@@ -2,6 +2,9 @@
 members = [
   "ui/overlay",
   "tests/overlay",
+  "tests/process",
+  "tests/ac7-render-scope",
+  "tests/overlay-panel",
   "tests/overlay-service",
   "tests/support",
   "tests/capture",

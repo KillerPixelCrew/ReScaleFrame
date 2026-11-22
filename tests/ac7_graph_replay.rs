@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Synthetic AC7 engine records. Native leaves drive the actual typed engine paths.
 
-use crate::ac7_graph_patch_abi::rsf_ac7_truesky_patches;
-use crate::ac7_graph_replay_abi::*;
+use super::ac7_graph_replay_abi::*;
+use crate::sys::rsf_ac7_truesky_patches;
 use std::ffi::{CStr, c_void};
 use std::ptr::from_mut;
 

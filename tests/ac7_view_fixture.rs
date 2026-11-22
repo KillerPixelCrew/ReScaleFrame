@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Captured View layout used by the native graph fixture's synthetic 2x2 input.
-use rsf_ac7::sys as ac7_graph_patch_abi;
+use crate::sys as ac7_graph_patch_abi;
 mod ac7_graph_replay;
 mod ac7_graph_replay_abi;
 

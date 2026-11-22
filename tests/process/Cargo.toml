@@ -1,0 +1,33 @@
+[package]
+name = "rsf-process-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Executables that load a built DLL in a process of their own and check its exports and
+# refusals. CTest runs them with the DLL path; the sources sit beside the other fixtures.
+[[bin]]
+name = "rsf_anomaly_bootstrap_test"
+path = "../anomaly_bootstrap.rs"
+
+[[bin]]
+name = "rsf_engine_sharpening_test"
+path = "../engine_sharpening.rs"
+
+[[bin]]
+name = "rsf_native_vulkan_exports_test"
+path = "../native_vulkan_exports.rs"
+
+[[bin]]
+name = "rsf_unity_mono_runtime_test"
+path = "../unity_mono_runtime.rs"
+
+[target."cfg(windows)".dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+rsf-test-support = { path = "../support" }
+windows = { workspace = true, features = ["std", "Win32_System_LibraryLoader"] }
+
+[lints]
+workspace = true

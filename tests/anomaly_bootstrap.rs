@@ -1,58 +1,36 @@
 // SPDX-License-Identifier: MIT
 // Exercise the exported cold-start entry in foreign Windows processes.
-use std::ffi::{OsStr, c_char, c_void};
+use rsf_test_support::Library;
+use std::ffi::OsStr;
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, ExitCode};
 use std::ptr;
 use std::time::{Duration, Instant};
+use windows::Win32::System::LibraryLoader::{
+    GetModuleHandleW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+};
+use windows::core::PCWSTR;
 
 type Entry = unsafe extern "system" fn(*const u16) -> u32;
-type Export = unsafe extern "system" fn() -> isize;
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn LoadLibraryExW(path: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
-    fn GetProcAddress(module: *mut c_void, name: *const c_char) -> Option<Export>;
-    fn GetModuleHandleW(path: *const u16) -> *mut c_void;
-    fn FreeLibrary(module: *mut c_void) -> i32;
-}
-
-const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x100;
-const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
-
-struct Module(*mut c_void);
-
-impl Drop for Module {
-    fn drop(&mut self) {
-        unsafe { FreeLibrary(self.0) };
-    }
-}
 
 fn wide(text: &OsStr) -> Vec<u16> {
     text.encode_wide().chain([0]).collect()
 }
 
 fn refused_observe(dll: &OsStr, directory: &Path, check_invalid_ini: bool) -> Result<(), String> {
-    let dll = wide(dll);
-    let module = unsafe {
-        LoadLibraryExW(
-            dll.as_ptr(),
-            ptr::null_mut(),
-            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
-        )
-    };
-    if module.is_null() {
-        return Err(format!(
-            "Adapter load failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    let module = Module(module);
-    let entry = unsafe { GetProcAddress(module.0, c"rsf_anomaly_start".as_ptr()) }
+    let module = Library::open(
+        dll,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+    )
+    .map_err(|error| format!("Adapter load failed: {error}"))?;
+    let entry = module
+        .symbol(c"rsf_anomaly_start")
         .ok_or("Anomaly cold-start entry missing")?;
-    let start = unsafe { std::mem::transmute::<Export, Entry>(entry) };
+    let start = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, Entry>(entry)
+    };
 
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     if check_invalid_ini {
@@ -69,7 +47,7 @@ fn refused_observe(dll: &OsStr, directory: &Path, check_invalid_ini: bool) -> Re
     fs::write(&ini, b"[Anomaly]\nMode=Observe\n").map_err(|error| error.to_string())?;
     let ini = wide(ini.as_os_str());
     let runtime = wide(OsStr::new("ReScaleFrame.Runtime.dll"));
-    let runtime_loaded = || !unsafe { GetModuleHandleW(runtime.as_ptr()) }.is_null();
+    let runtime_loaded = || unsafe { GetModuleHandleW(PCWSTR(runtime.as_ptr())) }.is_ok();
     if runtime_loaded() {
         return Err("Runtime was already loaded".into());
     }

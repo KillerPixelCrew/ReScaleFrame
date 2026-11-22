@@ -13,6 +13,8 @@ crate-type = ["staticlib", "rlib"]
 
 [features]
 warp-fixture = []
+# The view probe and session launchers' Rust halves (tests/ac7_view_probe.rs, tests/ac7_session.rs).
+view-fixtures = []
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }

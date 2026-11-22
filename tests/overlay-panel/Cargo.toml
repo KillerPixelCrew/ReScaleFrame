@@ -1,0 +1,20 @@
+[package]
+name = "rsf-overlay-panel-fixture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# A stand-in panel DLL with the five overlay.h exports, a triangle and one atlas upload, for the
+# native overlay host fixtures. It takes the record layouts from ui/overlay/src/abi.rs.
+[lib]
+name = "rsf_overlay_panel_fixture"
+path = "../overlay_panel_fixture.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+
+[lints]
+workspace = true

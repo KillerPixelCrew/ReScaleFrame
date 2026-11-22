@@ -3,9 +3,10 @@ mod engine_sharpening_abi;
 
 use engine_sharpening_abi::*;
 use rsf_game_sys::{RSF_SRVK_ABI_VERSION, rsf_sharpening_options, rsf_srvk_frame};
-use std::ffi::{CStr, OsStr, c_char, c_void};
-use std::os::windows::ffi::OsStrExt;
+use rsf_test_support::Library;
+use std::ffi::{CStr, OsStr};
 use std::process::ExitCode;
+use windows::Win32::System::LibraryLoader::LOAD_LIBRARY_FLAGS;
 
 const _: () = {
     assert!(RSF_GODOT_ABI_VERSION == 3);
@@ -24,40 +25,16 @@ const _: () = {
 
 type Procedure = unsafe extern "system" fn() -> isize;
 
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn LoadLibraryW(path: *const u16) -> *mut c_void;
-    fn GetProcAddress(module: *mut c_void, name: *const c_char) -> Option<Procedure>;
-    fn FreeLibrary(module: *mut c_void) -> i32;
+fn open(path: &OsStr) -> Result<Library, String> {
+    Library::open(path, LOAD_LIBRARY_FLAGS(0))
+        .map_err(|error| format!("LoadLibraryW failed for {path:?}: {error}"))
 }
 
-struct Library(*mut c_void);
-
-impl Library {
-    fn open(path: &OsStr) -> Result<Self, String> {
-        let wide: Vec<_> = path.encode_wide().chain([0]).collect();
-        let module = unsafe { LoadLibraryW(wide.as_ptr()) };
-        if module.is_null() {
-            return Err(format!(
-                "LoadLibraryW failed for {path:?}: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        Ok(Self(module))
-    }
-
-    fn procedure(&self, name: &CStr) -> Result<Procedure, String> {
-        unsafe { GetProcAddress(self.0, name.as_ptr()) }
-            .ok_or_else(|| format!("Missing export {}", name.to_string_lossy()))
-    }
+fn procedure(module: &Library, name: &CStr) -> Result<Procedure, String> {
+    module
+        .symbol(name)
+        .ok_or_else(|| format!("Missing export {}", name.to_string_lossy()))
 }
-
-impl Drop for Library {
-    fn drop(&mut self) {
-        unsafe { FreeLibrary(self.0) };
-    }
-}
-
 fn sharpening(mode: u32) -> rsf_sharpening_options {
     rsf_sharpening_options {
         struct_size: size_of::<rsf_sharpening_options>() as u32,
@@ -80,12 +57,12 @@ fn sharpening(mode: u32) -> rsf_sharpening_options {
 macro_rules! verify {
     ($name:ident, $settings:ident, $version:ident, $set:expr, $get:expr) => {
         fn $name(path: &OsStr) -> Result<(), String> {
-            let module = Library::open(path)?;
+            let module = open(path)?;
             // These names are the DLL's C exports and the generated records use their C layout.
             let configure: unsafe extern "C" fn(*const $settings) -> i32 =
-                unsafe { std::mem::transmute(module.procedure($set)?) };
+                unsafe { std::mem::transmute(procedure(&module, $set)?) };
             let get: unsafe extern "C" fn(*mut $settings) -> i32 =
-                unsafe { std::mem::transmute(module.procedure($get)?) };
+                unsafe { std::mem::transmute(procedure(&module, $get)?) };
             let header = || $settings {
                 struct_size: size_of::<$settings>() as u32,
                 abi_version: $version,

@@ -51,6 +51,15 @@ mod velocity_renderer;
 #[cfg(all(windows, feature = "warp-fixture"))]
 #[path = "../../../tests/ac7_velocity_shader_fixture.rs"]
 mod velocity_shader_fixture;
+#[cfg(feature = "view-fixtures")]
+#[path = "../../../tests/ac7_session.rs"]
+mod view_fixture_session;
+#[cfg(feature = "view-fixtures")]
+#[path = "../../../tests/ac7_view_probe.rs"]
+mod view_fixture_probe;
+#[cfg(all(windows, feature = "warp-fixture"))]
+#[path = "../../../tests/ac7_view_fixture.rs"]
+mod view_fixture_graph;
 #[cfg(any(windows, test))]
 mod velocity_stage;
 mod velocity_stream;

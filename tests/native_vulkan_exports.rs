@@ -1,18 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Validate the shipped DLL in a separate process using the Windows loader.
-use std::ffi::{CStr, c_char, c_void};
-use std::os::windows::ffi::OsStrExt;
+use rsf_test_support::Library;
+use std::ffi::{CStr, c_void};
 use std::process::ExitCode;
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn LoadLibraryW(path: *const u16) -> *mut c_void;
-    fn GetProcAddress(
-        module: *mut c_void,
-        name: *const c_char,
-    ) -> Option<unsafe extern "system" fn() -> isize>;
-    fn FreeLibrary(module: *mut c_void) -> i32;
-}
+use windows::Win32::System::LibraryLoader::LOAD_LIBRARY_FLAGS;
 
 const EXPORTS: &[&CStr] = &[
     c"rsf_get_runtime_version",
@@ -49,15 +40,13 @@ const EXPORTS: &[&CStr] = &[
 ];
 
 // No Vulkan handles are needed to check the production DLL's output-clearing rules.
-fn split_refuses_null_calls(runtime: *mut c_void) -> bool {
+fn split_refuses_null_calls(runtime: &Library) -> bool {
     type Plan = unsafe extern "C" fn(*const c_void, *mut u32, *mut u32) -> i32;
     type Destroy = unsafe extern "C" fn(*mut c_void) -> i32;
-    let (Some(plan), Some(destroy)) = (unsafe {
-        (
-            GetProcAddress(runtime, c"rsf_srvk_fsr4_plan".as_ptr()),
-            GetProcAddress(runtime, c"rsf_srvk_fsr4_destroy".as_ptr()),
-        )
-    }) else {
+    let (Some(plan), Some(destroy)) = (
+        runtime.symbol(c"rsf_srvk_fsr4_plan"),
+        runtime.symbol(c"rsf_srvk_fsr4_destroy"),
+    ) else {
         return false;
     };
     let plan: Plan = unsafe { std::mem::transmute(plan) };
@@ -73,24 +62,24 @@ fn main() -> ExitCode {
     let Some(path) = args.next().filter(|_| args.next().is_none()) else {
         return ExitCode::from(2);
     };
-    let wide: Vec<u16> = path.encode_wide().chain([0]).collect();
-    let runtime = unsafe { LoadLibraryW(wide.as_ptr()) };
-    if runtime.is_null() {
-        eprintln!("Runtime load failed: {}", std::io::Error::last_os_error());
-        return ExitCode::FAILURE;
-    }
+    let runtime = match Library::open(&path, LOAD_LIBRARY_FLAGS(0)) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("Runtime load failed: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let mut result = ExitCode::SUCCESS;
     for name in EXPORTS {
-        if unsafe { GetProcAddress(runtime, name.as_ptr()) }.is_none() {
+        if runtime.symbol(name).is_none() {
             eprintln!("Missing native Vulkan export: {}", name.to_string_lossy());
             result = ExitCode::FAILURE;
         }
     }
-    if !split_refuses_null_calls(runtime) {
+    if !split_refuses_null_calls(&runtime) {
         eprintln!("Vulkan split SR DLL admission check failed");
         result = ExitCode::FAILURE;
     }
-    unsafe { FreeLibrary(runtime) };
     result
 }

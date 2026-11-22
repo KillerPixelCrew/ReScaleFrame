@@ -1,38 +1,32 @@
 // SPDX-License-Identifier: MIT
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
-use std::os::windows::ffi::OsStrExt;
+use rsf_test_support::Library;
+use std::ffi::{CStr, CString, OsStr, c_char, c_int, c_void};
+use std::mem::ManuallyDrop;
 use std::process::ExitCode;
 use std::ptr::null_mut;
+use windows::Win32::System::LibraryLoader::{
+    LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+};
 
 type Handle = *mut c_void;
-const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0100;
-const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x1000;
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn LoadLibraryExW(path: *const u16, file: Handle, flags: u32) -> Handle;
-    fn GetProcAddress(module: Handle, name: *const c_char) -> Option<unsafe extern "system" fn()>;
-}
 
 /// F is the Mono embedding signature of the named export.
-unsafe fn entry<F: Copy>(module: Handle, name: &CStr) -> Option<F> {
+unsafe fn entry<F: Copy>(module: &Library, name: &CStr) -> Option<F> {
     const { assert!(size_of::<F>() == size_of::<usize>()) };
-    let address = unsafe { GetProcAddress(module, name.as_ptr()) }?;
+    let address = module.symbol(name)?;
     Some(unsafe { std::mem::transmute_copy(&address) })
 }
 
-fn run(mono_path: &[u16], framework: &CStr, assembly: &CStr) -> Option<i32> {
-    let module = unsafe {
-        LoadLibraryExW(
-            mono_path.as_ptr(),
-            null_mut(),
+fn run(mono_path: &OsStr, framework: &CStr, assembly: &CStr) -> Option<i32> {
+    // Process exit owns the hosted DLL and its runtime-generated code.
+    let module = ManuallyDrop::new(
+        Library::open(
+            mono_path,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
         )
-    };
-    if module.is_null() {
-        return None;
-    }
-    // Process exit owns the hosted DLL and its runtime-generated code.
+        .ok()?,
+    );
+    let module = &*module;
     unsafe {
         let search: unsafe extern "C" fn(*const c_char) =
             entry(module, c"mono_set_assemblies_path")?;
@@ -90,12 +84,11 @@ fn main() -> ExitCode {
         eprintln!("Usage: mono-contract mono-dll managed-framework-directory test-assembly");
         return ExitCode::from(2);
     };
-    let mono: Vec<u16> = mono.encode_wide().chain([0]).collect();
     let (Ok(framework), Ok(assembly)) = (
         CString::new(framework.to_string_lossy().as_bytes()),
         CString::new(assembly.to_string_lossy().as_bytes()),
     ) else {
         return ExitCode::FAILURE;
     };
-    std::process::exit(run(&mono, &framework, &assembly).unwrap_or(1));
+    std::process::exit(run(mono, &framework, &assembly).unwrap_or(1));
 }

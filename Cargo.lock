@@ -595,6 +595,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-ac7-render-scope-fixture"
+version = "0.1.2"
+
+[[package]]
 name = "rsf-anomaly"
 version = "0.1.2"
 dependencies = [
@@ -788,6 +792,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-overlay-panel-fixture"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
+]
+
+[[package]]
 name = "rsf-overlay-service-fixtures"
 version = "0.1.2"
 dependencies = [
@@ -812,6 +823,15 @@ dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-orchestrator",
+ "rsf-test-support",
+ "windows",
+]
+
+[[package]]
+name = "rsf-process-fixtures"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
  "rsf-test-support",
  "windows",
 ]
