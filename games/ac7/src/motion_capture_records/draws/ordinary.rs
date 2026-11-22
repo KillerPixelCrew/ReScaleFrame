@@ -62,12 +62,14 @@ struct Draw {
     render_targets: [DrawTarget; 8],
     depth: Resource,
     constants: [DrawConstants; 5],
+    context: u64,
 }
 
 const _: () = {
     assert!(size_of::<DrawInput>() == 24 && offset_of!(DrawInput, slot) == 8);
     assert!(size_of::<DrawConstants>() == 456 && offset_of!(DrawConstants, count) == 448);
-    assert!(size_of::<Draw>() == 14280 && offset_of!(Draw, qpc) == 72);
+    assert!(size_of::<Draw>() == 14288 && offset_of!(Draw, qpc) == 72);
+    assert!(offset_of!(Draw, context) == 14280);
     assert!(offset_of!(Draw, shader_hashes) == 132 && offset_of!(Draw, viewport_x) == 160);
     assert!(offset_of!(Draw, inputs) == 192 && offset_of!(Draw, ps_resources) == 576);
     assert!(offset_of!(Draw, vs_resources) == 5696 && offset_of!(Draw, render_targets) == 10816);
@@ -107,7 +109,7 @@ fn write_draw(out: &mut Bytes, interval: u32, d: &Draw) -> fmt::Result {
         out,
         concat!(
             "{{\"kind\":\"draw\",\"qpc\":{},\"interval\":{},\"thread\":{},\"native_scope\":{},",
-            "\"draw_index\":{},\"native_view\":{},\"target\":{},\"format\":{},\"extent\":[{},{}],",
+            "\"draw_index\":{},\"context\":{},\"native_view\":{},\"target\":{},\"format\":{},\"extent\":[{},{}],",
             "\"targets\":{},\"depth_bound\":{},\"indexed\":{},\"elements\":{},",
             "\"vs_hash\":{},\"ps_hash\":{},\"gs_hash\":{},\"hs_hash\":{},\"ds_hash\":{},",
             "\"layout\":{},\"topology\":{},\"stride\":{},\"viewport\":["
@@ -117,6 +119,7 @@ fn write_draw(out: &mut Bytes, interval: u32, d: &Draw) -> fmt::Result {
         d.thread,
         d.root.id,
         d.draw_index,
+        d.context,
         d.root.view,
         d.target,
         d.format,
@@ -175,5 +178,6 @@ fn write_draw(out: &mut Bytes, interval: u32, d: &Draw) -> fmt::Result {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_capture_record_draw(capture: CaptureInterval, draw: &Draw) -> bool {
     let mut row = Bytes::default();
-    write_draw(&mut row, capture.interval, draw).is_ok() && commit(capture, || Ok(row)).is_ok()
+    write_draw(&mut row, capture.interval, draw).is_ok()
+        && commit(capture, row) != super::Commit::Failed
 }

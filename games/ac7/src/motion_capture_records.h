@@ -101,6 +101,7 @@ struct MotionDraw {
     MotionDrawTarget render_targets[8];
     MotionResource depth;
     MotionDrawConstants constants[5];
+    uint64_t context;
 };
 struct MotionBeforeDrawPlan;
 struct MotionSampler {
@@ -114,6 +115,7 @@ struct MotionBeforeDraw {
     MotionDrawTarget colour, loss, inputs[6];
     MotionSampler samplers[6];
     MotionBoundConstant constants[2];
+    uint64_t context;
 };
 struct MotionGeometryPlan;
 struct MotionGeometryStream {
@@ -156,13 +158,15 @@ struct MotionFinalArtifacts {
 
 enum CommandAdvance : uint32_t { command_stop, command_next, command_failed };
 enum MotionPublication : uint32_t { publication_failed, publication_partial, publication_complete };
-enum class MotionRootInstall : uint32_t { already_installed, rhi_refused, entry_refused, rolled_back, installed };
+enum class MotionRootInstall : uint32_t {
+    already_installed, rhi_refused, entry_refused, rolled_back, installed, partial_teardown,
+};
 
 struct MotionRootHookEffects {
     bool(*copy)(void* destination, const void* source, std::size_t size);
     bool(*native_owner)();
-    bool(*install)(void* const* targets, uint32_t count);
-    void(*remove)(void* const* targets, uint32_t count);
+    bool(*install)(void** targets, uint32_t count);
+    void(*remove)(void** targets, uint32_t count);
 };
 
 // Callbacks are synchronous and return normally even if their native effects fail.
@@ -172,7 +176,7 @@ using MotionWriteFile = bool(*)(const char* path, const unsigned char* data, std
 
 extern "C" {
 MotionRootInstall rsf_ac7_capture_install_roots(unsigned char* base, const MotionRootHookEffects* effects);
-void rsf_ac7_capture_remove_roots(const MotionRootHookEffects* effects);
+bool rsf_ac7_capture_remove_roots(const MotionRootHookEffects* effects);
 const void* rsf_ac7_capture_current_command_address();
 
 EngineRecord* rsf_ac7_capture_swap_engine(EngineRecord* event);
@@ -231,13 +235,15 @@ static_assert(sizeof(MotionDrawInput) == 24 && offsetof(MotionDrawInput, slot) =
 static_assert(sizeof(MotionColourSnapshot) == 100 && offsetof(MotionColourSnapshot, result) == 96);
 static_assert(sizeof(MotionDrawTarget) == 144 && offsetof(MotionDrawTarget, snapshot) == 40);
 static_assert(sizeof(MotionDrawConstants) == 456 && offsetof(MotionDrawConstants, count) == 448);
-static_assert(sizeof(MotionDraw) == 14280 && offsetof(MotionDraw, qpc) == 72);
+static_assert(sizeof(MotionDraw) == 14288 && offsetof(MotionDraw, qpc) == 72);
+static_assert(offsetof(MotionDraw, context) == 14280);
 static_assert(offsetof(MotionDraw, shader_hashes) == 132 && offsetof(MotionDraw, viewport_x) == 160);
 static_assert(offsetof(MotionDraw, inputs) == 192 && offsetof(MotionDraw, ps_resources) == 576);
 static_assert(offsetof(MotionDraw, vs_resources) == 5696 && offsetof(MotionDraw, render_targets) == 10816);
 static_assert(offsetof(MotionDraw, depth) == 11968 && offsetof(MotionDraw, constants) == 12000);
 static_assert(sizeof(MotionSampler) == 32 && offsetof(MotionSampler, min_lod) == 24);
-static_assert(sizeof(MotionBeforeDraw) == 1496 && offsetof(MotionBeforeDraw, colour) == 88);
+static_assert(sizeof(MotionBeforeDraw) == 1504 && offsetof(MotionBeforeDraw, colour) == 88);
+static_assert(offsetof(MotionBeforeDraw, context) == 1496);
 static_assert(offsetof(MotionBeforeDraw, inputs) == 376 && offsetof(MotionBeforeDraw, samplers) == 1240 &&
     offsetof(MotionBeforeDraw, constants) == 1432);
 static_assert(sizeof(MotionGeometryStream) == 32 && offsetof(MotionGeometryStream, blob) == 28);

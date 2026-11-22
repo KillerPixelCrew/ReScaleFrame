@@ -75,6 +75,13 @@ impl Code for NativeCode<'_> {
 
 const SITE_BYTES: usize = RSF_AC7_SITE_BYTES as usize;
 
+pub(crate) const POSTPROCESS_RVA: u32 = 0xffb900;
+pub(crate) const POSTPROCESS_ENTRY: &[u8; 18] =
+    b"\x4c\x8b\xdc\x55\x49\x8d\xab\xe8\xfc\xff\xff\x48\x81\xec\x10\x04\x00\x00";
+pub(crate) const WIDGET_QUEUE_RVA: u32 = 0x4d6340;
+pub(crate) const WIDGET_QUEUE_ENTRY: &[u8; 16] =
+    b"\x40\x55\x57\x48\x8d\x6c\x24\xa8\x48\x81\xec\x58\x01\x00\x00\x0f";
+
 /// A function entry compared over its first 16 bytes.
 pub(crate) struct Site {
     pub(crate) rva: u32,
@@ -129,11 +136,11 @@ pub(crate) static HOOK_SITES: [Site; RSF_AC7_HOOK_SITE_COUNT as usize] = [
     Site::new(0xfb7bc0, b"\x40\x53\x48\x83\xec\x20\x48\x8b\x01\x48\x8b\xda\x33\xd2\xff\x50"), // 9 descriptor_hud
     Site::new(0xfb7b50, b"\x40\x53\x48\x83\xec\x20\x48\x8b\x01\x48\x8b\xda\x33\xd2\xff\x50"), // 10 descriptor_composite
     Site::new(0x10991e0, b"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\x01\x48\x8b\xda"), // 11 descriptor_output
-    Site::new(0xffb900, b"\x4c\x8b\xdc\x55\x49\x8d\xab\xe8\xfc\xff\xff\x48\x81\xec\x10\x04"), // 12 postprocess
+    Site::new(POSTPROCESS_RVA, POSTPROCESS_ENTRY.first_chunk::<SITE_BYTES>().unwrap()), // 12 postprocess
     Site::new(0x10b3970, b"\x40\x56\x57\x41\x57\x48\x83\xec\x30\x65\x48\x8b\x04\x25\x58\x00"), // 13 context
     Site::new(0x112afa0, b"\x40\x55\x53\x41\x54\x41\x57\x48\x8d\xac\x24\x68\xff\xff\xff\x48"), // 14 visibility
     Site::new(0x1113080, b"\x48\x89\x5c\x24\x20\x4c\x89\x44\x24\x18\x48\x89\x4c\x24\x08\x55"), // 15 construct
-    Site::new(0x4d6340, b"\x40\x55\x57\x48\x8d\x6c\x24\xa8\x48\x81\xec\x58\x01\x00\x00\x0f"), // 16 widget_queue
+    Site::new(WIDGET_QUEUE_RVA, WIDGET_QUEUE_ENTRY), // 16 widget_queue
     Site::new(0x4d6660, b"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x50\x80\x79\x78\x00\x48\x8b"), // 17 widget_targets
     Site::new(0x1380d80, b"\x48\x8b\xc4\x48\x89\x58\x08\x48\x89\x70\x10\x48\x89\x78\x18\x4c"), // 18 widget_draw
     Site::new(0x3a3f70, b"\x48\x8b\xc4\x48\x89\x58\x10\x48\x89\x70\x18\x55\x57\x41\x54\x41"), // 19 engine_tick

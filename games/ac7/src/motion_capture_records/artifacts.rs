@@ -2,7 +2,7 @@
 //! F9 checkpoint and completion artifacts over the native capture's copied observations.
 
 use super::{EngineRecord, NativeRecordCounts, ROOT_NAMES, RootRecord, observe_velocity, records};
-use crate::motion_capture_observations::{Observations, observations};
+use crate::motion_capture_observations::PublicationObservations;
 use std::ffi::{CStr, c_char, c_void};
 use std::fmt::{self, Write as _};
 use std::io::Write as _;
@@ -109,17 +109,17 @@ fn trim_fraction(text: &str) -> &str {
 }
 
 pub(super) fn write_float(out: &mut Bytes, value: f32) -> fmt::Result {
-    if !value.is_finite() {
-        return out.write_str("null");
-    }
-    write_finite_float(out, value, 9)
+    write_float_with_precision(out, value, 9)
 }
 
-pub(super) fn write_finite_float(
+pub(super) fn write_float_with_precision(
     out: &mut Bytes,
     value: f32,
     significant_digits: i32,
 ) -> fmt::Result {
+    if !value.is_finite() {
+        return out.write_str("null");
+    }
     if value == 0.0 {
         return out.write_str(if value.is_sign_negative() { "-0" } else { "0" });
     }
@@ -312,11 +312,11 @@ fn write_summary(
     counts: &NativeRecordCounts,
     stats: &Stats,
     draws: usize,
-    observations: &Observations,
+    observations: &PublicationObservations,
     files_written: bool,
 ) -> fmt::Result {
-    let (readbacks, readback_failures) = observations.constant_readback_counts();
-    let (colour_readbacks, colour_readback_failures) = observations.colour_readback_counts();
+    let (readbacks, readback_failures) = observations.constant_readbacks;
+    let (colour_readbacks, colour_readback_failures) = observations.colour_readbacks;
     writeln!(
         out,
         concat!(
@@ -422,9 +422,7 @@ impl<'a> Publisher<'a> {
     }
 
     fn finish(mut self, sources: &FinalArtifacts) -> Result<bool, fmt::Error> {
-        // Freeze creation observations through publication so the shader ordinals and drop
-        // counter describe the same cache. Disassembly happens before taking this lock.
-        let observations = observations();
+        let observations = PublicationObservations::snapshot().map_err(|_| fmt::Error)?;
         let snapshot = Snapshot::finish();
         let mut text = Bytes::default();
         write_engine(&mut text, &snapshot.engine)?;
@@ -451,7 +449,7 @@ impl<'a> Publisher<'a> {
                 &shader.data,
             )?;
         }
-        // SAFETY: The native callback samples completion counters while the guard and
+        // SAFETY: The native callback samples completion counters while the native guard and
         // capture are still live, after the other file attempts as in the original writer.
         let stats = unsafe { (sources.stats)(sources.user) };
         text.0.clear();

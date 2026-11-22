@@ -2,11 +2,13 @@
 //! Before-draw rows over the live bindings and dump receipts collected by native code.
 
 use super::{
-    BoundConstant, DrawTarget, QueuedDraw, commit, write_constants, write_queued, write_resource,
-    write_snapshot, write_targets,
+    BoundConstant, Commit, DrawTarget, QueuedDraw, commit, write_constants, write_queued,
+    write_resource, write_snapshot, write_targets,
 };
-use crate::motion_capture_observations::colour::BeforeDrawPlan;
-use crate::motion_capture_records::artifacts::{Bytes, write_finite_float};
+use crate::motion_capture_observations::colour::{
+    BeforeDrawPlan, LightingDraw, record_lighting_before,
+};
+use crate::motion_capture_records::artifacts::{Bytes, write_float_with_precision};
 use crate::motion_capture_session::CaptureInterval;
 use std::fmt::{self, Write as _};
 use std::mem::{offset_of, size_of};
@@ -35,11 +37,13 @@ struct BeforeDraw {
     inputs: [DrawTarget; 6],
     samplers: [Sampler; 6],
     constants: [BoundConstant; 2],
+    context: u64,
 }
 
 const _: () = {
     assert!(size_of::<Sampler>() == 32 && offset_of!(Sampler, min_lod) == 24);
-    assert!(size_of::<BeforeDraw>() == 1496 && offset_of!(BeforeDraw, colour) == 88);
+    assert!(size_of::<BeforeDraw>() == 1504 && offset_of!(BeforeDraw, colour) == 88);
+    assert!(offset_of!(BeforeDraw, context) == 1496);
     assert!(offset_of!(BeforeDraw, inputs) == 376 && offset_of!(BeforeDraw, samplers) == 1240);
     assert!(offset_of!(BeforeDraw, constants) == 1432);
 };
@@ -49,21 +53,6 @@ fn write_sampled_view(out: &mut Bytes, target: &DrawTarget) -> fmt::Result {
     write_resource(out, &target.view.resource)?;
     write_snapshot(out, &target.snapshot)?;
     out.write_char('}')
-}
-
-fn write_lod(out: &mut Bytes, value: f32) -> fmt::Result {
-    if value.is_finite() {
-        return write_finite_float(out, value, 6);
-    }
-    // The old Windows stream wrote these tokens after promoting the LOD to double.
-    if value.is_sign_negative() {
-        out.write_char('-')?;
-    }
-    out.write_str(match value.to_bits() {
-        0xffc0_0000 => "nan(ind)",
-        _ if value.is_nan() => "nan",
-        _ => "inf",
-    })
 }
 
 fn write_samplers(out: &mut Bytes, samplers: &[Sampler]) -> fmt::Result {
@@ -77,9 +66,9 @@ fn write_samplers(out: &mut Bytes, samplers: &[Sampler]) -> fmt::Result {
             "{{\"slot\":{},\"filter\":{},\"address\":[{u},{v},{w}],\"comparison\":{},\"lod\":[",
             sampler.slot, sampler.filter, sampler.comparison
         )?;
-        write_lod(out, sampler.min_lod)?;
+        write_float_with_precision(out, sampler.min_lod, 6)?;
         out.write_char(',')?;
-        write_lod(out, sampler.max_lod)?;
+        write_float_with_precision(out, sampler.max_lod, 6)?;
         out.write_str("]}")?;
     }
     Ok(())
@@ -102,13 +91,11 @@ fn write_before(
         "{{\"kind\":\"{kind}\",\"qpc\":{},\"interval\":{interval},\"thread\":{}",
         draw.qpc, draw.thread
     )?;
-    if !lighting {
-        write!(
-            out,
-            ",\"target\":{},\"draw_index\":{}",
-            draw.colour.view.resource.resource, draw.draw_index
-        )?;
-    }
+    write!(
+        out,
+        ",\"target\":{},\"draw_index\":{},\"context\":{}",
+        draw.colour.view.resource.resource, draw.draw_index, draw.context
+    )?;
     write!(out, ",\"ps_hash\":{},\"colour\":", plan.ps_hash)?;
     write_sampled_view(out, &draw.colour)?;
     if !lighting {
@@ -152,6 +139,28 @@ extern "C" fn rsf_ac7_capture_record_before_draw(
     draw: &BeforeDraw,
 ) -> bool {
     let mut row = Bytes::default();
-    write_before(&mut row, capture.interval, plan, draw).is_ok()
-        && commit(capture, || Ok(row)).is_ok()
+    if write_before(&mut row, capture.interval, plan, draw).is_err() {
+        return false;
+    }
+    match commit(capture, row) {
+        Commit::Failed => false,
+        Commit::Skipped => true,
+        Commit::Recorded => {
+            if plan.lighting != 0
+                && draw.colour.snapshot.name[0] != 0
+                && draw.colour.snapshot.result == 0
+            {
+                record_lighting_before(
+                    capture,
+                    LightingDraw {
+                        context: draw.context,
+                        target: draw.colour.view.resource.resource,
+                        index: draw.draw_index,
+                        hash: plan.ps_hash,
+                    },
+                );
+            }
+            true
+        }
+    }
 }

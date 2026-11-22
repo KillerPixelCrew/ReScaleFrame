@@ -168,5 +168,5 @@ extern "C" fn rsf_ac7_capture_record_geometry(
 ) -> bool {
     let mut row = Bytes::default();
     write_geometry(&mut row, capture.interval, plan, draw).is_ok()
-        && commit(capture, || Ok(row)).is_ok()
+        && commit(capture, row) != super::Commit::Failed
 }

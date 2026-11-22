@@ -105,17 +105,23 @@ extern "C" fn rsf_ac7_capture_can_record_draw(capture: CaptureInterval) -> bool 
     draw_available(&mut records(), capture)
 }
 
-fn commit(
-    capture: CaptureInterval,
-    row: impl FnOnce() -> Result<Bytes, fmt::Error>,
-) -> fmt::Result {
+#[derive(PartialEq, Eq)]
+enum Commit {
+    Skipped,
+    Recorded,
+    Failed,
+}
+
+fn commit(capture: CaptureInterval, row: Bytes) -> Commit {
     let mut records = records();
-    if draw_available(&mut records, capture) {
-        let row = row()?;
-        records.draws.try_reserve(1).map_err(|_| fmt::Error)?;
-        records.draws.push(row.0);
+    if !draw_available(&mut records, capture) {
+        return Commit::Skipped;
     }
-    Ok(())
+    if records.draws.try_reserve(1).is_err() {
+        return Commit::Failed;
+    }
+    records.draws.push(row.0);
+    Commit::Recorded
 }
 
 fn write_resource(out: &mut Bytes, r: &Resource) -> fmt::Result {
@@ -254,5 +260,5 @@ extern "C" fn rsf_ac7_capture_record_dispatch(
 ) -> bool {
     let mut row = Bytes::default();
     write_dispatch(&mut row, capture.interval, dispatch).is_ok()
-        && commit(capture, || Ok(row)).is_ok()
+        && commit(capture, row) != Commit::Failed
 }

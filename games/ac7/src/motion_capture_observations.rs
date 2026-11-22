@@ -14,7 +14,7 @@ use geometry::GeometryReads;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::offset_of;
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
 const MAX_SHADER_BYTES: usize = 1024 * 1024;
 const SHADER_BUDGET: usize = 64 * 1024 * 1024;
@@ -31,11 +31,12 @@ struct ShaderFacts {
     constant_mask: u32,
 }
 
+#[derive(Clone)]
 pub(super) struct Shader {
     identity: usize,
     pub(super) stage: u32,
     facts: ShaderFacts,
-    pub(super) data: Vec<u8>,
+    pub(super) data: Arc<Vec<u8>>,
 }
 
 impl Shader {
@@ -96,6 +97,28 @@ pub(super) fn reset_session_observations() {
     observations.geometry = GeometryReads::default();
 }
 
+pub(super) struct PublicationObservations {
+    pub(super) shaders: Vec<Shader>,
+    pub(super) shaders_dropped: u32,
+    pub(super) constant_readbacks: (u32, u32),
+    pub(super) colour_readbacks: (u32, u32),
+}
+
+impl PublicationObservations {
+    pub(super) fn snapshot() -> Result<Self, std::collections::TryReserveError> {
+        let observations = observations();
+        let mut shaders = Vec::new();
+        shaders.try_reserve_exact(observations.shaders.len())?;
+        shaders.extend(observations.shaders.iter().cloned());
+        Ok(Self {
+            shaders,
+            shaders_dropped: observations.shaders_dropped,
+            constant_readbacks: observations.constants.readback_counts(),
+            colour_readbacks: observations.colour.counts(),
+        })
+    }
+}
+
 impl Observations {
     fn shader_facts(&self, identity: usize, stage: u32) -> ShaderFacts {
         self.shaders
@@ -108,14 +131,6 @@ impl Observations {
                 },
                 |item| item.facts,
             )
-    }
-
-    pub(super) fn constant_readback_counts(&self) -> (u32, u32) {
-        self.constants.readback_counts()
-    }
-
-    pub(super) fn colour_readback_counts(&self) -> (u32, u32) {
-        self.colour.counts()
     }
 
     fn observe_shader(
@@ -152,7 +167,7 @@ impl Observations {
             identity,
             stage,
             facts,
-            data,
+            data: Arc::new(data),
         });
         true
     }

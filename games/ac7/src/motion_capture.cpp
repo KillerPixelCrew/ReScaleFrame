@@ -375,7 +375,7 @@ MotionQueuedDraw queued_draw()
     } else draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, false);
     return draw;
 }
-bool install_root_hooks(void* const* targets, uint32_t count)
+bool install_root_hooks(void** targets, uint32_t count)
 {
     // Slot order matches ROOT_SITES in motion_capture_records/root_hooks.rs.
     void* detours[] = {reinterpret_cast<void*>(&hooked_postprocess),
@@ -402,6 +402,8 @@ void install_roots(unsigned char* base)
         say("renderer root capture refused: expected AC7 entry bytes differ"); return;
     case MotionRootInstall::rolled_back:
         say("renderer root capture failed and was rolled back"); return;
+    case MotionRootInstall::partial_teardown:
+        say("renderer root capture has hooks pending removal"); return;
     case MotionRootInstall::installed:
         say("renderer root capture installed: graph/RHI associations, main temporal graph and widget producers; engine arguments unchanged"); return;
     }
@@ -539,7 +541,8 @@ void before_draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_targ
     const bool lighting = plan.lighting != 0;
     MotionBeforeDraw row{};
     row.qpc = tick(); row.thread = GetCurrentThreadId();
-    if (!lighting) row.draw_index = d->draw_index;
+    row.draw_index = d->draw_index;
+    row.context = uint64_t(uintptr_t(d->context));
     row.colour = sampled_target(capture, context, static_cast<ID3D11Resource*>(d->render_target),
         plan.colour_role, lighting, 0);
 
@@ -586,10 +589,13 @@ void before_draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_targ
 catch (...) { capture_failed(capture); }
 void draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw* d) try
 {
-    if (!capture || !rsf_ac7_capture_can_record_draw(capture)) return;
+    if (!capture) return;
     auto* c = static_cast<ID3D11DeviceContext*>(d->context);
     const uint32_t ps = shader_hash(d->pixel_shader, 1);
-    const bool light_after = rsf_ac7_capture_take_lighting_after(capture, ps);
+    const MotionLightingDraw identity{uint64_t(uintptr_t(d->context)), uint64_t(uintptr_t(d->render_target)),
+        d->draw_index, ps};
+    const bool matched_light = rsf_ac7_capture_take_lighting_after(capture, &identity);
+    if (!rsf_ac7_capture_can_record_draw(capture)) return;
     ComPtr<ID3D11GeometryShader> gs; ComPtr<ID3D11HullShader> hs; ComPtr<ID3D11DomainShader> ds;
     c->GSGetShader(&gs, nullptr, nullptr); c->HSGetShader(&hs, nullptr, nullptr); c->DSGetShader(&ds, nullptr, nullptr);
     MotionDraw draw{};
@@ -597,6 +603,7 @@ void draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw
     draw.qpc = tick();
     draw.thread = GetCurrentThreadId();
     draw.draw_index = d->draw_index;
+    draw.context = identity.context;
     draw.target = uint64_t(uintptr_t(d->render_target));
     draw.format = d->target_format;
     draw.width = d->target_width;
@@ -640,6 +647,7 @@ void draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw
         auto& record = draw.render_targets[draw.render_target_count++];
         record.view = {resource_facts(resource.Get()), i};
         if (i == 0) {
+            const bool light_after = matched_light && record.view.resource.resource == identity.target;
             // The contact-light shaders are separate from the colour_stage producers.
             const auto* role = large ? colour_stage(ps) : nullptr;
             if (light_after) role = "contact_light_after";
@@ -828,6 +836,10 @@ catch (...) { capture_failed(); }
 extern "C" int rsf_ac7_motion_capture_install(void)
 {
     auto& s = state(); if (!rsf_ac7_capture_enabled() || s.installed) return s.installed ? 1 : 0;
+    const auto owns_hooks = [](auto target) { return target != nullptr; };
+    if (std::any_of(std::begin(hook_targets), std::end(hook_targets), owns_hooks)) {
+        say("motion capture engine hooks pending removal"); return 0;
+    }
     auto* base = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) { say("motion capture: MinHook unavailable"); return 0; }
@@ -853,15 +865,21 @@ extern "C" int rsf_ac7_motion_capture_install(void)
     if (rsf::ac7::install_hooks(hook_targets, detours, originals, 3)) {
         s.installed = true; say("motion capture engine hooks installed; original decisions preserved"); return 1;
     }
-    std::fill(std::begin(hook_targets), std::end(hook_targets), nullptr);
-    say("motion capture engine hooks failed and were rolled back"); return 0;
+    if (std::any_of(std::begin(hook_targets), std::end(hook_targets), owns_hooks))
+        say("motion capture engine hook rollback left hooks pending removal");
+    else
+        say("motion capture engine hooks failed and were rolled back");
+    return 0;
 }
 extern "C" void rsf_ac7_motion_capture_shutdown(void)
 {
     auto& s = state();
     rsf_ac7_capture_shutdown(&capture_effects);
-    if (s.installed) rsf::ac7::remove_hooks(hook_targets, 3);
-    rsf_ac7_capture_remove_roots(&root_hook_effects);
+    rsf::ac7::remove_hooks(hook_targets, 3);
+    if (std::any_of(std::begin(hook_targets), std::end(hook_targets), [](auto target) { return target != nullptr; }))
+        say("motion capture engine hooks pending removal");
+    if (!rsf_ac7_capture_remove_roots(&root_hook_effects))
+        say("renderer root capture shutdown left hooks pending removal");
     s.installed = false;
 }
 extern "C" void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, const void* bytes, uint32_t size)

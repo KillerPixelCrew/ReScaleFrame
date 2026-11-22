@@ -27,6 +27,7 @@ struct MotionBeforeDrawPlan {
     const char* input_roles[6];
     uint32_t input_slots, sampler_slots, constant_slots, ps_hash, lighting;
 };
+struct MotionLightingDraw { uint64_t context, target; uint32_t index, hash; };
 enum MotionConstantSource : uint32_t {
     constant_stopped, constant_uploaded, constant_try_read, constant_missing, constant_failed,
 };
@@ -57,7 +58,7 @@ void rsf_ac7_capture_constant_read_failed(MotionCaptureInterval capture);
 bool rsf_ac7_capture_is_cloud_composite(uint32_t hash);
 bool rsf_ac7_capture_plan_before_draw(MotionCaptureInterval capture, uint32_t width, uint32_t height,
     void* pixel_shader, MotionBeforeDrawPlan* plan);
-bool rsf_ac7_capture_take_lighting_after(MotionCaptureInterval capture, uint32_t hash);
+bool rsf_ac7_capture_take_lighting_after(MotionCaptureInterval capture, const MotionLightingDraw* draw);
 bool rsf_ac7_capture_colour_snapshot_available(MotionCaptureInterval capture, bool lighting);
 // Returns the capture-wide read ordinal or UINT32_MAX if the sample or budget expired.
 uint32_t rsf_ac7_capture_reserve_colour_snapshot(MotionCaptureInterval capture, bool lighting);

@@ -3,6 +3,7 @@
 
 use super::{observations, rsf_ac7_capture_shader_facts};
 use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
+use std::cell::Cell;
 use std::ffi::{c_char, c_void};
 use std::mem::{offset_of, size_of};
 
@@ -45,6 +46,7 @@ extern "C" fn rsf_ac7_capture_plan_before_draw(
     pixel_shader: *mut c_void,
     plan: &mut BeforeDrawPlan,
 ) -> bool {
+    LIGHTING_BEFORE.set(None);
     if !capture.active() || width < 400 || height < 200 {
         return false;
     }
@@ -99,7 +101,24 @@ pub(super) struct ColourReadbacks {
     attempted: u32,
     failed: u32,
     lighting_interval: Option<u32>,
-    lighting_after_pending: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LightingDraw {
+    pub(crate) context: u64,
+    pub(crate) target: u64,
+    pub(crate) index: u32,
+    pub(crate) hash: u32,
+}
+
+thread_local! {
+    // The tap invokes both phases synchronously on the draw thread and suppresses reentry.
+    static LIGHTING_BEFORE: Cell<Option<(CaptureInterval, LightingDraw)>> = const { Cell::new(None) };
+}
+
+pub(crate) fn record_lighting_before(capture: CaptureInterval, draw: LightingDraw) {
+    LIGHTING_BEFORE.set(Some((capture, draw)));
 }
 
 impl ColourReadbacks {
@@ -127,21 +146,16 @@ fn begin_lighting_pair(capture: CaptureInterval) -> bool {
         return false;
     }
     colour.lighting_interval = Some(capture.interval);
-    colour.lighting_after_pending = true;
     true
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_take_lighting_after(capture: CaptureInterval, hash: u32) -> bool {
-    if !is_contact_light(hash) {
-        return false;
-    }
-    let mut observations = observations();
-    let colour = &mut observations.colour;
-    capture.active()
-        && CaptureInterval::load() == capture
-        && colour.lighting_interval == Some(capture.interval)
-        && std::mem::take(&mut colour.lighting_after_pending)
+extern "C" fn rsf_ac7_capture_take_lighting_after(
+    capture: CaptureInterval,
+    draw: &LightingDraw,
+) -> bool {
+    let before = LIGHTING_BEFORE.take();
+    capture.active() && CaptureInterval::load() == capture && before == Some((capture, *draw))
 }
 
 #[unsafe(no_mangle)]
