@@ -118,7 +118,6 @@ impl Fake {
     fn options() -> rsf_ac7_native_renderer_options {
         // SAFETY: all-zero is an options record without callbacks.
         let mut options: rsf_ac7_native_renderer_options = unsafe { std::mem::zeroed() };
-        options.struct_size = size_of::<rsf_ac7_native_renderer_options>() as u32;
         options.session_id = 7;
         options
     }
@@ -356,21 +355,13 @@ fn prepare_binds_wanted_sites_and_publishes_before_hooking() {
 
 #[test]
 fn diagnostics_bind_the_evidence_hooks() {
-    let mut options = Fake::options();
-    options.diagnostics = RSF_AC7_DIAG_PIXEL_BINDINGS;
-    options.pending_capacity = 32;
-    let fake = Fake::new();
-    assert!(prepare(&fake, &options).1);
-    assert_eq!(fake.capacity.get(), 32);
-    assert_eq!(fake.created_count(), HOOKS);
-    assert!(fake.image.logged(DIAGNOSTICS));
-
     let fake = Fake {
         environment: true,
         ..Fake::new()
     };
     assert!(prepare(&fake, &Fake::options()).1);
     assert_eq!(fake.created_count(), HOOKS);
+    assert!(fake.image.logged(DIAGNOSTICS));
 }
 
 #[test]

@@ -41,7 +41,6 @@ use rsf_game_sys::{
     rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, c_char};
-use std::ptr::null_mut;
 
 use rsf_ac7::{AMD64, EXECUTABLE, EXECUTABLE_SHA256};
 pub(crate) use rsf_game_sys::{
@@ -62,9 +61,7 @@ struct Native;
 
 impl Leaves for Native {
     fn prepare(&self, options: &rsf_ac7_native_renderer_options) -> (Renderer, bool) {
-        let mut created = null_mut();
-        let prepared = unsafe { renderer::rsf_ac7_renderer_prepare(options, &mut created) };
-        (created, prepared)
+        renderer::rsf_ac7_renderer_prepare(options)
     }
 
     fn start(&self, renderer: Renderer) -> bool {

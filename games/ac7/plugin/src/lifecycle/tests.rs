@@ -88,14 +88,11 @@ fn text(reason: &CStr) -> String {
 }
 
 #[test]
-fn options_carry_the_host_and_adapter_capacity() {
+fn options_carry_the_host() {
     let host = host();
     let options = options(&host);
-    assert_eq!(options.struct_size, 72);
-    assert_eq!(options.pending_capacity, 256);
     assert_eq!(options.session_id, 9);
     assert!(options.log.is_some() && options.on_stage.is_none() && options.on_state.is_none());
-    assert_eq!(options.diagnostics, 0);
 }
 
 #[test]

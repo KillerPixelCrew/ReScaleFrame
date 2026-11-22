@@ -620,9 +620,7 @@ unsafe extern "C" fn original_context(raw_context: *mut c_void, raw_root: *mut c
 }
 
 fn options() -> rsf_ac7_native_renderer_options {
-    let mut options: rsf_ac7_native_renderer_options = unsafe { zeroed() };
-    options.struct_size = size_of::<rsf_ac7_native_renderer_options>() as u32;
-    options
+    unsafe { zeroed() }
 }
 
 fn new_renderer(options: &rsf_ac7_native_renderer_options) -> Box<Renderer> {

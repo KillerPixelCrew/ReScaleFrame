@@ -13,9 +13,6 @@ use std::ffi::CStr;
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// Queued render-scope capacity the adapter requests from the native pass controller.
-pub(crate) const PENDING_CAPACITY: u32 = 256;
-
 pub(crate) const NOT_PREPARED: &CStr = c"Native renderer has not been prepared.";
 pub(crate) const PREPARED: &CStr = c"Native pass controller prepared; graphics activation pending.";
 pub(crate) const REFUSED: &CStr =
@@ -57,11 +54,9 @@ unsafe impl Send for State {}
 
 pub(crate) struct Lifecycle(Mutex<State>);
 
-/// The renderer options for a validated host. The renderer reads its startup diagnostics.
+/// The renderer options for a validated host.
 pub(crate) fn options(host: &rsf_game_host_services) -> rsf_ac7_native_renderer_options {
     rsf_ac7_native_renderer_options {
-        struct_size: size_of::<rsf_ac7_native_renderer_options>() as u32,
-        pending_capacity: PENDING_CAPACITY,
         session_id: host.session_id,
         on_stage: host.render_pass,
         log: host.log,
@@ -69,7 +64,6 @@ pub(crate) fn options(host: &rsf_game_host_services) -> rsf_ac7_native_renderer_
         render_config: host.render_config,
         cpu_event: host.cpu_event,
         on_state: host.scope_state,
-        diagnostics: 0,
     }
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use std::ptr::null;
+use std::ptr::{null, null_mut};
 
 fn probe(machine: u16, executable: &CStr, digest: &CStr) -> rsf_game_probe {
     rsf_game_probe {

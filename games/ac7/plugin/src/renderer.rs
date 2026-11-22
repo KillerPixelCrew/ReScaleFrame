@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! The native renderer transaction behind the five calls of ac7_native_renderer.h: prepare,
-//! start, is_active, quiesce and stop.
+//! The native renderer transaction behind the lifecycle's five renderer calls: prepare, start,
+//! is_active, quiesce and stop.
 //!
 //! native_renderer/leaves.rs (formerly native_renderer.cpp) holds the native leaves: the renderer object and its fields, MinHook, module pinning, the
 //! render scopes, the input hook, the controller facts and the TrueSky restore, which takes the
@@ -20,11 +20,11 @@
 //!   of every bound target, so a retried stop or a stop after a partial activation removes
 //!   exactly what is still owned.
 use crate::guards::rsf_ac7_guards_held;
-use crate::lifecycle::{PENDING_CAPACITY, Renderer};
+use crate::lifecycle::Renderer;
 use crate::native_renderer::leaves;
 use crate::patches;
 use crate::sites::{self, Code, CodeView, HOOK_SITES, NativeCode};
-use crate::sys::{RSF_AC7_DIAG_PIXEL_BINDINGS, rsf_ac7_native_renderer_options};
+use crate::sys::rsf_ac7_native_renderer_options;
 use crate::sys::{RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -33,6 +33,8 @@ use windows::Win32::System::WindowsProgramming::GetPrivateProfileIntW;
 use windows::core::{PCWSTR, w};
 
 const HOOKS: usize = RSF_AC7_HOOK_SITE_COUNT as usize;
+/// Queued render-scope capacity of the native pass controller.
+pub(crate) const PENDING_CAPACITY: u32 = 256;
 const DIAGNOSTICS_VARIABLE: &str = "RSF_AC7_PIXEL_DIAGNOSTICS";
 
 pub(crate) const PINNED: &str =
@@ -142,7 +144,7 @@ fn discard(native: &impl Native, renderer: Renderer) {
     native.release(renderer);
 }
 
-/// Prepare after the argument and installed checks. The renderer and whether preparation
+/// Prepare after the installed check. The renderer and whether preparation
 /// succeeded: a renderer with `false` is a pinned inactive renderer that stop retires later.
 pub(crate) fn prepare(
     native: &impl Native,
@@ -158,11 +160,7 @@ pub(crate) fn prepare(
     if renderer.is_null() {
         return refused;
     }
-    let capacity = match options.pending_capacity {
-        0 => PENDING_CAPACITY,
-        capacity => capacity,
-    };
-    if !native.scopes_create(renderer, capacity) {
+    if !native.scopes_create(renderer, PENDING_CAPACITY) {
         native.release(renderer);
         return refused;
     }
@@ -172,8 +170,7 @@ pub(crate) fn prepare(
     }
     // The evidence hooks run for every pixel uniform bind. Their sites were verified above, but
     // they are hooked only when the diagnostic is asked for (sites::wanted).
-    let diagnostics =
-        (options.diagnostics & RSF_AC7_DIAG_PIXEL_BINDINGS) != 0 || native.pixel_diagnostics();
+    let diagnostics = native.pixel_diagnostics();
     let bound: [bool; HOOKS] = std::array::from_fn(|hook| sites::wanted(hook as u32, diagnostics));
     for (hook, site) in HOOK_SITES.iter().enumerate() {
         let target = if bound[hook] {
@@ -451,37 +448,20 @@ impl Native for NativeLeaves {
     }
 }
 
-/// The former argument checks: options of the current size with a session, an output and no
-/// installed renderer. A refusal here leaves `*out` untouched.
-///
-/// # Safety
-/// `options` and `out` are null or valid for the call.
-pub(crate) unsafe fn rsf_ac7_renderer_prepare(
-    options: *const rsf_ac7_native_renderer_options,
-    out: *mut Renderer,
-) -> bool {
-    if options.is_null()
-        || unsafe { options.cast::<u32>().read() }
-            < size_of::<rsf_ac7_native_renderer_options>() as u32
-        || out.is_null()
-    {
-        return false;
-    }
-    let options = unsafe { &*options };
-    if options.session_id == 0 {
-        return false;
-    }
+/// Prepares a renderer for the host options lifecycle.rs built from validated GameSDK services.
+/// Refused while another renderer is installed.
+pub(crate) fn rsf_ac7_renderer_prepare(
+    options: &rsf_ac7_native_renderer_options,
+) -> (Renderer, bool) {
+    let refused = (null_mut(), false);
     let Some(native) = NativeLeaves::new() else {
-        return false;
+        return refused;
     };
     let native = native.log_to(options);
     if !native.installed().is_null() {
-        return false;
+        return refused;
     }
-    unsafe { out.write(null_mut()) };
-    let (renderer, prepared) = prepare(&native, options);
-    unsafe { out.write(renderer) };
-    prepared
+    prepare(&native, options)
 }
 
 /// # Safety
