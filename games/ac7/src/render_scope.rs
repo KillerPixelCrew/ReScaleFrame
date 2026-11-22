@@ -15,10 +15,10 @@
 //! including `execute`, the function the engine's command iterator calls.
 use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};
 use crate::scope_abi::{rsf_ac7_scope_calls, rsf_ac7_scope_lease};
+use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_TEXTURE_BINDING, RSF_GAME_RENDER_WINDOW,
 };
-use std::alloc::{Layout, alloc};
 use std::ffi::{c_int, c_void};
 use std::mem::{offset_of, zeroed};
 use std::ptr::{addr_of, addr_of_mut, null, null_mut};
@@ -128,18 +128,6 @@ impl Scopes {
         // Nothing here panics while holding the lock; a poisoned state is still consistent.
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
-}
-
-/// `value` on the heap, or None when memory is exhausted: open and create refuse instead of
-/// ending the process, as the C++ owner did. Freed with `Box::from_raw`.
-fn try_box<T>(value: T) -> Option<*mut T> {
-    const { assert!(size_of::<T>() != 0) };
-    let raw = unsafe { alloc(Layout::new::<T>()) }.cast::<T>();
-    if raw.is_null() {
-        return None;
-    }
-    unsafe { raw.write(value) };
-    Some(raw)
 }
 
 /// Scene work needs its family and view. Slate window and texture-binding work has no scene view:
@@ -299,7 +287,7 @@ unsafe extern "C" fn rsf_ac7_scope_owner_create(
     }) else {
         return 0;
     };
-    unsafe { out.write(owner) };
+    unsafe { out.write(Box::into_raw(owner)) };
     1
 }
 
@@ -353,6 +341,7 @@ unsafe extern "C" fn rsf_ac7_render_scope_open_leased(
     }) else {
         return 0;
     };
+    let ticket = Box::into_raw(ticket);
     unsafe {
         (*ticket).begin.ticket = ticket;
         (*ticket).end.ticket = ticket;

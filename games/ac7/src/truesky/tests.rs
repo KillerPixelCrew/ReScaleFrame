@@ -201,8 +201,8 @@ fn module_and_effect_fingerprints() {
         String::from_utf16(&MODULE).unwrap(),
         "TrueSkyPluginRender_MT.dll\0"
     );
-    assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
-    assert_eq!(crc32(&[]), 0);
+    assert_eq!(crc32_ieee(b"123456789"), 0xcbf4_3926);
+    assert_eq!(crc32_ieee(&[]), 0);
     assert!(!effect_matches(&[]));
     assert!(!effect_matches(&[0; EFFECT_BYTES - 1]));
     assert!(EFFECT_PATH.ends_with(r"\Win64\mixed_resolution.fxo"));

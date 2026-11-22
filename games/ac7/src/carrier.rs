@@ -2,6 +2,7 @@
 //! AC7 policy shared by the dedicated and combined DirectInput carriers.
 use crate::sites::DEPTH_GATES;
 use crate::{AMD64, EXECUTABLE};
+use rsf_game_sys::ffi_util::ascii_wide;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_probe};
 use std::ffi::{CStr, CString, c_char, c_int, c_ulong};
 use std::mem::offset_of;
@@ -108,22 +109,11 @@ const SEPARATE_TRANSLUCENCY_GATE: &[u8; 15] =
 const SEPARATE_TRANSLUCENCY_PATCH: &[u8; 15] =
     b"\x66\x0f\x1f\x44\x00\x00\xb8\x00\x00\x80\x3f\x66\x0f\x6e\xc8";
 
-const fn widen<const N: usize>(text: &[u8]) -> [u16; N] {
-    assert!(text.len() == N);
-    let mut wide = [0; N];
-    let mut index = 0;
-    while index < N {
-        wide[index] = text[index] as u16;
-        index += 1;
-    }
-    wide
-}
-
 static EXECUTABLE_WIDE: [u16; EXECUTABLE.to_bytes_with_nul().len()] =
-    widen(EXECUTABLE.to_bytes_with_nul());
+    ascii_wide(EXECUTABLE.to_bytes_with_nul());
 static GAME_DLL: [u16; b"ReScaleFrame.Game.AC7.dll\0".len()] =
-    widen(b"ReScaleFrame.Game.AC7.dll\0");
-static WINDOW_CLASS: [u16; b"UnrealWindow\0".len()] = widen(b"UnrealWindow\0");
+    ascii_wide(b"ReScaleFrame.Game.AC7.dll\0");
+static WINDOW_CLASS: [u16; b"UnrealWindow\0".len()] = ascii_wide(b"UnrealWindow\0");
 static STARTUP_READY: AtomicBool = AtomicBool::new(false);
 static STARTUP_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 

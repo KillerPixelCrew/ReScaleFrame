@@ -20,24 +20,15 @@ use crate::sites::{Code, CodeView, NativeCode};
 use crate::sites_abi::{
     RSF_AC7_RELAY_BYTES, rsf_ac7_call_relay, rsf_ac7_truesky_leaves, rsf_ac7_truesky_patches,
 };
+use rsf_game_sys::{checksum::crc32_ieee, ffi_util::ascii_wide};
 use std::ffi::c_void;
 use std::io::Read;
 use std::ptr::null_mut;
 
 const RELAY: usize = RSF_AC7_RELAY_BYTES as usize;
 
-const fn wide<const N: usize>(text: &[u8; N]) -> [u16; N] {
-    let mut out = [0; N];
-    let mut index = 0;
-    while index < N {
-        out[index] = text[index] as u16;
-        index += 1;
-    }
-    out
-}
-
 /// The plugin module as GetModuleHandleW names it, terminated.
-pub(crate) const MODULE: [u16; 27] = wide(b"TrueSkyPluginRender_MT.dll\0");
+pub(crate) const MODULE: [u16; 27] = ascii_wide(b"TrueSkyPluginRender_MT.dll\0");
 
 /// The shipped mixed-resolution effect beside the executable, by exact size and CRC-32 (IEEE).
 /// Its x2/x3/x4 depth permutations are why the full grid needs the first-party x1 kernel.
@@ -155,17 +146,8 @@ pub(crate) const EMPTY_RELAY: rsf_ac7_call_relay = rsf_ac7_call_relay {
     size: 0,
 };
 
-/// CRC-32 (IEEE, reflected 0xedb88320), as the former bytewise loop computed it.
-pub(crate) fn crc32(bytes: &[u8]) -> u32 {
-    !bytes.iter().fold(u32::MAX, |crc, byte| {
-        (0..8).fold(crc ^ u32::from(*byte), |crc, _| {
-            (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1))
-        })
-    })
-}
-
 pub(crate) fn effect_matches(bytes: &[u8]) -> bool {
-    bytes.len() == EFFECT_BYTES && crc32(bytes) == EFFECT_CRC
+    bytes.len() == EFFECT_BYTES && crc32_ieee(bytes) == EFFECT_CRC
 }
 
 /// The effect beside the process executable (GetModuleFileNameW of the process). A longer file
