@@ -4,10 +4,7 @@ mod bindings;
 mod resources;
 
 use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
-pub(super) use crate::sys::{
-    rsf_anomaly_motion_fixture_input as Input, rsf_anomaly_motion_fixture_output as Output,
-    rsf_anomaly_motion_fixture_override as Override, rsf_anomaly_motion_fixture_targets as Targets,
-};
+
 pub(super) use bindings::Bindings;
 pub(super) use bindings::{
     rsf_anomaly_motion_fixture_bind_core, rsf_anomaly_motion_fixture_bind_stage,
@@ -17,7 +14,7 @@ pub(super) use bindings::{
 pub(super) use resources::{
     rsf_anomaly_motion_fixture_make_layout, rsf_anomaly_motion_fixture_make_targets,
 };
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 use windows::Win32::Graphics::Direct3D::{
     D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
@@ -27,8 +24,49 @@ use windows::core::Interface;
 
 type Raw = *mut c_void;
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_read(
+/// Borrowed input-assembler and shader state for one draw.
+pub(super) struct Input {
+    pub(super) layout: Raw,
+    pub(super) vertex_buffer: Raw,
+    pub(super) vs: Raw,
+    pub(super) hs: Raw,
+    pub(super) ds: Raw,
+    pub(super) ps: Raw,
+    pub(super) stride: u32,
+    pub(super) tessellated: bool,
+}
+
+/// Borrowed output-merger state for one draw.
+pub(super) struct Output {
+    pub(super) position: Raw,
+    pub(super) albedo: Raw,
+    pub(super) motion: Raw,
+    pub(super) depth: Raw,
+    pub(super) depth_state: Raw,
+    pub(super) raster: Raw,
+    pub(super) size: u32,
+}
+
+/// One named constant replaced while patching a shader's constant buffers.
+pub(super) struct Override {
+    pub(super) name: *const c_char,
+    pub(super) values: *const f32,
+    pub(super) count: usize,
+}
+
+/// The eight COM references `rsf_anomaly_motion_fixture_make_targets` transfers together.
+pub(super) struct Targets {
+    pub(super) position_texture: Raw,
+    pub(super) position_rtv: Raw,
+    pub(super) albedo_texture: Raw,
+    pub(super) albedo_rtv: Raw,
+    pub(super) depth_texture: Raw,
+    pub(super) depth_view: Raw,
+    pub(super) depth_state: Raw,
+    pub(super) raster: Raw,
+}
+
+pub(super) unsafe fn rsf_anomaly_motion_fixture_read(
     device: Raw,
     context: Raw,
     texture: Raw,
@@ -40,8 +78,7 @@ pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_read(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_clear(
+pub(super) unsafe fn rsf_anomaly_motion_fixture_clear(
     raw: Raw,
     targets: &Output,
     stencil: bool,
@@ -73,8 +110,7 @@ pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_clear(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_input_bind(raw: Raw, input: &Input) {
+pub(super) unsafe fn rsf_anomaly_motion_fixture_input_bind(raw: Raw, input: &Input) {
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }) else {
         return;
     };
@@ -99,8 +135,7 @@ pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_input_bind(raw: Raw, 
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_output_bind(raw: Raw, targets: &Output) {
+pub(super) unsafe fn rsf_anomaly_motion_fixture_output_bind(raw: Raw, targets: &Output) {
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }) else {
         return;
     };
@@ -121,15 +156,13 @@ pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_output_bind(raw: Raw,
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_draw(raw: Raw, count: u32) {
+pub(super) unsafe fn rsf_anomaly_motion_fixture_draw(raw: Raw, count: u32) {
     if let Some(context) = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) } {
         unsafe { context.Draw(count, 0) };
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_anomaly_motion_fixture_draw_quad(
+pub(super) unsafe fn rsf_anomaly_motion_fixture_draw_quad(
     raw: Raw,
     buffer: Raw,
     stride: u32,

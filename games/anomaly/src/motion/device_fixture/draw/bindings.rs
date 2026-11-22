@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::Raw;
 use crate::ffi::borrow_span;
-use crate::sys::rsf_anomaly_motion_fixture_override as Override;
+use super::Override;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
 use windows::Win32::Graphics::Direct3D::Fxc::D3DReflect;
@@ -19,14 +19,12 @@ pub(in crate::motion::device_fixture) struct Bindings {
     samplers: Vec<ID3D11SamplerState>,
 }
 
-#[unsafe(no_mangle)]
-pub(in crate::motion::device_fixture) extern "C" fn rsf_anomaly_motion_fixture_bindings_new()
+pub(in crate::motion::device_fixture) fn rsf_anomaly_motion_fixture_bindings_new()
 -> *mut Bindings {
     Box::into_raw(Box::new(Bindings::default()))
 }
 
-#[unsafe(no_mangle)]
-pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_bindings_drop(
+pub(in crate::motion::device_fixture) unsafe fn rsf_anomaly_motion_fixture_bindings_drop(
     handle: *mut Bindings,
 ) {
     if !handle.is_null() {
@@ -227,8 +225,7 @@ fn bind(
     Ok(())
 }
 
-#[unsafe(no_mangle)]
-pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_bind_stage(
+pub(in crate::motion::device_fixture) unsafe fn rsf_anomaly_motion_fixture_bind_stage(
     keep: &mut Bindings,
     device: Raw,
     context: Raw,
@@ -266,8 +263,7 @@ pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fi
         .map_or(null(), CStr::as_ptr)
 }
 
-#[unsafe(no_mangle)]
-pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_bind_core(
+pub(in crate::motion::device_fixture) unsafe fn rsf_anomaly_motion_fixture_bind_core(
     keep: &mut Bindings,
     device: Raw,
     context: Raw,
@@ -401,8 +397,7 @@ fn patch_core(
     Ok(())
 }
 
-#[unsafe(no_mangle)]
-pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_patch_core(
+pub(in crate::motion::device_fixture) unsafe fn rsf_anomaly_motion_fixture_patch_core(
     keep: &mut Bindings,
     device: Raw,
     context: Raw,

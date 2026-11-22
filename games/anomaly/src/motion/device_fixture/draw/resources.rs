@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::Raw;
 use crate::ffi::borrow_span;
-use crate::sys::rsf_anomaly_motion_fixture_targets as Targets;
+use super::Targets;
 use std::ffi::{CStr, c_char};
 use std::mem::MaybeUninit;
 use std::ptr::null;
@@ -105,8 +105,7 @@ fn targets(device: &ID3D11Device, size: u32, stencil: bool) -> Result<Targets, &
     })
 }
 
-#[unsafe(no_mangle)]
-pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_make_targets(
+pub(in crate::motion::device_fixture) unsafe fn rsf_anomaly_motion_fixture_make_targets(
     device: Raw,
     size: u32,
     stencil: bool,
@@ -124,8 +123,7 @@ pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fi
     }
 }
 
-#[unsafe(no_mangle)]
-pub(in crate::motion::device_fixture) unsafe extern "C" fn rsf_anomaly_motion_fixture_make_layout(
+pub(in crate::motion::device_fixture) unsafe fn rsf_anomaly_motion_fixture_make_layout(
     device: Raw,
     signature: *const D3D11_SIGNATURE_PARAMETER_DESC,
     count: u32,
