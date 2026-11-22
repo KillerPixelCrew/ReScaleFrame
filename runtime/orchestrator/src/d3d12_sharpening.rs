@@ -401,37 +401,37 @@ impl Sharpen12 {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_sharpen12_host_create() -> *mut c_void {
+pub(super) extern "C" fn create_host() -> *mut c_void {
     crate::allocate_handle(Sharpen12::default()).cast()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sharpen12_host_destroy(owner: *mut Sharpen12) {
+pub(super) unsafe extern "C" fn destroy_host(owner: *mut c_void) {
     if !owner.is_null() {
-        drop(unsafe { Box::from_raw(owner) });
+        drop(unsafe { Box::from_raw(owner.cast::<Sharpen12>()) });
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sharpen12_host_run(
-    owner: *mut Sharpen12,
+pub(super) unsafe extern "C" fn run_host(
+    owner: *mut c_void,
     commands: *mut c_void,
     output: *mut c_void,
     motion: *mut c_void,
     depth: *mut c_void,
     exposure: *mut c_void,
-    options: &Options,
+    options: *const Options,
     hdr: u32,
     depth_inverted: u32,
     near_plane: f32,
     far_plane: f32,
     slot: u32,
 ) -> i32 {
+    let Some(options) = (unsafe { options.as_ref() }) else {
+        return 0;
+    };
     if unsafe { rsf_sharpening_requested(options) } == 0 {
         return 1;
     }
-    let Some(owner) = (unsafe { owner.as_mut() }) else {
+    let Some(owner) = (unsafe { owner.cast::<Sharpen12>().as_mut() }) else {
         return 0;
     };
     let frame = Frame {

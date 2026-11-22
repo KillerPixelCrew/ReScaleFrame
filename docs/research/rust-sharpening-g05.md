@@ -195,3 +195,44 @@ The thin settings launcher now compiles as C11. It keeps the independent
 panel, Runtime and SDK layout probes, the FidelityFX descriptor fields and
 the CRT decimal comparison. Strict MinGW C11 syntax passed with and without
 the pinned FidelityFX header. CTest execution and native linking are pending.
+## Retained payload boundary at `fb27ab2f`
+
+`PORT.md` has two open G05 implementation entries at this base. Both belong
+to the existing GPL-3.0-only payload in `runtime/graphics/src/sharpening/`.
+
+| Path | Current ownership and lineage |
+| --- | --- |
+| `options.h` | Licensed option activation and sanitization, motion-adaptive ramp and 128-byte constant mapping. The Git blob `2308f85eed1659d60991cff4ec2d8d302faa54f8` is identical to the blob introduced by `dee20e5869eca9598d154376613606156ef3fa10`. The header records OptiScaler `2fff542e78e257a1e4ff5a1e21a69a166c78c335` as its source. |
+| `pass_payload.cpp` | The sole translation unit that includes the calculator and embedded shader arrays. Its blob `887202ba15ab227d693ade1a95f59c19f64485e9` was introduced in its current form at `094a8fc936ebe0828d45adec23ad52d7dde9a0c9`. The bridge began at `489369bffe6443a39ad1a485c0f238aa91e57da7` for D3D12, added D3D11 at `0a40bb30c2aa4612ea029e112bad8aefd81d1cb2`, and shared D3D marshalling at `296f75425adf8b5b7fae4929b10a74ee5f64dd7e` before adding SPIR-V access. |
+
+The bridge returns borrowed HLSL strings and SPIR-V word ranges by filter
+mode, marshals the public settings and frame facts, and invokes the original
+calculator for admission, constants and the fixture's adaptive ramp. It
+contains no graphics API calls. D3D11 owns its compute shader, bindings and
+copy in `runtime/orchestrator/src/d3d11_sharpening.rs`. D3D12 owns its
+descriptors, slot resources and commands in `d3d12_sharpening.rs`. The SR12
+platform table now refers directly to that Rust module's private callbacks.
+Vulkan's shared owner and typed API calls are in `vulkan_sharpening.rs` and
+`vulkan_sharpening/native.rs`. The licensed functions they call provide
+shader and calculation inputs only. Moving the existing calculator or
+shader code into MIT sources would translate upstream-derived code.
+
+The Windows branch of `runtime/orchestrator/build.rs` compiles just
+`pass_payload.cpp` as C++17 into `rsf_sharpening_payload` through `cc`.
+CMake consumes the resulting `rsf-orchestrator` static library through
+`rsf_orchestrator_rust`. This is a source and compilation boundary within
+the existing static link. The redistribution terms for linked binaries
+remain those recorded in [the dependency notices](../dependencies.md).
+
+The Git objects for `rcas.h` and `rcas_spirv.h` match `dee20e58`.
+`da_rcas.h`, `da_das.h`, `depth_color.inc` and their two SPIR-V headers
+match `d44a68463fc12df99b28579fbcb9dce3d1269b39`. The license text
+matches `8fec1933638f22ed6b55e50d436678c828ca6f59`.
+`eng/sharpening/spirv.py` is the recorded payload generation path.
+
+The retained translation unit passed MSVC `/Zs /std:c++17 /W4 /WX` syntax
+checking. Bindgen 0.72.1 reproduced the existing D3D11 and Vulkan private
+records and the two SDK sharpening files byte for byte. Pinned Rust 1.94.1
+formatting, locked offline Cargo metadata and the source caller and blob
+checks also passed. No object files, binaries or runtime observations
+were produced.

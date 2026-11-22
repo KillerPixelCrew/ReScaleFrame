@@ -3,6 +3,7 @@ use super::*;
 use crate::d3d11_output_abi::rsf_d3d11_output_srv_format;
 use crate::d3d12_host::sr::*;
 use crate::d3d12_host::{borrow, rsf_core_d3d12_create_uav_texture, rsf_core_d3d12_transition};
+use crate::d3d12_sharpening as sharpening;
 use crate::frame_capture12::native::{rsf_fg12_platform_map, rsf_fg12_platform_unmap};
 use crate::frame_capture12::{self as capture, Owner as Capture};
 use std::mem::ManuallyDrop;
@@ -87,22 +88,6 @@ unsafe extern "C" {
     fn rsf_sr_session_get_status(session: Handle, status: *mut rsf_sr_session_status) -> i32;
     fn rsf_sr_session_evaluate(session: Handle, list: Handle, frame: *const rsf_sr_frame) -> i32;
     fn rsf_sr_session_destroy(session: Handle);
-    fn rsf_sharpen12_host_create() -> Handle;
-    fn rsf_sharpen12_host_destroy(owner: Handle);
-    fn rsf_sharpen12_host_run(
-        owner: Handle,
-        list: Handle,
-        input: Handle,
-        output: Handle,
-        depth: Handle,
-        exposure: Handle,
-        options: *const rsf_sharpening_options,
-        width: u32,
-        height: u32,
-        near_plane: f32,
-        far_plane: f32,
-        slot: u32,
-    ) -> i32;
     fn rsf_input_dump_begin_record(record: *const rsf_frame_record, backend: u32) -> i32;
     fn rsf_input_dump_pass_metadata(pass: *const Pass);
     fn rsf_input_dump_sr_frame(frame: *const rsf_sr_frame, backend: u32, sdr: u32);
@@ -158,9 +143,9 @@ pub(super) static PLATFORM: Platform = Platform {
     capture_event,
     capture_wants,
     capture_force_reset,
-    sharpen_create: rsf_sharpen12_host_create,
-    sharpen_destroy: rsf_sharpen12_host_destroy,
-    sharpen_run: rsf_sharpen12_host_run,
+    sharpen_create: sharpening::create_host,
+    sharpen_destroy: sharpening::destroy_host,
+    sharpen_run: sharpening::run_host,
     dump_begin_record: rsf_input_dump_begin_record,
     dump_pass_metadata: rsf_input_dump_pass_metadata,
     dump_sr_frame: rsf_input_dump_sr_frame,
