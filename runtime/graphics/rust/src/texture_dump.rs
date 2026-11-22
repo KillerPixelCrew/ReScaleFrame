@@ -38,8 +38,9 @@ enum Output {
     Raw,
 }
 
+/// rsf_texture_dump_report.
 #[repr(C)]
-struct Report {
+pub struct Report {
     struct_size: u32,
     width: u32,
     height: u32,
@@ -479,21 +480,14 @@ fn dump_texture(
     preview.write(request, output, report)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_texture_dump_texture(
+unsafe fn dump(
     device: Handle,
     context: Handle,
     source: Handle,
     options: *const TextureOptions,
     report: *mut Report,
-    output: u32,
+    output: Output,
 ) -> i32 {
-    let output = match output {
-        0 => Output::Targa,
-        1 => Output::Png,
-        2 => Output::Raw,
-        _ => return INVALID,
-    };
     let handles = unsafe {
         (
             ID3D11Device::from_raw_borrowed(&device),
@@ -515,8 +509,44 @@ unsafe extern "C" fn rsf_core_texture_dump_texture(
         .unwrap_or(0)
 }
 
+/// texture_dump.h: a Targa of `source`, with an optional report.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_texture_dump_pixels(
+pub unsafe extern "C" fn rsf_dump_texture(
+    device: Handle,
+    context: Handle,
+    source: Handle,
+    options: *const TextureOptions,
+    report: *mut Report,
+) -> i32 {
+    unsafe { dump(device, context, source, options, report, Output::Targa) }
+}
+
+/// texture_dump.h: a PNG of `source`, with an optional report.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_dump_texture_png(
+    device: Handle,
+    context: Handle,
+    source: Handle,
+    options: *const TextureOptions,
+    report: *mut Report,
+) -> i32 {
+    unsafe { dump(device, context, source, options, report, Output::Png) }
+}
+
+/// texture_dump.h: the packed rows of `source` and their sidecar.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_dump_texture_bytes(
+    device: Handle,
+    context: Handle,
+    source: Handle,
+    options: *const TextureOptions,
+) -> i32 {
+    unsafe { dump(device, context, source, options, std::ptr::null_mut(), Output::Raw) }
+}
+
+/// texture_dump.h: a PNG of CPU pixels, with an optional report.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_dump_pixels_png(
     pixels: *const Pixels,
     options: *const TextureOptions,
     report: *mut Report,

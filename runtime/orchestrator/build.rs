@@ -95,7 +95,6 @@ fn native_leaves() {
         ],
         &["RSF_RUNTIME_BUILD", "RSF_STREAMLINE_HOST_BUILD"],
     );
-    native_leaf("rsf_graphics", &["../graphics/src/texture_dump.c"], &[]);
     native_leaf(
         "rsf_presentation",
         &["../presentation/src/d3d11_present_bridge.c"],

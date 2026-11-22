@@ -30,7 +30,7 @@ pub(super) enum Format {
 }
 
 impl Format {
-    // Values from DXGI_FORMAT in texture_dump.c's compile-time checks.
+    // DXGI_FORMAT values.
     pub(super) fn from_dxgi(dxgi: u32) -> Option<Self> {
         Some(match dxgi {
             60 | 61 => Self::R8,

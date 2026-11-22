@@ -288,16 +288,7 @@ unsafe extern "C" fn capture_record(
     };
 }
 
-unsafe extern "C" {
-    fn rsf_capture_sr_parameters(
-        record: *const rsf_frame_record,
-        backend: u32,
-        x: f32,
-        y: f32,
-        exposure: f32,
-        reset: u32,
-    );
-}
+use crate::input_dump::abi::rsf_capture_sr_parameters;
 
 unsafe extern "C" fn capture_parameters(frame: &Frame, backend: u32, reset: u32) {
     // The FrameDump entry keeps its once-only service binding.

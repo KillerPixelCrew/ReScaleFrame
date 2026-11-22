@@ -335,16 +335,7 @@ unsafe extern "C" fn rsf_core_srvk_graphics_flush(owner: &Native) {
     }
 }
 
-unsafe extern "C" {
-    fn rsf_capture_sr_parameters(
-        record: *const rsf_frame_record,
-        backend: u32,
-        x: f32,
-        y: f32,
-        exposure: f32,
-        reset: u32,
-    );
-}
+use crate::input_dump::abi::rsf_capture_sr_parameters;
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_srvk_graphics_capture_parameters(

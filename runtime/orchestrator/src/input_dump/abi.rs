@@ -384,7 +384,7 @@ unsafe extern "C" fn rsf_input_dump_pass_metadata(input: *const rsf_game_render_
             return;
         }
         capture.identity = Some(pass.into());
-        let depth_requested = unsafe { native::depth_domains_requested(&pass.depth_domains) };
+        let depth_requested = u32::from(rsf_game_sys::depth_domains_requested(&pass.depth_domains));
         let _ = metadata::engine_pass(&capture.bundle, pass, depth_requested);
     });
 }

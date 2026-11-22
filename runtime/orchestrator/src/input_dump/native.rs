@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Clock, Encoding, Pixels, Surface, TextureOptions};
-use rsf_game_sys::rsf_game_depth_domains;
+use crate::texture_dump;
 use std::ffi::c_void;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D11::{
@@ -74,28 +74,9 @@ pub(super) unsafe fn backbuffer(chain: *mut c_void) -> *mut c_void {
 
 type Handle = *mut c_void;
 
-// The common file hasher and the D3D11 texture encoders, from the native archives the Runtime
-// links beside this crate.
 unsafe extern "C" {
-    fn rsf_common_sha256_file(path: *const u16, share: u32, digest: *mut u8) -> u32;
-    fn rsf_dump_texture_bytes(
-        device: Handle,
-        context: Handle,
-        texture: Handle,
-        options: *const TextureOptions,
-    ) -> i32;
-    fn rsf_dump_texture_png(
-        device: Handle,
-        context: Handle,
-        texture: Handle,
-        options: *const TextureOptions,
-        report: Handle,
-    ) -> i32;
-    fn rsf_dump_pixels_png(
-        pixels: *const Pixels,
-        options: *const TextureOptions,
-        report: Handle,
-    ) -> i32;
+    // runtime/common, linked as the RuntimeCommon archive.
+    fn rsf_common_sha256_file(path: *const u16, sharing: u32, output: *mut u8) -> u32;
 }
 
 pub(super) fn executable_hash(path: &[u16]) -> String {
@@ -103,14 +84,8 @@ pub(super) fn executable_hash(path: &[u16]) -> String {
         FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
     let mut digest = [0; 32];
-    if unsafe {
-        rsf_common_sha256_file(
-            path.as_ptr(),
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            digest.as_mut_ptr(),
-        )
-    } == 0
-    {
+    let sharing = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    if unsafe { rsf_common_sha256_file(path.as_ptr(), sharing, digest.as_mut_ptr()) } == 0 {
         return String::new();
     }
     use std::fmt::Write as _;
@@ -121,11 +96,6 @@ pub(super) fn executable_hash(path: &[u16]) -> String {
     hash
 }
 
-pub(super) unsafe fn depth_domains_requested(value: *const rsf_game_depth_domains) -> u32 {
-    unsafe { value.as_ref() }.map_or(0, |value| {
-        u32::from(rsf_game_sys::depth_domains_requested(value))
-    })
-}
 
 struct Predicate<'a> {
     context: &'a ID3D11DeviceContext,
@@ -170,13 +140,13 @@ pub(super) unsafe fn encode_texture(
         immediate.GetPredication(Some(&mut predicate.saved), Some(&mut predicate.value));
         immediate.SetPredication(None::<&ID3D11Predicate>, false);
         if include_raw != 0 {
-            result.raw = rsf_dump_texture_bytes(device.as_raw(), context, source, options);
+            result.raw = texture_dump::rsf_dump_texture_bytes(device.as_raw(), context, source, options);
         }
         result.preview =
-            rsf_dump_texture_png(device.as_raw(), context, source, options, ptr::null_mut());
+            texture_dump::rsf_dump_texture_png(device.as_raw(), context, source, options, ptr::null_mut());
     }
 }
 
 pub(super) unsafe fn preview_pixels(pixels: *const Pixels, options: *const TextureOptions) -> i32 {
-    unsafe { rsf_dump_pixels_png(pixels, options, ptr::null_mut()) }
+    unsafe { texture_dump::rsf_dump_pixels_png(pixels, options, ptr::null_mut()) }
 }
