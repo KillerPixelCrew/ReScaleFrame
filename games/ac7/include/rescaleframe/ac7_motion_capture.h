@@ -31,7 +31,8 @@ void rsf_ac7_motion_capture_request(void);
 /* Native controller supplies queued execution identity; capture must not detour its owner again. */
 void rsf_ac7_motion_capture_native_owner(uint32_t enabled);
 void rsf_ac7_motion_capture_native_pass(const rsf_game_render_pass* pass, uint32_t begin);
-/* Returns a sample prefix when paired backend images should be requested for the next evaluation. */
+/* The caller lends capacity writable bytes for the narrow sample prefix. A nonzero result
+   requests paired backend images for the next evaluation. */
 int rsf_ac7_motion_capture_present(void* swapchain, char* prefix, uint32_t capacity);
 
 typedef struct rsf_ac7_velocity_facts {

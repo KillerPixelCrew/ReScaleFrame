@@ -2,10 +2,12 @@
 //! Native CPU observations, candidate graph-to-RHI associations and capture publication.
 //! The C++ capture owns guarded engine reads, typed GPU effects and narrow file effects.
 
-mod artifacts;
+pub(super) mod artifacts;
 mod draws;
 mod root_hooks;
 
+use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
+use crate::velocity_container::borrowed;
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -19,6 +21,8 @@ const MAX_ENGINE: usize = 16384;
 const MAX_ROOTS: usize = 2048;
 const MAX_COMMANDS: usize = 16384;
 const MAX_COMMANDS_PER_ROOT: u32 = 4096;
+const MAX_BLOBS: usize = 4096;
+const BLOB_BUDGET: usize = 32 * 1024 * 1024;
 
 // Private ABI mirrored in motion_capture_records.h, except VelocityFacts, which is public.
 #[repr(C)]
@@ -172,6 +176,7 @@ struct NativeRecordCounts {
     roots_dropped: u32,
     commands_dropped: u32,
     draw_dropped: u32,
+    blob_dropped: u32,
 }
 
 #[repr(u32)]
@@ -201,10 +206,13 @@ struct Records {
     roots: Vec<RootRecord>,
     commands: HashMap<u64, Association>,
     draws: Vec<Vec<u8>>,
+    blobs: Vec<Vec<u8>>,
+    blob_bytes: usize,
     engine_dropped: u32,
     roots_dropped: u32,
     commands_dropped: u32,
     draw_dropped: u32,
+    blob_dropped: u32,
 }
 
 static RECORDS: LazyLock<Mutex<Records>> = LazyLock::new(|| Mutex::new(Records::default()));
@@ -217,7 +225,6 @@ thread_local! {
 }
 
 fn records() -> MutexGuard<'static, Records> {
-    // The native session mutex is taken first whenever both locks are needed.
     // No engine call or file effect runs under this lock.
     RECORDS.lock().unwrap_or_else(|error| error.into_inner())
 }
@@ -380,11 +387,15 @@ pub extern "C" fn rsf_ac7_capture_has_velocity(primitive: u64, has_velocity: boo
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_record_engine(
+unsafe extern "C" fn rsf_ac7_capture_record_engine(
+    capture: CaptureInterval,
     event: *const EngineRecord,
     accepted: bool,
 ) -> bool {
     let mut records = records();
+    if !rsf_ac7_capture_current(capture.session) {
+        return true;
+    }
     if records.engine.len() >= MAX_ENGINE {
         records.engine_dropped = records.engine_dropped.wrapping_add(1);
     } else {
@@ -452,15 +463,19 @@ pub unsafe extern "C" fn rsf_ac7_capture_end_root(root: *mut RootRecord, qpc: u6
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_ac7_capture_record_root(root: *const RootRecord) -> bool {
+    // SAFETY: The native detour passes its live, fully initialized record.
+    let root = unsafe { *root };
     let mut records = records();
+    if !rsf_ac7_capture_current(root.session) {
+        return true;
+    }
     if records.roots.len() >= MAX_ROOTS {
         records.roots_dropped = records.roots_dropped.wrapping_add(1);
     } else {
         if records.roots.try_reserve(1).is_err() {
             return false;
         }
-        // SAFETY: The native detour passes its live, fully initialized record.
-        records.roots.push(unsafe { *root });
+        records.roots.push(root);
     }
     true
 }
@@ -485,6 +500,9 @@ pub unsafe extern "C" fn rsf_ac7_capture_associate_command(
     // SAFETY: The native detour passes its live graph root after reading the command prefix.
     let root = unsafe { &mut *root };
     let mut records = records();
+    if !rsf_ac7_capture_current(root.session) {
+        return CommandAdvance::Stop;
+    }
     let association = Association {
         scope: QueuedScope {
             scope: root.id,
@@ -601,14 +619,39 @@ pub extern "C" fn rsf_ac7_capture_geometry_scope() -> GeometryScope {
     })
 }
 
-type CopyRoots = unsafe extern "C" fn(*mut c_void, *const RootRecord, usize) -> bool;
-
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_copy_roots(user: *mut c_void, copy: CopyRoots) -> bool {
-    let records = records();
-    // SAFETY: The native callback only copies the locked array into checkpoint storage
-    // while holding its session guard, which also protects the companion blob snapshot.
-    records.roots.is_empty() || unsafe { copy(user, records.roots.as_ptr(), records.roots.len()) }
+unsafe extern "C" fn rsf_ac7_capture_store_blob(
+    capture: CaptureInterval,
+    bytes: *const u8,
+    size: usize,
+    id: &mut u32,
+) -> bool {
+    *id = 0;
+    // SAFETY: The D3D or guarded engine read lends its local copy for this call.
+    let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
+        return size == 0;
+    };
+    let mut records = records();
+    if !rsf_ac7_capture_current(capture.session) {
+        return true;
+    }
+    if let Some(index) = records.blobs.iter().position(|blob| blob == bytes) {
+        *id = (index + 1) as u32;
+        return true;
+    }
+    if records.blobs.len() >= MAX_BLOBS || bytes.len() > BLOB_BUDGET - records.blob_bytes {
+        records.blob_dropped = records.blob_dropped.wrapping_add(1);
+        return true;
+    }
+    let mut blob = Vec::new();
+    if blob.try_reserve_exact(size).is_err() || records.blobs.try_reserve(1).is_err() {
+        return false;
+    }
+    blob.extend_from_slice(bytes);
+    records.blob_bytes += size;
+    records.blobs.push(blob);
+    *id = records.blobs.len() as u32;
+    true
 }
 
 pub(super) fn reset_records() {
@@ -617,8 +660,11 @@ pub(super) fn reset_records() {
     records.roots.clear();
     records.commands.clear();
     records.draws.clear();
+    records.blobs.clear();
+    records.blob_bytes = 0;
     records.engine_dropped = 0;
     records.roots_dropped = 0;
     records.commands_dropped = 0;
     records.draw_dropped = 0;
+    records.blob_dropped = 0;
 }

@@ -6,7 +6,9 @@ pub(super) mod colour;
 pub(super) mod geometry;
 
 use crate::d3d11_observer_layout_abi::rsf_observer_layout_element as LayoutElement;
-use crate::motion_capture_session::rsf_ac7_capture_enabled;
+use crate::motion_capture_session::{
+    CaptureInterval, rsf_ac7_capture_enabled, rsf_ac7_capture_fail,
+};
 use crate::shader_hash::crc32c;
 use crate::velocity_container::borrowed;
 use buffers::ConstantBuffers;
@@ -234,7 +236,19 @@ unsafe extern "C" fn rsf_ac7_capture_declared_constants(text: *const u8, size: u
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_observe_layout(
+unsafe extern "C" fn rsf_ac7_motion_capture_layout(
+    layout: *mut c_void,
+    elements: *const LayoutElement,
+    copied: u32,
+    count: u32,
+) {
+    // SAFETY: The public callback lends the observer's translated descriptors.
+    if !unsafe { observe_layout(layout, elements, copied, count) } {
+        rsf_ac7_capture_fail(CaptureInterval::load());
+    }
+}
+
+unsafe fn observe_layout(
     layout: *mut c_void,
     elements: *const LayoutElement,
     copied: u32,

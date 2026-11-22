@@ -3,17 +3,20 @@
 
 use super::{EngineRecord, NativeRecordCounts, ROOT_NAMES, RootRecord, observe_velocity, records};
 use crate::motion_capture_observations::PublicationObservations;
-use std::ffi::{CStr, c_char, c_void};
+use crate::motion_capture_session::{
+    CaptureInterval, capture_prefix, rsf_ac7_capture_current, rsf_ac7_capture_fail,
+    rsf_ac7_capture_sampled, say, say_path,
+};
+use std::ffi::{CStr, c_char};
 use std::fmt::{self, Write as _};
 use std::io::Write as _;
 use std::mem::{offset_of, size_of, take};
-use std::slice;
 
 #[derive(Default)]
-pub(super) struct Bytes(pub(super) Vec<u8>);
+pub(crate) struct Bytes(pub(crate) Vec<u8>);
 
 impl Bytes {
-    pub(super) fn extend(&mut self, bytes: &[u8]) -> fmt::Result {
+    pub(crate) fn extend(&mut self, bytes: &[u8]) -> fmt::Result {
         self.0.try_reserve(bytes.len()).map_err(|_| fmt::Error)?;
         self.0.extend_from_slice(bytes);
         Ok(())
@@ -220,6 +223,7 @@ struct Snapshot {
     engine: Vec<EngineRecord>,
     roots: Vec<RootRecord>,
     draws: Vec<Vec<u8>>,
+    blobs: Vec<Vec<u8>>,
     counts: NativeRecordCounts,
 }
 
@@ -237,10 +241,12 @@ impl Snapshot {
                 roots_dropped: records.roots_dropped,
                 commands_dropped: records.commands_dropped,
                 draw_dropped: records.draw_dropped,
+                blob_dropped: records.blob_dropped,
             },
             engine: take(&mut records.engine),
             roots: take(&mut records.roots),
             draws: take(&mut records.draws),
+            blobs: take(&mut records.blobs),
         }
     }
 }
@@ -252,59 +258,22 @@ impl Drop for Snapshot {
         records.engine = take(&mut self.engine);
         records.roots = take(&mut self.roots);
         records.draws = take(&mut self.draws);
+        records.blobs = take(&mut self.blobs);
     }
 }
 
-// Private ABI mirrored in motion_capture_records.h. Native lists lend bytes for the full call.
+// Private ABI mirrored in motion_capture_records.h.
 #[repr(C)]
-struct Artifact {
-    data: *const u8,
-    size: usize,
-}
-
-#[repr(C)]
-struct ArtifactList {
-    user: *const c_void,
-    count: usize,
-    at: unsafe extern "C" fn(*const c_void, usize) -> Artifact,
-}
-
-impl ArtifactList {
-    fn entries(&self) -> impl Iterator<Item = &[u8]> {
-        (0..self.count).map(move |index| -> &[u8] {
-            // SAFETY: Native supplies its live list, callback and exact size. At finish the
-            // session guard prevents mutation, and the checkpoint list is a local copy.
-            let entry = unsafe { (self.at)(self.user, index) };
-            if entry.size == 0 {
-                &[]
-            } else {
-                // SAFETY: The returned data is valid and unchanged for the list borrow.
-                unsafe { slice::from_raw_parts(entry.data, entry.size) }
-            }
-        })
-    }
-}
-
-#[repr(C)]
-struct Stats {
+#[derive(Default)]
+pub(crate) struct Stats {
     qpc_frequency: i64,
     engine_hooks: u32,
     renderer_root_hooks: u32,
-    blob_dropped: u32,
     capture_failures: u32,
 }
 
-#[repr(C)]
-struct FinalArtifacts {
-    blobs: ArtifactList,
-    user: *const c_void,
-    stats: unsafe extern "C" fn(*const c_void) -> Stats,
-}
-
 const _: () = {
-    assert!(size_of::<Artifact>() == 16 && size_of::<ArtifactList>() == 24);
-    assert!(size_of::<Stats>() == 24 && offset_of!(Stats, capture_failures) == 20);
-    assert!(size_of::<FinalArtifacts>() == 40 && offset_of!(FinalArtifacts, stats) == 32);
+    assert!(size_of::<Stats>() == 24 && offset_of!(Stats, capture_failures) == 16);
 };
 
 fn write_summary(
@@ -344,7 +313,7 @@ fn write_summary(
         draws,
         counts.engine_dropped,
         counts.draw_dropped,
-        stats.blob_dropped,
+        counts.blob_dropped,
         observations.shaders_dropped,
         readbacks,
         readback_failures,
@@ -355,24 +324,7 @@ fn write_summary(
     )
 }
 
-type WriteFile = unsafe extern "C" fn(*const c_char, *const u8, usize) -> bool;
-
-#[repr(u32)]
-enum Publication {
-    Failed,
-    Partial,
-    Complete,
-}
-
-impl From<Result<bool, fmt::Error>> for Publication {
-    fn from(result: Result<bool, fmt::Error>) -> Self {
-        match result {
-            Ok(true) => Self::Complete,
-            Ok(false) => Self::Partial,
-            Err(_) => Self::Failed,
-        }
-    }
-}
+pub(crate) type WriteFile = unsafe extern "C" fn(*const c_char, *const u8, usize) -> bool;
 
 struct Publisher<'a> {
     prefix: &'a CStr,
@@ -402,18 +354,14 @@ impl<'a> Publisher<'a> {
         Ok(())
     }
 
-    fn blobs(&mut self, blobs: &ArtifactList) -> fmt::Result {
-        for (index, bytes) in blobs.entries().enumerate() {
+    fn blobs(&mut self, blobs: &[Vec<u8>]) -> fmt::Result {
+        for (index, bytes) in blobs.iter().enumerate() {
             self.file(format_args!("\\cb_{}.bin", index + 1), bytes)?;
         }
         Ok(())
     }
 
-    fn checkpoint(
-        mut self,
-        roots: &[RootRecord],
-        blobs: &ArtifactList,
-    ) -> Result<bool, fmt::Error> {
+    fn checkpoint(mut self, roots: &[RootRecord], blobs: &[Vec<u8>]) -> Result<bool, fmt::Error> {
         let mut text = Bytes::default();
         write_roots(&mut text, roots)?;
         self.file(format_args!("\\native.partial.jsonl"), &text.0)?;
@@ -421,7 +369,7 @@ impl<'a> Publisher<'a> {
         Ok(self.ok)
     }
 
-    fn finish(mut self, sources: &FinalArtifacts) -> Result<bool, fmt::Error> {
+    fn finish(mut self, stats: unsafe extern "C" fn() -> Stats) -> Result<bool, fmt::Error> {
         let observations = PublicationObservations::snapshot().map_err(|_| fmt::Error)?;
         let snapshot = Snapshot::finish();
         let mut text = Bytes::default();
@@ -437,7 +385,7 @@ impl<'a> Publisher<'a> {
             text.write_char('\n')?;
         }
         self.file(format_args!("\\draws.jsonl"), &text.0)?;
-        self.blobs(&sources.blobs)?;
+        self.blobs(&snapshot.blobs)?;
         for (index, shader) in observations.shaders.iter().enumerate() {
             self.file(
                 format_args!(
@@ -449,9 +397,8 @@ impl<'a> Publisher<'a> {
                 &shader.data,
             )?;
         }
-        // SAFETY: The native callback samples completion counters while the native guard and
-        // capture are still live, after the other file attempts as in the original writer.
-        let stats = unsafe { (sources.stats)(sources.user) };
+        // SAFETY: The native callback samples completion counters after the other file attempts.
+        let stats = unsafe { stats() };
         text.0.clear();
         write_summary(
             &mut text,
@@ -467,33 +414,62 @@ impl<'a> Publisher<'a> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_publish_checkpoint(
-    prefix: *const c_char,
-    write: WriteFile,
-    roots: *const RootRecord,
-    count: usize,
-    blobs: &ArtifactList,
-) -> Publication {
-    let roots = if count == 0 {
-        &[]
-    } else {
-        // SAFETY: Native lends its completed checkpoint copy for this call.
-        unsafe { slice::from_raw_parts(roots, count) }
+extern "C" fn rsf_ac7_capture_publish_checkpoint(write: WriteFile, capture: CaptureInterval) {
+    if !rsf_ac7_capture_sampled(capture.interval) {
+        return;
+    }
+    let Some(prefix) = capture_prefix(capture.session) else {
+        return;
     };
-    // SAFETY: Native lends the checkpoint's terminated narrow prefix for this call.
-    let prefix = unsafe { CStr::from_ptr(prefix) };
-    Publisher::new(prefix, write)
-        .checkpoint(roots, blobs)
-        .into()
+    let result = (|| {
+        let records = records();
+        if !rsf_ac7_capture_current(capture.session) {
+            return Ok(true);
+        }
+        let mut roots = Vec::new();
+        let mut blobs = Vec::new();
+        roots
+            .try_reserve_exact(records.roots.len())
+            .map_err(|_| fmt::Error)?;
+        blobs
+            .try_reserve_exact(records.blobs.len())
+            .map_err(|_| fmt::Error)?;
+        roots.extend_from_slice(&records.roots);
+        for blob in &records.blobs {
+            let mut bytes = Bytes::default();
+            bytes.extend(blob)?;
+            blobs.push(bytes.0);
+        }
+        drop(records);
+        Publisher::new(&prefix, write).checkpoint(&roots, &blobs)
+    })();
+    match result {
+        Err(_) => rsf_ac7_capture_fail(capture),
+        Ok(false) => say(c"motion capture: native checkpoint could not be fully written"),
+        Ok(true) => {}
+    }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_publish_finish(
-    prefix: *const c_char,
+pub(crate) fn publish_finish(
+    capture: CaptureInterval,
     write: WriteFile,
-    sources: &FinalArtifacts,
-) -> Publication {
-    // SAFETY: Native lends the guarded session's terminated narrow prefix for this call.
-    let prefix = unsafe { CStr::from_ptr(prefix) };
-    Publisher::new(prefix, write).finish(sources).into()
+    stats: unsafe extern "C" fn() -> Stats,
+) {
+    let Some(prefix) = capture_prefix(capture.session) else {
+        rsf_ac7_capture_fail(capture);
+        return;
+    };
+    let result = Publisher::new(&prefix, write)
+        .finish(stats)
+        .and_then(|complete| {
+            let suffix = if complete {
+                ""
+            } else {
+                " (some writes failed)"
+            };
+            say_path("motion capture finished: ", &prefix, suffix)
+        });
+    if result.is_err() {
+        rsf_ac7_capture_fail(capture);
+    }
 }

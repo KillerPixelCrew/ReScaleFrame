@@ -2,9 +2,11 @@
 //! Admission for sampled colour reads and the contact-light before/after pair.
 
 use super::{observations, rsf_ac7_capture_shader_facts};
-use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
+use crate::motion_capture_records::artifacts::Bytes;
+use crate::motion_capture_session::{CaptureInterval, capture_prefix, rsf_ac7_capture_current};
 use std::cell::Cell;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
+use std::fmt::{self, Write as _};
 use std::mem::{offset_of, size_of};
 
 const SHARED_READ_LIMIT: u32 = 48;
@@ -166,25 +168,65 @@ extern "C" fn rsf_ac7_capture_colour_snapshot_available(
     observations().colour.available(capture, lighting)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_reserve_colour_snapshot(
-    capture: CaptureInterval,
-    lighting: bool,
-) -> u32 {
+fn reserve_colour_snapshot(capture: CaptureInterval, lighting: bool) -> Option<u32> {
     let mut observations = observations();
     let colour = &mut observations.colour;
     if !colour.available(capture, lighting) {
-        return u32::MAX;
+        return None;
     }
     let ordinal = colour.attempted;
     colour.attempted += 1;
-    ordinal
+    Some(ordinal)
 }
 
+#[repr(C)]
+pub(crate) struct ColourSnapshot {
+    pub(crate) name: [u8; 96],
+    pub(crate) result: i32,
+}
+
+type ReadColour = unsafe extern "C" fn(*mut c_void, *const c_char) -> i32;
+
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_colour_snapshot_failed(capture: CaptureInterval) {
-    let mut observations = observations();
-    if rsf_ac7_capture_current(capture.session) {
-        observations.colour.failed += 1;
-    }
+unsafe extern "C" fn rsf_ac7_capture_colour_snapshot(
+    capture: CaptureInterval,
+    role: *const c_char,
+    lighting: bool,
+    user: *mut c_void,
+    read: ReadColour,
+    snapshot: &mut ColourSnapshot,
+) -> bool {
+    let Some(prefix) = capture_prefix(capture.session) else {
+        return true;
+    };
+    let Some(ordinal) = reserve_colour_snapshot(capture, lighting) else {
+        return true;
+    };
+    // SAFETY: The native capture supplies a static terminated role string.
+    let Ok(role) = unsafe { CStr::from_ptr(role) }.to_str() else {
+        return false;
+    };
+    let result = (|| -> fmt::Result {
+        use std::io::Write as _;
+        let mut name = &mut snapshot.name[..];
+        let initial = name.len();
+        write!(name, "f{:03}_stage_{role}_{ordinal:03}", capture.interval)
+            .map_err(|_| fmt::Error)?;
+        let name_len = initial - name.len();
+        let mut path = Bytes::default();
+        path.extend(prefix.to_bytes())?;
+        path.write_char('\\')?;
+        path.extend(&snapshot.name[..name_len])?;
+        path.write_char('\0')?;
+        // SAFETY: The native leaf borrows the path and its original COM state for this call.
+        snapshot.result = unsafe { read(user, path.0.as_ptr().cast()) };
+        if snapshot.result != 0 {
+            let mut observations = observations();
+            if rsf_ac7_capture_current(capture.session) {
+                observations.colour.failed += 1;
+            }
+        }
+        Ok(())
+    })();
+    result.is_ok()
 }

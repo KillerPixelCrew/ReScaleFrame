@@ -164,3 +164,42 @@ extern "C" fn rsf_ac7_capture_record_before_draw(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sampler_lod_is_json_with_six_significant_digits() {
+        let mut output = Bytes::default();
+        write_samplers(
+            &mut output,
+            &[
+                Sampler {
+                    slot: 0,
+                    filter: 0,
+                    address: [1, 1, 1],
+                    comparison: 0,
+                    min_lod: f32::INFINITY,
+                    max_lod: f32::from_bits(0xffc0_0000),
+                },
+                Sampler {
+                    slot: 1,
+                    filter: 0,
+                    address: [1, 1, 1],
+                    comparison: 0,
+                    min_lod: f32::NEG_INFINITY,
+                    max_lod: 0.12345678,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            str::from_utf8(&output.0).unwrap(),
+            concat!(
+                "{\"slot\":0,\"filter\":0,\"address\":[1,1,1],\"comparison\":0,\"lod\":[null,null]},",
+                "{\"slot\":1,\"filter\":0,\"address\":[1,1,1],\"comparison\":0,\"lod\":[null,0.123457]}"
+            )
+        );
+    }
+}

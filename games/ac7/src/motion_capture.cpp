@@ -17,41 +17,22 @@
 #include <wrl/client.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
-#include <mutex>
 #include <new>
-#include <string>
 #include <utility>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-constexpr uint32_t max_blobs = 4096;
-constexpr size_t blob_budget = 32u * 1024u * 1024u;
-
-struct Capture {
-    std::mutex guard;
-    std::atomic<bool> installed{false};
-    std::string directory, prefix;
-    rsf_ac7_capture_log_fn log = nullptr;
-    void* user = nullptr;
-    std::vector<std::vector<unsigned char>> blobs;
-    size_t blob_bytes = 0;
-    uint32_t blob_dropped = 0;
-};
-Capture& state() { static Capture s; return s; }
-std::atomic<bool> native_owner{false};
 using ShouldFn = bool(*)(void*, void*, bool);
 using HasFn = bool(*)(void*, void*);
 using HistoryFn = bool(*)(void*, void*, float*);
 ShouldFn original_should = nullptr;
 HasFn original_has = nullptr;
 HistoryFn original_history = nullptr;
-void* hook_targets[3]{};
 using PostProcessFn = void(*)(void*, void*, void*, void*);
 using WidgetPrepareFn = void(*)(void*);
 using WidgetQueueFn = void(*)(void*, float);
@@ -68,11 +49,10 @@ uint64_t tick()
 {
     LARGE_INTEGER t{}; QueryPerformanceCounter(&t); return uint64_t(t.QuadPart);
 }
-void say(const char* message) { auto& s = state(); if (s.log) s.log(s.user, message); }
+void say(const char* message) { rsf_ac7_capture_log(message); }
 void capture_failed(MotionCaptureInterval observed) noexcept
 {
     rsf_ac7_capture_fail(observed);
-    say("motion capture stopped after an allocation or serialization failure; game decisions are unchanged");
 }
 void capture_failed() noexcept { capture_failed(rsf_ac7_capture_interval()); }
 
@@ -117,7 +97,6 @@ bool hooked_has(void* view, void* primitive)
 }
 bool hooked_should(void* primitive, void* view, bool check_visibility)
 {
-    auto& s = state();
     const auto capture = rsf_ac7_capture_interval();
     if (!capture) return original_should(primitive, view, check_visibility);
     EngineRecord event{};
@@ -157,30 +136,15 @@ bool hooked_should(void* primitive, void* view, bool check_visibility)
         const EngineObservation observation(event);
         accepted = original_should(primitive, view, check_visibility);
     }
-    try {
-        bool recorded = true;
-        {
-            std::lock_guard<std::mutex> lock(s.guard);
-            if (rsf_ac7_capture_current(capture.session))
-                recorded = rsf_ac7_capture_record_engine(&event, accepted);
-        }
-        if (!recorded) capture_failed(capture);
-    } catch (...) { capture_failed(capture); }
+    if (!rsf_ac7_capture_record_engine(capture, &event, accepted)) capture_failed(capture);
     return accepted;
 }
 
-uint32_t save_blob(MotionCaptureInterval capture, std::vector<unsigned char> bytes)
+uint32_t save_blob(MotionCaptureInterval capture, const std::vector<unsigned char>& bytes)
 {
-    auto& s = state();
-    std::lock_guard<std::mutex> lock(s.guard);
-    if (!rsf_ac7_capture_current(capture.session)) return 0;
-    for (size_t i = 0; i < s.blobs.size(); ++i)
-        if (s.blobs[i] == bytes) return uint32_t(i + 1);
-    if (s.blobs.size() >= max_blobs || s.blob_bytes + bytes.size() > blob_budget) {
-        ++s.blob_dropped; return 0;
-    }
-    s.blob_bytes += bytes.size(); s.blobs.push_back(std::move(bytes));
-    return uint32_t(s.blobs.size());
+    uint32_t id;
+    if (!rsf_ac7_capture_store_blob(capture, bytes.data(), bytes.size(), &id)) throw std::bad_alloc{};
+    return id;
 }
 RootRecord root_record(MotionCaptureInterval capture, RootKind kind, void* owner)
 {
@@ -192,16 +156,7 @@ RootRecord root_record(MotionCaptureInterval capture, RootKind kind, void* owner
 }
 void record_root(const RootRecord& r) noexcept
 {
-    try {
-        auto& s = state();
-        bool recorded;
-        {
-            std::lock_guard<std::mutex> lock(s.guard);
-            if (!rsf_ac7_capture_current(r.session)) return;
-            recorded = rsf_ac7_capture_record_root(&r);
-        }
-        if (!recorded) capture_failed({r.session, r.interval});
-    } catch (...) { capture_failed({r.session, r.interval}); }
+    if (!rsf_ac7_capture_record_root(&r)) capture_failed({r.session, r.interval});
 }
 template<class Original> void observe_root(RootRecord& root, Original original)
 {
@@ -236,7 +191,7 @@ void hooked_postprocess(void* owner, void* command_list, void* view, void* veloc
     try {
         if (rsf_ac7_capture_sampled(r.interval)) {
             std::vector<unsigned char> bytes(0x27c0);
-            if (copy_memory(bytes.data(), view, bytes.size())) r.view_blob = save_blob(capture, std::move(bytes));
+            if (copy_memory(bytes.data(), view, bytes.size())) r.view_blob = save_blob(capture, bytes);
         }
     } catch (...) { capture_failed(capture); }
     observe_root(r, [&] { original_postprocess(owner, command_list, view, velocity_reference); });
@@ -286,7 +241,7 @@ void hooked_temporal_process(void* node, void* context)
     try {
         if (rsf_ac7_capture_sampled(r.interval)) {
             std::vector<unsigned char> bytes(0xe0);
-            if (copy_memory(bytes.data(), node, bytes.size())) r.node_blob = save_blob(capture, std::move(bytes));
+            if (copy_memory(bytes.data(), node, bytes.size())) r.node_blob = save_blob(capture, bytes);
         }
     } catch (...) { capture_failed(capture); }
     observe_root(r, [&] { original_temporal_process(node, context); });
@@ -324,7 +279,7 @@ void graph_output(RootRecord& r) noexcept
 void associate_commands(RootRecord& r) noexcept
 {
     try {
-        auto& s = state(); uint64_t link = 0, command = 0;
+        uint64_t link = 0, command = 0;
         uint32_t uid = 0;
         auto* list = reinterpret_cast<void*>(uintptr_t(r.command_list));
         if (!read(list, 8, link) || !read(list, 0x18, uid) ||
@@ -334,12 +289,7 @@ void associate_commands(RootRecord& r) noexcept
             uint64_t next = 0, execute = 0;
             auto* p = reinterpret_cast<void*>(uintptr_t(command));
             if (!read(p, 0, next) || !read(p, 8, execute)) break;
-            CommandAdvance advance;
-            {
-                std::lock_guard<std::mutex> lock(s.guard);
-                if (!rsf_ac7_capture_current(r.session)) return;
-                advance = rsf_ac7_capture_associate_command(&r, command, execute);
-            }
+            const auto advance = rsf_ac7_capture_associate_command(&r, command, execute);
             if (advance == command_failed) { capture_failed({r.session, r.interval}); return; }
             if (advance == command_stop) break;
             command = next;
@@ -370,7 +320,6 @@ MotionQueuedDraw queued_draw()
     const auto* current_command = rsf_ac7_capture_current_command_address();
     if (current_command && copy_memory(&draw.command, current_command, sizeof(draw.command)) &&
         draw.command && read(draw.command, 8, draw.execute)) {
-        auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
         draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, true);
     } else draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, false);
     return draw;
@@ -390,7 +339,18 @@ bool install_root_hooks(void** targets, uint32_t count)
     return count == 6 && rsf::ac7::install_hooks(targets, detours, originals, count);
 }
 const MotionRootHookEffects root_hook_effects{
-    copy_memory, [] { return native_owner.load(); }, install_root_hooks, rsf::ac7::remove_hooks,
+    copy_memory, install_root_hooks, rsf::ac7::remove_hooks,
+};
+bool install_engine_hooks(void** targets, uint32_t count)
+{
+    void* detours[] = {reinterpret_cast<void*>(&hooked_should), reinterpret_cast<void*>(&hooked_has),
+                      reinterpret_cast<void*>(&hooked_history)};
+    void** originals[] = {reinterpret_cast<void**>(&original_should), reinterpret_cast<void**>(&original_has),
+                         reinterpret_cast<void**>(&original_history)};
+    return count == std::size(detours) && rsf::ac7::install_hooks(targets, detours, originals, count);
+}
+const MotionRootHookEffects engine_hook_effects{
+    copy_memory, install_engine_hooks, rsf::ac7::remove_hooks,
 };
 void install_roots(unsigned char* base)
 {
@@ -442,7 +402,7 @@ void visit_constants(MotionCaptureInterval capture, ID3D11DeviceContext* context
                 }
             }
         }
-        const uint32_t id = bytes.empty() ? 0 : save_blob(capture, std::move(bytes));
+        const uint32_t id = bytes.empty() ? 0 : save_blob(capture, bytes);
         visit(MotionBoundConstant{record.buffer, record.upload_serial, slot, id, uint32_t(fallback)});
     }
 }
@@ -507,22 +467,18 @@ MotionColourSnapshot colour_snapshot(MotionCaptureInterval capture, ID3D11Device
     if (!role || !resource || !rsf_ac7_capture_colour_snapshot_available(capture, lighting)) return {};
     ComPtr<ID3D11Texture2D> texture;
     if (FAILED(resource->QueryInterface(IID_PPV_ARGS(&texture)))) return {};
-    auto& s = state();
     MotionColourSnapshot snapshot{};
-    std::string path;
-    {
-        // Keep the accepted ordinals and their paths tied to this native session's directory.
-        std::lock_guard<std::mutex> lock(s.guard);
-        const auto ordinal = rsf_ac7_capture_reserve_colour_snapshot(capture, lighting);
-        if (ordinal == UINT32_MAX) return {};
-        std::snprintf(snapshot.name, sizeof(snapshot.name), "f%03u_stage_%s_%03u", capture.interval, role, ordinal);
-        path = s.prefix + "\\" + snapshot.name;
-    }
-    ComPtr<ID3D11Device> device; context->GetDevice(&device);
-    rsf_texture_dump_options options{}; options.struct_size = sizeof(options);
-    options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION; options.output_prefix_utf8 = path.c_str();
-    snapshot.result = rsf_dump_texture_bytes(device.Get(), context, texture.Get(), &options);
-    if (snapshot.result != RSF_TEXTURE_OK) rsf_ac7_capture_colour_snapshot_failed(capture);
+    struct Readback { ID3D11DeviceContext* context; ID3D11Texture2D* texture; } readback{context, texture.Get()};
+    const auto dump = [](void* user, const char* path) noexcept -> int32_t {
+        const auto& input = *static_cast<const Readback*>(user);
+        ComPtr<ID3D11Device> device; input.context->GetDevice(&device);
+        rsf_texture_dump_options options{}; options.struct_size = sizeof(options);
+        options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION; options.output_prefix_utf8 = path;
+        return rsf_dump_texture_bytes(device.Get(), input.context, input.texture, &options);
+    };
+    static_assert(RSF_TEXTURE_OK == 0);
+    if (!rsf_ac7_capture_colour_snapshot(capture, role, lighting, &readback, dump, &snapshot))
+        throw std::bad_alloc{};
     return snapshot;
 }
 MotionDrawTarget sampled_target(MotionCaptureInterval capture, ID3D11DeviceContext* context,
@@ -708,69 +664,17 @@ bool write_file(const char* path, const unsigned char* data, size_t bytes) noexc
     return std::fclose(f) == 0 && ok;
 }
 
-template<class List> MotionArtifactList byte_artifacts(const List& list) noexcept
-{
-    return {&list, list.size(), [](const void* user, size_t index) noexcept -> MotionArtifact {
-        const auto& bytes = (*static_cast<const List*>(user))[index];
-        return {reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()};
-    }};
-}
-
-bool copy_checkpoint_roots(void* user, const RootRecord* records, size_t count) noexcept try
-{
-    auto& roots = *static_cast<std::vector<RootRecord>*>(user);
-    roots.assign(records, records + count);
-    return true;
-}
-catch (...) { return false; }
 void checkpoint_native(MotionCaptureInterval capture) noexcept
 {
-    if (!rsf_ac7_capture_due_checkpoint(capture)) return;
-    try {
-        auto& s = state();
-        std::string prefix;
-        std::vector<RootRecord> roots;
-        std::vector<std::vector<unsigned char>> blobs;
-        bool copied;
-        {
-            std::lock_guard<std::mutex> lock(s.guard);
-            if (!rsf_ac7_capture_current(capture.session)) return;
-            prefix = s.prefix;
-            copied = rsf_ac7_capture_copy_roots(&roots, copy_checkpoint_roots);
-            if (copied) blobs = s.blobs;
-        }
-        if (!copied) { capture_failed(capture); return; }
-        const auto files = byte_artifacts(blobs);
-        const auto result = rsf_ac7_capture_publish_checkpoint(prefix.c_str(), write_file,
-            roots.data(), roots.size(), &files);
-        if (result == publication_failed) capture_failed(capture);
-        else if (result == publication_partial) say("motion capture: native checkpoint could not be fully written");
-    } catch (...) { capture_failed(capture); }
+    rsf_ac7_capture_publish_checkpoint(write_file, capture);
 }
 
-MotionArtifactStats finish_stats(const void* user) noexcept
+MotionArtifactStats finish_stats() noexcept
 {
-    const auto& s = *static_cast<const Capture*>(user);
     LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
-    return {frequency.QuadPart, s.installed.load(), rsf_ac7_capture_current_command_address() != nullptr,
-        s.blob_dropped, rsf_ac7_capture_failures()};
+    return {frequency.QuadPart, rsf_ac7_capture_engine_installed(), rsf_ac7_capture_current_command_address() != nullptr,
+        rsf_ac7_capture_failures()};
 }
-void finish() noexcept try
-{
-    auto& s = state();
-    std::unique_lock<std::mutex> lock(s.guard);
-    const MotionFinalArtifacts files{byte_artifacts(s.blobs), &s, finish_stats};
-    const auto result = rsf_ac7_capture_publish_finish(s.prefix.c_str(), write_file, &files);
-    if (result == publication_failed) {
-        lock.unlock();
-        capture_failed();
-        return;
-    }
-    say((std::string("motion capture finished: ") + s.prefix +
-         (result == publication_complete ? "" : " (some writes failed)")).c_str());
-}
-catch (...) { capture_failed(); }
-
 bool poll_capture(void* swapchain, bool* pressed) noexcept
 {
     DXGI_SWAP_CHAIN_DESC desc{};
@@ -780,36 +684,21 @@ bool poll_capture(void* swapchain, bool* pressed) noexcept
     return true;
 }
 
-bool prepare_capture(uint32_t session) noexcept try
+void capture_stamp(MotionCaptureStamp* stamp) noexcept
 {
-    auto& s = state();
     SYSTEMTIME time{}; GetLocalTime(&time);
-    char name[96]{};
-    std::snprintf(name, sizeof(name), "\\motion-%04u%02u%02u-%02u%02u%02u-%lu-%u",
-                  time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond,
-                  GetCurrentProcessId(), session);
-    std::string path = s.directory + name;
-    if (!CreateDirectoryA(path.c_str(), nullptr)) {
-        say("motion capture: output directory could not be created");
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(s.guard);
-    s.prefix = std::move(path);
-    s.blobs.clear(); s.blob_bytes = 0;
-    s.blob_dropped = 0;
-    return true;
+    *stamp = {time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond,
+        uint32_t(GetCurrentProcessId())};
 }
-catch (...) { capture_failed(); return false; }
 
-void capture_armed(MotionCaptureInterval capture) noexcept try
+bool create_capture_directory(const char* path) noexcept
 {
-    say((std::string("motion capture armed: ") + state().prefix).c_str());
+    return CreateDirectoryA(path, nullptr) != FALSE;
 }
-catch (...) { capture_failed(capture); }
 
-void set_sample(uint32_t interval, char* prefix, uint32_t capacity) noexcept
+void set_sample(bool enabled) noexcept
 {
-    if (interval == UINT32_MAX) {
+    if (!enabled) {
         rsf_frame_tap_set_research_callbacks(nullptr, nullptr, nullptr);
         return;
     }
@@ -819,91 +708,49 @@ void set_sample(uint32_t interval, char* prefix, uint32_t capacity) noexcept
         [](void*, void* context, uint32_t x, uint32_t y, uint32_t z, void* indirect, uint32_t offset) {
             compute_capture(rsf_ac7_capture_sample(), context, x, y, z, indirect, offset);
         }, nullptr);
-    std::snprintf(prefix, capacity, "%s\\f%03u", state().prefix.c_str(), interval);
 }
 
-const MotionCaptureEffects capture_effects{poll_capture, prepare_capture, capture_armed, set_sample, finish};
+const MotionCaptureEffects capture_effects{
+    poll_capture, capture_stamp, create_capture_directory, set_sample, write_file, finish_stats,
+};
 } // namespace
 
-extern "C" void rsf_ac7_motion_capture_configure(const char* directory, rsf_ac7_capture_log_fn log, void* user) try
-{
-    auto& s = state(); s.directory = directory ? directory : ""; s.log = log; s.user = user;
-    const bool enabled = !s.directory.empty();
-    rsf_ac7_capture_enable(enabled);
-    if (enabled) say("motion capture configured: F9 records 60 intervals, sampled at 0/30/59");
-}
-catch (...) { capture_failed(); }
 extern "C" int rsf_ac7_motion_capture_install(void)
 {
-    auto& s = state(); if (!rsf_ac7_capture_enabled() || s.installed) return s.installed ? 1 : 0;
-    const auto owns_hooks = [](auto target) { return target != nullptr; };
-    if (std::any_of(std::begin(hook_targets), std::end(hook_targets), owns_hooks)) {
-        say("motion capture engine hooks pending removal"); return 0;
-    }
+    if (rsf_ac7_capture_engine_installed()) return 1;
+    if (!rsf_ac7_capture_enabled()) return 0;
     auto* base = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
     const MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) { say("motion capture: MinHook unavailable"); return 0; }
     install_roots(base);
-    const unsigned char should[] = {0x40,0x53,0x48,0x83,0xec,0x20,0x4c,0x8b,0xda,0x48,0x8b,0xd9,0x45,0x84,0xc0};
-    const unsigned char has[] = {0x40,0x53,0x48,0x83,0xec,0x60,0x80,0xb9,0x34,0x0c,0,0,0};
-    const unsigned char history[] = {0x40,0x53,0x48,0x83,0xec,0x20,0x49,0x8b,0xd8,0x48,0x85,0xd2,0x74,0x3a};
-    unsigned char actual[sizeof(should)]{};
-    unsigned char size_gate[5]{};
-    const bool size_matches = copy_memory(size_gate, base + 0x10fdd09, sizeof(size_gate)) &&
-        (!std::memcmp(size_gate, "\x0f\x2f\xdd\x76\x38", 5) ||
-         (native_owner.load() && !std::memcmp(size_gate, "\x0f\x2f\xdd\x90\x90", 5)));
-    if (!base || !copy_memory(actual, base + 0x10fdc00, sizeof(should)) || std::memcmp(actual, should, sizeof(should)) ||
-        !copy_memory(actual, base + 0x1183820, sizeof(has)) || std::memcmp(actual, has, sizeof(has)) ||
-        !copy_memory(actual, base + 0x10ee670, sizeof(history)) || std::memcmp(actual, history, sizeof(history)) ||
-        !size_matches) {
+    switch (rsf_ac7_capture_install_engine(base, &engine_hook_effects)) {
+    case MotionRootInstall::already_installed: return 1;
+    case MotionRootInstall::entry_refused:
+    case MotionRootInstall::rhi_refused:
         say("motion capture engine hooks refused: expected AC7 bytes differ"); return 0;
+    case MotionRootInstall::rolled_back:
+        say("motion capture engine hooks failed and were rolled back"); return 0;
+    case MotionRootInstall::partial_teardown:
+        say("motion capture engine hooks pending removal"); return 0;
+    case MotionRootInstall::installed:
+        say("motion capture engine hooks installed; original decisions preserved"); return 1;
     }
-    void* detours[] = {reinterpret_cast<void*>(&hooked_should), reinterpret_cast<void*>(&hooked_has), reinterpret_cast<void*>(&hooked_history)};
-    void** originals[] = {reinterpret_cast<void**>(&original_should), reinterpret_cast<void**>(&original_has), reinterpret_cast<void**>(&original_history)};
-    const uint32_t rvas[] = {0x10fdc00, 0x1183820, 0x10ee670};
-    for (uint32_t i = 0; i < 3; ++i) hook_targets[i] = base + rvas[i];
-    if (rsf::ac7::install_hooks(hook_targets, detours, originals, 3)) {
-        s.installed = true; say("motion capture engine hooks installed; original decisions preserved"); return 1;
-    }
-    if (std::any_of(std::begin(hook_targets), std::end(hook_targets), owns_hooks))
-        say("motion capture engine hook rollback left hooks pending removal");
-    else
-        say("motion capture engine hooks failed and were rolled back");
     return 0;
 }
 extern "C" void rsf_ac7_motion_capture_shutdown(void)
 {
-    auto& s = state();
     rsf_ac7_capture_shutdown(&capture_effects);
-    rsf::ac7::remove_hooks(hook_targets, 3);
-    if (std::any_of(std::begin(hook_targets), std::end(hook_targets), [](auto target) { return target != nullptr; }))
+    if (!rsf_ac7_capture_remove_engine(&engine_hook_effects))
         say("motion capture engine hooks pending removal");
     if (!rsf_ac7_capture_remove_roots(&root_hook_effects))
         say("renderer root capture shutdown left hooks pending removal");
-    s.installed = false;
 }
 extern "C" void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, const void* bytes, uint32_t size)
 {
     if (!rsf_ac7_capture_observe_shader(shader, stage, bytes, size, disassemble_constants)) capture_failed();
 }
-extern "C" void rsf_ac7_motion_capture_buffer(void*, void* buffer, const void* initial, uint32_t bytes, uint32_t bind_flags)
-{
-    const auto capture = rsf_ac7_capture_interval();
-    const auto* data = (bind_flags & D3D11_BIND_CONSTANT_BUFFER) ? static_cast<const unsigned char*>(initial) : nullptr;
-    if (!rsf_ac7_capture_store_upload(capture, buffer, data, bytes, true)) capture_failed(capture);
-}
-extern "C" void rsf_ac7_motion_capture_upload(void* buffer, const void* bytes, uint32_t size)
-{
-    const auto capture = rsf_ac7_capture_interval();
-    if (!rsf_ac7_capture_store_upload(capture, buffer, static_cast<const unsigned char*>(bytes), size, false))
-        capture_failed(capture);
-}
-extern "C" void rsf_ac7_motion_capture_layout(void* layout, const rsf_observer_layout_element* elements,
-    uint32_t copied, uint32_t count)
-{
-    if (!rsf_ac7_capture_observe_layout(layout, elements, copied, count)) capture_failed();
-}
 namespace {
+static_assert(D3D11_BIND_CONSTANT_BUFFER == 4);
 // The Rust capture classifies the target and the copied input layout with these DXGI values.
 static_assert(DXGI_FORMAT_R32G32B32A32_FLOAT == 2 && DXGI_FORMAT_R32G32B32_FLOAT == 6 &&
     DXGI_FORMAT_R16G16_UNORM == 35);
@@ -979,7 +826,7 @@ void capture_geometry(MotionCaptureInterval capture, const rsf_frame_tap_geometr
         if (offset >= desc.ByteWidth) continue;
         const uint32_t bytes = std::min(desc.ByteWidth - offset, max_sample_bytes);
         auto data = read_buffer(buffer, offset, max_sample_bytes);
-        const auto blob = data.empty() ? 0u : save_blob(capture, std::move(data));
+        const auto blob = data.empty() ? 0u : save_blob(capture, data);
         row.streams[row.stream_count++] = {
             uint64_t(uintptr_t(buffer)), slot, draw->strides[slot], offset, desc.ByteWidth, bytes, blob,
         };
@@ -1008,7 +855,7 @@ void capture_geometry(MotionCaptureInterval capture, const rsf_frame_tap_geometr
         const uint32_t offset = element * stride;
         auto data = read_buffer(buffer.Get(), offset, elements * stride);
         const auto bytes = static_cast<uint32_t>(data.size());
-        const auto blob = data.empty() ? 0u : save_blob(capture, std::move(data));
+        const auto blob = data.empty() ? 0u : save_blob(capture, data);
         row.vs_buffers[row.vs_buffer_count++] = {
             uint64_t(uintptr_t(buffer.Get())), slot, uint32_t(desc.Format), offset, b.ByteWidth, bytes, blob,
         };
@@ -1021,8 +868,6 @@ catch (...) { capture_failed(capture); }
 
 extern "C" void rsf_ac7_motion_capture_geometry(const rsf_frame_tap_geometry* draw)
 { capture_geometry(rsf_ac7_capture_sample(), draw); }
-extern "C" void rsf_ac7_motion_capture_native_owner(uint32_t enabled)
-{ native_owner.store(enabled != 0); }
 extern "C" void rsf_ac7_motion_capture_native_pass(const rsf_game_render_pass* pass, uint32_t begin)
 {
     if (!rsf_ac7_capture_execution_pass(pass)) return;
@@ -1032,9 +877,7 @@ extern "C" void rsf_ac7_motion_capture_native_pass(const rsf_game_render_pass* p
     rsf_ac7_capture_execution_root(&r);
     record_root(r);
 }
-extern "C" void rsf_ac7_motion_capture_request(void)
-{ rsf_ac7_capture_request(); }
 extern "C" int rsf_ac7_motion_capture_present(void* swapchain, char* prefix, uint32_t capacity)
 {
-    return swapchain && prefix && capacity && rsf_ac7_capture_present(swapchain, prefix, capacity, &capture_effects);
+    return rsf_ac7_capture_present(swapchain, prefix, capacity, &capture_effects);
 }

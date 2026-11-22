@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 
 use super::observations;
-use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_enabled};
+use crate::motion_capture_session::{
+    CaptureInterval, rsf_ac7_capture_enabled, rsf_ac7_capture_fail,
+};
 use crate::velocity_container::borrowed;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -89,7 +91,40 @@ impl ConstantBuffers {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_store_upload(
+unsafe extern "C" fn rsf_ac7_motion_capture_buffer(
+    _user: *mut c_void,
+    buffer: *mut c_void,
+    initial: *const c_void,
+    bytes: u32,
+    bind_flags: u32,
+) {
+    const BIND_CONSTANT_BUFFER: u32 = 4;
+    let initial = if bind_flags & BIND_CONSTANT_BUFFER == 0 {
+        std::ptr::null()
+    } else {
+        initial.cast()
+    };
+    let capture = CaptureInterval::load();
+    // SAFETY: The D3D11 creation callback lends any initialization data for this call.
+    if !unsafe { store_upload(capture, buffer, initial, bytes, true) } {
+        rsf_ac7_capture_fail(capture);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_motion_capture_upload(
+    buffer: *mut c_void,
+    bytes: *const c_void,
+    size: u32,
+) {
+    let capture = CaptureInterval::load();
+    // SAFETY: The upload callback lends the mapped or updated bytes for this call.
+    if !unsafe { store_upload(capture, buffer, bytes.cast(), size, false) } {
+        rsf_ac7_capture_fail(capture);
+    }
+}
+
+unsafe fn store_upload(
     capture: CaptureInterval,
     buffer: *mut c_void,
     bytes: *const u8,

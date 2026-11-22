@@ -136,53 +136,32 @@ struct MotionGeometry {
     MotionGeometryStream streams[32];
     MotionGeometryVsBuffer vs_buffers[3];
 };
-struct MotionArtifact {
-    const unsigned char* data;
-    std::size_t size;
-};
-struct MotionArtifactList {
-    const void* user;
-    std::size_t count;
-    MotionArtifact(*at)(const void* user, std::size_t index);
-};
-struct MotionArtifactStats {
-    int64_t qpc_frequency;
-    uint32_t engine_hooks, renderer_root_hooks, blob_dropped;
-    uint32_t capture_failures;
-};
-struct MotionFinalArtifacts {
-    MotionArtifactList blobs;
-    const void* user;
-    MotionArtifactStats(*stats)(const void* user);
-};
-
 enum CommandAdvance : uint32_t { command_stop, command_next, command_failed };
-enum MotionPublication : uint32_t { publication_failed, publication_partial, publication_complete };
 enum class MotionRootInstall : uint32_t {
     already_installed, rhi_refused, entry_refused, rolled_back, installed, partial_teardown,
 };
 
 struct MotionRootHookEffects {
     bool(*copy)(void* destination, const void* source, std::size_t size);
-    bool(*native_owner)();
     bool(*install)(void** targets, uint32_t count);
     void(*remove)(void** targets, uint32_t count);
 };
 
 // Callbacks are synchronous and return normally even if their native effects fail.
 using MotionHistoryCopy = bool(*)(float* destination, const float* source);
-using MotionCopyRoots = bool(*)(void* user, const RootRecord* roots, std::size_t count);
-using MotionWriteFile = bool(*)(const char* path, const unsigned char* data, std::size_t size);
 
 extern "C" {
 MotionRootInstall rsf_ac7_capture_install_roots(unsigned char* base, const MotionRootHookEffects* effects);
 bool rsf_ac7_capture_remove_roots(const MotionRootHookEffects* effects);
+MotionRootInstall rsf_ac7_capture_install_engine(unsigned char* base, const MotionRootHookEffects* effects);
+bool rsf_ac7_capture_remove_engine(const MotionRootHookEffects* effects);
+bool rsf_ac7_capture_engine_installed();
 const void* rsf_ac7_capture_current_command_address();
 
 EngineRecord* rsf_ac7_capture_swap_engine(EngineRecord* event);
 void rsf_ac7_capture_history(uint64_t primitive, bool found, const float* previous, MotionHistoryCopy copy);
 void rsf_ac7_capture_has_velocity(uint64_t primitive, bool has_velocity);
-bool rsf_ac7_capture_record_engine(const EngineRecord* event, bool accepted);
+bool rsf_ac7_capture_record_engine(MotionCaptureInterval capture, const EngineRecord* event, bool accepted);
 
 void rsf_ac7_capture_init_root(RootRecord* root, RootKind kind, uint64_t owner);
 NativeRootScope rsf_ac7_capture_root_scope();
@@ -209,18 +188,13 @@ bool rsf_ac7_capture_record_geometry(MotionCaptureInterval capture, const Motion
 bool rsf_ac7_capture_record_before_draw(MotionCaptureInterval capture, const MotionBeforeDrawPlan* plan,
     const MotionBeforeDraw* draw);
 
-// Record and copy share the native storage guard with the companion blob snapshots.
-bool rsf_ac7_capture_copy_roots(void* user, MotionCopyRoots copy);
-
-// The checkpoint uses copied roots and blobs. Finish uses the guarded native blob list for the
-// duration of the call. File effects run after the Rust record lock has been released.
-MotionPublication rsf_ac7_capture_publish_checkpoint(const char* prefix, MotionWriteFile write,
-    const RootRecord* roots, std::size_t count, const MotionArtifactList* blobs);
-MotionPublication rsf_ac7_capture_publish_finish(const char* prefix, MotionWriteFile write,
-    const MotionFinalArtifacts* artifacts);
+bool rsf_ac7_capture_store_blob(MotionCaptureInterval capture, const unsigned char* bytes,
+    std::size_t size, uint32_t* id);
+// File effects run after the Rust record lock has been released.
+void rsf_ac7_capture_publish_checkpoint(MotionWriteFile write, MotionCaptureInterval capture);
 }
 
-static_assert(sizeof(MotionRootHookEffects) == 32 && offsetof(MotionRootHookEffects, remove) == 24);
+static_assert(sizeof(MotionRootHookEffects) == 24 && offsetof(MotionRootHookEffects, remove) == 16);
 static_assert(sizeof(rsf_ac7_velocity_facts) == 60);
 static_assert(sizeof(EngineRecord) == 264 && offsetof(EngineRecord, previous) == 200);
 static_assert(sizeof(RootRecord) == 376 && offsetof(RootRecord, output_name) == 304);
@@ -251,6 +225,3 @@ static_assert(sizeof(MotionGeometryVsBuffer) == 32 && offsetof(MotionGeometryVsB
 static_assert(sizeof(MotionGeometry) == 1256 && offsetof(MotionGeometry, qpc) == 88);
 static_assert(offsetof(MotionGeometry, base_vertex) == 116 && offsetof(MotionGeometry, streams) == 136 &&
     offsetof(MotionGeometry, vs_buffers) == 1160);
-static_assert(sizeof(MotionArtifact) == 16 && sizeof(MotionArtifactList) == 24);
-static_assert(sizeof(MotionArtifactStats) == 24 && offsetof(MotionArtifactStats, capture_failures) == 20);
-static_assert(sizeof(MotionFinalArtifacts) == 40 && offsetof(MotionFinalArtifacts, stats) == 32);

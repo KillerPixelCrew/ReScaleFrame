@@ -12,25 +12,32 @@ struct MotionCaptureInterval {
     bool operator==(const MotionCaptureInterval&) const = default;
 };
 
+struct MotionCaptureStamp {
+    uint32_t year, month, day, hour, minute, second, process;
+};
+struct MotionArtifactStats {
+    int64_t qpc_frequency;
+    uint32_t engine_hooks, renderer_root_hooks, capture_failures;
+};
+using MotionWriteFile = bool(*)(const char* path, const unsigned char* data, std::size_t size);
+
 struct MotionCaptureEffects {
     bool(*poll)(void* swapchain, bool* pressed);
-    bool(*prepare)(uint32_t session);
-    void(*armed)(MotionCaptureInterval interval);
-    void(*set_sample)(uint32_t interval, char* prefix, uint32_t capacity);
-    void(*finish)();
+    void(*stamp)(MotionCaptureStamp* stamp);
+    bool(*create_directory)(const char* path);
+    void(*set_sample)(bool enabled);
+    MotionWriteFile write;
+    MotionArtifactStats(*stats)();
 };
 
 extern "C" {
-void rsf_ac7_capture_enable(bool enabled);
 bool rsf_ac7_capture_enabled();
-void rsf_ac7_capture_request();
+void rsf_ac7_capture_log(const char* message);
 MotionCaptureInterval rsf_ac7_capture_interval();
 MotionCaptureInterval rsf_ac7_capture_sample();
 bool rsf_ac7_capture_sampled(uint32_t interval);
-bool rsf_ac7_capture_current(uint32_t session);
 void rsf_ac7_capture_fail(MotionCaptureInterval observed);
 uint32_t rsf_ac7_capture_failures();
-bool rsf_ac7_capture_due_checkpoint(MotionCaptureInterval observed);
 bool rsf_ac7_capture_present(void* swapchain, char* prefix, uint32_t capacity,
     const MotionCaptureEffects* effects);
 void rsf_ac7_capture_shutdown(const MotionCaptureEffects* effects);
@@ -38,4 +45,6 @@ void rsf_ac7_capture_shutdown(const MotionCaptureEffects* effects);
 
 static_assert(sizeof(MotionCaptureInterval) == 8 && offsetof(MotionCaptureInterval, interval) == 4);
 static_assert(std::is_trivial_v<MotionCaptureInterval> && std::is_standard_layout_v<MotionCaptureInterval>);
-static_assert(sizeof(MotionCaptureEffects) == 40 && offsetof(MotionCaptureEffects, finish) == 32);
+static_assert(sizeof(MotionCaptureStamp) == 28 && offsetof(MotionCaptureStamp, process) == 24);
+static_assert(sizeof(MotionArtifactStats) == 24 && offsetof(MotionArtifactStats, capture_failures) == 16);
+static_assert(sizeof(MotionCaptureEffects) == 48 && offsetof(MotionCaptureEffects, stats) == 40);

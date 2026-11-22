@@ -6,6 +6,7 @@ mod geometry;
 mod ordinary;
 
 use super::{NativeRootScope, QueuedScope, Records, artifacts::Bytes, records};
+use crate::motion_capture_observations::colour::ColourSnapshot;
 use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
 use std::fmt::{self, Write as _};
 use std::mem::{offset_of, size_of};
@@ -45,12 +46,6 @@ struct BoundConstant {
     slot: u32,
     blob: u32,
     readback: u32,
-}
-
-#[repr(C)]
-struct ColourSnapshot {
-    name: [u8; 96],
-    result: i32,
 }
 
 #[repr(C)]
