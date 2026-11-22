@@ -8085,6 +8085,12 @@ Present recording and shared texture creation. The standalone bridge
 shares the texture format plan and keeps its native COM leaves.
 The source checks and remaining native boundaries are recorded there.
 
+The [integrated context follow-up](research/rust-vulkan-xess-fg-v06.md#integrated-context-and-retirement-from-f4871e47)
+uses typed DXGI and D3D12 setup, queue, retirement and timestamp calls on
+the integrated route. The standalone bridge and typed CPU mock retain
+their native call seams. Both device fixtures use C11 CRT launchers, and
+the Present fixture owns its window in Rust.
+
 ### D3D12 Streamline generation follow-up (D06)
 
 Rust packs the D3D12 SDK inputs, formats Reflex reports, parses NVAPI records

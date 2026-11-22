@@ -16,7 +16,10 @@ wsi-dispatch = ["dep:ash"]
 fsr4-state = ["dep:ash"]
 dlss = ["dep:ash"]
 xess-sr = ["dep:ash", "dep:windows-sys"]
-xess-device = ["dep:ash", "dep:windows-sys"]
+xess-device = [
+  "dep:ash", "dep:windows-sys", "windows-sys/Win32_Graphics_Gdi",
+  "windows-sys/Win32_UI_WindowsAndMessaging",
+]
 
 [dependencies]
 ash = { version = "=0.38.0", default-features = false, features = ["std"], optional = true }

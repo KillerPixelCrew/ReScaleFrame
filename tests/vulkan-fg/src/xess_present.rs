@@ -10,14 +10,90 @@ use ash::{
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
-use std::{ffi::c_void, mem, ptr::null_mut};
+use std::{
+    ffi::c_void,
+    mem,
+    ptr::{null, null_mut},
+};
+use windows_sys::Win32::{
+    Foundation::{HINSTANCE, HWND},
+    System::LibraryLoader::GetModuleHandleW,
+    UI::WindowsAndMessaging::{
+        CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, MSG,
+        PM_REMOVE, PeekMessageW, RegisterClassW, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow,
+        TranslateMessage, UnregisterClassW, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    },
+};
 
 type Handle = *mut c_void;
 
+const WINDOW_CLASS: *const u16 = windows_sys::w!("RsfXeSSInteropFixture");
+
+struct Window {
+    handle: HWND,
+    instance: HINSTANCE,
+}
+
+impl Window {
+    fn open() -> Result<Self, i32> {
+        let instance = unsafe { GetModuleHandleW(null()) };
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(DefWindowProcW),
+            hInstance: instance,
+            lpszClassName: WINDOW_CLASS,
+            ..Default::default()
+        };
+        if unsafe { RegisterClassW(&class) } == 0 {
+            return Err(100);
+        }
+        let handle = unsafe {
+            CreateWindowExW(
+                0,
+                WINDOW_CLASS,
+                windows_sys::w!("ReScaleFrame XeSS interop fixture"),
+                WS_OVERLAPPEDWINDOW,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                1296,
+                759,
+                null_mut(),
+                null_mut(),
+                instance,
+                null(),
+            )
+        };
+        if handle.is_null() {
+            unsafe { UnregisterClassW(WINDOW_CLASS, instance) };
+            return Err(101);
+        }
+        unsafe {
+            ShowWindow(handle, SW_SHOWNORMAL);
+            SetForegroundWindow(handle);
+        }
+        Ok(Self { handle, instance })
+    }
+
+    fn pump() {
+        let mut message = MSG::default();
+        while unsafe { PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) } != 0 {
+            unsafe {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+    }
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        unsafe {
+            DestroyWindow(self.handle);
+            UnregisterClassW(WINDOW_CLASS, self.instance);
+        }
+    }
+}
+
 unsafe extern "C" {
-    fn rsf_fixture_xess_window_open(window: *mut Handle) -> i32;
-    fn rsf_fixture_xess_window_pump();
-    fn rsf_fixture_xess_window_close(window: Handle);
     fn rsf_xessgvk_create(
         setup: *const rsf_fgvk_setup,
         options: *const rsf_xessgvk_options,
@@ -100,7 +176,7 @@ fn present_frames(
         let swapchains = [vk::SwapchainKHR::from_raw(chain)];
         let mut initialized_images = [false; 3];
         for frame in 0..12 {
-            rsf_fixture_xess_window_pump();
+            Window::pump();
             device.device_wait_idle().map_err(vk::Result::as_raw)?;
             let id = frame + 1;
             check(rsf_xessgvk_sleep(owner, id))?;
@@ -175,11 +251,10 @@ pub(crate) fn run(
     runtime: *const u16,
     retired: &mut bool,
 ) -> i32 {
-    let mut window = null_mut();
-    let window_result = unsafe { rsf_fixture_xess_window_open(&mut window) };
-    if window_result != 0 {
-        return window_result;
-    }
+    let window = match Window::open() {
+        Ok(window) => window,
+        Err(code) => return code,
+    };
     let mut queue = Box::new(Queue {
         handle: unsafe { device.get_device_queue(family, 0) },
         submit: device.fp_v1_0().queue_submit,
@@ -215,7 +290,7 @@ pub(crate) fn run(
     let options = rsf_xessgvk_options {
         struct_size: size_of::<rsf_xessgvk_options>() as u32,
         abi_version: 1,
-        window,
+        window: window.handle,
         timeline_enabled: 1,
         generated_count: 1,
         intel_runtime_directory: runtime,
@@ -259,10 +334,11 @@ pub(crate) fn run(
     if *retired {
         let _ = unsafe { device.device_wait_idle() };
         resources.release(device);
-        unsafe { rsf_fixture_xess_window_close(window) };
+        drop(window);
     } else {
         // The owner can still retain the callback user and Vulkan resources.
         mem::forget(queue);
+        mem::forget(window);
     }
     println!(
         concat!(

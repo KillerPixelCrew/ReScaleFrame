@@ -247,3 +247,14 @@ formatting, bindgen 0.72.1 regeneration of the local and vendor XeSS
 records, and locked offline Windows metadata passed. The export lists,
 SDK marker names, session retirement order, and bridge ABI were checked
 against the base.
+
+The Present fixture now owns its HWND and Win32 message pump in Rust. The
+original class, title, geometry and activation calls are preserved, and
+failed graphics retirement retains the window along with the queue user.
+The FG and SR device fixture entry points are C11 CRT launchers. The SR
+launcher retains the SDK-disabled skip decision. The FG launcher uses
+MinGW's Unicode CRT option to select its existing wide entry point.
+The independent C++ typed SR SDK mock remains byte-for-byte the same
+within its conditional. Synthetic provider coverage remains separate.
+Strict C11 launcher syntax and C++ mock syntax passed. Build and device
+execution remain pending.
