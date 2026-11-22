@@ -16,6 +16,7 @@ pub mod d3d11_sr_admission_abi;
 pub mod ffi_util;
 pub mod plugin_session_abi;
 pub mod presentation_result;
+pub mod profile_text;
 pub mod recording_slots;
 mod render_config;
 mod render_pass;

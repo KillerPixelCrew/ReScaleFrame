@@ -56,6 +56,58 @@ impl Default for rsf_overlay_host_option {
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_overlay_saved_row {
+    pub label: *const ::core::ffi::c_char,
+    pub text: *const u16,
+    pub text_length: u32,
+    pub kind: u32,
+    pub restart: u32,
+    pub value: i32,
+    pub minimum: i32,
+    pub maximum: i32,
+    pub step: i32,
+    pub divisor: u32,
+    pub last_result: i32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_overlay_saved_row"][::core::mem::size_of::<rsf_overlay_saved_row>() - 56usize];
+    ["Alignment of rsf_overlay_saved_row"]
+        [::core::mem::align_of::<rsf_overlay_saved_row>() - 8usize];
+    ["Offset of field: rsf_overlay_saved_row::label"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, label) - 0usize];
+    ["Offset of field: rsf_overlay_saved_row::text"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, text) - 8usize];
+    ["Offset of field: rsf_overlay_saved_row::text_length"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, text_length) - 16usize];
+    ["Offset of field: rsf_overlay_saved_row::kind"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, kind) - 20usize];
+    ["Offset of field: rsf_overlay_saved_row::restart"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, restart) - 24usize];
+    ["Offset of field: rsf_overlay_saved_row::value"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, value) - 28usize];
+    ["Offset of field: rsf_overlay_saved_row::minimum"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, minimum) - 32usize];
+    ["Offset of field: rsf_overlay_saved_row::maximum"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, maximum) - 36usize];
+    ["Offset of field: rsf_overlay_saved_row::step"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, step) - 40usize];
+    ["Offset of field: rsf_overlay_saved_row::divisor"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, divisor) - 44usize];
+    ["Offset of field: rsf_overlay_saved_row::last_result"]
+        [::core::mem::offset_of!(rsf_overlay_saved_row, last_result) - 48usize];
+};
+impl Default for rsf_overlay_saved_row {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_overlay_stats {
     pub struct_size: u32,
     pub backend_loaded: u32,
@@ -146,10 +198,12 @@ pub struct rsf_overlay_stats {
     pub sr_quality_choices: u32,
     pub sr_change_id: u32,
     pub sr_change_status: u32,
+    pub saved_row_count: u32,
+    pub saved_rows: *const rsf_overlay_saved_row,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_overlay_stats"][::core::mem::size_of::<rsf_overlay_stats>() - 432usize];
+    ["Size of rsf_overlay_stats"][::core::mem::size_of::<rsf_overlay_stats>() - 440usize];
     ["Alignment of rsf_overlay_stats"][::core::mem::align_of::<rsf_overlay_stats>() - 8usize];
     ["Offset of field: rsf_overlay_stats::struct_size"]
         [::core::mem::offset_of!(rsf_overlay_stats, struct_size) - 0usize];
@@ -329,6 +383,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_overlay_stats, sr_change_id) - 420usize];
     ["Offset of field: rsf_overlay_stats::sr_change_status"]
         [::core::mem::offset_of!(rsf_overlay_stats, sr_change_status) - 424usize];
+    ["Offset of field: rsf_overlay_stats::saved_row_count"]
+        [::core::mem::offset_of!(rsf_overlay_stats, saved_row_count) - 428usize];
+    ["Offset of field: rsf_overlay_stats::saved_rows"]
+        [::core::mem::offset_of!(rsf_overlay_stats, saved_rows) - 432usize];
 };
 impl Default for rsf_overlay_stats {
     fn default() -> Self {
@@ -393,10 +451,13 @@ pub struct rsf_overlay_intent {
     pub ui_preferences_changed: u32,
     pub ui_preferences: u32,
     pub sr_change_id: u32,
+    pub saved_action: u32,
+    pub saved_index: u32,
+    pub saved_value: i32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_overlay_intent"][::core::mem::size_of::<rsf_overlay_intent>() - 204usize];
+    ["Size of rsf_overlay_intent"][::core::mem::size_of::<rsf_overlay_intent>() - 216usize];
     ["Alignment of rsf_overlay_intent"][::core::mem::align_of::<rsf_overlay_intent>() - 4usize];
     ["Offset of field: rsf_overlay_intent::struct_size"]
         [::core::mem::offset_of!(rsf_overlay_intent, struct_size) - 0usize];
@@ -500,6 +561,12 @@ const _: () = {
         [::core::mem::offset_of!(rsf_overlay_intent, ui_preferences) - 196usize];
     ["Offset of field: rsf_overlay_intent::sr_change_id"]
         [::core::mem::offset_of!(rsf_overlay_intent, sr_change_id) - 200usize];
+    ["Offset of field: rsf_overlay_intent::saved_action"]
+        [::core::mem::offset_of!(rsf_overlay_intent, saved_action) - 204usize];
+    ["Offset of field: rsf_overlay_intent::saved_index"]
+        [::core::mem::offset_of!(rsf_overlay_intent, saved_index) - 208usize];
+    ["Offset of field: rsf_overlay_intent::saved_value"]
+        [::core::mem::offset_of!(rsf_overlay_intent, saved_value) - 212usize];
 };
 #[repr(C)]
 #[derive(Default, Copy, Clone)]

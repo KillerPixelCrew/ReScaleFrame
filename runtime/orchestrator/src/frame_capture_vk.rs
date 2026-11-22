@@ -125,15 +125,19 @@ impl Legacy {
             first: 30,
             count: 4,
         };
-        let Some(directory) = std::env::var_os(variable)
+        let Some(directory) = crate::diagnostic_preferences::value(variable)
             .filter(|path| !path.is_empty() && path.encode_wide_len() < 32768)
         else {
             return legacy;
         };
-        if let Some(value) = std::env::var_os("RSF_FRAME_CAPTURE_FIRST").filter(|v| !v.is_empty()) {
+        if let Some(value) = crate::diagnostic_preferences::value("RSF_FRAME_CAPTURE_FIRST")
+            .filter(|v| !v.is_empty())
+        {
             legacy.first = parse_count(&value);
         }
-        if let Some(value) = std::env::var_os("RSF_FRAME_CAPTURE_COUNT").filter(|v| !v.is_empty()) {
+        if let Some(value) = crate::diagnostic_preferences::value("RSF_FRAME_CAPTURE_COUNT")
+            .filter(|v| !v.is_empty())
+        {
             legacy.count = parse_count(&value).min(MAX_FRAMES);
         }
         let directory = PathBuf::from(directory);

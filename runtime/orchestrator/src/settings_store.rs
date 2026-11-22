@@ -263,6 +263,56 @@ impl File {
     }
 }
 
+pub(crate) fn read_saved_text(ini: &[u16], section: &[u16], key: &[u16]) -> Option<Vec<u16>> {
+    let file = File::new(ini.as_ptr(), section.as_ptr())?;
+    let _io = PROFILE_IO.lock().unwrap();
+    let mut value = file.previous(key)?;
+    value.pop();
+    Some(value)
+}
+
+pub(crate) fn read_saved_number(ini: &[u16], section: &[u16], key: &[u16], fallback: i32) -> i32 {
+    let _io = PROFILE_IO.lock().unwrap();
+    unsafe { GetPrivateProfileIntW(section.as_ptr(), key.as_ptr(), fallback, ini.as_ptr()) }
+}
+
+pub(crate) fn write_saved_text(
+    ini: &[u16],
+    section: &[u16],
+    key: &[u16],
+    value: Option<&[u16]>,
+) -> i32 {
+    let Some(file) = File::new(ini.as_ptr(), section.as_ptr()) else {
+        return INVALID_ARGUMENT;
+    };
+    // Surround the value so a read preserves whitespace and literal outer quotes.
+    let quoted: Option<Vec<u16>> = value.map(|value| {
+        let mut units = Vec::with_capacity(value.len() + 3);
+        let quote = |unit: &u16| matches!(*unit, 9 | 32 | 34 | 39);
+        let preserve = value.first().is_some_and(quote) || value.last().is_some_and(quote);
+        if preserve {
+            units.push(u16::from(b'"'));
+        }
+        units.extend_from_slice(value);
+        if preserve {
+            units.push(u16::from(b'"'));
+        }
+        units.push(0);
+        units
+    });
+    let _io = PROFILE_IO.lock().unwrap();
+    if file.write(
+        key,
+        quoted
+            .as_ref()
+            .map_or(std::ptr::null(), |value| value.as_ptr()),
+    ) {
+        OK
+    } else {
+        NOT_READY
+    }
+}
+
 // The shared post-pass keys fall back to `sharpening` (the facade passes rsf_sharpening_defaults),
 // not to the host defaults, because existing host aggregate initializers leave those fields zero.
 fn read(file: &File, defaults: &Settings, sharpening: &Sharpening) -> Settings {
@@ -653,6 +703,27 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_write_integer(
 mod tests {
     use super::*;
     use crate::temporary_ini::TemporaryIni;
+
+    #[test]
+    fn saved_unicode_text_round_trips_through_an_existing_ascii_profile() {
+        let ini = TemporaryIni::new("settings-store", "saved-unicode");
+        let section = wide("Rendering");
+        let key = wide("CaptureDirectory");
+        let unrelated = wide("Unrelated");
+        assert_eq!(
+            write_saved_text(ini.wide(), &section, &unrelated, Some(&[u16::from(b'7')])),
+            OK
+        );
+        let path: Vec<_> = r"C:\試験\🧪".encode_utf16().collect();
+        let encoded = rsf_game_sys::profile_text::encode(&path);
+        assert_eq!(
+            write_saved_text(ini.wide(), &section, &key, Some(&encoded)),
+            OK
+        );
+        let value = read_saved_text(ini.wide(), &section, &key).expect("stored path");
+        assert_eq!(rsf_game_sys::profile_text::decode(value), path);
+        assert_eq!(read_saved_number(ini.wide(), &section, &unrelated, 0), 7);
+    }
 
     #[test]
     fn decimal_matches_general_nine_digit_format() {

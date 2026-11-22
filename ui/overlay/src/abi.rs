@@ -40,6 +40,10 @@ pub const RSF_OVERLAY_MOUSE_MIDDLE: u32 = 0x4;
 
 #[path = "wire.rs"]
 mod wire;
+pub(crate) use wire::{
+    RSF_OVERLAY_SAVED_CLEAR, RSF_OVERLAY_SAVED_PASTE, RSF_OVERLAY_SAVED_ROW_LIMIT,
+    RSF_OVERLAY_SAVED_SET, RSF_OVERLAY_SAVED_TEXT, RSF_OVERLAY_SAVED_TOGGLE,
+};
 
 /// Version of the panel ABI implemented by this build.
 pub use wire::RSF_OVERLAY_ABI_VERSION;
@@ -188,7 +192,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 432);
+        assert_eq!(size_of::<RsfOverlayStats>(), 440);
         assert_eq!(size_of::<RsfOverlayHostOption>(), 40);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
@@ -271,7 +275,7 @@ mod tests {
 
     #[test]
     fn the_other_structs_match_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayIntent>(), 204);
+        assert_eq!(size_of::<RsfOverlayIntent>(), 216);
         assert_eq!(offset_of!(RsfOverlayIntent, sr_change_id), 200);
         assert_eq!(offset_of!(RsfOverlayIntent, close_requested), 188);
         assert_eq!(offset_of!(RsfOverlayIntent, ui_preferences_changed), 192);

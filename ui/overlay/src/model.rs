@@ -185,6 +185,8 @@ pub struct Stats<'a> {
     pub fg_present_count_valid: bool,
     /// Options the host defines, in the host's order. `None` past the last one.
     pub host_options: [Option<HostOption<'a>>; MAX_HOST_OPTIONS],
+    /// Saved options offered by the owner of this panel.
+    pub saved_options: [Option<SavedOption<'a>>; abi::RSF_OVERLAY_SAVED_ROW_LIMIT as usize],
     /// Host implements shared sharpening.
     pub sharpening_available: bool,
     /// The current frame has a depth input.
@@ -298,6 +300,17 @@ pub struct HostOption<'a> {
     pub restart: bool,
 }
 
+/// A borrowed saved option and the result of its latest edit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SavedOption<'a> {
+    /// Label, number range and restart information.
+    pub option: HostOption<'a>,
+    /// The current text value when this is a text row.
+    pub text: Option<&'a [u16]>,
+    /// Result code for the most recent save or live edit.
+    pub last_result: i32,
+}
+
 impl Default for Stats<'_> {
     /// Nothing loaded, nothing found, nothing counted. The state the runtime is actually in before
     /// it has established anything, which makes it the right starting point for a test as well.
@@ -322,6 +335,7 @@ impl Default for Stats<'_> {
             show_performance_hud: false,
             fg_present_count_valid: false,
             host_options: [None; MAX_HOST_OPTIONS],
+            saved_options: [None; abi::RSF_OVERLAY_SAVED_ROW_LIMIT as usize],
             sharpening_available: false,
             sharpening_depth_available: false,
             sharpening: Sharpening::default(),
@@ -443,6 +457,12 @@ pub struct Intent {
     pub frame_limit_us: u32,
     /// A host option changed.
     pub host_option_changed: bool,
+    /// Saved-option action, or zero when no edit was requested.
+    pub saved_action: u32,
+    /// Index of the saved option in this frame's snapshot.
+    pub saved_index: u32,
+    /// Value for a numeric saved-option action.
+    pub saved_value: i32,
     /// Which one, as an index into the host's options.
     pub host_option_index: u32,
     /// Its new value.
@@ -473,6 +493,7 @@ impl Intent {
             && !self.performance_hud_changed
             && !self.frame_limit_changed
             && !self.host_option_changed
+            && self.saved_action == 0
             && !self.sharpening_changed
             && !self.close_requested
             && !self.ui_preferences_changed

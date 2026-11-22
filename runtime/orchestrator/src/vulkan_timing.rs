@@ -121,8 +121,8 @@ extern "C" fn rsf_core_vk_timing_begin() -> i64 {
 
 pub(crate) fn timing_begin() -> i64 {
     INITIALIZE.call_once(|| {
-        let Some(timing) =
-            std::env::var_os("RSF_VULKAN_TIMING_FILE").and_then(|path| Timing::open(&path))
+        let Some(timing) = crate::diagnostic_preferences::value("RSF_VULKAN_TIMING_FILE")
+            .and_then(|path| Timing::open(&path))
         else {
             return;
         };

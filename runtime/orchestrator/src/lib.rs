@@ -155,6 +155,9 @@ mod owned_handle;
 #[cfg(windows)]
 mod d3d11_fg_api_abi;
 #[cfg(windows)]
+#[path = "../../diagnostic_preferences.rs"]
+mod diagnostic_preferences;
+#[cfg(windows)]
 mod ffx_version;
 #[cfg(windows)]
 mod fg12;
@@ -245,6 +248,10 @@ mod overlay_panel;
 mod overlay_pointer;
 #[cfg(windows)]
 mod overlay_renderer11;
+#[cfg(windows)]
+mod overlay_saved;
+#[cfg(windows)]
+mod overlay_saved_abi;
 #[cfg(windows)]
 mod overlay_service;
 #[cfg(windows)]

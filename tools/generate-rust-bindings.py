@@ -126,6 +126,7 @@ generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
           "--raw-line", "pub mod ffi_util;",
           "--raw-line", "pub mod plugin_session_abi;",
           "--raw-line", "pub mod presentation_result;",
+          "--raw-line", "pub mod profile_text;",
           "--raw-line", "pub mod recording_slots;",
           "--raw-line", "mod render_config;",
           "--raw-line", "mod render_pass;",
@@ -626,11 +627,15 @@ generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/incl
          ["--blocklist-type", "rsf_pipeline_camera_frame",
           "--raw-line", "use crate::render_abi::rsf_pipeline_camera_frame;",
           "--raw-line", "pub use rsf_game_sys::sr_abi::{RSF_DLSS_PIPELINE_ABI_VERSION, rsf_motion_decode_params};"])
-overlay_wire = "rsf_overlay_(host_option|intent|quality|stats)"
+overlay_wire = "rsf_overlay_(host_option|intent|quality|saved_row|stats)"
 generate("ui/overlay/src/wire.rs", "ui/overlay/include/rescaleframe/overlay.h",
-         overlay_wire, "RSF_OVERLAY_(ABI_VERSION|QUALITY_ULTRA_QUALITY|SR_QUALITY_.*|SR_CHANGE_.*|FRAME_LIMIT_VRR)",
+         overlay_wire, "RSF_OVERLAY_(ABI_VERSION|QUALITY_ULTRA_QUALITY|SR_QUALITY_.*|SR_CHANGE_.*|FRAME_LIMIT_VRR|SAVED_.*)",
          [], ["--with-derive-default", "--with-derive-partialeq", "--no-default", "rsf_overlay_intent",
               "--raw-line", "#![allow(missing_docs, dead_code)]"], derive_debug=True)
+generate("runtime/orchestrator/src/overlay_saved_abi.rs", "runtime/orchestrator/include/rescaleframe/overlay_saved_options.h",
+         "rsf_overlay_saved_(option|setup|apply)", "RSF_OVERLAY_SAVED_(OPTIONS_ABI_VERSION|TEXT_LIMIT|TOGGLE|NUMBER|TEXT)",
+         ["-Iruntime/orchestrator/include", "-Iui/overlay/include"],
+         ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("ui/overlay/src/fg_reason_codes.rs", "runtime/orchestrator/include/rescaleframe/native_fg.h",
          "NOTHING", "RSF_NATIVE_FG_REASON_.*",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/presentation/include",
@@ -664,7 +669,7 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
           "-Iruntime/backends/dlss/include", "-Iui/overlay/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "#[path = \"../../../ui/overlay/src/wire.rs\"]",
-          "--raw-line", "mod overlay_wire;",
+          "--raw-line", "pub(crate) mod overlay_wire;",
           "--raw-line", "pub use overlay_wire::{\n"
                         "    RSF_OVERLAY_FRAME_LIMIT_VRR, RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING,\n"
                         "    RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,\n"

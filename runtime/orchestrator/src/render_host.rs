@@ -43,7 +43,6 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ffi::{CString, c_char, c_int, c_void};
-use std::path::Path;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
@@ -81,8 +80,7 @@ const SLOTS: usize = 3;
 const SCENES: usize = 64;
 const CAPTURE_PATH: usize = 32768;
 const OVERLAY_PROBE: usize = 0;
-const FRAME_CAPTURE: usize = 1;
-const GRAPHICS_DIAGNOSTICS: usize = 2;
+const GRAPHICS_DIAGNOSTICS: usize = 1;
 const FENCE_TIMEOUT_MS: u32 = 15000;
 // Present-ratio quality index: native, quality, balanced, performance, ultra performance.
 const QUALITY_RATIOS: [f32; 5] = [1.0, 1.5, 1.72, 2.0, 3.0];
@@ -277,6 +275,7 @@ struct State {
     key: ContextKey,
     settings: Settings,
     capture_enabled: bool,
+    capture_directory: CString,
     capture_update: bool,
     graphics_diagnostics: bool,
     fg_backend_requested: u32,
@@ -322,7 +321,6 @@ pub(crate) struct Host {
     interposer: CString,
     fsr: CString,
     xess: CString,
-    capture_directory: CString,
     logger: rsf_game_log_fn,
     logger_user: *mut c_void,
     engine_streamline: bool,
@@ -432,6 +430,7 @@ impl State {
             key: ContextKey::default(),
             settings: DEFAULTS,
             capture_enabled: false,
+            capture_directory: CString::default(),
             capture_update: false,
             graphics_diagnostics: false,
             fg_backend_requested: u32::MAX,
@@ -1166,19 +1165,18 @@ impl Host {
         if !state.capture_update {
             return;
         }
-        let (directory, frames) = if state.capture_enabled {
-            (self.capture_directory.as_ptr(), 4)
+        let (path, frames) = if state.capture_enabled {
+            (state.capture_directory.as_ptr(), 4)
         } else {
             (c"".as_ptr(), 0)
         };
-        let result =
-            unsafe { (self.p.sr12_capture)(state.context, directory, first_frame, frames) };
+        let result = unsafe { (self.p.sr12_capture)(state.context, path, first_frame, frames) };
         if result == BACKEND_OK {
             state.capture_update = false;
         }
     }
 
-    fn diagnostic_options(&self, capture: bool, graphics: bool) -> [HostOption; 3] {
+    fn diagnostic_options(&self, graphics: bool) -> [HostOption; 2] {
         let probe = self
             .probe
             .lock()
@@ -1197,7 +1195,6 @@ impl Host {
         };
         [
             toggle(c"One-shot overlay probe", probe, false),
-            toggle(c"Bounded SR and FG capture", capture, false),
             toggle(c"D3D12 validation and DRED", graphics, true),
         ]
     }
@@ -1212,17 +1209,8 @@ impl Host {
         };
         let enabled = intent.host_option_value != 0;
         let toggle = if enabled { w!("1") } else { w!("0") };
-        let capture_path;
         let (key, value) = match intent.host_option_index as usize {
             OVERLAY_PROBE => (w!("OverlayProbe"), toggle),
-            FRAME_CAPTURE => {
-                capture_path = crate::settings_store::wide(if enabled {
-                    self.capture_directory.to_str().unwrap_or("")
-                } else {
-                    ""
-                });
-                (w!("SRCaptureDirectory"), capture_path.as_ptr())
-            }
             GRAPHICS_DIAGNOSTICS => (w!("GraphicsDiagnostics"), toggle),
             _ => return,
         };
@@ -1243,18 +1231,6 @@ impl Host {
                     enabled,
                     ..Probe::default()
                 };
-            }
-            FRAME_CAPTURE => {
-                state.capture_enabled = enabled;
-                state.capture_update = true;
-                if self.fg_installed() {
-                    let path = if enabled {
-                        self.capture_directory.as_ptr()
-                    } else {
-                        c"".as_ptr()
-                    };
-                    let _ = unsafe { (self.p.fg_capture_outputs)(path) };
-                }
             }
             GRAPHICS_DIAGNOSTICS => state.graphics_diagnostics = enabled,
             _ => unreachable!(),
@@ -1333,12 +1309,11 @@ impl Host {
             static SR_CHANGE: Cell<[u32; 2]> = const { Cell::new([0; 2]) };
         }
         let p = self.p;
-        let (queue, quality, capture, graphics) = {
+        let (queue, quality, graphics) = {
             let s = self.lock();
             (
                 s.overlay_queue.clone().or_else(|| s.queue.clone()),
                 s.key.quality,
-                s.capture_enabled,
                 s.graphics_diagnostics,
             )
         };
@@ -1439,9 +1414,11 @@ impl Host {
         stats.reflex_requested_mode = prefs.latency;
         stats.frame_limit_us = prefs.frame_limit_us;
         stats.display_refresh_mhz = crate::frame_limit::pacing_refresh_mhz();
-        let options = self.diagnostic_options(capture, graphics);
+        let options = self.diagnostic_options(graphics);
         stats.host_options = options.as_ptr();
         stats.host_option_count = options.len() as u32;
+        let saved = crate::overlay_saved::Frame::new(self.user());
+        saved.attach(&mut stats);
         let mut intent = Intent {
             struct_size: size_of::<Intent>() as u32,
             ..Intent::default()
@@ -1461,6 +1438,7 @@ impl Host {
             return;
         }
         self.diagnostic_intent(&intent);
+        saved.apply(&intent);
         if intent.ui_preferences_changed != 0 && intent.ui_preferences != stats.ui_preferences {
             self.ui_preferences
                 .store(intent.ui_preferences, Ordering::Relaxed);
@@ -1660,6 +1638,7 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
         )
     } as usize;
     capture.truncate(length);
+    let capture = rsf_game_sys::profile_text::decode(capture);
     let capture_enabled = !capture.is_empty();
     let graphics_diagnostics = unsafe {
         GetPrivateProfileIntW(section.as_ptr(), w!("GraphicsDiagnostics"), 0, ini.as_ptr())
@@ -1695,14 +1674,6 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
         interposer: c_string(interposer),
         fsr: c_string(format!("{root}/fidelityfx")),
         xess: c_string(format!("{root}/xess")),
-        capture_directory: c_string(if capture_enabled {
-            utf8(&capture)
-        } else {
-            Path::new(&root)
-                .join("captures")
-                .to_string_lossy()
-                .into_owned()
-        }),
         logger: services.log,
         logger_user: services.user,
         engine_streamline: setup.presentation_owner == ENGINE_PRESENTATION,
@@ -1719,6 +1690,7 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
         let mut state = host.lock();
         state.settings = host.read_settings_and_fg_mode().0;
         state.capture_enabled = capture_enabled;
+        state.capture_directory = c_string(utf8(&capture));
         state.graphics_diagnostics = graphics_diagnostics;
     }
     host
@@ -1790,8 +1762,11 @@ fn install(host: &Host, setup: &Setup) -> i32 {
         }
         host.observer.store(observer, Ordering::Release);
     }
-    if host.fg_installed() && host.lock().capture_enabled {
-        let _ = unsafe { (p.fg_capture_outputs)(host.capture_directory.as_ptr()) };
+    {
+        let state = host.lock();
+        if host.fg_installed() && state.capture_enabled {
+            let _ = unsafe { (p.fg_capture_outputs)(state.capture_directory.as_ptr()) };
+        }
     }
     host.log(if host.engine_streamline {
         "Engine presentation retained; SR borrows its existing graphics runtime."
@@ -1856,7 +1831,65 @@ unsafe fn create(setup: *const Setup, services: *mut Services, p: &'static Platf
     // The existing log callback keeps its original user argument through the runtime owner.
     services.log = Some(backend_log);
     FRONTEND.store(host, Ordering::Release);
+    let owner = unsafe { &*host };
+    let option = crate::overlay_saved_abi::rsf_overlay_saved_option {
+        label_utf8: c"SR and FG capture directory".as_ptr(),
+        key_utf8: c"SRCaptureDirectory".as_ptr(),
+        kind: crate::overlay_abi::overlay_wire::RSF_OVERLAY_SAVED_TEXT,
+        max_text_length: crate::overlay_saved_abi::RSF_OVERLAY_SAVED_TEXT_LIMIT,
+        ..Default::default()
+    };
+    let saved = crate::overlay_saved_abi::rsf_overlay_saved_setup {
+        struct_size: size_of::<crate::overlay_saved_abi::rsf_overlay_saved_setup>() as u32,
+        abi_version: crate::overlay_saved_abi::RSF_OVERLAY_SAVED_OPTIONS_ABI_VERSION,
+        configuration_path: owner.ini.as_ptr(),
+        configuration_section: owner.section.as_ptr(),
+        options: &option,
+        option_count: 1,
+        apply: Some(capture_directory_changed),
+        user: host.cast(),
+    };
+    if unsafe { crate::overlay_saved::register_builtin(host.cast(), &saved) } != OK {
+        owner.log("Could not register the capture directory control.");
+    }
     OK
+}
+
+unsafe extern "C" fn capture_directory_changed(
+    user: *mut c_void,
+    _: u32,
+    value: *const u16,
+    length: u32,
+) -> i32 {
+    let Some(host) = published(user) else {
+        return NOT_READY;
+    };
+    let units = unsafe { std::slice::from_raw_parts(value, length as usize) };
+    let Ok(directory) = String::from_utf16(units) else {
+        return INVALID;
+    };
+    host.set_capture_directory(directory)
+}
+
+impl Host {
+    fn set_capture_directory(&self, directory: String) -> i32 {
+        let Ok(directory) = CString::new(directory) else {
+            return INVALID;
+        };
+        let Some(mut state) = self.try_lock() else {
+            return BUSY;
+        };
+        if self.fg_installed() {
+            let result = unsafe { (self.p.fg_capture_outputs)(directory.as_ptr()) };
+            if result != OK {
+                return result;
+            }
+        }
+        state.capture_enabled = !directory.as_bytes().is_empty();
+        state.capture_update = true;
+        state.capture_directory = directory;
+        OK
+    }
 }
 
 #[cfg(not(test))]

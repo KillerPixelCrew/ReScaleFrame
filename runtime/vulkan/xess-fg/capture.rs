@@ -137,8 +137,11 @@ struct Config {
     probe: bool,
 }
 
+#[path = "../../diagnostic_preferences.rs"]
+mod diagnostic_preferences;
+
 fn read_variable(name: &str) -> Option<Vec<u16>> {
-    let value = std::env::var_os(name)?;
+    let value = diagnostic_preferences::value(name)?;
     let wide: Vec<u16> = value.encode_wide().take(VALUE_CAPACITY).collect();
     (!wide.is_empty() && wide.len() < VALUE_CAPACITY).then_some(wide)
 }
@@ -190,7 +193,7 @@ impl Config {
             count: DEFAULT_COUNT,
             probe: false,
         };
-        let Some(path) = std::env::var_os("RSF_VULKAN_FRAME_CAPTURE_DIR") else {
+        let Some(path) = diagnostic_preferences::value("RSF_VULKAN_FRAME_CAPTURE_DIR") else {
             return config;
         };
         if path.is_empty()

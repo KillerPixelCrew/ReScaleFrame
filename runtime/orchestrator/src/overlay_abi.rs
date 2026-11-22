@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 #[path = "../../../ui/overlay/src/wire.rs"]
-mod overlay_wire;
+pub(crate) mod overlay_wire;
 pub use overlay_wire::{
     RSF_OVERLAY_FRAME_LIMIT_VRR, RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING,
     RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,

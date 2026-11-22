@@ -1175,6 +1175,8 @@ unsafe fn present_inner(
         stats
     };
     let options = read_options(config);
+    let saved = crate::overlay_saved::Frame::new(null_mut());
+    saved.attach(&mut stats);
     if !config.options.is_empty() {
         stats.host_option_count = config.options.len() as u32;
         stats.host_options = options.as_ptr();
@@ -1222,6 +1224,7 @@ unsafe fn present_inner(
         state.presents_drawn = state.presents_drawn.wrapping_add(1);
     }
     apply_intent(config, &intent);
+    saved.apply(&intent);
     OK
 }
 

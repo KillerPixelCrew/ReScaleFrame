@@ -353,7 +353,10 @@ pub(crate) fn show(
 
     let offered = Tab::ALL.map(|tab| match tab {
         Tab::Sharpen => stats.backend_choices != 0 && stats.sharpening_available,
-        Tab::Game => stats.host_options.iter().any(Option::is_some),
+        Tab::Game => {
+            stats.host_options.iter().any(Option::is_some)
+                || stats.saved_options.iter().any(Option::is_some)
+        }
         _ => true,
     });
     if !offered[view.tab.index()] {
@@ -1649,6 +1652,81 @@ fn game_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mut 
             intent.host_option_index = index as u32;
             intent.host_option_value = value;
         }
+    }
+    for (index, saved) in stats.saved_options.iter().enumerate() {
+        let Some(saved) = saved else { continue };
+        let option = &saved.option;
+        let mut action = None;
+        if let Some(text) = saved.text {
+            ui.add(Label::new(RichText::new(option.label).size(15.5).color(TEXT)).wrap());
+            if option.restart {
+                note(ui, "Applies at next start", BLUE_TEXT);
+            }
+            let value = String::from_utf16_lossy(text);
+            ui.add(Label::new(if value.is_empty() { "Empty" } else { &value }).wrap());
+            ui.push_id(("saved-text", index), |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Paste and save").clicked() {
+                        action = Some((crate::abi::RSF_OVERLAY_SAVED_PASTE, 0));
+                    }
+                    if ui.button("Clear and save").clicked() {
+                        action = Some((crate::abi::RSF_OVERLAY_SAVED_CLEAR, 0));
+                    }
+                });
+            });
+        } else if option.toggle {
+            let (tapped, _) = switch_row(
+                ui,
+                ("saved-toggle", index),
+                option.label,
+                option
+                    .restart
+                    .then(|| ("Applies at next start".to_owned(), BLUE_TEXT)),
+                option.value != 0,
+                true,
+            );
+            if tapped {
+                action = Some((
+                    crate::abi::RSF_OVERLAY_SAVED_SET,
+                    i32::from(option.value == 0),
+                ));
+            }
+        } else {
+            ui.add(Label::new(RichText::new(option.label).size(15.5).color(TEXT)).wrap());
+            if option.restart {
+                note(ui, "Applies at next start", BLUE_TEXT);
+            }
+            let [minimum, maximum, step] = option.range;
+            let divisor = f64::from(option.divisor);
+            let digits = decimals(option.divisor);
+            let (commit, _) = stepper(
+                ui,
+                ("saved-number", index),
+                f64::from(option.value),
+                [option.value > minimum, option.value < maximum],
+                |value, direction| {
+                    (value + direction * f64::from(step))
+                        .clamp(f64::from(minimum), f64::from(maximum))
+                },
+                |value| format!("{:.digits$}", value / divisor),
+            );
+            if let Some(value) = commit {
+                action = Some((crate::abi::RSF_OVERLAY_SAVED_SET, value.round() as i32));
+            }
+        }
+        if saved.last_result != 0 {
+            note(
+                ui,
+                format!("Edit refused or could not be saved ({})", saved.last_result),
+                AMBER,
+            );
+        }
+        if let Some((action, value)) = action {
+            intent.saved_action = action;
+            intent.saved_index = index as u32;
+            intent.saved_value = value;
+        }
+        separator(ui);
     }
 }
 

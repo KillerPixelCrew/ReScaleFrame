@@ -287,6 +287,9 @@ fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
         frame_limit_changed: u32::from(produced.frame_limit_changed),
         frame_limit_us: produced.frame_limit_us,
         host_option_changed: u32::from(produced.host_option_changed),
+        saved_action: produced.saved_action,
+        saved_index: produced.saved_index,
+        saved_value: produced.saved_value,
         host_option_index: produced.host_option_index,
         host_option_value: produced.host_option_value,
         sharpening_changed: u32::from(produced.sharpening_changed),
@@ -382,6 +385,7 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
         show_performance_hud: stats.show_performance_hud != 0,
         fg_present_count_valid: stats.fg_present_count_valid != 0,
         host_options: unsafe { borrow_host_options(stats) },
+        saved_options: unsafe { borrow_saved_options(stats) },
         sharpening_available: stats.sharpening_available != 0,
         sharpening_depth_available: stats.have_depth != 0,
         sharpening: crate::model::Sharpening {
@@ -427,6 +431,46 @@ unsafe fn borrow_host_options(
             range: [option.minimum, option.maximum, option.step.max(1)],
             divisor: option.divisor.max(1),
             restart: option.restart != 0,
+        });
+    }
+    out
+}
+
+unsafe fn borrow_saved_options(
+    stats: &RsfOverlayStats,
+) -> [Option<crate::model::SavedOption<'_>>; crate::abi::RSF_OVERLAY_SAVED_ROW_LIMIT as usize] {
+    let mut out = [None; crate::abi::RSF_OVERLAY_SAVED_ROW_LIMIT as usize];
+    if stats.saved_rows.is_null() {
+        return out;
+    }
+    let count = (stats.saved_row_count as usize).min(out.len());
+    for (index, slot) in out.iter_mut().enumerate().take(count) {
+        let row = unsafe { &*stats.saved_rows.add(index) };
+        let Some(label) = (unsafe { borrow_str(row.label) }) else {
+            continue;
+        };
+        let text = if row.kind == crate::abi::RSF_OVERLAY_SAVED_TEXT {
+            if row.text_length == 0 {
+                Some(&[][..])
+            } else if row.text.is_null() || row.text_length > 32767 {
+                continue;
+            } else {
+                Some(unsafe { std::slice::from_raw_parts(row.text, row.text_length as usize) })
+            }
+        } else {
+            None
+        };
+        *slot = Some(crate::model::SavedOption {
+            option: crate::model::HostOption {
+                label,
+                toggle: row.kind == crate::abi::RSF_OVERLAY_SAVED_TOGGLE,
+                value: row.value,
+                range: [row.minimum, row.maximum, row.step.max(1)],
+                divisor: row.divisor.max(1),
+                restart: row.restart != 0,
+            },
+            text,
+            last_result: row.last_result,
         });
     }
     out
@@ -589,6 +633,8 @@ mod tests {
             sr_quality_choices: crate::abi::RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
             sr_change_id: 0,
             sr_change_status: 0,
+            saved_row_count: 0,
+            saved_rows: null(),
         }
     }
 
@@ -776,7 +822,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 19);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 20);
         let intent = RsfOverlayIntent::default();
         assert_eq!(intent.struct_size, size_of::<RsfOverlayIntent>() as u32);
         assert_eq!((intent.backend, intent.fg_generated), (1, 1));

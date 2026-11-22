@@ -450,7 +450,23 @@ unsafe extern "C" fn rsf_overlay_host_present(
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
 ) -> i32 {
-    unsafe { rsf_core_overlay_host_present(&PLATFORM, chain, stats, intent) }
+    if !unsafe { crate::sr_session::has_capacity(stats) } {
+        return 0;
+    }
+    let mut stats = unsafe { stats.read() };
+    if !stats.saved_rows.is_null() {
+        return unsafe { rsf_core_overlay_host_present(&PLATFORM, chain, &stats, intent) };
+    }
+    // Linked carriers that present directly still have the session-wide rows.
+    let saved = crate::overlay_saved::Frame::new(null_mut());
+    saved.attach(&mut stats);
+    let result = unsafe { rsf_core_overlay_host_present(&PLATFORM, chain, &stats, intent) };
+    if result != 0
+        && let Some(intent) = unsafe { intent.as_ref() }
+    {
+        saved.apply(intent);
+    }
+    result
 }
 
 #[unsafe(no_mangle)]

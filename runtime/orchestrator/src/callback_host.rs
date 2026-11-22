@@ -480,6 +480,8 @@ impl Host {
         }
         stats.show_performance_hud = u32::from(s.show_performance);
         stats.ui_preferences = s.ui_preferences;
+        let saved = crate::overlay_saved::Frame::new(self.user());
+        saved.attach(&mut stats);
         let mut intent = Intent {
             struct_size: size_of::<Intent>() as u32,
             ..Intent::default()
@@ -498,8 +500,9 @@ impl Host {
                 self.user(),
             )
         };
-        let mut guard = self.lock();
         if drawn != 0 {
+            saved.apply(&intent);
+            let mut guard = self.lock();
             self.apply_intent(&mut guard, &intent, &mut fg.requested);
         }
     }

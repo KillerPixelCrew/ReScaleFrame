@@ -128,7 +128,8 @@ pub struct Owner {
 fn from_environment() -> (Legacy, bool) {
     let legacy = Legacy::from_variable("RSF_FRAME_CAPTURE_DIR");
     let reset = legacy.directory.is_some()
-        && std::env::var_os("RSF_FRAME_CAPTURE_RESET_SR").is_some_and(|value| value == "1");
+        && crate::diagnostic_preferences::value("RSF_FRAME_CAPTURE_RESET_SR")
+            .is_some_and(|value| value == "1");
     (legacy, reset)
 }
 

@@ -29,7 +29,7 @@ extern "C" {
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
 /* 16: the touch panel. Stats carry an opaque layout word the host stores, and intent can ask to
    close the panel and to store a new layout word. */
-#define RSF_OVERLAY_ABI_VERSION 19u
+#define RSF_OVERLAY_ABI_VERSION 20u
 /* 17: latency pacing owner and accepted pacing count follow the layout preferences. */
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
@@ -80,6 +80,24 @@ typedef struct rsf_overlay_host_option {
     uint32_t restart;
     uint32_t reserved;
 } rsf_overlay_host_option;
+
+/* ABI 20 saved option rows. Text is UTF-16 with an explicit unit count and
+   is borrowed for this frame. The legacy host_options array is unchanged. */
+#define RSF_OVERLAY_SAVED_TOGGLE 0u
+#define RSF_OVERLAY_SAVED_NUMBER 1u
+#define RSF_OVERLAY_SAVED_TEXT 2u
+#define RSF_OVERLAY_SAVED_SET 1u
+#define RSF_OVERLAY_SAVED_PASTE 2u
+#define RSF_OVERLAY_SAVED_CLEAR 3u
+#define RSF_OVERLAY_SAVED_ROW_LIMIT 64u
+typedef struct rsf_overlay_saved_row {
+    const char* label;
+    const uint16_t* text;
+    uint32_t text_length, kind, restart;
+    int32_t value, minimum, maximum, step;
+    uint32_t divisor;
+    int32_t last_result;
+} rsf_overlay_saved_row;
 
 typedef struct rsf_overlay_stats {
     uint32_t struct_size;
@@ -200,6 +218,8 @@ typedef struct rsf_overlay_stats {
     uint32_t sr_quality_choices;
     /* Last quality or enable edit, keyed by the panel's request ID. */
     uint32_t sr_change_id, sr_change_status;
+    uint32_t saved_row_count;
+    const rsf_overlay_saved_row* saved_rows;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the
@@ -264,6 +284,8 @@ typedef struct rsf_overlay_intent {
     uint32_t ui_preferences_changed, ui_preferences;
     /* ABI 19. Nonzero for an SR quality or enable request. */
     uint32_t sr_change_id;
+    uint32_t saved_action, saved_index;
+    int32_t saved_value;
 } rsf_overlay_intent;
 
 /* Mouse buttons, as a bit field. */

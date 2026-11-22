@@ -587,23 +587,18 @@ fn diagnostics_save_live_capture_and_mark_graphics_for_restart() {
         });
     };
     set(OVERLAY_PROBE, 1);
-    set(FRAME_CAPTURE, 1);
+    assert_eq!(host.set_capture_directory(r"C:\試験".into()), OK);
     set(GRAPHICS_DIAGNOSTICS, 1);
     let state = host.lock();
-    let [probe, capture, graphics] =
-        host.diagnostic_options(state.capture_enabled, state.graphics_diagnostics);
-    assert_eq!((probe.value, capture.value, graphics.value), (1, 1, 1));
-    assert_eq!(
-        (probe.restart, capture.restart, graphics.restart),
-        (0, 0, 1)
-    );
+    let [probe, graphics] = host.diagnostic_options(state.graphics_diagnostics);
+    assert_eq!((probe.value, graphics.value), (1, 1));
+    assert_eq!((probe.restart, graphics.restart), (0, 1));
     assert!(state.capture_update);
     drop(state);
     assert_eq!(ini.integer("OverlayProbe"), 1);
     assert_eq!(ini.integer("GraphicsDiagnostics"), 1);
-    assert!(ini.contents().contains("SRCaptureDirectory="));
     assert!(!events().iter().any(|event| event == "diagnostics"));
-    set(FRAME_CAPTURE, 0);
+    assert_eq!(host.set_capture_directory(String::new()), OK);
     assert!(!host.lock().capture_enabled);
     assert!(host.lock().capture_update);
 }
@@ -632,7 +627,7 @@ fn install_reads_one_shot_requests_and_owns_fg_or_observer() {
     assert!(installed.fg_installed());
     assert!(installed.probe.lock().unwrap().enabled);
     assert_eq!(
-        installed.capture_directory.to_str().unwrap(),
+        installed.lock().capture_directory.to_str().unwrap(),
         "C:\\captures"
     );
     assert!(installed.fsr.to_str().unwrap().ends_with("/fidelityfx"));
