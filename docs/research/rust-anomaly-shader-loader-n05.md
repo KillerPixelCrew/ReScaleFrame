@@ -65,3 +65,29 @@ fixture inputs. These uses remain in `shader_d3d.cpp/.h`,
 layout declaration is now in
 `shader_frame_layout.h`. Converting the remaining fixture facades would
 also require changing those C++ motion fixtures.
+
+## N04 reconciliation
+
+The replay starts at `f40a25d5`. `6258fe6e` replays `872f68e0` with one
+Windows Cargo dev-dependency table for both the temporal and tessellation
+fixtures. `61e03df4` replays `768c7ced`. It keeps N04's generated frame
+target and out-pointer return, including `written` and `main` at byte
+offsets 20 and 21. The guarded views, viewport and bind helpers, callable COM
+leaves, native draw-unwind scopes and retirement state machine retain their N04
+owners. The typed pack validates and retains `ConstantOps` on admission.
+
+The compiler caller-frame layout now comes from bindgen 0.72.1 and still
+occupies 36 bytes with the same eight fields. The deployed-tree fixture facade
+has a single compiler/reflector class. The Runtime session, engine SEH
+includer and fixture-specific path conversion remain separate.
+
+| PORT path | Source handoff |
+| --- | --- |
+| `games/anomaly/src/runtime_shaders.cpp`, `games/anomaly/src/runtime_shaders.h` | Closed by the live Rust pack and isolated `engine_shader_includes.cpp` leaf. |
+| `tests/anomaly_temporal_shader_device.cpp` | Closed in source by the Rust example and existing Python entry point. |
+| `games/anomaly/src/shader_d3d.cpp`, `games/anomaly/src/shader_d3d.h` | Retained for `tests/anomaly_motion_device.cpp`, `tests/anomaly_motion_far_device.cpp`, and `tests/anomaly_motion_tess_chain_device.cpp`. These fixtures construct the loader compiler/reflector, consume C++ descriptors, and use Windows filesystem include lookup. |
+| `games/anomaly/src/shader_loader.cpp`, `games/anomaly/src/shader_loader.h`, `games/anomaly/src/shader_loader_platform.h` | The same device fixtures and `tests/anomaly_motion_contract.cpp` use these facades. The contract also uses mock compiler/reflector callbacks. `games/anomaly/src/motion_foliage.cpp/.h` and `motion_policy.h` refer to the fixture types. Their removal belongs with the corresponding fixture consumers. |
+
+The scoped bindgen run reproduced the N04 target binding byte for byte.
+Pinned formatting, locked offline Windows Cargo metadata and Git whitespace
+checks cover this reconciliation. Build and runtime verification remain open.

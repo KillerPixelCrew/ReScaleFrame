@@ -2,17 +2,10 @@
 use super::{Bytes, Define, Request, Span};
 use std::ffi::c_void;
 
-#[repr(C)]
-pub(crate) struct FrameLayout {
-    calls: [u32; 2],
-    call_length: u32,
-    source: u32,
-    length: u32,
-    entry: u32,
-    flags: u32,
-    defines: u32,
-    define_capacity: u32,
-}
+#[path = "frame_abi.rs"]
+mod abi;
+
+pub(crate) use abi::rsf_anomaly_shader_frame_layout as FrameLayout;
 
 const _: () = assert!(size_of::<FrameLayout>() == 36);
 

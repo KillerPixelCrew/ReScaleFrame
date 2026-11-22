@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "shader_d3d.h"
-#include "shader_loader_platform.h"
 #include <new>
 #include <utility>
 
@@ -9,6 +8,8 @@ using OpenFile = HRESULT (*)(const void* tree, const char* prefix, const char* n
 extern "C" {
 ShaderD3DModules* rsf_anomaly_shader_d3d_load(const uint16_t*, FARPROC*, FARPROC*) noexcept;
 void rsf_anomaly_shader_d3d_unload(ShaderD3DModules*) noexcept;
+bool rsf_anomaly_shader_reflect(FARPROC, rsf_anomaly_shader_bytes, void*,
+    bool (*)(void*, const rsf_anomaly_shader_reflection*)) noexcept;
 bool rsf_anomaly_shader_compile_tree(FARPROC, const void*, OpenFile, const rsf_anomaly_shader_request*,
     void*, bool (*)(void*, bool, rsf_anomaly_shader_bytes)) noexcept;
 }
@@ -72,7 +73,7 @@ bool copy_reflection(void* user, const rsf_anomaly_shader_reflection* view) noex
 } catch (...) { return false; }
 }
 
-D3DShaderApi::D3DShaderApi(const wchar_t* name) noexcept : D3DShaderReflector(nullptr)
+D3DShaderApi::D3DShaderApi(const wchar_t* name) noexcept
 {
     static_assert(sizeof(wchar_t) == sizeof(uint16_t));
     modules_ = rsf_anomaly_shader_d3d_load(reinterpret_cast<const uint16_t*>(name), &compile_, &reflect_);
@@ -113,7 +114,7 @@ bool D3DShaderApi::compile(const std::filesystem::path& tree, std::span<const st
         });
 }
 
-bool D3DShaderReflector::reflect(std::span<const std::byte> bytecode, Reflection& out)
+bool D3DShaderApi::reflect(std::span<const std::byte> bytecode, Reflection& out)
 {
     out = {};
     return rsf_anomaly_shader_reflect(reflect_, {reinterpret_cast<const uint8_t*>(bytecode.data()), bytecode.size()},
