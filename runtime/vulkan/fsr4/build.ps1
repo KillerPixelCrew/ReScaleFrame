@@ -2,7 +2,7 @@
 .SYNOPSIS
 Compiles the retained FSR4 Vulkan/DX12 bridge DLL.
 .DESCRIPTION
-Builds the INT8, bridge owner and file hashing Rust archives for Windows GNU, compiles MinHook with gcc, and links them with the Rust bridge exports through the g++ driver. Builds a sibling temporary DLL, replacing Output only after success.
+Builds the rsf-fsr4-compat archive (INT8 compatibility, bridge owner and file hashing) for Windows GNU, compiles MinHook with gcc, and links them with the Rust bridge exports through the g++ driver. Builds a sibling temporary DLL, replacing Output only after success.
 .PARAMETER SdkRoot
 FidelityFX SDK root containing Kits/FidelityFX/api/include/dx12/ffx_api_dx12.h.
 .PARAMETER Output
@@ -10,7 +10,7 @@ Target bridge DLL path; a successful build replaces this file.
 .PARAMETER VulkanSdkRoot
 Vulkan SDK root supplying Include headers for adapter matching; defaults to VULKAN_SDK.
 .PARAMETER MinHookRoot
-MinHook 1.3.4 source root containing include/MinHook.h and src/; defaults to the sdk/minhook submodule.
+MinHook source root containing include/MinHook.h and src/, at the revision third_party/minhook/minhook.lock.json pins.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$SdkRoot,
@@ -32,7 +32,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $vulkan 'vulkan/vulkan.h'))) {
     throw 'Vulkan SDK headers are required for DXGI adapter matching'
 }
 if (-not (Test-Path -LiteralPath (Join-Path $MinHookRoot 'include/MinHook.h') -PathType Leaf)) {
-    throw "MinHook sources are required at $MinHookRoot (run 'git submodule update --init sdk/minhook')"
+    throw "MinHook sources are required at $MinHookRoot"
 }
 $minHook = (Resolve-Path -LiteralPath $MinHookRoot).Path
 $minHookSources = @(@('src/buffer.c', 'src/hook.c', 'src/trampoline.c', 'src/hde/hde32.c', 'src/hde/hde64.c') |
@@ -50,14 +50,13 @@ try {
     $rustOutput = Join-Path $objects 'cargo'
     Push-Location -LiteralPath (Join-Path $PSScriptRoot '../../..')
     try {
-        & $cargo build --locked --release -p rsf-fsr4-compat -p rsf-runtime-common --target $rustTarget --target-dir $rustOutput
+        & $cargo build --locked --release -p rsf-fsr4-compat --target $rustTarget --target-dir $rustOutput
         if ($LASTEXITCODE -ne 0) { throw "FSR 4 Rust compatibility compilation failed: $LASTEXITCODE" }
     }
     finally {
         Pop-Location
     }
     $rustArchive = Join-Path $rustOutput "$rustTarget/release/librsf_fsr4_compat.a"
-    $commonArchive = Join-Path $rustOutput "$rustTarget/release/librsf_runtime_common.a"
 
     # hde32.c compiles to an empty object on x64; MinHook stays C, not C++.
     $minHookObjects = @($minHookSources | ForEach-Object {
@@ -73,7 +72,7 @@ try {
         if ($_ -match '^\s+(?:\w+=)?(\w+)\s*$') { "-Wl,--undefined=$($Matches[1])" }
     })
     & $compiler -O2 -shared -static $minHookObjects $exports $definition `
-        $rustArchive $commonArchive -o $temporary -ld3d12 -ldxgi -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp
+        $rustArchive -o $temporary -ld3d12 -ldxgi -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp
     if ($LASTEXITCODE -ne 0) { throw "FSR 4 bridge compilation failed: $LASTEXITCODE" }
     Move-Item -LiteralPath $temporary -Destination $target -Force
 }

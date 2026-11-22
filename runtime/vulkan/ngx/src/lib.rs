@@ -2,9 +2,8 @@
 //! NGX Vulkan's native caller module with its original flat C ABI.
 mod loader;
 mod parameters;
-#[cfg(feature = "vulkanstory-compat")]
-#[path = "../../../../integrations/vulkanstory/native/ngx.rs"]
-mod vulkanstory_compat;
+// The VulkanStoryNgx* names of the package this crate builds.
+mod vulkanstory;
 
 use std::ffi::{c_char, c_void};
 use std::ptr::{self, NonNull};

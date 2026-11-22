@@ -44,7 +44,7 @@ try {
     $rustOutput = Join-Path $scratch 'cargo'
     Push-Location -LiteralPath $workspace
     try {
-        & $cargo build --locked --release -p rsf-vulkanstory-ngx --features vulkanstory-compat --target $rustTarget --target-dir $rustOutput
+        & $cargo build --locked --release -p rsf-vulkanstory-ngx --target $rustTarget --target-dir $rustOutput
         if ($LASTEXITCODE -ne 0) { throw 'The VulkanStory NGX Rust loader failed to compile.' }
     }
     finally {

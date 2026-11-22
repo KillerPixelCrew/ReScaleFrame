@@ -64,7 +64,7 @@ mkdir -p -- "$out" || exit 0
 output="$(cd -- "$out" && pwd)" || exit 0
 scratch="$(mktemp -d "$output/.vulkanstory-ngx.XXXXXXXX")" || exit 0
 trap 'rm -rf -- "$scratch"' EXIT
-if ! (cd "$workspace" && cargo build --locked --release -p rsf-vulkanstory-ngx --features vulkanstory-compat \
+if ! (cd "$workspace" && cargo build --locked --release -p rsf-vulkanstory-ngx \
         "${rust_args[@]}" --target-dir "$scratch/cargo"); then
     skip_build "Rust caller module build failed"
 fi

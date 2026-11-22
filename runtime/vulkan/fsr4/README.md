@@ -19,8 +19,8 @@ The bridge state lives in the Rust [owner](owner.rs), compiled into the same
 argument and frame validation, provider selection and the FSR 4 pin, the
 compatibility decision, allocator and fence sequencing, the ready/done handoff
 and checked retirement. The Rust [capsule](native.rs) holds the DXGI, D3D12
-and FidelityFX objects behind the owner's private callback table and defines
-every export. The DLL has no C++ translation unit; `g++` only drives the link.
+and FidelityFX objects that the owner calls directly, and defines every
+export. The DLL has no C++ translation unit; `g++` only drives the link.
 
 NVIDIA and Intel run FSR 4 through the shared [Rust INT8 compatibility owner](../../backends/fsr/compat/src/lib.rs).
 It requires a pinned upscaler build, SDK 2.3.0 (4.1.1.2740) or SDK 2.4.0 (4.1.2.4555),

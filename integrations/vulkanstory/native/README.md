@@ -11,13 +11,13 @@ filenames and symbol names.
 | `VulkanStoryFsr4.dll` | `rsf_vk_fsr4_` | Same-DLL aliases from `fsr4.def` |
 | `VulkanStoryXessFg.dll` | `rsf_vk_xess_fg_` | Same-DLL aliases from `xess_fg.def` |
 | `VulkanStoryFsr3.dll` | `rsf_vk_fsr3_` | Same-DLL aliases from `fsr3.def` |
-| `VulkanStoryNgx.dll`, `libVulkanStoryNgx.so` | `rsf_vk_ngx_` | Rust forwarding exports selected by `vulkanstory-compat` |
+| `VulkanStoryNgx.dll`, `libVulkanStoryNgx.so` | `rsf_vk_ngx_` | Rust forwarding exports in `runtime/vulkan/ngx/src/vulkanstory.rs` |
 
 The standalone build scripts include the matching alias table. Each alias
 shares the same loaded provider and session, and public structure layouts
 and ABI versions stay the same. The Windows aliases are resolved by the
-linker. The Rust shims use the same typed calls on Windows and Linux, with
-the driver-facing call site still in the NGX package module.
+linker. The NGX forwarders are Rust because the package also builds on Linux,
+where no .def file applies.
 
 The external VulkanStory host package manifests at
 `e215d0143df4c0baf0438eb2c309df6085f69ea3` list only the original
