@@ -149,28 +149,79 @@ fn decode(
     ))
 }
 
-/// The private C++ wrapper lends the copied cache and three nonoverlapping outputs.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_camera_frame(
-    native: &NativeCamera,
-    width: u32,
-    height: u32,
-    out: *mut rsf_camera_frame,
-    previous_clip_to_clip: *mut Matrix,
-    history_valid: *mut bool,
-) -> bool {
-    let Some((camera, history)) = decode(native, width, height) else {
-        // The SDK record contains only integers and floats.
-        unsafe {
-            out.write(std::mem::zeroed());
-            history_valid.write(false);
-        }
-        return false;
-    };
-    unsafe {
-        out.write(camera);
-        history_valid.write(history.is_some());
-        previous_clip_to_clip.write(history.unwrap_or(IDENTITY));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn transformed(point: &[f32; 4], matrix: &Matrix) -> [f32; 4] {
+        std::array::from_fn(|column| {
+            (0..4)
+                .map(|row| point[row] * matrix[row * 4 + column])
+                .sum()
+        })
     }
-    true
+
+    fn near(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn native_skyrim_camera_contract() {
+        let projection = [
+            2.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 1.01, 1.0, 0.0, 0.0, -1.01, 0.0,
+        ];
+        let mut native = NativeCamera {
+            view: IDENTITY,
+            projection,
+            view_projection: projection,
+            previous_view_projection: projection,
+            origin: [10.0, 0.0, 0.0],
+            previous_origin: [9.0, 0.0, 0.0],
+            jitter_ndc: [-0.0005, 0.001],
+            near_plane: 1.0,
+            far_plane: 101.0,
+        };
+
+        let (frame, backward) = decode(&native, 1000, 500).expect("valid camera");
+        let mut jittered = projection;
+        // Native BuildCameraCache postmultiplies projection by clip translation.
+        for row in jittered.chunks_exact_mut(4) {
+            row[0] += row[3] * native.jitter_ndc[0];
+            row[1] += row[3] * native.jitter_ndc[1];
+        }
+        let sample = [1.0, 2.0, 5.0, 1.0];
+        let [x, y, _, w] = transformed(&sample, &projection);
+        let [jx, jy, _, _] = transformed(&sample, &jittered);
+        near(frame.jitter_pixels[0], (jx - x) / w * 500.0);
+        near(frame.jitter_pixels[1], -(jy - y) / w * 250.0);
+        near(
+            transformed(&[10.0, 0.0, 5.0, 1.0], &frame.world_to_view)[0],
+            0.0,
+        );
+
+        let clip = [0.0, 0.0, 4.04, 5.0];
+        let previous = transformed(&clip, &frame.clip_to_previous_clip);
+        near(previous[0] / previous[3], 0.4);
+        let roundtrip = transformed(&previous, &backward.expect("valid camera history"));
+        for (actual, expected) in roundtrip.into_iter().zip(clip) {
+            near(actual, expected);
+        }
+        for (z, expected) in [(1.0, 0.0), (101.0, 1.0)] {
+            let [_, _, clip_z, clip_w] = transformed(&[0.0, 0.0, z, 1.0], &frame.view_to_clip);
+            near(clip_z / clip_w, expected);
+        }
+
+        native.previous_view_projection = [0.0; 16];
+        assert!(
+            decode(&native, 1000, 500)
+                .expect("empty history resets")
+                .1
+                .is_none()
+        );
+        native.view_projection[0] += 1.0;
+        assert!(decode(&native, 1000, 500).is_none());
+        native.view_projection[0] -= 1.0;
+        native.projection[0] = f32::NAN;
+        assert!(decode(&native, 1000, 500).is_none());
+    }
 }

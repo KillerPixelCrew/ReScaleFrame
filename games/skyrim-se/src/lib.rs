@@ -23,6 +23,7 @@ mod postprocess;
 mod presentation;
 mod render_hook;
 mod render_inputs;
+mod render_native;
 mod render_observer;
 mod resolution;
 mod sampling;

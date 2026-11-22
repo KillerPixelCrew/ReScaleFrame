@@ -3,6 +3,10 @@
 
 use crate::platform::{self, Platform};
 use crate::render_hook::RenderHook;
+use crate::render_inputs::renderer_thread;
+use crate::render_native::thread;
+use crate::resolution;
+use rsf_game_sys::d3d11_host_abi::rsf_d3d11_sampler_bias as Bias;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
@@ -25,70 +29,37 @@ const SLOTS: usize = 16;
 const ADDRESSES: usize = 6;
 const FILTERS: usize = 5;
 
-#[repr(C)]
-struct Bias {
-    struct_size: u32,
-    abi_version: u32,
-    session_id: u64,
-    samplers: [*mut c_void; SLOTS],
-    slot_mask: u32,
-    bias: f32,
-    applied_mask: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Leaves {
-    on_renderer_thread: unsafe extern "C" fn() -> bool,
-    extent: unsafe extern "C" fn(u32, u32, *mut u32, *mut u32) -> bool,
-    bind: unsafe extern "C" fn(usize, *mut c_void, *mut c_void, *mut Bias) -> i32,
-    report: unsafe extern "C" fn(&rsf_game_host_services, f32, u32, u32, u32, u32, u32),
-}
-
-const _: () = {
-    assert!(size_of::<Bias>() == 160);
-    assert!(std::mem::offset_of!(Bias, slot_mask) == 144);
-    assert!(std::mem::offset_of!(Bias, applied_mask) == 152);
-    assert!(size_of::<Leaves>() == 32);
-};
-
 #[derive(Clone, Copy)]
 struct Binding {
     platform: &'static Platform,
     base: usize,
-    service: usize,
+    bind: Bind,
     host: rsf_game_host_services,
-    leaves: Leaves,
 }
 
 // The session keeps the Runtime and its host services alive while the hook or restore is busy.
 // Every engine read and graphics call uses the renderer thread.
 unsafe impl Send for Binding {}
 
+type Bind = unsafe extern "C" fn(*mut c_void, *mut c_void, &mut Bias) -> i32;
+
 static HOOK: RenderHook<Binding> = RenderHook::new();
 static PENDING: AtomicBool = AtomicBool::new(false);
 static CALLS: AtomicU32 = AtomicU32::new(0);
 static REPORTS: AtomicU32 = AtomicU32::new(0);
 
-fn read_word(platform: &Platform, address: usize) -> Option<u32> {
-    let mut bytes = [0; 4];
-    platform
-        .read(address, &mut bytes)
-        .then(|| u32::from_le_bytes(bytes))
-}
-
 impl Binding {
     fn scene_extent(&self, width: u32, height: u32) -> Option<(u32, u32)> {
-        let mut rw = 0;
-        let mut rh = 0;
+        let [rw, rh] = resolution::extent(width, height)?;
         // Primary colour1/depth0 select the scene raster. Postprocess and UI change colour
         // targets and shadow views change depth. The live ratios must also show reduction.
-        (unsafe { (self.leaves.extent)(width, height, &mut rw, &mut rh) }
-            && rw < width
-            && read_word(self.platform, self.base + COLOUR_TARGET) == Some(1)
-            && read_word(self.platform, self.base + DEPTH_TARGET) == Some(0)
-            && read_word(self.platform, self.base + SHADOW_VIEW) == Some(0)
-            && read_word(self.platform, self.base + RASTER_RATIO)
+        (rw < width
+            && self.platform.read_u32(self.base + COLOUR_TARGET) == Some(1)
+            && self.platform.read_u32(self.base + DEPTH_TARGET) == Some(0)
+            && self.platform.read_u32(self.base + SHADOW_VIEW) == Some(0)
+            && self
+                .platform
+                .read_u32(self.base + RASTER_RATIO)
                 .is_some_and(|ratio| f32::from_bits(ratio) < 1.0))
         .then_some((rw, rh))
     }
@@ -133,7 +104,7 @@ impl Binding {
     }
 
     fn apply(self, restore: bool) -> Option<()> {
-        if self.host.user.is_null() || !unsafe { (self.leaves.on_renderer_thread)() } {
+        if self.host.user.is_null() || renderer_thread() != thread() {
             return None;
         }
         let mut dimensions = [0; 8];
@@ -165,8 +136,7 @@ impl Binding {
         }
         let context = self.platform.read_usize(self.base + IMMEDIATE_CONTEXT)?;
         let result = unsafe {
-            (self.leaves.bind)(
-                self.service,
+            (self.bind)(
                 self.host.user,
                 ptr::with_exposed_provenance_mut(context),
                 &mut request,
@@ -176,7 +146,8 @@ impl Binding {
             return None;
         }
         PENDING.store(request.applied_mask != 0, Ordering::Release);
-        if request.applied_mask != 0
+        if self.host.log.is_some()
+            && request.applied_mask != 0
             && REPORTS
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                     (n < 4).then_some(n + 1)
@@ -184,17 +155,10 @@ impl Binding {
                 .is_ok()
         {
             let (rw, rh) = scene.unwrap_or_default();
-            unsafe {
-                (self.leaves.report)(
-                    &self.host,
-                    request.bias,
-                    request.applied_mask,
-                    rw,
-                    rh,
-                    width,
-                    height,
-                )
-            };
+            self.platform.log_text(&self.host, &format!(
+                "Skyrim scene sampler mip bias={} slots=0x{:x} render={rw}x{rh} output={width}x{height}; native comparison/no-mip samplers retained",
+                request.bias, request.applied_mask,
+            ));
         }
         Some(())
     }
@@ -218,13 +182,8 @@ unsafe extern "C" fn rsf_skyrim_sampling_guard(platform: *const Platform) -> boo
 
 /// Lifecycle calls are serialized by the adapter session.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sampling_start(
-    host: &rsf_game_host_services,
-    platform: *const Platform,
-    leaves: &Leaves,
-    detour: *const c_void,
-) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+extern "C" fn rsf_skyrim_sampling_start(host: &rsf_game_host_services) -> bool {
+    let Some(platform) = platform::get() else {
         return false;
     };
     let base = platform.main_module();
@@ -243,13 +202,12 @@ unsafe extern "C" fn rsf_skyrim_sampling_start(
     let binding = Binding {
         platform,
         base,
-        service,
+        bind: unsafe { std::mem::transmute::<usize, Bind>(service) },
         host: *host,
-        leaves: *leaves,
     };
     HOOK.enable(
         binding,
-        || platform.hook_create(target, detour),
+        || platform.hook_create(target, observe as *const c_void),
         || platform.hook_enable(target),
     )
 }
@@ -265,7 +223,7 @@ extern "C" fn rsf_skyrim_sampling_busy() -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sampling_stop(platform: *const Platform) -> bool {
+extern "C" fn rsf_skyrim_sampling_stop() -> bool {
     rsf_skyrim_sampling_quiesce();
     if rsf_skyrim_sampling_busy() {
         return false;
@@ -273,25 +231,31 @@ unsafe extern "C" fn rsf_skyrim_sampling_stop(platform: *const Platform) -> bool
     if HOOK.original.load(Ordering::Acquire).is_null() {
         return true;
     }
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+    let Some(platform) = platform::get() else {
         return false;
     };
     let base = platform.main_module();
     base != 0 && platform.hook_disable(base + FLUSH) && !rsf_skyrim_sampling_busy()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sampling_enter() -> *mut c_void {
+unsafe extern "C" fn observe(preserve_input_layout: u8) -> usize {
     CALLS.fetch_add(1, Ordering::AcqRel);
-    HOOK.original.load(Ordering::Acquire)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sampling_leave(returned: bool) {
-    if returned {
-        apply(false);
+    struct Call;
+    impl Drop for Call {
+        fn drop(&mut self) {
+            CALLS.fetch_sub(1, Ordering::AcqRel);
+        }
     }
-    CALLS.fetch_sub(1, Ordering::AcqRel);
+    let _call = Call;
+    let original = HOOK.original.load(Ordering::Acquire);
+    if original.is_null() {
+        return 0;
+    }
+    // The exact-build guard establishes this native flush signature.
+    let flush: unsafe extern "C" fn(u8) -> usize = unsafe { std::mem::transmute(original) };
+    let result = unsafe { flush(preserve_input_layout) };
+    apply(false);
+    result
 }
 
 pub(crate) fn finish() {

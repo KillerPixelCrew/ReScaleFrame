@@ -3,22 +3,15 @@
 
 use crate::compatibility::HdrCall;
 use crate::platform::{self, Platform};
+use crate::render_inputs;
+use crate::render_native::{rsf_skyrim_render_allowed, thread};
 use crate::session::{rsf_skyrim_session_accepting, rsf_skyrim_session_lease};
 use crate::taa;
 use rsf_game_sys::rsf_game_host_services;
-use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
-
-#[repr(C)]
-struct Leaves {
-    render_allowed: unsafe extern "C" fn() -> bool,
-    matches_call: unsafe extern "C" fn(&HdrCall) -> bool,
-    fg_inputs: unsafe extern "C" fn(*mut c_void, &rsf_game_host_services),
-    reconstruct: unsafe extern "C" fn(*mut c_void, &rsf_game_host_services) -> bool,
-    observe: unsafe extern "C" fn(&HdrCall, &rsf_game_host_services, u64, bool),
-}
+use winapi::um::d3d11::ID3D11Texture2D;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -29,9 +22,13 @@ struct TaaReceipt {
 }
 
 const _: () = {
-    assert!(size_of::<Leaves>() == 40);
     assert!(size_of::<TaaReceipt>() == 24 && std::mem::offset_of!(TaaReceipt, enabled) == 16);
 };
+
+unsafe extern "C" {
+    fn rsf_skyrim_matches_postprocess(call: &HdrCall) -> bool;
+    fn rsf_skyrim_render_source() -> u64;
+}
 
 static OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
 
@@ -91,26 +88,27 @@ fn bypass(platform: &Platform, manager: usize) -> Option<TaaReceipt> {
     })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_postprocess_busy(platform: *const Platform) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
-        return true;
-    };
-    !drain(
-        platform,
-        &mut RESTORE.lock().unwrap_or_else(PoisonError::into_inner),
-    )
+pub(crate) fn reset_observations() {
+    OBSERVATIONS.store(0, Ordering::Relaxed);
+    crate::camera::render::reset_history();
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_postprocess_prepare(
-    platform: *const Platform,
-    leaves: &Leaves,
-    call: &HdrCall,
-    receipt: &mut TaaReceipt,
-) {
+extern "C" fn rsf_skyrim_render_cleanup_pending() -> bool {
+    let Some(platform) = platform::get() else {
+        return crate::auxiliary::pending();
+    };
+    crate::auxiliary::pending()
+        || !drain(
+            platform,
+            &mut RESTORE.lock().unwrap_or_else(PoisonError::into_inner),
+        )
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_postprocess_prepare(call: &HdrCall, receipt: &mut TaaReceipt) {
     *receipt = TaaReceipt::default();
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+    let Some(platform) = platform::get() else {
         return;
     };
     if !drain(
@@ -121,23 +119,23 @@ unsafe extern "C" fn rsf_skyrim_postprocess_prepare(
     }
     let mut reconstructed = false;
     if rsf_skyrim_session_accepting()
-        && unsafe { (leaves.render_allowed)() }
+        && unsafe { rsf_skyrim_render_allowed() }
         && call.input == 1
         && call.output == 0
-        && unsafe { (leaves.matches_call)(call) }
+        && unsafe { rsf_skyrim_matches_postprocess(call) }
     {
         let host = services();
-        let manager = ptr::with_exposed_provenance_mut(call.manager);
         // Pre-mutation FG facts must reach the Runtime before SR can write these resources.
-        unsafe { (leaves.fg_inputs)(manager, &host) };
-        reconstructed = unsafe { (leaves.reconstruct)(manager, &host) };
+        let _ = render_inputs::produce(platform, call.manager, &host, true);
+        reconstructed =
+            render_inputs::produce(platform, call.manager, &host, false).unwrap_or(false);
     }
     if rsf_skyrim_session_accepting() {
         let number = OBSERVATIONS.fetch_add(1, Ordering::Relaxed);
         if number < 16 {
             let host = services();
             if host.log.is_some() {
-                unsafe { (leaves.observe)(call, &host, number, number < 4) };
+                report_postprocess(platform, call, &host, number);
             }
         }
     }
@@ -147,14 +145,11 @@ unsafe extern "C" fn rsf_skyrim_postprocess_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_postprocess_restore(
-    platform: *const Platform,
-    receipt: &TaaReceipt,
-) {
+extern "C" fn rsf_skyrim_postprocess_restore(receipt: &TaaReceipt) {
     if receipt.taa == 0 {
         return;
     }
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+    let Some(platform) = platform::get() else {
         return;
     };
     let restored = {
@@ -163,9 +158,49 @@ unsafe extern "C" fn rsf_skyrim_postprocess_restore(
         drain(platform, &mut state)
     };
     if !restored {
+        let mut retained: rsf_game_host_services = unsafe { std::mem::zeroed() };
+        unsafe { rsf_skyrim_session_lease(false, &mut retained) };
         platform.log(
-            &services(),
+            &retained,
             c"Skyrim native TAA restore pending after guarded restore refusal.",
         );
+    }
+}
+
+fn describe_target(platform: &Platform, base: usize, index: u32) -> String {
+    const TARGETS: usize = 0x333_1f40 + 0xa58;
+    if base != 0
+        && matches!(index, 1 | 7)
+        && let Some(texture) = platform.read_usize(base + TARGETS + index as usize * 0x30)
+        && texture != 0
+    {
+        // The synchronous postprocess callback owns these researched slots.
+        let texture = ptr::with_exposed_provenance_mut::<ID3D11Texture2D>(texture);
+        let mut desc = unsafe { std::mem::zeroed() };
+        unsafe { (*texture).GetDesc(&mut desc) };
+        return format!(
+            "target={index} texture={texture:p} size={}x{} format={} samples={} bind=0x{:x}",
+            desc.Width, desc.Height, desc.Format, desc.SampleDesc.Count, desc.BindFlags,
+        );
+    }
+    format!("target={index} unavailable")
+}
+
+fn report_postprocess(
+    platform: &Platform,
+    call: &HdrCall,
+    host: &rsf_game_host_services,
+    number: u64,
+) {
+    let base = platform.main_module();
+    let colour = describe_target(platform, base, call.input);
+    let motion = describe_target(platform, base, 7);
+    let source = unsafe { rsf_skyrim_render_source() };
+    platform.log_text(host, &format!(
+        "Skyrim native post-process observation={number} source={source} thread={} manager=0x{:x} input={} output={}; {colour}; motion candidate {motion}",
+        thread(), call.manager, call.input, call.output,
+    ));
+    if number < 4 && base != 0 {
+        crate::camera::render::describe_inputs(platform, base, host);
     }
 }

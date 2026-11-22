@@ -2,11 +2,13 @@
 //! One native camera-cache reader for Skyrim's pre-HDR SR and FG producers.
 
 use super::{Matrix, NativeCamera, decode};
-use crate::platform::Platform;
 use crate::taa;
+use crate::{platform::Platform, resolution};
 use rsf_game_sys::camera_math::finite_matrix_close;
-use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_render_pass};
+use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_host_services, rsf_game_render_pass};
 use std::sync::{Mutex, PoisonError};
+use winapi::um::profileapi::{QueryPerformanceCounter, QueryPerformanceFrequency};
+use winapi::um::winnt::LARGE_INTEGER;
 
 const RENDER_STATE: usize = 0x333_63a0;
 const ACTIVE_CAMERA: usize = 0x33d_3d28;
@@ -23,13 +25,11 @@ pub(crate) struct RenderCamera {
     pub(crate) ratios: [f32; 2],
 }
 
-#[repr(C)]
-pub(crate) struct Leaves {
-    extent: unsafe extern "C" fn(u32, u32, *mut u32, *mut u32) -> bool,
-    clock: unsafe extern "C" fn(*mut i64, *mut i64) -> bool,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SrFrame {
+    session: u64,
+    frame: u32,
 }
-
-const _: () = assert!(size_of::<Leaves>() == 16);
 
 struct History {
     session: u64,
@@ -44,13 +44,18 @@ struct History {
 
 // SR and FG observe the same native frame at their own call sites. Each needs its own
 // previous callback time and camera receipt. No native pointer is dereferenced from history.
-static ACCEPTED_SR: Mutex<Option<(u64, u32)>> = Mutex::new(None);
+static ACCEPTED_SR: Mutex<Option<SrFrame>> = Mutex::new(None);
 
 pub(crate) fn accept_sr(session: u64, frame: u32) {
-    *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner) = Some((session, frame));
+    *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner) = Some(SrFrame { session, frame });
 }
 
 static HISTORY: Mutex<[Option<History>; 2]> = Mutex::new([None, None]);
+
+pub(crate) fn reset_history() {
+    *HISTORY.lock().unwrap_or_else(PoisonError::into_inner) = [None, None];
+    *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner) = None;
+}
 
 fn read<const N: usize>(platform: &Platform, address: usize) -> Option<[u8; N]> {
     let mut bytes = [0; N];
@@ -133,7 +138,6 @@ fn read_cache(
 
 pub(crate) fn read_frame(
     platform: &Platform,
-    leaves: &Leaves,
     manager: usize,
     fg: bool,
     session: u64,
@@ -145,9 +149,11 @@ pub(crate) fn read_frame(
     }
     let (mut facts, native) = read_cache(platform, base, manager)?;
     let [width, height] = facts.output;
-    let [rw, rh] = &mut facts.render;
-    let controlled = unsafe { (leaves.extent)(width, height, rw, rh) };
-    if (!controlled && facts.ratios != [1.0; 2])
+    let controlled = resolution::extent(width, height);
+    if let Some(render) = controlled {
+        facts.render = render;
+    }
+    if (controlled.is_none() && facts.ratios != [1.0; 2])
         || !facts.ratios.iter().zip(facts.render).zip(facts.output).all(
             |((&ratio, render), output)| {
                 ratio.is_finite() && (ratio - render as f32 / output as f32).abs() <= 0.00001
@@ -160,9 +166,14 @@ pub(crate) fn read_frame(
     let (mut camera, history) = decode(&native, rw, rh)?;
     camera.output_width = width;
     camera.output_height = height;
-    let mut now = 0;
-    let mut frequency = 0;
-    if !unsafe { (leaves.clock)(&mut now, &mut frequency) } || frequency <= 0 {
+    let (mut now, mut frequency): (LARGE_INTEGER, LARGE_INTEGER) = unsafe { std::mem::zeroed() };
+    if unsafe {
+        QueryPerformanceCounter(&mut now) == 0 || QueryPerformanceFrequency(&mut frequency) == 0
+    } {
+        return None;
+    }
+    let (now, frequency) = unsafe { (*now.QuadPart(), *frequency.QuadPart()) };
+    if frequency <= 0 {
         return None;
     }
     let receipt = History {
@@ -185,9 +196,15 @@ pub(crate) fn read_frame(
         return None;
     }
     camera.frame_time_seconds = elapsed as f32;
-    let consumed = fg
-        || *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner)
-            == Some((session, previous.frame));
+    let accepted_sr = *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner);
+    let consumed = history_consumed(
+        fg,
+        accepted_sr,
+        SrFrame {
+            session,
+            frame: previous.frame,
+        },
+    );
     if consumed
         && history.is_some()
         && previous.camera == facts.camera
@@ -207,4 +224,79 @@ pub(crate) fn read_frame(
     pass.camera = camera;
     pass.previous_clip_to_clip = history.unwrap_or(super::IDENTITY);
     Some(facts)
+}
+
+fn history_consumed(fg: bool, accepted_sr: Option<SrFrame>, previous: SrFrame) -> bool {
+    fg || accepted_sr == Some(previous)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refused_sr_lease_resets_next_history_without_affecting_fg() {
+        let accepted = SrFrame {
+            session: 7,
+            frame: 1,
+        };
+        let refused = SrFrame {
+            session: 7,
+            frame: 2,
+        };
+        assert!(history_consumed(false, Some(accepted), accepted));
+        // Frame 2 sampled the camera but never acquired valid render inputs.
+        assert!(!history_consumed(false, Some(accepted), refused));
+        assert!(history_consumed(true, Some(accepted), refused));
+        let new_session = SrFrame {
+            session: 8,
+            ..accepted
+        };
+        assert!(!history_consumed(false, Some(accepted), new_session));
+    }
+}
+
+pub(crate) fn describe_inputs(platform: &Platform, base: usize, host: &rsf_game_host_services) {
+    use std::ptr;
+    use winapi::um::d3d11::ID3D11Texture2D;
+
+    let state = base + RENDER_STATE;
+    let camera = platform
+        .read_usize(base + ACTIVE_CAMERA)
+        .unwrap_or_default();
+    let cache = platform.read_usize(state + 0xb8).unwrap_or_default();
+    let count = platform.read_u32(state + 0xc8).unwrap_or_default();
+    let selected = if camera != 0 && cache != 0 && (1..=256).contains(&count) {
+        camera_entry(platform, cache, count, camera)
+    } else {
+        None
+    };
+    let numbers = selected.and_then(|entry| {
+        Some((
+            read_floats::<16>(platform, entry + 0x1c0)?,
+            read_floats::<16>(platform, entry + 0x140)?,
+            read_floats::<16>(platform, entry + 0x180)?,
+            read_floats::<6>(platform, entry + 0x26c)?,
+            read_floats::<2>(platform, camera + 0x160)?,
+            read_floats::<2>(platform, state + 0x44)?,
+            read_floats::<2>(platform, state + 0x114)?,
+        ))
+    });
+    let readable = u8::from(numbers.is_some());
+    let (projection, current, previous, origins, planes, jitter, scale) =
+        numbers.unwrap_or_default();
+    let depth = platform.read_usize(base + 0x333_3f58).unwrap_or_default();
+    let mut desc = unsafe { std::mem::zeroed() };
+    if depth != 0 {
+        let depth = ptr::with_exposed_provenance_mut::<ID3D11Texture2D>(depth);
+        unsafe { (*depth).GetDesc(&mut desc) };
+    }
+    platform.log_text(host, &format!(
+        "Skyrim native inputs camera=0x{camera:x} cache=0x{:x} entries={count} readable={readable} near={} far={} projection={},{},{},{},{} jitter={},{} scale={},{} origin={},{},{} previous_origin={},{},{} VP={},{} previous_VP={},{} depth=0x{depth:x} size={}x{} format={} samples={}; no input-frame identity or pixel validation",
+        selected.unwrap_or_default(), planes[0], planes[1],
+        projection[0], projection[5], projection[10], projection[11], projection[14],
+        jitter[0], jitter[1], scale[0], scale[1], origins[0], origins[1], origins[2],
+        origins[3], origins[4], origins[5], current[0], current[5], previous[0], previous[5],
+        desc.Width, desc.Height, desc.Format, desc.SampleDesc.Count,
+    ));
 }

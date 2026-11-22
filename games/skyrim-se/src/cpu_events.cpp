@@ -784,7 +784,7 @@ bool cpu_render_identity(rsf_game_render_pass& pass) {
         rsf_skyrim_cpu_active());
 }
 bool cpu_rendered_source_eligible() noexcept {
-    return current && rendered_source_eligible(rsf_skyrim_cpu_active() && current->render.scope,
+    return current && rsf_skyrim_rendered_source_eligible(rsf_skyrim_cpu_active() && current->render.scope,
         current->render.primary_world_entries, current->render.screen);
 }
 void cpu_render_diagnostic(const char* stage, const rsf_game_render_pass& pass) {

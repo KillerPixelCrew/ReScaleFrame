@@ -11,6 +11,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+winapi = { version = "=0.3.9", features = ["d3d11", "dxgi", "processthreadsapi", "profileapi", "winuser"] }
 
 [lints]
 workspace = true

@@ -2,12 +2,14 @@
 //! Native renderer jitter, frame-upload and end-of-render observations for Skyrim.
 
 use crate::platform::{self, Platform};
+use crate::render_native::rsf_skyrim_render_allowed;
 use crate::session::{rsf_skyrim_session_accepting, rsf_skyrim_session_lease};
-use crate::{presentation, resolution, sampling};
+use crate::{auxiliary, presentation, resolution, sampling};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use winapi::um::winuser::GetClassNameW;
 
 const ACTIVE_WINDOW: usize = 0x333_0198;
 const SWAPCHAIN: usize = 0x18;
@@ -24,32 +26,17 @@ struct PresentationBinding {
     swapchain: *mut c_void,
 }
 
-#[repr(C)]
-struct JitterReport {
-    state: usize,
-    number: u64,
-    dimensions: [u32; 2],
-    projection: [f32; 2],
-    readable: bool,
-}
+const _: () = assert!(size_of::<PresentationBinding>() == 16);
 
-#[repr(C)]
-struct Leaves {
-    render_allowed: unsafe extern "C" fn() -> bool,
-    bind: unsafe extern "C" fn(usize, *mut c_void, &PresentationBinding),
-    configure_resolution: unsafe extern "C" fn(*mut c_void, &rsf_game_host_services),
-    finish_auxiliaries: unsafe extern "C" fn(&rsf_game_host_services),
-    report_jitter: unsafe extern "C" fn(&rsf_game_host_services, &JitterReport),
-    window_class: unsafe extern "C" fn(*mut c_void, *mut u16, u32) -> u32,
-}
-
-const _: () = {
-    assert!(size_of::<PresentationBinding>() == 16);
-    assert!(size_of::<JitterReport>() == 40 && std::mem::offset_of!(JitterReport, readable) == 32);
-    assert!(size_of::<Leaves>() == 48);
-};
+type Bind = unsafe extern "C" fn(*mut c_void, &PresentationBinding) -> i32;
 
 static OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_reset_render_observations() {
+    OBSERVATIONS.store(0, Ordering::Relaxed);
+    crate::postprocess::reset_observations();
+}
 
 fn swapchain(platform: &Platform) -> Option<usize> {
     let base = platform.main_module();
@@ -67,16 +54,12 @@ fn swapchain(platform: &Platform) -> Option<usize> {
 
 /// The native detour holds this services record through its original renderer-end call.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_render_end_enter(
-    platform: *const Platform,
-    leaves: &Leaves,
-    retained: &mut rsf_game_host_services,
-) {
+unsafe extern "C" fn rsf_skyrim_render_end_enter(retained: &mut rsf_game_host_services) {
     let binding = unsafe { rsf_skyrim_session_lease(false, retained) };
     if rsf_skyrim_session_accepting()
-        && unsafe { (leaves.render_allowed)() }
+        && unsafe { rsf_skyrim_render_allowed() }
         && binding != 0
-        && let Some(platform) = unsafe { platform::inspect(platform) }
+        && let Some(platform) = platform::get()
         && let Some(chain) = swapchain(platform)
     {
         let request = PresentationBinding {
@@ -84,24 +67,26 @@ unsafe extern "C" fn rsf_skyrim_render_end_enter(
             abi_version: platform.d3d11_host_abi,
             swapchain: ptr::with_exposed_provenance_mut(chain),
         };
-        unsafe { (leaves.bind)(binding, retained.user, &request) };
+        let bind: Bind = unsafe { std::mem::transmute(binding) };
+        unsafe { bind(retained.user, &request) };
     }
     sampling::finish();
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_render_end_leave(leaves: &Leaves, retained: &rsf_game_host_services) {
+extern "C" fn rsf_skyrim_render_end_leave(retained: &rsf_game_host_services) {
     presentation::finish();
-    unsafe { (leaves.finish_auxiliaries)(retained) };
+    if let Some(platform) = platform::get() {
+        auxiliary::finish(platform, retained);
+    }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_render_upload_enter(
-    platform: *const Platform,
+extern "C" fn rsf_skyrim_render_upload_enter(
     renderer: usize,
     observation: &mut UploadObservation,
 ) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+    let Some(platform) = platform::get() else {
         return false;
     };
     let base = platform.main_module();
@@ -135,6 +120,10 @@ struct UploadObservation {
     frame: u32,
 }
 
+const _: () = assert!(
+    size_of::<UploadObservation>() == 16 && std::mem::offset_of!(UploadObservation, frame) == 8
+);
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_render_upload_leave(observation: &UploadObservation, flags: u8) {
     resolution::record_per_frame_flags(observation.session, observation.frame, flags);
@@ -148,18 +137,17 @@ fn pair(platform: &Platform, state: usize, offset: usize) -> Option<[u32; 2]> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_render_jitter_observed(
-    platform: *const Platform,
-    leaves: &Leaves,
-    state: usize,
-) {
+extern "C" fn rsf_skyrim_render_jitter_observed(state: usize) {
     // A withdrawn or incompatible host still gives the resolution owner a chance to restore.
     let mut host: rsf_game_host_services = unsafe { std::mem::zeroed() };
     unsafe { rsf_skyrim_session_lease(true, &mut host) };
-    if !unsafe { (leaves.render_allowed)() } {
+    if !unsafe { rsf_skyrim_render_allowed() } {
         host = unsafe { std::mem::zeroed() };
     }
-    unsafe { (leaves.configure_resolution)(ptr::with_exposed_provenance_mut(state), &host) };
+    let Some(platform) = platform::get() else {
+        return;
+    };
+    let _ = resolution::configure(platform, state, &host);
     if !rsf_skyrim_session_accepting() {
         return;
     }
@@ -171,33 +159,28 @@ unsafe extern "C" fn rsf_skyrim_render_jitter_observed(
     if host.log.is_none() {
         return;
     }
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
-        return;
-    };
     let dimensions = if state == 0 {
         None
     } else {
         pair(platform, state, 0x24)
     };
     let projection = dimensions.and_then(|_| pair(platform, state, 0x44));
-    let observation = JitterReport {
-        state,
-        number,
-        dimensions: dimensions.unwrap_or_default(),
-        projection: projection.unwrap_or_default().map(f32::from_bits),
-        readable: projection.is_some(),
-    };
-    unsafe { (leaves.report_jitter)(&host, &observation) };
+    let [width, height] = dimensions.unwrap_or_default();
+    let [x, y] = projection.unwrap_or_default().map(f32::from_bits);
+    let readable = u8::from(projection.is_some());
+    platform.log_text(&host, &format!(
+        "Skyrim native jitter observation={number} state=0x{state:x} readable={readable} size={width}x{height} projection={x},{y}",
+    ));
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_render_accept_window(leaves: &Leaves, window: *mut c_void) -> bool {
+extern "C" fn rsf_skyrim_render_accept_window(window: *mut c_void) -> bool {
     if window.is_null() {
         return false;
     }
     let mut name = [0; 128];
     let len =
-        unsafe { (leaves.window_class)(window, name.as_mut_ptr(), name.len() as u32) } as usize;
+        unsafe { GetClassNameW(window.cast(), name.as_mut_ptr(), name.len() as i32) } as usize;
     len == WINDOW_CLASS.len()
         && name[..len]
             .iter()

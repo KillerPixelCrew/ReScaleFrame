@@ -3,15 +3,20 @@
 
 use crate::platform::{self, Platform};
 use crate::render_hook::RenderHook;
+use crate::render_native::{
+    ComRef, rsf_skyrim_call_render_pass, rsf_skyrim_render_diagnostic, rsf_skyrim_render_identity,
+};
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_host_capture as Capture;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
     RSF_GAME_RENDER_WINDOW, rsf_game_host_services, rsf_game_render_pass,
 };
 use std::cell::RefCell;
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
+use winapi::shared::dxgi::IDXGISwapChain;
+use winapi::um::d3d11::{ID3D11DeviceContext, ID3D11Texture2D};
 
 const DRAW_INTERFACE: usize = 0x116_ac80;
 const INTERFACE_BYTES: [u8; 15] = [
@@ -22,54 +27,19 @@ const NATIVE_FRAME: usize = 0x333_63f4;
 const ACTIVE_WINDOW: usize = 0x333_0198;
 const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
 
-#[repr(C)]
-struct Buffer {
-    chain: *mut c_void,
-    context: *mut c_void,
-    texture: *mut c_void,
-    width: u32,
-    height: u32,
-    samples: u32,
-}
-
-type BufferCallback = unsafe extern "C" fn(*const c_void, &Buffer);
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Leaves {
-    identity: unsafe extern "C" fn(&mut rsf_game_render_pass) -> bool,
-    render: unsafe extern "C" fn(
-        &rsf_game_host_services,
-        *mut c_void,
-        &rsf_game_render_pass,
-        u32,
-    ) -> bool,
-    diagnostic: unsafe extern "C" fn(*const c_char, &rsf_game_render_pass),
-    buffer: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_void, BufferCallback),
-    retain: unsafe extern "C" fn(*mut c_void, *mut c_void),
-    release: unsafe extern "C" fn(*mut c_void, *mut c_void),
-    capture: unsafe extern "C" fn(usize, *mut c_void, *mut c_void, &Capture),
-}
-
-const _: () = {
-    assert!(size_of::<Capture>() == 64);
-    assert!(std::mem::offset_of!(Capture, texture) == 48);
-    assert!(size_of::<Buffer>() == 40);
-    assert!(size_of::<Leaves>() == 56);
-};
-
 #[derive(Clone, Copy)]
 struct Binding {
     platform: &'static Platform,
     base: usize,
     host: rsf_game_host_services,
-    capture: usize,
-    leaves: Leaves,
+    capture: Option<CaptureTexture>,
 }
 
 // The process-lived Runtime session lends host and native tables. Only the renderer owns
 // the command context and resources used during an admitted callback.
 unsafe impl Send for Binding {}
+
+type CaptureTexture = unsafe extern "C" fn(*mut c_void, *mut c_void, &Capture) -> i32;
 
 static HOOK: RenderHook<Binding> = RenderHook::new();
 static CALLS: AtomicU32 = AtomicU32::new(0);
@@ -84,13 +54,8 @@ struct Scene {
 struct Window {
     binding: Binding,
     pass: rsf_game_render_pass,
-    context: *mut c_void,
-}
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe { (self.binding.leaves.release)(self.pass.swapchain, self.context) };
-    }
+    context: ComRef<ID3D11DeviceContext>,
+    _chain: ComRef<IDXGISwapChain>,
 }
 
 #[derive(Default)]
@@ -175,18 +140,13 @@ pub(crate) fn same_source(a: &rsf_game_render_pass, b: &rsf_game_render_pass) ->
 
 impl Binding {
     fn native_frame(self) -> Option<u64> {
-        let mut frame = [0; 4];
         self.platform
-            .read(self.base + NATIVE_FRAME, &mut frame)
-            .then_some(u64::from(u32::from_le_bytes(frame)))
-    }
-
-    fn identity(self, pass: &mut rsf_game_render_pass) -> bool {
-        unsafe { (self.leaves.identity)(pass) }
+            .read_u32(self.base + NATIVE_FRAME)
+            .map(u64::from)
     }
 
     fn render(self, context: *mut c_void, pass: &rsf_game_render_pass, begin: bool) -> bool {
-        unsafe { (self.leaves.render)(&self.host, context, pass, u32::from(begin)) }
+        unsafe { rsf_skyrim_call_render_pass(&self.host, context, pass, u32::from(begin)) }
     }
 }
 
@@ -251,7 +211,7 @@ pub(crate) fn identify(pass: &rsf_game_render_pass) {
     }
     if pass.source_frame_id != 0 {
         let mut current = empty_pass();
-        if !binding.identity(&mut current) || !same_source(&current, pass) {
+        if !unsafe { rsf_skyrim_render_identity(&mut current) } || !same_source(&current, pass) {
             return;
         }
     }
@@ -303,31 +263,36 @@ fn snapshot(binding: Binding, after: bool) -> Option<()> {
         scene,
         after,
     };
-    unsafe {
-        (binding.leaves.buffer)(
-            ptr::with_exposed_provenance_mut(chain),
-            ptr::with_exposed_provenance_mut(context),
-            ptr::from_ref(&snapshot).cast(),
-            use_buffer,
-        )
-    };
+    let chain =
+        unsafe { ComRef::<IDXGISwapChain>::retain(ptr::with_exposed_provenance_mut(chain)) }?;
+    let context = unsafe {
+        ComRef::<ID3D11DeviceContext>::retain(ptr::with_exposed_provenance_mut(context))
+    }?;
+    let texture = chain.backbuffer()?;
+    use_buffer(snapshot, &chain, &context, &texture);
     Some(())
 }
 
-unsafe extern "C" fn use_buffer(snapshot: *const c_void, buffer: &Buffer) {
-    let &Snapshot {
+fn use_buffer(
+    Snapshot {
         binding,
         scene,
         after,
-    } = unsafe { &*snapshot.cast::<Snapshot>() };
-    if buffer.width != scene.pass.camera.output_width
-        || buffer.height != scene.pass.camera.output_height
-        || buffer.samples != 1
+    }: Snapshot,
+    chain: &ComRef<IDXGISwapChain>,
+    context: &ComRef<ID3D11DeviceContext>,
+    texture: &ComRef<ID3D11Texture2D>,
+) {
+    let desc = texture.desc();
+    if desc.Width != scene.pass.camera.output_width
+        || desc.Height != scene.pass.camera.output_height
+        || desc.SampleDesc.Count != 1
     {
         return;
     }
     let mut current = empty_pass();
-    let same_scope = binding.identity(&mut current) && same_source(&current, &scene.pass);
+    let same_scope =
+        unsafe { rsf_skyrim_render_identity(&mut current) } && same_source(&current, &scene.pass);
     if !after
         && same_scope
         && binding.host.render_pass.is_some()
@@ -340,24 +305,25 @@ unsafe extern "C" fn use_buffer(snapshot: *const c_void, buffer: &Buffer) {
             pass.screen = current.screen;
         }
         pass.role = RSF_GAME_RENDER_FINAL_SCENE;
-        pass.scene_surface = buffer.texture;
-        pass.swapchain = buffer.chain;
-        let began = binding.render(buffer.context, &pass, true);
-        let ended = binding.render(buffer.context, &pass, false);
+        pass.scene_surface = texture.as_raw().cast();
+        pass.swapchain = chain.as_raw().cast();
+        let began = binding.render(context.as_raw().cast(), &pass, true);
+        let ended = binding.render(context.as_raw().cast(), &pass, false);
         if !began || !ended {
             clear_window();
             return;
         }
         pass.role = RSF_GAME_RENDER_WINDOW;
         pass.scene_surface = ptr::null_mut();
-        unsafe { (binding.leaves.retain)(buffer.chain, buffer.context) };
         let window = Window {
             binding,
             pass,
-            context: buffer.context,
+            // The enclosing buffer leases keep both pointers valid and non-null.
+            context: context.clone(),
+            _chain: chain.clone(),
         };
-        unsafe { (binding.leaves.diagnostic)(c"WINDOW".as_ptr(), &pass) };
-        let began = binding.render(buffer.context, &pass, true);
+        unsafe { rsf_skyrim_render_diagnostic(c"WINDOW".as_ptr(), &pass) };
+        let began = binding.render(context.as_raw().cast(), &pass, true);
         if !began {
             // The host callback can throw after opening its scope. Recover immediately,
             // using the same pass and leases, and retry at renderer-end if recovery throws.
@@ -373,7 +339,7 @@ unsafe extern "C" fn use_buffer(snapshot: *const c_void, buffer: &Buffer) {
             retire_window(window);
         }
     }
-    if binding.capture != 0 {
+    if let Some(capture) = binding.capture {
         let (name, description) = if after {
             (
                 c"native_after_interface",
@@ -390,13 +356,11 @@ unsafe extern "C" fn use_buffer(snapshot: *const c_void, buffer: &Buffer) {
             view_key: scene.pass.view_key,
             name: name.as_ptr(),
             description: description.as_ptr(),
-            texture: buffer.texture,
+            texture: texture.as_raw().cast(),
             view: 0,
             scale: 1.0,
         };
-        unsafe {
-            (binding.leaves.capture)(binding.capture, binding.host.user, buffer.context, &request)
-        };
+        unsafe { capture(binding.host.user, context.as_raw().cast(), &request) };
     }
 }
 
@@ -409,7 +373,10 @@ fn clear_window() {
 }
 
 fn retire_window(window: Window) {
-    if window.binding.render(window.context, &window.pass, false) {
+    if window
+        .binding
+        .render(window.context.as_raw().cast(), &window.pass, false)
+    {
         drop(window);
         clear_window();
     } else {
@@ -438,16 +405,11 @@ unsafe extern "C" fn rsf_skyrim_presentation_guard(platform: *const Platform) ->
 
 /// Lifecycle calls are serialized by the adapter session.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_presentation_start(
-    host: &rsf_game_host_services,
-    platform: *const Platform,
-    leaves: &Leaves,
-    detour: *const c_void,
-) -> bool {
+extern "C" fn rsf_skyrim_presentation_start(host: &rsf_game_host_services) -> bool {
     if rsf_skyrim_presentation_busy() {
         return false;
     }
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+    let Some(platform) = platform::get() else {
         return false;
     };
     let base = platform.main_module();
@@ -464,12 +426,12 @@ unsafe extern "C" fn rsf_skyrim_presentation_start(
         platform,
         base,
         host: *host,
-        capture,
-        leaves: *leaves,
+        capture: (capture != 0)
+            .then(|| unsafe { std::mem::transmute::<usize, CaptureTexture>(capture) }),
     };
     HOOK.enable(
         binding,
-        || platform.hook_create(target, detour),
+        || platform.hook_create(target, observe as *const c_void),
         || platform.hook_enable(target),
     )
 }
@@ -485,20 +447,19 @@ extern "C" fn rsf_skyrim_presentation_busy() -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_presentation_stop(platform: *const Platform) -> bool {
+extern "C" fn rsf_skyrim_presentation_stop() -> bool {
     rsf_skyrim_presentation_quiesce();
     if HOOK.original.load(Ordering::Acquire).is_null() {
         return !rsf_skyrim_presentation_busy();
     }
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+    let Some(platform) = platform::get() else {
         return false;
     };
     let base = platform.main_module();
     base != 0 && platform.hook_disable(base + DRAW_INTERFACE) && !rsf_skyrim_presentation_busy()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_enter(ui: usize, primary: &mut bool) -> *mut c_void {
+fn enter(ui: usize, primary: &mut bool) -> *mut c_void {
     CALLS.fetch_add(1, Ordering::AcqRel);
     if let Some(binding) = binding()
         && binding.platform.read_usize(binding.base + PRIMARY_UI) == Some(ui)
@@ -509,10 +470,29 @@ extern "C" fn rsf_skyrim_presentation_enter(ui: usize, primary: &mut bool) -> *m
     HOOK.original.load(Ordering::Acquire)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_leave(primary: bool) {
+fn leave(primary: bool) {
     if primary && let Some(binding) = binding() {
         let _ = snapshot(binding, true);
     }
     CALLS.fetch_sub(1, Ordering::AcqRel);
+}
+
+unsafe extern "C" fn observe(ui: *mut c_void) -> usize {
+    #[derive(Default)]
+    struct Call {
+        primary: bool,
+    }
+    impl Drop for Call {
+        fn drop(&mut self) {
+            leave(self.primary);
+        }
+    }
+    let mut call = Call::default();
+    let original = enter(ui.addr(), &mut call.primary);
+    if original.is_null() {
+        return 0;
+    }
+    // The interface prologue guard establishes this native signature.
+    let draw: unsafe extern "C" fn(*mut c_void) -> usize = unsafe { std::mem::transmute(original) };
+    unsafe { draw(ui) }
 }

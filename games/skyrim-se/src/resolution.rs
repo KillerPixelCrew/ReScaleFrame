@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Owns Skyrim's engine render ratios, jitter and temporary output viewport.
 
-use crate::platform::{self, Platform};
+use crate::platform::Platform;
+use crate::render_inputs::renderer_thread;
+use crate::render_native::{
+    ComRef, rsf_skyrim_call_render_config, rsf_skyrim_call_upscale, thread,
+};
 use crate::taa;
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,
@@ -11,6 +15,8 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use winapi::shared::dxgi::IDXGISwapChain;
+use winapi::um::d3d11::ID3D11DeviceContext;
 
 const RENDER_STATE: usize = 0x333_63a0;
 const RENDERER: usize = 0x333_1f40;
@@ -24,44 +30,6 @@ const VIEWPORT: usize = 0x100_9960;
 const TAA_MANAGER: usize = 0x33d_40a0;
 const ACTIVE_WINDOW: usize = 0x333_0198;
 const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
-
-#[repr(C)]
-struct Report {
-    render: [u32; 2],
-    output: [u32; 2],
-    ratios: [f32; 2],
-    phases: u32,
-    saved_lock: u32,
-}
-
-#[repr(C)]
-struct Upload {
-    renderer: usize,
-    dirty: usize,
-    upload: usize,
-    viewport: usize,
-    extent: [u32; 2],
-    flags: u8,
-}
-
-#[repr(C)]
-struct Leaves {
-    renderer_thread: unsafe extern "C" fn() -> bool,
-    thread: unsafe extern "C" fn() -> u32,
-    prepare: unsafe extern "C" fn(&rsf_game_host_services, *mut c_void, &rsf_game_render_pass),
-    config: unsafe extern "C" fn(&rsf_game_host_services, &mut rsf_game_render_config),
-    ratios: unsafe extern "C" fn(usize, &[f32; 4]),
-    lock: unsafe extern "C" fn(usize, u32),
-    jitter: unsafe extern "C" fn(usize, &[f32; 2]),
-    upload: unsafe extern "C" fn(&Upload),
-    report: unsafe extern "C" fn(&rsf_game_host_services, &Report),
-}
-
-const _: () = {
-    assert!(size_of::<Report>() == 32);
-    assert!(size_of::<Upload>() == 48 && std::mem::offset_of!(Upload, flags) == 40);
-    assert!(size_of::<Leaves>() == 72);
-};
 
 #[derive(Clone, Copy)]
 struct Owner {
@@ -137,9 +105,8 @@ fn reconfigure(
     base: usize,
     output: [u32; 2],
     host: &rsf_game_host_services,
-    leaves: &Leaves,
 ) -> Option<[u32; 2]> {
-    if !unsafe { (leaves.renderer_thread)() }
+    if renderer_thread() != thread()
         || host.process_upscale.is_none()
         || host.render_config.is_none()
         || !output.into_iter().all(|value| (1..=16384).contains(&value))
@@ -165,18 +132,21 @@ fn reconfigure(
         pass.flags = RSF_GAME_RENDER_RECONFIGURE | RSF_GAME_RENDER_NO_FG;
         pass.swapchain = ptr::with_exposed_provenance_mut(chain);
         [pass.camera.output_width, pass.camera.output_height] = output;
-        unsafe { (leaves.prepare)(host, ptr::with_exposed_provenance_mut(context), &pass) };
+        let _context = unsafe {
+            ComRef::<ID3D11DeviceContext>::retain(ptr::with_exposed_provenance_mut(context))
+        }?;
+        let _chain = unsafe { ComRef::<IDXGISwapChain>::retain(pass.swapchain.cast()) }?;
+        unsafe { rsf_skyrim_call_upscale(host, ptr::with_exposed_provenance_mut(context), &pass) };
     }
     let mut config = rsf_game_render_config::request();
-    unsafe { (leaves.config)(host, &mut config) };
+    unsafe { rsf_skyrim_call_render_config(host, &mut config) };
     config.checked_render_extent(output)
 }
 
-fn configure(
+pub(crate) fn configure(
     platform: &Platform,
     pointer: usize,
     host: &rsf_game_host_services,
-    leaves: &Leaves,
 ) -> Option<()> {
     let _transaction = MUTATION.try_lock().ok()?;
     let base = platform.main_module();
@@ -185,12 +155,12 @@ fn configure(
     }
     let output = words::<2>(platform, pointer + 0x24)?;
     let previous = state().owner;
-    let Some(render) = reconfigure(platform, base, output, host, leaves) else {
+    let Some(render) = reconfigure(platform, base, output, host) else {
         if let Some(previous) = previous {
             // After restoring the saved fields, the native resolver can resume ownership.
             unsafe {
-                (leaves.ratios)(pointer + RATIO, &previous.saved_ratios);
-                (leaves.lock)(pointer + RATIO_LOCK, previous.saved_lock);
+                write_values(pointer + RATIO, &previous.saved_ratios);
+                ptr::with_exposed_provenance_mut(pointer + RATIO_LOCK).write(previous.saved_lock);
             }
             state().owner = None;
             let _ = reset_history(platform, base);
@@ -228,9 +198,12 @@ fn configure(
     let changed =
         previous.is_none_or(|previous| previous.render != render || previous.output != output);
     unsafe {
-        (leaves.ratios)(pointer + RATIO, &[ratios[0], ratios[1], prior[0], prior[1]]);
-        (leaves.lock)(pointer + RATIO_LOCK, 0);
-        (leaves.jitter)(pointer + JITTER, &jitter);
+        write_values(pointer + RATIO, &[ratios[0], ratios[1], prior[0], prior[1]]);
+        ptr::with_exposed_provenance_mut::<u32>(pointer + RATIO_LOCK).write(0);
+        write_values(
+            pointer + JITTER,
+            &[jitter[0], jitter[1], jitter[0], jitter[1]],
+        );
     }
     state().owner = Some(Owner {
         pointer,
@@ -244,45 +217,36 @@ fn configure(
     if changed {
         let _ = reset_history(platform, base);
         if host.log.is_some() {
-            unsafe {
-                (leaves.report)(
-                    host,
-                    &Report {
-                        render,
-                        output,
-                        ratios,
-                        phases,
-                        saved_lock,
-                    },
-                )
-            };
+            platform.log_text(host, &format!(
+                "Skyrim native resolution plan {}x{} -> {}x{} ratios={},{} phases={} saved_lock={}; native auxiliary handoff required for reduced SR",
+                render[0], render[1], output[0], output[1], ratios[0], ratios[1], phases, saved_lock,
+            ));
         }
     }
     Some(())
 }
 
-fn upload(base: usize, leaves: &Leaves, extent: [u32; 2], flags: u8) {
+unsafe fn write_values<const N: usize>(address: usize, values: &[f32; N]) {
     unsafe {
-        (leaves.upload)(&Upload {
-            renderer: base + RENDERER,
-            dirty: base + UPLOAD_DIRTY,
-            upload: base + UPLOAD,
-            viewport: base + VIEWPORT,
-            extent,
-            flags,
-        })
+        ptr::copy_nonoverlapping(
+            values.as_ptr(),
+            ptr::with_exposed_provenance_mut(address),
+            N,
+        )
     };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_resolution_configure(
-    platform: *const Platform,
-    leaves: &Leaves,
-    pointer: usize,
-    host: &rsf_game_host_services,
-) {
-    if let Some(platform) = unsafe { platform::inspect(platform) } {
-        let _ = configure(platform, pointer, host, leaves);
+fn upload(base: usize, extent: [u32; 2], flags: u8) {
+    type Upload = unsafe extern "C" fn(*mut c_void, u8);
+    type Viewport = unsafe extern "C" fn(*mut c_void, u32, u32, u8) -> usize;
+    let renderer = ptr::with_exposed_provenance_mut(base + RENDERER);
+    // This exact renderer and the two native entries were admitted by the observer guards.
+    unsafe {
+        ptr::with_exposed_provenance_mut::<u8>(base + UPLOAD_DIRTY).write(1);
+        let upload: Upload = std::mem::transmute(base + UPLOAD);
+        let viewport: Viewport = std::mem::transmute(base + VIEWPORT);
+        upload(renderer, flags);
+        viewport(renderer, extent[0], extent[1], 0);
     }
 }
 
@@ -296,21 +260,11 @@ extern "C" fn rsf_skyrim_resolution_controls(pointer: usize) -> bool {
     state().owner.is_some_and(|owner| owner.pointer == pointer)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_resolution_extent(
-    width: u32,
-    height: u32,
-    rw: &mut u32,
-    rh: &mut u32,
-) -> bool {
-    let Some(owner) = state()
+pub(crate) fn extent(width: u32, height: u32) -> Option<[u32; 2]> {
+    state()
         .owner
         .filter(|owner| owner.output == [width, height])
-    else {
-        return false;
-    };
-    [*rw, *rh] = owner.render;
-    true
+        .map(|owner| owner.render)
 }
 
 pub(crate) fn record_per_frame_flags(session: u64, frame: u32, flags: u8) {
@@ -321,34 +275,26 @@ pub(crate) fn record_per_frame_flags(session: u64, frame: u32, flags: u8) {
     }));
 }
 
-fn current_flags(platform: &Platform, owner: Owner) -> Option<u8> {
+fn current_flags(platform: &Platform, owner: Owner, pass: &rsf_game_render_pass) -> Option<u8> {
     let observation = FRAME_FLAGS.get()?;
     let frame = platform.read_u32(owner.pointer - RENDER_STATE + NATIVE_FRAME)?;
-    (frame == observation.frame && owner.session == observation.session)
+    (frame == observation.frame
+        && u64::from(frame) == pass.native_frame
+        && owner.session == observation.session
+        && owner.session == pass.session_id)
         .then_some(observation.flags)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_resolution_output_ready(platform: *const Platform) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
-        return false;
-    };
+pub(crate) fn output_ready(platform: &Platform, pass: &rsf_game_render_pass) -> bool {
     let state = state();
     state.output.is_none()
         && state
             .owner
-            .is_some_and(|owner| current_flags(platform, owner).is_some())
+            .is_some_and(|owner| current_flags(platform, owner, pass).is_some())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_resolution_enter(
-    platform: *const Platform,
-    leaves: &Leaves,
-) -> bool {
+pub(crate) fn enter(platform: &Platform, pass: &rsf_game_render_pass) -> bool {
     let Ok(_transaction) = MUTATION.try_lock() else {
-        return false;
-    };
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
         return false;
     };
     let owner = {
@@ -361,15 +307,15 @@ unsafe extern "C" fn rsf_skyrim_resolution_enter(
         };
         owner
     };
-    let Some(flags) = current_flags(platform, owner) else {
+    let Some(flags) = current_flags(platform, owner, pass) else {
         return false;
     };
-    let thread = unsafe { (leaves.thread)() };
+    let thread = thread();
     let Some(numbers) = words::<4>(platform, owner.pointer + RATIO) else {
         return false;
     };
-    unsafe { (leaves.ratios)(owner.pointer + RATIO, &[1.0; 4]) };
-    upload(owner.pointer - RENDER_STATE, leaves, owner.output, flags);
+    unsafe { write_values(owner.pointer + RATIO, &[1.0; 4]) };
+    upload(owner.pointer - RENDER_STATE, owner.output, flags);
     state().output = Some(Output {
         producer_ratios: numbers.map(f32::from_bits),
         thread,
@@ -378,8 +324,7 @@ unsafe extern "C" fn rsf_skyrim_resolution_enter(
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_resolution_leave(leaves: &Leaves) -> bool {
+pub(crate) fn leave() -> bool {
     let Ok(_transaction) = MUTATION.try_lock() else {
         return false;
     };
@@ -393,16 +338,11 @@ extern "C" fn rsf_skyrim_resolution_leave(leaves: &Leaves) -> bool {
         };
         (owner, output)
     };
-    if output.thread != unsafe { (leaves.thread)() } {
+    if output.thread != thread() {
         return false;
     }
-    unsafe { (leaves.ratios)(owner.pointer + RATIO, &output.producer_ratios) };
-    upload(
-        owner.pointer - RENDER_STATE,
-        leaves,
-        owner.render,
-        output.flags,
-    );
+    unsafe { write_values(owner.pointer + RATIO, &output.producer_ratios) };
+    upload(owner.pointer - RENDER_STATE, owner.render, output.flags);
     state().output = None;
     true
 }
