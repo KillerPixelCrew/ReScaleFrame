@@ -3,670 +3,665 @@
 // RCAS derives from RdenBlaauwen/RCAS-for-ReShade and AMD FidelityFX (MIT).
 // See THIRD_PARTY.md for provenance and license terms.
 #pragma once
-namespace rsf::sharpening {
-inline constexpr char da_das[] =
+static const char da_das_hlsl[] =
 #include "depth_color.inc"
-R"RSF(
-
-// 16x16 thread group + 1-pixel border on each side for 3x3 color taps.
-groupshared float4 s_color[18][18];
-
-// -----------------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------------
-
-float Luma(float3 c)
-{
-    return dot(c, kLumaCoeff);
-}
-
-float Max3(float3 v)
-{
-    return max(v.r, max(v.g, v.b));
-}
-
-int2 ClampCoord(int2 p)
-{
-    return int2(clamp(p.x, 0, DisplayWidth - 1), clamp(p.y, 0, DisplayHeight - 1));
-}
-
-int2 ClampMotionCoord(int2 p)
-{
-    return int2(clamp(p.x, 0, MotionWidth - 1), clamp(p.y, 0, MotionHeight - 1));
-}
-
-int2 ClampDepthCoord(int2 p)
-{
-    return int2(clamp(p.x, 0, DepthWidth - 1), clamp(p.y, 0, DepthHeight - 1));
-}
-
-float3 SafeLoadColor(int2 p)
-{
-    return loadColor(ClampCoord(p));
-}
-
-float SafeLoadRawDepthAtCoord(int2 p)
-{
-    return DepthTex.Load(int3(ClampDepthCoord(p), 0)).r;
-}
-
-float2 SafeLoadMotion(int2 p)
-{
-    return Motion.Load(int3(ClampMotionCoord(p), 0)).rg;
-}
-
-float LinearizeDepth(float rawDepth)
-{
-    float z = rawDepth;
-    if (KnownPlanes == 0 && DepthIsLinear == 0)
-        return DepthIsReversed != 0 ? 1.0-z : z;
-
-    if (DepthIsLinear > 0)
-    {
-        if (DepthIsReversed > 0)
-            z = 1.0 - z;
-
-        return z;
-    }
-
-    if (DepthIsReversed > 0)
-    {
-        // Reversed depth substitutes z' = 1 - z into A / (B - z*C):
-        // A / ((B - C) + z*C)
-        float revOffset = DepthLinearB - DepthLinearC;
-        return DepthLinearA / max(revOffset + z * DepthLinearC, 1e-6);
-    }
-
-    return DepthLinearA / max(DepthLinearB - z * DepthLinearC, 1e-6);
-}
-
-float SafeLoadDepthLinearFromDepthCoord(int2 depthCoord)
-{
-    return LinearizeDepth(SafeLoadRawDepthAtCoord(depthCoord));
-}
-
-float2 EstimateDepthGradientFromTaps(float centerDepth, float depthUp, float depthLeft,
-                                     float depthRight, float depthDown)
-{
-    float gxF = depthRight - centerDepth;
-    float gxB = centerDepth - depthLeft;
-    float gyF = depthDown - centerDepth;
-    float gyB = centerDepth - depthUp;
-
-    float gx = abs(gxF) < abs(gxB) ? gxF : gxB;
-    float gy = abs(gyF) < abs(gyB) ? gyF : gyB;
-
-    float maxGrad = max(abs(centerDepth) * 0.05, 1e-3);
-    return clamp(float2(gx, gy), -maxGrad, maxGrad);
-}
-
-float DepthResidualGrad(float centerDepth, float sampleDepth, float2 gradient, int2 offset)
-{
-    float predicted = centerDepth + dot(float2(offset), gradient);
-    float residual = abs(sampleDepth - predicted);
-
-    static const float kDepthNearBias = 0.01;
-    residual /= max(abs(centerDepth), kDepthNearBias);
-    residual = max(residual - DepthBias, 0.0);
-
-    return residual;
-}
-
-float DepthWeightFromResidual(float residual, float floorWeight)
-{
-    float w = saturate(1.0 - residual * DepthScale);
-    return lerp(floorWeight, 1.0, w);
-}
-
-float ComputeTapHaloRisk(float centerLuma, float sampleLuma, float depthResidual)
-{
-    float depthBreak = smoothstep(0.0015, 0.018, depthResidual);
-
-    float lumaDenom = max(max(abs(centerLuma), abs(sampleLuma)), 1e-4);
-    float relativeLumaDiff = abs(sampleLuma - centerLuma) / lumaDenom;
-
-    float lumaBreak = smoothstep(0.08, 0.45, relativeLumaDiff);
-    float asymmetry = smoothstep(0.12, 0.65, relativeLumaDiff);
-
-    float risk = depthBreak * lumaBreak * lerp(0.65, 1.0, asymmetry);
-
-    return saturate(risk * risk * (3.0 - 2.0 * risk));
-}
-
-float DepthWeightGradAdaptive(float centerDepth, float sampleDepth, float2 gradient, int2 offset,
-                              float centerLuma, float sampleLuma, out float haloRisk)
-{
-    float residual = DepthResidualGrad(centerDepth, sampleDepth, gradient, offset);
-
-    haloRisk = ComputeTapHaloRisk(centerLuma, sampleLuma, residual);
-
-    // Normal areas stay soft; high-risk silhouette taps get hard rejection.
-    float floorWeight = lerp(0.45, 0.07, haloRisk);
-
-    return DepthWeightFromResidual(residual, floorWeight);
-}
-
-// Expects positive view/world-space-like linear depth.
-// If linear depth is normalized 0..1, this boost is effectively disabled.
-float DistanceSharpnessBoost(float linearDepth)
-{
-    float d = max(linearDepth, 1e-4);
-    float boost = saturate((log2(d) - 4.0) * 0.15);
-
-    return lerp(1.0, 1.12, boost);
-}
-
-float ComputeAdaptiveSharpness(int2 pixelCoord)
-{
-    float setSharpness = Sharpness;
-
-    if (DynamicSharpenEnabled > 0)
-    {
-        float2 mv;
-
-        if (DisplaySizeMV > 0)
-        {
-            mv = SafeLoadMotion(pixelCoord);
-        }
-        else
-        {
-            // For lower-resolution motion, map the output pixel center into motion texture space.
-            // Display-size motion uses the same integer pixel coordinate directly.
-            float2 mvf = (float2(pixelCoord) + 0.5) * MotionTextureScale;
-            int2 mvCoord = int2(mvf);
-            mv = SafeLoadMotion(mvCoord);
-        }
-
-        float motion = max(abs(mv.x * MvScaleX), abs(mv.y * MvScaleY));
-        
-        float denom = max(MotionScaleLimit - MotionThreshold, 0.05);
-
-        float add = (max(motion - MotionThreshold, 0.0) / denom) * MotionSharpness;
-        add = clamp(add, min(0.0, MotionSharpness), max(0.0, MotionSharpness));
-
-        setSharpness += add;
-    }
-
-    return clamp(setSharpness, 0.0, 2.0);
-}
-
-float3 ApplyDebugTint(float3 color, float baseSharpness, float adaptiveSharpness, float edgeSharpness,
-                      float finalSharpness, float distanceBoost, int debugMode)
-{
-    float motionBoost = max(adaptiveSharpness - baseSharpness, 0.0);
-    float motionReduce = max(baseSharpness - adaptiveSharpness, 0.0);
-    float edgeReduce = max(adaptiveSharpness - edgeSharpness, 0.0);
-    float distanceIncrease = max(distanceBoost - 1.0, 0.0);
-
-    if (debugMode > 0)
-    {
-        color.r *= 1.0 + 12.0 * motionBoost;
-        color.g *= 1.0 + 12.0 * motionReduce;
-        color.b *= 1.0 + 12.0 * edgeReduce;
-
-        // Distance boost overlay, intentionally weaker than motion/edge debug.
-        color.r *= 1.0 + 4.0 * distanceIncrease;
-        color.g *= 1.0 + 2.0 * distanceIncrease;
-    }
-
-    return color;
-}
-
-float ComputeEdgeFactorFromCrossWeights(float centerLuma, float lumaUp, float lumaLeft, float lumaRight, float lumaDown,
-                                        float wUp, float wLeft, float wRight, float wDown)
-{
-    float lumaSum = 0.0;
-    lumaSum += abs(lumaUp - centerLuma);
-    lumaSum += abs(lumaLeft - centerLuma);
-    lumaSum += abs(lumaRight - centerLuma);
-    lumaSum += abs(lumaDown - centerLuma);
-
-    float minW = min(min(wUp, wLeft), min(wRight, wDown));
-    float avgW = (wUp + wLeft + wRight + wDown) * 0.25;
-
-    float depthEdge = lerp(minW, avgW, 0.50);
-
-    float lumaAvg = lumaSum * 0.25;
-
-    float lumaBase = max(max(abs(centerLuma), 0.25 * (abs(lumaUp) + abs(lumaLeft) + abs(lumaRight) + abs(lumaDown))), 1e-4);
-    float relativeLumaAvg = lumaAvg / lumaBase;
-
-    float lumaConfirm = saturate((relativeLumaAvg - 0.02) * 18.0);
-    
-    float depthBreakStrength = 1.0 - depthEdge;
-    float depthTrustFloor = lerp(0.15, 0.30, smoothstep(0.25, 0.80, depthBreakStrength));
-    float depthTrust = lerp(depthTrustFloor, 1.0, lumaConfirm);
-
-    return lerp(1.0, depthEdge, depthTrust);
-}
-
-float3 ApplyLumaRatio(float3 color, float oldY, float newY)
-{
-    return color * (max(newY, 0.0) / max(oldY, 1e-6));
-}
-
-float SoftHaloPair(float a, float b)
-{
-    float geometric = sqrt(max(a * b, 0.0));
-    float conservative = max(a, b);
-
-    return lerp(geometric, conservative, 0.55);
-}
-
-// -----------------------------------------------------------------------------
-// Directional adaptive sharpen core
-// -----------------------------------------------------------------------------
-
-)RSF"
-R"RSF(
-float3 ApplyDirectionalSharpen(float3 centerColor, float3 upColor, float3 leftColor, float3 rightColor, float3 downColor,
-                               float3 upLeftColor, float3 upRightColor, float3 downLeftColor, float3 downRightColor,
-                               float finalSharpness, float edgeFactor,
-                               float haloRiskH, float haloRiskV, float haloRiskDA, float haloRiskDB)
-{
-    float localScale = Max3(centerColor);
-    localScale = max(localScale, Max3(upColor));
-    localScale = max(localScale, Max3(leftColor));
-    localScale = max(localScale, Max3(rightColor));
-    localScale = max(localScale, Max3(downColor));
-    localScale = max(localScale, Max3(upLeftColor));
-    localScale = max(localScale, Max3(upRightColor));
-    localScale = max(localScale, Max3(downLeftColor));
-    localScale = max(localScale, Max3(downRightColor));
-    localScale = EncodeHdr != 0 ? 1.0 : max(localScale, 1e-4);
-
-    float invLocalScale = rcp(localScale);
-    
-    float rawCenterY = Luma(max(centerColor, 0.0));
-
-    float cY = max(Luma(max(centerColor, 0.0)) * invLocalScale, 1e-6);
-    float uY = max(Luma(max(upColor, 0.0)) * invLocalScale, 1e-6);
-    float lY = max(Luma(max(leftColor, 0.0)) * invLocalScale, 1e-6);
-    float rY = max(Luma(max(rightColor, 0.0)) * invLocalScale, 1e-6);
-    float dY = max(Luma(max(downColor, 0.0)) * invLocalScale, 1e-6);
-
-    float ulY = max(Luma(max(upLeftColor, 0.0)) * invLocalScale, 1e-6);
-    float urY = max(Luma(max(upRightColor, 0.0)) * invLocalScale, 1e-6);
-    float dlY = max(Luma(max(downLeftColor, 0.0)) * invLocalScale, 1e-6);
-    float drY = max(Luma(max(downRightColor, 0.0)) * invLocalScale, 1e-6);
-
-    float minY = min(cY, min(min(uY, dY), min(lY, rY)));
-    minY = min(minY, min(min(ulY, urY), min(dlY, drY)));
-
-    float maxY = max(cY, max(max(uY, dY), max(lY, rY)));
-    maxY = max(maxY, max(max(ulY, urY), max(dlY, drY)));
-
-    float localRange3x3 = maxY - minY;
-    float relativeRange = localRange3x3 / max(cY, 1e-4);
-
-    // Direction candidates.
-    float hY = (lY + rY) * 0.5;
-    float vY = (uY + dY) * 0.5;
-    float diagAY = (ulY + drY) * 0.5;
-    float diagBY = (urY + dlY) * 0.5;
-
-    float hDiff = abs(cY - hY);
-    float vDiff = abs(cY - vY);
-    float daDiff = abs(cY - diagAY);
-    float dbDiff = abs(cY - diagBY);
-
-    static const float kDirectionHaloSuppression = 0.35;
-
-    hDiff *= lerp(1.0, 1.0 - kDirectionHaloSuppression, haloRiskH);
-    vDiff *= lerp(1.0, 1.0 - kDirectionHaloSuppression, haloRiskV);
-    daDiff *= lerp(1.0, 1.0 - kDirectionHaloSuppression, haloRiskDA);
-    dbDiff *= lerp(1.0, 1.0 - kDirectionHaloSuppression, haloRiskDB);
-
-    float bestDiff = hDiff;
-    float secondDiff = max(max(vDiff, daDiff), dbDiff);
-    float refY = hY;
-    int selectedDir = 0; // 0=H, 1=V, 2=diagA, 3=diagB
-
-    if (vDiff > bestDiff)
-    {
-        secondDiff = max(max(hDiff, daDiff), dbDiff);
-        bestDiff = vDiff;
-        refY = vY;
-        selectedDir = 1;
-    }
-
-    if (daDiff > bestDiff)
-    {
-        secondDiff = max(max(hDiff, vDiff), dbDiff);
-        bestDiff = daDiff;
-        refY = diagAY;
-        selectedDir = 2;
-    }
-
-    if (dbDiff > bestDiff)
-    {
-        secondDiff = max(max(hDiff, vDiff), daDiff);
-        bestDiff = dbDiff;
-        refY = diagBY;
-        selectedDir = 3;
-    }
-
-    float selectedHaloRisk = haloRiskH;
-
-    if (selectedDir == 1)
-    {
-        selectedHaloRisk = haloRiskV;
-    }
-    else if (selectedDir == 2)
-    {
-        selectedHaloRisk = haloRiskDA;
-    }
-    else if (selectedDir == 3)
-    {
-        selectedHaloRisk = haloRiskDB;
-    }
-
-    float maxHaloRisk = max(max(haloRiskH, haloRiskV), max(haloRiskDA, haloRiskDB));
-
-    float directionSeparation = max(bestDiff - secondDiff, 0.0);
-
-    float rawDirectionConfidence = saturate(directionSeparation / max(bestDiff, 1e-5));
-    float directionConfidence = lerp(0.65, 1.0, rawDirectionConfidence);
-
-    float ambiguityDamp = lerp(0.75, 1.0, smoothstep(0.22, 0.65, rawDirectionConfidence));
-
-    // -------------------------------------------------------------------------
-    // AA-ramp preservation
-    // -------------------------------------------------------------------------
-
-    float crossAvgY = (uY + dY + lY + rY) * 0.25;
-    float isoDetail = (cY - crossAvgY) / max(crossAvgY, 1e-4);
-    isoDetail = clamp(isoDetail, -4.0, 4.0);
-
-    float rampRange = smoothstep(0.10, 0.45, relativeRange);
-    float rampDirection = smoothstep(0.35, 0.85, directionConfidence);
-    float rampDetail = smoothstep(0.025, 0.18, bestDiff);
-
-    // Partial protection even if direction confidence is imperfect.
-    float aaRampMask = rampRange * rampDetail * lerp(0.35, 1.0, rampDirection);
-
-    float aaRampBlend = 0.30 * aaRampMask;
-    refY = lerp(refY, crossAvgY, aaRampBlend);
-
-    float detail = (cY - refY) / max(refY, 1e-4);
-    detail = clamp(detail, -4.0, 4.0);
-
-    float absDetail = abs(detail);
-    float shapedDetail = sign(detail) * max(absDetail - 0.0010, 0.0);
-
-    shapedDetail = shapedDetail / (1.0 + 1.45 * abs(shapedDetail));
-    shapedDetail = clamp(shapedDetail, -0.42, 0.42);
-
-    float rangeConfidence = lerp(0.72, 1.0, smoothstep(0.0004, 0.018, relativeRange));
-    float edgeConfidence = lerp(0.18, 1.0, edgeFactor);
-
-    float aaStrengthDamp = lerp(1.0, 0.55, aaRampMask);
-
-    float posGainAA = lerp(1.50, 1.05, aaRampMask);
-    float negGainAA = lerp(0.72, 0.48, aaRampMask);
-    float detailGain = shapedDetail >= 0.0 ? posGainAA : negGainAA;
-
-    float unstablePattern = (1.0 - rawDirectionConfidence) * smoothstep(0.08, 0.35, relativeRange) * (1.0 - aaRampMask);
-
-    float strength = finalSharpness * 2.35 * directionConfidence * rangeConfidence * edgeConfidence *
-                     aaStrengthDamp * ambiguityDamp * lerp(1.0, 0.78, unstablePattern);
-
-    float edgeBlock = max(aaRampMask, maxHaloRisk);
-    edgeBlock = saturate(edgeBlock * 1.35);
-
-    float safeTextureMask = 1.0 - edgeBlock;
-
-    float nonDirectionalFloor = 0.15 * safeTextureMask * (1.0 - aaRampMask);
-    float nonDirectionalMask = max(1.0 - directionConfidence, nonDirectionalFloor);
-
-    // Shape the isotropic fallback too.
-    float absIso = abs(isoDetail);
-    float shapedIso = sign(isoDetail) * max(absIso - 0.0015, 0.0);
-    shapedIso = shapedIso / (1.0 + 1.25 * abs(shapedIso));
-    shapedIso = clamp(shapedIso, -0.12, 0.12);
-
-    float stableIsoDetail = smoothstep(0.006, 0.030, max(absIso - 0.0015, 0.0));
-    float isoBoost = lerp(1.0, 1.50, stableIsoDetail);
-
-    float newY = cY + cY * shapedDetail * strength * detailGain;
-    float isoGain = shapedIso >= 0.0 ? 1.0 : 0.45;
-
-    float lowContrastTexture = smoothstep(0.004, 0.045, relativeRange) * (1.0 - smoothstep(0.14, 0.40, relativeRange));
-    float lowContrastIsoBoost = lerp(1.0, 1.50, lowContrastTexture);
-
-    newY += cY * shapedIso * isoGain * finalSharpness * 0.18 * isoBoost * lowContrastIsoBoost *
-            nonDirectionalMask * safeTextureMask * lerp(1.0, 0.45, unstablePattern);
-
-    // -------------------------------------------------------------------------
-    // Halo-risk-aware limiter
-    // -------------------------------------------------------------------------
-
-    float rangeY = max(maxY - minY, cY * 0.01);
-
-    float haloLimiter = saturate(selectedHaloRisk);
-
-    float lowerExpand = lerp(0.42, 0.06, haloLimiter);
-    float upperExpand = lerp(0.48, 0.10, haloLimiter);
-
-    float limitMin = max(0.0, minY - rangeY * lowerExpand);
-    float limitMax = maxY + rangeY * upperExpand;
-
-    newY = clamp(newY, limitMin, limitMax);
-
-    float targetY = newY * localScale;
-
-    return max(ApplyLumaRatio(centerColor, max(rawCenterY, 1e-6), targetY), 0.0);
-}
-
-// -----------------------------------------------------------------------------
-// Main
-// -----------------------------------------------------------------------------
-
-)RSF"
-R"RSF(
-[numthreads(16, 16, 1)]
-void CSMain(uint3 DTid : SV_DispatchThreadID,
-            uint3 GTid : SV_GroupThreadID,
-            uint GI : SV_GroupIndex)
-{
-    int2 p = int2(DTid.xy);
-    int2 lp = int2(GTid.xy);
-    int2 groupBase = p - lp;
-
-    // Flattened cooperative 18x18 color tile load.
-    // 324 tile elements are distributed across 256 threads: every thread loads
-    // one element, and the first 68 threads load one additional element.
-    // Do not early-return before the group barrier; edge/out-of-dispatch threads
-    // still participate and simply load clamped border pixels.
-    for (uint i = GI; i < 324; i += 256)
-    {
-        uint lx = i % 18;
-        uint ly = i / 18;
-
-        int2 loadCoord = groupBase + int2(lx, ly) - int2(1, 1);
-        s_color[ly][lx] = float4(SafeLoadColor(loadCoord), 0.0);
-    }
-
-    GroupMemoryBarrierWithGroupSync();
-
-    if (DTid.x >= DisplayWidth || DTid.y >= DisplayHeight)
-        return;
-
-    float3 centerColor = s_color[lp.y + 1][lp.x + 1].rgb;
-    float adaptiveSharpness = ComputeAdaptiveSharpness(p);
-
-    if (adaptiveSharpness <= 0.0)
-    {
-        float3 outColor = max(centerColor, 0.0);
-
-        if (Debug > 0)
-            outColor = ApplyDebugTint(outColor, Sharpness, adaptiveSharpness, adaptiveSharpness, adaptiveSharpness, 1.0, Debug);
-
-
-        Dest[p] = storeColor(p, outColor);
-        return;
-    }
-
-    float centerLuma = Luma(centerColor);
-
-    // 9 color taps from LDS tile.
-    float3 colorUpRaw = s_color[lp.y][lp.x + 1].rgb;
-    float3 colorLeftRaw = s_color[lp.y + 1][lp.x].rgb;
-    float3 colorRightRaw = s_color[lp.y + 1][lp.x + 2].rgb;
-    float3 colorDownRaw = s_color[lp.y + 2][lp.x + 1].rgb;
-
-    float3 colorUpLeftRaw = s_color[lp.y][lp.x].rgb;
-    float3 colorUpRightRaw = s_color[lp.y][lp.x + 2].rgb;
-    float3 colorDownLeftRaw = s_color[lp.y + 2][lp.x].rgb;
-    float3 colorDownRightRaw = s_color[lp.y + 2][lp.x + 2].rgb;
-
-    float lumaUp = Luma(colorUpRaw);
-    float lumaLeft = Luma(colorLeftRaw);
-    float lumaRight = Luma(colorRightRaw);
-    float lumaDown = Luma(colorDownRaw);
-
-    float lumaUpLeft = Luma(colorUpLeftRaw);
-    float lumaUpRight = Luma(colorUpRightRaw);
-    float lumaDownLeft = Luma(colorDownLeftRaw);
-    float lumaDownRight = Luma(colorDownRightRaw);
-
-    // Only cross depth taps are loaded.
-    // Compute output-pixel to depth-texel mapping once.
-    // Offsetting baseDf by +/-DepthTextureScale is equivalent to mapping p + offset
-    // through OutputToDepthCoord(). For downsampled depth, multiple output pixels may
-    // intentionally map to the same depth texel after floor().
-    float2 baseDf = (float2(p) + 0.5) * DepthTextureScale;
-
-    int2 depthCenterCoord = int2(floor(baseDf));
-    int2 depthUpCoord = int2(floor(baseDf + float2(0.0, -DepthTextureScale.y)));
-    int2 depthLeftCoord = int2(floor(baseDf + float2(-DepthTextureScale.x, 0.0)));
-    int2 depthRightCoord = int2(floor(baseDf + float2(DepthTextureScale.x, 0.0)));
-    int2 depthDownCoord = int2(floor(baseDf + float2(0.0, DepthTextureScale.y)));
-
-    float centerDepth = SafeLoadDepthLinearFromDepthCoord(depthCenterCoord);
-    float depthUp = SafeLoadDepthLinearFromDepthCoord(depthUpCoord);
-    float depthLeft = SafeLoadDepthLinearFromDepthCoord(depthLeftCoord);
-    float depthRight = SafeLoadDepthLinearFromDepthCoord(depthRightCoord);
-    float depthDown = SafeLoadDepthLinearFromDepthCoord(depthDownCoord);
-    
-    float2 depthGrad = EstimateDepthGradientFromTaps(centerDepth, depthUp, depthLeft, depthRight, depthDown);
-
-    // RSF: preserve the center at a strong depth break. Upstream's soft tap
-    // floor can still sharpen across disjoint surfaces in perceptual HDR.
-    float4 depthResidual = abs(float4(depthUp,depthLeft,depthRight,depthDown) -
-        centerDepth - float4(-depthGrad.y,-depthGrad.x,depthGrad.x,depthGrad.y));
-    depthResidual = max(depthResidual / max(abs(centerDepth),0.01) - DepthBias,0);
-    if (Debug == 0 && any(depthResidual * DepthScale >= 1)) {
-        Dest[p] = storeColor(p,centerColor);
-        return;
-    }
-
-
-    float haloUp;
-    float haloLeft;
-    float haloRight;
-    float haloDown;
-
-    float wUp = DepthWeightGradAdaptive(centerDepth, depthUp, depthGrad, int2(0, -1), centerLuma, lumaUp, haloUp);
-    float wLeft = DepthWeightGradAdaptive(centerDepth, depthLeft, depthGrad, int2(-1, 0), centerLuma, lumaLeft, haloLeft);
-    float wRight = DepthWeightGradAdaptive(centerDepth, depthRight, depthGrad, int2(1, 0), centerLuma, lumaRight, haloRight);
-    float wDown = DepthWeightGradAdaptive(centerDepth, depthDown, depthGrad, int2(0, 1), centerLuma, lumaDown, haloDown);
-
-    // Cross depth-aware neighbor rejection.
-    float3 colorUp = lerp(centerColor, colorUpRaw, wUp);
-    float3 colorLeft = lerp(centerColor, colorLeftRaw, wLeft);
-    float3 colorRight = lerp(centerColor, colorRightRaw, wRight);
-    float3 colorDown = lerp(centerColor, colorDownRaw, wDown);
-
-    // Synthetic diagonal protection from adjacent cross weights.
-    // No diagonal depth loads.
-    float wUpLeft = min(wUp, wLeft);
-    float wUpRight = min(wUp, wRight);
-    float wDownLeft = min(wDown, wLeft);
-    float wDownRight = min(wDown, wRight);
-
-    float haloUpLeft = max(haloUp, haloLeft);
-    float haloUpRight = max(haloUp, haloRight);
-    float haloDownLeft = max(haloDown, haloLeft);
-    float haloDownRight = max(haloDown, haloRight);
-
-    // Optional luma contrast strengthening for diagonal synthetic rejection.
-    // This helps when diagonal color contrast is obviously risky even without diagonal depth.
-    float diagDenomUL = max(max(abs(centerLuma), abs(lumaUpLeft)), 1e-4);
-    float diagDenomUR = max(max(abs(centerLuma), abs(lumaUpRight)), 1e-4);
-    float diagDenomDL = max(max(abs(centerLuma), abs(lumaDownLeft)), 1e-4);
-    float diagDenomDR = max(max(abs(centerLuma), abs(lumaDownRight)), 1e-4);
-
-    float diagContrastUL = smoothstep(0.18, 0.65, abs(lumaUpLeft - centerLuma) / diagDenomUL);
-    float diagContrastUR = smoothstep(0.18, 0.65, abs(lumaUpRight - centerLuma) / diagDenomUR);
-    float diagContrastDL = smoothstep(0.18, 0.65, abs(lumaDownLeft - centerLuma) / diagDenomDL);
-    float diagContrastDR = smoothstep(0.18, 0.65, abs(lumaDownRight - centerLuma) / diagDenomDR);
-
-    wUpLeft = lerp(wUpLeft, min(wUpLeft, 0.4), diagContrastUL * haloUpLeft);
-    wUpRight = lerp(wUpRight, min(wUpRight, 0.4), diagContrastUR * haloUpRight);
-    wDownLeft = lerp(wDownLeft, min(wDownLeft, 0.4), diagContrastDL * haloDownLeft);
-    wDownRight = lerp(wDownRight, min(wDownRight, 0.4), diagContrastDR * haloDownRight);
-
-    float3 colorUpLeft = lerp(centerColor, colorUpLeftRaw, wUpLeft);
-    float3 colorUpRight = lerp(centerColor, colorUpRightRaw, wUpRight);
-    float3 colorDownLeft = lerp(centerColor, colorDownLeftRaw, wDownLeft);
-    float3 colorDownRight = lerp(centerColor, colorDownRightRaw, wDownRight);
-
-    float edgeFactor = ComputeEdgeFactorFromCrossWeights(centerLuma, lumaUp, lumaLeft, lumaRight, lumaDown,
-                                                         wUp, wLeft, wRight, wDown);
-
-    float edgeSharpness = adaptiveSharpness * lerp(0.10, 1.0, edgeFactor);
-
-    // DistanceSharpnessBoost only activates when centerDepth > ~16.
-    // With normalized linear depth 0..1 this intentionally evaluates to 1.0.
-    float distanceBoost = DistanceSharpnessBoost(centerDepth);
-    float motionStability = (Sharpness > 1e-5) ? saturate(adaptiveSharpness / Sharpness) : 0.0;
-    distanceBoost = lerp(1.0, distanceBoost, motionStability);
-
-    float boostedSharpness = edgeSharpness * distanceBoost;
-
-    float crossMin = min(centerLuma, min(min(lumaUp, lumaDown), min(lumaLeft, lumaRight)));
-    float crossMax = max(centerLuma, max(max(lumaUp, lumaDown), max(lumaLeft, lumaRight)));
-    float lumaRange = crossMax - crossMin;
-    float lumaBase = max(crossMax, 1e-4);
-    float lumaRangeRel = lumaRange / lumaBase;
-
-    float unstable = saturate((lumaRangeRel - 0.16) * 3.0);
-    unstable *= unstable;
-
-    float motionAmount = saturate((adaptiveSharpness - Sharpness) / max(abs(MotionSharpness), 1e-4));
-    float motionUnstable = unstable * motionAmount;
-
-    boostedSharpness *= lerp(1.0, 0.85, motionUnstable);
-
-    float finalSharpness = clamp(boostedSharpness, 0.0, 2.0);
-
-    // Diagonal halo risks are conservative because diagonal depth is not sampled.
-    // Each synthetic diagonal risk inherits from adjacent cross risks, so diagonal
-    // directions may collapse toward the max cross halo risk. This is intentional:
-    // it preserves halo safety while avoiding 4 extra depth loads.    
-    float haloRiskH = max(haloLeft, haloRight);
-    float haloRiskV = max(haloUp, haloDown);
-
-    // Diagonal risks are intentionally conservative. No diagonal depth taps are loaded,
-    // so each diagonal inherits adjacent cross risks and then softens the pair.
-    // This favors silhouette safety over maximum diagonal detail.
-    float haloRiskDA = SoftHaloPair(haloUpLeft, haloDownRight);
-    float haloRiskDB = SoftHaloPair(haloUpRight, haloDownLeft);
-
-    float3 output = ApplyDirectionalSharpen(centerColor, colorUp, colorLeft, colorRight, colorDown,
-                                            colorUpLeft, colorUpRight, colorDownLeft, colorDownRight,
-                                            finalSharpness, edgeFactor,
-                                            haloRiskH, haloRiskV, haloRiskDA, haloRiskDB);
-
-    if (Debug > 0)
-    {
-        output = ApplyDebugTint(output, Sharpness, adaptiveSharpness, edgeSharpness, finalSharpness, distanceBoost, Debug);
-    }
-
-
-    Dest[p] = storeColor(p, output);
-}
-
-)RSF";
-}
+"\n"
+"\n"
+"// 16x16 thread group + 1-pixel border on each side for 3x3 color taps.\n"
+"groupshared float4 s_color[18][18];\n"
+"\n"
+"// -----------------------------------------------------------------------------\n"
+"// Helpers\n"
+"// -----------------------------------------------------------------------------\n"
+"\n"
+"float Luma(float3 c)\n"
+"{\n"
+"    return dot(c, kLumaCoeff);\n"
+"}\n"
+"\n"
+"float Max3(float3 v)\n"
+"{\n"
+"    return max(v.r, max(v.g, v.b));\n"
+"}\n"
+"\n"
+"int2 ClampCoord(int2 p)\n"
+"{\n"
+"    return int2(clamp(p.x, 0, DisplayWidth - 1), clamp(p.y, 0, DisplayHeight - 1));\n"
+"}\n"
+"\n"
+"int2 ClampMotionCoord(int2 p)\n"
+"{\n"
+"    return int2(clamp(p.x, 0, MotionWidth - 1), clamp(p.y, 0, MotionHeight - 1));\n"
+"}\n"
+"\n"
+"int2 ClampDepthCoord(int2 p)\n"
+"{\n"
+"    return int2(clamp(p.x, 0, DepthWidth - 1), clamp(p.y, 0, DepthHeight - 1));\n"
+"}\n"
+"\n"
+"float3 SafeLoadColor(int2 p)\n"
+"{\n"
+"    return loadColor(ClampCoord(p));\n"
+"}\n"
+"\n"
+"float SafeLoadRawDepthAtCoord(int2 p)\n"
+"{\n"
+"    return DepthTex.Load(int3(ClampDepthCoord(p), 0)).r;\n"
+"}\n"
+"\n"
+"float2 SafeLoadMotion(int2 p)\n"
+"{\n"
+"    return Motion.Load(int3(ClampMotionCoord(p), 0)).rg;\n"
+"}\n"
+"\n"
+"float LinearizeDepth(float rawDepth)\n"
+"{\n"
+"    float z = rawDepth;\n"
+"    if (KnownPlanes == 0 && DepthIsLinear == 0)\n"
+"        return DepthIsReversed != 0 ? 1.0-z : z;\n"
+"\n"
+"    if (DepthIsLinear > 0)\n"
+"    {\n"
+"        if (DepthIsReversed > 0)\n"
+"            z = 1.0 - z;\n"
+"\n"
+"        return z;\n"
+"    }\n"
+"\n"
+"    if (DepthIsReversed > 0)\n"
+"    {\n"
+"        // Reversed depth substitutes z' = 1 - z into A / (B - z*C):\n"
+"        // A / ((B - C) + z*C)\n"
+"        float revOffset = DepthLinearB - DepthLinearC;\n"
+"        return DepthLinearA / max(revOffset + z * DepthLinearC, 1e-6);\n"
+"    }\n"
+"\n"
+"    return DepthLinearA / max(DepthLinearB - z * DepthLinearC, 1e-6);\n"
+"}\n"
+"\n"
+"float SafeLoadDepthLinearFromDepthCoord(int2 depthCoord)\n"
+"{\n"
+"    return LinearizeDepth(SafeLoadRawDepthAtCoord(depthCoord));\n"
+"}\n"
+"\n"
+"float2 EstimateDepthGradientFromTaps(float centerDepth, float depthUp, float depthLeft,\n"
+"                                     float depthRight, float depthDown)\n"
+"{\n"
+"    float gxF = depthRight - centerDepth;\n"
+"    float gxB = centerDepth - depthLeft;\n"
+"    float gyF = depthDown - centerDepth;\n"
+"    float gyB = centerDepth - depthUp;\n"
+"\n"
+"    float gx = abs(gxF) < abs(gxB) ? gxF : gxB;\n"
+"    float gy = abs(gyF) < abs(gyB) ? gyF : gyB;\n"
+"\n"
+"    float maxGrad = max(abs(centerDepth) * 0.05, 1e-3);\n"
+"    return clamp(float2(gx, gy), -maxGrad, maxGrad);\n"
+"}\n"
+"\n"
+"float DepthResidualGrad(float centerDepth, float sampleDepth, float2 gradient, int2 offset)\n"
+"{\n"
+"    float predicted = centerDepth + dot(float2(offset), gradient);\n"
+"    float residual = abs(sampleDepth - predicted);\n"
+"\n"
+"    static const float kDepthNearBias = 0.01;\n"
+"    residual /= max(abs(centerDepth), kDepthNearBias);\n"
+"    residual = max(residual - DepthBias, 0.0);\n"
+"\n"
+"    return residual;\n"
+"}\n"
+"\n"
+"float DepthWeightFromResidual(float residual, float floorWeight)\n"
+"{\n"
+"    float w = saturate(1.0 - residual * DepthScale);\n"
+"    return lerp(floorWeight, 1.0, w);\n"
+"}\n"
+"\n"
+"float ComputeTapHaloRisk(float centerLuma, float sampleLuma, float depthResidual)\n"
+"{\n"
+"    float depthBreak = smoothstep(0.0015, 0.018, depthResidual);\n"
+"\n"
+"    float lumaDenom = max(max(abs(centerLuma), abs(sampleLuma)), 1e-4);\n"
+"    float relativeLumaDiff = abs(sampleLuma - centerLuma) / lumaDenom;\n"
+"\n"
+"    float lumaBreak = smoothstep(0.08, 0.45, relativeLumaDiff);\n"
+"    float asymmetry = smoothstep(0.12, 0.65, relativeLumaDiff);\n"
+"\n"
+"    float risk = depthBreak * lumaBreak * lerp(0.65, 1.0, asymmetry);\n"
+"\n"
+"    return saturate(risk * risk * (3.0 - 2.0 * risk));\n"
+"}\n"
+"\n"
+"float DepthWeightGradAdaptive(float centerDepth, float sampleDepth, float2 gradient, int2 offset,\n"
+"                              float centerLuma, float sampleLuma, out float haloRisk)\n"
+"{\n"
+"    float residual = DepthResidualGrad(centerDepth, sampleDepth, gradient, offset);\n"
+"\n"
+"    haloRisk = ComputeTapHaloRisk(centerLuma, sampleLuma, residual);\n"
+"\n"
+"    // Normal areas stay soft; high-risk silhouette taps get hard rejection.\n"
+"    float floorWeight = lerp(0.45, 0.07, haloRisk);\n"
+"\n"
+"    return DepthWeightFromResidual(residual, floorWeight);\n"
+"}\n"
+"\n"
+"// Expects positive view/world-space-like linear depth.\n"
+"// If linear depth is normalized 0..1, this boost is effectively disabled.\n"
+"float DistanceSharpnessBoost(float linearDepth)\n"
+"{\n"
+"    float d = max(linearDepth, 1e-4);\n"
+"    float boost = saturate((log2(d) - 4.0) * 0.15);\n"
+"\n"
+"    return lerp(1.0, 1.12, boost);\n"
+"}\n"
+"\n"
+"float ComputeAdaptiveSharpness(int2 pixelCoord)\n"
+"{\n"
+"    float setSharpness = Sharpness;\n"
+"\n"
+"    if (DynamicSharpenEnabled > 0)\n"
+"    {\n"
+"        float2 mv;\n"
+"\n"
+"        if (DisplaySizeMV > 0)\n"
+"        {\n"
+"            mv = SafeLoadMotion(pixelCoord);\n"
+"        }\n"
+"        else\n"
+"        {\n"
+"            // For lower-resolution motion, map the output pixel center into motion texture space.\n"
+"            // Display-size motion uses the same integer pixel coordinate directly.\n"
+"            float2 mvf = (float2(pixelCoord) + 0.5) * MotionTextureScale;\n"
+"            int2 mvCoord = int2(mvf);\n"
+"            mv = SafeLoadMotion(mvCoord);\n"
+"        }\n"
+"\n"
+"        float motion = max(abs(mv.x * MvScaleX), abs(mv.y * MvScaleY));\n"
+"        \n"
+"        float denom = max(MotionScaleLimit - MotionThreshold, 0.05);\n"
+"\n"
+"        float add = (max(motion - MotionThreshold, 0.0) / denom) * MotionSharpness;\n"
+"        add = clamp(add, min(0.0, MotionSharpness), max(0.0, MotionSharpness));\n"
+"\n"
+"        setSharpness += add;\n"
+"    }\n"
+"\n"
+"    return clamp(setSharpness, 0.0, 2.0);\n"
+"}\n"
+"\n"
+"float3 ApplyDebugTint(float3 color, float baseSharpness, float adaptiveSharpness, float edgeSharpness,\n"
+"                      float finalSharpness, float distanceBoost, int debugMode)\n"
+"{\n"
+"    float motionBoost = max(adaptiveSharpness - baseSharpness, 0.0);\n"
+"    float motionReduce = max(baseSharpness - adaptiveSharpness, 0.0);\n"
+"    float edgeReduce = max(adaptiveSharpness - edgeSharpness, 0.0);\n"
+"    float distanceIncrease = max(distanceBoost - 1.0, 0.0);\n"
+"\n"
+"    if (debugMode > 0)\n"
+"    {\n"
+"        color.r *= 1.0 + 12.0 * motionBoost;\n"
+"        color.g *= 1.0 + 12.0 * motionReduce;\n"
+"        color.b *= 1.0 + 12.0 * edgeReduce;\n"
+"\n"
+"        // Distance boost overlay, intentionally weaker than motion/edge debug.\n"
+"        color.r *= 1.0 + 4.0 * distanceIncrease;\n"
+"        color.g *= 1.0 + 2.0 * distanceIncrease;\n"
+"    }\n"
+"\n"
+"    return color;\n"
+"}\n"
+"\n"
+"float ComputeEdgeFactorFromCrossWeights(float centerLuma, float lumaUp, float lumaLeft, float lumaRight, float lumaDown,\n"
+"                                        float wUp, float wLeft, float wRight, float wDown)\n"
+"{\n"
+"    float lumaSum = 0.0;\n"
+"    lumaSum += abs(lumaUp - centerLuma);\n"
+"    lumaSum += abs(lumaLeft - centerLuma);\n"
+"    lumaSum += abs(lumaRight - centerLuma);\n"
+"    lumaSum += abs(lumaDown - centerLuma);\n"
+"\n"
+"    float minW = min(min(wUp, wLeft), min(wRight, wDown));\n"
+"    float avgW = (wUp + wLeft + wRight + wDown) * 0.25;\n"
+"\n"
+"    float depthEdge = lerp(minW, avgW, 0.50);\n"
+"\n"
+"    float lumaAvg = lumaSum * 0.25;\n"
+"\n"
+"    float lumaBase = max(max(abs(centerLuma), 0.25 * (abs(lumaUp) + abs(lumaLeft) + abs(lumaRight) + abs(lumaDown))), 1e-4);\n"
+"    float relativeLumaAvg = lumaAvg / lumaBase;\n"
+"\n"
+"    float lumaConfirm = saturate((relativeLumaAvg - 0.02) * 18.0);\n"
+"    \n"
+"    float depthBreakStrength = 1.0 - depthEdge;\n"
+"    float depthTrustFloor = lerp(0.15, 0.30, smoothstep(0.25, 0.80, depthBreakStrength));\n"
+"    float depthTrust = lerp(depthTrustFloor, 1.0, lumaConfirm);\n"
+"\n"
+"    return lerp(1.0, depthEdge, depthTrust);\n"
+"}\n"
+"\n"
+"float3 ApplyLumaRatio(float3 color, float oldY, float newY)\n"
+"{\n"
+"    return color * (max(newY, 0.0) / max(oldY, 1e-6));\n"
+"}\n"
+"\n"
+"float SoftHaloPair(float a, float b)\n"
+"{\n"
+"    float geometric = sqrt(max(a * b, 0.0));\n"
+"    float conservative = max(a, b);\n"
+"\n"
+"    return lerp(geometric, conservative, 0.55);\n"
+"}\n"
+"\n"
+"// -----------------------------------------------------------------------------\n"
+"// Directional adaptive sharpen core\n"
+"// -----------------------------------------------------------------------------\n"
+"\n"
+"\n"
+"float3 ApplyDirectionalSharpen(float3 centerColor, float3 upColor, float3 leftColor, float3 rightColor, float3 downColor,\n"
+"                               float3 upLeftColor, float3 upRightColor, float3 downLeftColor, float3 downRightColor,\n"
+"                               float finalSharpness, float edgeFactor,\n"
+"                               float haloRiskH, float haloRiskV, float haloRiskDA, float haloRiskDB)\n"
+"{\n"
+"    float localScale = Max3(centerColor);\n"
+"    localScale = max(localScale, Max3(upColor));\n"
+"    localScale = max(localScale, Max3(leftColor));\n"
+"    localScale = max(localScale, Max3(rightColor));\n"
+"    localScale = max(localScale, Max3(downColor));\n"
+"    localScale = max(localScale, Max3(upLeftColor));\n"
+"    localScale = max(localScale, Max3(upRightColor));\n"
+"    localScale = max(localScale, Max3(downLeftColor));\n"
+"    localScale = max(localScale, Max3(downRightColor));\n"
+"    localScale = EncodeHdr != 0 ? 1.0 : max(localScale, 1e-4);\n"
+"\n"
+"    float invLocalScale = rcp(localScale);\n"
+"    \n"
+"    float rawCenterY = Luma(max(centerColor, 0.0));\n"
+"\n"
+"    float cY = max(Luma(max(centerColor, 0.0)) * invLocalScale, 1e-6);\n"
+"    float uY = max(Luma(max(upColor, 0.0)) * invLocalScale, 1e-6);\n"
+"    float lY = max(Luma(max(leftColor, 0.0)) * invLocalScale, 1e-6);\n"
+"    float rY = max(Luma(max(rightColor, 0.0)) * invLocalScale, 1e-6);\n"
+"    float dY = max(Luma(max(downColor, 0.0)) * invLocalScale, 1e-6);\n"
+"\n"
+"    float ulY = max(Luma(max(upLeftColor, 0.0)) * invLocalScale, 1e-6);\n"
+"    float urY = max(Luma(max(upRightColor, 0.0)) * invLocalScale, 1e-6);\n"
+"    float dlY = max(Luma(max(downLeftColor, 0.0)) * invLocalScale, 1e-6);\n"
+"    float drY = max(Luma(max(downRightColor, 0.0)) * invLocalScale, 1e-6);\n"
+"\n"
+"    float minY = min(cY, min(min(uY, dY), min(lY, rY)));\n"
+"    minY = min(minY, min(min(ulY, urY), min(dlY, drY)));\n"
+"\n"
+"    float maxY = max(cY, max(max(uY, dY), max(lY, rY)));\n"
+"    maxY = max(maxY, max(max(ulY, urY), max(dlY, drY)));\n"
+"\n"
+"    float localRange3x3 = maxY - minY;\n"
+"    float relativeRange = localRange3x3 / max(cY, 1e-4);\n"
+"\n"
+"    // Direction candidates.\n"
+"    float hY = (lY + rY) * 0.5;\n"
+"    float vY = (uY + dY) * 0.5;\n"
+"    float diagAY = (ulY + drY) * 0.5;\n"
+"    float diagBY = (urY + dlY) * 0.5;\n"
+"\n"
+"    float hDiff = abs(cY - hY);\n"
+"    float vDiff = abs(cY - vY);\n"
+"    float daDiff = abs(cY - diagAY);\n"
+"    float dbDiff = abs(cY - diagBY);\n"
+"\n"
+"    static const float kDirectionHaloSuppression = 0.35;\n"
+"\n"
+"    hDiff *= lerp(1.0, 1.0 - kDirectionHaloSuppression, haloRiskH);\n"
+"    vDiff *= lerp(1.0, 1.0 - kDirectionHaloSuppression, haloRiskV);\n"
+"    daDiff *= lerp(1.0, 1.0 - kDirectionHaloSuppression, haloRiskDA);\n"
+"    dbDiff *= lerp(1.0, 1.0 - kDirectionHaloSuppression, haloRiskDB);\n"
+"\n"
+"    float bestDiff = hDiff;\n"
+"    float secondDiff = max(max(vDiff, daDiff), dbDiff);\n"
+"    float refY = hY;\n"
+"    int selectedDir = 0; // 0=H, 1=V, 2=diagA, 3=diagB\n"
+"\n"
+"    if (vDiff > bestDiff)\n"
+"    {\n"
+"        secondDiff = max(max(hDiff, daDiff), dbDiff);\n"
+"        bestDiff = vDiff;\n"
+"        refY = vY;\n"
+"        selectedDir = 1;\n"
+"    }\n"
+"\n"
+"    if (daDiff > bestDiff)\n"
+"    {\n"
+"        secondDiff = max(max(hDiff, vDiff), dbDiff);\n"
+"        bestDiff = daDiff;\n"
+"        refY = diagAY;\n"
+"        selectedDir = 2;\n"
+"    }\n"
+"\n"
+"    if (dbDiff > bestDiff)\n"
+"    {\n"
+"        secondDiff = max(max(hDiff, vDiff), daDiff);\n"
+"        bestDiff = dbDiff;\n"
+"        refY = diagBY;\n"
+"        selectedDir = 3;\n"
+"    }\n"
+"\n"
+"    float selectedHaloRisk = haloRiskH;\n"
+"\n"
+"    if (selectedDir == 1)\n"
+"    {\n"
+"        selectedHaloRisk = haloRiskV;\n"
+"    }\n"
+"    else if (selectedDir == 2)\n"
+"    {\n"
+"        selectedHaloRisk = haloRiskDA;\n"
+"    }\n"
+"    else if (selectedDir == 3)\n"
+"    {\n"
+"        selectedHaloRisk = haloRiskDB;\n"
+"    }\n"
+"\n"
+"    float maxHaloRisk = max(max(haloRiskH, haloRiskV), max(haloRiskDA, haloRiskDB));\n"
+"\n"
+"    float directionSeparation = max(bestDiff - secondDiff, 0.0);\n"
+"\n"
+"    float rawDirectionConfidence = saturate(directionSeparation / max(bestDiff, 1e-5));\n"
+"    float directionConfidence = lerp(0.65, 1.0, rawDirectionConfidence);\n"
+"\n"
+"    float ambiguityDamp = lerp(0.75, 1.0, smoothstep(0.22, 0.65, rawDirectionConfidence));\n"
+"\n"
+"    // -------------------------------------------------------------------------\n"
+"    // AA-ramp preservation\n"
+"    // -------------------------------------------------------------------------\n"
+"\n"
+"    float crossAvgY = (uY + dY + lY + rY) * 0.25;\n"
+"    float isoDetail = (cY - crossAvgY) / max(crossAvgY, 1e-4);\n"
+"    isoDetail = clamp(isoDetail, -4.0, 4.0);\n"
+"\n"
+"    float rampRange = smoothstep(0.10, 0.45, relativeRange);\n"
+"    float rampDirection = smoothstep(0.35, 0.85, directionConfidence);\n"
+"    float rampDetail = smoothstep(0.025, 0.18, bestDiff);\n"
+"\n"
+"    // Partial protection even if direction confidence is imperfect.\n"
+"    float aaRampMask = rampRange * rampDetail * lerp(0.35, 1.0, rampDirection);\n"
+"\n"
+"    float aaRampBlend = 0.30 * aaRampMask;\n"
+"    refY = lerp(refY, crossAvgY, aaRampBlend);\n"
+"\n"
+"    float detail = (cY - refY) / max(refY, 1e-4);\n"
+"    detail = clamp(detail, -4.0, 4.0);\n"
+"\n"
+"    float absDetail = abs(detail);\n"
+"    float shapedDetail = sign(detail) * max(absDetail - 0.0010, 0.0);\n"
+"\n"
+"    shapedDetail = shapedDetail / (1.0 + 1.45 * abs(shapedDetail));\n"
+"    shapedDetail = clamp(shapedDetail, -0.42, 0.42);\n"
+"\n"
+"    float rangeConfidence = lerp(0.72, 1.0, smoothstep(0.0004, 0.018, relativeRange));\n"
+"    float edgeConfidence = lerp(0.18, 1.0, edgeFactor);\n"
+"\n"
+"    float aaStrengthDamp = lerp(1.0, 0.55, aaRampMask);\n"
+"\n"
+"    float posGainAA = lerp(1.50, 1.05, aaRampMask);\n"
+"    float negGainAA = lerp(0.72, 0.48, aaRampMask);\n"
+"    float detailGain = shapedDetail >= 0.0 ? posGainAA : negGainAA;\n"
+"\n"
+"    float unstablePattern = (1.0 - rawDirectionConfidence) * smoothstep(0.08, 0.35, relativeRange) * (1.0 - aaRampMask);\n"
+"\n"
+"    float strength = finalSharpness * 2.35 * directionConfidence * rangeConfidence * edgeConfidence *\n"
+"                     aaStrengthDamp * ambiguityDamp * lerp(1.0, 0.78, unstablePattern);\n"
+"\n"
+"    float edgeBlock = max(aaRampMask, maxHaloRisk);\n"
+"    edgeBlock = saturate(edgeBlock * 1.35);\n"
+"\n"
+"    float safeTextureMask = 1.0 - edgeBlock;\n"
+"\n"
+"    float nonDirectionalFloor = 0.15 * safeTextureMask * (1.0 - aaRampMask);\n"
+"    float nonDirectionalMask = max(1.0 - directionConfidence, nonDirectionalFloor);\n"
+"\n"
+"    // Shape the isotropic fallback too.\n"
+"    float absIso = abs(isoDetail);\n"
+"    float shapedIso = sign(isoDetail) * max(absIso - 0.0015, 0.0);\n"
+"    shapedIso = shapedIso / (1.0 + 1.25 * abs(shapedIso));\n"
+"    shapedIso = clamp(shapedIso, -0.12, 0.12);\n"
+"\n"
+"    float stableIsoDetail = smoothstep(0.006, 0.030, max(absIso - 0.0015, 0.0));\n"
+"    float isoBoost = lerp(1.0, 1.50, stableIsoDetail);\n"
+"\n"
+"    float newY = cY + cY * shapedDetail * strength * detailGain;\n"
+"    float isoGain = shapedIso >= 0.0 ? 1.0 : 0.45;\n"
+"\n"
+"    float lowContrastTexture = smoothstep(0.004, 0.045, relativeRange) * (1.0 - smoothstep(0.14, 0.40, relativeRange));\n"
+"    float lowContrastIsoBoost = lerp(1.0, 1.50, lowContrastTexture);\n"
+"\n"
+"    newY += cY * shapedIso * isoGain * finalSharpness * 0.18 * isoBoost * lowContrastIsoBoost *\n"
+"            nonDirectionalMask * safeTextureMask * lerp(1.0, 0.45, unstablePattern);\n"
+"\n"
+"    // -------------------------------------------------------------------------\n"
+"    // Halo-risk-aware limiter\n"
+"    // -------------------------------------------------------------------------\n"
+"\n"
+"    float rangeY = max(maxY - minY, cY * 0.01);\n"
+"\n"
+"    float haloLimiter = saturate(selectedHaloRisk);\n"
+"\n"
+"    float lowerExpand = lerp(0.42, 0.06, haloLimiter);\n"
+"    float upperExpand = lerp(0.48, 0.10, haloLimiter);\n"
+"\n"
+"    float limitMin = max(0.0, minY - rangeY * lowerExpand);\n"
+"    float limitMax = maxY + rangeY * upperExpand;\n"
+"\n"
+"    newY = clamp(newY, limitMin, limitMax);\n"
+"\n"
+"    float targetY = newY * localScale;\n"
+"\n"
+"    return max(ApplyLumaRatio(centerColor, max(rawCenterY, 1e-6), targetY), 0.0);\n"
+"}\n"
+"\n"
+"// -----------------------------------------------------------------------------\n"
+"// Main\n"
+"// -----------------------------------------------------------------------------\n"
+"\n"
+"\n"
+"[numthreads(16, 16, 1)]\n"
+"void CSMain(uint3 DTid : SV_DispatchThreadID,\n"
+"            uint3 GTid : SV_GroupThreadID,\n"
+"            uint GI : SV_GroupIndex)\n"
+"{\n"
+"    int2 p = int2(DTid.xy);\n"
+"    int2 lp = int2(GTid.xy);\n"
+"    int2 groupBase = p - lp;\n"
+"\n"
+"    // Flattened cooperative 18x18 color tile load.\n"
+"    // 324 tile elements are distributed across 256 threads: every thread loads\n"
+"    // one element, and the first 68 threads load one additional element.\n"
+"    // Do not early-return before the group barrier; edge/out-of-dispatch threads\n"
+"    // still participate and simply load clamped border pixels.\n"
+"    for (uint i = GI; i < 324; i += 256)\n"
+"    {\n"
+"        uint lx = i % 18;\n"
+"        uint ly = i / 18;\n"
+"\n"
+"        int2 loadCoord = groupBase + int2(lx, ly) - int2(1, 1);\n"
+"        s_color[ly][lx] = float4(SafeLoadColor(loadCoord), 0.0);\n"
+"    }\n"
+"\n"
+"    GroupMemoryBarrierWithGroupSync();\n"
+"\n"
+"    if (DTid.x >= DisplayWidth || DTid.y >= DisplayHeight)\n"
+"        return;\n"
+"\n"
+"    float3 centerColor = s_color[lp.y + 1][lp.x + 1].rgb;\n"
+"    float adaptiveSharpness = ComputeAdaptiveSharpness(p);\n"
+"\n"
+"    if (adaptiveSharpness <= 0.0)\n"
+"    {\n"
+"        float3 outColor = max(centerColor, 0.0);\n"
+"\n"
+"        if (Debug > 0)\n"
+"            outColor = ApplyDebugTint(outColor, Sharpness, adaptiveSharpness, adaptiveSharpness, adaptiveSharpness, 1.0, Debug);\n"
+"\n"
+"\n"
+"        Dest[p] = storeColor(p, outColor);\n"
+"        return;\n"
+"    }\n"
+"\n"
+"    float centerLuma = Luma(centerColor);\n"
+"\n"
+"    // 9 color taps from LDS tile.\n"
+"    float3 colorUpRaw = s_color[lp.y][lp.x + 1].rgb;\n"
+"    float3 colorLeftRaw = s_color[lp.y + 1][lp.x].rgb;\n"
+"    float3 colorRightRaw = s_color[lp.y + 1][lp.x + 2].rgb;\n"
+"    float3 colorDownRaw = s_color[lp.y + 2][lp.x + 1].rgb;\n"
+"\n"
+"    float3 colorUpLeftRaw = s_color[lp.y][lp.x].rgb;\n"
+"    float3 colorUpRightRaw = s_color[lp.y][lp.x + 2].rgb;\n"
+"    float3 colorDownLeftRaw = s_color[lp.y + 2][lp.x].rgb;\n"
+"    float3 colorDownRightRaw = s_color[lp.y + 2][lp.x + 2].rgb;\n"
+"\n"
+"    float lumaUp = Luma(colorUpRaw);\n"
+"    float lumaLeft = Luma(colorLeftRaw);\n"
+"    float lumaRight = Luma(colorRightRaw);\n"
+"    float lumaDown = Luma(colorDownRaw);\n"
+"\n"
+"    float lumaUpLeft = Luma(colorUpLeftRaw);\n"
+"    float lumaUpRight = Luma(colorUpRightRaw);\n"
+"    float lumaDownLeft = Luma(colorDownLeftRaw);\n"
+"    float lumaDownRight = Luma(colorDownRightRaw);\n"
+"\n"
+"    // Only cross depth taps are loaded.\n"
+"    // Compute output-pixel to depth-texel mapping once.\n"
+"    // Offsetting baseDf by +/-DepthTextureScale is equivalent to mapping p + offset\n"
+"    // through OutputToDepthCoord(). For downsampled depth, multiple output pixels may\n"
+"    // intentionally map to the same depth texel after floor().\n"
+"    float2 baseDf = (float2(p) + 0.5) * DepthTextureScale;\n"
+"\n"
+"    int2 depthCenterCoord = int2(floor(baseDf));\n"
+"    int2 depthUpCoord = int2(floor(baseDf + float2(0.0, -DepthTextureScale.y)));\n"
+"    int2 depthLeftCoord = int2(floor(baseDf + float2(-DepthTextureScale.x, 0.0)));\n"
+"    int2 depthRightCoord = int2(floor(baseDf + float2(DepthTextureScale.x, 0.0)));\n"
+"    int2 depthDownCoord = int2(floor(baseDf + float2(0.0, DepthTextureScale.y)));\n"
+"\n"
+"    float centerDepth = SafeLoadDepthLinearFromDepthCoord(depthCenterCoord);\n"
+"    float depthUp = SafeLoadDepthLinearFromDepthCoord(depthUpCoord);\n"
+"    float depthLeft = SafeLoadDepthLinearFromDepthCoord(depthLeftCoord);\n"
+"    float depthRight = SafeLoadDepthLinearFromDepthCoord(depthRightCoord);\n"
+"    float depthDown = SafeLoadDepthLinearFromDepthCoord(depthDownCoord);\n"
+"    \n"
+"    float2 depthGrad = EstimateDepthGradientFromTaps(centerDepth, depthUp, depthLeft, depthRight, depthDown);\n"
+"\n"
+"    // RSF: preserve the center at a strong depth break. Upstream's soft tap\n"
+"    // floor can still sharpen across disjoint surfaces in perceptual HDR.\n"
+"    float4 depthResidual = abs(float4(depthUp,depthLeft,depthRight,depthDown) -\n"
+"        centerDepth - float4(-depthGrad.y,-depthGrad.x,depthGrad.x,depthGrad.y));\n"
+"    depthResidual = max(depthResidual / max(abs(centerDepth),0.01) - DepthBias,0);\n"
+"    if (Debug == 0 && any(depthResidual * DepthScale >= 1)) {\n"
+"        Dest[p] = storeColor(p,centerColor);\n"
+"        return;\n"
+"    }\n"
+"\n"
+"\n"
+"    float haloUp;\n"
+"    float haloLeft;\n"
+"    float haloRight;\n"
+"    float haloDown;\n"
+"\n"
+"    float wUp = DepthWeightGradAdaptive(centerDepth, depthUp, depthGrad, int2(0, -1), centerLuma, lumaUp, haloUp);\n"
+"    float wLeft = DepthWeightGradAdaptive(centerDepth, depthLeft, depthGrad, int2(-1, 0), centerLuma, lumaLeft, haloLeft);\n"
+"    float wRight = DepthWeightGradAdaptive(centerDepth, depthRight, depthGrad, int2(1, 0), centerLuma, lumaRight, haloRight);\n"
+"    float wDown = DepthWeightGradAdaptive(centerDepth, depthDown, depthGrad, int2(0, 1), centerLuma, lumaDown, haloDown);\n"
+"\n"
+"    // Cross depth-aware neighbor rejection.\n"
+"    float3 colorUp = lerp(centerColor, colorUpRaw, wUp);\n"
+"    float3 colorLeft = lerp(centerColor, colorLeftRaw, wLeft);\n"
+"    float3 colorRight = lerp(centerColor, colorRightRaw, wRight);\n"
+"    float3 colorDown = lerp(centerColor, colorDownRaw, wDown);\n"
+"\n"
+"    // Synthetic diagonal protection from adjacent cross weights.\n"
+"    // No diagonal depth loads.\n"
+"    float wUpLeft = min(wUp, wLeft);\n"
+"    float wUpRight = min(wUp, wRight);\n"
+"    float wDownLeft = min(wDown, wLeft);\n"
+"    float wDownRight = min(wDown, wRight);\n"
+"\n"
+"    float haloUpLeft = max(haloUp, haloLeft);\n"
+"    float haloUpRight = max(haloUp, haloRight);\n"
+"    float haloDownLeft = max(haloDown, haloLeft);\n"
+"    float haloDownRight = max(haloDown, haloRight);\n"
+"\n"
+"    // Optional luma contrast strengthening for diagonal synthetic rejection.\n"
+"    // This helps when diagonal color contrast is obviously risky even without diagonal depth.\n"
+"    float diagDenomUL = max(max(abs(centerLuma), abs(lumaUpLeft)), 1e-4);\n"
+"    float diagDenomUR = max(max(abs(centerLuma), abs(lumaUpRight)), 1e-4);\n"
+"    float diagDenomDL = max(max(abs(centerLuma), abs(lumaDownLeft)), 1e-4);\n"
+"    float diagDenomDR = max(max(abs(centerLuma), abs(lumaDownRight)), 1e-4);\n"
+"\n"
+"    float diagContrastUL = smoothstep(0.18, 0.65, abs(lumaUpLeft - centerLuma) / diagDenomUL);\n"
+"    float diagContrastUR = smoothstep(0.18, 0.65, abs(lumaUpRight - centerLuma) / diagDenomUR);\n"
+"    float diagContrastDL = smoothstep(0.18, 0.65, abs(lumaDownLeft - centerLuma) / diagDenomDL);\n"
+"    float diagContrastDR = smoothstep(0.18, 0.65, abs(lumaDownRight - centerLuma) / diagDenomDR);\n"
+"\n"
+"    wUpLeft = lerp(wUpLeft, min(wUpLeft, 0.4), diagContrastUL * haloUpLeft);\n"
+"    wUpRight = lerp(wUpRight, min(wUpRight, 0.4), diagContrastUR * haloUpRight);\n"
+"    wDownLeft = lerp(wDownLeft, min(wDownLeft, 0.4), diagContrastDL * haloDownLeft);\n"
+"    wDownRight = lerp(wDownRight, min(wDownRight, 0.4), diagContrastDR * haloDownRight);\n"
+"\n"
+"    float3 colorUpLeft = lerp(centerColor, colorUpLeftRaw, wUpLeft);\n"
+"    float3 colorUpRight = lerp(centerColor, colorUpRightRaw, wUpRight);\n"
+"    float3 colorDownLeft = lerp(centerColor, colorDownLeftRaw, wDownLeft);\n"
+"    float3 colorDownRight = lerp(centerColor, colorDownRightRaw, wDownRight);\n"
+"\n"
+"    float edgeFactor = ComputeEdgeFactorFromCrossWeights(centerLuma, lumaUp, lumaLeft, lumaRight, lumaDown,\n"
+"                                                         wUp, wLeft, wRight, wDown);\n"
+"\n"
+"    float edgeSharpness = adaptiveSharpness * lerp(0.10, 1.0, edgeFactor);\n"
+"\n"
+"    // DistanceSharpnessBoost only activates when centerDepth > ~16.\n"
+"    // With normalized linear depth 0..1 this intentionally evaluates to 1.0.\n"
+"    float distanceBoost = DistanceSharpnessBoost(centerDepth);\n"
+"    float motionStability = (Sharpness > 1e-5) ? saturate(adaptiveSharpness / Sharpness) : 0.0;\n"
+"    distanceBoost = lerp(1.0, distanceBoost, motionStability);\n"
+"\n"
+"    float boostedSharpness = edgeSharpness * distanceBoost;\n"
+"\n"
+"    float crossMin = min(centerLuma, min(min(lumaUp, lumaDown), min(lumaLeft, lumaRight)));\n"
+"    float crossMax = max(centerLuma, max(max(lumaUp, lumaDown), max(lumaLeft, lumaRight)));\n"
+"    float lumaRange = crossMax - crossMin;\n"
+"    float lumaBase = max(crossMax, 1e-4);\n"
+"    float lumaRangeRel = lumaRange / lumaBase;\n"
+"\n"
+"    float unstable = saturate((lumaRangeRel - 0.16) * 3.0);\n"
+"    unstable *= unstable;\n"
+"\n"
+"    float motionAmount = saturate((adaptiveSharpness - Sharpness) / max(abs(MotionSharpness), 1e-4));\n"
+"    float motionUnstable = unstable * motionAmount;\n"
+"\n"
+"    boostedSharpness *= lerp(1.0, 0.85, motionUnstable);\n"
+"\n"
+"    float finalSharpness = clamp(boostedSharpness, 0.0, 2.0);\n"
+"\n"
+"    // Diagonal halo risks are conservative because diagonal depth is not sampled.\n"
+"    // Each synthetic diagonal risk inherits from adjacent cross risks, so diagonal\n"
+"    // directions may collapse toward the max cross halo risk. This is intentional:\n"
+"    // it preserves halo safety while avoiding 4 extra depth loads.    \n"
+"    float haloRiskH = max(haloLeft, haloRight);\n"
+"    float haloRiskV = max(haloUp, haloDown);\n"
+"\n"
+"    // Diagonal risks are intentionally conservative. No diagonal depth taps are loaded,\n"
+"    // so each diagonal inherits adjacent cross risks and then softens the pair.\n"
+"    // This favors silhouette safety over maximum diagonal detail.\n"
+"    float haloRiskDA = SoftHaloPair(haloUpLeft, haloDownRight);\n"
+"    float haloRiskDB = SoftHaloPair(haloUpRight, haloDownLeft);\n"
+"\n"
+"    float3 output = ApplyDirectionalSharpen(centerColor, colorUp, colorLeft, colorRight, colorDown,\n"
+"                                            colorUpLeft, colorUpRight, colorDownLeft, colorDownRight,\n"
+"                                            finalSharpness, edgeFactor,\n"
+"                                            haloRiskH, haloRiskV, haloRiskDA, haloRiskDB);\n"
+"\n"
+"    if (Debug > 0)\n"
+"    {\n"
+"        output = ApplyDebugTint(output, Sharpness, adaptiveSharpness, edgeSharpness, finalSharpness, distanceBoost, Debug);\n"
+"    }\n"
+"\n"
+"\n"
+"    Dest[p] = storeColor(p, output);\n"
+"}\n"
+"\n";

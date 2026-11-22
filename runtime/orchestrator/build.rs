@@ -46,7 +46,7 @@ fn shader_patch_parser() {
 fn sharpening_payload() {
     let directory = "../graphics/src/sharpening";
     for file in [
-        "pass_payload.cpp",
+        "pass_payload.c",
         "d3d11.h",
         "options.h",
         "rcas.h",
@@ -62,14 +62,14 @@ fn sharpening_payload() {
     println!("cargo:rerun-if-changed=include/rescaleframe/sharpening_settings.h");
     let mut build = cc::Build::new();
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        build.flags(["/EHsc", "/Zl"]);
+        build.flags(["/Zl", "/std:c11"]);
+    } else {
+        build.std("c11");
     }
     build
-        .cpp(true)
-        .std("c++17")
         .include("include")
         .warnings_into_errors(true)
-        .file(format!("{directory}/pass_payload.cpp"))
+        .file(format!("{directory}/pass_payload.c"))
         .compile("rsf_sharpening_payload");
 }
 

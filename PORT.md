@@ -796,7 +796,7 @@ Port colour transport, depth and motion processing and the fullscreen effects, w
 - [x] [runtime/graphics/src/motion_resolve_platform.h](runtime/graphics/src/motion_resolve_platform.h)
 - [x] [runtime/graphics/src/present_blit.cpp](runtime/graphics/src/present_blit.cpp)
 - [x] [runtime/orchestrator/src/motion_convention.h](runtime/orchestrator/src/motion_convention.h)
-- [ ] [tools/exposure_probe/ngx.cpp](tools/exposure_probe/ngx.cpp) (pinned NGX virtual-parameter calls)
+- [x] [tools/exposure_probe/ngx.cpp](tools/exposure_probe/ngx.cpp) (pinned NGX virtual-parameter calls; replaced by C11 `tools/exposure_probe/ngx.c`, which calls the SDK vtable slots directly)
 - [x] [tools/exposure-probe.cpp](tools/exposure-probe.cpp)
 
 **Fixtures (6)**
@@ -843,8 +843,8 @@ Port host wrappers, options and bindings for sharpening. Track shader provenance
 - [x] [runtime/graphics/src/sharpening/da_rcas.h](runtime/graphics/src/sharpening/da_rcas.h) (unchanged licensed shader payload)
 - [x] [runtime/graphics/src/sharpening/da_rcas_spirv.h](runtime/graphics/src/sharpening/da_rcas_spirv.h) (unchanged licensed shader payload)
 - [x] [runtime/graphics/src/sharpening/depth_color.inc](runtime/graphics/src/sharpening/depth_color.inc) (C++ raw string containing shared HLSL)
-- [ ] [runtime/graphics/src/sharpening/pass_payload.cpp](runtime/graphics/src/sharpening/pass_payload.cpp) (retained GPL shader access and constant packing)
-- [ ] [runtime/graphics/src/sharpening/options.h](runtime/graphics/src/sharpening/options.h)
+- [x] [runtime/graphics/src/sharpening/pass_payload.cpp](runtime/graphics/src/sharpening/pass_payload.cpp) (retained GPL shader access and constant packing; now GPL-3.0-only C11 `pass_payload.c`, byte-identical output to the C++ unit)
+- [x] [runtime/graphics/src/sharpening/options.h](runtime/graphics/src/sharpening/options.h) (now a C11 header, GPL-3.0-only; the HLSL and SPIR-V payload headers use C literals and arrays)
 - [x] [runtime/graphics/src/sharpening/rcas.h](runtime/graphics/src/sharpening/rcas.h) (unchanged licensed shader payload)
 - [x] [runtime/graphics/src/sharpening/rcas_spirv.h](runtime/graphics/src/sharpening/rcas_spirv.h) (unchanged licensed shader payload)
 - [x] [runtime/orchestrator/include/rescaleframe/sharpening_settings.h](runtime/orchestrator/include/rescaleframe/sharpening_settings.h)

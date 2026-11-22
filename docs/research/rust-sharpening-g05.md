@@ -236,3 +236,38 @@ records and the two SDK sharpening files byte for byte. Pinned Rust 1.94.1
 formatting, locked offline Cargo metadata and the source caller and blob
 checks also passed. No object files, binaries or runtime observations
 were produced.
+
+## GPL payload leaf in C11
+
+`options.h` and `pass_payload.cpp` were the last first-party C++ in G05. Moving the calculator
+into MIT Rust would still be a translation of OptiScaler-derived code, which the earlier notes
+rule out without an independent specification. The port therefore converts the licensed pair
+to C11 and keeps them GPL-3.0-only behind the same compilation boundary.
+
+- `pass_payload.cpp` becomes `pass_payload.c`. The six exported entry points
+  (`rsf_sharpening_hlsl`, `rsf_sharpening_spirv`, `rsf_sharpen11_active`,
+  `rsf_sharpening_requested`, `rsf_sharpen11_pack` and `rsf_sharpen11_adaptive`) keep their names,
+  signatures and return values, so no Rust declaration changed.
+- `options.h` keeps the mode values, the sanitizer, the activation test, the MAS ramp and the
+  128-byte constant mapping as C structs and `static inline` functions with a `_Static_assert`
+  on the layout. Namespaced C++ types are now `Sharpen*` types and `sharpen_*` functions. The
+  C++ default member values were unused because every field is set by the one caller.
+- The three HLSL headers and `depth_color.inc` could not stay C++ raw strings, because C has
+  none. `rcas.h`, `da_rcas.h`, `da_das.h` and `depth_color.inc` now hold the same shader text as
+  one C string literal per source line, and the three `*_spirv.h` headers use
+  `static const uint32_t` arrays. The shader text and SPIR-V words are unchanged.
+  `eng/sharpening/spirv.py` reads the literal form.
+- `runtime/orchestrator/build.rs` compiles `pass_payload.c` with `/std:c11`, without the C++
+  runtime flags.
+
+Evidence. A harness linked the old C++ unit (from `HEAD`) and the new C unit against the same C
+driver. It dumped `rsf_sharpening_hlsl` and `rsf_sharpening_spirv` for modes 0 to 6, then
+packed constants, activation, requested and adaptive results for 400,000 pseudo-random option and
+frame combinations. The inputs included NaN, both infinities, out-of-range and zero extents,
+near and far plane edge cases and every mode. The two 56,187,511-byte dumps are identical
+(SHA-256 `B733C333FC12A33F6E12F0AC9D9A575E7E74FD5EC8C24D58143C11435B1D087F`). Both units built
+with MSVC `/W4 /WX`. Running `eng/sharpening/spirv.py` with the script's default `dxc` and
+`spirv-val` from the Vulkan SDK 1.4.357.0 regenerated all three SPIR-V headers byte for byte from the
+converted HLSL. No device, game or Direct3D run was involved. The tip does not currently build
+the orchestrator, so the Cargo build script was run to the lib compile stage, where the 48
+existing errors are all in other files, and the CMake wiring was not exercised.

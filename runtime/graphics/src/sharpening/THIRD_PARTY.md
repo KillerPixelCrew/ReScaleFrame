@@ -17,9 +17,10 @@ Generated SPIR-V has the same provenance and license as its HLSL source.
 `options.h` also retains GPL-3.0-only terms for its OptiScaler-derived
 constant mapping and motion-adaptive sharpening ramp. The D3D and Vulkan
 native leaves use that mapping at shader dispatch.
-`pass_payload.cpp` exposes the original HLSL, SPIR-V and constant mapping to the
+`pass_payload.c` exposes the original HLSL, SPIR-V and constant mapping to the
 Rust D3D and Vulkan sharpening hosts. It is compiled under the same GPL-3.0-only
-terms.
+terms. The shader headers hold the same text and SPIR-V words as C string literals
+and arrays, so the C payload can include them.
 
 RCAS credits RdenBlaauwen's RCAS-for-ReShade and AMD FidelityFX RCAS.
 The RCAS-for-ReShade `RCAS.fx` includes the following MIT notice, checked at

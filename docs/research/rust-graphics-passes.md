@@ -62,8 +62,8 @@ hardware-first and WARP fallback behavior.
 `tools/exposure_probe/src/lib.rs` owns the CLI inputs, adapter selection, frozen resources,
 Streamline setup and teardown, 60 evaluations, colour transport, fidelity timing and raw dump.
 `tools/exposure_probe/src/ngx.rs` owns the optional NGX hooks and forwards all original arguments.
-`tools/exposure_probe/ngx.cpp` builds only with the NGX headers and retains the SDK's C++ virtual
-parameter calls. The Rust probe entry supplies the CRT's C `main` symbol. The optional RenderDoc
+`tools/exposure_probe/ngx.c` builds only with the NGX headers and retains the SDK's virtual
+parameter calls through its vtable slots (see the C leaf section below). The Rust probe entry supplies the CRT's C `main` symbol. The optional RenderDoc
 1.6.0 API table and its typed calls stay in `tools/exposure_probe/renderdoc.c`. Capture starts before the sixtieth evaluation. Streamline
 shuts down while the original and encoded resources remain alive. The probe is an explicit
 hardware experiment outside CTest.
@@ -125,3 +125,30 @@ device/input construction and the original evaluation sequence. Rust 1.94.1 pack
 formatting, targeted bindgen 0.72.1 reproduction, locked offline Cargo metadata and MSVC
 syntax-only checks for all four native feature combinations passed. Native linking, launch,
 capture and evaluation remain unverified.
+
+## Exposure probe NGX leaf in C11
+
+`tools/exposure_probe/ngx.cpp` is replaced by `tools/exposure_probe/ngx.c`. The question was
+whether the optional NGX parameter calls need first-party C++. `nvsdk_ngx_params.h` declares
+`NVSDK_NGX_Parameter` as a C++ abstract class only under `__cplusplus`, but `nvsdk_ngx_defs.h`
+has C branches for everything else the probe reads: the three DLSS feature flags, the result
+code and the parameter names. The leaf includes only that header and dispatches through the
+object's MSVC x64 vtable, the same approach `games/rdr2/src/capture_ngx.cpp` and the
+VulkanStory module take. MSVC places overloaded virtuals in reverse declaration order, so Set
+overloads occupy slots 0 to 7 and Get overloads slots 8 to 15. The probe uses Set int (3),
+Set float (6), Get D3D11 resource (10), Get int (11) and Get float (14). The existing
+`nvsdk_ngx_d.lib` audit in `rust-vulkanstory-ngx-loader.md` confirms the byte offsets 0x18, 0x30,
+0x58 and 0x70 for four of them. Get D3D11 follows from the same reversal and the RDR2 capture
+slots, but no binary shows it directly. `_Static_assert`s keep the three exposed flag values
+equal to the SDK enum. The SDK-less build still links the no-op seams in `renderdoc.c`.
+
+The CMake gate now tests for `nvsdk_ngx_defs.h`, the only header the leaf needs, and adds
+`ngx.c` instead of `ngx.cpp`. Rust callers, the `sdk.h` declarations and the probe's override
+and logging behavior are unchanged. The file is a Windows x64 MSVC layout dependency, which is
+the probe's only target.
+
+Checked: MSVC 2026 `cl /TC /std:c11 /W4 /WX /Zs` passed against the NGX headers from the Godot
+Streamline reference checkout, which provided `nvsdk_ngx_defs.h`. The checkout's header text
+matches the declaration order used above. Linking and the probe run need NGX headers and an
+NVIDIA device and were not run. The tip's `tests/CMakeLists.txt` does not currently parse, so
+the CMake wiring was reviewed by source only.
