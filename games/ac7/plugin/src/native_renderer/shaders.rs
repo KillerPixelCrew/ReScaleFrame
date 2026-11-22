@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The contact-shadow correction at the engine's pixel shader factory.
 use super::{Guard, Renderer, copy, hook, installed, original, read};
-use crate::contact_shadow::rsf_ac7_contact_shadow_correct;
 use crate::sys::{RSF_AC7_CONTACT_PATCHED, RSF_AC7_CONTACT_REFUSED};
+use rsf_ac7::contact_shadow::rsf_ac7_contact_shadow_correct;
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
 use std::ptr::null_mut;

@@ -1,0 +1,48 @@
+[package]
+name = "rsf-ac7-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+# ReScaleFrame.Game.AC7.dll's Rust archive; it carries the rsf-ac7 code the adapter uses.
+crate-type = ["staticlib"]
+
+[features]
+warp-fixture = ["rsf-ac7/warp-fixture"]
+
+[dependencies]
+rsf-ac7 = { path = ".." }
+rsf-game-sys = { path = "../../../sdk/game" }
+rsf-minhook-sys = { path = "../../../third_party/minhook" }
+
+[target."cfg(windows)".dependencies]
+windows = { workspace = true, features = [
+  "Win32_Graphics_Direct3D_Fxc",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_IO",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Performance",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+rsf-shader-compiler = { path = "../../../runtime/shader_patch/compiler" }
+
+[target."cfg(windows)".dev-dependencies]
+# Unit tests link the D3D11 leaves the adapter DLL gets from CMake.
+rsf-graphics = { path = "../../../runtime/graphics/rust" }
+
+[lints]
+workspace = true

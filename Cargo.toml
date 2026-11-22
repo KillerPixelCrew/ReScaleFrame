@@ -26,6 +26,7 @@ members = [
   "tests/loader",
   "sdk/game",
   "games/ac7",
+  "games/ac7/plugin",
   "games/anomaly",
   "games/fallout4",
   "games/minecraft",

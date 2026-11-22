@@ -583,6 +583,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-ac7-plugin"
+version = "0.1.2"
+dependencies = [
+ "rsf-ac7",
+ "rsf-game-sys",
+ "rsf-graphics",
+ "rsf-minhook-sys",
+ "rsf-shader-compiler",
+ "windows",
+]
+
+[[package]]
 name = "rsf-anomaly"
 version = "0.1.2"
 dependencies = [

@@ -16,9 +16,9 @@ rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
 rsf_add_rust_static(rsf_capture_fixtures_rust rsf_rust_capture_fixtures
     rsf-capture-fixtures rsf_capture_fixtures
     --features metadata,d3d12,d3d11,vulkan,vulkan-cpu,texture)
-# rsf-ac7 with the engine-address overrides the WARP fixtures need. It replaces the shipping
-# rsf_ac7_rust archive in those executables, after rsf_ac7_render_scope, which does not link either.
-rsf_add_rust_static(rsf_ac7_fixture_rust rsf_rust_ac7_fixture rsf-ac7 rsf_ac7 --features warp-fixture)
+# rsf-ac7-plugin with the engine-address overrides the WARP fixtures need. It replaces the shipping
+# rsf_ac7_plugin_rust archive in those executables, after rsf_ac7_render_scope, which does not link either.
+rsf_add_rust_static(rsf_ac7_fixture_rust rsf_rust_ac7_fixture rsf-ac7-plugin rsf_ac7_plugin --features warp-fixture)
 target_link_libraries(rsf_ac7_fixture_rust INTERFACE rsf_ac7_memory)
 rsf_add_rust_static(rsf_anomaly_fixtures_rust rsf_rust_anomaly_fixtures
     rsf-anomaly rsf_anomaly
@@ -288,7 +288,7 @@ set_target_properties(rsf_ac7_velocity_shader_test PROPERTIES LINKER_LANGUAGE CX
 if(MINGW)
     target_link_options(rsf_ac7_velocity_shader_test PRIVATE -municode)
 endif()
-target_link_libraries(rsf_ac7_velocity_shader_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust ReScaleFrame::Graphics ReScaleFrame::RuntimeCommon
+target_link_libraries(rsf_ac7_velocity_shader_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust minhook ReScaleFrame::Graphics ReScaleFrame::RuntimeCommon
     ReScaleFrame::GraphicsLeaves rsf_build_options d3d11)
 add_test(NAME ac7_velocity_shader COMMAND rsf_ac7_velocity_shader_test)
 set_tests_properties(ac7_velocity_shader PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
@@ -610,7 +610,7 @@ add_test(NAME shared_fg_present_bridge COMMAND rsf_fg_present_bridge_test)
 set_tests_properties(shared_fg_present_bridge PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 target_compile_definitions(rsf_d3d11_present_bridge_test PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # The render scope calls other than create are exported by the rsf-ac7 crate (render_scope.rs).
-target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_presentation_fixtures_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust rsf_build_options d3d11 dxgi dxguid)
+target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_presentation_fixtures_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust minhook rsf_build_options d3d11 dxgi dxguid)
 # Graphics fixtures must not load game-facing proxy DLLs from the shared artifact directory.
 set_target_properties(rsf_d3d11_present_bridge_test PROPERTIES LINKER_LANGUAGE CXX
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
@@ -725,7 +725,7 @@ set_tests_properties(render_links PROPERTIES TIMEOUT 120)
 
 rsf_ac7_fixture_object(ac7_scope_fixture_object ac7_render_scope ac7_render_scope_fixture_abi.rs)
 add_executable(rsf_ac7_render_scope_test ac7_render_scope.c "${ac7_scope_fixture_object}")
-target_link_libraries(rsf_ac7_render_scope_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust ReScaleFrame::GraphicsLeaves rsf_build_options)
+target_link_libraries(rsf_ac7_render_scope_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_plugin_rust ReScaleFrame::GraphicsLeaves minhook rsf_build_options)
 add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 
@@ -762,7 +762,7 @@ add_custom_command(OUTPUT "${ac7_view_fixture_object}"
 set_source_files_properties("${ac7_view_fixture_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
 # The C launcher hands the replay helpers above, rsf_native_sr_evaluate, the render scope create
 # call and the native renderer's call table to the Rust fixture (ac7_native_graph.rs), which the
-# rsf-ac7 crate builds with its warp-fixture feature beside games/ac7/src/native_renderer.rs.
+# rsf-ac7-plugin crate builds with its warp-fixture feature beside games/ac7/plugin/src/native_renderer.rs.
 add_executable(rsf_ac7_native_graph_test ac7_native_graph.c "${ac7_view_fixture_object}")
 set_target_properties(rsf_ac7_native_graph_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust ReScaleFrame::GraphicsLeaves rsf_orchestrator minhook rsf_build_options)

@@ -1,122 +1,31 @@
 // SPDX-License-Identifier: MIT
 //! Exact-build code sites of Ace7Game.exe (SHA-256 c7da97f5...58f4f) that the native renderer
-//! hooks or depends on, and the admission that verifies them before any hook is made.
-//!
-//! native_renderer.rs keeps MinHook, the detours and the original pointers, and lends the guarded
-//! reads and protected code writes through `rsf_ac7_code_leaves`.
-//! The renderer verifies post-patch depth gates installed by the carrier. The research for these
-//! sites is in docs/research/ue418-hook-map.md and games/ac7/engine.json.
+//! (rsf-ac7-plugin) hooks or depends on, the post-patch depth gates the carrier installs and the
+//! two capture hook entries. The research for these sites is in docs/research/ue418-hook-map.md
+//! and games/ac7/engine.json.
 use crate::sys::{
-    RSF_AC7_EVIDENCE_FIRST, RSF_AC7_EVIDENCE_LAST, RSF_AC7_HOOK_SITE_COUNT, RSF_AC7_PROCESS_HOOKS,
-    RSF_AC7_ROLE_AA, RSF_AC7_ROLE_COMPOSITE, RSF_AC7_ROLE_HUD, RSF_AC7_ROLE_MATERIAL,
-    RSF_AC7_ROLE_OUTPUT, RSF_AC7_ROLE_TONEMAP, RSF_AC7_SITE_BYTES, rsf_ac7_code_leaves,
+    RSF_AC7_HOOK_SITE_COUNT, RSF_AC7_PROCESS_HOOKS, RSF_AC7_ROLE_AA, RSF_AC7_ROLE_COMPOSITE,
+    RSF_AC7_ROLE_HUD, RSF_AC7_ROLE_MATERIAL, RSF_AC7_ROLE_OUTPUT, RSF_AC7_ROLE_TONEMAP,
+    RSF_AC7_SITE_BYTES,
 };
-use std::ffi::CString;
 
-/// Read-only access needed for exact-build admission.
-pub(crate) trait CodeView {
-    fn matches(&self, address: *const u8, expected: &[u8]) -> bool;
-    fn log(&self, message: &str);
-}
+pub const SITE_BYTES: usize = RSF_AC7_SITE_BYTES as usize;
 
-/// A writer replaces verified code, leaving the code unchanged on refusal.
-pub(crate) trait Code: CodeView {
-    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool;
-}
-
-type CompareFn = unsafe extern "C" fn(*const u8, *const u8, usize) -> bool;
-type WriteFn = unsafe extern "C" fn(*mut u8, *const u8, *const u8, usize) -> bool;
-
-pub(crate) struct NativeCodeView {
-    compare: CompareFn,
-    pub(crate) log: rsf_game_sys::rsf_game_log_fn,
-    pub(crate) user: *mut std::ffi::c_void,
-}
-
-impl NativeCodeView {
-    fn new(leaves: &rsf_ac7_code_leaves) -> Option<Self> {
-        Some(Self {
-            compare: leaves.matches?,
-            log: leaves.log,
-            user: leaves.user,
-        })
-    }
-}
-
-impl CodeView for NativeCodeView {
-    fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
-        // The native leaf guards access to the live image.
-        unsafe { (self.compare)(address, expected.as_ptr(), expected.len()) }
-    }
-
-    fn log(&self, message: &str) {
-        if let (Some(log), Ok(text)) = (self.log, CString::new(message)) {
-            unsafe { log(self.user, text.as_ptr()) };
-        }
-    }
-}
-
-pub(crate) struct NativeCode {
-    pub(crate) view: NativeCodeView,
-    write: WriteFn,
-}
-
-impl NativeCode {
-    /// # Safety
-    /// The table, user and callbacks must be valid for all uses of the returned code access.
-    pub(crate) unsafe fn new(leaves: *const rsf_ac7_code_leaves) -> Option<Self> {
-        let leaves = unsafe { leaves.as_ref() }?;
-        Some(Self {
-            view: NativeCodeView::new(leaves)?,
-            write: leaves.write?,
-        })
-    }
-}
-
-impl CodeView for NativeCode {
-    fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
-        self.view.matches(address, expected)
-    }
-
-    fn log(&self, message: &str) {
-        self.view.log(message);
-    }
-}
-
-impl Code for NativeCode {
-    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
-        if expected.len() != replacement.len() {
-            return false;
-        }
-        // The native leaf writes only after checking the live bytes.
-        unsafe {
-            (self.write)(
-                site,
-                expected.as_ptr(),
-                replacement.as_ptr(),
-                expected.len(),
-            )
-        }
-    }
-}
-
-const SITE_BYTES: usize = RSF_AC7_SITE_BYTES as usize;
-
-pub(crate) const POSTPROCESS_RVA: u32 = 0xffb900;
-pub(crate) const POSTPROCESS_ENTRY: &[u8; 18] =
+pub const POSTPROCESS_RVA: u32 = 0xffb900;
+pub const POSTPROCESS_ENTRY: &[u8; 18] =
     b"\x4c\x8b\xdc\x55\x49\x8d\xab\xe8\xfc\xff\xff\x48\x81\xec\x10\x04\x00\x00";
-pub(crate) const WIDGET_QUEUE_RVA: u32 = 0x4d6340;
-pub(crate) const WIDGET_QUEUE_ENTRY: &[u8; 16] =
+pub const WIDGET_QUEUE_RVA: u32 = 0x4d6340;
+pub const WIDGET_QUEUE_ENTRY: &[u8; 16] =
     b"\x40\x55\x57\x48\x8d\x6c\x24\xa8\x48\x81\xec\x58\x01\x00\x00\x0f";
 
 /// A function entry compared over its first 16 bytes.
-pub(crate) struct Site {
-    pub(crate) rva: u32,
-    pub(crate) expected: [u8; SITE_BYTES],
+pub struct Site {
+    pub rva: u32,
+    pub expected: [u8; SITE_BYTES],
 }
 
 impl Site {
-    const fn new(rva: u32, expected: &[u8; SITE_BYTES]) -> Self {
+    pub const fn new(rva: u32, expected: &[u8; SITE_BYTES]) -> Self {
         Self {
             rva,
             expected: *expected,
@@ -125,15 +34,15 @@ impl Site {
 }
 
 /// An in-function branch or comparison that enlarged separate translucency depends on.
-pub(crate) struct Gate {
-    pub(crate) rva: u32,
-    pub(crate) native: &'static [u8],
-    pub(crate) expected: &'static [u8],
-    pub(crate) description: &'static str,
+pub struct Gate {
+    pub rva: u32,
+    pub native: &'static [u8],
+    pub expected: &'static [u8],
+    pub description: &'static str,
 }
 
 impl Gate {
-    const fn new<const N: usize>(
+    pub const fn new<const N: usize>(
         rva: u32,
         native: &'static [u8; N],
         expected: &'static [u8; N],
@@ -150,7 +59,7 @@ impl Gate {
 
 /// Hooked entry sites, indexed by native_renderer.rs's `hook` constants.
 #[rustfmt::skip]
-pub(crate) static HOOK_SITES: [Site; RSF_AC7_HOOK_SITE_COUNT as usize] = [
+pub static HOOK_SITES: [Site; RSF_AC7_HOOK_SITE_COUNT as usize] = [
     Site::new(0x10b0220, b"\x40\x55\x53\x56\x57\x41\x55\x41\x57\x48\x8d\x6c\x24\xb8\x48\x81"), // 0 process_tonemap
     Site::new(0xfbfe90, b"\x40\x55\x56\x41\x56\x48\x8d\x6c\x24\xb9\x48\x81\xec\x00\x01\x00"), // 1 process_aa
     Site::new(0x1004960, b"\x40\x55\x53\x56\x57\x41\x54\x41\x55\x41\x56\x48\x8d\xac\x24\xe0"), // 2 process_material
@@ -219,7 +128,7 @@ pub(crate) static HOOK_SITES: [Site; RSF_AC7_HOOK_SITE_COUNT as usize] = [
 ];
 
 /// The pass role of each Process site: tonemap, AA, material, HUD, composite, output.
-pub(crate) const PROCESS_ROLES: [u32; RSF_AC7_PROCESS_HOOKS as usize] = [
+pub const PROCESS_ROLES: [u32; RSF_AC7_PROCESS_HOOKS as usize] = [
     RSF_AC7_ROLE_TONEMAP,
     RSF_AC7_ROLE_AA,
     RSF_AC7_ROLE_MATERIAL,
@@ -230,7 +139,7 @@ pub(crate) const PROCESS_ROLES: [u32; RSF_AC7_PROCESS_HOOKS as usize] = [
 
 /// Engine functions the detours call or whose layout they read; never hooked.
 #[rustfmt::skip]
-pub(crate) static HELPERS: [Site; 25] = [
+pub static HELPERS: [Site; 25] = [
     Site::new(0xfb7a00, b"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x40\x48\x8b\x01\x48\x8b\xda"),
     Site::new(0x1126090, b"\x83\xb9\xb0\x09\x00\x00\x02\x4c\x8b\x89\x10\x14\x00\x00\x75\x58"),
     Site::new(0x12183c0, b"\x40\x53\x48\x83\xec\x20\x8b\x1d\x94\x0c\xa6\x02\x85\xdb\x0f\x84"),
@@ -263,7 +172,7 @@ const SHADER_DEPTH_PATCHED: &[u8; 9] = b"\x0f\x2f\x86\x20\x02\x00\x00\x74\x04";
 
 /// Enlarged separate translucency needs the matching depth and shader-view paths.
 #[rustfmt::skip]
-pub(crate) static DEPTH_GATES: [Gate; 11] = [
+pub static DEPTH_GATES: [Gate; 11] = [
     Gate::new(0x1168f6f, b"\x76\x0e", b"\x74\x0e", "the depth allocation and fill"),
     Gate::new(0x1097a0c, b"\x76\x17", b"\x74\x17", "the depth bind"),
     Gate::new(0x109d03a, b"\x44\x0f\x47\xf9", b"\x44\x0f\x45\xf9", "the snapshot resolve"),
@@ -277,82 +186,3 @@ pub(crate) static DEPTH_GATES: [Gate; 11] = [
     Gate::new(0x102e792, SHADER_DEPTH_NATIVE, SHADER_DEPTH_PATCHED, "shader depth selection 5"),
     Gate::new(0x1031902, SHADER_DEPTH_NATIVE, SHADER_DEPTH_PATCHED, "shader depth selection 6"),
 ];
-
-/// Code at `rva` in the module at `base`. The address is only passed to the native leaves.
-pub(crate) fn at(base: *const u8, rva: u32) -> *const u8 {
-    base.wrapping_add(rva as usize)
-}
-
-/// Exact-build admission in the former order: hooked entry sites, enlarged UI depth/view gates,
-/// helper sites. The first difference is logged and refuses the build.
-pub(crate) fn admit(base: *const u8, code: &impl CodeView) -> bool {
-    if let Some(site) = HOOK_SITES
-        .iter()
-        .find(|site| !code.matches(at(base, site.rva), &site.expected))
-    {
-        code.log(&format!(
-            "AC7 native renderer refused: expected entry bytes differ at RVA 0x{:x}",
-            site.rva
-        ));
-        return false;
-    }
-    if let Some(gate) = DEPTH_GATES
-        .iter()
-        .find(|gate| !code.matches(at(base, gate.rva), gate.expected))
-    {
-        code.log(&format!(
-            "AC7 native renderer refused: enlarged UI depth/view gate missing at RVA 0x{:x}",
-            gate.rva
-        ));
-        return false;
-    }
-    if let Some(helper) = HELPERS
-        .iter()
-        .find(|helper| !code.matches(at(base, helper.rva), &helper.expected))
-    {
-        code.log(&format!(
-            "AC7 native renderer refused: expected helper bytes differ at RVA 0x{:x}",
-            helper.rva
-        ));
-        return false;
-    }
-    true
-}
-
-/// Evidence hooks run for every pixel uniform bind of every draw. Their sites are still verified,
-/// but they are hooked only when the pixel binding diagnostic is asked for.
-pub(crate) fn wanted(hook: u32, diagnostics: bool) -> bool {
-    hook < RSF_AC7_HOOK_SITE_COUNT
-        && (diagnostics || !(RSF_AC7_EVIDENCE_FIRST..=RSF_AC7_EVIDENCE_LAST).contains(&hook))
-}
-
-/// # Safety
-/// `leaves` is null or a table valid for the call. The leaves receive `base` plus each RVA.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_build_admit(
-    base: *const u8,
-    leaves: *const rsf_ac7_code_leaves,
-) -> bool {
-    match unsafe { leaves.as_ref() }.and_then(NativeCodeView::new) {
-        Some(code) => admit(base, &code),
-        None => false,
-    }
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_hook_rva(hook: u32) -> u32 {
-    HOOK_SITES.get(hook as usize).map_or(0, |site| site.rva)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_hook_role(hook: u32) -> u32 {
-    PROCESS_ROLES.get(hook as usize).copied().unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_hook_wanted(hook: u32, diagnostics: bool) -> bool {
-    wanted(hook, diagnostics)
-}
-
-#[cfg(test)]
-mod tests;

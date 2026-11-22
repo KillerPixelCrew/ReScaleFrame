@@ -14,7 +14,7 @@ use super::{
 };
 use crate::sys::rsf_ac7_render_scope;
 use crate::sys::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
-use crate::view::rsf_ac7_view_read;
+use rsf_ac7::view::rsf_ac7_view_read;
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,

@@ -55,16 +55,6 @@ typedef struct rsf_ac7_code_patches {
     unsigned char* scene_precision_site; // patched scene-precision site, or null
 } rsf_ac7_code_patches;
 
-// Exact-build admission: every hooked entry site, then the enlarged UI depth/view gates, then the
-// helper sites, compared at `base`. Logs the first difference and returns false.
-/* Admission uses matches and the optional logger. A writer is required only for patch calls. */
-bool rsf_ac7_build_admit(const unsigned char* base, const rsf_ac7_code_leaves* leaves);
-// RVA and pass role of a hooked entry site; zero out of range. Only Process sites have a role.
-uint32_t rsf_ac7_hook_rva(uint32_t hook);
-uint32_t rsf_ac7_hook_role(uint32_t hook);
-// Whether a verified site is hooked: always, except evidence hooks without diagnostics.
-bool rsf_ac7_hook_wanted(uint32_t hook, bool diagnostics);
-
 // Per-thread hook body counting. `kind` is RSF_AC7_GUARD_*.
 void rsf_ac7_guard_enter(uint32_t kind);
 void rsf_ac7_guard_leave(uint32_t kind);

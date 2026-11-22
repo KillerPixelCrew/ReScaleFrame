@@ -138,7 +138,7 @@ fn rewrite(input: &[u8], output: &mut [u8]) -> bool {
 
 /// The native caller lends the input. On success the factory borrows Rust-owned output.
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
+pub unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
     bytes: *const u8,
     size: usize,
     offset: usize,

@@ -58,7 +58,7 @@ mod views;
 mod widgets;
 
 #[cfg(feature = "warp-fixture")]
-#[path = "../../../tests/ac7_native_graph.rs"]
+#[path = "../../../../tests/ac7_native_graph.rs"]
 mod fixture;
 
 /// Index of each hooked function in `SITES` and in the Rust site table (sites.rs), in table order.

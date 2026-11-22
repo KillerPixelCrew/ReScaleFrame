@@ -211,7 +211,7 @@ fn read_view(data: &[u8], struct_size: u32) -> Result<rsf_ac7_view, rsf_ac7_view
 
 /// The caller lends `buffer` for `bytes` and a size-prefixed writable output, or null.
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_view_read(
+pub unsafe extern "C" fn rsf_ac7_view_read(
     buffer: *const c_void,
     bytes: u32,
     abi_version: u32,

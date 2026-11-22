@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::fake_code::Image;
+use rsf_ac7::sys::{RSF_AC7_PROCESS_HOOKS, RSF_AC7_ROLE_OUTPUT, RSF_AC7_ROLE_TONEMAP};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::c_uchar;
@@ -41,7 +42,7 @@ fn evidence_hooks_wait_for_diagnostics() {
     assert!(wanted(RSF_AC7_EVIDENCE_FIRST, true) && wanted(RSF_AC7_EVIDENCE_LAST, true));
     // pixel_view_uniform and sky_projection bracket the evidence range and are always hooked.
     assert!(wanted(37, false) && wanted(44, false));
-    assert!(!rsf_ac7_hook_wanted(RSF_AC7_HOOK_SITE_COUNT, true));
+    assert!(!wanted(RSF_AC7_HOOK_SITE_COUNT, true));
     let always = (0..RSF_AC7_HOOK_SITE_COUNT)
         .filter(|&hook| wanted(hook, false))
         .count();
@@ -97,6 +98,13 @@ unsafe extern "C" fn record(
     true
 }
 
+/// Admission through the native compare leaf, as native_renderer.rs lends it.
+fn build_admit(base: usize, leaves: Option<&rsf_ac7_code_leaves>) -> bool {
+    leaves
+        .and_then(NativeCodeView::new)
+        .is_some_and(|code| admit(without_provenance(base), &code))
+}
+
 #[test]
 fn native_admission_compares_each_site_at_the_module_base() {
     let base = 0x1_4000_0000usize;
@@ -106,7 +114,7 @@ fn native_admission_compares_each_site_at_the_module_base() {
         log: None,
         user: null_mut(),
     };
-    assert!(unsafe { rsf_ac7_build_admit(without_provenance(base), &leaves) });
+    assert!(build_admit(base, Some(&leaves)));
     SEEN.with(|seen| {
         let seen = seen.borrow();
         assert_eq!(
@@ -123,10 +131,10 @@ fn native_admission_compares_each_site_at_the_module_base() {
             Some(base + 0x11346d0)
         );
     });
-    assert!(!unsafe { rsf_ac7_build_admit(without_provenance(base), null()) });
+    assert!(!build_admit(base, None));
     let incomplete = rsf_ac7_code_leaves {
         matches: None,
         ..leaves
     };
-    assert!(!unsafe { rsf_ac7_build_admit(without_provenance(base), &incomplete) });
+    assert!(!build_admit(base, Some(&incomplete)));
 }
