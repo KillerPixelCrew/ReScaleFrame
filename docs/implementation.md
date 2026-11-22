@@ -7871,3 +7871,13 @@ the real D3D12 Present and marker contract. The
 the typed call leaves and compatibility bundle that remain native. Formatting,
 regenerated bindings and locked offline metadata were checked. Device and
 runtime verification remain pending.
+### Saved Unicode overlay options
+
+The shared panel now accepts saved Unicode values in ABI 20 while the Runtime
+overlay service keeps its v4 producer contract. Native D3D12 capture,
+RDR2 startup, Unity Mono diagnostics and the Runtime Vulkan and D3D12
+diagnostic readers use the saved option routes. The
+[source and handoff record](research/overlay-saved-unicode.md) lists the
+owner paths and remaining execution checks. Binding, formatting and locked
+offline metadata checks completed. Build, lint, fixture and device execution
+remain pending.
