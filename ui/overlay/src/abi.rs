@@ -1,5 +1,5 @@
 //! The Rust side of `include/rescaleframe/overlay.h`.
-//! The frame status, option and intent use generated records shared with the Runtime.
+//! Its records are the generated ones shared with the Runtime.
 //! The layout assertions pin the contract against the C header on 64-bit targets.
 
 /// Result code returned by the fallible entry points.
@@ -57,125 +57,16 @@ pub(crate) use rsf_game_sys::{
     RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
 };
 
-/// One frame of input, in physical pixels. Mirrors `rsf_overlay_input`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct RsfOverlayInput {
-    /// `sizeof(rsf_overlay_input)` as the caller knows it.
-    pub struct_size: u32,
-    /// Mouse x in the presented image's coordinates.
-    pub mouse_x: f32,
-    /// Mouse y in the presented image's coordinates.
-    pub mouse_y: f32,
-    /// Held mouse buttons, as `RSF_OVERLAY_MOUSE_*` bits.
-    pub mouse_buttons: u32,
-    /// Wheel movement since the previous frame.
-    pub scroll_delta: f32,
-    /// Width of the presented image.
-    pub display_width: u32,
-    /// Height of the presented image.
-    pub display_height: u32,
-    /// Seconds since the previous frame.
-    pub delta_seconds: f32,
-    /// Zero draws only the optional startup hint, without discarding widget state.
-    pub visible: u32,
-    /// Host-timed startup hint opacity, clamped to 0..1. Appended in ABI 5.
-    pub startup_hint_alpha: f32,
-}
-
-/// One vertex, in the layout egui produces. Mirrors `rsf_overlay_vertex`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct RsfOverlayVertex {
-    /// Position x, in physical pixels.
-    pub x: f32,
-    /// Position y, in physical pixels.
-    pub y: f32,
-    /// Texture coordinate u.
-    pub u: f32,
-    /// Texture coordinate v.
-    pub v: f32,
-    /// Premultiplied RGBA, red in the low byte, so the bytes in memory read R, G, B, A on a
-    /// little-endian target. That is what `DXGI_FORMAT_R8G8B8A8_UNORM` expects.
-    pub color: u32,
-}
-
-/// One draw call. Mirrors `rsf_overlay_draw_call`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RsfOverlayDrawCall {
-    /// First index of this call in the shared index buffer.
-    pub index_offset: u32,
-    /// How many indices to draw.
-    pub index_count: u32,
-    /// Value to add to every index, as `BaseVertexLocation` does. Indices are call-local.
-    pub vertex_offset: u32,
-    /// Scissor rectangle x, in physical pixels.
-    pub clip_x: u32,
-    /// Scissor rectangle y, in physical pixels.
-    pub clip_y: u32,
-    /// Scissor rectangle width, in physical pixels.
-    pub clip_width: u32,
-    /// Scissor rectangle height, in physical pixels.
-    pub clip_height: u32,
-    /// Which texture to bind, matching an id from a texture update.
-    pub texture_id: u64,
-}
-
-/// The triangles for one frame. Mirrors `rsf_overlay_draw_data`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct RsfOverlayDrawData {
-    /// `sizeof(rsf_overlay_draw_data)`, written by the overlay.
-    pub struct_size: u32,
-    /// Vertices, owned by the overlay and valid until the next frame call. Null when empty.
-    pub vertices: *const RsfOverlayVertex,
-    /// How many vertices.
-    pub vertex_count: u32,
-    /// Indices, owned by the overlay and valid until the next frame call. Null when empty.
-    pub indices: *const u32,
-    /// How many indices.
-    pub index_count: u32,
-    /// Draw calls, owned by the overlay and valid until the next frame call. Null when empty.
-    pub calls: *const RsfOverlayDrawCall,
-    /// How many draw calls.
-    pub call_count: u32,
-}
-
-impl Default for RsfOverlayDrawData {
-    fn default() -> Self {
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            vertices: core::ptr::null(),
-            vertex_count: 0,
-            indices: core::ptr::null(),
-            index_count: 0,
-            calls: core::ptr::null(),
-            call_count: 0,
-        }
-    }
-}
-
-/// A change to the overlay's texture atlas. Mirrors `rsf_overlay_texture_update`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct RsfOverlayTextureUpdate {
-    /// Which texture this patches.
-    pub id: u64,
-    /// Destination x of the patch.
-    pub x: u32,
-    /// Destination y of the patch.
-    pub y: u32,
-    /// Patch width.
-    pub width: u32,
-    /// Patch height.
-    pub height: u32,
-    /// Tightly packed RGBA bytes, `width * height * 4` of them, borrowed until the next frame call.
-    pub pixels: *const u8,
-    /// Non-zero when the destination has to be created or recreated at this size first.
-    pub is_whole_texture: u32,
-}
-
+/// One frame of input, in physical pixels.
+pub use rsf_game_sys::rsf_overlay_input as RsfOverlayInput;
+/// One draw call; indices are call-local and `vertex_offset` is added as `BaseVertexLocation`.
+pub use rsf_game_sys::rsf_overlay_draw_call as RsfOverlayDrawCall;
+/// The triangles for one frame, owned by the overlay until the next frame call.
+pub use rsf_game_sys::rsf_overlay_draw_data as RsfOverlayDrawData;
+/// A change to the overlay's texture atlas, borrowed until the next frame call.
+pub use rsf_game_sys::rsf_overlay_texture_update as RsfOverlayTextureUpdate;
+/// One vertex in egui's layout; `color` is premultiplied RGBA with red in the low byte.
+pub use rsf_game_sys::rsf_overlay_vertex as RsfOverlayVertex;
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;

@@ -9,6 +9,8 @@ fn derives(name: &str) -> &'static [&'static str] {
         | "rsf_overlay_saved_row"
         | "rsf_overlay_stats"
         | "rsf_overlay_intent"
+        | "rsf_overlay_vertex"
+        | "rsf_overlay_draw_call"
         | "rsf_sharpening_options" => &["Debug", "PartialEq"],
         _ => &[],
     }

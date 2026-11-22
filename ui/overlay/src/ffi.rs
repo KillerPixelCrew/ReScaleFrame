@@ -518,6 +518,13 @@ mod tests {
         is_whole_texture: 0,
     };
 
+    fn draw_data() -> RsfOverlayDrawData {
+        RsfOverlayDrawData {
+            struct_size: size_of::<RsfOverlayDrawData>() as u32,
+            ..Default::default()
+        }
+    }
+
     fn input() -> RsfOverlayInput {
         RsfOverlayInput {
             struct_size: size_of::<RsfOverlayInput>() as u32,
@@ -673,7 +680,7 @@ mod tests {
 
         let input = input();
         let stats = stats();
-        let mut draw = RsfOverlayDrawData::default();
+        let mut draw = draw_data();
         let mut intent = default_intent();
         // More than one, because egui lays a new window out invisibly to size it first.
         for _ in 0..3 {
@@ -788,10 +795,7 @@ mod tests {
         );
 
         // Including the outputs: an unset struct_size is a caller that has not been told.
-        let mut draw = RsfOverlayDrawData {
-            struct_size: 0,
-            ..RsfOverlayDrawData::default()
-        };
+        let mut draw = RsfOverlayDrawData::default();
         assert_eq!(
             unsafe { rsf_overlay_frame(overlay, &input, &stats, &mut draw, null_out.1) },
             RSF_OVERLAY_ERROR_INVALID_ARGUMENT
@@ -831,7 +835,7 @@ mod tests {
             visible: 0,
             ..input()
         };
-        let mut draw = RsfOverlayDrawData::default();
+        let mut draw = draw_data();
         assert_eq!(
             unsafe { rsf_overlay_frame(overlay, &hidden, &stats, &mut draw, std::ptr::null_mut()) },
             RSF_OVERLAY_OK
