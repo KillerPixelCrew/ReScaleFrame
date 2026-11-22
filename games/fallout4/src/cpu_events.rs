@@ -456,14 +456,14 @@ fn native_cycle(
     let expected = *proof;
     let base = image();
     let mut t = Terms::default();
-    let (mut worker, mut vtable, mut destructor, mut entry, mut renderer, mut window) =
+    let (mut worker_address, mut vtable, mut destructor, mut entry, mut renderer, mut window) =
         (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let (mut running, mut exiting, mut mode) = (0u8, 0u8, 0u32);
     let state_stage = snapshot(native, proof.main);
     let proved = t.test(0, state_stage == StateRead::Eligible)
-        && t.test(1, load(&mut worker, base + native::WORKER))
-        && t.test(2, worker == base + native::WORKER_OBJECT)
-        && t.test(3, load(&mut vtable, worker))
+        && t.test(1, load(&mut worker_address, base + native::WORKER))
+        && t.test(2, worker_address == base + native::WORKER_OBJECT)
+        && t.test(3, load(&mut vtable, worker_address))
         && t.test(4, vtable == base + native::WORKER_VTABLE)
         && t.test(5, load(&mut destructor, vtable))
         && t.test(6, destructor == base + native::WORKER_DESTRUCTOR)
@@ -471,19 +471,19 @@ fn native_cycle(
         && t.test(8, entry == base + native::WORKER_ENTRY)
         && t.test(
             9,
-            load(&mut proof.start_event, worker + native::WORKER_START),
+            load(&mut proof.start_event, worker_address + native::WORKER_START),
         )
         && t.test(10, proof.start_event != 0)
         && t.test(
             11,
-            load(&mut proof.complete_event, worker + native::WORKER_COMPLETE),
+            load(&mut proof.complete_event, worker_address + native::WORKER_COMPLETE),
         )
         && t.test(12, proof.complete_event != 0)
-        && t.test(13, load(&mut mode, worker + native::WORKER_MODE))
+        && t.test(13, load(&mut mode, worker_address + native::WORKER_MODE))
         && t.test(14, mode == 1 || (joining && mode == 0))
-        && t.test(15, load(&mut running, worker + native::WORKER_RUNNING))
+        && t.test(15, load(&mut running, worker_address + native::WORKER_RUNNING))
         && t.test(16, running != 0)
-        && t.test(17, load(&mut exiting, worker + native::WORKER_EXITING))
+        && t.test(17, load(&mut exiting, worker_address + native::WORKER_EXITING))
         && t.test(18, exiting == 0)
         && t.test(19, load(&mut window, native.main + native::MAIN_WINDOW))
         && t.test(20, window != 0)
@@ -497,7 +497,7 @@ fn native_cycle(
         && t.test(25, load(&mut proof.frame, base + native::NATIVE_FRAME));
     if proved {
         proof.main = native.main;
-        proof.worker = worker;
+        proof.worker = worker_address;
         proof.manager = native.manager;
         proof.queue = native.queue;
         proof.receiver = native.receiver;
