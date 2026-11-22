@@ -14,6 +14,21 @@ pub fn try_box<T>(value: T) -> Option<Box<T>> {
     }
 }
 
+/// `text` as NUL-terminated UTF-16.
+pub fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
+}
+
+/// `units` followed by `suffix`, NUL-terminated: a path built from a module directory.
+pub fn wide_path(units: &[u16], suffix: &str) -> Vec<u16> {
+    units
+        .iter()
+        .copied()
+        .chain(suffix.encode_utf16())
+        .chain(Some(0))
+        .collect()
+}
+
 /// Widens exactly N ASCII bytes. Include a NUL in the input when the caller needs one.
 pub const fn ascii_wide<const N: usize>(text: &[u8]) -> [u16; N] {
     assert!(text.len() == N);
@@ -41,4 +56,13 @@ pub unsafe fn has_capacity<T>(value: *const T) -> bool {
 /// As for [`has_capacity`]; the record must also be suitably aligned for `T` and live for `'a`.
 pub unsafe fn checked<'a, T>(value: *const T) -> Option<&'a T> {
     unsafe { has_capacity(value) }.then(|| unsafe { &*value })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn wide_strings_are_terminated_utf16() {
+        assert_eq!(super::wide("a.dll"), [0x61, 0x2e, 0x64, 0x6c, 0x6c, 0]);
+        assert_eq!(super::wide_path(&[0x43], "\\b"), [0x43, 0x5c, 0x62, 0]);
+    }
 }

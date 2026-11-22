@@ -104,11 +104,7 @@ pub(crate) fn get() -> Option<&'static Platform> {
     if cfg!(test) { None } else { Some(&Platform) }
 }
 
-/// `name` as a NUL-terminated UTF-16 string.
-pub(crate) fn wide(name: &str) -> Vec<u16> {
-    name.encode_utf16().chain(Some(0)).collect()
-}
-
+pub(crate) use rsf_game_sys::ffi_util::wide;
 pub(crate) fn module_path(module: usize, path: &mut [u16]) -> usize {
     let capacity = u32::try_from(path.len()).unwrap_or(u32::MAX);
     unsafe { GetModuleFileNameW(module as _, path.as_mut_ptr(), capacity) as usize }

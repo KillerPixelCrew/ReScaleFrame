@@ -175,12 +175,9 @@ fn record(update: impl FnOnce(&mut Results)) {
 }
 
 /// NUL-terminated UTF-16 for the leaves.
-pub(crate) fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
+pub(crate) use rsf_game_sys::ffi_util::wide;
 fn terminated(text: &[u16]) -> Vec<u16> {
-    text.iter().copied().chain(std::iter::once(0)).collect()
+    rsf_game_sys::ffi_util::wide_path(text, "")
 }
 
 /// True when the executable path names the supported game, ignoring ASCII case.

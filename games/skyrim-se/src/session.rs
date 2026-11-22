@@ -191,13 +191,7 @@ const fn empty_services() -> rsf_game_host_services {
     unsafe { std::mem::zeroed() }
 }
 
-fn terminated(units: &[u16], suffix: &str) -> Vec<u16> {
-    let mut path = units.to_vec();
-    path.extend(suffix.encode_utf16());
-    path.push(0);
-    path
-}
-
+use rsf_game_sys::ffi_util::wide_path as terminated;
 /// Quiesces the CPU, sampling and presentation-input subsystems and native creation.
 fn quiesce_subsystems(creation_first: bool) {
     if creation_first {

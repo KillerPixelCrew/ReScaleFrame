@@ -74,13 +74,7 @@ fn session() -> MutexGuard<'static, Session> {
     SESSION.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn wide(units: &[u16], suffix: &str) -> Vec<u16> {
-    let mut path = units.to_vec();
-    path.extend(suffix.encode_utf16());
-    path.push(0);
-    path
-}
-
+use rsf_game_sys::ffi_util::wide_path as wide;
 impl Session {
     fn busy(&self) -> bool {
         creation::busy() || render_hooks::busy() || cpu_events::busy()
