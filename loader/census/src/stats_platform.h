@@ -17,8 +17,8 @@ typedef struct rsf_census_stats_names {
 #ifdef __cplusplus
 extern "C" {
 #endif
-void rsf_census_stats_present(void);
-uint64_t rsf_census_stats_present_index(void);
+bool rsf_census_present_enter(bool test);
+void rsf_census_present_leave(void);
 void rsf_census_stats_queue_describe(uint8_t kind, const void* queue, uint32_t a, uint32_t b, uint32_t c);
 bool rsf_census_stats_queue_submit(uint8_t kind, const void* queue, uint32_t lists);
 #ifdef __cplusplus

@@ -102,12 +102,7 @@ void register_wrappers_d3d(void** table) noexcept {
     static const rsf_census_d3d_platform platform = {
         safe_read, safe_read_cstr, vtable_slot, query_interface, release_interface,
         queue_desc, swapchain_desc, enable_debug, info_queue,
-        [](bool test) {
-            const bool outer = tl_present_depth++ == 0;
-            if (outer && !test) note_present_begin();
-            return outer;
-        },
-        []() { --tl_present_depth; },
+        rsf_census_present_enter, rsf_census_present_leave,
     };
     void* wrappers[RSF_D3D_COUNT]{};
     rsf_census_d3d_bind(&platform, entries, wrappers);

@@ -194,17 +194,9 @@ inline size_t idx(Fn f) noexcept { return static_cast<size_t>(f); }
 inline void* orig_by(Fn f) noexcept {
     return rsf_census_hook_original(static_cast<uint16_t>(f));
 }
-template <Fn F>
-inline void* orig() noexcept { return orig_by(F); }
-
 // First binding wins. Returns the address to hand back to the game: the wrapper, or `real` when
 // the entry is bound to a different implementation (counted as a conflict) or already detoured.
 void* bind_thunk(Fn fn, void* real) noexcept;
-// Bind the address a vtable slot points at with an inline detour. Returns false when the entry is
-// already bound or the detour fails.
-bool bind_inline(Fn fn, void* target, const char* why) noexcept;
-// Apply the detours queued by bind_inline in one thread freeze.
-void hooks_apply() noexcept;
 // Look up an export or API name in the function table. Returns Fn::Count when unknown.
 Fn lookup_name(const char* name) noexcept;
 
@@ -217,11 +209,6 @@ bool plausible_ptr(const void* p) noexcept;
 template <class T>
 inline bool rd(const void* p, T& out) noexcept {
     return safe_read(p, &out, sizeof(T));
-}
-template <class T>
-inline T rd_or(const void* p, T fallback) noexcept {
-    T v{};
-    return safe_read(p, &v, sizeof(T)) ? v : fallback;
 }
 // True when `p` is committed executable memory.
 bool is_code_ptr(const void* p) noexcept;
@@ -237,65 +224,6 @@ inline bool guard(L&& lambda) noexcept {
     return guarded([](void* c) { (*static_cast<T*>(c))(); }, &lambda);
 }
 
-// ---- JSON line builder ------------------------------------------------------------------------
-class Json {
-public:
-    explicit Json(rsf_census_json* state) noexcept : state_(state) {}
-
-    void obj(const char* key = nullptr) noexcept { rsf_census_json_open(state_, key, '{'); }
-    void end_obj() noexcept { rsf_census_json_close(state_, '}'); }
-    void arr(const char* key = nullptr) noexcept { rsf_census_json_open(state_, key, '['); }
-    void end_arr() noexcept { rsf_census_json_close(state_, ']'); }
-    void str(const char* key, const char* v) noexcept { rsf_census_json_string(state_, key, v); }
-    void wstr(const char* key, const wchar_t* v) noexcept {
-        rsf_census_json_wide(state_, key, reinterpret_cast<const uint16_t*>(v));
-    }
-    void u64(const char* key, uint64_t v) noexcept { rsf_census_json_u64(state_, key, v); }
-    void i64(const char* key, int64_t v) noexcept { rsf_census_json_i64(state_, key, v); }
-    void hex(const char* key, uint64_t v) noexcept { rsf_census_json_hex(state_, key, v); }
-    void f32(const char* key, double v) noexcept;
-    void boolean(const char* key, bool v) noexcept { raw(key, v ? "true" : "false"); }
-    void null(const char* key) noexcept { raw(key, nullptr); }
-    void bytes_hex(const char* key, const void* data, size_t n) noexcept {
-        rsf_census_json_bytes(state_, key, data, n);
-    }
-    void raw(const char* key, const char* json_text) noexcept {
-        rsf_census_json_raw(state_, key, json_text);
-    }
-    void resource(const char* key, const void* resource, bool d3d12,
-                  rsf_census_read_resource read) noexcept {
-        rsf_census_json_resource(state_, key, resource, d3d12, read);
-    }
-
-private:
-    rsf_census_json* state_;
-};
-
-// ---- Per-call recording -----------------------------------------------------------------------
-class Call {
-public:
-    Call(Fn fn, void* return_address) noexcept : json_(&state_.json) {
-        rsf_census_call_begin(&state_, static_cast<uint16_t>(fn), return_address);
-    }
-    Call(const Call&) = delete;
-    Call& operator=(const Call&) = delete;
-    // True when this call is written in full. Decode arguments only then.
-    bool full() const noexcept { return state_.full; }
-    Json& json() noexcept { return json_; }
-    // Queue the record. `ret` is the raw return register.
-    void finish(uint64_t ret) noexcept { rsf_census_call_finish(&state_, ret); }
-
-private:
-    rsf_census_call_state state_{};
-    Json json_;
-};
-
-#define RSF_RETADDR() _ReturnAddress()
-
-// Present boundary: call before the real Present, before opening the Call for it.
-void note_present_begin() noexcept;
-uint64_t present_index() noexcept;
-
 enum class QueueKind : uint8_t { D3d12 = 1, Vulkan = 2 };
 // Describe a queue once (D3D12: type, priority, flags; Vulkan: family, index, unused).
 void queue_describe(QueueKind kind, const void* queue, uint32_t a, uint32_t b, uint32_t c) noexcept;
@@ -303,17 +231,6 @@ void queue_describe(QueueKind kind, const void* queue, uint32_t a, uint32_t b, u
 // time a queue is seen, so the caller can describe a queue that predates the census.
 bool queue_submit(QueueKind kind, const void* queue, uint32_t lists) noexcept;
 
-// Present calls can nest (a proxy swapchain calling the one beneath it). Only the outermost counts.
-inline thread_local int tl_present_depth = 0;
-struct PresentScope {
-    PresentScope() noexcept : outer(tl_present_depth++ == 0) {}
-    ~PresentScope() noexcept { --tl_present_depth; }
-    PresentScope(const PresentScope&) = delete;
-    PresentScope& operator=(const PresentScope&) = delete;
-    bool outer;
-};
-
-// Static findings (statically linked vendor code), kept for the summary.
 inline bool installed() noexcept { return rsf_census_active(); }
 inline uint32_t option_flags() noexcept { return rsf_census_flags(); }
 
@@ -324,19 +241,11 @@ void register_wrappers_ngx(void** table) noexcept;
 void register_wrappers_fsr(void** table) noexcept;
 void register_wrappers_misc(void** table) noexcept;
 
-// Hook layer (hooks.cpp).
+// Native hook registration.
 bool hooks_install() noexcept;
 
-// Resource decode helpers (decode_d3d_platform.cpp).
-inline const char* dxgi_format_name(uint32_t format) noexcept {
-    return rsf_census_dxgi_format_name(format);
-}
-void json_d3d12_resource(Json& j, const char* key, const void* resource) noexcept;
-void json_d3d11_resource(Json& j, const char* key, const void* resource) noexcept;
-inline void json_ptr_or_null(Json& j, const char* key, const void* p) noexcept {
-    if (p) j.hex(key, reinterpret_cast<uint64_t>(p));
-    else j.null(key);
-}
+void describe_d3d_resource(rsf_census_json* json, const char* key, const void* resource,
+                           bool d3d12) noexcept;
 // Read a narrow or wide string argument; returns false when unreadable.
 inline bool read_arg_string(const void* p, char* out, size_t cap) noexcept {
     if (!cap) return false;

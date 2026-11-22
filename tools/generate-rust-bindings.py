@@ -104,6 +104,11 @@ generate("loader/src/census/misc_abi.rs", "loader/census/src/misc_platform.h",
          ["--no-prepend-enum-name", "--blocklist-type", "rsf_census_json",
           "--raw-line", "#![allow(non_upper_case_globals)]",
           "--raw-line", "use super::json_abi::rsf_census_json;"])
+generate("loader/src/census/fsr_abi.rs", "loader/census/src/fsr_platform.h",
+         "rsf_census_fsr_(platform|entry)", "NOTHING", [],
+         ["--no-prepend-enum-name", "--blocklist-type", "rsf_census_json",
+          "--raw-line", "#![allow(non_upper_case_globals)]",
+          "--raw-line", "use super::json_abi::rsf_census_json;"])
 generate("tests/loader/src/windows/module_dump_abi.rs",
          "loader/diagnostics/include/rescaleframe/module_dump.h",
          "rsf_dump_(options|report|result)", "RSF_MODULE_DUMP_ABI_VERSION", [],

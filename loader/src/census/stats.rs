@@ -6,6 +6,7 @@ use super::json::{
 };
 use super::json_abi::rsf_census_json;
 use super::stats_abi::{rsf_census_sample, rsf_census_stats_names};
+use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::io::Write;
 use std::ptr::null;
@@ -256,8 +257,7 @@ pub(super) fn rsf_census_stats_counts(
     *overflow = SITE_OVERFLOW.load(Relaxed);
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_stats_present() {
+fn roll_present() {
     let Some(cfg) = SETTINGS.get() else { return };
     for function in &FUNCTIONS[..cfg.count] {
         function.histogram.roll();
@@ -270,9 +270,30 @@ pub(super) extern "C" fn rsf_census_stats_present() {
     PRESENT.fetch_add(1, Relaxed);
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_stats_present_index() -> u64 {
+pub(super) fn rsf_census_stats_present_index() -> u64 {
     PRESENT.load(Relaxed)
+}
+
+thread_local! { static PRESENT_DEPTH: Cell<u32> = const { Cell::new(0) }; }
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_census_present_enter(test: bool) -> bool {
+    let outer = PRESENT_DEPTH
+        .try_with(|depth| {
+            let old = depth.get();
+            depth.set(old.wrapping_add(1));
+            old == 0
+        })
+        .unwrap_or(false);
+    if outer && !test && super::session::rsf_census_active() {
+        roll_present();
+    }
+    outer
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_census_present_leave() {
+    let _ = PRESENT_DEPTH.try_with(|depth| depth.set(depth.get().wrapping_sub(1)));
 }
 
 #[unsafe(no_mangle)]

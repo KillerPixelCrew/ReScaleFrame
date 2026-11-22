@@ -38,12 +38,9 @@ extern "C" bool read_d3d11(const void* resource, rsf_census_resource_desc* out) 
 
 } // namespace
 
-void json_d3d12_resource(Json& j, const char* key, const void* resource) noexcept {
-    j.resource(key, resource, true, read_d3d12);
-}
-
-void json_d3d11_resource(Json& j, const char* key, const void* resource) noexcept {
-    j.resource(key, resource, false, read_d3d11);
+void describe_d3d_resource(rsf_census_json* json, const char* key, const void* resource,
+                           bool d3d12) noexcept {
+    rsf_census_json_resource(json, key, resource, d3d12, d3d12 ? read_d3d12 : read_d3d11);
 }
 
 } // namespace rsf_census

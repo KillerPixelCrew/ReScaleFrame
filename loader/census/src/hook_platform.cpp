@@ -84,12 +84,8 @@ bool hooks_install() noexcept {
     return rsf_census_hooks_install(&platform, option_flags());
 }
 
-void hooks_apply() noexcept { rsf_census_hooks_apply(); }
 void* bind_thunk(Fn fn, void* real) noexcept {
     return rsf_census_hook_bind_thunk(static_cast<uint16_t>(fn), real);
-}
-bool bind_inline(Fn fn, void* target, const char* module) noexcept {
-    return rsf_census_hook_bind_inline(static_cast<uint16_t>(fn), target, module);
 }
 Fn lookup_name(const char* name) noexcept {
     const uint16_t found = rsf_census_hook_lookup(name);

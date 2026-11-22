@@ -3,6 +3,8 @@ mod d3d;
 mod d3d_abi;
 mod decode;
 mod decode_abi;
+mod fsr;
+mod fsr_abi;
 mod hook_abi;
 mod hooks;
 mod identity;

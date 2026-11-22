@@ -238,3 +238,19 @@ the assumed-layout labels on NVAPI and NvLowLatencyVk records, Streamline decode
 and the AMD and AGS fields. NVAPI query and Streamline feature resolution preserve the same
 one-binding behavior. The remaining version-dependent exports retain eight-word forwarding.
 Streamline uses native guarded callbacks for its polymorphic token and writable output pointer.
+
+## FidelityFX and XeSS wrapper cutover
+
+`loader/census/src/wrap_fsr.cpp` and `loader/census/src/wrap_generic.h` are removed. Rust
+registers all 48 FSR2, FidelityFX, XeSS, XeFG and XeLL entries. The four floating-point
+signatures still use exact typed calls. Version-dependent exports keep the existing x64
+word forwarding, including the first hidden result pointer for the FSR2 resource return.
+
+The decoder keeps the 1,352-byte FSR2 record and all refusal reasons, the 12-element
+FidelityFX chain bound, and the XeSS layout. The Rust decoder reads copied byte fields and
+checks the raw boolean bytes before decoding FSR2. COM resource queries stay guarded in
+the platform leaf. The source comparison covered every registration, decoder field,
+descriptor kind and the original payload spans.
+
+The last native wrapper support header is reduced to the vendor catalog and guarded platform
+declarations. The DXGI and Vulkan platforms now share the Rust per-thread present scope.

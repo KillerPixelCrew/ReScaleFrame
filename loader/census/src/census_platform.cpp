@@ -7,6 +7,7 @@
 #include "census_internal.h"
 #include "ngx_platform.h"
 #include "misc_platform.h"
+#include "fsr_platform.h"
 #include "wrapper_platform.h"
 
 namespace rsf_census {
@@ -16,6 +17,16 @@ const FnDesc kFns[kFnCount] = {
     RSF_CENSUS_FUNCTIONS(X)
 #undef X
 };
+
+void put_decimal(rsf_census_json* json, const char* key, double value) noexcept {
+    if (!std::isfinite(value)) {
+        rsf_census_json_raw(json, key, nullptr);
+        return;
+    }
+    char text[40];
+    std::snprintf(text, sizeof(text), "%.9g", value);
+    rsf_census_json_raw(json, key, text);
+}
 
 void register_wrappers_vk(void** table) noexcept {
     static constexpr Fn entries[] = {
@@ -48,8 +59,8 @@ void register_wrappers_vk(void** table) noexcept {
             queue_describe(QueueKind::Vulkan, queue, family, index, 0);
         },
         [](void* queue, uint32_t count) { queue_submit(QueueKind::Vulkan, queue, count); },
-        []() { if (tl_present_depth++ == 0) note_present_begin(); },
-        []() { --tl_present_depth; },
+        []() { rsf_census_present_enter(false); },
+        rsf_census_present_leave,
     };
     void* wrappers[RSF_CENSUS_VK_COUNT]{};
     rsf_census_vk_bind(&services, wrappers);
@@ -78,13 +89,9 @@ void register_wrappers_ngx(void** table) noexcept {
             return get && guard([&] { result = get(parameters, name, output); }) && result == 1;
         },
         [](rsf_census_json* state, const char* key, const void* resource, bool d3d12) {
-            Json json(state);
-            if (d3d12) json_d3d12_resource(json, key, resource);
-            else json_d3d11_resource(json, key, resource);
+            describe_d3d_resource(state, key, resource, d3d12);
         },
-        [](rsf_census_json* state, const char* key, double value) {
-            Json(state).f32(key, value);
-        },
+        put_decimal,
     };
     void* wrappers[RSF_CENSUS_NGX_ENTRIES]{};
     rsf_census_ngx_bind(&platform, entries, wrappers);
@@ -114,31 +121,35 @@ void register_wrappers_misc(void** table) noexcept {
                 bind_thunk(found, value) : nullptr;
         },
         [](rsf_census_json* state, const char* key, const void* p) {
-            Json json(state);
-            json_d3d12_resource(json, key, p);
+            describe_d3d_resource(state, key, p, true);
         },
-        [](rsf_census_json* state, const char* key, double value) { Json(state).f32(key, value); },
+        put_decimal,
     };
     void* wrappers[RSF_MISC_COUNT]{};
     rsf_census_misc_bind(&platform, entries, wrappers);
     for (size_t i = 0; i < std::size(entries); ++i) table[entries[i]] = wrappers[i];
 }
 
-void Json::f32(const char* key, double value) noexcept {
-    if (!std::isfinite(value)) {
-        null(key);
-        return;
-    }
-    char text[40];
-    std::snprintf(text, sizeof(text), "%.9g", value);
-    raw(key, text);
+void register_wrappers_fsr(void** table) noexcept {
+    static constexpr uint16_t entries[] = {
+#define RSF_CENSUS_FSR_ID(name) static_cast<uint16_t>(Fn::name),
+        RSF_CENSUS_FSR_ENTRIES(RSF_CENSUS_FSR_ID)
+#undef RSF_CENSUS_FSR_ID
+    };
+    static_assert(std::size(entries) == RSF_FSR_COUNT);
+    static const rsf_census_fsr_platform platform = {
+        safe_read,
+        [](rsf_census_json* state, const char* key, const void* object, bool require_slot) {
+            if (!require_slot || (object && vtable_slot(object, 10))) {
+                describe_d3d_resource(state, key, object, true);
+            }
+        },
+        put_decimal,
+    };
+    void* wrappers[RSF_FSR_COUNT]{};
+    rsf_census_fsr_bind(&platform, entries, wrappers);
+    for (size_t i = 0; i < std::size(entries); ++i) table[entries[i]] = wrappers[i];
 }
-
-void note_present_begin() noexcept {
-    if (installed()) rsf_census_stats_present();
-}
-
-uint64_t present_index() noexcept { return rsf_census_stats_present_index(); }
 
 void queue_describe(QueueKind kind, const void* queue, uint32_t a, uint32_t b, uint32_t c) noexcept {
     if (installed()) rsf_census_stats_queue_describe(static_cast<uint8_t>(kind), queue, a, b, c);
