@@ -249,7 +249,7 @@ unsafe extern "C" fn backbuffer_identity(
     let mut raw = null_mut();
     let result =
         unsafe { (chain.vtable().GetBuffer)(chain.as_raw(), 0, &ID3D11Texture2D::IID, &mut raw) };
-    let Some(buffer) = (unsafe { ComRef::from_result(result.0, raw) }) else {
+    let Some(buffer) = (unsafe { ComRef::from_result(result, raw) }) else {
         return 0;
     };
     let raw = buffer.as_ptr();

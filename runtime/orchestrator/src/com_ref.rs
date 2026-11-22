@@ -2,9 +2,7 @@
 use std::borrow::Borrow;
 use std::ffi::c_void;
 use std::ptr::{NonNull, null_mut};
-use windows::core::{IUnknown, Interface};
-
-use windows::core::{HRESULT, IUnknown_Vtbl, Interface};
+use windows::core::{HRESULT, IUnknown, IUnknown_Vtbl, Interface};
 
 /// Borrow the generated vtable for a live interface of type `I`.
 pub(super) unsafe fn vtable<I: Interface>(object: &*mut c_void) -> &I::Vtable {
@@ -24,17 +22,11 @@ impl ComRef {
         NonNull::new(object).map(Self)
     }
 
-    // An output reference belongs to the caller even if the COM method reports failure.
-    pub(super) unsafe fn from_result(result: i32, object: *mut c_void) -> Option<Self> {
-        let owned = unsafe { Self::from_owned(object) };
-        if result >= 0 { owned } else { None }
-    }
-
     pub(super) unsafe fn identity(object: *mut c_void) -> Option<Self> {
         let object = unsafe { IUnknown::from_raw_borrowed(&object) }?;
         let mut identity = null_mut();
         let result = unsafe { object.query(&IUnknown::IID, &mut identity) };
-        unsafe { Self::from_result(result.0, identity) }
+        unsafe { Self::from_result(result, identity) }
     }
 
     // Every non-null slot transfers one reference, including partial results.
@@ -46,6 +38,7 @@ impl ComRef {
         Some(resources.map(Option::unwrap))
     }
 
+    // An output reference belongs to the caller even if the COM method reports failure.
     pub(super) unsafe fn from_result(status: HRESULT, object: *mut c_void) -> Option<Self> {
         let owned = unsafe { Self::from_owned(object) };
         if status.is_ok() { owned } else { None }

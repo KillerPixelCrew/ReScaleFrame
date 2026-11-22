@@ -141,7 +141,7 @@ unsafe fn borrow<T: Interface>(raw: &Handle) -> &T {
 fn output(create: impl FnOnce(*mut Handle) -> HRESULT) -> Option<ComRef> {
     let mut raw = null_mut();
     let result = create(&mut raw);
-    unsafe { ComRef::from_result(result.0, raw) }
+    unsafe { ComRef::from_result(result, raw) }
 }
 
 unsafe extern "C" fn present_graphics(
