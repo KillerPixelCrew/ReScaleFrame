@@ -36,6 +36,8 @@ mod dxbc_chunks;
 mod guards;
 mod hook_batch;
 mod lifecycle;
+#[cfg(windows)]
+mod motion_capture_graphics_abi;
 mod motion_capture_observations;
 mod motion_capture_records;
 mod motion_capture_session;

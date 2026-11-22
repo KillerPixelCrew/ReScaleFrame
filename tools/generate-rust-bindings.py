@@ -467,6 +467,17 @@ generate("runtime/orchestrator/src/d3d11_observer_abi.rs", "runtime/graphics/inc
          "RSF_OBSERVER_ABI_VERSION", ["-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--raw-line", "pub use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;",
           "--raw-line", "use crate::scene_abi::rsf_observer_present_event;"])
+generate("games/ac7/src/motion_capture_graphics_abi.rs", "runtime/graphics/include/rescaleframe/frame_tap.h",
+         "rsf_(frame_tap_(geometry|target_draw|input|options|result|target_fn|compute_fn)|"
+         "observer_(options|result)|texture_dump_(options|report)|dump_texture_result|constant_buffer_result)",
+         "RSF_(FRAME_TAP_(ABI_VERSION|OK)|OBSERVER_(ABI_VERSION|OK)|TEXTURE_(DUMP_ABI_VERSION|OK)|CONSTANT_BUFFER_OK)",
+         ["-Iruntime/graphics/include", "-include", "rescaleframe/d3d11_observer.h",
+          "-include", "rescaleframe/constant_buffer_read.h"],
+         ["--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--allowlist-function", "rsf_(frame_tap_(install|uninstall|set_constant_watch|set_research(_phase)?_callbacks)|"
+          "observer_(install|uninstall)|dump_texture(_bytes)?|read_constant_buffer)",
+          "--blocklist-type", "rsf_observer_layout_element",
+          "--raw-line", "use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;"])
 generate("runtime/orchestrator/src/frame_tap_abi.rs", "runtime/graphics/src/frame_tap_platform.h",
          "rsf_frame_tap_.*", "RSF_FRAME_TAP_.*", ["-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
