@@ -133,8 +133,7 @@ struct Config {
     probe: bool,
 }
 
-#[path = "../../diagnostic_preferences.rs"]
-mod diagnostic_preferences;
+use rsf_game_sys::diagnostic_preferences;
 
 fn read_number(name: &str) -> Option<u64> {
     diagnostic_preferences::value(name)?.to_str()?.trim().parse().ok()

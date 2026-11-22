@@ -29,6 +29,8 @@ pub mod call_header;
 pub mod camera_math;
 pub mod checksum;
 #[cfg(windows)]
+pub mod diagnostic_preferences;
+#[cfg(windows)]
 pub mod dpi;
 pub mod dxbc_chunks;
 pub mod ffi_util;

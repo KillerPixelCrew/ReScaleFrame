@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! The Runtime diagnostics profile is shared with the standalone bridge.
+//! The Runtime diagnostics profile (%LOCALAPPDATA%\ReScaleFrame\Diagnostics.ini), read by the
+//! Runtime and the standalone XeSS FG bridge.
+use crate::ffi_util::wide;
+use crate::profile_text;
 use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
-
-// The standalone XeSS bridge is compiled directly with rustc.
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
-#[path = "../sdk/game/src/profile_text.rs"]
-#[allow(dead_code)]
-mod profile_text;
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -22,9 +19,9 @@ unsafe extern "system" {
     ) -> u32;
 }
 
-pub(crate) const SECTION: &str = "Diagnostics";
+pub const SECTION: &str = "Diagnostics";
 
-pub(crate) fn profile() -> Option<PathBuf> {
+pub fn profile() -> Option<PathBuf> {
     let local = std::env::var_os("LOCALAPPDATA").filter(|path| !path.is_empty())?;
     Some(
         PathBuf::from(local)
@@ -33,11 +30,10 @@ pub(crate) fn profile() -> Option<PathBuf> {
     )
 }
 
-pub(crate) fn value(variable: &str) -> Option<OsString> {
+pub fn value(variable: &str) -> Option<OsString> {
     std::env::var_os(variable).or_else(|| {
         let path: Vec<u16> = profile()?.as_os_str().encode_wide().chain([0]).collect();
-        let section: Vec<u16> = SECTION.encode_utf16().chain([0]).collect();
-        let key: Vec<u16> = variable.encode_utf16().chain([0]).collect();
+        let (section, key) = (wide(SECTION), wide(variable));
         let mut buffer = vec![0u16; 32_768];
         let count = unsafe {
             GetPrivateProfileStringW(

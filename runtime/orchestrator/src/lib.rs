@@ -142,10 +142,8 @@ mod owned_handle;
 mod sync;
 mod wide;
 
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[cfg(windows)]
-#[path = "../../diagnostic_preferences.rs"]
-mod diagnostic_preferences;
+use rsf_game_sys::diagnostic_preferences;
 #[cfg(windows)]
 use rsf_fsr4_compat::ffx_version;
 #[cfg(all(windows, not(test)))]
