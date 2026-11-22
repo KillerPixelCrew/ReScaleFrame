@@ -107,15 +107,12 @@ typedef struct rsf_unity_package_platform {
     uint32_t (*bridge_try_close)(void);
     /* rsf_fg12_end_session for a session's id; non-zero once its tokens are retired. */
     uint32_t (*end_session)(uint64_t session);
-    /* SR views. commands is the pass's ID3D12GraphicsCommandList. sr_default_backend resolves
-       Auto through rsf_gpu_default_sr_backend for the list's adapter; zero when the device or
-       adapter cannot be read. sr_create is zero when the list has no device, and otherwise stores
-       rsf_sr12_create's result and context (null unless created). The rest are rsf_sr12_plan,
-       rsf_sharpening_defaults, rsf_sr12_set_sharpening, rsf_sr12_evaluate and rsf_sr12_destroy. */
-    uint32_t (*sr_default_backend)(void* commands, uint32_t* backend);
-    uint32_t (*sr_create)(void* commands, const rsf_unity_package_view_setup* setup, int32_t* result,
+    /* SR views. sr_quality_supported checks an explicit request. sr_create borrows the device
+       from commands, calls the Runtime's planned create and writes the original provider result.
+       On success it returns a context and updates the setup's backend and render dimensions. */
+    uint32_t (*sr_quality_supported)(uint32_t backend, uint32_t quality);
+    uint32_t (*sr_create)(void* commands, rsf_unity_package_view_setup* setup, int32_t* result,
         rsf_sr12** output);
-    int32_t (*sr_plan)(const rsf_sr12* sr, uint32_t* width, uint32_t* height);
     void (*sharpening_defaults)(rsf_sharpening_options* output);
     int32_t (*sr_set_sharpening)(rsf_sr12* sr, const rsf_sharpening_options* options);
     int32_t (*sr_evaluate)(rsf_sr12* sr, void* commands, const rsf_game_render_pass* pass, uint32_t slot);

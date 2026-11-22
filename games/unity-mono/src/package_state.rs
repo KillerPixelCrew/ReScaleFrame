@@ -37,7 +37,7 @@ use crate::package_views::{View, Views};
 use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_abi::{
     RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
-    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_SPATIAL, rsf_fg12_setup,
+    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_SPATIAL, rsf_fg12_setup,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_cpu_event, rsf_game_host_services,
@@ -141,14 +141,13 @@ struct Leaves {
     bridge_activate: unsafe extern "C" fn(u32),
     bridge_try_close: unsafe extern "C" fn() -> u32,
     end_session: unsafe extern "C" fn(u64) -> u32,
-    sr_default_backend: unsafe extern "C" fn(*mut c_void, *mut u32) -> u32,
+    sr_quality_supported: unsafe extern "C" fn(u32, u32) -> u32,
     sr_create: unsafe extern "C" fn(
         *mut c_void,
-        *const rsf_unity_package_view_setup,
+        *mut rsf_unity_package_view_setup,
         *mut i32,
         *mut *mut rsf_sr12,
     ) -> u32,
-    sr_plan: unsafe extern "C" fn(*const rsf_sr12, *mut u32, *mut u32) -> i32,
     sharpening_defaults: unsafe extern "C" fn(*mut rsf_sharpening_options),
     sr_set_sharpening: unsafe extern "C" fn(*mut rsf_sr12, *const rsf_sharpening_options) -> i32,
     sr_evaluate:
@@ -219,9 +218,8 @@ impl Leaves {
             bridge_activate: p.bridge_activate?,
             bridge_try_close: p.bridge_try_close?,
             end_session: p.end_session?,
-            sr_default_backend: p.sr_default_backend?,
+            sr_quality_supported: p.sr_quality_supported?,
             sr_create: p.sr_create?,
-            sr_plan: p.sr_plan?,
             sharpening_defaults: p.sharpening_defaults?,
             sr_set_sharpening: p.sr_set_sharpening?,
             sr_evaluate: p.sr_evaluate?,
@@ -314,33 +312,20 @@ impl Leaves {
     fn end_session(&self, session: u64) -> bool {
         unsafe { (self.end_session)(session) != 0 }
     }
-    /// Auto's backend for the list's adapter; None when its device or adapter cannot be read.
-    fn sr_default_backend(&self, commands: *mut c_void) -> Option<u32> {
-        let mut backend = 0u32;
-        (unsafe { (self.sr_default_backend)(commands, &mut backend) } != 0).then_some(backend)
+    fn sr_quality_supported(&self, backend: u32, quality: u32) -> bool {
+        unsafe { (self.sr_quality_supported)(backend, quality) != 0 }
     }
-    /// rsf_sr12_create's result and context (null unless created); None when the list has no
-    /// device.
+
     fn sr_create(
         &self,
         commands: *mut c_void,
-        setup: &rsf_unity_package_view_setup,
+        setup: &mut rsf_unity_package_view_setup,
     ) -> Option<(i32, *mut rsf_sr12)> {
         let (mut result, mut sr): (i32, *mut rsf_sr12) = (0, null_mut());
         (unsafe { (self.sr_create)(commands, setup, &mut result, &mut sr) } != 0)
             .then_some((result, sr))
     }
-    fn sr_plan(&self, sr: *mut rsf_sr12, output: (u32, u32)) -> Result<(u32, u32), i32> {
-        let (mut width, mut height) = (0u32, 0u32);
-        let result = unsafe { (self.sr_plan)(sr, &mut width, &mut height) };
-        if result != BACKEND_OK {
-            return Err(result);
-        }
-        if width == 0 || height == 0 || width > output.0 || height > output.1 {
-            return Err(services::BACKEND_FEATURE_FAILED);
-        }
-        Ok((width, height))
-    }
+
     /// The stored sharpening, or the Runtime defaults while its struct_size is zero.
     fn sharpening(&self, stored: &rsf_sharpening_options) -> rsf_sharpening_options {
         if stored.struct_size != 0 {
@@ -449,19 +434,15 @@ impl Package {
 
     /// Stores valid settings. A reconstruction change (backend, quality or DLSS model) sets the
     /// engine policy, withdraws the plan and temporal readiness and waits for the bridge's
-    /// reconfiguring pass. DLSS has no ultra quality, including Auto while DLSS is active.
+    /// reconfiguring pass. Auto quality admission happens on the current graphics device.
     fn configure(&self, input: &rsf_unity_package_settings, leaves: &Leaves) -> bool {
-        if !acceptable(input, leaves) {
+        if !acceptable(input, leaves)
+            || !leaves.sr_quality_supported(input.sr_backend, input.quality)
+        {
             return false;
         }
         let reconstruction_changed = {
             let state = self.lock();
-            if input.quality == ULTRA_QUALITY
-                && (input.sr_backend == RSF_SR_DLSS
-                    || (input.sr_backend == RSF_SR_AUTO && state.status.active_sr == RSF_SR_DLSS))
-            {
-                return false;
-            }
             state.settings.sr_backend != input.sr_backend
                 || state.settings.quality != input.quality
                 || state.settings.dlss_preset != input.dlss_preset
@@ -704,13 +685,11 @@ impl Package {
         settings: &rsf_unity_package_settings,
         camera: &rsf_camera_frame,
     ) -> Option<View> {
-        let mut backend = match settings.sr_backend {
-            RSF_SR_AUTO => leaves.sr_default_backend(commands)?,
-            requested => requested,
+        let backend = if settings.sr_backend == RSF_SR_SPATIAL {
+            RSF_SR_NONE
+        } else {
+            settings.sr_backend
         };
-        if backend == RSF_SR_SPATIAL {
-            backend = 0;
-        }
         let output = (camera.output_width, camera.output_height);
         let mut setup = rsf_unity_package_view_setup {
             backend,
@@ -725,30 +704,27 @@ impl Package {
         };
         let identity = self.presentation.identity();
         identity.lend(&mut setup);
-        let (created, mut sr) = leaves.sr_create(commands, &setup)?;
+        let (created, sr) = leaves.sr_create(commands, &mut setup)?;
         self.lock().status.sr_result = created;
-        if sr.is_null() && backend != 0 {
-            setup.backend = 0;
-            sr = leaves
-                .sr_create(commands, &setup)
-                .map_or(null_mut(), |(_, sr)| sr);
-            backend = 0;
-        }
-        if sr.is_null() {
+        let backend = setup.backend;
+        let render = (setup.render_width, setup.render_height);
+        if sr.is_null()
+            || render.0 == 0
+            || render.1 == 0
+            || render.0 > output.0
+            || render.1 > output.1
+        {
+            self.temporal_ready.store(false, SeqCst);
+            let mut state = self.lock();
+            state.plan = EMPTY_PLAN;
+            state.status.active_sr = 0;
+            if !sr.is_null() {
+                state.status.sr_result = services::BACKEND_FEATURE_FAILED;
+                drop(state);
+                leaves.sr_destroy(sr);
+            }
             return None;
         }
-        let render = match leaves.sr_plan(sr, output) {
-            Ok(render) => render,
-            Err(result) => {
-                leaves.sr_destroy(sr);
-                self.temporal_ready.store(false, SeqCst);
-                let mut state = self.lock();
-                state.plan = EMPTY_PLAN;
-                state.status.active_sr = 0;
-                state.status.sr_result = result;
-                return None;
-            }
-        };
         let mut view = View::created(sr, backend, output);
         view.render = render;
         self.view_planned(backend, output, view.render);
@@ -906,6 +882,7 @@ extern "C" fn rsf_unity_package_bridge_failed(result: i32) {
 mod tests {
     use super::*;
     use crate::package_abi::rsf_fg_status;
+    use crate::runtime_abi::RSF_SR_DLSS;
     use std::cell::{Cell, RefCell};
     use std::ffi::CStr;
     use std::ptr::without_provenance_mut;
@@ -1104,22 +1081,24 @@ mod tests {
         call(format!("end {session}"));
         fake().ended.into()
     }
-    unsafe extern "C" fn sr_default_backend(_: *mut c_void, backend: *mut u32) -> u32 {
-        call("default".into());
-        let adapter = fake().adapter;
-        if adapter == 0 {
-            return 0;
-        }
-        unsafe { backend.write(adapter) };
-        1
+    unsafe extern "C" fn sr_quality_supported(backend: u32, quality: u32) -> u32 {
+        u32::from(backend != RSF_SR_DLSS || quality != ULTRA_QUALITY)
     }
     unsafe extern "C" fn sr_create(
         _: *mut c_void,
-        setup: *const rsf_unity_package_view_setup,
+        setup: *mut rsf_unity_package_view_setup,
         result: *mut i32,
         output: *mut *mut rsf_sr12,
     ) -> u32 {
-        let s = unsafe { *setup };
+        let mut s = unsafe { *setup };
+        let f = fake();
+        if s.backend == RSF_SR_AUTO {
+            call("default".into());
+            if f.adapter == 0 {
+                return 0;
+            }
+            s.backend = f.adapter;
+        }
         // The identity is always lent; a loaded one follows the depth flag.
         let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_str().unwrap();
         let identity = match text(s.root_utf8) {
@@ -1134,40 +1113,46 @@ mod tests {
                 text(s.project_id_utf8)
             ),
         };
-        call(format!(
-            "create {} {} {} {}x{} {}x{} {}{identity}",
-            s.backend,
-            s.quality,
-            s.dlss_preset,
-            s.output_width,
-            s.output_height,
-            s.render_width,
-            s.render_height,
-            s.inverted_depth
-        ));
-        let f = fake();
+        let create = |backend| {
+            call(format!(
+                "create {backend} {} {} {}x{} {}x{} {}{identity}",
+                s.quality,
+                s.dlss_preset,
+                s.output_width,
+                s.output_height,
+                s.render_width,
+                s.render_height,
+                s.inverted_depth
+            ));
+        };
+        create(s.backend);
         if !f.device {
             return 0;
         }
-        let created = s.backend == 0 || f.vendor_creates;
+        if s.backend != 0 && !f.vendor_creates {
+            create(0);
+            s.backend = 0;
+        }
+        call("plan".into());
+        let context = without_provenance_mut(CONTEXT + s.backend as usize);
+        let result_code = if f.plan_result == 0 {
+            (s.render_width, s.render_height) = f.plan;
+            f.create_result
+        } else {
+            unsafe { sr_destroy(context) };
+            f.plan_result
+        };
+        let context = if f.plan_result == 0 {
+            context
+        } else {
+            null_mut()
+        };
         unsafe {
-            result.write(f.create_result);
-            output.write(if created {
-                without_provenance_mut(CONTEXT + s.backend as usize)
-            } else {
-                null_mut()
-            });
+            setup.write(s);
+            result.write(result_code);
+            output.write(context);
         }
         1
-    }
-    unsafe extern "C" fn sr_plan(_: *const rsf_sr12, width: *mut u32, height: *mut u32) -> i32 {
-        call("plan".into());
-        let (planned_width, planned_height) = fake().plan;
-        unsafe {
-            width.write(planned_width);
-            height.write(planned_height);
-        }
-        fake().plan_result
     }
     unsafe extern "C" fn sharpening_defaults(output: *mut rsf_sharpening_options) {
         call("defaults".into());
@@ -1470,9 +1455,8 @@ mod tests {
         bridge_activate: Some(bridge_activate),
         bridge_try_close: Some(bridge_try_close),
         end_session: Some(end_session),
-        sr_default_backend: Some(sr_default_backend),
+        sr_quality_supported: Some(sr_quality_supported),
         sr_create: Some(sr_create),
-        sr_plan: Some(sr_plan),
         sharpening_defaults: Some(sharpening_defaults),
         sr_set_sharpening: Some(sr_set_sharpening),
         sr_evaluate: Some(sr_evaluate),
@@ -1602,7 +1586,7 @@ mod tests {
     }
 
     #[test]
-    fn dlss_has_no_ultra_quality() {
+    fn runtime_admits_explicit_quality_and_defers_auto() {
         let package = Package::new();
         let leaves = leaves();
         let mut input = DEFAULT_SETTINGS;
@@ -1611,8 +1595,6 @@ mod tests {
         assert!(!package.configure(&input, &leaves));
         input.sr_backend = RSF_SR_AUTO;
         package.lock().status.active_sr = RSF_SR_DLSS;
-        assert!(!package.configure(&input, &leaves));
-        package.lock().status.active_sr = 5;
         assert!(package.configure(&input, &leaves));
     }
 

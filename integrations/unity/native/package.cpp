@@ -17,7 +17,6 @@
 #include "preview.h"
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
-#include <rescaleframe/gpu_policy.h>
 #include <rescaleframe/fg_choice.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -36,7 +35,7 @@ extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
 // package_abi.rs mirrors these layouts and constants.
 static_assert(sizeof(rsf_unity_package_settings) == 100 && sizeof(rsf_unity_package_status) == 184);
-static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 440);
+static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 432);
 // routing.rs mirrors the preview's source-state flag.
 static_assert(RSF_UNITY_PREVIEW_SOURCE_COMMON == 0x40000000u);
 static_assert(sizeof(rsf_native_fg_status) == 352 && sizeof(rsf_native_latency_status) == 152);
@@ -188,17 +187,7 @@ int configuration(void*, rsf_game_render_config* output)
     return rsf_unity_package_plan(output);
 }
 // rsf_unity_package_platform's SR view leaves. commands is the bridge's D3D12 command list.
-uint32_t sr_default_backend(void* commands, uint32_t* backend) noexcept
-{
-    ComPtr<ID3D12Device> device; ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter; DXGI_ADAPTER_DESC1 desc{};
-    if (FAILED(static_cast<ID3D12GraphicsCommandList*>(commands)->GetDevice(IID_PPV_ARGS(&device))) ||
-        FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
-        FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) ||
-        FAILED(adapter->GetDesc1(&desc))) return 0;
-    *backend = rsf_gpu_default_sr_backend(desc.VendorId, (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
-    return 1;
-}
-uint32_t sr_create(void* commands, const rsf_unity_package_view_setup* view, int32_t* result, rsf_sr12** output) noexcept try
+uint32_t sr_create(void* commands, rsf_unity_package_view_setup* view, int32_t* result, rsf_sr12** output) noexcept try
 {
     ComPtr<ID3D12Device> device;
     if (FAILED(static_cast<ID3D12GraphicsCommandList*>(commands)->GetDevice(IID_PPV_ARGS(&device)))) return 0;
@@ -212,7 +201,16 @@ uint32_t sr_create(void* commands, const rsf_unity_package_view_setup* view, int
     setup.xess_directory_utf8 = view->xess_utf8; setup.log = log;
     setup.dlss = {sizeof(setup.dlss), RSF_DLSS_ABI_VERSION, view->interposer_utf8, view->streamline_utf8, view->root_utf8,
         0, RSF_DLSS_ENGINE_UNITY, view->engine_version_utf8, view->project_id_utf8, 1, log, nullptr, view->dlss_preset};
-    *output = nullptr; *result = rsf_sr12_create(&setup, output);
+    rsf_sr12_plan_result plan{};
+    plan.struct_size = sizeof(plan);
+    plan.abi_version = RSF_SR12_PLAN_ABI_VERSION;
+    const auto created = rsf_sr12_create_planned(&setup, &plan, output);
+    *result = plan.requested_result != RSF_BACKEND_OK ? plan.requested_result : created;
+    if (created == RSF_BACKEND_OK) {
+        view->backend = plan.backend;
+        view->render_width = plan.render_width;
+        view->render_height = plan.render_height;
+    }
     return 1;
 } catch (...) { return 0; }
 // rsf_unity_package_platform::fg_default_backend: Auto's generation provider for the adapter of
@@ -270,9 +268,8 @@ constexpr rsf_unity_package_platform platform{
     [](uint32_t enabled) noexcept { rsf_unity_bridge_activate(enabled != 0); },
     []() noexcept -> uint32_t { return rsf_unity_package_bridge_try_close() ? 1u : 0u; },
     [](uint64_t session) noexcept -> uint32_t { return rsf_fg12_end_session(session) ? 1u : 0u; },
-    sr_default_backend,
+    rsf_sr12_quality_supported,
     sr_create,
-    [](const rsf_sr12* sr, uint32_t* width, uint32_t* height) noexcept -> int32_t { return rsf_sr12_plan(sr, width, height); },
     [](rsf_sharpening_options* output) noexcept { *output = rsf_sharpening_defaults(); },
     [](rsf_sr12* sr, const rsf_sharpening_options* options) noexcept -> int32_t { return rsf_sr12_set_sharpening(sr, options); },
     [](rsf_sr12* sr, void* commands, const rsf_game_render_pass* pass, uint32_t slot) noexcept -> int32_t {
