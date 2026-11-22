@@ -398,27 +398,27 @@ Port process entry, proxy forwarding and module selection for the thin loader an
 
 **Port files (14)**
 
-- [ ] [apps/launcher/src/main.cpp](apps/launcher/src/main.cpp)
-- [ ] [cmake/version.h.in](cmake/version.h.in) (template for the C/C++ version header)
-- [ ] [loader/proxy/src/dlss_bridge.h](loader/proxy/src/dlss_bridge.h)
-- [ ] [loader/proxy/src/plugin_carrier.cpp](loader/proxy/src/plugin_carrier.cpp)
-- [ ] [loader/proxy/src/preferences.h](loader/proxy/src/preferences.h)
-- [ ] [loader/proxy/src/shim_loader.cpp](loader/proxy/src/shim_loader.cpp)
-- [ ] [loader/proxy/src/thin_config.cpp](loader/proxy/src/thin_config.cpp)
-- [ ] [loader/proxy/src/thin_config.h](loader/proxy/src/thin_config.h)
-- [ ] [loader/proxy/src/thin_library.h](loader/proxy/src/thin_library.h)
-- [ ] [loader/proxy/src/thin_loader.cpp](loader/proxy/src/thin_loader.cpp)
-- [ ] [loader/proxy/src/thin_startup.cpp](loader/proxy/src/thin_startup.cpp)
-- [ ] [loader/proxy/src/thin_startup.h](loader/proxy/src/thin_startup.h)
-- [ ] [loader/proxy/src/xinput_forwarding.cpp](loader/proxy/src/xinput_forwarding.cpp)
-- [ ] [loader/src/bootstrap.cpp](loader/src/bootstrap.cpp)
+- [x] [apps/launcher/src/main.cpp](apps/launcher/src/main.cpp)
+- [x] [cmake/version.h.in](cmake/version.h.in) (template for the C/C++ version header)
+- [x] [loader/proxy/src/dlss_bridge.h](loader/proxy/src/dlss_bridge.h)
+- [x] [loader/proxy/src/plugin_carrier.cpp](loader/proxy/src/plugin_carrier.cpp)
+- [x] [loader/proxy/src/preferences.h](loader/proxy/src/preferences.h)
+- [x] [loader/proxy/src/shim_loader.cpp](loader/proxy/src/shim_loader.cpp)
+- [x] [loader/proxy/src/thin_config.cpp](loader/proxy/src/thin_config.cpp)
+- [x] [loader/proxy/src/thin_config.h](loader/proxy/src/thin_config.h)
+- [x] [loader/proxy/src/thin_library.h](loader/proxy/src/thin_library.h)
+- [x] [loader/proxy/src/thin_loader.cpp](loader/proxy/src/thin_loader.cpp)
+- [x] [loader/proxy/src/thin_startup.cpp](loader/proxy/src/thin_startup.cpp)
+- [x] [loader/proxy/src/thin_startup.h](loader/proxy/src/thin_startup.h)
+- [x] [loader/proxy/src/xinput_forwarding.cpp](loader/proxy/src/xinput_forwarding.cpp)
+- [x] [loader/src/bootstrap.cpp](loader/src/bootstrap.cpp)
 
 **Fixtures (4)**
 
-- [ ] [tests/shared_shim_exports.cpp](tests/shared_shim_exports.cpp)
-- [ ] [tests/thin_loader.cpp](tests/thin_loader.cpp)
-- [ ] [tests/thin_loader_fixture.cpp](tests/thin_loader_fixture.cpp)
-- [ ] [tests/xinput_carrier.cpp](tests/xinput_carrier.cpp)
+- [x] [tests/shared_shim_exports.cpp](tests/shared_shim_exports.cpp)
+- [x] [tests/thin_loader.cpp](tests/thin_loader.cpp)
+- [x] [tests/thin_loader_fixture.cpp](tests/thin_loader_fixture.cpp)
+- [x] [tests/xinput_carrier.cpp](tests/xinput_carrier.cpp)
 
 <a id="l02"></a>
 
@@ -1757,23 +1757,23 @@ Port the F9 capture boundary and reconcile the observation, record, session and 
 **Fixtures (2)**
 
 - [ ] [tests/ac7_capture_io.cpp](tests/ac7_capture_io.cpp)
-- [ ] [tests/ac7_motion_capture.cpp](tests/ac7_motion_capture.cpp)
+- [x] [tests/ac7_motion_capture.cpp](tests/ac7_motion_capture.cpp)
 
 **Rust review findings (7)**
 
-- [ ] **Duplication | Medium | Use the observer binding for AC7 input-layout elements.** The observer publishes the generated rsf_observer_layout_element at runtime/orchestrator/src/d3d11_observer_abi.rs:12 and :40. The native capture callback passes that exact pointer through at games/ac7/src/motion_capture.cpp:886, but the Rust consumer at games/ac7/src/motion_capture_observations.rs:234 interprets it as a handwritten five-field struct. The velocity cache also takes this mirror at games/ac7/src/velocity_pass_cache.rs:348. Reordering two of the first four u32 fields could silently change capture and velocity classification while the manual size and last-offset assertions still pass. Generate the narrow observer element binding once in a shared ABI module and import it on both sides, leaving snapshot ownership and cache limits local. [games/ac7/src/motion_capture_observations.rs:51](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_observations.rs#L51)
+- [x] **Duplication | Medium | Use the observer binding for AC7 input-layout elements.** The observer publishes the generated rsf_observer_layout_element at runtime/orchestrator/src/d3d11_observer_abi.rs:12 and :40. The native capture callback passes that exact pointer through at games/ac7/src/motion_capture.cpp:886, but the Rust consumer at games/ac7/src/motion_capture_observations.rs:234 interprets it as a handwritten five-field struct. The velocity cache also takes this mirror at games/ac7/src/velocity_pass_cache.rs:348. Reordering two of the first four u32 fields could silently change capture and velocity classification while the manual size and last-offset assertions still pass. Generate the narrow observer element binding once in a shared ABI module and import it on both sides, leaving snapshot ownership and cache limits local. [games/ac7/src/motion_capture_observations.rs:51](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_observations.rs#L51)
 
-- [ ] **Altitude | Medium | Bind the contact-light before/after pair to its draw.** begin_lighting_pair arms a single interval-wide flag before the before-draw record exists. draw_capture consumes it for either contact shader hash, without checking the originating context, draw or target. motion_capture.cpp:542 even omits the draw index on the lighting row. If two matching callbacks interleave, the second draw can consume the first draw's after sample, and the artifacts cannot establish which draw changed the pixels. Carry the same draw identity through both callbacks and complete only the matching recorded pair. [games/ac7/src/motion_capture_observations/colour.rs:130](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_observations/colour.rs#L130)
+- [x] **Altitude | Medium | Bind the contact-light before/after pair to its draw.** begin_lighting_pair arms a single interval-wide flag before the before-draw record exists. draw_capture consumes it for either contact shader hash, without checking the originating context, draw or target. motion_capture.cpp:542 even omits the draw index on the lighting row. If two matching callbacks interleave, the second draw can consume the first draw's after sample, and the artifacts cannot establish which draw changed the pixels. Carry the same draw identity through both callbacks and complete only the matching recorded pair. [games/ac7/src/motion_capture_observations/colour.rs:130](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_observations/colour.rs#L130)
 
-- [ ] **Altitude | Medium | Snapshot shader observations before writing capture files.** Publisher::finish keeps the global observations mutex from before formatting engine records until after the final session.json write, including each of up to 4,096 shader file writes. The shader creation hook in motion_capture.cpp:869 needs the same mutex even between armed captures, so file I/O can block shader creation. Snapshot ordered shader handles, counters and readback totals under the lock, using shared immutable bytecode storage to avoid copying the payloads, then publish from that snapshot after releasing the lock. [games/ac7/src/motion_capture_records/artifacts.rs:427](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/artifacts.rs#L427)
+- [x] **Altitude | Medium | Snapshot shader observations before writing capture files.** Publisher::finish keeps the global observations mutex from before formatting engine records until after the final session.json write, including each of up to 4,096 shader file writes. The shader creation hook in motion_capture.cpp:869 needs the same mutex even between armed captures, so file I/O can block shader creation. Snapshot ordered shader handles, counters and readback totals under the lock, using shared immutable bytecode storage to avoid copying the payloads, then publish from that snapshot after releasing the lock. [games/ac7/src/motion_capture_records/artifacts.rs:427](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/artifacts.rs#L427)
 
-- [ ] **Duplication | Medium | Keep one AC7 site description for capture and renderer admission.** The F9 root table records the postprocess and widget queue addresses and guard bytes at games/ac7/src/motion_capture_records/root_hooks.rs:25 and :42. Renderer admission at games/ac7/src/renderer.rs:153 checks independently maintained entries at games/ac7/src/sites.rs:132 and :136. Standalone capture uses its table from games/ac7/src/motion_capture.cpp:397 and skips these hooks when the native owner is active. The addresses agree today, but the postprocess checks cover 18 versus 16 bytes and widget queue covers 15 versus 16. Define each address and longest verified byte sequence once in AC7, retaining the consumer-specific prefix lengths, ownership flags and detour order so a site update reaches both paths. [games/ac7/src/motion_capture_records/root_hooks.rs:25](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/root_hooks.rs#L25)
+- [x] **Duplication | Medium | Keep one AC7 site description for capture and renderer admission.** The F9 root table records the postprocess and widget queue addresses and guard bytes at games/ac7/src/motion_capture_records/root_hooks.rs:25 and :42. Renderer admission at games/ac7/src/renderer.rs:153 checks independently maintained entries at games/ac7/src/sites.rs:132 and :136. Standalone capture uses its table from games/ac7/src/motion_capture.cpp:397 and skips these hooks when the native owner is active. The addresses agree today, but the postprocess checks cover 18 versus 16 bytes and widget queue covers 15 versus 16. Define each address and longest verified byte sequence once in AC7, retaining the consumer-specific prefix lengths, ownership flags and detour order so a site update reaches both paths. [games/ac7/src/motion_capture_records/root_hooks.rs:25](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/root_hooks.rs#L25)
 
-- [ ] **Altitude | Medium | Retain root-hook ownership until removal succeeds.** Capture shutdown calls the void remove callback and unconditionally clears REGISTRATION. The actual callback (motion_capture.cpp:393, ac7_hooks.h:9) discards the results of both DisableHook and RemoveHook. An unsuccessful removal leaves no tracked target for a retry, and install similarly reports RolledBack without evidence of complete removal. Have the native batch return the targets still owned, preserve their registration until retired, and report partial teardown to the caller. [games/ac7/src/motion_capture_records/root_hooks.rs:176](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/root_hooks.rs#L176)
+- [x] **Altitude | Medium | Retain root-hook ownership until removal succeeds.** Capture shutdown calls the void remove callback and unconditionally clears REGISTRATION. The actual callback (motion_capture.cpp:393, ac7_hooks.h:9) discards the results of both DisableHook and RemoveHook. An unsuccessful removal leaves no tracked target for a retry, and install similarly reports RolledBack without evidence of complete removal. Have the native batch return the targets still owned, preserve their registration until retired, and report partial teardown to the caller. [games/ac7/src/motion_capture_records/root_hooks.rs:176](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/root_hooks.rs#L176)
 
-- [ ] **Simplicity | Low | AC7 draw commit takes a fallible row closure that every caller pre-builds.** `commit(capture, row: impl FnOnce() -> Result<Bytes, fmt::Error>)` defers row construction until admission under the records lock, but all four callers (draws.rs:257, draws/before.rs:156, draws/geometry.rs:171, draws/ordinary.rs:178) format the row first and pass `|| Ok(row)`, so the closure, the inner `?` and the `fmt::Result` return are dead generality. Change it to `fn commit(capture, row: Bytes) -> bool` (admit, `try_reserve`, push) and have the exports return `write_x(...).is_ok() && commit(capture, row)`. Behavior is identical because formatting already happens before the lock; the only tradeoff is losing a lazy-build option nobody uses. [games/ac7/src/motion_capture_records/draws.rs:108](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/draws.rs#L108)
+- [x] **Simplicity | Low | AC7 draw commit takes a fallible row closure that every caller pre-builds.** `commit(capture, row: impl FnOnce() -> Result<Bytes, fmt::Error>)` defers row construction until admission under the records lock, but all four callers (draws.rs:257, draws/before.rs:156, draws/geometry.rs:171, draws/ordinary.rs:178) format the row first and pass `|| Ok(row)`, so the closure, the inner `?` and the `fmt::Result` return are dead generality. Change it to `fn commit(capture, row: Bytes) -> bool` (admit, `try_reserve`, push) and have the exports return `write_x(...).is_ok() && commit(capture, row)`. Behavior is identical because formatting already happens before the lock; the only tradeoff is losing a lazy-build option nobody uses. [games/ac7/src/motion_capture_records/draws.rs:108](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/draws.rs#L108)
 
-- [ ] **Altitude | Low | Keep Windows stream formatting out of JSON sampler records.** write_lod reproduces unquoted Windows stream tokens such as inf and nan(ind) for nonfinite sampler limits. When a sampled descriptor contains one, the draw writer reports success but tools/analyze-ac7-motion-capture.py:16 rejects the row with json.loads and aborts analysis of the capture. Give the JSON float writer responsibility for nonfinite values, using null as write_float already does while preserving six significant digits for finite sampler LODs. [games/ac7/src/motion_capture_records/draws/before.rs:63](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/draws/before.rs#L63)
+- [x] **Altitude | Low | Keep Windows stream formatting out of JSON sampler records.** write_lod reproduces unquoted Windows stream tokens such as inf and nan(ind) for nonfinite sampler limits. When a sampled descriptor contains one, the draw writer reports success but tools/analyze-ac7-motion-capture.py:16 rejects the row with json.loads and aborts analysis of the capture. Give the JSON float writer responsibility for nonfinite values, using null as write_float already does while preserving six significant digits for finite sampler LODs. [games/ac7/src/motion_capture_records/draws/before.rs:63](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/motion_capture_records/draws/before.rs#L63)
 
 <a id="a04"></a>
 
