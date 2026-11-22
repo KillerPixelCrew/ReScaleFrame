@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Typed D3D11 calls for the SR owners and their native fixtures.
-use super::{DEPTH_SRV, DSV, Draw, Extent, Ptr, ROUND_TRIP, RTV, SRV, Texture, UAV, View};
+use super::{
+    DEPTH_SRV, DSV, Draw, Extent, Log, Platform, Ptr, ROUND_TRIP, RTV, SRV, Texture, UAV, View,
+};
 use rsf_shader_compiler::{Compiler, Request, compile};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{copy_nonoverlapping, null_mut};
 use std::slice;
+use std::sync::OnceLock;
 use windows::Win32::Graphics::Direct3D::{
     D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D11_SRV_DIMENSION_TEXTURE2D,
 };
@@ -14,6 +17,101 @@ use windows::core::{BOOL, IUnknown, Interface};
 
 fn owned<T: Interface>(value: Option<T>) -> Ptr {
     value.map_or(null_mut(), Interface::into_raw)
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Foreign {
+    default_view: unsafe extern "C" fn(Ptr, Ptr) -> Ptr,
+    guarded_log: unsafe extern "C" fn(Log, Ptr, *const c_char) -> bool,
+    save_state: unsafe extern "C" fn(Ptr) -> Ptr,
+    restore_state: unsafe extern "C" fn(Ptr, Ptr),
+}
+const _: () = assert!(size_of::<Foreign>() == 32);
+
+static FOREIGN: OnceLock<Foreign> = OnceLock::new();
+static PLATFORM: OnceLock<Platform> = OnceLock::new();
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_d3d11_register(foreign: &Foreign) -> &'static Platform {
+    let foreign = FOREIGN.get_or_init(|| *foreign);
+    PLATFORM.get_or_init(|| Platform {
+        retain: rsf_anomaly_sr_retain,
+        release: rsf_anomaly_sr_release,
+        as_texture: rsf_anomaly_sr_as_texture,
+        view_resource: rsf_anomaly_sr_view_resource,
+        texture_device: rsf_anomaly_sr_texture_device,
+        describe_texture: rsf_anomaly_sr_describe_texture,
+        describe_view: rsf_anomaly_sr_describe_view,
+        format_support: rsf_anomaly_sr_format_support,
+        texture: rsf_anomaly_sr_texture,
+        view: view_with_default_srv,
+        shader: compile_with_guarded_log,
+        constant_buffer: rsf_anomaly_sr_constant_buffer,
+        raster_state: rsf_anomaly_sr_raster_state,
+        blend_state: rsf_anomaly_sr_blend_state,
+        depth_state: rsf_anomaly_sr_depth_state,
+        save_state: foreign.save_state,
+        restore_state: foreign.restore_state,
+        update_constants: rsf_anomaly_sr_update_constants,
+        ps_constant: rsf_anomaly_sr_ps_constant,
+        targets: rsf_anomaly_sr_targets,
+        ps_resources: rsf_anomaly_sr_ps_resources,
+        clear_stencil: rsf_anomaly_sr_clear_stencil,
+        draw: rsf_anomaly_sr_draw,
+    })
+}
+
+unsafe extern "C" fn view_with_default_srv(
+    device: Ptr,
+    texture: Ptr,
+    kind: u32,
+    source: Option<&View>,
+) -> Ptr {
+    if kind == SRV && source.is_none() {
+        let foreign = FOREIGN.get().expect("registered D3D11 platform");
+        return unsafe { (foreign.default_view)(device, texture) };
+    }
+    unsafe { rsf_anomaly_sr_view(device, texture, kind, source) }
+}
+
+struct LogSink {
+    callback: Log,
+    user: Ptr,
+    guarded: unsafe extern "C" fn(Log, Ptr, *const c_char) -> bool,
+}
+
+unsafe extern "C" fn shader_log(sink: Ptr, text: *const c_char) -> bool {
+    let sink = unsafe { &*sink.cast::<LogSink>() };
+    unsafe { (sink.guarded)(sink.callback, sink.user, text) }
+}
+
+unsafe extern "C" fn compile_with_guarded_log(
+    device: Ptr,
+    kind: u32,
+    vertex: u32,
+    entry: *const c_char,
+    callback: Log,
+    user: Ptr,
+    out: &mut Ptr,
+) -> i32 {
+    let foreign = FOREIGN.get().expect("registered D3D11 platform");
+    let mut sink = LogSink {
+        callback,
+        user,
+        guarded: foreign.guarded_log,
+    };
+    unsafe {
+        rsf_anomaly_sr_compile_shader(
+            device,
+            kind,
+            vertex,
+            entry,
+            Some(shader_log),
+            (&raw mut sink).cast(),
+            out,
+        )
+    }
 }
 
 // Foreign log callbacks are invoked through the C++ exception boundary.

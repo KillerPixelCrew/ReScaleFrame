@@ -88,22 +88,24 @@ static_assert(sr::site_phase_combine == 1 && sr::site_phase_blur == 3 && sr::sit
     sr::site_rm_far == 5 && sr::site_set_p == 6 && sr::site_set_mip_lod_bias == 9 && sr::site_sun_cascades == 15);
 
 const FixtureCalls fixture_calls{
-    [](const wchar_t* ini, rsf_game_log_fn log, void* user) { return sr::configure(ini, true, log, user); },
+    [](const wchar_t* ini, rsf_game_log_fn log, void* user) { return rsf_anomaly_sr_configure(ini, true, log, user); },
     [](std::byte* image, uint32_t size, bool outside) {
-        if (!outside) return sr::install(image, size, *B);
+        if (!outside) return rsf_anomaly_sr_install(image, size, B->image_size(), B);
         auto build = *B;
         auto profile = *B->sr;
         build.sr = &profile;
         profile.sr_call_sites[0].rva = build.image_size();
-        return sr::install(image, size, build);
+        return rsf_anomaly_sr_install(image, size, build.image_size(), &build);
     },
-    sr::active,
-    sr::frame_end,
-    sr::report,
-    sr::quiesce,
+    rsf_anomaly_sr_stage_active,
+    rsf_anomaly_sr_stage_frame_end,
+    rsf_anomaly_sr_stage_report,
+    rsf_anomaly_sr_stage_quiesce,
     [](rsf_anomaly_sr_jitter_uv* out) {
-        *out = std::bit_cast<rsf_anomaly_sr_jitter_uv>(sr::current_jitter_uv());
-        return sr::current_jitter().applied;
+        rsf_anomaly_sr_stage_jitter_uv(out);
+        rsf_anomaly_sr_jitter_state state{};
+        rsf_anomaly_sr_stage_jitter(&state);
+        return state.applied;
     },
 };
 

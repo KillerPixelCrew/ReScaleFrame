@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Private ABI between the native SR world-window leaf (sr_swap.cpp, sr_stage.cpp) and the Rust swap owner
-// (sr_swap.rs). tools/generate-rust-bindings.py generates sr_swap_abi.rs from this header; sr_swap.h uses the same
-// structures. Engine addresses are opaque here: every engine read and write goes through the platform's guarded
+// Private ABI between the native SR world-window leaf (sr_stage.cpp) and the Rust swap owner (sr_swap.rs).
+// tools/generate-rust-bindings.py generates sr_swap_abi.rs from this header; sr_swap.h names the world slots of the
+// same structures. Engine addresses are opaque here: every engine read and write goes through the platform's guarded
 // copies, and every D3D or engine call through its callbacks.
 #include <stdbool.h>
 #include <stddef.h>

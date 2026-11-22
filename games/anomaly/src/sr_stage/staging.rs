@@ -22,7 +22,7 @@ const SUBRESOURCE: u32 = 0;
 
 fn d3d11(platform: &Platform) -> Option<&'static D3d11Platform> {
     let table = leaf!(platform, temporal_platform()).cast::<D3d11Platform>();
-    // This leaf returns the process-lifetime table from sr_d3d11.cpp.
+    // This leaf returns the process-lifetime table registered by sr_d3d11_platform.c.
     unsafe { table.as_ref() }
 }
 

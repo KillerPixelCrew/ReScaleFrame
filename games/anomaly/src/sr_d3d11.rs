@@ -44,7 +44,7 @@ impl Extent {
     }
 }
 
-// D3D11_TEXTURE2D_DESC, checked field by field in sr_d3d11.cpp.
+// D3D11_TEXTURE2D_DESC, checked field by field in sr_d3d11_platform.c.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(crate) struct Texture {

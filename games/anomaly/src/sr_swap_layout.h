@@ -14,17 +14,17 @@ consteval bool world_targets_match_profile() {
                 found = item.offset == world.offset && item.d3d_format == world.d3d_format;
         if (!found) return false;
     }
-    return std::string_view{sr_world_targets[slot_index(Slot::Generic0)].name} == "$user$generic0" &&
-        std::string_view{sr_world_targets[slot_index(Slot::GenericTemp)].name} == "$user$generic_temp" &&
-        std::string_view{sr_world_targets[slot_index(Slot::Position)].name} == "$user$position" &&
-        std::string_view{sr_world_targets[slot_index(Slot::Generic1)].name} == "$user$generic1" &&
-        sr_world_targets[slot_index(Slot::Generic0)].d3d_format == d3dfmt_a8r8g8b8 &&
-        sr_world_targets[slot_index(Slot::GenericTemp)].d3d_format == d3dfmt_a8r8g8b8;
+    return std::string_view{sr_world_targets[RSF_ANOMALY_SWAP_SLOT_GENERIC0].name} == "$user$generic0" &&
+        std::string_view{sr_world_targets[RSF_ANOMALY_SWAP_SLOT_GENERIC_TEMP].name} == "$user$generic_temp" &&
+        std::string_view{sr_world_targets[RSF_ANOMALY_SWAP_SLOT_POSITION].name} == "$user$position" &&
+        std::string_view{sr_world_targets[RSF_ANOMALY_SWAP_SLOT_GENERIC1].name} == "$user$generic1" &&
+        sr_world_targets[RSF_ANOMALY_SWAP_SLOT_GENERIC0].d3d_format == d3dfmt_a8r8g8b8 &&
+        sr_world_targets[RSF_ANOMALY_SWAP_SLOT_GENERIC_TEMP].d3d_format == d3dfmt_a8r8g8b8;
 }
-static_assert(sr_world_targets.size() == slot_count);
+static_assert(sr_world_targets.size() == RSF_ANOMALY_SWAP_SLOT_COUNT);
 static_assert(sr_world_absent_offsets.size() == RSF_ANOMALY_SWAP_ABSENT_COUNT);
 static_assert(world_targets_match_profile());
-static_assert(texture_desc_offset + texture2d_desc_size <= texture_srv_offset);
+static_assert(texture_desc_offset + RSF_ANOMALY_SWAP_DESC_SIZE <= texture_srv_offset);
 static_assert(crt_format_offset + sizeof(uint32_t) <= crt_order_offset);
 static_assert(ssao_viewport_height_offset == ssao_viewport_width_offset + sizeof(float));
 static_assert(sizeof(rsf_anomaly_swap_fields) == 120 && offsetof(rsf_anomaly_swap_fields, desc) == 64);
@@ -59,7 +59,7 @@ constexpr rsf_anomaly_swap_layout engine_layout() noexcept {
     layout.format_a16b16g16r16f = d3dfmt_a16b16g16r16f;
     layout.format_r16f = d3dfmt_r16f;
     layout.format_r32f = d3dfmt_r32f;
-    for (std::size_t i = 0; i < slot_count; ++i)
+    for (std::size_t i = 0; i < RSF_ANOMALY_SWAP_SLOT_COUNT; ++i)
         layout.world[i] = {sr_world_targets[i].offset, sr_world_targets[i].d3d_format, sr_world_targets[i].optional,
             sr_world_targets[i].half_allowed};
     for (std::size_t i = 0; i < sr_world_absent_offsets.size(); ++i) layout.absent[i] = sr_world_absent_offsets[i];

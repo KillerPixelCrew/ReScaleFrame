@@ -31,6 +31,40 @@ fn device() -> Device<'static> {
 }
 
 #[test]
+fn twin_error_names_follow_the_refusal_causes() {
+    let name = |cause: u8| {
+        unsafe { std::ffi::CStr::from_ptr(rsf_anomaly_sr_twin_error_name(cause)) }
+            .to_str()
+            .unwrap()
+            .to_owned()
+    };
+    let causes = [
+        Error::None,
+        Error::NotTexture,
+        Error::Shape,
+        Error::Format,
+        Error::Support,
+        Error::Create,
+        Error::Depth,
+    ];
+    let names = causes.map(|cause| name(cause as u8));
+    assert_eq!(
+        names,
+        [
+            "none",
+            "not_texture",
+            "shape",
+            "format",
+            "support",
+            "create",
+            "depth"
+        ]
+    );
+    assert_eq!(name(7), "unknown");
+    assert_eq!(name(u8::MAX), "unknown");
+}
+
+#[test]
 fn twin_uses_engine_view_templates_and_partial_failure_releases_every_reference() {
     let input = twin_input();
     let (twin, desc, format) = device().twin(&input).ok().unwrap();

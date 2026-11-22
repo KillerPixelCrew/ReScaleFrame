@@ -40,6 +40,25 @@ pub(crate) enum Error {
     Depth,
 }
 
+// The names the stage log uses for TwinBatchInfo::cause.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_twin_error_name(cause: u8) -> *const std::ffi::c_char {
+    const NAMES: [&std::ffi::CStr; 7] = [
+        c"none",
+        c"not_texture",
+        c"shape",
+        c"format",
+        c"support",
+        c"create",
+        c"depth",
+    ];
+    NAMES
+        .get(usize::from(cause))
+        .copied()
+        .unwrap_or(c"unknown")
+        .as_ptr()
+}
+
 #[repr(C)]
 pub(super) struct TwinInput {
     pub(super) texture: Ptr,

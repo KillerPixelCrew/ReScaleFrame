@@ -134,7 +134,7 @@ struct WorldTarget {
     bool optional;
     bool half_allowed;
 };
-inline constexpr uint32_t d3dfmt_r16f = 111, d3dfmt_r32f = 114;
+inline constexpr uint32_t d3dfmt_a8r8g8b8 = 21, d3dfmt_a16b16g16r16f = 113, d3dfmt_r16f = 111, d3dfmt_r32f = 114;
 inline constexpr std::array<WorldTarget, 9> sr_world_targets{{
     {"$user$generic0", 0x3a8, 21, false, false},       // S-B colour; FP16 twin
     {"$user$generic_temp", 0x3b8, 21, false, false},   // CopyResource partner of generic0; FP16 twin

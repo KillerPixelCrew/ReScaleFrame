@@ -1,11 +1,11 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
-// The private boundary between the Rust SR stage driver (sr_stage.rs) and its native leaves (sr_stage.cpp).
-// Rust owns the lifecycle, view admission, frame preparation and seam ordering, jitter and camera publication,
-// capture and burst bookkeeping, the retained configuration (INI path, vendor directories, live options) and status.
-// The leaves keep guarded engine reads, the stage hooks and trampolines, the SwapController and its D3D11 host, typed
-// INI and file calls, and the C++ TemporalDriver facade.
-// Every callback runs on the calling thread. The Rust stage lock serializes the native controller.
+/* The private boundary between the Rust SR stage driver (sr_stage.rs) and its native leaves (sr_stage.cpp).
+   Rust owns the lifecycle, view admission, frame preparation and seam ordering, jitter and camera publication,
+   capture and burst bookkeeping, the retained configuration (INI path, vendor directories, live options), status,
+   the swap owner and the temporal driver. The leaves keep guarded engine reads, the stage hooks and trampolines, the
+   guarded engine calls behind the swap owner and the D3D11 host's resource handle.
+   Every callback runs on the calling thread. The Rust stage lock serializes the native controller. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -29,9 +29,11 @@ typedef struct rsf_anomaly_position_platform {
     uintptr_t (*buffer)(void*, uintptr_t, uint32_t);
 } rsf_anomaly_position_platform;
 #ifdef __cplusplus
-static_assert(sizeof(rsf_anomaly_position_layout) == 72 && sizeof(rsf_anomaly_position_platform) == 32);
-extern "C" uint32_t rsf_anomaly_sr_correct_position_constant(
-    const rsf_anomaly_position_layout*, const rsf_anomaly_position_platform*, uintptr_t, float, float) noexcept;
+static_assert(sizeof(rsf_anomaly_position_layout) == 72 && sizeof(rsf_anomaly_position_platform) == 32,
+    "position correction layout");
+#else
+_Static_assert(sizeof(rsf_anomaly_position_layout) == 72 && sizeof(rsf_anomaly_position_platform) == 32,
+    "position correction layout");
 #endif
 
 // Adapter settings supplied to the temporal driver.
@@ -54,7 +56,7 @@ typedef struct rsf_anomaly_sr_stage_config {
     rsf_anomaly_sr_settings settings;
 } rsf_anomaly_sr_stage_config;
 
-// JitterState, JitterSample and JitterUv (sr_jitter.h).
+/* The published jitter (sr_stage.h), one Halton sample and its viewport-UV form. */
 typedef struct rsf_anomaly_sr_jitter_state {
     uint64_t frame;
     uint32_t sequence_index, phase_count;
@@ -99,6 +101,8 @@ typedef struct rsf_anomaly_sr_burst_verdict {
 #ifdef __cplusplus
 extern "C" {
 #endif
+uint32_t rsf_anomaly_sr_correct_position_constant(
+    const rsf_anomaly_position_layout*, const rsf_anomaly_position_platform*, uintptr_t, float, float);
 bool rsf_anomaly_sr_make_plan(uint32_t output_width, uint32_t output_height, float scale, rsf_anomaly_sr_plan*);
 float rsf_anomaly_sr_clamp_mip_offset(float);
 float rsf_anomaly_sr_mip_delta(uint32_t render_width, uint32_t output_width, float offset);
@@ -116,7 +120,7 @@ void rsf_anomaly_sr_burst_interrupted(rsf_anomaly_sr_burst_gate*);
 }
 #endif
 
-// FrameFacts (sr_swap.h). Rust fills admission, sizes, jitter and bias from the native reads.
+/* The swap owner's frame facts. Rust fills admission, sizes, jitter and bias from the native reads. */
 typedef rsf_anomaly_swap_facts rsf_anomaly_sr_frame_facts;
 
 typedef struct rsf_anomaly_sr_frame_reads {

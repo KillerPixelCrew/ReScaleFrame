@@ -14,16 +14,15 @@
 #include "native_observer.h"
 #include "motion_stage.h"
 #include "runtime_module.h"
-#include "sr_d3d11.h"
+#include "sr_d3d11_platform.h"
 #include "build_profile.h"
-#include "sr_jitter.h"
-#include "sr_pass.h"
 #include "sr_swap_layout.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/overlay_api.h>
 #include <rescaleframe/texture_dump.h>
 #include <windows.h>
+#include <d3d11.h>
 #include <algorithm>
 #include <bit>
 #include <cstdio>
@@ -41,8 +40,6 @@ bool rsf_anomaly_sr_persist_text(const char*, const char*) noexcept;
 void rsf_anomaly_sr_stage_register(const rsf_anomaly_sr_stage_platform*) noexcept;
 bool rsf_anomaly_sr_stage_configure_ini(const wchar_t*, bool, rsf_anomaly_sr_log, void*) noexcept;
 bool rsf_anomaly_sr_stage_install(void*, uint32_t, uint32_t, const void*) noexcept;
-bool rsf_anomaly_sr_stage_quiesce() noexcept;
-bool rsf_anomaly_sr_stage_active() noexcept;
 void rsf_anomaly_sr_stage_prepare(void*) noexcept;
 void rsf_anomaly_sr_stage_prepared() noexcept;
 void rsf_anomaly_sr_stage_seam(void*) noexcept;
@@ -51,10 +48,6 @@ bool rsf_anomaly_sr_stage_sun_begin() noexcept;
 void rsf_anomaly_sr_stage_sun_end(bool) noexcept;
 void rsf_anomaly_sr_stage_position_setup(void*) noexcept;
 void rsf_anomaly_sr_stage_rm_near() noexcept;
-void rsf_anomaly_sr_stage_frame_end() noexcept;
-void rsf_anomaly_sr_stage_report(rsf_anomaly_sr_log, void*) noexcept;
-void rsf_anomaly_sr_stage_jitter(rsf_anomaly_sr_jitter_state*) noexcept;
-void rsf_anomaly_sr_stage_jitter_uv(rsf_anomaly_sr_jitter_uv*) noexcept;
 }
 
 namespace rsf::anomaly::sr {
@@ -150,7 +143,7 @@ static_assert(static_cast<uint32_t>(temporal::ViewId::Scope) == 1 && dx10_msaa_b
 static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 608 &&
     offsetof(rsf_anomaly_sr_stage_platform, immediate_context) == 280 &&
     offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 328 && offsetof(rsf_anomaly_sr_stage_platform, draw_pass) == 336);
-static_assert(first_person_depth_limit == 0.02f && RSF_SR_ROUND_TRIP == 0 && RSF_SR_UPSCALE == 1 &&
+static_assert(RSF_SR_ROUND_TRIP == 0 && RSF_SR_UPSCALE == 1 &&
     RSF_SR_PREPARE == 2 && RSF_SR_REINSERT == 3);
 // ---- the D3D11/engine host behind the swap controller --------------------------------------------------------
 struct TwinLog {
@@ -174,27 +167,27 @@ struct Host {
     bool write(void* address, const void* input, std::size_t size) noexcept { return guarded_copy(address, input, size); }
     ID3D11Device* device() noexcept { ID3D11Device* value{}; return read_global(srp().hw_device_rva, value) ? value : nullptr; }
     ID3D11DeviceContext* context() noexcept { ID3D11DeviceContext* value{}; return read_global(srp().hw_context_rva, value) ? value : nullptr; }
-    MakeResult make_twins(const TwinRequest& request, TwinSet& out) noexcept {
+    uint32_t make_twins(const rsf_anomaly_swap_request& request, rsf_anomaly_swap_twins& out) noexcept {
         const auto log = twin_log ? *twin_log : TwinLog{};
         auto* d3d = device();
-        if (!d3d) { log.say("Anomaly SR stage: HW.pDevice is null; twins not created."); return MakeResult::Failed; }
+        if (!d3d) { log.say("Anomaly SR stage: HW.pDevice is null; twins not created."); return RSF_ANOMALY_SWAP_MAKE_FAILED; }
         rsf_sr_twin_batch_info info{};
-        const auto result = static_cast<MakeResult>(
-            rsf_anomaly_sr_stage_make_twins(&resources, &d3d11_platform(), d3d, &request, &out, &info, log.callback, log.user));
+        const auto result = rsf_anomaly_sr_stage_make_twins(&resources, rsf_anomaly_sr_d3d11_platform(), d3d, &request, &out,
+            &info, log.callback, log.user);
         if (info.pass_refused) {
             log.say(request.stage == 1 ? "Anomaly SR stage: round-trip shader could not be created."
                 : "Anomaly SR stage: upscale shader could not be created.");
             return result;
         }
         char text[260];
-        if (result != MakeResult::Created) {
-            const auto error = twin_error_name(static_cast<TwinError>(info.cause));
-            if (info.failed_index < slot_count) {
+        if (result != RSF_ANOMALY_SWAP_MAKE_CREATED) {
+            const auto error = rsf_anomaly_sr_twin_error_name(info.cause);
+            if (info.failed_index < RSF_ANOMALY_SWAP_SLOT_COUNT) {
                 const auto i = info.failed_index;
                 const auto& spec = request.spec[i];
                 std::snprintf(text, sizeof(text), "Anomaly SR stage: twin of %s refused (%s) at %ux%u; this frame stays stock.",
                     sr_world_targets[i].name, error, spec.width, spec.height);
-            } else if (info.failed_index == slot_count) {
+            } else if (info.failed_index == RSF_ANOMALY_SWAP_SLOT_COUNT) {
                 std::snprintf(text, sizeof(text), "Anomaly SR stage: depth twin refused (%s) at %ux%u.",
                     error, request.render_width, request.render_height);
             } else {
@@ -213,14 +206,14 @@ struct Host {
                 info.made, request.render_width, request.render_height, request.output_width, request.output_height,
                 double(info.bytes) / (1024.0 * 1024.0));
         log.say(text);
-        return MakeResult::Created;
+        return RSF_ANOMALY_SWAP_MAKE_CREATED;
     }
     void drop_twins() noexcept {
         // Reference counts after our own views are gone. The engine's surface_get() before its generic_temp copy
         // takes references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
         rsf_anomaly_sr_stage_retire_twins(resources, rsf_anomaly_sr_twin_refs);
     }
-    void set_viewport(uint32_t width, uint32_t height) noexcept { set_full_viewport(context(), width, height); }
+    void set_viewport(uint32_t width, uint32_t height) noexcept { rsf_anomaly_sr_set_full_viewport(context(), width, height); }
     bool upload_projection(const void* matrix) noexcept { return call_set_projection(matrix); }
     bool set_mip_bias(float value) noexcept { return call_set_mip_bias(value); }
     uint32_t correct_position_constant(void* constant, float x, float y) noexcept {
@@ -236,8 +229,8 @@ const rsf_anomaly_swap_platform swap_platform{
     .user = &host,
     .read = [](void*, const void* from, void* to, size_t size) { return host.read(from, to, size); },
     .write = [](void*, void* to, const void* from, size_t size) { return host.write(to, from, size); },
-    .make_twins = [](void*, const TwinRequest* request, TwinSet* twins) {
-        return static_cast<uint32_t>(host.make_twins(*request, *twins));
+    .make_twins = [](void*, const rsf_anomaly_swap_request* request, rsf_anomaly_swap_twins* twins) {
+        return host.make_twins(*request, *twins);
     },
     .drop_twins = [](void*) { host.drop_twins(); },
     // The production seam passes a scoped operation directly to the Rust owner.
@@ -433,7 +426,7 @@ const rsf_anomaly_sr_stage_platform platform{
         return rsf_anomaly_sr_run_pass(host.pass(), host.context(), kind, views) != 0;
     },
     .temporal_ready = [] { return rsf_anomaly_sr_temporal_ready(host.pass()) && host.depth_texture(); },
-    .temporal_platform = []() -> const void* { return &d3d11_platform(); },
+    .temporal_platform = []() -> const void* { return rsf_anomaly_sr_d3d11_platform(); },
     .motion_target = [](rsf_anomaly_sr_motion_target* out) {
         const auto target = motion::frame_target();
         *out = {target.texture, target.written, target.main, target.frame, target.width, target.height};
@@ -515,42 +508,26 @@ const rsf_anomaly_sr_stage_platform platform{
 };
 void bind_platform() noexcept { rsf_anomaly_sr_stage_register(&platform); }
 }
-
-JitterState current_jitter() noexcept {
-    rsf_anomaly_sr_jitter_state state{};
-    rsf_anomaly_sr_stage_jitter(&state);
-    return std::bit_cast<JitterState>(state);
-}
-JitterUv current_jitter_uv() noexcept {
-    rsf_anomaly_sr_jitter_uv uv{};
-    rsf_anomaly_sr_stage_jitter_uv(&uv);
-    return {uv.current_u, uv.current_v, uv.previous_u, uv.previous_v};
 }
 
-bool configure(const wchar_t* ini, bool apply, rsf_game_log_fn log, void* user) noexcept {
-    bind_platform();
+extern "C" bool rsf_anomaly_sr_configure(const wchar_t* ini, bool apply, rsf_game_log_fn log, void* user) noexcept {
+    rsf::anomaly::sr::bind_platform();
     return rsf_anomaly_sr_stage_configure_ini(ini, apply, log, user);
 }
-bool active() noexcept { return rsf_anomaly_sr_stage_active(); }
 
-bool install(std::byte* module, uint32_t image_size, const BuildProfile& selected) noexcept {
-    bind_platform();
-    return rsf_anomaly_sr_stage_install(module, image_size, selected.image_size(), &selected);
-}
-bool quiesce() noexcept { return rsf_anomaly_sr_stage_quiesce(); }
-void frame_end() noexcept { rsf_anomaly_sr_stage_frame_end(); }
-void report(void (*emit)(void*, const char*), void* user) noexcept { rsf_anomaly_sr_stage_report(emit, user); }
-
+extern "C" bool rsf_anomaly_sr_install(void* image, uint32_t image_size, uint32_t expected_size, const void* build) noexcept {
+    rsf::anomaly::sr::bind_platform();
+    return rsf_anomaly_sr_stage_install(image, image_size, expected_size, build);
 }
 
 // C entries for the bootstrap and observer leaves (stage_entries.h).
 extern "C" bool rsf_anomaly_sr_configure_native(const wchar_t* ini, bool apply, rsf_game_log_fn log) noexcept {
-    return rsf::anomaly::sr::configure(ini, apply, log, nullptr);
+    return rsf_anomaly_sr_configure(ini, apply, log, nullptr);
 }
 extern "C" bool rsf_anomaly_sr_install_native(void* image, size_t build) noexcept {
     if (build >= rsf::anomaly::build_profiles.size()) return false;
     const auto& selected = rsf::anomaly::build_profiles[build];
-    return rsf::anomaly::sr::install(static_cast<std::byte*>(image), selected.image_size(), selected);
+    return rsf_anomaly_sr_install(image, selected.image_size(), selected.image_size(), &selected);
 }
 extern "C" uint32_t rsf_anomaly_sr_depth_rva(size_t build) noexcept {
     return build < rsf::anomaly::build_profiles.size() ? rsf::anomaly::build_profiles[build].sr->hw_base_zb_rva : 0;

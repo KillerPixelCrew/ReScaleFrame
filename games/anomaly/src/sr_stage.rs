@@ -2109,7 +2109,7 @@ impl Stage {
             // The old targets are only valid for their old shape. Free them before allocating replacements.
             state.temporal_targets = None;
             let platform = leaf!(p, temporal_platform()).cast::<D3d11Platform>();
-            // This leaf returns the process-lifetime table from sr_d3d11.cpp.
+            // This leaf returns the process-lifetime table registered by sr_d3d11_platform.c.
             state.temporal_targets = unsafe { platform.as_ref() }.and_then(|platform| {
                 TemporalTargets::new(platform, device, render, output, format).ok()
             });

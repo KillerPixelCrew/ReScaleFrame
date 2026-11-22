@@ -263,7 +263,8 @@ const MotionPlatform platform{
     geometry::read_vertex_constants, geometry::write_vertex_constants,
     [](void* raw, MotionDrawState* out) {
         rsf_anomaly_motion_viewport(raw, &out->viewport);
-        const auto jitter = sr::current_jitter_uv();
+        rsf_anomaly_sr_jitter_uv jitter{};
+        rsf_anomaly_sr_stage_jitter_uv(&jitter);
         out->jitter[0] = jitter.current_u;
         out->jitter[1] = jitter.current_v;
         out->jitter[2] = jitter.previous_u;
