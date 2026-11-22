@@ -78,11 +78,7 @@ fn publication_refuses_before_retaining_the_table() {
         },
     };
     let incomplete = rsf_ac7_platform {
-        prepare: None,
-        start: None,
-        is_active: None,
-        quiesce: None,
-        stop: None,
+        renderer_leaves: None,
     };
     assert_eq!(
         unsafe { rsf_ac7_publish_api(RSF_GAME_ABI_VERSION, null_mut(), &incomplete) },

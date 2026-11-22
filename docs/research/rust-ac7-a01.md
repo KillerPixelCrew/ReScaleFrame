@@ -60,3 +60,58 @@ metadata, source contract comparisons and `git diff --check` passed.
 Targeted bindgen 0.72.1 regeneration and pinned formatting reproduced the
 AC7 platform, site and scene-color bindings and added the GameSDK module
 declaration. Build, lint, fixture execution and game acceptance remain pending.
+
+## Startup, lifecycle and fixture follow-up
+
+Source base `0251a81a` includes shared input classification and the A04/A05
+velocity changes. This pass traces the remaining startup and lifecycle paths
+for Steam build 9855922 using the executable fingerprint in
+[engine.json](../../games/ac7/engine.json) and the recorded
+[startup evidence](rust-ac7-carrier-startup.md#guarded-sites).
+
+- `loader/proxy/src/dinput8_proxy.c` calls the measure-only decryption wait in
+  `games/ac7/src/carrier.rs` through `games/ac7/include/rescaleframe/ac7_carrier.h`.
+  The wait requires two consecutive entropy samples below 7.0, sleeps 250 ms
+  after each incomplete sample and returns the measurement failure or the
+  original 180 s timeout result. The optional dump and preparation calls retain
+  their order.
+- The same carrier paths use the original 82-byte jitter relay template for
+  the gate at `0x112b1f3`, owned by `PreVisibilityFrameSetup` at `0x112afa0`.
+  The three exit displacements reach gate + 6, gate + 6 and the stock JNE
+  destination. The entry displacement uses gate + 5 for `E9 rel32 90`. A
+  displacement outside rel32 range refuses before writing the page, then the
+  carrier releases it and takes its existing all-views fallback. The guarded
+  patch windows and inline storage retain their original bytes and offsets.
+  Rust also computes the jitter sample count and the translucency scale and
+  ceiling, using the existing scale ratio in `games/ac7/src/scene_color.rs`.
+  C retains executable allocation, cache flush, console calls, live
+  size publication and immediate writes.
+- `games/ac7/src/lib.rs` and `games/ac7/src/renderer.rs` dispatch the
+  lifecycle operations directly using the guarded per-call snapshot from
+  `games/ac7/src/native_renderer.cpp`. Only `games/ac7/src/plugin.cpp` called
+  the former private wrappers in `games/ac7/include/rescaleframe/ac7_native_renderer.h`.
+  The replacement uses `games/ac7/src/ac7_platform.h` and
+  `games/ac7/src/ac7_sites.h`. Prepare preserves the cleanup-only handle and
+  maps a failed snapshot to the former prepare refusal. Other snapshot
+  failures follow the existing exception path. Pinning still uses an address
+  in the same native module. The detour bodies retain the pixel enqueue caller
+  address capture and the original C++ engine unwind scopes.
+  `games/ac7/src/tests.rs` preserves the GameSDK publication refusal case.
+- `tests/ac7_native_graph.cpp` passes C++ hook indices and production
+  protected compare/write callbacks to `tests/ac7_view_fixture.rs`.
+  The Rust fixture checks the native enum against the hook table and runs
+  temporal gate mismatch refusal, duplicate install, foreign-byte
+  retention and final restore. C++ still supplies the independent UE graph
+  objects, guard scopes, queued calls and D3D11 resources.
+  `tests/CMakeLists.txt` tracks the new fixture binding dependency.
+  `tests/ac7_session.rs` adds relay relocation, refusal, inline storage and
+  scale cases using writable test data.
+- `tools/generate-rust-bindings.py` generates `games/ac7/src/carrier_abi.rs`,
+  `games/ac7/src/platform_abi.rs` and `tests/ac7_graph_patch_abi.rs` from the
+  C declarations. The carrier table remains version 2 and 72 bytes.
+
+Source comparison verified the relay template and patch windows, native
+detours and caller checks, carrier exports and linkage, shared D3D11 host and
+the A02 view owner against the base. Rust 1.94.1 formatting, bindgen 0.72.1
+regeneration, locked offline Windows metadata and whitespace checks passed.
+Compile, link, fixture, device and game verification remain pending.

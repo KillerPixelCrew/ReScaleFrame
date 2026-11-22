@@ -238,7 +238,10 @@ unsafe extern "C" fn rsf_ac7_separate_translucency_draw(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_translucency_scale(render_percent: u32, target_percent: u32) -> f32 {
+pub(crate) extern "C" fn rsf_ac7_translucency_scale(
+    render_percent: u32,
+    target_percent: u32,
+) -> f32 {
     if target_percent == 0 {
         return 1.0;
     }

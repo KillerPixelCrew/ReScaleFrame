@@ -2680,7 +2680,7 @@ rsf_ac7_renderer_leaves renderer_leaves()
     leaves.pin = []() noexcept {
         HMODULE pinned = nullptr;
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-            reinterpret_cast<LPCWSTR>(&rsf_ac7_native_renderer_prepare), &pinned);
+            reinterpret_cast<LPCWSTR>(&rsf_ac7_get_renderer_leaves), &pinned);
     };
     leaves.drain = [](Renderer* self) noexcept { drain_retired(*self); };
     leaves.outstanding = [](Renderer* self) noexcept {
@@ -2700,32 +2700,9 @@ rsf_ac7_renderer_leaves renderer_leaves()
     return leaves;
 }
 }
-// The five renderer calls. Their transaction (argument checks, admission, MinHook order, pinned
-// partial activation, activation patches and retirement) is owned by renderer.rs.
-extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_options* options,
-    rsf_ac7_native_renderer** out) try
+extern "C" bool rsf_ac7_get_renderer_leaves(rsf_ac7_renderer_leaves* out) try
 {
-    const auto leaves = renderer_leaves();
-    return rsf_ac7_renderer_prepare(options, out, &leaves) ? 1 : 0;
+    *out = renderer_leaves();
+    return true;
 }
-catch (...) { return 0; }
-extern "C" int rsf_ac7_native_renderer_start(rsf_ac7_native_renderer* self)
-{
-    const auto leaves = renderer_leaves();
-    return rsf_ac7_renderer_start(self, &leaves) ? 1 : 0;
-}
-extern "C" int rsf_ac7_native_renderer_is_active(rsf_ac7_native_renderer* self)
-{
-    const auto leaves = renderer_leaves();
-    return rsf_ac7_renderer_is_active(self, &leaves) ? 1 : 0;
-}
-extern "C" void rsf_ac7_native_renderer_quiesce(rsf_ac7_native_renderer* self)
-{
-    const auto leaves = renderer_leaves();
-    rsf_ac7_renderer_quiesce(self, &leaves);
-}
-extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
-{
-    const auto leaves = renderer_leaves();
-    return rsf_ac7_renderer_stop(self, &leaves) ? 1 : 0;
-}
+catch (...) { return false; }

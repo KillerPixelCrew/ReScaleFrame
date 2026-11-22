@@ -518,8 +518,7 @@ impl Native for NativeLeaves {
 ///
 /// # Safety
 /// `options` and `out` are null or valid for the call; see `NativeLeaves::new` for `leaves`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_renderer_prepare(
+pub(crate) unsafe fn rsf_ac7_renderer_prepare(
     options: *const rsf_ac7_native_renderer_options,
     out: *mut Renderer,
     leaves: *const rsf_ac7_renderer_leaves,
@@ -550,8 +549,7 @@ unsafe extern "C" fn rsf_ac7_renderer_prepare(
 
 /// # Safety
 /// `renderer` is null or live; see `NativeLeaves::new` for `leaves`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_renderer_start(
+pub(crate) unsafe fn rsf_ac7_renderer_start(
     renderer: Renderer,
     leaves: *const rsf_ac7_renderer_leaves,
 ) -> bool {
@@ -562,8 +560,7 @@ unsafe extern "C" fn rsf_ac7_renderer_start(
 
 /// # Safety
 /// As `rsf_ac7_renderer_start`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_renderer_is_active(
+pub(crate) unsafe fn rsf_ac7_renderer_is_active(
     renderer: Renderer,
     leaves: *const rsf_ac7_renderer_leaves,
 ) -> bool {
@@ -572,8 +569,7 @@ unsafe extern "C" fn rsf_ac7_renderer_is_active(
 
 /// # Safety
 /// As `rsf_ac7_renderer_start`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_renderer_quiesce(
+pub(crate) unsafe fn rsf_ac7_renderer_quiesce(
     renderer: Renderer,
     leaves: *const rsf_ac7_renderer_leaves,
 ) {
@@ -584,8 +580,7 @@ unsafe extern "C" fn rsf_ac7_renderer_quiesce(
 
 /// # Safety
 /// As `rsf_ac7_renderer_start`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_renderer_stop(
+pub(crate) unsafe fn rsf_ac7_renderer_stop(
     renderer: Renderer,
     leaves: *const rsf_ac7_renderer_leaves,
 ) -> bool {

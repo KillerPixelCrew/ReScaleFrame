@@ -6,6 +6,21 @@ use scene_color_abi::rsf_frame_tap_target_draw;
 use std::ffi::{c_int, c_void};
 
 unsafe extern "C" {
+    fn rsf_ac7_carrier_emit_jitter_relay(
+        base: usize,
+        rva: u32,
+        page: *mut u8,
+        size: usize,
+        entry_rel32: *mut i32,
+    ) -> c_int;
+    fn rsf_ac7_carrier_jitter_samples(percent: f32) -> i32;
+    fn rsf_ac7_carrier_translucency_scale(
+        render: u32,
+        target: u32,
+        override_percent: u32,
+        depth_conformed: c_int,
+        depth_limited_request: *mut f32,
+    ) -> f32;
     fn rsf_ac7_translucency_scale(render_percent: u32, target_percent: u32) -> f32;
     fn rsf_ac7_separate_translucency_draw(draw: *const rsf_frame_tap_target_draw) -> c_int;
     fn rsf_preferences_read(path: *const u16, enabled: *mut u32, quality: *mut u32);
@@ -22,6 +37,72 @@ unsafe extern "system" {
         path: *const u16,
     ) -> c_int;
     fn DeleteFileW(path: *const u16) -> c_int;
+}
+
+fn check_startup() {
+    let mut page = [0_u8; 4096];
+    let base = page.as_ptr().addr() + 0x10000;
+    let rva = 0x112b1f3;
+    let gate = base + rva as usize;
+    let mut entry = 0;
+    assert_eq!(
+        unsafe {
+            rsf_ac7_carrier_emit_jitter_relay(
+                base,
+                rva + 1,
+                page.as_mut_ptr(),
+                page.len(),
+                &mut entry,
+            )
+        },
+        0
+    );
+    assert_eq!(entry, 0);
+    assert_eq!(page, [0; 4096]);
+    assert_eq!(
+        unsafe {
+            rsf_ac7_carrier_emit_jitter_relay(base, rva, page.as_mut_ptr(), page.len(), &mut entry)
+        },
+        1
+    );
+    assert_eq!(
+        (gate + 5).checked_add_signed(entry as isize),
+        Some(page.as_ptr().addr())
+    );
+    assert_eq!(&page[..2], &[0x0f, 0x84]);
+    assert_eq!(page[59], 0xe9);
+    assert_eq!(page[77], 0xe9);
+    let branch = |end: usize| {
+        let displacement = i32::from_le_bytes(page[end - 4..end].try_into().unwrap());
+        (page.as_ptr().addr() + end).checked_add_signed(displacement as isize)
+    };
+    assert_eq!(branch(6), Some(gate + 6));
+    assert_eq!(branch(64), Some(gate + 6));
+    assert_eq!(branch(82), Some(gate + 6 + 0x3dd));
+    assert_eq!(&page[82..88], &[0xcc; 6]);
+    assert_eq!(&page[88..116], &[0; 28]);
+    assert_eq!(page[116], 0xcc);
+    assert_eq!(unsafe { rsf_ac7_carrier_jitter_samples(100.0) }, 8);
+    assert_eq!(unsafe { rsf_ac7_carrier_jitter_samples(50.0) }, 32);
+    assert_eq!(unsafe { rsf_ac7_carrier_jitter_samples(0.0) }, 0);
+
+    let mut limited = 0.0;
+    let mut scale = |render, target, override_percent, depth| {
+        let value = unsafe {
+            rsf_ac7_carrier_translucency_scale(
+                render,
+                target,
+                override_percent,
+                depth,
+                &mut limited,
+            )
+        };
+        (value, limited)
+    };
+    assert_eq!(scale(50, 100, 0, 0), (1.0, 2.0));
+    assert_eq!(scale(50, 100, 0, 1), (2.0, 0.0));
+    assert_eq!(scale(50, 100, 10, 1), (0.25, 0.0));
+    assert_eq!(scale(50, 100, 500, 1), (4.0, 0.0));
 }
 
 fn check_geometry() {
@@ -114,6 +195,7 @@ fn check_preferences() {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_session_fixture() -> c_int {
+    check_startup();
     check_geometry();
     check_preferences();
     0

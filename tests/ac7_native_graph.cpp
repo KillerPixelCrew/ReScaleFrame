@@ -3,6 +3,9 @@
 #define RSF_AC7_GRAPH_TEST 1
 #include "../games/ac7/src/native_renderer.cpp"
 extern "C" bool rsf_ac7_graph_fixture_view(float* output, size_t size);
+extern "C" bool rsf_ac7_graph_fixture_velocity_patches(
+    unsigned char* image, size_t size, const rsf_ac7_code_leaves* leaves);
+extern "C" bool rsf_ac7_graph_fixture_hooks(const uint32_t* hooks, size_t count, uint32_t output_role);
 #include <rescaleframe/native_sr.h>
 #include <wrl/client.h>
 #include <cstdio>
@@ -289,35 +292,14 @@ int main() {
         check(shader_ref.refs==1 && previous_ref.refs==1,"queued transform/shader references retire exactly once");
         installed.store(nullptr);
     }
-    // A mismatched site must leave the entire group native; teardown restores only owned bytes.
-    auto* patch_image = static_cast<unsigned char*>(VirtualAlloc(nullptr, 0x1190000,
+    constexpr size_t patch_image_size = 0x1190000;
+    auto* patch_image = static_cast<unsigned char*>(VirtualAlloc(nullptr, patch_image_size,
         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     check(patch_image != nullptr, "allocate temporal velocity code fixture");
     if (!patch_image) return 1;
-    // The table and transaction are the Rust owner's (patches.rs); the writes are the native leaves.
-    rsf_ac7_code_patch velocity_patches[RSF_AC7_VELOCITY_PATCHES]{};
-    for (uint32_t i = 0; i < RSF_AC7_VELOCITY_PATCHES; ++i)
-        check(rsf_ac7_velocity_patch(i, &velocity_patches[i]), "temporal velocity patch table");
-    for (const auto& patch : velocity_patches)
-        std::memcpy(patch_image + patch.rva, patch.native, patch.size);
-    rsf_ac7_native_renderer patch_owner;
     const auto patch_leaves = code_leaves(nullptr, nullptr);
-    patch_image[velocity_patches[2].rva] = 0xcc;
-    check(!rsf_ac7_velocity_apply(&patch_owner.patches, patch_image, &patch_leaves), "reject mismatched history gate");
-    check(patch_owner.patches.velocity_applied == 0 && bytes_match(patch_image + velocity_patches[0].rva,
-        velocity_patches[0].native, 2), "preflight cannot leave earlier gates patched");
-    patch_image[velocity_patches[2].rva] = 0x77;
-    check(rsf_ac7_velocity_apply(&patch_owner.patches, patch_image, &patch_leaves), "install complete temporal velocity group");
-    check(rsf_ac7_velocity_apply(&patch_owner.patches, patch_image, &patch_leaves), "owned patch installation is idempotent");
-    for (const auto& patch : velocity_patches)
-        check(bytes_match(patch_image + patch.rva, patch.replacement, patch.size), "temporal gate bytes installed");
-    patch_image[velocity_patches[2].rva] = 0xcc;
-    check(!rsf_ac7_velocity_restore(&patch_owner.patches, &patch_leaves) && patch_owner.patches.velocity_applied == 3,
-        "teardown refuses foreign bytes and retains ownership");
-    patch_image[velocity_patches[2].rva] = 0xeb;
-    check(rsf_ac7_velocity_restore(&patch_owner.patches, &patch_leaves), "restore owned temporal gates");
-    for (const auto& patch : velocity_patches)
-        check(bytes_match(patch_image + patch.rva, patch.native, patch.size), "native gates restored");
+    check(rsf_ac7_graph_fixture_velocity_patches(patch_image, patch_image_size, &patch_leaves),
+        "temporal gate preflight, idempotence and guarded retirement");
     VirtualFree(patch_image, 0, MEM_RELEASE);
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
         &device, nullptr, &immediate))) return 77;
@@ -427,16 +409,14 @@ int main() {
     uint32_t restored_mode = 0; copy_memory(&restored_mode, owned_views.data()+0x13c0, 4);
     check(restored_mode == 1, "native AA graph choice restored after jitter producer");
     configured_output = 4; configured_width = configured_height = 2;
-    // The hook enum names table entries; the diagnostic gate covers only the evidence hooks.
-    check(rsf_ac7_hook_rva(hook_engine_tick) == 0x3a3f70 && rsf_ac7_hook_rva(hook_base_pass) == 0xebf050 &&
-        rsf_ac7_hook_rva(hook_target_init) == 0x1ab0200 &&
-        rsf_ac7_hook_role(hook_process_output) == RSF_AC7_ROLE_OUTPUT && rsf_ac7_hook_rva(hook_descriptor_output) == 0x10991e0 &&
-        rsf_ac7_hook_rva(hook_pixel_enqueue_d) == 0xf4c620 && rsf_ac7_hook_rva(hook_create_pixel_shader) == 0xe31e90,
-        "hook enum indexes the Rust site table by name");
-    const auto evidence = [](uint32_t hook) { return !rsf_ac7_hook_wanted(hook, false) && rsf_ac7_hook_wanted(hook, true); };
-    check(evidence(hook_rhi_pixel_uniform) && evidence(hook_pixel_enqueue_d) &&
-        !evidence(hook_pixel_view_uniform) && !evidence(hook_sky_projection),
-        "only the pixel bind evidence hooks wait for the diagnostic");
+    // Pass native enum values, so the fixture checks the C++ indices against Rust's table.
+    const uint32_t fixture_hooks[]{
+        hook_engine_tick, hook_base_pass, hook_target_init, hook_process_output,
+        hook_descriptor_output, hook_pixel_enqueue_d, hook_create_pixel_shader,
+        hook_rhi_pixel_uniform, hook_pixel_view_uniform, hook_sky_projection,
+    };
+    check(rsf_ac7_graph_fixture_hooks(fixture_hooks, sizeof(fixture_hooks) / sizeof(*fixture_hooks), RSF_AC7_ROLE_OUTPUT),
+        "hook table and diagnostic admission match the native enum");
     // Hook guards count per thread and sum for the stop path.
     check(rsf_ac7_guards_held(true) == 0, "no hook body is running");
     {

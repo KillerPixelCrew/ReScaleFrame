@@ -25,6 +25,12 @@ fixture and capture hook batch policy moved to Rust. Source checks passed.
 Native build, fixtures and game validation remain pending.
 [A01 scope and checks](research/rust-ac7-a01.md)
 
+The A01 follow-up moves the measure-only decryption wait, jitter relay encoding,
+startup scale calculations and typed renderer dispatch into Rust. The native
+graph fixture delegates its hook table and temporal patch cases to Rust and
+still drives the independent engine ABI and WARP path from C++.
+[A01 follow-up evidence](research/rust-ac7-a01.md#startup-lifecycle-and-fixture-follow-up)
+
 G04 moves D3D11 colour, motion, depth and fullscreen passes and six fixture bodies to Rust.
 Source comparison covers the public C signatures, exact shader bytes and fixture wiring. The
 standalone exposure probe uses Rust for Streamline, NGX hook lifecycle and raw dump sequencing.

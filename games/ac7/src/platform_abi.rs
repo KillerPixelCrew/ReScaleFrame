@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
+use crate::sites_abi::rsf_ac7_renderer_leaves;
 use rsf_game_sys::{rsf_game_cpu_event_fn, rsf_game_render_config_fn, rsf_game_render_pass};
 
 pub const RSF_AC7_DIAG_PIXEL_BINDINGS: u32 = 1;
@@ -66,38 +67,13 @@ const _: () = {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_ac7_platform {
-    pub prepare: ::core::option::Option<
-        unsafe extern "C" fn(
-            options: *const rsf_ac7_native_renderer_options,
-            renderer: *mut *mut rsf_ac7_native_renderer,
-            prepared: *mut bool,
-        ) -> bool,
-    >,
-    pub start: ::core::option::Option<
-        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer, started: *mut bool) -> bool,
-    >,
-    pub is_active: ::core::option::Option<
-        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer, active: *mut bool) -> bool,
-    >,
-    pub quiesce: ::core::option::Option<
-        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
-    >,
-    pub stop: ::core::option::Option<
-        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer, stopped: *mut bool) -> bool,
-    >,
+    pub renderer_leaves:
+        ::core::option::Option<unsafe extern "C" fn(out: *mut rsf_ac7_renderer_leaves) -> bool>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_ac7_platform"][::core::mem::size_of::<rsf_ac7_platform>() - 40usize];
+    ["Size of rsf_ac7_platform"][::core::mem::size_of::<rsf_ac7_platform>() - 8usize];
     ["Alignment of rsf_ac7_platform"][::core::mem::align_of::<rsf_ac7_platform>() - 8usize];
-    ["Offset of field: rsf_ac7_platform::prepare"]
-        [::core::mem::offset_of!(rsf_ac7_platform, prepare) - 0usize];
-    ["Offset of field: rsf_ac7_platform::start"]
-        [::core::mem::offset_of!(rsf_ac7_platform, start) - 8usize];
-    ["Offset of field: rsf_ac7_platform::is_active"]
-        [::core::mem::offset_of!(rsf_ac7_platform, is_active) - 16usize];
-    ["Offset of field: rsf_ac7_platform::quiesce"]
-        [::core::mem::offset_of!(rsf_ac7_platform, quiesce) - 24usize];
-    ["Offset of field: rsf_ac7_platform::stop"]
-        [::core::mem::offset_of!(rsf_ac7_platform, stop) - 32usize];
+    ["Offset of field: rsf_ac7_platform::renderer_leaves"]
+        [::core::mem::offset_of!(rsf_ac7_platform, renderer_leaves) - 0usize];
 };

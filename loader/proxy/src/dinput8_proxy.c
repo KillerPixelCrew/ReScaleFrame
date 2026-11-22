@@ -551,11 +551,10 @@ static struct {
     DWORD rva;
     /* The main-view stub, when the gate opens through it rather than for every view. */
     unsigned char* stub;
+    int32_t stub_rel32;
     volatile LONG* stub_width;
     volatile LONG* stub_height;
-    /* The main view the stub last let through, kept for inspection in a dump; how many views it
-       let through and turned away; and the width or height that last failed the test. */
-    void* volatile* stub_view;
+    /* Views let through and turned away, and the width or height that last failed the test. */
     volatile LONG* stub_allowed;
     volatile LONG* stub_denied;
     volatile LONG* stub_last_denied;
@@ -599,43 +598,11 @@ static struct {
 static int build_jitter_stub(DWORD rva)
 {
     unsigned char* base = (unsigned char*)GetModuleHandleW(NULL);
-    unsigned char* gate;
-    unsigned char* continue_at;
-    unsigned char* skip_at;
     unsigned char* stub = NULL;
     uintptr_t candidate;
-    int32_t displacement;
-    static const unsigned char body[82] = {
-        0x0F, 0x84, 0, 0, 0, 0,             /* 0  je continue            */
-        0x50,                               /* 6  push rax               */
-        0x8B, 0x05, 75, 0, 0, 0,            /* 7  mov eax, [width]       */
-        0x85, 0xC0,                         /* 13 test eax, eax          */
-        0x74, 28,                           /* 15 je allow               */
-        0x8B, 0x46, 0x78,                   /* 17 mov eax, [rsi+78]      */
-        0x2B, 0x46, 0x70,                   /* 20 sub eax, [rsi+70]      */
-        0x3B, 0x05, 59, 0, 0, 0,            /* 23 cmp eax, [width]       */
-        0x75, 33,                           /* 29 jne deny               */
-        0x8B, 0x46, 0x7C,                   /* 31 mov eax, [rsi+7c]      */
-        0x2B, 0x46, 0x74,                   /* 34 sub eax, [rsi+74]      */
-        0x3B, 0x05, 49, 0, 0, 0,            /* 37 cmp eax, [height]      */
-        0x75, 19,                           /* 43 jne deny               */
-        0x48, 0x89, 0x35, 44, 0, 0, 0,      /* 45 allow: mov [view], rsi */
-        0xFF, 0x05, 46, 0, 0, 0,            /* 52 inc dword [allowed]    */
-        0x58,                               /* 58 pop rax                */
-        0xE9, 0, 0, 0, 0,                   /* 59 jmp continue           */
-        0x89, 0x05, 42, 0, 0, 0,            /* 64 deny: mov [last], eax  */
-        0xFF, 0x05, 32, 0, 0, 0,            /* 70 inc dword [denied]     */
-        0x58,                               /* 76 pop rax                */
-        0xE9, 0, 0, 0, 0,                   /* 77 jmp skip               */
-    };
-
     if (!base) {
         return 0;
     }
-    gate = base + rva;
-    continue_at = gate + 6;
-    /* The stock jne's own target, 0x3DD past the instruction for the verified site. */
-    skip_at = continue_at + 0x3DD;
     for (candidate = ((uintptr_t)base & ~(uintptr_t)0xFFFF) - 0x10000;
          candidate > (uintptr_t)base - 0x70000000u; candidate -= 0x10000) {
         stub = (unsigned char*)VirtualAlloc((void*)candidate, 0x1000, MEM_RESERVE | MEM_COMMIT,
@@ -647,27 +614,17 @@ static int build_jitter_stub(DWORD rva)
     if (!stub) {
         return 0;
     }
-    memset(stub, 0xCC, 0x1000);
-    memcpy(stub, body, sizeof(body));
-    displacement = (int32_t)(continue_at - (stub + 6));
-    memcpy(stub + 2, &displacement, 4);
-    displacement = (int32_t)(continue_at - (stub + 64));
-    memcpy(stub + 60, &displacement, 4);
-    displacement = (int32_t)(skip_at - (stub + 82));
-    memcpy(stub + 78, &displacement, 4);
+    if (!rsf_ac7_carrier_emit_jitter_relay((uintptr_t)base, rva, stub, 0x1000,
+            &jitter_patch.stub_rel32)) {
+        VirtualFree(stub, 0, MEM_RELEASE);
+        return 0;
+    }
     jitter_patch.stub = stub;
-    jitter_patch.stub_width = (volatile LONG*)(void*)(stub + 88);
-    jitter_patch.stub_height = (volatile LONG*)(void*)(stub + 92);
-    jitter_patch.stub_view = (void* volatile*)(void*)(stub + 96);
-    jitter_patch.stub_allowed = (volatile LONG*)(void*)(stub + 104);
-    jitter_patch.stub_denied = (volatile LONG*)(void*)(stub + 108);
-    jitter_patch.stub_last_denied = (volatile LONG*)(void*)(stub + 112);
-    *jitter_patch.stub_width = 0;
-    *jitter_patch.stub_height = 0;
-    *jitter_patch.stub_view = NULL;
-    *jitter_patch.stub_allowed = 0;
-    *jitter_patch.stub_denied = 0;
-    *jitter_patch.stub_last_denied = 0;
+    jitter_patch.stub_width = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_WIDTH);
+    jitter_patch.stub_height = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_HEIGHT);
+    jitter_patch.stub_allowed = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_ALLOWED);
+    jitter_patch.stub_denied = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_DENIED);
+    jitter_patch.stub_last_denied = (volatile LONG*)(void*)(stub + RSF_AC7_JITTER_RELAY_LAST_DENIED);
     FlushInstructionCache(GetCurrentProcess(), stub, 0x1000);
     return 1;
 }
@@ -721,13 +678,7 @@ static void set_jitter_enabled(int enabled)
     if (jitter_patch.enabled == (enabled != 0)) {
         return;
     }
-    int32_t displacement;
-    const int32_t* stub_rel32 = NULL;
-    if (jitter_patch.stub) {
-        unsigned char* gate_address = (unsigned char*)GetModuleHandleW(NULL) + jitter_patch.rva;
-        displacement = (int32_t)(jitter_patch.stub - (gate_address + 5));
-        stub_rel32 = &displacement;
-    }
+    const int32_t* stub_rel32 = jitter_patch.stub ? &jitter_patch.stub_rel32 : NULL;
     uint8_t previous[6] = {0};
 
     const rsf_dump_result result =
@@ -970,6 +921,11 @@ static const rsf_ac7_carrier_leaves carrier_leaves = {
     .install_motion_capture = rsf_ac7_motion_capture_install,
 };
 
+static int32_t measure_code_entropy(double* entropy)
+{
+    return rsf_measure_module_code(NULL, entropy);
+}
+
 static DWORD WINAPI dump_worker(LPVOID parameter)
 {
     (void)parameter;
@@ -1027,21 +983,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     if (dump_module) {
         result = rsf_dump_when_decrypted(&options, 250, 180000, 2, &report);
     } else {
-        /* The same decryption readiness check without writing the licensed executable to disk. */
-        const ULONGLONG deadline = GetTickCount64() + 180000;
-        unsigned stable = 0;
-        do {
-            result = rsf_measure_module_code(NULL, &entropy);
-            if (result != RSF_DUMP_OK) {
-                break;
-            }
-            stable = entropy < 7.0 ? stable + 1 : 0;
-            if (stable >= 2) {
-                break;
-            }
-            result = RSF_DUMP_ERROR_STILL_ENCRYPTED;
-            Sleep(250);
-        } while (GetTickCount64() < deadline);
+        result = rsf_ac7_carrier_wait_decrypted(measure_code_entropy, RSF_DUMP_ERROR_STILL_ENCRYPTED);
     }
     if (result != RSF_DUMP_OK) {
         note("startup: executable did not become ready, result %d; DLSS remains inactive", (int)result);
@@ -1098,14 +1040,8 @@ static void set_jitter_sequence_length(float percentage, uint32_t value_offset)
 {
     if (rsf_bridge_native_owned()) return;
     static int32_t previous_samples = 8;
-    if (percentage <= 0.0f) {
-        return;
-    }
-    const float ratio = 100.0f / percentage;
-    int32_t samples = (int32_t)(8.0f * ratio * ratio + 0.5f);
-    if (samples < 8) {
-        samples = 8;
-    }
+    const int32_t samples = rsf_ac7_carrier_jitter_samples(percentage);
+    if (samples == 0) return;
 
     rsf_dump_result result =
         rsf_console_set_int("r.TemporalAASamples", previous_samples, samples, value_offset,
@@ -1324,43 +1260,17 @@ static void set_separate_translucency_scale(void)
 
     /* Before a preset has actually changed the game, its scene is still native. */
     render_percent = requested_scale_percent ? requested_scale_percent : 100;
-    if (render_percent == 0) {
-        render_percent = 100;
-    }
     target = read_number("RSF_TRANSLUCENCY_TARGET", 100);
 
-    if (override_percent != 0) {
-        scale.value = (float)override_percent / 100.0f;
-    } else {
-        scale.value = rsf_ac7_translucency_scale(render_percent, target);
-    }
-    /* The engine clamps its own console value to 100 and this patch is downstream of that clamp,
-       so the bound has to be here. */
-    if (scale.value < 0.25f) {
-        scale.value = 0.25f;
-    }
-    /* Above the scene's resolution only once the engine can build a depth to match.
-
-       Stock 4.18 borrows the scene's depth for any scale at or above 1.0, which pairs a large
-       colour target with a small depth. Game-tested on 7 September: at 2.0 the briefing relief
-       disappeared, and the log said why in one line, `last candidate 2048x1152 ... depth view ...
-         its texture 1024x576`. The depth gates in rsf-ac7 narrow that borrow to exactly 1.0,
-       after which the engine allocates, fills, view-transforms and resolves the layer's own depth
-       at whatever size it is.
-
-       So the ceiling follows those patches rather than a setting. If a game update moves them they
-       refuse, this stays at the scene's resolution, and the briefing is soft rather than missing. */
-    if (scale.value > 1.0f && !translucency_depth_conformed) {
-        if (target != 0 && !ceiling_reported) {
-            ceiling_reported = 1;
-            note("separate translucency asked for %d%% of the scene, but the depth patches did not "
-                 "apply, so the engine has no depth to bind at that size. Held at 100%%",
-                 (int)(scale.value * 100.0f));
-        }
-        scale.value = 1.0f;
-    }
-    if (scale.value > 4.0f) {
-        scale.value = 4.0f;
+    /* Above scene resolution only when the patched engine can build matching depth. */
+    float depth_limited_request = 0.0f;
+    scale.value = rsf_ac7_carrier_translucency_scale(render_percent, target, override_percent,
+        translucency_depth_conformed, &depth_limited_request);
+    if (depth_limited_request != 0.0f && target != 0 && !ceiling_reported) {
+        ceiling_reported = 1;
+        note("separate translucency asked for %d%% of the scene, but the depth patches did not "
+             "apply, so the engine has no depth to bind at that size. Held at 100%%",
+             (int)(depth_limited_request * 100.0f));
     }
 
     if (*translucency_scale_slot == scale.bits) {

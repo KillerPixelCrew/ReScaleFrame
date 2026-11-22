@@ -14,15 +14,15 @@
 //! and reports. velocity_pass.cpp lends the D3D11 resource allocation, draw and merge leaves.
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
-//! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
-//! leaves, module pinning, detours, engine relays, the TrueSky relay handlers, relay memory,
+//! the renderer object and its fields, MinHook leaves, module pinning, detours, engine relays,
+//! the TrueSky relay handlers, relay memory,
 //! pass leases, SEH reads and protected code writes. Rust owns TrueSky's D3D11 kernels and
 //! composite depth dispatch, scene colour references and the scoped primary-view facts. plugin.cpp
-//! lends its entry points through the
-//! exception-guarded leaf table in ac7_platform.h and keeps the exported
+//! publishes the guarded native leaf snapshot in ac7_platform.h and keeps the exported
 //! rsf_get_game_plugin_api. The combined carriers call `carrier.rs` for their executable and
 //! window identifiers, GameSDK probe and decrypted patch policy through ac7_carrier.h.
 mod carrier;
+mod carrier_abi;
 mod cloud_depth;
 mod cloud_depth_abi;
 #[cfg(windows)]
@@ -93,6 +93,7 @@ use rsf_game_sys::{
     rsf_game_plugin_api, rsf_game_prepare_args, rsf_game_probe, rsf_game_renderer_status,
     rsf_game_start_args, rsf_result,
 };
+use sites_abi::rsf_ac7_renderer_leaves;
 use std::ffi::{CStr, c_char};
 use std::ptr::null_mut;
 use std::sync::OnceLock;
@@ -118,38 +119,22 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 const STATUS: &CStr =
     c"Native SR graph and view producer built and synthetic-tested. Game validation is pending.";
 
-/// A native leaf threw; the lifecycle entry reports RSF_ERROR_NOT_READY as the C++ catch did.
+/// Native snapshot acquisition threw.
 pub(crate) struct Threw;
 
-/// The validated native leaf table. Every entry is present.
-type PrepareFn =
-    unsafe extern "C" fn(*const rsf_ac7_native_renderer_options, *mut Renderer, *mut bool) -> bool;
-type QueryFn = unsafe extern "C" fn(Renderer, *mut bool) -> bool;
-
-struct Ops {
-    prepare: PrepareFn,
-    start: QueryFn,
-    is_active: QueryFn,
-    quiesce: unsafe extern "C" fn(Renderer) -> bool,
-    stop: QueryFn,
-}
+struct Ops(unsafe extern "C" fn(*mut rsf_ac7_renderer_leaves) -> bool);
 
 static OPS: OnceLock<Ops> = OnceLock::new();
 static LIFECYCLE: Lifecycle = Lifecycle::new();
 
-fn completed(returned: bool) -> Result<(), Threw> {
-    if returned { Ok(()) } else { Err(Threw) }
-}
-
 impl Ops {
-    fn new(table: &rsf_ac7_platform) -> Option<Self> {
-        Some(Self {
-            prepare: table.prepare?,
-            start: table.start?,
-            is_active: table.is_active?,
-            quiesce: table.quiesce?,
-            stop: table.stop?,
-        })
+    fn snapshot(&self) -> Result<rsf_ac7_renderer_leaves, Threw> {
+        let mut leaves = std::mem::MaybeUninit::uninit();
+        if unsafe { (self.0)(leaves.as_mut_ptr()) } {
+            Ok(unsafe { leaves.assume_init() })
+        } else {
+            Err(Threw)
+        }
     }
 }
 
@@ -158,37 +143,35 @@ impl Leaves for Ops {
         &self,
         options: &rsf_ac7_native_renderer_options,
     ) -> Result<(Renderer, bool), Threw> {
-        let leaf = self.prepare;
         let mut created = null_mut();
-        let mut prepared = false;
-        completed(unsafe { leaf(options, &mut created, &mut prepared) })?;
+        // The former native prepare entry caught acquisition failure and returned refusal.
+        let Ok(leaves) = self.snapshot() else {
+            return Ok((created, false));
+        };
+        let prepared =
+            unsafe { renderer::rsf_ac7_renderer_prepare(options, &mut created, &leaves) };
         Ok((created, prepared))
     }
 
     fn start(&self, renderer: Renderer) -> Result<bool, Threw> {
-        let leaf = self.start;
-        let mut started = false;
-        completed(unsafe { leaf(renderer, &mut started) })?;
-        Ok(started)
+        let leaves = self.snapshot()?;
+        Ok(unsafe { renderer::rsf_ac7_renderer_start(renderer, &leaves) })
     }
 
     fn is_active(&self, renderer: Renderer) -> Result<bool, Threw> {
-        let leaf = self.is_active;
-        let mut active = false;
-        completed(unsafe { leaf(renderer, &mut active) })?;
-        Ok(active)
+        let leaves = self.snapshot()?;
+        Ok(unsafe { renderer::rsf_ac7_renderer_is_active(renderer, &leaves) })
     }
 
     fn quiesce(&self, renderer: Renderer) -> Result<(), Threw> {
-        let leaf = self.quiesce;
-        completed(unsafe { leaf(renderer) })
+        let leaves = self.snapshot()?;
+        unsafe { renderer::rsf_ac7_renderer_quiesce(renderer, &leaves) };
+        Ok(())
     }
 
     fn stop(&self, renderer: Renderer) -> Result<bool, Threw> {
-        let leaf = self.stop;
-        let mut stopped = false;
-        completed(unsafe { leaf(renderer, &mut stopped) })?;
-        Ok(stopped)
+        let leaves = self.snapshot()?;
+        Ok(unsafe { renderer::rsf_ac7_renderer_stop(renderer, &leaves) })
     }
 }
 
@@ -312,10 +295,10 @@ unsafe extern "C" fn rsf_ac7_publish_api(
     let Some(table) = (unsafe { platform.as_ref() }) else {
         return RSF_ERROR_NOT_READY;
     };
-    let Some(ops) = Ops::new(table) else {
+    let Some(get_leaves) = table.renderer_leaves else {
         return RSF_ERROR_NOT_READY;
     };
-    let _ = OPS.get_or_init(|| ops);
+    let _ = OPS.get_or_init(|| Ops(get_leaves));
     let api = rsf_game_plugin_api {
         struct_size: size_of::<rsf_game_plugin_api>() as u32,
         abi_version: RSF_GAME_ABI_VERSION,

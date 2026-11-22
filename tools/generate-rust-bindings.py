@@ -287,11 +287,17 @@ generate("games/fallout4/src/cpu_abi.rs", "games/fallout4/src/cpu_events_platfor
          ["-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--with-derive-custom-struct", "rsf_fallout4_cpu_identity=Debug,PartialEq,Eq"])
+generate("games/ac7/src/carrier_abi.rs", "games/ac7/include/rescaleframe/ac7_carrier.h",
+         "rsf_ac7_carrier_(leaves|patch_fn)", "RSF_AC7_(CARRIER_.*|JITTER_RELAY_.*)",
+         ["-Isdk/game/include"],
+         ["--blocklist-type", "rsf_game_log_fn",
+          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"])
 generate("games/ac7/src/platform_abi.rs", "games/ac7/src/ac7_platform.h",
          "rsf_ac7_(platform|native_renderer(_options)?|renderer_log_fn|render_scope(_fn)?)", "RSF_AC7_DIAG_.*",
          ["-Isdk/game/include", "-Igames/ac7/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]", "--raw-line",
           "use rsf_game_sys::{rsf_game_cpu_event_fn, rsf_game_render_config_fn, rsf_game_render_pass};",
+          "--raw-line", "use crate::sites_abi::rsf_ac7_renderer_leaves;",
           "--with-derive-custom-struct", "rsf_ac7_native_renderer_options=Copy,Clone"])
 generate("games/ac7/src/sites_abi.rs", "games/ac7/src/ac7_sites.h",
          "rsf_ac7_(code_(leaves|patch|patches)|renderer_leaves|call_relay|truesky_(patches|leaves))",
@@ -306,6 +312,12 @@ generate("games/ac7/src/scope_abi.rs", "games/ac7/src/ac7_scope_owner.h",
          ["-Isdk/game/include", "-Igames/ac7/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};"])
+generate("tests/ac7_graph_patch_abi.rs", "games/ac7/src/ac7_sites.h",
+         "rsf_ac7_(code_(leaves|patch|patches)|renderer_log_fn)",
+         "RSF_AC7_(SITE_BYTES|VELOCITY_PATCHES)",
+         ["-Isdk/game/include", "-Igames/ac7/include"],
+         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
+          "--allowlist-function", "rsf_ac7_velocity_(patch|apply|restore)"])
 generate("games/ac7/src/view_abi.rs", "games/ac7/include/rescaleframe/ac7_view.h",
          "rsf_ac7_view(_result)?", "RSF_AC7_VIEW_.*", [],
          ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])

@@ -38,6 +38,8 @@ typedef struct rsf_ac7_carrier_leaves {
 /* Runs patches, native preparation and optional capture install, then publishes worker readiness.
    Called once by the worker after the decryption wait succeeds. */
 void rsf_ac7_carrier_install_decrypted(const rsf_ac7_carrier_leaves* leaves);
+/* Measure-only decryption gate. The caller supplies the native measure and timeout results. */
+int32_t rsf_ac7_carrier_wait_decrypted(int32_t (*measure)(double*), int32_t still_encrypted);
 /* Used by the Present callback to gate automatic SR startup. */
 unsigned long rsf_ac7_carrier_startup_ready(void);
 
@@ -61,6 +63,22 @@ void rsf_ac7_carrier_override_start_extent(uint32_t (*read_number)(const char* n
    previous must have room for six bytes. Returns the native patch result. */
 int32_t rsf_ac7_carrier_patch_jitter(rsf_ac7_carrier_patch_fn patch, uint32_t rva, int enabled,
     const int32_t* stub_rel32, uint8_t previous[6]);
+
+/* Emit the verified main-view relay into the caller's executable page and return the entry
+   displacement. A refusal leaves both outputs alone. The caller owns the page and cache flush. */
+#define RSF_AC7_JITTER_RELAY_WIDTH 88u
+#define RSF_AC7_JITTER_RELAY_HEIGHT 92u
+#define RSF_AC7_JITTER_RELAY_VIEW 96u
+#define RSF_AC7_JITTER_RELAY_ALLOWED 104u
+#define RSF_AC7_JITTER_RELAY_DENIED 108u
+#define RSF_AC7_JITTER_RELAY_LAST_DENIED 112u
+int rsf_ac7_carrier_emit_jitter_relay(uintptr_t base, uint32_t rva,
+    uint8_t* page, size_t size, int32_t* entry_rel32);
+
+int32_t rsf_ac7_carrier_jitter_samples(float percentage);
+/* Reports the requested scale before applying the 100% ceiling for missing depth conformance. */
+float rsf_ac7_carrier_translucency_scale(uint32_t render_percent, uint32_t target_percent,
+    uint32_t override_percent, int depth_conformed, float* depth_limited_request);
 
 #ifdef __cplusplus
 }

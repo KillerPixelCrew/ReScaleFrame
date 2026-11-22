@@ -12,19 +12,11 @@
 extern "C" {
 #endif
 
-// Exception guards around the native renderer entry points in native_renderer.cpp. A leaf
-// returns false only when its native call threw; the Rust lifecycle then answers
-// RSF_ERROR_NOT_READY as the former C++ catch did. Results go to the out parameters, which are
-// written only when the leaf returns true. The table lives for the process.
+// Acquires a renderer leaf snapshot for one lifecycle operation. A native exception returns
+// false and leaves the output untouched. The callbacks in a successful snapshot cannot unwind.
+struct rsf_ac7_renderer_leaves;
 typedef struct rsf_ac7_platform {
-    // rsf_ac7_native_renderer_prepare. *renderer receives the native output even when *prepared
-    // is false: a failed partial activation can return a pinned handle for retirement only.
-    bool (*prepare)(const rsf_ac7_native_renderer_options* options,
-        rsf_ac7_native_renderer** renderer, bool* prepared);
-    bool (*start)(rsf_ac7_native_renderer* renderer, bool* started);
-    bool (*is_active)(rsf_ac7_native_renderer* renderer, bool* active);
-    bool (*quiesce)(rsf_ac7_native_renderer* renderer);
-    bool (*stop)(rsf_ac7_native_renderer* renderer, bool* stopped);
+    bool (*renderer_leaves)(struct rsf_ac7_renderer_leaves* out);
 } rsf_ac7_platform;
 
 // Rust owner: validates `requested_abi` and `api`, retains `platform` and fills the GameSDK table.

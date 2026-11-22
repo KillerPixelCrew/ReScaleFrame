@@ -196,16 +196,8 @@ void rsf_ac7_truesky_refuse_full_grid(rsf_ac7_truesky_patches* patches,
 // Retirement in the former order. False, logged, keeps everything not yet restored for a retry.
 bool rsf_ac7_truesky_restore(rsf_ac7_truesky_patches* patches, const rsf_ac7_truesky_leaves* leaves);
 
-// The five renderer calls of ac7_native_renderer.h with their former results. Prepare writes
-// `*out` once its arguments are valid and no renderer is installed: the renderer, a pinned
-// inactive renderer after a partial activation that overlapped a hook body (false), or null.
-bool rsf_ac7_renderer_prepare(const rsf_ac7_native_renderer_options* options,
-    rsf_ac7_native_renderer** out, const rsf_ac7_renderer_leaves* leaves);
-bool rsf_ac7_renderer_start(rsf_ac7_native_renderer* renderer, const rsf_ac7_renderer_leaves* leaves);
-bool rsf_ac7_renderer_is_active(rsf_ac7_native_renderer* renderer, const rsf_ac7_renderer_leaves* leaves);
-void rsf_ac7_renderer_quiesce(rsf_ac7_native_renderer* renderer, const rsf_ac7_renderer_leaves* leaves);
-// True when the renderer is retired and deleted (or null). False keeps it for a retry.
-bool rsf_ac7_renderer_stop(rsf_ac7_native_renderer* renderer, const rsf_ac7_renderer_leaves* leaves);
+// Creates a per-call snapshot, including the loaded image base. False means acquisition threw.
+bool rsf_ac7_get_renderer_leaves(rsf_ac7_renderer_leaves* out);
 
 #ifdef __cplusplus
 }
