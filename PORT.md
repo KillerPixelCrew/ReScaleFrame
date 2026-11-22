@@ -597,31 +597,31 @@ Port D3D11 and D3D12 observer registration, device identity and callback retirem
 
 **Port files (12)**
 
-- [ ] [runtime/graphics/include/rescaleframe/d3d11_observer.h](runtime/graphics/include/rescaleframe/d3d11_observer.h)
-- [ ] [runtime/graphics/include/rescaleframe/d3d12_observer.h](runtime/graphics/include/rescaleframe/d3d12_observer.h)
+- [x] [runtime/graphics/include/rescaleframe/d3d11_observer.h](runtime/graphics/include/rescaleframe/d3d11_observer.h)
+- [x] [runtime/graphics/include/rescaleframe/d3d12_observer.h](runtime/graphics/include/rescaleframe/d3d12_observer.h)
 - [ ] [runtime/graphics/src/d3d11_observer.cpp](runtime/graphics/src/d3d11_observer.cpp)
-- [ ] [runtime/graphics/src/d3d11_observer_callbacks.h](runtime/graphics/src/d3d11_observer_callbacks.h)
-- [ ] [runtime/graphics/src/d3d11_observer_capture.h](runtime/graphics/src/d3d11_observer_capture.h)
-- [ ] [runtime/graphics/src/d3d11_observer_hooks.h](runtime/graphics/src/d3d11_observer_hooks.h)
-- [ ] [runtime/graphics/src/d3d11_observer_module.h](runtime/graphics/src/d3d11_observer_module.h)
-- [ ] [runtime/graphics/src/d3d11_observer_present.h](runtime/graphics/src/d3d11_observer_present.h)
+- [x] [runtime/graphics/src/d3d11_observer_callbacks.h](runtime/graphics/src/d3d11_observer_callbacks.h)
+- [x] [runtime/graphics/src/d3d11_observer_capture.h](runtime/graphics/src/d3d11_observer_capture.h)
+- [x] [runtime/graphics/src/d3d11_observer_hooks.h](runtime/graphics/src/d3d11_observer_hooks.h)
+- [x] [runtime/graphics/src/d3d11_observer_module.h](runtime/graphics/src/d3d11_observer_module.h)
+- [x] [runtime/graphics/src/d3d11_observer_present.h](runtime/graphics/src/d3d11_observer_present.h)
 - [ ] [runtime/graphics/src/d3d12_observer.cpp](runtime/graphics/src/d3d12_observer.cpp)
-- [ ] [runtime/graphics/src/d3d12_observer_platform.h](runtime/graphics/src/d3d12_observer_platform.h)
-- [ ] [runtime/graphics/src/device_owner.h](runtime/graphics/src/device_owner.h)
-- [ ] [runtime/graphics/src/vtable_patch.h](runtime/graphics/src/vtable_patch.h)
+- [x] [runtime/graphics/src/d3d12_observer_platform.h](runtime/graphics/src/d3d12_observer_platform.h)
+- [x] [runtime/graphics/src/device_owner.h](runtime/graphics/src/device_owner.h)
+- [x] [runtime/graphics/src/vtable_patch.h](runtime/graphics/src/vtable_patch.h)
 
 **Fixtures (2)**
 
-- [ ] [tests/d3d11_observer.cpp](tests/d3d11_observer.cpp)
-- [ ] [tests/d3d12_observer.cpp](tests/d3d12_observer.cpp)
+- [x] [tests/d3d11_observer.cpp](tests/d3d11_observer.cpp)
+- [x] [tests/d3d12_observer.cpp](tests/d3d12_observer.cpp)
 
 **Rust review findings (3)**
 
-- [ ] **Altitude | Medium | Associate captured resources with the selected presenting device.** adopt_device replaces the retained device and clears its immediate context but leaves textures and constant buffers from earlier devices in one bounded inventory. record_texture counts those entries toward capacity, and record_buffer replaces by byte size alone. A helper device can fill the texture slots before the real Present or overwrite a constant buffer later, so dump::write tries foreign resources and misses the actual device's inputs. Partition or filter inventory by COM device identity and transfer only matching candidates when Present selects the owner. [runtime/orchestrator/src/d3d11_observer_capture.rs:203](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/d3d11_observer_capture.rs#L203)
+- [x] **Altitude | Medium | Associate captured resources with the selected presenting device.** adopt_device replaces the retained device and clears its immediate context but leaves textures and constant buffers from earlier devices in one bounded inventory. record_texture counts those entries toward capacity, and record_buffer replaces by byte size alone. A helper device can fill the texture slots before the real Present or overwrite a constant buffer later, so dump::write tries foreign resources and misses the actual device's inputs. Partition or filter inventory by COM device identity and transfer only matching candidates when Present selects the owner. [runtime/orchestrator/src/d3d11_observer_capture.rs:203](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/d3d11_observer_capture.rs#L203)
 
-- [ ] **Altitude | Medium | Retain or verify the storage behind D3D11 probe vtables.** probe returns raw vtable addresses after releasing the temporary device, chain and chain1 interfaces. d3d11_observer.cpp:838 reads those tables to form patch slots, and Hooks retains slot addresses for later retirement. An object-local proxy vtable can disappear when the temporary object's final reference drops. Admit only independently verified resident tables, or retain the backing probe owner for the entire period the slots are read or patched. [runtime/orchestrator/src/d3d11_observer_hooks/probe.rs:124](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/d3d11_observer_hooks/probe.rs#L124)
+- [x] **Altitude | Medium | Retain or verify the storage behind D3D11 probe vtables.** probe returns raw vtable addresses after releasing the temporary device, chain and chain1 interfaces. d3d11_observer.cpp:838 reads those tables to form patch slots, and Hooks retains slot addresses for later retirement. An object-local proxy vtable can disappear when the temporary object's final reference drops. Admit only independently verified resident tables, or retain the backing probe owner for the entire period the slots are read or patched. [runtime/orchestrator/src/d3d11_observer_hooks/probe.rs:124](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/d3d11_observer_hooks/probe.rs#L124)
 
-- [ ] **Duplication | Medium | Share checked on-disk PE section lookup between the observer and Skyrim compatibility code.** runtime/orchestrator/src/d3d11_observer_module.rs:31 and :62 validate PE32+ headers and translate RVAs into bounded file bytes for :135. games/skyrim-se/src/compatibility.rs:98 and :119 repeat the DOS/NT/COFF walk, section iteration and raw-range check for exact Community Shaders guards at :154. Skyrim additionally verifies fingerprint facts and executable section flags, while the observer needs the preferred image base and refuses virtual tails. Share a read-only PE32+ view returning bounded bytes and section characteristics, leaving profile limits and comparison rules at the callers. Run a common set of truncated-table and virtual-tail vectors against that parser. [runtime/orchestrator/src/d3d11_observer_module.rs:62](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/d3d11_observer_module.rs#L62)
+- [x] **Duplication | Medium | Share checked on-disk PE section lookup between the observer and Skyrim compatibility code.** runtime/orchestrator/src/d3d11_observer_module.rs:31 and :62 validate PE32+ headers and translate RVAs into bounded file bytes for :135. games/skyrim-se/src/compatibility.rs:98 and :119 repeat the DOS/NT/COFF walk, section iteration and raw-range check for exact Community Shaders guards at :154. Skyrim additionally verifies fingerprint facts and executable section flags, while the observer needs the preferred image base and refuses virtual tails. Share a read-only PE32+ view returning bounded bytes and section characteristics, leaving profile limits and comparison rules at the callers. Run a common set of truncated-table and virtual-tail vectors against that parser. [runtime/orchestrator/src/d3d11_observer_module.rs:62](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/d3d11_observer_module.rs#L62)
 
 <a id="g02"></a>
 
