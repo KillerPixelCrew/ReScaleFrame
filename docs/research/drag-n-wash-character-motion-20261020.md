@@ -49,7 +49,7 @@ These findings are an audit, not a claim that all these paths have been repaired
 
 ## Repair
 
-`tools/patch-drag-n-wash-motion.py` generates a private ReScaleFrameMotion pass from
+`docs/research/scripts/patch-drag-n-wash-motion.py` generates a private ReScaleFrameMotion pass from
 the installed character shader's DepthOnly variants. It checks the exact original asset
 hash, keeps original game bytecode/decompiled material in ignored output, and stages a
 new asset outside the installation. Only serialized Shader object 81 changes. All
@@ -88,7 +88,7 @@ new views, generation changes, gaps, changed meshes/materials and ForceNoMotion 
 reusing incompatible history. Buffer identity belongs to renderer and material slot,
 so different deformations on a shared mesh cannot overwrite each other's history.
 
-`eng/deploy-unity-character-motion.ps1` verifies the game, original asset, staged
+`docs/research/scripts/deploy-unity-character-motion.ps1` verifies the game, original asset, staged
 shader report and owned helper; refuses a running game; backs up both files and the
 manifest; and records the one intentional game-asset patch. The normal Unity deployer
 recognizes that recorded hash while retaining the vanilla baseline. Original game

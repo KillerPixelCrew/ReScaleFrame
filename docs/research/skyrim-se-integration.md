@@ -178,7 +178,7 @@ Its independently generated MITIDTAB revision 5 is not the Nexus Address Library
 Its SHA-256 is `a75879011dce7f810992a86acf811daed2ed75813ecee9a3903aec1242c272ce`.
 The table's timestamp/image-size identity matches our exact executable.
 
-`tools/inspect-skyrim-hooks.py` checks the executable SHA-256, table identity,
+`docs/research/scripts/inspect-skyrim-hooks.py` checks the executable SHA-256, table identity,
 record bounds/order and FNV checksum before resolving source leads. It reads
 only files and creates a new report exclusively. The actual installed executable
 and downloaded table produced `.local/skyrim-research/hook-preflight.json`:
@@ -229,7 +229,7 @@ Its only file is `shadersfx/shaders011.fxp`, 67,768,128 bytes, SHA-256
 `72cfc73eb0938d5949f0b3a8683722a33b671a34b41b750ba138de8d154c5fbc`.
 Neither game file was changed; extraction stays under ignored local research.
 
-`tools/inspect-skyrim-shaders.py` inventories bounded DXBC containers and OSGN
+`docs/research/scripts/inspect-skyrim-shaders.py` inventories bounded DXBC containers and OSGN
 output signatures. The actual corpus contains 16,044 containers: 3,390 vertex,
 12,635 pixel and 19 compute shaders, with no rejected marker candidates.
 It records hashes, extents and signatures, but does not validate DXBC checksums

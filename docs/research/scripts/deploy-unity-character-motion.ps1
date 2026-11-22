@@ -5,7 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$taskRoot = Split-Path -Parent $PSScriptRoot
+$taskRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 if (!$ManagedHelper) { $ManagedHelper = Join-Path $taskRoot 'build/managed/unity/bin/Release/netstandard2.1/ReScaleFrame.Unity.Managed.dll' }
 $taskGame = (Resolve-Path -LiteralPath $GameDirectory).Path
 $taskPatch = (Resolve-Path -LiteralPath $PatchDirectory).Path
