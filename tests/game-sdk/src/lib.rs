@@ -19,8 +19,6 @@ mod sys {
 }
 
 mod anomaly;
-#[cfg(feature = "cpu-fixtures")]
-mod antilag;
 mod contract;
 #[cfg(any(
     feature = "cpu-fixtures",

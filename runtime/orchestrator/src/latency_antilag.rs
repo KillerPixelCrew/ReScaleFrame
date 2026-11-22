@@ -18,7 +18,8 @@ pub(crate) fn fps_from_interval(limit_us: u32) -> u32 {
         .map_or(0, |fps| fps.max(1))
 }
 
-#[repr(C)]
+// The recording driver of the unit tests.
+#[cfg(test)]
 struct Driver {
     initialize: unsafe extern "C" fn(*mut c_void, u32, *mut c_void) -> u32,
     update: unsafe extern "C" fn(*mut c_void, u32, u32, u32) -> u32,
@@ -26,10 +27,8 @@ struct Driver {
     shutdown: unsafe extern "C" fn(*mut c_void),
 }
 
-const _: () = assert!(size_of::<Driver>() == 32);
-
 enum Binding {
-    Unavailable,
+    #[cfg(test)]
     Callback(&'static Driver, *mut c_void),
     // Leaked storage. DXGI can keep the embedded DX12 context address after retirement.
     Sdk(*mut Sdk),
@@ -53,7 +52,7 @@ const FRAME_TYPE_KEY: GUID = GUID::from_u128(0x5083ae5b_8070_4fca_8ee5_3582dd367
 impl Binding {
     fn initialize(&self, api: u32, device: *mut c_void) -> u32 {
         match *self {
-            Self::Unavailable => 0,
+            #[cfg(test)]
             Self::Callback(calls, raw) => unsafe { (calls.initialize)(raw, api, device) },
             Self::Sdk(raw) => {
                 let result = unsafe {
@@ -70,7 +69,7 @@ impl Binding {
 
     fn update(&self, api: u32, enabled: u32, fps: u32) -> bool {
         match *self {
-            Self::Unavailable => false,
+            #[cfg(test)]
             Self::Callback(calls, raw) => unsafe { (calls.update)(raw, api, enabled, fps) != 0 },
             Self::Sdk(raw) => {
                 let enabled = enabled != 0;
@@ -88,7 +87,7 @@ impl Binding {
 
     fn end_render(&self, chain: *mut c_void, attach: u32) -> bool {
         match *self {
-            Self::Unavailable => false,
+            #[cfg(test)]
             Self::Callback(calls, raw) => unsafe { (calls.end_render)(raw, chain, attach) != 0 },
             Self::Sdk(raw) => {
                 let data = FrameTypeData {
@@ -113,14 +112,13 @@ impl Binding {
 
     fn shutdown(&self) {
         match *self {
-            Self::Unavailable => {}
+            #[cfg(test)]
             Self::Callback(calls, raw) => unsafe { (calls.shutdown)(raw) },
             Self::Sdk(raw) => unsafe { Sdk::shutdown(raw) },
         }
     }
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct State {
     pub(crate) available: u32,
@@ -283,17 +281,6 @@ impl Drop for Context {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_antilag_create(
-    calls: Option<&'static Driver>,
-    driver: *mut c_void,
-) -> *mut Context {
-    let binding = calls.map_or(Binding::Unavailable, |calls| {
-        Binding::Callback(calls, driver)
-    });
-    crate::allocate_handle(Context::new(binding))
-}
-
 /// The D3D owner for AMD hardware. Without a driver the binding reports unavailable on bind.
 pub(crate) unsafe extern "C" fn create_sdk_context() -> *mut c_void {
     // Reserve the Rust owner first. DXGI can keep the SDK context address alive after
@@ -305,55 +292,204 @@ pub(crate) unsafe extern "C" fn create_sdk_context() -> *mut c_void {
     Box::into_raw(Box::write(storage, Context::new(binding))).cast()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_antilag_destroy(context: *mut Context) {
-    if !context.is_null() {
-        drop(unsafe { Box::from_raw(context) });
+#[cfg(test)]
+mod tests {
+    // The Callback binding with a recording driver: the Anti-Lag 2 source, pacing and
+    // end-of-render contract, formerly the C-ABI fixture tests/game-sdk/src/antilag.rs.
+    use super::*;
+    use std::sync::Condvar;
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct DriverState {
+        initializes: u32,
+        updates: u32,
+        ends: u32,
+        shutdowns: u32,
+        api: u32,
+        update_api: u32,
+        fps: u32,
+        enabled: bool,
+        attached: bool,
+        fail_initialize: bool,
+        fail_update: bool,
+        sleeping: bool,
     }
-}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_antilag_bind(
-    context: *mut Context,
-    api: u32,
-    device: *mut c_void,
-    vendor: u32,
-) -> u32 {
-    u32::from(unsafe { context.as_ref() }.is_some_and(|context| context.bind(api, device, vendor)))
-}
+    #[derive(Default)]
+    struct Fake {
+        state: Mutex<DriverState>,
+        change: Condvar,
+        block_second_update: bool,
+    }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_antilag_pace(
-    context: *mut Context,
-    id: u64,
-    mode: u32,
-    limit_us: u32,
-    other_owner: u32,
-) -> u32 {
-    unsafe { context.as_ref() }.map_or(0, |c| c.pace(id, mode, limit_us, other_owner))
-}
+    unsafe extern "C" fn initialize(raw: *mut c_void, api: u32, _: *mut c_void) -> u32 {
+        let driver = unsafe { &*raw.cast::<Fake>() };
+        let mut state = driver.state.lock().unwrap();
+        state.initializes += 1;
+        state.api = api;
+        u32::from(!state.fail_initialize)
+    }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_antilag_end_render(
-    context: *mut Context,
-    id: u64,
-    chain: *mut c_void,
-    generated: u32,
-) -> u32 {
-    unsafe { context.as_ref() }.map_or(0, |c| c.end_render(id, chain, generated))
-}
+    unsafe extern "C" fn update(raw: *mut c_void, api: u32, enabled: u32, fps: u32) -> u32 {
+        let driver = unsafe { &*raw.cast::<Fake>() };
+        let mut state = driver.state.lock().unwrap();
+        state.updates += 1;
+        state.update_api = api;
+        state.enabled = enabled != 0;
+        state.fps = fps;
+        if driver.block_second_update && state.updates == 2 {
+            state.sleeping = true;
+            driver.change.notify_all();
+            let (state, _) = driver
+                .change
+                .wait_timeout_while(state, Duration::from_secs(3), |s| !s.attached)
+                .unwrap();
+            return u32::from(state.attached);
+        }
+        u32::from(!state.fail_update)
+    }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_antilag_state(context: *const Context, out: *mut State) {
-    let state = unsafe { context.as_ref() }
-        .map(Context::state)
-        .unwrap_or_default();
-    unsafe { out.write(state) };
-}
+    unsafe extern "C" fn end_render(raw: *mut c_void, _: *mut c_void, attach: u32) -> u32 {
+        let driver = unsafe { &*raw.cast::<Fake>() };
+        let mut state = driver.state.lock().unwrap();
+        state.ends += 1;
+        state.attached = attach != 0;
+        driver.change.notify_all();
+        1
+    }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_antilag_reset_sources(context: *mut Context) {
-    if let Some(context) = unsafe { context.as_ref() } {
-        context.reset_sources();
+    unsafe extern "C" fn shutdown(raw: *mut c_void) {
+        let driver = unsafe { &*raw.cast::<Fake>() };
+        driver.state.lock().unwrap().shutdowns += 1;
+    }
+
+    static CALLBACKS: Driver = Driver {
+        initialize,
+        update,
+        end_render,
+        shutdown,
+    };
+
+    fn fake_context(driver: &Fake) -> Context {
+        let raw = std::ptr::from_ref(driver).cast_mut().cast();
+        Context::new(Binding::Callback(&CALLBACKS, raw))
+    }
+
+    #[test]
+    fn callback_driver_follows_the_pacing_contract() {
+        const AMD: u32 = 0x1002;
+        const NONE: u32 = 0;
+        const REFLEX: u32 = 1;
+        const XELL: u32 = 2;
+        let (mut device, mut chain) = (0u8, 0u8);
+        let device: *mut c_void = (&raw mut device).cast();
+        let chain: *mut c_void = (&raw mut chain).cast();
+        let driver = Fake::default();
+        let owner = fake_context(&driver);
+
+        owner.bind(12, device, 0x10de);
+        assert_eq!(owner.state().available, 0);
+        assert_eq!(driver.state.lock().unwrap().initializes, 0);
+        owner.bind(11, device, 0x8086);
+        assert_eq!(owner.pace(1, 1, 0, NONE), 0);
+        assert_eq!(driver.state.lock().unwrap().updates, 0);
+        owner.bind(12, device, AMD);
+        assert_eq!(owner.state().available, 1);
+        {
+            let state = driver.state.lock().unwrap();
+            assert_eq!((state.initializes, state.api), (1, 12));
+        }
+        assert_ne!(owner.pace(1, 1, 10000, NONE), 0);
+        assert_eq!(owner.pace(1, 1, 10000, NONE), 0);
+        {
+            let state = driver.state.lock().unwrap();
+            assert!(state.enabled);
+            assert_eq!((state.updates, state.fps, state.update_api), (1, 100, 12));
+        }
+        assert_ne!(owner.end_render(1, chain, 1), 0);
+        assert_eq!(owner.end_render(1, chain, 1), 0);
+        {
+            let state = driver.state.lock().unwrap();
+            assert!(state.attached);
+            assert_eq!(state.ends, 1);
+        }
+        assert_ne!(owner.end_render(2, chain, 0), 0);
+        assert!(!driver.state.lock().unwrap().attached);
+        assert_eq!(owner.pace(2, 0, 0, NONE), 0);
+        {
+            let state = driver.state.lock().unwrap();
+            assert!(!state.enabled && state.fps == 0);
+        }
+        for (source, mode, pacing) in [(3, 1, XELL), (4, 2, REFLEX)] {
+            assert_eq!(owner.pace(source, mode, 0, pacing), 0);
+            assert!(!driver.state.lock().unwrap().enabled);
+        }
+        owner.bind(11, device, AMD);
+        assert_eq!(driver.state.lock().unwrap().api, 11);
+        assert_ne!(owner.pace(5, 2, 20000, NONE), 0);
+        {
+            let state = driver.state.lock().unwrap();
+            assert_eq!((state.fps, state.update_api), (50, 11));
+        }
+        assert_eq!(owner.end_render(5, chain, 1), 0);
+        driver.state.lock().unwrap().fail_update = true;
+        assert_eq!(owner.pace(6, 1, 0, NONE), 0);
+        assert_eq!((owner.state().available, owner.state().refused), (0, 1));
+        let updates = driver.state.lock().unwrap().updates;
+        assert_eq!(owner.pace(7, 1, 0, NONE), 0);
+        assert_eq!(driver.state.lock().unwrap().updates, updates);
+
+        let unsupported = Fake::default();
+        unsupported.state.lock().unwrap().fail_initialize = true;
+        let missing = fake_context(&unsupported);
+        missing.bind(12, device, AMD);
+        assert_eq!((missing.state().available, missing.state().refused), (0, 1));
+        assert_eq!(missing.pace(1, 1, 0, NONE), 0);
+
+        let reset = Fake::default();
+        let resetting = fake_context(&reset);
+        resetting.bind(12, device, AMD);
+        assert_ne!(resetting.pace(1, 1, 0, NONE), 0);
+        let before_shutdown = reset.state.lock().unwrap().shutdowns;
+        reset.state.lock().unwrap().fail_update = true;
+        resetting.reset_sources();
+        {
+            let state = reset.state.lock().unwrap();
+            assert_eq!(
+                (state.shutdowns, state.update_api),
+                (before_shutdown + 1, 12)
+            );
+        }
+        let state = resetting.state();
+        assert_eq!((state.available, state.enabled, state.refused), (0, 0, 1));
+
+        let sleeper = Fake {
+            block_second_update: true,
+            ..Default::default()
+        };
+        let concurrent = fake_context(&sleeper);
+        concurrent.bind(12, device, AMD);
+        assert_ne!(concurrent.pace(1, 1, 0, NONE), 0);
+        std::thread::scope(|scope| {
+            let pacing = scope.spawn(|| concurrent.pace(2, 1, 0, NONE));
+            let state = sleeper.state.lock().unwrap();
+            let (state, _) = sleeper
+                .change
+                .wait_timeout_while(state, Duration::from_secs(2), |s| !s.sleeping)
+                .unwrap();
+            let sleeping = state.sleeping;
+            drop(state);
+            assert!(sleeping);
+            let mut other = 0u8;
+            assert!(!concurrent.bind(12, (&raw mut other).cast(), AMD));
+            assert_eq!(concurrent.state().updates, 1);
+            assert_ne!(concurrent.end_render(1, chain, 1), 0);
+            assert_ne!(pacing.join().unwrap(), 0);
+        });
+        assert_eq!(
+            (concurrent.state().updates, concurrent.state().end_markers),
+            (2, 1)
+        );
     }
 }
