@@ -14,6 +14,13 @@ metadata and the source public header and carrier definition comparison
 passed. Binary ABI, fixture, device and game results are pending.
 [Candidate checks](rust-migration.md#candidate-9f53f1b0)
 
+The shared D3D11 host now checks SR session identity before graphics work,
+preserves input receipts across configure-only requests, and accepts independent
+depth inversion and far-plane facts. Rust owns the D3D11 output leaves and the
+Runtime's Anomaly backend admission service. The adapter's new startup route
+and device checks are pending.
+[D3D11 host port evidence](research/rust-d3d11-host-admission.md)
+
 Steam D3D11 uses a static C entry for both Rust adapters and the existing
 C++ callers. Rust owns fingerprinting, MinHook installation and the typed
 relay, while C++ guards exceptions at the foreign calls. AC7 uses the shared Rust XInput owner.

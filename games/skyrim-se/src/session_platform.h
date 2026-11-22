@@ -55,7 +55,7 @@ struct rsf_skyrim_session_leaves {
 };
 static_assert(sizeof(rsf_skyrim_session_leaves) == 8 + 11 * sizeof(void*));
 static_assert(sizeof(rsf_motion_decode_params) == 48);
-static_assert(sizeof(rsf_d3d11_host_setup) == 160 && offsetof(rsf_d3d11_host_setup, motion) == 80 &&
+static_assert(offsetof(rsf_d3d11_host_setup, depth_far_plane) == 160 && offsetof(rsf_d3d11_host_setup, motion) == 80 &&
     offsetof(rsf_d3d11_host_setup, quality_choices) == 128 &&
     offsetof(rsf_d3d11_host_setup, accept_window) == 136 &&
     offsetof(rsf_d3d11_host_setup, colour_transport_default) == 156);

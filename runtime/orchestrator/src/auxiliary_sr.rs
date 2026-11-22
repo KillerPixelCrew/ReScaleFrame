@@ -133,6 +133,31 @@ impl Mapping {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct SurfaceKey {
+    texture: Texture,
+    kind: u32,
+    flags: u32,
+    output: [i32; 4],
+}
+
+impl From<&rsf_d3d11_auxiliary_surface> for SurfaceKey {
+    fn from(input: &rsf_d3d11_auxiliary_surface) -> Self {
+        Self {
+            texture: input.texture,
+            kind: input.kind,
+            flags: input.flags,
+            output: input.output_rect,
+        }
+    }
+}
+
+impl SurfaceKey {
+    pub(crate) fn matches(self, input: &rsf_d3d11_auxiliary_surface) -> bool {
+        surface_size_valid(input) && self == Self::from(input)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct SurfacePlan {
     original: Texture,
@@ -155,11 +180,13 @@ impl SurfacePlan {
 
     fn accepts(&self, request: &rsf_d3d11_auxiliary_surface, spatial: bool) -> bool {
         let mapping = Mapping::from(request);
-        surface_size_valid(request)
-            && request.texture == self.original
-            && request.kind == self.kind
-            && request.flags == self.flags
-            && mapping.output == self.mapping.output
+        SurfaceKey {
+            texture: self.original,
+            kind: self.kind,
+            flags: self.flags,
+            output: self.mapping.output,
+        }
+        .matches(request)
             && mapping.source_fits(self.original_desc.into())
             && mapping.source_fits(self.source_desc.into())
             && (!(spatial || self.depth()) || mapping.integral())
@@ -262,7 +289,7 @@ fn device_ready(platform: &rsf_aux_platform, device: *mut c_void) -> bool {
     unsafe { platform.device_ready.unwrap()(device) != 0 }
 }
 
-struct AuxiliarySr {
+pub(crate) struct AuxiliarySr {
     // Drop native leases and private products while the context and device are still retained.
     frame: Option<Frame>,
     backups: [Option<Snapshot>; 2],
@@ -274,7 +301,7 @@ struct AuxiliarySr {
 }
 
 impl AuxiliarySr {
-    fn new(platform: rsf_aux_platform) -> Self {
+    pub(crate) fn new(platform: rsf_aux_platform) -> Self {
         Self {
             platform,
             owner: None,
@@ -853,6 +880,70 @@ impl AuxiliarySr {
         bindings.restore();
         self.frame = None;
         true
+    }
+}
+
+impl crate::d3d11_host_reduced::Products for AuxiliarySr {
+    fn pending(&self) -> bool {
+        self.frame.is_some()
+    }
+
+    fn matches(&self, scope: [u64; 3]) -> bool {
+        self.on_owner_thread()
+            && self
+                .frame
+                .as_ref()
+                .is_some_and(|frame| frame.scope == scope)
+    }
+
+    fn reserve(
+        &mut self,
+        context: *mut c_void,
+        pass: &rsf_game_render_pass,
+        inputs: &[rsf_d3d11_auxiliary_surface],
+        log: rsf_game_log_fn,
+        user: *mut c_void,
+        recovery: bool,
+    ) -> bool {
+        let limit = if recovery {
+            MAX_SURFACES
+        } else {
+            MAX_AUXILIARIES
+        };
+        inputs.len() <= limit
+            && Self::reserve(self, context, pass, inputs, log, user, recovery).is_some()
+    }
+
+    fn refine(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
+        inputs.len() <= MAX_SURFACES && Self::refine(self, inputs)
+    }
+
+    fn seal(&mut self) -> bool {
+        self.render(true, None)
+    }
+
+    fn cancel(&mut self) -> bool {
+        Self::cancel(self)
+    }
+
+    fn original_colour(&self) -> Texture {
+        Self::original_colour(self)
+    }
+
+    fn temporal_prepare(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
+        inputs.len() <= MAX_SURFACES && self.render(false, Some(inputs))
+    }
+
+    fn spatial_prepare(&mut self) -> bool {
+        self.render(false, None)
+    }
+
+    fn commit(&mut self, temporal: bool) -> bool {
+        Self::commit(self, temporal)
+    }
+
+    fn restore(&mut self) -> bool {
+        Self::restore(self)
     }
 }
 

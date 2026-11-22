@@ -10,6 +10,7 @@ use crate::native_sr_abi::rsf_motion_decode_params;
 use crate::overlay_abi::rsf_overlay_service_setup;
 use crate::render_abi::{rsf_backend_log_fn, rsf_native_fg_options, rsf_render_settings};
 use crate::scene_abi::{rsf_native_present_record, rsf_observer_present_event};
+pub(crate) use rsf_game_sys::d3d11_chain_abi::*;
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 pub(crate) use rsf_game_sys::d3d11_host_abi::{
     rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope, rsf_d3d11_host_capture,
@@ -19,16 +20,12 @@ use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_log_fn, rsf_ga
 use std::ffi::{c_char, c_int, c_void};
 use std::mem::{offset_of, size_of};
 
-pub(crate) const RSF_D3D11_HOST_ABI_VERSION: u32 = 8;
 pub(crate) const RSF_D3D11_HOST_CAP_FG_INPUTS: u32 = 1;
 pub(crate) const RSF_D3D11_HOST_CAP_INPUT_TIMELINE: u32 = 2;
 pub(crate) const RSF_D3D11_HOST_CAP_RENDERED_SOURCE: u32 = 4;
 pub(crate) const RSF_D3D11_CAPTURE_CONTROL_VERSION: u32 = 1;
 pub(crate) const RSF_D3D11_CAPTURE_SEQUENCE: u32 = 1;
 pub(crate) const RSF_D3D11_CAPTURE_FAILURES: u32 = 2;
-pub(crate) const RSF_D3D11_DISPATCH_RELEASE: u32 = 1;
-pub(crate) const RSF_D3D11_DISPATCH_PRESENT: u32 = 2;
-pub(crate) const RSF_D3D11_DISPATCH_RESIZE_BUFFERS1: u32 = 7;
 
 pub(crate) use rsf_game_sys::d3d11_reduced_abi::{
     RSF_D3D11_REDUCED_CANCEL, RSF_D3D11_REDUCED_CANCELLED, RSF_D3D11_REDUCED_CLEANUP_PENDING,
@@ -70,6 +67,7 @@ pub(crate) struct rsf_d3d11_host_setup {
     pub presentation_user: *mut c_void,
     pub capabilities: u32,
     pub colour_transport_default: u32,
+    pub depth_far_plane: u32,
 }
 
 #[repr(C)]
@@ -81,24 +79,6 @@ pub(crate) struct rsf_d3d11_present_dispatch {
     pub flags: u32,
     pub handled: u32,
     pub native_result: i32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) union rsf_d3d11_chain_args {
-    pub present: [u32; 2],
-    pub raw: [u64; 5],
-}
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11_chain_dispatch {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub method: u32,
-    pub handled: u32,
-    pub receiver: *mut c_void,
-    pub args: rsf_d3d11_chain_args,
-    pub result: i32,
 }
 
 #[repr(C)]
@@ -253,13 +233,14 @@ pub(crate) struct rsf_d3d11h_platform {
 }
 
 const _: () = {
-    assert!(size_of::<rsf_d3d11_host_setup>() == 160);
+    assert!(size_of::<rsf_d3d11_host_setup>() == 168);
     assert!(offset_of!(rsf_d3d11_host_setup, engine_type) == 48);
     assert!(offset_of!(rsf_d3d11_host_setup, units_to_meters) == 72);
     assert!(offset_of!(rsf_d3d11_host_setup, motion) == 80);
     assert!(offset_of!(rsf_d3d11_host_setup, quality_choices) == 128);
     assert!(offset_of!(rsf_d3d11_host_setup, accept_window) == 136);
     assert!(offset_of!(rsf_d3d11_host_setup, capabilities) == 152);
+    assert!(offset_of!(rsf_d3d11_host_setup, depth_far_plane) == 160);
     assert!(size_of::<rsf_d3d11_present_dispatch>() == 32);
     assert!(offset_of!(rsf_d3d11_present_dispatch, native_result) == 28);
     assert!(size_of::<rsf_d3d11_chain_dispatch>() == 72);

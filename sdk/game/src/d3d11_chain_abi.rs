@@ -11,6 +11,8 @@ pub const RSF_D3D11_DISPATCH_PRESENT1: u32 = 5;
 pub const RSF_D3D11_DISPATCH_SET_COLOR_SPACE1: u32 = 6;
 pub const RSF_D3D11_DISPATCH_RESIZE_BUFFERS1: u32 = 7;
 pub const RSF_D3D11_HOST_ABI_VERSION: u32 = 8;
+pub const RSF_D3D11_HOST_DEPTH_FINITE: u32 = 0;
+pub const RSF_D3D11_HOST_DEPTH_INFINITE: u32 = 1;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_d3d11_chain_dispatch {

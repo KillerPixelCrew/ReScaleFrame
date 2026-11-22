@@ -50,7 +50,6 @@ fn main() {
         "src/com_ref.cpp",
         "src/fg_leases_com.cpp",
         "src/sampler_bias_com.cpp",
-        "src/d3d11_output_platform.cpp",
         "src/native_regions_com.cpp",
         "src/native_translucency_com.cpp",
     ];

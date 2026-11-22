@@ -24,27 +24,13 @@
 extern "C" {
 const rsf_aux_platform* rsf_auxiliary_sr_platform(void);
 int32_t rsf_core_d3d11_host_create(const rsf_d3d11h_platform*, const rsf_d3d11_host_setup*, rsf_game_host_services*);
-int32_t rsf_core_d3d11_host_set_active(void*, uint32_t);
-int32_t rsf_core_d3d11_host_dispatch_present(void*, rsf_d3d11_present_dispatch*);
-int32_t rsf_core_d3d11_host_dispatch_chain(void*, rsf_d3d11_chain_dispatch*);
-int32_t rsf_core_d3d11_host_creation_begin(void*, rsf_d3d11_creation_scope*);
-int32_t rsf_core_d3d11_host_creation_end(void*, const rsf_d3d11_creation_scope*, const rsf_d3d11_native_chain*);
-int32_t rsf_core_d3d11_host_wrap_native_swapchain(void*, const rsf_d3d11_native_chain*);
-int32_t rsf_core_d3d11_host_bind_presentation(void*, const rsf_d3d11_presentation_binding*);
-uint32_t rsf_core_d3d11_host_request_capture(void*);
-int32_t rsf_core_d3d11_host_capture_control(const rsf_d3d11_capture_control*);
-int32_t rsf_core_d3d11_host_capture_texture(void*, void*, const rsf_d3d11_host_capture*);
-int32_t rsf_core_d3d11_host_upscale_auxiliaries(void*, void*, const rsf_d3d11_auxiliary_pass*);
-int32_t rsf_core_d3d11_host_restore_auxiliaries(void*, const rsf_d3d11_auxiliary_scope*);
-int32_t rsf_core_d3d11_host_reduced_frame(void*, void*, rsf_d3d11_reduced_frame*);
-int32_t rsf_core_d3d11_host_bind_sampler_bias(void*, void*, rsf_d3d11_sampler_bias*);
 }
 
 namespace {
 using Microsoft::WRL::ComPtr;
 
 // Layouts mirrored by hand in d3d11_host_abi.rs.
-static_assert(sizeof(rsf_d3d11_host_setup) == 160 && offsetof(rsf_d3d11_host_setup, engine_type) == 48 &&
+static_assert(sizeof(rsf_d3d11_host_setup) == 168 && offsetof(rsf_d3d11_host_setup, depth_far_plane) == 160 && offsetof(rsf_d3d11_host_setup, engine_type) == 48 &&
     offsetof(rsf_d3d11_host_setup, units_to_meters) == 72 && offsetof(rsf_d3d11_host_setup, motion) == 80 &&
     offsetof(rsf_d3d11_host_setup, quality_choices) == 128 && offsetof(rsf_d3d11_host_setup, accept_window) == 136 &&
     offsetof(rsf_d3d11_host_setup, capabilities) == 152);
@@ -413,62 +399,4 @@ const rsf_d3d11h_platform& platform()
 extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_setup* setup, rsf_game_host_services* services)
 {
     return rsf_core_d3d11_host_create(&platform(), setup, services);
-}
-extern "C" RSF_RUNTIME_API uint32_t rsf_d3d11_host_request_capture(void* unused)
-{
-    return rsf_core_d3d11_host_request_capture(unused);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_control(const rsf_d3d11_capture_control* request)
-{
-    return rsf_core_d3d11_host_capture_control(request);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_set_active(void* user, uint32_t active)
-{
-    return rsf_core_d3d11_host_set_active(user, active);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_dispatch_present(void* user, rsf_d3d11_present_dispatch* request)
-{
-    return rsf_core_d3d11_host_dispatch_present(user, request);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_dispatch_chain(void* user, rsf_d3d11_chain_dispatch* request)
-{
-    return rsf_core_d3d11_host_dispatch_chain(user, request);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_creation_begin(void* user, rsf_d3d11_creation_scope* scope)
-{
-    return rsf_core_d3d11_host_creation_begin(user, scope);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_creation_end(void* user, const rsf_d3d11_creation_scope* scope,
-    const rsf_d3d11_native_chain* result)
-{
-    return rsf_core_d3d11_host_creation_end(user, scope, result);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_wrap_native_swapchain(void* user, const rsf_d3d11_native_chain* request)
-{
-    return rsf_core_d3d11_host_wrap_native_swapchain(user, request);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_presentation(void* user, const rsf_d3d11_presentation_binding* binding)
-{
-    return rsf_core_d3d11_host_bind_presentation(user, binding);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_reduced_frame(void* user, void* context, rsf_d3d11_reduced_frame* request)
-{
-    return rsf_core_d3d11_host_reduced_frame(user, context, request);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_upscale_auxiliaries(void* user, void* context,
-    const rsf_d3d11_auxiliary_pass* request)
-{
-    return rsf_core_d3d11_host_upscale_auxiliaries(user, context, request);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_restore_auxiliaries(void* user, const rsf_d3d11_auxiliary_scope* scope)
-{
-    return rsf_core_d3d11_host_restore_auxiliaries(user, scope);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_sampler_bias(void* user, void* context, rsf_d3d11_sampler_bias* request)
-{
-    return rsf_core_d3d11_host_bind_sampler_bias(user, context, request);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_texture(void* user, void* context, const rsf_d3d11_host_capture* request)
-{
-    return rsf_core_d3d11_host_capture_texture(user, context, request);
 }

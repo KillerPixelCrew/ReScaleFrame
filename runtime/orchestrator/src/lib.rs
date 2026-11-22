@@ -45,11 +45,15 @@ mod d3d11_output;
 #[cfg(windows)]
 mod d3d11_output_abi;
 #[cfg(windows)]
+mod d3d11_output_platform;
+#[cfg(windows)]
 mod d3d11_present;
 #[cfg(windows)]
 mod d3d11_present_abi;
 #[cfg(windows)]
 mod d3d11_sharpening;
+#[cfg(windows)]
+mod d3d11_sr_admission;
 #[cfg(windows)]
 mod d3d11_state;
 #[cfg(windows)]
