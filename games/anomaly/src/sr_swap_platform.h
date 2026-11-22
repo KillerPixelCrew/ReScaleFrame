@@ -119,6 +119,7 @@ typedef struct rsf_anomaly_swap_upscale {
     const rsf_anomaly_swap_fields* generic1;
     void* engine_dsv;
     uint32_t render_width, render_height, output_width, output_height;
+    bool spatial_recovery; // World camera recovery requires the spatial seam pass.
 } rsf_anomaly_swap_upscale;
 
 typedef struct rsf_anomaly_swap_counters {

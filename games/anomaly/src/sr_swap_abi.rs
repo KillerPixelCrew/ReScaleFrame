@@ -327,11 +327,12 @@ pub struct rsf_anomaly_swap_upscale {
     pub render_height: u32,
     pub output_width: u32,
     pub output_height: u32,
+    pub spatial_recovery: bool,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_swap_upscale"]
-        [::core::mem::size_of::<rsf_anomaly_swap_upscale>() - 80usize];
+        [::core::mem::size_of::<rsf_anomaly_swap_upscale>() - 88usize];
     ["Alignment of rsf_anomaly_swap_upscale"]
         [::core::mem::align_of::<rsf_anomaly_swap_upscale>() - 8usize];
     ["Offset of field: rsf_anomaly_swap_upscale::generic0_twin"]
@@ -358,6 +359,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_swap_upscale, output_width) - 72usize];
     ["Offset of field: rsf_anomaly_swap_upscale::output_height"]
         [::core::mem::offset_of!(rsf_anomaly_swap_upscale, output_height) - 76usize];
+    ["Offset of field: rsf_anomaly_swap_upscale::spatial_recovery"]
+        [::core::mem::offset_of!(rsf_anomaly_swap_upscale, spatial_recovery) - 80usize];
 };
 impl Default for rsf_anomaly_swap_upscale {
     fn default() -> Self {

@@ -87,8 +87,10 @@ void ndc_offset() {
     const uint32_t w = 1286, h = 724;
     const auto p = perspective(1.2f, 1920.0f / 1080.0f);
     for (const auto& s : {jitter_sample(0, 18), jitter_sample(1, 18), jitter_sample(7, 18), JitterSample{-0.5f, 0.4999f}}) {
-        const auto j = jitter_engine_projection(p, s.x, s.y, w, h);
+        const auto j = production_jitter_projection(p, s.x, s.y, w, h);
         CHECK(j.has_value());
+        if (!j) continue;
+        CHECK(j == jitter_engine_projection(p, s.x, s.y, w, h));
         // Row vectors: only _31 and _32 change for a perspective matrix (_34 = 1, _44 = 0); everything else bit-exact.
         for (std::size_t i = 0; i < 16; ++i)
             if (i != 8 && i != 9) CHECK((*j)[i] == p[i]);
@@ -102,19 +104,20 @@ void ndc_offset() {
     }
     // An orthographic matrix (_34 = 0, _44 = 1) is shifted through its last row: the general row-vector rule.
     const EngineMatrix ortho{0.01f, 0, 0, 0, 0, 0.02f, 0, 0, 0, 0, 0.001f, 0, 0.1f, -0.2f, 0.5f, 1};
-    const auto o = jitter_engine_projection(ortho, 0.25f, -0.125f, 200, 100);
+    const auto o = production_jitter_projection(ortho, 0.25f, -0.125f, 200, 100);
+    CHECK(o == jitter_engine_projection(ortho, 0.25f, -0.125f, 200, 100));
+    CHECK(o.has_value());
+    if (!o) return;
     CHECK(o && (*o)[8] == 0.0f && (*o)[9] == 0.0f && near((*o)[12], 0.1 + 2 * 0.25 / 200, 1e-7) && near((*o)[13], -0.2 - 2 * -0.125 / 100, 1e-7));
     const auto a = pixel(row_times({3, 4, 10, 1}, ortho), 200, 100), b = pixel(row_times({3, 4, 10, 1}, *o), 200, 100);
     CHECK(near(b[0] - a[0], 0.25, 1e-4) && near(b[1] - a[1], -0.125, 1e-4));
-    // Same values as temporal::jitter_projection on the column-vector transpose (the existing helper, reused).
-    const auto t = temporal::jitter_projection(to_column(p), {double(0.3f), double(-0.2f)}, {w, h});
-    CHECK(t && from_column(*t) == *jitter_engine_projection(p, 0.3f, -0.2f, w, h));
     // Refusals: non-finite matrix or jitter, degenerate extent.
     auto bad = p;
     bad[5] = std::numeric_limits<float>::infinity();
-    CHECK(!jitter_engine_projection(bad, 0.1f, 0.1f, w, h));
-    CHECK(!jitter_engine_projection(p, std::numeric_limits<float>::quiet_NaN(), 0.1f, w, h));
-    CHECK(!jitter_engine_projection(p, 0.1f, 0.1f, 1, h) && !jitter_engine_projection(p, 0.1f, 0.1f, w, 0));
+    CHECK(!production_jitter_projection(bad, 0.1f, 0.1f, w, h));
+    CHECK(!production_jitter_projection(p, std::numeric_limits<float>::quiet_NaN(), 0.1f, w, h));
+    CHECK(!production_jitter_projection(p, 0.1f, 0.1f, 1, h) && !production_jitter_projection(p, 0.1f, 0.1f, w, 0));
+    CHECK(!production_jitter_projection(p, 0.1f, 0.1f, 16385, h));
     // Fmatrix::mul(P, V): v * mFullTransform == (v * V) * P.
     const EngineMatrix view{0.8f, 0, -0.6f, 0, 0, 1, 0, 0, 0.6f, 0, 0.8f, 0, -3, -1.5f, 7.25f, 1};
     const auto full = engine_mul(p, view);

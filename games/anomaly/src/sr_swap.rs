@@ -263,6 +263,7 @@ struct Swap {
     projection: Projection,
     bias: Bias,
     restore_state: RestoreState,
+    spatial_recovery: bool,
 }
 
 impl Swap {
@@ -284,6 +285,7 @@ impl Swap {
             projection: Projection::default(),
             bias: Bias::default(),
             restore_state: RestoreState::default(),
+            spatial_recovery: false,
         }
     }
 
@@ -817,18 +819,18 @@ impl Swap {
                 self.foreign(c"Device.mProject changed inside the world window.");
             }
             let mut ok =
-                self.write(p.project, &p.saved_project) && self.write(p.full, &p.saved_full);
+                self.write(p.project, &p.saved_project) & self.write(p.full, &p.saved_full);
             // Shutdown writes engine memory only; the next frame's SetCacheXform uploads Device.mProject again.
             if ok && p.uploaded && reason != RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN {
                 ok = self.upload_projection(p.project);
             }
             if ok {
                 self.view.counters.projection_restores += 1;
+                self.projection.written = false;
+                self.projection.uploaded = false;
             } else {
                 self.fault(c"Device.mProject could not be restored.");
             }
-            self.projection.written = false;
-            self.projection.uploaded = false;
             self.projection.sun_suspended = false;
         }
         let b = self.bias;
@@ -922,6 +924,7 @@ impl Swap {
         // After close_stale, which needs the previous window's values.
         self.projection = Projection::default();
         self.bias = Bias::default();
+        self.spatial_recovery = false;
         if !self.enabled || self.refused() {
             return self.skip(RSF_ANOMALY_SWAP_SKIP_OFF);
         }
@@ -1138,6 +1141,7 @@ impl Swap {
                 render_height: self.view.render_height,
                 output_width: self.view.output_width,
                 output_height: self.view.output_height,
+                spatial_recovery: self.spatial_recovery,
             };
             // The leaf runs the seam pass on the restored engine targets during the call.
             let ok = self
@@ -1201,7 +1205,7 @@ impl Swap {
         self.view.counters.sun_calls += 1;
         let p = self.projection;
         // A reentrant call borrows the already unjittered camera and must not restore the outer call's token.
-        if !self.view.open || !p.applied || !p.written || p.sun_suspended {
+        if !self.view.open || self.spatial_recovery || !p.applied || !p.written || p.sun_suspended {
             return false;
         }
         let mut current = Matrix::default();
@@ -1223,9 +1227,7 @@ impl Swap {
         }
         self.view.counters.sun_refused += 1;
         self.fault(c"The sun cascade camera could not be unjittered.");
-        self.projection.sun_suspended = false;
-        // Refuse further SR; the original runs with the stock engine state.
-        self.close_with_output(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK);
+        self.recover_sun_camera();
         false
     }
 
@@ -1245,7 +1247,14 @@ impl Swap {
         }
         self.view.counters.sun_refused += 1;
         self.fault(c"The jittered camera could not be restored after sun cascades.");
-        self.close_with_output(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK);
+        self.recover_sun_camera();
+    }
+
+    fn recover_sun_camera(&mut self) {
+        // World geometry already lives in the twins. Keep all target bindings and
+        // the reduced viewport until the seam can transfer colour, position and depth.
+        self.spatial_recovery = true;
+        self.restore_temporal(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK);
     }
 
     /// CRender::rmNear, after the original. Inside a jittered window, the site built Device.mProject (psHUD_FOV),
@@ -1257,12 +1266,16 @@ impl Swap {
         }
         self.view.counters.rm_near_in_window += 1;
         let p = self.projection;
-        if !p.written || !p.applied || p.sun_suspended {
+        if self.spatial_recovery || !p.written || !p.applied || p.sun_suspended {
             return;
         }
         let mut current = Matrix::default();
         let mut view = Matrix::default();
-        if !self.read(p.project, &mut current) || !self.read(p.view, &mut view) {
+        let mut saved_full = Matrix::default();
+        if !self.read(p.project, &mut current)
+            || !self.read(p.view, &mut view)
+            || !self.read(p.full, &mut saved_full)
+        {
             self.view.counters.fp_foreign += 1;
             return;
         }
@@ -1292,7 +1305,13 @@ impl Swap {
             || !self.write(p.full, &full)
             || !self.upload_projection(p.project)
         {
+            let project = self.write(p.project, &current);
+            let full = self.write(p.full, &saved_full);
+            let uploaded = project && self.upload_projection(p.project);
             self.fault(c"A first-person projection could not be jittered.");
+            if !full || !uploaded {
+                self.fault(c"The first-person projection could not be restored.");
+            }
             return;
         }
         self.projection.last_first_person = Some(jittered);
@@ -1442,6 +1461,25 @@ extern "C" fn rsf_anomaly_swap_position_constant(swap: *mut Handle, constant: *m
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_swap_shutdown(swap: *mut Handle) -> bool {
     with(swap, true, Swap::shutdown)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_jitter_projection(
+    projection: Option<&Matrix>,
+    x: f32,
+    y: f32,
+    width: u32,
+    height: u32,
+    output: Option<&mut Matrix>,
+) -> bool {
+    let (Some(projection), Some(output)) = (projection, output) else {
+        return false;
+    };
+    let Some(jittered) = jitter_projection(projection, x, y, width, height) else {
+        return false;
+    };
+    *output = jittered;
+    true
 }
 
 #[unsafe(no_mangle)]

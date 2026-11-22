@@ -80,6 +80,15 @@ private:
 
 // ---- engine (row-vector) matrices -----------------------------------------------------------------------------------
 using EngineMatrix = std::array<float, 16>;   // Fmatrix: _11.._14, _21.._24, _31.._34, _41.._44
+extern "C" bool rsf_anomaly_jitter_projection(const float*, float, float, uint32_t, uint32_t, float*) noexcept;
+inline std::optional<EngineMatrix> production_jitter_projection(const EngineMatrix& projection, float x, float y,
+    uint32_t render_width, uint32_t render_height) noexcept {
+    EngineMatrix result{};
+    if (!rsf_anomaly_jitter_projection(projection.data(), x, y, render_width, render_height, result.data()))
+        return std::nullopt;
+    return result;
+}
+
 inline temporal::Mat4 to_column(const EngineMatrix& engine) noexcept {
     temporal::Mat4 m;
     for (std::size_t r = 0; r < 4; ++r)

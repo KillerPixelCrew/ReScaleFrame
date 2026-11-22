@@ -177,7 +177,13 @@ struct FakeHost final : SwapHost {
     int makes = 0, drops = 0, round_trips = 0, upscales = 0;
     TargetFields last_twin{}, last_engine{};
     TwinRequest last_request{};
-    struct Upscale { TargetFields g0_twin, pos_twin, g1_twin, g0, pos, g1; void* depth_srv; void* dsv; uint32_t rw, rh, ow, oh; } last_upscale{};
+    struct Upscale {
+        TargetFields g0_twin, pos_twin, g1_twin, g0, pos, g1;
+        void* depth_srv;
+        void* dsv;
+        uint32_t rw, rh, ow, oh;
+        bool spatial_recovery;
+    } last_upscale{};
     std::vector<std::pair<uint32_t, uint32_t>> viewports;
     std::vector<std::byte> engine_at_round_trip;
     Engine* engine{};
@@ -230,7 +236,8 @@ struct FakeHost final : SwapHost {
     bool upscale(const UpscaleInputs& in) noexcept override {
         ++upscales;
         last_upscale = {*in.generic0_twin, *in.position_twin, *in.generic1_twin, *in.generic0, *in.position, *in.generic1,
-            in.depth_srv, in.engine_dsv, in.render_width, in.render_height, in.output_width, in.output_height};
+            in.depth_srv, in.engine_dsv, in.render_width, in.render_height, in.output_width, in.output_height,
+            in.spatial_recovery};
         if (engine) engine_at_round_trip = engine->snapshot();
         return !fail_round_trip;
     }
@@ -1108,7 +1115,7 @@ void stage3_sun_cascades() {
         c.controller.shutdown();
         CHECK(c.stock());
     }
-    // A partial unjitter or re-jitter write, or a failed set_P, closes the SR window and restores stock state.
+    // A partial unjitter or re-jitter write, or a failed set_P, restores the camera and keeps the targets to the seam.
     for (int failure = 0; failure < 5; ++failure) {
         Case c;
         CHECK(c.controller.prepare(c.engine.facts3()));
@@ -1124,6 +1131,8 @@ void stage3_sun_cascades() {
             else c.host.fail_upload_at = c.host.upload_calls;
         }
         c.controller.sun_cascades_end(token);
+        CHECK(c.controller.window_open() && c.controller.refused());
+        CHECK(c.controller.seam() && c.host.last_upscale.spatial_recovery);
         CHECK(c.stock() && c.controller.refused() && !c.controller.window_open());
         CHECK(c.controller.counters().sun_refused == 1 && c.controller.counters().sun_restored == 0);
         CHECK(c.host.cache_project == c.engine.project && c.host.cache_full == c.engine.full);
@@ -1138,9 +1147,7 @@ void stage3_sun_cascades() {
     c.controller.sun_cascades_end(token);
     CHECK(c.stock() && c.host.upload_calls == uploads && c.controller.counters().foreign_changes == 0);
 }
-// A refused sun cascade closes the window after the engine has rendered into the twins: the H1 epilogue set the
-// render-size viewport and u_setrt set CRenderTarget::dwWidth/dwHeight to the twin size. The rest of the frame renders
-// stock at output size, so this exit restores both like combine_end, frame_end and close_stale.
+// A refused sun cascade keeps the render-size viewport and transfers the filled twins to output targets at the seam.
 void stage3_sun_rollback() {
     for (int failure = 0; failure < 3; ++failure) {
         Case c;
@@ -1160,9 +1167,11 @@ void stage3_sun_rollback() {
             else c.host.fail_upload_at = c.host.upload_calls;             // set_P faults
         }
         c.controller.sun_cascades_end(token);
+        CHECK(c.controller.window_open() && c.host.viewports.size() == 1);
+        CHECK(c.controller.seam() && c.host.upscales == 1 && c.host.last_upscale.spatial_recovery);
         CHECK(c.stock() && c.controller.refused() && !c.controller.window_open());
         CHECK(c.host.viewports.size() == 2 && c.host.viewports.back() == std::make_pair(1920u, 1080u));
-        CHECK(restores(c.controller, Restore::Rollback) == 1);
+        CHECK(restores(c.controller, Restore::Seam) == 1);
     }
 }
 

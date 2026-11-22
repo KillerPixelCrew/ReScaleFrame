@@ -214,7 +214,7 @@ void run(const std::filesystem::path& source_dir) {
         const auto sample = sequence.next({width, height, output_width, output_height, 0}, true);
         require(sample.phase_count == 18, "18 phases at scale 0.67");
         state = next_state(state, false, true, sample, width, height, sequence.last_was_reset());
-        const auto jittered = jitter_engine_projection(projection, sample.x, sample.y, width, height);
+        const auto jittered = production_jitter_projection(projection, sample.x, sample.y, width, height);
         require(jittered.has_value(), "jittered projection");
         const auto full = engine_mul(*jittered, view);
         if (frame > 0) {
@@ -236,7 +236,7 @@ void run(const std::filesystem::path& source_dir) {
                 worst_control_error = std::fmax(worst_control_error, std::fmax(std::fabs(m.u - du), std::fabs(m.v - dv)));
             // 3. A camera pan of (+3, -2) render pixels (the previous image sat 3 px right and 2 px up): the jitter is
             // removed and the pan remains, motion = current - previous = (-3 / W, +2 / H).
-            const auto panned = engine_mul(*jitter_engine_projection(projection, previous_sample.x + 3.0f, previous_sample.y - 2.0f,
+            const auto panned = engine_mul(*production_jitter_projection(projection, previous_sample.x + 3.0f, previous_sample.y - 2.0f,
                 width, height), view);
             const auto pan = draw(f, full, panned, {0, 0, float(width), float(height), uv.current_u, uv.current_v, uv.previous_u, uv.previous_v});
             for (const auto& m : pan)

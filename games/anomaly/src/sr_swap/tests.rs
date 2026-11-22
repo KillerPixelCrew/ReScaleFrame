@@ -151,6 +151,7 @@ struct Host {
     drops: usize,
     round_trips: usize,
     upscales: usize,
+    recovery_inputs: Option<rsf_anomaly_swap_upscale>,
     published: *const View,
     observed_twin_generation: u64,
     positions: Vec<(f32, f32)>,
@@ -249,10 +250,25 @@ unsafe extern "C" fn round_trip(user: *mut c_void, _: *const Fields, _: *const F
     true
 }
 
-unsafe extern "C" fn upscale(user: *mut c_void, _: *const rsf_anomaly_swap_upscale) -> bool {
+unsafe extern "C" fn upscale(user: *mut c_void, inputs: *const rsf_anomaly_swap_upscale) -> bool {
     let host = host(user);
     host.upscales += 1;
     host.observed_twin_generation = unsafe { (*host.published).counters.twin_generations };
+    let inputs = unsafe { &*inputs };
+    if inputs.spatial_recovery {
+        // The target records are valid during this call.
+        for fields in [
+            inputs.generic0_twin,
+            inputs.position_twin,
+            inputs.generic1_twin,
+        ] {
+            assert!(!unsafe { (*fields).srv }.is_null());
+        }
+        for fields in [inputs.generic0, inputs.position, inputs.generic1] {
+            assert!(!unsafe { (*fields).rtv }.is_null());
+        }
+        host.recovery_inputs = Some(*inputs);
+    }
     true
 }
 
@@ -715,6 +731,30 @@ fn sun_cascades_borrow_the_unjittered_camera() {
 }
 
 #[test]
+fn failed_first_person_jitter_restores_the_camera_and_uploaded_projection() {
+    for fail_upload in [false, true] {
+        let c = Case::new(true);
+        assert!(c.prepare(&c.facts3(0.25, 0.1)));
+        let main = (c.engine().project, c.engine().full);
+        let hud = perspective(0.9, 1920.0 / 1080.0, 0.05);
+        let full = engine_mul(&hud, &VIEW);
+        (c.engine().project, c.engine().full) = (hud, full);
+        if fail_upload {
+            c.host().fail_upload_at = Some(c.host().upload_calls);
+        } else {
+            c.host().fail_write_at = Some(c.host().writes + 1);
+        }
+        rsf_anomaly_swap_rm_near(c.swap);
+        assert_eq!((c.engine().project, c.engine().full), (hud, full));
+        assert_eq!(c.host().uploads.last(), Some(&hud));
+        assert_eq!(c.view().counters.fp_jittered, 0);
+        assert!(!c.view().refusal.is_null());
+        (c.engine().project, c.engine().full) = main;
+        assert!(c.seam() && c.stock());
+    }
+}
+
+#[test]
 fn sun_refusal_returns_the_frame_to_output_size() {
     for failure in 0..3 {
         let c = Case::new(true);
@@ -737,12 +777,21 @@ fn sun_refusal_returns_the_frame_to_output_size() {
             token
         };
         rsf_anomaly_swap_sun_end(c.swap, token);
+        assert!(c.view().open && !c.view().refusal.is_null());
+        assert_eq!(c.host().viewports, [(1286, 724)]);
+        assert!(c.seam());
         assert!(c.stock(), "failure {failure}");
         assert!(!c.view().open && !c.view().refusal.is_null());
         assert_eq!(c.host().viewports, [(1286, 724), (1920, 1080)]);
         let n = c.view().counters;
-        assert_eq!(n.restores[RSF_ANOMALY_SWAP_RESTORE_ROLLBACK as usize], 1);
+        assert_eq!(n.restores[RSF_ANOMALY_SWAP_RESTORE_SEAM as usize], 1);
         assert_eq!((n.sun_refused, n.sun_restored), (1, 0));
+        assert_eq!(c.host().upscales, 1);
+        let inputs = c.host().recovery_inputs.expect("spatial seam");
+        assert_eq!(inputs.depth_srv, c.view().twins.depth_srv);
+        assert_eq!(inputs.engine_dsv, c.engine().base_zb);
+        assert_eq!((inputs.render_width, inputs.render_height), (1286, 724));
+        assert_eq!((inputs.output_width, inputs.output_height), (1920, 1080));
     }
 }
 
