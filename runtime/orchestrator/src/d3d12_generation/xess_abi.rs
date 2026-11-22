@@ -4,6 +4,9 @@
 #![allow(clippy::useless_transmute)]
 type ID3D12Resource = ::core::ffi::c_void;
 type D3D12_RESOURCE_STATES = u32;
+type ID3D12Heap = ::core::ffi::c_void;
+type ID3D12PipelineLibrary = ::core::ffi::c_void;
+type IDXGISwapChain = ::core::ffi::c_void;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -283,6 +286,15 @@ pub const XEFG_SWAPCHAIN_RV_ONLY_NOW: _xefg_swapchain_resource_validity_t = 1;
 pub const XEFG_SWAPCHAIN_RV_COUNT: _xefg_swapchain_resource_validity_t = 2;
 pub type _xefg_swapchain_resource_validity_t = ::core::ffi::c_int;
 pub use self::_xefg_swapchain_resource_validity_t as xefg_swapchain_resource_validity_t;
+pub const XEFG_SWAPCHAIN_INIT_FLAG_NONE: _xefg_swapchain_init_flags_t = 0;
+pub const XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH: _xefg_swapchain_init_flags_t = 1;
+pub const XEFG_SWAPCHAIN_INIT_FLAG_EXTERNAL_DESCRIPTOR_HEAP: _xefg_swapchain_init_flags_t = 2;
+pub const XEFG_SWAPCHAIN_INIT_FLAG_HIGH_RES_MV: _xefg_swapchain_init_flags_t = 4;
+pub const XEFG_SWAPCHAIN_INIT_FLAG_USE_NDC_VELOCITY: _xefg_swapchain_init_flags_t = 8;
+pub const XEFG_SWAPCHAIN_INIT_FLAG_JITTERED_MV: _xefg_swapchain_init_flags_t = 16;
+pub const XEFG_SWAPCHAIN_INIT_FLAG_UITEXTURE_NOT_PREMUL_ALPHA: _xefg_swapchain_init_flags_t = 32;
+pub type _xefg_swapchain_init_flags_t = ::core::ffi::c_int;
+pub use self::_xefg_swapchain_init_flags_t as xefg_swapchain_init_flags_t;
 pub const XEFG_SWAPCHAIN_RES_HUDLESS_COLOR: _xefg_swapchain_resource_type_t = 0;
 pub const XEFG_SWAPCHAIN_RES_DEPTH: _xefg_swapchain_resource_type_t = 1;
 pub const XEFG_SWAPCHAIN_RES_MOTION_VECTOR: _xefg_swapchain_resource_type_t = 2;
@@ -435,6 +447,14 @@ pub const XEFG_SWAPCHAIN_RESULT_ERROR_WRONG_CALL_ORDER: _xefg_swapchain_result_t
 pub const XEFG_SWAPCHAIN_RESULT_ERROR_UNKNOWN: _xefg_swapchain_result_t = -1000;
 pub type _xefg_swapchain_result_t = ::core::ffi::c_int;
 pub use self::_xefg_swapchain_result_t as xefg_swapchain_result_t;
+pub const XEFG_SWAPCHAIN_UI_MODE_AUTO: _xefg_swapchain_ui_mode_t = 0;
+pub const XEFG_SWAPCHAIN_UI_MODE_NONE: _xefg_swapchain_ui_mode_t = 1;
+pub const XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_UITEXTURE: _xefg_swapchain_ui_mode_t = 2;
+pub const XEFG_SWAPCHAIN_UI_MODE_HUDLESS_UITEXTURE: _xefg_swapchain_ui_mode_t = 3;
+pub const XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS: _xefg_swapchain_ui_mode_t = 4;
+pub const XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS_UITEXTURE: _xefg_swapchain_ui_mode_t = 5;
+pub type _xefg_swapchain_ui_mode_t = ::core::ffi::c_int;
+pub use self::_xefg_swapchain_ui_mode_t as xefg_swapchain_ui_mode_t;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct _xefg_swapchain_present_status_t {
@@ -468,6 +488,64 @@ pub type xefg_swapchain_present_status_t = _xefg_swapchain_present_status_t;
 pub const XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_DISABLED: xefg_swapchain_ui_composition_state_t = 0;
 pub const XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED: xefg_swapchain_ui_composition_state_t = 1;
 pub type xefg_swapchain_ui_composition_state_t = ::core::ffi::c_int;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct _xefg_swapchain_d3d12_init_params_t {
+    pub pApplicationSwapChain: *mut IDXGISwapChain,
+    pub initFlags: u32,
+    pub maxInterpolatedFrames: u32,
+    pub creationNodeMask: u32,
+    pub visibleNodeMask: u32,
+    pub pTempBufferHeap: *mut ID3D12Heap,
+    pub bufferHeapOffset: u64,
+    pub pTempTextureHeap: *mut ID3D12Heap,
+    pub textureHeapOffset: u64,
+    pub pPipelineLibrary: *mut ID3D12PipelineLibrary,
+    pub uiMode: xefg_swapchain_ui_mode_t,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of _xefg_swapchain_d3d12_init_params_t"]
+        [::core::mem::size_of::<_xefg_swapchain_d3d12_init_params_t>() - 72usize];
+    ["Alignment of _xefg_swapchain_d3d12_init_params_t"]
+        [::core::mem::align_of::<_xefg_swapchain_d3d12_init_params_t>() - 8usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::pApplicationSwapChain"][::core::mem::offset_of!(
+        _xefg_swapchain_d3d12_init_params_t,
+        pApplicationSwapChain
+    ) - 0usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::initFlags"]
+        [::core::mem::offset_of!(_xefg_swapchain_d3d12_init_params_t, initFlags) - 8usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::maxInterpolatedFrames"][::core::mem::offset_of!(
+        _xefg_swapchain_d3d12_init_params_t,
+        maxInterpolatedFrames
+    ) - 12usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::creationNodeMask"]
+        [::core::mem::offset_of!(_xefg_swapchain_d3d12_init_params_t, creationNodeMask) - 16usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::visibleNodeMask"]
+        [::core::mem::offset_of!(_xefg_swapchain_d3d12_init_params_t, visibleNodeMask) - 20usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::pTempBufferHeap"]
+        [::core::mem::offset_of!(_xefg_swapchain_d3d12_init_params_t, pTempBufferHeap) - 24usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::bufferHeapOffset"]
+        [::core::mem::offset_of!(_xefg_swapchain_d3d12_init_params_t, bufferHeapOffset) - 32usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::pTempTextureHeap"]
+        [::core::mem::offset_of!(_xefg_swapchain_d3d12_init_params_t, pTempTextureHeap) - 40usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::textureHeapOffset"]
+        [::core::mem::offset_of!(_xefg_swapchain_d3d12_init_params_t, textureHeapOffset) - 48usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::pPipelineLibrary"]
+        [::core::mem::offset_of!(_xefg_swapchain_d3d12_init_params_t, pPipelineLibrary) - 56usize];
+    ["Offset of field: _xefg_swapchain_d3d12_init_params_t::uiMode"]
+        [::core::mem::offset_of!(_xefg_swapchain_d3d12_init_params_t, uiMode) - 64usize];
+};
+impl Default for _xefg_swapchain_d3d12_init_params_t {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+pub type xefg_swapchain_d3d12_init_params_t = _xefg_swapchain_d3d12_init_params_t;
 #[repr(C)]
 pub struct _xefg_swapchain_d3d12_resource_data_t {
     pub type_: xefg_swapchain_resource_type_t,

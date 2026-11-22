@@ -37,12 +37,14 @@ def main():
 
 
     generate(bindgen, args.xess / "xess_fg/xefg_swapchain_d3d12.h",
-             r"_?xefg_swapchain_(d3d12_resource_data|version|2d|frame_constant_data|properties|"
+             r"_?xefg_swapchain_(d3d12_(resource_data|init_params)|init_flags|ui_mode|version|2d|frame_constant_data|properties|"
              r"present_status|result|resource_type|resource_validity)_t|xefg_swapchain_ui_composition_state_t|"
              r"_?xell_sleep_params_t",
              root / "runtime/orchestrator/src/d3d12_generation/xess_abi.rs",
              ["#![allow(clippy::useless_transmute)]",
-              "type ID3D12Resource = ::core::ffi::c_void;", "type D3D12_RESOURCE_STATES = u32;"],
+              "type ID3D12Resource = ::core::ffi::c_void;", "type D3D12_RESOURCE_STATES = u32;",
+              "type ID3D12Heap = ::core::ffi::c_void;", "type ID3D12PipelineLibrary = ::core::ffi::c_void;",
+              "type IDXGISwapChain = ::core::ffi::c_void;"],
              ["-x", "c++", "-std=c++20", "-include", "d3d12.h", "-include", "dxgi1_5.h",
               "-include", str(args.xess / "xell/xell.h")])
     api = args.fidelityfx / "api/include"

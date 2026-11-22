@@ -6,13 +6,34 @@ mod abi;
 use abi::*;
 use std::ffi::CStr;
 use std::sync::OnceLock;
-use windows_sys::Win32::{Foundation::FARPROC, System::LibraryLoader::GetProcAddress};
+use windows::Win32::{
+    Foundation::HANDLE,
+    Graphics::{Direct3D12::*, Dxgi::*},
+};
+use windows::core::{GUID, Interface};
+use windows_sys::Win32::{
+    Foundation::{S_OK, WAIT_OBJECT_0},
+    System::{
+        LibraryLoader::GetProcAddress,
+        Threading::{CreateEventW, WaitForSingleObject},
+    },
+};
 
 const MISSING_ENTRY: i32 = -5;
 
 type Create = unsafe extern "C" fn(Raw, *mut Raw) -> i32;
 type Destroy = unsafe extern "C" fn(Raw) -> i32;
 type SetUnsigned = unsafe extern "C" fn(Raw, u32) -> i32;
+type InitChain = unsafe extern "C" fn(
+    Raw,
+    Raw,
+    *const DXGI_SWAP_CHAIN_DESC1,
+    *const DXGI_SWAP_CHAIN_FULLSCREEN_DESC,
+    Raw,
+    Raw,
+    *const xefg_swapchain_d3d12_init_params_t,
+) -> i32;
+type ChainPtr = unsafe extern "C" fn(Raw, *const GUID, *mut Raw) -> i32;
 
 struct Sdk {
     create_fg: Create,
@@ -22,8 +43,8 @@ struct Sdk {
     properties: unsafe extern "C" fn(Raw, *mut xefg_swapchain_properties_t) -> i32,
     bind_xell: unsafe extern "C" fn(Raw, Raw) -> i32,
     version: unsafe extern "C" fn(*mut xefg_swapchain_version_t) -> i32,
-    init_chain: unsafe extern "system" fn() -> isize,
-    chain_ptr: unsafe extern "system" fn() -> isize,
+    init_chain: InitChain,
+    chain_ptr: ChainPtr,
     compose: unsafe extern "C" fn(Raw, i32) -> i32,
     count: SetUnsigned,
     enabled: SetUnsigned,
@@ -61,8 +82,8 @@ impl Sdk {
             properties: entry!(fg, c"xefgSwapChainGetProperties"),
             bind_xell: entry!(fg, c"xefgSwapChainSetLatencyReduction"),
             version: entry!(fg, c"xefgSwapChainGetVersion"),
-            init_chain: symbol(fg, c"xefgSwapChainD3D12InitFromSwapChainDesc")?,
-            chain_ptr: symbol(fg, c"xefgSwapChainD3D12GetSwapChainPtr")?,
+            init_chain: entry!(fg, c"xefgSwapChainD3D12InitFromSwapChainDesc"),
+            chain_ptr: entry!(fg, c"xefgSwapChainD3D12GetSwapChainPtr"),
             compose: entry!(fg, c"xefgSwapChainSetUiCompositionState"),
             count: entry!(fg, c"xefgSwapChainSetNumInterpolatedFrames"),
             enabled: entry!(fg, c"xefgSwapChainSetEnabled"),
@@ -77,18 +98,6 @@ impl Sdk {
     }
 }
 
-#[repr(C)]
-struct Native {
-    check: &'static Checks,
-    create_chain: unsafe extern "C" fn(FARPROC, FARPROC, Raw, *const Setup, u32, *mut Raw) -> i32,
-    create_fence: unsafe extern "C" fn(Raw) -> Raw,
-    create_event: unsafe extern "C" fn() -> Raw,
-    drain: unsafe extern "C" fn(Raw, Raw, Raw, u64) -> i32,
-}
-
-const _: () = assert!(size_of::<Native>() == 5 * size_of::<Raw>());
-
-static NATIVE: OnceLock<&Native> = OnceLock::new();
 static OPS: OnceLock<Ops> = OnceLock::new();
 
 unsafe extern "C" fn resolve(_: &Setup, fg: Raw, xell: Raw, out: &mut Raw) -> i32 {
@@ -151,16 +160,89 @@ unsafe extern "C" fn create_chain(
     out: *mut Raw,
 ) -> i32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
-    let native = NATIVE.get().unwrap();
-    unsafe {
-        (native.create_chain)(
-            Some(sdk.init_chain),
-            Some(sdk.chain_ptr),
+    let setup = unsafe { &*setup };
+    let Ok(factory) =
+        (unsafe { CreateDXGIFactory2::<IDXGIFactory2>(DXGI_CREATE_FACTORY_FLAGS(0)) })
+    else {
+        return INIT_FAILED;
+    };
+    let desc = chain_description(&setup.chain);
+    let mut flags = 0;
+    if setup.depth_inverted != 0 {
+        flags |= XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH as u32;
+    }
+    if setup.motion_jittered != 0 {
+        flags |= XEFG_SWAPCHAIN_INIT_FLAG_JITTERED_MV as u32;
+    }
+    let init = xefg_swapchain_d3d12_init_params_t {
+        maxInterpolatedFrames: reserved,
+        initFlags: flags,
+        uiMode: match setup.chain.ui_mode {
+            HUDLESS_UI => XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS_UITEXTURE,
+            HUDLESS => XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS,
+            _ => XEFG_SWAPCHAIN_UI_MODE_NONE,
+        },
+        ..Default::default()
+    };
+    let result = unsafe {
+        (sdk.init_chain)(
             context,
-            setup,
-            reserved,
-            out,
+            setup.chain.hwnd,
+            &desc,
+            std::ptr::null(),
+            setup.chain.d3d12_queue,
+            factory.as_raw(),
+            &init,
         )
+    };
+    if result != XEFG_SWAPCHAIN_RESULT_SUCCESS {
+        return INIT_FAILED;
+    }
+    let mut chain = null_mut();
+    let result = unsafe { (sdk.chain_ptr)(context, &IDXGISwapChain4::IID, &mut chain) };
+    if result != XEFG_SWAPCHAIN_RESULT_SUCCESS {
+        drop(unsafe { ComRef::from_owned(chain) });
+        return INIT_FAILED;
+    }
+    unsafe { out.write(chain) };
+    OK
+}
+
+unsafe extern "C" fn create_fence(device: Raw) -> Raw {
+    let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.unwrap();
+    unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }
+        .map_or(null_mut(), Interface::into_raw)
+}
+
+unsafe extern "C" fn create_event() -> Raw {
+    unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) }
+}
+
+unsafe extern "C" fn drain(queue: Raw, fence: Raw, event: Raw, serial: u64) -> i32 {
+    let queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) }.unwrap();
+    let fence = unsafe { ID3D12Fence::from_raw_borrowed(&fence) }.unwrap();
+    if let Err(err) = unsafe { queue.Signal(fence, serial) } {
+        return err.code().0;
+    }
+    if serial != 0 {
+        let result = crate::d3d12_fence::wait_for_value(
+            serial,
+            10_000,
+            || unsafe { fence.GetCompletedValue() },
+            || {
+                unsafe { fence.SetEventOnCompletion(serial, HANDLE(event)) }
+                    .map_or_else(|err| err.code().0, |()| S_OK)
+            },
+            |remaining| unsafe { WaitForSingleObject(event, remaining) == WAIT_OBJECT_0 },
+        );
+        if result < 0 {
+            return result;
+        }
+    }
+    match crate::d3d12_fence::FenceState::check(unsafe { fence.GetCompletedValue() }, serial) {
+        crate::d3d12_fence::FenceState::DeviceRemoved => DXGI_ERROR_DEVICE_REMOVED.0,
+        crate::d3d12_fence::FenceState::Pending => DXGI_ERROR_DEVICE_HUNG.0,
+        crate::d3d12_fence::FenceState::Complete => S_OK,
     }
 }
 
@@ -267,14 +349,13 @@ unsafe extern "C" fn present_status(bindings: Raw, context: Raw, out: *mut Prese
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_xeg12_create_native(
-    native: &'static Native,
+    checks: &'static Checks,
     setup: *const Setup,
     out: *mut Raw,
     chain: *mut Raw,
 ) -> i32 {
-    let native = NATIVE.get_or_init(|| native);
     let ops = OPS.get_or_init(|| Ops {
-        check: native.check,
+        check: checks,
         resolve,
         close,
         create_fg,
@@ -295,9 +376,9 @@ unsafe extern "C" fn rsf_core_xeg12_create_native(
         tag,
         constants,
         present_status,
-        create_fence: native.create_fence,
-        create_event: native.create_event,
-        drain: native.drain,
+        create_fence,
+        create_event,
+        drain,
     });
     unsafe { rsf_core_xeg12_create(ops, setup, out, chain) }
 }

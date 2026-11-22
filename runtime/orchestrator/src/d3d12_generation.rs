@@ -15,6 +15,30 @@ use std::sync::Mutex;
 mod fsr;
 mod xess;
 
+fn chain_description(
+    desc: &crate::render_abi::rsf_fg_swapchain_desc,
+) -> windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC1 {
+    use windows::Win32::Graphics::Dxgi::{Common::*, *};
+    DXGI_SWAP_CHAIN_DESC1 {
+        Width: desc.width,
+        Height: desc.height,
+        Format: DXGI_FORMAT(desc.format as i32),
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+        BufferCount: desc.buffer_count,
+        SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+        Flags: if desc.allow_tearing != 0 {
+            DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32
+        } else {
+            0
+        },
+        ..Default::default()
+    }
+}
+
 type Raw = *mut c_void;
 
 const OK: i32 = 0;
