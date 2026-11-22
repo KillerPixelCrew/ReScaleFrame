@@ -634,18 +634,9 @@ impl Stage {
     }
 }
 
+// The C leaf's static table; all leaves and their device/binder tables live for the adapter DLL.
 unsafe fn checked_platform(platform: *const Platform) -> Option<&'static Platform> {
-    if platform.is_null() {
-        return None;
-    }
-    let prefix = platform.cast::<u32>();
-    if unsafe { prefix.read() } < size_of::<Platform>() as u32
-        || unsafe { prefix.add(1).read() } != PLATFORM_ABI
-    {
-        return None;
-    }
-    // All leaves and their device/binder tables live for the adapter DLL.
-    Some(unsafe { &*platform })
+    unsafe { platform.as_ref() }
 }
 
 #[unsafe(no_mangle)]

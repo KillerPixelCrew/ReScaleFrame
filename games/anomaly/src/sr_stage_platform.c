@@ -156,7 +156,6 @@ static bool copy(void* output, const void* input, size_t size) { return guarded_
 static const void* d3d11(void) { return rsf_anomaly_sr_d3d11_platform(); }
 
 static const rsf_anomaly_sr_native native = {
-    sizeof(rsf_anomaly_sr_native),
     copy,
     guarded_log_line,
     set_projection,

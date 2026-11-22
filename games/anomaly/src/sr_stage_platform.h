@@ -308,7 +308,6 @@ typedef struct rsf_anomaly_sr_stage_platform {
 struct rsf_anomaly_hook_site;
 #define RSF_ANOMALY_SR_DETOUR_COUNT 5   /* phase_scene_prepare, phase_combine, phase_sunshafts, phase_blur, sun cascades */
 typedef struct rsf_anomaly_sr_native {
-    uint32_t struct_size;
     // Guarded engine-memory copy, and a log sink call that contains a foreign C++ exception.
     bool (*copy)(void* output, const void* input, size_t size);
     void (*log)(rsf_anomaly_sr_log log, void* user, const char* message);
@@ -330,10 +329,10 @@ typedef struct rsf_anomaly_sr_native {
     const void* (*d3d11)(void);                           // the process-lifetime rsf_sr_d3d11 table
 } rsf_anomaly_sr_native;
 #ifdef __cplusplus
-static_assert(sizeof(rsf_anomaly_sr_native) == 128, "SR native leaf table");
+static_assert(sizeof(rsf_anomaly_sr_native) == 120, "SR native leaf table");
 extern "C" {
 #else
-_Static_assert(sizeof(rsf_anomaly_sr_native) == 128, "SR native leaf table");
+_Static_assert(sizeof(rsf_anomaly_sr_native) == 120, "SR native leaf table");
 #endif
 // Rust entries of the leaf. `ini` is a NUL-terminated UTF-16 path; `build` the native_profile.rs index.
 bool rsf_anomaly_sr_stage_configure_native(const rsf_anomaly_sr_native*, const uint16_t* ini, bool apply,

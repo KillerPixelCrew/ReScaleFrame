@@ -97,9 +97,7 @@ typedef struct rsf_anomaly_motion_engine {
     uint32_t projection_rva;     // RCache.xforms.m_p
 } rsf_anomaly_motion_engine;
 
-#define RSF_ANOMALY_MOTION_PLATFORM_ABI 13u
 typedef struct rsf_anomaly_motion_platform {
-    uint32_t struct_size, abi_version;
     const rsf_anomaly_motion_device_platform* device;
     const rsf_anomaly_motion_bind_platform* bind;
     // Guarded engine-memory copy behind the guard image.

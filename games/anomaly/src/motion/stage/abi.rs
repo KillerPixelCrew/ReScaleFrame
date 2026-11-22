@@ -8,7 +8,6 @@ use crate::shader_loader::{EngineIncludeOps, Read};
 use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
-pub(super) const PLATFORM_ABI: u32 = 13;
 pub(super) type GuardedCopy = unsafe extern "C" fn(Raw, *const std::ffi::c_void, usize) -> bool;
 
 #[repr(C)]
@@ -73,8 +72,6 @@ pub(super) struct ShaderCreation {
 
 #[repr(C)]
 pub(super) struct Platform {
-    pub struct_size: u32,
-    pub abi_version: u32,
     pub device: &'static DevicePlatform,
     pub bind: &'static BindPlatform,
     pub copy: GuardedCopy,
@@ -143,11 +140,11 @@ const _: () = {
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 256);
-    assert!(std::mem::offset_of!(Platform, copy) == 24);
-    assert!(std::mem::offset_of!(Platform, install_hooks) == 56);
-    assert!(std::mem::offset_of!(Platform, render_target) == 88);
-    assert!(std::mem::offset_of!(Platform, target_facts) == 136);
-    assert!(std::mem::offset_of!(Platform, includes) == 240);
-    assert!(std::mem::offset_of!(Platform, read_engine) == 248);
+    assert!(size_of::<Platform>() == 248);
+    assert!(std::mem::offset_of!(Platform, copy) == 16);
+    assert!(std::mem::offset_of!(Platform, install_hooks) == 48);
+    assert!(std::mem::offset_of!(Platform, render_target) == 80);
+    assert!(std::mem::offset_of!(Platform, target_facts) == 128);
+    assert!(std::mem::offset_of!(Platform, includes) == 232);
+    assert!(std::mem::offset_of!(Platform, read_engine) == 240);
 };

@@ -87,7 +87,6 @@ type Ptr = *mut c_void;
 /// rsf_anomaly_sr_native (sr_stage_platform.h).
 #[repr(C)]
 pub(crate) struct Native {
-    struct_size: u32,
     copy: unsafe extern "C" fn(Ptr, *const c_void, usize) -> bool,
     log: unsafe extern "C" fn(rsf_anomaly_sr_log, Ptr, *const c_char),
     set_projection: unsafe extern "C" fn(Ptr, Ptr, *const c_void) -> bool,
@@ -106,7 +105,7 @@ pub(crate) struct Native {
 }
 
 const _: () = {
-    assert!(size_of::<Native>() == 128);
+    assert!(size_of::<Native>() == 120);
     // The seam reads the generic0 CRT the world window swaps.
     assert!(WORLD_TARGETS[0].offset == 0x3a8);
 };
@@ -220,9 +219,6 @@ struct TwinLog {
 
 impl TwinLog {
     fn say(&self, text: &str) {
-        let mut text = text.as_bytes().to_vec();
-        // The former 260-byte snprintf buffer.
-        text.truncate(259);
         if let Ok(text) = CString::new(text) {
             unsafe { (native().log)(self.callback, self.user, text.as_ptr()) };
         }
@@ -430,15 +426,13 @@ unsafe extern "C" fn position_buffer(_: Ptr, constant: usize, stage: u32) -> usi
 }
 
 unsafe extern "C" fn correct_position_constant(_: Ptr, constant: Ptr, x: f32, y: f32) -> u32 {
-    {
-        rsf_anomaly_sr_correct_position_constant(
-            &POSITION_LAYOUT,
-            &POSITION_PLATFORM.0,
-            constant as usize,
-            x,
-            y,
-        )
-    }
+    rsf_anomaly_sr_correct_position_constant(
+        &POSITION_LAYOUT,
+        &POSITION_PLATFORM.0,
+        constant as usize,
+        x,
+        y,
+    )
 }
 
 // ---- the stage leaves ----------------------------------------------------------------------------------------------
@@ -846,9 +840,7 @@ unsafe extern "C" fn rm_near_callback(_: Ptr) {
 }
 
 unsafe extern "C" fn set_rm_near(on: bool) {
-    {
-        rsf_anomaly_geometry_set_near(on.then_some(rm_near_callback as unsafe extern "C" fn(Ptr)))
-    };
+    rsf_anomaly_geometry_set_near(on.then_some(rm_near_callback as unsafe extern "C" fn(Ptr)));
 }
 
 unsafe extern "C" fn remove_hooks() -> bool {
@@ -951,13 +943,9 @@ fn leaves() -> Platform {
 }
 
 /// Adopts the leaf table and registers the production stage table built over it.
-pub(crate) fn bind(leaves_table: &'static Native) -> bool {
-    if leaves_table.struct_size as usize != size_of::<Native>() {
-        return false;
-    }
+fn bind(leaves_table: &'static Native) {
     NATIVE_LEAVES.store(from_ref(leaves_table).cast_mut(), Ordering::Release);
     STAGE.register(crate::sr_temporal::stage_bridge::production(leaves()));
-    true
 }
 
 #[unsafe(no_mangle)]
@@ -968,7 +956,8 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_sr_stage_configure_native(
     log: rsf_anomaly_sr_log,
     user: Ptr,
 ) -> bool {
-    bind(leaves_table) && unsafe { rsf_anomaly_sr_stage_configure_ini(ini, apply, log, user) }
+    bind(leaves_table);
+    unsafe { rsf_anomaly_sr_stage_configure_ini(ini, apply, log, user) }
 }
 
 #[unsafe(no_mangle)]
@@ -981,7 +970,8 @@ extern "C" fn rsf_anomaly_sr_stage_install_build(
         return false;
     };
     let size = selected.native.image_size;
-    bind(leaves_table) && STAGE.install(image, size, size, from_ref(selected).cast())
+    bind(leaves_table);
+    STAGE.install(image, size, size, from_ref(selected).cast())
 }
 
 #[unsafe(no_mangle)]

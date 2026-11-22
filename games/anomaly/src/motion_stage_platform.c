@@ -343,8 +343,6 @@ static const rsf_anomaly_motion_platform* motion_platform(void)
     static bool ready;
     if (!ready) {
         platform = (rsf_anomaly_motion_platform){
-            .struct_size = sizeof(rsf_anomaly_motion_platform),
-            .abi_version = RSF_ANOMALY_MOTION_PLATFORM_ABI,
             .device = rsf_anomaly_motion_device_platform_get(),
             .bind = &bind_platform,
             .copy = copy_engine,
@@ -392,12 +390,12 @@ _Static_assert(sizeof(rsf_anomaly_engine_include_ops) == 24 && offsetof(rsf_anom
     "include ops");
 _Static_assert(sizeof(rsf_anomaly_motion_engine) == 56 && offsetof(rsf_anomaly_motion_engine, hw_device_rva) == 8 &&
     offsetof(rsf_anomaly_motion_engine, projection_rva) == 48, "motion engine");
-_Static_assert(sizeof(rsf_anomaly_motion_platform) == 256 && offsetof(rsf_anomaly_motion_platform, copy) == 24 &&
-    offsetof(rsf_anomaly_motion_platform, install_hooks) == 56 &&
-    offsetof(rsf_anomaly_motion_platform, render_target) == 88 &&
-    offsetof(rsf_anomaly_motion_platform, target_facts) == 136 &&
-    offsetof(rsf_anomaly_motion_platform, includes) == 240 &&
-    offsetof(rsf_anomaly_motion_platform, read_engine) == 248, "motion platform");
+_Static_assert(sizeof(rsf_anomaly_motion_platform) == 248 && offsetof(rsf_anomaly_motion_platform, copy) == 16 &&
+    offsetof(rsf_anomaly_motion_platform, install_hooks) == 48 &&
+    offsetof(rsf_anomaly_motion_platform, render_target) == 80 &&
+    offsetof(rsf_anomaly_motion_platform, target_facts) == 128 &&
+    offsetof(rsf_anomaly_motion_platform, includes) == 232 &&
+    offsetof(rsf_anomaly_motion_platform, read_engine) == 240, "motion platform");
 _Static_assert(sizeof(rsf_anomaly_motion_frame_target) == 24 && offsetof(rsf_anomaly_motion_frame_target, written) == 20 &&
     offsetof(rsf_anomaly_motion_frame_target, main) == 21, "frame target");
 _Static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7, "frame phase and dump view");
