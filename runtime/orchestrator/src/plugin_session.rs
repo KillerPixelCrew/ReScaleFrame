@@ -55,10 +55,10 @@ unsafe extern "C" {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Phase {
-    Partial,
+    // Not startable: prepare has not succeeded, or a quiesce began and has not finished.
+    Closed,
     Prepared,
     Started,
-    Quiescing,
     Quiesced,
 }
 
@@ -184,7 +184,7 @@ pub(super) unsafe extern "C" fn rsf_plugin_session_prepare(
         _module: module,
         hooks: api.hooks,
         services: options.services,
-        phase: RwLock::new(Phase::Partial),
+        phase: RwLock::new(Phase::Closed),
     });
     if raw.is_null() {
         return NOT_READY;
@@ -248,7 +248,7 @@ pub(super) unsafe extern "C" fn rsf_plugin_session_quiesce(raw: *const Session) 
     }
     // A refusal may leave some producers closed. Only another quiesce can
     // finish the transition. Do not tell a caller that this session started.
-    *phase = Phase::Quiescing;
+    *phase = Phase::Closed;
     let result = unsafe { rsf_plugin_call_control(session.hooks.quiesce, &CONTROL_ARGS) };
     if result == 0 {
         *phase = Phase::Quiesced;
