@@ -196,7 +196,69 @@ extern "C" fn rsf_fixture_graph_main() -> i32 {
             )
         };
     }
+    failures += native_unloaded_cases();
     i32::from(failures != 0)
+}
+
+/// native.rs before any host loads: each forwarder refuses, or runs the engine's own call.
+fn native_unloaded_cases() -> i32 {
+    use crate::native::*;
+    unsafe extern "C" fn lease(user: *mut c_void) -> i32 {
+        unsafe { *user.cast::<i32>() += 1 };
+        7
+    }
+    unsafe extern "C" fn present(_queue: *mut c_void, info: *const c_void) -> i32 {
+        unsafe { *info.cast::<i32>() }
+    }
+    let mut failures = 0;
+    macro_rules! check {
+        ($condition:expr) => {
+            if !$condition {
+                rsf_fixture_graph_failure(line!());
+                failures += 1;
+            }
+        };
+    }
+    let mut leases = 0_i32;
+    let user = (&raw mut leases).cast::<c_void>();
+    let present_result = 5_i32;
+    // SAFETY: null owners and records are never dereferenced without a loaded host, the
+    // leases borrow live locals and the C++ runner prints failures synchronously.
+    unsafe {
+        check!(rsf_godot_native_vulkan_enabled() == 0);
+        check!(rsf_godot_native_vk_execution_supported() == 0);
+        check!(rsf_godot_native_vk_resolver() == 0);
+        check!(rsf_godot_native_vk_present_marker(1, 1) == 0);
+        check!(rsf_godot_native_vk_execution(1, 1, 1, 1, 1) == 0);
+        // An engine-owned WSI chain keeps Godot's present layout.
+        check!(rsf_godot_native_vk_image_layout(ptr::null_mut()) == 1_000_001_002);
+        check!(rsf_godot_native_vk_wsi_call(lease, user) == 7);
+        check!(rsf_godot_native_vk_foreign_call(lease, user) == 7);
+        check!(
+            rsf_godot_native_vk_native_present(
+                present as *const () as usize as u64,
+                ptr::null_mut(),
+                (&raw const present_result).cast(),
+            ) == 5
+        );
+        check!(rsf_godot_native_vk_capture_release(ptr::null_mut()) == 1);
+        check!(rsf_godot_native_vk_create(ptr::null(), ptr::null_mut(), ptr::null_mut()) == 0);
+        check!(rsf_godot_native_vk_destroy(ptr::null_mut()) == 0);
+        check!(rsf_godot_native_vk_images(ptr::null_mut(), ptr::null_mut(), ptr::null_mut()) == -3);
+        check!(rsf_godot_native_status(ptr::null_mut()) == 0);
+        check!(rsf_godot_native_attach(ptr::null()) == 0);
+        check!(
+            rsf_godot_native_render(
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null()
+            ) == 0
+        );
+        check!(rsf_godot_native_shutdown() == 0);
+        check!(leases == 2);
+    }
+    failures
 }
 
 #[unsafe(no_mangle)]
@@ -235,7 +297,8 @@ extern "C" fn rsf_fixture_graph_cases(
             )
         };
         let state = state.cast::<DriverState>();
-        let snapshot = || {
+        // Capture the raw pointer, not a borrow of its target that later faults would alias.
+        let snapshot = move || {
             let mut pool = [0; 4];
             rsf_fixture_graph_pool(context, &mut pool);
             let [command, used, buffers, semaphores] = pool;

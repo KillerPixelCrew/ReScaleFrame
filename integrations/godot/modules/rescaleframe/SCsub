@@ -41,7 +41,8 @@ elif rust_arch == "thumbv7a":
 else:
     rust_abi = "gnu"
 
-# Archive the Rust object with the C++ module objects. It needs no Rust runtime or DLL imports.
+# Archive the Rust object with the C++ module objects. It needs no Rust runtime. Its only
+# imports are the kernel32 library and timing calls that Godot's Windows link already provides.
 env.modules_sources += env_rsf.CommandNoCache(
     "#modules/rsf_godot_viewport" + env["OBJSUFFIX"],
     [
@@ -56,6 +57,7 @@ env.modules_sources += env_rsf.CommandNoCache(
         "host.rs",
         "motion.rs",
         "motion.glsl",
+        "native.rs",
         "packet.rs",
         "packet_abi.rs",
         "pass.rs",

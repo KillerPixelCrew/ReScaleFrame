@@ -4,6 +4,7 @@
 #include "core/variant/dictionary.h"
 #include "core/math/vector2i.h"
 #include "core/object/ref_counted.h"
+#include "native.h"
 class RenderDataRD;
 class RenderSceneBuffersRD;
 
@@ -17,10 +18,13 @@ public:
     void reset_history();
 };
 
+// Every RSFGodot name below is called from engine source inserted by eng/patch-godot.py.
+// The engine is C++, so its call sites name C++ functions; the forwarders defer to native.rs.
 namespace RSFGodot {
 void boot(bool headless);
-bool create_swapchain(void *factory, void *queue, void *window, const void *description, void **out);
-void shutdown();
+inline bool create_swapchain(void *factory, void *queue, void *window, const void *description, void **out) {
+    return rsf_godot_native_create_swapchain(factory, queue, window, description, out) != 0;
+}
 void cpu_begin();
 void cpu_sample();
 void cpu_simulation_begin();
@@ -29,17 +33,15 @@ void cpu_end();
 void input_event(uint32_t kind);
 void upscale(const RenderDataRD *data, double delta);
 void hudless(const RenderDataRD *data);
-void submitted(void *queue, void *const *commands, uint32_t count);
-void present(void *swapchain);
+inline void submitted(void *queue, void *const *commands, uint32_t count) { rsf_godot_native_submitted(queue, commands, count); }
+inline void present(void *swapchain) { rsf_godot_native_present(swapchain); }
 void render_size(RID target, const Vector2i &output, Vector2i &internal);
 void camera_changed(RID target);
 RID resolve_motion(const Ref<RenderSceneBuffersRD> &buffers, RID depth, RID motion,
     const float *to_previous, const Vector2 &jitter, bool normalize_depth, RID &resolved_depth);
 void release_motion();
-bool vulkan_enabled();
-uint64_t vk_resolver();
-bool vk_execution_supported();
-bool vk_execution(uint32_t role, uint64_t session, uint64_t source, uint64_t window, uint32_t begin);
+inline bool vulkan_enabled() { return rsf_godot_native_vulkan_enabled() != 0; }
+inline uint64_t vk_resolver() { return rsf_godot_native_vk_resolver(); }
 
 struct ExecutionReceipt {
     uint64_t queue, fence, session, source;
@@ -60,19 +62,8 @@ public:
     static void submit(uint64_t queue, uint64_t fence, bool begin);
     static bool present(uint64_t window, bool begin);
 };
-bool vk_present_marker(uint64_t window, uint32_t begin);
-int32_t vk_native_present(uint64_t callback, void* queue, const void* info);
-int32_t vk_wsi_call(int32_t (*callback)(void*), void* user);
-int32_t vk_foreign_call(int32_t (*callback)(void*), void* user);
-bool vk_create(const void *setup, void **owner, uint64_t *chain);
-void vk_capture_setup(const void *setup);
-bool vk_capture_release(void *queue_user);
-int32_t vk_images(void *owner, uint32_t *count, uint64_t *images);
-uint32_t vk_image_layout(void *owner);
-int32_t vk_acquire(void *owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t *index);
-int32_t vk_present(void *owner, const void *info);
-void vk_recording_begin(void* commands);
-void vk_submitted(void *const *commands, uint32_t count);
-bool vk_destroy(void *owner);
-bool vk_drain(void *owner);
+inline int32_t vk_foreign_call(int32_t (*callback)(void *), void *user) { return rsf_godot_native_vk_foreign_call(callback, user); }
+inline uint32_t vk_image_layout(void *owner) { return rsf_godot_native_vk_image_layout(owner); }
+inline void vk_recording_begin(void *commands) { rsf_godot_native_vk_recording_begin(commands); }
+inline void vk_submitted(void *const *commands, uint32_t count) { rsf_godot_native_vk_submitted(commands, count); }
 }

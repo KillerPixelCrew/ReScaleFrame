@@ -163,3 +163,42 @@ metadata. MinGW C++ syntax-only checks covered the real graph, Vulkan and
 registration translation units against the pinned checkout's patched headers,
 plus the graph fixture and private packet header. Engine object generation,
 linking, fixture execution and device behavior were outside this source pass.
+
+## Native host table and module entries
+
+This pass starts at RSF `2b62be02` against the same pinned Godot revision. The question
+was which logic still in the module's C++ did not need Godot's C++ API.
+
+| RSF paths | Ownership after this pass |
+| --- | --- |
+| `native.rs`, `native.h`, `bridge.cpp`, `rsf_godot_engine.h` | `native.rs` calls `LoadLibraryW` and `GetProcAddress` and holds the 33 `rsfg_*` exports. The first 29 are required, matching the old resolve macro. `rsfg_vk_execution`, `rsfg_vk_capture_setup`, `rsfg_vk_capture_release` and `rsfg_attach_engine` stay optional. A missing required export publishes nothing. Rust gates each forwarder on readiness, activity or the Vulkan driver, timestamps and reports CPU events, and selects the render-begin route. bridge.cpp supplies the UTF-16 path, the `OS::get_current_rendering_driver_name` query as a leaf, and the Godot error print. The patched engine still calls `RSFGodot` names, now inline forwarders into Rust. |
+| `present.rs`, `vulkan.cpp` | Receipt start, submit and Present call native.rs directly for the execution, support and legacy marker queries. `vulkan.cpp` keeps the `thread_local` scope stack and the private driver members. |
+| `host.rs`, `register_types.h`, `bridge.cpp` | `initialize_rescaleframe_module` and `uninitialize_rescaleframe_module` are `extern "C"` Rust entries. Godot's generated `register_module_types.gen.cpp` passes its unscoped `ModuleInitializationLevel`, which converts to `int`. Rust checks the scene level (`GDEXTENSION_INITIALIZATION_SCENE`, 2, asserted in bridge.cpp) and keeps registration before publication and shutdown before removal. `register_types.cpp` is gone. Its `GDREGISTER_CLASS`, API save and restore and singleton leaves sit in bridge.cpp next to `_bind_methods`. The graph fixture builds the object without these entries because it has no engine. |
+| `cpu_facts.rs`, `cpu_facts.h` | The CPU record builder is a plain Rust function, and the header is deleted. |
+
+Behavior is unchanged with one exception. `vk_image_layout` used to call a null pointer
+whenever the module had not loaded the host, such as with `rescaleframe/enabled` off on
+Vulkan, because the patched render pass setup calls it for every swapchain. native.rs
+now returns `VK_IMAGE_LAYOUT_PRESENT_SRC_KHR`, the layout the host gives a null owner.
+`rsfg_vk_images`, `_acquire` and `_present` return `VK_ERROR_INITIALIZATION_FAILED`
+without a host. Their callers reach them only with a proxy owner. Two fixes for rustc 1.100
+also landed: closure annotations in `packet.rs` and a raw pointer capture in the graph
+fixture's snapshot.
+
+Remaining C++ follows from Godot's C++ API. The class is a `GDCLASS` `Object`. The driver
+leaves are members of `RenderingDeviceDriverVulkan` and `RenderingDeviceDriverD3D12`
+declared by the patch. `GraphScope` is a template constructed inside
+`RenderingDeviceGraph::_run_render_commands`. Motion uses the RenderingDevice compute
+API and the variadic `UniformSetCacheRD::get_cache`. The fixture's C++ instantiates
+`graph.cpp` over typed doubles.
+
+Checks: rustc 1.100 built the object with `-Dwarnings` for `x86_64-pc-windows-msvc` with
+and without `rsf_graph_fixture`. The pinned 1.94.1 toolchain and the GNU target were not
+installed. rustfmt passed. MSVC `/Zs` and MinGW `-fsyntax-only` accepted every module
+translation unit against the pinned, patched headers. MinGW also accepted the patched
+engine sources that include `rsf_godot_engine.h`, plus a probe of the generated module
+registry caller. `main.cpp`, the D3D12 driver and `os_windows.cpp` were skipped because
+their generated or Mesa headers are missing locally. The graph fixture was built by hand
+with the CMake target's flags and passed, including the new unloaded-host cases. The
+preset could not configure because of the tip parse error at `tests/CMakeLists.txt:451`.
+Engine linking and device behavior remain unverified.

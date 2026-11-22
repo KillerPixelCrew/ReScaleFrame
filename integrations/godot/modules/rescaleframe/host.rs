@@ -365,32 +365,44 @@ pub unsafe extern "C" fn rsf_godot_host_render_size(
     }
 }
 
-/// Class registration must complete before the singleton becomes visible.
-///
-/// # Safety
-/// The engine calls this at its scene initialization level with both callbacks valid.
+// modules/register_module_types.h: MODULE_INITIALIZATION_LEVEL_SCENE. bridge.cpp checks the value.
+#[cfg(not(rsf_graph_fixture))]
+const SCENE_LEVEL: i32 = 2;
+
+// ClassDB and Engine singleton leaves next to ReScaleFrameBridge in bridge.cpp. The graph
+// fixture links this object without the engine, so it omits the module entries.
+#[cfg(not(rsf_graph_fixture))]
+unsafe extern "C" {
+    fn rsf_godot_register_bridge_class();
+    fn rsf_godot_publish_bridge();
+    fn rsf_godot_unpublish_bridge();
+    fn rsf_godot_engine_shutdown();
+}
+
+/// Main thread, from Godot's generated `initialize_modules`. Class registration must complete
+/// before the singleton becomes visible, both at the scene level.
+#[cfg(not(rsf_graph_fixture))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_godot_module_initialize(
-    register_class: unsafe extern "C" fn(),
-    publish_bridge: unsafe extern "C" fn(),
-) {
-    unsafe {
-        register_class();
-        publish_bridge();
+pub extern "C" fn initialize_rescaleframe_module(level: i32) {
+    if level == SCENE_LEVEL {
+        // SAFETY: the engine leaves run on the main thread at this level.
+        unsafe {
+            rsf_godot_register_bridge_class();
+            rsf_godot_publish_bridge();
+        }
     }
 }
 
-/// Keep the singleton alive through render and host retirement.
-///
-/// # Safety
-/// The engine calls this at scene teardown with both callbacks valid.
+/// Main thread, from Godot's generated `uninitialize_modules`. The singleton stays alive
+/// through render and host retirement.
+#[cfg(not(rsf_graph_fixture))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_godot_module_uninitialize(
-    shutdown: unsafe extern "C" fn(),
-    unpublish_bridge: unsafe extern "C" fn(),
-) {
-    unsafe {
-        shutdown();
-        unpublish_bridge();
+pub extern "C" fn uninitialize_rescaleframe_module(level: i32) {
+    if level == SCENE_LEVEL {
+        // SAFETY: the engine leaves run on the main thread at this level.
+        unsafe {
+            rsf_godot_engine_shutdown();
+            rsf_godot_unpublish_bridge();
+        }
     }
 }

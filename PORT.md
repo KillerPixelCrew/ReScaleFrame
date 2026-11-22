@@ -2975,28 +2975,28 @@ Port the SCons engine module and engine patch hooks, including frame, viewport, 
 
 **Port files (16)**
 
-- [ ] [eng/patch-godot.py](eng/patch-godot.py) (inserts integration hooks into the Godot source checkout)
-- [ ] [integrations/godot/modules/rescaleframe/bridge.cpp](integrations/godot/modules/rescaleframe/bridge.cpp)
-- [x] [integrations/godot/modules/rescaleframe/cpu_facts.h](integrations/godot/modules/rescaleframe/cpu_facts.h)
-- [ ] [integrations/godot/modules/rescaleframe/d3d12.cpp](integrations/godot/modules/rescaleframe/d3d12.cpp)
+- [ ] [eng/patch-godot.py](eng/patch-godot.py) (inserts integration hooks into the Godot source checkout; blocked: a Python source patcher whose inserted hooks are C++ statements inside Godot functions, `Main::iteration`, `Input::_parse_input_event_impl` (`Object::cast_to<InputEvent*>`), `DisplayServerWindows::process_events`, `RenderingDevice::_execute_frame`, `RenderingDeviceGraph::_run_render_commands`, `RenderForwardClustered::_render_scene` and private `RenderingDeviceDriverVulkan`/`RenderingDeviceDriverD3D12` members. The call sites name only `RSFGodot` forwarders and driver members.)
+- [ ] [integrations/godot/modules/rescaleframe/bridge.cpp](integrations/godot/modules/rescaleframe/bridge.cpp) (native.rs now owns the library load, export table, CPU event and every gated forwarder. Blocked residue is Godot glue: `ReScaleFrameBridge : Object` with `GDCLASS`, `_bind_methods`, `ClassDB::register_class<T>` and `Engine::add_singleton`; `Dictionary` reads and writes; `ProjectSettings`, `OS`, `SceneTree`, `DisplayServer` and `RenderingServer` calls; `RenderingDevice::driver_callback_add` with `RD::CallbackResource`; `RenderSceneBuffersRD` textures; `Projection` and `Transform3D` inverses; and callback lambdas that cast `RenderingDeviceDriver` to its D3D12 and Vulkan subclasses.)
+- [x] [integrations/godot/modules/rescaleframe/cpu_facts.h](integrations/godot/modules/rescaleframe/cpu_facts.h) (deleted; native.rs builds and reports the CPU event)
+- [ ] [integrations/godot/modules/rescaleframe/d3d12.cpp](integrations/godot/modules/rescaleframe/d3d12.cpp) (blocked: defines `RenderingDeviceDriverD3D12::rescaleframe_begin` and `rescaleframe_end`, members the patch declares in the Godot class. They call the private `_resource_transitions_flush` and reset private `CommandBufferInfo` binding caches.)
 - [x] [integrations/godot/modules/rescaleframe/frame.h](integrations/godot/modules/rescaleframe/frame.h)
-- [ ] [integrations/godot/modules/rescaleframe/graph.cpp](integrations/godot/modules/rescaleframe/graph.cpp)
-- [ ] [integrations/godot/modules/rescaleframe/graph.h](integrations/godot/modules/rescaleframe/graph.h)
+- [ ] [integrations/godot/modules/rescaleframe/graph.cpp](integrations/godot/modules/rescaleframe/graph.cpp) (blocked: graph.rs owns the decisions. The leaves call `RenderingDeviceDriverVulkan::command_buffer_create`, `semaphore_create`, `semaphore_free`, `command_buffer_begin` and the patched graph members, append to the typed `RenderingDeviceGraph::CommandBufferPool` vectors and rebind the live `CommandBufferID&`.)
+- [ ] [integrations/godot/modules/rescaleframe/graph.h](integrations/godot/modules/rescaleframe/graph.h) (blocked: `RSFGodot::GraphScope` is constructed in `RenderingDeviceGraph::_run_render_commands` through a template constructor over the engine's label lambda, holding `RenderingDeviceDriver::CommandBufferID&` and `CommandBufferPool&` in a C++ `thread_local` scope stack)
 - [x] [integrations/godot/modules/rescaleframe/host.h](integrations/godot/modules/rescaleframe/host.h)
-- [ ] [integrations/godot/modules/rescaleframe/motion.cpp](integrations/godot/modules/rescaleframe/motion.cpp)
+- [ ] [integrations/godot/modules/rescaleframe/motion.cpp](integrations/godot/modules/rescaleframe/motion.cpp) (blocked: motion.rs owns the decoder state. The leaves call `RenderingDevice::shader_compile_spirv_from_source`, `shader_create_from_spirv`, `compute_pipeline_create` and `compute_list_*`, the variadic `UniformSetCacheRD::get_cache` template and `RenderSceneBuffersRD::create_texture`/`get_texture` with `StringName`.)
 - [x] [integrations/godot/modules/rescaleframe/pass.h](integrations/godot/modules/rescaleframe/pass.h)
 - [x] [integrations/godot/modules/rescaleframe/primary.h](integrations/godot/modules/rescaleframe/primary.h)
-- [ ] [integrations/godot/modules/rescaleframe/register_types.cpp](integrations/godot/modules/rescaleframe/register_types.cpp)
-- [ ] [integrations/godot/modules/rescaleframe/register_types.h](integrations/godot/modules/rescaleframe/register_types.h)
-- [ ] [integrations/godot/modules/rescaleframe/rsf_godot_engine.h](integrations/godot/modules/rescaleframe/rsf_godot_engine.h)
+- [x] [integrations/godot/modules/rescaleframe/register_types.cpp](integrations/godot/modules/rescaleframe/register_types.cpp) (deleted; host.rs implements both module entries and the scene-level dispatch. The `ClassDB::register_class<T>` and `Engine` singleton leaves moved into bridge.cpp beside `ReScaleFrameBridge::_bind_methods`.)
+- [x] [integrations/godot/modules/rescaleframe/register_types.h](integrations/godot/modules/rescaleframe/register_types.h) (C declarations only: the two `extern "C"` entries called by Godot's generated `register_module_types.gen.cpp`)
+- [ ] [integrations/godot/modules/rescaleframe/rsf_godot_engine.h](integrations/godot/modules/rescaleframe/rsf_godot_engine.h) (blocked: declares `ReScaleFrameBridge : Object` through `GDCLASS` and the `RSFGodot` C++ names that patched engine sources call. Its forwarders are inline calls into native.rs. `VulkanExecutionScope` is RAII over `RenderingDevice::_execute_frame` with C++ `thread_local` nesting, which the no_std Rust object cannot hold on stable.)
 - [x] [integrations/godot/modules/rescaleframe/viewport.h](integrations/godot/modules/rescaleframe/viewport.h)
-- [ ] [integrations/godot/modules/rescaleframe/vulkan.cpp](integrations/godot/modules/rescaleframe/vulkan.cpp)
+- [ ] [integrations/godot/modules/rescaleframe/vulkan.cpp](integrations/godot/modules/rescaleframe/vulkan.cpp) (blocked: defines `RenderingDeviceDriverVulkan` members the patch declares in the Godot class, `rescaleframe_create`, `_release`, `_drain`, `_images`, `_acquire`, `_present`, `_begin`, `_graph_info`, `_graph_split`, `_submit` and the queue locks. They read private `queue_families`, `device_functions`, `SwapChain`, `CommandBufferInfo` and `RenderingContextDriverVulkan::Surface` fields. Receipt reporting now runs from present.rs to native.rs.)
 
 **Fixtures (3)**
 
-- [ ] [tests/godot_graph_handoff.cpp](tests/godot_graph_handoff.cpp)
-- [ ] [tests/godot_graph_stubs/drivers/vulkan/rendering_device_driver_vulkan.h](tests/godot_graph_stubs/drivers/vulkan/rendering_device_driver_vulkan.h)
-- [ ] [tests/godot_graph_stubs/servers/rendering/rendering_device_graph.h](tests/godot_graph_stubs/servers/rendering/rendering_device_graph.h)
+- [ ] [tests/godot_graph_handoff.cpp](tests/godot_graph_handoff.cpp) (blocked by graph.cpp: includes it to instantiate the production `GraphScope` over typed doubles. The Rust side now also covers native.rs refusals before load.)
+- [ ] [tests/godot_graph_stubs/drivers/vulkan/rendering_device_driver_vulkan.h](tests/godot_graph_stubs/drivers/vulkan/rendering_device_driver_vulkan.h) (blocked by graph.cpp: C++ double of the `RenderingDeviceDriverVulkan` members `GraphScope` calls)
+- [ ] [tests/godot_graph_stubs/servers/rendering/rendering_device_graph.h](tests/godot_graph_stubs/servers/rendering/rendering_device_graph.h) (blocked by graph.cpp: C++ double of `RenderingDeviceDriver` IDs and `RenderingDeviceGraph::CommandBufferPool`)
 
 **Rust review findings (5)**
 

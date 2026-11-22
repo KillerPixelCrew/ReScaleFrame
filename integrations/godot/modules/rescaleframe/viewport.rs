@@ -12,6 +12,7 @@ mod frame_event_abi;
 mod graph;
 mod host;
 mod motion;
+mod native;
 mod packet;
 mod packet_abi;
 mod pass;

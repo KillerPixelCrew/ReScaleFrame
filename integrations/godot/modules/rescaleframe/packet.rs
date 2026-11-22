@@ -117,7 +117,7 @@ pub unsafe extern "C" fn rsf_godot_packet_prepare(
         let camera = &payload.pass.camera;
         let render = [camera.render_width, camera.render_height];
         let target = [camera.output_width, camera.output_height];
-        let describe = |rid, [width, height]| {
+        let describe = |rid: u64, [width, height]: [u32; 2]| {
             let mut image = rsf_godot_vk_image::default();
             if rid != 0 {
                 unsafe { sources.vk_image.unwrap_unchecked()(context, rid, &mut image) };
