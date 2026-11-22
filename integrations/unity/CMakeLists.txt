@@ -24,11 +24,9 @@ if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
     target_include_directories(rsf_unity_package SYSTEM PRIVATE "${RSF_UNITY_NATIVE_INCLUDE}")
     # The shared D3D12 bridge keeps its frame state in the rsf-unity-mono archive (bridge_state.rs),
     # the same archive the game plugin links. native/bridge.cpp's D3D11 and Vulkan bridge uses that
-    # packet store, policy and retirement state too, with its D3D12 submission ring in
-    # bridge_interop.rs, its D3D11 graphics record and command slots in d3d11_state.rs and its
-    # D3D11 route and pass plan in d3d11_pass.rs;
-    # native/vulkan_bridge.cpp keeps its admission and lifecycle in
-    # vulkan_state.rs and shares that ring. package.cpp keeps its settings, status, session
+    # packet store and policy. D3D11 and Vulkan each use a Runtime submission ring.
+    # d3d11_state.rs owns the D3D11 graphics record and command slots, d3d11_pass.rs builds
+    # common scalar pass fields, and vulkan_state.rs owns Vulkan admission and lifecycle. package.cpp keeps its settings, status, session
     # state, SR views, presentation and session services there, [UnitySR] paths included
     # (package_state.rs, package_views.rs, package_state/presentation.rs,
     # package_state/services.rs, runtime_config.rs, via native/package_state.h). Only those symbols are

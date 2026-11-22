@@ -16,8 +16,8 @@
 //! released them without any check of its own and read the fence for the drained check outside
 //! any lock.
 use crate::bridge_abi::RSF_UNITY_FRAMES_SLOTS;
-use crate::bridge_interop::Interop;
 use rsf_game_sys::rsf_game_render_pass;
+use rsf_runtime_submission::SubmissionRing;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -289,7 +289,7 @@ struct Graphics {
     faulted: bool,
     /// The last drained check found every submission complete, and nothing was executed since.
     proved: bool,
-    ring: Interop,
+    ring: SubmissionRing,
 }
 
 // The references are used only under the graphics mutex: render-thread callers try to take it,
@@ -314,7 +314,7 @@ impl Graphics {
             slots: [Slot::EMPTY; SLOTS],
             faulted: false,
             proved: false,
-            ring: Interop::new(),
+            ring: SubmissionRing::new(SLOTS),
         }
     }
 
@@ -465,7 +465,7 @@ impl Graphics {
         } else {
             unsafe { (leaves.completed)(self.gpu.fence) }
         };
-        self.proved = !self.faulted && completed != u64::MAX && self.ring.drained(completed);
+        self.proved = !self.faulted && self.ring.drained(completed);
         self.proved
     }
 
@@ -966,7 +966,7 @@ mod tests {
         );
         assert_eq!(graphics.gpu, Gpu::EMPTY);
         assert_eq!(graphics.slots, [Slot::EMPTY; SLOTS]);
-        assert_eq!(graphics.ring, Interop::new());
+        assert_eq!(graphics.ring, SubmissionRing::new(SLOTS));
         assert!(!graphics.proved);
     }
 

@@ -56,7 +56,7 @@ bool rsf_unity_d3d11_plan_pass(uint32_t offset, const rsf_unity_packet* packet, 
     rsf_unity_d3d11_pass_plan* plan);
 /* The caller holds a frame callback with the published graphics record. On a reconfigurable plan
    with a pending policy change, waits through the record's wait leaf for the last completion value
-   handed out (rsf_unity_interop_submitted), settles that change and marks the pass
+   handed out by the Runtime ring, settles that change and marks the pass
    RSF_GAME_RENDER_RECONFIGURE with an invalid camera. False when that wait refused; the change
    stays pending. True when nothing applies. */
 bool rsf_unity_d3d11_apply_change(rsf_unity_d3d11_pass_plan* plan);

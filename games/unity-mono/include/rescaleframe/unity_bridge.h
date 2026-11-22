@@ -24,8 +24,9 @@
 // Depth and motion for generation, no reconstruction.
 #define RSF_UNITY_PACKET_INPUTS_ONLY 32u
 
-// Copied at graph execution. All texture pointers are Unity D3D12 resources, borrowed until
-// enqueue copies the packet and acquires leases. No managed object crosses this boundary.
+// Copied at graph execution. Texture fields carry native identities for the active renderer.
+// D3D11 and D3D12 enqueue retain the COM resources for the render event. Vulkan provides image
+// identities through its render-event access contract.
 typedef struct rsf_unity_packet {
     uint32_t struct_size, abi_version;
     uint64_t session_id, frame_id, view_key;

@@ -13,9 +13,9 @@
    colour, depth, motion, output, the HUD-less scene and the Editor preview source. Rust also owns
    the single creator, the stopped state after a failed creation, each surface's source key, its
    replacement, the surface lease, the checked close and the release. The ring's slot rotation,
-   completion values and shared fence values stay in bridge_interop.h.
+   completion values and shared fence values belong to the Runtime.
 
-   The D3D11 route admits its packets through rsf_unity_d3d11_admit_packet: the shared packet store
+   The D3D11 route admits its packets through rsf_unity_frames_admit_leased_packet: the shared packet store
    (bridge_state.h) owns each queued packet's texture references from admission until the render
    event that takes it ends (rsf_unity_frames_end_packet) or rsf_unity_frames_release cancels it.
 
@@ -100,10 +100,9 @@ bool rsf_unity_d3d11_surfaces_begin(void);
 void rsf_unity_d3d11_surfaces_end(void);
 /* The caller holds the surface lease. Writes surface index (0 to 5) as an rsf_shared_surface view
    valid until the lease ends. A surface whose key (the source texture's width, height and DXGI
-   format) matches is borrowed as it is. Otherwise Rust waits for the last completion value handed
-   out when a surface is being replaced, creates one in the shared format it chooses for the slot
-   and source format (d3d11_pass.h), publishes it and only then destroys the old one. A refused
-   wait or creation keeps the old surface. A slot this lease already borrowed is never replaced
+   format) matches is borrowed as it is. Replacement requires completion of the D3D12 queue and
+   proof of the D3D11 copy tail. Rust publishes a compatible new surface before destroying the
+   old one. A refused proof or creation keeps the old surface. A slot this lease already borrowed is never replaced
    within it. services is borrowed for the creation leaf. */
 bool rsf_unity_d3d11_prepare_surface(uint32_t index, const rsf_game_host_services* services,
     uint32_t width, uint32_t height, uint32_t source_format, void** view);
@@ -121,21 +120,6 @@ bool rsf_unity_d3d11_release(void);
 /* Resumes admission for the next package session. */
 void rsf_unity_d3d11_open(void);
 
-/* Typed reference leaves for Unity's D3D11 textures, as IUnknown: retain adds one reference
-   (AddRef) and release drops one (Release). Neither is called with null. Rust runs retain under
-   the packet store's lock and release outside it. */
-typedef struct rsf_unity_d3d11_texture_ops {
-    void (*retain)(void* texture);
-    void (*release)(void* texture);
-} rsf_unity_d3d11_texture_ops;
-
-/* Admits packet as rsf_unity_frames_admit_packet does and, before the stored address is returned,
-   retains its non-null colour, depth, motion and output textures for the stored copy. A refused
-   packet retains nothing and returns NULL. The render event that takes the packet keeps its slot
-   until rsf_unity_frames_end_packet, which releases the textures; rsf_unity_frames_release cancels
-   a packet still queued or consuming. Independent of the graphics record. */
-void* rsf_unity_d3d11_admit_packet(const rsf_unity_packet* packet, uint64_t session_id,
-    const rsf_unity_d3d11_texture_ops* ops);
 #ifdef __cplusplus
 }
 #endif

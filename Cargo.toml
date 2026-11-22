@@ -8,6 +8,7 @@ members = [
   "runtime/vulkan/streamline/lifecycle",
   "runtime/common",
   "runtime/contract",
+  "runtime/graphics/submission",
   "runtime/orchestrator",
   "runtime/shader_patch/compiler",
   "loader",

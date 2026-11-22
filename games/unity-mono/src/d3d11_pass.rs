@@ -14,20 +14,20 @@
 //! bridge.cpp keeps every typed D3D11, D3D12 and DXGI call in its original order: the
 //! `QueryInterface` of the packet textures, the swapchain buffer, the surface copies, the fence
 //! signals and waits, the barriers it records with the states planned here, list execution, the
-//! output copy and the render-pass calls. Vulkan (`vulkan_bridge.cpp`) and the Mono D3D12 bridge
-//! (`games/unity-mono/src/bridge.cpp`) assemble their own passes and do not use this module.
+//! output copy and the render-pass calls. D3D11, direct D3D12 and Vulkan share the scalar pass.
+//! Direct D3D12 binds packet resources and supplies camera-valid FG inputs on inputs-only probes.
 use crate::bridge_abi::{
-    RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_RESET, RSF_UNITY_PREVIEW_SOURCE_COMMON,
-    rsf_unity_packet,
+    RSF_UNITY_PACKET_INPUTS_ONLY, RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_RESET,
+    RSF_UNITY_PREVIEW_SOURCE_COMMON, rsf_unity_packet,
 };
-use crate::bridge_interop::rsf_unity_interop_submitted;
+use crate::bridge_interop::D3D11;
 use crate::bridge_state::{
     rsf_unity_frames_activate, rsf_unity_frames_pending_change, rsf_unity_frames_settle_change,
 };
 use crate::d3d11_state::wait_completion;
 use rsf_game_sys::{
-    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR,
-    RSF_GAME_RENDER_WINDOW, rsf_game_render_pass,
+    RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE,
+    RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass,
 };
 
 // Offsets in the bridge's reserved event range (ReserveEventIDRange(3)). The managed package
@@ -72,7 +72,10 @@ const R16G16B16A16_FLOAT: u32 = 10;
 const R8G8B8A8_TYPELESS: u32 = 27;
 const R8G8B8A8_UNORM: u32 = 28;
 const R8G8B8A8_UNORM_SRGB: u32 = 29;
+const R16G16_TYPELESS: u32 = 33;
 const R16G16_FLOAT: u32 = 34;
+const R32_TYPELESS: u32 = 39;
+const D32_FLOAT: u32 = 40;
 const R32_FLOAT: u32 = 41;
 const B8G8R8A8_UNORM: u32 = 87;
 const B8G8R8A8_TYPELESS: u32 = 90;
@@ -133,6 +136,36 @@ fn base_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
     pass
 }
 
+/// Copies the shared scalar fields. The caller supplies the route and resources.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_build_scalar_pass(
+    packet: *const rsf_unity_packet,
+    output: *mut rsf_game_render_pass,
+) {
+    if let (Some(packet), Some(output)) = unsafe { (packet.as_ref(), output.as_mut()) } {
+        *output = base_pass(packet);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_build_d3d12_pass(
+    packet: *const rsf_unity_packet,
+    output: *mut rsf_game_render_pass,
+) {
+    let (Some(packet), Some(output)) = (unsafe { (packet.as_ref(), output.as_mut()) }) else {
+        return;
+    };
+    *output = base_pass(packet);
+    output.color_input = packet.color;
+    output.color_output = packet.output;
+    output.depth = packet.depth;
+    output.motion = packet.motion;
+    if packet.flags & RSF_UNITY_PACKET_INPUTS_ONLY != 0 {
+        output.role = RSF_GAME_RENDER_FG_INPUTS;
+        output.camera_valid = 1;
+    }
+}
+
 /// The route and pass for event `offset` in the reserved range. `editor` is the package running
 /// in the Unity Editor, whose window pass presents a copy of the packet colour instead of the
 /// engine swapchain.
@@ -183,17 +216,18 @@ pub(super) fn plan(offset: u32, packet: &rsf_unity_packet, editor: bool) -> Pass
 /// The shared surface format for slot `index` copied from a source of `source` format: depth is
 /// R32_FLOAT and motion R16G16_FLOAT, typeless and sRGB colour formats take their linear typed
 /// view, any other format is kept.
-pub(crate) fn shared_format(index: u32, source: u32) -> u32 {
-    let format = match index {
-        SURFACE_DEPTH => R32_FLOAT,
-        SURFACE_MOTION => R16G16_FLOAT,
-        _ => source,
-    };
-    match format {
-        R16G16B16A16_TYPELESS => R16G16B16A16_FLOAT,
-        R8G8B8A8_TYPELESS | R8G8B8A8_UNORM_SRGB => R8G8B8A8_UNORM,
-        B8G8R8A8_TYPELESS | B8G8R8A8_UNORM_SRGB => B8G8R8A8_UNORM,
-        format => format,
+pub(crate) fn shared_format(index: u32, source: u32) -> Option<u32> {
+    match index {
+        SURFACE_DEPTH => {
+            matches!(source, R32_TYPELESS | D32_FLOAT | R32_FLOAT).then_some(R32_FLOAT)
+        }
+        SURFACE_MOTION => matches!(source, R16G16_TYPELESS | R16G16_FLOAT).then_some(R16G16_FLOAT),
+        _ => Some(match source {
+            R16G16B16A16_TYPELESS => R16G16B16A16_FLOAT,
+            R8G8B8A8_TYPELESS | R8G8B8A8_UNORM_SRGB => R8G8B8A8_UNORM,
+            B8G8R8A8_TYPELESS | B8G8R8A8_UNORM_SRGB => B8G8R8A8_UNORM,
+            format => format,
+        }),
     }
 }
 
@@ -267,7 +301,10 @@ unsafe extern "C" fn rsf_unity_d3d11_apply_change(plan: *mut PassPlan) -> bool {
             let mut generation = 0;
             (unsafe { rsf_unity_frames_pending_change(&mut generation) } != 0).then_some(generation)
         },
-        || wait_completion(rsf_unity_interop_submitted()),
+        || {
+            let submitted = D3D11.lock().submitted();
+            wait_completion(submitted)
+        },
         |generation| {
             rsf_unity_frames_settle_change(generation);
         },
@@ -421,20 +458,50 @@ mod tests {
     }
 
     #[test]
+    fn direct_d3d12_accepts_camera_data_for_inputs_only_probes() {
+        let mut packet = packet();
+        packet.flags = RSF_UNITY_PACKET_PROBE | RSF_UNITY_PACKET_INPUTS_ONLY;
+        let mut pass = base_pass(&packet);
+        assert_eq!(pass.camera_valid, 0);
+        assert!(pass.motion.is_null());
+        unsafe { rsf_unity_build_d3d12_pass(&packet, &mut pass) };
+        assert_eq!(pass.role, RSF_GAME_RENDER_FG_INPUTS);
+        assert_eq!(pass.camera_valid, 1);
+        assert_eq!(pass.motion, packet.motion);
+    }
+
+    #[test]
     fn shared_formats_follow_the_slot_and_the_source() {
-        // Depth and motion ignore the source format.
-        assert_eq!(shared_format(SURFACE_DEPTH, 40), R32_FLOAT);
-        assert_eq!(shared_format(SURFACE_MOTION, 10), R16G16_FLOAT);
+        // The shared depth and motion surfaces accept only compatible typed families.
+        assert_eq!(shared_format(SURFACE_DEPTH, D32_FLOAT), Some(R32_FLOAT));
+        assert_eq!(shared_format(SURFACE_DEPTH, 45), None);
+        assert_eq!(
+            shared_format(SURFACE_MOTION, R16G16_TYPELESS),
+            Some(R16G16_FLOAT)
+        );
+        assert_eq!(shared_format(SURFACE_MOTION, R16G16B16A16_FLOAT), None);
         for index in [0, 3, SURFACE_HUDLESS, SURFACE_PREVIEW] {
             assert_eq!(
                 shared_format(index, R16G16B16A16_TYPELESS),
-                R16G16B16A16_FLOAT
+                Some(R16G16B16A16_FLOAT)
             );
-            assert_eq!(shared_format(index, R8G8B8A8_TYPELESS), R8G8B8A8_UNORM);
-            assert_eq!(shared_format(index, R8G8B8A8_UNORM_SRGB), R8G8B8A8_UNORM);
-            assert_eq!(shared_format(index, B8G8R8A8_TYPELESS), B8G8R8A8_UNORM);
-            assert_eq!(shared_format(index, B8G8R8A8_UNORM_SRGB), B8G8R8A8_UNORM);
-            assert_eq!(shared_format(index, 24), 24);
+            assert_eq!(
+                shared_format(index, R8G8B8A8_TYPELESS),
+                Some(R8G8B8A8_UNORM)
+            );
+            assert_eq!(
+                shared_format(index, R8G8B8A8_UNORM_SRGB),
+                Some(R8G8B8A8_UNORM)
+            );
+            assert_eq!(
+                shared_format(index, B8G8R8A8_TYPELESS),
+                Some(B8G8R8A8_UNORM)
+            );
+            assert_eq!(
+                shared_format(index, B8G8R8A8_UNORM_SRGB),
+                Some(B8G8R8A8_UNORM)
+            );
+            assert_eq!(shared_format(index, 24), Some(24));
         }
     }
 

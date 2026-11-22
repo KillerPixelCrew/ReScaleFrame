@@ -43,6 +43,15 @@ exports matched in source, and pinned binding regeneration matched the
 private callback table. Build, Editor and player checks remain open.
 [Unity migration](rust-migration.md#remaining-integration-ports)
 
+Unity's D3D11, D3D12 and Vulkan bridges now share the Rust scalar pass
+builder. D3D12 retains view submission receipts through Unity's queue
+flush and acknowledges the reconfiguration generation after delivery.
+Separate Runtime rings track D3D11 and Vulkan interop submissions.
+D3D11 shared-surface replacement requires both fence timelines and
+rejects incompatible copy inputs. Source checks, pinned formatting and
+targeted binding regeneration passed. Build, fixture and device results
+remain open. [Unity bridge evidence](research/rust-unity-bridge-submission.md)
+
 The shared Vulkan-to-D3D12 FG paths now admit swapchain extensions and
 select vsync in Rust. The FSR4 state fixture uses the current graphics
 callback table. Build, fixture and device checks remain open.

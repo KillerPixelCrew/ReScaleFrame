@@ -5,7 +5,7 @@
 // entries, the window frame identity, the DXGI swap chain and its resize, and the checked release
 // are Rust (vulkan_state.rs), as are the intercepted swapchains with their images and present-ready
 // semaphores, the presentation window's identity and the presentation lease. The command slot
-// rotation and shared fence values are the package bridge's submission ring (bridge_interop.rs).
+// rotation and shared fence values come from this route's Runtime submission handle.
 // Rust owns the shared device, queue, fence and imported semaphore, as well as the pool, slots
 // and shared images. Unity's Vulkan resolver keys and routes, the registered interceptors, the
 // saved loader functions and the interop device-extension selection are vulkan_resolver.rs.
@@ -13,6 +13,7 @@
 #include "vulkan_bridge.h"
 #include "vulkan_state.h"
 #include "bridge_interop.h"
+#include "bridge_state.h"
 #include "package.h"
 #include <windows.h>
 #include <d3d12.h>
@@ -146,14 +147,16 @@ bool drain(const DeviceView& graphics)
 {
     if (vkQueueWaitIdle(graphics.vk_queue()) != VK_SUCCESS) return false;
     const uint64_t completed = shared_completed(&graphics.handles);
-    if (completed == UINT64_MAX) return false;
-    if (!rsf_unity_interop_drained(completed)) {
+    const auto* ring = rsf_unity_vulkan_submission_ring();
+    const auto status = rsf_submission_status(ring, completed);
+    if (status == RSF_SUBMISSION_REMOVED) return false;
+    if (status == RSF_SUBMISSION_PENDING) {
         HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr); if (!event) return false;
-        const bool done = SUCCEEDED(graphics.shared_fence()->SetEventOnCompletion(rsf_unity_interop_submitted(), event)) &&
+        const bool done = SUCCEEDED(graphics.shared_fence()->SetEventOnCompletion(rsf_submission_pending_value(ring), event)) &&
             WaitForSingleObject(event, 10000) == WAIT_OBJECT_0;
         CloseHandle(event);
         const uint64_t after_wait = shared_completed(&graphics.handles);
-        return done && after_wait != UINT64_MAX && rsf_unity_interop_drained(after_wait);
+        return done && rsf_submission_status(ring, after_wait) == RSF_SUBMISSION_COMPLETE;
     }
     return true;
 }
@@ -382,7 +385,7 @@ bool upload(const DeviceView& graphics, const SlotView& slot, const VkSemaphore*
     if (vkEndCommandBuffer(command) != VK_SUCCESS) return false;
     std::vector<VkPipelineStageFlags> stages(wait_count, VK_PIPELINE_STAGE_TRANSFER_BIT);
     std::vector<uint64_t> values(wait_count, 0);
-    const uint64_t value = rsf_unity_interop_next_completion();
+    const uint64_t value = rsf_submission_next_completion(rsf_unity_vulkan_submission_ring());
     if (!value) return false;
     VkD3D12FenceSubmitInfoKHR fence{VK_STRUCTURE_TYPE_D3D12_FENCE_SUBMIT_INFO_KHR};
     fence.waitSemaphoreValuesCount = wait_count; fence.pWaitSemaphoreValues = values.data();
@@ -392,7 +395,7 @@ bool upload(const DeviceView& graphics, const SlotView& slot, const VkSemaphore*
     submit.commandBufferCount = 1; submit.pCommandBuffers = &command; submit.signalSemaphoreCount = 1; submit.pSignalSemaphores = &semaphore;
     if (vkQueueSubmit(graphics.vk_queue(), 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS) return false;
     rsf_unity_vulkan_upload_submitted();
-    if (rsf_unity_interop_completion() != value) return false;
+    if (rsf_submission_completion(rsf_unity_vulkan_submission_ring()) != value) return false;
     return SUCCEEDED(graphics.queue()->Wait(graphics.shared_fence(), value));
 }
 // The D3D12 queue signals the ring slot's shared fence value; Vulkan waits for it before the
@@ -402,9 +405,10 @@ bool submit(const DeviceView& graphics, const SlotView& slot, uint32_t ring, VkS
     const auto command = slot.vk(1);
     const auto semaphore = graphics.semaphore();
     if (FAILED(slot.commands()->Close()) || vkEndCommandBuffer(command) != VK_SUCCESS) return false;
+    const uint64_t value = rsf_submission_submit(rsf_unity_vulkan_submission_ring(), ring);
+    if (!value) return false;
     ID3D12CommandList* lists[] = {slot.commands()}; graphics.queue()->ExecuteCommandLists(1, lists);
-    const uint64_t value = rsf_unity_interop_submit(ring);
-    if (!value || FAILED(graphics.queue()->Signal(graphics.shared_fence(), value))) return false;
+    if (FAILED(graphics.queue()->Signal(graphics.shared_fence(), value))) return false;
     VkD3D12FenceSubmitInfoKHR fence{VK_STRUCTURE_TYPE_D3D12_FENCE_SUBMIT_INFO_KHR};
     fence.waitSemaphoreValuesCount = 1; fence.pWaitSemaphoreValues = &value;
     uint64_t zero = 0; fence.signalSemaphoreValuesCount = ready ? 1u : 0u; fence.pSignalSemaphoreValues = &zero;
@@ -425,18 +429,6 @@ void copy(VkCommandBuffer commands, VkImage source, VkImageLayout source_layout,
     VkImageCopy region{}; region.srcSubresource = {aspect, 0, 0, 1}; region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.extent = {width, height, 1}; vkCmdCopyImage(commands, source, source_layout, target, target_layout, 1, &region);
 }
-void make_pass(const rsf_unity_packet& packet, rsf_game_render_pass& pass)
-{
-    pass = {}; pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR;
-    pass.session_id = packet.session_id; pass.family_key = pass.view_key = pass.history_key = packet.view_key;
-    pass.native_frame = pass.source_frame_id = packet.frame_id; pass.resource_generation = packet.generation;
-    pass.screen = RSF_SCREEN_FLIGHT; pass.flags = packet.flags & RSF_UNITY_PACKET_RESET;
-    pass.camera = packet.camera; pass.camera_valid = (packet.flags & RSF_UNITY_PACKET_PROBE) ? 0u : 1u;
-    pass.render_rect[2] = static_cast<int32_t>(packet.camera.render_width); pass.render_rect[3] = static_cast<int32_t>(packet.camera.render_height);
-    pass.output_rect[2] = static_cast<int32_t>(packet.camera.output_width); pass.output_rect[3] = static_cast<int32_t>(packet.camera.output_height);
-    pass.motion_to_uv[0] = pass.motion_to_uv[1] = 1; pass.motion_camera_included = 1;
-    std::memcpy(pass.previous_clip_to_clip, packet.previous_clip_to_clip, sizeof(pass.previous_clip_to_clip));
-}
 void execute_admitted(const rsf_unity_vulkan_frame& frame, uint32_t kind, uint32_t reconfigure, uint32_t index) noexcept try
 {
     PresentationLease lease{rsf_unity_vulkan_presentation_try_begin() != 0};
@@ -454,7 +446,7 @@ void execute_admitted(const rsf_unity_vulkan_frame& frame, uint32_t kind, uint32
         fault(RSF_BACKEND_ERROR_INIT_FAILED, "Unity Vulkan shared device/fence initialization failed; native output remains in place.");
         return;
     }
-    const uint32_t ring = rsf_unity_interop_slot(nullptr);
+    const uint32_t ring = rsf_submission_acquire(rsf_unity_vulkan_submission_ring(), nullptr);
     SlotView slot;
     if (!rsf_unity_vulkan_command_slot(ring, &slot.handles) || !begin(graphics, slot, ring)) {
         stop("Unity Vulkan command slot could not be reused; the bridge stopped.");
@@ -482,7 +474,7 @@ void execute_admitted(const rsf_unity_vulkan_frame& frame, uint32_t kind, uint32
         release_image(graphics, slot.vk(0), images[i], false);
     }
     if (!upload(graphics, slot)) { stop("Unity Vulkan upload submission failed; the bridge stopped."); return; }
-    rsf_game_render_pass pass{}; make_pass(packet, pass);
+    rsf_game_render_pass pass{}; rsf_unity_build_scalar_pass(&packet, &pass);
     if (reconfigure) { pass.flags |= RSF_GAME_RENDER_RECONFIGURE; pass.camera_valid = 0; }
     if (present) {
         pass.role = RSF_GAME_RENDER_WINDOW; pass.color_input = images[5].resource(); pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
@@ -511,7 +503,7 @@ void execute_admitted(const rsf_unity_vulkan_frame& frame, uint32_t kind, uint32
     }
     if (!submit(graphics, slot, ring)) { stop("Unity Vulkan render submission failed; the bridge stopped."); return; }
     host.render_pass(host.user, slot.commands(), &pass, 0);
-    rsf_unity_interop_advance(ring);
+    rsf_submission_advance(rsf_unity_vulkan_submission_ring(), ring);
 } catch (...) { stop("Unity Vulkan queue execution failed; resources remain owned."); }
 
 // Keep the event admitted through the worker's exception handler as well as its queue calls.
@@ -600,7 +592,7 @@ VkResult present_admitted(PFN_vkQueuePresentKHR original_present, VkQueue vk_que
         stop("Unity Vulkan swap chain buffer was unavailable; the bridge stopped.");
         return native();
     }
-    const uint32_t ring = rsf_unity_interop_slot(nullptr);
+    const uint32_t ring = rsf_submission_acquire(rsf_unity_vulkan_submission_ring(), nullptr);
     SlotView slot;
     if (!rsf_unity_vulkan_command_slot(ring, &slot.handles) || !begin(graphics, slot, ring)) {
         stop("Unity Vulkan command slot could not be reused; the bridge stopped.");
@@ -621,12 +613,12 @@ VkResult present_admitted(PFN_vkQueuePresentKHR original_present, VkQueue vk_que
     slot.commands()->CopyResource(buffer.Get(), image.resource());
     dx_barrier(slot.commands(), buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
     dx_barrier(slot.commands(), image.resource(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
-    rsf_game_render_pass pass{}; make_pass(frame.packet, pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain;
+    rsf_game_render_pass pass{}; rsf_unity_build_scalar_pass(&frame.packet, &pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain;
     frame.services.render_pass(frame.services.user, graphics.queue(), &pass, 1);
     if (!submit(graphics, slot, ring, present_ready)) { stop("Unity Vulkan present submission failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
     if (SUCCEEDED(chain->Present(0, 0))) ShowWindowAsync(window, SW_SHOWNOACTIVATE);
     auto forwarded = *info; forwarded.waitSemaphoreCount = 1; forwarded.pWaitSemaphores = &present_ready;
-    rsf_unity_interop_advance(ring);
+    rsf_submission_advance(rsf_unity_vulkan_submission_ring(), ring);
     return original_present(vk_queue, &forwarded);
 } catch (...) { stop("Unity Vulkan present interception failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
 VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPresentInfoKHR* info) noexcept try

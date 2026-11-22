@@ -528,6 +528,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-runtime-submission"
+version = "0.1.2"
+
+[[package]]
 name = "rsf-shader-compiler"
 version = "0.1.2"
 dependencies = [
@@ -561,6 +565,7 @@ name = "rsf-unity-mono"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "rsf-runtime-submission",
  "windows-sys",
 ]
 

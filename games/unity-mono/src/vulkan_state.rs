@@ -9,7 +9,7 @@
 //! renders under, the bridge's DXGI swap chain and resize, and the checked close and release.
 //! One record owns the D3D12 device, queue and fence, the imported semaphore and commands, and
 //! retains the Unity Vulkan device facts that shared images and commands need. Slot rotation and
-//! shared fence values follow the package bridge's submission ring (`bridge_interop.rs`).
+//! shared fence values follow the Vulkan route's Runtime submission handle.
 //!
 //! The presentation state outlives a release, because Unity owns the swapchains and the window
 //! stays: Unity's intercepted swapchains (their images and the present-ready semaphores the bridge
@@ -28,7 +28,7 @@
 //! could destroy the slots, images and swap chain a present interception was recording into on the
 //! render thread, and it cleared the window frame identity while that thread copied it.
 use crate::bridge_abi::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
-use crate::bridge_interop::{rsf_unity_interop_drained, rsf_unity_interop_release};
+use crate::bridge_interop::VULKAN;
 use crate::device_creation::{Claim, Creation};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
@@ -684,7 +684,7 @@ fn commands_retired() -> bool {
         })
     };
     let Some((handles, fences, fence_ready, shared_completed)) = proof else {
-        return rsf_unity_interop_drained(0) != 0;
+        return VULKAN.lock().drained(0);
     };
     if !fences
         .into_iter()
@@ -694,7 +694,7 @@ fn commands_retired() -> bool {
     }
     // D3D12 reports device removal as UINT64_MAX. It is not a completion value.
     let completed = unsafe { shared_completed(&handles) };
-    completed != u64::MAX && rsf_unity_interop_drained(completed) != 0
+    VULKAN.lock().drained(completed)
 }
 
 /// The caller holds the presentation lease throughout native replacement.
@@ -881,7 +881,7 @@ fn release_closed() {
     // Drop the chain before the shared queue and device it was created on.
     drop(surface);
     drop(device);
-    rsf_unity_interop_release();
+    VULKAN.reset();
     lock().release();
 }
 
