@@ -62,7 +62,6 @@ mod widgets;
 mod fixture;
 
 /// Index of each hooked function in `SITES` and in the Rust site table (sites.rs), in table order.
-#[allow(dead_code)]
 pub(crate) mod hook {
     pub(crate) const PROCESS_TONEMAP: u32 = 0;
     pub(crate) const PROCESS_AA: u32 = 1;
