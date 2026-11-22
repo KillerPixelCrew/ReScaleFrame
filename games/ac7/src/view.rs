@@ -8,6 +8,9 @@ use rsf_game_sys::camera_math::inverse_4x4;
 use std::ffi::c_void;
 use std::{ptr, slice};
 
+#[cfg(test)]
+mod tests;
+
 const OK: rsf_ac7_view_result = 0;
 const INVALID_ARGUMENT: rsf_ac7_view_result = -1;
 const ABI_MISMATCH: rsf_ac7_view_result = -2;
@@ -174,7 +177,7 @@ fn read_view(data: &[u8], struct_size: u32) -> Result<rsf_ac7_view, rsf_ac7_view
     view_to_clip_no_jitter[8] -= jx;
     view_to_clip_no_jitter[9] -= jy;
     let clip_to_view_no_jitter = inverse(view_to_clip_no_jitter).ok_or(NOT_A_VIEW)?;
-    let is_main_view = view_width == buffer_width
+    let fills_target = view_width == buffer_width
         && view_height == buffer_height
         && view_rect_x == 0
         && view_rect_y == 0;
@@ -199,7 +202,7 @@ fn read_view(data: &[u8], struct_size: u32) -> Result<rsf_ac7_view, rsf_ac7_view
         view_rect_y,
         buffer_width,
         buffer_height,
-        is_main_view: u32::from(is_main_view),
+        fills_target: u32::from(fills_target),
         jitter_pixels: [jx * half_width, jy * -half_height],
         previous_jitter_pixels: [prev_x * half_width, prev_y * -half_height],
         has_jitter: u32::from(jx != 0.0 || jy != 0.0),

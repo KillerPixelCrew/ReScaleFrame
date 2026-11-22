@@ -267,10 +267,13 @@ static struct {
     unsigned long held_height;
     /* The recombine route evaluates before this frame's qualifying pass has happened, so it works
        from the textures the last pass named, which are the same pooled targets every frame, and
-       from this frame's camera, read from the main view's uniform buffer as the game uploads it. */
+       from this frame's upload to the buffer identified by that scene pass. */
     void* last_depth;
     void* last_motion;
     void* last_exposure;
+    void* scene_view_constants;
+    uint32_t scene_view_width;
+    uint32_t scene_view_height;
     rsf_pipeline_camera_frame upload_camera;
     unsigned long upload_width;
     unsigned long upload_height;
@@ -908,10 +911,10 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
         return;
     }
 
-    /* The engine renders several views into the same target. Handing a backend the camera of one
-       the player is not looking through produces a plausible, wrong image, which is worse than
-       producing none. */
-    if (!view.is_main_view) {
+    /* The tap identifies the scene input set. The view still has to cover its own target and fit
+       the scene pass's pooled motion extent. */
+    if (!view.fills_target || view.view_width > pass->render_width ||
+        view.view_height > pass->render_height) {
         ++bridge.not_main_view;
         return;
     }
@@ -946,6 +949,15 @@ static void on_pass(void* user, const rsf_frame_tap_pass* pass)
     }
 
     fill_camera(&view, &camera);
+    if (bridge.scene_view_constants != pass->view_constants ||
+        bridge.scene_view_width != view.view_width || bridge.scene_view_height != view.view_height) {
+        rsf_resource_retain(pass->view_constants);
+        rsf_resource_release(bridge.scene_view_constants);
+        bridge.scene_view_constants = pass->view_constants;
+        bridge.scene_view_width = view.view_width;
+        bridge.scene_view_height = view.view_height;
+        bridge.upload_camera_valid = 0;
+    }
 
     /* Held rather than evaluated. The camera is a plain structure and is copied; the textures are
        borrowed for this callback only, so keeping them past it means taking a reference. One set
@@ -2339,8 +2351,9 @@ static void observe_constants(void* user, void* buffer, const void* contents, ui
     }
     if (bytes == RSF_AC7_VIEW_BUFFER_BYTES) {
         on_view_constants(user, buffer, contents, bytes);
-    } else if (view_twins) {
-        rsf_constant_twins_forget(view_twins, buffer);
+    } else {
+        if (buffer == bridge.scene_view_constants) bridge.upload_camera_valid = 0;
+        if (view_twins) rsf_constant_twins_forget(view_twins, buffer);
     }
     rsf_ac7_motion_capture_upload(buffer, contents, bytes);
 }
@@ -2353,36 +2366,27 @@ static void on_view_constants(void* user, void* buffer, const void* contents, ui
         return;
     }
     {
-        rsf_ac7_view main_view;
-        memset(&main_view, 0, sizeof(main_view));
-        main_view.struct_size = sizeof(main_view);
-        if (rsf_ac7_view_read(contents, bytes, RSF_AC7_VIEW_ABI_VERSION, &main_view) ==
-                RSF_AC7_VIEW_OK &&
-            main_view.is_main_view && main_view.has_jitter &&
-            bridge.depth_candidate_width != 0 &&
-            main_view.view_width == bridge.depth_candidate_width &&
-            main_view.view_height == bridge.depth_candidate_height) {
-            /* The separate translucency view: the scene's camera at the layer's size, which is
-               what the layer's integration needs, jitter in the layer's own pixels. */
-            fill_camera(&main_view, &bridge.layer_camera);
-            bridge.layer_camera_valid = 1;
-        }
-        if (rsf_ac7_view_read(contents, bytes, RSF_AC7_VIEW_ABI_VERSION, &main_view) ==
-                RSF_AC7_VIEW_OK &&
-            main_view.is_main_view && main_view.has_jitter &&
-            /* The render size the qualifying pass reported. UE builds the separate translucency
-               view from the main one at the layer's size, 1600x904 in a 1600x900 briefing, and
-               that upload is main and jittered too; handed to DLSS as the render size it made
-               every evaluation fail. */
-            /* The pass reports the pooled motion target's size, which the pool rounds up by a
-               few rows, so the view has to fit inside it rather than equal it. */
-            (bridge.held_width == 0 ||
-             (main_view.view_width <= bridge.held_width &&
-              main_view.view_height <= bridge.held_height))) {
-            fill_camera(&main_view, &bridge.upload_camera);
-            bridge.upload_width = main_view.view_width;
-            bridge.upload_height = main_view.view_height;
-            bridge.upload_camera_valid = 1;
+        rsf_ac7_view view;
+        const int scene_upload = buffer && buffer == bridge.scene_view_constants;
+        if (scene_upload) bridge.upload_camera_valid = 0;
+        memset(&view, 0, sizeof(view));
+        view.struct_size = sizeof(view);
+        if (rsf_ac7_view_read(contents, bytes, RSF_AC7_VIEW_ABI_VERSION, &view) ==
+                RSF_AC7_VIEW_OK && view.fills_target && view.has_jitter) {
+            if (bridge.depth_candidate_width != 0 &&
+                view.view_width == bridge.depth_candidate_width &&
+                view.view_height == bridge.depth_candidate_height) {
+                /* The separate translucency layer uses jitter in its own pixels. */
+                fill_camera(&view, &bridge.layer_camera);
+                bridge.layer_camera_valid = 1;
+            }
+            if (scene_upload && view.view_width == bridge.scene_view_width &&
+                view.view_height == bridge.scene_view_height) {
+                fill_camera(&view, &bridge.upload_camera);
+                bridge.upload_width = view.view_width;
+                bridge.upload_height = view.view_height;
+                bridge.upload_camera_valid = 1;
+            }
         }
     }
     if (!view_twins) {
@@ -3205,6 +3209,9 @@ static int drain_shutdown(void)
         return 1;
     }
     release_held();
+    rsf_resource_release(bridge.scene_view_constants);
+    bridge.scene_view_constants = NULL;
+    bridge.upload_camera_valid = 0;
     rsf_ac7_velocity_release();
     rsf_dlss_pipeline_stop(); bridge.started = 0;
     rsf_input_dump_cancel(0);

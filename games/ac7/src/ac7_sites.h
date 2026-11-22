@@ -162,6 +162,7 @@ typedef struct rsf_ac7_truesky_patches {
     rsf_ac7_call_relay depth_call;    // depth producer dispatch relay
     rsf_ac7_call_relay motion_call;   // composite_tile draw relay
     bool resolution_refused;          // the full cloud grid stays off for this renderer
+    bool motion_refused;              // composite_tile fingerprint refused for this renderer
 } rsf_ac7_truesky_patches;
 
 // Native leaves of the TrueSky owner, lent for one call. Every entry is required. None throws.

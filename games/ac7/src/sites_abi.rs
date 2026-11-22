@@ -265,6 +265,7 @@ pub struct rsf_ac7_truesky_patches {
     pub depth_call: rsf_ac7_call_relay,
     pub motion_call: rsf_ac7_call_relay,
     pub resolution_refused: bool,
+    pub motion_refused: bool,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -284,6 +285,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_ac7_truesky_patches, motion_call) - 64usize];
     ["Offset of field: rsf_ac7_truesky_patches::resolution_refused"]
         [::core::mem::offset_of!(rsf_ac7_truesky_patches, resolution_refused) - 104usize];
+    ["Offset of field: rsf_ac7_truesky_patches::motion_refused"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, motion_refused) - 105usize];
 };
 #[repr(C)]
 pub struct rsf_ac7_truesky_leaves {

@@ -22,10 +22,10 @@ add_library(rsf_game_ac7 SHARED src/plugin.cpp)
 target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_view rsf_ac7_render_scope rsf_ac7_rust rsf_build_options)
 set_target_properties(rsf_game_ac7 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.AC7")
 
-# The Rust UI rules classify frame-tap facts. The native wrapper lends the shared shader hash.
-add_library(rsf_ac7_ui_rules STATIC src/ui_rules.cpp)
-target_include_directories(rsf_ac7_ui_rules PUBLIC include)
-target_link_libraries(rsf_ac7_ui_rules PRIVATE ReScaleFrame::Graphics rsf_ac7_rust rsf_build_options)
+# The Rust UI rules classify frame-tap facts and check the captured shader fingerprint.
+add_library(rsf_ac7_ui_rules INTERFACE)
+target_include_directories(rsf_ac7_ui_rules INTERFACE include)
+target_link_libraries(rsf_ac7_ui_rules INTERFACE rsf_ac7_rust)
 add_library(ReScaleFrame::AC7UIRules ALIAS rsf_ac7_ui_rules)
 
 # Capture-derived scene selection stays with the game; graphics supplies only draw observations.

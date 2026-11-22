@@ -599,13 +599,16 @@ fn refused_appends_leave_the_list_and_the_owner_unchanged() {
     assert!(open(scopes, &mut full, &frame).is_null());
     assert_eq!(full.count, u32::MAX);
 
-    // A refused close keeps the ticket open for another list; a second close refuses.
+    // A different recording list cannot close the ticket, even if it can accept commands.
     let mut list = List::new();
     let ticket = open(scopes, &mut list, &frame);
     assert!(!ticket.is_null());
     let mut refusing = List::new();
-    refusing.executing = 1;
     assert!(!close(ticket, &mut refusing));
+    assert_eq!(refusing.count, 0);
+    list.executing = 1;
+    assert!(!close(ticket, &mut list));
+    list.executing = 0;
     assert!(close(ticket, &mut list));
     assert!(!close(ticket, &mut list));
     assert!(!close(null_mut(), &mut list));
@@ -613,6 +616,40 @@ fn refused_appends_leave_the_list_and_the_owner_unchanged() {
     list.run();
     quiesce(scopes);
     assert!(idle(scopes), "refusals leaked no ticket");
+    assert!(destroy(scopes));
+}
+
+#[test]
+fn adjacent_markers_admit_together_or_leave_the_lease_with_the_caller() {
+    let check = Check::new();
+    let scopes = create(&check, 1, Some(state), Some(pass), &CALLS);
+    let mut list = List::new();
+    let frame = scene(1, 0x10);
+    let lease = rsf_ac7_scope_lease {
+        object: check.user(),
+        resolve: Some(lease_resolve),
+        release: Some(lease_release),
+    };
+    list.count = u32::MAX - 1;
+    assert_eq!(
+        unsafe { rsf_ac7_render_scope_enqueue_leased(scopes, list.raw(), &frame, &lease) },
+        0
+    );
+    assert_eq!(list.count, u32::MAX - 1);
+    assert!(list.root.is_null());
+    assert!(check.frames().is_empty());
+    assert_eq!((check.resolved.get(), check.released.get()), (0, 0));
+    list.count = 0;
+    assert_eq!(
+        unsafe { rsf_ac7_render_scope_enqueue_leased(scopes, list.raw(), &frame, &lease) },
+        1
+    );
+    assert_eq!(list.count, 2);
+    quiesce(scopes);
+    assert!(!idle(scopes));
+    list.run();
+    assert_eq!((check.resolved.get(), check.released.get()), (2, 1));
+    assert!(idle(scopes));
     assert!(destroy(scopes));
 }
 

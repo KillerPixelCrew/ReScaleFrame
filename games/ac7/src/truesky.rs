@@ -243,16 +243,14 @@ fn release_slot(plugin: &impl Plugin, relay: &mut rsf_ac7_call_relay) -> bool {
     true
 }
 
-/// The composite_tile draw relay that supplies cloud motion depth. A refusal is logged and tried
-/// again on the next sky render, as before.
+/// The composite_tile draw relay supplies cloud motion depth independently of the depth route.
+/// Only a fingerprint mismatch is terminal. Allocation and guarded writes can be retried.
 fn install_motion(state: &mut rsf_ac7_truesky_patches, module: *mut u8, plugin: &impl Plugin) {
-    if !state.motion_call.slot.is_null() {
-        return;
-    }
     let call = module.wrapping_add(MOTION_CALL_RVA as usize);
     if !plugin.matches(call.wrapping_sub(MOTION_BEFORE.len()), &MOTION_BEFORE)
         || !plugin.matches(call, &MOTION_CALL_EXPECTED)
     {
+        state.motion_refused = true;
         plugin.log(MOTION_REFUSED);
         return;
     }
@@ -331,14 +329,21 @@ fn install_depth(
 /// full grid is enabled only after the replacement kernel has compiled and its bindings were
 /// verified on the actual device. A refusal keeps stock cloud resolution for this renderer.
 pub(crate) fn apply(state: &mut rsf_ac7_truesky_patches, plugin: &impl Plugin) {
-    if !state.resolution_site.is_null() || state.resolution_refused {
+    let grid_pending = state.resolution_site.is_null() && !state.resolution_refused;
+    let motion_pending = state.motion_call.slot.is_null() && !state.motion_refused;
+    if !grid_pending && !motion_pending {
         return;
     }
     let module = plugin.module();
     if module.is_null() {
         return;
     }
-    install_motion(state, module, plugin);
+    if motion_pending {
+        install_motion(state, module, plugin);
+    }
+    if !grid_pending {
+        return;
+    }
     if !install_depth(state, module, plugin) {
         state.resolution_refused = true;
         plugin.log(DEPTH_REFUSED);

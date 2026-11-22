@@ -29,7 +29,7 @@ pub struct rsf_ac7_view {
     pub view_rect_y: u32,
     pub buffer_width: u32,
     pub buffer_height: u32,
-    pub is_main_view: u32,
+    pub fills_target: u32,
     pub jitter_pixels: [f32; 2usize],
     pub previous_jitter_pixels: [f32; 2usize],
     pub has_jitter: u32,
@@ -78,8 +78,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_ac7_view, buffer_width) - 464usize];
     ["Offset of field: rsf_ac7_view::buffer_height"]
         [::core::mem::offset_of!(rsf_ac7_view, buffer_height) - 468usize];
-    ["Offset of field: rsf_ac7_view::is_main_view"]
-        [::core::mem::offset_of!(rsf_ac7_view, is_main_view) - 472usize];
+    ["Offset of field: rsf_ac7_view::fills_target"]
+        [::core::mem::offset_of!(rsf_ac7_view, fills_target) - 472usize];
     ["Offset of field: rsf_ac7_view::jitter_pixels"]
         [::core::mem::offset_of!(rsf_ac7_view, jitter_pixels) - 476usize];
     ["Offset of field: rsf_ac7_view::previous_jitter_pixels"]

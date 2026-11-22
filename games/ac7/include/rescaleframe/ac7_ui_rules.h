@@ -30,21 +30,21 @@ extern "C" {
    interface shape but does not match any rule, and it is counted per screen so a classification
    gap is visible in the log instead of being diverted on a guess. */
 typedef uint32_t rsf_ac7_draw_class;
-#define RSF_AC7_DRAW_SCENE ((rsf_ac7_draw_class)0)
+#define RSF_AC7_DRAW_SCENE 0u
 /* Slate or canvas geometry into the frame's own target: the interface drawn at native. */
-#define RSF_AC7_DRAW_UI_SLATE ((rsf_ac7_draw_class)1)
+#define RSF_AC7_DRAW_UI_SLATE 1u
 /* A world space widget quad reading a converter target: the interface drawn as scene geometry. */
-#define RSF_AC7_DRAW_UI_WIDGET_QUAD ((rsf_ac7_draw_class)2)
+#define RSF_AC7_DRAW_UI_WIDGET_QUAD 2u
 /* An interface draw whose blend cannot be represented in a premultiplied layer. Counted, never
    diverted: a modulate blend writes colour only, so a transparent layer has nothing to composite. */
-#define RSF_AC7_DRAW_UI_MODULATE ((rsf_ac7_draw_class)3)
+#define RSF_AC7_DRAW_UI_MODULATE 3u
 /* Slate rasterizing a widget into a converter's own render target. This is what builds the texture
    the quads read, so diverting it would empty the interface rather than move it. */
-#define RSF_AC7_DRAW_WIDGET_RASTER ((rsf_ac7_draw_class)4)
+#define RSF_AC7_DRAW_WIDGET_RASTER 4u
 /* Interface shaped and unexplained. The classification gap, reported per screen. */
-#define RSF_AC7_DRAW_UNKNOWN ((rsf_ac7_draw_class)5)
+#define RSF_AC7_DRAW_UNKNOWN 5u
 /* Named by the override table as not interface, whatever the other rules say. */
-#define RSF_AC7_DRAW_SKIP ((rsf_ac7_draw_class)6)
+#define RSF_AC7_DRAW_SKIP 6u
 
 /* D3D11 blend factors, named here so this header does not include d3d11.h and stays testable
    without a device. The values are the D3D11_BLEND enumerators. */
@@ -69,14 +69,14 @@ typedef uint32_t rsf_ac7_draw_class;
 /* What produced a vertex declaration. Recognising this is what turns a pointer into a name, and it
    is the only part of identification that can be done at creation, before anything has drawn. */
 typedef uint32_t rsf_ac7_layout_kind;
-#define RSF_AC7_LAYOUT_OTHER ((rsf_ac7_layout_kind)0)
+#define RSF_AC7_LAYOUT_OTHER 0u
 /* `FSlateVertexDeclaration`: the interface's own geometry. */
-#define RSF_AC7_LAYOUT_SLATE ((rsf_ac7_layout_kind)1)
+#define RSF_AC7_LAYOUT_SLATE 1u
 /* `FSlateInstancedVertexDeclaration`: the same five elements plus a per-instance transform. */
-#define RSF_AC7_LAYOUT_SLATE_INSTANCED ((rsf_ac7_layout_kind)2)
+#define RSF_AC7_LAYOUT_SLATE_INSTANCED 2u
 /* `FSimpleElementVertexDeclaration`: the canvas, which is what `ANimbusHUD::DrawWidget*` and the
    engine's own debug drawing go through. */
-#define RSF_AC7_LAYOUT_CANVAS ((rsf_ac7_layout_kind)3)
+#define RSF_AC7_LAYOUT_CANVAS 3u
 
 /* One `D3D11_INPUT_ELEMENT_DESC`, reduced to the fields that carry information.
 

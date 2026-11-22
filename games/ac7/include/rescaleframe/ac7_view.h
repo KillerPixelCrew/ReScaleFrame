@@ -90,9 +90,8 @@ typedef struct rsf_ac7_view {
     uint32_t buffer_width;
     uint32_t buffer_height;
 
-    /* Whether this is the view the player is looking through, rather than one of the smaller ones
-       the engine renders into the same target. */
-    uint32_t is_main_view;
+    /* The view rectangle starts at zero and covers its whole buffer. */
+    uint32_t fills_target;
 
     /* Sub-pixel projection offset, in pixels at the view's own resolution, which is the convention
        every backend takes it in. The engine stores it in clip space and divides by the view rect

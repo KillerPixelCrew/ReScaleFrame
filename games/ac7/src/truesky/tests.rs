@@ -22,6 +22,7 @@ fn unpatched() -> rsf_ac7_truesky_patches {
         depth_format_site: null_mut(),
         depth_call: EMPTY_RELAY,
         motion_call: EMPTY_RELAY,
+        motion_refused: false,
         resolution_refused: false,
     }
 }
@@ -326,15 +327,37 @@ fn depth_admission_refuses_before_any_depth_write() {
 }
 
 #[test]
-fn a_refused_motion_relay_is_retried_each_sky_render() {
+fn a_motion_fingerprint_refusal_does_not_block_depth() {
     let fake = Fake::new();
     fake.image.put(at(MOTION_CALL_RVA) - 1, &[0]);
     let mut state = unpatched();
     apply(&mut state, &fake);
     apply(&mut state, &fake);
-    assert_eq!(fake.logged(MOTION_REFUSED), 2);
+    assert_eq!(fake.logged(MOTION_REFUSED), 1);
+    assert!(state.motion_refused);
     // The depth route does not depend on it.
     assert_eq!(owned(&state), [false, false, true, true, true]);
+}
+
+#[test]
+fn motion_write_retry_is_independent_of_both_terminal_grid_states() {
+    for depth_supported in [false, true] {
+        let fake = Fake::new();
+        fake.ready.set(true);
+        fake.effect.set(depth_supported);
+        // First guarded write is the motion call. Later writes use the default success.
+        fake.outcomes.borrow_mut().push_back(false);
+        let mut state = unpatched();
+        apply(&mut state, &fake);
+        assert!(state.motion_call.slot.is_null());
+        assert!(!state.motion_refused);
+        assert_eq!(!state.resolution_site.is_null(), depth_supported);
+        assert_eq!(state.resolution_refused, !depth_supported);
+        apply(&mut state, &fake);
+        assert!(!state.motion_call.slot.is_null());
+        assert_eq!(fake.logged(MOTION_INSTALLED), 1);
+        assert!(restore(&mut state, &fake));
+    }
 }
 
 #[test]
