@@ -1,8 +1,76 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_sr_abi::rsf_vk_function;
+use crate::vulkan_latency_platform_abi::{
+    rsf_vk_synchronized_present, rsf_vk_wsi_call, rsf_vk_wsi_scope,
+};
+use crate::vulkan_sr_abi::{rsf_vk_function, rsf_vk_get_proc};
 use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle};
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
+
+const INIT_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_slvk_without_dlssg(
+    scope: rsf_vk_wsi_scope,
+    callback: rsf_vk_wsi_call,
+    user: *mut c_void,
+) -> i32 {
+    let Some(call) = callback else {
+        return INIT_FAILED;
+    };
+    match scope {
+        Some(scope) => unsafe { scope(callback, user) },
+        None => unsafe { call(user) },
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_latencyvk_instance_proc(
+    resolve: rsf_vk_get_proc,
+    instance: *mut c_void,
+    name: *const c_char,
+) -> rsf_vk_function {
+    let resolve = resolve?;
+    if name.is_null() {
+        return None;
+    }
+    unsafe { resolve(instance, name) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_latencyvk_queue_present(
+    synchronized: rsf_vk_synchronized_present,
+    callback: rsf_vk_function,
+    queue: *mut c_void,
+    info: *const c_void,
+) -> i32 {
+    let Some(callback) = callback else {
+        return INIT_FAILED;
+    };
+    if queue.is_null() || info.is_null() {
+        return INIT_FAILED;
+    }
+    if let Some(synchronized) = synchronized {
+        return unsafe { synchronized(callback as usize, queue, info) };
+    }
+
+    // The public C ABI erases Vulkan function types. This entry only accepts
+    // vkQueuePresentKHR and borrows the original queue and present info.
+    let present = unsafe { std::mem::transmute::<_, vk::PFN_vkQueuePresentKHR>(callback) };
+    unsafe { present(vk::Queue::from_raw(queue as usize as u64), info.cast()).as_raw() }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_latencyvk_wsi_call(
+    scope: rsf_vk_wsi_scope,
+    callback: rsf_vk_wsi_call,
+    user: *mut c_void,
+) -> i32 {
+    if user.is_null() {
+        return INIT_FAILED;
+    }
+    unsafe { rsf_core_slvk_without_dlssg(scope, callback, user) }
+}
 
 type Callback = unsafe extern "C" fn(*mut c_void) -> i32;
 type Scope = unsafe extern "C" fn(Callback, *mut c_void) -> i32;

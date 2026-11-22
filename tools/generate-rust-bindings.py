@@ -546,7 +546,7 @@ generate("tests/game-sdk/src/vk_latency_calls.rs", "runtime/orchestrator/src/nat
           "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};"])
 
 generate("runtime/orchestrator/src/vulkan_latency_platform_abi.rs", "runtime/orchestrator/src/native_latency_vulkan_platform.h",
-         "rsf_vk_(latency_platform|streamline_calls|token_calls|pcl_calls)", "NOTHING",
+         "rsf_vk_(latency_platform|streamline_calls|token_calls|pcl_calls|wsi_(call|scope)|synchronized_present)", "NOTHING",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",
           "--raw-line", "use crate::vulkan_fg_abi::{rsf_fgvk, rsf_fgvk_latency_status};",

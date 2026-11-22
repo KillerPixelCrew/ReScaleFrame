@@ -48,7 +48,7 @@ add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
 set(RSF_VULKAN_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/engine/thirdparty/vulkan/include" CACHE PATH "Vulkan headers for native Vulkan services")
 set(RSF_FFX_VK_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/fidelityfx-vulkan/ffx-api/include" CACHE PATH "Pinned FidelityFX Vulkan API headers")
-add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.cpp src/native_dlss_vulkan.cpp src/native_xess_vulkan.cpp src/native_fg_vulkan.cpp src/native_fg_vulkan_dispatch.cpp src/native_fg_dlss_vulkan.cpp src/native_fg_dlss_vulkan_capture.cpp src/native_latency_vulkan.cpp)
+add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.cpp src/native_dlss_vulkan.cpp src/native_xess_vulkan.cpp src/native_fg_vulkan.cpp src/native_fg_vulkan_dispatch.cpp src/native_fg_dlss_vulkan.cpp src/native_fg_dlss_vulkan_capture.cpp src/native_latency_vulkan.c)
 target_sources(rsf_native_vulkan PRIVATE src/latency_amd_vulkan.c)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_ANTILAG_VK=1)
@@ -124,7 +124,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_I
     endforeach()
     file(SHA256 "${RSF_STREAMLINE_VK_RUNTIME}/sl.interposer.dll" rsf_sl_hash)
     string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," rsf_sl_bytes "${rsf_sl_hash}")
-    target_sources(rsf_native_vulkan PRIVATE ../vulkan/streamline/bridge.cpp)
+    target_sources(rsf_native_vulkan PRIVATE ../vulkan/streamline/bridge.cpp src/native_latency_streamline_exceptions.cpp)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_STREAMLINE_VK=1 RSF_STREAMLINE_VULKAN_STATIC=1 "VULKANSTORY_CORRECTED_STREAMLINE_SHA256=${rsf_sl_bytes}")
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_STREAMLINE_INCLUDE}")
     # The interposer lifecycle is Rust; the standalone bridge links the same crate.

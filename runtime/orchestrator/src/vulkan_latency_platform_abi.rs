@@ -5,6 +5,8 @@ use crate::vulkan_fg_abi::{rsf_fgvk, rsf_fgvk_latency_status};
 use crate::vulkan_latency_abi::rsf_slvk_call;
 type rsf_backend_result = i32;
 
+pub type rsf_vk_wsi_call =
+    ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> i32>;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_vk_token_calls {
@@ -139,3 +141,13 @@ const _: () = {
     ["Offset of field: rsf_vk_latency_platform::status"]
         [::core::mem::offset_of!(rsf_vk_latency_platform, status) - 40usize];
 };
+pub type rsf_vk_wsi_scope = ::core::option::Option<
+    unsafe extern "C" fn(arg1: rsf_vk_wsi_call, arg2: *mut ::core::ffi::c_void) -> i32,
+>;
+pub type rsf_vk_synchronized_present = ::core::option::Option<
+    unsafe extern "C" fn(
+        arg1: usize,
+        arg2: *mut ::core::ffi::c_void,
+        arg3: *const ::core::ffi::c_void,
+    ) -> i32,
+>;

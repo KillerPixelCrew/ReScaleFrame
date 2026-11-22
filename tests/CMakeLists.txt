@@ -639,8 +639,10 @@ set(rsf_vulkan_latency_test_endpoints
     rsf_fgvk_latency_get_status=rsf_test_fgvk_latency_get_status)
 rsf_add_rust_static(rsf_vk_latency_fixtures_rust rsf_rust_vk_latency_fixtures
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features vk-latency-fixtures)
-add_executable(rsf_native_latency_vulkan_test game-sdk/cpu_fixture_main.c ../runtime/orchestrator/src/native_latency_vulkan.cpp)
-target_sources(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/src/latency_amd_vulkan.c)
+add_executable(rsf_native_latency_vulkan_test game-sdk/cpu_fixture_main.c ../runtime/orchestrator/src/native_latency_vulkan.c)
+target_sources(rsf_native_latency_vulkan_test PRIVATE
+    ../runtime/orchestrator/src/latency_amd_vulkan.c
+    ../runtime/orchestrator/src/native_latency_streamline_exceptions.cpp)
 target_include_directories(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/include)
 target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1
     RSF_CPU_FIXTURE=rsf_native_latency_vulkan_fixture
@@ -846,7 +848,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_build_options)
     add_test(NAME streamline_vulkan_dispatch_contract COMMAND rsf_streamline_vulkan_dispatch_test)
     add_executable(rsf_native_antilag_vulkan_test game-sdk/cpu_fixture_main.c
-        ../runtime/orchestrator/src/native_latency_vulkan.cpp ../runtime/orchestrator/src/latency_amd_vulkan.c)
+        ../runtime/orchestrator/src/native_latency_vulkan.c ../runtime/orchestrator/src/latency_amd_vulkan.c)
     target_compile_definitions(rsf_native_antilag_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_ANTILAG_VK=1
         RSF_CPU_FIXTURE=rsf_native_antilag_vulkan_fixture
         ${rsf_vulkan_latency_test_endpoints})

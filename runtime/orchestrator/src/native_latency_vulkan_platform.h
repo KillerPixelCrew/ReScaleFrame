@@ -52,6 +52,12 @@ void rsf_core_latencyvk_present(const rsf_vk_latency_platform*, uint32_t);
 rsf_backend_result rsf_core_latencyvk_submit(const rsf_vk_latency_platform*, const rsf_game_render_pass*, uint32_t);
 rsf_backend_result rsf_core_latencyvk_get_status(const rsf_vk_latency_platform*, rsf_latencyvk_status*);
 rsf_backend_result rsf_core_latencyvk_shutdown(const rsf_vk_latency_platform*);
+typedef int32_t (*rsf_vk_wsi_scope)(rsf_vk_wsi_call, void*);
+typedef int32_t (*rsf_vk_synchronized_present)(uintptr_t, void*, const void*);
+int32_t rsf_core_slvk_without_dlssg(rsf_vk_wsi_scope, rsf_vk_wsi_call, void*);
+rsf_vk_function rsf_core_latencyvk_instance_proc(rsf_vk_get_proc, void*, const char*);
+int32_t rsf_core_latencyvk_queue_present(rsf_vk_synchronized_present, rsf_vk_function, void*, const void*);
+int32_t rsf_core_latencyvk_wsi_call(rsf_vk_wsi_scope, rsf_vk_wsi_call, void*);
 #ifdef __cplusplus
 }
 #endif
