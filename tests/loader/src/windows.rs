@@ -12,6 +12,8 @@ mod vendor_census_asi;
 mod vendor_census_asi_abi;
 #[cfg(target_env = "msvc")]
 mod vendor_census_fixture;
+#[cfg(target_env = "msvc")]
+mod vendor_layouts;
 
 use std::ffi::{CStr, OsStr};
 use std::os::windows::ffi::OsStrExt;

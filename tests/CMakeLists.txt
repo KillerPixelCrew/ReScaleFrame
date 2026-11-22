@@ -936,10 +936,11 @@ if(TARGET rsf_vendor_census)
     # tests compare the restated offsets with the headers where an untracked checkout provides them.
     function(rsf_census_layout_check suffix define probe)
         if(EXISTS "${probe}")
-            add_executable(rsf_vendor_census_layouts_${suffix} vendor_census_layouts.cpp)
+            add_executable(rsf_vendor_census_layouts_${suffix} loader/vendor_layout_facts.cpp)
             target_compile_definitions(rsf_vendor_census_layouts_${suffix} PRIVATE ${define})
             target_include_directories(rsf_vendor_census_layouts_${suffix} SYSTEM PRIVATE ${ARGN})
-            target_link_libraries(rsf_vendor_census_layouts_${suffix} PRIVATE rsf_build_options)
+            target_link_libraries(rsf_vendor_census_layouts_${suffix} PRIVATE
+                rsf_loader_fixtures_rust rsf_build_options)
             add_test(NAME vendor_census_layouts_${suffix} COMMAND rsf_vendor_census_layouts_${suffix})
         else()
             message(STATUS "vendor census layout check ${suffix} skipped: ${probe} not found")

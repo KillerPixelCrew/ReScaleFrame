@@ -222,3 +222,11 @@ The Rust observers back the unchanged public `census_d3d12_observer.h` ABI. The 
 depth still covers both APIs, filters DXGI test presents, and sends the before-present callback
 only through the original Present path. Borrowed interface queries, debug-layer configuration
 and debug-message registration remain isolated in `d3d_guarded_platform.cpp`.
+
+## Vendor SDK layout fixture
+
+`tests/vendor_census_layouts.cpp` is replaced by a Rust comparison fixture and native SDK
+fact collector. All 188 expected values stay associated with the same types, fields and
+SDK sets. The fact collector still uses the actual optional vendor headers to supply the
+independent offsets and sizes, including C++ layouts from Streamline. CTest keeps all five
+conditional targets and the original skip code.
