@@ -49,7 +49,8 @@ const PHASE_RENDER_SUBMIT: u32 = 2;
 const SCREEN_UNKNOWN: u32 = 0;
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 const FORMAT_RGBA16F: u32 = 10;
-pub(super) const DX10_MSAA: u32 = 1 << 14;
+// CRender::o word3 o.dx10_msaa (sr_profile.rs).
+pub(super) const DX10_MSAA: u32 = crate::sr_profile::DX10_MSAA_BIT;
 pub(crate) const FIRST_PERSON_DEPTH_BITS: u32 = 0.02f32.to_bits();
 const VIEW_RAW: u32 = 0;
 const VIEW_HDR: u32 = 3;

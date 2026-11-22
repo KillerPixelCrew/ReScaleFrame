@@ -36,6 +36,14 @@
 
 #ifdef __cplusplus
 static_assert(RSF_ANOMALY_SWAP_SLOT_SSAO_TEMP + 1 == RSF_ANOMALY_SWAP_SLOT_COUNT, "world slot order");
+extern "C" {
 #else
 _Static_assert(RSF_ANOMALY_SWAP_SLOT_SSAO_TEMP + 1 == RSF_ANOMALY_SWAP_SLOT_COUNT, "world slot order");
+#endif
+
+/* The verified engine layout shared by both executable profiles (sr_profile.rs), for the lifetime of the process. */
+const rsf_anomaly_swap_layout* rsf_anomaly_sr_engine_layout(void);
+
+#ifdef __cplusplus
+}
 #endif

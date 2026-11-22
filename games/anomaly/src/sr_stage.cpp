@@ -16,7 +16,7 @@
 #include "runtime_module.h"
 #include "sr_d3d11_platform.h"
 #include "build_profile.h"
-#include "sr_swap_layout.h"
+#include "sr_swap.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/overlay_api.h>
@@ -244,7 +244,7 @@ const rsf_anomaly_swap_platform swap_platform{
     },
 };
 struct SwapOwner {
-    rsf_anomaly_swap* state = rsf_anomaly_swap_create_scoped(&verified_layout, &swap_platform);
+    rsf_anomaly_swap* state = rsf_anomaly_swap_create_scoped(rsf_anomaly_sr_engine_layout(), &swap_platform);
     ~SwapOwner() { rsf_anomaly_swap_destroy(state); }
 };
 SwapOwner swap;

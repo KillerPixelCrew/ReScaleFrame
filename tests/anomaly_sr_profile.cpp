@@ -69,19 +69,8 @@ constexpr auto profiles = [] {
     return result;
 }();
 
-// C++ layout consumers still get their compile-time offset cross-checks.
-// CRT field order follows SH_RT.h; pTexture is a ref_texture (one pointer) and the record ends after _order.
-static_assert(sr::crt_surface_offset < sr::crt_rtv_offset && sr::crt_rtv_offset < sr::crt_dsv_offset &&
-              sr::crt_dsv_offset < sr::crt_uav_offset && sr::crt_uav_offset < sr::crt_texture_offset &&
-              sr::crt_texture_offset + 8 == sr::crt_width_offset && sr::crt_width_offset + 4 == sr::crt_height_offset &&
-              sr::crt_height_offset + 4 == sr::crt_format_offset && sr::crt_order_offset + 8 == sr::crt_size);
-// RCache texture caches: ps[16], vs[4], then gs/hs/ds/cs[16] contiguous; T precedes them (STextureList*, M, C).
-static_assert(sr::backend_textures_vs_offset == sr::backend_textures_ps_offset + 8 * sr::backend_textures_ps_count);
-static_assert(sr::backend_textures_gs_offset == sr::backend_textures_vs_offset + 8 * sr::backend_textures_vs_count);
-static_assert(sr::backend_textures_hs_offset == sr::backend_textures_gs_offset + 8 * sr::backend_textures_stage_count);
-static_assert(sr::backend_textures_cs_offset == sr::backend_textures_ds_offset + 8 * sr::backend_textures_stage_count);
-static_assert(sr::backend_texture_list_offset + 24 == sr::backend_textures_ps_offset);
-static_assert(sr::xforms_project_offset == sr::xforms_view_offset + 64);
+// The SR layout relationships (CRT field order, RCache texture ranges, R_xforms) are compile-time checks in
+// sr_profile.rs, which owns those values.
 }
 
 extern "C" int rsf_test_anomaly_profile_contract(const Profile*, const rsf::anomaly::sr::TargetSlot*, size_t) noexcept;

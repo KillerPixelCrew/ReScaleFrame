@@ -4,7 +4,8 @@
 namespace rsf::anomaly::sr {
 // Render-resolution split (SR Stage 0, docs/research/anomaly-sr-seam.md). One table per exact executable (native_profile.h,
 // build_profile.h); the AVX table is documented in docs/research/anomaly-avx-profile.md.
-// Data only: nothing here installs a hook or changes rendering. Every value is re-checked against the installed
+// Data only: nothing here installs a hook or changes rendering. sr_profile.rs owns every value below and
+// tools/generate-anomaly-sr-profile.py projects it here (--check refuses drift). Every value is re-checked against the installed
 // executable by tests/anomaly_sr_evidence.py --verify [--exe avx] (decompile/disassembly evidence in that script and the docs).
 // All functions are x64 __fastcall with `this` in rcx. Line numbers refer to xray-monolith 028ccf5.
 
@@ -122,8 +123,8 @@ inline constexpr std::array<TargetSlot, 26> target_slots{{
 inline constexpr uint32_t target_lum_src_texture_offset = 0x4c8, target_lum_dest_texture_offset = 0x4d0;
 
 // SR Stage 2 world targets: every CRenderTarget target the world window (phase_scene_prepare .. S-B seam) renders
-// into, in the order of sr::Slot. Each entry repeats its target_slots offset and format (static_assert in
-// sr_swap.cpp, and the verifier). d3d_format 0 accepts R16F (111) or R32F (114): rt_half_depth is R32F on NVIDIA and
+// into, in the RSF_ANOMALY_SWAP_SLOT_* order (sr_swap.h). Each entry repeats its target_slots offset and format (a
+// compile-time check in sr_profile.rs, and the verifier). d3d_format 0 accepts R16F (111) or R32F (114): rt_half_depth is R32F on NVIDIA and
 // R16F elsewhere (r4_rendertarget.cpp:717), rt_ssao_temp is R16F with a UAV (749). Optional targets exist only with
 // their option (generic2: o.advancedpp; half_depth: o.ssao_opt_data; ssao_temp: o.ssao_hdao && o.ssao_ultra).
 // half_allowed: the engine may create it at Device.dwWidth/2 x Device.dwHeight/2 (o.ssao_half_data, line 709).
@@ -177,6 +178,10 @@ inline constexpr uint32_t backend_rt_changed_offset = 0x980;       // m_bChanged
 // R_xforms (r_backend_xform.h): m_w, m_invw, m_v, m_p, then derived matrices.
 inline constexpr uint32_t xforms_view_offset = 0x80, xforms_project_offset = 0xc0;
 
+// Per-build records. In the AVX build rmFar's 16 bytes are unique, so it has no extended guard, and the SSAO helper is
+// re-encoded with VEX moves (0x4a bytes up to the viewport lea instead of 0x46).
+// BEGIN GENERATED SR PROFILES
+// Generated from sr_profile.rs by tools/generate-anomaly-sr-profile.py.
 // ---- Standard 1.5.3 DX11 (AnomalyDX11.exe) -------------------------------------------------------------------------
 inline constexpr std::array<UniqueGuard, 7> sr_standard_unique{{
     {"CRender::render_sun_cascades", 0x815a30, "48895c240848896c2410488974241848897c242041564883ec20488bd948"},
@@ -259,8 +264,6 @@ inline constexpr SrProfile sr_standard{
 };
 
 // ---- AVX 1.5.3 DX11 (AnomalyDX11AVX.exe) ---------------------------------------------------------------------------
-// rmFar's 16 bytes are unique in this build, so it has no extended guard. The SSAO helper is re-encoded with VEX moves
-// (0x4a bytes up to the viewport lea instead of 0x46).
 inline constexpr std::array<UniqueGuard, 6> sr_avx_unique{{
     {"CRender::render_sun_cascades", 0x80dfd0, "48895c240848896c2410488974241848897c242041564883ec20488bd948"},
     {"CRenderTarget::phase_blur", 0x8e6e40, "488bc44889582055565741564157488d68a14881eca0"},
@@ -339,4 +342,5 @@ inline constexpr SrProfile sr_avx{
         {"constant buffer reflected size", 0x834e80, "488d5424404c896b10498bcc4c896b204c896b284c896b304c896b384c896b404c896b48c6436801498b0424ff10488b542440488b0d0e894f00e8d18986ff4885c07402ff00488b4b104885c9740fff09488b4b1044392975044c896b108b54244c488d4b20488943108b4424488943188b442450894358"},
     }},
 };
+// END GENERATED SR PROFILES
 }
