@@ -24,13 +24,6 @@ typedef struct {
 } rsf_anomaly_shader_identity;
 
 typedef struct {
-    rsf_anomaly_shader_bytes source, entry;
-    uint32_t flags;
-    rsf_anomaly_shader_defines defines;
-} rsf_anomaly_shader_decoded_frame;
-typedef bool (*rsf_anomaly_shader_publish)(void*, const rsf_anomaly_shader_decoded_frame*);
-
-typedef struct {
     rsf_anomaly_shader_bytes name, original, motion, tag;
     uint32_t stage;
 } rsf_anomaly_shader_root;
@@ -104,8 +97,6 @@ bool rsf_anomaly_shader_sha256(rsf_anomaly_shader_bytes, uint8_t (*out)[64]);
 const rsf_anomaly_shader_entry* rsf_anomaly_shader_match_request(const rsf_anomaly_shader_admitted*,
     rsf_anomaly_shader_bytes source, rsf_anomaly_shader_bytes target);
 const char* rsf_anomaly_shader_outcome_name(uint8_t);
-uint8_t rsf_anomaly_shader_frame(const rsf_anomaly_shader_frame_layout*, uintptr_t module, uintptr_t return_address,
-    uintptr_t stack, const void* reader, rsf_anomaly_shader_read, void* request, rsf_anomaly_shader_publish);
 uint8_t rsf_anomaly_shader_compatible(uint8_t, const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*);
 bool rsf_anomaly_shader_linkable(const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*);
 bool rsf_anomaly_shader_tess_linkable(const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*,

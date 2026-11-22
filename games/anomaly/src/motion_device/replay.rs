@@ -3,9 +3,13 @@ use super::{Raw, View};
 use std::mem::{MaybeUninit, align_of};
 use std::ptr::{drop_in_place, null, null_mut};
 
-pub(crate) const REPLAY_READY: u8 = 0;
-pub(crate) const REPLAY_NO_DEPTH_WRITE: u8 = 1;
-const FAILED: u8 = 2;
+use crate::motion_device_abi::{
+    RSF_MOTION_REPLAY_FAILED, RSF_MOTION_REPLAY_NO_DEPTH_WRITE, RSF_MOTION_REPLAY_READY,
+};
+
+pub(crate) const REPLAY_READY: u8 = RSF_MOTION_REPLAY_READY as u8;
+pub(crate) const REPLAY_NO_DEPTH_WRITE: u8 = RSF_MOTION_REPLAY_NO_DEPTH_WRITE as u8;
+const FAILED: u8 = RSF_MOTION_REPLAY_FAILED as u8;
 pub(super) const RENDER_TARGETS: usize = 8;
 pub(super) const CLASS_INTERFACES: usize = 253;
 

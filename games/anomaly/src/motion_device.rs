@@ -219,13 +219,6 @@ extern "C" fn rsf_anomaly_motion_device_drop(owner: *mut Owner) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_reset(owner: Option<&mut Owner>) {
-    if let Some(owner) = owner {
-        owner.device = None;
-    }
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_device_create(
     owner: &mut Owner,
     device: *mut c_void,

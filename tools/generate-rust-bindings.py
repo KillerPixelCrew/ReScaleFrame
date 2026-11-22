@@ -356,6 +356,8 @@ generate("games/anomaly/src/motion_frame_target_abi.rs", "games/anomaly/src/moti
          "rsf_anomaly_motion_frame_target", "NOTHING", [], ["--with-derive-default"])
 generate("games/anomaly/src/shader_loader/frame_abi.rs", "games/anomaly/src/shader_frame_layout.h",
          "rsf_anomaly_shader_frame_layout", "NOTHING", [])
+generate("games/anomaly/src/shader_loader/engine_include_abi.rs", "games/anomaly/src/engine_shader_includes.h",
+         "rsf_anomaly_engine_(include_ops|shader_profile)", "NOTHING", [])
 generate("games/anomaly/src/fg_stage_abi.rs", "games/anomaly/src/fg_stage_platform.h",
          "rsf_(anomaly_fg_.*|d3d11_(present_(api|setup)|fg_api|state)|get_d3d11_(present|fg)_api_fn|"
          "native_fg_(options|status)|fg_status|d3d11_fg_inputs|observer_present(_event)?(_fn)?|backend_log_fn)",

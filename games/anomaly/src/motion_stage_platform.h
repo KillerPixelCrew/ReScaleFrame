@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "engine_shader_includes.h"
 #include "motion_device_platform.h"
 #include "motion_frame_target.h"
 #include "motion_target_platform.h"
@@ -14,7 +15,7 @@ namespace rsf::anomaly::motion {
 using FrameTarget = rsf_anomaly_motion_frame_target;
 
 // Private static-library ABI. Engine objects borrow their native lifetime.
-// Shader pack ownership transfers back to Rust after the guarded include setup.
+// Native include operations guard engine calls. Rust opens and owns the pack.
 struct PositionViews { void* rtv; void* surface; };
 struct TargetFacts { uint32_t width, height, samples, layers; };
 struct DrawFacts {
@@ -71,12 +72,12 @@ struct MotionPlatform {
     bool (*read_constant)(uint32_t, uint32_t, uint32_t, void*, uint32_t);
     bool (*write_constant)(uint32_t, uint32_t, uint32_t, const void*, uint32_t);
     void (*draw_state)(void*, MotionDrawState*);
-    void* (*open_pack)(void*, const void*, const wchar_t*, const wchar_t*, char*, size_t);
+    const rsf_anomaly_engine_include_ops* includes;
+    void (*shader_profile)(const void*, rsf_anomaly_engine_shader_profile*);
     void* (*frame_layout)(rsf_anomaly_shader_frame_layout*);
     rsf_anomaly_shader_read read_engine;
 };
-inline constexpr uint32_t motion_platform_abi = 11;
-void* open_shader_pack(void*, const void*, const wchar_t*, const wchar_t*, char*, size_t) noexcept;
+inline constexpr uint32_t motion_platform_abi = 12;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;

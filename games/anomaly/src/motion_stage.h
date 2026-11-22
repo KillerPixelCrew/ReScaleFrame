@@ -9,25 +9,25 @@
 //   MotionFoliage=1                    tree and grass history (default 1): reads each foliage draw's staged VS constants,
 //                                      keeps the previous frame's by stable identity and binds it in b13. 0 binds the
 //                                      all-invalid foliage buffer (validity 0). Grass also needs the engine's unused
-//                                      instance rows poisoned after each read (see motion_foliage.h).
+//                                      instance rows poisoned after each read (motion/foliage.rs).
 //   MotionCapture=1                    dump the motion target and G-buffer through the core frame dump service;
 //   MotionCaptureStart=600, MotionCaptureCount=3 (max 16), MotionCaptureInterval=300 (main-view frames), and F10
 //                                      (refused while SRStageCapture owns the dump service)
 //
-// Pipeline (see the headers for each piece):
-// * create_shader detour (shader_loader.h): the engine creates, reflects and signature-extracts its stock shader
+// Pipeline:
+// * create_shader detour (shader_loader.rs): the engine creates, reflects and signature-extracts its stock shader
 //   unchanged; for an allowlisted root RSF builds the verified motion variant of that exact permutation and records
 //   stock -> variant. Every refusal leaves the stock shader in use.
 // * phase_scene_begin/end detours: the G-buffer window. The first open of a frame starts the draw-time history
-//   frame (motion_history.h), sizes the RGBA16F target to the bound rt_Position texture (so it follows an SR render-
+//   frame (motion.rs), sizes the RGBA16F target to the bound rt_Position texture (so it follows an SR render-
 //   size twin) and clears it to zero.
 // * CBackend::constants.flush (the geometry producer's draw-time site, geometry_set_flush_callback): after every
-//   native upload, keep RTV2 bound across engine binds (motion_target.h), record the draw's camera and instance
+//   native upload, keep RTV2 bound across engine binds (motion_target.rs), record the draw's camera and instance
 //   snapshot, and for a G-buffer draw whose VS and PS both have linkable variants upload VS/PS b13 and bind the
 //   variants. A tessellated draw (r4_enable_tessellation: DX11\tess.hs/ds bound) swaps the whole VS+HS+DS+PS chain, with
 //   the DS b13 previous view/projection split, only when all four stages have verified variants and every interface
-//   links (shader_loader.h tess_chain_linkable). Other occluding draws are marked for the invalidation replay
-//   (motion_d3d11.h).
+//   links (shader_loader/reflection.rs). Other occluding draws are marked for the invalidation replay
+//   (motion_device/replay.rs).
 // * ID3D11DeviceContext Draw/DrawIndexed/DrawInstanced/DrawIndexedInstanced detours on the game's immediate
 //   context: run the engine's draw, then the invalidation replay if marked, then put the stock shaders (VS, PS and, for
 //   a swapped chain, HS and DS) back so the engine's shader cache matches the device again.

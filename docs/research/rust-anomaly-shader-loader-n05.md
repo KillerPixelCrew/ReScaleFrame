@@ -91,3 +91,28 @@ includer and fixture-specific path conversion remain separate.
 The scoped bindgen run reproduced the N04 target binding byte for byte.
 Pinned formatting, locked offline Windows Cargo metadata and Git whitespace
 checks cover this reconciliation. Build and runtime verification remain open.
+## Motion and deployed-tree ownership follow-up from 0251a81a
+
+This follow-up traces the mixed fixtures and live pack entry from the integrated
+`0251a81a` tree. The profile, HLSL, patch assets, and source and DXBC digests
+used by the fixtures still come from the same inputs.
+
+| Path | Source evidence |
+| --- | --- |
+| `games/anomaly/src/engine_shader_includes.cpp` | Retired. `motion/stage/shaders.rs` calls `RuntimePack::open_engine` directly and receives an owned Rust value. The generated records in `engine_shader_includes.h` pass the selected profile's compiler name and setup RVA along with the native include operations. The two native engine calls still use their original SEH scopes in `motion_stage.cpp`. `runtime_pack.rs` retains the RIP-relative LEA and both entry-prefix checks, closes each successful include through its scope, and drops the Runtime session before the compiler module. MotionPlatform ABI 12 is 288 bytes. |
+| `games/anomaly/src/shader_d3d.cpp`, `games/anomaly/src/shader_d3d.h` | Retired. The three deployed devices pass the admitted manifest and compile request directly to the Rust D3D owner. `shader_loader/d3d.rs` retains the compiler and reflector, compiles with the original macro order, flags and empty source name, and retains complete stock and variant reflection snapshots through preparation. The common Rust tree policy checks both reflection and the original bytecode reproduction before publishing a fresh variant. The native Windows path opener and C++ assertion projection remain in `shader_loader.cpp`. |
+| `games/anomaly/src/motion_d3d11.cpp`, `games/anomaly/src/motion_d3d11.h` | Retired. `tests/anomaly_motion_device.cpp`, `tests/anomaly_motion_far_device.cpp`, and `tests/anomaly_motion_tess_chain_device.cpp` use the typed device-owner pointer, direct uploads and borrowed target views from the Rust ABI. The core fixture retains the native unwind test across Rust replay begin and end, including its OM and PS restoration assertions. Far and tessellation fixtures keep the existing hardware selection and G-buffer, depth and vector comparisons. |
+| `tests/anomaly_motion_contract.cpp` caller-frame case | `shader_loader/frame/fixture.rs` checks both selected layouts supplied from `motion_profile.h`. It calls the typed decoder and checks the two return sites, ordered defines, cross-build and non-return refusals, missing terminator, failed entry read, invalid length and entry string limit. The old callback-based decoder and request publisher are removed. CTest still reaches the case through the existing contract launcher. |
+
+The CPU loader's fake compiler and reflector still call the common Rust tree
+policy through the C++ contract facade. The three deployed device fixtures retain
+their native scene setup, D3D11 draws, readback and result assertions. Motion
+constants, history and foliage remain mixed through `motion_bridge.cpp`,
+`motion_constants.h`, `motion_history.h`, `motion_foliage.cpp/.h` and
+`motion_policy.h`. The verified native profile, live detours and their native
+hook fixture remain in `motion_profile.h`, `motion_stage.cpp/.h`,
+`motion_stage_platform.h` and `tests/anomaly_motion_hooks_native.cpp`.
+
+Source checks covered this diff, bindgen 0.72.1, pinned Rust 1.94.1 formatting,
+locked offline Windows metadata and Git whitespace. Build, fixture execution,
+lint and device or game acceptance remain open.

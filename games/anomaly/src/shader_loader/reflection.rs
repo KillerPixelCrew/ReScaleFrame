@@ -179,17 +179,6 @@ pub(super) fn reflect(entry: FARPROC, code: &[u8]) -> Option<Snapshot> {
     snapshot(&shader)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_reflect(
-    entry: FARPROC,
-    code: Bytes,
-    user: *mut c_void,
-    consume: unsafe extern "C" fn(*mut c_void, &Reflection) -> bool,
-) -> bool {
-    reflect(entry, unsafe { code.as_slice() })
-        .is_some_and(|snapshot| unsafe { consume(user, snapshot.view()) })
-}
-
 #[repr(C)]
 struct Parameter {
     name: Bytes,

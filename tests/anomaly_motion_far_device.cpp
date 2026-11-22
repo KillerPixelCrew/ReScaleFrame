@@ -13,8 +13,8 @@
 //   50 m is therefore drawn ONLY through the LQ pairs; nothing in the game captures so far measured one.
 // * Every SKIN_n permutation of those roots is in the user's shader cache (appdata/shaders_cache/r4).
 //
-// What it proves, per pair and SKIN mode, through the production ShaderLoader (original reproduced byte for byte),
-// linkable(), decide_core, the b13 packers and MotionDevice:
+// What it proves, per pair and SKIN mode, through the Rust deployed-tree loader (original reproduced byte for byte),
+// linkable(), decide_core, the b13 packers and Rust motion owner:
 // 1. The variant pair links; the stock VS cannot feed the variant PS.
 // 2. A skinned mover whose previous palette (SKIN_1..4) or bone-composed previous world (SKIN_0) is a rigid motion of the
 //    current one, under a different previous camera: the motion target equals the CPU model at every covered pixel with
@@ -24,9 +24,8 @@
 //    CPU model to 0.02 px and every covered pixel must be valid (no loss to coverage or rounding).
 // 4. Missing history writes all-zero motion (validity 0) and leaves the native output unchanged.
 #include "motion_constants.h"
-#include "motion_d3d11.h"
+#include "motion_device_platform.h"
 #include "motion_policy.h"
-#include "shader_d3d.h"
 #include "shader_loader.h"
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
@@ -42,6 +41,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -93,8 +93,8 @@ std::vector<std::byte> file_bytes(const std::filesystem::path& path)
 }
 
 std::filesystem::path deployment;
-D3DShaderApi* api{};
-ShaderLoader* loader{};
+const rsf_anomaly_shader_d3d* api{};
+const Manifest* admitted{};
 
 struct Built {
     std::vector<std::byte> stock;
@@ -111,9 +111,9 @@ Built build(char stage, const std::string& root, const std::vector<Define>& defi
     request.source = file_bytes(deployment / "original" / "r3" / root);
     Built built;
     std::string error;
-    require(api->compile(deployment / "original", request.source, request, built.stock, error), root + " stock: " + error);
+    require(compile_deployed(*api, deployment / "original", request, built.stock, error), root + " stock: " + error);
     request.bytecode = built.stock;
-    built.prepared = loader->prepare(request);
+    built.prepared = prepare_deployed(*api, *admitted, deployment, request);
     require(built.prepared.outcome == Outcome::Replaced || built.prepared.outcome == Outcome::ReplacedFromCache,
         root + " " + request.target + ": " + outcome_name(built.prepared.outcome) + " " + built.prepared.detail);
     return built;
@@ -121,7 +121,7 @@ Built build(char stage, const std::string& root, const std::vector<Define>& defi
 Reflection reflection_of(const std::vector<std::byte>& code)
 {
     Reflection r;
-    require(api->reflect(code, r), "reflect");
+    require(reflect_deployed(*api, code, r), "reflect");
     return r;
 }
 
@@ -466,7 +466,7 @@ struct Frame {
     std::vector<uint32_t> albedo;
     std::vector<float> depth;
 };
-Frame draw(const Pair& p, const Scene& scene, Shaders& s, const Mesh& mesh, Targets& t, MotionDevice* motion, bool history)
+Frame draw(const Pair& p, const Scene& scene, Shaders& s, const Mesh& mesh, Targets& t, rsf_anomaly_motion_device_owner* motion, bool history)
 {
     Bindings keep;
     context->ClearState();
@@ -474,7 +474,11 @@ Frame draw(const Pair& p, const Scene& scene, Shaders& s, const Mesh& mesh, Targ
     context->ClearRenderTargetView(t.position_rtv.Get(), sentinel);
     context->ClearRenderTargetView(t.albedo_rtv.Get(), zero);
     context->ClearDepthStencilView(t.dsv.Get(), D3D11_CLEAR_DEPTH, 1, 0);
-    if (motion) motion->clear(context.Get());
+    rsf_anomaly_motion_device_view motion_view{};
+    if (motion) {
+        rsf_anomaly_motion_device_get(motion, &motion_view);
+        rsf_anomaly_motion_clear_target(context.Get(), motion_view.rtv);
+    }
     context->IASetInputLayout(s.layout.Get());
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     UINT offset = 0;
@@ -489,7 +493,7 @@ Frame draw(const Pair& p, const Scene& scene, Shaders& s, const Mesh& mesh, Targ
     bind_stage(true, s.vs.stock, overrides, keep);
     bind_stage(false, s.ps.stock, overrides, keep);
     if (motion) {
-        // The production policy, packers and MotionDevice uploads, as on_flush runs them for a swapped pair.
+        // The production policy, packers and Rust motion owner uploads, as on_flush runs them for a swapped pair.
         temporal::InstanceSnapshot previous;
         previous.world = p.skin == 0 ? scene.previous_bone : identity();
         if (p.skin != 0) previous.bones.assign(78, scene.previous_bone);
@@ -509,9 +513,10 @@ Frame draw(const Pair& p, const Scene& scene, Shaders& s, const Mesh& mesh, Targ
         else pack_core_invalid(vbytes);
         PixelBytes pbytes;
         require(pack_pixel({0, 0, float(size), float(size), 0, 0, 0, 0}, pbytes), "pack PS b13");
-        require(motion->set_core_vertex(context.Get(), vbytes) && motion->set_pixel(context.Get(), pbytes), "b13 uploads");
+        require(rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_CORE, vbytes.data(), vbytes.size()) &&
+            rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_PIXEL, pbytes.data(), pbytes.size()), "b13 uploads");
     }
-    ID3D11RenderTargetView* views[3]{t.position_rtv.Get(), t.albedo_rtv.Get(), motion ? motion->rtv() : nullptr};
+    ID3D11RenderTargetView* views[3]{t.position_rtv.Get(), t.albedo_rtv.Get(), motion ? static_cast<ID3D11RenderTargetView*>(motion_view.rtv) : nullptr};
     context->OMSetRenderTargets(motion ? 3 : 2, views, t.dsv.Get());
     context->OMSetDepthStencilState(t.less.Get(), 0);
     context->RSSetState(t.raster.Get());
@@ -522,7 +527,7 @@ Frame draw(const Pair& p, const Scene& scene, Shaders& s, const Mesh& mesh, Targ
     frame.position = read_back<Half4>(t.position.Get());
     frame.albedo = read_back<uint32_t>(t.albedo.Get());
     frame.depth = read_back<float>(t.depth.Get());
-    if (motion) frame.motion = read_back<Half4>(motion->texture());
+    if (motion) frame.motion = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
     require_clean_debug_layer(p.vs + "+" + p.ps + (motion ? " motion draw" : " stock draw"));
     return frame;
 }
@@ -536,14 +541,17 @@ Result run(const Pair& p, Shaders& s, const Scene& scene)
     const std::string name = std::string(p.element) + " " + p.vs + "+" + p.ps + " SKIN_" + std::to_string(p.skin) + " " + scene.name;
     const auto mesh = make_mesh(s, scene, p.skin);
     auto targets = make_targets();
-    MotionDevice motion;
-    require(motion.create(device.Get(), nullptr, nullptr), "MotionDevice");
+    std::unique_ptr<rsf_anomaly_motion_device_owner, decltype(&rsf_anomaly_motion_device_drop)> owner{
+        rsf_anomaly_motion_device_new(rsf_anomaly_motion_device_platform_get()), rsf_anomaly_motion_device_drop};
+    auto* motion = owner.get();
+    require(rsf_anomaly_motion_device_create(motion, device.Get(), nullptr, nullptr), "Rust motion owner");
     D3D11_TEXTURE2D_DESC position_desc{};
     targets.position->GetDesc(&position_desc);
-    require(motion.ensure_target(position_desc) == TargetResult::Created, "motion target");
+    require(rsf_anomaly_motion_device_target(motion, position_desc.Width, position_desc.Height,
+        position_desc.SampleDesc.Count, position_desc.ArraySize) == RSF_MOTION_CREATED, "motion target");
 
     const auto stock = draw(p, scene, s, mesh, targets, nullptr, true);
-    const auto moved = draw(p, scene, s, mesh, targets, &motion, true);
+    const auto moved = draw(p, scene, s, mesh, targets, motion, true);
     // Current clip -> object (the current palette is identity, view identity): inverse of the projection. Previous clip of
     // that object point: previous projection * previous view * previous bone.
     const auto to_object = invert(scene.projection);
@@ -578,7 +586,7 @@ Result run(const Pair& p, Shaders& s, const Scene& scene)
     require(r.covered >= scene.min_covered, name + ": coverage " + std::to_string(r.covered));
     require(r.largest_px > 4 * scene.tolerance_px, name + ": the scene moves more than the tolerance");
 
-    const auto none = draw(p, scene, s, mesh, targets, &motion, false);
+    const auto none = draw(p, scene, s, mesh, targets, motion, false);
     for (UINT i = 0; i < size * size; ++i) {
         const auto& m = none.motion[i];
         require(m.c[0] == 0 && m.c[1] == 0 && m.c[2] == 0 && m.c[3] == 0, name + ": missing history is zero");
@@ -613,11 +621,11 @@ int main()
         auto manifest = Manifest::parse(std::string(reinterpret_cast<const char*>(text.data()), text.size()), error);
         require(manifest.has_value(), "manifest: " + error);
         if (!create_device()) { std::printf("SKIP: no hardware D3D11 device\n"); return 77; }
-        D3DShaderApi shader_api(L"d3dcompiler_43.dll");
-        if (!shader_api.ready()) { std::printf("SKIP: d3dcompiler_43.dll not available\n"); return 77; }
-        api = &shader_api;
-        ShaderLoader shader_loader(*manifest, deployment, {}, shader_api, shader_api);
-        loader = &shader_loader;
+        std::unique_ptr<rsf_anomaly_shader_d3d, decltype(&rsf_anomaly_shader_d3d_unload)> shader_api{
+            rsf_anomaly_shader_d3d_load(reinterpret_cast<const uint16_t*>(L"d3dcompiler_43.dll")), rsf_anomaly_shader_d3d_unload};
+        if (!shader_api) { std::printf("SKIP: d3dcompiler_43.dll not available\n"); return 77; }
+        api = shader_api.get();
+        admitted = &*manifest;
         std::printf("deployment: %s\n", deployment.string().c_str());
         // The element pairs uber_deffer builds for a deferred model (bump or flat base texture, with or without alpha
         // reference), restricted to the SKIN modes the user's shader cache holds for each VS root.

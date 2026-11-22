@@ -10,6 +10,7 @@ use crate::shader_loader::{rsf_anomaly_shader_linkable, rsf_anomaly_shader_tess_
 use rsf_game_sys::shader_patch_abi::{RSF_PATCH_OK, rsf_patch_counters};
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 const NOT_ALLOWLISTED: u8 = 0;
@@ -220,7 +221,7 @@ impl Registry {
     }
 }
 
-pub(super) struct Pack(Box<RuntimePack>);
+pub(super) struct Pack(RuntimePack);
 
 // The loader lock serializes access to the pack, including its engine includer
 // and Runtime session scratch storage.
@@ -228,26 +229,15 @@ unsafe impl Send for Pack {}
 
 impl Pack {
     pub fn open(platform: &Platform, build: Build, root: &Path) -> Result<Self, String> {
+        let mut profile = MaybeUninit::uninit();
+        let profile = unsafe {
+            (platform.shader_profile)(build.profile(), profile.as_mut_ptr());
+            profile.assume_init()
+        };
         let pack = wide_path(&root.join("motion.rsfpatch"));
         let cache = wide_path(&root.join("cache"));
-        let mut error = [0; 512];
-        let handle = unsafe {
-            (platform.open_pack)(
-                build.image(),
-                build.profile(),
-                pack.as_ptr(),
-                cache.as_ptr(),
-                error.as_mut_ptr(),
-                error.len(),
-            )
-        };
-        if handle.is_null() {
-            return Err(unsafe { CStr::from_ptr(error.as_ptr()) }
-                .to_string_lossy()
-                .into_owned());
-        }
-        // The native SEH wrapper returns the Rust allocation from runtime_pack_open.
-        Ok(Self(unsafe { Box::from_raw(handle.cast::<RuntimePack>()) }))
+        unsafe { RuntimePack::open_engine(&pack, &cache, build.image, profile, platform.includes) }
+            .map(Self)
     }
 
     pub(super) unsafe fn attach(&self, device: Raw) -> i32 {

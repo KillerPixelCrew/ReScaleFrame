@@ -12,6 +12,10 @@ pub const RSF_MOTION_CREATED: _bindgen_ty_2 = 1;
 pub const RSF_MOTION_MULTISAMPLED: _bindgen_ty_2 = 2;
 pub const RSF_MOTION_FAILED: _bindgen_ty_2 = 3;
 pub type _bindgen_ty_2 = ::core::ffi::c_int;
+pub const RSF_MOTION_REPLAY_READY: _bindgen_ty_3 = 0;
+pub const RSF_MOTION_REPLAY_NO_DEPTH_WRITE: _bindgen_ty_3 = 1;
+pub const RSF_MOTION_REPLAY_FAILED: _bindgen_ty_3 = 2;
+pub type _bindgen_ty_3 = ::core::ffi::c_int;
 pub type rsf_anomaly_motion_log = ::core::option::Option<
     unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *const ::core::ffi::c_char),
 >;

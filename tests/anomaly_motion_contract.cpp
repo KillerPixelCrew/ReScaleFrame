@@ -576,97 +576,14 @@ void compatibility_rules()
     require(!linkable(variant_reflection('v'), stock_reflection('p')), "motion VS registers shift under a stock PS");
 }
 
-struct FakeFrame {
-    const MotionProfile* profile = &motion_standard;
-    std::vector<std::byte> module = std::vector<std::byte>(0x900000);
-    std::vector<std::byte> stack = std::vector<std::byte>(0x2000);
-    std::string source, entry = "main", flags_text;
-    std::vector<std::pair<std::string, std::string>> defines;
-    std::vector<std::string> storage;
-    std::vector<const char*> pointers;
-    void build(bool terminate = true)
-    {
-        auto put = [&](std::size_t offset, const void* value, std::size_t size) { std::memcpy(stack.data() + offset, value, size); };
-        const char* src = source.c_str();
-        const std::uint32_t length = static_cast<std::uint32_t>(source.size());
-        const char* e = entry.c_str();
-        const std::uint32_t flags = 8;   // D3D10_SHADER_PACK_MATRIX_ROW_MAJOR
-        put(profile->frame.source_offset, &src, 8);
-        put(profile->frame.length_offset, &length, 4);
-        put(profile->frame.entry_offset, &e, 8);
-        put(profile->frame.flags_offset, &flags, 4);
-        storage.clear();
-        storage.reserve(defines.size() * 2);
-        std::size_t i = 0;
-        for (const auto& [name, value] : defines) {
-            storage.push_back(name); storage.push_back(value);
-            const char* pair[2]{storage[storage.size() - 2].c_str(), storage.back().c_str()};
-            put(profile->frame.defines_offset + i++ * 16, pair, 16);
-        }
-        const char* none[2]{terminate ? nullptr : "X", "1"};
-        for (std::size_t j = i; j < frame_defines_capacity; ++j) {
-            put(profile->frame.defines_offset + j * 16, none, 16);
-            if (terminate) break;
-        }
-    }
-    const void* return_address(std::size_t call) const { return module.data() + profile->create_shader_calls[call].rva + call_length; }
-};
-FrameReader direct = [](const void* a, void* o, std::size_t s) { if (!a) return false; std::memcpy(o, a, s); return true; };
-
-// Both exact builds (build_profile.h): each accepts only its own two call sites and reads its own frame offsets.
-void caller_frame(const MotionProfile& profile, const MotionProfile& other)
-{
-    FakeFrame frame;
-    frame.profile = &profile;
-    frame.source = "#include \"common.h\"\nmain body";
-    frame.defines = {{"SMAP_size", "2048"}, {"SKIN_2", "1"}, {"USE_SUNFILTER", "1"}};
-    frame.build();
-    for (std::size_t call = 0; call < profile.create_shader_calls.size(); ++call) {
-        ShaderRequest request;
-        require(read_request(profile, frame.module.data(), frame.return_address(call), frame.stack.data(), direct, request) == FrameStatus::Ok,
-            "both create_shader call sites are accepted");
-        require(std::string(reinterpret_cast<const char*>(request.source.data()), request.source.size()) == frame.source, "source");
-        require(request.entry == "main" && request.flags == 8, "entry and flags");
-        require(request.defines.size() == 3 && request.defines[1].name == "SKIN_2" && request.defines[0].value == "2048",
-            "defines in engine order");
-        require(skin_mode(request.defines) == 2, "skin mode from defines");
-    }
-    ShaderRequest request;
-    require(read_request(profile, frame.module.data(), frame.module.data() + 0x1234, frame.stack.data(), direct, request) ==
-        FrameStatus::UnknownCaller, "any other return address is refused");
-    require(read_request(profile, frame.module.data(), static_cast<const std::byte*>(frame.return_address(0)) - 5, frame.stack.data(), direct,
-        request) == FrameStatus::UnknownCaller, "the call instruction itself is not a return address");
-    FakeFrame unterminated = frame;
-    unterminated.build(false);
-    require(read_request(profile, unterminated.module.data(), unterminated.return_address(0), unterminated.stack.data(), direct, request) ==
-        FrameStatus::BadDefines, "a define list without terminator is refused");
-    const FrameReader faulting = [&](const void* a, void* o, std::size_t s) {
-        if (a == frame.stack.data() + profile.frame.entry_offset) return false;
-        std::memcpy(o, a, s); return true;
-    };
-    require(read_request(profile, frame.module.data(), frame.return_address(1), frame.stack.data(), faulting, request) == FrameStatus::Unreadable,
-        "unreadable frame");
-    std::uint32_t zero = 0;
-    std::memcpy(frame.stack.data() + profile.frame.length_offset, &zero, 4);
-    require(read_request(profile, frame.module.data(), frame.return_address(1), frame.stack.data(), direct, request) == FrameStatus::BadSource,
-        "empty source");
-    const std::uint32_t too_long = 16 * 1024 * 1024 + 1;
-    std::memcpy(frame.stack.data() + profile.frame.length_offset, &too_long, sizeof(too_long));
-    require(read_request(profile, frame.module.data(), frame.return_address(1), frame.stack.data(), direct, request) == FrameStatus::BadSource,
-        "oversized source length refused before reading root bytes");
-    frame.entry.assign(512, 'x');
-    frame.build();
-    require(read_request(profile, frame.module.data(), frame.return_address(1), frame.stack.data(), direct, request) == FrameStatus::BadSource,
-        "entry point must terminate inside the guarded 512-byte window");
-    // The other build's profile names other call sites: a return address of this build is an unknown caller there.
-    require(read_request(other, frame.module.data(), frame.return_address(0), frame.stack.data(), direct, request) ==
-        FrameStatus::UnknownCaller, "a call site of one build is refused under the other build's profile");
-}
+extern "C" const char* rsf_anomaly_shader_frame_fixture(const rsf_anomaly_shader_frame_layout*,
+    const rsf_anomaly_shader_frame_layout*) noexcept;
 
 void caller_frames()
 {
-    caller_frame(motion_standard, motion_avx);
-    caller_frame(motion_avx, motion_standard);
+    const auto standard = shader_frame_layout(motion_standard), avx = shader_frame_layout(motion_avx);
+    const auto* error = rsf_anomaly_shader_frame_fixture(&standard, &avx);
+    require(!error, error ? error : "both compiler caller frames");
 }
 
 void manifest_rules()

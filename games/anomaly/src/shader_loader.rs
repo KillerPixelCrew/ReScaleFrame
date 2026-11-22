@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 mod d3d;
+mod engine_include_abi;
 mod frame;
 mod manifest;
 mod reflection;
 mod runtime_pack;
 
 use crate::digest::sha256;
+pub(crate) use engine_include_abi::{
+    rsf_anomaly_engine_include_ops as EngineIncludeOps,
+    rsf_anomaly_engine_shader_profile as EngineShaderProfile,
+};
 pub(crate) use frame::{DecodedFrame, FrameLayout, Read, decode_frame};
 pub(crate) use manifest::{Entry, Manifest};
 use reflection::{Compatibility, rsf_anomaly_shader_compatible};
@@ -278,6 +283,131 @@ fn write_cache(path: &Path, bytes: &[u8]) {
     }
 }
 
+struct TreeResult<R> {
+    outcome: Outcome,
+    compatibility: Compatibility,
+    stock: Option<R>,
+    reflection: Option<R>,
+    bytes: Vec<u8>,
+    detail: Vec<u8>,
+}
+
+impl<R> TreeResult<R> {
+    fn refused(outcome: Outcome, detail: impl AsRef<[u8]>) -> Self {
+        Self {
+            outcome,
+            compatibility: Compatibility::Ok,
+            stock: None,
+            reflection: None,
+            bytes: Vec::new(),
+            detail: detail.as_ref().to_vec(),
+        }
+    }
+
+    fn publish(self, host: &Preparation, request: &Request) {
+        ResultSink {
+            host,
+            skin: unsafe { rsf_anomaly_shader_skin_mode(request.defines) },
+        }
+        .complete(self.outcome, self.compatibility, &self.detail, &self.bytes);
+    }
+}
+
+fn prepare_tree<R>(
+    request: &Request,
+    id: &Identity,
+    deployment: &Path,
+    cache: Option<&Path>,
+    mut reflect: impl FnMut(bool, &[u8]) -> Option<R>,
+    view: impl Fn(&R) -> &Reflection,
+    mut compile: impl FnMut(bool, &[u8]) -> Result<Vec<u8>, Vec<u8>>,
+) -> TreeResult<R> {
+    let bytecode = unsafe { request.bytecode.as_slice() };
+    let Some(stock) = reflect(true, bytecode) else {
+        return TreeResult::refused(
+            Outcome::ReflectionMismatch,
+            b"stock bytecode does not reflect",
+        );
+    };
+    let cache_path = cache.and_then(|path| {
+        let key = cache_key(request, id)?;
+        Some(path.join(format!("{}.dxbc", std::str::from_utf8(&key).unwrap())))
+    });
+    let check = |variant: &R| rsf_anomaly_shader_compatible(id.stage, view(&stock), view(variant));
+    if let Some(path) = &cache_path
+        && path.is_file()
+        && let Ok(bytes) = fs::read(path)
+        && !bytes.is_empty()
+        && let Some(reflection) = reflect(false, &bytes)
+        && check(&reflection) == Compatibility::Ok
+    {
+        return TreeResult {
+            outcome: Outcome::ReplacedFromCache,
+            compatibility: Compatibility::Ok,
+            stock: Some(stock),
+            reflection: Some(reflection),
+            bytes,
+            detail: Vec::new(),
+        };
+    }
+
+    let mut prepare = || {
+        let compiled = compile(false, unsafe { request.source.as_slice() })
+            .map_err(|error| TreeResult::refused(Outcome::OriginalCompileFailed, error))?;
+        if compiled != bytecode {
+            return Err(TreeResult::refused(
+                Outcome::OriginalMismatch,
+                b"deployed original tree does not reproduce the engine bytecode",
+            ));
+        }
+        let mut root_path = deployment.join("motion").join("r3");
+        // Build individual path components so extended-length Windows paths keep native separators.
+        let root = std::str::from_utf8(unsafe { id.name.as_slice() })
+            .ok()
+            .and_then(|name| {
+                root_path.extend(name.split('/'));
+                fs::read(root_path).ok()
+            })
+            .filter(|bytes| {
+                sha256(bytes).is_some_and(|hash| hash.as_slice() == unsafe { id.motion.as_slice() })
+            })
+            .ok_or_else(|| {
+                TreeResult::refused(
+                    Outcome::MotionCompileFailed,
+                    b"motion root missing or not the manifest's",
+                )
+            })?;
+        let bytes = compile(true, &root)
+            .map_err(|error| TreeResult::refused(Outcome::MotionCompileFailed, error))?;
+        let reflection = reflect(false, &bytes).ok_or_else(|| {
+            TreeResult::refused(Outcome::ReflectionMismatch, b"variant does not reflect")
+        })?;
+        let compatibility = check(&reflection);
+        if compatibility != Compatibility::Ok {
+            return Err(TreeResult {
+                compatibility,
+                ..TreeResult::refused(Outcome::ReflectionMismatch, compatibility.name())
+            });
+        }
+        if let Some(path) = &cache_path {
+            write_cache(path, &bytes);
+        }
+        Ok(TreeResult {
+            outcome: Outcome::Replaced,
+            compatibility,
+            stock: None,
+            reflection: Some(reflection),
+            bytes,
+            detail: Vec::new(),
+        })
+    };
+    let mut result = match prepare() {
+        Ok(result) | Err(result) => result,
+    };
+    result.stock = Some(stock);
+    result
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_shader_prepare_tree(
     request: &Request,
@@ -287,77 +417,24 @@ unsafe extern "C" fn rsf_anomaly_shader_prepare_tree(
     host: &Preparation,
     compile: Compile,
 ) {
-    let sink = ResultSink {
-        host,
-        skin: unsafe { rsf_anomaly_shader_skin_mode(request.defines) },
-    };
-    let bytecode = unsafe { request.bytecode.as_slice() };
-    let Some(stock) = host.reflect(true, bytecode) else {
-        return sink.refuse(
-            Outcome::ReflectionMismatch,
-            b"stock bytecode does not reflect",
-        );
-    };
+    let deployment = PathBuf::from(OsString::from_wide(unsafe { deployment.as_slice() }));
     let cache = unsafe { cache.as_slice() };
-    let cache_path = (!cache.is_empty())
-        .then(|| cache_key(request, id))
-        .flatten()
-        .map(|key| {
-            let mut path = PathBuf::from(OsString::from_wide(cache));
-            path.push(format!("{}.dxbc", std::str::from_utf8(&key).unwrap()));
-            path
-        });
-    if let Some(path) = &cache_path
-        && path.is_file()
-        && let Ok(bytes) = fs::read(path)
-        && !bytes.is_empty()
-        && host.check(id.stage, &stock, &bytes).is_ok()
-    {
-        return sink.complete(Outcome::ReplacedFromCache, Compatibility::Ok, &[], &bytes);
-    }
-    let mut compiled = Bytes::from(&[][..]);
-    if !unsafe { compile(host.user, false, request.source, &mut compiled) } {
-        return sink.refuse(Outcome::OriginalCompileFailed, unsafe {
-            compiled.as_slice()
-        });
-    }
-    if unsafe { compiled.as_slice() } != bytecode {
-        return sink.refuse(
-            Outcome::OriginalMismatch,
-            b"deployed original tree does not reproduce the engine bytecode",
-        );
-    }
-    let mut root_path = PathBuf::from(OsString::from_wide(unsafe { deployment.as_slice() }));
-    root_path.push("motion");
-    root_path.push("r3");
-    // Build individual path components so extended-length Windows paths keep native separators.
-    let name = unsafe { id.name.as_slice() };
-    let root = std::str::from_utf8(name)
-        .ok()
-        .and_then(|name| {
-            root_path.extend(name.split('/'));
-            fs::read(root_path).ok()
-        })
-        .filter(|bytes| {
-            sha256(bytes).is_some_and(|hash| hash.as_slice() == unsafe { id.motion.as_slice() })
-        });
-    let Some(root) = root else {
-        return sink.refuse(
-            Outcome::MotionCompileFailed,
-            b"motion root missing or not the manifest's",
-        );
-    };
-    if !unsafe { compile(host.user, true, Bytes::from(root.as_slice()), &mut compiled) } {
-        return sink.refuse(Outcome::MotionCompileFailed, unsafe { compiled.as_slice() });
-    }
-    let variant = unsafe { compiled.as_slice() };
-    if let Err((compatibility, detail)) = host.check(id.stage, &stock, variant) {
-        return sink.complete(Outcome::ReflectionMismatch, compatibility, detail, &[]);
-    }
-    if let Some(path) = &cache_path {
-        write_cache(path, variant);
-    }
-    sink.complete(Outcome::Replaced, Compatibility::Ok, &[], variant);
+    let cache = (!cache.is_empty()).then(|| PathBuf::from(OsString::from_wide(cache)));
+    prepare_tree(
+        request,
+        id,
+        &deployment,
+        cache.as_deref(),
+        |stock, code| host.reflect(stock, code),
+        |reflection| reflection,
+        |motion, code| {
+            let mut output = Bytes::from(&[][..]);
+            let ok = unsafe { compile(host.user, motion, Bytes::from(code), &mut output) };
+            let data = unsafe { output.as_slice() }.to_vec();
+            if ok { Ok(data) } else { Err(data) }
+        },
+    )
+    .publish(host, request);
 }
 
 // The generic Runtime v1 service owns the original DXBC proof and production cache.

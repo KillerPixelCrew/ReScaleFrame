@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: MIT
-use super::{Bytes, Request};
+use super::reflection::{Reflection, Snapshot, reflect};
+use super::{
+    Bytes, Compatibility, Entry, Manifest, Outcome, Request, Span, prepare_tree,
+    rsf_anomaly_shader_match_request, rsf_anomaly_shader_skin_mode,
+};
 use crate::runtime_module::Module;
 use rsf_shader_compiler::{Request as CompileRequest, compile};
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::File;
 use std::io::{ErrorKind, Read};
-use std::os::windows::io::FromRawHandle;
+use std::os::windows::{ffi::OsStringExt, io::FromRawHandle};
+use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 use std::sync::Mutex;
 use windows::Win32::Graphics::Direct3D::{D3D_INCLUDE_TYPE, D3D_SHADER_MACRO, ID3DInclude_Vtbl};
@@ -76,23 +81,12 @@ impl Modules {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_d3d_load(
-    name: *const u16,
-    compile: &mut FARPROC,
-    reflect: &mut FARPROC,
-) -> *mut Modules {
+unsafe extern "C" fn rsf_anomaly_shader_d3d_load(name: *const u16) -> *mut Modules {
     let modules = unsafe { Modules::load(name, true) };
-    *compile = modules.compile();
-    *reflect = modules.reflect();
-    if compile.is_none() && reflect.is_none() {
+    if modules.compile().is_none() || modules.reflect().is_none() {
         return null_mut();
     }
-    let owned = allocate(modules);
-    if owned.is_null() {
-        *compile = None;
-        *reflect = None;
-    }
-    owned
+    allocate(modules)
 }
 
 #[unsafe(no_mangle)]
@@ -100,6 +94,17 @@ unsafe extern "C" fn rsf_anomaly_shader_d3d_unload(modules: *mut Modules) {
     if !modules.is_null() {
         drop(unsafe { Box::from_raw(modules) });
     }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_shader_d3d_reflect(
+    modules: &Modules,
+    code: Bytes,
+    user: *mut c_void,
+    consume: unsafe extern "C" fn(*mut c_void, &Reflection) -> bool,
+) -> bool {
+    reflect(modules.reflect(), unsafe { code.as_slice() })
+        .is_some_and(|snapshot| unsafe { consume(user, snapshot.view()) })
 }
 
 #[derive(Default)]
@@ -212,24 +217,21 @@ unsafe extern "system" fn include_close(this: *mut c_void, data: *const c_void) 
     })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_compile_tree(
+fn compile_tree(
     entry: FARPROC,
     tree: *const c_void,
     open_file: OpenFile,
     request: &Request,
-    user: *mut c_void,
-    publish: unsafe extern "C" fn(*mut c_void, bool, Bytes) -> bool,
-) -> bool {
-    let publish = |ok, bytes: &[u8]| unsafe { publish(user, ok, Bytes::from(bytes)) };
+    source: &[u8],
+) -> Result<Vec<u8>, Vec<u8>> {
     let Some(entry) = entry else {
-        return publish(false, b"D3DCompile unavailable");
+        return Err(b"D3DCompile unavailable".to_vec());
     };
     let (Ok(function), Ok(target)) = (
         CString::new(unsafe { request.entry.as_slice() }),
         CString::new(unsafe { request.target.as_slice() }),
     ) else {
-        return publish(false, b"compiler entry or target contains a NUL");
+        return Err(b"compiler entry or target contains a NUL".to_vec());
     };
     let mut defines = Vec::new();
     for d in unsafe { request.defines.as_slice() } {
@@ -237,7 +239,7 @@ unsafe extern "C" fn rsf_anomaly_shader_compile_tree(
             CString::new(unsafe { d.name.as_slice() }),
             CString::new(unsafe { d.value.as_slice() }),
         ) else {
-            return publish(false, b"compiler macro contains a NUL");
+            return Err(b"compiler macro contains a NUL".to_vec());
         };
         defines.push((name, value));
     }
@@ -259,7 +261,7 @@ unsafe extern "C" fn rsf_anomaly_shader_compile_tree(
         compile(
             entry as *mut c_void,
             CompileRequest {
-                source: request.source.as_slice(),
+                source,
                 name: c"",
                 entry: &function,
                 target: &target,
@@ -270,12 +272,96 @@ unsafe extern "C" fn rsf_anomaly_shader_compile_tree(
         )
     };
     if let Some(code) = result.code.filter(|_| result.status >= 0) {
-        return publish(true, &code);
+        return Ok(code);
     }
     let mut error = format!("D3DCompile 0x{}", result.status as u32).into_bytes();
     if let Some(bytes) = result.errors {
         error.extend(b": ");
         error.extend(&bytes[..bytes.len().min(400)]);
     }
-    publish(false, &error)
+    Err(error)
+}
+
+type PublishCompile = unsafe extern "C" fn(*mut c_void, bool, Bytes) -> bool;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_shader_d3d_compile(
+    modules: &Modules,
+    tree: *const c_void,
+    open_file: OpenFile,
+    request: &Request,
+    user: *mut c_void,
+    publish: PublishCompile,
+) -> bool {
+    let source = unsafe { request.source.as_slice() };
+    match compile_tree(modules.compile(), tree, open_file, request, source) {
+        Ok(code) => unsafe { publish(user, true, Bytes::from(code.as_slice())) },
+        Err(error) => unsafe { publish(user, false, Bytes::from(error.as_slice())) },
+    }
+}
+
+// Compiler and reflection snapshots stay owned by Rust. The fixture projects the
+// immutable result into its existing assertions during one synchronous callback.
+type PublishPrepared = unsafe extern "C" fn(
+    *mut c_void,
+    &Entry,
+    Outcome,
+    Compatibility,
+    i32,
+    Bytes,
+    Bytes,
+    Option<&Reflection>,
+    Option<&Reflection>,
+);
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_shader_d3d_prepare(
+    modules: &Modules,
+    manifest: &Manifest,
+    request: &Request,
+    deployment: Span<u16>,
+    original: *const c_void,
+    motion: *const c_void,
+    open_file: OpenFile,
+    user: *mut c_void,
+    publish: PublishPrepared,
+) {
+    let Some(entry) = (unsafe {
+        rsf_anomaly_shader_match_request(Some(manifest), request.source, request.target)
+    }) else {
+        return;
+    };
+    // Entry spans come from immutable manifest-owned backing storage.
+    let id = entry.identity(manifest.namespace());
+    let deployment = PathBuf::from(OsString::from_wide(unsafe { deployment.as_slice() }));
+    let result = prepare_tree(
+        request,
+        &id,
+        &deployment,
+        None,
+        |_, code| reflect(modules.reflect(), code),
+        Snapshot::view,
+        |patched, code| {
+            compile_tree(
+                modules.compile(),
+                if patched { motion } else { original },
+                open_file,
+                request,
+                code,
+            )
+        },
+    );
+    unsafe {
+        publish(
+            user,
+            entry,
+            result.outcome,
+            result.compatibility,
+            rsf_anomaly_shader_skin_mode(request.defines),
+            Bytes::from(result.detail.as_slice()),
+            Bytes::from(result.bytes.as_slice()),
+            result.stock.as_ref().map(Snapshot::view),
+            result.reflection.as_ref().map(Snapshot::view),
+        )
+    };
 }

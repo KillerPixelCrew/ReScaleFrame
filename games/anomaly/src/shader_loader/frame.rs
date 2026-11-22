@@ -9,25 +9,18 @@ pub(crate) use abi::rsf_anomaly_shader_frame_layout as FrameLayout;
 
 const _: () = assert!(size_of::<FrameLayout>() == 36);
 
-#[repr(C)]
-struct FrameRequest {
-    source: Bytes,
-    entry: Bytes,
-    flags: u32,
-    defines: Span<Define>,
-}
+#[cfg(feature = "motion-binder-fixture")]
+mod fixture;
 
 #[repr(u8)]
 pub(crate) enum FrameStatus {
-    Ok,
-    UnknownCaller,
+    UnknownCaller = 1,
     Unreadable,
     BadSource,
     BadDefines,
 }
 
 pub(crate) type Read = unsafe extern "C" fn(*const c_void, usize, *mut u8, usize) -> bool;
-type Publish = unsafe extern "C" fn(*mut c_void, &FrameRequest) -> bool;
 
 #[derive(Default)]
 pub(crate) struct DecodedFrame {
@@ -63,41 +56,6 @@ impl DecodedFrame {
             source: Bytes::from(self.source.as_slice()),
             bytecode: Bytes::from(bytecode),
         })
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_frame(
-    layout: &FrameLayout,
-    module: usize,
-    return_address: usize,
-    stack: usize,
-    reader: *const c_void,
-    read: Read,
-    request: *mut c_void,
-    publish: Publish,
-) -> FrameStatus {
-    let decoded = match decode_frame(
-        layout,
-        module,
-        return_address,
-        stack,
-        |address, bytes| unsafe { read(reader, address, bytes.as_mut_ptr(), bytes.len()) },
-    ) {
-        Ok(decoded) => decoded,
-        Err(status) => return status,
-    };
-    let defines = decoded.define_views();
-    let frame = FrameRequest {
-        source: Bytes::from(decoded.source.as_slice()),
-        entry: Bytes::from(decoded.entry.as_slice()),
-        flags: decoded.flags,
-        defines: Span::from(defines.as_slice()),
-    };
-    if unsafe { publish(request, &frame) } {
-        FrameStatus::Ok
-    } else {
-        FrameStatus::Unreadable
     }
 }
 

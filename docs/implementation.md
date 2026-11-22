@@ -1414,6 +1414,14 @@ D3D11 device admission and keep their existing native shader scenarios.
 Fixture execution remains open.
 [Independent fixture ports](research/rust-anomaly-motion-stage.md#independent-fixture-ports-from-f40a25d5)
 
+The three Anomaly deployed motion fixtures now call the Rust motion device
+and deployed shader-tree owners directly. The live motion stage also opens
+its Rust shader pack directly with the selected profile and guarded engine
+include operations. The compiler caller-frame assertions run in Rust through
+the existing mixed CPU contract. Source checks passed. Build, fixture, device
+and game checks remain open.
+[Motion and shader loader follow-up](research/rust-anomaly-shader-loader-n05.md#motion-and-deployed-tree-ownership-follow-up-from-0251a81a)
+
 Anomaly now admits successful stock shader creation and reads its
 guarded interface and filename in Rust. The native detour still
 supplies its own return address and stack to the compiler-frame

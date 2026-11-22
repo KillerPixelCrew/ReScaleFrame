@@ -1,9 +1,22 @@
 // SPDX-License-Identifier: MIT
 #include "shader_loader.h"
 #include "shader_loader_platform.h"
+#include <windows.h>
+#include <new>
 #include <utility>
 
 namespace rsf::anomaly::motion {
+using OpenFile = HRESULT (*)(const void*, const char*, const char*, HANDLE*);
+extern "C" {
+bool rsf_anomaly_shader_d3d_reflect(const rsf_anomaly_shader_d3d*, rsf_anomaly_shader_bytes, void*,
+    bool (*)(void*, const rsf_anomaly_shader_reflection*)) noexcept;
+bool rsf_anomaly_shader_d3d_compile(const rsf_anomaly_shader_d3d*, const void*, OpenFile,
+    const rsf_anomaly_shader_request*, void*, bool (*)(void*, bool, rsf_anomaly_shader_bytes)) noexcept;
+void rsf_anomaly_shader_d3d_prepare(const rsf_anomaly_shader_d3d*, const rsf_anomaly_shader_admitted*,
+    const rsf_anomaly_shader_request*, rsf_anomaly_shader_wide, const void*, const void*, OpenFile, void*,
+    void (*)(void*, const rsf_anomaly_shader_entry*, uint8_t, uint8_t, int32_t, rsf_anomaly_shader_bytes,
+        rsf_anomaly_shader_bytes, const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*)) noexcept;
+}
 namespace {
 using Bytes = rsf_anomaly_shader_bytes;
 
@@ -102,6 +115,58 @@ struct ReflectionView {
     }
 };
 
+HRESULT open_file(const void* tree, const char* prefix, const char* name, HANDLE* out) noexcept try {
+    // Keep the STL's narrow filename conversion and Windows root/drive/UNC append rules.
+    // make_preferred also converts slashes in include names for extended-length trees.
+    auto path = *static_cast<const std::filesystem::path*>(tree);
+    if (prefix) path /= prefix;
+    path /= std::filesystem::path(name).make_preferred();
+    // Match the previous binary stream's read access and sharing on this native path.
+    const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return S_FALSE;
+    *out = file;
+    return S_OK;
+} catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+} catch (...) {
+    return E_FAIL;
+}
+
+bool copy_reflection(void* user, const rsf_anomaly_shader_reflection* view) noexcept try
+{
+    Reflection result;
+    result.version = view->version;
+    const auto signatures = [](const auto& rows, auto& out) {
+        out.reserve(rows.len);
+        for (size_t i = 0; i < rows.len; ++i) {
+            const auto& p = rows.data[i];
+            out.push_back({std::string(text(p.name)), p.index, p.reg, p.system_value, p.component, p.mask});
+        }
+    };
+    signatures(view->inputs, result.inputs);
+    signatures(view->outputs, result.outputs);
+    signatures(view->patch, result.patch);
+    result.bindings.reserve(view->bindings.len);
+    for (size_t i = 0; i < view->bindings.len; ++i) {
+        const auto& b = view->bindings.data[i];
+        result.bindings.push_back({std::string(text(b.name)), b.type, b.point, b.count, b.return_type, b.dimension});
+    }
+    result.buffers.reserve(view->buffers.len);
+    for (size_t i = 0; i < view->buffers.len; ++i) {
+        const auto& b = view->buffers.data[i];
+        Buffer buffer{std::string(text(b.name)), b.size, {}};
+        buffer.variables.reserve(b.variables.len);
+        for (size_t j = 0; j < b.variables.len; ++j) {
+            const auto& v = b.variables.data[j];
+            buffer.variables.push_back({std::string(text(v.name)), v.offset, v.size});
+        }
+        result.buffers.push_back(std::move(buffer));
+    }
+    *static_cast<Reflection*>(user) = std::move(result);
+    return true;
+} catch (...) { return false; }
+
 struct PreparationBridge {
     Prepared result;
     Reflector& reflector;
@@ -165,26 +230,6 @@ struct TreePreparation : PreparationBridge {
     }
 };
 
-bool read_frame(const void* user, uintptr_t address, uint8_t* out, std::size_t size) noexcept try
-{
-    return (*static_cast<const FrameReader*>(user))(reinterpret_cast<const void*>(address), out, size);
-} catch (...) { return false; }
-
-bool publish_frame(void* user, const rsf_anomaly_shader_decoded_frame* decoded) noexcept try
-{
-    auto& out = *static_cast<ShaderRequest*>(user);
-    const auto source = bytecode(decoded->source);
-    out.source.assign(source.begin(), source.end());
-    out.entry = text(decoded->entry);
-    out.flags = decoded->flags;
-    out.defines.clear();
-    out.defines.reserve(decoded->defines.len);
-    for (std::size_t i = 0; i < decoded->defines.len; ++i) {
-        const auto& define = decoded->defines.data[i];
-        out.defines.push_back({std::string(text(define.name)), std::string(text(define.value))});
-    }
-    return true;
-} catch (...) { return false; }
 }
 
 const char* family_name(Family family) noexcept { return rsf_anomaly_shader_family_name(static_cast<uint8_t>(family)); }
@@ -253,16 +298,6 @@ std::string sha256_hex(std::span<const std::byte> data)
     return rsf_anomaly_shader_sha256(bytes(data), &digest) ? std::string(text({digest, sizeof(digest)})) : std::string{};
 }
 
-FrameStatus read_request(const MotionProfile& profile, const std::byte* module, const void* return_address,
-    const std::byte* caller_rsp, const FrameReader& reader, ShaderRequest& request)
-{
-    if (!reader) return FrameStatus::UnknownCaller;
-    const auto layout = shader_frame_layout(profile);
-    return static_cast<FrameStatus>(rsf_anomaly_shader_frame(&layout, reinterpret_cast<uintptr_t>(module),
-        reinterpret_cast<uintptr_t>(return_address), reinterpret_cast<uintptr_t>(caller_rsp),
-        &reader, read_frame, &request, publish_frame));
-}
-
 Compatibility compatible(char stage, const Reflection& stock, const Reflection& variant) noexcept try
 {
     ReflectionView a, b;
@@ -305,6 +340,60 @@ ShaderLoader::ShaderLoader(Manifest manifest, std::filesystem::path deployment, 
 
 ShaderLoader::ShaderLoader(Manifest manifest, Compiler& compiler, Reflector& reflector, Prepare prepare)
     : manifest_(std::move(manifest)), compiler_(compiler), reflector_(reflector), runtime_prepare_(std::move(prepare)) {}
+
+bool compile_deployed(const rsf_anomaly_shader_d3d& modules, const std::filesystem::path& tree,
+    const ShaderRequest& request, std::vector<std::byte>& code, std::string& error)
+{
+    code.clear();
+    const RequestView input(request);
+    struct Output { std::vector<std::byte>& code; std::string& error; } output{code, error};
+    return rsf_anomaly_shader_d3d_compile(&modules, &tree, open_file, &input.value, &output,
+        [](void* user, bool ok, Bytes value) noexcept try {
+            auto& out = *static_cast<Output*>(user);
+            if (!ok) {
+                out.error = text(value);
+                return false;
+            }
+            const auto data = bytecode(value);
+            if (!data.empty()) out.code.assign(data.begin(), data.end());
+            return true;
+        } catch (...) { return false; });
+}
+
+bool reflect_deployed(const rsf_anomaly_shader_d3d& modules, std::span<const std::byte> code, Reflection& out)
+{
+    out = {};
+    return rsf_anomaly_shader_d3d_reflect(&modules, bytes(code), &out, copy_reflection);
+}
+
+Prepared prepare_deployed(const rsf_anomaly_shader_d3d& modules, const Manifest& manifest,
+    const std::filesystem::path& deployment, const ShaderRequest& request)
+{
+    if (!manifest.admitted()) return {};
+    const auto original = deployment / "original", motion = deployment / "motion";
+    const RequestView input(request);
+    Prepared result;
+    rsf_anomaly_shader_d3d_prepare(&modules, manifest.admitted(), &input.value, wide(deployment), &original, &motion,
+        open_file, &result,
+        [](void* user, const rsf_anomaly_shader_entry* entry, uint8_t outcome, uint8_t compatibility, int32_t skin,
+            Bytes detail, Bytes variant, const rsf_anomaly_shader_reflection* stock,
+            const rsf_anomaly_shader_reflection* reflection) noexcept try {
+            Prepared next;
+            next.entry = &manifest_entry(*entry);
+            next.outcome = static_cast<Outcome>(outcome);
+            next.compatibility = static_cast<Compatibility>(compatibility);
+            next.skin = skin;
+            next.detail = text(detail);
+            if (stock && !copy_reflection(&next.stock, stock)) return;
+            if (reflection && !copy_reflection(&next.reflection, reflection)) return;
+            if (variant.len) {
+                const auto code = bytecode(variant);
+                next.variant.assign(code.begin(), code.end());
+            }
+            *static_cast<Prepared*>(user) = std::move(next);
+        } catch (...) {});
+    return result;
+}
 
 std::string ShaderLoader::cache_key(const ShaderRequest& request, const ManifestEntry& entry) const
 {

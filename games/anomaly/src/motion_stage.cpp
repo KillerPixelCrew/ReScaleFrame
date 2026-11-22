@@ -3,12 +3,12 @@
 #include "motion_stage_platform.h"
 #include "engine_guards.h"
 #include "geometry_feed.h"
-#include "motion_d3d11.h"
 #include "native_hooks.h"
 #include "native_memory.h"
 #include "native_observer.h"
 #include "sr_profile.h"
 #include "sr_stage.h"
+#include <d3dcompiler.h>
 #include <intrin.h>
 #include <array>
 #include <type_traits>
@@ -230,6 +230,20 @@ constexpr rsf_anomaly_motion_bind_platform bind_platform{
     rsf_anomaly_motion_bind_targets, rsf_anomaly_motion_clear_targets
 };
 
+bool include_open(void* table, const char* name, const void** data, uint32_t* size) noexcept {
+    __try {
+        auto* object = reinterpret_cast<ID3DInclude*>(&table);
+        return SUCCEEDED(object->Open(D3D_INCLUDE_LOCAL, name, nullptr, data, size));
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
+void include_close(void* table, const void* data) noexcept {
+    __try { reinterpret_cast<ID3DInclude*>(&table)->Close(data); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+constexpr rsf_anomaly_engine_include_ops include_ops{include_open, guarded_copy, include_close};
+
 const MotionPlatform platform{
     sizeof(MotionPlatform), motion_platform_abi, rsf_anomaly_motion_device_platform_get(), &bind_platform,
     {sr::backend_rt_offset, sr::backend_zb_offset, sr::backend_rt_changed_offset},
@@ -252,7 +266,12 @@ const MotionPlatform platform{
         out->jitter[2] = jitter.previous_u;
         out->jitter[3] = jitter.previous_v;
     },
-    open_shader_pack,
+    &include_ops,
+    [](const void* profile, rsf_anomaly_engine_shader_profile* out) {
+        static_assert(sizeof(wchar_t) == sizeof(uint16_t));
+        const auto& motion = *static_cast<const BuildProfile*>(profile)->motion;
+        *out = {reinterpret_cast<const uint16_t*>(engine_compiler_module), motion.d3dcompile_setup_rva};
+    },
     [](rsf_anomaly_shader_frame_layout* out) -> void* { *out = shader_frame_layout(mp()); return image; },
     [](const void*, uintptr_t address, uint8_t* out, size_t size) -> bool {
         return guarded_copy(out, reinterpret_cast<const void*>(address), size);
@@ -261,12 +280,15 @@ const MotionPlatform platform{
 
 static_assert(sizeof(PositionViews) == 16 && sizeof(TargetFacts) == 16 && sizeof(DrawFacts) == 32);
 static_assert(sizeof(ShaderObjects) == 40);
-static_assert(sizeof(MotionPlatform) == 280 && offsetof(MotionPlatform, guards) == 40 &&
+static_assert(sizeof(rsf_anomaly_engine_include_ops) == 24 &&
+    offsetof(rsf_anomaly_engine_include_ops, close) == 16);
+static_assert(sizeof(rsf_anomaly_engine_shader_profile) == 16 &&
+    offsetof(rsf_anomaly_engine_shader_profile, setup_rva) == 8);
+static_assert(sizeof(MotionPlatform) == 288 && offsetof(MotionPlatform, guards) == 40 &&
     offsetof(MotionPlatform, render_target) == 104 && offsetof(MotionPlatform, target_facts) == 152 &&
-    offsetof(MotionPlatform, open_pack) == 256 &&
-    offsetof(MotionPlatform, frame_layout) == 264 && offsetof(MotionPlatform, read_engine) == 272);
+    offsetof(MotionPlatform, includes) == 256 && offsetof(MotionPlatform, shader_profile) == 264 &&
+    offsetof(MotionPlatform, frame_layout) == 272 && offsetof(MotionPlatform, read_engine) == 280);
 static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, written) == 20 && offsetof(FrameTarget, main) == 21);
-static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);
 }
 

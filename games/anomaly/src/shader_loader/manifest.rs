@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The admitted motion manifest. Rust owns its rows and the original-source digest index for
 //! both the fixture text form and the Runtime pack form. Native code holds the opaque object.
-use super::Bytes;
+use super::{Bytes, Identity};
 use crate::shader_family::FAMILIES;
 use std::collections::HashSet;
 use std::ffi::{CStr, c_char, c_void};
@@ -42,6 +42,16 @@ impl Entry {
 
     pub fn original(&self) -> &[u8] {
         unsafe { self.original.as_slice() }
+    }
+
+    pub(super) fn identity(&self, namespace: &[u8]) -> Identity {
+        Identity {
+            namespace: Bytes::from(namespace),
+            original: self.original,
+            motion: self.motion,
+            name: self.name,
+            stage: self.stage,
+        }
     }
 
     #[cfg(test)]

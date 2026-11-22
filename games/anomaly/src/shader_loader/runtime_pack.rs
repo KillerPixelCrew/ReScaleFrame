@@ -3,8 +3,8 @@ use super::d3d::Modules;
 use super::manifest::{Manifest, Root, admit_pack};
 use super::reflection::{Snapshot, reflect};
 use super::{
-    Bytes, Compatibility, Outcome, Request, rsf_anomaly_shader_compatible,
-    rsf_anomaly_shader_skin_mode, runtime_refusal,
+    Bytes, Compatibility, EngineIncludeOps, EngineShaderProfile, Outcome, Request,
+    rsf_anomaly_shader_compatible, rsf_anomaly_shader_skin_mode, runtime_refusal,
 };
 use crate::motion_device::ConstantOps;
 use crate::runtime_module::{export, rsf_anomaly_runtime_module};
@@ -37,16 +37,16 @@ pub(crate) struct RuntimePack {
     modules: Modules,
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
 struct Includer {
     table: *mut c_void,
-    open: unsafe extern "C" fn(*mut c_void, *const c_char, *mut *const c_void, *mut u32) -> bool,
+    open: IncludeOpen,
     copy: GuardedCopy,
-    close: unsafe extern "C" fn(*mut c_void, *const c_void),
+    close: IncludeClose,
 }
 
-const _: () = assert!(size_of::<Includer>() == 32);
+type IncludeOpen =
+    unsafe extern "C" fn(*mut c_void, *const c_char, *mut *const c_void, *mut u32) -> bool;
+type IncludeClose = unsafe extern "C" fn(*mut c_void, *const c_void);
 
 struct OpenInclude<'a> {
     reader: &'a Includer,
@@ -277,44 +277,31 @@ fn includer_table(image: usize, setup_rva: u32, read: GuardedCopy) -> Result<usi
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_runtime_pack_open(
-    pack: *const u16,
-    cache: *const u16,
-    compiler_name: *const u16,
-    image: usize,
-    setup_rva: u32,
-    includer: &Includer,
-    error: *mut c_char,
-    capacity: usize,
-) -> *mut RuntimePack {
-    let opened = includer_table(image, setup_rva, includer.copy)
-        .map_err(String::from)
-        .and_then(|table| unsafe {
-            RuntimePack::open(
-                pack,
-                cache,
-                compiler_name,
+impl RuntimePack {
+    /// The profile borrows the engine's module name and supplies its confirmed setup RVA.
+    pub(crate) unsafe fn open_engine(
+        pack: &[u16],
+        cache: &[u16],
+        image: usize,
+        profile: EngineShaderProfile,
+        ops: &EngineIncludeOps,
+    ) -> Result<Self, String> {
+        let (Some(open), Some(copy), Some(close)) = (ops.open, ops.copy, ops.close) else {
+            return Err(String::from("engine include operations unavailable"));
+        };
+        let table = includer_table(image, profile.setup_rva, copy)?;
+        unsafe {
+            Self::open(
+                pack.as_ptr(),
+                cache.as_ptr(),
+                profile.compiler_name,
                 Includer {
                     table: table as *mut c_void,
-                    ..*includer
+                    open,
+                    copy,
+                    close,
                 },
             )
-        });
-    match opened {
-        Ok(pack) => Box::into_raw(Box::new(pack)),
-        Err(message) => {
-            if !error.is_null() && capacity != 0 {
-                let mut len = message.len().min(capacity - 1);
-                while !message.is_char_boundary(len) {
-                    len -= 1;
-                }
-                unsafe {
-                    std::ptr::copy_nonoverlapping(message.as_ptr(), error.cast(), len);
-                    error.add(len).write(0);
-                }
-            }
-            null_mut()
         }
     }
 }

@@ -5,11 +5,11 @@ use crate::motion_device::{Platform as DevicePlatform, ReplayPlatform};
 use crate::motion_device_abi::rsf_anomaly_motion_device_view as DeviceView;
 use crate::motion_target::Platform as BindPlatform;
 use crate::motion_target_abi::rsf_anomaly_motion_bind_layout as BindLayout;
-use crate::shader_loader::{FrameLayout, Read};
+use crate::shader_loader::{EngineIncludeOps, EngineShaderProfile, FrameLayout, Read};
 use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
-pub(super) const PLATFORM_ABI: u32 = 11;
+pub(super) const PLATFORM_ABI: u32 = 12;
 
 #[repr(C)]
 pub(super) struct DrawScope([std::mem::MaybeUninit<u64>; 22]);
@@ -105,8 +105,8 @@ pub(super) struct Platform {
     pub read_constant: unsafe extern "C" fn(u32, u32, u32, Raw, u32) -> bool,
     pub write_constant: unsafe extern "C" fn(u32, u32, u32, *const std::ffi::c_void, u32) -> bool,
     pub draw_state: unsafe extern "C" fn(Raw, &mut DrawState),
-    pub open_pack:
-        unsafe extern "C" fn(Raw, Raw, *const u16, *const u16, *mut c_char, usize) -> Raw,
+    pub includes: &'static EngineIncludeOps,
+    pub shader_profile: unsafe extern "C" fn(Raw, *mut EngineShaderProfile),
     pub frame_layout: unsafe extern "C" fn(*mut FrameLayout) -> Raw,
     pub read_engine: Read,
 }
@@ -145,11 +145,12 @@ const _: () = {
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 280);
+    assert!(size_of::<Platform>() == 288);
     assert!(std::mem::offset_of!(Platform, guards) == 40);
     assert!(std::mem::offset_of!(Platform, render_target) == 104);
     assert!(std::mem::offset_of!(Platform, target_facts) == 152);
-    assert!(std::mem::offset_of!(Platform, open_pack) == 256);
-    assert!(std::mem::offset_of!(Platform, frame_layout) == 264);
-    assert!(std::mem::offset_of!(Platform, read_engine) == 272);
+    assert!(std::mem::offset_of!(Platform, includes) == 256);
+    assert!(std::mem::offset_of!(Platform, shader_profile) == 264);
+    assert!(std::mem::offset_of!(Platform, frame_layout) == 272);
+    assert!(std::mem::offset_of!(Platform, read_engine) == 280);
 };

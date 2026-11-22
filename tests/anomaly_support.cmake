@@ -81,9 +81,9 @@ set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection 
 # Motion MRT. The contract test checks the b13 layouts against the shader READMEs/headers, the history policy, the
 # RTV2 bind-preservation state machine on fake RCache memory and the shader-loader hook contract (caller frame,
 # manifest, original-bytecode proof, reflection rules, disk cache) with fakes. The device fixture draws the real
-# deployed core variants (tools/anomaly_motion_deploy.py output, local only; 77 when absent) through the production
-# loader, b13 packers and invalidation replay. Neither runs game code.
-# These fixtures still use the C++ loader facade. The live hook fixture shares only the production leaves.
+# deployed core variants (tools/anomaly_motion_deploy.py output, local only; 77 when absent) through the Rust
+# deployed-tree loader, b13 packers and invalidation replay. Neither runs game code.
+# The mixed fixtures still use C++ projections for their assertions.
 set(RSF_ANOMALY_MOTION_SOURCES "${RSF_ANOMALY_SR_SRC}/motion_foliage.cpp"
     "${RSF_ANOMALY_SR_SRC}/shader_loader.cpp")
 rsf_add_rust_static(rsf_anomaly_motion_binder_fixture_rust rsf_rust_anomaly_motion_binder_fixture
@@ -100,8 +100,7 @@ set_tests_properties(anomaly_motion_unknown_selection PROPERTIES WILL_FAIL TRUE)
 rsf_add_rust_static(rsf_anomaly_motion_device_fixture_rust rsf_rust_anomaly_motion_device_fixture
     rsf-anomaly rsf_anomaly --features motion-device-fixture)
 add_executable(rsf_anomaly_motion_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_device.cpp" ${RSF_ANOMALY_MOTION_SOURCES}
-    "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp"
-    "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
+    "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp")
 target_include_directories(rsf_anomaly_motion_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(rsf_anomaly_motion_device_test PRIVATE rsf_anomaly_motion_device_fixture_rust ReScaleFrame::Graphics
@@ -142,8 +141,7 @@ set_tests_properties(anomaly_motion_tess_device PROPERTIES SKIP_RETURN_CODE 77 T
 # The real VS+HS+DS+PS motion chain of the tessellation pass (local deployment with the dx11/tess roots, NVIDIA adapter
 # preferred; 77 without deployment, d3dcompiler_43 or hardware): a skinned PN/HM mover against the CPU model.
 add_executable(rsf_anomaly_motion_tess_chain_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_tess_chain_device.cpp"
-    ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp"
-    "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
+    ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp")
 target_include_directories(rsf_anomaly_motion_tess_chain_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_tess_chain_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(rsf_anomaly_motion_tess_chain_device_test PRIVATE rsf_anomaly_motion_device_fixture_rust ReScaleFrame::Graphics
@@ -153,8 +151,7 @@ set_tests_properties(anomaly_motion_tess_chain_device PROPERTIES SKIP_RETURN_COD
 # The far (SE_R2_NORMAL_LQ, beyond r__dtex_range) and near (HQ) skinned VS/PS pairs against the CPU model, including a
 # few-pixel mover 100 m away (local deployment, NVIDIA adapter preferred; 77 without deployment, d3dcompiler_43 or hardware).
 add_executable(rsf_anomaly_motion_far_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_far_device.cpp"
-    ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp"
-    "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
+    ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp")
 target_include_directories(rsf_anomaly_motion_far_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_far_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_motion_device_fixture_rust ReScaleFrame::Graphics
@@ -257,8 +254,6 @@ set_tests_properties(anomaly_geometry_hooks_avx_contract anomaly_sr_hooks_avx_co
 add_test(NAME anomaly_sr_sun_cascades_contract COMMAND rsf_anomaly_sr_swap_test stage3_sun_cascades)
 set_tests_properties(anomaly_sr_sun_cascades_contract PROPERTIES TIMEOUT 30)
 
-
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/engine_shader_includes.cpp")
 
 # Jittered deferred reconstruction: float-precision round trips and all six native constant-buffer stages.
 add_test(NAME anomaly_sr_reconstruction_window_contract COMMAND rsf_anomaly_sr_swap_test stage3_position_reconstruction)

@@ -2,11 +2,11 @@
 // Motion MRT device fixture. Uses the LOCAL deployment from tools/anomaly_motion_deploy.py (licensed shader bodies,
 // never tracked; RSF_ANOMALY_MOTION_DEPLOY or <repo>/.local/anomaly/motion-deploy). Without it the test exits 77.
 //
-// 1. Every allowlisted root compiles through the production ShaderLoader with the engine's d3dcompiler_43: the stock
+// 1. Every allowlisted root compiles through the Rust deployed-tree loader with the engine's d3dcompiler_43: the stock
 //    permutation is compiled from original/, handed in as "engine bytecode", reproduced byte for byte, and its motion
 //    variant compiled from motion/ and reflection-checked. A one-byte change of the engine bytecode is refused.
 // 2. deffer_base_flat VS/PS: the stock pair and the variant pair draw the same triangle into a real G-buffer
-//    (RGBA16F position, RGBA8 albedo, D24S8) with the RGBA16F motion target from MotionDevice as RTV2 and b13 from the
+//    (RGBA16F position, RGBA8 albedo, D24S8) with the RGBA16F motion target from Rust motion owner as RTV2 and b13 from the
 //    production packers. Native MRT0/1 must be bit-identical; motion must equal the CPU value of the supplied previous
 //    WVP; missing history must write all-zero motion.
 // 3. The invalidation replay: a stock-shader occluder drawn over the valid motion leaves stale vectors; the replay
@@ -17,9 +17,8 @@
 //    is the camera vector, and missing history is zero. A real deffer_detail_w_flat variant draws two plants whose
 //    previous rows were batched into other groups: the production FoliageHistory remaps them to the current groups, the
 //    motion equals the CPU model including the plant that grew, and a plant without history stays zero.
-#include "motion_d3d11.h"
+#include "motion_device_platform.h"
 #include "motion_foliage.h"
-#include "shader_d3d.h"
 #include "shader_loader.h"
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
@@ -34,6 +33,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -99,8 +99,8 @@ std::vector<Root> roots(const std::filesystem::path& manifest)
     return result;
 }
 
-D3DShaderApi* api{};
-ShaderLoader* loader{};
+const rsf_anomaly_shader_d3d* api{};
+const Manifest* admitted{};
 std::filesystem::path deployment;
 
 ShaderRequest request_for(const Root& root, std::vector<Define> defines)
@@ -131,9 +131,9 @@ Built build(const Root& root, std::vector<Define> defines)
     auto request = request_for(root, std::move(defines));
     Built built;
     std::string error;
-    require(api->compile(deployment / "original", request.source, request, built.stock, error), root.name + " stock: " + error);
+    require(compile_deployed(*api, deployment / "original", request, built.stock, error), root.name + " stock: " + error);
     request.bytecode = built.stock;
-    built.prepared = loader->prepare(request);
+    built.prepared = prepare_deployed(*api, *admitted, deployment, request);
     return built;
 }
 
@@ -162,19 +162,20 @@ void every_root(const std::vector<Root>& list)
     auto request = request_for(list.front(), engine_defines(list.front()));
     std::vector<std::byte> stock;
     std::string error;
-    api->compile(deployment / "original", request.source, request, stock, error);
+    require(compile_deployed(*api, deployment / "original", request, stock, error) && !stock.empty(),
+        "compile original before tampering");
     stock[stock.size() / 2] ^= std::byte{1};
     request.bytecode = stock;
-    auto refused = loader->prepare(request);
+    auto refused = prepare_deployed(*api, *admitted, deployment, request);
     require(refused.outcome != Outcome::Replaced && refused.variant.empty(), "tampered engine bytecode refused");
     // Valid bytecode of another permutation (other root, same stage) for this root's source: the recompile differs.
     const auto other = std::find_if(list.begin() + 1, list.end(), [&](const Root& r) { return r.stage == list.front().stage; });
     require(other != list.end(), "second root of the stage");
     auto foreign = build(*other, engine_defines(*other));
     request.bytecode = foreign.stock;
-    refused = loader->prepare(request);
+    refused = prepare_deployed(*api, *admitted, deployment, request);
     require(refused.outcome == Outcome::OriginalMismatch && refused.variant.empty(), "bytecode of another permutation refused");
-    std::printf("roots compiled: %u variants through the production loader (%zu roots)\n", replaced, list.size());
+    std::printf("roots compiled: %u variants through the deployed-tree loader (%zu roots)\n", replaced, list.size());
 }
 
 struct Target {
@@ -334,7 +335,7 @@ void draw_scene()
     require(vs.prepared.outcome == Outcome::Replaced && ps.prepared.outcome == Outcome::Replaced, "flat pair variants");
     require(linkable(vs.prepared.reflection, ps.prepared.reflection), "variant pair links");
     Reflection stock_vs_reflection;
-    api->reflect(vs.stock, stock_vs_reflection);
+    require(reflect_deployed(*api, vs.stock, stock_vs_reflection), "reflect stock VS");
     require(!linkable(stock_vs_reflection, ps.prepared.reflection), "stock VS cannot feed the motion PS");
 
     Scene s;
@@ -376,15 +377,24 @@ void draw_scene()
     rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE;
     hr(device->CreateRasterizerState(&rd, &s.raster), "raster");
 
-    MotionDevice motion;
-    require(motion.create(device.Get(), nullptr, nullptr), "MotionDevice create");
+    std::unique_ptr<rsf_anomaly_motion_device_owner, decltype(&rsf_anomaly_motion_device_drop)> owner{
+        rsf_anomaly_motion_device_new(rsf_anomaly_motion_device_platform_get()), rsf_anomaly_motion_device_drop};
+    auto* motion = owner.get();
+    require(rsf_anomaly_motion_device_create(motion, device.Get(), nullptr, nullptr), "Rust motion owner create");
     D3D11_TEXTURE2D_DESC position_desc{};
     s.position.texture->GetDesc(&position_desc);
-    require(motion.ensure_target(position_desc) == TargetResult::Created && motion.width() == size, "motion target follows RT0");
-    require(motion.ensure_target(position_desc) == TargetResult::Ready, "reused");
+    require(rsf_anomaly_motion_device_target(motion, position_desc.Width, position_desc.Height,
+        position_desc.SampleDesc.Count, position_desc.ArraySize) == RSF_MOTION_CREATED, "motion target created");
+    rsf_anomaly_motion_device_view motion_view{};
+    rsf_anomaly_motion_device_get(motion, &motion_view);
+    require(motion_view.width == size, "motion target follows RT0");
+    require(rsf_anomaly_motion_device_target(motion, position_desc.Width, position_desc.Height,
+        position_desc.SampleDesc.Count, position_desc.ArraySize) == RSF_MOTION_READY, "reused");
     auto ms = position_desc;
     ms.SampleDesc.Count = 4;
-    require(motion.ensure_target(ms) == TargetResult::Multisampled, "MSAA refused");
+    require(rsf_anomaly_motion_device_target(motion, ms.Width, ms.Height,
+        ms.SampleDesc.Count, ms.ArraySize) == RSF_MOTION_MULTISAMPLED, "MSAA refused");
+    rsf_anomaly_motion_device_get(motion, &motion_view);
 
     const auto setup = [&](bool variant, ID3D11Buffer* vb, bool three) {
         context->ClearState();
@@ -396,7 +406,8 @@ void draw_scene()
         context->PSSetShader(variant ? s.motion_ps.Get() : s.stock_ps.Get(), nullptr, 0);
         bind_engine_constants(s, vs_reflection.Get(), true);
         bind_engine_constants(s, reflect(ps.stock).Get(), false);
-        ID3D11RenderTargetView* views[3]{s.position.rtv.Get(), s.albedo.rtv.Get(), three ? motion.rtv() : nullptr};
+        ID3D11RenderTargetView* views[3]{s.position.rtv.Get(), s.albedo.rtv.Get(),
+            three ? static_cast<ID3D11RenderTargetView*>(motion_view.rtv) : nullptr};
         context->OMSetRenderTargets(three ? 3 : 2, views, s.depth.Get());
         context->OMSetDepthStencilState(s.less.Get(), 0);
         context->RSSetState(s.raster.Get());
@@ -408,7 +419,7 @@ void draw_scene()
         context->ClearRenderTargetView(s.position.rtv.Get(), sentinel);
         context->ClearRenderTargetView(s.albedo.rtv.Get(), zero);
         context->ClearDepthStencilView(s.depth.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1, 0);
-        motion.clear(context.Get());
+        rsf_anomaly_motion_clear_target(context.Get(), motion_view.rtv);
     };
     const auto upload = [&](bool valid) {
         temporal::Mat4 previous = temporal::Mat4::identity();
@@ -418,7 +429,8 @@ void draw_scene()
         require(pack_core_vertex(previous, {}, {valid, false, false}, vbytes), "pack VS b13");
         PixelBytes pbytes;
         require(pack_pixel({0, 0, float(size), float(size), 0, 0, 0, 0}, pbytes), "pack PS b13");
-        require(motion.set_core_vertex(context.Get(), vbytes) && motion.set_pixel(context.Get(), pbytes), "b13 upload");
+        require(rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_CORE, vbytes.data(), vbytes.size()) &&
+            rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_PIXEL, pbytes.data(), pbytes.size()), "b13 upload");
     };
 
     // Stock reference.
@@ -435,7 +447,7 @@ void draw_scene()
     context->Draw(6, 0);
     const auto position = read_back<Half4>(s.position.texture.Get());
     const auto albedo = read_back<uint32_t>(s.albedo.texture.Get());
-    auto vectors = read_back<Half4>(motion.texture());
+    auto vectors = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
     debug_errors();
     unsigned covered = 0;
     for (UINT i = 0; i < size * size; ++i) {
@@ -453,7 +465,7 @@ void draw_scene()
     // Stock occluder in front of the left half: the stock PS leaves stale vectors; the replay invalidates them.
     setup(false, s.near_vb.Get(), true);
     context->Draw(6, 0);
-    auto stale = read_back<Half4>(motion.texture());
+    auto stale = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
     require(half(stale[size / 2 * size + 4].c[2]) == 1, "fixture: a stock draw leaves the old vector (the reason for the replay)");
     const auto occluded_position = read_back<Half4>(s.position.texture.Get());
     const auto check_restored = [&] {
@@ -465,27 +477,41 @@ void draw_scene()
         ComPtr<ID3D11DepthStencilState> bound_state;
         UINT reference = 0;
         context->OMGetDepthStencilState(&bound_state, &reference);
-        const bool restored = bound[0] == s.position.rtv.Get() && bound[1] == s.albedo.rtv.Get() && bound[2] == motion.rtv() &&
+        const bool restored = bound[0] == s.position.rtv.Get() && bound[1] == s.albedo.rtv.Get() && bound[2] == static_cast<ID3D11RenderTargetView*>(motion_view.rtv) &&
             bound_depth.Get() == s.depth.Get() && bound_ps.Get() == s.stock_ps.Get() && bound_state.Get() == s.less.Get() && reference == 0;
         for (auto* p : bound) if (p) p->Release();
         require(restored, "OM state and PS restored");
     };
+    // Keep the C++ unwind on this frame while Rust owns the saved graphics state.
+    const auto replay = [&](auto&& redraw) {
+        rsf_anomaly_motion_replay_scope scope;
+        const auto result = rsf_anomaly_motion_replay_begin(rsf_anomaly_motion_replay_platform_get(),
+            &motion_view, context.Get(), &scope);
+        if (result == RSF_MOTION_REPLAY_READY) {
+            struct Restore {
+                rsf_anomaly_motion_replay_scope* scope;
+                ~Restore() { rsf_anomaly_motion_replay_end(scope); }
+            } restore{&scope};
+            redraw(context.Get());
+        }
+        return result;
+    };
     struct ReplayAborted {};
     bool unwound = false;
     try {
-        (void)motion.invalidate(context.Get(), [](ID3D11DeviceContext*) { throw ReplayAborted{}; });
+        (void)replay([](ID3D11DeviceContext*) { throw ReplayAborted{}; });
     } catch (const ReplayAborted&) {
         unwound = true;
     }
     require(unwound, "replay callback unwound on the native frame");
     check_restored();
-    require(motion.invalidate(context.Get(), [&](ID3D11DeviceContext* c) { c->Draw(6, 0); }) == ReplayResult::Done, "replay");
+    require(replay([&](ID3D11DeviceContext* c) { c->Draw(6, 0); }) == RSF_MOTION_REPLAY_READY, "replay");
     check_restored();
     // Behind the surface: the occluder fails the depth test, so the replay's EQUAL test fails too.
     setup(false, s.behind_vb.Get(), true);
     context->Draw(6, 0);
-    require(motion.invalidate(context.Get(), [&](ID3D11DeviceContext* c) { c->Draw(6, 0); }) == ReplayResult::Done, "replay behind");
-    vectors = read_back<Half4>(motion.texture());
+    require(replay([&](ID3D11DeviceContext* c) { c->Draw(6, 0); }) == RSF_MOTION_REPLAY_READY, "replay behind");
+    vectors = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
     const auto after_position = read_back<Half4>(s.position.texture.Get());
     debug_errors();
     unsigned invalidated = 0, kept = 0;
@@ -507,15 +533,16 @@ void draw_scene()
     setup(true, s.full_vb.Get(), true);
     upload(false);
     context->Draw(6, 0);
-    vectors = read_back<Half4>(motion.texture());
+    vectors = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
     const auto invalid_position = read_back<Half4>(s.position.texture.Get());
     for (UINT i = 0; i < size * size; ++i) {
         require(vectors[i].c[0] == 0 && vectors[i].c[1] == 0 && vectors[i].c[2] == 0 && vectors[i].c[3] == 0, "missing history is zero");
         require(std::memcmp(&invalid_position[i], &stock_position[i], sizeof(Half4)) == 0, "native unchanged without history");
     }
     debug_errors();
+    rsf_anomaly_motion_device_get(motion, &motion_view);
     std::printf("draw: %u covered, %u invalidated by replay, %u kept, uploads=%llu skipped=%llu\n", covered, invalidated, kept,
-        static_cast<unsigned long long>(motion.uploads()), static_cast<unsigned long long>(motion.upload_skips()));
+        static_cast<unsigned long long>(motion_view.uploads), static_cast<unsigned long long>(motion_view.upload_skips));
 }
 
 // ---- foliage (trees and grass) ------------------------------------------------------------------------------------
@@ -696,7 +723,7 @@ struct FoliageDraw {
 };
 // Draws `vertex_buffers` (one quad each, 6 vertices) with the stock pair or the variant pair and `overrides` as the
 // engine's VS constants. The variant draw uploads `vbytes` as VS b13 and a unit-viewport PS b13.
-FoliageDraw draw_foliage_pair(FoliageRig& rig, MotionDevice& motion, bool variant, const Overrides& overrides,
+FoliageDraw draw_foliage_pair(FoliageRig& rig, rsf_anomaly_motion_device_owner* motion, bool variant, const Overrides& overrides,
     const std::vector<ComPtr<ID3D11Buffer>>& quads, const FoliageVertexBytes* vbytes)
 {
     context->ClearState();
@@ -704,7 +731,9 @@ FoliageDraw draw_foliage_pair(FoliageRig& rig, MotionDevice& motion, bool varian
     context->ClearRenderTargetView(rig.position.rtv.Get(), sentinel);
     context->ClearRenderTargetView(rig.albedo.rtv.Get(), zero);
     context->ClearDepthStencilView(rig.depth.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1, 0);
-    motion.clear(context.Get());
+    rsf_anomaly_motion_device_view motion_view{};
+    rsf_anomaly_motion_device_get(motion, &motion_view);
+    rsf_anomaly_motion_clear_target(context.Get(), motion_view.rtv);
     context->IASetInputLayout(rig.layout.Get());
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->VSSetShader(variant ? rig.motion_vs.Get() : rig.stock_vs.Get(), nullptr, 0);
@@ -713,7 +742,7 @@ FoliageDraw draw_foliage_pair(FoliageRig& rig, MotionDevice& motion, bool varian
     std::vector<ComPtr<ID3D11Buffer>> keep;
     apply_overrides(rig.vs_reflection.Get(), overrides, keep);
     bind_engine_constants(rig.engine, rig.ps_reflection.Get(), false);
-    ID3D11RenderTargetView* views[3]{rig.position.rtv.Get(), rig.albedo.rtv.Get(), variant ? motion.rtv() : nullptr};
+    ID3D11RenderTargetView* views[3]{rig.position.rtv.Get(), rig.albedo.rtv.Get(), variant ? static_cast<ID3D11RenderTargetView*>(motion_view.rtv) : nullptr};
     context->OMSetRenderTargets(variant ? 3 : 2, views, rig.depth.Get());
     context->OMSetDepthStencilState(rig.less.Get(), 0);
     context->RSSetState(rig.raster.Get());
@@ -722,7 +751,8 @@ FoliageDraw draw_foliage_pair(FoliageRig& rig, MotionDevice& motion, bool varian
     if (variant) {
         PixelBytes pbytes;
         require(pack_pixel({0, 0, float(size), float(size), 0, 0, 0, 0}, pbytes), "pack PS b13");
-        require(vbytes && motion.set_foliage_vertex(context.Get(), *vbytes) && motion.set_pixel(context.Get(), pbytes), "foliage b13 upload");
+        require(vbytes && rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_FOLIAGE, vbytes->data(), vbytes->size()) &&
+            rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_PIXEL, pbytes.data(), pbytes.size()), "foliage b13 upload");
     }
     for (const auto& quad : quads) {
         ID3D11Buffer* vb = quad.Get();
@@ -733,7 +763,7 @@ FoliageDraw draw_foliage_pair(FoliageRig& rig, MotionDevice& motion, bool varian
     FoliageDraw out;
     out.position = read_back<Half4>(rig.position.texture.Get());
     out.albedo = read_back<uint32_t>(rig.albedo.texture.Get());
-    if (variant) out.vectors = read_back<Half4>(motion.texture());
+    if (variant) out.vectors = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
     debug_errors();
     return out;
 }
@@ -746,11 +776,14 @@ void draw_tree()
     auto rig = make_rig(vs_root, ps_root);
     const auto layout = make_foliage_layout(Family::FoliageTree, rig.vs.prepared.stock);
     require(layout.usable, "tree layout");
-    MotionDevice motion;
-    require(motion.create(device.Get(), nullptr, nullptr), "MotionDevice create");
+    std::unique_ptr<rsf_anomaly_motion_device_owner, decltype(&rsf_anomaly_motion_device_drop)> owner{
+        rsf_anomaly_motion_device_new(rsf_anomaly_motion_device_platform_get()), rsf_anomaly_motion_device_drop};
+    auto* motion = owner.get();
+    require(rsf_anomaly_motion_device_create(motion, device.Get(), nullptr, nullptr), "Rust motion owner create");
     D3D11_TEXTURE2D_DESC position_desc{};
     rig.position.texture->GetDesc(&position_desc);
-    require(motion.ensure_target(position_desc) == TargetResult::Created, "motion target");
+    require(rsf_anomaly_motion_device_target(motion, position_desc.Width, position_desc.Height,
+        position_desc.SampleDesc.Count, position_desc.ArraySize) == RSF_MOTION_CREATED, "motion target");
     const std::vector<ComPtr<ID3D11Buffer>> quads{foliage_quad(rig, -1, 1, -1, 1, 0.5f, 1024, 0)};
     // Engine constants as FTreeVisual::Render stages them: scale 1/2048, wave (0, 0, 0, time), wind (amplitude, 0, 0, 0).
     // m_xform and the matrices stay identity, so the quad's y is the height above the trunk base (m_xform._24 = 0).
@@ -834,11 +867,14 @@ void draw_detail()
     auto rig = make_rig(vs_root, ps_root);
     const auto layout = make_foliage_layout(Family::FoliageDetail, rig.vs.prepared.stock);
     require(layout.usable, "detail layout");
-    MotionDevice motion;
-    require(motion.create(device.Get(), nullptr, nullptr), "MotionDevice create");
+    std::unique_ptr<rsf_anomaly_motion_device_owner, decltype(&rsf_anomaly_motion_device_drop)> owner{
+        rsf_anomaly_motion_device_new(rsf_anomaly_motion_device_platform_get()), rsf_anomaly_motion_device_drop};
+    auto* motion = owner.get();
+    require(rsf_anomaly_motion_device_create(motion, device.Get(), nullptr, nullptr), "Rust motion owner create");
     D3D11_TEXTURE2D_DESC position_desc{};
     rig.position.texture->GetDesc(&position_desc);
-    require(motion.ensure_target(position_desc) == TargetResult::Created, "motion target");
+    require(rsf_anomaly_motion_device_target(motion, position_desc.Width, position_desc.Height,
+        position_desc.SampleDesc.Count, position_desc.ArraySize) == RSF_MOTION_CREATED, "motion target");
 
     struct Plant { float tx, scale, sun, hemi; };
     const Plant a{-0.5f, 1.0f, 0.3f, 0.7f}, b{0.5f, 1.0f, 0.2f, 0.6f};
@@ -975,16 +1011,16 @@ int main()
         // The engine's compiler (motion_profile.h); RSF_ANOMALY_MOTION_COMPILER overrides it for experiments.
         wchar_t compiler_name[MAX_PATH] = L"d3dcompiler_43.dll";
         GetEnvironmentVariableW(L"RSF_ANOMALY_MOTION_COMPILER", compiler_name, MAX_PATH);
-        D3DShaderApi shader_api(compiler_name);
-        if (!shader_api.ready()) { std::printf("SKIP: %ls not available\n", compiler_name); return 77; }
+        std::unique_ptr<rsf_anomaly_shader_d3d, decltype(&rsf_anomaly_shader_d3d_unload)> shader_api{
+            rsf_anomaly_shader_d3d_load(reinterpret_cast<const uint16_t*>(compiler_name)), rsf_anomaly_shader_d3d_unload};
+        if (!shader_api) { std::printf("SKIP: %ls not available\n", compiler_name); return 77; }
         std::printf("compiler: %ls\n", compiler_name);
-        api = &shader_api;
+        api = shader_api.get();
         const auto text = file_bytes(deployment / "manifest.txt");
         std::string error;
         auto manifest = Manifest::parse(std::string(reinterpret_cast<const char*>(text.data()), text.size()), error);
         require(manifest.has_value(), "manifest: " + error);
-        ShaderLoader shader_loader(*manifest, deployment, {}, shader_api, shader_api);
-        loader = &shader_loader;
+        admitted = &*manifest;
         const auto list = roots(deployment / "manifest.txt");
         require(list.size() == manifest->entries().size(), "manifest roots");
         every_root(list);

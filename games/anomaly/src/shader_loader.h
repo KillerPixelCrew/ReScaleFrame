@@ -32,6 +32,9 @@
 #include <vector>
 
 struct rsf_anomaly_shader_admitted;
+struct rsf_anomaly_shader_d3d;
+extern "C" rsf_anomaly_shader_d3d* rsf_anomaly_shader_d3d_load(const uint16_t*) noexcept;
+extern "C" void rsf_anomaly_shader_d3d_unload(rsf_anomaly_shader_d3d*) noexcept;
 
 namespace rsf::anomaly::motion {
 // C++ data and callback facades for the native motion fixtures.
@@ -101,15 +104,6 @@ struct ShaderRequest {
     std::span<const std::byte> bytecode;  // what the engine just created (borrowed)
     std::string file_name;              // engine cache/object path, diagnostics only
 };
-// Guarded engine-memory reader (returns false on a fault).
-using FrameReader = std::function<bool(const void* address, void* out, std::size_t size)>;
-enum class FrameStatus : std::uint8_t { Ok, UnknownCaller, Unreadable, BadSource, BadDefines };
-// `return_address` is create_shader's return address, `caller_rsp` the caller's rsp at the call. `module` is the
-// executable base of the build `profile` describes. Only that build's two verified call sites are accepted, and the
-// frame is read at that build's caller-frame offsets.
-FrameStatus read_request(const MotionProfile& profile, const std::byte* module, const void* return_address,
-    const std::byte* caller_rsp, const FrameReader&, ShaderRequest&);
-
 // One compile through the engine's d3dcompiler with an include handler rooted at `tree`/r3.
 class Compiler {
 public:
@@ -183,6 +177,13 @@ struct Prepared {
     Compatibility compatibility{};
     std::string detail;
 };
+
+// Device fixture projections. Rust runs the real compiler, stock proof, and reflection.
+bool compile_deployed(const rsf_anomaly_shader_d3d&, const std::filesystem::path& tree,
+    const ShaderRequest&, std::vector<std::byte>&, std::string& error);
+bool reflect_deployed(const rsf_anomaly_shader_d3d&, std::span<const std::byte>, Reflection&);
+Prepared prepare_deployed(const rsf_anomaly_shader_d3d&, const Manifest&, const std::filesystem::path& deployment,
+    const ShaderRequest&);
 
 class ShaderLoader {
 public:
