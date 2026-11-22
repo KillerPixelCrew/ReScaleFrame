@@ -731,8 +731,7 @@ fn select_version(versions: &[Version], count: u64) -> u64 {
     ffx_version::select(&versions[..count as usize], 4, 0).map_or(0, |version| version.id)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_probe(
+unsafe fn rsf_core_fsr4fg_probe(
     ops: &'static Platform,
     luid: u64,
     directory: *const u16,
@@ -757,8 +756,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_probe(
     result.err().unwrap_or(0)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create(
+unsafe fn rsf_core_fsr4fg_create(
     ops: &'static Platform,
     setup: *const BridgeCreate,
     output: *mut *mut Bridge,

@@ -12,8 +12,9 @@ use super::super::{
     Bridge, BridgeCreate, BridgeFrame, BridgeInfo, GeneratedFn, Handle, INVALID, Platform,
     QueueDesc, SwapchainDesc, Version, rsf_core_fsr4fg_create, rsf_core_fsr4fg_probe,
 };
-use super::abi::*;
-use crate::d3d12_sr::{ffx_abi, ffx_resource};
+use crate::d3d12_generation::fsr_abi::*;
+use crate::d3d12_sr::ffx_abi::{self, *};
+use crate::d3d12_sr::ffx_resource;
 use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::ptr;
 use windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC1;
@@ -66,7 +67,6 @@ const _: () = {
     assert!(size_of::<ChainVersion>() == 24 && offset_of!(ChainVersion, version) == 16);
     assert!(size_of::<ChainForHwnd>() == 64 && offset_of!(ChainForHwnd, hwnd) == 24);
     assert!(offset_of!(ChainForHwnd, desc) == 32 && offset_of!(ChainForHwnd, game_queue) == 56);
-    assert!(size_of::<FfxApiResource>() == size_of::<ffx_abi::FfxApiResource>());
     assert!(SURFACE_BGRA8_UNORM == 14);
 };
 
@@ -112,7 +112,7 @@ unsafe extern "C" fn allocate(telemetry: Handle, generated: GeneratedFn) -> Hand
 unsafe extern "C" fn release(native: Handle) {
     let owner = unsafe { capsule(native) };
     unsafe {
-        super::rsf_core_fsr4fg_release_provider_objects(&owner.graphics, owner.module);
+        super::release_provider_objects(&owner.graphics, owner.module);
         dealloc(native.cast(), Layout::new::<Native>());
     }
 }
@@ -126,49 +126,49 @@ macro_rules! graphics {
 }
 
 graphics! {
-    create_factory => rsf_core_fsr4fg_create_factory(flags: u32) -> i32;
-    find_adapter => rsf_core_fsr4fg_find_adapter(luid: u64) -> i32;
-    create_device => rsf_core_fsr4fg_create_device(level: u32) -> i32;
-    create_allocator => rsf_core_fsr4fg_create_allocator(kind: u32) -> i32;
-    create_command_list => rsf_core_fsr4fg_create_list(node_mask: u32, kind: u32) -> i32;
-    create_completion_fence => rsf_core_fsr4fg_create_completion_fence(value: u64, flags: u32) -> i32;
-    create_event => rsf_core_fsr4fg_create_event(manual: u32, initial: u32) -> i32;
-    create_image => rsf_core_fsr4fg_shared_image(
+    create_factory => create_factory(flags: u32) -> i32;
+    find_adapter => find_adapter(luid: u64) -> i32;
+    create_device => create_device(level: u32) -> i32;
+    create_allocator => create_allocator(kind: u32) -> i32;
+    create_command_list => create_list(node_mask: u32, kind: u32) -> i32;
+    create_completion_fence => create_completion_fence(value: u64, flags: u32) -> i32;
+    create_event => create_event(manual: u32, initial: u32) -> i32;
+    create_image => shared_image(
         width: u32, height: u32, format: u32, handle: *mut Handle, resource: *mut Handle
     ) -> i32;
-    reset_commands => rsf_core_fsr4fg_reset_commands() -> i32;
-    close_commands => rsf_core_fsr4fg_close_commands() -> i32;
-    shader_read => rsf_core_fsr4fg_shader_read(image: Handle, enter: u32);
-    copy_to_backbuffer => rsf_core_fsr4fg_copy_to_backbuffer(color: Handle) -> i32;
-    wait_shared => rsf_core_fsr4fg_wait_shared(value: u64) -> i32;
-    execute => rsf_core_fsr4fg_execute();
-    present => rsf_core_fsr4fg_present_dxgi(vsync: u32) -> i32;
-    signal => rsf_core_fsr4fg_signal(value: u64, shared: u32) -> i32;
-    wait_local => rsf_core_fsr4fg_wait_local(value: u64) -> i32;
-    get_present_count => rsf_core_fsr4fg_present_count(count: *mut u32) -> i32;
-    release_chain => rsf_core_fsr4fg_release_chain();
+    reset_commands => reset_commands() -> i32;
+    close_commands => close_commands() -> i32;
+    shader_read => shader_read(image: Handle, enter: u32);
+    copy_to_backbuffer => copy_to_backbuffer(color: Handle) -> i32;
+    wait_shared => wait_shared(value: u64) -> i32;
+    execute => execute();
+    present => present_dxgi(vsync: u32) -> i32;
+    signal => signal(value: u64, shared: u32) -> i32;
+    wait_local => wait_local(value: u64) -> i32;
+    get_present_count => present_count(count: *mut u32) -> i32;
+    release_chain => release_chain();
 }
 
 unsafe extern "C" fn get_adapter_vendor(native: Handle, vendor: *mut u32) -> i32 {
     let native = unsafe { capsule(native) };
-    unsafe { commands::rsf_core_fsr4fg_get_adapter_vendor(&native.graphics, &mut *vendor) }
+    unsafe { commands::get_adapter_vendor(&native.graphics, &mut *vendor) }
 }
 
 unsafe extern "C" fn create_queue(native: Handle, desc: *const QueueDesc) -> i32 {
     let native = unsafe { capsule(native) };
-    unsafe { commands::rsf_core_fsr4fg_create_queue(&mut native.graphics, &*desc) }
+    unsafe { commands::create_queue(&mut native.graphics, &*desc) }
 }
 
 unsafe extern "C" fn create_fence(native: Handle, handle: *mut Handle) -> i32 {
     let native = unsafe { capsule(native) };
-    unsafe { commands::rsf_core_fsr4fg_shared_fence(&mut native.graphics, &mut *handle) }
+    unsafe { commands::shared_fence(&mut native.graphics, &mut *handle) }
 }
 
 unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
     let native = unsafe { capsule(native) };
     let mut module = ptr::null_mut();
     let code = unsafe {
-        super::rsf_core_fsr4fg_load_provider(
+        super::load_provider(
             path,
             &mut module,
             &mut native.create,
@@ -184,7 +184,7 @@ unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
 
 unsafe extern "C" fn versions(native: Handle, out: *mut Version, count: *mut u64) -> i32 {
     let native = unsafe { capsule(native) };
-    unsafe { super::rsf_core_fsr4fg_sdk_versions(native.query, native.graphics.device, out, count) }
+    unsafe { super::sdk_versions(native.query, native.graphics.device, out, count) }
 }
 
 unsafe extern "C" fn create_generation(
@@ -199,7 +199,7 @@ unsafe extern "C" fn create_generation(
     native.backend.header.type_ = BACKEND_DX12;
     native.backend.device = native.graphics.device;
     unsafe {
-        super::rsf_core_fsr4fg_sdk_generation(
+        super::sdk_generation(
             &*setup,
             provider,
             FRAMEGENERATION_VERSION,
@@ -219,7 +219,7 @@ unsafe extern "C" fn create_generation(
 
 unsafe extern "C" fn get_provider(native: Handle, actual: *mut u64) -> i32 {
     let native = unsafe { capsule(native) };
-    unsafe { super::rsf_core_fsr4fg_sdk_provider(native.query, &mut native.generation, actual) }
+    unsafe { super::sdk_provider(native.query, &mut native.generation, actual) }
 }
 
 unsafe extern "C" fn objects(native: Handle) -> u32 {
@@ -251,7 +251,7 @@ unsafe extern "C" fn create_swapchain(
         return INVALID;
     };
     unsafe {
-        commands::rsf_core_fsr4fg_dxgi_description(
+        commands::dxgi_description(
             &mut native.dxgi_description,
             &*setup,
             first_attempt,
@@ -294,8 +294,7 @@ unsafe extern "C" fn generate(
 
 unsafe extern "C" fn describe_resource(resource: Handle, state: u32, out: *mut FfxApiResource) {
     unsafe {
-        out.cast::<ffx_abi::FfxApiResource>()
-            .write(ffx_resource::describe(resource, state));
+        out.write(ffx_resource::describe(resource, state));
     }
 }
 
@@ -310,7 +309,7 @@ unsafe extern "C" fn configure(
     let user = native;
     let native = unsafe { capsule(native) };
     unsafe {
-        super::rsf_core_fsr4fg_sdk_configure(
+        super::sdk_configure(
             native.graphics.chain,
             sequence,
             width,
@@ -334,7 +333,7 @@ unsafe extern "C" fn prepare(
 ) -> i32 {
     let native = unsafe { capsule(native) };
     unsafe {
-        super::rsf_core_fsr4fg_sdk_prepare(
+        super::sdk_prepare(
             &*frame,
             sequence,
             reset,
@@ -348,7 +347,7 @@ unsafe extern "C" fn prepare(
 
 unsafe extern "C" fn wait_presents(native: Handle) -> i32 {
     let native = unsafe { capsule(native) };
-    unsafe { super::rsf_core_fsr4fg_sdk_wait_presents(native.dispatch, &mut native.swapchain) }
+    unsafe { super::sdk_wait_presents(native.dispatch, &mut native.swapchain) }
 }
 
 fn destroy_context(destroy: PfnFfxDestroyContext, context: &mut ffxContext) -> i32 {
@@ -392,7 +391,7 @@ static PLATFORM: Platform = Platform {
     create_swapchain,
     create_image,
     create_fence,
-    describe_texture: commands::rsf_core_fsr4fg_describe_texture,
+    describe_texture: commands::describe_texture,
     reset_commands,
     close_commands,
     configure,

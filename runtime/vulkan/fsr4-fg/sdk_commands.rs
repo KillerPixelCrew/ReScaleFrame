@@ -2,9 +2,6 @@
 use super::{Handle, QueueDesc, SwapchainDesc, Texture, dx12};
 use crate::d3d12_host::{rsf_core_d3d12_copy_transitioned, rsf_core_d3d12_wait_native_fence};
 
-#[path = "bridge_objects_abi.rs"]
-mod abi;
-pub(super) use abi::rsf_fsr4fg_native_graphics as Graphics;
 use windows::Win32::{
     Foundation::LUID,
     Graphics::{
@@ -19,16 +16,29 @@ use windows::Win32::{
 };
 use windows::core::{BOOL, Interface};
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_release_chain(graphics: &mut Graphics) {
+/// The capsule's graphics slots. The SDK retains the address of `chain`.
+#[repr(C)]
+pub(super) struct Graphics {
+    pub(super) factory: Handle,
+    pub(super) adapter: Handle,
+    pub(super) device: Handle,
+    pub(super) queue: Handle,
+    pub(super) allocator: Handle,
+    pub(super) commands: Handle,
+    pub(super) completion: Handle,
+    pub(super) shared: Handle,
+    pub(super) chain: Handle,
+    pub(super) event: Handle,
+}
+
+pub(super) unsafe fn release_chain(graphics: &mut Graphics) {
     if !graphics.chain.is_null() {
         drop(unsafe { IDXGISwapChain4::from_raw(graphics.chain) });
         graphics.chain = core::ptr::null_mut();
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_factory(
+pub(super) unsafe fn create_factory(
     graphics: &mut Graphics,
     flags: u32,
 ) -> i32 {
@@ -38,8 +48,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_factory(
     )
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_find_adapter(
+pub(super) unsafe fn find_adapter(
     graphics: &mut Graphics,
     luid: u64,
 ) -> i32 {
@@ -54,8 +63,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_find_adapter(
     )
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_get_adapter_vendor(
+pub(super) unsafe fn get_adapter_vendor(
     graphics: &Graphics,
     vendor: &mut u32,
 ) -> i32 {
@@ -63,8 +71,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_get_adapter_vendor(
     dx12::status(unsafe { adapter.GetDesc1() }.map(|desc| *vendor = desc.VendorId))
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_device(
+pub(super) unsafe fn create_device(
     graphics: &mut Graphics,
     level: u32,
 ) -> i32 {
@@ -77,8 +84,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_device(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_event(
+pub(super) unsafe fn create_event(
     graphics: &mut Graphics,
     manual: u32,
     initial: u32,
@@ -99,8 +105,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_event(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_queue(
+pub(super) unsafe fn create_queue(
     graphics: &mut Graphics,
     desc: &QueueDesc,
 ) -> i32 {
@@ -117,8 +122,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_queue(
     )
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_allocator(
+pub(super) unsafe fn create_allocator(
     graphics: &mut Graphics,
     kind: u32,
 ) -> i32 {
@@ -130,8 +134,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_allocator(
     )
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_list(
+pub(super) unsafe fn create_list(
     graphics: &mut Graphics,
     node_mask: u32,
     kind: u32,
@@ -149,8 +152,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_list(
     )
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_completion_fence(
+pub(super) unsafe fn create_completion_fence(
     graphics: &mut Graphics,
     value: u64,
     flags: u32,
@@ -161,8 +163,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_completion_fence(
     dx12::store_interface(result, &mut graphics.completion)
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_shared_fence(
+pub(super) unsafe fn shared_fence(
     graphics: &mut Graphics,
     handle: &mut Handle,
 ) -> i32 {
@@ -174,15 +175,13 @@ pub(crate) unsafe extern "C" fn RsfFsr4FgReleaseImage(image: Handle) {
     unsafe { dx12::release_image(image) };
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_reset_commands(graphics: &Graphics) -> i32 {
+pub(super) unsafe fn reset_commands(graphics: &Graphics) -> i32 {
     dx12::status(unsafe {
         dx12::reset_commands(dx12::borrow(&graphics.commands), graphics.allocator)
     })
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_close_commands(graphics: &Graphics) -> i32 {
+pub(super) unsafe fn close_commands(graphics: &Graphics) -> i32 {
     dx12::status(unsafe { dx12::borrow::<ID3D12GraphicsCommandList>(&graphics.commands).Close() })
 }
 
@@ -192,8 +191,7 @@ const _: () = {
     assert!(core::mem::offset_of!(DXGI_SWAP_CHAIN_DESC1, SwapEffect) == 36);
 };
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_dxgi_description(
+pub(super) unsafe fn dxgi_description(
     desc: &mut DXGI_SWAP_CHAIN_DESC1,
     setup: &SwapchainDesc,
     first_attempt: u32,
@@ -214,8 +212,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_dxgi_description(
     desc.SwapEffect = DXGI_SWAP_EFFECT(setup.swap_effect as i32);
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_shared_image(
+pub(super) unsafe fn shared_image(
     graphics: &Graphics,
     width: u32,
     height: u32,
@@ -242,8 +239,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_shared_image(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_describe_texture(
+pub(super) unsafe extern "C" fn describe_texture(
     resource: Handle,
     out: *mut Texture,
 ) {
@@ -260,8 +256,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_describe_texture(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_shader_read(
+pub(super) unsafe fn shader_read(
     graphics: &Graphics,
     image: Handle,
     enter: u32,
@@ -278,8 +273,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_shader_read(
     dx12::transition(commands, image, before, after);
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_copy_to_backbuffer(
+pub(super) unsafe fn copy_to_backbuffer(
     graphics: &Graphics,
     color: Handle,
 ) -> i32 {
@@ -305,13 +299,11 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_copy_to_backbuffer(
     0
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_execute(graphics: &Graphics) {
+pub(super) unsafe fn execute(graphics: &Graphics) {
     unsafe { dx12::execute(graphics.queue, graphics.commands) };
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_signal(
+pub(super) unsafe fn signal(
     graphics: &Graphics,
     value: u64,
     shared: u32,
@@ -324,8 +316,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_signal(
     unsafe { dx12::queue_fence(graphics.queue, fence, value, true) }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_present_dxgi(
+pub(super) unsafe fn present_dxgi(
     graphics: &Graphics,
     vsync: u32,
 ) -> i32 {
@@ -333,8 +324,7 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_present_dxgi(
     dx12::status(unsafe { chain.Present(vsync, DXGI_PRESENT(0)) }.ok())
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_present_count(
+pub(super) unsafe fn present_count(
     graphics: &Graphics,
     count: *mut u32,
 ) -> i32 {
@@ -344,15 +334,13 @@ pub(super) unsafe extern "C" fn rsf_core_fsr4fg_present_count(
     )
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_wait_shared(
+pub(super) unsafe fn wait_shared(
     graphics: &Graphics,
     value: u64,
 ) -> i32 {
     unsafe { dx12::queue_fence(graphics.queue, graphics.shared, value, false) }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fsr4fg_wait_local(graphics: &Graphics, value: u64) -> i32 {
+pub(super) unsafe fn wait_local(graphics: &Graphics, value: u64) -> i32 {
     unsafe { rsf_core_d3d12_wait_native_fence(graphics.completion, value, graphics.event, 10_000) }
 }

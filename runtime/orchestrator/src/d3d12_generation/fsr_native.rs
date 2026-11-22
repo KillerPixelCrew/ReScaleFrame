@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: MIT
-// bindgen output keeps the SDK's Win32 names.
-#[allow(clippy::upper_case_acronyms)]
-#[path = "fsr_abi.rs"]
-mod abi;
 use super::*;
+use crate::d3d12_generation::fsr_abi::*;
 use crate::d3d12_sr::{ffx_abi::*, ffx_resource};
-use abi::*;
 use std::cell::UnsafeCell;
 use std::mem::ManuallyDrop;
 use windows::{

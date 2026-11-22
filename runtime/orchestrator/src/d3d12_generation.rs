@@ -18,6 +18,9 @@ use std::sync::Mutex;
 
 mod admission;
 mod disabled;
+/// The pinned FidelityFX frame-generation records, shared with the FSR4 Vulkan FG bridge.
+#[allow(clippy::upper_case_acronyms)] // bindgen output keeps the SDK's Win32 names.
+pub(crate) mod fsr_abi;
 
 use disabled::DISABLED_PROVIDER;
 mod fsr;

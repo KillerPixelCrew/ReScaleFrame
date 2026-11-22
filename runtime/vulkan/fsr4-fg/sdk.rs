@@ -6,9 +6,8 @@ use super::{
 };
 use std::ptr;
 
-#[path = "sdk_abi.rs"]
-mod abi;
-use abi::*;
+use crate::d3d12_generation::fsr_abi::*;
+use crate::d3d12_sr::ffx_abi::*;
 
 #[path = "native.rs"]
 mod native;
@@ -16,8 +15,7 @@ mod native;
 mod provider_module;
 use windows::Win32::Foundation::FARPROC;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_load_provider(
+pub(super) unsafe fn load_provider(
     path: *const u16,
     out: &mut Handle,
     create: &mut PfnFfxCreateContext,
@@ -70,8 +68,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_load_provider(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_release_provider_objects(
+pub(super) unsafe fn release_provider_objects(
     graphics: &super::commands::Graphics,
     module: Handle,
 ) {
@@ -96,8 +93,7 @@ const FG_PREPARE_V2: u32 = 0x2000c;
 const FG_VERSION: u32 = 0x2000e;
 const SWAPCHAIN_WAIT_PRESENTS: u32 = 0x30007;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_sdk_wait_presents(
+pub(super) unsafe fn sdk_wait_presents(
     dispatch: PfnFfxDispatch,
     context: *mut ffxContext,
 ) -> i32 {
@@ -117,8 +113,7 @@ fn header(type_: u32) -> ffxApiHeader {
 
 /// Queries candidates on the matching DX12 device without creating a context.
 /// The SDK owns the returned names for the duration of provider selection.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_sdk_versions(
+pub(super) unsafe fn sdk_versions(
     query: PfnFfxQuery,
     device: Handle,
     output: *mut Version,
@@ -156,8 +151,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_sdk_versions(
 }
 
 /// Writes the retained generation descriptors in their final native storage.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_sdk_generation(
+pub(super) unsafe fn sdk_generation(
     setup: &BridgeCreate,
     provider: u64,
     api_version: u32,
@@ -211,8 +205,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_sdk_generation(
 
 type DescribeResource = unsafe extern "C" fn(Handle, u32, *mut FfxApiResource);
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_sdk_configure(
+pub(super) unsafe fn sdk_configure(
     swapchain: Handle,
     sequence: u64,
     width: u32,
@@ -256,8 +249,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_sdk_configure(
 }
 
 /// Queries the provider selected by the SDK on the live effect.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_sdk_provider(
+pub(super) unsafe fn sdk_provider(
     query: PfnFfxQuery,
     context: *mut ffxContext,
     version: *mut u64,
@@ -320,8 +312,7 @@ fn prepare(
 }
 
 /// Records the frame preparation on the command list loaned by the capsule.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_sdk_prepare(
+pub(super) unsafe fn sdk_prepare(
     frame: &BridgeFrame,
     sequence: u64,
     reset: u32,
@@ -412,7 +403,7 @@ mod tests {
             let mut versions = [Version::default(); MAX_VERSIONS];
             let mut count = MAX_VERSIONS as u64;
             let code = unsafe {
-                rsf_core_fsr4fg_sdk_versions(query, device, versions.as_mut_ptr(), &mut count)
+                sdk_versions(query, device, versions.as_mut_ptr(), &mut count)
             };
             if code != 0 {
                 return Err(code);
@@ -428,19 +419,19 @@ mod tests {
         let mut context = fake_handle(1);
         let mut version = 0;
         assert_eq!(
-            unsafe { rsf_core_fsr4fg_sdk_provider(Some(query), &mut context, &mut version) },
+            unsafe { sdk_provider(Some(query), &mut context, &mut version) },
             0
         );
         assert_eq!(version, 42);
         MODE.set(4);
         assert_eq!(
-            unsafe { rsf_core_fsr4fg_sdk_provider(Some(query), &mut context, &mut version) },
+            unsafe { sdk_provider(Some(query), &mut context, &mut version) },
             0
         );
         assert_eq!(version, 3);
         MODE.set(5);
         assert_eq!(
-            unsafe { rsf_core_fsr4fg_sdk_provider(Some(query), &mut context, &mut version) },
+            unsafe { sdk_provider(Some(query), &mut context, &mut version) },
             1
         );
         assert_eq!(version, 3);
