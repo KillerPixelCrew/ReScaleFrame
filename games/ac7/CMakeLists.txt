@@ -54,7 +54,7 @@ add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
 add_library(rsf_ac7_render_scope STATIC src/render_scope_entry.c src/native_renderer_platform.c)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
-target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_memory rsf_windows_input_facts minhook rsf_build_options ReScaleFrame::RuntimeCommon)
+target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_memory rsf_windows_input_facts rsf_build_options ReScaleFrame::RuntimeCommon)
 
 target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/runtime/graphics/include")
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)

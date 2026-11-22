@@ -159,9 +159,9 @@ static SITES: [Site; HOOKS] = [const {
 static INSTALLED: AtomicPtr<Renderer> = AtomicPtr::new(null_mut());
 static NATIVE: AtomicPtr<rsf_ac7_native_calls> = AtomicPtr::new(null_mut());
 
-/// Binds the native call table (ac7_sites.h) that plugin.c and the native graph fixture lend, so
-/// this archive holds no link-time reference to MinHook, the Windows input facts, the render scope
-/// create call or the shader factory leaf. Every other rsf-ac7 consumer links without them.
+/// Binds the native call table (ac7_sites.h) that plugin.c and the native graph fixture lend, so the
+/// crate's unit tests link without the Windows input facts, the render scope create call and the
+/// shader factory leaf.
 ///
 /// # Safety
 /// calls is null or a complete table that outlives the module.

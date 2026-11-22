@@ -13,6 +13,7 @@ use crate::sys::{rsf_ac7_code_leaves, rsf_ac7_code_patches};
 use crate::sys::{
     rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_renderer_log_fn,
 };
+use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
 use std::ffi::c_void;
 use std::ptr::{copy_nonoverlapping, null_mut};
 use std::sync::atomic::Ordering;
@@ -32,44 +33,6 @@ const MH_OK: i32 = 0;
 const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
 const MH_ERROR_NOT_CREATED: i32 = 4;
 const MH_ERROR_DISABLED: i32 = 6;
-/// MH_UNKNOWN, the result of a MinHook call when no native table is bound.
-const MH_UNKNOWN: i32 = -1;
-
-// MinHook through the bound native table (ac7_sites.h).
-#[allow(non_snake_case)]
-fn MH_Initialize() -> i32 {
-    native()
-        .and_then(|calls| calls.hook_initialize)
-        .map_or(MH_UNKNOWN, |call| unsafe { call() })
-}
-
-#[allow(non_snake_case)]
-fn MH_CreateHook(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32 {
-    native()
-        .and_then(|calls| calls.hook_create)
-        .map_or(MH_UNKNOWN, |call| unsafe { call(target, detour, original) })
-}
-
-#[allow(non_snake_case)]
-fn MH_EnableHook(target: *mut c_void) -> i32 {
-    native()
-        .and_then(|calls| calls.hook_enable)
-        .map_or(MH_UNKNOWN, |call| unsafe { call(target) })
-}
-
-#[allow(non_snake_case)]
-fn MH_DisableHook(target: *mut c_void) -> i32 {
-    native()
-        .and_then(|calls| calls.hook_disable)
-        .map_or(MH_UNKNOWN, |call| unsafe { call(target) })
-}
-
-#[allow(non_snake_case)]
-fn MH_RemoveHook(target: *mut c_void) -> i32 {
-    native()
-        .and_then(|calls| calls.hook_remove)
-        .map_or(MH_UNKNOWN, |call| unsafe { call(target) })
-}
 
 unsafe extern "C" fn matches(address: *const u8, expected: *const u8, count: usize) -> bool {
     bytes_match(address.cast(), expected.cast(), count)
@@ -484,7 +447,7 @@ pub(crate) unsafe extern "C" fn scopes_destroy(renderer: *mut rsf_ac7_native_ren
 }
 
 pub(crate) unsafe extern "C" fn hooks_initialize() -> bool {
-    let init = MH_Initialize();
+    let init = unsafe { MH_Initialize() };
     if init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED {
         return false;
     }
@@ -503,15 +466,18 @@ pub(crate) unsafe extern "C" fn hook_create(hook: u32) -> bool {
         return false;
     };
     let site = &SITES[hook as usize];
-    MH_CreateHook(
-        target,
-        site.detour.load(Ordering::Relaxed),
-        site.original.as_ptr(),
-    ) == MH_OK
+    let created = unsafe {
+        MH_CreateHook(
+            target,
+            site.detour.load(Ordering::Relaxed),
+            site.original.as_ptr(),
+        )
+    };
+    created == MH_OK
 }
 
 pub(crate) unsafe extern "C" fn hook_enable(hook: u32) -> bool {
-    bound_target(hook).is_some_and(|target| MH_EnableHook(target) == MH_OK)
+    bound_target(hook).is_some_and(|target| unsafe { MH_EnableHook(target) } == MH_OK)
 }
 
 /// MH_CreateHook writes the trampoline only on success; a removal clears it again.
@@ -528,7 +494,7 @@ pub(crate) unsafe extern "C" fn hook_disable(hook: u32) -> bool {
     let Some(target) = bound_target(hook) else {
         return false;
     };
-    let disabled = MH_DisableHook(target);
+    let disabled = unsafe { MH_DisableHook(target) };
     disabled == MH_OK || disabled == MH_ERROR_DISABLED || disabled == MH_ERROR_NOT_CREATED
 }
 
@@ -536,7 +502,7 @@ pub(crate) unsafe extern "C" fn hook_remove(hook: u32) -> bool {
     let Some(target) = bound_target(hook) else {
         return false;
     };
-    let removed = MH_RemoveHook(target);
+    let removed = unsafe { MH_RemoveHook(target) };
     if removed != MH_OK && removed != MH_ERROR_NOT_CREATED {
         return false;
     }

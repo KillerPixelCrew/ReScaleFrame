@@ -99,16 +99,10 @@ typedef struct rsf_ac7_truesky_patches {
 
 
 // Native calls of the native renderer, bound at run time by plugin.c and the native graph fixture
-// so that MinHook, the Windows input facts, the render scope create call and the shader factory
-// leaf stay off the link line of every other rsf-ac7 consumer. native_renderer_platform.c defines
-// the table. Every entry is required.
+// so that the Windows input facts, the render scope create call and the shader factory leaf stay
+// off the link line of the plugin crate's unit tests. native_renderer_platform.c defines the
+// table. Every entry is required. MinHook the renderer calls directly (rsf-minhook-sys).
 typedef struct rsf_ac7_native_calls {
-    // MinHook, returning MH_STATUS.
-    int32_t (*hook_initialize)(void);
-    int32_t (*hook_create)(void* target, void* detour, void** original);
-    int32_t (*hook_enable)(void* target);
-    int32_t (*hook_disable)(void* target);
-    int32_t (*hook_remove)(void* target);
     // rsf_win32_input_kind and the XInput facts (integrations/windows).
     uint32_t (*input_kind)(uint32_t message, intptr_t lparam);
     void (*controller_install)(void (*callback)(void));
