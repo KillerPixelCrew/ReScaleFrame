@@ -967,8 +967,8 @@ Port host setup, output admission and reduced-frame handling through the shared 
 **Port files (5)**
 
 - [x] [runtime/orchestrator/include/rescaleframe/d3d11_host.h](runtime/orchestrator/include/rescaleframe/d3d11_host.h)
-- [ ] [runtime/orchestrator/src/d3d11_host.cpp](runtime/orchestrator/src/d3d11_host.cpp)
-- [ ] [runtime/orchestrator/src/d3d11_host_platform.h](runtime/orchestrator/src/d3d11_host_platform.h)
+- [x] [runtime/orchestrator/src/d3d11_host.cpp](runtime/orchestrator/src/d3d11_host.cpp)
+- [x] [runtime/orchestrator/src/d3d11_host_platform.h](runtime/orchestrator/src/d3d11_host_platform.h)
 - [x] [runtime/orchestrator/src/d3d11_output_platform.cpp](runtime/orchestrator/src/d3d11_output_platform.cpp)
 - [x] [runtime/orchestrator/src/d3d11_output_platform.h](runtime/orchestrator/src/d3d11_output_platform.h)
 
@@ -1048,7 +1048,7 @@ Port generic SR setup, legacy bridging and auxiliary reconstruction. Trace the p
 
 **Port files (15)**
 
-- [ ] [runtime/backends/common/sr_helpers.h](runtime/backends/common/sr_helpers.h)
+- [x] [runtime/backends/common/sr_helpers.h](runtime/backends/common/sr_helpers.h)
 - [x] [runtime/orchestrator/include/rescaleframe/d3d11_sr_api.h](runtime/orchestrator/include/rescaleframe/d3d11_sr_api.h)
 - [x] [runtime/orchestrator/include/rescaleframe/native_sr.h](runtime/orchestrator/include/rescaleframe/native_sr.h)
 - [x] [runtime/orchestrator/include/rescaleframe/sr_bridge.h](runtime/orchestrator/include/rescaleframe/sr_bridge.h)
