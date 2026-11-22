@@ -7,6 +7,7 @@ use crate::native_regions::{
     MaskTarget, Region, SourceView, compile_compute, create_constants, crop, device_identity,
     update_constants,
 };
+use crate::sync::lock;
 use crate::sys::rsf_native_translucency_masks as Masks;
 use crate::sys::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_USAGE_DEFAULT,
@@ -20,7 +21,7 @@ use rsf_game_sys::{
 };
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::BOOL;
 
@@ -267,7 +268,7 @@ impl<T> Exclusive<T> {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Slot<T>> {
-        self.slot.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.slot)
     }
 
     fn with<R>(&self, run: impl FnOnce(&mut Option<T>) -> R) -> Option<R> {

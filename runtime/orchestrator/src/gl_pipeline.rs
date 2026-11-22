@@ -8,6 +8,7 @@ use crate::com_ref::ComRef;
 use crate::owned_handle::OwnedHandle as Owned;
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
+use crate::sys::RSF_OVERLAY_NOTIFY_DEVICE_RESET;
 use crate::sys::rsf_fg12_setup;
 use crate::sys::rsf_native_cpu_frame;
 use crate::sys::*;
@@ -15,7 +16,6 @@ use crate::sys::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_REFLEX_OFF, rsf_backend_log_fn,
     rsf_native_fg_options, rsf_native_fg_status, rsf_sharpening_options,
 };
-use crate::sys::RSF_OVERLAY_NOTIFY_DEVICE_RESET;
 use crate::sys::{
     RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_NONE, RSF_SR_SPATIAL,
     RSF_SR_XESS,
@@ -33,7 +33,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::{self};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 
 #[cfg_attr(test, allow(dead_code))]
 mod dxgi;
@@ -90,8 +90,7 @@ fn valid_options(options: &rsf_gl_pipeline_options, width: u32, height: u32) -> 
         && options.quality <= MAX_QUALITY
         && unsafe { native::dlss_preset_valid(options.dlss_preset) } != 0
         && options.generation.struct_size as usize >= size_of::<rsf_native_fg_options>()
-        && (options.sharpening.struct_size == 0
-            || sharpening_policy::valid(&options.sharpening))
+        && (options.sharpening.struct_size == 0 || sharpening_policy::valid(&options.sharpening))
 }
 fn failed(result: i32) -> bool {
     result < 0
@@ -141,10 +140,7 @@ impl Shared {
     }
 
     fn detach_log(&self) {
-        *self
-            .logger
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = (None, 0);
+        *crate::sync::lock(&self.logger) = (None, 0);
     }
 }
 
@@ -309,11 +305,7 @@ fn concat(base: &CStr, suffix: &str) -> CString {
 fn lock(pipeline: &Pipeline) -> Option<MutexGuard<'_, State>> {
     // Graphics-owner calls are serialized by contract. A concurrent or reentrant call is refused
     // instead of waiting on, or racing, the graphics owner.
-    match pipeline.state.try_lock() {
-        Ok(state) => Some(state),
-        Err(TryLockError::Poisoned(state)) => Some(state.into_inner()),
-        Err(TryLockError::WouldBlock) => None,
-    }
+    crate::sync::try_lock(&pipeline.state)
 }
 
 impl Pipeline {
@@ -517,8 +509,7 @@ impl Pipeline {
         } else {
             (window::INITIAL_EXTENT, window::INITIAL_EXTENT)
         };
-        state.window_dirty =
-            native::window_resize(state.window, width, height) == 0;
+        state.window_dirty = native::window_resize(state.window, width, height) == 0;
     }
 
     fn request_fg(&self, state: &mut State, requested: u32) {
@@ -686,9 +677,13 @@ impl Pipeline {
         pass.session_id = self.session;
         pass.color_input = active.resource(HUDLESS);
         let result = self.transaction(state, &active.handles[HUDLESS..=HUDLESS], |list, _| {
-            unsafe { native::transition(list, pass.color_input, STATE_COMMON, STATE_RENDER_TARGET) };
+            unsafe {
+                native::transition(list, pass.color_input, STATE_COMMON, STATE_RENDER_TARGET)
+            };
             unsafe { native::fg_hudless(list, &pass) };
-            unsafe { native::transition(list, pass.color_input, STATE_RENDER_TARGET, STATE_COMMON) };
+            unsafe {
+                native::transition(list, pass.color_input, STATE_RENDER_TARGET, STATE_COMMON)
+            };
             OK
         });
         match result {
@@ -710,7 +705,8 @@ impl Pipeline {
         let (Some(active), Some(chain)) = (state.active.as_ref(), state.chain.as_ref()) else {
             return INVALID_ARGUMENT;
         };
-        let Some(buffer) = (unsafe { ComRef::from_owned(native::chain_back_buffer(chain.as_ptr())) })
+        let Some(buffer) =
+            (unsafe { ComRef::from_owned(native::chain_back_buffer(chain.as_ptr())) })
         else {
             return FEATURE_FAILED;
         };
@@ -786,10 +782,7 @@ impl Pipeline {
         }
         self.shared.window.store(ptr::null_mut(), Ordering::Release);
         self.shared.detach_log();
-        if self.own_window
-            && !state.window.is_null()
-            && native::window_destroy(state.window) == 0
-        {
+        if self.own_window && !state.window.is_null() && native::window_destroy(state.window) == 0 {
             return FEATURE_FAILED;
         }
         state.window = ptr::null_mut();
@@ -868,10 +861,7 @@ fn open(setup: &rsf_gl_pipeline_setup, cleanup: &mut Option<Pipeline>) -> Result
             put_registration(shared);
             return Err(NEEDS_RESTART);
         }
-        *shared
-            .logger
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = (setup.log, setup.user as usize);
+        *crate::sync::lock(&shared.logger) = (setup.log, setup.user as usize);
     }
     let guard = reused.is_none().then(|| {
         let streamline = concat(root, "/streamline");
@@ -990,9 +980,9 @@ fn open(setup: &rsf_gl_pipeline_setup, cleanup: &mut Option<Pipeline>) -> Result
     let created =
         unsafe { native::chain_create(queue, window, CHAIN_BUFFERS, CHAIN_FORMAT, &mut chain) };
     let chain = unsafe { ComRef::from_owned(chain) };
-    let owner = chain
-        .as_ref()
-        .map_or(0, |chain| unsafe { native::present_is_owner(chain.as_ptr()) });
+    let owner = chain.as_ref().map_or(0, |chain| unsafe {
+        native::present_is_owner(chain.as_ptr())
+    });
     if failed(created) || owner == 0 {
         shared.log(&format!(
             "OpenGL: DXGI creation result=0x{:08x}, intercepted={}",
@@ -1077,8 +1067,8 @@ unsafe extern "C" fn rsf_gl_pipeline_configure(
     let Some(options) = (unsafe { read_sized(options) }) else {
         return INVALID_ARGUMENT;
     };
-    let valid = unsafe { pipeline.as_ref() }
-        .is_some_and(|_| valid_options(&options, width, height));
+    let valid =
+        unsafe { pipeline.as_ref() }.is_some_and(|_| valid_options(&options, width, height));
     if !valid {
         return INVALID_ARGUMENT;
     }

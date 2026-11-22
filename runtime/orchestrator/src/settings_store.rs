@@ -5,6 +5,7 @@
 //! come from the adapter. The frontend ABI exposes FG as an enable flag, so the store
 //! also tracks the original mode when reading or rewriting saved preferences.
 use crate::sharpening_policy;
+use crate::sync::lock;
 use crate::sys::{
     RSF_RENDER_FRONTEND_ABI_VERSION, RSF_SHARPENING_ABI_VERSION, rsf_render_settings as Settings,
     rsf_sharpening_options as Sharpening,
@@ -637,7 +638,7 @@ unsafe extern "C" fn rsf_adapter_setting_read_bool(
     let Some(file) = File::new(ini, section).filter(|_| !key.is_null() && fallback <= 1) else {
         return INVALID_ARGUMENT;
     };
-    let _io = PROFILE_IO.lock().unwrap_or_else(|lock| lock.into_inner());
+    let _io = lock(&PROFILE_IO);
     let stored = unsafe { GetPrivateProfileIntW(file.section, key, fallback as i32, file.ini) };
     i32::from(stored != 0)
 }
@@ -654,7 +655,7 @@ unsafe extern "C" fn rsf_adapter_setting_write_bool(
     let Some(file) = File::new(ini, section).filter(|_| !key.is_null() && value <= 1) else {
         return INVALID_ARGUMENT;
     };
-    let _io = PROFILE_IO.lock().unwrap_or_else(|lock| lock.into_inner());
+    let _io = lock(&PROFILE_IO);
     let text = [u16::from(b'0') + value as u16, 0];
     if unsafe { WritePrivateProfileStringW(file.section, key, text.as_ptr(), file.ini) } == 0 {
         NOT_READY

@@ -6,11 +6,12 @@
 // are unchanged.
 use super::gate::protection_matches;
 use super::{Handle, provider, retain_module};
+use crate::sync::lock;
 use std::ffi::c_void;
 use std::mem::forget;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows::Win32::Graphics::Direct3D12::ID3D12Device;
 use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::{
@@ -924,7 +925,7 @@ static LUID: AtomicU64 = AtomicU64::new(0);
 static PUBLICATION: Mutex<Option<Publication>> = Mutex::new(None);
 
 fn publication() -> MutexGuard<'static, Option<Publication>> {
-    PUBLICATION.lock().unwrap_or_else(PoisonError::into_inner)
+    lock(&PUBLICATION)
 }
 
 fn set_failure(failure: Failure) {

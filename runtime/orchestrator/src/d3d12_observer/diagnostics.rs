@@ -2,11 +2,12 @@
 use super::attachment::{Query, query, query_interface};
 use super::{Handle, foreign};
 use crate::com_ref::ComRef;
+use crate::sync::lock;
 use crate::win32_diagnostics::module_location;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock};
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_AUTO_BREADCRUMB_NODE, D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_ID, D3D12_MESSAGE_SEVERITY,
     ID3D12Debug, ID3D12DeviceRemovedExtendedData, ID3D12DeviceRemovedExtendedDataSettings,
@@ -136,8 +137,7 @@ static REMOVAL_REPORTED: AtomicBool = AtomicBool::new(false);
 static COUNTS: [AtomicU8; MESSAGE_IDS] = [const { AtomicU8::new(0) }; MESSAGE_IDS];
 
 fn sink() -> Option<Sink> {
-    SINK.get()
-        .map(|sink| *sink.lock().unwrap_or_else(PoisonError::into_inner))
+    SINK.get().map(|sink| *lock(&sink))
 }
 
 #[unsafe(no_mangle)]
@@ -147,10 +147,7 @@ pub(crate) extern "C" fn rsf_d3d12_diagnostics_enable(log: Option<Log>, user: Ha
         return -1;
     };
     let selected = Sink { log, user };
-    *SINK
-        .get_or_init(|| Mutex::new(selected))
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = selected;
+    *lock(SINK.get_or_init(|| Mutex::new(selected))) = selected;
     let settings = query_debug(platform.query_settings);
     if let Some(settings) = &settings {
         unsafe {

@@ -23,6 +23,7 @@ use crate::overlay_wrapped12::native::{
 };
 use crate::sharpening_policy;
 use crate::streamline_sr::preset_valid;
+use crate::sync::lock;
 use crate::wide::copy_nul as copy_wide;
 #[cfg(not(test))]
 use crate::{
@@ -147,15 +148,11 @@ static APPLY_DIAGNOSTICS: Mutex<ApplyDiagnostics> = Mutex::new(ApplyDiagnostics 
 });
 
 fn state() -> MutexGuard<'static, State> {
-    STATE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    lock(&STATE)
 }
 
 fn apply_diagnostics() -> MutexGuard<'static, ApplyDiagnostics> {
-    APPLY_DIAGNOSTICS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    lock(&APPLY_DIAGNOSTICS)
 }
 
 #[derive(Clone, Copy)]

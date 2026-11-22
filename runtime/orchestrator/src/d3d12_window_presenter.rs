@@ -2,10 +2,11 @@
 //! A per-output D3D12 presenter. The caller owns window selection and leases the source.
 #[cfg(windows)]
 mod windows;
+use crate::sync::lock;
 use rsf_game_sys::rsf_game_render_pass;
 use rsf_runtime_submission::SubmissionRing;
 #[cfg(windows)]
-use std::sync::{Mutex, PoisonError, TryLockError};
+use std::sync::{Mutex, TryLockError};
 use std::{ffi::c_void, ptr};
 
 type Observer = Option<unsafe extern "C" fn(*const rsf_game_render_pass) -> i32>;
@@ -488,10 +489,7 @@ unsafe extern "C" fn rsf_d3d12_window_destroy(output: *mut c_void) -> i32 {
     let Some(output_ref) = (unsafe { output.as_ref() }) else {
         return 1;
     };
-    if !release_checked(
-        &mut output_ref.0.lock().unwrap_or_else(PoisonError::into_inner),
-        &windows::LEAVES,
-    ) {
+    if !release_checked(&mut lock(&output_ref.0), &windows::LEAVES) {
         return 0;
     }
     drop(unsafe { Box::from_raw(output) });

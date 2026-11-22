@@ -10,7 +10,7 @@ use crate::{d3d11_observer_callbacks, d3d11_observer_capture};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
 
 type Handle = *mut c_void;
@@ -99,11 +99,7 @@ fn lifecycle() -> Option<MutexGuard<'static, Hooks>> {
     if d3d11_observer_callbacks::in_creation_callback() {
         return None;
     }
-    match HOOKS.try_lock() {
-        Ok(state) => Some(state),
-        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
-        Err(TryLockError::WouldBlock) => None,
-    }
+    crate::sync::try_lock(&HOOKS)
 }
 
 impl Hooks {

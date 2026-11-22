@@ -3,10 +3,11 @@
 // from MFG-Unlocker 2b52823e ngx_mfg_gate.h and protected_pointer.h
 // (Copyright 2026 Michael Robles, MIT; notice in third_party/mfg_unlocker).
 use super::Handle;
+use crate::sync::lock;
 use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::System::{
     Diagnostics::Debug::{
         FlushInstructionCache, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC,
@@ -247,7 +248,7 @@ pub(super) fn patch(module: Handle) -> bool {
     if !super::provider::retained_provider(module) {
         return false;
     }
-    let mut publications = PUBLICATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut publications = lock(&PUBLICATIONS);
     let Some(site) = find(module) else {
         return false;
     };

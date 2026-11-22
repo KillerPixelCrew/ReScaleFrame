@@ -11,7 +11,7 @@ use std::fmt::Write;
 use std::fs;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 mod dump;
 use dump::DumpSettings;
@@ -169,7 +169,7 @@ static REQUESTED: AtomicBool = AtomicBool::new(false);
 static PRESENTING_DEVICE: AtomicBool = AtomicBool::new(false);
 
 fn lock() -> MutexGuard<'static, Capture> {
-    CAPTURE.lock().unwrap_or_else(PoisonError::into_inner)
+    crate::sync::lock(&CAPTURE)
 }
 
 pub(super) fn configure(options: &rsf_observer_options, log: rsf_dump_log_fn) {

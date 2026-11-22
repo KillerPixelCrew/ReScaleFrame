@@ -9,13 +9,14 @@
 use crate::com_ref::ComRef;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::overlay_panel::{LoadError, PanelEntries, elapsed_seconds};
+use crate::sync::lock;
 use crate::sys::{RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data, rsf_overlay_input};
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use std::ffi::{CString, c_char, c_void};
 use std::fmt::Display;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 
 type Handle = *mut c_void;
 
@@ -133,7 +134,7 @@ thread, including while the host is held. */
 static LOGGER: Mutex<Logger> = Mutex::new(Logger { log: None, user: 0 });
 
 fn set_logger(log: Log, user: Handle) {
-    *LOGGER.lock().unwrap_or_else(PoisonError::into_inner) = Logger {
+    *lock(&LOGGER) = Logger {
         log,
         user: user as usize,
     };
@@ -141,7 +142,7 @@ fn set_logger(log: Log, user: Handle) {
 
 fn say(message: impl Display) {
     let (log, user) = {
-        let logger = LOGGER.lock().unwrap_or_else(PoisonError::into_inner);
+        let logger = lock(&LOGGER);
         (logger.log, logger.user)
     };
     if log.is_none() {
@@ -832,17 +833,13 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 static PRESENTABLE: AtomicBool = AtomicBool::new(false);
 
 fn hold() -> MutexGuard<'static, Host> {
-    HOST.lock().unwrap_or_else(PoisonError::into_inner)
+    lock(&HOST)
 }
 
 /* A second drawing thread skips its frame rather than waiting: waiting on a render thread to draw
 a diagnostic is a worse trade than missing one frame of it. */
 fn try_hold() -> Option<MutexGuard<'static, Host>> {
-    match HOST.try_lock() {
-        Ok(host) => Some(host),
-        Err(TryLockError::Poisoned(host)) => Some(host.into_inner()),
-        Err(TryLockError::WouldBlock) => None,
-    }
+    crate::sync::try_lock(&HOST)
 }
 
 fn publish(host: &Host) {

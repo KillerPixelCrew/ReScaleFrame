@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 use crate::diagnostic_output::Output;
+use crate::sync::lock;
 use crate::sys::rsf_backend_log_fn as Log;
 use crate::win32_diagnostics::module_location;
 use std::arch::naked_asm;
 use std::ffi::{CStr, CString, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows::core::w;
 use windows_sys::Win32::{
     System::{
@@ -291,7 +292,7 @@ static AUDIT: Mutex<Audit> = Mutex::new(Audit {
 });
 
 fn audit() -> MutexGuard<'static, Audit> {
-    AUDIT.lock().unwrap_or_else(PoisonError::into_inner)
+    lock(&AUDIT)
 }
 
 // Optional process-lifetime observation. It never changes arguments, return

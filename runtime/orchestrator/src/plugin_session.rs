@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 use crate::sdk_module::SdkModule;
+use crate::sync::lock;
 use rsf_game_sys::windows_path::absolute_wide_path;
 use rsf_game_sys::*;
 use rsf_game_sys::{RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options};
 use std::ffi::CStr;
 use std::ptr;
-use std::sync::{Mutex, PoisonError, RwLock};
+use std::sync::{Mutex, RwLock};
 use windows_sys::Win32::{
     Foundation::FARPROC,
     System::LibraryLoader::{
@@ -70,9 +71,7 @@ struct PluginModule(SdkModule);
 impl PluginModule {
     fn admit(module: SdkModule) -> Result<Self, i32> {
         let identity = module.as_ptr() as usize;
-        let mut modules = ADMITTED_MODULES
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut modules = lock(&ADMITTED_MODULES);
         if modules.contains(&identity) {
             return Err(BUSY);
         }
@@ -85,9 +84,7 @@ impl PluginModule {
 impl Drop for PluginModule {
     fn drop(&mut self) {
         let identity = self.0.as_ptr() as usize;
-        let mut modules = ADMITTED_MODULES
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut modules = lock(&ADMITTED_MODULES);
         modules.retain(|&admitted| admitted != identity);
     }
 }

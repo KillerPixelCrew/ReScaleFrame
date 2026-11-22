@@ -21,7 +21,7 @@ use rsf_game_sys::backend_result::{
 };
 use std::ffi::{CStr, CString, c_void};
 use std::ptr::{self, NonNull};
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 // GL operations return glGetError after their call. D3D12 and DXGI calls return an HRESULT.
@@ -248,17 +248,12 @@ pub(crate) struct Texture {
 impl Context {
     // All calls run on the original WGL context and its thread.
     fn owner(&self) -> bool {
-        self.thread == unsafe { GetCurrentThreadId() }
-            && self.gl_context == native::gl_current()
+        self.thread == unsafe { GetCurrentThreadId() } && self.gl_context == native::gl_current()
     }
 
     fn lock(&self) -> Option<MutexGuard<'_, State>> {
         // Admission already pins the owner thread, so contention here is reentrancy.
-        match self.state.try_lock() {
-            Ok(state) => Some(state),
-            Err(TryLockError::Poisoned(state)) => Some(state.into_inner()),
-            Err(TryLockError::WouldBlock) => None,
-        }
+        crate::sync::try_lock(&self.state)
     }
 
     fn message(&self, text: &str) {
@@ -402,7 +397,8 @@ impl Context {
         }
         let current = &mut state.slots[index];
         current.leases.clear();
-        if failed(unsafe { native::slot_reset(current.allocator.as_ptr(), current.list.as_ptr()) }) {
+        if failed(unsafe { native::slot_reset(current.allocator.as_ptr(), current.list.as_ptr()) })
+        {
             return FEATURE_FAILED;
         }
         state.serial += 1;
@@ -606,8 +602,9 @@ fn create_texture(owner: &Context, width: u32, height: u32, format: u32) -> Resu
     owner.prior_errors();
     let (native, internal) = native_format(format).ok_or(INVALID_ARGUMENT)?;
     let mut resource = ptr::null_mut();
-    let created =
-        unsafe { native::resource_create(owner.device.as_ptr(), width, height, native, &mut resource) };
+    let created = unsafe {
+        native::resource_create(owner.device.as_ptr(), width, height, native, &mut resource)
+    };
     let resource = unsafe { ComRef::from_owned(resource) };
     let Some(resource) = resource.filter(|_| !failed(created)) else {
         owner.failure("shared D3D12 resource", created as u32);

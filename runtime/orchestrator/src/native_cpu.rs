@@ -5,12 +5,13 @@
 use crate::cpu_reservations::Book;
 use crate::input_receipts::Window as ReceiptWindow;
 use crate::sr_session::has_capacity;
+use crate::sync::lock;
 use crate::sys::*;
 use std::ffi::c_void;
 use std::mem::{offset_of, zeroed};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 type Event = rsf_game_cpu_event;
 type Sink = rsf_game_cpu_event_fn;
@@ -238,7 +239,7 @@ static CPU: Dispatcher = Dispatcher {
 
 impl Dispatcher {
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 
     fn rendered(&self) -> bool {

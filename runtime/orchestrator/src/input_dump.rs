@@ -2,6 +2,7 @@
 use crate::capture_names::{ALPHA, DENSE_MOTION, DEPTH, HDR, SCALAR};
 use crate::com_ref::ComRef;
 use crate::sr_session::checked;
+use crate::sync::lock;
 use crate::sys::{rsf_backend_log_fn, rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR,
@@ -441,9 +442,7 @@ static OWNER: LazyLock<Mutex<Owner>> = LazyLock::new(|| Mutex::new(Owner::defaul
 
 fn owner<T>(operation: impl FnOnce(&mut Owner) -> T) -> T {
     let (result, messages) = {
-        let mut owner = OWNER
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut owner = lock(&OWNER);
         let result = operation(&mut owner);
         (result, std::mem::take(&mut owner.messages))
     };

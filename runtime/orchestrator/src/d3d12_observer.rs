@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_session::has_capacity;
+use crate::sync::lock;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock};
 
 pub(super) mod attachment;
 mod detours;
@@ -85,7 +86,7 @@ pub(super) unsafe extern "C" fn rsf_d3d12_observer_create(
         return -1;
     }
     unsafe { out.write(ptr::null_mut()) };
-    let _install = INSTALL.lock().unwrap_or_else(PoisonError::into_inner);
+    let _install = lock(&INSTALL);
     if OBSERVER.get().is_some() {
         return -2;
     }
@@ -110,7 +111,7 @@ unsafe fn bind(kind: u32, target: Handle, wrappers: &[Handle; CAPACITY]) -> i32 
     if target.is_null() {
         return 0;
     }
-    let _install = INSTALL.lock().unwrap_or_else(PoisonError::into_inner);
+    let _install = lock(&INSTALL);
     if bindings
         .iter()
         .any(|entry| entry.target.load(Ordering::Relaxed) == target)

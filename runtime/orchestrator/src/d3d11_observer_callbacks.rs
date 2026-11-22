@@ -6,7 +6,7 @@ use crate::sys::rsf_observer_present_event as Event;
 use crate::sys::*;
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 type Handle = *mut c_void;
 type Layout = rsf_observer_layout_element;
@@ -71,7 +71,7 @@ fn creation(run: impl FnOnce(&Registration)) {
     if in_creation_callback() {
         return;
     }
-    let _serialized = CREATION.lock().unwrap_or_else(PoisonError::into_inner);
+    let _serialized = crate::sync::lock(&CREATION);
     let Some(config) = snapshot().filter(|_| installed() != 0) else {
         return;
     };
@@ -81,7 +81,7 @@ fn creation(run: impl FnOnce(&Registration)) {
 }
 
 fn lock() -> MutexGuard<'static, Option<Registration>> {
-    OPTIONS.lock().unwrap_or_else(PoisonError::into_inner)
+    crate::sync::lock(&OPTIONS)
 }
 
 pub(super) fn snapshot() -> Option<Registration> {
@@ -89,7 +89,7 @@ pub(super) fn snapshot() -> Option<Registration> {
 }
 
 pub(super) fn clear() {
-    let _serialized = CREATION.lock().unwrap_or_else(PoisonError::into_inner);
+    let _serialized = crate::sync::lock(&CREATION);
     *lock() = None;
 }
 

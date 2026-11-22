@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::sync::lock;
 use crate::sys::RSF_OVERLAY_FRAME_LIMIT_VRR;
 use crate::sys::{RSF_FG_OFF, rsf_fg_status};
 use std::ffi::c_void;
@@ -60,9 +61,7 @@ unsafe fn display_refresh(chain: *mut c_void) -> u32 {
         return 0;
     };
     let now = unsafe { GetTickCount64() };
-    let mut display = DISPLAY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut display = lock(&DISPLAY);
     if display.chain != id || now.wrapping_sub(display.sampled) >= 500 {
         display.chain = id;
         display.sampled = now;

@@ -5,6 +5,7 @@
 // configuration, slot, scene, settings and overlay routing policy only.
 use super::*;
 use crate::com_ref::test::{Fake as ComHeader, add_ref};
+use crate::sync::lock;
 use rsf_game_sys::rsf_game_probe as Probe;
 use std::cell::RefCell;
 use windows_sys::Win32::System::WindowsProgramming::{
@@ -627,9 +628,7 @@ fn admission_refuses_in_the_native_order() {
 
 #[test]
 fn start_publishes_services_and_stop_retires_in_order() {
-    let _serial = LIFECYCLE_TESTS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _serial = lock(&LIFECYCLE_TESTS);
     let files = Files::new("lifecycle");
     reset();
     with(|world| world.now = 1000);
@@ -696,9 +695,7 @@ fn start_publishes_services_and_stop_retires_in_order() {
 
 #[test]
 fn refused_plugins_are_stopped_or_kept_for_retry() {
-    let _serial = LIFECYCLE_TESTS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _serial = lock(&LIFECYCLE_TESTS);
     let files = Files::new("refused");
     let setup = setup(&files, 1, 1);
 

@@ -24,6 +24,7 @@ use crate::sr_legacy::{
     rsf_sr_legacy_select, rsf_sr_legacy_warm_up,
 };
 use crate::sr_session::has_capacity;
+use crate::sync::lock;
 use crate::sys::rsf_dlss_setup;
 use crate::sys::{
     RSF_D3D11_BIND_RENDER_TARGET, RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_RG16_FLOAT,
@@ -42,7 +43,7 @@ use crate::sys::{
 use std::ffi::{CStr, CString, c_char};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
 type P = rsf_dlssp_platform;
@@ -484,24 +485,20 @@ impl Pipeline {
     }
 
     fn owned(&self) -> Option<MutexGuard<'_, Owned>> {
-        match self.owned.try_lock() {
-            Ok(owned) => Some(owned),
-            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
-            Err(TryLockError::WouldBlock) => None,
-        }
+        crate::sync::try_lock(&self.owned)
     }
 
     fn shared(&self) -> MutexGuard<'_, Shared> {
-        self.shared.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.shared)
     }
 
     fn set_sink(&self, sink: Sink) {
-        *self.sink.lock().unwrap_or_else(PoisonError::into_inner) = sink;
+        *lock(&self.sink) = sink;
     }
 
     // One line through the caller's sink, cut where rsf_logf cuts it.
     fn emit(&self, text: &[u8]) {
-        let sink = *self.sink.lock().unwrap_or_else(PoisonError::into_inner);
+        let sink = *lock(&self.sink);
         let Some(log) = sink.log else {
             return;
         };
@@ -598,7 +595,7 @@ impl Pipeline {
     }
 
     unsafe fn create_alternate(&self, p: &P, owned: &Owned, width: u32, height: u32) -> (i32, Raw) {
-        let sink = *self.sink.lock().unwrap_or_else(PoisonError::into_inner);
+        let sink = *lock(&self.sink);
         let directories = owned.directory_pointers();
         let mut adapter = null_mut();
         let result = unsafe {
@@ -643,7 +640,7 @@ impl Pipeline {
         if settings.directory().is_empty() {
             return INVALID;
         }
-        let sink = *self.sink.lock().unwrap_or_else(PoisonError::into_inner);
+        let sink = *lock(&self.sink);
         let mut plugins = settings.directory().to_vec();
         while matches!(plugins.last(), Some(b'\\' | b'/')) {
             plugins.pop();

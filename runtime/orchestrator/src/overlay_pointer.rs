@@ -7,7 +7,7 @@ use crate::sr_session::has_capacity;
 use crate::sys::rsf_overlay_input as Input;
 use std::ffi::c_void;
 use std::mem;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 const LEFT: u32 = 1;
 pub(super) const DOWN: u32 = 1;
@@ -296,7 +296,7 @@ impl PointerState {
 static STATE: Mutex<PointerState> = Mutex::new(PointerState::new());
 
 fn lock() -> MutexGuard<'static, PointerState> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    crate::sync::lock(&STATE)
 }
 
 pub(super) fn reset() {

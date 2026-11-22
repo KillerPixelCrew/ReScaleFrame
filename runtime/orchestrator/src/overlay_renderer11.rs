@@ -14,7 +14,7 @@ use crate::sys::{
 use std::ffi::{CString, c_void};
 use std::mem;
 use std::ptr::null_mut;
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 mod pipeline;
 mod platform;
@@ -106,12 +106,7 @@ impl Renderer {
             Err(TryLockError::Poisoned(error)) => error.into_inner(),
             Err(TryLockError::WouldBlock) => return None,
         };
-        let frees = mem::take(
-            &mut *self
-                .pending_free
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
+        let frees = mem::take(&mut *crate::sync::lock(&self.pending_free));
         for id in frees {
             state.free(id);
         }
@@ -466,11 +461,7 @@ unsafe extern "C" fn rsf_overlay_renderer_free_texture(renderer: Handle, id: u64
         if let Some(mut state) = renderer.state() {
             state.free(id);
         } else {
-            renderer
-                .pending_free
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(id);
+            crate::sync::lock(&renderer.pending_free).push(id);
         }
     }
 }

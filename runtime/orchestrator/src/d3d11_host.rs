@@ -10,6 +10,7 @@ use crate::d3d11_host_abi::*;
 use crate::d3d11_host_platform as native;
 use crate::d3d11_host_reduced::{MAX_RESERVED, Products, Raw, Ticket, zeroed_pass};
 use crate::native_cpu::{SourcePacket, decode_source_event};
+use crate::sync::lock;
 use crate::sys::RSF_SR_DLSS;
 use crate::sys::rsf_d3d11_present_setup;
 use crate::sys::{
@@ -35,7 +36,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::mem::offset_of;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 #[cfg(test)]
 use tests::native;
 
@@ -516,21 +517,17 @@ impl Host {
     }
 
     fn shared(&self) -> MutexGuard<'_, Shared> {
-        self.shared.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.shared)
     }
 
     // The callback lease. A contended lease is refused, never waited on, so a
     // reentrant or concurrent native callback cannot deadlock the owner.
     fn try_graphics(&self) -> Option<MutexGuard<'_, Graphics>> {
-        match self.graphics.try_lock() {
-            Ok(guard) => Some(guard),
-            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
-            Err(TryLockError::WouldBlock) => None,
-        }
+        crate::sync::try_lock(&self.graphics)
     }
 
     fn lock_graphics(&self) -> MutexGuard<'_, Graphics> {
-        self.graphics.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.graphics)
     }
 
     fn log(&self, text: &str) {
@@ -691,7 +688,8 @@ impl Host {
         }
         g.device = self.child_device(context);
         let mut vendor = 0;
-        if g.device.is_none() || unsafe { native::device_vendor(g.device_ptr(), &mut vendor) } == 0 {
+        if g.device.is_none() || unsafe { native::device_vendor(g.device_ptr(), &mut vendor) } == 0
+        {
             return false;
         }
         let selected =
@@ -806,9 +804,9 @@ impl Host {
                 "D3D11 callback host uses bridge application Present events; native DXGI interception is unnecessary.",
             );
         } else {
-            g.observer =
-                unsafe { native::observer_install(Some(host_log), self.user(), Some(host_present)) }
-                    != 0;
+            g.observer = unsafe {
+                native::observer_install(Some(host_log), self.user(), Some(host_present))
+            } != 0;
         }
         if !g.observer {
             self.log("D3D11 callback host: Present observation refused; SR activation suspended.");
@@ -926,9 +924,8 @@ impl Host {
                     view_space_to_meters: setup.units_to_meters,
                     standard_depth: u32::from(setup.depth_inverted == 0),
                 };
-                g.last_result = unsafe {
-                    native::pipeline_start(g.device_ptr(), &start, settings.sr_backend)
-                };
+                g.last_result =
+                    unsafe { native::pipeline_start(g.device_ptr(), &start, settings.sr_backend) };
                 g.running = g.last_result == OK;
                 g.backend = settings.sr_backend;
                 g.dlss_started = g.running && g.backend == RSF_SR_DLSS;
@@ -939,7 +936,8 @@ impl Host {
             }
             if g.running && g.present_result == DLSS_OK {
                 if g.output_width != width || g.output_height != height {
-                    g.last_result = unsafe { native::pipeline_resize(width, height, null_mut(), null_mut()) };
+                    g.last_result =
+                        unsafe { native::pipeline_resize(width, height, null_mut(), null_mut()) };
                     if g.last_result == OK {
                         g.output_width = width;
                         g.output_height = height;
@@ -1869,7 +1867,8 @@ impl Host {
         }
         if g.capture_pending && self.dump_wants(&g.capture_record) {
             if event.completed == 0 {
-                let context = unsafe { ComRef::from_owned(native::immediate_context(g.device_ptr())) };
+                let context =
+                    unsafe { ComRef::from_owned(native::immediate_context(g.device_ptr())) };
                 let buffer = unsafe { ComRef::from_owned(native::chain_buffer(g.chain_ptr())) };
                 if let Some(buffer) = &buffer {
                     self.dump_texture(

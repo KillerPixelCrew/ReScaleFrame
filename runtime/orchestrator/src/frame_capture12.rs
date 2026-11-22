@@ -10,6 +10,7 @@ use crate::com_ref::ComRef;
 use crate::d3d12_fence::FenceState;
 use crate::frame_capture_vk::Legacy;
 use crate::sr_session::has_capacity;
+use crate::sync::lock;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs;
@@ -124,9 +125,7 @@ impl Owner {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        lock(&self.state)
     }
 
     fn fail(&self, value: &Readback, result: i32) {
@@ -185,8 +184,7 @@ impl Owner {
             return false;
         }
         let mut layout = Layout::default();
-        let Some(buffer) =
-            (unsafe { ComRef::from_owned(ops::allocate(source, &mut layout)) })
+        let Some(buffer) = (unsafe { ComRef::from_owned(ops::allocate(source, &mut layout)) })
         else {
             return false;
         };
@@ -500,7 +498,6 @@ unsafe fn owner<'a>(owner: *const Owner) -> Option<&'a Owner> {
 unsafe fn text<'a>(value: *const c_char) -> Option<&'a CStr> {
     (!value.is_null()).then(|| unsafe { CStr::from_ptr(value) })
 }
-
 
 #[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_capture12_create(environment: u32) -> *mut Owner {

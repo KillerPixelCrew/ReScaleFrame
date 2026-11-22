@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
+use crate::sync::lock;
 use std::cell::Cell;
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 // Serialize borrowed sink callbacks and let owners drain output before release.
 static OUTPUT: Mutex<()> = Mutex::new(());
@@ -19,7 +20,7 @@ impl Output {
         if Self::active_here() {
             return None;
         }
-        let guard = OUTPUT.lock().unwrap_or_else(PoisonError::into_inner);
+        let guard = lock(&OUTPUT);
         IN_OUTPUT.set(true);
         Some(Self { _guard: guard })
     }

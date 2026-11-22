@@ -3,7 +3,7 @@ use crate::overlay_window::diagnostic;
 use std::ffi::{CStr, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::{
     Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
     core::w,
@@ -47,7 +47,7 @@ static CALLS: AtomicU32 = AtomicU32::new(0);
 static READY: AtomicBool = AtomicBool::new(false);
 
 fn lock() -> MutexGuard<'static, [Option<Binding>; COUNT]> {
-    BINDINGS.lock().unwrap_or_else(PoisonError::into_inner)
+    crate::sync::lock(&BINDINGS)
 }
 
 pub(super) fn has_hooks() -> bool {

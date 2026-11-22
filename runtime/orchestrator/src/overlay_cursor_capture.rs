@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::Foundation::{POINT, RECT};
 
 const SHOW_LIMIT: u32 = 64;
@@ -50,7 +50,7 @@ thread_local! {
 }
 
 fn lock() -> MutexGuard<'static, Capture> {
-    CAPTURE.lock().unwrap_or_else(PoisonError::into_inner)
+    crate::sync::lock(&CAPTURE)
 }
 
 fn captured() -> bool {

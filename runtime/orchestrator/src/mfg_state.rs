@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 use crate::sdk_module::SdkModule;
+use crate::sync::lock;
 use crate::sys::rsf_backend_log_fn as Log;
 use std::ffi::{CStr, CString, c_void};
 use std::ptr::null_mut;
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
     System::{
@@ -284,7 +285,7 @@ pub(crate) struct Owner(Mutex<State>);
 
 impl Owner {
     fn state(&self) -> MutexGuard<'_, State> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.0)
     }
 
     fn release(&self) {
@@ -298,15 +299,11 @@ impl Owner {
 static UPDATE: Mutex<()> = Mutex::new(());
 
 fn update() -> MutexGuard<'static, ()> {
-    UPDATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock(&UPDATE)
 }
 
 fn try_update() -> Option<MutexGuard<'static, ()>> {
-    match UPDATE.try_lock() {
-        Ok(guard) => Some(guard),
-        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
-        Err(TryLockError::WouldBlock) => None,
-    }
+    crate::sync::try_lock(&UPDATE)
 }
 
 #[unsafe(no_mangle)]

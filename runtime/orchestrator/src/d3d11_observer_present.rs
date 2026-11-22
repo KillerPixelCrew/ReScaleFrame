@@ -4,13 +4,14 @@ use crate::d3d11_observer_callbacks::snapshot;
 use crate::d3d11_observer_capture::{adopt_device, dump_presenter, needs_presenter};
 use crate::d3d11_observer_hooks::{forward_target, installed};
 use crate::sr_session::has_capacity;
+use crate::sync::lock;
 use crate::sys::rsf_observer_present_event as Event;
 use rsf_game_sys::backend_result::{INVALID_ARGUMENT, OK};
 use std::cell::Cell;
 use std::ffi::{CString, c_void};
 use std::ptr::null_mut;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, PoisonError};
 
 type Handle = *mut c_void;
 
@@ -204,7 +205,7 @@ unsafe fn application_present(event: *const Event, update: impl FnOnce(Handle)) 
     };
     if event.completed == 0 {
         {
-            let mut calls = APPLICATION.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut calls = lock(&APPLICATION);
             calls.push(key);
             CALLS.fetch_add(1, Ordering::SeqCst);
         }
@@ -212,7 +213,7 @@ unsafe fn application_present(event: *const Event, update: impl FnOnce(Handle)) 
             update(event.swapchain);
         }
     } else {
-        let mut calls = APPLICATION.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut calls = lock(&APPLICATION);
         let Some(index) = calls.iter().rposition(|call| *call == key) else {
             return INVALID_ARGUMENT;
         };

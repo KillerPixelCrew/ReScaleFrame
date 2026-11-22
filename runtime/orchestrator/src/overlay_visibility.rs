@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 const INSERT: u32 = 0x2d;
 const DEBOUNCE_MS: u64 = 250;
@@ -95,7 +95,7 @@ static VISIBLE: AtomicBool = AtomicBool::new(false);
 static TOGGLE_KEY: AtomicU32 = AtomicU32::new(INSERT);
 
 fn lock() -> MutexGuard<'static, Visibility> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    crate::sync::lock(&STATE)
 }
 
 fn apply_changes(mut change: Option<Change>, apply: Apply) {

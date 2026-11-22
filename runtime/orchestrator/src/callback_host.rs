@@ -17,6 +17,7 @@ use crate::settings_store::{
     rsf_settings_store_read_layout, rsf_settings_store_write_layout,
     rsf_settings_store_write_sharpening, write_dlss_preset,
 };
+use crate::sync::lock;
 use crate::sys::{
     RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
     rsf_sharpening_options as Sharpening,
@@ -49,7 +50,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::core::{PCWSTR, w};
 
@@ -291,11 +292,7 @@ static LIFECYCLE: Mutex<Published> = Mutex::new(Published(null_mut()));
 
 fn try_lifecycle() -> Option<MutexGuard<'static, Published>> {
     // Adapter callbacks may reenter either public lifecycle entry.
-    match LIFECYCLE.try_lock() {
-        Ok(guard) => Some(guard),
-        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
-        Err(TryLockError::WouldBlock) => None,
-    }
+    crate::sync::try_lock(&LIFECYCLE)
 }
 
 unsafe fn c_copy(text: *const c_char) -> CString {
@@ -327,11 +324,11 @@ impl Host {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 
     fn log_bytes(&self, message: &[u8]) {
-        let mut file = self.log_file.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut file = lock(&self.log_file);
         let mut line = Vec::with_capacity(message.len() + 2);
         line.extend_from_slice(message);
         line.extend_from_slice(b"\r\n");

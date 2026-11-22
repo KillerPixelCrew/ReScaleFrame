@@ -18,6 +18,7 @@ use crate::settings_store::{
     rsf_settings_store_write_layout, set_sharpening, sharpening_of,
 };
 use crate::sharpening_policy;
+use crate::sync::lock;
 use crate::sys::rsf_fg12_setup as FgSetup;
 use crate::sys::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
@@ -52,7 +53,7 @@ use std::collections::hash_map::Entry;
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileStringW;
@@ -531,15 +532,11 @@ impl Host {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 
     fn try_lock(&self) -> Option<MutexGuard<'_, State>> {
-        match self.state.try_lock() {
-            Ok(state) => Some(state),
-            Err(TryLockError::Poisoned(state)) => Some(state.into_inner()),
-            Err(TryLockError::WouldBlock) => None,
-        }
+        crate::sync::try_lock(&self.state)
     }
 
     fn fg_installed(&self) -> bool {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::overlay_visibility::{self, rsf_core_overlay_toggle_key};
 use crate::sr_session::has_capacity;
+use crate::sync::lock;
 use crate::sys::{
     RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay_input_log_fn as LogFn,
     rsf_overlay_input_options as Options,
@@ -8,8 +9,8 @@ use crate::sys::{
 use crate::{overlay_cursor_hooks, overlay_pointer};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::null_mut;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
-use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::{
     Foundation::{GetLastError, SetLastError},
     UI::{
@@ -77,11 +78,11 @@ static LOGGER: Mutex<Option<Logger>> = Mutex::new(None);
 static HELD: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
 
 fn set_logger(logger: Option<Logger>) {
-    *LOGGER.lock().unwrap_or_else(PoisonError::into_inner) = logger;
+    *lock(&LOGGER) = logger;
 }
 
 fn logger() -> Option<Logger> {
-    *LOGGER.lock().unwrap_or_else(PoisonError::into_inner)
+    *lock(&LOGGER)
 }
 
 pub(super) fn diagnostic(text: &str) {
@@ -127,7 +128,7 @@ pub(super) unsafe extern "C" fn rsf_core_overlay_input_install(
         return INVALID;
     }
     // The window procedure reads its forwarding target without this lock.
-    let _lifecycle = LIFECYCLE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _lifecycle = lock(&LIFECYCLE);
     if !rsf_core_overlay_input_window().is_null() {
         return ALREADY_INSTALLED;
     }
@@ -187,7 +188,7 @@ pub(super) unsafe extern "C" fn rsf_core_overlay_input_uninstall(
     procedure: isize,
     platform: &Platform,
 ) -> i32 {
-    let _lifecycle = LIFECYCLE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _lifecycle = lock(&LIFECYCLE);
     let window = rsf_core_overlay_input_window();
     if window.is_null() {
         return if overlay_cursor_hooks::has_hooks() {

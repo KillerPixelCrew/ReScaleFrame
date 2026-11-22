@@ -42,7 +42,7 @@ use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
     D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -531,11 +531,7 @@ fn slot(source: u64) -> MutexGuard<'static, Slot> {
 }
 
 fn try_slot(source: u64) -> Option<MutexGuard<'static, Slot>> {
-    match SLOTS[slot_index(source)].try_lock() {
-        Ok(guard) => Some(guard),
-        Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
-        Err(TryLockError::WouldBlock) => None,
-    }
+    crate::sync::try_lock(&SLOTS[slot_index(source)])
 }
 
 fn texture_info(texture: Handle) -> TextureInfo {
