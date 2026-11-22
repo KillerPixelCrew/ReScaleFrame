@@ -527,7 +527,7 @@ int main(int argc, char* argv[])
     char prefix[1024];
     snprintf(prefix, sizeof(prefix), "%s\\observed", argv[1]);
     stage("requesting dump");
-    check(rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_VELOCITY) == RSF_OBSERVER_OK,
+    check(rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_ENCODED_MOTION) == RSF_OBSERVER_OK,
           "Requesting a dump must succeed.");
     // The request is carried out inside a present, so one more present performs it.
     check(SUCCEEDED(IDXGISwapChain_Present(swapchain, 0, 0)), "Presenting must carry out the dump.");

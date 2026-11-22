@@ -45,8 +45,6 @@ typedef uint32_t rsf_dump_view;
 #define RSF_DUMP_VIEW_RAW ((rsf_dump_view)0)
 /* Decode motion using the caller's encoding, then centre zero motion at mid grey. */
 #define RSF_DUMP_VIEW_ENCODED_MOTION ((rsf_dump_view)1)
-/* Source compatibility name for the encoded motion view. */
-#define RSF_DUMP_VIEW_VELOCITY RSF_DUMP_VIEW_ENCODED_MOTION
 /* Motion that a pass has already decoded. Centred the same way as the velocity view so the two can
    be compared side by side, but without decoding again, and marking the sentinel rather than a
    stored zero: after a decode, zero is a real motion of zero and cannot serve as the marker. */

@@ -51,10 +51,7 @@ const _: () = {
 
 pub const MAP_WRITE_DISCARD: u32 = 4;
 const MAP_READ: u32 = 1;
-pub const USAGE_DYNAMIC: u32 = 2;
 const USAGE_STAGING: u32 = 3;
-const BIND_CONSTANT_BUFFER: u32 = 4;
-const CPU_ACCESS_WRITE: u32 = 0x10000;
 const CPU_ACCESS_READ: u32 = 0x20000;
 const RESOURCE_DIMENSION_BUFFER: u32 = 1;
 
@@ -79,24 +76,6 @@ unsafe fn create_buffer(device: Handle, desc: &BufferDesc) -> Option<IUnknown> {
 
 /// # Safety
 ///
-/// `device` must be a live `ID3D11Device`.
-pub unsafe fn make_dynamic(device: Handle, bytes: u32) -> Option<IUnknown> {
-    unsafe {
-        create_buffer(
-            device,
-            &BufferDesc {
-                byte_width: bytes,
-                usage: USAGE_DYNAMIC,
-                bind_flags: BIND_CONSTANT_BUFFER,
-                cpu_access_flags: CPU_ACCESS_WRITE,
-                ..BufferDesc::default()
-            },
-        )
-    }
-}
-
-/// # Safety
-///
 /// `buffer` must be a live `ID3D11Resource`.
 pub unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32, u32)> {
     type GetType = unsafe extern "system" fn(Handle, *mut u32);
@@ -108,14 +87,6 @@ pub unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32, u32)> {
     }
     let desc = unsafe { buffer_desc(buffer) };
     Some((desc.byte_width, desc.bind_flags, desc.usage))
-}
-
-/// # Safety
-///
-/// `buffer` must be a live `ID3D11Buffer`.
-pub unsafe fn constant_size(buffer: Handle, bytes: u32) -> bool {
-    let desc = unsafe { buffer_desc(buffer) };
-    desc.byte_width == bytes && desc.bind_flags & BIND_CONSTANT_BUFFER != 0
 }
 
 pub type Map = unsafe extern "system" fn(Handle, Handle, u32, u32, u32, *mut MappedResource) -> i32;
@@ -130,27 +101,6 @@ unsafe fn map(context: Handle, buffer: Handle, kind: u32) -> Option<MappedResour
 unsafe fn unmap(context: Handle, buffer: Handle) {
     let unmap: Unmap = unsafe { std::mem::transmute(slot(context, 15)) };
     unsafe { unmap(context, buffer, 0) };
-}
-
-/// # Safety
-///
-/// `context` must be a live `ID3D11DeviceContext`, `buffer` a dynamic buffer of its device and
-/// `contents` readable for `bytes` bytes, which must fit the buffer.
-pub unsafe fn upload(context: Handle, buffer: Handle, contents: *const c_void, bytes: u32) -> bool {
-    let Some(mapped) = (unsafe { map(context, buffer, MAP_WRITE_DISCARD) }) else {
-        return false;
-    };
-    if !mapped.data.is_null() {
-        unsafe {
-            ptr::copy_nonoverlapping(
-                contents.cast::<u8>(),
-                mapped.data.cast::<u8>(),
-                bytes as usize,
-            )
-        };
-    }
-    unsafe { unmap(context, buffer) };
-    !mapped.data.is_null()
 }
 
 #[unsafe(no_mangle)]
