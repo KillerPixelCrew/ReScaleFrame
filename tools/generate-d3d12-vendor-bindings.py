@@ -53,7 +53,7 @@ def main():
              r"CreateContextDescHeader|DispatchDescHeader|QueryDescHeader|QueryDescGetVersions|OverrideVersion|"
              r"QueryGetProviderVersion|CreateBackendDX12Desc|CreateContextDescUpscale|DispatchDescUpscale|"
              r"QueryDescUpscaleGetRenderResolutionFromQualityMode)|PfnFfx(CreateContext|DestroyContext|Query|Dispatch)|"
-             r"rsf_ffx_descriptor_type|FfxApi(Resource|ResourceDescription|Dimensions2D|FloatCoords2D|ReturnCodes|CreateContextUpscaleFlags|ResourceState)",
+             r"rsf_ffx_descriptor_type|FfxApi(Resource|ResourceDescription|Dimensions2D|FloatCoords2D|ReturnCodes|CreateContextUpscaleFlags|ResourceState|SurfaceFormat|ResourceType|ResourceUsage)",
              root / "runtime/orchestrator/src/d3d12_sr/fsr_abi.rs",
              ["type ID3D12Device = ::core::ffi::c_void;", "type wchar_t = u16;"],
              [f"-I{api}", f"-I{args.fidelityfx / 'upscalers/include'}"],

@@ -14,10 +14,9 @@ struct Ops {
     load: Load,
     acquire_compatibility: unsafe extern "C" fn(Raw, *const Open) -> *const c_void,
     release_compatibility: unsafe extern "C" fn(*const c_void),
-    resource: unsafe extern "C" fn(Raw, u32, *mut FfxApiResource),
 }
 
-const _: () = assert!(size_of::<Ops>() == 4 * size_of::<Raw>());
+const _: () = assert!(size_of::<Ops>() == 3 * size_of::<Raw>());
 
 struct Sdk {
     create: PfnFfxCreateContext,
@@ -90,7 +89,6 @@ impl Drop for Compatibility {
 }
 
 pub(super) struct Owner {
-    ops: &'static Ops,
     sdk: Sdk,
     description: Box<CreateDescription>,
     context: Raw,
@@ -107,7 +105,6 @@ impl Owner {
         let description = unsafe { Box::from_raw(description) };
         let sdk = Sdk::open(desc, ops)?;
         let mut owner = Self {
-            ops,
             sdk,
             description,
             context: null_mut(),
@@ -252,12 +249,6 @@ impl Owner {
         }
     }
 
-    fn resource(&self, resource: Raw, state: i32) -> FfxApiResource {
-        let mut description = FfxApiResource::default();
-        unsafe { (self.ops.resource)(resource, state as u32, &mut description) };
-        description
-    }
-
     pub(super) fn evaluate(&mut self, commands: Raw, frame: &Frame) -> i32 {
         let record = unsafe { &*frame.record };
         let far = record.camera.far_plane;
@@ -265,16 +256,18 @@ impl Owner {
         let (enable_sharpening, sharpness) =
             crate::sharpening_policy::ffx_sharpening(frame.sharpness);
         let read = FFX_API_RESOURCE_STATE_COMPUTE_READ;
+        let resource =
+            |texture, state: i32| unsafe { super::ffx_resource::describe(texture, state as u32) };
         let data = ffxDispatchDescUpscale {
             header: header(RSF_FFX_DISPATCH_UPSCALE as u32),
             commandList: commands,
-            color: self.resource(frame.color.resource, read),
-            depth: self.resource(frame.depth.resource, read),
-            motionVectors: self.resource(frame.motion.resource, read),
-            exposure: self.resource(frame.exposure.resource, read),
-            reactive: self.resource(frame.reactive.resource, read),
-            transparencyAndComposition: self.resource(frame.transparency.resource, read),
-            output: self.resource(
+            color: resource(frame.color.resource, read),
+            depth: resource(frame.depth.resource, read),
+            motionVectors: resource(frame.motion.resource, read),
+            exposure: resource(frame.exposure.resource, read),
+            reactive: resource(frame.reactive.resource, read),
+            transparencyAndComposition: resource(frame.transparency.resource, read),
+            output: resource(
                 frame.output.resource,
                 FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
             ),

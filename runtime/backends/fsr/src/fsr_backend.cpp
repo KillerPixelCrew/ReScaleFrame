@@ -84,19 +84,13 @@ const rsf_fsr4_compat_lease* acquire_compatibility(void* module, const rsf_sr_op
         desc->log, desc->log_user);
 }
 
-void resource(void* texture, uint32_t state, FfxApiResource* out)
-{
-    *out = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(texture), state);
-}
-
 struct FsrOps {
     decltype(&load) load_library;
     decltype(&acquire_compatibility) acquire_compatibility;
     decltype(&rsf_fsr4_compat_release) release_compatibility;
-    decltype(&resource) describe_resource;
 };
-static_assert(sizeof(FsrOps) == 4 * sizeof(void*));
-constexpr FsrOps fsr_ops{load, acquire_compatibility, rsf_fsr4_compat_release, resource};
+static_assert(sizeof(FsrOps) == 3 * sizeof(void*));
+constexpr FsrOps fsr_ops{load, acquire_compatibility, rsf_fsr4_compat_release};
 
 } // namespace
 

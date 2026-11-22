@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use windows::{
+    Win32::Graphics::{Direct3D12::*, Dxgi::Common::*},
+    core::Interface,
+};
 
 #[path = "xess_abi.rs"]
 mod abi;
@@ -59,32 +63,55 @@ const QUALITIES: [i32; 6] = [
     XESS_QUALITY_SETTING_ULTRA_QUALITY,
 ];
 
-// Windows-specific COM operations and the configured runtime search.
-#[repr(C)]
-struct Ops {
-    load: Load,
-    create_mask: unsafe extern "C" fn(Raw, *const u32, *mut Raw) -> i32,
-    release_mask: unsafe extern "C" fn(Raw),
+fn zero_mask(device: Raw, [width, height]: Extent) -> Result<ID3D12Resource, i32> {
+    let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.ok_or(INVALID)?;
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        ..Default::default()
+    };
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Width: width.into(),
+        Height: height,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Format: DXGI_FORMAT_R8_UNORM,
+        ..Default::default()
+    };
+    let mut texture = None;
+    // Committed resources are zero-filled unless created with CREATE_NOT_ZEROED.
+    unsafe {
+        device.CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            None,
+            &mut texture,
+        )
+    }
+    .map_err(|_| INIT_FAILED)?;
+    texture.ok_or(INIT_FAILED)
 }
 
-const _: () = assert!(size_of::<Ops>() == 3 * size_of::<Raw>());
-
 pub(super) struct Owner {
-    ops: &'static Ops,
     sdk: Sdk,
     context: Raw,
-    zero_mask: Raw,
+    zero_mask: Option<ID3D12Resource>,
     auto_exposure: bool,
 }
 
 impl Owner {
-    fn open(desc: &Open, output: Extent, ops: &'static Ops) -> Result<(Backend, Version), i32> {
-        let sdk = Sdk::open(desc, ops.load)?;
+    fn open(desc: &Open, output: Extent, load: Load) -> Result<(Backend, Version), i32> {
+        let sdk = Sdk::open(desc, load)?;
         let mut owner = Self {
-            ops,
             sdk,
             context: null_mut(),
-            zero_mask: null_mut(),
+            zero_mask: None,
             auto_exposure: desc.auto_exposure != 0,
         };
         let mut version = xess_version_t::default();
@@ -111,10 +138,7 @@ impl Owner {
             return Err(INIT_FAILED);
         }
         // Responsive-mask mode requires a texture at every evaluation.
-        checked(unsafe { (ops.create_mask)(desc.device, output.as_ptr(), &mut owner.zero_mask) })?;
-        if owner.zero_mask.is_null() {
-            return Err(INIT_FAILED);
-        }
+        owner.zero_mask = Some(zero_mask(desc.device, output)?);
         let mut flags = XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
         flags |= if desc.auto_exposure != 0 {
             XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE
@@ -184,7 +208,7 @@ impl Owner {
             return FEATURE_FAILED;
         }
         let mask = if frame.reactive.resource.is_null() {
-            self.zero_mask
+            self.zero_mask.as_ref().unwrap().as_raw()
         } else {
             frame.reactive.resource
         };
@@ -217,9 +241,7 @@ impl Drop for Owner {
         if !self.context.is_null() {
             unsafe { (self.sdk.destroy)(self.context) };
         }
-        if !self.zero_mask.is_null() {
-            unsafe { (self.ops.release_mask)(self.zero_mask) };
-        }
+        drop(self.zero_mask.take());
     }
 }
 
@@ -227,7 +249,7 @@ impl Drop for Owner {
 unsafe extern "C" fn rsf_core_d3d12_sr_provider_xess_open(
     desc: &Open,
     out: *mut Raw,
-    ops: &'static Ops,
+    load: Load,
 ) -> i32 {
-    open_session(desc, out, |output| Owner::open(desc, output, ops))
+    open_session(desc, out, |output| Owner::open(desc, output, load))
 }

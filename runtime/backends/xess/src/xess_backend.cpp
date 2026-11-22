@@ -50,48 +50,17 @@ void* load(const rsf_sr_open_desc* desc)
     return rsf::load_runtime(*desc, L"libxess.dll");
 }
 
-rsf_backend_result create_mask(void* device, const uint32_t* extent, void** out)
-{
-    D3D12_HEAP_PROPERTIES heap{};
-    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC zero{};
-    zero.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    zero.Width = extent[0];
-    zero.Height = extent[1];
-    zero.DepthOrArraySize = zero.MipLevels = 1;
-    zero.SampleDesc.Count = 1;
-    zero.Format = DXGI_FORMAT_R8_UNORM;
-    ID3D12Resource* resource = nullptr;
-    // Committed resources are zero-filled unless created with CREATE_NOT_ZEROED.
-    const auto result = static_cast<ID3D12Device*>(device)->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE,
-        &zero, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&resource));
-    *out = resource;
-    return SUCCEEDED(result) ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
-}
-
-void release_mask(void* resource)
-{
-    static_cast<ID3D12Resource*>(resource)->Release();
-}
-
-struct XessOps {
-    decltype(&load) load_library;
-    decltype(&create_mask) allocate_mask;
-    decltype(&release_mask) free_mask;
-};
-static_assert(sizeof(XessOps) == 3 * sizeof(void*));
-constexpr XessOps xess_ops{load, create_mask, release_mask};
-
 } // namespace
 
-extern "C" rsf_backend_result rsf_core_d3d12_sr_provider_xess_open(const rsf_sr_open_desc*, void**, const XessOps*);
+extern "C" rsf_backend_result rsf_core_d3d12_sr_provider_xess_open(
+    const rsf_sr_open_desc*, void**, void* (*)(const rsf_sr_open_desc*));
 
 namespace {
 
 rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
 {
     const auto result = rsf::validate_open(desc, out);
-    return result == RSF_BACKEND_OK ? rsf_core_d3d12_sr_provider_xess_open(desc, out, &xess_ops) : result;
+    return result == RSF_BACKEND_OK ? rsf_core_d3d12_sr_provider_xess_open(desc, out, load) : result;
 }
 
 #else

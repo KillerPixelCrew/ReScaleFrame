@@ -10,6 +10,7 @@ use std::ptr::null_mut;
 
 #[path = "d3d12_sr/fsr_abi.rs"]
 pub(crate) mod ffx_abi;
+pub(super) mod ffx_resource;
 mod fsr;
 mod xess;
 
@@ -61,10 +62,6 @@ struct Session {
     output: Extent,
     version: Version,
     backend: Backend,
-}
-
-fn checked(result: i32) -> Result<(), i32> {
-    if result == OK { Ok(()) } else { Err(result) }
 }
 
 fn copy_bytes(out: &mut [c_char], source: &[u8]) {
