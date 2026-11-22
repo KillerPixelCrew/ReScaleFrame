@@ -17,34 +17,12 @@
 #include <intrin.h>
 #endif
 
-extern "C" bool rsf_skyrim_presentation_guard() noexcept;
-extern "C" bool rsf_skyrim_sampling_guard() noexcept;
 extern "C" bool rsf_skyrim_resolution_controls(uintptr_t) noexcept;
 
-extern "C" bool rsf_skyrim_render_allowed() noexcept {
-    return rsf::skyrim::compatibility_render_allowed();
-}
-
-extern "C" bool rsf_skyrim_matches_postprocess(const rsf_skyrim_cs_hdr_call* call) noexcept {
-    return rsf::skyrim::compatibility_postprocess_call(call->caller, reinterpret_cast<void*>(call->manager),
-        call->input, call->output, call->argument4, call->argument5);
-}
-
-extern "C" uint64_t rsf_skyrim_render_source() noexcept {
-    return rsf::skyrim::cpu_source();
-}
-
-extern "C" bool rsf_skyrim_render_identity(rsf_game_render_pass* pass) noexcept try {
-    return rsf::skyrim::cpu_render_identity(*pass);
+extern "C" bool rsf_skyrim_call_log(const rsf_game_host_services* host, const char* message) noexcept try {
+    if (host && host->log) host->log(host->user, message);
+    return true;
 } catch (...) { return false; }
-
-extern "C" bool rsf_skyrim_render_eligible() noexcept {
-    return rsf::skyrim::cpu_rendered_source_eligible();
-}
-
-extern "C" void rsf_skyrim_render_diagnostic(const char* stage, const rsf_game_render_pass* pass) noexcept try {
-    rsf::skyrim::cpu_render_diagnostic(stage, *pass);
-} catch (...) {}
 
 extern "C" bool rsf_skyrim_call_render_pass(const rsf_game_host_services* host, void* context,
     const rsf_game_render_pass* pass, uint32_t begin) noexcept try {
@@ -64,28 +42,19 @@ extern "C" void rsf_skyrim_call_render_config(const rsf_game_host_services* host
 } catch (...) { *config = {sizeof(*config)}; }
 
 namespace {
-using UpdateJitter = void (*)(void*);
-UpdateJitter original = nullptr;
-void* target = nullptr;
-// The matched game consumes three arguments. Carry the CS wrapper's two extra
-// machine arguments unchanged, including its fifth stack byte (not a bool read).
+// Keep CS's extra fourth argument and its fifth stack byte in the native signature.
 using ProcessMain = uintptr_t (*)(void*, uint32_t, uint32_t, uintptr_t, uint8_t);
-ProcessMain original_process = nullptr;
-void* process_target = nullptr;
-UpdateJitter original_resolution = nullptr;
-void* resolution_target = nullptr;
+using UpdateJitter = void (*)(void*);
 using RendererEnd = uintptr_t (*)();
-RendererEnd original_end = nullptr;
-void* end_target = nullptr;
 using UploadFrame = void (*)(void*, uint8_t);
-UploadFrame original_upload = nullptr;
-void* upload_target = nullptr;
 std::atomic<uint32_t> calls{0};
 using CreateHost = int32_t (*)(const rsf_d3d11_host_setup*, rsf_game_host_services*);
 using SetHostActive = int32_t (*)(void*, uint32_t);
-int accept_presentation_window(void*, void* window) noexcept
-{
-    return rsf_skyrim_render_accept_window(window) ? 1 : 0;
+
+enum ObserverIndex : uint32_t { jitter, process, resolution, end, upload, observer_count };
+
+template<class Function> Function continuation(ObserverIndex index) noexcept {
+    return reinterpret_cast<Function>(rsf_skyrim_observer_original(index));
 }
 
 uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5) noexcept
@@ -105,20 +74,20 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
     } restore;
     const rsf_skyrim_cs_hdr_call call{caller, uintptr_t(manager), argument4, input, output, argument5};
     rsf_skyrim_postprocess_prepare(&call, &restore.receipt);
-    return original_process(manager, input, output, argument4, argument5);
+    return continuation<ProcessMain>(process)(manager, input, output, argument4, argument5);
 }
 
 void observe_jitter(void* state) noexcept
 {
     calls.fetch_add(1, std::memory_order_acq_rel);
-    original(state);
+    continuation<UpdateJitter>(jitter)(state);
     rsf_skyrim_render_jitter_observed(uintptr_t(state));
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 void observe_resolution(void* state) noexcept {
     calls.fetch_add(1, std::memory_order_acq_rel);
-    if (!rsf_skyrim_resolution_controls(uintptr_t(state))) original_resolution(state);
+    if (!rsf_skyrim_resolution_controls(uintptr_t(state))) continuation<UpdateJitter>(resolution)(state);
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
@@ -127,7 +96,7 @@ uintptr_t observe_end() noexcept
     calls.fetch_add(1, std::memory_order_acq_rel);
     rsf_game_host_services host{};
     rsf_skyrim_render_end_enter(&host);
-    const auto result = original_end();
+    const auto result = continuation<RendererEnd>(end)();
     rsf_skyrim_render_end_leave(&host);
     calls.fetch_sub(1, std::memory_order_acq_rel);
     return result;
@@ -138,77 +107,35 @@ void observe_upload(void* renderer, uint8_t flags) noexcept
     calls.fetch_add(1, std::memory_order_acq_rel);
     rsf_skyrim_upload_observation observation{};
     const bool uploading = rsf_skyrim_render_upload_enter(uintptr_t(renderer), &observation);
-    original_upload(renderer, flags);
+    continuation<UploadFrame>(upload)(renderer, flags);
     if (uploading) rsf_skyrim_render_upload_leave(&observation, flags);
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
-int32_t admit_observers() noexcept
-{
-    rsf_skyrim_observer_targets sites{};
-    const auto result = rsf_skyrim_observer_admit(
-        []() noexcept -> int32_t { return rsf_skyrim_sampling_guard(); },
-        []() noexcept -> int32_t { return rsf_skyrim_presentation_guard(); }, &sites);
-    if (result == 1) {
-        target = sites.jitter;
-        process_target = sites.process;
-        resolution_target = sites.resolution;
-        end_target = sites.end;
-        upload_target = sites.upload;
-    }
-    return result;
-}
-
-struct ObserverHook {
-    void* const* address;
-    void* detour;
-    void** trampoline;
-};
-const ObserverHook& observer_hook(uint32_t index) noexcept
-{
-    static const ObserverHook hooks[]{
-        {&target, reinterpret_cast<void*>(&observe_jitter), reinterpret_cast<void**>(&original)},
-        {&process_target, reinterpret_cast<void*>(&observe_process), reinterpret_cast<void**>(&original_process)},
-        {&resolution_target, reinterpret_cast<void*>(&observe_resolution), reinterpret_cast<void**>(&original_resolution)},
-        {&end_target, reinterpret_cast<void*>(&observe_end), reinterpret_cast<void**>(&original_end)},
-        {&upload_target, reinterpret_cast<void*>(&observe_upload), reinterpret_cast<void**>(&original_upload)},
-    };
-    return hooks[index];
-}
-
 constexpr rsf_skyrim_observer_leaves observer_leaves{
     rsf_skyrim_observer_initialize,
-    [](uint32_t index) noexcept {
-        const auto& hook = observer_hook(index);
-        return rsf_skyrim_observer_create(*hook.address, hook.detour, hook.trampoline);
-    },
-    [](uint32_t index) noexcept {
-        const auto& hook = observer_hook(index);
-        return rsf_skyrim_observer_remove(*hook.address, hook.trampoline);
-    },
-    [](uint32_t index) noexcept { return rsf_skyrim_observer_enable(*observer_hook(index).address); },
-    [](uint32_t index) noexcept { return rsf_skyrim_observer_disable(*observer_hook(index).address); },
-    []() noexcept { return rsf_skyrim_observer_pin(reinterpret_cast<uintptr_t>(&observe_jitter)); },
+    rsf_skyrim_observer_create,
+    rsf_skyrim_observer_remove,
+    rsf_skyrim_observer_enable,
+    rsf_skyrim_observer_disable,
+    rsf_skyrim_observer_pin,
     [](const rsf_game_host_services* host, const char* message) noexcept {
-        if (host->log) try { host->log(host->user, message); } catch (...) {}
+        (void)rsf_skyrim_call_log(host, message);
     },
 };
 
 const rsf_skyrim_session_leaves session_leaves{
     sizeof(rsf_skyrim_session_leaves), RSF_SKYRIM_SESSION_LEAVES_VERSION,
     rsf::skyrim::creation_platform(), &observer_leaves,
-    admit_observers,
+    rsf_skyrim_observer_admit,
     []() noexcept { return calls.load(std::memory_order_acquire) != 0; },
-    rsf::skyrim::cpu_prepare,
-    rsf::skyrim::cpu_start,
+    rsf_skyrim_cpu_prepare,
+    rsf_skyrim_cpu_start,
     [](const char** refusal, bool arm) noexcept {
-        return rsf::skyrim::compatibility_checkpoint(*refusal, arm ? &rsf_skyrim_session_withdraw : nullptr);
+        return rsf_skyrim_cs_checkpoint(refusal, arm ? &rsf_skyrim_session_withdraw : nullptr);
     },
-    []() noexcept { return rsf::skyrim::compatibility_status(); },
-    [](const rsf_game_host_services* host, const char* message) noexcept {
-        try { if (host && host->log) host->log(host->user, message); return true; }
-        catch (...) { return false; }
-    },
+    rsf_skyrim_cs_status,
+    rsf_skyrim_call_log,
     [](uintptr_t create, const rsf_d3d11_host_setup* setup, rsf_game_host_services* services, int32_t* result) noexcept {
         try { *result = reinterpret_cast<CreateHost>(create)(setup, services); return true; }
         catch (...) { return false; }
@@ -217,8 +144,20 @@ const rsf_skyrim_session_leaves session_leaves{
         try { *result = reinterpret_cast<SetHostActive>(activate)(user, active); return true; }
         catch (...) { return false; }
     },
-    accept_presentation_window,
+    rsf_skyrim_render_accept_window,
 };
+}
+
+extern "C" void* rsf_skyrim_observer_detour(uint32_t index) noexcept
+{
+    static void* const detours[observer_count]{
+        reinterpret_cast<void*>(&observe_jitter),
+        reinterpret_cast<void*>(&observe_process),
+        reinterpret_cast<void*>(&observe_resolution),
+        reinterpret_cast<void*>(&observe_end),
+        reinterpret_cast<void*>(&observe_upload),
+    };
+    return index < observer_count ? detours[index] : nullptr;
 }
 
 extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(

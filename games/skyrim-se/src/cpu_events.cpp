@@ -1,198 +1,157 @@
 // SPDX-License-Identifier: MIT
 #include "cpu_events.h"
-#include "cpu_policy.h"
-#include "input_ownership.h"
-#include <windows.h>
-#include <atomic>
-#include <cstdio>
+#include "cpu_call.h"
+#include "screen_classification.h"
+
 #if defined(_MSC_VER)
 #include <intrin.h>
+#define RSF_SKYRIM_CALLER uintptr_t(_ReturnAddress())
+#else
+#define RSF_SKYRIM_CALLER uintptr_t(__builtin_return_address(0))
 #endif
 
-namespace rsf::skyrim {
+extern "C" void* rsf_skyrim_cpu_original(uint32_t) noexcept;
+extern "C" bool rsf_skyrim_cpu_tick_admissible() noexcept;
+extern "C" void rsf_skyrim_cpu_enter() noexcept;
+extern "C" void rsf_skyrim_cpu_leave() noexcept;
+extern "C" void rsf_skyrim_cpu_before(rsf_skyrim_cpu_hook, rsf_skyrim_cpu_call*, rsf_game_render_pass*) noexcept;
+extern "C" void rsf_skyrim_cpu_after(rsf_skyrim_cpu_hook, rsf_skyrim_cpu_call*, rsf_game_render_pass*,
+    uintptr_t, bool returned) noexcept;
+
+static_assert(sizeof(rsf_skyrim_cpu_call) == 344 && alignof(rsf_skyrim_cpu_call) == 8);
+static_assert(offsetof(rsf_skyrim_cpu_call, storage) == 24);
+static_assert(RSF_SKYRIM_CPU_HOOK_COUNT == 13);
+
 namespace {
-// Private Rust lifecycle boundary, mirrored in cpu_hooks.rs. The native wrappers below
-// preserve the fixture and session subsystem interfaces.
 struct CpuDetours {
     uint32_t struct_size, version;
-    const void* functions[13];
+    void* functions[RSF_SKYRIM_CPU_HOOK_COUNT];
 };
-struct CpuServices {
-    rsf_game_host_services host{};
-    uint64_t frequency{};
-};
-struct CpuStartRefusal {
-    const char* stage;
-    uint32_t rva;
-    int32_t status;
-};
-struct ManagerState {
-    uintptr_t manager{}, main{};
-    uint32_t requested{}, running{};
-    bool read() noexcept;
-};
-static_assert(sizeof(ManagerState) == 24);
-static_assert(sizeof(CpuDetours) == 8 + 13 * sizeof(void*));
-static_assert(sizeof(CpuServices) == sizeof(rsf_game_host_services) + 8 &&
-    offsetof(CpuServices, frequency) == sizeof(rsf_game_host_services));
-static_assert(sizeof(CpuStartRefusal) == 16);
-}
-extern "C" {
-bool rsf_skyrim_guarded_read(uintptr_t, void*, size_t) noexcept;
-bool rsf_skyrim_cpu_manager_state(ManagerState*) noexcept;
-bool rsf_skyrim_cpu_is_input_manager(uintptr_t) noexcept;
-bool rsf_skyrim_cpu_is_player_controls(uintptr_t) noexcept;
-bool rsf_skyrim_cpu_is_player(uintptr_t) noexcept;
-bool rsf_skyrim_cpu_is_player_camera(uintptr_t) noexcept;
-bool rsf_skyrim_cpu_camera_consumes(uintptr_t) noexcept;
-bool rsf_skyrim_cpu_queued_move(bool*) noexcept;
-bool rsf_skyrim_cpu_free_camera(bool*) noexcept;
-void* rsf_skyrim_cpu_original(uint32_t) noexcept;
-bool rsf_skyrim_cpu_rust_prepare(const CpuDetours*) noexcept;
-bool rsf_skyrim_cpu_rust_start(CpuStartRefusal*) noexcept;
-void rsf_skyrim_cpu_services(CpuServices*) noexcept;
-bool rsf_skyrim_cpu_active() noexcept;
-void rsf_skyrim_cpu_enter() noexcept;
-void rsf_skyrim_cpu_leave() noexcept;
-void rsf_skyrim_jobs_publish(JobTicket*, uintptr_t, uint64_t, uint64_t, bool) noexcept;
-void rsf_skyrim_jobs_snapshot(JobTicket*) noexcept;
-bool rsf_skyrim_jobs_matches(const JobTicket*) noexcept;
-bool rsf_skyrim_jobs_retire(const JobTicket*) noexcept;
-uint64_t rsf_skyrim_jobs_retired() noexcept;
-void rsf_skyrim_jobs_invalidate() noexcept;
-void rsf_skyrim_epochs_snapshot(InputStamp*) noexcept;
-void rsf_skyrim_epochs_begin_write() noexcept;
-void rsf_skyrim_epochs_end_write() noexcept;
-void rsf_skyrim_epochs_invalidate() noexcept;
-void rsf_skyrim_poll_begin(PollScope*, uintptr_t manager) noexcept;
-void rsf_skyrim_poll_end(const PollScope*, bool nested) noexcept;
-void rsf_skyrim_poll_record_kinds(PollScope*, uint32_t kinds) noexcept;
-void rsf_skyrim_poll_sink_produced(PollScope*) noexcept;
-bool rsf_skyrim_poll_provenance(CpuPollProvenance*, const PollScope*, const JobTicket*) noexcept;
-PollSample rsf_skyrim_poll_sample_status(const PollScope*, uint64_t source) noexcept;
-void rsf_skyrim_worker_bind(uint64_t source) noexcept;
-void rsf_skyrim_worker_release() noexcept;
-void rsf_skyrim_worker_intervening_poll() noexcept;
-void rsf_skyrim_worker_record_consumer(const InputStamp*, CpuConsumer) noexcept;
-void rsf_skyrim_worker_counts(WorkerCounts*) noexcept;
-void rsf_skyrim_sources_reserve(SourceReserve*, uint64_t source,
-    uint64_t predecessor, uint64_t session, uint64_t job_generation, uint64_t poll_generation) noexcept;
-bool rsf_skyrim_sources_still_reserved(uint64_t) noexcept;
-bool rsf_skyrim_sources_sample(uint64_t, bool, uint32_t) noexcept;
-uint64_t rsf_skyrim_sources_withdraw_pending(uint64_t) noexcept;
-void rsf_skyrim_sources_adopt(SourceReservation*, uint64_t, uint64_t) noexcept;
-bool rsf_skyrim_sources_bind(uint64_t, uint64_t) noexcept;
-void rsf_skyrim_sources_owned(SourceReservation*) noexcept;
-void rsf_skyrim_sources_release(SourceReservation*, uint64_t) noexcept;
-BindRefusal rsf_skyrim_bind_refusal(bool, bool, bool, bool) noexcept;
-}
+static_assert(sizeof(CpuDetours) == 8 + RSF_SKYRIM_CPU_HOOK_COUNT * sizeof(void*));
 
-bool ManagerState::read() noexcept { return rsf_skyrim_cpu_manager_state(this); }
+struct Scope {
+    rsf_skyrim_cpu_hook index;
+    rsf_skyrim_cpu_call call;
+    rsf_game_render_pass* pass;
+    uintptr_t result{};
+    bool returned{};
 
-static_assert(sizeof(CpuPollProvenance) == 32 && offsetof(CpuPollProvenance, poll_generation) == 24);
+    Scope(rsf_skyrim_cpu_hook index, uintptr_t owner = 0, uintptr_t argument = 0,
+        uintptr_t caller = 0, rsf_game_render_pass* pass = nullptr) noexcept
+        : index(index), call{owner, argument, caller, {}}, pass(pass)
+    {
+        rsf_skyrim_cpu_enter();
+        rsf_skyrim_cpu_before(index, &call, pass);
+    }
+    ~Scope()
+    {
+        rsf_skyrim_cpu_after(index, &call, pass, result, returned);
+        rsf_skyrim_cpu_leave();
+    }
+    Scope(const Scope&) = delete;
+    Scope& operator=(const Scope&) = delete;
 
-namespace {
-JobTicket current_job() noexcept {
-    JobTicket job{};
-    rsf_skyrim_jobs_snapshot(&job);
-    return job;
-}
-InputStamp completed_input() noexcept {
-    InputStamp stamp{};
-    rsf_skyrim_epochs_snapshot(&stamp);
-    return stamp;
-}
-SourceReservation release_source(uint64_t source) noexcept {
-    SourceReservation released{};
-    rsf_skyrim_sources_release(&released, source);
-    return released;
-}
-
-struct Frame {
-    CpuServices services{};
-    uint64_t source{};
-    rsf_skyrim_cpu_render_state render{};
-    rsf_skyrim_cpu_frame_input input{};
-    JobTicket jobs{};
-    void* main{};
-    SourceReservation reservation{}; // adopted at tick entry, if any
-    bool entry_readable{}, queued_move{}; // player queued-move gates read at tick entry
-    BindRefusal refusal{BindRefusal::none};
+    template<class T> T complete(T value) noexcept {
+        result = static_cast<uintptr_t>(value);
+        returned = true;
+        return value;
+    }
 };
-thread_local Frame* current{};
-std::atomic<uint32_t> poll_samples{};
-thread_local JobTicket named_poll_jobs{};
-thread_local PollScope* current_poll{};
-thread_local void* dispatched_list{};
-std::atomic<uint32_t> prospective_reports{};
-struct Entry {
-    Entry() noexcept { rsf_skyrim_cpu_enter(); }
-    ~Entry() { rsf_skyrim_cpu_leave(); }
-};
-CpuServices cpu_services() noexcept {
-    CpuServices result{};
-    rsf_skyrim_cpu_services(&result);
-    return result;
-}
-// Version 2 source lifetime fact. The runtime decides what, if anything, it means.
-void emit_source(const CpuServices& services, uint32_t stage, uint64_t source, uint64_t predecessor,
-    uint64_t generation, uint32_t flags, uint32_t kinds, uint32_t reason, uint64_t poll_begin = 0)
+
+template<class Function> Function continuation(rsf_skyrim_cpu_hook index) noexcept
 {
-    const auto& host = services.host;
-    if (!host.cpu_event || !source) return;
-    LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
-    rsf_game_cpu_source_event event{};
-    rsf_skyrim_cpu_source_event(&event, stage, host.session_id, source, uint64_t(now.QuadPart), services.frequency,
-        predecessor, generation, flags, kinds, reason, poll_begin);
-    try { host.cpu_event(host.user, &event.header); } catch (...) {}
+    return reinterpret_cast<Function>(rsf_skyrim_cpu_original(index));
 }
-void abort_source(const CpuServices& services, uint64_t source, uint32_t reason)
+
+short tick(void* main)
 {
-    emit_source(services, RSF_GAME_CPU_SOURCE_ABORT, source, 0, 0, 0, 0, reason);
+    const auto original = continuation<decltype(&tick)>(RSF_SKYRIM_CPU_TICK);
+    if (!rsf_skyrim_cpu_tick_admissible()) return original(main);
+    Scope scope{RSF_SKYRIM_CPU_TICK, uintptr_t(main)};
+    return scope.complete(original(main));
 }
-void emit(Frame& frame, uint32_t stage)
+
+// The native timestep is in XMM1.
+uintptr_t poll(void* manager, float timestep)
 {
-    if (!frame.services.host.cpu_event) return;
-    LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
-    rsf_game_cpu_event event{};
-    rsf_skyrim_cpu_frame_event(&event, &frame.render, stage, frame.services.host.session_id, frame.source,
-        uint64_t(now.QuadPart), frame.services.frequency);
-    try { frame.services.host.cpu_event(frame.services.host.user, &event); } catch (...) {}
+    const auto original = continuation<decltype(&poll)>(RSF_SKYRIM_CPU_POLL);
+    Scope scope{RSF_SKYRIM_CPU_POLL, uintptr_t(manager)};
+    return scope.complete(original(manager, timestep));
 }
-short tick(void*);
-// Native second argument is the device timestep in XMM1, not an unused register.
-uintptr_t poll(void*, float);
-uintptr_t render(void*);
-uintptr_t world(void*, uint32_t, uint8_t);
-int dispatch(void*, void*);
-uintptr_t controls(void*, void*, void*);
-uintptr_t camera_update(void*);
-uint32_t jobs_submit();
-uint32_t jobs_join();
-uintptr_t named_poll(void*);
-void movement(void*, float, void*, float*);
-uintptr_t player_update(void*, float);
-void player_camera_update(void*);
-// The order matches the Rust admission table. MinHook writes a disabled trampoline first;
-// a successful prepare pins these native detours, and stop leaves their continuations resident.
-enum HookIndex : uint32_t {
-    tick_hook,
-    poll_hook,
-    render_hook,
-    dispatch_hook,
-    world_hook,
-    controls_hook,
-    camera_update_hook,
-    jobs_submit_hook,
-    jobs_join_hook,
-    named_poll_hook,
-    movement_hook,
-    player_update_hook,
-    player_camera_update_hook,
-    hook_count
-};
-static_assert(hook_count == 13);
-const CpuDetours cpu_detours{sizeof(CpuDetours), 1, {
+
+uintptr_t render(void* main)
+{
+    rsf_game_render_pass pass{};
+    Scope scope{RSF_SKYRIM_CPU_RENDER, uintptr_t(main), 0, 0, &pass};
+    return scope.complete(continuation<decltype(&render)>(RSF_SKYRIM_CPU_RENDER)(main));
+}
+
+int dispatch(void* manager, void* list)
+{
+    Scope scope{RSF_SKYRIM_CPU_DISPATCH, uintptr_t(manager), uintptr_t(list)};
+    return scope.complete(continuation<decltype(&dispatch)>(RSF_SKYRIM_CPU_DISPATCH)(manager, list));
+}
+
+uintptr_t world(void* main, uint32_t output, uint8_t flags)
+{
+    rsf_game_render_pass pass{};
+    Scope scope{RSF_SKYRIM_CPU_WORLD, uintptr_t(main), output, RSF_SKYRIM_CALLER, &pass};
+    return scope.complete(continuation<decltype(&world)>(RSF_SKYRIM_CPU_WORLD)(main, output, flags));
+}
+
+uintptr_t controls(void* owner, void* list, void* source)
+{
+    Scope scope{RSF_SKYRIM_CPU_CONTROLS, uintptr_t(owner), uintptr_t(list)};
+    // The event-source pointer in R8 is forwarded unchanged.
+    return scope.complete(continuation<decltype(&controls)>(RSF_SKYRIM_CPU_CONTROLS)(owner, list, source));
+}
+
+uintptr_t camera_update(void* state)
+{
+    Scope scope{RSF_SKYRIM_CPU_CAMERA, uintptr_t(state)};
+    return scope.complete(continuation<decltype(&camera_update)>(RSF_SKYRIM_CPU_CAMERA)(state));
+}
+
+uint32_t jobs_submit()
+{
+    Scope scope{RSF_SKYRIM_CPU_SUBMIT, 0, 0, RSF_SKYRIM_CALLER};
+    return scope.complete(continuation<decltype(&jobs_submit)>(RSF_SKYRIM_CPU_SUBMIT)());
+}
+
+uint32_t jobs_join()
+{
+    Scope scope{RSF_SKYRIM_CPU_JOIN, 0, 0, RSF_SKYRIM_CALLER};
+    return scope.complete(continuation<decltype(&jobs_join)>(RSF_SKYRIM_CPU_JOIN)());
+}
+
+uintptr_t named_poll(void* data)
+{
+    Scope scope{RSF_SKYRIM_CPU_NAMED_POLL, 0, 0, RSF_SKYRIM_CALLER};
+    return scope.complete(continuation<decltype(&named_poll)>(RSF_SKYRIM_CPU_NAMED_POLL)(data));
+}
+
+void movement(void* actor, float timestep, void* argument, float* output)
+{
+    Scope scope{RSF_SKYRIM_CPU_MOVEMENT, uintptr_t(actor)};
+    continuation<decltype(&movement)>(RSF_SKYRIM_CPU_MOVEMENT)(actor, timestep, argument, output);
+    scope.complete(0);
+}
+
+uintptr_t player_update(void* actor, float timestep)
+{
+    Scope scope{RSF_SKYRIM_CPU_PLAYER_UPDATE, uintptr_t(actor)};
+    return scope.complete(continuation<decltype(&player_update)>(RSF_SKYRIM_CPU_PLAYER_UPDATE)(actor, timestep));
+}
+
+// TESCamera::Update forwards to the current state vfunc and has a void result.
+void player_camera_update(void* camera)
+{
+    Scope scope{RSF_SKYRIM_CPU_PLAYER_CAMERA, uintptr_t(camera)};
+    continuation<decltype(&player_camera_update)>(RSF_SKYRIM_CPU_PLAYER_CAMERA)(camera);
+    scope.complete(0);
+}
+
+const CpuDetours detours{sizeof(CpuDetours), 1, {
     reinterpret_cast<void*>(&tick),
     reinterpret_cast<void*>(&poll),
     reinterpret_cast<void*>(&render),
@@ -207,469 +166,29 @@ const CpuDetours cpu_detours{sizeof(CpuDetours), 1, {
     reinterpret_cast<void*>(&player_update),
     reinterpret_cast<void*>(&player_camera_update),
 }};
+}
 
-template<class Function> Function continuation(HookIndex index) noexcept {
-    return reinterpret_cast<Function>(rsf_skyrim_cpu_original(index));
-}
-uint32_t jobs_submit()
+extern "C" bool rsf_skyrim_cpu_rust_prepare(const CpuDetours*) noexcept;
+
+extern "C" bool rsf_skyrim_cpu_prepare() noexcept
 {
-    Entry lease;
-#if defined(_MSC_VER)
-    const auto caller = uintptr_t(_ReturnAddress());
-#else
-    const auto caller = uintptr_t(__builtin_return_address(0));
-#endif
-    const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    ManagerState before{};
-    JobTicket ticket{};
-    if (rsf_skyrim_cpu_active()) {
-        if (current && caller == base + 0x658b14 && before.read() && before.main == uintptr_t(current->main) &&
-            before.requested == 0 && before.running == 0) {
-            // Main reaches this call only on its normal-simulation branch (0x658aed..0x658b0f),
-            // after the pause/freeze decision and before any worker of this generation runs.
-            // Bind the adopted poll here only while its completed control state is unchanged and
-            // no consumer ran earlier in the tick: the pre-submit callees read no controls
-            // (prospective-source note), 0x743090 is refused through its queued-move gates, and
-            // hooked player/movement/camera consumers before this point refuse the bind. Later
-            // consumers are observed by the stamp counters, not assumed.
-            if (current->reservation.source) {
-                // 0x659ea0 runs next, at 0x658b17: free camera there bypasses the 0x745200 envelope.
-                bool free_camera{};
-                const bool camera_read = rsf_skyrim_cpu_free_camera(&free_camera);
-                current->refusal = rsf_skyrim_bind_refusal(current->entry_readable && camera_read, current->queued_move,
-                    current->input.player_update_calls || current->input.movement_calls ||
-                        current->input.camera_updates || current->input.player_camera_updates,
-                    free_camera);
-                const auto stamp = completed_input();
-                if (current->refusal != BindRefusal::none) {
-                    if (release_source(current->source).source) {
-                        abort_source(current->services, current->source, RSF_GAME_CPU_ABORT_NOT_CONSUMED);
-                    }
-                } else if (rsf_skyrim_sources_bind(current->source, stamp.generation)) {
-                    rsf_skyrim_worker_bind(current->source);
-                    emit_source(current->services, RSF_GAME_CPU_SOURCE_BIND, current->source, 0, 0, 0, 0, 0);
-                } else if (release_source(current->source).source) {
-                    abort_source(current->services, current->source, RSF_GAME_CPU_ABORT_STATE_CHANGED);
-                }
-            }
-            // This verified normal-simulation branch starts actor/player work even when
-            // prospective input ownership was refused. Report the engine fact independently.
-            emit(*current, RSF_GAME_CPU_SIMULATION_BEGIN);
-            // Original wakes the manager only after setting both native mode1 fields.
-            // Publish immutable scalars first so a newly awakened worker sees them.
-            rsf_skyrim_jobs_publish(&ticket, before.manager, current->source, current->services.host.session_id, true);
-            current->jobs = ticket;
-        } else if (current || current_job().generation) {
-            // Mid-tick activation has no owned source. Only a real outstanding ticket
-            // or a refused owned submit invalidates provenance.
-            rsf_skyrim_jobs_invalidate();
-        }
-    }
-    const auto result = continuation<uint32_t (*)()>(jobs_submit_hook)();
-    ManagerState after{};
-    if (ticket.generation && (!result || !after.read() || after.manager != before.manager ||
-        after.main != before.main || after.requested != 1 || after.running != 1)) rsf_skyrim_jobs_invalidate();
-    return result;
+    return rsf_skyrim_cpu_rust_prepare(&detours);
 }
-uint32_t jobs_join()
+
+extern "C" bool rsf_skyrim_query_menus(uintptr_t open_address, uintptr_t frozen_address, uintptr_t ui,
+    uintptr_t loading, uintptr_t main, rsf::skyrim::NativeScreenFacts* facts) noexcept try
 {
-    Entry lease;
-#if defined(_MSC_VER)
-    const auto caller = uintptr_t(_ReturnAddress());
-#else
-    const auto caller = uintptr_t(__builtin_return_address(0));
-#endif
-    const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    ManagerState before{};
-    const auto ticket = current ? current->jobs : JobTicket{};
-    const bool owns_wait = current && caller == base + 0x659334 && before.read() &&
-        before.main == uintptr_t(current->main) && before.manager == ticket.manager &&
-        before.requested <= 1 && before.running == 1 && rsf_skyrim_jobs_matches(&ticket);
-    const auto result = continuation<uint32_t (*)()>(jobs_join_hook)();
-    if (owns_wait) {
-        ManagerState after{};
-        if (result == WAIT_OBJECT_0 && after.read() && after.manager == before.manager &&
-            after.main == before.main && after.requested == 0 && after.running == 0) {
-            (void)rsf_skyrim_jobs_retire(&ticket);
-        } else rsf_skyrim_jobs_invalidate();
-    } else if (rsf_skyrim_cpu_active() && current_job().generation) rsf_skyrim_jobs_invalidate();
-    return result;
-}
-uintptr_t named_poll(void* data)
-{
-    Entry lease;
-#if defined(_MSC_VER)
-    const auto caller = uintptr_t(_ReturnAddress());
-#else
-    const auto caller = uintptr_t(__builtin_return_address(0));
-#endif
-    const auto previous = named_poll_jobs;
-    named_poll_jobs = {};
-    ManagerState native{};
-    const auto ticket = current_job();
-    if (rsf_skyrim_cpu_active() && caller == uintptr_t(GetModuleHandleW(nullptr)) + 0xebc248 &&
-        !previous.generation && native.read() &&
-        native.manager == ticket.manager && native.requested <= 1 && native.running == 1)
-        named_poll_jobs = ticket;
-    const auto result = continuation<uintptr_t (*)(void*)>(named_poll_hook)(data);
-    named_poll_jobs = previous;
-    return result;
-}
-bool query_menus(uintptr_t open_address, uintptr_t frozen_address, uintptr_t ui, uintptr_t loading_name,
-    uintptr_t main_name, NativeScreenFacts* facts) noexcept {
     const auto open = reinterpret_cast<bool (*)(void*, const void*)>(open_address);
     const auto frozen = reinterpret_cast<bool (*)(void*)>(frozen_address);
     auto* owner = reinterpret_cast<void*>(ui);
-    try {
-        facts->loading_menu = open(owner, reinterpret_cast<const void*>(loading_name));
-        facts->main_menu = open(owner, reinterpret_cast<const void*>(main_name));
-        facts->frozen_background = frozen(owner);
-        return true;
-    } catch (...) { return false; }
-}
-rsf_game_render_pass render_fact(uint32_t role) {
-    rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.role = role;
-    if (!current || !current->services.host.render_pass || !cpu_render_identity(pass)) return pass;
-    rsf_skyrim_cpu_render_fact(&pass, current->services.host.session_id);
-    return pass;
-}
-void report_render(const rsf_game_render_pass& pass, uint32_t begin) {
-    if (current && current->services.host.render_pass && pass.source_frame_id) {
-        try { current->services.host.render_pass(current->services.host.user, nullptr, &pass, begin); } catch (...) {}
-    }
-}
-uintptr_t world(void* main, uint32_t output, uint8_t flags) {
-    Entry lease;
-#if defined(_MSC_VER)
-    const auto caller = uintptr_t(_ReturnAddress());
-#else
-    const auto caller = uintptr_t(__builtin_return_address(0));
-#endif
-    auto pass = render_fact(RSF_GAME_RENDER_SUBMISSION);
-    const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    const bool primary = current && rsf_skyrim_cpu_begin_world(&current->render, &pass, base, caller, output);
-    if (primary) {
-        const auto screen = rsf_skyrim_cpu_screen(uintptr_t(main), true, query_menus);
-        rsf_skyrim_cpu_world_screen(&current->render, screen);
-        (void)cpu_render_identity(pass);
-        report_render(pass, 1);
-    }
-    const auto result = continuation<uintptr_t (*)(void*, uint32_t, uint8_t)>(world_hook)(main, output, flags);
-    if (primary) {
-        rsf_skyrim_cpu_end_world(&current->render);
-        (void)cpu_render_identity(pass);
-        report_render(pass, 0);
-    }
-    return result;
-}
-int dispatch(void* manager, void* list) {
-    Entry lease;
-    rsf_game_cpu_event event{};
-    rsf_game_host_services host{};
-    if (rsf_skyrim_cpu_active() && rsf_skyrim_cpu_is_input_manager(uintptr_t(manager))) {
-        if (const auto kinds = cpu_input_kinds(list)) {
-            const auto services = cpu_services();
-            host = services.host;
-            LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
-            rsf_skyrim_cpu_input_event(&event, host.session_id, kinds, uint64_t(now.QuadPart), services.frequency);
-        }
-    }
-    auto* previous_list = dispatched_list;
-    dispatched_list = current_poll && current_poll->manager == uintptr_t(manager) ? list : nullptr;
-    if (dispatched_list) rsf_skyrim_poll_record_kinds(current_poll, event.input_kind);
-    const auto result = continuation<int (*)(void*, void*)>(dispatch_hook)(manager, list);
-    dispatched_list = previous_list;
-    // Worker polling is not assigned the latest tick. The runtime owns any bounded
-    // association of this delivered input with an engine source and vendor policy.
-    if (event.input_kind && host.cpu_event) {
-        try { host.cpu_event(host.user, &event); } catch (...) {}
-    }
-    return result;
-}
-short tick(void* main)
-{
-    const auto original = continuation<short (*)(void*)>(tick_hook);
-    if (!rsf_skyrim_cpu_active() || current) return original(main);
-    Entry lease;
-    if (!rsf_skyrim_cpu_active()) return original(main);
-    Frame frame{}; frame.services = cpu_services(); frame.main = main;
-    // The previous generation's late poll becomes this tick's identity only when it was
-    // sampled with exclusive control state and its native job generation joined normally.
-    // Its actual input therefore predates this FRAME_BEGIN; binding still waits for the
-    // normal-simulation submit. Anything else is withdrawn before this frame begins.
-    rsf_skyrim_sources_adopt(&frame.reservation, frame.services.host.session_id, rsf_skyrim_jobs_retired());
-    if (frame.reservation.source) {
-        frame.source = frame.reservation.source;
-        // 0x743090 runs at 0x6588de, before the bind. It calls nothing unless player +0xBEC bit
-        // 0x40 (test at 0x7430ed) or byte +0x692 (0x74314e) is set; its queued-move path reaches
-        // camera update 0x7468b0 through 0x75ed50. Only 0xec1c40 and GetAsyncKeyState run between
-        // this read and those tests on this thread.
-        frame.entry_readable = rsf_skyrim_cpu_queued_move(&frame.queued_move);
-    } else {
-        if (const auto withdrawn = rsf_skyrim_sources_withdraw_pending(0))
-            abort_source(frame.services, withdrawn, RSF_GAME_CPU_ABORT_STATE_CHANGED);
-        frame.source = rsf_skyrim_cpu_next_source();
-    }
-    current = &frame;
-    emit(frame, RSF_GAME_CPU_FRAME_BEGIN);
-    const auto result = original(main);
-    if (frame.reservation.source) {
-        // An adopted, unbound reservation (paused/frozen tick) closes unbound with FRAME_END.
-        const auto owned = release_source(frame.source);
-        if (owned.phase == SourcePhase::bound) rsf_skyrim_worker_release();
-        const auto& facts = frame.reservation; // immutable adoption facts, including a refused bind
-        if (frame.services.host.log && prospective_reports.fetch_add(1) < 16) {
-            // PlayerCharacter update 0x745200 runs on this thread at 0x659f4d (via 0x659ea0, after
-            // the submit) and drives PlayerCamera/camera-state updates; movement runs on workers.
-            char message[560]{};
-            WorkerCounts worker{};
-            rsf_skyrim_worker_counts(&worker);
-            std::snprintf(message, sizeof(message),
-                "Skyrim prospective source=%llu predecessor=%llu poll_generation=%llu job_generation=%llu bound=%d refusal=%u kinds=0x%x main_player_update=%u main_camera=%u main_player_camera=%u main_movement=%u main_generation_match=%d main_ambiguous=%d worker_movement=%u worker_player_update=%u worker_camera=%u mismatched=%u; input timeline ownership diagnostics",
-                static_cast<unsigned long long>(frame.source), static_cast<unsigned long long>(facts.predecessor),
-                static_cast<unsigned long long>(facts.poll_generation), static_cast<unsigned long long>(facts.job_generation),
-                owned.phase == SourcePhase::bound, static_cast<unsigned>(frame.refusal), facts.kinds,
-                frame.input.player_update_calls, frame.input.camera_updates, frame.input.player_camera_updates,
-                frame.input.movement_calls, frame.input.consumed.generation == facts.poll_generation, frame.input.ambiguous,
-                worker.movement, worker.player_update, worker.camera, worker.mismatched);
-            try { frame.services.host.log(frame.services.host.user, message); } catch (...) {}
-        }
-    }
-    emit(frame, RSF_GAME_CPU_FRAME_END);
-    current = nullptr;
-    return result;
-}
-uintptr_t poll(void* manager, float timestep)
-{
-    Entry lease;
-    // All native poll paths remain intact, including the independent mode-2 loop.
-    PollScope scope{};
-    auto* previous_poll = current_poll;
-    rsf_skyrim_poll_begin(&scope, uintptr_t(manager));
-    current_poll = &scope;
-    const bool running = rsf_skyrim_cpu_active();
-    CpuPollProvenance provenance{};
-    const bool scheduled = running && cpu_poll_provenance(provenance);
-    const auto services = running ? cpu_services() : CpuServices{};
-    if (running && poll_samples.fetch_add(1) < 16 && services.host.log) {
-        char message[352]{};
-        std::snprintf(message, sizeof(message),
-            "Skyrim native poll thread=%lu scoped_source=%llu native_job_generation=%llu submitting_source=%llu poll_generation=%llu; submitting source is not input consumption",
-            GetCurrentThreadId(), static_cast<unsigned long long>(current ? current->source : 0),
-            static_cast<unsigned long long>(provenance.native_job_generation),
-            static_cast<unsigned long long>(provenance.submitting_source_frame_id),
-            static_cast<unsigned long long>(provenance.poll_generation));
-        try { services.host.log(services.host.user, message); } catch (...) {}
-    }
-    uint64_t reserved{};
-    if (running) {
-        if (scheduled) {
-            // The verified mode1 late poll of the submitting source's generation. Its consumer
-            // is a later tick; reserve that future identity before the unchanged native call.
-            const auto source = rsf_skyrim_cpu_next_source();
-            SourceReserve reservation{};
-            rsf_skyrim_sources_reserve(&reservation, source, provenance.submitting_source_frame_id,
-                provenance.session_id, provenance.native_job_generation, provenance.poll_generation);
-            if (reservation.withdrawn) abort_source(services, reservation.withdrawn,
-                reservation.overlap ? RSF_GAME_CPU_ABORT_OVERLAP : RSF_GAME_CPU_ABORT_INTERVENING_POLL);
-            if (reservation.reserved.source) {
-                reserved = source;
-                emit_source(services, RSF_GAME_CPU_SOURCE_RESERVE, source, provenance.submitting_source_frame_id,
-                    provenance.poll_generation, RSF_GAME_CPU_SOURCE_OVERLAPS_PREDECESSOR, 0, 0);
-                // Withdrawal can win between local reservation and the host callback.
-                // Repeat its terminal fact after RESERVE so the host cannot retain it open.
-                if (!rsf_skyrim_sources_still_reserved(source)) {
-                    abort_source(services, source, RSF_GAME_CPU_ABORT_STATE_CHANGED);
-                    reserved = 0;
-                }
-            }
-        } else {
-            // Mode2, paused main-thread, nested or unverified polls keep native behavior and
-            // replace the controls any pending reservation sampled.
-            if (const auto withdrawn = rsf_skyrim_sources_withdraw_pending(0))
-                abort_source(services, withdrawn, RSF_GAME_CPU_ABORT_INTERVENING_POLL);
-            rsf_skyrim_worker_intervening_poll();
-        }
-    }
-    // A scheduled late poll never samples the tick that happens to run it.
-    if (current && !scheduled && rsf_skyrim_cpu_sample_tick(&current->render)) {
-        emit(*current, RSF_GAME_CPU_INPUT_SAMPLE);
-    }
-    // The actual sample time: after the synchronous RESERVE callback (and anything the runtime
-    // does inside it) has returned, immediately before the unchanged native poll.
-    const auto original = continuation<uintptr_t (*)(void*, float)>(poll_hook);
-    LARGE_INTEGER poll_begin{};
-    if (reserved) QueryPerformanceCounter(&poll_begin);
-    const auto result = original(manager, timestep);
-    current_poll = previous_poll;
-    rsf_skyrim_poll_end(&scope, previous_poll != nullptr);
-    if (reserved) {
-        // Produced only when this exact poll left the completed, unchanged control state.
-        const auto sample = rsf_skyrim_poll_sample_status(&scope, reserved);
-        if (sample == PollSample::not_produced) {
-            abort_source(services, reserved, RSF_GAME_CPU_ABORT_NOT_PRODUCED);
-        } else if (sample == PollSample::ready) {
-            // Report before the adapter can adopt it, so the runtime never sees the frame first.
-            emit_source(services, RSF_GAME_CPU_SOURCE_SAMPLED, reserved, 0, scope.ticket.generation,
-                RSF_GAME_CPU_SOURCE_PRODUCED, scope.kinds, 0, uint64_t(poll_begin.QuadPart));
-            if (!rsf_skyrim_sources_sample(reserved, true, scope.kinds) && rsf_skyrim_sources_withdraw_pending(reserved))
-                abort_source(services, reserved, RSF_GAME_CPU_ABORT_STATE_CHANGED);
-        }
-    }
-    return result;
-}
-uintptr_t controls(void* owner, void* list, void* source)
-{
-    Entry lease;
-    // BSTEventSink also receives its event-source pointer in R8. Forward it even
-    // though this implementation does not read it in the matched executable.
-    rsf_skyrim_epochs_begin_write();
-    if (!current_poll || !list || list != dispatched_list) rsf_skyrim_epochs_invalidate();
-    const auto result = continuation<uintptr_t (*)(void*, void*, void*)>(controls_hook)(owner, list, source);
-    if (rsf_skyrim_cpu_active() && current_poll && list && list == dispatched_list &&
-        rsf_skyrim_cpu_is_player_controls(uintptr_t(owner))) rsf_skyrim_poll_sink_produced(current_poll);
-    rsf_skyrim_epochs_end_write();
-    return result;
-}
-void movement(void* actor, float timestep, void* argument, float* output)
-{
-    Entry lease;
-    const auto stamp = completed_input();
-    const bool player = rsf_skyrim_cpu_is_player(uintptr_t(actor));
-    continuation<void (*)(void*, float, void*, float*)>(movement_hook)(actor, timestep, argument, output);
-    if (rsf_skyrim_cpu_active() && player && rsf_skyrim_cpu_is_player(uintptr_t(actor))) {
-        if (current) rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::movement, true);
-        else rsf_skyrim_worker_record_consumer(&stamp, CpuConsumer::movement);
-    }
-}
-uintptr_t player_update(void* actor, float timestep)
-{
-    Entry lease;
-    const auto stamp = completed_input();
-    const bool player = rsf_skyrim_cpu_is_player(uintptr_t(actor));
-    const auto result = continuation<uintptr_t (*)(void*, float)>(player_update_hook)(actor, timestep);
-    if (rsf_skyrim_cpu_active() && player && rsf_skyrim_cpu_is_player(uintptr_t(actor))) {
-        if (current) rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::player_update, true);
-        else rsf_skyrim_worker_record_consumer(&stamp, CpuConsumer::player_update);
-    }
-    return result;
-}
-uintptr_t camera_update(void* state)
-{
-    Entry lease;
-    const auto stamp = completed_input();
-    const bool consumes = rsf_skyrim_cpu_camera_consumes(uintptr_t(state));
-    const auto result = continuation<uintptr_t (*)(void*)>(camera_update_hook)(state);
-    if (rsf_skyrim_cpu_active() && current) {
-        rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::camera, consumes);
-    } else if (rsf_skyrim_cpu_active() && consumes) {
-        rsf_skyrim_worker_record_consumer(&stamp, CpuConsumer::camera);
-    }
-    return result;
-}
-// TESCamera::Update(this) dispatches the current state vfunc at +0x18, with a void result.
-// Every PlayerCamera state update (first person, third person, furniture, free, load and
-// queued-move paths) runs through this TESCamera::Update with the PlayerCamera singleton.
-void player_camera_update(void* camera)
-{
-    Entry lease;
-    const auto stamp = completed_input();
-    const bool player_camera = rsf_skyrim_cpu_is_player_camera(uintptr_t(camera));
-    continuation<void (*)(void*)>(player_camera_update_hook)(camera);
-    if (rsf_skyrim_cpu_active() && current && player_camera)
-        rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::player_camera, true);
-}
-uintptr_t render(void* main)
-{
-    Entry lease;
-    struct Restore {
-        Frame* frame;
-        rsf_skyrim_cpu_render_receipt previous{};
-        ~Restore() { if (frame) rsf_skyrim_cpu_end_render(&frame->render, &previous); }
-    } restore{current};
-    if (current) {
-        const auto screen = rsf_skyrim_cpu_screen(uintptr_t(main), false, query_menus);
-        if (rsf_skyrim_cpu_begin_render(&current->render, screen, &restore.previous)) {
-            emit(*current, RSF_GAME_CPU_SIMULATION_END);
-        }
-    }
-    auto pass = render_fact(RSF_GAME_RENDER_FRAME);
-    report_render(pass, 1);
-    const auto result = continuation<uintptr_t (*)(void*)>(render_hook)(main);
-    if (current) (void)cpu_render_identity(pass);
-    report_render(pass, 0);
-    return result;
-}
-}
+    facts->loading_menu = open(owner, reinterpret_cast<const void*>(loading));
+    facts->main_menu = open(owner, reinterpret_cast<const void*>(main));
+    facts->frozen_background = frozen(owner);
+    return true;
+} catch (...) { return false; }
 
-bool cpu_prepare() noexcept
+extern "C" void rsf_skyrim_call_cpu_event(
+    const rsf_game_host_services* host, const rsf_game_cpu_event* event) noexcept try
 {
-    return rsf_skyrim_cpu_rust_prepare(&cpu_detours);
-}
-bool cpu_start() noexcept
-{
-    CpuStartRefusal refusal{};
-    if (rsf_skyrim_cpu_rust_start(&refusal)) return true;
-    const auto services = cpu_services();
-    if (services.host.log) {
-        char message[180]{};
-        std::snprintf(message, sizeof(message), "Skyrim CPU start refused: %s RVA=%X status=%d",
-            refusal.stage, refusal.rva, refusal.status);
-        services.host.log(services.host.user, message);
-    }
-    return false;
-}
-uint64_t cpu_source() { return current ? current->source : 0; }
-bool cpu_render_identity(rsf_game_render_pass& pass) {
-    return current && rsf_skyrim_cpu_render_identity(&current->render, &pass, current->source,
-        rsf_skyrim_cpu_active());
-}
-bool cpu_rendered_source_eligible() noexcept {
-    return current && rsf_skyrim_rendered_source_eligible(rsf_skyrim_cpu_active() && current->render.scope,
-        current->render.primary_world_entries, current->render.screen);
-}
-void cpu_render_diagnostic(const char* stage, const rsf_game_render_pass& pass) {
-    if (!current || !current->services.host.log || (current->source > 8 && current->source % 128 != 0)) return;
-    static std::atomic<uint32_t> reports{};
-    if (reports.fetch_add(1, std::memory_order_relaxed) >= 64) return;
-    const auto& frame = *current;
-    SourceReservation owned{};
-    rsf_skyrim_sources_owned(&owned);
-    char message[760]{};
-    std::snprintf(message, sizeof(message),
-        "Skyrim render producer stage=%s source=%llu cpu_source=%llu native=%llu scope=%llu cpu_scope=%llu flags=0x%x screen=%u cpu_screen=%u active=%u world_entries=%u eligible=%u render_entered=%u simulation_ended=%u primary_count=%u reservation=%llu owned_source=%llu owned_phase=%u bound=%u refusal=%u poll=%llu job=%llu entry_readable=%u queued_move=%u input_ambiguous=%u; diagnostic only",
-        stage, static_cast<unsigned long long>(pass.source_frame_id), static_cast<unsigned long long>(frame.source),
-        static_cast<unsigned long long>(pass.native_frame), static_cast<unsigned long long>(pass.scope_id),
-        static_cast<unsigned long long>(frame.render.scope), pass.flags, unsigned(pass.screen), unsigned(frame.render.screen),
-        unsigned(rsf_skyrim_cpu_active()), frame.render.primary_world_entries, unsigned(cpu_rendered_source_eligible()),
-        unsigned(frame.render.render_entered), unsigned(frame.render.simulation_ended), frame.render.primary_count,
-        static_cast<unsigned long long>(frame.reservation.source), static_cast<unsigned long long>(owned.source), unsigned(owned.phase),
-        unsigned(owned.source == frame.source && owned.phase == SourcePhase::bound), unsigned(frame.refusal),
-        static_cast<unsigned long long>(frame.reservation.poll_generation), static_cast<unsigned long long>(frame.reservation.job_generation),
-        unsigned(frame.entry_readable), unsigned(frame.queued_move), unsigned(frame.input.ambiguous));
-    try { frame.services.host.log(frame.services.host.user, message); } catch (...) {}
-}
-uint32_t cpu_input_kinds(const void* list) noexcept {
-    return rsf_skyrim_cpu_input_kinds(uintptr_t(list), rsf_skyrim_guarded_read);
-}
-bool cpu_input_consumption(CpuInputConsumption& result) noexcept {
-    result = {};
-    if (!rsf_skyrim_cpu_active() || !current ||
-        !rsf_skyrim_cpu_consumption_proven(&current->input)) return false;
-    result.source_frame_id = current->source;
-    result.poll_generation = current->input.consumed.generation;
-    result.camera_updates = current->input.camera_updates;
-    result.movement_calls = current->input.movement_calls;
-    result.player_update_calls = current->input.player_update_calls;
-    return true;
-}
-bool cpu_poll_provenance(CpuPollProvenance& result) noexcept {
-    result = {};
-    CpuPollProvenance proof{};
-    if (!rsf_skyrim_cpu_active() || !current_poll ||
-        !rsf_skyrim_poll_provenance(&proof, current_poll, &named_poll_jobs) ||
-        !rsf_skyrim_cpu_active()) return false;
-    result = proof;
-    return true;
-}
-}
+    if (host->cpu_event) host->cpu_event(host->user, event);
+} catch (...) {}

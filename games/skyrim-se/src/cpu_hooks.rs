@@ -112,6 +112,8 @@ const HOOKS: [(u32, [u8; 19]); 13] = [
     ), // player_camera_update
 ];
 
+const _: () = assert!(HOOKS.len() == crate::cpu_call_abi::RSF_SKYRIM_CPU_HOOK_COUNT as usize);
+
 const INDICES: std::ops::Range<usize> = 0..HOOKS.len();
 
 /// Static list of typed native detours, in the same order as HOOKS.
@@ -142,9 +144,9 @@ fn qpc_frequency() -> u64 {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-struct Services {
-    host: rsf_game_host_services,
-    frequency: u64,
+pub(crate) struct Services {
+    pub(crate) host: rsf_game_host_services,
+    pub(crate) frequency: u64,
 }
 
 // The SDK table borrows process services used by native CPU producer threads. Detours
@@ -152,10 +154,10 @@ struct Services {
 unsafe impl Send for Services {}
 
 #[repr(C)]
-struct StartRefusal {
-    stage: *const c_char,
-    rva: u32,
-    status: i32,
+pub(crate) struct StartRefusal {
+    pub(crate) stage: *const c_char,
+    pub(crate) rva: u32,
+    pub(crate) status: i32,
 }
 
 const _: () = {
@@ -238,7 +240,7 @@ impl Control {
     }
 
     fn prepare(&mut self, platform: &Platform, detours: &Detours) -> bool {
-        if rsf_skyrim_cpu_active() || rsf_skyrim_cpu_rust_busy() || !self.hooks.is_disabled() {
+        if active() || rsf_skyrim_cpu_rust_busy() || !self.hooks.is_disabled() {
             return false;
         }
         let base = platform.main_module();
@@ -284,7 +286,7 @@ impl Control {
     }
 
     fn start(&mut self, platform: &Platform) -> Result<(), StartRefusal> {
-        if rsf_skyrim_cpu_active() || rsf_skyrim_cpu_rust_busy() {
+        if active() || rsf_skyrim_cpu_rust_busy() {
             return Err(StartRefusal::new(c"active or entered", 0, 0));
         }
         // Disabled targets are the only ones whose live prologues can be checked.
@@ -359,23 +361,12 @@ pub(crate) extern "C" fn rsf_skyrim_cpu_rust_bind(host: &rsf_game_host_services)
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_rust_start(refusal: &mut StartRefusal) -> bool {
-    let Some(platform) = platform::get() else {
-        *refusal = StartRefusal::new(c"hook state", 0, 0);
-        return false;
-    };
-    match CONTROL
+pub(crate) fn start() -> Result<(), StartRefusal> {
+    let platform = platform::get().ok_or_else(|| StartRefusal::new(c"hook state", 0, 0))?;
+    CONTROL
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .start(platform)
-    {
-        Ok(()) => true,
-        Err(reason) => {
-            *refusal = reason;
-            false
-        }
-    }
 }
 
 #[unsafe(no_mangle)]
@@ -405,15 +396,11 @@ pub(crate) extern "C" fn rsf_skyrim_cpu_rust_stop() -> bool {
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_services(out: &mut Services) {
-    if let Some(services) = *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) {
-        *out = services;
-    }
+pub(crate) fn services() -> Option<Services> {
+    *SERVICES.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_active() -> bool {
+pub(crate) fn active() -> bool {
     PRODUCERS.load(Ordering::Acquire) & ACTIVE != 0
 }
 

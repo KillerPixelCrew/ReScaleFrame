@@ -6,10 +6,13 @@
 //! with Steam Present cooperation (`creation.rs`). Rust also owns the CPU hook lifecycle
 //! (`cpu_hooks.rs`), event records, scoped render facts (`cpu_policy.rs`), native job and poll proof,
 //! and prospective source transitions (`cpu_sources.rs`). Native code keeps typed detours,
-//! thread-local scopes, guarded reads and MinHook.
+//! return-address capture, guarded reads and foreign exception boundaries.
 mod auxiliary;
 mod camera;
 mod compatibility;
+#[allow(non_camel_case_types)]
+mod cpu_call_abi;
+mod cpu_events;
 mod cpu_hooks;
 mod cpu_native;
 mod cpu_policy;

@@ -25,7 +25,7 @@ bool rsf_skyrim_render_upload_enter(uintptr_t renderer, rsf_skyrim_upload_observ
 void rsf_skyrim_render_upload_leave(const rsf_skyrim_upload_observation*, uint8_t flags) RSF_SKYRIM_NOEXCEPT;
 void rsf_skyrim_render_jitter_observed(uintptr_t state) RSF_SKYRIM_NOEXCEPT;
 void rsf_skyrim_reset_render_observations(void) RSF_SKYRIM_NOEXCEPT;
-bool rsf_skyrim_render_accept_window(void* window) RSF_SKYRIM_NOEXCEPT;
+int rsf_skyrim_render_accept_window(void* user, void* window) RSF_SKYRIM_NOEXCEPT;
 #ifdef __cplusplus
 }
 #endif

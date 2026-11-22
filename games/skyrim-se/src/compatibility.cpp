@@ -8,74 +8,44 @@
 #endif
 
 extern "C" {
-using ProfileRead = bool (*)(uintptr_t, void*, size_t);
-using Withdraw = void (*)() noexcept;
 struct rsf_skyrim_cs_hdr_scope {
     rsf_skyrim_cs_hdr_call call;
     bool primary, active;
 };
-struct rsf_skyrim_cs_leaves {
-    ProfileRead read;
-    uint32_t (*initialize)(uintptr_t, const void*);
-    const void* resolver_detour;
-    uintptr_t initialize_detour;
-    const void* configure_detour;
-    const void* hdr_detour;
-};
-
-bool rsf_skyrim_cs_checkpoint(const rsf_skyrim_cs_leaves*, Withdraw, const char**) noexcept;
 uintptr_t rsf_skyrim_cs_original(uint32_t slot) noexcept;
-uintptr_t rsf_skyrim_cs_resolved(const rsf_skyrim_cs_leaves*, uintptr_t module, const char*, uintptr_t result) noexcept;
-bool rsf_skyrim_cs_initialize(const rsf_skyrim_cs_leaves*, const void*) noexcept;
+uintptr_t rsf_skyrim_cs_resolved(uintptr_t module, const char* name, uintptr_t result) noexcept;
 uintptr_t rsf_skyrim_cs_excluded_byte(uintptr_t feature) noexcept;
-bool rsf_skyrim_cs_render_allowed(const rsf_skyrim_cs_leaves*) noexcept;
-const char* rsf_skyrim_cs_status(const rsf_skyrim_cs_leaves*) noexcept;
 void rsf_skyrim_cs_hdr_enter(uintptr_t game, const rsf_skyrim_cs_hdr_call*, rsf_skyrim_cs_hdr_scope*) noexcept;
 void rsf_skyrim_cs_hdr_leave(const rsf_skyrim_cs_hdr_scope*) noexcept;
-bool rsf_skyrim_cs_postprocess_allowed(uintptr_t game, const rsf_skyrim_cs_hdr_call*, ProfileRead) noexcept;
 }
 
-static_assert(sizeof(wchar_t) == 2 && sizeof(rsf_skyrim_cs_leaves) == 48);
-static_assert(sizeof(rsf_skyrim_cs_hdr_scope) == 48);
+static_assert(sizeof(wchar_t) == 2 && sizeof(rsf_skyrim_cs_hdr_scope) == 48);
 static_assert(sizeof(IMAGE_DOS_HEADER) == 64 && offsetof(IMAGE_DOS_HEADER, e_lfanew) == 0x3c);
 static_assert(sizeof(IMAGE_NT_HEADERS64) == 264 && sizeof(IMAGE_OPTIONAL_HEADER64) == 240);
 static_assert(offsetof(IMAGE_NT_HEADERS64, OptionalHeader) == 24 &&
     offsetof(IMAGE_OPTIONAL_HEADER64, SizeOfImage) == 56);
 static_assert(sizeof(IMAGE_SECTION_HEADER) == 40 && offsetof(IMAGE_SECTION_HEADER, Characteristics) == 36);
 
-namespace rsf::skyrim {
-namespace {
-using Resolve = decltype(&GetProcAddress);
-using Initialize = bool (*)(const void*);
-using Configure = void (*)(void*, void*);
-using HdrProcess = void (*)(void*, uint32_t, uint32_t, uintptr_t, uint8_t);
-
-extern const rsf_skyrim_cs_leaves leaves;
-
-bool read(uintptr_t address, void* output, size_t size) noexcept
+extern "C" FARPROC WINAPI rsf_skyrim_cs_resolve(HMODULE module, LPCSTR name)
 {
-    SIZE_T count{};
-    return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address), output, size, &count) && count == size;
-}
-
-FARPROC WINAPI resolve(HMODULE module, LPCSTR name)
-{
-    const auto original = reinterpret_cast<Resolve>(rsf_skyrim_cs_original(0));
+    const auto original = reinterpret_cast<decltype(&GetProcAddress)>(rsf_skyrim_cs_original(0));
     if (!original) return nullptr;
     const auto found = original(module, name);
     const auto error = GetLastError();
-    const auto resolved = rsf_skyrim_cs_resolved(&leaves, uintptr_t(module), name, uintptr_t(found));
+    const auto resolved = rsf_skyrim_cs_resolved(uintptr_t(module), name, uintptr_t(found));
     SetLastError(error);
     return reinterpret_cast<FARPROC>(resolved);
 }
 
-bool initialize(const void* skse) noexcept
+extern "C" uint32_t rsf_skyrim_cs_call_initializer(uintptr_t original, const void* skse) noexcept try
 {
-    return rsf_skyrim_cs_initialize(&leaves, skse);
-}
+    using Initialize = bool (*)(const void*);
+    return original && reinterpret_cast<Initialize>(original)(skse) ? 1u : 0u;
+} catch (...) { return 2u; }
 
-void configure(void* feature, void* json)
+extern "C" void rsf_skyrim_cs_configure(void* feature, void* json)
 {
+    using Configure = void (*)(void*, void*);
     // The original keeps parsing and validating desired settings. The guarded byte affects only lifecycle participation.
     const auto original = reinterpret_cast<Configure>(rsf_skyrim_cs_original(1));
     struct Exclude {
@@ -85,8 +55,10 @@ void configure(void* feature, void* json)
     if (original) original(feature, json);
 }
 
-void hdr_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5)
+extern "C" void rsf_skyrim_cs_hdr_process(
+    void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5)
 {
+    using HdrProcess = void (*)(void*, uint32_t, uint32_t, uintptr_t, uint8_t);
 #if defined(_MSC_VER)
     const auto caller = uintptr_t(_ReturnAddress());
 #else
@@ -101,32 +73,4 @@ void hdr_process(void* manager, uint32_t input, uint32_t output, uintptr_t argum
     rsf_skyrim_cs_hdr_enter(uintptr_t(GetModuleHandleW(nullptr)), &call, &restore.saved);
     // Preserve CS's RedirectFramebuffer -> ProcessMain -> RestoreFramebuffer sequence.
     if (original) original(manager, input, output, argument4, argument5);
-}
-
-const rsf_skyrim_cs_leaves leaves{
-    read,
-    [](uintptr_t original, const void* skse) noexcept -> uint32_t {
-        try { return original && reinterpret_cast<Initialize>(original)(skse) ? 1u : 0u; } catch (...) { return 2u; }
-    },
-    reinterpret_cast<const void*>(&resolve),
-    reinterpret_cast<uintptr_t>(&initialize),
-    reinterpret_cast<const void*>(&configure),
-    reinterpret_cast<const void*>(&hdr_process),
-};
-}
-
-bool compatibility_checkpoint(const char*& refusal, void (*withdraw)() noexcept) noexcept
-{
-    return rsf_skyrim_cs_checkpoint(&leaves, withdraw, &refusal);
-}
-
-bool compatibility_render_allowed() noexcept { return rsf_skyrim_cs_render_allowed(&leaves); }
-const char* compatibility_status() noexcept { return rsf_skyrim_cs_status(&leaves); }
-
-bool compatibility_postprocess_call(uintptr_t caller, void* manager, uint32_t input, uint32_t output,
-    uintptr_t argument4, uint8_t argument5) noexcept
-{
-    const rsf_skyrim_cs_hdr_call call{caller, uintptr_t(manager), argument4, input, output, argument5};
-    return rsf_skyrim_cs_postprocess_allowed(uintptr_t(GetModuleHandleW(nullptr)), &call, read);
-}
 }

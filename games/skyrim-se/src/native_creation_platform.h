@@ -52,7 +52,7 @@ typedef struct rsf_skyrim_creation_platform {
     int32_t (*creation_begin)(uintptr_t service, void* user, rsf_d3d11_creation_scope* scope);
     int32_t (*creation_end)(uintptr_t service, void* user, const rsf_d3d11_creation_scope* scope,
         const rsf_d3d11_native_chain* outputs);
-    // The Community Shaders compatibility gate (compatibility.cpp).
+    // The Community Shaders compatibility gate (compatibility/initializer.rs).
     bool (*render_allowed)(void);
 } rsf_skyrim_creation_platform;
 

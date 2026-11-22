@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Skyrim's guarded pre-HDR reconstruction and temporary native TAA bypass.
 
-use crate::compatibility::HdrCall;
+use crate::compatibility::{HdrCall, matches_postprocess, render_allowed};
+use crate::cpu_events::render_source;
 use crate::layout::target_slot;
 use crate::platform::{self, Platform};
 use crate::render_inputs;
-use crate::render_native::{rsf_skyrim_render_allowed, thread};
+use crate::render_native::thread;
 use crate::session::{rsf_skyrim_session_accepting, rsf_skyrim_session_lease};
 use crate::taa;
 use rsf_game_sys::rsf_game_host_services;
@@ -25,11 +26,6 @@ struct TaaReceipt {
 const _: () = {
     assert!(size_of::<TaaReceipt>() == 24 && std::mem::offset_of!(TaaReceipt, enabled) == 16);
 };
-
-unsafe extern "C" {
-    fn rsf_skyrim_matches_postprocess(call: &HdrCall) -> bool;
-    fn rsf_skyrim_render_source() -> u64;
-}
 
 static OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
 
@@ -120,10 +116,10 @@ extern "C" fn rsf_skyrim_postprocess_prepare(call: &HdrCall, receipt: &mut TaaRe
     }
     let mut reconstructed = false;
     if rsf_skyrim_session_accepting()
-        && unsafe { rsf_skyrim_render_allowed() }
+        && render_allowed()
         && call.input == 1
         && call.output == 0
-        && unsafe { rsf_skyrim_matches_postprocess(call) }
+        && matches_postprocess(call)
     {
         let host = services();
         // Pre-mutation FG facts must reach the Runtime before SR can write these resources.
@@ -195,7 +191,7 @@ fn report_postprocess(
     let base = platform.main_module();
     let colour = describe_target(platform, base, call.input);
     let motion = describe_target(platform, base, 7);
-    let source = unsafe { rsf_skyrim_render_source() };
+    let source = render_source();
     platform.log_text(host, &format!(
         "Skyrim native post-process observation={number} source={source} thread={} manager=0x{:x} input={} output={}; {colour}; motion candidate {motion}",
         thread(), call.manager, call.input, call.output,

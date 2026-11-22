@@ -2,7 +2,7 @@
 //! Typed Windows graphics leases and the guarded native CPU and host callback boundary.
 
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_config, rsf_game_render_pass};
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::ptr::{self, NonNull};
 use winapi::Interface;
 use winapi::shared::dxgi::IDXGISwapChain;
@@ -12,10 +12,6 @@ use winapi::um::d3d11::{
 use winapi::um::unknwnbase::IUnknown;
 
 unsafe extern "C" {
-    pub(crate) fn rsf_skyrim_render_allowed() -> bool;
-    pub(crate) fn rsf_skyrim_render_identity(pass: &mut rsf_game_render_pass) -> bool;
-    pub(crate) fn rsf_skyrim_render_eligible() -> bool;
-    pub(crate) fn rsf_skyrim_render_diagnostic(stage: *const c_char, pass: &rsf_game_render_pass);
     pub(crate) fn rsf_skyrim_call_render_pass(
         host: &rsf_game_host_services,
         context: *mut c_void,

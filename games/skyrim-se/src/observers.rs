@@ -3,6 +3,8 @@
 //! owns the control record under its lock; native code keeps the typed MinHook trampolines.
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CString, c_char, c_void};
+use std::ptr;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::hook_set::HookSet;
 
@@ -105,46 +107,69 @@ impl Control {
     }
 }
 
-// These leaves bind the existing observer transaction to the same Rust MinHook owner as
-// cold creation and CPU hooks. The adapter supplies typed native detours and trampoline slots.
+// Admission and MinHook control run under the session lock. Trampolines are published
+// before enable and remain callable until a successful removal of a disabled hook.
+static TARGETS: [AtomicUsize; HOOKS.len()] = [const { AtomicUsize::new(0) }; HOOKS.len()];
+static ORIGINALS: [AtomicPtr<c_void>; HOOKS.len()] =
+    [const { AtomicPtr::new(ptr::null_mut()) }; HOOKS.len()];
+
+unsafe extern "C" {
+    fn rsf_skyrim_observer_detour(index: u32) -> *mut c_void;
+}
+
+pub(crate) fn bind_targets(targets: [usize; HOOKS.len()]) {
+    for (slot, target) in TARGETS.iter().zip(targets) {
+        slot.store(target, Ordering::Relaxed);
+    }
+}
+
+fn target(index: usize) -> *mut c_void {
+    ptr::with_exposed_provenance_mut(TARGETS[index].load(Ordering::Relaxed))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_observer_original(index: u32) -> *mut c_void {
+    ORIGINALS[index as usize].load(Ordering::Acquire)
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_observer_initialize() -> bool {
     rsf_windows::minhook::initialize()
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_observer_create(
-    target: *mut c_void,
-    detour: *mut c_void,
-    original: *mut *mut c_void,
-) -> bool {
-    unsafe { rsf_windows::minhook::create(target, detour, original) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_observer_remove(
-    target: *mut c_void,
-    original: &mut *mut c_void,
-) -> bool {
-    if !unsafe { rsf_windows::minhook::remove_idempotent(target) } {
+extern "C" fn rsf_skyrim_observer_create(index: u32) -> bool {
+    let detour = unsafe { rsf_skyrim_observer_detour(index) };
+    let mut original = ptr::null_mut();
+    if !unsafe { rsf_windows::minhook::create(target(index as usize), detour, &mut original) } {
         return false;
     }
-    *original = std::ptr::null_mut();
+    ORIGINALS[index as usize].store(original, Ordering::Release);
     true
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_observer_enable(target: *mut c_void) -> i32 {
-    unsafe { rsf_windows::minhook::enable_status(target) }
+extern "C" fn rsf_skyrim_observer_remove(index: u32) -> bool {
+    if !unsafe { rsf_windows::minhook::remove_idempotent(target(index as usize)) } {
+        return false;
+    }
+    ORIGINALS[index as usize].store(ptr::null_mut(), Ordering::Release);
+    true
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_observer_disable(target: *mut c_void) -> bool {
-    unsafe { rsf_windows::minhook::disable(target) }
+extern "C" fn rsf_skyrim_observer_enable(index: u32) -> i32 {
+    unsafe { rsf_windows::minhook::enable_status(target(index as usize)) }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observer_pin(address: usize) -> bool {
+extern "C" fn rsf_skyrim_observer_disable(index: u32) -> bool {
+    unsafe { rsf_windows::minhook::disable(target(index as usize)) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_observer_pin() -> bool {
+    let address = unsafe { rsf_skyrim_observer_detour(0) } as usize;
     crate::platform::get().is_some_and(|platform| platform.pin_module(address) != 0)
 }
 

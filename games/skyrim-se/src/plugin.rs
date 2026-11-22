@@ -7,7 +7,7 @@ use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detection, rsf_game_hooks_api, rsf_game_info, rsf_game_plugin_api,
     rsf_game_probe, rsf_result,
 };
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_char};
 
 pub(crate) const INVALID_ARGUMENT: rsf_result = -1;
 pub(crate) const ABI_MISMATCH: rsf_result = -2;
@@ -20,19 +20,6 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 const STATUS: &CStr =
     c"Experimental native-resolution SR; reduced-resolution SR, FG and latency remain incomplete.";
 
-#[repr(C)]
-struct ObserverTargets {
-    jitter: *mut c_void,
-    process: *mut c_void,
-    resolution: *mut c_void,
-    end: *mut c_void,
-    upload: *mut c_void,
-}
-
-const _: () = assert!(size_of::<ObserverTargets>() == 40);
-
-type Guard = unsafe extern "C" fn() -> i32;
-
 fn executable(path: &[u16]) -> bool {
     let leaf = path.rsplit(|&unit| unit == u16::from(b'\\')).next();
     leaf.is_some_and(|leaf| {
@@ -43,22 +30,12 @@ fn executable(path: &[u16]) -> bool {
     })
 }
 
+/// The public lifecycle serializes observer admission and installation.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_executable_sha256() -> *const c_char {
-    SHA256.as_ptr()
-}
-
-/// The callbacks are process-lived and `out` is null or writable for one record. The public
-/// lifecycle serializes admission.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_observer_admit(
-    sampling: Guard,
-    presentation_inputs: Guard,
-    out: *mut ObserverTargets,
-) -> i32 {
+extern "C" fn rsf_skyrim_observer_admit() -> i32 {
     let mut path = [0u16; 32_768];
     let length = platform::module_path(0, &mut path);
-    if out.is_null() || length == 0 || length >= path.len() || !executable(&path[..length]) {
+    if length == 0 || length >= path.len() || !executable(&path[..length]) {
         return 0;
     }
     let Some(platform) = platform::get() else {
@@ -75,11 +52,8 @@ unsafe extern "C" fn rsf_skyrim_observer_admit(
     {
         return 0;
     }
-    for guard in [sampling, presentation_inputs] {
-        let result = unsafe { guard() };
-        if result != 1 {
-            return result;
-        }
+    if !crate::sampling::sampling_guard() || !crate::presentation::presentation_guard() {
+        return 0;
     }
     if ![
         PROCESS,
@@ -95,15 +69,9 @@ unsafe extern "C" fn rsf_skyrim_observer_admit(
     {
         return 0;
     }
-    unsafe {
-        out.write(ObserverTargets {
-            jitter: base.wrapping_add(JITTER.rva) as *mut c_void,
-            process: base.wrapping_add(PROCESS.rva) as *mut c_void,
-            resolution: base.wrapping_add(RESOLUTION.rva) as *mut c_void,
-            end: base.wrapping_add(END.rva) as *mut c_void,
-            upload: base.wrapping_add(UPLOAD.rva) as *mut c_void,
-        })
-    };
+    crate::observers::bind_targets(
+        [JITTER, PROCESS, RESOLUTION, END, UPLOAD].map(|site| base.wrapping_add(site.rva)),
+    );
     1
 }
 

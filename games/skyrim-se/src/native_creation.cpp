@@ -8,6 +8,7 @@
 #include "native_creation_platform.h"
 #include "observer_platform.h"
 #include "compatibility.h"
+#include "cpu_events.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <cstddef>
@@ -65,7 +66,7 @@ const rsf_skyrim_creation_platform platform{
     rsf_skyrim_guarded_read,
     reinterpret_cast<const void*>(&create),
     [](const rsf_game_host_services* host, const char* message) noexcept {
-        if (host && host->log) try { host->log(host->user, message); } catch (...) {}
+        (void)rsf_skyrim_call_log(host, message);
     },
     [](uintptr_t service, void* user, rsf_d3d11_creation_scope* scope) noexcept {
         int32_t status = RSF_ERROR_NOT_READY;
@@ -78,7 +79,7 @@ const rsf_skyrim_creation_platform platform{
         try { status = reinterpret_cast<End>(service)(user, scope, outputs); } catch (...) {}
         return status;
     },
-    []() noexcept { return compatibility_render_allowed(); },
+    rsf_skyrim_cs_render_allowed,
 };
 }
 

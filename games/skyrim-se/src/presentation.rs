@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Pre-HDR identity, HUD-less handoff and matching window pass for Skyrim.
 
+use crate::cpu_events::{render_diagnostic, render_identity};
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
 use crate::render_hook::RenderHook;
-use crate::render_native::{
-    ComRef, rsf_skyrim_call_render_pass, rsf_skyrim_render_diagnostic, rsf_skyrim_render_identity,
-};
+use crate::render_native::{ComRef, rsf_skyrim_call_render_pass};
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_host_capture as Capture;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
@@ -210,7 +209,7 @@ pub(crate) fn identify(pass: &rsf_game_render_pass) {
     }
     if pass.source_frame_id != 0 {
         let mut current = empty_pass();
-        if !unsafe { rsf_skyrim_render_identity(&mut current) } || !same_source(&current, pass) {
+        if !render_identity(&mut current) || !same_source(&current, pass) {
             return;
         }
     }
@@ -290,8 +289,7 @@ fn use_buffer(
         return;
     }
     let mut current = empty_pass();
-    let same_scope =
-        unsafe { rsf_skyrim_render_identity(&mut current) } && same_source(&current, &scene.pass);
+    let same_scope = render_identity(&mut current) && same_source(&current, &scene.pass);
     if !after
         && same_scope
         && binding.host.render_pass.is_some()
@@ -321,7 +319,7 @@ fn use_buffer(
             context: context.clone(),
             _chain: chain.clone(),
         };
-        unsafe { rsf_skyrim_render_diagnostic(c"WINDOW".as_ptr(), &pass) };
+        render_diagnostic(c"WINDOW", &pass);
         let began = binding.render(context.as_raw().cast(), &pass, true);
         if !began {
             // The host callback can throw after opening its scope. Recover immediately,
@@ -393,8 +391,7 @@ pub(crate) fn finish() {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_guard() -> bool {
+pub(crate) fn presentation_guard() -> bool {
     let Some(platform) = platform::get() else {
         return false;
     };

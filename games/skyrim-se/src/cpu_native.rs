@@ -14,11 +14,12 @@ const PLAYER_CONTROLS: usize = 0x31a_5698;
 const PLAYER_CAMERA: usize = 0x31a_5478;
 
 #[repr(C)]
-struct ManagerState {
-    manager: usize,
-    main: usize,
-    requested: u32,
-    running: u32,
+#[derive(Default)]
+pub(crate) struct ManagerState {
+    pub(crate) manager: usize,
+    pub(crate) main: usize,
+    pub(crate) requested: u32,
+    pub(crate) running: u32,
 }
 
 const _: () = assert!(size_of::<ManagerState>() == 24);
@@ -47,8 +48,7 @@ fn byte(platform: &Platform, address: usize) -> Option<u8> {
     platform.read(address, &mut value).then_some(value[0])
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_manager_state(out: &mut ManagerState) -> bool {
+pub(crate) fn rsf_skyrim_cpu_manager_state(out: &mut ManagerState) -> bool {
     let Some(state) = platform::get().and_then(|p| ManagerState::read(p, p.main_module())) else {
         return false;
     };
@@ -70,28 +70,23 @@ fn matches_singleton(address: usize, offset: usize) -> bool {
     platform::get().is_some_and(|p| singleton(p, p.main_module(), offset) == Some(address))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_is_input_manager(address: usize) -> bool {
+pub(crate) fn rsf_skyrim_cpu_is_input_manager(address: usize) -> bool {
     matches_singleton(address, INPUT_MANAGER)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_is_player_controls(address: usize) -> bool {
+pub(crate) fn rsf_skyrim_cpu_is_player_controls(address: usize) -> bool {
     matches_singleton(address, PLAYER_CONTROLS)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_is_player(address: usize) -> bool {
+pub(crate) fn rsf_skyrim_cpu_is_player(address: usize) -> bool {
     matches_singleton(address, PLAYER)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_is_player_camera(address: usize) -> bool {
+pub(crate) fn rsf_skyrim_cpu_is_player_camera(address: usize) -> bool {
     matches_singleton(address, PLAYER_CAMERA)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_camera_consumes(address: usize) -> bool {
+pub(crate) fn rsf_skyrim_cpu_camera_consumes(address: usize) -> bool {
     platform::get().is_some_and(|p| address.checked_add(0xe0).and_then(|at| byte(p, at)) == Some(0))
 }
 
@@ -103,8 +98,7 @@ fn queued_move() -> Option<bool> {
     Some(flags & 0x40 != 0 || pending != 0)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_queued_move(queued: &mut bool) -> bool {
+pub(crate) fn rsf_skyrim_cpu_queued_move(queued: &mut bool) -> bool {
     let Some(value) = queued_move() else {
         return false;
     };
@@ -121,8 +115,7 @@ fn free_camera() -> Option<bool> {
     Some(state == free)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_free_camera(active: &mut bool) -> bool {
+pub(crate) fn rsf_skyrim_cpu_free_camera(active: &mut bool) -> bool {
     let Some(value) = free_camera() else {
         return false;
     };

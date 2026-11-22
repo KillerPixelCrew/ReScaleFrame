@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! Skyrim's pre-HDR SR and FG producers use the same native texture admission.
 
+use crate::cpu_events::{render_diagnostic, render_eligible, render_identity};
+
 use crate::auxiliary;
 use crate::camera::render::{RenderCamera, accept_sr, read_frame};
 use crate::layout::{NATIVE_FRAME, target_slot};
 use crate::platform::Platform;
 use crate::presentation::{begin_inputs, empty_pass, identify, same_source};
 use crate::render_native::{
-    ComRef, rsf_skyrim_call_render_pass, rsf_skyrim_call_upscale, rsf_skyrim_render_diagnostic,
-    rsf_skyrim_render_eligible, rsf_skyrim_render_identity, thread, viewport,
+    ComRef, rsf_skyrim_call_render_pass, rsf_skyrim_call_upscale, thread, viewport,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,
@@ -258,26 +259,26 @@ pub(crate) fn produce(
     let context = inputs.context.as_raw().cast();
     pass_identity(&mut pass, &view, host.session_id, fg);
     if fg {
-        if !unsafe { rsf_skyrim_render_identity(&mut pass) }
+        if !render_identity(&mut pass)
             || pass.source_frame_id == 0
             || pass.submission_id == 0
             || pass.scope_id == 0
         {
             return None;
         }
-        if !unsafe { rsf_skyrim_render_eligible() } || pass.screen != GAMEPLAY {
+        if !render_eligible() || pass.screen != GAMEPLAY {
             pass.flags |= RSF_GAME_RENDER_NO_FG;
         }
         bind_inputs(&mut pass, &view, &inputs);
         let mut current = empty_pass();
         if platform.read_u32(base + NATIVE_FRAME) != Some(view.frame)
-            || !unsafe { rsf_skyrim_render_identity(&mut current) }
+            || !render_identity(&mut current)
             || !same_source(&current, &pass)
         {
             return None;
         }
         // These are the pre-mutation inputs. The Runtime consumes them synchronously.
-        unsafe { rsf_skyrim_render_diagnostic(c"FG_INPUTS".as_ptr(), &pass) };
+        render_diagnostic(c"FG_INPUTS", &pass);
         if !unsafe {
             rsf_skyrim_call_render_pass(host, context, &pass, 1)
                 && rsf_skyrim_call_render_pass(host, context, &pass, 0)
@@ -291,7 +292,7 @@ pub(crate) fn produce(
     SCENE_THREAD.store(thread(), Ordering::Release);
     pass.flags |= RSF_GAME_RENDER_NO_FG;
     if host.render_pass.is_some() {
-        unsafe { rsf_skyrim_render_identity(&mut pass) };
+        render_identity(&mut pass);
     }
     pass.flags |= RSF_GAME_RENDER_NO_FG;
     bind_inputs(&mut pass, &view, &inputs);

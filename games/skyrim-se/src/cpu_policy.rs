@@ -55,7 +55,7 @@ static NEXT_RENDER_SCOPE: AtomicU64 = AtomicU64::new(1);
 
 #[repr(C)]
 #[derive(Default)]
-struct ScreenFacts {
+pub(crate) struct ScreenFacts {
     readable: bool,
     owned_main: bool,
     primary_world: bool,
@@ -69,27 +69,29 @@ struct ScreenFacts {
     parent_cell: bool,
 }
 
-/// `rsf_skyrim_cpu_render_state`, lent by the native Main tick on its own thread.
+/// Render facts collected during a Main tick.
 #[repr(C)]
-struct RenderState {
-    scope: u64,
-    screen: rsf_screen_class,
-    primary_world_entries: u32,
-    primary_count: u32,
-    render_entered: bool,
-    simulation_ended: bool,
-    sampled: bool,
+#[derive(Default)]
+pub(crate) struct RenderState {
+    pub(crate) scope: u64,
+    pub(crate) screen: rsf_screen_class,
+    pub(crate) primary_world_entries: u32,
+    pub(crate) primary_count: u32,
+    pub(crate) render_entered: bool,
+    pub(crate) simulation_ended: bool,
+    pub(crate) sampled: bool,
 }
 
-/// Native consumers lend the tick's input record after their original call returns.
+/// Observations from consumers during the current tick.
 #[repr(C)]
-struct FrameInput {
-    consumed: Stamp,
-    camera_updates: u32,
-    movement_calls: u32,
-    player_update_calls: u32,
-    player_camera_updates: u32,
-    ambiguous: bool,
+#[derive(Default)]
+pub(crate) struct FrameInput {
+    pub(crate) consumed: Stamp,
+    pub(crate) camera_updates: u32,
+    pub(crate) movement_calls: u32,
+    pub(crate) player_update_calls: u32,
+    pub(crate) player_camera_updates: u32,
+    pub(crate) ambiguous: bool,
 }
 
 const _: () = {
@@ -168,8 +170,7 @@ mod tests {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_record_consumer(
+pub(crate) fn rsf_skyrim_cpu_record_consumer(
     state: &mut FrameInput,
     stamp: &Stamp,
     consumer: Consumer,
@@ -194,18 +195,11 @@ extern "C" fn rsf_skyrim_cpu_record_consumer(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_consumption_proven(state: &FrameInput) -> bool {
-    !state.ambiguous && state.camera_updates != 0 && cpu_sources::unchanged(state.consumed)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_next_source() -> u64 {
+pub(crate) fn rsf_skyrim_cpu_next_source() -> u64 {
     NEXT_SOURCE.fetch_add(1, Ordering::SeqCst)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_classify_screen(facts: &ScreenFacts) -> rsf_screen_class {
+fn rsf_skyrim_classify_screen(facts: &ScreenFacts) -> rsf_screen_class {
     if !facts.readable || !facts.owned_main {
         return SCREEN_UNKNOWN;
     }
@@ -226,8 +220,7 @@ extern "C" fn rsf_skyrim_classify_screen(facts: &ScreenFacts) -> rsf_screen_clas
     SCREEN_GAMEPLAY
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_rendered_source_eligible(
+pub(crate) fn rsf_skyrim_rendered_source_eligible(
     active_scope: bool,
     primary_world_entries: u32,
     screen: rsf_screen_class,
@@ -294,8 +287,7 @@ pub(crate) fn bad_screen_query(platform: &Platform, base: usize) -> u32 {
         .map_or(0, |(rva, _)| *rva as u32)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_screen(
+pub(crate) fn rsf_skyrim_cpu_screen(
     main: usize,
     primary: bool,
     menus: MenuQueries,
@@ -335,13 +327,12 @@ extern "C" fn rsf_skyrim_cpu_screen(
 
 #[repr(C)]
 #[derive(Default)]
-struct RenderReceipt {
-    scope: u64,
-    screen: rsf_screen_class,
+pub(crate) struct RenderReceipt {
+    pub(crate) scope: u64,
+    pub(crate) screen: rsf_screen_class,
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_begin_render(
+pub(crate) fn rsf_skyrim_cpu_begin_render(
     state: &mut RenderState,
     screen: rsf_screen_class,
     previous: &mut RenderReceipt,
@@ -356,14 +347,12 @@ extern "C" fn rsf_skyrim_cpu_begin_render(
     !std::mem::replace(&mut state.simulation_ended, true)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_end_render(state: &mut RenderState, previous: &RenderReceipt) {
+pub(crate) fn rsf_skyrim_cpu_end_render(state: &mut RenderState, previous: &RenderReceipt) {
     state.scope = previous.scope;
     state.screen = previous.screen;
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_begin_world(
+pub(crate) fn rsf_skyrim_cpu_begin_world(
     state: &mut RenderState,
     pass: &rsf_game_render_pass,
     base: usize,
@@ -382,8 +371,7 @@ extern "C" fn rsf_skyrim_cpu_begin_world(
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_world_screen(state: &mut RenderState, screen: rsf_screen_class) {
+pub(crate) fn rsf_skyrim_cpu_world_screen(state: &mut RenderState, screen: rsf_screen_class) {
     state.screen = if state.primary_world_entries == 1 {
         screen
     } else {
@@ -391,13 +379,11 @@ extern "C" fn rsf_skyrim_cpu_world_screen(state: &mut RenderState, screen: rsf_s
     };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_end_world(state: &mut RenderState) {
+pub(crate) fn rsf_skyrim_cpu_end_world(state: &mut RenderState) {
     state.primary_count = state.primary_count.wrapping_add(1);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_render_identity(
+pub(crate) fn rsf_skyrim_cpu_render_identity(
     state: &RenderState,
     pass: &mut rsf_game_render_pass,
     source: u64,
@@ -417,8 +403,7 @@ extern "C" fn rsf_skyrim_cpu_render_identity(
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_render_fact(pass: &mut rsf_game_render_pass, session: u64) {
+pub(crate) fn rsf_skyrim_cpu_render_fact(pass: &mut rsf_game_render_pass, session: u64) {
     let Some(platform) = platform::get() else {
         return;
     };
@@ -449,8 +434,7 @@ extern "C" fn rsf_skyrim_cpu_render_fact(pass: &mut rsf_game_render_pass, sessio
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_sample_tick(state: &mut RenderState) -> bool {
+pub(crate) fn rsf_skyrim_cpu_sample_tick(state: &mut RenderState) -> bool {
     !std::mem::replace(&mut state.sampled, true)
 }
 
@@ -476,8 +460,8 @@ fn cpu_event(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_frame_event(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rsf_skyrim_cpu_frame_event(
     out: &mut rsf_game_cpu_event,
     state: &RenderState,
     stage: u32,
@@ -497,8 +481,8 @@ extern "C" fn rsf_skyrim_cpu_frame_event(
     };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_source_event(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rsf_skyrim_cpu_source_event(
     out: &mut rsf_game_cpu_source_event,
     stage: u32,
     session: u64,
@@ -528,8 +512,7 @@ extern "C" fn rsf_skyrim_cpu_source_event(
     };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_input_event(
+pub(crate) fn rsf_skyrim_cpu_input_event(
     out: &mut rsf_game_cpu_event,
     session: u64,
     kinds: u32,
@@ -556,8 +539,7 @@ struct NativeInputEvent {
 
 const _: () = assert!(size_of::<NativeInputEvent>() == 0x18);
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_input_kinds(list: usize, read: ReadNative) -> u32 {
+pub(crate) fn rsf_skyrim_cpu_input_kinds(list: usize, read: ReadNative) -> u32 {
     let mut next = 0usize;
     if list == 0
         || !unsafe {

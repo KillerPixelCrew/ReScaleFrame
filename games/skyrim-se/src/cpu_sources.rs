@@ -7,11 +7,11 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct JobTicket {
-    generation: u64,
-    source: u64,
-    session: u64,
-    manager: usize,
+pub(crate) struct JobTicket {
+    pub(crate) generation: u64,
+    pub(crate) source: u64,
+    pub(crate) session: u64,
+    pub(crate) manager: usize,
 }
 
 struct NativeJobs {
@@ -21,6 +21,15 @@ struct NativeJobs {
     session: AtomicU64,
     retired: AtomicU64,
     manager: AtomicUsize,
+}
+
+impl JobTicket {
+    pub(crate) const EMPTY: Self = Self {
+        generation: 0,
+        source: 0,
+        session: 0,
+        manager: 0,
+    };
 }
 
 impl NativeJobs {
@@ -135,9 +144,9 @@ pub(crate) struct Stamp {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
-struct PollTicket {
-    generation: u64,
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PollTicket {
+    pub(crate) generation: u64,
     conflicts: u64,
     exclusive: bool,
 }
@@ -258,8 +267,7 @@ impl InputEpochs {
 static JOBS: NativeJobs = NativeJobs::new();
 static EPOCHS: InputEpochs = InputEpochs::new();
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_jobs_publish(
+pub(crate) fn rsf_skyrim_jobs_publish(
     out: &mut JobTicket,
     manager: usize,
     source: u64,
@@ -269,48 +277,39 @@ extern "C" fn rsf_skyrim_jobs_publish(
     *out = JOBS.publish(manager, source, session, native_idle);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_jobs_snapshot(out: &mut JobTicket) {
+pub(crate) fn rsf_skyrim_jobs_snapshot(out: &mut JobTicket) {
     *out = JOBS.snapshot();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_jobs_matches(ticket: &JobTicket) -> bool {
+pub(crate) fn rsf_skyrim_jobs_matches(ticket: &JobTicket) -> bool {
     JOBS.matches(*ticket)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_jobs_retire(ticket: &JobTicket) -> bool {
+pub(crate) fn rsf_skyrim_jobs_retire(ticket: &JobTicket) -> bool {
     JOBS.retire(*ticket)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_jobs_retired() -> u64 {
+pub(crate) fn rsf_skyrim_jobs_retired() -> u64 {
     JOBS.retired.load(SeqCst)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_jobs_invalidate() {
+pub(crate) fn rsf_skyrim_jobs_invalidate() {
     JOBS.invalidate();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_epochs_snapshot(out: &mut Stamp) {
+pub(crate) fn rsf_skyrim_epochs_snapshot(out: &mut Stamp) {
     *out = EPOCHS.snapshot();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_epochs_begin_write() {
+pub(crate) fn rsf_skyrim_epochs_begin_write() {
     EPOCHS.begin_write();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_epochs_end_write() {
+pub(crate) fn rsf_skyrim_epochs_end_write() {
     EPOCHS.end_write();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_epochs_invalidate() {
+pub(crate) fn rsf_skyrim_epochs_invalidate() {
     EPOCHS.invalidate();
 }
 
@@ -320,7 +319,6 @@ pub(crate) fn unchanged(stamp: Stamp) -> bool {
 
 #[repr(u32)]
 #[derive(Clone, Copy)]
-#[allow(dead_code)] // The native consumer detours supply the variants.
 pub(crate) enum Consumer {
     Movement,
     PlayerUpdate,
@@ -329,24 +327,24 @@ pub(crate) enum Consumer {
 }
 
 #[repr(C)]
-struct PollScope {
-    ticket: PollTicket,
-    manager: usize,
-    produced: bool,
-    kinds: u32,
+#[derive(Default)]
+pub(crate) struct PollScope {
+    pub(crate) ticket: PollTicket,
+    pub(crate) manager: usize,
+    pub(crate) produced: bool,
+    pub(crate) kinds: u32,
 }
 
 #[repr(C)]
 #[derive(Default)]
-struct PollProvenance {
-    session: u64,
-    job_generation: u64,
-    submitting_source: u64,
-    poll_generation: u64,
+pub(crate) struct PollProvenance {
+    pub(crate) session: u64,
+    pub(crate) job_generation: u64,
+    pub(crate) submitting_source: u64,
+    pub(crate) poll_generation: u64,
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_poll_begin(scope: &mut PollScope, manager: usize) {
+pub(crate) fn rsf_skyrim_poll_begin(scope: &mut PollScope, manager: usize) {
     *scope = PollScope {
         ticket: EPOCHS.begin_poll(),
         manager,
@@ -355,23 +353,19 @@ extern "C" fn rsf_skyrim_poll_begin(scope: &mut PollScope, manager: usize) {
     };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_poll_end(scope: &PollScope, nested: bool) {
+pub(crate) fn rsf_skyrim_poll_end(scope: &PollScope, nested: bool) {
     EPOCHS.end_poll(scope.ticket, scope.produced && !nested);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_poll_record_kinds(scope: &mut PollScope, kinds: u32) {
+pub(crate) fn rsf_skyrim_poll_record_kinds(scope: &mut PollScope, kinds: u32) {
     scope.kinds |= kinds;
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_poll_sink_produced(scope: &mut PollScope) {
+pub(crate) fn rsf_skyrim_poll_sink_produced(scope: &mut PollScope) {
     scope.produced = true;
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_poll_provenance(
+pub(crate) fn rsf_skyrim_poll_provenance(
     out: &mut PollProvenance,
     scope: &PollScope,
     ticket: &JobTicket,
@@ -409,7 +403,7 @@ const _: () = {
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Phase {
+pub(crate) enum Phase {
     None,
     Polling,
     Sampled,
@@ -419,19 +413,19 @@ enum Phase {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Reservation {
-    source: u64,
-    predecessor: u64,
-    session: u64,
-    job_generation: u64,
-    poll_generation: u64,
-    phase: Phase,
-    produced: bool,
-    kinds: u32,
+pub(crate) struct Reservation {
+    pub(crate) source: u64,
+    pub(crate) predecessor: u64,
+    pub(crate) session: u64,
+    pub(crate) job_generation: u64,
+    pub(crate) poll_generation: u64,
+    pub(crate) phase: Phase,
+    pub(crate) produced: bool,
+    pub(crate) kinds: u32,
 }
 
 impl Reservation {
-    const EMPTY: Self = Self {
+    pub(crate) const EMPTY: Self = Self {
         source: 0,
         predecessor: 0,
         session: 0,
@@ -448,10 +442,10 @@ impl Reservation {
 }
 
 #[repr(C)]
-struct Reserve {
-    reserved: Reservation,
-    withdrawn: u64,
-    overlap: bool,
+pub(crate) struct Reserve {
+    pub(crate) reserved: Reservation,
+    pub(crate) withdrawn: u64,
+    pub(crate) overlap: bool,
 }
 
 struct Sources {
@@ -551,14 +545,13 @@ fn lock_store(store: &Store) -> MutexGuard<'_, Sources> {
 }
 
 #[repr(u32)]
-enum PollSample {
+pub(crate) enum PollSample {
     None,
     NotProduced,
     Ready,
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_poll_sample_status(scope: &PollScope, source: u64) -> PollSample {
+pub(crate) fn rsf_skyrim_poll_sample_status(scope: &PollScope, source: u64) -> PollSample {
     // Finish an exclusive poll first. Report SAMPLED only for the exact completed
     // generation, and leave it unadoptable until the native host call returns.
     if EPOCHS.snapshot().generation != scope.ticket.generation {
@@ -581,8 +574,7 @@ const _: () = {
     assert!(size_of::<Reserve>() == 72);
 };
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sources_reserve(
+pub(crate) fn rsf_skyrim_sources_reserve(
     out: &mut Reserve,
     source: u64,
     predecessor: u64,
@@ -601,38 +593,31 @@ extern "C" fn rsf_skyrim_sources_reserve(
     });
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sources_still_reserved(source: u64) -> bool {
+pub(crate) fn rsf_skyrim_sources_still_reserved(source: u64) -> bool {
     lock_store(&PRODUCTION).pending.polling(source)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sources_sample(source: u64, produced: bool, kinds: u32) -> bool {
+pub(crate) fn rsf_skyrim_sources_sample(source: u64, produced: bool, kinds: u32) -> bool {
     lock_store(&PRODUCTION).sample(source, produced, kinds)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sources_withdraw_pending(only: u64) -> u64 {
+pub(crate) fn rsf_skyrim_sources_withdraw_pending(only: u64) -> u64 {
     lock_store(&PRODUCTION).withdraw_pending(only)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sources_adopt(out: &mut Reservation, session: u64, joined: u64) {
+pub(crate) fn rsf_skyrim_sources_adopt(out: &mut Reservation, session: u64, joined: u64) {
     *out = lock_store(&PRODUCTION).adopt(session, joined);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sources_bind(source: u64, completed: u64) -> bool {
+pub(crate) fn rsf_skyrim_sources_bind(source: u64, completed: u64) -> bool {
     lock_store(&PRODUCTION).bind(source, completed)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sources_owned(out: &mut Reservation) {
+pub(crate) fn rsf_skyrim_sources_owned(out: &mut Reservation) {
     *out = lock_store(&PRODUCTION).owned;
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sources_release(out: &mut Reservation, source: u64) {
+pub(crate) fn rsf_skyrim_sources_release(out: &mut Reservation, source: u64) {
     *out = lock_store(&PRODUCTION).release(source);
 }
 
@@ -655,17 +640,17 @@ static WORKERS: WorkerConsumption = WorkerConsumption {
 };
 
 #[repr(C)]
-struct WorkerCounts {
-    movement: u32,
-    player_update: u32,
-    camera: u32,
-    mismatched: u32,
+#[derive(Default)]
+pub(crate) struct WorkerCounts {
+    pub(crate) movement: u32,
+    pub(crate) player_update: u32,
+    pub(crate) camera: u32,
+    pub(crate) mismatched: u32,
 }
 
 const _: () = assert!(size_of::<WorkerCounts>() == 16);
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_worker_bind(source: u64) {
+pub(crate) fn rsf_skyrim_worker_bind(source: u64) {
     WORKERS.source.store(0, SeqCst);
     WORKERS.movement.store(0, SeqCst);
     WORKERS.player_update.store(0, SeqCst);
@@ -674,20 +659,17 @@ extern "C" fn rsf_skyrim_worker_bind(source: u64) {
     WORKERS.source.store(source, SeqCst);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_worker_release() {
+pub(crate) fn rsf_skyrim_worker_release() {
     WORKERS.source.store(0, SeqCst);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_worker_intervening_poll() {
+pub(crate) fn rsf_skyrim_worker_intervening_poll() {
     if WORKERS.source.load(SeqCst) != 0 {
         WORKERS.mismatched.fetch_add(1, SeqCst);
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_worker_record_consumer(stamp: &Stamp, consumer: Consumer) {
+pub(crate) fn rsf_skyrim_worker_record_consumer(stamp: &Stamp, consumer: Consumer) {
     let source = WORKERS.source.load(SeqCst);
     if source == 0 {
         return;
@@ -714,8 +696,7 @@ extern "C" fn rsf_skyrim_worker_record_consumer(stamp: &Stamp, consumer: Consume
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_worker_counts(out: &mut WorkerCounts) {
+pub(crate) fn rsf_skyrim_worker_counts(out: &mut WorkerCounts) {
     *out = WorkerCounts {
         movement: WORKERS.movement.load(SeqCst),
         player_update: WORKERS.player_update.load(SeqCst),
@@ -745,8 +726,7 @@ enum BindRefusal {
     FreeCamera,
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_bind_refusal(
+pub(crate) fn rsf_skyrim_bind_refusal(
     readable: bool,
     queued_move: bool,
     consumed_before_bind: bool,

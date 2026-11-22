@@ -379,3 +379,35 @@ The seven assigned headers now contain declarations, private wire records and la
 `tests/skyrim_input.cpp` was replaced by a Rust fixture body and C entry point with the
 same CTest name. It uses the production guarded-copy callback for the valid, cyclic, bounded
 and unreadable pointer cases. Render scope and event receipts are checked in Rust.
+
+## Native source follow-up from 76720485
+
+The CPU receipts and thread-local frame, poll, named-job and dispatch scopes now live in Rust.
+The 13 native detours keep their typed continuations and forward the original arguments and
+results. The four caller addresses for World, submit, join and named poll still come from their
+own native detours. Submit, join and named poll retain the matched return RVAs `0x658b14`,
+`0x659334` and `0xebc248`. The World match remains in the Rust proof. A poll timestamp is
+sampled after the synchronous reservation callback and before native PollDevices.
+
+Each detour lends aligned stack storage for one Rust receipt. The generated x64 wire record is
+344 bytes with 8-byte alignment and storage at byte 24. Rust checks that its private receipt fits.
+Native scope destruction restores thread-local observations and releases the entry lease on
+return and C++ unwind. Unwound control writes invalidate the input proof, and an unwound poll
+cannot publish a completed sample. The original native continuations, menu queries and foreign
+host calls keep their native exception boundaries.
+
+Observer admission now publishes its verified targets and original addresses in Rust. Enabled
+detours acquire the published trampoline and keep their original native signatures. The
+Community Shaders resolver still calls the native GetProcAddress trampoline and preserves its
+last error. Rust owns the read-only profile probe, repeated initializer lookup and phase proofs.
+Native initializer exception containment, configuration exclusion on unwind, and the HDR
+caller/restore scope remain. Cold D3D11 creation still enters the direct I01 Steam C ABI. The
+S02 session retirement implementation and guarded-copy source match the base byte-for-byte.
+
+Source checks covered the native and Rust hook order, the four original caller captures, the
+unchanged Community Shaders loader and phase predicates, the direct Steam call and the
+unchanged S02 retirement files. Bindgen 0.72.1 reproduced the private CPU record for
+`x86_64-pc-windows-msvc`, and the pinned Rust 1.94.1 formatter and locked offline Cargo metadata
+passed. MSVC `/Zs /W4 /WX` parsed all five Skyrim C++ source files and their layout assertions
+without producing objects. No Rust compilation, links, fixtures, device checks or game runs
+were performed.

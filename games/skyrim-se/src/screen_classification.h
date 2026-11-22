@@ -11,6 +11,3 @@ struct NativeScreenFacts {
 };
 static_assert(sizeof(NativeScreenFacts) == 24 && offsetof(NativeScreenFacts, pause_count) == 8);
 }
-
-extern "C" rsf_screen_class rsf_skyrim_classify_screen(const rsf::skyrim::NativeScreenFacts*) noexcept;
-extern "C" bool rsf_skyrim_rendered_source_eligible(bool, uint32_t, rsf_screen_class) noexcept;

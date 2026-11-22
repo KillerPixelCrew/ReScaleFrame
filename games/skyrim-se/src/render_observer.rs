@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Native renderer jitter, frame-upload and end-of-render observations for Skyrim.
 
+use crate::compatibility::render_allowed;
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
-use crate::render_native::rsf_skyrim_render_allowed;
 use crate::session::{rsf_skyrim_session_accepting, rsf_skyrim_session_lease};
 use crate::{auxiliary, presentation, resolution, sampling};
 use rsf_game_sys::rsf_game_host_services;
@@ -56,7 +56,7 @@ fn swapchain(platform: &Platform) -> Option<usize> {
 unsafe extern "C" fn rsf_skyrim_render_end_enter(retained: &mut rsf_game_host_services) {
     let binding = unsafe { rsf_skyrim_session_lease(false, retained) };
     if rsf_skyrim_session_accepting()
-        && unsafe { rsf_skyrim_render_allowed() }
+        && render_allowed()
         && binding != 0
         && let Some(platform) = platform::get()
         && let Some(chain) = swapchain(platform)
@@ -140,7 +140,7 @@ extern "C" fn rsf_skyrim_render_jitter_observed(state: usize) {
     // A withdrawn or incompatible host still gives the resolution owner a chance to restore.
     let mut host: rsf_game_host_services = unsafe { std::mem::zeroed() };
     unsafe { rsf_skyrim_session_lease(true, &mut host) };
-    if !unsafe { rsf_skyrim_render_allowed() } {
+    if !render_allowed() {
         host = unsafe { std::mem::zeroed() };
     }
     let Some(platform) = platform::get() else {
@@ -173,16 +173,18 @@ extern "C" fn rsf_skyrim_render_jitter_observed(state: usize) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_render_accept_window(window: *mut c_void) -> bool {
+extern "C" fn rsf_skyrim_render_accept_window(_user: *mut c_void, window: *mut c_void) -> i32 {
     if window.is_null() {
-        return false;
+        return 0;
     }
     let mut name = [0; 128];
     let len =
         unsafe { GetClassNameW(window.cast(), name.as_mut_ptr(), name.len() as i32) } as usize;
-    len == WINDOW_CLASS.len()
-        && name[..len]
-            .iter()
-            .zip(WINDOW_CLASS)
-            .all(|(&wide, &ascii)| wide == u16::from(ascii))
+    i32::from(
+        len == WINDOW_CLASS.len()
+            && name[..len]
+                .iter()
+                .zip(WINDOW_CLASS)
+                .all(|(&wide, &ascii)| wide == u16::from(ascii)),
+    )
 }

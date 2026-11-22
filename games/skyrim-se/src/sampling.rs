@@ -171,8 +171,7 @@ fn apply(restore: bool) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sampling_guard() -> bool {
+pub(crate) fn sampling_guard() -> bool {
     let Some(platform) = platform::get() else {
         return false;
     };
