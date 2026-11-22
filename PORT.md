@@ -1259,22 +1259,22 @@ Port the two providers and FSR4 compatibility controls, coordinating the shared 
 
 **Port files (12)**
 
-- [ ] [runtime/backends/fsr/include/rescaleframe/fsr_backend.h](runtime/backends/fsr/include/rescaleframe/fsr_backend.h)
+- [x] [runtime/backends/fsr/include/rescaleframe/fsr_backend.h](runtime/backends/fsr/include/rescaleframe/fsr_backend.h)
 - [ ] [runtime/backends/fsr/src/ffx_version.h](runtime/backends/fsr/src/ffx_version.h)
 - [x] [runtime/backends/fsr/src/fsr4_compat.cpp](runtime/backends/fsr/src/fsr4_compat.cpp)
 - [x] [runtime/backends/fsr/src/fsr4_compat.h](runtime/backends/fsr/src/fsr4_compat.h)
 - [ ] [runtime/backends/fsr/src/fsr4_compat_core.cpp](runtime/backends/fsr/src/fsr4_compat_core.cpp)
 - [ ] [runtime/backends/fsr/src/fsr4_compat_core.h](runtime/backends/fsr/src/fsr4_compat_core.h)
-- [ ] [runtime/backends/fsr/src/fsr4_compat_platform.h](runtime/backends/fsr/src/fsr4_compat_platform.h)
+- [x] [runtime/backends/fsr/src/fsr4_compat_platform.h](runtime/backends/fsr/src/fsr4_compat_platform.h)
 - [ ] [runtime/backends/fsr/src/fsr_backend.cpp](runtime/backends/fsr/src/fsr_backend.cpp)
 - [ ] [runtime/backends/fsr/src/fsr_generation.cpp](runtime/backends/fsr/src/fsr_generation.cpp)
-- [ ] [runtime/backends/xess/include/rescaleframe/xess_backend.h](runtime/backends/xess/include/rescaleframe/xess_backend.h)
+- [x] [runtime/backends/xess/include/rescaleframe/xess_backend.h](runtime/backends/xess/include/rescaleframe/xess_backend.h)
 - [ ] [runtime/backends/xess/src/xess_backend.cpp](runtime/backends/xess/src/xess_backend.cpp)
 - [ ] [runtime/backends/xess/src/xess_generation.cpp](runtime/backends/xess/src/xess_generation.cpp)
 
 **Fixtures (1)**
 
-- [ ] [tests/fsr_backend.cpp](tests/fsr_backend.cpp)
+- [x] [tests/fsr_backend.cpp](tests/fsr_backend.cpp)
 
 **Rust review findings (1)**
 
@@ -1753,17 +1753,18 @@ Port the F9 capture boundary and reconcile the observation, record, session and 
 
 - Borrowed view and constant-buffer identity across render, capture and velocity ([A02](#a02), [A05](#a05), [G02](#g02)).
 
-**Port files (5)**
+**Port files (6)**
 
-- [ ] [games/ac7/include/rescaleframe/ac7_motion_capture.h](games/ac7/include/rescaleframe/ac7_motion_capture.h)
-- [ ] [games/ac7/src/motion_capture.cpp](games/ac7/src/motion_capture.cpp)
-- [ ] [games/ac7/src/motion_capture_observations.h](games/ac7/src/motion_capture_observations.h)
-- [ ] [games/ac7/src/motion_capture_records.h](games/ac7/src/motion_capture_records.h)
-- [ ] [games/ac7/src/motion_capture_session.h](games/ac7/src/motion_capture_session.h)
+- [x] [games/ac7/include/rescaleframe/ac7_motion_capture.h](games/ac7/include/rescaleframe/ac7_motion_capture.h)
+- [x] [games/ac7/src/motion_capture.cpp](games/ac7/src/motion_capture.cpp)
+- [x] [games/ac7/src/motion_capture_observations.h](games/ac7/src/motion_capture_observations.h)
+- [x] [games/ac7/src/motion_capture_records.h](games/ac7/src/motion_capture_records.h)
+- [x] [games/ac7/src/motion_capture_session.h](games/ac7/src/motion_capture_session.h)
+- [ ] [games/ac7/src/motion_capture_trampolines.cpp](games/ac7/src/motion_capture_trampolines.cpp) (typed Unreal calls, SEH and native callbacks)
 
 **Fixtures (2)**
 
-- [ ] [tests/ac7_capture_io.cpp](tests/ac7_capture_io.cpp)
+- [x] [tests/ac7_capture_io.cpp](tests/ac7_capture_io.cpp)
 - [x] [tests/ac7_motion_capture.cpp](tests/ac7_motion_capture.cpp)
 
 **Rust review findings (7)**

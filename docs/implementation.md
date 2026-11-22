@@ -7674,3 +7674,15 @@ Mono fixture moved to Rust. Source checks cover late Mono arrival, retained
 fingerprints, provider paths and checked bridge retirement. The offline fixtures
 and native links await user execution. The shared overlay controls for Mono
 graphics diagnostics remain open. See [Unity Mono startup and configuration](research/rust-unity-mono-startup.md).
+
+### AC7 capture and D3D12 provider follow-ups
+
+AC7 capture now records D3D11 resources and serializes observations in Rust. The Rust WARP
+fixture links the same capture ABI and retains the seven shader inputs and schedule. The
+Unreal trampoline and structured exception guards are isolated in `motion_capture_trampolines.cpp`.
+
+The D3D12 FidelityFX and XeSS ports move provider resource and swapchain operations and FSR4
+fingerprint admission to Rust. The linked C fixture retains the missing-runtime and
+missing-provider checks. Feature selection and validation adapters remain native. Checks covered
+source ABI comparisons, C11 syntax, binding generation and locked Cargo metadata. Builds,
+fixture execution and device validation remain pending.
