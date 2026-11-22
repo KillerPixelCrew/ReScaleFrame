@@ -8,7 +8,7 @@
 // callback's passes with the Editor preview's admission and diagnostic budget, the generation
 // window guard and Unity's device lifecycle) are Rust (games/unity-mono/src/package_state.rs,
 // package_views.rs and package_state/presentation.rs, services.rs and routing.rs, through
-// package_state.h). This file keeps the Unity, DXGI, Vulkan and preview work and lends the typed
+// package_state.h). This file keeps the Unity, DXGI and Vulkan leaves and lends the typed
 // Win32, SDK and Runtime calls through rsf_unity_package_platform. Its mutex serializes the
 // session exports, Unity device events and the SR pass.
 #include "package.h"
@@ -120,9 +120,11 @@ void render(void*, void* commands, const rsf_game_render_pass* original, uint32_
     if (rsf_unity_package_route(commands, original, begin)) render_sr(commands, original);
 }
 // rsf_unity_package_platform's render-routing leaves.
-uint32_t preview_present(void* resource, const rsf_game_render_pass* pass, uint32_t common) noexcept try
+// Keep C++ exceptions from the Runtime observer out of Rust.
+int observe_preview_window(const rsf_game_render_pass* pass) noexcept try
 {
-    return rsf_unity_preview_present(resource, *pass, common != 0) ? 1u : 0u;
+    rsf_fg12_window(pass);
+    return 1;
 } catch (...) { return 0; }
 void texture_desc(void* resource, uint64_t* width, uint32_t* height, uint32_t* format) noexcept
 {
@@ -133,8 +135,9 @@ uint32_t preview_prepare(uint32_t width, uint32_t height) noexcept try
 {
     ComPtr<ID3D12Device> owning_device;
     ComPtr<ID3D12CommandQueue> owning_queue;
-    return rsf_unity_package_graphics(owning_device, owning_queue) &&
-        rsf_unity_preview_prepare(owning_device.Get(), owning_queue.Get(), width, height) ? 1u : 0u;
+    if (!rsf_unity_package_graphics(owning_device, owning_queue)) return 0;
+    return rsf_unity_preview_prepare(owning_device.Get(), owning_queue.Get(), width, height,
+        observe_preview_window);
 } catch (...) { return 0; }
 uint32_t bridge_open(uint32_t is_editor) noexcept try
 {
@@ -190,7 +193,7 @@ constexpr rsf_unity_package_platform platform{
     [](uint64_t session, uint64_t frame) noexcept { rsf_fg12_submitted(session, frame); },
     [](const rsf_game_render_pass* pass) noexcept { rsf_fg12_window(pass); },
     [](void* commands, const rsf_game_render_pass* pass) noexcept { rsf_fg12_hudless(commands, pass); },
-    preview_present,
+    rsf_unity_preview_present,
     texture_desc,
     preview_prepare,
     [](void* window) noexcept -> uint32_t { return rsf_unity_preview_owns(window) ? 1u : 0u; },

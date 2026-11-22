@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: MIT
-//! Unity Editor window selection and visibility. Runtime receives only a destination token.
+//! Unity Editor window selection, visibility and ownership of the Runtime output handle.
+use crate::preview_abi::{
+    RSF_D3D12_WINDOW_TARGET_ABI_VERSION, rsf_d3d12_window_create, rsf_d3d12_window_destroy,
+    rsf_d3d12_window_drained, rsf_d3d12_window_observer, rsf_d3d12_window_prepare,
+    rsf_d3d12_window_present, rsf_d3d12_window_presenter, rsf_d3d12_window_target,
+};
+use rsf_game_sys::rsf_game_render_pass;
 use std::{
-    ptr,
-    sync::{Mutex, MutexGuard, PoisonError},
+    ffi::c_void,
+    ptr::{self, NonNull},
+    sync::{Mutex, MutexGuard, PoisonError, TryLockError},
 };
 use windows_sys::Win32::{
     Foundation::{
@@ -20,18 +27,21 @@ use windows_sys::core::w;
 
 const CLASS: *const u16 = w!("ReScaleFrame.Unity.EditorPreview");
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Target {
-    struct_size: u32,
-    version: u32,
-    handle: HWND,
-    generation: u64,
+struct Output(NonNull<rsf_d3d12_window_presenter>);
+
+// The package can use the handle from different threads only under OUTPUT.
+// Runtime owns and synchronizes the D3D12 state behind the handle.
+unsafe impl Send for Output {}
+
+static OUTPUT: Mutex<Option<Output>> = Mutex::new(None);
+
+fn try_output() -> Option<MutexGuard<'static, Option<Output>>> {
+    match OUTPUT.try_lock() {
+        Ok(output) => Some(output),
+        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
 }
-const _: () = {
-    assert!(size_of::<Target>() == 24);
-    assert!(std::mem::offset_of!(Target, generation) == 16);
-};
 
 #[derive(Clone, Copy, Default)]
 struct Window {
@@ -311,29 +321,94 @@ extern "C" fn rsf_unity_preview_hide() {
     hide();
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_preview_target(target: *mut Target) -> bool {
+fn target() -> Option<rsf_d3d12_window_target> {
     let state = state();
     let window = state.window;
-    if !window.visible || !window.live() {
-        return false;
-    }
-    unsafe {
-        target.write(Target {
-            struct_size: size_of::<Target>() as u32,
-            version: 1,
-            handle: window.child(),
-            generation: window.generation,
-        })
-    };
-    true
+    (window.visible && window.live()).then(|| rsf_d3d12_window_target {
+        struct_size: size_of::<rsf_d3d12_window_target>() as u32,
+        abi_version: RSF_D3D12_WINDOW_TARGET_ABI_VERSION,
+        window: window.child(),
+        generation: window.generation,
+    })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_preview_show(generation: u64) {
+fn show(generation: u64) {
     let state = state();
     let window = state.window;
     if window.visible && window.generation == generation && window.live() {
         unsafe { ShowWindowAsync(window.child(), SW_SHOWNOACTIVATE) };
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_preview_prepare(
+    device: *mut c_void,
+    queue: *mut c_void,
+    width: u32,
+    height: u32,
+    observer: rsf_d3d12_window_observer,
+) -> u32 {
+    let Some(mut output) = try_output() else {
+        return 0;
+    };
+    let Some(target) = target() else {
+        return 0;
+    };
+    if output.is_none() {
+        *output = NonNull::new(unsafe { rsf_d3d12_window_create(observer) }).map(Output);
+    }
+    let Some(output) = output.as_ref() else {
+        return 0;
+    };
+    // The bridge lends the device and queue for this call. STATE is unlocked, so the
+    // Runtime can ask the adapter whether it owns the HWND during DXGI creation.
+    u32::from(
+        unsafe {
+            rsf_d3d12_window_prepare(output.0.as_ptr(), &target, device, queue, width, height)
+        } != 0,
+    )
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_preview_present(
+    texture: *mut c_void,
+    pass: *const rsf_game_render_pass,
+    common_state: u32,
+) -> u32 {
+    let Some(output) = try_output() else {
+        return 0;
+    };
+    let (Some(output), Some(target)) = (output.as_ref(), target()) else {
+        return 0;
+    };
+    // Keep the output gate across the observer and DXGI Present. Nested preview
+    // calls refuse at try_output, while the window guard can still read STATE.
+    if unsafe { rsf_d3d12_window_present(output.0.as_ptr(), &target, texture, pass, common_state) }
+        == 0
+    {
+        return 0;
+    }
+    show(target.generation);
+    1
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_preview_drained() -> bool {
+    try_output().is_some_and(|output| {
+        output
+            .as_ref()
+            .is_none_or(|output| unsafe { rsf_d3d12_window_drained(output.0.as_ptr()) != 0 })
+    })
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_preview_release() {
+    // The package closes bridge admission and proves the drain before committing.
+    let mut output = OUTPUT.lock().unwrap_or_else(PoisonError::into_inner);
+    if output
+        .as_ref()
+        .is_some_and(|output| unsafe { rsf_d3d12_window_destroy(output.0.as_ptr()) != 0 })
+    {
+        *output = None;
     }
 }

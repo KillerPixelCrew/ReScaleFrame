@@ -169,3 +169,30 @@ flag, the D3D11 preview flag and Unity's existing routing and
 checked with pinned Rust 1.94.1 formatting, locked offline Windows Cargo
 metadata and staged whitespace. Build, fixture execution, lint and device
 verification remain user-owned.
+
+### Rust ownership of the output handle
+
+At `82b39a63`, `games/unity-mono/src/preview.rs` takes over the package's
+output mutex and opaque presenter handle. Prepare, Present and drain try
+the output lock. Commit takes it after bridge admission closes and clears
+the handle only if Runtime accepts destruction. The window-state lock is
+released before entering Runtime, so swapchain creation or presentation
+can call back into the adapter's HWND ownership guard. Nested preview
+work refuses while the output is busy. Showing the child still requires
+the same live generation after a successful Present.
+
+`integrations/unity/native/preview.cpp` is removed. Its header only declares
+the C entry points. `package.cpp` still borrows Unity's typed device and
+queue and supplies the Runtime window observer. The observer catches C++
+exceptions and reports refusal before they can cross into Rust. It receives
+the actual presented swapchain and forwards to `rsf_fg12_window`; Win32
+foreground observation and the no-activate child policy are unchanged.
+The package archive links the presenter through the embedded Runtime core.
+The separately built Mono archive excludes the preview module and its
+new private imports, and keeps the existing Runtime DLL link.
+
+Targeted bindgen 0.72.1 generated the Runtime imports and reproduced the
+formatted package callback binding. Source checks confirmed the unchanged
+bridge retirement order, Runtime observer and shared `SubmissionRing`.
+Pinned formatting, locked offline Cargo metadata and Git whitespace
+passed. Builds, fixture execution, lint and device checks remain user-owned.

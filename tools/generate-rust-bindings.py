@@ -337,6 +337,11 @@ generate("games/unity-mono/src/runtime_abi.rs", "runtime/orchestrator/include/re
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
           "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]"])
+generate("games/unity-mono/src/preview_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d12_window_presenter.h",
+         "rsf_d3d12_window_(presenter|target|observer)", "RSF_D3D12_WINDOW_TARGET_ABI_VERSION",
+         ["-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--allowlist-function", "rsf_d3d12_window_.*",
+          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
 generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(unity_(package_(settings|status|platform|view_setup)|frame_counters)|native_fg_(options|status)|fg_status|"
          "native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode|sr12)",

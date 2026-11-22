@@ -11,7 +11,7 @@ if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
         rsf_unity_get_render_event=rsf_unity_d3d12_get_render_event rsf_unity_get_event_id=rsf_unity_d3d12_get_event_id
         rsf_unity_set_engine_spatial=rsf_unity_d3d12_set_engine_spatial)
     target_link_libraries(rsf_unity_package_bridge PRIVATE ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
-    add_library(rsf_unity_package SHARED native/package.cpp native/bridge.cpp native/preview.cpp native/vulkan_bridge.cpp
+    add_library(rsf_unity_package SHARED native/package.cpp native/bridge.cpp native/vulkan_bridge.cpp
         $<TARGET_OBJECTS:rsf_unity_package_bridge>)
     target_compile_definitions(rsf_unity_package PRIVATE VK_USE_PLATFORM_WIN32_KHR RSF_STREAMLINE_HOST_BUILD)
     target_include_directories(rsf_unity_package SYSTEM PRIVATE "${Vulkan_INCLUDE_DIRS}")
@@ -31,7 +31,7 @@ if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
     # (package_state.rs, package_views.rs, package_state/presentation.rs,
     # package_state/services.rs, runtime_config.rs, via native/package_state.h). Only those symbols are
     # referenced here; the game plugin's Runtime setup reaches the Runtime through its own native
-    # leaves.
+    # leaves. The package's Rust Editor preview links directly to the embedded Runtime presenter.
     target_link_libraries(rsf_unity_package PRIVATE rsf_orchestrator_core rsf_unity_mono_rust ReScaleFrame::RuntimeCommon rsf_build_options d3d12 d3d11)
     set_target_properties(rsf_unity_package PROPERTIES OUTPUT_NAME "ReScaleFrame.Unity.Native")
 endif()

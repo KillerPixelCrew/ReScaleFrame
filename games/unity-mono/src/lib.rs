@@ -18,8 +18,10 @@ mod package_abi;
 mod package_state;
 mod package_views;
 mod plugin_abi;
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "mono-plugin")))]
 mod preview;
+#[cfg(all(windows, not(feature = "mono-plugin")))]
+mod preview_abi;
 mod runtime_abi;
 mod runtime_config;
 #[cfg(all(windows, feature = "mono-plugin"))]
