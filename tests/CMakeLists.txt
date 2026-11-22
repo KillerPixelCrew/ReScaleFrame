@@ -390,8 +390,8 @@ target_link_libraries(rsf_auxiliary_sr PRIVATE rsf_orchestrator_rust ReScaleFram
 add_test(NAME auxiliary_sr_device COMMAND rsf_auxiliary_sr)
 set_tests_properties(auxiliary_sr_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_skyrim_input skyrim_input_main.c ../games/skyrim-se/src/guarded_read.cpp)
-set_target_properties(rsf_skyrim_input PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+add_executable(rsf_skyrim_input skyrim_input_main.c ../games/skyrim-se/src/guarded_read.c)
+set_target_properties(rsf_skyrim_input PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_skyrim_input PRIVATE rsf_skyrim_se_rust ReScaleFrame::GameSDK rsf_steam_d3d11_chain minhook rsf_build_options)
 add_test(NAME skyrim_input_contract COMMAND rsf_skyrim_input)
 

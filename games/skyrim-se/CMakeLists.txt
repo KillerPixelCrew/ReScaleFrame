@@ -2,7 +2,7 @@
 # creation, Steam Present cooperation and typed D3D11 render leases. Native code supplies the
 # remaining detours and the callback exception boundary.
 rsf_add_rust_static(rsf_skyrim_se_rust rsf_rust_skyrim_se rsf-skyrim-se rsf_skyrim_se)
-add_library(rsf_game_skyrim_se SHARED src/plugin.c src/render_detours.cpp src/native_creation.cpp src/compatibility.cpp src/cpu_events.cpp src/guarded_read.cpp)
+add_library(rsf_game_skyrim_se SHARED src/plugin.c src/render_detours.cpp src/native_creation.cpp src/compatibility.cpp src/cpu_events.cpp src/guarded_read.c)
 target_include_directories(rsf_game_skyrim_se PRIVATE
     "${CMAKE_SOURCE_DIR}/runtime/orchestrator/include" "${CMAKE_SOURCE_DIR}/runtime/graphics/include"
     "${CMAKE_SOURCE_DIR}/runtime/presentation/include")
