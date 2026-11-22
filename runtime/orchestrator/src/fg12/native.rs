@@ -67,8 +67,7 @@ pub(super) unsafe fn install(setup: *const rsf_d3d11_present_setup, explicit: i3
 pub(super) unsafe fn host_abort(host: *mut rsf_streamline_host, source: u64) -> i32 {
     unsafe { crate::streamline_host::rsf_streamline_host_abort(host.cast(), source) }
 }
-// The native lifetime hooks run at module attach and detach, as the former
-// C++ capture member did. Detach requires a quiescent Runtime.
+// The native lifetime hooks run at module attach and detach. Detach requires a quiescent Runtime.
 static CAPTURE: AtomicPtr<Capture> = AtomicPtr::new(null_mut());
 
 #[unsafe(no_mangle)]

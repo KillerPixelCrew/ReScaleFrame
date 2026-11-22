@@ -235,10 +235,8 @@ unsafe extern "C" fn load_library(setup: &Setup, name: *const u16) -> Raw {
     let (module, error) = unsafe { load_system_library(&path) };
     if module.is_null() {
         let path = String::from_utf16_lossy(&path[..path.len() - 1]);
-        let message = format!("could not load {path} (Windows error {error})");
-        // The legacy C++ diagnostic used a 512-byte buffer including NUL.
-        let end = message.floor_char_boundary(511.min(message.len()));
-        crate::input_dump::Log::new(setup.chain.log, setup.chain.log_user).say(&message[..end]);
+        crate::input_dump::Log::new(setup.chain.log, setup.chain.log_user)
+            .say(&format!("could not load {path} (Windows error {error})"));
     }
     module
 }

@@ -2421,7 +2421,7 @@ impl Owner {
             RETIREMENT_PENDING.store(false, Ordering::Release);
         }
         if !private {
-            // Preserve the former reverse member release order after the events close.
+            // Release in reverse creation order after the events close.
             self.release_command_slots(true);
             drop(retired.take());
             drop(sync.completion_fence.take());

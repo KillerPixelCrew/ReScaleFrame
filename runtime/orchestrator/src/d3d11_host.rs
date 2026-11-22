@@ -2089,7 +2089,7 @@ impl Host {
     }
 }
 
-// MSVC's %p, which the native-chain receipts used before the port.
+// The native-chain receipts print pointers as MSVC's %p does.
 fn msvc_pointer(value: Raw) -> String {
     format!("{:016X}", value as usize)
 }
@@ -2578,7 +2578,7 @@ unsafe extern "C" fn rsf_d3d11_host_wrap_native_swapchain(
     if g.configured || g.scene_bound {
         return NOT_READY;
     }
-    // The lease `g` stays held across the adoption, as it did around the C++ wrapper.
+    // The lease `g` stays held across the adoption.
     host.wrap_native_chain(request)
 }
 

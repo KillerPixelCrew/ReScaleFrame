@@ -83,14 +83,14 @@ impl Slot {
         source: ptr::null_mut(),
     };
 
-    /// Drops the slot in the order of the C++ `slot = {}` assignment: allocator, list, source.
+    /// Drops the slot: allocator, list, source.
     fn clear(self, leaves: &Leaves) {
         unref(leaves, self.allocator);
         unref(leaves, self.list);
         unref(leaves, self.source);
     }
 
-    /// Drops a refused fresh slot in the order the C++ local was destroyed: list, allocator.
+    /// Drops a refused fresh slot: list, then allocator.
     fn discard(self, leaves: &Leaves) {
         unref(leaves, self.list);
         unref(leaves, self.allocator);
@@ -153,7 +153,7 @@ impl Graphics {
     }
 
     /// Takes one reference each to the lent device and queue and creates the fence. A refused or
-    /// incomplete transfer is dropped at once, in the C++ release order.
+    /// incomplete transfer is dropped at once.
     fn bind(&mut self, device: *mut c_void, queue: *mut c_void, leaves: &Leaves) -> bool {
         let mut bound = Gpu::EMPTY;
         let accepted = unsafe { (leaves.bind_gpu)(device, queue, &mut bound) };
@@ -365,7 +365,7 @@ impl Graphics {
         self.proved
     }
 
-    /// Drops every reference in the C++ release order: each slot's allocator, list and source,
+    /// Drops every reference: each slot's allocator, list and source,
     /// then the swapchain, fence, queue and device.
     fn destroy(self, leaves: &Leaves) {
         for slot in self.slots {

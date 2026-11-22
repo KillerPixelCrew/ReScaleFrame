@@ -540,8 +540,7 @@ impl Atlas {
 }
 
 // One Present slot on the overlay device: direct allocator, its closed list, the shader-visible
-// SRV heap and the RTV heap. Fields release in declaration order, the reverse of creation, as the
-// former native members did.
+// SRV heap and the RTV heap. Fields release in declaration order, the reverse of creation.
 #[derive(Default)]
 struct Frame {
     rtv: Option<IUnknown>,
