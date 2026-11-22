@@ -87,7 +87,7 @@ impl Leaves {
     }
     fn manager(&self) -> Option<usize> {
         let mut manager = 0;
-        unsafe { (self.manager)(&mut manager) }.then_some(manager)
+        (unsafe { (self.manager)(&mut manager) } && manager != 0).then_some(manager)
     }
     /// The resolution receipt on the World's state pass.
     fn report_state(&self, stage: u32, result: rsf_result) {

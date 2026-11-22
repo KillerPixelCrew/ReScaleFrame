@@ -19,7 +19,12 @@ use crate::resolution::rsf_fallout4_resolution_inputs;
 use crate::resolution_stages::{
     RSF_FALLOUT4_STAGE_EVALUATED as EVALUATED, RSF_FALLOUT4_STAGE_OUTPUT_READY as OUTPUT_READY,
 };
-use crate::{RSF_ERROR_NOT_READY, RSF_OK, image, message};
+use crate::screen::NativeScreen as Screen;
+use crate::{RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, image, message};
+use rsf_game_sys::d3d11_reduced_abi::{
+    RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL,
+    RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, rsf_d3d11_auxiliary_surface as Surface,
+};
 use rsf_game_sys::{
     RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RECONFIGURE,
@@ -36,7 +41,7 @@ const SCREEN_UNKNOWN: u32 = 0;
 const SCREEN_GAMEPLAY: u32 = 8;
 
 // The Effects call inside imagespace whose return is the SR pass key.
-const SR_PASS: usize = 0x21f_a283;
+const SR_PASS: usize = super::EFFECTS_CALL.0;
 
 const SCREEN_RECEIPTS: u32 = 8;
 
@@ -46,6 +51,13 @@ struct Inputs {
     pass: *const rsf_game_render_pass,
     context: *mut c_void,
     chain: *mut c_void,
+}
+
+// The live input lease owns these textures through the synchronous evaluation.
+#[repr(C)]
+struct AuxiliaryInputs {
+    textures: [*mut c_void; 5],
+    raster: [f32; 4],
 }
 
 /// NativePublicationFramebuffer: borrowed facts of the HUDless framebuffer lease, which may be
@@ -60,11 +72,10 @@ struct Framebuffer {
     extent: [u32; 3],
 }
 
-use crate::screen::NativeScreen as Screen;
-
 const _: () = {
     assert!(size_of::<CpuIdentity>() == 40);
     assert!(size_of::<Inputs>() == 3 * size_of::<usize>());
+    assert!(size_of::<AuxiliaryInputs>() == 56 && offset_of!(AuxiliaryInputs, raster) == 40);
     assert!(size_of::<Framebuffer>() == 56 && offset_of!(Framebuffer, native_frame) == 24);
 };
 
@@ -97,7 +108,11 @@ pub(super) struct Leaves {
     begin_output: unsafe extern "C" fn(*const rsf_game_render_pass) -> bool,
     report_state: unsafe extern "C" fn(u32, *const rsf_game_render_pass, *mut c_void, bool, i32),
     // The guarded auxiliary or full-output evaluation of the input lease.
-    reconstruct: unsafe extern "C" fn(*const rsf_game_render_pass) -> rsf_result,
+    auxiliary_inputs: unsafe extern "C" fn(&mut AuxiliaryInputs) -> bool,
+    auxiliary_colour: unsafe extern "C" fn(*mut c_void) -> bool,
+    same_texture: unsafe extern "C" fn(*mut c_void, *mut c_void) -> bool,
+    reconstruct:
+        unsafe extern "C" fn(*const rsf_game_render_pass, *const Surface, u32) -> rsf_result,
     end_output: unsafe extern "C" fn() -> bool,
     // Acquire in the caller's native stack lease and return the facts of that exact read.
     read_framebuffer: unsafe extern "C" fn(*mut c_void, &mut Framebuffer) -> bool,
@@ -105,7 +120,7 @@ pub(super) struct Leaves {
     publish_window: unsafe extern "C" fn(*const c_void, *const rsf_game_render_pass),
 }
 
-const _: () = assert!(size_of::<Leaves>() == 19 * size_of::<usize>());
+const _: () = assert!(size_of::<Leaves>() == 22 * size_of::<usize>());
 
 impl Leaves {
     fn world(&self) -> World {
@@ -348,7 +363,7 @@ pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
         return SrOutcome::Refused;
     }
     leaves.report_state(OUTPUT_READY, &pass, lease.context, false, RSF_OK);
-    let result = unsafe { (leaves.reconstruct)(&pass) };
+    let result = reconstruct(leaves, &pass);
     leaves.report_state(EVALUATED, &pass, lease.context, result == RSF_OK, result);
     if result != RSF_OK {
         // A sealed ticket owns rollback/recovery; retain its output scope until FINISH so
@@ -365,6 +380,80 @@ pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
         c"Fallout4 producer-verified SR publication accepted before imagespace; scoped native output/auxiliary consumers active, FG remains unproven.",
     );
     SrOutcome::Published
+}
+
+// Keep the depth mapping on the integer render rectangle. The colour surfaces share the
+// producer's fractional viewport and the same camera jitter.
+fn reconstruct(leaves: &Leaves, pass: &rsf_game_render_pass) -> rsf_result {
+    let reduced = pass.camera.render_width != pass.camera.output_width
+        || pass.camera.render_height != pass.camera.output_height
+        || pass.render_rect[0] != 0
+        || pass.render_rect[1] != 0;
+    if !reduced {
+        return unsafe { (leaves.reconstruct)(pass, std::ptr::null(), 0) };
+    }
+    let mut inputs = AuxiliaryInputs {
+        textures: [null_mut(); 5],
+        raster: [0.0; 4],
+    };
+    if !unsafe { (leaves.auxiliary_inputs)(&mut inputs) }
+        || !unsafe { (leaves.auxiliary_colour)(inputs.textures[1]) }
+    {
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
+
+    let mut surfaces = [Surface::default(); 5];
+    let mut count = 0;
+    let [x, y, width, height] = inputs.raster;
+    let colours = [x, y, x + width, y + height];
+    let names = [
+        (c"native_depth_expanded", c"native_depth_partitioned"),
+        (c"native_motion_expanded", c"native_motion_reduced"),
+        (c"native_pipboy_expanded", c"native_pipboy_reduced"),
+        (c"native_vats_expanded", c"native_vats_reduced"),
+        (c"native_refraction_expanded", c"native_refraction_reduced"),
+    ];
+    for (slot, (texture, (name, source_name))) in inputs.textures.into_iter().zip(names).enumerate()
+    {
+        if slot >= 2
+            && (!unsafe { (leaves.auxiliary_colour)(texture) }
+                || unsafe { (leaves.same_texture)(texture, pass.color_output) }
+                || surfaces[..count]
+                    .iter()
+                    .any(|surface| unsafe { (leaves.same_texture)(texture, surface.texture) }))
+        {
+            continue;
+        }
+        let depth = slot == 0;
+        surfaces[count] = Surface {
+            struct_size: size_of::<Surface>() as u32,
+            kind: if depth {
+                RSF_D3D11_AUXILIARY_DEPTH_STENCIL
+            } else {
+                RSF_D3D11_AUXILIARY_COLOUR
+            },
+            texture,
+            source_rect: if depth {
+                pass.render_rect.map(|coordinate| coordinate as f32)
+            } else {
+                colours
+            },
+            output_rect: pass.output_rect,
+            jitter_pixels: pass.camera.jitter_pixels,
+            name: name.as_ptr(),
+            source_name: source_name.as_ptr(),
+            flags: if slot == 3 {
+                RSF_D3D11_AUXILIARY_RESTORE_CONTENTS
+            } else {
+                0
+            },
+        };
+        count += 1;
+    }
+    if recovery::token() != 0 && count != surfaces.len() {
+        return RSF_ERROR_NATIVE_REFUSED;
+    }
+    unsafe { (leaves.reconstruct)(pass, surfaces.as_ptr(), count as u32) }
 }
 
 /// MSVC `%p`: sixteen uppercase hexadecimal digits.

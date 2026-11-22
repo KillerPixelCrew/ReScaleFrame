@@ -11,6 +11,7 @@
 #include <cstddef>
 
 struct rsf_d3d11_reduced_frame;
+struct rsf_d3d11_auxiliary_surface;
 
 namespace rsf::fallout4 {
 // Detours in creation and enable order. Rust owns each record's RVA, expected entry bytes and
@@ -166,6 +167,11 @@ struct NativePublicationInputs {
     void* context;
     void* chain;
 };
+struct NativeAuxiliaryInputs {
+    void* textures[5];
+    float raster[4];
+};
+static_assert(sizeof(NativeAuxiliaryInputs) == 56 && offsetof(NativeAuxiliaryInputs, raster) == 40);
 struct NativePublicationFramebuffer {
     void* context;
     void* chain;
@@ -200,7 +206,10 @@ struct NativePublicationLeaves {
     void (*report_state)(uint32_t stage, const rsf_game_render_pass*, void* context, bool published,
         int32_t result) noexcept;
     // Evaluate the input lease; a throw drains auxiliaries and answers RSF_ERROR_NOT_READY.
-    int32_t (*reconstruct)(const rsf_game_render_pass*) noexcept;
+    bool (*auxiliary_inputs)(NativeAuxiliaryInputs*) noexcept;
+    bool (*auxiliary_colour)(void*) noexcept;
+    bool (*same_texture)(void*, void*) noexcept;
+    int32_t (*reconstruct)(const rsf_game_render_pass*, const rsf_d3d11_auxiliary_surface*, uint32_t) noexcept;
     bool (*end_output)() noexcept;
     // Acquire in the viewport detour's stack lease and return that read's facts, including on refusal.
     bool (*read_framebuffer)(NativeFramebuffer*, NativePublicationFramebuffer*) noexcept;
@@ -210,7 +219,7 @@ struct NativePublicationLeaves {
 static_assert(sizeof(NativePublicationInputs) == 3 * sizeof(void*));
 static_assert(sizeof(NativePublicationFramebuffer) == 56 &&
     offsetof(NativePublicationFramebuffer, native_frame) == 24);
-static_assert(sizeof(NativePublicationLeaves) == 19 * sizeof(void*));
+static_assert(sizeof(NativePublicationLeaves) == 22 * sizeof(void*));
 
 // FRAME, SUBMISSION and WINDOW scope (render_hooks/scope.rs). Rust owns the before/after owner
 // lease verdict, the FRAME pass identity and keys, FRAME then SUBMISSION begin, the balanced

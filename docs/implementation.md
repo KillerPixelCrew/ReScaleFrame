@@ -161,11 +161,13 @@ shots at the existing 84-copy budget. Interleaved submissions,
 descriptor-copy and object-retirement coverage and live capture
 remain open. [Shot ownership](research/rust-rdr2-asi.md#native-capture-shot-and-tail-ownership)
 
-Fallout 4's render hook lifecycle now verifies, installs, starts and
-retires the eight hooks in Rust. Typed detours still call their original
-functions on native frames. Pinned bindgen reproduced the changed private
-platform layout exactly. Producer callbacks and reduced-render recovery
-remain native. [Render hook lifecycle](research/rust-fallout4-render-hooks.md)
+Fallout 4's render callbacks sequence World and Present admission, producer
+reads, SR publication, and reduced recovery in Rust. Typed detours call
+their originals on native frames and own COM leases. Effects cleanup uses
+the admitted World's identity across the original call, and the HUDless
+lease stays on the viewport detour's stack. F03 has source and binding
+checks. Build, fixtures and matched game captures remain open.
+[Render hook transactions](research/rust-fallout4-render-hooks.md#render-transaction-contracts)
 
 Unity's Editor preview now owns its device, queue, swapchain and per-slot
 resources in Rust and requires a fresh drain proof before release. The

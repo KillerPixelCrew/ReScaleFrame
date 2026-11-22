@@ -458,7 +458,7 @@ pub(super) fn finish(leaves: &Leaves) -> bool {
 /// `finished` is this token's own proof that FINISH resolved full output. With it, RETIRE goes
 /// straight to the host, so a retry after the imagespace exit cleared the World's
 /// `full_output_resolved` still reaches it, and FINISH is never repeated. Without it, the guarded
-/// FINISH admission runs first, as before.
+/// FINISH admission runs first. Success means no token is still owned.
 pub(super) fn retire(leaves: &Leaves) -> bool {
     let recovery = state();
     if recovery.token == 0 {
