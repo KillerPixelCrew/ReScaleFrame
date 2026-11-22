@@ -64,7 +64,7 @@ unsafe extern "system" fn controller_read<const SLOT: usize>(
     result
 }
 
-pub(super) unsafe extern "C" fn install(message: Message, controller: Controller) {
+pub(crate) unsafe extern "C" fn install(message: Message, controller: Controller) {
     MESSAGE.store(message as *mut c_void, Ordering::Release);
     CONTROLLER.store(controller as *mut c_void, Ordering::Release);
     INPUT_ENABLED.store(true, Ordering::SeqCst);
@@ -127,18 +127,18 @@ pub(super) unsafe extern "C" fn install(message: Message, controller: Controller
     }
 }
 
-pub(super) unsafe extern "C" fn disable() {
+pub(crate) unsafe extern "C" fn disable() {
     INPUT_ENABLED.store(false, Ordering::SeqCst);
     for &target in lock(&TARGETS).iter().filter(|&&target| target != 0) {
         unsafe { MH_DisableHook(target as _) };
     }
 }
 
-pub(super) unsafe extern "C" fn idle() -> bool {
+pub(crate) unsafe extern "C" fn idle() -> bool {
     MESSAGE_READERS.load(Ordering::SeqCst) == 0 && CONTROLLER_READERS.load(Ordering::SeqCst) == 0
 }
 
-pub(super) unsafe extern "C" fn unhook() -> bool {
+pub(crate) unsafe extern "C" fn unhook() -> bool {
     let mut hook = lock(&MESSAGE_HOOK);
     if *hook == 0 {
         return true;
@@ -152,7 +152,7 @@ pub(super) unsafe extern "C" fn unhook() -> bool {
     true
 }
 
-pub(super) unsafe extern "C" fn remove() -> bool {
+pub(crate) unsafe extern "C" fn remove() -> bool {
     unsafe { disable() };
     if !unsafe { idle() } {
         return false;

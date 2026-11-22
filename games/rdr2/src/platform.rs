@@ -1,23 +1,28 @@
 // SPDX-License-Identifier: MIT
 //! Platform services used by the game renderer and synthetic fixtures.
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-#[cfg(all(windows, not(test)))]
+#[cfg(windows)]
 #[path = "native_input.rs"]
 mod input;
-#[cfg(all(windows, not(test)))]
+#[cfg(windows)]
 #[path = "native_platform.rs"]
 mod native;
-#[cfg(all(windows, not(test)))]
-pub(crate) use native::read as read_process_memory;
-
-#[cfg(all(windows, not(test)))]
-pub(crate) fn native() -> &'static Platform {
-    &native::NATIVE
-}
+#[cfg(windows)]
+pub(crate) use input::{
+    disable as input_disable, idle as input_idle, install as input_install, remove as input_remove,
+    unhook as input_unhook,
+};
+#[cfg(windows)]
+pub(crate) use native::{
+    attach_present, attach_queue, back_buffer_index, barrier, blit_detour, export_address,
+    fsr_dispatch_detour, initialize as hook_initialize, main_module, module_handle, module_path,
+    output_detour, pop_detour, read as read_process_memory, resource_facts, swapchain_buffer,
+    swapchain_facts,
+};
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub(crate) unsafe extern "C" fn worker_tls_slots() -> usize {
@@ -44,8 +49,6 @@ pub(crate) unsafe fn trampoline<F: Copy>(slot: &AtomicPtr<c_void>) -> Option<F> 
     (!pointer.is_null()).then(|| unsafe { std::mem::transmute_copy::<*mut c_void, F>(&pointer) })
 }
 
-pub(crate) const PLATFORM_VERSION: u32 = 2;
-
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub(crate) struct ResourceFacts {
@@ -56,113 +59,26 @@ pub(crate) struct ResourceFacts {
     _reserved: u32,
 }
 
-#[repr(C)]
-pub(crate) struct Platform {
-    _struct_size: u32,
-    _version: u32,
-    // Process, image and memory. `read` is a non-faulting ReadProcessMemory copy.
-    pub(crate) main_module: unsafe extern "C" fn() -> usize,
-    pub(crate) module_handle: unsafe extern "C" fn(name: *const c_char) -> usize,
-    pub(crate) export_address: unsafe extern "C" fn(module: usize, name: *const c_char) -> usize,
-    pub(crate) read: unsafe extern "C" fn(address: usize, out: *mut c_void, size: usize) -> bool,
-    pub(crate) thread_slots: unsafe extern "C" fn() -> usize,
-    pub(crate) qpc: unsafe extern "C" fn(now: *mut u64, frequency: *mut u64),
-    pub(crate) module_path: unsafe extern "C" fn(
-        address: usize,
-        base: *mut usize,
-        path: *mut c_char,
-        capacity: usize,
-    ) -> bool,
-    // MinHook.
-    pub(crate) hook_initialize: unsafe extern "C" fn() -> bool,
-    pub(crate) hook_create: unsafe extern "C" fn(
-        target: usize,
-        detour: *const c_void,
-        original: *mut *mut c_void,
-    ) -> bool,
-    pub(crate) hook_enable: unsafe extern "C" fn(target: usize) -> bool,
-    pub(crate) hook_disable: unsafe extern "C" fn(target: usize) -> bool,
-    pub(crate) hook_remove: unsafe extern "C" fn(target: usize) -> bool,
-    // Detours that capture the native return address before forwarding to this crate.
-    pub(crate) pop_detour: *const c_void,
-    pub(crate) output_detour: *const c_void,
-    pub(crate) blit_detour: *const c_void,
-    pub(crate) fsr_dispatch_detour: *const c_void,
-    // D3D12/DXGI. Attach clones the object's own table and retains one reference on success.
-    pub(crate) attach_queue: unsafe extern "C" fn(
-        queue: *mut c_void,
-        detour: *const c_void,
-        original: *mut *mut c_void,
-    ) -> bool,
-    pub(crate) attach_present: unsafe extern "C" fn(
-        swapchain: *mut c_void,
-        detour: *const c_void,
-        original: *mut *mut c_void,
-    ) -> bool,
-    pub(crate) resource_facts:
-        unsafe extern "C" fn(resource: *mut c_void, out: *mut ResourceFacts) -> bool,
-    pub(crate) barrier:
-        unsafe extern "C" fn(list: *mut c_void, resource: *mut c_void, before: u32, after: u32),
-    pub(crate) swapchain_facts:
-        unsafe extern "C" fn(swapchain: *mut c_void, buffers: *mut u32, window: *mut u64) -> bool,
-    /// Returns a referenced buffer or null.
-    pub(crate) swapchain_buffer:
-        unsafe extern "C" fn(swapchain: *mut c_void, index: u32) -> *mut c_void,
-    pub(crate) back_buffer_index: unsafe extern "C" fn(swapchain: *mut c_void) -> u32,
-    pub(crate) release: unsafe extern "C" fn(object: *mut c_void),
-    // Window-message and XInput read facts on the game's input thread.
-    pub(crate) input_install: unsafe extern "C" fn(
-        message: unsafe extern "C" fn(u32, u32),
-        controller: unsafe extern "C" fn(),
-    ),
-    pub(crate) input_disable: unsafe extern "C" fn(),
-    pub(crate) input_idle: unsafe extern "C" fn() -> bool,
-    pub(crate) input_unhook: unsafe extern "C" fn() -> bool,
-    pub(crate) input_remove: unsafe extern "C" fn() -> bool,
-}
+/// The Windows and COM services of the game DLL (`native_platform.rs`).
+pub(crate) struct Platform;
 
-const _: () = {
-    assert!(size_of::<ResourceFacts>() == 24);
-    assert!(size_of::<Platform>() == 8 + 29 * size_of::<usize>());
-    assert!(std::mem::offset_of!(Platform, pop_detour) == 8 + 12 * 8);
-    assert!(std::mem::offset_of!(Platform, attach_queue) == 8 + 16 * 8);
-    assert!(std::mem::offset_of!(Platform, input_install) == 8 + 24 * 8);
-};
+const _: () = assert!(size_of::<ResourceFacts>() == 24);
 
-// The native table is a constant with static storage in the plugin DLL.
-unsafe impl Sync for Platform {}
-
-static PLATFORM: AtomicPtr<Platform> = AtomicPtr::new(ptr::null_mut());
-
-/// Accepts the plugin's native table once its size and version match this crate.
-pub(crate) fn register(platform: *const Platform) {
-    if platform.is_null() {
-        return;
-    }
-    // Only the leading header is readable from a short or foreign table.
-    let header = platform.cast::<u32>();
-    let size = unsafe { header.read() };
-    if size as usize == size_of::<Platform>() && unsafe { header.add(1).read() } == PLATFORM_VERSION
-    {
-        PLATFORM.store(platform.cast_mut(), Ordering::Release);
-    }
-}
-
+/// The platform. Unit tests see none, so they never reach the game image.
 pub(crate) fn get() -> Option<&'static Platform> {
-    // A registered table lives in the plugin DLL's constant data until unload.
-    unsafe { PLATFORM.load(Ordering::Acquire).as_ref() }
+    if cfg!(test) { None } else { Some(&Platform) }
 }
 
 impl Platform {
     pub(crate) fn read_bytes(&self, address: usize, out: &mut [u8]) -> bool {
-        address != 0 && unsafe { (self.read)(address, out.as_mut_ptr().cast(), out.len()) }
+        address != 0 && unsafe { native::read(address, out.as_mut_ptr().cast(), out.len()) }
     }
 
     /// Copies a plain-data value. `T` must be valid for every bit pattern.
     pub(crate) fn read_value<T: Copy + Default>(&self, address: usize) -> Option<T> {
         let mut value = T::default();
         let read = address != 0
-            && unsafe { (self.read)(address, (&raw mut value).cast(), size_of::<T>()) };
+            && unsafe { native::read(address, (&raw mut value).cast(), size_of::<T>()) };
         read.then_some(value)
     }
 
@@ -177,7 +93,7 @@ impl Platform {
 
     pub(crate) fn qpc(&self) -> (u64, u64) {
         let (mut now, mut frequency) = (0, 0);
-        unsafe { (self.qpc)(&mut now, &mut frequency) };
+        unsafe { native::qpc(&mut now, &mut frequency) };
         (now, frequency)
     }
 
@@ -188,7 +104,7 @@ impl Platform {
         original: &AtomicPtr<c_void>,
     ) -> bool {
         let mut trampoline = ptr::null_mut();
-        if !unsafe { (self.hook_create)(target, detour, &mut trampoline) } {
+        if !unsafe { native::create(target, detour, &mut trampoline) } {
             return false;
         }
         original.store(trampoline, Ordering::Release);
@@ -196,20 +112,20 @@ impl Platform {
     }
 
     pub(crate) fn enable(&self, target: usize) -> bool {
-        unsafe { (self.hook_enable)(target) }
+        unsafe { native::enable(target) }
     }
 
     pub(crate) fn disable(&self, target: usize) -> bool {
-        unsafe { (self.hook_disable)(target) }
+        unsafe { native::disable(target) }
     }
 
     pub(crate) fn remove(&self, target: usize) -> bool {
-        unsafe { (self.hook_remove)(target) }
+        unsafe { native::remove(target) }
     }
 
     pub(crate) fn release(&self, object: *mut c_void) {
         if !object.is_null() {
-            unsafe { (self.release)(object) };
+            unsafe { native::release(object) };
         }
     }
 }
@@ -221,8 +137,8 @@ pub(crate) struct ImageFacts {
     pub(crate) image_size: u32,
 }
 
-pub(crate) fn image_facts(platform: &Platform, module: usize) -> Option<ImageFacts> {
-    image_header(platform.read, module).map(|(_, facts)| facts)
+pub(crate) fn image_facts(module: usize) -> Option<ImageFacts> {
+    image_header(native::read, module).map(|(_, facts)| facts)
 }
 
 pub(crate) const PE_SIGNATURE: u32 = 0x4550;

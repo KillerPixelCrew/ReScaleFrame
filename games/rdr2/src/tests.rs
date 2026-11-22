@@ -38,7 +38,7 @@ fn published() -> rsf_game_plugin_api {
     let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
     api.struct_size = size_of::<rsf_game_plugin_api>() as u32;
     assert_eq!(
-        unsafe { rsf_rdr2_publish_api(RSF_GAME_ABI_VERSION, &mut api, ptr::null()) },
+        unsafe { rsf_get_game_plugin_api(RSF_GAME_ABI_VERSION, &mut api) },
         OK
     );
     api
@@ -48,12 +48,12 @@ fn published() -> rsf_game_plugin_api {
 fn publication_checks_size_and_abi() {
     let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
     assert_eq!(
-        unsafe { rsf_rdr2_publish_api(RSF_GAME_ABI_VERSION, &mut api, ptr::null()) },
+        unsafe { rsf_get_game_plugin_api(RSF_GAME_ABI_VERSION, &mut api) },
         INVALID_ARGUMENT
     );
     api.struct_size = size_of::<rsf_game_plugin_api>() as u32;
     assert_eq!(
-        unsafe { rsf_rdr2_publish_api(RSF_GAME_ABI_VERSION + 1, &mut api, ptr::null()) },
+        unsafe { rsf_get_game_plugin_api(RSF_GAME_ABI_VERSION + 1, &mut api) },
         ABI_MISMATCH
     );
     let api = published();

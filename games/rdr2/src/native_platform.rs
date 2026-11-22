@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Windows x64 leaves for the renderer. COM layouts follow Windows SDK 10.0.26100.0.
-use super::{PLATFORM_VERSION, Platform, ResourceFacts, worker_tls_slots};
+use super::ResourceFacts;
 use crate::{renderer, scene};
 use rsf_minhook_sys::*;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -19,22 +19,22 @@ use windows_sys::Win32::System::{
 use windows_sys::core::GUID;
 
 #[unsafe(naked)]
-unsafe extern "C" fn pop(_: *mut c_void, _: *mut c_void) -> *mut c_void {
+pub(crate) unsafe extern "C" fn pop_detour(_: *mut c_void, _: *mut c_void) -> *mut c_void {
     naked_asm!("mov r8, [rsp]", "jmp {}", sym renderer::rsf_rdr2_pop_detour);
 }
 #[unsafe(naked)]
-unsafe extern "C" fn output(_: *mut c_void, _: *mut c_void, _: u32) -> usize {
+pub(crate) unsafe extern "C" fn output_detour(_: *mut c_void, _: *mut c_void, _: u32) -> usize {
     naked_asm!("mov r9, [rsp]", "jmp {}", sym scene::rsf_rdr2_output_detour);
 }
 #[unsafe(naked)]
-unsafe extern "C" fn fsr_dispatch(_: *mut c_void, _: *const c_void) -> i32 {
+pub(crate) unsafe extern "C" fn fsr_dispatch_detour(_: *mut c_void, _: *const c_void) -> i32 {
     naked_asm!("mov r8, [rsp]", "jmp {}", sym renderer::rsf_rdr2_fsr_dispatch_detour);
 }
 
 // Pack the two 32-bit arguments into rdx to free r8 for the actual caller address.
 // The four register arguments and both existing stack arguments fit without changing rsp.
 #[unsafe(naked)]
-unsafe extern "C" fn blit(
+pub(crate) unsafe extern "C" fn blit_detour(
     _: *mut c_void,
     _: u32,
     _: u32,
@@ -74,7 +74,7 @@ pub(crate) unsafe extern "C" fn read(address: usize, out: *mut c_void, bytes: us
         && count == bytes
 }
 
-unsafe extern "C" fn module_path(
+pub(crate) unsafe extern "C" fn module_path(
     address: usize,
     base: *mut usize,
     path: *mut c_char,
@@ -213,7 +213,7 @@ unsafe fn clone_table<const N: usize>(
     }
     installed
 }
-unsafe extern "C" fn attach_queue(
+pub(crate) unsafe extern "C" fn attach_queue(
     queue: *mut c_void,
     detour: *const c_void,
     original: *mut *mut c_void,
@@ -232,7 +232,7 @@ unsafe extern "C" fn attach_queue(
     unsafe { add_ref(queue) };
     true
 }
-unsafe extern "C" fn attach_present(
+pub(crate) unsafe extern "C" fn attach_present(
     chain: *mut c_void,
     detour: *const c_void,
     original: *mut *mut c_void,
@@ -252,7 +252,10 @@ unsafe extern "C" fn attach_present(
     }
     true
 }
-unsafe extern "C" fn resource_facts(resource: *mut c_void, out: *mut ResourceFacts) -> bool {
+pub(crate) unsafe extern "C" fn resource_facts(
+    resource: *mut c_void,
+    out: *mut ResourceFacts,
+) -> bool {
     if resource.is_null() || out.is_null() {
         return false;
     }
@@ -271,7 +274,12 @@ unsafe extern "C" fn resource_facts(resource: *mut c_void, out: *mut ResourceFac
     }
     true
 }
-unsafe extern "C" fn barrier(list: *mut c_void, resource: *mut c_void, before: u32, after: u32) {
+pub(crate) unsafe extern "C" fn barrier(
+    list: *mut c_void,
+    resource: *mut c_void,
+    before: u32,
+    after: u32,
+) {
     let barrier = TransitionBarrier {
         kind: 0,
         flags: 0,
@@ -285,7 +293,7 @@ unsafe extern "C" fn barrier(list: *mut c_void, resource: *mut c_void, before: u
         unsafe { method(list, BARRIER) };
     unsafe { record(list, 1, &barrier) };
 }
-unsafe extern "C" fn swapchain_facts(
+pub(crate) unsafe extern "C" fn swapchain_facts(
     chain: *mut c_void,
     buffers: *mut u32,
     window: *mut u64,
@@ -305,7 +313,7 @@ unsafe extern "C" fn swapchain_facts(
     }
     true
 }
-unsafe extern "C" fn swapchain_buffer(chain: *mut c_void, index: u32) -> *mut c_void {
+pub(crate) unsafe extern "C" fn swapchain_buffer(chain: *mut c_void, index: u32) -> *mut c_void {
     if chain.is_null() {
         return null_mut();
     }
@@ -318,30 +326,30 @@ unsafe extern "C" fn swapchain_buffer(chain: *mut c_void, index: u32) -> *mut c_
     }
     buffer
 }
-unsafe extern "C" fn back_buffer_index(chain: *mut c_void) -> u32 {
+pub(crate) unsafe extern "C" fn back_buffer_index(chain: *mut c_void) -> u32 {
     let get: unsafe extern "system" fn(*mut c_void) -> u32 = unsafe { method(chain, BACK_BUFFER) };
     unsafe { get(chain) }
 }
-unsafe extern "C" fn release(object: *mut c_void) {
+pub(crate) unsafe extern "C" fn release(object: *mut c_void) {
     if !object.is_null() {
         let release: unsafe extern "system" fn(*mut c_void) -> u32 = unsafe { method(object, 2) };
         unsafe { release(object) };
     }
 }
 
-unsafe extern "C" fn main_module() -> usize {
+pub(crate) unsafe extern "C" fn main_module() -> usize {
     unsafe { GetModuleHandleW(ptr::null()) as usize }
 }
-unsafe extern "C" fn module_handle(name: *const c_char) -> usize {
+pub(crate) unsafe extern "C" fn module_handle(name: *const c_char) -> usize {
     unsafe { GetModuleHandleA(name.cast()) as usize }
 }
-unsafe extern "C" fn export_address(module: usize, name: *const c_char) -> usize {
+pub(crate) unsafe extern "C" fn export_address(module: usize, name: *const c_char) -> usize {
     if module == 0 {
         return 0;
     }
     unsafe { GetProcAddress(module as _, name.cast()).map_or(0, |entry| entry as usize) }
 }
-unsafe extern "C" fn qpc(now: *mut u64, frequency: *mut u64) {
+pub(crate) unsafe extern "C" fn qpc(now: *mut u64, frequency: *mut u64) {
     let (mut counter, mut rate) = (0, 0);
     unsafe {
         QueryPerformanceCounter(&mut counter);
@@ -350,56 +358,22 @@ unsafe extern "C" fn qpc(now: *mut u64, frequency: *mut u64) {
         frequency.write(rate as u64);
     }
 }
-unsafe extern "C" fn initialize() -> bool {
+pub(crate) unsafe extern "C" fn initialize() -> bool {
     matches!(unsafe { MH_Initialize() }, 0 | 1)
 }
-unsafe extern "C" fn create(
+pub(crate) unsafe extern "C" fn create(
     target: usize,
     detour: *const c_void,
     original: *mut *mut c_void,
 ) -> bool {
     unsafe { MH_CreateHook(target as _, detour.cast_mut(), original) == 0 }
 }
-unsafe extern "C" fn enable(target: usize) -> bool {
+pub(crate) unsafe extern "C" fn enable(target: usize) -> bool {
     unsafe { MH_EnableHook(target as _) == 0 }
 }
-unsafe extern "C" fn disable(target: usize) -> bool {
+pub(crate) unsafe extern "C" fn disable(target: usize) -> bool {
     matches!(unsafe { MH_DisableHook(target as _) }, 0 | 4 | 6)
 }
-unsafe extern "C" fn remove(target: usize) -> bool {
+pub(crate) unsafe extern "C" fn remove(target: usize) -> bool {
     matches!(unsafe { MH_RemoveHook(target as _) }, 0 | 4)
 }
-
-pub(super) static NATIVE: Platform = Platform {
-    _struct_size: size_of::<Platform>() as u32,
-    _version: PLATFORM_VERSION,
-    main_module,
-    module_handle,
-    export_address,
-    read,
-    thread_slots: worker_tls_slots,
-    qpc,
-    module_path,
-    hook_initialize: initialize,
-    hook_create: create,
-    hook_enable: enable,
-    hook_disable: disable,
-    hook_remove: remove,
-    pop_detour: pop as *const c_void,
-    output_detour: output as *const c_void,
-    blit_detour: blit as *const c_void,
-    fsr_dispatch_detour: fsr_dispatch as *const c_void,
-    attach_queue,
-    attach_present,
-    resource_facts,
-    barrier,
-    swapchain_facts,
-    swapchain_buffer,
-    back_buffer_index,
-    release,
-    input_install: super::input::install,
-    input_disable: super::input::disable,
-    input_idle: super::input::idle,
-    input_unhook: super::input::unhook,
-    input_remove: super::input::remove,
-};

@@ -245,7 +245,6 @@ const HOST_STATES: [u32; 5] = [
 ];
 
 fn transition(
-    platform: &Platform,
     list: *mut c_void,
     resources: &[*mut c_void; 5],
     before: &[u32; 5],
@@ -253,7 +252,7 @@ fn transition(
 ) {
     for ((&resource, &from), &to) in resources.iter().zip(before).zip(after) {
         if !resource.is_null() && from != to {
-            unsafe { (platform.barrier)(list, resource, from, to) };
+            unsafe { platform::barrier(list, resource, from, to) };
         }
     }
 }
@@ -330,7 +329,7 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
         );
     };
     let mut output = ResourceFacts::default();
-    if !unsafe { (ctx.platform.resource_facts)(d.output, &mut output) }
+    if !unsafe { platform::resource_facts(d.output, &mut output) }
         || output.width > d3d::MAX_EXTENT
         || u64::from(output.height) > d3d::MAX_EXTENT
         || output.format != d3d::R16G16B16A16_FLOAT
@@ -376,21 +375,9 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
     pass.resource_generation = generation;
     let resources = [d.color, d.depth, d.motion, d.output, d.exposure];
     let before = request.engine_states.unwrap_or(DLSS_STATES);
-    transition(
-        ctx.platform,
-        request.list,
-        &resources,
-        &before,
-        &HOST_STATES,
-    );
+    transition(request.list, &resources, &before, &HOST_STATES);
     let accepted = unsafe { process_upscale(host.0.user, request.list, &pass) } == 0;
-    transition(
-        ctx.platform,
-        request.list,
-        &resources,
-        &HOST_STATES,
-        &before,
-    );
+    transition(request.list, &resources, &HOST_STATES, &before);
     history.frame = frame;
     history.generation = generation;
     history.jitter = d.jitter;
@@ -495,16 +482,16 @@ unsafe extern "C" fn evaluate(
     };
     let ctx = platform::get().and_then(context);
     let mut descriptor = Evaluation::default();
-    let copied = ctx.as_ref().is_some_and(|ctx| {
+    let copied = ctx.is_some() && {
         !pointer.is_null()
             && unsafe {
-                (ctx.platform.read)(
+                platform::read_process_memory(
                     pointer as usize,
                     (&raw mut descriptor).cast(),
                     size_of::<Evaluation>(),
                 )
             }
-    });
+    };
     let Some(ctx) = ctx.filter(|_| copied) else {
         return unsafe { native(list, feature, parameters, pointer) };
     };
@@ -551,7 +538,7 @@ fn report_fsr_caller(ctx: &Context, caller: usize) {
     }
     let mut base = 0usize;
     let mut path = [0u8; 1024];
-    unsafe { (ctx.platform.module_path)(caller, &mut base, path.as_mut_ptr().cast(), path.len()) };
+    unsafe { platform::module_path(caller, &mut base, path.as_mut_ptr().cast(), path.len()) };
     let path = CStr::from_bytes_until_nul(&path)
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
@@ -733,13 +720,13 @@ unsafe extern "system" fn present(owner: *mut c_void, interval: u32, flags: u32)
     result
 }
 
-fn select_observers(platform: &Platform, host: &Host, queue: usize, swapchain: usize) {
+fn select_observers(host: &Host, queue: usize, swapchain: usize) {
     let mut observers = lock(&OBSERVERS);
     let queue_changed = observers.queue.select(queue, |original| unsafe {
-        (platform.attach_queue)(queue as *mut c_void, execute as *const c_void, original)
+        platform::attach_queue(queue as *mut c_void, execute as *const c_void, original)
     });
     let swapchain_changed = observers.swapchain.select(swapchain, |original| unsafe {
-        (platform.attach_present)(swapchain as *mut c_void, present as *const c_void, original)
+        platform::attach_present(swapchain as *mut c_void, present as *const c_void, original)
     });
     if queue_changed || swapchain_changed {
         observers.changed();
@@ -774,7 +761,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_pop_detour(
             .platform
             .read_pointer(image.wrapping_add(SWAPCHAIN))
             .unwrap_or(0);
-        select_observers(ctx.platform, &ctx.host, queue, swapchain);
+        select_observers(&ctx.host, queue, swapchain);
     }
     result
 }
@@ -782,7 +769,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_pop_detour(
 /// The FSR2 dispatch export, or the reason the route is refused. A refusal leaves native FSR2
 /// untouched; the route is independent of the DLSS route.
 fn find_fsr_export(platform: &Platform, host: &Host, image: usize) -> Result<usize, &'static str> {
-    let module = unsafe { (platform.module_handle)(fsr::MODULE.as_ptr()) };
+    let module = unsafe { platform::module_handle(fsr::MODULE.as_ptr()) };
     if module == 0 {
         return Err("ffx_fsr2_api_x64.dll is not loaded");
     }
@@ -790,18 +777,18 @@ fn find_fsr_export(platform: &Platform, host: &Host, image: usize) -> Result<usi
         timestamp: fsr::TIMESTAMP,
         image_size: fsr::IMAGE_SIZE,
     };
-    if image_facts(platform, module) != Some(expected) {
+    if image_facts(module) != Some(expected) {
         return Err(
             "ffx_fsr2_api_x64.dll is not the 1491.50 build (timestamp 64907ede, image 0x10000)",
         );
     }
-    let entry = unsafe { (platform.export_address)(module, fsr::DISPATCH.as_ptr()) };
+    let entry = unsafe { platform::export_address(module, fsr::DISPATCH.as_ptr()) };
     if entry != module.wrapping_add(fsr::DISPATCH_RVA)
         || !platform.matches(entry, &fsr::DISPATCH_BYTES)
     {
         return Err("ffxFsr2ContextDispatch is not at +3c70 with the expected entry bytes");
     }
-    let create = unsafe { (platform.export_address)(module, fsr::CREATE.as_ptr()) };
+    let create = unsafe { platform::export_address(module, fsr::CREATE.as_ptr()) };
     if create == module.wrapping_add(fsr::CREATE_RVA)
         && platform.matches(create, &fsr::CREATE_BYTES)
         && platform.create(create, fsr_create as *const c_void, &ORIGINAL_FSR_CREATE)
@@ -831,13 +818,13 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
     let Some(platform) = platform::get() else {
         return NOT_READY;
     };
-    let image = unsafe { (platform.main_module)() };
+    let image = unsafe { platform::main_module() };
     IMAGE.store(image, Ordering::SeqCst);
     let expected = ImageFacts {
         timestamp: IMAGE_TIMESTAMP,
         image_size: IMAGE_SIZE,
     };
-    if image_facts(platform, image) != Some(expected) {
+    if image_facts(image) != Some(expected) {
         return NOT_READY;
     }
     if !platform.matches(image.wrapping_add(EVALUATE.rva), &EVALUATE.expected)
@@ -845,7 +832,7 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
     {
         return NATIVE_REFUSED;
     }
-    if !unsafe { (platform.hook_initialize)() } {
+    if !unsafe { platform::hook_initialize() } {
         return NATIVE_REFUSED;
     }
     let host = Host(*services);
@@ -855,7 +842,7 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
     }
     if !platform.create(
         image.wrapping_add(POP.rva),
-        platform.pop_detour,
+        platform::pop_detour as *const c_void,
         &ORIGINAL_POP,
     ) {
         platform.remove(evaluate_site);
@@ -867,7 +854,13 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
         host.log("RDR2 completed-scene producer unavailable; SR remains available.");
     }
     let refused = match find_fsr_export(platform, &host, image) {
-        Ok(entry) if platform.create(entry, platform.fsr_dispatch_detour, &ORIGINAL_FSR) => {
+        Ok(entry)
+            if platform.create(
+                entry,
+                platform::fsr_dispatch_detour as *const c_void,
+                &ORIGINAL_FSR,
+            ) =>
+        {
             FSR_EXPORT.store(entry, Ordering::SeqCst);
             None
         }

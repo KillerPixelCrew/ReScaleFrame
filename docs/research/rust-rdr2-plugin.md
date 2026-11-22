@@ -38,16 +38,14 @@ made. The ASI (`rsf_asi_rdr2`) and the attach helper (`rsf_rdr2_attach`) stay C+
 | `native_renderer.cpp` | `renderer.rs`, `layout.rs` | image identity (`0x65eec92e`, `0x7397600`), `+26f3a3c`/`+26c97d4` entry bytes, the 0x168-byte DLSS descriptor, TLS worker view (`+5b403e0`, block `+14d8`/`+61c`), frame counters `+542904c`/`+5429058`, frame time `+59b393c`, NGX `GetI` slot 11 creation flags, refusal reasons 1 to 7 with their messages and dedupe, per-feature history and `native_gap` reset, SR pass identity and transitions, FSR2 2.1.2-prefix normalization and engine states, `ffx_fsr2_api_x64.dll` identity and export bytes, caller report, game-submit return `+26df79b`, swapchain global `+571c7e8`, queue/Present observer attach, lifecycle ordering and busy rules |
 | `scene_boundary.cpp` | `scene.rs`, `layout.rs` | blit/marker/output/sleep/mode entry bytes, `+26b4250` texture accessor bytes, the three `call +5f1e08` sites and their returns, blit return `+5c11b9`, draw-context colour view and resource chain, marker ring and required mask, scene ring and 16-blit limit, final-scene and window passes, SDK sleep/mode latency reports, input-source framing and input event flags, hook rollback, start/quiesce/stop order |
 
-`plugin.cpp` keeps the `rsf_get_game_plugin_api` export, so the DLL name, export and ABI 24
-contract are unchanged. It lends the leaf table in `native_platform.cpp` to
-`rsf_rdr2_publish_api`. The table carries only typed leaves: `ReadProcessMemory`, module and
-export lookup, `gs:[0x58]`, QPC, caller module path, MinHook create/enable/disable/remove, four
-detour shims that capture `_ReturnAddress()` for the pop, postfx output, blit and FSR dispatch
-sites, D3D12/DXGI COM calls (queue type, table clone, swapchain identity, resource description,
-transition barrier, swapchain description and buffers, back-buffer index, release), and the
-window-message hook and `XInputFacts` observation. The crate imports no native symbol, so the
-camera fixture links it without the plugin's leaves. Both sides assert the table's size and
-offsets; bindgen-cli was not available, so the table is hand-written like the Anomaly hook tables.
+`rsf_get_game_plugin_api` is a Rust export listed in `plugin.def`, so the DLL name, export and ABI
+contract are unchanged. `native_platform.rs` holds the Windows leaves the renderer calls directly:
+`ReadProcessMemory`, module and export lookup, `gs:[0x58]`, QPC, caller module path, MinHook
+create/enable/disable/remove, four naked detour shims that capture the return address for the pop,
+postfx output, blit and FSR dispatch sites, D3D12/DXGI COM calls (queue type, table clone, swapchain
+identity, resource description, transition barrier, swapchain description and buffers, back-buffer
+index, release), and the window-message hook and `XInputFacts` observation (`native_input.rs`).
+Unit tests see no platform (`platform::get` is None), so they never reach the game image.
 
 `render_camera.h` now declares the crate's camera C ABI (`rsf_rdr2_decode_render_camera_abi`) and
 an inline wrapper with the old signature, so `tests/rdr2_camera.cpp` is unchanged. Its CMake target

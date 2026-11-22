@@ -119,7 +119,7 @@ pub(crate) fn render_block(
     if index >= block::TLS_LIMIT {
         return None;
     }
-    let slots = unsafe { (platform.thread_slots)() };
+    let slots = unsafe { platform::worker_tls_slots() };
     let block = platform.read_pointer(slots.wrapping_add(index as usize * size_of::<usize>()))?;
     let value = platform.read_pointer(block.wrapping_add(field))?;
     let flags = platform.read_value::<u32>(block.wrapping_add(block::FLAGS))?;
@@ -193,9 +193,9 @@ unsafe extern "C" fn controller_received() {
     }
 }
 
-fn input_thread(platform: &Platform, frame: u64) {
+fn input_thread(frame: u64) {
     INPUT_SOURCE.store(frame, Ordering::SeqCst);
-    unsafe { (platform.input_install)(received_message, controller_received) };
+    unsafe { platform::input_install(received_message, controller_received) };
 }
 
 unsafe extern "C" fn sleep() -> bool {
@@ -206,7 +206,7 @@ unsafe extern "C" fn sleep() -> bool {
         if let Some(current) = platform.read_value::<u32>(image.wrapping_add(FRAME_COUNTER)) {
             let frame = u64::from(current.wrapping_add(1));
             if ACTIVE.load(Ordering::SeqCst) {
-                input_thread(platform, frame);
+                input_thread(frame);
             }
             if latency(platform, RSF_GAME_LATENCY_SLEEP, frame) {
                 return true;
@@ -340,7 +340,7 @@ fn completed_scene(image: usize) {
     // Match the actual colour resource rather than the swapchain's current CPU index on a recording
     // worker. References are local to this callback and cannot block a later resize.
     let (mut buffers, mut window) = (0u32, 0u64);
-    if !unsafe { (platform.swapchain_facts)(chain, &mut buffers, &mut window) }
+    if !unsafe { platform::swapchain_facts(chain, &mut buffers, &mut window) }
         || buffers > MAX_BUFFERS
     {
         return;
@@ -349,7 +349,7 @@ fn completed_scene(image: usize) {
     for index in 0..buffers {
         let candidate = Retained {
             platform,
-            object: unsafe { (platform.swapchain_buffer)(chain, index) },
+            object: unsafe { platform::swapchain_buffer(chain, index) },
         };
         if !candidate.object.is_null() && candidate.object as usize == target.resource {
             surface = Some(candidate);
@@ -358,7 +358,7 @@ fn completed_scene(image: usize) {
     }
     let Some(surface) = surface else { return };
     let mut facts = ResourceFacts::default();
-    if !unsafe { (platform.resource_facts)(surface.object, &mut facts) }
+    if !unsafe { platform::resource_facts(surface.object, &mut facts) }
         || facts.width != u64::from(pass.camera.output_width)
         || facts.height != pass.camera.output_height
         || facts.samples != 1
@@ -410,10 +410,10 @@ pub(crate) fn before_present(
     if flags & 1 != 0 {
         return None; // DXGI_PRESENT_TEST does not present a buffer.
     }
-    let index = unsafe { (platform.back_buffer_index)(chain) };
+    let index = unsafe { platform::back_buffer_index(chain) };
     let buffer = Retained {
         platform,
-        object: unsafe { (platform.swapchain_buffer)(chain, index) },
+        object: unsafe { platform::swapchain_buffer(chain, index) },
     };
     (!buffer.object.is_null()).then_some(PresentReceipt {
         chain: chain as usize,
@@ -478,7 +478,7 @@ unsafe extern "C" fn marker(kind: u32, frame: u64) -> bool {
             let chain = receipt.chain as *mut c_void;
             let presented = Retained {
                 platform,
-                object: unsafe { (platform.swapchain_buffer)(chain, receipt.index) },
+                object: unsafe { platform::swapchain_buffer(chain, receipt.index) },
             };
             if presented.object as usize == receipt.surface {
                 pass.swapchain = chain;
@@ -503,16 +503,16 @@ struct Hook {
 }
 
 /// Creation order; rollback runs in reverse.
-fn hooks(platform: &Platform) -> [Hook; 5] {
+fn hooks() -> [Hook; 5] {
     [
         Hook {
             rva: OUTPUT.rva,
-            detour: platform.output_detour,
+            detour: platform::output_detour as *const c_void,
             original: &ORIGINAL_OUTPUT,
         },
         Hook {
             rva: BLIT.rva,
-            detour: platform.blit_detour,
+            detour: platform::blit_detour as *const c_void,
             original: &ORIGINAL_BLIT,
         },
         Hook {
@@ -568,7 +568,7 @@ pub(crate) fn prepare(
         host.log("RDR2 scene producer refused: postfx output callers differ.");
         return false;
     }
-    let hooks = hooks(platform);
+    let hooks = hooks();
     for (index, hook) in hooks.iter().enumerate() {
         if !platform.create(image.wrapping_add(hook.rva), hook.detour, hook.original) {
             for created in hooks[..index].iter().rev() {
@@ -608,11 +608,11 @@ pub(crate) fn start() -> bool {
 
 pub(crate) fn quiesce() -> bool {
     ACTIVE.store(false, Ordering::SeqCst);
-    let Some(platform) = platform::get() else {
+    if platform::get().is_none() {
         return READERS.load(Ordering::SeqCst) == 0;
-    };
-    unsafe { (platform.input_disable)() };
-    READERS.load(Ordering::SeqCst) == 0 && unsafe { (platform.input_idle)() }
+    }
+    unsafe { platform::input_disable() };
+    READERS.load(Ordering::SeqCst) == 0 && unsafe { platform::input_idle() }
 }
 
 pub(crate) fn stop() -> bool {
@@ -627,13 +627,13 @@ pub(crate) fn stop() -> bool {
     }
     let image = IMAGE.load(Ordering::SeqCst);
     INPUT_SOURCE.store(0, Ordering::SeqCst);
-    unsafe { (platform.input_disable)() };
+    unsafe { platform::input_disable() };
     let sites =
         [BLIT.rva, MARKER.rva, OUTPUT.rva, SLEEP.rva, MODE.rva].map(|rva| image.wrapping_add(rva));
-    if !unsafe { (platform.input_unhook)() }
+    if !unsafe { platform::input_unhook() }
         || !sites.iter().all(|&site| platform.disable(site))
         || READERS.load(Ordering::SeqCst) != 0
-        || !unsafe { (platform.input_idle)() && (platform.input_remove)() }
+        || !unsafe { platform::input_idle() && platform::input_remove() }
         || !sites.into_iter().all(|site| platform.remove(site))
     {
         return false;
