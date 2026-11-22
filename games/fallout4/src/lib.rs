@@ -7,8 +7,8 @@
 //! admission, the reduced-render recovery transaction and SR and HUDless publication, and
 //! render-input admission with its camera history and leased passes.
 //!
-//! Native leaves stay in C++ and reach this crate through rsf_fallout4_platform
-//! (fallout4_platform.h), the linked CPU leaves (cpu_events_platform.h), the render hook
+//! Native leaves stay in C++ and reach this crate through linked host and CPU functions
+//! (fallout4_platform.h and cpu_events_platform.h), the render hook
 //! leaves (render_hooks_platform.h) and the per-call depth-domain and render-input leaves
 //! (depth_domains_platform.h, render_inputs_platform.h): MinHook, the typed detour shells with
 //! their return addresses and trampoline calls, exception guards, the shared file hash, the Steam
@@ -37,7 +37,7 @@ use platform_abi::{
     rsf_d3d11_creation_scope, rsf_d3d11_host_setup, rsf_d3d11_native_chain,
     rsf_d3d11_presentation_binding, rsf_fallout4_bind_presentation_fn,
     rsf_fallout4_creation_begin_fn, rsf_fallout4_creation_end_fn, rsf_fallout4_host_active_fn,
-    rsf_fallout4_host_create_fn, rsf_fallout4_platform,
+    rsf_fallout4_host_create_fn,
 };
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detection, rsf_game_hooks_api, rsf_game_host_services, rsf_game_info,
@@ -75,50 +75,8 @@ const PENDING: &CStr = c"Guarded native/reduced SR callbacks; game quality, FG a
 /// A native leaf threw; the lifecycle entry reports RSF_ERROR_NOT_READY as the C++ catch did.
 pub(crate) struct Threw;
 
-/// The validated native leaf table. Every entry is present.
-pub(crate) struct Ops {
-    log: unsafe extern "C" fn(
-        log: rsf_game_log_fn,
-        user: *mut ::core::ffi::c_void,
-        message: *const ::core::ffi::c_char,
-    ) -> bool,
-    file_sha256: unsafe extern "C" fn(
-        path: *const u16,
-        digest: *mut ::core::ffi::c_char,
-        hashed: *mut bool,
-    ) -> bool,
-    host_create: unsafe extern "C" fn(
-        create: rsf_fallout4_host_create_fn,
-        setup: *const rsf_d3d11_host_setup,
-        services: *mut rsf_game_host_services,
-        result: *mut i32,
-    ) -> bool,
-    host_set_active: unsafe extern "C" fn(
-        activate: rsf_fallout4_host_active_fn,
-        services_user: *mut ::core::ffi::c_void,
-        active: u32,
-        result: *mut i32,
-    ) -> bool,
-    creation_begin: unsafe extern "C" fn(
-        begin: rsf_fallout4_creation_begin_fn,
-        services_user: *mut ::core::ffi::c_void,
-        scope: *mut rsf_d3d11_creation_scope,
-        result: *mut i32,
-    ) -> bool,
-    creation_end: unsafe extern "C" fn(
-        end: rsf_fallout4_creation_end_fn,
-        services_user: *mut ::core::ffi::c_void,
-        scope: *const rsf_d3d11_creation_scope,
-        outputs: *const rsf_d3d11_native_chain,
-        result: *mut i32,
-    ) -> bool,
-    bind_presentation: unsafe extern "C" fn(
-        bind: rsf_fallout4_bind_presentation_fn,
-        services_user: *mut ::core::ffi::c_void,
-        binding: *const rsf_d3d11_presentation_binding,
-        result: *mut i32,
-    ) -> bool,
-}
+/// Operations provided by the linked native guards and MinHook.
+pub(crate) struct Ops;
 
 // MinHook.h, MH_STATUS. The native CMake target links the same MinHook instance for all seams.
 const MH_OK: i32 = 0;
@@ -134,7 +92,47 @@ unsafe extern "system" {
 }
 
 unsafe extern "C" {
-    fn rsf_fallout4_host_boundary() -> *const rsf_fallout4_platform;
+    fn rsf_fallout4_native_log(
+        log: rsf_game_log_fn,
+        user: *mut ::core::ffi::c_void,
+        message: *const ::core::ffi::c_char,
+    ) -> bool;
+    fn rsf_fallout4_native_file_sha256(
+        path: *const u16,
+        digest: *mut ::core::ffi::c_char,
+        hashed: *mut bool,
+    ) -> bool;
+    fn rsf_fallout4_native_host_create(
+        create: rsf_fallout4_host_create_fn,
+        setup: *const rsf_d3d11_host_setup,
+        services: *mut rsf_game_host_services,
+        result: *mut i32,
+    ) -> bool;
+    fn rsf_fallout4_native_host_set_active(
+        activate: rsf_fallout4_host_active_fn,
+        services_user: *mut ::core::ffi::c_void,
+        active: u32,
+        result: *mut i32,
+    ) -> bool;
+    fn rsf_fallout4_native_creation_begin(
+        begin: rsf_fallout4_creation_begin_fn,
+        services_user: *mut ::core::ffi::c_void,
+        scope: *mut rsf_d3d11_creation_scope,
+        result: *mut i32,
+    ) -> bool;
+    fn rsf_fallout4_native_creation_end(
+        end: rsf_fallout4_creation_end_fn,
+        services_user: *mut ::core::ffi::c_void,
+        scope: *const rsf_d3d11_creation_scope,
+        outputs: *const rsf_d3d11_native_chain,
+        result: *mut i32,
+    ) -> bool;
+    fn rsf_fallout4_native_bind_presentation(
+        bind: rsf_fallout4_bind_presentation_fn,
+        services_user: *mut ::core::ffi::c_void,
+        binding: *const rsf_d3d11_presentation_binding,
+        result: *mut i32,
+    ) -> bool;
     fn rsf_fallout4_publish_render_boundary();
 }
 
@@ -149,26 +147,13 @@ fn completed(returned: bool) -> Result<(), Threw> {
 }
 
 impl Ops {
-    fn from_native(table: &rsf_fallout4_platform) -> Option<Self> {
-        Some(Self {
-            log: table.log?,
-            file_sha256: table.file_sha256?,
-            host_create: table.host_create?,
-            host_set_active: table.host_set_active?,
-            creation_begin: table.creation_begin?,
-            creation_end: table.creation_end?,
-            bind_presentation: table.bind_presentation?,
-        })
-    }
-
     pub(crate) fn log(
         &self,
         log: rsf_game_log_fn,
         user: *mut c_void,
         message: &CStr,
     ) -> Result<(), Threw> {
-        let leaf = self.log;
-        completed(unsafe { leaf(log, user, message.as_ptr()) })
+        completed(unsafe { rsf_fallout4_native_log(log, user, message.as_ptr()) })
     }
 
     pub(crate) fn log_host(
@@ -181,10 +166,11 @@ impl Ops {
 
     /// `path` is a terminated wide path.
     pub(crate) fn file_sha256(&self, path: &[u16]) -> Result<Option<[u8; 64]>, Threw> {
-        let leaf = self.file_sha256;
         let mut digest = [0u8; 64];
         let mut hashed = false;
-        completed(unsafe { leaf(path.as_ptr(), digest.as_mut_ptr().cast(), &mut hashed) })?;
+        completed(unsafe {
+            rsf_fallout4_native_file_sha256(path.as_ptr(), digest.as_mut_ptr().cast(), &mut hashed)
+        })?;
         Ok(hashed.then_some(digest))
     }
 
@@ -212,9 +198,10 @@ impl Ops {
         setup: &rsf_d3d11_host_setup,
         services: &mut rsf_game_host_services,
     ) -> Result<rsf_result, Threw> {
-        let leaf = self.host_create;
         let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe { leaf(create, setup, services, &mut result) })?;
+        completed(unsafe {
+            rsf_fallout4_native_host_create(create, setup, services, &mut result)
+        })?;
         Ok(result)
     }
 
@@ -224,9 +211,10 @@ impl Ops {
         user: *mut c_void,
         active: u32,
     ) -> Result<rsf_result, Threw> {
-        let leaf = self.host_set_active;
         let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe { leaf(activate, user, active, &mut result) })?;
+        completed(unsafe {
+            rsf_fallout4_native_host_set_active(activate, user, active, &mut result)
+        })?;
         Ok(result)
     }
 
@@ -236,9 +224,10 @@ impl Ops {
         user: *mut c_void,
         scope: &mut rsf_d3d11_creation_scope,
     ) -> Result<rsf_result, Threw> {
-        let leaf = self.creation_begin;
         let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe { leaf(Some(begin), user, scope, &mut result) })?;
+        completed(unsafe {
+            rsf_fallout4_native_creation_begin(Some(begin), user, scope, &mut result)
+        })?;
         Ok(result)
     }
 
@@ -249,10 +238,11 @@ impl Ops {
         scope: &rsf_d3d11_creation_scope,
         outputs: Option<&rsf_d3d11_native_chain>,
     ) -> Result<rsf_result, Threw> {
-        let leaf = self.creation_end;
         let outputs = outputs.map_or(std::ptr::null(), std::ptr::from_ref);
         let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe { leaf(Some(end), user, scope, outputs, &mut result) })?;
+        completed(unsafe {
+            rsf_fallout4_native_creation_end(Some(end), user, scope, outputs, &mut result)
+        })?;
         Ok(result)
     }
 
@@ -262,9 +252,10 @@ impl Ops {
         user: *mut c_void,
         binding: &rsf_d3d11_presentation_binding,
     ) -> Result<rsf_result, Threw> {
-        let leaf = self.bind_presentation;
         let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe { leaf(Some(bind), user, binding, &mut result) })?;
+        completed(unsafe {
+            rsf_fallout4_native_bind_presentation(Some(bind), user, binding, &mut result)
+        })?;
         Ok(result)
     }
 }
@@ -386,13 +377,7 @@ unsafe extern "C" fn rsf_get_game_plugin_api(
     if requested_abi != RSF_GAME_ABI_VERSION {
         return RSF_ERROR_ABI_MISMATCH;
     }
-    let Some(table) = (unsafe { rsf_fallout4_host_boundary().as_ref() }) else {
-        return RSF_ERROR_NOT_READY;
-    };
-    let Some(table) = Ops::from_native(table) else {
-        return RSF_ERROR_NOT_READY;
-    };
-    let _ = OPS.get_or_init(|| table);
+    let _ = OPS.get_or_init(|| Ops);
     let api = rsf_game_plugin_api {
         struct_size: size_of::<rsf_game_plugin_api>() as u32,
         abi_version: RSF_GAME_ABI_VERSION,

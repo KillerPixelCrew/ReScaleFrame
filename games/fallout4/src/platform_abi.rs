@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 type wchar_t = u16;
-use rsf_game_sys::{rsf_game_host_services, rsf_game_log_fn};
+use rsf_game_sys::rsf_game_host_services;
 
 pub const RSF_D3D11_HOST_ABI_VERSION: u32 = 8;
 pub const RSF_D3D11_HOST_CAP_FG_INPUTS: u32 = 1;
@@ -274,83 +274,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fallout4_create_call, feature_level) - 72usize];
     ["Offset of field: rsf_fallout4_create_call::immediate_context"]
         [::core::mem::offset_of!(rsf_fallout4_create_call, immediate_context) - 80usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_fallout4_platform {
-    pub log: ::core::option::Option<
-        unsafe extern "C" fn(
-            log: rsf_game_log_fn,
-            user: *mut ::core::ffi::c_void,
-            message: *const ::core::ffi::c_char,
-        ) -> bool,
-    >,
-    pub file_sha256: ::core::option::Option<
-        unsafe extern "C" fn(
-            path: *const wchar_t,
-            digest: *mut ::core::ffi::c_char,
-            hashed: *mut bool,
-        ) -> bool,
-    >,
-    pub host_create: ::core::option::Option<
-        unsafe extern "C" fn(
-            create: rsf_fallout4_host_create_fn,
-            setup: *const rsf_d3d11_host_setup,
-            services: *mut rsf_game_host_services,
-            result: *mut i32,
-        ) -> bool,
-    >,
-    pub host_set_active: ::core::option::Option<
-        unsafe extern "C" fn(
-            activate: rsf_fallout4_host_active_fn,
-            services_user: *mut ::core::ffi::c_void,
-            active: u32,
-            result: *mut i32,
-        ) -> bool,
-    >,
-    pub creation_begin: ::core::option::Option<
-        unsafe extern "C" fn(
-            begin: rsf_fallout4_creation_begin_fn,
-            services_user: *mut ::core::ffi::c_void,
-            scope: *mut rsf_d3d11_creation_scope,
-            result: *mut i32,
-        ) -> bool,
-    >,
-    pub creation_end: ::core::option::Option<
-        unsafe extern "C" fn(
-            end: rsf_fallout4_creation_end_fn,
-            services_user: *mut ::core::ffi::c_void,
-            scope: *const rsf_d3d11_creation_scope,
-            outputs: *const rsf_d3d11_native_chain,
-            result: *mut i32,
-        ) -> bool,
-    >,
-    pub bind_presentation: ::core::option::Option<
-        unsafe extern "C" fn(
-            bind: rsf_fallout4_bind_presentation_fn,
-            services_user: *mut ::core::ffi::c_void,
-            binding: *const rsf_d3d11_presentation_binding,
-            result: *mut i32,
-        ) -> bool,
-    >,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_fallout4_platform"][::core::mem::size_of::<rsf_fallout4_platform>() - 56usize];
-    ["Alignment of rsf_fallout4_platform"]
-        [::core::mem::align_of::<rsf_fallout4_platform>() - 8usize];
-    ["Offset of field: rsf_fallout4_platform::log"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, log) - 0usize];
-    ["Offset of field: rsf_fallout4_platform::file_sha256"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, file_sha256) - 8usize];
-    ["Offset of field: rsf_fallout4_platform::host_create"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, host_create) - 16usize];
-    ["Offset of field: rsf_fallout4_platform::host_set_active"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, host_set_active) - 24usize];
-    ["Offset of field: rsf_fallout4_platform::creation_begin"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, creation_begin) - 32usize];
-    ["Offset of field: rsf_fallout4_platform::creation_end"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, creation_end) - 40usize];
-    ["Offset of field: rsf_fallout4_platform::bind_presentation"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, bind_presentation) - 48usize];
 };
