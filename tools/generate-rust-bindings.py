@@ -39,7 +39,8 @@ generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          ["-Isdk/game/include"], ["--blocklist-type", frame_records, "--blocklist-item", frame_constants,
           "--raw-line", "mod frame_event_abi;", "--raw-line", "pub use frame_event_abi::*;",
           "--raw-line", "pub mod camera_math;", "--raw-line", "pub mod plugin_session_abi;",
-          "--raw-line", "pub mod shader_patch_abi;", "--raw-line", "pub mod sr_abi;"])
+          "--raw-line", "mod render_pass;", "--raw-line", "pub mod shader_patch_abi;",
+          "--raw-line", "pub mod sr_abi;"])
 generate("sdk/game/src/shader_patch_abi.rs", "runtime/shader_patch/include/rescaleframe/shader_patch.h",
          "rsf_(get_shader_patch_api_fn|shader_patch_api|patch_.*)", "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", [],
          ["--with-derive-default"])

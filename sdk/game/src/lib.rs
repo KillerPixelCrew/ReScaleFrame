@@ -7,6 +7,7 @@ pub mod camera_math;
 pub mod plugin_session_abi;
 pub mod shader_patch_abi;
 pub mod sr_abi;
+mod render_pass;
 
 pub const RSF_GAME_FRAME_ABI_VERSION: u32 = 2;
 pub const RSF_FRAME_FLAG_RESET: u32 = 1;
