@@ -224,6 +224,7 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
     retire: Some(leaf!(|native: Handle, commands: Handle| -> () {
         unsafe { fake(native).calls.push(Call::Retire(commands as usize)) }
     })),
+    preset_valid: Some(leaf!(|preset: u32| -> i32 { i32::from(preset == 11) })),
 };
 
 // Types 1 and 2 are compatible inside the three reported types; 2 and 3 are device-local.

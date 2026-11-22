@@ -28,6 +28,7 @@ typedef struct rsf_vkdlss_platform {
     int32_t (*release)(void*, uintptr_t, void*);
     void (*flush)(void*);
     void (*retire)(void*, void* commands);
+    int32_t (*preset_valid)(uint32_t preset);
 } rsf_vkdlss_platform;
 
 #ifdef __cplusplus

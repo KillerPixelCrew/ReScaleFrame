@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "native_dlss_vulkan_platform.h"
+#include "../../backends/dlss/include/rescaleframe/dlss_preset.h"
 #include <rescaleframe/native_streamline_vulkan.h>
 #include <cmath>
 #include <cstring>
@@ -268,6 +269,7 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
         self.sharpen.retire(commands);
         self.capture.retire_commands(static_cast<VkCommandBuffer>(commands));
     },
+    rsf_dlss_preset_valid,
 };
-static_assert(sizeof(rsf_vkdlss_platform) == 18 * sizeof(void*));
+static_assert(sizeof(rsf_vkdlss_platform) == 19 * sizeof(void*));
 #endif

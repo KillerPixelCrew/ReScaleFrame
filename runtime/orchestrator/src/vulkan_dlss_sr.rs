@@ -325,7 +325,10 @@ impl Owner {
     }
 
     pub(super) fn set_preset(&mut self, preset: u32) -> i32 {
-        if !matches!(preset, 0 | 5 | 6 | 10..=13) {
+        let Some(preset_valid) = self.platform.preset_valid else {
+            return INVALID;
+        };
+        if unsafe { preset_valid(preset) } == 0 {
             return INVALID;
         }
         if self.preset == preset {

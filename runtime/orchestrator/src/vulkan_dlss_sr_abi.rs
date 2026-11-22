@@ -155,10 +155,11 @@ pub struct rsf_vkdlss_platform {
     pub retire: ::core::option::Option<
         unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, commands: *mut ::core::ffi::c_void),
     >,
+    pub preset_valid: ::core::option::Option<unsafe extern "C" fn(preset: u32) -> i32>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_vkdlss_platform"][::core::mem::size_of::<rsf_vkdlss_platform>() - 144usize];
+    ["Size of rsf_vkdlss_platform"][::core::mem::size_of::<rsf_vkdlss_platform>() - 152usize];
     ["Alignment of rsf_vkdlss_platform"][::core::mem::align_of::<rsf_vkdlss_platform>() - 8usize];
     ["Offset of field: rsf_vkdlss_platform::open"]
         [::core::mem::offset_of!(rsf_vkdlss_platform, open) - 0usize];
@@ -196,4 +197,6 @@ const _: () = {
         [::core::mem::offset_of!(rsf_vkdlss_platform, flush) - 128usize];
     ["Offset of field: rsf_vkdlss_platform::retire"]
         [::core::mem::offset_of!(rsf_vkdlss_platform, retire) - 136usize];
+    ["Offset of field: rsf_vkdlss_platform::preset_valid"]
+        [::core::mem::offset_of!(rsf_vkdlss_platform, preset_valid) - 144usize];
 };
