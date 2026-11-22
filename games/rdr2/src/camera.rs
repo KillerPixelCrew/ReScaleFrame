@@ -5,7 +5,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use crate::layout::view;
-use rsf_game_sys::camera_math::inverse_4x4 as inverse;
+use rsf_game_sys::camera_math::{inverse_4x4 as inverse, multiply_4x4 as multiply};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};
 use std::ffi::c_void;
 use std::slice;
@@ -50,18 +50,6 @@ fn identity() -> Matrix {
     let mut result = [0.0; 16];
     for i in 0..4 {
         result[i * 4 + i] = 1.0;
-    }
-    result
-}
-
-fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
-    let mut result = [0.0; 16];
-    for r in 0..4 {
-        for c in 0..4 {
-            for k in 0..4 {
-                result[r * 4 + c] += a[r * 4 + k] * b[k * 4 + c];
-            }
-        }
     }
     result
 }
