@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#[path = "../../vulkan/streamline/lifecycle/src/sdk_fg_options.rs"]
+pub(super) mod sdk_fg_options;
 mod wsi;
 
 use self::wsi::Wsi;
@@ -127,6 +129,7 @@ struct Owner {
     wsi: Option<Wsi>,
     chain: u64,
     backbuffers: u32,
+    output_format: u32,
     setup: Setup,
     timeline: Timeline,
     slots: [Slot; SLOTS],
@@ -272,14 +275,13 @@ impl Owner {
     fn sdk(
         &mut self,
         callback: rsf_slvk_callback,
-        count: u32,
         source: Option<&Record>,
+        options: Option<&sdk_fg_options::Packed>,
     ) -> (i32, Sample) {
         let mut call = SdkCall {
             native: self.native,
             result: self.status.sdk_result,
-            count,
-            backbuffers: self.backbuffers,
+            options: options.map_or(ptr::null(), ptr::from_ref),
             ..Default::default()
         };
         let result = invoke(
@@ -293,12 +295,22 @@ impl Owner {
     }
 
     fn configure(&mut self, enable: bool, source: Option<&Record>) -> i32 {
-        let count = if enable {
-            self.status.requested_generated_frames
-        } else {
-            0
-        };
-        let (result, _) = self.sdk(self.platform.configure, count, source);
+        let graphics = &self.setup.graphics;
+        let mut options = sdk_fg_options::pack(
+            enable.then_some(self.status.requested_generated_frames),
+            graphics.output_width,
+            graphics.output_height,
+            self.output_format,
+            self.backbuffers,
+        );
+        options.flags = 8; // eRetainResourcesWhenOff
+        options.queue_parallelism = 1; // eBlockNoClientQueues
+        options.depth_format = R32F;
+        options.motion_format = RG16F;
+        options.hudless_format = RGBA8;
+        // No separate UI alpha/color producer is supplied by this ABI.
+        // A new owner still publishes Off to the shared SDK viewport.
+        let (result, _) = self.sdk(self.platform.configure, source, Some(&options));
         if result == OK {
             self.configured = enable;
             self.resources |= enable;
@@ -307,7 +319,7 @@ impl Owner {
     }
 
     fn sample(&mut self) -> (i32, Sample) {
-        let (result, sample) = self.sdk(self.platform.sample, 0, None);
+        let (result, sample) = self.sdk(self.platform.sample, None, None);
         if result == OK {
             self.status.presentation.last_present_count += u64::from(sample.actual_presents);
             self.status.max_generated_frames = sample.max_generated;
@@ -741,6 +753,7 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
         wsi: None,
         chain: 0,
         backbuffers: 0,
+        output_format: create_info.image_format.as_raw() as u32,
         // The C host keeps the allocator and callback contexts alive for this owner.
         setup: unsafe { ptr::read(setup) },
         timeline: unsafe { std::mem::zeroed() },
@@ -760,7 +773,7 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
         configured: false,
         resources: false,
     });
-    let (initialized, _) = owner.sdk(platform.initialize, 0, None);
+    let (initialized, _) = owner.sdk(platform.initialize, None, None);
     if initialized != OK {
         return initialized;
     }
@@ -941,7 +954,7 @@ unsafe extern "C" fn rsf_core_dlgvk_destroy(owner: *mut Owner) -> i32 {
         return detached;
     }
     if live.resources {
-        let (released, _) = live.sdk(live.platform.release, 0, None);
+        let (released, _) = live.sdk(live.platform.release, None, None);
         if released != OK {
             return released;
         }

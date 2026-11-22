@@ -37,6 +37,9 @@ sl::Result options(const sl::ViewportHandle& view, const sl::DLSSGOptions& value
     require(value.queueParallelismMode == sl::DLSSGQueueParallelismMode::eBlockNoClientQueues,
         "SDK never queues a future timeline wait ahead of client binary waits");
     require(value.enableUserInterfaceRecomposition == sl::Boolean::eFalse, "missing UI producer does not enable recomposition");
+    require(value.structVersion == sl::kStructVersion5 && value.bReserved15 == sl::Boolean::eInvalid &&
+        value.dynamicTargetFrameRate == 0.0f && value.onErrorCallback == on_error,
+        "packed options keep the pinned defaults and native API-error callback");
     require((static_cast<uint32_t>(value.flags) & static_cast<uint32_t>(sl::DLSSGFlags::eRetainResourcesWhenOff)) != 0,
         "Off keeps resources available for checked retirement");
     if (refuse_options) return sl::Result::eErrorInvalidParameter;

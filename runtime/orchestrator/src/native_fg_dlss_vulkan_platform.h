@@ -3,6 +3,7 @@
 #include <rescaleframe/native_fg_dlss_vulkan.h>
 #include <rescaleframe/native_streamline_vulkan.h>
 #include "vulkan_fg_resources.h"
+#include "../../vulkan/streamline/sdk_fg_options.h"
 
 struct rsf_dlgvk_sample {
     uint64_t semaphore, value;
@@ -12,13 +13,13 @@ struct rsf_dlgvk_sample {
 struct rsf_dlgvk_sdk_call {
     void* native;
     int32_t result;
-    uint32_t count; // Generated frames (zero is Off) for configure, staged images for tag.
+    uint32_t count; // Staged image count for tag.
     rsf_dlgvk_sample sample;
     void* commands;
     const rsf_fgvk_frame* input;
     const rsf_frame_record* record;
     const rsf_vkfg_image* images;
-    uint32_t backbuffers;
+    const rsf_slvk_sdk_fg_options* options;
 };
 
 struct rsf_dlgvk_chain_support {

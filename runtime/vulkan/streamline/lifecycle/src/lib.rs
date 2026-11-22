@@ -2,7 +2,7 @@
 //! Lifecycle owner for the Streamline Vulkan interposer.
 //!
 //! `runtime/vulkan/streamline/bridge.cpp` keeps the `VulkanStorySl*` exports, the
-//! typed SDK entry points, the slInit preferences and the verified-file leaf. This
+//! typed SDK entry points and the verified-file leaf. This
 //! crate decides when the interposer is admitted, loaded, initialized, shut down
 //! and unloaded, which features slInit loads, and which Vulkan dispatch entry
 //! points stay usable after SDK shutdown. It also owns the legacy bridge's
@@ -20,6 +20,8 @@ mod frame_generation;
 mod frame_token;
 #[cfg(any(windows, test))]
 mod lifecycle;
+#[cfg(windows)]
+mod sdk_fg_options;
 #[cfg(any(windows, test))]
 mod sdk_records;
 #[cfg(any(windows, test))]

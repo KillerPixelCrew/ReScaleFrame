@@ -2,6 +2,8 @@
 //! DLSS-G state for the legacy VulkanStorySl bridge. The orchestrator's
 //! rsf_dlssgvk owner has its own proxy, frame inputs and retirement protocol.
 
+use crate::sdk_fg_options::{self, Packed};
+
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Options {
@@ -17,7 +19,7 @@ const _: () = assert!(size_of::<Options>() == 5 * size_of::<u32>());
 #[repr(C)]
 pub(crate) struct Platform {
     pub options_bound: unsafe extern "C" fn() -> u32,
-    pub apply: unsafe extern "C" fn(u32, &Options) -> i32,
+    pub apply: unsafe extern "C" fn(&Packed) -> i32,
     pub release: unsafe extern "C" fn() -> i32,
 }
 
@@ -101,11 +103,15 @@ impl FrameGeneration {
             return 0;
         }
 
-        let sdk_options = Options {
-            count: if enabled { requested.count } else { 1 },
-            ..requested
-        };
-        let result = unsafe { (platform.apply)(u32::from(enabled), &sdk_options) };
+        let mut sdk_options = sdk_fg_options::pack(
+            enabled.then_some(requested.count),
+            requested.width,
+            requested.height,
+            requested.format,
+            requested.back_buffers,
+        );
+        sdk_options.ui_recomposition = 1;
+        let result = unsafe { (platform.apply)(&sdk_options) };
         if result == 0 {
             // Keep the pre-call revision. A WSI callback during SetOptions
             // invalidates this result for reuse while ownership still updates.

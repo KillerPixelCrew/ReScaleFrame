@@ -6,7 +6,7 @@
 #include <windows.h>
 #include <vulkan/vulkan.h>
 #include <sl.h>
-#include <sl_dlss_g.h>
+#include "../../vulkan/streamline/sdk_fg_options_checks.h"
 #include <DirectXMath.h>
 #include <cmath>
 #include <cstring>
@@ -49,6 +49,7 @@ struct Native {
 
 static_assert(sizeof(rsf_dlgvk_sample) == 40);
 static_assert(sizeof(rsf_dlgvk_sdk_call) == 96);
+static_assert(offsetof(rsf_dlgvk_sdk_call, options) == 88);
 static_assert(sizeof(rsf_dlgvk_chain_support) == 8);
 static_assert(sizeof(rsf_dlgvk_platform) == 160);
 static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 &&
@@ -82,20 +83,8 @@ rsf_backend_result initialize(void* module, uintptr_t, void* user) {
 rsf_backend_result configure(void*, uintptr_t, void* user) {
     auto& call = *static_cast<rsf_dlgvk_sdk_call*>(user);
     const auto& self = *static_cast<Native*>(call.native);
-    const bool enabled = call.count != 0;
-    // Options apply to the next proxy Present. A new owner must publish Off
-    // too, since its local state cannot describe the shared SDK viewport.
-    sl::DLSSGOptions options{}; options.mode = enabled ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-    options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
-    options.numFramesToGenerate = enabled ? call.count : 1;
-    options.colorWidth = self.info.imageExtent.width; options.colorHeight = self.info.imageExtent.height;
-    options.colorBufferFormat = self.info.imageFormat; options.numBackBuffers = call.backbuffers;
-    options.depthBufferFormat = VK_FORMAT_R32_SFLOAT; options.mvecBufferFormat = VK_FORMAT_R16G16_SFLOAT;
-    options.hudLessBufferFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
-    // No UI alpha/color producer is supplied by this ABI. HUD-less color alone
-    // supports the SDK's ordinary UI detection, not separate UI recomposition.
-    options.enableUserInterfaceRecomposition = sl::Boolean::eFalse;
+    sl::DLSSGOptions options{};
+    std::memcpy(static_cast<void*>(&options), call.options, sizeof(options));
     options.onErrorCallback = on_error;
     return sdk_result(call, self.options(viewport, options));
 }

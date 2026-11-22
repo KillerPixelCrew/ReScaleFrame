@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::vulkan_dlss_fg::sdk_fg_options::Packed;
 use crate::vulkan_fg_abi::{
     rsf_dlssgvk_status as Status, rsf_fgvk_frame as Frame, rsf_fgvk_setup as Setup,
 };
@@ -35,7 +36,7 @@ pub(super) struct SdkCall {
     pub input: *const Frame,
     pub record: *const Record,
     pub images: *const Image,
-    pub backbuffers: u32,
+    pub options: *const Packed,
 }
 
 #[repr(C)]
@@ -72,6 +73,7 @@ pub(super) struct Platform {
 const _: () = {
     assert!(size_of::<Sample>() == 40);
     assert!(size_of::<SdkCall>() == 96);
+    assert!(std::mem::offset_of!(SdkCall, options) == 88);
     assert!(size_of::<ChainSupport>() == 8);
     assert!(size_of::<Platform>() == 160);
 };

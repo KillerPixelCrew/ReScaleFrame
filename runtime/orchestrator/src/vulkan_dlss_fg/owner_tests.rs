@@ -149,7 +149,15 @@ unsafe extern "C" fn sdk_initialize(_: Handle, _: usize, _: Handle) -> i32 {
 unsafe extern "C" fn sdk_configure(_: Handle, _: usize, user: Handle) -> i32 {
     let call = unsafe { &*user.cast::<SdkCall>() };
     let test = unsafe { harness(call.native) };
-    test.events.push(if call.count == 0 { "off" } else { "on" });
+    let options = unsafe { &*call.options };
+    assert_eq!(options.flags, 8);
+    assert_eq!(options.queue_parallelism, 1);
+    assert_eq!(options.ui_recomposition, 0);
+    assert_eq!(options.depth_format, R32F);
+    assert_eq!(options.motion_format, RG16F);
+    assert_eq!(options.hudless_format, RGBA8);
+    test.events
+        .push(if options.mode == 0 { "off" } else { "on" });
     if test.configure_api_error != 0 {
         rsf_core_dlgvk_report_api_error(test.configure_api_error);
     }

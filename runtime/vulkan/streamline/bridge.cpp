@@ -17,7 +17,7 @@
 #include <cstring>
 #include "sdk_records_checks.h"
 #include "wsi_abi.h"
-#include <sl_dlss_g.h>
+#include "sdk_fg_options_checks.h"
 #include <sl_reflex.h>
 #include <sl_pcl.h>
 
@@ -44,7 +44,7 @@ struct RsfSlFgOptions {
 static_assert(sizeof(RsfSlFgOptions) == 5 * sizeof(uint32_t));
 struct RsfSlFgPlatform {
     uint32_t (*optionsBound)();
-    int32_t (*apply)(uint32_t enabled, const RsfSlFgOptions*);
+    int32_t (*apply)(const rsf_slvk_sdk_fg_options*);
     int32_t (*release)();
 };
 static_assert(sizeof(RsfSlFgPlatform) == 3 * sizeof(void*));
@@ -189,15 +189,9 @@ void onPresentError(const sl::APIError& error) {
 // Rust invokes these leaves only while holding the initialized SDK session.
 uint32_t fgOptionsBound() noexcept { return fgOptions != nullptr; }
 
-int32_t applyFgOptions(uint32_t enabled, const RsfSlFgOptions* request) noexcept try {
+int32_t applyFgOptions(const rsf_slvk_sdk_fg_options* request) noexcept try {
     sl::DLSSGOptions options{};
-    options.mode = enabled ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-    options.numFramesToGenerate = request->count;
-    options.colorWidth = request->width;
-    options.colorHeight = request->height;
-    options.colorBufferFormat = request->format;
-    options.numBackBuffers = request->backBuffers;
-    options.enableUserInterfaceRecomposition = sl::Boolean::eTrue;
+    std::memcpy(static_cast<void*>(&options), request, sizeof(options));
     options.onErrorCallback = onPresentError;
     return static_cast<int32_t>(fgOptions(viewport, options));
 } catch (...) {
