@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::{PATH_CAPACITY, entry, load_library, module_path, null, null_mut, spawn_startup, wide};
+use rsf_game_sys::ffi_util::ascii_wide;
+use rsf_game_sys::session::carrier_log::CarrierLog;
 use std::cell::UnsafeCell;
 use std::ffi::{CString, OsString, c_void};
-use rsf_game_sys::ffi_util::ascii_wide;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
 use windows_sys::Win32::Foundation::{GetLastError, HMODULE};
 use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
@@ -12,6 +11,7 @@ use windows_sys::Win32::System::LibraryLoader::{
     DisableThreadLibraryCalls, GetModuleFileNameW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
 };
+use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, GetPrivateProfileStringW,
@@ -45,11 +45,10 @@ fn configure(module: HMODULE) -> Option<u32> {
     let root = path.parent()?;
     let directory = root.join("ReScaleFrame");
     let configuration = wide(root.join("ReScaleFrame.ini"));
-    let log_path = directory.join("loader.log");
+    let log = CarrierLog::new();
+    log.set_path(&wide(directory.join("loader.log")));
     let note = |message: &str, result: u32| {
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
-            let _ = writeln!(file, "{message}: {result}");
-        }
+        log.write(unsafe { GetTickCount64() }, format!("{message}: {result}"))
     };
     if unsafe {
         GetPrivateProfileIntW(
