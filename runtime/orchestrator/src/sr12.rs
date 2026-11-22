@@ -37,7 +37,9 @@ const STALE_RESOURCES: i32 = -10;
 // sr12_platform.cpp.
 const SR_NONE: u32 = 0;
 const SR_DLSS: u32 = 1;
+const SR_AUTO: u32 = 7;
 const MAX_QUALITY: u32 = 5;
+const PLAN_ABI_VERSION: u32 = 1;
 
 const RG32_FLOAT: u32 = 16;
 const R32_FLOAT_X8X24_TYPELESS: u32 = 21;
@@ -78,6 +80,16 @@ const READBACK_BYTES: u64 = 4 * TILE_BYTES;
 const DIAGNOSTIC_FRAMES: u32 = 12;
 
 type Handle = *mut c_void;
+
+#[repr(C)]
+struct PlanResult {
+    struct_size: u32,
+    abi_version: u32,
+    backend: u32,
+    render_width: u32,
+    render_height: u32,
+    requested_result: i32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -1306,6 +1318,122 @@ unsafe extern "C" fn rsf_core_sr12_create(
         }
         Err(result) => result,
     }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_sr12_quality_supported(backend: u32, quality: u32) -> u32 {
+    u32::from(
+        backend <= SR_AUTO
+            && quality <= MAX_QUALITY
+            && !(backend == SR_DLSS && quality == MAX_QUALITY),
+    )
+}
+
+unsafe fn create_checked(setup: &Setup, platform: &'static Platform) -> Result<Sr12, i32> {
+    if rsf_core_sr12_quality_supported(setup.backend, setup.quality) == 0 {
+        return Err(INVALID);
+    }
+    let owner = unsafe { create(setup, platform) }?;
+    if owner.width == 0
+        || owner.height == 0
+        || owner.width > owner.output_width
+        || owner.height > owner.output_height
+    {
+        return Err(FEATURE_FAILED);
+    }
+    Ok(owner)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_sr12_create_planned(
+    setup: *const Setup,
+    plan: *mut PlanResult,
+    out: *mut *mut Sr12,
+    platform: *const Platform,
+    adapter_identity: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> u32,
+) -> i32 {
+    if out.is_null() {
+        return INVALID;
+    }
+    unsafe { out.write(ptr::null_mut()) };
+    if plan.is_null() || (unsafe { plan.cast::<u32>().read() } as usize) < size_of::<PlanResult>() {
+        return INVALID;
+    }
+    if unsafe { (*plan).abi_version } != PLAN_ABI_VERSION {
+        return ABI_MISMATCH;
+    }
+    unsafe {
+        plan.write(PlanResult {
+            struct_size: size_of::<PlanResult>() as u32,
+            abi_version: PLAN_ABI_VERSION,
+            backend: SR_NONE,
+            render_width: 0,
+            render_height: 0,
+            requested_result: INVALID,
+        });
+    }
+    let plan = unsafe { &mut *plan };
+    let Some((mut setup, size)) = (unsafe { read_setup(setup) }) else {
+        return INVALID;
+    };
+    if (size as usize) < offset_of!(Setup, engine_input_extents)
+        || setup.device.is_null()
+        || setup.output_width == 0
+        || setup.output_height == 0
+        || setup.quality > MAX_QUALITY
+        || (setup.backend > RSF_SR_XESS && setup.backend != SR_AUTO)
+    {
+        return INVALID;
+    }
+    if setup.abi_version != 1 && setup.abi_version != 2 {
+        plan.requested_result = ABI_MISMATCH;
+        return ABI_MISMATCH;
+    }
+    if setup.abi_version == 2 && (size as usize) < size_of::<Setup>() {
+        return INVALID;
+    }
+    let Some(platform): Option<&'static Platform> = (unsafe { platform.as_ref() }) else {
+        return INVALID;
+    };
+    assert_eq!(platform.struct_size as usize, size_of::<Platform>());
+    if setup.backend == SR_AUTO {
+        let (mut vendor, mut software) = (0, 0);
+        if unsafe { adapter_identity(setup.device, &mut vendor, &mut software) } == 0 {
+            plan.requested_result = NOT_READY;
+            return NOT_READY;
+        }
+        setup.backend = crate::rsf_gpu_default_sr_backend(vendor, software);
+    }
+    let owner = match unsafe { create_checked(&setup, platform) } {
+        Ok(owner) => {
+            plan.requested_result = OK;
+            owner
+        }
+        Err(result) => {
+            plan.requested_result = result;
+            if setup.backend == SR_NONE {
+                return result;
+            }
+            setup.backend = SR_NONE;
+            match unsafe { create_checked(&setup, platform) } {
+                Ok(owner) => owner,
+                Err(result) => return result,
+            }
+        }
+    };
+    let (backend, width, height) = (owner.backend, owner.width, owner.height);
+    let handle = crate::allocate_handle(owner);
+    if handle.is_null() {
+        if plan.requested_result == OK {
+            plan.requested_result = INIT_FAILED;
+        }
+        return INIT_FAILED;
+    }
+    plan.backend = backend;
+    plan.render_width = width;
+    plan.render_height = height;
+    unsafe { out.write(handle) };
+    OK
 }
 
 #[unsafe(no_mangle)]

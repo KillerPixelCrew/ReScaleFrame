@@ -14,6 +14,7 @@
 #include "sharpening_pass_options.h"
 #include <windows.h>
 #include <d3d12.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <new>
 
@@ -31,10 +32,25 @@ static_assert(D3D12_RESOURCE_STATE_RENDER_TARGET == 0x4 && D3D12_RESOURCE_STATE_
               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE == 0x40 && D3D12_RESOURCE_STATE_COPY_DEST == 0x400 &&
               D3D12_RESOURCE_STATE_COPY_SOURCE == 0x800 && D3D12_RESOURCE_DIMENSION_TEXTURE2D == 3);
 static_assert(RSF_SR_DLSS == 1 && RSF_SR_XESS == 5 && RSF_API_D3D12 == 2);
+static_assert(RSF_SR_AUTO == 7 && RSF_QUALITY_ULTRA_QUALITY == 5 &&
+              RSF_SR12_PLAN_ABI_VERSION == 1 && sizeof(rsf_sr12_plan_result) == 24);
 static_assert(RSF_DUMP_VIEW_RAW == 0 && RSF_DUMP_VIEW_HDR == 3);
 static_assert(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT == 256);
 
 namespace {
+uint32_t adapter_identity(void* device, uint32_t* vendor, uint32_t* software)
+{
+    ComPtr<IDXGIFactory4> factory;
+    ComPtr<IDXGIAdapter1> adapter;
+    DXGI_ADAPTER_DESC1 desc{};
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->EnumAdapterByLuid(static_cast<ID3D12Device*>(device)->GetAdapterLuid(),
+            IID_PPV_ARGS(&adapter))) || FAILED(adapter->GetDesc1(&desc))) return 0;
+    *vendor = desc.VendorId;
+    *software = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
+    return 1;
+}
+
 struct TextureDesc {
     uint64_t width;
     uint32_t height, dimension, array_size, samples, format, srv_format;
@@ -369,6 +385,9 @@ constexpr Platform platform{
 
 extern "C" {
 rsf_backend_result rsf_core_sr12_create(const rsf_sr12_setup*, rsf_sr12**, const Platform*);
+uint32_t rsf_core_sr12_quality_supported(uint32_t, uint32_t);
+rsf_backend_result rsf_core_sr12_create_planned(const rsf_sr12_setup*, rsf_sr12_plan_result*, rsf_sr12**,
+    const Platform*, decltype(&adapter_identity));
 rsf_backend_result rsf_core_sr12_plan(const rsf_sr12*, uint32_t*, uint32_t*);
 rsf_backend_result rsf_core_sr12_evaluate(rsf_sr12*, void*, const rsf_game_render_pass*, uint32_t);
 rsf_backend_result rsf_core_sr12_set_sharpening(rsf_sr12*, const rsf_sharpening_options*);
@@ -384,6 +403,14 @@ rsf_backend_result rsf_core_sr12_capture_scene(rsf_sr12*, void*, const rsf_game_
 extern "C" rsf_backend_result rsf_sr12_create(const rsf_sr12_setup* setup, rsf_sr12** out)
 {
     return rsf_core_sr12_create(setup, out, &platform);
+}
+extern "C" uint32_t rsf_sr12_quality_supported(uint32_t backend, uint32_t quality)
+{
+    return rsf_core_sr12_quality_supported(backend, quality);
+}
+extern "C" rsf_backend_result rsf_sr12_create_planned(const rsf_sr12_setup* setup, rsf_sr12_plan_result* plan, rsf_sr12** out)
+{
+    return rsf_core_sr12_create_planned(setup, plan, out, &platform, adapter_identity);
 }
 extern "C" rsf_backend_result rsf_sr12_plan(const rsf_sr12* self, uint32_t* width, uint32_t* height)
 {

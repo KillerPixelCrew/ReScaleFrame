@@ -37,10 +37,25 @@ typedef struct rsf_sr12_setup {
     void* dlss_registration;
 } rsf_sr12_setup;
 
+#define RSF_SR12_PLAN_ABI_VERSION 1u
+typedef struct rsf_sr12_plan_result {
+    uint32_t struct_size, abi_version;
+    uint32_t backend, render_width, render_height;
+    rsf_backend_result requested_result;
+} rsf_sr12_plan_result;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 RSF_RUNTIME_API rsf_backend_result rsf_sr12_create(const rsf_sr12_setup*, rsf_sr12**);
+/* Validates an explicit request, or defers Auto's provider-specific admission until the
+   device is known. */
+RSF_RUNTIME_API uint32_t rsf_sr12_quality_supported(uint32_t backend, uint32_t quality);
+/* Chooses Auto for setup.device, then plans the selected provider. On provider refusal
+   tries backend zero and reports the original refusal in requested_result. A successful
+   result owns a usable context and returns its effective backend and input dimensions. */
+RSF_RUNTIME_API rsf_backend_result rsf_sr12_create_planned(const rsf_sr12_setup*,
+    rsf_sr12_plan_result*, rsf_sr12**);
 RSF_RUNTIME_API rsf_backend_result rsf_sr12_plan(const rsf_sr12*, uint32_t* width, uint32_t* height);
 // Input states NON_PIXEL_SHADER_RESOURCE, game output COPY_DEST. The private staging output
 // reaches the engine only on accepted evaluation. Caller drains the slot before reusing its
