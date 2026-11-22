@@ -1,52 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-pub(super) const UNDEFINED: u32 = 0;
+use crate::vulkan_fg_copy::TRANSFER_SRC;
+pub(super) use crate::vulkan_fg_copy::{
+    ALL_COMMANDS, Barrier, FAMILY_EXTERNAL, FAMILY_IGNORED, UNDEFINED,
+};
+
 pub(super) const GENERAL: u32 = 1;
-pub(super) const TRANSFER_SRC: u32 = 6;
 pub(super) const TRANSFER_DST: u32 = 7;
-pub(super) const FAMILY_IGNORED: u32 = !0;
-pub(super) const FAMILY_EXTERNAL: u32 = !1;
-const MEMORY_ACCESS: u32 = 0x8000 | 0x1_0000;
-pub(super) const ALL_COMMANDS: u32 = 0x1_0000;
-
-/// Mirrors rsf_dx12gvk_barrier in native_fg_dx12_vulkan_platform.h.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Barrier {
-    pub image: u64,
-    pub old_layout: u32,
-    pub new_layout: u32,
-    pub source_family: u32,
-    pub target_family: u32,
-    pub source_access: u32,
-    pub target_access: u32,
-    pub source_stages: u32,
-    pub target_stages: u32,
-}
-
-impl Barrier {
-    pub(super) fn new(image: u64, before: u32, after: u32, from: u32, to: u32) -> Self {
-        Self {
-            image,
-            old_layout: before,
-            new_layout: after,
-            source_family: from,
-            target_family: to,
-            source_access: if before == UNDEFINED || from == FAMILY_EXTERNAL {
-                0
-            } else {
-                MEMORY_ACCESS
-            },
-            target_access: if to == FAMILY_EXTERNAL {
-                0
-            } else {
-                MEMORY_ACCESS
-            },
-            source_stages: ALL_COMMANDS,
-            target_stages: ALL_COMMANDS,
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

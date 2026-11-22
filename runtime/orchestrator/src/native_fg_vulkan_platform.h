@@ -9,8 +9,8 @@ typedef struct rsf_fgvk_provider {
     rsf_backend_result (*enable)(void*, uint32_t, uint32_t);
     int32_t (*images)(void*, uint32_t*, uint64_t*);
     int32_t (*acquire)(void*, uint64_t, uint64_t, uint64_t, uint32_t*);
-    rsf_backend_result (*image_layout)(void*, uint32_t*);
-    rsf_backend_result (*max_generated)(void*, uint32_t*);
+    rsf_backend_result (*image_layout)(void*, uint32_t*); /* Null selects shader-read layout. */
+    rsf_backend_result (*max_generated)(void*, uint32_t*); /* Null selects a one-frame limit. */
     rsf_backend_result (*prepare)(void*, void*, const rsf_fgvk_frame*);
     rsf_backend_result (*hudless)(void*, void*, const rsf_fgvk_frame*);
     void (*submitted)(void*, void* const*, uint32_t);

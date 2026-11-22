@@ -25,7 +25,12 @@ unsafe extern "C" fn submit_fence(user: Handle, _: u64) -> i32 {
     test.fence_result
 }
 
-unsafe extern "C" fn wait_fence(_: Handle, _: u64) -> i32 {
+unsafe extern "C" fn reset_fence(_: Handle, _: u64) -> i32 {
+    OK
+}
+
+unsafe extern "C" fn wait_fence(_: Handle, _: u64, timeout_ns: u64) -> i32 {
+    assert_eq!(timeout_ns, 15_000_000_000);
     OK
 }
 
@@ -46,7 +51,7 @@ static GPU: Gpu = Gpu {
     create_fence: None,
     destroy_fence: Some(destroy_fence),
     wait_fence: Some(wait_fence),
-    reset_fence: Some(wait_fence),
+    reset_fence: Some(reset_fence),
     submit_fence: Some(submit_fence),
 };
 

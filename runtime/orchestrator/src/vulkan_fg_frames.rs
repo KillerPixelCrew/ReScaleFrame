@@ -52,10 +52,11 @@ pub(super) fn valid_source_record(
             .all(|value| value.is_finite())
 }
 
-pub(super) fn bounded_swapchain_images(
-    count: &mut u32,
+// The count-only call may receive uninitialized output storage from Vulkan.
+pub(super) unsafe fn bounded_swapchain_images(
+    count: *mut u32,
     output: *mut u64,
-    mut enumerate: impl FnMut(&mut u32, *mut u64) -> i32,
+    mut enumerate: impl FnMut(*mut u32, *mut u64) -> i32,
 ) -> i32 {
     const SUCCESS: i32 = 0;
     const INCOMPLETE: i32 = 5;
@@ -64,20 +65,21 @@ pub(super) fn bounded_swapchain_images(
         return enumerate(count, output);
     }
     // A proxy can leave an oversized capacity unchanged after writing fewer images.
-    let capacity = *count;
+    let capacity = unsafe { count.read() };
     let mut available = 0;
     let queried = enumerate(&mut available, ptr::null_mut());
     if queried != SUCCESS {
-        *count = 0;
+        unsafe { count.write(0) };
         return queried;
     }
     let limit = capacity.min(available);
-    *count = limit;
-    let filled = enumerate(count, output);
-    if *count > limit {
-        *count = 0;
+    let mut written = limit;
+    let filled = enumerate(&mut written, output);
+    if written > limit {
+        unsafe { count.write(0) };
         return INITIALIZATION_FAILED;
     }
+    unsafe { count.write(written) };
     if filled == SUCCESS && capacity < available {
         INCOMPLETE
     } else {
@@ -242,35 +244,25 @@ fn recorded_for_submit(slot: &Slot, command: *mut c_void) -> bool {
             && slot.submitted_hudless == 0)
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_fgvk_submitted(
-    slots: *const *mut Slot,
-    commands: *const *mut c_void,
-    count: u32,
-    out: &mut SubmitPlan,
-) {
-    *out = SubmitPlan {
+pub(super) fn submission_plan(
+    mut slots: [&mut Slot; SLOTS],
+    commands: &[*mut c_void],
+) -> SubmitPlan {
+    let mut out = SubmitPlan {
         fences: 0,
         discarded_prepare: 0,
         discarded_hudless: 0,
     };
-    if commands.is_null() {
-        return;
-    }
-    let slots = unsafe { slice::from_raw_parts(slots, SLOTS) };
-    let commands = unsafe { slice::from_raw_parts(commands, count as usize) };
     // A reset or re-recorded command list can reuse an old pointer. Only its
     // latest recording can prove a submission for these source leases.
     for &command in commands.iter().filter(|command| !command.is_null()) {
         let newest = slots
             .iter()
-            .map(|&slot| unsafe { &*slot })
             .filter(|slot| recorded_for_submit(slot, command))
             .map(|slot| slot.recording_sequence)
             .max();
         let Some(newest) = newest else { continue };
-        for (index, &slot) in slots.iter().enumerate() {
-            let slot = unsafe { &mut *slot };
+        for (index, slot) in slots.iter_mut().enumerate() {
             if slot.recording_sequence >= newest {
                 continue;
             }
@@ -293,8 +285,7 @@ pub(super) unsafe extern "C" fn rsf_core_fgvk_submitted(
             }
         }
     }
-    for (index, &slot) in slots.iter().enumerate() {
-        let slot = unsafe { &mut *slot };
+    for (index, slot) in slots.iter_mut().enumerate() {
         let prepare = slot.recorded_prepare != 0
             && slot.submitted_prepare == 0
             && !slot.prepare_commands.is_null()
@@ -309,6 +300,28 @@ pub(super) unsafe extern "C" fn rsf_core_fgvk_submitted(
             out.fences |= 1 << index;
         }
     }
+    out
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fgvk_submitted(
+    slots: *const *mut Slot,
+    commands: *const *mut c_void,
+    count: u32,
+    out: &mut SubmitPlan,
+) {
+    if commands.is_null() {
+        *out = SubmitPlan {
+            fences: 0,
+            discarded_prepare: 0,
+            discarded_hudless: 0,
+        };
+        return;
+    }
+    let slots = unsafe { slots.cast::<[*mut Slot; SLOTS]>().read() };
+    let commands = unsafe { slice::from_raw_parts(commands, count as usize) };
+    // The native caller supplies six distinct slots tied to its resource ring.
+    *out = submission_plan(slots.map(|slot| unsafe { &mut *slot }), commands);
 }
 
 fn matches_slot(slot: &Slot, source_frame: u64, identity_matches: u32) -> bool {
@@ -326,6 +339,7 @@ pub(super) extern "C" fn rsf_core_fgvk_present_candidate(
     u32::from(
         matches_slot(slot, source_frame, identity_matches)
             && requested != 0
+            && slot.record.flags & FG_VETO == 0
             && slot.recording_sequence > timeline.presented_sequence
             && slot.prepared != 0
             && slot.hudless != 0
@@ -364,22 +378,38 @@ mod tests {
         ] {
             let mut count = capacity;
             let mut filled = false;
-            let result = bounded_swapchain_images(&mut count, output, |count, images| {
-                if images.is_null() {
-                    *count = 2;
-                    query
-                } else {
-                    assert_eq!(*count, capacity.min(2));
-                    *count = fill_count.unwrap();
-                    filled = true;
-                    0
-                }
-            });
+            let result = unsafe {
+                bounded_swapchain_images(&mut count, output, |count, images| {
+                    if images.is_null() {
+                        count.write(2);
+                        query
+                    } else {
+                        assert_eq!(count.read(), capacity.min(2));
+                        count.write(fill_count.unwrap());
+                        filled = true;
+                        0
+                    }
+                })
+            };
             assert_eq!(
                 (result, count, filled),
                 (expected_result, expected_count, fill_count.is_some())
             );
         }
+    }
+
+    #[test]
+    fn count_only_supports_uninitialized_output_storage() {
+        let mut count = std::mem::MaybeUninit::<u32>::uninit();
+        let result = unsafe {
+            bounded_swapchain_images(count.as_mut_ptr(), ptr::null_mut(), |count, images| {
+                assert!(images.is_null());
+                count.write(3);
+                0
+            })
+        };
+        assert_eq!(result, 0);
+        assert_eq!(unsafe { count.assume_init() }, 3);
     }
 
     #[test]
@@ -419,6 +449,38 @@ mod tests {
             };
             let source = unsafe { PresentSource::read(&late, 1) }.unwrap();
             assert!(source.matches(&record) && !source.allows_fg());
+        }
+    }
+
+    #[test]
+    fn stored_veto_applies_to_implicit_and_explicit_present() {
+        let timeline: Timeline = unsafe { std::mem::zeroed() };
+        let mut slot: Slot = unsafe { std::mem::zeroed() };
+        slot.record.struct_size = size_of::<rsf_frame_record>() as u32;
+        slot.record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        slot.record.frame_id = 1;
+        slot.record.session_id = 2;
+        slot.recording_sequence = 1;
+        slot.prepared = 1;
+        slot.hudless = 1;
+        slot.submitted_prepare = 1;
+        slot.submitted_hudless = 1;
+        let clean = slot.record;
+        for explicit in [0, 1] {
+            let source = unsafe { PresentSource::read(&clean, explicit) }.unwrap();
+            for flags in [0, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_AMBIGUOUS_ID] {
+                slot.record.flags = flags;
+                assert_eq!(
+                    rsf_core_fgvk_present_candidate(
+                        &timeline,
+                        &slot,
+                        source.frame(1),
+                        u32::from(source.matches(&slot.record)),
+                        u32::from(source.allows_fg()),
+                    ),
+                    u32::from(flags == 0),
+                );
+            }
         }
     }
 

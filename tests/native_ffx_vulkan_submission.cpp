@@ -128,8 +128,13 @@ int main() {
         "foreign identity retains ordinary output without selecting latest guides");
     auto forbidden_source = record(99, 6, 8, 3, RSF_FRAME_FLAG_NO_FG);
     complete(self, forbidden_source, b, b); rsf_ffxgvk_submitted(self, &b, 1);
-    require(rsf_ffxgvk_present_source(self, &info, &forbidden_source) == VK_SUCCESS && !state.enabled,
-        "explicit source preserves NO_FG admission refusal");
+    auto explicit_without_veto = forbidden_source; explicit_without_veto.flags = 0;
+    require(rsf_ffxgvk_present_source(self, &info, &explicit_without_veto) == VK_SUCCESS && !state.enabled,
+        "a matching explicit identity cannot clear the prepared source's veto");
+    auto ambiguous = record(98, 6, 8, 3, RSF_FRAME_FLAG_AMBIGUOUS_ID);
+    complete(self, ambiguous, b, b); rsf_ffxgvk_submitted(self, &b, 1);
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && !state.enabled,
+        "implicit presentation applies the prepared source's veto");
     auto late_veto = record(99, 7, 8, 3);
     complete(self, late_veto, a, a); rsf_ffxgvk_submitted(self, &a, 1);
     late_veto.flags |= RSF_FRAME_FLAG_NO_FG;

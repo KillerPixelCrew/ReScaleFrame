@@ -34,7 +34,8 @@ void rsf_core_fgvk_prepare_accepted(rsf_fgvk_timeline*, rsf_fgvk_frame_slot*);
 uint32_t rsf_core_fgvk_hudless_begin(rsf_fgvk_frame_slot*, const rsf_frame_record*, void* commands);
 /* Bit i refers to native slot i. Duplicate list notifications are idempotent.
    A reused pointer belongs to its newest recording. Discarded recordings can
-   no longer establish their images' recorded layouts. */
+   no longer establish their images' recorded layouts. The array contains six
+   distinct writable slots. */
 void rsf_core_fgvk_submitted(rsf_fgvk_frame_slot* const slots[RSF_FGVK_FRAME_SLOTS],
     void* const* commands, uint32_t count, rsf_fgvk_submit_plan* out);
 uint32_t rsf_core_fgvk_present_candidate(const rsf_fgvk_timeline*, const rsf_fgvk_frame_slot*,

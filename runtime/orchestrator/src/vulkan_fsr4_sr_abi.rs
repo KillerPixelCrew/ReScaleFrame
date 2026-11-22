@@ -4,7 +4,7 @@
 use super::bridge_abi::{rsf_fsr4_bridge_create, rsf_fsr4_bridge_frame, rsf_fsr4_bridge_info};
 use crate::dx12_vulkan_interop_abi::rsf_dx12vk_platform;
 use crate::render_abi::rsf_sharpening_options;
-use crate::vulkan_external_copy::Barrier as rsf_dx12gvk_barrier;
+use crate::vulkan_fg_resources_abi::rsf_vkfg_barrier;
 use crate::vulkan_sr_abi::{rsf_fsr4vk_handoff, rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
 use rsf_game_sys::rsf_frame_record;
 type rsf_fsr4_bridge = ::core::ffi::c_void;
@@ -81,7 +81,7 @@ pub struct rsf_fsr4vk_platform {
         unsafe extern "C" fn(
             arg1: *mut ::core::ffi::c_void,
             arg2: *mut ::core::ffi::c_void,
-            arg3: *const rsf_dx12gvk_barrier,
+            arg3: *const rsf_vkfg_barrier,
         ),
     >,
     pub copy: ::core::option::Option<

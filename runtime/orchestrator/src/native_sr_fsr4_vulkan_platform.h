@@ -3,7 +3,7 @@
 #include "native_dx12_vulkan_platform.h"
 #include "native_sr_fsr4_vulkan.h"
 
-typedef struct rsf_dx12gvk_barrier rsf_dx12gvk_barrier;
+#include "vulkan_fg_copy_abi.h"
 
 typedef struct rsf_fsr4vk_platform {
     const rsf_dx12vk_platform* interop;
@@ -20,7 +20,7 @@ typedef struct rsf_fsr4vk_platform {
     void (*capture_record)(void*, void*, const rsf_srvk_image*, const rsf_frame_record*, const char*, uint32_t);
     void (*capture_parameters)(const rsf_srvk_frame*, uint32_t);
     int32_t (*capture_flush)(void*);
-    void (*transition)(void*, void*, const rsf_dx12gvk_barrier*);
+    void (*transition)(void*, void*, const struct rsf_vkfg_barrier*);
     void (*copy)(void*, void*, uint64_t, uint64_t, uint32_t, uint32_t);
     int32_t (*split)(const rsf_fsr4vk_handoff*, void*, uint64_t, uint64_t, uint64_t, uint64_t, void**);
     int32_t (*sharpening_valid)(const rsf_sharpening_options*);

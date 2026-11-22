@@ -3,6 +3,69 @@
 #![allow(non_camel_case_types)]
 
 #[repr(C)]
+#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
+pub struct rsf_vkfg_barrier {
+    pub image: u64,
+    pub old_layout: u32,
+    pub new_layout: u32,
+    pub source_family: u32,
+    pub target_family: u32,
+    pub source_access: u32,
+    pub target_access: u32,
+    pub source_stages: u32,
+    pub target_stages: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_vkfg_barrier"][::core::mem::size_of::<rsf_vkfg_barrier>() - 40usize];
+    ["Alignment of rsf_vkfg_barrier"][::core::mem::align_of::<rsf_vkfg_barrier>() - 8usize];
+    ["Offset of field: rsf_vkfg_barrier::image"]
+        [::core::mem::offset_of!(rsf_vkfg_barrier, image) - 0usize];
+    ["Offset of field: rsf_vkfg_barrier::old_layout"]
+        [::core::mem::offset_of!(rsf_vkfg_barrier, old_layout) - 8usize];
+    ["Offset of field: rsf_vkfg_barrier::new_layout"]
+        [::core::mem::offset_of!(rsf_vkfg_barrier, new_layout) - 12usize];
+    ["Offset of field: rsf_vkfg_barrier::source_family"]
+        [::core::mem::offset_of!(rsf_vkfg_barrier, source_family) - 16usize];
+    ["Offset of field: rsf_vkfg_barrier::target_family"]
+        [::core::mem::offset_of!(rsf_vkfg_barrier, target_family) - 20usize];
+    ["Offset of field: rsf_vkfg_barrier::source_access"]
+        [::core::mem::offset_of!(rsf_vkfg_barrier, source_access) - 24usize];
+    ["Offset of field: rsf_vkfg_barrier::target_access"]
+        [::core::mem::offset_of!(rsf_vkfg_barrier, target_access) - 28usize];
+    ["Offset of field: rsf_vkfg_barrier::source_stages"]
+        [::core::mem::offset_of!(rsf_vkfg_barrier, source_stages) - 32usize];
+    ["Offset of field: rsf_vkfg_barrier::target_stages"]
+        [::core::mem::offset_of!(rsf_vkfg_barrier, target_stages) - 36usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
+pub struct rsf_vkfg_image_copy {
+    pub source: u64,
+    pub target: u64,
+    pub source_layout: u32,
+    pub target_layout: u32,
+    pub width: u32,
+    pub height: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_vkfg_image_copy"][::core::mem::size_of::<rsf_vkfg_image_copy>() - 32usize];
+    ["Alignment of rsf_vkfg_image_copy"][::core::mem::align_of::<rsf_vkfg_image_copy>() - 8usize];
+    ["Offset of field: rsf_vkfg_image_copy::source"]
+        [::core::mem::offset_of!(rsf_vkfg_image_copy, source) - 0usize];
+    ["Offset of field: rsf_vkfg_image_copy::target"]
+        [::core::mem::offset_of!(rsf_vkfg_image_copy, target) - 8usize];
+    ["Offset of field: rsf_vkfg_image_copy::source_layout"]
+        [::core::mem::offset_of!(rsf_vkfg_image_copy, source_layout) - 16usize];
+    ["Offset of field: rsf_vkfg_image_copy::target_layout"]
+        [::core::mem::offset_of!(rsf_vkfg_image_copy, target_layout) - 20usize];
+    ["Offset of field: rsf_vkfg_image_copy::width"]
+        [::core::mem::offset_of!(rsf_vkfg_image_copy, width) - 24usize];
+    ["Offset of field: rsf_vkfg_image_copy::height"]
+        [::core::mem::offset_of!(rsf_vkfg_image_copy, height) - 28usize];
+};
+#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_vkfg_image {
     pub image: u64,
@@ -104,7 +167,7 @@ pub struct rsf_vkfg_platform {
     pub destroy_fence:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64)>,
     pub wait_fence: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64) -> i32,
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, fence: u64, timeout_ns: u64) -> i32,
     >,
     pub reset_fence: ::core::option::Option<
         unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u64) -> i32,

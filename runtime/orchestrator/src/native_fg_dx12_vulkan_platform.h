@@ -3,6 +3,7 @@
 #include <rescaleframe/native_fg_vulkan.h>
 #include "native_dx12_vulkan_interop.h"
 #include "vulkan_fg_resources.h"
+#include "vulkan_fg_copy_abi.h"
 
 struct rsf_dx12gvk_platform;
 using rsf_dx12gvk_dispatch_entries = rsf_vk_function[24];
@@ -30,12 +31,7 @@ struct rsf_dx12gvk_present_submit {
     uint32_t stages[rsf_dx12gvk_submit_wait_capacity];
     uint64_t signal, ready;
 };
-// One single-subresource colour image barrier planned by vulkan_dx12_fg.rs.
-struct rsf_dx12gvk_barrier {
-    uint64_t image;
-    uint32_t old_layout, new_layout, source_family, target_family;
-    uint32_t source_access, target_access, source_stages, target_stages;
-};
+using rsf_dx12gvk_barrier = rsf_vkfg_barrier;
 // Source and target of one planned single-subresource colour copy or blit.
 struct rsf_dx12gvk_transfer {
     uint64_t source, target;

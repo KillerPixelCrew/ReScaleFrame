@@ -139,11 +139,11 @@ inline constexpr rsf_vkfg_platform platform{
         const auto& native = *static_cast<Device*>(user);
         native.destroy_fence(native.device, reinterpret_cast<VkFence>(fence), nullptr);
     },
-    [](void* user, uint64_t fence) -> int32_t {
+    [](void* user, uint64_t fence, uint64_t timeout_ns) -> int32_t {
         const auto& native = *static_cast<Device*>(user);
         const auto handle = reinterpret_cast<VkFence>(fence);
         const VulkanTimingScope timing(native.wait_label, native.wait_frame);
-        return native.wait_fences(native.device, 1, &handle, VK_TRUE, 15000000000ull);
+        return native.wait_fences(native.device, 1, &handle, VK_TRUE, timeout_ns);
     },
     [](void* user, uint64_t fence) -> int32_t {
         const auto& native = *static_cast<Device*>(user);

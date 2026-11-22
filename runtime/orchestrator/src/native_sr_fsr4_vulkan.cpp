@@ -2,6 +2,7 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <windows.h>
 #include <vulkan/vulkan.h>
+#include "vulkan_fg_copy.h"
 #include <memory>
 #include <new>
 #include "native_fg_dx12_vulkan_platform.h"
@@ -101,19 +102,9 @@ void capture_parameters(const rsf_srvk_frame* frame, uint32_t reset) {
 
 int32_t capture_flush(void* graphics) { return static_cast<Graphics*>(graphics)->capture.flush() ? 1 : 0; }
 
-void transition(void* graphics, void* commands, const rsf_dx12gvk_barrier* plan) {
+void transition(void* graphics, void* commands, const rsf_vkfg_barrier* plan) {
     const auto& native = *static_cast<const Graphics*>(graphics);
-    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    barrier.srcAccessMask = plan->source_access;
-    barrier.dstAccessMask = plan->target_access;
-    barrier.oldLayout = static_cast<VkImageLayout>(plan->old_layout);
-    barrier.newLayout = static_cast<VkImageLayout>(plan->new_layout);
-    barrier.srcQueueFamilyIndex = plan->source_family;
-    barrier.dstQueueFamilyIndex = plan->target_family;
-    barrier.image = reinterpret_cast<VkImage>(plan->image);
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    native.barrier(static_cast<VkCommandBuffer>(commands), plan->source_stages,
-        plan->target_stages, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    rsf::vkfg::record_barrier(native.barrier, static_cast<VkCommandBuffer>(commands), *plan);
 }
 
 void copy(void* graphics, void* commands, uint64_t src, uint64_t dst, uint32_t width, uint32_t height) {

@@ -23,7 +23,7 @@ typedef struct rsf_vkfg_platform {
     void (*free_memory)(void*, uint64_t);
     int32_t (*create_fence)(void*, uint64_t*);
     void (*destroy_fence)(void*, uint64_t);
-    int32_t (*wait_fence)(void*, uint64_t);
+    int32_t (*wait_fence)(void*, uint64_t fence, uint64_t timeout_ns);
     int32_t (*reset_fence)(void*, uint64_t);
     int32_t (*submit_fence)(void*, uint64_t);
 } rsf_vkfg_platform;

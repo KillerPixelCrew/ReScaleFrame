@@ -12,7 +12,7 @@ use crate::sr_session::has_capacity;
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame as Frame,
     rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup, rsf_fgvk_status as Status,
-    rsf_fgvk_submit_plan as SubmitPlan, rsf_fgvk_timeline as RecordingTimeline,
+    rsf_fgvk_timeline as RecordingTimeline,
 };
 use crate::vulkan_fg_copy::{BarrierFn, CopyFn, SHADER_READ, record_shader_read_copy};
 use crate::vulkan_fg_frames::*;
@@ -24,9 +24,9 @@ use crate::vulkan_fg_resources_abi::{
     rsf_vkfg_fences as Fences, rsf_vkfg_image as PrivateImage, rsf_vkfg_platform as Resources,
 };
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as Image};
-use rsf_game_sys::{
-    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
-};
+use rsf_game_sys::rsf_frame_record as Record;
+#[cfg(test)]
+use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -40,7 +40,6 @@ const NOT_SUPPORTED: i32 = -7;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 const VK_SUCCESS: i32 = 0;
-const VK_INCOMPLETE: i32 = 5;
 const VK_SUBOPTIMAL: i32 = 1_000_001_003;
 const VK_INITIALIZATION_FAILED: i32 = -3;
 // rsfFfxSetVulkanWsiDispatch has no table for this device when it returns -3.
@@ -268,7 +267,6 @@ struct Owner {
     enabled: bool,
     configured: bool,
     retiring: bool,
-    admitted: bool,
     wsi_registered: bool,
     timeline: RecordingTimeline,
     slots: [Slot; SLOT_COUNT],
@@ -294,7 +292,6 @@ impl Owner {
             enabled: false,
             configured: false,
             retiring: false,
-            admitted: false,
             wsi_registered: false,
             timeline: unsafe { std::mem::zeroed() },
             slots: std::array::from_fn(|_| Slot::default()),
@@ -324,7 +321,6 @@ impl Owner {
         if !route().admit(self.id(), self.device.addr()) {
             return NOT_SUPPORTED;
         }
-        self.admitted = true;
         let module = match unsafe {
             SdkModule::open(
                 ops.loader,
@@ -404,46 +400,12 @@ impl Owner {
             return None;
         }
         let record = unsafe { &*frame.record };
-        let camera = &record.camera;
-        if record.abi_version != RSF_GAME_FRAME_ABI_VERSION
-            || (camera.struct_size as usize) < size_of_val(camera)
-            || camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION
-        {
-            return None;
-        }
-        let finite = [
-            &camera.view_to_clip,
-            &camera.clip_to_view,
-            &camera.view_to_world,
-            &camera.world_to_view,
-            &camera.clip_to_previous_clip,
-        ]
-        .into_iter()
-        .flatten()
-        .all(|value| value.is_finite());
-        let positive = |value: f32| value.is_finite() && value > 0.0;
-        let valid = finite
-            && record.session_id != 0
-            && record.frame_id != 0
-            && record.render_width != 0
-            && record.render_height != 0
-            && record.render_width <= self.width
-            && record.render_height <= self.height
-            && record.output_width == self.width
-            && record.output_height == self.height
-            && camera.render_width == record.render_width
-            && camera.render_height == record.render_height
-            && camera.output_width == self.width
-            && camera.output_height == self.height
-            && positive(record.frame_time_ms)
-            && positive(camera.near_plane)
-            && camera.far_plane.is_finite()
-            && camera.far_plane >= 0.0
-            && (self.depth_infinite != 0 || camera.far_plane > camera.near_plane)
-            && positive(camera.vertical_fov_radians)
-            // The former `< 3.141593f` rounds to the f32 just above PI.
-            && camera.vertical_fov_radians <= std::f32::consts::PI
-            && camera.jitter_pixels.iter().all(|value| value.is_finite());
+        let valid = valid_source_record(record, self.width, self.height, self.depth_infinite != 0)
+            && record
+                .camera
+                .world_to_view
+                .iter()
+                .all(|value| value.is_finite());
         valid.then_some(record)
     }
 
@@ -465,32 +427,11 @@ impl Owner {
             && record.camera.motion_jittered == self.motion_jittered
     }
 
-    fn images(&self, count: *mut u32, output: *mut u64) -> i32 {
-        let images = self.ops.images;
-        if output.is_null() {
-            return unsafe { images(self.native, count, ptr::null_mut()) };
-        }
-        // FidelityFX FrameInterpolationSwapChainVK::getSwapchainImages leaves an
-        // oversized capacity unchanged after filling its smaller image set. Query
-        // the real count first so callers never consume uninitialized tail handles.
-        let capacity = unsafe { count.read() };
-        let mut available = 0;
-        let result = unsafe { images(self.native, &mut available, ptr::null_mut()) };
-        if result != VK_SUCCESS {
-            unsafe { count.write(0) };
-            return result;
-        }
-        unsafe { count.write(capacity.min(available)) };
-        let filled = unsafe { images(self.native, count, output) };
-        let written = unsafe { count.read() };
-        if written > capacity || written > available {
-            unsafe { count.write(0) };
-            return VK_INITIALIZATION_FAILED;
-        }
-        if filled == VK_SUCCESS && capacity < available {
-            VK_INCOMPLETE
-        } else {
-            filled
+    unsafe fn images(&self, count: *mut u32, output: *mut u64) -> i32 {
+        unsafe {
+            bounded_swapchain_images(count, output, |count, images| {
+                (self.ops.images)(self.native, count, images)
+            })
         }
     }
 
@@ -602,15 +543,8 @@ impl Owner {
         OK
     }
 
-    fn submitted(&mut self, commands: *const Handle, count: u32) {
-        let states: [*mut Recording; SLOT_COUNT] =
-            std::array::from_fn(|i| &raw mut self.slots[i].state);
-        let mut plan = SubmitPlan {
-            fences: 0,
-            discarded_prepare: 0,
-            discarded_hudless: 0,
-        };
-        unsafe { rsf_core_fgvk_submitted(states.as_ptr(), commands, count, &mut plan) };
+    fn submitted(&mut self, commands: &[*mut c_void]) {
+        let plan = submission_plan(self.slots.each_mut().map(|slot| &mut slot.state), commands);
         for (index, slot) in self.slots.iter_mut().enumerate() {
             let bit = 1 << index;
             if plan.discarded_hudless & bit != 0 {
@@ -763,7 +697,7 @@ impl Owner {
         if self.native.is_null() {
             // A failed open freed its own partial leaf and registered no hooks.
             self.module = None;
-            self.withdraw();
+            route().release(self.id());
             return OK;
         }
         if !self.retiring {
@@ -833,15 +767,8 @@ impl Owner {
         unsafe { (ops.close)(native) };
         self.native = ptr::null_mut();
         self.module = None;
-        self.withdraw();
+        route().release(self.id());
         OK
-    }
-
-    fn withdraw(&mut self) {
-        if self.admitted {
-            route().release(self.id());
-            self.admitted = false;
-        }
     }
 }
 
@@ -951,7 +878,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_images(
     images: *mut u64,
 ) -> i32 {
     match unsafe { live(owner) } {
-        Some(owner) if !count.is_null() => owner.images(count, images),
+        Some(owner) if !count.is_null() => unsafe { owner.images(count, images) },
         _ => VK_INITIALIZATION_FAILED,
     }
 }
@@ -1036,7 +963,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_submitted(
     if let Some(owner) = unsafe { live(owner) }
         && !commands.is_null()
     {
-        owner.submitted(commands, count);
+        owner.submitted(unsafe { std::slice::from_raw_parts(commands, count as usize) });
     }
 }
 
@@ -1337,6 +1264,10 @@ mod tests {
     unsafe extern "C" fn fence_ok(_: Handle, _: u64) -> i32 {
         OK
     }
+    unsafe extern "C" fn wait_fence(_: Handle, _: u64, timeout_ns: u64) -> i32 {
+        assert_eq!(timeout_ns, 15_000_000_000);
+        OK
+    }
     unsafe extern "C" fn submit_fence(_: Handle, _: u64) -> i32 {
         calls(|c| c.fence_submits += 1);
         OK
@@ -1354,7 +1285,7 @@ mod tests {
         free_memory: Some(release),
         create_fence: Some(fence),
         destroy_fence: Some(release),
-        wait_fence: Some(fence_ok),
+        wait_fence: Some(wait_fence),
         reset_fence: Some(fence_ok),
         submit_fence: Some(submit_fence),
     };

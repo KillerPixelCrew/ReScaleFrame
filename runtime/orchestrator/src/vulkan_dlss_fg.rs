@@ -4,8 +4,7 @@ use crate::vulkan_dlss_fg_abi::{ChainSupport, Handle, Platform, Sample, SdkCall,
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_dlssgvk_status as Status,
     rsf_fgvk_frame as Frame, rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup,
-    rsf_fgvk_status as Presentation, rsf_fgvk_submit_plan as SubmitPlan,
-    rsf_fgvk_timeline as Timeline,
+    rsf_fgvk_status as Presentation, rsf_fgvk_timeline as Timeline,
 };
 use crate::vulkan_fg_copy::{SHADER_READ, TRANSFER_SRC, record_shader_read_copy};
 use crate::vulkan_fg_frames::*;
@@ -450,14 +449,8 @@ impl Owner {
         result
     }
 
-    unsafe fn submitted(&mut self, commands: *const Handle, count: u32) {
-        let states = self.slots.each_mut().map(|slot| &raw mut slot.frame);
-        let mut plan = SubmitPlan {
-            fences: 0,
-            discarded_prepare: 0,
-            discarded_hudless: 0,
-        };
-        unsafe { rsf_core_fgvk_submitted(states.as_ptr(), commands, count, &mut plan) };
+    fn submitted(&mut self, commands: &[*mut c_void]) {
+        let plan = submission_plan(self.slots.each_mut().map(|slot| &mut slot.frame), commands);
         for (i, slot) in self.slots.iter_mut().enumerate() {
             let bit = 1 << i;
             for (discarded, hudless, images) in [
@@ -750,12 +743,14 @@ unsafe extern "C" fn rsf_core_dlgvk_images(
     count: *mut u32,
     images: *mut u64,
 ) -> i32 {
-    let (Some(owner), Some(count)) = (unsafe { (owner.as_ref(), count.as_mut()) }) else {
-        return WSI_ERROR;
-    };
-    bounded_swapchain_images(count, images, |count, images| unsafe {
-        (owner.platform.images)(owner.native, owner.chain, count, images)
-    })
+    match unsafe { owner.as_ref() } {
+        Some(owner) if !count.is_null() => unsafe {
+            bounded_swapchain_images(count, images, |count, images| {
+                (owner.platform.images)(owner.native, owner.chain, count, images)
+            })
+        },
+        _ => WSI_ERROR,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -834,8 +829,10 @@ unsafe extern "C" fn rsf_core_dlgvk_submitted(
     commands: *const Handle,
     count: u32,
 ) {
-    if let Some(owner) = unsafe { owner.as_mut() } {
-        unsafe { owner.submitted(commands, count) };
+    if let Some(owner) = unsafe { owner.as_mut() }
+        && !commands.is_null()
+    {
+        owner.submitted(unsafe { std::slice::from_raw_parts(commands, count as usize) });
     }
 }
 

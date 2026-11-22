@@ -2,6 +2,7 @@
 // Presenter activation, camera reset delivery and source identity through the
 // retained rsf_ffxgvk entry points. No vendor DLL, Vulkan device or GPU work.
 #include "native_ffx_vulkan_harness.h"
+#include <limits>
 
 using namespace fake;
 
@@ -15,6 +16,16 @@ int main() {
     state.check_reset = true;
 
     require(rsf_ffxgvk_enable(self, 1) == RSF_BACKEND_OK, "explicit FG enable is accepted");
+    auto invalid = record(7, 1);
+    invalid.camera.world_to_view[0] = std::numeric_limits<float>::quiet_NaN();
+    auto invalid_input = frame(invalid);
+    require(rsf_ffxgvk_prepare(self, a, &invalid_input) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !state.sdk_records,
+        "FidelityFX retains its world-to-view check after sharing source validation");
+    invalid = record(7, 1);
+    invalid.camera.motion_jittered = 1;
+    invalid_input = frame(invalid);
+    require(rsf_ffxgvk_prepare(self, a, &invalid_input) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && !state.sdk_records,
+        "FidelityFX retains its setup-specific guide validation");
     for (uint64_t frame = 1; frame <= 4; ++frame) {
         // Frame 1 starts a producer, frame 3 carries an engine camera reset.
         const auto source = record(7, frame, 0, 1, frame == 3 ? RSF_FRAME_FLAG_RESET : 0);

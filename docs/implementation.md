@@ -3385,6 +3385,14 @@ FidelityFX failed-bind rollback, split submissions and duplicate refusal.
 All 192 locked Rust tests, formatting and Clippy passed. Device timing and
 in-game behavior remain unverified.
 
+The shared Vulkan FG planner now checks the stored source's interpolation
+veto and accepts typed recording slots across the three submission owners.
+FidelityFX and DLSS-G share source admission and bounded image enumeration.
+The native Vulkan and external D3D12 paths use one image-barrier ABI.
+Source review, generated bindings and pinned formatting are complete for
+this follow-up. Builds, fixtures and device checks remain open.
+[Shared FG and WSI follow-up](research/rust-vulkan-ffx-fg-copy-plan.md#shared-fg-admission-submission-and-wsi-follow-up)
+
 The shared frame-capture owner now keeps requests, exact capture identity,
 metadata, ticket publication and GPU completion bounds in Rust. It closes
 new reservations at the first matched Present and lets pending readbacks

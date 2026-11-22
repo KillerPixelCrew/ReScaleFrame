@@ -2,7 +2,9 @@
 use crate::allocate_handle;
 use crate::sr_session::has_capacity;
 use crate::vulkan_fg_abi::*;
+use crate::vulkan_fg_copy::SHADER_READ;
 use crate::vulkan_fg_frames::PresentSource;
+use crate::vulkan_ownership::Claim;
 use crate::vulkan_presentation::ProviderOperation;
 use crate::vulkan_sr_abi::RSF_SRVK_ABI_VERSION;
 use rsf_game_sys::rsf_frame_record;
@@ -28,28 +30,11 @@ static OCCUPIED: AtomicBool = AtomicBool::new(false);
 // Primary admission allows at most one retained, partially created owner.
 static CLEANUP_ONLY: AtomicPtr<rsf_fgvk> = AtomicPtr::new(ptr::null_mut());
 
-struct PrimaryClaim;
-
-impl PrimaryClaim {
-    fn acquire() -> Option<Self> {
-        OCCUPIED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()
-            .map(|_| Self)
-    }
-}
-
-impl Drop for PrimaryClaim {
-    fn drop(&mut self) {
-        OCCUPIED.store(false, Ordering::Release);
-    }
-}
-
 // The C ABI requires the host to serialize WSI calls and keep its callbacks
 // alive through retirement. The presentation binding separately admits
 // CPU latency borrows, including sleep, and refuses destruction while borrowed.
 struct Owner {
-    _claim: PrimaryClaim,
+    _claim: Claim,
     provider: &'static rsf_fgvk_provider,
     context: *mut c_void,
     backend: u32,
@@ -172,7 +157,7 @@ unsafe extern "C" fn rsf_core_fgvk_create(
         Ok(provider) => provider,
         Err(error) => return error,
     };
-    let Some(claim) = PrimaryClaim::acquire() else {
+    let Some(claim) = Claim::acquire(&OCCUPIED) else {
         return NOT_READY;
     };
     let creation = match ProviderOperation::create() {
@@ -311,11 +296,13 @@ unsafe extern "C" fn rsf_fgvk_image_layout(handle: *const rsf_fgvk, layout: *mut
     if layout.is_null() {
         return INVALID;
     }
-    let call = owner
-        .provider
-        .image_layout
-        .expect("provider image layout callback");
-    unsafe { call(owner.context, layout) }
+    match owner.provider.image_layout {
+        Some(call) => unsafe { call(owner.context, layout) },
+        None => {
+            unsafe { layout.write(SHADER_READ) };
+            OK
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -327,11 +314,13 @@ unsafe extern "C" fn rsf_fgvk_max_generated(handle: *mut rsf_fgvk, count: *mut u
     if count.is_null() {
         return INVALID;
     }
-    let call = owner
-        .provider
-        .max_generated
-        .expect("provider max generated callback");
-    unsafe { call(owner.context, count) }
+    match owner.provider.max_generated {
+        Some(call) => unsafe { call(owner.context, count) },
+        None => {
+            unsafe { count.write(1) };
+            OK
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

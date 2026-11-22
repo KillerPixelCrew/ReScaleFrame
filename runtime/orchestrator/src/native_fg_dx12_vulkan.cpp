@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "vulkan_fg_copy.h"
 #include <vulkan/vulkan.h>
 #include <array>
 #include <cstddef>
@@ -187,14 +188,7 @@ int32_t allocate_commands(rsf_dx12gvk_platform* self, uint64_t pool, void** outp
 // Rust plans layouts, queue ownership, access and stage masks, and the copy-or-blit choice.
 // These leaves only translate one planned step into its typed Vulkan command.
 void barrier(rsf_dx12gvk_platform* self, void* list, const rsf_dx12gvk_barrier* plan) {
-    VkImageMemoryBarrier transition{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    transition.srcAccessMask = plan->source_access; transition.dstAccessMask = plan->target_access;
-    transition.oldLayout = static_cast<VkImageLayout>(plan->old_layout);
-    transition.newLayout = static_cast<VkImageLayout>(plan->new_layout);
-    transition.srcQueueFamilyIndex = plan->source_family; transition.dstQueueFamilyIndex = plan->target_family;
-    transition.image = image(plan->image); transition.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    self->barrier(static_cast<VkCommandBuffer>(list), plan->source_stages, plan->target_stages,
-        0, 0, nullptr, 0, nullptr, 1, &transition);
+    rsf::vkfg::record_barrier(self->barrier, static_cast<VkCommandBuffer>(list), *plan);
 }
 void copy(rsf_dx12gvk_platform* self, void* list, const rsf_dx12gvk_transfer* plan) {
     VkImageCopy region{};

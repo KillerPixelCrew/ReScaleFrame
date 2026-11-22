@@ -33,7 +33,6 @@ RSF_EXPORT(rsf_fgvk_destroy)
 
 namespace {
 constexpr int32_t wsi_initialization_failed = -3;
-constexpr uint32_t shader_read_layout = 5; // VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
 constexpr int32_t unchanged(int32_t result) { return result; }
 
 // Adapt the typed provider pointer without reinterpreting any function pointer.
@@ -67,11 +66,6 @@ rsf_backend_result create_provider(void** out, Create create) noexcept {
     try { result = create(&owner); } catch (...) {}
     *out = owner;
     return result;
-}
-
-rsf_backend_result shader_read(void*, uint32_t* layout) {
-    *layout = shader_read_layout;
-    return RSF_BACKEND_OK;
 }
 
 rsf_backend_result dlss_status(rsf_dlssgvk* owner, rsf_dlssgvk_status& status) noexcept try {
@@ -109,8 +103,7 @@ constexpr rsf_fgvk_provider ffx_provider{
         return create_provider<rsf_ffxgvk>(out, [&](auto** owner) { return rsf_ffxgvk_create(setup, owner, chain); });
     },
     [](void* owner, uint32_t enabled, uint32_t) { return Call<rsf_ffxgvk_enable>::invoke(owner, enabled); },
-    wsi_call<rsf_ffxgvk_images>, wsi_call<rsf_ffxgvk_acquire>, shader_read,
-    [](void*, uint32_t* count) { *count = 1; return RSF_BACKEND_OK; },
+    wsi_call<rsf_ffxgvk_images>, wsi_call<rsf_ffxgvk_acquire>, nullptr, nullptr,
     Call<rsf_ffxgvk_prepare>::invoke, Call<rsf_ffxgvk_hudless>::invoke, Call<rsf_ffxgvk_submitted>::invoke,
     wsi_call<rsf_ffxgvk_present>, wsi_call<rsf_ffxgvk_present_source>, Call<rsf_ffxgvk_get_status>::invoke,
     Call<rsf_ffxgvk_drain>::invoke, Call<rsf_ffxgvk_destroy>::invoke,
@@ -132,7 +125,7 @@ constexpr rsf_fgvk_provider fsr4_provider{
         const rsf_fsr4gvk_options options{sizeof(options), 1, host->window, host->timeline_enabled, count};
         return create_provider<rsf_fsr4gvk>(out, [&](auto** owner) { return fsr4_result(rsf_fsr4gvk_create(setup, &options, owner, chain)); });
     },
-    Call<rsf_fsr4gvk_enable_options, fsr4_result>::invoke, wsi_call<rsf_fsr4gvk_images>, wsi_call<rsf_fsr4gvk_acquire>, shader_read,
+    Call<rsf_fsr4gvk_enable_options, fsr4_result>::invoke, wsi_call<rsf_fsr4gvk_images>, wsi_call<rsf_fsr4gvk_acquire>, nullptr,
     max_generated<rsf_fsr4gvk, rsf_fsr4gvk_max_generated>,
     Call<rsf_fsr4gvk_prepare, fsr4_result>::invoke, Call<rsf_fsr4gvk_hudless, fsr4_result>::invoke, Call<rsf_fsr4gvk_submitted>::invoke,
     wsi_call<rsf_fsr4gvk_present>, wsi_call<rsf_fsr4gvk_present_source>, Call<rsf_fsr4gvk_status, fsr4_result>::invoke,
@@ -155,7 +148,7 @@ constexpr rsf_fgvk_provider xess_provider{
         const rsf_xessgvk_options options{sizeof(options), 1, host->window, host->timeline_enabled, count, host->intel_runtime_directory};
         return create_provider<rsf_xessgvk>(out, [&](auto** owner) { return xess_result(rsf_xessgvk_create(setup, &options, owner, chain)); });
     },
-    Call<rsf_xessgvk_enable_options, xess_result>::invoke, wsi_call<rsf_xessgvk_images>, wsi_call<rsf_xessgvk_acquire>, shader_read,
+    Call<rsf_xessgvk_enable_options, xess_result>::invoke, wsi_call<rsf_xessgvk_images>, wsi_call<rsf_xessgvk_acquire>, nullptr,
     max_generated<rsf_xessgvk, rsf_xessgvk_max_generated>,
     Call<rsf_xessgvk_prepare, xess_result>::invoke, Call<rsf_xessgvk_hudless, xess_result>::invoke, Call<rsf_xessgvk_submitted>::invoke,
     wsi_call<rsf_xessgvk_present>, wsi_call<rsf_xessgvk_present_source>, Call<rsf_xessgvk_status, xess_result>::invoke,

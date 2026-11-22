@@ -7,6 +7,7 @@ use std::ffi::c_void;
 
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
+const FENCE_TIMEOUT_NS: u64 = 15_000_000_000;
 pub(super) const SAMPLED_TRANSFER: u32 = 0x7;
 
 struct Replacement<'a> {
@@ -166,7 +167,9 @@ pub(super) fn ensure_image(
 }
 
 fn wait_pending(platform: &Platform, user: *mut c_void, fence: u64, pending: u32) -> bool {
-    pending == 0 || (fence != 0 && unsafe { (platform.wait_fence.unwrap())(user, fence) } == 0)
+    pending == 0
+        || (fence != 0
+            && unsafe { (platform.wait_fence.unwrap())(user, fence, FENCE_TIMEOUT_NS) } == 0)
 }
 
 #[unsafe(no_mangle)]

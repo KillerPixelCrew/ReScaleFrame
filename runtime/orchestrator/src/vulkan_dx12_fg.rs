@@ -9,7 +9,7 @@ use crate::vulkan_external_copy::{
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame as Frame,
     rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup, rsf_fgvk_status as Status,
-    rsf_fgvk_submit_plan as SubmitPlan, rsf_fgvk_timeline as RecordingTimeline,
+    rsf_fgvk_timeline as RecordingTimeline,
 };
 use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
@@ -17,8 +17,7 @@ use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_plat
 use crate::vulkan_sr::{SAMPLED_USAGE, TRANSFER_SRC_USAGE};
 use crate::vulkan_sr_abi::{rsf_srvk_image as Image, rsf_srvk_setup as Graphics, rsf_vk_function};
 use rsf_game_sys::{
-    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_CAMERA_ABI_VERSION,
-    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
 };
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
@@ -944,21 +943,7 @@ impl Presentation {
     }
 
     fn submitted(&mut self, commands: &[*mut c_void]) {
-        let slots: [*mut Recording; SLOT_COUNT] =
-            std::array::from_fn(|i| &raw mut self.slots[i].state);
-        let mut plan = SubmitPlan {
-            fences: 0,
-            discarded_prepare: 0,
-            discarded_hudless: 0,
-        };
-        unsafe {
-            rsf_core_fgvk_submitted(
-                slots.as_ptr(),
-                commands.as_ptr(),
-                commands.len() as u32,
-                &mut plan,
-            )
-        };
+        let plan = submission_plan(self.slots.each_mut().map(|slot| &mut slot.state), commands);
         for (index, slot) in self.slots.iter_mut().enumerate() {
             let bit = 1 << index;
             for (discarded, stage) in [
@@ -1027,15 +1012,13 @@ impl Presentation {
         let slot_index = slot_index(source_frame);
         let slot = &self.slots[slot_index];
         let identity = source.matches(&slot.state.record);
-        let valid = slot.state.record.flags & (RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID)
-            == 0
-            && rsf_core_fgvk_present_candidate(
-                &self.recording,
-                &slot.state,
-                source_frame,
-                u32::from(identity),
-                u32::from(self.requested && source.allows_fg()),
-            ) != 0;
+        let valid = rsf_core_fgvk_present_candidate(
+            &self.recording,
+            &slot.state,
+            source_frame,
+            u32::from(identity),
+            u32::from(self.requested && source.allows_fg()),
+        ) != 0;
 
         let matched_source =
             identity && source_frame != 0 && slot.state.record.frame_id == source_frame;

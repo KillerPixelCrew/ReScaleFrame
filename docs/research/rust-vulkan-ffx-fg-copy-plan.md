@@ -98,3 +98,41 @@ groups. The new fixture checks that the full WSI group is queried
 and partial startup closes on a miss. Pinned formatting, locked
 offline metadata and whitespace passed. Builds, fixtures, and
 device and game verification remain open.
+
+## Shared FG admission, submission and WSI follow-up
+
+PORT.md V02 builds on V04's common source and image enumeration helpers and
+V05's external input planner at `a3ea6940`. FidelityFX retains its finite
+world-to-view transform and setup-specific depth and motion checks. Both image
+routes query the count before a bounded fill and support a write-only count
+query. The shared Present predicate now checks the prepared record for
+`NO_FG` and `AMBIGUOUS_ID`, including legacy implicit Present. An explicit
+matching identity can also veto interpolation.
+
+FidelityFX, DLSS-G and Vulkan-to-D3D12 FG now give the Rust submission planner
+six distinct resource slots and the actual submitted command list. This
+preserves the per-slot masks and the different native fence and capture
+actions. The native compatibility adapter remains available. FidelityFX
+releases its route through the existing owner-ID check after closing its leaf
+and unloading the module. The main FG dispatcher uses the common atomic
+claim, and Rust supplies the default shader-read layout and one-frame limit
+when the provider table omits a query callback.
+
+The copy ABI generates the same barrier for same-queue transitions and
+external acquire and release. The two transfer records still express their
+own layout or extent facts. Vulkan command recording stays in a shared native
+leaf. Rust now supplies the existing 15-second timeout for waits on private
+FG resources. FidelityFX capture uses per-readback Vulkan events and still
+flushes after the existing SDK and Vulkan drain. This prevents an idle device
+from certifying an abandoned recording at a reused command address.
+
+The patched SDK's dispatch-table implementation and its fixture stay on the
+SDK side of the DLL boundary. The public Vulkan headers, SDK descriptor
+marshalling, exception guards and native WSI hook fixtures remain in C++.
+The shared Rust fixtures cover count, submission and veto decisions. The
+FidelityFX native fixtures add stored-veto coverage for both Present routes
+and check the provider-specific matrix and guide refusals.
+
+Source review, bindgen 0.72.1 plus Rust 1.94.1 formatting, and
+`git diff --check` were used for verification. Builds, fixture execution
+and device validation remain open.

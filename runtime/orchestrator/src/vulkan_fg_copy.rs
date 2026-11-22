@@ -1,42 +1,49 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_fg_resources_abi::rsf_vkfg_image as Image;
+pub(super) use crate::vulkan_fg_resources_abi::rsf_vkfg_barrier as Barrier;
+use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as Image, rsf_vkfg_image_copy as ImageCopy};
 use std::ffi::c_void;
 
 pub(super) const UNDEFINED: u32 = 0;
 pub(super) const SHADER_READ: u32 = 5;
 pub(super) const TRANSFER_SRC: u32 = 6;
 const TRANSFER_DST: u32 = 7;
-const FAMILY_IGNORED: u32 = !0;
+pub(super) const FAMILY_IGNORED: u32 = !0;
+pub(super) const FAMILY_EXTERNAL: u32 = !1;
 // VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT.
 const MEMORY_ACCESS: u32 = 0x8000 | 0x1_0000;
-const ALL_COMMANDS: u32 = 0x1_0000;
+pub(super) const ALL_COMMANDS: u32 = 0x1_0000;
 
 type Handle = *mut c_void;
 pub(super) type BarrierFn = unsafe extern "C" fn(Handle, Handle, *const Barrier);
 pub(super) type CopyFn = unsafe extern "C" fn(Handle, Handle, *const ImageCopy);
 
-#[repr(C)]
-#[cfg_attr(test, derive(Clone, Copy, Debug, PartialEq))]
-pub(super) struct Barrier {
-    image: u64,
-    old_layout: u32,
-    new_layout: u32,
-    source_family: u32,
-    target_family: u32,
-    source_access: u32,
-    target_access: u32,
-    source_stages: u32,
-    target_stages: u32,
-}
-
 impl Barrier {
-    pub(super) fn new(image: u64, old_layout: u32, new_layout: u32) -> Self {
-        let source_access = if old_layout == UNDEFINED {
+    pub(super) fn new(image: u64, old_layout: u32, new_layout: u32, from: u32, to: u32) -> Self {
+        let source_access = if old_layout == UNDEFINED || from == FAMILY_EXTERNAL {
             0
         } else {
             MEMORY_ACCESS
         };
-        Self::with_access(image, old_layout, new_layout, source_access, MEMORY_ACCESS)
+        let target_access = if to == FAMILY_EXTERNAL {
+            0
+        } else {
+            MEMORY_ACCESS
+        };
+        let mut barrier =
+            Self::with_access(image, old_layout, new_layout, source_access, target_access);
+        barrier.source_family = from;
+        barrier.target_family = to;
+        barrier
+    }
+
+    fn same_queue(image: u64, old_layout: u32, new_layout: u32) -> Self {
+        Self::new(
+            image,
+            old_layout,
+            new_layout,
+            FAMILY_IGNORED,
+            FAMILY_IGNORED,
+        )
     }
 
     pub(super) fn with_access(
@@ -58,17 +65,6 @@ impl Barrier {
             target_stages: ALL_COMMANDS,
         }
     }
-}
-
-#[repr(C)]
-#[cfg_attr(test, derive(Clone, Copy, Debug, PartialEq))]
-pub(super) struct ImageCopy {
-    source: u64,
-    target: u64,
-    source_layout: u32,
-    target_layout: u32,
-    width: u32,
-    height: u32,
 }
 
 impl ImageCopy {
@@ -107,13 +103,25 @@ pub(super) unsafe fn record_shader_read_copy(
         UNDEFINED
     };
     let barrier = |plan: Barrier| unsafe { record_barrier(native, commands, &plan) };
-    barrier(Barrier::new(copy.source, SHADER_READ, copy.source_layout));
-    barrier(Barrier::new(
+    barrier(Barrier::same_queue(
+        copy.source,
+        SHADER_READ,
+        copy.source_layout,
+    ));
+    barrier(Barrier::same_queue(
         copy.target,
         target_initial_layout,
         copy.target_layout,
     ));
     unsafe { record_copy(native, commands, &copy) };
-    barrier(Barrier::new(copy.source, copy.source_layout, SHADER_READ));
-    barrier(Barrier::new(copy.target, copy.target_layout, SHADER_READ));
+    barrier(Barrier::same_queue(
+        copy.source,
+        copy.source_layout,
+        SHADER_READ,
+    ));
+    barrier(Barrier::same_queue(
+        copy.target,
+        copy.target_layout,
+        SHADER_READ,
+    ));
 }

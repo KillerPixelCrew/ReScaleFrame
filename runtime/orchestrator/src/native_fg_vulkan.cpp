@@ -46,9 +46,9 @@ struct rsf_ffxgvk_native {
     VkPhysicalDeviceMemoryProperties memory_properties{};
     VkAllocationCallbacks* allocator = nullptr;
     uint32_t width = 0, height = 0;
-    // The source Rust admitted at the last successful configure. The SDK calls
-    // the generation callback synchronously inside queuePresent.
-    rsf::FrameCaptureVk capture;
+    // Each readback must identify a recording that executed, even after a
+    // command buffer address is reused. The owner flushes after a full drain.
+    rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
 };
 namespace {
 // The WSI hooks carry no user pointer. Each borrows the leaf from the Rust

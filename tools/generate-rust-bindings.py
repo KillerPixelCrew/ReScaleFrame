@@ -298,15 +298,18 @@ generate("runtime/orchestrator/src/vulkan_fsr4_sr_abi.rs", "runtime/orchestrator
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",
           "--raw-line", "use super::bridge_abi::{rsf_fsr4_bridge_create, rsf_fsr4_bridge_frame, rsf_fsr4_bridge_info};",
-          "--raw-line", "use crate::vulkan_external_copy::Barrier as rsf_dx12gvk_barrier;",
+          "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_barrier;",
           "--raw-line", "use crate::dx12_vulkan_interop_abi::rsf_dx12vk_platform;",
           "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_fsr4vk_handoff, rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;",
           "--raw-line", "type rsf_fsr4_bridge = ::core::ffi::c_void;"])
 generate("runtime/orchestrator/src/vulkan_fg_resources_abi.rs", "runtime/orchestrator/src/vulkan_fg_resources.h",
-         "rsf_vkfg_(platform|image|fences)", "NOTHING",
-         ["-Isdk/game/include"], ["--no-recursive-allowlist", "--with-derive-default"])
+         "rsf_vkfg_(platform|image|fences|barrier|image_copy)", "NOTHING",
+         ["-Isdk/game/include", "-include", "runtime/orchestrator/src/vulkan_fg_copy_abi.h"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--with-derive-custom-struct", "rsf_vkfg_barrier=Debug,PartialEq,Eq",
+          "--with-derive-custom-struct", "rsf_vkfg_image_copy=Debug,PartialEq,Eq"])
 generate("runtime/orchestrator/src/d3d11_sharpening_abi.rs", "runtime/graphics/src/sharpening/d3d11_platform.h",
          "rsf_sharpen11_(draw|platform)", "NOTHING",
          ["-Iruntime/graphics/include"],
