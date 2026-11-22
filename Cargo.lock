@@ -478,6 +478,7 @@ dependencies = [
 name = "rsf-game-sdk-fixtures"
 version = "0.1.2"
 dependencies = [
+ "ash",
  "rsf-game-sys",
  "windows-sys",
 ]

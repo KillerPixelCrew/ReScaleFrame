@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Synthetic concrete providers test dispatch/admission only, without GPU/SDKs.
 #include "../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp"
-#include "../runtime/orchestrator/src/native_latency_vulkan_presentation.h"
+#include "vulkan_presentation_fixture.h"
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>

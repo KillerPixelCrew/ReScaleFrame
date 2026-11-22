@@ -433,6 +433,19 @@ generate("runtime/orchestrator/src/vulkan_latency_abi.rs", "runtime/orchestrator
           "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "type rsf_backend_result = i32;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_vk_function, rsf_vk_get_proc};"])
+generate("tests/game-sdk/src/vk_latency_calls.rs", "runtime/orchestrator/src/native_latency_vulkan_presentation.h",
+         "rsf_(latencyvk_(setup|status|device_query|device_requirements|created_device)|"
+         "slvk_(setup|call|callback)|fgvk(_latency_status)?|vk_(function|get_proc|wsi_call))",
+         "RSF_(LATENCYVK_.*|SLVK_.*|FGVK_LATENCY_ABI_VERSION|FG_BACKEND_XESS|PACING_(XELL|REFLEX|ANTILAG_VULKAN))",
+         ["-include", "rescaleframe/native_streamline_vulkan.h",
+          "-include", "rescaleframe/native_latency_vulkan.h", "-include", "rescaleframe/native_latency_vulkan_requirements.h",
+          "-include", "rescaleframe/native_cpu.h", "-include", "rescaleframe/frame_generation.h", "-Iruntime/orchestrator/include",
+          "-Iruntime/contract/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--allowlist-function", "rsf_(latencyvk_.*|slvk_.*|native_latency_(claim|has_claim|release_claim)|core_fgvk_presentation_(attach|borrow|return))",
+          "--raw-line", "type rsf_backend_result = i32;",
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};"])
+
 generate("runtime/orchestrator/src/vulkan_latency_platform_abi.rs", "runtime/orchestrator/src/native_latency_vulkan_platform.h",
          "rsf_vk_(latency_platform|streamline_calls|token_calls|pcl_calls)", "NOTHING",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Isdk/game/include"],
@@ -747,6 +760,16 @@ generate("runtime/orchestrator/src/native_fg_cpu_abi.rs", "runtime/orchestrator/
          ["--no-recursive-allowlist",
           "--raw-line", "use crate::render_abi::{rsf_fg_status, rsf_pacing_owner, rsf_reflex_mode};",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
+
+generate("tests/game-sdk/src/fg_cpu_calls.rs", "runtime/orchestrator/src/native_fg_cpu_platform.h",
+         "rsf_native_(latency_frame|input_routes)", "RSF_FG_BACKEND_XESS",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--allowlist-function", "rsf_(core_(nfg_(duplicate_render_thread|sample_render_thread|describe_address)|native_(fg_(cpu|frame|reflex_ordering_set)|input_routes_get|latency_(render|present|frame_get|window_bind|retire|end_session)))|native_(fg_rendered_source_set|latency_has_claim))",
+          "--allowlist-var", "rsf_native_fg_cpu_platform",
+          "--raw-line", "use crate::native_fg_cpu_abi::{rsf_native_latency_window, rsf_nfg_cpu_platform};",
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};"])
 
 generate("tests/generation/src/abi.rs", "tests/generation/fixture_abi.h",
          "rsf_(fg_choice|fg_retirement|pipeline_camera_frame|frame_resources|dlss_frame|dlss_quality)",

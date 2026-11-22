@@ -7,11 +7,20 @@ mod antilag;
 #[cfg(feature = "cpu-fixtures")]
 mod antilag_abi;
 mod contract;
-#[cfg(feature = "cpu-fixtures")]
+#[cfg(any(
+    feature = "cpu-fixtures",
+    feature = "fg-cpu-fixture",
+    feature = "vk-latency-fixtures"
+))]
 #[allow(dead_code)]
 #[path = "../../../runtime/orchestrator/src/cpu_abi.rs"]
 mod cpu_abi;
-#[cfg(feature = "cpu-fixtures")]
+#[cfg(any(
+    feature = "cpu-fixtures",
+    feature = "fg-cpu-fixture",
+    feature = "vk-latency-fixtures"
+))]
+#[allow(dead_code)]
 mod cpu_calls;
 #[cfg(feature = "cpu-fixtures")]
 mod cpu_events;
@@ -20,11 +29,30 @@ mod d3d11_host;
 #[cfg(feature = "d3d11-host-fixture")]
 mod d3d11_host_calls;
 mod domains;
+#[cfg(feature = "fg-cpu-fixture")]
+mod fg_cpu;
+#[cfg(feature = "fg-cpu-fixture")]
+mod fg_cpu_calls;
 #[cfg(feature = "cpu-fixtures")]
 mod input_receipts;
+#[cfg(feature = "fg-cpu-fixture")]
+#[allow(dead_code)]
+#[path = "../../../runtime/orchestrator/src/native_fg_cpu_abi.rs"]
+mod native_fg_cpu_abi;
+#[cfg(feature = "fg-cpu-fixture")]
+#[allow(dead_code, unused_imports)]
+#[path = "../../../runtime/orchestrator/src/render_abi.rs"]
+mod render_abi;
 #[cfg(feature = "cpu-fixtures")]
 mod reservation;
 mod session;
+#[cfg(feature = "vk-latency-fixtures")]
+mod vk_latency;
+#[cfg(feature = "vk-latency-fixtures")]
+#[allow(dead_code)]
+mod vk_latency_calls;
+#[cfg(feature = "xell-fixture")]
+mod xell;
 
 use std::ffi::{CStr, OsStr};
 use std::os::windows::ffi::OsStrExt;

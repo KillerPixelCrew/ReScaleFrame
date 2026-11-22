@@ -7,6 +7,9 @@ publish.workspace = true
 license.workspace = true
 
 [features]
+xell-fixture = []
+vk-latency-fixtures = ["dep:ash", "windows-sys/Win32_System_Performance", "windows-sys/Win32_System_Threading", "windows-sys/Win32_UI_WindowsAndMessaging"]
+fg-cpu-fixture = ["windows-sys/Win32_System_Performance", "windows-sys/Win32_System_Threading"]
 cpu-fixtures = ["windows-sys/Win32_System_Memory", "windows-sys/Win32_System_SystemInformation"]
 d3d11-host-fixture = []
 
@@ -14,6 +17,7 @@ d3d11-host-fixture = []
 crate-type = ["staticlib"]
 
 [target.'cfg(windows)'.dependencies]
+ash = { version = "=0.38.0", optional = true, default-features = false, features = ["std"] }
 rsf-game-sys = { path = "../../sdk/game" }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",

@@ -386,10 +386,11 @@ target_compile_definitions(rsf_native_cpu_reservation_test PRIVATE RSF_CPU_FIXTU
 target_link_libraries(rsf_native_cpu_reservation_test PRIVATE rsf_cpu_fixtures_rust rsf_native_cpu rsf_build_options)
 add_test(NAME native_cpu_reservation_contract COMMAND rsf_native_cpu_reservation_test)
 
-add_executable(rsf_native_fg_cpu_test native_fg_cpu.cpp)
-target_include_directories(rsf_native_fg_cpu_test PRIVATE "${PROJECT_SOURCE_DIR}/runtime/orchestrator/src")
-target_compile_definitions(rsf_native_fg_cpu_test PRIVATE RSF_RUNTIME_BUILD)
-target_link_libraries(rsf_native_fg_cpu_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
+rsf_add_rust_static(rsf_fg_cpu_fixture_rust rsf_rust_fg_cpu_fixture
+    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features fg-cpu-fixture)
+add_executable(rsf_native_fg_cpu_test game-sdk/cpu_fixture_main.c)
+target_compile_definitions(rsf_native_fg_cpu_test PRIVATE RSF_CPU_FIXTURE=rsf_native_fg_cpu_fixture)
+target_link_libraries(rsf_native_fg_cpu_test PRIVATE rsf_fg_cpu_fixture_rust ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME native_fg_cpu_contract COMMAND rsf_native_fg_cpu_test)
 set_tests_properties(native_fg_cpu_contract PROPERTIES TIMEOUT 15)
 
@@ -626,12 +627,15 @@ set(rsf_vulkan_latency_test_endpoints
     rsf_fgvk_latency_sleep=rsf_test_fgvk_latency_sleep
     rsf_fgvk_latency_marker=rsf_test_fgvk_latency_marker
     rsf_fgvk_latency_get_status=rsf_test_fgvk_latency_get_status)
-add_executable(rsf_native_latency_vulkan_test native_latency_vulkan.cpp ../runtime/orchestrator/src/native_latency_vulkan.cpp)
+rsf_add_rust_static(rsf_vk_latency_fixtures_rust rsf_rust_vk_latency_fixtures
+    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features vk-latency-fixtures)
+add_executable(rsf_native_latency_vulkan_test game-sdk/cpu_fixture_main.c ../runtime/orchestrator/src/native_latency_vulkan.cpp)
 target_sources(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/src/latency_amd_vulkan.c)
 target_include_directories(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/include)
 target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1
+    RSF_CPU_FIXTURE=rsf_native_latency_vulkan_fixture
     ${rsf_vulkan_latency_test_endpoints})
-target_link_libraries(rsf_native_latency_vulkan_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
+target_link_libraries(rsf_native_latency_vulkan_test PRIVATE rsf_vk_latency_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
 add_test(NAME native_latency_vulkan_contract COMMAND rsf_native_latency_vulkan_test)
 find_program(RSF_DOTNET_EXECUTABLE NAMES dotnet)
 if(RSF_DOTNET_EXECUTABLE)
@@ -827,13 +831,13 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_include_directories(rsf_streamline_vulkan_dispatch_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
     target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_build_options)
     add_test(NAME streamline_vulkan_dispatch_contract COMMAND rsf_streamline_vulkan_dispatch_test)
-    add_executable(rsf_native_antilag_vulkan_test native_antilag_vulkan.cpp
+    add_executable(rsf_native_antilag_vulkan_test game-sdk/cpu_fixture_main.c
         ../runtime/orchestrator/src/native_latency_vulkan.cpp ../runtime/orchestrator/src/latency_amd_vulkan.c)
     target_compile_definitions(rsf_native_antilag_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_ANTILAG_VK=1
+        RSF_CPU_FIXTURE=rsf_native_antilag_vulkan_fixture
         ${rsf_vulkan_latency_test_endpoints})
     target_include_directories(rsf_native_antilag_vulkan_test PRIVATE ../runtime/orchestrator/include)
-    target_include_directories(rsf_native_antilag_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_native_antilag_vulkan_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
+    target_link_libraries(rsf_native_antilag_vulkan_test PRIVATE rsf_vk_latency_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
     add_test(NAME native_antilag_vulkan_contract COMMAND rsf_native_antilag_vulkan_test)
     set_tests_properties(native_antilag_vulkan_contract PROPERTIES TIMEOUT 20)
 endif()
@@ -1015,10 +1019,12 @@ target_link_libraries(rsf_input_receipts_test PRIVATE rsf_cpu_fixtures_rust rsf_
 add_test(NAME input_receipts_contract COMMAND rsf_input_receipts_test)
 if(EXISTS "${RSF_XESS_INCLUDE}/xell/xell_d3d12.h" AND
    EXISTS "${RSF_XESS_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h")
+    rsf_add_rust_static(rsf_xell_fixture_rust rsf_rust_xell_fixture
+        rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features xell-fixture)
     add_executable(rsf_xell_sleep_concurrency xell_sleep_concurrency.cpp)
     target_compile_definitions(rsf_xell_sleep_concurrency PRIVATE RSF_HAVE_XESS_FG=1)
     target_include_directories(rsf_xell_sleep_concurrency SYSTEM PRIVATE "${RSF_XESS_INCLUDE}")
-    target_link_libraries(rsf_xell_sleep_concurrency PRIVATE rsf_orchestrator_rust ReScaleFrame::Contract ReScaleFrame::RuntimeCommon rsf_build_options d3d11 d3d12 dxgi)
+    target_link_libraries(rsf_xell_sleep_concurrency PRIVATE rsf_xell_fixture_rust rsf_orchestrator_rust ReScaleFrame::Contract ReScaleFrame::RuntimeCommon rsf_build_options d3d11 d3d12 dxgi)
     add_test(NAME xell_sleep_concurrency_contract COMMAND rsf_xell_sleep_concurrency)
     set_tests_properties(xell_sleep_concurrency_contract PROPERTIES TIMEOUT 10)
 endif()
