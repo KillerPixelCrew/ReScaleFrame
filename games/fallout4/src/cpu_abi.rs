@@ -16,7 +16,7 @@ pub const RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN: u32 = 9;
 pub const RSF_FALLOUT4_CPU_HOOK_COUNT: u32 = 10;
 pub const RSF_FALLOUT4_CPU_SCOPE_WORDS: u32 = 64;
 #[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct rsf_fallout4_cpu_identity {
     pub session: u64,
     pub source: u64,
