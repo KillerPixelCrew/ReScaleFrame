@@ -31,6 +31,8 @@ mod sampler_bias;
 mod sharpening;
 #[path = "sharpening_d3d12.rs"]
 mod sharpening_d3d12;
+#[path = "sharpening_settings.rs"]
+mod sharpening_settings;
 #[path = "sharpening_vulkan.rs"]
 mod sharpening_vulkan;
 #[path = "sharpening_vulkan_cpu.rs"]

@@ -149,13 +149,13 @@ pub(super) fn fill_sharpening_stats(stats: &mut Stats, options: &Sharpening) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_overlay_fill_sharpening_stats(stats: &mut Stats, options: &Sharpening) {
+pub(super) extern "C" fn rsf_overlay_fill_sharpening_stats(stats: &mut Stats, options: &Sharpening) {
     stats.sharpening_available = 1;
     fill_sharpening_stats(stats, options);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_overlay_requested_sharpening(intent: &Intent) -> Sharpening {
+pub(super) extern "C" fn rsf_overlay_requested_sharpening(intent: &Intent) -> Sharpening {
     intent_sharpening(intent)
 }
 

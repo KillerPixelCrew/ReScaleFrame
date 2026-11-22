@@ -161,9 +161,23 @@ Remaining G05 paths with implementation code are
   graphics/compute queue, preserves the upload, dispatch and readback
   sequence, and tests the same shader responses and three pre-submit
   slots. It retains the skip behavior for missing loader or devices.
+- `tests/sharpening_settings.cpp` was replaced by a Rust fixture body.
+  It retains the D3D11 setter, INI round-trip, owned and foreign keys,
+  CRT decimal agreement, FFX descriptor and overlay intent checks.
+  `tests/sharpening_settings_native.cpp` exposes the actual C++ overlay
+  wrappers, SDK descriptor, appended setter and CRT formatter through a
+  fixture-only table. The assertions and test data live in Rust.
 
 The GPL HLSL, SPIR-V and `options.h` inputs match `82b39a63` byte for byte.
 The calculator and adaptive ramp in `options.h` are upstream-derived
 implementations. Moving them into MIT Rust would require an independently
 specified replacement and parity evidence. The host ports call these
 calculations through the existing GPL-3.0-only compilation boundary.
+
+The HLSL headers `rcas.h`, `da_rcas.h`, `da_das.h` and `depth_color.inc`
+and the three corresponding SPIR-V headers contain payload data and are
+accounted for as such. `sharpening_settings.h` keeps the C ABI and its
+header-only fallback defaults for targets without Runtime linkage. The
+Runtime's validation and normalization are already in Rust.
+`sharpening_vulkan_core.h` remains a C declaration file for generated
+records and private Rust symbols.
