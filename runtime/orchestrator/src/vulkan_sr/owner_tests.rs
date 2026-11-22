@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_images, rsf_vkdlss_platform};
+use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_platform};
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
+use ash::vk::{self, Handle as _};
 
 const FAILED: i32 = -9;
 
@@ -22,6 +23,7 @@ enum Call {
     DlssConstants(u32),
     DlssOptions(u32),
     DlssStage,
+    DlssBias,
     DlssParameters(u32),
     DlssPublish,
     Retire(usize),
@@ -89,16 +91,108 @@ impl Fake {
     }
 }
 
+fn fake_dlss_commands() -> rsf_vkdlss_commands {
+    unsafe extern "system" fn barrier(
+        _: vk::CommandBuffer,
+        src: vk::PipelineStageFlags,
+        dst: vk::PipelineStageFlags,
+        _: vk::DependencyFlags,
+        _: u32,
+        _: *const vk::MemoryBarrier<'_>,
+        _: u32,
+        _: *const vk::BufferMemoryBarrier<'_>,
+        count: u32,
+        barriers: *const vk::ImageMemoryBarrier<'_>,
+    ) {
+        assert!(src == vk::PipelineStageFlags::ALL_COMMANDS && dst == src);
+        assert_eq!(count, 1);
+        let image = unsafe { &*barriers };
+        assert_eq!(image.subresource_range.layer_count, 1);
+        assert!(image.subresource_range.aspect_mask == vk::ImageAspectFlags::COLOR);
+        assert_eq!(image.src_queue_family_index, vk::QUEUE_FAMILY_IGNORED);
+        assert_eq!(image.dst_queue_family_index, vk::QUEUE_FAMILY_IGNORED);
+        assert_eq!(
+            image.src_access_mask.is_empty(),
+            image.old_layout == vk::ImageLayout::UNDEFINED
+        );
+    }
+
+    unsafe extern "system" fn copy(
+        commands: vk::CommandBuffer,
+        _: vk::Image,
+        src: vk::ImageLayout,
+        _: vk::Image,
+        dst: vk::ImageLayout,
+        count: u32,
+        region: *const vk::ImageCopy,
+    ) {
+        assert!(
+            src == vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+                && dst == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        );
+        assert_eq!(count, 1);
+        let extent = unsafe { (*region).extent };
+        assert_eq!(extent.depth, 1);
+        let call = if (extent.width, extent.height) == (128, 72) {
+            Call::DlssPublish
+        } else {
+            assert_eq!((extent.width, extent.height), (64, 36));
+            Call::DlssStage
+        };
+        unsafe { fake(commands.as_raw() as Handle).calls.push(call) };
+    }
+
+    unsafe extern "system" fn blit(
+        commands: vk::CommandBuffer,
+        _: vk::Image,
+        src: vk::ImageLayout,
+        _: vk::Image,
+        dst: vk::ImageLayout,
+        count: u32,
+        region: *const vk::ImageBlit,
+        filter: vk::Filter,
+    ) {
+        assert!(
+            src == vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+                && dst == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        );
+        assert_eq!(count, 1);
+        assert!(filter == vk::Filter::NEAREST);
+        let last = unsafe { (*region).src_offsets[1] };
+        assert_eq!((last.x, last.y, last.z), (64, 36, 1));
+        unsafe { fake(commands.as_raw() as Handle).calls.push(Call::DlssBias) };
+    }
+
+    unsafe {
+        rsf_vkdlss_commands {
+            barrier: Some(std::mem::transmute::<
+                vk::PFN_vkCmdPipelineBarrier,
+                unsafe extern "C" fn(),
+            >(barrier)),
+            copy: Some(std::mem::transmute::<
+                vk::PFN_vkCmdCopyImage,
+                unsafe extern "C" fn(),
+            >(copy)),
+            blit: Some(std::mem::transmute::<
+                vk::PFN_vkCmdBlitImage,
+                unsafe extern "C" fn(),
+            >(blit)),
+        }
+    }
+}
+
 static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
     open: Some(leaf!(|setup: *const Setup,
                       native: *mut Handle,
                       w: *mut u32,
-                      h: *mut u32|
+                      h: *mut u32,
+                      commands: *mut rsf_vkdlss_commands|
      -> i32 {
         unsafe {
             native.write((*setup).device);
             w.write(64);
             h.write(36);
+            commands.write(fake_dlss_commands());
         }
         0
     })),
@@ -152,18 +246,6 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
         unsafe { fake(native).calls.push(Call::DlssOptions(preset)) };
         0
     })),
-    stage: Some(leaf!(|native: Handle,
-                       _: Handle,
-                       _: *const Image,
-                       _: *mut rsf_vkfg_image,
-                       _: u32|
-     -> () {
-        unsafe { fake(native).calls.push(Call::DlssStage) };
-    })),
-    initialize_output: Some(leaf!(|_: Handle,
-                                   _: Handle,
-                                   _: *const rsf_vkfg_image|
-     -> () {})),
     tag: Some(leaf!(|_: Handle,
                      _: usize,
                      _: Handle,
@@ -202,13 +284,6 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
                          _: u64|
      -> () {
         unsafe { fake(native).calls.push(Call::Sharpen) };
-    })),
-    publish: Some(leaf!(|native: Handle,
-                         _: Handle,
-                         _: *const Frame,
-                         _: u64|
-     -> () {
-        unsafe { fake(native).calls.push(Call::DlssPublish) };
     })),
     release: Some(leaf!(|_: Handle, token: usize, native: Handle| -> i32 {
         assert_eq!(token, 0);
@@ -783,7 +858,7 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
     assert_eq!([width, height], [64, 36]);
     assert_eq!(unsafe { rsf_core_srvk_dlss_preset(owner, 11) }, 0);
     assert_eq!(unsafe { rsf_core_srvk_dlss_preset(owner, 99) }, INVALID);
-    let commands = ptr::dangling_mut::<u8>().cast();
+    let commands = ptr::from_mut(&mut state).cast();
     let mut record = frame_record();
     for (frame_id, result, reset) in [(1, 0, 1), (2, FAILED, 0), (3, 0, 1)] {
         record.frame_id = frame_id;
@@ -791,7 +866,9 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
         state.calls.clear();
         let mut frame = frame_input(&setup, &record);
         frame.depth.format = R32_FLOAT;
-        frame.bias_current_color.image = 0;
+        if frame_id != 1 {
+            frame.bias_current_color.image = 0;
+        }
         assert_eq!(
             unsafe { rsf_core_srvk_evaluate(owner, commands, &frame) },
             result
@@ -803,6 +880,9 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
             Call::DlssStage,
             Call::DlssStage,
         ];
+        if frame_id == 1 {
+            expected.push(Call::DlssBias);
+        }
         if result == 0 {
             expected.push(Call::DlssParameters(reset));
             expected.extend(
@@ -811,10 +891,13 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
                     "sr-linear-color",
                     "sr-depth",
                     "sr-motion-uv",
-                    "sr-output-linear",
                 ]
                 .map(|role| Call::Capture(role.to_owned())),
             );
+            if frame_id == 1 {
+                expected.push(Call::Capture("sr-bias-mask".to_owned()));
+            }
+            expected.push(Call::Capture("sr-output-linear".to_owned()));
             expected.extend([Call::Sharpen, Call::DlssPublish]);
         }
         assert_eq!(state.calls, expected);

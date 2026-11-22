@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
 use crate::frame_capture_vk::sr_capture_inputs;
-use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_images, rsf_vkdlss_platform as Platform};
+mod commands;
+use self::commands::Dispatch;
+use crate::vulkan_dlss_sr_abi::{
+    rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_platform as Platform,
+};
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_ownership::Claim;
 use crate::vulkan_sr::{
@@ -16,6 +20,7 @@ use std::sync::atomic::AtomicBool;
 
 const INVALID: i32 = -1;
 const INIT_FAILED: i32 = -6;
+const MISSING_ENTRY_POINT: i32 = -5;
 const NOT_READY: i32 = -8;
 const R16: u32 = 76;
 const INPUT_USAGE: u32 = SAMPLED_USAGE | TRANSFER_DST_USAGE;
@@ -46,6 +51,7 @@ pub(super) struct Owner {
     _claim: Claim,
     platform: &'static Platform,
     native: *mut c_void,
+    dispatch: Option<Dispatch>,
     width: u32,
     height: u32,
     images: rsf_vkdlss_images,
@@ -164,29 +170,21 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
     }
 
     let images = &mut owner.images;
-    let stage = platform.stage.unwrap();
+    let dispatch = owner.dispatch.as_ref().unwrap();
     for (source, image) in [
         (&input.color, &mut images.color),
         (&input.depth, &mut images.depth),
         (&input.motion, &mut images.motion),
     ] {
-        unsafe { stage(native, *commands, source, image, 0) };
+        dispatch.stage(*commands, source, image, false);
         image.initialized = 1;
     }
     if input.bias_current_color.image != 0 {
-        unsafe {
-            stage(
-                native,
-                *commands,
-                &input.bias_current_color,
-                &mut images.bias,
-                1,
-            )
-        };
+        dispatch.stage(*commands, &input.bias_current_color, &images.bias, true);
         images.bias.initialized = 1;
     }
     if images.output.initialized == 0 {
-        unsafe { (platform.initialize_output.unwrap())(native, *commands, &images.output) };
+        dispatch.initialize_output(*commands, &images.output);
         images.output.initialized = 1;
     }
     let result = unsafe { (platform.tag.unwrap())(native, token, *commands, *input, images) };
@@ -229,8 +227,14 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
             reset,
         );
         (platform.sharpen.unwrap())(native, *commands, *input, images.output.image);
-        (platform.publish.unwrap())(native, *commands, *input, images.output.image);
     }
+    dispatch.publish(
+        *commands,
+        images.output.image,
+        input.output.image,
+        record.output_width,
+        record.output_height,
+    );
     owner.history.commit(record);
     0
 }
@@ -245,6 +249,7 @@ impl Owner {
             _claim: claim,
             platform,
             native: ptr::null_mut(),
+            dispatch: None,
             width: 0,
             height: 0,
             images: rsf_vkdlss_images::default(),
@@ -256,17 +261,20 @@ impl Owner {
             return Err(INIT_FAILED);
         }
         let mut owner = unsafe { Box::from_raw(raw) };
+        let mut commands = rsf_vkdlss_commands::default();
         let result = unsafe {
             (platform.open.unwrap())(
                 setup,
                 &mut owner.native,
                 &mut owner.width,
                 &mut owner.height,
+                &mut commands,
             )
         };
         if result != 0 {
             return Err(result);
         }
+        owner.dispatch = Some(Dispatch::new(commands).ok_or(MISSING_ENTRY_POINT)?);
         if owner.native.is_null() || owner.width == 0 || owner.height == 0 || !owner.allocate(setup)
         {
             return Err(INIT_FAILED);

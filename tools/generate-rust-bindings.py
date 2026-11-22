@@ -413,12 +413,12 @@ generate("runtime/orchestrator/src/vulkan_sharpening_abi.rs", "runtime/orchestra
           "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_platform;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_setup};"])
 generate("runtime/orchestrator/src/vulkan_dlss_sr_abi.rs", "runtime/orchestrator/src/native_dlss_vulkan_platform.h",
-         "rsf_vkdlss_(platform|images)", "NOTHING",
+         "rsf_vkdlss_(platform|images|commands)", "NOTHING",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_image;",
           "--raw-line", "use crate::vulkan_latency_abi::rsf_slvk_call;",
-          "--raw-line", "use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};",
+          "--raw-line", "use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup, rsf_vk_function};",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
 generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/rescaleframe/native_cpu.h",
          "rsf_native_(cpu_(frame|counters|reservation|reservation_counters)|input_receipts)",

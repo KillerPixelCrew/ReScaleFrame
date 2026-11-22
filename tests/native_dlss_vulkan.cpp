@@ -16,9 +16,10 @@ int main() {
     setup.output_height = 360;
     void* native{};
     uint32_t width{}, height{};
+    rsf_vkdlss_commands commands{};
     const auto* platform = rsf::dlss_vk::platform;
-    if (platform && platform->open(&setup, &native, &width, &height) == RSF_BACKEND_ERROR_NOT_READY &&
-        !native && !width && !height) return 0;
+    if (platform && platform->open(&setup, &native, &width, &height, &commands) == RSF_BACKEND_ERROR_NOT_READY &&
+        !native && !width && !height && !commands.barrier && !commands.copy && !commands.blit) return 0;
     std::fputs("The enabled DLSS leaves must preserve an SDK-lease refusal.\n", stderr);
     return 1;
 }

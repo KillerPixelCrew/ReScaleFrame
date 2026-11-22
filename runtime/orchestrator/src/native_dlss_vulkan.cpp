@@ -37,44 +37,12 @@ struct Native {
     rsf::sharpening::Vulkan sharpen;
     rsf_srvk_setup setup{};
     rsf::vkfg::Device gpu;
-    PFN_vkCmdPipelineBarrier barrier = nullptr; PFN_vkCmdCopyImage copy = nullptr;
-    PFN_vkCmdBlitImage blit = nullptr;
     PFun_slSetConstants* constants = nullptr; PFun_slSetTagForFrame* tags = nullptr;
     PFun_slEvaluateFeature* evaluate = nullptr; PFun_slFreeResources* release = nullptr;
     PFun_slDLSSGetOptimalSettings* optimal = nullptr; PFun_slDLSSSetOptions* options = nullptr;
     rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
 };
 namespace {
-void transition(Native& self, VkCommandBuffer commands, VkImage image, VkImageLayout before, VkImageLayout after) {
-    VkImageMemoryBarrier barrier{}; barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.image = image; barrier.oldLayout = before; barrier.newLayout = after;
-    barrier.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    self.barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-}
-void stage(Native& self, VkCommandBuffer commands, const rsf_srvk_image& source, Image& destination) {
-    const auto image = reinterpret_cast<VkImage>(source.image);
-    transition(self, commands, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    transition(self, commands, rsf::vkfg::image_handle(destination), destination.initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.extent = {source.width, source.height, 1};
-    self.copy(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    transition(self, commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    transition(self, commands, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-}
-void stage_bias(Native& self, VkCommandBuffer commands, const rsf_srvk_image& source, Image& destination) {
-    // Streamline's Vulkan getFormat omits R8_UNORM in the pinned SDK. Convert
-    // the public R8 mask to R16F rather than passing an internally invalid format.
-    const auto image = reinterpret_cast<VkImage>(source.image);
-    transition(self, commands, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    transition(self, commands, rsf::vkfg::image_handle(destination), destination.initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    VkImageBlit region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.srcOffsets[1] = region.dstOffsets[1] = {int32_t(source.width), int32_t(source.height), 1};
-    self.blit(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
-    transition(self, commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    transition(self, commands, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-}
 sl::Resource resource(const Image& image, bool output = false) {
     sl::Resource result{sl::ResourceType::eTex2d, reinterpret_cast<void*>(image.image), nullptr,
         reinterpret_cast<void*>(image.view), uint32_t(output ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)};
@@ -177,7 +145,7 @@ void capture_record(void* native, void* commands, const rsf_srvk_image* image,
     (void)static_cast<Native*>(native)->capture.record(
         static_cast<VkCommandBuffer>(commands), *image, *record, role, reset);
 }
-int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t* height) noexcept try {
+int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t* height, rsf_vkdlss_commands* commands) noexcept try {
     auto self = std::make_unique<Native>();
     self->setup = *setup;
     Init init{*self, *width, *height};
@@ -185,7 +153,7 @@ int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t*
     const auto result = rsf_slvk_invoke(&call);
     if (result != RSF_BACKEND_OK) return result;
     if (!self->gpu.load_images(*setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-#define RSF_LOAD(member, function) self->member = reinterpret_cast<PFN_##function>(setup->device_proc(setup->device, #function)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
+#define RSF_LOAD(member, function) commands->member = setup->device_proc(setup->device, #function); if (!commands->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_LOAD(barrier, vkCmdPipelineBarrier);
     RSF_LOAD(copy, vkCmdCopyImage);
     RSF_LOAD(blit, vkCmdBlitImage);
@@ -203,20 +171,6 @@ int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t*
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-void publish(void* native, void* commands, const rsf_srvk_frame* input, uint64_t output) {
-    auto& self = *static_cast<Native*>(native);
-    const auto list = static_cast<VkCommandBuffer>(commands);
-    const auto image = reinterpret_cast<VkImage>(output);
-    const auto& record = *input->record;
-    transition(self, list, image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    VkImageCopy region{};
-    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.extent = {record.output_width, record.output_height, 1};
-    self.copy(list, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, reinterpret_cast<VkImage>(input->output.image),
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    transition(self, list, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
-}
-
 }
 
 const rsf_vkdlss_platform rsf::dlss_vk::leaves{
@@ -231,16 +185,6 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
         rsf_core_vkfg_release_image(&rsf::vkfg::platform, &static_cast<Native*>(native)->gpu, image);
     },
     set_constants, set_options,
-    [](void* native, void* commands, const rsf_srvk_image* source, Image* image, uint32_t bias) {
-        const auto list = static_cast<VkCommandBuffer>(commands);
-        auto& self = *static_cast<Native*>(native);
-        if (bias) stage_bias(self, list, *source, *image);
-        else stage(self, list, *source, *image);
-    },
-    [](void* native, void* commands, const Image* image) {
-        transition(*static_cast<Native*>(native), static_cast<VkCommandBuffer>(commands),
-            rsf::vkfg::image_handle(*image), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-    },
     tag,
     [](void* native, uintptr_t token, void* commands) -> int32_t {
         auto& self = *static_cast<Native*>(native);
@@ -254,7 +198,6 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
         auto& self = *static_cast<Native*>(native);
         (void)self.sharpen.run(self.setup, static_cast<VkCommandBuffer>(commands), *input, reinterpret_cast<VkImage>(output));
     },
-    publish,
     [](void*, uintptr_t, void* native) -> int32_t {
         return static_cast<Native*>(native)->release(sl::kFeatureDLSS, viewport) == sl::Result::eOk ?
             RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -271,5 +214,5 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     },
     rsf_dlss_preset_valid,
 };
-static_assert(sizeof(rsf_vkdlss_platform) == 19 * sizeof(void*));
+static_assert(sizeof(rsf_vkdlss_platform) == 16 * sizeof(void*));
 #endif
