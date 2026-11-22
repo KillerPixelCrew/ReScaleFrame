@@ -64,3 +64,28 @@ Auxiliary bindings were regenerated with bindgen 0.72.1 against the existing
 D3D11 state ABI. The changed Rust files passed the Rust 1.94.1 formatting
 check and the patch passed the whitespace check. Builds, lint, test and
 device execution remain user-owned.
+
+## Residual source cutover from `84a8b9eb`
+
+| PORT path | Source evidence |
+| --- | --- |
+| `runtime/orchestrator/src/d3d11_sr_api.cpp` | Removed. `d3d11_sr_api.rs` constructs the existing GameSDK table and preserves the size-before-version check, reset-on-evaluate wrapper, stop reset, and quality guard. `dll_exports.c` exports the query for Runtime DLL clients. |
+| `runtime/orchestrator/src/sr_session_backends.cpp` | Removed. `sr_session.rs` binds the same managed FSR and XeSS getters and uses the shared frame validator directly. |
+| `runtime/orchestrator/src/sr_legacy_adapter.cpp` | Removed. `sr_legacy.rs` builds the session setup and calls the existing bridge, motion resolve and capture services. The private C declaration in `sr_legacy_adapter.h` remains for the legacy pipeline caller. |
+| `runtime/orchestrator/src/sr_bridge_platform.cpp` | Removed. `sr_bridge/platform.rs` implements the Windows platform and capture calls. `d3d11_d3d12.rs` shares command, copy, event and fence operations with the existing native FG path. The bridge owner still controls all waits, leases and consume-on-success retirement. |
+| `runtime/orchestrator/src/auxiliary_sr.cpp` and `auxiliary_sr.h` | Removed. `auxiliary_sr/platform.rs` populates the existing generated table and uses the same shader, state helpers, resource flags and draw order. The C++ convenience wrapper is local to the remaining device fixture. |
+| `runtime/orchestrator/src/native_sr.cpp` | Partial. Rust checks COM device identity and clears predication. C++ still owns the remaining pipeline and normalization callbacks and their exception containment. `native_sr_completion.h` still declares the ordered receipt consumed by the host. |
+| `tests/sr_session.cpp` | Removed. The CTest entry invokes the Rust fixture with the same deterministic provider cases, including copied paths, replacement refusal, reset, stale generations and retirement counts. |
+| `tests/sr_bridge.cpp` | Removed. Its Rust fixture keeps the explicit hardware arguments, backend/quality sequence, exposure switches, pixel readback and checked close. The C entry now links the embedded core. The separate D3D11 Runtime API fixture still exercises the DLL query. |
+
+`sr_helpers.h` retains vendor-facing native helpers. `auxiliary_sr_platform.h`
+still defines the private callback ABI shared with the D3D11 host.
+The auxiliary and backend-switch device fixture bodies remain native.
+
+The base contained two conflicting definitions of `ComRef::from_result`.
+The shared implementation now uses the existing typed HRESULT and continues
+to release non-null failed COM outputs. Both the bridge and FG reuse it.
+
+Source checked against the existing C headers and the pinned Windows bindings.
+Rust 1.94.1 formatting, targeted bindgen 0.72.1 regeneration and locked offline
+Cargo metadata passed. The four regenerated binding files were unchanged.

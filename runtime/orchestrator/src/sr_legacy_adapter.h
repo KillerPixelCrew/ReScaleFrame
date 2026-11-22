@@ -4,7 +4,7 @@
 #include <rescaleframe/sr_session.h>
 #include <rescaleframe/motion_resolve.h>
 struct rsf_sr_legacy_adapter;
-rsf_backend_result rsf_sr_legacy_create(void* device, uint32_t width, uint32_t height,
+extern "C" rsf_backend_result rsf_sr_legacy_create(void* device, uint32_t width, uint32_t height,
     const char* fsr2, const char* fsr3, const char* fsr4, const char* xess,
     float units_to_meters, uint32_t standard_depth, uint32_t auto_exposure, rsf_backend_log_fn log, void* user,
     rsf_sr_legacy_adapter** out);

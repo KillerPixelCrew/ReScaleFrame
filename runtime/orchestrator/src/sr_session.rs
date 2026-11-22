@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::render_abi::*;
+
+mod fixture;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_NO_SR, RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION,
     RSF_GAME_FRAME_ABI_VERSION, rsf_camera_frame,
@@ -17,7 +19,6 @@ const WRONG_API: i32 = -12;
 const ULTRA_QUALITY: u32 = 5;
 const PATH_CAPACITY: usize = 1024;
 
-type Validate = unsafe extern "C" fn(*const rsf_sr_frame) -> i32;
 type Evaluate = unsafe extern "C" fn(*mut c_void, *mut c_void, *const rsf_sr_frame) -> i32;
 type Close = unsafe extern "C" fn(*mut c_void);
 
@@ -41,12 +42,11 @@ struct FrameIdentity {
     generation: u32,
 }
 
-struct Session {
+pub(super) struct Session {
     open: rsf_sr_open_desc,
     directories: [[c_char; PATH_CAPACITY]; 4],
     fsr: *const rsf_sr_provider,
     xess: *const rsf_sr_provider,
-    validate: Validate,
     active: Option<Context>,
     status: rsf_sr_session_status,
     reset: bool,
@@ -69,7 +69,7 @@ pub(crate) unsafe fn checked<'a, T>(value: *const T) -> Option<&'a T> {
 
 // Shared wire validation for direct provider calls, sessions and the D3D11 bridge.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_validate_sr_frame(frame: *const rsf_sr_frame) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_validate_sr_frame(frame: *const rsf_sr_frame) -> i32 {
     let Some(frame) = (unsafe { checked(frame) }) else {
         return INVALID;
     };
@@ -142,13 +142,33 @@ unsafe extern "C" fn rsf_core_validate_sr_frame(frame: *const rsf_sr_frame) -> i
     0
 }
 
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn rsf_fsr_managed_sr_provider() -> *const rsf_sr_provider;
+    fn rsf_xess_sr_provider() -> *const rsf_sr_provider;
+}
+
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr_session_create(
+pub(super) unsafe extern "C" fn rsf_sr_session_create(
+    setup: *const rsf_sr_session_setup,
+    out: *mut *mut Session,
+) -> i32 {
+    unsafe {
+        create(
+            setup,
+            out,
+            rsf_fsr_managed_sr_provider(),
+            rsf_xess_sr_provider(),
+        )
+    }
+}
+
+unsafe fn create(
     setup: *const rsf_sr_session_setup,
     out: *mut *mut Session,
     fsr: *const rsf_sr_provider,
     xess: *const rsf_sr_provider,
-    validate: Validate,
 ) -> i32 {
     if out.is_null()
         || !unsafe { has_capacity(setup) && has_capacity(ptr::addr_of!((*setup).open)) }
@@ -200,7 +220,6 @@ unsafe extern "C" fn rsf_core_sr_session_create(
         directories,
         fsr,
         xess,
-        validate,
         active: None,
         status,
         reset: true,
@@ -345,7 +364,7 @@ impl Session {
         if command.is_null() {
             return INVALID;
         }
-        let result = unsafe { (self.validate)(frame) };
+        let result = unsafe { rsf_core_validate_sr_frame(frame) };
         if result != 0 {
             return result;
         }
@@ -397,7 +416,7 @@ impl Session {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_session_select(
+pub(super) unsafe extern "C" fn rsf_sr_session_select(
     session: *mut Session,
     backend: u32,
     quality: u32,
@@ -410,7 +429,10 @@ unsafe extern "C" fn rsf_sr_session_select(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_session_set_auto_exposure(session: *mut Session, enabled: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_sr_session_set_auto_exposure(
+    session: *mut Session,
+    enabled: u32,
+) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
         return INVALID;
     };
@@ -431,7 +453,7 @@ unsafe extern "C" fn rsf_sr_session_set_auto_exposure(session: *mut Session, ena
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_session_evaluate(
+pub(super) unsafe extern "C" fn rsf_sr_session_evaluate(
     session: *mut Session,
     command: *mut c_void,
     frame: *const rsf_sr_frame,
@@ -459,7 +481,7 @@ unsafe extern "C" fn rsf_sr_session_evaluate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_session_warm_up(
+pub(super) unsafe extern "C" fn rsf_sr_session_warm_up(
     session: *mut Session,
     command: *mut c_void,
     frame: *const rsf_sr_frame,
@@ -471,7 +493,7 @@ unsafe extern "C" fn rsf_sr_session_warm_up(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_session_get_status(
+pub(super) unsafe extern "C" fn rsf_sr_session_get_status(
     session: *const Session,
     status: *mut rsf_sr_session_status,
 ) -> i32 {
@@ -486,7 +508,7 @@ unsafe extern "C" fn rsf_sr_session_get_status(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_session_destroy(session: *mut Session) {
+pub(super) unsafe extern "C" fn rsf_sr_session_destroy(session: *mut Session) {
     if !session.is_null() {
         drop(unsafe { Box::from_raw(session) });
     }

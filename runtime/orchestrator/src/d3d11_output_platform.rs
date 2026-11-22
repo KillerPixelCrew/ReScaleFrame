@@ -98,7 +98,7 @@ unsafe extern "C" fn rsf_d3d11_output_create_srv(device: Raw, texture: Raw, form
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_output_create_rtv(device: Raw, texture: Raw) -> Raw {
+pub(super) unsafe extern "C" fn rsf_d3d11_output_create_rtv(device: Raw, texture: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     let texture = unsafe { ID3D11Resource::from_raw_borrowed(&texture).unwrap() };
     let mut result = None;

@@ -9,33 +9,13 @@
 #include "native_reinsert.h"
 #include "native_sr_completion.h"
 #include <d3d11.h>
-#include <wrl/client.h>
 
+extern "C" int rsf_sr11_validate_device(void* context, const rsf_game_render_pass* pass);
+extern "C" void rsf_sr11_clear_predication(void* context);
 
 namespace {
-bool same_device_inputs(void* raw_context, const rsf_game_render_pass& pass) {
-    auto* context=static_cast<ID3D11DeviceContext*>(raw_context);
-    Microsoft::WRL::ComPtr<ID3D11Device> device; context->GetDevice(&device);
-    Microsoft::WRL::ComPtr<IUnknown> identity;
-    if (!device || FAILED(device.As(&identity))) return false;
-    void* textures[]{pass.color_input,pass.color_output,pass.depth,pass.motion,pass.exposure,
-        pass.color_output_readable,pass.temporal_mask};
-    for (void* pointer:textures) if (pointer) {
-        Microsoft::WRL::ComPtr<ID3D11Device> owner;
-        static_cast<ID3D11Texture2D*>(pointer)->GetDevice(&owner);
-        Microsoft::WRL::ComPtr<IUnknown> other;
-        if (!owner || FAILED(owner.As(&other)) || other.Get()!=identity.Get()) return false;
-    }
-    return true;
-}
 // Private leaf result outside the public result enum.
 constexpr int leaf_fault = INT32_MIN;
-
-int validate_device(void* context, const rsf_game_render_pass* pass) try
-{
-    return same_device_inputs(context, *pass);
-}
-catch (...) { return leaf_fault; }
 
 int depth_layout(const rsf_game_render_pass* pass) try
 {
@@ -46,11 +26,6 @@ int depth_layout(const rsf_game_render_pass* pass) try
     return rsf_game_depth_domains_requested(&pass->depth_domains);
 }
 catch (...) { return leaf_fault; }
-
-void clear_predication(void* context)
-{
-    static_cast<ID3D11DeviceContext*>(context)->SetPredication(nullptr, FALSE);
-}
 
 int resize_output(uint32_t width, uint32_t height) try
 {
@@ -104,11 +79,11 @@ int publish_output(void* context, const rsf_game_render_pass* pass) try
 catch (...) { return leaf_fault; }
 
 struct SrServices {
-    decltype(&validate_device) validate_device;
+    decltype(&rsf_sr11_validate_device) validate_device;
     decltype(&depth_layout) depth_layout;
     decltype(&rsf_d3d11_state_save) save;
     decltype(&rsf_d3d11_state_restore) restore;
-    decltype(&clear_predication) clear_predication;
+    decltype(&rsf_sr11_clear_predication) clear_predication;
     decltype(&resize_output) resize_output;
     decltype(&prepare_regions) prepare_regions;
     decltype(&rsf_native_scalar_exposure) exposure;
@@ -118,7 +93,7 @@ struct SrServices {
     decltype(&publish_output) publish_output;
 };
 constexpr SrServices sr_services{
-    validate_device, depth_layout, rsf_d3d11_state_save, rsf_d3d11_state_restore, clear_predication,
+    rsf_sr11_validate_device, depth_layout, rsf_d3d11_state_save, rsf_d3d11_state_restore, rsf_sr11_clear_predication,
     resize_output, prepare_regions, rsf_native_scalar_exposure, take_translucency, merge_mask,
     evaluate_pipeline, publish_output,
 };

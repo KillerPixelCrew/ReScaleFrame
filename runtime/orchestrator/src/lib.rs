@@ -24,6 +24,8 @@ mod cpu_abi;
 #[cfg(windows)]
 mod cpu_reservations;
 #[cfg(windows)]
+mod d3d11_d3d12;
+#[cfg(windows)]
 mod d3d11_device_identity;
 #[cfg(windows)]
 mod d3d11_host;
@@ -62,6 +64,8 @@ mod d3d11_present_abi;
 mod d3d11_sharpening;
 #[cfg(windows)]
 mod d3d11_sr_admission;
+#[cfg(all(windows, not(test)))]
+mod d3d11_sr_api;
 #[cfg(windows)]
 mod d3d11_state;
 #[cfg(windows)]

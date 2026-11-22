@@ -31,9 +31,6 @@ add_library(rsf_orchestrator_core OBJECT
     src/overlay_platform.cpp
     src/overlay_native12.cpp
     src/fg_frame_policy.c
-    src/sr_session_backends.cpp
-    src/sr_bridge_platform.cpp
-    src/sr_legacy_adapter.cpp
     src/dlss_pipeline.cpp)
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
@@ -154,8 +151,6 @@ target_link_libraries(rsf_orchestrator PRIVATE rsf_build_options)
 set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runtime")
 target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.c src/dll_exports.c)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_host.cpp src/d3d11_host_exports.c)
-target_sources(rsf_orchestrator PRIVATE src/auxiliary_sr.cpp)
-target_sources(rsf_orchestrator PRIVATE src/d3d11_sr_api.cpp)
 add_subdirectory(../shader_patch "${CMAKE_CURRENT_BINARY_DIR}/shader_patch")
 
 # Optional AMD driver SDK; the Runtime remains available when it is absent.

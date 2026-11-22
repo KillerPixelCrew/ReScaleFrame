@@ -370,7 +370,7 @@ target_link_libraries(rsf_depth_scale PRIVATE ReScaleFrame::Graphics rsf_build_o
 add_test(NAME depth_scale_device COMMAND rsf_depth_scale)
 set_tests_properties(depth_scale_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_auxiliary_sr auxiliary_sr.cpp ../runtime/orchestrator/src/auxiliary_sr.cpp)
+add_executable(rsf_auxiliary_sr auxiliary_sr.cpp)
 target_include_directories(rsf_auxiliary_sr PRIVATE ../runtime/orchestrator/include ../runtime/presentation/include)
 target_link_libraries(rsf_auxiliary_sr PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME auxiliary_sr_device COMMAND rsf_auxiliary_sr)
@@ -501,16 +501,15 @@ set_tests_properties(dlss_backend PROPERTIES TIMEOUT 120)
 add_test(NAME launcher_version COMMAND rsf_launcher --version)
 set_tests_properties(launcher_version PROPERTIES PASS_REGULAR_EXPRESSION "ReScaleFrame ${PROJECT_VERSION}")
 
-add_executable(rsf_sr_bridge_test sr_bridge.cpp)
-target_link_libraries(rsf_sr_bridge_test PRIVATE rsf_orchestrator rsf_build_options)
+add_executable(rsf_sr_bridge_test sr_bridge_main.c)
+target_link_libraries(rsf_sr_bridge_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME sr_bridge COMMAND rsf_sr_bridge_test)
 set_tests_properties(sr_bridge PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
-# Link controller against deterministic providers, with no vendor DLLs or graphics device.
-add_executable(rsf_sr_session_test sr_session.cpp ../runtime/orchestrator/src/sr_session_backends.cpp)
-target_compile_definitions(rsf_sr_session_test PRIVATE RSF_RUNTIME_BUILD)
-target_include_directories(rsf_sr_session_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_sr_session_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Contract ReScaleFrame::RuntimeCommon rsf_build_options)
+# The Rust fixture injects deterministic providers without opening vendor DLLs.
+add_executable(rsf_sr_session_test graphics_fixture_main.c)
+target_compile_definitions(rsf_sr_session_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_sr_session_fixture)
+target_link_libraries(rsf_sr_session_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME sr_session COMMAND rsf_sr_session_test)
 
 add_executable(rsf_motion_resolve_test graphics_fixture_main.c)

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+mod platform;
+
 use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;

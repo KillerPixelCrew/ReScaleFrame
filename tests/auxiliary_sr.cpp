@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-#include "../runtime/orchestrator/src/auxiliary_sr.h"
+#include "../runtime/orchestrator/src/auxiliary_sr_platform.h"
+#include <d3d11.h>
 #include "../runtime/orchestrator/src/native_regions.h"
 #include <wrl/client.h>
 #include <array>
@@ -10,7 +11,66 @@
 #include <cstdio>
 #include <limits>
 
+struct rsf_auxiliary_sr;
+
+extern "C" {
+const rsf_aux_platform* rsf_auxiliary_sr_platform();
+rsf_auxiliary_sr* rsf_auxiliary_sr_create(const rsf_aux_platform*);
+void rsf_auxiliary_sr_destroy(rsf_auxiliary_sr*);
+int32_t rsf_auxiliary_sr_pending(const rsf_auxiliary_sr*);
+int32_t rsf_auxiliary_sr_matches(const rsf_auxiliary_sr*, uint64_t session, uint64_t frame, uint64_t view);
+int32_t rsf_auxiliary_sr_reserve(rsf_auxiliary_sr*, void* context, const rsf_game_render_pass*,
+    uint32_t count, const rsf_d3d11_auxiliary_surface*, rsf_game_log_fn, void*, uint32_t recovery);
+int32_t rsf_auxiliary_sr_seal(rsf_auxiliary_sr*);
+int32_t rsf_auxiliary_sr_temporal_prepare(rsf_auxiliary_sr*, uint32_t count, const rsf_d3d11_auxiliary_surface*);
+int32_t rsf_auxiliary_sr_spatial_prepare(rsf_auxiliary_sr*);
+int32_t rsf_auxiliary_sr_commit(rsf_auxiliary_sr*, uint32_t temporal);
+int32_t rsf_auxiliary_sr_restore(rsf_auxiliary_sr*);
+}
+
 namespace {
+class AuxiliarySurfaces {
+    rsf_auxiliary_sr* state_;
+public:
+    AuxiliarySurfaces();
+    ~AuxiliarySurfaces();
+    AuxiliarySurfaces(const AuxiliarySurfaces&) = delete;
+    AuxiliarySurfaces& operator=(const AuxiliarySurfaces&) = delete;
+    bool prepare(ID3D11DeviceContext*, const rsf_game_render_pass&, const rsf_d3d11_auxiliary_pass&,
+        rsf_game_log_fn, void*);
+    // reserve performs only validation/allocation; seal snapshots/draws private products.
+    bool reserve(ID3D11DeviceContext*, const rsf_game_render_pass&, const rsf_d3d11_auxiliary_pass&,
+        rsf_game_log_fn, void*, bool recovery = false);
+    bool seal();
+    bool temporal_prepare(const rsf_d3d11_auxiliary_pass&);
+    bool spatial_prepare();
+    bool commit(bool temporal = false);
+    bool restore();
+    bool matches(const rsf_d3d11_auxiliary_scope&) const;
+    bool pending() const;
+};
+AuxiliarySurfaces::AuxiliarySurfaces() : state_(rsf_auxiliary_sr_create(rsf_auxiliary_sr_platform())) {}
+AuxiliarySurfaces::~AuxiliarySurfaces() { rsf_auxiliary_sr_destroy(state_); }
+bool AuxiliarySurfaces::pending() const { return rsf_auxiliary_sr_pending(state_) != 0; }
+bool AuxiliarySurfaces::matches(const rsf_d3d11_auxiliary_scope& scope) const {
+    return rsf_auxiliary_sr_matches(state_, scope.session_id, scope.native_frame, scope.view_key) != 0;
+}
+bool AuxiliarySurfaces::prepare(ID3D11DeviceContext* context, const rsf_game_render_pass& pass,
+    const rsf_d3d11_auxiliary_pass& inputs, rsf_game_log_fn log, void* user) {
+    return reserve(context, pass, inputs, log, user) && seal();
+}
+bool AuxiliarySurfaces::reserve(ID3D11DeviceContext* context, const rsf_game_render_pass& pass,
+    const rsf_d3d11_auxiliary_pass& inputs, rsf_game_log_fn log, void* user, bool recovery) {
+    return rsf_auxiliary_sr_reserve(state_, context, &pass, inputs.surface_count, inputs.surfaces, log, user, recovery) != 0;
+}
+bool AuxiliarySurfaces::seal() { return rsf_auxiliary_sr_seal(state_) != 0; }
+bool AuxiliarySurfaces::temporal_prepare(const rsf_d3d11_auxiliary_pass& request) {
+    return rsf_auxiliary_sr_temporal_prepare(state_, request.surface_count, request.surfaces) != 0;
+}
+bool AuxiliarySurfaces::spatial_prepare() { return rsf_auxiliary_sr_spatial_prepare(state_) != 0; }
+bool AuxiliarySurfaces::commit(bool temporal) { return rsf_auxiliary_sr_commit(state_, temporal) != 0; }
+bool AuxiliarySurfaces::restore() { return rsf_auxiliary_sr_restore(state_) != 0; }
+
 using Microsoft::WRL::ComPtr;
 int failures{};
 void check(bool value, const char* label) { if (!value) { ++failures; std::fprintf(stderr, "FAIL %s\n", label); } }

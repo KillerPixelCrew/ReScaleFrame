@@ -34,6 +34,8 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_camera_frame, rsf_game_render_pass as Pass,
 };
 use std::ffi::{c_char, c_void};
+use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
+use windows::core::Interface;
 
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
@@ -58,6 +60,43 @@ struct Services {
     merge_mask: unsafe extern "C" fn(*mut c_void, *const Pass, *mut Frame) -> i32,
     evaluate_pipeline: unsafe extern "C" fn(*mut c_void, *const Frame) -> i32,
     publish_output: unsafe extern "C" fn(*mut c_void, *const Pass) -> i32,
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sr11_validate_device(context: *mut c_void, pass: *const Pass) -> i32 {
+    let context = unsafe { crate::d3d11_d3d12::borrow::<ID3D11DeviceContext>(&context) };
+    let Ok(device) = (unsafe { context.GetDevice() }) else {
+        return 0;
+    };
+    let Some(identity) = (unsafe { ComRef::identity(device.as_raw()) }) else {
+        return 0;
+    };
+    let pass = unsafe { &*pass };
+    let textures = [
+        pass.color_input,
+        pass.color_output,
+        pass.depth,
+        pass.motion,
+        pass.exposure,
+        pass.color_output_readable,
+        pass.temporal_mask,
+    ];
+    i32::from(
+        textures
+            .into_iter()
+            .filter(|texture| !texture.is_null())
+            .all(|texture| {
+                unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(texture)) }
+                    .and_then(|owner| unsafe { ComRef::identity(owner.as_ptr()) })
+                    .is_some_and(|other| other.as_ptr() == identity.as_ptr())
+            }),
+    )
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sr11_clear_predication(context: *mut c_void) {
+    let context = unsafe { crate::d3d11_d3d12::borrow::<ID3D11DeviceContext>(&context) };
+    unsafe { context.SetPredication(None, false) };
 }
 
 fn extent([left, top, right, bottom]: [i32; 4]) -> Option<[u32; 2]> {

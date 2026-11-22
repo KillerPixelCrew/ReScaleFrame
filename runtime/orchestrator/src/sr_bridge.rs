@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
 // D3D11 to D3D12 SR bridge: the game's D3D11 device, a D3D12 device on the same adapter, shared
 // surfaces and one shared fence. This owner decides lifetime, cross-API ordering, input leases,
-// GPU retirement and failure policy. sr_bridge_platform.cpp supplies one call per platform operation.
+// GPU retirement and failure policy. The Windows platform supplies the native operations.
+#[cfg(not(test))]
+mod fixture;
+#[cfg(not(test))]
+mod platform;
+
 use crate::com_ref::ComRef;
 use crate::owned_handle::OwnedHandle as Owned;
 use crate::render_abi::*;
@@ -24,7 +29,7 @@ const WRONG_API: i32 = -12;
 const API_D3D11: u32 = 1;
 const SR_NONE: u32 = 0;
 
-// DXGI formats and D3D12 states, pinned by static_asserts in sr_bridge_platform.cpp.
+// DXGI formats and D3D12 states, checked against the Windows bindings in platform.rs.
 const COLOR_FORMAT: u32 = 10; // R16G16B16A16_FLOAT
 const MOTION_FORMAT: u32 = 34; // R16G16_FLOAT; R32G32_FLOAT is not shareable
 const SCALAR_FORMAT: u32 = 41; // R32_FLOAT
@@ -59,7 +64,6 @@ pub(crate) struct TextureDesc {
     array_size: u32,
 }
 
-// Field order matches `Platform` in sr_bridge_platform.cpp.
 #[repr(C)]
 pub(crate) struct Platform {
     session_create: unsafe extern "C" fn(*const rsf_sr_session_setup, *mut Handle) -> i32,
@@ -868,8 +872,16 @@ fn create_commands(p: &Platform, device12: &ComRef) -> Option<Commands> {
     })
 }
 
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr_bridge_create(
+pub(super) unsafe extern "C" fn rsf_sr_bridge_create(
+    setup: *const rsf_sr_session_setup,
+    out: *mut *mut Bridge,
+) -> i32 {
+    unsafe { rsf_core_sr_bridge_create(setup, out, &platform::WINDOWS) }
+}
+
+unsafe fn rsf_core_sr_bridge_create(
     setup: *const rsf_sr_session_setup,
     out: *mut *mut Bridge,
     platform: *const Platform,
@@ -908,7 +920,7 @@ unsafe extern "C" fn rsf_core_sr_bridge_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_bridge_select(
+pub(super) unsafe extern "C" fn rsf_sr_bridge_select(
     bridge: *mut Bridge,
     backend: u32,
     quality: u32,
@@ -921,7 +933,10 @@ unsafe extern "C" fn rsf_sr_bridge_select(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_bridge_set_auto_exposure(bridge: *mut Bridge, enabled: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_sr_bridge_set_auto_exposure(
+    bridge: *mut Bridge,
+    enabled: u32,
+) -> i32 {
     match unsafe { bridge.as_mut() } {
         Some(bridge) if enabled <= 1 => bridge.set_auto_exposure(enabled),
         _ => INVALID,
@@ -929,7 +944,7 @@ unsafe extern "C" fn rsf_sr_bridge_set_auto_exposure(bridge: *mut Bridge, enable
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_bridge_evaluate(
+pub(super) unsafe extern "C" fn rsf_sr_bridge_evaluate(
     bridge: *mut Bridge,
     context: *mut c_void,
     frame: *const rsf_sr_frame,
@@ -941,7 +956,7 @@ unsafe extern "C" fn rsf_sr_bridge_evaluate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_bridge_warm_up(
+pub(super) unsafe extern "C" fn rsf_sr_bridge_warm_up(
     bridge: *mut Bridge,
     render_width: u32,
     render_height: u32,
@@ -967,7 +982,7 @@ unsafe extern "C" fn rsf_sr_bridge_warm_up(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_bridge_get_status(
+pub(super) unsafe extern "C" fn rsf_sr_bridge_get_status(
     bridge: *const Bridge,
     status: *mut rsf_sr_session_status,
 ) -> i32 {
@@ -992,7 +1007,7 @@ unsafe extern "C" fn rsf_sr_bridge_close(bridge: *mut Bridge) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_bridge_destroy(bridge: *mut Bridge) {
+pub(super) unsafe extern "C" fn rsf_sr_bridge_destroy(bridge: *mut Bridge) {
     if unsafe { rsf_sr_bridge_close(bridge) } == NOT_READY {
         // Legacy callers cannot observe retention. Preserve outstanding GPU resources.
         unsafe { &*bridge }.say("SR GPU completion failed; retaining the failed bridge resources");

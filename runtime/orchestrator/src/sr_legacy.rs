@@ -15,8 +15,8 @@ const FEATURE_FAILED: i32 = -9;
 const EXPOSURE_SETTLE_FRAMES: u32 = 30;
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
-type Bridge = c_void;
-type Resolve = c_void;
+use crate::motion_resolve::Pass as Resolve;
+use crate::sr_bridge::Bridge;
 type Frame = rsf_dlss_frame;
 
 #[repr(C)]
@@ -30,19 +30,89 @@ struct Services {
     destroy: unsafe extern "C" fn(*mut Bridge),
     create_resolve: unsafe extern "C" fn(*mut c_void, u32, u32, *mut *mut Resolve) -> i32,
     resolve: unsafe extern "C" fn(
-        *mut Resolve,
+        *const Resolve,
         *mut c_void,
         *mut c_void,
         *mut c_void,
         *const rsf_motion_resolve_params,
     ) -> i32,
-    depth: unsafe extern "C" fn(*mut Resolve) -> *mut c_void,
-    motion: unsafe extern "C" fn(*mut Resolve) -> *mut c_void,
+    depth: unsafe extern "C" fn(*const Resolve) -> *mut c_void,
+    motion: unsafe extern "C" fn(*const Resolve) -> *mut c_void,
     destroy_resolve: unsafe extern "C" fn(*mut Resolve),
     dump_active: unsafe extern "C" fn() -> i32,
     dump_frame: unsafe extern "C" fn(*mut c_void, *const Frame, u32),
 }
 const _: () = assert!(size_of::<Services>() == 14 * size_of::<*const c_void>());
+
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn rsf_input_dump_active() -> i32;
+    fn rsf_input_dump_sr(context: *mut c_void, frame: *const Frame, backend: u32);
+}
+
+#[cfg(not(test))]
+static SERVICES: Services = Services {
+    create: crate::sr_bridge::rsf_sr_bridge_create,
+    select: crate::sr_bridge::rsf_sr_bridge_select,
+    status: crate::sr_bridge::rsf_sr_bridge_get_status,
+    exposure: crate::sr_bridge::rsf_sr_bridge_set_auto_exposure,
+    evaluate: crate::sr_bridge::rsf_sr_bridge_evaluate,
+    warm_up: crate::sr_bridge::rsf_sr_bridge_warm_up,
+    destroy: crate::sr_bridge::rsf_sr_bridge_destroy,
+    create_resolve: crate::motion_resolve::rsf_motion_resolve_create,
+    resolve: crate::motion_resolve::rsf_motion_resolve_run,
+    depth: crate::motion_resolve::rsf_motion_resolve_depth,
+    motion: crate::motion_resolve::rsf_motion_resolve_motion,
+    destroy_resolve: crate::motion_resolve::rsf_motion_resolve_destroy,
+    dump_active: rsf_input_dump_active,
+    dump_frame: rsf_input_dump_sr,
+};
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sr_legacy_create(
+    device: *mut c_void,
+    width: u32,
+    height: u32,
+    fsr2: *const std::ffi::c_char,
+    fsr3: *const std::ffi::c_char,
+    fsr4: *const std::ffi::c_char,
+    xess: *const std::ffi::c_char,
+    units_to_meters: f32,
+    standard_depth: u32,
+    auto_exposure: u32,
+    log: rsf_backend_log_fn,
+    user: *mut c_void,
+    out: *mut *mut Adapter,
+) -> i32 {
+    let mut setup: rsf_sr_session_setup = unsafe { std::mem::zeroed() };
+    setup.struct_size = size_of_val(&setup) as u32;
+    setup.abi_version = RSF_SR_SESSION_ABI_VERSION;
+    setup.open.struct_size = size_of_val(&setup.open) as u32;
+    setup.open.abi_version = RSF_BACKEND_ABI_VERSION;
+    setup.open.api = 1; // RSF_API_D3D11
+    setup.open.device = device;
+    setup.open.output_width = width;
+    setup.open.output_height = height;
+    // The legacy pipeline setup does not carry the projection far-plane convention.
+    setup.open.depth_infinite = u32::from(standard_depth == 0);
+    setup.open.log = log;
+    setup.open.log_user = user;
+    setup.fsr2_directory_utf8 = fsr2;
+    setup.fsr3_directory_utf8 = fsr3;
+    setup.fsr4_directory_utf8 = fsr4;
+    setup.xess_directory_utf8 = xess;
+    unsafe {
+        create_adapter(
+            &setup,
+            units_to_meters,
+            standard_depth,
+            auto_exposure,
+            &SERVICES,
+            out,
+        )
+    }
+}
 
 struct Exposure {
     auto: bool,
@@ -107,8 +177,7 @@ fn counter() -> i64 {
     now
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr_legacy_create(
+unsafe fn create_adapter(
     setup: &rsf_sr_session_setup,
     units_to_meters: f32,
     standard_depth: u32,
@@ -469,7 +538,7 @@ pub(super) mod fake {
         1
     }
     unsafe extern "C" fn resolve(
-        _: *mut Resolve,
+        _: *const Resolve,
         _: *mut c_void,
         _: *mut c_void,
         _: *mut c_void,
@@ -477,10 +546,10 @@ pub(super) mod fake {
     ) -> i32 {
         1
     }
-    unsafe extern "C" fn depth(_: *mut Resolve) -> *mut c_void {
+    unsafe extern "C" fn depth(_: *const Resolve) -> *mut c_void {
         DEPTH
     }
-    unsafe extern "C" fn motion(_: *mut Resolve) -> *mut c_void {
+    unsafe extern "C" fn motion(_: *const Resolve) -> *mut c_void {
         MOTION
     }
     unsafe extern "C" fn destroy_resolve(_: *mut Resolve) {}
@@ -509,7 +578,7 @@ pub(super) mod fake {
     pub(crate) fn adapter() -> *mut Adapter {
         let setup: rsf_sr_session_setup = unsafe { std::mem::zeroed() };
         let mut out = ptr::null_mut();
-        let result = unsafe { rsf_core_sr_legacy_create(&setup, 1.0, 0, 1, &SERVICES, &mut out) };
+        let result = unsafe { create_adapter(&setup, 1.0, 0, 1, &SERVICES, &mut out) };
         assert_eq!(result, 0);
         out
     }

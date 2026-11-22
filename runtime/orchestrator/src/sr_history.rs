@@ -6,19 +6,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 static RESET_PENDING: AtomicBool = AtomicBool::new(false);
 type Evaluate = unsafe extern "C" fn(*mut c_void, *const Pass) -> i32;
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_sr_request_reset() -> i32 {
+pub(super) extern "C" fn rsf_core_sr_request_reset() -> i32 {
     RESET_PENDING.store(true, Ordering::Release);
     0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_sr_clear_reset() {
+pub(super) extern "C" fn rsf_core_sr_clear_reset() {
     RESET_PENDING.store(false, Ordering::Release);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr_evaluate(
+pub(super) unsafe extern "C" fn rsf_core_sr_evaluate(
     context: *mut c_void,
     pass: *const Pass,
     evaluate: Evaluate,

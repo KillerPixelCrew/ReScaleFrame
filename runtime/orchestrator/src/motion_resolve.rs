@@ -107,7 +107,7 @@ const _: () = {
     assert!(size_of::<Constants>() == 112 && PARAMS_V1 == 96);
 };
 
-struct Pass {
+pub(super) struct Pass {
     sources: Mutex<SourceViews<8>>,
     resources: [ComRef; 6],
     device: ComRef,
@@ -154,7 +154,7 @@ fn constants(params: &Params, width: u32, height: u32) -> Option<Constants> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_motion_resolve_create(
+pub(super) unsafe extern "C" fn rsf_motion_resolve_create(
     device: Handle,
     width: u32,
     height: u32,
@@ -193,7 +193,7 @@ unsafe extern "C" fn rsf_motion_resolve_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_motion_resolve_run(
+pub(super) unsafe extern "C" fn rsf_motion_resolve_run(
     pass: *const Pass,
     context: Handle,
     motion: Handle,
@@ -283,17 +283,17 @@ unsafe fn resolve_texture(pass: *const Pass, output: usize) -> Handle {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_motion_resolve_motion(pass: *const Pass) -> Handle {
+pub(super) unsafe extern "C" fn rsf_motion_resolve_motion(pass: *const Pass) -> Handle {
     unsafe { resolve_texture(pass, 2) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_motion_resolve_depth(pass: *const Pass) -> Handle {
+pub(super) unsafe extern "C" fn rsf_motion_resolve_depth(pass: *const Pass) -> Handle {
     unsafe { resolve_texture(pass, 3) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_motion_resolve_destroy(pass: *mut Pass) {
+pub(super) unsafe extern "C" fn rsf_motion_resolve_destroy(pass: *mut Pass) {
     if !pass.is_null() {
         drop(unsafe { Box::from_raw(pass) });
     }
