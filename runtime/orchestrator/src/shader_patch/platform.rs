@@ -24,12 +24,12 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
+use rsf_minhook_sys::{
+    MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED, MH_ERROR_ENABLED, MH_EnableHook,
+    MH_Initialize, MH_OK, MH_RemoveHook,
+};
 
 // MinHook.h v1.3.4 enum values.
-const MH_OK: i32 = 0;
-const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
-const MH_ERROR_ENABLED: i32 = 5;
 
 #[repr(C)]
 struct Includes<'a> {

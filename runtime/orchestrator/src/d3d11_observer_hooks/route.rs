@@ -30,13 +30,11 @@ const BLOCK_SIZE: usize = 64;
 const FILE_WINDOW: usize = 32;
 const ABSOLUTE_JUMP_SIZE: usize = 14;
 const CHAIN_LIMIT: usize = 8;
-const MH_OK: i32 = 0;
-const MH_ALREADY_INITIALIZED: i32 = 1;
-const MH_NOT_CREATED: i32 = 4;
-const MH_ENABLED: i32 = 5;
-const MH_DISABLED: i32 = 6;
 
-use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
+use rsf_minhook_sys::{
+    MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED, MH_ERROR_DISABLED,
+    MH_ERROR_ENABLED, MH_ERROR_NOT_CREATED, MH_EnableHook, MH_Initialize, MH_OK, MH_RemoveHook,
+};
 
 fn module_at(address: usize) -> Option<HMODULE> {
     let mut module = null_mut();
@@ -361,7 +359,7 @@ fn install(
         (genuine, module_leaf(image.module), 0)
     };
     let init = unsafe { MH_Initialize() };
-    if !matches!(init, MH_OK | MH_ALREADY_INITIALIZED) {
+    if !matches!(init, MH_OK | MH_ERROR_ALREADY_INITIALIZED) {
         return Err(format!("MinHook did not initialise, status {init}"));
     }
     let target = without_provenance_mut::<c_void>(target);
@@ -375,9 +373,9 @@ fn install(
     let genuine_route = trampoline.0.cast();
     ROUTES[method].publish(target, chain, genuine_route);
     let enabled = unsafe { MH_EnableHook(target) };
-    if !matches!(enabled, MH_OK | MH_ENABLED) {
+    if !matches!(enabled, MH_OK | MH_ERROR_ENABLED) {
         let removed = unsafe { MH_RemoveHook(target) };
-        if matches!(removed, MH_OK | MH_NOT_CREATED) {
+        if matches!(removed, MH_OK | MH_ERROR_NOT_CREATED) {
             ROUTES[method].publish(null_mut(), null_mut(), null_mut());
         } else {
             std::mem::forget(trampoline);
@@ -434,10 +432,10 @@ pub(super) unsafe extern "C" fn detour(user: Handle, method: u32) -> i32 {
 
 pub(super) unsafe extern "C" fn remove(target: Handle) -> i32 {
     match unsafe { MH_DisableHook(target) } {
-        MH_NOT_CREATED => 1,
-        MH_OK | MH_DISABLED => i32::from(matches!(
+        MH_ERROR_NOT_CREATED => 1,
+        MH_OK | MH_ERROR_DISABLED => i32::from(matches!(
             unsafe { MH_RemoveHook(target) },
-            MH_OK | MH_NOT_CREATED
+            MH_OK | MH_ERROR_NOT_CREATED
         )),
         _ => 0,
     }

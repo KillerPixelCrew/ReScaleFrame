@@ -18,10 +18,9 @@ const CAPACITY: usize = 8;
 pub(crate) use crate::sys::rsf_d3d12_observer_setup as ObserverSetup;
 
 // The graphics target links the same MinHook instance as D3D11.
-use rsf_minhook_sys::{MH_CreateHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
-
-const MH_OK: i32 = 0;
-const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
+use rsf_minhook_sys::{
+    MH_CreateHook, MH_ERROR_ALREADY_INITIALIZED, MH_EnableHook, MH_Initialize, MH_OK, MH_RemoveHook,
+};
 
 const _: () = assert!(
     size_of::<ObserverSetup>() == 48 && std::mem::offset_of!(ObserverSetup, swapchain) == 40

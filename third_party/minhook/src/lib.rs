@@ -9,7 +9,22 @@ use std::ffi::{c_char, c_void};
 #[allow(non_camel_case_types, non_upper_case_globals, dead_code)]
 pub mod hde;
 
-// MinHook.h; MH_STATUS values are returned as i32.
+// MinHook.h MH_STATUS values; the functions return them as i32.
+pub const MH_UNKNOWN: i32 = -1;
+pub const MH_OK: i32 = 0;
+pub const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
+pub const MH_ERROR_NOT_INITIALIZED: i32 = 2;
+pub const MH_ERROR_ALREADY_CREATED: i32 = 3;
+pub const MH_ERROR_NOT_CREATED: i32 = 4;
+pub const MH_ERROR_ENABLED: i32 = 5;
+pub const MH_ERROR_DISABLED: i32 = 6;
+pub const MH_ERROR_NOT_EXECUTABLE: i32 = 7;
+pub const MH_ERROR_UNSUPPORTED_FUNCTION: i32 = 8;
+pub const MH_ERROR_MEMORY_ALLOC: i32 = 9;
+pub const MH_ERROR_MEMORY_PROTECT: i32 = 10;
+pub const MH_ERROR_MODULE_NOT_FOUND: i32 = 11;
+pub const MH_ERROR_FUNCTION_NOT_FOUND: i32 = 12;
+
 unsafe extern "system" {
     pub fn MH_Initialize() -> i32;
     pub fn MH_Uninitialize() -> i32;

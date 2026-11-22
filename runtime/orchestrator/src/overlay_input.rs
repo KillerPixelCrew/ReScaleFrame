@@ -579,15 +579,12 @@ pub(super) unsafe extern "C" fn rsf_overlay_input_collect(
 #[cfg(not(test))]
 mod minhook {
     use super::*;
-    // Values from the pinned MinHook.h. All calls share the carrier's MinHook instance.
-    const OK: i32 = 0;
-    const ALREADY_INITIALIZED: i32 = 1;
-    const NOT_CREATED: i32 = 4;
-    const ENABLED: i32 = 5;
-    const DISABLED: i32 = 6;
-
+    // All calls share the carrier's MinHook instance.
     use rsf_minhook_sys::{
-        MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook,
+        MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED as ALREADY_INITIALIZED,
+        MH_ERROR_DISABLED as DISABLED, MH_ERROR_ENABLED as ENABLED,
+        MH_ERROR_NOT_CREATED as NOT_CREATED, MH_EnableHook, MH_Initialize, MH_OK as OK,
+        MH_RemoveHook,
     };
 
     pub(super) static PLATFORM: HookPlatform = HookPlatform {
