@@ -7,11 +7,9 @@
 #include <ffx_antilag2_dx11.h>
 #include <ffx_antilag2_dx12.h>
 #include <new>
-#endif
 
-namespace rsf::latency {
 namespace {
-#ifdef RSF_HAVE_ANTILAG2
+using rsf::latency::AntiLagCallbacks;
 struct SdkContexts {
     AMD::AntiLag2DX11::Context dx11{};
     AMD::AntiLag2DX12::Context dx12{};
@@ -46,31 +44,19 @@ void shutdown(void* raw) noexcept {
 }
 
 constexpr AntiLagCallbacks calls{initialize, update, end_render, shutdown};
-#else
-constexpr AntiLagCallbacks calls{
-    +[](void*, uint32_t, void*) -> uint32_t { return 0; },
-    +[](void*, uint32_t, uint32_t, uint32_t) -> uint32_t { return 0; },
-    +[](void*, void*, uint32_t) -> uint32_t { return 0; },
-    +[](void*) {},
-};
-#endif
 }
+#endif
 
-AntiLagContext* create_native_antilag_context() noexcept {
+extern "C" void* rsf_native_antilag_context_create() noexcept {
 #ifdef RSF_HAVE_ANTILAG2
-    // DXGI private data can keep a reference to the storage for the life of a swapchain.
-    // Rust retires the SDK handles while the process-lifetime storage keeps its address.
+    // DXGI private data embeds the DX12 context pointer. Keep its address
+    // for the life of the process. Rust retires the SDK handles separately.
     auto* sdk = new (std::nothrow) SdkContexts{};
     if (!sdk) return nullptr;
-    auto* context = rsf_core_antilag_create(&calls, sdk);
+    auto* context = rsf::latency::rsf_core_antilag_create(&calls, sdk);
     if (!context) delete sdk;
     return context;
 #else
-    return rsf_core_antilag_create(&calls, nullptr);
+    return rsf::latency::rsf_core_antilag_create(nullptr, nullptr);
 #endif
-}
-}
-
-extern "C" void* rsf_native_antilag_context_create() noexcept {
-    return rsf::latency::create_native_antilag_context();
 }

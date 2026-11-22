@@ -20,6 +20,7 @@ typedef struct AntiLagContext AntiLagContext;
 static_assert(sizeof(AntiLagCallbacks) == 32);
 extern "C" {
 #endif
+/* A null table selects the unavailable SDK implementation. */
 AntiLagContext* rsf_core_antilag_create(const AntiLagCallbacks*, void* driver);
 void rsf_core_antilag_destroy(AntiLagContext*);
 uint32_t rsf_core_antilag_bind(AntiLagContext*, uint32_t api, void* device, uint32_t vendor);
@@ -30,6 +31,5 @@ void rsf_core_antilag_reset_sources(AntiLagContext*);
 
 #ifdef __cplusplus
 }
-AntiLagContext* create_native_antilag_context() noexcept;
 }
 #endif

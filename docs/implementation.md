@@ -8,15 +8,16 @@ Pinned formatting, binding regeneration, locked offline metadata and
 source checks passed. Builds, fixtures and device checks remain pending.
 [V01 residual evidence](research/vulkan-sr-native-port-followup.md#v01-residual-replay)
 
-C05 moves Vulkan Anti-Lag device discovery and SDK calls, Streamline token
-result handling, and Reflex timing into Rust. The optional native provider
-entry points still supply linkage and contain C++ exceptions. The receipt,
-CPU latency event, CPU reservation, and D3D Anti-Lag fixture bodies use Rust
-with their existing CTest names. The D3D CPU, Vulkan Anti-Lag, Vulkan
-Streamline/XeLL, and XeLL sleep concurrency fixtures also run their scenarios
-in Rust. The pinned AMD D3D SDK retains its inline C++ calls, and the XeLL
-fixture retains a native COM and callback-table shim. Verification covers
-source and bindings. [C05 fixture evidence](research/rust-c05-native-fixtures.md)
+C05 owns Vulkan Anti-Lag device discovery, checked Streamline tokens,
+Reflex timing and WSI routing in Rust. C wires the Vulkan exports to the
+configured providers, and a C++ leaf catches exceptions at Streamline
+initialization and host callback invocation. The XeLL sleep concurrency
+fixture now also supplies its mock COM objects and SDK table in Rust.
+The pinned AMD D3D SDK retains its inline C++ calls and FSR swapchain
+private data. Pinned formatting, scoped binding regeneration, locked
+offline metadata and source checks passed for this replay. Native
+build and fixture execution remain pending.
+[C05 source evidence](research/rust-c05-native-fixtures.md#terminal-replay)
 
 AC7 carrier startup passes the admitted Present size directly to the backend
 and exposes its install-time settings in the shared panel. A refused native

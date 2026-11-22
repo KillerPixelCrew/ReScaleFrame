@@ -177,10 +177,34 @@ impl Drop for Context {
     }
 }
 
+static UNAVAILABLE: Driver = Driver {
+    initialize: unavailable_initialize,
+    update: unavailable_update,
+    end_render: unavailable_end_render,
+    shutdown: unavailable_shutdown,
+};
+
+unsafe extern "C" fn unavailable_initialize(_: *mut c_void, _: u32, _: *mut c_void) -> u32 {
+    0
+}
+
+unsafe extern "C" fn unavailable_update(_: *mut c_void, _: u32, _: u32, _: u32) -> u32 {
+    0
+}
+
+unsafe extern "C" fn unavailable_end_render(_: *mut c_void, _: *mut c_void, _: u32) -> u32 {
+    0
+}
+
+unsafe extern "C" fn unavailable_shutdown(_: *mut c_void) {}
+
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_antilag_create(calls: &'static Driver, driver: *mut c_void) -> *mut Context {
+extern "C" fn rsf_core_antilag_create(
+    calls: Option<&'static Driver>,
+    driver: *mut c_void,
+) -> *mut Context {
     crate::allocate_handle(Context {
-        calls,
+        calls: calls.unwrap_or(&UNAVAILABLE),
         driver,
         lifetime: RwLock::new(()),
         updater: Mutex::new(()),

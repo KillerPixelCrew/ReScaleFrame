@@ -26,3 +26,32 @@ facade and the SDK-facing Runtime implementation were preserved.
 Verification used pinned Rust formatting, scoped bindgen regeneration,
 locked offline Cargo metadata and source comparisons. Build, fixture
 execution and device verification remain pending.
+
+## Terminal replay
+
+Base `9716068b` tracks three open C05 paths.
+
+| Original path | Suggested PORT disposition | Source evidence |
+| --- | --- | --- |
+| `tests/xell_sleep_concurrency.cpp` | Ported and removed | `tests/game-sdk/src/xell.rs` builds the mock COM objects and calls the production XeFG provider through bindgen declarations from `generation12_platform.h`. The CTest name, SDK-header gate and timeout stay in place. The fixture checks real callback delivery while a later mock sleep is pending, configuration recovery, native queue identity on settings drain and balanced COM references at teardown. It takes only Windows system module references and creates an unnamed event. |
+| `runtime/orchestrator/src/native_latency_vulkan.cpp` | Ported and removed, with explicit native ABI and exception leaves | `native_latency_vulkan.c` wires the existing public exports and optional providers. `vulkan_fg_wsi.rs` validates and forwards the original native queue and Present info, using Streamline synchronization when linked and the typed Vulkan proc otherwise. The instance resolver still accepts a null instance and stays callable after SDK shutdown. The separate C++ leaf catches exceptions at SDK startup and when invoking the borrowed host callback. |
+| `runtime/orchestrator/src/latency_antilag.cpp` | Retain as a pinned SDK leaf | The Rust owner supplies the unavailable callback table. The C++ leaf keeps the inline SDK initialization, updates, end marker and teardown, plus the FSR swapchain private-data record. Its DX12 context address remains valid for the process because the record embeds that pointer. |
+
+The Vulkan table still binds `rsf_vk_sl_begin_frame_checked`,
+`VulkanStorySlTokenMatches` and `VulkanStorySlMarkerForToken`. The existing
+Rust owner leases tokens only after a successful checked start with a
+nonzero handle. It uses the marker callback result before recording success.
+The FG endpoint table also retains its provider marker result and status
+callbacks. The changes leave CPU fact admission and presentation ownership
+with the existing Rust owners.
+
+The installed Anti-Lag headers match both SHA-256 entries in
+[the pinned SDK record](../dependencies.md#amd-antilag-2). The matching
+DX11 and DX12 headers define the called operations inline over vendor
+COM interfaces. The leaf uses the header-defined context types and retains
+the existing FSR private-data GUID and payload. The source review did not
+exercise an AMD device.
+
+Verification used Rust 1.94.1 formatting, scoped bindgen 0.72.1
+regeneration, locked offline Cargo metadata and source comparisons.
+Build and fixture execution were outside this replay.
