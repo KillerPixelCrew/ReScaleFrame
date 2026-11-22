@@ -249,5 +249,6 @@ unsafe extern "C" fn fixture_xess_seen(
 
 mod creation;
 mod fidelityfx;
+mod ngx_params;
 mod streamline;
 mod vulkan;

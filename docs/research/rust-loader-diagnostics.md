@@ -122,3 +122,13 @@ adapter filter, visible triple-buffered flip-discard chain, per-buffer transitio
 and fence ordering, and summary fields. The COM calls use the generated Windows bindings.
 Setup failures and a failed fence wait now produce a failure result instead of proceeding
 with an unavailable resource. The build and desktop run remain user-owned.
+
+## NGX fixture parameter object
+
+Rust now supplies `NVSDK_NGX_D3D12_GetParameters` and the 17-slot parameter object. The
+native `tests/vendor_census_ngx_params.h` retains the vendor declaration order for independent
+call-site slot selection, while the storage and every virtual operation are in Rust.
+`tests/loader/vendor_census_ngx_platform.cpp` is removed. The C++ slot probe now checks
+all eight setters alongside the prior eight getters and reset, deriving each slot from the
+native declarations. The DLL export name, pointer result and numeric versus pointer lookup
+behavior are preserved.

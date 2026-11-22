@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Vendor call census test.
 //
-// Fake vendor DLLs (tests/vendor_census_fixture.cpp) are called through a direct import, through
+// Fake vendor DLLs are called through a direct import, through
 // LoadLibrary plus GetProcAddress and through nvapi_QueryInterface, with the census installed. The
 // test checks that every call passes through unchanged and that the records, summary and byte
 // budget say what was called. A real DXGI and D3D12 (WARP) path covers the swapchain hooks, and a
@@ -390,6 +390,22 @@ void check_vtable_slots() {
     CHECK(g_slot == 10);
 
     // NVSDK_NGX_Parameter: MSVC groups each overload set and reverses the declaration order.
+    fake<NgxParam>()->Set("x", static_cast<void*>(nullptr));
+    CHECK(g_slot == 0);
+    fake<NgxParam>()->Set("x", static_cast<ID3D12Resource*>(nullptr));
+    CHECK(g_slot == 1);
+    fake<NgxParam>()->Set("x", static_cast<ID3D11Resource*>(nullptr));
+    CHECK(g_slot == 2);
+    fake<NgxParam>()->Set("x", 0);
+    CHECK(g_slot == 3);
+    fake<NgxParam>()->Set("x", 0u);
+    CHECK(g_slot == 4);
+    fake<NgxParam>()->Set("x", 0.0);
+    CHECK(g_slot == 5);
+    fake<NgxParam>()->Set("x", 0.0f);
+    CHECK(g_slot == 6);
+    fake<NgxParam>()->Set("x", 0ull);
+    CHECK(g_slot == 7);
     fake<NgxParam>()->Get("x", static_cast<void**>(nullptr));
     CHECK(g_slot == 8);
     fake<NgxParam>()->Get("x", static_cast<ID3D12Resource**>(nullptr));
