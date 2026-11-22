@@ -364,3 +364,33 @@ pub unsafe extern "C" fn rsf_godot_host_render_size(
         internal.add(1).write(size.1);
     }
 }
+
+/// Class registration must complete before the singleton becomes visible.
+///
+/// # Safety
+/// The engine calls this at its scene initialization level with both callbacks valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_godot_module_initialize(
+    register_class: unsafe extern "C" fn(),
+    publish_bridge: unsafe extern "C" fn(),
+) {
+    unsafe {
+        register_class();
+        publish_bridge();
+    }
+}
+
+/// Keep the singleton alive through render and host retirement.
+///
+/// # Safety
+/// The engine calls this at scene teardown with both callbacks valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_godot_module_uninitialize(
+    shutdown: unsafe extern "C" fn(),
+    unpublish_bridge: unsafe extern "C" fn(),
+) {
+    unsafe {
+        shutdown();
+        unpublish_bridge();
+    }
+}

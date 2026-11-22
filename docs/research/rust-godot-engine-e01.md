@@ -149,3 +149,17 @@ for later retirement. Release still stops on capture refusal or failed proxy
 destruction and clears native fields only after both owners retire. Typed
 swapchain fields and the native fallback stay in `vulkan.cpp` and the pinned
 driver patch.
+
+`host.rs` sequences scene registration before singleton publication and host
+shutdown before singleton removal. `register_types.cpp` keeps the generated
+Godot module entry points, scene-level check, ClassDB API save and restore,
+`GDREGISTER_CLASS`, and allocation and removal of the typed bridge singleton.
+The pinned evidence is `main/main.cpp:3792,5296`,
+`modules/register_module_types.h:38` and `core/object/class_db.h:535,568`.
+
+The checks resolved all 21 patch-plan files in memory, regenerated the targeted
+bindings without diff and passed Rust 1.94.1 formatting and locked offline
+metadata. MinGW C++ syntax-only checks covered the real graph, Vulkan and
+registration translation units against the pinned checkout's patched headers,
+plus the graph fixture and private packet header. Engine object generation,
+linking, fixture execution and device behavior were outside this source pass.

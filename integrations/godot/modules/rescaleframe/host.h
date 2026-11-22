@@ -62,6 +62,9 @@ extern "C" uint64_t rsf_godot_host_session(); // any thread
 extern "C" void rsf_godot_host_boot(const rsf_godot_boot_facts *facts, const rsf_godot_boot_callbacks *callbacks);
 extern "C" uint32_t rsf_godot_host_configure(const rsf_godot_configure_facts *facts, const rsf_godot_configure_callbacks *callbacks);
 extern "C" void rsf_godot_host_shutdown(const rsf_godot_shutdown_callbacks *callbacks);
+// Main thread, at the engine's scene module initialization level.
+extern "C" void rsf_godot_module_initialize(void (*register_class)(), void (*publish_bridge)());
+extern "C" void rsf_godot_module_uninitialize(void (*shutdown)(), void (*unpublish_bridge)());
 // Rendering server thread.
 extern "C" void rsf_godot_host_render_begin(uint64_t source_frame_id, uint32_t gameplay, double seconds,
     const rsf_godot_render_callbacks *callbacks);

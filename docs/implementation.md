@@ -342,7 +342,9 @@ Godot's SCons Rust object now assembles driver packets, matches Vulkan submissio
 receipts, chooses Vulkan batch routing and graph pool reuse, composes SR camera
 reprojection and owns the motion decoder variants and RIDs. The graph fixture
 runs its Rust scenarios and synthetic driver through the typed C++ graph lease.
-Godot C++ owns ClassDB, resource leases and driver calls.
+Rust sequences graph allocation, Vulkan receipt dispatch and swapchain lifecycle,
+and scene singleton publication and retirement. Godot C++ owns ClassDB, resource
+leases and driver calls.
 Source checks only. [Engine ownership and evidence](research/rust-godot-engine-e01.md)
 
 RDR2's pending and ready readbacks and retained final draw live in Rust.
