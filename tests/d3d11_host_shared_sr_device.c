@@ -36,7 +36,7 @@ static int32_t has_token(void* user, uint64_t source)
     RSF_FOREIGN_TRY {
         const rsf_d3d11_present_api* api = ((const NativeCalls*)user)->presentation;
         return rsf_streamline_host_token(api->host(), source) != NULL;
-    } RSF_FOREIGN_CATCH(return -1)
+    } RSF_FOREIGN_CATCH { return -1; }
 }
 
 static int32_t set_quality(void* user, uint32_t quality)
@@ -48,7 +48,7 @@ static int32_t set_quality(void* user, uint32_t quality)
         if (result != RSF_OK) return result;
         settings.sr_quality = quality;
         return api->settings_apply(&settings);
-    } RSF_FOREIGN_CATCH(return RSF_ERROR_NOT_READY)
+    } RSF_FOREIGN_CATCH { return RSF_ERROR_NOT_READY; }
 }
 
 static int32_t sr_status(void* user, int32_t* result, uint32_t* backend)
@@ -60,7 +60,7 @@ static int32_t sr_status(void* user, int32_t* result, uint32_t* backend)
         *result = published.sr_result;
         *backend = published.sr_effective_backend;
         return status;
-    } RSF_FOREIGN_CATCH(return RSF_ERROR_NOT_READY)
+    } RSF_FOREIGN_CATCH { return RSF_ERROR_NOT_READY; }
 }
 
 static int32_t cancel_dump(uint64_t session)
@@ -68,14 +68,14 @@ static int32_t cancel_dump(uint64_t session)
     RSF_FOREIGN_TRY {
         rsf_input_dump_cancel(session);
         return RSF_OK;
-    } RSF_FOREIGN_CATCH(return RSF_ERROR_NOT_READY)
+    } RSF_FOREIGN_CATCH { return RSF_ERROR_NOT_READY; }
 }
 
 static int32_t present_chain(void* receiver)
 {
     RSF_FOREIGN_TRY {
         return IDXGISwapChain_Present((IDXGISwapChain*)receiver, 0, 0);
-    } RSF_FOREIGN_CATCH(return E_FAIL)
+    } RSF_FOREIGN_CATCH { return E_FAIL; }
 }
 
 static int32_t disable_sr(void* user)
@@ -87,7 +87,7 @@ static int32_t disable_sr(void* user)
         if (read != RSF_OK) return read;
         changed.sr_enabled = 0;
         return api->settings_apply(&changed);
-    } RSF_FOREIGN_CATCH(return RSF_ERROR_NOT_READY)
+    } RSF_FOREIGN_CATCH { return RSF_ERROR_NOT_READY; }
 }
 
 /* IEEE binary16 to binary32, with subnormals, infinities and NaN, as XMConvertHalfToFloat. */

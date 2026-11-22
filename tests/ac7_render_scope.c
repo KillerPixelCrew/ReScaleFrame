@@ -9,7 +9,7 @@
 #endif
 #include <windows.h>
 
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
+#include <rescaleframe/foreign_guard.h>
 #define RSF_CXX_EXCEPTION_MAGIC 0x19930520UL
 
 /* C cannot throw a C++ object, so the deliberate foreign exceptions raise the MSVC C++ exception

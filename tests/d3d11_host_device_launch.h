@@ -17,18 +17,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <rescaleframe/foreign_guard.h>
 #include "d3d11_host_device_fixture.h"
-
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
-
-#if defined(_MSC_VER)
-#define RSF_FOREIGN_TRY __try
-#define RSF_FOREIGN_CATCH(on_exception) \
-    __except (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER \
-                                                           : EXCEPTION_CONTINUE_SEARCH) { on_exception; }
-#else
-#error "Foreign C++ exception containment needs MSVC structured exception handling"
-#endif
 
 #define RSF_FIXTURE_WIDTH 960u
 #define RSF_FIXTURE_HEIGHT 540u

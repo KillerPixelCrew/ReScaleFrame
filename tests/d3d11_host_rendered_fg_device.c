@@ -178,26 +178,26 @@ static int32_t fg_get_buffer(void* receiver, void** out)
         const HRESULT result = IDXGISwapChain_GetBuffer((IDXGISwapChain*)receiver, 0, &IID_ID3D11Texture2D, (void**)&texture);
         if (SUCCEEDED(result)) *out = texture;
         return result;
-    } RSF_FOREIGN_CATCH(return E_FAIL)
+    } RSF_FOREIGN_CATCH { return E_FAIL; }
 }
 static int32_t fg_present(void* receiver)
 {
     RSF_FOREIGN_TRY {
         return IDXGISwapChain_Present((IDXGISwapChain*)receiver, 0, 0);
-    } RSF_FOREIGN_CATCH(return E_FAIL)
+    } RSF_FOREIGN_CATCH { return E_FAIL; }
 }
 static int32_t fg_has_provider_session(void* user)
 {
     RSF_FOREIGN_TRY {
         const rsf_d3d11_present_api* api = ((const NativeCalls*)user)->presentation;
         return api->provider() && api->session();
-    } RSF_FOREIGN_CATCH(return -1)
+    } RSF_FOREIGN_CATCH { return -1; }
 }
 static uint32_t fg_backend(void* user)
 {
     RSF_FOREIGN_TRY {
         return ((const NativeCalls*)user)->presentation->backend();
-    } RSF_FOREIGN_CATCH(return UINT32_MAX)
+    } RSF_FOREIGN_CATCH { return UINT32_MAX; }
 }
 static void fg_outer_counts(void* user, uint32_t* pre, uint32_t* post, uint32_t* dispatched)
 {
@@ -215,33 +215,33 @@ static int32_t fg_pump_messages(void)
             DispatchMessageW(&message);
         }
         return RSF_OK;
-    } RSF_FOREIGN_CATCH(return RSF_ERROR_NOT_READY)
+    } RSF_FOREIGN_CATCH { return RSF_ERROR_NOT_READY; }
 }
 static int32_t fg_settings_get(void* user, rsf_render_settings* settings)
 {
     RSF_FOREIGN_TRY {
         return ((const NativeCalls*)user)->overlay->settings_get(settings);
-    } RSF_FOREIGN_CATCH(return RSF_ERROR_NOT_READY)
+    } RSF_FOREIGN_CATCH { return RSF_ERROR_NOT_READY; }
 }
 static int32_t fg_settings_apply(void* user, const rsf_render_settings* settings)
 {
     RSF_FOREIGN_TRY {
         return ((const NativeCalls*)user)->overlay->settings_apply(settings);
-    } RSF_FOREIGN_CATCH(return RSF_ERROR_NOT_READY)
+    } RSF_FOREIGN_CATCH { return RSF_ERROR_NOT_READY; }
 }
 static int32_t fg_switch_result(void* user, int32_t* result)
 {
     RSF_FOREIGN_TRY {
         *result = ((const NativeCalls*)user)->presentation->switch_result();
         return RSF_OK;
-    } RSF_FOREIGN_CATCH(return RSF_ERROR_NOT_READY)
+    } RSF_FOREIGN_CATCH { return RSF_ERROR_NOT_READY; }
 }
 static int32_t fg_generation(void* user, uint64_t* generation)
 {
     RSF_FOREIGN_TRY {
         *generation = ((const NativeCalls*)user)->presentation->generation();
         return RSF_OK;
-    } RSF_FOREIGN_CATCH(return RSF_ERROR_NOT_READY)
+    } RSF_FOREIGN_CATCH { return RSF_ERROR_NOT_READY; }
 }
 
 /* R11G11B10_FLOAT channels for the two fixture pixels: unsigned floats with a 5-bit exponent
