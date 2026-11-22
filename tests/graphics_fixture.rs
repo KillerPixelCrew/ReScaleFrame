@@ -39,8 +39,6 @@ mod sharpening_settings;
 mod sharpening_vulkan;
 #[path = "sharpening_vulkan_cpu.rs"]
 mod sharpening_vulkan_cpu;
-#[path = "ui_layer.rs"]
-mod ui_layer;
 
 type Handle = *mut c_void;
 

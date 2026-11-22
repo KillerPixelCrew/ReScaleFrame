@@ -34,10 +34,6 @@ mod colour_d3d11;
 #[cfg(windows)]
 use rsf_graphics::com_ref;
 #[cfg(windows)]
-use rsf_graphics::constant_buffer_read;
-#[cfg(windows)]
-mod constant_twins;
-#[cfg(windows)]
 mod cpu_reservations;
 #[cfg(windows)]
 mod d3d11_d3d12;
@@ -89,8 +85,6 @@ mod d3d12_sharpening;
 mod d3d12_sr;
 #[cfg(any(windows, test))]
 mod d3d12_window_presenter;
-#[cfg(windows)]
-mod depth_replay;
 #[cfg(windows)]
 mod depth_scale;
 #[cfg(windows)]
@@ -253,8 +247,6 @@ mod render_links;
 #[cfg(windows)]
 mod sampler_bias;
 #[cfg(windows)]
-mod scene_promote;
-#[cfg(windows)]
 mod sdk_module;
 #[cfg(windows)]
 mod settings_store;
@@ -294,8 +286,6 @@ mod temporary_ini;
 use rsf_graphics::texture_dump;
 #[cfg(windows)]
 mod ui_identify;
-#[cfg(windows)]
-mod ui_layer;
 #[cfg(windows)]
 mod vulkan_antilag;
 #[cfg(windows)]

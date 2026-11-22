@@ -380,13 +380,6 @@ target_link_libraries(rsf_shared_surface PRIVATE rsf_presentation_fixtures_rust
 add_test(NAME shared_surface COMMAND rsf_shared_surface)
 set_tests_properties(shared_surface PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-# The layer, and the alpha accumulation that decides whether diverting into it works at all.
-add_executable(rsf_ui_layer fixture_main.c)
-target_compile_definitions(rsf_ui_layer PRIVATE RSF_FIXTURE_ENTRY=rsf_ui_layer_fixture)
-target_link_libraries(rsf_ui_layer PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
-add_test(NAME ui_layer COMMAND rsf_ui_layer)
-set_tests_properties(ui_layer PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
-
 # The composite's arithmetic, which nothing covered while it lived in present_blit.
 add_executable(rsf_fullscreen_pass fixture_main.c)
 target_compile_definitions(rsf_fullscreen_pass PRIVATE RSF_FIXTURE_ENTRY=rsf_fullscreen_pass_fixture)
