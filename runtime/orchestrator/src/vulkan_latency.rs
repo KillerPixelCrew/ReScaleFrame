@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::latency_lease::{
-    rsf_core_latency_pacing_owner, rsf_native_latency_claim, rsf_native_latency_has_claim,
+    pacing_owner, rsf_native_latency_claim, rsf_native_latency_has_claim,
     rsf_native_latency_release_claim,
 };
 use crate::native_cpu::rsf_native_cpu_release_session;
@@ -16,7 +16,7 @@ use crate::vulkan_pcl::{
 };
 use crate::vulkan_presentation::*;
 use rsf_game_sys::*;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::Mutex;
 
@@ -33,7 +33,7 @@ const CLIENT: u32 = 2;
 
 #[repr(C)]
 struct Streamline {
-    initialize: unsafe extern "C" fn(*const c_char, *const c_char, u32, *mut i32) -> i32,
+    initialize: unsafe extern "C" fn(*const u16, *const c_char, u32, *mut i32) -> i32,
     shutdown: unsafe extern "C" fn() -> i32,
     module: unsafe extern "C" fn() -> *mut c_void,
     invoke: unsafe extern "C" fn(*const rsf_slvk_call, *mut c_void, usize) -> i32,
@@ -103,21 +103,7 @@ static HOST: Mutex<Host> = Mutex::new(Host {
     facts_session: 0,
 });
 
-struct Lease {
-    context: *mut rsf_fgvk,
-    closing: bool,
-}
-
-impl Lease {
-    fn borrow() -> Self {
-        let mut closing = 0;
-        let context = unsafe { rsf_core_fgvk_presentation_borrow(&mut closing) };
-        Self {
-            context,
-            closing: closing != 0,
-        }
-    }
-
+impl PresentationLease {
     fn xell(&self, platform: &Platform) -> bool {
         let mut backend = 0;
         !self.context.is_null()
@@ -127,15 +113,7 @@ impl Lease {
 
     fn mark(&self, platform: &Platform, owner: u32, id: u64, kind: u32) {
         if owner == RSF_PACING_XELL && !self.context.is_null() {
-            unsafe { (platform.marker)(self.context, id, kind) };
-        }
-    }
-}
-
-impl Drop for Lease {
-    fn drop(&mut self) {
-        if !self.context.is_null() {
-            rsf_core_fgvk_presentation_return();
+            self.record_latency_result(unsafe { (platform.marker)(self.context, id, kind) });
         }
     }
 }
@@ -170,7 +148,7 @@ impl Host {
             .flatten()
     }
 
-    fn choose(&mut self, platform: &Platform, lease: &Lease) -> u32 {
+    fn choose(&mut self, platform: &Platform, lease: &PresentationLease) -> u32 {
         let mut owner = RSF_PACING_NONE;
         if !self.closing && !lease.closing {
             let reflex = self.sdk(platform).is_some_and(|sdk| {
@@ -182,8 +160,7 @@ impl Host {
             } else {
                 RSF_PACING_NONE
             };
-            owner =
-                rsf_core_latency_pacing_owner(required, u32::from(reflex && amd == 0), amd, AMD);
+            owner = pacing_owner(required, reflex && amd == 0, amd != 0, AMD);
             if owner != RSF_PACING_NONE {
                 if rsf_native_latency_claim(CLIENT) != 0 {
                     self.claimed_owner = owner;
@@ -236,8 +213,17 @@ fn initialize(
     let Some(sdk) = (unsafe { platform.streamline.as_ref() }) else {
         return NOT_SUPPORTED;
     };
+    let Ok(directory) = unsafe { CStr::from_ptr(directory) }.to_str() else {
+        return INVALID;
+    };
+    let mut wide = Vec::new();
+    if wide.try_reserve_exact(directory.len() + 1).is_err() {
+        return FEATURE_FAILED;
+    }
+    wide.extend(directory.encode_utf16());
+    wide.push(0);
     let mut result = 0;
-    let bridge = unsafe { (sdk.initialize)(directory, project, features, &mut result) };
+    let bridge = unsafe { (sdk.initialize)(wide.as_ptr(), project, features, &mut result) };
     if bridge != OK {
         return bridge;
     }
@@ -323,7 +309,7 @@ unsafe extern "C" fn rsf_core_slvk_invoke(platform: &Platform, call: *const rsf_
 }
 
 fn options(platform: &Platform, settings: Option<(u32, u32)>) -> i32 {
-    let lease = Lease::borrow();
+    let lease = PresentationLease::borrow();
     let (owner, requested, limit) = {
         let mut host = HOST.lock().unwrap();
         if host.closing {
@@ -336,7 +322,7 @@ fn options(platform: &Platform, settings: Option<(u32, u32)>) -> i32 {
         (host.choose(platform, &lease), host.requested, host.limit)
     };
     if owner == RSF_PACING_XELL {
-        unsafe { (platform.options)(lease.context, 1, limit) }
+        lease.record_latency_result(unsafe { (platform.options)(lease.context, 1, limit) })
     } else if owner == RSF_PACING_NONE && (requested != 0 || limit != 0) {
         NOT_SUPPORTED
     } else {
@@ -395,14 +381,7 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
     if id == 0 || session == 0 {
         return;
     }
-    let substituted =
-        event.flags & (RSF_GAME_CPU_INPUT_SUBSTITUTE | RSF_GAME_CPU_DERIVED_BOUNDARY) != 0;
-    if substituted
-        && matches!(
-            stage,
-            RSF_GAME_CPU_INPUT_SAMPLE | RSF_GAME_CPU_SIMULATION_BEGIN | RSF_GAME_CPU_SIMULATION_END
-        )
-    {
+    if !crate::native_cpu::observed_boundary(event) {
         return;
     }
     let platform = unsafe { &*user.cast::<Platform>() };
@@ -410,14 +389,9 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
         rsf_core_latencyvk_input(platform, session, id, event.input_kind, event.message_id);
         return;
     }
-    let lease = Lease::borrow();
-    let keyed = event.event_version == RSF_GAME_CPU_EVENT_VERSION
-        && event.flags & RSF_GAME_CPU_INPUT_KEYED != 0;
-    let pacing = if keyed {
-        stage == RSF_GAME_CPU_INPUT_SAMPLE
-    } else {
-        stage == RSF_GAME_CPU_PACING
-    };
+    let lease = PresentationLease::borrow();
+    let keyed = crate::native_cpu::input_keyed(event);
+    let pacing = crate::native_cpu::pacing_boundary(event);
     let (owner, requested, limit) = {
         let mut host = HOST.lock().unwrap();
         if host.closing {
@@ -451,9 +425,10 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
         }
         if owner == RSF_PACING_XELL
             && !lease.context.is_null()
-            && unsafe { (platform.options)(lease.context, 1, limit) } == OK
+            && lease.record_latency_result(unsafe { (platform.options)(lease.context, 1, limit) })
+                == OK
         {
-            unsafe { (platform.sleep)(lease.context, id) };
+            lease.record_latency_result(unsafe { (platform.sleep)(lease.context, id) });
         }
     }
     let marker = match stage {
@@ -537,7 +512,7 @@ unsafe extern "C" fn rsf_core_latencyvk_cpu(platform: &Platform, event: *const r
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_latencyvk_submit_end(platform: &Platform, frame: u64) {
-    let lease = Lease::borrow();
+    let lease = PresentationLease::borrow();
     let owner = HOST.lock().unwrap().owner;
     lease.mark(platform, owner, frame, 3);
     if owner == AMD {
@@ -547,7 +522,7 @@ extern "C" fn rsf_core_latencyvk_submit_end(platform: &Platform, frame: u64) {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_latencyvk_render(platform: &Platform, frame: u64) {
-    let lease = Lease::borrow();
+    let lease = PresentationLease::borrow();
     let owner = HOST.lock().unwrap().owner;
     lease.mark(platform, owner, frame, 2);
     let host = HOST.lock().unwrap();
@@ -574,7 +549,7 @@ unsafe extern "C" fn rsf_core_latencyvk_submit(
     pass: *const rsf_game_render_pass,
     begin: u32,
 ) -> i32 {
-    let lease = Lease::borrow();
+    let lease = PresentationLease::borrow();
     let owner;
     let kind;
     let frame;
@@ -609,7 +584,7 @@ unsafe extern "C" fn rsf_core_latencyvk_get_status(
     if unsafe { (*output).abi_version } != RSF_LATENCYVK_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let lease = Lease::borrow();
+    let lease = PresentationLease::borrow();
     let amd = rsf_core_amd_vk_status();
     let (mut result, ready) = {
         let host = HOST.lock().unwrap();
@@ -641,7 +616,7 @@ unsafe extern "C" fn rsf_core_latencyvk_get_status(
             ready,
         )
     };
-    if result.owner == RSF_PACING_XELL && !lease.context.is_null() {
+    if result.owner == RSF_PACING_XELL {
         let mut status = rsf_fgvk_latency_status {
             struct_size: size_of::<rsf_fgvk_latency_status>() as u32,
             abi_version: RSF_FGVK_LATENCY_ABI_VERSION,
@@ -651,12 +626,28 @@ unsafe extern "C" fn rsf_core_latencyvk_get_status(
             marker_calls: 0,
             result: 0,
         };
-        if unsafe { (platform.status)(lease.context, &mut status) } == OK {
+        let query = if lease.context.is_null() {
+            NOT_READY
+        } else {
+            unsafe { (platform.status)(lease.context, &mut status) }
+        };
+        let (last, refused) = lease.latency_outcome();
+        result.mode = 0;
+        result.low_latency_available = 0;
+        result.sleep_calls = 0;
+        result.marker_calls = 0;
+        if query == OK {
             result.mode = status.mode;
             result.low_latency_available = status.available;
             result.sleep_calls = status.sleep_calls;
-            result.marker_calls += status.marker_calls;
+            result.marker_calls = status.marker_calls;
         }
+        result.refused_calls = refused;
+        result.last_result = if query == OK {
+            last.filter(|result| *result != OK).unwrap_or(status.result)
+        } else {
+            query
+        };
     }
     if result.owner == AMD {
         result.mode = amd.enabled;

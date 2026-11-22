@@ -62,18 +62,9 @@ extern "C" const rsf_nfg_cpu_platform rsf_native_fg_cpu_platform{
     rsf_d3d11_present_receipt,
     rsf_d3d11_present_abort,
     +[]() -> void* { return rsf::latency::create_native_antilag_context(); },
-    rsf_core_nfg_owned_window_thread,
-    rsf_core_nfg_post_ping,
-    rsf_core_nfg_signal_completion,
-    rsf_core_nfg_wait_completion,
-    rsf_core_nfg_input_idle_ms,
-    rsf_core_nfg_tick_millis,
-    rsf_core_nfg_qpc_frequency,
-    rsf_core_nfg_thread_id,
+    nullptr, // Native fixture override.
+    nullptr, // Native fixture override.
     rsf_frame_allows_fg,
-    rsf_core_nfg_duplicate_render_thread,
-    rsf_core_nfg_sample_render_thread,
-    rsf_core_nfg_describe_address,
 };
 
 extern "C" RSF_RUNTIME_API void rsf_native_fg_rendered_source_set(uint32_t enabled) {

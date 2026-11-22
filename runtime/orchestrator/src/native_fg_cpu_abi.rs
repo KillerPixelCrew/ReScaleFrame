@@ -168,41 +168,18 @@ pub struct rsf_nfg_cpu_platform {
     >,
     pub abort: ::core::option::Option<unsafe extern "C" fn(source: u64) -> i32>,
     pub create_antilag: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
-    pub owned_window_thread: ::core::option::Option<unsafe extern "C" fn(window_key: u64) -> u32>,
-    pub post_ping: ::core::option::Option<
-        unsafe extern "C" fn(window: *mut ::core::ffi::c_void, message: u32) -> ::core::ffi::c_int,
-    >,
-    pub signal_completion: ::core::option::Option<unsafe extern "C" fn()>,
-    pub wait_completion: ::core::option::Option<
+    pub fixture_owned_window_thread:
+        ::core::option::Option<unsafe extern "C" fn(window_key: u64) -> u32>,
+    pub fixture_wait_completion: ::core::option::Option<
         unsafe extern "C" fn(timeout_ms: u32, pump_sent_messages: u32) -> ::core::ffi::c_int,
     >,
-    pub input_idle_ms: ::core::option::Option<unsafe extern "C" fn() -> u32>,
-    pub tick_millis: ::core::option::Option<unsafe extern "C" fn() -> u64>,
-    pub qpc_frequency: ::core::option::Option<unsafe extern "C" fn() -> u64>,
-    pub thread_id: ::core::option::Option<unsafe extern "C" fn() -> u32>,
     pub allows_fg: ::core::option::Option<
         unsafe extern "C" fn(arg1: *const rsf_frame_record) -> ::core::ffi::c_int,
-    >,
-    pub duplicate_render_thread:
-        ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
-    pub sample_render_thread: ::core::option::Option<
-        unsafe extern "C" fn(
-            thread: *mut ::core::ffi::c_void,
-            addresses: *mut u64,
-            capacity: usize,
-        ) -> usize,
-    >,
-    pub describe_address: ::core::option::Option<
-        unsafe extern "C" fn(
-            address: u64,
-            output: *mut ::core::ffi::c_char,
-            capacity: usize,
-        ) -> usize,
     >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_nfg_cpu_platform"][::core::mem::size_of::<rsf_nfg_cpu_platform>() - 264usize];
+    ["Size of rsf_nfg_cpu_platform"][::core::mem::size_of::<rsf_nfg_cpu_platform>() - 192usize];
     ["Alignment of rsf_nfg_cpu_platform"][::core::mem::align_of::<rsf_nfg_cpu_platform>() - 8usize];
     ["Offset of field: rsf_nfg_cpu_platform::has_owner"]
         [::core::mem::offset_of!(rsf_nfg_cpu_platform, has_owner) - 0usize];
@@ -246,28 +223,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_nfg_cpu_platform, abort) - 152usize];
     ["Offset of field: rsf_nfg_cpu_platform::create_antilag"]
         [::core::mem::offset_of!(rsf_nfg_cpu_platform, create_antilag) - 160usize];
-    ["Offset of field: rsf_nfg_cpu_platform::owned_window_thread"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, owned_window_thread) - 168usize];
-    ["Offset of field: rsf_nfg_cpu_platform::post_ping"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, post_ping) - 176usize];
-    ["Offset of field: rsf_nfg_cpu_platform::signal_completion"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, signal_completion) - 184usize];
-    ["Offset of field: rsf_nfg_cpu_platform::wait_completion"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, wait_completion) - 192usize];
-    ["Offset of field: rsf_nfg_cpu_platform::input_idle_ms"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, input_idle_ms) - 200usize];
-    ["Offset of field: rsf_nfg_cpu_platform::tick_millis"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, tick_millis) - 208usize];
-    ["Offset of field: rsf_nfg_cpu_platform::qpc_frequency"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, qpc_frequency) - 216usize];
-    ["Offset of field: rsf_nfg_cpu_platform::thread_id"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, thread_id) - 224usize];
+    ["Offset of field: rsf_nfg_cpu_platform::fixture_owned_window_thread"]
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, fixture_owned_window_thread) - 168usize];
+    ["Offset of field: rsf_nfg_cpu_platform::fixture_wait_completion"]
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, fixture_wait_completion) - 176usize];
     ["Offset of field: rsf_nfg_cpu_platform::allows_fg"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, allows_fg) - 232usize];
-    ["Offset of field: rsf_nfg_cpu_platform::duplicate_render_thread"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, duplicate_render_thread) - 240usize];
-    ["Offset of field: rsf_nfg_cpu_platform::sample_render_thread"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, sample_render_thread) - 248usize];
-    ["Offset of field: rsf_nfg_cpu_platform::describe_address"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, describe_address) - 256usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, allows_fg) - 184usize];
 };

@@ -26,7 +26,7 @@ struct AntiLagContext;
 extern "C" {
 AntiLagContext* rsf_core_antilag_create(const AntiLagCallbacks*, void* driver);
 void rsf_core_antilag_destroy(AntiLagContext*);
-void rsf_core_antilag_bind(AntiLagContext*, uint32_t api, void* device, uint32_t vendor);
+uint32_t rsf_core_antilag_bind(AntiLagContext*, uint32_t api, void* device, uint32_t vendor);
 uint32_t rsf_core_antilag_pace(AntiLagContext*, uint64_t id, uint32_t mode, uint32_t limit_us, uint32_t other_owner);
 uint32_t rsf_core_antilag_end_render(AntiLagContext*, uint64_t id, void* chain, uint32_t generated);
 void rsf_core_antilag_state(const AntiLagContext*, AntiLagState*);
@@ -55,8 +55,8 @@ public:
     AntiLag(const AntiLag&) = delete;
     AntiLag& operator=(const AntiLag&) = delete;
     ~AntiLag() { rsf_core_antilag_destroy(context_); }
-    void bind(uint32_t api, void* device, uint32_t vendor) noexcept {
-        rsf_core_antilag_bind(context_, api, device, vendor);
+    bool bind(uint32_t api, void* device, uint32_t vendor) noexcept {
+        return rsf_core_antilag_bind(context_, api, device, vendor) != 0;
     }
     bool pace(uint64_t id, uint32_t mode, uint32_t limit_us, uint32_t other_owner) noexcept {
         return rsf_core_antilag_pace(context_, id, mode, limit_us, other_owner) != 0;

@@ -36,7 +36,7 @@ void cpu(uint64_t frame, uint32_t stage, uint32_t expected = 1) {
 }
 namespace {std::mutex sleep_guard;std::condition_variable sleep_changed;bool block_xell=false,xell_entered=false,release_xell=false;
 bool block_reflex=false,reflex_entered=false,release_reflex=false;
-uint32_t xell_sleeps{},xell_mode{}; std::vector<Marker> xell_markers;}
+int32_t xell_marker_result{}; uint32_t xell_sleeps{},xell_mode{}; std::vector<Marker> xell_markers;}
 extern "C" rsf_backend_result rsf_fgvk_backend(const rsf_fgvk* context,uint32_t* backend) {
     if (!context || !backend) return RSF_BACKEND_ERROR_INVALID_ARGUMENT; *backend=5;return RSF_BACKEND_OK;
 }
@@ -48,6 +48,7 @@ extern "C" rsf_backend_result rsf_fgvk_latency_sleep(rsf_fgvk* context,uint64_t)
     return RSF_BACKEND_OK;
 }
 extern "C" rsf_backend_result rsf_fgvk_latency_marker(rsf_fgvk*,uint64_t frame,uint32_t kind) {
+    if (xell_marker_result) return xell_marker_result;
     xell_markers.push_back({uint32_t(frame),kind});return RSF_BACKEND_OK;
 }
 extern "C" rsf_backend_result rsf_fgvk_latency_get_status(rsf_fgvk*,rsf_fgvk_latency_status* value) {
@@ -264,6 +265,14 @@ int main() {
     rsf_latencyvk_cpu(&duplicate_begin);
     require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_ERROR_NOT_READY,
         "a duplicate legacy CPU begin cannot reopen an already presented keyed source");
+    execution.source_frame_id = 101;
+    xell_marker_result = RSF_BACKEND_ERROR_FEATURE_FAILED;
+    require(rsf_latencyvk_execution(&execution, 0) == RSF_BACKEND_OK, "submission end fact is admitted");
+    require(rsf_latencyvk_get_status(&status) == RSF_BACKEND_OK &&
+        status.owner == RSF_PACING_XELL && status.marker_calls == n &&
+        status.last_result == RSF_BACKEND_ERROR_FEATURE_FAILED && status.refused_calls == 1,
+        "XeLL status reports the selected provider marker refusal");
+    xell_marker_result = RSF_BACKEND_OK;
     require(rsf_latencyvk_presentation(nullptr)==RSF_BACKEND_OK && rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"keyed owner retired");
     require(rsf_latencyvk_initialize(&setup)==RSF_BACKEND_OK,"new keyed session initialized");
     require(rsf_latencyvk_options(1,12345)==RSF_BACKEND_OK,"new session owns pacing");

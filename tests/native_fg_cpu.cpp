@@ -162,7 +162,7 @@ void mock_platform() {
         return RSF_BACKEND_OK;
     };
     platform.abort = +[](uint64_t) { ++abort_calls; return RSF_BACKEND_OK; };
-    platform.wait_completion = +[](uint32_t timeout_ms, uint32_t pump_sent_messages) {
+    platform.fixture_wait_completion = +[](uint32_t timeout_ms, uint32_t pump_sent_messages) {
         if (!pump_sent_messages) {
             {
                 std::lock_guard lock(guard);
@@ -170,30 +170,30 @@ void mock_platform() {
             }
             changed.notify_all();
         }
-        return rsf_native_fg_cpu_platform.wait_completion(timeout_ms, pump_sent_messages);
+        Sleep(timeout_ms);
+        return 1;
     };
-    platform.owned_window_thread = +[](uint64_t key) -> uint32_t {
+    platform.fixture_owned_window_thread = +[](uint64_t key) -> uint32_t {
         return key == primary_window || key == replacement_window ? GetCurrentThreadId() : 0;
     };
 }
 void sample_native_thread() {
-    const auto& native = rsf_native_fg_cpu_platform;
     std::promise<void*> duplicated;
     auto handle = duplicated.get_future();
     std::atomic<bool> done{};
     std::thread renderer([&] {
-        duplicated.set_value(native.duplicate_render_thread());
+        duplicated.set_value(rsf_core_nfg_duplicate_render_thread());
         while (!done.load()) Sleep(1);
     });
     void* thread = handle.get();
     CHECK(thread != nullptr);
     if (thread) {
         uint64_t addresses[9]{};
-        const size_t count = native.sample_render_thread(thread, addresses, 9);
+        const size_t count = rsf_core_nfg_sample_render_thread(thread, addresses, 9);
         CHECK(count > 0 && count <= 9);
         CHECK(addresses[0] != 0);
         char location[384]{};
-        CHECK(native.describe_address(addresses[0], location, sizeof(location)) > 0);
+        CHECK(rsf_core_nfg_describe_address(addresses[0], location, sizeof(location)) > 0);
     }
     done.store(true);
     renderer.join();
@@ -270,6 +270,37 @@ int main() {
     CHECK(pace_calls == 3 && snapshot(4).failed && snapshot(4).generation == admitted_generation);
     CHECK(send(fact(4, RSF_GAME_CPU_FRAME_END)));
 
+    // A real Present without a reported submission cannot fabricate submit timing.
+    CHECK(send(fact(5, RSF_GAME_CPU_FRAME_BEGIN)));
+    CHECK(send(fact(5, RSF_GAME_CPU_INPUT_SAMPLE)));
+    CHECK(send(fact(5, RSF_GAME_CPU_SIMULATION_BEGIN)));
+    CHECK(send(fact(5, RSF_GAME_CPU_SIMULATION_END)));
+    const auto before_missing_submit = markers.size();
+    rsf_core_native_latency_present(5, nullptr, 1, &platform);
+    rsf_core_native_latency_present(5, nullptr, 0, &platform);
+    CHECK(markers.size() == before_missing_submit);
+    CHECK(send(fact(5, RSF_GAME_CPU_FRAME_END)));
+
+    // A failed simulation marker stays in the producer ledger but cannot
+    // authorize any subsequent call into the vendor.
+    const auto original_marker = platform.marker;
+    platform.marker = +[](uint64_t, uint64_t, uint32_t marker, uint32_t) {
+        CHECK(marker == RSF_LATENCY_SIMULATION_START);
+        return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    };
+    CHECK(send(fact(6, RSF_GAME_CPU_FRAME_BEGIN)));
+    CHECK(send(fact(6, RSF_GAME_CPU_INPUT_SAMPLE)));
+    CHECK(send(fact(6, RSF_GAME_CPU_SIMULATION_BEGIN)));
+    CHECK(send(fact(6, RSF_GAME_CPU_SIMULATION_END)));
+    rsf_core_native_latency_render(6, 1, &platform);
+    rsf_core_native_latency_present(6, nullptr, 1, &platform);
+    rsf_core_native_latency_present(6, nullptr, 0, &platform);
+    rsf_native_cpu_frame refused{sizeof(refused)};
+    CHECK(rsf_native_cpu_read(session, 6, &refused) && refused.marker_mask == 1);
+    CHECK(snapshot(6).failed);
+    CHECK(send(fact(6, RSF_GAME_CPU_FRAME_END)));
+    platform.marker = original_marker;
+
     rsf_core_native_latency_end_session(session + 1, &platform);
     CHECK(snapshot(3).failed && rsf_native_latency_has_claim(1));
     rsf_core_native_latency_end_session(session, &platform);
@@ -277,6 +308,7 @@ int main() {
     rsf_native_latency_frame retired{sizeof(retired), 1, 3};
     CHECK(!rsf_core_native_latency_frame_get(&retired));
 
+    const auto paced_before_rendered = pace_calls.load();
     rsf_native_fg_rendered_source_set(1);
     rsf_core_native_fg_reflex_ordering_set(0);
     const auto previous_markers = markers.size();
@@ -310,7 +342,7 @@ int main() {
     rsf_core_native_fg_frame(&pass, 0, &platform);
     CHECK(send(fact(1, RSF_GAME_CPU_FRAME_END)));
     CHECK(!snapshot(1).paced && !snapshot(1).failed && snapshot(1).completed);
-    CHECK(pace_calls == 3 && markers.size() == previous_markers && !rsf_native_latency_has_claim(1));
+    CHECK(pace_calls == paced_before_rendered && markers.size() == previous_markers && !rsf_native_latency_has_claim(1));
     rsf_core_native_latency_end_session(session, &platform);
     return failures.load() != 0;
 }

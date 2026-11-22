@@ -46,31 +46,14 @@ typedef struct rsf_nfg_cpu_platform {
     int32_t (*receipt)(uint64_t generation, uint64_t source, uint32_t kind, uint32_t message);
     int32_t (*abort)(uint64_t source);
     void* (*create_antilag)(void);
-    uint32_t (*owned_window_thread)(uint64_t window_key);
-    int (*post_ping)(void* window, uint32_t message);
-    void (*signal_completion)(void);
-    int (*wait_completion)(uint32_t timeout_ms, uint32_t pump_sent_messages);
-    uint32_t (*input_idle_ms)(void);
-    uint64_t (*tick_millis)(void);
-    uint64_t (*qpc_frequency)(void);
-    uint32_t (*thread_id)(void);
+    uint32_t (*fixture_owned_window_thread)(uint64_t window_key);
+    int (*fixture_wait_completion)(uint32_t timeout_ms, uint32_t pump_sent_messages);
     int (*allows_fg)(const rsf_frame_record*);
-    void* (*duplicate_render_thread)(void); /* Owned thread handle, or null. */
-    size_t (*sample_render_thread)(void* thread, uint64_t* addresses, size_t capacity);
-    size_t (*describe_address)(uint64_t address, char* output, size_t capacity);
 } rsf_nfg_cpu_platform;
 
 extern const rsf_nfg_cpu_platform rsf_native_fg_cpu_platform;
 
-/* Win32 callbacks supplied by the Rust owner in the production table. */
-uint32_t rsf_core_nfg_owned_window_thread(uint64_t);
-int rsf_core_nfg_post_ping(void*, uint32_t);
-void rsf_core_nfg_signal_completion(void);
-int rsf_core_nfg_wait_completion(uint32_t, uint32_t);
-uint32_t rsf_core_nfg_input_idle_ms(void);
-uint64_t rsf_core_nfg_tick_millis(void);
-uint64_t rsf_core_nfg_qpc_frequency(void);
-uint32_t rsf_core_nfg_thread_id(void);
+/* Win32 diagnostics exercised by the native fixture. */
 void* rsf_core_nfg_duplicate_render_thread(void);
 size_t rsf_core_nfg_sample_render_thread(void*, uint64_t*, size_t);
 size_t rsf_core_nfg_describe_address(uint64_t, char*, size_t);

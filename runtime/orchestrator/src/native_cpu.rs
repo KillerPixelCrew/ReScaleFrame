@@ -36,6 +36,39 @@ const SIMULATION_END: u32 = RSF_GAME_CPU_SIMULATION_END;
 const FRAME_END: u32 = RSF_GAME_CPU_FRAME_END;
 const INPUT_EVENT: u32 = RSF_GAME_CPU_INPUT_EVENT;
 const PACING: u32 = RSF_GAME_CPU_PACING;
+pub(crate) const fn stage_bit(stage: u32) -> u32 {
+    1 << stage
+}
+
+const BEGUN: u32 = stage_bit(FRAME_BEGIN);
+const BEGUN_INPUT: u32 = BEGUN | stage_bit(INPUT_SAMPLE);
+const BEGUN_SIMULATION: u32 = BEGUN | stage_bit(SIMULATION_BEGIN);
+const BEGUN_SIM_END: u32 = BEGUN | stage_bit(SIMULATION_END);
+const BEGUN_SIM_INTERVAL: u32 = BEGUN_SIMULATION | stage_bit(SIMULATION_END);
+pub(crate) const THROUGH_SIM_BEGIN: u32 = BEGUN_INPUT | stage_bit(SIMULATION_BEGIN);
+pub(crate) const THROUGH_SIM_END: u32 = THROUGH_SIM_BEGIN | stage_bit(SIMULATION_END);
+
+pub(crate) fn observed_boundary(event: &Event) -> bool {
+    event.flags & (SUBSTITUTE | DERIVED) == 0
+        || !matches!(
+            event.stage,
+            INPUT_SAMPLE | SIMULATION_BEGIN | SIMULATION_END
+        )
+}
+
+pub(crate) fn input_keyed(event: &Event) -> bool {
+    event.event_version == RSF_GAME_CPU_EVENT_VERSION && event.flags & KEYED != 0
+}
+
+pub(crate) fn pacing_boundary(event: &Event) -> bool {
+    event.stage
+        == if input_keyed(event) {
+            INPUT_SAMPLE
+        } else {
+            PACING
+        }
+}
+
 /// Legacy threaded hosts report overlapping simulation/render and EndFrame after
 /// Present. Preserve those dependencies until they migrate; input-keyed facts use
 /// canonical order.
@@ -296,7 +329,7 @@ impl Dispatcher {
                     && frame.source_frame_id == header.source_frame_id
                     && frame.failed == 0
                     && frame.ended == 0
-                    && frame.stage_mask == 3
+                    && frame.stage_mask == BEGUN_INPUT
                     && frame.flags & SUBSTITUTE == 0
                 {
                     derived = Event {
@@ -390,7 +423,8 @@ impl Dispatcher {
                     previous = state.slot(last).record;
                 }
             }
-            if (previous.stage_mask == 15 || (rendered && previous.stage_mask & 9 == 9))
+            if (previous.stage_mask == THROUGH_SIM_END
+                || (rendered && previous.stage_mask & BEGUN_SIM_END == BEGUN_SIM_END))
                 && previous.ended == 0
             {
                 let end = Event {
@@ -417,18 +451,24 @@ impl Dispatcher {
                 .is_some_and(|reservation| reservation.state != RSF_NATIVE_CPU_RESERVATION_BOUND);
             let mut substitute = *event;
             substitute.flags |= SUBSTITUTE;
-            if !refused_binding && current.stage_mask & 1 != 0 && current.stage_mask & 2 == 0 {
+            if !refused_binding
+                && current.stage_mask & stage_bit(FRAME_BEGIN) != 0
+                && current.stage_mask & stage_bit(INPUT_SAMPLE) == 0
+            {
                 substitute.stage = INPUT_SAMPLE;
                 if self.dispatch(&substitute, sink, user) == 0 {
                     return 0;
                 }
             }
-            if !refused_binding && current.stage_mask & 1 != 0 && current.stage_mask & 4 == 0 {
+            if !refused_binding
+                && current.stage_mask & stage_bit(FRAME_BEGIN) != 0
+                && current.stage_mask & stage_bit(SIMULATION_BEGIN) == 0
+            {
                 substitute.stage = SIMULATION_BEGIN;
                 if let Some(reservation) = found
                     && reservation.state == RSF_NATIVE_CPU_RESERVATION_BOUND
                     && reservation.poll_begin_qpc != 0
-                    && current.stage_mask & 2 != 0
+                    && current.stage_mask & stage_bit(INPUT_SAMPLE) != 0
                     && current.flags & SUBSTITUTE == 0
                 {
                     substitute.timestamp_qpc = reservation.bind_qpc;
@@ -504,7 +544,7 @@ impl Dispatcher {
             if event.qpc_frequency != record.qpc_frequency
                 || event.timestamp_qpc < preceding
                 || (event.stage == SIMULATION_BEGIN
-                    && record.stage_mask & 8 != 0
+                    && record.stage_mask & stage_bit(SIMULATION_END) != 0
                     && event.timestamp_qpc > stamps[SIMULATION_END as usize])
             {
                 return Some(0);
@@ -530,6 +570,9 @@ impl Dispatcher {
         {
             let mut guard = self.lock();
             let state = &mut *guard;
+            if state.current_session != event.session_id {
+                return;
+            }
             for pending in &mut state.pending {
                 if pending.message_id == 0 && pending.input_kind == 0 {
                     continue;
@@ -538,8 +581,10 @@ impl Dispatcher {
                     && (pending.message_id == state.ping_message
                         || (pending.input_kind != 0 && pending.flags & UNFRAMED != 0))
                     && pending.qpc_frequency == event.qpc_frequency
-                    && event.timestamp_qpc >= pending.timestamp_qpc
                 {
+                    if pending.timestamp_qpc > event.timestamp_qpc {
+                        continue;
+                    }
                     if event.timestamp_qpc - pending.timestamp_qpc <= event.qpc_frequency / 4 {
                         let mut message = *pending;
                         message.source_frame_id = event.source_frame_id;
@@ -635,7 +680,7 @@ fn record(
     if canonical
         && stage <= FRAME_END
         && stage != FRAME_BEGIN
-        && frame.stage_mask & (1 << stage) != 0
+        && frame.stage_mask & stage_bit(stage) != 0
     {
         totals.duplicates = totals.duplicates.wrapping_add(1);
         return Err(1);
@@ -646,7 +691,7 @@ fn record(
             // Version 1 pacing is selected at INPUT_SAMPLE, not at a guessed frame-open boundary.
             return Err(1);
         }
-        if frame.stage_mask != 1
+        if frame.stage_mask != BEGUN
             || frame.pacing_qpc != 0
             || frame.qpc_frequency != event.qpc_frequency
             || event.timestamp_qpc < frame.timestamps_qpc[0]
@@ -711,19 +756,18 @@ fn record(
         // Idle/loading frames may close before input or simulation; they remain explicit partial
         // CPU records. They cannot be promoted to a complete render or latency frame.
         let partial_end = stage == FRAME_END
-            && (mask == 1 || mask == 3 || (mask == 7 && event.flags & RENDER_SKIPPED != 0));
-        let rendered_end = rendered
-            && ((stage == SIMULATION_END && (mask == 1 || mask == 5))
-                || (stage == FRAME_END && (mask == 9 || mask == 13)));
+            && (mask == BEGUN
+                || mask == BEGUN_INPUT
+                || (mask == THROUGH_SIM_BEGIN && event.flags & RENDER_SKIPPED != 0));
         let reservation = ledger.get(session, source);
         let refused_binding = !rendered
             && canonical
             && reservation.is_some_and(|entry| entry.state != RSF_NATIVE_CPU_RESERVATION_BOUND);
         // Keep actual simulation boundaries when consumption was refused. Missing
         // input remains missing, rather than being inserted after simulation began.
-        let unbound_end = refused_binding
-            && ((stage == SIMULATION_END && (mask == 1 || mask == 5))
-                || (stage == FRAME_END && (mask == 9 || mask == 13)));
+        let incomplete_end = (rendered || refused_binding)
+            && ((stage == SIMULATION_END && matches!(mask, BEGUN | BEGUN_SIMULATION))
+                || (stage == FRAME_END && matches!(mask, BEGUN_SIM_END | BEGUN_SIM_INTERVAL)));
         if !rendered
             && event.flags & DERIVED != 0
             && stage == SIMULATION_BEGIN
@@ -731,13 +775,12 @@ fn record(
         {
             return Err(0);
         }
-        let early_simulation = canonical && stage == SIMULATION_BEGIN && mask == 1;
-        let input_after_begin = canonical && stage == INPUT_SAMPLE && mask == 5;
+        let early_simulation = canonical && stage == SIMULATION_BEGIN && mask == BEGUN;
+        let input_after_begin = canonical && stage == INPUT_SAMPLE && mask == BEGUN_SIMULATION;
         let previous = frame.timestamps_qpc.iter().copied().max().unwrap_or(0);
         if frame.qpc_frequency != event.qpc_frequency
             || event.timestamp_qpc < previous
-            || (!rendered_end
-                && !unbound_end
+            || (!incomplete_end
                 && !partial_end
                 && !early_simulation
                 && !input_after_begin
@@ -758,9 +801,9 @@ fn record(
         frame.timestamps_qpc[stage as usize] = event.timestamp_qpc;
         if event.flags & DERIVED != 0 {
             frame.flags |= DERIVED;
-            slot.derived_stages |= 1 << stage;
+            slot.derived_stages |= stage_bit(stage);
         }
-        frame.stage_mask |= 1 << stage;
+        frame.stage_mask |= stage_bit(stage);
         frame.ended = (stage == FRAME_END) as u32;
         if frame.ended != 0 {
             if event.flags & DERIVED != 0 {
@@ -938,7 +981,7 @@ pub(crate) fn mark_frame(session: Option<u64>, source: u64, marker: u32) -> i32 
         } else {
             SIMULATION_END
         };
-        if frame.timestamps_qpc[stage as usize] == 0 || *derived_stages & (1 << stage) != 0 {
+        if frame.timestamps_qpc[stage as usize] == 0 || *derived_stages & stage_bit(stage) != 0 {
             return -1;
         }
     }

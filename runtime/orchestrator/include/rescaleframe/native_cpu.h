@@ -60,6 +60,7 @@ RSF_RUNTIME_API int rsf_native_latency_status_get(rsf_native_latency_status*);
 RSF_RUNTIME_API int rsf_native_latency_frame_get(rsf_native_latency_frame*);
 /* Runtime graphics paths report their API and execution boundaries. No vendor policy in callers. */
 RSF_RUNTIME_API void rsf_native_latency_graphics(uint32_t api);
+/* Completed CPU events alone cannot authorize a render-submit marker. Report actual submission. */
 RSF_RUNTIME_API void rsf_native_latency_render(uint64_t source, uint32_t begin);
 RSF_RUNTIME_API void rsf_native_latency_present(uint64_t source, void* chain, uint32_t begin);
 /* Diagnostic tool request; registration/message selection remains in the core. */
@@ -76,7 +77,8 @@ RSF_RUNTIME_API void rsf_native_latency_release_claim(uint32_t client);
 RSF_RUNTIME_API int rsf_native_cpu_counters_get(rsf_native_cpu_counters*);
 /* Core endpoints register the SDK-owned Windows ping identifier, never an adapter. */
 RSF_RUNTIME_API void rsf_native_cpu_ping_message(uint32_t message);
-/* SDK marker 0..5: 1 accepted, 0 duplicate, -1 missing/out of order. */
+/* Marker ordering 0..5: 1 accepted, 0 duplicate, -1 missing/out of order.
+   Acceptance records ordering only. The provider tracks successful SDK delivery. */
 RSF_RUNTIME_API int rsf_native_cpu_marker(uint64_t source, uint32_t marker);
 RSF_RUNTIME_API void rsf_native_cpu_paced(uint64_t source, uint64_t began, uint64_t ready);
 /* Copies CPU ownership/ordering only, with no GPU or presentation authorization. A bounded

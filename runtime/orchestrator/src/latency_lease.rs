@@ -14,18 +14,12 @@ struct Claim {
 
 static CLAIM: Mutex<Option<Claim>> = Mutex::new(None);
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_latency_pacing_owner(
-    required: u32,
-    reflex: u32,
-    amd: u32,
-    amd_owner: u32,
-) -> u32 {
+pub(crate) fn pacing_owner(required: u32, reflex: bool, amd: bool, amd_owner: u32) -> u32 {
     if matches!(required, RSF_PACING_REFLEX | RSF_PACING_XELL) {
         required
-    } else if reflex != 0 {
+    } else if reflex {
         RSF_PACING_REFLEX
-    } else if amd != 0 {
+    } else if amd {
         amd_owner
     } else {
         RSF_PACING_NONE
@@ -82,5 +76,29 @@ pub(crate) extern "C" fn rsf_native_latency_release_claim(client: u32) {
     let mut claim = CLAIM.lock().unwrap();
     if claim.as_ref().is_some_and(|claim| claim.client == client) {
         *claim = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pacing_owner;
+    use crate::render_abi::{
+        RSF_PACING_ANTILAG2, RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL,
+    };
+
+    #[test]
+    fn required_provider_wins_before_optional_pacing() {
+        for (required, reflex, amd, expected) in [
+            (RSF_PACING_XELL, true, true, RSF_PACING_XELL),
+            (RSF_PACING_REFLEX, false, true, RSF_PACING_REFLEX),
+            (RSF_PACING_NONE, true, true, RSF_PACING_REFLEX),
+            (RSF_PACING_NONE, false, true, RSF_PACING_ANTILAG2),
+            (RSF_PACING_NONE, false, false, RSF_PACING_NONE),
+        ] {
+            assert_eq!(
+                pacing_owner(required, reflex, amd, RSF_PACING_ANTILAG2),
+                expected
+            );
+        }
     }
 }

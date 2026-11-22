@@ -18,7 +18,7 @@ struct rsf_vk_pcl_calls {
     void (*report)(int32_t);
 };
 struct rsf_vk_streamline_calls {
-    int32_t (*initialize)(const char*, const char*, uint32_t, int32_t*);
+    int32_t (*initialize)(const wchar_t*, const char*, uint32_t, int32_t*);
     int32_t (*shutdown)();
     void* (*module)();
     int32_t (*invoke)(const rsf_slvk_call*, void*, uintptr_t);
@@ -55,8 +55,6 @@ void rsf_core_latencyvk_sdk_result(int32_t, uint32_t marker);
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
 #include "native_vulkan_timing.h"
-#include <windows.h>
-#include <string>
 
 extern "C" {
 int VulkanStorySlInitializeFeatures(const wchar_t*, const char*, uint32_t, uint32_t, uint32_t);
@@ -79,13 +77,8 @@ int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call, void*);
 }
 
 namespace {
-int32_t initialize(const char* directory, const char* project, uint32_t features, int32_t* result) noexcept try {
-    const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, directory, -1, nullptr, 0);
-    if (!count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    std::wstring path(static_cast<size_t>(count), 0);
-    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, directory, -1, path.data(), count))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *result = VulkanStorySlInitializeFeatures(path.c_str(), project, 1,
+int32_t initialize(const wchar_t* directory, const char* project, uint32_t features, int32_t* result) noexcept try {
+    *result = VulkanStorySlInitializeFeatures(directory, project, 1,
         (features & RSF_SLVK_DLSS_FG) != 0, (features & RSF_SLVK_DLSS_SR) != 0);
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }

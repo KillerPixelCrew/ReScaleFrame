@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::{FRAMES, Frame, INVALID, LegacyPresent, NOT_READY};
+use crate::input_receipts::streamline_input;
 
 const TOKEN_SLOTS: usize = 6; // The pinned SDK's retained frame-token ring.
-const PCL_PING: u32 = 8;
-const CONTROLLER_SAMPLE: u32 = 13;
-const CONTROLLER: u32 = 4;
-const INPUT_KINDS: u32 = 7;
 const FEATURE_FAILED: i32 = -9;
 
 #[derive(Clone, Copy)]
@@ -179,22 +176,17 @@ pub(crate) extern "C" fn rsf_core_latencyvk_token_input(
     let Some(mut token) = validated(sdk, session, id) else {
         return NOT_READY;
     };
-    if kind & !INPUT_KINDS != 0 || (message != 0 && message != pcl_message) {
+    let Some(input) = streamline_input(kind, message, pcl_message) else {
+        return INVALID;
+    };
+    if input.foreign_message || input.empty {
         return INVALID;
     }
-    // Keyboard and mouse timing uses real PCL pings, with a separate marker
-    // for controller input. An unrelated window message contributes neither.
-    if kind & CONTROLLER != 0 {
-        let result = emit(sdk, &mut token, CONTROLLER_SAMPLE);
+    if let Some(marker) = input.controller {
+        let result = emit(sdk, &mut token, marker);
         if result != 0 {
             return result;
         }
     }
-    if message != 0 {
-        emit(sdk, &mut token, PCL_PING)
-    } else if kind != 0 {
-        0
-    } else {
-        INVALID
-    }
+    input.ping.map_or(0, |marker| emit(sdk, &mut token, marker))
 }

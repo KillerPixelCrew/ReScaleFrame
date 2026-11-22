@@ -49,6 +49,7 @@ typedef int32_t (*rsf_vk_wsi_call)(void*);
 /* Synchronous native WSI callback lease, also used for acquire/image queries.
    Do not reenter PCL/Reflex from the callback. No user data is retained. */
 RSF_RUNTIME_API int32_t rsf_latencyvk_wsi_call(rsf_vk_wsi_call, void* user);
+/* Under XeLL, pacing and marker counters and the result describe its bound provider. */
 RSF_RUNTIME_API rsf_backend_result rsf_latencyvk_get_status(rsf_latencyvk_status*);
 /* Caller first retires provider work. Dispatch code remains mapped for device
    and instance destruction after this call. */

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Bounded diagnostics over copied CPU frame and provider facts.
 use super::{
-    AntiLag, Facts, Frame, LEDGER, OK, Pass, Platform, Reservation, Source, antilag, lock,
+    AntiLag, Facts, Frame, LEDGER, OK, Pass, Platform, Reservation, Source, antilag, lock, win32,
 };
 use crate::cpu_abi::rsf_native_cpu_counters;
 use crate::native_cpu::counters;
@@ -55,9 +55,9 @@ struct OwnershipTotals {
     previous_native: u32,
 }
 
-pub(super) fn audit(p: &Platform, source: Source) {
+pub(super) fn audit(_p: &Platform, source: Source) {
     let now = now_qpc();
-    let frequency = call!(p, qpc_frequency);
+    let frequency = win32::qpc_frequency();
     let (frame, total) = {
         let mut ledger = lock(&LEDGER);
         let Some(frame) = ledger.exact(source) else {
@@ -124,14 +124,15 @@ struct Timing {
 }
 
 pub(crate) fn report_timing(
-    p: &Platform,
+    _p: &Platform,
     cpu: &Facts,
     owner: &Frame,
     screen: u32,
     wait: u64,
     evaluate: u64,
 ) {
-    if cpu.qpc_frequency == 0
+    if owner.marker_failed
+        || cpu.qpc_frequency == 0
         || owner.ready_qpc == 0
         || owner.submit_begin == 0
         || owner.submit_end < owner.submit_begin
@@ -183,7 +184,7 @@ pub(crate) fn report_timing(
     {
         let avg = |i: usize| timing.sum[i] / timing.frames as f64;
         let peak = timing.peak;
-        let idle = call!(p, input_idle_ms);
+        let idle = win32::input_idle_ms();
         log.say(&format!(
             "FG source timing source={} frames={} screen={screen} windows_input_idle_ms={idle} join_ms={:.2}/{:.2} pacing_operation_ms={:.2}/{:.2} engine_preinput_ms={:.2}/{:.2} input_to_sim_ms={:.2}/{:.2} simulation_ms={:.2}/{:.2} rhi_ms={:.2}/{:.2} sr_ms={:.2}/{:.2} sr_wait_ms={:.2}/{:.2}",
             owner.id, timing.frames, avg(0), peak[0], avg(1), peak[1], avg(2), peak[2], avg(3), peak[3],
@@ -238,6 +239,7 @@ pub(crate) enum Failure {
     RenderInput,
     RenderProvider,
     RenderOwner,
+    PresentWithoutSubmission,
 }
 
 impl Failure {
@@ -255,6 +257,7 @@ impl Failure {
             Self::RenderInput => "render-input",
             Self::RenderProvider => "render-provider",
             Self::RenderOwner => "render-owner",
+            Self::PresentWithoutSubmission => "present-without-submission",
         }
     }
 }
@@ -336,7 +339,7 @@ struct StageBudget {
 }
 
 pub(crate) fn stage(
-    p: &Platform,
+    _p: &Platform,
     generation: u64,
     stage: &str,
     source: u64,
@@ -382,7 +385,7 @@ pub(crate) fn stage(
         }
         budget.lines += 1;
     }
-    let thread = call!(p, thread_id);
+    let thread = win32::thread_id();
     let mut row = format!(
         "FG stage={stage} generation={generation} source={source} native_frame={native} result={result} thread={thread}"
     );

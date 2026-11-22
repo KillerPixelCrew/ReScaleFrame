@@ -201,10 +201,8 @@ unsafe extern "C" fn rsf_core_antilag_bind(
     api: u32,
     device: *mut c_void,
     vendor: u32,
-) {
-    if let Some(context) = unsafe { context.as_ref() } {
-        context.bind(api, device, vendor);
-    }
+) -> u32 {
+    u32::from(unsafe { context.as_ref() }.is_some_and(|context| context.bind(api, device, vendor)))
 }
 
 #[unsafe(no_mangle)]

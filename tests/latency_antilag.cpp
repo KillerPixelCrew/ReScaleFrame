@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "latency_antilag.h"
-#include "latency_policy.h"
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -42,11 +41,6 @@ struct Sleeper : AntiLagDriver {
 };
 }
 int main() {
-    CHECK(pacing_owner(RSF_PACING_XELL,true,true)==RSF_PACING_XELL);
-    CHECK(pacing_owner(RSF_PACING_REFLEX,false,true)==RSF_PACING_REFLEX);
-    CHECK(pacing_owner(RSF_PACING_NONE,true,true)==RSF_PACING_REFLEX);
-    CHECK(pacing_owner(RSF_PACING_NONE,false,true)==RSF_PACING_ANTILAG2);
-    CHECK(pacing_owner(RSF_PACING_NONE,false,false)==RSF_PACING_NONE);
     Driver d; AntiLag owner(d); int device{},chain{};
     owner.bind(12,&device,0x10de); CHECK(!owner.state().available && d.initializes==0);
     owner.bind(11,&device,0x8086); CHECK(!owner.pace(1,1,0,0) && d.updates==0);
@@ -84,6 +78,8 @@ int main() {
         std::unique_lock guard(sdk.lock);
         CHECK(sdk.change.wait_for(guard, std::chrono::seconds(2), [&] { return sdk.sleeping; }));
     }
+    int other_device{};
+    CHECK(!concurrent.bind(12, &other_device, 0x1002));
     CHECK(concurrent.state().updates == 1);
     CHECK(concurrent.end_render(1, &chain, true));
     pacing.join();

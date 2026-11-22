@@ -7,12 +7,12 @@ use crate::fg12_abi::rsf_native_latency_frame as LatencyFrame;
 use crate::input_receipts::{self, Owner};
 use crate::latency_antilag::Context as AntiLag;
 use crate::latency_lease::{
-    rsf_core_latency_pacing_owner, rsf_native_latency_claim, rsf_native_latency_release_claim,
+    pacing_owner, rsf_native_latency_claim, rsf_native_latency_release_claim,
 };
 use crate::native_cpu::{
-    counters, frame_facts, mark_frame, marker_prerequisites, owns_session, record_pacing,
-    rendered_source, reservation, rsf_native_cpu_is_ping_message, rsf_native_cpu_ping_message,
-    rsf_native_cpu_release_session,
+    THROUGH_SIM_BEGIN, THROUGH_SIM_END, counters, frame_facts, mark_frame, marker_prerequisites,
+    observed_boundary, owns_session, pacing_boundary, record_pacing, rendered_source, reservation,
+    rsf_native_cpu_is_ping_message, rsf_native_cpu_ping_message, rsf_native_cpu_release_session,
 };
 use crate::native_fg::{now_qpc, requested};
 use crate::native_fg_cpu_abi::*;
@@ -43,11 +43,6 @@ const D3D_CLAIM: u32 = 1;
 const OK: i32 = 0;
 const NOT_READY: i32 = RSF_NFG_CPU_NOT_READY;
 const INVALID: i32 = RSF_NFG_CPU_INVALID;
-const ACTUAL_INPUT: u32 = (1 << RSF_GAME_CPU_FRAME_BEGIN)
-    | (1 << RSF_GAME_CPU_INPUT_SAMPLE)
-    | (1 << RSF_GAME_CPU_SIMULATION_BEGIN);
-const SIM_INTERVAL: u32 = ACTUAL_INPUT | (1 << RSF_GAME_CPU_SIMULATION_END);
-
 macro_rules! call {
     ($p:expr, $f:ident $(, $a:expr)* $(,)?) => {{
         #[allow(unused_unsafe)]
@@ -61,6 +56,20 @@ mod hitch;
 mod win32;
 use diagnostics::{Diagnostics, audit, failure, report_latency_window};
 pub(crate) use diagnostics::{Failure, report_timing, sr_failure, stage, trace};
+
+fn wait_completion(p: &Platform, timeout: u32, pump: u32) -> i32 {
+    p.fixture_wait_completion.map_or_else(
+        || win32::wait_completion(timeout, pump),
+        |wait| unsafe { wait(timeout, pump) },
+    )
+}
+
+fn owned_window_thread(p: &Platform, key: u64) -> u32 {
+    p.fixture_owned_window_thread.map_or_else(
+        || win32::owned_window_thread(key),
+        |thread| unsafe { thread(key) },
+    )
+}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -96,6 +105,14 @@ impl Source {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Attempt {
+    #[default]
+    Idle,
+    Pending,
+    Done,
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Frame {
     pub(crate) id: u64,
@@ -116,16 +133,9 @@ pub(crate) struct Frame {
     pub(crate) scene_begins: u32,
     pub(crate) scene_ends: u32,
     ended: bool,
-    pacing_started: bool,
-    pacing_finished: bool,
-    render_started: bool,
-    render_starting: bool,
-    submit_ended: bool,
-    submit_ending: bool,
-    present_started: bool,
-    present_starting: bool,
-    present_ended: bool,
-    present_ending: bool,
+    pacing: Attempt,
+    markers: [Attempt; 6],
+    marker_failed: bool,
     audited: bool,
     expected_count: u32,
     sr_calls: u32,
@@ -152,8 +162,16 @@ impl Frame {
         }
     }
 
+    fn marked(self, marker: u32) -> bool {
+        self.markers[marker as usize] == Attempt::Done
+    }
+
+    fn attempted(self, marker: u32) -> bool {
+        self.markers[marker as usize] != Attempt::Idle
+    }
+
     fn pacing_in_flight(self) -> bool {
-        self.pacing_started && !self.pacing_finished
+        self.pacing == Attempt::Pending
     }
 }
 
@@ -202,10 +220,10 @@ impl Ledger {
 
     fn claim_pace(&mut self, source: Source) -> Option<Frame> {
         let frame = self.exact(source)?;
-        if frame.pacing_started || frame.failed {
+        if frame.pacing != Attempt::Idle || frame.failed {
             return None;
         }
-        frame.pacing_started = true;
+        frame.pacing = Attempt::Pending;
         Some(*frame)
     }
 
@@ -284,9 +302,9 @@ pub(crate) fn present_observed(presenting: u64, session: u64) {
     }
 }
 
-pub(crate) fn complete(p: &Platform, source: u64) {
+pub(crate) fn complete(_p: &Platform, source: u64) {
     COMPLETED.fetch_max(source, Ordering::AcqRel);
-    call!(p, signal_completion);
+    win32::signal_completion();
 }
 
 pub(crate) fn progress(p: &Platform, source: u64) -> (bool, bool) {
@@ -320,8 +338,7 @@ fn frame_acquire(p: &Platform, source: Source) -> i32 {
                 && f.id < source.id
                 && f.session == source.session
                 && !f.failed
-                && !f.render_started
-                && !f.render_starting
+                && !f.attempted(RSF_NFG_CPU_SUBMIT_START)
                 && !f.submitted
                 && !f.pacing_in_flight()
                 && f.source().facts().is_some_and(|facts| facts.ended != 0)
@@ -344,12 +361,57 @@ fn frame_acquire(p: &Platform, source: Source) -> i32 {
     result
 }
 
+fn claim_marker(frame: &mut Frame, marker: u32) -> Option<Frame> {
+    let attempt = &mut frame.markers[marker as usize];
+    if frame.failed || frame.marker_failed || *attempt != Attempt::Idle {
+        return None;
+    }
+    *attempt = Attempt::Pending;
+    Some(*frame)
+}
+
+fn settle_marker(source: Source, marker: u32, marked: bool, marker_failed: bool) {
+    if let Some(frame) = lock(&LEDGER).exact(source) {
+        frame.markers[marker as usize] = if marked { Attempt::Done } else { Attempt::Idle };
+        frame.marker_failed |= marker_failed;
+        // Preserve the existing render-stage failure signal to FG admission.
+        frame.failed |= marker_failed && marker >= RSF_NFG_CPU_SUBMIT_START;
+    }
+}
+
+fn deliver_marker(p: &Platform, frame: Frame, marker: u32) -> (i32, bool) {
+    let (result, marked) = frame_marker(p, frame, marker);
+    settle_marker(frame.source(), marker, marked, result != OK);
+    (result, marked)
+}
+
+fn simulation_marker(p: &Platform, source: Source, marker: u32, label: &str) {
+    let frame = lock(&LEDGER)
+        .exact(source)
+        .and_then(|frame| claim_marker(frame, marker));
+    if let Some(frame) = frame {
+        trace(label, source.id, deliver_marker(p, frame, marker).0);
+    }
+}
+
 fn frame_marker(p: &Platform, frame: Frame, marker: u32) -> (i32, bool) {
     if rendered_source() {
         return (OK, true);
     }
     let generation = frame.provider_generation;
     if frame.failed || frame.pacing_in_flight() || generation != call!(p, generation) {
+        return (NOT_READY, false);
+    }
+    let Some(facts) = frame.source().facts() else {
+        return (NOT_READY, false);
+    };
+    let required = marker_prerequisites(facts.flags, marker);
+    if frame
+        .markers
+        .iter()
+        .enumerate()
+        .any(|(index, attempt)| required & (1 << index) != 0 && *attempt != Attempt::Done)
+    {
         return (NOT_READY, false);
     }
     match mark_frame(Some(frame.session), frame.id, marker) {
@@ -377,9 +439,9 @@ fn join_previous_present(p: &Platform, previous: u64) -> u64 {
         }
     }
     let started = now_qpc();
-    let deadline = call!(p, tick_millis) + 20;
+    let deadline = win32::tick_millis() + 20;
     while COMPLETED.load(Ordering::Acquire) < previous {
-        let now = call!(p, tick_millis);
+        let now = win32::tick_millis();
         if now >= deadline {
             JOIN_SKIP.store(120, Ordering::Relaxed);
             trace(
@@ -389,7 +451,7 @@ fn join_previous_present(p: &Platform, previous: u64) -> u64 {
             );
             break;
         }
-        if call!(p, wait_completion, (deadline - now) as u32, 1) == 0 {
+        if wait_completion(p, (deadline - now) as u32, 1) == 0 {
             return 0;
         }
     }
@@ -472,10 +534,10 @@ fn select_pacer(p: &Platform, id: u64, mode: u32, limit: u32) -> Selection {
         }
         antilag(p).filter(|anti| anti.bind(api, device, pacer.vendor))
     };
-    let chosen = rsf_core_latency_pacing_owner(
+    let chosen = pacing_owner(
         state.pacing_owner,
-        u32::from(reflex_available),
-        u32::from(anti.is_some_and(|anti| anti.state().available != 0)),
+        reflex_available,
+        anti.is_some_and(|anti| anti.state().available != 0),
         RSF_PACING_ANTILAG2,
     );
     let denied = chosen != RSF_PACING_NONE && rsf_native_latency_claim(D3D_CLAIM) == 0;
@@ -584,7 +646,7 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
                 _ => {
                     // Cancellation is recorded by the dispatcher independently
                     // of this callback. The callback owns this token until it returns.
-                    if call!(p, wait_completion, 1, 0) == 0 {
+                    if wait_completion(p, 1, 0) == 0 {
                         std::thread::sleep(std::time::Duration::from_millis(1));
                     }
                 }
@@ -595,7 +657,7 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
             if let Some(frame) = lock(&LEDGER).exact(source) {
                 frame.failed = true;
                 frame.join_ticks = ticks;
-                frame.pacing_finished = true;
+                frame.pacing = Attempt::Done;
             }
             call!(p, abort, source.id);
             trace(
@@ -641,7 +703,7 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
     let finished = now_qpc();
     let mut withdrawn = false;
     if let Some(frame) = lock(&LEDGER).exact(source) {
-        frame.pacing_finished = true;
+        frame.pacing = Attempt::Done;
         withdrawn = frame.failed;
         frame.paced = !withdrawn && result == OK && (prospective.is_none() || actual_pacer);
         frame.failed |= result != OK;
@@ -706,8 +768,7 @@ fn withdraw_reserved(p: &Platform, session: u64) {
             })
         {
             frame.failed = true;
-            if !frame.render_started
-                && !frame.render_starting
+            if !frame.attempted(RSF_NFG_CPU_SUBMIT_START)
                 && !frame.submitted
                 && !frame.pacing_in_flight()
             {
@@ -735,7 +796,7 @@ fn reserve(p: &Platform, source: Source) {
             || frame.pacing_in_flight()
             || (frame.id != 0
                 && !frame.ended
-                && !(frame.failed && !frame.render_started && !frame.submitted))
+                && !(frame.failed && !frame.marked(RSF_NFG_CPU_SUBMIT_START) && !frame.submitted))
         {
             return;
         }
@@ -826,7 +887,7 @@ fn end(p: &Platform, event: &Event, source: Source) {
     let required = if rendered_source() {
         (1 << RSF_GAME_CPU_FRAME_BEGIN) | (1 << RSF_GAME_CPU_SIMULATION_END)
     } else {
-        SIM_INTERVAL
+        THROUGH_SIM_END
     };
     let aborted = {
         let mut ledger = lock(&LEDGER);
@@ -866,7 +927,7 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
         let thread = if binding.key == 0 {
             0
         } else {
-            call!(p, owned_window_thread, binding.key)
+            owned_window_thread(p, binding.key)
         };
         let target = binding.session == event.session_id
             && thread != 0
@@ -874,17 +935,18 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
             && if receipt.window_key != 0 {
                 receipt.window_key == binding.key
             } else {
-                call!(p, thread_id) == binding.thread
+                win32::thread_id() == binding.thread
             };
         let mut candidates = [Owner::default(); CAPACITY];
         if target {
             for (candidate, frame) in candidates.iter_mut().zip(&ledger.frames) {
                 if frame.id == 0
                     || frame.session != event.session_id
-                    || !frame.pacing_finished
+                    || frame.pacing != Attempt::Done
                     || frame.failed
+                    || frame.marker_failed
                     || frame.ended
-                    || frame.render_started
+                    || frame.attempted(RSF_NFG_CPU_SUBMIT_START)
                     || frame.submitted
                 {
                     continue;
@@ -892,7 +954,7 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
                 let Some(facts) = frame.source().facts().filter(|f| {
                     f.failed == 0
                         && f.ended == 0
-                        && f.stage_mask == ACTUAL_INPUT
+                        && f.stage_mask == THROUGH_SIM_BEGIN
                         && f.flags & (RSF_GAME_CPU_INPUT_SUBSTITUTE | RSF_GAME_CPU_DERIVED_BOUNDARY)
                             == 0
                 }) else {
@@ -960,13 +1022,7 @@ unsafe extern "C" fn rsf_core_native_fg_cpu(event: *const Event, p: &Platform) {
         return;
     }
     let stage = event_ref.stage;
-    if (event_ref.flags & (RSF_GAME_CPU_INPUT_SUBSTITUTE | RSF_GAME_CPU_DERIVED_BOUNDARY) != 0
-        && matches!(
-            stage,
-            RSF_GAME_CPU_INPUT_SAMPLE | RSF_GAME_CPU_SIMULATION_BEGIN | RSF_GAME_CPU_SIMULATION_END
-        ))
-        || call!(p, has_owner) == 0
-    {
+    if !observed_boundary(event_ref) || call!(p, has_owner) == 0 {
         return;
     }
     let source = Source::from_event(event_ref);
@@ -1017,29 +1073,21 @@ fn dispatch_boundary(p: &Platform, event: &Event, source: Source) {
     } else {
         None
     };
-    let input_keyed = event.event_version == RSF_GAME_CPU_EVENT_VERSION
-        && event.flags & RSF_GAME_CPU_INPUT_KEYED != 0;
+    // A reservation already ran the pacer before its actual poll.
+    if pacing_boundary(event) && (bound.is_none() || event.stage == RSF_GAME_CPU_PACING) {
+        pace_frame(p, source, None);
+        return;
+    }
     match event.stage {
-        RSF_GAME_CPU_PACING if !input_keyed => pace_frame(p, source, None),
-        // Input sample is the legacy keyed pacing boundary. A reservation
-        // already ran the pacer before its actual poll.
-        RSF_GAME_CPU_INPUT_SAMPLE if bound.is_none() && input_keyed => pace_frame(p, source, None),
         RSF_GAME_CPU_SIMULATION_BEGIN if bound.is_none_or(|r| r.poll_begin_qpc != 0) => {
-            trace(
-                "actual simulation begin",
-                source.id,
-                frame_marker(p, frame, RSF_NFG_CPU_SIM_START).0,
-            );
+            simulation_marker(p, source, RSF_NFG_CPU_SIM_START, "actual simulation begin");
         }
         RSF_GAME_CPU_SIMULATION_END => {
-            trace(
-                "simulation end",
-                source.id,
-                frame_marker(p, frame, RSF_NFG_CPU_SIM_END).0,
-            );
+            simulation_marker(p, source, RSF_NFG_CPU_SIM_END, "simulation end");
         }
         RSF_GAME_CPU_INPUT_EVENT
-            if frame.provider_generation == generation
+            if !frame.marker_failed
+                && frame.provider_generation == generation
                 && (!frame.prospective
                     || event.flags
                         & (RSF_GAME_CPU_INPUT_UNFRAMED | RSF_GAME_CPU_WINDOW_MESSAGE)
@@ -1068,25 +1116,19 @@ fn start_render_marker(p: &Platform, id: u64) {
             failure(Failure::RenderOwner, source, NOT_READY, 1, 0, None, None);
             return;
         }
-        if frame.render_started || frame.render_starting {
+        let Some(frame) = claim_marker(frame, RSF_NFG_CPU_SUBMIT_START) else {
             return;
-        }
-        if rendered_source() {
-            frame.render_started = true;
-            return;
-        }
-        frame.render_starting = true;
-        *frame
+        };
+        frame
     };
     let source = frame.source();
-    // A pending attempt cannot authorize an end or Present marker.
     let finish = |accepted, failed| {
-        if let Some(frame) = lock(&LEDGER).exact(source) {
-            frame.render_starting = false;
-            frame.render_started = accepted;
-            frame.failed |= failed;
-        }
+        settle_marker(source, RSF_NFG_CPU_SUBMIT_START, accepted, failed);
     };
+    if rendered_source() {
+        finish(true, false);
+        return;
+    }
     let facts = source.facts();
     let Some(f) = facts.filter(|f| f.failed == 0) else {
         finish(false, false);
@@ -1115,7 +1157,7 @@ fn start_render_marker(p: &Platform, id: u64) {
             && frame.first_view != 0
             && frame.provider_generation == generation;
         let substitute = f.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE != 0;
-        let missing = f.stage_mask & ACTUAL_INPUT != ACTUAL_INPUT;
+        let missing = f.stage_mask & THROUGH_SIM_BEGIN != THROUGH_SIM_BEGIN;
         if !bound || !post_update || substitute || missing {
             finish(false, true);
             let detail = u32::from(!bound)
@@ -1135,8 +1177,9 @@ fn start_render_marker(p: &Platform, id: u64) {
         }
     }
     // Only the real simulation interval authorizes vendor submission timing.
-    if f.stage_mask & SIM_INTERVAL != SIM_INTERVAL
-        || f.marker_mask & 3 != 3
+    if f.stage_mask & THROUGH_SIM_END != THROUGH_SIM_END
+        || !frame.marked(RSF_NFG_CPU_SIM_START)
+        || !frame.marked(RSF_NFG_CPU_SIM_END)
         || f.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE != 0
     {
         finish(false, false);
@@ -1151,8 +1194,7 @@ fn start_render_marker(p: &Platform, id: u64) {
         );
         return;
     }
-    let (result, marked) = frame_marker(p, frame, RSF_NFG_CPU_SUBMIT_START);
-    finish(marked, result != OK);
+    let (result, marked) = deliver_marker(p, frame, RSF_NFG_CPU_SUBMIT_START);
     trace("actual graphics submit begin", id, result);
     if !marked || result != OK {
         failure(
@@ -1173,11 +1215,13 @@ fn end_render_marker(p: &Platform, id: u64, stage: &str) {
         let Some(frame) = ledger.frame(id) else {
             return;
         };
-        if frame.failed || !frame.render_started || frame.submit_ended || frame.submit_ending {
+        if !frame.marked(RSF_NFG_CPU_SUBMIT_START) {
             return;
         }
-        frame.submit_ending = true;
-        *frame
+        let Some(frame) = claim_marker(frame, RSF_NFG_CPU_SUBMIT_END) else {
+            return;
+        };
+        frame
     };
     if !rendered_source()
         && !frame.source().facts().is_some_and(|f| {
@@ -1185,17 +1229,10 @@ fn end_render_marker(p: &Platform, id: u64, stage: &str) {
             f.failed == 0 && f.marker_mask & required == required
         })
     {
-        if let Some(frame) = lock(&LEDGER).exact(frame.source()) {
-            frame.submit_ending = false;
-        }
+        settle_marker(frame.source(), RSF_NFG_CPU_SUBMIT_END, false, false);
         return;
     }
-    let (result, marked) = frame_marker(p, frame, RSF_NFG_CPU_SUBMIT_END);
-    if let Some(frame) = lock(&LEDGER).exact(frame.source()) {
-        frame.submit_ending = false;
-        frame.submit_ended = marked;
-        frame.failed |= result != OK;
-    }
+    let (result, _) = deliver_marker(p, frame, RSF_NFG_CPU_SUBMIT_END);
     trace(stage, id, result);
 }
 
@@ -1204,7 +1241,6 @@ pub(crate) fn latency_present(p: &Platform, id: u64, chain: Handle, begin: bool)
         return;
     }
     if begin {
-        start_render_marker(p, id);
         let threaded = THREADED.load(Ordering::Relaxed);
         if !threaded {
             end_render_marker(p, id, "render submission end before present");
@@ -1214,56 +1250,59 @@ pub(crate) fn latency_present(p: &Platform, id: u64, chain: Handle, begin: bool)
             let Some(frame) = ledger.frame(id) else {
                 return;
             };
-            if frame.failed
-                || !frame.render_started
-                || frame.present_started
-                || frame.present_starting
-            {
+            if !frame.marked(RSF_NFG_CPU_SUBMIT_START) {
+                let frame = *frame;
+                drop(ledger);
+                if !frame.submitted
+                    && !frame.attempted(RSF_NFG_CPU_SUBMIT_START)
+                    && !frame.failed
+                    && !frame.marker_failed
+                    && !rendered_source()
+                {
+                    failure(
+                        Failure::PresentWithoutSubmission,
+                        frame.source(),
+                        NOT_READY,
+                        0,
+                        frame.provider_generation,
+                        frame.source().facts().as_ref(),
+                        None,
+                    );
+                }
                 return;
             }
-            frame.present_starting = true;
-            *frame
+            let Some(frame) = claim_marker(frame, RSF_NFG_CPU_PRESENT_START) else {
+                return;
+            };
+            frame
         };
         let rendered = rendered_source();
         let facts = frame.source().facts();
         let keyed = facts.is_some_and(|f| f.flags & RSF_GAME_CPU_INPUT_KEYED != 0);
-        if ((keyed || !threaded) && !frame.submit_ended)
+        if ((keyed || !threaded) && !frame.marked(RSF_NFG_CPU_SUBMIT_END))
             || (!rendered
                 && !facts.is_some_and(|f| {
                     let required = marker_prerequisites(f.flags, RSF_NFG_CPU_PRESENT_START);
                     f.failed == 0 && f.marker_mask & required == required
                 }))
         {
-            if let Some(frame) = lock(&LEDGER).exact(frame.source()) {
-                frame.present_starting = false;
-            }
+            settle_marker(frame.source(), RSF_NFG_CPU_PRESENT_START, false, false);
             return;
         }
         if !rendered && let Some(anti) = antilag(p) {
             anti.end_render(id, chain, u32::from(fsr(call!(p, backend))));
         }
-        let (result, marked) = frame_marker(p, frame, RSF_NFG_CPU_PRESENT_START);
-        if let Some(frame) = lock(&LEDGER).exact(frame.source()) {
-            frame.present_starting = false;
-            frame.present_started = marked;
-            frame.failed |= result != OK;
-        }
+        let (result, _) = deliver_marker(p, frame, RSF_NFG_CPU_PRESENT_START);
         trace("present begin", id, result);
     } else {
-        let frame = lock(&LEDGER).frame(id).and_then(|f| {
-            if f.failed || !f.present_started || f.present_ended || f.present_ending {
+        let frame = lock(&LEDGER).frame(id).and_then(|frame| {
+            if !frame.marked(RSF_NFG_CPU_PRESENT_START) {
                 return None;
             }
-            f.present_ending = true;
-            Some(*f)
+            claim_marker(frame, RSF_NFG_CPU_PRESENT_END)
         });
         if let Some(frame) = frame {
-            let (result, marked) = frame_marker(p, frame, RSF_NFG_CPU_PRESENT_END);
-            if let Some(frame) = lock(&LEDGER).exact(frame.source()) {
-                frame.present_ending = false;
-                frame.present_ended = marked;
-                frame.failed |= result != OK;
-            }
+            let (result, _) = deliver_marker(p, frame, RSF_NFG_CPU_PRESENT_END);
             trace("present end", id, result);
         }
         complete(p, id);
@@ -1294,7 +1333,7 @@ unsafe extern "C" fn rsf_core_native_fg_frame(pass: *const Pass, begin: u32, p: 
                 pass,
                 call!(p, generation),
                 now_qpc(),
-                call!(p, qpc_frequency),
+                win32::qpc_frequency(),
             );
         } else if let Some(frame) = ledger.exact(source) {
             if begin != 0 {
@@ -1329,7 +1368,7 @@ fn watch(p: &Platform, pass: &Pass, begin: bool) {
     if requested().debug == 0 {
         return;
     }
-    let now = call!(p, tick_millis);
+    let now = win32::tick_millis();
     let (screen, since) = SHOWN.get();
     if screen != pass.screen {
         SHOWN.set((pass.screen, now));
@@ -1339,7 +1378,7 @@ fn watch(p: &Platform, pass: &Pass, begin: bool) {
     record.struct_size = size_of::<rsf_frame_record>() as u32;
     record.screen = screen;
     if now.saturating_sub(since) >= 3000 && call!(p, allows_fg, &record) != 0 {
-        hitch::open(p, Source::from_pass(pass), pass.submission_id, now_qpc());
+        hitch::open(Source::from_pass(pass), pass.submission_id, now_qpc());
     }
 }
 
@@ -1390,8 +1429,7 @@ unsafe extern "C" fn rsf_core_native_fg_submission(pass: *const Pass, begin: u32
                 && frame.id < source.id
                 && frame.ended
                 && !frame.submitted
-                && !frame.render_started
-                && !frame.render_starting
+                && !frame.attempted(RSF_NFG_CPU_SUBMIT_START)
                 && !frame.failed
                 && !frame.pacing_in_flight()
             {
@@ -1462,7 +1500,7 @@ unsafe extern "C" fn rsf_core_native_latency_window_bind(
     if binding.version != 1 {
         return RSF_NFG_CPU_ABI_MISMATCH;
     }
-    let thread = call!(p, owned_window_thread, binding.window_key);
+    let thread = owned_window_thread(p, binding.window_key);
     if thread == 0 {
         return INVALID;
     }
@@ -1507,7 +1545,7 @@ unsafe extern "C" fn rsf_core_native_latency_frame_get(out: *mut LatencyFrame) -
     out.generation = frame.provider_generation;
     out.ready_qpc = frame.ready_qpc;
     out.paced = u32::from(frame.paced);
-    out.failed = u32::from(frame.failed);
+    out.failed = u32::from(frame.failed || frame.marker_failed);
     out.completed = u32::from(COMPLETED.load(Ordering::Acquire) >= frame.id);
     1
 }
@@ -1553,7 +1591,7 @@ extern "C" fn rsf_core_native_latency_ping(window: Handle, p: &Platform) -> i32 
         !window.is_null()
             && host_status(p, call!(p, host)).is_some_and(|sdk| {
                 registered_ping(sdk.pcl_message_id)
-                    && call!(p, post_ping, window, sdk.pcl_message_id) != 0
+                    && win32::post_ping(window, sdk.pcl_message_id) != 0
             }),
     )
 }
@@ -1569,7 +1607,10 @@ extern "C" fn rsf_core_native_latency_retire(session: u64, through: u64, p: &Pla
         call!(p, host_retire, host, through);
     }
     for frame in &mut lock(&LEDGER).frames {
-        if frame.session == session && frame.id != 0 && frame.id <= through && !frame.render_started
+        if frame.session == session
+            && frame.id != 0
+            && frame.id <= through
+            && !frame.marked(RSF_NFG_CPU_SUBMIT_START)
         {
             frame.failed = true;
         }

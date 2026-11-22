@@ -7,6 +7,13 @@ int failures{};
 #define CHECK(x) do { if (!(x)) { std::printf("FAIL %d: %s\n",__LINE__,#x); ++failures; } } while(false)
 std::vector<rsf_game_cpu_event> delivered;
 void sink(void*,const rsf_game_cpu_event* event) { delivered.push_back(*event); }
+void enqueue_after_begin(void* user, const rsf_game_cpu_event* event) {
+    sink(nullptr, event);
+    if (event->stage == RSF_GAME_CPU_FRAME_BEGIN) {
+        const auto* future = static_cast<const rsf_game_cpu_event*>(user);
+        CHECK(rsf_native_cpu_dispatch(future, &sink, nullptr));
+    }
+}
 rsf_game_cpu_event fact(uint64_t source,uint32_t stage,uint64_t stamp) {
     return {sizeof(rsf_game_cpu_event),stage,9,source,stamp,1000,1,0,0,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED};
 }
@@ -91,6 +98,29 @@ int main() {
     CHECK(rsf_native_cpu_release_session(9) && !rsf_native_cpu_read(9,8,&current));
     auto next_session=fact(1,RSF_GAME_CPU_FRAME_BEGIN,2100);next_session.session_id=10;
     CHECK(send(next_session));
+    auto prior_end = next_session;
+    prior_end.stage = RSF_GAME_CPU_FRAME_END;
+    ++prior_end.timestamp_qpc;
+    CHECK(send(prior_end));
+    auto begin = fact(2, RSF_GAME_CPU_FRAME_BEGIN, 2200);
+    begin.session_id = 10;
+    auto future = fact(0, RSF_GAME_CPU_INPUT_EVENT, 2205);
+    future.session_id = begin.session_id;
+    future.flags |= RSF_GAME_CPU_INPUT_UNFRAMED;
+    future.input_kind = RSF_GAME_INPUT_MOUSE;
+    delivered.clear();
+    CHECK(rsf_native_cpu_dispatch(&begin, &enqueue_after_begin, &future));
+    CHECK(delivered.size() == 1);
+    auto end = begin;
+    end.stage = RSF_GAME_CPU_FRAME_END;
+    end.timestamp_qpc = 2206;
+    CHECK(send(end));
+    ++begin.source_frame_id;
+    begin.timestamp_qpc = 2210;
+    delivered.clear();
+    CHECK(send(begin));
+    CHECK(delivered.size() == 2 && delivered[1].source_frame_id == 3 &&
+        delivered[1].timestamp_qpc == future.timestamp_qpc);
     rsf_native_cpu_release();
     std::printf("%d failures\n",failures); return failures ? 1 : 0;
 }

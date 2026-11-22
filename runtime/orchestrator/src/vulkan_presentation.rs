@@ -28,6 +28,8 @@ enum Operation {
 struct Binding {
     context: Context,
     borrowers: usize,
+    last_latency_result: Option<i32>,
+    latency_refusals: u64,
     admission: Admission,
     operation: Option<Operation>,
 }
@@ -40,6 +42,8 @@ impl Binding {
         Self {
             context: ptr::null_mut(),
             borrowers: 0,
+            last_latency_result: None,
+            latency_refusals: 0,
             admission: Admission::Open,
             operation: None,
         }
@@ -61,6 +65,8 @@ impl Binding {
 
     fn clear(&mut self) {
         self.context = ptr::null_mut();
+        self.last_latency_result = None;
+        self.latency_refusals = 0;
         self.admission = Admission::Open;
     }
 
@@ -191,21 +197,67 @@ pub(crate) extern "C" fn rsf_core_fgvk_presentation_unbind() -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_fgvk_presentation_borrow(closing: *mut u32) -> Context {
+fn borrow() -> (Context, bool) {
     let mut state = binding();
     let closed = state.closing();
-    unsafe { closing.write(u32::from(closed)) };
     if closed || state.context.is_null() {
-        return ptr::null_mut();
+        return (ptr::null_mut(), closed);
     }
     state.borrowers += 1;
-    state.context
+    (state.context, false)
+}
+
+fn return_borrow() {
+    binding().borrowers -= 1;
+}
+
+pub(super) struct PresentationLease {
+    pub(super) context: Context,
+    pub(super) closing: bool,
+}
+
+impl PresentationLease {
+    pub(super) fn borrow() -> Self {
+        let (context, closing) = borrow();
+        Self { context, closing }
+    }
+
+    pub(super) fn record_latency_result(&self, result: i32) -> i32 {
+        debug_assert!(!self.context.is_null());
+        let mut state = binding();
+        state.last_latency_result = Some(result);
+        state.latency_refusals += u64::from(result != OK);
+        result
+    }
+
+    pub(super) fn latency_outcome(&self) -> (Option<i32>, u64) {
+        if self.context.is_null() {
+            return (None, 0);
+        }
+        let state = binding();
+        (state.last_latency_result, state.latency_refusals)
+    }
+}
+
+impl Drop for PresentationLease {
+    fn drop(&mut self) {
+        if !self.context.is_null() {
+            return_borrow();
+        }
+    }
+}
+
+// Native fixtures use the same registry to verify cross-language borrow ownership.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fgvk_presentation_borrow(closing: *mut u32) -> Context {
+    let (context, closed) = borrow();
+    unsafe { closing.write(u32::from(closed)) };
+    context
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_fgvk_presentation_return() {
-    binding().borrowers -= 1;
+extern "C" fn rsf_core_fgvk_presentation_return() {
+    return_borrow();
 }
 
 #[unsafe(no_mangle)]

@@ -3,6 +3,31 @@
 //! to receipt IDs and the owner selection the Direct3D pacing owner applies
 //! before routing a receipt to a provider frame.
 
+use rsf_game_sys::{RSF_GAME_INPUT_CONTROLLER, RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE};
+
+pub(crate) const PCL_PING: u32 = 8;
+pub(crate) const CONTROLLER_SAMPLE: u32 = 13;
+
+pub(crate) struct StreamlineInput {
+    pub controller: Option<u32>,
+    pub ping: Option<u32>,
+    pub foreign_message: bool,
+    pub empty: bool,
+}
+
+pub(crate) fn streamline_input(kinds: u32, message: u32, ping: u32) -> Option<StreamlineInput> {
+    const KINDS: u32 = RSF_GAME_INPUT_KEYBOARD | RSF_GAME_INPUT_MOUSE | RSF_GAME_INPUT_CONTROLLER;
+    if kinds & !KINDS != 0 {
+        return None;
+    }
+    Some(StreamlineInput {
+        controller: (kinds & RSF_GAME_INPUT_CONTROLLER != 0).then_some(CONTROLLER_SAMPLE),
+        ping: (message != 0 && message == ping).then_some(PCL_PING),
+        foreign_message: message != 0 && message != ping,
+        empty: kinds == 0 && message == 0,
+    })
+}
+
 /// Receipt IDs accepted within the last 64 of the highest one seen. Bounded
 /// callback reordering is admitted once; a repeat or an older ID is refused.
 /// The owner serializes access.
@@ -82,6 +107,29 @@ pub(crate) fn owner(owners: &[Owner], session: u64, generation: u64, timestamp: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamline_classifies_physical_input_and_registered_ping() {
+        let ping = 0xc123;
+        let input = streamline_input(RSF_GAME_INPUT_CONTROLLER, ping, ping).unwrap();
+        assert_eq!(
+            (input.controller, input.ping),
+            (Some(CONTROLLER_SAMPLE), Some(PCL_PING))
+        );
+        assert!(!input.foreign_message && !input.empty);
+
+        let foreign = streamline_input(RSF_GAME_INPUT_CONTROLLER, ping + 1, ping).unwrap();
+        assert!(foreign.foreign_message);
+        assert_eq!(
+            (foreign.controller, foreign.ping),
+            (Some(CONTROLLER_SAMPLE), None)
+        );
+
+        let empty = streamline_input(0, 0, 0).unwrap();
+        assert!(empty.empty);
+        assert_eq!((empty.controller, empty.ping), (None, None));
+        assert!(streamline_input(8, 0, ping).is_none());
+    }
 
     #[test]
     fn window_refuses_zero_and_repeats() {

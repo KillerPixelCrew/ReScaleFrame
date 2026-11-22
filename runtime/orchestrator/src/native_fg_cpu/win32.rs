@@ -39,15 +39,13 @@ fn completion_event() -> Option<HANDLE> {
         .map(AsRawHandle::as_raw_handle)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_signal_completion() {
+pub(super) fn signal_completion() {
     if let Some(event) = completion_event() {
         unsafe { SetEvent(event) };
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_wait_completion(timeout: u32, sent_messages: u32) -> i32 {
+pub(super) fn wait_completion(timeout: u32, sent_messages: u32) -> i32 {
     let Some(event) = completion_event() else {
         return 0;
     };
@@ -70,8 +68,7 @@ extern "C" fn rsf_core_nfg_wait_completion(timeout: u32, sent_messages: u32) -> 
     i32::from(result != WAIT_FAILED)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_owned_window_thread(key: u64) -> u32 {
+pub(super) fn owned_window_thread(key: u64) -> u32 {
     let mut process = 0;
     let thread = unsafe { GetWindowThreadProcessId(key as usize as *mut c_void, &mut process) };
     if process == unsafe { GetCurrentProcessId() } {
@@ -81,13 +78,11 @@ extern "C" fn rsf_core_nfg_owned_window_thread(key: u64) -> u32 {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_post_ping(window: *mut c_void, message: u32) -> i32 {
+pub(super) fn post_ping(window: *mut c_void, message: u32) -> i32 {
     unsafe { PostMessageW(window, message, 0, 0) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_input_idle_ms() -> u32 {
+pub(super) fn input_idle_ms() -> u32 {
     let mut input = LASTINPUTINFO {
         cbSize: size_of::<LASTINPUTINFO>() as u32,
         dwTime: 0,
@@ -99,25 +94,21 @@ extern "C" fn rsf_core_nfg_input_idle_ms() -> u32 {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_tick_millis() -> u64 {
+pub(super) fn tick_millis() -> u64 {
     unsafe { GetTickCount64() }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_qpc_frequency() -> u64 {
+pub(super) fn qpc_frequency() -> u64 {
     let mut frequency = 0;
     unsafe { QueryPerformanceFrequency(&mut frequency) };
     frequency as u64
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_thread_id() -> u32 {
+pub(super) fn thread_id() -> u32 {
     unsafe { GetCurrentThreadId() }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_duplicate_render_thread() -> HANDLE {
+pub(super) fn duplicate_render_thread() -> HANDLE {
     let mut copy = null_mut();
     let process = unsafe { GetCurrentProcess() };
     let access = THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION;
@@ -185,8 +176,7 @@ unsafe fn sample_suspended(thread: HANDLE, addresses: *mut u64, capacity: usize)
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_nfg_sample_render_thread(
+pub(super) unsafe fn sample_render_thread(
     thread: HANDLE,
     addresses: *mut u64,
     capacity: usize,
@@ -203,12 +193,7 @@ unsafe extern "C" fn rsf_core_nfg_sample_render_thread(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_nfg_describe_address(
-    address: u64,
-    output: *mut c_char,
-    capacity: usize,
-) -> usize {
+pub(super) unsafe fn describe_address(address: u64, output: *mut c_char, capacity: usize) -> usize {
     let address = address as usize;
     let mut region = MEMORY_BASIC_INFORMATION::default();
     let executable =
@@ -237,4 +222,28 @@ unsafe extern "C" fn rsf_core_nfg_describe_address(
         output.add(text.len()).write(0);
     }
     text.len()
+}
+
+// Entry points used by the native Win32 diagnostics fixture.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_nfg_duplicate_render_thread() -> HANDLE {
+    duplicate_render_thread()
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_nfg_sample_render_thread(
+    thread: HANDLE,
+    addresses: *mut u64,
+    capacity: usize,
+) -> usize {
+    unsafe { sample_render_thread(thread, addresses, capacity) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_nfg_describe_address(
+    address: u64,
+    output: *mut c_char,
+    capacity: usize,
+) -> usize {
+    unsafe { describe_address(address, output, capacity) }
 }

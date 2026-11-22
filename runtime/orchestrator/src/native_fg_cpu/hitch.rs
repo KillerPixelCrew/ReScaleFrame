@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-use super::{Platform, Source, lock, now_qpc};
+use super::{Source, lock, now_qpc, win32};
 use crate::native_fg::sink;
 use crate::owned_win32_handle;
-use std::ffi::{c_char, c_void};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -31,18 +30,25 @@ struct RenderThread {
 enum Worker {
     Idle,
     Watching,
-    Finished,
 }
 
 struct Watch {
     thread: Option<RenderThread>,
     worker: Worker,
+    samples: Samples,
 }
 
 static WATCH: Mutex<Watch> = Mutex::new(Watch {
     thread: None,
     worker: Worker::Idle,
+    samples: Samples {
+        source: Source { session: 0, id: 0 },
+        taken: 0,
+        total: 0,
+    },
 });
+
+static CHANGED: Condvar = Condvar::new();
 
 fn close_interval(current: &mut Option<Interval>, source: Source, submission: u64) {
     if current
@@ -55,6 +61,7 @@ fn close_interval(current: &mut Option<Interval>, source: Source, submission: u6
 pub(super) fn close(source: Source, submission: u64) {
     if let Some(thread) = lock(&WATCH).thread.as_mut() {
         close_interval(&mut thread.interval, source, submission);
+        CHANGED.notify_one();
     }
 }
 
@@ -66,24 +73,26 @@ pub(super) fn end_session(session: u64) {
         .is_some_and(|thread| thread.session == session)
     {
         state.thread = None;
+        CHANGED.notify_one();
     }
 }
 
-pub(super) fn open(p: &Platform, source: Source, submission: u64, opened_qpc: u64) {
+pub(super) fn open(source: Source, submission: u64, opened_qpc: u64) {
     let mut state = lock(&WATCH);
-    if state.worker == Worker::Finished || opened_qpc == 0 {
+    if state.samples.total == TOTAL_SAMPLES || opened_qpc == 0 {
         return;
     }
-    let id = call!(p, thread_id);
+    let id = win32::thread_id();
     if state
         .thread
         .as_ref()
         .is_none_or(|thread| thread.id != id || thread.session != source.session)
     {
-        let handle = call!(p, duplicate_render_thread);
+        let handle = win32::duplicate_render_thread();
         // The callback transfers a real duplicated handle to this thread.
         let Some(handle) = (unsafe { owned_win32_handle(handle) }) else {
             state.thread = None;
+            CHANGED.notify_one();
             return;
         };
         state.thread = Some(RenderThread {
@@ -99,13 +108,13 @@ pub(super) fn open(p: &Platform, source: Source, submission: u64, opened_qpc: u6
         submission,
         opened_qpc,
     });
+    CHANGED.notify_one();
     if state.worker == Worker::Idle {
-        let frequency = call!(p, qpc_frequency);
+        let frequency = win32::qpc_frequency();
         if frequency != 0
-            && let (Some(sample), Some(describe)) = (p.sample_render_thread, p.describe_address)
             && thread::Builder::new()
                 .name("RSF render hitch".into())
-                .spawn(move || watch_thread(frequency, sample, describe))
+                .spawn(move || watch_thread(frequency))
                 .is_ok()
         {
             state.worker = Worker::Watching;
@@ -138,29 +147,39 @@ impl Samples {
     }
 }
 
-type Sample = unsafe extern "C" fn(*mut c_void, *mut u64, usize) -> usize;
-type Describe = unsafe extern "C" fn(u64, *mut c_char, usize) -> usize;
-
-fn watch_thread(frequency: u64, sample: Sample, describe: Describe) {
-    let mut counts = Samples::default();
+fn watch_thread(frequency: u64) {
     let mut addresses = [0; 513]; // The instruction pointer followed by up to 512 stack words.
-    while counts.total < TOTAL_SAMPLES {
-        thread::sleep(Duration::from_millis(2));
-        let Some((interval, handle)) = lock(&WATCH)
-            .thread
-            .as_ref()
-            .and_then(|thread| Some((thread.interval?, Arc::clone(&thread.handle))))
-        else {
-            continue;
+    loop {
+        let mut state = lock(&WATCH);
+        let (interval, handle, elapsed_ms) = loop {
+            if state.thread.is_none() || state.samples.total == TOTAL_SAMPLES {
+                state.thread = None;
+                state.worker = Worker::Idle;
+                return;
+            }
+            let target = state
+                .thread
+                .as_ref()
+                .and_then(|thread| Some((thread.interval?, Arc::clone(&thread.handle))));
+            if let Some((interval, handle)) = target {
+                let elapsed_ms = now_qpc().saturating_sub(interval.opened_qpc) as f64 * 1000.0
+                    / frequency as f64;
+                if state.samples.take_if_due(interval.source, elapsed_ms) {
+                    break (interval, handle, elapsed_ms);
+                }
+                if state.samples.taken < SAMPLES_PER_SOURCE {
+                    let due_ms = FIRST_SAMPLE_MS * f64::from(state.samples.taken + 1);
+                    let delay = Duration::from_secs_f64((due_ms - elapsed_ms).max(1.0) / 1000.0);
+                    state = CHANGED.wait_timeout(state, delay).unwrap().0;
+                    continue;
+                }
+            }
+            state = CHANGED.wait(state).unwrap();
         };
-        let elapsed_ms =
-            now_qpc().saturating_sub(interval.opened_qpc) as f64 * 1000.0 / frequency as f64;
-        if !counts.take_if_due(interval.source, elapsed_ms) {
-            continue;
-        }
+        drop(state);
         // The native leaf resumes the thread before returning any copied addresses.
         let count = unsafe {
-            sample(
+            win32::sample_render_thread(
                 handle.as_raw_handle(),
                 addresses.as_mut_ptr(),
                 addresses.len(),
@@ -175,22 +194,18 @@ fn watch_thread(frequency: u64, sample: Sample, describe: Describe) {
                 interval.source.id,
                 elapsed_ms,
                 &addresses[..count.min(addresses.len())],
-                describe,
             );
         }
     }
-    let mut state = lock(&WATCH);
-    state.thread = None;
-    state.worker = Worker::Finished;
 }
 
-fn report(source: u64, elapsed_ms: f64, addresses: &[u64], describe: Describe) {
+fn report(source: u64, elapsed_ms: f64, addresses: &[u64]) {
     let mut message = format!("Render hitch source={source} open {elapsed_ms:.1} ms; executing");
     let mut bytes = [0; 384];
     let mut append = |message: &mut String, address| {
         let remaining = LOG_CAPACITY - message.len() - 1;
         let capacity = remaining.min(bytes.len());
-        let size = unsafe { describe(address, bytes.as_mut_ptr().cast(), capacity) };
+        let size = unsafe { win32::describe_address(address, bytes.as_mut_ptr().cast(), capacity) };
         if size == 0 || size >= capacity {
             return false;
         }
