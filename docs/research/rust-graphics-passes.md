@@ -63,8 +63,8 @@ hardware-first and WARP fallback behavior.
 Streamline setup and teardown, 60 evaluations, colour transport, fidelity timing and raw dump.
 `tools/exposure_probe/src/ngx.rs` owns the optional NGX hooks and forwards all original arguments.
 `tools/exposure_probe/ngx.cpp` builds only with the NGX headers and retains the SDK's C++ virtual
-parameter calls and their diagnostics. `tools/exposure-probe.c` provides the CRT entry point and
-the optional RenderDoc 1.6.0 C API. Capture starts before the sixtieth evaluation. Streamline
+parameter calls. The Rust probe entry supplies the CRT's C `main` symbol. The optional RenderDoc
+1.6.0 API table and its typed calls stay in `tools/exposure_probe/renderdoc.c`. Capture starts before the sixtieth evaluation. Streamline
 shuts down while the original and encoded resources remain alive. The probe is an explicit
 hardware experiment outside CTest.
 
@@ -102,3 +102,26 @@ the optional NGX C++ leaf. Source comparison against `3665aef0` verified all six
 eight C headers, all SRV format match arms and six CTest target declarations. Shader source,
 SDK diagnostics and fixture wiring were reviewed. Linking, test execution, Clippy, and device
 or game verification remain outside this check.
+
+## Exposure probe seams on 19680cf1
+
+The integrated base already includes the earlier probe port in `9f2e8500`. The follow-up
+retires the C launcher and moves RenderDoc library selection, capture sequencing and status
+reporting to Rust. The optional NGX leaf returns borrowed resources and reads and writes SDK
+parameters. Rust owns the override decisions, D3D11 texture description and log fields.
+Oversized NGX environment values are ignored because the Win32 buffer contents are undefined
+when a value does not fit. The exposure log uses Rust's decimal formatting with the existing
+field names and actual values. The previous binding allowlist named two cast macros that
+bindgen omitted. The probe binding header now exposes both as C enum values derived from
+the public DLSS header.
+
+The CMake target remains a standalone native console executable with the CRT startup and the
+same optional SDK header gates. The probe still selects the NVIDIA D3D11 adapter, uses the same
+frozen input and resource setup, and starts capture before evaluation 60. The RenderDoc
+library remains loaded until process exit. The SDK-free build links no-op capability seams.
+
+Source comparison against `19680cf1` confirms byte-identical shader files, unchanged real
+device/input construction and the original evaluation sequence. Rust 1.94.1 package
+formatting, targeted bindgen 0.72.1 reproduction, locked offline Cargo metadata and MSVC
+syntax-only checks for all four native feature combinations passed. Native linking, launch,
+capture and evaluation remain unverified.

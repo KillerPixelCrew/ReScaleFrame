@@ -1,60 +1,45 @@
 // SPDX-License-Identifier: MIT
-// Optional NGX parameter tracing uses the SDK's C++ virtual interface.
+// NGX parameter access through the SDK's C++ virtual interface.
+#include "sdk.h"
 #include <d3d11.h>
-#include <wrl/client.h>
-#include <atomic>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <nvsdk_ngx_params.h>
 
-using Microsoft::WRL::ComPtr;
-extern "C" int32_t rsf_probe_ngx_available() { return 1; }
+static_assert(RSF_PROBE_NGX_HDR == NVSDK_NGX_DLSS_Feature_Flags_IsHDR);
+static_assert(RSF_PROBE_NGX_DEPTH_INVERTED == NVSDK_NGX_DLSS_Feature_Flags_DepthInverted);
+static_assert(RSF_PROBE_NGX_AUTO_EXPOSURE == NVSDK_NGX_DLSS_Feature_Flags_AutoExposure);
 
-extern "C" void rsf_probe_ngx_evaluate_parameters(void* parameters)
+int32_t rsf_probe_ngx_available() { return 1; }
+
+uint32_t rsf_probe_ngx_get_flags(const void* parameters, int32_t* flags)
 {
-    auto* params = static_cast<NVSDK_NGX_Parameter*>(parameters);
-    static std::atomic_bool reported = false;
-    char override_value[64]{};
-    if (GetEnvironmentVariableA("RSF_PROBE_PRE_EXPOSURE", override_value, sizeof(override_value))) {
-        const float value = std::strtof(override_value, nullptr);
-        if (value > 0) params->Set(NVSDK_NGX_Parameter_DLSS_Pre_Exposure, value);
-    }
-    if (GetEnvironmentVariableA("RSF_PROBE_EXPOSURE_SCALE", override_value, sizeof(override_value))) {
-        const float value = std::strtof(override_value, nullptr);
-        if (value > 0) params->Set(NVSDK_NGX_Parameter_DLSS_Exposure_Scale, value);
-    }
-    if (!reported.exchange(true, std::memory_order_relaxed)) {
-        float pre = 0, scale = 0;
-        params->Get(NVSDK_NGX_Parameter_DLSS_Pre_Exposure, &pre);
-        params->Get(NVSDK_NGX_Parameter_DLSS_Exposure_Scale, &scale);
-        std::fprintf(stderr, "NGX_EVALUATE preExposure=%g exposureScale=%g\n", double(pre), double(scale));
-        const char* names[] = {NVSDK_NGX_Parameter_Color, NVSDK_NGX_Parameter_Output};
-        for (const auto* name : names) {
-            ID3D11Resource* resource = nullptr;
-            if (params->Get(name, &resource) == NVSDK_NGX_Result_Success && resource) {
-                ComPtr<ID3D11Texture2D> texture;
-                if (SUCCEEDED(resource->QueryInterface(IID_PPV_ARGS(&texture)))) {
-                    D3D11_TEXTURE2D_DESC description{}; texture->GetDesc(&description);
-                    std::fprintf(stderr, "NGX_RESOURCE %s %ux%u format=%u bind=%x\n", name,
-                                 description.Width, description.Height, unsigned(description.Format), description.BindFlags);
-                }
-            }
-        }
-    }
+    return static_cast<const NVSDK_NGX_Parameter*>(parameters)->Get(
+        NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, flags);
 }
 
-extern "C" void rsf_probe_ngx_create_parameters(const void* parameters)
+void rsf_probe_ngx_set_flags(const void* parameters, int32_t flags)
+{
+    const_cast<NVSDK_NGX_Parameter*>(static_cast<const NVSDK_NGX_Parameter*>(parameters))->Set(
+        NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, flags);
+}
+
+void rsf_probe_ngx_set_exposure(void* parameters, const float* pre, const float* scale)
+{
+    auto* params = static_cast<NVSDK_NGX_Parameter*>(parameters);
+    if (pre) params->Set(NVSDK_NGX_Parameter_DLSS_Pre_Exposure, *pre);
+    if (scale) params->Set(NVSDK_NGX_Parameter_DLSS_Exposure_Scale, *scale);
+}
+
+void rsf_probe_ngx_get_exposure(void* parameters, float* pre, float* scale)
+{
+    auto* params = static_cast<const NVSDK_NGX_Parameter*>(parameters);
+    params->Get(NVSDK_NGX_Parameter_DLSS_Pre_Exposure, pre);
+    params->Get(NVSDK_NGX_Parameter_DLSS_Exposure_Scale, scale);
+}
+
+void* rsf_probe_ngx_get_resource(void* parameters, int32_t output)
 {
     const auto* params = static_cast<const NVSDK_NGX_Parameter*>(parameters);
-    int flags = 0;
-    const auto result = params->Get(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, &flags);
-    char ldr[8]{};
-    if (GetEnvironmentVariableA("RSF_PROBE_LDR", ldr, sizeof(ldr)) && ldr[0] == '1') {
-        flags &= ~int(NVSDK_NGX_DLSS_Feature_Flags_IsHDR);
-        const_cast<NVSDK_NGX_Parameter*>(params)->Set(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, flags);
-    }
-    std::fprintf(stderr, "NGX_CREATE flags_get=%x flags=%x HDR=%u AutoExposure=%u DepthInverted=%u\n",
-                 unsigned(result), unsigned(flags), (unsigned(flags) & 1u) != 0,
-                 (unsigned(flags) & 64u) != 0, (unsigned(flags) & 8u) != 0);
+    ID3D11Resource* resource = nullptr;
+    const char* name = output ? NVSDK_NGX_Parameter_Output : NVSDK_NGX_Parameter_Color;
+    return params->Get(name, &resource) == NVSDK_NGX_Result_Success ? resource : nullptr;
 }

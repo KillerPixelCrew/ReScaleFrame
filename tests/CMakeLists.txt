@@ -746,7 +746,11 @@ set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 
 # Explicit hardware experiment, never run by routine CTest verification.
 rsf_add_rust_static(rsf_exposure_probe_rust rsf_exposure_probe_rust_build rsf-exposure-probe rsf_exposure_probe)
-add_executable(rsf_exposure_probe ../tools/exposure-probe.c)
+# The probe archive supplies the C main symbol. Keep the platform console CRT startup.
+add_executable(rsf_exposure_probe ../tools/exposure_probe/renderdoc.c)
+if(MSVC)
+    target_link_options(rsf_exposure_probe PRIVATE /SUBSYSTEM:CONSOLE)
+endif()
 set_target_properties(rsf_exposure_probe PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
 target_link_libraries(rsf_exposure_probe PRIVATE rsf_exposure_probe_rust ReScaleFrame::DLSS ReScaleFrame::Graphics minhook rsf_build_options)
 if(EXISTS "${RSF_RENDERDOC_INCLUDE}/renderdoc_app.h")

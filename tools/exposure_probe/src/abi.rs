@@ -2,62 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
-pub const RSF_TEXTURE_DUMP_ABI_VERSION: u32 = 2;
 pub const RSF_DLSS_ABI_VERSION: u32 = 5;
-pub type rsf_dump_texture_result = i32;
-pub type rsf_dump_log_fn = ::core::option::Option<
-    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
->;
-pub type rsf_dump_view = u32;
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_texture_dump_options {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub output_prefix_utf8: *const ::core::ffi::c_char,
-    pub view: rsf_dump_view,
-    pub scale: f32,
-    pub log: rsf_dump_log_fn,
-    pub log_user: *mut ::core::ffi::c_void,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_texture_dump_options"]
-        [::core::mem::size_of::<rsf_texture_dump_options>() - 40usize];
-    ["Alignment of rsf_texture_dump_options"]
-        [::core::mem::align_of::<rsf_texture_dump_options>() - 8usize];
-    ["Offset of field: rsf_texture_dump_options::struct_size"]
-        [::core::mem::offset_of!(rsf_texture_dump_options, struct_size) - 0usize];
-    ["Offset of field: rsf_texture_dump_options::abi_version"]
-        [::core::mem::offset_of!(rsf_texture_dump_options, abi_version) - 4usize];
-    ["Offset of field: rsf_texture_dump_options::output_prefix_utf8"]
-        [::core::mem::offset_of!(rsf_texture_dump_options, output_prefix_utf8) - 8usize];
-    ["Offset of field: rsf_texture_dump_options::view"]
-        [::core::mem::offset_of!(rsf_texture_dump_options, view) - 16usize];
-    ["Offset of field: rsf_texture_dump_options::scale"]
-        [::core::mem::offset_of!(rsf_texture_dump_options, scale) - 20usize];
-    ["Offset of field: rsf_texture_dump_options::log"]
-        [::core::mem::offset_of!(rsf_texture_dump_options, log) - 24usize];
-    ["Offset of field: rsf_texture_dump_options::log_user"]
-        [::core::mem::offset_of!(rsf_texture_dump_options, log_user) - 32usize];
-};
-impl Default for rsf_texture_dump_options {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-unsafe extern "C" {
-    pub fn rsf_dump_texture_bytes(
-        device: *mut ::core::ffi::c_void,
-        context: *mut ::core::ffi::c_void,
-        texture: *mut ::core::ffi::c_void,
-        options: *const rsf_texture_dump_options,
-    ) -> rsf_dump_texture_result;
-}
+pub const RSF_TEXTURE_DUMP_ABI_VERSION: u32 = 2;
 pub type rsf_dlss_engine = u32;
 pub type rsf_dlss_result = i32;
 pub type rsf_dlss_log_fn = ::core::option::Option<
@@ -283,3 +229,60 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn rsf_dlss_shutdown() -> rsf_dlss_result;
 }
+pub type rsf_dump_texture_result = i32;
+pub type rsf_dump_log_fn = ::core::option::Option<
+    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
+>;
+pub type rsf_dump_view = u32;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_texture_dump_options {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub output_prefix_utf8: *const ::core::ffi::c_char,
+    pub view: rsf_dump_view,
+    pub scale: f32,
+    pub log: rsf_dump_log_fn,
+    pub log_user: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_texture_dump_options"]
+        [::core::mem::size_of::<rsf_texture_dump_options>() - 40usize];
+    ["Alignment of rsf_texture_dump_options"]
+        [::core::mem::align_of::<rsf_texture_dump_options>() - 8usize];
+    ["Offset of field: rsf_texture_dump_options::struct_size"]
+        [::core::mem::offset_of!(rsf_texture_dump_options, struct_size) - 0usize];
+    ["Offset of field: rsf_texture_dump_options::abi_version"]
+        [::core::mem::offset_of!(rsf_texture_dump_options, abi_version) - 4usize];
+    ["Offset of field: rsf_texture_dump_options::output_prefix_utf8"]
+        [::core::mem::offset_of!(rsf_texture_dump_options, output_prefix_utf8) - 8usize];
+    ["Offset of field: rsf_texture_dump_options::view"]
+        [::core::mem::offset_of!(rsf_texture_dump_options, view) - 16usize];
+    ["Offset of field: rsf_texture_dump_options::scale"]
+        [::core::mem::offset_of!(rsf_texture_dump_options, scale) - 20usize];
+    ["Offset of field: rsf_texture_dump_options::log"]
+        [::core::mem::offset_of!(rsf_texture_dump_options, log) - 24usize];
+    ["Offset of field: rsf_texture_dump_options::log_user"]
+        [::core::mem::offset_of!(rsf_texture_dump_options, log_user) - 32usize];
+};
+impl Default for rsf_texture_dump_options {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+unsafe extern "C" {
+    pub fn rsf_dump_texture_bytes(
+        device: *mut ::core::ffi::c_void,
+        context: *mut ::core::ffi::c_void,
+        texture: *mut ::core::ffi::c_void,
+        options: *const rsf_texture_dump_options,
+    ) -> rsf_dump_texture_result;
+}
+pub const RSF_PROBE_DLSS_ENGINE_UNREAL: _bindgen_ty_1 = 1;
+pub const RSF_PROBE_DLSS_QUALITY_PERFORMANCE: _bindgen_ty_1 = 3;
+pub type _bindgen_ty_1 = ::core::ffi::c_int;

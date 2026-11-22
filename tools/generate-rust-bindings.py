@@ -789,11 +789,12 @@ generate("runtime/orchestrator/src/graphics_pass_abi.rs", "runtime/graphics/incl
          ["-Iruntime/graphics/include", "-include", "rescaleframe/motion_decode.h",
           "-include", "rescaleframe/present_blit.h", "-include", "rescaleframe/depth_replay.h"],
          ["--with-derive-default"])
-generate("tools/exposure_probe/src/abi.rs", "runtime/backends/dlss/include/rescaleframe/dlss.h",
+generate("tools/exposure_probe/src/sdk_abi.rs", "tools/exposure_probe/sdk.h",
+         "NOTHING", "RSF_PROBE_NGX_.*", [], ["--allowlist-function", "rsf_probe_.*"])
+generate("tools/exposure_probe/src/abi.rs", "tools/exposure_probe/dlss_abi.h",
          "rsf_(dlss_(frame|setup)|texture_dump_options)",
-         "RSF_(DLSS_(ABI_VERSION|ENGINE_UNREAL|QUALITY_PERFORMANCE)|TEXTURE_DUMP_ABI_VERSION)",
-         ["-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
-          "-include", "rescaleframe/texture_dump.h"],
+         "RSF_(DLSS_ABI_VERSION|PROBE_DLSS_(ENGINE_UNREAL|QUALITY_PERFORMANCE)|TEXTURE_DUMP_ABI_VERSION)",
+         ["-Iruntime/backends/dlss/include", "-Iruntime/graphics/include"],
          ["--with-derive-default", "--allowlist-function",
           "rsf_(dlss_(load|set_device|evaluate|shutdown)|dump_texture_bytes)"])
 generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr.h",

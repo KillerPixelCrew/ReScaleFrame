@@ -4,9 +4,11 @@
 
 mod abi;
 mod ngx;
+mod renderdoc;
+mod sdk_abi;
 
 use abi::{
-    RSF_DLSS_ABI_VERSION, RSF_DLSS_ENGINE_UNREAL, RSF_DLSS_QUALITY_PERFORMANCE,
+    RSF_DLSS_ABI_VERSION, RSF_PROBE_DLSS_ENGINE_UNREAL, RSF_PROBE_DLSS_QUALITY_PERFORMANCE,
     RSF_TEXTURE_DUMP_ABI_VERSION, rsf_dlss_evaluate, rsf_dlss_frame as Frame, rsf_dlss_load,
     rsf_dlss_set_device, rsf_dlss_setup, rsf_dlss_shutdown, rsf_dump_texture_bytes,
     rsf_texture_dump_options,
@@ -33,9 +35,6 @@ unsafe extern "C" {
     fn strtoul(text: *const c_char, end: *mut *mut c_char, base: i32) -> u32;
     fn strtof(text: *const c_char, end: *mut *mut c_char) -> f32;
 
-    fn rsf_probe_capture_open(prefix: *const c_char) -> i32;
-    fn rsf_probe_capture_start(device: Handle);
-    fn rsf_probe_capture_end(device: Handle) -> i32;
     fn rsf_colour_transport_create(device: Handle, pass: *mut Handle) -> i32;
     fn rsf_colour_transport_encode(
         pass: Handle,
@@ -88,7 +87,7 @@ impl Session {
             struct_size: size_of::<rsf_dlss_setup>() as u32,
             abi_version: RSF_DLSS_ABI_VERSION,
             interposer_path_utf8: interposer,
-            engine: RSF_DLSS_ENGINE_UNREAL,
+            engine: RSF_PROBE_DLSS_ENGINE_UNREAL as u32,
             engine_version_utf8: c"4.18".as_ptr(),
             project_id_utf8: c"a3ed1f08-3542-4698-b85c-e1a9908e861a".as_ptr(),
             log: Some(log_line),
@@ -161,7 +160,7 @@ impl Inputs {
         File::open(input)?.read_exact(&mut pixels)?;
         Ok(Self {
             render,
-            quality: number(5, RSF_DLSS_QUALITY_PERFORMANCE),
+            quality: number(5, RSF_PROBE_DLSS_QUALITY_PERFORMANCE as u32),
             input_format,
             output_format,
             pixel_bytes,
@@ -449,9 +448,7 @@ fn apply_fidelity(
 fn run(args: &[*const c_char]) -> ProbeResult<bool> {
     let inputs = Inputs::parse(args)?;
     let prefix = args[3];
-    if unsafe { rsf_probe_capture_open(prefix) } == 0 {
-        return Err("could not initialize RenderDoc".into());
-    }
+    let capture = renderdoc::Capture::open(prefix)?;
     let (device, context) = native_device()?;
     let dev = device.as_raw();
     let ctx = context.as_raw();
@@ -486,7 +483,9 @@ fn run(args: &[*const c_char]) -> ProbeResult<bool> {
     if ok {
         for i in 0..60 {
             if i == 59 {
-                unsafe { rsf_probe_capture_start(dev) };
+                if let Some(capture) = &capture {
+                    capture.start(dev);
+                }
             }
             frame.reset = u32::from(i == 0);
             frame.frame_index = i + 1;
@@ -498,7 +497,9 @@ fn run(args: &[*const c_char]) -> ProbeResult<bool> {
             }
         }
     }
-    ok &= unsafe { rsf_probe_capture_end(dev) } != 0;
+    if let Some(capture) = &capture {
+        ok &= capture.finish(dev);
+    }
     if !transport.0.is_null() {
         ok &= unsafe {
             rsf_colour_transport_decode(
@@ -528,8 +529,8 @@ fn run(args: &[*const c_char]) -> ProbeResult<bool> {
     Ok(ok)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_exposure_probe(argc: i32, argv: *const *const c_char) -> i32 {
+#[unsafe(export_name = "main")]
+unsafe extern "C" fn probe_main(argc: i32, argv: *const *const c_char) -> i32 {
     if !(5..=10).contains(&argc) || argc == 9 || argv.is_null() {
         println!(
             "usage: exposure-probe interposer input.bin output-prefix exposure (0=auto) [quality: 0=DLAA,1=Quality,3=Performance,4=Ultra] [input DXGI format: 26=R11,10=FP16,2=FP32] [output format:10=FP16,2=FP32] [render width height]"
