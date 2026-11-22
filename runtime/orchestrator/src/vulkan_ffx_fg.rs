@@ -59,32 +59,29 @@ struct Swapchain {
     format: u32,
     color_space: u32,
     layers: u32,
-    structure_valid: u32,
     old_chain: u64,
 }
 
 impl Swapchain {
-    unsafe fn read(info: *const c_void) -> Self {
+    unsafe fn read(info: *const c_void) -> Option<Self> {
         if unsafe { info.cast::<vk::StructureType>().read() }
             != vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR
         {
-            return Self::default();
+            return None;
         }
         let info = unsafe { &*info.cast::<vk::SwapchainCreateInfoKHR<'_>>() };
-        Self {
+        Some(Self {
             width: info.image_extent.width,
             height: info.image_extent.height,
             format: info.image_format.as_raw() as u32,
             color_space: info.image_color_space.as_raw() as u32,
             layers: info.image_array_layers,
-            structure_valid: 1,
             old_chain: info.old_swapchain.as_raw(),
-        }
+        })
     }
 
     fn supported(self) -> bool {
-        self.structure_valid != 0
-            && self.old_chain == 0
+        self.old_chain == 0
             && self.width != 0
             && self.height != 0
             && self.layers == 1
@@ -822,33 +819,14 @@ unsafe extern "C" fn rsf_core_ffxgvk_create_sdk(
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
-    let host = unsafe { host.as_ref() };
-    let description = if host.is_some() && unsafe { has_capacity(setup) } {
-        let setup = unsafe { &*setup };
-        (setup.abi_version == RSF_FGVK_ABI_VERSION
-            && unsafe { has_capacity(&setup.graphics) }
-            && setup.graphics.abi_version == RSF_SRVK_ABI_VERSION
-            && !setup.create_info.is_null())
-        .then(|| unsafe { Swapchain::read(setup.create_info) })
-    } else {
-        None
-    };
-    unsafe {
-        create(
-            host.map(|host| (&sdk::OPS, host)),
-            setup,
-            description,
-            output,
-            chain,
-        )
-    }
+    let leaf = unsafe { host.as_ref() }.map(|host| (&sdk::OPS, host));
+    unsafe { create(leaf, setup, output, chain) }
 }
 
 /// `leaf` is None in the disabled build.
 unsafe fn create(
     leaf: Option<(&'static Ops, &'static Host)>,
     setup: *const Setup,
-    swapchain: Option<Swapchain>,
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
@@ -898,12 +876,11 @@ unsafe fn create(
     let Some((ops, host)) = leaf else {
         return NOT_COMPILED;
     };
-    let Some(swapchain) = swapchain else {
-        return INVALID_ARGUMENT;
-    };
-    if !swapchain.supported() {
+    let Some(swapchain) =
+        unsafe { Swapchain::read(setup.create_info) }.filter(|swapchain| swapchain.supported())
+    else {
         return NOT_SUPPORTED;
-    }
+    };
     let owner = allocate_handle(Owner::new(ops, host, setup, swapchain));
     if owner.is_null() {
         return INIT_FAILED;
@@ -1429,7 +1406,6 @@ mod tests {
         format: BGRA8,
         color_space: SRGB_NONLINEAR,
         layers: 1,
-        structure_valid: 1,
         old_chain: 0,
     };
 
@@ -1455,16 +1431,22 @@ mod tests {
     }
 
     fn create(setup: &Setup, swapchain: &Swapchain) -> (i32, *mut Owner, u64) {
-        let (mut owner, mut chain) = (ptr::null_mut(), 0);
-        let result = unsafe {
-            super::create(
-                Some((&OPS, &HOST)),
-                setup,
-                Some(*swapchain),
-                &mut owner,
-                &mut chain,
-            )
+        let info = vk::SwapchainCreateInfoKHR {
+            image_extent: vk::Extent2D {
+                width: swapchain.width,
+                height: swapchain.height,
+            },
+            image_format: vk::Format::from_raw(swapchain.format as i32),
+            image_color_space: vk::ColorSpaceKHR::from_raw(swapchain.color_space as i32),
+            image_array_layers: swapchain.layers,
+            old_swapchain: vk::SwapchainKHR::from_raw(swapchain.old_chain),
+            ..Default::default()
         };
+        let mut setup = *setup;
+        setup.create_info = ptr::from_ref(&info).cast();
+        let (mut owner, mut chain) = (ptr::null_mut(), 0);
+        let result =
+            unsafe { super::create(Some((&OPS, &HOST)), &setup, &mut owner, &mut chain) };
         (result, owner, chain)
     }
 
