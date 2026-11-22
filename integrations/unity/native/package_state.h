@@ -16,10 +16,12 @@
    generation install and the window pass's provider request, and the session services
    (package_state/services.rs): the host services and bridge API of each session, the log file,
    the input window's registration and retirement, and the routing of CPU events, window messages
-   and rsfu_input into the Runtime. package.cpp keeps the Unity, DXGI, Vulkan and preview work,
-   the render callback's routing and the window guard, and lends the typed Unity, Win32, SDK and
-   Runtime calls through rsf_unity_package_platform. package.cpp's mutex still serializes the
-   exports and the SR pass; nothing here takes it. Rust never holds its state lock while it calls
+   and rsfu_input into the Runtime, and the routing (package_state/routing.rs): the render
+   callback's window, final-scene, SR and submitted passes with the Editor preview's admission and
+   diagnostic budget, the generation window guard and Unity's device lifecycle. package.cpp keeps
+   the Unity, DXGI, Vulkan and preview work and lends the typed Unity, Win32, SDK and Runtime
+   calls through rsf_unity_package_platform. package.cpp's mutex still serializes the exports,
+   Unity device events and the SR pass; nothing here takes it. Rust never holds its state lock while it calls
    a leaf; its view lock is held across the SR leaves and its presentation lock across the install
    leaf, none of which re-enter, and both are always taken before the state lock. Its log lock is
    held across the log leaves only and its input-window lock across the window leaves only; the
@@ -84,8 +86,8 @@ typedef struct rsf_unity_package_view_setup {
 } rsf_unity_package_view_setup;
 
 /* package.cpp's typed leaves, all present. No leaf calls back into a rsf_unity_package_* entry
-   except the log, render and Runtime leaves, which may reach rsf_unity_package_log; none may
-   throw. The table is package.cpp's constant: a session's host services carry its address as
+   except the log, render, bridge and Runtime leaves, which may reach rsf_unity_package_log; none
+   may throw. The table is package.cpp's constant: a session's host services carry its address as
    their user pointer. */
 typedef struct rsf_unity_package_platform {
     /* rsf::sharpening_settings::valid and rsf_dlss_preset_valid are header-inline C/C++. */
@@ -168,6 +170,30 @@ typedef struct rsf_unity_package_platform {
     void (*timestamp)(uint64_t* counter, uint64_t* frequency);
     /* rsf_fg12_cpu. */
     void (*cpu)(const rsf_game_cpu_event* event);
+    /* The render callback's routing (package_state/routing.rs). fg_submitted, fg_window and
+       fg_hudless are rsf_fg12_submitted, rsf_fg12_window and rsf_fg12_hudless. preview_present is
+       rsf_unity_preview_present; texture_desc reads ID3D12Resource::GetDesc's width, height and
+       format. preview_prepare reads Unity's D3D12 device and queue and prepares the Editor
+       preview for the extents; zero when either refuses. */
+    void (*fg_submitted)(uint64_t session, uint64_t source_frame);
+    void (*fg_window)(const rsf_game_render_pass* pass);
+    void (*fg_hudless)(void* commands, const rsf_game_render_pass* pass);
+    uint32_t (*preview_present)(void* resource, const rsf_game_render_pass* pass, uint32_t common);
+    void (*texture_desc)(void* resource, uint64_t* width, uint32_t* height, uint32_t* format);
+    uint32_t (*preview_prepare)(uint32_t width, uint32_t height);
+    /* The window guard's facts. preview_owns is rsf_unity_preview_owns, renderer_vulkan whether
+       Unity's renderer is Vulkan, vulkan_owns rsf_uvk_owns_window. window_class is 0 for another
+       process's window or an unreadable class, 1 for this process's UnityWndClass and 2 for
+       another class in this process; the class is read only for this process's windows. */
+    uint32_t (*preview_owns)(void* window);
+    uint32_t (*renderer_vulkan)(void);
+    uint32_t (*vulkan_owns)(void* window);
+    uint32_t (*window_class)(void* window);
+    /* Unity's device lifecycle, under package.cpp's mutex. bridge_load loads the renderer bridge
+       with Unity's interfaces; zero, loading nothing, before UnityPluginLoad stored them.
+       bridge_unload is rsf_unity_package_bridge_unload. */
+    uint32_t (*bridge_load)(void);
+    void (*bridge_unload)(void);
 } rsf_unity_package_platform;
 
 #ifdef __cplusplus
@@ -242,6 +268,29 @@ void* rsf_unity_package_window_message(uint32_t message, intptr_t lparam,
 int rsf_unity_package_input(uint64_t frame, uint32_t kinds, const rsf_unity_package_platform* platform);
 void rsf_unity_package_preview_input(const rsf_unity_package_platform* platform);
 void rsf_unity_package_unload(const rsf_unity_package_platform* platform);
+
+/* Routing (package_state/routing.rs). route is the host render callback's body, outside
+   package.cpp's mutex: a null list or pass does nothing; an end reports a non-window pass
+   submitted; the window pass requests the generation provider, then presents the Editor preview
+   (logging the first four refusals of the process with a texture) or hands the pass to
+   generation; the final scene goes to generation as the HUD-less image; any other pass prepares
+   the Editor preview and returns non-zero when the SR pass (rsf_unity_package_render) should run
+   on the original pass under the mutex. accept_window is the generation window guard: in the
+   Editor only the preview's window, under Vulkan only the player's surface, otherwise this
+   process's UnityWndClass window or the Vulkan surface. */
+uint32_t rsf_unity_package_route(void* commands, const rsf_game_render_pass* pass, uint32_t begin,
+    const rsf_unity_package_platform* platform);
+int rsf_unity_package_accept_window(void* hwnd, const rsf_unity_package_platform* platform);
+/* Unity's device lifecycle, under package.cpp's mutex. device_event handles an initialize
+   (non-zero) or shutdown event: a waiting device loads the bridge once Unity's interfaces exist;
+   a ready one retires the session and unloads the bridge, or is retained for the process when
+   retirement refuses. device_retained refuses a later plugin load. shutdown is rsfu_shutdown's
+   body after the preview is hidden: 1 for a waiting device, 0 for a retained one, else the
+   retirement's verdict. rsf_unity_package_initialize returns 0 for a retained device and 2 for a
+   waiting one before it opens a session. */
+void rsf_unity_package_device_event(uint32_t initialize, const rsf_unity_package_platform* platform);
+uint32_t rsf_unity_package_device_retained(void);
+uint32_t rsf_unity_package_shutdown(const rsf_unity_package_platform* platform);
 #ifdef __cplusplus
 }
 #endif

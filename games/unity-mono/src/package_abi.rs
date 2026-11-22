@@ -685,11 +685,42 @@ pub struct rsf_unity_package_platform {
     pub timestamp:
         ::core::option::Option<unsafe extern "C" fn(counter: *mut u64, frequency: *mut u64)>,
     pub cpu: ::core::option::Option<unsafe extern "C" fn(event: *const rsf_game_cpu_event)>,
+    pub fg_submitted: ::core::option::Option<unsafe extern "C" fn(session: u64, source_frame: u64)>,
+    pub fg_window: ::core::option::Option<unsafe extern "C" fn(pass: *const rsf_game_render_pass)>,
+    pub fg_hudless: ::core::option::Option<
+        unsafe extern "C" fn(commands: *mut ::core::ffi::c_void, pass: *const rsf_game_render_pass),
+    >,
+    pub preview_present: ::core::option::Option<
+        unsafe extern "C" fn(
+            resource: *mut ::core::ffi::c_void,
+            pass: *const rsf_game_render_pass,
+            common: u32,
+        ) -> u32,
+    >,
+    pub texture_desc: ::core::option::Option<
+        unsafe extern "C" fn(
+            resource: *mut ::core::ffi::c_void,
+            width: *mut u64,
+            height: *mut u32,
+            format: *mut u32,
+        ),
+    >,
+    pub preview_prepare:
+        ::core::option::Option<unsafe extern "C" fn(width: u32, height: u32) -> u32>,
+    pub preview_owns:
+        ::core::option::Option<unsafe extern "C" fn(window: *mut ::core::ffi::c_void) -> u32>,
+    pub renderer_vulkan: ::core::option::Option<unsafe extern "C" fn() -> u32>,
+    pub vulkan_owns:
+        ::core::option::Option<unsafe extern "C" fn(window: *mut ::core::ffi::c_void) -> u32>,
+    pub window_class:
+        ::core::option::Option<unsafe extern "C" fn(window: *mut ::core::ffi::c_void) -> u32>,
+    pub bridge_load: ::core::option::Option<unsafe extern "C" fn() -> u32>,
+    pub bridge_unload: ::core::option::Option<unsafe extern "C" fn()>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_unity_package_platform"]
-        [::core::mem::size_of::<rsf_unity_package_platform>() - 344usize];
+        [::core::mem::size_of::<rsf_unity_package_platform>() - 440usize];
     ["Alignment of rsf_unity_package_platform"]
         [::core::mem::align_of::<rsf_unity_package_platform>() - 8usize];
     ["Offset of field: rsf_unity_package_platform::sharpening_valid"]
@@ -778,6 +809,30 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_package_platform, timestamp) - 328usize];
     ["Offset of field: rsf_unity_package_platform::cpu"]
         [::core::mem::offset_of!(rsf_unity_package_platform, cpu) - 336usize];
+    ["Offset of field: rsf_unity_package_platform::fg_submitted"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, fg_submitted) - 344usize];
+    ["Offset of field: rsf_unity_package_platform::fg_window"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, fg_window) - 352usize];
+    ["Offset of field: rsf_unity_package_platform::fg_hudless"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, fg_hudless) - 360usize];
+    ["Offset of field: rsf_unity_package_platform::preview_present"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, preview_present) - 368usize];
+    ["Offset of field: rsf_unity_package_platform::texture_desc"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, texture_desc) - 376usize];
+    ["Offset of field: rsf_unity_package_platform::preview_prepare"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, preview_prepare) - 384usize];
+    ["Offset of field: rsf_unity_package_platform::preview_owns"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, preview_owns) - 392usize];
+    ["Offset of field: rsf_unity_package_platform::renderer_vulkan"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, renderer_vulkan) - 400usize];
+    ["Offset of field: rsf_unity_package_platform::vulkan_owns"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, vulkan_owns) - 408usize];
+    ["Offset of field: rsf_unity_package_platform::window_class"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, window_class) - 416usize];
+    ["Offset of field: rsf_unity_package_platform::bridge_load"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_load) - 424usize];
+    ["Offset of field: rsf_unity_package_platform::bridge_unload"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_unload) - 432usize];
 };
 impl Default for rsf_unity_package_platform {
     fn default() -> Self {
