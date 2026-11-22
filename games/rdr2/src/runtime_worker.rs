@@ -9,6 +9,7 @@ use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
 use rsf_game_sys::rsf_game_host_services;
 use rsf_game_sys::session::carrier_log::CarrierLog;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
+use rsf_game_sys::win32::module_path;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
@@ -17,8 +18,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 use windows_sys::Win32::System::LibraryLoader::{
-    DisableThreadLibraryCalls, GetModuleFileNameW, GetModuleHandleW, GetProcAddress,
-    LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LoadLibraryExW,
+    DisableThreadLibraryCalls, GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LoadLibraryExW,
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{CreateThread, GetCurrentProcessId};
@@ -42,17 +43,6 @@ pub(crate) fn log(message: impl AsRef<[u8]>) {
 
 unsafe extern "C" fn rsf_rdr2_runtime_log(_: *mut c_void, message: *const c_char) {
     unsafe { LOG.write_c_message(GetTickCount64(), message) };
-}
-
-fn module_path(module: HMODULE) -> Option<Vec<u16>> {
-    let mut path = vec![0; 32768];
-    let length =
-        unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) } as usize;
-    if length == 0 || length >= path.len() {
-        return None;
-    }
-    path.truncate(length);
-    Some(path)
 }
 
 pub(crate) fn append_path(parent: &[u16], suffix: &str) -> Vec<u16> {
@@ -170,16 +160,22 @@ fn run_session(
             export(runtime, s!("rsf_plugin_session_stop")).ok_or_else(lifecycle_missing)?,
         )
     };
-    let mut executable = module_path(null_mut())
-        .filter(|path| asi::is_game(path))
+    let executable = unsafe { module_path(null_mut()) }
+        .filter(|path| asi::is_game(path.units()))
         .ok_or(Refusal {
             stage: "executable admission",
             result: 1,
         })?;
-    executable.push(0);
     let mut bytes = [0u8; 32];
     let sharing = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-    if unsafe { fingerprint(executable.as_ptr(), sharing, bytes.as_mut_ptr()) } == 0 {
+    if unsafe {
+        fingerprint(
+            executable.terminated().as_ptr(),
+            sharing,
+            bytes.as_mut_ptr(),
+        )
+    } == 0
+    {
         return Err(Refusal {
             stage: "executable fingerprint",
             result: 1,
@@ -260,7 +256,9 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
     let Some(fingerprint) = leaves.fingerprint else {
         return 1;
     };
-    let Some((root, config)) = module_path(module).and_then(|path| asi::deployment(&path)) else {
+    let Some((root, config)) =
+        unsafe { module_path(module) }.and_then(|path| asi::deployment(path.units()))
+    else {
         return 1;
     };
     if unsafe { GetPrivateProfileIntW(w!("RDR2"), w!("Enable"), 1, config.as_ptr()) } == 0 {
@@ -363,9 +361,10 @@ unsafe extern "system" fn attach_worker(module: *mut c_void) -> u32 {
     let Some(&fingerprint) = ATTACH_FINGERPRINT.get() else {
         return 1;
     };
-    let Some(path) = module_path(module) else {
+    let Some(path) = (unsafe { module_path(module) }) else {
         return 1;
     };
+    let path = path.units();
     let Some(separator) = path.iter().rposition(|&unit| unit == u16::from(b'\\')) else {
         return 1;
     };

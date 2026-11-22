@@ -1,25 +1,19 @@
 // SPDX-License-Identifier: MIT
 //! Process identity and guarded native reads for the Wingman carrier and plugin.
+use rsf_game_sys::win32::module_path;
 use std::ffi::{OsString, c_void};
 use std::io::Read;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
-use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_HASH_HANDLE, BCRYPT_SHA256_ALG_HANDLE, BCryptCreateHash, BCryptDestroyHash,
     BCryptFinishHash, BCryptHashData,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
-
-pub(crate) fn module_path(module: HMODULE, buffer: &mut [u16]) -> Option<&[u16]> {
-    let length =
-        unsafe { GetModuleFileNameW(module, buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
-    (length != 0 && length < buffer.len()).then(|| &buffer[..length])
-}
 
 pub(crate) fn matches_executable(path: &[u16]) -> bool {
     let leaf = path
@@ -96,10 +90,9 @@ pub(crate) unsafe extern "C" fn rsf_wingman_copy(
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_wingman_verify_executable() -> bool {
-    let mut executable = vec![0; 32768];
-    module_path(null_mut(), &mut executable)
-        .filter(|path| matches_executable(path))
-        .and_then(fingerprint)
+    unsafe { module_path(null_mut()) }
+        .filter(|path| matches_executable(path.units()))
+        .and_then(|path| fingerprint(path.units()))
         .is_some_and(|digest| &digest[..64] == crate::SHA256.to_bytes())
 }
 

@@ -216,7 +216,7 @@ extern "C" fn set_development(value: i32) -> bool {
 }
 
 extern "C" fn fg_capture() -> i32 {
-    i32::from(read(w!("FGCapture"), 0) != 0)
+    i32::from(fg_stage::CaptureSettings::decode(read).enabled)
 }
 
 extern "C" fn set_fg_capture(value: i32) -> bool {
@@ -224,7 +224,7 @@ extern "C" fn set_fg_capture(value: i32) -> bool {
 }
 
 extern "C" fn capture_start() -> i32 {
-    capture_number(w!("FGCaptureStart"), 600, 0, PANEL_MAX as u32)
+    fg_stage::CaptureSettings::decode(read).start as i32
 }
 
 extern "C" fn set_capture_start(value: i32) -> bool {
@@ -232,7 +232,7 @@ extern "C" fn set_capture_start(value: i32) -> bool {
 }
 
 extern "C" fn capture_count() -> i32 {
-    capture_number(w!("FGCaptureCount"), 3, 0, 16)
+    fg_stage::CaptureSettings::decode(read).count as i32
 }
 
 extern "C" fn set_capture_count(value: i32) -> bool {
@@ -240,7 +240,7 @@ extern "C" fn set_capture_count(value: i32) -> bool {
 }
 
 extern "C" fn capture_interval() -> i32 {
-    capture_number(w!("FGCaptureInterval"), 300, 1, PANEL_MAX as u32)
+    fg_stage::CaptureSettings::decode(read).interval as i32
 }
 
 extern "C" fn set_capture_interval(value: i32) -> bool {

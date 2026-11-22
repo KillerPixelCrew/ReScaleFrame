@@ -2834,14 +2834,9 @@ unsafe extern "C" fn rsf_anomaly_sr_stage_configure_ini(
     log: rsf_anomaly_sr_log,
     user: *mut c_void,
 ) -> bool {
-    if ini.is_null() {
+    let Some((path, _)) = (unsafe { crate::wide::terminated(ini) }) else {
         return false;
-    }
-    let mut length = 0;
-    while unsafe { ini.add(length).read() } != 0 {
-        length += 1;
-    }
-    let path = unsafe { std::slice::from_raw_parts(ini, length) };
+    };
     STAGE.configure_ini(path, apply, log, user)
 }
 

@@ -22,6 +22,10 @@ use crate::settings_store::{
     rsf_settings_store_write_sharpening, write_dlss_preset,
 };
 use crate::sharpening_policy;
+use rsf_game_sys::plugin_session_abi::{
+    RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION,
+    rsf_plugin_session_options as SessionOptions,
+};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
     RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
@@ -55,7 +59,6 @@ const OK: i32 = 0;
 const BACKEND_OK: i32 = 0;
 const BACKEND_NOT_SUPPORTED: i32 = -7;
 
-const SESSION_ABI_VERSION: u32 = 1;
 const SR_NONE: u32 = 0;
 const SR_DLSS: u32 = 1;
 const SR_XESS: u32 = 5;
@@ -67,22 +70,6 @@ const SECTION: PCWSTR = w!("Rendering");
 // FILE_APPEND_DATA, and FILE_SHARE_READ | FILE_SHARE_WRITE.
 const LOG_ACCESS: u32 = 4;
 const LOG_SHARE: u32 = 3;
-
-/// plugin_session.h's rsf_plugin_session_options.
-#[repr(C)]
-pub(crate) struct SessionOptions {
-    struct_size: u32,
-    abi_version: u32,
-    plugin_path: *const u16,
-    probe: *const Probe,
-    services: Services,
-}
-
-const _: () = {
-    assert!(
-        size_of::<SessionOptions>() == 128 && std::mem::offset_of!(SessionOptions, services) == 24
-    );
-};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

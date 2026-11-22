@@ -38,19 +38,14 @@ impl Stage {
             return;
         }
         let mut settings = lock(&self.settings);
-        if !ini.is_null() {
-            let mut len = 0;
-            while unsafe { ini.add(len).read() } != 0 {
-                len += 1;
-            }
-            let units = unsafe { slice::from_raw_parts(ini, len) };
+        if let Some((units, terminated)) = unsafe { crate::wide::terminated(ini) } {
             let path = PathBuf::from(OsString::from_wide(units));
             settings.shader_dir = path
                 .parent()
                 .unwrap_or_else(|| Path::new(""))
                 .join("ReScaleFrame")
                 .join("patches");
-            settings.ini = units.iter().copied().chain([0]).collect();
+            settings.ini = terminated.to_vec();
         }
         settings.capture = Schedule {
             enabled: settings.read(w!("MotionCapture"), 0) != 0,

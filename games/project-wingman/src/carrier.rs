@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! The Wingman XInput carrier's optional, process-lived plugin session.
-use crate::windows::{fingerprint, matches_executable, module_path};
+use crate::windows::{fingerprint, matches_executable};
 use crate::{AMD64, EXECUTABLE, SHA256, overlay};
 use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
 use rsf_game_sys::session::carrier_log::CarrierLog;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
+use rsf_game_sys::win32::{module_path, module_path_in};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::{Mutex, PoisonError};
@@ -66,7 +67,7 @@ pub(crate) unsafe extern "C" fn host_log(_: *mut c_void, message: *const c_char)
 unsafe extern "C" fn rsf_wingman_carrier_attach(module: HMODULE) {
     unsafe { DisableThreadLibraryCalls(module) };
     let mut executable = [0; 32768];
-    if module_path(null_mut(), &mut executable).is_some_and(matches_executable) {
+    if unsafe { module_path_in(null_mut(), &mut executable) }.is_some_and(matches_executable) {
         // The worker's entry runs outside loader lock. DllMain never waits for it.
         let worker =
             unsafe { CreateThread(std::ptr::null(), 0, Some(startup), module, 0, null_mut()) };
@@ -77,10 +78,10 @@ unsafe extern "C" fn rsf_wingman_carrier_attach(module: HMODULE) {
 }
 
 unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
-    let mut path_buffer = vec![0; 32768];
-    let Some(module_path_utf16) = module_path(module, &mut path_buffer) else {
+    let Some(path) = (unsafe { module_path(module) }) else {
         return 1;
     };
+    let module_path_utf16 = path.units();
     let parent_end = module_path_utf16
         .iter()
         .rposition(|&unit| unit == 0x5c || unit == 0x2f)
@@ -91,8 +92,9 @@ unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
     LOG.set_path(&log_path);
     write_log(b"XInput carrier started; Windows controller forwarding remains independent.");
 
-    let mut executable = vec![0; 32768];
-    let Some(digest) = module_path(null_mut(), &mut executable).and_then(fingerprint) else {
+    let Some(digest) =
+        unsafe { module_path(null_mut()) }.and_then(|path| fingerprint(path.units()))
+    else {
         write_log(b"Executable fingerprint could not be read.");
         return 1;
     };

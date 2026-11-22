@@ -11,7 +11,7 @@ use windows_sys::Win32::Foundation::MAX_PATH;
 use windows_sys::core::{PCWSTR, w};
 
 #[derive(Clone, Copy)]
-pub(super) struct CaptureSettings {
+pub(crate) struct CaptureSettings {
     pub enabled: bool,
     pub start: u32,
     pub count: u32,
@@ -22,20 +22,26 @@ impl CaptureSettings {
     fn new(enabled: bool, start: u32, count: u32, interval: u32) -> Self {
         Self {
             enabled,
-            start,
+            start: start.min(i32::MAX as u32),
             count: count.min(16),
-            interval: interval.max(1),
+            interval: interval.clamp(1, i32::MAX as u32),
         }
     }
 
-    pub(super) unsafe fn read(path: PCWSTR) -> Self {
-        let get = |key, fallback| unsafe { ini::read_int(path, key, fallback) as u32 };
+    /// Uses the nonnegative ranges representable by the overlay's signed
+    /// controls. Keep the unsigned INI interpretation before clamping.
+    pub(crate) fn decode(mut read: impl FnMut(PCWSTR, i32) -> i32) -> Self {
+        let mut get = |key, fallback| read(key, fallback) as u32;
         Self::new(
             get(w!("FGCapture"), 0) != 0,
             get(w!("FGCaptureStart"), 600),
             get(w!("FGCaptureCount"), 3),
             get(w!("FGCaptureInterval"), 300),
         )
+    }
+
+    pub(super) unsafe fn read(path: PCWSTR) -> Self {
+        Self::decode(|key, fallback| unsafe { ini::read_int(path, key, fallback) })
     }
 }
 
@@ -132,7 +138,7 @@ impl Options {
             capture_interval: capture.interval,
             ..Default::default()
         };
-        let ini_units = unsafe { wide(ini) };
+        let ini_units = unsafe { crate::wide::terminated(ini) }.map_or(&[][..], |(units, _)| units);
         let ini_path = PathBuf::from(OsString::from_wide(ini_units));
         let base = ini_path
             .parent()
@@ -173,10 +179,17 @@ impl Options {
             native.fidelityfx_dir,
             native.xess_dir,
         ]
-        .map(|path| crate::sr_stage::plain_directory(unsafe { wide(path) }));
+        .map(|path| {
+            crate::sr_stage::plain_directory(
+                unsafe { crate::wide::terminated(path) }.map_or(&[][..], |(units, _)| units),
+            )
+        });
         Self::admit(
             native,
-            String::from_utf16_lossy(unsafe { wide(native.capture_dir) }),
+            String::from_utf16_lossy(
+                unsafe { crate::wide::terminated(native.capture_dir) }
+                    .map_or(&[][..], |(units, _)| units),
+            ),
             vendors,
         )
     }
@@ -215,18 +228,6 @@ impl Options {
     }
 }
 
-unsafe fn wide<'a>(value: PCWSTR) -> &'a [u16] {
-    if value.is_null() {
-        return &[];
-    }
-    let mut size = 0;
-    // The carrier and fixture provide NUL-terminated Win32 strings.
-    while unsafe { value.add(size).read() } != 0 {
-        size += 1;
-    }
-    unsafe { slice::from_raw_parts(value, size) }
-}
-
 fn c_string(text: String) -> CString {
     CString::new(text).unwrap_or_default()
 }
@@ -239,5 +240,28 @@ pub(super) fn backend_name(backend: u32) -> &'static str {
         RSF_FG_BACKEND_XESS => "XeSS",
         RSF_FG_BACKEND_AUTO => "Auto",
         _ => "Off",
+    }
+}
+
+#[cfg(test)]
+mod capture_settings_tests {
+    use super::*;
+
+    #[test]
+    fn persisted_capture_settings_fit_the_panel_ranges() {
+        let defaults = CaptureSettings::decode(|_, fallback| fallback);
+        assert_eq!(
+            (defaults.start, defaults.count, defaults.interval),
+            (600, 3, 300)
+        );
+
+        let large = CaptureSettings::decode(|_, _| -1);
+        assert!(large.enabled);
+        assert_eq!(
+            (large.start, large.count, large.interval),
+            (i32::MAX as u32, 16, i32::MAX as u32)
+        );
+        let zero = CaptureSettings::decode(|_, _| 0);
+        assert_eq!((zero.start, zero.count, zero.interval), (0, 0, 1));
     }
 }

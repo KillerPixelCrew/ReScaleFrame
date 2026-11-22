@@ -55,11 +55,21 @@ target_include_directories(rsf_anomaly_native_hooks_test PRIVATE ../games/anomal
 target_link_libraries(rsf_anomaly_native_hooks_test PRIVATE rsf_anomaly_rust minhook rsf_build_options)
 add_test(NAME anomaly_native_hooks_contract COMMAND rsf_anomaly_native_hooks_test)
 set_tests_properties(anomaly_native_hooks_contract PROPERTIES TIMEOUT 30)
-add_executable(rsf_anomaly_bootstrap_test anomaly_bootstrap.cpp)
-target_link_libraries(rsf_anomaly_bootstrap_test PRIVATE rsf_build_options)
+set(rsf_anomaly_bootstrap_exe "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_anomaly_bootstrap_test.exe")
+set(rsf_anomaly_bootstrap_source "${CMAKE_CURRENT_SOURCE_DIR}/anomaly_bootstrap.rs")
+add_custom_command(OUTPUT "${rsf_anomaly_bootstrap_exe}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+    COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
+        -D warnings "${rsf_anomaly_bootstrap_source}" -o "${rsf_anomaly_bootstrap_exe}"
+    DEPENDS "${rsf_anomaly_bootstrap_source}"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+add_custom_target(rsf_anomaly_bootstrap_test ALL DEPENDS "${rsf_anomaly_bootstrap_exe}")
 add_dependencies(rsf_anomaly_bootstrap_test rsf_game_anomaly)
-add_test(NAME anomaly_bootstrap_contract COMMAND rsf_anomaly_bootstrap_test
+add_test(NAME anomaly_bootstrap_contract COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
+    "${rsf_anomaly_bootstrap_exe}"
     "$<TARGET_FILE:rsf_game_anomaly>" "${CMAKE_CURRENT_BINARY_DIR}/anomaly-bootstrap")
+set_tests_properties(anomaly_bootstrap_contract PROPERTIES TIMEOUT 130)
 find_program(RSF_PWSH_EXECUTABLE pwsh)
 if(RSF_PWSH_EXECUTABLE)
     add_test(NAME ffx_line_width_patch COMMAND "${RSF_PWSH_EXECUTABLE}" -NoProfile -File "${CMAKE_CURRENT_SOURCE_DIR}/ffx_line_width_patch.ps1" -SdkRoot "${RSF_FFX_VK_INCLUDE}/../..")

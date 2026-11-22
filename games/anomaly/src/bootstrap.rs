@@ -4,9 +4,16 @@
 //! already loaded and starts Observe through the Runtime's stable plugin-session C ABI. This module owns the step
 //! order, refusals, retry state and adapter log. The private leaves in bootstrap.cpp call the native engine code.
 
-use crate::executable::{identity_name, module_path, running_build};
+use crate::executable::{identity_name, running_build, with_verified_build};
 use crate::{AMD64, BuildIdentity};
-use rsf_game_sys::{RSF_GAME_ABI_VERSION, rsf_game_host_services, rsf_game_log_fn, rsf_game_probe};
+#[cfg(test)]
+use rsf_game_sys::RSF_GAME_ABI_VERSION;
+#[cfg(test)]
+use rsf_game_sys::plugin_session_abi::RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION;
+use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options as SessionOptions;
+use rsf_game_sys::rsf_game_log_fn;
+use rsf_game_sys::session::{Probe, host_services, with_session_options};
+use rsf_game_sys::win32::module_path;
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -41,7 +48,6 @@ const FAULT: u32 = 8;
 const OVERLAY_REFUSED: u32 = 9;
 
 const RSF_OK: i32 = 0;
-const SESSION_ABI_VERSION: u32 = 1;
 
 /// The C++ owners this entry orders, supplied by the export in bootstrap.cpp. Every leaf is noexcept, runs under the
 /// entry lock and takes a build index this module selected from `builds`.
@@ -63,17 +69,6 @@ pub(crate) struct Leaves {
     overlay: unsafe extern "C" fn(HMODULE, *const u16, rsf_game_log_fn) -> bool,
     overlay_sink: unsafe extern "C" fn(),
 }
-
-/// `rsf_plugin_session_options` from runtime/orchestrator/include/rescaleframe/plugin_session.h.
-#[repr(C)]
-struct SessionOptions {
-    struct_size: u32,
-    abi_version: u32,
-    plugin_path: *const u16,
-    probe: *const rsf_game_probe,
-    services: rsf_game_host_services,
-}
-const _: () = assert!(size_of::<SessionOptions>() == 128);
 
 type PrepareFn = unsafe extern "C" fn(*const SessionOptions, *mut *mut c_void) -> i32;
 type ControlFn = unsafe extern "C" fn(*mut c_void) -> i32;
@@ -113,7 +108,7 @@ impl Runtime {
 struct Request<'a> {
     ini: &'a [u16],
     build: usize,
-    identity: &'a BuildIdentity,
+    builds: &'a [BuildIdentity],
     observe: bool,
     overlay: bool,
 }
@@ -129,7 +124,8 @@ enum Observation {
 struct Entry {
     started: bool,            // every requested mode is complete
     options_registered: bool, // restart options are in the overlay list once
-    stages_configured: bool,  // Observe stages were configured and FG/input installed once
+    stages_configured: bool,  // Observe stages were configured and the FG bridge was attempted
+    input: InputInstallation,
     observation: Observation,
     session: *mut c_void, // the Runtime's session, including one retained after refused prepare
 }
@@ -143,6 +139,7 @@ impl Entry {
             started: false,
             options_registered: false,
             stages_configured: false,
+            input: InputInstallation::Pending,
             observation: Observation::Unprepared,
             session: ptr::null_mut(),
         }
@@ -239,7 +236,7 @@ unsafe fn enter(configuration: *const u16, leaves: &Leaves) -> u32 {
     let request = Request {
         ini,
         build,
-        identity,
+        builds,
         observe,
         overlay,
     };
@@ -290,10 +287,10 @@ fn orchestrate(
                 b"Anomaly FG refused: FG/FGBridge require Mode=Observe; presentation stays stock.",
             );
         }
-        if unsafe { (leaves.fg_installed)() } {
-            install_input(leaves, request.build);
-        }
         entry.stages_configured = request.observe;
+    }
+    if request.observe && unsafe { (leaves.fg_installed)() } {
+        entry.input = install_input(entry.input, leaves, request.build);
     }
     if request.observe && entry.observation != Observation::Active {
         let status = start_observation(entry, request, runtime);
@@ -315,17 +312,36 @@ fn orchestrate(
     READY
 }
 
+#[derive(Clone, Copy)]
+enum InputInstallation {
+    Pending,
+    DirectInput,
+    Complete,
+}
+
 /// The engine input hook installs only after DirectInput observation, so its facts always have their receipts.
-fn install_input(leaves: &Leaves, build: usize) {
-    let mut reason: *const c_char = ptr::null();
-    let fallback: &[u8] = if !unsafe { (leaves.input_observation)(&mut reason) } {
-        b"Anomaly DirectInput observation refused."
-    } else if !unsafe { (leaves.input_hook)(build, &mut reason) } {
-        b"Anomaly input hook refused."
-    } else {
+fn install_input(mut state: InputInstallation, leaves: &Leaves, build: usize) -> InputInstallation {
+    let mut reason = ptr::null();
+    if matches!(state, InputInstallation::Pending) {
+        if !unsafe { (leaves.input_observation)(&mut reason) } {
+            log_input_refusal(reason, b"Anomaly DirectInput observation refused.");
+            return state;
+        }
+        state = InputInstallation::DirectInput;
+    }
+    if matches!(state, InputInstallation::DirectInput) {
+        reason = ptr::null();
+        if !unsafe { (leaves.input_hook)(build, &mut reason) } {
+            log_input_refusal(reason, b"Anomaly input hook refused.");
+            return state;
+        }
         write_log(b"Anomaly input facts: guarded CInput slot 0 installed; buffered keyboard/mouse reads observed.");
-        return;
-    };
+        state = InputInstallation::Complete;
+    }
+    state
+}
+
+fn log_input_refusal(reason: *const c_char, fallback: &[u8]) {
     // A refusing leaf reports a static site or reason string.
     if reason.is_null() {
         write_log(fallback);
@@ -385,44 +401,28 @@ fn prepare_observation(entry: &mut Entry, request: &Request, prepare: PrepareFn)
     if unsafe { GetModuleHandleExW(flags, ptr::addr_of!(ANCHOR).cast(), &mut module) } == 0 {
         return RUNTIME_REFUSED;
     }
-    let Some(plugin) = module_path(module) else {
+    let Some(plugin) = (unsafe { module_path(module) }) else {
         return RUNTIME_REFUSED;
     };
     let mut counter = 0i64;
     if unsafe { QueryPerformanceCounter(&mut counter) } == 0 || counter <= 0 {
         return RUNTIME_REFUSED;
     }
-    let probe = rsf_game_probe {
-        struct_size: size_of::<rsf_game_probe>() as u32,
-        pe_machine: AMD64,
-        reserved: 0,
-        executable_name_utf8: request.identity.executable,
-        sha256_hex: request.identity.sha256,
+    let identity = &request.builds[request.build];
+    let probe = Probe {
+        machine: AMD64,
+        executable: identity_name(identity),
+        // Borrow the selected immutable profile's verified hash.
+        sha256: unsafe { CStr::from_ptr(identity.sha256) },
     };
-    let options = SessionOptions {
-        struct_size: size_of::<SessionOptions>() as u32,
-        abi_version: SESSION_ABI_VERSION,
-        plugin_path: plugin.as_ptr(),
-        probe: &probe,
-        services: rsf_game_host_services {
-            struct_size: size_of::<rsf_game_host_services>() as u32,
-            abi_version: RSF_GAME_ABI_VERSION,
-            session_id: counter as u64,
-            log: LOG_FN,
-            render_pass: None,
-            user: ptr::null_mut(),
-            render_config: None,
-            cpu_event: None,
-            scope_state: None,
-            process_upscale: None,
-            submit: None,
-            present: None,
-            process_latency: None,
-            render_feedback: None,
-        },
-    };
+    let mut services = host_services(counter as u64, LOG_FN);
+    services.session_id = counter as u64;
     write_log(b"Anomaly Observe cold startup; borrowing existing Runtime, before DirectInput/device creation.");
-    let prepared = unsafe { prepare(&options, &mut entry.session) };
+    let prepared = with_session_options(plugin.terminated(), probe, &services, |options| {
+        with_verified_build(request.builds, request.build, || unsafe {
+            prepare(options, &mut entry.session)
+        })
+    });
     log_result("session prepare", prepared);
     if prepared != RSF_OK {
         if !entry.session.is_null() {

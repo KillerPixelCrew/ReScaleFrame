@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Windows module leases and by-name access to the Runtime already loaded by Anomaly's carrier.
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::ptr::{NonNull, null_mut};
 use windows_sys::Win32::Foundation::{FARPROC, FreeLibrary, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{
@@ -51,20 +51,10 @@ pub(crate) extern "C" fn rsf_anomaly_runtime_module() -> HMODULE {
     unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_runtime_symbol(module: HMODULE, name: *const c_char) -> FARPROC {
-    if module.is_null() || name.is_null() {
-        return None;
-    }
-    unsafe { GetProcAddress(module, name.cast()) }
-}
-
 /// The module must be the carrier's borrowed handle, and F must be the named C export's signature.
 pub(crate) unsafe fn export<F: Copy>(module: HMODULE, name: &[u8]) -> Option<F> {
-    const { assert!(size_of::<F>() == size_of::<usize>()) };
     let name = CStr::from_bytes_with_nul(name).ok()?;
-    let function = unsafe { rsf_anomaly_runtime_symbol(module, name.as_ptr()) }?;
-    Some(unsafe { std::mem::transmute_copy(&function) })
+    unsafe { rsf_game_sys::win32::typed_export(module, name) }
 }
 
 #[unsafe(no_mangle)]

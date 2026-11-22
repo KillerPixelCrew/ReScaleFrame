@@ -1,26 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::{BuildIdentity, digest::sha256_file, match_build};
+use rsf_game_sys::win32::module_path;
+use std::cell::Cell;
 use std::ffi::{CStr, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::ptr;
-use windows_sys::Win32::Foundation::HMODULE;
-use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
-
-const PATH_CAPACITY: usize = 32768;
-
-/// The module path with its trailing NUL. A null module selects the executable.
-pub(crate) fn module_path(module: HMODULE) -> Option<Vec<u16>> {
-    let mut path = vec![0u16; PATH_CAPACITY];
-    let length =
-        unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), PATH_CAPACITY as u32) } as usize;
-    if length == 0 || length >= PATH_CAPACITY {
-        return None;
-    }
-    path.truncate(length + 1);
-    Some(path)
-}
-
 pub(crate) fn identity_name(identity: &BuildIdentity) -> &CStr {
     // The native profile table supplies immutable, NUL-terminated strings.
     unsafe { CStr::from_ptr(identity.executable) }
@@ -28,9 +13,9 @@ pub(crate) fn identity_name(identity: &BuildIdentity) -> &CStr {
 
 /// Only a profiled ASCII filename is eligible for hashing.
 pub(crate) fn running_build(builds: &[BuildIdentity]) -> Result<usize, &'static CStr> {
-    let path =
-        module_path(ptr::null_mut()).ok_or(c"Could not read the running executable path.")?;
-    let path = OsString::from_wide(&path[..path.len() - 1]);
+    let path = unsafe { module_path(ptr::null_mut()) }
+        .ok_or(c"Could not read the running executable path.")?;
+    let path = OsString::from_wide(path.units());
     let path = Path::new(&path);
     let name = path
         .file_name()
@@ -45,4 +30,47 @@ pub(crate) fn running_build(builds: &[BuildIdentity]) -> Result<usize, &'static 
     sha256_file(path)
         .and_then(|hash| match_build(builds, name.as_bytes(), &hash))
         .ok_or(c"Running executable SHA-256 does not match a guarded native profile.")
+}
+
+// The Runtime calls prepare synchronously. Only the same thread and exact static
+// profile table can reuse this admission, and only until that call returns.
+#[derive(Clone, Copy)]
+struct VerifiedBuild {
+    table: *const BuildIdentity,
+    count: usize,
+    index: usize,
+}
+
+thread_local! {
+    static VERIFIED_BUILD: Cell<Option<VerifiedBuild>> = const { Cell::new(None) };
+}
+
+pub(crate) fn with_verified_build<T>(
+    builds: &[BuildIdentity],
+    index: usize,
+    prepare: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<VerifiedBuild>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            VERIFIED_BUILD.set(self.0);
+        }
+    }
+
+    let _restore = Restore(VERIFIED_BUILD.replace(Some(VerifiedBuild {
+        table: builds.as_ptr(),
+        count: builds.len(),
+        index,
+    })));
+    prepare()
+}
+
+pub(crate) fn observer_build(builds: &[BuildIdentity]) -> Result<usize, &'static CStr> {
+    if let Some(verified) = VERIFIED_BUILD.get()
+        && verified.table == builds.as_ptr()
+        && verified.count == builds.len()
+    {
+        return Ok(verified.index);
+    }
+    running_build(builds)
 }
