@@ -5,6 +5,7 @@
 // configuration, slot, scene, settings and overlay routing policy only.
 use super::*;
 use crate::com_ref::test::{Fake as ComHeader, add_ref};
+use rsf_game_sys::rsf_game_probe as Probe;
 use std::cell::RefCell;
 use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, WritePrivateProfileStringW,

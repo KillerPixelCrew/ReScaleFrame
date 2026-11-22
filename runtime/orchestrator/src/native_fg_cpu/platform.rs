@@ -42,7 +42,7 @@ pub(crate) static NATIVE_PLATFORM: Platform = Platform {
     backend: rsf_core_d3d11p_backend,
     status: rsf_d3d11_present_status_get,
     device: native_device,
-    adapter_vendor: adapter_vendor,
+    adapter_vendor,
     host: rsf_core_d3d11p_host,
     host_status: rsf_streamline_host_latency_status,
     host_reflex: rsf_streamline_host_reflex,

@@ -568,6 +568,9 @@ struct Renderer {
     frames: [Frame; SLOTS],
 }
 
+// Only the locked panel uses or releases the native renderer and its frames.
+unsafe impl Send for Renderer {}
+
 impl Renderer {
     // A refusal keeps the complete and partial frames until teardown, after the startup fence.
     fn create_frames(&mut self, platform: &Platform) -> Option<()> {
@@ -787,6 +790,7 @@ fn panel_toggle(platform: &Platform) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn panel_present(
     platform: &Platform,
     device: *mut c_void,
@@ -1188,7 +1192,7 @@ mod tests {
         stop_input: unused_stop_input,
         destroy: unused_destroy,
         visible: unused_visible,
-        set_visible: unused_visible,
+        set_visible: unused_set_visible,
         completed: unused_completed,
         arm: unused_arm,
         begin: unused_begin,
@@ -1422,7 +1426,7 @@ mod tests {
     }
 
     const FRAME_PLATFORM: Platform = Platform {
-        create_frame: create_frame,
+        create_frame,
         ..PLATFORM
     };
 
@@ -1538,8 +1542,8 @@ mod tests {
         };
         let platform = Platform {
             completed: pending,
-            signal: signal,
-            stop_input: stop_input,
+            signal,
+            stop_input,
             ..FRAME_PLATFORM
         };
         panel.retire_failed(&platform, 42);
@@ -1549,7 +1553,7 @@ mod tests {
         assert!(panel.started.is_some());
         panel.retire_failed(
             &Platform {
-                completed: completed,
+                completed,
                 ..platform
             },
             44,

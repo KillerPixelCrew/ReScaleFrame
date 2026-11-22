@@ -69,7 +69,7 @@ struct Platform {
     present_has_owner: unsafe extern "C" fn() -> i32,
     present_is_owner: unsafe extern "C" fn(swapchain: *mut ::core::ffi::c_void) -> i32,
     present_host: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
-    present_provider: unsafe extern "C" fn() -> *const rsf_generation_provider,
+    present_provider: unsafe extern "C" fn() -> *const Provider,
     present_session: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
     present_backend: unsafe extern "C" fn() -> u32,
     present_generation: unsafe extern "C" fn() -> u64,
@@ -86,18 +86,10 @@ struct Platform {
     ) -> i32,
     present_abort: unsafe extern "C" fn(id: u64) -> i32,
     host_token: unsafe extern "C" fn(host: *mut ::core::ffi::c_void, id: u64) -> i32,
-    window_match: unsafe extern "C" fn(
-        swapchain: *mut ::core::ffi::c_void,
-        out: *mut rsf_game_render_pass,
-    ) -> i32,
-    scene_for_window: unsafe extern "C" fn(
-        window: *const rsf_game_render_pass,
-        out: *mut rsf_native_scene_identity,
-    ) -> i32,
-    scene_present_path: unsafe extern "C" fn(
-        window: *const rsf_game_render_pass,
-        scene: *const rsf_native_scene_identity,
-    ) -> u32,
+    window_match: unsafe extern "C" fn(swapchain: *mut ::core::ffi::c_void, out: *mut Pass) -> i32,
+    scene_for_window: unsafe extern "C" fn(window: *const Pass, out: *mut SceneIdentity) -> i32,
+    scene_present_path:
+        unsafe extern "C" fn(window: *const Pass, scene: *const SceneIdentity) -> u32,
     allows_fg: unsafe extern "C" fn(record: *const rsf_frame_record) -> i32,
     context_device:
         unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
@@ -193,30 +185,25 @@ struct Platform {
         fence12: *mut ::core::ffi::c_void,
         value: u64,
     ) -> i32,
-    dlss_evaluate: unsafe extern "C" fn(
-        context: *mut ::core::ffi::c_void,
-        frame: *const rsf_dlss_frame,
-    ) -> i32,
+    dlss_evaluate:
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void, frame: *const DlssFrame) -> i32,
     dlss_evaluate_shared: unsafe extern "C" fn(
         list: *mut ::core::ffi::c_void,
-        frame: *const rsf_dlss_frame,
+        frame: *const DlssFrame,
         source: u64,
     ) -> i32,
     dump_sr: unsafe extern "C" fn(
         context: *mut ::core::ffi::c_void,
-        frame: *const rsf_dlss_frame,
+        frame: *const DlssFrame,
         backend: u32,
     ),
     dump_fg: unsafe extern "C" fn(
         context: *mut ::core::ffi::c_void,
-        pass: *const rsf_game_render_pass,
-        frame: *const rsf_dlss_frame,
+        pass: *const Pass,
+        frame: *const DlssFrame,
     ),
-    dump_fg_prepare: unsafe extern "C" fn(
-        pass: *const rsf_game_render_pass,
-        frame: *const rsf_fg_frame,
-        result: i32,
-    ),
+    dump_fg_prepare:
+        unsafe extern "C" fn(pass: *const Pass, frame: *const rsf_fg_frame, result: i32),
     dump_named: unsafe extern "C" fn(
         context: *mut ::core::ffi::c_void,
         texture: *mut ::core::ffi::c_void,
@@ -224,7 +211,7 @@ struct Platform {
         name: *const ::core::ffi::c_char,
         view: u32,
         scale: f32,
-        log: rsf_backend_log_fn,
+        log: Log,
         log_user: *mut ::core::ffi::c_void,
     ) -> i32,
 }

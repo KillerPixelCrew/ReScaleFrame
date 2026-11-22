@@ -11,8 +11,8 @@ use ::windows::core::{IUnknown, Interface};
 use rsf_runtime_submission::{FenceStatus, fence_status};
 use std::mem::ManuallyDrop;
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, S_OK, WAIT_OBJECT_0},
-    System::Threading::{CreateEventW, WaitForSingleObject},
+    Foundation::{CloseHandle, S_OK},
+    System::Threading::CreateEventW,
 };
 
 const FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -150,7 +150,7 @@ unsafe extern "C" fn wait(fence: *mut c_void, value: u64) -> bool {
             unsafe { fence.SetEventOnCompletion(value, HANDLE(event)) }
                 .map_or_else(|e| e.code().0, |()| S_OK)
         },
-        |remaining| unsafe { WaitForSingleObject(event, remaining) == WAIT_OBJECT_0 },
+        |remaining| unsafe { crate::d3d12_fence::wait_event(event, remaining) },
     );
     unsafe { CloseHandle(event) };
     result == S_OK

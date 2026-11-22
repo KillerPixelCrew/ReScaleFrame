@@ -15,6 +15,7 @@ use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
 #[path = "vulkan_xess_fg_abi.rs"]
 mod abi;
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[path = "../../vulkan/xess-fg/bridge_abi.rs"]
 mod bridge_abi;
 use abi::rsf_xessgvk_options as Options;

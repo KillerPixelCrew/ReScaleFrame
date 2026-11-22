@@ -6,7 +6,7 @@ use crate::d3d11_present::{
     rsf_core_d3d11p_backend, rsf_core_d3d11p_backend_choices, rsf_core_d3d11p_has_owner,
     rsf_core_d3d11p_request, rsf_core_d3d11p_session, rsf_core_d3d11p_switch_result,
 };
-use crate::dlss_pipeline::exports::rsf_core_dlss_pipeline_apply_sharpening;
+use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening;
 use crate::frame_limit::rsf_core_overlay_refresh_mhz;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::native_fg::{rsf_native_fg_options_set, rsf_native_fg_status_get};
@@ -1343,8 +1343,9 @@ fn notify_inner(reason: u32, deferred: bool, stop: impl FnOnce() -> i32) -> i32 
     let Ok(_panel) = PANEL.try_lock() else {
         return BUSY;
     };
-    if deferred && LIFECYCLE.load(Ordering::Acquire) == COLD && stop() != OK {
-        return NOT_READY;
+    if deferred && LIFECYCLE.load(Ordering::Acquire) == COLD {
+        // A cold panel has nothing to reset, but a deferred host still stops its renderer.
+        return if stop() == OK { OK } else { NOT_READY };
     }
     let previous = match reset_panel(&LIFECYCLE, stop) {
         Ok(previous) => previous,
@@ -1371,27 +1372,6 @@ fn reset_panel(lifecycle: &AtomicU8, stop: impl FnOnce() -> i32) -> Result<u8, i
     }
     lifecycle.store(COLD, Ordering::Release);
     Ok(previous)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reset_runs_stop_again_until_the_panel_is_cold() {
-        let lifecycle = AtomicU8::new(STARTED);
-        assert_eq!(reset_panel(&lifecycle, || -1), Err(NOT_READY));
-        assert_eq!(lifecycle.load(Ordering::Acquire), RESET_PENDING);
-        assert_eq!(
-            reset_panel(&lifecycle, || {
-                assert_eq!(lifecycle.load(Ordering::Acquire), RESET_PENDING);
-                0
-            }),
-            Ok(RESET_PENDING)
-        );
-        assert_eq!(lifecycle.load(Ordering::Acquire), COLD);
-        assert_eq!(reset_panel(&lifecycle, || unreachable!()), Ok(COLD));
-    }
 }
 
 fn started() -> bool {
@@ -1576,6 +1556,27 @@ unsafe extern "C" fn rsf_get_overlay_api(api: *mut rsf_overlay_api) -> i32 {
         })
     };
     OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_runs_stop_again_until_the_panel_is_cold() {
+        let lifecycle = AtomicU8::new(STARTED);
+        assert_eq!(reset_panel(&lifecycle, || -1), Err(NOT_READY));
+        assert_eq!(lifecycle.load(Ordering::Acquire), RESET_PENDING);
+        assert_eq!(
+            reset_panel(&lifecycle, || {
+                assert_eq!(lifecycle.load(Ordering::Acquire), RESET_PENDING);
+                0
+            }),
+            Ok(RESET_PENDING)
+        );
+        assert_eq!(lifecycle.load(Ordering::Acquire), COLD);
+        assert_eq!(reset_panel(&lifecycle, || unreachable!()), Ok(COLD));
+    }
 }
 
 #[cfg(not(test))]

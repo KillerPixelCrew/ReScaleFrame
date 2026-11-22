@@ -18,6 +18,7 @@ const CONSTANT_WORDS: usize = 32;
 
 unsafe extern "C" {
     fn rsf_sharpening_hlsl(mode: u32) -> *const c_char;
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_sharpening_requested(options: &Options) -> u32;
 }
 
@@ -401,16 +402,19 @@ impl Sharpen12 {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) extern "C" fn create_host() -> *mut c_void {
     crate::allocate_handle(Sharpen12::default()).cast()
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn destroy_host(owner: *mut c_void) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner.cast::<Sharpen12>()) });
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn run_host(
     owner: *mut c_void,
     commands: *mut c_void,

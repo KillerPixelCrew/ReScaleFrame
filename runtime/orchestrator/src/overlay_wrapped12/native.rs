@@ -65,7 +65,25 @@ impl SystemEntry {
             LoadLibraryExW(path.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32)
         })?;
         let create = module.symbol(c"D3D11On12CreateDevice")?;
-        let create = unsafe { transmute(create) };
+        let create = unsafe {
+            transmute::<
+                unsafe extern "system" fn() -> isize,
+                unsafe extern "system" fn(
+                    *mut std::ffi::c_void,
+                    u32,
+                    *const windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL,
+                    u32,
+                    *const *mut std::ffi::c_void,
+                    u32,
+                    u32,
+                    *mut std::option::Option<windows::Win32::Graphics::Direct3D11::ID3D11Device>,
+                    *mut std::option::Option<
+                        windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+                    >,
+                    *mut windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL,
+                ) -> windows::core::HRESULT,
+            >(create)
+        };
         Some(Self {
             _module: module,
             create,
@@ -88,7 +106,7 @@ unsafe extern "C" fn create_wrapped_device(
     let result = unsafe {
         (entry.create)(
             device,
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT.0 as u32,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT.0,
             null(),
             0,
             queues.as_ptr(),

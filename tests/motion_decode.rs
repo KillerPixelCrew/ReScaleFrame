@@ -8,6 +8,8 @@ use rsf_game_sys::sr_abi::rsf_motion_decode_params as Params;
 use std::ffi::{CStr, c_char};
 use windows::core::Interface;
 
+// An ABI-identical raw-pointer view of exports another module declares with references.
+#[allow(clashing_extern_declarations)]
 unsafe extern "C" {
     fn rsf_motion_decode_create(device: Handle, setup: *const Setup, pass: *mut Handle) -> i32;
     fn rsf_motion_decode_run(

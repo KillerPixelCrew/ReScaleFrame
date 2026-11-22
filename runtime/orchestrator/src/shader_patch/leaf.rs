@@ -12,13 +12,17 @@ pub(super) const RSF_PATCH_SIGNATURE_OUTPUT: i32 = 1;
 #[cfg(not(test))]
 pub(super) const RSF_PATCH_SIGNATURE_PATCH: i32 = 2;
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) struct CompileCall {
+    #[cfg_attr(test, allow(dead_code))]
     pub compiler: *mut c_void,
     pub source: rsf_patch_bytes,
     pub defines: *const rsf_patch_define,
     pub define_count: usize,
+    #[cfg_attr(test, allow(dead_code))]
     pub entry: *const c_char,
     pub target: *const c_char,
+    #[cfg_attr(test, allow(dead_code))]
     pub flags: u32,
     pub user: *mut c_void,
     pub include: Include,
@@ -44,11 +48,14 @@ pub(super) struct ParameterRecord {
     pub mask: u32,
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) struct ReflectionSink {
     pub user: *mut c_void,
     pub shader: Option<unsafe fn(user: *mut c_void, version: u32)>,
     pub binding: Option<unsafe fn(user: *mut c_void, binding: *const BindingRecord)>,
+    #[cfg_attr(test, allow(dead_code))]
     pub buffer: Option<unsafe fn(user: *mut c_void, name: *const c_char, size: u32)>,
+    #[cfg_attr(test, allow(dead_code))]
     pub variable: Option<unsafe fn(user: *mut c_void, name: *const c_char, offset: u32, size: u32)>,
     pub parameter:
         Option<unsafe fn(user: *mut c_void, signature: u32, parameter: *const ParameterRecord)>,

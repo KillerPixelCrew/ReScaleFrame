@@ -53,7 +53,7 @@ fn output_matches(
         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
         let mut staging = None;
         unsafe { device.CreateTexture2D(&desc, None, Some(&mut staging)) }?;
-        let staging = staging.ok_or_else(|| E_FAIL.into())?;
+        let staging = staging.ok_or_else(|| windows::core::Error::from(E_FAIL))?;
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         let half = unsafe {
             context.CopyResource(&staging, output);
@@ -97,7 +97,7 @@ fn evaluate(
         )?;
         let mut view = None;
         unsafe { device.CreateUnorderedAccessView(&texture, None, Some(&mut view)) }?;
-        let view = view.ok_or_else(|| E_FAIL.into())?;
+        let view = view.ok_or_else(|| windows::core::Error::from(E_FAIL))?;
         unsafe { context.ClearUnorderedAccessViewFloat(&view, &[red, 0.0, 0.0, 1.0]) };
         textures.push(texture);
     }

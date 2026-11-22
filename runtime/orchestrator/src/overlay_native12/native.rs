@@ -172,7 +172,7 @@ unsafe extern "C" fn create_frame(gpu: *mut c_void, out: *mut FrameTable) -> u32
     }
     let mut desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-        NumDescriptors: RSF_OVERLAY12_TEXTURE_LIMIT,
+        NumDescriptors: RSF_OVERLAY12_TEXTURE_LIMIT as u32,
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
         NodeMask: 0,
     };

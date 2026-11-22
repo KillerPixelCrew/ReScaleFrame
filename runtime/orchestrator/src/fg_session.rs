@@ -6,7 +6,7 @@ use crate::sr_session::has_capacity;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_INPUT,
     RSF_FRAME_SOURCE_RENDERED, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_allows_fg,
-    rsf_frame_has_rendered_source, rsf_frame_record,
+    rsf_frame_has_rendered_source,
 };
 use std::ffi::c_void;
 use std::ptr;

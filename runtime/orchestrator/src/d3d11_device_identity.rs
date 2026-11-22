@@ -31,9 +31,9 @@ unsafe extern "C" fn rsf_d3d11_same_device(child: *mut c_void, device: *mut c_vo
     unsafe { owns(device, child) }
 }
 
-pub(super) unsafe fn device_vendor(device: Raw) -> Option<u32> {
+pub(super) unsafe fn device_vendor(device: *mut c_void) -> Option<u32> {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }?;
     let dxgi = device.cast::<IDXGIDevice>().ok()?;
-    let desc = unsafe { dxgi.GetAdapter()?.GetDesc() }.ok()?;
+    let desc = unsafe { dxgi.GetAdapter().ok()?.GetDesc() }.ok()?;
     Some(desc.VendorId)
 }

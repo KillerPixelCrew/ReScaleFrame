@@ -70,14 +70,6 @@ unsafe extern "C" fn rsf_dlss_pipeline_set_sharpening(options: *const Sharpening
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_dlss_pipeline_apply_sharpening(
-    settings: &crate::render_abi::rsf_render_settings,
-) {
-    let options = crate::settings_store::sharpening_of(settings, &sharpening_policy::defaults());
-    let _ = unsafe { PROCESS.set_sharpening(&raw const options) };
-}
-
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_set_preset(preset: u32) -> i32 {
     unsafe { PROCESS.set_preset(&LEAVES, preset) }
 }

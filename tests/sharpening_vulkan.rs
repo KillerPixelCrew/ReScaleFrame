@@ -55,8 +55,16 @@ fn entry() -> TestResult<(Library, ash::Entry)> {
     let library = Library(module);
     let proc = unsafe { GetProcAddress(module, c"vkGetInstanceProcAddr".as_ptr().cast()) }
         .ok_or("missing vkGetInstanceProcAddr")?;
-    let get_instance_proc_addr =
-        unsafe { std::mem::transmute::<_, vk::PFN_vkGetInstanceProcAddr>(proc) };
+    let get_instance_proc_addr = unsafe {
+        std::mem::transmute::<
+            unsafe extern "system" fn() -> isize,
+            unsafe extern "system" fn(
+                ash::vk::Instance,
+                *const i8,
+            )
+                -> std::option::Option<unsafe extern "system" fn()>,
+        >(proc)
+    };
     let entry = unsafe {
         ash::Entry::from_static_fn(ash::StaticFn {
             get_instance_proc_addr,
@@ -439,10 +447,38 @@ impl Fixture {
         setup.physical_device = gpu.physical.as_raw() as *mut c_void;
         setup.device = gpu.device().handle().as_raw() as *mut c_void;
         // The private C proc signature transports the Vulkan proc address on Windows x64.
-        setup.instance_proc =
-            unsafe { std::mem::transmute(gpu.entry.static_fn().get_instance_proc_addr) };
-        setup.device_proc =
-            unsafe { std::mem::transmute(gpu.instance.fp_v1_0().get_device_proc_addr) };
+        setup.instance_proc = unsafe {
+            std::mem::transmute::<
+                unsafe extern "system" fn(
+                    ash::vk::Instance,
+                    *const i8,
+                )
+                    -> std::option::Option<unsafe extern "system" fn()>,
+                std::option::Option<
+                    unsafe extern "C" fn(
+                        *mut std::ffi::c_void,
+                        *const i8,
+                    )
+                        -> std::option::Option<unsafe extern "C" fn()>,
+                >,
+            >(gpu.entry.static_fn().get_instance_proc_addr)
+        };
+        setup.device_proc = unsafe {
+            std::mem::transmute::<
+                unsafe extern "system" fn(
+                    ash::vk::Device,
+                    *const i8,
+                )
+                    -> std::option::Option<unsafe extern "system" fn()>,
+                std::option::Option<
+                    unsafe extern "C" fn(
+                        *mut std::ffi::c_void,
+                        *const i8,
+                    )
+                        -> std::option::Option<unsafe extern "C" fn()>,
+                >,
+            >(gpu.instance.fp_v1_0().get_device_proc_addr)
+        };
         let mut record: Box<rsf_frame_record> = Box::new(unsafe { std::mem::zeroed() });
         record.output_width = W as u32;
         record.output_height = H as u32;

@@ -31,6 +31,13 @@ impl Json {
             _ => None,
         }
     }
+
+    pub(crate) fn items(value: Option<&Json>) -> &[Json] {
+        match value {
+            Some(Json::Arr(items)) => items,
+            _ => &[],
+        }
+    }
 }
 
 /// An unsigned read of an integer, or 0 for anything else, as the schema has always read it.

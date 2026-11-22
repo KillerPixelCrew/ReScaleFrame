@@ -19,6 +19,8 @@ use windows_sys::Win32::{
     UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
 };
 
+// bindgen output: bitfield accessors.
+#[allow(clippy::ptr_offset_with_cast)]
 #[path = "reflex_nvapi_abi.rs"]
 mod nvapi;
 use nvapi::*;
@@ -55,7 +57,8 @@ const _: () = {
     assert!(std::mem::offset_of!(NV_ASYNC_FRAME_MARKER_PARAMS, vendorInternal) == 32);
 };
 
-unsafe extern "C" {
+// MinHook's API is WINAPI, as d3d11_observer_hooks declares it.
+unsafe extern "system" {
     fn MH_Initialize() -> i32;
     fn MH_CreateHook(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32;
     fn MH_EnableHook(target: *mut c_void) -> i32;

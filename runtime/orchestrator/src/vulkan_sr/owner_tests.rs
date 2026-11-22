@@ -23,7 +23,6 @@ enum Call {
     Parameters(u32),
     Capture(String),
     Sharpen,
-    Log,
     Copy(ImageCopy),
     DlssConstants(u32),
     DlssOptions(u32),
@@ -499,9 +498,6 @@ pub(super) static PLATFORM: Platform = Platform {
         clear_sharpen: leaf!(|handle: Handle| -> () {
             unsafe { fake(handle).calls.push(Call::Clear) }
         }),
-        log: leaf!(|frame: &Frame, _: *const c_char| -> () {
-            unsafe { fake(frame.log_user).calls.push(Call::Log) }
-        }),
         capture_provider: leaf!(|_: Handle, _: u64, _: u32| -> () {}),
         capture_record: leaf!(|handle: Handle,
                                _: Handle,
@@ -531,6 +527,7 @@ pub(super) static PLATFORM: Platform = Platform {
     dump_result: leaf!(|_: &rsf_frame_record, _: *const c_char, _: u32, _: i32| -> () {}),
 };
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn unused() {}
 
 fn frame_record() -> rsf_frame_record {
@@ -677,9 +674,6 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
         if !failure {
             expected.push(Call::Capture("sr-output-linear".into()));
             expected.push(Call::Sharpen);
-            if sequence == 1 {
-                expected.push(Call::Log);
-            }
             expected.extend([
                 Call::Barrier(Barrier::with_access(14, GENERAL, TRANSFER_SRC, 0x40, 0x800)),
                 Call::Copy(ImageCopy::transfer(14, 4, [128, 72])),

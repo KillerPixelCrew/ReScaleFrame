@@ -6,7 +6,7 @@ mod parameters;
 #[path = "../../../../integrations/vulkanstory/native/ngx.rs"]
 mod vulkanstory_compat;
 
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{c_char, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::OnceLock;
 

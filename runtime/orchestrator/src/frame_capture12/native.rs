@@ -145,13 +145,14 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback_copy(
     source: Handle,
     state: u32,
     buffer: Handle,
-    layout: &Layout,
+    layout: *const Layout,
 ) {
-    let (Some(commands), Some(source), Some(buffer)) = (unsafe {
+    let (Some(commands), Some(source), Some(buffer), Some(layout)) = (unsafe {
         (
             ID3D12GraphicsCommandList::from_raw_borrowed(&list),
             ID3D12Resource::from_raw_borrowed(&source),
             ID3D12Resource::from_raw_borrowed(&buffer),
+            layout.as_ref(),
         )
     }) else {
         return;

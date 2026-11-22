@@ -26,6 +26,7 @@ mod dx12;
 mod sdk;
 #[path = "fsr4_fg_bridge/state_fixture.rs"]
 mod state_fixture;
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[path = "../../vulkan/timeline_pair.rs"]
 mod timeline_pair;
 

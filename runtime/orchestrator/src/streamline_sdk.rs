@@ -14,8 +14,10 @@ use std::ptr::null_mut;
 
 #[path = "../../vulkan/streamline/lifecycle/src/sdk_camera_defaults.rs"]
 mod sdk_camera_defaults;
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[path = "../../vulkan/streamline/lifecycle/src/sdk_fg_options_abi.rs"]
 mod sdk_fg_options_abi;
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[path = "../../vulkan/streamline/lifecycle/src/sdk_records_abi.rs"]
 mod sdk_records_abi;
 

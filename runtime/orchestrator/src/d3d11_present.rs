@@ -2376,7 +2376,7 @@ impl Owner {
         let host = self.host();
         let private = !host.is_null() && ACTIVE_HOST.load(Ordering::Acquire) != host;
         let mut sync = std::mem::take(&mut *lock(&self.sync));
-        let retired = lock(&self.provider_retirement).fence.take();
+        let mut retired = lock(&self.provider_retirement).fence.take();
         drop(sync.completion_event.take());
         drop(sync.application_ready.take());
         if private {
@@ -2385,7 +2385,7 @@ impl Owner {
             drop(sync.interop_queue.take());
             self.release_command_slots(false);
             drop(sync.completion_fence.take());
-            drop(retired);
+            drop(retired.take());
             unsafe { (p.release_host)(b) };
         } else if !host.is_null() {
             // Shared SR callbacks keep using the process-owned interop queue.
@@ -2399,7 +2399,7 @@ impl Owner {
         if !private {
             // Preserve the former reverse member release order after the events close.
             self.release_command_slots(true);
-            drop(retired);
+            drop(retired.take());
             drop(sync.completion_fence.take());
             unsafe { (p.release_direct_graphics)(b) };
             drop(sync.interop_queue.take());

@@ -4,6 +4,9 @@ use crate::com_ref::test::{Fake, add_ref, fake, raw};
 use std::cell::RefCell;
 use std::ffi::CStr;
 
+// The shared panel clock's delta for a first frame, a stalled counter or a long gap.
+const DEFAULT_DELTA: f32 = 1.0 / 60.0;
+
 const RENDERER: usize = 0x2000;
 
 #[derive(Default)]
@@ -378,6 +381,24 @@ fn stats(hud: bool) -> rsf_overlay_stats {
     }
 }
 
+// Admits and draws one supplied target, as rsf_core_overlay_host_draw_target does for a held host.
+#[allow(clippy::too_many_arguments)]
+fn draw_target(
+    host: &mut Host,
+    p: &Platform,
+    context: Handle,
+    target: Handle,
+    width: u32,
+    height: u32,
+    stats: &rsf_overlay_stats,
+    intent: *mut rsf_overlay_intent,
+) -> i32 {
+    let Some(admission) = host.admit_target(p, stats.show_performance_hud != 0) else {
+        return 0;
+    };
+    host.draw_target(p, context, target, width, height, stats, intent, admission)
+}
+
 fn started(p: &Platform) -> Host {
     let mut host = Host::new();
     assert_eq!(host.start(p, CHAIN), 1);
@@ -647,7 +668,7 @@ fn a_layout_failure_is_reported_once_even_with_the_performance_hud() {
     let hud = stats(true);
     world(|world| world.visible = 1);
     assert_eq!(
-        host.draw_target(&p, context, target, 64, 32, &hud, null_mut()),
+        draw_target(&mut host, &p, context, target, 64, 32, &hud, null_mut()),
         0
     );
     assert_eq!(world(|world| world.visible), 0);
@@ -655,7 +676,7 @@ fn a_layout_failure_is_reported_once_even_with_the_performance_hud() {
     for _ in 0..4 {
         assert_eq!(host.present(&p, CHAIN, &hud, null_mut()), 0);
         assert_eq!(
-            host.draw_target(&p, context, target, 64, 32, &hud, null_mut()),
+            draw_target(&mut host, &p, context, target, 64, 32, &hud, null_mut()),
             0
         );
     }
@@ -726,14 +747,32 @@ fn draw_target_keeps_the_device_hint_clock_and_retraces_each_opening() {
     let mut intent = rsf_overlay_intent::default();
     world(|world| world.tick = 12500);
     assert_eq!(
-        host.draw_target(&p, context, target, 64, 32, &stats(false), &mut intent),
+        draw_target(
+            &mut host,
+            &p,
+            context,
+            target,
+            64,
+            32,
+            &stats(false),
+            &mut intent
+        ),
         1
     );
     assert_eq!(world(|world| world.alpha), 0.5);
     world(|world| world.tick = 13000);
     calls();
     assert_eq!(
-        host.draw_target(&p, context, target, 64, 32, &stats(false), &mut intent),
+        draw_target(
+            &mut host,
+            &p,
+            context,
+            target,
+            64,
+            32,
+            &stats(false),
+            &mut intent
+        ),
         0
     );
     assert!(calls().is_empty());
@@ -746,7 +785,16 @@ fn draw_target_keeps_the_device_hint_clock_and_retraces_each_opening() {
     });
     intent = rsf_overlay_intent::default();
     assert_eq!(
-        host.draw_target(&p, context, target, 64, 32, &stats(false), &mut intent),
+        draw_target(
+            &mut host,
+            &p,
+            context,
+            target,
+            64,
+            32,
+            &stats(false),
+            &mut intent
+        ),
         0
     );
     assert_eq!(

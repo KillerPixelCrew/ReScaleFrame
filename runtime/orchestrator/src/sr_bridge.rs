@@ -43,6 +43,7 @@ const WARM_UP_TIMEOUT_MS: u32 = 30_000;
 const COMMAND_SLOTS: usize = 3;
 
 // Colour, depth, motion, exposure, output, then the reactive and transparency masks.
+#[allow(dead_code)] // Slot 0 is addressed as the first entry.
 const COLOR: usize = 0;
 const DEPTH: usize = 1;
 const MOTION: usize = 2;

@@ -24,9 +24,7 @@ macro_rules! device_dispatch {
 
         impl Dispatch {
             fn load(graphics: &Graphics) -> Option<Self> {
-                if graphics.instance_proc.is_none() {
-                    return None;
-                }
+                graphics.instance_proc?;
                 $(let $field = lookup(graphics.device_proc, graphics.device, $name)?;)+
                 let memory = lookup(graphics.instance_proc, graphics.instance, c"vkGetPhysicalDeviceMemoryProperties");
                 let formats = lookup(graphics.instance_proc, graphics.instance, c"vkGetPhysicalDeviceFormatProperties");

@@ -17,7 +17,7 @@ use std::sync::RwLock;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct3D12::{ID3D12CommandQueue, ID3D12Device};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
-use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC, DXGI_USAGE};
+use windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC;
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow};
 use windows::core::{GUID, IUnknown, Interface};
 

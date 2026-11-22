@@ -3,7 +3,7 @@ use crate::com_ref::ComRef;
 pub(super) use crate::d3d12_fence::FenceState;
 use crate::render_abi::{rsf_backend_result, rsf_fg_retirement};
 use std::ffi::c_void;
-use std::ptr::{self, NonNull};
+use std::ptr::NonNull;
 use std::slice;
 
 const MAX_LEASES: usize = 16;

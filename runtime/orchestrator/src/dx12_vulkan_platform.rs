@@ -16,6 +16,16 @@ pub(super) fn lookup(proc: rsf_vk_get_proc, object: Handle, name: &CStr) -> rsf_
     unsafe { proc?(object, name.as_ptr()) }
 }
 
+// Selects the resolver and dispatch object for an `instance` or `device` scoped entry.
+macro_rules! scope {
+    ($setup:ident, instance) => {
+        ($setup.instance_proc, $setup.instance)
+    };
+    ($setup:ident, device) => {
+        ($setup.device_proc, $setup.device)
+    };
+}
+
 macro_rules! dispatch {
     ($($scope:ident $field:ident: $ty:ident = $name:literal),+ $(,)?) => {
         struct Dispatch {
@@ -26,10 +36,11 @@ macro_rules! dispatch {
 
         impl Dispatch {
             fn load(setup: &Setup) -> Option<Self> {
-                let instance = (setup.instance_proc, setup.instance);
-                let device = (setup.device_proc, setup.device);
                 // Query all entries before checking for a missing address.
-                $(let $field = lookup($scope.0, $scope.1, $name);)+
+                $(let $field = {
+                    let (proc, object) = scope!(setup, $scope);
+                    lookup(proc, object, $name)
+                };)+
                 Some(Self {
                     physical: vk::PhysicalDevice::from_raw(setup.physical_device as u64),
                     device: vk::Device::from_raw(setup.device as u64),

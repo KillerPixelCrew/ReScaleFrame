@@ -603,12 +603,12 @@ mod tests {
 
     static STUB: Provider = Provider {
         create: allocate,
-        plan: plan,
-        evaluate: evaluate,
-        destroy: destroy,
-        retire: retire,
-        submitted: submitted,
-        info: info,
+        plan,
+        evaluate,
+        destroy,
+        retire,
+        submitted,
+        info,
     };
 
     unsafe extern "C" fn plan(_: *const c_void, w: *mut u32, h: *mut u32) -> i32 {

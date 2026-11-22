@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 mod bridge_abi;
 #[path = "capture.rs"]
 mod capture;
+// bindgen output: SDK typedef aliases and bitfield accessors.
+#[allow(unused_imports, clippy::ptr_offset_with_cast)]
 #[path = "../../orchestrator/src/d3d12_generation/xess_abi.rs"]
 mod sdk;
 #[path = "session_records_abi.rs"]

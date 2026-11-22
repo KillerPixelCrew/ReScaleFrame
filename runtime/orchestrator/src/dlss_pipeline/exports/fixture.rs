@@ -12,6 +12,7 @@ use windows_sys::Win32::System::LibraryLoader::{
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[allow(dead_code)]
 #[path = "../../../../../tests/graphics_fixture_device.rs"]
 mod graphics;
@@ -48,7 +49,10 @@ impl Runtime {
                     .symbol($name)
                     .ok_or_else(|| format!("missing Runtime export {}", $name.to_string_lossy()))?;
                 // The signature is the corresponding public declaration in dlss_pipeline.h.
-                unsafe { std::mem::transmute(address) }
+                // The target is the field the import fills, so it differs per use.
+                #[allow(clippy::missing_transmute_annotations)]
+                let function = unsafe { std::mem::transmute(address) };
+                function
             }};
         }
         Ok(Self {
@@ -281,7 +285,7 @@ fn evaluate(runtime: &Runtime, device: &Device) -> TestResult<bool> {
     camera.reset = 1;
     camera.jitter_pixels[0] = 0.25;
     frame.camera = &camera;
-    Ok(sharpening(runtime, &inputs, &frame)? && passed)
+    Ok(sharpening(runtime, device, &inputs, &frame)? && passed)
 }
 
 #[unsafe(no_mangle)]

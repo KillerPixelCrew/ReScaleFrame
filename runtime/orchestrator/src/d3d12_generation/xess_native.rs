@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
+// bindgen output: SDK typedef aliases and bitfield accessors.
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
+#[allow(unused_imports, clippy::ptr_offset_with_cast)]
 #[path = "xess_abi.rs"]
 mod abi;
 use abi::*;
@@ -11,11 +14,8 @@ use windows::Win32::{
 };
 use windows::core::{GUID, Interface};
 use windows_sys::Win32::{
-    Foundation::{S_OK, WAIT_OBJECT_0},
-    System::{
-        LibraryLoader::GetProcAddress,
-        Threading::{CreateEventW, WaitForSingleObject},
-    },
+    Foundation::S_OK,
+    System::{LibraryLoader::GetProcAddress, Threading::CreateEventW},
 };
 
 const MISSING_ENTRY: i32 = -5;
@@ -230,7 +230,7 @@ unsafe extern "C" fn drain(queue: Raw, fence: Raw, event: Raw, serial: u64) -> i
                 unsafe { fence.SetEventOnCompletion(serial, HANDLE(event)) }
                     .map_or_else(|err| err.code().0, |()| S_OK)
             },
-            |remaining| unsafe { WaitForSingleObject(event, remaining) == WAIT_OBJECT_0 },
+            |remaining| unsafe { crate::d3d12_fence::wait_event(event, remaining) },
         );
         if result < 0 {
             return result;

@@ -4,6 +4,8 @@ use super::*;
 use crate::d3d11_output_platform::srv_format;
 use windows::core::Interface;
 
+// An ABI-identical raw-pointer view of exports another module declares with references.
+#[allow(clashing_extern_declarations)]
 unsafe extern "C" {
     fn rsf_colour_transport_create(device: Handle, pass: *mut Handle) -> i32;
     fn rsf_colour_transport_encode(

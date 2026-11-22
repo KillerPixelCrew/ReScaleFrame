@@ -5,6 +5,8 @@ use windows::{
     core::Interface,
 };
 
+// bindgen output: SDK typedef aliases and bitfield accessors.
+#[allow(unused_imports, clippy::ptr_offset_with_cast)]
 #[path = "xess_abi.rs"]
 mod abi;
 use abi::*;

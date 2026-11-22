@@ -110,7 +110,9 @@ unsafe extern "C" fn rsf_core_latencyvk_queue_present(
 
     // The public C ABI erases Vulkan function types. This entry only accepts
     // vkQueuePresentKHR and borrows the original queue and present info.
-    let present = unsafe { std::mem::transmute::<_, vk::PFN_vkQueuePresentKHR>(callback) };
+    let present = unsafe {
+        std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkQueuePresentKHR>(callback)
+    };
     unsafe { present(vk::Queue::from_raw(queue as usize as u64), info.cast()).as_raw() }
 }
 
@@ -166,6 +168,7 @@ pub(crate) unsafe fn rsf_core_vkfg_wsi_destroy(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn rsf_core_vkfg_wsi_acquire(
     without_fg: Scope,
     synchronized: Scope,

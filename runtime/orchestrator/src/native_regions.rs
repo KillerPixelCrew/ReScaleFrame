@@ -276,7 +276,7 @@ fn depth_constants(
         size: region.extent,
         ..Default::default()
     };
-    let Some(facts) = facts.filter(|facts| depth_domains_requested(facts)) else {
+    let Some(facts) = facts.filter(depth_domains_requested) else {
         return Some(constants);
     };
     if facts.struct_size as usize != size_of::<rsf_game_depth_domains>()

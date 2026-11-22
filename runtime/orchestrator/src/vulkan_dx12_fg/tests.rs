@@ -11,6 +11,8 @@ const IGNORED: u32 = 0xffff_ffff;
 const EXTERNAL: u32 = 0xffff_fffe;
 const MEMORY: u32 = 0x8000 | 0x1_0000;
 const ALL: u32 = 0x1_0000;
+// VK_ERROR_OUT_OF_DATE_KHR.
+const OUT_OF_DATE: i32 = -1_000_001_004;
 
 fn expected(image: u64, old: u32, new: u32, from: u32, to: u32, src: u32, dst: u32) -> Step {
     Step::Barrier(Barrier {

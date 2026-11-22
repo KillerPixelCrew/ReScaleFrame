@@ -5,6 +5,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 
 // The standalone XeSS bridge is compiled directly with rustc.
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[path = "../sdk/game/src/profile_text.rs"]
 #[allow(dead_code)]
 mod profile_text;

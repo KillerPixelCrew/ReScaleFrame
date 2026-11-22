@@ -5,7 +5,7 @@ use std::ptr::{NonNull, null_mut};
 use windows::core::{HRESULT, IUnknown, IUnknown_Vtbl, Interface};
 
 /// Borrow the generated vtable for a live interface of type `I`.
-pub(super) unsafe fn vtable<I: Interface>(object: &*mut c_void) -> &I::Vtable {
+pub(super) unsafe fn vtable<'a, I: Interface + 'a>(object: &'a *mut c_void) -> &'a I::Vtable {
     unsafe { I::from_raw_borrowed(object) }
         .expect("live COM interface")
         .vtable()
@@ -84,6 +84,50 @@ impl Borrow<NonNull<c_void>> for ComRef {
     fn borrow(&self) -> &NonNull<c_void> {
         &self.0
     }
+}
+
+// C callers own these leases explicitly. Forget the Rust owner on retain and adopt
+// that same reference on release. Both entry points accept an absent resource.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_resource_retain(resource: *mut c_void) {
+    if !resource.is_null() {
+        unsafe { ComRef::retain(resource) }.into_raw();
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_resource_release(resource: *mut c_void) {
+    drop(unsafe { ComRef::from_owned(resource) });
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_create_render_target_view(
+    device: *mut c_void,
+    texture: *mut c_void,
+) -> *mut c_void {
+    if device.is_null() || texture.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { crate::d3d11_output_abi::rsf_d3d11_output_create_rtv(device, texture) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_swapchain_back_buffer(swapchain: *mut c_void) -> *mut c_void {
+    use windows::Win32::Graphics::{Direct3D11::ID3D11Texture2D, Dxgi::IDXGISwapChain};
+
+    if swapchain.is_null() {
+        return std::ptr::null_mut();
+    }
+    let mut buffer = std::ptr::null_mut();
+    let status = unsafe {
+        (vtable::<IDXGISwapChain>(&swapchain).GetBuffer)(
+            swapchain,
+            0,
+            &ID3D11Texture2D::IID,
+            &mut buffer,
+        )
+    };
+    unsafe { ComRef::from_result(status, buffer) }.map_or(std::ptr::null_mut(), ComRef::into_raw)
 }
 
 #[cfg(test)]
@@ -182,48 +226,4 @@ pub(crate) mod test {
         assert_eq!(first.refs.get(), 1);
         assert_eq!(last.refs.get(), 1);
     }
-}
-
-// C callers own these leases explicitly. Forget the Rust owner on retain and adopt
-// that same reference on release. Both entry points accept an absent resource.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_resource_retain(resource: *mut c_void) {
-    if !resource.is_null() {
-        unsafe { ComRef::retain(resource) }.into_raw();
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_resource_release(resource: *mut c_void) {
-    drop(unsafe { ComRef::from_owned(resource) });
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_create_render_target_view(
-    device: *mut c_void,
-    texture: *mut c_void,
-) -> *mut c_void {
-    if device.is_null() || texture.is_null() {
-        return std::ptr::null_mut();
-    }
-    unsafe { crate::d3d11_output_abi::rsf_d3d11_output_create_rtv(device, texture) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_swapchain_back_buffer(swapchain: *mut c_void) -> *mut c_void {
-    use windows::Win32::Graphics::{Direct3D11::ID3D11Texture2D, Dxgi::IDXGISwapChain};
-
-    if swapchain.is_null() {
-        return std::ptr::null_mut();
-    }
-    let mut buffer = std::ptr::null_mut();
-    let status = unsafe {
-        (vtable::<IDXGISwapChain>(&swapchain).GetBuffer)(
-            swapchain,
-            0,
-            &ID3D11Texture2D::IID,
-            &mut buffer,
-        )
-    };
-    unsafe { ComRef::from_result(status, buffer) }.map_or(std::ptr::null_mut(), ComRef::into_raw)
 }

@@ -550,8 +550,7 @@ struct Provider {
 }
 
 /// C++ iostream `std::setprecision(9)` default float formatting (`%.9g`).
-#[cfg(test)]
-fn general(value: f64) -> String {
+pub(crate) fn general(value: f64) -> String {
     general_precision(value, 9)
 }
 

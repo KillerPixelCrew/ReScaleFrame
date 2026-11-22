@@ -3,6 +3,7 @@
 #[cfg(windows)]
 mod auxiliary_sr;
 #[cfg(windows)]
+#[allow(unused_imports)] // bindgen output with shared record imports
 mod auxiliary_sr_abi;
 #[cfg(windows)]
 mod callback_host;
@@ -154,6 +155,7 @@ mod owned_handle;
 
 #[cfg(windows)]
 mod d3d11_fg_api_abi;
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[cfg(windows)]
 #[path = "../../diagnostic_preferences.rs"]
 mod diagnostic_preferences;
@@ -162,6 +164,7 @@ mod ffx_version;
 #[cfg(windows)]
 mod fg12;
 #[cfg(windows)]
+#[allow(dead_code)] // bindgen output
 mod fg12_abi;
 #[cfg(windows)]
 mod fg_choice;
@@ -382,6 +385,7 @@ mod vulkan_fsr4_sr;
 #[cfg(windows)]
 mod vulkan_latency;
 #[cfg(windows)]
+#[allow(unused_imports)] // bindgen output with shared record imports
 mod vulkan_latency_abi;
 #[cfg(windows)]
 mod vulkan_latency_frames;
@@ -395,6 +399,7 @@ mod vulkan_presentation;
 #[cfg(windows)]
 mod vulkan_sharpening;
 #[cfg(windows)]
+#[allow(unused_imports)] // bindgen output with shared record imports
 mod vulkan_sharpening_abi;
 #[cfg(windows)]
 mod vulkan_sr;

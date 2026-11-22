@@ -17,6 +17,7 @@ use std::{
 
 #[path = "native_sr_fsr4_vulkan_abi.rs"]
 mod abi;
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[allow(dead_code)]
 #[path = "../runtime/vulkan/fsr4/bridge_abi.rs"]
 mod bridge_abi;

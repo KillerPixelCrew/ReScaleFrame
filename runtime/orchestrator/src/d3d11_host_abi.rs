@@ -82,6 +82,7 @@ pub(crate) struct rsf_d3d11h_pipeline_status {
 type Raw = *mut c_void;
 
 #[derive(Clone, Copy)]
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) struct rsf_d3d11h_platform {
     pub same_object: unsafe extern "C" fn(Raw, Raw) -> i32,
     pub child_device: unsafe extern "C" fn(Raw) -> Raw,
@@ -92,15 +93,24 @@ pub(crate) struct rsf_d3d11h_platform {
     pub chain_device: unsafe extern "C" fn(Raw) -> Raw,
     pub chain_window: unsafe extern "C" fn(Raw) -> Raw,
     pub chain_buffer: unsafe extern "C" fn(Raw) -> Raw,
+    #[cfg_attr(test, allow(dead_code))]
     pub present_install: unsafe extern "C" fn(*const rsf_d3d11_present_setup) -> c_int,
+    #[cfg_attr(test, allow(dead_code))]
     pub present_prepare: unsafe extern "C" fn(*const rsf_d3d11_present_setup) -> c_int,
+    #[cfg_attr(test, allow(dead_code))]
     pub present_install_scoped: unsafe extern "C" fn(*const rsf_d3d11_present_setup) -> c_int,
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_prepare:
         unsafe extern "C" fn(Raw, Raw, Raw, Raw, Raw, *mut rsf_streamline_host, Raw, u32),
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_retire: unsafe extern "C" fn(Raw, Raw),
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_latency_event: unsafe extern "C" fn(Raw, *const rsf_observer_present_event),
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_rendered_source_set: unsafe extern "C" fn(u32),
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_set_log: unsafe extern "C" fn(rsf_backend_log_fn, Raw),
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_options_set: unsafe extern "C" fn(*const rsf_native_fg_options),
     pub observer_install: unsafe extern "C" fn(rsf_game_log_fn, Raw, PresentEvent) -> i32,
     pub present_is_owner: unsafe extern "C" fn(Raw) -> i32,
@@ -111,18 +121,26 @@ pub(crate) struct rsf_d3d11h_platform {
     pub com_identity: unsafe extern "C" fn(Raw) -> Raw,
     pub chain_present: unsafe extern "C" fn(Raw) -> Raw,
     pub com_release: unsafe extern "C" fn(Raw) -> u32,
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_frame: unsafe extern "C" fn(*const Pass, u32),
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_submission: unsafe extern "C" fn(*const Pass, u32),
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_final: unsafe extern "C" fn(Raw, *const Pass),
+    #[cfg_attr(test, allow(dead_code))]
     pub fg_capture: unsafe extern "C" fn(Raw, *const Pass, *const rsf_motion_decode_params) -> i32,
+    #[cfg_attr(test, allow(dead_code))]
     pub scene_pass: unsafe extern "C" fn(*const Pass, u32) -> i32,
     pub scene_present_path: unsafe extern "C" fn(*const Pass) -> u32,
+    #[cfg_attr(test, allow(dead_code))]
     pub window_scope: unsafe extern "C" fn(*const Pass, u32) -> i32,
     pub window_present: unsafe extern "C" fn(*const rsf_observer_present_event) -> i32,
     pub window_last_present: unsafe extern "C" fn(*mut rsf_native_present_record) -> i32,
     pub window_match: unsafe extern "C" fn(Raw, *mut Pass) -> i32,
     pub latency_window_bind: unsafe extern "C" fn(u64, Raw),
+    #[cfg_attr(test, allow(dead_code))]
     pub cpu_dispatch_fg: unsafe extern "C" fn(*const rsf_game_cpu_event) -> i32,
+    #[cfg_attr(test, allow(dead_code))]
     pub cpu_event: unsafe extern "C" fn(*const rsf_game_cpu_event),
     pub dlss_native_present: unsafe extern "C" fn(Raw, u32, u32, u32) -> i32,
     pub pipeline_start: unsafe extern "C" fn(Raw, *const rsf_d3d11h_pipeline_start) -> i32,

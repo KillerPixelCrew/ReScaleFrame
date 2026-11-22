@@ -3,14 +3,14 @@ use super::*;
 use crate::d3d12_host::{borrow, owned_by};
 use crate::render_abi::{RSF_BACKEND_ABI_VERSION, rsf_fg_swapchain_desc};
 use crate::sdk_module::{d3d12_library_path, load_system_library};
-use rsf_game_sys::frame_policy::{rsf_frame_allows_fg, rsf_frame_has_rendered_source};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_RENDERED,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_camera_frame,
 };
+use rsf_game_sys::{rsf_frame_allows_fg, rsf_frame_has_rendered_source};
 use std::ffi::CStr;
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::core::PCWSTR;
+use windows::core::{Interface, PCWSTR};
 
 const UI_COMPLETE: u32 = 5;
 // The existing FG ABI admission cutoff, rounded to f32.
@@ -232,7 +232,8 @@ unsafe extern "C" fn load_library(setup: &Setup, name: *const u16) -> Raw {
     let Ok(directory) = unsafe { CStr::from_ptr(setup.runtime_directory_utf8) }.to_str() else {
         return null_mut();
     };
-    let name = unsafe { PCWSTR(name).as_wide() };
+    let name = PCWSTR(name);
+    let name = unsafe { name.as_wide() };
     let Some(path) = d3d12_library_path(directory, name.iter().copied()) else {
         return null_mut();
     };

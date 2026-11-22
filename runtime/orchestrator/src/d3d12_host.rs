@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use rsf_game_sys::{renderer_policy::depth_domains_requested, rsf_game_render_pass};
+use rsf_game_sys::{depth_domains_requested, rsf_game_render_pass};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
@@ -7,6 +7,7 @@ use windows::core::{GUID, HRESULT, Interface};
 
 pub(super) type Raw = *mut c_void;
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn pass_depth_domains(pass: *const rsf_game_render_pass) -> u32 {
     u32::from(depth_domains_requested(unsafe { &(*pass).depth_domains }))
 }

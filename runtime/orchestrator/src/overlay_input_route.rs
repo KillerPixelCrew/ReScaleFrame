@@ -62,7 +62,7 @@ pub(super) struct MessageOps {
 const _: () = {
     assert!(size_of::<Contact>() == 20);
     assert!(std::mem::offset_of!(Contact, kind) == 16);
-    assert!(size_of::<MessageOps>() == 8 * size_of::<usize>());
+    assert!(size_of::<MessageOps>() == usize::BITS as usize);
 };
 
 #[repr(u32)]

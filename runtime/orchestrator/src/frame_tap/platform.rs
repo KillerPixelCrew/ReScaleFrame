@@ -237,7 +237,16 @@ unsafe extern "C" fn set_viewports(
     let set: Set = if original.is_null() {
         unsafe { method!(context, 44, Set) }
     } else {
-        unsafe { std::mem::transmute(original) }
+        unsafe {
+            std::mem::transmute::<
+                *mut std::ffi::c_void,
+                unsafe extern "system" fn(
+                    *mut std::ffi::c_void,
+                    u32,
+                    *const crate::frame_tap_abi::rsf_frame_tap_viewport,
+                ),
+            >(original)
+        }
     };
     unsafe { set(context, count, views) };
 }
@@ -252,7 +261,16 @@ unsafe extern "C" fn set_scissors(
     let set: Set = if original.is_null() {
         unsafe { method!(context, 45, Set) }
     } else {
-        unsafe { std::mem::transmute(original) }
+        unsafe {
+            std::mem::transmute::<
+                *mut std::ffi::c_void,
+                unsafe extern "system" fn(
+                    *mut std::ffi::c_void,
+                    u32,
+                    *const crate::frame_tap_abi::rsf_frame_tap_rect,
+                ),
+            >(original)
+        }
     };
     unsafe { set(context, count, rects) };
 }
@@ -455,7 +473,17 @@ unsafe extern "C" fn bind_constants(
     buffer: Handle,
 ) {
     let set: SetRange = match stage {
-        0 | 1 => unsafe { std::mem::transmute(original) },
+        0 | 1 => unsafe {
+            std::mem::transmute::<
+                *mut std::ffi::c_void,
+                unsafe extern "system" fn(
+                    *mut std::ffi::c_void,
+                    u32,
+                    u32,
+                    *const *mut std::ffi::c_void,
+                ),
+            >(original)
+        },
         2 => unsafe { method!(context, 22, SetRange) },
         3 => unsafe { method!(context, 62, SetRange) },
         4 => unsafe { method!(context, 66, SetRange) },

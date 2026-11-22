@@ -49,10 +49,30 @@ impl Sdk {
         };
         // The signatures come from AMD's FFX API header. The module outlives each call.
         Ok(Self {
-            create: unsafe { std::mem::transmute::<_, PfnFfxCreateContext>(create) },
-            destroy: unsafe { std::mem::transmute::<_, PfnFfxDestroyContext>(destroy) },
-            query: unsafe { std::mem::transmute::<_, PfnFfxQuery>(query) },
-            dispatch: unsafe { std::mem::transmute::<_, PfnFfxDispatch>(dispatch) },
+            create: unsafe {
+                std::mem::transmute::<
+                    std::option::Option<unsafe extern "system" fn() -> isize>,
+                    PfnFfxCreateContext,
+                >(create)
+            },
+            destroy: unsafe {
+                std::mem::transmute::<
+                    std::option::Option<unsafe extern "system" fn() -> isize>,
+                    PfnFfxDestroyContext,
+                >(destroy)
+            },
+            query: unsafe {
+                std::mem::transmute::<
+                    std::option::Option<unsafe extern "system" fn() -> isize>,
+                    PfnFfxQuery,
+                >(query)
+            },
+            dispatch: unsafe {
+                std::mem::transmute::<
+                    std::option::Option<unsafe extern "system" fn() -> isize>,
+                    PfnFfxDispatch,
+                >(dispatch)
+            },
             _compatibility: compatibility,
             _module: module,
         })

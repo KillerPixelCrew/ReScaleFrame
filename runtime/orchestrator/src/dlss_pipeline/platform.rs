@@ -14,6 +14,7 @@ use crate::motion_resolve::{
     rsf_motion_resolve_create, rsf_motion_resolve_depth, rsf_motion_resolve_destroy,
     rsf_motion_resolve_motion, rsf_motion_resolve_run,
 };
+use crate::render_abi::rsf_motion_resolve_params;
 use crate::sr_legacy::rsf_sr_legacy_create;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

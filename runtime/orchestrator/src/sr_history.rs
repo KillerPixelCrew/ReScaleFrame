@@ -11,6 +11,7 @@ pub(super) extern "C" fn rsf_core_sr_request_reset() -> i32 {
     0
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) extern "C" fn rsf_core_sr_clear_reset() {
     RESET_PENDING.store(false, Ordering::Release);
 }

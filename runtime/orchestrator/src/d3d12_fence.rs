@@ -104,20 +104,28 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d12_wait_fence(
         timeout_ms,
         || unsafe { completed(fence) },
         || unsafe { arm(fence, value, event) },
-        |remaining| match unsafe { WaitForSingleObject(event, remaining) } {
-            WAIT_OBJECT_0 => S_OK,
-            WAIT_TIMEOUT => TIMED_OUT,
-            WAIT_FAILED => {
-                let error = unsafe { GetLastError() };
-                if error == 0 {
-                    E_FAIL
-                } else {
-                    win32_hresult(error)
-                }
-            }
-            _ => E_FAIL,
-        },
+        |remaining| unsafe { wait_event(event, remaining) },
     )
+}
+
+/// One wait on a fence event, as the HRESULT `wait_for_value` expects from its wait step.
+///
+/// # Safety
+/// `event` is a live event handle for the duration of the call.
+pub(super) unsafe fn wait_event(event: Handle, remaining: u32) -> i32 {
+    match unsafe { WaitForSingleObject(event, remaining) } {
+        WAIT_OBJECT_0 => S_OK,
+        WAIT_TIMEOUT => TIMED_OUT,
+        WAIT_FAILED => {
+            let error = unsafe { GetLastError() };
+            if error == 0 {
+                E_FAIL
+            } else {
+                win32_hresult(error)
+            }
+        }
+        _ => E_FAIL,
+    }
 }
 
 #[cfg(test)]

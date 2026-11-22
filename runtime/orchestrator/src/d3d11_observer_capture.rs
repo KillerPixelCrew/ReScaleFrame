@@ -263,9 +263,7 @@ pub(super) fn needs_presenter() -> bool {
 }
 
 pub(super) fn adopt_device(incoming: ComRef) -> Option<ComRef> {
-    let Some(identity) = (unsafe { device_identity(incoming.as_ptr()) }) else {
-        return None;
-    };
+    let identity = (unsafe { device_identity(incoming.as_ptr()) })?;
     let (old, context, old_identity, discarded) = {
         let mut state = lock();
         if PRESENTING_DEVICE.swap(true, Ordering::AcqRel) {

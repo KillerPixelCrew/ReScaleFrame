@@ -7,7 +7,7 @@ use crate::native_regions::{
     rsf_native_regions_depth_valid, rsf_native_regions_prepare, rsf_native_regions_temporal_mask,
 };
 use crate::native_reinsert::rsf_native_reinsert;
-use rsf_game_sys::renderer_policy::depth_domains_requested;
+use rsf_game_sys::depth_domains_requested;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32_FLOAT;
 
 // The pipeline and FG capture owners are Rust exports of this crate. Vendor C++

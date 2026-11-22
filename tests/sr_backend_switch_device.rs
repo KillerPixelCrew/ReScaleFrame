@@ -57,7 +57,10 @@ impl Runtime {
             ($name:expr) => {{
                 let address = dll.symbol($name)?;
                 // Each slot follows the matching public dlss_pipeline.h signature.
-                unsafe { std::mem::transmute(address) }
+                // The target is the field the import fills, so it differs per use.
+                #[allow(clippy::missing_transmute_annotations)]
+                let function = unsafe { std::mem::transmute(address) };
+                function
             }};
         }
         Some(Self {
@@ -227,7 +230,11 @@ impl Rig {
     }
 
     fn run_frame(&mut self, runtime: &Runtime) -> i32 {
-        self.camera.jitter_pixels[0] = if self.serial % 2 == 0 { 0.25 } else { -0.25 };
+        self.camera.jitter_pixels[0] = if self.serial.is_multiple_of(2) {
+            0.25
+        } else {
+            -0.25
+        };
         self.serial += 1;
         let context = self.context.as_raw();
         // Restore engine bindings before the next flush and timing sample.

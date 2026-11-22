@@ -543,6 +543,8 @@ impl FfxOps {
 }
 
 impl FidelityFx {
+    // The partial owner travels with the error so its retirement stays with the caller.
+    #[allow(clippy::type_complexity)]
     unsafe fn create(
         ops: &'static FfxOps,
         setup: &Setup,
@@ -821,6 +823,8 @@ struct Owner {
 }
 
 impl Owner {
+    // The partial owner travels with the error so its retirement stays with the caller.
+    #[allow(clippy::result_large_err)]
     unsafe fn create(
         platform: &'static Platform,
         mut setup: Setup,

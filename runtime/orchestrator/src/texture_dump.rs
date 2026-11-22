@@ -4,7 +4,7 @@ use crate::input_dump::{
     TextureOptions,
 };
 use crate::sr_session::checked;
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::fs::File;
 use std::io::{BufWriter, Write as _};
 use std::mem::{offset_of, size_of};

@@ -821,10 +821,10 @@ impl AuxiliarySr {
         };
         frame.phase = Phase::Publishing;
         if frame.depth_restore.is_some()
-            && !self
+            && self
                 .depth
                 .as_ref()
-                .is_some_and(|depth| depth.commit() == RSF_DEPTH_SCALE_OK as i32)
+                .is_none_or(|depth| depth.commit() != RSF_DEPTH_SCALE_OK as i32)
         {
             return false;
         }

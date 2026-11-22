@@ -221,9 +221,9 @@ pub(super) unsafe extern "C" fn rsf_motion_resolve_run(
     };
     let layer = params.depth_layer;
     if !layer.is_null()
-        && !pass
+        && pass
             .source(layer)
-            .is_some_and(|info| info.format == R32_FLOAT)
+            .is_none_or(|info| info.format != R32_FLOAT)
     {
         return 0;
     }

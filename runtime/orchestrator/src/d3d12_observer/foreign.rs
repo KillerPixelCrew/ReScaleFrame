@@ -180,7 +180,7 @@ pub(super) unsafe extern "C" fn describe_window(raw: Handle, window: &mut Handle
     };
     let mut out = DXGI_SWAP_CHAIN_DESC::default();
     let result = guarded(|| unsafe { get_chain_desc(chain)(raw, &mut out) }.0);
-    if !result.is_some_and(|hr| hr >= 0) {
+    if result.is_none_or(|hr| hr < 0) {
         return 0;
     }
     *window = out.OutputWindow.0;

@@ -464,7 +464,7 @@ impl Capture {
             .record
             .is_none_or(|frame| frame.flags & RSF_FRAME_FLAG_NO_SR == 0)
             || observed_sr;
-        let required = if self.record.is_none() {
+        let required: &[&str] = if self.record.is_none() {
             metadata::LEGACY_REQUIRED
         } else if requires_sr {
             &["final_color", "sr_color", "sr_depth", "sr_motion"]

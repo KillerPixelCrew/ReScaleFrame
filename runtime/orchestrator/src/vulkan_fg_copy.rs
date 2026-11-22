@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pub(super) use crate::vulkan_fg_resources_abi::rsf_vkfg_barrier as Barrier;
-use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as Image, rsf_vkfg_image_copy as ImageCopy};
-use ash::vk::{self, Handle};
+use crate::vulkan_fg_resources_abi::rsf_vkfg_image as Image;
+pub(super) use crate::vulkan_fg_resources_abi::rsf_vkfg_image_copy as ImageCopy;
+use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
 
 pub(super) const COLOR_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
@@ -80,7 +81,7 @@ const TRANSFER_DST: u32 = 7;
 pub(super) const FAMILY_IGNORED: u32 = !0;
 pub(super) const FAMILY_EXTERNAL: u32 = !1;
 // VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT.
-const MEMORY_ACCESS: u32 = 0x8000 | 0x1_0000;
+pub(super) const MEMORY_ACCESS: u32 = 0x8000 | 0x1_0000;
 pub(super) const ALL_COMMANDS: u32 = 0x1_0000;
 
 type Handle = *mut c_void;
@@ -106,7 +107,7 @@ impl Barrier {
         barrier
     }
 
-    fn same_queue(image: u64, old_layout: u32, new_layout: u32) -> Self {
+    pub(super) fn same_queue(image: u64, old_layout: u32, new_layout: u32) -> Self {
         Self::new(
             image,
             old_layout,

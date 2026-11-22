@@ -89,8 +89,11 @@ fn entry(streamline: rsf_vk_get_proc) -> TestResult<(Library, ash::Entry)> {
     let library = Library(module);
     let proc = unsafe { GetProcAddress(module, c"vkGetInstanceProcAddr".as_ptr().cast()) }
         .ok_or("missing vkGetInstanceProcAddr")?;
-    let get_instance_proc_addr =
-        unsafe { std::mem::transmute::<_, vk::PFN_vkGetInstanceProcAddr>(proc) };
+    let get_instance_proc_addr = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, vk::PFN_vkGetInstanceProcAddr>(
+            proc,
+        )
+    };
     let get_instance_proc_addr = streamline.map_or(get_instance_proc_addr, |proc| unsafe {
         std::mem::transmute::<_, vk::PFN_vkGetInstanceProcAddr>(proc)
     });
@@ -423,14 +426,24 @@ impl Gpu {
             device: raw(self.device().handle()),
             // The x64 system and C ABIs use the same Vulkan calling convention.
             instance_proc: Some(unsafe {
-                std::mem::transmute::<vk::PFN_vkGetInstanceProcAddr, _>(
-                    self.entry.static_fn().get_instance_proc_addr,
-                )
+                std::mem::transmute::<
+                    vk::PFN_vkGetInstanceProcAddr,
+                    unsafe extern "C" fn(
+                        *mut std::ffi::c_void,
+                        *const i8,
+                    )
+                        -> std::option::Option<unsafe extern "C" fn()>,
+                >(self.entry.static_fn().get_instance_proc_addr)
             }),
             device_proc: Some(unsafe {
-                std::mem::transmute::<vk::PFN_vkGetDeviceProcAddr, _>(
-                    self.instance.fp_v1_0().get_device_proc_addr,
-                )
+                std::mem::transmute::<
+                    vk::PFN_vkGetDeviceProcAddr,
+                    unsafe extern "C" fn(
+                        *mut std::ffi::c_void,
+                        *const i8,
+                    )
+                        -> std::option::Option<unsafe extern "C" fn()>,
+                >(self.instance.fp_v1_0().get_device_proc_addr)
             }),
             backend,
             quality: 1,

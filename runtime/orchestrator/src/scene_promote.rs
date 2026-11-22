@@ -85,6 +85,8 @@ struct FullscreenDraw {
     height: u32,
 }
 
+// An ABI-identical raw-pointer view of exports another module declares with references.
+#[allow(clashing_extern_declarations)]
 unsafe extern "C" {
     fn rsf_fullscreen_pass_create(
         device: Handle,

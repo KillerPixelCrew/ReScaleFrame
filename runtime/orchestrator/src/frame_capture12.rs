@@ -41,6 +41,8 @@ const FEATURE_FAILED: i32 = -9;
 
 use crate::fg12_abi::rsf_fg12_readback_layout as Layout;
 
+// The record is generated; the derive cannot be added to its definition.
+#[allow(clippy::derivable_impls)]
 impl Default for Layout {
     fn default() -> Self {
         Self {

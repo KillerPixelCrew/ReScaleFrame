@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// bindgen output keeps the SDK's Win32 names.
+#[allow(clippy::upper_case_acronyms)]
 #[path = "fsr_abi.rs"]
 mod abi;
 use super::*;
@@ -13,8 +15,6 @@ use windows::{
     },
     core::Interface,
 };
-
-const FFX_OK: u32 = FFX_API_RETURN_OK as u32;
 
 #[derive(Default)]
 struct CreateDescription {

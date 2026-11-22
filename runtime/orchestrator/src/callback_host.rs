@@ -40,7 +40,7 @@ use rsf_game_sys::{
         rsf_callback_host_setup as Setup, rsf_callback_host_setup_v2 as SetupV2,
     },
     recording_slots::RecordingSlots,
-    rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services, rsf_game_probe as Probe,
+    rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
     rsf_game_render_config as Config, rsf_game_render_pass as Pass,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};

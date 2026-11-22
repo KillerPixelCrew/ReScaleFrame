@@ -29,6 +29,7 @@ use rsf_game_sys::{
     rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config, rsf_game_render_feedback,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::mem::offset_of;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
@@ -51,6 +52,7 @@ const REFLEX_OFF: u32 = 0;
 const REFLEX_ON: u32 = 1;
 const REFLEX_BOOST: u32 = 2;
 const MAX_GENERATED_FRAMES: u32 = 15;
+#[cfg_attr(test, allow(dead_code))]
 const UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
 const SCREEN_GAMEPLAY: u32 = 8;
 const DXGI_PRESENT_TEST: u32 = 1;
@@ -299,6 +301,7 @@ impl Graphics {
 // owner that holds the callback lease.
 unsafe impl Send for Graphics {}
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) struct Host {
     platform: rsf_d3d11h_platform,
     make_products: ProductsFactory,
@@ -317,9 +320,13 @@ pub(crate) struct Host {
     capture_failures: AtomicBool,
     capture_sequence: AtomicBool,
     requested_generation: AtomicU32,
+    #[cfg_attr(test, allow(dead_code))]
     cpu_reports: AtomicU32,
+    #[cfg_attr(test, allow(dead_code))]
     cpu_sample_reports: AtomicU32,
+    #[cfg_attr(test, allow(dead_code))]
     cpu_refusal_stages: AtomicU32,
+    #[cfg_attr(test, allow(dead_code))]
     cpu_stage_reports: [AtomicU32; RSF_GAME_CPU_SOURCE_ABORT as usize + 1],
     shared: Mutex<Shared>,
     graphics: Mutex<Graphics>,
@@ -330,6 +337,7 @@ pub(crate) struct Host {
 unsafe impl Send for Host {}
 unsafe impl Sync for Host {}
 
+#[cfg_attr(test, allow(dead_code))]
 static CREATION: Mutex<()> = Mutex::new(());
 static OWNER: AtomicPtr<Host> = AtomicPtr::new(null_mut());
 
@@ -466,6 +474,7 @@ fn validate_setup(setup: &rsf_d3d11_host_setup, services: &rsf_game_host_service
         || services.render_feedback.is_some())
 }
 
+#[cfg_attr(test, allow(dead_code))]
 impl Host {
     fn new(
         platform: rsf_d3d11h_platform,
@@ -644,6 +653,7 @@ impl Host {
         }
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     fn install_bridge(&self) {
         let mode = self.setup.presentation_bridge;
         if mode == 0 {
@@ -1744,6 +1754,7 @@ impl Host {
         result
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     fn passes(&self, context: Raw, pass: &Pass, begin: u32) {
         let Some(guard) = self.try_graphics() else {
             return;
@@ -1925,6 +1936,7 @@ impl Host {
         }
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     fn cpu(&self, event: *const rsf_game_cpu_event) {
         // Installation/preparation alone does not prove the engine retained the facade.
         if self.setup.presentation_bridge != 0 && !self.bridge_bound.load(Ordering::Acquire) {
@@ -2179,6 +2191,7 @@ unsafe extern "C" fn host_sr_report(user: Raw, output: *mut rsf_overlay_sr_repor
     1
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_cpu(user: Raw, event: *const rsf_game_cpu_event) {
     unsafe { host(user) }.cpu(event);
 }
@@ -2191,6 +2204,7 @@ unsafe extern "C" fn host_accept_window(user: Raw, window: Raw) -> c_int {
         as c_int
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_passes(user: Raw, context: Raw, pass: *const Pass, begin: u32) {
     let host = unsafe { host(user) };
     let Some(pass) = (unsafe { pass.as_ref() }) else {
@@ -2205,6 +2219,7 @@ unsafe extern "C" fn host_passes(user: Raw, context: Raw, pass: *const Pass, beg
     host.passes(context, pass, begin);
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_config(user: Raw, output: *mut rsf_game_render_config) -> c_int {
     let host = unsafe { host(user) };
     let Some(output) = (unsafe { output.as_mut() }) else {
@@ -2220,6 +2235,7 @@ unsafe extern "C" fn host_config(user: Raw, output: *mut rsf_game_render_config)
     1
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_feedback(user: Raw, event: *const rsf_game_render_feedback) {
     let host = unsafe { host(user) };
     let Some(event) = (unsafe { event.as_ref() }) else {
@@ -2264,6 +2280,7 @@ unsafe extern "C" fn host_present(user: Raw, event: *const rsf_observer_present_
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_process(user: Raw, context: Raw, pass: *const Pass) -> i32 {
     let Some(pass) = (unsafe { pass.as_ref() }) else {
         return INVALID;
@@ -2310,6 +2327,7 @@ unsafe extern "C" fn rsf_d3d11_host_create(
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe fn create(
     platform: *const rsf_d3d11h_platform,
     setup: *const rsf_d3d11_host_setup,

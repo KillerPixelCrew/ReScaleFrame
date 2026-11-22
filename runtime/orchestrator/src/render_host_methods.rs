@@ -6,6 +6,7 @@ macro_rules! impl_host_methods {
     ($(fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $result:ty)? { $native:expr })*) => {
         impl Platform {
             $(
+                #[allow(clippy::too_many_arguments)]
                 unsafe fn $name(&self, $($arg: $ty),*) $(-> $result)? {
                     #[cfg(not(test))]
                     { $native }

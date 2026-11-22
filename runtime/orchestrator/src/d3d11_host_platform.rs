@@ -10,12 +10,12 @@ use crate::d3d11_output_platform::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_device_ok, rsf_d3d11_output_is_immediate,
 };
 use crate::dlss_pipeline::exports::{
-    rsf_core_dlss_pipeline_apply_sharpening, rsf_dlss_pipeline_get_status,
-    rsf_dlss_pipeline_output_texture, rsf_dlss_pipeline_resize_output,
-    rsf_dlss_pipeline_select_backend, rsf_dlss_pipeline_set_colour_correction,
-    rsf_dlss_pipeline_set_colour_transport, rsf_dlss_pipeline_set_preset,
-    rsf_dlss_pipeline_set_quality, rsf_dlss_pipeline_start_backend,
+    rsf_dlss_pipeline_get_status, rsf_dlss_pipeline_output_texture,
+    rsf_dlss_pipeline_resize_output, rsf_dlss_pipeline_select_backend,
+    rsf_dlss_pipeline_set_colour_correction, rsf_dlss_pipeline_set_colour_transport,
+    rsf_dlss_pipeline_set_preset, rsf_dlss_pipeline_set_quality, rsf_dlss_pipeline_start_backend,
 };
+use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening;
 use crate::dlss_streamline::exports::rsf_dlss_native_present;
 use crate::fg12_abi::rsf_streamline_host;
 use crate::native_cpu::{rsf_native_cpu_dispatch, rsf_native_cpu_event};

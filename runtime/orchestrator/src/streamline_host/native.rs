@@ -783,7 +783,7 @@ unsafe extern "C" fn version(handle: Handle, status: &mut Status) {
     let mut version = sdk::FeatureVersion::new();
     let found = unsafe { (host.core().version)(sdk::FEATURE_DLSS_G, &mut version) } == sdk::OK
         && version.ngx.present();
-    let record = found.then(|| Version {
+    let record = found.then_some(Version {
         ngx: [version.ngx.major, version.ngx.minor, version.ngx.build],
         streamline: [
             version.streamline.major,

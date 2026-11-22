@@ -7,7 +7,6 @@ use crate::overlay_native12_abi::{
 };
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, c_void};
-use std::ptr;
 use std::sync::Mutex;
 #[cfg(not(test))]
 pub(super) mod native;
@@ -263,6 +262,7 @@ impl State {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn render_frame(
     platform: &Platform,
     device: Handle,
@@ -350,6 +350,7 @@ extern "C" fn rsf_core_overlay11on12_stop(raw: &RawPlatform) {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    use std::ptr;
 
     #[repr(C)]
     struct Vtable {

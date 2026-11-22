@@ -7,7 +7,7 @@ use std::ffi::{CStr, c_void};
 use std::ptr::null_mut;
 use std::sync::Mutex;
 use windows_sys::Win32::{
-    Foundation::{FARPROC, FreeLibrary, GetLastError, HMODULE},
+    Foundation::{FreeLibrary, GetLastError, HMODULE},
     System::{
         Environment::GetEnvironmentVariableW,
         LibraryLoader::{
@@ -124,13 +124,50 @@ fn exports(module: HMODULE) -> rsf_overlay_host_panel {
     // The panel's five C exports have the signatures declared in overlay.h.
     unsafe {
         rsf_overlay_host_panel {
-            create: std::mem::transmute::<FARPROC, _>(get(c"rsf_overlay_create")),
-            destroy: std::mem::transmute::<FARPROC, _>(get(c"rsf_overlay_destroy")),
-            frame: std::mem::transmute::<FARPROC, _>(get(c"rsf_overlay_frame")),
-            texture_updates: std::mem::transmute::<FARPROC, _>(get(c"rsf_overlay_texture_updates")),
-            textures_to_free: std::mem::transmute::<FARPROC, _>(get(
-                c"rsf_overlay_textures_to_free",
-            )),
+            create: std::mem::transmute::<
+                std::option::Option<unsafe extern "system" fn() -> isize>,
+                std::option::Option<
+                    unsafe extern "C" fn(u32) -> *mut crate::overlay_host_abi::rsf_overlay,
+                >,
+            >(get(c"rsf_overlay_create")),
+            destroy: std::mem::transmute::<
+                std::option::Option<unsafe extern "system" fn() -> isize>,
+                std::option::Option<
+                    unsafe extern "C" fn(*mut crate::overlay_host_abi::rsf_overlay),
+                >,
+            >(get(c"rsf_overlay_destroy")),
+            frame: std::mem::transmute::<
+                std::option::Option<unsafe extern "system" fn() -> isize>,
+                std::option::Option<
+                    unsafe extern "C" fn(
+                        *mut crate::overlay_host_abi::rsf_overlay,
+                        *const crate::overlay_host_abi::rsf_overlay_input,
+                        *const crate::overlay_abi::overlay_wire::rsf_overlay_stats,
+                        *mut crate::overlay_host_abi::rsf_overlay_draw_data,
+                        *mut crate::overlay_abi::overlay_wire::rsf_overlay_intent,
+                    ) -> i32,
+                >,
+            >(get(c"rsf_overlay_frame")),
+            texture_updates: std::mem::transmute::<
+                std::option::Option<unsafe extern "system" fn() -> isize>,
+                std::option::Option<
+                    unsafe extern "C" fn(
+                        *mut crate::overlay_host_abi::rsf_overlay,
+                        *mut crate::overlay_abi::rsf_overlay_texture_update,
+                        u32,
+                    ) -> u32,
+                >,
+            >(get(c"rsf_overlay_texture_updates")),
+            textures_to_free: std::mem::transmute::<
+                std::option::Option<unsafe extern "system" fn() -> isize>,
+                std::option::Option<
+                    unsafe extern "C" fn(
+                        *mut crate::overlay_host_abi::rsf_overlay,
+                        *mut u64,
+                        u32,
+                    ) -> u32,
+                >,
+            >(get(c"rsf_overlay_textures_to_free")),
         }
     }
 }

@@ -21,6 +21,8 @@ const CACHE_IDLE_MS: u64 = 2000;
 unsafe extern "C" {
     pub(super) fn rsf_d3d11_state_save(context: Handle, state: *mut rsf_d3d11_state) -> u32;
     pub(super) fn rsf_d3d11_state_restore(context: Handle, state: *mut rsf_d3d11_state);
+    pub(super) fn rsf_d3d11_depth_state_save(context: Handle, state: *mut rsf_d3d11_state) -> u32;
+    pub(super) fn rsf_d3d11_depth_state_restore(context: Handle, state: *mut rsf_d3d11_state);
     pub(super) fn rsf_call_native_log(log: LogFn, user: Handle, text: *const c_char);
 }
 

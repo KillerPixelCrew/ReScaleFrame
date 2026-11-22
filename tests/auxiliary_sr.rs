@@ -297,6 +297,7 @@ fn saved_viewport(context: &ID3D11DeviceContext) -> (u32, [u32; 6]) {
     (count, viewport_bits(viewport))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn transaction_scenarios(
     rig: &Device,
     transaction: &Transaction,

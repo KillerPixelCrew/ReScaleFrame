@@ -2,9 +2,7 @@
 use super::{Handle, TestResult, check};
 use crate::gl_pipeline_abi::rsf_sr12_setup as Setup;
 use crate::owned_win32_handle;
-use rsf_game_sys::{
-    frame_event_abi::RSF_GAME_CAMERA_ABI_VERSION, rsf_game_render_pass as RenderPass,
-};
+use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_game_render_pass as RenderPass};
 use std::ffi::{CString, c_char};
 use std::fs;
 use std::io::Read;

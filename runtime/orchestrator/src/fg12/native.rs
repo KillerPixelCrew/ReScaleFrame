@@ -88,7 +88,7 @@ unsafe extern "C" fn readback_copy(
     buffer: *mut c_void,
     layout: *const rsf_fg12_readback_layout,
 ) {
-    unsafe { rsf_fg12_platform_readback_copy(list, source, state, buffer, &*layout) };
+    unsafe { rsf_fg12_platform_readback_copy(list, source, state, buffer, layout) };
 }
 
 pub(super) static CALLS: Platform = Platform {

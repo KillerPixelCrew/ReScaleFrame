@@ -203,7 +203,7 @@ unsafe fn rsf_core_native_scene_classify_present(
     scene: *const Scene,
     backbuffer: BackbufferIdentity,
 ) -> u32 {
-    if !unsafe { full_prefix(window) && full_prefix(scene) } {
+    if !unsafe { has_capacity(window) && has_capacity(scene) } {
         return RSF_NATIVE_SCENE_PRESENT_NONE;
     }
     classify_present_path(unsafe { &*window }, unsafe { &*scene }, backbuffer)

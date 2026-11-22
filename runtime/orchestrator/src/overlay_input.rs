@@ -327,91 +327,6 @@ unsafe extern "system" fn hooked_raw_buffer(
     result
 }
 
-#[cfg(not(test))]
-mod minhook {
-    use super::*;
-    // Values from the pinned MinHook.h. All calls share the carrier's MinHook instance.
-    const OK: i32 = 0;
-    const ALREADY_INITIALIZED: i32 = 1;
-    const NOT_CREATED: i32 = 4;
-    const ENABLED: i32 = 5;
-    const DISABLED: i32 = 6;
-
-    unsafe extern "system" {
-        fn MH_Initialize() -> i32;
-        fn MH_CreateHook(
-            target: *mut c_void,
-            detour: *mut c_void,
-            original: *mut *mut c_void,
-        ) -> i32;
-        fn MH_EnableHook(target: *mut c_void) -> i32;
-        fn MH_DisableHook(target: *mut c_void) -> i32;
-        fn MH_RemoveHook(target: *mut c_void) -> i32;
-    }
-
-    pub(super) static PLATFORM: HookPlatform = HookPlatform {
-        initialize,
-        create,
-        enable,
-        disable,
-        remove,
-    };
-
-    unsafe extern "C" fn initialize() -> i32 {
-        match unsafe { MH_Initialize() } {
-            ALREADY_INITIALIZED => OK,
-            status => status,
-        }
-    }
-
-    unsafe extern "C" fn create(
-        target: *mut c_void,
-        detour: *mut c_void,
-        original: *mut *mut c_void,
-    ) -> i32 {
-        unsafe { MH_CreateHook(target, detour, original) }
-    }
-
-    unsafe extern "C" fn enable(target: *mut c_void) -> i32 {
-        match unsafe { MH_EnableHook(target) } {
-            ENABLED => OK,
-            status => status,
-        }
-    }
-
-    unsafe extern "C" fn disable(target: *mut c_void) -> i32 {
-        i32::from(matches!(
-            unsafe { MH_DisableHook(target) },
-            OK | DISABLED | NOT_CREATED
-        ))
-    }
-
-    unsafe extern "C" fn remove(target: *mut c_void) -> i32 {
-        i32::from(matches!(unsafe { MH_RemoveHook(target) }, OK | NOT_CREATED))
-    }
-}
-
-#[cfg(test)]
-mod minhook {
-    use super::*;
-    unsafe extern "C" fn unavailable() -> i32 {
-        -1
-    }
-    unsafe extern "C" fn create(_: *mut c_void, _: *mut c_void, _: *mut *mut c_void) -> i32 {
-        -1
-    }
-    unsafe extern "C" fn modify(_: *mut c_void) -> i32 {
-        0
-    }
-    pub(super) static PLATFORM: HookPlatform = HookPlatform {
-        initialize: unavailable,
-        create,
-        enable: modify,
-        disable: modify,
-        remove: modify,
-    };
-}
-
 unsafe extern "C" fn install_cursor() {
     let detours = [
         hooked_set_position as *mut c_void,
@@ -659,4 +574,89 @@ pub(super) unsafe extern "C" fn rsf_overlay_input_collect(
     delta: f32,
 ) -> i32 {
     unsafe { pointer::rsf_core_overlay_input_collect(out, width, height, delta, sample_cursor) }
+}
+
+#[cfg(not(test))]
+mod minhook {
+    use super::*;
+    // Values from the pinned MinHook.h. All calls share the carrier's MinHook instance.
+    const OK: i32 = 0;
+    const ALREADY_INITIALIZED: i32 = 1;
+    const NOT_CREATED: i32 = 4;
+    const ENABLED: i32 = 5;
+    const DISABLED: i32 = 6;
+
+    unsafe extern "system" {
+        fn MH_Initialize() -> i32;
+        fn MH_CreateHook(
+            target: *mut c_void,
+            detour: *mut c_void,
+            original: *mut *mut c_void,
+        ) -> i32;
+        fn MH_EnableHook(target: *mut c_void) -> i32;
+        fn MH_DisableHook(target: *mut c_void) -> i32;
+        fn MH_RemoveHook(target: *mut c_void) -> i32;
+    }
+
+    pub(super) static PLATFORM: HookPlatform = HookPlatform {
+        initialize,
+        create,
+        enable,
+        disable,
+        remove,
+    };
+
+    unsafe extern "C" fn initialize() -> i32 {
+        match unsafe { MH_Initialize() } {
+            ALREADY_INITIALIZED => OK,
+            status => status,
+        }
+    }
+
+    unsafe extern "C" fn create(
+        target: *mut c_void,
+        detour: *mut c_void,
+        original: *mut *mut c_void,
+    ) -> i32 {
+        unsafe { MH_CreateHook(target, detour, original) }
+    }
+
+    unsafe extern "C" fn enable(target: *mut c_void) -> i32 {
+        match unsafe { MH_EnableHook(target) } {
+            ENABLED => OK,
+            status => status,
+        }
+    }
+
+    unsafe extern "C" fn disable(target: *mut c_void) -> i32 {
+        i32::from(matches!(
+            unsafe { MH_DisableHook(target) },
+            OK | DISABLED | NOT_CREATED
+        ))
+    }
+
+    unsafe extern "C" fn remove(target: *mut c_void) -> i32 {
+        i32::from(matches!(unsafe { MH_RemoveHook(target) }, OK | NOT_CREATED))
+    }
+}
+
+#[cfg(test)]
+mod minhook {
+    use super::*;
+    unsafe extern "C" fn unavailable() -> i32 {
+        -1
+    }
+    unsafe extern "C" fn create(_: *mut c_void, _: *mut c_void, _: *mut *mut c_void) -> i32 {
+        -1
+    }
+    unsafe extern "C" fn modify(_: *mut c_void) -> i32 {
+        0
+    }
+    pub(super) static PLATFORM: HookPlatform = HookPlatform {
+        initialize: unavailable,
+        create,
+        enable: modify,
+        disable: modify,
+        remove: modify,
+    };
 }

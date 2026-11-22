@@ -24,7 +24,7 @@ use rsf_game_sys::{
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 #[cfg(test)]
 use std::mem::MaybeUninit;
-use std::ptr::{self, NonNull};
+use std::ptr::{self};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 

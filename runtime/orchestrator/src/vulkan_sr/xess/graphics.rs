@@ -21,13 +21,16 @@ impl Graphics {
         // Host proc lookup supplies the concrete Vulkan type for each exact command.
         let (barrier, copy, properties) = unsafe {
             (
-                std::mem::transmute::<_, vk::PFN_vkCmdPipelineBarrier>(device(
-                    c"vkCmdPipelineBarrier",
+                std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdPipelineBarrier>(
+                    device(c"vkCmdPipelineBarrier")?,
+                ),
+                std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdCopyImage>(device(
+                    c"vkCmdCopyImage",
                 )?),
-                std::mem::transmute::<_, vk::PFN_vkCmdCopyImage>(device(c"vkCmdCopyImage")?),
-                std::mem::transmute::<_, vk::PFN_vkGetPhysicalDeviceMemoryProperties>(instance(
-                    c"vkGetPhysicalDeviceMemoryProperties",
-                )?),
+                std::mem::transmute::<
+                    unsafe extern "C" fn(),
+                    vk::PFN_vkGetPhysicalDeviceMemoryProperties,
+                >(instance(c"vkGetPhysicalDeviceMemoryProperties")?),
             )
         };
         let mut memory = vk::PhysicalDeviceMemoryProperties::default();

@@ -524,7 +524,7 @@ impl XessOwner {
             GENERAL
         };
         let barrier = |plan: Barrier| unsafe { (ops.barrier)(native, commands, &plan) };
-        barrier(Barrier::new(output_image, output_before, GENERAL));
+        barrier(Barrier::same_queue(output_image, output_before, GENERAL));
         self.output.initialized = 1;
 
         let render = [record.render_width, record.render_height];
@@ -555,7 +555,7 @@ impl XessOwner {
         self.record_capture(commands, &private, record, c"sr-output-linear", reset);
         unsafe { (ops.sharpen)(native, &self.setup, commands, frame, private.image) };
         // The caller already supplied its output in TRANSFER_DST_OPTIMAL.
-        barrier(Barrier::new(output_image, GENERAL, TRANSFER_SRC));
+        barrier(Barrier::same_queue(output_image, GENERAL, TRANSFER_SRC));
         unsafe {
             (ops.copy)(
                 native,
@@ -563,7 +563,7 @@ impl XessOwner {
                 &ImageCopy::transfer(output_image, frame.output.image, output),
             )
         };
-        barrier(Barrier::new(output_image, TRANSFER_SRC, GENERAL));
+        barrier(Barrier::same_queue(output_image, TRANSFER_SRC, GENERAL));
         self.active = render;
         self.history.commit(record);
         0

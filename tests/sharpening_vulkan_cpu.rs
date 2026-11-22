@@ -742,8 +742,15 @@ fn admission() -> TestResult {
     check(!f.run(0, f.frame(1, true)), "commands required")?;
     let normal = f.frame(1, true);
     check(
-        unsafe { rsf_sharpenvk_host_run(&mut f.host, &f.setup, 1usize as *mut c_void, &normal, 0) }
-            == 0,
+        unsafe {
+            rsf_sharpenvk_host_run(
+                &mut f.host,
+                &f.setup,
+                std::ptr::dangling_mut::<c_void>(),
+                &normal,
+                0,
+            )
+        } == 0,
         "output required",
     )?;
     f.record.output_height = 0;

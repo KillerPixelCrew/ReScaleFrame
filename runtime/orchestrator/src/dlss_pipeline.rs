@@ -225,12 +225,30 @@ impl Shared {
 
 #[derive(Default)]
 struct DlssSettings {
-    directory: CString,
+    // None until Prepare copies the Streamline directory; the process owner is built in a const.
+    directory: Option<CString>,
     log_directory: Option<CString>,
     engine_version: Option<CString>,
     project_id: Option<CString>,
     engine: u32,
     require_signature: u32,
+}
+
+impl DlssSettings {
+    const fn empty() -> Self {
+        Self {
+            directory: None,
+            log_directory: None,
+            engine_version: None,
+            project_id: None,
+            engine: 0,
+            require_signature: 0,
+        }
+    }
+
+    fn directory(&self) -> &[u8] {
+        self.directory.as_deref().map_or(&[], CStr::to_bytes)
+    }
 }
 
 /// Owned by the thread that drives frames.
@@ -288,7 +306,7 @@ impl Owned {
             device: None,
             output: None,
             streamline_loaded: false,
-            dlss_settings: DlssSettings::default(),
+            dlss_settings: DlssSettings::empty(),
             dlss_evaluation_attempted: false,
             decode: null_mut(),
             decode_extent: [0; 2],
@@ -435,6 +453,15 @@ pub(super) struct Pipeline {
 // device and one Streamline.
 static PROCESS: Pipeline = Pipeline::new();
 
+// Applies saved settings to the process pipeline; used by the overlay in every build.
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_core_dlss_pipeline_apply_sharpening(
+    settings: &crate::render_abi::rsf_render_settings,
+) {
+    let options = crate::settings_store::sharpening_of(settings, &sharpening_policy::defaults());
+    let _ = unsafe { PROCESS.set_sharpening(&raw const options) };
+}
+
 unsafe extern "C" fn forward_dlss(_: Raw, message: *const c_char) {
     unsafe { PROCESS.forward(b"dlss", message) };
 }
@@ -445,6 +472,7 @@ unsafe extern "C" fn forward_dump(_: Raw, message: *const c_char) {
     unsafe { PROCESS.forward(b"dump", message) };
 }
 
+#[cfg_attr(test, allow(dead_code))]
 impl Pipeline {
     pub(super) const fn new() -> Self {
         Self {
@@ -615,11 +643,11 @@ impl Pipeline {
 
     unsafe fn open_dlss(&self, p: &P, owned: &mut Owned) -> i32 {
         let settings = &owned.dlss_settings;
-        if settings.directory.as_bytes().is_empty() {
+        if settings.directory().is_empty() {
             return INVALID;
         }
         let sink = *self.sink.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut plugins = settings.directory.as_bytes().to_vec();
+        let mut plugins = settings.directory().to_vec();
         while matches!(plugins.last(), Some(b'\\' | b'/')) {
             plugins.pop();
         }
@@ -852,7 +880,7 @@ impl Pipeline {
         let optional_string =
             |text: *const c_char| (!text.is_null()).then(|| unsafe { copy_string(text) });
         owned.dlss_settings = DlssSettings {
-            directory: unsafe { copy_string(setup.streamline_directory_utf8) },
+            directory: Some(unsafe { copy_string(setup.streamline_directory_utf8) }),
             log_directory: optional_string(setup.streamline_log_directory_utf8),
             engine_version: optional_string(setup.engine_version_utf8),
             project_id: optional_string(setup.project_id_utf8),
@@ -1907,11 +1935,13 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         self.count(true, OK)
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     pub(super) fn set_colour_correction(&self, enabled: u32) {
         self.colour_correction
             .store(enabled != 0, Ordering::Release);
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     pub(super) fn set_colour_transport(&self, enabled: u32) {
         self.colour_transport.store(enabled != 0, Ordering::Release);
     }

@@ -72,6 +72,7 @@ pub(super) fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vulkan_fg_copy::MEMORY_ACCESS;
 
     #[test]
     fn discards_on_first_use_then_acquires_and_releases() {

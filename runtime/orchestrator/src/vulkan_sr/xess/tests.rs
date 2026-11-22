@@ -558,22 +558,22 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
                         .into()
                 ),
                 Call::Velocity,
-                Call::Barrier(Barrier::new(20, SHADER_READ, TRANSFER_SRC)),
-                Call::Barrier(Barrier::new(10, UNDEFINED, TRANSFER_DST)),
+                Call::Barrier(Barrier::same_queue(20, SHADER_READ, TRANSFER_SRC)),
+                Call::Barrier(Barrier::same_queue(10, UNDEFINED, TRANSFER_DST)),
                 Call::Copy(ImageCopy::transfer(20, 10, extent)),
-                Call::Barrier(Barrier::new(20, TRANSFER_SRC, SHADER_READ)),
-                Call::Barrier(Barrier::new(10, TRANSFER_DST, SHADER_READ)),
-                Call::Barrier(Barrier::new(21, SHADER_READ, TRANSFER_SRC)),
-                Call::Barrier(Barrier::new(11, UNDEFINED, TRANSFER_DST)),
+                Call::Barrier(Barrier::same_queue(20, TRANSFER_SRC, SHADER_READ)),
+                Call::Barrier(Barrier::same_queue(10, TRANSFER_DST, SHADER_READ)),
+                Call::Barrier(Barrier::same_queue(21, SHADER_READ, TRANSFER_SRC)),
+                Call::Barrier(Barrier::same_queue(11, UNDEFINED, TRANSFER_DST)),
                 Call::Copy(ImageCopy::transfer(21, 11, extent)),
-                Call::Barrier(Barrier::new(21, TRANSFER_SRC, SHADER_READ)),
-                Call::Barrier(Barrier::new(11, TRANSFER_DST, SHADER_READ)),
-                Call::Barrier(Barrier::new(22, SHADER_READ, TRANSFER_SRC)),
-                Call::Barrier(Barrier::new(12, UNDEFINED, TRANSFER_DST)),
+                Call::Barrier(Barrier::same_queue(21, TRANSFER_SRC, SHADER_READ)),
+                Call::Barrier(Barrier::same_queue(11, TRANSFER_DST, SHADER_READ)),
+                Call::Barrier(Barrier::same_queue(22, SHADER_READ, TRANSFER_SRC)),
+                Call::Barrier(Barrier::same_queue(12, UNDEFINED, TRANSFER_DST)),
                 Call::Copy(ImageCopy::transfer(22, 12, extent)),
-                Call::Barrier(Barrier::new(22, TRANSFER_SRC, SHADER_READ)),
-                Call::Barrier(Barrier::new(12, TRANSFER_DST, SHADER_READ)),
-                Call::Barrier(Barrier::new(13, UNDEFINED, GENERAL)),
+                Call::Barrier(Barrier::same_queue(22, TRANSFER_SRC, SHADER_READ)),
+                Call::Barrier(Barrier::same_queue(12, TRANSFER_DST, SHADER_READ)),
+                Call::Barrier(Barrier::same_queue(13, UNDEFINED, GENERAL)),
                 Call::Execute(1128, 632, 1920, 1080, 1),
                 Call::Parameters(1),
                 Call::Capture("sr-source-jittered".into(), 20),
@@ -582,16 +582,19 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
                 Call::Capture("sr-motion-uv".into(), 22),
                 Call::Capture("sr-output-linear".into(), 13),
                 Call::Sharpen,
-                Call::Barrier(Barrier::new(13, GENERAL, TRANSFER_SRC)),
+                Call::Barrier(Barrier::same_queue(13, GENERAL, TRANSFER_SRC)),
                 Call::Copy(output_copy),
-                Call::Barrier(Barrier::new(13, TRANSFER_SRC, GENERAL)),
+                Call::Barrier(Barrier::same_queue(13, TRANSFER_SRC, GENERAL)),
             ]
         );
         assert_eq!(run(extent, 2, &|_| {}), 0);
         assert!(calls().contains(&Call::Execute(1128, 632, 1920, 1080, 0)));
         assert!(
-            calls().contains(&Call::Barrier(Barrier::new(10, SHADER_READ, TRANSFER_DST)))
-                && calls().contains(&Call::Barrier(Barrier::new(13, GENERAL, GENERAL)))
+            calls().contains(&Call::Barrier(Barrier::same_queue(
+                10,
+                SHADER_READ,
+                TRANSFER_DST
+            ))) && calls().contains(&Call::Barrier(Barrier::same_queue(13, GENERAL, GENERAL)))
         );
         // A changed active extent inside the SDK range resets history.
         assert_eq!(run([1280, 720], 3, &|_| {}), 0);

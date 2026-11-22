@@ -165,7 +165,7 @@ unsafe extern "C" fn record(
     _: Handle,
     image: *const Image,
     record: *const Record,
-    generated: i32,
+    role: *const c_char,
 ) -> u32 {
     let test = unsafe { harness(native) };
     let image = unsafe { &*image };
@@ -181,9 +181,9 @@ unsafe extern "C" fn record(
         ),
         (77, BGRA8, 640, 360, PRESENT_LAYOUT, 1),
     );
-    test.events.push(format!("record {} {generated}", unsafe {
-        (*record).frame_id
-    }));
+    let role = unsafe { CStr::from_ptr(role) }.to_string_lossy();
+    test.events
+        .push(format!("record {} {role}", unsafe { (*record).frame_id }));
     if test.record_adds {
         test.readbacks += 1;
     }
@@ -214,22 +214,34 @@ unsafe extern "C" fn failure(native: Handle, source: u64, reason: *const c_char,
         .push((source, reason, result));
 }
 
-unsafe extern "C" fn trace(native: Handle, _: *const Packet, _: *const Source, found: u32) {
-    unsafe { event(native, format!("trace {found}")) };
+// The value of a scalar JSON field in one diagnostic line.
+fn field<'a>(line: &'a str, key: &str) -> &'a str {
+    let start = line
+        .find(&format!("\"{key}\":"))
+        .map(|at| at + key.len() + 3)
+        .expect("diagnostic field");
+    let rest = &line[start..];
+    &rest[..rest.find([',', '}']).expect("field end")]
 }
 
-unsafe extern "C" fn metadata(
-    native: Handle,
-    _: *const Packet,
-    _: *const Source,
-    sequence: u64,
-    result: i32,
-    ready: u32,
-    flushed: u32,
-) {
-    unsafe { harness(native) }
-        .metadata
-        .push((sequence, result, ready, flushed));
+// Boundary lines record whether the source was found; capture lines carry the metadata.
+unsafe extern "C" fn append(native: Handle, file: *const c_char, bytes: *const u8, len: usize) {
+    let file = unsafe { CStr::from_ptr(file) }.to_str().expect("file name");
+    let line =
+        std::str::from_utf8(unsafe { std::slice::from_raw_parts(bytes, len) }).expect("UTF-8 line");
+    let flag = |key| u32::from(field(line, key) == "true");
+    match file {
+        "dlss-present-boundaries.jsonl" => unsafe {
+            event(native, format!("trace {}", flag("source_found")))
+        },
+        "dlss-present-capture.jsonl" => unsafe { harness(native) }.metadata.push((
+            field(line, "sequence").parse().expect("sequence"),
+            field(line, "present_result").parse().expect("result"),
+            flag("legacy_flush_attempted"),
+            flag("legacy_flush_succeeded"),
+        )),
+        other => panic!("unexpected diagnostic file {other}"),
+    }
 }
 
 unsafe extern "C" fn ignore_readback(_: Handle, _: Handle) {}
@@ -258,8 +270,7 @@ static PLATFORM: Platform = Platform {
     present: present_leaf,
     flush,
     failure,
-    trace,
-    metadata,
+    append,
 };
 
 struct Test {
@@ -402,7 +413,7 @@ fn capture_consumes_waits_in_its_fenced_copy_before_a_waitless_present() {
             "reset pool 1",
             "reset fence 2",
             "begin",
-            "record 42 1",
+            "record 42 fg-generated-present-1",
             "end",
             "submit 2",
             "wait 2",
@@ -423,7 +434,7 @@ fn capture_consumes_waits_in_its_fenced_copy_before_a_waitless_present() {
             "reset pool 1",
             "reset fence 2",
             "begin",
-            "record 42 1",
+            "record 42 fg-generated-present-1",
             "end",
             "submit 2",
             "wait 2",

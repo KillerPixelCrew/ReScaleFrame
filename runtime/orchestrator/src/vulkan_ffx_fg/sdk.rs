@@ -43,6 +43,7 @@ use std::cell::UnsafeCell;
 use std::ffi::{c_char, c_void};
 use std::ptr;
 
+#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[path = "../../../vulkan/fsr3/sdk_abi.rs"]
 mod abi;
 use abi::{
