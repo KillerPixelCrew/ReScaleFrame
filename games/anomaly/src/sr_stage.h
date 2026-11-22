@@ -40,17 +40,10 @@ extern "C" {
 #define RSF_ANOMALY_SR_NOEXCEPT
 #endif
 
-/* Called by bootstrap before Observe starts. Reads the keys from `ini`; when `apply` and a stage or the capture is
-   selected, the Rust stage keeps them with the INI path and the vendor directories (refused while installed). Returns
-   whether one is selected. Binds the native leaves first. */
-bool rsf_anomaly_sr_configure(const wchar_t* ini, bool apply, rsf_game_log_fn log, void* user) RSF_ANOMALY_SR_NOEXCEPT;
-/* Called by the native observer after its own and the geometry hooks are installed on the verified image. Verifies
-   every guard of the selected stage and installs the hooks, or refuses and leaves the game stock. Returns true when
-   not selected. `build` is the exact executable profile the observer selected (a `const BuildProfile*`,
-   build_profile.h), borrowed for the process; `image_size` must equal its SizeOfImage `expected_size`. */
-bool rsf_anomaly_sr_install(void* image, uint32_t image_size, uint32_t expected_size, const void* build)
-    RSF_ANOMALY_SR_NOEXCEPT;
-
+/* Bootstrap configures the stage and the native observer installs it through the C11 leaf's entries in stage_entries.h
+   (rsf_anomaly_sr_configure_native, rsf_anomaly_sr_install_native), which bind the leaf table first. Install verifies
+   every guard of the selected stage on the verified image and installs the hooks, or refuses and leaves the game stock;
+   it returns true when nothing is selected. */
 /* Rust (sr_stage.rs). Quiesce disables the hooks, restores an open window and drops the twins. Frame end runs
    immediately before the original IRenderDeviceRender::End (before Present). Report emits two log lines with the
    per-window deltas and the totals, nothing when inactive. */

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 #[cfg(windows)]
 mod motion;
+#[cfg(windows)]
 mod sr;
 
 #[cfg(windows)]
 pub(crate) use motion::motion_guard_failure;
+#[cfg(windows)]
+pub(crate) use sr::sr_guard_failure;
 
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::with_exposed_provenance;
@@ -35,6 +38,7 @@ pub(super) struct Image {
     pub(super) read: Read,
 }
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub(super) struct NativeSite {
     pub(super) name: *const c_char,
     pub(super) rva: u32,
@@ -64,6 +68,7 @@ pub(super) const fn site(name: &'static CStr, rva: u32, hex: &[u8; 32]) -> Nativ
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub(super) struct UniqueGuard {
     pub(super) name: *const c_char,
     pub(super) rva: u32,

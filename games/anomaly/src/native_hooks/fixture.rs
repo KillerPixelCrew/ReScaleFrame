@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::engine_guards::{NativeSite, Read};
+use crate::engine_guards::Read;
 use crate::motion_profile::{MotionProfile, PROFILES as MOTION};
 use crate::native_profile::{PROFILES, Profile};
+use crate::sr_profile::{self, PROFILES as SR, Profile as SrProfile};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
@@ -335,30 +336,22 @@ fn mapping_contract(platform: &Platform, page: u32) {
     assert_eq!(bytes(image.at(valid)), expected);
 }
 
-#[repr(C)]
-struct SiteBank {
-    sites: *const NativeSite,
-    count: usize,
-}
-
-/// The SR site bank of one build; the motion sites come from motion_profile.rs.
-#[repr(C)]
-struct FixtureProfile {
-    sr: SiteBank,
-}
-
-const _: () = {
-    assert!(size_of::<SiteBank>() == 16);
-    assert!(size_of::<FixtureProfile>() == 16);
-};
+// The SR stage detours in their install order (sr_stage/native.rs).
+const SR_DETOURS: [usize; 5] = [
+    sr_profile::SITE_PHASE_SCENE_PREPARE,
+    sr_profile::SITE_PHASE_COMBINE,
+    sr_profile::SITE_PHASE_SUNSHAFTS,
+    sr_profile::SITE_PHASE_BLUR,
+    sr_profile::SITE_SUN_CASCADES,
+];
 
 fn profile_contract(
     platform: &Platform,
     profile: &Profile,
     motion: &MotionProfile,
-    fixture: &FixtureProfile,
-    sr_indices: &[usize; 5],
+    sr_profile: &SrProfile,
 ) {
+    let sr_indices = &SR_DETOURS;
     println!(
         "Anomaly HookSet profile: {}",
         profile.label.to_string_lossy()
@@ -367,7 +360,7 @@ fn profile_contract(
     let image = Image::new(size, PAGE_EXECUTE_READWRITE);
     image.write_headers(size);
     let motion = &motion.sites[..];
-    let sr = unsafe { slice::from_raw_parts(fixture.sr.sites, fixture.sr.count) };
+    let sr = &sr_profile.function_sites[..];
     let count = profile.sites.len() + motion.len() + sr_indices.len();
     let mut originals = vec![ptr::null_mut(); count];
     let mut sites: Vec<_> = profile
@@ -417,19 +410,14 @@ unsafe extern "C" fn rsf_test_anomaly_native_hooks(
     copy: Read,
     target: Function,
     untouched: Function,
-    profiles: *const FixtureProfile,
-    count: usize,
-    sr_indices: &[usize; 5],
 ) -> i32 {
     std::panic::catch_unwind(|| {
         let page = page_size();
         copy_contract(copy, page);
         executable_contract(platform, target, untouched);
         mapping_contract(platform, page);
-        assert_eq!(count, PROFILES.len());
-        let fixtures = unsafe { slice::from_raw_parts(profiles, count) };
-        for ((profile, motion), fixture) in PROFILES.iter().zip(&MOTION).zip(fixtures) {
-            profile_contract(platform, profile, motion, fixture, sr_indices);
+        for ((profile, motion), sr) in PROFILES.iter().zip(&MOTION).zip(&SR) {
+            profile_contract(platform, profile, motion, sr);
         }
         println!("Anomaly guarded native hooks: PASS");
         0

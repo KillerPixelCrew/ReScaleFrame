@@ -4,9 +4,9 @@ use std::{ffi::c_void, ptr};
 
 /// CBackend::m_aVertexConstants slots, the reflected size and the staged data
 /// pointer of the engine's dx10ConstantBuffer (geometry_profile.h constants).
-const SLOTS: u32 = 14;
-const SIZE_OFFSET: u32 = 0x58;
-const DATA_OFFSET: u32 = 0x60;
+pub(crate) const SLOTS: u32 = 14;
+pub(crate) const SIZE_OFFSET: u32 = 0x58;
+pub(crate) const DATA_OFFSET: u32 = 0x60;
 
 struct VertexConstantTable {
     module: usize,

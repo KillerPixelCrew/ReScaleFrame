@@ -1,63 +1,19 @@
 // SPDX-License-Identifier: MIT
-//! SR hook admission against synthetic images of the two production profiles.
-use crate::sr_stage_abi::{rsf_anomaly_sr_jitter_uv as JitterUv, rsf_anomaly_sr_log as Log};
+//! SR hook admission against synthetic images of the two production profiles. The C11 launcher lends the production
+//! leaf table and a real x64 target for the shared rmNear detour; the profile records are sr_profile.rs.
+use super::native::{BUILDS, Build, Native, rsf_anomaly_sr_stage_configure_native};
+use super::{
+    STAGE, rsf_anomaly_sr_stage_frame_end, rsf_anomaly_sr_stage_jitter_uv,
+    rsf_anomaly_sr_stage_report,
+};
+use crate::engine_guards::{NativeSite, UniqueGuard};
+use crate::sr_profile::{FirstPersonSite, PROFILES as SR};
+use crate::sr_stage_abi::rsf_anomaly_sr_jitter_uv as JitterUv;
 use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
-use std::slice;
 use windows_sys::Win32::System::WindowsProgramming::WritePrivateProfileStringW;
 use windows_sys::core::w;
-
-#[repr(C)]
-struct Site {
-    name: *const c_char,
-    rva: u32,
-    expected: [u8; 16],
-}
-
-#[repr(C)]
-struct Guard {
-    name: *const c_char,
-    rva: u32,
-    expected_hex: *const c_char,
-}
-
-#[repr(C)]
-struct FirstPerson {
-    name: *const c_char,
-    function_rva: u32,
-    set_p_call: u32,
-    rm_near_call: u32,
-}
-
-#[repr(C)]
-struct Profile {
-    functions: *const [Site; 17],
-    unique: *const Guard,
-    unique_count: usize,
-    calls: *const [Site; 6],
-    first_person: *const [FirstPerson; 6],
-    reconstruction: *const [Guard; 4],
-    ssao_code: *const c_char,
-    ssao_rva: u32,
-    image_size: u32,
-}
-
-#[repr(C)]
-struct Calls {
-    configure: unsafe extern "C" fn(*const u16, Log, *mut c_void) -> bool,
-    install: unsafe extern "C" fn(*mut u8, u32, bool) -> bool,
-    active: extern "C" fn() -> bool,
-    frame_end: extern "C" fn(),
-    report: unsafe extern "C" fn(Log, *mut c_void),
-    quiesce: extern "C" fn() -> bool,
-    jitter: unsafe extern "C" fn(*mut JitterUv) -> bool,
-}
-
-const _: () = {
-    assert!(size_of::<Site>() == 32 && size_of::<Guard>() == 24 && size_of::<FirstPerson>() == 24);
-    assert!(size_of::<Profile>() == 64 && size_of::<Calls>() == 56);
-};
 
 const COMBINE: usize = 1;
 const BLUR: usize = 3;
@@ -152,13 +108,14 @@ fn check_line(expected: &str) {
 
 struct Fixture<'a> {
     image: Vec<u8>,
-    functions: &'a [Site; 17],
-    unique: &'a [Guard],
-    calls: &'a [Site; 6],
-    first_person: &'a [FirstPerson; 6],
-    reconstruction: &'a [Guard; 4],
+    functions: &'a [NativeSite; 17],
+    unique: &'a [UniqueGuard],
+    calls: &'a [NativeSite; 6],
+    first_person: &'a [FirstPersonSite; 6],
+    reconstruction: &'a [UniqueGuard; 4],
     ssao: (u32, Vec<u8>),
-    host: &'a Calls,
+    native: &'static Native,
+    build: usize,
 }
 
 impl Fixture<'_> {
@@ -207,15 +164,41 @@ impl Fixture<'_> {
     fn configure(&mut self, ini: &Ini, stage: u32) {
         ini.set_stage(stage);
         assert_eq!(
-            unsafe { (self.host.configure)(ini.path().as_ptr(), Some(collect), ptr::null_mut()) },
+            unsafe {
+                rsf_anomaly_sr_stage_configure_native(
+                    self.native,
+                    ini.path().as_ptr(),
+                    true,
+                    Some(collect),
+                    ptr::null_mut(),
+                )
+            },
             stage != 0
         );
     }
 
     fn install(&mut self, size: u32, outside: bool) -> bool {
         LINES.with_borrow_mut(Vec::clear);
-        let installed = unsafe { (self.host.install)(self.image.as_mut_ptr(), size, outside) };
-        assert!(!(self.host.active)());
+        let selected = &BUILDS[self.build];
+        let build = if outside {
+            // A copy of the build whose first call site lies at the end of the image.
+            let mut sr = *selected.sr;
+            sr.call_sites[0].rva = selected.native.image_size;
+            Box::leak(Box::new(Build {
+                index: selected.index,
+                native: selected.native,
+                sr: Box::leak(Box::new(sr)),
+            }))
+        } else {
+            selected
+        };
+        let installed = STAGE.install(
+            self.image.as_mut_ptr().cast(),
+            size,
+            build.native.image_size,
+            ptr::from_ref(build).cast(),
+        );
+        assert!(!STAGE.active());
         installed
     }
 
@@ -275,9 +258,9 @@ impl Fixture<'_> {
         self.fill();
         self.refused("guarded detour installation failed");
         LINES.with_borrow_mut(Vec::clear);
-        (self.host.frame_end)();
-        unsafe { (self.host.report)(Some(collect), ptr::null_mut()) };
-        assert!(LINES.with_borrow(Vec::is_empty) && (self.host.quiesce)());
+        rsf_anomaly_sr_stage_frame_end();
+        unsafe { rsf_anomaly_sr_stage_report(Some(collect), ptr::null_mut()) };
+        assert!(LINES.with_borrow(Vec::is_empty) && STAGE.quiesce());
 
         self.configure(&ini, 3);
         self.fill();
@@ -322,7 +305,8 @@ impl Fixture<'_> {
             self.refused(unsafe { CStr::from_ptr(site.name) }.to_str().unwrap());
         }
         let mut uv = JitterUv::default();
-        assert!(!unsafe { (self.host.jitter)(&mut uv) });
+        unsafe { rsf_anomaly_sr_stage_jitter_uv(&mut uv) };
+        assert!(!STAGE.jitter().applied);
         assert_eq!(
             [uv.current_u, uv.current_v, uv.previous_u, uv.previous_v],
             [0.0; 4]
@@ -334,8 +318,8 @@ impl Fixture<'_> {
 unsafe extern "C" fn rsf_test_anomaly_sr_hooks(
     argc: i32,
     argv: *const *const c_char,
-    project: unsafe extern "C" fn(usize, *mut Profile) -> *const Calls,
-    exercise_near: extern "C" fn() -> i32,
+    native: &'static Native,
+    exercise_near: extern "C" fn(usize, usize) -> i32,
 ) -> i32 {
     let result = std::panic::catch_unwind(|| {
         let build = unsafe { crate::fixture_profile::rsf_test_anomaly_select_build(argc, argv) };
@@ -345,34 +329,42 @@ unsafe extern "C" fn rsf_test_anomaly_sr_hooks(
             identity.label.to_string_lossy(),
             identity.executable.to_string_lossy()
         );
-        let mut profile = std::mem::MaybeUninit::uninit();
-        // The native fixture binds the selected stage profile and lends its calls.
-        let host = unsafe { project(build, profile.as_mut_ptr()).as_ref() }
-            .expect("native SR fixture calls");
-        let profile = unsafe { profile.assume_init() };
-        let failures = exercise_near() + guard_refusals(&profile, host);
+        // The launcher redirects the geometry producer's rmNear site, which shares its bytes with the SR record.
+        let geometry = &crate::geometry_profile::PROFILES[build].sites;
+        let near = geometry
+            .iter()
+            .position(|site| unsafe { CStr::from_ptr(site.name) } == c"CRender::rmNear")
+            .expect("geometry rmNear site");
+        assert_eq!(
+            geometry[near].expected,
+            SR[build].function_sites[NEAR].expected
+        );
+        let failures = exercise_near(build, near) + guard_refusals(build, native);
         println!("{failures} failure(s)");
         i32::from(failures != 0)
     });
     result.unwrap_or(1)
 }
 
-fn guard_refusals(profile: &Profile, host: &Calls) -> i32 {
+fn guard_refusals(build: usize, native: &'static Native) -> i32 {
     let result = std::panic::catch_unwind(|| {
-        // The native executable lends immutable production profile records for this call.
-        let mut fixture = unsafe {
-            Fixture {
-                image: vec![0; profile.image_size as usize],
-                functions: &*profile.functions,
-                unique: slice::from_raw_parts(profile.unique, profile.unique_count),
-                calls: &*profile.calls,
-                first_person: &*profile.first_person,
-                reconstruction: &*profile.reconstruction,
-                ssao: (profile.ssao_rva, bytes(CStr::from_ptr(profile.ssao_code))),
-                host,
-            }
+        let profile = &SR[build];
+        let image_size = crate::native_profile::PROFILES[build].image_size;
+        let mut fixture = Fixture {
+            image: vec![0; image_size as usize],
+            functions: &profile.function_sites,
+            unique: profile.unique_guards,
+            calls: &profile.call_sites,
+            first_person: &profile.first_person_sites,
+            reconstruction: &profile.reconstruction_guards,
+            ssao: (
+                profile.ssao_set_viewport_rva,
+                bytes(profile.ssao_set_viewport_code),
+            ),
+            native,
+            build,
         };
-        fixture.exercise(profile.image_size);
+        fixture.exercise(image_size);
     });
     i32::from(result.is_err())
 }

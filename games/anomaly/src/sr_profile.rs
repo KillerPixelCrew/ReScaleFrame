@@ -166,6 +166,7 @@ pub(crate) static WORLD_TARGETS: [WorldTarget; 9] = [
 ];
 pub(crate) const WORLD_ABSENT_OFFSETS: [u32; 4] = [0x358, 0x360, 0x368, 0x390];
 
+#[derive(Clone, Copy)]
 pub(crate) struct FirstPersonSite {
     pub(crate) name: &'static CStr,
     pub(crate) function_rva: u32,
@@ -187,6 +188,7 @@ const fn first_person(
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Profile {
     pub(crate) label: &'static CStr,
     pub(crate) function_sites: [NativeSite; SR_FUNCTION_SITE_COUNT],
@@ -529,6 +531,6 @@ static ENGINE_LAYOUT: SwapLayout = engine_layout();
 
 /// The verified engine layout shared by both executable profiles, in the swap owner's form.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_engine_layout() -> &'static SwapLayout {
+pub(crate) extern "C" fn rsf_anomaly_sr_engine_layout() -> &'static SwapLayout {
     &ENGINE_LAYOUT
 }

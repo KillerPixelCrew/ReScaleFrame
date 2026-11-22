@@ -224,12 +224,12 @@ fn adapter_binding(query: Query) {
     let mut out = rsf_d3d11_sr_api::default();
     let mut reason = null();
     assert!(matches!(
-        rsf_anomaly_sr_query(None, &mut out, &mut reason),
+        unsafe { rsf_anomaly_sr_query(None, &mut out, &mut reason) },
         ApiStatus::Missing
     ));
     assert!(!reason.is_null());
     assert!(matches!(
-        rsf_anomaly_sr_query(Some(query), &mut out, &mut reason),
+        unsafe { rsf_anomaly_sr_query(Some(query), &mut out, &mut reason) },
         ApiStatus::Bound
     ));
     assert_eq!(out.start.unwrap() as usize, real.start.unwrap() as usize);
@@ -239,7 +239,7 @@ fn adapter_binding(query: Query) {
     );
 
     assert!(matches!(
-        rsf_anomaly_sr_query(Some(mismatch), &mut out, &mut reason),
+        unsafe { rsf_anomaly_sr_query(Some(mismatch), &mut out, &mut reason) },
         ApiStatus::Refused
     ));
     assert!(
@@ -313,7 +313,7 @@ fn adapter_binding(query: Query) {
             ..Default::default()
         };
         assert!(matches!(
-            rsf_anomaly_sr_query(Some(tampered), &mut untouched, &mut reason),
+            unsafe { rsf_anomaly_sr_query(Some(tampered), &mut untouched, &mut reason) },
             ApiStatus::Refused
         ));
         assert_eq!(untouched.struct_size, 77);

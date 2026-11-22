@@ -146,7 +146,7 @@ pub(super) fn decode_case(d: &Device, api: &Graphics) {
         .into_iter()
         .cycle()
         .take((w * h) as usize)
-        .flat_map(|value| value.map(half))
+        .flat_map(|value| value.map(|channel| half(channel)))
         .collect();
     let size = [w, h];
     let source = d.data_texture(size, HDR, SRV, &halves, w * 8).unwrap();

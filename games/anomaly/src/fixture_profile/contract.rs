@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
-//! Consistency checks on the stage profiles lent by the native fixture.
+//! Consistency checks across the Rust-owned native, geometry, SR and motion profile records.
 use crate::engine_guards::{NativeSite, UniqueGuard};
 use crate::motion_profile::{MotionProfile, PROFILES as MOTION, SITE_CREATE_SHADER};
+use crate::sr_profile::{FirstPersonSite, SITE_RM_NEAR, SITE_SUN_CASCADES};
 use std::ffi::{CStr, c_char, c_void};
+use std::ptr::from_ref;
 use std::slice;
 
 #[repr(C)]
@@ -21,14 +23,6 @@ impl<T> Bank<T> {
 }
 
 #[repr(C)]
-struct FirstPersonSite {
-    _name: *const c_char,
-    function_rva: u32,
-    set_p_call: u32,
-    rm_near_call: u32,
-}
-
-#[repr(C)]
 struct TargetSlot {
     name: *const c_char,
     offset: u32,
@@ -42,7 +36,6 @@ struct Relation {
     observed: u32,
 }
 
-#[repr(C)]
 struct Profile {
     label: *const c_char,
     executable: *const c_char,
@@ -63,12 +56,93 @@ struct Profile {
     relations: [Relation; 13],
 }
 
-const _: () = {
-    assert!(size_of::<Profile>() == 400 && std::mem::offset_of!(Profile, sites) == 56);
-    assert!(std::mem::offset_of!(Profile, ssao_code) == 224);
-    assert!(std::mem::offset_of!(Profile, relations) == 240);
-    assert!(size_of::<FirstPersonSite>() == 24 && size_of::<TargetSlot>() == 16);
-};
+// Geometry detour indices the relations name (geometry_profile.h geometry_site_*), checked by name below.
+const GEOMETRY_RENDER_HUD: usize = 11;
+const GEOMETRY_RENDER_SORTED: usize = 12;
+const GEOMETRY_RENDER_EMISSIVE: usize = 13;
+const GEOMETRY_RM_NEAR: usize = 14;
+
+fn bank<T>(values: &[T]) -> Bank<T> {
+    Bank {
+        data: values.as_ptr(),
+        count: values.len(),
+    }
+}
+
+fn project(build: usize) -> Profile {
+    let n = &crate::native_profile::PROFILES[build];
+    let g = &crate::geometry_profile::PROFILES[build];
+    let s = &crate::sr_profile::PROFILES[build];
+    for (index, name) in [
+        (
+            GEOMETRY_RENDER_HUD,
+            c"R_dsgraph_structure::r_dsgraph_render_hud",
+        ),
+        (
+            GEOMETRY_RENDER_SORTED,
+            c"R_dsgraph_structure::r_dsgraph_render_sorted",
+        ),
+        (
+            GEOMETRY_RENDER_EMISSIVE,
+            c"R_dsgraph_structure::r_dsgraph_render_emissive",
+        ),
+        (GEOMETRY_RM_NEAR, c"CRender::rmNear"),
+    ] {
+        assert_eq!(unsafe { CStr::from_ptr(g.sites[index].name) }, name);
+    }
+    let fp = &s.first_person_sites;
+    let relation = |base, offset, observed| Relation {
+        base,
+        offset,
+        observed,
+    };
+    Profile {
+        label: n.label.as_ptr(),
+        executable: n.executable.as_ptr(),
+        sha256: n.sha256.as_ptr(),
+        image_size: n.image_size,
+        owners: [from_ref(n).cast(), from_ref(g).cast(), from_ref(s).cast()],
+        sites: [
+            bank(&n.sites),
+            bank(&g.sites),
+            bank(&g.layout_sites),
+            bank(&s.function_sites),
+            bank(&s.call_sites),
+        ],
+        guards: [bank(&n.guards), bank(&g.unique), bank(s.unique_guards)],
+        first_person: bank(fp),
+        required_rvas: [s.get_constant_buffer_rva, s.position_setup_vtable_rva],
+        sun_target: s.function_sites[SITE_SUN_CASCADES].rva,
+        sr_near_index: SITE_RM_NEAR as u32,
+        geometry_near_index: GEOMETRY_RM_NEAR as u32,
+        ssao_code: s.ssao_set_viewport_code.as_ptr(),
+        ssao_function: s.ssao_set_viewport_rva,
+        ssao_viewport: s.ssao_viewport_rva,
+        relations: [
+            relation(
+                s.backend_rva,
+                crate::sr_profile::BACKEND_XFORMS_OFFSET,
+                g.world_matrix_rva,
+            ),
+            relation(s.render_implementation_rva, 0x150, g.render_phase_rva),
+            relation(s.render_options_word0_rva, 12, s.render_options_word3_rva),
+            relation(s.device_view_rva, 64, s.device_project_rva),
+            relation(s.device_project_rva, 64, s.device_full_transform_rva),
+            relation(n.device_width_rva, 8, s.device_precache_frame_rva),
+            relation(n.device_width_rva, 4, n.device_height_rva),
+            relation(fp[0].function_rva, 0, g.sites[GEOMETRY_RENDER_HUD].rva),
+            relation(fp[2].function_rva, 0, g.sites[GEOMETRY_RENDER_SORTED].rva),
+            relation(fp[3].function_rva, 0, g.sites[GEOMETRY_RENDER_EMISSIVE].rva),
+            relation(fp[4].function_rva, 0, s.function_sites[13].rva),
+            relation(fp[5].function_rva, 0, s.function_sites[14].rva),
+            relation(
+                s.function_sites[SITE_RM_NEAR].rva,
+                0,
+                g.sites[GEOMETRY_RM_NEAR].rva,
+            ),
+        ],
+    }
+}
 
 fn check_build_selection() {
     // Independent fingerprints pinned by the two executable evidence records.
@@ -339,16 +413,18 @@ fn check_profiles(profiles: &[Profile; 2], slots: &[TargetSlot]) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_anomaly_profile_contract(
-    profiles: &[Profile; 2],
-    slots: *const TargetSlot,
-    slot_count: usize,
-) -> i32 {
+extern "C" fn rsf_test_anomaly_profile_contract() -> i32 {
     let result = std::panic::catch_unwind(|| {
-        // The native fixture supplies these statically bounded profile arrays.
-        check_profiles(profiles, unsafe {
-            slice::from_raw_parts(slots, slot_count)
-        });
+        let profiles = [project(0), project(1)];
+        let slots: Vec<_> = crate::sr_profile::TARGET_SLOTS
+            .iter()
+            .map(|slot| TargetSlot {
+                name: slot.name.as_ptr(),
+                offset: slot.offset,
+                format: slot.d3d_format,
+            })
+            .collect();
+        check_profiles(&profiles, &slots);
         check_build_selection();
         println!("0 failure(s)");
         0

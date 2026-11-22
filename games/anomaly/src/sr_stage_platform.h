@@ -304,6 +304,56 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*guarded_log)(rsf_anomaly_sr_log log, void* user, const char* message);
 } rsf_anomaly_sr_stage_platform;
 
+/* The operations of the C11 leaf (sr_stage_platform.c) that Rust cannot express. sr_stage/native.rs builds the
+   production stage table from them and reads every engine address from the selected build's profile records
+   (sr_profile.rs, native_profile.rs). The trampolines call back into the Rust stage. */
+struct rsf_anomaly_hook_site;
+#define RSF_ANOMALY_SR_DETOUR_COUNT 5   /* phase_scene_prepare, phase_combine, phase_sunshafts, phase_blur, sun cascades */
+typedef struct rsf_anomaly_sr_native {
+    uint32_t struct_size;
+    // Guarded engine-memory copy, and a log sink call that contains a foreign C++ exception.
+    bool (*copy)(void* output, const void* input, size_t size);
+    void (*log)(rsf_anomaly_sr_log log, void* user, const char* message);
+    // R_xforms::set_P(this, rdx = matrix), dx10SamplerStateCache::SetMipLODBias(this, xmm1 = bias) and
+    // R_constants::GetCBuffer(this, constant, stage) at `function`, each under SEH (false or 0 on a fault).
+    bool (*set_projection)(void* function, void* xforms, const void* matrix);
+    bool (*set_mip_bias)(void* function, void* cache, float bias);
+    uintptr_t (*constant_buffer)(void* function, void* constants, uintptr_t constant, uint32_t stage);
+    // Fills each lent site's replacement and trampoline slot in detour order, then installs the batch.
+    bool (*install_hooks)(void* image, uint32_t size, struct rsf_anomaly_hook_site* sites, size_t count);
+    bool (*hooks_created)(void);
+    bool (*enable_hooks)(void);
+    bool (*disable_hooks)(void);
+    void* position_setup;   // the cl_pos_decompress_params::setup vtable replacement
+    bool (*compare_slot)(void* address, void* expected, void* value, void** previous);
+    uint8_t (*current_view)(const void* module, size_t build);
+    uint32_t (*pixel_bytes)(uint32_t format);
+    void* (*create_view)(void* device, void* texture);   // an owned reference or null
+    const void* (*d3d11)(void);                           // the process-lifetime rsf_sr_d3d11 table
+} rsf_anomaly_sr_native;
+#ifdef __cplusplus
+static_assert(sizeof(rsf_anomaly_sr_native) == 128, "SR native leaf table");
+extern "C" {
+#else
+_Static_assert(sizeof(rsf_anomaly_sr_native) == 128, "SR native leaf table");
+#endif
+// Rust entries of the leaf. `ini` is a NUL-terminated UTF-16 path; `build` the native_profile.rs index.
+bool rsf_anomaly_sr_stage_configure_native(const rsf_anomaly_sr_native*, const uint16_t* ini, bool apply,
+    rsf_anomaly_sr_log log, void* user);
+bool rsf_anomaly_sr_stage_install_build(const rsf_anomaly_sr_native*, void* image, size_t build);
+void rsf_anomaly_sr_stage_prepare(void* target);
+void rsf_anomaly_sr_stage_prepared(void);
+void rsf_anomaly_sr_stage_seam(void* target);
+void rsf_anomaly_sr_stage_combine_end(void);
+bool rsf_anomaly_sr_stage_sun_begin(void);
+void rsf_anomaly_sr_stage_sun_end(bool suspended);
+void rsf_anomaly_sr_stage_position_setup(void* constant);
+// The leaf's table, for the hook fixture.
+const rsf_anomaly_sr_native* rsf_anomaly_sr_native_leaves(void);
+#ifdef __cplusplus
+}
+#endif
+
 // Live panel options, in registration order (sr_stage.rs registers them with the overlay service).
 #define RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT 0
 #define RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO 1

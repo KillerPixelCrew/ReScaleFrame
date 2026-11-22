@@ -535,3 +535,47 @@ boundary. It needs a C entry for the geometry render-view read.
 `tests/anomaly_sr_hook_bridge.cpp` follows it. `build_profile.h` still has
 C++ users: `sr_stage.cpp`, `motion_stage.cpp`, `native_geometry.cpp` and the
 profile, hook and geometry fixtures.
+
+## sr_stage.cpp to a C11 leaf and Rust (final Anomaly pass)
+
+`sr_stage.cpp` is gone. `sr_stage_platform.c` keeps what Rust cannot express:
+the five stage trampolines and the `cl_pos_decompress_params::setup` vtable
+replacement, `__try/__finally` (MSVC) or a cleanup handler (GCC,
+`-fexceptions`) so the sun-cascade camera is restored when an engine C++
+exception leaves the original, the SEH calls to `R_xforms::set_P`,
+`SetMipLODBias` and `GetCBuffer`, the guarded copy, the log-sink boundary on
+the MSVC C++ exception code `0xE06D7363` (the former `catch (...)`), the hook
+set and the bootstrap/observer entries. It lends these through one 128-byte
+`rsf_anomaly_sr_native` table.
+
+`sr_stage/native.rs` builds the production `rsf_anomaly_sr_stage_platform`
+over that table, one Rust function per former C++ lambda, and reads every
+address from `sr_profile.rs` and `native_profile.rs` through a `Build` record
+named by the native_profile.rs index (`BUILDS`). It hosts the swap owner's
+platform (`make_twins` keeps the former log texts and their 259-character
+limit), the position-constant layout (the geometry constant-buffer offsets
+now re-exported from `native_geometry/vertex_constants.rs`) and the D3D11
+resource handle. The SR guard check (`engine_guards/sr.rs`) runs over the Rust
+record in the former order. `rsf_anomaly_sr_depth_rva` is a Rust export.
+
+Behaviour notes. The swap owner is created on first use instead of at DLL
+static initialization, and neither it nor the D3D11 resource owner is freed at
+DLL detach. The former C++ static destructors only freed memory there
+(`rsf_anomaly_swap_destroy` drops the box; the resource owner already refused
+to drop live twins), so nothing reaches the engine either way. A leaf table
+with the wrong `struct_size` is refused instead of registered. The C++-era
+`rsf_anomaly_sr_configure` and `rsf_anomaly_sr_install` entries are removed;
+the first one also duplicated the `#[no_mangle]` Rust symbol of the same name
+in `sr_temporal.rs`.
+
+Fixtures. `tests/anomaly_sr_hook_bridge.c`, `anomaly_sr_profile.c` and
+`anomaly_native_hook_leaves.c` are C11 launchers. The hook fixture installs
+the production table over the Rust records; its outside-image case uses a
+leaked copy of the build with the first call site moved to the image end. The
+profile contract projects the native, geometry, SR and motion records itself,
+keeping the fixed geometry indices with a name check. The native hook fixture
+reads the SR bank and the detour order from `sr_profile.rs`.
+`build_profile.h` had no C++ user left and is removed. The N06/N07 fixture
+modules that no longer compiled at the tip (`sr_swap/tests.rs` counter field,
+`temporal_device/decode.rs`, `sr_temporal/runtime_fixture*`) are repaired so
+the `sr-fixtures` library builds.

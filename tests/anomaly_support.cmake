@@ -47,7 +47,7 @@ set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_R
 
 # SR Stage 0 site profile: compile-time consistency and runtime build selection. The guards are checked against the installed executable by
 # tests/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.
-add_executable(rsf_anomaly_sr_profile_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_profile.cpp")
+add_executable(rsf_anomaly_sr_profile_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_profile.c")
 target_include_directories(rsf_anomaly_sr_profile_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_anomaly_sr_fixture_rust rsf_build_options)
 add_test(NAME anomaly_sr_profile_contract COMMAND rsf_anomaly_sr_profile_test)
@@ -70,8 +70,8 @@ target_link_libraries(rsf_anomaly_sr_swap_test PRIVATE rsf_anomaly_sr_fixture_ru
 add_test(NAME anomaly_sr_swap_contract COMMAND rsf_anomaly_sr_swap_test)
 add_test(NAME anomaly_sr_swap_unknown_selection COMMAND rsf_anomaly_sr_swap_test unknown-case)
 set_tests_properties(anomaly_sr_swap_unknown_selection PROPERTIES WILL_FAIL TRUE)
-add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hook_bridge.cpp"
-    "${RSF_ANOMALY_SR_SRC}/sr_stage.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c" "${RSF_ANOMALY_SR_SRC}/engine_slots.c"
+add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hook_bridge.c"
+    "${RSF_ANOMALY_SR_SRC}/sr_stage_platform.c" "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c" "${RSF_ANOMALY_SR_SRC}/engine_slots.c"
     "${RSF_ANOMALY_SR_SRC}/native_observer_platform.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 # The observer leaf retires its invocations during a C++ unwind (cleanup handlers under GCC).
 target_compile_options(rsf_anomaly_sr_hooks_test PRIVATE $<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<C_COMPILER_ID:MSVC>>>:-fexceptions>)
@@ -243,8 +243,8 @@ set_tests_properties(anomaly_sr_runtime_api_contract
     anomaly_sr_temporal_device PROPERTIES TIMEOUT 120)
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
 
-# Profile-dependent fixtures once more against the AVX executable's tables (build_profile.h selects them by name and
-# SHA-256 in the game; here the argument selects them). anomaly_sr_profile_contract checks both tables at compile time.
+# Profile-dependent fixtures once more against the AVX executable's tables (native_profile.rs selects them by name and
+# SHA-256 in the game; here the argument selects them). anomaly_sr_profile_contract checks both tables.
 add_test(NAME anomaly_geometry_hooks_avx_contract COMMAND rsf_anomaly_geometry_hooks_test avx)
 add_test(NAME anomaly_sr_hooks_avx_contract COMMAND rsf_anomaly_sr_hooks_test avx)
 set_tests_properties(anomaly_geometry_hooks_avx_contract anomaly_sr_hooks_avx_contract PROPERTIES TIMEOUT 120)

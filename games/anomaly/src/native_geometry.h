@@ -36,7 +36,7 @@ extern "C" {
 #endif
 
 // `build` is the index of the profile selected for the running executable by its exact name and SHA-256 (the order of
-// build_profile.h and native_profile.rs). Every site and unique guard of that build is checked first.
+// native_profile.rs). Every site and unique guard of that build is checked first.
 bool rsf_anomaly_geometry_install_native(void* image, size_t build) RSF_GEOMETRY_NOEXCEPT;
 bool rsf_anomaly_geometry_disable_native(void) RSF_GEOMETRY_NOEXCEPT;
 // Opens the view and World context for one CRender::Render around `original(self)`, including on a C++ unwind out of

@@ -26,7 +26,7 @@ enum {
 
 typedef bool (*rsf_anomaly_geometry_read_fn)(void*, const void*, size_t) RSF_GEOMETRY_NOEXCEPT;
 
-// The mapped executable and the index of its Rust-owned profiles (build_profile order: Standard, AVX).
+// The mapped executable and the index of its Rust-owned profiles (native_profile.rs order: Standard, AVX).
 typedef struct rsf_anomaly_geometry_engine { uintptr_t module, build; } rsf_anomaly_geometry_engine;
 typedef struct rsf_anomaly_geometry_native_matrix { float values[16]; } rsf_anomaly_geometry_native_matrix;
 // Row-major, column vectors, widened from the engine's row-vector Fmatrix.

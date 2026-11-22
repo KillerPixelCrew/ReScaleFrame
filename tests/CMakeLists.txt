@@ -62,7 +62,7 @@ add_dependencies(rsf_anomaly_lifecycle_test rsf_game_anomaly)
 add_test(NAME anomaly_lifecycle_contract COMMAND rsf_anomaly_lifecycle_test "$<TARGET_FILE:rsf_game_anomaly>")
 rsf_add_rust_static(rsf_anomaly_hook_fixture_rust rsf_rust_anomaly_hook_fixture
     rsf-anomaly rsf_anomaly --features native-hook-fixture)
-add_executable(rsf_anomaly_native_hooks_test anomaly_native_hook_leaves.cpp ../games/anomaly/src/native_hooks_platform.c)
+add_executable(rsf_anomaly_native_hooks_test anomaly_native_hook_leaves.c ../games/anomaly/src/native_hooks_platform.c)
 target_include_directories(rsf_anomaly_native_hooks_test PRIVATE ../games/anomaly/src)
 target_link_libraries(rsf_anomaly_native_hooks_test PRIVATE rsf_anomaly_hook_fixture_rust minhook rsf_build_options)
 add_test(NAME anomaly_native_hooks_contract COMMAND rsf_anomaly_native_hooks_test)

@@ -1901,7 +1901,7 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 
 - [x] [games/anomaly/src/bootstrap_platform.cpp](games/anomaly/src/bootstrap_platform.cpp) (native profile and stage table; replaced by the C11 leaf `bootstrap_platform.c`)
 - [x] [games/anomaly/src/bootstrap.cpp](games/anomaly/src/bootstrap.cpp)
-- [ ] [games/anomaly/src/build_profile.h](games/anomaly/src/build_profile.h) (blocked: aggregates the C++ `constexpr` records of `geometry_profile.h` and `sr_profile.h` (the motion record moved to `motion_profile.rs` in N04), which use `std::array`, `std::span` and the `consteval` decoder, for the C++ callers `native_geometry.cpp` (N03), `sr_stage.cpp` (N06) and the fixtures `anomaly_sr_profile.cpp`, `anomaly_sr_hook_bridge.cpp`, `anomaly_geometry_hooks.cpp` and `anomaly_native_hook_leaves.cpp` (the N04 motion stage and hook fixture no longer include it); closes once those records have a C or Rust projection like `native_profile.h`)
+- [x] [games/anomaly/src/build_profile.h](games/anomaly/src/build_profile.h) (removed: no C++ user remains; native, geometry, SR and motion records are Rust-owned and named by the native_profile.rs build index)
 - [x] [games/anomaly/src/engine_guards.h](games/anomaly/src/engine_guards.h) (C declarations only)
 - [x] [games/anomaly/src/engine_slots.h](games/anomaly/src/engine_slots.h)
 - [x] [games/anomaly/src/native_hook_ops.h](games/anomaly/src/native_hook_ops.h) (C declarations only)
@@ -1924,7 +1924,7 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 - [x] [tests/anomaly_bootstrap.cpp](tests/anomaly_bootstrap.cpp)
 - [x] [tests/anomaly_build_select.h](tests/anomaly_build_select.h) (C declarations only)
 - [x] [tests/anomaly_lifecycle.cpp](tests/anomaly_lifecycle.cpp)
-- [ ] [tests/anomaly_native_hook_leaves.cpp](tests/anomaly_native_hook_leaves.cpp) (native detour fixture functions; blocked: lends the SR site bank and the five `sr::site_*` indices from the C++ `sr_profile.h` record through `build_profile.h` (the motion sites now come from `motion_profile.rs`); its target functions, guarded copy and platform pointer are already C-compatible)
+- [x] [tests/anomaly_native_hook_leaves.cpp](tests/anomaly_native_hook_leaves.cpp) (now the C11 launcher `anomaly_native_hook_leaves.c` with the two native targets; the Rust fixture reads the SR bank and detour order from `sr_profile.rs`)
 - [x] [tests/anomaly_native_hooks.cpp](tests/anomaly_native_hooks.cpp)
 - [x] [tests/anomaly_plugin.cpp](tests/anomaly_plugin.cpp)
 
@@ -2140,18 +2140,18 @@ Port the live SR stage, D3D11 pass and reconstruction, including refusing a fram
 - [x] [games/anomaly/src/sr_profile.h](games/anomaly/src/sr_profile.h) (generated projection from the Rust profile owner `sr_profile.rs`; `tools/generate-anomaly-sr-profile.py --check` runs as CTest `anomaly_sr_profile_projection`)
 - [x] [games/anomaly/src/sr_reconstruction.h](games/anomaly/src/sr_reconstruction.h)
 - [x] [games/anomaly/src/sr_settings.h](games/anomaly/src/sr_settings.h)
-- [ ] [games/anomaly/src/sr_stage.cpp](games/anomaly/src/sr_stage.cpp) (open: the leaf table still reads the selected C++ `BuildProfile` (`build_profile.h`) through `srp()`/`np()` and calls `geometry::current_render_view(module, BuildProfile&)` and the `geometry::constant_buffer_*` layout from `native_geometry.h`, whose geometry records are C++ `constexpr` data (N03). The SR records are now Rust-owned (`sr_profile.rs`), so the next step is a Rust production table plus a C11 leaf for the five trampolines (`__try/__finally` around the sun-cascade original), the SEH calls to `R_xforms::set_P`, `SetMipLODBias` and `GetCBuffer` and the C++-exception log boundary; it needs a C entry for the geometry render-view read and could not be linked or run on the current tip)
+- [x] [games/anomaly/src/sr_stage.cpp](games/anomaly/src/sr_stage.cpp) (now the C11 leaf `sr_stage_platform.c` (five trampolines, `__try/__finally` or cleanup handler around the sun-cascade original, SEH calls to set_P, SetMipLODBias and GetCBuffer, the C++ exception boundary on log sinks, the hook set); `sr_stage/native.rs` builds the production table over `sr_profile.rs` and `native_profile.rs` and hosts the swap owner)
 - [x] [games/anomaly/src/sr_stage.h](games/anomaly/src/sr_stage.h) (C declarations only)
 - [x] [games/anomaly/src/sr_stage_platform.h](games/anomaly/src/sr_stage_platform.h) (C declarations only)
 
 **Fixtures (9)**
 
-- [ ] [tests/anomaly_sr_hook_bridge.cpp](tests/anomaly_sr_hook_bridge.cpp) (native detour and PE fixture seam; open: it projects the C++ `BuildProfile` and installs a modified copy through `rsf_anomaly_sr_install`, and takes the rmNear redirect from `geometry::native_geometry_hook_sites` (N03 C++). It follows sr_stage.cpp: once the stage takes the Rust profile record, the fixture can move to C11 with the C hook-set API and `rsf_anomaly_geometry_set_near`)
+- [x] [tests/anomaly_sr_hook_bridge.cpp](tests/anomaly_sr_hook_bridge.cpp) (now the C11 launcher `anomaly_sr_hook_bridge.c`; the Rust fixture installs the production table over the `sr_profile.rs` records)
 - [x] [tests/anomaly_sr_runtime_api_bridge.cpp](tests/anomaly_sr_runtime_api_bridge.cpp) (actual Runtime import and fixture entry)
 - [x] [tests/anomaly_sr_hooks.cpp](tests/anomaly_sr_hooks.cpp)
 - [x] [tests/anomaly_sr_pass.cpp](tests/anomaly_sr_pass.cpp)
 - [x] [tests/anomaly_sr_plan.cpp](tests/anomaly_sr_plan.cpp)
-- [ ] [tests/anomaly_sr_profile.cpp](tests/anomaly_sr_profile.cpp) (open: the contract relates the native, geometry and SR records, and `geometry_profile.h` (N03) is still C++ `constexpr` data; the motion record is Rust (`motion_profile.rs`) and the Rust contract reads it there. Its SR-only layout `static_assert`s moved to compile-time checks in `sr_profile.rs`)
+- [x] [tests/anomaly_sr_profile.cpp](tests/anomaly_sr_profile.cpp) (now the C11 launcher `anomaly_sr_profile.c`; the Rust contract projects the native, geometry, SR and motion records itself)
 - [x] [tests/anomaly_sr_reconstruction.cpp](tests/anomaly_sr_reconstruction.cpp)
 - [x] [tests/anomaly_sr_roundtrip.cpp](tests/anomaly_sr_roundtrip.cpp)
 - [x] [tests/anomaly_sr_runtime_api.cpp](tests/anomaly_sr_runtime_api.cpp)

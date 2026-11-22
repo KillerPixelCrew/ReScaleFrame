@@ -337,8 +337,11 @@ pub(super) fn lifecycle() {
         );
         assert_eq!(s.view_space_to_meters, 1.0);
         for (value, expected) in [
-            (s.project_id_utf8, RSF_ANOMALY_SR_PROJECT_ID),
-            (s.engine_version_utf8, RSF_ANOMALY_SR_ENGINE_VERSION),
+            (s.project_id_utf8, RSF_ANOMALY_SR_PROJECT_ID.as_slice()),
+            (
+                s.engine_version_utf8,
+                RSF_ANOMALY_SR_ENGINE_VERSION.as_slice(),
+            ),
             (s.streamline_directory_utf8, b"C:\\sl\0".as_slice()),
             (s.fsr3_directory_utf8, b"C:\\ffx\0".as_slice()),
             (s.fsr4_directory_utf8, b"C:\\ffx\0".as_slice()),

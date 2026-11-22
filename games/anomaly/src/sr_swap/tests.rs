@@ -579,7 +579,7 @@ impl Case {
     }
 
     fn skipped(&self, reason: u32) -> u64 {
-        self.view().counters.skips[reason as usize]
+        self.view().counters.skipped[reason as usize]
     }
 
     fn before_draw_stock(&self) -> bool {
@@ -947,7 +947,7 @@ fn sun_refusal_returns_the_frame_to_output_size() {
         assert_eq!(c.host().upscales, 1);
         let inputs = c.host().recovery_inputs.expect("spatial seam");
         assert_eq!(inputs.depth_srv, c.view().twins.depth_srv);
-        assert_eq!(inputs.engine_dsv, c.engine().base_zb);
+        assert_eq!(inputs.engine_dsv as usize, c.engine().base_zb);
         assert_eq!((inputs.render_width, inputs.render_height), (1286, 724));
         assert_eq!((inputs.output_width, inputs.output_height), (1920, 1080));
     }

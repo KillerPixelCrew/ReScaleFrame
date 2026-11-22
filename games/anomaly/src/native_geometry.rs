@@ -14,6 +14,11 @@ mod scopes;
 #[cfg(test)]
 mod tests;
 mod vertex_constants;
+// The dx10ConstantBuffer layout the SR position correction also reads.
+pub(crate) use vertex_constants::{
+    DATA_OFFSET as CONSTANT_BUFFER_DATA, SIZE_OFFSET as CONSTANT_BUFFER_SIZE,
+    SLOTS as CONSTANT_BUFFER_SLOTS,
+};
 
 use crate::engine_guards::read_bytes;
 #[cfg_attr(not(windows), allow(unused_imports))]

@@ -3,7 +3,7 @@
 #include "native_profile.h"
 namespace rsf::anomaly::sr {
 // Render-resolution split (SR Stage 0, docs/research/anomaly-sr-seam.md). One table per exact executable (native_profile.h,
-// build_profile.h); the AVX table is documented in docs/research/anomaly-avx-profile.md.
+// native_profile.rs order); the AVX table is documented in docs/research/anomaly-avx-profile.md.
 // Data only: nothing here installs a hook or changes rendering. sr_profile.rs owns every value below and
 // tools/generate-anomaly-sr-profile.py projects it here (--check refuses drift). Every value is re-checked against the installed
 // executable by tests/anomaly_sr_evidence.py --verify [--exe avx] (decompile/disassembly evidence in that script and the docs).

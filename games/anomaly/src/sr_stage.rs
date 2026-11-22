@@ -5,7 +5,8 @@
 // (staging.rs), the configuration (the [Anomaly] keys,
 // the INI path, the vendor directories, the live panel options), GPU query retirement and the
 // status text.
-// sr_stage.cpp provides guarded engine reads, foreign trampolines and the game-owned resource callbacks.
+// sr_stage/native.rs builds the production leaf table over the Rust profile records and the C11 leaf
+// (sr_stage_platform.c): guarded engine reads, the trampolines and the game-owned resource callbacks.
 #[cfg(all(windows, feature = "sr-fixtures"))]
 mod jitter_device;
 pub(crate) mod math;
@@ -188,6 +189,8 @@ mod burst_file;
 mod gpu_timer;
 #[cfg(all(windows, feature = "sr-fixtures"))]
 mod hook_fixture;
+#[cfg(windows)]
+pub(crate) mod native;
 mod staging;
 
 fn default_jitter() -> JitterState {
@@ -2767,16 +2770,7 @@ unsafe extern "C" fn forward_line(user: *mut c_void, text: *const c_char) {
 
 pub(crate) static STAGE: Stage = Stage::new();
 
-// ---- the private C ABI the native leaves call --------------------------------------------------------------------
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_register(table: *const Platform) {
-    #[cfg(windows)]
-    if let Some(leaves) = unsafe { table.as_ref() } {
-        STAGE.register(crate::sr_temporal::stage_bridge::production(*leaves));
-        return;
-    }
-    STAGE.register(table);
-}
+// ---- the private C ABI the native leaves call (sr_stage/native.rs binds the C11 leaf's table) ---------------------
 // `ini` is null (nothing selected) or a NUL-terminated UTF-16 path that stays readable for the call: the carrier's
 // configuration path at cold start, or a fixture's INI.
 #[unsafe(no_mangle)]
@@ -2925,15 +2919,6 @@ fn live_options() -> [crate::overlay_abi::rsf_anomaly_overlay_option; 13] {
             )
         },
     ]
-}
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_install(
-    module: *mut c_void,
-    image_size: u32,
-    expected_size: u32,
-    build: *const c_void,
-) -> bool {
-    STAGE.install(module, image_size, expected_size, build)
 }
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_stage_quiesce() -> bool {
