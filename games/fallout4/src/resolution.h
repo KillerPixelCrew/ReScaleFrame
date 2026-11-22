@@ -7,7 +7,6 @@ struct NativeDepthSnapshot;
 // Bounded same-source receipts only; graphics state is queried on its native owner.
 void report_resolution_state(uint32_t, const rsf_game_render_pass&, void* context,
     bool published, int32_t result, void (*report)(const char*)) noexcept;
-bool verify_resolution() noexcept;
 bool native_resolution_inputs(const rsf_game_render_pass&) noexcept;
 bool configure_native_resolution(const rsf_game_host_services&, const rsf_game_render_pass&, void* context,
     bool (*reserve)(const rsf_game_render_pass&)) noexcept;

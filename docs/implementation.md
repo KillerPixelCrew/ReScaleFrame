@@ -228,6 +228,12 @@ ABI checks and fixture, device and game runs for these ports remain open.
   the remaining hook lifecycle are native.
   [Render inputs](research/rust-fallout4-render-inputs.md) ·
   [Render hooks](research/rust-fallout4-render-hooks.md)
+- The Fallout 4 F02 follow-up shares render-context reads and camera jitter math, rechecks
+  the native records before handing out leases, stores the validated depth maps and allows
+  advanced-frame resolution cleanup at the ordinary World boundary. The camera fixtures
+  moved to Rust and the native padding fixture calls the production comparator. The changes
+  are source-checked and await build, fixtures and game or device validation.
+  [F02 input ownership and resolution retirement](research/rust-fallout4-f02.md)
 - AC7's Rust F9 path admits geometry reads and writes the existing JSONL
   schema. The velocity owner admits commit targets and applies the
   existing profile and log limits. D3D11 readback, blob deduplication,

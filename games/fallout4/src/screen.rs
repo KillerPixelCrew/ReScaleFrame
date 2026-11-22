@@ -8,15 +8,13 @@ use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_PRIMARY,
     rsf_game_render_pass,
 };
+use rsf_game_sys::{RSF_SCREEN_GAMEPLAY, RSF_SCREEN_LOADING, RSF_SCREEN_MENU, RSF_SCREEN_UNKNOWN};
 use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-const UNKNOWN: u32 = 0;
-const MENU: u32 = 1;
-const LOADING: u32 = 7;
-const GAMEPLAY: u32 = 8;
 const LOADING_FACT: u32 = 1;
 const MENU_FACTS: u32 = 2 | 4 | 8 | 16 | 32;
 const FROZEN_BACKGROUND: u32 = 64;
@@ -133,7 +131,7 @@ impl NativeScreen {
 
     const fn refused(refusals: u32) -> Self {
         Self {
-            screen: UNKNOWN,
+            screen: RSF_SCREEN_UNKNOWN,
             facts: 0,
             refusals,
             camera_index: u32::MAX,
@@ -309,8 +307,7 @@ struct MenuCall {
 
 #[repr(C)]
 struct QueryPlan {
-    base: usize,
-    before: Observation,
+    ui: usize,
     menus: [MenuCall; MENUS.len()],
     menu_open: usize,
     freeze_background: usize,
@@ -320,6 +317,7 @@ struct QueryPlan {
 }
 
 #[repr(C)]
+#[derive(Default)]
 struct QueryResult {
     names: [usize; MENUS.len()],
     open: [u8; MENUS.len()],
@@ -330,64 +328,67 @@ struct QueryResult {
 
 const _: () = {
     assert!(size_of::<Observation>() == 80);
-    assert!(size_of::<QueryPlan>() == 224 && std::mem::offset_of!(QueryPlan, menus) == 88);
+    assert!(size_of::<QueryPlan>() == 144 && std::mem::offset_of!(QueryPlan, menus) == 8);
     assert!(size_of::<QueryResult>() == 64 && std::mem::offset_of!(QueryResult, cameras) == 56);
 };
 
-/// Prepare the exact engine calls. The native observer performs them on its own frame.
+type Observe = unsafe extern "C" fn(&QueryPlan, &mut QueryResult) -> bool;
+
+struct LastError(u32);
+
+impl Drop for LastError {
+    fn drop(&mut self) {
+        unsafe { SetLastError(self.0) };
+    }
+}
+
+/// Query only on the engine callback. The native leaf contains the exception
+/// guard around the engine calls.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_screen_prepare(
+extern "C" fn rsf_fallout4_screen_classify(
     source: &rsf_fallout4_cpu_identity,
-    plan: *mut QueryPlan,
+    pass: &rsf_game_render_pass,
+    ordinary_world: bool,
     result: &mut NativeScreen,
-) -> bool {
+    observe: Observe,
+) {
+    let _error = LastError(unsafe { GetLastError() });
     let base = VERIFIED_IMAGE.load(Ordering::Acquire);
     if base == 0 {
         *result = NativeScreen::refused(QUERY_UNAVAILABLE);
-        return false;
+        return;
     }
     if !unsafe { rsf_fallout4_cpu_render_source_is_current(source) } {
         *result = NativeScreen::refused(SOURCE_CHANGED);
-        return false;
+        return;
     }
     let Some(before) = Observation::read(base) else {
         *result = NativeScreen::refused(QUERY_UNAVAILABLE);
-        return false;
+        return;
     };
     let camera = if before.camera_state != 0 && before.camera_vtable == base + 0x25a_a6d8 {
         before.player_camera
     } else {
         0
     };
-    unsafe {
-        plan.write(QueryPlan {
-            base,
-            before,
-            menus: MENUS.map(|menu| MenuCall {
-                name: base + menu.entry,
-                expected: base + menu.object,
-            }),
-            menu_open: base + MENU_OPEN,
-            freeze_background: base + FREEZE_BACKGROUND,
-            freeze_pause: base + FREEZE_PAUSE,
-            camera_equals: base + CAMERA_EQUALS,
-            camera,
-        })
+    let plan = QueryPlan {
+        ui: before.ui,
+        menus: MENUS.map(|menu| MenuCall {
+            name: base + menu.entry,
+            expected: base + menu.object,
+        }),
+        menu_open: base + MENU_OPEN,
+        freeze_background: base + FREEZE_BACKGROUND,
+        freeze_pause: base + FREEZE_PAUSE,
+        camera_equals: base + CAMERA_EQUALS,
+        camera,
     };
-    true
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_screen_finish(
-    plan: &QueryPlan,
-    observed: &QueryResult,
-    source: &rsf_fallout4_cpu_identity,
-    pass: &rsf_game_render_pass,
-    ordinary_world: bool,
-    result: &mut NativeScreen,
-) {
+    let mut observed = QueryResult::default();
+    if !unsafe { observe(&plan, &mut observed) } {
+        *result = NativeScreen::refused(QUERY_UNAVAILABLE);
+        return;
+    }
     *result = NativeScreen::refused(0);
-    let before = &plan.before;
     for (index, menu) in MENUS.iter().enumerate() {
         if observed.names[index] != plan.menus[index].expected {
             result.refusals = QUERY_UNAVAILABLE;
@@ -413,7 +414,7 @@ extern "C" fn rsf_fallout4_screen_finish(
         result.camera_index = observed.cameras.trailing_zeros();
     }
     result.camera_state = before.camera_state;
-    if Observation::read(plan.base).as_ref() != Some(before)
+    if Observation::read(base).as_ref() != Some(&before)
         || !unsafe { rsf_fallout4_cpu_render_source_is_current(source) }
         || (result.facts & FROZEN_BACKGROUND != 0) != (before.freeze_background != 0)
         || (result.facts & FROZEN_PAUSE != 0) != (before.freeze_pause != 0)
@@ -437,10 +438,10 @@ extern "C" fn rsf_fallout4_screen_finish(
         result.refusals |= MENU_OR_FREEZE;
     }
     if result.facts & LOADING_FACT != 0 {
-        result.screen = LOADING;
+        result.screen = RSF_SCREEN_LOADING;
     } else if result.facts & MENU_FACTS != 0 {
-        result.screen = MENU;
+        result.screen = RSF_SCREEN_MENU;
     } else if result.refusals == 0 {
-        result.screen = GAMEPLAY;
+        result.screen = RSF_SCREEN_GAMEPLAY;
     }
 }

@@ -304,11 +304,8 @@ target_link_libraries(rsf_auxiliary_sr PRIVATE rsf_orchestrator_rust ReScaleFram
 add_test(NAME auxiliary_sr_device COMMAND rsf_auxiliary_sr)
 set_tests_properties(auxiliary_sr_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_fallout4_camera fallout4_camera.cpp)
-target_link_libraries(rsf_fallout4_camera PRIVATE rsf_fallout4_rust ReScaleFrame::GameSDK rsf_build_options)
-add_test(NAME fallout4_camera_contract COMMAND rsf_fallout4_camera)
 add_executable(rsf_fallout4_input_state fallout4_input_state.cpp)
-target_link_libraries(rsf_fallout4_input_state PRIVATE rsf_build_options)
+target_link_libraries(rsf_fallout4_input_state PRIVATE rsf_fallout4_rust rsf_build_options)
 add_test(NAME fallout4_input_state_contract COMMAND rsf_fallout4_input_state)
 add_executable(rsf_skyrim_input skyrim_input.cpp ../games/skyrim-se/src/cpu_events.cpp)
 target_link_libraries(rsf_skyrim_input PRIVATE rsf_skyrim_se_rust ReScaleFrame::GameSDK minhook rsf_build_options)

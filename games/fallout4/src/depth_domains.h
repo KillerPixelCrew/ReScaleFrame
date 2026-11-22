@@ -36,16 +36,17 @@ struct NativeDepthSnapshot {
     bool scissor_enabled{};
     unsigned char default_viewport{}, dynamic_viewport{};
     bool valid{}, raster_valid{};
+    float maps[3][4][4]{}; // Validated near, world and projection maps for temporal snapshots.
 };
 static_assert(sizeof(NativeDepthCamera) == 71 * sizeof(float));
-static_assert(sizeof(NativeDepthSnapshot) == 1304);
+static_assert(sizeof(NativeDepthSnapshot) == 1496);
 static_assert(offsetof(NativeDepthSnapshot, native_frame) == 40 && offsetof(NativeDepthSnapshot, width) == 144 &&
     offsetof(NativeDepthSnapshot, mode) == 168 && offsetof(NativeDepthSnapshot, intervals) == 172 &&
     offsetof(NativeDepthSnapshot, near_camera) == 268 && offsetof(NativeDepthSnapshot, render_rect) == 1120 &&
     offsetof(NativeDepthSnapshot, descriptor_read) == 1224 && offsetof(NativeDepthSnapshot, cube_key) == 1232 &&
     offsetof(NativeDepthSnapshot, colour_slot) == 1248 && offsetof(NativeDepthSnapshot, colour_texture_key) == 1264 &&
     offsetof(NativeDepthSnapshot, scissor) == 1280 && offsetof(NativeDepthSnapshot, scissor_enabled) == 1296 &&
-    offsetof(NativeDepthSnapshot, raster_valid) == 1300);
+    offsetof(NativeDepthSnapshot, raster_valid) == 1300 && offsetof(NativeDepthSnapshot, maps) == 1304);
 
 using NativeDepthReport = void (*)(const char*);
 struct NativeDepthLeaves;

@@ -3,15 +3,16 @@
 //! owner, camera cache and range records, producer raster and target admission, the camera math
 //! that recovers the near and world source-clip maps, and the two composed GameSDK depth domains.
 //!
-//! depth_domains.cpp supplies narrow leaves through `Leaves` (depth_domains_platform.h): the TLS
-//! slot array, canonical COM identity, D3D11 context, target, rasterizer and view facts, and the
-//! refusal receipts with their original text. Engine memory is read here through the guarded
+//! Rust samples the D3D11 facts directly on the renderer thread. The native leaves format and
+//! report refusal receipts. Engine memory is read here through the guarded
 //! `crate::read`. Matrix work goes through `camera::xm` and the camera admission helpers, which
 //! repeat the DirectXMath SSE2 operations the former C++ compiled to.
 //!
 //! Every refusal names the stage the C++ named, reports it once per stage when a report callback
 //! is supplied, and leaves fields written before the failing step in the reported copy. Outputs
 //! are cleared on entry and written only on admission.
+
+mod native;
 
 use crate::build_layout::{
     RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
@@ -21,6 +22,7 @@ use crate::camera::xm::{self, Matrix};
 use crate::camera::{self, CameraDepthBound, CameraRaster};
 use crate::cpu_abi::rsf_fallout4_cpu_identity;
 use crate::cpu_events::{current_identity, render_source_is_current};
+use crate::d3d11::same_native;
 use crate::{Plain, image, read};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
@@ -118,11 +120,10 @@ pub(crate) struct Snapshot {
     dynamic_viewport: u8,
     valid: bool,
     raster_valid: bool,
+    maps: Maps,
 }
 
-/// depth_domains_platform.h `NativeDepthTextureFacts`.
-#[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct TextureFacts {
     resource: u64,
     device: u64,
@@ -136,8 +137,7 @@ struct TextureFacts {
     sample_quality: u32,
 }
 
-/// depth_domains_platform.h `NativeDepthContextFacts`.
-#[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct ContextFacts {
     device: u64,
     immediate: u32,
@@ -146,8 +146,7 @@ struct ContextFacts {
     viewport: [f32; 6],
 }
 
-/// depth_domains_platform.h `NativeDepthTargetFacts`.
-#[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct TargetFacts {
     rtv: u64,
     dsv: u64,
@@ -161,8 +160,7 @@ struct TargetFacts {
     rtv_mip: u32,
 }
 
-/// depth_domains_platform.h `NativeDepthScissorFacts`.
-#[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct ScissorFacts {
     enabled: u32,
     count: u32,
@@ -170,8 +168,7 @@ struct ScissorFacts {
     rect: [i32; 4],
 }
 
-/// depth_domains_platform.h `NativeDepthViewFacts`.
-#[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct ViewFacts {
     resource: u64,
     device: u64,
@@ -199,13 +196,6 @@ struct MathFailure {
 #[repr(C)]
 #[allow(dead_code)] // constructed by the C++ leaf table
 pub(crate) struct NativeLeaves {
-    tls_slots: Option<unsafe extern "C" fn() -> usize>,
-    identity: Option<unsafe extern "C" fn(u64) -> u64>,
-    context: Option<unsafe extern "C" fn(u64, *mut ContextFacts)>,
-    targets: Option<unsafe extern "C" fn(u64, *mut TargetFacts)>,
-    scissor: Option<unsafe extern "C" fn(u64, *mut ScissorFacts)>,
-    texture: Option<unsafe extern "C" fn(u64, *mut TextureFacts)>,
-    view: Option<unsafe extern "C" fn(u64, *mut ViewFacts)>,
     refusal: Option<
         unsafe extern "C" fn(Report, *const c_char, *const Snapshot, *const MathFailure, u32),
     >,
@@ -214,13 +204,6 @@ pub(crate) struct NativeLeaves {
 }
 
 pub(crate) struct Leaves {
-    tls_slots: unsafe extern "C" fn() -> usize,
-    identity: unsafe extern "C" fn(u64) -> u64,
-    context: unsafe extern "C" fn(u64, *mut ContextFacts),
-    targets: unsafe extern "C" fn(u64, *mut TargetFacts),
-    scissor: unsafe extern "C" fn(u64, *mut ScissorFacts),
-    texture: unsafe extern "C" fn(u64, *mut TextureFacts),
-    view: unsafe extern "C" fn(u64, *mut ViewFacts),
     refusal: unsafe extern "C" fn(Report, *const c_char, *const Snapshot, *const MathFailure, u32),
     lease: unsafe extern "C" fn(Report, *const Snapshot, *const Snapshot, u32, u32, u32, u32),
 }
@@ -229,7 +212,7 @@ const _: () = {
     use std::mem::offset_of;
     assert!(size_of::<Identity>() == 40);
     assert!(size_of::<DepthCamera>() == 71 * 4);
-    assert!(size_of::<Snapshot>() == 1304);
+    assert!(size_of::<Snapshot>() == 1496);
     assert!(offset_of!(Snapshot, native_frame) == 40);
     assert!(offset_of!(Snapshot, width) == 144);
     assert!(offset_of!(Snapshot, mode) == 168);
@@ -243,17 +226,10 @@ const _: () = {
     assert!(offset_of!(Snapshot, scissor) == 1280);
     assert!(offset_of!(Snapshot, scissor_enabled) == 1296);
     assert!(offset_of!(Snapshot, raster_valid) == 1300);
-    assert!(size_of::<TextureFacts>() == 48 && offset_of!(TextureFacts, texture) == 16);
-    assert!(offset_of!(TextureFacts, sample_quality) == 44);
-    assert!(size_of::<ContextFacts>() == 48 && offset_of!(ContextFacts, viewport) == 20);
-    assert!(size_of::<TargetFacts>() == 144 && offset_of!(TargetFacts, depth) == 24);
-    assert!(offset_of!(TargetFacts, colour) == 72 && offset_of!(TargetFacts, dsv_format) == 120);
-    assert!(offset_of!(TargetFacts, rtv_mip) == 136);
-    assert!(size_of::<ScissorFacts>() == 28 && offset_of!(ScissorFacts, rect) == 12);
-    assert!(size_of::<ViewFacts>() == 32 && offset_of!(ViewFacts, mip_levels) == 28);
+    assert!(offset_of!(Snapshot, maps) == 1304);
     assert!(size_of::<MathFailure>() == 64 && offset_of!(MathFailure, w) == 16);
     assert!(offset_of!(MathFailure, range) == 56);
-    assert!(size_of::<NativeLeaves>() == 9 * 8);
+    assert!(size_of::<NativeLeaves>() == 2 * 8);
 };
 
 const NO_IDENTITY: Identity = Identity::ZERO;
@@ -321,19 +297,11 @@ pub(crate) const EMPTY: Snapshot = Snapshot {
     dynamic_viewport: 0,
     valid: false,
     raster_valid: false,
-};
-
-const NO_TEXTURE: TextureFacts = TextureFacts {
-    resource: 0,
-    device: 0,
-    texture: 0,
-    width: 0,
-    height: 0,
-    format: 0,
-    mip_levels: 0,
-    array_size: 0,
-    sample_count: 0,
-    sample_quality: 0,
+    maps: Maps {
+        near: [[0.0; 4]; 4],
+        world: [[0.0; 4]; 4],
+        projection: [[0.0; 4]; 4],
+    },
 };
 
 const NO_FAILURE: MathFailure = MathFailure {
@@ -450,90 +418,9 @@ const _: () = assert!(Stage::NearBasis as usize + 1 == NAMES.len() && NAMES.len(
 impl Leaves {
     fn from_native(table: &NativeLeaves) -> Option<Self> {
         Some(Self {
-            tls_slots: table.tls_slots?,
-            identity: table.identity?,
-            context: table.context?,
-            targets: table.targets?,
-            scissor: table.scissor?,
-            texture: table.texture?,
-            view: table.view?,
             refusal: table.refusal?,
             lease: table.lease?,
         })
-    }
-
-    fn tls_slots(&self) -> usize {
-        unsafe { (self.tls_slots)() }
-    }
-
-    /// Canonical identity of a live COM object, 0 when null or not an object.
-    fn identity(&self, object: u64) -> u64 {
-        unsafe { (self.identity)(object) }
-    }
-
-    fn context(&self, context: u64) -> ContextFacts {
-        let mut facts = ContextFacts {
-            device: 0,
-            immediate: 0,
-            viewport_count: 0,
-            viewport_copied: 0,
-            viewport: [0.0; 6],
-        };
-        unsafe { (self.context)(context, &mut facts) };
-        facts
-    }
-
-    fn targets(&self, context: u64) -> TargetFacts {
-        let mut facts = TargetFacts {
-            rtv: 0,
-            dsv: 0,
-            rtv_identity: 0,
-            depth: NO_TEXTURE,
-            colour: NO_TEXTURE,
-            dsv_format: 0,
-            dsv_dimension: 0,
-            dsv_mip: 0,
-            rtv_dimension: 0,
-            rtv_mip: 0,
-        };
-        unsafe { (self.targets)(context, &mut facts) };
-        facts
-    }
-
-    fn scissor(&self, context: u64) -> ScissorFacts {
-        let mut facts = ScissorFacts {
-            enabled: 0,
-            count: 0,
-            copied: 0,
-            rect: [0; 4],
-        };
-        unsafe { (self.scissor)(context, &mut facts) };
-        facts
-    }
-
-    fn texture(&self, texture: u64) -> TextureFacts {
-        let mut facts = NO_TEXTURE;
-        unsafe { (self.texture)(texture, &mut facts) };
-        facts
-    }
-
-    fn view(&self, view: u64) -> ViewFacts {
-        let mut facts = ViewFacts {
-            resource: 0,
-            device: 0,
-            format: 0,
-            dimension: 0,
-            most_detailed_mip: 0,
-            mip_levels: 0,
-        };
-        unsafe { (self.view)(view, &mut facts) };
-        facts
-    }
-
-    /// `object` is the canonical identity of a live object, `native` a native pointer: the C++
-    /// `same_object`, which required both and compared their IUnknown identities.
-    fn same_native(&self, object: u64, native: u64) -> bool {
-        object != 0 && native != 0 && self.identity(native) == object
     }
 }
 
@@ -714,29 +601,18 @@ fn valid_camera(value: &DepthCamera) -> bool {
 
 /// The full temporal sample: owner, dimensions, cache, range, camera owners, depth owner and the
 /// three unique camera cache entries.
-fn sample(leaves: &Leaves, cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
+fn sample(cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
     let base = image();
     let state = base.wrapping_add(GRAPHICS_RVA);
     let targets = base.wrapping_add(TARGETS_RVA);
     out.identity = *cpu;
-    let (mut tls_index, mut tls) = (0u32, 0u64);
-    let (mut context, mut tls_device_context, mut graph_camera) = (0u64, 0u64, 0u64);
+    let mut graph_camera = 0u64;
     *stage = Stage::Tls;
-    if !load(base.wrapping_add(0x3e73018), &mut tls_index) || tls_index > 4096 {
+    let Some((context, Some(tls_device_context))) = crate::build_layout::render_context(base, true)
+    else {
         return false;
-    }
-    let tls_array = leaves.tls_slots();
-    if !load(tls_array.wrapping_add(tls_index as usize * 8), &mut tls)
-        || tls == 0
-        || !load(at(tls, 0xb20), &mut context)
-        || !load(at(tls, 0xb18), &mut tls_device_context)
-    {
-        return false;
-    }
-    if context == 0 && !load(base.wrapping_add(0x38e1398), &mut context) {
-        return false;
-    }
-    out.context_key = context;
+    };
+    out.context_key = context as u64;
     *stage = Stage::Owner;
     if context == 0
         || !load(base.wrapping_add(RENDERER_POINTER), &mut out.renderer_key)
@@ -748,7 +624,7 @@ fn sample(leaves: &Leaves, cpu: &Identity, out: &mut Snapshot, stage: &mut Stage
             &mut out.device_context_key,
         )
         || out.device_context_key == 0
-        || tls_device_context != out.device_context_key
+        || tls_device_context as u64 != out.device_context_key
         || !load(at(out.renderer_key, RENDERER_WINDOW), &mut out.window_key)
         || out.window_key == 0
         || !load(at(out.renderer_key, RENDERER_CHAIN), &mut out.chain_key)
@@ -927,6 +803,8 @@ fn same(a: &Snapshot, b: &Snapshot) -> bool {
 }
 
 /// Source-clip maps recovered from one admitted sample.
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct Maps {
     near: Matrix,
     world: Matrix,
@@ -1026,14 +904,14 @@ fn math(s: &Snapshot, stage: &mut Stage, detail: &mut MathFailure) -> Option<Map
 /// device, one viewport inside the allocation, the native depth DSV and slot0 colour owners, the
 /// native shadow selectors, descriptor and physical slot maps, and a containing scissor.
 /// `temporal` also requires every camera port to equal the shadow port.
-fn producer_raster(leaves: &Leaves, s: &mut Snapshot, stage: &mut Stage, temporal: bool) -> bool {
+fn producer_raster(s: &mut Snapshot, stage: &mut Stage, temporal: bool) -> bool {
     *stage = Stage::ProducerRaster;
-    let context = leaves.context(s.device_context_key);
+    let context = native::context(s.device_context_key);
     if context.immediate == 0 {
         return false;
     }
     let device = context.device;
-    if !leaves.same_native(device, s.device_key) {
+    if !same_native(device, s.device_key) {
         return false;
     }
     if context.viewport_count != 1 || context.viewport_copied != 1 {
@@ -1067,13 +945,13 @@ fn producer_raster(leaves: &Leaves, s: &mut Snapshot, stage: &mut Stage, tempora
         return false;
     }
     *stage = Stage::ProducerTarget;
-    let bound = leaves.targets(s.device_context_key);
+    let bound = native::targets(s.device_context_key);
     if bound.dsv == 0 {
         return false;
     }
     s.depth_dsv_key = bound.dsv;
     let depth = &bound.depth;
-    if !leaves.same_native(depth.resource, s.depth_key) || depth.texture == 0 {
+    if !same_native(depth.resource, s.depth_key) || depth.texture == 0 {
         return false;
     }
     if depth.width != s.width
@@ -1166,14 +1044,14 @@ fn producer_raster(leaves: &Leaves, s: &mut Snapshot, stage: &mut Stage, tempora
             || !load(target.wrapping_add(0x10), &mut native_rtv)
             || native_rtv == 0
             || bound.rtv == 0
-            || !leaves.same_native(bound.rtv_identity, native_rtv)
+            || !same_native(bound.rtv_identity, native_rtv)
         {
             return false;
         }
         let colour = &bound.colour;
         if colour.resource == 0
             || colour.texture == 0
-            || !leaves.same_native(colour.resource, native_texture)
+            || !same_native(colour.resource, native_texture)
         {
             return false;
         }
@@ -1227,7 +1105,7 @@ fn producer_raster(leaves: &Leaves, s: &mut Snapshot, stage: &mut Stage, tempora
         return false;
     }
     *stage = Stage::ProducerScissor;
-    let scissor = leaves.scissor(s.device_context_key);
+    let scissor = native::scissor(s.device_context_key);
     s.scissor_enabled = scissor.enabled != 0;
     if s.scissor_enabled {
         if scissor.count != 1 {
@@ -1249,24 +1127,16 @@ fn producer_raster(leaves: &Leaves, s: &mut Snapshot, stage: &mut Stage, tempora
 
 /// Only native owner/raster prerequisites. No temporal cache, projection, history or CPU
 /// sample-validity predicate is admitted through this boundary.
-fn raster_owner(leaves: &Leaves, cpu: &Identity, out: &mut Snapshot) -> bool {
+fn raster_owner(cpu: &Identity, out: &mut Snapshot) -> bool {
     let base = image();
     let state = base.wrapping_add(GRAPHICS_RVA);
     let targets = base.wrapping_add(TARGETS_RVA);
     out.identity = *cpu;
-    let (mut index, mut frame, mut block, mut tls_device) = (0u32, 0u32, 0u64, 0u64);
-    if !load(base.wrapping_add(0x3e73018), &mut index) || index > 4096 {
+    let mut frame = 0u32;
+    let Some((context, Some(tls_device))) = crate::build_layout::render_context(base, true) else {
         return false;
-    }
-    let slots = leaves.tls_slots();
-    if slots == 0
-        || !load(slots.wrapping_add(index as usize * 8), &mut block)
-        || block == 0
-        || !load(at(block, 0xb20), &mut out.context_key)
-        || !load(at(block, 0xb18), &mut tls_device)
-    {
-        return false;
-    }
+    };
+    out.context_key = context as u64;
     if out.context_key == 0 && !load(base.wrapping_add(0x38e1398), &mut out.context_key) {
         return false;
     }
@@ -1280,7 +1150,7 @@ fn raster_owner(leaves: &Leaves, cpu: &Identity, out: &mut Snapshot) -> bool {
             &mut out.device_context_key,
         )
         || out.device_context_key == 0
-        || tls_device != out.device_context_key
+        || tls_device as u64 != out.device_context_key
         || !load(at(out.renderer_key, RENDERER_WINDOW), &mut out.window_key)
         || out.window_key == 0
         || !load(at(out.renderer_key, RENDERER_CHAIN), &mut out.chain_key)
@@ -1465,10 +1335,10 @@ fn capture_raster(leaves: &Leaves, cpu: &Identity, report: Report) -> Option<Sna
     let mut stage = Stage::Source;
     let admitted = VERIFIED.load(Ordering::Acquire)
         && same_identity(cpu, &current_identity())
-        && raster_owner(leaves, cpu, &mut before)
-        && producer_raster(leaves, &mut before, &mut stage, false)
-        && raster_owner(leaves, cpu, &mut after)
-        && producer_raster(leaves, &mut after, &mut stage, false)
+        && raster_owner(cpu, &mut before)
+        && producer_raster(&mut before, &mut stage, false)
+        && raster_owner(cpu, &mut after)
+        && producer_raster(&mut after, &mut stage, false)
         && same_raster_owner(&before, &after)
         && same_raster(&before, &after)
         && bits(&before.ratio) == bits(&after.ratio)
@@ -1482,12 +1352,12 @@ fn capture_raster(leaves: &Leaves, cpu: &Identity, report: Report) -> Option<Sna
     Some(before)
 }
 
-pub(crate) fn raster_current(leaves: &Leaves, snapshot: &Snapshot) -> bool {
+pub(crate) fn raster_current(snapshot: &Snapshot) -> bool {
     let mut current = EMPTY;
     VERIFIED.load(Ordering::Acquire)
         && snapshot.raster_valid
         && same_identity(&snapshot.identity, &current_identity())
-        && raster_owner(leaves, &snapshot.identity, &mut current)
+        && raster_owner(&snapshot.identity, &mut current)
         && same_raster_owner(snapshot, &current)
 }
 
@@ -1499,7 +1369,7 @@ pub(crate) fn resolution_owner(
 ) -> Option<(usize, usize, usize)> {
     let leaves = Leaves::from_native(leaves)?;
     let current = if snapshot.raster_valid {
-        raster_current(&leaves, snapshot)
+        raster_current(snapshot)
     } else {
         snapshot_current(&leaves, snapshot, None)
     };
@@ -1525,10 +1395,7 @@ pub(crate) fn snapshot_current(leaves: &Leaves, snapshot: &Snapshot, report: Rep
         && check(2, snapshot.valid)
         && check(4, same_identity(&snapshot.identity, &current_identity()))
         && check(8, render_source_is_current(&snapshot.identity))
-        && check(
-            16,
-            sample(leaves, &snapshot.identity, &mut current, &mut stage),
-        )
+        && check(16, sample(&snapshot.identity, &mut current, &mut stage))
         && check(32, same(snapshot, &current))
         && check(64, render_source_is_current(&snapshot.identity));
     if !okay && report.is_some() {
@@ -1593,15 +1460,13 @@ fn capture(leaves: &Leaves, cpu: &Identity, report: Report) -> Option<Snapshot> 
     if !same_identity(cpu, &current_identity()) || !render_source_is_current(cpu) {
         return refused(leaves, Stage::Source, &before, report, None);
     }
-    if !sample(leaves, cpu, &mut before, &mut stage)
-        || !producer_raster(leaves, &mut before, &mut stage, true)
-        || math(&before, &mut stage, &mut detail).is_none()
-    {
+    if !sample(cpu, &mut before, &mut stage) || !producer_raster(&mut before, &mut stage, true) {
         return refused(leaves, stage, &before, report, Some(&detail));
     }
-    if !sample(leaves, cpu, &mut after, &mut stage)
-        || !producer_raster(leaves, &mut after, &mut stage, true)
-    {
+    let Some(maps) = math(&before, &mut stage, &mut detail) else {
+        return refused(leaves, stage, &before, report, Some(&detail));
+    };
+    if !sample(cpu, &mut after, &mut stage) || !producer_raster(&mut after, &mut stage, true) {
         return refused(leaves, stage, &after, report, None);
     }
     if !same(&before, &after) || !same_raster(&before, &after) {
@@ -1610,6 +1475,7 @@ fn capture(leaves: &Leaves, cpu: &Identity, report: Report) -> Option<Snapshot> 
     if !same_identity(cpu, &current_identity()) || !render_source_is_current(cpu) {
         return refused(leaves, Stage::Source, &after, report, None);
     }
+    before.maps = maps;
     before.valid = true;
     Some(before)
 }
@@ -1669,16 +1535,13 @@ fn make(
     }
     let (mut current, mut confirmed) = (EMPTY, EMPTY);
     let mut stage = Stage::Source;
-    let mut detail = NO_FAILURE;
-    if !sample(leaves, cpu, &mut current, &mut stage) {
+    if !sample(cpu, &mut current, &mut stage) {
         return refused(leaves, stage, &current, report, None);
     }
     if !same(snapshot, &current) {
         return refused(leaves, Stage::StateChanged, &current, report, None);
     }
-    let Some(maps) = math(snapshot, &mut stage, &mut detail) else {
-        return refused(leaves, stage, snapshot, report, Some(&detail));
-    };
+    let maps = &snapshot.maps;
     let mut native_projection = [0.0; 16];
     if !camera::store(&maps.projection, &mut native_projection) {
         return refused(leaves, Stage::FiniteMap, snapshot, report, None);
@@ -1716,17 +1579,17 @@ fn make(
     if !camera::store(&projection, &mut target) {
         return refused(leaves, Stage::TargetCamera, snapshot, report, None);
     }
-    if (0..16).any(|i| i != 8 && i != 9 && !camera::near(w.projection[i], native_projection[i])) {
+    let Some([jitter_x, jitter_y]) =
+        camera::projection_jitter(&w.projection, &native_projection, [width, height])
+    else {
         return refused(leaves, Stage::TargetCamera, snapshot, report, None);
-    }
-    let jitter_x = (w.projection[8] - native_projection[8]) * width * 0.5;
-    let jitter_y = -(w.projection[9] - native_projection[9]) * height * 0.5;
+    };
     if !camera::near(frame.jitter_pixels[0], jitter_x)
         || !camera::near(frame.jitter_pixels[1], jitter_y)
     {
         return refused(leaves, Stage::TargetCamera, snapshot, report, None);
     }
-    let depth = leaves.texture(pass.depth as u64);
+    let depth = native::texture(pass.depth as u64);
     if depth.format != DXGI_FORMAT_R24G8_TYPELESS
         || depth.width != snapshot.width
         || depth.height != snapshot.height
@@ -1734,11 +1597,11 @@ fn make(
         || depth.array_size != 1
         || depth.sample_count != 1
         || depth.sample_quality != 0
-        || !leaves.same_native(depth.device, current.device_key)
+        || !same_native(depth.device, current.device_key)
     {
         return refused(leaves, Stage::DepthFormat, snapshot, report, None);
     }
-    let view = leaves.view(current.depth_srv_key);
+    let view = native::view(current.depth_srv_key);
     if view.format != DXGI_FORMAT_R24_UNORM_X8_TYPELESS
         || view.dimension != D3D11_SRV_DIMENSION_TEXTURE2D
         || view.most_detailed_mip != 0
@@ -1769,7 +1632,7 @@ fn make(
             return refused(leaves, Stage::FiniteMap, snapshot, report, None);
         }
     }
-    if !sample(leaves, cpu, &mut confirmed, &mut stage) {
+    if !sample(cpu, &mut confirmed, &mut stage) {
         return refused(leaves, stage, &confirmed, report, None);
     }
     if !same(snapshot, &confirmed) {
@@ -1827,7 +1690,7 @@ unsafe extern "C" fn rsf_fallout4_depth_raster_current(
     snapshot: *const Snapshot,
 ) -> bool {
     match (unsafe { complete(leaves) }, unsafe { snapshot.as_ref() }) {
-        (Some(leaves), Some(snapshot)) => raster_current(&leaves, snapshot),
+        (Some(_), Some(snapshot)) => raster_current(snapshot),
         _ => false,
     }
 }

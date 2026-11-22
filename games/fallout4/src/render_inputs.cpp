@@ -1,10 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Native leaves of the Rust render-input owner (render_inputs.rs). Rust owns the code guards, the
-// guarded engine reads of the renderer owner, temporal state, camera cache and target maps, every
-// admission decision, the camera history, the passes and the receipt budgets. This file keeps
-// what needs C++ or COM: the lease that holds the context, chain and textures as typed COM
-// references, canonical object identity, the D3D11 and DXGI facts, and the receipts with their
-// original text. The leaves only report; none of them decides admission.
+// Receipt formatting and transfer of the Rust input lease into the native World.
 #include "render_inputs.h"
 #include "render_inputs_platform.h"
 #include <windows.h>
@@ -14,110 +9,22 @@
 #include <utility>
 
 namespace rsf::fallout4 {
-namespace {
-using Microsoft::WRL::ComPtr;
-// render_inputs.rs compares these enumerators by value.
-static_assert(DXGI_FORMAT_R11G11B10_FLOAT == 26 && DXGI_FORMAT_R16G16_FLOAT == 34 &&
-    DXGI_FORMAT_R32_TYPELESS == 39 && DXGI_FORMAT_R32_FLOAT == 41 && DXGI_FORMAT_R24G8_TYPELESS == 44 &&
-    DXGI_FORMAT_R24_UNORM_X8_TYPELESS == 46);
-static_assert(D3D11_SRV_DIMENSION_TEXTURE2D == 4 && D3D11_RTV_DIMENSION_TEXTURE2D == 4);
-static_assert(RSF_SCREEN_UNKNOWN == 0);
-
-// Typed references a reader holds until it returns. The wrappers move them into their output on
-// admission; a refusal releases them with the lease.
+// Each nonnull field receives one owned reference from Rust. Attach transfers
+// it to the result; refusal and unused slots release it here.
 struct NativeInputLease {
-    ComPtr<ID3D11DeviceContext> context;
-    ComPtr<IDXGISwapChain> chain;
-    ComPtr<ID3D11Texture2D> textures[native_input_slot_count];
-};
+    ID3D11DeviceContext* context{};
+    IDXGISwapChain* chain{};
+    ID3D11Texture2D* textures[native_input_slot_count]{};
 
-uint64_t identity_of(IUnknown* object) noexcept {
-    ComPtr<IUnknown> canonical;
-    return object && SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&canonical)))
-        ? reinterpret_cast<uint64_t>(canonical.Get()) : 0;
-}
-
-uint64_t identity(uint64_t object) noexcept { return identity_of(reinterpret_cast<IUnknown*>(object)); }
-void owner(void* lease, uint64_t context, uint64_t chain, NativeInputDeviceFacts* output) noexcept {
-    *output = {};
-    auto& held = *static_cast<NativeInputLease*>(lease);
-    held.context = reinterpret_cast<ID3D11DeviceContext*>(context);
-    held.chain = reinterpret_cast<IDXGISwapChain*>(chain);
-    if (!held.context || !held.chain) return;
-    output->immediate = held.context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;
-    ComPtr<ID3D11Device> device, chain_device;
-    held.context->GetDevice(&device);
-    output->device = identity_of(device.Get());
-    output->chain_device_read = SUCCEEDED(held.chain->GetDevice(IID_PPV_ARGS(&chain_device)));
-    output->chain_device = identity_of(chain_device.Get());
-}
-void viewport(uint64_t key, NativeInputViewportFacts* output) noexcept {
-    *output = {};
-    auto* context = reinterpret_cast<ID3D11DeviceContext*>(key);
-    if (!context) return;
-    UINT count{};
-    context->RSGetViewports(&count, nullptr);
-    output->count = count;
-    if (count != 1) return;
-    UINT capacity = 1;
-    D3D11_VIEWPORT actual{};
-    context->RSGetViewports(&capacity, &actual);
-    output->copied = capacity;
-    const float values[]{actual.TopLeftX, actual.TopLeftY, actual.Width, actual.Height, actual.MinDepth, actual.MaxDepth};
-    std::memcpy(output->viewport, values, sizeof(values));
-}
-void swap(uint64_t key, NativeInputSwapFacts* output) noexcept {
-    *output = {};
-    auto* chain = reinterpret_cast<IDXGISwapChain*>(key);
-    if (!chain) return;
-    DXGI_SWAP_CHAIN_DESC description{};
-    output->read = SUCCEEDED(chain->GetDesc(&description));
-    output->window = reinterpret_cast<uint64_t>(description.OutputWindow);
-    output->width = description.BufferDesc.Width; output->height = description.BufferDesc.Height;
-}
-void resource(void* lease, uint32_t slot, uint64_t key, uint32_t render_target,
-    NativeInputResourceFacts* output) noexcept {
-    *output = {};
-    ComPtr<ID3D11Resource> viewed;
-    if (render_target) {
-        auto* view = reinterpret_cast<ID3D11RenderTargetView*>(key);
-        if (!view) return;
-        D3D11_RENDER_TARGET_VIEW_DESC description{};
-        view->GetDesc(&description);
-        output->read = 1;
-        output->view_format = description.Format; output->view_dimension = description.ViewDimension;
-        output->view_mip = description.Texture2D.MipSlice;
-        view->GetResource(&viewed);
-    } else {
-        auto* view = reinterpret_cast<ID3D11ShaderResourceView*>(key);
-        if (!view) return;
-        D3D11_SHADER_RESOURCE_VIEW_DESC description{};
-        view->GetDesc(&description);
-        output->read = 1;
-        output->view_format = description.Format; output->view_dimension = description.ViewDimension;
-        output->view_mip = description.Texture2D.MostDetailedMip; output->view_mips = description.Texture2D.MipLevels;
-        view->GetResource(&viewed);
+    ~NativeInputLease() {
+        for (auto* texture : textures) if (texture) texture->Release();
+        if (chain) chain->Release();
+        if (context) context->Release();
     }
-    output->identity = identity_of(viewed.Get());
-    ComPtr<ID3D11Texture2D> texture;
-    if (!viewed || FAILED(viewed.As(&texture))) return;
-    output->pointer = reinterpret_cast<uint64_t>(texture.Get());
-    D3D11_TEXTURE2D_DESC allocation{};
-    texture->GetDesc(&allocation);
-    output->width = allocation.Width; output->height = allocation.Height;
-    output->format = allocation.Format; output->mip_levels = allocation.MipLevels;
-    output->array_size = allocation.ArraySize;
-    output->sample_count = allocation.SampleDesc.Count; output->sample_quality = allocation.SampleDesc.Quality;
-    output->bind_flags = allocation.BindFlags;
-    ComPtr<ID3D11Device> device;
-    texture->GetDevice(&device);
-    output->device = identity_of(device.Get());
-    if (slot < native_input_slot_count) static_cast<NativeInputLease*>(lease)->textures[slot] = std::move(texture);
-}
-void release(void* lease, uint32_t slot) noexcept {
-    if (slot < native_input_slot_count) static_cast<NativeInputLease*>(lease)->textures[slot].Reset();
-}
+};
+static_assert(sizeof(NativeInputLease) == 8 * sizeof(void*) && offsetof(NativeInputLease, textures) == 16);
 
+namespace {
 // The text the former reader receipt wrote; Rust decides the stage and its once-per-stage mask.
 void reader(NativeInputReport report, const char* stage, const NativeInputReceipt* receipt,
     const rsf_game_render_pass* pass) noexcept {
@@ -216,22 +123,19 @@ void framebuffer(NativeInputReport report, const char* stage, const char* owner_
     } catch (...) {}
 }
 
-constexpr NativeInputLeaves leaves{identity, owner, viewport, swap, resource, release, reader, mismatch,
-    history, framebuffer};
+constexpr NativeInputLeaves leaves{reader, mismatch, history, framebuffer};
 
 void take(NativeInputs& result, NativeInputLease& lease) noexcept {
-    result.context = std::move(lease.context);
-    result.chain = std::move(lease.chain);
-    result.colour = std::move(lease.textures[native_input_colour]);
-    result.motion = std::move(lease.textures[native_input_motion]);
-    result.depth = std::move(lease.textures[native_input_depth]);
-    result.refraction_normals = std::move(lease.textures[native_input_refraction_normals]);
-    result.pipboy = std::move(lease.textures[native_input_pipboy]);
-    result.vats = std::move(lease.textures[native_input_vats]);
+    result.context.Attach(std::exchange(lease.context, nullptr));
+    result.chain.Attach(std::exchange(lease.chain, nullptr));
+    result.colour.Attach(std::exchange(lease.textures[native_input_colour], nullptr));
+    result.motion.Attach(std::exchange(lease.textures[native_input_motion], nullptr));
+    result.depth.Attach(std::exchange(lease.textures[native_input_depth], nullptr));
+    result.refraction_normals.Attach(std::exchange(lease.textures[native_input_refraction_normals], nullptr));
+    result.pipboy.Attach(std::exchange(lease.textures[native_input_pipboy], nullptr));
+    result.vats.Attach(std::exchange(lease.textures[native_input_vats], nullptr));
 }
 }
-
-bool verify_render_inputs() noexcept { return rsf_fallout4_inputs_verify(); }
 
 bool read_native_inputs(NativeInputs& output, void (*report)(const char*), const NativeDepthSnapshot* producer) noexcept try {
     output={};
@@ -250,7 +154,7 @@ bool read_native_raster_inputs(NativeInputs& output, const rsf_game_render_pass&
     output={};
     NativeInputLease lease;
     NativeInputs result;
-    if (!rsf_fallout4_inputs_read_raster(&leaves,native_depth_leaves(),&lease,&frame,producer,&result.pass)) return false;
+    if (!rsf_fallout4_inputs_read_raster(&lease,&frame,producer,&result.pass)) return false;
     take(result,lease);
     output=std::move(result); return true;
 } catch (...) { return false; }
@@ -261,9 +165,9 @@ bool read_native_framebuffer(NativeFramebuffer& output, void (*report)(const cha
     NativeFramebufferFacts facts{};
     if (!rsf_fallout4_inputs_read_framebuffer(&leaves,&lease,report,&facts)) return false;
     NativeFramebuffer result;
-    result.context=std::move(lease.context);
-    result.chain=std::move(lease.chain);
-    result.texture=std::move(lease.textures[native_input_colour]);
+    result.context.Attach(std::exchange(lease.context, nullptr));
+    result.chain.Attach(std::exchange(lease.chain, nullptr));
+    result.texture.Attach(std::exchange(lease.textures[native_input_colour], nullptr));
     result.native_frame=facts.native_frame; result.window_key=facts.window_key;
     output=std::move(result); return true;
 } catch (...) {

@@ -22,6 +22,7 @@ mod camera;
 mod cpu_abi;
 mod cpu_events;
 mod creation;
+mod d3d11;
 mod depth_domains;
 mod dpi;
 mod platform_abi;

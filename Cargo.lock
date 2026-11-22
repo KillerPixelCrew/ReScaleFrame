@@ -440,6 +440,7 @@ name = "rsf-fallout4"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "windows",
  "windows-sys",
 ]
 
