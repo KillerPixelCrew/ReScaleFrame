@@ -1,8 +1,7 @@
 add_library(rsf_fsr STATIC src/fsr_backend.c src/fsr_generation.c)
 target_include_directories(rsf_fsr PUBLIC include)
-rsf_add_rust_static(rsf_fsr4_compat_rust rsf_rust_fsr4_compat rsf-fsr4-compat rsf_fsr4_compat)
-target_link_libraries(rsf_fsr4_compat_rust INTERFACE minhook ReScaleFrame::RuntimeCommon)
-target_link_libraries(rsf_fsr PRIVATE rsf_fsr4_compat_rust rsf_build_options)
+# The INT8 lease entries fsr_backend.c names are Rust in rsf-fsr4-compat, inside the Runtime archive.
+target_link_libraries(rsf_fsr PRIVATE rsf_build_options)
 target_link_libraries(rsf_fsr PUBLIC ReScaleFrame::Contract d3d12 dxgi)
 
 # Fetched into an untracked vendor directory, exactly as Streamline is, so a checkout without it
