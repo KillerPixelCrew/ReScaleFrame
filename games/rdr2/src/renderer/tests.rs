@@ -65,13 +65,11 @@ fn unsupported_descriptors_refuse() {
 
 #[test]
 fn sr_pass_carries_identity_motion_scale_and_fg_refusal() {
-    let output = ResourceFacts {
-        width: 2560,
-        height: 1600,
-        format: d3d::R16G16B16A16_FLOAT,
-        samples: 1,
-        ..ResourceFacts::default()
-    };
+    let mut output = ResourceFacts::default();
+    output.width = 2560;
+    output.height = 1600;
+    output.format = d3d::R16G16B16A16_FLOAT;
+    output.samples = 1;
     let decoded = CameraResult::default();
     let d = descriptor();
     let pass = sr_pass(
