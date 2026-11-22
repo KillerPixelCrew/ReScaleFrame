@@ -87,6 +87,8 @@ mod dx12_vulkan_interop;
 #[cfg(windows)]
 mod dx12_vulkan_interop_abi;
 #[cfg(windows)]
+mod dx12_vulkan_platform;
+#[cfg(windows)]
 #[path = "../../graphics/src/dxbc_chunks.rs"]
 mod dxbc_chunks;
 #[cfg(windows)]

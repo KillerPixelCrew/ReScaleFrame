@@ -6,7 +6,6 @@
 #include "vulkan_fg_copy_abi.h"
 
 struct rsf_dx12gvk_platform;
-using rsf_dx12gvk_dispatch_entries = rsf_vk_function[24];
 // Raw VkSwapchainCreateInfoKHR facts. vulkan_dx12_fg.rs decides extension and present-mode policy.
 // extension_count saturates at 2; extension_type is the first chained sType, or 0 without a chain.
 struct rsf_dx12gvk_swapchain {
@@ -19,10 +18,6 @@ struct rsf_dx12gvk_present_info {
     uint32_t index, wait_count;
     const uint64_t* waits;
     int32_t* result;
-};
-struct rsf_dx12gvk_present_input {
-    const void* native;
-    uint32_t swapchain_count, wait_count, has_extension, has_image, has_waits, has_result;
 };
 inline constexpr uint32_t rsf_dx12gvk_submit_wait_capacity = 17;
 struct rsf_dx12gvk_present_submit {
@@ -41,8 +36,7 @@ struct rsf_dx12gvk_ops {
     int32_t (*adapter_luid)(const rsf_srvk_setup*, uint64_t*);
     rsf_dx12gvk_platform* (*platform_allocate)(const rsf_fgvk_setup*);
     void (*platform_destroy)(rsf_dx12gvk_platform*);
-    int32_t (*lookup)(rsf_vk_get_proc, void*, const char*, rsf_vk_function*);
-    void (*platform_bind)(rsf_dx12gvk_platform*, const rsf_dx12gvk_dispatch_entries*);
+    int32_t (*platform_resolve)(rsf_dx12gvk_platform*, const rsf_srvk_setup*);
     uint32_t (*format_features)(rsf_dx12gvk_platform*, uint32_t format);
     int32_t (*initialize_capture)(rsf_dx12gvk_platform*, const rsf_srvk_setup*);
     int32_t (*create_pool)(rsf_dx12gvk_platform*, uint64_t*);
@@ -76,15 +70,13 @@ struct rsf_dx12gvk_interop_ops {
     decltype(&rsf_dx12vk_interop_image) image;
     decltype(&rsf_dx12vk_interop_timeline) timeline;
     decltype(&rsf_dx12vk_interop_destroy) destroy;
+    decltype(&rsf_dx12vk_interop_release_guides) release_guides;
 };
 constexpr rsf_dx12gvk_interop_ops rsf_dx12gvk_interop{
     rsf_dx12vk_interop_image, rsf_dx12vk_interop_timeline, rsf_dx12vk_interop_destroy,
+    rsf_dx12vk_interop_release_guides,
 };
-extern const rsf_dx12gvk_ops rsf_dx12gvk_graphics;
+const rsf_dx12gvk_ops& rsf_dx12gvk_graphics();
 
 using rsf_dx12gvk_present_fn = int32_t (*)(void*, const rsf_dx12gvk_present_info*, const rsf_frame_record*, uint32_t);
-// Receives the admitted wait count. The caller lends output storage for that many handles.
-using rsf_dx12gvk_read_present_fn = void (*)(const void*, uint32_t, uint64_t*, uint32_t*, uint64_t*);
-extern "C" int32_t rsf_core_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn, void*,
-    const rsf_dx12gvk_present_input*, rsf_dx12gvk_read_present_fn, const rsf_frame_record*, uint32_t, int32_t*);
-int32_t rsf_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn, void*, const void*, const rsf_frame_record*, uint32_t);
+extern "C" int32_t rsf_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn, void*, const void*, const rsf_frame_record*, uint32_t);

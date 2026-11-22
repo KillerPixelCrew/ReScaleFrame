@@ -691,6 +691,7 @@ unsafe extern "C" fn rsf_core_xessgvk_latency_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::sync::{Condvar, mpsc};
     use std::time::Duration;
 
@@ -698,6 +699,79 @@ mod tests {
     const NEXT: u32 = PRIOR + SLOT_COUNT as u32;
     const FAILED: u32 = NEXT + SLOT_COUNT as u32;
     const BOUND: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn interop_validates_graphics_before_querying_the_bridge() {
+        unsafe extern "C" fn luid(bridge: Handle) -> u64 {
+            let calls = unsafe { &*bridge.cast::<Cell<u32>>() };
+            calls.set(calls.get() + 1);
+            7
+        }
+        unsafe extern "C" fn create(
+            _: *const Graphics,
+            callbacks: *const InteropCallbacks,
+            timeline: u32,
+            _: *mut Handle,
+        ) -> i32 {
+            let callbacks = unsafe { &*callbacks };
+            assert_eq!(callbacks.adapter_luid, 7);
+            assert_eq!(timeline, 1);
+            -9
+        }
+        unsafe extern "C" fn resolver(
+            _: Handle,
+            _: *const std::ffi::c_char,
+        ) -> crate::vulkan_sr_abi::rsf_vk_function {
+            None
+        }
+        unsafe extern "C" fn image(
+            _: Handle,
+            _: u32,
+            _: u32,
+            _: u32,
+            _: *mut Handle,
+            _: *mut Handle,
+        ) -> i32 {
+            -9
+        }
+        unsafe extern "C" fn release(_: Handle) {}
+        unsafe extern "C" fn fence(_: Handle, _: *mut Handle) -> i32 {
+            -9
+        }
+        let operations = ImportCreate {
+            adapter_luid: luid,
+            create,
+            create_image: image,
+            release_image: release,
+            create_fence: fence,
+        };
+        let calls = Cell::new(0u32);
+        let bridge = ptr::from_ref(&calls).cast_mut().cast();
+        let attempt = |setup, expected| {
+            let mut out = ptr::without_provenance_mut(1);
+            assert_eq!(
+                unsafe { rsf_core_xessvk_interop_create(&operations, setup, bridge, 1, &mut out) },
+                expected
+            );
+            assert!(out.is_null());
+        };
+        let mut setup: Graphics = unsafe { std::mem::zeroed() };
+        setup.struct_size = size_of::<Graphics>() as u32 - 1;
+        setup.abi_version = RSF_SRVK_ABI_VERSION + 1;
+        setup.device = bridge;
+        setup.physical_device = bridge;
+        setup.instance = bridge;
+        setup.device_proc = Some(resolver);
+        setup.instance_proc = Some(resolver);
+        attempt(ptr::null(), XESS_INVALID);
+        attempt(&setup, XESS_INVALID);
+        setup.struct_size += 1;
+        attempt(&setup, XESS_ABI_MISMATCH);
+        assert_eq!(calls.get(), 0);
+        setup.abi_version = RSF_SRVK_ABI_VERSION;
+        attempt(&setup, -9);
+        assert_eq!(calls.get(), 1);
+    }
 
     #[derive(Default)]
     struct Calls {

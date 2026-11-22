@@ -19,6 +19,7 @@ cc = "1"
 workspace = true
 
 [target."cfg(windows)".dependencies]
+ash = { version = "=0.38.0", default-features = false, features = ["std"] }
 rsf-shader-compiler = { path = "../shader_patch/compiler", default-features = false }
 windows = { version = "0.62.2", default-features = false, features = [
   "Win32_Graphics_Direct3D_Fxc",

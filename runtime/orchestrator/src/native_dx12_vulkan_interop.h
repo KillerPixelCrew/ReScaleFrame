@@ -33,6 +33,9 @@ int32_t rsf_dx12vk_interop_create(const rsf_srvk_setup*, const rsf_dx12vk_intero
 int32_t rsf_dx12vk_interop_image(rsf_dx12vk_interop*, uint32_t format,
     uint32_t width, uint32_t height, rsf_dx12vk_shared_image*);
 uint64_t rsf_dx12vk_interop_timeline(const rsf_dx12vk_interop*);
+/* The caller has retired every Vulkan and DX12 use of both guides. A zero
+   handle denotes an absent guide. Unknown identities leave both untouched. */
+int32_t rsf_dx12vk_interop_release_guides(rsf_dx12vk_interop*, uint64_t depth, uint64_t motion);
 /* Parent proves Vulkan AND DX12 queues drained. Failure preserves all owners. */
 int32_t rsf_dx12vk_interop_destroy(rsf_dx12vk_interop*, uint32_t queues_drained);
 #ifdef __cplusplus

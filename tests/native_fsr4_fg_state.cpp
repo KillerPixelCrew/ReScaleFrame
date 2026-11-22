@@ -276,7 +276,7 @@ struct Calls {
     void* depth = nullptr;
     void* hudless = nullptr;
     uint32_t starts = 0, images_destroyed = 0, pools_destroyed = 0, releases = 0, idles = 0;
-    uint32_t cleared = 0, enables = 0, lookups = 0, pending_initialized = 0;
+    uint32_t cleared = 0, enables = 0, pending_initialized = 0, guide_releases = 0;
     bool fail_marker = false, fail_start = false, fail_importer_destroy = false;
     std::vector<uint64_t> waits, markers, marked_complete, discarded;
     std::vector<uint32_t> initialized_copies;
@@ -297,7 +297,6 @@ const rsf_vkfg_platform images{
     [](void*, uint64_t image) { CHECK(image); ++calls.images_destroyed; },
     [](void*, uint64_t memory) { CHECK(memory); },
 };
-void resolved_proc() {}
 constexpr uint32_t all_commands = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, general_layout = VK_IMAGE_LAYOUT_GENERAL;
 constexpr uint32_t transfer_dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rgba8 = VK_FORMAT_R8G8B8A8_UNORM, bgra8 = VK_FORMAT_B8G8R8A8_UNORM;
 constexpr uint32_t blit_features = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
@@ -351,8 +350,14 @@ const rsf_fsr4gvk_ops platform{
         },
         [](const auto*) -> uint64_t { return completion_timeline; },
         [](auto*, uint32_t drained) -> int32_t { CHECK(drained == 1); return calls.fail_importer_destroy ? injected_error : 0; },
+        [](auto*, uint64_t depth, uint64_t motion) -> int32_t {
+            CHECK(depth || motion);
+            CHECK(calls.waits.size() == 2 && calls.marked_complete.size() == 2);
+            ++calls.guide_releases;
+            return 0;
+        },
     },
-    // Shared graphics table in rsf_dx12gvk_ops order (31 slots).
+    // Shared graphics table in rsf_dx12gvk_ops order (30 slots).
     {
         [](const auto*, uint64_t* luid) -> int32_t { *luid = adapter; return 0; },
         [](const rsf_fgvk_setup* setup) -> rsf_dx12gvk_platform* {
@@ -360,16 +365,9 @@ const rsf_fsr4gvk_ops platform{
             return fake<rsf_dx12gvk_platform>(3);
         },
         [](auto*) {},
-        // Rust resolves 22 device entries, then both instance entries, before binding.
-        [](rsf_vk_get_proc get, void* object, const char* name, rsf_vk_function* out) -> int32_t {
-            CHECK(get && object == fake(5) && name && *name);
-            ++calls.lookups;
-            *out = resolved_proc;
+        [](auto*, const rsf_srvk_setup* graphics) -> int32_t {
+            CHECK(graphics->device == fake(5) && graphics->instance_proc && graphics->device_proc);
             return 0;
-        },
-        [](auto*, const rsf_dx12gvk_dispatch_entries* entries) {
-            CHECK(calls.lookups == 24);
-            for (const auto entry : *entries) CHECK(entry == resolved_proc);
         },
         // Blit admission queries RGBA8, then BGRA8, optimal tiling.
         [](auto*, uint32_t format) -> uint32_t {
@@ -476,35 +474,26 @@ rsf_fgvk_frame inputs(const rsf_frame_record& record) {
     auto srv = [](uint64_t image, uint32_t format, uint32_t width, uint32_t height) -> rsf_srvk_image {
         return {fake(5), image, format, width, height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
     };
-    return {sizeof(rsf_fgvk_frame), RSF_FGVK_ABI_VERSION, &record, srv(21, VK_FORMAT_R32_SFLOAT, 320, 180),
-        srv(22, VK_FORMAT_R16G16_SFLOAT, 320, 180), srv(23, VK_FORMAT_R8G8B8A8_UNORM, 640, 360), 320, 180};
+    return {sizeof(rsf_fgvk_frame), RSF_FGVK_ABI_VERSION, &record,
+        srv(21, VK_FORMAT_R32_SFLOAT, record.render_width, record.render_height),
+        srv(22, VK_FORMAT_R16G16_SFLOAT, record.render_width, record.render_height),
+        srv(23, VK_FORMAT_R8G8B8A8_UNORM, 640, 360), 320, 180};
 }
 void present(rsf_fsr4gvk* owner, uint64_t chain, const rsf_frame_record* record, uint64_t expected, uint32_t enabled) {
     uint32_t index = 0;
     CHECK(rsf_fsr4gvk_acquire(owner, 100, 1, 0, &index) == 0);
-    // Mirror rsf_dx12gvk_present_marshaled: Rust admits the VkPresentInfoKHR shape, the
-    // reader copies the admitted handles, and only a changed sentinel reaches pResults.
+    // Exercise the same Vulkan descriptor reader used by both providers.
     const auto semaphore = reinterpret_cast<VkSemaphore>(uint64_t{88});
     const auto swapchain = reinterpret_cast<VkSwapchainKHR>(chain);
     VkResult written = VK_INCOMPLETE;
     VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     info.waitSemaphoreCount = 1; info.pWaitSemaphores = &semaphore;
     info.swapchainCount = 1; info.pSwapchains = &swapchain; info.pImageIndices = &index; info.pResults = &written;
-    const rsf_dx12gvk_present_input input{&info, info.swapchainCount, info.waitSemaphoreCount, info.pNext != nullptr,
-        info.pSwapchains && info.pImageIndices, info.pWaitSemaphores != nullptr, info.pResults != nullptr};
-    int32_t result = VK_INCOMPLETE;
-    const int32_t code = rsf_core_dx12gvk_present_marshaled(
+    const int32_t code = rsf_dx12gvk_present_marshaled(
         [](void* context, const rsf_dx12gvk_present_info* admitted, const rsf_frame_record* identity, uint32_t exact) {
             return rsf_core_fsr4gvk_present(static_cast<rsf_fsr4gvk*>(context), admitted, identity, exact);
-        }, owner, &input,
-        [](const void* native, uint32_t count, uint64_t* chain_out, uint32_t* index_out, uint64_t* waits) {
-            const auto& present_info = *static_cast<const VkPresentInfoKHR*>(native);
-            *chain_out = reinterpret_cast<uint64_t>(present_info.pSwapchains[0]);
-            *index_out = present_info.pImageIndices[0];
-            for (uint32_t i = 0; i < count; ++i) waits[i] = reinterpret_cast<uint64_t>(present_info.pWaitSemaphores[i]);
-        }, record, 1, &result);
-    if (info.pResults && result != VK_INCOMPLETE) info.pResults[0] = static_cast<VkResult>(result);
-    CHECK(code == 0 && result == 0 && written == VK_SUCCESS);
+        }, owner, &info, record, 1);
+    CHECK(code == 0 && written == VK_SUCCESS);
     CHECK(calls.presented == expected);
     rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
     CHECK(rsf_fsr4gvk_status(owner, &status) == 0 && status.enabled == enabled);
@@ -561,11 +550,15 @@ void prove_identity_and_completion() {
     CHECK(calls.depth == off_depth);
     CHECK(calls.marked_complete.empty());
 
-    const auto reused = source(7);
+    auto reused = source(7);
+    reused.render_width = 288;
+    reused.render_height = 162;
     const auto reused_inputs = inputs(reused);
     CHECK(rsf_fsr4gvk_prepare(owner, guides, &reused_inputs) == 0);
     CHECK(calls.waits.size() == 2 && calls.marked_complete.size() == 2);
-    CHECK(calls.initialized_copies[calls.initialized_copies.size() - 1] == 1);
+    CHECK(calls.guide_releases == 1);
+    CHECK(calls.initialized_copies[calls.initialized_copies.size() - 1] == 0);
+    CHECK(calls.initialized_copies[calls.initialized_copies.size() - 2] == 0);
 
     // A source with only the submitted guide stage may present the real frame.
     rsf_fsr4gvk_submitted(owner, &guides, 1);

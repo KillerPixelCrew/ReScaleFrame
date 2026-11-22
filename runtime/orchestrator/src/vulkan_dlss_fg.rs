@@ -102,17 +102,13 @@ impl Slot {
         }
     }
 
-    fn group(&self, hudless: bool) -> u64 {
-        self.frame.recording_sequence * 2 + u64::from(hudless)
-    }
-
     fn capture_retired(&self, platform: &Platform, native: Handle) {
         for (submitted, hudless) in [
             (self.frame.submitted_prepare, false),
             (self.frame.submitted_hudless, true),
         ] {
             if submitted != 0 {
-                unsafe { (platform.capture_group)(native, self.group(hudless), 1) };
+                unsafe { (platform.capture_group)(native, self.frame.capture_group(hudless), 1) };
             }
         }
     }
@@ -322,13 +318,14 @@ impl Owner {
     }
 
     fn valid_image(&self, image: &SourceImage, width: u32, height: u32, format: u32) -> bool {
-        image.device == self.setup.graphics.device
-            && image.image != 0
-            && image.copy_source != 0
-            && image.width == width
-            && image.height == height
-            && image.format == format
-            && image.layout == SHADER_READ
+        image.copy_source != 0
+            && crate::vulkan_sr::valid_image(
+                image,
+                self.setup.graphics.device,
+                [width, height],
+                SHADER_READ,
+                &[format],
+            )
     }
 
     fn record(&mut self, commands: Handle, input: &Frame, record: &Record, hudless: bool) -> i32 {
@@ -389,7 +386,7 @@ impl Owner {
         }
 
         let slot = &mut self.slots[index];
-        let group = slot.group(hudless);
+        let group = slot.frame.capture_group(hudless);
         let guides = [input.depth, input.motion];
         let (images, sources, first_role) = if hudless {
             (
@@ -461,7 +458,13 @@ impl Owner {
                     for image in &mut slot.images[images] {
                         image.initialized = 0;
                     }
-                    unsafe { (self.platform.capture_group)(self.native, slot.group(hudless), 0) };
+                    unsafe {
+                        (self.platform.capture_group)(
+                            self.native,
+                            slot.frame.capture_group(hudless),
+                            0,
+                        )
+                    };
                 }
             }
             if plan.fences & bit != 0 {

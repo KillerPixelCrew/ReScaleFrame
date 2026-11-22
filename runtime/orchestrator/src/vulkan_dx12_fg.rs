@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
-use crate::dx12_vulkan_interop::Lookup;
 use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image as SharedImage;
 use crate::sr_session::has_capacity;
 use crate::vulkan_external_copy::{
@@ -14,13 +13,14 @@ use crate::vulkan_fg_abi::{
 use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
-use crate::vulkan_sr::{SAMPLED_USAGE, TRANSFER_SRC_USAGE};
-use crate::vulkan_sr_abi::{rsf_srvk_image as Image, rsf_srvk_setup as Graphics, rsf_vk_function};
+use crate::vulkan_sr::{SAMPLED_USAGE, TRANSFER_SRC_USAGE, valid_image};
+use crate::vulkan_sr_abi::{rsf_srvk_image as Image, rsf_srvk_setup as Graphics};
 use rsf_game_sys::{
-    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
+    RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION,
+    rsf_frame_record as Record,
 };
 use std::cell::UnsafeCell;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{c_char, c_void};
 use std::ptr;
 use std::slice;
 
@@ -34,7 +34,6 @@ const EXTENSION_NOT_PRESENT: i32 = -7;
 pub(super) const FORMAT_UNSUPPORTED: i32 = -11;
 pub(super) const UNKNOWN: i32 = -13;
 pub(super) const INVALID_EXTERNAL_HANDLE: i32 = -1000072003;
-const OUT_OF_DATE: i32 = -1000001004;
 const RGBA8: u32 = 37;
 const BGRA8: u32 = 44;
 const RG16F: u32 = 83;
@@ -53,35 +52,7 @@ const PRESENT_WAIT_LIMIT: usize = 16;
 const SUBMIT_WAIT_CAPACITY: usize = PRESENT_WAIT_LIMIT + 1;
 pub(super) const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
-const DEVICE_PROCS: [&CStr; 22] = [
-    c"vkCreateImage",
-    c"vkDestroyImage",
-    c"vkGetImageMemoryRequirements",
-    c"vkAllocateMemory",
-    c"vkFreeMemory",
-    c"vkBindImageMemory",
-    c"vkCreateCommandPool",
-    c"vkDestroyCommandPool",
-    c"vkAllocateCommandBuffers",
-    c"vkResetCommandBuffer",
-    c"vkBeginCommandBuffer",
-    c"vkEndCommandBuffer",
-    c"vkCmdPipelineBarrier",
-    c"vkCmdCopyImage",
-    c"vkCmdBlitImage",
-    c"vkCmdClearColorImage",
-    c"vkWaitSemaphores",
-    c"vkDeviceWaitIdle",
-    c"vkCreateFence",
-    c"vkResetFences",
-    c"vkWaitForFences",
-    c"vkDestroyFence",
-];
-const INSTANCE_PROCS: [&CStr; 2] = [
-    c"vkGetPhysicalDeviceMemoryProperties",
-    c"vkGetPhysicalDeviceFormatProperties",
-];
-type DispatchEntries = [rsf_vk_function; DEVICE_PROCS.len() + INSTANCE_PROCS.len()];
+mod platform;
 
 pub(super) type Handle = *mut c_void;
 pub(super) type Release = unsafe extern "C" fn(Handle) -> i32;
@@ -181,9 +152,8 @@ struct PresentInput {
 type ReadPresent = unsafe extern "C" fn(*const c_void, u32, &mut u64, &mut u32, *mut u64);
 type PresentCallback = unsafe extern "C" fn(Handle, &PresentInfo, *const Record, u32) -> i32;
 
-// Rust admits the borrowed VkPresentInfoKHR shape before the native reader touches its arrays.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dx12gvk_present_marshaled(
+// Admit the borrowed VkPresentInfoKHR shape before the reader touches its arrays.
+unsafe fn marshal_present(
     call: PresentCallback,
     owner: Handle,
     input: &PresentInput,
@@ -265,8 +235,7 @@ pub(super) struct GraphicsOps {
     pub(super) adapter_luid: unsafe extern "C" fn(*const Graphics, *mut u64) -> i32,
     platform_allocate: unsafe extern "C" fn(*const Setup) -> Handle,
     platform_destroy: unsafe extern "C" fn(Handle),
-    lookup: Lookup,
-    platform_bind: unsafe extern "C" fn(Handle, &DispatchEntries),
+    platform_resolve: unsafe extern "C" fn(Handle, *const Graphics) -> i32,
     format_features: unsafe extern "C" fn(Handle, u32) -> u32,
     initialize_capture: unsafe extern "C" fn(Handle, *const Graphics) -> i32,
     create_pool: unsafe extern "C" fn(Handle, *mut u64) -> i32,
@@ -296,11 +265,10 @@ pub(super) struct GraphicsOps {
     describe: unsafe extern "C" fn(*const c_void, *mut Swapchain),
 }
 const _: () = {
-    assert!(size_of::<GraphicsOps>() == 31 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(GraphicsOps, describe) == 30 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(GraphicsOps, platform_bind) == 4 * size_of::<Handle>());
-    assert!(std::mem::offset_of!(GraphicsOps, images) == 9 * size_of::<Handle>());
-    assert!(size_of::<DispatchEntries>() == 24 * size_of::<Handle>());
+    assert!(size_of::<GraphicsOps>() == 30 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(GraphicsOps, describe) == 29 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(GraphicsOps, platform_resolve) == 3 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(GraphicsOps, images) == 8 * size_of::<Handle>());
     assert!(size_of::<Swapchain>() == 56);
     assert!(size_of::<PresentInfo>() == 32);
     assert!(size_of::<PresentInput>() == 32);
@@ -361,42 +329,6 @@ fn blit_formats_supported(rgba_optimal: u32, bgra_optimal: u32) -> bool {
     rgba_optimal & BLIT_SRC != 0 && bgra_optimal & BLIT_DST != 0
 }
 
-fn resolve_platform_dispatch(graphics: &Graphics, lookup: Lookup) -> Result<DispatchEntries, i32> {
-    if graphics.device_proc.is_none() || graphics.instance_proc.is_none() {
-        return Err(EXTENSION_NOT_PRESENT);
-    }
-    let mut entries = [None; DEVICE_PROCS.len() + INSTANCE_PROCS.len()];
-    let (device, instance) = entries.split_at_mut(DEVICE_PROCS.len());
-    for (name, address) in DEVICE_PROCS.iter().zip(device) {
-        succeeded(unsafe {
-            lookup(
-                graphics.device_proc,
-                graphics.device,
-                name.as_ptr(),
-                address,
-            )
-        })?;
-        if address.is_none() {
-            return Err(EXTENSION_NOT_PRESENT);
-        }
-    }
-    // Resolve both instance entries before testing their addresses, as the native setup did.
-    for (name, address) in INSTANCE_PROCS.iter().zip(instance.iter_mut()) {
-        succeeded(unsafe {
-            lookup(
-                graphics.instance_proc,
-                graphics.instance,
-                name.as_ptr(),
-                address,
-            )
-        })?;
-    }
-    if instance.iter().any(Option::is_none) {
-        return Err(EXTENSION_NOT_PRESENT);
-    }
-    Ok(entries)
-}
-
 impl GraphicsOps {
     fn open(&self, setup: &Setup) -> Result<Handle, i32> {
         let platform = unsafe { (self.platform_allocate)(setup) };
@@ -411,8 +343,7 @@ impl GraphicsOps {
     }
 
     fn prepare(&self, platform: Handle, graphics: &Graphics) -> Result<(), i32> {
-        let entries = resolve_platform_dispatch(graphics, self.lookup)?;
-        unsafe { (self.platform_bind)(platform, &entries) };
+        succeeded(unsafe { (self.platform_resolve)(platform, graphics) })?;
         let rgba = unsafe { (self.format_features)(platform, RGBA8) };
         let bgra = unsafe { (self.format_features)(platform, BGRA8) };
         if !blit_formats_supported(rgba, bgra) {
@@ -498,6 +429,7 @@ pub(super) struct InteropOps {
     pub(super) image: unsafe extern "C" fn(Handle, u32, u32, u32, *mut SharedImage) -> i32,
     pub(super) timeline: unsafe extern "C" fn(Handle) -> u64,
     pub(super) destroy: unsafe extern "C" fn(Handle, u32) -> i32,
+    pub(super) release_guides: unsafe extern "C" fn(Handle, u64, u64) -> i32,
 }
 
 impl InteropOps {
@@ -585,7 +517,6 @@ struct Buffer {
     shared: SharedImage,
     done: u64,
     acquired: bool,
-    initialized: bool,
 }
 
 #[derive(Default)]
@@ -624,10 +555,6 @@ impl Default for Slot {
 
 const GUIDES: u32 = 1;
 const HUDLESS: u32 = 2;
-fn capture_group(slot: &Recording, stage: u32) -> u64 {
-    (slot.recording_sequence << 1) | u64::from(stage == HUDLESS)
-}
-
 fn slot_index(frame: u64) -> usize {
     (frame % SLOT_COUNT as u64) as usize
 }
@@ -651,7 +578,8 @@ struct Presentation {
     recording: RecordingTimeline,
     fallback_depth: SharedImage,
     fallback_motion: SharedImage,
-    fallback_initialized: bool,
+    // Zero marks first use for both the fallback pair and Buffer::done.
+    // Successful GPU submission commits an even, nonzero timeline value.
     last_done: u64,
     requested: bool,
     terminal: bool,
@@ -678,7 +606,6 @@ impl Presentation {
             recording: unsafe { std::mem::zeroed() },
             fallback_depth: SharedImage::default(),
             fallback_motion: SharedImage::default(),
-            fallback_initialized: false,
             last_done: 0,
             requested: false,
             terminal: false,
@@ -764,7 +691,7 @@ impl Presentation {
     fn complete_source(ops: &GraphicsOps, vk: Handle, record: &Recording, fence: &mut SourceFence) {
         for stage in [GUIDES, HUDLESS] {
             if fence.stages & stage != 0 {
-                unsafe { (ops.capture_complete)(vk, capture_group(record, stage)) }
+                unsafe { (ops.capture_complete)(vk, record.capture_group(stage == HUDLESS)) }
             }
         }
         fence.stages = 0;
@@ -805,13 +732,8 @@ impl Presentation {
     }
 
     fn image_valid(&self, image: &Image, format: u32, width: u32, height: u32) -> bool {
-        image.device == self.device
-            && image.image != 0
-            && image.copy_source != 0
-            && image.format == format
-            && image.layout == SHADER_READ
-            && image.width == width
-            && image.height == height
+        image.copy_source != 0
+            && valid_image(image, self.device, [width, height], SHADER_READ, &[format])
     }
 
     fn acquire(&mut self, timeout: u64, semaphore: u64, fence: u64) -> Result<u32, i32> {
@@ -851,8 +773,20 @@ impl Presentation {
         self.wait_timeline(slot.done, WAIT_NS)?;
         let slot = &mut self.slots[index];
         Self::wait_sources(self.ops, self.vk, slot)?;
-        if slot.depth.image != 0 && (slot.depth.width != width || slot.depth.height != height) {
-            return Err(OUT_OF_DATE);
+        let importer = vendor.importer_ops();
+        let resized = [&slot.depth, &slot.motion]
+            .iter()
+            .any(|guide| guide.image != 0 && [guide.width, guide.height] != [width, height]);
+        if resized {
+            // The Vulkan source fences and DX12 consumer timeline have retired.
+            succeeded(unsafe {
+                (importer.release_guides)(self.interop, slot.depth.image, slot.motion.image)
+            })?;
+            slot.depth = SharedImage::default();
+            slot.motion = SharedImage::default();
+            slot.guides_initialized = false;
+            // A failed replacement must leave the previous frame ineligible.
+            slot.state = unsafe { std::mem::zeroed() };
         }
         let ops = self.ops;
         for (target, format, width, height) in [
@@ -866,9 +800,7 @@ impl Presentation {
             ),
         ] {
             if target.image == 0 {
-                vendor
-                    .importer_ops()
-                    .image(self.interop, format, width, height, target)?;
+                importer.image(self.interop, format, width, height, target)?;
             }
         }
         for fence in &mut slot.fences {
@@ -878,7 +810,12 @@ impl Presentation {
         }
         slot.done = 0;
         slot.scales = [frame.motion_scale_x, frame.motion_scale_y];
+        let previous = &self.recording.last_prepared;
+        let previous_extent = [previous.render_width, previous.render_height];
         rsf_core_fgvk_prepare_begin(&mut self.recording, &mut slot.state, record, commands);
+        if previous_extent != [width, height] {
+            slot.state.record.flags |= RSF_FRAME_FLAG_RESET;
+        }
         for (source, target, role) in [
             (&frame.depth, &slot.depth, c"fg-depth"),
             (&frame.motion, &slot.motion, c"fg-motion-uv"),
@@ -892,7 +829,7 @@ impl Presentation {
                     source,
                     &slot.state.record,
                     role.as_ptr(),
-                    capture_group(&slot.state, GUIDES),
+                    slot.state.capture_group(false),
                 );
             }
         }
@@ -933,7 +870,7 @@ impl Presentation {
                 &frame.hudless,
                 &slot.state.record,
                 c"fg-hudless-color".as_ptr(),
-                capture_group(&slot.state, HUDLESS),
+                slot.state.capture_group(true),
             );
         }
         slot.state.recorded_hudless = 1;
@@ -952,7 +889,10 @@ impl Presentation {
             ] {
                 if discarded & bit != 0 {
                     unsafe {
-                        (self.ops.capture_discard)(self.vk, capture_group(&slot.state, stage))
+                        (self.ops.capture_discard)(
+                            self.vk,
+                            slot.state.capture_group(stage == HUDLESS),
+                        )
                     };
                 }
             }
@@ -1043,18 +983,13 @@ impl Presentation {
             copy_source: 1,
         };
         succeeded(unsafe { (ops.begin)(self.vk, buffer.commands) })?;
-        if !self.fallback_initialized {
+        if self.last_done == 0 {
             for image in [&self.fallback_depth, &self.fallback_motion] {
                 let steps = clear_steps(self.family, image.image);
                 ops.record(self.vk, buffer.commands, steps);
             }
         }
-        let steps = copy_steps(
-            self.family,
-            &source_image,
-            &buffer.shared,
-            buffer.initialized,
-        );
+        let steps = copy_steps(self.family, &source_image, &buffer.shared, buffer.done != 0);
         ops.record(self.vk, buffer.commands, steps);
         succeeded(unsafe { (ops.end)(self.vk, buffer.commands) })?;
 
@@ -1074,8 +1009,6 @@ impl Presentation {
             self.terminal = true;
             return Err(result);
         }
-        self.fallback_initialized = true;
-        buffer.initialized = true;
         buffer.done = done;
         self.last_done = done;
 

@@ -2,8 +2,9 @@
 // Expected values are the Vulkan header constants written out, not the
 // module's names for them, so a wrong constant cannot agree with itself.
 use super::*;
-use crate::vulkan_sr_abi::rsf_vk_get_proc;
+use crate::vulkan_sr_abi::rsf_vk_function;
 use std::cell::{Cell, RefCell};
+use std::ffi::CStr;
 
 const FAMILY: u32 = 3;
 const IGNORED: u32 = 0xffff_ffff;
@@ -149,16 +150,6 @@ unsafe extern "C" fn test_proc(object: Handle, name: *const c_char) -> rsf_vk_fu
     })
 }
 
-unsafe extern "C" fn lookup(
-    proc: rsf_vk_get_proc,
-    object: Handle,
-    name: *const c_char,
-    output: &mut rsf_vk_function,
-) -> i32 {
-    *output = unsafe { proc.unwrap()(object, name) };
-    0
-}
-
 #[test]
 fn required_dispatch_stops_at_device_miss_and_queries_both_instance_entries() {
     let mut graphics: Graphics = unsafe { std::mem::zeroed() };
@@ -176,22 +167,26 @@ fn required_dispatch_stops_at_device_miss_and_queries_both_instance_entries() {
             lookups.calls.clear();
             lookups.missing = missing;
         });
-        let result = resolve_platform_dispatch(&graphics, lookup);
-        if missing.is_some() {
-            assert_eq!(result.err(), Some(EXTENSION_NOT_PRESENT));
-        } else {
-            assert!(result.unwrap().iter().all(Option::is_some));
-        }
-        let expected: Vec<_> = DEVICE_PROCS[..device_count]
-            .iter()
-            .map(|name| (1, name.to_string_lossy().into_owned()))
-            .chain(
-                INSTANCE_PROCS[..instance_count]
+        assert_eq!(platform::dispatch_available(&graphics), missing.is_none());
+        LOOKUPS.with_borrow(|lookups| {
+            assert_eq!(lookups.calls.len(), device_count + instance_count);
+            assert!(
+                lookups.calls[..device_count]
                     .iter()
-                    .map(|name| (2, name.to_string_lossy().into_owned())),
-            )
-            .collect();
-        LOOKUPS.with_borrow(|lookups| assert_eq!(lookups.calls, expected));
+                    .all(|(object, _)| *object == 1)
+            );
+            if instance_count != 0 {
+                let instance = &lookups.calls[device_count..];
+                assert_eq!(
+                    instance[0],
+                    (2, "vkGetPhysicalDeviceMemoryProperties".into())
+                );
+                assert_eq!(
+                    instance[1],
+                    (2, "vkGetPhysicalDeviceFormatProperties".into())
+                );
+            }
+        });
     }
 }
 
@@ -257,7 +252,7 @@ fn present_marshaling_checks_shape_before_reading_borrowed_arrays() {
         has_result: 1,
     };
     let submit = |input: &PresentInput, result: &mut i32| unsafe {
-        rsf_core_dx12gvk_present_marshaled(
+        marshal_present(
             present_callback,
             owner,
             input,
