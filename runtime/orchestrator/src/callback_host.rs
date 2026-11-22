@@ -12,7 +12,11 @@
 //! upscales spatially itself, never the vendor.
 use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
-use crate::overlay_abi::{rsf_overlay_intent as Intent, rsf_overlay_stats as Stats};
+use crate::overlay_abi::{
+    RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,
+    RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+    rsf_overlay_intent as Intent, rsf_overlay_stats as Stats,
+};
 use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
 use crate::render_abi::{
     RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
@@ -152,6 +156,8 @@ struct State {
     quality: u32,
     requested_backend: u32,
     requested_quality: u32,
+    sr_change_id: u32,
+    sr_change_status: u32,
     preset: u32,
     sharpening: Sharpening,
     sharpening_poll: u64,
@@ -202,8 +208,16 @@ struct PolicyV2 {
     spatial_name: CString,
 }
 
+fn quality_choices(backend: u32) -> u32 {
+    match backend {
+        SR_DLSS => RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+        0..=SR_SPATIAL => RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,
+        _ => 0,
+    }
+}
+
 fn accepts_backend_quality(backend: u32, quality: u32) -> bool {
-    backend <= SR_SPATIAL && quality <= 5 && (backend != SR_DLSS || quality <= 4)
+    quality < 32 && quality_choices(backend) & (1 << quality) != 0
 }
 
 struct Published(*mut Host);
@@ -379,6 +393,9 @@ impl Host {
                 ),
             backend: s.backend,
             sr_backend_choices: self.sr_choices,
+            sr_quality_choices: quality_choices(s.backend),
+            sr_change_id: s.sr_change_id,
+            sr_change_status: s.sr_change_status,
             requested_backend: s.requested_backend,
             quality: s.quality,
             sharpening_available: u32::from((SR_DLSS..=SR_XESS).contains(&s.backend)),
@@ -538,6 +555,12 @@ impl Host {
         if !preset_changed && !policy_changed {
             return;
         }
+        let sr_edit = intent.sr_change_id != 0
+            && (intent.quality_changed != 0 || intent.enabled_changed != 0);
+        if sr_edit {
+            s.sr_change_id = intent.sr_change_id;
+            s.sr_change_status = RSF_OVERLAY_SR_CHANGE_REFUSED;
+        }
         let backend = if intent.backend_changed != 0 {
             intent.backend
         } else {
@@ -555,6 +578,9 @@ impl Host {
         }
         s.requested_backend = backend;
         s.requested_quality = quality;
+        if sr_edit {
+            s.sr_change_status = RSF_OVERLAY_SR_CHANGE_PENDING;
+        }
         if intent.backend_changed != 0 {
             s.automatic = false;
         }
@@ -607,8 +633,18 @@ impl Host {
             s.refused = 0;
             s.last_result = 0;
         }
-        if !s.attempted && !self.prepare(s, commands, pass) {
-            return;
+        if !s.attempted {
+            let prepared = self.prepare(s, commands, pass);
+            if !s.dirty && s.sr_change_status == RSF_OVERLAY_SR_CHANGE_PENDING {
+                s.sr_change_status = if prepared || s.last_result == BACKEND_OK {
+                    RSF_OVERLAY_SR_CHANGE_APPLIED
+                } else {
+                    RSF_OVERLAY_SR_CHANGE_REFUSED
+                };
+            }
+            if !prepared {
+                return;
+            }
         }
         if pass.role == RSF_GAME_RENDER_FG_INPUTS && pass.camera_valid != 0 {
             if s.inputs.is_null()
@@ -924,6 +960,8 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
             quality,
             requested_backend: backend,
             requested_quality: quality,
+            sr_change_id: 0,
+            sr_change_status: 0,
             preset: setup.dlss_preset,
             sharpening: unsafe { std::mem::zeroed() },
             sharpening_poll: 0,

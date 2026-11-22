@@ -245,7 +245,7 @@ impl Config {
             || unsafe { *setup.configuration_section } == 0
             || setup.sr_backend_choices & !KNOWN_SR != 0
             || (setup.sr_backend_choices != 0 && setup.sr_quality_choices == 0)
-            || setup.sr_quality_choices & !0x1f != 0
+            || setup.sr_quality_choices & !RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK != 0
             || setup.fg_backend_choices & !(RSF_FG_BACKEND_ALL | AUTO_FG) != 0
             || !has(setup.latency_choices, RSF_REFLEX_OFF)
             || setup.latency_choices & !KNOWN_LATENCY != 0
@@ -393,6 +393,8 @@ struct State {
     presents_drawn: u64,
     request_result: i32,
     panel_apply_result: i32,
+    sr_change_id: u32,
+    sr_change_status: u32,
     options: [i32; OPTION_LIMIT],
     ui_preferences: u32,
     rates: Rates,
@@ -412,6 +414,8 @@ impl Default for State {
             presents_drawn: 0,
             request_result: OK,
             panel_apply_result: OK,
+            sr_change_id: 0,
+            sr_change_status: 0,
             options: [0; OPTION_LIMIT],
             ui_preferences: 0,
             rates: Rates::default(),
@@ -762,6 +766,13 @@ impl State {
             requested_backend: backend,
             last_switch_result: self.panel_apply_result,
             sr_backend_choices: config.sr_choices,
+            sr_quality_choices: if config.sr_choices != 0 {
+                config.quality_choices
+            } else {
+                0
+            },
+            sr_change_id: self.sr_change_id,
+            sr_change_status: self.sr_change_status,
             dlss_preset: settings.dlss_preset,
             dlss_preset_available: config.preset_available,
             sr_quality_locked: u32::from(sr.quality_locked != 0),
@@ -1026,7 +1037,20 @@ fn apply_intent(config: &Config, intent: &rsf_overlay_intent) {
             },
             "panel",
         );
-        state().panel_apply_result = result;
+        {
+            let mut state = state();
+            state.panel_apply_result = result;
+            if intent.sr_change_id != 0
+                && (intent.quality_changed != 0 || intent.enabled_changed != 0)
+            {
+                state.sr_change_id = intent.sr_change_id;
+                state.sr_change_status = if result == OK {
+                    RSF_OVERLAY_SR_CHANGE_APPLIED
+                } else {
+                    RSF_OVERLAY_SR_CHANGE_REFUSED
+                };
+            }
+        }
         if result != OK {
             config.callbacks.say(format_args!(
                 "RSF overlay: panel request refused ({result}); saved settings retained."

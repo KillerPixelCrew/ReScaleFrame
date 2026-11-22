@@ -8,7 +8,11 @@ use crate::render_abi::{
     rsf_generation_provider, rsf_native_fg_options, rsf_native_fg_status, rsf_render_settings,
     rsf_sharpening_options,
 };
-pub use overlay_wire::{rsf_overlay_host_option, rsf_overlay_intent, rsf_overlay_stats};
+pub use overlay_wire::{
+    RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,
+    RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+    rsf_overlay_host_option, rsf_overlay_intent, rsf_overlay_stats,
+};
 use rsf_game_sys::rsf_game_log_fn;
 pub use rsf_game_sys::sr_abi::{
     RSF_OVERLAY_SR_INPUT_COLOR, RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_EXPOSURE,

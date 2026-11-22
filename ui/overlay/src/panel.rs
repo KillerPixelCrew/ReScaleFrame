@@ -184,12 +184,23 @@ pub(crate) struct Selection {
     enabled: bool,
     requested_enabled: Option<bool>,
     requested_backend: Option<u32>,
+    sr_change_id: u32,
 }
 
 impl Selection {
+    fn sr_change_refused(&self, stats: &Stats<'_>) -> bool {
+        self.sr_change_id != 0
+            && stats.sr_change_id == self.sr_change_id
+            && stats.sr_change_status == crate::abi::RSF_OVERLAY_SR_CHANGE_REFUSED
+    }
+
     /// Reconcile with what the runtime says is in effect. Called once per frame, whether or not
     /// the panel is visible, so a change applied while it was hidden is not shown as still pending.
     pub(crate) fn reconcile(&mut self, stats: &Stats<'_>) {
+        if self.sr_change_refused(stats) {
+            self.requested_quality = None;
+            self.requested_enabled = None;
+        }
         if self.requested_quality == stats.quality() {
             self.requested_quality = None;
         }
@@ -218,6 +229,9 @@ impl Selection {
     /// Applied after the layout rather than inside it, so every pass over one frame sees the same
     /// starting point. See the call site in [`crate::Overlay::frame`].
     pub(crate) fn apply(&mut self, intent: &Intent) {
+        if intent.sr_change_id != 0 {
+            self.sr_change_id = intent.sr_change_id;
+        }
         if intent.quality_changed {
             self.quality = intent.quality;
             self.requested_quality = Some(intent.quality);
@@ -257,7 +271,7 @@ pub struct Controls {
     /// One button per tab in `Tab::ALL` order, `None` for a tab this host does not offer.
     pub tabs: [Option<Rect>; 5],
     /// One rectangle per quality level, in [`Quality::ALL`] order.
-    pub quality: [Option<Rect>; 5],
+    pub quality: [Option<Rect>; Quality::ALL.len()],
     /// Default, E, F, J, K, L and M model selectors.
     pub dlss_preset: [Option<Rect>; 7],
     /// The upscaling switch row.
@@ -793,6 +807,12 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
                 stats.last_switch_result
             ),
         );
+    } else if selection.sr_change_refused(stats) {
+        banner(
+            ui,
+            "Requested configuration refused",
+            "The host declined this quality or enable change.",
+        );
     }
     // A zero mask means the host offers no super resolution backend: there is nothing to enable or
     // choose, so the upscaling controls are not drawn rather than shown as a switch that cannot work.
@@ -885,7 +905,11 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         "Quality".to_owned()
     };
     heading(ui, &title);
-    let items: Vec<Segment> = Quality::ALL
+    let offered: Vec<_> = Quality::ALL
+        .into_iter()
+        .filter(|quality| stats.sr_quality_choices & (1 << quality.to_abi()) != 0)
+        .collect();
+    let items: Vec<Segment> = offered
         .iter()
         .map(|level| Segment {
             label: if *level == Quality::Native && stats.backend == 1 {
@@ -910,10 +934,12 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         })
         .collect();
     let (chosen, rects) = segments(ui, "sr-quality", &items);
-    store(&mut controls.quality, &rects);
+    for (level, rect) in offered.iter().zip(rects) {
+        controls.quality[level.to_abi() as usize] = Some(rect);
+    }
     if let Some(index) = chosen {
-        let level = Quality::ALL[index];
-        if level != selection.quality {
+        let level = offered[index];
+        if level != selection.quality || selection.sr_change_refused(stats) {
             intent.quality = level;
             intent.quality_changed = true;
         }

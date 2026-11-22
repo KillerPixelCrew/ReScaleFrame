@@ -264,6 +264,7 @@ fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
         quality: produced.quality.to_abi(),
         enabled_changed: u32::from(produced.enabled_changed),
         enabled: u32::from(produced.enabled),
+        sr_change_id: produced.sr_change_id,
         fg_changed: u32::from(produced.fg_changed),
         fg_mode: produced.fg_mode,
         fg_generated: produced.fg_generated,
@@ -327,6 +328,9 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
         backend_loaded: stats.backend_loaded != 0,
         refusal_reason: unsafe { borrow_str(stats.refusal_reason) },
         quality_raw: stats.quality,
+        sr_quality_choices: stats.sr_quality_choices,
+        sr_change_id: stats.sr_change_id,
+        sr_change_status: stats.sr_change_status,
         enabled: stats.enabled != 0,
         backend: stats.backend,
         dlss_preset: stats.dlss_preset,
@@ -572,6 +576,9 @@ mod tests {
             pcl_routed: 0,
             pcl_failed: 0,
             pcl_unmatched: 0,
+            sr_quality_choices: crate::abi::RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+            sr_change_id: 0,
+            sr_change_status: 0,
         }
     }
 
@@ -759,7 +766,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 18);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 19);
     }
 
     #[test]

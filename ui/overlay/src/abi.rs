@@ -5,9 +5,6 @@
 #[path = "../../../sdk/game/src/sharpening_defaults.rs"]
 pub(crate) mod sharpening_defaults;
 
-/// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 18;
-
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
 
@@ -44,12 +41,17 @@ pub const RSF_OVERLAY_MOUSE_MIDDLE: u32 = 0x4;
 #[path = "wire.rs"]
 mod wire;
 
+/// Version of the panel ABI implemented by this build.
+pub use wire::RSF_OVERLAY_ABI_VERSION;
+/// XeSS Ultra Quality preset.
+pub use wire::RSF_OVERLAY_QUALITY_ULTRA_QUALITY;
 /// An adapter option borrowed for the frame call.
 pub use wire::rsf_overlay_host_option as RsfOverlayHostOption;
 /// Settings and actions requested by the panel this frame.
 pub use wire::rsf_overlay_intent as RsfOverlayIntent;
 /// The frame status record defined in overlay.h.
 pub use wire::rsf_overlay_stats as RsfOverlayStats;
+pub(crate) use wire::{RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK};
 
 /// One frame of input, in physical pixels. Mirrors `rsf_overlay_input`.
 #[repr(C)]
@@ -183,7 +185,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 416);
+        assert_eq!(size_of::<RsfOverlayStats>(), 432);
         assert_eq!(size_of::<RsfOverlayHostOption>(), 40);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
@@ -259,11 +261,15 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, pcl_routed), 392);
         assert_eq!(offset_of!(RsfOverlayStats, pcl_failed), 400);
         assert_eq!(offset_of!(RsfOverlayStats, pcl_unmatched), 408);
+        assert_eq!(offset_of!(RsfOverlayStats, sr_quality_choices), 416);
+        assert_eq!(offset_of!(RsfOverlayStats, sr_change_id), 420);
+        assert_eq!(offset_of!(RsfOverlayStats, sr_change_status), 424);
     }
 
     #[test]
     fn the_other_structs_match_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayIntent>(), 200);
+        assert_eq!(size_of::<RsfOverlayIntent>(), 204);
+        assert_eq!(offset_of!(RsfOverlayIntent, sr_change_id), 200);
         assert_eq!(offset_of!(RsfOverlayIntent, close_requested), 188);
         assert_eq!(offset_of!(RsfOverlayIntent, ui_preferences_changed), 192);
         assert_eq!(offset_of!(RsfOverlayIntent, ui_preferences), 196);

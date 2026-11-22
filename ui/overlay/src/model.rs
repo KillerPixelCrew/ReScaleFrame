@@ -23,16 +23,19 @@ pub enum Quality {
     Performance,
     /// Ultra performance preset.
     UltraPerformance,
+    /// Ultra Quality for providers that offer an additional preset.
+    UltraQuality,
 }
 
 impl Quality {
     /// Every level, in the order the panel offers them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Native,
         Self::Quality,
         Self::Balanced,
         Self::Performance,
         Self::UltraPerformance,
+        Self::UltraQuality,
     ];
 
     /// The value the C header gives this level.
@@ -44,6 +47,7 @@ impl Quality {
             Self::Balanced => abi::RSF_OVERLAY_QUALITY_BALANCED,
             Self::Performance => abi::RSF_OVERLAY_QUALITY_PERFORMANCE,
             Self::UltraPerformance => abi::RSF_OVERLAY_QUALITY_ULTRA_PERFORMANCE,
+            Self::UltraQuality => abi::RSF_OVERLAY_QUALITY_ULTRA_QUALITY,
         }
     }
 
@@ -60,6 +64,7 @@ impl Quality {
             abi::RSF_OVERLAY_QUALITY_BALANCED => Some(Self::Balanced),
             abi::RSF_OVERLAY_QUALITY_PERFORMANCE => Some(Self::Performance),
             abi::RSF_OVERLAY_QUALITY_ULTRA_PERFORMANCE => Some(Self::UltraPerformance),
+            abi::RSF_OVERLAY_QUALITY_ULTRA_QUALITY => Some(Self::UltraQuality),
             _ => None,
         }
     }
@@ -73,6 +78,7 @@ impl Quality {
             Self::Balanced => "Balanced",
             Self::Performance => "Performance",
             Self::UltraPerformance => "Ultra perf",
+            Self::UltraQuality => "Ultra Quality",
         }
     }
 }
@@ -148,6 +154,12 @@ pub struct Stats<'a> {
     pub refusal_reason: Option<&'a str>,
     /// The quality in effect, including numeric values this panel build does not recognize.
     pub quality_raw: abi::RsfOverlayQuality,
+    /// Available presets, keyed by their ABI values.
+    pub sr_quality_choices: u32,
+    /// Request ID of the host's latest SR quality or enable result.
+    pub sr_change_id: u32,
+    /// Host acknowledgment status in the panel ABI.
+    pub sr_change_status: u32,
     /// Requested DLSS model.
     pub dlss_preset: u32,
     /// The runtime implements DLSS model selection.
@@ -296,6 +308,9 @@ impl Default for Stats<'_> {
             backend_loaded: false,
             refusal_reason: None,
             quality_raw: abi::RSF_OVERLAY_QUALITY_NATIVE,
+            sr_quality_choices: abi::RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+            sr_change_id: 0,
+            sr_change_status: 0,
             dlss_preset: 0,
             dlss_preset_available: false,
             sr_quality_locked: false,
@@ -400,6 +415,8 @@ pub struct Intent {
     pub enabled: bool,
     /// Whether the enable state changed in this frame.
     pub enabled_changed: bool,
+    /// Request ID the host returns with a quality or enable result.
+    pub sr_change_id: u32,
     /// Whether the user chose an SR backend.
     pub backend_changed: bool,
     /// Backend requested by the user.
@@ -529,6 +546,7 @@ mod tests {
         assert_eq!(Quality::Balanced.to_abi(), 2);
         assert_eq!(Quality::Performance.to_abi(), 3);
         assert_eq!(Quality::UltraPerformance.to_abi(), 4);
+        assert_eq!(Quality::UltraQuality.to_abi(), 5);
 
         for (index, level) in Quality::ALL.iter().enumerate() {
             assert_eq!(level.to_abi(), index as u32);
@@ -538,7 +556,7 @@ mod tests {
 
     #[test]
     fn an_unknown_quality_stays_unknown() {
-        assert_eq!(Quality::from_abi(5), None);
+        assert_eq!(Quality::from_abi(6), None);
         assert_eq!(Quality::from_abi(u32::MAX), None);
 
         let mut stats = Stats::default();

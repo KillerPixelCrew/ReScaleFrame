@@ -2949,6 +2949,7 @@ void rsf_bridge_set_enabled(int enabled)
 
 /* The FG provider the panel asked for, saved once the switch has taken effect. UINT32_MAX is none. */
 static uint32_t pending_fg_save = UINT32_MAX;
+static uint32_t overlay_sr_change_id, overlay_sr_change_status;
 
 static void overlay_tick(void* swapchain)
 {
@@ -2964,6 +2965,9 @@ static void overlay_tick(void* swapchain)
     }
 
     fill_overlay_stats(&stats);
+    stats.sr_quality_choices = RSF_OVERLAY_SR_QUALITY_STANDARD_MASK;
+    stats.sr_change_id = overlay_sr_change_id;
+    stats.sr_change_status = overlay_sr_change_status;
     /* The switch runs at a later Present, so the choice is saved once it has taken effect and
        dropped when the switch reported a failure. */
     if (pending_fg_save != UINT32_MAX) {
@@ -3028,8 +3032,10 @@ static void overlay_tick(void* swapchain)
             say("overlay: nothing is registered to write a dump");
         }
     }
+    int sr_applied = 1;
     if (intent.enabled_changed) {
         rsf_bridge_set_enabled(intent.enabled != 0);
+        sr_applied = ((bridge.enabled_requested != 0) == (intent.enabled != 0));
     }
     if (intent.jitter_changed) {
         if (bridge.actions.set_jitter) {
@@ -3074,7 +3080,11 @@ static void overlay_tick(void* swapchain)
     }
     if (intent.dlss_preset_changed) rsf_bridge_select_dlss_preset(intent.dlss_preset);
     if (intent.quality_changed) {
-        rsf_bridge_select_quality((unsigned long)intent.quality);
+        if (!rsf_bridge_select_quality((unsigned long)intent.quality)) sr_applied = 0;
+    }
+    if (intent.sr_change_id && (intent.enabled_changed || intent.quality_changed)) {
+        overlay_sr_change_id = intent.sr_change_id;
+        overlay_sr_change_status = sr_applied ? RSF_OVERLAY_SR_CHANGE_APPLIED : RSF_OVERLAY_SR_CHANGE_REFUSED;
     }
 }
 

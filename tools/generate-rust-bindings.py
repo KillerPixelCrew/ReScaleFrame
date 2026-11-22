@@ -454,7 +454,8 @@ generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/incl
           "--raw-line", "pub use rsf_game_sys::sr_abi::{RSF_DLSS_PIPELINE_ABI_VERSION, rsf_motion_decode_params};"])
 overlay_wire = "rsf_overlay_(host_option|intent|quality|stats)"
 generate("ui/overlay/src/wire.rs", "ui/overlay/include/rescaleframe/overlay.h",
-         overlay_wire, "NOTHING", [], ["--with-derive-default", "--raw-line", "#![allow(missing_docs)]"])
+         overlay_wire, "RSF_OVERLAY_(ABI_VERSION|QUALITY_ULTRA_QUALITY|SR_QUALITY_.*|SR_CHANGE_.*)",
+         [], ["--with-derive-default", "--raw-line", "#![allow(missing_docs, dead_code)]"])
 generate("ui/overlay/src/fg_reason_codes.rs", "runtime/orchestrator/include/rescaleframe/native_fg.h",
          "NOTHING", "RSF_NATIVE_FG_REASON_.*",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/presentation/include",
@@ -481,7 +482,9 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "#[path = \"../../../ui/overlay/src/wire.rs\"]",
           "--raw-line", "mod overlay_wire;",
-          "--raw-line", "pub use overlay_wire::{rsf_overlay_host_option, rsf_overlay_intent, rsf_overlay_stats};",
+          "--raw-line", "pub use overlay_wire::{RSF_OVERLAY_SR_QUALITY_STANDARD_MASK, RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,\n"
+                        "    RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,\n"
+                        "    rsf_overlay_host_option, rsf_overlay_intent, rsf_overlay_stats};",
           "--raw-line", "use crate::cpu_abi::rsf_native_cpu_counters;",
           "--raw-line", "use crate::render_abi::{\n"
                         "    rsf_generation_provider, rsf_native_fg_options, rsf_native_fg_status, rsf_render_settings,\n"

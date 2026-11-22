@@ -19,7 +19,7 @@ extern "C" {
    D3D11, normally the facade chain of the D3D11 presentation bridge
    (d3d11_present_api.h). It is the same overlay_host/overlay_input/overlay_renderer
    path the D3D11 carrier uses, not a second panel, renderer or runtime. The Rust panel
-   (rescaleframe_overlay.dll, overlay ABI 17) is loaded from RSF_OVERLAY_DLL when that
+   (rescaleframe_overlay.dll) is loaded from RSF_OVERLAY_DLL when that
    names a file, otherwise from beside ReScaleFrame.Runtime.dll.
 
    Composition. present() draws into the chain's current D3D11 backbuffer at the

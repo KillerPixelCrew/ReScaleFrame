@@ -13,7 +13,8 @@ use crate::fg_choice;
 use crate::fg12_abi::rsf_fg12_setup as FgSetup;
 use crate::gl_pipeline_abi::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use crate::overlay_abi::{
-    RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_OVERLAY_HOST_OPTION_TOGGLE, RSF_REFLEX_ON,
+    RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_OVERLAY_HOST_OPTION_TOGGLE, RSF_OVERLAY_SR_CHANGE_APPLIED,
+    RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK, RSF_REFLEX_ON,
     rsf_overlay_host_option as HostOption, rsf_overlay_intent as Intent,
     rsf_overlay_stats as Stats, rsf_render_status as Status,
 };
@@ -1329,6 +1330,7 @@ impl Host {
             // Upscale workers own the renderer lock for most of a busy frame. A busy settings
             // observer must not remove the HUD or panel from that frame.
             static PREFS: Cell<Option<Settings>> = const { Cell::new(None) };
+            static SR_CHANGE: Cell<[u32; 2]> = const { Cell::new([0; 2]) };
         }
         let p = self.p;
         let (queue, quality, capture, graphics) = {
@@ -1384,6 +1386,8 @@ impl Host {
         stats.enabled = prefs.sr_enabled;
         stats.quality = quality;
         stats.sr_backend_choices = self.sr_choices;
+        stats.sr_quality_choices = RSF_OVERLAY_SR_QUALITY_STANDARD_MASK;
+        [stats.sr_change_id, stats.sr_change_status] = SR_CHANGE.get();
         stats.sharpening_available = 1;
         fill_sharpening_stats(
             &mut stats,
@@ -1414,12 +1418,10 @@ impl Host {
         unsafe { (p.overlay_fill_fg)(&mut stats, &fg) };
         // Keep the saved provider for re-enabling FG, but Off is the selected UI choice while
         // disabled. A retained SDK context is not an active provider.
-        stats.fg_requested_backend = if prefs.fg_enabled == 0 {
-            0
-        } else if prefs.fg_backend == RSF_FG_BACKEND_AUTO {
-            stats.fg_backend
-        } else {
+        stats.fg_requested_backend = if prefs.fg_enabled != 0 {
             prefs.fg_backend
+        } else {
+            0
         };
         if prefs.fg_enabled == 0 && fg.vendor.configured_mode == RSF_FG_OFF {
             stats.fg_backend = 0;
@@ -1476,7 +1478,19 @@ impl Host {
             return;
         }
         apply_settings_intent(&mut prefs, &intent);
-        if self.settings_apply(&prefs) == OK {
+        let applied = self.settings_apply(&prefs) == OK;
+        if intent.sr_change_id != 0 && (intent.quality_changed != 0 || intent.enabled_changed != 0)
+        {
+            SR_CHANGE.set([
+                intent.sr_change_id,
+                if applied {
+                    RSF_OVERLAY_SR_CHANGE_APPLIED
+                } else {
+                    RSF_OVERLAY_SR_CHANGE_REFUSED
+                },
+            ]);
+        }
+        if applied {
             PREFS.set(Some(prefs));
         } else {
             self.log("RSF overlay settings request refused; saved settings retained.");

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
+use crate::overlay_abi::{
+    RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+};
 use crate::sdk_module::{FFX_CONTEXT_EXPORTS, FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
@@ -80,6 +83,11 @@ unsafe fn setup_admit(setup: *const Setup) -> i32 {
     if s.abi_version != RSF_SRVK_ABI_VERSION {
         return ABI_MISMATCH;
     }
+    let quality_choices = if s.backend == RSF_SR_XESS {
+        RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK
+    } else {
+        RSF_OVERLAY_SR_QUALITY_STANDARD_MASK
+    };
     if s.instance.is_null()
         || s.physical_device.is_null()
         || s.device.is_null()
@@ -88,7 +96,8 @@ unsafe fn setup_admit(setup: *const Setup) -> i32 {
         || s.runtime_directory_utf8.is_null()
         || s.output_width == 0
         || s.output_height == 0
-        || (s.quality > 4 && (s.backend != RSF_SR_XESS || s.quality > 5))
+        || s.quality >= 32
+        || quality_choices & (1 << s.quality) == 0
         || s.depth_inverted > 1
         || s.depth_infinite > 1
         || s.motion_jittered > 1

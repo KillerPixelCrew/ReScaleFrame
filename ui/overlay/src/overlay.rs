@@ -5,6 +5,7 @@
 //! header describes. The FFI layer above it does nothing but check pointers and copy.
 
 use egui::{Event, PointerButton, Pos2, RawInput, ViewportId, epaint};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::abi::{
     RSF_OVERLAY_MOUSE_LEFT, RSF_OVERLAY_MOUSE_MIDDLE, RSF_OVERLAY_MOUSE_RIGHT, RsfOverlayDrawCall,
@@ -22,6 +23,8 @@ use crate::panel::{self, Controls, HudDetail, Selection, View};
 /// atlas space and rebuilds the atlas, which costs a whole-texture update and, briefly, wrong
 /// glyphs. Read out of epaint's `TextureAtlas`, not observed here.
 const MAX_TEXTURE_SIDE: usize = 2048;
+
+static NEXT_SR_CHANGE: AtomicU32 = AtomicU32::new(1);
 
 /// Reference display height for the scale heuristic below.
 const REFERENCE_HEIGHT: f32 = 1080.0;
@@ -235,6 +238,14 @@ impl Overlay {
         // Applied after the layout rather than during it, so every widget in the frame reads the
         // same selection: the one the frame started with. A switch that wrote back into that
         // state mid-layout would toggle twice if the layout ever ran twice over one set of events.
+        if intent.quality_changed || intent.enabled_changed {
+            let sequence = NEXT_SR_CHANGE.fetch_add(1, Ordering::Relaxed);
+            intent.sr_change_id = if sequence == 0 {
+                NEXT_SR_CHANGE.fetch_add(1, Ordering::Relaxed)
+            } else {
+                sequence
+            };
+        }
         self.selection.apply(&intent);
         self.view.apply(&intent);
         intent.quality = self.selection.quality();
@@ -771,6 +782,67 @@ mod tests {
     }
 
     #[test]
+    fn refused_quality_can_be_retried_and_other_receipts_are_ignored() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.enabled = true;
+        settle(&mut overlay, &stats);
+
+        let target = quality_rect(&overlay, Quality::Balanced);
+        let [_, initial] = click(&mut overlay, &stats, target);
+        assert_ne!(initial.sr_change_id, 0);
+        stats.sr_change_id = initial.sr_change_id.wrapping_add(1);
+        stats.sr_change_status = crate::abi::RSF_OVERLAY_SR_CHANGE_REFUSED;
+        let [_, stale] = click(&mut overlay, &stats, target);
+        assert!(!stale.quality_changed);
+
+        stats.sr_change_id = initial.sr_change_id;
+        settle(&mut overlay, &stats);
+        let target = quality_rect(&overlay, Quality::Balanced);
+        let [_, retry] = click(&mut overlay, &stats, target);
+        assert!(retry.quality_changed);
+        assert_eq!(retry.quality, Quality::Balanced);
+        assert_ne!(retry.sr_change_id, initial.sr_change_id);
+    }
+
+    #[test]
+    fn ultra_quality_is_offered_only_when_the_host_advertises_it() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.backend = 5;
+        settle(&mut overlay, &stats);
+        assert!(overlay.controls().quality[5].is_none());
+
+        stats.sr_quality_choices |= 1 << Quality::UltraQuality.to_abi();
+        settle(&mut overlay, &stats);
+        let target = quality_rect(&overlay, Quality::UltraQuality);
+        let [_, release] = click(&mut overlay, &stats, target);
+        assert!(release.quality_changed);
+        assert_eq!(release.quality.to_abi(), 5);
+    }
+
+    #[test]
+    fn refused_enable_edit_can_be_retried() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.enabled = true;
+        settle(&mut overlay, &stats);
+        let enabled = overlay.controls().enabled.expect("SR enable control");
+        let [_, change] = click(&mut overlay, &stats, enabled);
+        assert!(change.enabled_changed);
+        assert!(!change.enabled);
+
+        stats.sr_change_id = change.sr_change_id;
+        stats.sr_change_status = crate::abi::RSF_OVERLAY_SR_CHANGE_REFUSED;
+        settle(&mut overlay, &stats);
+        let enabled = overlay.controls().enabled.expect("SR enable control");
+        let [_, retry] = click(&mut overlay, &stats, enabled);
+        assert!(retry.enabled_changed);
+        assert!(!retry.enabled);
+        assert_ne!(retry.sr_change_id, change.sr_change_id);
+    }
+
+    #[test]
     fn an_unimplemented_generation_provider_cannot_be_selected() {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();
@@ -1158,7 +1230,8 @@ mod tests {
         let stats = stats_with_backend();
         settle(&mut overlay, &stats);
         assert!(overlay.controls().enabled.is_some());
-        assert!(overlay.controls().quality.iter().all(Option::is_some));
+        assert!(overlay.controls().quality[..5].iter().all(Option::is_some));
+        assert!(overlay.controls().quality[5].is_none());
         let intent = idle_frame(&mut overlay, &stats);
         assert!(intent.is_idle());
     }

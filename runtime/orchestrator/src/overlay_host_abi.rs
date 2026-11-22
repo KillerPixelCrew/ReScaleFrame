@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 18;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 19;
 pub const RSF_OVERLAY_INPUT_ABI_VERSION: u32 = 1;
 pub type rsf_overlay_result = i32;
 #[repr(C)]
