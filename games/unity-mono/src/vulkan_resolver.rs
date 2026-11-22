@@ -2,11 +2,14 @@
 //! Unity's Vulkan resolver: the resolver keys and their separate instance and device routes, the
 //! interceptors native code registers at initialization, the loader functions they replace, the
 //! Win32 interop device-extension selection and the interop readiness of the created device.
-//! Native code supplies stateless Vulkan loader entry points and the swapchain and surface hooks.
+//! Native code supplies stateless Vulkan loader entry points and the DXGI presentation callback.
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::slice;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+
+#[path = "vulkan_wsi.rs"]
+mod wsi;
 
 const FORWARD: u32 = 0;
 const INSTANCE_PROC: u32 = 1;
@@ -109,20 +112,21 @@ const _: () = assert!(
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct NativeHooks {
-    create_swapchain: Function,
-    destroy_swapchain: Function,
     present: Function,
-    create_surface: Function,
-    destroy_surface: Function,
     device_proc: Lookup,
     enumerate: Enumerate,
+    create_device: CreateDevice,
+    create_semaphore: wsi::CreateSemaphore,
+    destroy_semaphore: wsi::Destroy,
+    wait_idle: wsi::WaitIdle,
+    retirement_fault: extern "C" fn(),
 }
 
 struct Resolver {
     /// Native interceptors by slot, published with the loader's instance resolver. FORWARD has none.
     interceptors: [Option<Function>; SLOTS],
-    /// The loader functions the interceptors replace, published before an interceptor is returned.
-    originals: [Option<Function>; SLOTS],
+    /// The Unity loader resolver. Vulkan commands dispatch on their supplied owner.
+    original_instance: Option<Function>,
     /// The device created with both interop extensions in its request.
     interop_device: usize,
     native: Option<NativeHooks>,
@@ -152,7 +156,7 @@ fn key(slot: u32) -> Option<&'static CStr> {
 impl Resolver {
     const NEW: Self = Self {
         interceptors: [None; SLOTS],
-        originals: [None; SLOTS],
+        original_instance: None,
         interop_device: 0,
         native: None,
     };
@@ -166,14 +170,13 @@ impl Resolver {
         }
         self.interceptors.copy_from_slice(table);
         self.interceptors[FORWARD as usize] = None;
-        self.originals[INSTANCE_PROC as usize] = Some(original);
+        self.original_instance = Some(original);
         self.interceptors[INSTANCE_PROC as usize]
     }
 
-    /// A null resolution stays null and is never saved. A routed key saves its original before its
-    /// interceptor is returned; without a registered interceptor it forwards unchanged.
+    /// A null command stays null. An unhandled name forwards Unity's loader result.
     fn resolve(
-        &mut self,
+        &self,
         name: Option<&CStr>,
         original: Option<Function>,
         from_instance: bool,
@@ -182,20 +185,16 @@ impl Resolver {
         let Some(name) = name else {
             return Some(original);
         };
-        let slot = route(name, from_instance) as usize;
-        let Some(interceptor) = self.interceptors[slot] else {
-            return Some(original);
-        };
-        // Device-command continuations are looked up for the dispatch owner at call time.
-        // Caching these even on an instance route would make a later device's lookup global.
-        if slot == CREATE_DEVICE as usize && from_instance {
-            self.originals[slot] = Some(original);
-        }
-        Some(interceptor)
+        self.interceptors[route(name, from_instance) as usize].or(Some(original))
     }
 
+    #[cfg(test)]
     fn original(&self, slot: u32) -> Option<Function> {
-        self.originals.get(slot as usize).copied().flatten()
+        if slot == INSTANCE_PROC {
+            self.original_instance
+        } else {
+            None
+        }
     }
 }
 
@@ -215,11 +214,13 @@ unsafe extern "C" fn rsf_unity_vk_install(
         Some(cast(get_instance_proc)),
         Some(cast(get_device_proc)),
         Some(unsafe { std::mem::transmute::<CreateDevice, Function>(intercept_create_device) }),
-        Some(native.create_swapchain),
-        Some(native.destroy_swapchain),
+        Some(unsafe {
+            std::mem::transmute::<wsi::CreateSwapchain, Function>(wsi::create_swapchain)
+        }),
+        Some(unsafe { std::mem::transmute::<wsi::Destroy, Function>(wsi::destroy_swapchain) }),
         Some(native.present),
-        Some(native.create_surface),
-        Some(native.destroy_surface),
+        Some(unsafe { std::mem::transmute::<wsi::CreateSurface, Function>(wsi::create_surface) }),
+        Some(unsafe { std::mem::transmute::<wsi::Destroy, Function>(wsi::destroy_surface) }),
     ];
     let mut state = resolver();
     state.native = Some(native);
@@ -227,12 +228,8 @@ unsafe extern "C" fn rsf_unity_vk_install(
     Some(get_instance_proc)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vk_instance_command(
-    instance: *mut c_void,
-    name: *const c_char,
-) -> Option<Function> {
-    let original = resolver().original(INSTANCE_PROC)?;
+unsafe fn instance_command(instance: *mut c_void, name: *const c_char) -> Option<Function> {
+    let original = resolver().original_instance?;
     let lookup = unsafe { std::mem::transmute::<Function, Lookup>(original) };
     unsafe { lookup(instance, name) }
 }
@@ -245,7 +242,7 @@ unsafe extern "system" fn get_instance_proc(
     if name.is_null() {
         return None;
     }
-    let original = unsafe { rsf_unity_vk_instance_command(instance, name) };
+    let original = unsafe { instance_command(instance, name) };
     resolver().resolve(Some(unsafe { CStr::from_ptr(name) }), original, true)
 }
 
@@ -335,12 +332,7 @@ unsafe extern "system" fn intercept_create_device(
     allocator: *const c_void,
     output: *mut *mut c_void,
 ) -> i32 {
-    let (original, native) = {
-        let state = resolver();
-        (state.original(CREATE_DEVICE), state.native)
-    };
-    let (Some(original), Some(native), Some(info)) = (original, native, unsafe { info.as_ref() })
-    else {
+    let (Some(native), Some(info)) = (resolver().native, unsafe { info.as_ref() }) else {
         return INITIALIZATION_FAILED;
     };
     if output.is_null() {
@@ -353,7 +345,7 @@ unsafe extern "system" fn intercept_create_device(
     } else {
         unsafe { slice::from_raw_parts(info.extensions, info.extension_count as usize) }
     };
-    let create = unsafe { std::mem::transmute::<Function, CreateDevice>(original) };
+    let create = native.create_device;
     let interop = available(
         |count, properties| unsafe { (native.enumerate)(physical, ptr::null(), count, properties) },
         &INTEROP,

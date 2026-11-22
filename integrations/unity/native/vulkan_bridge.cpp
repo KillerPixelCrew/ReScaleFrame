@@ -28,15 +28,23 @@
 
 // Only the Vulkan commands still implemented in this translation unit cross into the resolver.
 struct VulkanHooks {
-    PFN_vkVoidFunction create_swapchain, destroy_swapchain, present, create_surface, destroy_surface;
+    PFN_vkQueuePresentKHR present;
     PFN_vkGetDeviceProcAddr device_proc;
     PFN_vkEnumerateDeviceExtensionProperties enumerate;
+    PFN_vkCreateDevice create_device;
+    PFN_vkCreateSemaphore create_semaphore;
+    PFN_vkDestroySemaphore destroy_semaphore;
+    PFN_vkDeviceWaitIdle wait_idle;
+    void (*retirement_fault)();
 };
 extern "C" PFN_vkGetInstanceProcAddr rsf_unity_vk_install(PFN_vkGetInstanceProcAddr, const VulkanHooks*);
-extern "C" PFN_vkVoidFunction rsf_unity_vk_instance_command(VkInstance, const char*);
 extern "C" bool rsf_unity_vk_interop_ready(VkDevice, PFN_vkGetDeviceProcAddr);
-static_assert(sizeof(VulkanHooks) == 7 * sizeof(void*));
+static_assert(sizeof(VulkanHooks) == 8 * sizeof(void*));
 static_assert(sizeof(VkExtensionProperties) == 260 && offsetof(VkExtensionProperties, specVersion) == 256);
+static_assert(sizeof(VkSwapchainCreateInfoKHR) == 104 && offsetof(VkSwapchainCreateInfoKHR, imageUsage) == 56 &&
+    offsetof(VkSwapchainCreateInfoKHR, oldSwapchain) == 96);
+static_assert(sizeof(VkWin32SurfaceCreateInfoKHR) == 40 && offsetof(VkWin32SurfaceCreateInfoKHR, hwnd) == 32);
+static_assert(sizeof(VkSemaphoreCreateInfo) == 24);
 static_assert(sizeof(VkDeviceCreateInfo) == 72 && offsetof(VkDeviceCreateInfo, enabledExtensionCount) == 48 &&
     offsetof(VkDeviceCreateInfo, ppEnabledExtensionNames) == 56);
 
@@ -626,110 +634,12 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     return entry.admitted ? present_admitted(original_present, vk_queue, info) : original_present(vk_queue, info);
 } catch (...) { return VK_ERROR_DEVICE_LOST; }
 
-VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* allocator, VkSwapchainKHR* output) noexcept try
-{
-    const auto original_create_swapchain = reinterpret_cast<PFN_vkCreateSwapchainKHR>(vkGetDeviceProcAddr(vk_device, "vkCreateSwapchainKHR"));
-    if (!original_create_swapchain || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
-    const auto destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(vkGetDeviceProcAddr(vk_device, "vkDestroySwapchainKHR"));
-    // Vulkan retires oldSwapchain even if creating the successor fails.
-    rsf_unity_vulkan_swapchain_supersede(vk_device, handle_id(info->oldSwapchain));
-    if (!destroy) return original_create_swapchain(vk_device, info, allocator, output);
-
-    auto request = *info; request.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    std::vector<VkImage> images;
-    std::vector<VkSemaphore> present_ready;
-    struct PendingSwapchain {
-        VkDevice device;
-        const VkAllocationCallbacks* allocator;
-        PFN_vkDestroySwapchainKHR destroy;
-        const std::vector<VkSemaphore>& semaphores;
-        VkSwapchainKHR chain = VK_NULL_HANDLE;
-        ~PendingSwapchain()
-        {
-            if (!chain) return;
-            for (auto semaphore : semaphores)
-                if (semaphore) vkDestroySemaphore(device, semaphore, nullptr);
-            destroy(device, chain, allocator);
-        }
-    } pending{vk_device, allocator, destroy, present_ready};
-
-    *output = VK_NULL_HANDLE;
-    VkSwapchainKHR created = VK_NULL_HANDLE;
-    const auto result = original_create_swapchain(vk_device, &request, allocator, &created);
-    if (result != VK_SUCCESS) return result;
-    pending.chain = created;
-    uint32_t count = 0;
-    if (vkGetSwapchainImagesKHR(vk_device, pending.chain, &count, nullptr) != VK_SUCCESS || !count)
-        return VK_ERROR_INITIALIZATION_FAILED;
-    images.resize(count);
-    if (vkGetSwapchainImagesKHR(vk_device, pending.chain, &count, images.data()) != VK_SUCCESS || !count)
-        return VK_ERROR_INITIALIZATION_FAILED;
-    images.resize(count);
-    present_ready.resize(count);
-    VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    for (auto& ready : present_ready) {
-        VkSemaphore semaphore = VK_NULL_HANDLE;
-        if (vkCreateSemaphore(vk_device, &semaphore_info, nullptr, &semaphore) != VK_SUCCESS)
-            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-        ready = semaphore;
-    }
-    std::vector<uint64_t> image_ids(count), ready_ids(count);
-    for (uint32_t i = 0; i < count; ++i) { image_ids[i] = handle_id(images[i]); ready_ids[i] = handle_id(present_ready[i]); }
-    // A refused publication (a handle already published) rolls back like any other step.
-    if (!rsf_unity_vulkan_swapchain_register(vk_device, handle_id(pending.chain), handle_id(request.surface), request.imageExtent.width, request.imageExtent.height,
-        image_ids.data(), ready_ids.data(), count)) return VK_ERROR_INITIALIZATION_FAILED;
-    *output = pending.chain;
-    pending.chain = VK_NULL_HANDLE;
-    return result;
-} catch (...) { return VK_ERROR_OUT_OF_HOST_MEMORY; }
-// Destroys a retired swapchain's present-ready semaphores. Runs with the presentation lease held, so
-// no present interception submits to or presents on the device's queues while vkDeviceWaitIdle
-// waits for them.
-void retire_present_ready(void* context, const uint64_t* present_ready, uint32_t count) noexcept
-{
-    const auto vk_device = static_cast<VkDevice>(context);
-    for (uint32_t i = 0; i < count; ++i) vkDestroySemaphore(vk_device, from_id<VkSemaphore>(present_ready[i]), nullptr);
-}
-VKAPI_ATTR void VKAPI_CALL intercept_destroy_swapchain(VkDevice vk_device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* allocator)
-{
-    const auto wait_idle = [](void* device) noexcept -> int32_t {
-        return vkDeviceWaitIdle(static_cast<VkDevice>(device));
-    };
-    const int32_t retired = rsf_unity_vulkan_swapchain_retire(vk_device, handle_id(swapchain), wait_idle, retire_present_ready);
-    if (retired != VK_SUCCESS && retired != VK_ERROR_DEVICE_LOST)
-        stop("Unity Vulkan could not retire its present semaphores; ownership was retained.");
-    const auto destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(vkGetDeviceProcAddr(vk_device, "vkDestroySwapchainKHR"));
-    if (destroy) destroy(vk_device, swapchain, allocator);
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL intercept_create_surface(VkInstance instance, const VkWin32SurfaceCreateInfoKHR* info,
-    const VkAllocationCallbacks* allocator, VkSurfaceKHR* output)
-{
-    const auto create = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(rsf_unity_vk_instance_command(instance, "vkCreateWin32SurfaceKHR"));
-    if (!create || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
-    const auto result = create(instance, info, allocator, output);
-    if (result == VK_SUCCESS) rsf_unity_vulkan_surface_register(handle_id(instance), handle_id(*output), info->hwnd);
-    return result;
-}
-VKAPI_ATTR void VKAPI_CALL intercept_destroy_surface(VkInstance instance, VkSurfaceKHR surface,
-    const VkAllocationCallbacks* allocator)
-{
-    const auto destroy = reinterpret_cast<PFN_vkDestroySurfaceKHR>(rsf_unity_vk_instance_command(instance, "vkDestroySurfaceKHR"));
-    if (destroy) {
-        rsf_unity_vulkan_surface_forget(handle_id(instance), handle_id(surface));
-        destroy(instance, surface, allocator);
-    }
-}
-
-template <class Function> PFN_vkVoidFunction as_void(Function function)
-{
-    return reinterpret_cast<PFN_vkVoidFunction>(function);
-}
 PFN_vkGetInstanceProcAddr UNITY_INTERFACE_API initialize_intercept(PFN_vkGetInstanceProcAddr original, void*)
 {
-    const VulkanHooks hooks{as_void(intercept_create_swapchain), as_void(intercept_destroy_swapchain),
-        as_void(intercept_present), as_void(intercept_create_surface), as_void(intercept_destroy_surface),
-        vkGetDeviceProcAddr, vkEnumerateDeviceExtensionProperties};
+    const VulkanHooks hooks{intercept_present, vkGetDeviceProcAddr, vkEnumerateDeviceExtensionProperties,
+        vkCreateDevice, vkCreateSemaphore, vkDestroySemaphore, vkDeviceWaitIdle, []() noexcept {
+            stop("Unity Vulkan could not retire its present semaphores; ownership was retained.");
+        }};
     return rsf_unity_vk_install(original, &hooks);
 }
 }

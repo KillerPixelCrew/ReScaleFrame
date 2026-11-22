@@ -154,21 +154,6 @@ uint32_t rsf_unity_vulkan_surface_ready(void);
 uint32_t rsf_unity_vulkan_set_surface_window(void* window);
 void* rsf_unity_vulkan_surface_window(void);
 
-/* Publishes a complete swapchain with one present-ready semaphore per image, waiting for the lease
-   to end. Zero for a null handle or array, no images or a handle already published; the caller then
-   destroys what it created. */
-void rsf_unity_vulkan_surface_register(uint64_t instance, uint64_t surface, void* parent);
-void rsf_unity_vulkan_surface_forget(uint64_t instance, uint64_t surface);
-void rsf_unity_vulkan_swapchain_supersede(void* device, uint64_t chain);
-uint32_t rsf_unity_vulkan_swapchain_register(void* device, uint64_t chain, uint64_t surface, uint32_t width, uint32_t height,
-    const uint64_t* images, const uint64_t* present_ready, uint32_t count);
-/* Detaches the swapchain and retires pending semaphores for device when wait_idle proves
-   completion or reports device loss. Returns the Vulkan wait result. */
-typedef int32_t (*rsf_unity_vulkan_wait_idle_fn)(void* device);
-typedef void (*rsf_unity_vulkan_destroy_ready_fn)(void* device, const uint64_t* present_ready, uint32_t count);
-int32_t rsf_unity_vulkan_swapchain_retire(void* device, uint64_t chain,
-    rsf_unity_vulkan_wait_idle_fn wait_idle, rsf_unity_vulkan_destroy_ready_fn destroy);
-
 typedef struct rsf_unity_vulkan_present_source {
     uint64_t image;         /* VkImage at the presented index */
     uint64_t present_ready; /* VkSemaphore the forwarded present waits on */
