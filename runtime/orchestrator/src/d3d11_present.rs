@@ -1000,7 +1000,7 @@ impl Owner {
         Ok(physical)
     }
 
-    fn create_application_buffers(&self, facts: &rsf_d3d11p_facts) -> Result<(), i32> {
+    fn allocate_application_buffers(&self, facts: &rsf_d3d11p_facts) -> Result<ApplicationBuffers, i32> {
         let p = self.p();
         let mut batch = ApplicationBuffers::default();
         let slots = batch
@@ -1039,7 +1039,11 @@ impl Owner {
                 *slot = Some(ApplicationBuffer::Shared(surface));
             }
         }
-        // Publish only a full batch. A failure drops every allocation made so far.
+        Ok(batch)
+    }
+
+    fn create_application_buffers(&self, facts: &rsf_d3d11p_facts) -> Result<(), i32> {
+        let batch = self.allocate_application_buffers(facts)?;
         *lock(&self.buffers) = batch;
         Ok(())
     }
@@ -2019,6 +2023,22 @@ impl Owner {
         if (!native12 || switching) && self.buffers_referenced() {
             return DXGI_ERROR_INVALID_CALL;
         }
+        if count != 0 {
+            facts.buffer_count = count;
+        }
+        facts.width = width;
+        facts.height = height;
+        facts.format = format;
+        // The application images are independent allocations, not references to
+        // DXGI's physical backbuffers. Keep both batches until DXGI accepts the resize.
+        let replacement = if !native12 || switching {
+            match self.allocate_application_buffers(&facts) {
+                Ok(batch) => Some(batch),
+                Err(error) => return error,
+            }
+        } else {
+            None
+        };
         let provider = self.provider();
         if !provider.is_null() {
             let configured = self
@@ -2053,20 +2073,8 @@ impl Owner {
         if failed(result) {
             return result;
         }
-        if count != 0 {
-            facts.buffer_count = count;
-        }
-        if !native12 || switching {
-            // The physical resize succeeded and the old application buffers can be retired.
-            // Release them before allocating their replacements to keep the same memory budget.
-            drop(self.take_application_buffers());
-            facts.width = width;
-            facts.height = height;
-            facts.format = format;
-            if self.create_application_buffers(&facts).is_err() {
-                self.faulted.store(true, Ordering::Release);
-                return E_FAIL;
-            }
+        if let Some(batch) = replacement {
+            *lock(&self.buffers) = batch;
         }
         unsafe { (p.set_description)(b, facts.buffer_count, width, height, format, flags) };
         if native12 && switching {
