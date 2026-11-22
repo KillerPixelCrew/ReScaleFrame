@@ -5,7 +5,7 @@ use crate::{AMD64, EXECUTABLE, SHA256, overlay};
 use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
 use rsf_game_sys::session::carrier_log::CarrierLog;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
-use std::ffi::{CStr, OsString, c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::Foundation::{CloseHandle, HMODULE};
