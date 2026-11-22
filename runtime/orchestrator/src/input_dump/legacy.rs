@@ -144,7 +144,7 @@ extern "C" fn rsf_input_dump_active() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_sr(
+pub(crate) unsafe extern "C" fn rsf_input_dump_sr(
     context: *mut c_void,
     input: *const rsf_dlss_frame,
     backend: u32,
@@ -234,7 +234,7 @@ extern "C" fn rsf_input_dump_sr_result(result: i32) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_fg(
+pub(crate) unsafe extern "C" fn rsf_input_dump_fg(
     context: *mut c_void,
     pass: *const rsf_game_render_pass,
     input: *const rsf_dlss_frame,
@@ -275,7 +275,7 @@ unsafe extern "C" fn rsf_input_dump_fg(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_fg_prepare(
+pub(crate) unsafe extern "C" fn rsf_input_dump_fg_prepare(
     pass: *const rsf_game_render_pass,
     input: *const rsf_fg_frame,
     result: i32,

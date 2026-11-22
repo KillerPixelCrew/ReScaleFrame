@@ -124,7 +124,7 @@ pub(crate) extern "C" fn rsf_native_fg_rendered_source_set(enabled: u32) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_fg_reflex_ordering_set(threaded: u32) {
+pub(crate) extern "C" fn rsf_native_fg_reflex_ordering_set(threaded: u32) {
     rsf_core_native_fg_reflex_ordering_set(threaded);
 }
 

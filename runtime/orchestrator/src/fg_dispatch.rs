@@ -1,15 +1,25 @@
 // SPDX-License-Identifier: MIT
+use crate::fg_scene::rsf_native_fg_bind_source;
 use crate::native_cpu::rsf_native_cpu_dispatch;
+use crate::native_fg::{
+    rsf_native_fg_capture_scoped, rsf_native_fg_dump_inputs, rsf_native_fg_final,
+    rsf_native_fg_inputs_ready, rsf_native_fg_options_set, rsf_native_fg_present,
+    rsf_native_fg_retire, rsf_native_fg_set_log, rsf_native_fg_status_get,
+    rsf_native_fg_window_end,
+};
+use crate::native_fg_cpu::platform::{
+    rsf_native_fg_cpu, rsf_native_fg_frame, rsf_native_fg_reflex_ordering_set,
+    rsf_native_fg_submission,
+};
+use crate::native_scene::{rsf_native_scene_pass, rsf_native_scene_texture_binding};
+use crate::native_window::{rsf_native_window_present, rsf_native_window_scope};
 use crate::sr_session::has_capacity;
 use crate::sys::rsf_native_fg_prepare;
 use crate::sys::rsf_observer_present_event as Present;
 use crate::sys::{
     RSF_D3D11_FG_API_VERSION, RSF_D3D11_FG_INPUTS_VERSION, rsf_d3d11_fg_api, rsf_d3d11_fg_inputs,
 };
-use crate::sys::{
-    RSF_DLSS_ABI_VERSION, rsf_backend_log_fn, rsf_dlss_frame as Frame, rsf_native_fg_options,
-    rsf_native_fg_status,
-};
+use crate::sys::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
 use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_game_sys::rsf_game_cpu_event;
 use rsf_game_sys::{
@@ -18,33 +28,6 @@ use rsf_game_sys::{
     rsf_game_render_pass as Pass,
 };
 use std::ffi::c_void;
-
-unsafe extern "C" {
-    fn rsf_native_fg_cpu(event: *const rsf_game_cpu_event);
-    fn rsf_native_fg_frame(pass: *const Pass, begin: u32);
-    fn rsf_native_fg_submission(pass: *const Pass, begin: u32);
-    fn rsf_native_scene_pass(pass: *const Pass, begin: u32) -> i32;
-    fn rsf_native_fg_final(context: *mut c_void, pass: *const Pass);
-    fn rsf_native_scene_texture_binding(pass: *const Pass) -> i32;
-    fn rsf_native_fg_window_end(pass: *const Pass);
-    fn rsf_native_window_scope(pass: *const Pass, begin: u32) -> i32;
-    fn rsf_native_fg_set_log(log: rsf_backend_log_fn, user: *mut c_void);
-    fn rsf_native_fg_options_set(options: *const rsf_native_fg_options);
-    fn rsf_native_fg_status_get(status: *mut rsf_native_fg_status) -> i32;
-    fn rsf_native_fg_reflex_ordering_set(threaded: u32);
-    fn rsf_native_fg_bind_source(pass: *const Pass);
-    fn rsf_native_fg_capture_scoped(context: *mut c_void, pass: *const Pass, frame: *const Frame);
-    fn rsf_native_fg_inputs_ready(source: u64) -> i32;
-    fn rsf_native_fg_dump_inputs(
-        context: *mut c_void,
-        source: u64,
-        directory: *const std::ffi::c_char,
-        prefix: *const std::ffi::c_char,
-    ) -> i32;
-    fn rsf_native_fg_retire(user: *mut c_void, provider: *mut c_void);
-    fn rsf_native_window_present(event: *const Present) -> i32;
-    fn rsf_native_fg_present(event: *const Present);
-}
 
 unsafe extern "C" fn cpu_sink(_: *mut c_void, event: *const rsf_game_cpu_event) {
     unsafe { rsf_native_fg_cpu(event) };

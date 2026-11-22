@@ -1083,7 +1083,7 @@ pub(crate) unsafe fn drain(host: *mut Host) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_token(host: *mut Host, id: u64) -> Handle {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_token(host: *mut Host, id: u64) -> Handle {
     unsafe { rsf_core_slhost_token(host, id) }
 }
 

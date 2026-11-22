@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{DlssFrame, Handle, Log, Pass, Provider, TextureInfo, rsf_fg_frame};
+use super::{Handle, Log, TextureInfo};
 use crate::d3d11_d3d12::*;
 use crate::d3d11_present::rsf_d3d11_present_graphics;
 use crate::d3d11_present_abi::rsf_streamline_graphics;
@@ -15,49 +15,24 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::core::{IUnknown, Interface};
 
-unsafe extern "C" {
-    #[link_name = "rsf_d3d11_present_has_owner"]
-    pub(super) fn present_has_owner() -> i32;
-    #[link_name = "rsf_d3d11_present_is_owner"]
-    pub(super) fn present_is_owner(chain: Handle) -> i32;
-    #[link_name = "rsf_d3d11_present_provider"]
-    pub(super) fn present_provider() -> *const Provider;
-    #[link_name = "rsf_d3d11_present_session"]
-    pub(super) fn present_session() -> Handle;
-    #[link_name = "rsf_d3d11_present_backend"]
-    pub(super) fn present_backend() -> u32;
-    #[link_name = "rsf_d3d11_present_generation"]
-    pub(super) fn present_generation() -> u64;
-    #[link_name = "rsf_d3d11_present_retire"]
-    pub(super) fn present_retire(
-        session: Handle,
-        list: Handle,
-        fence: *mut Handle,
-        value: *mut u64,
-    ) -> i32;
-    #[link_name = "rsf_d3d11_present_abort"]
-    pub(super) fn present_abort(id: u64) -> i32;
-    fn rsf_streamline_host_token(host: Handle, source: u64) -> Handle;
-    #[link_name = "rsf_dlss_evaluate"]
-    pub(super) fn dlss_evaluate(context: Handle, frame: *const DlssFrame) -> i32;
-    #[link_name = "rsf_dlss_evaluate_shared"]
-    pub(super) fn dlss_evaluate_shared(list: Handle, frame: *const DlssFrame, source: u64) -> i32;
-    #[link_name = "rsf_input_dump_sr"]
-    pub(super) fn dump_sr(context: Handle, frame: *const DlssFrame, backend: u32);
-    #[link_name = "rsf_input_dump_fg"]
-    pub(super) fn dump_fg(context: Handle, pass: *const Pass, frame: *const DlssFrame);
-    #[link_name = "rsf_input_dump_fg_prepare"]
-    pub(super) fn dump_fg_prepare(pass: *const Pass, frame: *const rsf_fg_frame, result: i32);
-    fn rsf_input_dump_named_texture(
-        context: Handle,
-        texture: Handle,
-        request: *const rsf_named_frame_dump,
-        report: *mut rsf_named_frame_dump_report,
-    ) -> i32;
-}
-
 // The native_fg owner calls these directly. Rust owners elsewhere in the Runtime appear under the
 // names the owner uses.
+pub(super) use crate::d3d11_present::{
+    rsf_d3d11_present_abort as present_abort, rsf_d3d11_present_backend as present_backend,
+    rsf_d3d11_present_generation as present_generation,
+    rsf_d3d11_present_has_owner as present_has_owner, rsf_d3d11_present_is_owner as present_is_owner,
+    rsf_d3d11_present_provider as present_provider, rsf_d3d11_present_retire as present_retire,
+    rsf_d3d11_present_session as present_session,
+};
+pub(super) use crate::dlss_streamline::exports::{
+    rsf_dlss_evaluate as dlss_evaluate, rsf_dlss_evaluate_shared as dlss_evaluate_shared,
+};
+use crate::input_dump::abi::rsf_input_dump_named_texture;
+pub(super) use crate::input_dump::{
+    rsf_input_dump_fg as dump_fg, rsf_input_dump_fg_prepare as dump_fg_prepare,
+    rsf_input_dump_sr as dump_sr,
+};
+use crate::streamline_host::rsf_streamline_host_token;
 pub(super) use crate::d3d11_d3d12::{
     close_commands, close_event, context_signal, context_wait, copy_resource, copy_transitioned,
     create_commands, create_event, create_output, execute, fence_d3d11, fence_d3d12, flush,
@@ -102,7 +77,7 @@ pub(super) unsafe fn present_graphics(
 }
 
 pub(super) unsafe fn host_token(host: Handle, source: u64) -> i32 {
-    i32::from(!unsafe { rsf_streamline_host_token(host, source) }.is_null())
+    i32::from(!unsafe { rsf_streamline_host_token(host.cast(), source) }.is_null())
 }
 
 pub(super) unsafe fn context_device(context: Handle) -> Handle {
@@ -187,5 +162,7 @@ pub(super) unsafe fn dump_named(
         log,
         log_user: user,
     };
-    unsafe { rsf_input_dump_named_texture(context, texture, &request, null_mut()) }
+    // input_dump mirrors rsf_named_frame_dump as its own NamedRequest.
+    let request = (&raw const request).cast();
+    unsafe { rsf_input_dump_named_texture(context, texture, request, null_mut()) }
 }

@@ -303,7 +303,7 @@ unsafe extern "C" fn rsf_input_dump_texture_record(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_named_texture(
+pub(crate) unsafe extern "C" fn rsf_input_dump_named_texture(
     context: *mut c_void,
     source: *mut c_void,
     request: *const NamedRequest,

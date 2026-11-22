@@ -801,7 +801,7 @@ fn refuse_held_inputs(pass: &Pass) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_capture_scoped(
+pub(crate) unsafe extern "C" fn rsf_native_fg_capture_scoped(
     context: Handle,
     identity: *const Pass,
     frame: *const DlssFrame,
@@ -1847,7 +1847,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_window_end(pass: *const Pass) {
+pub(crate) unsafe extern "C" fn rsf_native_fg_window_end(pass: *const Pass) {
     if pass.is_null() || unsafe { pass.cast::<u32>().read() } < PASS_SIZE {
         return;
     }
@@ -1885,7 +1885,7 @@ pub(super) extern "C" fn rsf_native_fg_inputs_ready(source: u64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_dump_inputs(
+pub(crate) unsafe extern "C" fn rsf_native_fg_dump_inputs(
     context: Handle,
     source: u64,
     directory: *const c_char,

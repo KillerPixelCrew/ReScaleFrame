@@ -24,6 +24,7 @@ pub(super) use rsf_graphics::dump_options::{
 };
 pub(super) mod abi;
 mod legacy;
+pub(crate) use legacy::{rsf_input_dump_fg, rsf_input_dump_fg_prepare, rsf_input_dump_sr};
 mod metadata;
 mod native;
 
@@ -76,7 +77,7 @@ impl Encoding {
 }
 
 #[repr(C)]
-struct NamedRequest {
+pub(crate) struct NamedRequest {
     struct_size: u32,
     abi_version: u32,
     directory: *const c_char,
@@ -88,7 +89,7 @@ struct NamedRequest {
 }
 
 #[repr(C)]
-struct NamedReport {
+pub(crate) struct NamedReport {
     struct_size: u32,
     width: u32,
     height: u32,

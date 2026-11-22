@@ -264,12 +264,12 @@ unsafe extern "C" fn backbuffer_identity(
 }
 
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_native_scene_pass(pass: *const Pass, begin: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_native_scene_pass(pass: *const Pass, begin: u32) -> i32 {
     unsafe { rsf_core_native_scene_pass(pass, begin, resource_identity) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_scene_texture_binding(pass: *const Pass) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_native_scene_texture_binding(pass: *const Pass) -> i32 {
     unsafe { rsf_core_native_scene_texture_binding(pass, resource_identity) }
 }
 

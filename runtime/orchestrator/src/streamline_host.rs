@@ -23,7 +23,7 @@ use windows_sys::Win32::Foundation::FARPROC;
 
 mod generation;
 mod native;
-pub(crate) use native::{common_set, drain, shared};
+pub(crate) use native::{common_set, drain, rsf_streamline_host_token, shared};
 mod startup;
 #[cfg(test)]
 mod tests;

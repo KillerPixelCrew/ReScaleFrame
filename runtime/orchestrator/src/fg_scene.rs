@@ -100,7 +100,7 @@ pub(super) fn with_capture_scene<R>(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_bind_source(identity: *const Pass) {
+pub(crate) unsafe extern "C" fn rsf_native_fg_bind_source(identity: *const Pass) {
     let source = if unsafe { has_capacity(identity) } {
         Source::from_pass(unsafe { &*identity })
     } else {
