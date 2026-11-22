@@ -41,9 +41,17 @@ typedef struct rsf_anomaly_fg_platform {
 } rsf_anomaly_fg_platform;
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+#endif
 bool rsf_anomaly_fg_configure_ini(const wchar_t*, bool apply, void* runtime, uint32_t depth_rva,
-    rsf_game_log_fn, const rsf_anomaly_fg_platform*) noexcept;
+    rsf_game_log_fn, const rsf_anomaly_fg_platform*)
+#ifdef __cplusplus
+    noexcept
+#endif
+    ;
+
+#ifdef __cplusplus
+extern "C" {
 bool rsf_anomaly_fg_installed() noexcept;
 void rsf_anomaly_fg_set_overlay_sink(rsf_anomaly_fg_overlay_present, void*) noexcept;
 void rsf_anomaly_fg_stage_camera(const float*, const float*) noexcept;

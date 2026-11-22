@@ -2248,7 +2248,7 @@ Port FG configuration, window and input ownership, and the generation-stage call
 - [x] [games/anomaly/src/fg_policy.h](games/anomaly/src/fg_policy.h)
 - [x] [games/anomaly/src/fg_policy_platform.h](games/anomaly/src/fg_policy_platform.h)
 - [x] [games/anomaly/src/fg_stage.h](games/anomaly/src/fg_stage.h)
-- [ ] [games/anomaly/src/fg_stage_platform.cpp](games/anomaly/src/fg_stage_platform.cpp)
+- [x] [games/anomaly/src/fg_stage_platform.cpp](games/anomaly/src/fg_stage_platform.cpp)
 - [x] [games/anomaly/src/fg_stage_platform.h](games/anomaly/src/fg_stage_platform.h)
 
 **Fixtures (2)**
