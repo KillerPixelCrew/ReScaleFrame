@@ -42,7 +42,7 @@ copied camera data past the callback, or retain a buffer reference for identity 
 and release it on replacement, invalidation, frame reset or uninstall as appropriate. The
 adapter supplies the native facts and decides primary-camera admission.
 
-The [TrueSky depth evidence](../research/ue418-hook-map.md) still governs effect size, expected
+The [TrueSky depth evidence](ue418-hook-map.md) still governs effect size, expected
 code and first-party shader choice. A mismatched composite draw fingerprint logs one terminal
 motion refusal per renderer. Its relay allocation or write can retry on subsequent sky renders
 even when the independent cloud-grid decision is terminal. No patch site, expected byte,
@@ -72,3 +72,39 @@ interfaces.
 
 Checks were limited to caller and source review, bindgen 0.72.1 generation, Rust 1.94.1
 formatting and Git whitespace checks. Builds, tests, lint and runtime checks are user-owned.
+
+## PORT.md handoff
+
+Source-closed paths:
+
+- `games/ac7/include/rescaleframe/ac7_render_scope.h`
+- `games/ac7/include/rescaleframe/ac7_ui_rules.h`
+- `games/ac7/include/rescaleframe/ac7_view.h`
+- `games/ac7/src/ui_rules.cpp`
+- `tests/ac7_render_scope.cpp`
+- `tests/ac7_ui_rules.cpp`
+- `tests/ac7_view.cpp`
+
+The other inventoried paths remain in use at the native boundaries listed above.
+
+Source-closed review findings:
+
+- Queue point-in-time scope markers in one operation.
+- Bind each queued scope ticket to its originating command list.
+- Track cloud motion relay installation independently of the full-grid transition.
+- Generate the numeric draw and layout classes consumed across the AC7 UI ABI.
+
+Open review findings:
+
+- Report a full-target view separately from player-camera identity. The reader and adapter
+  now distinguish rectangle coverage from scene-pass buffer association. G02 and an AC7
+  native producer still need to carry the compatibility receipt described above.
+- Share fallible allocation for Rust-owned FFI handles. Shared helper and AC7 adoption
+  landed in `3f5527b6`; Vulkan FSR3 and RDR2 caller adoption require their owners.
+- Reuse the compile-time ASCII widening used by the Windows adapters. Shared helper and AC7
+  adoption landed in `3f5527b6`; Godot caller adoption requires its owner.
+- Reuse one IEEE CRC-32 implementation for binary fingerprints. Shared helper and AC7
+  adoption landed in `3f5527b6`; RDR2 caller adoption requires its owner.
+
+`3f5527b6` can be applied independently of the later A02 changes. The later changes use
+its AC7 adoption and build on it.
