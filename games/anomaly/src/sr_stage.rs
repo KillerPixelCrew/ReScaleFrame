@@ -700,13 +700,6 @@ pub(crate) struct Stage {
     live: Live,
 }
 
-fn emit(log: rsf_anomaly_sr_log, user: Raw, text: &str) {
-    if let (Some(log), Ok(text)) = (log, CString::new(text)) {
-        // The configured host log accepts any NUL-terminated message for the duration of the call.
-        unsafe { log(user.0, text.as_ptr()) };
-    }
-}
-
 // A path's UTF-16 units, without a terminator.
 fn units(path: &Path) -> Vec<u16> {
     #[cfg(windows)]
@@ -865,7 +858,7 @@ impl Stage {
     }
 
     fn say(&self, state: &State, text: &str) {
-        emit(state.log, state.log_user, text);
+        rsf_game_sys::log_guarded(state.log, state.log_user.0, text);
     }
 
     fn live_mip_offset(&self) -> f32 {

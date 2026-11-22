@@ -797,19 +797,10 @@ fn fresh_pipeline_status() -> rsf_dlss_pipeline_status {
     }
 }
 
-fn emit(log: rsf_game_log_fn, user: Raw, text: &str) {
-    if let Some(log) = log
-        && let Ok(text) = CString::new(text)
-    {
-        // The native facade's sink catches C++ exceptions before returning into Rust.
-        unsafe { log(user, text.as_ptr()) };
-    }
-}
-
 impl RenderState {
     fn say(&self, text: &str) {
         if let Some(config) = &self.setup {
-            emit(config.template.log, config.template.log_user, text);
+            rsf_game_sys::log_guarded(config.template.log, config.template.log_user, text);
         }
     }
 
@@ -1234,7 +1225,7 @@ extern "C" fn rsf_anomaly_sr_report(
     let pass_errors = |index| delta(now.pass_errors[index], old.pass_errors[index]);
     let results = |index| delta(now.results[index], old.results[index]);
     let resets = |index| delta(now.resets[index], old.resets[index]);
-    emit(
+    rsf_game_sys::log_guarded(
         log,
         user,
         &format!(
@@ -1280,7 +1271,7 @@ extern "C" fn rsf_anomaly_sr_report(
     );
     if stage == 5 {
         let pipeline = status.pipeline;
-        emit(
+        rsf_game_sys::log_guarded(
             log,
             user,
             &format!(
