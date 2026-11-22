@@ -1539,8 +1539,8 @@ Port the FSR3 and FSR4 bridge owners, private ABI and SDK patch payloads alongsi
 - [ ] [runtime/orchestrator/src/native_sr_fsr4_vulkan.cpp](runtime/orchestrator/src/native_sr_fsr4_vulkan.cpp)
 - [ ] [runtime/orchestrator/src/native_sr_fsr4_vulkan.h](runtime/orchestrator/src/native_sr_fsr4_vulkan.h)
 - [ ] [runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h](runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h)
-- [ ] [runtime/vulkan/fsr3/bridge.cpp](runtime/vulkan/fsr3/bridge.cpp)
-- [ ] [runtime/vulkan/fsr3/bridge_platform.h](runtime/vulkan/fsr3/bridge_platform.h)
+- [x] [runtime/vulkan/fsr3/bridge.cpp](runtime/vulkan/fsr3/bridge.cpp)
+- [x] [runtime/vulkan/fsr3/bridge_platform.h](runtime/vulkan/fsr3/bridge_platform.h)
 - [ ] [runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json](runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json) (C++ edits applied to the FidelityFX SDK)
 - [ ] [runtime/vulkan/fsr3/sdk-fixes/line-width.json](runtime/vulkan/fsr3/sdk-fixes/line-width.json) (C++ edits applied to the FidelityFX SDK)
 - [ ] [runtime/vulkan/fsr3/sdk-fixes/presenter-cpu-drain.json](runtime/vulkan/fsr3/sdk-fixes/presenter-cpu-drain.json) (C++ edits applied to the FidelityFX SDK)
@@ -1550,7 +1550,7 @@ Port the FSR3 and FSR4 bridge owners, private ABI and SDK patch payloads alongsi
 - [ ] [runtime/vulkan/fsr3/wsi-dispatch.h](runtime/vulkan/fsr3/wsi-dispatch.h)
 - [ ] [runtime/vulkan/fsr4-fg/bridge.cpp](runtime/vulkan/fsr4-fg/bridge.cpp)
 - [ ] [runtime/vulkan/fsr4-fg/bridge_api.h](runtime/vulkan/fsr4-fg/bridge_api.h)
-- [ ] [runtime/vulkan/fsr4-fg/bridge_contract.h](runtime/vulkan/fsr4-fg/bridge_contract.h)
+- [x] [runtime/vulkan/fsr4-fg/bridge_contract.h](runtime/vulkan/fsr4-fg/bridge_contract.h)
 - [ ] [runtime/vulkan/fsr4-fg/bridge_platform.h](runtime/vulkan/fsr4-fg/bridge_platform.h)
 - [ ] [runtime/vulkan/fsr4/bridge.cpp](runtime/vulkan/fsr4/bridge.cpp)
 - [ ] [runtime/vulkan/fsr4/bridge_api.h](runtime/vulkan/fsr4/bridge_api.h)
@@ -1559,7 +1559,7 @@ Port the FSR3 and FSR4 bridge owners, private ABI and SDK patch payloads alongsi
 **Fixtures (5)**
 
 - [ ] [tests/native_fsr4_fg_bridge.cpp](tests/native_fsr4_fg_bridge.cpp)
-- [ ] [tests/native_fsr4_fg_contract.cpp](tests/native_fsr4_fg_contract.cpp)
+- [x] [tests/native_fsr4_fg_contract.cpp](tests/native_fsr4_fg_contract.cpp)
 - [ ] [tests/native_fsr4_fg_state.cpp](tests/native_fsr4_fg_state.cpp)
 - [ ] [tests/native_sr_fsr4_state.cpp](tests/native_sr_fsr4_state.cpp)
 - [ ] [tests/native_sr_fsr4_vulkan.cpp](tests/native_sr_fsr4_vulkan.cpp)
@@ -1725,7 +1725,7 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 
 **Rust review findings (8)**
 
-- [ ] **Duplication | Medium | Share fallible allocation for Rust-owned FFI handles.** AC7 allocates and initializes nonzero-sized Scopes and Ticket objects at games/ac7/src/render_scope.rs:286 and :346. Vulkan FSR3 repeats the unsafe allocation at runtime/vulkan/fsr3/owner.rs:331 for swapchains and FG contexts at :640 and :946, returning NonNull instead of a raw pointer. RDR2 capture creation at games/rdr2/src/capture_state.rs:112 uses a third generic implementation at :117 that omits the nonzero-size guard. Current callers allocate concrete nonzero types. Use one small fallible allocation helper returning Option<Box<T>>, with one documented size contract, and convert to raw handles and existing error codes in the owning exports. This removes three separate implementations of the allocator preconditions. [games/ac7/src/render_scope.rs:135](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/render_scope.rs#L135)
+- [x] **Duplication | Medium | Share fallible allocation for Rust-owned FFI handles.** AC7 allocates and initializes nonzero-sized Scopes and Ticket objects at games/ac7/src/render_scope.rs:286 and :346. Vulkan FSR3 repeats the unsafe allocation at runtime/vulkan/fsr3/owner.rs:331 for swapchains and FG contexts at :640 and :946, returning NonNull instead of a raw pointer. RDR2 capture creation at games/rdr2/src/capture_state.rs:112 uses a third generic implementation at :117 that omits the nonzero-size guard. Current callers allocate concrete nonzero types. Use one small fallible allocation helper returning Option<Box<T>>, with one documented size contract, and convert to raw handles and existing error codes in the owning exports. This removes three separate implementations of the allocator preconditions. [games/ac7/src/render_scope.rs:135](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/render_scope.rs#L135)
 
 - [x] **Altitude | Medium | Queue point-in-time scope markers in one operation.** retire_renderer_uniforms (native_renderer.cpp:814-822), the native SR submission at line 982 and velocity finalization at line 1716 open and immediately close a leased ticket. No engine work occurs between those calls. Open transfers ownership and increments outstanding, but close can refuse after the first marker was published. These callers then discard the open ticket, preventing idle and lease retirement. Add an enqueue operation for these callers that admits and links both markers together before transferring ownership. Keep separate open/close for scopes spanning genuine engine work. [games/ac7/src/render_scope.rs:380](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/render_scope.rs#L380)
 
@@ -1737,7 +1737,7 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 
 - [ ] **Duplication | Low | Reuse the compile-time ASCII widening used by the Windows adapters.** TrueSky converts its NUL-terminated module name at games/ac7/src/truesky.rs:40 using the same byte-to-u16 loop that games/ac7/src/carrier.rs:27 uses for DLL, executable and window-class pointers. Godot repeats it at integrations/godot/native/window.rs:29 for a length-delimited class comparison at :108. Share one const helper for ASCII bytes which preserves exactly the input length, including a terminator only when supplied, and keep the names in their owning integrations. This gives all three callers the same ASCII and length contract. [games/ac7/src/truesky.rs:29](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L29)
 
-- [ ] **Duplication | Low | Reuse one IEEE CRC-32 implementation for binary fingerprints.** AC7 checks its effect bytes at games/ac7/src/truesky.rs:168 using a slice fold. RDR2 computes the same reflected polynomial, initial value and final complement in games/rdr2/src/capture_state/recordings.rs:180; games/rdr2/src/native_capture.cpp:104 calls that loop for both pixel and vertex shader bytecode. Fixes or faster implementations currently need to preserve identical persisted hash values in two places. Share a pure crc32_ieee(&[u8]) function with the existing checksum utilities, retaining the RDR2 pointer/length contract and AC7 file-size check in their adapters. The existing CRC-32C function uses a different polynomial. [games/ac7/src/truesky.rs:159](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L159)
+- [x] **Duplication | Low | Reuse one IEEE CRC-32 implementation for binary fingerprints.** AC7 checks its effect bytes at games/ac7/src/truesky.rs:168 using a slice fold. RDR2 computes the same reflected polynomial, initial value and final complement in games/rdr2/src/capture_state/recordings.rs:180; games/rdr2/src/native_capture.cpp:104 calls that loop for both pixel and vertex shader bytecode. Fixes or faster implementations currently need to preserve identical persisted hash values in two places. Share a pure crc32_ieee(&[u8]) function with the existing checksum utilities, retaining the RDR2 pointer/length contract and AC7 file-size check in their adapters. The existing CRC-32C function uses a different polynomial. [games/ac7/src/truesky.rs:159](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L159)
 
 - [x] **Duplication | Low | Generate the numeric draw and layout classes consumed across the AC7 UI ABI.** The seven draw and four layout result values at games/ac7/src/ui.rs:7 and :15 repeat the cast macros at games/ac7/include/rescaleframe/ac7_ui_rules.h:33 and :72. Although tools/generate-rust-bindings.py:113 requests both families, games/ac7/src/ui_abi.rs:19 emits only their u32 aliases. The classifier returns its private numbers and the native dispatch at loader/proxy/src/dlss_bridge.c:534 switches on the header values; changing one side can silently route a different layout. Express those values as bindgen-readable integer constants while retaining the u32 return ABI, regenerate, and consume the generated constants in the classifiers. [games/ac7/src/ui.rs:7](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/ui.rs#L7)
 
