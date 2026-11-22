@@ -7,6 +7,10 @@ publish.workspace = true
 license.workspace = true
 
 [features]
+unity-sr-d3d12-fixture = [
+  "dep:windows", "windows-sys/Win32_System_Performance",
+  "windows-sys/Win32_System_Threading", "windows-sys/Win32_System_WindowsProgramming",
+]
 xell-fixture = ["windows-sys/Win32_Security", "windows-sys/Win32_System_Threading"]
 vk-latency-fixtures = ["dep:ash", "windows-sys/Win32_System_Performance", "windows-sys/Win32_System_Threading", "windows-sys/Win32_UI_WindowsAndMessaging"]
 fg-cpu-fixture = ["windows-sys/Win32_System_Performance", "windows-sys/Win32_System_Threading"]
@@ -21,6 +25,11 @@ crate-type = ["staticlib"]
 [target.'cfg(windows)'.dependencies]
 ash = { version = "=0.38.0", optional = true, default-features = false, features = ["std"] }
 rsf-game-sys = { path = "../../sdk/game" }
+windows = { version = "=0.62.2", optional = true, default-features = false, features = [
+  "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Security",
+  "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging",
+] }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_System_Diagnostics_Debug",

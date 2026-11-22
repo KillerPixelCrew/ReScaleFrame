@@ -1105,6 +1105,24 @@ generate("sdk/game/src/render_host_abi.rs", "runtime/orchestrator/include/rescal
          ["-Isdk/game/include", "-Iruntime/orchestrator/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "type wchar_t = u16;"])
 
+generate("tests/game-sdk/src/unity_sr_d3d12_abi.rs", "tests/unity_sr_d3d12_abi.h",
+         "rsf_(sr12(_setup)?|dlss_setup|streamline_host(_setup)?|native_(fg_status|fg_options|latency_status|cpu_counters)|"
+         "fg_status|render_settings|unity_(packet|config|native_api)|fixture_unity_constants|"
+         "dlss_(engine|log_fn)|fg_mode|latency_marker|pacing_owner|reflex_mode)",
+         "RSF_(DLSS_ABI_VERSION|UNITY_(ENGINE_VERSION|PROJECT_ID)|STREAMLINE_HOST_ABI_VERSION|"
+         "SL_PROFILE_DLSS_FG|RENDER_FRONTEND_ABI_VERSION|LATENCY_.*|FG_OFF|SR_(DLSS|FSR3))",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include",
+          "-Igames/unity-mono/include", "-fdeclspec"],
+         ["--allowlist-function", "rsf_(fixture_unity_.*|sr12_(create|plan|evaluate|destroy)|"
+          "streamline_host_(adopt|acquire|marker|sleep|destroy)|fg12_status|native_latency_(status_get|ping)|"
+          "render_(host_create|settings_(get|apply)|overlay_(toggle|visible))|rdr2_fill_runtime_setup)",
+          "--no-recursive-allowlist", "--with-derive-default", "--no-prepend-enum-name",
+          "--raw-line", "use rsf_game_sys::{render_host_abi::rsf_render_host_setup, rsf_camera_frame, "
+          "rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_pass};",
+          "--raw-line", "type wchar_t = u16; type rsf_backend_result = i32; type rsf_result = i32;",
+          "--raw-line", "type rsf_backend_log_fn = Option<unsafe extern \"C\" fn(*mut ::core::ffi::c_void, *const ::core::ffi::c_char)>;"])
+
 generate("tests/game-sdk/src/render_host_fixture_abi.rs", "tests/game-sdk/render_host_fixture_abi.h",
          "rsf_(render_(settings|status|links?)|native_present_record|observer_present_event)",
          "RSF_(RENDER_(FRONTEND_ABI_VERSION|LINK_ABI_VERSION)|SR_(AUTO|DLSS|FSR3|FSR4|SPATIAL|XESS))",
