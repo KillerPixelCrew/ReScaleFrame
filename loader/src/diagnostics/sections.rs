@@ -184,7 +184,7 @@ impl ThreadView<'_> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dump_threads_impl(
+pub(super) unsafe extern "C" fn rsf_dump_threads_impl(
     stream: *mut c_void,
     write: Write,
     modules: *const rsf_module_entry,
@@ -361,7 +361,7 @@ impl Functions {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_dump_functions_impl(
+pub(super) extern "C" fn rsf_dump_functions_impl(
     stream: *mut c_void,
     write: Write,
     base: *const u8,

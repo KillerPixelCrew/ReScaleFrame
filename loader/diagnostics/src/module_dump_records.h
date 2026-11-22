@@ -43,4 +43,33 @@ typedef struct rsf_dump_image_stats {
     uint32_t iat_references;
 } rsf_dump_image_stats;
 
+typedef struct rsf_dump_sidecar_info {
+    const rsf_dump_image_info* image;
+    const void* headers;
+    const wchar_t* module_path;
+    const rsf_module_entry* modules;
+    size_t module_count;
+    const rsf_section_digest* digests;
+    const char* name_list;
+    uint64_t preferred_base;
+    double code_entropy;
+    double hash_ms;
+    double started_ms;
+    uint32_t abi_version;
+    uint32_t schema_version;
+    uint32_t entry_rva;
+    uint32_t iat_references;
+    uint32_t import_bytes;
+    uint32_t exception_rva;
+    uint32_t exception_bytes;
+    uint32_t rtti_budget_ms;
+} rsf_dump_sidecar_info;
+
+typedef struct rsf_dump_sidecar_stats {
+    uint32_t imports_described;
+    uint32_t threads_listed;
+    uint32_t rtti_classes;
+    uint32_t function_starts;
+} rsf_dump_sidecar_stats;
+
 #endif

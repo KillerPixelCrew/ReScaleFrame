@@ -12,114 +12,40 @@
 #include <string.h>
 #include <wchar.h>
 
+_Static_assert(RSF_DUMP_MODULE_PATH_UNITS == MAX_PATH, "module path must match the Windows SDK");
+_Static_assert(sizeof(RUNTIME_FUNCTION) == 12, "RUNTIME_FUNCTION must use the Windows x64 layout");
+
 rsf_dump_result rsf_dump_image_write(const rsf_dump_image_info* info, rsf_section_digest* digests,
                                     rsf_dump_image_stats* stats);
-uint32_t rsf_dump_imports_impl(void* stream, rsf_dump_stream_write write,
-                               const unsigned char* base, uint32_t image_size,
-                               uint32_t directory, const rsf_module_entry* modules, size_t count);
+typedef void (*rsf_dump_rtti_write)(void* stream, const unsigned char* base,
+                                    const void* headers, uint32_t budget, uint32_t* count);
+void rsf_dump_sidecar_impl(void* stream, rsf_dump_stream_write write, rsf_dump_rtti_write rtti,
+                           const rsf_dump_sidecar_info* info, rsf_dump_sidecar_stats* stats);
 
 static void write_bytes(void* stream, const unsigned char* bytes, size_t count)
 {
     fwrite(bytes, 1, count, (FILE*)stream);
 }
 
-/* Format a fixed-point number without going through the CRT's float formatting, which follows
-   the process locale. A German locale writes 7,9971, and that is not JSON. */
-static void write_json_number(FILE* stream, double value)
+static void write_rtti(void* stream, const unsigned char* base, const void* headers,
+                       uint32_t budget, uint32_t* count)
 {
-    if (value < 0.0) {
-        fputc('-', stream);
-        value = -value;
-    }
-    const long long scaled = (long long)(value * 10000.0 + 0.5);
-    fprintf(stream, "%lld.%04lld", scaled / 10000, scaled % 10000);
+    rsf_dump_write_rtti((FILE*)stream, base, (const IMAGE_NT_HEADERS64*)headers, budget, count);
 }
 
-static rsf_dump_result write_sidecar(const wchar_t* path, const unsigned char* base,
-                                     const IMAGE_NT_HEADERS64* headers, const wchar_t* module_path,
-                                     const rsf_module_entry* modules, size_t module_count,
-                                     const rsf_dump_options* options,
-                                     const rsf_section_digest* digests, double hash_ms,
-                                     double started_ms, rsf_dump_report* report)
+static rsf_dump_result write_sidecar(const wchar_t* path, const rsf_dump_sidecar_info* info,
+                                     rsf_dump_report* report)
 {
     FILE* stream = _wfopen(path, L"wb");
     if (!stream) {
         return RSF_DUMP_ERROR_WRITE_FAILED;
     }
-
-    fputs("{\n  \"tool\": \"rescaleframe-module-dump\",\n", stream);
-    fprintf(stream, "  \"abi_version\": %u,\n", RSF_MODULE_DUMP_ABI_VERSION);
-    fprintf(stream, "  \"schema_version\": %u,\n", RSF_MODULE_DUMP_SCHEMA_VERSION);
-    fputs("  \"module\": {\"path\": \"", stream);
-    rsf_json_wide(stream, module_path);
-    fprintf(stream,
-            "\", \"load_base\": \"0x%llx\", \"preferred_base\": \"0x%llx\", "
-            "\"size_of_image\": %lu, \"entry_point_rva\": \"0x%lx\"},\n",
-            (unsigned long long)(uintptr_t)base,
-            (unsigned long long)headers->OptionalHeader.ImageBase,
-            (unsigned long)headers->OptionalHeader.SizeOfImage,
-            (unsigned long)headers->OptionalHeader.AddressOfEntryPoint);
-    fputs("  \"code_entropy\": ", stream);
-    write_json_number(stream, report->code_entropy);
-    fprintf(stream, ",\n  \"iat_references\": %lu,\n", (unsigned long)report->iat_references);
-
-    fputs("  \"sections\": [", stream);
-    const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(headers);
-    for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index) {
-        fprintf(stream, "%s\n    {\"name\": \"", index ? "," : "");
-        rsf_json_ascii(stream, (const char*)sections[index].Name, IMAGE_SIZEOF_SHORT_NAME);
-        fprintf(stream,
-                "\", \"rva\": \"0x%lx\", \"virtual_size\": %lu, \"characteristics\": \"0x%lx\"",
-                (unsigned long)sections[index].VirtualAddress,
-                (unsigned long)sections[index].Misc.VirtualSize,
-                (unsigned long)sections[index].Characteristics);
-        if (digests && digests[index].valid) {
-            fprintf(stream, ", \"dumped_size\": %llu, \"readable_bytes\": %llu, \"entropy\": ",
-                    (unsigned long long)digests[index].dumped_size,
-                    (unsigned long long)digests[index].readable_bytes);
-            write_json_number(stream, digests[index].entropy);
-            fprintf(stream, ", \"sha256\": \"%s\"", digests[index].sha256);
-        }
-        fputc('}', stream);
-    }
-    fputs("\n  ],\n", stream);
-
-    fputs("  \"modules\": [", stream);
-    for (size_t index = 0; index < module_count; ++index) {
-        fprintf(stream, "%s\n    {\"path\": \"", index ? "," : "");
-        rsf_json_wide(stream, modules[index].path);
-        fprintf(stream, "\", \"base\": \"0x%llx\", \"size\": %llu}",
-                (unsigned long long)(uintptr_t)modules[index].base,
-                (unsigned long long)modules[index].size);
-    }
-    fputs("\n  ],\n", stream);
-
-    fputs("  \"imports\": [", stream);
-    const IMAGE_DATA_DIRECTORY* imports =
-        &headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    if (imports->Size != 0) {
-        report->imports_described = rsf_dump_imports_impl(
-            stream, write_bytes, base, headers->OptionalHeader.SizeOfImage,
-            imports->VirtualAddress, modules, module_count);
-    }
-    fputs("\n  ],\n", stream);
-
-    const double structured = rsf_dump_now_ms();
-    report->threads_listed = rsf_dump_write_threads(stream, modules, module_count);
-    rsf_dump_write_rtti(stream, base, headers, options->rtti_budget_ms, &report->rtti_classes);
-    rsf_dump_write_functions(stream, base, headers, &report->function_starts);
-    rsf_dump_write_names(stream, options->name_list_path_utf8);
-    fprintf(stream,
-            "  \"timing_ms\": {\"section_hash_and_entropy\": %lu, \"structured_sections\": %lu, "
-            "\"total\": %lu},\n",
-            (unsigned long)(hash_ms + 0.5), (unsigned long)(rsf_dump_now_ms() - structured + 0.5),
-            (unsigned long)(rsf_dump_now_ms() - started_ms + 0.5));
-
-    fputs("  \"limits\": \"Section raw offsets equal virtual addresses, so the dump maps one to "
-          "one onto runtime addresses. It is not runnable: the entry point is unchanged and no "
-          "import table was rebuilt. Import values are the addresses resolved in this process at "
-          "dump time. Threads, RTTI and function starts describe the process at dump time.\"\n}\n", stream);
-
+    rsf_dump_sidecar_stats stats = {0};
+    rsf_dump_sidecar_impl(stream, write_bytes, write_rtti, info, &stats);
+    report->imports_described = stats.imports_described;
+    report->threads_listed = stats.threads_listed;
+    report->rtti_classes = stats.rtti_classes;
+    report->function_starts = stats.function_starts;
     const int failed = ferror(stream);
     fclose(stream);
     return failed ? RSF_DUMP_ERROR_WRITE_FAILED : RSF_DUMP_OK;
@@ -238,9 +164,17 @@ rsf_dump_result rsf_dump_module(const void* module_base, const rsf_dump_options*
         rsf_dump_collect_modules(modules, RSF_MAX_MODULES, &module_count);
     }
     local.modules_listed = (uint32_t)module_count;
-    const rsf_dump_result sidecar =
-        write_sidecar(sidecar_path, base, headers, module_path, modules, module_count, options,
-                      digests, stats.hash_ms, started_ms, &local);
+    const IMAGE_DATA_DIRECTORY* directories = headers->OptionalHeader.DataDirectory;
+    const rsf_dump_sidecar_info sidecar_info = {
+        &info, headers, module_path, modules, module_count, digests, options->name_list_path_utf8,
+        local.preferred_base, local.code_entropy, stats.hash_ms, started_ms,
+        RSF_MODULE_DUMP_ABI_VERSION, RSF_MODULE_DUMP_SCHEMA_VERSION,
+        headers->OptionalHeader.AddressOfEntryPoint, local.iat_references,
+        directories[IMAGE_DIRECTORY_ENTRY_IMPORT].Size,
+        directories[IMAGE_DIRECTORY_ENTRY_EXCEPTION].VirtualAddress,
+        directories[IMAGE_DIRECTORY_ENTRY_EXCEPTION].Size, options->rtti_budget_ms,
+    };
+    const rsf_dump_result sidecar = write_sidecar(sidecar_path, &sidecar_info, &local);
     free(modules);
     free(digests);
 

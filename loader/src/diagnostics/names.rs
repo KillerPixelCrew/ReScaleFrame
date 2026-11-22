@@ -92,7 +92,11 @@ fn name_entry(line: &[u8]) -> Option<(u32, &[u8])> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dump_names_impl(file: *mut c_void, path: *const c_char, write: Write) {
+pub(super) unsafe extern "C" fn rsf_dump_names_impl(
+    file: *mut c_void,
+    path: *const c_char,
+    write: Write,
+) {
     let emit = |text: &str| unsafe { write(file, text.as_ptr(), text.len()) };
     let path = if path.is_null() {
         None

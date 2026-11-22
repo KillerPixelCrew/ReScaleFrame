@@ -4,7 +4,6 @@ set(RSF_RENDERDOC_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/renderdoc" CACHE PATH
 add_library(rsf_loader_diagnostics STATIC
     src/module_dump.c
     src/module_dump_rtti.c
-    src/module_dump_v2.c
     src/module_dump_writer.c)
 target_include_directories(rsf_loader_diagnostics PUBLIC include)
 

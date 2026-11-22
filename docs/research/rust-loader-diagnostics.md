@@ -336,6 +336,13 @@ The native entry still validates and copies the public ABI, constructs paths, an
 remaining C sidecar envelope and RTTI producer. The Rust file path rejects an inconsistent
 header or a range outside the image before writing. Longer RVAs use the Rust 64-bit seek API.
 
+## Module sidecar document
+
+Rust now assembles the sidecar envelope and timing fields. The C bridge opens the existing
+CRT stream and calls the native RTTI writer on that stream at the same point in section order.
+The old sidecar bridge translation unit is gone. The only native JSON helper left belongs to
+RTTI, where it preserves the existing output for native decorated names.
+
 ## Inventory at the end of the 82b39a63 continuation
 
 Eleven additional baseline paths have source cutovers. The two public header paths retain

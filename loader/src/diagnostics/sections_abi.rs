@@ -102,3 +102,92 @@ const _: () = {
     ["Offset of field: rsf_dump_image_stats::iat_references"]
         [::core::mem::offset_of!(rsf_dump_image_stats, iat_references) - 20usize];
 };
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dump_sidecar_info {
+    pub image: *const rsf_dump_image_info,
+    pub headers: *const ::core::ffi::c_void,
+    pub module_path: *const wchar_t,
+    pub modules: *const rsf_module_entry,
+    pub module_count: usize,
+    pub digests: *const rsf_section_digest,
+    pub name_list: *const ::core::ffi::c_char,
+    pub preferred_base: u64,
+    pub code_entropy: f64,
+    pub hash_ms: f64,
+    pub started_ms: f64,
+    pub abi_version: u32,
+    pub schema_version: u32,
+    pub entry_rva: u32,
+    pub iat_references: u32,
+    pub import_bytes: u32,
+    pub exception_rva: u32,
+    pub exception_bytes: u32,
+    pub rtti_budget_ms: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dump_sidecar_info"][::core::mem::size_of::<rsf_dump_sidecar_info>() - 120usize];
+    ["Alignment of rsf_dump_sidecar_info"]
+        [::core::mem::align_of::<rsf_dump_sidecar_info>() - 8usize];
+    ["Offset of field: rsf_dump_sidecar_info::image"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, image) - 0usize];
+    ["Offset of field: rsf_dump_sidecar_info::headers"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, headers) - 8usize];
+    ["Offset of field: rsf_dump_sidecar_info::module_path"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, module_path) - 16usize];
+    ["Offset of field: rsf_dump_sidecar_info::modules"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, modules) - 24usize];
+    ["Offset of field: rsf_dump_sidecar_info::module_count"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, module_count) - 32usize];
+    ["Offset of field: rsf_dump_sidecar_info::digests"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, digests) - 40usize];
+    ["Offset of field: rsf_dump_sidecar_info::name_list"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, name_list) - 48usize];
+    ["Offset of field: rsf_dump_sidecar_info::preferred_base"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, preferred_base) - 56usize];
+    ["Offset of field: rsf_dump_sidecar_info::code_entropy"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, code_entropy) - 64usize];
+    ["Offset of field: rsf_dump_sidecar_info::hash_ms"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, hash_ms) - 72usize];
+    ["Offset of field: rsf_dump_sidecar_info::started_ms"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, started_ms) - 80usize];
+    ["Offset of field: rsf_dump_sidecar_info::abi_version"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, abi_version) - 88usize];
+    ["Offset of field: rsf_dump_sidecar_info::schema_version"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, schema_version) - 92usize];
+    ["Offset of field: rsf_dump_sidecar_info::entry_rva"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, entry_rva) - 96usize];
+    ["Offset of field: rsf_dump_sidecar_info::iat_references"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, iat_references) - 100usize];
+    ["Offset of field: rsf_dump_sidecar_info::import_bytes"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, import_bytes) - 104usize];
+    ["Offset of field: rsf_dump_sidecar_info::exception_rva"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, exception_rva) - 108usize];
+    ["Offset of field: rsf_dump_sidecar_info::exception_bytes"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, exception_bytes) - 112usize];
+    ["Offset of field: rsf_dump_sidecar_info::rtti_budget_ms"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_info, rtti_budget_ms) - 116usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dump_sidecar_stats {
+    pub imports_described: u32,
+    pub threads_listed: u32,
+    pub rtti_classes: u32,
+    pub function_starts: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dump_sidecar_stats"][::core::mem::size_of::<rsf_dump_sidecar_stats>() - 16usize];
+    ["Alignment of rsf_dump_sidecar_stats"]
+        [::core::mem::align_of::<rsf_dump_sidecar_stats>() - 4usize];
+    ["Offset of field: rsf_dump_sidecar_stats::imports_described"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_stats, imports_described) - 0usize];
+    ["Offset of field: rsf_dump_sidecar_stats::threads_listed"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_stats, threads_listed) - 4usize];
+    ["Offset of field: rsf_dump_sidecar_stats::rtti_classes"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_stats, rtti_classes) - 8usize];
+    ["Offset of field: rsf_dump_sidecar_stats::function_starts"]
+        [::core::mem::offset_of!(rsf_dump_sidecar_stats, function_starts) - 12usize];
+};

@@ -349,7 +349,7 @@ unsafe extern "C" fn rsf_dump_image_write(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dump_imports_impl(
+pub(super) unsafe extern "C" fn rsf_dump_imports_impl(
     stream: *mut c_void,
     write: Write,
     base: *const u8,
@@ -406,4 +406,23 @@ unsafe extern "C" fn rsf_dump_imports_impl(
         true
     });
     count
+}
+
+pub(super) fn sidecar_section(
+    info: &rsf_dump_image_info,
+    index: u32,
+) -> Option<([u8; 8], u32, u32, u32)> {
+    let image = LiveImage {
+        base: info.base as usize,
+        size: info.image_size as usize,
+    };
+    let offset = index
+        .checked_mul(SECTION_BYTES as u32)?
+        .checked_add(info.sections_offset)?;
+    let row = image.bytes::<SECTION_BYTES>(offset)?;
+    let name = row[..8].try_into().unwrap();
+    let rva = word32(&row, offset_of!(IMAGE_SECTION_HEADER, VirtualAddress));
+    let size = word32(&row, offset_of!(IMAGE_SECTION_HEADER, Misc));
+    let flags = word32(&row, offset_of!(IMAGE_SECTION_HEADER, Characteristics));
+    Some((name, rva, size, flags))
 }

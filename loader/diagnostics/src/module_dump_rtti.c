@@ -198,6 +198,20 @@ static int target_in_data(const scan* state, uint32_t rva)
     return 0;
 }
 
+static void rsf_json_ascii(FILE* stream, const char* text, size_t limit)
+{
+    for (size_t index = 0; index < limit && text[index]; ++index) {
+        const unsigned char value = (unsigned char)text[index];
+        if (value == '"' || value == '\\') {
+            fprintf(stream, "\\%c", (char)value);
+        } else if (value < 0x20 || value > 0x7e) {
+            fprintf(stream, "\\u%04x", (unsigned)value);
+        } else {
+            fputc((char)value, stream);
+        }
+    }
+}
+
 static void emit_class(scan* state, uint32_t vtable_rva, uint32_t locator_rva, const locator* col)
 {
     char decorated[RSF_RTTI_NAME_BYTES];

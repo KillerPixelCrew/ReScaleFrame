@@ -10,3 +10,4 @@ mod names;
 mod sections;
 mod sections_abi;
 mod sha256;
+mod sidecar;
