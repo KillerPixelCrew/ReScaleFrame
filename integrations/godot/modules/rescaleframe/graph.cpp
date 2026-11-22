@@ -2,7 +2,7 @@
 #include "graph.h"
 #include "drivers/vulkan/rendering_device_driver_vulkan.h"
 
-namespace {
+namespace RSFGodot {
 struct GraphCalls {
     void *(*current)(void *scope);
     int32_t (*prepare)(void *scope, uint64_t *next);
@@ -12,11 +12,9 @@ struct GraphCalls {
 };
 static_assert(sizeof(GraphCalls) == 5 * sizeof(void *));
 static_assert(VK_ERROR_INITIALIZATION_FAILED == -3);
-}
 extern "C" int32_t rsf_godot_graph_split(const GraphCalls *calls, void *scope, void *current,
         uint64_t timeline, uint64_t previous_done, uint64_t ready, uint64_t done, void **out);
 
-namespace RSFGodot {
 thread_local GraphScope *GraphScope::active = nullptr;
 
 bool GraphScope::handoff(RenderingDeviceDriver *driver, RenderingDeviceDriver::CommandBufferID commands,

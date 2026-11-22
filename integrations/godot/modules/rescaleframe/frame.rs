@@ -149,10 +149,14 @@ pub unsafe extern "C" fn rsf_godot_cpu_simulation_begin(callbacks: *const FrameC
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_godot_cpu_queue(callbacks: *const FrameCallbacks, present: u32) {
     let callbacks = unsafe { &*callbacks };
-    emit(callbacks, RSF_GAME_CPU_SIMULATION_END, 0);
-    CPU.simulation_ended.store(true, R);
-    CPU.queued.store(present != 0, R);
-    let frame = if present != 0 { CPU.frame.load(R) } else { 0 };
+    let open = CPU.open.load(R);
+    if open {
+        emit(callbacks, RSF_GAME_CPU_SIMULATION_END, 0);
+        CPU.simulation_ended.store(true, R);
+    }
+    let will_present = open && present != 0;
+    CPU.queued.store(will_present, R);
+    let frame = if will_present { CPU.frame.load(R) } else { 0 };
     // SAFETY: valid callbacks, see above.
     unsafe { (callbacks.queue_render)(frame, f64::from_bits(CPU.seconds.load(R))) };
 }
