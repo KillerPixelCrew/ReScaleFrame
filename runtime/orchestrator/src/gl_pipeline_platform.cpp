@@ -50,8 +50,8 @@ int32_t chain_create(void* queue, void* window, uint32_t buffers, uint32_t forma
     desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
     auto result = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
     if (SUCCEEDED(result))
-        result = factory->CreateSwapChainForHwnd(static_cast<ID3D12CommandQueue*>(queue), static_cast<HWND>(window),
-                                                 &desc, nullptr, nullptr, &chain);
+        result = rsf_d3d11_present_create_for_hwnd(static_cast<IDXGIFactory*>(factory.Get()), queue, window,
+                                                 &desc, reinterpret_cast<void**>(chain.GetAddressOf()));
     if (SUCCEEDED(result)) result = chain.As(&chain3);
     if (SUCCEEDED(result)) *out = chain3.Detach();
     return result;
@@ -157,7 +157,7 @@ struct Platform {
     decltype(&rsf_sr12_evaluate) sr_evaluate;
     decltype(&rsf_sr12_set_sharpening) sr_set_sharpening;
     decltype(&rsf_sr12_destroy) sr_destroy;
-    decltype(&rsf_fg12_install) fg_install;
+    decltype(&rsf_fg12_install_explicit) fg_install;
     decltype(&rsf_fg12_options) fg_options;
     decltype(&rsf_fg12_cpu) fg_cpu;
     decltype(&rsf_fg12_hudless) fg_hudless;
@@ -189,7 +189,7 @@ constexpr Platform platform{
     rsf_gl_submit, rsf_gl_drain, rsf_gl_close, rsf_core_gl_window_valid, rsf_core_gl_window_create, rsf_core_gl_window_destroy, rsf_core_gl_window_child_of,
     rsf_core_gl_window_resize, rsf_core_gl_window_show, chain_create, chain_associate, chain_resize, chain_back_buffer, chain_present,
     adapter_identity, transition, copy_resource, rsf_sr12_create, rsf_sr12_plan, rsf_sr12_evaluate,
-    rsf_sr12_set_sharpening, rsf_sr12_destroy, rsf_fg12_install, rsf_fg12_options, rsf_fg12_cpu, rsf_fg12_hudless,
+    rsf_sr12_set_sharpening, rsf_sr12_destroy, rsf_fg12_install_explicit, rsf_fg12_options, rsf_fg12_cpu, rsf_fg12_hudless,
     rsf_fg12_submitted, rsf_fg12_window, rsf_fg12_status, present_host, rsf_d3d11_present_is_owner,
     rsf_d3d11_present_backend, rsf_d3d11_present_backend_choices, rsf_d3d11_present_request,
     rsf_d3d11_present_switch_result, rsf_d3d11_present_abort,

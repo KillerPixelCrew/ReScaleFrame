@@ -886,6 +886,13 @@ fn failed_chain_open_returns_a_cleanup_handle_if_retirement_refuses() {
         events(),
         ["gl_close", "latency end", "dump cancel", "destroy window1"]
     );
+    world(|world| world.chain_unowned = false);
+    assert_eq!(
+        unsafe { rsf_core_gl_pipeline_open(&setup(), &mut pipeline, &PLATFORM) },
+        OK
+    );
+    assert_eq!(events(), ["gl_open"]);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
 }
 
 #[test]

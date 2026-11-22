@@ -14,6 +14,10 @@ code units and the linked Runtime receives standard UTF-8. The existing 88-float
 layout and ten-value configuration result are unchanged. Evaluate and HUD-less return
 a failed surface query directly before constructing a camera pass.
 
+Rust owns the WGL, OpenGL and shared D3D12 resource and fence calls. The pipeline uses
+explicit DXGI facade creation and can retry a failed open with the same SDK paths and engine
+identity after cleanup. The pipeline's remaining native adapter supplies DXGI and vendor leaves.
+
 `eng/generate-native-status.py` defines the status fields in wire order and emits the Rust
 writer and Java getters. It accepts `--check` to verify both outputs. The first 25 positions
 and the minimum length of 14 are preserved. A failed graphics status query writes nothing.

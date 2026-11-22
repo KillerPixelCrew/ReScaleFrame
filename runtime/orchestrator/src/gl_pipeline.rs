@@ -36,6 +36,7 @@ const INVALID: i32 = -1;
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
+const NEEDS_RESTART: i32 = -11;
 
 // Public SR backend IDs (sr_session.h), pinned by static_asserts in gl_pipeline_platform.cpp.
 const SR_NONE: u32 = 0;
@@ -171,6 +172,28 @@ struct Shared {
     project: CString,
 }
 
+#[cfg(not(test))]
+static IDLE_REGISTRATION: AtomicPtr<Shared> = AtomicPtr::new(ptr::null_mut());
+#[cfg(test)]
+thread_local! {
+    static IDLE_REGISTRATION: AtomicPtr<Shared> = const { AtomicPtr::new(ptr::null_mut()) };
+}
+
+fn with_idle_registration<T>(operation: impl FnOnce(&AtomicPtr<Shared>) -> T) -> T {
+    #[cfg(not(test))]
+    {
+        operation(&IDLE_REGISTRATION)
+    }
+    #[cfg(test)]
+    {
+        IDLE_REGISTRATION.with(operation)
+    }
+}
+
+fn put_registration(shared: &'static Shared) {
+    with_idle_registration(|idle| idle.store(ptr::from_ref(shared).cast_mut(), Ordering::Release));
+}
+
 impl Shared {
     fn log(&self, message: &str) {
         if let Ok(text) = CString::new(message) {
@@ -234,6 +257,7 @@ struct State {
     chain: Option<ComRef>,
     shown: bool,
     closed: bool,
+    retry_registration: bool,
     window_dirty: bool,
     width: u32,
     height: u32,
@@ -282,10 +306,6 @@ struct SharedGuard(*mut Shared);
 impl SharedGuard {
     fn get(&self) -> &Shared {
         unsafe { &*self.0 }
-    }
-
-    fn user(&self) -> Handle {
-        self.0.cast()
     }
 
     fn keep(mut self) -> &'static Shared {
@@ -821,11 +841,17 @@ impl Pipeline {
         }
         self.shared.window.store(ptr::null_mut(), Ordering::Release);
         self.shared.detach_log();
-        if self.own_window && unsafe { (p.window_destroy)(state.window) } == 0 {
+        if self.own_window
+            && !state.window.is_null()
+            && unsafe { (p.window_destroy)(state.window) } == 0
+        {
             return FEATURE_FAILED;
         }
         state.window = ptr::null_mut();
         state.closed = true;
+        if std::mem::take(&mut state.retry_registration) {
+            put_registration(self.shared);
+        }
         OK
     }
 
@@ -894,47 +920,54 @@ fn open(
         return Err(INVALID);
     }
     let root = unsafe { CStr::from_ptr(setup.runtime_directory_utf8) };
-    let streamline = concat(root, "/streamline");
-    let guard = SharedGuard(Box::into_raw(Box::new(Shared {
-        logger: Mutex::new((setup.log, setup.user as usize)),
-        window: AtomicPtr::new(ptr::null_mut()),
-        root: root.to_owned(),
-        fidelityfx: concat(root, "/fidelityfx"),
-        xess: concat(root, "/xess"),
-        interposer: concat(&streamline, "/sl.interposer.dll"),
-        streamline,
-        version: unsafe { CStr::from_ptr(setup.engine_version_utf8) }.to_owned(),
-        project: unsafe { CStr::from_ptr(setup.project_id_utf8) }.to_owned(),
-    })));
-    let (shared, user) = (guard.get(), guard.user());
+    let version = unsafe { CStr::from_ptr(setup.engine_version_utf8) };
+    let project = unsafe { CStr::from_ptr(setup.project_id_utf8) };
+    let idle = with_idle_registration(|idle| idle.swap(ptr::null_mut(), Ordering::AcqRel));
+    let reused = unsafe { idle.as_ref() };
+    if let Some(shared) = reused {
+        if (&*shared.root, &*shared.version, &*shared.project) != (root, version, project) {
+            put_registration(shared);
+            return Err(NEEDS_RESTART);
+        }
+        *shared.logger.lock().unwrap_or_else(|error| error.into_inner()) =
+            (setup.log, setup.user as usize);
+    }
+    let guard = reused.is_none().then(|| {
+        let streamline = concat(root, "/streamline");
+        SharedGuard(Box::into_raw(Box::new(Shared {
+            logger: Mutex::new((setup.log, setup.user as usize)),
+            window: AtomicPtr::new(ptr::null_mut()),
+            root: root.to_owned(),
+            fidelityfx: concat(root, "/fidelityfx"),
+            xess: concat(root, "/xess"),
+            interposer: concat(&streamline, "/sl.interposer.dll"),
+            streamline,
+            version: version.to_owned(),
+            project: project.to_owned(),
+        })))
+    });
+    let shared = reused.unwrap_or_else(|| guard.as_ref().unwrap().get());
+    let user = ptr::from_ref(shared).cast_mut().cast();
     let mut sharing = ptr::null_mut();
     let result = unsafe { (p.gl_open)(Some(hook_log), user, &mut sharing) };
     if result != OK {
+        if let Some(shared) = reused {
+            shared.detach_log();
+            put_registration(shared);
+        }
         return Err(result);
     }
     let (mut device, mut queue) = (ptr::null_mut(), ptr::null_mut());
-    unsafe { (p.gl_graphics)(sharing, &mut device, &mut queue) };
+    let graphics = unsafe { (p.gl_graphics)(sharing, &mut device, &mut queue) };
     // Once WGL has presented even a loading screen, DXGI creation on that HWND returns
     // E_ACCESSDENIED. A child gives the native chain its own compositor surface while GLFW keeps
     // the original context, events and window lifecycle.
     let own_window = setup.presentation_hwnd.is_null();
-    let mut window = if own_window {
+    let window = if own_window {
         unsafe { (p.window_create)(setup.hwnd) }
     } else {
         setup.presentation_hwnd
     };
-    if !window.is_null() && unsafe { (p.window_child_of)(window, setup.hwnd) } == 0 {
-        shared.log("OpenGL: presentation child must belong to the GLFW event thread.");
-        if own_window {
-            unsafe { (p.window_destroy)(window) };
-        }
-        window = ptr::null_mut();
-    }
-    if window.is_null() {
-        unsafe { (p.gl_close)(sharing) };
-        return Err(INIT_FAILED);
-    }
-    shared.window.store(window, Ordering::Release);
     let fg = rsf_fg12_setup {
         struct_size: size_of::<rsf_fg12_setup>() as u32,
         backend: 0,
@@ -965,7 +998,7 @@ fn open(
         project_id_utf8: shared.project.as_ptr(),
     };
     // FG can retain its logger before publishing whether the installation succeeded.
-    let shared = guard.keep();
+    let shared = reused.unwrap_or_else(|| guard.unwrap().keep());
     let mut pipeline = Pipeline {
         platform,
         shared,
@@ -982,6 +1015,7 @@ fn open(
             chain: None,
             shown: false,
             closed: false,
+            retry_registration: reused.is_some(),
             window_dirty: false,
             width: 0,
             height: 0,
@@ -994,10 +1028,23 @@ fn open(
             active: None,
         }),
     };
-    let result = unsafe { (p.fg_install)(&fg) };
-    if result != OK {
+    if graphics != OK {
         reject_open(pipeline, cleanup);
-        return Err(result);
+        return Err(graphics);
+    }
+    if window.is_null() || unsafe { (p.window_child_of)(window, setup.hwnd) } == 0 {
+        shared.log("OpenGL: presentation child must belong to the parent event thread.");
+        reject_open(pipeline, cleanup);
+        return Err(INIT_FAILED);
+    }
+    shared.window.store(window, Ordering::Release);
+    if reused.is_none() {
+        let result = unsafe { (p.fg_install)(&fg) };
+        if result != OK {
+            reject_open(pipeline, cleanup);
+            return Err(result);
+        }
+        pipeline.state.get_mut().unwrap().retry_registration = true;
     }
     let mut chain = ptr::null_mut();
     let created =
@@ -1018,7 +1065,9 @@ fn open(
     }
     let chain = chain.expect("created chain");
     unsafe { (p.chain_associate)(chain.as_ptr(), window) };
-    pipeline.state.get_mut().unwrap().chain = Some(chain);
+    let state = pipeline.state.get_mut().unwrap();
+    state.chain = Some(chain);
+    state.retry_registration = false;
     pipeline.ready.store(true, Ordering::Release);
     Ok(pipeline)
 }
