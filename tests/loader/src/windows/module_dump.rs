@@ -348,6 +348,11 @@ fn check_sidecar(
     );
     checks.includes(
         text,
+        r#""name": "Probe_Unicode \ud83d\ude80""#,
+        "Non-BMP name characters must use paired UTF-16 escapes.",
+    );
+    checks.includes(
+        text,
         "\"skipped_lines\": 1",
         "The malformed line must be counted.",
     );
@@ -398,7 +403,7 @@ unsafe extern "C" fn rsf_test_module_dump_v2(
     let worker = Worker::start(&mut checks);
     let names_path = directory.join("v2-names.tsv");
     let names = format!(
-        "# engine names\n{worker_rva:#x}\tProbe_Worker\n{vtable_rva}\tProbe_Decimal \"quoted\"\nnot-a-line\n"
+        "\u{feff}{worker_rva:#x}\tProbe_Worker\n# engine names\n{vtable_rva}\tProbe_Decimal \"quoted\"\n{vtable_rva}\tProbe_Unicode \u{1f680}\nnot-a-line\n"
     );
     checks.check(
         fs::write(&names_path, names).is_ok(),

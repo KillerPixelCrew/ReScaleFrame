@@ -5,3 +5,4 @@ mod frame_capture_abi;
 mod measure;
 mod memory;
 mod memory_abi;
+mod names;

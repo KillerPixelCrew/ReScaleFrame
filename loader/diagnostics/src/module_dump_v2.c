@@ -11,8 +11,6 @@
 
 #define RSF_MAX_THREADS 4096u
 #define RSF_MAX_PDATA_BYTES (96u * 1024u * 1024u)
-#define RSF_MAX_NAME_LINES 2000000u
-#define RSF_MAX_NAME_BYTES 1024u
 
 /* ---- JSON helpers ---- */
 
@@ -40,20 +38,6 @@ void rsf_json_ascii(FILE* stream, const char* text, size_t limit)
         } else {
             fputc((char)value, stream);
         }
-    }
-}
-
-/* UTF-8 text becomes \u escapes of its UTF-16 units. Bytes that are not valid UTF-8 fall back to
-   one escape per byte, which keeps the JSON valid. */
-void rsf_json_utf8(FILE* stream, const char* text)
-{
-    wchar_t wide[RSF_MAX_NAME_BYTES + 1];
-    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide,
-                                           (int)(sizeof(wide) / sizeof(wide[0])));
-    if (length > 0) {
-        rsf_json_wide(stream, wide);
-    } else {
-        rsf_json_ascii(stream, text, RSF_MAX_NAME_BYTES);
     }
 }
 
@@ -304,96 +288,15 @@ void rsf_dump_write_functions(FILE* stream, const unsigned char* base,
 
 /* ---- caller-supplied names ---- */
 
-static int parse_rva(const char* text, uint64_t* value)
+typedef void (*rsf_dump_names_write)(void* stream, const unsigned char* data, size_t size);
+void rsf_dump_names_impl(void* stream, const char* path_utf8, rsf_dump_names_write write);
+
+static void write_names_bytes(void* stream, const unsigned char* data, size_t size)
 {
-    char* end = NULL;
-    const int hex = text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
-    const unsigned long long parsed = strtoull(hex ? text + 2 : text, &end, hex ? 16 : 10);
-    if (end == text || (hex && end == text + 2)) {
-        return 0;
-    }
-    while (*end == ' ') {
-        ++end;
-    }
-    if (*end != '\0' || parsed > 0xFFFFFFFFull) {
-        return 0;
-    }
-    *value = parsed;
-    return 1;
+    fwrite(data, 1, size, (FILE*)stream);
 }
 
 void rsf_dump_write_names(FILE* stream, const char* path_utf8)
 {
-    fputs("  \"names\": {\"entries\": [", stream);
-    uint32_t accepted = 0;
-    uint32_t skipped = 0;
-    const char* reason = NULL;
-
-    FILE* input = NULL;
-    if (path_utf8) {
-        wchar_t path[MAX_PATH * 2];
-        if (MultiByteToWideChar(CP_UTF8, 0, path_utf8, -1, path, MAX_PATH * 2) == 0) {
-            reason = "the name list path is not valid UTF-8";
-        } else {
-            input = _wfopen(path, L"rb");
-            if (!input) {
-                reason = "the name list could not be opened";
-            }
-        }
-    }
-
-    if (input) {
-        char line[RSF_MAX_NAME_BYTES + 64];
-        uint32_t lines = 0;
-        while (fgets(line, (int)sizeof(line), input)) {
-            if (++lines > RSF_MAX_NAME_LINES) {
-                reason = "the name list exceeds the line bound";
-                break;
-            }
-            size_t length = strlen(line);
-            while (length && (line[length - 1] == '\n' || line[length - 1] == '\r')) {
-                line[--length] = '\0';
-            }
-            if (lines == 1 && (unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB &&
-                (unsigned char)line[2] == 0xBF) {
-                memmove(line, line + 3, length - 2);
-            }
-            if (line[0] == '\0' || line[0] == '#') {
-                continue;
-            }
-            char* tab = strchr(line, '\t');
-            uint64_t rva = 0;
-            if (!tab) {
-                ++skipped;
-                continue;
-            }
-            *tab = '\0';
-            const char* name = tab + 1;
-            if (*name == '\0' || !parse_rva(line, &rva)) {
-                ++skipped;
-                continue;
-            }
-            fprintf(stream, "%s\n    {\"rva\": \"0x%llx\", \"name\": \"", accepted ? "," : "",
-                    (unsigned long long)rva);
-            rsf_json_utf8(stream, name);
-            fputs("\"}", stream);
-            ++accepted;
-        }
-        fclose(input);
-    }
-
-    fputs("\n  ], \"source\": ", stream);
-    if (path_utf8) {
-        fputc('"', stream);
-        rsf_json_utf8(stream, path_utf8);
-        fputc('"', stream);
-    } else {
-        fputs("null", stream);
-    }
-    fprintf(stream, ", \"count\": %lu, \"skipped_lines\": %lu", (unsigned long)accepted,
-            (unsigned long)skipped);
-    if (reason) {
-        fprintf(stream, ", \"reason\": \"%s\"", reason);
-    }
-    fputs("},\n", stream);
+    rsf_dump_names_impl(stream, path_utf8, write_names_bytes);
 }

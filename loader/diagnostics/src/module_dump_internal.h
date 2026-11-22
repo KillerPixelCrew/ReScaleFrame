@@ -32,7 +32,6 @@ typedef struct rsf_section_digest {
 
 void rsf_json_wide(FILE* stream, const wchar_t* text);
 void rsf_json_ascii(FILE* stream, const char* text, size_t limit);
-void rsf_json_utf8(FILE* stream, const char* text);
 
 double rsf_dump_now_ms(void);
 const wchar_t* rsf_dump_basename(const wchar_t* path);

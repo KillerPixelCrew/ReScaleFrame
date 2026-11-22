@@ -44,7 +44,7 @@ Builds, lint, fixture execution and game or device verification are user-owned.
 
 ## L02 inventory
 
-Five checklist paths have source cutovers.
+Five checklist paths had source cutovers before the continuation at `726c5e18`.
 
 - `loader/census/src/decode.cpp`, replaced by Rust decoding and the guarded COM leaf.
 - `loader/census/src/static_scan.cpp`, replaced by the Rust scan worker body.
@@ -54,8 +54,16 @@ Five checklist paths have source cutovers.
 - `tests/vendor_census_fixture.cpp`, replaced by Rust fixture behavior and the native NGX and
   loader-lock leaves.
 
+The continuation closes these five additional paths.
+
+- `loader/census/src/wrap_vk.cpp`
+- `tests/module_dump_v2.cpp`
+- `tests/census_present_coexistence.cpp`
+- `tests/vendor_census_ngx_params.h`
+- `tests/loader/vendor_census_ngx_platform.cpp`
+
 The census core, internal contract and module-dump internal contract are partially ported.
-Eighteen checklist paths remain open.
+Fifteen paths from the continuation baseline remain open.
 
 - `loader/census/include/rescaleframe/census_d3d12_observer.h`
 - `loader/census/include/rescaleframe/vendor_census.h`
@@ -67,14 +75,11 @@ Eighteen checklist paths remain open.
 - `loader/census/src/wrap_generic.h`
 - `loader/census/src/wrap_misc.cpp`
 - `loader/census/src/wrap_ngx.cpp`
-- `loader/census/src/wrap_vk.cpp`
+- `loader/census/src/decode_d3d_platform.cpp`
 - `loader/diagnostics/include/rescaleframe/module_dump.h`
 - `loader/diagnostics/src/module_dump_internal.h`
-- `tests/census_present_coexistence.cpp`
-- `tests/module_dump_v2.cpp`
 - `tests/vendor_census.cpp`
 - `tests/vendor_census_layouts.cpp`
-- `tests/vendor_census_ngx_params.h`
 
 L02 has no numbered Rust findings.
 
@@ -132,3 +137,11 @@ call-site slot selection, while the storage and every virtual operation are in R
 all eight setters alongside the prior eight getters and reset, deriving each slot from the
 native declarations. The DLL export name, pointer result and numeric versus pointer lookup
 behavior are preserved.
+
+## Module-dump name sidecar
+
+The names section now reads and serializes the TSV in Rust, with the native writer receiving
+byte spans for its existing stream. The port keeps the bounded line reads, decimal and prefixed
+hex addresses, comments, UTF-8 BOM, skip count and UTF-16 JSON escaping. The schema fixture
+adds a first-record BOM and a non-BMP character to exercise the ported parser. Native module
+list, thread, function and RTTI sidecar sections still need further porting.
