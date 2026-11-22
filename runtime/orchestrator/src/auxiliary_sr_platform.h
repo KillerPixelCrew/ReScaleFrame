@@ -59,14 +59,7 @@ typedef struct rsf_aux_platform {
     void (*clear)(void* context);
     void (*copy)(void* context, void* destination, void* source);
     void (*draw)(void* context, const rsf_aux_colour_pipeline*, void* view, void* target, const rsf_aux_draw_constants*);
-    int32_t (*depth_create)(void* context, const rsf_depth_scale_setup*, rsf_depth_scale**);
-    int32_t (*depth_reserve)(rsf_depth_scale*, void* texture);
-    int32_t (*depth_prepare)(rsf_depth_scale*, const rsf_depth_scale_frame*);
-    int32_t (*depth_redraw)(rsf_depth_scale*, const rsf_depth_scale_frame*);
-    int32_t (*depth_commit)(rsf_depth_scale*);
-    int32_t (*depth_restore)(rsf_depth_scale*);
-    int32_t (*depth_discard)(rsf_depth_scale*);
-    int32_t (*depth_destroy)(rsf_depth_scale*);
+    const void* depth;
 } rsf_aux_platform;
 
 #ifdef __cplusplus

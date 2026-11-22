@@ -138,7 +138,9 @@ void draw(void* raw, const rsf_depth_scale_pipeline* p, const void* constants, u
     c->Draw(3, 0);
 }
 
-constexpr rsf_depth_scale_platform platform{
+} // namespace
+
+const rsf_depth_scale_platform rsf_depth_scale_native_platform{
     immediate_device, make_pipeline, describe, ready, make_surfaces, rsf_d3d11_state_save,
     rsf_d3d11_state_restore, clear, rsf_d3d11_copy_resource, bind, draw,
 };
@@ -149,16 +151,10 @@ static_assert(sizeof(rsf_depth_scale_setup) == 24 && sizeof(rsf_depth_scale_fram
 static_assert(RSF_DEPTH_SCALE_ABI_VERSION == 1 && RSF_DEPTH_SCALE_OK == 0 &&
     RSF_DEPTH_SCALE_INVALID_ARGUMENT == -1 && RSF_DEPTH_SCALE_ABI_MISMATCH == -2 &&
     RSF_DEPTH_SCALE_RESOURCE_FAILED == -3 && RSF_DEPTH_SCALE_BUSY == -4);
-}
 
 extern "C" int32_t rsf_depth_scale_create(void* context, const rsf_depth_scale_setup* setup, rsf_depth_scale** out)
 {
-    return rsf_core_depth_scale_create(context, setup, out, &platform);
-}
-
-bool rsf_depth_scale_reserve(rsf_depth_scale* p, ID3D11Texture2D* texture)
-{
-    return rsf_core_depth_scale_reserve(p, texture) != 0;
+    return rsf_core_depth_scale_create(context, setup, out, &rsf_depth_scale_native_platform);
 }
 
 extern "C" int32_t rsf_depth_scale_prepare(rsf_depth_scale* p, const rsf_depth_scale_frame* frame)
@@ -166,9 +162,9 @@ extern "C" int32_t rsf_depth_scale_prepare(rsf_depth_scale* p, const rsf_depth_s
     return rsf_core_depth_scale_render(p, frame, 1);
 }
 
-int32_t rsf_depth_scale_redraw(rsf_depth_scale* p, const rsf_depth_scale_frame* frame)
+bool rsf_depth_scale_reserve(rsf_depth_scale* p, ID3D11Texture2D* texture)
 {
-    return rsf_core_depth_scale_render(p, frame, 0);
+    return rsf_core_depth_scale_reserve(p, texture) != 0;
 }
 
 extern "C" int32_t rsf_depth_scale_commit(rsf_depth_scale* p)

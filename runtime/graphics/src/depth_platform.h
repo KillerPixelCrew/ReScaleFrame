@@ -45,6 +45,8 @@ struct rsf_depth_scale_platform {
     void (*draw)(void* context, const rsf_depth_scale_pipeline*, const void* constants, uint32_t step);
 };
 
+extern const rsf_depth_scale_platform rsf_depth_scale_native_platform;
+
 struct rsf_depth_replay_resources {
     ID3D11Texture2D* texture;
     ID3D11DepthStencilView* view;

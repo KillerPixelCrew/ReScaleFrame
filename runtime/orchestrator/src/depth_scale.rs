@@ -29,7 +29,7 @@ struct Constants {
 }
 
 #[repr(C)]
-struct Platform {
+pub(super) struct Platform {
     device: unsafe extern "C" fn(Handle) -> Handle,
     make: unsafe extern "C" fn(Handle, &Setup, u32, &mut Pipeline) -> i32,
     describe: unsafe extern "C" fn(Handle, Handle, &mut [u32; 2]) -> i32,
@@ -66,7 +66,7 @@ struct Transaction {
 
 // One graphics-thread transaction over a native depth/stencil texture. Other threads only read
 // `thread`; the transaction is borrowed by the owner thread for each call.
-struct DepthScale {
+pub(super) struct DepthScale {
     thread: u32,
     context: ComRef,
     device: ComRef,
@@ -91,6 +91,59 @@ pub(super) fn jitter_valid(jitter: [f32; 2]) -> bool {
 }
 
 impl DepthScale {
+    pub(super) unsafe fn new(
+        context: Handle,
+        setup: &Setup,
+        platform: &'static Platform,
+    ) -> Result<Box<Self>, i32> {
+        let Some(device) = (unsafe { ComRef::from_owned((platform.device)(context)) }) else {
+            return Err(INVALID);
+        };
+        let mut raw = [null_mut(); 14];
+        let status = unsafe {
+            (platform.make)(
+                device.as_ptr(),
+                setup,
+                size_of::<Constants>() as u32,
+                &mut raw,
+            )
+        };
+        let resources = unsafe { ComRef::adopt_all(raw) };
+        if status != OK {
+            return Err(RESOURCE_FAILED);
+        }
+        let scale = crate::allocate_handle(Self {
+            thread: unsafe { GetCurrentThreadId() },
+            context: unsafe { ComRef::retain(context) },
+            device,
+            pipeline: resources.ok_or(RESOURCE_FAILED)?,
+            transaction: RefCell::default(),
+            platform,
+        });
+        if scale.is_null() {
+            return Err(RESOURCE_FAILED);
+        }
+        Ok(unsafe { Box::from_raw(scale) })
+    }
+
+    pub(super) fn reserve(&self, texture: Handle) -> bool {
+        if texture.is_null() {
+            return false;
+        }
+        let Ok(mut transaction) = self.transaction.try_borrow_mut() else {
+            return false;
+        };
+        self.reserve_surfaces(&mut transaction, texture)
+    }
+
+    pub(super) fn retire(self: Box<Self>) {
+        // Preserve the native handle's rule: a failed or wrong-thread restore
+        // must leave the outstanding depth lease alive.
+        if !self.owner() || self.restore() != OK {
+            std::mem::forget(self);
+        }
+    }
+
     fn owner(&self) -> bool {
         self.thread == unsafe { GetCurrentThreadId() }
     }
@@ -120,7 +173,7 @@ impl DepthScale {
     }
 
     // Allocation only: the private snapshot and output follow the native texture's size.
-    fn reserve(&self, transaction: &mut Transaction, texture: Handle) -> bool {
+    fn reserve_surfaces(&self, transaction: &mut Transaction, texture: Handle) -> bool {
         if transaction.original.is_some() {
             return false;
         }
@@ -152,7 +205,7 @@ impl DepthScale {
         true
     }
 
-    fn render(&self, frame: &Frame, capture: bool) -> i32 {
+    pub(super) fn render(&self, frame: &Frame, capture: bool) -> i32 {
         let Ok(mut transaction) = self.transaction.try_borrow_mut() else {
             return BUSY;
         };
@@ -178,7 +231,7 @@ impl DepthScale {
         if !rect_valid(&frame.source_rect, size) || !rect_valid(&frame.output_rect, size) {
             return INVALID;
         }
-        if capture && !self.reserve(&mut transaction, texture) {
+        if capture && !self.reserve_surfaces(&mut transaction, texture) {
             return RESOURCE_FAILED;
         }
         let Some(reserved) = transaction.reserved.as_ref() else {
@@ -219,7 +272,7 @@ impl DepthScale {
         OK
     }
 
-    fn commit(&self) -> i32 {
+    pub(super) fn commit(&self) -> i32 {
         let Ok(mut transaction) = self.transaction.try_borrow_mut() else {
             return BUSY;
         };
@@ -241,7 +294,7 @@ impl DepthScale {
     }
 
     // Queue the exact original contents back when committed, then release the lease.
-    fn restore(&self) -> i32 {
+    pub(super) fn restore(&self) -> i32 {
         let Ok(mut transaction) = self.transaction.try_borrow_mut() else {
             return BUSY;
         };
@@ -265,7 +318,7 @@ impl DepthScale {
         OK
     }
 
-    fn discard(&self) -> i32 {
+    pub(super) fn discard(&self) -> i32 {
         let Ok(mut transaction) = self.transaction.try_borrow_mut() else {
             return BUSY;
         };
@@ -301,38 +354,13 @@ unsafe extern "C" fn rsf_core_depth_scale_create(
     if setup.abi_version != ABI {
         return ABI_MISMATCH;
     }
-    let Some(device) = (unsafe { ComRef::from_owned((platform.device)(context)) }) else {
-        return INVALID;
-    };
-    let mut raw = [null_mut(); 14];
-    let status = unsafe {
-        (platform.make)(
-            device.as_ptr(),
-            setup,
-            size_of::<Constants>() as u32,
-            &mut raw,
-        )
-    };
-    let resources = unsafe { ComRef::adopt_all(raw) };
-    if status != OK {
-        return RESOURCE_FAILED;
+    match unsafe { DepthScale::new(context, setup, platform) } {
+        Ok(scale) => {
+            unsafe { out.write(Box::into_raw(scale)) };
+            OK
+        }
+        Err(status) => status,
     }
-    let Some(resources) = resources else {
-        return RESOURCE_FAILED;
-    };
-    let scale = crate::allocate_handle(DepthScale {
-        thread: unsafe { GetCurrentThreadId() },
-        context: unsafe { ComRef::retain(context) },
-        device,
-        pipeline: resources,
-        transaction: RefCell::default(),
-        platform,
-    });
-    if scale.is_null() {
-        return RESOURCE_FAILED;
-    }
-    unsafe { out.write(scale) };
-    OK
 }
 
 #[unsafe(no_mangle)]
@@ -343,13 +371,7 @@ unsafe extern "C" fn rsf_core_depth_scale_reserve(
     let Ok(scale) = (unsafe { owned(scale) }) else {
         return 0;
     };
-    if texture.is_null() {
-        return 0;
-    }
-    let Ok(mut transaction) = scale.transaction.try_borrow_mut() else {
-        return 0;
-    };
-    scale.reserve(&mut transaction, texture).into()
+    scale.reserve(texture).into()
 }
 
 #[unsafe(no_mangle)]

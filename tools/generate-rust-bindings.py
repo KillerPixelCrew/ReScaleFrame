@@ -446,7 +446,7 @@ generate("sdk/game/src/d3d11_host_abi.rs", "runtime/orchestrator/include/rescale
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use crate::rsf_game_render_pass;"])
 generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/src/auxiliary_sr_platform.h",
-         "rsf_aux_platform",
+         "rsf_(aux_platform|depth_scale_(setup|frame))",
          "RSF_(AUX_.*|DEPTH_SCALE_(ABI_VERSION|OK))",
          ["-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include", "-Isdk/game/include"],

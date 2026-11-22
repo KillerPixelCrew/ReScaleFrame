@@ -209,7 +209,7 @@ impl Default for rsf_aux_colour_pipeline {
     }
 }
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct rsf_aux_platform {
     pub immediate_device: ::core::option::Option<
         unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
@@ -276,34 +276,11 @@ pub struct rsf_aux_platform {
             arg2: *const rsf_aux_draw_constants,
         ),
     >,
-    pub depth_create: ::core::option::Option<
-        unsafe extern "C" fn(
-            context: *mut ::core::ffi::c_void,
-            arg1: *const rsf_depth_scale_setup,
-            arg2: *mut *mut rsf_depth_scale,
-        ) -> i32,
-    >,
-    pub depth_reserve: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut rsf_depth_scale, texture: *mut ::core::ffi::c_void) -> i32,
-    >,
-    pub depth_prepare: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut rsf_depth_scale, arg2: *const rsf_depth_scale_frame) -> i32,
-    >,
-    pub depth_redraw: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut rsf_depth_scale, arg2: *const rsf_depth_scale_frame) -> i32,
-    >,
-    pub depth_commit:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_depth_scale) -> i32>,
-    pub depth_restore:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_depth_scale) -> i32>,
-    pub depth_discard:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_depth_scale) -> i32>,
-    pub depth_destroy:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_depth_scale) -> i32>,
+    pub depth: *const ::core::ffi::c_void,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_aux_platform"][::core::mem::size_of::<rsf_aux_platform>() - 168usize];
+    ["Size of rsf_aux_platform"][::core::mem::size_of::<rsf_aux_platform>() - 112usize];
     ["Alignment of rsf_aux_platform"][::core::mem::align_of::<rsf_aux_platform>() - 8usize];
     ["Offset of field: rsf_aux_platform::immediate_device"]
         [::core::mem::offset_of!(rsf_aux_platform, immediate_device) - 0usize];
@@ -331,20 +308,15 @@ const _: () = {
         [::core::mem::offset_of!(rsf_aux_platform, copy) - 88usize];
     ["Offset of field: rsf_aux_platform::draw"]
         [::core::mem::offset_of!(rsf_aux_platform, draw) - 96usize];
-    ["Offset of field: rsf_aux_platform::depth_create"]
-        [::core::mem::offset_of!(rsf_aux_platform, depth_create) - 104usize];
-    ["Offset of field: rsf_aux_platform::depth_reserve"]
-        [::core::mem::offset_of!(rsf_aux_platform, depth_reserve) - 112usize];
-    ["Offset of field: rsf_aux_platform::depth_prepare"]
-        [::core::mem::offset_of!(rsf_aux_platform, depth_prepare) - 120usize];
-    ["Offset of field: rsf_aux_platform::depth_redraw"]
-        [::core::mem::offset_of!(rsf_aux_platform, depth_redraw) - 128usize];
-    ["Offset of field: rsf_aux_platform::depth_commit"]
-        [::core::mem::offset_of!(rsf_aux_platform, depth_commit) - 136usize];
-    ["Offset of field: rsf_aux_platform::depth_restore"]
-        [::core::mem::offset_of!(rsf_aux_platform, depth_restore) - 144usize];
-    ["Offset of field: rsf_aux_platform::depth_discard"]
-        [::core::mem::offset_of!(rsf_aux_platform, depth_discard) - 152usize];
-    ["Offset of field: rsf_aux_platform::depth_destroy"]
-        [::core::mem::offset_of!(rsf_aux_platform, depth_destroy) - 160usize];
+    ["Offset of field: rsf_aux_platform::depth"]
+        [::core::mem::offset_of!(rsf_aux_platform, depth) - 104usize];
 };
+impl Default for rsf_aux_platform {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}

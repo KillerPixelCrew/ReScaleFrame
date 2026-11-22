@@ -2,7 +2,7 @@
 use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
-use crate::depth_scale::{jitter_valid, rect_valid};
+use crate::depth_scale::{DepthScale, Platform as DepthPlatform, jitter_valid, rect_valid};
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::c_void;
@@ -270,7 +270,7 @@ pub(crate) struct AuxiliarySr {
     colours: [Option<ColourProducts>; MAX_SURFACES],
     pipeline: Option<Pipeline>,
     owner: Option<Owner>,
-    depth: *mut rsf_depth_scale,
+    depth: Option<Box<DepthScale>>,
     platform: rsf_aux_platform,
 }
 
@@ -280,7 +280,7 @@ impl AuxiliarySr {
             platform,
             owner: None,
             pipeline: None,
-            depth: ptr::null_mut(),
+            depth: None,
             colours: [const { None }; MAX_SURFACES],
             backups: [None, None],
             frame: None,
@@ -553,14 +553,11 @@ impl AuxiliarySr {
                     log,
                     log_user: user,
                 };
-                if self.depth.is_null()
-                    && unsafe {
-                        self.platform.depth_create.unwrap()(context, &setup, &mut self.depth)
-                    } != RSF_DEPTH_SCALE_OK as i32
-                {
-                    return None;
+                if self.depth.is_none() {
+                    let platform = unsafe { self.platform.depth.cast::<DepthPlatform>().as_ref() }?;
+                    self.depth = Some(unsafe { DepthScale::new(context, &setup, platform) }.ok()?);
                 }
-                if unsafe { self.platform.depth_reserve.unwrap()(self.depth, plan.original) } == 0 {
+                if !self.depth.as_ref()?.reserve(plan.original) {
                     return None;
                 }
             } else {
@@ -685,14 +682,10 @@ impl AuxiliarySr {
                     output_rect: mapping.output,
                     jitter_pixels: mapping.jitter,
                 };
-                let render_depth = if capture {
-                    self.platform.depth_prepare
-                } else {
-                    self.platform.depth_redraw
+                let Some(depth) = &self.depth else {
+                    return false;
                 };
-                if unsafe { render_depth.unwrap()(self.depth, &depth_frame) }
-                    != RSF_DEPTH_SCALE_OK as i32
-                {
+                if depth.render(&depth_frame, capture) != RSF_DEPTH_SCALE_OK as i32 {
                     return false;
                 }
                 frame.depth_restore = Some(plan.restore_contents());
@@ -770,8 +763,10 @@ impl AuxiliarySr {
         };
         frame.phase = Phase::Publishing;
         if frame.depth_restore.is_some()
-            && unsafe { self.platform.depth_commit.unwrap()(self.depth) }
-                != RSF_DEPTH_SCALE_OK as i32
+            && !self
+                .depth
+                .as_ref()
+                .is_some_and(|depth| depth.commit() == RSF_DEPTH_SCALE_OK as i32)
         {
             return false;
         }
@@ -808,12 +803,15 @@ impl AuxiliarySr {
         };
         let accepted = frame.phase == Phase::Accepted;
         if let Some(restore) = frame.depth_restore {
-            let depth_release = if accepted && !restore {
-                self.platform.depth_discard
-            } else {
-                self.platform.depth_restore
+            let Some(depth) = &self.depth else {
+                return false;
             };
-            if unsafe { depth_release.unwrap()(self.depth) } != RSF_DEPTH_SCALE_OK as i32 {
+            let status = if accepted && !restore {
+                depth.discard()
+            } else {
+                depth.restore()
+            };
+            if status != RSF_DEPTH_SCALE_OK as i32 {
                 return false;
             }
             frame.depth_restore = None;
@@ -924,8 +922,8 @@ impl crate::d3d11_host_reduced::Products for AuxiliarySr {
 impl Drop for AuxiliarySr {
     fn drop(&mut self) {
         let _ = self.restore();
-        if !self.depth.is_null() {
-            unsafe { self.platform.depth_destroy.unwrap()(self.depth) };
+        if let Some(depth) = self.depth.take() {
+            depth.retire();
         }
     }
 }
