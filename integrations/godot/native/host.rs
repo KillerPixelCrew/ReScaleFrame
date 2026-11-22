@@ -37,7 +37,7 @@ use windows_sys::Win32::{
 type Handle = *mut c_void;
 
 unsafe extern "C" {
-    // Runtime capture owner, as declared in runtime/backends/common/frame_capture12.h.
+    // Runtime capture owner, as exported by runtime/orchestrator/src/frame_capture12.rs.
     fn rsf_core_capture12_create(environment: u32) -> Handle;
     fn rsf_core_capture12_destroy(owner: Handle);
     fn rsf_core_capture12_wants(owner: Handle, frame: u64) -> i32;

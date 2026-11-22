@@ -467,7 +467,6 @@ unsafe fn rsf_core_fsr12_native_supported(
 
 static OPS: Ops = Ops {
     check: &admission::NATIVE_CHECKS,
-    capture: crate::frame_capture12::native_platform(),
     sdk: &SDK,
     resolve,
     close,

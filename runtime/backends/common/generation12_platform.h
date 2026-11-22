@@ -19,7 +19,6 @@ typedef struct rsf_gen12_extent {
     uint32_t width, height, format;
 } rsf_gen12_extent;
 
-struct rsf_core_capture12_platform;
 struct rsf_ffx_version;
 /* API versions the native leaf was compiled against, for Rust's startup records. */
 typedef struct rsf_fsr12_sdk {
@@ -89,7 +88,6 @@ typedef struct rsf_fsr12_present {
 
 typedef struct rsf_fsr12_ops {
     const rsf_gen12_checks* check;
-    const struct rsf_core_capture12_platform* capture;
     const rsf_fsr12_sdk* sdk;
     rsf_backend_result (*resolve)(const rsf_generation_setup*, void* module, void* latency, void**);
     void (*close)(void*);

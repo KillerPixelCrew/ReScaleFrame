@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 pub(super) mod native;
+#[cfg(not(test))]
+use native::ops;
+#[cfg(test)]
+use tests::ops;
 
 type Handle = *mut c_void;
 
@@ -40,29 +44,7 @@ const FEATURE_FAILED: i32 = -9;
 
 use crate::sys::rsf_fg12_readback_layout as Layout;
 
-#[repr(C)]
-pub struct Platform {
-    /// Refuses all but a single-sample, single-slice 2D texture, then creates
-    /// its readback buffer in COPY_DEST. Returns the buffer with one reference.
-    pub allocate: unsafe extern "C" fn(Handle, *mut Layout) -> Handle,
-    /// Records the source transitions and the footprint copy.
-    pub copy: unsafe extern "C" fn(Handle, Handle, u32, Handle, *const Layout),
-    pub map: unsafe extern "C" fn(Handle, u64) -> *const u8,
-    pub unmap: unsafe extern "C" fn(Handle),
-    /// A new fence signalled to 1 on the queue, with one reference.
-    pub signal: unsafe extern "C" fn(Handle) -> Handle,
-    pub completed: unsafe extern "C" fn(Handle) -> u64,
-    /// Signals the queue and waits at most 15 seconds. Returns the fence
-    /// value on a completed wait, or zero if the wait was refused.
-    pub drain: unsafe extern "C" fn(Handle) -> u64,
-    pub wants: unsafe extern "C" fn(*const Record) -> i32,
-    pub reserve: unsafe extern "C" fn(*const Record, *const c_char, *const c_char, u32, f32) -> u64,
-    pub failed: unsafe extern "C" fn(u64, *const c_char, i32),
-    pub pixels: unsafe extern "C" fn(u64, *const c_char, *const Pixels, u32, u32) -> i32,
-}
-
 const _: () = {
-    assert!(size_of::<Platform>() == 11 * size_of::<Handle>());
     assert!(size_of::<Layout>() == 32);
 };
 
@@ -106,7 +88,6 @@ struct State {
 }
 
 pub struct Owner {
-    ops: &'static Platform,
     state: Mutex<State>,
 }
 
@@ -119,9 +100,9 @@ fn from_environment() -> (Legacy, bool) {
 }
 
 impl Owner {
-    pub(super) fn from_environment(ops: &'static Platform) -> Self {
+    pub(super) fn from_environment() -> Self {
         let (legacy, reset) = from_environment();
-        Self::new(ops, legacy, reset)
+        Self::new(legacy, reset)
     }
 
     pub(super) fn enabled(&self) -> bool {
@@ -132,9 +113,8 @@ impl Owner {
         self.lock().legacy.wants(frame)
     }
 
-    fn new(ops: &'static Platform, legacy: Legacy, reset_sr: bool) -> Self {
+    fn new(legacy: Legacy, reset_sr: bool) -> Self {
         Self {
-            ops,
             state: Mutex::new(State {
                 legacy,
                 reset_sr,
@@ -151,7 +131,7 @@ impl Owner {
 
     fn fail(&self, value: &Readback, result: i32) {
         if value.ticket != 0 {
-            unsafe { (self.ops.failed)(value.ticket, value.name.as_ptr(), result) };
+            unsafe { ops::failed(value.ticket, value.name.as_ptr(), result) };
         }
     }
 
@@ -200,13 +180,13 @@ impl Owner {
         let mut state = self.lock();
         let _ = self.flush(&mut state, ALL_SLOTS, true);
         let legacy = state.legacy.wants(identity.frame_id);
-        let core = unsafe { (self.ops.wants)(identity) } != 0;
+        let core = unsafe { ops::wants(identity) } != 0;
         if (!legacy && !core) || list.is_null() || source.is_null() {
             return false;
         }
         let mut layout = Layout::default();
         let Some(buffer) =
-            (unsafe { ComRef::from_owned((self.ops.allocate)(source, &mut layout)) })
+            (unsafe { ComRef::from_owned(ops::allocate(source, &mut layout)) })
         else {
             return false;
         };
@@ -241,14 +221,14 @@ impl Owner {
                 scale
             };
             readback.ticket =
-                unsafe { (self.ops.reserve)(identity, name.as_ptr(), role.as_ptr(), view, scale) };
+                unsafe { ops::reserve(identity, name.as_ptr(), role.as_ptr(), view, scale) };
             readback.name = name;
         }
         if !legacy && readback.ticket == 0 {
             return false;
         }
         unsafe {
-            (self.ops.copy)(
+            ops::copy(
                 list,
                 source,
                 resource_state,
@@ -287,7 +267,7 @@ impl Owner {
                     index += 1;
                     continue;
                 };
-                let completed = unsafe { (self.ops.completed)(fence.as_ptr()) };
+                let completed = unsafe { ops::completed(fence.as_ptr()) };
                 match FenceState::check(completed, SUBMITTED) {
                     FenceState::DeviceRemoved => {
                         self.fail(value, MAP_FAILED);
@@ -302,7 +282,7 @@ impl Owner {
                     FenceState::Complete => {}
                 }
             }
-            let data = unsafe { (self.ops.map)(value.buffer.as_ptr(), value.layout.bytes) };
+            let data = unsafe { ops::map(value.buffer.as_ptr(), value.layout.bytes) };
             if data.is_null() {
                 // Retained with its ticket; a later flush retries.
                 okay = false;
@@ -329,7 +309,7 @@ impl Owner {
                 data: data.wrapping_add(layout.offset as usize).cast(),
             };
             okay &= unsafe {
-                (self.ops.pixels)(
+                ops::pixels(
                     value.ticket,
                     value.name.as_ptr(),
                     &pixels,
@@ -339,7 +319,7 @@ impl Owner {
             } != 0;
         }
         if !value.legacy {
-            unsafe { (self.ops.unmap)(value.buffer.as_ptr()) };
+            unsafe { ops::unmap(value.buffer.as_ptr()) };
             return okay;
         }
         let directory = legacy.directory.as_deref().unwrap_or(Path::new(""));
@@ -352,7 +332,7 @@ impl Owner {
             bytes,
             &legacy_json(value),
         );
-        unsafe { (self.ops.unmap)(value.buffer.as_ptr()) };
+        unsafe { ops::unmap(value.buffer.as_ptr()) };
         okay && written.is_ok()
     }
 
@@ -362,7 +342,7 @@ impl Owner {
         if queue.is_null() || !state.pending.iter().any(matching) {
             return true;
         }
-        let Some(fence) = (unsafe { ComRef::from_owned((self.ops.signal)(queue)) }) else {
+        let Some(fence) = (unsafe { ComRef::from_owned(ops::signal(queue)) }) else {
             return false;
         };
         for value in state.pending.iter_mut().filter(|value| matching(value)) {
@@ -420,7 +400,7 @@ impl Owner {
         if !wait_submissions() {
             return None;
         }
-        let completed = unsafe { (self.ops.drain)(queue) };
+        let completed = unsafe { ops::drain(queue) };
         if FenceState::check(completed, SUBMITTED) != FenceState::Complete {
             return None;
         }
@@ -521,21 +501,13 @@ unsafe fn text<'a>(value: *const c_char) -> Option<&'a CStr> {
     (!value.is_null()).then(|| unsafe { CStr::from_ptr(value) })
 }
 
-pub(super) const fn native_platform() -> &'static Platform {
-    &native::PLATFORM
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_capture12_native_platform() -> *const Platform {
-    native_platform()
-}
 
 #[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_capture12_create(environment: u32) -> *mut Owner {
     let owner = if environment != 0 {
-        Owner::from_environment(&native::PLATFORM)
+        Owner::from_environment()
     } else {
-        Owner::new(&native::PLATFORM, Legacy::default(), false)
+        Owner::new(Legacy::default(), false)
     };
     crate::allocate_handle(owner)
 }
@@ -699,7 +671,7 @@ unsafe extern "C" fn rsf_input_dump12_record(
     if identity.abi_version != RSF_GAME_FRAME_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    if unsafe { (owner.ops.wants)(identity) } == 0 {
+    if unsafe { ops::wants(identity) } == 0 {
         return OK;
     }
     let role = unsafe { CStr::from_ptr(role) };

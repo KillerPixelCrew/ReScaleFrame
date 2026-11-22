@@ -66,7 +66,7 @@ fn refs(pointer: usize) -> u32 {
     })
 }
 
-unsafe extern "C" fn allocate(_: Handle, out: *mut Layout) -> Handle {
+pub(super) unsafe extern "C" fn allocate(_: Handle, out: *mut Layout) -> Handle {
     if world(|w| w.refuse_source) {
         return std::ptr::null_mut();
     }
@@ -79,7 +79,7 @@ unsafe extern "C" fn allocate(_: Handle, out: *mut Layout) -> Handle {
     buffer as Handle
 }
 
-unsafe extern "C" fn copy(
+pub(super) unsafe extern "C" fn copy(
     list: Handle,
     source: Handle,
     state: u32,
@@ -92,7 +92,7 @@ unsafe extern "C" fn copy(
     });
 }
 
-unsafe extern "C" fn map(buffer: Handle, bytes: u64) -> *const u8 {
+pub(super) unsafe extern "C" fn map(buffer: Handle, bytes: u64) -> *const u8 {
     world(|w| {
         if w.refuse_map {
             return std::ptr::null();
@@ -104,11 +104,11 @@ unsafe extern "C" fn map(buffer: Handle, bytes: u64) -> *const u8 {
     })
 }
 
-unsafe extern "C" fn unmap(_: Handle) {
+pub(super) unsafe extern "C" fn unmap(_: Handle) {
     world(|w| w.unmapped += 1);
 }
 
-unsafe extern "C" fn signal(queue: Handle) -> Handle {
+pub(super) unsafe extern "C" fn signal(queue: Handle) -> Handle {
     assert_eq!(queue as usize, QUEUE);
     if world(|w| w.refuse_signal) {
         return std::ptr::null_mut();
@@ -118,11 +118,11 @@ unsafe extern "C" fn signal(queue: Handle) -> Handle {
     fence as Handle
 }
 
-unsafe extern "C" fn completed(fence: Handle) -> u64 {
+pub(super) unsafe extern "C" fn completed(fence: Handle) -> u64 {
     world(|w| w.fences[&(fence as usize)])
 }
 
-unsafe extern "C" fn drain(queue: Handle) -> u64 {
+pub(super) unsafe extern "C" fn drain(queue: Handle) -> u64 {
     assert_eq!(queue as usize, QUEUE);
     world(|w| {
         w.drains += 1;
@@ -130,11 +130,11 @@ unsafe extern "C" fn drain(queue: Handle) -> u64 {
     })
 }
 
-unsafe extern "C" fn wants(_: *const Record) -> i32 {
+pub(super) unsafe extern "C" fn wants(_: *const Record) -> i32 {
     world(|w| i32::from(w.core))
 }
 
-unsafe extern "C" fn reserve(
+pub(super) unsafe extern "C" fn reserve(
     record: *const Record,
     name: *const c_char,
     description: *const c_char,
@@ -144,11 +144,11 @@ unsafe extern "C" fn reserve(
     world(|w| unsafe { w.sink.reserve(record, name, description, view, scale) })
 }
 
-unsafe extern "C" fn failed(ticket: u64, name: *const c_char, result: i32) {
+pub(super) unsafe extern "C" fn failed(ticket: u64, name: *const c_char, result: i32) {
     world(|w| unsafe { w.sink.failed(ticket, name, result) });
 }
 
-unsafe extern "C" fn pixels(
+pub(super) unsafe extern "C" fn pixels(
     ticket: u64,
     name: *const c_char,
     pixels: *const Pixels,
@@ -158,22 +158,13 @@ unsafe extern "C" fn pixels(
     world(|w| unsafe { w.sink.pixels(ticket, name, pixels, api, native) })
 }
 
-static OPS: Platform = Platform {
-    allocate,
-    copy,
-    map,
-    unmap,
-    signal,
-    completed,
-    drain,
-    wants,
-    reserve,
-    failed,
-    pixels,
-};
+// The fakes frame_capture12.rs calls in place of native::ops.
+pub(super) mod ops {
+    pub(in crate::frame_capture12) use super::{allocate, completed, copy, drain, failed, map, pixels, reserve, signal, unmap, wants};
+}
 
 fn owner() -> Owner {
-    Owner::new(&OPS, Legacy::default(), false)
+    Owner::new(Legacy::default(), false)
 }
 
 fn frame(id: u64) -> Record {
@@ -523,7 +514,6 @@ fn configuration_requires_an_absolute_bounded_idle_window() {
 #[test]
 fn reset_request_follows_the_legacy_window() {
     let owner = Owner::new(
-        &OPS,
         Legacy {
             directory: Some(directory("reset")),
             first: 9,

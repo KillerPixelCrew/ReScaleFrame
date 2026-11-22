@@ -7,7 +7,7 @@ pub(crate) use native::rsf_generation_fsr4_supported;
 use super::*;
 use crate::com_ref::ComRef;
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
-use crate::frame_capture12::{Owner as Capture, Platform as CapturePlatform};
+use crate::frame_capture12::Owner as Capture;
 use crate::sdk_module::FFX_CONTEXT_EXPORTS;
 use crate::sys::{
     RSF_FG_FIXED, RSF_FG_STAT_ACTIVITY, RSF_FG_STAT_PRESENT_CALLBACKS, RSF_FG_STAT_TOTAL_PRESENTED,
@@ -117,7 +117,6 @@ type Entry = Option<unsafe extern "system" fn() -> isize>;
 #[repr(C)]
 struct Ops {
     check: &'static Checks,
-    capture: &'static CapturePlatform,
     sdk: &'static SdkApi,
     resolve: Resolve,
     close: unsafe extern "C" fn(Raw),
@@ -145,7 +144,7 @@ const _: () = {
     assert!(size_of::<Configuration>() == 64);
     assert!(size_of::<Generated>() == 104 && size_of::<PresentFacts>() == 40);
     assert!(size_of::<Entry>() == size_of::<Raw>());
-    assert!(size_of::<Ops>() == 21 * size_of::<Raw>());
+    assert!(size_of::<Ops>() == 20 * size_of::<Raw>());
 };
 
 // rsf_fsr12_entry_index order. The shared names are create, destroy, query, dispatch.
@@ -810,7 +809,7 @@ unsafe extern "C" fn rsf_core_fsr12_create(
         extent: Cell::new(Extent::default()),
         sequence: Cell::new(0),
         counters: Cell::new(Counters::default()),
-        capture: Capture::from_environment(ops.capture),
+        capture: Capture::from_environment(),
         capture_ids: Mutex::new(Recent::new()),
         generated: AtomicU64::new(0),
         presented: AtomicU64::new(0),

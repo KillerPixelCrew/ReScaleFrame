@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: MIT
-use super::{Handle, Layout, Platform, SUBMITTED};
-use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
-use crate::input_dump::abi::{
-    rsf_input_dump_failed, rsf_input_dump_pixels, rsf_input_dump_reserve, rsf_input_dump_wants,
-};
+use super::{Handle, Layout};
 use std::mem::ManuallyDrop;
 use std::ptr;
-use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
-use windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED;
 use windows::core::Interface;
-use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateEventW};
+// The fence leaves only the capture owner's production `ops` reach.
+#[cfg(not(test))]
+use {
+    super::SUBMITTED,
+    crate::d3d12_fence::rsf_core_d3d12_wait_fence,
+    windows::Win32::Foundation::HANDLE,
+    windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED,
+    windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateEventW},
+};
 
 mod xess;
 
@@ -98,7 +100,8 @@ unsafe fn allocate_raw(source: Handle, out: *mut Layout, single_slice: bool) -> 
     buffer.into_raw()
 }
 
-unsafe extern "C" fn allocate_capture(source: Handle, out: *mut Layout) -> Handle {
+#[cfg(not(test))]
+pub(super) unsafe extern "C" fn allocate_capture(source: Handle, out: *mut Layout) -> Handle {
     unsafe { allocate_raw(source, out, true) }
 }
 
@@ -212,13 +215,15 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_unmap(buffer: Handle) {
     }
 }
 
+#[cfg(not(test))]
 fn new_fence(queue: &ID3D12CommandQueue) -> Option<ID3D12Fence> {
     let mut device: Option<ID3D12Device> = None;
     unsafe { queue.GetDevice(&mut device) }.ok()?;
     unsafe { device?.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.ok()
 }
 
-unsafe extern "C" fn signal(queue: Handle) -> Handle {
+#[cfg(not(test))]
+pub(super) unsafe extern "C" fn signal(queue: Handle) -> Handle {
     let fence = (unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) }).and_then(|queue| {
         let fence = new_fence(queue)?;
         unsafe { queue.Signal(&fence, SUBMITTED) }.ok()?;
@@ -227,18 +232,21 @@ unsafe extern "C" fn signal(queue: Handle) -> Handle {
     fence.map_or(ptr::null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn completed(fence: Handle) -> u64 {
+#[cfg(not(test))]
+pub(super) unsafe extern "C" fn completed(fence: Handle) -> u64 {
     (unsafe { ID3D12Fence::from_raw_borrowed(&fence) })
         .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
 }
 
+#[cfg(not(test))]
 unsafe extern "C" fn arm(fence: Handle, value: u64, event: Handle) -> i32 {
     let fence = unsafe { ID3D12Fence::from_raw_borrowed(&fence) }.unwrap();
     unsafe { fence.SetEventOnCompletion(value, HANDLE(event)) }
         .map_or_else(|error| error.code().0, |()| 0)
 }
 
-unsafe extern "C" fn drain(queue: Handle) -> u64 {
+#[cfg(not(test))]
+pub(super) unsafe extern "C" fn drain(queue: Handle) -> u64 {
     let Some(queue) = (unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) }) else {
         return 0;
     };
@@ -265,16 +273,19 @@ unsafe extern "C" fn drain(queue: Handle) -> u64 {
     }
 }
 
-pub(super) static PLATFORM: Platform = Platform {
-    allocate: allocate_capture,
-    copy: rsf_fg12_platform_readback_copy,
-    map: rsf_fg12_platform_map,
-    unmap: rsf_fg12_platform_unmap,
-    signal,
-    completed,
-    drain,
-    wants: rsf_input_dump_wants,
-    reserve: rsf_input_dump_reserve,
-    failed: rsf_input_dump_failed,
-    pixels: rsf_input_dump_pixels,
-};
+// The leaves frame_capture12.rs calls as `ops::*`; its tests fake the same names.
+// `allocate` refuses all but a single-sample, single-slice 2D texture and returns a readback
+// buffer in COPY_DEST with one reference; `signal` returns a new fence signalled to 1 on the
+// queue; `drain` signals the queue, waits at most 15 seconds and returns the fence value on a
+// completed wait, zero on a refused one.
+#[cfg(not(test))]
+pub(super) mod ops {
+    pub(in crate::frame_capture12) use super::{
+        allocate_capture as allocate, completed, drain, rsf_fg12_platform_map as map,
+        rsf_fg12_platform_readback_copy as copy, rsf_fg12_platform_unmap as unmap, signal,
+    };
+    pub(in crate::frame_capture12) use crate::input_dump::abi::{
+        rsf_input_dump_failed as failed, rsf_input_dump_pixels as pixels,
+        rsf_input_dump_reserve as reserve, rsf_input_dump_wants as wants,
+    };
+}
