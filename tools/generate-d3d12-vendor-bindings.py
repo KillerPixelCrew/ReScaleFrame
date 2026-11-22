@@ -5,10 +5,11 @@ import subprocess
 from pathlib import Path
 
 
-def generate(bindgen, header, pattern, output, aliases, clang_args, constants='NOTHING'):
+def generate(bindgen, header, pattern, output, aliases, clang_args, constants='NOTHING', *, recursive=False):
     subprocess.run([
         bindgen, str(header), "--output", str(output), "--allowlist-type", pattern,
-        "--allowlist-var", constants, "--no-recursive-allowlist", "--no-prepend-enum-name", "--with-derive-default",
+        "--allowlist-var", constants, *([] if recursive else ["--no-recursive-allowlist"]),
+        "--no-prepend-enum-name", "--with-derive-default",
         "--no-derive-debug", "--no-doc-comments", "--use-core",
         "--rust-edition", "2024", "--rust-target", "1.85",
         "--raw-line", "#![allow(dead_code, non_camel_case_types, non_snake_case)]",
@@ -25,10 +26,20 @@ def main():
     parser.add_argument("--xess", type=Path, default=root / "vendor/xess/inc")
     parser.add_argument("--fidelityfx", type=Path, default=root / "vendor/fidelityfx/Kits/FidelityFX")
     parser.add_argument("--vulkan", type=Path, help="Vulkan SDK Include directory for XeSS Vulkan records")
+    parser.add_argument("--nvapi", type=Path, help="Regenerate only the NVAPI records from this SDK directory")
     args = parser.parse_args()
     bindgen = os.environ.get("BINDGEN", "bindgen")
     if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
         raise SystemExit("Install bindgen-cli 0.72.1 to regenerate the vendor ABI records")
+
+    if args.nvapi:
+        generate(bindgen, args.nvapi / "nvapi.h",
+                 r"NV_(GET_SLEEP_STATUS|SET_SLEEP_MODE|LATENCY_MARKER|SET_REFLEX_SYNC|ASYNC_FRAME_MARKER)_PARAMS",
+                 root / "runtime/orchestrator/src/reflex_nvapi_abi.rs",
+                 ["#![allow(non_upper_case_globals, clippy::useless_transmute)]"],
+                 ["-include", "sal.h"],
+                 recursive=True)
+        return
 
     aliases = [f"type ID3D12{name} = ::core::ffi::c_void;"
                for name in ("Resource", "DescriptorHeap", "Heap", "PipelineLibrary")]

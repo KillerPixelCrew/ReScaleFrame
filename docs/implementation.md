@@ -7862,3 +7862,12 @@ options records retain the wire formats. See the
 [V06 follow-up](research/rust-vulkan-xess-fg-v06.md#sdk-record-and-fixture-follow-up-from-821642ae)
 for the source comparison, fixture coverage and outstanding O02 settings.
 Build, fixture execution and device checks remain pending.
+### D3D12 Streamline generation follow-up (D06)
+
+Rust packs the D3D12 SDK inputs, formats Reflex reports, parses NVAPI records
+and owns wrapper/provider discovery. The linked Rust latency fixture retains
+the real D3D12 Present and marker contract. The
+[D06 source record](research/rust-d3d12-streamline-generation-port.md) lists
+the typed call leaves and compatibility bundle that remain native. Formatting,
+regenerated bindings and locked offline metadata were checked. Device and
+runtime verification remain pending.

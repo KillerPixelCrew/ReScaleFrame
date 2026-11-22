@@ -848,3 +848,15 @@ generate("integrations/godot/native/host_abi.rs", "integrations/godot/native/hos
           "input_dump_(cancel|request)|slvk_without_dlssg|latencyvk_(queue_present|wsi_call))",
           "--raw-line", "use crate::vulkan::creation::abi::rsf_vk_function;",
           "--raw-line", "use rsf_game_sys::{rsf_game_render_pass, sharpening_abi::rsf_sharpening_options};"])
+
+generate("tests/generation/src/latency_abi.rs",
+         "tests/generation/latency_abi.h",
+         "rsf_streamline_latency_status",
+         "RSF_SL_PROFILE_(REFLEX|PCL)|LATENCY_.*",
+         ["-Iruntime/backends/dlss/include", "-Iruntime/contract/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--with-derive-default", "--no-prepend-enum-name",
+          "--raw-line", "use crate::session_abi::{rsf_pacing_owner, rsf_reflex_mode};"])
+
+generate("runtime/orchestrator/src/streamline_generation_records_abi.rs",
+         "runtime/backends/dlss/src/streamline_generation_records.h",
+         "rsf_slhost_(tag|reflex_sample)", "NOTHING", [])

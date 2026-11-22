@@ -19,7 +19,7 @@ entry points and the public Streamline host ABI 2.
 | Keep one flag for a successfully prepared DLSS-G history. | `streamline_host/generation.rs` uses the shared optional last interpolated source for reset and activity decisions. The successfully consumed source watermark remains separate. |
 | Borrow the boxed host for non-owning FFI tests. | `streamline_host/tests.rs` passes mutable borrows in the ring retirement, PCL profile and generation reload tests. |
 
-## Native inventory
+## Native inventory at the initial port
 
 The paths below are relative to `runtime/backends/dlss/`.
 
@@ -30,12 +30,23 @@ The paths below are relative to `runtime/backends/dlss/`.
 | `src/reflex_audit.cpp`, `src/reflex_audit.h`, `src/streamline_diagnostics.h` | Rust borrows the NVAPI query export from the already loaded driver. Audit installation state, listener lifetime and log filtering are already Rust-owned. The native leaves retain the typed NVAPI detours, MinHook calls, module pinning and exception guards around caller log callbacks. |
 | `third_party/mfg_unlocker/dlssg_provider_policy.cpp`, `third_party/mfg_unlocker/dlssg_provider_policy.h`, `third_party/mfg_unlocker/midpoint_fix.cpp`, `third_party/mfg_unlocker/midpoint_fix.h`, `third_party/mfg_unlocker/ngx_mfg_gate.h`, `third_party/mfg_unlocker/protected_pointer.h`, `third_party/mfg_unlocker/universal_wrapper_profile.h` | The pinned MIT compatibility bundle and its exact verification gates are retained as native dependencies. See the [bundle provenance](../../runtime/backends/dlss/third_party/mfg_unlocker/README.md). |
 
-`tests/latency_host.cpp` remains the native public-ABI smoke fixture for actual
-device, window, submission and swap-chain Present. Its marker assertions cover
-both controller routes while retaining the expected marker total. The portable
-failure and interleaving cases are in the Rust host and generation fixtures.
+## Follow-up from `821642ae`
 
-Pinned Rust 1.94.1 formatting, locked offline Cargo metadata and source checks
-were used. Public declarations are unchanged and the new private callback tables
-have paired layout assertions. Builds, lint, synthetic tests and device/game
-verification remain user-owned and pending.
+| Paths | Source evidence |
+| --- | --- |
+| `dlss_generation.cpp`, `streamline_generation_records.h`, `streamline_generation_records.rs` | Rust assembles the DLSS-G, Reflex and PCL options, common FG camera fields and resource tag plan. The typed SDK leaves use the checked Streamline 2.14.1 value records also used by Vulkan. The camera keeps the SDK inverse routine, finite check and shared SR constants gate. The tag leaves still lend the resources through Present, with the original tag order and extents. Rust chooses the latest Reflex report and formats both summaries and the 64-row ring. |
+| `reflex_audit.cpp`, `reflex_audit.rs`, `reflex_nvapi_abi.rs` | Bindgen 0.72.1 produced the five version-1 NVAPI records from the local NVIDIA MIT header `nvapi.h` dated 2026-09-02, SHA-256 `4ee1bff7568ceec72124b8b3e43bf65ccb69dbb878b08c634b128f7edcd28f3b`. Rust performs the borrowed sleep-status query, checks each detour record version, deduplicates and emits reports. The native detours still get the actual caller PC, call their typed original once and return its result. MinHook operations, pinning and the native log exception guard stay on the typed boundary. The SDK declaration sizes and key offsets have native assertions. Binding generation uses the header as C with SAL declarations, so unrelated C++ SDK declarations are excluded. |
+| `mfg_unlock.cpp`, `mfg_state.rs` | Rust owns the signature-gated wrapper load, bounded executable-section enumeration and unique pinned-profile match. The scan bounds come from the retained module and PE image size. A failed section read refuses the scan. Rust enumerates and retains exactly one matching NGX implementation through the existing bundle predicate. The typed compatibility leaves retain the expected-byte publication, page protection restore, SDK provider classification and bundle patch operations. The existing serialized startup/reload and shutdown order continues to govern the calls. |
+| `tests/generation/src/latency.rs`, `tests/generation/latency_abi.h`, `tests/CMakeLists.txt` | The Rust device fixture replaces `tests/latency_host.cpp` and links the same Runtime DLL entry points. It retains the 256x256 hidden chain, Space sample, real command submission and Present, two input receipt routes, 12-frame sleep counts, 96 markers and source reset refusal while a token is live. CTest keeps the same target, timeout, and skip code. |
+
+The public `streamline_host.h` ABI 2 stays in C and the remaining
+`dlss_generation.cpp` leaves own SDK startup, COM identity and validation,
+typed SDK calls, output marshaling and public export glue.
+`mfg_unlock.h` retains the C++ lease used by the SDK host and
+`streamline_diagnostics.h` retains the exception boundary shared with D05.
+The complete compatibility bundle listed above still uses its pinned native
+implementation. The D04 host and D05 provider ownership paths were preserved.
+
+Verification used pinned Rust 1.94.1 formatting, binding regeneration, locked
+offline Cargo metadata, source inspection and a whitespace check. Runtime
+behavior and device acceptance remain unverified on this change.

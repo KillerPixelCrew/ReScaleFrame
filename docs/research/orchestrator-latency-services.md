@@ -32,7 +32,7 @@ Configuration/status are graphics-owner-thread operations; marker and begin use 
 
 ## Device experiment
 
-`tests/latency_host.cpp` creates a hidden 256x256 plain D3D12 chain, samples Space, updates a small
+`tests/generation/src/latency.rs` creates a hidden 256x256 plain D3D12 chain, samples Space, updates a small
 simulation value, renders a changing clear color, submits, presents and drains its queue for
 12 source frames. It marks the actual boundaries of that fixture. Logical IDs are
 `4294967297..4294967308`, deliberately above the SDK's 32-bit range. Reflex changes Off -> On -> Boost

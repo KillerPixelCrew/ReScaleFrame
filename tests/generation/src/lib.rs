@@ -7,6 +7,8 @@ mod choice;
 mod device;
 mod dll;
 mod dll_abi;
+mod latency;
+mod latency_abi;
 mod leases;
 mod policy;
 mod provider;

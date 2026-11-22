@@ -81,6 +81,10 @@ pub(super) struct Window {
 
 impl Window {
     pub(super) fn new(class: PCWSTR, title: PCWSTR) -> Result<Self> {
+        Self::sized(class, title, WIDTH as i32, HEIGHT as i32)
+    }
+
+    pub(super) fn sized(class: PCWSTR, title: PCWSTR, width: i32, height: i32) -> Result<Self> {
         let instance = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null())? }.0);
         let wc = WNDCLASSW {
             lpfnWndProc: Some(DefWindowProcW),
@@ -99,8 +103,8 @@ impl Window {
                 WS_OVERLAPPEDWINDOW,
                 0,
                 0,
-                WIDTH as i32,
-                HEIGHT as i32,
+                width,
+                height,
                 None,
                 None,
                 Some(instance),

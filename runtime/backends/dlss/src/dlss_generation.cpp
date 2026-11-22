@@ -4,6 +4,7 @@
 #include "streamline_frame.h"
 #include "reflex_audit.h"
 #include "streamline_load.h"
+#include "streamline_generation_records.h"
 #include "mfg_unlock.h"
 #include "../../common/fg_helpers.h"
 #include "../../common/d3d12_helpers.h"
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <new>
 #if RSF_HAVE_STREAMLINE
 #include <sl.h>
@@ -19,9 +21,8 @@
 #include <sl_reflex.h>
 #include <sl_pcl.h>
 #include <sl_matrix_helpers.h>
-#if RSF_HAVE_NVAPI_DIAGNOSTICS
-#include <nvapi.h>
-#endif
+#include "../../../vulkan/streamline/sdk_records_checks.h"
+#include "../../../vulkan/streamline/sdk_fg_options_checks.h"
 using Microsoft::WRL::ComPtr;
 
 // Plain data exchanged with the Rust owner in runtime/orchestrator/src/streamline_host.rs, which
@@ -116,7 +117,11 @@ static_assert(sizeof(rsf_streamline_host_setup) == 80 && offsetof(rsf_streamline
     offsetof(rsf_streamline_host_setup, engine_version_utf8) == 32 && offsetof(rsf_streamline_host_setup, log) == 56 &&
     offsetof(rsf_streamline_host_setup, profile) == 72 && RSF_STREAMLINE_HOST_ABI_VERSION == 2 &&
     RSF_SL_PROFILE_DLSS_FG == 0 && RSF_SL_PROFILE_PCL == 2);
-static_assert(sl::MAX_FRAMES_IN_FLIGHT == 6);
+static_assert(sl::MAX_FRAMES_IN_FLIGHT == 6 && sl::kReflexFrameReportCount == 64);
+static_assert(sizeof(rsf_slhost_reflex_sample) == 120);
+static_assert(sl::kBufferTypeBackbuffer == 53 && sizeof(rsf_slhost_tag) == 32);
+static_assert(RSF_REFLEX_ON == 1 && uint32_t(sl::ReflexMode::eOff) == 0 &&
+    uint32_t(sl::ReflexMode::eLowLatency) == 1 && uint32_t(sl::ReflexMode::eLowLatencyWithBoost) == 2);
 static_assert(sl::kFeatureDLSS == 0 && sl::kFeatureReflex == 3 && sl::kFeaturePCL == 4 && sl::kFeatureDLSS_G == 1000 &&
     uint64_t(sl::PreferenceFlags::eDisableDebugText) == (1u << 1) &&
     uint64_t(sl::PreferenceFlags::eUseManualHooking) == (1u << 2) &&
@@ -141,6 +146,15 @@ struct rsf_slhost_common_present {
 static_assert(sizeof(rsf_slhost_common_present) == 3 * sizeof(void*));
 
 extern "C" {
+void rsf_slhost_pack_options(uint32_t, uint32_t, uint32_t, float, rsf_slvk_sdk_fg_options*);
+void rsf_slhost_pack_reflex(uint32_t, uint32_t, rsf_slvk_sdk_reflex_options*);
+void rsf_slhost_pack_pcl(rsf_slvk_sdk_pcl_options*);
+void rsf_slhost_pack_fg_camera(const rsf_fg_frame*, uint32_t, rsf_slvk_sdk_constants*);
+uint32_t rsf_slhost_plan_tags(const rsf_fg_frame*, rsf_slhost_tag*);
+void rsf_slhost_reflex_summary(const rsf_slhost_reflex_sample*, const uint64_t*, uint32_t,
+    rsf_backend_log_fn, void*, RsfStreamlineEmitLog);
+void rsf_slhost_reflex_ring(const rsf_slhost_reflex_sample*, const char*, uint64_t,
+    rsf_backend_log_fn, void*, RsfStreamlineEmitLog);
 int32_t rsf_core_slhost_create(const rsf_streamline_host_setup*, void*, void*, rsf_streamline_host**,
     const rsf_slhost_platform*);
 int32_t rsf_core_slhost_destroy(rsf_streamline_host*, const rsf_slhost_platform*);
@@ -227,26 +241,7 @@ uint32_t resolved(const Native& host)
 
 void report_driver_sleep(Native& host)
 {
-#if RSF_HAVE_NVAPI_DIAGNOSTICS
-    // Query only the module Streamline already initialized. Never create a second Reflex owner.
-    const auto query = rsf_nvapi_query();
-    auto status = query ? reinterpret_cast<decltype(&NvAPI_D3D_GetSleepStatus)>(query(0xaef96ca1u)) : nullptr;
-    NV_GET_SLEEP_STATUS_PARAMS state{}; state.version = NV_GET_SLEEP_STATUS_PARAMS_VER;
-    const auto result = status ? status(host.native_device.Get(), &state) : NVAPI_NO_IMPLEMENTATION;
-    char text[320];
-    DWORD foreground_process = 0;
-    GetWindowThreadProcessId(GetForegroundWindow(), &foreground_process);
-    std::snprintf(text, sizeof(text),
-        "Reflex driver sleep status=%d low_latency=%u sleep_interval_us=%u app_called_sleep=%u vrr=%u cpl_vsync=%u fullscreen_iflip=%u fg_multiplier=%u dfg=%u dfg_target_us=%u foreground=%u",
-        int(result), unsigned(state.bLowLatencyMode), state.sleepIntervalUs, unsigned(state.bUseGameSleep),
-        unsigned(state.bFsVrr), unsigned(state.bCplVsyncOn), unsigned(state.bFullscreenIFlip),
-        unsigned(state.fgMultiplier), unsigned(state.bDfgControl), state.dfgFrameTimeTargetUs,
-        unsigned(foreground_process == GetCurrentProcessId()));
-    if (host.log) host.log(host.log_user, text);
-    rsf_reflex_audit_report();
-#else
-    (void)host;
-#endif
+    rsf_reflex_driver_sleep(host.native_device.Get(), host.log, host.log_user);
 }
 void message(sl::LogType type, const char* text)
 {
@@ -482,7 +477,10 @@ void prepare_mfg(void* native) noexcept
 
 void pcl_defaults(void* native) noexcept
 {
+    rsf_slvk_sdk_pcl_options packed{};
+    rsf_slhost_pack_pcl(&packed);
     sl::PCLOptions options{};
+    std::memcpy(static_cast<void*>(&options), &packed, sizeof(options));
     as_native(native).pcl_options(options);
 }
 
@@ -514,6 +512,18 @@ int32_t common(void* native, void* token, uint32_t viewport, const void* constan
         sl::ViewportHandle(viewport)) == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 
+void reflex_samples(const sl::ReflexState& state, rsf_slhost_reflex_sample* samples)
+{
+    for (int i = 0; i < sl::kReflexFrameReportCount; ++i) {
+        const auto& r = state.frameReport[i];
+        samples[i] = {r.frameID, r.simStartTime, r.simEndTime, r.renderSubmitStartTime,
+            r.renderSubmitEndTime, r.presentStartTime, r.presentEndTime, r.driverStartTime,
+            r.driverEndTime, r.osRenderQueueStartTime, r.osRenderQueueEndTime,
+            r.gpuRenderStartTime, r.gpuRenderEndTime, r.gpuActiveRenderTimeUs,
+            r.gpuFrameTimeUs, state.frameReport2[i].crossAdapterCopyTimeUs};
+    }
+}
+
 int32_t reflex_state(void* native, uint32_t report, const uint64_t* inputs, rsf_slhost_reflex* out) noexcept
 {
     auto& host = as_native(native);
@@ -522,19 +532,10 @@ int32_t reflex_state(void* native, uint32_t report, const uint64_t* inputs, rsf_
     out->low_latency_available = reflex.lowLatencyAvailable;
     out->latency_report_available = reflex.latencyReportAvailable;
     if (!report || !host.log) return RSF_BACKEND_OK;
-    const sl::ReflexReport* latest = &reflex.frameReport[0];
-    for (const auto& item : reflex.frameReport) if (item.frameID > latest->frameID) latest = &item;
-    const auto ms = [](uint64_t end, uint64_t start) { return end >= start && start ? double(end - start) / 1000.0 : -1.0; };
-    char text[440];
-    std::snprintf(text, sizeof(text),
-        "Reflex driver report available=%u frame=%llu sim_ms=%.2f render_ms=%.2f present_ms=%.2f gpu_ms=%.2f gpu_active_us=%u gpu_frame_us=%u inputs_keyboard=%llu mouse=%llu controller=%llu pcl_ping=%llu",
-        unsigned(reflex.latencyReportAvailable), static_cast<unsigned long long>(latest->frameID),
-        ms(latest->simEndTime, latest->simStartTime), ms(latest->renderSubmitEndTime, latest->renderSubmitStartTime),
-        ms(latest->presentEndTime, latest->presentStartTime), ms(latest->gpuRenderEndTime, latest->gpuRenderStartTime),
-        latest->gpuActiveRenderTimeUs, latest->gpuFrameTimeUs,
-        static_cast<unsigned long long>(inputs[0]), static_cast<unsigned long long>(inputs[1]),
-        static_cast<unsigned long long>(inputs[2]), static_cast<unsigned long long>(inputs[3]));
-    host.log(host.log_user, text);
+    rsf_slhost_reflex_sample samples[sl::kReflexFrameReportCount]{};
+    reflex_samples(reflex, samples);
+    rsf_slhost_reflex_summary(samples, inputs, reflex.latencyReportAvailable,
+        host.log, host.log_user, rsf::emit_streamline_log);
     report_driver_sleep(host);
     return RSF_BACKEND_OK;
 }
@@ -542,9 +543,10 @@ int32_t reflex_state(void* native, uint32_t report, const uint64_t* inputs, rsf_
 int32_t reflex_options(void* native, uint32_t mode, uint32_t limit) noexcept
 {
     auto& host = as_native(native);
-    sl::ReflexOptions options{}; options.frameLimitUs = limit;
-    options.mode = mode == RSF_REFLEX_BOOST ? sl::ReflexMode::eLowLatencyWithBoost :
-        mode == RSF_REFLEX_ON ? sl::ReflexMode::eLowLatency : sl::ReflexMode::eOff;
+    rsf_slvk_sdk_reflex_options packed{};
+    rsf_slhost_pack_reflex(mode, limit, &packed);
+    sl::ReflexOptions options{};
+    std::memcpy(static_cast<void*>(&options), &packed, sizeof(options));
     if (!host.reflex_options || host.reflex_options(options) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     if (host.log) {
         char text[160]; std::snprintf(text, sizeof(text),
@@ -580,27 +582,9 @@ void ring_write(void* native, const char* reason, uint64_t source) noexcept
 {
     auto& host = as_native(native);
     if (!host.log) return;
-    char text[520];
-    std::snprintf(text, sizeof(text),
-        "Reflex ring %s source=%llu: one line per driver frame, microseconds from its SimulationStart; -1 means not recorded",
-        reason, static_cast<unsigned long long>(source));
-    host.log(host.log_user, text);
-    uint64_t previous_sim = 0;
-    for (int i = 0; i < sl::kReflexFrameReportCount; ++i) {
-        const auto& r = ring.frameReport[i];
-        if (!r.frameID || !r.simStartTime) continue;
-        const auto at = [&r](uint64_t time) { return time ? static_cast<long long>(time - r.simStartTime) : -1ll; };
-        std::snprintf(text, sizeof(text),
-            "Reflex ring frame=%llu sim_interval=%lld sim_end=%lld submit=%lld..%lld present=%lld..%lld driver=%lld..%lld os_queue=%lld..%lld gpu=%lld..%lld gpu_active=%u gpu_frame=%u copy=%u",
-            static_cast<unsigned long long>(r.frameID),
-            previous_sim ? static_cast<long long>(r.simStartTime - previous_sim) : -1ll, at(r.simEndTime),
-            at(r.renderSubmitStartTime), at(r.renderSubmitEndTime), at(r.presentStartTime), at(r.presentEndTime),
-            at(r.driverStartTime), at(r.driverEndTime), at(r.osRenderQueueStartTime), at(r.osRenderQueueEndTime),
-            at(r.gpuRenderStartTime), at(r.gpuRenderEndTime), r.gpuActiveRenderTimeUs, r.gpuFrameTimeUs,
-            ring.frameReport2[i].crossAdapterCopyTimeUs);
-        host.log(host.log_user, text);
-        previous_sim = r.simStartTime;
-    }
+    rsf_slhost_reflex_sample samples[sl::kReflexFrameReportCount]{};
+    reflex_samples(ring, samples);
+    rsf_slhost_reflex_ring(samples, reason, source, host.log, host.log_user, rsf::emit_streamline_log);
 }
 
 // FEATURE_FAILED means the plugin state did not change. Any other result reports the
@@ -676,11 +660,11 @@ int32_t chain(void* native, const rsf_fg_swapchain_desc* desc, void** out) noexc
 int32_t options(void* native, const rsf_slhost_request* request) noexcept
 {
     auto& host = as_native(native);
-    sl::DLSSGOptions fg{}; fg.mode = static_cast<sl::DLSSGMode>(request->mode);
-    fg.numFramesToGenerate = request->frames;
-    fg.dynamicTargetFrameRate = request->dynamic_target_fps;
-    fg.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
-    fg.enableUserInterfaceRecomposition = request->ui_recomposition ? sl::eTrue : sl::eFalse;
+    rsf_slvk_sdk_fg_options packed{};
+    rsf_slhost_pack_options(request->mode, request->frames, request->ui_recomposition,
+        request->dynamic_target_fps, &packed);
+    sl::DLSSGOptions fg{};
+    std::memcpy(static_cast<void*>(&fg), &packed, sizeof(fg));
     return host.set_options && host.set_options(sl::ViewportHandle(0), fg) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
@@ -726,28 +710,16 @@ int32_t command(void* native, void* command) noexcept
 // Builds the frame's common constants. Sets them only when SR has not already done so.
 int32_t constants(void* native, void* token, const rsf_fg_frame* frame, uint32_t reset, uint32_t apply) noexcept
 {
-    const auto& camera = frame->record->camera;
+    rsf_slvk_sdk_constants packed{};
+    rsf_slhost_pack_fg_camera(frame, reset, &packed);
     sl::Constants constants{};
-    constants.cameraViewToClip = rsf::sl_matrix(camera.view_to_clip); constants.clipToCameraView = rsf::sl_matrix(camera.clip_to_view);
-    constants.clipToPrevClip = rsf::sl_matrix(camera.clip_to_previous_clip);
+    std::memcpy(static_cast<void*>(&constants), &packed, sizeof(constants));
     sl::matrixFullInvert(constants.prevClipToClip, constants.clipToPrevClip);
     for (uint32_t i = 0; i < 4; ++i) {
         const auto& row = constants.prevClipToClip[i];
         if (!std::isfinite(row.x) || !std::isfinite(row.y) || !std::isfinite(row.z) || !std::isfinite(row.w))
             return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     }
-    constants.jitterOffset = {camera.jitter_pixels[0], camera.jitter_pixels[1]}; constants.cameraPinholeOffset = {0, 0};
-    constants.mvecScale = {frame->motion_scale_x / frame->motion.width, frame->motion_scale_y / frame->motion.height};
-    constants.cameraPos = {camera.view_to_world[12], camera.view_to_world[13], camera.view_to_world[14]};
-    constants.cameraRight = {camera.view_to_world[0], camera.view_to_world[1], camera.view_to_world[2]};
-    constants.cameraUp = {camera.view_to_world[4], camera.view_to_world[5], camera.view_to_world[6]};
-    constants.cameraFwd = rsf::sl_camera_forward(camera,1.0f);
-    constants.cameraNear = camera.near_plane; constants.cameraFar = camera.far_plane;
-    constants.cameraFOV = camera.vertical_fov_radians; constants.cameraAspectRatio = camera.view_to_clip[5] / camera.view_to_clip[0];
-    constants.depthInverted = camera.depth_inverted ? sl::eTrue : sl::eFalse;
-    constants.cameraMotionIncluded = sl::eTrue; constants.motionVectors3D = sl::eFalse;
-    constants.motionVectorsJittered = camera.motion_jittered ? sl::eTrue : sl::eFalse;
-    constants.reset = reset ? sl::eTrue : sl::eFalse;
     if (apply && as_native(native).constants(constants, as_token(token), sl::ViewportHandle(0)) != sl::Result::eOk)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
     return RSF_BACKEND_OK;
@@ -755,16 +727,14 @@ int32_t constants(void* native, void* token, const rsf_fg_frame* frame, uint32_t
 
 int32_t tags(void* native, void* token, void* command, const rsf_fg_frame* frame) noexcept
 {
-    const rsf_backend_resource* inputs[] = {&frame->backbuffer, &frame->depth, &frame->motion, &frame->hudless, &frame->ui};
-    const sl::BufferType types[] = {sl::kBufferTypeBackbuffer, sl::kBufferTypeDepth, sl::kBufferTypeMotionVectors,
-        sl::kBufferTypeHUDLessColor, sl::kBufferTypeUIColorAndAlpha};
+    rsf_slhost_tag packed[5]{};
+    const uint32_t count = rsf_slhost_plan_tags(frame, packed);
     sl::Resource resources[5]{}; sl::Extent extents[5]{}; sl::ResourceTag tags[5]{};
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < 5; ++i) {
-        if (!inputs[i]->resource) continue;
-        resources[count] = sl::Resource(sl::ResourceType::eTex2d, inputs[i]->resource, inputs[i]->state);
-        extents[count] = {inputs[i]->y, inputs[i]->x, inputs[i]->width, inputs[i]->height};
-        tags[count] = sl::ResourceTag(&resources[count], types[i], sl::eValidUntilPresent, &extents[count]); ++count;
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& tag = packed[i];
+        resources[i] = sl::Resource(sl::ResourceType::eTex2d, tag.resource, tag.state);
+        extents[i] = {tag.top, tag.left, tag.width, tag.height};
+        tags[i] = sl::ResourceTag(&resources[i], tag.kind, sl::eValidUntilPresent, &extents[i]);
     }
     return as_native(native).tags(as_token(token), sl::ViewportHandle(0), tags, count,
         static_cast<sl::CommandBuffer*>(command)) == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;

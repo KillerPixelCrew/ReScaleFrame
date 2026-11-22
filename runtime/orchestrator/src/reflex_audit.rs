@@ -1,16 +1,26 @@
 // SPDX-License-Identifier: MIT
 use crate::diagnostic_output::Output;
 use crate::render_abi::rsf_backend_log_fn as Log;
-use std::ffi::c_void;
-use std::ptr;
+use crate::win32_diagnostics::module_location;
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows::core::w;
 use windows_sys::Win32::{
     Foundation::FARPROC,
-    System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
+    System::{
+        LibraryLoader::{GetModuleHandleW, GetProcAddress},
+        Threading::{GetCurrentProcessId, GetCurrentThreadId},
+    },
+    UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
 };
 
-type Emit = unsafe extern "C" fn(Log, *mut c_void, *const c_void);
+#[path = "reflex_nvapi_abi.rs"]
+mod nvapi;
+use nvapi::*;
+
+type Emit = unsafe extern "C" fn(Log, *mut c_void, *const c_char);
+type Query = unsafe extern "C" fn(u32) -> *mut c_void;
+type SleepStatus = unsafe extern "C" fn(*mut c_void, &mut NV_GET_SLEEP_STATUS_PARAMS) -> i32;
 const SOURCES: usize = 64;
 const LINE_LIMIT: u32 = 192;
 const HOOKS: usize = 4;
@@ -105,9 +115,15 @@ struct Listener {
 impl Listener {
     const NONE: Self = Self { log: None, user: 0 };
 
-    unsafe fn emit(self, payload: *const c_void, emit: Emit) {
+    fn emit(self, text: &CStr, emit: Emit) {
         if self.log.is_some() {
-            unsafe { emit(self.log, self.user as *mut c_void, payload) };
+            unsafe { emit(self.log, self.user as *mut c_void, text.as_ptr()) };
+        }
+    }
+
+    fn formatted(self, text: String, emit: Emit) {
+        if let Ok(text) = CString::new(text) {
+            self.emit(&text, emit);
         }
     }
 }
@@ -119,7 +135,6 @@ struct Source {
     kind: u32,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 struct SyncReport {
     caller: usize,
@@ -133,8 +148,6 @@ struct SyncReport {
     result: i32,
     enabled: u32,
 }
-
-const _: () = assert!(size_of::<SyncReport>() == 48);
 
 struct Audit {
     listener: Listener,
@@ -218,7 +231,7 @@ unsafe extern "C" fn rsf_core_reflex_audit_start(
         }
         _ => return,
     };
-    unsafe { listener.emit(message.as_ptr().cast(), text) };
+    listener.emit(message, text);
 }
 
 #[unsafe(no_mangle)]
@@ -228,15 +241,7 @@ extern "C" fn rsf_core_reflex_audit_stop() {
     audit().listener = Listener::NONE;
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_reflex_audit_event(
-    caller: usize,
-    object: usize,
-    kind: u32,
-    settings: u64,
-    payload: *const c_void,
-    emit: Emit,
-) {
+fn event(source: Source, settings: u64, format: impl FnOnce() -> String, emit: Emit) {
     let Some(_output) = Output::enter() else {
         return;
     };
@@ -244,27 +249,18 @@ unsafe extern "C" fn rsf_core_reflex_audit_event(
         let mut audit = audit();
         if audit.listener.log.is_none()
             || audit.lines >= LINE_LIMIT
-            || !audit.changed(
-                Source {
-                    caller,
-                    object,
-                    kind,
-                },
-                settings,
-            )
+            || !audit.changed(source, settings)
         {
             return;
         }
         audit.lines += 1;
         audit.listener
     };
-    unsafe { listener.emit(payload, emit) };
+    listener.formatted(format(), emit);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_reflex_audit_sync(report: &SyncReport, enable: u32, disable: u32) {
+fn sync(mut report: SyncReport, enable: u32, disable: u32) {
     let mut audit = audit();
-    let mut report = *report;
     report.enabled = audit
         .sync
         .filter(|prior| prior.device == report.device)
@@ -280,8 +276,7 @@ unsafe extern "C" fn rsf_core_reflex_audit_sync(report: &SyncReport, enable: u32
     audit.sync = Some(report);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_reflex_audit_report(emit: Emit) {
+fn report_sync(emit: Emit) {
     let Some(_output) = Output::enter() else {
         return;
     };
@@ -290,14 +285,191 @@ unsafe extern "C" fn rsf_core_reflex_audit_report(emit: Emit) {
         (audit.listener, audit.sync)
     };
     if let Some(report) = report.filter(|report| report.caller != 0) {
-        unsafe { listener.emit(ptr::from_ref(&report).cast(), emit) };
+        let origin = origin(report.caller);
+        let enabled = match report.enabled {
+            0 => "0",
+            1 => "1",
+            _ => "unknown",
+        };
+        listener.formatted(format!(
+            "Reflex API sync caller={origin} device=0x{:x} enabled={enabled} queue_us={} target_us={} vblank_us={} fg={} dfg_max={} dfg_fps={} result={}",
+            report.device, report.queue_us, report.target_us, report.vblank_us, report.fg,
+            report.dfg_max, report.dfg_fps, report.result,
+        ), emit);
     }
+}
+
+fn origin(caller: usize) -> String {
+    let (name, offset) = module_location(caller).unwrap_or_else(|| ("unknown".into(), caller));
+    format!("{name}+0x{offset:x}")
+}
+
+const fn version<T>() -> u32 {
+    size_of::<T>() as u32 | (1 << 16)
+}
+
+// Every intercepted SDK record starts with its version. Inspect only that word
+// until the caller's record size and revision match the pinned declaration.
+unsafe fn params<T>(raw: *const c_void) -> Option<*const T> {
+    if raw.is_null() || unsafe { raw.cast::<u32>().read() } != version::<T>() {
+        return None;
+    }
+    Some(raw.cast())
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_reflex_nvapi_observe(
+    kind: u32,
+    caller: usize,
+    object: *mut c_void,
+    raw: *const c_void,
+    result: i32,
+    emit: Emit,
+) {
+    let source = |kind| Source {
+        caller,
+        object: object.addr(),
+        kind,
+    };
+    let thread = || unsafe { GetCurrentThreadId() };
+    match kind {
+        0 => {
+            let Some(p) = (unsafe { params::<NV_SET_SLEEP_MODE_PARAMS>(raw) }) else {
+                return;
+            };
+            let p = unsafe { &*p };
+            let settings = u64::from(p.minimumIntervalUs) << 32
+                | u64::from(p.bLowLatencyMode)
+                | u64::from(p.bLowLatencyBoost) << 1
+                | u64::from(p.bUseMarkersToOptimize) << 2
+                | u64::from(p.bUseMinQueueTime) << 3;
+            event(
+                source(0),
+                settings,
+                || {
+                    format!(
+                        "Reflex API mode caller={} device={object:p} low_latency={} boost={} minimum_us={} marker_opt={} min_queue={} result={result} thread={}",
+                        origin(caller),
+                        p.bLowLatencyMode,
+                        p.bLowLatencyBoost,
+                        p.minimumIntervalUs,
+                        p.bUseMarkersToOptimize,
+                        p.bUseMinQueueTime,
+                        thread(),
+                    )
+                },
+                emit,
+            );
+        }
+        1 => {
+            let Some(p) = (unsafe { params::<NV_LATENCY_MARKER_PARAMS>(raw) }) else {
+                return;
+            };
+            let p = unsafe { &*p };
+            let marker = p.markerType as u32;
+            let high_bits = p.frameID >> 32;
+            event(
+                source(marker.wrapping_add(1)),
+                high_bits,
+                || {
+                    format!(
+                        "Reflex API marker source caller={} device={object:p} marker={marker} frame={} high_bits={high_bits} result={result} thread={}",
+                        origin(caller),
+                        p.frameID,
+                        thread(),
+                    )
+                },
+                emit,
+            );
+        }
+        2 => {
+            let Some(p) = (unsafe { params::<NV_SET_REFLEX_SYNC_PARAMS>(raw) }) else {
+                return;
+            };
+            let p = unsafe { &*p };
+            sync(
+                SyncReport {
+                    caller,
+                    device: object.addr(),
+                    queue_us: p.timeInQueueUs,
+                    target_us: p.timeInQueueUsTarget,
+                    vblank_us: p.vblankIntervalUs,
+                    fg: p.fgMultiplier.into(),
+                    dfg_max: p.dfgMaxMultiplier.into(),
+                    dfg_fps: p.dfgTargetFps,
+                    result,
+                    enabled: 0,
+                },
+                p.bEnable(),
+                p.bDisable(),
+            );
+        }
+        3 => {
+            let Some(p) = (unsafe { params::<NV_ASYNC_FRAME_MARKER_PARAMS>(raw) }) else {
+                return;
+            };
+            let p = unsafe { &*p };
+            let marker = p.markerType as u32;
+            event(
+                source(marker.wrapping_add(100)),
+                p.vendorInternal.into(),
+                || {
+                    format!(
+                        "Reflex API async source caller={} queue={object:p} marker={marker} frame={} present_frame={} vendor={} result={result} thread={}",
+                        origin(caller),
+                        p.frameID,
+                        p.presentFrameID,
+                        p.vendorInternal,
+                        thread(),
+                    )
+                },
+                emit,
+            );
+        }
+        _ => {}
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_reflex_driver_sleep(
+    device: *mut c_void,
+    log: Log,
+    user: *mut c_void,
+    emit: Emit,
+) {
+    let mut state = NV_GET_SLEEP_STATUS_PARAMS {
+        version: version::<NV_GET_SLEEP_STATUS_PARAMS>(),
+        ..Default::default()
+    };
+    let address = unsafe { rsf_core_reflex_audit_query() }.map_or(std::ptr::null_mut(), |entry| {
+        let query = unsafe { std::mem::transmute::<_, Query>(entry) };
+        unsafe { query(0xaef9_6ca1) }
+    });
+    let result = if address.is_null() {
+        -3 // NVAPI_NO_IMPLEMENTATION
+    } else {
+        let status = unsafe { std::mem::transmute::<_, SleepStatus>(address) };
+        unsafe { status(device, &mut state) }
+    };
+    if log.is_some() {
+        let mut foreground = 0;
+        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground) };
+        let foreground = u32::from(foreground == unsafe { GetCurrentProcessId() });
+        Listener { log, user: user.addr() }.formatted(format!(
+            "Reflex driver sleep status={result} low_latency={} sleep_interval_us={} app_called_sleep={} vrr={} cpl_vsync={} fullscreen_iflip={} fg_multiplier={} dfg={} dfg_target_us={} foreground={foreground}",
+            state.bLowLatencyMode, state.sleepIntervalUs, state.bUseGameSleep, state.bFsVrr,
+            state.bCplVsyncOn, state.bFullscreenIFlip, state.fgMultiplier, state.bDfgControl,
+            state.dfgFrameTimeTargetUs,
+        ), emit);
+    }
+    report_sync(emit);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    use std::ptr;
 
     thread_local! {
         static STEPS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };

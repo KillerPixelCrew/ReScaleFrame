@@ -304,6 +304,8 @@ mod sr_legacy;
 #[cfg(windows)]
 mod sr_session;
 #[cfg(windows)]
+mod streamline_generation_records;
+#[cfg(windows)]
 mod streamline_host;
 #[cfg(windows)]
 mod streamline_log;

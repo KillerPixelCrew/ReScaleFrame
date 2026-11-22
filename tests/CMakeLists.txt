@@ -620,7 +620,8 @@ target_link_libraries(rsf_fg_switching_test PRIVATE rsf_generation_fixtures_rust
 add_test(NAME fg_switching COMMAND rsf_fg_switching_test)
 set_tests_properties(fg_switching PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_latency_host_test latency_host.cpp)
+add_executable(rsf_latency_host_test generation/device_main.c)
+target_compile_definitions(rsf_latency_host_test PRIVATE RSF_FG_DEVICE_FIXTURE=rsf_test_latency_host)
 
 # These latency fixtures supply fake FG endpoints while linking the production Rust lease.
 set(rsf_vulkan_latency_test_endpoints
@@ -715,7 +716,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
         add_test(NAME native_ffx_vulkan_wsi_route_contract COMMAND rsf_native_ffx_vulkan_wsi_route_test)
     endif()
 endif()
-target_link_libraries(rsf_latency_host_test PRIVATE rsf_orchestrator rsf_build_options)
+target_link_libraries(rsf_latency_host_test PRIVATE rsf_generation_fixtures_rust rsf_orchestrator rsf_build_options)
 add_test(NAME latency_host COMMAND rsf_latency_host_test)
 set_tests_properties(latency_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
