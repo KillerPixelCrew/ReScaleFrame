@@ -31,3 +31,24 @@ Bindgen 0.72.1 regenerated the repository C ABI and the FSR4 and standalone
 FSR3 SDK projections. Rust 1.94.1 formatting, locked offline metadata and
 Git whitespace checks completed. Compilation, linking, fixture execution,
 lint and device verification remain pending.
+
+## Module and bridge forwarding follow-up from b5a7434c
+
+| Source | Disposition |
+| --- | --- |
+| `native_sr_fsr4_vulkan.cpp` | The production table now binds Rust directly for provider info, sharpness storage and imported COM image release. The SDK-gated binder still supplies the real bridge and guards calls that reach the bridge SDK, the host proc resolver and the split callback. |
+| `runtime/vulkan/fsr4/bridge.cpp` | Rust resolves the owning module's legacy directory and loads and binds the signed provider. Rust releases the list, three allocators, fences, queue, device, adapter and factory in the prior order, then closes the event and unloads the provider. The native capsule still drops the INT8 lease first and deletes itself last. |
+| `runtime/vulkan/fsr4-fg/bridge.cpp` | The same Rust Windows loader and release mechanism binds the five typed SDK exports and retires the capsule's COM references, event and module in their established order. Rust releases the DXGI swapchain reference at the existing point before checked swapchain-context destruction. |
+| FG Vulkan C++ binder, SDK headers and standalone exports | The optional SDK binder, exact function shapes, standalone exports, typed SDK description helpers, retained create descriptors and SDK destruction calls stay at their existing entry points. G07 capture still enters its existing native service binder where required. |
+| Standalone FSR3, fixtures, D07 and `PORT.md` | Git comparison against the base found no changes. |
+
+Both loaders retain the module for checked cleanup on missing-export failure.
+SR retains its separate module and export refusal codes, and FG retains the
+HRESULT and missing-interface mapping. The Rust SR directory lookup keeps the
+borrowed module reference, MAX_PATH bound and trailing separator.
+
+Bindgen 0.72.1 reproduced both changed SDK projections at FidelityFX revision
+`7539ae8b6568ad29ed78a753404351daf3b5cca7`. Rust 1.94.1 formatting, locked
+offline Windows metadata and Git whitespace checks passed. MSVC `/Zs /W4 /WX`
+passed for both native provider binders and the FG bridge, and for both the
+embedded and standalone SR bridges. This was a source-only check.

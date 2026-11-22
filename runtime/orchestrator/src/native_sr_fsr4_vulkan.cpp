@@ -7,10 +7,12 @@
 struct ID3D12Resource;
 extern "C" int VulkanStoryFsr4CreateSharedImage(rsf_fsr4_bridge*, uint32_t, uint32_t,
     uint32_t, uint32_t, HANDLE*, ID3D12Resource**);
-extern "C" void VulkanStoryFsr4ReleaseImage(ID3D12Resource*);
 extern "C" int VulkanStoryFsr4CreateSharedFence(rsf_fsr4_bridge*, HANDLE*);
 extern "C" int VulkanStoryFsr4PrepareDestroy(rsf_fsr4_bridge*);
 extern "C" int VulkanStoryFsr4DestroyChecked(rsf_fsr4_bridge*);
+extern "C" int32_t rsf_core_fsr4sr_info(const rsf_fsr4_bridge*, rsf_fsr4_bridge_info*);
+extern "C" int32_t rsf_core_fsr4sr_sharpness(rsf_fsr4_bridge*, float);
+extern "C" void rsf_core_fsr4sr_release_image(void*);
 
 static_assert(sizeof(rsf_fsr4_bridge_create) == 56 && offsetof(rsf_fsr4_bridge_create, output_width) == 32);
 static_assert(sizeof(rsf_fsr4_bridge_frame) == 112 && offsetof(rsf_fsr4_bridge_frame, reset) == 92 &&
@@ -53,8 +55,6 @@ int32_t create_image(rsf_fsr4_bridge* bridge, uint32_t width, uint32_t height, u
     return result;
 }
 
-void release_image(void* resource) { VulkanStoryFsr4ReleaseImage(static_cast<ID3D12Resource*>(resource)); }
-
 int32_t split(const rsf_fsr4vk_handoff* handoff, void* commands, uint64_t timeline,
     uint64_t previous, uint64_t ready, uint64_t done, void** continuation) noexcept try {
     return handoff->split_record(handoff->user, commands, timeline, previous, ready, done, continuation);
@@ -63,11 +63,11 @@ int32_t split(const rsf_fsr4vk_handoff* handoff, void* commands, uint64_t timeli
 const rsf_fsr4vk_platform& platform() {
     static const rsf_fsr4vk_platform ops{
         rsf_dx12vk_platform_ops(), open, rsf_fsr4vk_graphics_close,
-        checked<RsfFsr4BridgeCreate>, checked<RsfFsr4BridgePlan>, checked<RsfFsr4BridgeInfo>,
-        create_fence, create_image, release_image, rsf_fsr4vk_capture_initialize, rsf_fsr4vk_capture_begin,
+        checked<RsfFsr4BridgeCreate>, checked<RsfFsr4BridgePlan>, rsf_core_fsr4sr_info,
+        create_fence, create_image, rsf_core_fsr4sr_release_image, rsf_fsr4vk_capture_initialize, rsf_fsr4vk_capture_begin,
         rsf_fsr4vk_capture_record, rsf_fsr4vk_capture_parameters, rsf_fsr4vk_capture_flush,
         rsf_fsr4vk_graphics_transition, rsf_fsr4vk_graphics_copy, split, nullptr,
-        checked<RsfFsr4BridgeSharpness>, checked<RsfFsr4BridgeEvaluate>, rsf_fsr4vk_graphics_sharpen,
+        rsf_core_fsr4sr_sharpness, checked<RsfFsr4BridgeEvaluate>, rsf_fsr4vk_graphics_sharpen,
         rsf_fsr4vk_graphics_retire, rsf_fsr4vk_graphics_clear_sharpen, rsf_fsr4vk_graphics_wait, rsf_fsr4vk_graphics_idle,
         checked<VulkanStoryFsr4PrepareDestroy>, checked<VulkanStoryFsr4DestroyChecked>,
     };

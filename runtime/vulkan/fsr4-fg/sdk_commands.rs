@@ -16,6 +16,13 @@ use windows::Win32::{
 use windows::core::{BOOL, Interface};
 
 #[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_release_chain(chain: Handle) {
+    if !chain.is_null() {
+        drop(unsafe { IDXGISwapChain4::from_raw(chain) });
+    }
+}
+
+#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr4fg_create_factory(flags: u32, out: &mut Handle) -> i32 {
     dx12::store_interface(
         unsafe { CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(flags)) },

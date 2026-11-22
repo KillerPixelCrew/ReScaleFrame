@@ -126,6 +126,56 @@ impl Default for ffxQueryGetProviderVersion {
         }
     }
 }
+pub type ffxAlloc = ::core::option::Option<
+    unsafe extern "C" fn(
+        pUserData: *mut ::core::ffi::c_void,
+        size: u64,
+    ) -> *mut ::core::ffi::c_void,
+>;
+pub type ffxDealloc = ::core::option::Option<
+    unsafe extern "C" fn(pUserData: *mut ::core::ffi::c_void, pMem: *mut ::core::ffi::c_void),
+>;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct ffxAllocationCallbacks {
+    pub pUserData: *mut ::core::ffi::c_void,
+    pub alloc: ffxAlloc,
+    pub dealloc: ffxDealloc,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxAllocationCallbacks"][::core::mem::size_of::<ffxAllocationCallbacks>() - 24usize];
+    ["Alignment of ffxAllocationCallbacks"]
+        [::core::mem::align_of::<ffxAllocationCallbacks>() - 8usize];
+    ["Offset of field: ffxAllocationCallbacks::pUserData"]
+        [::core::mem::offset_of!(ffxAllocationCallbacks, pUserData) - 0usize];
+    ["Offset of field: ffxAllocationCallbacks::alloc"]
+        [::core::mem::offset_of!(ffxAllocationCallbacks, alloc) - 8usize];
+    ["Offset of field: ffxAllocationCallbacks::dealloc"]
+        [::core::mem::offset_of!(ffxAllocationCallbacks, dealloc) - 16usize];
+};
+impl Default for ffxAllocationCallbacks {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+pub type PfnFfxCreateContext = ::core::option::Option<
+    unsafe extern "C" fn(
+        context: *mut ffxContext,
+        desc: *mut ffxCreateContextDescHeader,
+        memCb: *const ffxAllocationCallbacks,
+    ) -> ffxReturnCode_t,
+>;
+pub type PfnFfxDestroyContext = ::core::option::Option<
+    unsafe extern "C" fn(
+        context: *mut ffxContext,
+        memCb: *const ffxAllocationCallbacks,
+    ) -> ffxReturnCode_t,
+>;
 pub type PfnFfxConfigure = ::core::option::Option<
     unsafe extern "C" fn(
         context: *mut ffxContext,

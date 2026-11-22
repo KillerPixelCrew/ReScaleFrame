@@ -10,6 +10,73 @@ use std::ptr;
 mod abi;
 use abi::*;
 
+#[path = "../dx12_provider_module.rs"]
+mod provider_module;
+use windows::Win32::Foundation::FARPROC;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_load_provider(
+    path: *const u16,
+    out: &mut Handle,
+    create: &mut PfnFfxCreateContext,
+    destroy: &mut PfnFfxDestroyContext,
+    configure: &mut PfnFfxConfigure,
+    dispatch: &mut PfnFfxDispatch,
+    query: &mut PfnFfxQuery,
+) -> i32 {
+    let module = match unsafe { provider_module::load(path) } {
+        Ok(module) => module,
+        Err(error) => return error.code().0,
+    };
+    *out = module.0;
+    // Each optional export uses its SDK signature on Windows x64.
+    unsafe {
+        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(provider_module::export(
+            module,
+            c"ffxCreateContext",
+        ));
+        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(provider_module::export(
+            module,
+            c"ffxDestroyContext",
+        ));
+        *configure = core::mem::transmute::<FARPROC, PfnFfxConfigure>(provider_module::export(
+            module,
+            c"ffxConfigure",
+        ));
+        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(provider_module::export(
+            module,
+            c"ffxDispatch",
+        ));
+        *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::export(
+            module,
+            c"ffxQuery",
+        ));
+    }
+    if [
+        create.is_some(),
+        destroy.is_some(),
+        configure.is_some(),
+        dispatch.is_some(),
+        query.is_some(),
+    ]
+    .into_iter()
+    .all(|bound| bound)
+    {
+        0
+    } else {
+        windows::Win32::Foundation::E_NOINTERFACE.0
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4fg_release_provider_objects(
+    objects: &[Handle; 8],
+    event: Handle,
+    module: Handle,
+) {
+    unsafe { provider_module::release(objects, event, module) };
+}
+
 // Bindgen skips the SDK's function-like descriptor macros. The native
 // consumer checks these IDs against the header selected for that build.
 const FG_CREATE: u32 = 0x20001;

@@ -23,6 +23,10 @@
 #endif
 #include "bridge_platform.h"
 
+extern "C" uint32_t rsf_core_fsr4sr_own_directory(uint16_t*, uint32_t);
+extern "C" int32_t rsf_core_fsr4sr_load_provider(const uint16_t*, void**, PfnFfxCreateContext*,
+    PfnFfxDestroyContext*, PfnFfxDispatch*, PfnFfxQuery*);
+extern "C" void rsf_core_fsr4sr_release_provider_objects(void* const (*)[10], void*, void*);
 extern "C" int32_t rsf_core_fsr4sr_sdk_versions(PfnFfxQuery, void*, rsf_ffx_version*, uint64_t*);
 extern "C" int32_t rsf_core_fsr4sr_sdk_provider(PfnFfxQuery, ffxContext*, rsf_ffx_version*, uint32_t*);
 extern "C" int32_t rsf_core_fsr4sr_sdk_create(PfnFfxCreateContext, ffxContext*, ffxApiHeader*, uint32_t,
@@ -66,11 +70,6 @@ static_assert(DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R16G16_FLOAT =
 static_assert(static_cast<uint32_t>(E_UNEXPECTED) == 0x8000ffffu &&
     static_cast<uint32_t>(DXGI_ERROR_DEVICE_REMOVED) == 0x887a0005u);
 
-/// @brief Releases a local COM reference and clears its pointer without waiting for GPU work.
-template<class T> static void Release(T*& object) {
-    if (object) { object->Release(); object = nullptr; }
-}
-
 /// @brief Native capsule: signed-runtime module, matching DX12 adapter/device, SDK context, queue and command objects.
 /// @details Imported image/resource ownership stays with the caller. Only the Rust owner releases the capsule.
 /// The NVIDIA/Intel INT8 compatibility lease must outlive the SDK context; Rust drops it after context destruction.
@@ -102,16 +101,11 @@ rsf_fsr4sr_native* Allocate() { return new (std::nothrow) rsf_fsr4sr_native(); }
 void ReleaseNative(rsf_fsr4sr_native* native) {
     if (!native) return;
     native->compatibility.reset();
-    Release(native->commands);
-    for (auto*& allocator : native->allocators) Release(allocator);
-    Release(native->completionFence);
-    Release(native->sharedFence);
-    Release(native->queue);
-    Release(native->device);
-    Release(native->adapter);
-    Release(native->factory);
-    if (native->completionEvent) CloseHandle(native->completionEvent);
-    if (native->module) FreeLibrary(native->module);
+    void* const objects[10] = {
+        native->commands, native->allocators[0], native->allocators[1], native->allocators[2],
+        native->completionFence, native->sharedFence, native->queue, native->device, native->adapter, native->factory,
+    };
+    rsf_core_fsr4sr_release_provider_objects(&objects, native->completionEvent, native->module);
     delete native;
 }
 
@@ -146,34 +140,14 @@ int32_t CreateDevice(rsf_fsr4sr_native* native) {
     return code;
 }
 
-/// @brief Writes the directory of the module containing this bridge, with its trailing separator.
-/// @return The UTF-16 length written, or zero when it cannot be resolved.
-uint32_t OwnDirectory(uint16_t* path, uint32_t capacity) {
-    HMODULE own{};
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(&OwnDirectory), &own)) return 0;
-    wchar_t module[MAX_PATH]{};
-    DWORD length = GetModuleFileNameW(own, module, MAX_PATH);
-    if (!length || length == MAX_PATH) return 0;
-    while (length && module[length - 1] != L'\\' && module[length - 1] != L'/') --length;
-    if (!length || length > capacity) return 0;
-    static_assert(sizeof(wchar_t) == sizeof(uint16_t));
-    std::memcpy(path, module, length * sizeof(uint16_t));
-    return length;
-}
-
 /// @brief Loads the signed upscaler from a full NUL-terminated path and resolves its four exports.
 /// @return Zero, -7 when the module does not load, or -8 when an export is missing.
 int32_t Load(rsf_fsr4sr_native* native, const uint16_t* path) {
-    native->module = LoadLibraryExW(reinterpret_cast<const wchar_t*>(path), nullptr,
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-    if (!native->module) return -7;
-    native->create = reinterpret_cast<PfnFfxCreateContext>(GetProcAddress(native->module, "ffxCreateContext"));
-    native->destroy = reinterpret_cast<PfnFfxDestroyContext>(GetProcAddress(native->module, "ffxDestroyContext"));
-    native->dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(native->module, "ffxDispatch"));
-    native->query = reinterpret_cast<PfnFfxQuery>(GetProcAddress(native->module, "ffxQuery"));
-    return native->create && native->destroy && native->dispatch && native->query ? 0 : -8;
+    void* module = nullptr;
+    const int32_t code = rsf_core_fsr4sr_load_provider(path, &module, &native->create, &native->destroy,
+        &native->dispatch, &native->query);
+    native->module = static_cast<HMODULE>(module);
+    return code;
 }
 
 /// @brief Takes the pinned-SDK INT8 capability lease for NVIDIA/Intel.
@@ -284,7 +258,7 @@ int32_t DestroyContext(rsf_fsr4sr_native* native) {
 
 constexpr rsf_fsr4sr_platform kPlatform{
     sizeof(rsf_fsr4sr_platform), RSF_FSR4SR_PLATFORM_ABI_VERSION,
-    Allocate, ReleaseNative, Objects, FindAdapter, CreateDevice, OwnDirectory, Load,
+    Allocate, ReleaseNative, Objects, FindAdapter, CreateDevice, rsf_core_fsr4sr_own_directory, Load,
     AcquireCompatibility, ReleaseCompatibility, Versions, CreateContext, Provider, CreateCommands,
     Plan, CreateImage, CreateFence, rsf_core_fsr4sr_describe, Completed, WaitEvent, Record, WaitShared, Execute,
     Signal, DestroyContext,

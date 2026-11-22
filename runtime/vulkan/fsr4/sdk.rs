@@ -16,6 +16,108 @@ mod commands;
 #[cfg(windows)]
 #[path = "../dx12_bridge_commands.rs"]
 mod dx12;
+#[cfg(windows)]
+#[path = "../dx12_provider_module.rs"]
+mod provider_module;
+#[cfg(windows)]
+use windows::Win32::Foundation::FARPROC;
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_own_directory(out: *mut u16, capacity: u32) -> u32 {
+    use windows::{
+        Win32::{
+            Foundation::{HMODULE, MAX_PATH},
+            System::LibraryLoader::{
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW,
+                GetModuleHandleExW,
+            },
+        },
+        core::PCWSTR,
+    };
+
+    let mut module = HMODULE::default();
+    let address = PCWSTR(rsf_core_fsr4sr_own_directory as *const () as *const u16);
+    if unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            address,
+            &mut module,
+        )
+    }
+    .is_err()
+    {
+        return 0;
+    }
+    let mut path = [0_u16; MAX_PATH as usize];
+    let length = unsafe { GetModuleFileNameW(Some(module), &mut path) } as usize;
+    if length == 0 || length >= path.len() {
+        return 0;
+    }
+    let Some(separator) = path[..length]
+        .iter()
+        .rposition(|&unit| unit == u16::from(b'\\') || unit == u16::from(b'/'))
+    else {
+        return 0;
+    };
+    let directory = separator + 1;
+    if directory > capacity as usize {
+        return 0;
+    }
+    unsafe { ptr::copy_nonoverlapping(path.as_ptr(), out, directory) };
+    directory as u32
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_load_provider(
+    path: *const u16,
+    out: &mut Handle,
+    create: &mut PfnFfxCreateContext,
+    destroy: &mut PfnFfxDestroyContext,
+    dispatch: &mut PfnFfxDispatch,
+    query: &mut PfnFfxQuery,
+) -> i32 {
+    let Ok(module) = (unsafe { provider_module::load(path) }) else {
+        return -7;
+    };
+    *out = module.0;
+    // Each optional export uses its SDK signature on Windows x64.
+    unsafe {
+        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(provider_module::export(
+            module,
+            c"ffxCreateContext",
+        ));
+        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(provider_module::export(
+            module,
+            c"ffxDestroyContext",
+        ));
+        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(provider_module::export(
+            module,
+            c"ffxDispatch",
+        ));
+        *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::export(
+            module,
+            c"ffxQuery",
+        ));
+    }
+    if create.is_some() && destroy.is_some() && dispatch.is_some() && query.is_some() {
+        0
+    } else {
+        -8
+    }
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr4sr_release_provider_objects(
+    objects: &[Handle; 10],
+    event: Handle,
+    module: Handle,
+) {
+    unsafe { provider_module::release(objects, event, module) };
+}
 
 // Function-like FidelityFX macros are checked against both native headers.
 const UPSCALE_CREATE: u32 = 0x10000;

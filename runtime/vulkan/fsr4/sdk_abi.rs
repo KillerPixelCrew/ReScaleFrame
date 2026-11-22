@@ -171,6 +171,12 @@ pub type PfnFfxCreateContext = ::core::option::Option<
         memCb: *const ffxAllocationCallbacks,
     ) -> ffxReturnCode_t,
 >;
+pub type PfnFfxDestroyContext = ::core::option::Option<
+    unsafe extern "C" fn(
+        context: *mut ffxContext,
+        memCb: *const ffxAllocationCallbacks,
+    ) -> ffxReturnCode_t,
+>;
 pub type PfnFfxQuery = ::core::option::Option<
     unsafe extern "C" fn(
         context: *mut ffxContext,

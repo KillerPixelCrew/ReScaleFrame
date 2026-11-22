@@ -11,6 +11,11 @@
 #include "bridge_platform.h"
 #include "../../backends/common/d3d12_helpers.h"
 
+extern "C" int32_t rsf_core_fsr4fg_load_provider(const uint16_t*, void**, PfnFfxCreateContext*,
+    PfnFfxDestroyContext*, PfnFfxConfigure*, PfnFfxDispatch*, PfnFfxQuery*);
+extern "C" void rsf_core_fsr4fg_release_provider_objects(void* const (*)[8], void*, void*);
+extern "C" void rsf_core_fsr4fg_release_chain(void*);
+
 extern "C" void rsf_core_fsr4fg_dxgi_description(DXGI_SWAP_CHAIN_DESC1*, const rsf_fsr4fg_swapchain_desc*, uint32_t);
 static_assert(sizeof(DXGI_SWAP_CHAIN_DESC1) == 48 &&
     offsetof(DXGI_SWAP_CHAIN_DESC1, SampleDesc) == 16 &&
@@ -107,13 +112,6 @@ static_assert(D3D_FEATURE_LEVEL_12_0 == 0xc000 && D3D12_COMMAND_LIST_TYPE_DIRECT
 static_assert(DXGI_USAGE_RENDER_TARGET_OUTPUT == 0x20 && DXGI_SCALING_STRETCH == 0 &&
     DXGI_SWAP_EFFECT_FLIP_DISCARD == 4 && DXGI_ALPHA_MODE_UNSPECIFIED == 0);
 
-template<class T> void release(T*& value) {
-    if (value) {
-        value->Release();
-        value = nullptr;
-    }
-}
-
 Native* allocate(void* telemetry, rsf_fsr4fg_generated_fn generated) {
     auto* self = new (std::nothrow) Native{};
     if (self) {
@@ -124,16 +122,11 @@ Native* allocate(void* telemetry, rsf_fsr4fg_generated_fn generated) {
 }
 
 void release_native(Native* self) {
-    release(self->commands);
-    release(self->allocator);
-    release(self->completion);
-    release(self->shared);
-    release(self->queue);
-    release(self->device);
-    release(self->adapter);
-    release(self->factory);
-    if (self->event) CloseHandle(self->event);
-    if (self->module) FreeLibrary(self->module);
+    void* const objects[8] = {
+        self->commands, self->allocator, self->completion, self->shared,
+        self->queue, self->device, self->adapter, self->factory,
+    };
+    rsf_core_fsr4fg_release_provider_objects(&objects, self->event, self->module);
     delete self;
 }
 
@@ -162,15 +155,11 @@ int32_t create_device(Native* self, uint32_t feature_level) {
 }
 
 int32_t load(Native* self, const uint16_t* path) {
-    self->module = LoadLibraryExW(reinterpret_cast<const wchar_t*>(path), nullptr,
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-    if (!self->module) return HRESULT_FROM_WIN32(GetLastError());
-    self->create = reinterpret_cast<PfnFfxCreateContext>(GetProcAddress(self->module, "ffxCreateContext"));
-    self->destroy = reinterpret_cast<PfnFfxDestroyContext>(GetProcAddress(self->module, "ffxDestroyContext"));
-    self->configure = reinterpret_cast<PfnFfxConfigure>(GetProcAddress(self->module, "ffxConfigure"));
-    self->dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(self->module, "ffxDispatch"));
-    self->query = reinterpret_cast<PfnFfxQuery>(GetProcAddress(self->module, "ffxQuery"));
-    return self->create && self->destroy && self->configure && self->dispatch && self->query ? 0 : E_NOINTERFACE;
+    void* module = nullptr;
+    const int32_t code = rsf_core_fsr4fg_load_provider(path, &module, &self->create, &self->destroy,
+        &self->configure, &self->dispatch, &self->query);
+    self->module = static_cast<HMODULE>(module);
+    return code;
 }
 
 int32_t versions(Native* self, rsf_ffx_version* out, uint64_t* count) {
@@ -314,7 +303,10 @@ int32_t destroy_context(Native* self, ffxContext& context) {
     return static_cast<int32_t>(code);
 }
 int32_t destroy_generation(Native* self) { return destroy_context(self, self->generation); }
-void release_chain(Native* self) { release(self->chain); }
+void release_chain(Native* self) {
+    rsf_core_fsr4fg_release_chain(self->chain);
+    self->chain = nullptr;
+}
 int32_t destroy_swapchain(Native* self) { return destroy_context(self, self->swapchain); }
 
 const rsf_fsr4fg_platform platform{

@@ -8099,3 +8099,9 @@ Windows interfaces. The [V05 production source record](research/rust-vulkan-ffx-
 lists the SDK and exception boundaries and the unchanged fixture and receipt
 inputs. Pinned binding regeneration, formatting and locked offline metadata
 passed. Build, fixture and device validation remain pending.
+
+The V05 follow-up binds three SR production callbacks directly to Rust and
+ports provider module loading, export resolution and Windows resource release
+for both bridges. The same [source record](research/rust-vulkan-ffx-production-leaves.md#module-and-bridge-forwarding-follow-up-from-b5a7434c)
+lists the remaining SDK and fault boundaries. Targeted bindings, pinned
+formatting, locked offline metadata and MSVC syntax checks passed.

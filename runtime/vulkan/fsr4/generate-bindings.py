@@ -15,7 +15,7 @@ if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindge
 include = sdk / "Kits" / "FidelityFX"
 result = subprocess.check_output([
     bindgen, str(include / "upscalers/include/ffx_upscale.h"),
-    "--allowlist-type", "PfnFfx(CreateContext|Dispatch|Query)|ffxQuery(DescGetVersions|GetProviderVersion)|"
+    "--allowlist-type", "PfnFfx(CreateContext|DestroyContext|Dispatch|Query)|ffxQuery(DescGetVersions|GetProviderVersion)|"
     "ffxOverrideVersion|ffx(CreateContextDescUpscale(Version)?|DispatchDescUpscale|"
     "QueryDescUpscaleGetRenderResolutionFromQualityMode)|FfxApiCreateContextUpscaleFlags|FfxApiResourceState",
     "--allowlist-var", "FFX_API_.*DESC_TYPE_(UPSCALE(_VERSION|_GETRENDERRESOLUTIONFROMQUALITYMODE)?|"
