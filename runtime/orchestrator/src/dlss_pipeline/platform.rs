@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d11_d3d12::borrow;
-use crate::d3d11_present::rsf_core_d3d11p_host;
+use crate::d3d11_present::rsf_d3d11_present_host;
 use crate::d3d11_sharpening::{
     Frame as SharpenFrame, rsf_core_sharpen11_destroy, rsf_core_sharpen11_run,
 };
@@ -330,7 +330,7 @@ unsafe extern "C" fn dump_image(
 }
 
 pub(super) static LEAVES: P = P {
-    present_host: rsf_core_d3d11p_host,
+    present_host: rsf_d3d11_present_host,
     share_host: rsf_dlss_share_host,
     load: rsf_dlss_load,
     set_device: rsf_dlss_set_device,

@@ -3,8 +3,8 @@
 //! Present thread. Published settings and the last sampled frame can be read by any thread.
 use crate::d3d11_d3d12::borrow;
 use crate::d3d11_present::{
-    rsf_core_d3d11p_backend, rsf_core_d3d11p_backend_choices, rsf_core_d3d11p_has_owner,
-    rsf_core_d3d11p_request, rsf_core_d3d11p_session, rsf_core_d3d11p_switch_result,
+    rsf_d3d11_present_backend, rsf_d3d11_present_backend_choices, rsf_d3d11_present_has_owner,
+    rsf_d3d11_present_request, rsf_d3d11_present_session, rsf_d3d11_present_switch_result,
 };
 use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening;
 use crate::frame_limit::rsf_core_overlay_refresh_mhz;
@@ -572,12 +572,12 @@ fn forward_fg(value: &Settings) -> i32 {
     unsafe { rsf_native_fg_options_set(&options) };
     if value.fg_enabled == 0
         || value.fg_backend == RSF_FG_BACKEND_AUTO
-        || rsf_core_d3d11p_has_owner() == 0
-        || rsf_core_d3d11p_backend() == value.fg_backend
+        || rsf_d3d11_present_has_owner() == 0
+        || rsf_d3d11_present_backend() == value.fg_backend
     {
         return OK;
     }
-    rsf_core_d3d11p_request(value.fg_backend)
+    rsf_d3d11_present_request(value.fg_backend)
 }
 
 unsafe extern "C" fn configure(setup: *const rsf_overlay_service_setup) -> i32 {
@@ -738,11 +738,11 @@ impl Sample {
         let mut fg: FgStatus = unsafe { std::mem::zeroed() };
         fg.struct_size = abi_size::<FgStatus>();
         unsafe { bound_status.unwrap_or(rsf_native_fg_status_get)(&mut fg) };
-        let fg_owner = rsf_core_d3d11p_has_owner() != 0;
+        let fg_owner = rsf_d3d11_present_has_owner() != 0;
         let mut fg_backend = 0;
         if fg_owner {
             let provider = unsafe { rsf_d3d11_present_provider().as_ref() };
-            let session = rsf_core_d3d11p_session();
+            let session = rsf_d3d11_present_session();
             if let Some(status) = provider
                 .and_then(|provider| provider.status)
                 .filter(|_| bound_status.is_none() && !session.is_null())
@@ -760,15 +760,15 @@ impl Sample {
                     fg.last_result = queried;
                 }
             }
-            fg_backend = rsf_core_d3d11p_backend();
+            fg_backend = rsf_d3d11_present_backend();
         }
         Self {
             sr,
             fg,
             fg_owner,
             fg_backend,
-            bridge_choices: rsf_core_d3d11p_backend_choices(),
-            switch_result: rsf_core_d3d11p_switch_result(),
+            bridge_choices: rsf_d3d11_present_backend_choices(),
+            switch_result: rsf_d3d11_present_switch_result(),
         }
     }
 }

@@ -28,11 +28,11 @@ use crate::sys::{
 
 use crate::d3d12_generation::rsf_generation_fsr4_supported;
 
+// The SEH-guarded native calls in d3d11_present_bridge.c, and the Streamline host's graphics.
 unsafe extern "C" {
-    fn rsf_d3d11p_default_backend(vendor: u32, software: u32) -> u32;
     fn rsf_d3d11p_original_create() -> Option<GuardedCreate>;
     fn rsf_d3d11p_unwrap_guarded(host: Raw, proxy: Raw) -> Raw;
-    fn rsf_d3d11p_streamline_graphics(host: Raw, graphics: *mut rsf_streamline_graphics) -> i32;
+    fn rsf_streamline_host_graphics(host: Raw, graphics: *mut rsf_streamline_graphics) -> i32;
 }
 
 #[derive(Default)]
@@ -128,17 +128,11 @@ static STATE_OPS: NativeState = NativeState {
     destroy,
 };
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_window_valid(window: Raw) -> u32 {
+pub(super) unsafe extern "C" fn window_valid(window: Raw) -> u32 {
     u32::from(unsafe { IsWindow(Some(HWND(window))) }.as_bool())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_client_size(
-    window: Raw,
-    width: *mut u32,
-    height: *mut u32,
-) -> u32 {
+pub(super) unsafe extern "C" fn client_size(window: Raw, width: *mut u32, height: *mut u32) -> u32 {
     let mut rect = RECT::default();
     if unsafe { GetClientRect(HWND(window), &mut rect) }.is_err() {
         return 0;
@@ -150,23 +144,19 @@ unsafe extern "C" fn rsf_d3d11p_native_client_size(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_canonical_identity(receiver: Raw) -> Raw {
+pub(super) unsafe extern "C" fn canonical_identity(receiver: Raw) -> Raw {
     unsafe { com_ref::identity(receiver) }.map_or(null_mut(), |identity| identity.as_raw())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_add_ref(object: Raw) {
+pub(super) unsafe extern "C" fn add_ref(object: Raw) {
     unsafe { com_ref::retain(object) }.into_raw();
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_release(object: Raw) {
+pub(super) unsafe extern "C" fn release(object: Raw) {
     drop(unsafe { com_ref::owned(object) });
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_bridge_new(chain: *mut Chain) -> Raw {
+pub(super) unsafe extern "C" fn bridge_new(chain: *mut Chain) -> Raw {
     let capsule: Raw = allocate_handle(FacadeState::default()).cast();
     if capsule.is_null() {
         return null_mut();
@@ -178,13 +168,11 @@ unsafe extern "C" fn rsf_d3d11p_native_bridge_new(chain: *mut Chain) -> Raw {
     facade
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_bridge_release_owned(facade: Raw) {
+pub(super) unsafe extern "C" fn bridge_release_owned(facade: Raw) {
     unsafe { rsf_d3d11p_facade_release(facade) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_facts(facade: Raw, out: *mut rsf_d3d11p_facts) {
+pub(super) unsafe extern "C" fn facts(facade: Raw, out: *mut rsf_d3d11p_facts) {
     let s = unsafe { state(facade) };
     let d = unsafe { description(facade) };
     unsafe {
@@ -206,8 +194,7 @@ unsafe extern "C" fn rsf_d3d11p_native_facts(facade: Raw, out: *mut rsf_d3d11p_f
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_init_source(
+pub(super) unsafe extern "C" fn init_source(
     facade: Raw,
     factory: Raw,
     source: Raw,
@@ -225,8 +212,7 @@ unsafe extern "C" fn rsf_d3d11p_native_init_source(
     s.native12
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_queue_device(facade: Raw) -> i32 {
+pub(super) unsafe extern "C" fn native_device(facade: Raw) -> i32 {
     let s = unsafe { state_mut(facade) };
     s.direct_device = None;
     let mut device = null_mut();
@@ -235,15 +221,12 @@ unsafe extern "C" fn rsf_d3d11p_native_queue_device(facade: Raw) -> i32 {
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_owning_adapter(
+pub(super) unsafe extern "C" fn owning_adapter(
     facade: Raw,
     source: Raw,
     out: *mut rsf_d3d11p_adapter,
 ) -> i32 {
-    if unsafe { state(facade) }.native12 != 0
-        && unsafe { rsf_d3d11p_native_queue_device(facade) } < 0
-    {
+    if unsafe { state(facade) }.native12 != 0 && unsafe { native_device(facade) } < 0 {
         return E_FAIL;
     }
     let mut info = AdapterInfo::default();
@@ -257,19 +240,14 @@ unsafe extern "C" fn rsf_d3d11p_native_owning_adapter(
         out.write(rsf_d3d11p_adapter {
             vendor: info.vendor,
             device: info.device,
-            default_backend: rsf_d3d11p_default_backend(info.vendor, info.software),
+            default_backend: crate::fg_choice::rsf_fg_default_backend(info.vendor, info.software),
             reserved: 0,
         });
     }
     S_OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_adopt_host(
-    facade: Raw,
-    identity: u32,
-    result: *mut i32,
-) -> u32 {
+pub(super) unsafe extern "C" fn adopt_host(facade: Raw, identity: u32, result: *mut i32) -> u32 {
     let s = unsafe { state_mut(facade) };
     let mut adapter = null_mut();
     if unsafe { rsf_d3d11p_device_native_adapter(raw(&s.direct_device), &mut adapter) } < 0 {
@@ -293,8 +271,7 @@ unsafe extern "C" fn rsf_d3d11p_native_adopt_host(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_d3d11_device(facade: Raw, source: Raw) -> i32 {
+pub(super) unsafe extern "C" fn d3d11_device(facade: Raw, source: Raw) -> i32 {
     let s = unsafe { state_mut(facade) };
     s.device = None;
     s.context = None;
@@ -308,24 +285,21 @@ unsafe extern "C" fn rsf_d3d11p_native_d3d11_device(facade: Raw, source: Raw) ->
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_create_host(facade: Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_host(facade: Raw) -> i32 {
     let s = unsafe { state_mut(facade) };
     let setup = host_setup(raw(&s.adapter));
     unsafe { rsf_streamline_host_create(&setup, (&raw mut s.host).cast()) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_host(facade: Raw) -> Raw {
+pub(super) unsafe extern "C" fn host(facade: Raw) -> Raw {
     unsafe { state(facade) }.host
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_resolve_graphics(facade: Raw) -> i32 {
+pub(super) unsafe extern "C" fn resolve_graphics(facade: Raw) -> i32 {
     let s = unsafe { state_mut(facade) };
     let adapter = s.adapter.take();
     if !s.host.is_null() {
-        return if unsafe { rsf_d3d11p_streamline_graphics(s.host, &mut s.graphics) } == 0 {
+        return if unsafe { rsf_streamline_host_graphics(s.host, &mut s.graphics) } == 0 {
             S_OK
         } else {
             E_FAIL
@@ -341,7 +315,7 @@ unsafe extern "C" fn rsf_d3d11p_native_resolve_graphics(facade: Raw) -> i32 {
     }
     if s.direct_queue.is_none() {
         let mut queue = null_mut();
-        if unsafe { rsf_d3d11p_gpu_queue(raw(&s.direct_device), &mut queue) } < 0 {
+        if unsafe { create_interop_queue(raw(&s.direct_device), &mut queue) } < 0 {
             return E_FAIL;
         }
         s.direct_queue = unsafe { com_ref::owned(queue) };
@@ -353,23 +327,17 @@ unsafe extern "C" fn rsf_d3d11p_native_resolve_graphics(facade: Raw) -> i32 {
     S_OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_tearing_supported(facade: Raw) -> u32 {
+pub(super) unsafe extern "C" fn tearing_supported(facade: Raw) -> u32 {
     let s = unsafe { state_mut(facade) };
     s.tearing = unsafe { rsf_d3d11p_device_tearing(raw(&s.parent)) };
     s.tearing
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_fsr4_supported(
-    facade: Raw,
-    directory: *const c_char,
-) -> u32 {
+pub(super) unsafe extern "C" fn fsr4_supported(facade: Raw, directory: *const c_char) -> u32 {
     unsafe { rsf_generation_fsr4_supported(state(facade).graphics.native_device, directory) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_create_upload_fence(facade: Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_upload_fence(facade: Raw) -> i32 {
     let s = unsafe { state_mut(facade) };
     let config = settings();
     let ok = unsafe {
@@ -384,8 +352,7 @@ unsafe extern "C" fn rsf_d3d11p_native_create_upload_fence(facade: Raw) -> i32 {
     if ok { S_OK } else { E_FAIL }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_create_slot(
+pub(super) unsafe extern "C" fn create_slot(
     facade: Raw,
     allocator: *mut Raw,
     list: *mut Raw,
@@ -393,8 +360,7 @@ unsafe extern "C" fn rsf_d3d11p_native_create_slot(
     unsafe { rsf_d3d11p_gpu_create_slot(state(facade).graphics.device, allocator, list) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_create_render_buffer(
+pub(super) unsafe extern "C" fn create_render_buffer(
     facade: Raw,
     width: u32,
     height: u32,
@@ -412,8 +378,7 @@ unsafe extern "C" fn rsf_d3d11p_native_create_render_buffer(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_create_plain(
+pub(super) unsafe extern "C" fn create_plain(
     facade: Raw,
     plan: &rsf_d3d11p_plain_plan,
     physical: *mut Raw,
@@ -435,8 +400,7 @@ unsafe extern "C" fn rsf_d3d11p_native_create_plain(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_resize_physical(
+pub(super) unsafe extern "C" fn resize_physical(
     facade: Raw,
     physical: Raw,
     count: u32,
@@ -456,8 +420,7 @@ unsafe extern "C" fn rsf_d3d11p_native_resize_physical(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_upload_wait(facade: Raw, queue: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn upload_wait(facade: Raw, queue: Raw, value: u64) -> i32 {
     let s = unsafe { state(facade) };
     unsafe {
         rsf_d3d11p_gpu_upload_wait(
@@ -470,8 +433,7 @@ unsafe extern "C" fn rsf_d3d11p_native_upload_wait(facade: Raw, queue: Raw, valu
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_record_copy(
+pub(super) unsafe extern "C" fn record_copy(
     facade: Raw,
     commands: Raw,
     backbuffer: Raw,
@@ -480,13 +442,11 @@ unsafe extern "C" fn rsf_d3d11p_native_record_copy(
     unsafe { rsf_d3d11p_gpu_record_copy(commands, backbuffer, source, state(facade).native12) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_context11(facade: Raw) -> Raw {
+pub(super) unsafe extern "C" fn context11(facade: Raw) -> Raw {
     raw(&unsafe { state(facade) }.context)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_upload_return(facade: Raw, queue: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn upload_return(facade: Raw, queue: Raw, value: u64) -> i32 {
     let s = unsafe { state(facade) };
     unsafe {
         rsf_d3d11p_gpu_upload_return(
@@ -499,12 +459,7 @@ unsafe extern "C" fn rsf_d3d11p_native_upload_return(facade: Raw, queue: Raw, va
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_report_device_failure(
-    facade: Raw,
-    result: i32,
-    backend: u32,
-) {
+pub(super) unsafe extern "C" fn report_device_failure(facade: Raw, result: i32, backend: u32) {
     let device = raw(&unsafe { state(facade) }.direct_device);
     let Some(device) = (unsafe { ID3D12Device::from_raw_borrowed(&device) }) else {
         return;
@@ -553,8 +508,7 @@ fn report_debug_messages(device: &ID3D12Device) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_log_present_failure(
+pub(super) unsafe extern "C" fn log_present_failure(
     facade: Raw,
     step: *const c_char,
     result: i32,
@@ -568,8 +522,7 @@ unsafe extern "C" fn rsf_d3d11p_native_log_present_failure(
     ));
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_log_buffer_refusal(
+pub(super) unsafe extern "C" fn log_buffer_refusal(
     facade: Raw,
     index: u32,
     requested: *const c_void,
@@ -584,8 +537,7 @@ unsafe extern "C" fn rsf_d3d11p_native_log_buffer_refusal(
     ));
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_set_description(
+pub(super) unsafe extern "C" fn set_description(
     facade: Raw,
     count: u32,
     width: u32,
@@ -602,13 +554,11 @@ unsafe extern "C" fn rsf_d3d11p_native_set_description(
     d.Flags = flags;
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_create_retirement_fence(facade: Raw, out: *mut Raw) -> i32 {
-    unsafe { rsf_d3d11p_gpu_fence(state(facade).graphics.native_device, out) }
+pub(super) unsafe extern "C" fn create_retirement_fence(facade: Raw, out: *mut Raw) -> i32 {
+    unsafe { create_completion_fence(state(facade).graphics.native_device, out) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_retire_submit(
+pub(super) unsafe extern "C" fn retire_submit(
     facade: Raw,
     queue: Raw,
     retirement_fence: Raw,
@@ -626,13 +576,12 @@ unsafe extern "C" fn rsf_d3d11p_native_retire_submit(
             vendor_value,
             list,
             value,
-            rsf_d3d11p_native_command_list,
+            command_list,
         )
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_retain_all(facade: Raw) {
+pub(super) unsafe extern "C" fn retain_all(facade: Raw) {
     let s = unsafe { state_mut(facade) };
     // Unknown completion: leave every reference reachable by GPU work alive.
     for reference in [
@@ -648,21 +597,18 @@ unsafe extern "C" fn rsf_d3d11p_native_retain_all(facade: Raw) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_release_presentation(facade: Raw) {
+pub(super) unsafe extern "C" fn release_presentation(facade: Raw) {
     let fence = std::mem::replace(&mut unsafe { state_mut(facade) }.shared_fence, null_mut());
     unsafe { rsf_shared_fence_destroy(fence) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_release_direct_graphics(facade: Raw) {
+pub(super) unsafe extern "C" fn release_direct_graphics(facade: Raw) {
     let s = unsafe { state_mut(facade) };
     s.direct_queue = None;
     s.direct_device = None;
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_release_host(facade: Raw) {
+pub(super) unsafe extern "C" fn release_host(facade: Raw) {
     let s = unsafe { state_mut(facade) };
     s.context = None;
     s.device = None;
@@ -671,8 +617,7 @@ unsafe extern "C" fn rsf_d3d11p_native_release_host(facade: Raw) {
     unsafe { rsf_streamline_host_destroy(host.cast()) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_source_queue(facade: Raw, mut queue: Raw) -> Raw {
+pub(super) unsafe extern "C" fn source_queue(facade: Raw, mut queue: Raw) -> Raw {
     let s = unsafe { state(facade) };
     if s.native12 == 0 && !s.host.is_null() && !queue.is_null() {
         queue = unsafe { rsf_d3d11p_unwrap_guarded(s.host, queue) };
@@ -683,8 +628,7 @@ unsafe extern "C" fn rsf_d3d11p_native_source_queue(facade: Raw, mut queue: Raw)
     queue
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_command_list(facade: Raw, queue: Raw, list: Raw) -> Raw {
+pub(super) unsafe extern "C" fn command_list(facade: Raw, queue: Raw, list: Raw) -> Raw {
     let s = unsafe { state(facade) };
     if !s.host.is_null() && queue != s.graphics.queue {
         unsafe { rsf_d3d11p_unwrap_guarded(s.host, list) }

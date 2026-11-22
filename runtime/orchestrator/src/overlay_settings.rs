@@ -11,8 +11,8 @@ use crate::sys::{
 };
 use crate::{
     d3d11_present::{
-        rsf_core_d3d11p_backend, rsf_core_d3d11p_backend_choices, rsf_core_d3d11p_has_owner,
-        rsf_core_d3d11p_switch_result,
+        rsf_d3d11_present_backend, rsf_d3d11_present_backend_choices, rsf_d3d11_present_has_owner,
+        rsf_d3d11_present_switch_result,
     },
     fg_choice::rsf_fg_choice_get,
     native_cpu::rsf_native_input_receipts_get,
@@ -64,18 +64,18 @@ pub(super) unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg:
         rsf_core_native_input_routes_get,
     );
     let choice = rsf_fg_choice_get();
-    stats.fg_backend = if rsf_core_d3d11p_has_owner() != 0 {
-        rsf_core_d3d11p_backend()
+    stats.fg_backend = if rsf_d3d11_present_has_owner() != 0 {
+        rsf_d3d11_present_backend()
     } else {
         0
     };
     stats.fg_requested_backend = choice.backend;
     stats.fg_backend_choices =
-        (choice.choices & rsf_core_d3d11p_backend_choices()) | RSF_OVERLAY_FG_RUNTIME_SWITCH;
+        (choice.choices & rsf_d3d11_present_backend_choices()) | RSF_OVERLAY_FG_RUNTIME_SWITCH;
     stats.fg_selection_result = if choice.last_result != 0 {
         choice.last_result
     } else {
-        rsf_core_d3d11p_switch_result()
+        rsf_d3d11_present_switch_result()
     };
     let Some(fg) = (unsafe { fg.as_ref() }) else {
         return;

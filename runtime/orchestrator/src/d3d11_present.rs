@@ -37,20 +37,70 @@ use std::sync::atomic::{
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
 use windows::core::{IUnknown, Interface};
 
+// Under unit tests the fakes replace these modules' leaves.
+#[cfg_attr(test, allow(dead_code))]
 #[path = "d3d11_present_device.rs"]
 mod device;
+#[cfg_attr(test, allow(dead_code))]
 #[path = "d3d11_present_dxgi.rs"]
 mod dxgi;
 #[path = "d3d11_present_facade.rs"]
 mod facade;
 #[path = "d3d11_present_factory.rs"]
 mod factory;
+#[cfg_attr(test, allow(dead_code))]
 #[path = "d3d11_present_gpu.rs"]
 mod gpu;
+#[cfg_attr(test, allow(dead_code))]
 #[path = "d3d11_present_native.rs"]
 mod native;
 
-type Platform = rsf_d3d11p_platform;
+/// The native DXGI, D3D12, Win32 and SDK steps the owner calls. Unit tests swap in fakes with the
+/// same names (d3d11_present_tests.rs).
+#[cfg(not(test))]
+mod leaf {
+    pub(super) use super::facade::rsf_d3d11p_facade_chain as bridge_chain;
+    pub(super) use super::provider_table;
+    use super::{Event as rsf_observer_present_event, Raw};
+    pub(super) use super::{device::verify_outer, dxgi::*, gpu::*, native::*};
+    pub(super) use crate::shared_surface::rsf_shared_surface_native_platform as shared_surface_platform;
+    // The observer and Streamline host owners, linked from their own modules.
+    unsafe extern "C" {
+        fn rsf_observer_notify_application_present(event: *mut rsf_observer_present_event) -> i32;
+        fn rsf_streamline_host_reflex(host: Raw, mode: u32, limit: u32) -> i32;
+        #[link_name = "rsf_streamline_host_sleep"]
+        pub(super) fn host_sleep(host: Raw, id: u64) -> i32;
+        #[link_name = "rsf_streamline_host_marker"]
+        pub(super) fn host_marker(host: Raw, id: u64, marker: u32, controller: u32) -> i32;
+        #[link_name = "rsf_streamline_host_acquire"]
+        pub(super) fn host_acquire(host: Raw, id: u64) -> i32;
+        #[link_name = "rsf_streamline_host_input"]
+        pub(super) fn host_input(host: Raw, id: u64, kinds: u32, message: u32) -> i32;
+        #[link_name = "rsf_streamline_host_abort"]
+        pub(super) fn host_abort(host: Raw, id: u64) -> i32;
+        #[link_name = "rsf_streamline_host_generation_load"]
+        pub(super) fn host_generation_load(host: Raw, enabled: u32) -> i32;
+        #[link_name = "rsf_streamline_host_present_common"]
+        pub(super) fn host_present_common(
+            host: Raw,
+            chain: Raw,
+            sync: u32,
+            flags: u32,
+            begin: u32,
+        ) -> i32;
+    }
+
+    pub(super) unsafe fn observer_present(event: *mut rsf_observer_present_event) {
+        unsafe { rsf_observer_notify_application_present(event) };
+    }
+
+    pub(super) unsafe fn host_reflex_off(host: Raw) -> i32 {
+        unsafe { rsf_streamline_host_reflex(host, super::RSF_REFLEX_OFF, 0) }
+    }
+}
+#[cfg(test)]
+use tests as leaf;
+
 type Graphics = rsf_streamline_graphics;
 
 pub(crate) const S_OK: i32 = 0;
@@ -133,9 +183,28 @@ pub(crate) fn family(backend: u32) -> Option<u32> {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_fg_provider_family(backend: u32) -> u32 {
-    family(backend).unwrap_or(0)
+unsafe extern "C" {
+    fn rsf_generation_dlss() -> *const Provider;
+    fn rsf_generation_fsr() -> *const Provider;
+    fn rsf_generation_xess() -> *const Provider;
+}
+
+/// The SDK provider table of a family.
+#[cfg_attr(test, allow(dead_code))]
+unsafe fn provider_table(family: u32) -> *const Provider {
+    unsafe {
+        match family {
+            FAMILY_DLSS => rsf_generation_dlss(),
+            FAMILY_FIDELITYFX => rsf_generation_fsr(),
+            FAMILY_XESS => rsf_generation_xess(),
+            _ => ptr::null(),
+        }
+    }
+}
+
+/// rsf_fg_get_provider's provider, shared with the orchestrator.
+pub(crate) fn provider_for(backend: u32) -> *const Provider {
+    family(backend).map_or(ptr::null(), |family| unsafe { provider_table(family) })
 }
 
 fn hex(value: *const c_void) -> String {
@@ -203,12 +272,6 @@ fn sdk_directory(backend: u32) -> *const c_char {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_settings() -> *const Setup {
-    settings()
-}
-
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_prepare(
     setup: *const Setup,
     installed: u32,
@@ -347,9 +410,9 @@ fn generation() -> u64 {
     CHAIN_GENERATION.load(Ordering::SeqCst)
 }
 
-fn provider_api(platform: &Platform, backend: u32) -> Option<&'static Provider> {
+fn provider_api(backend: u32) -> Option<&'static Provider> {
     let family = family(backend)?;
-    let table = unsafe { (platform.provider_table)(family) };
+    let table = unsafe { leaf::provider_table(family) };
     if table.is_null() || unsafe { table.cast::<u32>().read() } < size_of::<Provider>() as u32 {
         return None;
     }
@@ -540,16 +603,12 @@ unsafe impl Sync for CommandSlots {}
 // by DuplicateHandle has its own lifetime.
 struct EventLease {
     handle: NonNull<c_void>,
-    close: unsafe extern "C" fn(Raw),
 }
 
 impl EventLease {
-    fn create(platform: &Platform, initially_signaled: bool) -> Option<Self> {
-        let handle = unsafe { (platform.create_event)(u32::from(initially_signaled)) };
-        NonNull::new(handle).map(|handle| Self {
-            handle,
-            close: platform.close_event,
-        })
+    fn create(initially_signaled: bool) -> Option<Self> {
+        let handle = unsafe { leaf::create_event(u32::from(initially_signaled)) };
+        NonNull::new(handle).map(|handle| Self { handle })
     }
 
     fn as_ptr(&self) -> Raw {
@@ -559,7 +618,7 @@ impl EventLease {
 
 impl Drop for EventLease {
     fn drop(&mut self) {
-        unsafe { (self.close)(self.as_ptr()) };
+        unsafe { leaf::close_event(self.as_ptr()) };
     }
 }
 
@@ -576,30 +635,30 @@ struct PresentationSync {
 impl PresentationSync {
     // Store each acquisition before checking the result so an unpublished facade retires
     // the same partial state as a published one.
-    fn initialize(&mut self, p: &Platform, facts: &rsf_d3d11p_facts, ready: bool) -> i32 {
+    fn initialize(&mut self, facts: &rsf_d3d11p_facts, ready: bool) -> i32 {
         self.graphics_queue = NonNull::new(facts.graphics.queue);
         if facts.native12 != 0 {
             self.interop_queue = Some(unsafe { com_ref::retain(facts.direct_queue) });
         } else {
             let mut queue = null_mut();
-            let result = unsafe { (p.create_interop_queue)(facts.graphics.device, &mut queue) };
+            let result = unsafe { leaf::create_interop_queue(facts.graphics.device, &mut queue) };
             self.interop_queue = unsafe { com_ref::owned(queue) };
             if failed(result) {
                 return E_FAIL;
             }
         }
-        self.completion_event = EventLease::create(p, false);
+        self.completion_event = EventLease::create(false);
         if self.completion_event.is_none() {
             return E_FAIL;
         }
         let mut fence = null_mut();
-        let result = unsafe { (p.create_completion_fence)(facts.graphics.device, &mut fence) };
+        let result = unsafe { leaf::create_completion_fence(facts.graphics.device, &mut fence) };
         self.completion_fence = unsafe { com_ref::owned(fence) };
         if failed(result) {
             return E_FAIL;
         }
         if ready {
-            self.application_ready = EventLease::create(p, true);
+            self.application_ready = EventLease::create(true);
             if self.application_ready.is_none() {
                 return E_FAIL;
             }
@@ -640,7 +699,6 @@ struct ProviderRetirement {
 // DXGI serializes the application's frame calls. Provider callbacks and the retire
 // lease can reenter on the same thread.
 pub(crate) struct Owner {
-    platform: *const Platform,
     bridge: AtomicPtr<c_void>,
     native12: AtomicBool,
     tearing: AtomicBool,
@@ -674,9 +732,8 @@ unsafe impl Send for Owner {}
 unsafe impl Sync for Owner {}
 
 impl Owner {
-    fn new(platform: *const Platform) -> Self {
+    fn new() -> Self {
         Self {
-            platform,
             bridge: AtomicPtr::new(null_mut()),
             native12: AtomicBool::new(false),
             tearing: AtomicBool::new(false),
@@ -705,10 +762,6 @@ impl Owner {
             last_normalized_sync: AtomicU32::new(0),
             timing: Mutex::new(Timing::default()),
         }
-    }
-
-    fn p(&self) -> &Platform {
-        unsafe { &*self.platform }
     }
 
     fn b(&self) -> Raw {
@@ -747,12 +800,12 @@ impl Owner {
             device11: null_mut(),
             buffer_usage: 0,
         };
-        unsafe { (self.p().facts)(self.b(), &mut facts) };
+        unsafe { leaf::facts(self.b(), &mut facts) };
         facts
     }
 
     fn api(&self) -> Option<&'static Provider> {
-        provider_api(self.p(), self.provider_backend.load(Ordering::Relaxed))
+        provider_api(self.provider_backend.load(Ordering::Relaxed))
     }
 
     // Every current provider status is a cached-only copy; SDK polling stays in the owner callbacks.
@@ -885,7 +938,7 @@ impl Owner {
         let Some((backend, session)) = *pending else {
             return OK;
         };
-        let result = destroy_provider(provider_api(self.p(), backend), session as Raw);
+        let result = destroy_provider(provider_api(backend), session as Raw);
         if result == OK {
             *pending = None;
         }
@@ -905,7 +958,6 @@ impl Owner {
         if retired != OK {
             return retired;
         }
-        let p = self.p();
         if backend == 0 {
             let facts = self.facts();
             // D3D11 application bindings belong to the virtual buffers. The plain physical
@@ -932,12 +984,12 @@ impl Owner {
             };
             let mut queue = null_mut();
             let chain = acquire_resource(|out| unsafe {
-                (p.create_plain)(self.b(), &plan, out, &mut queue)
+                leaf::create_plain(self.b(), &plan, out, &mut queue)
             });
             return self.publish_physical(chain, queue);
         }
         let setup = self.generation_setup(backend);
-        let Some(api) = provider_api(p, backend) else {
+        let Some(api) = provider_api(backend) else {
             return NOT_SUPPORTED;
         };
         let (Some(create), Some(configure)) = (api.create, api.configure) else {
@@ -968,7 +1020,7 @@ impl Owner {
             result = unsafe { configure(provider, &FG_OFF) };
         }
         if result == OK {
-            let chain4 = acquire_resource(|out| unsafe { (p.query_chain4)(chain, out) });
+            let chain4 = acquire_resource(|out| unsafe { leaf::query_chain4(chain, out) });
             result = self.publish_physical(chain4, setup.chain.d3d12_queue);
         }
         if result == OK {
@@ -985,7 +1037,6 @@ impl Owner {
 
     // Joins the shared queues and the provider's retirement fence.
     fn drain(&self) -> i32 {
-        let p = self.p();
         let (interop, graphics, (fence, event)) = {
             let sync = lock(&self.sync);
             (sync.queue(), sync.graphics_queue, sync.completion())
@@ -997,11 +1048,12 @@ impl Owner {
             return S_OK;
         }
         if !interop.is_null()
-            && failed(unsafe { (p.signal_wait)(interop, fence, event, self.next_serial()) })
+            && failed(unsafe { leaf::signal_wait(interop, fence, event, self.next_serial()) })
         {
             return E_FAIL;
         }
-        if failed(unsafe { (p.signal_wait)(graphics.as_ptr(), fence, event, self.next_serial()) }) {
+        if failed(unsafe { leaf::signal_wait(graphics.as_ptr(), fence, event, self.next_serial()) })
+        {
             return E_FAIL;
         }
         let provider = self.provider();
@@ -1018,7 +1070,7 @@ impl Owner {
                     call(provider, &mut retirement)
                 });
             if retired != OK
-                || failed(unsafe { (p.wait_fence)(retirement.fence, event, retirement.value) })
+                || failed(unsafe { leaf::wait_fence(retirement.fence, event, retirement.value) })
             {
                 return E_FAIL;
             }
@@ -1031,7 +1083,6 @@ impl Owner {
     }
 
     fn ensure_physical(&self) -> Result<Arc<Physical>, i32> {
-        let p = self.p();
         // Never create the HWND owner from an outer wrapper's constructor query.
         if SCOPED.load(Ordering::Acquire) && SCOPE_TOKEN.get() != 0 {
             return Err(DXGI_ERROR_WAS_STILL_DRAWING);
@@ -1063,7 +1114,7 @@ impl Owner {
         let host = self.host();
         if !host.is_null()
             && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS
-            && unsafe { (p.host_generation_load)(host, 0) } != OK
+            && unsafe { leaf::host_generation_load(host, 0) } != OK
         {
             self.physical_creation
                 .store(PhysicalCreation::Pending as u8, Ordering::Release);
@@ -1098,7 +1149,7 @@ impl Owner {
         self.physical_creation
             .store(PhysicalCreation::Idle as u8, Ordering::Release);
         if self.facts().windowed == 0
-            && failed(unsafe { (p.set_fullscreen)(physical.chain.as_raw(), 1, null_mut()) })
+            && failed(unsafe { leaf::set_fullscreen(physical.chain.as_raw(), 1, null_mut()) })
         {
             return Err(E_FAIL);
         }
@@ -1109,7 +1160,6 @@ impl Owner {
         &self,
         facts: &rsf_d3d11p_facts,
     ) -> Result<ApplicationBuffers, i32> {
-        let p = self.p();
         let mut batch = ApplicationBuffers::default();
         let slots = batch
             .get_mut(..facts.buffer_count as usize)
@@ -1118,7 +1168,13 @@ impl Owner {
         if self.native12() {
             for slot in slots {
                 let resource = acquire_resource(|out| unsafe {
-                    (p.create_render_buffer)(self.b(), facts.width, facts.height, facts.format, out)
+                    leaf::create_render_buffer(
+                        self.b(),
+                        facts.width,
+                        facts.height,
+                        facts.format,
+                        out,
+                    )
                 })?;
                 *slot = Some(ApplicationBuffer::Render(resource));
             }
@@ -1138,7 +1194,7 @@ impl Owner {
             if device12.is_null() || !shared_surface::valid_surface(facts.device11, &setup) {
                 return Err(E_FAIL);
             }
-            let platform = unsafe { &*(p.shared_surface_platform)() };
+            let platform = unsafe { &*leaf::shared_surface_platform() };
             for slot in slots {
                 let surface = unsafe {
                     shared_surface::create_surface(platform, facts.device11, device12, &setup)
@@ -1161,13 +1217,13 @@ impl Owner {
     }
 
     fn buffers_referenced(&self) -> bool {
-        lock(&self.buffers).iter().flatten().any(|buffer| unsafe {
-            (self.p().buffer_referenced)(buffer.application().as_raw()) != 0
-        })
+        lock(&self.buffers)
+            .iter()
+            .flatten()
+            .any(|buffer| unsafe { leaf::buffer_referenced(buffer.application().as_raw()) != 0 })
     }
 
     unsafe fn get_buffer(&self, index: u32, iid: *const c_void, out: *mut Raw) -> i32 {
-        let p = self.p();
         // Wrappers can query virtual buffers before any physical chain is created.
         if !self.native12() || switching() {
             let buffer = lock(&self.buffers)
@@ -1175,7 +1231,7 @@ impl Owner {
                 .and_then(Option::as_ref)
                 .map(|buffer| buffer.application().clone());
             return buffer.map_or(DXGI_ERROR_INVALID_CALL, |buffer| unsafe {
-                (p.query_buffer_interface)(buffer.as_raw(), iid, out)
+                leaf::query_buffer_interface(buffer.as_raw(), iid, out)
             });
         }
         let physical = match self.ensure_physical() {
@@ -1183,18 +1239,16 @@ impl Owner {
             Err(error) => {
                 if self.failed_buffer_reports.fetch_add(1, Ordering::Relaxed) < 4 {
                     let pending = u32::from(self.creation_pending());
-                    unsafe { (p.log_buffer_refusal)(self.b(), index, iid, error, pending) };
+                    unsafe { leaf::log_buffer_refusal(self.b(), index, iid, error, pending) };
                 }
                 return error;
             }
         };
-        unsafe { (p.get_physical_buffer)(physical.chain.as_raw(), index, iid, out) }
+        unsafe { leaf::get_physical_buffer(physical.chain.as_raw(), index, iid, out) }
     }
 
     fn acquire_backbuffer(&self, physical: &Physical) -> Result<IUnknown, i32> {
-        acquire_resource(|out| unsafe {
-            (self.p().acquire_backbuffer)(physical.chain.as_raw(), out)
-        })
+        acquire_resource(|out| unsafe { leaf::acquire_backbuffer(physical.chain.as_raw(), out) })
     }
 
     fn copy_source(&self, index: u32) -> Option<IUnknown> {
@@ -1208,12 +1262,11 @@ impl Owner {
     // Creates the slot pairs in slot order. A refusal keeps the earlier pairs, which teardown
     // releases or retains with the rest of the unpublished facade.
     fn create_command_slots(&self) -> i32 {
-        let p = self.p();
         let mut pairs = Vec::with_capacity(SLOTS);
         let mut result = S_OK;
         while pairs.len() < SLOTS {
             let (mut allocator, mut list) = (null_mut(), null_mut());
-            let created = unsafe { (p.create_slot)(self.b(), &mut allocator, &mut list) };
+            let created = unsafe { leaf::create_slot(self.b(), &mut allocator, &mut list) };
             let list = unsafe { com_ref::owned(list) };
             let allocator = unsafe { com_ref::owned(allocator) };
             match (list, allocator) {
@@ -1262,7 +1315,7 @@ impl Owner {
         }
         let ready = lock(&self.sync).ready_event();
         if !ready.is_null() {
-            let _ = unsafe { (self.p().application_ready)(ready, null_mut(), 0) };
+            let _ = unsafe { leaf::application_ready(ready, null_mut(), 0) };
         }
     }
 
@@ -1273,7 +1326,6 @@ impl Owner {
         request: &rsf_d3d11p_request,
         desc: *const c_void,
     ) -> i32 {
-        let p = self.p();
         let b = self.b();
         let setup = settings();
         let identity = prepared().is_some_and(|value| value.identity);
@@ -1286,11 +1338,11 @@ impl Owner {
         } else {
             0.0
         };
-        let native12 = unsafe { (p.init_source)(b, factory, source, desc) } != 0;
+        let native12 = unsafe { leaf::init_source(b, factory, source, desc) } != 0;
         self.native12.store(native12, Ordering::Relaxed);
         if setup.backend == AUTO {
             let mut adapter = rsf_d3d11p_adapter::default();
-            if failed(unsafe { (p.owning_adapter)(b, source, &mut adapter) }) {
+            if failed(unsafe { leaf::owning_adapter(b, source, &mut adapter) }) {
                 return E_FAIL;
             }
             let allowed = setup.allowed_backend_choices;
@@ -1313,13 +1365,13 @@ impl Owner {
             if setup.backend == DLSS && setup.runtime_switching == 0 {
                 return DXGI_ERROR_UNSUPPORTED;
             }
-            let result = unsafe { (p.native_device)(b) };
+            let result = unsafe { leaf::native_device(b) };
             if failed(result) {
                 return result;
             }
             if setup.runtime_switching != 0 && explicit {
                 let mut adopted = NOT_SUPPORTED;
-                if unsafe { (p.adopt_host)(b, u32::from(identity), &mut adopted) } != 0 {
+                if unsafe { leaf::adopt_host(b, u32::from(identity), &mut adopted) } != 0 {
                     // Only INIT_FAILED can follow slInit, slUpgradeInterface or slSetD3DDevice on the
                     // engine device, which may then be half registered. Every other refusal happens
                     // before the device is touched and only leaves DLSS-G unavailable.
@@ -1335,7 +1387,7 @@ impl Owner {
                 }
             }
         } else {
-            let result = unsafe { (p.d3d11_device)(b, source) };
+            let result = unsafe { leaf::d3d11_device(b, source) };
             if failed(result) {
                 return result;
             }
@@ -1346,7 +1398,7 @@ impl Owner {
             setup.runtime_switching == 0 && (setup.backend == 0 || setup.backend == DLSS);
         if !native12 && (dlss_required || setup.runtime_switching != 0) {
             let result = if identity {
-                unsafe { (p.create_host)(b) }
+                unsafe { leaf::create_host(b) }
             } else {
                 NOT_SUPPORTED
             };
@@ -1364,15 +1416,17 @@ impl Owner {
                 }
             }
         }
-        self.host.store(unsafe { (p.host)(b) }, Ordering::Release);
-        let result = unsafe { (p.resolve_graphics)(b) };
+        self.host.store(unsafe { leaf::host(b) }, Ordering::Release);
+        let result = unsafe { leaf::resolve_graphics(b) };
         if failed(result) {
             return result;
         }
-        self.tearing
-            .store(unsafe { (p.tearing_supported)(b) } != 0, Ordering::Relaxed);
+        self.tearing.store(
+            unsafe { leaf::tearing_supported(b) } != 0,
+            Ordering::Relaxed,
+        );
         let mut choices = RSF_FG_BACKEND_ALL | 1;
-        if unsafe { (p.fsr4_supported)(b, setup.fsr4_directory_utf8) } == 0 {
+        if unsafe { leaf::fsr4_supported(b, setup.fsr4_directory_utf8) } == 0 {
             choices &= !bit(FSR4);
         }
         if setup.allowed_backend_choices != 0 {
@@ -1383,13 +1437,13 @@ impl Owner {
             && setup.runtime_switching != 0
             && request.flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT != 0;
         let mut sync = PresentationSync::default();
-        let result = sync.initialize(p, &self.facts(), ready);
+        let result = sync.initialize(&self.facts(), ready);
         *lock(&self.sync) = sync;
         if failed(result) {
             return E_FAIL;
         }
         if !native12 {
-            if failed(unsafe { (p.create_upload_fence)(b) })
+            if failed(unsafe { leaf::create_upload_fence(b) })
                 || self.create_application_buffers(&self.facts()).is_err()
             {
                 return E_FAIL;
@@ -1420,7 +1474,7 @@ impl Owner {
         }
         if request.windowed == 0
             && let Some(physical) = self.physical()
-            && failed(unsafe { (p.set_fullscreen)(physical.chain.as_raw(), 1, null_mut()) })
+            && failed(unsafe { leaf::set_fullscreen(physical.chain.as_raw(), 1, null_mut()) })
         {
             return E_FAIL;
         }
@@ -1483,7 +1537,6 @@ impl Owner {
     }
 
     fn switch_provider(&self, backend: u32) {
-        let p = self.p();
         let b = self.b();
         let setup = settings();
         let allowed = setup.allowed_backend_choices;
@@ -1523,7 +1576,7 @@ impl Owner {
         {
             let mut probe_setup = self.generation_setup(backend);
             probe_setup.chain.hwnd = null_mut();
-            result = match provider_api(p, backend).and_then(|api| api.create) {
+            result = match provider_api(backend).and_then(|api| api.create) {
                 Some(create) => {
                     let mut probe = null_mut();
                     let mut probe_chain = null_mut();
@@ -1560,9 +1613,9 @@ impl Owner {
             .as_ref()
             .map_or(null_mut(), |pair| pair.chain.as_raw());
         if !old_chain.is_null() {
-            let _ = unsafe { (p.get_fullscreen)(old_chain, &mut fullscreen) };
+            let _ = unsafe { leaf::get_fullscreen(old_chain, &mut fullscreen) };
             if fullscreen != 0 {
-                let _ = unsafe { (p.set_fullscreen)(old_chain, 0, null_mut()) };
+                let _ = unsafe { leaf::set_fullscreen(old_chain, 0, null_mut()) };
             }
         }
         log(&format!(
@@ -1588,8 +1641,8 @@ impl Owner {
         CREATING.set(true);
         let host = self.host();
         if !host.is_null() {
-            let _ = unsafe { (p.host_reflex_off)(host) };
-            result = unsafe { (p.host_generation_load)(host, u32::from(backend == DLSS)) };
+            let _ = unsafe { leaf::host_reflex_off(host) };
+            result = unsafe { leaf::host_generation_load(host, u32::from(backend == DLSS)) };
         }
         if result == OK {
             result = self.create_physical(backend);
@@ -1598,7 +1651,7 @@ impl Owner {
         if result != OK {
             effective = previous;
             if !host.is_null() {
-                let _ = unsafe { (p.host_generation_load)(host, u32::from(previous == DLSS)) };
+                let _ = unsafe { leaf::host_generation_load(host, u32::from(previous == DLSS)) };
             }
             if self.create_physical(previous) != OK {
                 effective = 0;
@@ -1619,7 +1672,7 @@ impl Owner {
         if fullscreen != 0
             && let Some(physical) = &physical
         {
-            let _ = unsafe { (p.set_fullscreen)(physical.chain.as_raw(), 1, null_mut()) };
+            let _ = unsafe { leaf::set_fullscreen(physical.chain.as_raw(), 1, null_mut()) };
         }
         ACTIVE_BACKEND.store(effective, Ordering::SeqCst);
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
@@ -1647,7 +1700,6 @@ impl Owner {
     }
 
     fn application_frame_complete(&self, value: u64) -> i32 {
-        let p = self.p();
         let (ready, fence) = {
             let sync = lock(&self.sync);
             (sync.ready_event(), sync.completion().0)
@@ -1660,18 +1712,18 @@ impl Owner {
             .store(value, Ordering::Relaxed);
         let latency = u64::from(self.application_latency.load(Ordering::Relaxed));
         if frame < latency {
-            return unsafe { (p.application_ready)(ready, null_mut(), 0) };
+            return unsafe { leaf::application_ready(ready, null_mut(), 0) };
         }
         let available = self.application_fences
             [((frame - latency + 1) % APPLICATION_FENCES as u64) as usize]
             .load(Ordering::Relaxed);
-        unsafe { (p.application_ready)(ready, fence, available) }
+        unsafe { leaf::application_ready(ready, fence, available) }
     }
 
     fn notify_presented(&self, event: &mut Event, result: i32) {
         event.completed = 1;
         event.result = result;
-        unsafe { (self.p().observer_present)(event) };
+        unsafe { leaf::observer_present(event) };
         if let Some(callback) = settings().present_event {
             unsafe { callback(settings().user, event) };
         }
@@ -1686,7 +1738,6 @@ impl Owner {
         flags: u32,
         ticks: &mut [u64; 6],
     ) -> i32 {
-        let p = self.p();
         let setup = settings();
         let debug = setup.debug_timing != 0;
         self.receipt("physical-enter", S_OK);
@@ -1709,7 +1760,7 @@ impl Owner {
         }
         let host = self.host();
         let common = !host.is_null() && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS;
-        if common && unsafe { (p.host_present_common)(host, chain, sync, flags, 1) } != OK {
+        if common && unsafe { leaf::host_present_common(host, chain, sync, flags, 1) } != OK {
             log("presentation bridge: shared Streamline common Present begin refused");
             return E_FAIL;
         }
@@ -1720,9 +1771,9 @@ impl Owner {
             ticks[3] = tick();
         }
         self.receipt("vendor-present-enter", S_OK);
-        let result = unsafe { (p.physical_present)(chain, sync, flags) };
+        let result = unsafe { leaf::physical_present(chain, sync, flags) };
         self.receipt("vendor-present-done", result);
-        if common && unsafe { (p.host_present_common)(host, chain, sync, flags, 0) } != OK {
+        if common && unsafe { leaf::host_present_common(host, chain, sync, flags, 0) } != OK {
             log("presentation bridge: shared Streamline common Present end refused");
         }
         if debug {
@@ -1767,7 +1818,6 @@ impl Owner {
     }
 
     fn present(&self, sync: u32, flags: u32) -> i32 {
-        let p = self.p();
         let b = self.b();
         let setup = settings();
         let debug = setup.debug_timing != 0;
@@ -1778,7 +1828,7 @@ impl Owner {
         if flags & DXGI_PRESENT_TEST != 0 {
             return self.ensure_physical().map_or_else(
                 |error| error,
-                |physical| unsafe { (p.physical_present)(physical.chain.as_raw(), sync, flags) },
+                |physical| unsafe { leaf::physical_present(physical.chain.as_raw(), sync, flags) },
             );
         }
         // An incomplete provider teardown has no physical chain to present on.
@@ -1802,7 +1852,7 @@ impl Owner {
         let mut fullscreen = 0;
         if sync == 0
             && self.tearing.load(Ordering::Relaxed)
-            && !failed(unsafe { (p.get_fullscreen)(chain, &mut fullscreen) })
+            && !failed(unsafe { leaf::get_fullscreen(chain, &mut fullscreen) })
             && fullscreen == 0
         {
             physical_flags |= DXGI_PRESENT_ALLOW_TEARING;
@@ -1820,7 +1870,7 @@ impl Owner {
             result: 0,
             method: 0,
         };
-        unsafe { (p.observer_present)(&mut event) };
+        unsafe { leaf::observer_present(&mut event) };
         if let Some(callback) = setup.present_event {
             unsafe { callback(setup.user, &event) };
         }
@@ -1855,12 +1905,12 @@ impl Owner {
             let mut stage = DXGI_ERROR_DEVICE_REMOVED;
             let source_joined = !joined
                 || !failed(unsafe {
-                    (p.join)(source_queue, queue, completion_fence, self.next_serial())
+                    leaf::join(source_queue, queue, completion_fence, self.next_serial())
                 });
             if source_joined {
                 let mut step_index = 0;
                 stage = unsafe {
-                    (p.slot_reset)(
+                    leaf::slot_reset(
                         completion_fence,
                         completion_event,
                         allocator,
@@ -1887,10 +1937,10 @@ impl Owner {
                         } else {
                             if let Some(source) = &source {
                                 unsafe {
-                                    (p.record_copy)(b, list, backbuffer.as_raw(), source.as_raw())
+                                    leaf::record_copy(b, list, backbuffer.as_raw(), source.as_raw())
                                 };
                             }
-                            let command = unsafe { (p.command_list)(b, queue, list) };
+                            let command = unsafe { leaf::command_list(b, queue, list) };
                             if command.is_null() {
                                 step = "command list unwrap";
                                 stage = E_FAIL;
@@ -1898,12 +1948,12 @@ impl Owner {
                                 self.prepare_callback(null_mut(), command, backbuffer, sync);
                                 self.publish_status();
                                 step = "command list Close";
-                                stage = unsafe { (p.close_execute)(queue, list, command) };
+                                stage = unsafe { leaf::close_execute(queue, list, command) };
                             }
                             if !failed(stage) {
                                 if joined
                                     && failed(unsafe {
-                                        (p.join)(
+                                        leaf::join(
                                             queue,
                                             source_queue,
                                             completion_fence,
@@ -1933,7 +1983,7 @@ impl Owner {
                 let fence = self.next_serial();
                 slot.store(fence, Ordering::Relaxed);
                 submission_fenced =
-                    !failed(unsafe { (p.signal_slot)(queue, completion_fence, fence) });
+                    !failed(unsafe { leaf::signal_slot(queue, completion_fence, fence) });
                 if !submission_fenced {
                     step = "slot fence signal";
                     stage = DXGI_ERROR_DEVICE_REMOVED;
@@ -1944,7 +1994,7 @@ impl Owner {
             if failed(result) {
                 let step = CString::new(step).unwrap_or_default();
                 unsafe {
-                    (p.log_present_failure)(
+                    leaf::log_present_failure(
                         b,
                         step.as_ptr(),
                         stage,
@@ -1969,7 +2019,7 @@ impl Owner {
             // with DEVICE_REMOVED because the submitted list cannot be reused safely.
             if failed(result) && !(submission_fenced && result == DXGI_ERROR_WAS_STILL_DRAWING) {
                 unsafe {
-                    (p.report_device_failure)(b, result, ACTIVE_BACKEND.load(Ordering::SeqCst))
+                    leaf::report_device_failure(b, result, ACTIVE_BACKEND.load(Ordering::SeqCst))
                 };
                 self.faulted.store(true, Ordering::Release);
             }
@@ -1978,7 +2028,7 @@ impl Owner {
         self.receipt("d3d11-slot-enter", S_OK);
         let mut step_index = 0;
         if !failed(unsafe {
-            (p.slot_reset)(
+            leaf::slot_reset(
                 completion_fence,
                 completion_event,
                 allocator,
@@ -1993,18 +2043,23 @@ impl Owner {
             // Real DXGI backbuffers (the Off path) must be written on their creation queue.
             // The separate interop queue stays with SR; the final upload uses the present queue.
             // Submit the D3D11 signal with its preceding work before D3D12 waits on it.
-            if !failed(unsafe { (p.upload_wait)(b, queue, self.next_serial()) })
+            if !failed(unsafe { leaf::upload_wait(b, queue, self.next_serial()) })
                 && let Ok(backbuffer) = self.acquire_backbuffer(&physical)
                 && let Some(source) = self.copy_source(0)
             {
                 // The application writes slot zero. Generated frames use the physical backbuffer.
-                unsafe { (p.record_copy)(b, list, backbuffer.as_raw(), source.as_raw()) };
-                let command = unsafe { (p.command_list)(b, queue, list) };
+                unsafe { leaf::record_copy(b, list, backbuffer.as_raw(), source.as_raw()) };
+                let command = unsafe { leaf::command_list(b, queue, list) };
                 if !command.is_null() {
-                    self.prepare_callback(unsafe { (p.context11)(b) }, command, &backbuffer, sync);
+                    self.prepare_callback(
+                        unsafe { leaf::context11(b) },
+                        command,
+                        &backbuffer,
+                        sync,
+                    );
                     self.publish_status();
-                    if !failed(unsafe { (p.close_execute)(queue, list, command) })
-                        && !failed(unsafe { (p.upload_return)(b, queue, self.next_serial()) })
+                    if !failed(unsafe { leaf::close_execute(queue, list, command) })
+                        && !failed(unsafe { leaf::upload_return(b, queue, self.next_serial()) })
                     {
                         result = self.present_physical(
                             chain,
@@ -2018,7 +2073,8 @@ impl Owner {
             }
             let fence = self.next_serial();
             slot.store(fence, Ordering::Relaxed);
-            submission_fenced = !failed(unsafe { (p.signal_slot)(queue, completion_fence, fence) });
+            submission_fenced =
+                !failed(unsafe { leaf::signal_slot(queue, completion_fence, fence) });
             if !submission_fenced {
                 result = DXGI_ERROR_DEVICE_REMOVED;
             }
@@ -2122,7 +2178,7 @@ impl Owner {
         if failed(self.drain()) {
             return E_FAIL;
         }
-        unsafe { (self.p().set_fullscreen)(physical.chain.as_raw(), fullscreen, target) }
+        unsafe { leaf::set_fullscreen(physical.chain.as_raw(), fullscreen, target) }
     }
 
     fn resize(
@@ -2133,7 +2189,6 @@ impl Owner {
         mut format: u32,
         flags: u32,
     ) -> i32 {
-        let p = self.p();
         let b = self.b();
         if count > MAX_BUFFERS || self.faulted.load(Ordering::Acquire) {
             return DXGI_ERROR_INVALID_CALL;
@@ -2144,7 +2199,7 @@ impl Owner {
         };
         let mut facts = self.facts();
         if (width == 0 || height == 0)
-            && unsafe { (p.client_size)(facts.window, &mut width, &mut height) } == 0
+            && unsafe { leaf::client_size(facts.window, &mut width, &mut height) } == 0
         {
             return E_FAIL;
         }
@@ -2200,7 +2255,7 @@ impl Owner {
             (true, false) => count,
         };
         let result = unsafe {
-            (p.resize_physical)(
+            leaf::resize_physical(
                 b,
                 physical.chain.as_raw(),
                 physical_count,
@@ -2215,7 +2270,7 @@ impl Owner {
         if let Some(batch) = replacement {
             *lock(&self.buffers) = batch;
         }
-        unsafe { (p.set_description)(b, facts.buffer_count, width, height, format, flags) };
+        unsafe { leaf::set_description(b, facts.buffer_count, width, height, format, flags) };
         if native12 && switching {
             self.reset_application_frames();
         } else if !native12 {
@@ -2227,7 +2282,6 @@ impl Owner {
     // Joins vendor retirement on the provider queue, optionally runs a closed list there, and
     // signals one private fence that covers both. Present thread, between Presents.
     fn retire(&self, session: Raw, list: Raw, fence: &mut Raw, value: &mut u64) -> i32 {
-        let p = self.p();
         let b = self.b();
         let provider = self.provider();
         let Some(retirement) = self.api().and_then(|api| api.retirement) else {
@@ -2248,7 +2302,7 @@ impl Owner {
         };
         if state.fence.is_none() {
             let mut acquired = null_mut();
-            let result = unsafe { (p.create_retirement_fence)(b, &mut acquired) };
+            let result = unsafe { leaf::create_retirement_fence(b, &mut acquired) };
             let acquired = unsafe { com_ref::owned(acquired) };
             if failed(result) || acquired.is_none() {
                 return INIT_FAILED;
@@ -2273,7 +2327,7 @@ impl Owner {
             return result;
         }
         let result = unsafe {
-            (p.retire_submit)(
+            leaf::retire_submit(
                 b,
                 physical.queue.as_raw(),
                 retired,
@@ -2294,7 +2348,6 @@ impl Owner {
 
     // The facade's last reference is gone. Unpublish, drain and release or retain.
     fn retire_owner(&self) {
-        let p = self.p();
         let b = self.b();
         let published = {
             // Drain existing shared provider leases before unpublishing. Release this lock
@@ -2327,7 +2380,7 @@ impl Owner {
             // A refused wait can leave the completion and application events armed.
             std::mem::forget(std::mem::take(&mut *lock(&self.sync)));
             std::mem::forget(lock(&self.provider_retirement).fence.take());
-            unsafe { (p.retain_all)(b) };
+            unsafe { leaf::retain_all(b) };
             return;
         }
         let checked = self.api().is_some_and(|api| api.destroy_checked.is_some());
@@ -2341,7 +2394,7 @@ impl Owner {
         };
         let physical = self.take_physical();
         if !checked {
-            unsafe { (p.release_presentation)(b) };
+            unsafe { leaf::release_presentation(b) };
         }
         drop(physical);
         if destroy_provider(self.api(), self.provider()) != OK {
@@ -2351,7 +2404,7 @@ impl Owner {
             std::mem::forget(self.take_command_slots());
             std::mem::forget(std::mem::take(&mut *lock(&self.sync)));
             std::mem::forget(lock(&self.provider_retirement).fence.take());
-            unsafe { (p.retain_all)(b) };
+            unsafe { leaf::retain_all(b) };
             return;
         }
         self.provider.store(null_mut(), Ordering::Release);
@@ -2362,7 +2415,7 @@ impl Owner {
             None
         };
         if checked {
-            unsafe { (p.release_presentation)(b) };
+            unsafe { leaf::release_presentation(b) };
         }
         // The host also serves SR and CPU callbacks and stays loaded while it is the published one.
         let host = self.host();
@@ -2378,7 +2431,7 @@ impl Owner {
             self.release_command_slots(false);
             drop(sync.completion_fence.take());
             drop(retired.take());
-            unsafe { (p.release_host)(b) };
+            unsafe { leaf::release_host(b) };
         } else if !host.is_null() {
             // Shared SR callbacks keep using the process-owned interop queue.
             std::mem::forget(sync.interop_queue.take());
@@ -2393,7 +2446,7 @@ impl Owner {
             self.release_command_slots(true);
             drop(retired.take());
             drop(sync.completion_fence.take());
-            unsafe { (p.release_direct_graphics)(b) };
+            unsafe { leaf::release_direct_graphics(b) };
             drop(sync.interop_queue.take());
         }
     }
@@ -2422,12 +2475,10 @@ unsafe fn owner<'a>(chain: *mut Chain) -> Option<&'a Owner> {
 
 // Creation and admission --------------------------------------------------------------------
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_d3d11p_set_scoped(scoped: u32) {
     SCOPED.store(scoped != 0, Ordering::Release);
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_d3d11p_capture(window: Raw) -> u32 {
     let captured = SCOPE_CAPTURED.with_borrow(|value| !value.object.is_null());
     u32::from(
@@ -2436,38 +2487,30 @@ pub(crate) extern "C" fn rsf_core_d3d11p_capture(window: Raw) -> u32 {
     )
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_captured(platform: *const Platform, bridge: Raw) {
-    let Some(p) = (unsafe { platform.as_ref() }) else {
-        return;
-    };
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_captured(bridge: Raw) {
     if !SCOPED.load(Ordering::Acquire) || bridge.is_null() {
         return;
     }
-    unsafe { (p.add_ref)(bridge) };
+    unsafe { leaf::add_ref(bridge) };
     let previous = SCOPE_CAPTURED.replace(Captured {
         object: bridge,
-        release: Some(p.release),
+        release: Some(leaf::release),
     });
     drop(previous);
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_d3d11p_active_bridge() -> Raw {
     ACTIVE_BRIDGE.load(Ordering::Acquire)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_create(
-    platform: *const Platform,
     factory: Raw,
     source: Raw,
     request: *const rsf_d3d11p_request,
     desc: *const c_void,
     out: *mut Raw,
 ) -> i32 {
-    let (Some(p), Some(request)) = (unsafe { platform.as_ref() }, unsafe { request.as_ref() })
-    else {
+    let Some(request) = (unsafe { request.as_ref() }) else {
         return DXGI_ERROR_UNSUPPORTED;
     };
     let setup = settings();
@@ -2483,7 +2526,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_create(
         || request.sample_count != 1
         || request.width == 0
         || request.height == 0
-        || unsafe { (p.window_valid)(request.window) } == 0
+        || unsafe { leaf::window_valid(request.window) } == 0
         || !FORMATS.contains(&request.format)
     {
         return DXGI_ERROR_UNSUPPORTED;
@@ -2497,11 +2540,11 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_create(
         return DXGI_ERROR_UNSUPPORTED;
     }
     CREATING.set(true);
-    let owner = crate::allocate_handle(Owner::new(platform));
+    let owner = crate::allocate_handle(Owner::new());
     let result = if owner.is_null() {
         E_OUTOFMEMORY
     } else {
-        let bridge = unsafe { (p.bridge_new)(owner.cast()) };
+        let bridge = unsafe { leaf::bridge_new(owner.cast()) };
         if bridge.is_null() {
             drop(unsafe { Box::from_raw(owner) });
             E_OUTOFMEMORY
@@ -2511,7 +2554,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_create(
             let result = value.initialize(factory, source, request, desc);
             if failed(result) {
                 // Not published; never enter an external Release hook.
-                unsafe { (p.bridge_release_owned)(bridge) };
+                unsafe { leaf::bridge_release_owned(bridge) };
             } else {
                 log(&format!(
                     "presentation bridge: application chain {}x{} refresh={}/{} windowed={} buffers={} flags=0x{:x} effect={}",
@@ -2533,17 +2576,15 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_create(
     result
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_creation_begin(
-    platform: *const Platform,
     window: Raw,
     token: *mut u64,
     installed: u32,
 ) -> i32 {
-    let (Some(p), Some(token)) = (unsafe { platform.as_ref() }, unsafe { token.as_mut() }) else {
+    let Some(token) = (unsafe { token.as_mut() }) else {
         return E_INVALIDARG;
     };
-    if *token != 0 || window.is_null() || unsafe { (p.window_valid)(window) } == 0 {
+    if *token != 0 || window.is_null() || unsafe { leaf::window_valid(window) } == 0 {
         return E_INVALIDARG;
     }
     if !SCOPED.load(Ordering::Acquire)
@@ -2568,17 +2609,13 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_creation_begin(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_creation_end(
-    platform: *const Platform,
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_creation_end(
     window: Raw,
     token: u64,
     device: Raw,
     context: Raw,
     outer: Raw,
 ) -> i32 {
-    let Some(p) = (unsafe { platform.as_ref() }) else {
-        return E_INVALIDARG;
-    };
     if token == 0 || token != SCOPE_TOKEN.get() || window != SCOPE_WINDOW.get() {
         return E_INVALIDARG;
     }
@@ -2594,7 +2631,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_creation_end(
     let result = if inner.is_null() || device.is_null() || context.is_null() || outer.is_null() {
         DXGI_ERROR_UNSUPPORTED
     } else if inner != ACTIVE_BRIDGE.load(Ordering::Acquire)
-        || failed(unsafe { (p.verify_outer)(inner, window, device, context, outer) })
+        || failed(unsafe { leaf::verify_outer(inner, window, device, context, outer) })
     {
         E_INVALIDARG
     } else {
@@ -2607,7 +2644,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_creation_end(
     };
     if failed(result)
         && !inner.is_null()
-        && let Some(owner) = unsafe { owner((p.bridge_chain)(inner)) }
+        && let Some(owner) = unsafe { owner(leaf::bridge_chain(inner)) }
     {
         owner.refuse();
     }
@@ -2617,7 +2654,6 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_creation_end(
 
 // Facade methods ----------------------------------------------------------------------------
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_chain_destroy(chain: *mut Chain) {
     let owner = chain.cast::<Owner>();
     if owner.is_null() {
@@ -2630,7 +2666,6 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_chain_destroy(chain: *mut Chain)
 macro_rules! facade {
     ($(#[$attr:meta])* $name:ident($($arg:ident: $ty:ty),*) -> $ret:ty, $missing:expr, |$owner:ident| $body:expr) => {
         $(#[$attr])*
-        #[unsafe(no_mangle)]
         pub(crate) unsafe extern "C" fn $name(chain: *mut Chain $(, $arg: $ty)*) -> $ret {
             match unsafe { owner(chain) } {
                 Some($owner) => $body,
@@ -2640,7 +2675,6 @@ macro_rules! facade {
     };
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_acquire_physical(
     chain: *mut Chain,
     initialize: u32,
@@ -2671,14 +2705,12 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_acquire_physical(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_release_physical(lease: *const Physical) {
     if !lease.is_null() {
         drop(unsafe { Arc::from_raw(lease) });
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_get_buffer(
     chain: *mut Chain,
     index: u32,
@@ -2713,7 +2745,6 @@ facade!(
     E_FAIL,
     |o| o.resize(count, width, height, format, flags)
 );
-facade!(rsf_core_d3d11p_faulted() -> u32, 1, |o| u32::from(o.faulted.load(Ordering::Acquire)));
 facade!(rsf_core_d3d11p_physical_pending() -> u32, 0,
     |o| u32::from(o.creation_pending()));
 facade!(rsf_core_d3d11p_render_index() -> u32, 0, |o| o.render_index.load(Ordering::Relaxed));
@@ -2755,7 +2786,7 @@ facade!(
         if ready.is_null() {
             null_mut()
         } else {
-            unsafe { (o.p().duplicate_event)(ready) }
+            unsafe { leaf::duplicate_event(ready) }
         }
     }
 );
@@ -2763,12 +2794,38 @@ facade!(
 // Public bridge exports ---------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_host() -> Raw {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_prepare(setup: *const Setup) -> i32 {
+    unsafe { rsf_core_d3d11p_prepare(setup, factory::rsf_d3d11p_factory_hooks_block_explicit()) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11_present_creation_begin(window: Raw, token: *mut u64) -> i32 {
+    unsafe {
+        rsf_core_d3d11p_creation_begin(window, token, factory::rsf_d3d11p_factory_hooks_ready())
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11_present_pace(id: u64, owner: u32, generation: *mut u64) -> i32 {
+    unsafe { rsf_core_d3d11p_pace(id, owner, ptr::null(), generation) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11_present_pace_for_generation(
+    id: u64,
+    owner: u32,
+    generation: u64,
+) -> i32 {
+    unsafe { rsf_core_d3d11p_pace(id, owner, &generation, null_mut()) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_d3d11_present_host() -> Raw {
     ACTIVE_HOST.load(Ordering::Acquire)
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_graphics(graphics: *mut Graphics) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_graphics(graphics: *mut Graphics) -> i32 {
     if !unsafe { has_capacity(graphics) } {
         return 0;
     }
@@ -2781,45 +2838,40 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_graphics(graphics: *mut Graphics
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_queue(platform: *const Platform) -> Raw {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_queue() -> Raw {
     let Some(_guard) = read_guard() else {
         return null_mut();
     };
-    if platform.is_null() {
-        return null_mut();
-    }
+
     active()
         .and_then(Owner::physical)
         .map_or(null_mut(), |physical| physical.queue.as_raw())
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_source_queue(platform: *const Platform) -> Raw {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_source_queue() -> Raw {
     // The same lock fences owner unpublication. A transition must not block the producer.
     let Some(_guard) = read_guard() else {
         return null_mut();
     };
-    match (unsafe { platform.as_ref() }, active()) {
-        (Some(p), Some(owner)) => {
+    match active() {
+        Some(owner) => {
             let queue = lock(&owner.sync).queue();
-            unsafe { (p.source_queue)(owner.b(), queue) }
+            unsafe { leaf::source_queue(owner.b(), queue) }
         }
         _ => null_mut(),
     }
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_command_list(
-    platform: *const Platform,
-    list: Raw,
-) -> Raw {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_command_list(list: Raw) -> Raw {
     let Some(_guard) = read_guard() else {
         return null_mut();
     };
     if list.is_null() {
         return null_mut();
     }
-    let (Some(p), Some(owner)) = (unsafe { platform.as_ref() }, active()) else {
+    let Some(owner) = active() else {
         return null_mut();
     };
     let physical = owner.physical();
@@ -2827,18 +2879,12 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_command_list(
         .as_ref()
         .map_or(null_mut(), |pair| pair.queue.as_raw());
     // Pending creation used the native-list path when a host was already available.
-    unsafe { (p.command_list)(owner.b(), queue, list) }
+    unsafe { leaf::command_list(owner.b(), queue, list) }
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_is_owner(
-    platform: *const Platform,
-    swapchain: Raw,
-) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_is_owner(swapchain: Raw) -> i32 {
     let active = ACTIVE_BRIDGE.load(Ordering::Acquire);
-    let Some(p) = (unsafe { platform.as_ref() }) else {
-        return 0;
-    };
     if swapchain.is_null()
         || active.is_null()
         || (SCOPED.load(Ordering::Acquire) && !SCOPED_ADMITTED.load(Ordering::Acquire))
@@ -2853,12 +2899,12 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_is_owner(
     }
     // The facade publishes its canonical COM interface address. Query only the
     // caller's live receiver, since the cached address can retire during the call.
-    let identity = unsafe { (p.canonical_identity)(swapchain) };
+    let identity = unsafe { leaf::canonical_identity(swapchain) };
     i32::from(
         identity == active
             && ACTIVE_BRIDGE.load(Ordering::Acquire) == active
             && OUTER_ALIAS.load(Ordering::Acquire) == swapchain
-            && rsf_core_d3d11p_has_owner() != 0,
+            && rsf_d3d11_present_has_owner() != 0,
     )
 }
 
@@ -2935,7 +2981,9 @@ unsafe extern "C" fn dispatch_invoke_owned(request: *mut rsf_d3d11_chain_dispatc
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_dispatch_chain(request: *mut rsf_d3d11_chain_dispatch) {
+pub(crate) unsafe extern "C" fn rsf_d3d11_chain_dispatch_owned(
+    request: *mut rsf_d3d11_chain_dispatch,
+) {
     unsafe {
         rsf_core_d3d11p_dispatch_owned(
             request,
@@ -2946,7 +2994,7 @@ unsafe extern "C" fn rsf_d3d11p_dispatch_chain(request: *mut rsf_d3d11_chain_dis
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_dispatch_present(
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_dispatch_owned(
     receiver: Raw,
     sync_interval: u32,
     flags: u32,
@@ -2963,14 +3011,13 @@ unsafe extern "C" fn rsf_d3d11p_dispatch_present(
         sync_interval,
         flags,
     };
-    unsafe { rsf_d3d11p_dispatch_chain(&mut request) };
+    unsafe { rsf_d3d11_chain_dispatch_owned(&mut request) };
     if request.handled != 0 {
         unsafe { result.write(request.result.hresult) };
     }
     request.handled as i32
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_d3d11p_dispatch_owned(
     request: *mut rsf_d3d11_chain_dispatch,
     release_owned: unsafe extern "C" fn(Raw) -> u32,
@@ -3014,7 +3061,7 @@ unsafe extern "C" fn rsf_core_d3d11p_get_api(out: *mut u8, table: *const u8) -> 
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_has_owner() -> i32 {
+pub(crate) extern "C" fn rsf_d3d11_present_has_owner() -> i32 {
     i32::from(
         !ACTIVE_BRIDGE.load(Ordering::Acquire).is_null()
             && (!SCOPED.load(Ordering::Acquire) || SCOPED_ADMITTED.load(Ordering::Acquire)),
@@ -3022,36 +3069,32 @@ pub(crate) extern "C" fn rsf_core_d3d11p_has_owner() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_provider(
-    platform: *const Platform,
-) -> *const Provider {
-    unsafe { platform.as_ref() }
-        .and_then(|p| provider_api(p, ACTIVE_BACKEND.load(Ordering::SeqCst)))
-        .map_or(ptr::null(), ptr::from_ref)
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_provider() -> *const Provider {
+    provider_api(ACTIVE_BACKEND.load(Ordering::SeqCst)).map_or(ptr::null(), ptr::from_ref)
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_status_get(status: *mut PresentStatus) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_status_get(status: *mut PresentStatus) -> i32 {
     unsafe { lock(&STATUS).read(status) }
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_session() -> Raw {
+pub(crate) extern "C" fn rsf_d3d11_present_session() -> Raw {
     ACTIVE_SESSION.load(Ordering::Acquire)
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_backend() -> u32 {
+pub(crate) extern "C" fn rsf_d3d11_present_backend() -> u32 {
     ACTIVE_BACKEND.load(Ordering::SeqCst)
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_backend_choices() -> u32 {
+pub(crate) extern "C" fn rsf_d3d11_present_backend_choices() -> u32 {
     BACKEND_CHOICES.load(Ordering::SeqCst)
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_request(backend: u32) -> i32 {
+pub(crate) extern "C" fn rsf_d3d11_present_request(backend: u32) -> i32 {
     if !switching() || ACTIVE_CHAIN.load(Ordering::Acquire).is_null() {
         return NOT_READY;
     }
@@ -3068,25 +3111,24 @@ pub(crate) extern "C" fn rsf_core_d3d11p_request(backend: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_switch_result() -> i32 {
+pub(crate) extern "C" fn rsf_d3d11_present_switch_result() -> i32 {
     SWITCH_RESULT.load(Ordering::SeqCst)
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_generation() -> u64 {
+pub(crate) extern "C" fn rsf_d3d11_present_generation() -> u64 {
     generation()
 }
 
 // Latency routing ---------------------------------------------------------------------------
 
-struct Lease<'a> {
-    p: &'a Platform,
+struct Lease {
     api: Option<&'static Provider>,
     session: Raw,
     host: Raw,
 }
 
-impl Lease<'_> {
+impl Lease {
     fn context(&self) -> Option<(&'static Provider, Raw)> {
         self.api
             .filter(|_| !self.session.is_null())
@@ -3095,24 +3137,19 @@ impl Lease<'_> {
 }
 
 // Shares the provider lifetime; refuses NOT_READY while replacement or retirement holds it.
-unsafe fn with_provider(platform: *const Platform, call: impl FnOnce(&Lease) -> i32) -> i32 {
-    let Some(p) = (unsafe { platform.as_ref() }) else {
-        return NOT_READY;
-    };
+unsafe fn with_provider(call: impl FnOnce(&Lease) -> i32) -> i32 {
     let Some(_guard) = read_guard() else {
         return NOT_READY;
     };
     call(&Lease {
-        p,
-        api: provider_api(p, ACTIVE_BACKEND.load(Ordering::SeqCst)),
+        api: provider_api(ACTIVE_BACKEND.load(Ordering::SeqCst)),
         session: ACTIVE_SESSION.load(Ordering::Acquire),
         host: ACTIVE_HOST.load(Ordering::Acquire),
     })
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_retire(
-    platform: *const Platform,
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_retire(
     session: Raw,
     list: Raw,
     fence: *mut Raw,
@@ -3124,7 +3161,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_retire(
     *fence = null_mut();
     *value = 0;
     unsafe {
-        with_provider(platform, |_| {
+        with_provider(|_| {
             active().map_or(NOT_READY, |owner| owner.retire(session, list, fence, value))
         })
     }
@@ -3133,18 +3170,14 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_retire(
 // A provider that paces through the host is the host: it gets the host calls once. Any other
 // provider owns its own pacing, and the host only records markers for latency reporting.
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_begin(
-    platform: *const Platform,
-    id: u64,
-    out: *mut u64,
-) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_begin(id: u64, out: *mut u64) -> i32 {
     unsafe {
-        with_provider(platform, |lease| {
+        with_provider(|lease| {
             if let Some(out) = out.as_mut() {
                 *out = generation();
             }
             if HOST_PACED.load(Ordering::SeqCst) {
-                return (lease.p.host_sleep)(lease.host, id);
+                return leaf::host_sleep(lease.host, id);
             }
             match lease
                 .context()
@@ -3157,16 +3190,14 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_begin(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_pace(
-    platform: *const Platform,
     id: u64,
     owner: u32,
     expected: *const u64,
     out: *mut u64,
 ) -> i32 {
     unsafe {
-        with_provider(platform, |lease| {
+        with_provider(|lease| {
             let current = generation();
             if let Some(out) = out.as_mut() {
                 *out = current;
@@ -3181,7 +3212,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_pace(
                 return INVALID_ARGUMENT;
             }
             match owner {
-                RSF_PACING_REFLEX if !lease.host.is_null() => (lease.p.host_sleep)(lease.host, id),
+                RSF_PACING_REFLEX if !lease.host.is_null() => leaf::host_sleep(lease.host, id),
                 RSF_PACING_REFLEX => NOT_READY,
                 RSF_PACING_XELL => lease
                     .context()
@@ -3195,22 +3226,21 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_pace(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_marker(
-    platform: *const Platform,
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_marker(
     expected: u64,
     id: u64,
     marker: u32,
     controller: u32,
 ) -> i32 {
     unsafe {
-        with_provider(platform, |lease| {
+        with_provider(|lease| {
             if expected != generation() {
                 return NOT_READY;
             }
             let host = if lease.host.is_null() {
                 OK
             } else {
-                (lease.p.host_marker)(lease.host, id, marker, controller)
+                leaf::host_marker(lease.host, id, marker, controller)
             };
             if host != OK || HOST_PACED.load(Ordering::SeqCst) {
                 return host;
@@ -3227,50 +3257,44 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_marker(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_acquire(platform: *const Platform, id: u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_acquire(id: u64) -> i32 {
     unsafe {
-        with_provider(platform, |lease| {
+        with_provider(|lease| {
             if lease.host.is_null() {
                 OK
             } else {
-                (lease.p.host_acquire)(lease.host, id)
+                leaf::host_acquire(lease.host, id)
             }
         })
     }
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_receipt(
-    platform: *const Platform,
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_receipt(
     expected: u64,
     id: u64,
     kinds: u32,
     message: u32,
 ) -> i32 {
     unsafe {
-        with_provider(platform, |lease| {
+        with_provider(|lease| {
             if expected != generation() || lease.host.is_null() {
                 NOT_READY
             } else {
-                (lease.p.host_input)(lease.host, id, kinds, message)
+                leaf::host_input(lease.host, id, kinds, message)
             }
         })
     }
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_input(
-    platform: *const Platform,
-    id: u64,
-    kinds: u32,
-    message: u32,
-) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_input(id: u64, kinds: u32, message: u32) -> i32 {
     unsafe {
-        with_provider(platform, |lease| {
+        with_provider(|lease| {
             let result = if lease.host.is_null() {
                 OK
             } else {
-                (lease.p.host_input)(lease.host, id, kinds, message)
+                leaf::host_input(lease.host, id, kinds, message)
             };
             if result != OK || HOST_PACED.load(Ordering::SeqCst) || kinds == 0 {
                 return result;
@@ -3289,13 +3313,13 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_input(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_d3d11p_abort(platform: *const Platform, id: u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_abort(id: u64) -> i32 {
     unsafe {
-        with_provider(platform, |lease| {
+        with_provider(|lease| {
             let host = if lease.host.is_null() {
                 OK
             } else {
-                (lease.p.host_abort)(lease.host, id)
+                leaf::host_abort(lease.host, id)
             };
             if HOST_PACED.load(Ordering::SeqCst) {
                 return host;

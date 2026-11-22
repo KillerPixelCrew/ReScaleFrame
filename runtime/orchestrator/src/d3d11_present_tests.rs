@@ -323,13 +323,17 @@ static CHECKED_PROVIDER: Provider = Provider {
     ..PROVIDER_BASE
 };
 
-// Leaves ------------------------------------------------------------------------------------
+// Leaves: d3d11_present.rs calls these as `leaf::*` under test --------------------------------
+
+pub(super) use self::{
+    ok_bridge as create_upload_fence, ok_bridge as native_device, ok_bridge as resolve_graphics,
+};
 
 struct FakeBridge {
     chain: *mut Chain,
 }
 
-unsafe extern "C" fn provider_table(family: u32) -> *const Provider {
+pub(super) unsafe extern "C" fn provider_table(family: u32) -> *const Provider {
     if family == 0 {
         null()
     } else if with(|fake| fake.checked_provider) {
@@ -338,17 +342,17 @@ unsafe extern "C" fn provider_table(family: u32) -> *const Provider {
         &PROVIDER
     }
 }
-unsafe extern "C" fn observer_present(event: *mut Event) {
+pub(super) unsafe extern "C" fn observer_present(event: *mut Event) {
     call(if unsafe { (*event).completed } != 0 {
         "observed"
     } else {
         "observer"
     });
 }
-unsafe extern "C" fn window_valid(window: Raw) -> u32 {
+pub(super) unsafe extern "C" fn window_valid(window: Raw) -> u32 {
     u32::from(!window.is_null())
 }
-unsafe extern "C" fn client_size(_: Raw, width: *mut u32, height: *mut u32) -> u32 {
+pub(super) unsafe extern "C" fn client_size(_: Raw, width: *mut u32, height: *mut u32) -> u32 {
     let (w, h) = with(|fake| fake.client);
     unsafe {
         *width = w;
@@ -356,7 +360,7 @@ unsafe extern "C" fn client_size(_: Raw, width: *mut u32, height: *mut u32) -> u
     }
     1
 }
-unsafe extern "C" fn canonical_identity(receiver: Raw) -> Raw {
+pub(super) unsafe extern "C" fn canonical_identity(receiver: Raw) -> Raw {
     if receiver != OUTER_ALIAS.load(Ordering::Acquire) {
         return null_mut();
     }
@@ -366,56 +370,62 @@ unsafe extern "C" fn canonical_identity(receiver: Raw) -> Raw {
     }
     identity
 }
-unsafe extern "C" fn add_ref(_: Raw) {
+pub(super) unsafe extern "C" fn add_ref(_: Raw) {
     with(|fake| fake.refs += 1);
 }
-unsafe extern "C" fn release(_: Raw) {
+pub(super) unsafe extern "C" fn release(_: Raw) {
     with(|fake| fake.refs -= 1);
 }
-unsafe extern "C" fn host_sleep(_: Raw, id: u64) -> i32 {
+pub(super) unsafe extern "C" fn host_sleep(_: Raw, id: u64) -> i32 {
     call(format!("host_sleep {id}"));
     OK
 }
-unsafe extern "C" fn host_marker(_: Raw, id: u64, marker: u32, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn host_marker(_: Raw, id: u64, marker: u32, _: u32) -> i32 {
     call(format!("host_marker {marker} {id}"));
     OK
 }
-unsafe extern "C" fn host_acquire(_: Raw, id: u64) -> i32 {
+pub(super) unsafe extern "C" fn host_acquire(_: Raw, id: u64) -> i32 {
     call(format!("host_acquire {id}"));
     OK
 }
-unsafe extern "C" fn host_input(_: Raw, id: u64, kinds: u32, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn host_input(_: Raw, id: u64, kinds: u32, _: u32) -> i32 {
     call(format!("host_input {id} {kinds}"));
     OK
 }
-unsafe extern "C" fn host_abort(_: Raw, id: u64) -> i32 {
+pub(super) unsafe extern "C" fn host_abort(_: Raw, id: u64) -> i32 {
     call(format!("host_abort {id}"));
     OK
 }
-unsafe extern "C" fn host_reflex_off(_: Raw) -> i32 {
+pub(super) unsafe extern "C" fn host_reflex_off(_: Raw) -> i32 {
     call("host_reflex_off");
     OK
 }
-unsafe extern "C" fn host_generation_load(_: Raw, enabled: u32) -> i32 {
+pub(super) unsafe extern "C" fn host_generation_load(_: Raw, enabled: u32) -> i32 {
     call(format!("host_load {enabled}"));
     with(|fake| fake.host_load_result)
 }
-unsafe extern "C" fn host_present_common(_: Raw, chain: Raw, _: u32, _: u32, begin: u32) -> i32 {
+pub(super) unsafe extern "C" fn host_present_common(
+    _: Raw,
+    chain: Raw,
+    _: u32,
+    _: u32,
+    begin: u32,
+) -> i32 {
     assert_chain(chain);
     call(format!("host_common {begin}"));
     OK
 }
-unsafe extern "C" fn bridge_new(chain: *mut Chain) -> Raw {
+pub(super) unsafe extern "C" fn bridge_new(chain: *mut Chain) -> Raw {
     Box::into_raw(Box::new(FakeBridge { chain })).cast()
 }
-unsafe extern "C" fn bridge_release_owned(bridge: Raw) {
+pub(super) unsafe extern "C" fn bridge_release_owned(bridge: Raw) {
     let bridge = unsafe { Box::from_raw(bridge.cast::<FakeBridge>()) };
     unsafe { rsf_core_d3d11p_chain_destroy(bridge.chain) };
 }
-unsafe extern "C" fn bridge_chain(bridge: Raw) -> *mut Chain {
+pub(super) unsafe extern "C" fn bridge_chain(bridge: Raw) -> *mut Chain {
     unsafe { (*bridge.cast::<FakeBridge>()).chain }
 }
-unsafe extern "C" fn facts(_: Raw, out: *mut rsf_d3d11p_facts) {
+pub(super) unsafe extern "C" fn facts(_: Raw, out: *mut rsf_d3d11p_facts) {
     let value = with(|fake| rsf_d3d11p_facts {
         window: raw(0x10),
         width: fake.width,
@@ -444,10 +454,14 @@ unsafe extern "C" fn facts(_: Raw, out: *mut rsf_d3d11p_facts) {
     });
     unsafe { *out = value };
 }
-unsafe extern "C" fn init_source(_: Raw, _: Raw, _: Raw, _: *const c_void) -> u32 {
+pub(super) unsafe extern "C" fn init_source(_: Raw, _: Raw, _: Raw, _: *const c_void) -> u32 {
     u32::from(with(|fake| fake.native12))
 }
-unsafe extern "C" fn owning_adapter(_: Raw, _: Raw, adapter: *mut rsf_d3d11p_adapter) -> i32 {
+pub(super) unsafe extern "C" fn owning_adapter(
+    _: Raw,
+    _: Raw,
+    adapter: *mut rsf_d3d11p_adapter,
+) -> i32 {
     let backend = with(|fake| fake.adapter_default);
     unsafe {
         *adapter = rsf_d3d11p_adapter {
@@ -459,10 +473,10 @@ unsafe extern "C" fn owning_adapter(_: Raw, _: Raw, adapter: *mut rsf_d3d11p_ada
     };
     S_OK
 }
-unsafe extern "C" fn ok_bridge(_: Raw) -> i32 {
+pub(super) unsafe extern "C" fn ok_bridge(_: Raw) -> i32 {
     S_OK
 }
-unsafe extern "C" fn adopt_host(bridge: Raw, _: u32, result: *mut i32) -> u32 {
+pub(super) unsafe extern "C" fn adopt_host(bridge: Raw, _: u32, result: *mut i32) -> u32 {
     if with(|fake| fake.host_available) {
         unsafe { *result = create_host(bridge) };
         1
@@ -470,10 +484,10 @@ unsafe extern "C" fn adopt_host(bridge: Raw, _: u32, result: *mut i32) -> u32 {
         0
     }
 }
-unsafe extern "C" fn d3d11_device(_: Raw, _: Raw) -> i32 {
+pub(super) unsafe extern "C" fn d3d11_device(_: Raw, _: Raw) -> i32 {
     S_OK
 }
-unsafe extern "C" fn create_host(_: Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_host(_: Raw) -> i32 {
     with(|fake| {
         if fake.host_available {
             fake.host = 0xAA;
@@ -483,16 +497,16 @@ unsafe extern "C" fn create_host(_: Raw) -> i32 {
         }
     })
 }
-unsafe extern "C" fn host(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn host(_: Raw) -> Raw {
     raw(with(|fake| fake.host))
 }
-unsafe extern "C" fn tearing_supported(_: Raw) -> u32 {
+pub(super) unsafe extern "C" fn tearing_supported(_: Raw) -> u32 {
     u32::from(with(|fake| fake.tearing))
 }
-unsafe extern "C" fn fsr4_supported(_: Raw, _: *const c_char) -> u32 {
+pub(super) unsafe extern "C" fn fsr4_supported(_: Raw, _: *const c_char) -> u32 {
     u32::from(with(|fake| fake.fsr4))
 }
-unsafe extern "C" fn create_interop_queue(device: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_interop_queue(device: Raw, out: *mut Raw) -> i32 {
     assert_eq!(device, raw(0x40));
     with(|fake| {
         assert!(!fake.native12);
@@ -504,7 +518,7 @@ unsafe extern "C" fn create_interop_queue(device: Raw, out: *mut Raw) -> i32 {
         S_OK
     })
 }
-unsafe extern "C" fn create_completion_fence(device: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_completion_fence(device: Raw, out: *mut Raw) -> i32 {
     assert_eq!(device, raw(0x40));
     with(|fake| {
         assert_eq!(fake.interop().refs.get(), 2);
@@ -518,7 +532,7 @@ unsafe extern "C" fn create_completion_fence(device: Raw, out: *mut Raw) -> i32 
 }
 const COMPLETION_EVENT: usize = 0x61;
 const READY_EVENT: usize = 0x62;
-unsafe extern "C" fn create_event(initially_signaled: u32) -> Raw {
+pub(super) unsafe extern "C" fn create_event(initially_signaled: u32) -> Raw {
     with(|fake| {
         assert_eq!(fake.interop().refs.get(), 2);
         let (operation, failure, event) = if initially_signaled == 0 {
@@ -540,11 +554,11 @@ unsafe extern "C" fn create_event(initially_signaled: u32) -> Raw {
         }
     })
 }
-unsafe extern "C" fn duplicate_event(event: Raw) -> Raw {
+pub(super) unsafe extern "C" fn duplicate_event(event: Raw) -> Raw {
     assert_eq!(event, raw(READY_EVENT));
     raw(0x63)
 }
-unsafe extern "C" fn close_event(event: Raw) {
+pub(super) unsafe extern "C" fn close_event(event: Raw) {
     if event == raw(COMPLETION_EVENT) {
         call("close completion event");
         with(|fake| {
@@ -581,7 +595,7 @@ unsafe fn give_ref(resource: Raw, out: *mut Raw) {
     }
 }
 
-unsafe extern "C" fn create_render_buffer(
+pub(super) unsafe extern "C" fn create_render_buffer(
     _: Raw,
     width: u32,
     height: u32,
@@ -635,7 +649,7 @@ unsafe extern "C" fn no_output(_: Raw, _: *mut Raw) -> i32 {
     E_UNEXPECTED
 }
 
-unsafe extern "C" fn shared_surface_platform() -> *const shared_surface::Platform {
+pub(super) unsafe extern "C" fn shared_surface_platform() -> *const shared_surface::Platform {
     static SHARED: shared_surface::Platform = shared_surface::Platform {
         texture: shared_texture,
         target: shared_target,
@@ -679,7 +693,7 @@ fn assert_queue(queue: Raw) {
     });
 }
 
-unsafe extern "C" fn create_plain(
+pub(super) unsafe extern "C" fn create_plain(
     _: Raw,
     plan: &rsf_d3d11p_plain_plan,
     physical: *mut Raw,
@@ -721,7 +735,7 @@ unsafe extern "C" fn create_plain(
         fake.plain_result
     })
 }
-unsafe extern "C" fn query_chain4(_: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn query_chain4(_: Raw, out: *mut Raw) -> i32 {
     call("adopt");
     with(|fake| {
         let chain = stage_physical(fake, fake.provider_queue);
@@ -753,18 +767,18 @@ fn reenter_physical(expected: Raw) {
         unsafe { rsf_core_d3d11p_release_physical(lease) };
     }
 }
-unsafe extern "C" fn get_fullscreen(chain: Raw, fullscreen: *mut i32) -> i32 {
+pub(super) unsafe extern "C" fn get_fullscreen(chain: Raw, fullscreen: *mut i32) -> i32 {
     assert_chain(chain);
     unsafe { *fullscreen = with(|fake| fake.fullscreen) };
     S_OK
 }
-unsafe extern "C" fn set_fullscreen(chain: Raw, fullscreen: i32, _: Raw) -> i32 {
+pub(super) unsafe extern "C" fn set_fullscreen(chain: Raw, fullscreen: i32, _: Raw) -> i32 {
     assert_chain(chain);
     call(format!("fullscreen {fullscreen}"));
     reenter_physical(if fullscreen == 0 { null_mut() } else { chain });
     with(|fake| std::mem::replace(&mut fake.fullscreen_result, S_OK))
 }
-unsafe extern "C" fn physical_present(chain: Raw, sync: u32, flags: u32) -> i32 {
+pub(super) unsafe extern "C" fn physical_present(chain: Raw, sync: u32, flags: u32) -> i32 {
     assert_chain(chain);
     reenter_physical(chain);
     if flags & DXGI_PRESENT_TEST != 0 {
@@ -777,7 +791,7 @@ unsafe extern "C" fn physical_present(chain: Raw, sync: u32, flags: u32) -> i32 
         fake.present_result
     })
 }
-unsafe extern "C" fn resize_physical(
+pub(super) unsafe extern "C" fn resize_physical(
     _: Raw,
     chain: Raw,
     count: u32,
@@ -794,7 +808,7 @@ unsafe extern "C" fn resize_physical(
         fake.resize_result
     })
 }
-unsafe extern "C" fn join(signaller: Raw, waiter: Raw, fence: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn join(signaller: Raw, waiter: Raw, fence: Raw, value: u64) -> i32 {
     let source = with(|fake| {
         fake.assert_completion(fence);
         assert!(fake.native12);
@@ -812,7 +826,7 @@ unsafe extern "C" fn join(signaller: Raw, waiter: Raw, fence: Raw, value: u64) -
     call(format!("join {direction} {value}"));
     with(|fake| fake.join_result)
 }
-unsafe extern "C" fn create_slot(_: Raw, allocator: *mut Raw, list: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_slot(_: Raw, allocator: *mut Raw, list: *mut Raw) -> i32 {
     unsafe {
         allocator.write(null_mut());
         list.write(null_mut());
@@ -855,7 +869,7 @@ fn held_slot_pairs(fake: &Fake) -> usize {
         .filter(|pair| pair.list.refs.get() > 1 || pair.allocator.refs.get() > 1)
         .count()
 }
-unsafe extern "C" fn slot_reset(
+pub(super) unsafe extern "C" fn slot_reset(
     completion: Raw,
     event: Raw,
     allocator: Raw,
@@ -870,12 +884,12 @@ unsafe extern "C" fn slot_reset(
     with(|fake| fake.slots.push((slot, fence)));
     S_OK
 }
-unsafe extern "C" fn upload_wait(_: Raw, queue: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn upload_wait(_: Raw, queue: Raw, value: u64) -> i32 {
     assert_queue(queue);
     call(format!("upload {value}"));
     S_OK
 }
-unsafe extern "C" fn acquire_backbuffer(chain: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn acquire_backbuffer(chain: Raw, out: *mut Raw) -> i32 {
     assert_chain(chain);
     let (resource, result, null) = with(|fake| {
         (
@@ -889,7 +903,7 @@ unsafe extern "C" fn acquire_backbuffer(chain: Raw, out: *mut Raw) -> i32 {
     }
     result
 }
-unsafe extern "C" fn record_copy(_: Raw, list: Raw, destination: Raw, source: Raw) {
+pub(super) unsafe extern "C" fn record_copy(_: Raw, list: Raw, destination: Raw, source: Raw) {
     let slot = slot_of(list, None);
     let render_index = with(|fake| {
         assert_eq!(destination, com_raw(&fake.backbuffer));
@@ -901,22 +915,22 @@ unsafe extern "C" fn record_copy(_: Raw, list: Raw, destination: Raw, source: Ra
     });
     call(format!("copy {slot} {render_index}"));
 }
-unsafe extern "C" fn context11(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn context11(_: Raw) -> Raw {
     raw(0xD0)
 }
-unsafe extern "C" fn close_execute(queue: Raw, list: Raw, command: Raw) -> i32 {
+pub(super) unsafe extern "C" fn close_execute(queue: Raw, list: Raw, command: Raw) -> i32 {
     assert_queue(queue);
     slot_of(list, None);
     // The fake queue takes the slot list itself.
     assert_eq!(command, list);
     with(|fake| fake.close_result)
 }
-unsafe extern "C" fn upload_return(_: Raw, queue: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn upload_return(_: Raw, queue: Raw, value: u64) -> i32 {
     assert_queue(queue);
     call(format!("return {value}"));
     S_OK
 }
-unsafe extern "C" fn signal_slot(queue: Raw, fence: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn signal_slot(queue: Raw, fence: Raw, value: u64) -> i32 {
     assert_queue(queue);
     with(|fake| {
         fake.assert_completion(fence);
@@ -926,7 +940,7 @@ unsafe extern "C" fn signal_slot(queue: Raw, fence: Raw, value: u64) -> i32 {
     call(format!("slot_signal {value}"));
     with(|fake| fake.signal_result)
 }
-unsafe extern "C" fn application_ready(event: Raw, fence: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn application_ready(event: Raw, fence: Raw, value: u64) -> i32 {
     assert_eq!(event, raw(READY_EVENT));
     if !fence.is_null() {
         with(|fake| fake.assert_completion(fence));
@@ -935,16 +949,16 @@ unsafe extern "C" fn application_ready(event: Raw, fence: Raw, value: u64) -> i3
     call(format!("app_ready {on_completion} {value}"));
     S_OK
 }
-unsafe extern "C" fn report_device_failure(_: Raw, _: i32, _: u32) {
+pub(super) unsafe extern "C" fn report_device_failure(_: Raw, _: i32, _: u32) {
     call("device_failure");
 }
-unsafe extern "C" fn log_present_failure(_: Raw, step: *const c_char, _: i32, _: u32) {
+pub(super) unsafe extern "C" fn log_present_failure(_: Raw, step: *const c_char, _: i32, _: u32) {
     call(format!(
         "present_failure {}",
         unsafe { CStr::from_ptr(step) }.to_string_lossy()
     ));
 }
-unsafe extern "C" fn signal_wait(queue: Raw, fence: Raw, event: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn signal_wait(queue: Raw, fence: Raw, event: Raw, value: u64) -> i32 {
     assert_eq!(event, raw(COMPLETION_EVENT));
     let interop = with(|fake| {
         fake.assert_completion(fence);
@@ -955,17 +969,21 @@ unsafe extern "C" fn signal_wait(queue: Raw, fence: Raw, event: Raw, value: u64)
     call(format!("signal_wait {interop} {value}"));
     with(|fake| fake.drain_result)
 }
-unsafe extern "C" fn wait_fence(fence: Raw, event: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn wait_fence(fence: Raw, event: Raw, value: u64) -> i32 {
     assert_eq!(fence, raw(0xF0));
     assert_eq!(event, raw(COMPLETION_EVENT));
     call(format!("wait_fence {value}"));
     S_OK
 }
-unsafe extern "C" fn query_buffer_interface(resource: Raw, _: *const c_void, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn query_buffer_interface(
+    resource: Raw,
+    _: *const c_void,
+    out: *mut Raw,
+) -> i32 {
     unsafe { give_ref(resource, out) };
     S_OK
 }
-unsafe extern "C" fn get_physical_buffer(
+pub(super) unsafe extern "C" fn get_physical_buffer(
     chain: Raw,
     index: u32,
     _: *const c_void,
@@ -977,14 +995,20 @@ unsafe extern "C" fn get_physical_buffer(
     unsafe { give_ref(resource, out) };
     S_OK
 }
-unsafe extern "C" fn log_buffer_refusal(_: Raw, _: u32, _: *const c_void, _: i32, _: u32) {
+pub(super) unsafe extern "C" fn log_buffer_refusal(
+    _: Raw,
+    _: u32,
+    _: *const c_void,
+    _: i32,
+    _: u32,
+) {
     call("GetBuffer refused");
 }
-unsafe extern "C" fn buffer_referenced(resource: Raw) -> u32 {
+pub(super) unsafe extern "C" fn buffer_referenced(resource: Raw) -> u32 {
     let refs = unsafe { &*resource.cast::<FakeCom>() }.refs.get();
     u32::from(refs > 2)
 }
-unsafe extern "C" fn set_description(
+pub(super) unsafe extern "C" fn set_description(
     _: Raw,
     count: u32,
     width: u32,
@@ -1000,14 +1024,14 @@ unsafe extern "C" fn set_description(
         fake.flags = flags;
     });
 }
-unsafe extern "C" fn create_retirement_fence(_: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_retirement_fence(_: Raw, out: *mut Raw) -> i32 {
     with(|fake| {
         fake.sync_calls.push("create retirement fence");
         unsafe { give_ref(com_raw(&fake.retirement_fence), out) };
     });
     S_OK
 }
-unsafe extern "C" fn retire_submit(
+pub(super) unsafe extern "C" fn retire_submit(
     _: Raw,
     queue: Raw,
     retirement_fence: Raw,
@@ -1022,9 +1046,8 @@ unsafe extern "C" fn retire_submit(
         let (mut fence, mut serial) = (retirement_fence, value);
         assert_eq!(
             unsafe {
-                rsf_core_d3d11p_retire(
-                    &PLATFORM,
-                    rsf_core_d3d11p_session(),
+                rsf_d3d11_present_retire(
+                    rsf_d3d11_present_session(),
                     null_mut(),
                     &mut fence,
                     &mut serial,
@@ -1037,20 +1060,20 @@ unsafe extern "C" fn retire_submit(
     call(format!("retire_submit {value}"));
     OK
 }
-unsafe extern "C" fn retain_all(_: Raw) {
+pub(super) unsafe extern "C" fn retain_all(_: Raw) {
     call("retain");
 }
-unsafe extern "C" fn release_presentation(_: Raw) {
+pub(super) unsafe extern "C" fn release_presentation(_: Raw) {
     call("release_presentation");
 }
-unsafe extern "C" fn release_direct_graphics(_: Raw) {
+pub(super) unsafe extern "C" fn release_direct_graphics(_: Raw) {
     with(|fake| {
         assert_eq!(fake.completion_fence.refs.get(), 1);
         assert_eq!(fake.retirement_fence.refs.get(), 1);
         fake.sync_calls.push("release direct graphics");
     });
 }
-unsafe extern "C" fn release_host(_: Raw) {
+pub(super) unsafe extern "C" fn release_host(_: Raw) {
     call("release_host");
     with(|fake| {
         assert_eq!(fake.interop().refs.get(), 1);
@@ -1060,12 +1083,12 @@ unsafe extern "C" fn release_host(_: Raw) {
         fake.held_at_release.push(held);
     });
 }
-unsafe extern "C" fn source_queue(_: Raw, queue: Raw) -> Raw {
+pub(super) unsafe extern "C" fn source_queue(_: Raw, queue: Raw) -> Raw {
     with(|fake| assert_eq!(queue, com_raw(fake.interop())));
     unsafe { com_add_ref(queue.cast()) };
     queue
 }
-unsafe extern "C" fn command_list(_: Raw, queue: Raw, list: Raw) -> Raw {
+pub(super) unsafe extern "C" fn command_list(_: Raw, queue: Raw, list: Raw) -> Raw {
     if !queue.is_null() {
         assert_queue(queue);
     }
@@ -1075,84 +1098,9 @@ unsafe extern "C" fn command_list(_: Raw, queue: Raw, list: Raw) -> Raw {
         list
     }
 }
-unsafe extern "C" fn verify_outer(_: Raw, _: Raw, _: Raw, _: Raw, _: Raw) -> i32 {
+pub(super) unsafe extern "C" fn verify_outer(_: Raw, _: Raw, _: Raw, _: Raw, _: Raw) -> i32 {
     with(|fake| fake.verify_result)
 }
-
-static PLATFORM: Platform = Platform {
-    provider_table,
-    observer_present,
-    window_valid,
-    client_size,
-    canonical_identity,
-    add_ref,
-    release,
-    host_sleep,
-    host_marker,
-    host_acquire,
-    host_input,
-    host_abort,
-    host_reflex_off,
-    host_generation_load,
-    host_present_common,
-    bridge_new,
-    bridge_release_owned,
-    bridge_chain,
-    facts,
-    init_source,
-    owning_adapter,
-    native_device: ok_bridge,
-    adopt_host,
-    d3d11_device,
-    create_host,
-    host,
-    resolve_graphics: ok_bridge,
-    tearing_supported,
-    fsr4_supported,
-    create_interop_queue,
-    create_completion_fence,
-    create_event,
-    duplicate_event,
-    close_event,
-    create_upload_fence: ok_bridge,
-    create_slot,
-    shared_surface_platform,
-    create_render_buffer,
-    create_plain,
-    query_chain4,
-    get_fullscreen,
-    set_fullscreen,
-    physical_present,
-    resize_physical,
-    join,
-    slot_reset,
-    upload_wait,
-    acquire_backbuffer,
-    record_copy,
-    context11,
-    close_execute,
-    upload_return,
-    signal_slot,
-    application_ready,
-    report_device_failure,
-    log_present_failure,
-    query_buffer_interface,
-    get_physical_buffer,
-    log_buffer_refusal,
-    signal_wait,
-    wait_fence,
-    buffer_referenced,
-    set_description,
-    create_retirement_fence,
-    retire_submit,
-    retain_all,
-    release_presentation,
-    release_direct_graphics,
-    release_host,
-    source_queue,
-    command_list,
-    verify_outer,
-};
 
 // Settings callbacks ------------------------------------------------------------------------
 
@@ -1186,16 +1134,13 @@ unsafe extern "C" fn retire_callback(_: Raw, session: Raw) {
     assert_eq!(with(|fake| fake.backbuffer.refs.get()), 2);
     call("retire");
     if with(|fake| fake.reenter_physical) && !session.is_null() {
-        assert_queue(unsafe { rsf_core_d3d11p_queue(&PLATFORM) });
+        assert_queue(unsafe { rsf_d3d11_present_queue() });
         let list = raw(0xCA);
-        assert_eq!(
-            unsafe { rsf_core_d3d11p_command_list(&PLATFORM, list) },
-            list
-        );
+        assert_eq!(unsafe { rsf_d3d11_present_command_list(list) }, list);
         let mut fence = null_mut();
         let mut value = 0;
         assert_eq!(
-            unsafe { rsf_core_d3d11p_retire(&PLATFORM, session, list, &mut fence, &mut value) },
+            unsafe { rsf_d3d11_present_retire(session, list, &mut fence, &mut value) },
             OK
         );
         assert!(!fence.is_null() && value != 0);
@@ -1290,8 +1235,7 @@ fn request(flags: u32) -> rsf_d3d11p_request {
 
 fn create_with(value: &rsf_d3d11p_request) -> (i32, Raw) {
     let mut out = null_mut();
-    let result =
-        unsafe { rsf_core_d3d11p_create(&PLATFORM, raw(0x20), raw(0x30), value, null(), &mut out) };
+    let result = unsafe { rsf_core_d3d11p_create(raw(0x20), raw(0x30), value, null(), &mut out) };
     (result, out)
 }
 
@@ -1303,6 +1247,10 @@ fn create() -> Raw {
 
 fn chain_of(bridge: Raw) -> *mut Chain {
     unsafe { bridge_chain(bridge) }
+}
+
+unsafe fn faulted(chain: *mut Chain) -> u32 {
+    unsafe { owner(chain) }.map_or(1, |o| u32::from(o.faulted.load(Ordering::Acquire)))
 }
 
 fn present(bridge: Raw, sync: u32, flags: u32) -> i32 {
@@ -1319,7 +1267,7 @@ fn status() -> (i32, PresentStatus) {
     let mut value: PresentStatus = unsafe { std::mem::zeroed() };
     value.struct_size = size_of::<PresentStatus>() as u32;
     value.version = STATUS_VERSION;
-    let result = unsafe { rsf_core_d3d11p_status_get(&mut value) };
+    let result = unsafe { rsf_d3d11_present_status_get(&mut value) };
     (result, value)
 }
 
@@ -1460,13 +1408,13 @@ fn prepare_refuses_invalid_setup_and_selects_cold_backend() {
     value.runtime_switching = 0;
     assert_eq!(prepare(&value), 1);
     assert_eq!(
-        rsf_core_d3d11p_backend(),
+        rsf_d3d11_present_backend(),
         DLSS,
         "zero keeps the DLSS default"
     );
     value.runtime_switching = 1;
     assert_eq!(prepare(&value), 1);
-    assert_eq!(rsf_core_d3d11p_backend(), 0, "switching starts Off");
+    assert_eq!(rsf_d3d11_present_backend(), 0, "switching starts Off");
     let copy = settings();
     let directory = |text: *const c_char| unsafe { CStr::from_ptr(text) }.to_str().unwrap();
     assert_eq!(
@@ -1499,16 +1447,16 @@ fn creation_admission_publication_and_retirement() {
     let bridge = create();
     assert_eq!(take_calls(), ["create 3", "adopt"]);
     assert_eq!(rsf_core_d3d11p_active_bridge(), bridge);
-    assert_eq!(unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, bridge) }, 1);
-    assert_eq!(rsf_core_d3d11p_has_owner(), 1);
+    assert_eq!(unsafe { rsf_d3d11_present_is_owner(bridge) }, 1);
+    assert_eq!(rsf_d3d11_present_has_owner(), 1);
     assert_eq!(dispatch_admit(bridge), 1);
     assert_eq!(dispatch_admit(raw(0x1234)), 0);
     assert_eq!(
-        rsf_core_d3d11p_backend_choices() & (1 << FSR4),
+        rsf_d3d11_present_backend_choices() & (1 << FSR4),
         0,
         "FSR4 needs SDK support"
     );
-    assert_eq!(rsf_core_d3d11p_session(), raw(0x1001));
+    assert_eq!(rsf_d3d11_present_session(), raw(0x1001));
     let (result, value) = status();
     assert!(result == OK && value.backend == FSR3 && value.generation == 1);
     assert_eq!(
@@ -1518,20 +1466,20 @@ fn creation_admission_publication_and_retirement() {
     );
     let mut short = size_of::<u32>() as u32;
     assert_eq!(
-        unsafe { rsf_core_d3d11p_graphics(ptr::from_mut(&mut short).cast()) },
+        unsafe { rsf_d3d11_present_graphics(ptr::from_mut(&mut short).cast()) },
         0
     );
     assert_eq!(short, size_of::<u32>() as u32);
     let mut graphics = Graphics::EMPTY;
     graphics.struct_size = 48;
-    assert_eq!(unsafe { rsf_core_d3d11p_graphics(&mut graphics) }, 1);
+    assert_eq!(unsafe { rsf_d3d11_present_graphics(&mut graphics) }, 1);
     let interop = with(|fake| com_raw(fake.interop()));
     assert!(
         graphics.queue == interop
             && graphics.native_queue.is_null()
             && graphics.device == raw(0x40)
     );
-    let source_queue = unsafe { rsf_core_d3d11p_source_queue(&PLATFORM) };
+    let source_queue = unsafe { rsf_d3d11_present_source_queue() };
     assert_eq!(source_queue, interop);
     assert_eq!(with(|fake| fake.interop().refs.get()), 3);
     drop(unsafe { com_ref::owned(source_queue) });
@@ -1555,12 +1503,12 @@ fn creation_admission_publication_and_retirement() {
         assert_eq!(fake.commands.len(), SLOTS);
         assert_eq!(held_slot_pairs(fake), 0);
     });
-    assert!(rsf_core_d3d11p_active_bridge().is_null() && rsf_core_d3d11p_session().is_null());
+    assert!(rsf_core_d3d11p_active_bridge().is_null() && rsf_d3d11_present_session().is_null());
     assert_eq!(generation(), 2);
     assert!(!RETIREMENT_PENDING.load(Ordering::Acquire));
-    assert_eq!(rsf_core_d3d11p_has_owner(), 0);
+    assert_eq!(rsf_d3d11_present_has_owner(), 0);
     assert_eq!(status().0, NOT_READY);
-    assert_eq!(unsafe { rsf_core_d3d11p_graphics(&mut graphics) }, 0);
+    assert_eq!(unsafe { rsf_d3d11_present_graphics(&mut graphics) }, 0);
 }
 
 #[test]
@@ -1759,7 +1707,7 @@ fn d3d11_present_orders_callbacks_and_rotates_slots() {
     take_calls();
     assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
     assert!(take_calls().is_empty());
-    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain_of(bridge)) }, 1);
+    assert_eq!(unsafe { faulted(chain_of(bridge)) }, 1);
     unsafe { bridge_release_owned(bridge) };
 }
 
@@ -1828,12 +1776,12 @@ fn native12_switching_sequences_frames_and_providers() {
         ]
     );
     assert_eq!(
-        rsf_core_d3d11p_backend(),
+        rsf_d3d11_present_backend(),
         XESS,
         "Auto resolved from the owning adapter"
     );
     assert_eq!(unsafe { rsf_core_d3d11p_physical_pending(chain) }, 1);
-    assert!(rsf_core_d3d11p_session().is_null());
+    assert!(rsf_d3d11_present_session().is_null());
 
     assert_eq!(present(bridge, 1, 0), S_OK);
     let calls = take_calls();
@@ -1860,9 +1808,9 @@ fn native12_switching_sequences_frames_and_providers() {
     );
     assert_eq!(latency, 2, "bounded by the application buffer count");
 
-    assert_eq!(rsf_core_d3d11p_request(FSR4), NOT_SUPPORTED);
-    assert_eq!(rsf_core_d3d11p_switch_result(), NOT_SUPPORTED);
-    assert_eq!(rsf_core_d3d11p_request(FSR3), OK);
+    assert_eq!(rsf_d3d11_present_request(FSR4), NOT_SUPPORTED);
+    assert_eq!(rsf_d3d11_present_switch_result(), NOT_SUPPORTED);
+    assert_eq!(rsf_d3d11_present_request(FSR3), OK);
     assert_eq!(present(bridge, 1, 0), S_OK);
     let calls = take_calls();
     let switch = calls.iter().position(|call| call == "probe 3").unwrap();
@@ -1878,9 +1826,9 @@ fn native12_switching_sequences_frames_and_providers() {
             "create 3"
         ]
     );
-    assert_eq!(rsf_core_d3d11p_backend(), FSR3);
-    assert_eq!(rsf_core_d3d11p_generation(), 2);
-    assert_eq!(rsf_core_d3d11p_switch_result(), OK);
+    assert_eq!(rsf_d3d11_present_backend(), FSR3);
+    assert_eq!(rsf_d3d11_present_generation(), 2);
+    assert_eq!(rsf_d3d11_present_switch_result(), OK);
     let (result, value) = status();
     assert!(result == OK && value.backend == FSR3 && value.generation == 2);
 
@@ -1888,23 +1836,23 @@ fn native12_switching_sequences_frames_and_providers() {
     with(|fake| {
         fake.real_results.insert(XESS, INIT_FAILED);
     });
-    assert_eq!(rsf_core_d3d11p_request(XESS), OK);
+    assert_eq!(rsf_d3d11_present_request(XESS), OK);
     assert_eq!(present(bridge, 1, 0), S_OK);
-    assert_eq!(rsf_core_d3d11p_backend(), FSR3);
-    assert_eq!(rsf_core_d3d11p_switch_result(), INIT_FAILED);
-    assert_eq!(rsf_core_d3d11p_generation(), 3);
+    assert_eq!(rsf_d3d11_present_backend(), FSR3);
+    assert_eq!(rsf_d3d11_present_switch_result(), INIT_FAILED);
+    assert_eq!(rsf_d3d11_present_generation(), 3);
     with(|fake| fake.real_results.clear());
-    assert_eq!(rsf_core_d3d11p_request(XESS), OK);
+    assert_eq!(rsf_d3d11_present_request(XESS), OK);
     take_calls();
     // Leased providers postpone the switch to a later Present without losing the request.
     {
         let _lease = PROVIDER_GUARD.read().unwrap();
         assert_eq!(present(bridge, 1, 0), S_OK);
-        assert_eq!(rsf_core_d3d11p_backend(), FSR3);
+        assert_eq!(rsf_d3d11_present_backend(), FSR3);
         assert_eq!(REQUESTED_BACKEND.load(Ordering::SeqCst), XESS);
     }
     assert_eq!(present(bridge, 1, 0), S_OK);
-    assert_eq!(rsf_core_d3d11p_backend(), XESS);
+    assert_eq!(rsf_d3d11_present_backend(), XESS);
     unsafe { bridge_release_owned(bridge) };
     assert!(with(|fake| fake.sync_calls.ends_with(&[
         "close completion event",
@@ -1927,21 +1875,21 @@ fn switch_probe_refusal_keeps_and_double_refusal_presents_plain() {
     with(|fake| {
         fake.create_results.insert(FSR3, INIT_FAILED);
     });
-    assert_eq!(rsf_core_d3d11p_request(FSR3), OK);
+    assert_eq!(rsf_d3d11_present_request(FSR3), OK);
     take_calls();
     assert_eq!(present(bridge, 1, 0), S_OK);
     assert!(!take_calls().iter().any(|call| call.starts_with("destroy")));
     assert_eq!(with(|fake| fake.physical[0].chain.refs.get()), 2);
-    assert_eq!(rsf_core_d3d11p_switch_result(), INIT_FAILED);
-    assert_eq!(rsf_core_d3d11p_backend(), XESS);
-    assert_eq!(rsf_core_d3d11p_generation(), 1);
+    assert_eq!(rsf_d3d11_present_switch_result(), INIT_FAILED);
+    assert_eq!(rsf_d3d11_present_backend(), XESS);
+    assert_eq!(rsf_d3d11_present_generation(), 1);
     // Probe succeeds, then both the new and the restored provider are refused.
     with(|fake| {
         fake.create_results.clear();
         fake.real_results.insert(FSR3, INIT_FAILED);
         fake.real_results.insert(XESS, INIT_FAILED);
     });
-    assert_eq!(rsf_core_d3d11p_request(FSR3), OK);
+    assert_eq!(rsf_d3d11_present_request(FSR3), OK);
     assert_eq!(present(bridge, 1, 0), S_OK);
     let calls = take_calls();
     let probe = calls.iter().position(|call| call == "probe 3").unwrap();
@@ -1956,10 +1904,10 @@ fn switch_probe_refusal_keeps_and_double_refusal_presents_plain() {
             "plain"
         ]
     );
-    assert_eq!(rsf_core_d3d11p_switch_result(), INIT_FAILED);
-    assert_eq!(rsf_core_d3d11p_backend(), 0);
-    assert_eq!(rsf_core_d3d11p_generation(), 2);
-    assert!(rsf_core_d3d11p_session().is_null());
+    assert_eq!(rsf_d3d11_present_switch_result(), INIT_FAILED);
+    assert_eq!(rsf_d3d11_present_backend(), 0);
+    assert_eq!(rsf_d3d11_present_generation(), 2);
+    assert!(rsf_d3d11_present_session().is_null());
     assert_eq!(present(bridge, 1, 0), S_OK, "plain presentation continues");
     unsafe { bridge_release_owned(bridge) };
 }
@@ -1974,16 +1922,16 @@ fn provider_teardown_refusal_defers_replacement_until_retry_succeeds() {
     });
     let bridge = create();
     assert_eq!(present(bridge, 1, 0), S_OK);
-    let outgoing = rsf_core_d3d11p_session();
+    let outgoing = rsf_d3d11_present_session();
     assert!(!outgoing.is_null());
     take_calls();
 
     with(|fake| fake.refused_destroy = outgoing);
-    assert_eq!(rsf_core_d3d11p_request(FSR3), OK);
+    assert_eq!(rsf_d3d11_present_request(FSR3), OK);
     assert_eq!(present(bridge, 1, 0), S_OK);
-    assert_eq!(rsf_core_d3d11p_switch_result(), NOT_READY);
-    assert_eq!(rsf_core_d3d11p_generation(), 1);
-    assert!(rsf_core_d3d11p_session().is_null());
+    assert_eq!(rsf_d3d11_present_switch_result(), NOT_READY);
+    assert_eq!(rsf_d3d11_present_generation(), 1);
+    assert!(rsf_d3d11_present_session().is_null());
     let refused = format!("refused destroy {:x}", outgoing as usize);
     let calls = take_calls();
     assert!(calls.contains(&refused));
@@ -1991,9 +1939,9 @@ fn provider_teardown_refusal_defers_replacement_until_retry_succeeds() {
 
     with(|fake| fake.refused_destroy = null_mut());
     assert_eq!(present(bridge, 1, 0), S_OK);
-    assert_eq!(rsf_core_d3d11p_switch_result(), OK);
-    assert_eq!(rsf_core_d3d11p_backend(), FSR3);
-    assert_eq!(rsf_core_d3d11p_generation(), 2);
+    assert_eq!(rsf_d3d11_present_switch_result(), OK);
+    assert_eq!(rsf_d3d11_present_backend(), FSR3);
+    assert_eq!(rsf_d3d11_present_generation(), 2);
     let calls = take_calls();
     let destroyed = format!("destroy {:x}", outgoing as usize);
     let retired = calls.iter().position(|call| call == &destroyed).unwrap();
@@ -2013,9 +1961,9 @@ fn ensure_failure_falls_back_to_plain_presentation() {
     take_calls();
     assert_eq!(present(bridge, 1, 0), S_OK);
     assert_eq!(take_calls()[..2], ["create 5", "plain"]);
-    assert_eq!(rsf_core_d3d11p_backend(), 0);
-    assert_eq!(rsf_core_d3d11p_switch_result(), INIT_FAILED);
-    assert!(rsf_core_d3d11p_session().is_null());
+    assert_eq!(rsf_d3d11_present_backend(), 0);
+    assert_eq!(rsf_d3d11_present_switch_result(), INIT_FAILED);
+    assert!(rsf_d3d11_present_session().is_null());
     unsafe { bridge_release_owned(bridge) };
 }
 
@@ -2040,7 +1988,7 @@ fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
             (DXGI_ERROR_WAS_STILL_DRAWING, null(), null_mut())
         );
         assert_eq!(
-            unsafe { rsf_core_d3d11p_command_list(&PLATFORM, raw(0xC1)) },
+            unsafe { rsf_d3d11_present_command_list(raw(0xC1)) },
             raw(0xC1)
         );
         assert_eq!(present(bridge, 0, DXGI_PRESENT_TEST), S_OK);
@@ -2053,19 +2001,19 @@ fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
                 com_raw(&fake.native_queue)
             }
         });
-        assert_eq!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }, old_queue);
-        assert_eq!(rsf_core_d3d11p_request(DLSS), OK);
+        assert_eq!(unsafe { rsf_d3d11_present_queue() }, old_queue);
+        assert_eq!(rsf_d3d11_present_request(DLSS), OK);
         assert_eq!(present(bridge, 1, 0), S_OK);
-        assert_eq!(rsf_core_d3d11p_backend(), FSR3);
-        assert_eq!(rsf_core_d3d11p_generation(), 1);
+        assert_eq!(rsf_d3d11_present_backend(), FSR3);
+        assert_eq!(rsf_d3d11_present_generation(), 1);
         assert_eq!(REQUESTED_BACKEND.load(Ordering::SeqCst), DLSS);
         assert_chain(old_chain);
         assert_queue(old_queue);
         unsafe { rsf_core_d3d11p_release_physical(old_lease) };
 
         assert_eq!(present(bridge, 1, 0), S_OK);
-        assert_eq!(rsf_core_d3d11p_backend(), DLSS);
-        assert_eq!(rsf_core_d3d11p_generation(), 2);
+        assert_eq!(rsf_d3d11_present_backend(), DLSS);
+        assert_eq!(rsf_d3d11_present_generation(), 2);
         let (result, new_lease, new_chain) = physical_lease(chain, 0);
         assert_eq!(result, S_OK);
         assert_ne!(new_chain, old_chain);
@@ -2077,11 +2025,11 @@ fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
             );
             com_raw(&fake.proxy_queue)
         });
-        assert_eq!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }, new_queue);
+        assert_eq!(unsafe { rsf_d3d11_present_queue() }, new_queue);
         unsafe { rsf_core_d3d11p_release_physical(new_lease) };
         assert_eq!(present(bridge, 1, 0), S_OK);
         unsafe { bridge_release_owned(bridge) };
-        assert!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }.is_null());
+        assert!(unsafe { rsf_d3d11_present_queue() }.is_null());
         with(|fake| {
             assert_eq!(fake.physical[1].chain.refs.get(), 1);
             assert_eq!(fake.proxy_queue.refs.get(), 1);
@@ -2102,9 +2050,9 @@ fn failed_creation_releases_partial_pairs_before_fallback() {
         let bridge = create();
         let chain = chain_of(bridge);
         let (result, lease, physical) = physical_lease(chain, 1);
-        assert_eq!(rsf_core_d3d11p_backend(), 0);
-        assert_eq!(rsf_core_d3d11p_switch_result(), INIT_FAILED);
-        assert!(rsf_core_d3d11p_session().is_null());
+        assert_eq!(rsf_d3d11_present_backend(), 0);
+        assert_eq!(rsf_d3d11_present_switch_result(), INIT_FAILED);
+        assert!(rsf_d3d11_present_session().is_null());
         let calls = take_calls();
         assert!(calls.ends_with(&[
             "create 5".into(),
@@ -2115,8 +2063,8 @@ fn failed_creation_releases_partial_pairs_before_fallback() {
         with(|fake| assert_eq!(fake.physical[0].chain.refs.get(), 1));
         if queue_missing {
             assert_eq!((result, lease, physical), (E_FAIL, null(), null_mut()));
-            assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 1);
-            assert!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }.is_null());
+            assert_eq!(unsafe { faulted(chain) }, 1);
+            assert!(unsafe { rsf_d3d11_present_queue() }.is_null());
             with(|fake| {
                 assert_eq!(fake.physical[1].chain.refs.get(), 1);
                 assert_eq!(fake.native_queue.refs.get(), 1);
@@ -2124,7 +2072,7 @@ fn failed_creation_releases_partial_pairs_before_fallback() {
         } else {
             assert_eq!(result, S_OK);
             assert_chain(physical);
-            assert_queue(unsafe { rsf_core_d3d11p_queue(&PLATFORM) });
+            assert_queue(unsafe { rsf_d3d11_present_queue() });
             unsafe { rsf_core_d3d11p_release_physical(lease) };
         }
         unsafe { bridge_release_owned(bridge) };
@@ -2175,7 +2123,7 @@ fn resize_normalizes_and_preserves_shared_surfaces_on_allocation_failure() {
         E_FAIL
     );
     assert!(!take_calls().contains(&"resize 3 320x200".to_owned()));
-    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 0);
+    assert_eq!(unsafe { faulted(chain) }, 0);
     let (result, still_old) = get_buffer(chain, 1);
     assert_eq!((result, still_old), (S_OK, pointer));
     drop(unsafe { com_ref::owned(still_old) });
@@ -2222,7 +2170,7 @@ fn failed_render_buffer_resize_exposes_no_partial_batch() {
         E_FAIL
     );
     assert!(!take_calls().contains(&"resize 0 320x200".to_owned()));
-    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 0);
+    assert_eq!(unsafe { faulted(chain) }, 0);
     let (result, old) = get_buffer(chain, 0);
     assert_eq!(
         (result, old),
@@ -2401,14 +2349,14 @@ fn retire_lease_matches_session_and_serializes_fences() {
     let _guard = reset();
     assert_eq!(prepare(&setup(FSR3, 0)), 1);
     let bridge = create();
-    let session = rsf_core_d3d11p_session();
+    let session = rsf_d3d11_present_session();
     let (mut fence, mut value) = (null_mut(), 0_u64);
     assert_eq!(
-        unsafe { rsf_core_d3d11p_retire(&PLATFORM, session, null_mut(), null_mut(), &mut value) },
+        unsafe { rsf_d3d11_present_retire(session, null_mut(), null_mut(), &mut value) },
         INVALID_ARGUMENT
     );
     assert_eq!(
-        unsafe { rsf_core_d3d11p_retire(&PLATFORM, raw(0x55), null_mut(), &mut fence, &mut value) },
+        unsafe { rsf_d3d11_present_retire(raw(0x55), null_mut(), &mut fence, &mut value) },
         NOT_READY
     );
     with(|fake| fake.reenter_retirement = true);
@@ -2421,9 +2369,7 @@ fn retire_lease_matches_session_and_serializes_fences() {
     assert_ne!(expected_fence, completion_fence);
     for expected in 1..=2 {
         assert_eq!(
-            unsafe {
-                rsf_core_d3d11p_retire(&PLATFORM, session, raw(0xC1), &mut fence, &mut value)
-            },
+            unsafe { rsf_d3d11_present_retire(session, raw(0xC1), &mut fence, &mut value) },
             OK
         );
         assert!(fence == expected_fence && value == expected);
@@ -2438,25 +2384,20 @@ fn retire_lease_matches_session_and_serializes_fences() {
     );
     with(|fake| fake.retirement_result = NOT_READY);
     assert_eq!(
-        unsafe { rsf_core_d3d11p_retire(&PLATFORM, session, null_mut(), &mut fence, &mut value) },
+        unsafe { rsf_d3d11_present_retire(session, null_mut(), &mut fence, &mut value) },
         NOT_READY
     );
     assert!(fence.is_null() && value == 0);
     with(|fake| fake.retirement_result = OK);
     let list = raw(0xC1);
-    assert_queue(unsafe { rsf_core_d3d11p_queue(&PLATFORM) });
-    assert_eq!(
-        unsafe { rsf_core_d3d11p_command_list(&PLATFORM, list) },
-        list
-    );
+    assert_queue(unsafe { rsf_d3d11_present_queue() });
+    assert_eq!(unsafe { rsf_d3d11_present_command_list(list) }, list);
     {
         let _replacement = PROVIDER_GUARD.write().unwrap();
-        assert!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }.is_null());
-        assert!(unsafe { rsf_core_d3d11p_command_list(&PLATFORM, list) }.is_null());
+        assert!(unsafe { rsf_d3d11_present_queue() }.is_null());
+        assert!(unsafe { rsf_d3d11_present_command_list(list) }.is_null());
         assert_eq!(
-            unsafe {
-                rsf_core_d3d11p_retire(&PLATFORM, session, null_mut(), &mut fence, &mut value)
-            },
+            unsafe { rsf_d3d11_present_retire(session, null_mut(), &mut fence, &mut value) },
             NOT_READY
         );
     }
@@ -2467,17 +2408,16 @@ fn retire_lease_matches_session_and_serializes_fences() {
 #[test]
 fn latency_routes_to_host_or_provider_once() {
     let _guard = reset();
-    let p = &PLATFORM;
     ACTIVE_BACKEND.store(XESS, Ordering::SeqCst);
     ACTIVE_SESSION.store(raw(0x1234), Ordering::SeqCst);
     ACTIVE_HOST.store(raw(0xAA), Ordering::SeqCst);
     let mut generation = 0;
-    assert_eq!(unsafe { rsf_core_d3d11p_begin(p, 5, &mut generation) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_begin(5, &mut generation) }, OK);
     assert_eq!(generation, 1);
-    assert_eq!(unsafe { rsf_core_d3d11p_marker(p, 1, 5, 2, 0) }, OK);
-    assert_eq!(unsafe { rsf_core_d3d11p_input(p, 5, 4, 9) }, OK);
-    assert_eq!(unsafe { rsf_core_d3d11p_input(p, 5, 0, 9) }, OK);
-    assert_eq!(unsafe { rsf_core_d3d11p_abort(p, 5) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_marker(1, 5, 2, 0) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_input(5, 4, 9) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_input(5, 0, 9) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_abort(5) }, OK);
     assert_eq!(
         take_calls(),
         [
@@ -2492,9 +2432,9 @@ fn latency_routes_to_host_or_provider_once() {
         ]
     );
     HOST_PACED.store(true, Ordering::SeqCst);
-    assert_eq!(unsafe { rsf_core_d3d11p_begin(p, 6, null_mut()) }, OK);
-    assert_eq!(unsafe { rsf_core_d3d11p_marker(p, 1, 6, 2, 0) }, OK);
-    assert_eq!(unsafe { rsf_core_d3d11p_abort(p, 6) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_begin(6, null_mut()) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_marker(1, 6, 2, 0) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_abort(6) }, OK);
     assert_eq!(
         take_calls(),
         ["host_sleep 6", "host_marker 2 6", "host_abort 6"]
@@ -2502,44 +2442,44 @@ fn latency_routes_to_host_or_provider_once() {
     // The core names the pacer; a stale generation, null frame or unknown owner is refused.
     let stale = 9;
     assert_eq!(
-        unsafe { rsf_core_d3d11p_pace(p, 7, RSF_PACING_REFLEX, &stale, null_mut()) },
+        unsafe { rsf_core_d3d11p_pace(7, RSF_PACING_REFLEX, &stale, null_mut()) },
         NOT_READY
     );
     assert_eq!(
-        unsafe { rsf_core_d3d11p_pace(p, 0, RSF_PACING_REFLEX, null(), null_mut()) },
+        unsafe { rsf_core_d3d11p_pace(0, RSF_PACING_REFLEX, null(), null_mut()) },
         INVALID_ARGUMENT
     );
     assert_eq!(
-        unsafe { rsf_core_d3d11p_pace(p, 7, 4, null(), null_mut()) },
+        unsafe { rsf_core_d3d11p_pace(7, 4, null(), null_mut()) },
         INVALID_ARGUMENT
     );
     assert_eq!(
-        unsafe { rsf_core_d3d11p_pace(p, 7, RSF_PACING_REFLEX, null(), &mut generation) },
+        unsafe { rsf_core_d3d11p_pace(7, RSF_PACING_REFLEX, null(), &mut generation) },
         OK
     );
     assert_eq!(
-        unsafe { rsf_core_d3d11p_pace(p, 8, RSF_PACING_XELL, null(), null_mut()) },
+        unsafe { rsf_core_d3d11p_pace(8, RSF_PACING_XELL, null(), null_mut()) },
         OK
     );
     assert_eq!(
-        unsafe { rsf_core_d3d11p_pace(p, 9, PACING_LAST, null(), null_mut()) },
+        unsafe { rsf_core_d3d11p_pace(9, PACING_LAST, null(), null_mut()) },
         OK
     );
     assert_eq!(take_calls(), ["host_sleep 7", "begin_frame 8"]);
-    assert_eq!(unsafe { rsf_core_d3d11p_receipt(p, 2, 9, 1, 3) }, NOT_READY);
-    assert_eq!(unsafe { rsf_core_d3d11p_receipt(p, 1, 9, 1, 3) }, OK);
-    assert_eq!(unsafe { rsf_core_d3d11p_acquire(p, 9) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_receipt(2, 9, 1, 3) }, NOT_READY);
+    assert_eq!(unsafe { rsf_d3d11_present_receipt(1, 9, 1, 3) }, OK);
+    assert_eq!(unsafe { rsf_d3d11_present_acquire(9) }, OK);
     assert_eq!(take_calls(), ["host_input 9 1", "host_acquire 9"]);
     ACTIVE_HOST.store(null_mut(), Ordering::SeqCst);
     assert_eq!(
-        unsafe { rsf_core_d3d11p_pace(p, 10, RSF_PACING_REFLEX, null(), null_mut()) },
+        unsafe { rsf_core_d3d11p_pace(10, RSF_PACING_REFLEX, null(), null_mut()) },
         NOT_READY
     );
-    assert_eq!(unsafe { rsf_core_d3d11p_receipt(p, 1, 9, 1, 3) }, NOT_READY);
+    assert_eq!(unsafe { rsf_d3d11_present_receipt(1, 9, 1, 3) }, NOT_READY);
     // A caller arriving during provider replacement is turned away, never blocked.
     let _replacement = PROVIDER_GUARD.write().unwrap();
     assert_eq!(
-        unsafe { rsf_core_d3d11p_begin(p, 11, null_mut()) },
+        unsafe { rsf_d3d11_present_begin(11, null_mut()) },
         NOT_READY
     );
     assert!(take_calls().is_empty());
@@ -2553,7 +2493,7 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
     let window = raw(0x10);
     let mut token = 0;
     assert_eq!(
-        unsafe { rsf_core_d3d11p_creation_begin(&PLATFORM, window, &mut token, 0) },
+        unsafe { rsf_core_d3d11p_creation_begin(window, &mut token, 0) },
         DXGI_ERROR_INVALID_CALL
     );
     assert_eq!(
@@ -2562,19 +2502,19 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
         "no transaction, no capture"
     );
     assert_eq!(
-        unsafe { rsf_core_d3d11p_creation_begin(&PLATFORM, window, &mut token, 1) },
+        unsafe { rsf_core_d3d11p_creation_begin(window, &mut token, 1) },
         S_OK
     );
     assert_ne!(token, 0);
     let mut second = 0;
     assert_eq!(
-        unsafe { rsf_core_d3d11p_creation_begin(&PLATFORM, window, &mut second, 1) },
+        unsafe { rsf_core_d3d11p_creation_begin(window, &mut second, 1) },
         DXGI_ERROR_INVALID_CALL
     );
     assert_eq!(rsf_core_d3d11p_capture(raw(0x11)), 0);
     assert_eq!(rsf_core_d3d11p_capture(window), 1);
     let bridge = create();
-    unsafe { rsf_core_d3d11p_captured(&PLATFORM, bridge) };
+    unsafe { rsf_core_d3d11p_captured(bridge) };
     assert_eq!(
         rsf_core_d3d11p_capture(window),
         0,
@@ -2584,18 +2524,16 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
         physical_lease(chain_of(bridge), 1),
         (DXGI_ERROR_WAS_STILL_DRAWING, null(), null_mut())
     );
-    assert_eq!(unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, bridge) }, 0);
-    assert_eq!(rsf_core_d3d11p_has_owner(), 0);
+    assert_eq!(unsafe { rsf_d3d11_present_is_owner(bridge) }, 0);
+    assert_eq!(rsf_d3d11_present_has_owner(), 0);
     assert_eq!(dispatch_admit(bridge), 2);
     let outer = raw(0x500);
     assert_eq!(
-        unsafe {
-            rsf_core_d3d11p_creation_end(&PLATFORM, window, token + 1, raw(1), raw(2), outer)
-        },
+        unsafe { rsf_d3d11_present_creation_end(window, token + 1, raw(1), raw(2), outer) },
         E_INVALIDARG
     );
     assert_eq!(
-        unsafe { rsf_core_d3d11p_creation_end(&PLATFORM, window, token, raw(1), raw(2), outer) },
+        unsafe { rsf_d3d11_present_creation_end(window, token, raw(1), raw(2), outer) },
         S_OK
     );
     assert_eq!(
@@ -2603,11 +2541,11 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
         0,
         "the captured reference is released"
     );
-    assert_eq!(unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, bridge) }, 1);
-    assert_eq!(unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, outer) }, 1);
+    assert_eq!(unsafe { rsf_d3d11_present_is_owner(bridge) }, 1);
+    assert_eq!(unsafe { rsf_d3d11_present_is_owner(outer) }, 1);
     with(|fake| fake.unpublish_alias_on_lookup = true);
     assert_eq!(
-        unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, outer) },
+        unsafe { rsf_d3d11_present_is_owner(outer) },
         0,
         "the alias was unpublished while its identity query ran"
     );
@@ -2618,16 +2556,16 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
     with(|fake| fake.verify_result = E_INVALIDARG);
     token = 0;
     assert_eq!(
-        unsafe { rsf_core_d3d11p_creation_begin(&PLATFORM, window, &mut token, 1) },
+        unsafe { rsf_core_d3d11p_creation_begin(window, &mut token, 1) },
         S_OK
     );
     let bridge = create();
-    unsafe { rsf_core_d3d11p_captured(&PLATFORM, bridge) };
+    unsafe { rsf_core_d3d11p_captured(bridge) };
     assert_eq!(
-        unsafe { rsf_core_d3d11p_creation_end(&PLATFORM, window, token, raw(1), raw(2), outer) },
+        unsafe { rsf_d3d11_present_creation_end(window, token, raw(1), raw(2), outer) },
         E_INVALIDARG
     );
-    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain_of(bridge)) }, 1);
+    assert_eq!(unsafe { faulted(chain_of(bridge)) }, 1);
     assert_eq!(dispatch_admit(bridge), 2);
     assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
     unsafe { bridge_release_owned(bridge) };
@@ -2686,12 +2624,12 @@ fn failed_retirement_retains_provider_and_inputs() {
 
 #[test]
 fn provider_family_is_the_single_backend_mapping() {
-    assert_eq!(rsf_core_fg_provider_family(DLSS), FAMILY_DLSS);
-    assert_eq!(rsf_core_fg_provider_family(FSR3), FAMILY_FIDELITYFX);
-    assert_eq!(rsf_core_fg_provider_family(FSR4), FAMILY_FIDELITYFX);
-    assert_eq!(rsf_core_fg_provider_family(XESS), FAMILY_XESS);
+    assert_eq!(family(DLSS), Some(FAMILY_DLSS));
+    assert_eq!(family(FSR3), Some(FAMILY_FIDELITYFX));
+    assert_eq!(family(FSR4), Some(FAMILY_FIDELITYFX));
+    assert_eq!(family(XESS), Some(FAMILY_XESS));
     for backend in [0, 2, 6, AUTO, 32, u32::MAX] {
-        assert_eq!(rsf_core_fg_provider_family(backend), 0);
+        assert_eq!(family(backend), None);
         assert!(!known(backend));
     }
 }
@@ -2716,7 +2654,7 @@ fn lazy_creation_publishes_before_fullscreen_entry() {
         "the created chain keeps presenting"
     );
     assert!(
-        !rsf_core_d3d11p_session().is_null(),
+        !rsf_d3d11_present_session().is_null(),
         "provider session published"
     );
     let (result, value) = status();
@@ -2744,7 +2682,7 @@ fn early_present_failures_complete_the_notification_and_fault() {
     let calls = take_calls();
     assert_eq!(calls[..2], ["observer", "present_event"]);
     assert!(calls.contains(&"observed".to_owned()) && calls.contains(&"presented".to_owned()));
-    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain_of(bridge)) }, 1);
+    assert_eq!(unsafe { faulted(chain_of(bridge)) }, 1);
     unsafe { bridge_release_owned(bridge) };
 
     assert_eq!(prepare(&setup(FSR3, 0)), 1);
@@ -2766,7 +2704,7 @@ fn early_present_failures_complete_the_notification_and_fault() {
             .any(|call| matches!(call.as_str(), "prepare" | "present"))
     );
     assert!(calls.iter().any(|call| call.starts_with("slot_signal")));
-    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain_of(bridge)) }, 1);
+    assert_eq!(unsafe { faulted(chain_of(bridge)) }, 1);
     unsafe { bridge_release_owned(bridge) };
 }
 
@@ -2786,7 +2724,7 @@ fn lazy_creation_retries_after_host_load_refusal() {
     assert_eq!(present(bridge, 0, DXGI_PRESENT_TEST), E_FAIL);
     assert_eq!(unsafe { rsf_core_d3d11p_physical_pending(chain) }, 1);
     assert!(with(|fake| fake.physical.is_empty()));
-    assert!(rsf_core_d3d11p_session().is_null());
+    assert!(rsf_d3d11_present_session().is_null());
     with(|fake| fake.host_load_result = OK);
     assert_eq!(present(bridge, 0, DXGI_PRESENT_TEST), S_OK);
     assert_eq!(unsafe { rsf_core_d3d11p_physical_pending(chain) }, 0);
@@ -2826,7 +2764,7 @@ fn a_nonblocking_present_is_retryable_only_when_submission_is_fenced() {
         let flags = DXGI_PRESENT_DO_NOT_WAIT.0;
         assert_eq!(present(bridge, 1, flags), DXGI_ERROR_WAS_STILL_DRAWING);
         assert_eq!(with(|fake| fake.presents.last().copied()), Some((1, flags)));
-        assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 0);
+        assert_eq!(unsafe { faulted(chain) }, 0);
         assert_eq!(unsafe { rsf_core_d3d11p_render_index(chain) }, 0);
         assert!(
             take_calls()
@@ -2845,7 +2783,7 @@ fn a_nonblocking_present_is_retryable_only_when_submission_is_fenced() {
             fake.signal_result = E_FAIL;
         });
         assert_eq!(present(bridge, 1, flags), DXGI_ERROR_DEVICE_REMOVED);
-        assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 1);
+        assert_eq!(unsafe { faulted(chain) }, 1);
         assert_eq!(present(bridge, 1, flags), DXGI_ERROR_DEVICE_REMOVED);
         unsafe { bridge_release_owned(bridge) };
     }

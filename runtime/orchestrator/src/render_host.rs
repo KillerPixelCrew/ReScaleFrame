@@ -238,9 +238,9 @@ crate::render_host_methods::impl_host_methods! {
         unsafe { u32::from(rsf_game_sys::depth_domains_requested(&(*pass).depth_domains)) }
     }
     fn dlss_preset_valid(preset: u32) -> u32 { u32::from(crate::streamline_sr::preset_valid(preset)) }
-    fn present_host() -> Handle { crate::d3d11_present::rsf_core_d3d11p_host() }
-    fn present_request(backend: u32) -> i32 { crate::d3d11_present::rsf_core_d3d11p_request(backend) }
-    fn present_backend() -> u32 { crate::d3d11_present::rsf_core_d3d11p_backend() }
+    fn present_host() -> Handle { crate::d3d11_present::rsf_d3d11_present_host() }
+    fn present_request(backend: u32) -> i32 { crate::d3d11_present::rsf_d3d11_present_request(backend) }
+    fn present_backend() -> u32 { crate::d3d11_present::rsf_d3d11_present_backend() }
     fn overlay_fill_fg(stats: &mut Stats, fg: *const FgStatus) {
         unsafe { crate::overlay_settings::rsf_overlay_fill_fg_stats(stats, fg) }
     }
@@ -269,8 +269,8 @@ crate::render_host_methods::impl_host_methods! {
             )
         }
     }
-    fn present_has_owner() -> i32 { crate::d3d11_present::rsf_core_d3d11p_has_owner() }
-    fn present_backend_choices() -> u32 { crate::d3d11_present::rsf_core_d3d11p_backend_choices() }
+    fn present_has_owner() -> i32 { crate::d3d11_present::rsf_d3d11_present_has_owner() }
+    fn present_backend_choices() -> u32 { crate::d3d11_present::rsf_d3d11_present_backend_choices() }
     fn overlay_present(
         device: Handle,
         queue: Handle,

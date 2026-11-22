@@ -158,8 +158,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_device_tearing(factory: Raw) -> u32 {
     u32::from(result.is_ok() && allow.0 != 0)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_device_verify_outer(
+pub(super) unsafe extern "C" fn verify_outer(
     inner: Raw,
     window: Raw,
     device: Raw,

@@ -7,7 +7,7 @@ target_include_directories(rsf_presentation PUBLIC include)
 target_compile_definitions(rsf_presentation PRIVATE RSF_STREAMLINE_HOST_BUILD)
 target_link_libraries(rsf_presentation PRIVATE rsf_build_options opengl32)
 target_link_libraries(rsf_presentation PUBLIC d3d11 d3d12 dxgi ReScaleFrame::DLSS ReScaleFrame::FSR ReScaleFrame::XeSS ReScaleFrame::Graphics minhook)
-# The native hook shim owns the platform table and the guarded factory trampoline.
-# Their callbacks share this single object with the C entry points that pull it in.
+# The SEH-guarded native calls and the factory detours of the Rust presentation owner, which
+# calls into them and back.
 target_link_libraries(rsf_presentation PUBLIC rsf_orchestrator_rust)
 add_library(ReScaleFrame::Presentation ALIAS rsf_presentation)

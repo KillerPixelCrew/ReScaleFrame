@@ -77,8 +77,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_facade_resize1(
     unsafe { rsf_core_d3d11p_resize(chain, count, width, height, format, flags) }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11p_native_query_interface(
+pub(super) unsafe extern "C" fn query_buffer_interface(
     receiver: Raw,
     iid: *const c_void,
     out: *mut Raw,
@@ -87,11 +86,10 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_native_query_interface(
     unsafe { object.query(iid.cast(), out) }.0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_query_chain4(receiver: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn query_chain4(receiver: Raw, out: *mut Raw) -> i32 {
     unsafe {
         out.write(null_mut());
-        rsf_d3d11p_native_query_interface(
+        query_buffer_interface(
             receiver,
             std::ptr::from_ref(&IDXGISwapChain4::IID).cast(),
             out,
@@ -99,8 +97,7 @@ unsafe extern "C" fn rsf_d3d11p_native_query_chain4(receiver: Raw, out: *mut Raw
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_get_fullscreen(receiver: Raw, fullscreen: *mut i32) -> i32 {
+pub(super) unsafe extern "C" fn get_fullscreen(receiver: Raw, fullscreen: *mut i32) -> i32 {
     let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&receiver) }.unwrap();
     let mut value = BOOL(0);
     let result = unsafe { (chain.vtable().GetFullscreenState)(receiver, &mut value, null_mut()) };
@@ -108,24 +105,17 @@ unsafe extern "C" fn rsf_d3d11p_native_get_fullscreen(receiver: Raw, fullscreen:
     result.0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_set_fullscreen(
-    receiver: Raw,
-    fullscreen: i32,
-    target: Raw,
-) -> i32 {
+pub(super) unsafe extern "C" fn set_fullscreen(receiver: Raw, fullscreen: i32, target: Raw) -> i32 {
     let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&receiver) }.unwrap();
     unsafe { (chain.vtable().SetFullscreenState)(receiver, BOOL(fullscreen), target) }.0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_present(receiver: Raw, sync: u32, flags: u32) -> i32 {
+pub(super) unsafe extern "C" fn physical_present(receiver: Raw, sync: u32, flags: u32) -> i32 {
     let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&receiver) }.unwrap();
     unsafe { (chain.vtable().Present)(receiver, sync, DXGI_PRESENT(flags)) }.0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_get_buffer(
+pub(super) unsafe extern "C" fn get_physical_buffer(
     receiver: Raw,
     index: u32,
     iid: *const c_void,
@@ -135,13 +125,12 @@ unsafe extern "C" fn rsf_d3d11p_native_get_buffer(
     unsafe { (chain.vtable().GetBuffer)(receiver, index, iid.cast(), out) }.0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_native_acquire_backbuffer(receiver: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn acquire_backbuffer(receiver: Raw, out: *mut Raw) -> i32 {
     let chain = unsafe { IDXGISwapChain3::from_raw_borrowed(&receiver) }.unwrap();
     let index = unsafe { (chain.vtable().GetCurrentBackBufferIndex)(receiver) };
     unsafe {
         out.write(null_mut());
-        rsf_d3d11p_native_get_buffer(
+        get_physical_buffer(
             receiver,
             index,
             std::ptr::from_ref(&ID3D12Resource::IID).cast(),

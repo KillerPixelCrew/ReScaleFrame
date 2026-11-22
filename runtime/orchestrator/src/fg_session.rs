@@ -631,9 +631,6 @@ unsafe extern "C" fn rsf_fg_session_destroy(raw: *mut Session) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_get_provider(backend: u32) -> *const rsf_generation_provider {
-    unsafe extern "C" {
-        fn rsf_d3d11p_provider_for(backend: u32) -> *const rsf_generation_provider;
-    }
-    unsafe { rsf_d3d11p_provider_for(backend) }
+extern "C" fn rsf_fg_get_provider(backend: u32) -> *const rsf_generation_provider {
+    crate::d3d11_present::provider_for(backend)
 }

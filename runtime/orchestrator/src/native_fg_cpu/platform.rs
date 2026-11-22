@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d11_present::{
-    rsf_core_d3d11p_backend, rsf_core_d3d11p_generation, rsf_core_d3d11p_graphics,
-    rsf_core_d3d11p_has_owner, rsf_core_d3d11p_host,
+    rsf_d3d11_present_backend, rsf_d3d11_present_generation, rsf_d3d11_present_graphics,
+    rsf_d3d11_present_has_owner, rsf_d3d11_present_host,
 };
 use crate::d3d11_present_abi::rsf_streamline_graphics;
 use crate::native_cpu::rsf_native_cpu_rendered_source_set;
@@ -37,13 +37,13 @@ unsafe extern "C" {
 }
 
 pub(crate) static NATIVE_PLATFORM: Platform = Platform {
-    has_owner: rsf_core_d3d11p_has_owner,
-    generation: rsf_core_d3d11p_generation,
-    backend: rsf_core_d3d11p_backend,
+    has_owner: rsf_d3d11_present_has_owner,
+    generation: rsf_d3d11_present_generation,
+    backend: rsf_d3d11_present_backend,
     status: rsf_d3d11_present_status_get,
     device: native_device,
     adapter_vendor,
-    host: rsf_core_d3d11p_host,
+    host: rsf_d3d11_present_host,
     host_status: rsf_streamline_host_latency_status,
     host_reflex: rsf_streamline_host_reflex,
     host_token: rsf_streamline_host_token,
@@ -96,7 +96,7 @@ unsafe extern "C" fn native_device() -> Handle {
         struct_size: size_of::<rsf_streamline_graphics>() as u32,
         ..rsf_streamline_graphics::EMPTY
     };
-    if unsafe { rsf_core_d3d11p_graphics(&mut graphics) } != 0 {
+    if unsafe { rsf_d3d11_present_graphics(&mut graphics) } != 0 {
         graphics.native_device
     } else {
         null_mut()

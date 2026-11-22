@@ -20,8 +20,7 @@ unsafe fn borrow<T: Interface>(value: &Raw) -> &T {
     unsafe { T::from_raw_borrowed(value) }.unwrap()
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_queue(device: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_interop_queue(device: Raw, out: *mut Raw) -> i32 {
     let bound = unsafe { borrow::<ID3D12Device>(&device) };
     let desc = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -34,8 +33,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_queue(device: Raw, out: *mut Raw)
     .0
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_fence(device: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_completion_fence(device: Raw, out: *mut Raw) -> i32 {
     let bound = unsafe { borrow::<ID3D12Device>(&device) };
     unsafe {
         out.write(null_mut());
@@ -44,13 +42,11 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_fence(device: Raw, out: *mut Raw)
     .0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_create_event(initial: u32) -> Raw {
+pub(super) unsafe extern "C" fn create_event(initial: u32) -> Raw {
     unsafe { CreateEventW(null(), 0, i32::from(initial != 0), null()) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_duplicate_event(event: Raw) -> Raw {
+pub(super) unsafe extern "C" fn duplicate_event(event: Raw) -> Raw {
     let process = unsafe { GetCurrentProcess() };
     let mut copy = null_mut();
     unsafe {
@@ -67,8 +63,7 @@ unsafe extern "C" fn rsf_d3d11p_gpu_duplicate_event(event: Raw) -> Raw {
     copy
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_close_event(event: Raw) {
+pub(super) unsafe extern "C" fn close_event(event: Raw) {
     unsafe { CloseHandle(event) };
 }
 
@@ -166,15 +161,13 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_render_buffer(
     .0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_signal(queue: Raw, fence: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn signal_slot(queue: Raw, fence: Raw, value: u64) -> i32 {
     let bound = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
     unsafe { (bound.vtable().Signal)(queue, fence, value) }.0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_join(source: Raw, target: Raw, fence: Raw, value: u64) -> i32 {
-    let signaled = unsafe { rsf_d3d11p_gpu_signal(source, fence, value) };
+pub(super) unsafe extern "C" fn join(source: Raw, target: Raw, fence: Raw, value: u64) -> i32 {
+    let signaled = unsafe { signal_slot(source, fence, value) };
     if signaled < 0 {
         return signaled;
     }
@@ -195,28 +188,20 @@ unsafe extern "C" fn arm(fence: Raw, value: u64, event: Raw) -> i32 {
     unsafe { (bound.vtable().SetEventOnCompletion)(fence, value, HANDLE(event)) }.0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_wait(fence: Raw, event: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn wait_fence(fence: Raw, event: Raw, value: u64) -> i32 {
     unsafe {
         crate::d3d12_fence::rsf_core_d3d12_wait_fence(fence, value, event, 10_000, completed, arm)
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_signal_wait(
-    queue: Raw,
-    fence: Raw,
-    event: Raw,
-    value: u64,
-) -> i32 {
-    if unsafe { rsf_d3d11p_gpu_signal(queue, fence, value) } < 0 {
+pub(super) unsafe extern "C" fn signal_wait(queue: Raw, fence: Raw, event: Raw, value: u64) -> i32 {
+    if unsafe { signal_slot(queue, fence, value) } < 0 {
         return E_FAIL;
     }
-    unsafe { rsf_d3d11p_gpu_wait(fence, event, value) }
+    unsafe { wait_fence(fence, event, value) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_reset_slot(
+pub(super) unsafe extern "C" fn slot_reset(
     fence: Raw,
     event: Raw,
     allocator: Raw,
@@ -225,7 +210,7 @@ unsafe extern "C" fn rsf_d3d11p_gpu_reset_slot(
     step: *mut u32,
 ) -> i32 {
     unsafe { step.write(0) };
-    let waited = unsafe { rsf_d3d11p_gpu_wait(fence, event, value) };
+    let waited = unsafe { wait_fence(fence, event, value) };
     if waited < 0 {
         return waited;
     }
@@ -240,8 +225,7 @@ unsafe extern "C" fn rsf_d3d11p_gpu_reset_slot(
     unsafe { (bound.vtable().Reset)(list, allocator, null_mut()) }.0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_close_execute(queue: Raw, list: Raw, command: Raw) -> i32 {
+pub(super) unsafe extern "C" fn close_execute(queue: Raw, list: Raw, command: Raw) -> i32 {
     let bound = unsafe { borrow::<ID3D12GraphicsCommandList>(&list) };
     let closed = unsafe { (bound.vtable().Close)(list) };
     if closed.is_ok() {
@@ -255,8 +239,7 @@ unsafe fn execute(queue: Raw, command: Raw) {
     unsafe { (bound.vtable().ExecuteCommandLists)(queue, 1, &command) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_application_ready(event: Raw, fence: Raw, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn application_ready(event: Raw, fence: Raw, value: u64) -> i32 {
     if !fence.is_null() {
         return unsafe { arm(fence, value, event) };
     }
@@ -267,8 +250,7 @@ unsafe extern "C" fn rsf_d3d11p_gpu_application_ready(event: Raw, fence: Raw, va
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_gpu_buffer_referenced(resource: Raw) -> u32 {
+pub(super) unsafe extern "C" fn buffer_referenced(resource: Raw) -> u32 {
     let bound = unsafe { borrow::<IUnknown>(&resource) };
     unsafe {
         (bound.vtable().AddRef)(resource);
@@ -397,7 +379,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_upload_return(
     fence12: Raw,
     value: u64,
 ) -> i32 {
-    let joined = unsafe { rsf_d3d11p_gpu_join(queue, queue, fence12, value) };
+    let joined = unsafe { join(queue, queue, fence12, value) };
     if joined < 0 {
         return joined;
     }
@@ -427,7 +409,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_retire_submit(
         }
         unsafe { execute(queue, command) };
     }
-    if unsafe { rsf_d3d11p_gpu_signal(queue, retirement_fence, value) } < 0 {
+    if unsafe { signal_slot(queue, retirement_fence, value) } < 0 {
         return FEATURE_FAILED;
     }
     S_OK

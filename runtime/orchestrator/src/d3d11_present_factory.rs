@@ -2,14 +2,18 @@
 //! Descriptor translation, interception and cold installation for DXGI factories.
 use super::device::rsf_d3d11p_device_native_chain;
 use super::{
-    DXGI_ERROR_UNSUPPORTED, E_FAIL, E_INVALIDARG, E_UNEXPECTED, Platform, S_OK, failed, log,
+    DXGI_ERROR_UNSUPPORTED, E_FAIL, E_INVALIDARG, E_UNEXPECTED, S_OK, failed, log,
     rsf_core_d3d11p_active_bridge, rsf_core_d3d11p_capture, rsf_core_d3d11p_captured,
-    rsf_core_d3d11p_create, rsf_core_d3d11p_is_owner, rsf_core_d3d11p_prepare,
-    rsf_core_d3d11p_set_scoped, settings,
+    rsf_core_d3d11p_create, rsf_core_d3d11p_prepare, rsf_core_d3d11p_set_scoped,
+    rsf_d3d11_present_is_owner, settings,
 };
 use crate::com_ref;
 use crate::d3d11_present_abi::{Raw, rsf_d3d11p_plain_plan, rsf_d3d11p_request};
 use crate::sys::rsf_d3d11_present_setup;
+use rsf_minhook_sys::{
+    MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED, MH_ERROR_NOT_CREATED,
+    MH_ERROR_NOT_INITIALIZED, MH_EnableHook, MH_Initialize, MH_OK, MH_RemoveHook,
+};
 use std::ffi::c_void;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
@@ -55,9 +59,7 @@ fn translate(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_factory_create(
-    platform: *const Platform,
+unsafe fn rsf_d3d11p_factory_create(
     factory: Raw,
     device: Raw,
     desc: &DXGI_SWAP_CHAIN_DESC,
@@ -77,21 +79,11 @@ unsafe extern "C" fn rsf_d3d11p_factory_create(
         refresh_numerator: mode.RefreshRate.Numerator,
         refresh_denominator: mode.RefreshRate.Denominator,
     };
-    unsafe {
-        rsf_core_d3d11p_create(
-            platform,
-            factory,
-            device,
-            &request,
-            ptr::from_ref(desc).cast(),
-            out,
-        )
-    }
+    unsafe { rsf_core_d3d11p_create(factory, device, &request, ptr::from_ref(desc).cast(), out) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11p_factory_intercept(
-    platform: *const Platform,
     factory: Raw,
     device: Raw,
     desc: *const DXGI_SWAP_CHAIN_DESC,
@@ -101,16 +93,15 @@ unsafe extern "C" fn rsf_d3d11p_factory_intercept(
         return false;
     };
     if rsf_core_d3d11p_capture(desc.OutputWindow.0) == 0
-        || failed(unsafe { rsf_d3d11p_factory_create(platform, factory, device, desc, out) })
+        || failed(unsafe { rsf_d3d11p_factory_create(factory, device, desc, out) })
     {
         return false;
     }
-    unsafe { rsf_core_d3d11p_captured(platform, out.read()) };
+    unsafe { rsf_core_d3d11p_captured(out.read()) };
     true
 }
 
 unsafe fn create_hwnd(
-    platform: *const Platform,
     factory: Raw,
     device: Raw,
     desc: &DXGI_SWAP_CHAIN_DESC,
@@ -118,7 +109,7 @@ unsafe fn create_hwnd(
     capture: bool,
 ) -> Result<i32, i32> {
     let mut bridge = null_mut();
-    let status = unsafe { rsf_d3d11p_factory_create(platform, factory, device, desc, &mut bridge) };
+    let status = unsafe { rsf_d3d11p_factory_create(factory, device, desc, &mut bridge) };
     if failed(status) {
         return Err(status);
     }
@@ -126,7 +117,7 @@ unsafe fn create_hwnd(
     // Retain raw HRESULT semantics for a null output and transfer one reference.
     let result = unsafe { bridge.query(&IDXGISwapChain1::IID, out) }.0;
     if capture && !failed(result) {
-        unsafe { rsf_core_d3d11p_captured(platform, bridge.as_raw()) };
+        unsafe { rsf_core_d3d11p_captured(bridge.as_raw()) };
     }
     Ok(result)
 }
@@ -134,7 +125,6 @@ unsafe fn create_hwnd(
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 unsafe extern "C" fn rsf_d3d11p_factory_intercept_hwnd(
-    platform: *const Platform,
     factory: Raw,
     device: Raw,
     hwnd: HWND,
@@ -151,7 +141,7 @@ unsafe extern "C" fn rsf_d3d11p_factory_intercept_hwnd(
         return false;
     }
     let translated = translate(hwnd, desc, unsafe { fullscreen.as_ref() });
-    match unsafe { create_hwnd(platform, factory, device, &translated, out, true) } {
+    match unsafe { create_hwnd(factory, device, &translated, out, true) } {
         Ok(status) => {
             unsafe { result.write(status) };
             true
@@ -162,7 +152,6 @@ unsafe extern "C" fn rsf_d3d11p_factory_intercept_hwnd(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11p_factory_create_hwnd(
-    platform: *const Platform,
     factory: Raw,
     device: Raw,
     hwnd: HWND,
@@ -178,14 +167,11 @@ unsafe extern "C" fn rsf_d3d11p_factory_create_hwnd(
         return DXGI_ERROR_UNSUPPORTED;
     }
     let translated = translate(hwnd, desc, None);
-    unsafe { create_hwnd(platform, factory, device, &translated, out, false) }
-        .unwrap_or_else(|error| error)
+    unsafe { create_hwnd(factory, device, &translated, out, false) }.unwrap_or_else(|error| error)
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11p_factory_wrap_native(
-    platform: *const Platform,
-    hooked: u32,
     device: Raw,
     native: Raw,
     out: *mut Raw,
@@ -197,7 +183,7 @@ unsafe extern "C" fn rsf_d3d11p_factory_wrap_native(
     if device.is_null()
         || native.is_null()
         || settings().accept_window.is_none()
-        || hooked != 0
+        || rsf_d3d11p_factory_hooks_block_explicit() != 0
         || !rsf_core_d3d11p_active_bridge().is_null()
     {
         return E_INVALIDARG;
@@ -209,9 +195,7 @@ unsafe extern "C" fn rsf_d3d11p_factory_wrap_native(
     }
     let factory = unsafe { IDXGIFactory::from_raw(factory) };
     let mut facade = null_mut();
-    let result = unsafe {
-        rsf_d3d11p_factory_create(platform, factory.as_raw(), device, &desc, &mut facade)
-    };
+    let result = unsafe { rsf_d3d11p_factory_create(factory.as_raw(), device, &desc, &mut facade) };
     let owned = unsafe { com_ref::owned(facade) };
     if failed(result) {
         return result;
@@ -219,24 +203,20 @@ unsafe extern "C" fn rsf_d3d11p_factory_wrap_native(
     let Some(owned) = owned else {
         return E_UNEXPECTED;
     };
-    if unsafe { rsf_core_d3d11p_is_owner(platform, owned.as_raw()) } == 0 {
+    if unsafe { rsf_d3d11_present_is_owner(owned.as_raw()) } == 0 {
         return E_UNEXPECTED;
     }
     unsafe { out.write(owned.into_raw()) };
     S_OK
 }
 
-#[repr(C)]
-struct HookCalls {
-    bootstrap: unsafe extern "C" fn() -> Raw,
-    initialize: unsafe extern "C" fn() -> u32,
-    create: unsafe extern "C" fn(Raw, Raw, *mut Raw) -> u32,
-    enable: unsafe extern "C" fn(Raw) -> u32,
-    disable: unsafe extern "C" fn(Raw),
-    remove: unsafe extern "C" fn(Raw) -> u32,
+// The SEH-guarded factory bootstrap and the two detours, in d3d11_present_bridge.c.
+unsafe extern "C" {
+    fn rsf_d3d11p_bootstrap_factory() -> Raw;
+    fn rsf_d3d11p_create_hook();
+    fn rsf_d3d11p_hwnd_hook();
 }
 
-const _: () = assert!(size_of::<HookCalls>() == 6 * size_of::<Raw>());
 const IDLE: u8 = 0;
 const INSTALLING: u8 = 1;
 const READY: u8 = 2;
@@ -246,12 +226,12 @@ static LEGACY_ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static HWND_ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_d3d11p_factory_hooks_ready() -> u32 {
+pub(super) extern "C" fn rsf_d3d11p_factory_hooks_ready() -> u32 {
     u32::from(HOOK_STATE.load(Ordering::Acquire) == READY)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_d3d11p_factory_hooks_block_explicit() -> u32 {
+pub(super) extern "C" fn rsf_d3d11p_factory_hooks_block_explicit() -> u32 {
     u32::from(HOOK_STATE.load(Ordering::Acquire) != IDLE)
 }
 
@@ -276,26 +256,34 @@ fn hook_targets(factory: Raw) -> (Raw, Raw) {
 
 // A refused remove may leave a detour registered. Its original must remain
 // available for native replay, and a second installation must leave it alone.
-fn remove_hook(calls: &HookCalls, target: Raw, published: &AtomicPtr<c_void>) -> bool {
-    if unsafe { (calls.remove)(target) } == 0 {
+// A target with no registered hook counts as removed.
+fn remove_hook(target: Raw, published: &AtomicPtr<c_void>) -> bool {
+    if !matches!(
+        unsafe { MH_RemoveHook(target) },
+        MH_OK | MH_ERROR_NOT_CREATED | MH_ERROR_NOT_INITIALIZED
+    ) {
         return false;
     }
     published.store(null_mut(), Ordering::Release);
     true
 }
 
-fn install_hooks(calls: &HookCalls, factory: Raw, legacy_detour: Raw, hwnd_detour: Raw) -> u8 {
-    if unsafe { (calls.initialize)() } == 0 {
+fn install_hooks(factory: Raw) -> u8 {
+    if !matches!(
+        unsafe { MH_Initialize() },
+        MH_OK | MH_ERROR_ALREADY_INITIALIZED
+    ) {
         return IDLE;
     }
     let (legacy_target, hwnd_target) = hook_targets(factory);
+    let (legacy_detour, hwnd_detour) = (rsf_d3d11p_create_hook as Raw, rsf_d3d11p_hwnd_hook as Raw);
     let mut legacy = null_mut();
-    if unsafe { (calls.create)(legacy_target, legacy_detour, &mut legacy) } == 0 {
+    if unsafe { MH_CreateHook(legacy_target, legacy_detour, &mut legacy) } != MH_OK {
         return IDLE;
     }
     let mut hwnd = null_mut();
-    if unsafe { (calls.create)(hwnd_target, hwnd_detour, &mut hwnd) } == 0 {
-        return if remove_hook(calls, legacy_target, &LEGACY_ORIGINAL) {
+    if unsafe { MH_CreateHook(hwnd_target, hwnd_detour, &mut hwnd) } != MH_OK {
+        return if remove_hook(legacy_target, &LEGACY_ORIGINAL) {
             IDLE
         } else {
             BLOCKED
@@ -306,14 +294,15 @@ fn install_hooks(calls: &HookCalls, factory: Raw, legacy_detour: Raw, hwnd_detou
     // complete they only replay the typed native continuations.
     LEGACY_ORIGINAL.store(legacy, Ordering::Release);
     HWND_ORIGINAL.store(hwnd, Ordering::Release);
-    if unsafe { (calls.enable)(legacy_target) } != 0 && unsafe { (calls.enable)(hwnd_target) } != 0
+    if unsafe { MH_EnableHook(legacy_target) } == MH_OK
+        && unsafe { MH_EnableHook(hwnd_target) } == MH_OK
     {
         return READY;
     }
 
-    unsafe { (calls.disable)(legacy_target) };
-    let legacy_removed = remove_hook(calls, legacy_target, &LEGACY_ORIGINAL);
-    let hwnd_removed = remove_hook(calls, hwnd_target, &HWND_ORIGINAL);
+    unsafe { MH_DisableHook(legacy_target) };
+    let legacy_removed = remove_hook(legacy_target, &LEGACY_ORIGINAL);
+    let hwnd_removed = remove_hook(hwnd_target, &HWND_ORIGINAL);
     if legacy_removed && hwnd_removed {
         IDLE
     } else {
@@ -322,33 +311,40 @@ fn install_hooks(calls: &HookCalls, factory: Raw, legacy_detour: Raw, hwnd_detou
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_factory_install(
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_install(
     setup: *const rsf_d3d11_present_setup,
-    scoped: u32,
-    calls: &HookCalls,
-    legacy_detour: Raw,
-    hwnd_detour: Raw,
 ) -> i32 {
+    unsafe { install(setup, false) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11_present_install_scoped(
+    setup: *const rsf_d3d11_present_setup,
+) -> i32 {
+    unsafe { install(setup, true) }
+}
+
+unsafe fn install(setup: *const rsf_d3d11_present_setup, scoped: bool) -> i32 {
     if HOOK_STATE
         .compare_exchange(IDLE, INSTALLING, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
         return 0;
     }
-    if scoped != 0 {
+    if scoped {
         rsf_core_d3d11p_set_scoped(1);
     }
     // Keep Factory2 live through the install result and its success log, as in
     // the native bootstrap.
     let factory = if unsafe { rsf_core_d3d11p_prepare(setup, 0) } != 0 {
-        unsafe { com_ref::owned((calls.bootstrap)()) }
+        unsafe { com_ref::owned(rsf_d3d11p_bootstrap_factory()) }
     } else {
         None
     };
-    let state = factory.as_ref().map_or(IDLE, |factory| {
-        install_hooks(calls, factory.as_raw(), legacy_detour, hwnd_detour)
-    });
-    if state != READY && scoped != 0 {
+    let state = factory
+        .as_ref()
+        .map_or(IDLE, |factory| install_hooks(factory.as_raw()));
+    if state != READY && scoped {
         rsf_core_d3d11p_set_scoped(0);
     }
     HOOK_STATE.store(state, Ordering::Release);

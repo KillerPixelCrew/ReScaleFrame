@@ -166,8 +166,8 @@ static NATIVE_PLATFORM: Platform = Platform {
     open_fence: native_open::<ID3D12Fence>,
 };
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_shared_surface_native_platform() -> *const Platform {
+#[cfg_attr(test, allow(dead_code))] // The presentation tests use their own surface fakes.
+pub(crate) extern "C" fn rsf_shared_surface_native_platform() -> *const Platform {
     &NATIVE_PLATFORM
 }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{DlssFrame, Handle, Log, Pass, Provider, TextureInfo, rsf_fg_frame};
 use crate::d3d11_d3d12::*;
-use crate::d3d11_present::rsf_core_d3d11p_graphics;
+use crate::d3d11_present::rsf_d3d11_present_graphics;
 use crate::d3d11_present_abi::rsf_streamline_graphics;
 use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
 use crate::shared_surface::{
@@ -64,7 +64,7 @@ pub(super) use crate::d3d11_d3d12::{
     queue_signal, queue_wait, reset_commands, surface_d3d11, surface_d3d12, surface_destroy,
     transition,
 };
-pub(super) use crate::d3d11_present::rsf_core_d3d11p_host as present_host;
+pub(super) use crate::d3d11_present::rsf_d3d11_present_host as present_host;
 pub(super) use crate::fg_leases::rsf_d3d12_fence_completed as fence_completed;
 pub(super) use crate::native_scene::{
     rsf_native_scene_classify_present as scene_present_path,
@@ -90,7 +90,7 @@ pub(super) unsafe fn present_graphics(
         struct_size: size_of::<rsf_streamline_graphics>() as u32,
         ..rsf_streamline_graphics::EMPTY
     };
-    if unsafe { rsf_core_d3d11p_graphics(&mut graphics) } == 0 {
+    if unsafe { rsf_d3d11_present_graphics(&mut graphics) } == 0 {
         return 0;
     }
     unsafe {

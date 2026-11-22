@@ -19,10 +19,10 @@ pub(super) use super::window::{
     rsf_gl_window_create as window_create, rsf_gl_window_destroy as window_destroy,
 };
 pub(super) use crate::d3d11_present::{
-    rsf_core_d3d11p_backend as present_backend,
-    rsf_core_d3d11p_backend_choices as present_backend_choices,
-    rsf_core_d3d11p_host as present_host, rsf_core_d3d11p_request as present_request,
-    rsf_core_d3d11p_switch_result as present_switch_result,
+    rsf_d3d11_present_backend as present_backend,
+    rsf_d3d11_present_backend_choices as present_backend_choices,
+    rsf_d3d11_present_host as present_host, rsf_d3d11_present_request as present_request,
+    rsf_d3d11_present_switch_result as present_switch_result,
 };
 pub(super) use crate::fg_choice::rsf_fg_default_backend as fg_default_backend;
 pub(super) use crate::fg12::{
@@ -90,7 +90,7 @@ pub(super) unsafe extern "C" fn pcl_message() -> u32 {
     // The service status consists exclusively of integers.
     let mut status: rsf_streamline_latency_status = unsafe { std::mem::zeroed() };
     status.struct_size = size_of::<rsf_streamline_latency_status>() as u32;
-    let host = present::rsf_core_d3d11p_host();
+    let host = present::rsf_d3d11_present_host();
     if unsafe { rsf_streamline_host_latency_status(host, &mut status) } == OK {
         status.pcl_message_id
     } else {

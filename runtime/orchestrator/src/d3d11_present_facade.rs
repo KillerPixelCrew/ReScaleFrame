@@ -2,8 +2,8 @@
 //! Application-facing COM identity. Native leaves access the backing graphics state
 //! through the facade while the owner and its physical-chain leases remain in Rust.
 use super::dxgi::{
-    rsf_d3d11p_facade_present1, rsf_d3d11p_facade_query_interface, rsf_d3d11p_facade_resize1,
-    rsf_d3d11p_native_query_interface,
+    query_buffer_interface, rsf_d3d11p_facade_present1, rsf_d3d11p_facade_query_interface,
+    rsf_d3d11p_facade_resize1,
 };
 use super::{
     DXGI_ERROR_INVALID_CALL, E_POINTER, Physical, owner, rsf_core_d3d11p_acquire_physical,
@@ -130,7 +130,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_facade_state(this: Raw) -> Raw {
     unsafe { Facade::borrow(this) }.state
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_facade_chain(this: Raw) -> *mut Chain {
     unsafe { Facade::borrow(this) }.chain
 }
@@ -211,13 +210,13 @@ forward!(set_hdr_metadata, IDXGISwapChain4, SetHDRMetaData, kind: DXGI_HDR_METAD
 unsafe extern "system" fn get_parent(this: Raw, iid: *const GUID, out: *mut Raw) -> HRESULT {
     let facade = unsafe { Facade::borrow(this) };
     let parent = unsafe { (facade.native.parent)(facade.state) };
-    HRESULT(unsafe { rsf_d3d11p_native_query_interface(parent, iid.cast(), out) })
+    HRESULT(unsafe { query_buffer_interface(parent, iid.cast(), out) })
 }
 
 unsafe extern "system" fn get_device(this: Raw, iid: *const GUID, out: *mut Raw) -> HRESULT {
     let facade = unsafe { Facade::borrow(this) };
     let device = unsafe { (facade.native.device)(facade.state) };
-    HRESULT(unsafe { rsf_d3d11p_native_query_interface(device, iid.cast(), out) })
+    HRESULT(unsafe { query_buffer_interface(device, iid.cast(), out) })
 }
 
 // A real call and volatile return load keep public detours from following a
