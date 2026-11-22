@@ -10,56 +10,80 @@ pub(crate) struct Rates {
 struct Sample {
     tick: u64,
     frequency: u64,
-    rendered: u64,
-    presented: u64,
-    sdk: bool,
+    count: u64,
 }
 #[derive(Default)]
-pub(crate) struct Meter {
+struct Counter {
     baseline: Option<Sample>,
-    rates: Rates,
+    rate: Option<f64>,
 }
-impl Meter {
-    pub fn sample(&mut self, stats: &Stats<'_>) -> Rates {
+impl Counter {
+    fn sample(&mut self, [tick, frequency]: [u64; 2], count: u64) -> Option<f64> {
         let sample = Sample {
-            tick: stats.counter_clock[0],
-            frequency: stats.counter_clock[1],
-            rendered: stats.application_presented_frames,
-            presented: if stats.fg_present_count_valid {
-                stats.generation.total_presented
-            } else {
-                stats.application_presented_frames
-            },
-            sdk: stats.fg_present_count_valid,
+            tick,
+            frequency,
+            count,
         };
-        if sample.tick == 0 || sample.frequency == 0 {
-            self.baseline = None;
-            self.rates = Rates::default();
-            return self.rates;
+        if tick == 0 || frequency == 0 {
+            *self = Self::default();
+            return None;
         }
         let Some(previous) = self.baseline else {
             self.baseline = Some(sample);
-            return self.rates;
+            return None;
         };
-        if sample.tick < previous.tick
-            || sample.frequency != previous.frequency
-            || sample.sdk != previous.sdk
-            || sample.rendered < previous.rendered
-            || sample.presented < previous.presented
-        {
+        if tick < previous.tick || frequency != previous.frequency || count < previous.count {
             self.baseline = Some(sample);
-            self.rates = Rates::default();
-            return self.rates;
+            self.rate = None;
+            return None;
         }
-        let elapsed = (sample.tick - previous.tick) as f64 / sample.frequency as f64;
+        let elapsed = (tick - previous.tick) as f64 / frequency as f64;
         if elapsed >= 0.5 {
-            self.rates = Rates {
-                rendered: Some((sample.rendered - previous.rendered) as f64 / elapsed),
-                presented: Some((sample.presented - previous.presented) as f64 / elapsed),
-            };
+            self.rate = Some((count - previous.count) as f64 / elapsed);
             self.baseline = Some(sample);
         }
-        self.rates
+        self.rate
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PresentSource {
+    Application,
+    Aggregate,
+}
+
+#[derive(Default)]
+pub(crate) struct Meter {
+    rendered: Counter,
+    presented: Counter,
+    present_source: Option<PresentSource>,
+}
+
+impl Meter {
+    pub fn sample(&mut self, stats: &Stats<'_>) -> Rates {
+        let source = if stats.fg_present_count_valid {
+            Some(PresentSource::Aggregate)
+        } else if !stats.generation.active {
+            Some(PresentSource::Application)
+        } else {
+            None
+        };
+        if source != self.present_source {
+            self.presented = Counter::default();
+            self.present_source = source;
+        }
+        Rates {
+            rendered: self
+                .rendered
+                .sample(stats.counter_clock, stats.application_presented_frames),
+            presented: source.and_then(|source| {
+                let count = match source {
+                    PresentSource::Application => stats.application_presented_frames,
+                    PresentSource::Aggregate => stats.generation.total_presented,
+                };
+                self.presented.sample(stats.counter_clock, count)
+            }),
+        }
     }
 }
 
@@ -91,6 +115,23 @@ mod tests {
         stats.counter_clock[0] = 4_000;
         stats.application_presented_frames = 180;
         stats.generation.total_presented = 280;
+        assert_eq!(meter.sample(&stats).presented, Some(60.0));
+        stats.generation.active = true;
+        stats.fg_present_count_valid = false;
+        assert_eq!(meter.sample(&stats).presented, None);
+        stats.counter_clock[0] = 5_000;
+        stats.application_presented_frames = 240;
+        assert_eq!(
+            meter.sample(&stats),
+            Rates {
+                rendered: Some(60.0),
+                presented: None,
+            }
+        );
+        stats.generation.active = false;
+        assert_eq!(meter.sample(&stats).presented, None);
+        stats.counter_clock[0] = 6_000;
+        stats.application_presented_frames = 300;
         assert_eq!(meter.sample(&stats).presented, Some(60.0));
         stats.application_presented_frames = 0;
         assert!(meter.sample(&stats).rendered.is_none());

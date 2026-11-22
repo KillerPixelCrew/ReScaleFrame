@@ -37,6 +37,7 @@ const ATLAS_BATCH: usize = 32;
 const STARTUP_MS: u64 = 8000;
 const STARTUP_FADE_MS: u64 = 1000;
 const FENCE_WAIT_MS: u32 = 5000;
+const RETRY_DELAY_MS: u64 = 1000;
 
 struct Ui {
     api: rsf_overlay_host_panel,
@@ -163,7 +164,10 @@ impl Fence {
         if self.armed.is_none() {
             return true;
         }
-        let event = self.event.as_ref().unwrap().as_raw_handle();
+        let Some(event) = &self.event else {
+            return false;
+        };
+        let event = event.as_raw_handle();
         let signaled = unsafe { WaitForSingleObject(event, timeout) } == WAIT_OBJECT_0;
         let completed = self.completed(platform);
         retire_fence_event(&mut self.armed, signaled, completed)
@@ -549,17 +553,34 @@ impl Drop for Renderer {
     }
 }
 
-struct Panel {
-    ui: Option<Ui>,
-    native: Option<Renderer>,
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Owner {
     device: usize,
     queue: usize,
-    failed: bool,
-    fence: Option<Fence>,
-    unsignalled: Option<u64>,
-    ring: Ring,
+}
+
+struct Retry {
+    owner: Owner,
+    after: u64,
+}
+
+impl Retry {
+    fn allows(&self, owner: Owner, now: u64) -> bool {
+        owner != self.owner || now >= self.after
+    }
+}
+
+struct Started {
+    // Release leased GPU resources before their renderer, and the UI before the fence.
     atlas: Atlas,
     graphics: Graphics,
+    ui: Ui,
+    renderer: Renderer,
+    fence: Fence,
+    owner: Owner,
+    failed: bool,
+    unsignalled: Option<u64>,
+    ring: Ring,
     started: u64,
     previous: u64,
     was_visible: bool,
@@ -568,38 +589,26 @@ struct Panel {
     log_user: usize,
 }
 
+struct Panel {
+    started: Option<Started>,
+    retry: Option<Retry>,
+}
+
 static READY: AtomicBool = AtomicBool::new(false);
 static PANEL: Mutex<Panel> = Mutex::new(Panel {
-    ui: None,
-    native: None,
-    device: 0,
-    queue: 0,
-    failed: false,
-    fence: None,
-    unsignalled: None,
-    ring: Ring {
-        completions: [0; SLOTS],
-        cursor: 0,
-        serial: 0,
-    },
-    atlas: Atlas::new(),
-    graphics: Graphics::new(),
-    started: 0,
-    previous: 0,
-    was_visible: false,
-    trace_left: 0,
-    logger: None,
-    log_user: 0,
+    started: None,
+    retry: None,
 });
 
-impl Panel {
+impl Started {
     fn initialize(
-        &mut self,
         platform: &Platform,
         device: *mut c_void,
         queue: *mut c_void,
         chain: *mut c_void,
-    ) -> Option<()> {
+        logger: rsf_overlay12_log,
+        user: *mut c_void,
+    ) -> Option<Self> {
         let window = unsafe { (platform.window.unwrap())(chain) };
         if window.is_null() {
             return None;
@@ -617,23 +626,35 @@ impl Panel {
         // A refusal releases the fence, then the created frames and the renderer, as the native
         // initialization failure did. Nothing has been submitted yet.
         renderer.create_frames(platform)?;
-        let user = self.log_user as *mut c_void;
-        if unsafe { (platform.install_input.unwrap())(window, self.logger, user) } == 0 {
+        if unsafe { (platform.install_input.unwrap())(window, logger, user) } == 0 {
             return None;
         }
         ui.publish();
-        self.ui = Some(ui);
-        self.native = Some(renderer);
-        self.fence = Some(Fence {
-            reference,
-            event: None,
-            armed: None,
-        });
-        self.device = device as usize;
-        self.queue = queue as usize;
-        self.started = unsafe { GetTickCount64() };
-        self.previous = self.started;
-        Some(())
+        let started = unsafe { GetTickCount64() };
+        Some(Self {
+            atlas: Atlas::new(),
+            graphics: Graphics::new(),
+            ui,
+            renderer,
+            fence: Fence {
+                reference,
+                event: None,
+                armed: None,
+            },
+            owner: Owner {
+                device: device as usize,
+                queue: queue as usize,
+            },
+            failed: false,
+            unsignalled: None,
+            ring: Ring::default(),
+            started,
+            previous: started,
+            was_visible: false,
+            trace_left: 0,
+            logger,
+            log_user: user as usize,
+        })
     }
 
     fn log(&self, message: &CStr) {
@@ -642,56 +663,56 @@ impl Panel {
         }
     }
 
-    fn fail(&mut self, platform: &Platform) -> i32 {
+    fn fail(&mut self, platform: &Platform) {
         self.failed = true;
         READY.store(false, Ordering::Release);
-        if self.native.is_some() {
-            unsafe { (platform.set_visible.unwrap())(0) };
-        }
+        unsafe { (platform.set_visible.unwrap())(0) };
         self.log(c"Native D3D12 overlay refused graphics work; see validation evidence.");
-        if self.unsignalled.is_none() {
-            self.retire_failed(platform);
-        }
-        0
     }
 
-    fn retire_failed(&mut self, platform: &Platform) {
-        let Some(native) = &self.native else { return };
-        if let Some(fence) = &mut self.fence {
-            let completed = fence.completed(platform);
-            if completed != u64::MAX {
-                if let Some(value) = self.unsignalled {
-                    // Nothing else enters the renderer after a fault. Signal on its original queue,
-                    // behind the already executed list, without executing the list again.
-                    if unsafe {
-                        (platform.signal.unwrap())(
-                            native.handle.as_ptr(),
-                            fence.reference.as_ptr(),
-                            value,
-                        )
-                    } != 0
-                    {
-                        self.ring.serial = value;
-                        self.unsignalled = None;
-                    }
-                    return;
+    fn retired(&mut self, platform: &Platform) -> bool {
+        let completed = self.fence.completed(platform);
+        if completed != u64::MAX {
+            if let Some(value) = self.unsignalled {
+                // Signal on the retained original queue behind the already executed list.
+                if unsafe {
+                    (platform.signal.unwrap())(
+                        self.renderer.handle.as_ptr(),
+                        self.fence.reference.as_ptr(),
+                        value,
+                    )
+                } != 0
+                {
+                    self.ring.serial = value;
+                    self.unsignalled = None;
                 }
-                if completed < self.ring.serial {
-                    return;
-                }
+                return false;
             }
-            if !fence.finish_event(platform, 0) {
-                return;
+            if completed < self.ring.serial {
+                return false;
             }
         }
-        if unsafe { (platform.stop_input.unwrap())() } == 0 {
-            return;
+        self.fence.finish_event(platform, 0) && unsafe { (platform.stop_input.unwrap())() != 0 }
+    }
+}
+
+impl Panel {
+    fn defer_retry(&mut self, owner: Owner, now: u64) {
+        self.retry = Some(Retry {
+            owner,
+            after: now.saturating_add(RETRY_DELAY_MS),
+        });
+    }
+
+    fn retire_failed(&mut self, platform: &Platform, now: u64) {
+        if let Some(started) = &mut self.started
+            && started.failed
+            && started.retired(platform)
+        {
+            let owner = started.owner;
+            self.started = None;
+            self.defer_retry(owner, now);
         }
-        self.atlas = Atlas::new();
-        self.graphics = Graphics::new();
-        self.ui = None;
-        self.native = None;
-        self.fence = None;
     }
 }
 
@@ -736,173 +757,210 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     let Ok(mut panel) = PANEL.try_lock() else {
         return 0;
     };
-    if panel.failed {
-        if panel.device == device as usize && panel.queue == queue as usize {
-            panel.retire_failed(platform);
+    let owner = Owner {
+        device: device as usize,
+        queue: queue as usize,
+    };
+    let now = unsafe { GetTickCount64() };
+    panel.retire_failed(platform, now);
+    if panel.started.is_none() {
+        if panel
+            .retry
+            .as_ref()
+            .is_some_and(|retry| !retry.allows(owner, now))
+        {
+            return 0;
         }
-        return 0;
-    }
-    if panel.native.is_none() {
-        panel.logger = logger;
-        panel.log_user = user as usize;
-        if panel.initialize(platform, device, queue, chain).is_none() {
-            return panel.fail(platform);
-        }
+        let Some(started) = Started::initialize(platform, device, queue, chain, logger, user)
+        else {
+            panel.defer_retry(owner, now);
+            if let Some(log) = logger {
+                unsafe {
+                    log(
+                        user,
+                        c"Native D3D12 overlay initialization failed.".as_ptr(),
+                    )
+                };
+            }
+            return 0;
+        };
         READY.store(true, Ordering::Release);
-        panel.log(
+        started.log(
             c"RSF native D3D12 overlay ready; Insert opens settings. No D3D11-on-12 resources.",
         );
+        panel.started = Some(started);
+        panel.retry = None;
     }
-    if panel.device != device as usize || panel.queue != queue as usize {
+    let Some(started) = &mut panel.started else {
+        return 0;
+    };
+    if started.failed || started.owner != owner {
         return 0;
     }
-    let now = unsafe { GetTickCount64() };
-    let active_for = now.saturating_sub(panel.started);
-    let visible = unsafe { (platform.visible.unwrap())() } != 0;
-    if !visible && unsafe { (*stats).show_performance_hud } == 0 && active_for >= STARTUP_MS {
-        return 0;
+    if let Some(decided) = unsafe { started.present(platform, chain, stats) } {
+        if !intent.is_null() {
+            unsafe { intent.write(decided) };
+        }
+        return 1;
     }
-    let native = panel.native.as_ref().unwrap().handle.as_ptr();
-    let completed = panel.fence.as_ref().unwrap().completed(platform);
-    if completed == u64::MAX {
-        return panel.fail(platform);
+    if started.failed {
+        panel.retire_failed(platform, now);
     }
-    let (slot, wait_for) = panel.ring.select(completed);
-    // Only already-submitted overlay work can block slot reuse.
-    if wait_for != 0
-        && !panel
-            .fence
-            .as_mut()
-            .unwrap()
-            .wait_for_slot(platform, wait_for)
-    {
-        return panel.fail(platform);
-    }
-    // The slot's frame stays owned by the renderer. The fence proof above admits its reuse.
-    let Some(table) = panel.native.as_ref().unwrap().frame(slot) else {
-        return panel.fail(platform);
-    };
-    let lease = Lease { slot, frame: table };
-    panel.atlas.retained[slot].clear();
-    panel.graphics.slots[slot].pipeline = None;
-    let mut frame = Target {
-        width: 0,
-        height: 0,
-        format: 0,
-    };
-    let target =
-        unsafe { ComRef::from_owned((platform.begin.unwrap())(&lease.frame, chain, &mut frame)) };
-    let Some(target) = target else {
-        return panel.fail(platform);
-    };
-    let Some(pipeline) = panel
-        .graphics
-        .bind_pipeline(platform, native, slot, frame.format)
-    else {
-        return panel.fail(platform);
-    };
-    if visible && !panel.was_visible {
-        panel.trace_left = 4;
-    }
-    panel.was_visible = visible;
-    let trace = visible && panel.trace_left != 0;
-    if trace {
-        panel.trace_left -= 1;
-        panel.log(c"Overlay12: input/layout begin");
-    }
-    let elapsed = now.saturating_sub(panel.previous) as f32 / 1000.0;
-    let hint_alpha = STARTUP_MS.saturating_sub(active_for).min(STARTUP_FADE_MS) as f32 / 1000.0;
-    let mut decided = rsf_overlay_intent {
-        struct_size: size_of::<rsf_overlay_intent>() as u32,
-        ..Default::default()
-    };
-    let mut data = DrawData {
-        struct_size: size_of::<DrawData>() as u32,
-        ..Default::default()
-    };
-    let mut input = rsf_overlay_input {
-        struct_size: size_of::<rsf_overlay_input>() as u32,
-        ..Default::default()
-    };
-    if unsafe { (platform.collect_input.unwrap())(&mut input, frame.width, frame.height, elapsed) }
-        == 0
-    {
-        return panel.fail(platform);
-    }
-    input.startup_hint_alpha = hint_alpha;
-    let ui = panel.ui.as_ref().unwrap();
-    if unsafe {
-        (ui.api.frame.unwrap())(ui.handle.as_ptr(), &input, stats, &mut data, &mut decided)
-    } != 0
-    {
-        return panel.fail(platform);
-    }
-    panel.previous = now;
-    if decided.close_requested != 0 {
-        unsafe { (platform.set_visible.unwrap())(0) };
-    }
-    if trace {
-        panel.log(c"Overlay12: atlas uploads and draw recording");
-    }
-    let mut binding = Draw {
-        target: target.as_ptr(),
-        pipeline,
-        vertices: std::ptr::null_mut(),
-        indices: std::ptr::null_mut(),
-        vertex_data: data.vertices.cast(),
-        index_data: data.indices.cast(),
-        width: frame.width,
-        height: frame.height,
-        vertex_bytes: 0,
-        index_bytes: 0,
-    };
-    if panel.graphics.slots[slot]
-        .bind_uploads(platform, native, &data, &mut binding)
+    0
+}
+
+impl Started {
+    unsafe fn present(
+        &mut self,
+        platform: &Platform,
+        chain: *mut c_void,
+        stats: *const rsf_overlay_stats,
+    ) -> Option<rsf_overlay_intent> {
+        let now = unsafe { GetTickCount64() };
+        let active_for = now.saturating_sub(self.started);
+        let visible = unsafe { (platform.visible.unwrap())() } != 0;
+        if !visible && unsafe { (*stats).show_performance_hud } == 0 && active_for >= STARTUP_MS {
+            return None;
+        }
+        let native = self.renderer.handle.as_ptr();
+        let completed = self.fence.completed(platform);
+        if completed == u64::MAX {
+            self.fail(platform);
+            return None;
+        }
+        let (slot, wait_for) = self.ring.select(completed);
+        // Only already-submitted overlay work can block slot reuse.
+        if wait_for != 0 && !self.fence.wait_for_slot(platform, wait_for) {
+            self.fail(platform);
+            return None;
+        }
+        // The slot's frame stays owned by the renderer. The fence proof above admits its reuse.
+        let Some(table) = self.renderer.frame(slot) else {
+            self.fail(platform);
+            return None;
+        };
+        let lease = Lease { slot, frame: table };
+        self.atlas.retained[slot].clear();
+        self.graphics.slots[slot].pipeline = None;
+        let mut frame = Target {
+            width: 0,
+            height: 0,
+            format: 0,
+        };
+        let target = unsafe {
+            ComRef::from_owned((platform.begin.unwrap())(&lease.frame, chain, &mut frame))
+        };
+        let Some(target) = target else {
+            self.fail(platform);
+            return None;
+        };
+        let Some(pipeline) = self
+            .graphics
+            .bind_pipeline(platform, native, slot, frame.format)
+        else {
+            self.fail(platform);
+            return None;
+        };
+        if visible && !self.was_visible {
+            self.trace_left = 4;
+        }
+        self.was_visible = visible;
+        let trace = visible && self.trace_left != 0;
+        if trace {
+            self.trace_left -= 1;
+            self.log(c"Overlay12: input/layout begin");
+        }
+        let elapsed = now.saturating_sub(self.previous) as f32 / 1000.0;
+        let hint_alpha = STARTUP_MS.saturating_sub(active_for).min(STARTUP_FADE_MS) as f32 / 1000.0;
+        let mut decided = rsf_overlay_intent {
+            struct_size: size_of::<rsf_overlay_intent>() as u32,
+            ..Default::default()
+        };
+        let mut data = DrawData {
+            struct_size: size_of::<DrawData>() as u32,
+            ..Default::default()
+        };
+        let mut input = rsf_overlay_input {
+            struct_size: size_of::<rsf_overlay_input>() as u32,
+            ..Default::default()
+        };
+        if unsafe {
+            (platform.collect_input.unwrap())(&mut input, frame.width, frame.height, elapsed)
+        } == 0
+        {
+            self.fail(platform);
+            return None;
+        }
+        input.startup_hint_alpha = hint_alpha;
+        let ui = &self.ui;
+        if unsafe {
+            (ui.api.frame.unwrap())(ui.handle.as_ptr(), &input, stats, &mut data, &mut decided)
+        } != 0
+        {
+            self.fail(platform);
+            return None;
+        }
+        self.previous = now;
+        if decided.close_requested != 0 {
+            unsafe { (platform.set_visible.unwrap())(0) };
+        }
+        if trace {
+            self.log(c"Overlay12: atlas uploads and draw recording");
+        }
+        let mut binding = Draw {
+            target: target.as_ptr(),
+            pipeline,
+            vertices: std::ptr::null_mut(),
+            indices: std::ptr::null_mut(),
+            vertex_data: data.vertices.cast(),
+            index_data: data.indices.cast(),
+            width: frame.width,
+            height: frame.height,
+            vertex_bytes: 0,
+            index_bytes: 0,
+        };
+        if self.graphics.slots[slot]
+            .bind_uploads(platform, native, &data, &mut binding)
+            .is_none()
+        {
+            self.fail(platform);
+            return None;
+        }
+        if unsafe {
+            self.atlas
+                .record(platform, native, &self.ui, &lease, &binding, &data)
+        }
         .is_none()
-    {
-        return panel.fail(platform);
+        {
+            self.fail(platform);
+            return None;
+        }
+        let Some(value) = self
+            .ring
+            .serial
+            .checked_add(1)
+            .filter(|value| *value != u64::MAX)
+        else {
+            self.fail(platform);
+            return None;
+        };
+        if trace {
+            self.log(c"Overlay12: queue submission begin");
+        }
+        let fence = self.fence.reference.as_ptr();
+        unsafe { (platform.execute.unwrap())(native, &lease.frame) };
+        if unsafe { (platform.signal.unwrap())(native, fence, value) } == 0 {
+            // Execute already happened. The failed owner stays alive until a signal proves retirement.
+            self.unsignalled = Some(value);
+            self.fail(platform);
+            return None;
+        }
+        self.ring.submitted(slot, value);
+        if trace {
+            self.log(c"Overlay12: submission completed");
+        }
+        Some(decided)
     }
-    let Panel { ui, atlas, .. } = &mut *panel;
-    if unsafe {
-        atlas.record(
-            platform,
-            native,
-            ui.as_ref().unwrap(),
-            &lease,
-            &binding,
-            &data,
-        )
-    }
-    .is_none()
-    {
-        return panel.fail(platform);
-    }
-    let Some(value) = panel
-        .ring
-        .serial
-        .checked_add(1)
-        .filter(|value| *value != u64::MAX)
-    else {
-        return panel.fail(platform);
-    };
-    if trace {
-        panel.log(c"Overlay12: queue submission begin");
-    }
-    let fence = panel.fence.as_ref().unwrap().reference.as_ptr();
-    unsafe { (platform.execute.unwrap())(native, &lease.frame) };
-    if unsafe { (platform.signal.unwrap())(native, fence, value) } == 0 {
-        // Execute already happened. The failed owner stays alive until a signal proves retirement.
-        panel.unsignalled = Some(value);
-        return panel.fail(platform);
-    }
-    panel.ring.submitted(slot, value);
-    if trace {
-        panel.log(c"Overlay12: submission completed");
-    }
-    if !intent.is_null() {
-        unsafe { intent.write(decided) };
-    }
-    1
 }
 
 #[cfg(test)]
@@ -1179,6 +1237,7 @@ mod tests {
         created: usize,
         refuse_at: usize,
         refs_at_destroy: Option<Vec<u32>>,
+        signalled: Option<u64>,
     }
 
     impl FrameFixture {
@@ -1239,6 +1298,7 @@ mod tests {
             created: 0,
             refuse_at: usize::MAX,
             refs_at_destroy: None,
+            signalled: None,
         };
         let mut renderer = frame_renderer(&mut fixture);
         assert!(renderer.create_frames(&FRAME_PLATFORM).is_some());
@@ -1265,6 +1325,7 @@ mod tests {
             // The third frame's SRV heap is refused after its allocator and list exist.
             refuse_at: 10,
             refs_at_destroy: None,
+            signalled: None,
         };
         let mut renderer = frame_renderer(&mut fixture);
         assert!(renderer.create_frames(&FRAME_PLATFORM).is_none());
@@ -1276,6 +1337,95 @@ mod tests {
             fixture.refs_at_destroy.as_deref(),
             Some(&[1; 4 * SLOTS][..])
         );
+    }
+
+    #[test]
+    fn failed_owner_retires_on_its_original_queue_before_a_replacement_can_start() {
+        unsafe extern "C" fn pending(_: *mut c_void) -> u64 {
+            0
+        }
+        unsafe extern "C" fn completed(_: *mut c_void) -> u64 {
+            9
+        }
+        unsafe extern "C" fn signal(native: *mut c_void, _: *mut c_void, value: u64) -> u32 {
+            // The retained renderer handle identifies the fixture for the original queue.
+            unsafe { &mut *native.cast::<FrameFixture>() }.signalled = Some(value);
+            1
+        }
+        unsafe extern "C" fn stop_input() -> u32 {
+            1
+        }
+
+        let mut fixture = FrameFixture {
+            objects: std::array::from_fn(|_| fake()),
+            created: 0,
+            refuse_at: usize::MAX,
+            refs_at_destroy: None,
+            signalled: None,
+        };
+        let renderer = frame_renderer(&mut fixture);
+        let fence = fake();
+        let reference = unsafe {
+            add_ref(raw(&fence).cast());
+            ComRef::from_owned(raw(&fence)).unwrap()
+        };
+        let owner = Owner {
+            device: 1,
+            queue: 2,
+        };
+        let replacement = Owner {
+            device: 3,
+            queue: 4,
+        };
+        let mut panel = Panel {
+            started: Some(Started {
+                atlas: Atlas::new(),
+                graphics: Graphics::new(),
+                ui: fake_ui(renderer.handle.as_ptr()),
+                renderer,
+                fence: Fence {
+                    reference,
+                    event: None,
+                    armed: None,
+                },
+                owner,
+                failed: true,
+                unsignalled: Some(9),
+                ring: Ring::default(),
+                started: 0,
+                previous: 0,
+                was_visible: false,
+                trace_left: 0,
+                logger: None,
+                log_user: 0,
+            }),
+            retry: None,
+        };
+        let platform = Platform {
+            completed: Some(pending),
+            signal: Some(signal),
+            stop_input: Some(stop_input),
+            ..FRAME_PLATFORM
+        };
+        panel.retire_failed(&platform, 42);
+        assert_eq!(fixture.signalled, Some(9));
+        assert!(panel.started.is_some());
+        panel.retire_failed(&platform, 43);
+        assert!(panel.started.is_some());
+        panel.retire_failed(
+            &Platform {
+                completed: Some(completed),
+                ..platform
+            },
+            44,
+        );
+        assert!(panel.started.is_none());
+        assert!(fixture.refs_at_destroy.is_some());
+        assert_eq!(fence.refs.get(), 1);
+        let retry = panel.retry.unwrap();
+        assert!(retry.allows(replacement, 44));
+        assert!(!retry.allows(owner, 44));
+        assert!(retry.allows(owner, 44 + RETRY_DELAY_MS));
     }
 
     #[test]

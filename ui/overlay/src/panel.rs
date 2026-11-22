@@ -333,15 +333,12 @@ pub(crate) fn show(
     let screen = ctx.content_rect().size();
     let sheet = sheet_rect(screen, frame.preferences);
 
-    let offered: Vec<Tab> = Tab::ALL
-        .into_iter()
-        .filter(|tab| match tab {
-            Tab::Sharpen => stats.backend_choices != 0 && stats.sharpening_available,
-            Tab::Game => stats.host_options.iter().any(Option::is_some),
-            _ => true,
-        })
-        .collect();
-    if !offered.contains(&view.tab) {
+    let offered = Tab::ALL.map(|tab| match tab {
+        Tab::Sharpen => stats.backend_choices != 0 && stats.sharpening_available,
+        Tab::Game => stats.host_options.iter().any(Option::is_some),
+        _ => true,
+    });
+    if !offered[view.tab.index()] {
         view.tab = Tab::Upscale;
     }
 
@@ -383,7 +380,7 @@ pub(crate) fn show(
             draw_strip(ui, &painter, strip, frame, view);
             painter.hline(sheet.x_range(), strip.bottom(), Stroke::new(1.0, LINE));
             painter.vline(rail.right(), middle.y_range(), Stroke::new(1.0, LINE));
-            draw_rail(ui, &painter, rail, &offered, view, controls);
+            draw_rail(ui, rail, offered, view, controls);
             painter.hline(sheet.x_range(), footer.top(), Stroke::new(1.0, LINE));
             painter.text(
                 pos2(footer.left() + 18.0, footer.center().y),
@@ -652,47 +649,56 @@ fn rates_cell(rates: Rates) -> Cell {
 }
 
 fn draw_rail(
-    ui: &Ui,
-    painter: &Painter,
+    ui: &mut Ui,
     rail: Rect,
-    offered: &[Tab],
+    offered: [bool; Tab::ALL.len()],
     view: &mut View,
     controls: &mut Controls,
 ) {
-    for (slot, tab) in offered.iter().enumerate() {
-        let rect = Rect::from_min_size(
-            pos2(rail.left() + 10.0, rail.top() + 10.0 + slot as f32 * 72.0),
-            vec2(64.0, 64.0),
-        );
-        if rect.bottom() > rail.bottom() {
-            break;
-        }
-        let response = ui.interact(rect, Id::new(("rsf-tab", tab.index())), Sense::click());
-        let current = view.tab == *tab;
-        if current {
-            painter.rect_filled(rect, 12.0, TAB_ON);
-        } else if response.is_pointer_button_down_on() {
-            painter.rect_filled(rect, 12.0, PRESSED);
-        }
-        let color = if current { Color32::WHITE } else { MUTED };
-        paint_tab_icon(
-            painter,
-            *tab,
-            pos2(rect.center().x, rect.top() + 24.0),
-            color,
-        );
-        painter.text(
-            pos2(rect.center().x, rect.bottom() - 13.0),
-            Align2::CENTER_CENTER,
-            tab.label(),
-            FontId::proportional(11.5),
-            color,
-        );
-        controls.tabs[tab.index()] = Some(rect);
-        if response.clicked() {
-            view.tab = *tab;
-        }
-    }
+    ui.scope_builder(UiBuilder::new().max_rect(rail), |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("rsf-tab-rail")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 8.0;
+                ui.add_space(10.0);
+                for (index, tab) in Tab::ALL.into_iter().enumerate() {
+                    if !offered[index] {
+                        continue;
+                    }
+                    let (row, _) = ui.allocate_exact_size(vec2(74.0, 64.0), Sense::hover());
+                    let rect = Rect::from_min_size(row.min + vec2(10.0, 0.0), vec2(64.0, 64.0));
+                    let response =
+                        ui.interact(rect, ui.id().with(("rsf-tab", index)), Sense::click());
+                    let painter = ui.painter();
+                    let current = view.tab == tab;
+                    if current {
+                        painter.rect_filled(rect, 12.0, TAB_ON);
+                    } else if response.is_pointer_button_down_on() {
+                        painter.rect_filled(rect, 12.0, PRESSED);
+                    }
+                    let color = if current { Color32::WHITE } else { MUTED };
+                    paint_tab_icon(
+                        painter,
+                        tab,
+                        pos2(rect.center().x, rect.top() + 24.0),
+                        color,
+                    );
+                    painter.text(
+                        pos2(rect.center().x, rect.bottom() - 13.0),
+                        Align2::CENTER_CENTER,
+                        tab.label(),
+                        FontId::proportional(11.5),
+                        color,
+                    );
+                    controls.tabs[index] =
+                        Some(rect.intersect(ui.clip_rect())).filter(|rect| rect.is_positive());
+                    if response.clicked() {
+                        view.tab = tab;
+                    }
+                }
+            });
+    });
 }
 
 fn paint_tab_icon(painter: &Painter, tab: Tab, centre: Pos2, color: Color32) {
@@ -833,7 +839,6 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         .iter()
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
-            sub: None,
             enabled: stats.backend_loaded && stats.backend_choices & (1 << id) != 0,
             mark: if *id == shown_backend {
                 if selection.requested_backend.is_some() {
@@ -846,7 +851,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "sr-backend", &items, 6);
+    let (chosen, rects) = segments(ui, "sr-backend", &items);
     store(&mut controls.backend, &rects);
     if let Some(index) = chosen {
         let backend = SR_BACKENDS[index].0;
@@ -890,7 +895,6 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             } else {
                 level.label().to_owned()
             },
-            sub: None,
             enabled: !stats.sr_quality_locked,
             mark: if *level == selection.quality {
                 if selection.requested_quality.is_some() {
@@ -903,7 +907,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "sr-quality", &items, 5);
+    let (chosen, rects) = segments(ui, "sr-quality", &items);
     store(&mut controls.quality, &rects);
     if let Some(index) = chosen {
         let level = Quality::ALL[index];
@@ -948,7 +952,6 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             .iter()
             .map(|(id, label)| Segment {
                 label: (*label).to_owned(),
-                sub: None,
                 enabled: dlss,
                 mark: if *id == stats.dlss_preset {
                     Mark::On
@@ -957,7 +960,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
                 },
             })
             .collect();
-        let (chosen, rects) = segments(ui, "dlss-preset", &items, 7);
+        let (chosen, rects) = segments(ui, "dlss-preset", &items);
         store(&mut controls.dlss_preset, &rects);
         if let Some(index) = chosen {
             let preset = DLSS_PRESETS[index].0;
@@ -998,7 +1001,6 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
         .iter()
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
-            sub: None,
             enabled: generation.backend_choices & (1 << id) != 0,
             mark: if *id == generation.requested_backend {
                 if pending { Mark::Pending } else { Mark::On }
@@ -1007,7 +1009,7 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "fg-provider", &items, 5);
+    let (chosen, rects) = segments(ui, "fg-provider", &items);
     store(&mut controls.fg_backend, &rects);
     if let Some(index) = chosen {
         let id = FG_PROVIDERS[index].0;
@@ -1113,7 +1115,6 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     let items: Vec<Segment> = (2..=top)
         .map(|multiplier| Segment {
             label: format!("{multiplier}×"),
-            sub: None,
             enabled: usable && multiplier <= maximum && generation.max_generated >= 1,
             mark: if multiplier == current {
                 Mark::On
@@ -1122,8 +1123,7 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
             },
         })
         .collect();
-    let columns = items.len();
-    let (chosen, rects) = segments(ui, "fg-multiplier", &items, columns);
+    let (chosen, rects) = segments(ui, "fg-multiplier", &items);
     store(&mut controls.fg_multiplier, &rects);
     if let Some(index) = chosen {
         let multiplier = 2 + index as u32;
@@ -1206,7 +1206,6 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
             .iter()
             .map(|(id, label)| Segment {
                 label: (*label).to_owned(),
-                sub: None,
                 enabled: generation.reflex_available,
                 mark: if *id == generation.requested_reflex {
                     Mark::On
@@ -1215,7 +1214,7 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
                 },
             })
             .collect();
-        let (chosen, rects) = segments(ui, "reflex", &items, 3);
+        let (chosen, rects) = segments(ui, "reflex", &items);
         store(&mut controls.reflex, &rects);
         if let Some(index) = chosen
             && index as u32 != generation.requested_reflex
@@ -1284,7 +1283,6 @@ fn latency_toggle(
         .enumerate()
         .map(|(id, label)| Segment {
             label: (*label).to_owned(),
-            sub: None,
             enabled: generation.reflex_available,
             mark: if (generation.requested_reflex != 0) == (id != 0) {
                 Mark::On
@@ -1293,7 +1291,7 @@ fn latency_toggle(
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "latency_toggle", &items, 2);
+    let (chosen, rects) = segments(ui, "latency_toggle", &items);
     store(&mut controls.reflex, &rects);
     if let Some(index) = chosen
         && (generation.requested_reflex != 0) != (index != 0)
@@ -1380,7 +1378,6 @@ fn frame_limit(
         .iter()
         .map(|(label, interval, enabled)| Segment {
             label: (*label).to_owned(),
-            sub: None,
             enabled: usable && *enabled,
             mark: if *enabled && stored == interval.round() as u32 {
                 Mark::On
@@ -1389,7 +1386,7 @@ fn frame_limit(
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "frame-limit-presets", &items, 5);
+    let (chosen, rects) = segments(ui, "frame-limit-presets", &items);
     store(&mut controls.frame_limit_preset, &rects);
     if let Some(index) = chosen {
         requested = Some(presets[index].1);
@@ -1432,7 +1429,6 @@ fn sharpen_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &m
         .enumerate()
         .map(|(index, label)| Segment {
             label: (*label).to_owned(),
-            sub: None,
             enabled: index != 4 || vendor,
             mark: if options.mode == index as u32 {
                 Mark::On
@@ -1441,7 +1437,7 @@ fn sharpen_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &m
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "sharpen-mode", &items, 5);
+    let (chosen, rects) = segments(ui, "sharpen-mode", &items);
     store(&mut controls.sharpening_mode, &rects);
     if let Some(index) = chosen
         && options.mode != index as u32
@@ -1655,7 +1651,6 @@ fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         .enumerate()
         .map(|(index, label)| Segment {
             label: (*label).to_owned(),
-            sub: None,
             enabled: stats.show_performance_hud,
             mark: if preferences.detailed_hud == (index == 1) {
                 Mark::On
@@ -1664,7 +1659,7 @@ fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "hud-detail", &items, 2);
+    let (chosen, rects) = segments(ui, "hud-detail", &items);
     store(&mut controls.hud_detail, &rects);
     if let Some(index) = chosen
         && preferences.detailed_hud != (index == 1)
@@ -1678,7 +1673,6 @@ fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         .iter()
         .map(|size| Segment {
             label: size.label().to_owned(),
-            sub: None,
             enabled: true,
             mark: if *size == preferences.size {
                 Mark::On
@@ -1687,7 +1681,7 @@ fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "panel-size", &items, 4);
+    let (chosen, rects) = segments(ui, "panel-size", &items);
     store(&mut controls.panel_size, &rects);
     if let Some(index) = chosen
         && PanelSize::ALL[index] != preferences.size
@@ -1707,7 +1701,6 @@ fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         .enumerate()
         .map(|(index, label)| Segment {
             label: (*label).to_owned(),
-            sub: None,
             enabled: true,
             mark: if preferences.right == (index == 1) {
                 Mark::On
@@ -1716,7 +1709,7 @@ fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             },
         })
         .collect();
-    let (chosen, rects) = segments(ui, "panel-side", &items, 2);
+    let (chosen, rects) = segments(ui, "panel-side", &items);
     store(&mut controls.panel_side, &rects);
     if let Some(index) = chosen
         && preferences.right != (index == 1)
@@ -1744,7 +1737,6 @@ enum Mark {
 
 struct Segment {
     label: String,
-    sub: Option<String>,
     enabled: bool,
     mark: Mark,
 }
@@ -1755,20 +1747,16 @@ fn segments(
     ui: &mut Ui,
     salt: impl egui::AsIdSalt,
     items: &[Segment],
-    columns: usize,
 ) -> (Option<usize>, Vec<Rect>) {
     if items.is_empty() {
         return (None, Vec::new());
     }
-    let columns = columns.clamp(1, items.len());
-    let rows = items.len().div_ceil(columns);
-    let tall = items
-        .iter()
-        .any(|item| item.sub.is_some() || item.label.contains('\n'));
+    let columns = items.len();
+    let tall = items.iter().any(|item| item.label.contains('\n'));
     let cell_height = if tall { 58.0 } else { TARGET };
     let (pad, gap) = (4.0, 4.0);
     let width = ui.available_width();
-    let height = pad * 2.0 + rows as f32 * cell_height + (rows - 1) as f32 * gap;
+    let height = pad * 2.0 + cell_height;
     let (outer, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let base = ui.id().with(salt);
     let painter = ui.painter();
@@ -1778,13 +1766,8 @@ fn segments(
     let mut chosen = None;
     let mut rects = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
-        let (row, column) = (index / columns, index % columns);
         let rect = Rect::from_min_size(
-            outer.min
-                + vec2(
-                    pad + column as f32 * (cell_width + gap),
-                    pad + row as f32 * (cell_height + gap),
-                ),
+            outer.min + vec2(pad + index as f32 * (cell_width + gap), pad),
             vec2(cell_width, cell_height),
         );
         let enabled = item.enabled && ui.is_enabled();
@@ -1814,37 +1797,17 @@ fn segments(
             painter.rect_stroke(rect, 9.0, Stroke::new(2.0, AMBER_DOT), StrokeKind::Inside);
         }
         let clip = painter.with_clip_rect(rect);
-        match &item.sub {
-            Some(sub) => {
-                clip.text(
-                    rect.center() - vec2(0.0, 8.0),
-                    Align2::CENTER_CENTER,
-                    &item.label,
-                    FontId::proportional(14.5),
-                    text,
-                );
-                clip.text(
-                    rect.center() + vec2(0.0, 11.0),
-                    Align2::CENTER_CENTER,
-                    sub,
-                    FontId::monospace(11.0),
-                    text.gamma_multiply(0.8),
-                );
-            }
-            None => {
-                clip.text(
-                    rect.center(),
-                    Align2::CENTER_CENTER,
-                    &item.label,
-                    FontId::proportional(if item.label.contains('\n') {
-                        13.5
-                    } else {
-                        14.5
-                    }),
-                    text,
-                );
-            }
-        }
+        clip.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            &item.label,
+            FontId::proportional(if item.label.contains('\n') {
+                13.5
+            } else {
+                14.5
+            }),
+            text,
+        );
         if enabled && response.clicked() {
             chosen = Some(index);
         }
@@ -2277,10 +2240,14 @@ fn sr_name(backend: u32) -> &'static str {
 }
 
 fn quality_label(stats: &Stats<'_>) -> String {
-    match stats.quality {
-        Some(Quality::Native) if stats.backend == 1 => "DLAA".to_owned(),
+    quality_level_label(stats.backend, stats.quality_raw)
+}
+
+fn quality_level_label(backend: u32, raw: crate::abi::RsfOverlayQuality) -> String {
+    match Quality::from_abi(raw) {
+        Some(Quality::Native) if backend == 1 => "DLAA".to_owned(),
         Some(level) => level.label().to_owned(),
-        None => format!("level {}", stats.quality_raw),
+        None => format!("level {raw}"),
     }
 }
 
@@ -2296,7 +2263,7 @@ fn waiting_reason(reason: u32) -> &'static str {
         1 => "Waiting for a matching scene and window",
         2 => "Waiting for reconstruction inputs",
         3 => "Waiting for a complete frame submission",
-        4 => "Waiting for flight, hangar, or briefing",
+        4 => "Waiting for an eligible scene",
         5 => "Suspended for a camera cut",
         6 => "Current VSync mode is unsupported",
         8 => "Waiting for a HUD-less scene color",
@@ -2321,24 +2288,19 @@ enum HudState {
 }
 
 /// What the detailed HUD adds: the SR state and the frame limit.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HudDetail {
-    pub(crate) sr: String,
-    pub(crate) limit: String,
+    sr: Option<(u32, crate::abi::RsfOverlayQuality)>,
+    limit_us: u32,
 }
 
 impl HudDetail {
     pub(crate) fn of(stats: &Stats<'_>) -> Self {
-        let sr = if stats.backend_choices == 0 || !stats.enabled {
-            "off".to_owned()
-        } else {
-            format!("{} {}", sr_name(stats.backend), quality_label(stats))
-        };
-        let limit = match stats.generation.frame_limit_us {
-            0 => "off".to_owned(),
-            interval => format!("{:.0} fps", 1.0e6 / f64::from(interval)),
-        };
-        Self { sr, limit }
+        Self {
+            sr: (stats.backend_choices != 0 && stats.enabled)
+                .then_some((stats.backend, stats.quality_raw)),
+            limit_us: stats.generation.frame_limit_us,
+        }
     }
 }
 
@@ -2386,9 +2348,23 @@ impl HudCache {
                 },
             ),
         ];
-        if let Some(detail) = &key.2 {
-            rows.push(("SR", detail.sr.clone()));
-            rows.push(("Limit", detail.limit.clone()));
+        if let Some(detail) = key.2 {
+            let sr = match detail.sr {
+                Some((backend, quality)) => {
+                    format!(
+                        "{} {}",
+                        sr_name(backend),
+                        quality_level_label(backend, quality)
+                    )
+                }
+                None => "off".to_owned(),
+            };
+            let limit = match detail.limit_us {
+                0 => "off".to_owned(),
+                interval => format!("{:.0} fps", 1.0e6 / f64::from(interval)),
+            };
+            rows.push(("SR", sr));
+            rows.push(("Limit", limit));
         }
         self.rows = rows;
         self.active = matches!(state, HudState::Active(_));

@@ -212,8 +212,7 @@ impl Overlay {
             return intent;
         }
 
-        let points_per_pixel = 1.0 / scale;
-        let raw = self.raw_input(input, display, scale);
+        let (raw, pointer) = self.raw_input(input, display, scale);
 
         let frame = panel::Frame {
             selection: &self.selection,
@@ -225,10 +224,6 @@ impl Overlay {
         let hud = &self.hud;
         let controls = &mut self.controls;
         *controls = Controls::default();
-        let pointer = Pos2::new(
-            sanitise(input.mouse[0], 0.0) * points_per_pixel,
-            sanitise(input.mouse[1], 0.0) * points_per_pixel,
-        );
         let output = self.context.run_ui(raw, |ui| {
             panel::show(ui.ctx(), &frame, view, &mut intent, controls);
             if stats.show_performance_hud {
@@ -296,7 +291,7 @@ impl Overlay {
     ///
     /// The header hands over a position and a button mask, not events, so the transitions have to
     /// be recovered by comparing against the previous frame.
-    fn raw_input(&mut self, input: &FrameInput, display: [f32; 2], scale: f32) -> RawInput {
+    fn raw_input(&mut self, input: &FrameInput, display: [f32; 2], scale: f32) -> (RawInput, Pos2) {
         let points_per_pixel = 1.0 / scale;
         let mouse = [sanitise(input.mouse[0], 0.0), sanitise(input.mouse[1], 0.0)];
         let position = Pos2::new(mouse[0] * points_per_pixel, mouse[1] * points_per_pixel);
@@ -369,13 +364,16 @@ impl Overlay {
         let advance = if delta > 0.0 { delta } else { 1.0 / 60.0 };
         self.time += f64::from(advance);
 
-        RawInput {
-            time: Some(self.time),
-            predicted_dt: advance,
-            events,
-            focused: true,
-            ..base_raw_input(display, scale)
-        }
+        (
+            RawInput {
+                time: Some(self.time),
+                predicted_dt: advance,
+                events,
+                focused: true,
+                ..base_raw_input(display, scale)
+            },
+            position,
+        )
     }
 
     fn collect_textures(&mut self, delta: epaint::textures::TexturesDelta) {
@@ -510,7 +508,7 @@ fn paint_startup_hint(ctx: &egui::Context, alpha: f32) {
     );
 }
 
-/// Draw a pointer because AC7 hides the system cursor.
+/// Draw the panel pointer while the overlay owns cursor input.
 fn paint_cursor(ctx: &egui::Context, position: Pos2) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -1418,6 +1416,62 @@ mod tests {
         settle(&mut overlay, &stats);
         assert!(overlay.controls().fg_backend[0].is_some());
         assert!(overlay.controls().quality[0].is_none());
+    }
+
+    #[test]
+    fn rail_scroll_reaches_adapter_and_display_tabs_at_largest_scale() {
+        use crate::model::{HostOption, PanelSize};
+
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.sharpening_available = true;
+        stats.host_options[0] = Some(HostOption {
+            label: "Adapter toggle",
+            toggle: true,
+            value: 0,
+            range: [0, 1, 1],
+            divisor: 1,
+            restart: false,
+        });
+        stats.ui_preferences = UiPreferences {
+            size: PanelSize::Larger,
+            ..UiPreferences::default()
+        }
+        .to_bits();
+        settle(&mut overlay, &stats);
+        assert!(overlay.controls().tabs[Tab::Display as usize].is_none());
+        let rail = overlay.controls().tabs[Tab::Frames as usize]
+            .expect("Frames tab")
+            .center()
+            * 1.5;
+        overlay.frame(
+            &FrameInput {
+                mouse: [rail.x, rail.y],
+                scroll_delta: -600.0,
+                ..visible_input()
+            },
+            &stats,
+        );
+        for _ in 0..30 {
+            idle_frame(&mut overlay, &stats);
+        }
+        for tab in [Tab::Game, Tab::Display] {
+            let target = overlay.controls().tabs[tab as usize]
+                .expect("tab reached by scrolling")
+                .center()
+                * 1.5;
+            for mouse_buttons in [RSF_OVERLAY_MOUSE_LEFT, 0] {
+                overlay.frame(
+                    &FrameInput {
+                        mouse: [target.x, target.y],
+                        mouse_buttons,
+                        ..visible_input()
+                    },
+                    &stats,
+                );
+            }
+            assert_eq!(overlay.view.tab, tab);
+        }
     }
 
     #[test]

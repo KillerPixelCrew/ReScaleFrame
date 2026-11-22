@@ -357,11 +357,24 @@ add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_
 # a couple of minutes rather than hanging the suite.
 set_tests_properties(d3d11_observer texture_dump PROPERTIES TIMEOUT 120)
 
-add_library(rsf_overlay_panel_fixture SHARED overlay_panel_fixture.cpp)
-target_link_libraries(rsf_overlay_panel_fixture PRIVATE ReScaleFrame::Graphics rsf_build_options)
-# Exported by property rather than by dllexport on each definition: the header declares the
-# functions plainly, and MSVC refuses a definition whose linkage differs from its declaration.
-set_target_properties(rsf_overlay_panel_fixture PROPERTIES PREFIX "" WINDOWS_EXPORT_ALL_SYMBOLS ON)
+find_program(RSF_RUSTC rustc REQUIRED)
+if(MSVC)
+    set(overlay_fixture_rust_target x86_64-pc-windows-msvc)
+else()
+    set(overlay_fixture_rust_target x86_64-pc-windows-gnu)
+endif()
+set(overlay_fixture_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+set(overlay_fixture_dll "${overlay_fixture_dir}/rsf_overlay_panel_fixture.dll")
+set(overlay_fixture_source "${CMAKE_CURRENT_SOURCE_DIR}/overlay_panel_fixture.rs")
+add_custom_command(OUTPUT "${overlay_fixture_dll}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${overlay_fixture_dir}"
+    COMMAND "${RSF_RUSTC}" --edition=2024 --crate-type=cdylib --target ${overlay_fixture_rust_target}
+        -Cpanic=abort -Dwarnings "${overlay_fixture_source}" -o "${overlay_fixture_dll}"
+    DEPENDS "${overlay_fixture_source}" "${PROJECT_SOURCE_DIR}/ui/overlay/src/abi.rs"
+        "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+add_custom_target(rsf_overlay_panel_fixture DEPENDS "${overlay_fixture_dll}")
 rsf_add_rust_static(rsf_overlay_fixtures_rust rsf_rust_overlay_fixtures
     rsf-overlay-fixtures rsf_overlay_fixtures)
 add_executable(rsf_overlay_host overlay/main.c)
@@ -376,14 +389,14 @@ target_link_libraries(rsf_overlay_hotkey PRIVATE rsf_overlay_fixtures_rust rsf_o
 add_test(NAME overlay_hotkey COMMAND rsf_overlay_hotkey)
 set_tests_properties(overlay_hotkey PROPERTIES TIMEOUT 30)
 add_dependencies(rsf_overlay_host rsf_overlay_panel_fixture)
-add_test(NAME overlay_host COMMAND rsf_overlay_host "$<TARGET_FILE_NAME:rsf_overlay_panel_fixture>")
+add_test(NAME overlay_host COMMAND rsf_overlay_host "${overlay_fixture_dll}")
 set_tests_properties(overlay_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_overlay_host>")
 add_executable(rsf_overlay_native12_test overlay_native12.cpp ../runtime/orchestrator/src/overlay_native12.cpp)
 target_include_directories(rsf_overlay_native12_test PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_overlay_native12_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options d3d12 d3dcompiler dxgi)
 add_dependencies(rsf_overlay_native12_test rsf_overlay_panel_fixture)
-add_test(NAME overlay_native12_backpressure COMMAND rsf_overlay_native12_test "$<TARGET_FILE:rsf_overlay_panel_fixture>")
+add_test(NAME overlay_native12_backpressure COMMAND rsf_overlay_native12_test "${overlay_fixture_dll}")
 set_tests_properties(overlay_native12_backpressure PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 
 add_executable(rsf_dlss_backend dlss_backend.cpp)
@@ -519,7 +532,6 @@ if(RSF_DOTNET_EXECUTABLE)
         set_tests_properties(unity_input_facts_contract PROPERTIES TIMEOUT 120)
     endif()
 endif()
-find_program(RSF_RUSTC rustc REQUIRED)
 if(MSVC)
     set(godot_graph_rust_target x86_64-pc-windows-msvc)
 else()
