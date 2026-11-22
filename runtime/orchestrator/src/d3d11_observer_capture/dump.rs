@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
-use super::{Constant, DumpResult, Handle, Immediate, OK, Request};
+use super::{Constant, DumpResult, Handle, OK, Request};
 use crate::com_ref::ComRef;
 use crate::d3d11_observer_abi::rsf_observer_options;
+use crate::graphics_pass_abi::{
+    RSF_MOTION_DECODE_ABI_VERSION, rsf_motion_decode_setup as DecodeSetup,
+};
 use crate::input_dump::{
     DECODED_MOTION, ENCODED_MOTION, Log, MotionEncoding, MotionTextureOptions, TextureOptions,
 };
@@ -45,35 +48,46 @@ impl DumpSettings {
     }
 }
 
-#[repr(C)]
-pub(super) struct DumpPlatform {
-    pub(super) immediate: Immediate,
-    texture: unsafe extern "C" fn(Handle, Handle, Handle, *const TextureOptions) -> i32,
-    read_buffer: unsafe extern "C" fn(Handle, Handle, Handle, Handle, u32) -> i32,
-    create_decode:
-        unsafe extern "C" fn(Handle, Handle, rsf_backend_log_fn, Handle, *mut Handle) -> i32,
-    decode: unsafe extern "C" fn(Handle, Handle, Handle, &DecodeParams) -> i32,
-    decoded_texture: unsafe extern "C" fn(Handle) -> Handle,
-    destroy_decode: unsafe extern "C" fn(Handle),
+unsafe extern "C" {
+    fn rsf_observer11_guard_texture_extent(
+        source: Handle,
+        width: &mut u32,
+        height: &mut u32,
+    ) -> i32;
+    fn rsf_dump_texture(
+        device: Handle,
+        context: Handle,
+        source: Handle,
+        options: *const TextureOptions,
+        info: Handle,
+    ) -> i32;
+    fn rsf_read_constant_buffer(
+        device: Handle,
+        context: Handle,
+        buffer: Handle,
+        out: Handle,
+        bytes: u32,
+    ) -> i32;
+    fn rsf_motion_decode_create(device: Handle, setup: &DecodeSetup, out: &mut Handle) -> i32;
+    fn rsf_motion_decode_run(
+        pass: Handle,
+        context: Handle,
+        source: Handle,
+        params: &DecodeParams,
+    ) -> i32;
+    fn rsf_motion_decode_texture(pass: Handle) -> Handle;
+    fn rsf_motion_decode_destroy(pass: Handle);
 }
 
-const _: () = {
-    assert!(size_of::<DumpPlatform>() == 7 * size_of::<Handle>());
-};
-
-struct Decode {
-    handle: NonNull<std::ffi::c_void>,
-    destroy: unsafe extern "C" fn(Handle),
-}
+struct Decode(NonNull<std::ffi::c_void>);
 
 impl Drop for Decode {
     fn drop(&mut self) {
-        unsafe { (self.destroy)(self.handle.as_ptr()) };
+        unsafe { rsf_motion_decode_destroy(self.0.as_ptr()) };
     }
 }
 
 struct Writer<'a> {
-    platform: &'a DumpPlatform,
     settings: &'a DumpSettings,
     log: Log,
     device: Handle,
@@ -93,33 +107,38 @@ impl Writer<'_> {
                 },
             );
             unsafe {
-                (self.platform.texture)(
+                rsf_dump_texture(
                     self.device,
                     self.context,
                     source,
                     std::ptr::from_ref(&extended).cast(),
+                    null_mut(),
                 )
             }
         } else {
-            unsafe { (self.platform.texture)(self.device, self.context, source, &options) }
+            unsafe { rsf_dump_texture(self.device, self.context, source, &options, null_mut()) }
         }
     }
 
     fn decoded(&self, source: Handle, prefix: &str) {
-        let mut handle = null_mut();
-        let result = unsafe {
-            (self.platform.create_decode)(
-                self.device,
-                source,
-                self.settings.log,
-                self.settings.log_user,
-                &mut handle,
-            )
+        let (mut width, mut height) = (0, 0);
+        if unsafe { rsf_observer11_guard_texture_extent(source, &mut width, &mut height) } == 0 {
+            self.log
+                .say("motion decode unavailable, texture description refused");
+            return;
+        }
+        let setup = DecodeSetup {
+            struct_size: size_of::<DecodeSetup>() as u32,
+            abi_version: RSF_MOTION_DECODE_ABI_VERSION,
+            width,
+            height,
+            output_format: 0,
+            log: self.settings.log,
+            log_user: self.settings.log_user,
         };
-        let pass = NonNull::new(handle).map(|handle| Decode {
-            handle,
-            destroy: self.platform.destroy_decode,
-        });
+        let mut handle = null_mut();
+        let result = unsafe { rsf_motion_decode_create(self.device, &setup, &mut handle) };
+        let pass = NonNull::new(handle).map(Decode);
         let Some(pass) = pass.filter(|_| result == OK) else {
             self.log
                 .say(&format!("motion decode unavailable, result {result}"));
@@ -138,13 +157,13 @@ impl Writer<'_> {
             ..DecodeParams::default()
         };
         let result =
-            unsafe { (self.platform.decode)(pass.handle.as_ptr(), self.context, source, &params) };
+            unsafe { rsf_motion_decode_run(pass.0.as_ptr(), self.context, source, &params) };
         if result != OK {
             self.log
                 .say(&format!("motion decode refused, result {result}"));
             return;
         }
-        let decoded = unsafe { (self.platform.decoded_texture)(pass.handle.as_ptr()) };
+        let decoded = unsafe { rsf_motion_decode_texture(pass.0.as_ptr()) };
         let path = CString::new(format!("{prefix}_decoded")).expect("prefix is a C string");
         self.texture(decoded, &path, DECODED_MOTION);
     }
@@ -154,7 +173,7 @@ impl Writer<'_> {
         self.log.say(&format!("constant buffer of {bytes} bytes"));
         let mut contents = vec![0u8; bytes as usize];
         let read = unsafe {
-            (self.platform.read_buffer)(
+            rsf_read_constant_buffer(
                 self.device,
                 self.context,
                 entry.buffer.as_ptr(),
@@ -180,7 +199,6 @@ impl Writer<'_> {
 }
 
 pub(super) fn write(
-    platform: &DumpPlatform,
     settings: &DumpSettings,
     request: &Request,
     device: &ComRef,
@@ -198,7 +216,6 @@ pub(super) fn write(
     if let Some(context) = context {
         if let Ok(prefix) = request.prefix.to_str() {
             let writer = Writer {
-                platform,
                 settings,
                 log,
                 device: device.as_ptr(),

@@ -1,16 +1,63 @@
 // SPDX-License-Identifier: MIT
+use super::{BUFFER, LAYOUT, PRESENT, SLOT_COUNT, STAGE_BASE, Slot, TEXTURE, detours};
 use crate::com_ref::ComRef;
 use std::ffi::c_void;
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::Direct3D11::ID3D11Device_Vtbl;
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
+use windows::Win32::Graphics::Dxgi::{
+    DXGI_SWAP_CHAIN_DESC, DXGI_USAGE, IDXGISwapChain_Vtbl, IDXGISwapChain1_Vtbl,
+};
+use windows::core::BOOL;
+use windows_sys::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+    GetModuleHandleW,
+};
+use windows_sys::Win32::System::Memory::{
+    MEM_COMMIT, MEM_IMAGE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_GUARD, PAGE_NOACCESS,
+    VirtualQuery,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, WNDCLASSEXW,
+    WS_OVERLAPPEDWINDOW,
+};
 
 type Handle = *mut c_void;
 type Table = *mut Handle;
 
 const HARDWARE: u32 = 1;
 const WARP: u32 = 5;
-const DEVICE_SLOTS: usize = 19;
-const CHAIN_SLOTS: usize = 9;
-const CHAIN1_SLOTS: usize = 23;
+macro_rules! slot {
+    ($table:ty, $method:ident) => {
+        std::mem::offset_of!($table, $method) / size_of::<Handle>()
+    };
+}
+
+const CREATE_BUFFER: usize = slot!(ID3D11Device_Vtbl, CreateBuffer);
+const CREATE_TEXTURE: usize = slot!(ID3D11Device_Vtbl, CreateTexture2D);
+const CREATE_LAYOUT: usize = slot!(ID3D11Device_Vtbl, CreateInputLayout);
+const CREATE_SHADER: [usize; SLOT_COUNT - STAGE_BASE] = [
+    slot!(ID3D11Device_Vtbl, CreateGeometryShader),
+    slot!(ID3D11Device_Vtbl, CreateHullShader),
+    slot!(ID3D11Device_Vtbl, CreateDomainShader),
+    slot!(ID3D11Device_Vtbl, CreateComputeShader),
+    slot!(ID3D11Device_Vtbl, CreateGeometryShaderWithStreamOutput),
+    slot!(ID3D11Device_Vtbl, CreateVertexShader),
+    slot!(ID3D11Device_Vtbl, CreatePixelShader),
+];
+const DXGI_PRESENT: usize = slot!(IDXGISwapChain_Vtbl, Present);
+const DXGI_PRESENT1: usize = slot!(IDXGISwapChain1_Vtbl, Present1);
+const DEVICE_SLOTS: usize = slot!(ID3D11Device_Vtbl, CreateComputeShader) + 1;
+const CHAIN_SLOTS: usize = DXGI_PRESENT + 1;
+const CHAIN1_SLOTS: usize = DXGI_PRESENT1 + 1;
+
+#[repr(C)]
+struct Route {
+    table: Table,
+    index: usize,
+    hook: Handle,
+}
 
 #[repr(C)]
 struct Description {
@@ -58,6 +105,123 @@ struct Platform {
     query_chain1: unsafe extern "C" fn(Handle, &mut Handle, &mut i32) -> u32,
     vtable: unsafe extern "C" fn(Handle, usize) -> Table,
 }
+
+unsafe extern "C" {
+    fn rsf_observer11_guard_probe_create(
+        driver: u32,
+        feature_level: u32,
+        description: &DXGI_SWAP_CHAIN_DESC,
+        out: &mut Attempt,
+    );
+    fn rsf_observer11_probe_chain1(chain: Handle, extended: &mut Handle, result: &mut i32) -> u32;
+}
+
+unsafe extern "C" fn create(
+    window: Handle,
+    driver: u32,
+    description: &Description,
+    out: &mut Attempt,
+) {
+    let mut desc = DXGI_SWAP_CHAIN_DESC {
+        BufferCount: description.buffer_count,
+        BufferUsage: DXGI_USAGE(description.usage),
+        OutputWindow: HWND(window),
+        Windowed: BOOL(1),
+        ..Default::default()
+    };
+    desc.BufferDesc.Width = description.width;
+    desc.BufferDesc.Height = description.height;
+    desc.BufferDesc.Format = DXGI_FORMAT(description.format as i32);
+    desc.SampleDesc.Count = description.sample_count;
+    unsafe { rsf_observer11_guard_probe_create(driver, description.feature_level, &desc, out) };
+}
+
+unsafe extern "C" fn window(width: u32, height: u32) -> Handle {
+    let instance = unsafe { GetModuleHandleW(null()) };
+    let class = windows::core::w!("RsfObserverProbe");
+    let title = windows::core::w!("");
+    let description = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        lpfnWndProc: Some(DefWindowProcW),
+        hInstance: instance,
+        lpszClassName: class.0,
+        ..Default::default()
+    };
+    unsafe {
+        RegisterClassExW(&description);
+        CreateWindowExW(
+            0,
+            class.0,
+            title.0,
+            WS_OVERLAPPEDWINDOW,
+            0,
+            0,
+            width as i32,
+            height as i32,
+            null_mut(),
+            null_mut(),
+            instance,
+            null(),
+        )
+    }
+}
+
+unsafe extern "C" fn destroy_window(window: Handle) {
+    unsafe { DestroyWindow(window) };
+}
+
+// An object's private table can disappear when the last interface reference is released.
+// A table must have a complete readable span inside a pinned executable image.
+unsafe extern "C" fn resident_vtable(object: Handle, count: usize) -> Table {
+    let table = unsafe { object.cast::<Table>().read() };
+    let mut info = MEMORY_BASIC_INFORMATION::default();
+    if table.is_null()
+        || unsafe {
+            VirtualQuery(
+                table.cast(),
+                &mut info,
+                size_of::<MEMORY_BASIC_INFORMATION>(),
+            )
+        } != size_of::<MEMORY_BASIC_INFORMATION>()
+        || info.Type != MEM_IMAGE
+        || info.State != MEM_COMMIT
+        || info.Protect & (PAGE_GUARD | PAGE_NOACCESS) != 0
+        || info.Protect & 0xff == PAGE_EXECUTE
+    {
+        return null_mut();
+    }
+    let Some(offset) = table.addr().checked_sub(info.BaseAddress.addr()) else {
+        return null_mut();
+    };
+    if info
+        .RegionSize
+        .checked_sub(offset)
+        .is_none_or(|bytes| bytes / size_of::<Handle>() < count)
+    {
+        return null_mut();
+    }
+    let mut module = null_mut();
+    if unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            table.cast(),
+            &mut module,
+        )
+    } == 0
+        || module != info.AllocationBase
+    {
+        return null_mut();
+    }
+    table
+}
+
+const NATIVE: Platform = Platform {
+    window,
+    destroy_window,
+    create,
+    query_chain1: rsf_observer11_probe_chain1,
+    vtable: resident_vtable,
+};
 
 const _: () = {
     assert!(size_of::<Description>() == 28);
@@ -132,7 +296,73 @@ fn probe(platform: &Platform, window: Handle) -> Option<Tables> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_probe(platform: &Platform, tables: &mut Tables) -> u32 {
+extern "C" fn rsf_core_observer11_probe(
+    slots: &mut [Slot; SLOT_COUNT],
+    routes: &mut [Route; 2],
+) -> u32 {
+    let mut tables = Tables {
+        device: null_mut(),
+        chain: null_mut(),
+        chain1: null_mut(),
+    };
+    if run(&NATIVE, &mut tables) == 0 {
+        return 0;
+    }
+    let present = detours::hook_present as Handle;
+    *routes = [
+        Route {
+            table: tables.chain,
+            index: DXGI_PRESENT,
+            hook: present,
+        },
+        Route {
+            table: tables.chain1,
+            index: DXGI_PRESENT1,
+            hook: detours::hook_present1 as Handle,
+        },
+    ];
+    slots[PRESENT] = Slot {
+        address: unsafe { tables.chain.add(DXGI_PRESENT) },
+        hook: present,
+    };
+    let shader_hooks = [
+        detours::hook_create_geometry_shader as Handle,
+        detours::hook_create_hull_shader as Handle,
+        detours::hook_create_domain_shader as Handle,
+        detours::hook_create_compute_shader as Handle,
+        detours::hook_create_geometry_so as Handle,
+        detours::hook_create_vertex_shader as Handle,
+        detours::hook_create_pixel_shader as Handle,
+    ];
+    let device_hooks = [
+        (
+            TEXTURE,
+            CREATE_TEXTURE,
+            detours::hook_create_texture2d as Handle,
+        ),
+        (BUFFER, CREATE_BUFFER, detours::hook_create_buffer as Handle),
+        (
+            LAYOUT,
+            CREATE_LAYOUT,
+            detours::hook_create_input_layout as Handle,
+        ),
+    ];
+    for (i, index, hook) in device_hooks.into_iter().chain(
+        CREATE_SHADER
+            .into_iter()
+            .zip(shader_hooks)
+            .enumerate()
+            .map(|(i, (index, hook))| (STAGE_BASE + i, index, hook)),
+    ) {
+        slots[i] = Slot {
+            address: unsafe { tables.device.add(index) },
+            hook,
+        };
+    }
+    1
+}
+
+fn run(platform: &Platform, tables: &mut Tables) -> u32 {
     let window = unsafe { (platform.window)(DESCRIPTION.width, DESCRIPTION.height) };
     if window.is_null() {
         return 0;
@@ -288,7 +518,7 @@ mod tests {
             chain: null_mut(),
             chain1: null_mut(),
         };
-        assert_eq!(rsf_core_observer11_probe(&PLATFORM, &mut tables), 0);
+        assert_eq!(run(&PLATFORM, &mut tables), 0);
         assert!(tables.device.is_null());
         FIXTURE.with_borrow(|fixture| {
             assert_eq!(fixture.windows_destroyed, 1);
@@ -308,10 +538,7 @@ mod tests {
                 chain: null_mut(),
                 chain1: null_mut(),
             };
-            assert_eq!(
-                rsf_core_observer11_probe(&PLATFORM, &mut tables),
-                u32::from(!interrupted)
-            );
+            assert_eq!(run(&PLATFORM, &mut tables), u32::from(!interrupted));
             FIXTURE.with_borrow(|fixture| {
                 assert_eq!(fixture.windows_destroyed, 1);
                 if interrupted {

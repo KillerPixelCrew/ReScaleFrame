@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: MIT
 use super::Handle;
-use super::attachment::{Query, query_interface};
+use super::attachment::{Query, query, query_interface};
 use crate::com_ref::ComRef;
 use crate::win32_diagnostics::module_location;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
+use windows::Win32::Graphics::Direct3D12::{
+    D3D12_AUTO_BREADCRUMB_NODE, D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_ID, D3D12_MESSAGE_SEVERITY,
+    D3D12MessageFunc, ID3D12Debug, ID3D12DeviceRemovedExtendedData,
+    ID3D12DeviceRemovedExtendedDataSettings, ID3D12InfoQueue1,
+};
+use windows::core::{GUID, Interface, PCSTR};
 use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 
 const WARNING: u32 = 2;
@@ -18,7 +24,6 @@ const BREADCRUMB_LIMIT: u32 = 64;
 type Log = unsafe extern "C" fn(Handle, *const c_char);
 type DebugQuery = unsafe extern "C" fn(&mut Handle) -> i32;
 
-#[repr(C)]
 #[derive(Default)]
 struct Breadcrumb {
     next: *const c_void,
@@ -29,7 +34,6 @@ struct Breadcrumb {
     name: *const c_char,
 }
 
-#[repr(C)]
 struct DiagnosticSetup {
     query_settings: DebugQuery,
     enable_breadcrumbs: unsafe extern "C" fn(Handle),
@@ -38,8 +42,7 @@ struct DiagnosticSetup {
     enable_debug: unsafe extern "C" fn(Handle) -> i32,
 }
 
-#[repr(C)]
-struct Removal {
+pub(super) struct Removal {
     queue_device: Query,
     removed_reason: unsafe extern "C" fn(Handle) -> i32,
     query_dred: Query,
@@ -49,12 +52,68 @@ struct Removal {
     page_fault: unsafe extern "C" fn(Handle, &mut u64) -> i32,
 }
 
-const _: () = {
-    assert!(size_of::<Breadcrumb>() == 40);
-    assert!(std::mem::offset_of!(Breadcrumb, name) == 32);
-    assert!(size_of::<DiagnosticSetup>() == 5 * size_of::<Handle>());
-    assert!(size_of::<Removal>() == 7 * size_of::<Handle>());
+unsafe extern "C" {
+    fn rsf_observer12_guard_register_debug(info_queue: Handle, callback: D3D12MessageFunc);
+    fn rsf_observer12_guard_debug(iid: &GUID, out: &mut Handle) -> i32;
+    fn rsf_observer12_guard_breadcrumbs(settings: Handle);
+    fn rsf_observer12_guard_page_faults(settings: Handle);
+    fn rsf_observer12_guard_debug_layer(debug: Handle) -> i32;
+    fn rsf_observer12_guard_queue_device(queue: Handle, out: &mut Handle) -> i32;
+    fn rsf_observer12_guard_removed_reason(device: Handle) -> i32;
+    fn rsf_observer12_guard_breadcrumb_head(dred: Handle) -> *const c_void;
+    fn rsf_observer12_guard_page_fault(dred: Handle, address: &mut u64) -> i32;
+}
+
+unsafe extern "C" fn debug_interface<T: Interface>(out: &mut Handle) -> i32 {
+    unsafe { rsf_observer12_guard_debug(&T::IID, out) }
+}
+
+const DIAGNOSTICS: DiagnosticSetup = DiagnosticSetup {
+    query_settings: debug_interface::<ID3D12DeviceRemovedExtendedDataSettings>,
+    enable_breadcrumbs: rsf_observer12_guard_breadcrumbs,
+    enable_page_faults: rsf_observer12_guard_page_faults,
+    query_debug: debug_interface::<ID3D12Debug>,
+    enable_debug: rsf_observer12_guard_debug_layer,
 };
+
+pub(super) const NATIVE: Removal = Removal {
+    queue_device: rsf_observer12_guard_queue_device,
+    removed_reason: rsf_observer12_guard_removed_reason,
+    query_dred: query::<ID3D12DeviceRemovedExtendedData>,
+    breadcrumb_head: rsf_observer12_guard_breadcrumb_head,
+    breadcrumb,
+    operation: breadcrumb_operation,
+    page_fault: rsf_observer12_guard_page_fault,
+};
+
+// DRED node storage is borrowed until the owning interface is released.
+unsafe extern "C" fn breadcrumb(node: *const c_void, out: &mut Breadcrumb) {
+    let node = unsafe { &*node.cast::<D3D12_AUTO_BREADCRUMB_NODE>() };
+    *out = Breadcrumb {
+        next: node.pNext.cast(),
+        list: node
+            .pCommandList
+            .as_ref()
+            .map_or(null_mut(), Interface::as_raw),
+        queue: node
+            .pCommandQueue
+            .as_ref()
+            .map_or(null_mut(), Interface::as_raw),
+        completed: unsafe { node.pLastBreadcrumbValue.as_ref() }
+            .copied()
+            .unwrap_or(0),
+        count: node.BreadcrumbCount,
+        name: node.pCommandListDebugNameA.cast(),
+    };
+}
+
+unsafe extern "C" fn breadcrumb_operation(node: *const c_void, index: u32) -> u32 {
+    let node = unsafe { &*node.cast::<D3D12_AUTO_BREADCRUMB_NODE>() };
+    if node.pCommandHistory.is_null() {
+        return u32::MAX;
+    }
+    unsafe { (*node.pCommandHistory.add(index as usize)).0 as u32 }
+}
 
 fn query_debug(query: DebugQuery) -> Option<ComRef> {
     let mut object = null_mut();
@@ -94,11 +153,8 @@ fn sink() -> Option<Sink> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer12_diagnostics_enable(
-    log: Option<Log>,
-    user: Handle,
-    platform: &DiagnosticSetup,
-) -> i32 {
+extern "C" fn rsf_d3d12_diagnostics_enable(log: Option<Log>, user: Handle) -> i32 {
+    let platform = &DIAGNOSTICS;
     let Some(log) = log else {
         return -1;
     };
@@ -130,12 +186,20 @@ pub(super) fn enabled() -> bool {
     SINK.get().is_some()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer12_debug_message(
-    severity: u32,
-    id: u32,
-    description: *const c_char,
+pub(super) unsafe extern "C" fn register_debug(device: Handle) {
+    if let Some(info) = query_interface(query::<ID3D12InfoQueue1>, device) {
+        unsafe { rsf_observer12_guard_register_debug(info.as_ptr(), Some(debug_message)) }
+    }
+}
+
+unsafe extern "system" fn debug_message(
+    _: D3D12_MESSAGE_CATEGORY,
+    severity: D3D12_MESSAGE_SEVERITY,
+    id: D3D12_MESSAGE_ID,
+    description: PCSTR,
+    _: Handle,
 ) {
+    let (severity, id) = (severity.0 as u32, id.0 as u32);
     if severity > WARNING || SINK.get().is_none() {
         return;
     }
@@ -153,7 +217,7 @@ unsafe extern "C" fn rsf_core_observer12_debug_message(
     let Some(sink) = sink() else {
         return;
     };
-    let description = unsafe { message(description) };
+    let description = unsafe { message(description.0.cast()) };
     sink.line(format!(
         "D3D12 validation severity={severity} id={id}: {description}"
     ));
@@ -180,8 +244,7 @@ unsafe fn message<'a>(text: *const c_char) -> std::borrow::Cow<'a, str> {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_report_removal(queue: Handle, platform: &Removal) {
+pub(super) fn report_removal(queue: Handle, platform: &Removal) {
     if !enabled() || REMOVAL_REPORTED.load(Ordering::Relaxed) {
         return;
     }

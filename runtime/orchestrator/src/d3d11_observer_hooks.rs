@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
+mod detours;
 mod probe;
 
 use crate::d3d11_observer_abi::rsf_observer_options as Options;
 use crate::d3d11_observer_callbacks::Callbacks;
-use crate::d3d11_observer_present::{present_calls, rsf_core_observer11_replace_size};
+use crate::d3d11_observer_present::{present_calls, replace_present_size};
 use crate::{d3d11_observer_callbacks, d3d11_observer_capture};
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -271,22 +272,19 @@ extern "C" fn rsf_core_observer11_uninstall_hooks(platform: &Platform) -> i32 {
         return PATCH_FAILED;
     }
     d3d11_observer_capture::clear();
-    rsf_core_observer11_replace_size(0, 0);
+    replace_present_size(0, 0);
     OK
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_core_observer11_installed() -> i32 {
+pub(super) fn installed() -> i32 {
     i32::from(ACTIVE.load(Ordering::Acquire))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_original(slot: usize) -> Handle {
+fn original(slot: usize) -> Handle {
     ORIGINALS[slot].load(Ordering::Acquire)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_forward(method: u32, nested: u32) -> Handle {
+pub(super) fn forward_target(method: u32, nested: u32) -> Handle {
     let route = &ROUTES[method as usize];
     let chain = route.chain.load(Ordering::Acquire);
     if nested != 0 {
@@ -296,7 +294,7 @@ extern "C" fn rsf_core_observer11_forward(method: u32, nested: u32) -> Handle {
             route.genuine.load(Ordering::Relaxed)
         }
     } else if method == 0 && chain.is_null() {
-        rsf_core_observer11_original(PRESENT)
+        original(PRESENT)
     } else {
         chain
     }
@@ -353,8 +351,8 @@ mod tests {
     #[test]
     fn required_present_failure_restores_both_creation_hooks() {
         let mut state = lifecycle().unwrap();
-        let original = without_provenance_mut(11);
-        let mut table = [original; 3];
+        let native = without_provenance_mut(11);
+        let mut table = [native; 3];
         let mut slots = [Slot {
             address: null_mut(),
             hook: null_mut(),
@@ -369,9 +367,9 @@ mod tests {
             state.install(&slots, 0, null_mut(), &PLATFORM),
             PATCH_FAILED
         );
-        assert_eq!(table, [original; 3]);
+        assert_eq!(table, [native; 3]);
         assert!(!state.has_patches());
-        assert!(rsf_core_observer11_original(TEXTURE).is_null());
-        assert!(rsf_core_observer11_original(BUFFER).is_null());
+        assert!(original(TEXTURE).is_null());
+        assert!(original(BUFFER).is_null());
     }
 }

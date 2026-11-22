@@ -7,7 +7,7 @@ pub(super) unsafe fn identity(object: *mut c_void) -> Option<IUnknown> {
     unsafe { IUnknown::from_raw_borrowed(&object) }?.cast().ok()
 }
 
-pub(super) unsafe fn owns(device: *mut c_void, child: *mut c_void) -> bool {
+unsafe fn owns(device: *mut c_void, child: *mut c_void) -> bool {
     if device.is_null() {
         return false;
     }
@@ -26,6 +26,6 @@ pub(super) unsafe fn owns(device: *mut c_void, child: *mut c_void) -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_device_owns(device: *mut c_void, child: *mut c_void) -> i32 {
-    i32::from(unsafe { owns(device, child) })
+unsafe extern "C" fn rsf_d3d11_same_device(child: *mut c_void, device: *mut c_void) -> bool {
+    unsafe { owns(device, child) }
 }

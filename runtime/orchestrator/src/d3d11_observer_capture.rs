@@ -2,8 +2,8 @@
 use crate::com_ref::ComRef;
 use crate::d3d11_device_identity::identity as device_identity;
 use crate::d3d11_observer_abi::{rsf_dump_log_fn, rsf_observer_options, rsf_observer_status};
-use crate::d3d11_observer_hooks::rsf_core_observer11_installed;
-use crate::d3d11_observer_present::{frames, rsf_core_observer11_present_size};
+use crate::d3d11_observer_hooks::installed;
+use crate::d3d11_observer_present::{frames, present_size};
 use crate::sr_session::has_capacity;
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -14,8 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 mod dump;
-use dump::{DumpPlatform, DumpSettings};
+use dump::DumpSettings;
 
+use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
@@ -257,23 +258,18 @@ pub(super) unsafe fn record_buffer(device: Handle, buffer: Handle, bytes: u32, b
     drop(retired);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_needs_presenter() -> i32 {
-    i32::from(!PRESENTING_DEVICE.load(Ordering::Acquire) || REQUESTED.load(Ordering::Acquire))
+pub(super) fn needs_presenter() -> bool {
+    !PRESENTING_DEVICE.load(Ordering::Acquire) || REQUESTED.load(Ordering::Acquire)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_adopt_device(incoming: Handle) -> Handle {
-    let Some(incoming) = (unsafe { ComRef::from_owned(incoming) }) else {
-        return ptr::null_mut();
-    };
+pub(super) fn adopt_device(incoming: ComRef) -> Option<ComRef> {
     let Some(identity) = (unsafe { device_identity(incoming.as_ptr()) }) else {
-        return ptr::null_mut();
+        return None;
     };
     let (old, context, old_identity, discarded) = {
         let mut state = lock();
         if PRESENTING_DEVICE.swap(true, Ordering::AcqRel) {
-            return ptr::null_mut();
+            return None;
         }
         let retained = &mut state.retained;
         let mut discarded = std::mem::take(&mut retained.candidates);
@@ -301,7 +297,7 @@ unsafe extern "C" fn rsf_core_observer11_adopt_device(incoming: Handle) -> Handl
         (old, context, old_identity, discarded)
     };
     drop((context, old_identity, discarded));
-    old.map_or(ptr::null_mut(), ComRef::into_raw)
+    old
 }
 
 pub(super) fn clear() {
@@ -340,11 +336,17 @@ fn resolve_context(
     Some(context)
 }
 
+unsafe extern "C" fn capture_immediate(device: Handle) -> Handle {
+    let Some(device) = (unsafe { ID3D11Device::from_raw_borrowed(&device) }) else {
+        return ptr::null_mut();
+    };
+    unsafe { device.GetImmediateContext() }.map_or(ptr::null_mut(), Interface::into_raw)
+}
+
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_acquire_device(
+unsafe extern "C" fn rsf_observer_acquire_device(
     device_out: *mut Handle,
     context_out: *mut Handle,
-    immediate: Immediate,
 ) -> i32 {
     if device_out.is_null() && context_out.is_null() {
         return INVALID;
@@ -359,7 +361,7 @@ unsafe extern "C" fn rsf_core_observer11_acquire_device(
     let context = if context_out.is_null() {
         None
     } else {
-        resolve_context(&device, context, immediate)
+        resolve_context(&device, context, capture_immediate)
     };
     if !device_out.is_null() {
         unsafe { device_out.write(device.into_raw()) };
@@ -376,10 +378,10 @@ unsafe extern "C" fn rsf_observer_get_status(out: *mut rsf_observer_status) -> i
         return INVALID;
     }
     let state = lock();
-    let size = rsf_core_observer11_present_size();
+    let size = present_size();
     let status = rsf_observer_status {
         struct_size: unsafe { out.cast::<u32>().read() },
-        installed: rsf_core_observer11_installed() as u32,
+        installed: installed() as u32,
         have_device: state.retained.device.is_some().into(),
         frames_presented: frames(),
         textures_matched: state
@@ -409,7 +411,7 @@ unsafe extern "C" fn rsf_observer_request_dump(prefix: *const c_char, view: u32)
         view,
     };
     let mut state = lock();
-    if rsf_core_observer11_installed() == 0 {
+    if installed() == 0 {
         return NOT_READY;
     }
     state.request = Some(request);
@@ -417,12 +419,11 @@ unsafe extern "C" fn rsf_observer_request_dump(prefix: *const c_char, view: u32)
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_dump(presenter: Handle, platform: &DumpPlatform) {
+pub(super) fn dump_presenter(presenter: &ComRef) {
     if !REQUESTED.load(Ordering::Acquire) {
         return;
     }
-    let Some(presenter) = (unsafe { device_identity(presenter) }) else {
+    let Some(presenter) = (unsafe { device_identity(presenter.as_ptr()) }) else {
         return;
     };
     let (request, settings, device, context, textures, buffers) = {
@@ -458,9 +459,8 @@ unsafe extern "C" fn rsf_core_observer11_dump(presenter: Handle, platform: &Dump
                 .map_or_else(Vec::new, |entry| entry.constants.clone()),
         )
     };
-    let context = resolve_context(&device, context, platform.immediate);
+    let context = resolve_context(&device, context, capture_immediate);
     let result = dump::write(
-        platform,
         &settings,
         &request,
         &device,

@@ -28,7 +28,7 @@ The device ownership check, D3D11 compare-and-exchange slot writer and status/du
 and D3D12 MinHook calls run in Rust. The native D3D11 and D3D12 source paths still contain COM
 leaves. D3D11 retains the HDE and MinHook Present chain reconstruction and its exception guards.
 D3D12 retains the SDK method forwarding and guarded DRED and debug-interface leaves. The temporary
-frame-tap caller on this branch uses the existing `vtable_patch.h` adapter around the Rust writer.
+frame-tap caller in the first G01 revision uses the existing `vtable_patch.h` adapter around the Rust writer.
 G02 removes its last caller. Public observer callback signatures and A03 layout bindings keep the
 same ABI. The Skyrim hunk touches only the disk validation path, which S01 also borders when moving
 the caller to Rust.
@@ -73,3 +73,43 @@ adaptation. Their implementation ownership is in Rust.
 Leave `runtime/graphics/src/d3d11_observer.cpp` and `runtime/graphics/src/d3d12_observer.cpp`
 open for their native forwarding and guarded SDK leaves. Remove `runtime/graphics/src/vtable_patch.h`
 in integration after confirming the G02 frame-tap leaf and its include are gone.
+
+## Typed SDK follow-up
+
+The follow-up branch starts at integrated revision `82b39a63` and reapplies the first G01 commit.
+G02 frame tap and G03 graphics state keep their source files and ABI.
+
+- D3D11 creation, shader, layout and Present detour entries now use Rust SDK types. The hook
+  offsets come from the generated Windows vtables. COM ownership, presenter selection, resize
+  bookkeeping and the capture-to-dump calls are Rust-owned. The guarded probe now receives a
+  typed DXGI descriptor prepared by Rust. Rust owns the probe window and checks the complete
+  consumed slot range before pinning its module. C++ retains the D3D11 Present/Present1 target
+  call, fallible driver probe/query calls, foreign callback invocation, and the existing HDE and
+  MinHook route reconstruction. The unguarded original creation methods use an unwind-capable
+  SDK calling convention so the port does not turn a forwarded C++ exception into a Rust abort.
+- D3D12 method-entry forwarding, per-method reentry, SDK vtable offsets, attachment, debug
+  interface selection and DRED breadcrumb traversal are Rust-owned. The original calls preserve
+  their native return values and unwind behavior. Native guards still contain exceptions at
+  the same optional diagnostics and COM-proxy call sites. The public setup record is generated
+  from the observer header and has the original layout.
+- The capture and D3D12 platform headers were removed with their callback tables. No code
+  referenced `vtable_patch.h` after G02, so it was removed. The device ownership header now
+  contains a declaration and typed alias for callers.
+
+The first three Rust findings and both C++ fixtures remain closed. The ten closed inventory paths
+are the nine header paths above plus `runtime/graphics/src/vtable_patch.h`. The two still-open
+paths are `runtime/graphics/src/d3d11_observer.cpp` for guarded calls and the native route
+reconstruction, and `runtime/graphics/src/d3d12_observer.cpp` for guarded SDK calls. Existing
+runtime evidence for the D3D11 chain is in [Windows Present hook coexistence](windows-present-hook-coexistence.md).
+
+MSVC Windows SDK `/Zs /W4 /WX` accepted both observer translation units and both C fixtures.
+MinGW C11 warnings-as-errors accepted both C fixtures in syntax-only mode. Pinned Rust 1.94.1
+formatting, locked offline Cargo metadata and Git whitespace checks passed. Rust no-codegen
+source analysis included the observer modules and fixture source with external dependencies
+stubbed. The detour declarations also check their parameter and result types against the
+Windows SDK Rust vtable types in the real crate. No project build or fixture execution occurred.
+
+Both observer bindings were regenerated with bindgen 0.72.1 from the individual generator
+clauses. The unscoped generator stopped at the pre-existing D3D11 SR admission clause, whose
+clang include set could not resolve `rescaleframe/game_frame.h`. Its unrelated earlier outputs
+were restored.

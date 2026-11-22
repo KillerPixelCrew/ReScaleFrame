@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::d3d11_observer_abi::*;
 use crate::d3d11_observer_capture;
-use crate::d3d11_observer_hooks::rsf_core_observer11_installed;
+use crate::d3d11_observer_hooks::installed;
 use crate::scene_abi::rsf_observer_present_event as Event;
 use crate::sr_session::has_capacity;
 use std::cell::Cell;
@@ -13,15 +13,15 @@ type Layout = rsf_observer_layout_element;
 type Options = rsf_observer_options;
 
 #[repr(C)]
-struct TextureFacts {
-    width: u32,
-    height: u32,
-    format: u32,
-    mip_levels: u32,
-    array_size: u32,
-    sample_count: u32,
-    bind_flags: u32,
-    misc_flags: u32,
+pub(super) struct TextureFacts {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) format: u32,
+    pub(super) mip_levels: u32,
+    pub(super) array_size: u32,
+    pub(super) sample_count: u32,
+    pub(super) bind_flags: u32,
+    pub(super) misc_flags: u32,
 }
 
 #[repr(C)]
@@ -72,7 +72,7 @@ fn creation(run: impl FnOnce(&Registration)) {
         return;
     }
     let _serialized = CREATION.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(config) = snapshot().filter(|_| rsf_core_observer11_installed() != 0) else {
+    let Some(config) = snapshot().filter(|_| installed() != 0) else {
         return;
     };
     IN_CREATION.set(true);
@@ -157,12 +157,7 @@ unsafe extern "C" fn relay_log(_: Handle, text: *const c_char) {
 }
 
 // Creation callbacks are serialized, as required by d3d11_observer.h.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_texture_created(
-    device: Handle,
-    texture: Handle,
-    facts: &TextureFacts,
-) {
+pub(super) unsafe fn texture_created(device: Handle, texture: Handle, facts: &TextureFacts) {
     creation(|config| {
         let callback = config.options.on_texture;
         if callback.is_some() {
@@ -182,8 +177,7 @@ unsafe extern "C" fn rsf_core_observer11_texture_created(
     });
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_buffer_created(
+pub(super) unsafe fn buffer_created(
     device: Handle,
     buffer: Handle,
     initial: *const c_void,
@@ -208,13 +202,7 @@ unsafe extern "C" fn rsf_core_observer11_buffer_created(
     });
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_shader_created(
-    shader: Handle,
-    stage: u32,
-    bytes: *const c_void,
-    size: u32,
-) {
+pub(super) unsafe fn shader_created(shader: Handle, stage: u32, bytes: *const c_void, size: u32) {
     creation(|config| {
         if config.options.on_shader.is_some() {
             unsafe {
@@ -231,8 +219,7 @@ unsafe extern "C" fn rsf_core_observer11_shader_created(
     });
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_layout_created(
+pub(super) unsafe fn layout_created(
     layout: Handle,
     elements: *const Layout,
     copied: u32,

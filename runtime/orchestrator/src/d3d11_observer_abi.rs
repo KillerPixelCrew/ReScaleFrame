@@ -5,6 +5,13 @@ pub use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;
 use crate::scene_abi::rsf_observer_present_event;
 
 pub const RSF_OBSERVER_ABI_VERSION: u32 = 8;
+pub const RSF_OBSERVER_MAX_LAYOUT_ELEMENTS: u32 = 16;
+pub const RSF_OBSERVER_STAGE_VERTEX: u32 = 0;
+pub const RSF_OBSERVER_STAGE_PIXEL: u32 = 1;
+pub const RSF_OBSERVER_STAGE_GEOMETRY: u32 = 2;
+pub const RSF_OBSERVER_STAGE_HULL: u32 = 3;
+pub const RSF_OBSERVER_STAGE_DOMAIN: u32 = 4;
+pub const RSF_OBSERVER_STAGE_COMPUTE: u32 = 5;
 pub type rsf_dump_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
 >;

@@ -7,24 +7,14 @@ use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 mod attachment;
+mod detours;
 mod diagnostics;
 
 type Handle = *mut c_void;
 const KINDS: usize = 4;
 const CAPACITY: usize = 8;
 
-/// rsf_d3d12_observer_setup from d3d12_observer.h.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct ObserverSetup {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub user: Handle,
-    pub accept_window: Option<unsafe extern "C" fn(Handle, Handle) -> i32>,
-    pub submit: Option<unsafe extern "C" fn(Handle, Handle, u64, u32, *const Handle, u32)>,
-    pub present: Option<unsafe extern "C" fn(Handle, Handle, u32, u32, u32)>,
-    pub swapchain: Option<unsafe extern "C" fn(Handle, Handle, Handle, Handle)>,
-}
+pub(crate) use crate::d3d12_observer_abi::rsf_d3d12_observer_setup as ObserverSetup;
 
 // MinHook.h v1.3.4. The graphics target links the same MinHook instance as D3D11.
 unsafe extern "system" {
@@ -118,12 +108,7 @@ unsafe extern "C" fn rsf_d3d12_observer_create(
     0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer12_bind(
-    kind: u32,
-    target: Handle,
-    wrappers: &[Handle; CAPACITY],
-) -> i32 {
+unsafe fn bind(kind: u32, target: Handle, wrappers: &[Handle; CAPACITY]) -> i32 {
     let Some(bindings) = BINDINGS.get(kind as usize) else {
         return 0;
     };
@@ -160,15 +145,13 @@ unsafe extern "C" fn rsf_core_observer12_bind(
     0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_original(kind: u32, index: usize) -> Handle {
+fn original(kind: u32, index: usize) -> Handle {
     BINDINGS[kind as usize][index]
         .original
         .load(Ordering::Acquire)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_enter(kind: u32) -> i32 {
+fn enter(kind: u32) -> i32 {
     DEPTH.with(|depth| {
         let mut current = depth.get();
         let value = &mut current[kind as usize];
@@ -179,8 +162,7 @@ extern "C" fn rsf_core_observer12_enter(kind: u32) -> i32 {
     })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_leave(kind: u32) {
+fn leave(kind: u32) {
     DEPTH.with(|depth| {
         let mut current = depth.get();
         current[kind as usize] -= 1;
@@ -188,12 +170,7 @@ extern "C" fn rsf_core_observer12_leave(kind: u32) {
     });
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_submit_begin(
-    queue: Handle,
-    count: u32,
-    lists: *const Handle,
-) -> u64 {
+fn submit_begin(queue: Handle, count: u32, lists: *const Handle) -> u64 {
     OBSERVER.get().map_or(0, |owner| {
         let id = owner.serial.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         owner.notify_submit(queue, id, count, lists, 1);
@@ -201,20 +178,13 @@ extern "C" fn rsf_core_observer12_submit_begin(
     })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_submit_end(
-    queue: Handle,
-    id: u64,
-    count: u32,
-    lists: *const Handle,
-) {
+fn submit_end(queue: Handle, id: u64, count: u32, lists: *const Handle) {
     if let Some(owner) = OBSERVER.get() {
         owner.notify_submit(queue, id, count, lists, 0);
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_present(chain: Handle, interval: u32, flags: u32, begin: u32) {
+fn notify_present(chain: Handle, interval: u32, flags: u32, begin: u32) {
     if let Some(owner) = OBSERVER.get()
         && let Some(present) = owner.setup.present
     {

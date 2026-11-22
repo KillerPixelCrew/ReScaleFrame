@@ -1,22 +1,30 @@
 // SPDX-License-Identifier: MIT
-use super::{Handle, OBSERVER, Observer, diagnostics, rsf_core_observer12_present};
+use super::{Handle, OBSERVER, Observer, diagnostics, notify_present};
 use crate::com_ref::ComRef;
 use std::ptr;
+use windows::Win32::Graphics::Direct3D12::{
+    D3D12_COMMAND_LIST_TYPE_DIRECT, ID3D12CommandQueue, ID3D12CommandQueue_Vtbl, ID3D12Device,
+    ID3D12Device_Vtbl,
+};
+use windows::Win32::Graphics::Dxgi::{IDXGIFactory2, IDXGIFactory2_Vtbl, IDXGISwapChain_Vtbl};
+use windows::core::{GUID, Interface};
 
 const FACTORY: u32 = 0;
 const DEVICE: u32 = 1;
 const QUEUE: u32 = 2;
 const CHAIN: u32 = 3;
-const DIRECT: u32 = 0;
-const CREATE_SWAPCHAIN_FOR_HWND: usize = 15;
-const CREATE_COMMAND_QUEUE: usize = 8;
-const EXECUTE_COMMAND_LISTS: usize = 10;
-const PRESENT: usize = 8;
+const DIRECT: u32 = D3D12_COMMAND_LIST_TYPE_DIRECT.0 as u32;
+const CREATE_SWAPCHAIN_FOR_HWND: usize =
+    std::mem::offset_of!(IDXGIFactory2_Vtbl, CreateSwapChainForHwnd) / size_of::<Handle>();
+const CREATE_COMMAND_QUEUE: usize =
+    std::mem::offset_of!(ID3D12Device_Vtbl, CreateCommandQueue) / size_of::<Handle>();
+const EXECUTE_COMMAND_LISTS: usize =
+    std::mem::offset_of!(ID3D12CommandQueue_Vtbl, ExecuteCommandLists) / size_of::<Handle>();
+const PRESENT: usize = std::mem::offset_of!(IDXGISwapChain_Vtbl, Present) / size_of::<Handle>();
 
 pub(super) type Query = unsafe extern "C" fn(Handle, &mut Handle) -> i32;
 
-#[repr(C)]
-struct Platform {
+pub(super) struct Platform {
     query_factory: Query,
     query_device: Query,
     query_queue: Query,
@@ -26,7 +34,25 @@ struct Platform {
     describe_window: unsafe extern "C" fn(Handle, &mut Handle) -> i32,
 }
 
-const _: () = assert!(size_of::<Platform>() == 7 * size_of::<Handle>());
+unsafe extern "C" {
+    fn rsf_observer12_guard_query(object: Handle, iid: &GUID, out: &mut Handle) -> i32;
+    fn rsf_observer12_guard_queue_type(queue: Handle) -> u32;
+    fn rsf_observer12_guard_describe_window(chain: Handle, window: &mut Handle) -> i32;
+}
+
+pub(super) unsafe extern "C" fn query<T: Interface>(object: Handle, out: &mut Handle) -> i32 {
+    unsafe { rsf_observer12_guard_query(object, &T::IID, out) }
+}
+
+pub(super) const NATIVE: Platform = Platform {
+    query_factory: query::<IDXGIFactory2>,
+    query_device: query::<ID3D12Device>,
+    query_queue: query::<ID3D12CommandQueue>,
+    queue_type: rsf_observer12_guard_queue_type,
+    bind_interface: super::detours::bind_interface,
+    register_debug: diagnostics::register_debug,
+    describe_window: rsf_observer12_guard_describe_window,
+};
 
 pub(super) fn query_interface(query: Query, pointer: Handle) -> Option<ComRef> {
     if pointer.is_null() {
@@ -48,13 +74,7 @@ impl Platform {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_attach(
-    observer: *const Observer,
-    pointer: Handle,
-    kind: u32,
-    platform: &Platform,
-) -> i32 {
+fn attach(observer: *const Observer, pointer: Handle, kind: u32, platform: &Platform) -> i32 {
     if !OBSERVER.get().is_some_and(|owner| ptr::eq(owner, observer)) {
         return -1;
     }
@@ -76,9 +96,18 @@ extern "C" fn rsf_core_observer12_attach(
     }
 }
 
-/// The native CreateSwapChainForHwnd has returned. Its output is readable on success.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer12_factory_result(
+extern "C" fn rsf_d3d12_observer_device(observer: *const Observer, pointer: Handle) -> i32 {
+    attach(observer, pointer, DEVICE, &NATIVE)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_d3d12_observer_factory(observer: *const Observer, pointer: Handle) -> i32 {
+    attach(observer, pointer, FACTORY, &NATIVE)
+}
+
+/// The native CreateSwapChainForHwnd has returned. Its output is readable on success.
+pub(super) unsafe fn factory_result(
     platform: &Platform,
     result: i32,
     outer: u32,
@@ -117,12 +146,7 @@ fn observe_swapchain(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer12_device_result(
-    platform: &Platform,
-    result: i32,
-    queue: *const Handle,
-) {
+pub(super) unsafe fn device_result(platform: &Platform, result: i32, queue: *const Handle) {
     if result >= 0
         && let Some(&queue) = unsafe { queue.as_ref() }
         && let Some(queue) = platform.direct_queue(queue)
@@ -131,13 +155,7 @@ unsafe extern "C" fn rsf_core_observer12_device_result(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_present_begin(
-    platform: &Platform,
-    chain: Handle,
-    interval: u32,
-    flags: u32,
-) -> u32 {
+pub(super) fn present_begin(platform: &Platform, chain: Handle, interval: u32, flags: u32) -> u32 {
     let mut window = ptr::null_mut();
     if unsafe { (platform.describe_window)(chain, &mut window) } == 0
         || !OBSERVER
@@ -146,7 +164,7 @@ extern "C" fn rsf_core_observer12_present_begin(
     {
         return 0;
     }
-    rsf_core_observer12_present(chain, interval, flags, 1);
+    notify_present(chain, interval, flags, 1);
     1
 }
 

@@ -20,8 +20,4 @@ struct rsf_observer11_callbacks {
 extern "C" {
 int32_t rsf_core_observer11_logging(void);
 void rsf_core_observer11_log(const char*);
-void rsf_core_observer11_texture_created(void* device, void* texture, const rsf_observer11_texture_facts*);
-void rsf_core_observer11_buffer_created(void* device, void* buffer, const void* initial, uint32_t size, uint32_t flags);
-void rsf_core_observer11_shader_created(void* shader, uint32_t stage, const void* bytes, uint32_t size);
-void rsf_core_observer11_layout_created(void* layout, const rsf_observer_layout_element*, uint32_t copied, uint32_t count);
 }

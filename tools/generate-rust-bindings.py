@@ -482,7 +482,7 @@ generate("runtime/graphics/src/d3d11_observer_layout_abi.rs", "runtime/graphics/
          ["--no-recursive-allowlist", "--with-derive-default"])
 generate("runtime/orchestrator/src/d3d11_observer_abi.rs", "runtime/graphics/include/rescaleframe/d3d11_observer.h",
          "rsf_(observer_(options|status|(layout|shader|texture|buffer|present|present_event)_fn)|dump_log_fn)",
-         "RSF_OBSERVER_ABI_VERSION", ["-Iruntime/graphics/include"],
+         "RSF_OBSERVER_(ABI_VERSION|MAX_LAYOUT_ELEMENTS|STAGE_.*)", ["-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--raw-line", "pub use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;",
           "--raw-line", "use crate::scene_abi::rsf_observer_present_event;"])
 generate("games/ac7/src/motion_capture_graphics_abi.rs", "runtime/graphics/include/rescaleframe/frame_tap.h",
@@ -498,6 +498,9 @@ generate("games/ac7/src/motion_capture_graphics_abi.rs", "runtime/graphics/inclu
           "--blocklist-type", "rsf_(observer_layout_element|game_render_pass)",
           "--raw-line", "use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;",
           "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
+generate("runtime/orchestrator/src/d3d12_observer_abi.rs", "runtime/graphics/include/rescaleframe/d3d12_observer.h",
+         "rsf_d3d12_observer_setup", "NOTHING", [])
+
 generate("runtime/orchestrator/src/frame_tap_abi.rs", "runtime/graphics/src/frame_tap_platform.h",
          "rsf_frame_tap_.*", "RSF_FRAME_TAP_.*", ["-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
