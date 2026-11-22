@@ -1314,6 +1314,12 @@ hook launcher still exercises the production detour. Fixture execution and
 live verification remain open.
 [N04 reconciliation](research/rust-anomaly-motion-stage.md#reconciliation-from-89f6df5d)
 
+Anomaly's standalone foliage device driver and fake RTV2 binder case now run
+through Rust fixture code. The deployed motion fixture drivers share Rust
+D3D11 device admission and keep their existing native shader scenarios.
+Fixture execution remains open.
+[Independent fixture ports](research/rust-anomaly-motion-stage.md#independent-fixture-ports-from-f40a25d5)
+
 Anomaly now admits successful stock shader creation and reads its
 guarded interface and filename in Rust. The native detour still
 supplies its own return address and stack to the compiler-frame

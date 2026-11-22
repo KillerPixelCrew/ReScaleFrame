@@ -4,6 +4,8 @@
 //! The motion stage consumes guarded draw facts and borrows previous draw data
 //! through upload. The private C ABI also serves the native contract fixtures.
 
+#[cfg(all(windows, feature = "motion-device-fixture"))]
+mod device_fixture;
 mod foliage;
 #[cfg(all(windows, feature = "motion-hooks-fixture"))]
 mod hook_fixture;

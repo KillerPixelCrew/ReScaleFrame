@@ -348,3 +348,62 @@ admission, preserve N04's generated frame-target return and guarded draw
 helpers, and converge the C++ and Rust stage ABI to the resulting layout
 together. Keep the N04 removal of production motion fixture sources as well
 as the N05 engine-include source rename.
+
+### Independent fixture ports from f40a25d5
+
+The standalone foliage device fixture now has a Rust driver. The Python
+harness still uses FXC and the local licensed DXBC corpus to produce the same
+seven VS variants and flat/bump PS pairs. The Rust driver uses Windows SDK
+reflection for constant slots, packing and generated signature probes. It
+compares stream-output current and previous clip with the original shaders,
+checks both native MRTs and RGBA16F motion at texel (8,8), and retains the
+missing-history, missing/invalid foliage state and row-index cases. It tries
+hardware and then WARP, as the native fixture did. The Python harness builds
+the Windows x64 MSVC Cargo example in its temporary staging directory.
+
+The RTV2 binder case in the mixed CPU fixture now calls the production Rust
+binder directly. The fake cache uses the same RT/ZB/dirty offsets. The Rust
+case retains the native test cases for rebind, foreign targets, unavailable
+cache, write refusal and cleanup retry. It also covers both replacement-context
+results: a borrowed RTV blocks cleanup, and an empty original slot permits
+retirement. CTest still reaches it through the same contract case. The
+C++ virtual BinderHost and its two adapter files were removed.
+
+All three deployed motion devices now use Rust SDK admission before entering
+their existing fixture scenarios. The far and tessellation-chain drivers keep
+hardware-only admission with NVIDIA-first selection, feature level 11 and
+optional debug fallback. The core driver keeps its separate first NVIDIA
+or default hardware choice, retries without debug and then tries WARP. Rust
+returns owned COM references, which the C++ callers adopt in their existing
+ComPtrs. Compiler choice, fixture skip codes, deployed shader callers and
+the frame comparisons stay in the original drivers.
+
+New PORT source closures:
+
+- `games/anomaly/src/motion_target.cpp`
+- `games/anomaly/src/motion_target.h`
+- `tests/anomaly_foliage_shader_device.cpp`
+
+The four mixed fixtures remain open: `tests/anomaly_motion_contract.cpp`,
+`tests/anomaly_motion_device.cpp`, `tests/anomaly_motion_far_device.cpp` and
+`tests/anomaly_motion_tess_chain_device.cpp`. Their remaining code consumes
+the N05 manifest, reflection and loader facades, along with typed motion
+packers and device helpers. The fixture port in this change leaves those
+caller hunks intact.
+
+Remaining native inventory and source boundaries:
+
+| Paths | Remaining use |
+| --- | --- |
+| `motion_bridge.cpp`, `motion_constants.h`, `motion_history.h`, `motion_policy.h` | Mixed C++ fixtures still construct typed snapshots and byte spans, borrow previous history, and translate result flags across their Rust ABI. The Rust packing and policy owners are already in production. |
+| `motion_d3d11.cpp`, `motion_d3d11.h` | Typed COM compatibility surface for the deployed C++ drivers. The device and replay implementations already live in Rust. The replay template owns a C++ scope whose destructor restores state when the caller throws. |
+| `motion_foliage.cpp`, `motion_foliage.h` | Borrow native reflected stock layouts and carry the C++ fixture history inputs and finite-lifetime outputs. N05 is reconciling the reflection owner and live callers. |
+| `motion_profile.h` | Verified executable profile data is consumed by the shared build selection, compiler-frame fixture and Python evidence readers. Changing its source joins the N05 compiler-frame work. |
+| `motion_stage.cpp`, `motion_stage.h`, `motion_stage_platform.h` | The shader trampoline lends its original stack frame and the native draw guards preserve restoration across C++ unwind. N05 is reconciling the stage table and shader preparation. |
+| `tests/anomaly_motion_hooks_native.cpp` | The Rust driver already checks order and facts. The remaining launcher selects the real C++ detour, builds its PE-backed relocation target and creates the production RAII draw/context scopes. It remains an open native fixture path. |
+
+The source check compares the native fixture conditions against the Rust
+drivers and the installed windows 0.62.2 signatures. Pinned Rust formatting,
+unchanged scoped binder bindgen output, Python parsing, locked offline Windows
+Cargo metadata and whitespace checks were used. Build, link, fixture execution
+and visual or device acceptance are outside this source-only check.

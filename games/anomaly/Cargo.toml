@@ -11,6 +11,8 @@ crate-type = ["staticlib"]
 
 [features]
 motion-hooks-fixture = []
+motion-binder-fixture = []
+motion-device-fixture = ["windows/Win32_Graphics_Dxgi"]
 native-entry = []
 native-hook-fixture = []
 

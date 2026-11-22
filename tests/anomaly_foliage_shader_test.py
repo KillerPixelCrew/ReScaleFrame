@@ -248,12 +248,12 @@ class CompilerTests(unittest.TestCase):
 
 class DeviceTests(unittest.TestCase):
     def test_real_fxc_vertex_programs_execute_unchanged_current_and_previous_deformation(self):
-        cpp = REPO / "tests/anomaly_foliage_shader_device.cpp"
-        self.assertTrue(cpp.exists(), "real foliage device fixture is missing")
+        fixture = REPO / "games/anomaly/examples/anomaly_foliage_shader_device.rs"
+        self.assertTrue(fixture.exists(), "real foliage device fixture is missing")
         fxc = find_fxc()
-        compiler = shutil.which("g++")
-        if not fxc or not compiler or not SOURCE.exists():
-            self.skipTest("Windows D3D11 fixture requires FXC, g++ and licensed corpus")
+        cargo = shutil.which("cargo")
+        if os.name != "nt" or not fxc or not cargo or not SOURCE.exists():
+            self.skipTest("Windows D3D11 fixture requires FXC, Cargo and licensed corpus")
         staging = REPO / ".local/anomaly/staging"
         staging.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=staging, prefix="foliage-device-") as folder:
@@ -274,11 +274,14 @@ class DeviceTests(unittest.TestCase):
                 name = "deffer_base_" + kind + ".ps"
                 compile_shader(fxc, SOURCE, folder / ("pixel-" + kind + "-original"), name, "ps_5_0")
                 compile_shader(fxc, output, folder / ("pixel-" + kind + "-changed"), name, "ps_5_0")
-            exe = folder / "fixture.exe"
-            build = subprocess.run([compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-O2", "-static",
-                                    str(cpp), "-o", str(exe), "-ld3d11", "-ld3dcompiler", "-ldxguid"],
-                                   capture_output=True, text=True, timeout=120)
+            cargo_output = folder / "cargo"
+            target = "x86_64-pc-windows-msvc"
+            example = "anomaly_foliage_shader_device"
+            build = subprocess.run([cargo, "build", "--locked", "--release", "-p", "rsf-anomaly",
+                                    "--target", target, "--target-dir", str(cargo_output), "--example", example],
+                                   cwd=REPO, capture_output=True, text=True, timeout=300)
             self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            exe = cargo_output / target / "release/examples" / (example + ".exe")
             run = subprocess.run([str(exe), str(folder)], capture_output=True, text=True, timeout=90)
             (REPO / ".local/anomaly/foliage-device-report.txt").write_text(run.stdout + run.stderr)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)

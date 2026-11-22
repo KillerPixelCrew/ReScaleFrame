@@ -953,6 +953,8 @@ void draw_detail()
 }
 }
 
+extern "C" bool rsf_anomaly_motion_fixture_default(ID3D11Device**, ID3D11DeviceContext**, int32_t*) noexcept;
+
 int main()
 {
     try {
@@ -964,43 +966,12 @@ int main()
             std::printf("SKIP: no local motion deployment at %s (run tools/anomaly_motion_deploy.py)\n", deployment.string().c_str());
             return 77;
         }
-        D3D_FEATURE_LEVEL level{};
-        bool warp = false, debug = true;
-        // The NVIDIA adapter (vendor 0x10de) when present: adapter 0 on the hybrid laptop is the Intel iGPU.
-        ComPtr<IDXGIAdapter1> nvidia;
-        {
-            ComPtr<IDXGIFactory1> factory;
-            if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
-                for (UINT i = 0;; ++i) {
-                    ComPtr<IDXGIAdapter1> candidate;
-                    if (factory->EnumAdapters1(i, &candidate) == DXGI_ERROR_NOT_FOUND) break;
-                    DXGI_ADAPTER_DESC1 desc{};
-                    candidate->GetDesc1(&desc);
-                    if (desc.VendorId == 0x10de && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) { nvidia = candidate; break; }
-                }
+        int32_t level{};
+        if (!rsf_anomaly_motion_fixture_default(&device, &context, &level)) {
+            std::printf("SKIP: no D3D11 device\n");
+            return 77;
         }
-        const auto create = [&](UINT flags) {
-            return nvidia ? D3D11CreateDevice(nvidia.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION, &device,
-                                &level, &context)
-                          : D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0, D3D11_SDK_VERSION, &device,
-                                &level, &context);
-        };
-        HRESULT result = create(D3D11_CREATE_DEVICE_DEBUG);
-        if (FAILED(result)) {
-            debug = false;
-            result = create(0);
-        }
-        if (FAILED(result)) {
-            warp = true;
-            result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, &level, &context);
-        }
-        if (FAILED(result)) { std::printf("SKIP: no D3D11 device\n"); return 77; }
-        require(level >= D3D_FEATURE_LEVEL_11_0, "feature level 11");
-        ComPtr<IDXGIDevice> dxgi;
-        ComPtr<IDXGIAdapter> adapter;
-        DXGI_ADAPTER_DESC adapter_desc{};
-        if (SUCCEEDED(device.As(&dxgi)) && SUCCEEDED(dxgi->GetAdapter(&adapter))) adapter->GetDesc(&adapter_desc);
-        std::printf("device: %ls (%s, debug layer %s)\n", adapter_desc.Description, warp ? "WARP" : "hardware", debug ? "on" : "off");
+        require(level >= static_cast<int32_t>(D3D_FEATURE_LEVEL_11_0), "feature level 11");
         // The engine's compiler (motion_profile.h); RSF_ANOMALY_MOTION_COMPILER overrides it for experiments.
         wchar_t compiler_name[MAX_PATH] = L"d3dcompiler_43.dll";
         GetEnvironmentVariableW(L"RSF_ANOMALY_MOTION_COMPILER", compiler_name, MAX_PATH);

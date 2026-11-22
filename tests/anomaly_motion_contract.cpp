@@ -8,7 +8,6 @@
 #include "motion_history.h"
 #include "motion_policy.h"
 #include "motion_profile.h"
-#include "motion_target.h"
 #include "shader_loader.h"
 #include "shader_loader_platform.h"
 #include "sr_pass.h"
@@ -463,106 +462,11 @@ void history_rules()
     require(!h.begin_frame(ViewId::Main, 5, 1, 1280, 720), "older frame number restarts history");
 }
 
-// ---- RTV2 binder -----------------------------------------------------------------------------------------------
-struct FakeBackend {
-    std::array<std::byte, 0x1000> memory{};
-    static constexpr BackendLayout layout{0x578, 0x598, 0x980};
-    void* rt(int i) { void* v; std::memcpy(&v, memory.data() + 0x578 + i * 8, 8); return v; }
-    void set_rt(int i, void* v) { std::memcpy(memory.data() + 0x578 + i * 8, &v, 8); }
-    bool changed() { return memory[0x980] != std::byte{}; }
-    void set_changed(bool v) { memory[0x980] = std::byte{v}; }
-    void set_zb(void* v) { std::memcpy(memory.data() + 0x598, &v, 8); }
-    // CBackend::set_RT + ApplyRTandZB, as the engine does at a u_setrt.
-    void engine_bind(void* rt0, void* rt1, void* rt2) {
-        set_rt(0, rt0); set_rt(1, rt1); set_rt(2, rt2); set_changed(false);
-    }
-};
-struct FakeHost final : BinderHost {
-    FakeBackend* backend{};
-    int binds{}, clears{};
-    void* last[4]{};
-    void* last_depth{};
-    bool fail_write{};
-    const void* refused_address{};
-    bool read(const void* a, void* o, std::size_t s) noexcept override { std::memcpy(o, a, s); return true; }
-    bool write(void* a, const void* i, std::size_t s) noexcept override {
-        if (fail_write || a == refused_address) return false;
-        std::memcpy(a, i, s);
-        return true;
-    }
-    void set_targets(void* const (&t)[4], void* d) noexcept override { ++binds; std::memcpy(last, t, sizeof(last)); last_depth = d; }
-    void clear_targets() noexcept override { ++clears; }
-};
+extern "C" bool rsf_anomaly_motion_binder_fixture() noexcept;
+
 void binder_state_machine()
 {
-    FakeBackend engine;
-    FakeHost host;
-    MotionBinder binder(host, FakeBackend::layout);
-    auto* base = engine.memory.data();
-    void* const position = reinterpret_cast<void*>(0x1000), *color = reinterpret_cast<void*>(0x2000);
-    void* const motion = reinterpret_cast<void*>(0x3000), *zb = reinterpret_cast<void*>(0x4000), *other = reinterpret_cast<void*>(0x5000);
-    engine.set_zb(zb);
-    engine.engine_bind(position, color, nullptr);
-    require(binder.on_draw(base, true, position, motion) == BindAction::Bound, "first G-buffer draw binds");
-    require(engine.rt(2) == motion && !engine.changed(), "cache holds motion, clean");
-    require(host.binds == 1 && host.last[0] == position && host.last[1] == color && host.last[2] == motion && host.last_depth == zb,
-        "the same targets plus slot 2 are bound");
-    require(binder.on_draw(base, true, position, motion) == BindAction::AlreadyBound && host.binds == 1, "kept without a call");
-    // An engine bind inside the pass (u_setrt to the same G-buffer) drops slot 2; the next draw restores it.
-    engine.engine_bind(position, color, nullptr);
-    require(binder.on_draw(base, true, position, motion) == BindAction::Bound && host.binds == 2, "rebind after engine bind");
-    // A pass of another RT0 inside the window (occlusion queries) must not inherit the motion target.
-    engine.set_rt(0, other);
-    require(binder.on_draw(base, true, position, motion) == BindAction::Unbound && engine.rt(2) == nullptr &&
-        host.last[2] == nullptr && host.last[0] == other, "foreign RT0 unbinds");
-    require(binder.on_draw(base, true, position, motion) == BindAction::None, "nothing to do");
-    // A foreign slot-2 target is never replaced.
-    engine.engine_bind(position, color, other);
-    require(binder.on_draw(base, true, position, motion) == BindAction::Conflict && engine.rt(2) == other && !binder.motion_bound(),
-        "conflict");
-    // Not wanted (shadow pass, unusable target) while bound: removed.
-    engine.engine_bind(position, color, nullptr);
-    binder.on_draw(base, true, position, motion);
-    require(binder.on_draw(base, false, position, motion) == BindAction::Unbound && engine.rt(2) == nullptr, "unwanted unbinds");
-    // Window close outside a draw: drop from the cache like set_RT does.
-    binder.on_draw(base, true, position, motion);
-    const int clears = host.clears;
-    require(binder.close(nullptr, motion) == BindAction::Fault && engine.rt(2) == motion,
-        "unavailable cache cannot prove the borrowed RTV is clear");
-    FakeBackend foreign;
-    require(binder.close(foreign.memory.data(), motion) == BindAction::Fault &&
-        binder.cache_may_hold_motion() && engine.rt(2) == motion,
-        "an empty foreign cache cannot authorize retirement of the old target");
-    require(binder.close(base, motion) == BindAction::Unbound && engine.rt(2) == nullptr && engine.changed() &&
-        host.clears == clears + 1, "close dirties a clean cache and unbinds");
-    engine.engine_bind(position, color, nullptr);
-    binder.on_draw(base, true, position, motion);
-    engine.set_changed(true);
-    require(binder.close(base, motion) == BindAction::Unbound && host.clears == clears + 1, "already dirty: no extra unbind");
-    require(binder.close(base, motion) == BindAction::None, "close with nothing bound");
-    engine.engine_bind(position, color, nullptr);
-    host.fail_write = true;
-    require(binder.on_draw(base, true, position, motion) == BindAction::Fault && engine.rt(2) == nullptr, "write fault changes nothing");
-    host.fail_write = false;
-    host.refused_address = base + FakeBackend::layout.changed_offset;
-    engine.set_changed(true);
-    const int binds = host.binds;
-    require(binder.on_draw(base, true, position, motion) == BindAction::Fault && engine.rt(2) == nullptr &&
-        engine.changed() && host.binds == binds, "a refused dirty-byte write leaves the target slot untouched");
-    host.refused_address = base + FakeBackend::layout.rt_offset + 2 * sizeof(void*);
-    require(binder.on_draw(base, true, position, motion) == BindAction::Fault && engine.rt(2) == nullptr &&
-        engine.changed() && host.binds == binds, "a refused slot restores the previous dirty byte");
-    host.refused_address = nullptr;
-    require(binder.on_draw(base, true, position, motion) == BindAction::Bound, "retry binds after the fault clears");
-    host.refused_address = base + FakeBackend::layout.changed_offset;
-    const int previous_clears = host.clears;
-    require(binder.close(base, motion) == BindAction::Fault && engine.rt(2) == motion &&
-        !engine.changed() && host.clears == previous_clears && binder.cache_may_hold_motion(),
-        "refused close keeps the old target visible to cleanup");
-    host.refused_address = nullptr;
-    require(binder.close(base, motion) == BindAction::Unbound && engine.rt(2) == nullptr &&
-        engine.changed() && !binder.cache_may_hold_motion() && host.clears == previous_clears + 1,
-        "close retry invalidates the cache and clears the old targets");
+    require(rsf_anomaly_motion_binder_fixture(), "Rust RTV2 binder contract");
 }
 
 // ---- shader loader ---------------------------------------------------------------------------------------------

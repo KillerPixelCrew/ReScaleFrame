@@ -679,29 +679,11 @@ void run(const Case& c)
     }
 }
 
+extern "C" bool rsf_anomaly_motion_fixture_hardware(bool, ID3D11Device**, ID3D11DeviceContext**, bool*) noexcept;
+
 bool create_device()
 {
-    ComPtr<IDXGIFactory1> factory;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return false;
-    // The NVIDIA adapter (the game's GPU on this machine), else the first hardware adapter.
-    for (const UINT want : {0x10deu, 0u})
-        for (const UINT flags : {std::getenv("RSF_TESS_NODEBUG") ? 0u : UINT(D3D11_CREATE_DEVICE_DEBUG), 0u})
-            for (UINT i = 0;; ++i) {
-                ComPtr<IDXGIAdapter1> adapter;
-                if (factory->EnumAdapters1(i, &adapter) == DXGI_ERROR_NOT_FOUND) break;
-                DXGI_ADAPTER_DESC1 desc{};
-                adapter->GetDesc1(&desc);
-                if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || (want && desc.VendorId != want)) continue;
-                const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
-                if (SUCCEEDED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags, &level, 1, D3D11_SDK_VERSION,
-                        &device, nullptr, &context))) {
-                    debug_layer = flags != 0;
-                    std::printf("device: %ls (vendor 0x%04x, debug layer %s)%s\n", desc.Description, desc.VendorId,
-                        debug_layer ? "on" : "off", want ? "" : " -- no NVIDIA adapter, first hardware adapter used");
-                    return true;
-                }
-            }
-    return false;
+    return rsf_anomaly_motion_fixture_hardware(!std::getenv("RSF_TESS_NODEBUG"), &device, &context, &debug_layer);
 }
 bool has_tess_roots(const Manifest& manifest)
 {

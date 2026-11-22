@@ -10,6 +10,9 @@ use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::ptr;
 
+#[cfg(feature = "motion-binder-fixture")]
+mod fixture;
+
 type Target = *mut c_void;
 
 #[repr(C)]
