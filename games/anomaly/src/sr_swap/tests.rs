@@ -402,7 +402,7 @@ impl Case {
             set_mip_bias: Some(set_mip_bias),
             correct_position_constant: Some(correct_position_constant),
         };
-        let swap = unsafe { rsf_anomaly_swap_create(Some(&layout()), Some(&platform)) };
+        let swap = rsf_anomaly_swap_create(Some(&layout()), Some(&platform));
         assert!(!swap.is_null());
         unsafe { (*host).published = rsf_anomaly_swap_view_of(swap) };
         let case = Self {
@@ -987,11 +987,10 @@ fn layout_and_platform_are_checked_at_creation() {
         read: Some(read),
         ..Platform::default()
     };
-    unsafe {
-        assert!(rsf_anomaly_swap_create(Some(&short), Some(&platform)).is_null());
-        assert!(rsf_anomaly_swap_create(Some(&layout()), Some(&platform)).is_null());
-        assert!(rsf_anomaly_swap_create(None, None).is_null());
-    }
+    assert!(rsf_anomaly_swap_create(Some(&short), Some(&platform)).is_null());
+    assert!(rsf_anomaly_swap_create(Some(&layout()), Some(&platform)).is_null());
+    assert!(rsf_anomaly_swap_create_scoped(Some(&layout()), Some(&platform)).is_null());
+    assert!(rsf_anomaly_swap_create(None, None).is_null());
     assert!(!rsf_anomaly_swap_prepare(null_mut(), Some(&c.facts())));
     let name = |text: *const c_char| unsafe { CStr::from_ptr(text) }.to_bytes();
     assert_eq!(

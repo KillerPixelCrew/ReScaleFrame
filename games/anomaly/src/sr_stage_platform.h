@@ -263,7 +263,7 @@ typedef struct rsf_anomaly_sr_stage_platform {
     bool (*motion_target)(rsf_anomaly_sr_motion_target*);
     void* (*create_motion_view)(void* device, void* texture);   // an owned reference or null
     void* (*depth_texture)(void);   // borrowed by the seam
-    // TemporalDriver (sr_temporal.h).
+    // Rust temporal owner. The production registration fills these slots and synthetic fixtures can supply fakes.
     bool (*driver_bind)(void);
     bool (*driver_enabled)(void);
     uint32_t (*driver_output_format)(void);
@@ -296,6 +296,8 @@ typedef struct rsf_anomaly_sr_stage_platform {
     // An accepted configuration: the log the D3D11 host reports through and, for Stages 4 and 5, the TemporalDriver
     // options (null otherwise).
     void (*configured)(rsf_anomaly_sr_log log, void* user, const rsf_anomaly_sr_driver_config* driver);
+    // Calls a native log sink without letting a C++ exception cross into Rust.
+    void (*guarded_log)(rsf_anomaly_sr_log log, void* user, const char* message);
 } rsf_anomaly_sr_stage_platform;
 
 // Live panel options, in registration order (sr_stage.rs registers them with the overlay service).

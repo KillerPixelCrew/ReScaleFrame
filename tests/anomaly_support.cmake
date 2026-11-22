@@ -64,15 +64,15 @@ add_test(NAME anomaly_sr_swap_contract COMMAND rsf_anomaly_sr_swap_test)
 add_test(NAME anomaly_sr_swap_unknown_selection COMMAND rsf_anomaly_sr_swap_test unknown-case)
 set_tests_properties(anomaly_sr_swap_unknown_selection PROPERTIES WILL_FAIL TRUE)
 add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hook_bridge.cpp"
-    "${RSF_ANOMALY_SR_SRC}/sr_stage.cpp" "${RSF_ANOMALY_SR_SRC}/sr_swap.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp"
+    "${RSF_ANOMALY_SR_SRC}/sr_stage.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp"
     "${RSF_ANOMALY_SR_SRC}/native_observer_platform.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon
-    ReScaleFrame::Graphics rsf_anomaly_sr_shaders minhook d3d11 rsf_build_options)
+    ReScaleFrame::Graphics minhook d3d11 rsf_build_options)
 add_test(NAME anomaly_sr_hooks_contract COMMAND rsf_anomaly_sr_hooks_test)
 add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
 target_include_directories(rsf_anomaly_sr_roundtrip_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection anomaly_sr_hooks_contract
@@ -173,8 +173,7 @@ add_test(NAME anomaly_sr_jitter_unknown_selection COMMAND rsf_anomaly_sr_jitter_
 set_tests_properties(anomaly_sr_jitter_unknown_selection PROPERTIES WILL_FAIL TRUE)
 add_executable(rsf_anomaly_sr_jitter_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter_device.cpp")
 target_include_directories(rsf_anomaly_sr_jitter_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_compile_definitions(rsf_anomaly_sr_jitter_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_sr_jitter_device_test PRIVATE rsf_anomaly_motion_bridge d3d11 d3dcompiler dxgi dxguid rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_jitter_device_test PRIVATE rsf_anomaly_sr_fixture_rust d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_jitter_device COMMAND rsf_anomaly_sr_jitter_device_test)
 set_tests_properties(anomaly_sr_jitter_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_jitter_contract anomaly_sr_jitter_unknown_selection anomaly_sr_jitter_device PROPERTIES TIMEOUT 120)
@@ -196,7 +195,7 @@ foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_d
     else()
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.cpp"
             "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
-        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_temporal rsf_anomaly_rust ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi d3dcompiler)
+        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_temporal rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics d3d11 dxgi d3dcompiler)
     endif()
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
         "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
@@ -240,8 +239,6 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/fidelity
 endif()
 set_tests_properties(anomaly_sr_runtime_api_contract
     anomaly_sr_temporal_device PROPERTIES TIMEOUT 120)
-# Stage 5 is part of sr_stage.cpp, which the hooks contract links.
-target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_sr_temporal)
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
 
 # Profile-dependent fixtures once more against the AVX executable's tables (build_profile.h selects them by name and

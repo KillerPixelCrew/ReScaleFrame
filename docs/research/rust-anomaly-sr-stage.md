@@ -443,3 +443,30 @@ against the local MSVC STL, which requires Clang 22. MSVC `/Zs /W4 /WX`
 then accepted the seven touched C++ translation units. Locked offline
 Windows Cargo metadata and Git whitespace checks passed. These are source
 checks. Builds, links, fixtures and device execution remain pending.
+
+## N06 and N07 follow-up from 0251a81a
+
+This source pass reused the live stage checkpoint at `277f8ac2`, the swap
+rollback checkpoint at `529ec7ab` and the input restoration fixture at
+`518e2511`. Section 12 of [the SR seam record](anomaly-sr-seam.md) supplies
+the prepare, evaluation and reinsertion order. Section 11 supplies the H1
+and S-B projection convention and the separate first-person and sun-camera
+transactions. Both executable profile tables, their compile-time proof in
+`tests/anomaly_sr_profile.cpp`, and the input fixture sources match
+`0251a81a` byte for byte.
+
+| Path | Source evidence |
+| --- | --- |
+| `games/anomaly/src/sr_stage.cpp`, `sr_stage.rs`, `sr_stage_platform.h`, `sr_stage_abi.rs`, `sr_temporal/stage_bridge.rs`, `sr_temporal.rs` | Stage registration fills the temporal callbacks in Rust. Device and context borrows still come from the verified engine globals. Evaluation passes the same sequence and camera-cut facts. The stage lock still serializes render operations. The platform ends with one C++ exception guard for foreign log sinks. Native original-call ordering and the sun-camera destructor are unchanged. |
+| `games/anomaly/src/sr_swap.cpp`, `sr_swap_layout.h`, `sr_swap_platform.h`, `sr_swap.rs`, `sr_swap/tests.rs` | Production uses a scoped swap handle with no legacy seam callbacks. The native swap fixture still uses its own seam callbacks and the same constexpr layout. Pending restore readback, target-chain checks and twin retention at H1 and quiesce are the same Rust paths as in `529ec7ab`. |
+| `games/anomaly/src/sr_d3d11.cpp`, `sr_d3d11.h`, `sr_d3d11_platform.h`, `sr_d3d11/native.rs` | Rust embeds the same checked-in SR shaders, loads System32 d3dcompiler_47, compiles the same entry/profile and creates the typed D3D11 shader. A native callback catches log exceptions and signals a fatal compile outcome. The shared graphics state snapshot and its restoration semantics are preserved. |
+| `games/anomaly/src/sr_stage/jitter_device.rs`, `games/anomaly/src/motion.rs`, `tests/anomaly_sr_jitter_device.cpp` | Rust runs the hardware-first, WARP-last fixture against the unmodified core motion writer. It checks all covered pixels over 18 measured frames, the no-jitter-b13 control, pan preservation and debug-layer errors. Projection uses the production row-vector jitter and b13 uses the existing motion packer. `tests/anomaly_sr_jitter_reference.h` still holds the independent native oracle. |
+| `games/anomaly/src/sr_fixture_device.rs`, `sr_fixture_readback.rs`, `tests/anomaly_sr_readback.h`, `tests/anomaly_sr_roundtrip.cpp`, `tests/anomaly_sr_temporal_device.cpp` | Rust handles actual DXGI/D3D11 adapter and device acquisition for all three fixtures and staging readback for the D24S8 and R24G8 round-trip samples. Round-trip retries WARP with and without the debug layer. Temporal checks prefer NVIDIA hardware with the existing hardware-only fallback. GPU scenario bodies, state and provider assertions remain in their native fixtures. |
+| `games/anomaly/CMakeLists.txt`, `games/anomaly/Cargo.toml`, `games/anomaly/src/lib.rs`, `tests/anomaly_support.cmake` | The game DLL no longer links the native swap or temporal facades. The existing CTest entries still register both profiles and the jitter, swap, round-trip, temporal, provider and input checks. |
+
+Pinned Rust 1.94.1 formatting, bindgen 0.72.1 stage and swap regeneration,
+locked offline metadata for Windows x64 and Git whitespace checks passed.
+The native swap and temporal planning scenario bodies, native round-trip
+and temporal device scenario bodies, and production engine and graphics
+forwarding still need review for any further Rust migration. This pass did
+not compile, link, run fixtures or use a game or device.

@@ -23,7 +23,7 @@ motion-binder-fixture = []
 motion-device-fixture = ["windows/Win32_Graphics_Dxgi"]
 native-entry = []
 native-hook-fixture = []
-sr-fixtures = []
+sr-fixtures = ["windows/Win32_Graphics_Dxgi"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }

@@ -8,7 +8,7 @@ use windows::core::Interface;
 // The native device fixtures lend the source and context and allocate the
 // destination. No mapped storage or owned COM reference crosses this call.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_fixture_readback(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_fixture_readback(
     device: *mut c_void,
     context: *mut c_void,
     source: *mut c_void,
@@ -31,7 +31,10 @@ unsafe extern "C" fn rsf_anomaly_sr_fixture_readback(
         return false;
     }
     let texel_bytes = match desc.Format {
-        DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R16G16_FLOAT => 4,
+        DXGI_FORMAT_R8G8B8A8_UNORM
+        | DXGI_FORMAT_R16G16_FLOAT
+        | DXGI_FORMAT_D24_UNORM_S8_UINT
+        | DXGI_FORMAT_R24G8_TYPELESS => 4,
         DXGI_FORMAT_R32G32_FLOAT | DXGI_FORMAT_R16G16B16A16_FLOAT => 8,
         _ => return false,
     };

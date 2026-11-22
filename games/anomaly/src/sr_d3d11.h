@@ -171,6 +171,4 @@ private:
 void set_full_viewport(ID3D11DeviceContext*, uint32_t width, uint32_t height) noexcept;
 
 // The embedded RSF-authored HLSL (games/anomaly/shaders/sr/).
-const char* round_trip_source() noexcept;
-const char* upscale_source() noexcept;
 }

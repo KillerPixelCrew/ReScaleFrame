@@ -106,6 +106,8 @@ void rsf_anomaly_sr_describe_view(void*, uint32_t, rsf_sr_view*) noexcept;
 uint32_t rsf_anomaly_sr_format_support(void*, uint32_t) noexcept;
 void* rsf_anomaly_sr_texture(void*, const rsf_sr_texture*, const void*, uint32_t) noexcept;
 void* rsf_anomaly_sr_view(void*, void*, uint32_t, const rsf_sr_view*) noexcept;
+int32_t rsf_anomaly_sr_compile_shader(void*, uint32_t, uint32_t, const char*,
+    bool (*)(void*, const char*), void*, void**) noexcept;
 void* rsf_anomaly_sr_constant_buffer(void*) noexcept;
 void* rsf_anomaly_sr_raster_state(void*) noexcept;
 void* rsf_anomaly_sr_blend_state(void*) noexcept;

@@ -68,6 +68,8 @@ mod shader_family;
 #[cfg(windows)]
 mod shader_loader;
 mod sr_d3d11;
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod sr_fixture_device;
 #[cfg(windows)]
 mod sr_fixture_readback;
 #[path = "../../../tests/anomaly_sr_jitter_fixture.rs"]

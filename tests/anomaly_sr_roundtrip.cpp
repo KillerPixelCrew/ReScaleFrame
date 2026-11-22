@@ -14,6 +14,7 @@
 // This proves the passes and their numerics, not the in-game swap.
 #include "sr_d3d11.h"
 #include "sr_tonemap.h"
+#include "anomaly_sr_readback.h"
 #include <rescaleframe/shader_compile.h>
 
 #include <d3d11sdklayers.h>
@@ -48,25 +49,13 @@ struct Device {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     ComPtr<ID3D11InfoQueue> info;
-    bool debug{};
     bool create() {
-        const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0};
-        for (const auto type : {D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP}) {
-            for (const UINT flags : {UINT(D3D11_CREATE_DEVICE_DEBUG), 0u}) {
-                if (SUCCEEDED(D3D11CreateDevice(nullptr, type, nullptr, flags, levels, 1, D3D11_SDK_VERSION, &device, nullptr, &context))) {
-                    debug = flags != 0;
-                    if (debug) device.As(&info);
-                    ComPtr<IDXGIDevice> dxgi;
-                    ComPtr<IDXGIAdapter> adapter;
-                    DXGI_ADAPTER_DESC desc{};
-                    if (SUCCEEDED(device.As(&dxgi)) && SUCCEEDED(dxgi->GetAdapter(&adapter))) adapter->GetDesc(&desc);
-                    std::printf("device: %ls (%s, debug layer %s)\n", desc.Description,
-                        type == D3D_DRIVER_TYPE_HARDWARE ? "hardware" : "WARP", debug ? "on" : "unavailable");
-                    return true;
-                }
-            }
-        }
-        return false;
+        void *dev{}, *ctx{}, *queue{};
+        if (!rsf_anomaly_sr_fixture_device(false, 0, true, &dev, &ctx, &queue)) return false;
+        device.Attach(static_cast<ID3D11Device*>(dev));
+        context.Attach(static_cast<ID3D11DeviceContext*>(ctx));
+        info.Attach(static_cast<ID3D11InfoQueue*>(queue));
+        return true;
     }
     UINT64 errors() {
         if (!info) return 0;
@@ -95,17 +84,14 @@ ComPtr<ID3D11Texture2D> texture(ID3D11Device* device, uint32_t w, uint32_t h, DX
     device->CreateTexture2D(&desc, data ? &initial : nullptr, &result);
     return result;
 }
-std::vector<uint8_t> read_rgba8(Device& d, ID3D11Texture2D* source, uint32_t w, uint32_t h) {
-    D3D11_TEXTURE2D_DESC desc{w, h, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0};
-    ComPtr<ID3D11Texture2D> staging;
-    std::vector<uint8_t> pixels(size_t(w) * h * 4);
-    if (FAILED(d.device->CreateTexture2D(&desc, nullptr, &staging))) return {};
-    d.context->CopyResource(staging.Get(), source);
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(d.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return {};
-    for (uint32_t y = 0; y < h; ++y) std::memcpy(&pixels[size_t(y) * w * 4], static_cast<uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch, size_t(w) * 4);
-    d.context->Unmap(staging.Get(), 0);
-    return pixels;
+std::vector<uint8_t> read_raw(Device& d, ID3D11Texture2D* source, DXGI_FORMAT format, uint32_t w, uint32_t h, uint32_t texel) {
+    if (!source) return {};
+    D3D11_TEXTURE2D_DESC desc{};
+    source->GetDesc(&desc);
+    if (desc.Width != w || desc.Height != h || desc.Format != format) return {};
+    std::vector<uint8_t> bytes(size_t(w) * h * texel);
+    if (!rsf_anomaly_sr_fixture_readback(d.device.Get(), d.context.Get(), source, nullptr, bytes.data(), bytes.size())) return {};
+    return bytes;
 }
 // Runs the pass on an FP16 source given as half bit patterns (4 per pixel) and returns the UNORM8 output.
 std::vector<uint8_t> run_pass(Device& d, RoundTripPass& pass, std::span<const uint16_t> halves, uint32_t w, uint32_t h,
@@ -120,7 +106,7 @@ std::vector<uint8_t> run_pass(Device& d, RoundTripPass& pass, std::span<const ui
     const float clear[4]{0.25f, 0.5f, 0.75f, 1};
     d.context->ClearRenderTargetView(rtv.Get(), clear);
     if (!pass.run(d.context.Get(), srv.Get(), w, h, rtv.Get(), out_w, out_h)) return {};
-    return read_rgba8(d, target.Get(), out_w, out_h);
+    return read_raw(d, target.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, out_w, out_h, 4);
 }
 
 struct RoundTripRig { Device& device; RoundTripPass& pass; };
@@ -249,19 +235,6 @@ void debug_layer(Device& d, RoundTripPass& pass) {
 }
 
 // ---- Stage 2: seam upscale pass, world twins and the depth twin ---------------------------------------------------
-std::vector<uint8_t> read_raw(Device& d, ID3D11Texture2D* source, DXGI_FORMAT format, uint32_t w, uint32_t h, uint32_t texel) {
-    D3D11_TEXTURE2D_DESC desc{w, h, 1, 1, format, {1, 0}, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0};
-    ComPtr<ID3D11Texture2D> staging;
-    std::vector<uint8_t> bytes(size_t(w) * h * texel);
-    if (FAILED(d.device->CreateTexture2D(&desc, nullptr, &staging))) return {};
-    d.context->CopyResource(staging.Get(), source);
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(d.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return {};
-    for (uint32_t y = 0; y < h; ++y)
-        std::memcpy(&bytes[size_t(y) * w * texel], static_cast<uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch, size_t(w) * texel);
-    d.context->Unmap(staging.Get(), 0);
-    return bytes;
-}
 template<class T> T at(const std::vector<uint8_t>& bytes, size_t index) { T value; std::memcpy(&value, &bytes[index * sizeof(T)], sizeof(T)); return value; }
 
 // Render-size inputs and output-size engine targets, as the seam sees them.

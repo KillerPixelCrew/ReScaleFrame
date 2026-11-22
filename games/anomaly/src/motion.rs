@@ -791,13 +791,13 @@ unsafe extern "C" fn rsf_anomaly_motion_pack_detail(
 }
 
 #[repr(C)]
-struct PixelInputs {
-    viewport: [f32; 4],
-    jitter: [f32; 4],
+pub(crate) struct PixelInputs {
+    pub(crate) viewport: [f32; 4],
+    pub(crate) jitter: [f32; 4],
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_pack_pixel(
+pub(crate) extern "C" fn rsf_anomaly_motion_pack_pixel(
     input: &PixelInputs,
     out: &mut MaybeUninit<[u8; PIXEL_BYTES]>,
 ) -> bool {

@@ -2,7 +2,7 @@
 // Native leaves of the SR stage driver. sr_stage.rs owns the lifecycle, view admission, the H1 and seam ordering,
 // jitter and camera publication, capture and burst bookkeeping, the configuration (INI path, vendor directories, live
 // panel options) and status (sr_stage_platform.h). This file keeps the guarded engine reads, the stage hooks and
-// trampolines, the SwapController with its D3D11 host, and the TemporalDriver facade.
+// trampolines, and the guarded engine and graphics callbacks for the Rust swap owner.
 #include "sr_stage.h"
 #include "sr_stage_platform.h"
 #include "engine_slots.h"
@@ -14,8 +14,8 @@
 #include "sr_d3d11.h"
 #include "build_profile.h"
 #include "sr_jitter.h"
-#include "sr_swap.h"
-#include "sr_temporal.h"
+#include "sr_pass.h"
+#include "sr_swap_layout.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/overlay_api.h>
@@ -83,7 +83,6 @@ static_assert(sizeof(SrGuardProfile) == 120 && offsetof(SrGuardProfile, unique) 
 extern "C" const char* rsf_anomaly_sr_guard_failure(const rsf_anomaly_guard_image*,
     const SrGuardProfile*, bool world_window, bool temporal) noexcept;
 
-static_assert(static_cast<uint8_t>(Refusal::Prepare) == 2 && static_cast<uint8_t>(Refusal::Reinsert) == 5);
 static_assert(DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && RSF_DUMP_VIEW_HDR == 3 && RSF_DUMP_VIEW_DEPTH == 4 &&
     RSF_DUMP_VIEW_DENSE_MOTION == 7 && RSF_PHASE_RENDER_SUBMIT == 2 && RSF_SCREEN_UNKNOWN == 0);
 namespace {
@@ -145,7 +144,7 @@ const rsf_anomaly_position_platform position_constants{
 static_assert(D3D11_DEVICE_CONTEXT_IMMEDIATE == 0 && D3D11_USAGE_STAGING == 3 && D3D11_CPU_ACCESS_READ == 0x20000);
 static_assert(sizeof(rsf_anomaly_sr_frame_reads) == 168 && offsetof(rsf_anomaly_sr_frame_reads, render_view) == 152);
 static_assert(static_cast<uint32_t>(temporal::ViewId::Scope) == 1 && dx10_msaa_bit == (1u << 14));
-static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 600 &&
+static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 608 &&
     offsetof(rsf_anomaly_sr_stage_platform, immediate_context) == 280 &&
     offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 328 && offsetof(rsf_anomaly_sr_stage_platform, draw_pass) == 336);
 static_assert(first_person_depth_limit == 0.02f && RSF_SR_ROUND_TRIP == 0 && RSF_SR_UPSCALE == 1 &&
@@ -159,20 +158,20 @@ struct TwinLog {
     }
 };
 
-struct Host final : SwapHost {
+struct Host {
     rsf_sr_stage_resources* resources{};
-    const TwinLog* twin_log{}; // borrowed only while controller.prepare() runs
+    const TwinLog* twin_log{}; // borrowed only while the swap owner prepares the frame
     Host() = default;
     Host(const Host&) = delete;
     Host& operator=(const Host&) = delete;
     ~Host() { rsf_anomaly_sr_stage_drop_resources(resources); }
     const rsf_sr_pass* pass() const noexcept { return rsf_anomaly_sr_stage_pass(resources); }
     void* depth_texture() const noexcept { return rsf_anomaly_sr_stage_depth(resources); }
-    bool read(const void* address, void* output, std::size_t size) noexcept override { return guarded_copy(output, address, size); }
-    bool write(void* address, const void* input, std::size_t size) noexcept override { return guarded_copy(address, input, size); }
+    bool read(const void* address, void* output, std::size_t size) noexcept { return guarded_copy(output, address, size); }
+    bool write(void* address, const void* input, std::size_t size) noexcept { return guarded_copy(address, input, size); }
     ID3D11Device* device() noexcept { ID3D11Device* value{}; return read_global(srp().hw_device_rva, value) ? value : nullptr; }
     ID3D11DeviceContext* context() noexcept { ID3D11DeviceContext* value{}; return read_global(srp().hw_context_rva, value) ? value : nullptr; }
-    MakeResult make_twins(const TwinRequest& request, TwinSet& out) noexcept override {
+    MakeResult make_twins(const TwinRequest& request, TwinSet& out) noexcept {
         const auto log = twin_log ? *twin_log : TwinLog{};
         auto* d3d = device();
         if (!d3d) { log.say("Anomaly SR stage: HW.pDevice is null; twins not created."); return MakeResult::Failed; }
@@ -213,19 +212,15 @@ struct Host final : SwapHost {
         log.say(text);
         return MakeResult::Created;
     }
-    void drop_twins() noexcept override {
+    void drop_twins() noexcept {
         // Reference counts after our own views are gone. The engine's surface_get() before its generic_temp copy
         // takes references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
         rsf_anomaly_sr_stage_retire_twins(resources, rsf_anomaly_sr_twin_refs);
     }
-    // Production supplies the scoped Rust operation to the swap owner. These
-    // virtual slots are for native callers of the legacy fixture seam.
-    bool round_trip(const TargetFields&, const TargetFields&) noexcept override { return false; }
-    bool upscale(const UpscaleInputs&) noexcept override { return false; }
-    void set_viewport(uint32_t width, uint32_t height) noexcept override { set_full_viewport(context(), width, height); }
-    bool upload_projection(const void* matrix) noexcept override { return call_set_projection(matrix); }
-    bool set_mip_bias(float value) noexcept override { return call_set_mip_bias(value); }
-    uint32_t correct_position_constant(void* constant, float x, float y) noexcept override {
+    void set_viewport(uint32_t width, uint32_t height) noexcept { set_full_viewport(context(), width, height); }
+    bool upload_projection(const void* matrix) noexcept { return call_set_projection(matrix); }
+    bool set_mip_bias(float value) noexcept { return call_set_mip_bias(value); }
+    uint32_t correct_position_constant(void* constant, float x, float y) noexcept {
         return rsf_anomaly_sr_correct_position_constant(&position_layout, &position_constants,
             reinterpret_cast<uintptr_t>(constant), x, y);
     }
@@ -234,9 +229,31 @@ struct Host final : SwapHost {
 // ---- process state --------------------------------------------------------------------------------------------
 // The leaf objects below are used under the Rust stage lock (the callbacks run inside its calls).
 Host host;
-SwapController controller{host};
+const rsf_anomaly_swap_platform swap_platform{
+    .user = &host,
+    .read = [](void*, const void* from, void* to, size_t size) { return host.read(from, to, size); },
+    .write = [](void*, void* to, const void* from, size_t size) { return host.write(to, from, size); },
+    .make_twins = [](void*, const TwinRequest* request, TwinSet* twins) {
+        return static_cast<uint32_t>(host.make_twins(*request, *twins));
+    },
+    .drop_twins = [](void*) { host.drop_twins(); },
+    // The production seam passes a scoped operation directly to the Rust owner.
+    .round_trip = nullptr,
+    .upscale = nullptr,
+    .set_viewport = [](void*, uint32_t width, uint32_t height) { host.set_viewport(width, height); },
+    .upload_projection = [](void*, const void* matrix) { return host.upload_projection(matrix); },
+    .set_mip_bias = [](void*, float value) { return host.set_mip_bias(value); },
+    .correct_position_constant = [](void*, void* constant, float x, float y) {
+        return host.correct_position_constant(constant, x, y);
+    },
+};
+struct SwapOwner {
+    rsf_anomaly_swap* state = rsf_anomaly_swap_create_scoped(&verified_layout, &swap_platform);
+    ~SwapOwner() { rsf_anomaly_swap_destroy(state); }
+};
+SwapOwner swap;
+constexpr rsf_anomaly_swap_view unavailable{.refusal = "The SR swap owner could not be created."};
 HookSet hooks;
-TemporalDriver driver;
 
 std::array<void*, 5> originals{};
 using Unary = void(__fastcall*)(void*);
@@ -364,31 +381,34 @@ const rsf_anomaly_sr_stage_platform platform{
     },
     .geometry_active = [] { return geometry::geometry_hooks_active(); },
     .build_sha256 = []() -> const char* { return build ? build->sha256 : ""; },
-    .close_stale = [] { controller.close_stale(); },
+    .close_stale = [] { rsf_anomaly_swap_close_stale(swap.state); },
     .prepare = [](const rsf_anomaly_sr_frame_facts* in, rsf_anomaly_sr_log log, void* user) {
         const TwinLog call_log{log, user};
         const auto* previous = host.twin_log;
         host.twin_log = &call_log;
-        const bool prepared = controller.prepare(*in);
+        const bool prepared = rsf_anomaly_swap_prepare(swap.state, in);
         host.twin_log = previous;
         return prepared;
     },
-    .prepared = [] { controller.prepared(); },
-    .swap_handle = []() -> void* { return controller.native_handle(); },
-    .combine_end = [] { controller.combine_end(); },
-    .frame_end = [] { controller.frame_end(); },
-    .rm_near = [] { controller.rm_near(); },
-    .sun_begin = [] { return controller.sun_cascades_begin(); },
-    .sun_end = [](bool suspended) { controller.sun_cascades_end(suspended); },
-    .position_setup = [](void* constant) { controller.position_constant_setup(constant); },
-    .shutdown = [] { return controller.shutdown(); },
-    .set_swap_enabled = [](bool enabled) { controller.set_swap_enabled(enabled); },
+    .prepared = [] { rsf_anomaly_swap_prepared(swap.state); },
+    .swap_handle = []() -> void* { return swap.state; },
+    .combine_end = [] { rsf_anomaly_swap_combine_end(swap.state); },
+    .frame_end = [] { rsf_anomaly_swap_frame_end(swap.state); },
+    .rm_near = [] { rsf_anomaly_swap_rm_near(swap.state); },
+    .sun_begin = [] { return rsf_anomaly_swap_sun_begin(swap.state); },
+    .sun_end = [](bool suspended) { rsf_anomaly_swap_sun_end(swap.state, suspended); },
+    .position_setup = [](void* constant) { rsf_anomaly_swap_position_constant(swap.state, constant); },
+    .shutdown = [] { return rsf_anomaly_swap_shutdown(swap.state); },
+    .set_swap_enabled = [](bool enabled) { rsf_anomaly_swap_set_enabled(swap.state, enabled); },
     .controller = [](rsf_anomaly_sr_controller* out) {
-        *out = {controller.window_open(), controller.refused(), controller.jitter_applied(), controller.mip_bias_applied(),
-            controller.stage(), controller.render_width(), controller.render_height(), controller.window_mip_bias(),
-            controller.saved_mip_bias(), controller.twin_generation(), controller.refusal()};
+        const auto& view = swap.state ? *rsf_anomaly_swap_view_of(swap.state) : unavailable;
+        *out = {view.open, view.refusal != nullptr, view.jitter_applied, view.mip_bias_applied,
+            view.stage, view.render_width, view.render_height, view.window_mip_bias,
+            view.saved_mip_bias, view.counters.twin_generations, view.refusal};
     },
-    .swap_counters = [](rsf_anomaly_sr_swap_counters* out) { *out = controller.counters(); },
+    .swap_counters = [](rsf_anomaly_sr_swap_counters* out) {
+        *out = swap.state ? rsf_anomaly_swap_view_of(swap.state)->counters : rsf_anomaly_swap_counters{};
+    },
     .timer_retain_device = rsf_anomaly_sr_timer_retain_device,
     .timer_create_query = rsf_anomaly_sr_timer_create_query,
     .timer_issue = rsf_anomaly_sr_timer_issue,
@@ -415,25 +435,20 @@ const rsf_anomaly_sr_stage_platform platform{
     },
     .create_motion_view = rsf_d3d11_create_shader_view,
     .depth_texture = [] { return host.depth_texture(); },
-    .driver_bind = [] { return driver.bind(rsf_anomaly_runtime_module()); },
-    .driver_enabled = [] { return driver.enabled(); },
-    .driver_output_format = [] { return driver.output_format(); },
-    .driver_planned = [](uint32_t ow, uint32_t oh, uint32_t* rw, uint32_t* rh) { return driver.planned_render(ow, oh, *rw, *rh); },
-    .driver_boundary = [](uint32_t width, uint32_t height) { driver.boundary(host.device(), width, height); },
-    .driver_evaluate = [](rsf_anomaly_sr_pass_inputs* in, rsf_camera_frame* camera, uint32_t* backend) {
-        return driver.evaluate(host.context(), *in, {.sequence = in->frame.reset_sequence, .cut = in->frame.cut}, camera, backend);
-    },
-    .driver_request_dump = [](const char* prefix) {
-        try { return driver.request_dump(prefix); } catch (...) { return false; }
-    },
-    .driver_fallback = [](uint8_t reason, bool drawn) { driver.fallback(reason, drawn); },
-    .driver_count_prepared = [](bool missing) { driver.count_prepared(missing); },
-    .driver_stop = [] { driver.stop(); },
-    .driver_report = [](bool exposure_auto, bool first_person_zero, rsf_anomaly_sr_log emit, void* user) {
-        driver.report(exposure_auto, first_person_zero, emit, user);
-    },
-    .driver_overlay_report = [](void* report) { (void)driver.overlay_report(*static_cast<rsf_overlay_sr_report*>(report)); },
-    .driver_request = [](const rsf_anomaly_sr_settings* settings) { driver.request(*settings); },
+    // Registration connects these directly to the Rust temporal driver.
+    .driver_bind = nullptr,
+    .driver_enabled = nullptr,
+    .driver_output_format = nullptr,
+    .driver_planned = nullptr,
+    .driver_boundary = nullptr,
+    .driver_evaluate = nullptr,
+    .driver_request_dump = nullptr,
+    .driver_fallback = nullptr,
+    .driver_count_prepared = nullptr,
+    .driver_stop = nullptr,
+    .driver_report = nullptr,
+    .driver_overlay_report = nullptr,
+    .driver_request = nullptr,
     .verify_guards = [](void* module, uint32_t image_size, const void* selected, bool world_window, bool temporal) -> const char* {
         const auto& profile = *static_cast<const BuildProfile*>(selected)->sr;
         const auto& sites = profile.sr_function_sites;
@@ -487,8 +502,9 @@ const rsf_anomaly_sr_stage_platform platform{
     .persist_int = rsf_anomaly_sr_persist_int,
     .persist_text = rsf_anomaly_sr_persist_text,
     .apply_colour_transport = rsf_anomaly_runtime_set_colour_transport,
-    .configured = [](rsf_anomaly_sr_log log, void* user, const rsf_anomaly_sr_driver_config* config) {
-        if (config) driver.configure(*config, log, user);
+    .configured = nullptr,
+    .guarded_log = [](rsf_anomaly_sr_log log, void* user, const char* message) {
+        if (log) try { log(user, message); } catch (...) {}
     },
 };
 void bind_platform() noexcept { rsf_anomaly_sr_stage_register(&platform); }

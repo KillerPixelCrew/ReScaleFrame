@@ -1389,8 +1389,6 @@ fn platform_valid(platform: &Platform) -> bool {
         && platform.write.is_some()
         && platform.make_twins.is_some()
         && platform.drop_twins.is_some()
-        && platform.round_trip.is_some()
-        && platform.upscale.is_some()
         && platform.set_viewport.is_some()
         && platform.upload_projection.is_some()
         && platform.set_mip_bias.is_some()
@@ -1421,7 +1419,18 @@ fn with<R>(handle: *mut Handle, fallback: R, call: impl FnOnce(&mut Swap) -> R) 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_swap_create(
+extern "C" fn rsf_anomaly_swap_create(
+    layout: Option<&Layout>,
+    platform: Option<&Platform>,
+) -> *mut Handle {
+    let Some(platform) = platform.filter(|p| p.round_trip.is_some() && p.upscale.is_some()) else {
+        return null_mut();
+    };
+    rsf_anomaly_swap_create_scoped(layout, Some(platform))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_swap_create_scoped(
     layout: Option<&Layout>,
     platform: Option<&Platform>,
 ) -> *mut Handle {

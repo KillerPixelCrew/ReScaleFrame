@@ -21,6 +21,8 @@ use std::time::Instant;
 
 #[cfg(all(windows, feature = "sr-fixtures"))]
 mod runtime_fixture;
+#[cfg(windows)]
+pub(crate) mod stage_bridge;
 
 #[cfg(all(windows, feature = "fg-fixture", not(test)))]
 pub(crate) mod fg_fixture;
@@ -800,7 +802,11 @@ impl RenderState {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_create() -> *mut Driver {
-    Box::into_raw(Box::new(Driver {
+    Box::into_raw(Box::new(new_driver()))
+}
+
+fn new_driver() -> Driver {
+    Driver {
         render: UnsafeCell::new(RenderState {
             resets: ResetFacts {
                 first: true,
@@ -810,7 +816,7 @@ extern "C" fn rsf_anomaly_sr_create() -> *mut Driver {
             ..RenderState::default()
         }),
         published: Mutex::default(),
-    }))
+    }
 }
 
 #[unsafe(no_mangle)]

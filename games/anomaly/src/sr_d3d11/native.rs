@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Typed D3D11 calls for the SR owners and their native fixtures.
-use super::{DEPTH_SRV, DSV, Draw, Extent, Ptr, RTV, SRV, Texture, UAV, View};
-use std::ffi::c_void;
+use super::{DEPTH_SRV, DSV, Draw, Extent, Ptr, ROUND_TRIP, RTV, SRV, Texture, UAV, View};
+use rsf_shader_compiler::{Compiler, Request, compile};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{copy_nonoverlapping, null_mut};
 use std::slice;
 use windows::Win32::Graphics::Direct3D::{
@@ -13,6 +14,111 @@ use windows::core::{BOOL, IUnknown, Interface};
 
 fn owned<T: Interface>(value: Option<T>) -> Ptr {
     value.map_or(null_mut(), Interface::into_raw)
+}
+
+// Foreign log callbacks are invoked through the C++ exception boundary.
+type ShaderLog = Option<unsafe extern "C" fn(Ptr, *const c_char) -> bool>;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_compile_shader(
+    raw: Ptr,
+    kind: u32,
+    vertex: u32,
+    entry: *const c_char,
+    log: ShaderLog,
+    user: Ptr,
+    out: &mut Ptr,
+) -> i32 {
+    *out = null_mut();
+    let (source, name) = if kind == ROUND_TRIP {
+        (
+            include_bytes!("../../shaders/sr/rsf_sr_roundtrip.hlsl").as_slice(),
+            c"rsf_sr_roundtrip.hlsl",
+        )
+    } else {
+        (
+            include_bytes!("../../shaders/sr/rsf_sr_upscale.hlsl").as_slice(),
+            c"rsf_sr_upscale.hlsl",
+        )
+    };
+    let say = |message: String| {
+        let Some(emit) = log else { return 0 };
+        let mut message = message.into_bytes();
+        message.truncate(
+            message
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(message.len())
+                .min(511),
+        );
+        let message = CString::new(message).expect("trimmed at the first NUL");
+        if unsafe { emit(user, message.as_ptr()) } {
+            0
+        } else {
+            -1
+        }
+    };
+    let Some(compiler) = Compiler::system("d3dcompiler_47.dll") else {
+        return say(format!(
+            "shader {}: d3dcompiler_47 is not available",
+            name.to_string_lossy()
+        ));
+    };
+    let Some(address) = compiler.entry() else {
+        return 0;
+    };
+    let entry = unsafe { CStr::from_ptr(entry) };
+    let result = unsafe {
+        compile(
+            address,
+            Request {
+                source,
+                name,
+                entry,
+                target: if vertex != 0 { c"vs_5_0" } else { c"ps_5_0" },
+                flags: 1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
+            },
+            &[],
+            null_mut(),
+        )
+    };
+    let Some(code) = result.code.filter(|_| result.status >= 0) else {
+        let status = if result.status < 0 {
+            result.status as u32
+        } else {
+            0x8000_4005
+        };
+        let details = result.errors.as_deref().map(String::from_utf8_lossy);
+        return say(format!(
+            "shader {} ({}): compile failed 0x{status:08x} {}",
+            name.to_string_lossy(),
+            entry.to_string_lossy(),
+            details.as_deref().unwrap_or_default()
+        ));
+    };
+    let Some(device) = (unsafe { ID3D11Device::from_raw_borrowed(&raw) }) else {
+        return 0;
+    };
+    let mut shader = None;
+    if vertex != 0 {
+        if unsafe {
+            device.CreateVertexShader(&code, None::<&ID3D11ClassLinkage>, Some(&mut shader))
+        }
+        .is_ok()
+        {
+            *out = owned(shader);
+        }
+    } else {
+        let mut shader = None;
+        if unsafe {
+            device.CreatePixelShader(&code, None::<&ID3D11ClassLinkage>, Some(&mut shader))
+        }
+        .is_ok()
+        {
+            *out = owned(shader);
+        }
+    }
+    i32::from(!out.is_null())
 }
 
 #[unsafe(no_mangle)]

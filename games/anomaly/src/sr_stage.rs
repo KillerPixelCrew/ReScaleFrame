@@ -5,9 +5,9 @@
 // (staging.rs), the configuration (the [Anomaly] keys,
 // the INI path, the vendor directories, the live panel options), GPU query retirement and the
 // status text.
-// sr_stage.cpp keeps guarded engine reads, trampolines, the SwapController and its D3D11 host, typed INI and file
-// calls, and the TemporalDriver facade over the existing Rust temporal driver
-// (docs/research/rust-anomaly-sr-configuration.md).
+// sr_stage.cpp provides guarded engine reads, foreign trampolines and the game-owned resource callbacks.
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod jitter_device;
 mod math;
 
 #[cfg(test)]
@@ -2767,7 +2767,12 @@ pub(crate) static STAGE: Stage = Stage::new();
 
 // ---- the private C ABI the native leaves call --------------------------------------------------------------------
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_register(table: *const Platform) {
+unsafe extern "C" fn rsf_anomaly_sr_stage_register(table: *const Platform) {
+    #[cfg(windows)]
+    if let Some(leaves) = unsafe { table.as_ref() } {
+        STAGE.register(crate::sr_temporal::stage_bridge::production(*leaves));
+        return;
+    }
     STAGE.register(table);
 }
 // `ini` is null (nothing selected) or a NUL-terminated UTF-16 path that stays readable for the call: the carrier's

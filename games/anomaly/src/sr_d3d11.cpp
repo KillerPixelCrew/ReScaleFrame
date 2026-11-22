@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "sr_d3d11.h"
-#include "sr_roundtrip_hlsl.h"
-#include "sr_upscale_hlsl.h"
 #include <rescaleframe/d3d11_state.h>
-#include <rescaleframe/shader_compile.h>
 #include <bit>
 #include <iterator>
 #include <new>
@@ -46,24 +43,13 @@ const rsf_sr_d3d11 platform{
         return rsf_anomaly_sr_view(device, texture, kind, source);
     },
     .shader = [](void* raw, uint32_t kind, uint32_t vertex, const char* entry, rsf_sr_log log, void* user, void** out) -> int32_t {
-        auto* device = static_cast<ID3D11Device*>(raw);
-        const bool round_trip = kind == RSF_SR_ROUND_TRIP;
-        const char* source = round_trip ? round_trip_source() : upscale_source();
-        const char* name = round_trip ? "rsf_sr_roundtrip.hlsl" : "rsf_sr_upscale.hlsl";
-        try {
-            if (vertex) {
-                ComPtr<ID3D11VertexShader> shader;
-                if (!rsf::compile_vertex(device, source, name, entry, &shader, log, user)) return 0;
-                *out = shader.Detach();
-            } else {
-                ComPtr<ID3D11PixelShader> shader;
-                if (!rsf::compile_pixel(device, source, name, entry, &shader, log, user)) return 0;
-                *out = shader.Detach();
-            }
-            return 1;
-        } catch (...) {
-            return -1;
-        }
+        struct Sink { rsf_sr_log log; void* user; } sink{log, user};
+        return rsf_anomaly_sr_compile_shader(raw, kind, vertex, entry, [](void* data, const char* message) noexcept {
+            const auto& sink = *static_cast<Sink*>(data);
+            try { if (sink.log) sink.log(sink.user, message); }
+            catch (...) { return false; }
+            return true;
+        }, &sink, out);
     },
     .constant_buffer = rsf_anomaly_sr_constant_buffer,
     .raster_state = rsf_anomaly_sr_raster_state,
@@ -102,8 +88,6 @@ rsf_sr_draw_views prepare_views(const PrepareViews& v) noexcept {
         {v.colour, v.depth, v.motion}, std::bit_cast<uint32_t>(v.first_person_depth), uint32_t(v.first_person_zero)};
 }
 
-const char* round_trip_source() noexcept { return rsf_sr_roundtrip_hlsl; }
-const char* upscale_source() noexcept { return rsf_sr_upscale_hlsl; }
 const rsf_sr_d3d11& d3d11_platform() noexcept { return platform; }
 
 const char* twin_error_name(TwinError error) noexcept {

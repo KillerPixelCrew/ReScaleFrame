@@ -892,11 +892,18 @@ pub struct rsf_anomaly_sr_stage_platform {
             driver: *const rsf_anomaly_sr_driver_config,
         ),
     >,
+    pub guarded_log: ::core::option::Option<
+        unsafe extern "C" fn(
+            log: rsf_anomaly_sr_log,
+            user: *mut ::core::ffi::c_void,
+            message: *const ::core::ffi::c_char,
+        ),
+    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_sr_stage_platform"]
-        [::core::mem::size_of::<rsf_anomaly_sr_stage_platform>() - 600usize];
+        [::core::mem::size_of::<rsf_anomaly_sr_stage_platform>() - 608usize];
     ["Alignment of rsf_anomaly_sr_stage_platform"]
         [::core::mem::align_of::<rsf_anomaly_sr_stage_platform>() - 8usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::render_target"]
@@ -1049,4 +1056,6 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, apply_colour_transport) - 584usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::configured"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, configured) - 592usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::guarded_log"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, guarded_log) - 600usize];
 };

@@ -8027,3 +8027,10 @@ Build, fixture and device execution remain pending.
 The Rust overlay statistics owner reads the same linked latency status directly.
 The native hosts and embedded carrier call its C entry without an inline
 forwarder. C11 header and C++20 caller syntax checks passed.
+Anomaly SR's production stage now binds the Rust temporal driver and scoped
+swap owner directly. The jitter device scenario, the SR pass compiler and
+shared SR fixture device acquisition moved to Rust. The
+[N06 and N07 source record](research/rust-anomaly-sr-stage.md#n06-and-n07-follow-up-from-0251a81a)
+lists the preserved profile and rollback evidence and remaining native fixture
+bodies. Pinned formatting, binding regeneration and locked offline metadata
+passed. Build, fixture and device validation remain pending.

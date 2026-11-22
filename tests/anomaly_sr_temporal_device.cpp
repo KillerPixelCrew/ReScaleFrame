@@ -81,29 +81,14 @@ void log_line(void*, const char* message) { std::printf("  | %s\n", message); }
 struct Device {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
-    std::wstring name;
-    uint32_t vendor{};
+    ComPtr<ID3D11InfoQueue> info;
     bool create(uint32_t want_vendor, bool debug) {
-        ComPtr<IDXGIFactory1> factory;
-        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return false;
-        const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
-        for (UINT i = 0;; ++i) {
-            ComPtr<IDXGIAdapter1> adapter;
-            if (factory->EnumAdapters1(i, &adapter) == DXGI_ERROR_NOT_FOUND) break;
-            DXGI_ADAPTER_DESC1 desc{};
-            adapter->GetDesc1(&desc);
-            if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || (want_vendor && desc.VendorId != want_vendor)) continue;
-            for (const UINT flags : {debug ? UINT(D3D11_CREATE_DEVICE_DEBUG) : 0u, 0u}) {
-                if (SUCCEEDED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags, levels, 2, D3D11_SDK_VERSION,
-                        &device, nullptr, &context))) {
-                    name = desc.Description;
-                    vendor = desc.VendorId;
-                    std::printf("device: %ls (vendor 0x%04x, debug layer %s)\n", desc.Description, desc.VendorId, flags ? "on" : "off");
-                    return true;
-                }
-            }
-        }
-        return false;
+        void *dev{}, *ctx{}, *queue{};
+        if (!rsf_anomaly_sr_fixture_device(true, want_vendor, debug, &dev, &ctx, &queue)) return false;
+        device.Attach(static_cast<ID3D11Device*>(dev));
+        context.Attach(static_cast<ID3D11DeviceContext*>(ctx));
+        info.Attach(static_cast<ID3D11InfoQueue*>(queue));
+        return true;
     }
 };
 ComPtr<ID3D11Texture2D> texture(ID3D11Device* device, uint32_t w, uint32_t h, DXGI_FORMAT format, UINT bind, const void* data = nullptr,
@@ -790,8 +775,7 @@ int main(int argc, char** argv) {
         if (selected.empty() || selected == "thin") { thin_case(d); ++ran; }
         if (selected.empty() || selected == "prepare") { prepare_case(d); ++ran; }
         // Debug-layer errors from either case (when the layer is installed).
-        ComPtr<ID3D11InfoQueue> info;
-        if (SUCCEEDED(d.device.As(&info))) {
+        if (const auto& info = d.info) {
             uint64_t errors = 0;
             for (UINT64 i = 0, n = info->GetNumStoredMessages(); i < n; ++i) {
                 SIZE_T size = 0;
