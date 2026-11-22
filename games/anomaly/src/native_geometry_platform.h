@@ -2,7 +2,7 @@
 #pragma once
 #include "geometry_registry_platform.h"
 #include "native_profile.h"
-#include "../temporal/math.h"
+#include "temporal_types.h"
 
 // Private adapter ABI. Engine addresses are opaque to Rust. Only the platform
 // leaves access the engine's memory or trampoline tables.

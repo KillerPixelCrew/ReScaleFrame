@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "native_geometry.h"
 #include "anomaly_geometry_fixture.h"
+#include "anomaly_geometry_history.h"
 #include "geometry_feed.h"
 #include "geometry_retirement.h"
 #include <cstdio>
@@ -239,7 +240,7 @@ int main()
         frame.view = view;
         frame.source_frame = source;
         frame.world = {temporal::Mat4::identity(), temporal::Mat4::identity(), {}};
-        frame.resolutions = *temporal::plan_resolutions({1920, 1080}, {1280, 720}, {1024, 512});
+        frame.resolutions = {{1920, 1080}, {1280, 720}, {1024, 512}};
         return frame;
     };
     const auto run_history = [&] {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
-pub(super) fn view_timelines(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn view_timelines() {
+    let mut h = History::new();
     let a = h.start(&frame(MAIN, 100));
     assert!(!h.cameras(a, WORLD).unwrap().has_previous);
     let scope = h.start(&frame(SCOPE, 101));
@@ -20,8 +20,8 @@ pub(super) fn view_timelines(api: &Oracle) {
     assert!(h.cameras(a, WORLD).is_none());
 }
 
-pub(super) fn reject_frame_mutation(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn reject_frame_mutation() {
+    let mut h = History::new();
     let input = frame(MAIN, 20);
     let t = h.start(&input);
     let mut changed = input;
@@ -45,8 +45,8 @@ pub(super) fn reject_frame_mutation(api: &Oracle) {
     assert!(h.cameras(t, 99).is_none());
 }
 
-pub(super) fn camera_resets(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn camera_resets() {
+    let mut h = History::new();
     let mut input = frame(MAIN, 1);
     input.has_first_person = true;
     input.first_person = camera();
@@ -54,7 +54,8 @@ pub(super) fn camera_resets(api: &Oracle) {
     h.start(&input);
     input.source_frame = 3;
     input.first_person.projection.values[0] = 4.;
-    let pair = h.cameras(h.start(&input), FIRST_PERSON).unwrap();
+    let token = h.start(&input);
+    let pair = h.cameras(token, FIRST_PERSON).unwrap();
     assert!(pair.has_previous);
     assert_eq!(
         (
@@ -71,23 +72,28 @@ pub(super) fn camera_resets(api: &Oracle) {
     input.source_frame = 7;
     input.has_first_person = false;
     input.first_person_cut = false;
-    assert!(h.cameras(h.start(&input), FIRST_PERSON).is_none());
+    let token = h.start(&input);
+    assert!(h.cameras(token, FIRST_PERSON).is_none());
     input.source_frame = 9;
     input.camera_cut = true;
-    assert!(!h.cameras(h.start(&input), WORLD).unwrap().has_previous);
+    let token = h.start(&input);
+    assert!(!h.cameras(token, WORLD).unwrap().has_previous);
     input.source_frame = 11;
     input.camera_cut = false;
     input.sizes.render = extent(960, 540);
-    assert!(!h.cameras(h.start(&input), WORLD).unwrap().has_previous);
+    let token = h.start(&input);
+    assert!(!h.cameras(token, WORLD).unwrap().has_previous);
     input.source_frame = 13;
-    assert!(h.cameras(h.start(&input), WORLD).unwrap().has_previous);
+    let token = h.start(&input);
+    assert!(h.cameras(token, WORLD).unwrap().has_previous);
     input.source_frame = 15;
     input.sizes.output = extent(2560, 1440);
-    assert!(!h.cameras(h.start(&input), WORLD).unwrap().has_previous);
+    let token = h.start(&input);
+    assert!(!h.cameras(token, WORLD).unwrap().has_previous);
 }
 
-pub(super) fn rigid_instances(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn rigid_instances() {
+    let mut h = History::new();
     let (a, b) = (key(10, 100, 1), key(11, 100, 1));
     let mut data = pose();
     let first_token = h.start(&frame(MAIN, 10));
@@ -117,8 +123,8 @@ pub(super) fn rigid_instances(api: &Oracle) {
     assert_eq!(h.capture(first_token, a, &data).status(), STALE);
 }
 
-pub(super) fn retirement(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn retirement() {
+    let mut h = History::new();
     let k = key(42, 500, 3);
     let data = pose();
     let t = h.start(&frame(MAIN, 1));
@@ -142,42 +148,38 @@ pub(super) fn retirement(api: &Oracle) {
     assert!(later.previous().is_none());
 }
 
-pub(super) fn bones(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn bones() {
+    let mut h = History::new();
     let k = key(5, 6, 1);
-    let mut bones = [identity(), identity()];
-    bones[1].values[7] = 4.;
     let mut data = Pose {
         kind: SKINNED,
         palette_layout: 77,
-        bone_count: bones.len(),
+        bones: vec![identity(), identity()],
         ..pose()
     };
+    data.bones[1].values[7] = 4.;
     let t = h.start(&frame(MAIN, 1));
-    data.bones = bones.as_ptr();
     let initial = h.capture(t, k, &data);
-    bones[1].values[7] = 9.;
+    data.bones[1].values[7] = 9.;
     assert_eq!(initial.current().unwrap().bone1.values[7], 4.);
     let t = h.start(&frame(MAIN, 3));
-    data.bones = bones.as_ptr();
     let next = h.capture(t, k, &data);
     assert_eq!(next.previous().unwrap().bone1.values[7], 4.);
     assert_eq!(h.capture(t, k, &data).handles(), next.handles());
-    bones[0].values[3] = 12.;
-    data.bones = bones.as_ptr();
+    data.bones[0].values[3] = 12.;
     assert_eq!(h.capture(t, k, &data).status(), CAPTURE_CONFLICT);
     let t = h.start(&frame(MAIN, 5));
     data.palette_layout = 78;
     assert!(h.capture(t, k, &data).previous().is_none());
     let t = h.start(&frame(MAIN, 7));
-    data.bone_count = 1;
+    data.bones.pop();
     assert!(h.capture(t, k, &data).previous().is_none());
 }
 
-pub(super) fn details(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn details() {
+    let mut h = History::new();
     let (ka, kb) = (key(1001, 90, 1), key(1002, 90, 1));
-    let mut constants = [
+    let constants = vec![
         Vec4 {
             x: 1.,
             y: 2.,
@@ -195,13 +197,12 @@ pub(super) fn details(api: &Oracle) {
         kind: DETAIL,
         has_deformation: true,
         deformation_layout: 99,
-        constants: constants.as_ptr(),
-        constant_count: 2,
+        constants,
         has_detail: true,
         fade: 0.25,
         ..pose()
     };
-    let mut b = a;
+    let mut b = a.clone();
     b.world.values[3] = 100.;
     b.fade = 0.75;
     let t = h.start(&frame(MAIN, 1));
@@ -209,10 +210,7 @@ pub(super) fn details(api: &Oracle) {
     h.capture(t, kb, &b);
     let t = h.start(&frame(MAIN, 3));
     // Only the first item's shader constants change. The second keeps its frozen schema/values.
-    let unchanged = constants;
-    constants[0].w = 20.;
-    a.constants = constants.as_ptr();
-    b.constants = unchanged.as_ptr();
+    a.constants[0].w = 20.;
     a.fade = 0.5;
     b.fade = 0.9;
     let current_b = h.capture(t, kb, &b);
@@ -236,8 +234,8 @@ pub(super) fn details(api: &Oracle) {
     assert!(h.capture(t, kb, &b).previous().is_none());
 }
 
-pub(super) fn reject_producer(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn reject_producer() {
+    let mut h = History::new();
     let t = h.start(&frame(MAIN, 1));
     for key in [key(0, 10, 1), key(1, 0, 1), key(1, 10, 0)] {
         assert_eq!(h.capture(t, key, &pose()).status(), CAPTURE_INVALID);
@@ -248,7 +246,7 @@ pub(super) fn reject_producer(api: &Oracle) {
         owner += 1;
         h.capture(t, key(owner, 10, 1), data)
     };
-    let invalid = |result: OwnedCapture<'_>| {
+    let invalid = |result: Capture| {
         assert_eq!(result.status(), CAPTURE_INVALID);
         assert!(result.current().is_none() && result.previous().is_none());
     };
@@ -271,25 +269,19 @@ pub(super) fn reject_producer(api: &Oracle) {
     ] {
         invalid(capture(&data));
     }
-    let mut bones = vec![identity(); 1025];
     let mut data = Pose {
         kind: SKINNED,
-        bones: bones.as_ptr(),
-        bone_count: 1,
+        bones: vec![identity()],
         ..pose()
     };
     invalid(capture(&data)); // No palette layout.
     data.palette_layout = 1;
-    bones[0].values[11] = f64::NAN;
-    data.bones = bones.as_ptr();
+    data.bones[0].values[11] = f64::NAN;
     invalid(capture(&data));
-    bones[0] = identity();
-    data.bones = bones.as_ptr();
-    data.bone_count = bones.len();
+    data.bones = vec![identity(); 1025];
     invalid(capture(&data));
     invalid(capture(&Pose {
-        bones: bones.as_ptr(),
-        bone_count: 1,
+        bones: vec![identity()],
         ..pose()
     }));
     let mut data = Pose {
@@ -297,20 +289,16 @@ pub(super) fn reject_producer(api: &Oracle) {
         ..pose()
     };
     invalid(capture(&data)); // No deformation.
-    let mut constants = [Vec4 {
+    data.constants = vec![Vec4 {
         w: 1.,
         ..Default::default()
     }];
     data.has_deformation = true;
     data.deformation_layout = 1;
-    data.constants = constants.as_ptr();
-    data.constant_count = 1;
     assert_eq!(capture(&data).status(), CAPTURED);
-    constants[0].x = f64::INFINITY;
-    data.constants = constants.as_ptr();
+    data.constants[0].x = f64::INFINITY;
     invalid(capture(&data));
-    constants[0].x = 0.;
-    data.constants = constants.as_ptr();
+    data.constants[0].x = 0.;
     data.kind = DETAIL;
     invalid(capture(&data)); // Missing per-item fade.
     data.has_detail = true;
@@ -328,8 +316,8 @@ pub(super) fn reject_producer(api: &Oracle) {
     assert!(missing.current().is_none() && missing.previous().is_none());
 }
 
-pub(super) fn first_person(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn first_person() {
+    let mut h = History::new();
     let k = key(5, 6, 1);
     let mut input = frame(MAIN, 1);
     input.has_first_person = true;
@@ -370,9 +358,9 @@ pub(super) fn first_person(api: &Oracle) {
     );
 }
 
-pub(super) fn explicit_resets(api: &Oracle) {
-    let h = History::new(api);
-    let other = History::new(api);
+pub(super) fn explicit_resets() {
+    let mut h = History::new();
+    let mut other = History::new();
     let k = key(4, 5, 1);
     let t = h.start(&frame(MAIN, 10));
     let wrong = other.start(&frame(MAIN, 10));
@@ -391,8 +379,8 @@ pub(super) fn explicit_resets(api: &Oracle) {
     assert!(h.cameras(scope, WORLD).is_none() && h.cameras(restarted, WORLD).is_none());
 }
 
-pub(super) fn degenerate_camera(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn degenerate_camera() {
+    let mut h = History::new();
     let mut input = frame(MAIN, 1);
     input.world.projection = Matrix::default();
     assert_eq!(h.begin(&input).0, INVALID);
@@ -423,8 +411,8 @@ pub(super) fn degenerate_camera(api: &Oracle) {
     );
 }
 
-pub(super) fn frame_plans(api: &Oracle) {
-    let h = History::new(api);
+pub(super) fn frame_plans() {
+    let mut h = History::new();
     let mut input = frame(MAIN, 80);
     input.world.jitter = Vec2 { x: 0.25, y: 0.5 };
     input.has_first_person = true;
@@ -447,14 +435,14 @@ pub(super) fn frame_plans(api: &Oracle) {
     let render = plan.sizes.render;
     assert_eq!(
         plan.world.values,
-        math::jitter(api, &input.world.projection, 0.25, 0.5, render)
+        oracle::math::jitter(&input.world.projection, 0.25, 0.5, render)
             .unwrap()
             .values
     );
     assert!(plan.has_first_person);
     assert_eq!(
         plan.first_person.values,
-        math::jitter(api, &input.first_person.projection, -0.25, -0.5, render)
+        oracle::math::jitter(&input.first_person.projection, -0.25, -0.5, render)
             .unwrap()
             .values
     );

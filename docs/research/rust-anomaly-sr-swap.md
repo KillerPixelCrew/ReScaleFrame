@@ -213,3 +213,41 @@ regenerated the existing swap, stage, Runtime SR and admission records.
 Pinned formatting, locked offline Windows x64 metadata and source
 comparison passed. No compilation, fixture execution or device results
 were gathered.
+
+## N01 oracle and N07 launchers from 6c935471
+
+- The round-trip, temporal device and swap executables now have C process
+  entries. Temporal passes the eight linked Runtime decode/resolve
+  exports, and round-trip and temporal borrow the production D3D11 table
+  through `sr_d3d11.cpp`. The table still owns the native exception barrier
+  and context snapshot. Swap keeps a small C++ getter for the exact
+  `sr_swap_layout.h` profile record. GPU calls, CTest names, timeouts and
+  skip rules remain as at `6c935471`.
+- `temporal_fixture/oracle.rs` and `oracle/math.rs` replace the executable
+  code in the old planning, math, history and frame-plan headers. The
+  oracle uses its own column-vector math and history state, with no calls
+  into production. Swap still compares main and first-person projection
+  and full matrices for the same five samples against the oracle's
+  transposition and Fmatrix summation order. The 17 planning and 39 swap
+  selections, including the 29 original named swap cases, keep their
+  existing names and assertions.
+- `temporal_types.h` holds the native draw packet matrix, key and view
+  types needed by existing geometry and motion consumers. The native
+  geometry fixture keeps its guarded producer reads and forwards copied
+  data through `anomaly_geometry_history.h` and
+  `temporal_fixture/geometry_bridge.rs`. Rust owns the history and
+  immutable snapshots, and the C bridge returns only a copied previous
+  world matrix and status. The fixture still checks the original live
+  geometry capture, miss, conflict and retirement branches. Source
+  comparison matched all 71 geometry assertion lines and all 35 CTest
+  declarations.
+
+Targeted bindgen regenerated the smaller geometry fixture records and
+reproduced the native geometry, swap and temporal device bindings.
+Pinned formatting, locked offline Windows x64 metadata, source comparison
+and MSVC `/Zs /W4 /WX` checks covered the changed native entries,
+geometry consumers, D3D11 bridge and stage. The extended adjacent
+`motion_stage.cpp` syntax check found the same missing D3D11 declaration
+at line 57 on the archived base and this worktree. That translation unit
+passed with `d3d11.h` supplied to the syntax check. Builds, linking,
+fixture execution and device validation remain outside this checkpoint.

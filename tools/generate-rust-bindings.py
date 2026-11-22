@@ -545,7 +545,9 @@ generate("games/anomaly/src/sr_d3d11/temporal_device_abi.rs", "games/anomaly/src
           "--raw-line", "use rsf_game_sys::sr_abi::rsf_motion_decode_params;"])
 generate("games/anomaly/src/temporal_fixture/abi.rs", "games/anomaly/temporal/fixture_platform.h",
          "rsf_anomaly_plan_.*", "NOTHING", [],
-         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--with-derive-custom-struct", "rsf_anomaly_plan_(matrix|extent|vec2|vec4|resolutions|camera|frame|token)=PartialEq",
+          "--with-derive-custom-struct", "rsf_anomaly_plan_key=Eq,Ord,PartialEq,PartialOrd"])
 generate("games/unity-mono/src/plugin_abi.rs", "games/unity-mono/include/rescaleframe/unity_bridge.h",
          "rsf_unity_native_api", "RSF_UNITY_NATIVE_ABI_VERSION",
          ["-Isdk/game/include", "-Igames/unity-mono/include"],

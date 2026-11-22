@@ -1,15 +1,15 @@
 # Anomaly temporal boundary
 
-Pure first-party C++20, header-only, adapter-local support logic. These types do not install hooks, allocate GPU resources, produce a velocity texture, activate SR/FG, or establish rendering readiness. No engine headers or reference-source code are imported. Do not export these STL-owning types across a DLL boundary.
+First-party Rust fixture model for Anomaly temporal behavior. The model consumes copied fixture inputs and is independent of the live SR and motion implementations. Its C interface is private to the native geometry fixture and transfers plain records and an opaque owner.
 
 The source constraints come from `docs/research/anomaly-world-space-ui.md`, referencing the read-only Anomaly 1.5.3 source revision `028ccf5`. Those source findings are not verified shipping-binary hooks. Numeric fixtures are not game or GPU acceptance.
 
 ## Files
 
-- `planning.h`: independent output, world-render and PDA-content dimensions.
-- `math.h`: explicit matrix convention, finite arithmetic, inverse, projection jitter and current-to-previous pixel motion.
-- `history.h`: per-source-view camera/instance histories and lifecycle retirement.
-- `frame_plan.h`: source-frame-bound geometry and unjittered UI canvas plans. No Present ownership is inferred.
+- `../src/temporal_fixture/oracle.rs` owns per-view history, retirement and source-frame-bound geometry and UI plans.
+- `../src/temporal_fixture/oracle/math.rs` handles independent output, world and PDA sizes, finite matrix arithmetic, column-vector projection jitter and pixel motion.
+- `fixture_platform.h` declares the native geometry fixture's plain data records.
+- `../src/temporal_types.h` defines the native matrix and identity representations used by geometry and motion consumers.
 
 ## Hook feeding contract
 
@@ -20,9 +20,9 @@ The source constraints come from `docs/research/anomaly-world-space-ui.md`, refe
 5. For deformed geometry, provide a nonzero schema/layout ID and all exact shader deformation constants needed to reproduce the draw, including relevant wind/wave/time values. The schema is adapter-defined, not an inferred engine layout. Skinned snapshots can additionally contain deformation. Rigid snapshots reject otherwise-ignored bones/deformation rather than claiming camera-only coverage.
 6. For detail/grass items, provide that **actual item's** world placement/rotation and effective fade/scale, plus its deformation constants. Key the item lifetime, not an upload index, batch index, cache slot or raw pointer alone. Repacking a batch must preserve each item's key. Changing fade/scale belongs in the snapshot, not in the identity key.
 7. Obtain stable nonzero `owner` and `visual` identities from verified lifecycle tracking. `generation` is nonzero and monotonically increasing for reuse of the owner/visual pair. Distinguish different render instances even when they share a visual. Namespacing IDs is the adapter's responsibility. On destruction/cache-item retirement, call `retire` before that identity can be reused. New content in a recycled address/slot requires a new generation. These primitives cannot prove that a caller's identity came from a real lifecycle hook.
-8. Consumers use the frozen current/previous snapshots and the matching `cameras(token, domain)` pair to render geometric motion. Evaluate the real previous skinning/deformation/fade path, not only the previous camera. `previous == nullptr` means missing history; it is not permission to substitute another object, identity bones, current pose, zero motion or a camera-only path. Missing deformation inputs reject capture. A valid CPU pair is still not evidence of a complete GPU motion pass.
+8. Consumers use the frozen current/previous snapshots and the matching `cameras(token, domain)` pair to render geometric motion. Evaluate the real previous skinning/deformation/fade path for the matched object. Missing previous snapshots and deformation inputs remain explicit. A valid CPU pair alone cannot establish GPU motion coverage.
 
-The history owner is single-render-thread and noncopyable. External lifecycle notifications must be serialized onto that owner. There is no hidden locking around maps or producer reads. Snapshot allocation and checked matrix indexing can throw; contain exceptions inside the adapter, not across the C ABI.
+The history owner is single-render-thread and noncopyable. External lifecycle notifications must be serialized onto that owner. Snapshot maps and producer reads need no internal lock. The C bridge borrows plain inputs for the call and retains Rust-owned snapshots.
 
 ## Frame and instance invariants
 
@@ -33,7 +33,7 @@ The history owner is single-render-thread and noncopyable. External lifecycle no
 - Owner, visual or generation changes do not match. Changes of instance kind, palette layout/count or deformation layout/count do not match previous state. Schema IDs must change when ordering or semantics change, not merely when values change.
 - Retirement clears both view histories for the retired owner/visual generation and all older generations. Persistent retirement watermarks reject attempts to resurrect those generations. A higher generation starts with no inherited history.
 - `CaptureStatus::MissingProjection` distinguishes a missing first-person camera from a stale/foreign frame token. Neither supplies fallback data.
-- Consumers may keep immutable snapshot storage alive, but must discard queued draw/submission work when its instance retires or its view resets. A held `shared_ptr` is not a resource lease, a valid current token, or proof that an object is still live.
+- Consumers may keep immutable snapshot storage alive, but must discard queued draws when the instance retires or the view resets. Resource leases and token validity follow their own lifecycles.
 
 Bone palettes are bounded to 1024 matrices per snapshot and deformation blocks to 256 float4-equivalent values. Instance maps retain only current/previous source frames per view. Retirement watermarks persist for the history object's lifetime; the adapter owns session/level lifetime and memory budgeting. Destroy the history owner only when the associated source session and queued work are fully retired. CPU matrices/constants use double precision; check representability and the actual shader ABI when converting to GPU float buffers.
 
@@ -51,7 +51,7 @@ Use `reset_view` for aborted/missing view production, a source counter restart, 
 - UV origin is top-left. `pixel_motion` returns `(previous_uv - current_uv) * motion_grid_size`, excluding jitter. `pixel_motion_from_jittered` removes the two supplied render-pixel jitter offsets. Vendor sign/units conversion belongs at the explicit adapter/runtime boundary.
 - Invalid/nonfinite arithmetic, overflow, near-zero/negative clip W or depth-clipped points yield no motion value. Offscreen XY values are not clamped. Inverse uses scaled partial pivoting with a 1e-12 relative pivot threshold. Matrix indices are checked individually before linearization.
 - Each texture dimension must be in [2, 16384]. Render dimensions cannot exceed output dimensions; PDA dimensions are independent and need not share output size or aspect ratio. No global `Device` dimensions are mutated.
-- `FrameViewPlan` uses render-sized jittered world/first-person geometry, output-sized reconstruction and screen UI, and independently sized unjittered PDA content. A PDA content canvas is a UV-space source texture, **not** output-space FG UI. Projecting it on a physical screen remains scene geometry with the appropriate world/first-person motion and occlusion.
+- The frame plan uses render-sized jittered world and first-person geometry, output-sized reconstruction and screen UI, and independently sized unjittered PDA content. A PDA content canvas is a UV-space source texture. Projecting it on a physical screen remains scene geometry with the appropriate world or first-person motion and occlusion.
 - Scope planning is offscreen. Main planning says `RequiresHostDecision`, since a main/camera-ready source frame still does not establish a valid Present lease.
 
 ## Geometry producer (`../src/native_geometry.*`, `geometry_profile.h`, `geometry_feed.*`)
@@ -68,17 +68,17 @@ Standard DX11 executable only, every site guarded by expected bytes (`anomaly_ge
 
 ## Verification
 
-`tests/anomaly_temporal_tests.cpp` launches the Rust cases in
-`games/anomaly/src/temporal_fixture/`. It lends the independent C++ model
-through the private C table in `fixture_platform.h`. The model retains
-each capture's shared pointers until the Rust case releases them, so the
-same cases can verify frozen snapshots and identity across later source
-frames and retirement. There is no game, engine or GPU dependency. An
-optional argument selects an exact case. An unknown selection fails, and
-the default runs all 17 checks in Debug and Release.
+`tests/anomaly_temporal_tests.c` launches the Rust cases in
+`games/anomaly/src/temporal_fixture/`. Each capture lends retained
+Rust snapshots to its case, which checks identity and frozen values
+across later source frames and retirement. The geometry fixture uses
+the same model through a private C bridge. An optional argument
+selects an exact case. An unknown selection fails, and the default runs
+all 17 checks in Debug and Release. The model runs without the game or
+a GPU.
 
 The isolated worker build and actual execution results are recorded in `.local/anomaly/temporal-worker.md`. The parent registered these contracts through `tests/anomaly_support.cmake` and rebuilt the main Windows/MSVC Debug target: all 17 internal cases passed, and unknown-case selection correctly failed. Adapter integration remains pending. Passing these tests establishes CPU behavior only; source-to-binary hooks, real resource formats/lifetimes, dense geometry motion coverage, game captures, SR/FG and image quality remain unverified.
 
-Those execution results precede the Rust fixture port. The port used
-pinned formatting, binding regeneration, locked offline metadata and
-source comparison only.
+Those execution results precede the Rust fixture and oracle ports. The
+latest port used pinned formatting, binding regeneration, locked offline
+metadata, MSVC syntax checks and source comparison.

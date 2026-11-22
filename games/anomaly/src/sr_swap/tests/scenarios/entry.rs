@@ -2,17 +2,6 @@
 use super::*;
 use std::panic::catch_unwind;
 
-type CameraOracle = unsafe extern "C" fn(
-    *const Matrix,
-    *const Matrix,
-    f32,
-    f32,
-    u32,
-    u32,
-    *mut Matrix,
-    *mut Matrix,
-) -> bool;
-
 fn profile(native: &Layout) {
     let fixture = layout();
     macro_rules! equal {
@@ -55,26 +44,14 @@ fn profile(native: &Layout) {
     }
 }
 
-fn independent_jitter(oracle: CameraOracle) {
+fn independent_jitter() {
     for i in [0, 1, 2, 5, 17] {
         let c = Case::new(true);
         let sample = crate::sr_stage::math::jitter_sample(i, 18);
         let (x, y) = (sample.x, sample.y);
         let expected = |projection: &Matrix| {
-            let (mut p, mut full) = ([0.; 16], [0.; 16]);
-            assert!(unsafe {
-                oracle(
-                    projection,
-                    &c.original.view,
-                    x,
-                    y,
-                    1286,
-                    724,
-                    &mut p,
-                    &mut full,
-                )
-            });
-            (p, full)
+            crate::temporal_fixture::swap_camera(projection, &c.original.view, x, y, [1286, 724])
+                .unwrap()
         };
         assert!(c.prepare(&c.facts3(x, y)));
         assert_eq!(
@@ -92,15 +69,15 @@ fn independent_jitter(oracle: CameraOracle) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_swap_fixture(
-    selection: *const c_char,
+    argc: i32,
+    argv: *const *const c_char,
     native: &Layout,
-    oracle: CameraOracle,
 ) -> i32 {
-    let selection = if selection.is_null() {
-        None
-    } else {
-        Some(unsafe { CStr::from_ptr(selection) }.to_bytes())
-    };
+    // The C launcher lends its process arguments.
+    let args = unsafe { crate::ffi::borrow_span(argv, argc.max(0) as usize) };
+    let selection = args
+        .get(1)
+        .map(|&arg| unsafe { CStr::from_ptr(arg) }.to_bytes());
     if catch_unwind(|| profile(native)).is_err() {
         return 1;
     }
@@ -179,7 +156,7 @@ unsafe extern "C" fn rsf_anomaly_sr_swap_fixture(
             let result = catch_unwind(|| {
                 exercise();
                 if name == "stage3_normal" {
-                    independent_jitter(oracle);
+                    independent_jitter();
                 }
             });
             if result.is_err() {

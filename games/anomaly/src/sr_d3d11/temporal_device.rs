@@ -409,24 +409,16 @@ fn prepare_case(d: &Device, platform: &'static Platform) {
 unsafe extern "C" fn rsf_anomaly_sr_temporal_device_fixture(
     platform: &'static Platform,
     graphics: &Graphics,
-    selection: *const c_char,
-    root: *const c_char,
+    argc: i32,
+    argv: *const *const c_char,
 ) -> i32 {
-    let selected = if selection.is_null() {
-        b"".as_slice()
-    } else {
-        unsafe { CStr::from_ptr(selection) }.to_bytes()
-    };
-    let root = if root.is_null() {
-        std::env::var_os("RSF_SR_VENDOR_ROOT")
-    } else {
-        Some(
-            unsafe { CStr::from_ptr(root) }
-                .to_string_lossy()
-                .into_owned()
-                .into(),
-        )
-    };
+    // The C launcher lends its process arguments and the real linked graphics exports.
+    let args = unsafe { crate::ffi::borrow_span(argv, argc.max(0) as usize) };
+    let argument = |index| args.get(index).map(|&arg| unsafe { CStr::from_ptr(arg) });
+    let selected = argument(1).map_or(b"".as_slice(), CStr::to_bytes);
+    let root = argument(2)
+        .map(|path| path.to_string_lossy().into_owned().into())
+        .or_else(|| std::env::var_os("RSF_SR_VENDOR_ROOT"));
     let mut ran = 0;
     let mut skipped = 0;
     let mut failed = 0;

@@ -2,7 +2,7 @@ rsf_add_rust_static(rsf_anomaly_sr_fixture_rust rsf_rust_anomaly_sr_fixture
     rsf-anomaly rsf_anomaly --features sr-fixtures)
 
 # CPU history/planning contracts only; these tests do not prove game motion output.
-add_executable(rsf_anomaly_temporal_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_temporal_tests.cpp")
+add_executable(rsf_anomaly_temporal_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_temporal_tests.c")
 target_include_directories(rsf_anomaly_temporal_test PRIVATE "${PROJECT_SOURCE_DIR}")
 target_link_libraries(rsf_anomaly_temporal_test PRIVATE rsf_anomaly_sr_fixture_rust rsf_build_options)
 add_test(NAME anomaly_temporal_contract COMMAND rsf_anomaly_temporal_test)
@@ -25,7 +25,7 @@ set(RSF_ANOMALY_GEOMETRY_SOURCES
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_hooks.cpp")
 add_executable(rsf_anomaly_geometry_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_tests.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
-target_link_libraries(rsf_anomaly_geometry_test PRIVATE rsf_anomaly_rust minhook rsf_build_options)
+target_link_libraries(rsf_anomaly_geometry_test PRIVATE rsf_anomaly_sr_fixture_rust minhook rsf_build_options)
 add_test(NAME anomaly_geometry_contract COMMAND rsf_anomaly_geometry_test)
 add_executable(rsf_anomaly_geometry_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_hooks.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
@@ -58,7 +58,8 @@ set_tests_properties(anomaly_sr_profile_contract PROPERTIES TIMEOUT 30)
 # synthetic image; the round-trip fixture runs the production pass and shader on a real D3D11 device (hardware
 # with the debug layer when present, else WARP; 77 when neither exists). None of them runs game code.
 set(RSF_ANOMALY_SR_SRC "${PROJECT_SOURCE_DIR}/games/anomaly/src")
-add_executable(rsf_anomaly_sr_swap_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_swap.cpp")
+add_executable(rsf_anomaly_sr_swap_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_swap.c"
+    "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_swap_profile.cpp")
 target_include_directories(rsf_anomaly_sr_swap_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_link_libraries(rsf_anomaly_sr_swap_test PRIVATE rsf_anomaly_sr_fixture_rust rsf_build_options)
 add_test(NAME anomaly_sr_swap_contract COMMAND rsf_anomaly_sr_swap_test)
@@ -71,7 +72,7 @@ target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_S
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon
     ReScaleFrame::Graphics minhook d3d11 rsf_build_options)
 add_test(NAME anomaly_sr_hooks_contract COMMAND rsf_anomaly_sr_hooks_test)
-add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
+add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.c" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
 target_include_directories(rsf_anomaly_sr_roundtrip_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
@@ -194,7 +195,7 @@ foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_d
         set_target_properties(${rsf_sr5_client} PROPERTIES LINKER_LANGUAGE CXX)
         target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust)
     else()
-        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.cpp"
+        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.c"
             "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
         target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics d3d11 dxgi)
     endif()

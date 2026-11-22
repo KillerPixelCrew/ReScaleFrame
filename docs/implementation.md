@@ -8243,6 +8243,14 @@ checks used pinned formatting, targeted binding regeneration and locked
 offline Windows metadata.
 [F01 admission evidence](research/rust-anomaly-sr-swap.md#f01-typed-callback-admission-from-10dac39f)
 
+The Anomaly N01 oracle and N07 fixture follow-up moves temporal history,
+planning and column-vector comparison math into an independent Rust
+model. C launchers retain linked Runtime graphics and the native profile
+and D3D11 boundaries. The native geometry fixture supplies its guarded
+captures to the Rust oracle. Pinned formatting, binding regeneration,
+locked offline metadata and focused MSVC syntax checks passed.
+[Source evidence](research/rust-anomaly-sr-swap.md#n01-oracle-and-n07-launchers-from-6c935471)
+
 ### Direct overlay service and panel admission
 
 Rust now owns the remaining overlay service entry points and binds input,

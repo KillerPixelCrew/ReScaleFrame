@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: MIT
-//! CPU scenarios for the independent C++ temporal model.
+//! CPU scenarios for the independent temporal model.
 mod abi;
+mod geometry_bridge;
 mod history;
 mod math;
+mod oracle;
 
 use abi::{
-    rsf_anomaly_plan_camera as Camera, rsf_anomaly_plan_camera_pair as Pair,
-    rsf_anomaly_plan_capture as Capture, rsf_anomaly_plan_extent as Extent,
-    rsf_anomaly_plan_fixture as Oracle, rsf_anomaly_plan_frame as Frame,
-    rsf_anomaly_plan_key as Key, rsf_anomaly_plan_matrix as Matrix, rsf_anomaly_plan_pose as Pose,
-    rsf_anomaly_plan_resolutions as Sizes, rsf_anomaly_plan_sample as Sample,
+    rsf_anomaly_plan_camera as Camera, rsf_anomaly_plan_extent as Extent,
+    rsf_anomaly_plan_frame as Frame, rsf_anomaly_plan_key as Key,
+    rsf_anomaly_plan_matrix as Matrix, rsf_anomaly_plan_resolutions as Sizes,
     rsf_anomaly_plan_token as Token, rsf_anomaly_plan_vec2 as Vec2, rsf_anomaly_plan_vec4 as Vec4,
-    rsf_anomaly_plan_view as Plan,
 };
-use std::ffi::{CStr, c_char, c_void};
+use oracle::{Capture, History, Pose};
+use std::ffi::{CStr, c_char};
 use std::panic::catch_unwind;
-use std::ptr::NonNull;
 
 const MAIN: u8 = 0;
 const SCOPE: u8 = 1;
@@ -94,115 +93,46 @@ fn token(t: Token) -> (u64, u64, u64, u8) {
     (t.source_frame, t.serial, t.owner, t.view)
 }
 
-struct History<'a> {
-    api: &'a Oracle,
-    ptr: NonNull<c_void>,
-}
-
-impl<'a> History<'a> {
-    fn new(api: &'a Oracle) -> Self {
-        Self {
-            api,
-            ptr: NonNull::new(unsafe { api.create.unwrap()() }).expect("temporal history"),
-        }
+pub(crate) fn swap_camera(
+    projection: &[f32; 16],
+    view: &[f32; 16],
+    x: f32,
+    y: f32,
+    size: [u32; 2],
+) -> Option<([f32; 16], [f32; 16])> {
+    let column = Matrix {
+        values: std::array::from_fn(|i| f64::from(projection[(i % 4) * 4 + i / 4])),
+    };
+    let jitter = oracle::math::jitter(
+        &column,
+        f64::from(x),
+        f64::from(y),
+        extent(size[0], size[1]),
+    )?;
+    let row: [f32; 16] = std::array::from_fn(|i| jitter.values[(i % 4) * 4 + i / 4] as f32);
+    if !row.into_iter().all(f32::is_finite) {
+        return None;
     }
-
-    fn begin(&self, frame: &Frame) -> (u32, Token) {
-        let mut token = Token::default();
-        let status = unsafe { self.api.begin.unwrap()(self.ptr.as_ptr(), frame, &mut token) };
-        assert_ne!(status, u32::MAX, "native begin failed");
-        assert_eq!(token.owner != 0, matches!(status, STARTED | REPEATED));
-        (status, token)
-    }
-
-    fn start(&self, frame: &Frame) -> Token {
-        let (status, token) = self.begin(frame);
-        assert_eq!(status, STARTED);
-        token
-    }
-
-    fn cameras(&self, token: Token, domain: u8) -> Option<Pair> {
-        let mut out = Pair::default();
-        unsafe { self.api.cameras.unwrap()(self.ptr.as_ptr(), &token, domain, &mut out) }
-            .then_some(out)
-    }
-
-    fn plan(&self, token: Token) -> Option<Plan> {
-        let mut out = Plan::default();
-        unsafe { self.api.plan.unwrap()(self.ptr.as_ptr(), &token, &mut out) }.then_some(out)
-    }
-
-    fn capture(&self, token: Token, key: Key, pose: &Pose) -> OwnedCapture<'a> {
-        let capture = unsafe { self.api.capture.unwrap()(self.ptr.as_ptr(), &token, key, pose) };
-        assert!(!capture.owner.is_null(), "native capture failed");
-        OwnedCapture {
-            api: self.api,
-            capture,
-        }
-    }
-
-    fn retire(&self, key: Key) -> bool {
-        unsafe { self.api.retire.unwrap()(self.ptr.as_ptr(), key) }
-    }
-
-    fn reset_view(&self, view: u8) -> bool {
-        unsafe { self.api.reset_view.unwrap()(self.ptr.as_ptr(), view) }
-    }
-
-    fn reset_all(&self) {
-        unsafe { self.api.reset_all.unwrap()(self.ptr.as_ptr()) };
-    }
-}
-
-impl Drop for History<'_> {
-    fn drop(&mut self) {
-        unsafe { self.api.destroy.unwrap()(self.ptr.as_ptr()) };
-    }
-}
-
-struct OwnedCapture<'a> {
-    api: &'a Oracle,
-    capture: Capture,
-}
-impl OwnedCapture<'_> {
-    fn sample(&self, ptr: *const c_void) -> Option<Sample> {
-        if ptr.is_null() {
-            return None;
-        }
-        let mut sample = Sample::default();
-        unsafe { self.api.sample.unwrap()(ptr, &mut sample) };
-        Some(sample)
-    }
-    fn current(&self) -> Option<Sample> {
-        self.sample(self.capture.current)
-    }
-    fn previous(&self) -> Option<Sample> {
-        self.sample(self.capture.previous)
-    }
-    fn status(&self) -> u32 {
-        self.capture.status
-    }
-    fn handles(&self) -> (*const c_void, *const c_void) {
-        (self.capture.current, self.capture.previous)
-    }
-}
-impl Drop for OwnedCapture<'_> {
-    fn drop(&mut self) {
-        unsafe { self.api.drop_capture.unwrap()(self.capture.owner) };
-    }
+    // Original Fmatrix multiplication order for the separate native view oracle.
+    let full = std::array::from_fn(|i| {
+        let r = (i / 4) * 4;
+        let c = i % 4;
+        row[c] * view[r]
+            + row[4 + c] * view[r + 1]
+            + row[8 + c] * view[r + 2]
+            + row[12 + c] * view[r + 3]
+    });
+    Some((row, full))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_temporal_planning_fixture(
-    selection: *const c_char,
-    api: &Oracle,
-) -> i32 {
+unsafe extern "C" fn rsf_anomaly_temporal_planning_fixture(selection: *const c_char) -> i32 {
     let selected = if selection.is_null() {
         None
     } else {
         Some(unsafe { CStr::from_ptr(selection) }.to_bytes())
     };
-    let cases: &[(&str, fn(&Oracle))] = &[
+    let cases: &[(&str, fn())] = &[
         ("independent_dimensions", math::independent_dimensions),
         ("dimension_validation", math::dimension_validation),
         ("matrix_motion", math::matrix_motion),
@@ -266,7 +196,7 @@ unsafe extern "C" fn rsf_anomaly_temporal_planning_fixture(
     let mut count = 0;
     for &(name, run) in cases {
         if selected.is_none_or(|value| value == name.as_bytes()) {
-            if catch_unwind(|| run(api)).is_err() {
+            if catch_unwind(run).is_err() {
                 eprintln!("FAIL: {name}");
                 return 1;
             }

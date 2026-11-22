@@ -9,7 +9,7 @@
 // Y down (shaders/core/README.md).
 //
 // Engine matrices are X-Ray Fmatrix bytes: row-major storage and ROW vectors, clip = v * M. The NDC offset is applied
-// by temporal::jitter_projection (column vectors) on the transposed matrix, which for row vectors is
+// by the independent temporal fixture (column vectors) on the transposed matrix, which for row vectors is
 // M[i][0] += 2x/W * M[i][3] and M[i][1] -= 2y/H * M[i][3] for every row i (for a perspective matrix: _31 and _32).
 #include "sr_stage_platform.h"
 #include <bit>

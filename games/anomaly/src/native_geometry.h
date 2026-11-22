@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "../temporal/history.h"
+#include "temporal_types.h"
 #include <cstddef>
 #include <cstdint>
 #include <optional>

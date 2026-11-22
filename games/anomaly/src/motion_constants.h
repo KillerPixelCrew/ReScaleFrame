@@ -2,7 +2,7 @@
 #pragma once
 // Byte layouts of the per-draw b13 constant buffers, exactly as games/anomaly/shaders/core/README.md and
 // games/anomaly/shaders/foliage/README.md specify them (FXC-reflected offsets). Pure CPU; no D3D.
-#include "../temporal/math.h"
+#include "temporal_types.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>

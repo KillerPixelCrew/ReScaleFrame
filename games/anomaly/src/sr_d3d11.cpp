@@ -214,3 +214,7 @@ bool UpscalePass::reinsert(ID3D11DeviceContext* context, const UpscaleViews& vie
     return rsf_anomaly_sr_run_pass(owner_.get(), context, RSF_SR_REINSERT, &view) != 0;
 }
 }
+
+extern "C" const rsf_sr_d3d11* rsf_anomaly_sr_d3d11_platform(void) noexcept {
+    return &rsf::anomaly::sr::d3d11_platform();
+}

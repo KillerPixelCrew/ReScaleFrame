@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct rsf_anomaly_plan_matrix {
     pub values: [f64; 16usize],
 }
@@ -18,7 +18,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_plan_matrix, values) - 0usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct rsf_anomaly_plan_extent {
     pub width: u32,
     pub height: u32,
@@ -34,7 +34,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_plan_extent, height) - 4usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct rsf_anomaly_plan_vec2 {
     pub x: f64,
     pub y: f64,
@@ -50,7 +50,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_plan_vec2, y) - 8usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct rsf_anomaly_plan_vec4 {
     pub x: f64,
     pub y: f64,
@@ -72,7 +72,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_plan_vec4, w) - 24usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct rsf_anomaly_plan_resolutions {
     pub output: rsf_anomaly_plan_extent,
     pub render: rsf_anomaly_plan_extent,
@@ -92,7 +92,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_plan_resolutions, pda) - 16usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct rsf_anomaly_plan_camera {
     pub view: rsf_anomaly_plan_matrix,
     pub projection: rsf_anomaly_plan_matrix,
@@ -112,7 +112,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_plan_camera, jitter) - 256usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct rsf_anomaly_plan_frame {
     pub world: rsf_anomaly_plan_camera,
     pub first_person: rsf_anomaly_plan_camera,
@@ -146,7 +146,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_plan_frame, first_person_cut) - 579usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct rsf_anomaly_plan_token {
     pub source_frame: u64,
     pub serial: u64,
@@ -168,61 +168,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_plan_token, view) - 24usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_plan_camera_pair {
-    pub current: rsf_anomaly_plan_camera,
-    pub previous: rsf_anomaly_plan_camera,
-    pub previous_frame: u64,
-    pub has_previous: bool,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_plan_camera_pair"]
-        [::core::mem::size_of::<rsf_anomaly_plan_camera_pair>() - 560usize];
-    ["Alignment of rsf_anomaly_plan_camera_pair"]
-        [::core::mem::align_of::<rsf_anomaly_plan_camera_pair>() - 8usize];
-    ["Offset of field: rsf_anomaly_plan_camera_pair::current"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_camera_pair, current) - 0usize];
-    ["Offset of field: rsf_anomaly_plan_camera_pair::previous"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_camera_pair, previous) - 272usize];
-    ["Offset of field: rsf_anomaly_plan_camera_pair::previous_frame"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_camera_pair, previous_frame) - 544usize];
-    ["Offset of field: rsf_anomaly_plan_camera_pair::has_previous"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_camera_pair, has_previous) - 552usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_plan_view {
-    pub token: rsf_anomaly_plan_token,
-    pub sizes: rsf_anomaly_plan_resolutions,
-    pub screen_ui: rsf_anomaly_plan_extent,
-    pub world: rsf_anomaly_plan_matrix,
-    pub first_person: rsf_anomaly_plan_matrix,
-    pub presentation: u32,
-    pub has_first_person: bool,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_plan_view"][::core::mem::size_of::<rsf_anomaly_plan_view>() - 328usize];
-    ["Alignment of rsf_anomaly_plan_view"]
-        [::core::mem::align_of::<rsf_anomaly_plan_view>() - 8usize];
-    ["Offset of field: rsf_anomaly_plan_view::token"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_view, token) - 0usize];
-    ["Offset of field: rsf_anomaly_plan_view::sizes"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_view, sizes) - 32usize];
-    ["Offset of field: rsf_anomaly_plan_view::screen_ui"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_view, screen_ui) - 56usize];
-    ["Offset of field: rsf_anomaly_plan_view::world"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_view, world) - 64usize];
-    ["Offset of field: rsf_anomaly_plan_view::first_person"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_view, first_person) - 192usize];
-    ["Offset of field: rsf_anomaly_plan_view::presentation"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_view, presentation) - 320usize];
-    ["Offset of field: rsf_anomaly_plan_view::has_first_person"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_view, has_first_person) - 324usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct rsf_anomaly_plan_key {
     pub owner: u64,
     pub visual: u64,
@@ -244,46 +190,28 @@ const _: () = {
 pub struct rsf_anomaly_plan_pose {
     pub world: rsf_anomaly_plan_matrix,
     pub palette_layout: u64,
-    pub deformation_layout: u64,
     pub bones: *const rsf_anomaly_plan_matrix,
     pub bone_count: usize,
-    pub constants: *const rsf_anomaly_plan_vec4,
-    pub constant_count: usize,
-    pub fade: f64,
     pub domain: u8,
     pub kind: u8,
-    pub has_deformation: bool,
-    pub has_detail: bool,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_anomaly_plan_pose"][::core::mem::size_of::<rsf_anomaly_plan_pose>() - 192usize];
+    ["Size of rsf_anomaly_plan_pose"][::core::mem::size_of::<rsf_anomaly_plan_pose>() - 160usize];
     ["Alignment of rsf_anomaly_plan_pose"]
         [::core::mem::align_of::<rsf_anomaly_plan_pose>() - 8usize];
     ["Offset of field: rsf_anomaly_plan_pose::world"]
         [::core::mem::offset_of!(rsf_anomaly_plan_pose, world) - 0usize];
     ["Offset of field: rsf_anomaly_plan_pose::palette_layout"]
         [::core::mem::offset_of!(rsf_anomaly_plan_pose, palette_layout) - 128usize];
-    ["Offset of field: rsf_anomaly_plan_pose::deformation_layout"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, deformation_layout) - 136usize];
     ["Offset of field: rsf_anomaly_plan_pose::bones"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, bones) - 144usize];
+        [::core::mem::offset_of!(rsf_anomaly_plan_pose, bones) - 136usize];
     ["Offset of field: rsf_anomaly_plan_pose::bone_count"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, bone_count) - 152usize];
-    ["Offset of field: rsf_anomaly_plan_pose::constants"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, constants) - 160usize];
-    ["Offset of field: rsf_anomaly_plan_pose::constant_count"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, constant_count) - 168usize];
-    ["Offset of field: rsf_anomaly_plan_pose::fade"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, fade) - 176usize];
+        [::core::mem::offset_of!(rsf_anomaly_plan_pose, bone_count) - 144usize];
     ["Offset of field: rsf_anomaly_plan_pose::domain"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, domain) - 184usize];
+        [::core::mem::offset_of!(rsf_anomaly_plan_pose, domain) - 152usize];
     ["Offset of field: rsf_anomaly_plan_pose::kind"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, kind) - 185usize];
-    ["Offset of field: rsf_anomaly_plan_pose::has_deformation"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, has_deformation) - 186usize];
-    ["Offset of field: rsf_anomaly_plan_pose::has_detail"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_pose, has_detail) - 187usize];
+        [::core::mem::offset_of!(rsf_anomaly_plan_pose, kind) - 153usize];
 };
 impl Default for rsf_anomaly_plan_pose {
     fn default() -> Self {
@@ -296,208 +224,21 @@ impl Default for rsf_anomaly_plan_pose {
 }
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_plan_sample {
-    pub world: rsf_anomaly_plan_matrix,
-    pub bone1: rsf_anomaly_plan_matrix,
-    pub deformation_w: f64,
-    pub fade: f64,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_plan_sample"]
-        [::core::mem::size_of::<rsf_anomaly_plan_sample>() - 272usize];
-    ["Alignment of rsf_anomaly_plan_sample"]
-        [::core::mem::align_of::<rsf_anomaly_plan_sample>() - 8usize];
-    ["Offset of field: rsf_anomaly_plan_sample::world"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_sample, world) - 0usize];
-    ["Offset of field: rsf_anomaly_plan_sample::bone1"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_sample, bone1) - 128usize];
-    ["Offset of field: rsf_anomaly_plan_sample::deformation_w"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_sample, deformation_w) - 256usize];
-    ["Offset of field: rsf_anomaly_plan_sample::fade"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_sample, fade) - 264usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
 pub struct rsf_anomaly_plan_capture {
-    pub owner: *mut ::core::ffi::c_void,
-    pub current: *const ::core::ffi::c_void,
-    pub previous: *const ::core::ffi::c_void,
+    pub previous_world: rsf_anomaly_plan_matrix,
     pub status: u32,
+    pub has_previous: bool,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_plan_capture"]
-        [::core::mem::size_of::<rsf_anomaly_plan_capture>() - 32usize];
+        [::core::mem::size_of::<rsf_anomaly_plan_capture>() - 136usize];
     ["Alignment of rsf_anomaly_plan_capture"]
         [::core::mem::align_of::<rsf_anomaly_plan_capture>() - 8usize];
-    ["Offset of field: rsf_anomaly_plan_capture::owner"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_capture, owner) - 0usize];
-    ["Offset of field: rsf_anomaly_plan_capture::current"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_capture, current) - 8usize];
-    ["Offset of field: rsf_anomaly_plan_capture::previous"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_capture, previous) - 16usize];
+    ["Offset of field: rsf_anomaly_plan_capture::previous_world"]
+        [::core::mem::offset_of!(rsf_anomaly_plan_capture, previous_world) - 0usize];
     ["Offset of field: rsf_anomaly_plan_capture::status"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_capture, status) - 24usize];
-};
-impl Default for rsf_anomaly_plan_capture {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_plan_fixture {
-    pub resolutions: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const rsf_anomaly_plan_resolutions,
-            arg2: *mut rsf_anomaly_plan_resolutions,
-        ) -> bool,
-    >,
-    pub jitter: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const rsf_anomaly_plan_matrix,
-            arg2: rsf_anomaly_plan_vec2,
-            arg3: rsf_anomaly_plan_extent,
-            arg4: *mut rsf_anomaly_plan_matrix,
-        ) -> bool,
-    >,
-    pub multiply: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const rsf_anomaly_plan_matrix,
-            arg2: *const rsf_anomaly_plan_matrix,
-            arg3: *mut rsf_anomaly_plan_matrix,
-        ) -> bool,
-    >,
-    pub inverse: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const rsf_anomaly_plan_matrix,
-            arg2: *mut rsf_anomaly_plan_matrix,
-        ) -> bool,
-    >,
-    pub transform: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const rsf_anomaly_plan_matrix,
-            arg2: rsf_anomaly_plan_vec4,
-            arg3: *mut rsf_anomaly_plan_vec4,
-        ) -> bool,
-    >,
-    pub pixel_motion: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: rsf_anomaly_plan_vec4,
-            arg2: rsf_anomaly_plan_vec4,
-            arg3: rsf_anomaly_plan_extent,
-            arg4: rsf_anomaly_plan_vec2,
-            arg5: rsf_anomaly_plan_vec2,
-            arg6: *mut rsf_anomaly_plan_vec2,
-        ) -> bool,
-    >,
-    pub matrix_read: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const rsf_anomaly_plan_matrix,
-            arg2: usize,
-            arg3: usize,
-            arg4: *mut f64,
-        ) -> bool,
-    >,
-    pub matrix_write: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut rsf_anomaly_plan_matrix,
-            arg2: usize,
-            arg3: usize,
-            arg4: f64,
-        ) -> bool,
-    >,
-    pub create: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
-    pub destroy: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
-    pub begin: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut ::core::ffi::c_void,
-            arg2: *const rsf_anomaly_plan_frame,
-            arg3: *mut rsf_anomaly_plan_token,
-        ) -> u32,
-    >,
-    pub cameras: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut ::core::ffi::c_void,
-            arg2: *const rsf_anomaly_plan_token,
-            arg3: u8,
-            arg4: *mut rsf_anomaly_plan_camera_pair,
-        ) -> bool,
-    >,
-    pub plan: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut ::core::ffi::c_void,
-            arg2: *const rsf_anomaly_plan_token,
-            arg3: *mut rsf_anomaly_plan_view,
-        ) -> bool,
-    >,
-    pub capture: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut ::core::ffi::c_void,
-            arg2: *const rsf_anomaly_plan_token,
-            arg3: rsf_anomaly_plan_key,
-            arg4: *const rsf_anomaly_plan_pose,
-        ) -> rsf_anomaly_plan_capture,
-    >,
-    pub drop_capture: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
-    pub sample: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *const ::core::ffi::c_void, arg2: *mut rsf_anomaly_plan_sample),
-    >,
-    pub retire: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: rsf_anomaly_plan_key) -> bool,
-    >,
-    pub reset_view: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: u8) -> bool,
-    >,
-    pub reset_all: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_plan_fixture"]
-        [::core::mem::size_of::<rsf_anomaly_plan_fixture>() - 152usize];
-    ["Alignment of rsf_anomaly_plan_fixture"]
-        [::core::mem::align_of::<rsf_anomaly_plan_fixture>() - 8usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::resolutions"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, resolutions) - 0usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::jitter"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, jitter) - 8usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::multiply"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, multiply) - 16usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::inverse"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, inverse) - 24usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::transform"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, transform) - 32usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::pixel_motion"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, pixel_motion) - 40usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::matrix_read"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, matrix_read) - 48usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::matrix_write"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, matrix_write) - 56usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::create"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, create) - 64usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::destroy"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, destroy) - 72usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::begin"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, begin) - 80usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::cameras"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, cameras) - 88usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::plan"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, plan) - 96usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::capture"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, capture) - 104usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::drop_capture"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, drop_capture) - 112usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::sample"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, sample) - 120usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::retire"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, retire) - 128usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::reset_view"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, reset_view) - 136usize];
-    ["Offset of field: rsf_anomaly_plan_fixture::reset_all"]
-        [::core::mem::offset_of!(rsf_anomaly_plan_fixture, reset_all) - 144usize];
+        [::core::mem::offset_of!(rsf_anomaly_plan_capture, status) - 128usize];
+    ["Offset of field: rsf_anomaly_plan_capture::has_previous"]
+        [::core::mem::offset_of!(rsf_anomaly_plan_capture, has_previous) - 132usize];
 };
