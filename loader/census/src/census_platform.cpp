@@ -6,6 +6,7 @@
 
 #include "census_internal.h"
 #include "ngx_platform.h"
+#include "misc_platform.h"
 #include "wrapper_platform.h"
 
 namespace rsf_census {
@@ -87,6 +88,39 @@ void register_wrappers_ngx(void** table) noexcept {
     };
     void* wrappers[RSF_CENSUS_NGX_ENTRIES]{};
     rsf_census_ngx_bind(&platform, entries, wrappers);
+    for (size_t i = 0; i < std::size(entries); ++i) table[entries[i]] = wrappers[i];
+}
+
+void register_wrappers_misc(void** table) noexcept {
+    static constexpr uint16_t entries[] = {
+#define RSF_CENSUS_MISC_ID(name) static_cast<uint16_t>(Fn::name),
+        RSF_CENSUS_MISC_ENTRIES(RSF_CENSUS_MISC_ID)
+#undef RSF_CENSUS_MISC_ID
+    };
+    static_assert(std::size(entries) == RSF_MISC_COUNT);
+    static const rsf_census_misc_platform platform = {
+        safe_read, read_arg_string,
+        [](const void* p, uint16_t* text, size_t capacity) {
+            return read_arg_wstring(p, reinterpret_cast<wchar_t*>(text), capacity);
+        },
+        [](const void* token, uint32_t* value) {
+            auto f = reinterpret_cast<uint32_t (*)(const void*)>(vtable_slot(token, 0));
+            return f && guard([&] { *value = f(token); });
+        },
+        [](void** output, void* value) { guard([&] { *output = value; }); },
+        [](const char* name, void* value) {
+            const Fn found = lookup_name(name);
+            return found != Fn::Count && !std::strcmp(kFns[idx(found)].api, "streamline") ?
+                bind_thunk(found, value) : nullptr;
+        },
+        [](rsf_census_json* state, const char* key, const void* p) {
+            Json json(state);
+            json_d3d12_resource(json, key, p);
+        },
+        [](rsf_census_json* state, const char* key, double value) { Json(state).f32(key, value); },
+    };
+    void* wrappers[RSF_MISC_COUNT]{};
+    rsf_census_misc_bind(&platform, entries, wrappers);
     for (size_t i = 0; i < std::size(entries); ++i) table[entries[i]] = wrappers[i];
 }
 

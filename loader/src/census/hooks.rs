@@ -201,7 +201,7 @@ pub(super) extern "C" fn rsf_census_hook_original(entry: u16) -> Ptr {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_hook_bind_thunk(entry: u16, real: Ptr) -> Ptr {
+pub(super) extern "C" fn rsf_census_hook_bind_thunk(entry: u16, real: Ptr) -> Ptr {
     let Some(cfg) = CONFIG.get() else { return real };
     let replacement = wrapper(cfg, entry);
     if replacement.is_null() || TARGETS[entry as usize].load(Acquire) == real {

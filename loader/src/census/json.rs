@@ -169,7 +169,7 @@ pub(super) unsafe extern "C" fn rsf_census_json_hex(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_json_bytes(
+pub(super) unsafe extern "C" fn rsf_census_json_bytes(
     json: &mut rsf_census_json,
     key: *const c_char,
     data: *const c_void,

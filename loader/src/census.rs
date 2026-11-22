@@ -8,6 +8,8 @@ mod hooks;
 mod identity;
 mod json;
 mod json_abi;
+mod misc;
+mod misc_abi;
 mod ngx;
 mod ngx_abi;
 mod output;

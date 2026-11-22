@@ -230,3 +230,11 @@ fact collector. All 188 expected values stay associated with the same types, fie
 SDK sets. The fact collector still uses the actual optional vendor headers to supply the
 independent offsets and sizes, including C++ layouts from Streamline. CTest keeps all five
 conditional targets and the original skip code.
+
+## NVAPI, Streamline and AMD wrapper cutover
+
+`loader/census/src/wrap_misc.cpp` is removed. The 36-entry Rust table retains NVAPI Reflex IDs,
+the assumed-layout labels on NVAPI and NvLowLatencyVk records, Streamline decoder bounds,
+and the AMD and AGS fields. NVAPI query and Streamline feature resolution preserve the same
+one-binding behavior. The remaining version-dependent exports retain eight-word forwarding.
+Streamline uses native guarded callbacks for its polymorphic token and writable output pointer.
