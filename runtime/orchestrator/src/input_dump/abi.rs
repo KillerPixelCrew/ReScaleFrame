@@ -213,7 +213,7 @@ pub(crate) unsafe extern "C" fn rsf_core_dump_pixels(
     };
     let view = preview_view(work.view, pixels.format, true);
     let mut encoding = Encoding::INVALID;
-    let platform = platform();
+
     if let Some(rows) = unsafe { PackedRows::new(pixels, pixel_bytes(pixels.format)) }
         .filter(|rows| rows.packed_size() <= MAX_IMAGE_BYTES)
         && let Ok(prefix) = prefix(&work.prefix)
@@ -229,8 +229,7 @@ pub(crate) unsafe extern "C" fn rsf_core_dump_pixels(
             Ok(()) => 0,
             Err(_) => WRITE_FAILED,
         };
-        encoding.preview =
-            unsafe { (platform.preview_pixels)(pixels, &work.options(&prefix, view)) };
+        encoding.preview = unsafe { native::preview_pixels(pixels, &work.options(&prefix, view)) };
     }
     let result = ImageResult {
         surface: Surface {
@@ -333,7 +332,7 @@ unsafe extern "C" fn rsf_core_dump_named_texture(
     }
     let mut surface = Surface::default();
     let Some(texture) =
-        (unsafe { ComRef::from_owned((platform().open_texture)(context, source, &mut surface)) })
+        (unsafe { ComRef::from_owned(native::open_texture(context, source, &mut surface)) })
     else {
         return INVALID;
     };
@@ -351,7 +350,7 @@ unsafe extern "C" fn rsf_core_dump_named_texture(
         Log::new(request.log, request.log_user),
     );
     let mut encoding = Encoding::INVALID;
-    unsafe { (platform().encode_texture)(context, texture.as_ptr(), &options, 0, &mut encoding) };
+    unsafe { native::encode_texture(context, texture.as_ptr(), &options, 0, &mut encoding) };
     if encoding.preview == 0
         && !report.is_null()
         && unsafe { report.cast::<u32>().read() } as usize >= size_of::<NamedReport>()
@@ -385,7 +384,7 @@ unsafe extern "C" fn rsf_core_dump_pass_metadata(input: *const rsf_game_render_p
             return;
         }
         capture.identity = Some(pass.into());
-        let depth_requested = unsafe { (platform().depth_domains_requested)(&pass.depth_domains) };
+        let depth_requested = unsafe { native::depth_domains_requested(&pass.depth_domains) };
         let _ = metadata::engine_pass(&capture.bundle, pass, depth_requested);
     });
 }

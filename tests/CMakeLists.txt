@@ -209,29 +209,40 @@ target_link_libraries(rsf_module_dump_self PRIVATE ReScaleFrame::LoaderDiagnosti
 target_compile_definitions(rsf_module_dump_self PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_test(NAME module_dump_self COMMAND rsf_module_dump_self "${CMAKE_CURRENT_BINARY_DIR}")
 
-add_executable(rsf_texture_dump texture_dump.cpp)
+function(rsf_add_capture_fixture target entry feature source)
+    rsf_add_rust_static(${target}_rust ${target}_rust_build
+        rsf-capture-fixtures rsf_capture_fixtures --features ${feature})
+    add_executable(${target} ${source})
+    target_compile_definitions(${target} PRIVATE RSF_CAPTURE_FIXTURE=${entry})
+    target_link_libraries(${target} PRIVATE ${target}_rust rsf_build_options)
+endfunction()
+
+rsf_add_capture_fixture(rsf_texture_dump rsf_fixture_texture_dump texture capture_fixture_main.c)
 target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME texture_dump COMMAND rsf_texture_dump "${CMAKE_CURRENT_BINARY_DIR}")
 
-add_executable(rsf_input_dump_test input_dump.cpp)
+rsf_add_capture_fixture(rsf_input_dump_test rsf_fixture_input_dump_d3d11 d3d11 capture_fixture_main.c)
 add_library(rsf_input_dump_c_header OBJECT input_dump_c_header.c)
 target_link_libraries(rsf_input_dump_c_header PRIVATE ReScaleFrame::FrameDump rsf_build_options)
 target_link_libraries(rsf_input_dump_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options windowscodecs ole32)
 add_test(NAME input_dump COMMAND rsf_input_dump_test "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(input_dump PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_input_dump_d3d12 input_dump_d3d12.cpp)
+rsf_add_capture_fixture(rsf_input_dump_d3d12 rsf_fixture_input_dump_d3d12 d3d12 capture_fixture_main.c)
 target_compile_definitions(rsf_input_dump_d3d12 PRIVATE RSF_FRAME_DUMP_STATIC)
 target_link_libraries(rsf_input_dump_d3d12 PRIVATE ReScaleFrame::FrameDump rsf_build_options d3d12 dxgi)
 add_test(NAME input_dump_d3d12 COMMAND rsf_input_dump_d3d12 "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(input_dump_d3d12 PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
-    add_executable(rsf_input_dump_vulkan_cpu input_dump_vulkan_cpu.cpp)
+    rsf_add_capture_fixture(rsf_input_dump_vulkan_cpu rsf_fixture_input_dump_vulkan_cpu vulkan-cpu
+        capture_vulkan_fixture_main.c)
     target_link_libraries(rsf_input_dump_vulkan_cpu PRIVATE ReScaleFrame::NativeVulkan rsf_build_options)
     add_test(NAME input_dump_vulkan_cpu_linked COMMAND rsf_input_dump_vulkan_cpu "${CMAKE_CURRENT_BINARY_DIR}")
 
-    add_executable(rsf_input_dump_vulkan_cpu_dll input_dump_vulkan_cpu.cpp)
+    add_executable(rsf_input_dump_vulkan_cpu_dll capture_vulkan_fixture_main.c)
+    target_compile_definitions(rsf_input_dump_vulkan_cpu_dll PRIVATE RSF_CAPTURE_FIXTURE=rsf_fixture_input_dump_vulkan_cpu)
+    target_link_libraries(rsf_input_dump_vulkan_cpu_dll PRIVATE rsf_input_dump_vulkan_cpu_rust)
     target_include_directories(rsf_input_dump_vulkan_cpu_dll PRIVATE
         "$<TARGET_PROPERTY:rsf_frame_dump,INTERFACE_INCLUDE_DIRECTORIES>")
     target_include_directories(rsf_input_dump_vulkan_cpu_dll SYSTEM PRIVATE "${RSF_FRAME_DUMP_VULKAN_INCLUDE}")
@@ -240,7 +251,8 @@ if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
     add_dependencies(rsf_input_dump_vulkan_cpu_dll rsf_orchestrator)
     add_test(NAME input_dump_vulkan_cpu_dll COMMAND rsf_input_dump_vulkan_cpu_dll "${CMAKE_CURRENT_BINARY_DIR}")
 
-    add_executable(rsf_input_dump_vulkan input_dump_vulkan.cpp)
+    rsf_add_capture_fixture(rsf_input_dump_vulkan rsf_fixture_input_dump_vulkan vulkan
+        capture_vulkan_fixture_main.c)
     target_include_directories(rsf_input_dump_vulkan SYSTEM PRIVATE "${RSF_FRAME_DUMP_VULKAN_INCLUDE}")
     target_compile_definitions(rsf_input_dump_vulkan PRIVATE RSF_RUNTIME_BUILD)
     target_link_libraries(rsf_input_dump_vulkan PRIVATE ReScaleFrame::NativeVulkan rsf_build_options)
@@ -976,7 +988,7 @@ if(TARGET rsf_godot AND TARGET rsf_unity_package)
 endif()
 
 
-add_executable(rsf_capture_metadata capture_metadata.cpp)
+rsf_add_capture_fixture(rsf_capture_metadata rsf_fixture_capture_metadata metadata capture_fixture_main.c)
 target_link_libraries(rsf_capture_metadata PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options windowscodecs ole32)
 add_test(NAME capture_metadata_contract COMMAND rsf_capture_metadata "${CMAKE_CURRENT_BINARY_DIR}")
 

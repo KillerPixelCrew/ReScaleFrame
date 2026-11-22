@@ -83,6 +83,10 @@ leaves. Each retains its texture admission, fences and file format.
 
 ## Remaining native surface
 
+The later follow-up ports the D3D12 leaves, D3D11 dump leaves, WIC encoder
+and all six G07 fixture bodies. This section records the earlier boundary.
+[Native capture and fixture port](rust-capture-native-followup.md)
+
 `native_fg_dx12_vulkan.cpp` was removed. `frame_capture_vk.h` and
 `input_dump_vulkan.cpp` retain the native ownership facade and export
 forwards. The D3D12 readback and fence calls, WIC PNG interop, and D3D11

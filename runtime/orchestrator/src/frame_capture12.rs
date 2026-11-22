@@ -18,6 +18,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+mod native;
+
 type Handle = *mut c_void;
 
 const ALL_SLOTS: u32 = u32::MAX;
@@ -532,14 +534,16 @@ unsafe fn text<'a>(value: *const c_char) -> Option<&'a CStr> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_create(
-    environment: u32,
-    ops: &'static Platform,
-) -> *mut Owner {
+extern "C" fn rsf_core_capture12_native_platform() -> *const Platform {
+    &native::PLATFORM
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_capture12_create(environment: u32) -> *mut Owner {
     let owner = if environment != 0 {
-        Owner::from_environment(ops)
+        Owner::from_environment(&native::PLATFORM)
     } else {
-        Owner::new(ops, Legacy::default(), false)
+        Owner::new(&native::PLATFORM, Legacy::default(), false)
     };
     crate::allocate_handle(owner)
 }
@@ -685,11 +689,11 @@ unsafe extern "C" fn rsf_core_capture12_flush_after_queue(
 // Public capture readers use the same owner as the embedded backends without
 // the environment-driven capture window.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump12_create(out: *mut *mut Owner, ops: &'static Platform) -> i32 {
+unsafe extern "C" fn rsf_core_dump12_create(out: *mut *mut Owner) -> i32 {
     if out.is_null() {
         return INVALID;
     }
-    let owner = unsafe { rsf_core_capture12_create(0, ops) };
+    let owner = rsf_core_capture12_create(0);
     unsafe { out.write(owner) };
     if owner.is_null() { INIT_FAILED } else { OK }
 }

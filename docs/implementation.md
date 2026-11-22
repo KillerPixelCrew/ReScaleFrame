@@ -1384,6 +1384,12 @@ buffer. D3D12 and Vulkan share the legacy metadata and artifact names carry
 view and generation. Source and ABI checks passed. Builds, fixtures and
 device checks remain open. [Shared capture port](research/rust-shared-capture-port.md)
 
+The D3D12 capture and FG colour readback leaves now share typed Rust
+allocation, copy and mapping. Rust also owns D3D11 predication and WIC
+encoding. All six G07 fixture bodies moved to Rust and retain their native C
+entry points. Source and generated ABI checks passed. Compile, link, fixture
+and device checks remain open. [Native capture and fixture port](research/rust-capture-native-followup.md)
+
 The standalone FSR3 bridge now binds the SDK and owns the SR, FG and
 swapchain transactions in Rust. It keeps the active FG and swapchain
 paired through disable, drain, UI clear and checked retirement.

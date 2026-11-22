@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: MIT
-use super::{Clock, Surface};
+use super::{Clock, Encoding, INVALID, Pixels, Surface, TextureOptions};
+use rsf_game_sys::rsf_game_depth_domains;
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::OnceLock;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_DEVICE_CONTEXT_IMMEDIATE, D3D11_TEXTURE2D_DESC, ID3D11DeviceContext, ID3D11Texture2D,
+    D3D11_DEVICE_CONTEXT_IMMEDIATE, D3D11_TEXTURE2D_DESC, ID3D11DeviceContext, ID3D11Predicate,
+    ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
-use windows::core::{IUnknown, Interface};
+use windows::core::{BOOL, IUnknown, Interface};
 use windows_sys::Win32::System::SystemInformation::{GetLocalTime, GetTickCount64};
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F10};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_read_clock(out: &mut Clock) {
+pub(super) fn read_clock(out: &mut Clock) {
     let mut foreground = 0;
     unsafe {
         GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground);
@@ -24,8 +26,7 @@ unsafe extern "C" fn rsf_core_dump_read_clock(out: &mut Clock) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_read_local_time(out: &mut Clock) {
+pub(super) fn read_local_time(out: &mut Clock) {
     let mut now = windows_sys::Win32::Foundation::SYSTEMTIME::default();
     unsafe { GetLocalTime(&mut now) };
     out.year = u32::from(now.wYear);
@@ -37,8 +38,7 @@ unsafe extern "C" fn rsf_core_dump_read_local_time(out: &mut Clock) {
     out.millisecond = u32::from(now.wMilliseconds);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_open_texture(
+pub(super) unsafe fn open_texture(
     context: *mut c_void,
     source: *mut c_void,
     surface: &mut Surface,
@@ -67,9 +67,114 @@ unsafe extern "C" fn rsf_core_dump_open_texture(
     texture.into_raw()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_backbuffer(chain: *mut c_void) -> *mut c_void {
+pub(super) unsafe fn backbuffer(chain: *mut c_void) -> *mut c_void {
     unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }
         .and_then(|chain| unsafe { chain.GetBuffer::<ID3D11Texture2D>(0) }.ok())
         .map_or(ptr::null_mut(), Interface::into_raw)
+}
+
+type Handle = *mut c_void;
+
+#[repr(C)]
+struct Services {
+    struct_size: u32,
+    hash: unsafe extern "C" fn(*const u16, u32, *mut u8) -> u32,
+    raw: unsafe extern "C" fn(Handle, Handle, Handle, *const TextureOptions) -> i32,
+    png: unsafe extern "C" fn(Handle, Handle, Handle, *const TextureOptions, Handle) -> i32,
+    pixels_png: unsafe extern "C" fn(*const Pixels, *const TextureOptions, Handle) -> i32,
+    depth_domains_requested: unsafe extern "C" fn(*const rsf_game_depth_domains) -> u32,
+}
+
+const _: () = assert!(size_of::<Services>() == 48);
+static SERVICES: OnceLock<&'static Services> = OnceLock::new();
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_dump_bind_services(services: &'static Services) {
+    assert_eq!(services.struct_size as usize, size_of::<Services>());
+    let _ = SERVICES.set(services);
+}
+
+pub(super) fn executable_hash(path: &[u16]) -> String {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let mut digest = [0; 32];
+    if !SERVICES.get().is_some_and(|services| unsafe {
+        (services.hash)(
+            path.as_ptr(),
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            digest.as_mut_ptr(),
+        ) != 0
+    }) {
+        return String::new();
+    }
+    use std::fmt::Write as _;
+    let mut hash = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(hash, "{byte:02x}");
+    }
+    hash
+}
+
+pub(super) unsafe fn depth_domains_requested(value: *const rsf_game_depth_domains) -> u32 {
+    SERVICES.get().map_or(0, |services| unsafe {
+        (services.depth_domains_requested)(value)
+    })
+}
+
+struct Predicate<'a> {
+    context: &'a ID3D11DeviceContext,
+    saved: Option<ID3D11Predicate>,
+    value: BOOL,
+}
+
+impl Drop for Predicate<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            (self.context.vtable().SetPredication)(
+                self.context.as_raw(),
+                self.saved
+                    .as_ref()
+                    .map_or(ptr::null_mut(), Interface::as_raw),
+                self.value,
+            );
+        }
+    }
+}
+
+pub(super) unsafe fn encode_texture(
+    context: Handle,
+    source: Handle,
+    options: *const TextureOptions,
+    include_raw: u32,
+    result: &mut Encoding,
+) {
+    let (Some(services), Some(immediate)) = (SERVICES.get(), unsafe {
+        ID3D11DeviceContext::from_raw_borrowed(&context)
+    }) else {
+        return;
+    };
+    let Ok(device) = (unsafe { immediate.GetDevice() }) else {
+        return;
+    };
+    let mut predicate = Predicate {
+        context: immediate,
+        saved: None,
+        value: BOOL(0),
+    };
+    // Both copies honor predication. Restore the exact native BOOL on exit.
+    unsafe {
+        immediate.GetPredication(Some(&mut predicate.saved), Some(&mut predicate.value));
+        immediate.SetPredication(None::<&ID3D11Predicate>, false);
+        if include_raw != 0 {
+            result.raw = (services.raw)(device.as_raw(), context, source, options);
+        }
+        result.preview = (services.png)(device.as_raw(), context, source, options, ptr::null_mut());
+    }
+}
+
+pub(super) unsafe fn preview_pixels(pixels: *const Pixels, options: *const TextureOptions) -> i32 {
+    SERVICES.get().map_or(INVALID, |services| unsafe {
+        (services.pixels_png)(pixels, options, ptr::null_mut())
+    })
 }

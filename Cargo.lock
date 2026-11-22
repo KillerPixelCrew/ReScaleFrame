@@ -441,6 +441,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-capture-fixtures"
+version = "0.1.2"
+dependencies = [
+ "ash",
+ "rsf-game-sys",
+ "windows",
+ "windows-sys",
+]
+
+[[package]]
 name = "rsf-exposure-probe"
 version = "0.1.2"
 dependencies = [

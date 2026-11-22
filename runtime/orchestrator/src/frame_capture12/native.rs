@@ -1,0 +1,269 @@
+// SPDX-License-Identifier: MIT
+use super::{Handle, Layout, Platform, SUBMITTED};
+use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
+use crate::input_dump::abi::{
+    rsf_core_dump_failed, rsf_core_dump_pixels, rsf_core_dump_reserve, rsf_core_dump_wants,
+};
+use std::mem::ManuallyDrop;
+use std::ptr;
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED;
+use windows::core::Interface;
+use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateEventW};
+
+fn allocate(source: &ID3D12Resource, single_slice: bool) -> Option<(ID3D12Resource, Layout)> {
+    let desc = unsafe { source.GetDesc() };
+    if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+        || desc.SampleDesc.Count != 1
+        || (single_slice && desc.DepthOrArraySize != 1)
+    {
+        return None;
+    }
+    let mut device: Option<ID3D12Device> = None;
+    unsafe { source.GetDevice(&mut device) }.ok()?;
+    let device = device?;
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut bytes = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut bytes),
+        );
+    }
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_READBACK,
+        ..Default::default()
+    };
+    let storage = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Width: bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        ..Default::default()
+    };
+    let mut buffer = None;
+    unsafe {
+        device.CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &storage,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            None,
+            &mut buffer,
+        )
+    }
+    .ok()?;
+    let fields = footprint.Footprint;
+    Some((
+        buffer?,
+        Layout {
+            bytes,
+            offset: footprint.Offset,
+            width: fields.Width,
+            height: fields.Height,
+            format: fields.Format.0 as u32,
+            row_pitch: fields.RowPitch,
+        },
+    ))
+}
+
+unsafe fn allocate_raw(source: Handle, out: *mut Layout, single_slice: bool) -> Handle {
+    let Some((buffer, layout)) = (unsafe { ID3D12Resource::from_raw_borrowed(&source) })
+        .and_then(|source| allocate(source, single_slice))
+    else {
+        return ptr::null_mut();
+    };
+    unsafe { out.write(layout) };
+    buffer.into_raw()
+}
+
+unsafe extern "C" fn allocate_capture(source: Handle, out: *mut Layout) -> Handle {
+    unsafe { allocate_raw(source, out, true) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_platform_readback(source: Handle, out: *mut Layout) -> Handle {
+    unsafe { allocate_raw(source, out, false) }
+}
+
+fn resource_field(resource: &ID3D12Resource) -> ManuallyDrop<Option<ID3D12Resource>> {
+    // The descriptor borrows the live reference held by the recording owner.
+    ManuallyDrop::new(Some(unsafe { ID3D12Resource::from_raw(resource.as_raw()) }))
+}
+
+fn transition(
+    commands: &ID3D12GraphicsCommandList,
+    resource: &ID3D12Resource,
+    from: D3D12_RESOURCE_STATES,
+    to: D3D12_RESOURCE_STATES,
+) {
+    if from == to {
+        return;
+    }
+    let barrier = D3D12_RESOURCE_BARRIER {
+        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                pResource: resource_field(resource),
+                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                StateBefore: from,
+                StateAfter: to,
+            }),
+        },
+    };
+    unsafe { commands.ResourceBarrier(&[barrier]) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_platform_readback_copy(
+    list: Handle,
+    source: Handle,
+    state: u32,
+    buffer: Handle,
+    layout: &Layout,
+) {
+    let (Some(commands), Some(source), Some(buffer)) = (unsafe {
+        (
+            ID3D12GraphicsCommandList::from_raw_borrowed(&list),
+            ID3D12Resource::from_raw_borrowed(&source),
+            ID3D12Resource::from_raw_borrowed(&buffer),
+        )
+    }) else {
+        return;
+    };
+    let before = D3D12_RESOURCE_STATES(state as i32);
+    let copy = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    let from = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: resource_field(source),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    let to = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: resource_field(buffer),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+                Offset: layout.offset,
+                Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                    Format: DXGI_FORMAT(layout.format as i32),
+                    Width: layout.width,
+                    Height: layout.height,
+                    Depth: 1,
+                    RowPitch: layout.row_pitch,
+                },
+            },
+        },
+    };
+    transition(commands, source, before, copy);
+    unsafe { commands.CopyTextureRegion(&to, 0, 0, 0, &from, None) };
+    transition(commands, source, copy, before);
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_platform_map(buffer: Handle, bytes: u64) -> *const u8 {
+    let Some(buffer) = (unsafe { ID3D12Resource::from_raw_borrowed(&buffer) }) else {
+        return ptr::null();
+    };
+    let mut data = ptr::null_mut();
+    let range = D3D12_RANGE {
+        Begin: 0,
+        End: bytes as usize,
+    };
+    if unsafe { buffer.Map(0, Some(&range), Some(&mut data)) }.is_ok() {
+        data.cast()
+    } else {
+        ptr::null()
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg12_platform_unmap(buffer: Handle) {
+    if let Some(buffer) = unsafe { ID3D12Resource::from_raw_borrowed(&buffer) } {
+        let written = D3D12_RANGE { Begin: 0, End: 0 };
+        unsafe { buffer.Unmap(0, Some(&written)) };
+    }
+}
+
+fn new_fence(queue: &ID3D12CommandQueue) -> Option<ID3D12Fence> {
+    let mut device: Option<ID3D12Device> = None;
+    unsafe { queue.GetDevice(&mut device) }.ok()?;
+    unsafe { device?.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.ok()
+}
+
+unsafe extern "C" fn signal(queue: Handle) -> Handle {
+    let fence = (unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) }).and_then(|queue| {
+        let fence = new_fence(queue)?;
+        unsafe { queue.Signal(&fence, SUBMITTED) }.ok()?;
+        Some(fence)
+    });
+    fence.map_or(ptr::null_mut(), Interface::into_raw)
+}
+
+unsafe extern "C" fn completed(fence: Handle) -> u64 {
+    (unsafe { ID3D12Fence::from_raw_borrowed(&fence) })
+        .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
+}
+
+unsafe extern "C" fn arm(fence: Handle, value: u64, event: Handle) -> i32 {
+    let fence = unsafe { ID3D12Fence::from_raw_borrowed(&fence) }.unwrap();
+    unsafe { fence.SetEventOnCompletion(value, HANDLE(event)) }
+        .map_or_else(|error| error.code().0, |()| 0)
+}
+
+unsafe extern "C" fn drain(queue: Handle) -> u64 {
+    let Some(queue) = (unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) }) else {
+        return 0;
+    };
+    let Some(fence) = new_fence(queue) else {
+        return 0;
+    };
+    let event = unsafe { CreateEventW(ptr::null(), 0, 0, ptr::null()) };
+    if event.is_null() {
+        return 0;
+    }
+    let result = unsafe { queue.Signal(&fence, SUBMITTED) }.map_or_else(
+        |error| error.code().0,
+        |()| unsafe {
+            rsf_core_d3d12_wait_fence(fence.as_raw(), SUBMITTED, event, 15_000, completed, arm)
+        },
+    );
+    unsafe { CloseHandle(event) };
+    if result == DXGI_ERROR_DEVICE_REMOVED.0 {
+        u64::MAX
+    } else if result >= 0 {
+        SUBMITTED
+    } else {
+        0
+    }
+}
+
+pub(super) static PLATFORM: Platform = Platform {
+    allocate: allocate_capture,
+    copy: rsf_fg12_platform_readback_copy,
+    map: rsf_fg12_platform_map,
+    unmap: rsf_fg12_platform_unmap,
+    signal,
+    completed,
+    drain,
+    wants: rsf_core_dump_wants,
+    reserve: rsf_core_dump_reserve,
+    failed: rsf_core_dump_failed,
+    pixels: rsf_core_dump_pixels,
+};

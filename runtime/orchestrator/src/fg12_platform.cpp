@@ -92,27 +92,6 @@ extern "C" int rsf_fg12_platform_signal(void* queue, void* fence, uint64_t value
     return SUCCEEDED(static_cast<ID3D12CommandQueue*>(queue)->Signal(static_cast<ID3D12Fence*>(fence), value));
 }
 
-extern "C" void* rsf_fg12_platform_readback(void* source, rsf_fg12_readback_layout* output)
-{
-    return rsf::allocate_readback12(source, output, false);
-}
-
-extern "C" void rsf_fg12_platform_readback_copy(void* list, void* source, uint32_t source_state, void* buffer,
-    const rsf_fg12_readback_layout* layout)
-{
-    rsf::copy_readback12(list, source, source_state, buffer, layout);
-}
-
-extern "C" const uint8_t* rsf_fg12_platform_map(void* buffer, uint64_t bytes)
-{
-    return rsf::map_readback12(buffer, bytes);
-}
-
-extern "C" void rsf_fg12_platform_unmap(void* buffer)
-{
-    rsf::unmap_readback12(buffer);
-}
-
 extern "C" void rsf_fg12_platform_dump_record(void* list, void* source, uint32_t state, const rsf_frame_record* record,
     const char* role, uint32_t slot)
 {

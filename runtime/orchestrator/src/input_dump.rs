@@ -7,13 +7,13 @@ use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR,
     RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
     RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_UI_COMPOSITE, rsf_camera_frame,
-    rsf_frame_record, rsf_game_depth_domains, rsf_game_render_pass,
+    rsf_frame_record, rsf_game_render_pass,
 };
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 
 pub(super) use crate::capture_pixels::Pixels;
 pub(super) mod abi;
@@ -143,37 +143,9 @@ struct NamedReport {
     dxgi_format: u32,
 }
 
-#[repr(C)]
-struct Platform {
-    struct_size: u32,
-    clock: unsafe extern "C" fn(*mut Clock),
-    local_time: unsafe extern "C" fn(*mut Clock),
-    sha256: unsafe extern "C" fn(*const u16, *mut c_char),
-    open_texture: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut Surface) -> *mut c_void,
-    backbuffer: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
-    encode_texture:
-        unsafe extern "C" fn(*mut c_void, *mut c_void, *const TextureOptions, u32, *mut Encoding),
-    preview_pixels: unsafe extern "C" fn(*const Pixels, *const TextureOptions) -> i32,
-    depth_domains_requested: unsafe extern "C" fn(*const rsf_game_depth_domains) -> u32,
-}
-
-static PLATFORM: OnceLock<&'static Platform> = OnceLock::new();
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_bind_platform(platform: &'static Platform) {
-    assert_eq!(platform.struct_size as usize, size_of::<Platform>());
-    let _ = PLATFORM.set(platform);
-}
-
-fn platform() -> &'static Platform {
-    PLATFORM
-        .get()
-        .expect("FrameDump platform bound by the public ABI")
-}
-
 fn clock() -> Clock {
     let mut facts = Clock::default();
-    unsafe { (platform().clock)(&mut facts) };
+    native::read_clock(&mut facts);
     facts
 }
 
@@ -613,11 +585,7 @@ impl Owner {
             };
         let game = game.to_string_lossy().into_owned();
         let path: Vec<u16> = executable.as_os_str().encode_wide().chain([0]).collect();
-        let mut hash = [0; 65];
-        unsafe { (platform().sha256)(path.as_ptr(), hash.as_mut_ptr()) };
-        let hash = unsafe { CStr::from_ptr(hash.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
+        let hash = native::executable_hash(&path);
         self.configure(Some(directory), game, hash, self.log);
         Some(())
     }
@@ -635,7 +603,7 @@ impl Owner {
             return;
         }
         let mut now = *now;
-        unsafe { (platform().local_time)(&mut now) };
+        native::read_local_time(&mut now);
         let name = format!(
             "scene-{:04}{:02}{:02}-{:02}{:02}{:02}-{:03}-{}-{}-{ticket}",
             now.year,
@@ -790,12 +758,12 @@ unsafe fn write_texture(
     let mut surface = Surface::default();
     let mut encoding = Encoding::INVALID;
     let texture =
-        unsafe { ComRef::from_owned((platform().open_texture)(context, source, &mut surface)) };
+        unsafe { ComRef::from_owned(native::open_texture(context, source, &mut surface)) };
     let view = preview_view(work.view, surface.format, false);
     if let Some(texture) = texture {
         match prefix(&work.prefix) {
             Ok(prefix) => unsafe {
-                (platform().encode_texture)(
+                native::encode_texture(
                     context,
                     texture.as_ptr(),
                     &work.options(&prefix, view),

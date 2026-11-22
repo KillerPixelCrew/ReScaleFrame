@@ -3,20 +3,14 @@
 #include "texture_dump_platform.h"
 
 #include <d3d11.h>
-#include <wincodec.h>
-#include <wrl/client.h>
 
 #include <cstddef>
-#include <string>
 
 namespace {
-using Microsoft::WRL::ComPtr;
-
 static_assert(sizeof(rsf_texture_dump_options) == 40 && sizeof(rsf_dump_pixels) == 40 &&
     sizeof(rsf_texture_dump_report) == 40);
 static_assert(offsetof(rsf_dump_pixels, row_pitch) == 16 && offsetof(rsf_dump_pixels, data_size) == 24 && offsetof(rsf_dump_pixels, data) == 32);
 static_assert(sizeof(rsf_texture_dump_motion_options) == 64 && offsetof(rsf_texture_dump_motion_options, motion_scale) == 40);
-static_assert(sizeof(rsf_texture_dump_platform) == 16 && offsetof(rsf_texture_dump_platform, write_png) == 8);
 static_assert(RSF_TEXTURE_DUMP_ABI_VERSION == 2 &&
     RSF_TEXTURE_OK == 0 && RSF_TEXTURE_ERROR_INVALID_ARGUMENT == -1 &&
     RSF_TEXTURE_ERROR_ABI_MISMATCH == -2 && RSF_TEXTURE_ERROR_UNSUPPORTED_FORMAT == -3 &&
@@ -41,44 +35,6 @@ static_assert(DXGI_FORMAT_R8_TYPELESS == 60 && DXGI_FORMAT_R8_UNORM == 61 &&
     DXGI_FORMAT_R32G32_FLOAT == 16 && DXGI_FORMAT_R11G11B10_FLOAT == 26 &&
     DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R32G32B32A32_FLOAT == 2);
 
-std::wstring wide_path(const char* path)
-{
-    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, nullptr, 0);
-    if (!length) return {};
-    std::wstring filename(size_t(length), L'\0');
-    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, filename.data(), length)) return {};
-    return filename;
-}
-
-uint32_t write_png(const char* path, uint32_t width, uint32_t height, uint32_t pitch,
-    uint32_t bytes, uint8_t* bgra) try
-{
-    const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) return 0;
-    struct Apartment {
-        bool owned;
-        ~Apartment() { if (owned) CoUninitialize(); }
-    } apartment{SUCCEEDED(initialized)};
-    const auto filename = wide_path(path);
-    if (filename.empty()) return 0;
-    ComPtr<IWICImagingFactory> factory;
-    ComPtr<IWICStream> stream;
-    ComPtr<IWICBitmapEncoder> encoder;
-    ComPtr<IWICBitmapFrameEncode> frame;
-    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
-    return SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) &&
-        SUCCEEDED(factory->CreateStream(&stream)) && SUCCEEDED(stream->InitializeFromFilename(filename.c_str(), GENERIC_WRITE)) &&
-        SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
-        SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) &&
-        SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr)) && SUCCEEDED(frame->Initialize(nullptr)) &&
-        SUCCEEDED(frame->SetSize(width, height)) && SUCCEEDED(frame->SetPixelFormat(&format)) &&
-        IsEqualGUID(format, GUID_WICPixelFormat32bppBGRA) &&
-        SUCCEEDED(frame->WritePixels(height, pitch, bytes, bgra)) &&
-        SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
-}
-catch (...) { return 0; }
-
-const rsf_texture_dump_platform platform{sizeof(platform), write_png};
 } // namespace
 
 extern "C" uint32_t rsf_core_texture_pixel_bytes(uint32_t format);
@@ -94,23 +50,23 @@ uint32_t texture_pixel_bytes(DXGI_FORMAT format)
 extern "C" rsf_dump_texture_result rsf_dump_texture(void* device, void* context, void* texture,
     const rsf_texture_dump_options* options, rsf_texture_dump_report* report)
 {
-    return rsf_core_texture_dump_texture(&platform, device, context, texture, options, report, RSF_TEXTURE_OUTPUT_TARGA);
+    return rsf_core_texture_dump_texture(device, context, texture, options, report, RSF_TEXTURE_OUTPUT_TARGA);
 }
 
 extern "C" rsf_dump_texture_result rsf_dump_texture_png(void* device, void* context, void* texture,
     const rsf_texture_dump_options* options, rsf_texture_dump_report* report)
 {
-    return rsf_core_texture_dump_texture(&platform, device, context, texture, options, report, RSF_TEXTURE_OUTPUT_PNG);
+    return rsf_core_texture_dump_texture(device, context, texture, options, report, RSF_TEXTURE_OUTPUT_PNG);
 }
 
 extern "C" rsf_dump_texture_result rsf_dump_texture_bytes(void* device, void* context, void* texture,
     const rsf_texture_dump_options* options)
 {
-    return rsf_core_texture_dump_texture(&platform, device, context, texture, options, nullptr, RSF_TEXTURE_OUTPUT_RAW);
+    return rsf_core_texture_dump_texture(device, context, texture, options, nullptr, RSF_TEXTURE_OUTPUT_RAW);
 }
 
 extern "C" rsf_dump_texture_result rsf_dump_pixels_png(const rsf_dump_pixels* pixels,
     const rsf_texture_dump_options* options, rsf_texture_dump_report* report)
 {
-    return rsf_core_texture_dump_pixels(&platform, pixels, options, report);
+    return rsf_core_texture_dump_pixels(pixels, options, report);
 }

@@ -719,3 +719,14 @@ generate("tests/generation/src/abi.rs", "tests/generation/fixture_abi.h",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
           "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist"])
+
+generate("tests/capture/src/abi.rs", "tests/capture/capture_fixture_abi.h",
+         "rsf_(fixture_vk_capture_api|input_dump(12|_vk|_vk_setup)|dump_(log_fn|pixels|view|texture_result)|"
+         "texture_dump_(options|motion_options|report)|srvk_(setup|image)|vk_(function|get_proc)|"
+         "fg_frame|dlss_(frame|quality)|sr_frame|backend_resource|named_frame_dump(_report|_log_fn)?|lifetime)",
+         "RSF_(FIXTURE_.*|DUMP_VIEW_.*|INPUT_DUMP_VK_DEVICE_LOST|TEXTURE_.*|BACKEND_.*|SRVK_ABI_VERSION)",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/graphics/include", "-Iruntime/backends/dlss/include"],
+         ["--no-recursive-allowlist", "--with-derive-default", "--no-prepend-enum-name",
+          "--allowlist-function", "rsf_(input_dump.*|dump_texture.*|dump_pixels_png|native_window_(scope|reset))",
+          "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};"])

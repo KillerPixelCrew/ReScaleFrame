@@ -4,65 +4,14 @@
 #include <rescaleframe/input_dump_d3d12.h>
 #include "../../backends/common/frame_capture12.h"
 #include <rescaleframe/sha256_file.h>
-#include <d3d11.h>
-#include <wrl/client.h>
-#include <cstring>
-
-extern "C" {
-void rsf_core_dump_read_clock(rsf_dump_clock*);
-void rsf_core_dump_read_local_time(rsf_dump_clock*);
-void* rsf_core_dump_open_texture(void*, void*, rsf_dump_surface*);
-void* rsf_core_dump_backbuffer(void*);
-}
-
 namespace {
-using Microsoft::WRL::ComPtr;
-
-// Also mirrored by the private Rust call table.
-static_assert(sizeof(rsf_dump_clock) == 48 && sizeof(rsf_dump_surface) == 12 && sizeof(rsf_dump_encoding) == 8);
-static_assert(sizeof(rsf_dump_pixels) == 40 && sizeof(rsf_texture_dump_options) == 40);
-static_assert(sizeof(rsf_named_frame_dump) == 48 && sizeof(rsf_named_frame_dump_report) == 16);
-static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 &&
-    RSF_BACKEND_ERROR_ABI_MISMATCH == -2 && RSF_BACKEND_ERROR_INIT_FAILED == -6 &&
-    RSF_BACKEND_ERROR_NOT_READY == -8 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9);
-
-void executable_sha256(const wchar_t* executable, char* out) try
-{
-    std::string hash;
-    if (rsf::sha256_file(executable, hash)) std::memcpy(out, hash.c_str(), 65);
-} catch (...) { out[0] = 0; }
-
-void encode_texture(void* context, void* source, const rsf_texture_dump_options* options,
-    uint32_t include_raw, rsf_dump_encoding* result) try
-{
-    auto* immediate = static_cast<ID3D11DeviceContext*>(context);
-    ComPtr<ID3D11Device> device;
-    immediate->GetDevice(&device);
-    // Copy commands obey predication. Restore the exact predicate and value.
-    ComPtr<ID3D11Predicate> predicate;
-    BOOL predicate_value = FALSE;
-    immediate->GetPredication(&predicate, &predicate_value);
-    struct Restore {
-        ID3D11DeviceContext* context;
-        ID3D11Predicate* predicate;
-        BOOL value;
-        ~Restore() { context->SetPredication(predicate, value); }
-    } restore{immediate, predicate.Get(), predicate_value};
-    immediate->SetPredication(nullptr, FALSE);
-    if (include_raw) result->raw = rsf_dump_texture_bytes(device.Get(), immediate, source, options);
-    result->preview = rsf_dump_texture_png(device.Get(), immediate, source, options, nullptr);
-} catch (...) { *result = {RSF_TEXTURE_ERROR_WRITE_FAILED, RSF_TEXTURE_ERROR_WRITE_FAILED}; }
-
-int32_t preview_pixels(const rsf_dump_pixels* pixels, const rsf_texture_dump_options* options)
-{
-    return rsf_dump_pixels_png(pixels, options, nullptr);
-}
-
 void bind_platform()
 {
-    static const rsf_dump_platform platform{sizeof(platform), rsf_core_dump_read_clock, rsf_core_dump_read_local_time, executable_sha256,
-        rsf_core_dump_open_texture, rsf_core_dump_backbuffer, encode_texture, preview_pixels, rsf_game_depth_domains_requested};
-    static const bool bound = (rsf_core_dump_bind_platform(&platform), true);
+    static const rsf_dump_services services{
+        sizeof(services), rsf_common_sha256_file, rsf_dump_texture_bytes,
+        rsf_dump_texture_png, rsf_dump_pixels_png, rsf_game_depth_domains_requested,
+    };
+    static const bool bound = (rsf_core_dump_bind_services(&services), true);
     (void)bound;
 }
 }
@@ -122,10 +71,10 @@ RSF_DUMP_EXPORT(int32_t, named_texture, (void* context, void* source, const rsf_
     (context, source, request, report))
 #undef RSF_DUMP_EXPORT
 
-extern "C" int32_t rsf_core_dump12_create(rsf_input_dump12**, const rsf_core_capture12_platform*);
+extern "C" int32_t rsf_core_dump12_create(rsf_input_dump12**);
 extern "C" RSF_RUNTIME_API int32_t rsf_input_dump12_create(rsf_input_dump12** out)
 {
-    return rsf_core_dump12_create(out, rsf::FrameCapture12::native_platform());
+    return rsf_core_dump12_create(out);
 }
 
 #define RSF_DUMP12_EXPORT(result, name, signature, arguments) \

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "d3d12_readback.h"
+#include "d3d12_helpers.h"
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/capture_names.h>
 #include <wrl/client.h>
@@ -18,25 +18,12 @@
 // Rust (runtime/orchestrator/src/frame_capture12.rs) owns configuration,
 // admission, pending identity, slot and fence completion, retirement, core
 // ticket refusal and publishing, and the buffer, source and fence leases.
-// These native leaves only issue typed D3D12 and Win32 calls.
+// This façade leaves the caller in control of submission and retirement.
 extern "C" {
 struct rsf_core_capture12;
-struct rsf_core_capture12_platform {
-    void* (*allocate)(void* source, rsf_fg12_readback_layout*);
-    void (*copy)(void* list, void* source, uint32_t state, void* buffer, const rsf_fg12_readback_layout*);
-    const uint8_t* (*map)(void* buffer, uint64_t bytes);
-    void (*unmap)(void* buffer);
-    void* (*signal)(void* queue);
-    uint64_t (*completed)(void* fence);
-    uint64_t (*drain)(void* queue);
-    int (*wants)(const rsf_frame_record*);
-    uint64_t (*reserve)(const rsf_frame_record*, const char*, const char*, rsf_dump_view, float);
-    void (*failed)(uint64_t, const char*, int32_t);
-    int (*pixels)(uint64_t, const char*, const rsf_dump_pixels*, uint32_t, uint32_t);
-};
-static_assert(sizeof(rsf_core_capture12_platform) == 11 * sizeof(void*));
-static_assert(sizeof(rsf_fg12_readback_layout) == 32 && sizeof(rsf_dump_pixels) == 40);
-rsf_core_capture12* rsf_core_capture12_create(uint32_t environment, const rsf_core_capture12_platform*);
+struct rsf_core_capture12_platform;
+const rsf_core_capture12_platform* rsf_core_capture12_native_platform();
+rsf_core_capture12* rsf_core_capture12_create(uint32_t environment);
 void rsf_core_capture12_destroy(rsf_core_capture12*);
 int32_t rsf_core_capture12_enabled(const rsf_core_capture12*);
 int32_t rsf_core_capture12_configure(const rsf_core_capture12*, const char* path, uint64_t first, uint32_t frames);
@@ -60,41 +47,13 @@ namespace rsf {
 class FrameCapture12 {
     rsf_core_capture12* owner = nullptr;
 
-    static void* allocate_leaf(void* raw, rsf_fg12_readback_layout* out) noexcept {
-        return allocate_readback12(raw, out, true);
-    }
-    static void* signal_leaf(void* raw) noexcept {
-        auto* queue = static_cast<ID3D12CommandQueue*>(raw);
-        Microsoft::WRL::ComPtr<ID3D12Device> device;
-        Microsoft::WRL::ComPtr<ID3D12Fence> fence;
-        if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))) ||
-            FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))) || FAILED(queue->Signal(fence.Get(), 1))) return nullptr;
-        return fence.Detach();
-    }
-    static uint64_t completed_leaf(void* fence) noexcept { return static_cast<ID3D12Fence*>(fence)->GetCompletedValue(); }
-    static uint64_t drain_leaf(void* raw) noexcept {
-        auto* queue = static_cast<ID3D12CommandQueue*>(raw);
-        Microsoft::WRL::ComPtr<ID3D12Device> device;
-        Microsoft::WRL::ComPtr<ID3D12Fence> fence;
-        if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))) || FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return 0;
-        HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!event) return 0;
-        HRESULT result = queue->Signal(fence.Get(), 1);
-        if (SUCCEEDED(result)) result = wait_fence(fence.Get(), 1, event, 15000);
-        CloseHandle(event);
-        if (result == DXGI_ERROR_DEVICE_REMOVED) return UINT64_MAX;
-        return SUCCEEDED(result) ? 1u : 0u;
-    }
 public:
     static const rsf_core_capture12_platform* native_platform() noexcept {
-        static const rsf_core_capture12_platform value{allocate_leaf, copy_readback12, map_readback12, unmap_readback12, signal_leaf,
-            completed_leaf, drain_leaf, rsf_input_dump_wants, rsf_input_dump_reserve, rsf_input_dump_failed,
-            rsf_input_dump_pixels};
-        return &value;
+        return rsf_core_capture12_native_platform();
     }
 
     explicit FrameCapture12(bool environment = true) noexcept
-        : owner(rsf_core_capture12_create(environment, native_platform())) {}
+        : owner(rsf_core_capture12_create(environment)) {}
     ~FrameCapture12() { rsf_core_capture12_destroy(owner); }
     FrameCapture12(const FrameCapture12&) = delete;
     FrameCapture12& operator=(const FrameCapture12&) = delete;

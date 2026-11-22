@@ -17,6 +17,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::core::Interface;
 
 mod sample;
+mod wic;
 use sample::Format;
 
 type Handle = *mut c_void;
@@ -38,12 +39,6 @@ enum Output {
 }
 
 #[repr(C)]
-struct Platform {
-    struct_size: u32,
-    write_png: unsafe extern "C" fn(*const c_char, u32, u32, u32, u32, *mut u8) -> u32,
-}
-
-#[repr(C)]
 struct Report {
     struct_size: u32,
     width: u32,
@@ -58,8 +53,6 @@ struct Report {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 16);
-    assert!(offset_of!(Platform, write_png) == 8);
     assert!(size_of::<Report>() == 40);
     assert!(size_of::<Pixels>() == 40);
     assert!(size_of::<TextureOptions>() == 40);
@@ -185,7 +178,6 @@ impl Drop for Mapping<'_> {
 }
 
 struct Readback<'a> {
-    platform: &'a Platform,
     device: &'a ID3D11Device,
     context: &'a ID3D11DeviceContext,
     source: &'a ID3D11Resource,
@@ -377,7 +369,6 @@ impl Preview {
 
     fn write(
         mut self,
-        platform: &Platform,
         request: &Request<'_>,
         output: Output,
         report: *mut Report,
@@ -390,19 +381,7 @@ impl Preview {
             .log
             .say(&format!("dump: writing {}", path.to_string_lossy()));
         if png {
-            let ok = unsafe {
-                (platform.write_png)(
-                    path.as_ptr(),
-                    width,
-                    height,
-                    width * 4,
-                    stats.bytes_written,
-                    self.bgra.as_mut_ptr(),
-                )
-            };
-            if ok == 0 {
-                return Err(WRITE_FAILED);
-            }
+            wic::write_png(&path, width, height, &self.bgra).ok_or(WRITE_FAILED)?;
         } else {
             let width = u16::try_from(width).map_err(|_| INVALID)?;
             let height = u16::try_from(height).map_err(|_| INVALID)?;
@@ -495,12 +474,11 @@ fn dump_texture(
         .say(&format!("dump: decoding {} rows", desc.Height));
     let preview = Preview::encode(rows, format, request)?;
     drop(mapping);
-    preview.write(readback.platform, request, output, report)
+    preview.write(request, output, report)
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_texture_dump_texture(
-    platform: *const Platform,
     device: Handle,
     context: Handle,
     source: Handle,
@@ -514,9 +492,6 @@ unsafe extern "C" fn rsf_core_texture_dump_texture(
         2 => Output::Raw,
         _ => return INVALID,
     };
-    let Some(platform) = (unsafe { checked(platform) }) else {
-        return INVALID;
-    };
     let handles = unsafe {
         (
             ID3D11Device::from_raw_borrowed(&device),
@@ -528,7 +503,6 @@ unsafe extern "C" fn rsf_core_texture_dump_texture(
         return INVALID;
     };
     let readback = Readback {
-        platform,
         device,
         context,
         source,
@@ -541,13 +515,11 @@ unsafe extern "C" fn rsf_core_texture_dump_texture(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_texture_dump_pixels(
-    platform: *const Platform,
     pixels: *const Pixels,
     options: *const TextureOptions,
     report: *mut Report,
 ) -> i32 {
-    let (Some(platform), Some(pixels)) = (unsafe { checked(platform) }, unsafe { checked(pixels) })
-    else {
+    let Some(pixels) = (unsafe { checked(pixels) }) else {
         return INVALID;
     };
     let format = Format::from_dxgi(pixels.format);
@@ -561,7 +533,7 @@ unsafe extern "C" fn rsf_core_texture_dump_pixels(
     let result = unsafe { Request::new(options, Output::Png) }.and_then(|request| {
         let format = format.ok_or(UNSUPPORTED)?;
         let rows = unsafe { PackedRows::new(pixels, stride) }.ok_or(INVALID)?;
-        Preview::encode(rows, format, &request)?.write(platform, &request, Output::Png, report)
+        Preview::encode(rows, format, &request)?.write(&request, Output::Png, report)
     });
     result.err().unwrap_or(0)
 }

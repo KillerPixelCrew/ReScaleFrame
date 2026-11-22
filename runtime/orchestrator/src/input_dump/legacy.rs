@@ -333,7 +333,7 @@ unsafe extern "C" fn rsf_core_dump_present(
         (true, None)
     });
     if let Some(ticket) = ticket
-        && let Some(buffer) = unsafe { ComRef::from_owned((platform().backbuffer)(chain)) }
+        && let Some(buffer) = unsafe { ComRef::from_owned(native::backbuffer(chain)) }
     {
         unsafe {
             capture_batch(
