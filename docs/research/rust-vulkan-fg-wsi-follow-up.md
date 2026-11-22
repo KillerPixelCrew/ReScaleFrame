@@ -40,3 +40,9 @@ fixture configurations, standalone corrected SDK WSI fixture, shared WSI
 header and the SDK-disabled FidelityFX leaf. The SDK-enabled FidelityFX leaf
 and callback harness need the optional Vulkan FidelityFX headers for their
 syntax check. Runtime behavior remains unverified.
+
+The three dispatch fixtures now use a C11 launcher and compile the same
+production native dispatch source separately with their existing provider
+defines. The Rust fakes and CTest entries are unchanged. Strict C11 and
+MinGW C++ syntax checks passed for the disabled, XeSS and FSR4 variants.
+Linking and execution remain pending.

@@ -1410,7 +1410,7 @@ Port common frame-generation resources, transfers, submission and swapchain life
 
 **Fixtures (8)**
 
-- [ ] [tests/vulkan-fg/dispatch_fixture.cpp](tests/vulkan-fg/dispatch_fixture.cpp) (fake provider callbacks)
+- [x] [tests/vulkan-fg/dispatch_fixture.cpp](tests/vulkan-fg/dispatch_fixture.cpp) (fake provider callbacks)
 - [ ] [tests/vulkan-fg/ffx_fixture.cpp](tests/vulkan-fg/ffx_fixture.cpp) (SDK records and Vulkan callbacks)
 - [ ] [tests/ffx_vulkan_wsi_dispatch.cpp](tests/ffx_vulkan_wsi_dispatch.cpp)
 - [ ] [tests/native_ffx_vulkan_harness.h](tests/native_ffx_vulkan_harness.h)

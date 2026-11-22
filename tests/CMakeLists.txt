@@ -820,17 +820,20 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCL
 endif()
 rsf_add_rust_static(rsf_vulkan_dispatch_fixtures_rust rsf_rust_vulkan_dispatch_fixtures
     rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features dispatch)
-add_executable(rsf_native_fg_vulkan_dispatch_test vulkan-fg/dispatch_fixture.cpp)
+add_executable(rsf_native_fg_vulkan_dispatch_test vulkan-fg/dispatch_fixture.c
+    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp)
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_test PRIVATE RSF_RUNTIME_BUILD)
 target_include_directories(rsf_native_fg_vulkan_dispatch_test PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_native_fg_vulkan_dispatch_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME native_fg_vulkan_dispatch_contract COMMAND rsf_native_fg_vulkan_dispatch_test)
-add_executable(rsf_native_fg_vulkan_dispatch_xess_test vulkan-fg/dispatch_fixture.cpp)
+add_executable(rsf_native_fg_vulkan_dispatch_xess_test vulkan-fg/dispatch_fixture.c
+    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp)
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_XESS_FG_VK=1)
 target_include_directories(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME native_fg_vulkan_dispatch_xess_contract COMMAND rsf_native_fg_vulkan_dispatch_xess_test)
-add_executable(rsf_native_fg_vulkan_dispatch_fsr4_test vulkan-fg/dispatch_fixture.cpp)
+add_executable(rsf_native_fg_vulkan_dispatch_fsr4_test vulkan-fg/dispatch_fixture.c
+    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp)
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_FSR4_FG_VK=1)
 target_include_directories(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
