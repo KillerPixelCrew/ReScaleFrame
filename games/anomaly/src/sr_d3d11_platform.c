@@ -2,6 +2,7 @@
 /* Native leaves of the SR D3D11 table. Rust owns the table and every typed COM call; this file keeps the shared
    default-view and pipeline-state helpers, the C++ exception boundary around foreign log sinks and the descriptor
    layout checks against the Windows SDK. */
+#include "native_memory.h"
 #include "sr_d3d11_platform.h"
 #include "sr_swap_platform.h"
 #include <rescaleframe/d3d11_state.h>
@@ -34,30 +35,6 @@ _Static_assert((D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_LOA
 static void* default_view(void* device, void* texture)
 {
     return rsf_d3d11_create_shader_view(device, texture);
-}
-
-#ifdef _MSC_VER
-/* The MSVC C++ exception code. Filtering on it keeps the boundary as narrow as catch (...) under /EHsc: hardware
-   faults still reach the process handlers. */
-static int cpp_exception(DWORD code)
-{
-    return code == 0xe06d7363u ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
-}
-#endif
-
-static bool guarded_log(rsf_sr_log log, void* user, const char* message)
-{
-    if (!log) return true;
-#ifdef _MSC_VER
-    __try {
-        log(user, message);
-    } __except (cpp_exception(GetExceptionCode())) {
-        return false;
-    }
-#else
-    log(user, message);
-#endif
-    return true;
 }
 
 static void* save_state(void* context)

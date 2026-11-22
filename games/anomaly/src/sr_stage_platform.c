@@ -153,33 +153,12 @@ static uintptr_t constant_buffer(void* function, void* constants, uintptr_t cons
 /* ---- memory, logs and helpers ---------------------------------------------------------------------------------- */
 static bool copy(void* output, const void* input, size_t size) { return guarded_copy(output, input, size); }
 
-#ifdef _MSC_VER
-/* The MSVC C++ exception code: the boundary is as narrow as the former catch (...) under /EHsc. */
-static int cpp_exception(DWORD code)
-{
-    return code == 0xe06d7363u ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
-}
-#endif
-
-static void log_line(rsf_anomaly_sr_log log, void* user, const char* message)
-{
-    if (!log) return;
-#ifdef _MSC_VER
-    __try {
-        log(user, message);
-    } __except (cpp_exception(GetExceptionCode())) {
-    }
-#else
-    log(user, message);
-#endif
-}
-
 static const void* d3d11(void) { return rsf_anomaly_sr_d3d11_platform(); }
 
 static const rsf_anomaly_sr_native native = {
     sizeof(rsf_anomaly_sr_native),
     copy,
-    log_line,
+    guarded_log_line,
     set_projection,
     set_mip_bias,
     constant_buffer,

@@ -55,7 +55,6 @@ static bool install_motion(const rsf_anomaly_observer_engine*);
 static bool enable_input(void);
 static bool disable_input(void);
 static bool read_frame(const rsf_anomaly_observer_engine*, rsf_anomaly_observer_frame*);
-static void log_line(rsf_game_log_fn, void*, const char*);
 
 static const rsf_anomaly_observer_platform platform = {
     .identify = identify,
@@ -80,7 +79,7 @@ static const rsf_anomaly_observer_platform platform = {
     .ui_boundary = rsf_anomaly_fg_stage_ui_boundary,
     .scope_frame = rsf_anomaly_fg_stage_scope,
     .device_reset = rsf_anomaly_fg_stage_device_reset,
-    .log = log_line,
+    .log = guarded_log_line,
 };
 
 static void call_original(const invocation* call)
@@ -233,25 +232,6 @@ static bool read_frame(const rsf_anomaly_observer_engine* engine, rsf_anomaly_ob
 {
     return rsf_anomaly_observer_read_frame(engine, guarded_copy, out);
 }
-
-// The host log callback is foreign code. Under MSVC a C++ exception it raises is contained here and its object is
-// abandoned; any other exception continues the search. GCC C has no handler for a foreign C++ exception.
-#ifdef _MSC_VER
-#define RSF_MSVC_CXX_EXCEPTION 0xE06D7363u
-static void log_line(rsf_game_log_fn emit, void* user, const char* text)
-{
-    if (!emit) return;
-    __try {
-        emit(user, text);
-    } __except (GetExceptionCode() == RSF_MSVC_CXX_EXCEPTION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-    }
-}
-#else
-static void log_line(rsf_game_log_fn emit, void* user, const char* text)
-{
-    if (emit) emit(user, text);
-}
-#endif
 
 
 const rsf_anomaly_observer_platform* rsf_anomaly_observer_native(void)
