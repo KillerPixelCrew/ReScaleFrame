@@ -1,31 +1,24 @@
 // SPDX-License-Identifier: MIT
-//! D3D12 FG payloads using the same checked SDK value layouts as Vulkan.
+//! D3D12 FG payloads and reports, built from the same checked SDK records as Vulkan.
 use crate::streamline_policy::camera_forward;
+use crate::streamline_sdk::{
+    self as sdk, Constants, FeatureVersion, FgOptions, ReflexOptions, ReflexState,
+    default_constants,
+};
 use crate::sys::{RSF_REFLEX_BOOST, rsf_backend_log_fn as Log, rsf_fg_frame, rsf_fg_status};
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::ptr::null_mut;
-
-use crate::streamline_sdk::{
-    Constants as rsf_slvk_sdk_constants, FgHeader, FgOptions as rsf_slvk_sdk_fg_options,
-    Header as rsf_slvk_sdk_header, PclOptions as rsf_slvk_sdk_pcl_options,
-    ReflexOptions as rsf_slvk_sdk_reflex_options, default_constants,
-};
-pub(crate) use crate::sys::{rsf_slhost_reflex_sample, rsf_slhost_tag, rsf_slhost_version};
 
 const REFLEX_ON: u32 = 1;
-pub(crate) const REFLEX_SAMPLES: usize = 64;
-pub(crate) type Emit = unsafe extern "C" fn(Log, *mut c_void, *const c_char);
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_slhost_format_version(
-    version: Option<&rsf_slhost_version>,
-    status: &mut rsf_fg_status,
-) {
+pub(crate) fn format_version(version: Option<&FeatureVersion>, status: &mut rsf_fg_status) {
     let text = if let Some(version) = version {
-        let [major, minor, build] = version.ngx;
-        let [sl_major, sl_minor, sl_build] = version.streamline;
-        status.version_id = (u64::from(major) << 48) | (u64::from(minor) << 32) | u64::from(build);
-        format!("DLSS-G NGX {major}.{minor}.{build} (SL {sl_major}.{sl_minor}.{sl_build})")
+        let (ngx, sl) = (&version.ngx, &version.streamline);
+        status.version_id =
+            (u64::from(ngx.major) << 48) | (u64::from(ngx.minor) << 32) | u64::from(ngx.build);
+        format!(
+            "DLSS-G NGX {}.{}.{} (SL {}.{}.{})",
+            ngx.major, ngx.minor, ngx.build, sl.major, sl.minor, sl.build
+        )
     } else {
         String::from("DLSS-G runtime version unavailable")
     };
@@ -36,60 +29,46 @@ pub(crate) extern "C" fn rsf_slhost_format_version(
     status.version_name[len] = 0;
 }
 
-fn emit_line(log: Log, user: *mut c_void, emit: Emit, text: String) {
-    if let Ok(text) = CString::new(text) {
-        unsafe { emit(log, user, text.as_ptr()) };
+fn emit_line(log: Log, user: *mut c_void, text: String) {
+    if let (Some(log), Ok(text)) = (log, CString::new(text)) {
+        unsafe { log(user, text.as_ptr()) };
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_slhost_report_support(
-    fg: u32,
-    reflex: u32,
-    log: Log,
-    user: *mut c_void,
-    emit: Emit,
-) {
-    if log.is_some() {
-        emit_line(
-            log,
-            user,
-            emit,
-            format!("DLSS-G support={fg} Reflex support={reflex}"),
-        );
-    }
+pub(crate) fn report_support(fg: u32, reflex: u32, log: Log, user: *mut c_void) {
+    emit_line(
+        log,
+        user,
+        format!("DLSS-G support={fg} Reflex support={reflex}"),
+    );
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_slhost_report_reflex_options(
+pub(crate) fn report_reflex_options(
     mode: u32,
     limit: u32,
     marker_optimization: u32,
     log: Log,
     user: *mut c_void,
-    emit: Emit,
 ) {
     emit_line(
         log,
         user,
-        emit,
         format!(
             "Reflex options applied: mode={mode} frameLimitUs={limit} markerOptimization={marker_optimization}"
         ),
     );
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_slhost_reflex_summary(
-    samples: &[rsf_slhost_reflex_sample; REFLEX_SAMPLES],
+pub(crate) fn reflex_summary(
+    state: &ReflexState,
     inputs: &[u64; 4],
     available: u32,
     log: Log,
     user: *mut c_void,
-    emit: Emit,
 ) {
-    let latest = samples[1..].iter().fold(&samples[0], |best, candidate| {
-        if candidate.id > best.id {
+    let reports = &state.reports;
+    let latest = reports[1..].iter().fold(&reports[0], |best, candidate| {
+        if candidate.frame_id > best.frame_id {
             candidate
         } else {
             best
@@ -106,42 +85,40 @@ pub(crate) extern "C" fn rsf_slhost_reflex_summary(
     emit_line(
         log,
         user,
-        emit,
         format!(
             "Reflex driver report available={available} frame={} sim_ms={:.2} render_ms={:.2} present_ms={:.2} gpu_ms={:.2} gpu_active_us={} gpu_frame_us={} inputs_keyboard={keyboard} mouse={mouse} controller={controller} pcl_ping={ping}",
-            latest.id,
+            latest.frame_id,
             ms(latest.simulation_end, latest.simulation_start),
             ms(latest.submit_end, latest.submit_start),
             ms(latest.present_end, latest.present_start),
             ms(latest.gpu_end, latest.gpu_start),
-            latest.gpu_active,
-            latest.gpu_frame,
+            latest.gpu_active_us,
+            latest.gpu_frame_us,
         ),
     );
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_slhost_reflex_ring(
-    samples: &[rsf_slhost_reflex_sample; REFLEX_SAMPLES],
-    reason: *const c_char,
+pub(crate) fn reflex_ring(
+    state: &ReflexState,
+    reason: &CStr,
     source: u64,
     log: Log,
     user: *mut c_void,
-    emit: Emit,
 ) {
-    let reason = unsafe { CStr::from_ptr(reason) }.to_string_lossy();
+    let reason = reason.to_string_lossy();
     emit_line(
         log,
         user,
-        emit,
         format!(
             "Reflex ring {reason} source={source}: one line per driver frame, microseconds from its SimulationStart; -1 means not recorded",
         ),
     );
     let mut previous_sim = 0;
-    for sample in samples
+    for (sample, extra) in state
+        .reports
         .iter()
-        .filter(|sample| sample.id != 0 && sample.simulation_start != 0)
+        .zip(&state.reports2)
+        .filter(|(sample, _)| sample.frame_id != 0 && sample.simulation_start != 0)
     {
         let at = |time: u64| {
             if time != 0 {
@@ -158,10 +135,9 @@ pub(crate) unsafe extern "C" fn rsf_slhost_reflex_ring(
         emit_line(
             log,
             user,
-            emit,
             format!(
                 "Reflex ring frame={} sim_interval={sim_interval} sim_end={} submit={}..{} present={}..{} driver={}..{} os_queue={}..{} gpu={}..{} gpu_active={} gpu_frame={} copy={}",
-                sample.id,
+                sample.frame_id,
                 at(sample.simulation_end),
                 at(sample.submit_start),
                 at(sample.submit_end),
@@ -173,93 +149,48 @@ pub(crate) unsafe extern "C" fn rsf_slhost_reflex_ring(
                 at(sample.queue_end),
                 at(sample.gpu_start),
                 at(sample.gpu_end),
-                sample.gpu_active,
-                sample.gpu_frame,
-                sample.cross_adapter_copy,
+                sample.gpu_active_us,
+                sample.gpu_frame_us,
+                extra.cross_adapter_copy_us,
             ),
         );
         previous_sim = sample.simulation_start;
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_slhost_pack_options(
+/// `sl::DLSSGOptions` v5 with eRetainResourcesWhenOff and the requested mode, frame count, UI
+/// recomposition and dynamic target rate.
+pub(crate) fn pack_options(
     mode: u32,
     frames: u32,
     ui_recomposition: u32,
     dynamic_target_fps: f32,
-    out: &mut rsf_slvk_sdk_fg_options,
-) {
-    *out = rsf_slvk_sdk_fg_options {
-        base: FgHeader {
-            next: null_mut(),
-            type_lo: 0xfac5_f1cb,
-            type_mid: 0x2dfd,
-            type_hi: 0x4f36,
-            type_tail: [0xa1, 0xe6, 0x3a, 0x9e, 0x86, 0x52, 0x56, 0xc5],
-            version: 5,
-        },
+) -> FgOptions {
+    FgOptions {
         mode,
         generated: frames,
-        flags: 8,            // eRetainResourcesWhenOff
-        reserved_boolean: 2, // eInvalid
+        flags: 8, // eRetainResourcesWhenOff
         ui_recomposition: u8::from(ui_recomposition != 0),
         target_rate: dynamic_target_fps,
-        ..Default::default()
-    };
+        ..sdk::fg_options(None, 0, 0, 0, 0)
+    }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_slhost_pack_reflex(
-    mode: u32,
-    limit: u32,
-    out: &mut rsf_slvk_sdk_reflex_options,
-) {
-    *out = rsf_slvk_sdk_reflex_options {
-        base: rsf_slvk_sdk_header {
-            next: null_mut(),
-            type_lo: 0xf03a_f81a,
-            type_mid: 0x6d0b,
-            type_hi: 0x4902,
-            type_tail: [0xa6, 0x51, 0xc4, 0x96, 0x5e, 0x21, 0x54, 0x34],
-            version: 1,
-        },
-        mode: match mode {
-            RSF_REFLEX_BOOST => 2,
-            REFLEX_ON => 1,
-            _ => 0,
-        },
-        interval_us: limit,
-        ..Default::default()
+/// Off, On or Boost (other modes select Off) with a frame limit in microseconds.
+pub(crate) fn pack_reflex(mode: u32, limit: u32) -> ReflexOptions {
+    let mode = match mode {
+        RSF_REFLEX_BOOST => 2,
+        REFLEX_ON => 1,
+        _ => 0,
     };
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_slhost_pack_pcl(out: &mut rsf_slvk_sdk_pcl_options) {
-    *out = rsf_slvk_sdk_pcl_options {
-        base: rsf_slvk_sdk_header {
-            next: null_mut(),
-            type_lo: 0xcfa3_2f9b,
-            type_mid: 0x023c,
-            type_hi: 0x420e,
-            type_tail: [0x90, 0x56, 0x68, 0x32, 0xb7, 0x4f, 0x89, 0xb4],
-            version: 1,
-        },
-        hotkey: 0, // eUsePingMessage
-        thread_id: 0,
-    };
+    sdk::reflex_options(mode, limit, 0)
 }
 
 // The shared FG validator admitted the frame and its camera before packing.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_slhost_pack_fg_camera(
-    frame: &rsf_fg_frame,
-    reset: u32,
-    out: &mut rsf_slvk_sdk_constants,
-) {
+pub(crate) unsafe fn pack_fg_camera(frame: &rsf_fg_frame, reset: u32) -> Constants {
     let camera = &unsafe { &*frame.record }.camera;
     let world = &camera.view_to_world;
-    *out = rsf_slvk_sdk_constants {
+    Constants {
         view_to_clip: camera.view_to_clip,
         clip_to_view: camera.clip_to_view,
         clip_to_previous: camera.clip_to_previous_clip,
@@ -280,14 +211,27 @@ pub(crate) unsafe extern "C" fn rsf_slhost_pack_fg_camera(
         motion_jittered: u8::from(camera.motion_jittered != 0),
         reset: u8::from(reset != 0),
         ..default_constants()
-    };
+    }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_slhost_plan_tags(
-    frame: &rsf_fg_frame,
-    out: &mut [rsf_slhost_tag; 5],
-) -> u32 {
+/// One frame-generation input to tag.
+#[derive(Clone, Copy)]
+pub(crate) struct PlannedTag {
+    pub(crate) resource: *mut c_void,
+    pub(crate) state: u32,
+    pub(crate) kind: u32,
+    /// Top, left, width and height.
+    pub(crate) extent: [u32; 4],
+}
+
+/// The frame's present inputs in tag order: backbuffer, depth, motion, HUD-less color and UI.
+pub(crate) fn plan_tags(frame: &rsf_fg_frame) -> ([PlannedTag; 5], u32) {
+    let mut out = [PlannedTag {
+        resource: std::ptr::null_mut(),
+        state: 0,
+        kind: 0,
+        extent: [0; 4],
+    }; 5];
     let mut count = 0;
     for (input, kind) in [
         (&frame.backbuffer, 53),
@@ -299,16 +243,13 @@ pub(crate) extern "C" fn rsf_slhost_plan_tags(
         if input.resource.is_null() {
             continue;
         }
-        out[count] = rsf_slhost_tag {
+        out[count] = PlannedTag {
             resource: input.resource,
             state: input.state,
             kind,
-            top: input.y,
-            left: input.x,
-            width: input.width,
-            height: input.height,
+            extent: [input.y, input.x, input.width, input.height],
         };
         count += 1;
     }
-    count as u32
+    (out, count as u32)
 }

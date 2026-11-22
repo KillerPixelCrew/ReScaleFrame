@@ -17,7 +17,8 @@ The interposer exports its API with C linkage, and the references in the C++ dec
 pointers in that ABI. `lifecycle/src/sdk_api.rs` names the entry types and builds the viewport,
 adapter, resource and tag headers. The orchestrator includes it with `#[path]`, as it already did
 for the record bindings. The records are C mirrors: `sdk_records.h` gains `rsf_slvk_sdk_viewport`,
-`rsf_slvk_sdk_adapter`, `rsf_slvk_sdk_reflex_state` (leading facts and an opaque 12808-byte tail)
+`rsf_slvk_sdk_adapter`, `rsf_slvk_sdk_reflex_state` (leading facts and an opaque 12808-byte tail,
+spelled out as the 64 `ReflexReport` and `ReflexReport2` records since D22)
 and `rsf_slvk_sdk_pcl_state`; `sdk_fg_options.h` gains `rsf_slvk_sdk_fg_state`; the DLSS SR
 options and optimal settings live in `sdk_sr_options.h`. MSVC measured every size and offset
 against the 2.14.1 headers before the mirrors were written. The D3D12 Streamline host's

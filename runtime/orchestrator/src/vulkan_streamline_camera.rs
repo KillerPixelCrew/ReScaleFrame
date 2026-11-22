@@ -2,8 +2,7 @@
 // The Streamline record mirrors are loaded once, in streamline_sdk.
 pub(super) use crate::streamline_sdk::{
     Constants as rsf_slvk_sdk_constants, Header as rsf_slvk_sdk_header,
-    Preferences as rsf_slvk_sdk_preferences, Resource as rsf_slvk_sdk_resource,
-    ResourceTag as rsf_slvk_sdk_tag,
+    Resource as rsf_slvk_sdk_resource, ResourceTag as rsf_slvk_sdk_tag,
 };
 use crate::streamline_sdk::{RESOURCE, TAG, default_constants};
 // The Streamline Vulkan call leaves' entry types, owned by rsf-streamline-vk.

@@ -69,6 +69,23 @@ static_assert(sl::AdapterInfo::s_structType.data1 == 0x0677315f);
 static_assert(sizeof(sl::ReflexState) == sizeof(rsf_slvk_sdk_reflex_state) &&
     alignof(sl::ReflexState) == alignof(rsf_slvk_sdk_reflex_state));
 static_assert(sl::ReflexState::s_structType.data1 == 0xf0bb5985);
+static_assert(sl::kReflexFrameReportCount == 64);
+static_assert(sizeof(sl::ReflexReport) == sizeof(rsf_slvk_sdk_reflex_report) &&
+    alignof(sl::ReflexReport) == alignof(rsf_slvk_sdk_reflex_report));
+static_assert(sl::ReflexReport::s_structType.data1 == 0x0d569b37);
+static_assert(sizeof(sl::ReflexReport2) == sizeof(rsf_slvk_sdk_reflex_report2) &&
+    alignof(sl::ReflexReport2) == alignof(rsf_slvk_sdk_reflex_report2));
+static_assert(sl::ReflexReport2::s_structType.data1 == 0x68bb0632);
+static_assert(sizeof(sl::Version) == sizeof(rsf_slvk_sdk_version));
+static_assert(sizeof(sl::FeatureVersion) == sizeof(rsf_slvk_sdk_feature_version) &&
+    alignof(sl::FeatureVersion) == alignof(rsf_slvk_sdk_feature_version));
+static_assert(sl::FeatureVersion::s_structType.data1 == 0x6d5b51f0);
+static_assert(sizeof(sl::FeatureRequirements) == sizeof(rsf_slvk_sdk_requirements) &&
+    alignof(sl::FeatureRequirements) == alignof(rsf_slvk_sdk_requirements));
+static_assert(sl::FeatureRequirements::s_structType.data1 == 0x66714097);
+static_assert(uint32_t(sl::EngineType::eCount) == 3 && uint32_t(sl::RenderAPI::eD3D11) == 0 &&
+    uint32_t(sl::RenderAPI::eD3D12) == 1);
+static_assert(sl::kFeatureCommon == UINT32_MAX);
 static_assert(sizeof(sl::PCLState) == sizeof(rsf_slvk_sdk_pcl_state) &&
     alignof(sl::PCLState) == alignof(rsf_slvk_sdk_pcl_state));
 static_assert(sl::PCLState::s_structType.data1 == 0xcfa32f9b && sl::PCLState::s_structType.data4[7] == 0xb5);
@@ -170,6 +187,49 @@ RSF_SL_OFFSET(ReflexState, reflex_state, lowLatencyAvailable, low_latency_availa
 RSF_SL_OFFSET(ReflexState, reflex_state, latencyReportAvailable, latency_report_available);
 RSF_SL_OFFSET(ReflexState, reflex_state, statsWindowMessage, window_message);
 RSF_SL_OFFSET(PCLState, pcl_state, statsWindowMessage, window_message);
+RSF_SL_OFFSET(ReflexState, reflex_state, frameReport, reports);
+RSF_SL_OFFSET(ReflexState, reflex_state, flashIndicatorDriverControlled, flash_indicator_driver_controlled);
+RSF_SL_OFFSET(ReflexState, reflex_state, frameReport2, reports2);
+RSF_SL_OFFSET(ReflexReport, reflex_report, frameID, frame_id);
+RSF_SL_OFFSET(ReflexReport, reflex_report, inputSampleTime, input_sample);
+RSF_SL_OFFSET(ReflexReport, reflex_report, simStartTime, simulation_start);
+RSF_SL_OFFSET(ReflexReport, reflex_report, simEndTime, simulation_end);
+RSF_SL_OFFSET(ReflexReport, reflex_report, renderSubmitStartTime, submit_start);
+RSF_SL_OFFSET(ReflexReport, reflex_report, renderSubmitEndTime, submit_end);
+RSF_SL_OFFSET(ReflexReport, reflex_report, presentStartTime, present_start);
+RSF_SL_OFFSET(ReflexReport, reflex_report, presentEndTime, present_end);
+RSF_SL_OFFSET(ReflexReport, reflex_report, driverStartTime, driver_start);
+RSF_SL_OFFSET(ReflexReport, reflex_report, driverEndTime, driver_end);
+RSF_SL_OFFSET(ReflexReport, reflex_report, osRenderQueueStartTime, queue_start);
+RSF_SL_OFFSET(ReflexReport, reflex_report, osRenderQueueEndTime, queue_end);
+RSF_SL_OFFSET(ReflexReport, reflex_report, gpuRenderStartTime, gpu_start);
+RSF_SL_OFFSET(ReflexReport, reflex_report, gpuRenderEndTime, gpu_end);
+RSF_SL_OFFSET(ReflexReport, reflex_report, gpuActiveRenderTimeUs, gpu_active_us);
+RSF_SL_OFFSET(ReflexReport, reflex_report, gpuFrameTimeUs, gpu_frame_us);
+RSF_SL_OFFSET(ReflexReport2, reflex_report2, cameraConstructedTime, camera_constructed);
+RSF_SL_OFFSET(ReflexReport2, reflex_report2, crossAdapterCopyTimeUs, cross_adapter_copy_us);
+RSF_SL_OFFSET(FeatureVersion, feature_version, versionSL, streamline);
+RSF_SL_OFFSET(FeatureVersion, feature_version, versionNGX, ngx);
+RSF_SL_OFFSET(FeatureRequirements, requirements, flags, flags);
+RSF_SL_OFFSET(FeatureRequirements, requirements, maxNumCPUThreads, max_cpu_threads);
+RSF_SL_OFFSET(FeatureRequirements, requirements, maxNumViewports, max_viewports);
+RSF_SL_OFFSET(FeatureRequirements, requirements, numRequiredTags, num_required_tags);
+RSF_SL_OFFSET(FeatureRequirements, requirements, requiredTags, required_tags);
+RSF_SL_OFFSET(FeatureRequirements, requirements, osVersionDetected, os_detected);
+RSF_SL_OFFSET(FeatureRequirements, requirements, osVersionRequired, os_required);
+RSF_SL_OFFSET(FeatureRequirements, requirements, driverVersionDetected, driver_detected);
+RSF_SL_OFFSET(FeatureRequirements, requirements, driverVersionRequired, driver_required);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkNumComputeQueuesRequired, vk_compute_queues);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkNumGraphicsQueuesRequired, vk_graphics_queues);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkNumDeviceExtensions, vk_num_device_extensions);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkDeviceExtensions, vk_device_extensions);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkNumInstanceExtensions, vk_num_instance_extensions);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkInstanceExtensions, vk_instance_extensions);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkNumFeatures12, vk_num_features12);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkFeatures12, vk_features12);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkNumFeatures13, vk_num_features13);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkFeatures13, vk_features13);
+RSF_SL_OFFSET(FeatureRequirements, requirements, vkNumOpticalFlowQueuesRequired, vk_optical_flow_queues);
 #define RSF_SL_SR(vendor, wire) \
     static_assert(RSF_SL_FIELD_OFFSET(sl::DLSSOptions, vendor) == RSF_SL_FIELD_OFFSET(rsf_vkdlss_options, wire))
 RSF_SL_SR(mode, mode);

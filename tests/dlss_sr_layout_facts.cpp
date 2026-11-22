@@ -3,7 +3,7 @@
 // sl.h and sl_security.h are C++ only (namespaces, constructors, virtual members), so they cannot
 // be measured from C or Rust. The static assertions fix the layouts, GUIDs and enum values at
 // build time. The two exported functions report what the SDK constructors and enums actually
-// hold; runtime/orchestrator/src/streamline_sr/sdk/layout_fixture.rs holds the expectations and
+// hold; runtime/orchestrator/src/streamline_sdk/layout_fixture.rs holds the expectations and
 // compares them, so a drifting Rust default or literal fails the dlss_sr_layout test.
 
 #include <windows.h>
@@ -13,7 +13,6 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
-#include "../runtime/backends/dlss/src/streamline_sr_records.h"
 #include "../runtime/vulkan/streamline/sdk_records_checks.h"
 
 #include <cfloat>
@@ -31,8 +30,6 @@ namespace {
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #endif
 
-#define RSF_SL_RECORD(sdk, wire) \
-    static_assert(sizeof(sl::sdk) == sizeof(wire) && alignof(sl::sdk) == alignof(wire))
 #define RSF_SL_AT(sdk, wire, sdk_member, wire_member) \
     static_assert(offsetof(sl::sdk, sdk_member) == offsetof(wire, wire_member))
 #define RSF_SL_GUID(sdk, d1, d2, d3, b0, b1, b2, b3, b4, b5, b6, b7)                    \
@@ -54,76 +51,21 @@ RSF_SL_GUID(ViewportHandle, 0x171b6435, 0x9b3c, 0x4fc8, 0x99, 0x94, 0xfb, 0xe5, 
 RSF_SL_GUID(FeatureRequirements, 0x66714097, 0xac6d, 0x4bc6, 0x89, 0x15, 0x1e, 0x0f, 0x55, 0xa6, 0xb6, 0x1f);
 RSF_SL_GUID(AdapterInfo, 0x0677315f, 0xa746, 0x4492, 0x9f, 0x42, 0xcb, 0x61, 0x42, 0xc9, 0xc3, 0xd4);
 
-RSF_SL_RECORD(ViewportHandle, rsf_sl_sdk_viewport);
-static_assert(sizeof(sl::BaseStructure) == offsetof(rsf_sl_sdk_viewport, value));
-
-RSF_SL_RECORD(AdapterInfo, rsf_sl_sdk_adapter);
-RSF_SL_AT(AdapterInfo, rsf_sl_sdk_adapter, deviceLUID, luid);
-RSF_SL_AT(AdapterInfo, rsf_sl_sdk_adapter, deviceLUIDSizeInBytes, luid_size);
-RSF_SL_AT(AdapterInfo, rsf_sl_sdk_adapter, vkPhysicalDevice, vk_physical_device);
-
-static_assert(sizeof(sl::Version) == sizeof(rsf_sl_sdk_version) &&
-    offsetof(sl::Version, major) == offsetof(rsf_sl_sdk_version, major) &&
-    offsetof(sl::Version, minor) == offsetof(rsf_sl_sdk_version, minor) &&
-    offsetof(sl::Version, build) == offsetof(rsf_sl_sdk_version, build));
-RSF_SL_RECORD(FeatureRequirements, rsf_sl_sdk_requirements);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, flags, flags);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, maxNumCPUThreads, max_cpu_threads);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, maxNumViewports, max_viewports);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, numRequiredTags, num_required_tags);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, requiredTags, required_tags);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, osVersionDetected, os_detected);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, osVersionRequired, os_required);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, driverVersionDetected, driver_detected);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, driverVersionRequired, driver_required);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkNumComputeQueuesRequired, vk_compute_queues);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkNumGraphicsQueuesRequired, vk_graphics_queues);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkNumDeviceExtensions, vk_num_device_extensions);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkDeviceExtensions, vk_device_extensions);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkNumInstanceExtensions, vk_num_instance_extensions);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkInstanceExtensions, vk_instance_extensions);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkNumFeatures12, vk_num_features12);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkFeatures12, vk_features12);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkNumFeatures13, vk_num_features13);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkFeatures13, vk_features13);
-RSF_SL_AT(FeatureRequirements, rsf_sl_sdk_requirements, vkNumOpticalFlowQueuesRequired, vk_optical_flow_queues);
-
-// sharpness is deprecated in the SDK, so its slot is checked through its neighbours.
-RSF_SL_RECORD(DLSSOptions, rsf_sl_sdk_dlss_options);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, mode, mode);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, outputWidth, output_width);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, outputHeight, output_height);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, preExposure, pre_exposure);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, exposureScale, exposure_scale);
-static_assert(offsetof(sl::DLSSOptions, outputHeight) + 2 * sizeof(uint32_t) ==
-    offsetof(sl::DLSSOptions, preExposure) &&
-    offsetof(rsf_sl_sdk_dlss_options, output_height) + 2 * sizeof(uint32_t) ==
-    offsetof(rsf_sl_sdk_dlss_options, pre_exposure));
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, colorBuffersHDR, hdr);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, indicatorInvertAxisX, invert_axis_x);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, indicatorInvertAxisY, invert_axis_y);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, dlaaPreset, presets);
+// The record layouts are in sdk_records_checks.h; these are the members it does not reach.
+RSF_SL_AT(DLSSOptimalSettings, rsf_vkdlss_optimal, optimalSharpness, sharpness);
+RSF_SL_AT(DLSSOptimalSettings, rsf_vkdlss_optimal, renderWidthMin, min_width);
+RSF_SL_AT(DLSSOptimalSettings, rsf_vkdlss_optimal, renderHeightMin, min_height);
+RSF_SL_AT(DLSSOptimalSettings, rsf_vkdlss_optimal, renderWidthMax, max_width);
+RSF_SL_AT(DLSSOptimalSettings, rsf_vkdlss_optimal, renderHeightMax, max_height);
 static_assert(sizeof(sl::DLSSPreset) == sizeof(uint32_t) &&
     offsetof(sl::DLSSOptions, qualityPreset) == offsetof(sl::DLSSOptions, dlaaPreset) + 4 &&
     offsetof(sl::DLSSOptions, balancedPreset) == offsetof(sl::DLSSOptions, dlaaPreset) + 8 &&
     offsetof(sl::DLSSOptions, performancePreset) == offsetof(sl::DLSSOptions, dlaaPreset) + 12 &&
     offsetof(sl::DLSSOptions, ultraPerformancePreset) == offsetof(sl::DLSSOptions, dlaaPreset) + 16 &&
     offsetof(sl::DLSSOptions, ultraQualityPreset) == offsetof(sl::DLSSOptions, dlaaPreset) + 20);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, useAutoExposure, auto_exposure);
-RSF_SL_AT(DLSSOptions, rsf_sl_sdk_dlss_options, alphaUpscalingEnabled, alpha);
-
-RSF_SL_RECORD(DLSSOptimalSettings, rsf_sl_sdk_dlss_optimal);
-RSF_SL_AT(DLSSOptimalSettings, rsf_sl_sdk_dlss_optimal, optimalRenderWidth, width);
-RSF_SL_AT(DLSSOptimalSettings, rsf_sl_sdk_dlss_optimal, optimalRenderHeight, height);
-RSF_SL_AT(DLSSOptimalSettings, rsf_sl_sdk_dlss_optimal, optimalSharpness, sharpness);
-RSF_SL_AT(DLSSOptimalSettings, rsf_sl_sdk_dlss_optimal, renderWidthMin, width_min);
-RSF_SL_AT(DLSSOptimalSettings, rsf_sl_sdk_dlss_optimal, renderHeightMin, height_min);
-RSF_SL_AT(DLSSOptimalSettings, rsf_sl_sdk_dlss_optimal, renderWidthMax, width_max);
-RSF_SL_AT(DLSSOptimalSettings, rsf_sl_sdk_dlss_optimal, renderHeightMax, height_max);
 
 #undef RSF_SL_GUID
 #undef RSF_SL_AT
-#undef RSF_SL_RECORD
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #elif defined(__GNUC__)

@@ -93,7 +93,7 @@ unsafe extern "C" fn resolve(_: *mut c_void) -> i32 {
 unsafe extern "C" fn init(preferences: *const rsf_slvk_sdk_preferences, version: u64) -> i32 {
     record("init");
     let preferences = unsafe { &*preferences };
-    assert_eq!(version, sdk_records::VERSION);
+    assert_eq!(version, crate::sdk_api::SDK_VERSION);
     assert_eq!(preferences.base.version, 1);
     assert_eq!(preferences.render_api, 2);
     assert_eq!(preferences.flags, 132);

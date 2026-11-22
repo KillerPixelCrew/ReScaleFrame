@@ -319,7 +319,7 @@ impl Lifecycle {
         self.diagnostics.set_verbose(verbose);
         let preferences =
             sdk_records::preferences(&selected[..count], plugin, project, verbose, platform.log);
-        let result = unsafe { (platform.init)(&preferences, sdk_records::VERSION) };
+        let result = unsafe { (platform.init)(&preferences, crate::sdk_api::SDK_VERSION) };
         if result != 0 {
             unsafe { self.abandon(system, platform, &mut session, loaded_here) };
             return result;

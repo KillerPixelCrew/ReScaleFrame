@@ -28,13 +28,58 @@ typedef struct rsf_slvk_sdk_adapter {
     void* physical_device;
 } rsf_slvk_sdk_adapter;
 
-/* sl::ReflexState v2. The leaf reads the leading facts. The SDK writes the
-   frame reports into the opaque tail. */
+/* sl::Version. */
+typedef struct rsf_slvk_sdk_version {
+    uint32_t major, minor, build;
+} rsf_slvk_sdk_version;
+
+/* sl::FeatureVersion, written by slGetFeatureVersion. */
+typedef struct rsf_slvk_sdk_feature_version {
+    rsf_slvk_sdk_header base;
+    rsf_slvk_sdk_version streamline, ngx;
+} rsf_slvk_sdk_feature_version;
+
+/* sl::FeatureRequirements v2, written by slGetFeatureRequirements. */
+typedef struct rsf_slvk_sdk_requirements {
+    rsf_slvk_sdk_header base;
+    uint32_t flags, max_cpu_threads, max_viewports, num_required_tags;
+    const uint32_t* required_tags;
+    rsf_slvk_sdk_version os_detected, os_required, driver_detected, driver_required;
+    uint32_t vk_compute_queues, vk_graphics_queues, vk_num_device_extensions;
+    const char** vk_device_extensions;
+    uint32_t vk_num_instance_extensions;
+    const char** vk_instance_extensions;
+    uint32_t vk_num_features12;
+    const char** vk_features12;
+    uint32_t vk_num_features13;
+    const char** vk_features13;
+    uint32_t vk_optical_flow_queues;
+} rsf_slvk_sdk_requirements;
+
+/* sl::ReflexReport. */
+typedef struct rsf_slvk_sdk_reflex_report {
+    rsf_slvk_sdk_header base;
+    uint64_t frame_id, input_sample, simulation_start, simulation_end, submit_start, submit_end,
+        present_start, present_end, driver_start, driver_end, queue_start, queue_end, gpu_start,
+        gpu_end;
+    uint32_t gpu_active_us, gpu_frame_us;
+} rsf_slvk_sdk_reflex_report;
+
+/* sl::ReflexReport2. */
+typedef struct rsf_slvk_sdk_reflex_report2 {
+    rsf_slvk_sdk_header base;
+    uint64_t camera_constructed;
+    uint32_t cross_adapter_copy_us;
+} rsf_slvk_sdk_reflex_report2;
+
+/* sl::ReflexState v2. */
 typedef struct rsf_slvk_sdk_reflex_state {
     rsf_slvk_sdk_header base;
     uint8_t low_latency_available, latency_report_available;
     uint32_t window_message;
-    uint8_t reports[12808];
+    rsf_slvk_sdk_reflex_report reports[64];
+    uint8_t flash_indicator_driver_controlled;
+    rsf_slvk_sdk_reflex_report2 reports2[64];
 } rsf_slvk_sdk_reflex_state;
 
 /* sl::PCLState. */

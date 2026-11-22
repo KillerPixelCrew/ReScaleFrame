@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Data construction for the pinned Streamline 2.14.1 call leaves.
-use crate::sdk_api::{RESOURCE, TAG};
+use crate::sdk_api::{PREFERENCES, RESOURCE, TAG};
 use crate::sdk_camera_defaults;
 use crate::sys::{
     rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_header,
@@ -9,17 +9,6 @@ use crate::sys::{
 };
 use std::ffi::c_char;
 use std::ptr;
-
-pub(crate) const VERSION: u64 = 0x0002_000e_0001_fedc;
-
-const PREFERENCES: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
-    next: ptr::null_mut(),
-    type_lo: 0x1ca1_0965,
-    type_mid: 0xbf8e,
-    type_hi: 0x432b,
-    type_tail: [0x8d, 0xa1, 0x67, 0x16, 0xd8, 0x79, 0xfb, 0x14],
-    version: 1,
-};
 
 pub(crate) fn features(mask: u32) -> impl Iterator<Item = u32> {
     // PCL, Reflex, DLSS-G and DLSS SR. Order matches the native startup leaf.
@@ -54,11 +43,7 @@ pub(crate) fn preferences(
     }
 }
 
-pub(crate) fn reflex_options(
-    mode: u32,
-    interval_us: u32,
-    thread_id: u32,
-) -> rsf_slvk_sdk_reflex_options {
+pub fn reflex_options(mode: u32, interval_us: u32, thread_id: u32) -> rsf_slvk_sdk_reflex_options {
     rsf_slvk_sdk_reflex_options {
         base: rsf_slvk_sdk_header {
             next: ptr::null_mut(),
@@ -76,7 +61,7 @@ pub(crate) fn reflex_options(
     }
 }
 
-pub(crate) fn rsf_slvk_pack_pcl_options(thread_id: u32, output: &mut rsf_slvk_sdk_pcl_options) {
+pub fn rsf_slvk_pack_pcl_options(thread_id: u32, output: &mut rsf_slvk_sdk_pcl_options) {
     *output = rsf_slvk_sdk_pcl_options {
         base: rsf_slvk_sdk_header {
             next: ptr::null_mut(),
