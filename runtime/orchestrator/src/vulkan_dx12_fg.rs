@@ -51,6 +51,9 @@ const BLIT_SRC: u32 = 0x400;
 const BLIT_DST: u32 = 0x800;
 const SRGB_NONLINEAR: u32 = 0;
 const EXCLUSIVE: u32 = 0;
+const PRESENT_FIFO: u32 = 2;
+const PRESENT_FIFO_RELAXED: u32 = 3;
+const SWAPCHAIN_LATENCY_NV: u32 = 1_000_505_007;
 const WAIT_NS: u64 = 10_000_000_000;
 const BUFFER_COUNT: usize = 3;
 const PRESENT_WAIT_LIMIT: usize = 16;
@@ -102,8 +105,10 @@ impl Default for SharedImage {
     }
 }
 
+/// Raw facts the native reader copies from the borrowed VkSwapchainCreateInfoKHR.
+/// `extension_count` saturates at 2; `extension_type` is the first chained sType or 0.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct Swapchain {
     pub(super) width: u32,
     pub(super) height: u32,
@@ -114,12 +119,28 @@ pub(super) struct Swapchain {
     sharing_mode: u32,
     min_images: u32,
     flags: u32,
-    compatible_extensions: u32,
-    vsync: u32,
+    present_mode: u32,
+    extension_count: u32,
+    extension_type: u32,
     old_chain: u64,
 }
 
 impl Swapchain {
+    /// The owned chain accepts no extension, or only the NV low-latency create info,
+    /// which the vendor latency path consumes.
+    fn extensions_compatible(self) -> bool {
+        self.extension_count == 0
+            || (self.extension_count == 1 && self.extension_type == SWAPCHAIN_LATENCY_NV)
+    }
+
+    /// FIFO and FIFO_RELAXED present on vertical blank; the vendor presents with vsync then.
+    pub(super) fn vsync(self) -> u32 {
+        u32::from(matches!(
+            self.present_mode,
+            PRESENT_FIFO | PRESENT_FIFO_RELAXED
+        ))
+    }
+
     pub(super) fn supported(self) -> bool {
         self.old_chain == 0
             && self.layers == 1
@@ -128,10 +149,20 @@ impl Swapchain {
             && self.height != 0
             && self.color_space == SRGB_NONLINEAR
             && matches!(self.format, RGBA8 | BGRA8)
-            && self.compatible_extensions != 0
+            && self.extensions_compatible()
             && self.flags == 0
             && self.min_images <= BUFFER_COUNT as u32
     }
+}
+
+/// Reads the borrowed create info only after the caller admitted the setup and options.
+pub(super) fn describe(ops: &GraphicsOps, setup: &Setup) -> Option<Swapchain> {
+    if setup.create_info.is_null() {
+        return None;
+    }
+    let mut swapchain = Swapchain::default();
+    unsafe { (ops.describe)(setup.create_info, &mut swapchain) };
+    Some(swapchain)
 }
 
 #[repr(C)]
@@ -169,7 +200,8 @@ unsafe extern "C" fn rsf_core_dx12gvk_present_marshaled(
     result: &mut i32,
 ) -> i32 {
     *result = INCOMPLETE;
-    if input.has_extension != 0
+    if input.native.is_null()
+        || input.has_extension != 0
         || input.swapchain_count != 1
         || input.has_image == 0
         || input.wait_count as usize > PRESENT_WAIT_LIMIT
@@ -268,9 +300,11 @@ pub(super) struct GraphicsOps {
     capture_complete: unsafe extern "C" fn(Handle, u64),
     capture_discard: unsafe extern "C" fn(Handle, u64),
     capture_flush: Release,
+    describe: unsafe extern "C" fn(*const c_void, *mut Swapchain),
 }
 const _: () = {
-    assert!(size_of::<GraphicsOps>() == 30 * size_of::<Handle>());
+    assert!(size_of::<GraphicsOps>() == 31 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(GraphicsOps, describe) == 30 * size_of::<Handle>());
     assert!(std::mem::offset_of!(GraphicsOps, platform_bind) == 4 * size_of::<Handle>());
     assert!(std::mem::offset_of!(GraphicsOps, images) == 9 * size_of::<Handle>());
     assert!(size_of::<DispatchEntries>() == 24 * size_of::<Handle>());
@@ -1180,7 +1214,7 @@ impl Presentation {
             scales,
             ready,
             done,
-            vsync: self.swapchain.vsync,
+            vsync: self.swapchain.vsync(),
         };
         let (result, status) = submission.present(frame);
         self.terminal = status.terminal;

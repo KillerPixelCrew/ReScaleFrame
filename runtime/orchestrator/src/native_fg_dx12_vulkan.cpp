@@ -22,9 +22,13 @@ static_assert(VK_IMAGE_LAYOUT_UNDEFINED == 0 && VK_IMAGE_LAYOUT_GENERAL == 1 &&
     VK_ACCESS_MEMORY_READ_BIT == 0x8000 && VK_ACCESS_MEMORY_WRITE_BIT == 0x10000 &&
     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT == 0x10000 &&
     VK_FORMAT_FEATURE_BLIT_SRC_BIT == 0x400 && VK_FORMAT_FEATURE_BLIT_DST_BIT == 0x800);
-static_assert(sizeof(rsf_dx12gvk_swapchain) == 56 && sizeof(rsf_dx12gvk_present_info) == 32 &&
+// The Rust swapchain admission compares these present modes and the extension sType.
+static_assert(VK_PRESENT_MODE_FIFO_KHR == 2 && VK_PRESENT_MODE_FIFO_RELAXED_KHR == 3 &&
+    VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV == 1000505007);
+static_assert(sizeof(rsf_dx12gvk_swapchain) == 56 && offsetof(rsf_dx12gvk_swapchain, present_mode) == 36 &&
+    offsetof(rsf_dx12gvk_swapchain, old_chain) == 48 && sizeof(rsf_dx12gvk_present_info) == 32 &&
     sizeof(rsf_dx12gvk_barrier) == 40 && sizeof(rsf_dx12gvk_transfer) == 32 &&
-    sizeof(rsf_dx12gvk_ops) == 30 * sizeof(void*));
+    sizeof(rsf_dx12gvk_ops) == 31 * sizeof(void*) && offsetof(rsf_dx12gvk_ops, describe) == 30 * sizeof(void*));
 static_assert(offsetof(rsf_dx12gvk_ops, platform_bind) == 4 * sizeof(void*) &&
     offsetof(rsf_dx12gvk_ops, images) == 9 * sizeof(void*) &&
     sizeof(rsf_dx12gvk_dispatch_entries) == 24 * sizeof(void*));
@@ -239,6 +243,16 @@ int32_t wait_timeline(rsf_dx12gvk_platform* self, uint64_t semaphore, uint64_t v
     info.semaphoreCount = 1; info.pSemaphores = &timeline; info.pValues = &value;
     return self->wait(self->device, &info, timeout);
 }
+// Copies facts only. Rust decides extension compatibility, present-mode vsync and old-chain refusal.
+void describe(const void* create_info, rsf_dx12gvk_swapchain* out) {
+    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(create_info);
+    const auto* extra = static_cast<const VkBaseInStructure*>(info.pNext);
+    *out = {info.imageExtent.width, info.imageExtent.height, static_cast<uint32_t>(info.imageFormat), info.imageUsage,
+        static_cast<uint32_t>(info.imageColorSpace), info.imageArrayLayers, static_cast<uint32_t>(info.imageSharingMode),
+        info.minImageCount, info.flags, static_cast<uint32_t>(info.presentMode),
+        !extra ? 0u : extra->pNext ? 2u : 1u, extra ? static_cast<uint32_t>(extra->sType) : 0u,
+        reinterpret_cast<uint64_t>(info.oldSwapchain)};
+}
 }
 
 const rsf_dx12gvk_ops rsf_dx12gvk_graphics{
@@ -289,23 +303,15 @@ const rsf_dx12gvk_ops rsf_dx12gvk_graphics{
     [](auto* self, uint64_t group) { self->capture.complete_group(group); },
     [](auto* self, uint64_t group) { self->capture.discard_group(group); },
     [](auto* self) -> int32_t { return self->capture.flush() ? VK_SUCCESS : VK_ERROR_UNKNOWN; },
+    describe,
 };
 
-rsf_dx12gvk_swapchain rsf_dx12gvk_describe(const void* create_info) {
-    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(create_info);
-    const auto* extra = static_cast<const VkBaseInStructure*>(info.pNext);
-    const bool compatible = !extra || (extra->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV && !extra->pNext);
-    return {info.imageExtent.width, info.imageExtent.height, static_cast<uint32_t>(info.imageFormat), info.imageUsage,
-        static_cast<uint32_t>(info.imageColorSpace), info.imageArrayLayers, static_cast<uint32_t>(info.imageSharingMode),
-        info.minImageCount, info.flags, compatible, info.presentMode == VK_PRESENT_MODE_FIFO_KHR ||
-            info.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR, reinterpret_cast<uint64_t>(info.oldSwapchain)};
-}
-
 int32_t rsf_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn call, void* owner, const void* info, const rsf_frame_record* source, uint32_t explicit_source) {
-    if (!info) return VK_ERROR_INITIALIZATION_FAILED;
-    const auto& vk = *static_cast<const VkPresentInfoKHR*>(info);
-    const rsf_dx12gvk_present_input input{info, vk.swapchainCount, vk.waitSemaphoreCount, vk.pNext != nullptr,
-        vk.pSwapchains && vk.pImageIndices, vk.pWaitSemaphores != nullptr, vk.pResults != nullptr};
+    // Rust refuses a missing VkPresentInfoKHR; this reader only reports its shape.
+    const auto* vk = static_cast<const VkPresentInfoKHR*>(info);
+    rsf_dx12gvk_present_input input{};
+    if (vk) input = {info, vk->swapchainCount, vk->waitSemaphoreCount, vk->pNext != nullptr,
+        vk->pSwapchains && vk->pImageIndices, vk->pWaitSemaphores != nullptr, vk->pResults != nullptr};
     // Keep the write to pResults typed as VkResult.
     int32_t result = VK_INCOMPLETE;
     const int32_t code = rsf_core_dx12gvk_present_marshaled(call, owner, &input,
@@ -315,6 +321,6 @@ int32_t rsf_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn call, void* owner, 
             *index = present.pImageIndices[0];
             for (uint32_t i = 0; i < count; ++i) waits[i] = reinterpret_cast<uint64_t>(present.pWaitSemaphores[i]);
         }, source, explicit_source, &result);
-    if (vk.pResults && result != VK_INCOMPLETE) vk.pResults[0] = static_cast<VkResult>(result);
+    if (vk && vk->pResults && result != VK_INCOMPLETE) vk->pResults[0] = static_cast<VkResult>(result);
     return code;
 }

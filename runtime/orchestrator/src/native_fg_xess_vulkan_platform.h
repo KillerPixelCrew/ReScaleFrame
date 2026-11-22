@@ -36,7 +36,7 @@ extern "C" int32_t rsf_core_xessvk_interop_create(const rsf_xessvk_import_create
     rsf_xess_bridge*, uint32_t, rsf_xessvk_interop**);
 extern "C" int32_t rsf_core_xessvk_interop_result(int32_t);
 extern "C" int32_t rsf_core_xessgvk_create(const rsf_xessgvk_ops*, const rsf_fgvk_setup*, const rsf_xessgvk_options*,
-    const rsf_dx12gvk_swapchain*, rsf_xessgvk**, uint64_t*);
+    rsf_xessgvk**, uint64_t*);
 extern "C" int32_t rsf_core_xessgvk_images(const rsf_xessgvk*, uint32_t*, uint64_t*);
 extern "C" int32_t rsf_core_xessgvk_acquire(rsf_xessgvk*, uint64_t, uint64_t, uint64_t, uint32_t*);
 extern "C" int32_t rsf_core_xessgvk_prepare(rsf_xessgvk*, void*, const rsf_fgvk_frame*);

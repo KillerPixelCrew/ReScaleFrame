@@ -397,11 +397,15 @@ rsf_fgvk_setup setup() {
     return s;
 }
 int32_t create(rsf_fsr4gvk** owner, uint64_t* chain) {
-    const auto graphics = setup();
+    static VkSwapchainCreateInfoKHR info{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    info.imageExtent = {640, 360}; info.imageFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; info.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    info.imageArrayLayers = 1; info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; info.minImageCount = 3;
+    info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    auto graphics = setup();
+    graphics.create_info = &info;
     const rsf_fsr4gvk_options options{sizeof(options), 1, fake(7), 1, 1};
-    const rsf_fsr4gvk_swapchain description{640, 360, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-        VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, 1, VK_SHARING_MODE_EXCLUSIVE, 3, 0, 1, 1, 0};
-    return rsf_core_fsr4gvk_create(&platform, &graphics, &options, &description, owner, chain);
+    return rsf_core_fsr4gvk_create(&platform, &graphics, &options, owner, chain);
 }
 rsf_frame_record source(uint64_t frame) {
     rsf_frame_record record{sizeof(record), RSF_GAME_FRAME_ABI_VERSION};
