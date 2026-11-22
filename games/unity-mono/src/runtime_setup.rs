@@ -6,17 +6,21 @@
 //! leaves; nothing here loads a Runtime or references its exports directly.
 use crate::generation::{self, RSF_DLSS_ENGINE_UNITY, Sources};
 use crate::runtime_abi::{
-    RSF_CALLBACK_HOST_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS,
-    RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4, RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_REFLEX_OFF,
-    RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL, RSF_SR_XESS,
-    rsf_backend_result, rsf_callback_host_setup, rsf_fg12_setup, rsf_native_fg_options,
-    rsf_unity_runtime_platform,
+    RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3,
+    RSF_FG_BACKEND_FSR4, RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO,
+    RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL, RSF_SR_XESS,
+    rsf_backend_result, rsf_fg12_setup, rsf_native_fg_options, rsf_unity_runtime_platform,
 };
 use crate::runtime_config::{
     Ini, PATH_CAPACITY, file_name, path_setting, preferences_path, profile_int, setting,
     terminated, utf8,
 };
-use rsf_game_sys::rsf_game_probe;
+use rsf_game_sys::{
+    callback_host_abi::{
+        RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup, rsf_callback_host_setup_v2,
+    },
+    rsf_game_probe,
+};
 use std::ffi::{CStr, OsString, c_char, c_int, c_void};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -87,6 +91,9 @@ struct Leaves {
     callback_host_start: unsafe extern "C" fn(*const rsf_callback_host_setup) -> u32,
     callback_host_stop: unsafe extern "C" fn() -> u32,
     set_engine_spatial: unsafe extern "C" fn(u32, u32) -> c_int,
+    request_policy: Option<unsafe extern "C" fn(u32, u32, *mut u32) -> c_int>,
+    drained_generation: Option<unsafe extern "C" fn(*mut u32) -> c_int>,
+    spatial_extent: Option<unsafe extern "C" fn(u32, u32, u32, *mut u32, *mut u32) -> c_int>,
 }
 
 impl Leaves {
@@ -113,6 +120,9 @@ impl Leaves {
             callback_host_start: p.callback_host_start?,
             callback_host_stop: p.callback_host_stop?,
             set_engine_spatial: p.set_engine_spatial?,
+            request_policy: Some(p.request_policy?),
+            drained_generation: Some(p.drained_generation?),
+            spatial_extent: Some(p.spatial_extent?),
         })
     }
 }
@@ -315,28 +325,34 @@ fn sr_start(ini: *const u16, leaves: &Leaves) -> u32 {
     if unsafe { (leaves.dlss_preset_valid)(dlss_preset) } == 0 {
         dlss_preset = 0;
     }
-    let setup = rsf_callback_host_setup {
-        struct_size: size_of::<rsf_callback_host_setup>() as u32,
-        abi_version: RSF_CALLBACK_HOST_ABI_VERSION,
-        plugin_path: plugin.as_ptr(),
-        log_path: output.as_ptr(),
-        preferences_path: preferences.as_ptr(),
-        probe: &probe,
-        backend,
-        quality,
-        dlss_preset,
-        sr_backend_choices: SR_CHOICES,
-        engine_type: RSF_DLSS_ENGINE_UNITY,
-        engine_version_utf8: leaves.engine_version,
-        project_id_utf8: leaves.project_id,
-        streamline_directory_utf8: streamline.as_ptr().cast(),
-        fsr2_directory_utf8: fsr2.as_ptr().cast(),
-        fsr3_directory_utf8: fsr3.as_ptr().cast(),
-        fsr4_directory_utf8: fsr4.as_ptr().cast(),
-        xess_directory_utf8: xess.as_ptr().cast(),
-        set_engine_spatial: Some(leaves.set_engine_spatial),
+    let setup = rsf_callback_host_setup_v2 {
+        base: rsf_callback_host_setup {
+            struct_size: size_of::<rsf_callback_host_setup_v2>() as u32,
+            abi_version: RSF_CALLBACK_HOST_ABI_VERSION_V2,
+            plugin_path: plugin.as_ptr(),
+            log_path: output.as_ptr(),
+            preferences_path: preferences.as_ptr(),
+            probe: &probe,
+            backend,
+            quality,
+            dlss_preset,
+            sr_backend_choices: SR_CHOICES,
+            engine_type: RSF_DLSS_ENGINE_UNITY,
+            engine_version_utf8: leaves.engine_version,
+            project_id_utf8: leaves.project_id,
+            streamline_directory_utf8: streamline.as_ptr().cast(),
+            fsr2_directory_utf8: fsr2.as_ptr().cast(),
+            fsr3_directory_utf8: fsr3.as_ptr().cast(),
+            fsr4_directory_utf8: fsr4.as_ptr().cast(),
+            xess_directory_utf8: xess.as_ptr().cast(),
+            set_engine_spatial: Some(leaves.set_engine_spatial),
+        },
+        request_policy: leaves.request_policy,
+        drained_generation: leaves.drained_generation,
+        spatial_extent: leaves.spatial_extent,
+        spatial_name_utf8: c"FSR1".as_ptr(),
     };
-    unsafe { (leaves.callback_host_start)(&setup) }
+    unsafe { (leaves.callback_host_start)(&setup.base) }
 }
 
 fn mono_loaded() -> bool {

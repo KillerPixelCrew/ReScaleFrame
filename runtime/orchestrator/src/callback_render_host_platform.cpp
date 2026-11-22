@@ -22,12 +22,13 @@
 
 using Microsoft::WRL::ComPtr;
 
-// Layouts callback_host.rs mirrors.
+// Keep native and generated size checks for both admitted setup versions.
 static_assert(sizeof(rsf_callback_host_setup) == 128 && offsetof(rsf_callback_host_setup, probe) == 32 &&
               offsetof(rsf_callback_host_setup, backend) == 40 &&
               offsetof(rsf_callback_host_setup, engine_version_utf8) == 64 &&
               offsetof(rsf_callback_host_setup, xess_directory_utf8) == 112 &&
               offsetof(rsf_callback_host_setup, set_engine_spatial) == 120);
+static_assert(sizeof(rsf_callback_host_setup_v2) == 160 && offsetof(rsf_callback_host_setup_v2, base) == 0);
 static_assert(sizeof(rsf_plugin_session_options) == 128 && offsetof(rsf_plugin_session_options, services) == 24);
 static_assert(RSF_CALLBACK_HOST_ABI_VERSION == 1 && RSF_PLUGIN_SESSION_ABI_VERSION == 1 && RSF_SR_DLSS == 1 &&
               RSF_SR_XESS == 5 && RSF_SR_SPATIAL == 6 && RSF_SR_AUTO == 7 &&

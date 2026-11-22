@@ -16,12 +16,15 @@
 #include <cstring>
 #include <string>
 
+extern "C" int rsf_unity_mono_request_policy(uint32_t, uint32_t, uint32_t*);
+extern "C" int rsf_unity_mono_drained_generation(uint32_t*);
+extern "C" int rsf_unity_mono_spatial_extent(uint32_t, uint32_t, uint32_t, uint32_t*, uint32_t*);
 extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
 // runtime_abi.rs mirrors these layouts and constants.
 static_assert(sizeof(rsf_fg12_setup) == 152 && sizeof(rsf_native_fg_options) == 24);
 static_assert(sizeof(rsf_callback_host_setup) == 128 && sizeof(rsf_game_probe) == 24);
-static_assert(sizeof(rsf_unity_runtime_platform) == 104);
+static_assert(sizeof(rsf_unity_runtime_platform) == 128);
 static_assert(RSF_DLSS_ENGINE_UNITY == 2 && RSF_BACKEND_OK == 0);
 
 namespace {
@@ -54,6 +57,9 @@ constexpr rsf_unity_runtime_platform platform{
     [](const rsf_callback_host_setup* setup) noexcept { return rsf_callback_host_start(setup); },
     []() noexcept { return rsf_callback_host_stop(); },
     rsf_unity_set_engine_spatial,
+    rsf_unity_mono_request_policy,
+    rsf_unity_mono_drained_generation,
+    rsf_unity_mono_spatial_extent,
 };
 }
 

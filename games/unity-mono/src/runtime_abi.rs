@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-use rsf_game_sys::rsf_game_probe;
+use rsf_game_sys::callback_host_abi::rsf_callback_host_setup;
 
 pub const RSF_UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
 pub const RSF_SR_DLSS: u32 = 1;
@@ -12,7 +12,6 @@ pub const RSF_SR_FSR4: u32 = 4;
 pub const RSF_SR_XESS: u32 = 5;
 pub const RSF_SR_SPATIAL: u32 = 6;
 pub const RSF_SR_AUTO: u32 = 7;
-pub const RSF_CALLBACK_HOST_ABI_VERSION: u32 = 1;
 pub const RSF_FG_BACKEND_DLSS: u32 = 1;
 pub const RSF_FG_BACKEND_FSR3: u32 = 3;
 pub const RSF_FG_BACKEND_FSR4: u32 = 4;
@@ -26,76 +25,6 @@ pub type rsf_backend_result = i32;
 pub type rsf_backend_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
 >;
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_callback_host_setup {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub plugin_path: *const wchar_t,
-    pub log_path: *const wchar_t,
-    pub preferences_path: *const wchar_t,
-    pub probe: *const rsf_game_probe,
-    pub backend: u32,
-    pub quality: u32,
-    pub dlss_preset: u32,
-    pub sr_backend_choices: u32,
-    pub engine_type: u32,
-    pub engine_version_utf8: *const ::core::ffi::c_char,
-    pub project_id_utf8: *const ::core::ffi::c_char,
-    pub streamline_directory_utf8: *const ::core::ffi::c_char,
-    pub fsr2_directory_utf8: *const ::core::ffi::c_char,
-    pub fsr3_directory_utf8: *const ::core::ffi::c_char,
-    pub fsr4_directory_utf8: *const ::core::ffi::c_char,
-    pub xess_directory_utf8: *const ::core::ffi::c_char,
-    pub set_engine_spatial: ::core::option::Option<
-        unsafe extern "C" fn(spatial: u32, quality: u32) -> ::core::ffi::c_int,
-    >,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_callback_host_setup"]
-        [::core::mem::size_of::<rsf_callback_host_setup>() - 128usize];
-    ["Alignment of rsf_callback_host_setup"]
-        [::core::mem::align_of::<rsf_callback_host_setup>() - 8usize];
-    ["Offset of field: rsf_callback_host_setup::struct_size"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, struct_size) - 0usize];
-    ["Offset of field: rsf_callback_host_setup::abi_version"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, abi_version) - 4usize];
-    ["Offset of field: rsf_callback_host_setup::plugin_path"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, plugin_path) - 8usize];
-    ["Offset of field: rsf_callback_host_setup::log_path"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, log_path) - 16usize];
-    ["Offset of field: rsf_callback_host_setup::preferences_path"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, preferences_path) - 24usize];
-    ["Offset of field: rsf_callback_host_setup::probe"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, probe) - 32usize];
-    ["Offset of field: rsf_callback_host_setup::backend"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, backend) - 40usize];
-    ["Offset of field: rsf_callback_host_setup::quality"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, quality) - 44usize];
-    ["Offset of field: rsf_callback_host_setup::dlss_preset"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, dlss_preset) - 48usize];
-    ["Offset of field: rsf_callback_host_setup::sr_backend_choices"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, sr_backend_choices) - 52usize];
-    ["Offset of field: rsf_callback_host_setup::engine_type"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, engine_type) - 56usize];
-    ["Offset of field: rsf_callback_host_setup::engine_version_utf8"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, engine_version_utf8) - 64usize];
-    ["Offset of field: rsf_callback_host_setup::project_id_utf8"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, project_id_utf8) - 72usize];
-    ["Offset of field: rsf_callback_host_setup::streamline_directory_utf8"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, streamline_directory_utf8) - 80usize];
-    ["Offset of field: rsf_callback_host_setup::fsr2_directory_utf8"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, fsr2_directory_utf8) - 88usize];
-    ["Offset of field: rsf_callback_host_setup::fsr3_directory_utf8"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, fsr3_directory_utf8) - 96usize];
-    ["Offset of field: rsf_callback_host_setup::fsr4_directory_utf8"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, fsr4_directory_utf8) - 104usize];
-    ["Offset of field: rsf_callback_host_setup::xess_directory_utf8"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, xess_directory_utf8) - 112usize];
-    ["Offset of field: rsf_callback_host_setup::set_engine_spatial"]
-        [::core::mem::offset_of!(rsf_callback_host_setup, set_engine_spatial) - 120usize];
-};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_native_fg_options {
@@ -226,11 +155,29 @@ pub struct rsf_unity_runtime_platform {
     pub set_engine_spatial: ::core::option::Option<
         unsafe extern "C" fn(spatial: u32, quality: u32) -> ::core::ffi::c_int,
     >,
+    pub request_policy: ::core::option::Option<
+        unsafe extern "C" fn(
+            spatial: u32,
+            quality: u32,
+            generation: *mut u32,
+        ) -> ::core::ffi::c_int,
+    >,
+    pub drained_generation:
+        ::core::option::Option<unsafe extern "C" fn(generation: *mut u32) -> ::core::ffi::c_int>,
+    pub spatial_extent: ::core::option::Option<
+        unsafe extern "C" fn(
+            quality: u32,
+            output_width: u32,
+            output_height: u32,
+            render_width: *mut u32,
+            render_height: *mut u32,
+        ) -> ::core::ffi::c_int,
+    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_unity_runtime_platform"]
-        [::core::mem::size_of::<rsf_unity_runtime_platform>() - 104usize];
+        [::core::mem::size_of::<rsf_unity_runtime_platform>() - 128usize];
     ["Alignment of rsf_unity_runtime_platform"]
         [::core::mem::align_of::<rsf_unity_runtime_platform>() - 8usize];
     ["Offset of field: rsf_unity_runtime_platform::engine_version_utf8"]
@@ -259,4 +206,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_runtime_platform, callback_host_stop) - 88usize];
     ["Offset of field: rsf_unity_runtime_platform::set_engine_spatial"]
         [::core::mem::offset_of!(rsf_unity_runtime_platform, set_engine_spatial) - 96usize];
+    ["Offset of field: rsf_unity_runtime_platform::request_policy"]
+        [::core::mem::offset_of!(rsf_unity_runtime_platform, request_policy) - 104usize];
+    ["Offset of field: rsf_unity_runtime_platform::drained_generation"]
+        [::core::mem::offset_of!(rsf_unity_runtime_platform, drained_generation) - 112usize];
+    ["Offset of field: rsf_unity_runtime_platform::spatial_extent"]
+        [::core::mem::offset_of!(rsf_unity_runtime_platform, spatial_extent) - 120usize];
 };

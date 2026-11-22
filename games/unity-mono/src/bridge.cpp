@@ -40,6 +40,9 @@ std::array<Commands, RSF_UNITY_FRAMES_SLOTS> commands;
 ComPtr<ID3D12Fence> fence;
 uint32_t refusals = 0;
 int event_id = 0;
+#ifndef RSF_UNITY_PACKAGE_BRIDGE
+thread_local const uint32_t* drained_policy = nullptr;
+#endif
 bool active() { return rsf_unity_frames_active() != 0; }
 // Unity's frame-fence completion, or 0 without a fence: every recorded submission is then pending.
 uint64_t completed() { return fence ? fence->GetCompletedValue() : 0; }
@@ -202,7 +205,12 @@ void __stdcall render(int id, void* address) noexcept try
     const bool hudless = (entry.packet.flags & RSF_UNITY_PACKET_HUDLESS) != 0;
     // Extent and policy changes wait for the ring; a busy slot leaves the queued spatial fallback.
     rsf_unity_frame_admission admission{};
+#ifdef RSF_UNITY_PACKAGE_BRIDGE
     if (!rsf_unity_frames_admit_frame(&entry.packet, completed(), &admission)) return;
+#else
+    uint32_t policy_generation = 0;
+    if (!rsf_unity_mono_admit_frame(&entry.packet, completed(), &admission, &policy_generation)) return;
+#endif
     const bool changing = admission.reconfigure != 0;
     auto& slot = commands[admission.slot];
     slot.leases = {};
@@ -222,7 +230,17 @@ void __stdcall render(int id, void* address) noexcept try
     rsf_game_render_pass pass{}; make_pass(entry.packet, pass);
     if (hudless) pass.role = RSF_GAME_RENDER_FINAL_SCENE;
     if (changing) { pass.flags |= RSF_GAME_RENDER_RECONFIGURE; pass.camera_valid = 0; }
+#ifndef RSF_UNITY_PACKAGE_BRIDGE
+    if (changing && !rsf_unity_frames_settle_change(policy_generation)) {
+        (void)slot.list->Close();
+        return;
+    }
+    drained_policy = changing ? &policy_generation : nullptr;
+#endif
     services.render_pass(services.user, slot.list.Get(), &pass, 1);
+#ifndef RSF_UNITY_PACKAGE_BRIDGE
+    drained_policy = nullptr;
+#endif
     if (FAILED(slot.list->Close())) return;
     std::array<UnityGraphicsD3D12ResourceState, 4> states{};
     int count = 0;
@@ -356,6 +374,15 @@ extern "C" __declspec(dllexport) void* rsf_unity_get_render_event() noexcept
 #endif
 }
 extern "C" __declspec(dllexport) int rsf_unity_get_event_id() noexcept { return event_id; }
+#ifndef RSF_UNITY_PACKAGE_BRIDGE
+extern "C" int rsf_unity_mono_drained_generation(uint32_t* generation)
+{
+    if (!drained_policy || !generation) return 0;
+    *generation = *drained_policy;
+    return 1;
+}
+#endif
+
 extern "C" __declspec(dllexport) int rsf_unity_set_engine_spatial(uint32_t requested_engine_spatial, uint32_t requested_quality) noexcept
 {
     return rsf_unity_frames_set_policy(requested_engine_spatial, requested_quality);

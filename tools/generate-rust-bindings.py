@@ -42,7 +42,13 @@ generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
           "--raw-line", "pub mod plugin_session_abi;", "--raw-line", "mod render_config;",
           "--raw-line", "mod render_pass;", "--raw-line", "pub mod shader_patch_abi;",
           "--raw-line", "pub mod sr_abi;",
-          "--raw-line", "#[cfg(windows)]", "--raw-line", "pub mod win32;"])
+          "--raw-line", "#[cfg(windows)]", "--raw-line", "pub mod win32;",
+          "--raw-line", "pub mod callback_host_abi;"])
+generate("sdk/game/src/callback_host_abi.rs", "runtime/orchestrator/include/rescaleframe/callback_render_host.h",
+         "rsf_callback_host_setup(_v2)?", "RSF_CALLBACK_HOST_ABI_VERSION(_V2)?",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include"],
+         ["--no-recursive-allowlist", "--raw-line", "type wchar_t = u16;",
+          "--raw-line", "use crate::rsf_game_probe;"])
 generate("sdk/game/src/shader_patch_abi.rs", "runtime/shader_patch/include/rescaleframe/shader_patch.h",
          "rsf_(get_shader_patch_api_fn|shader_patch_api|patch_.*)", "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", [],
          ["--with-derive-default"])
@@ -232,14 +238,14 @@ generate("games/unity-mono/src/bridge_abi.rs", "games/unity-mono/src/bridge_stat
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;",
           "--with-derive-custom-struct", "rsf_unity_packet=Copy,Clone"])
 generate("games/unity-mono/src/runtime_abi.rs", "games/unity-mono/src/runtime_platform.h",
-         "rsf_(unity_runtime_platform|fg12_setup|native_fg_options|callback_host_setup|backend_result|backend_log_fn)|wchar_t",
+         "rsf_(unity_runtime_platform|fg12_setup|native_fg_options|backend_result|backend_log_fn)|wchar_t",
          "RSF_(FG_BACKEND_(DLSS|FSR3|FSR4|XESS|AUTO|ALL)|FG_FIXED|REFLEX_OFF|UI_MODE_BACKBUFFER_HUDLESS|"
-         "SR_(DLSS|FSR2|FSR3|FSR4|XESS|SPATIAL|AUTO)|CALLBACK_HOST_ABI_VERSION)",
+         "SR_(DLSS|FSR2|FSR3|FSR4|XESS|SPATIAL|AUTO))",
          ["-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
           "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "use rsf_game_sys::rsf_game_probe;"])
+          "--raw-line", "use rsf_game_sys::callback_host_abi::rsf_callback_host_setup;"])
 generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(unity_(package_(settings|status|platform|view_setup)|frame_counters)|native_fg_(options|status)|fg_status|"
          "sharpening_options|native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode|sr12)",

@@ -63,6 +63,7 @@ struct World {
     vendor: u32,
     adapter_ok: bool,
     policy_ok: bool,
+    drained_generation: u32,
     create_result: i32,
     evaluate_result: i32,
     contexts: usize,
@@ -92,6 +93,7 @@ impl Default for World {
             vendor: 0x10de,
             adapter_ok: true,
             policy_ok: true,
+            drained_generation: 0,
             create_result: BACKEND_OK,
             evaluate_result: BACKEND_OK,
             contexts: 0,
@@ -486,6 +488,43 @@ fn code(result: Result<Host, u32>) -> u32 {
     result.err().unwrap_or(0)
 }
 
+unsafe extern "C" fn request_policy(spatial: u32, quality: u32, out: *mut u32) -> c_int {
+    unsafe { out.write(42) };
+    unsafe { policy(spatial, quality) }
+}
+
+unsafe extern "C" fn drained_generation(out: *mut u32) -> c_int {
+    unsafe { out.write(with(|world| world.drained_generation)) };
+    1
+}
+
+unsafe extern "C" fn spatial_extent(
+    quality: u32,
+    _: u32,
+    _: u32,
+    width: *mut u32,
+    height: *mut u32,
+) -> c_int {
+    unsafe {
+        width.write(900 + quality);
+        height.write(500 + quality);
+    }
+    1
+}
+
+fn setup_v2(files: &Files, backend: u32, quality: u32) -> SetupV2 {
+    let mut base = setup(files, backend, quality);
+    base.struct_size = size_of::<SetupV2>() as u32;
+    base.abi_version = RSF_CALLBACK_HOST_ABI_VERSION_V2;
+    SetupV2 {
+        base,
+        request_policy: Some(request_policy),
+        drained_generation: Some(drained_generation),
+        spatial_extent: Some(spatial_extent),
+        spatial_name_utf8: c"Fixture spatial".as_ptr(),
+    }
+}
+
 fn host(files: &Files, backend: u32, quality: u32) -> Box<Host> {
     reset();
     let setup = setup(files, backend, quality);
@@ -758,7 +797,6 @@ fn auto_resolves_from_the_owning_adapter_and_prepares_the_vendor_context() {
                     "create abi=1 backend={backend} quality=2 0x0->1920x1080 depth=1 preset=6 signature=1 interposer=C:\\SL\\sl.interposer.dll engine=4 6000.0 project fsr=C:\\FSR xess=C:\\XeSS"
                 ),
                 "sharpen 1 0.4".into(),
-                "sharpen 1 0.4".into(),
                 "evaluate 1 slot=0".into(),
             ]
         );
@@ -817,10 +855,13 @@ fn unidentified_adapters_and_refused_policy_keep_native_rendering() {
 
 #[test]
 fn spatial_upscaling_is_planned_for_the_engine() {
+    reset();
     let files = Files::new("spatial");
     let list = fake(fake(null_mut()));
-    for (quality, width, height) in [(0, 1920, 1080), (2, 1129, 635), (5, 1476, 830)] {
-        let host = host(&files, SR_SPATIAL, quality);
+    for (quality, width, height) in [(0, 900, 500), (2, 902, 502), (5, 905, 505)] {
+        let setup = setup_v2(&files, SR_SPATIAL, quality);
+        let host = unsafe { describe(&setup.base, &PLATFORM) }.ok().unwrap();
+        events();
         run(&host, list, &sr((1920, 1080)), true);
         assert!(events().is_empty(), "no vendor context");
         let plan = config(&host);
@@ -831,10 +872,70 @@ fn spatial_upscaling_is_planned_for_the_engine() {
     }
     let log = files.log_text();
     assert_eq!(
-        log.matches("FSR1 selected through the engine's own spatial upscaling path.\r\n")
+        log.matches("Engine spatial upscaling plan accepted.\r\n")
             .count(),
         3
     );
+}
+
+#[test]
+fn preset_change_waits_for_its_drain_even_during_resize() {
+    reset();
+    let files = Files::new("preset-drain");
+    let setup = setup_v2(&files, SR_DLSS, 2);
+    let host = unsafe { describe(&setup.base, &PLATFORM) }.ok().unwrap();
+    let device = fake(null_mut());
+    let queue = fake(device);
+    let list = fake(device);
+    run(&host, list, &sr((1920, 1080)), true);
+    events();
+    window(
+        &host,
+        queue,
+        Some(Intent {
+            dlss_preset_changed: 1,
+            dlss_preset: 10,
+            ..intent()
+        }),
+    );
+    assert_eq!(events(), ["fg window 5", "overlay", "policy 0 2"]);
+    assert_eq!(config(&host).enabled, 0);
+    let mut flagged = sr((2560, 1440));
+    flagged.flags = RSF_GAME_RENDER_RECONFIGURE;
+    run(&host, list, &flagged, true);
+    assert!(events().is_empty());
+    with(|world| world.drained_generation = 42);
+    run(&host, list, &flagged, true);
+    let rebuilt = events();
+    assert_eq!(rebuilt[0], "destroy 1");
+    assert!(rebuilt[1].contains("preset=10"));
+    assert_eq!(config(&host).enabled, 1);
+}
+
+#[test]
+fn quality_five_spatial_accepts_an_enable_only_change() {
+    reset();
+    let files = Files::new("spatial-enable");
+    let setup = setup_v2(&files, SR_SPATIAL, 5);
+    let host = unsafe { describe(&setup.base, &PLATFORM) }.ok().unwrap();
+    let device = fake(null_mut());
+    let queue = fake(device);
+    let list = fake(device);
+    run(&host, list, &sr((1920, 1080)), true);
+    assert_eq!(config(&host).enabled, 1);
+    events();
+    window(
+        &host,
+        queue,
+        Some(Intent {
+            enabled_changed: 1,
+            enabled: 0,
+            ..intent()
+        }),
+    );
+    assert_eq!(events(), ["fg window 5", "overlay", "policy 1 5"]);
+    assert_eq!(config(&host).enabled, 0);
+    assert!(!host.lock().enabled);
 }
 
 #[test]
@@ -1284,10 +1385,7 @@ fn sharpening_is_polled_from_the_preferences_once_a_second() {
     assert_eq!(host.lock().sharpening.sharpness, 0.3);
     let list = fake(fake(null_mut()));
     run(&host, list, &sr((1920, 1080)), true);
-    assert_eq!(
-        &events()[1..],
-        ["sharpen 1 0.3", "sharpen 1 0.3", "evaluate 1 slot=0"]
-    );
+    assert_eq!(&events()[1..], ["sharpen 1 0.3", "evaluate 1 slot=0"]);
     files.write("Sharpness", "1.7");
     with(|world| world.now = 999);
     run(&host, list, &sr((1920, 1080)), true);

@@ -328,6 +328,7 @@ impl State {
         &mut self,
         packet: &rsf_unity_packet,
         completed: u64,
+        defer_policy: bool,
     ) -> Option<rsf_unity_frame_admission> {
         if completed == u64::MAX {
             return None;
@@ -344,10 +345,12 @@ impl State {
         }
         let reconfigure = self.policy.pending;
         if reconfigure {
-            if busy {
+            if busy || (defer_policy && hudless) {
                 return None;
             }
-            self.policy.pending = false;
+            if !defer_policy {
+                self.policy.pending = false;
+            }
         } else if packet.generation != self.policy.generation {
             return None;
         }
@@ -626,6 +629,46 @@ extern "C" fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> 
 }
 
 #[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_mono_request_policy(
+    engine_spatial: u32,
+    quality: u32,
+    generation: *mut u32,
+) -> c_int {
+    if generation.is_null() {
+        return 0;
+    }
+    let mut state = lock();
+    if !state.set_policy(engine_spatial, quality, ACTIVE.load(Ordering::SeqCst)) {
+        return 0;
+    }
+    unsafe { generation.write(state.policy.generation) };
+    1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_mono_spatial_extent(
+    quality: u32,
+    width: u32,
+    height: u32,
+    render_width: *mut u32,
+    render_height: *mut u32,
+) -> c_int {
+    // The Mono URP camera adapter applies these extents as its FSR1 render scale.
+    const RATIOS: [f32; 6] = [1.0, 1.5, 1.7, 2.0, 3.0, 1.3];
+    let Some(&ratio) = RATIOS.get(quality as usize) else {
+        return 0;
+    };
+    if render_width.is_null() || render_height.is_null() {
+        return 0;
+    }
+    unsafe {
+        render_width.write((width as f32 / ratio) as u32);
+        render_height.write((height as f32 / ratio) as u32);
+    }
+    1
+}
+
+#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_unity_frames_pending_change(generation: *mut u32) -> u32 {
     if generation.is_null() {
         return 0;
@@ -654,10 +697,34 @@ unsafe extern "C" fn rsf_unity_frames_admit_frame(
     if admission.is_null() {
         return 0;
     }
-    let Some(admitted) = lock().admit_frame(packet, completed) else {
+    let Some(admitted) = lock().admit_frame(packet, completed, false) else {
         return 0;
     };
     unsafe { admission.write(admitted) };
+    1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_mono_admit_frame(
+    packet: *const rsf_unity_packet,
+    completed: u64,
+    admission: *mut rsf_unity_frame_admission,
+    generation: *mut u32,
+) -> u32 {
+    let Some(packet) = (unsafe { packet.as_ref() }) else {
+        return 0;
+    };
+    if admission.is_null() || generation.is_null() {
+        return 0;
+    }
+    let mut state = lock();
+    let Some(admitted) = state.admit_frame(packet, completed, true) else {
+        return 0;
+    };
+    unsafe {
+        admission.write(admitted);
+        generation.write(state.policy.generation);
+    }
     1
 }
 
@@ -962,33 +1029,33 @@ mod tests {
     #[test]
     fn frames_wait_for_the_ring_before_changing_extents_or_policy() {
         let mut state = State::new();
-        let first = state.admit_frame(&packet(1), 0).unwrap();
+        let first = state.admit_frame(&packet(1), 0, false).unwrap();
         assert_eq!((first.slot, first.reconfigure), (0, 0));
         assert!(state.submitted(&first, 10, &source(1)));
 
         // Same extents and generation: the next slot is free.
-        let second = state.admit_frame(&packet(2), 0).unwrap();
+        let second = state.admit_frame(&packet(2), 0, false).unwrap();
         assert_eq!(second.slot, 1);
         assert!(state.submitted(&second, 11, &source(2)));
 
         // A size change waits for both submissions.
         let mut resized = packet(3);
         resized.camera.render_width = 960;
-        assert!(state.admit_frame(&resized, 10).is_none());
+        assert!(state.admit_frame(&resized, 10, false).is_none());
         assert_eq!(state.input, (1280, 720));
-        assert_eq!(state.admit_frame(&resized, 11).unwrap().slot, 2);
+        assert_eq!(state.admit_frame(&resized, 11, false).unwrap().slot, 2);
         assert_eq!(state.input, (960, 720));
 
         // A policy change advances the generation; stale packets wait for it.
         assert!(!state.set_policy(2, 1, true));
         assert!(state.set_policy(1, 3, true));
         assert_eq!(state.policy.generation, 2);
-        let mut admitted = state.admit_frame(&resized, 11).unwrap();
+        let mut admitted = state.admit_frame(&resized, 11, false).unwrap();
         assert_eq!(admitted.reconfigure, 1);
         assert!(state.submitted(&admitted, 12, &source(3)));
-        assert!(state.admit_frame(&resized, 12).is_none());
+        assert!(state.admit_frame(&resized, 12, false).is_none());
         resized.generation = 2;
-        admitted = state.admit_frame(&resized, 12).unwrap();
+        admitted = state.admit_frame(&resized, 12, false).unwrap();
         assert_eq!((admitted.slot, admitted.reconfigure), (0, 0));
 
         // An inactive bridge records the change without a pending reconfiguration.
@@ -1013,25 +1080,44 @@ mod tests {
     }
 
     #[test]
+    fn mono_keeps_the_generation_pending_until_the_list_is_ready() {
+        let mut state = State::new();
+        assert!(state.set_policy(0, 1, true));
+        let old = state.pending_change().unwrap();
+        let mut hudless = packet(1);
+        hudless.flags |= RSF_UNITY_PACKET_HUDLESS;
+        assert!(state.admit_frame(&hudless, 0, true).is_none());
+        assert_eq!(
+            state.admit_frame(&packet(1), 0, true).unwrap().reconfigure,
+            1
+        );
+        assert_eq!(state.pending_change(), Some(old));
+        assert!(state.set_policy(1, 5, true));
+        assert!(!state.settle_change(old));
+        let latest = state.pending_change().unwrap();
+        assert!(state.settle_change(latest));
+    }
+
+    #[test]
     fn a_busy_slot_is_not_reused() {
         let mut state = State::new();
         for (frame, complete) in [(1, 5), (2, 6), (3, 7)] {
-            let admitted = state.admit_frame(&packet(frame), 0).unwrap();
+            let admitted = state.admit_frame(&packet(frame), 0, false).unwrap();
             assert!(state.submitted(&admitted, complete, &source(frame)));
         }
-        assert!(state.admit_frame(&packet(4), 4).is_none());
-        assert_eq!(state.admit_frame(&packet(4), 5).unwrap().slot, 0);
+        assert!(state.admit_frame(&packet(4), 4, false).is_none());
+        assert_eq!(state.admit_frame(&packet(4), 5, false).unwrap().slot, 0);
         // Without a fence every recorded submission is in flight.
-        assert!(state.admit_frame(&packet(4), 0).is_none());
+        assert!(state.admit_frame(&packet(4), 0, false).is_none());
         // Device removal gives no completion proof for the recorded slots.
-        assert!(state.admit_frame(&packet(4), u64::MAX).is_none());
+        assert!(state.admit_frame(&packet(4), u64::MAX, false).is_none());
         assert!(!state.drained(u64::MAX));
     }
 
     #[test]
     fn a_missing_completion_blocks_retirement() {
         let mut state = State::new();
-        let admitted = state.admit_frame(&packet(1), 0).unwrap();
+        let admitted = state.admit_frame(&packet(1), 0, false).unwrap();
         assert!(!state.submitted(&admitted, 0, &source(1)));
         assert_eq!(state.next, 0);
         assert!(!state.drained(u64::MAX));
@@ -1077,7 +1163,7 @@ mod tests {
     fn release_keeps_the_policy() {
         let mut state = State::new();
         assert!(state.set_policy(1, 4, true));
-        let admitted = state.admit_frame(&packet(1), 0).unwrap();
+        let admitted = state.admit_frame(&packet(1), 0, false).unwrap();
         assert!(state.submitted(&admitted, 3, &source(1)));
         state.release();
         assert_eq!(

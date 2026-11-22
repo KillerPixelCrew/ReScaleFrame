@@ -73,6 +73,9 @@ uint32_t rsf_unity_frames_settle_change(uint32_t generation);
 /* Admits a reconstruction packet against the policy generation, extents and ring completion. */
 uint32_t rsf_unity_frames_admit_frame(const rsf_unity_packet* packet, uint64_t completed,
     rsf_unity_frame_admission* admission);
+/* Mono keeps a policy pending until command-list setup succeeds. */
+uint32_t rsf_unity_mono_admit_frame(const rsf_unity_packet* packet, uint64_t completed,
+    rsf_unity_frame_admission* admission, uint32_t* generation);
 /* Records the slot's Unity completion and its source. Zero or the device-removed sentinel stops
    the bridge with ownership unknown and returns zero. */
 uint32_t rsf_unity_frames_submitted(const rsf_unity_frame_admission* admission, uint64_t complete,

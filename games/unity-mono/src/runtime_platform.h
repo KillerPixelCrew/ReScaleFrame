@@ -29,6 +29,10 @@ typedef struct rsf_unity_runtime_platform {
     uint32_t (*callback_host_start)(const rsf_callback_host_setup* setup);
     uint32_t (*callback_host_stop)(void);
     int (*set_engine_spatial)(uint32_t spatial, uint32_t quality);
+    int (*request_policy)(uint32_t spatial, uint32_t quality, uint32_t* generation);
+    int (*drained_generation)(uint32_t* generation);
+    int (*spatial_extent)(uint32_t quality, uint32_t output_width, uint32_t output_height,
+        uint32_t* render_width, uint32_t* render_height);
 } rsf_unity_runtime_platform;
 
 #ifdef __cplusplus

@@ -61,7 +61,14 @@ int main()
     auto setup = valid; setup.struct_size -= 8;
     check(rsf_callback_host_start(&setup) == 1, "short setup");
     setup = valid; setup.abi_version = 2;
-    check(rsf_callback_host_start(&setup) == 1, "ABI mismatch");
+    check(rsf_callback_host_start(&setup) == 1, "short v2 setup");
+    setup = valid; setup.abi_version = RSF_CALLBACK_HOST_ABI_VERSION_V2 + 1;
+    check(rsf_callback_host_start(&setup) == 1, "unknown ABI version");
+    rsf_callback_host_setup_v2 v2{};
+    v2.base = valid;
+    v2.base.struct_size = sizeof(v2);
+    v2.base.abi_version = RSF_CALLBACK_HOST_ABI_VERSION_V2;
+    check(rsf_callback_host_start(&v2.base) == 1, "missing v2 callbacks");
     setup = valid; setup.probe = nullptr;
     check(rsf_callback_host_start(&setup) == 1, "missing probe");
     setup = valid; setup.set_engine_spatial = nullptr;

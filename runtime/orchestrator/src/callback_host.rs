@@ -25,9 +25,13 @@ use crate::sharpening_policy;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
     RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
-    RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW, rsf_game_cpu_event as CpuEvent,
-    rsf_game_host_services as Services, rsf_game_probe as Probe, rsf_game_render_config as Config,
-    rsf_game_render_pass as Pass,
+    RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW,
+    callback_host_abi::{
+        RSF_CALLBACK_HOST_ABI_VERSION as HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2,
+        rsf_callback_host_setup as Setup, rsf_callback_host_setup_v2 as SetupV2,
+    },
+    rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services, rsf_game_probe as Probe,
+    rsf_game_render_config as Config, rsf_game_render_pass as Pass,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::fs::File;
@@ -51,7 +55,6 @@ const OK: i32 = 0;
 const BACKEND_OK: i32 = 0;
 const BACKEND_NOT_SUPPORTED: i32 = -7;
 
-const HOST_ABI_VERSION: u32 = 1;
 const SESSION_ABI_VERSION: u32 = 1;
 const SR_NONE: u32 = 0;
 const SR_DLSS: u32 = 1;
@@ -60,37 +63,10 @@ const SR_SPATIAL: u32 = 6;
 const SR_AUTO: u32 = 7;
 const SLOTS: usize = 3;
 const SHARPENING_POLL_MS: u64 = 1000;
-// The engine's spatial upscaler scale by quality index: native, quality, balanced, performance,
-// ultra performance, ultra quality.
-const SPATIAL_RATIOS: [f32; 6] = [1.0, 1.5, 1.7, 2.0, 3.0, 1.3];
 const SECTION: PCWSTR = w!("Rendering");
 // FILE_APPEND_DATA, and FILE_SHARE_READ | FILE_SHARE_WRITE.
 const LOG_ACCESS: u32 = 4;
 const LOG_SHARE: u32 = 3;
-
-/// callback_render_host.h's rsf_callback_host_setup; the platform file asserts the layout.
-#[repr(C)]
-pub(crate) struct Setup {
-    struct_size: u32,
-    abi_version: u32,
-    plugin_path: *const u16,
-    log_path: *const u16,
-    preferences_path: *const u16,
-    probe: *const Probe,
-    backend: u32,
-    quality: u32,
-    dlss_preset: u32,
-    sr_backend_choices: u32,
-    engine_type: u32,
-    engine_version_utf8: *const c_char,
-    project_id_utf8: *const c_char,
-    streamline_directory_utf8: *const c_char,
-    fsr2_directory_utf8: *const c_char,
-    fsr3_directory_utf8: *const c_char,
-    fsr4_directory_utf8: *const c_char,
-    xess_directory_utf8: *const c_char,
-    set_engine_spatial: Option<SpatialFn>,
-}
 
 /// plugin_session.h's rsf_plugin_session_options.
 #[repr(C)]
@@ -103,11 +79,6 @@ pub(crate) struct SessionOptions {
 }
 
 const _: () = {
-    assert!(size_of::<Setup>() == 128 && std::mem::offset_of!(Setup, probe) == 32);
-    assert!(
-        std::mem::offset_of!(Setup, engine_version_utf8) == 64
-            && std::mem::offset_of!(Setup, set_engine_spatial) == 120
-    );
     assert!(
         size_of::<SessionOptions>() == 128 && std::mem::offset_of!(SessionOptions, services) == 24
     );
@@ -198,6 +169,7 @@ struct State {
     sharpening: Sharpening,
     sharpening_poll: u64,
     dirty: bool,
+    requested_generation: Option<u32>,
     enabled: bool,
     show_performance: bool,
     // Panel layout word, saved in the preferences file under its own key.
@@ -248,6 +220,18 @@ pub(crate) struct Host {
     engine_version: CString,
     project_id: CString,
     set_engine_spatial: SpatialFn,
+    policy_v2: Option<PolicyV2>,
+}
+
+struct PolicyV2 {
+    request: unsafe extern "C" fn(u32, u32, *mut u32) -> c_int,
+    drained: unsafe extern "C" fn(*mut u32) -> c_int,
+    extent: unsafe extern "C" fn(u32, u32, u32, *mut u32, *mut u32) -> c_int,
+    spatial_name: CString,
+}
+
+fn accepts_backend_quality(backend: u32, quality: u32) -> bool {
+    backend <= SR_SPATIAL && quality <= 5 && (backend != SR_DLSS || quality <= 4)
 }
 
 struct Published(*mut Host);
@@ -337,6 +321,24 @@ impl Host {
         unsafe { (self.set_engine_spatial)(u32::from(backend == SR_SPATIAL), quality) != 0 }
     }
 
+    fn request_reconfigure(&self, state: &mut State, backend: u32, quality: u32) -> bool {
+        if let Some(adapter) = &self.policy_v2 {
+            let mut generation = 0;
+            if unsafe {
+                (adapter.request)(u32::from(backend == SR_SPATIAL), quality, &mut generation)
+            } == 0
+            {
+                return false;
+            }
+            state.requested_generation = Some(generation);
+        } else if !self.policy(backend, quality) {
+            return false;
+        }
+        state.dirty = true;
+        state.plan.enabled = 0;
+        true
+    }
+
     // The shared post-pass keys of the preferences section, sanitized.
     fn read_sharpening(&self) -> Sharpening {
         unsafe { crate::settings_store::read_sharpening(self.preferences.as_ptr(), SECTION) }
@@ -409,7 +411,14 @@ impl Host {
             struct_size: size_of::<Stats>() as u32,
             backend_loaded: 1,
             backend_supported: s.plan.enabled,
-            backend_name: sr_name(s.backend).as_ptr(),
+            backend_name: self
+                .policy_v2
+                .as_ref()
+                .filter(|adapter| s.backend == SR_SPATIAL && !adapter.spatial_name.is_empty())
+                .map_or_else(
+                    || sr_name(s.backend).as_ptr(),
+                    |adapter| adapter.spatial_name.as_ptr(),
+                ),
             backend: s.backend,
             sr_backend_choices: self.sr_choices,
             requested_backend: s.requested_backend,
@@ -586,45 +595,47 @@ impl Host {
                 self.log("Could not save sharpening settings; previous values retained.");
             }
         }
-        if intent.dlss_preset_changed != 0
-            && unsafe { (p.dlss_preset_valid)(intent.dlss_preset) } != 0
+        let preset_changed = intent.dlss_preset_changed != 0
+            && intent.dlss_preset != s.preset
+            && unsafe { (p.dlss_preset_valid)(intent.dlss_preset) } != 0;
+        let policy_changed = intent.backend_changed != 0
+            || intent.quality_changed != 0
+            || intent.enabled_changed != 0
+            || intent.start_requested != 0;
+        if !preset_changed && !policy_changed {
+            return;
+        }
+        let backend = if intent.backend_changed != 0 {
+            intent.backend
+        } else {
+            s.requested_backend
+        };
+        let quality = if intent.quality_changed != 0 {
+            intent.quality
+        } else {
+            s.requested_quality
+        };
+        if !accepts_backend_quality(backend, quality)
+            || !self.request_reconfigure(s, backend, quality)
         {
+            return;
+        }
+        s.requested_backend = backend;
+        s.requested_quality = quality;
+        if intent.backend_changed != 0 {
+            s.automatic = false;
+        }
+        if intent.enabled_changed != 0 {
+            s.enabled = intent.enabled != 0;
+        }
+        if preset_changed {
             s.preset = intent.dlss_preset;
-            s.dirty = true;
-            s.plan.enabled = 0;
             if unsafe { write_dlss_preset(self.preferences.as_ptr(), SECTION, s.preset) } != OK {
                 self.log("Could not save requested DLSS model preset.");
             }
             self.log("DLSS model change requested; draining previous GPU work.");
-        }
-        if intent.backend_changed != 0
-            || intent.quality_changed != 0
-            || intent.enabled_changed != 0
-            || intent.start_requested != 0
-        {
-            let backend = if intent.backend_changed != 0 {
-                intent.backend
-            } else {
-                s.requested_backend
-            };
-            let quality = if intent.quality_changed != 0 {
-                intent.quality
-            } else {
-                s.requested_quality
-            };
-            if backend <= SR_SPATIAL && quality <= 4 && self.policy(backend, quality) {
-                s.requested_backend = backend;
-                s.requested_quality = quality;
-                if intent.backend_changed != 0 {
-                    s.automatic = false;
-                }
-                if intent.enabled_changed != 0 {
-                    s.enabled = intent.enabled != 0;
-                }
-                s.dirty = true;
-                s.plan.enabled = 0;
-                self.log("Overlay requested vendor/quality change; draining previous GPU work.");
-            }
+        } else {
+            self.log("Overlay requested vendor/quality change; draining previous GPU work.");
         }
     }
 
@@ -632,7 +643,17 @@ impl Host {
     fn scene(&self, s: &mut State, commands: Handle, pass: &Pass) {
         let p = self.p;
         let camera = &pass.camera;
-        if (s.dirty && pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0)
+        let mut drained = pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0;
+        if let (Some(adapter), Some(expected)) = (&self.policy_v2, s.requested_generation) {
+            let mut generation = 0;
+            drained = drained
+                && unsafe { (adapter.drained)(&mut generation) } != 0
+                && generation == expected;
+            if !drained {
+                return;
+            }
+        }
+        if (s.dirty && drained)
             || s.width != camera.output_width
             || s.height != camera.output_height
         {
@@ -648,6 +669,7 @@ impl Host {
             s.backend = s.requested_backend;
             s.quality = s.requested_quality;
             s.dirty = false;
+            s.requested_generation = None;
             s.accepted = 0;
             s.refused = 0;
             s.last_result = 0;
@@ -772,7 +794,9 @@ impl Host {
             s.backend =
                 crate::rsf_gpu_select_sr_backend(adapter.vendor, adapter.software, self.sr_choices);
             s.requested_backend = s.backend;
-            if !self.policy(s.backend, s.quality) {
+            if !accepts_backend_quality(s.backend, s.quality)
+                || (self.policy_v2.is_none() && !self.policy(s.backend, s.quality))
+            {
                 return false;
             }
             self.log(&format!(
@@ -785,11 +809,23 @@ impl Host {
             return true;
         }
         if s.backend == SR_SPATIAL {
-            let ratio = SPATIAL_RATIOS[s.quality as usize];
-            s.plan.render_width = (s.width as f32 / ratio) as u32;
-            s.plan.render_height = (s.height as f32 / ratio) as u32;
+            let (mut width, mut height) = (pass.camera.render_width, pass.camera.render_height);
+            if let Some(adapter) = &self.policy_v2
+                && unsafe {
+                    (adapter.extent)(s.quality, s.width, s.height, &mut width, &mut height)
+                } == 0
+            {
+                s.last_result = BACKEND_NOT_SUPPORTED;
+                return false;
+            }
+            if width == 0 || height == 0 || width > s.width || height > s.height {
+                s.last_result = BACKEND_NOT_SUPPORTED;
+                return false;
+            }
+            s.plan.render_width = width;
+            s.plan.render_height = height;
             s.plan.enabled = 1;
-            self.log("FSR1 selected through the engine's own spatial upscaling path.");
+            self.log("Engine spatial upscaling plan accepted.");
             return true;
         }
         let Some(device) = (unsafe { ComRef::from_owned((p.list_device)(commands)) }) else {
@@ -831,6 +867,11 @@ impl Host {
         drop(device);
         s.last_result = created;
         if created == BACKEND_OK {
+            let now = unsafe { (p.tick)() };
+            if now >= s.sharpening_poll {
+                s.sharpening = self.read_sharpening();
+                s.sharpening_poll = now.saturating_add(SHARPENING_POLL_MS);
+            }
             let _ = unsafe { (p.sr12_set_sharpening)(s.sr, &s.sharpening) };
             let _ =
                 unsafe { (p.sr12_plan)(s.sr, &mut s.plan.render_width, &mut s.plan.render_height) };
@@ -886,12 +927,25 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
     if setup.is_null() || (unsafe { setup.cast::<u32>().read() } as usize) < size_of::<Setup>() {
         return Err(1);
     }
+    let setup_ptr = setup;
     let setup = unsafe { &*setup };
     let Some(set_engine_spatial) = setup.set_engine_spatial else {
         return Err(1);
     };
-    if setup.abi_version != HOST_ABI_VERSION
-        || setup.plugin_path.is_null()
+    let policy_v2 = match setup.abi_version {
+        HOST_ABI_VERSION => None,
+        RSF_CALLBACK_HOST_ABI_VERSION_V2 if setup.struct_size as usize >= size_of::<SetupV2>() => {
+            let extended = unsafe { &*setup_ptr.cast::<SetupV2>() };
+            Some(PolicyV2 {
+                request: extended.request_policy.ok_or(1u32)?,
+                drained: extended.drained_generation.ok_or(1u32)?,
+                extent: extended.spatial_extent.ok_or(1u32)?,
+                spatial_name: unsafe { c_copy(extended.spatial_name_utf8) },
+            })
+        }
+        _ => return Err(1),
+    };
+    if setup.plugin_path.is_null()
         || setup.log_path.is_null()
         || setup.preferences_path.is_null()
         || setup.probe.is_null()
@@ -905,9 +959,7 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
     let backend = if automatic { SR_NONE } else { setup.backend };
     let quality = setup.quality;
     if unsafe { (p.dlss_preset_valid)(setup.dlss_preset) } == 0
-        || backend > SR_SPATIAL
-        || quality > 5
-        || (backend == SR_DLSS && quality > 4)
+        || !accepts_backend_quality(backend, quality)
     {
         return Err(2);
     }
@@ -943,6 +995,7 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
             sharpening: unsafe { std::mem::zeroed() },
             sharpening_poll: 0,
             dirty: false,
+            requested_generation: None,
             enabled: true,
             show_performance: false,
             ui_preferences,
@@ -971,6 +1024,7 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
         engine_version: unsafe { c_copy(setup.engine_version_utf8) },
         project_id: unsafe { c_copy(setup.project_id_utf8) },
         set_engine_spatial,
+        policy_v2,
     };
     let sharpening = host.read_sharpening();
     host.lock().sharpening = sharpening;
