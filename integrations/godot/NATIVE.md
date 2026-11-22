@@ -20,8 +20,8 @@ the method binds by their pinned 4.7 hashes.
 layouts, supplies the CMake-selected optional Vulkan symbols and the CMake version, and
 registers `rsf_godot_host_unload` with `atexit` from a CRT initializer. `exports.def` exports the
 entry. CMake builds the DLL when `RSF_GODOT_NATIVE=ON`, which `eng/build-godot.ps1` passes. The
-native `rsf_godot_platform` leaf table is `PLATFORM_VERSION = 9` (`native/platform.rs:18`), asserted
-on both sides by `runtime_platform.c`; earlier table versions are not supported.
+native leaf table (`native/platform.rs`) is Rust to Rust: it has no C declaration, and
+`runtime_platform.c` asserts only the `api.h` records and Runtime constants.
 
 ## Rust owners in the native DLL
 

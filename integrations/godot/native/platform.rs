@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! `api.h` records and the leaves lent by `runtime.cpp`, mirrored by hand from `api.h` and
-//! `godot_platform.h` (bindgen-cli 0.72.1 was not available). Both sides assert sizes and offsets.
+//! `api.h` records, mirrored by hand (runtime_platform.c asserts the layouts the engine module reads),
+//! and the Rust-only records and leaves lent by `host.rs`.
 //! The leaves carry the D3D12 capture owner, the FG presenter install, header-inline Runtime
 //! validators, the Vulkan owner's guard and its device, provider, presenter, SDK and SR context
 //! calls in `vulkan/native.rs` (the latter driven by `vulkan/sr.rs`), the status facts, and the D3D12
@@ -666,6 +666,8 @@ pub(crate) struct CpuService {
     pub(crate) execution: Option<unsafe extern "C" fn(*const rsf_game_render_pass, u32) -> i32>,
 }
 
+// The records the engine module and the C leaves also read; runtime_platform.c asserts the same
+// layouts. The other records here are Rust to Rust.
 const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<CpuService>() == 32 && offset_of!(CpuService, execution) == 24);
@@ -682,81 +684,7 @@ const _: () = {
     assert!(offset_of!(Status, derived_boundaries) == 248);
     assert!(size_of::<Setup>() == 48);
     assert!(size_of::<EngineServices>() == 24);
-    assert!(size_of::<FgOptions>() == 20);
-    assert!(size_of::<FgInstall>() == 96);
-    assert!(offset_of!(FgInstall, fidelityfx_directory) == 56);
-    assert!(size_of::<Paths>() == 56);
-    assert!(size_of::<InputFacts>() == 56);
-    assert!(size_of::<WindowFacts>() == 16);
-    assert!(size_of::<FgFacts>() == 88);
-    assert!(offset_of!(FgFacts, tagged_frames) == 40);
-    assert!(size_of::<LatencyFacts>() == 96);
-    assert!(size_of::<SrCreate>() == 88);
-    assert!(offset_of!(SrCreate, paths) == 32);
-    assert!(size_of::<SrContext>() == 24);
-    assert!(offset_of!(SrContext, desired_width) == 12);
-    assert!(size_of::<SrEvaluate>() == 64);
-    assert!(size_of::<OptionField>() == 16);
-    assert!(size_of::<OptionValue>() == 24);
-    assert!(size_of::<VkFacts>() == 40);
-    assert!(size_of::<VkLatencyFacts>() == 40);
-    assert!(offset_of!(VkLatencyFacts, sleep_calls) == 24);
-    assert!(size_of::<VkView>() == 136);
-    assert!(offset_of!(VkView, generation) == 104);
-    assert!(size_of::<VkPresentFacts>() == 32);
-    assert!(size_of::<VkSrPass>() == 56);
-    assert!(offset_of!(VkSrPass, output_width) == 32);
-    assert!(offset_of!(VkSrPass, source_frame_id) == 40);
-    assert!(size_of::<VkSrCreate>() == 12);
-    assert!(size_of::<VkSrContext>() == 16);
-    assert!(offset_of!(VkSrContext, result) == 8);
-    assert!(offset_of!(VkFacts, graph_handoff) == 8);
-    assert!(size_of::<VkChainFacts>() == 40);
-    assert!(size_of::<VkDeviceDerive>() == 40);
-    assert!(offset_of!(VkDeviceDerive, next) == 24);
-    assert!(size_of::<VkLatencyRequirements>() == 24);
-    assert!(size_of::<VkInstanceCall>() == 48);
-    assert!(size_of::<VkDeviceCall>() == 56);
-    assert!(offset_of!(VkDeviceCall, extension_count) == 48);
-    assert!(size_of::<VkCreationLeaves>() == 120);
-    assert!(offset_of!(VkCreationLeaves, latency_requirements) == 64);
-    assert!(offset_of!(VkCreationLeaves, destroy_device) == 104);
-    assert!(offset_of!(VkCreationLeaves, adapter) == 112);
-    assert!(size_of::<VkAdapter>() == 16);
-    assert!(size_of::<EffectFrame>() == 272);
-    assert!(offset_of!(EffectFrame, motion_valid) == 36);
-    assert!(offset_of!(EffectFrame, camera_transform) == 48);
-    assert!(offset_of!(EffectFrame, jittered_projection) == 144);
-    assert!(size_of::<EffectResources>() == 24);
-    assert!(size_of::<EffectStatus>() == 416);
-    assert!(offset_of!(EffectStatus, frame) == 16);
-    assert!(offset_of!(EffectStatus, resources) == 288);
-    assert!(offset_of!(EffectStatus, buffers_available) == 312);
-    assert!(offset_of!(EffectStatus, captures) == 320);
-    assert!(offset_of!(EffectStatus, capture_max_abs_uv) == 368);
-    assert!(offset_of!(EffectStatus, stage) == 376);
-    assert!(offset_of!(EffectStatus, rendering_ready) == 400);
-    assert!(size_of::<EffectLeaves>() == 32);
-    assert!(offset_of!(EffectLeaves, read_motion) == 24);
-    assert!(size_of::<EffectReadback>() == 24 && offset_of!(EffectReadback, groups_y) == 16);
-    assert!(size_of::<WindowIdentity>() == 144);
-    assert!(offset_of!(WindowIdentity, class_name) == 16);
-    assert!(size_of::<Platform>() == 472);
-    assert!(offset_of!(Platform, sr_select_backend) == 456);
-    assert!(offset_of!(Platform, vulkan_locked) == 88);
-    assert!(offset_of!(Platform, latency_facts) == 176);
-    assert!(offset_of!(Platform, d3d12_bind) == 184);
-    assert!(offset_of!(Platform, sr_evaluate) == 256);
-    assert!(offset_of!(Platform, d3d12_release) == 320);
-    assert!(offset_of!(Platform, vulkan_presenter_drain) == 328);
-    assert!(offset_of!(Platform, vulkan_sr_create) == 352);
-    assert!(offset_of!(Platform, vulkan_sr_record) == 368);
-    assert!(offset_of!(Platform, vulkan_sr_dump_result) == 384);
-    assert!(offset_of!(Platform, window_identity) == 392);
-    assert!(offset_of!(Platform, d3d12_cpu_service) == 432);
-    assert!(offset_of!(Platform, vulkan_present_marker) == 448);
 };
-
 #[cfg(test)]
 pub(crate) mod fake;
 
