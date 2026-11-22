@@ -6,9 +6,10 @@
 //! (their table and slot rules are package_views.rs), the presentation: the package identity,
 //! the generation install and the window pass's provider request (presentation.rs), and the
 //! session services: each session's host services and bridge API, the log, the input window and
-//! the routing of CPU events, window messages and rsfu_input (services.rs). package.cpp keeps the
-//! Unity, DXGI, Vulkan and preview work, the render callback's routing and the window guard, and
-//! lends the Unity, Win32, SDK and Runtime calls through rsf_unity_package_platform
+//! the routing of CPU events, window messages and rsfu_input (services.rs), and the render
+//! callback's routing, the generation window guard and Unity's device lifecycle (routing.rs).
+//! package.cpp keeps the Unity, DXGI, Vulkan and preview work, and lends the Unity, Win32, SDK
+//! and Runtime calls through rsf_unity_package_platform
 //! (integrations/unity/native/package_state.h); nothing here loads a Runtime or references its
 //! exports.
 //!
@@ -21,6 +22,7 @@
 //! taken before the state lock. The log and input-window locks are innermost: they are held
 //! across their own leaves only.
 mod presentation;
+mod routing;
 mod services;
 
 use self::presentation::{Identity, Presentation};
@@ -43,7 +45,7 @@ use rsf_game_sys::{
 };
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// RSF_BACKEND_OK, a cast macro bindgen does not evaluate; package.cpp asserts it.
@@ -175,6 +177,18 @@ struct Leaves {
     raw_input_type: unsafe extern "C" fn(isize, *mut u32) -> u32,
     timestamp: unsafe extern "C" fn(*mut u64, *mut u64),
     cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
+    fg_submitted: unsafe extern "C" fn(u64, u64),
+    fg_window: unsafe extern "C" fn(*const rsf_game_render_pass),
+    fg_hudless: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass),
+    preview_present: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass, u32) -> u32,
+    texture_desc: unsafe extern "C" fn(*mut c_void, *mut u64, *mut u32, *mut u32),
+    preview_prepare: unsafe extern "C" fn(u32, u32) -> u32,
+    preview_owns: unsafe extern "C" fn(*mut c_void) -> u32,
+    renderer_vulkan: unsafe extern "C" fn() -> u32,
+    vulkan_owns: unsafe extern "C" fn(*mut c_void) -> u32,
+    window_class: unsafe extern "C" fn(*mut c_void) -> u32,
+    bridge_load: unsafe extern "C" fn() -> u32,
+    bridge_unload: unsafe extern "C" fn(),
     /// The table itself, package.cpp's constant: the user pointer of a session's host services.
     table: *const rsf_unity_package_platform,
 }
@@ -236,6 +250,18 @@ impl Leaves {
             raw_input_type: p.raw_input_type?,
             timestamp: p.timestamp?,
             cpu: p.cpu?,
+            fg_submitted: p.fg_submitted?,
+            fg_window: p.fg_window?,
+            fg_hudless: p.fg_hudless?,
+            preview_present: p.preview_present?,
+            texture_desc: p.texture_desc?,
+            preview_prepare: p.preview_prepare?,
+            preview_owns: p.preview_owns?,
+            renderer_vulkan: p.renderer_vulkan?,
+            vulkan_owns: p.vulkan_owns?,
+            window_class: p.window_class?,
+            bridge_load: p.bridge_load?,
+            bridge_unload: p.bridge_unload?,
             table: platform,
         })
     }
@@ -368,6 +394,10 @@ struct Package {
     temporal_ready: AtomicBool,
     /// A renderer bridge failure, reported as the SR result until the next session.
     bridge_result: AtomicI32,
+    /// Unity's device (routing.rs), written only under package.cpp's mutex.
+    device: AtomicU8,
+    /// Editor preview refusals counted toward the process's diagnostic budget.
+    preview_reports: AtomicU32,
 }
 
 static PACKAGE: Package = Package::new();
@@ -401,6 +431,8 @@ impl Package {
             services: Services::new(),
             temporal_ready: AtomicBool::new(false),
             bridge_result: AtomicI32::new(0),
+            device: AtomicU8::new(routing::DEVICE_WAITING),
+            preview_reports: AtomicU32::new(0),
         }
     }
 
@@ -815,6 +847,12 @@ unsafe extern "C" fn rsf_unity_package_initialize(
     if runtime.is_null() || engine.is_null() || project.is_null() || output.is_null() {
         return code::FAILED;
     }
+    // package.cpp's mutex serializes this with Unity's device events.
+    match PACKAGE.device.load(SeqCst) {
+        routing::DEVICE_RETAINED => return code::FAILED,
+        routing::DEVICE_WAITING => return code::BUSY,
+        _ => {}
+    }
     let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_bytes();
     let identity = Identity::new(text(runtime), text(engine), text(project));
     match PACKAGE.initialize(&leaves, identity) {
@@ -911,6 +949,17 @@ mod tests {
         /// Auto's generation provider for Unity's adapter; None when it cannot be read.
         fg_adapter: Option<u32>,
         request_result: i32,
+        /// The Editor preview presents, and is prepared, its window answers preview_owns.
+        shown: bool,
+        preview_ready: bool,
+        preview_owns: bool,
+        /// Unity renders with Vulkan; the window is the player's surface.
+        vulkan: bool,
+        surface_owns: bool,
+        /// window_class's answer.
+        class: u32,
+        /// UnityPluginLoad stored Unity's interfaces.
+        registry: bool,
     }
 
     const READY: Fake = Fake {
@@ -940,6 +989,13 @@ mod tests {
         owner: true,
         fg_adapter: Some(3),
         request_result: 0,
+        shown: true,
+        preview_ready: true,
+        preview_owns: true,
+        vulkan: false,
+        surface_owns: true,
+        class: 1,
+        registry: true,
     };
     /// A fake context's address is 0x100 plus its backend.
     const CONTEXT: usize = 0x100;
@@ -1330,6 +1386,66 @@ mod tests {
             e.event_version
         ));
     }
+    unsafe extern "C" fn fg_submitted(session: u64, source_frame: u64) {
+        call(format!("submitted {session} {source_frame}"));
+    }
+    unsafe extern "C" fn fg_window(pass: *const rsf_game_render_pass) {
+        call(format!("window {}", unsafe { (*pass).view_key }));
+    }
+    unsafe extern "C" fn fg_hudless(commands: *mut c_void, pass: *const rsf_game_render_pass) {
+        call(format!("hudless {:#x} {}", commands as usize, unsafe {
+            (*pass).view_key
+        }));
+    }
+    unsafe extern "C" fn preview_present(
+        resource: *mut c_void,
+        pass: *const rsf_game_render_pass,
+        common: u32,
+    ) -> u32 {
+        assert_eq!(resource, unsafe { (*pass).color_input });
+        call(format!("present {:#x} {common}", resource as usize));
+        fake().shown.into()
+    }
+    unsafe extern "C" fn texture_desc(
+        resource: *mut c_void,
+        width: *mut u64,
+        height: *mut u32,
+        format: *mut u32,
+    ) {
+        call(format!("desc {:#x}", resource as usize));
+        unsafe {
+            width.write(640);
+            height.write(360);
+            format.write(10);
+        }
+    }
+    unsafe extern "C" fn preview_prepare(width: u32, height: u32) -> u32 {
+        call(format!("preview prepare {width}x{height}"));
+        fake().preview_ready.into()
+    }
+    unsafe extern "C" fn preview_owns(window: *mut c_void) -> u32 {
+        call(format!("preview owns {:#x}", window as usize));
+        fake().preview_owns.into()
+    }
+    unsafe extern "C" fn renderer_vulkan() -> u32 {
+        call("vulkan renderer".into());
+        fake().vulkan.into()
+    }
+    unsafe extern "C" fn vulkan_owns(window: *mut c_void) -> u32 {
+        call(format!("surface owns {:#x}", window as usize));
+        fake().surface_owns.into()
+    }
+    unsafe extern "C" fn window_class(window: *mut c_void) -> u32 {
+        call(format!("class {:#x}", window as usize));
+        fake().class
+    }
+    unsafe extern "C" fn bridge_load() -> u32 {
+        call("bridge load".into());
+        fake().registry.into()
+    }
+    unsafe extern "C" fn bridge_unload() {
+        call("bridge unload".into());
+    }
 
     /// The table every test adopts, at a fixed address like package.cpp's constant.
     static PLATFORM: rsf_unity_package_platform = TABLE;
@@ -1380,6 +1496,18 @@ mod tests {
         raw_input_type: Some(raw_input_type),
         timestamp: Some(timestamp),
         cpu: Some(cpu),
+        fg_submitted: Some(fg_submitted),
+        fg_window: Some(fg_window),
+        fg_hudless: Some(fg_hudless),
+        preview_present: Some(preview_present),
+        texture_desc: Some(texture_desc),
+        preview_prepare: Some(preview_prepare),
+        preview_owns: Some(preview_owns),
+        renderer_vulkan: Some(renderer_vulkan),
+        vulkan_owns: Some(vulkan_owns),
+        window_class: Some(window_class),
+        bridge_load: Some(bridge_load),
+        bridge_unload: Some(bridge_unload),
     };
     /// Fresh fakes and an empty call record for this test.
     fn leaves() -> Leaves {
@@ -1395,6 +1523,9 @@ mod tests {
         assert!(unsafe { Leaves::adopt(&table) }.is_none());
         let mut table = platform();
         table.fg_default_backend = None;
+        assert!(unsafe { Leaves::adopt(&table) }.is_none());
+        let mut table = platform();
+        table.bridge_unload = None;
         assert!(unsafe { Leaves::adopt(&table) }.is_none());
         assert!(unsafe { Leaves::adopt(std::ptr::null()) }.is_none());
     }
@@ -2243,5 +2374,156 @@ mod tests {
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 1 0x0 17 1"]);
         package.window_message(&leaves, 0x0109, 0);
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 1 0x109 21 1"]);
+    }
+
+    #[test]
+    fn the_render_callback_routes_each_pass_in_the_cpp_order() {
+        use rsf_game_sys::{
+            RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW,
+        };
+        let package = Package::new();
+        let leaves = leaves();
+        set(|f| f.owner = false);
+        let mut pass = sr_pass(3, (8, 8), (4, 4));
+        (pass.role, pass.session_id, pass.source_frame_id) = (RSF_GAME_RENDER_SR, 42, 7);
+        // An end reports every pass but the window's as submitted.
+        assert!(!package.route(&leaves, list(1), &pass, false));
+        assert_eq!(calls(), ["submitted 42 7"]);
+        pass.role = RSF_GAME_RENDER_WINDOW;
+        assert!(!package.route(&leaves, list(1), &pass, false));
+        assert!(calls().is_empty());
+        // The player's window pass asks for the provider, then hands the pass to generation.
+        assert!(!package.route(&leaves, list(1), &pass, true));
+        assert_eq!(calls(), ["owner", "window 3"]);
+        pass.role = RSF_GAME_RENDER_FINAL_SCENE;
+        assert!(!package.route(&leaves, list(1), &pass, true));
+        assert_eq!(calls(), ["hudless 0x1 3"]);
+        // Any other pass goes to the SR pass; the player has no preview to prepare.
+        pass.role = RSF_GAME_RENDER_SR;
+        assert!(package.route(&leaves, list(1), &pass, true));
+        assert!(calls().is_empty());
+        // The export refuses a null list or pass before routing.
+        let route = routing::rsf_unity_package_route;
+        unsafe {
+            assert_eq!(route(std::ptr::null_mut(), &pass, 1, &PLATFORM), 0);
+            assert_eq!(route(list(1), std::ptr::null(), 1, &PLATFORM), 0);
+        }
+        assert!(calls().is_empty());
+    }
+
+    #[test]
+    fn the_editor_preview_is_admitted_and_its_refusals_budgeted() {
+        use rsf_game_sys::{RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW};
+        let package = Package::new();
+        let leaves = leaves();
+        set(|f| {
+            f.owner = false;
+            f.shown = false;
+            f.preview_ready = false;
+        });
+        package.services.editor.store(true, SeqCst);
+        let mut pass = sr_pass(3, (8, 6), (4, 3));
+        pass.role = RSF_GAME_RENDER_SR;
+        // The SR pass waits for the preview's resources.
+        assert!(!package.route(&leaves, list(1), &pass, true));
+        assert_eq!(calls(), ["preview prepare 8x6"]);
+        set(|f| f.preview_ready = true);
+        assert!(package.route(&leaves, list(1), &pass, true));
+        assert_eq!(calls(), ["preview prepare 8x6"]);
+        // A refusal without a texture still spends the budget.
+        pass.role = RSF_GAME_RENDER_WINDOW;
+        assert!(!package.route(&leaves, list(1), &pass, true));
+        assert_eq!(calls(), ["owner", "present 0x0 0"]);
+        // RSF_UNITY_PREVIEW_SOURCE_COMMON selects the common source state.
+        pass.color_input = without_provenance_mut(0x50);
+        pass.flags = 0x4000_0000;
+        let logged = "log Editor presentation pending: texture=640x360 format=10 expected=8x6";
+        for _ in 0..3 {
+            package.route(&leaves, list(1), &pass, true);
+            assert_eq!(calls(), ["owner", "present 0x50 1", "desc 0x50", logged]);
+        }
+        package.route(&leaves, list(1), &pass, true);
+        assert_eq!(calls(), ["owner", "present 0x50 1"]);
+        // A shown preview neither logs nor counts.
+        set(|f| f.shown = true);
+        package.route(&leaves, list(1), &pass, true);
+        assert_eq!(calls(), ["owner", "present 0x50 1"]);
+        assert_eq!(package.preview_reports.load(SeqCst), 5);
+    }
+
+    #[test]
+    fn the_window_guard_follows_the_host() {
+        let package = Package::new();
+        let leaves = leaves();
+        let window = without_provenance_mut(0x60);
+        // The D3D12 player accepts its own UnityWndClass window, and another window of this
+        // process only when it is the Vulkan surface.
+        assert!(package.accept_window(&leaves, window));
+        assert_eq!(calls(), ["vulkan renderer", "class 0x60"]);
+        set(|f| {
+            f.class = 2;
+            f.surface_owns = false;
+        });
+        assert!(!package.accept_window(&leaves, window));
+        assert_eq!(
+            calls(),
+            ["vulkan renderer", "class 0x60", "surface owns 0x60"]
+        );
+        set(|f| f.class = 0);
+        assert!(!package.accept_window(&leaves, window));
+        assert_eq!(calls(), ["vulkan renderer", "class 0x60"]);
+        // The Vulkan player accepts only its surface.
+        set(|f| {
+            f.vulkan = true;
+            f.surface_owns = true;
+        });
+        assert!(package.accept_window(&leaves, window));
+        assert_eq!(calls(), ["vulkan renderer", "surface owns 0x60"]);
+        // The Editor accepts only its preview.
+        package.services.editor.store(true, SeqCst);
+        set(|f| f.preview_owns = false);
+        assert!(!package.accept_window(&leaves, window));
+        assert_eq!(calls(), ["preview owns 0x60"]);
+    }
+
+    #[test]
+    fn the_device_lifecycle_loads_retires_and_retains() {
+        let package = Package::new();
+        let leaves = leaves();
+        // Waiting: nothing to retire, and the bridge loads once Unity's interfaces exist.
+        assert!(package.shutdown(&leaves));
+        package.device_event(&leaves, false);
+        assert!(calls().is_empty());
+        set(|f| f.registry = false);
+        package.device_event(&leaves, true);
+        assert_eq!(calls(), ["bridge load"]);
+        assert_eq!(package.device.load(SeqCst), routing::DEVICE_WAITING);
+        set(|f| f.registry = true);
+        package.device_event(&leaves, true);
+        package.device_event(&leaves, true);
+        assert_eq!(calls(), ["bridge load"]);
+        assert_eq!(package.device.load(SeqCst), routing::DEVICE_READY);
+        // Ready: a shutdown retires the session, then unloads the bridge.
+        package.device_event(&leaves, false);
+        assert_eq!(calls(), ["close", "release", "bridge unload"]);
+        assert_eq!(package.device.load(SeqCst), routing::DEVICE_WAITING);
+        // A refused retirement retains the device for the process.
+        package.device_event(&leaves, true);
+        package.lock().session = Session::Opening;
+        set(|f| f.drained = false);
+        calls();
+        package.device_event(&leaves, false);
+        assert_eq!(
+            calls(),
+            [
+                "close",
+                "log Unity device shutdown retained unproved bridge work; initialization requires a process restart."
+            ]
+        );
+        assert_eq!(package.device.load(SeqCst), routing::DEVICE_RETAINED);
+        assert!(!package.shutdown(&leaves));
+        package.device_event(&leaves, true);
+        package.device_event(&leaves, false);
+        assert!(calls().is_empty());
     }
 }

@@ -4,10 +4,11 @@
 // session lifecycle, the D3D12 SR views with their recording slots, the presentation (the
 // package identity, the generation install and the window pass's provider request) and the
 // session services (each session's host services and bridge API, the log, the input window and
-// the routing of CPU events, window messages and rsfu_input) are Rust
-// (games/unity-mono/src/package_state.rs, package_views.rs, package_state/presentation.rs and
-// package_state/services.rs, through package_state.h). This file keeps the Unity, DXGI, Vulkan
-// and preview work, the render callback's routing and the window guard, and lends the typed
+// the routing of CPU events, window messages and rsfu_input) and the routing (the render
+// callback's passes with the Editor preview's admission and diagnostic budget, the generation
+// window guard and Unity's device lifecycle) are Rust (games/unity-mono/src/package_state.rs,
+// package_views.rs and package_state/presentation.rs, services.rs and routing.rs, through
+// package_state.h). This file keeps the Unity, DXGI, Vulkan and preview work and lends the typed
 // Win32, SDK and Runtime calls through rsf_unity_package_platform. Its mutex serializes the
 // session exports, Unity device events and the SR pass.
 #include "package.h"
@@ -26,7 +27,6 @@
 #include <wrl/client.h>
 #include <mutex>
 #include <string>
-#include <cstdio>
 #include <cstring>
 
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_load(IUnityInterfaces*);
@@ -35,7 +35,9 @@ extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
 // package_abi.rs mirrors these layouts and constants.
 static_assert(sizeof(rsf_unity_package_settings) == 100 && sizeof(rsf_unity_package_status) == 184);
-static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 344);
+static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 440);
+// routing.rs mirrors the preview's source-state flag.
+static_assert(RSF_UNITY_PREVIEW_SOURCE_COMMON == 0x40000000u);
 static_assert(sizeof(rsf_native_fg_status) == 352 && sizeof(rsf_native_latency_status) == 152);
 static_assert(sizeof(rsf_native_fg_options) == 24 && RSF_BACKEND_OK == 0);
 static_assert(RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_SR_NONE == 0);
@@ -55,9 +57,8 @@ std::wstring ini;
 bool editor = false;
 IUnityInterfaces* registry = nullptr;
 IUnityGraphics* graphics = nullptr;
-enum class Device { Waiting, Ready, Retained };
-Device device_state = Device::Waiting; // Under guard. Unity may have destroyed a retained device.
-// The table, defined below; the log, window procedure and exports hand it to Rust.
+// The table, defined below; the log, window guard, render callback, window procedure and exports
+// hand it to Rust.
 const rsf_unity_package_platform* leaves() noexcept;
 // The hooked input window's procedure: services.rs reports the message and names the procedure
 // it goes on to.
@@ -119,15 +120,15 @@ void log_write(void* file, const char* text) noexcept
         WriteFile(file, "\r\n", 2, &written, nullptr);
     }
 }
-// rsf_unity_package_platform::accept_window, generation's window guard.
-int accept(void*, void* hwnd)
+// rsf_unity_package_platform::accept_window, generation's window guard; routing.rs decides.
+int accept(void*, void* hwnd) { return rsf_unity_package_accept_window(hwnd, leaves()); }
+// rsf_unity_package_platform's window-guard leaves.
+uint32_t window_class(void* hwnd) noexcept
 {
-    if (editor) return rsf_unity_preview_owns(hwnd) ? 1 : 0;
-    if (graphics && graphics->GetRenderer() == kUnityGfxRendererVulkan) return rsf_uvk_owns_window(hwnd) ? 1 : 0;
     DWORD process = 0; wchar_t name[64]{};
     GetWindowThreadProcessId(static_cast<HWND>(hwnd), &process);
-    return !editor && process == GetCurrentProcessId() && GetClassNameW(static_cast<HWND>(hwnd), name, 64) &&
-        (std::wcscmp(name, L"UnityWndClass") == 0 || rsf_uvk_owns_window(hwnd));
+    if (process != GetCurrentProcessId() || !GetClassNameW(static_cast<HWND>(hwnd), name, 64)) return 0;
+    return std::wcscmp(name, L"UnityWndClass") == 0 ? 1u : 2u;
 }
 int configuration(void*, rsf_game_render_config* output)
 {
@@ -177,39 +178,29 @@ uint32_t fg_default_backend(uint32_t* backend) noexcept
     return 1;
 }
 void render_sr(void* commands, const rsf_game_render_pass* pass);
-void request_generation();
-// rsf_unity_package_platform::render_pass, the host services' render callback.
+// rsf_unity_package_platform::render_pass, the host services' render callback. routing.rs routes
+// the window, final-scene and submitted passes and admits the SR pass, which runs under the mutex.
 void render(void*, void* commands, const rsf_game_render_pass* original, uint32_t begin)
 {
-    if (!commands || !original) return;
-    auto pass = *original;
-    if (!begin) {
-        if (pass.role != RSF_GAME_RENDER_WINDOW) rsf_fg12_submitted(pass.session_id, pass.source_frame_id);
-        return;
-    }
-    if (pass.role == RSF_GAME_RENDER_WINDOW) {
-        request_generation();
-        if (editor) {
-            const bool shown = rsf_unity_preview_present(pass.color_input, pass, (pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON) != 0);
-            static uint32_t reports = 0;
-            if (!shown && reports++ < 4 && pass.color_input) {
-                const auto desc = static_cast<ID3D12Resource*>(pass.color_input)->GetDesc();
-                char text[160]; std::snprintf(text, sizeof(text), "Editor presentation pending: texture=%llux%u format=%u expected=%ux%u",
-                    desc.Width, desc.Height, desc.Format, pass.camera.output_width, pass.camera.output_height); log(nullptr, text);
-            }
-        }
-        else rsf_fg12_window(&pass);
-        return;
-    }
-    if (pass.role == RSF_GAME_RENDER_FINAL_SCENE) { rsf_fg12_hudless(commands, &pass); return; }
-    if (editor) {
-        ComPtr<ID3D12Device> owning_device;
-        ComPtr<ID3D12CommandQueue> owning_queue;
-        if (!rsf_unity_package_graphics(owning_device, owning_queue) ||
-            !rsf_unity_preview_prepare(owning_device.Get(), owning_queue.Get(), pass.camera.output_width, pass.camera.output_height)) return;
-    }
-    render_sr(commands, original);
+    if (rsf_unity_package_route(commands, original, begin, leaves())) render_sr(commands, original);
 }
+// rsf_unity_package_platform's render-routing leaves.
+uint32_t preview_present(void* resource, const rsf_game_render_pass* pass, uint32_t common) noexcept try
+{
+    return rsf_unity_preview_present(resource, *pass, common != 0) ? 1u : 0u;
+} catch (...) { return 0; }
+void texture_desc(void* resource, uint64_t* width, uint32_t* height, uint32_t* format) noexcept
+{
+    const auto desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
+    *width = desc.Width; *height = desc.Height; *format = static_cast<uint32_t>(desc.Format);
+}
+uint32_t preview_prepare(uint32_t width, uint32_t height) noexcept try
+{
+    ComPtr<ID3D12Device> owning_device;
+    ComPtr<ID3D12CommandQueue> owning_queue;
+    return rsf_unity_package_graphics(owning_device, owning_queue) &&
+        rsf_unity_preview_prepare(owning_device.Get(), owning_queue.Get(), width, height) ? 1u : 0u;
+} catch (...) { return 0; }
 uint32_t bridge_open(uint32_t is_editor) noexcept try
 {
     return rsf_unity_package_bridge_open(is_editor != 0) ? 1u : 0u;
@@ -262,34 +253,35 @@ constexpr rsf_unity_package_platform platform{
     raw_input_type,
     timestamp,
     [](const rsf_game_cpu_event* event) noexcept { rsf_fg12_cpu(event); },
+    [](uint64_t session, uint64_t frame) noexcept { rsf_fg12_submitted(session, frame); },
+    [](const rsf_game_render_pass* pass) noexcept { rsf_fg12_window(pass); },
+    [](void* commands, const rsf_game_render_pass* pass) noexcept { rsf_fg12_hudless(commands, pass); },
+    preview_present,
+    texture_desc,
+    preview_prepare,
+    [](void* window) noexcept -> uint32_t { return rsf_unity_preview_owns(window) ? 1u : 0u; },
+    []() noexcept -> uint32_t { return graphics && graphics->GetRenderer() == kUnityGfxRendererVulkan ? 1u : 0u; },
+    [](void* window) noexcept -> uint32_t { return rsf_uvk_owns_window(window) ? 1u : 0u; },
+    window_class,
+    // Under the mutex, which also guards registry.
+    []() noexcept -> uint32_t {
+        if (!registry) return 0;
+        rsf_unity_package_bridge_load(registry);
+        return 1;
+    },
+    []() noexcept { rsf_unity_package_bridge_unload(); },
 };
 const rsf_unity_package_platform* leaves() noexcept { return &platform; }
 void render_sr(void* commands, const rsf_game_render_pass* pass)
 {
     std::lock_guard<std::mutex> lock(guard); rsf_unity_package_render(commands, pass, &platform);
 }
-// The window pass's request stays outside the mutex, which only wrapped its settings read and
-// result store; Rust's state lock covers both now. The Editor's install runs under it from open.
-void request_generation() { rsf_unity_package_request_generation(&platform); }
+// routing.rs keeps the device state: Unity may have destroyed a retained device.
 void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
 {
     if (type != kUnityGfxDeviceEventInitialize && type != kUnityGfxDeviceEventShutdown) return;
     std::lock_guard<std::mutex> lock(guard);
-    if (type == kUnityGfxDeviceEventInitialize && device_state == Device::Waiting && registry) {
-        rsf_unity_package_bridge_load(registry);
-        device_state = Device::Ready;
-    }
-    if (type == kUnityGfxDeviceEventShutdown && device_state == Device::Ready) {
-        if (!rsf_unity_package_retire(&platform)) {
-            // Unity's void event can proceed to destroy its device. A later callback cannot
-            // assume the borrowed Vulkan handles still identify a live device.
-            device_state = Device::Retained;
-            log(nullptr, "Unity device shutdown retained unproved bridge work; initialization requires a process restart.");
-            return;
-        }
-        rsf_unity_package_bridge_unload();
-        device_state = Device::Waiting;
-    }
+    rsf_unity_package_device_event(type == kUnityGfxDeviceEventInitialize ? 1u : 0u, &platform);
 }
 void preload()
 {
@@ -317,8 +309,6 @@ extern "C" __declspec(dllexport) int rsfu_initialize(const char* runtime, const 
 {
     if (!runtime || !engine || !id || !output) return 0;
     std::lock_guard<std::mutex> lock(guard);
-    if (device_state == Device::Retained) return 0;
-    if (device_state == Device::Waiting) return 2;
     return rsf_unity_package_initialize(runtime, engine, id, output, &platform);
 } catch (...) { return 0; }
 
@@ -362,15 +352,14 @@ extern "C" __declspec(dllexport) int rsfu_shutdown() noexcept try
 {
     if (editor) rsf_unity_preview_hide();
     std::lock_guard<std::mutex> lock(guard);
-    if (device_state != Device::Ready) return device_state == Device::Waiting ? 1 : 0;
-    return rsf_unity_package_retire(&platform) ? 1 : 0;
+    return rsf_unity_package_shutdown(&platform) ? 1 : 0;
 } catch (...) { return 0; }
 
 extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API UnityPluginLoad(IUnityInterfaces* interfaces)
 {
     {
         std::lock_guard<std::mutex> lock(guard);
-        if (device_state == Device::Retained || registry) return;
+        if (rsf_unity_package_device_retained() || registry) return;
         registry = interfaces;
     }
     graphics = interfaces ? interfaces->Get<IUnityGraphics>() : nullptr;
