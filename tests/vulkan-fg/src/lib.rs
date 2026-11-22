@@ -17,14 +17,14 @@ mod fsr4_state_abi;
 mod wsi;
 mod wsi_abi;
 
-#[cfg(feature = "xess-device")]
+#[cfg(any(feature = "xess-device", feature = "xess-sr"))]
 #[allow(dead_code)]
 #[path = "../../../runtime/orchestrator/src/vulkan_sr_abi.rs"]
 mod vulkan_sr_abi;
 #[cfg(feature = "xess-device")]
 mod xess_interop;
 
-#[cfg(feature = "xess-device")]
+#[cfg(any(feature = "xess-device", feature = "xess-sr"))]
 mod render_abi {
     pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;
 }

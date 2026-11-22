@@ -107,11 +107,14 @@ receipt. An unsuccessful drain retains the views and owner. After drain,
 views retire before the presenter releases the underlying images. The
 remaining fixture allocations retire only after checked presenter release.
 
-The SR fixture now runs requirements preflight, SDK session admission,
-quality selection and shutdown in Rust. It preserves the return-77 decisions
-and the device-before-SDK retirement order. Native leaves still own Vulkan
-setup, both quality runs' frame recording and pixel comparison, and the
-separately compiled typed SDK input-range mock.
+The SR fixture runs requirements preflight, SDK session admission, both
+quality cases, the 12-frame evaluation and rejection checks, and shutdown
+in Rust. It preserves the return-77 decisions, reset and sharpening
+sequence, optional exposure failures, diagnostic counter, known-color
+readbacks, and device-before-SDK retirement order. A context that cannot
+retire keeps its device alive. Native leaves own Vulkan setup, drawing
+operations, readback and pixel comparison, and the separately compiled
+typed SDK input-range mock.
 
 ### Source boundaries and disposition
 
@@ -124,7 +127,7 @@ separately compiled typed SDK input-range mock.
 | `bridge_api.h`, `capture_api.h`, `session_abi.h` | Retained ABI contracts. Public bridge ABI 1 and all DLL export names stay fixed. The private platform stays 552 bytes and moves to version 8 for its digest and setter-binding slots. |
 | `tests/native_fg_xess_vulkan_interop.cpp` | Driver ported. C++ provides the UTF-16 CRT entry point. |
 | `tests/native_fg_xess_vulkan_present.cpp` | Driver ported. C++ provides Win32, Vulkan allocation and drawing leaves. |
-| `tests/native_xess_vulkan.cpp` | Partial. Rust owns preflight and device-run admission. Native GPU setup, the per-quality evaluation and pixel verification, and the typed input-range mock remain. |
+| `tests/native_xess_vulkan.cpp` | Driver ported. C++ provides Vulkan commands and pixel verification and retains the typed CPU input-range mock. |
 
 The saved Unicode overlay integration at `6814dd3e` supplies the existing
 diagnostic profile to both bridge builds. The fingerprint still gates the

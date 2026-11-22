@@ -198,6 +198,7 @@ int main() {
 #include <array>
 #include <fstream>
 #include <filesystem>
+#include <memory>
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -400,88 +401,93 @@ struct Gpu {
         unmap(device, readback_memory); require(valid, "GPU output disagrees with known linear scene colour");
     }
 };
-void device_case(Gpu& gpu, const char* directory, uint32_t quality) {
-    rsf_srvk_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_SRVK_ABI_VERSION;
-    setup.instance = gpu.instance; setup.physical_device = gpu.physical; setup.device = gpu.device;
-    setup.instance_proc = reinterpret_cast<rsf_vk_get_proc>(gpu.gip); setup.device_proc = reinterpret_cast<rsf_vk_get_proc>(gpu.gdp);
-    setup.backend = RSF_SR_XESS; setup.quality = quality; setup.output_width = 320; setup.output_height = 180;
-    setup.depth_inverted = 1; setup.runtime_directory_utf8 = directory;
-    rsf_srvk* context = nullptr; auto result = rsf_srvk_create(&setup, &context);
-    // Context retirement must precede device retirement even when an assertion fails.
-    struct ContextOwner { Gpu& gpu; rsf_srvk* value; ~ContextOwner() { (void)gpu.idle(gpu.device); (void)rsf_srvk_destroy(value); } } owner{gpu, context};
-    std::printf("Vulkan SR backend %u create=%d\n", RSF_SR_XESS, result); require(result == RSF_BACKEND_OK && context, "create native Vulkan SR context");
-    uint32_t width = 0, height = 0; require(rsf_srvk_plan(context, &width, &height) == RSF_BACKEND_OK && width && height, "SR sizing plan");
-    require(rsf_xessvk_shutdown() == RSF_BACKEND_ERROR_NOT_READY, "live XeSS context pins SDK module");
-    auto color = gpu.image(width, height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    auto depth = gpu.image(width, height, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    auto motion = gpu.image(width, height, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    auto output = gpu.image(320, 180, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    record.session_id = 43 + quality; record.view_id = 1; record.resource_generation = 1; record.frame_time_ms = 16.667f;
-    record.render_width = record.camera.render_width = width; record.render_height = record.camera.render_height = height;
-    record.output_width = record.camera.output_width = 320; record.output_height = record.camera.output_height = 180;
-    record.camera.struct_size = sizeof(record.camera); record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-    record.camera.depth_inverted = 1; record.camera.near_plane = 0.1f; record.camera.far_plane = 100; record.camera.vertical_fov_radians = 1;
-    for (auto* matrix : {record.camera.view_to_clip, record.camera.clip_to_view, record.camera.view_to_world, record.camera.world_to_view, record.camera.clip_to_previous_clip})
-        for (uint32_t i = 0; i < 4; ++i) matrix[i * 4 + i] = 1;
-    rsf_srvk_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = RSF_SRVK_ABI_VERSION; frame.record = &record;
-    frame.color = gpu.describe(color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); frame.depth = gpu.describe(depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    frame.motion = gpu.describe(motion, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); frame.output = gpu.describe(output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    frame.motion_scale_x = frame.motion_scale_y = frame.pre_exposure = 1;
-    uint32_t fallback_logs=0;frame.log_user=&fallback_logs;
-    frame.log=[](void* user,const char* message){
-        if (std::strncmp(message,"XeSS input range ",sizeof("XeSS input range ")-1)) ++*static_cast<uint32_t*>(user);
-        std::printf("SR diagnostic: %s\n",message);
-    };
-    for (uint32_t index = 1; index <= 12; ++index) {
-        const std::array<float, 4> value = index < 7 ? std::array<float, 4>{0.18f, 0.05f, 0.7f, 1} : std::array<float, 4>{0.05f, 0.4f, 0.12f, 1};
-        frame.sharpening=rsf_sharpening_defaults(); frame.sharpening.mode=(index-1)%4;
-        if(index==12 && setup.backend>=2 && setup.backend<=4)frame.sharpening.mode=RSF_SHARPENING_VENDOR;
-        frame.sharpening.sharpness=.7f;
-        frame.exposure={};if(index==6||index==10)frame.exposure.image=1; // Invalid optional exposure must retain valid vendor output.
-        gpu.start(); rsf_srvk_retire_commands(context,gpu.commands);
-        std::printf("live sharpening mode=%u\n",frame.sharpening.mode);
-        for (const auto* image : {&color, &depth, &motion}) gpu.transition(*image, index == 1 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        if (index == 1) gpu.transition(output, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        gpu.fill(color, value); gpu.fill(depth, {0.5f, 0, 0, 0}); gpu.fill(motion, {0, 0, 0, 0});
-        for (const auto* image : {&color, &depth, &motion}) gpu.transition(*image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        record.frame_id = index; record.flags = index == 1 || index == 7 ? RSF_FRAME_FLAG_RESET : 0;
-        auto invalid = frame; invalid.color.device = nullptr;
-        require(rsf_srvk_evaluate(context, gpu.commands, &invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "foreign device image refusal");
-        invalid = frame; invalid.motion.copy_source = 0;
-        require(rsf_srvk_evaluate(context, gpu.commands, &invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "motion copy usage required");
-        invalid = frame; invalid.depth.image = invalid.color.image;
-        require(rsf_srvk_evaluate(context, gpu.commands, &invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "color/depth alias refused");
-        invalid = frame; invalid.motion.image = invalid.color.image;
-        require(rsf_srvk_evaluate(context, gpu.commands, &invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "color/motion alias refused");
-        invalid = frame; invalid.motion.image = invalid.depth.image;
-        require(rsf_srvk_evaluate(context, gpu.commands, &invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "depth/motion alias refused");
-        invalid = frame; invalid.pre_exposure = std::numeric_limits<float>::denorm_min();
-        require(rsf_srvk_evaluate(context, gpu.commands, &invalid) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "nonfinite reciprocal exposure refused");
-        result = rsf_srvk_evaluate(context, gpu.commands, &frame);
-        std::printf("backend=%u frame=%u dispatch=%d reset=%u\n", RSF_SR_XESS, index, result, record.flags);
-        require(result == RSF_BACKEND_OK, "Vulkan SR dispatch");
-        gpu.read(output); gpu.finish(); gpu.verify(value);
-    }
-    require(fallback_logs==1,"optional failure logs once while frames remain valid");
-    require(gpu.idle(gpu.device) == VK_SUCCESS && rsf_srvk_destroy(context) == RSF_BACKEND_OK, "drain and retire Vulkan SR"); owner.value = nullptr;
-    std::printf("PASS: Vulkan SR backend %u GPU pixels, reset and image-owner guards\n", RSF_SR_XESS);
-}
-}
-extern "C" int run_device(const char* directory, uint32_t quality, uint32_t second_quality) noexcept try {
+struct Workload {
     Gpu gpu;
+    std::array<Image, 4> images{};
+};
+
+void release(void* value) { delete static_cast<Workload*>(value); }
+
+void* open(rsf_srvk_setup* setup) noexcept try {
+    auto value = std::make_unique<Workload>();
+    auto& gpu = value->gpu;
     gpu.initialize();
-    device_case(gpu, directory, quality);
-    device_case(gpu, directory, second_quality);
-    return 0;
-} catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }
+    setup->instance = gpu.instance;
+    setup->physical_device = gpu.physical;
+    setup->device = gpu.device;
+    setup->instance_proc = reinterpret_cast<rsf_vk_get_proc>(gpu.gip);
+    setup->device_proc = reinterpret_cast<rsf_vk_get_proc>(gpu.gdp);
+    return value.release();
+} catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return nullptr; }
+
+bool allocate(void* value, uint32_t width, uint32_t height, rsf_srvk_image* images) noexcept try {
+    auto& workload = *static_cast<Workload*>(value);
+    auto& gpu = workload.gpu;
+    constexpr VkImageUsageFlags transfer = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    constexpr VkImageUsageFlags source = VK_IMAGE_USAGE_SAMPLED_BIT | transfer;
+    workload.images[0] = gpu.image(width, height, VK_FORMAT_R16G16B16A16_SFLOAT, source);
+    workload.images[1] = gpu.image(width, height, VK_FORMAT_R32_SFLOAT, source);
+    workload.images[2] = gpu.image(width, height, VK_FORMAT_R16G16_SFLOAT, source);
+    workload.images[3] = gpu.image(320, 180, VK_FORMAT_R16G16B16A16_SFLOAT, transfer);
+    for (size_t i = 0; i < 3; ++i) images[i] = gpu.describe(workload.images[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    images[3] = gpu.describe(workload.images[3], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    return true;
+} catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return false; }
+
+void* begin(void* value) noexcept try {
+    auto& gpu = static_cast<Workload*>(value)->gpu;
+    gpu.start();
+    return gpu.commands;
+} catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return nullptr; }
+
+void record(void* value, bool first, const float* color) {
+    auto& workload = *static_cast<Workload*>(value);
+    auto& gpu = workload.gpu;
+    const auto& images = workload.images;
+    for (size_t i = 0; i < 3; ++i)
+        gpu.transition(images[i], first ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    if (first) gpu.transition(images[3], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    gpu.fill(images[0], {color[0], color[1], color[2], color[3]});
+    gpu.fill(images[1], {0.5f, 0, 0, 0});
+    gpu.fill(images[2], {0, 0, 0, 0});
+    for (size_t i = 0; i < 3; ++i)
+        gpu.transition(images[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
+bool finish(void* value, const float* expected) noexcept try {
+    auto& workload = *static_cast<Workload*>(value);
+    workload.gpu.read(workload.images[3]);
+    workload.gpu.finish();
+    workload.gpu.verify({expected[0], expected[1], expected[2], expected[3]});
+    return true;
+} catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return false; }
+
+int32_t drain(void* value) {
+    auto& gpu = static_cast<Workload*>(value)->gpu;
+    return gpu.idle(gpu.device);
+}
+}
+
+struct XessSrFixtureDevice {
+    void* (*open)(rsf_srvk_setup*);
+    void (*release)(void*);
+    bool (*allocate)(void*, uint32_t, uint32_t, rsf_srvk_image*);
+    void* (*begin)(void*);
+    void (*record)(void*, bool, const float*);
+    bool (*finish)(void*, const float*);
+    int32_t (*drain)(void*);
+};
+static_assert(sizeof(XessSrFixtureDevice) == 7 * sizeof(void*));
+static constexpr XessSrFixtureDevice xess_sr_device{open, release, allocate, begin, record, finish, drain};
 #endif
 
-extern "C" int rsf_fixture_xess_sr_main(int argc, int (*run)(const char*, uint32_t, uint32_t));
+struct XessSrFixtureDevice;
+extern "C" int rsf_fixture_xess_sr_main(int argc, const XessSrFixtureDevice* device);
 
 int main(int argc, char**) {
 #if defined(RSF_TEST_VULKAN)
-    return rsf_fixture_xess_sr_main(argc, run_device);
+    return rsf_fixture_xess_sr_main(argc, &xess_sr_device);
 #else
     return rsf_fixture_xess_sr_main(argc, nullptr);
 #endif
