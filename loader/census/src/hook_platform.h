@@ -17,7 +17,7 @@ typedef struct rsf_census_hook_platform {
     uint16_t count;
     uint16_t graphics_roots[4];
     int (*initialize)(void);
-    void (*register_wrappers)(void**);
+    void (*register_d3d)(void**);
     int (*create_api)(const uint16_t* module, const char* name, void* detour, void** original);
     int (*create)(void* target, void* detour, void** original);
     void (*remove)(void* target);
@@ -27,16 +27,6 @@ typedef struct rsf_census_hook_platform {
     const void* (*current_teb)(void);
     bool (*read)(const void* address, void* destination, size_t bytes);
     bool (*read_name)(const void* address, char* destination, size_t capacity);
-    bool (*active)(void);
 } rsf_census_hook_platform;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-bool rsf_census_hooks_install(const rsf_census_hook_platform*, uint32_t flags);
-
-#ifdef __cplusplus
-}
-#endif
 #endif

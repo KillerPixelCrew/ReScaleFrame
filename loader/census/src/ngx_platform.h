@@ -12,14 +12,7 @@ typedef struct rsf_census_ngx_platform {
     bool (*read_wstring)(const void*, uint16_t*, size_t);
     bool (*parameter)(const void*, size_t slot, const char* name, void* output, int32_t* result);
     void (*d3d_resource)(rsf_census_json*, const char* key, const void* resource, bool d3d12);
-    void (*decimal)(rsf_census_json*, const char* key, double value);
+    int (*decimal)(char* output, size_t capacity, double value);
 } rsf_census_ngx_platform;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-void rsf_census_ngx_bind(const rsf_census_ngx_platform*, const uint16_t* entries, void** wrappers);
-#ifdef __cplusplus
-}
-#endif
 #endif

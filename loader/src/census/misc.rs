@@ -739,8 +739,7 @@ extern "system" fn wrapper<const ENTRY: Entry>(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_misc_bind(
+pub(super) unsafe fn rsf_census_misc_bind(
     platform: &rsf_census_misc_platform,
     entries: &[u16; COUNT],
     output: &mut [Ptr; COUNT],

@@ -9,13 +9,17 @@ pub(super) unsafe fn emit_decimal(
     json: &mut rsf_census_json,
     key: *const c_char,
     value: f64,
-    format: unsafe extern "C" fn(*mut rsf_census_json, *const c_char, f64),
+    format: unsafe extern "C" fn(*mut c_char, usize, f64) -> i32,
 ) {
     if value.is_finite() {
-        unsafe { format(json, key, value) };
-    } else {
-        unsafe { rsf_census_json_raw(json, key, ptr::null()) };
+        let mut text = [0; 40];
+        let count = unsafe { format(text.as_mut_ptr(), text.len(), value) };
+        if count >= 0 && (count as usize) < text.len() {
+            unsafe { rsf_census_json_raw(json, key, text.as_ptr()) };
+            return;
+        }
     }
+    unsafe { rsf_census_json_raw(json, key, ptr::null()) };
 }
 
 const HEX: &[u8; 16] = b"0123456789abcdef";

@@ -33,14 +33,7 @@ typedef struct rsf_census_fsr_platform {
     bool (*read)(const void*, void*, size_t);
     void* (*slot)(const void*, size_t);
     void (*resource)(rsf_census_json*, const char* key, const void*);
-    void (*decimal)(rsf_census_json*, const char* key, double value);
+    int (*decimal)(char* output, size_t capacity, double value);
 } rsf_census_fsr_platform;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-void rsf_census_fsr_bind(const rsf_census_fsr_platform*, const uint16_t* entries, void** wrappers);
-#ifdef __cplusplus
-}
-#endif
 #endif

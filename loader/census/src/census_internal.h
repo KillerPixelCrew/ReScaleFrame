@@ -212,18 +212,10 @@ inline bool guard(L&& lambda) noexcept {
     return guarded([](void* c) { (*static_cast<T*>(c))(); }, &lambda);
 }
 
-inline bool installed() noexcept { return rsf_census_active(); }
-inline uint32_t option_flags() noexcept { return rsf_census_flags(); }
-
 // Hook installation entry points of each translation unit.
 void register_wrappers_d3d(void** table) noexcept;
-void register_wrappers_vk(void** table) noexcept;
-void register_wrappers_ngx(void** table) noexcept;
-void register_wrappers_fsr(void** table) noexcept;
-void register_wrappers_misc(void** table) noexcept;
 
-// Native hook registration.
-bool hooks_install() noexcept;
+extern const rsf_census_hook_platform kHookPlatform;
 
 void describe_d3d_resource(rsf_census_json* json, const char* key, const void* resource,
                            bool d3d12) noexcept;

@@ -35,7 +35,7 @@ pub struct rsf_census_hook_platform {
     pub count: u16,
     pub graphics_roots: [u16; 4usize],
     pub initialize: ::core::option::Option<unsafe extern "C" fn() -> ::core::ffi::c_int>,
-    pub register_wrappers:
+    pub register_d3d:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut *mut ::core::ffi::c_void)>,
     pub create_api: ::core::option::Option<
         unsafe extern "C" fn(
@@ -73,12 +73,11 @@ pub struct rsf_census_hook_platform {
             capacity: usize,
         ) -> bool,
     >,
-    pub active: ::core::option::Option<unsafe extern "C" fn() -> bool>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_census_hook_platform"]
-        [::core::mem::size_of::<rsf_census_hook_platform>() - 120usize];
+        [::core::mem::size_of::<rsf_census_hook_platform>() - 112usize];
     ["Alignment of rsf_census_hook_platform"]
         [::core::mem::align_of::<rsf_census_hook_platform>() - 8usize];
     ["Offset of field: rsf_census_hook_platform::entries"]
@@ -89,8 +88,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_census_hook_platform, graphics_roots) - 10usize];
     ["Offset of field: rsf_census_hook_platform::initialize"]
         [::core::mem::offset_of!(rsf_census_hook_platform, initialize) - 24usize];
-    ["Offset of field: rsf_census_hook_platform::register_wrappers"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, register_wrappers) - 32usize];
+    ["Offset of field: rsf_census_hook_platform::register_d3d"]
+        [::core::mem::offset_of!(rsf_census_hook_platform, register_d3d) - 32usize];
     ["Offset of field: rsf_census_hook_platform::create_api"]
         [::core::mem::offset_of!(rsf_census_hook_platform, create_api) - 40usize];
     ["Offset of field: rsf_census_hook_platform::create"]
@@ -109,6 +108,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_census_hook_platform, read) - 96usize];
     ["Offset of field: rsf_census_hook_platform::read_name"]
         [::core::mem::offset_of!(rsf_census_hook_platform, read_name) - 104usize];
-    ["Offset of field: rsf_census_hook_platform::active"]
-        [::core::mem::offset_of!(rsf_census_hook_platform, active) - 112usize];
 };

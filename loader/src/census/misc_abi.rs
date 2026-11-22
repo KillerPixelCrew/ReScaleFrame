@@ -77,10 +77,10 @@ pub struct rsf_census_misc_platform {
     >,
     pub decimal: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut rsf_census_json,
-            key: *const ::core::ffi::c_char,
+            output: *mut ::core::ffi::c_char,
+            capacity: usize,
             value: f64,
-        ),
+        ) -> ::core::ffi::c_int,
     >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]

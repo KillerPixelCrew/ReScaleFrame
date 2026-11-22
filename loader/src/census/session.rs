@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
-use super::hooks::{rsf_census_hook_counts, rsf_census_hooks_remove, rsf_census_hooks_summary};
+use super::hooks::{
+    rsf_census_hook_counts, rsf_census_hooks_install, rsf_census_hooks_remove,
+    rsf_census_hooks_summary,
+};
 use super::identity::*;
 use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_raw,
@@ -379,18 +382,15 @@ fn write_start(core: &Core) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_active() -> bool {
+pub(super) fn rsf_census_active() -> bool {
     ACTIVE.load(Acquire)
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_flags() -> u32 {
+pub(super) fn rsf_census_flags() -> u32 {
     CORE.get().map_or(0, |core| core.flags)
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_call_begin(
+pub(super) unsafe fn rsf_census_call_begin(
     state: *mut rsf_census_call_state,
     entry: u16,
     caller: *mut c_void,
@@ -453,11 +453,7 @@ pub(super) unsafe extern "C" fn rsf_census_call_begin(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_call_finish(
-    state: *mut rsf_census_call_state,
-    result: u64,
-) {
+pub(super) unsafe fn rsf_census_call_finish(state: *mut rsf_census_call_state, result: u64) {
     if !unsafe { (*state).full } || !rsf_census_active() {
         return;
     }
@@ -759,7 +755,9 @@ unsafe extern "C" fn rsf_census_install_impl(
     core.writer_tid.store(tid, Release);
     core.writer_handle.store(worker, Release);
     unsafe { AddVectoredExceptionHandler(1, Some(fatal_exception)) };
-    if !unsafe { core.platform.install_hooks.unwrap()() } {
+    if !unsafe {
+        rsf_census_hooks_install(&*core.platform.hooks, &*core.platform.vendors, core.flags)
+    } {
         return HOOK_ERROR;
     }
     if core.flags & RSF_CENSUS_FLAG_NO_STATIC_SCAN == 0 {

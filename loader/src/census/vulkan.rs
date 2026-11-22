@@ -596,8 +596,7 @@ extern "system" fn create_swapchain(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_vk_bind(
+pub(super) unsafe fn rsf_census_vk_bind(
     platform: &rsf_census_vk_platform,
     ids: &[u16; COUNT],
     wrappers: &mut [Handle; COUNT],

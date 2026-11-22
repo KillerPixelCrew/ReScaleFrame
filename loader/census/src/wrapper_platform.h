@@ -23,11 +23,4 @@ typedef struct rsf_census_vk_platform {
     bool (*read_string)(const void*, char*, size_t);
 } rsf_census_vk_platform;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-void rsf_census_vk_bind(const rsf_census_vk_platform*, const uint16_t* entries, void** wrappers);
-#ifdef __cplusplus
-}
-#endif
 #endif

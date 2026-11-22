@@ -5,6 +5,9 @@ use super::json::{
     rsf_census_json_string, rsf_census_json_u64,
 };
 use super::json_abi::rsf_census_json;
+use super::session::rsf_census_active;
+use super::vendor::register_vendors;
+use super::vendor_abi::rsf_census_vendor_platform;
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::transmute;
@@ -413,7 +416,7 @@ fn post_load(module: HMODULE, flags: u32) {
     }
     let Some(_busy) = Busy::enter() else { return };
     let cfg = CONFIG.get().unwrap();
-    if !unsafe { cfg.platform.active.unwrap()() } || seen_before(module as usize) {
+    if !rsf_census_active() || seen_before(module as usize) {
         return;
     }
     let last_error = unsafe { GetLastError() };
@@ -434,7 +437,7 @@ fn intercept(real: FARPROC, name: *const u8) -> FARPROC {
         return real;
     };
     let cfg = CONFIG.get().unwrap();
-    if !unsafe { cfg.platform.active.unwrap()() } {
+    if !rsf_census_active() {
         return real;
     }
     let last_error = unsafe { GetLastError() };
@@ -517,16 +520,19 @@ fn install_api(module: *const u16, name: &CStr, detour: Ptr, slot: &AtomicPtr<c_
     true
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_hooks_install(
+pub(super) unsafe fn rsf_census_hooks_install(
     value: &rsf_census_hook_platform,
+    vendors: &rsf_census_vendor_platform,
     flags: u32,
 ) -> bool {
     if usize::from(value.count) >= ENTRIES || unsafe { value.initialize.unwrap()() } != HOOK_OK {
         return false;
     }
     let mut wrappers = [null_mut(); ENTRIES];
-    unsafe { value.register_wrappers.unwrap()(wrappers.as_mut_ptr()) };
+    unsafe { value.register_d3d.unwrap()(wrappers.as_mut_ptr()) };
+    if !unsafe { register_vendors(vendors, &mut wrappers[..usize::from(value.count)]) } {
+        return false;
+    }
     let mut cfg = Config {
         platform: *value,
         flags,

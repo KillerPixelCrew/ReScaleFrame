@@ -29,14 +29,7 @@ typedef struct rsf_census_misc_platform {
     bool (*frame_index)(const void*, uint32_t*);
     void (*write_ptr)(void**, void*);
     void (*d3d_resource)(rsf_census_json*, const char* key, const void*);
-    void (*decimal)(rsf_census_json*, const char* key, double value);
+    int (*decimal)(char* output, size_t capacity, double value);
 } rsf_census_misc_platform;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-void rsf_census_misc_bind(const rsf_census_misc_platform*, const uint16_t* entries, void** wrappers);
-#ifdef __cplusplus
-}
-#endif
 #endif

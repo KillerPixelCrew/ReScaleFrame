@@ -523,8 +523,7 @@ macro_rules! group {
     };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_ngx_bind(
+pub(super) unsafe fn rsf_census_ngx_bind(
     platform: &rsf_census_ngx_platform,
     entries: &[u16; ENTRIES],
     output: &mut [Ptr; ENTRIES],

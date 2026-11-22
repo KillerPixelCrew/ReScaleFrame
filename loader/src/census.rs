@@ -22,5 +22,7 @@ mod session_abi;
 mod static_scan;
 mod stats;
 mod stats_abi;
+mod vendor;
+mod vendor_abi;
 mod vulkan;
 mod wrapper_abi;

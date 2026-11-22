@@ -469,3 +469,17 @@ The hook check used the CMake-pinned
 The optional vendor-layout source was checked for unchanged content.
 Pinned Rust formatting, targeted bindgen regeneration, locked offline Cargo metadata
 and whitespace checks passed. Compiled and runtime verification remain user-owned.
+
+## Native startup declarations
+
+The continuation from `818a5ede` moves the Vulkan, NGX, FidelityFX/XeSS and miscellaneous
+registration loops to Rust. The C++ startup file supplies constant descriptor and callback
+tables. Rust publishes the same IDs in the same order, validates the destination indices, and
+owns the decimal record buffer and JSON emission. The native CRT still performs the existing
+`%.9g` conversion. The session calls the Rust hook owner directly with the same flags.
+
+`loader/census/src/census_platform.cpp` retains the public C ABI entry, the catalog and
+callback declarations, and the actual guarded NGX and Streamline calls, pointer write and
+resource description dispatch. `loader/census/src/hook_platform.cpp` retains native MinHook
+entry calls and the Windows SDK TEB getter. The D3D registration adapter and guarded COM
+and SEH implementations remain in their existing files.

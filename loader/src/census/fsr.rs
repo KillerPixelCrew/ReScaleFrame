@@ -961,8 +961,7 @@ extern "system" fn upscale_ratio(mode: i32) -> f32 {
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_fsr_bind(
+pub(super) unsafe fn rsf_census_fsr_bind(
     platform: &rsf_census_fsr_platform,
     entries: &[u16; COUNT],
     output: &mut [Ptr; COUNT],
