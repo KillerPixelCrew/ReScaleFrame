@@ -6,6 +6,7 @@ mod wsi;
 
 use crate::frame_generation::{Options, Platform as FgPlatform};
 use crate::lifecycle::{Lifecycle, Platform, System, feature_mask};
+use crate::sdk_fg_options::Sample;
 use crate::sdk_records;
 use crate::sdk_records_abi::rsf_slvk_sdk_reflex_options;
 use std::ffi::{CStr, c_char, c_void};
@@ -132,6 +133,53 @@ unsafe extern "C" fn rsf_slvk_fg_disable(platform: &FgPlatform) -> i32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_slvk_fg_free(platform: &FgPlatform) -> i32 {
     LIFECYCLE.with_frame_generation(0, |fg, _| unsafe { fg.free(platform) })
+}
+
+type ReadFg = unsafe extern "C" fn(&mut Sample) -> i32;
+
+fn read_fg_sample(read: ReadFg, output: impl FnOnce(&Sample)) -> i32 {
+    LIFECYCLE.with_sdk(-1, || {
+        let mut sample = Sample::default();
+        let result = unsafe { read(&mut sample) };
+        if result == 0 {
+            output(&sample);
+        }
+        result
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_fg_state(
+    read: ReadFg,
+    status: *mut u32,
+    presented: *mut u32,
+    max_generated: *mut u32,
+) -> i32 {
+    if status.is_null() || presented.is_null() || max_generated.is_null() {
+        return -1;
+    }
+    read_fg_sample(read, |sample| unsafe {
+        status.write(sample.status);
+        presented.write(sample.actual_presents);
+        max_generated.write(sample.max_generated);
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_fg_state_details(read: ReadFg, values: *mut u32, count: u32) -> i32 {
+    if values.is_null() || count != 6 {
+        return -1;
+    }
+    read_fg_sample(read, |sample| unsafe {
+        values.cast::<[u32; 6]>().write([
+            sample.status,
+            sample.actual_presents,
+            sample.max_generated,
+            sample.min_dimension,
+            u32::from(sample.vsync),
+            u32::from(sample.dynamic_mfg),
+        ]);
+    })
 }
 
 #[unsafe(no_mangle)]

@@ -3,6 +3,9 @@
 mod abi;
 
 pub(crate) use abi::rsf_slvk_sdk_fg_options as Packed;
+#[cfg(windows)]
+#[allow(unused_imports)] // The Vulkan Runtime consumes its own present timing sample.
+pub(crate) use abi::rsf_slvk_sdk_fg_sample as Sample;
 use abi::rsf_slvk_sdk_header;
 
 pub(crate) fn pack(

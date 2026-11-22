@@ -63,6 +63,8 @@ uint32_t rsf_slvk_diagnostic_message(const char* message, uint32_t info);
 int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
 int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
 int32_t rsf_slvk_fg_free(const RsfSlFgPlatform*);
+int32_t rsf_slvk_fg_state(int32_t (*)(rsf_slvk_sdk_fg_sample*), uint32_t*, uint32_t*, uint32_t*);
+int32_t rsf_slvk_fg_state_details(int32_t (*)(rsf_slvk_sdk_fg_sample*), uint32_t*, uint32_t);
 int32_t rsf_slvk_sdk_call(int32_t (*)(void*), void*, int32_t inactive);
 int32_t rsf_slvk_reflex_options(int32_t (*)(const rsf_slvk_sdk_reflex_options*), int32_t mode, uint32_t limit, uint32_t limitIsFps);
 int32_t rsf_slvk_token_begin(int32_t (*)(uint32_t, uintptr_t*), uint32_t, uintptr_t*);
@@ -515,23 +517,26 @@ RSF_SL_VK_EXPORT int VulkanStorySlFreeFrameGenerationResources() {
 RSF_SL_VK_EXPORT int VulkanStorySlTakePresentError() {
     return rsf_slvk_diagnostic_take_present_error();
 }
+static int32_t readFgSample(rsf_slvk_sdk_fg_sample* output) noexcept try {
+    if (!fgState) return -1;
+    sl::DLSSGState state{};
+    const auto result = fgState(viewport, state, nullptr);
+    if (result == sl::Result::eOk) {
+        *output = {static_cast<uint32_t>(state.status), state.numFramesActuallyPresented,
+            state.numFramesToGenerateMax, state.minWidthOrHeight,
+            static_cast<uint8_t>(state.bIsVsyncSupportAvailable), static_cast<uint8_t>(state.bIsDynamicMFGSupported)};
+    }
+    return static_cast<int32_t>(result);
+} catch (...) {
+    return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
+}
+
 /// @brief Queries frame-generation status, actual presents and the generated-frame limit.
 /// @details Output values are written only after a successful SDK state query.
 /// @return SDK result, or -1 for unavailable state/null outputs.
 RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationState(uint32_t* status,
     uint32_t* presented, uint32_t* maxGenerated) {
-    if (!status || !presented || !maxGenerated) return -1;
-    return callSdk([&] {
-        if (!fgState) return -1;
-        sl::DLSSGState state{};
-        const auto result = fgState(viewport, state, nullptr);
-        if (result == sl::Result::eOk) {
-            *status = static_cast<uint32_t>(state.status);
-            *presented = state.numFramesActuallyPresented;
-            *maxGenerated = state.numFramesToGenerateMax;
-        }
-        return static_cast<int>(result);
-    });
+    return rsf_slvk_fg_state(readFgSample, status, presented, maxGenerated);
 }
 /// @brief Queries the six-word frame-generation capability/state ABI.
 /// @details Words contain status, actual presents, maximum generated count, minimum size, VSync availability and dynamic-MFG support in that order.
@@ -539,20 +544,6 @@ RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationState(uint32_t* status,
 /// @param count Must equal six.
 /// @return SDK result, or -1 for unavailable state/invalid output storage.
 RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationStateDetails(uint32_t* values, uint32_t count) {
-    if (!values || count != 6) return -1;
-    return callSdk([&] {
-        if (!fgState) return -1;
-        sl::DLSSGState state{};
-        const auto result = fgState(viewport, state, nullptr);
-        if (result == sl::Result::eOk) {
-            values[0] = static_cast<uint32_t>(state.status);
-            values[1] = state.numFramesActuallyPresented;
-            values[2] = state.numFramesToGenerateMax;
-            values[3] = state.minWidthOrHeight;
-            values[4] = static_cast<uint32_t>(state.bIsVsyncSupportAvailable);
-            values[5] = static_cast<uint32_t>(state.bIsDynamicMFGSupported);
-        }
-        return static_cast<int>(result);
-    });
+    return rsf_slvk_fg_state_details(readFgSample, values, count);
 }
 }

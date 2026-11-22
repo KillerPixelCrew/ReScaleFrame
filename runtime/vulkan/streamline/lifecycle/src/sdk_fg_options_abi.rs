@@ -121,3 +121,31 @@ impl Default for rsf_slvk_sdk_fg_options {
         }
     }
 }
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_slvk_sdk_fg_sample {
+    pub status: u32,
+    pub actual_presents: u32,
+    pub max_generated: u32,
+    pub min_dimension: u32,
+    pub vsync: u8,
+    pub dynamic_mfg: u8,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_fg_sample"][::core::mem::size_of::<rsf_slvk_sdk_fg_sample>() - 20usize];
+    ["Alignment of rsf_slvk_sdk_fg_sample"]
+        [::core::mem::align_of::<rsf_slvk_sdk_fg_sample>() - 4usize];
+    ["Offset of field: rsf_slvk_sdk_fg_sample::status"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_sample, status) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_fg_sample::actual_presents"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_sample, actual_presents) - 4usize];
+    ["Offset of field: rsf_slvk_sdk_fg_sample::max_generated"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_sample, max_generated) - 8usize];
+    ["Offset of field: rsf_slvk_sdk_fg_sample::min_dimension"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_sample, min_dimension) - 12usize];
+    ["Offset of field: rsf_slvk_sdk_fg_sample::vsync"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_sample, vsync) - 16usize];
+    ["Offset of field: rsf_slvk_sdk_fg_sample::dynamic_mfg"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_fg_sample, dynamic_mfg) - 17usize];
+};

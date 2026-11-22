@@ -16,3 +16,9 @@ typedef struct rsf_slvk_sdk_fg_options {
     uint8_t ui_recomposition;
     float target_rate;
 } rsf_slvk_sdk_fg_options;
+
+/* Narrow state facts copied from the typed SDK query. */
+typedef struct rsf_slvk_sdk_fg_sample {
+    uint32_t status, actual_presents, max_generated, min_dimension;
+    uint8_t vsync, dynamic_mfg;
+} rsf_slvk_sdk_fg_sample;
