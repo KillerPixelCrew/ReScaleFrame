@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Process identity and guarded native reads for the Wingman carrier and plugin.
+//! Process identity and guarded native reads for the Wingman plugin.
 use rsf_game_sys::win32::module_path;
 use std::ffi::{OsString, c_void};
 use std::io::Read;
