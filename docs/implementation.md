@@ -1,5 +1,10 @@
 # Implementation tracker
 
+The Godot SCons module now owns host boot, configuration, shutdown and
+viewport extent policy in Rust. Source checks matched the private
+callbacks and public declarations. The SCons build, editor and player
+checks remain open. [Godot evidence](../integrations/godot/NATIVE.md#engine-module-host-lifecycle)
+
 D3D12 FidelityFX frame generation now plans context flags, extents,
 provider admission and per-frame camera constants in Rust. Native code
 retains typed descriptors and SDK calls. Source review matched startup
