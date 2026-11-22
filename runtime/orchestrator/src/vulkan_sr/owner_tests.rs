@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::vulkan_dlss_sr_abi::{
-    rsf_vkdlss_commands, rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform, rsf_vkdlss_tag,
+    rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform, rsf_vkdlss_tag,
 };
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
@@ -81,7 +81,11 @@ impl Fake {
             physical_device: device,
             device,
             instance_proc: Some(proc),
-            device_proc: Some(proc),
+            device_proc: Some(if backend == RSF_SR_DLSS {
+                dlss_proc
+            } else {
+                proc
+            }),
             backend,
             quality: 1,
             output_width: 128,
@@ -94,7 +98,7 @@ impl Fake {
     }
 }
 
-fn fake_dlss_commands() -> rsf_vkdlss_commands {
+unsafe extern "C" fn dlss_proc(_: Handle, name: *const c_char) -> rsf_vk_function {
     unsafe extern "system" fn barrier(
         _: vk::CommandBuffer,
         src: vk::PipelineStageFlags,
@@ -166,20 +170,22 @@ fn fake_dlss_commands() -> rsf_vkdlss_commands {
         unsafe { fake(commands.as_raw() as Handle).calls.push(Call::DlssBias) };
     }
 
+    let name = unsafe { std::ffi::CStr::from_ptr(name) };
     unsafe {
-        rsf_vkdlss_commands {
-            barrier: Some(std::mem::transmute::<
+        match name {
+            name if name == c"vkCmdPipelineBarrier" => Some(std::mem::transmute::<
                 vk::PFN_vkCmdPipelineBarrier,
                 unsafe extern "C" fn(),
             >(barrier)),
-            copy: Some(std::mem::transmute::<
+            name if name == c"vkCmdCopyImage" => Some(std::mem::transmute::<
                 vk::PFN_vkCmdCopyImage,
                 unsafe extern "C" fn(),
             >(copy)),
-            blit: Some(std::mem::transmute::<
+            name if name == c"vkCmdBlitImage" => Some(std::mem::transmute::<
                 vk::PFN_vkCmdBlitImage,
                 unsafe extern "C" fn(),
             >(blit)),
+            _ => None,
         }
     }
 }
@@ -199,12 +205,7 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
         init.height = 36;
         0
     })),
-    prepare: Some(leaf!(|_: Handle,
-                         commands: *mut rsf_vkdlss_commands|
-     -> i32 {
-        unsafe { commands.write(fake_dlss_commands()) };
-        0
-    })),
+    prepare: Some(leaf!(|_: Handle| -> i32 { 0 })),
     close: Some(leaf!(|native: Handle| -> () {
         unsafe { fake(native).calls.push(Call::Close) }
     })),

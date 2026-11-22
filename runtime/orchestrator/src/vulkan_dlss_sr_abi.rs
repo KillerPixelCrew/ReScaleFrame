@@ -3,7 +3,7 @@
 #![allow(non_camel_case_types)]
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
 use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
-use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup, rsf_vk_function};
+use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
 use crate::vulkan_streamline_camera::{rsf_slvk_sdk_constants, rsf_slvk_sdk_header};
 use rsf_game_sys::rsf_frame_record;
 
@@ -31,32 +31,6 @@ const _: () = {
         [::core::mem::offset_of!(rsf_vkdlss_images, output) - 192usize];
 };
 impl Default for rsf_vkdlss_images {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
-pub struct rsf_vkdlss_commands {
-    pub barrier: rsf_vk_function,
-    pub copy: rsf_vk_function,
-    pub blit: rsf_vk_function,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_vkdlss_commands"][::core::mem::size_of::<rsf_vkdlss_commands>() - 24usize];
-    ["Alignment of rsf_vkdlss_commands"][::core::mem::align_of::<rsf_vkdlss_commands>() - 8usize];
-    ["Offset of field: rsf_vkdlss_commands::barrier"]
-        [::core::mem::offset_of!(rsf_vkdlss_commands, barrier) - 0usize];
-    ["Offset of field: rsf_vkdlss_commands::copy"]
-        [::core::mem::offset_of!(rsf_vkdlss_commands, copy) - 8usize];
-    ["Offset of field: rsf_vkdlss_commands::blit"]
-        [::core::mem::offset_of!(rsf_vkdlss_commands, blit) - 16usize];
-};
-impl Default for rsf_vkdlss_commands {
     fn default() -> Self {
         let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
         unsafe {
@@ -195,9 +169,8 @@ pub struct rsf_vkdlss_platform {
     pub close: ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
     pub invoke: ::core::option::Option<unsafe extern "C" fn(arg1: *const rsf_slvk_call) -> i32>,
     pub initialize: rsf_slvk_callback,
-    pub prepare: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *mut rsf_vkdlss_commands) -> i32,
-    >,
+    pub prepare:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> i32>,
     pub allocate: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut ::core::ffi::c_void,

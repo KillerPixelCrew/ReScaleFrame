@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_dlss_sr_abi::rsf_vkdlss_commands;
+use crate::dx12_vulkan_platform::lookup;
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image as Image;
-use crate::vulkan_sr_abi::rsf_srvk_image as Source;
+use crate::vulkan_sr_abi::{rsf_srvk_image as Source, rsf_srvk_setup};
 use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
 use std::{mem, ptr};
@@ -29,19 +29,23 @@ pub(super) struct Dispatch {
 }
 
 impl Dispatch {
-    pub(super) fn new(commands: rsf_vkdlss_commands) -> Option<Self> {
-        // The native loader resolved each function by its Vulkan name.
+    pub(super) fn load(setup: &rsf_srvk_setup) -> Option<Self> {
+        let resolve = |name| lookup(setup.device_proc, setup.device, name);
         Some(Self {
             barrier: unsafe {
-                mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdPipelineBarrier>(
-                    commands.barrier?,
-                )
+                mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdPipelineBarrier>(resolve(
+                    c"vkCmdPipelineBarrier",
+                )?)
             },
             copy: unsafe {
-                mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdCopyImage>(commands.copy?)
+                mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdCopyImage>(resolve(
+                    c"vkCmdCopyImage",
+                )?)
             },
             blit: unsafe {
-                mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdBlitImage>(commands.blit?)
+                mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdBlitImage>(resolve(
+                    c"vkCmdBlitImage",
+                )?)
             },
         })
     }

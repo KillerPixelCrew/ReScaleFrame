@@ -117,15 +117,10 @@ int32_t open(const rsf_srvk_setup* setup, void** out) noexcept try {
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-int32_t prepare(void* native, rsf_vkdlss_commands* commands) noexcept try {
+int32_t prepare(void* native) noexcept try {
     auto* self = static_cast<Native*>(native);
     const auto* setup = &self->setup;
     if (!self->gpu.load_images(*setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-#define RSF_LOAD(member, function) commands->member = setup->device_proc(setup->device, #function); if (!commands->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
-    RSF_LOAD(barrier, vkCmdPipelineBarrier);
-    RSF_LOAD(copy, vkCmdCopyImage);
-    RSF_LOAD(blit, vkCmdBlitImage);
-#undef RSF_LOAD
     const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
         setup->instance_proc(setup->instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;

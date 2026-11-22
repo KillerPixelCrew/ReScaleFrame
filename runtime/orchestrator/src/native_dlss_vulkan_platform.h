@@ -9,10 +9,6 @@ typedef struct rsf_vkdlss_images {
     rsf_vkfg_image color, depth, motion, bias, output;
 } rsf_vkdlss_images;
 
-typedef struct rsf_vkdlss_commands {
-    rsf_vk_function barrier, copy, blit;
-} rsf_vkdlss_commands;
-
 typedef struct rsf_vkdlss_tag {
     const rsf_vkfg_image* image;
     uint32_t kind, layout, width, height;
@@ -38,7 +34,7 @@ typedef struct rsf_vkdlss_platform {
     void (*close)(void*);
     int32_t (*invoke)(const rsf_slvk_call*);
     rsf_slvk_callback initialize;
-    int32_t (*prepare)(void*, rsf_vkdlss_commands*);
+    int32_t (*prepare)(void*);
     uint32_t (*allocate)(void*, rsf_vkfg_image*, uint32_t width, uint32_t height, uint32_t format, uint32_t usage);
     void (*free_image)(void*, rsf_vkfg_image*);
     int32_t (*constants)(void*, uintptr_t token, const rsf_slvk_sdk_constants*);

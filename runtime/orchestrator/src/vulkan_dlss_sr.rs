@@ -4,8 +4,8 @@ use crate::frame_capture_vk::sr_capture_inputs;
 mod commands;
 use self::commands::Dispatch;
 use crate::vulkan_dlss_sr_abi::{
-    rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_init, rsf_vkdlss_options,
-    rsf_vkdlss_platform as Platform, rsf_vkdlss_tag,
+    rsf_vkdlss_images, rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform as Platform,
+    rsf_vkdlss_tag,
 };
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_ownership::Claim;
@@ -347,12 +347,12 @@ impl Owner {
         }
         owner.width = init.width;
         owner.height = init.height;
-        let mut commands = rsf_vkdlss_commands::default();
-        let result = unsafe { (platform.prepare.unwrap())(owner.native, &mut commands) };
+        let dispatch = Dispatch::load(setup).ok_or(MISSING_ENTRY_POINT)?;
+        let result = unsafe { (platform.prepare.unwrap())(owner.native) };
         if result != 0 {
             return Err(result);
         }
-        owner.dispatch = Some(Dispatch::new(commands).ok_or(MISSING_ENTRY_POINT)?);
+        owner.dispatch = Some(dispatch);
         if owner.width == 0 || owner.height == 0 || !owner.allocate(setup) {
             return Err(INIT_FAILED);
         }
