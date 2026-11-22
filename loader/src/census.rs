@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+mod d3d;
+mod d3d_abi;
 mod decode;
 mod decode_abi;
 mod hook_abi;

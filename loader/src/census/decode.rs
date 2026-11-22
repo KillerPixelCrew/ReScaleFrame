@@ -8,7 +8,7 @@ use super::json_abi::rsf_census_json;
 use std::ffi::{c_char, c_void};
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_dxgi_format_name(format: u32) -> *const c_char {
+pub(super) extern "C" fn rsf_census_dxgi_format_name(format: u32) -> *const c_char {
     match format {
         0 => c"UNKNOWN",
         1 => c"R32G32B32A32_TYPELESS",

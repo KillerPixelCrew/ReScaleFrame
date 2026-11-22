@@ -209,3 +209,16 @@ regardless of record sampling.
 Native leaves keep the guarded virtual getter calls, D3D resource description probes and CRT
 float formatting. The D3D12 registration API keeps its public signature. Source checks compare
 all catalog and decoder names, getter order and observer phases with the previous wrapper.
+
+## DXGI and D3D12 wrapper cutover
+
+`loader/census/src/wrap_d3d.cpp` is removed. The sixteen Rust wrappers use the native argument
+widths, stack argument counts, HRESULT and handle returns, and void submission return. The
+Windows bindings supply the DXGI and D3D12 description layouts. Factory, swapchain and queue
+admission still use the same SDK slots and interface IDs. Rust reports a zero return for the
+void ExecuteCommandLists method.
+
+The Rust observers back the unchanged public `census_d3d12_observer.h` ABI. The shared present
+depth still covers both APIs, filters DXGI test presents, and sends the before-present callback
+only through the original Present path. Borrowed interface queries, debug-layer configuration
+and debug-message registration remain isolated in `d3d_guarded_platform.cpp`.

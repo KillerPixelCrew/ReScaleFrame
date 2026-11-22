@@ -11,7 +11,7 @@ add_library(rsf_vendor_census STATIC
     src/decode_d3d_platform.cpp
     src/guarded_platform.cpp
     src/hook_platform.cpp
-    src/wrap_d3d.cpp
+    src/d3d_guarded_platform.cpp
     src/wrap_fsr.cpp
     src/wrap_misc.cpp)
 target_include_directories(rsf_vendor_census PUBLIC include PRIVATE src)

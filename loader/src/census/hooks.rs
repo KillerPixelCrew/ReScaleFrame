@@ -261,7 +261,11 @@ fn bind_inline(cfg: &Config, entry: u16, target: Ptr, module: &[u8]) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_hook_bind_inline(entry: u16, target: Ptr, module: *const c_char) -> bool {
+pub(super) extern "C" fn rsf_census_hook_bind_inline(
+    entry: u16,
+    target: Ptr,
+    module: *const c_char,
+) -> bool {
     CONFIG.get().is_some_and(|cfg| {
         bind_inline(
             cfg,
@@ -534,7 +538,7 @@ pub(super) fn rsf_census_hooks_remove() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_hooks_apply() {
+pub(super) extern "C" fn rsf_census_hooks_apply() {
     let Some(cfg) = CONFIG.get() else { return };
     unsafe { cfg.platform.apply.unwrap()() };
     let mut book = book();

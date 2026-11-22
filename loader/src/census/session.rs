@@ -378,12 +378,12 @@ fn write_start(core: &Core) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_active() -> bool {
+pub(super) extern "C" fn rsf_census_active() -> bool {
     ACTIVE.load(Acquire)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_flags() -> u32 {
+pub(super) extern "C" fn rsf_census_flags() -> u32 {
     CORE.get().map_or(0, |core| core.flags)
 }
 

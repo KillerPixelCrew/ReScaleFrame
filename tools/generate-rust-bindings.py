@@ -96,6 +96,9 @@ generate("loader/src/census/ngx_abi.rs", "loader/census/src/ngx_platform.h",
          "rsf_census_ngx_platform", "RSF_CENSUS_NGX_ENTRIES", [],
          ["--blocklist-type", "rsf_census_json",
           "--raw-line", "use super::json_abi::rsf_census_json;"])
+generate("loader/src/census/d3d_abi.rs", "loader/census/src/d3d_platform.h",
+         "rsf_census_(d3d_(platform|entry)|debug_message)", "NOTHING", [],
+         ["--no-prepend-enum-name", "--raw-line", "#![allow(non_upper_case_globals)]"])
 generate("tests/loader/src/windows/module_dump_abi.rs",
          "loader/diagnostics/include/rescaleframe/module_dump.h",
          "rsf_dump_(options|report|result)", "RSF_MODULE_DUMP_ABI_VERSION", [],
