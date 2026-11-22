@@ -15,13 +15,9 @@
 use super::World;
 use super::publication::{self, Leaves as PublicationLeaves, SrOutcome};
 use super::recovery::{self, Leaves as RecoveryLeaves};
-use crate::resolution::owns_full_output;
+use crate::resolution::{EFFECTS_RETURNED, PRE_SR, UI_RESTORED, UI_RETURN, owns_full_output};
 use crate::sys::NativeEffectsCall as EffectsCall;
 use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
-use crate::sys::{
-    RSF_FALLOUT4_STAGE_EFFECTS_RETURNED as EFFECTS_RETURNED, RSF_FALLOUT4_STAGE_PRE_SR as PRE_SR,
-    RSF_FALLOUT4_STAGE_UI_RESTORED as UI_RESTORED, RSF_FALLOUT4_STAGE_UI_RETURN as UI_RETURN,
-};
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, image, message};
 use rsf_game_sys::{rsf_game_render_pass, rsf_result};
 use std::ffi::{CStr, c_char, c_void};

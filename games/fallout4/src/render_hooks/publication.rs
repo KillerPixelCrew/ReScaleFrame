@@ -16,12 +16,10 @@ use super::World;
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use crate::render_inputs;
 use crate::resolution::inputs_match as resolution_inputs_match;
+use crate::resolution::{EVALUATED, OUTPUT_READY};
 use crate::screen::NativeScreen as Screen;
 use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::sys::{NativeAuxiliaryInputs as AuxiliaryInputs, NativePublicationInputs as Inputs};
-use crate::sys::{
-    RSF_FALLOUT4_STAGE_EVALUATED as EVALUATED, RSF_FALLOUT4_STAGE_OUTPUT_READY as OUTPUT_READY,
-};
 use crate::{RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, image, message};
 use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL,

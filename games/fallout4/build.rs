@@ -80,7 +80,6 @@ fn bindings() {
         "games/fallout4/src/cpu_events_platform.h",
         "games/fallout4/src/fallout4_platform.h",
         "games/fallout4/src/render_hooks_platform.h",
-        "games/fallout4/src/resolution_stages.h",
     ];
     let builder = rsf_bindgen::owner(&headers, &[], &["games/fallout4"], &[], &[])
         .parse_callbacks(Box::new(rsf_bindgen::Derives(derives)))

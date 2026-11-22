@@ -15,9 +15,9 @@
 use super::World;
 use super::publication;
 use super::recovery::{self, Leaves as RecoveryLeaves};
+use crate::resolution::SOURCE_RETIRED;
 use crate::resolution::is_busy as resolution_busy;
 pub(super) use crate::sys::NativeRenderOwner as Owner;
-use crate::sys::RSF_FALLOUT4_STAGE_SOURCE_RETIRED as SOURCE_RETIRED;
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, image};
 use rsf_game_sys::{
     RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_SUBMISSION, rsf_game_render_pass,

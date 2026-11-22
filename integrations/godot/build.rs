@@ -6,7 +6,6 @@ fn main() {
     let headers = [
         "integrations/godot/native/api.h",
         "integrations/godot/native/extension_abi.h",
-        "integrations/godot/native/host_abi.h",
         "integrations/godot/native/vulkan_features.h",
     ];
     let builder = rsf_bindgen::owner(

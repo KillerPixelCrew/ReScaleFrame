@@ -24,6 +24,16 @@ use windows_sys::Win32::System::{
     Diagnostics::Debug::WriteProcessMemory, Threading::GetCurrentProcess,
 };
 
+// Receipt stages reported to the render hooks.
+pub(crate) const PRE_SR: u32 = 0;
+pub(crate) const OUTPUT_READY: u32 = 1;
+pub(crate) const EVALUATED: u32 = 2;
+pub(crate) const EFFECTS_RETURNED: u32 = 3;
+pub(crate) const HUDLESS: u32 = 4;
+pub(crate) const UI_RETURN: u32 = 5;
+pub(crate) const UI_RESTORED: u32 = 6;
+pub(crate) const SOURCE_RETIRED: u32 = 7;
+
 const STATE: usize = 0x3d871a0;
 pub(crate) const TARGETS: usize = 0x2f4d750;
 const RATIOS: usize = TARGETS + 0xfb8;
@@ -1079,16 +1089,15 @@ unsafe fn report_state(
     result: i32,
     report: Report,
 ) {
-    use crate::sys::*;
     let name = match stage {
-        RSF_FALLOUT4_STAGE_PRE_SR => c"pre-sr",
-        RSF_FALLOUT4_STAGE_OUTPUT_READY => c"output-ready",
-        RSF_FALLOUT4_STAGE_EVALUATED => c"evaluated",
-        RSF_FALLOUT4_STAGE_EFFECTS_RETURNED => c"effects-return",
-        RSF_FALLOUT4_STAGE_HUDLESS => c"hudless",
-        RSF_FALLOUT4_STAGE_UI_RETURN => c"ui-return",
-        RSF_FALLOUT4_STAGE_UI_RESTORED => c"ui-restored",
-        RSF_FALLOUT4_STAGE_SOURCE_RETIRED => c"source-retired",
+        PRE_SR => c"pre-sr",
+        OUTPUT_READY => c"output-ready",
+        EVALUATED => c"evaluated",
+        EFFECTS_RETURNED => c"effects-return",
+        HUDLESS => c"hudless",
+        UI_RETURN => c"ui-return",
+        UI_RESTORED => c"ui-restored",
+        SOURCE_RETIRED => c"source-retired",
         _ => return,
     };
     let Some(report) = report else {
@@ -1106,7 +1115,7 @@ unsafe fn report_state(
     let mut receipt = Receipt {
         stage: name.as_ptr(),
         result,
-        evaluation: stage == RSF_FALLOUT4_STAGE_EVALUATED,
+        evaluation: stage == EVALUATED,
         published,
         input: scope.input,
         output: scope.output,
