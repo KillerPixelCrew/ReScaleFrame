@@ -79,3 +79,58 @@ untouched.
   work, packed output pixel checks and fake-driver capture against the G07
   native readback leaf. Its device scenarios and CPU retirement assertions
   remain pending a port with those direct dependencies.
+
+## V01 residual replay
+
+The residual replay starts at `3665aef0`. That base already contains the typed
+spatial recovery replay `552b1480`. FidelityFX Vulkan SR now creates its
+graphics owner in Rust. The owner binds the shared image allocator, queries
+physical-device memory properties with Ash, and records barriers and copies
+through the integrated V02 functions. Zero-mask clearing uses the same typed
+Rust command buffer and color range. FidelityFX's memory fallback remains in
+the shared resource transaction. On initialization failure, the new graphics
+owner releases any image-dispatch or capture state already acquired.
+
+The graphics owner calls the G05 sharpening host and G07 capture owner
+directly. SR still records raw provider output before sharpening. Readback
+publication still requires the exact command retirement or a full drain, and
+SDK destruction refusal still retains its dependencies for another attempt.
+The V06 XeSS typed SDK bridge and the optional DLSS and XeSS platform entries
+stay in place.
+
+The compiler-selected C++ leaf still compiles against the configured
+FidelityFX Vulkan headers. It retains version discovery, create and dispatch
+records, provider resource interpretation, and the exception guards around the
+four SDK procedures and host resolver. The public exports and their
+feature-disabled forwarding remain in that translation unit.
+
+The former `tests/native_sr_vulkan.cpp` body now uses Rust and Ash. Its C
+entry provides the public SR, FG, and Streamline callbacks and the configured
+feature bit. The original CTest names, arguments, timeouts, and skip codes
+remain. The device routes still create a Vulkan 1.2 device, submit commands
+and wait on a fence. They preserve two gradient recovery passes with
+full-output comparison, FSR2 and FSR3 dispatch, DLSS with a shared PCL
+session and default/K presets, the 12-frame reset and optional-input
+sequence, and packed FP16 comparisons. The CPU path still records three
+fake-driver readbacks through the production capture owner and separately
+checks submitted, abandoned, and drained recordings. Its typed fake Vulkan
+entry points preserve the event-completion and no-map assertions.
+
+### Source evidence
+
+- Rust 1.94.1 workspace formatting and locked offline Cargo metadata passed.
+- Bindgen 0.72.1 reproduced the checked-in Vulkan SR, shared resources, and
+  sharpening records byte-for-byte after newline normalization. A Windows
+  x64 probe returned 128 bytes and the expected 16 pointer offsets for the
+  fixture table. The pinned FidelityFX headers
+  (`c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`) produced 40-byte backend and
+  432-byte dispatch descriptors with the Godot Vulkan headers
+  (`ed1daf0bf001b61586d9930840f2f1394092c079`). The SDK probe required C++
+  parsing because the Vulkan SDK header uses unqualified struct names.
+- Clang source syntax checks with warnings as errors passed for the production
+  C++ leaf and the C fixture entry, each with the Vulkan SR feature enabled
+  and disabled. Source comparison covered the seven public SR exports,
+  optional provider routes, SDK call sequence, and the fixture assertions.
+- Build, binary linkage, fixture execution, and hardware results remain
+  pending. The two V01 residual PORT entries can cite this section, with
+  the production entry retaining the optional C++ SDK leaf.

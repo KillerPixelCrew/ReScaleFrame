@@ -51,7 +51,7 @@ struct Fences {
     queue_user: *mut c_void,
 }
 
-struct Device {
+pub(crate) struct Device {
     handle: vk::Device,
     local_types: u32,
     images: Images,
@@ -117,7 +117,7 @@ unsafe extern "C" fn rsf_core_vkfg_load_device(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vkfg_bind_images(
+pub(crate) extern "C" fn rsf_core_vkfg_bind_images(
     handle: *mut c_void,
     entries: &[rsf_vk_function; 6],
 ) -> *mut Device {
@@ -128,14 +128,14 @@ extern "C" fn rsf_core_vkfg_bind_images(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_device_destroy(device: *mut Device) {
+pub(crate) unsafe extern "C" fn rsf_core_vkfg_device_destroy(device: *mut Device) {
     if !device.is_null() {
         unsafe { drop(Box::from_raw(device)) };
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vkfg_device_memory(
+pub(crate) extern "C" fn rsf_core_vkfg_device_memory(
     device: &mut Device,
     properties: &vk::PhysicalDeviceMemoryProperties,
 ) {

@@ -20,17 +20,17 @@ int32_t rsf_core_srvk_spatial_fallback(Lookup, const rsf_srvk_fallback*);
 #if defined(RSF_HAVE_FFX_VK)
 #include "native_dlss_vulkan_platform.h"
 #include "native_xess_vulkan.h"
-#include "../../backends/common/frame_capture_vk.h"
 #include "../../backends/common/sharpening.h"
-#include "sharpening_vulkan.h"
-#include "vulkan_fg_copy.h"
-#include "vulkan_fg_resources_native.h"
+#include "vulkan_fg_copy_abi.h"
+#include "vulkan_fg_resources.h"
 #include "../../backends/fsr/src/ffx_version.h"
 #include <ffx_api/ffx_api.h>
 #include <ffx_api/ffx_upscale.h>
 #include <ffx_api/vk/ffx_api_vk.h>
-#include <cstdio>
-#include <cstring>
+#include <rescaleframe/input_dump.h>
+#include <rescaleframe/capture_names.h>
+
+extern "C" const rsf_vkfg_platform rsf_core_vkfg_platform;
 
 namespace {
 constexpr auto max_versions = rsf::max_ffx_versions;
@@ -119,19 +119,29 @@ PFN_vkVoidFunction VKAPI_PTR sdk_device_proc(VkDevice device, const char* name) 
     return reinterpret_cast<PFN_vkVoidFunction>(rsf_core_srvk_dispatch_lookup(device, name, call_device_proc));
 }
 
+struct Graphics;
+extern "C" {
+Graphics* rsf_core_srvk_graphics_create(const rsf_srvk_setup*, const FfxDeviceEntries*, rsf_vk_function);
+void rsf_core_srvk_graphics_destroy(Graphics*);
+void* rsf_core_srvk_graphics_images(Graphics*);
+uint32_t rsf_core_srvk_graphics_memory_count(const Graphics*);
+void rsf_core_srvk_graphics_barrier(const Graphics*, void*, const rsf_vkfg_barrier*);
+void rsf_core_srvk_graphics_clear(const Graphics*, void*, uint64_t, uint32_t);
+void rsf_core_srvk_graphics_copy(const Graphics*, void*, const rsf_vkfg_image_copy*);
+int32_t rsf_core_srvk_graphics_sharpen(Graphics*, const rsf_srvk_setup*, void*, const rsf_srvk_frame*, uint64_t);
+void rsf_core_srvk_graphics_clear_sharpen(Graphics*);
+void rsf_core_srvk_graphics_capture_provider(const Graphics*, uint64_t, uint32_t);
+void rsf_core_srvk_graphics_capture_record(const Graphics*, void*, const rsf_srvk_image*, const rsf_frame_record*, const char*, uint32_t);
+int32_t rsf_core_srvk_graphics_capture_wants(const Graphics*, uint64_t);
+void rsf_core_srvk_graphics_retire(Graphics*, void*);
+void rsf_core_srvk_graphics_flush(const Graphics*);
+}
+
 struct FfxNative {
-    VkDevice device = VK_NULL_HANDLE;
     rsf_vkffx_exports sdk;
     ffxContext effect = nullptr;
-    rsf::vkfg::Device gpu;
-    PFN_vkCmdPipelineBarrier barrier = nullptr;
-    PFN_vkCmdClearColorImage clear = nullptr;
-    PFN_vkCmdCopyImage copy = nullptr;
-    VkPhysicalDeviceMemoryProperties memory{};
-    rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
-    rsf_sharpenvk_host sharpen{};
-    ~FfxNative() { rsf_sharpenvk_host_destroy(&sharpen); }
-
+    Graphics* graphics = nullptr;
+    ~FfxNative() { rsf_core_srvk_graphics_destroy(graphics); }
 };
 
 FfxNative* allocate(const rsf_srvk_setup*) noexcept try
@@ -152,18 +162,8 @@ void bind_sdk(FfxNative* native, const FfxExports* exports) noexcept
 int32_t initialize_graphics(FfxNative* native, const rsf_srvk_setup* setup,
     const FfxDeviceEntries* entries, rsf_vk_function memory_properties) noexcept try
 {
-    const auto& [create, destroy, requirements, allocate_memory, free_memory, bind, barrier, clear, copy] = *entries;
-    native->device = static_cast<VkDevice>(setup->device);
-    const rsf_vk_function images[]{create, destroy, requirements, allocate_memory, free_memory, bind};
-    if (!native->gpu.bind_images(native->device, images)) return RSF_BACKEND_ERROR_INIT_FAILED;
-    native->barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(barrier);
-    native->clear = reinterpret_cast<PFN_vkCmdClearColorImage>(clear);
-    native->copy = reinterpret_cast<PFN_vkCmdCopyImage>(copy);
-    const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(memory_properties);
-    properties(static_cast<VkPhysicalDevice>(setup->physical_device), &native->memory);
-    native->gpu.memory_types(native->memory);
-    return native->capture.initialize(native->device, setup->device_proc, native->memory)
-        ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
+    native->graphics = rsf_core_srvk_graphics_create(setup, entries, memory_properties);
+    return native->graphics ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
@@ -195,7 +195,7 @@ int32_t create_effect(FfxNative* native, const rsf_srvk_setup* setup, uint64_t i
     ffxCreateBackendVKDesc backend{};
     backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
     backend.header.pNext = &version.header;
-    backend.vkDevice = native->device;
+    backend.vkDevice = static_cast<VkDevice>(setup->device);
     backend.vkPhysicalDevice = static_cast<VkPhysicalDevice>(setup->physical_device);
     backend.vkDeviceProcAddr = sdk_device_proc;
     ffxCreateContextDescUpscale create{};
@@ -240,24 +240,6 @@ int32_t plan(FfxNative* native, const rsf_srvk_setup* setup, uint32_t* width, ui
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_SUPPORTED;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
-
-void record_barrier(FfxNative* native, void* commands, const rsf_vkfg_barrier* plan) noexcept
-{
-    rsf_core_vkfg_record_barrier(native->barrier, static_cast<VkCommandBuffer>(commands), plan);
-}
-
-void clear_color_zero(FfxNative* native, void* commands, uint64_t image, uint32_t layout) noexcept
-{
-    const VkClearColorValue zero{};
-    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    native->clear(static_cast<VkCommandBuffer>(commands), reinterpret_cast<VkImage>(image),
-        static_cast<VkImageLayout>(layout), &zero, 1, &range);
-}
-
-void record_copy(FfxNative* native, void* commands, const rsf_vkfg_image_copy* plan) noexcept
-{
-    rsf_core_vkfg_record_copy(native->copy, static_cast<VkCommandBuffer>(commands), plan);
-}
 
 FfxApiResource resource(const rsf_srvk_image& image, bool output = false) noexcept
 {
@@ -317,27 +299,35 @@ constexpr Platform native{
     {rsf_vk_sdk_system_loader, allocate, [](FfxNative* owner) { delete owner; }, rsf_vkffx_symbol, bind_sdk,
         call_device_proc, initialize_graphics, versions, create_effect,
         effective_version, destroy_effect, plan,
-        [](FfxNative* owner) -> void* { return owner->gpu.get(); }, &rsf::vkfg::platform,
-        [](FfxNative* owner) { return owner->memory.memoryTypeCount; },
-        record_barrier, clear_color_zero, dispatch, record_copy,
-        [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {
-            return rsf_sharpenvk_host_run(&owner->sharpen, setup, commands, frame, output) != 0;
+        [](FfxNative* owner) { return rsf_core_srvk_graphics_images(owner->graphics); }, &rsf_core_vkfg_platform,
+        [](FfxNative* owner) { return rsf_core_srvk_graphics_memory_count(owner->graphics); },
+        [](FfxNative* owner, void* commands, const rsf_vkfg_barrier* plan) {
+            rsf_core_srvk_graphics_barrier(owner->graphics, commands, plan);
         },
-        [](FfxNative* owner) { rsf_sharpenvk_host_clear(&owner->sharpen); },
-        [](FfxNative* owner, uint64_t version, uint32_t backend) { owner->capture.set_provider(version, backend); },
+        [](FfxNative* owner, void* commands, uint64_t image, uint32_t layout) {
+            rsf_core_srvk_graphics_clear(owner->graphics, commands, image, layout);
+        },
+        dispatch,
+        [](FfxNative* owner, void* commands, const rsf_vkfg_image_copy* plan) {
+            rsf_core_srvk_graphics_copy(owner->graphics, commands, plan);
+        },
+        [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) {
+            return rsf_core_srvk_graphics_sharpen(owner->graphics, setup, commands, frame, output);
+        },
+        [](FfxNative* owner) { rsf_core_srvk_graphics_clear_sharpen(owner->graphics); },
+        [](FfxNative* owner, uint64_t version, uint32_t backend) {
+            rsf_core_srvk_graphics_capture_provider(owner->graphics, version, backend);
+        },
         [](FfxNative* owner, void* commands, const rsf_srvk_image* image,
             const rsf_frame_record* record, const char* role, uint32_t reset) {
-            (void)owner->capture.record(static_cast<VkCommandBuffer>(commands), *image, *record, role, reset);
+            rsf_core_srvk_graphics_capture_record(owner->graphics, commands, image, record, role, reset);
         },
-        [](FfxNative* owner, uint64_t frame) -> int32_t { return owner->capture.wants(frame); },
+        [](FfxNative* owner, uint64_t frame) { return rsf_core_srvk_graphics_capture_wants(owner->graphics, frame); },
         [](const rsf_srvk_frame* frame, uint32_t backend, uint32_t reset) {
             rsf_capture_sr_parameters(frame->record, backend, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
         },
-        [](FfxNative* owner, void* commands) {
-            rsf_sharpenvk_host_retire(&owner->sharpen, commands);
-            owner->capture.retire_commands(static_cast<VkCommandBuffer>(commands));
-        },
-        [](FfxNative* owner) { (void)owner->capture.flush(); }},
+        [](FfxNative* owner, void* commands) { rsf_core_srvk_graphics_retire(owner->graphics, commands); },
+        [](FfxNative* owner) { rsf_core_srvk_graphics_flush(owner->graphics); }},
     rsf_input_dump_begin_record, rsf_input_dump_wants, rsf_input_dump_result,
 };
 constexpr const Platform* platform = &native;

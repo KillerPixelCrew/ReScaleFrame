@@ -1,5 +1,13 @@
 # Implementation tracker
 
+V01 moves FidelityFX Vulkan SR graphics ownership and recording into Rust
+and ports the native SR contract and device fixture bodies. The shared
+Vulkan recording, sharpening and capture proofs remain in use, and the
+configured FidelityFX SDK calls retain their native exception boundary.
+Pinned formatting, binding regeneration, locked offline metadata and
+source checks passed. Builds, fixtures and device checks remain pending.
+[V01 residual evidence](research/vulkan-sr-native-port-followup.md#v01-residual-replay)
+
 C05 moves Vulkan Anti-Lag device discovery and SDK calls, Streamline token
 result handling, and Reflex timing into Rust. The optional native provider
 entry points still supply linkage and contain C++ exceptions. The receipt,

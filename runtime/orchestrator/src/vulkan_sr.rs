@@ -1104,4 +1104,6 @@ macro_rules! leaf {
 mod owner_tests;
 
 mod fallback;
+#[cfg(windows)]
+mod graphics;
 mod xess;

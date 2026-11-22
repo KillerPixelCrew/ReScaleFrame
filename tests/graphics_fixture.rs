@@ -23,6 +23,8 @@ mod motion_decode;
 mod motion_resolve;
 #[path = "native_reinsert.rs"]
 mod native_reinsert;
+#[path = "native_sr_vulkan.rs"]
+mod native_sr_vulkan;
 #[path = "resource_roles.rs"]
 mod resource_roles;
 #[path = "sampler_bias.rs"]

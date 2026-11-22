@@ -564,7 +564,7 @@ impl Drop for Fixture {
 }
 
 // Pattern components are zero or positive normal binary16 values in range.
-fn half(value: f32) -> u16 {
+pub(super) fn half(value: f32) -> u16 {
     if value == 0.0 {
         return 0;
     }

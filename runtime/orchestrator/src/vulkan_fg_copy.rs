@@ -13,7 +13,7 @@ pub(super) const COLOR_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRa
 };
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_record_barrier(
+pub(super) unsafe extern "C" fn rsf_core_vkfg_record_barrier(
     barrier: vk::PFN_vkCmdPipelineBarrier,
     commands: vk::CommandBuffer,
     plan: &Barrier,
@@ -44,7 +44,7 @@ unsafe extern "C" fn rsf_core_vkfg_record_barrier(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_record_copy(
+pub(super) unsafe extern "C" fn rsf_core_vkfg_record_copy(
     copy: vk::PFN_vkCmdCopyImage,
     commands: vk::CommandBuffer,
     plan: &ImageCopy,

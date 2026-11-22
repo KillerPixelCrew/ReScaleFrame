@@ -688,7 +688,7 @@ impl Owner {
 
 #[cfg(windows)]
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_capture_vk_create(command_completion: u32) -> *mut Owner {
+pub(super) extern "C" fn rsf_core_capture_vk_create(command_completion: u32) -> *mut Owner {
     crate::allocate_handle(Owner::new_native(command_completion != 0))
 }
 
