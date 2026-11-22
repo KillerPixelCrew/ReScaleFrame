@@ -21,18 +21,18 @@ const LOADER: [u16; 7] = wide_literal(b"Loader");
 const FLAGS: u32 = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
 
 fn profile(key: &str, capacity: usize, configuration: &[u16]) -> Option<Vec<u16>> {
-    let mut value = vec![0; capacity];
+    let mut value = vec![0; capacity + 1];
     let count = unsafe {
         GetPrivateProfileStringW(
             LOADER.as_ptr(),
             wide(key).as_ptr(),
             null(),
             value.as_mut_ptr(),
-            capacity as u32,
+            value.len() as u32,
             configuration.as_ptr(),
         )
     } as usize;
-    if count == 0 || count >= capacity - 1 {
+    if count == 0 || count >= capacity {
         return None;
     }
     value.truncate(count);

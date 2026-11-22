@@ -2,14 +2,14 @@
 use std::ffi::{CStr, c_char};
 use std::io::{self, Write};
 
-const VERSION: &str = concat!("ReScaleFrame ", env!("CARGO_PKG_VERSION"), "\n");
+const VERSION: &str = concat!("ReScaleFrame ", env!("CARGO_PKG_VERSION"), "\r\n");
 const HELP: &str = concat!(
     "ReScaleFrame ",
     env!("CARGO_PKG_VERSION"),
-    "\n",
-    "A framework for adding upscaling and frame generation to games.\n\n",
-    "Initial scaffold. Game launching and injection are not implemented.\n",
-    "Options: --help, --version\n",
+    "\r\n",
+    "A framework for adding upscaling and frame generation to games.\r\n\r\n",
+    "Initial scaffold. Game launching and injection are not implemented.\r\n",
+    "Options: --help, --version\r\n",
 );
 
 #[unsafe(no_mangle)]
@@ -23,7 +23,7 @@ unsafe extern "C" fn rsf_launcher_main(argc: i32, argv: *const *const c_char) ->
             let _ = io::stdout().write_all(HELP.as_bytes());
         }
         _ => {
-            let _ = io::stderr().write_all(b"Unknown option. Use --help.\n");
+            let _ = io::stderr().write_all(b"Unknown option. Use --help.\r\n");
             return 2;
         }
     }

@@ -32,14 +32,18 @@ fn module_path(module: HMODULE) -> Option<PathBuf> {
 fn load_system(name: &str, load: impl FnOnce(*const u16, u32) -> HMODULE) -> HMODULE {
     let mut buffer = [0; MAX_PATH as usize];
     let count = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), MAX_PATH) } as usize;
-    if count == 0 || count >= buffer.len() {
+    if count == 0 || count + name.len() + 2 > buffer.len() {
         return null_mut();
     }
     // A bare DLL name can resolve back to the carrier.
-    let mut path = buffer[..count].to_vec();
-    path.push(u16::from(b'\\'));
-    path.extend(name.encode_utf16().chain([0]));
-    load(path.as_ptr(), LOAD_LIBRARY_SEARCH_SYSTEM32)
+    buffer[count] = u16::from(b'\\');
+    for (unit, encoded) in buffer[count + 1..]
+        .iter_mut()
+        .zip(name.encode_utf16().chain([0]))
+    {
+        *unit = encoded;
+    }
+    load(buffer.as_ptr(), LOAD_LIBRARY_SEARCH_SYSTEM32)
 }
 
 fn load_library(path: *const u16, flags: u32) -> HMODULE {
