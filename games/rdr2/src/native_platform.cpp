@@ -11,6 +11,8 @@
 #include "../../../integrations/windows/xinput_facts.h"
 #include <array>
 #include <atomic>
+#include <memory>
+#include <new>
 
 extern "C" {
 void* rsf_rdr2_pop_detour(void* ring, void* record, uintptr_t caller) noexcept;
@@ -56,21 +58,24 @@ bool read(uintptr_t address, void* out, size_t size) noexcept
 // Clone an object's own table and swap its table pointer. The original entry keeps any existing
 // wrapper or overlay chain; no module-wide D3D12 or DXGI function is patched.
 template<size_t N>
-bool clone_table(void* object, std::array<void*, N>& copy, size_t slot, const void* detour, void** original) noexcept
+bool clone_table(void* object, size_t slot, const void* detour, void** original) noexcept
 {
+    auto copy = std::unique_ptr<std::array<void*, N>>(new (std::nothrow) std::array<void*, N>);
+    if (!copy) return false;
     auto** table = *static_cast<void***>(object);
-    if (!read(reinterpret_cast<uintptr_t>(table), copy.data(), sizeof(copy))) return false;
-    *original = copy[slot];
-    copy[slot] = const_cast<void*>(detour);
+    if (!read(reinterpret_cast<uintptr_t>(table), copy->data(), sizeof(*copy))) return false;
+    *original = (*copy)[slot];
+    (*copy)[slot] = const_cast<void*>(detour);
     DWORD protection{};
     if (!VirtualProtect(object, sizeof(void*), PAGE_READWRITE, &protection)) return false;
-    const auto replaced = InterlockedCompareExchangePointer(static_cast<void* volatile*>(object), copy.data(), table);
+    const auto replaced = InterlockedCompareExchangePointer(static_cast<void* volatile*>(object), copy->data(), table);
     DWORD ignored{};
     VirtualProtect(object, sizeof(void*), protection, &ignored);
-    return replaced == table;
+    if (replaced != table) return false;
+    // Attached owners are process-lived and may still call their cloned table after replacement.
+    copy.release();
+    return true;
 }
-std::array<void*, 19> queue_table{};
-std::array<void*, 41> swapchain_table{};
 constexpr size_t execute_slot = 10;
 constexpr size_t present_slot = 8;
 
@@ -78,7 +83,7 @@ bool attach_queue(void* candidate, const void* detour, void** original) noexcept
 {
     auto* queue = static_cast<ID3D12CommandQueue*>(candidate);
     if (!queue || queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT ||
-        !clone_table(candidate, queue_table, execute_slot, detour, original)) return false;
+        !clone_table<19>(candidate, execute_slot, detour, original)) return false;
     // The cloned table calls into this DLL, so the queue stays referenced until process teardown.
     queue->AddRef();
     return true;
@@ -88,7 +93,7 @@ bool attach_present(void* candidate, const void* detour, void** original) noexce
     IDXGISwapChain4* latest{};
     if (!candidate || FAILED(static_cast<IUnknown*>(candidate)->QueryInterface(IID_PPV_ARGS(&latest)))) return false;
     if (static_cast<void*>(latest) != candidate ||
-        !clone_table(candidate, swapchain_table, present_slot, detour, original)) {
+        !clone_table<41>(candidate, present_slot, detour, original)) {
         latest->Release();
         return false;
     }

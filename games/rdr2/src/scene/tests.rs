@@ -4,6 +4,7 @@ use super::*;
 fn state() -> Box<State> {
     Box::new(State {
         swapchain: 0,
+        generation: 0,
         markers: [Markers { frame: 0, mask: 0 }; 128],
         scenes: [Scene::EMPTY; 64],
     })

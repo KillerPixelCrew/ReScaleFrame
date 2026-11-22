@@ -89,6 +89,7 @@ impl Scene {
 
 struct State {
     swapchain: usize,
+    generation: u32,
     markers: [Markers; 128],
     scenes: [Scene; 64],
 }
@@ -98,6 +99,7 @@ unsafe impl Send for State {}
 
 static STATE: Mutex<State> = Mutex::new(State {
     swapchain: 0,
+    generation: 0,
     markers: [Markers { frame: 0, mask: 0 }; 128],
     scenes: [Scene::EMPTY; 64],
 });
@@ -380,7 +382,7 @@ fn completed_scene(image: usize) {
     }
     {
         let mut state = lock(&STATE);
-        if state.swapchain != chain as usize {
+        if state.swapchain != chain as usize || state.generation != pass.resource_generation {
             return;
         }
         let saved = slot(&mut state.scenes, target.frame);
@@ -659,7 +661,9 @@ pub(crate) fn upscale(commands: usize, pass: &rsf_game_render_pass) {
         return;
     }
     let mut state = lock(&STATE);
-    record_upscale(&mut state, commands, pass);
+    if state.generation == pass.resource_generation {
+        record_upscale(&mut state, commands, pass);
+    }
 }
 
 fn record_upscale(state: &mut State, commands: usize, pass: &rsf_game_render_pass) {
@@ -677,12 +681,11 @@ fn record_upscale(state: &mut State, commands: usize, pass: &rsf_game_render_pas
 }
 
 /// The swapchain whose Present observer the renderer attached; retained by the renderer.
-pub(crate) fn set_swapchain(swapchain: usize) {
+pub(crate) fn set_swapchain(swapchain: usize, generation: u32) {
     let mut state = lock(&STATE);
-    if state.swapchain != swapchain {
-        state.scenes.fill(Scene::EMPTY);
-        state.swapchain = swapchain;
-    }
+    state.scenes.fill(Scene::EMPTY);
+    state.swapchain = swapchain;
+    state.generation = generation;
 }
 
 /// The native frame's source identity once its required markers were all observed.

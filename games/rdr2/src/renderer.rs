@@ -53,8 +53,6 @@ static IMAGE: AtomicUsize = AtomicUsize::new(0);
 static HOST: HostCell = HostCell::new();
 static ORIGINAL_EVALUATE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static ORIGINAL_POP: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
-static ORIGINAL_EXECUTE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
-static ORIGINAL_PRESENT: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static ORIGINAL_FSR: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static ORIGINAL_FSR_CREATE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 /// ffxFsr2ContextDispatch inside the game's own ffx_fsr2_api_x64.dll. Detouring the export reaches
@@ -68,20 +66,68 @@ static REFUSAL: AtomicU32 = AtomicU32::new(u32::MAX);
 /// The game's DIRECT queue and actual swapchain. Each holds one reference and points at a cloned
 /// table whose entries call into this module, so a live observer pins the plugin; process teardown
 /// owns them until an explicit queue-drain/unhook protocol exists.
+struct Observer {
+    active: usize,
+    observed: bool,
+    originals: BTreeMap<usize, usize>,
+}
+
+impl Observer {
+    const fn new() -> Self {
+        Self {
+            active: 0,
+            observed: false,
+            originals: BTreeMap::new(),
+        }
+    }
+
+    fn select(&mut self, candidate: usize, attach: impl FnOnce(*mut *mut c_void) -> bool) -> bool {
+        let previous = self.active;
+        let mut original = ptr::null_mut();
+        self.active = if candidate == 0 {
+            0
+        } else if self.originals.contains_key(&candidate) {
+            candidate
+        } else if attach(&mut original) {
+            self.originals.insert(candidate, original as usize);
+            candidate
+        } else {
+            0
+        };
+        previous != self.active
+    }
+}
+
 struct Observers {
-    queue: usize,
-    swapchain: usize,
+    queue: Observer,
+    swapchain: Observer,
+    generation: u32,
+}
+
+impl Observers {
+    fn changed(&mut self) {
+        self.generation = self.generation.wrapping_add(1).max(1);
+        self.queue.observed = false;
+        self.swapchain.observed = false;
+        scene::set_swapchain(self.swapchain.active, self.generation);
+    }
+
+    fn ready(&self) -> bool {
+        self.queue.observed && self.swapchain.observed
+    }
 }
 
 static OBSERVERS: Mutex<Observers> = Mutex::new(Observers {
-    queue: 0,
-    swapchain: 0,
+    queue: Observer::new(),
+    swapchain: Observer::new(),
+    generation: 0,
 });
 
 #[derive(Clone, Copy)]
 pub(crate) struct History {
     pub(crate) frame: u64,
     pub(crate) jitter: [f32; 2],
+    generation: u32,
     pub(crate) native_gap: bool,
     pub(crate) native_result: u32,
 }
@@ -91,6 +137,7 @@ impl Default for History {
         Self {
             frame: 0,
             jitter: [0.0; 2],
+            generation: 0,
             native_gap: false,
             native_result: u32::MAX,
         }
@@ -258,16 +305,19 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
             "RDR2 SR native fallback: nonzero input/output subrect origin.",
         );
     }
-    {
+    let active_swapchain = ctx.platform.read_pointer(ctx.image.wrapping_add(SWAPCHAIN));
+    let generation = {
         let observers = lock(&OBSERVERS);
-        if observers.queue == 0 || observers.swapchain == 0 {
-            return refusal(
-                host,
-                RSF_GAME_RENDER_FEEDBACK_PRESENT_UNAVAILABLE,
-                "RDR2 SR native fallback: game queue/Present observers not attached yet.",
-            );
-        }
-    }
+        (active_swapchain == Some(observers.swapchain.active) && observers.ready())
+            .then_some(observers.generation)
+    };
+    let Some(generation) = generation else {
+        return refusal(
+            host,
+            RSF_GAME_RENDER_FEEDBACK_PRESENT_UNAVAILABLE,
+            "RDR2 SR native fallback: current game queue/Present pair has not been observed.",
+        );
+    };
     let mut camera = [0u8; view::BYTES];
     let Some((view_address, frame, dt)) = sample(ctx, request.flags, &mut camera) else {
         return refusal(
@@ -288,7 +338,8 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
             "RDR2 SR native fallback: output format/extent unsupported.",
         );
     }
-    let reset = d.reset != 0 || history.frame.wrapping_add(1) != frame;
+    let reset =
+        d.reset != 0 || history.generation != generation || history.frame.wrapping_add(1) != frame;
     let input = CameraInputs {
         render_width: d.width,
         render_height: d.height,
@@ -311,7 +362,7 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
     // Source identity comes from observed native input/simulation/render markers. Actual Present
     // still requires the later scene/resource match on the submission thread.
     let source = scene::source(frame);
-    let pass = sr_pass(
+    let mut pass = sr_pass(
         host,
         request,
         d,
@@ -319,6 +370,7 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
         &decoded,
         (view_address, frame, reset, source),
     );
+    pass.resource_generation = generation;
     let resources = [d.color, d.depth, d.motion, d.output, d.exposure];
     let before = request.engine_states.unwrap_or(DLSS_STATES);
     transition(
@@ -337,6 +389,7 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
         &before,
     );
     history.frame = frame;
+    history.generation = generation;
     history.jitter = d.jitter;
     host.feedback(
         if accepted {
@@ -602,84 +655,96 @@ unsafe extern "C" fn fsr_create(context_pointer: *mut c_void, description: *cons
 
 unsafe extern "system" fn execute(owner: *mut c_void, count: u32, lists: *const *mut c_void) {
     let _callback = Scope::enter(&CALLBACKS);
+    let (original, generation, active) = {
+        let observers = lock(&OBSERVERS);
+        (
+            observers.queue.originals.get(&(owner as usize)).copied(),
+            observers.generation,
+            observers.queue.active == owner as usize,
+        )
+    };
+    let Some(original) = original else { return };
+    let native = unsafe { std::mem::transmute::<usize, ExecuteFn>(original) };
     let id = NEXT_SUBMISSION
         .fetch_add(1, Ordering::SeqCst)
         .wrapping_add(1);
-    let host = HOST.get();
-    let submit = host.and_then(|host| host.0.submit.map(|submit| (host.0.user, submit)));
+    let submit = HOST
+        .get()
+        .and_then(|host| host.0.submit.map(|submit| (host.0.user, submit)));
     if let Some((user, submit)) = submit {
         unsafe { submit(user, owner, id, count, lists, 1) };
     }
-    if let Some(native) = unsafe { trampoline::<ExecuteFn>(&ORIGINAL_EXECUTE) } {
-        unsafe { native(owner, count, lists) };
-    }
+    unsafe { native(owner, count, lists) };
     if let Some((user, submit)) = submit {
         unsafe { submit(user, owner, id, count, lists, 0) };
+    }
+    if active && count != 0 && !lists.is_null() {
+        let mut observers = lock(&OBSERVERS);
+        if observers.generation == generation {
+            observers.queue.observed = true;
+        }
     }
 }
 
 unsafe extern "system" fn present(owner: *mut c_void, interval: u32, flags: u32) -> i32 {
     let _callback = Scope::enter(&CALLBACKS);
-    let host = HOST.get();
-    let report = host.and_then(|host| host.0.present.map(|present| (host.0.user, present)));
+    let (original, generation, active) = {
+        let observers = lock(&OBSERVERS);
+        (
+            observers
+                .swapchain
+                .originals
+                .get(&(owner as usize))
+                .copied(),
+            observers.generation,
+            observers.swapchain.active == owner as usize,
+        )
+    };
+    let Some(original) = original else {
+        return NO_TRAMPOLINE;
+    };
+    let native = unsafe { std::mem::transmute::<usize, PresentFn>(original) };
+    let report = HOST
+        .get()
+        .filter(|_| active)
+        .and_then(|host| host.0.present.map(|present| (host.0.user, present)));
     if let Some((user, present)) = report {
         unsafe { present(user, owner, interval, flags, 1) };
     }
-    let receipt =
-        platform::get().and_then(|platform| scene::before_present(platform, owner, flags));
-    let result = match unsafe { trampoline::<PresentFn>(&ORIGINAL_PRESENT) } {
-        Some(native) => unsafe { native(owner, interval, flags) },
-        None => NO_TRAMPOLINE,
+    let receipt = platform::get()
+        .filter(|_| active)
+        .and_then(|platform| scene::before_present(platform, owner, flags));
+    let result = unsafe { native(owner, interval, flags) };
+    let observed = {
+        let mut observers = lock(&OBSERVERS);
+        let observed = observers.generation == generation && receipt.is_some() && result == 0;
+        observers.swapchain.observed |= observed;
+        observed
     };
-    scene::after_present(receipt, result);
+    if active {
+        scene::after_present(receipt.filter(|_| observed), result);
+    }
     if let Some((user, present)) = report {
         unsafe { present(user, owner, interval, flags, 0) };
     }
     result
 }
 
-fn attach_queue(platform: &Platform, host: &Host, candidate: usize) {
+fn select_observers(platform: &Platform, host: &Host, queue: usize, swapchain: usize) {
     let mut observers = lock(&OBSERVERS);
-    if candidate == 0 || observers.queue != 0 {
-        return;
-    }
-    // The leaf clones this actual queue's existing table. Its original Execute entry includes any
-    // existing wrapper/RTSS chain; no module-wide D3D12 or overlay function is patched.
-    let attached = unsafe {
-        (platform.attach_queue)(
-            candidate as *mut c_void,
-            execute as *const c_void,
-            ORIGINAL_EXECUTE.as_ptr(),
-        )
-    };
-    if attached {
-        observers.queue = candidate;
-        host.log("RDR2 native DIRECT queue submission observer attached; existing Execute chain preserved.");
-    }
-}
-
-fn attach_present(platform: &Platform, host: &Host, image: usize) {
-    let mut observers = lock(&OBSERVERS);
-    if observers.swapchain != 0 {
-        return;
-    }
-    let Some(candidate) = platform.read_pointer(image.wrapping_add(SWAPCHAIN)) else {
-        return;
-    };
-    if candidate == 0 {
-        return;
-    }
-    let attached = unsafe {
-        (platform.attach_present)(
-            candidate as *mut c_void,
-            present as *const c_void,
-            ORIGINAL_PRESENT.as_ptr(),
-        )
-    };
-    if attached {
-        observers.swapchain = candidate;
-        scene::set_swapchain(candidate);
-        host.log("RDR2 actual swapchain Present observer attached; existing Steam/RTSS Present chain preserved.");
+    let queue_changed = observers.queue.select(queue, |original| unsafe {
+        (platform.attach_queue)(queue as *mut c_void, execute as *const c_void, original)
+    });
+    let swapchain_changed = observers.swapchain.select(swapchain, |original| unsafe {
+        (platform.attach_present)(swapchain as *mut c_void, present as *const c_void, original)
+    });
+    if queue_changed || swapchain_changed {
+        observers.changed();
+        let generation = observers.generation;
+        let queue = observers.queue.active;
+        let swapchain = observers.swapchain.active;
+        drop(observers);
+        host.log(&format!("RDR2 queue/Present observer pair changed: generation={generation} queue={queue:016X} swapchain={swapchain:016X}."));
     }
 }
 
@@ -701,10 +766,12 @@ unsafe extern "C" fn rsf_rdr2_pop_detour(
         && ACTIVE.load(Ordering::SeqCst)
         && let Some(ctx) = platform::get().and_then(context)
     {
-        if let Some(candidate) = ctx.platform.read_pointer(record as usize) {
-            attach_queue(ctx.platform, &ctx.host, candidate);
-        }
-        attach_present(ctx.platform, &ctx.host, image);
+        let queue = ctx.platform.read_pointer(record as usize).unwrap_or(0);
+        let swapchain = ctx
+            .platform
+            .read_pointer(image.wrapping_add(SWAPCHAIN))
+            .unwrap_or(0);
+        select_observers(ctx.platform, &ctx.host, queue, swapchain);
     }
     result
 }
@@ -882,7 +949,7 @@ pub(crate) fn stop() -> i32 {
     {
         // A live observer table pins the module; process teardown owns it.
         let observers = lock(&OBSERVERS);
-        if observers.queue != 0 || observers.swapchain != 0 {
+        if !observers.queue.originals.is_empty() || !observers.swapchain.originals.is_empty() {
             return BUSY;
         }
     }
