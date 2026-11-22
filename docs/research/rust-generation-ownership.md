@@ -70,9 +70,12 @@ bridge DXGI adapter discovery, Streamline and presentation callbacks.
   identity checks alongside the separate C11 import fixture.
 - tests/fg_session.cpp retains the public ABI session host and provider mocks and
   adds refusals before and after Prepare.
-- tests/fg_leases_faults.cpp retains the C COM fake vtables and adds terminal
-  teardown coverage without making the removed fence complete.
-- tests/fg_leases.cpp retains real D3D12 queue and fence retirement.
+- tests/fg_leases_faults.cpp and tests/fg_leases.cpp moved to
+  tests/generation/src/leases.rs. The synthetic COM objects use slots derived
+  from the Windows bindings and cover removal on either fence, successful
+  collection of a different slot, and terminal teardown while removal persists.
+  The WARP case keeps the device-unavailable skip, real resource retention and
+  independent CPU-signaled queue and provider fences.
 - tests/fg_provider.cpp and tests/fg_switching.cpp retain native provider,
   swap-chain, device and window paths.
 

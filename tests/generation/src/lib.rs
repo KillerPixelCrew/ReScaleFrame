@@ -6,4 +6,6 @@ mod assembly;
 #[cfg(windows)]
 mod choice;
 #[cfg(windows)]
+mod leases;
+#[cfg(windows)]
 mod policy;

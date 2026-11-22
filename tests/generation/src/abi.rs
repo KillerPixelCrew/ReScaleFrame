@@ -16,6 +16,24 @@ pub const RSF_DLSS_ABI_VERSION: u32 = 5;
 pub const RSF_FRAME_ASSEMBLY_ABI_VERSION: u32 = 1;
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_fg_retirement {
+    pub struct_size: u32,
+    pub fence: *mut ::core::ffi::c_void,
+    pub value: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_retirement"][::core::mem::size_of::<rsf_fg_retirement>() - 24usize];
+    ["Alignment of rsf_fg_retirement"][::core::mem::align_of::<rsf_fg_retirement>() - 8usize];
+    ["Offset of field: rsf_fg_retirement::struct_size"]
+        [::core::mem::offset_of!(rsf_fg_retirement, struct_size) - 0usize];
+    ["Offset of field: rsf_fg_retirement::fence"]
+        [::core::mem::offset_of!(rsf_fg_retirement, fence) - 8usize];
+    ["Offset of field: rsf_fg_retirement::value"]
+        [::core::mem::offset_of!(rsf_fg_retirement, value) - 16usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_fg_choice {
     pub backend: u32,
     pub choices: u32,

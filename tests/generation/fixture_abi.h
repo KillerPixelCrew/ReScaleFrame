@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include <rescaleframe/fg_choice.h>
+#include <rescaleframe/fg_leases.h>
 #include <rescaleframe/sr_session.h>
 #include <rescaleframe/frame_assembly.h>
 

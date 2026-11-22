@@ -483,6 +483,7 @@ dependencies = [
 name = "rsf-generation-fixtures"
 version = "0.1.2"
 dependencies = [
+ "windows",
  "windows-sys",
 ]
 

@@ -526,13 +526,15 @@ target_link_libraries(rsf_fg_provider_test PRIVATE rsf_orchestrator rsf_build_op
 add_test(NAME fg_provider COMMAND rsf_fg_provider_test)
 set_tests_properties(fg_provider PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_fg_leases_test fg_leases.cpp)
-target_link_libraries(rsf_fg_leases_test PRIVATE rsf_orchestrator rsf_build_options)
+add_executable(rsf_fg_leases_test generation/main.c)
+target_compile_definitions(rsf_fg_leases_test PRIVATE RSF_GENERATION_FIXTURE=rsf_test_fg_leases)
+target_link_libraries(rsf_fg_leases_test PRIVATE rsf_generation_fixtures_rust rsf_orchestrator rsf_build_options)
 add_test(NAME fg_leases COMMAND rsf_fg_leases_test)
 set_tests_properties(fg_leases PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_fg_leases_faults_test fg_leases_faults.cpp)
-target_link_libraries(rsf_fg_leases_faults_test PRIVATE rsf_orchestrator rsf_build_options)
+add_executable(rsf_fg_leases_faults_test generation/main.c)
+target_compile_definitions(rsf_fg_leases_faults_test PRIVATE RSF_GENERATION_FIXTURE=rsf_test_fg_leases_faults)
+target_link_libraries(rsf_fg_leases_faults_test PRIVATE rsf_generation_fixtures_rust rsf_orchestrator rsf_build_options)
 add_test(NAME fg_leases_faults COMMAND rsf_fg_leases_faults_test)
 
 add_library(rsf_fg_c_header OBJECT fg_c_header.c)

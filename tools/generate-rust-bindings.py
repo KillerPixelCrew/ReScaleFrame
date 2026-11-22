@@ -660,7 +660,7 @@ generate("runtime/orchestrator/src/native_fg_cpu_abi.rs", "runtime/orchestrator/
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
 
 generate("tests/generation/src/abi.rs", "tests/generation/fixture_abi.h",
-         "rsf_(fg_choice|pipeline_camera_frame|frame_resources|dlss_frame|dlss_quality)",
+         "rsf_(fg_choice|fg_retirement|pipeline_camera_frame|frame_resources|dlss_frame|dlss_quality)",
          "RSF_(FG_BACKEND_(ALL|AUTO|DLSS|FSR3|XESS)|SR_(NONE|DLSS|FSR3|FSR4|XESS)|"
          "FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|TEST_DLSS_.*)",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
