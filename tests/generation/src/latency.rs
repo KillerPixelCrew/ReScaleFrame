@@ -54,6 +54,15 @@ fn check(result: i32) -> Result<(), i32> {
     if result == OK { Ok(()) } else { Err(1) }
 }
 
+// The RSF_LATENCY_* values of rescaleframe/game_frame.h (casts in macros, which bindgen skips).
+const LATENCY_SIMULATION_START: i32 = 0;
+const LATENCY_SIMULATION_END: i32 = 1;
+const LATENCY_RENDER_SUBMIT_START: i32 = 2;
+const LATENCY_RENDER_SUBMIT_END: i32 = 3;
+const LATENCY_PRESENT_START: i32 = 4;
+const LATENCY_PRESENT_END: i32 = 5;
+const LATENCY_INPUT_SAMPLE: i32 = 6;
+
 fn marker(host: Raw, id: u64, marker: i32, controller: u32) -> Result<(), i32> {
     check(unsafe { rsf_streamline_host_marker(host, id, marker as u32, controller) })
 }

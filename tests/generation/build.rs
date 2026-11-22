@@ -5,7 +5,6 @@ fn bindings() {
         "fixture_abi.h",
         "session_abi.h",
         "dll_abi.h",
-        "latency_abi.h",
     ]
     .map(|header| format!("tests/generation/{header}"));
     let headers: Vec<&str> = headers.iter().map(String::as_str).collect();
