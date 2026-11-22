@@ -425,6 +425,8 @@ pub(crate) unsafe fn rsf_sharpenvk_host_retire(host: &mut Host, commands: *mut c
     unsafe { rsf_core_sharpenvk_retire(host.owner.cast(), commands) };
 }
 
+// Read by the sharpening fixtures.
+#[cfg(feature = "test-fixtures")]
 pub(crate) unsafe fn rsf_sharpenvk_host_dispatches(host: &Host) -> u64 {
     unsafe { rsf_core_sharpenvk_dispatches(host.owner.cast()) }
 }

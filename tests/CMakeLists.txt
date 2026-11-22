@@ -1100,7 +1100,7 @@ endif()
 # These executables call the fixture exports of the Rust orchestrator, which only the test-fixtures archive carries
 # (runtime/orchestrator/CMakeLists.txt).
 foreach(rsf_fixture_target
-        rsf_ui_layer rsf_fullscreen_pass rsf_native_reinsert rsf_depth_scale rsf_auxiliary_sr rsf_sampler_bias
+        rsf_fullscreen_pass rsf_native_reinsert rsf_depth_scale rsf_auxiliary_sr rsf_sampler_bias
         rsf_resource_roles rsf_motion_decode rsf_d3d11_state rsf_motion_resolve_test rsf_colour_transport_test
         rsf_sharpening_test rsf_sharpening_d3d12_test rsf_sharpening_vulkan_test rsf_sharpening_vulkan_cpu_test
         rsf_sharpening_settings_test rsf_exposure_normalization_test rsf_native_vulkan_test rsf_dlss_backend
