@@ -3,11 +3,11 @@
 //! Present thread. Published settings and the last sampled frame can be read by any thread.
 use crate::sharpening_policy;
 use crate::{
-    cpu_abi::rsf_native_input_receipts,
     fg_status,
-    native_cpu::rsf_native_input_receipts_get,
     overlay_abi::*,
-    overlay_settings::{apply_settings_intent, fill_sharpening_stats, settings_changed, sr_name},
+    overlay_settings::{
+        apply_settings_intent, fill_latency_stats, fill_sharpening_stats, settings_changed, sr_name,
+    },
     present_rates::Rates,
     render_abi::{
         RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
@@ -922,30 +922,11 @@ impl State {
 }
 
 fn sample_latency(stats: &mut rsf_overlay_stats) {
-    let mut latency = rsf_native_latency_status {
-        struct_size: abi_size::<rsf_native_latency_status>(),
-        version: 1,
-        ..Default::default()
-    };
-    if unsafe { (platform().latency_status_get.unwrap())(&mut latency) } != 0 {
-        stats.pcl_available = latency.pcl_available;
-    }
-    let mut receipts: rsf_native_input_receipts = unsafe { std::mem::zeroed() };
-    receipts.struct_size = abi_size::<rsf_native_input_receipts>();
-    receipts.version = 1;
-    if unsafe { rsf_native_input_receipts_get(&mut receipts) } != 0 {
-        stats.input_receipts = receipts.input_kinds;
-    }
-    let mut routes = rsf_native_input_routes {
-        struct_size: abi_size::<rsf_native_input_routes>(),
-        version: 1,
-        ..Default::default()
-    };
-    if unsafe { (platform().input_routes_get.unwrap())(&mut routes) } != 0 {
-        stats.pcl_routed = routes.routed;
-        stats.pcl_failed = routes.failed;
-        stats.pcl_unmatched = routes.unmatched;
-    }
+    fill_latency_stats(
+        stats,
+        platform().latency_status_get.unwrap(),
+        platform().input_routes_get.unwrap(),
+    );
     let mut ticks = 0;
     let mut frequency = 0;
     unsafe {
@@ -1092,11 +1073,8 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
     }
 }
 
-type DrawBound = unsafe extern "C" fn(
-    *mut c_void,
-    *const rsf_overlay_stats,
-    *mut rsf_overlay_intent,
-) -> i32;
+type DrawBound =
+    unsafe extern "C" fn(*mut c_void, *const rsf_overlay_stats, *mut rsf_overlay_intent) -> i32;
 type FgStatusGet = unsafe extern "C" fn(*mut FgStatus) -> i32;
 
 #[unsafe(no_mangle)]
@@ -1108,9 +1086,13 @@ unsafe extern "C" fn rsf_core_overlay_present_bound(
     user: *mut c_void,
 ) -> i32 {
     unsafe {
-        present_inner(chain, input_window, null_mut(), Some(status_get), |stats, intent| {
-            draw(user, stats, intent)
-        })
+        present_inner(
+            chain,
+            input_window,
+            null_mut(),
+            Some(status_get),
+            |stats, intent| draw(user, stats, intent),
+        )
     }
 }
 
@@ -1139,7 +1121,11 @@ unsafe fn present_inner(
     if chain_window.is_null() || config.deferred == input_window.is_null() {
         return INVALID_ARGUMENT;
     }
-    let window = if input_window.is_null() { chain_window } else { input_window };
+    let window = if input_window.is_null() {
+        chain_window
+    } else {
+        input_window
+    };
     if config
         .callbacks
         .accept

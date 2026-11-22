@@ -1542,7 +1542,7 @@ unsafe extern "C" fn rsf_core_native_latency_window_bind(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_input_routes_get(out: *mut Routes) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_core_native_input_routes_get(out: *mut Routes) -> i32 {
     if !unsafe { has_capacity(out) } || unsafe { (*out).version } != 1 {
         return 0;
     }

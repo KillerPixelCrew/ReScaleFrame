@@ -27,6 +27,7 @@
 #include <rescaleframe/input_dump.h>
 #include <rescaleframe/fg_choice.h>
 #include <rescaleframe/overlay_fg_stats.h>
+#include "../../../runtime/orchestrator/src/sharpening_overlay.h"
 #include <rescaleframe/overlay_api.h>
 #include <rescaleframe/ac7_ui_rules.h>
 #include <rescaleframe/fullscreen_pass.h>
@@ -2813,19 +2814,7 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->quality = (rsf_overlay_quality)bridge.quality;
     stats->dlss_preset = (uint32_t)bridge.dlss_preset;
     stats->dlss_preset_available = 1;
-    stats->sharpening_available = 1;
-    stats->sharpening_mode = bridge.sharpening.mode;
-    stats->sharpening_sharpness = bridge.sharpening.sharpness;
-    stats->sharpening_mas = bridge.sharpening.mas;
-    stats->sharpening_motion_sharpness = bridge.sharpening.motion_sharpness;
-    stats->sharpening_motion_threshold = bridge.sharpening.motion_threshold;
-    stats->sharpening_motion_scale_limit = bridge.sharpening.motion_scale_limit;
-    stats->sharpening_contrast_enabled = bridge.sharpening.contrast_enabled;
-    stats->sharpening_contrast = bridge.sharpening.contrast;
-    stats->sharpening_depth_scale = bridge.sharpening.depth_scale;
-    stats->sharpening_depth_bias = bridge.sharpening.depth_bias;
-    stats->sharpening_clamp_output = bridge.sharpening.clamp_output;
-    stats->sharpening_debug = bridge.sharpening.debug;
+    rsf_overlay_fill_sharpening_stats(stats, &bridge.sharpening);
 
     if (rsf_bridge_native_owned()) {
         rsf_game_render_config config = {0}; config.struct_size = sizeof(config);
@@ -3080,19 +3069,7 @@ static void overlay_tick(void* swapchain)
         }
     }
     if (intent.sharpening_changed) {
-        rsf_sharpening_options options = rsf_sharpening_defaults();
-        options.mode = intent.sharpening_mode;
-        options.sharpness = intent.sharpening_sharpness;
-        options.mas = intent.sharpening_mas;
-        options.motion_sharpness = intent.sharpening_motion_sharpness;
-        options.motion_threshold = intent.sharpening_motion_threshold;
-        options.motion_scale_limit = intent.sharpening_motion_scale_limit;
-        options.contrast_enabled = intent.sharpening_contrast_enabled;
-        options.contrast = intent.sharpening_contrast;
-        options.depth_scale = intent.sharpening_depth_scale;
-        options.depth_bias = intent.sharpening_depth_bias;
-        options.clamp_output = intent.sharpening_clamp_output;
-        options.debug = intent.sharpening_debug;
+        rsf_sharpening_options options = rsf_overlay_requested_sharpening(&intent);
         rsf_bridge_select_sharpening(&options);
     }
     if (intent.dlss_preset_changed) rsf_bridge_select_dlss_preset(intent.dlss_preset);

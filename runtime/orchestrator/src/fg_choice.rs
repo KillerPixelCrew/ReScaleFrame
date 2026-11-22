@@ -112,7 +112,7 @@ extern "C" fn rsf_fg_choice_save(backend: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fg_choice_get() -> Choice {
+pub(crate) extern "C" fn rsf_fg_choice_get() -> Choice {
     SETTINGS.lock().unwrap().choice
 }
 
