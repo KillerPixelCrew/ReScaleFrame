@@ -8,7 +8,7 @@ if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 if(NOT MSVC)
-    # mingw would otherwise emit libReScaleFrame.Bootstrap.dll. Windows DLL names are exact, and
+    # mingw would otherwise emit libdinput8.dll. Windows DLL names are exact, and
     # a forwarder has to match the name the game imports, so the cross build keeps MSVC's naming.
     set(CMAKE_SHARED_LIBRARY_PREFIX "")
     set(CMAKE_SHARED_MODULE_PREFIX "")
@@ -93,7 +93,6 @@ add_subdirectory(games/unity-mono)
 add_subdirectory(integrations/unity)
 add_subdirectory(integrations/godot)
 add_subdirectory(games/minecraft)
-add_subdirectory(apps/launcher)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()

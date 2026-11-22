@@ -552,9 +552,6 @@ if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
     add_test(NAME dlss_sr_layout COMMAND rsf_dlss_sr_layout)
 endif()
 
-add_test(NAME launcher_version COMMAND rsf_launcher --version)
-set_tests_properties(launcher_version PROPERTIES PASS_REGULAR_EXPRESSION "ReScaleFrame ${PROJECT_VERSION}")
-
 add_executable(rsf_sr_bridge_test sr_bridge_main.c)
 target_link_libraries(rsf_sr_bridge_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME sr_bridge COMMAND rsf_sr_bridge_test)

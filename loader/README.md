@@ -1,6 +1,7 @@
 # Loader and research proxy
 
-`rsf_bootstrap` exports a version only; product launching and frontend IPC remain pending.
+Product launching and frontend IPC remain pending (the version-only bootstrap DLL and launcher
+scaffolds were removed; Git history keeps them).
 Current game loading uses the AC7 DirectInput carrier and shared Unity version shim. Runtime-owned
 plugin preparation/start/quiesce/stop and renderer/CPU callbacks are implemented. The published
 v0.1.0 AC7 ZIP is SR-only; FG/Reflex below describe current source/development deployments.

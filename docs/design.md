@@ -10,7 +10,6 @@ recorded acceptance from plans and the published SR-only AC7 package.
 | Component | Owns |
 | --- | --- |
 | Launcher or WSGM, planned | Game selection, profile storage, early loading, session lifetime |
-| Bootstrap, currently version-only | Intended general runtime-loading entry point |
 | Current carriers | AC7 DirectInput entry and Unity version shim; runtime/plugin loading |
 | Orchestrator | Plugin lifecycle, vendor SDKs, resources, settings, latency and presentation |
 | Game plugin | Build recognition, engine hooks, frame data and SR reinsertion |
