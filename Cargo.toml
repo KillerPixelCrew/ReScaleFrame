@@ -49,3 +49,5 @@ egui = "=0.35.0"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+# runtime/vulkan/fsr3/build.ps1 builds the VulkanStory forwarding DLL with --cfg vulkanstory_compat.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(vulkanstory_compat)'] }
