@@ -3,9 +3,12 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 type wchar_t = u16;
-use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config_fn, rsf_game_render_pass, rsf_game_render_pass_fn};
 use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_abi::rsf_fg12_setup;
+use rsf_game_sys::{
+    rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config_fn, rsf_game_render_pass,
+    rsf_game_render_pass_fn,
+};
 
 pub const RSF_FG_OFF: u32 = 0;
 pub const RSF_FG_STAT_TOTAL_PRESENTED: u32 = 1;
