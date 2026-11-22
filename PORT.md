@@ -755,16 +755,16 @@ Port colour transport, depth and motion processing and the fullscreen effects, w
 
 - Shader inputs, formats and compilation interfaces ([G05](#g05), [G06](#g06)).
 
-**Port files (25)**
+**Port files (26)**
 
-- [ ] [runtime/graphics/include/rescaleframe/colour_fidelity.h](runtime/graphics/include/rescaleframe/colour_fidelity.h)
-- [ ] [runtime/graphics/include/rescaleframe/colour_transport.h](runtime/graphics/include/rescaleframe/colour_transport.h)
-- [ ] [runtime/graphics/include/rescaleframe/depth_replay.h](runtime/graphics/include/rescaleframe/depth_replay.h)
-- [ ] [runtime/graphics/include/rescaleframe/depth_scale.h](runtime/graphics/include/rescaleframe/depth_scale.h)
-- [ ] [runtime/graphics/include/rescaleframe/fullscreen_pass.h](runtime/graphics/include/rescaleframe/fullscreen_pass.h)
-- [ ] [runtime/graphics/include/rescaleframe/motion_decode.h](runtime/graphics/include/rescaleframe/motion_decode.h)
-- [ ] [runtime/graphics/include/rescaleframe/motion_resolve.h](runtime/graphics/include/rescaleframe/motion_resolve.h)
-- [ ] [runtime/graphics/include/rescaleframe/present_blit.h](runtime/graphics/include/rescaleframe/present_blit.h)
+- [x] [runtime/graphics/include/rescaleframe/colour_fidelity.h](runtime/graphics/include/rescaleframe/colour_fidelity.h)
+- [x] [runtime/graphics/include/rescaleframe/colour_transport.h](runtime/graphics/include/rescaleframe/colour_transport.h)
+- [x] [runtime/graphics/include/rescaleframe/depth_replay.h](runtime/graphics/include/rescaleframe/depth_replay.h)
+- [x] [runtime/graphics/include/rescaleframe/depth_scale.h](runtime/graphics/include/rescaleframe/depth_scale.h)
+- [x] [runtime/graphics/include/rescaleframe/fullscreen_pass.h](runtime/graphics/include/rescaleframe/fullscreen_pass.h)
+- [x] [runtime/graphics/include/rescaleframe/motion_decode.h](runtime/graphics/include/rescaleframe/motion_decode.h)
+- [x] [runtime/graphics/include/rescaleframe/motion_resolve.h](runtime/graphics/include/rescaleframe/motion_resolve.h)
+- [x] [runtime/graphics/include/rescaleframe/present_blit.h](runtime/graphics/include/rescaleframe/present_blit.h)
 - [x] [runtime/graphics/src/colour_d3d11_platform.h](runtime/graphics/src/colour_d3d11_platform.h)
 - [x] [runtime/graphics/src/colour_fidelity.cpp](runtime/graphics/src/colour_fidelity.cpp)
 - [x] [runtime/graphics/src/colour_transport.cpp](runtime/graphics/src/colour_transport.cpp)
@@ -781,7 +781,8 @@ Port colour transport, depth and motion processing and the fullscreen effects, w
 - [x] [runtime/graphics/src/motion_resolve_platform.h](runtime/graphics/src/motion_resolve_platform.h)
 - [x] [runtime/graphics/src/present_blit.cpp](runtime/graphics/src/present_blit.cpp)
 - [x] [runtime/orchestrator/src/motion_convention.h](runtime/orchestrator/src/motion_convention.h)
-- [ ] [tools/exposure-probe.cpp](tools/exposure-probe.cpp)
+- [ ] [tools/exposure_probe/ngx.cpp](tools/exposure_probe/ngx.cpp) (pinned NGX virtual-parameter calls)
+- [x] [tools/exposure-probe.cpp](tools/exposure-probe.cpp)
 
 **Fixtures (6)**
 
@@ -869,7 +870,7 @@ Port shader patch sessions, compiler interfaces and the cache with their CPU and
 **Port files (5)**
 
 - [ ] [runtime/graphics/include/rescaleframe/shader_compile.h](runtime/graphics/include/rescaleframe/shader_compile.h)
-- [ ] [runtime/shader_patch/include/rescaleframe/shader_patch.h](runtime/shader_patch/include/rescaleframe/shader_patch.h)
+- [x] [runtime/shader_patch/include/rescaleframe/shader_patch.h](runtime/shader_patch/include/rescaleframe/shader_patch.h)
 - [x] [runtime/shader_patch/src/export.cpp](runtime/shader_patch/src/export.cpp)
 - [x] [runtime/shader_patch/src/platform.cpp](runtime/shader_patch/src/platform.cpp)
 - [x] [runtime/shader_patch/src/platform.h](runtime/shader_patch/src/platform.h)
@@ -967,7 +968,7 @@ Port host setup, output admission and reduced-frame handling through the shared 
 - [ ] [runtime/orchestrator/src/d3d11_host.cpp](runtime/orchestrator/src/d3d11_host.cpp)
 - [ ] [runtime/orchestrator/src/d3d11_host_platform.h](runtime/orchestrator/src/d3d11_host_platform.h)
 - [x] [runtime/orchestrator/src/d3d11_output_platform.cpp](runtime/orchestrator/src/d3d11_output_platform.cpp)
-- [ ] [runtime/orchestrator/src/d3d11_output_platform.h](runtime/orchestrator/src/d3d11_output_platform.h)
+- [x] [runtime/orchestrator/src/d3d11_output_platform.h](runtime/orchestrator/src/d3d11_output_platform.h)
 
 **Fixtures (3)**
 
@@ -1052,13 +1053,13 @@ Port generic SR setup, legacy bridging and auxiliary reconstruction. Trace the p
 - [x] [runtime/orchestrator/include/rescaleframe/sr_session.h](runtime/orchestrator/include/rescaleframe/sr_session.h)
 - [x] [runtime/orchestrator/src/auxiliary_sr.cpp](runtime/orchestrator/src/auxiliary_sr.cpp)
 - [x] [runtime/orchestrator/src/auxiliary_sr.h](runtime/orchestrator/src/auxiliary_sr.h)
-- [ ] [runtime/orchestrator/src/auxiliary_sr_platform.h](runtime/orchestrator/src/auxiliary_sr_platform.h)
+- [x] [runtime/orchestrator/src/auxiliary_sr_platform.h](runtime/orchestrator/src/auxiliary_sr_platform.h)
 - [x] [runtime/orchestrator/src/d3d11_sr_api.cpp](runtime/orchestrator/src/d3d11_sr_api.cpp)
 - [ ] [runtime/orchestrator/src/native_sr.cpp](runtime/orchestrator/src/native_sr.cpp)
 - [ ] [runtime/orchestrator/src/native_sr_completion.h](runtime/orchestrator/src/native_sr_completion.h)
 - [x] [runtime/orchestrator/src/sr_bridge_platform.cpp](runtime/orchestrator/src/sr_bridge_platform.cpp)
 - [x] [runtime/orchestrator/src/sr_legacy_adapter.cpp](runtime/orchestrator/src/sr_legacy_adapter.cpp)
-- [ ] [runtime/orchestrator/src/sr_legacy_adapter.h](runtime/orchestrator/src/sr_legacy_adapter.h)
+- [x] [runtime/orchestrator/src/sr_legacy_adapter.h](runtime/orchestrator/src/sr_legacy_adapter.h)
 - [x] [runtime/orchestrator/src/sr_session_backends.cpp](runtime/orchestrator/src/sr_session_backends.cpp)
 
 **Fixtures (4)**
@@ -1982,7 +1983,7 @@ Port geometry admission, observation and retirement together with their contract
 - [ ] [games/anomaly/src/geometry_feed.cpp](games/anomaly/src/geometry_feed.cpp)
 - [ ] [games/anomaly/src/geometry_feed.h](games/anomaly/src/geometry_feed.h)
 - [ ] [games/anomaly/src/geometry_profile.h](games/anomaly/src/geometry_profile.h)
-- [ ] [games/anomaly/src/geometry_registry_platform.h](games/anomaly/src/geometry_registry_platform.h)
+- [x] [games/anomaly/src/geometry_registry_platform.h](games/anomaly/src/geometry_registry_platform.h)
 - [ ] [games/anomaly/src/geometry_retirement.h](games/anomaly/src/geometry_retirement.h)
 - [ ] [games/anomaly/src/native_geometry.cpp](games/anomaly/src/native_geometry.cpp)
 - [ ] [games/anomaly/src/native_geometry.h](games/anomaly/src/native_geometry.h)
@@ -2429,7 +2430,7 @@ Port ASI startup, attach, settings and Runtime session workers with their input 
 - [x] [games/rdr2/src/engine_settings_policy.h](games/rdr2/src/engine_settings_policy.h)
 - [x] [games/rdr2/src/native_settings.cpp](games/rdr2/src/native_settings.cpp)
 - [x] [games/rdr2/src/native_settings.h](games/rdr2/src/native_settings.h)
-- [ ] [games/rdr2/src/runtime_setup.h](games/rdr2/src/runtime_setup.h)
+- [x] [games/rdr2/src/runtime_setup.h](games/rdr2/src/runtime_setup.h)
 - [x] [games/rdr2/src/runtime_worker_native.h](games/rdr2/src/runtime_worker_native.h)
 
 **Fixtures (1)**
@@ -2629,12 +2630,12 @@ Port camera and render inputs, presentation, resolution, sampling and auxiliary 
 - [x] [games/skyrim-se/src/auxiliary.cpp](games/skyrim-se/src/auxiliary.cpp)
 - [x] [games/skyrim-se/src/auxiliary.h](games/skyrim-se/src/auxiliary.h)
 - [x] [games/skyrim-se/src/camera.h](games/skyrim-se/src/camera.h)
-- [ ] [games/skyrim-se/src/postprocess_platform.h](games/skyrim-se/src/postprocess_platform.h)
+- [x] [games/skyrim-se/src/postprocess_platform.h](games/skyrim-se/src/postprocess_platform.h)
 - [x] [games/skyrim-se/src/presentation_inputs.cpp](games/skyrim-se/src/presentation_inputs.cpp)
 - [x] [games/skyrim-se/src/presentation_inputs.h](games/skyrim-se/src/presentation_inputs.h)
 - [x] [games/skyrim-se/src/render_inputs.cpp](games/skyrim-se/src/render_inputs.cpp)
 - [x] [games/skyrim-se/src/render_inputs.h](games/skyrim-se/src/render_inputs.h)
-- [ ] [games/skyrim-se/src/render_observer_platform.h](games/skyrim-se/src/render_observer_platform.h)
+- [x] [games/skyrim-se/src/render_observer_platform.h](games/skyrim-se/src/render_observer_platform.h)
 - [x] [games/skyrim-se/src/resolution.cpp](games/skyrim-se/src/resolution.cpp)
 - [x] [games/skyrim-se/src/resolution.h](games/skyrim-se/src/resolution.h)
 - [x] [games/skyrim-se/src/sampling.cpp](games/skyrim-se/src/sampling.cpp)
