@@ -224,8 +224,9 @@ add_executable(rsf_ac7_session ac7_session.cpp ../loader/proxy/src/preferences.c
 target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7SceneColor rsf_build_options)
 add_test(NAME ac7_session COMMAND rsf_ac7_session)
 
-add_executable(rsf_constant_override constant_override.cpp)
-target_link_libraries(rsf_constant_override PRIVATE ReScaleFrame::Graphics rsf_build_options d3dcompiler)
+include(g02/fixture.cmake)
+rsf_add_g02_fixture(rsf_constant_override constant_override.rs)
+target_link_libraries(rsf_constant_override PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options d3dcompiler)
 add_test(NAME constant_override COMMAND rsf_constant_override)
 set_tests_properties(constant_override PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
@@ -341,7 +342,6 @@ target_link_libraries(rsf_d3d11_state PRIVATE ReScaleFrame::Graphics rsf_build_o
 add_test(NAME d3d11_state COMMAND rsf_d3d11_state)
 set_tests_properties(d3d11_state PROPERTIES TIMEOUT 120)
 
-include(g02/fixture.cmake)
 rsf_add_g02_fixture(rsf_scene_promote scene_promote.rs)
 target_link_libraries(rsf_scene_promote PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME scene_promote COMMAND rsf_scene_promote)
