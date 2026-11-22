@@ -1131,6 +1131,7 @@ fn the_overlay_reports_host_state_and_persists_panel_intent() {
         ]
     );
     assert_eq!(files.integer("OverlayLayout"), 0x55);
+    assert_eq!(files.integer("FrameLimitUs"), 8000);
     let stats = window(&host, queue, None);
     assert_eq!(
         (stats.show_performance_hud, stats.ui_preferences),

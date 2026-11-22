@@ -910,7 +910,10 @@ static void start_generation(void)
     /* A limit on rendered frames, applied before generation. FPS wins over the interval form. */
     {
         const DWORD limit_fps = read_number("RSF_FRAME_LIMIT_FPS", 0);
-        options.frame_limit_us = limit_fps ? (1000000u + limit_fps / 2u) / limit_fps : read_number("RSF_REFLEX_LIMIT_US", 0);
+        const DWORD fallback_limit = limit_fps ?
+            (1000000u + limit_fps / 2u) / limit_fps : read_number("RSF_REFLEX_LIMIT_US", 0);
+        options.frame_limit_us = rsf_settings_store_read_integer(
+            preference_path, L"Rendering", "FrameLimitUs", fallback_limit);
     }
     options.debug = read_number("RSF_FG_DEBUG", 0);
     rsf_native_fg_options_set(&options);
@@ -940,8 +943,12 @@ static void start_generation(void)
     note("frame generation: cold startup requested, backend=%lu mode=%lu generated=%lu Reflex=%lu directory=%s (%s)",
         (unsigned long)backend, (unsigned long)options.mode, (unsigned long)options.generated_frames, (unsigned long)options.reflex_mode,
         directory, setup.development_runtime ? "development" : "production");
-    note("frame limit before generation: %lu us between rendered frames (0 is unlimited)",
-        (unsigned long)options.frame_limit_us);
+    if (options.frame_limit_us == RSF_OVERLAY_FRAME_LIMIT_VRR) {
+        note("frame limit: VRR policy");
+    } else {
+        note("frame limit before generation: %lu us between rendered frames (0 is unlimited)",
+            (unsigned long)options.frame_limit_us);
+    }
     note("Latency pacing, input markers and Present ordering are owned by the core orchestrator.");
 }
 
@@ -1485,6 +1492,12 @@ static void action_save_enabled(unsigned long enabled)
     save_preferences();
 }
 
+static int action_save_frame_limit(uint32_t interval_or_policy)
+{
+    return rsf_settings_store_write_integer(
+        preference_path, L"Rendering", "FrameLimitUs", interval_or_policy) == RSF_OK;
+}
+
 static void action_maintain_renderer(void)
 {
     static ULONGLONG last_check;
@@ -1520,6 +1533,7 @@ static void register_overlay_actions(void)
     actions.maintain_renderer = action_maintain_renderer;
     actions.read_host_options = read_startup_options;
     actions.save_host_option = save_startup_option;
+    actions.save_frame_limit = action_save_frame_limit;
     preferred_enabled = read_number("RSF_DLSS_ENABLE", 1) != 0;
     rsf_dlss_pipeline_set_colour_correction(read_number("RSF_DLSS_COLOUR_CORRECTION", 0) != 0);
     rsf_dlss_pipeline_set_colour_transport(read_number("RSF_DLSS_TONEMAP", 1) != 0);

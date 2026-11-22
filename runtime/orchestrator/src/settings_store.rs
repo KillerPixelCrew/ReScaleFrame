@@ -613,7 +613,7 @@ unsafe extern "C" fn rsf_core_adapter_setting_write_bool(
 
 /// Reads a numeric adapter setting from its own INI section.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_settings_store_read_integer(
+pub(crate) unsafe extern "C" fn rsf_settings_store_read_integer(
     ini: PCWSTR,
     section: PCWSTR,
     key: *const c_char,
@@ -632,7 +632,7 @@ unsafe extern "C" fn rsf_settings_store_read_integer(
 
 /// Saves a numeric adapter setting using the shared profile write lock.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_settings_store_write_integer(
+pub(crate) unsafe extern "C" fn rsf_settings_store_write_integer(
     ini: PCWSTR,
     section: PCWSTR,
     key: *const c_char,

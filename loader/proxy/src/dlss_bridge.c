@@ -2999,7 +2999,13 @@ static void overlay_tick(void* swapchain)
         if (rsf_native_fg_status_get(&current)) {
             if (intent.fg_changed) { current.requested.mode = intent.fg_mode; current.requested.generated_frames = intent.fg_generated; }
             if (intent.reflex_changed) current.requested.reflex_mode = intent.reflex_mode;
-            if (intent.frame_limit_changed) current.requested.frame_limit_us = intent.frame_limit_us;
+            if (intent.frame_limit_changed) {
+                if (bridge.actions.save_frame_limit && !bridge.actions.save_frame_limit(intent.frame_limit_us)) {
+                    say("settings: could not save the frame limit; keeping the active limit");
+                } else {
+                    current.requested.frame_limit_us = intent.frame_limit_us;
+                }
+            }
             rsf_native_fg_options_set(&current.requested);
             say("FG selection: requested mode=%u generated=%u Reflex=%u frame limit=%u us", current.requested.mode,
                 current.requested.generated_frames, current.requested.reflex_mode, current.requested.frame_limit_us);

@@ -193,6 +193,7 @@ typedef struct rsf_bridge_actions {
     void (*maintain_renderer)(void);
     uint32_t (*read_host_options)(struct rsf_overlay_host_option* options, uint32_t capacity);
     int (*save_host_option)(uint32_t index, int32_t value);
+    int (*save_frame_limit)(uint32_t interval_or_policy);
 } rsf_bridge_actions;
 
 void rsf_bridge_set_actions(const rsf_bridge_actions* actions);

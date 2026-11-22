@@ -165,6 +165,7 @@ struct State {
     requested_generation: Option<u32>,
     enabled: bool,
     show_performance: bool,
+    loaded_frame_limit: bool,
     // Panel layout word, saved in the preferences file under its own key.
     ui_preferences: u32,
     automatic: bool,
@@ -457,6 +458,21 @@ impl Host {
             ..unsafe { std::mem::zeroed() }
         };
         let have_fg = unsafe { (p.fg_status)(&mut fg) } != 0;
+        if have_fg && !s.loaded_frame_limit {
+            s.loaded_frame_limit = true;
+            let limit = unsafe {
+                crate::settings_store::rsf_settings_store_read_integer(
+                    self.preferences.as_ptr(),
+                    SECTION,
+                    c"FrameLimitUs".as_ptr(),
+                    fg.requested.frame_limit_us,
+                )
+            };
+            if limit != fg.requested.frame_limit_us {
+                fg.requested.frame_limit_us = limit;
+                unsafe { (p.fg_options)(&fg.requested) };
+            }
+        }
         unsafe { (p.overlay_fill_fg)(&mut stats, if have_fg { &fg } else { null() }) };
         // The saved choice stays on the old provider until the switch lands, so show the target.
         if s.save_pending {
@@ -511,7 +527,19 @@ impl Host {
                 fg.reflex_mode = intent.reflex_mode;
             }
             if intent.frame_limit_changed != 0 {
-                fg.frame_limit_us = intent.frame_limit_us;
+                let saved = unsafe {
+                    crate::settings_store::rsf_settings_store_write_integer(
+                        self.preferences.as_ptr(),
+                        SECTION,
+                        c"FrameLimitUs".as_ptr(),
+                        intent.frame_limit_us,
+                    )
+                };
+                if saved == OK {
+                    fg.frame_limit_us = intent.frame_limit_us;
+                } else {
+                    self.log("Could not save the frame limit; keeping the active limit.");
+                }
             }
             unsafe { (p.fg_options)(fg) };
         }
@@ -969,6 +997,7 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
             requested_generation: None,
             enabled: true,
             show_performance: false,
+            loaded_frame_limit: false,
             ui_preferences,
             automatic,
             last_result: 0,
