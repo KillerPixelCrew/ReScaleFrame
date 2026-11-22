@@ -20,6 +20,14 @@ jobs:
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: rustup show
+      # build.rs generates the C bindings with bindgen, which loads libclang (docs/tooling.md).
+      - name: Install pinned LLVM for bindgen
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'LLVM-22.1.8-win64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-win64.exe' -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList '/S', "/D=$env:RUNNER_TEMP\llvm" -Wait
+          "LIBCLANG_PATH=$env:RUNNER_TEMP\llvm\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Verify native and Rust components
         shell: pwsh
         run: ./eng/verify.ps1 -Configuration Release
