@@ -2795,7 +2795,7 @@ Port the plugin, Runtime setup and configuration from managed entry through sess
 - [x] [games/unity-mono/src/plugin.cpp](games/unity-mono/src/plugin.cpp)
 - [x] [games/unity-mono/src/plugin_platform.h](games/unity-mono/src/plugin_platform.h)
 - [x] [games/unity-mono/src/runtime_host.cpp](games/unity-mono/src/runtime_host.cpp)
-- [ ] [games/unity-mono/src/runtime_graphics.cpp](games/unity-mono/src/runtime_graphics.cpp) (retained typed graphics leaves)
+- [x] [games/unity-mono/src/runtime_graphics.cpp](games/unity-mono/src/runtime_graphics.cpp)
 - [x] [games/unity-mono/src/runtime_platform.h](games/unity-mono/src/runtime_platform.h)
 
 **Fixtures (2)**

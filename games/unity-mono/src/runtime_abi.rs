@@ -19,6 +19,7 @@ pub const RSF_FG_BACKEND_AUTO: u32 = 7;
 pub const RSF_FG_BACKEND_ALL: u32 = 58;
 pub const RSF_FG_FIXED: u32 = 1;
 pub const RSF_REFLEX_OFF: u32 = 0;
+pub const RSF_DLSS_PRESET_MASK: u32 = 15457;
 pub type wchar_t = ::core::ffi::c_ushort;
 pub type rsf_backend_result = i32;
 pub type rsf_backend_log_fn = ::core::option::Option<

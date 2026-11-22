@@ -3,9 +3,9 @@
 //! owned executable identity and adapter callbacks to the Runtime already loaded by the carrier.
 use crate::generation::{self, RSF_DLSS_ENGINE_UNITY, Sources};
 use crate::runtime_abi::{
-    RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR2,
-    RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL, RSF_SR_XESS, rsf_backend_result, rsf_fg_choice,
-    rsf_fg12_setup, rsf_native_fg_options,
+    RSF_DLSS_PRESET_MASK, RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO,
+    RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL, RSF_SR_XESS,
+    rsf_backend_result, rsf_fg_choice, rsf_fg12_setup, rsf_native_fg_options,
 };
 use crate::runtime_config::{
     Ini, PATH_CAPACITY, file_name, path_setting, preferences_path, profile_int, setting,
@@ -28,6 +28,7 @@ use std::ptr::null_mut;
 use std::sync::{Mutex, PoisonError};
 use std::thread::sleep;
 use std::time::Instant;
+use windows::Win32::Graphics::Direct3D12::{D3D12GetDebugInterface, ID3D12Debug};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowThreadProcessId};
@@ -83,8 +84,6 @@ unsafe extern "C" {
     fn rsf_callback_host_stop() -> u32;
     fn rsf_unity_set_engine_spatial(spatial: u32, quality: u32) -> c_int;
     fn rsf_unity_mono_drained_generation(generation: *mut u32) -> c_int;
-    fn rsf_unity_mono_graphics_debug();
-    fn rsf_unity_mono_dlss_preset_valid(preset: u32) -> c_int;
     fn rsf_overlay_saved_options_register(
         scope: *mut c_void,
         setup: *const saved_abi::rsf_overlay_saved_setup,
@@ -233,7 +232,12 @@ fn fg_start(ini: *const u16) -> u32 {
     let backend = fg_choice_start(&ini);
     *LOG_PATH.lock().unwrap_or_else(PoisonError::into_inner) = path_setting(&ini, w!("Log"));
     if setting(&ini, w!("GraphicsDebug"), 0) != 0 {
-        unsafe { rsf_unity_mono_graphics_debug() };
+        let mut debug: Option<ID3D12Debug> = None;
+        if unsafe { D3D12GetDebugInterface(&mut debug) }.is_ok()
+            && let Some(debug) = debug
+        {
+            unsafe { debug.EnableDebugLayer() };
+        }
     }
     let generated_frames = setting(&ini, w!("GeneratedFrames"), 1);
     if generated_frames == 0 || generated_frames > MAX_GENERATED_FRAMES {
@@ -347,7 +351,7 @@ fn sr_start(ini: *const u16, identity: &mut Option<Fingerprint>) -> u32 {
         setting(&ini, w!("DlssPreset"), 0),
         preferences.as_ptr(),
     );
-    if unsafe { rsf_unity_mono_dlss_preset_valid(dlss_preset) } == 0 {
+    if dlss_preset > 13 || RSF_DLSS_PRESET_MASK & (1 << dlss_preset) == 0 {
         dlss_preset = 0;
     }
     let setup = rsf_callback_host_setup_v2 {

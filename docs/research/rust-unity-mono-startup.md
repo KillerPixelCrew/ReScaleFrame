@@ -29,3 +29,8 @@ points. Regenerated the two changed binding modules with bindgen 0.72.1 and used
 Rust 1.94.1 formatting on the changed Rust files. Cargo metadata and
 `git diff --check` passed. Builds, fixtures, lint and device execution are pending
 user verification.
+
+The Mono startup now enables the optional D3D12 debug layer through typed
+Rust bindings. DLSS preset admission uses the mask generated from the same
+C header. The former native graphics file is removed and the D3D12 import
+link stays in place. Binding regeneration and source checks passed.

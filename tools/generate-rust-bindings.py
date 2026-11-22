@@ -455,9 +455,10 @@ generate("games/unity-mono/src/vulkan_handles.rs", "games/unity-mono/src/vulkan_
          ["--no-recursive-allowlist"])
 generate("games/unity-mono/src/runtime_abi.rs", "runtime/orchestrator/include/rescaleframe/native_fg_d3d12.h",
          "rsf_(fg12_setup|fg_choice|native_fg_options|backend_result|backend_log_fn)|wchar_t",
-         "RSF_(FG_BACKEND_(DLSS|FSR3|FSR4|XESS|AUTO|ALL)|FG_FIXED|REFLEX_OFF|UI_MODE_BACKBUFFER_HUDLESS|"
+         "RSF_(DLSS_PRESET_MASK|FG_BACKEND_(DLSS|FSR3|FSR4|XESS|AUTO|ALL)|FG_FIXED|REFLEX_OFF|UI_MODE_BACKBUFFER_HUDLESS|"
          "SR_(DLSS|FSR2|FSR3|FSR4|XESS|SPATIAL|AUTO))",
-         ["-include", "rescaleframe/sr_session.h", "-include", "rescaleframe/fg_choice.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+         ["-include", "rescaleframe/sr_session.h", "-include", "rescaleframe/fg_choice.h",
+          "-include", "rescaleframe/dlss_preset.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
           "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]"])
