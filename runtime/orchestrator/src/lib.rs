@@ -179,8 +179,6 @@ mod frame_capture_vk;
 mod frame_limit;
 mod frame_sequencer;
 #[cfg(windows)]
-use rsf_graphics::frame_tap;
-#[cfg(windows)]
 mod fsr4_fg_bridge;
 #[cfg(windows)]
 mod fullscreen_pass;
@@ -252,8 +250,6 @@ mod render_host_methods;
 mod render_host_native;
 #[cfg(windows)]
 mod render_links;
-#[cfg(windows)]
-use rsf_graphics::resource_roles;
 #[cfg(windows)]
 mod sampler_bias;
 #[cfg(windows)]

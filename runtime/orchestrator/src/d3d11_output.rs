@@ -4,11 +4,8 @@ use crate::fullscreen_pass::{
     COPY, COPY_RGBA, rsf_fullscreen_pass_create, rsf_fullscreen_pass_destroy,
     rsf_fullscreen_pass_draw,
 };
+use crate::sys::rsf_fullscreen_pass;
 use crate::sys::{RSF_FULLSCREEN_PASS_ABI_VERSION, rsf_fullscreen_draw, rsf_fullscreen_setup};
-use crate::sys::{
-    rsf_d3d11_output_child_device, rsf_d3d11_output_texture_desc, rsf_d3d11_state,
-    rsf_d3d11_texture_desc, rsf_fullscreen_pass,
-};
 use std::ffi::c_void;
 use std::ptr;
 use std::ptr::NonNull;

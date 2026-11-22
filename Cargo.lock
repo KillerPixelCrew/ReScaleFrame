@@ -560,8 +560,12 @@ dependencies = [
 name = "rsf-ac7"
 version = "0.1.2"
 dependencies = [
+ "cc",
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-graphics",
+ "rsf-minhook-sys",
+ "rsf-shader-compiler",
  "windows",
 ]
 
@@ -570,6 +574,9 @@ name = "rsf-ac7-capture-fixture"
 version = "0.1.2"
 dependencies = [
  "rsf-ac7",
+ "rsf-orchestrator",
+ "rsf-runtime-common",
+ "rsf-shader-compiler",
  "windows",
 ]
 
@@ -616,8 +623,12 @@ dependencies = [
 name = "rsf-fallout4"
 version = "0.1.2"
 dependencies = [
+ "cc",
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-minhook-sys",
+ "rsf-runtime-common",
+ "rsf-steam",
  "windows",
  "windows-sys",
 ]
@@ -675,6 +686,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-graphics"
+version = "0.1.2"
+dependencies = [
+ "cc",
+ "rsf-bindgen",
+ "rsf-game-sys",
+ "windows",
+ "windows-sys",
+]
+
+[[package]]
 name = "rsf-loader"
 version = "0.1.2"
 dependencies = [
@@ -705,6 +727,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-minhook-sys"
+version = "0.1.2"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "rsf-orchestrator"
 version = "0.1.2"
 dependencies = [
@@ -713,6 +742,9 @@ dependencies = [
  "rsf-bindgen",
  "rsf-fsr4-compat",
  "rsf-game-sys",
+ "rsf-graphics",
+ "rsf-minhook-sys",
+ "rsf-runtime-common",
  "rsf-runtime-submission",
  "rsf-shader-compiler",
  "rsf-streamline-vk",
@@ -798,8 +830,10 @@ dependencies = [
 name = "rsf-skyrim-se"
 version = "0.1.2"
 dependencies = [
+ "cc",
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-steam",
  "rsf-windows",
  "winapi",
  "windows-sys",
@@ -809,6 +843,7 @@ dependencies = [
 name = "rsf-steam"
 version = "0.1.2"
 dependencies = [
+ "cc",
  "rsf-game-sys",
  "rsf-windows",
  "windows-sys",
@@ -839,6 +874,8 @@ dependencies = [
  "ash",
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-orchestrator",
+ "rsf-runtime-common",
  "rsf-runtime-submission",
  "rsf-windows",
  "windows",
@@ -869,6 +906,7 @@ name = "rsf-windows"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "rsf-minhook-sys",
  "windows-sys",
 ]
 

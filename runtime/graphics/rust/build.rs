@@ -14,7 +14,9 @@ fn bindings() {
         ],
         &[],
         &[],
-    );
+    )
+    // The public srv_format.h declares it too; rsf-game-sys binds that one.
+    .blocklist_function("rsf_d3d11_output_srv_format");
     rsf_bindgen::write(builder, "sys.rs");
 }
 
