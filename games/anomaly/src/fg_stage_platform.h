@@ -6,13 +6,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-typedef struct rsf_anomaly_fg_status {
-    bool installed, owner;
-    uint32_t backend, choices, requested_mode, effective_mode, generated, reason;
-    uint64_t source_frames, level_frames, eligible_at_ui_boundary, fed, presented, unpresented, runtime_tagged,
-        vendor_presented, captures;
-} rsf_anomaly_fg_status;
-
 #ifdef __cplusplus
 typedef struct IDXGISwapChain rsf_anomaly_fg_swap_chain;
 #else

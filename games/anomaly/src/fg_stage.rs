@@ -31,7 +31,6 @@ use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerf
 
 type Raw = *mut c_void;
 type Pass = rsf_game_render_pass;
-type Status = rsf_anomaly_fg_status;
 type Platform = rsf_anomaly_fg_platform;
 #[derive(Clone, Copy)]
 pub(crate) struct Frontend {
@@ -360,7 +359,6 @@ struct Stage {
     frequency: u64,
     facade: AtomicPtr<c_void>,
     engine: Mutex<Engine>,
-    status: Mutex<Status>,
 }
 
 // SAFETY: COM access and native engine reads run on the serialized render thread.
@@ -391,7 +389,6 @@ impl Stage {
                 frequency: frequency as u64,
                 facade: AtomicPtr::new(ptr::null_mut()),
                 engine: Mutex::new(engine),
-                status: Mutex::new(Status::default()),
             })
             .is_err()
         {
@@ -459,7 +456,6 @@ impl Stage {
             "Anomaly FG: presentation bridge installed at cold start, before device creation. FG={} backend={backend} generated={} Latency={} FrameLimitUs={} scope_hold={}.",
             frontend.enabled, frontend.generated, frontend.latency, frontend.frame_limit_us, options.scope_hold
         ));
-        self.publish();
         true
     }
 
@@ -616,40 +612,6 @@ impl Stage {
             ..Default::default()
         };
         (unsafe { (self.tables.fg.status)(&mut runtime) } != 0).then_some(runtime)
-    }
-
-    fn publish(&self) {
-        let runtime = self.runtime_status();
-        let counts = self.engine.lock().unwrap().policy.counters();
-        let captures = self.options.capture.lock().unwrap().total;
-        let present = self.tables.present;
-        let (owner, backend, choices) = unsafe {
-            (
-                (present.has_owner)() != 0,
-                (present.backend)(),
-                (present.backend_choices)(),
-            )
-        };
-        let mut status = self.status.lock().unwrap();
-        status.installed = true;
-        status.owner = owner;
-        status.backend = backend;
-        status.choices = choices;
-        if let Some(runtime) = runtime {
-            status.requested_mode = runtime.requested.mode;
-            status.effective_mode = runtime.vendor.effective_mode;
-            status.generated = runtime.vendor.effective_generated_frames;
-            status.reason = runtime.reason;
-            status.runtime_tagged = runtime.tagged_frames;
-            status.vendor_presented = runtime.vendor.total_presented;
-        }
-        status.source_frames = counts.source_frames;
-        status.level_frames = counts.level_frames;
-        status.eligible_at_ui_boundary = counts.eligible_at_ui_boundary;
-        status.fed = counts.fed;
-        status.presented = counts.presented;
-        status.unpresented = counts.unpresented;
-        status.captures = captures;
     }
 }
 
@@ -1084,7 +1046,6 @@ extern "C" fn rsf_anomaly_fg_stage_end_after() {
             engine.camera_fed = engine.render.camera;
         }
     }
-    stage.publish();
     stage.engine.lock().unwrap().phase = Phase::Idle;
 }
 
@@ -1172,7 +1133,35 @@ pub(crate) extern "C" fn report(emit: rsf_game_log_fn, user: Raw) {
     ));
 }
 
+/// The adapter's frame counters as the tests and the device fixture judge them; each reads its own subset.
+#[cfg(any(test, feature = "fg-fixture"))]
+#[derive(Default)]
+#[allow(dead_code)]
+struct Status {
+    source_frames: u64,
+    level_frames: u64,
+    eligible_at_ui_boundary: u64,
+    fed: u64,
+    presented: u64,
+    unpresented: u64,
+    runtime_tagged: u64,
+    captures: u64,
+}
+
 #[cfg(any(test, feature = "fg-fixture"))]
 fn stage_status() -> Status {
-    installed().map_or_else(Status::default, |stage| *stage.status.lock().unwrap())
+    let Some(stage) = installed() else {
+        return Status::default();
+    };
+    let counts = stage.engine.lock().unwrap().policy.counters();
+    Status {
+        source_frames: counts.source_frames,
+        level_frames: counts.level_frames,
+        eligible_at_ui_boundary: counts.eligible_at_ui_boundary,
+        fed: counts.fed,
+        presented: counts.presented,
+        unpresented: counts.unpresented,
+        runtime_tagged: stage.runtime_status().map_or(0, |runtime| runtime.tagged_frames),
+        captures: stage.options.capture.lock().unwrap().total,
+    }
 }
