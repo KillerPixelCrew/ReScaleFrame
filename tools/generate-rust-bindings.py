@@ -592,8 +592,8 @@ generate("runtime/orchestrator/src/vulkan_dlss_sr_abi.rs", "runtime/orchestrator
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_image;",
           "--raw-line", "use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};",
-          "--raw-line", "use crate::vulkan_streamline_camera::{rsf_slvk_sdk_constants, rsf_slvk_sdk_header};",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup, rsf_vk_function};",
+          "--raw-line", "use crate::vulkan_streamline_camera::{rsf_slvk_sdk_constants, rsf_slvk_sdk_header};",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
 generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/rescaleframe/native_cpu.h",
          "rsf_native_(cpu_(frame|counters|reservation|reservation_counters)|input_receipts)",
