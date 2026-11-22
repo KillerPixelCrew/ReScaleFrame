@@ -27,7 +27,6 @@ int32_t rsf_core_srvk_spatial_fallback(Lookup, const rsf_srvk_fallback*);
 #include <ffx_api/ffx_upscale.h>
 #include <ffx_api/vk/ffx_api_vk.h>
 #include <rescaleframe/input_dump.h>
-#include <rescaleframe/capture_names.h>
 
 extern "C" const rsf_vkfg_platform rsf_core_vkfg_platform;
 
@@ -161,8 +160,8 @@ static_assert(FFX_API_RESOURCE_TYPE_TEXTURE2D == 2 && FFX_API_RESOURCE_USAGE_REA
     FFX_API_RESOURCE_STATE_UNORDERED_ACCESS == 2 && FFX_API_RESOURCE_STATE_COMPUTE_READ == 4);
 
 extern "C" {
-void rsf_core_srvk_ffx_create_desc(const rsf_srvk_setup*, uint32_t, PFN_vkGetDeviceProcAddr,
-    ffxApiHeader*, ffxCreateBackendVKDesc*, ffxCreateContextDescUpscale*);
+void rsf_core_srvk_ffx_create_desc(const rsf_srvk_setup*, uint32_t, ffxApiHeader*,
+    ffxCreateBackendVKDesc*, ffxCreateContextDescUpscale*);
 void rsf_core_srvk_ffx_plan_desc(const rsf_srvk_setup*, uint32_t*, uint32_t*, PlanDesc*);
 void rsf_core_srvk_ffx_dispatch_desc(void*, const FfxDispatch*, DispatchDesc*);
 }
@@ -182,9 +181,6 @@ static_assert(RSF_SHARPENING_VENDOR == 4);
 // rsf::vkfg::platform leaves sharingMode and initialLayout zero; the former FFX leaf requested the same values.
 static_assert(VK_SHARING_MODE_EXCLUSIVE == 0 && VK_IMAGE_LAYOUT_UNDEFINED == 0);
 
-extern "C" rsf_vk_function rsf_core_srvk_dispatch_lookup(void*, const char*,
-    int32_t (*)(rsf_vk_get_proc, void*, const char*, rsf_vk_function*));
-
 int32_t call_device_proc(rsf_vk_get_proc proc, void* device, const char* name, rsf_vk_function* result) noexcept try
 {
     *result = proc(device, name);
@@ -192,61 +188,39 @@ int32_t call_device_proc(rsf_vk_get_proc proc, void* device, const char* name, r
 }
 catch (...) { return 0; }
 
-PFN_vkVoidFunction VKAPI_PTR sdk_device_proc(VkDevice device, const char* name) noexcept
-{
-    return reinterpret_cast<PFN_vkVoidFunction>(rsf_core_srvk_dispatch_lookup(device, name, call_device_proc));
-}
-
-struct Graphics;
-extern "C" {
-Graphics* rsf_core_srvk_graphics_create(const rsf_srvk_setup*, const FfxDeviceEntries*, rsf_vk_function);
-void rsf_core_srvk_graphics_destroy(Graphics*);
-void* rsf_core_srvk_graphics_images(Graphics*);
-uint32_t rsf_core_srvk_graphics_memory_count(const Graphics*);
-void rsf_core_srvk_graphics_barrier(const Graphics*, void*, const rsf_vkfg_barrier*);
-void rsf_core_srvk_graphics_clear(const Graphics*, void*, uint64_t, uint32_t);
-void rsf_core_srvk_graphics_copy(const Graphics*, void*, const rsf_vkfg_image_copy*);
-int32_t rsf_core_srvk_graphics_sharpen(Graphics*, const rsf_srvk_setup*, void*, const rsf_srvk_frame*, uint64_t);
-void rsf_core_srvk_graphics_clear_sharpen(Graphics*);
-void rsf_core_srvk_graphics_capture_provider(const Graphics*, uint64_t, uint32_t);
-void rsf_core_srvk_graphics_capture_record(const Graphics*, void*, const rsf_srvk_image*, const rsf_frame_record*, const char*, uint32_t);
-int32_t rsf_core_srvk_graphics_capture_wants(const Graphics*, uint64_t);
-void rsf_core_srvk_graphics_retire(Graphics*, void*);
-void rsf_core_srvk_graphics_flush(const Graphics*);
-}
-
-struct FfxNative {
-    rsf_vkffx_exports sdk;
-    ffxContext effect = nullptr;
-    Graphics* graphics = nullptr;
-    ~FfxNative() { rsf_core_srvk_graphics_destroy(graphics); }
+struct Sdk {
+    rsf_vkffx_exports exports;
+    ffxContext effect;
 };
+static_assert(sizeof(Sdk) == 40 && alignof(Sdk) == 8 && offsetof(Sdk, effect) == 32);
+static_assert(sizeof(rsf_vkffx_exports) == 32 && offsetof(rsf_vkffx_exports, create) == 0 &&
+    offsetof(rsf_vkffx_exports, destroy) == 8 && offsetof(rsf_vkffx_exports, query) == 16 &&
+    offsetof(rsf_vkffx_exports, dispatch) == 24);
 
-FfxNative* allocate(const rsf_srvk_setup*) noexcept try
-{
-    return new FfxNative{};
+extern "C" {
+FfxNative* rsf_core_srvk_native_allocate(const rsf_srvk_setup*);
+void rsf_core_srvk_native_close(FfxNative*);
+void rsf_core_srvk_native_bind(FfxNative*, const FfxExports*);
+Sdk* rsf_core_srvk_native_sdk(FfxNative*);
+int32_t rsf_core_srvk_graphics_initialize(FfxNative*, const rsf_srvk_setup*, const FfxDeviceEntries*, rsf_vk_function);
+void* rsf_core_srvk_graphics_images(FfxNative*);
+uint32_t rsf_core_srvk_graphics_memory_count(FfxNative*);
+void rsf_core_srvk_graphics_barrier(FfxNative*, void*, const rsf_vkfg_barrier*);
+void rsf_core_srvk_graphics_clear(FfxNative*, void*, uint64_t, uint32_t);
+void rsf_core_srvk_graphics_copy(FfxNative*, void*, const rsf_vkfg_image_copy*);
+int32_t rsf_core_srvk_graphics_sharpen(FfxNative*, const rsf_srvk_setup*, void*, const rsf_srvk_frame*, uint64_t);
+void rsf_core_srvk_graphics_clear_sharpen(FfxNative*);
+void rsf_core_srvk_graphics_capture_provider(FfxNative*, uint64_t, uint32_t);
+void rsf_core_srvk_graphics_capture_record(FfxNative*, void*, const rsf_srvk_image*, const rsf_frame_record*, const char*, uint32_t);
+int32_t rsf_core_srvk_graphics_capture_wants(FfxNative*, uint64_t);
+void rsf_core_srvk_graphics_capture_parameters(const rsf_srvk_frame*, uint32_t, uint32_t);
+void rsf_core_srvk_graphics_retire(FfxNative*, void*);
+void rsf_core_srvk_graphics_flush(FfxNative*);
 }
-catch (...) { return nullptr; }
-
-void bind_sdk(FfxNative* native, const FfxExports* exports) noexcept
-{
-    const auto& [create, destroy, query, dispatch] = *exports;
-    native->sdk.create = reinterpret_cast<PfnFfxCreateContext>(create);
-    native->sdk.destroy = reinterpret_cast<PfnFfxDestroyContext>(destroy);
-    native->sdk.query = reinterpret_cast<PfnFfxQuery>(query);
-    native->sdk.dispatch = reinterpret_cast<PfnFfxDispatch>(dispatch);
-}
-
-int32_t initialize_graphics(FfxNative* native, const rsf_srvk_setup* setup,
-    const FfxDeviceEntries* entries, rsf_vk_function memory_properties) noexcept try
-{
-    native->graphics = rsf_core_srvk_graphics_create(setup, entries, memory_properties);
-    return native->graphics ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
-}
-catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 int32_t versions(FfxNative* native, Version* out, uint64_t* count) noexcept try
 {
+    auto& sdk = *rsf_core_srvk_native_sdk(native);
     uint64_t ids[max_versions]{};
     const char* names[max_versions]{};
     *count = max_versions;
@@ -256,7 +230,7 @@ int32_t versions(FfxNative* native, Version* out, uint64_t* count) noexcept try
     query.outputCount = count;
     query.versionIds = ids;
     query.versionNames = names;
-    if (native->sdk.query(nullptr, &query.header) != FFX_API_RETURN_OK || *count > max_versions)
+    if (sdk.exports.query(nullptr, &query.header) != FFX_API_RETURN_OK || *count > max_versions)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     for (uint64_t index = 0; index < *count; ++index) {
         (void)rsf_fsr4_parse_version(ids[index], names[index], &out[index]);
@@ -267,22 +241,24 @@ catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 int32_t create_effect(FfxNative* native, const rsf_srvk_setup* setup, uint64_t id, uint32_t flags) noexcept try
 {
+    auto& sdk = *rsf_core_srvk_native_sdk(native);
     ffxOverrideVersion version{};
     version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
     version.versionId = id;
     ffxCreateBackendVKDesc backend{};
     ffxCreateContextDescUpscale create{};
-    rsf_core_srvk_ffx_create_desc(setup, flags, sdk_device_proc, &version.header, &backend, &create);
-    return native->sdk.create(&native->effect, &create.header, nullptr) == FFX_API_RETURN_OK
+    rsf_core_srvk_ffx_create_desc(setup, flags, &version.header, &backend, &create);
+    return sdk.exports.create(&sdk.effect, &create.header, nullptr) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 int32_t effective_version(FfxNative* native, uint64_t* out) noexcept try
 {
+    auto& sdk = *rsf_core_srvk_native_sdk(native);
     ffxQueryGetProviderVersion query{};
     query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-    if (native->sdk.query(&native->effect, &query.header) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if (sdk.exports.query(&sdk.effect, &query.header) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     *out = query.versionId;
     return RSF_BACKEND_OK;
 }
@@ -290,27 +266,30 @@ catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 int32_t destroy_effect(FfxNative* native) noexcept try
 {
-    if (!native->effect) return RSF_BACKEND_OK;
-    if (native->sdk.destroy(&native->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    native->effect = nullptr;
+    auto& sdk = *rsf_core_srvk_native_sdk(native);
+    if (!sdk.effect) return RSF_BACKEND_OK;
+    if (sdk.exports.destroy(&sdk.effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    sdk.effect = nullptr;
     return RSF_BACKEND_OK;
 }
 catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 int32_t plan(FfxNative* native, const rsf_srvk_setup* setup, uint32_t* width, uint32_t* height) noexcept try
 {
+    auto& sdk = *rsf_core_srvk_native_sdk(native);
     PlanDesc query{};
     rsf_core_srvk_ffx_plan_desc(setup, width, height, &query);
-    return native->sdk.query(&native->effect, &query.header) == FFX_API_RETURN_OK
+    return sdk.exports.query(&sdk.effect, &query.header) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_SUPPORTED;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 int32_t dispatch(FfxNative* native, void* commands, const FfxDispatch* call) noexcept try
 {
+    auto& sdk = *rsf_core_srvk_native_sdk(native);
     DispatchDesc data{};
     rsf_core_srvk_ffx_dispatch_desc(commands, call, &data);
-    return native->sdk.dispatch(&native->effect, &data.header) == FFX_API_RETURN_OK
+    return sdk.exports.dispatch(&sdk.effect, &data.header) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
@@ -318,38 +297,15 @@ catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 constexpr Platform native{
     rsf::dlss_vk::platform,
     rsf::xess_vk::platform,
-    {rsf_vk_sdk_system_loader, allocate, [](FfxNative* owner) { delete owner; }, rsf_vkffx_symbol, bind_sdk,
-        call_device_proc, initialize_graphics, versions, create_effect,
-        effective_version, destroy_effect, plan,
-        [](FfxNative* owner) { return rsf_core_srvk_graphics_images(owner->graphics); }, &rsf_core_vkfg_platform,
-        [](FfxNative* owner) { return rsf_core_srvk_graphics_memory_count(owner->graphics); },
-        [](FfxNative* owner, void* commands, const rsf_vkfg_barrier* plan) {
-            rsf_core_srvk_graphics_barrier(owner->graphics, commands, plan);
-        },
-        [](FfxNative* owner, void* commands, uint64_t image, uint32_t layout) {
-            rsf_core_srvk_graphics_clear(owner->graphics, commands, image, layout);
-        },
-        dispatch,
-        [](FfxNative* owner, void* commands, const rsf_vkfg_image_copy* plan) {
-            rsf_core_srvk_graphics_copy(owner->graphics, commands, plan);
-        },
-        [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) {
-            return rsf_core_srvk_graphics_sharpen(owner->graphics, setup, commands, frame, output);
-        },
-        [](FfxNative* owner) { rsf_core_srvk_graphics_clear_sharpen(owner->graphics); },
-        [](FfxNative* owner, uint64_t version, uint32_t backend) {
-            rsf_core_srvk_graphics_capture_provider(owner->graphics, version, backend);
-        },
-        [](FfxNative* owner, void* commands, const rsf_srvk_image* image,
-            const rsf_frame_record* record, const char* role, uint32_t reset) {
-            rsf_core_srvk_graphics_capture_record(owner->graphics, commands, image, record, role, reset);
-        },
-        [](FfxNative* owner, uint64_t frame) { return rsf_core_srvk_graphics_capture_wants(owner->graphics, frame); },
-        [](const rsf_srvk_frame* frame, uint32_t backend, uint32_t reset) {
-            rsf_capture_sr_parameters(frame->record, backend, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
-        },
-        [](FfxNative* owner, void* commands) { rsf_core_srvk_graphics_retire(owner->graphics, commands); },
-        [](FfxNative* owner) { rsf_core_srvk_graphics_flush(owner->graphics); }},
+    {rsf_vk_sdk_system_loader, rsf_core_srvk_native_allocate, rsf_core_srvk_native_close,
+        rsf_vkffx_symbol, rsf_core_srvk_native_bind, call_device_proc, rsf_core_srvk_graphics_initialize,
+        versions, create_effect, effective_version, destroy_effect, plan,
+        rsf_core_srvk_graphics_images, &rsf_core_vkfg_platform, rsf_core_srvk_graphics_memory_count,
+        rsf_core_srvk_graphics_barrier, rsf_core_srvk_graphics_clear, dispatch,
+        rsf_core_srvk_graphics_copy, rsf_core_srvk_graphics_sharpen, rsf_core_srvk_graphics_clear_sharpen,
+        rsf_core_srvk_graphics_capture_provider, rsf_core_srvk_graphics_capture_record,
+        rsf_core_srvk_graphics_capture_wants, rsf_core_srvk_graphics_capture_parameters,
+        rsf_core_srvk_graphics_retire, rsf_core_srvk_graphics_flush},
     rsf_input_dump_begin_record, rsf_input_dump_wants, rsf_input_dump_result,
 };
 constexpr const Platform* platform = &native;

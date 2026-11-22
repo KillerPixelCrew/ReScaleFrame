@@ -251,12 +251,22 @@ type Lookup = unsafe extern "C" fn(DeviceProc, Device, *const c_char, *mut rsf_v
 
 struct Dispatch {
     proc: DeviceProc,
+    lookup: Option<Lookup>,
     references: u32,
 }
 
 static DISPATCH: LazyLock<Mutex<HashMap<usize, Dispatch>>> = LazyLock::new(Mutex::default);
 
+#[cfg(test)]
 fn dispatch_register(device: Device, proc: rsf_vk_get_proc) -> i32 {
+    dispatch_register_with_lookup(device, proc, None)
+}
+
+fn dispatch_register_with_lookup(
+    device: Device,
+    proc: rsf_vk_get_proc,
+    lookup: Option<Lookup>,
+) -> i32 {
     let Some(proc) = proc else { return INVALID };
     let mut dispatch = DISPATCH.lock().unwrap();
     if let Some(entry) = dispatch.get_mut(&(device as usize)) {
@@ -275,6 +285,7 @@ fn dispatch_register(device: Device, proc: rsf_vk_get_proc) -> i32 {
             device as usize,
             Dispatch {
                 proc,
+                lookup,
                 references: 1,
             },
         );
@@ -292,7 +303,6 @@ fn dispatch_unregister(device: Device) {
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_srvk_dispatch_lookup(
     device: Device,
     name: *const c_char,
@@ -303,8 +313,17 @@ unsafe extern "C" fn rsf_core_srvk_dispatch_lookup(
         .unwrap()
         .get(&(device as usize))
         .map(|entry| entry.proc)?;
+    unsafe { lookup_device_proc(device, name, proc, lookup) }
+}
+
+unsafe fn lookup_device_proc(
+    device: Device,
+    name: *const c_char,
+    proc: DeviceProc,
+    lookup: Lookup,
+) -> rsf_vk_function {
     let mut result = None;
-    // The native caller holds the device lease. Invoke the supplied proc outside the lock.
+    // The caller holds the device lease. Invoke the supplied proc outside the lock.
     if unsafe { lookup(proc, device, name, &mut result) } == 0 {
         return None;
     }
@@ -554,7 +573,11 @@ impl FidelityFx {
 
     unsafe fn initialize(&mut self, setup: &Setup, output: [u32; 2]) -> Result<[u32; 2], i32> {
         let (ops, handle) = (self.ops, self.handle);
-        check(dispatch_register(setup.device, setup.device_proc))?;
+        check(dispatch_register_with_lookup(
+            setup.device,
+            setup.device_proc,
+            Some(ops.lookup),
+        ))?;
         self.dispatch_lease = Some(DispatchLease(setup.device));
         ops.prepare_graphics(handle, setup)?;
         let mut versions = [Version::default(); MAX_VERSIONS];

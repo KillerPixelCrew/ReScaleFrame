@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
+use super::graphics::sdk_device_proc;
 use super::{FfxDispatch, Handle, Image, Setup};
 use crate::sharpening_policy::ffx_sharpening;
 use ash::vk;
 use std::ptr;
 
 #[path = "../../../vulkan/fsr3/sdk_abi.rs"]
-mod abi;
+pub(super) mod abi;
 use abi::*;
 
 fn header(kind: u32, next: *mut ffxApiHeader) -> ffxApiHeader {
@@ -19,7 +20,6 @@ fn header(kind: u32, next: *mut ffxApiHeader) -> ffxApiHeader {
 extern "C" fn rsf_core_srvk_ffx_create_desc(
     setup: &Setup,
     flags: u32,
-    device_proc: PFN_vkGetDeviceProcAddr,
     version: *mut ffxApiHeader,
     backend: &mut ffxCreateBackendVKDesc,
     create: &mut ffxCreateContextDescUpscale,
@@ -28,7 +28,7 @@ extern "C" fn rsf_core_srvk_ffx_create_desc(
         header: header(FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK, version),
         vkDevice: setup.device.cast(),
         vkPhysicalDevice: setup.physical_device.cast(),
-        vkDeviceProcAddr: device_proc,
+        vkDeviceProcAddr: Some(sdk_device_proc),
     };
     let dimensions = FfxApiDimensions2D {
         width: setup.output_width,
