@@ -8155,6 +8155,14 @@ The [C02 source record](research/rust-render-host-cutover.md#c02-follow-up-on-th
 lists the native service edges and saved capture refusal coverage. Binding,
 formatting, locked offline metadata and source checks completed. Build and
 fixture execution remain pending.
+
+The C02 follow-up removes both production host callback tables. The hosts
+call the Rust renderer, overlay, observer and plugin-session services
+directly. Rust resolves the borrowed Streamline module and the remaining
+C++ guard contains exceptions from its native-interface export. The
+[service boundary record](research/rust-render-host-cutover.md#c02-direct-service-calls-and-the-foreign-boundary)
+covers the retained executable edges and source checks.
+
 ### FidelityFX Vulkan bridge follow-up
 
 Rust owns FSR4 Vulkan SDK dispatch and queue leaves, shared texture allocation

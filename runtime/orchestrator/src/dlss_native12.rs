@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-mod exports;
+pub(super) mod exports;
 
 use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
@@ -378,7 +378,7 @@ impl Drop for DeviceRegistration {
     }
 }
 
-struct Registration(Arc<DeviceRegistration>);
+pub(super) struct Registration(Arc<DeviceRegistration>);
 
 // Viewports 0 and 1 can be used by generation or D3D11 SR on a shared host.
 static NEXT_VIEWPORT: AtomicU32 = AtomicU32::new(2);

@@ -73,3 +73,30 @@ Pinned Rust 1.94.1 formatting, bindgen 0.72.1 reproduction of five C02
 binding outputs, locked offline Cargo metadata with all features, and
 changed-source whitespace checks passed. These are source checks. Runtime
 linking, all fixture execution and device behavior remain pending.
+
+## C02 direct service calls and the foreign boundary
+
+At `6c935471`, the two host platform translation units still built separate
+C++ tables for Runtime services. The hosts now call the existing Rust depth
+and preset policy, presentation owner, overlay owners, plugin-session owner,
+D3D12 observer and diagnostics owner, and DLSS registration owner directly.
+Only Rust fixture builds construct host callback tables. The public exports,
+setup records, saved Unicode transaction, FG source receipts and GPU
+retirement order carry forward from the base.
+
+The native host resolves `sl.interposer.dll` and `slGetNativeInterface` in Rust.
+It borrows the already-loaded module for DLSS registration. A successful
+native-object lookup returns the SDK's owned reference. A missing entry,
+failed call or C++ exception returns one retained reference to the original
+object. `render_host_platform.cpp` contains only the exception guard for this
+foreign call. The declaration matches `PFun_slGetNativeInterface` from the
+local Streamline checkout at `e8aaa6eaac968711fb62473d4ae8256dde20919b`.
+Plugin lifecycle and observer calls still pass through their existing foreign
+guards. Capture cancellation still enters `input_dump.c` to establish its
+services before reaching the Rust capture owner.
+
+Pinned Rust 1.94.1 formatting, targeted bindgen 0.72.1 reproduction, locked
+offline all-feature metadata and source checks passed. MSVC syntax-only
+checks covered the remaining guard, its exact comparison with the Streamline
+header, and the existing C fixture launcher. Linking, fixture execution and
+device verification remain pending.

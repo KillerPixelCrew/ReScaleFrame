@@ -265,7 +265,7 @@ const PRESENT: Platform = Platform {
 };
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_d3d12_frame(
+pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame(
     device: Handle,
     queue: Handle,
     chain: Handle,
@@ -316,7 +316,7 @@ pub(crate) extern "C" fn rsf_overlay_d3d12_stop() {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_d3d12_present(
+pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_present(
     device: Handle,
     queue: Handle,
     chain: Handle,

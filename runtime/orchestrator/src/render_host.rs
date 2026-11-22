@@ -3,9 +3,7 @@
 //!
 //! Rust owns admission, host and control state, SR backend resolution, settings translation and
 //! commit, SR context lifetime, recording slots, fence retirement, scene and Present matching,
-//! the frontend status and overlay routing. render_host_platform.cpp supplies one call per
-//! DLSS registration, presentation bridge, overlay or observer operation
-//! through its static leaf table. Settings keys and text belong to settings_store.rs,
+//! the frontend status and overlay routing. Settings keys and text belong to settings_store.rs,
 //! SR vendor selection to rsf_gpu_select_sr_backend and FG provider admission to fg_choice.rs.
 use crate::com_ref::ComRef;
 use crate::d3d12_observer::ObserverSetup;
@@ -34,6 +32,8 @@ use crate::settings_store::{
     rsf_settings_store_write_layout, set_sharpening, sharpening_of,
 };
 use crate::sharpening_policy;
+#[cfg(not(test))]
+use crate::{d3d12_observer::Observer, dlss_native12::Registration};
 use rsf_game_sys::render_host_abi::{
     RSF_RENDER_HOST_ABI_VERSION as HOST_ABI_VERSION,
     RSF_RENDER_HOST_ENGINE_PRESENTATION as ENGINE_PRESENTATION, rsf_render_host_setup as Setup,
@@ -62,6 +62,10 @@ use windows_sys::core::w;
 mod tests;
 
 type Handle = *mut c_void;
+#[cfg(test)]
+type Observer = c_void;
+#[cfg(test)]
+type Registration = c_void;
 type LogFn = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
 type WindowFn = Option<unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int>;
 
@@ -115,75 +119,51 @@ const DEFAULTS: Settings = Settings {
     ..unsafe { std::mem::zeroed() }
 };
 
-// Field order matches `Platform` in render_host_platform.cpp. Returned COM interfaces carry
-// one reference for the caller; arguments are borrowed for the call.
-#[repr(C)]
-pub(crate) struct Platform {
-    struct_size: u32,
-    #[cfg(test)]
+#[cfg(not(test))]
+struct Platform;
+
+#[cfg(not(test))]
+static PLATFORM: Platform = Platform;
+
+// Recording callbacks let fixtures exercise the same Rust host logic.
+#[cfg(test)]
+struct Platform {
     tick: unsafe extern "C" fn() -> u64,
-    #[cfg(test)]
     foreground: unsafe extern "C" fn() -> u32,
-    #[cfg(test)]
     hide_cursor: unsafe extern "C" fn() -> i32,
-    #[cfg(test)]
     list_device: unsafe extern "C" fn(Handle) -> Handle,
-    #[cfg(test)]
     queue_device: unsafe extern "C" fn(Handle) -> Handle,
-    #[cfg(test)]
     queue_direct: unsafe extern "C" fn(Handle) -> i32,
-    #[cfg(test)]
     create_fence: unsafe extern "C" fn(Handle) -> Handle,
-    #[cfg(test)]
     fence_completed: unsafe extern "C" fn(Handle) -> u64,
     // 1 completed, 0 no wait event, -1 failed or timed out.
-    #[cfg(test)]
     fence_wait: unsafe extern "C" fn(Handle, u64, u32) -> i32,
-    #[cfg(test)]
     queue_signal: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
-    #[cfg(test)]
     adapter: unsafe extern "C" fn(Handle, *mut Adapter) -> i32,
     native_object: unsafe extern "C" fn(Handle) -> Handle,
     depth_domains: unsafe extern "C" fn(*const Pass) -> u32,
     dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
     fg_default_backend: unsafe extern "C" fn(u32, u32) -> u32,
-    #[cfg(test)]
     sr12_create: unsafe extern "C" fn(*const SrSetup, *mut Handle) -> i32,
-    #[cfg(test)]
     sr12_destroy: unsafe extern "C" fn(Handle),
-    #[cfg(test)]
     sr12_evaluate: unsafe extern "C" fn(Handle, Handle, *const Pass, u32) -> i32,
-    #[cfg(test)]
     sr12_set_sharpening: unsafe extern "C" fn(Handle, *const Sharpening) -> i32,
-    #[cfg(test)]
     sr12_present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
-    #[cfg(test)]
     sr12_capture: unsafe extern "C" fn(Handle, *const c_char, u64, u32) -> i32,
-    #[cfg(test)]
     sr12_capture_flush: unsafe extern "C" fn(Handle, u32) -> i32,
-    #[cfg(test)]
     sr12_capture_scene: unsafe extern "C" fn(Handle, Handle, *const Pass, u32) -> i32,
     registration_create: unsafe extern "C" fn(Handle, *const DlssSetup, *mut Handle) -> i32,
     // Borrows the engine's loaded sl.interposer.dll.
     registration_borrow: unsafe extern "C" fn(Handle, *const DlssSetup, *mut Handle) -> i32,
     registration_present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
-    #[cfg(test)]
     fg_install: unsafe extern "C" fn(*const FgSetup) -> i32,
-    #[cfg(test)]
     fg_options: unsafe extern "C" fn(*const FgOptions),
-    #[cfg(test)]
     fg_latency: unsafe extern "C" fn(*const LatencyEvent) -> i32,
-    #[cfg(test)]
     fg_cpu: unsafe extern "C" fn(*const CpuEvent),
-    #[cfg(test)]
     fg_submitted: unsafe extern "C" fn(u64, u64),
-    #[cfg(test)]
     fg_hudless: unsafe extern "C" fn(Handle, *const Pass),
-    #[cfg(test)]
     fg_window: unsafe extern "C" fn(*const Pass),
-    #[cfg(test)]
     fg_status_try: unsafe extern "C" fn(*mut FgStatus) -> i32,
-    #[cfg(test)]
     fg_capture_outputs: unsafe extern "C" fn(*const c_char) -> i32,
     present_host: unsafe extern "C" fn() -> Handle,
     present_has_owner: unsafe extern "C" fn() -> i32,
@@ -209,57 +189,123 @@ pub(crate) struct Platform {
 }
 
 crate::render_host_methods::impl_host_methods! {
-    fn tick() -> u64 { crate::render_host_native::tick() }
-    fn list_device(list: Handle) -> Handle { crate::render_host_native::child_device(list) }
-    fn queue_device(queue: Handle) -> Handle { crate::render_host_native::child_device(queue) }
+    fn tick() -> u64 { unsafe { crate::render_host_native::tick() } }
+    fn list_device(list: Handle) -> Handle { unsafe { crate::render_host_native::child_device(list) } }
+    fn queue_device(queue: Handle) -> Handle { unsafe { crate::render_host_native::child_device(queue) } }
     fn adapter(device: Handle, out: *mut Adapter) -> i32 {
-        crate::render_host_native::adapter(device, out)
+        unsafe { crate::render_host_native::adapter(device, out) }
     }
-    fn foreground() -> u32 { crate::render_host_native::foreground() }
-    fn hide_cursor() -> i32 { crate::render_host_native::hide_cursor() }
-    fn queue_direct(queue: Handle) -> i32 { crate::render_host_native::queue_direct(queue) }
-    fn create_fence(device: Handle) -> Handle { crate::render_host_native::create_fence(device) }
-    fn fence_completed(fence: Handle) -> u64 { crate::render_host_native::fence_completed(fence) }
+    fn foreground() -> u32 { unsafe { crate::render_host_native::foreground() } }
+    fn hide_cursor() -> i32 { unsafe { crate::render_host_native::hide_cursor() } }
+    fn queue_direct(queue: Handle) -> i32 { unsafe { crate::render_host_native::queue_direct(queue) } }
+    fn create_fence(device: Handle) -> Handle { unsafe { crate::render_host_native::create_fence(device) } }
+    fn fence_completed(fence: Handle) -> u64 { unsafe { crate::render_host_native::fence_completed(fence) } }
     fn fence_wait(fence: Handle, value: u64, timeout: u32) -> i32 {
-        crate::render_host_native::fence_wait(fence, value, timeout)
+        unsafe { crate::render_host_native::fence_wait(fence, value, timeout) }
     }
     fn queue_signal(queue: Handle, fence: Handle, value: u64) -> i32 {
-        crate::render_host_native::queue_signal(queue, fence, value)
+        unsafe { crate::render_host_native::queue_signal(queue, fence, value) }
     }
     fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
-        crate::sr12::create_for_host(setup, out.cast())
+        unsafe { crate::sr12::create_for_host(setup, out.cast()) }
     }
-    fn sr12_destroy(context: Handle) { crate::sr12::rsf_core_sr12_destroy(context.cast()) }
+    fn sr12_destroy(context: Handle) { unsafe { crate::sr12::rsf_core_sr12_destroy(context.cast()) } }
     fn sr12_evaluate(context: Handle, commands: Handle, pass: *const Pass, slot: u32) -> i32 {
-        crate::sr12::rsf_core_sr12_evaluate(context.cast(), commands, pass, slot)
+        unsafe { crate::sr12::rsf_core_sr12_evaluate(context.cast(), commands, pass, slot) }
     }
     fn sr12_set_sharpening(context: Handle, options: *const Sharpening) -> i32 {
-        crate::sr12::rsf_core_sr12_set_sharpening(context.cast(), options)
+        unsafe { crate::sr12::rsf_core_sr12_set_sharpening(context.cast(), options) }
     }
     fn sr12_present(context: Handle, chain: Handle, interval: u32, flags: u32, begin: u32) -> i32 {
-        crate::sr12::rsf_core_sr12_present(context.cast(), chain, interval, flags, begin)
+        unsafe { crate::sr12::rsf_core_sr12_present(context.cast(), chain, interval, flags, begin) }
     }
     fn sr12_capture(context: Handle, path: *const c_char, first_frame: u64, frames: u32) -> i32 {
-        crate::sr12::rsf_core_sr12_capture(context.cast(), path, first_frame, frames)
+        unsafe { crate::sr12::rsf_core_sr12_capture(context.cast(), path, first_frame, frames) }
     }
     fn sr12_capture_flush(context: Handle, slot: u32) -> i32 {
-        crate::sr12::rsf_core_sr12_capture_flush(context.cast(), slot)
+        unsafe { crate::sr12::rsf_core_sr12_capture_flush(context.cast(), slot) }
     }
     fn sr12_capture_scene(context: Handle, commands: Handle, pass: *const Pass, slot: u32) -> i32 {
-        crate::sr12::rsf_core_sr12_capture_scene(context.cast(), commands, pass, slot)
+        unsafe { crate::sr12::rsf_core_sr12_capture_scene(context.cast(), commands, pass, slot) }
     }
-    fn fg_install(setup: *const FgSetup) -> i32 { crate::fg12::rsf_core_fg12_install(setup) }
-    fn fg_options(options: *const FgOptions) { crate::fg12::rsf_core_fg12_options(options) }
-    fn fg_latency(event: *const LatencyEvent) -> i32 { crate::fg12::rsf_core_fg12_latency(event) }
-    fn fg_cpu(event: *const CpuEvent) { crate::fg12::rsf_core_fg12_cpu(event) }
-    fn fg_submitted(session: u64, source: u64) { crate::fg12::rsf_core_fg12_submitted(session, source) }
+    fn fg_install(setup: *const FgSetup) -> i32 { unsafe { crate::fg12::rsf_core_fg12_install(setup) } }
+    fn fg_options(options: *const FgOptions) { unsafe { crate::fg12::rsf_core_fg12_options(options) } }
+    fn fg_latency(event: *const LatencyEvent) -> i32 { unsafe { crate::fg12::rsf_core_fg12_latency(event) } }
+    fn fg_cpu(event: *const CpuEvent) { unsafe { crate::fg12::rsf_core_fg12_cpu(event) } }
+    fn fg_submitted(session: u64, source: u64) { unsafe { crate::fg12::rsf_core_fg12_submitted(session, source) } }
     fn fg_hudless(commands: Handle, pass: *const Pass) {
-        crate::fg12::rsf_core_fg12_hudless(commands, pass)
+        unsafe { crate::fg12::rsf_core_fg12_hudless(commands, pass) }
     }
-    fn fg_window(pass: *const Pass) { crate::fg12::rsf_core_fg12_window(pass) }
-    fn fg_status_try(output: *mut FgStatus) -> i32 { crate::fg12::rsf_core_fg12_status_try(output) }
+    fn fg_window(pass: *const Pass) { unsafe { crate::fg12::rsf_core_fg12_window(pass) } }
+    fn fg_status_try(output: *mut FgStatus) -> i32 { unsafe { crate::fg12::rsf_core_fg12_status_try(output) } }
     fn fg_capture_outputs(directory: *const c_char) -> i32 {
-        crate::fg12::rsf_core_fg12_capture_outputs(directory)
+        unsafe { crate::fg12::rsf_core_fg12_capture_outputs(directory) }
+    }
+    fn depth_domains(pass: *const Pass) -> u32 {
+        unsafe { u32::from(rsf_game_sys::depth_domains_requested(&(*pass).depth_domains)) }
+    }
+    fn dlss_preset_valid(preset: u32) -> u32 { u32::from(crate::streamline_sr::preset_valid(preset)) }
+    fn present_host() -> Handle { crate::d3d11_present::rsf_core_d3d11p_host() }
+    fn present_request(backend: u32) -> i32 { crate::d3d11_present::rsf_core_d3d11p_request(backend) }
+    fn present_backend() -> u32 { crate::d3d11_present::rsf_core_d3d11p_backend() }
+    fn overlay_fill_fg(stats: &mut Stats, fg: *const FgStatus) {
+        unsafe { crate::overlay_settings::rsf_overlay_fill_fg_stats(stats, fg) }
+    }
+    fn native_object(object: Handle) -> Handle {
+        unsafe { crate::render_host_native::native_object(object) }
+    }
+    fn fg_default_backend(vendor: u32, software: u32) -> u32 {
+        crate::fg_choice::rsf_fg_default_backend(vendor, software)
+    }
+    fn registration_create(device: Handle, setup: *const DlssSetup, out: *mut *mut Registration) -> i32 {
+        unsafe { crate::dlss_native12::exports::rsf_dlss_native12_registration_create(device, setup, out) }
+    }
+    fn registration_borrow(device: Handle, setup: *const DlssSetup, out: *mut *mut Registration) -> i32 {
+        unsafe { crate::render_host_native::registration_borrow(device, setup, out) }
+    }
+    fn registration_present(
+        registration: *mut Registration,
+        chain: Handle,
+        interval: u32,
+        flags: u32,
+        begin: u32,
+    ) -> i32 {
+        unsafe {
+            crate::dlss_native12::exports::rsf_dlss_native12_registration_present(
+                registration, chain, interval, flags, begin,
+            )
+        }
+    }
+    fn present_has_owner() -> i32 { crate::d3d11_present::rsf_core_d3d11p_has_owner() }
+    fn present_backend_choices() -> u32 { crate::d3d11_present::rsf_core_d3d11p_backend_choices() }
+    fn overlay_visible() -> u32 { crate::overlay_native12::native::rsf_overlay_native12_visible() }
+    fn overlay_toggle() { crate::overlay_native12::native::rsf_overlay_native12_toggle() }
+    fn overlay_present(
+        device: Handle,
+        queue: Handle,
+        chain: Handle,
+        stats: *const Stats,
+        intent: *mut Intent,
+        log: LogFn,
+        user: Handle,
+    ) -> i32 {
+        unsafe {
+            crate::overlay_native12::native::rsf_overlay_native12_present(
+                device, queue, chain, stats, intent, log, user,
+            )
+        }
+    }
+    fn observer_create(setup: *const ObserverSetup, out: *mut *mut Observer) -> i32 {
+        unsafe { crate::d3d12_observer::rsf_d3d12_observer_create(setup, out) }
+    }
+    fn observer_device(observer: *mut Observer, device: Handle) -> i32 {
+        crate::d3d12_observer::attachment::rsf_d3d12_observer_device(observer, device)
+    }
+    fn observer_factory(observer: *mut Observer, factory: Handle) -> i32 {
+        crate::d3d12_observer::attachment::rsf_d3d12_observer_factory(observer, factory)
+    }
+    fn diagnostics_enable(log: LogFn, user: Handle) -> i32 {
+        crate::d3d12_observer::diagnostics::rsf_d3d12_diagnostics_enable(log, user)
     }
 }
 
@@ -311,7 +357,7 @@ struct State {
     context: Handle,
     // The game retains native NGX handles for pause and fallback. Global SDK shutdown during a
     // backend change invalidates those handles, so the registration belongs to the session.
-    dlss_registration: Handle,
+    dlss_registration: *mut Registration,
     poll_tick: u64,
     serial: u64,
     fence_value: u64,
@@ -375,7 +421,7 @@ pub(crate) struct Host {
     logger_user: *mut c_void,
     engine_streamline: bool,
     fg_installed: AtomicBool,
-    observer: AtomicPtr<c_void>,
+    observer: AtomicPtr<Observer>,
     // Auto resolves once against the adapter that owns the game's device.
     automatic_backend: AtomicU32,
     poisoned: AtomicBool,
@@ -610,8 +656,8 @@ impl Host {
         let mut desired = values.fg_backend;
         if desired == RSF_FG_BACKEND_AUTO && s.device.is_some() {
             let vendor = self.adapter(s).map_or(0, |adapter| adapter.vendor);
-            let preferred = unsafe { (p.fg_default_backend)(vendor, 0) };
-            let choices = unsafe { (p.present_backend_choices)() };
+            let preferred = unsafe { p.fg_default_backend(vendor, 0) };
+            let choices = unsafe { p.present_backend_choices() };
             // Honor the bridge's Off choice when the adapter has no preference.
             desired = if preferred == 0 && has(choices, 0) {
                 0
@@ -621,9 +667,9 @@ impl Host {
         }
         if desired != RSF_FG_BACKEND_AUTO
             && desired != s.fg_backend_requested
-            && unsafe { (p.present_has_owner)() } != 0
+            && unsafe { p.present_has_owner() } != 0
         {
-            let result = unsafe { (p.present_request)(desired) };
+            let result = unsafe { p.present_request(desired) };
             if result == BACKEND_OK {
                 s.fg_backend_requested = desired;
             }
@@ -742,16 +788,16 @@ impl Host {
             preset: s.preset,
             ..DlssSetup::default()
         };
-        setup.streamline_host = unsafe { (p.present_host)() };
+        setup.streamline_host = unsafe { p.present_host() };
         // The scene is linear floating-point HDR even when the swapchain is SDR.
         if s.backend == SR_DLSS && setup.streamline_host.is_null() {
             if s.dlss_registration.is_null() {
                 let mut registration = null_mut();
                 let registered = unsafe {
                     if self.engine_streamline {
-                        (p.registration_borrow)(device, &setup.dlss, &mut registration)
+                        p.registration_borrow(device, &setup.dlss, &mut registration)
                     } else {
-                        (p.registration_create)(device, &setup.dlss, &mut registration)
+                        p.registration_create(device, &setup.dlss, &mut registration)
                     }
                 };
                 if registered != BACKEND_OK {
@@ -762,7 +808,7 @@ impl Host {
                     "Native renderer NGX registration retained for native game handles across backend changes.",
                 );
             }
-            setup.dlss_registration = s.dlss_registration;
+            setup.dlss_registration = s.dlss_registration.cast();
         }
         // Retire this SR feature's resources after GPU completion. Its registration remains
         // alive for native evaluation and for a later SR context on the same device.
@@ -796,7 +842,7 @@ impl Host {
         if commands.is_null() || pass.camera_valid == 0 || pass.session_id != self.session {
             return INVALID;
         }
-        if unsafe { (p.depth_domains)(pass) } != 0 {
+        if unsafe { p.depth_domains(pass) } != 0 {
             return INVALID;
         }
         let mut guard = self.lock();
@@ -805,7 +851,7 @@ impl Host {
         self.poll(s);
         if self.poisoned.load(Ordering::Relaxed)
             || !s.enabled
-            || unsafe { (p.dlss_preset_valid)(s.preset) } == 0
+            || unsafe { p.dlss_preset_valid(s.preset) } == 0
         {
             s.reset = true;
             return NOT_READY;
@@ -1049,7 +1095,7 @@ impl Host {
         let begin = u32::from(begin);
         let result = unsafe {
             if !s.dlss_registration.is_null() {
-                (p.registration_present)(s.dlss_registration, swapchain, interval, flags, begin)
+                p.registration_present(s.dlss_registration, swapchain, interval, flags, begin)
             } else if !s.context.is_null() {
                 p.sr12_present(s.context, swapchain, interval, flags, begin)
             } else {
@@ -1067,7 +1113,7 @@ impl Host {
     // The frontend status from saved `values`, the FG snapshot and the host state.
     fn status(&self, s: &mut State, values: &Settings, fg: &FgStatus, now: u64) -> Status {
         let p = self.p;
-        let backend = unsafe { (p.present_backend)() };
+        let backend = unsafe { p.present_backend() };
         let valid =
             fg.available != 0 && fg.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED != 0;
         s.rates.sample(
@@ -1114,7 +1160,7 @@ impl Host {
             output_fps_valid: u32::from(s.rates.output_valid && valid),
             status_overlay: u32::from(s.status_overlay),
             sr_backend_choices: self.sr_choices,
-            fg_backend_choices: unsafe { (p.present_backend_choices)() },
+            fg_backend_choices: unsafe { p.present_backend_choices() },
             base_fps: s.rates.base_fps,
             output_fps: s.rates.output_fps,
             native_frame: s.native_frame,
@@ -1193,7 +1239,7 @@ impl Host {
             || request.latency > 2
             || request.sr_quality > 4
             || !(1..=15).contains(&request.generated_frames)
-            || unsafe { (p.dlss_preset_valid)(request.dlss_preset) } == 0
+            || unsafe { p.dlss_preset_valid(request.dlss_preset) } == 0
             || (request.sr_backend != SR_AUTO
                 && (request.sr_backend > 31 || !has(self.sr_choices, request.sr_backend)))
             || !fg_choice::allowed(request.fg_backend, RSF_FG_BACKEND_ALL)
@@ -1279,8 +1325,8 @@ impl Host {
         match intent.host_option_index as usize {
             OVERLAY_PROBE => {
                 let mut probe = self.probe.lock().unwrap_or_else(PoisonError::into_inner);
-                if !enabled && probe.phase == 1 && unsafe { (self.p.overlay_visible)() } != 0 {
-                    unsafe { (self.p.overlay_toggle)() };
+                if !enabled && probe.phase == 1 && unsafe { self.p.overlay_visible() } != 0 {
+                    unsafe { self.p.overlay_toggle() };
                 }
                 *probe = Probe {
                     enabled,
@@ -1299,10 +1345,10 @@ impl Host {
             return;
         }
         if probe.phase == 0 && application_presents >= 60 {
-            if unsafe { (p.overlay_visible)() } == 0 {
-                unsafe { (p.overlay_toggle)() };
+            if unsafe { p.overlay_visible() } == 0 {
+                unsafe { p.overlay_toggle() };
             }
-            if unsafe { (p.overlay_visible)() } != 0 {
+            if unsafe { p.overlay_visible() } != 0 {
                 probe.phase = 1;
                 if unsafe {
                     WritePrivateProfileStringW(
@@ -1338,8 +1384,8 @@ impl Host {
         } else if probe.phase == 1 && application_presents.wrapping_sub(probe.start) >= 120 {
             probe.phase = 2;
             probe.enabled = false;
-            if unsafe { (p.overlay_visible)() } != 0 {
-                unsafe { (p.overlay_toggle)() };
+            if unsafe { p.overlay_visible() } != 0 {
+                unsafe { p.overlay_toggle() };
             }
             self.log("Native renderer overlay probe: full panel survived 120 application Presents; closed.");
         }
@@ -1445,7 +1491,7 @@ impl Host {
         }
         stats.sample_qpc = now as u64;
         stats.qpc_frequency = frequency as u64;
-        unsafe { (p.overlay_fill_fg)(&mut stats, &fg) };
+        unsafe { p.overlay_fill_fg(&mut stats, &fg) };
         // Keep the saved provider for re-enabling FG, but Off is the selected UI choice while
         // disabled. A retained SDK context is not an active provider.
         stats.fg_requested_backend = if prefs.fg_enabled != 0 {
@@ -1456,7 +1502,7 @@ impl Host {
         if prefs.fg_enabled == 0 && fg.vendor.configured_mode == RSF_FG_OFF {
             stats.fg_backend = 0;
         }
-        stats.fg_backend_choices = unsafe { (p.present_backend_choices)() }
+        stats.fg_backend_choices = unsafe { p.present_backend_choices() }
             | RSF_OVERLAY_FG_RUNTIME_SWITCH
             | 1
             | (1 << RSF_FG_BACKEND_AUTO);
@@ -1479,7 +1525,7 @@ impl Host {
             ..Intent::default()
         };
         let shown = unsafe {
-            (p.overlay_present)(
+            p.overlay_present(
                 device.as_ptr(),
                 queue.as_ptr(),
                 chain,
@@ -1758,7 +1804,7 @@ fn install(host: &Host, setup: &Setup) -> i32 {
     let ini = host.ini.as_ptr();
     let section = host.section.as_ptr();
     if host.lock().graphics_diagnostics {
-        let _ = unsafe { (p.diagnostics_enable)(Some(backend_log), host.user()) };
+        let _ = unsafe { p.diagnostics_enable(Some(backend_log), host.user()) };
     }
     // A diagnostic request belongs to this one process, never the next game launch.
     let probe = host
@@ -1812,7 +1858,7 @@ fn install(host: &Host, setup: &Setup) -> i32 {
             swapchain: Some(observer_chain),
         };
         let mut observer = null_mut();
-        if unsafe { (p.observer_create)(&observed, &mut observer) } != 0 {
+        if unsafe { p.observer_create(&observed, &mut observer) } != 0 {
             return NOT_READY;
         }
         host.observer.store(observer, Ordering::Release);
@@ -1948,29 +1994,22 @@ impl Host {
 }
 
 #[cfg(not(test))]
-unsafe extern "C" {
-    fn rsf_render_host_platform() -> &'static Platform;
-}
-
-#[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_host_create(setup: *const Setup, services: *mut Services) -> i32 {
     crate::fg12::bind_native_platform();
-    let platform = unsafe { rsf_render_host_platform() };
-    assert_eq!(platform.struct_size as usize, size_of::<Platform>());
-    unsafe { create(setup, services, platform) }
+    unsafe { create(setup, services, &PLATFORM) }
 }
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_render_overlay_visible() -> u32 {
-    unsafe { (rsf_render_host_platform().overlay_visible)() }
+    unsafe { PLATFORM.overlay_visible() }
 }
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_render_overlay_toggle() {
-    unsafe { (rsf_render_host_platform().overlay_toggle)() };
+    unsafe { PLATFORM.overlay_toggle() };
 }
 
 #[unsafe(no_mangle)]
@@ -1989,9 +2028,7 @@ unsafe extern "C" fn rsf_render_host_graphics(user: *mut c_void, queue: Handle) 
 unsafe extern "C" fn rsf_render_host_device(user: *mut c_void, device: Handle) -> i32 {
     match published(user) {
         Some(host) => match host.observer.load(Ordering::Acquire) {
-            observer if !observer.is_null() => unsafe {
-                (host.p.observer_device)(observer, device)
-            },
+            observer if !observer.is_null() => unsafe { host.p.observer_device(observer, device) },
             _ => NOT_READY,
         },
         None => NOT_READY,
@@ -2003,7 +2040,7 @@ unsafe extern "C" fn rsf_render_host_factory(user: *mut c_void, factory: Handle)
     match published(user) {
         Some(host) => match host.observer.load(Ordering::Acquire) {
             observer if !observer.is_null() => unsafe {
-                (host.p.observer_factory)(observer, factory)
+                host.p.observer_factory(observer, factory)
             },
             _ => NOT_READY,
         },
@@ -2021,7 +2058,7 @@ extern "C" fn rsf_render_host_graphics_ready(user: *mut c_void) -> u32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_host_native_object(user: *mut c_void, object: Handle) -> Handle {
     match published(user) {
-        Some(host) if !object.is_null() => unsafe { (host.p.native_object)(object) },
+        Some(host) if !object.is_null() => unsafe { host.p.native_object(object) },
         _ => null_mut(),
     }
 }

@@ -3,12 +3,12 @@
 // Production calls the Rust owners and Windows operations directly. Host fixtures
 // substitute recording callbacks without adding test slots to the native tables.
 macro_rules! impl_host_methods {
-    ($(fn $name:ident($($arg:ident: $ty:ty),*) $(-> $result:ty)? { $native:expr })*) => {
+    ($(fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $result:ty)? { $native:expr })*) => {
         impl Platform {
             $(
                 unsafe fn $name(&self, $($arg: $ty),*) $(-> $result)? {
                     #[cfg(not(test))]
-                    { unsafe { $native } }
+                    { $native }
                     #[cfg(test)]
                     { unsafe { (self.$name)($($arg),*) } }
                 }

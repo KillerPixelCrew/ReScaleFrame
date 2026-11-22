@@ -1241,3 +1241,11 @@ generate("integrations/godot/native/vulkan_features.rs", "integrations/godot/nat
                         "    rsf_fsr4fg_info, rsf_input_dump_vk_setup, rsf_srvk_image, rsf_srvk_setup,\n};",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;",
           "--raw-line", "type rsf_input_dump_vk = core::ffi::c_void;"])
+
+generate("runtime/orchestrator/src/render_host_foreign_abi.rs",
+         "runtime/orchestrator/src/render_host_foreign.h",
+         "rsf_render_host_native_interface_fn", "NOTHING",
+         ["-include", "rescaleframe/input_dump.h", "-Isdk/game/include", "-Iruntime/graphics/include",
+          "-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include"],
+         ["--no-recursive-allowlist", "--allowlist-function",
+          "rsf_(render_host_call_native_interface|input_dump_cancel)"])

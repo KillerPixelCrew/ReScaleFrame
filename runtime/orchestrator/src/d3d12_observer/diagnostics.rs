@@ -141,7 +141,7 @@ fn sink() -> Option<Sink> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_d3d12_diagnostics_enable(log: Option<Log>, user: Handle) -> i32 {
+pub(crate) extern "C" fn rsf_d3d12_diagnostics_enable(log: Option<Log>, user: Handle) -> i32 {
     let platform = &DIAGNOSTICS;
     let Some(log) = log else {
         return -1;

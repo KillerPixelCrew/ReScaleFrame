@@ -57,7 +57,7 @@ pub(super) fn fill_latency_stats(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg: *const FgStatus) {
+pub(super) unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg: *const FgStatus) {
     fill_latency_stats(
         stats,
         rsf_native_latency_status_get,

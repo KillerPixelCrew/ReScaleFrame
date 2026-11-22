@@ -24,7 +24,6 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_composition_unload.cpp
     src/gl_pipeline_contract.c
     src/rust_exports.c
-    src/callback_render_host_platform.cpp
     src/render_host_platform.cpp
 )
 target_include_directories(rsf_orchestrator_core PUBLIC include)

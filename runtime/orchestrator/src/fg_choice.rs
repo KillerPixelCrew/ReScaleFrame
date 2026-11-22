@@ -156,7 +156,7 @@ unsafe extern "C" fn rsf_fg_choice_start(path: PCWSTR, fallback: u32, choices: u
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fg_choice_save(backend: u32) -> i32 {
+pub(super) extern "C" fn rsf_fg_choice_save(backend: u32) -> i32 {
     let mut settings = SETTINGS.lock().unwrap();
     let result = if !allowed(backend, settings.choice.choices) {
         NOT_SUPPORTED

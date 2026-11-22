@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MIT
 use super::render_host_methods::{Adapter, ResourceDesc};
+use crate::com_ref::ComRef;
 use crate::d3d12_host::{borrow, device_of, rsf_core_d3d12_wait_native_fence};
+use crate::dlss_native12::{Registration, exports::rsf_dlss_native12_registration_borrow};
+use crate::gl_pipeline_abi::rsf_dlss_setup;
+use crate::render_host_foreign_abi::{
+    rsf_render_host_call_native_interface, rsf_render_host_native_interface_fn,
+};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use windows::Win32::Graphics::{
@@ -17,13 +23,43 @@ use windows::core::Interface;
 use windows_sys::Win32::{
     Foundation::CloseHandle,
     System::{
+        LibraryLoader::GetModuleHandleW,
         SystemInformation::GetTickCount64,
         Threading::{CreateEventW, GetCurrentProcessId},
     },
     UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, ShowCursor},
 };
+use windows_sys::core::w;
 
 type Handle = *mut c_void;
+
+pub(super) unsafe fn native_object(object: Handle) -> Handle {
+    let module = unsafe { GetModuleHandleW(w!("sl.interposer.dll")) };
+    let entry = unsafe {
+        rsf_game_sys::win32::typed_export::<rsf_render_host_native_interface_fn>(
+            module,
+            c"slGetNativeInterface",
+        )
+    }
+    .flatten();
+    let mut native = null_mut();
+    if let Some(entry) = entry
+        && unsafe { rsf_render_host_call_native_interface(Some(entry), object, &mut native) } == 0
+        && !native.is_null()
+    {
+        return native;
+    }
+    unsafe { ComRef::retain(object) }.into_raw()
+}
+
+pub(super) unsafe fn registration_borrow(
+    device: Handle,
+    setup: *const rsf_dlss_setup,
+    out: *mut *mut Registration,
+) -> i32 {
+    let module = unsafe { GetModuleHandleW(w!("sl.interposer.dll")) };
+    unsafe { rsf_dlss_native12_registration_borrow(device, module, setup, out) }
+}
 
 pub(super) unsafe fn tick() -> u64 {
     unsafe { GetTickCount64() }

@@ -94,7 +94,7 @@ impl Drop for PluginModule {
     }
 }
 
-struct Session {
+pub(super) struct Session {
     _module: PluginModule,
     hooks: rsf_game_hooks_api,
     services: rsf_game_host_services,
@@ -102,7 +102,7 @@ struct Session {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_plugin_session_prepare(
+pub(super) unsafe extern "C" fn rsf_plugin_session_prepare(
     options: *const rsf_plugin_session_options,
     out: *mut *mut Session,
 ) -> i32 {
@@ -217,7 +217,7 @@ unsafe extern "C" fn rsf_plugin_session_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_plugin_session_start(raw: *const Session) -> i32 {
+pub(super) unsafe extern "C" fn rsf_plugin_session_start(raw: *const Session) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
@@ -241,7 +241,7 @@ unsafe extern "C" fn rsf_plugin_session_start(raw: *const Session) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_plugin_session_quiesce(raw: *const Session) -> i32 {
+pub(super) unsafe extern "C" fn rsf_plugin_session_quiesce(raw: *const Session) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
@@ -284,7 +284,7 @@ unsafe extern "C" fn rsf_plugin_session_status(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_plugin_session_stop(raw: *mut Session) -> i32 {
+pub(super) unsafe extern "C" fn rsf_plugin_session_stop(raw: *mut Session) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
         return 0;
     };

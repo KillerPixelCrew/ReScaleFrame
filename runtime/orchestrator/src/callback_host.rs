@@ -5,8 +5,6 @@
 //! plugin, probe, saved SR choice and engine identity. Rust owns admission, the refusal codes,
 //! the plugin lifecycle order, host state, renderer configuration, scene and submission
 //! matching, SR context lifetime, callback recording slots, settings and overlay control.
-//! callback_render_host_platform.cpp supplies one call per presentation
-//! bridge, overlay, input dump or plugin session operation.
 //! Settings keys belong to settings_store.rs, SR vendor selection to rsf_gpu_select_sr_backend.
 //! The adapter's only policy input is `set_engine_spatial`, which learns whether the engine
 //! upscales spatially itself, never the vendor.
@@ -18,6 +16,8 @@ use crate::overlay_abi::{
     rsf_overlay_intent as Intent, rsf_overlay_stats as Stats,
 };
 use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
+#[cfg(not(test))]
+use crate::plugin_session::Session;
 use crate::render_abi::{
     RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
     rsf_sharpening_options as Sharpening,
@@ -58,6 +58,8 @@ use windows_sys::core::{PCWSTR, w};
 mod tests;
 
 type Handle = *mut c_void;
+#[cfg(test)]
+type Session = c_void;
 type LogFn = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
 type SpatialFn = unsafe extern "C" fn(u32, u32) -> c_int;
 
@@ -76,47 +78,33 @@ const SECTION: PCWSTR = w!("Rendering");
 const LOG_ACCESS: u32 = 4;
 const LOG_SHARE: u32 = 3;
 
-// Field order matches `Platform` in callback_render_host_platform.cpp. Returned COM interfaces
-// carry one reference for the caller; arguments are borrowed for the call. The plugin session and
-// FG choice entries are the public ones, passed here so contract tests can substitute them.
-#[repr(C)]
-pub(crate) struct Platform {
-    struct_size: u32,
-    #[cfg(test)]
+#[cfg(not(test))]
+struct Platform;
+
+#[cfg(not(test))]
+static PLATFORM: Platform = Platform;
+
+// Recording callbacks let fixtures exercise the same Rust host logic.
+#[cfg(test)]
+struct Platform {
     tick: unsafe extern "C" fn() -> u64,
-    #[cfg(test)]
     list_device: unsafe extern "C" fn(Handle) -> Handle,
-    #[cfg(test)]
     queue_device: unsafe extern "C" fn(Handle) -> Handle,
-    #[cfg(test)]
     adapter: unsafe extern "C" fn(Handle, *mut Adapter) -> i32,
-    #[cfg(test)]
     last_present_count: unsafe extern "C" fn(Handle, *mut u32) -> i32,
-    #[cfg(test)]
     resource_desc: unsafe extern "C" fn(Handle, *mut ResourceDesc),
     depth_domains: unsafe extern "C" fn(*const Pass) -> u32,
     dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
-    #[cfg(test)]
     sr12_create: unsafe extern "C" fn(*const SrSetup, *mut Handle) -> i32,
-    #[cfg(test)]
     sr12_plan: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> i32,
-    #[cfg(test)]
     sr12_destroy: unsafe extern "C" fn(Handle),
-    #[cfg(test)]
     sr12_evaluate: unsafe extern "C" fn(Handle, Handle, *const Pass, u32) -> i32,
-    #[cfg(test)]
     sr12_set_sharpening: unsafe extern "C" fn(Handle, *const Sharpening) -> i32,
-    #[cfg(test)]
     fg_cpu: unsafe extern "C" fn(*const CpuEvent),
-    #[cfg(test)]
     fg_submitted: unsafe extern "C" fn(u64, u64),
-    #[cfg(test)]
     fg_hudless: unsafe extern "C" fn(Handle, *const Pass),
-    #[cfg(test)]
     fg_window: unsafe extern "C" fn(*const Pass),
-    #[cfg(test)]
     fg_status: unsafe extern "C" fn(*mut FgStatus) -> i32,
-    #[cfg(test)]
     fg_options: unsafe extern "C" fn(*const FgOptions),
     fg_choice_save: unsafe extern "C" fn(u32) -> i32,
     present_host: unsafe extern "C" fn() -> Handle,
@@ -142,39 +130,82 @@ pub(crate) struct Platform {
 }
 
 crate::render_host_methods::impl_host_methods! {
-    fn tick() -> u64 { crate::render_host_native::tick() }
-    fn list_device(list: Handle) -> Handle { crate::render_host_native::child_device(list) }
-    fn queue_device(queue: Handle) -> Handle { crate::render_host_native::child_device(queue) }
+    fn tick() -> u64 { unsafe { crate::render_host_native::tick() } }
+    fn list_device(list: Handle) -> Handle { unsafe { crate::render_host_native::child_device(list) } }
+    fn queue_device(queue: Handle) -> Handle { unsafe { crate::render_host_native::child_device(queue) } }
     fn adapter(device: Handle, out: *mut Adapter) -> i32 {
-        crate::render_host_native::adapter(device, out)
+        unsafe { crate::render_host_native::adapter(device, out) }
     }
     fn last_present_count(chain: Handle, out: *mut u32) -> i32 {
-        crate::render_host_native::last_present_count(chain, out)
+        unsafe { crate::render_host_native::last_present_count(chain, out) }
     }
     fn resource_desc(resource: Handle, out: *mut ResourceDesc) {
-        crate::render_host_native::resource_desc(resource, out)
+        unsafe { crate::render_host_native::resource_desc(resource, out) }
     }
     fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
-        crate::sr12::create_for_host(setup, out.cast())
+        unsafe { crate::sr12::create_for_host(setup, out.cast()) }
     }
     fn sr12_plan(context: Handle, width: *mut u32, height: *mut u32) -> i32 {
-        crate::sr12::rsf_core_sr12_plan(context.cast(), width, height)
+        unsafe { crate::sr12::rsf_core_sr12_plan(context.cast(), width, height) }
     }
-    fn sr12_destroy(context: Handle) { crate::sr12::rsf_core_sr12_destroy(context.cast()) }
+    fn sr12_destroy(context: Handle) { unsafe { crate::sr12::rsf_core_sr12_destroy(context.cast()) } }
     fn sr12_evaluate(context: Handle, commands: Handle, pass: *const Pass, slot: u32) -> i32 {
-        crate::sr12::rsf_core_sr12_evaluate(context.cast(), commands, pass, slot)
+        unsafe { crate::sr12::rsf_core_sr12_evaluate(context.cast(), commands, pass, slot) }
     }
     fn sr12_set_sharpening(context: Handle, options: *const Sharpening) -> i32 {
-        crate::sr12::rsf_core_sr12_set_sharpening(context.cast(), options)
+        unsafe { crate::sr12::rsf_core_sr12_set_sharpening(context.cast(), options) }
     }
-    fn fg_options(options: *const FgOptions) { crate::fg12::rsf_core_fg12_options(options) }
-    fn fg_cpu(event: *const CpuEvent) { crate::fg12::rsf_core_fg12_cpu(event) }
-    fn fg_submitted(session: u64, source: u64) { crate::fg12::rsf_core_fg12_submitted(session, source) }
+    fn fg_options(options: *const FgOptions) { unsafe { crate::fg12::rsf_core_fg12_options(options) } }
+    fn fg_cpu(event: *const CpuEvent) { unsafe { crate::fg12::rsf_core_fg12_cpu(event) } }
+    fn fg_submitted(session: u64, source: u64) { unsafe { crate::fg12::rsf_core_fg12_submitted(session, source) } }
     fn fg_hudless(commands: Handle, pass: *const Pass) {
-        crate::fg12::rsf_core_fg12_hudless(commands, pass)
+        unsafe { crate::fg12::rsf_core_fg12_hudless(commands, pass) }
     }
-    fn fg_window(pass: *const Pass) { crate::fg12::rsf_core_fg12_window(pass) }
-    fn fg_status(output: *mut FgStatus) -> i32 { crate::fg12::rsf_core_fg12_status(output) }
+    fn fg_window(pass: *const Pass) { unsafe { crate::fg12::rsf_core_fg12_window(pass) } }
+    fn fg_status(output: *mut FgStatus) -> i32 { unsafe { crate::fg12::rsf_core_fg12_status(output) } }
+    fn depth_domains(pass: *const Pass) -> u32 {
+        unsafe { u32::from(rsf_game_sys::depth_domains_requested(&(*pass).depth_domains)) }
+    }
+    fn dlss_preset_valid(preset: u32) -> u32 { u32::from(crate::streamline_sr::preset_valid(preset)) }
+    fn present_host() -> Handle { crate::d3d11_present::rsf_core_d3d11p_host() }
+    fn present_request(backend: u32) -> i32 { crate::d3d11_present::rsf_core_d3d11p_request(backend) }
+    fn present_backend() -> u32 { crate::d3d11_present::rsf_core_d3d11p_backend() }
+    fn overlay_fill_fg(stats: &mut Stats, fg: *const FgStatus) {
+        unsafe { crate::overlay_settings::rsf_overlay_fill_fg_stats(stats, fg) }
+    }
+    fn fg_choice_save(backend: u32) -> i32 { crate::fg_choice::rsf_fg_choice_save(backend) }
+    fn present_switch_result() -> i32 { crate::d3d11_present::rsf_core_d3d11p_switch_result() }
+    fn overlay_frame(
+        device: Handle,
+        queue: Handle,
+        chain: Handle,
+        stats: *const Stats,
+        intent: *mut Intent,
+        log: LogFn,
+        user: Handle,
+    ) -> i32 {
+        unsafe {
+            crate::overlay_wrapped12::native::rsf_overlay_d3d12_frame(
+                device, queue, chain, stats, intent, log, user,
+            )
+        }
+    }
+    fn overlay_stop() { crate::overlay_wrapped12::native::rsf_overlay_d3d12_stop() }
+    fn input_dump_cancel(session: u64) {
+        unsafe { crate::render_host_foreign_abi::rsf_input_dump_cancel(session) }
+    }
+    fn session_prepare(options: *const SessionOptions, out: *mut *mut Session) -> i32 {
+        unsafe { crate::plugin_session::rsf_plugin_session_prepare(options, out) }
+    }
+    fn session_start(session: *mut Session) -> i32 {
+        unsafe { crate::plugin_session::rsf_plugin_session_start(session) }
+    }
+    fn session_quiesce(session: *mut Session) -> i32 {
+        unsafe { crate::plugin_session::rsf_plugin_session_quiesce(session) }
+    }
+    fn session_stop(session: *mut Session) -> i32 {
+        unsafe { crate::plugin_session::rsf_plugin_session_stop(session) }
+    }
 }
 
 struct State {
@@ -222,7 +253,7 @@ pub(crate) struct Host {
     state: Mutex<State>,
     log_file: Mutex<File>,
     // Written only under the lifecycle lock; read by stop.
-    plugin: AtomicPtr<c_void>,
+    plugin: AtomicPtr<Session>,
     preferences: Vec<u16>,
     streamline: CString,
     interposer: CString,
@@ -363,7 +394,7 @@ impl Host {
 
     fn release_rendering(&self, stop_overlay: bool) {
         if stop_overlay {
-            unsafe { (self.p.overlay_stop)() };
+            unsafe { self.p.overlay_stop() };
         }
         let mut state = self.lock();
         self.destroy(&mut state.sr);
@@ -372,7 +403,7 @@ impl Host {
 
     fn render(&self, commands: Handle, pass: &Pass, begin: bool) {
         let p = self.p;
-        if unsafe { (p.depth_domains)(pass) } != 0 {
+        if unsafe { p.depth_domains(pass) } != 0 {
             return;
         }
         if !begin {
@@ -408,12 +439,12 @@ impl Host {
             return;
         };
         if s.save_pending {
-            if unsafe { (p.present_switch_result)() } != 0 {
+            if unsafe { p.present_switch_result() } != 0 {
                 s.save_pending = false;
                 self.log("Generation provider switch failed; the saved choice is unchanged.");
-            } else if unsafe { (p.present_backend)() } == s.save_backend {
+            } else if unsafe { p.present_backend() } == s.save_backend {
                 s.save_pending = false;
-                let _ = unsafe { (p.fg_choice_save)(s.save_backend) };
+                let _ = unsafe { p.fg_choice_save(s.save_backend) };
             }
         }
         let mut stats = Stats {
@@ -509,7 +540,7 @@ impl Host {
                 unsafe { p.fg_options(&fg.requested) };
             }
         }
-        unsafe { (p.overlay_fill_fg)(&mut stats, if have_fg { &fg } else { null() }) };
+        unsafe { p.overlay_fill_fg(&mut stats, if have_fg { &fg } else { null() }) };
         // The saved choice stays on the old provider until the switch lands, so show the target.
         if s.save_pending {
             stats.fg_requested_backend = s.save_backend;
@@ -526,7 +557,7 @@ impl Host {
         // query waits on this lock.
         drop(guard);
         let drawn = unsafe {
-            (p.overlay_frame)(
+            p.overlay_frame(
                 device.as_ptr(),
                 queue,
                 pass.swapchain,
@@ -546,7 +577,7 @@ impl Host {
     fn apply_intent(&self, s: &mut State, intent: &Intent, fg: &mut FgOptions) {
         let p = self.p;
         if intent.fg_backend_changed != 0 {
-            let applied = unsafe { (p.present_request)(intent.fg_backend) };
+            let applied = unsafe { p.present_request(intent.fg_backend) };
             if applied == BACKEND_OK {
                 s.save_pending = true;
                 s.save_backend = intent.fg_backend;
@@ -614,7 +645,7 @@ impl Host {
         }
         let preset_changed = intent.dlss_preset_changed != 0
             && intent.dlss_preset != s.preset
-            && unsafe { (p.dlss_preset_valid)(intent.dlss_preset) } != 0;
+            && unsafe { p.dlss_preset_valid(intent.dlss_preset) } != 0;
         let policy_changed = intent.backend_changed != 0
             || intent.quality_changed != 0
             || intent.enabled_changed != 0
@@ -872,7 +903,7 @@ impl Host {
             device: device.as_ptr(),
             backend: s.backend,
             quality: s.quality,
-            streamline_host: unsafe { (p.present_host)() },
+            streamline_host: unsafe { p.present_host() },
             output_width: s.width,
             output_height: s.height,
             inverted_depth: pass.camera.depth_inverted,
@@ -993,7 +1024,7 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
     let automatic = setup.backend == SR_AUTO;
     let backend = if automatic { SR_NONE } else { setup.backend };
     let quality = setup.quality;
-    if unsafe { (p.dlss_preset_valid)(setup.dlss_preset) } == 0
+    if unsafe { p.dlss_preset_valid(setup.dlss_preset) } == 0
         || !accepts_backend_quality(backend, quality)
     {
         return Err(2);
@@ -1072,10 +1103,10 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
     Ok(host)
 }
 
-fn retire_plugin(platform: &Platform, plugin: Handle) -> bool {
+fn retire_plugin(platform: &Platform, plugin: *mut Session) -> bool {
     plugin.is_null()
-        || (unsafe { (platform.session_quiesce)(plugin) } == OK
-            && unsafe { (platform.session_stop)(plugin) } == OK)
+        || (unsafe { platform.session_quiesce(plugin) } == OK
+            && unsafe { platform.session_stop(plugin) } == OK)
 }
 
 // Refusal codes beyond describe: 9 a refused plugin could not be stopped and the host stays
@@ -1116,9 +1147,9 @@ unsafe fn start(setup: *const Setup, p: &'static Platform) -> u32 {
         },
     };
     let mut plugin = null_mut();
-    let mut result = unsafe { (p.session_prepare)(&options, &mut plugin) };
+    let mut result = unsafe { p.session_prepare(&options, &mut plugin) };
     if result == OK {
-        result = unsafe { (p.session_start)(plugin) };
+        result = unsafe { p.session_start(plugin) };
     }
     host.plugin.store(plugin, Ordering::Release);
     if result != OK {
@@ -1156,7 +1187,7 @@ fn stop() -> u32 {
     }
     host.plugin.store(null_mut(), Ordering::Release);
     host.release_rendering(true);
-    unsafe { (p.input_dump_cancel)(0) };
+    unsafe { p.input_dump_cancel(0) };
     host.log("Native renderer SR stopped after managed/native/GPU retirement.");
     published.0 = null_mut();
     drop(unsafe { Box::from_raw(raw) });
@@ -1164,17 +1195,10 @@ fn stop() -> u32 {
 }
 
 #[cfg(not(test))]
-unsafe extern "C" {
-    fn rsf_callback_host_platform() -> &'static Platform;
-}
-
-#[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_callback_host_start(setup: *const Setup) -> u32 {
     crate::fg12::bind_native_platform();
-    let platform = unsafe { rsf_callback_host_platform() };
-    assert_eq!(platform.struct_size as usize, size_of::<Platform>());
-    unsafe { start(setup, platform) }
+    unsafe { start(setup, &PLATFORM) }
 }
 
 #[unsafe(no_mangle)]

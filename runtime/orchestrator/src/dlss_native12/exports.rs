@@ -59,7 +59,7 @@ unsafe fn register(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_native12_registration_create(
+pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_create(
     device: Handle,
     setup: *const Setup,
     out: *mut *mut Registration,
@@ -68,7 +68,7 @@ unsafe extern "C" fn rsf_dlss_native12_registration_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_native12_registration_borrow(
+pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_borrow(
     device: Handle,
     module: Handle,
     setup: *const Setup,
@@ -102,7 +102,7 @@ unsafe extern "C" fn rsf_dlss_native12_create_registered(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_native12_registration_present(
+pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_present(
     registration: *mut Registration,
     swapchain: Handle,
     interval: u32,

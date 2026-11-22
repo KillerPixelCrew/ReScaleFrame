@@ -6,9 +6,9 @@ use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-mod attachment;
+pub(super) mod attachment;
 mod detours;
-mod diagnostics;
+pub(super) mod diagnostics;
 mod foreign;
 
 type Handle = *mut c_void;
@@ -32,7 +32,7 @@ const _: () = assert!(
     size_of::<ObserverSetup>() == 48 && std::mem::offset_of!(ObserverSetup, swapchain) == 40
 );
 
-struct Observer {
+pub(super) struct Observer {
     setup: ObserverSetup,
     serial: AtomicU64,
 }
@@ -79,7 +79,7 @@ thread_local! {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d12_observer_create(
+pub(super) unsafe extern "C" fn rsf_d3d12_observer_create(
     setup: *const ObserverSetup,
     out: *mut *mut Observer,
 ) -> i32 {

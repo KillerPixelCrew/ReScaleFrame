@@ -343,7 +343,6 @@ unsafe extern "C" fn diagnostics_enable(_: LogFn, _: Handle) -> i32 {
 }
 
 static PLATFORM: Platform = Platform {
-    struct_size: size_of::<Platform>() as u32,
     tick,
     foreground,
     hide_cursor,

@@ -274,6 +274,8 @@ mod reflex_audit;
 mod render_abi;
 #[cfg(windows)]
 mod render_host;
+#[cfg(all(windows, not(test)))]
+mod render_host_foreign_abi;
 #[cfg(windows)]
 mod render_host_methods;
 #[cfg(all(windows, not(test)))]

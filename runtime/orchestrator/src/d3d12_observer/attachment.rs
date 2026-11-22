@@ -91,12 +91,18 @@ fn attach(observer: *const Observer, pointer: Handle, kind: u32, platform: &Plat
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_d3d12_observer_device(observer: *const Observer, pointer: Handle) -> i32 {
+pub(crate) extern "C" fn rsf_d3d12_observer_device(
+    observer: *const Observer,
+    pointer: Handle,
+) -> i32 {
     attach(observer, pointer, DEVICE, &NATIVE)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_d3d12_observer_factory(observer: *const Observer, pointer: Handle) -> i32 {
+pub(crate) extern "C" fn rsf_d3d12_observer_factory(
+    observer: *const Observer,
+    pointer: Handle,
+) -> i32 {
     attach(observer, pointer, FACTORY, &NATIVE)
 }
 

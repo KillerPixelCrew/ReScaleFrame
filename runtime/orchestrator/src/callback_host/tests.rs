@@ -324,7 +324,6 @@ unsafe extern "C" fn session_stop(_: Handle) -> i32 {
 }
 
 static PLATFORM: Platform = Platform {
-    struct_size: size_of::<Platform>() as u32,
     tick,
     list_device: device_of,
     queue_device: device_of,
