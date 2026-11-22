@@ -459,6 +459,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-loader-fixtures"
+version = "0.1.2"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "rsf-minecraft"
 version = "0.1.2"
 dependencies = [
