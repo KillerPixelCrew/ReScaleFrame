@@ -67,6 +67,8 @@ mod d3d12_fence;
 #[cfg(windows)]
 mod d3d12_generation;
 #[cfg(windows)]
+mod d3d12_host;
+#[cfg(windows)]
 mod d3d12_observer;
 #[cfg(windows)]
 mod d3d12_observer_abi;

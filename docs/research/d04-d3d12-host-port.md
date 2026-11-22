@@ -36,17 +36,24 @@ shared host policy, provider tables and resource leases.
 - **Retire failed diagnostic readbacks when their device generation is drained.** A removed-device readback is discarded after the presentation generation drains. Pending work still waits for completion.
 - **Reuse the validated external exposure view during normalization.** SR12 stores the validated view format with the retained COM reference and uses R32_FLOAT when exposure is absent.
 
-## Native paths still open
+## Native ownership follow-up at 84a8b9eb
 
-| Path | What remains |
+The follow-up moves the five remaining paths to Rust owners with native ABI and
+SDK adapters. The base implementation and exact boundary are recorded here.
+
+| PORT path | Source evidence |
 | --- | --- |
-| `runtime/backends/common/d3d12_helpers.h` | Shared COM adapter calls for barriers, copies, fences, allocator and list creation, and UAV creation. The presentation bridge, frame capture, sharpening and vendor leaves share this header. |
-| `runtime/backends/common/fg_helpers.h` | Setup and resource validation, DXGI descriptor construction and stub callbacks for Streamline and the generation checks. |
-| `runtime/backends/common/generation12_checks.h` | The FSR and XeSS factories bind shared C++ validation, Win32 module detection and runtime loading callbacks here. |
-| `runtime/orchestrator/src/fg12_platform.cpp` | COM calls, bridge installation, FrameCapture12 and exported C ABI stubs. |
-| `runtime/orchestrator/src/sr12_platform.cpp` | COM and D3DCompiler setup, root signature and descriptor recording, FrameCapture12 and backend callbacks. D05 owns the direct DLSS callback migration. |
+| `d3d12_helpers.h` | `d3d12_host.rs` owns barriers, copies, allocator/list creation, and UAV creation. A copy transitions source then destination before copying, and restores destination then source. Command creation returns both owned handles only after a successful close. The native fence entry calls `d3d12_fence.rs` with the same requested value, event, budget, and raw arm HRESULT. |
+| `fg_helpers.h` | `d3d12_generation/admission.rs` owns direct-command and device checks and the frame and resource validation shared with Streamline. Validation retains result precedence, including the disabled-interpolation exit, source provenance, the exact FOV cutoff, optional HUD-less/UI resources and per-resource stale-generation checks. The adapter supplies the canonical game-frame predicates. Native setup-header checks, DXGI descriptor marshalling and the SDK-off provider table remain available to standalone backends. |
+| `generation12_checks.h` | The existing five-slot table forwards setup, frame, command and module-presence checks to Rust after the setup header is admitted. The runtime DLL loader retains its absolute path check, bounded Windows paths, load flags and log callback. FSR and XeSS still use their existing D07 setup/probe call order and SDK gates. |
+| `fg12_platform.cpp` | `d3d12_host/fg.rs` owns the swapchain query, texture reuse/allocation and fence work. Texture reuse keeps the original shape fields, exact device pointer and retained output lease. The native public entry points, presentation bridge and G07 capture receipts remain in place. |
+| `sr12_platform.cpp` | `d3d12_host/sr.rs` owns adapter discovery, normalization pipeline and resource creation and device admission. `d3d12_host/normalize.hlsl` contains the same kernel bytes. The pipeline uses four SRVs, four UAVs, six constants and the same System32 compiler, target and flags. Native borrowed command recording and mapping, provider callbacks, G05 sharpening and G07 captures still use their existing table entries. |
 
-## Verification
+The follow-up was checked with Rust 1.94.1 formatting, bindgen 0.72.1 for
+the affected ABI inputs, and locked offline Windows Cargo metadata. The generated
+files matched the base. Build, test, lint and device results are pending.
+
+## Initial port verification
 
 - Pinned Rust 1.94.1 rustfmt checked the changed Rust sources. Bindgen CLI
   0.72.1 regenerated the two changed Runtime tables. Unrelated generator

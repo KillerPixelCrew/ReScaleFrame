@@ -2,19 +2,9 @@
 #include <rescaleframe/native_cpu_service.h>
 #include "fg12_platform.h"
 #include "../../backends/common/frame_capture12.h"
-#include <dxgi1_4.h>
-
-using Microsoft::WRL::ComPtr;
 
 namespace {
 rsf::FrameCapture12 dump;
-}
-
-extern "C" uint32_t rsf_fg12_platform_buffer_index(void* chain)
-{
-    ComPtr<IDXGISwapChain3> typed;
-    return chain && SUCCEEDED(static_cast<IUnknown*>(chain)->QueryInterface(IID_PPV_ARGS(&typed)))
-        ? typed->GetCurrentBackBufferIndex() : UINT32_MAX;
 }
 
 extern "C" int rsf_fg12_platform_install(const rsf_d3d11_present_setup* setup, int explicit_creation) try
@@ -30,66 +20,6 @@ extern "C" uint32_t rsf_fg12_platform_allows_fg(const rsf_frame_record* record)
 extern "C" uint32_t rsf_fg12_platform_depth_domains(const rsf_game_render_pass* pass)
 {
     return rsf_game_depth_domains_requested(&pass->depth_domains);
-}
-
-extern "C" void rsf_fg12_platform_texture_desc(void* resource, rsf_fg12_texture_desc* output)
-{
-    const auto desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
-    *output = {desc.Width, desc.Height, uint32_t(desc.Format)};
-}
-
-extern "C" void* rsf_fg12_platform_texture(void* list, void* resource, void* reuse)
-{
-    auto desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
-    ComPtr<ID3D12Device> device;
-    if (FAILED(static_cast<ID3D12GraphicsCommandList*>(list)->GetDevice(IID_PPV_ARGS(&device)))) return nullptr;
-    auto* previous = static_cast<ID3D12Resource*>(reuse);
-    if (previous) {
-        const auto old = previous->GetDesc();
-        ComPtr<ID3D12Device> previous_device;
-        if (old.Dimension == desc.Dimension && old.Alignment == desc.Alignment && old.Width == desc.Width &&
-            old.Height == desc.Height && old.DepthOrArraySize == desc.DepthOrArraySize &&
-            old.MipLevels == desc.MipLevels && old.Format == desc.Format && old.Layout == desc.Layout &&
-            old.SampleDesc.Count == desc.SampleDesc.Count && old.SampleDesc.Quality == desc.SampleDesc.Quality &&
-            SUCCEEDED(previous->GetDevice(IID_PPV_ARGS(&previous_device))) && previous_device.Get() == device.Get()) {
-            previous->AddRef();
-            return previous;
-        }
-    }
-    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    ComPtr<ID3D12Resource> texture;
-    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture)))) return nullptr;
-    return texture.Detach();
-}
-
-extern "C" void rsf_fg12_platform_copy(void* list, void* source, uint32_t source_state, void* target, uint32_t target_state)
-{
-    const auto before = static_cast<D3D12_RESOURCE_STATES>(source_state);
-    rsf::copy_transitioned(static_cast<ID3D12GraphicsCommandList*>(list), static_cast<ID3D12Resource*>(target),
-        static_cast<D3D12_RESOURCE_STATES>(target_state), D3D12_RESOURCE_STATE_COMMON,
-        static_cast<ID3D12Resource*>(source), before, before);
-}
-
-extern "C" void rsf_fg12_platform_transition(void* list, void* resource, uint32_t before, uint32_t after)
-{
-    rsf::transition(static_cast<ID3D12GraphicsCommandList*>(list), static_cast<ID3D12Resource*>(resource),
-        static_cast<D3D12_RESOURCE_STATES>(before), static_cast<D3D12_RESOURCE_STATES>(after));
-}
-
-extern "C" void* rsf_fg12_platform_fence(void* queue)
-{
-    ComPtr<ID3D12Device> device;
-    ComPtr<ID3D12Fence> fence;
-    if (FAILED(static_cast<ID3D12CommandQueue*>(queue)->GetDevice(IID_PPV_ARGS(&device))) ||
-        FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return nullptr;
-    return fence.Detach();
-}
-
-extern "C" int rsf_fg12_platform_signal(void* queue, void* fence, uint64_t value)
-{
-    return SUCCEEDED(static_cast<ID3D12CommandQueue*>(queue)->Signal(static_cast<ID3D12Fence*>(fence), value));
 }
 
 extern "C" void rsf_fg12_platform_dump_record(void* list, void* source, uint32_t state, const rsf_frame_record* record,

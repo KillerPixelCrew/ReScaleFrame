@@ -5,7 +5,6 @@
 // interfaces carry one reference for the caller; resource arguments are borrowed for the call.
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/dlss_native12.h>
-#include <rescaleframe/shader_compile.h>
 #include <rescaleframe/srv_format.h>
 #include "../../backends/common/d3d12_helpers.h"
 #include "../../backends/common/frame_capture12.h"
@@ -13,11 +12,7 @@
 #include "fg12_platform.h"
 #include <windows.h>
 #include <d3d12.h>
-#include <dxgi1_4.h>
-#include <wrl/client.h>
 #include <new>
-
-using Microsoft::WRL::ComPtr;
 
 // Values sr12.rs names directly.
 static_assert(DXGI_FORMAT_R32G32B32A32_FLOAT == 2 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10 &&
@@ -36,119 +31,21 @@ static_assert(RSF_SR_AUTO == 7 && RSF_QUALITY_ULTRA_QUALITY == 5 &&
 static_assert(RSF_DUMP_VIEW_RAW == 0 && RSF_DUMP_VIEW_HDR == 3);
 static_assert(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT == 256);
 
-namespace {
-uint32_t adapter_identity(void* device, uint32_t* vendor, uint32_t* software)
-{
-    ComPtr<IDXGIFactory4> factory;
-    ComPtr<IDXGIAdapter1> adapter;
-    DXGI_ADAPTER_DESC1 desc{};
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
-        FAILED(factory->EnumAdapterByLuid(static_cast<ID3D12Device*>(device)->GetAdapterLuid(),
-            IID_PPV_ARGS(&adapter))) || FAILED(adapter->GetDesc1(&desc))) return 0;
-    *vendor = desc.VendorId;
-    *software = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
-    return 1;
+extern "C" {
+uint32_t rsf_core_sr12_adapter_identity(void*, uint32_t*, uint32_t*);
+int rsf_core_sr12_create_pipeline(void*, rsf_backend_log_fn, void*, void**, void**);
+void* rsf_core_sr12_create_heap(void*);
+void* rsf_core_sr12_create_exposure_texture(void*);
+void* rsf_core_sr12_create_exposure_upload(void*, uint64_t);
+void* rsf_core_sr12_create_readback(void*, uint64_t);
+int rsf_core_sr12_owned_by(void*, void*);
 }
 
+namespace {
 struct TextureDesc {
     uint64_t width;
     uint32_t height, dimension, array_size, samples, format, srv_format;
 };
-
-template<class T> void* transfer(HRESULT result, T* object)
-{
-    if (SUCCEEDED(result)) return object;
-    if (object) object->Release();
-    return nullptr;
-}
-
-// The kernel and its root layout are retained from the C++ owner byte for byte.
-constexpr char normalize_shader[] = R"(
-Texture2D<float4> scene : register(t0);
-Texture2D<float> depth : register(t1);
-Texture2D<float2> motion : register(t2);
-Texture2D<float> exposureInput : register(t3);
-RWTexture2D<float4> sceneOut : register(u0);
-RWTexture2D<float> depthOut : register(u1);
-RWTexture2D<float2> motionOut : register(u2);
-RWTexture2D<float> exposureOut : register(u3);
-cbuffer Constants : register(b0) { uint2 extent; float2 toPixels; uint inputsOnly; uint externalExposure; };
-[numthreads(8,8,1)] void main(uint3 id : SV_DispatchThreadID) {
-    if (any(id.xy >= extent)) return;
-    if (!inputsOnly) sceneOut[id.xy] = scene.Load(int3(id.xy,0));
-    depthOut[id.xy] = depth.Load(int3(id.xy,0));
-    motionOut[id.xy] = motion.Load(int3(id.xy,0)) * toPixels;
-    if (externalExposure && all(id.xy == 0)) exposureOut[uint2(0,0)] = exposureInput.Load(int3(0,0,0));
-})";
-
-int create_pipeline(void* device, rsf_backend_log_fn log, void* user, void** root_out, void** pipeline_out) try
-{
-    auto* owner = static_cast<ID3D12Device*>(device);
-    D3D12_DESCRIPTOR_RANGE ranges[] = {
-        {D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0, 0, 0},
-        {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 4, 0, 0, 4}};
-    D3D12_ROOT_PARAMETER parameters[2]{};
-    parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    parameters[0].DescriptorTable = {2, ranges};
-    parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    parameters[1].Constants = {0, 0, 6};
-    D3D12_ROOT_SIGNATURE_DESC desc{2, parameters, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
-    ComPtr<ID3DBlob> serialized, errors;
-    ComPtr<ID3D12RootSignature> root;
-    ComPtr<ID3D12PipelineState> pipeline;
-    std::vector<uint8_t> shader;
-    if (FAILED(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors)) ||
-        FAILED(owner->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(), IID_PPV_ARGS(&root))) ||
-        !rsf::compile_shader(normalize_shader, sizeof(normalize_shader) - 1, "RSF temporal input normalization", "main",
-            "cs_5_0", shader, log, user, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3)) return 0;
-    D3D12_COMPUTE_PIPELINE_STATE_DESC state{}; state.pRootSignature = root.Get();
-    state.CS = {shader.data(), shader.size()};
-    if (FAILED(owner->CreateComputePipelineState(&state, IID_PPV_ARGS(&pipeline)))) return 0;
-    *root_out = root.Detach(); *pipeline_out = pipeline.Detach();
-    return 1;
-} catch (...) { return 0; }
-
-void* create_heap(void* device)
-{
-    D3D12_DESCRIPTOR_HEAP_DESC desc{}; desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    desc.NumDescriptors = 8; desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    ID3D12DescriptorHeap* heap = nullptr;
-    const HRESULT result = static_cast<ID3D12Device*>(device)->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heap));
-    return transfer(result, heap);
-}
-// Created in UNORDERED_ACCESS.
-void* create_texture(void* device, uint32_t width, uint32_t height, uint32_t format)
-{
-    ID3D12Resource* texture = nullptr;
-    return rsf::create_uav_texture(static_cast<ID3D12Device*>(device), width, height,
-        static_cast<DXGI_FORMAT>(format), &texture) ? texture : nullptr;
-}
-// The SDR exposure texture starts in COPY_DEST.
-void* create_exposure_texture(void* device)
-{
-    auto* owner = static_cast<ID3D12Device*>(device);
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = 1; desc.Height = 1; desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.SampleDesc.Count = 1;
-    desc.Format = DXGI_FORMAT_R32_FLOAT;
-    ID3D12Resource* texture = nullptr;
-    const auto result = owner->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture));
-    return transfer(result, texture);
-}
-
-void* create_exposure_upload(void* device, uint64_t bytes)
-{
-    auto* owner = static_cast<ID3D12Device*>(device);
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-    D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = bytes; desc.Height = 1; desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.SampleDesc.Count = 1;
-    desc.Format = DXGI_FORMAT_UNKNOWN; desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    ID3D12Resource* upload = nullptr;
-    const auto result = owner->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload));
-    return transfer(result, upload);
-}
 
 int write_exposure_upload(void* resource, float value)
 {
@@ -164,32 +61,12 @@ int write_exposure_upload(void* resource, float value)
     upload->Unmap(0, &written);
     return 1;
 }
-// Created in COPY_DEST.
-void* create_readback(void* device, uint64_t bytes)
-{
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_READBACK;
-    D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; desc.Width = bytes;
-    desc.Height = desc.DepthOrArraySize = desc.MipLevels = 1; desc.SampleDesc.Count = 1; desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    ID3D12Resource* buffer = nullptr;
-    const HRESULT result = static_cast<ID3D12Device*>(device)->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&buffer));
-    return transfer(result, buffer);
-}
-
 void describe(void* resource, TextureDesc* out)
 {
     const auto desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
     *out = {desc.Width, desc.Height, uint32_t(desc.Dimension), desc.DepthOrArraySize, desc.SampleDesc.Count,
         uint32_t(desc.Format), rsf_d3d11_output_srv_format(uint32_t(desc.Format))};
 }
-// Resources and command lists are both device children.
-int owned_by(void* child, void* device)
-{
-    ComPtr<ID3D12Device> owner;
-    return SUCCEEDED(static_cast<ID3D12DeviceChild*>(child)->GetDevice(IID_PPV_ARGS(&owner))) &&
-        owner.Get() == static_cast<ID3D12Device*>(device);
-}
-
 void write_srv(void* device, void* heap, uint32_t index, void* resource, uint32_t format)
 {
     auto* owner = static_cast<ID3D12Device*>(device);
@@ -311,15 +188,15 @@ struct Platform {
     decltype(&rsf_sr_session_get_status) session_get_status;
     decltype(&rsf_sr_session_evaluate) session_evaluate;
     decltype(&rsf_sr_session_destroy) session_destroy;
-    decltype(&create_pipeline) create_pipeline;
-    decltype(&create_heap) create_heap;
-    decltype(&create_texture) create_texture;
-    decltype(&create_exposure_texture) create_exposure_texture;
-    decltype(&create_exposure_upload) create_exposure_upload;
+    decltype(&rsf_core_sr12_create_pipeline) create_pipeline;
+    decltype(&rsf_core_sr12_create_heap) create_heap;
+    decltype(&rsf_core_d3d12_create_uav_texture) create_texture;
+    decltype(&rsf_core_sr12_create_exposure_texture) create_exposure_texture;
+    decltype(&rsf_core_sr12_create_exposure_upload) create_exposure_upload;
     decltype(&write_exposure_upload) write_exposure_upload;
-    decltype(&create_readback) create_readback;
+    decltype(&rsf_core_sr12_create_readback) create_readback;
     decltype(&describe) describe;
-    decltype(&owned_by) owned_by;
+    decltype(&rsf_core_sr12_owned_by) owned_by;
     decltype(&write_srv) write_srv;
     decltype(&write_uav) write_uav;
     decltype(&dispatch) dispatch;
@@ -355,9 +232,10 @@ constexpr Platform platform{
     rsf_dlss_native12_plan, rsf_dlss_native12_set_sdr, rsf_dlss_native12_evaluate,
     rsf_dlss_native12_evaluate_borrowed, rsf_dlss_native12_present, rsf_dlss_native12_destroy,
     rsf_sr_session_create, rsf_sr_session_select, rsf_sr_session_get_status, rsf_sr_session_evaluate,
-    rsf_sr_session_destroy, create_pipeline, create_heap, create_texture, create_exposure_texture,
-    create_exposure_upload, write_exposure_upload, create_readback,
-    describe, owned_by, write_srv, write_uav, dispatch, transition, copy_region, copy_unit_exposure,
+    rsf_sr_session_destroy, rsf_core_sr12_create_pipeline, rsf_core_sr12_create_heap,
+    rsf_core_d3d12_create_uav_texture, rsf_core_sr12_create_exposure_texture,
+    rsf_core_sr12_create_exposure_upload, write_exposure_upload, rsf_core_sr12_create_readback,
+    describe, rsf_core_sr12_owned_by, write_srv, write_uav, dispatch, transition, copy_region, copy_unit_exposure,
     copy_motion_tile, map, unmap, depth_domains, capture_create, capture_destroy, capture_enabled,
     capture_configure, capture_flush, capture_record, capture_event, capture_wants, capture_force_reset,
     rsf_sharpen12_host_create, rsf_sharpen12_host_destroy, rsf_sharpen12_host_run,
@@ -370,7 +248,7 @@ extern "C" {
 rsf_backend_result rsf_core_sr12_create(const rsf_sr12_setup*, rsf_sr12**, const Platform*);
 uint32_t rsf_core_sr12_quality_supported(uint32_t, uint32_t);
 rsf_backend_result rsf_core_sr12_create_planned(const rsf_sr12_setup*, rsf_sr12_plan_result*, rsf_sr12**,
-    const Platform*, decltype(&adapter_identity));
+    const Platform*, decltype(&rsf_core_sr12_adapter_identity));
 rsf_backend_result rsf_core_sr12_plan(const rsf_sr12*, uint32_t*, uint32_t*);
 rsf_backend_result rsf_core_sr12_evaluate(rsf_sr12*, void*, const rsf_game_render_pass*, uint32_t);
 rsf_backend_result rsf_core_sr12_set_sharpening(rsf_sr12*, const rsf_sharpening_options*);
@@ -393,7 +271,7 @@ extern "C" uint32_t rsf_sr12_quality_supported(uint32_t backend, uint32_t qualit
 }
 extern "C" rsf_backend_result rsf_sr12_create_planned(const rsf_sr12_setup* setup, rsf_sr12_plan_result* plan, rsf_sr12** out)
 {
-    return rsf_core_sr12_create_planned(setup, plan, out, &platform, adapter_identity);
+    return rsf_core_sr12_create_planned(setup, plan, out, &platform, rsf_core_sr12_adapter_identity);
 }
 extern "C" rsf_backend_result rsf_sr12_plan(const rsf_sr12* self, uint32_t* width, uint32_t* height)
 {
