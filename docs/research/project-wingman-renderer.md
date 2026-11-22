@@ -10,7 +10,10 @@ removes it either when that specific pass executes or when its tracked allocatio
 destroyed. Only the RHI command's acquired COM leases survive the graph.
 
 Static follow-up used the installed Steam build `16671873`, whose executable SHA256
-matches the table below. GNU objdump showed the compute helper at RVA `0x5c2d4a0`
+matches the table below. REA confirmed the PE identity. Its Ghidra 12.1.4 provider
+timed out importing the 159,688,704-byte executable at the 330-second startup
+deadline, so this follow-up uses independent static disassembly. GNU objdump
+showed the compute helper at RVA `0x5c2d4a0`
 allocating a 0x120-byte object from the allocator at graph + 0x10. At `0x5c2d556`
 it installs the tracked vtable (`0x8390f78`) on the owner, then at `0x5c2d599`
 installs the compute-pass vtable (`0x83f6838`) on the embedded pass at owner + 8.
