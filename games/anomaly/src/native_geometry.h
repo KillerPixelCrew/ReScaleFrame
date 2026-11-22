@@ -13,15 +13,6 @@
 
 namespace rsf::anomaly::geometry {
 using temporal::InstanceKey;
-enum class VisualLookup : std::uint8_t {
-    Missing = RSF_ANOMALY_VISUAL_MISSING,
-    Unique = RSF_ANOMALY_VISUAL_UNIQUE,
-    Ambiguous = RSF_ANOMALY_VISUAL_AMBIGUOUS,
-};
-struct VisualProbe {
-    VisualLookup lookup{VisualLookup::Missing};
-    std::optional<InstanceKey> key; // Set only for Unique.
-};
 class IdentityRegistry {
 public:
     IdentityRegistry();
@@ -30,11 +21,7 @@ public:
     IdentityRegistry& operator=(const IdentityRegistry&) = delete;
     std::optional<InstanceKey> acquire(std::uint64_t owner, std::uint64_t visual);
     std::optional<InstanceKey> find(std::uint64_t owner, std::uint64_t visual) const;
-    std::optional<InstanceKey> find_visual(std::uint64_t visual) const;
-    // Like find_visual, but distinguishes an unknown visual from one live under several owners.
-    VisualProbe probe_visual(std::uint64_t visual) const;
     std::optional<InstanceKey> retire(std::uint64_t owner, std::uint64_t visual);
-    std::size_t retire_all(void (*apply)(void*, InstanceKey), void* user);
 private:
     friend class DrawScope;
     rsf_anomaly_geometry_registry* state_;
@@ -92,8 +79,6 @@ struct DrawCapture {
     std::uint64_t palette_layout{};
     std::vector<temporal::Mat4> bones;
 };
-struct DrawTimeFacts;
-void observe_draw_facts(DrawTimeFacts&, std::optional<DrawCapture>&) noexcept;
 class DrawContextScope {
 public:
     struct InheritView {};
@@ -122,15 +107,11 @@ private:
 // Valid only until the matching visual returns, on this thread. No engine object/resource lease.
 const DrawIdentity* borrow_draw() noexcept;
 std::optional<DrawCapture> capture_current_draw() noexcept;
-// Called by the draw-time hook before the engine's D3D draw. Counts the draw and, for an identified main-pass draw,
-// captures it and hands it to the draw sink. Does nothing outside a DrawScope other than count.
-void geometry_observe_draw() noexcept;
-
 struct GeometrySink {
     void* context{};
     // Called synchronously after identity invalidation, before engine pooling/free or a new generation.
     // Runs on the engine lifecycle caller thread, not necessarily the render thread. Must not reenter.
-    void (*retired)(void*, InstanceKey) noexcept{};
+    rsf_anomaly_geometry_retire_fn retired{};
 };
 void geometry_set_sink(GeometrySink) noexcept; // Set only with native hooks quiescent.
 struct DrawSink {
@@ -218,5 +199,6 @@ bool geometry_hooks_active() noexcept;
 void geometry_retire_all() noexcept; // Device/session teardown. Generation never resets.
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING
 void geometry_test_bind_module(std::byte*, const BuildProfile&) noexcept;
+bool geometry_test_seed(std::byte*, const BuildProfile&) noexcept;
 #endif
 }

@@ -3,6 +3,7 @@
 #include "geometry_feed.h"
 #include "geometry_retirement.h"
 #include <cstdio>
+#include <exception>
 #include <cstdlib>
 #include <thread>
 #include <limits>
@@ -17,6 +18,23 @@ extern "C" uint8_t rsf_anomaly_geometry_snapshot_kind(const SnapshotFacts*, uint
 
 namespace {
 namespace temporal = rsf::anomaly::temporal;
+
+// Keep any exception from the C++ history owner on this side of the C boundary.
+struct RetirementCall {
+    void (*apply)(void*, temporal::InstanceKey);
+    void* user;
+    std::exception_ptr exception{};
+
+    static void visit(void* context, const rsf_anomaly_geometry_key* key) noexcept {
+        auto& call = *static_cast<RetirementCall*>(context);
+        if (call.exception) return;
+        try {
+            call.apply(call.user, {key->owner, key->visual, key->generation});
+        } catch (...) {
+            call.exception = std::current_exception();
+        }
+    }
+};
 
 // Exercises the Rust queue from the native history fixture and contains
 // any exceptions from the fixture's callback on this side of the C ABI.
@@ -137,31 +155,8 @@ FeedResult feed_current_draw(temporal::TemporalHistory& history, temporal::Frame
 int main()
 {
     IdentityRegistry identities;
-    CHECK(!identities.find(0x10, 0x20));
-    const auto created = identities.acquire(0x10, 0x20);
-    CHECK(created && created->owner == 0x10 && created->visual == 0x20 && created->generation != 0);
-    CHECK(identities.find(0x10, 0x20) == created);
-    CHECK(!identities.acquire(0, 0x20));
-    CHECK(!identities.acquire(0x10, 0));
-    CHECK(!identities.acquire(0x10, 0x20)); // A second create cannot silently preserve a live lifetime.
-    CHECK(identities.retire(0x10, 0x20) == created);
-    CHECK(!identities.find(0x10, 0x20));
-    CHECK(!identities.retire(0x10, 0x20));
-    const auto recycled = identities.acquire(0x10, 0x20);
-    CHECK(recycled && recycled->generation > created->generation);
-    CHECK(identities.find_visual(0x20) == recycled);
-    CHECK(identities.acquire(0x30, 0x20));
-    CHECK(!identities.find_visual(0x20)); // An ambiguous pool never supplies a draw identity.
-    struct DrainCheck { IdentityRegistry& registry; unsigned callbacks{}; } drain{identities};
-    const auto retired = identities.retire_all([](void* user, InstanceKey key) {
-        auto& check = *static_cast<DrainCheck*>(user);
-        CHECK(!check.registry.find(key.owner, key.visual));
-        CHECK(!check.registry.find(0x10, 0x20) && !check.registry.find(0x30, 0x20));
-        ++check.callbacks;
-    }, &drain);
-    CHECK(retired == 2 && drain.callbacks == 2 && !identities.find_visual(0x20));
-    CHECK(identities.acquire(0x10, 0x20)->generation > recycled->generation);
-    const auto live = identities.find(0x10, 0x20);
+    const auto live = identities.acquire(0x10, 0x20);
+    CHECK(live && identities.find(0x10, 0x20) == live);
     float world[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 7, 8, 9, 1};
     CHECK(!borrow_draw());
     {

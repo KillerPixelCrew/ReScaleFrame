@@ -75,12 +75,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_registry_destroy(registry: *mut Identi
     drop(unsafe { Box::from_raw(registry) });
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_geometry_register(
-    registry: &IdentityRegistry,
-    owner: u64,
-    visual: u64,
-) -> u64 {
+pub(crate) fn register(registry: &IdentityRegistry, owner: u64, visual: u64) -> u64 {
     if owner == 0 || visual == 0 {
         return 0;
     }
@@ -97,11 +92,15 @@ pub(crate) extern "C" fn rsf_anomaly_geometry_register(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_geometry_find(
+extern "C" fn rsf_anomaly_geometry_register(
     registry: &IdentityRegistry,
     owner: u64,
     visual: u64,
 ) -> u64 {
+    register(registry, owner, visual)
+}
+
+pub(crate) fn find(registry: &IdentityRegistry, owner: u64, visual: u64) -> u64 {
     registry
         .lock()
         .unwrap()
@@ -112,14 +111,18 @@ pub(crate) extern "C" fn rsf_anomaly_geometry_find(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_geometry_probe_visual(
+extern "C" fn rsf_anomaly_geometry_find(
     registry: &IdentityRegistry,
+    owner: u64,
     visual: u64,
-    out: &mut Probe,
-) {
+) -> u64 {
+    find(registry, owner, visual)
+}
+
+pub(crate) fn probe_visual(registry: &IdentityRegistry, visual: u64) -> Probe {
     let state = registry.lock().unwrap();
     let mut matches = state.live.range((visual, 0)..=(visual, u64::MAX));
-    *out = match (matches.next(), matches.next()) {
+    match (matches.next(), matches.next()) {
         (Some(((_, owner), generation)), None) => Probe {
             lookup: RSF_ANOMALY_VISUAL_UNIQUE as u32,
             key: Key {
@@ -136,15 +139,10 @@ pub(crate) extern "C" fn rsf_anomaly_geometry_probe_visual(
             lookup: RSF_ANOMALY_VISUAL_MISSING as u32,
             ..Default::default()
         },
-    };
+    }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_geometry_retire(
-    registry: &IdentityRegistry,
-    owner: u64,
-    visual: u64,
-) -> u64 {
+pub(crate) fn retire(registry: &IdentityRegistry, owner: u64, visual: u64) -> u64 {
     registry
         .lock()
         .unwrap()
@@ -154,19 +152,22 @@ pub(crate) extern "C" fn rsf_anomaly_geometry_retire(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_geometry_retire_all(
+extern "C" fn rsf_anomaly_geometry_retire(
     registry: &IdentityRegistry,
-    retired: Retired,
-    user: *mut c_void,
-) -> usize {
+    owner: u64,
+    visual: u64,
+) -> u64 {
+    retire(registry, owner, visual)
+}
+
+// Invalidate the entire batch and release the registry lock before delivering callbacks.
+pub(crate) fn take_live(registry: &IdentityRegistry) -> impl ExactSizeIterator<Item = Key> {
     let live = mem::take(&mut registry.lock().unwrap().live);
-    let keys = live.into_iter().map(|((visual, owner), generation)| Key {
+    live.into_iter().map(|((visual, owner), generation)| Key {
         owner,
         visual,
         generation,
-    });
-    // All entries are invalidated before any engine callback sees the batch.
-    unsafe { deliver(keys, retired, user) }
+    })
 }
 
 pub(crate) fn classify(draw: &Draw) -> i32 {

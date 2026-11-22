@@ -18,7 +18,7 @@ add_library(rsf_anomaly_sr_shaders INTERFACE)
 target_include_directories(rsf_anomaly_sr_shaders INTERFACE "${RSF_ANOMALY_SR_GENERATED}")
 
 add_library(rsf_game_anomaly SHARED src/plugin.def src/bootstrap_platform.cpp src/native_observer_platform.cpp src/native_hooks.cpp
-    src/native_geometry.cpp src/geometry_feed.cpp
+    src/native_geometry.cpp
     src/sr_swap.cpp src/sr_d3d11.cpp src/sr_stage.cpp)
 rsf_add_rust_static(rsf_anomaly_rust rsf_rust_anomaly rsf-anomaly rsf_anomaly)
 rsf_add_rust_static(rsf_anomaly_plugin_rust rsf_rust_anomaly_plugin rsf-anomaly rsf_anomaly

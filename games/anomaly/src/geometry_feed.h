@@ -15,6 +15,15 @@ struct SnapshotFacts {
     std::uint64_t palette_layout;
     std::uint8_t view, domain, draw_kind;
 };
-SnapshotFacts snapshot_facts(const DrawCapture&) noexcept;
+static_assert(sizeof(SnapshotFacts) == 64 && offsetof(SnapshotFacts, world) == 24 &&
+    offsetof(SnapshotFacts, view) == 56 && offsetof(SnapshotFacts, draw_kind) == 58);
+
+inline SnapshotFacts snapshot_facts(const DrawCapture& draw) noexcept
+{
+    return {{draw.key.owner, draw.key.visual, draw.key.generation}, draw.world ? &*draw.world : nullptr,
+        draw.bones.data(), draw.bones.size(), draw.palette_layout,
+        draw.view ? uint8_t(*draw.view) : uint8_t{255},
+        draw.domain ? uint8_t(*draw.domain) : uint8_t{255}, uint8_t(draw.kind)};
+}
 
 }

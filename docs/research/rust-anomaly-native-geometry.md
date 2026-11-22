@@ -187,3 +187,45 @@ Pinned Rust 1.94.1 formatting, locked offline Windows Cargo metadata,
 an unchanged bindgen 0.72.1 geometry registry regeneration and Git
 whitespace checks passed. Build, lint, tests, fixtures and device or
 moving-game acceptance remain user-owned.
+
+## Remaining geometry source and fixtures
+
+The N03 follow-up at base `76720485` moves palette address admission,
+registry lookups and retirement delivery through Rust's typed geometry
+owners. The palette reader verifies the start and exclusive end of each
+batch using the existing 168-byte instance stride and 64-byte transform
+offset. The native leaf still guards each 64-byte read and transfers up
+to 64 matrices per call. A partial or non-affine batch still clears the
+published palette, while the copied world remains available.
+
+The dispatch path uses typed flush, draw, near and retirement callbacks.
+The registry invalidates its whole batch before reporting any retirement.
+The locks for the callback slots are released before the callbacks run.
+The native flush still captures before the original call, then reports
+after the original upload. The native rmNear still runs the original,
+enters the near scope and reports it to the existing SR callback. The
+motion flush still consumes a borrowed world and palette through the
+same call record. The inline adapter now lives with that record, so the
+separate geometry feed translation unit is gone.
+
+Both profile banks keep their original RVAs, byte strings, table order
+and layouts. The real MinHook fixture lends the selected bank to Rust to
+seed the synthetic PE. Rust writes detour bytes, layout bytes and then
+extended prefixes in the original order. The C++ fixture still owns the
+executable allocation and calls the native install, restore and re-enable
+paths for Standard and AVX. It still mutates every extended prefix,
+layout site and entry site to verify guarded refusal, and checks 65-bone
+capture and rejection when the last matrix is invalid. The pure registry
+cases now exercise the Rust owner directly. The mixed fixture still
+checks TLS, guarded world and palette reads, capture into temporal
+history and retirement across threads. Its exception guard stays with
+the native history callback.
+
+Source comparison matched the two guarded profile banks and 5,120
+modeled palette span cases, including addresses at and beyond the old
+exclusive-end limit. N01's observer sources and N04's motion stage
+sources match the base, as do the SR and FG stage sources. Pinned Rust
+1.94.1 formatting, locked offline Windows Cargo metadata, targeted
+bindgen 0.72.1 regeneration of the unchanged registry binding and Git
+whitespace checks passed. Builds, Clippy, native fixtures and game or
+device execution were outside this pass.

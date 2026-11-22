@@ -7,16 +7,26 @@ struct PaletteRead {
     fail_at: Option<u32>,
 }
 
+const INSTANCES: usize = 0x1000;
+thread_local! {
+    static READER: std::cell::RefCell<PaletteRead> = Default::default();
+}
+
 unsafe extern "C" fn read_bones(
-    reader: usize,
-    first: u32,
+    start: usize,
+    stride: usize,
     count: u32,
     out: *mut NativeMatrix,
 ) -> bool {
-    // The test lends an exclusive reader and write-only scratch span for this call.
-    let reader = unsafe { &mut *ptr::with_exposed_provenance_mut::<PaletteRead>(reader) };
-    reader.batches.push((first, count));
-    if reader.fail_at == Some(first) {
+    assert_eq!(stride, 168);
+    let offset = start - INSTANCES - 64;
+    assert_eq!(offset % stride, 0);
+    let first = (offset / stride) as u32;
+    let failed = READER.with_borrow_mut(|reader| {
+        reader.batches.push((first, count));
+        reader.fail_at == Some(first)
+    });
+    if failed {
         return false;
     }
     for index in 0..count {
@@ -29,12 +39,11 @@ unsafe extern "C" fn read_bones(
 
 #[test]
 fn max_palette_uses_sixteen_batches_in_engine_order() {
-    let mut reader = PaletteRead::default();
+    READER.set(Default::default());
     let mut output = vec![[0.; 16]; MAX_CAPTURE_BONES as usize];
-    let instances = ptr::from_mut(&mut reader).expose_provenance();
-    assert!(write_palette(read_bones, instances, &mut output));
+    assert!(write_palette(read_bones, INSTANCES, &mut output));
     assert_eq!(
-        reader.batches,
+        READER.with_borrow(|reader| reader.batches.clone()),
         (0..MAX_CAPTURE_BONES)
             .step_by(BONE_BATCH)
             .map(|first| (first, BONE_BATCH as u32))
@@ -47,12 +56,11 @@ fn max_palette_uses_sixteen_batches_in_engine_order() {
 
 #[test]
 fn unreadable_later_batch_stops_the_palette() {
-    let mut reader = PaletteRead {
+    READER.set(PaletteRead {
         fail_at: Some(BONE_BATCH as u32),
         ..Default::default()
-    };
+    });
     let mut output = [[0.; 16]; BONE_BATCH * 2 + 1];
-    let instances = ptr::from_mut(&mut reader).expose_provenance();
-    assert!(!write_palette(read_bones, instances, &mut output));
-    assert_eq!(reader.batches, [(0, 64), (64, 64)]);
+    assert!(!write_palette(read_bones, INSTANCES, &mut output));
+    READER.with_borrow(|reader| assert_eq!(reader.batches, [(0, 64), (64, 64)]));
 }

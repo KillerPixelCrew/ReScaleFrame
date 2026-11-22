@@ -40,8 +40,8 @@ pub(super) struct NativeSite {
 #[repr(C)]
 pub(super) struct UniqueGuard {
     name: *const c_char,
-    rva: u32,
-    expected_hex: *const c_char,
+    pub(super) rva: u32,
+    pub(super) expected_hex: *const c_char,
 }
 
 const _: () = {
@@ -116,23 +116,26 @@ impl Image {
     }
 
     fn matches_hex(&self, rva: u32, hex: &[u8]) -> bool {
-        let pairs = hex.chunks_exact(2);
-        if !pairs.remainder().is_empty() {
-            return false;
-        }
-        let Some(address) = self.address(rva, pairs.len()) else {
+        let Some(address) = self.address(rva, hex.len() / 2) else {
             return false;
         };
-        let Some(expected): Option<Vec<_>> = pairs
-            .map(|pair| Some((digit(pair[0])? << 4) | digit(pair[1])?))
-            .collect()
-        else {
+        let Some(expected) = decode_hex(hex) else {
             return false;
         };
         let mut bytes = vec![0u8; expected.len()];
         let copied = unsafe { (self.read)(bytes.as_mut_ptr().cast(), address.cast(), bytes.len()) };
         copied && bytes == expected
     }
+}
+
+pub(super) fn decode_hex(hex: &[u8]) -> Option<Vec<u8>> {
+    let pairs = hex.chunks_exact(2);
+    if !pairs.remainder().is_empty() {
+        return None;
+    }
+    pairs
+        .map(|pair| Some((digit(pair[0])? << 4) | digit(pair[1])?))
+        .collect()
 }
 
 fn digit(value: u8) -> Option<u8> {

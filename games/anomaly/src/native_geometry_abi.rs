@@ -62,7 +62,7 @@ pub(crate) struct Layout {
 
 pub(crate) type NativeMatrix = [f32; 16];
 pub(crate) type Matrix = [f64; 16];
-pub(crate) type ReadBones = unsafe extern "C" fn(usize, u32, u32, *mut NativeMatrix) -> bool;
+pub(crate) type ReadBones = unsafe extern "C" fn(usize, usize, u32, *mut NativeMatrix) -> bool;
 
 #[repr(C)]
 pub(crate) struct Context {
@@ -110,21 +110,20 @@ pub(crate) struct Facts {
     pub detail: bool,
 }
 
-type Function = unsafe extern "C" fn();
-type Invoke = unsafe extern "C" fn(Function, usize, *const c_void);
+// The Windows x64 ABI passes each native const reference as a pointer.
+// The backing C++ objects live through the synchronous callback.
+pub(crate) enum NativeDrawCapture {}
+pub(crate) enum NativeDrawFacts {}
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct Callback {
-    pub function: Option<Function>,
-    pub user: usize,
-    pub invoke: Option<Invoke>,
-}
+pub(crate) type Retired = unsafe extern "C" fn(*mut c_void, *const Key);
+pub(crate) type DrawSink = unsafe extern "C" fn(*mut c_void, *const NativeDrawCapture);
+pub(crate) type Flush = unsafe extern "C" fn(*const NativeDrawFacts);
+pub(crate) type Near = unsafe extern "C" fn(*mut c_void);
 
 #[repr(C)]
 pub(crate) struct Writer {
     pub begin: unsafe extern "C" fn(*mut c_void, *const Visual, *const Matrix, u32) -> *mut Matrix,
-    pub finish: unsafe extern "C" fn(*mut c_void, u64) -> *const c_void,
+    pub finish: unsafe extern "C" fn(*mut c_void, u64) -> *const NativeDrawCapture,
 }
 
 /// The selected build's immutable guard facts. Each pointer borrows a static
@@ -209,7 +208,6 @@ const _: () = {
     assert!(size_of::<Window>() == 32);
     assert!(size_of::<Visual>() == 80);
     assert!(size_of::<Facts>() == 32);
-    assert!(size_of::<Callback>() == 24);
     assert!(size_of::<Writer>() == 16);
     assert!(size_of::<GuardProfile>() == 64);
     assert!(std::mem::offset_of!(GuardProfile, sites) == 24);

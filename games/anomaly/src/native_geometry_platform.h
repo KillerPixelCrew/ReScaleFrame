@@ -51,17 +51,20 @@ struct rsf_anomaly_geometry_facts {
     bool in_visual, detail;
 };
 
-using rsf_anomaly_geometry_fn = void (*)();
-struct rsf_anomaly_geometry_callback {
-    rsf_anomaly_geometry_fn function;
-    uintptr_t user;
-    void (*invoke)(rsf_anomaly_geometry_fn, uintptr_t, const void*) noexcept;
-};
+namespace rsf::anomaly::geometry {
+struct DrawCapture;
+struct DrawTimeFacts;
+}
+using rsf_anomaly_geometry_retire_fn = void (*)(void*, const rsf_anomaly_geometry_key*) noexcept;
+using rsf_anomaly_geometry_draw_fn = void (*)(void*, const rsf::anomaly::geometry::DrawCapture&) noexcept;
+using rsf_anomaly_geometry_flush_fn = void (*)(const rsf::anomaly::geometry::DrawTimeFacts&) noexcept;
+using rsf_anomaly_geometry_near_fn = void (*)(void*) noexcept;
+
 struct rsf_anomaly_geometry_writer {
     // Lends count initialized elements until finish. Null declines palette storage.
     rsf_anomaly_geometry_matrix* (*begin)(void*, const rsf_anomaly_geometry_visual*,
         const rsf_anomaly_geometry_matrix*, uint32_t count) noexcept;
-    const void* (*finish)(void*, uint64_t) noexcept;
+    const rsf::anomaly::geometry::DrawCapture* (*finish)(void*, uint64_t) noexcept;
 };
 // The selected build's immutable guard facts. Each pointer borrows a static profile table, and read is the guarded
 // engine-memory leaf behind Rust's checked-image reader.
@@ -84,7 +87,7 @@ struct rsf_anomaly_geometry_platform {
     rsf_anomaly_geometry_hierarchy (*hierarchy)(rsf_anomaly_geometry_engine) noexcept;
     rsf_anomaly_geometry_layout (*layout)(rsf_anomaly_geometry_engine) noexcept;
     bool (*read)(void*, const void*, size_t) noexcept;
-    bool (*bones)(uintptr_t, uint32_t first, uint32_t count, rsf_anomaly_geometry_native_matrix*) noexcept;
+    bool (*bones)(uintptr_t first, size_t stride, uint32_t count, rsf_anomaly_geometry_native_matrix*) noexcept;
 };
 
 struct rsf_anomaly_geometry_stats {
@@ -104,11 +107,11 @@ bool rsf_anomaly_geometry_disable(const rsf_anomaly_geometry_platform*);
 bool rsf_anomaly_geometry_active();
 rsf_anomaly_geometry_engine rsf_anomaly_geometry_binding();
 void rsf_anomaly_geometry_test_bind(rsf_anomaly_geometry_engine);
-void rsf_anomaly_geometry_set_retired(rsf_anomaly_geometry_callback);
-void rsf_anomaly_geometry_set_draw(rsf_anomaly_geometry_callback);
-void rsf_anomaly_geometry_set_flush(rsf_anomaly_geometry_callback);
-void rsf_anomaly_geometry_set_near(rsf_anomaly_geometry_callback);
-void rsf_anomaly_geometry_publish_flush(const void*);
+void rsf_anomaly_geometry_set_retired(uintptr_t, rsf_anomaly_geometry_retire_fn);
+void rsf_anomaly_geometry_set_draw(uintptr_t, rsf_anomaly_geometry_draw_fn);
+void rsf_anomaly_geometry_set_flush(rsf_anomaly_geometry_flush_fn);
+void rsf_anomaly_geometry_set_near(rsf_anomaly_geometry_near_fn);
+void rsf_anomaly_geometry_publish_flush(const rsf::anomaly::geometry::DrawTimeFacts*);
 void rsf_anomaly_geometry_publish_near(void*);
 void rsf_anomaly_geometry_set_foliage(bool);
 bool rsf_anomaly_geometry_foliage();
@@ -133,8 +136,8 @@ void rsf_anomaly_geometry_visual_enter(rsf_anomaly_geometry_visual*);
 void rsf_anomaly_geometry_classify_visual(const rsf_anomaly_geometry_platform*, rsf_anomaly_geometry_visual*);
 void rsf_anomaly_geometry_visual_leave(const rsf_anomaly_geometry_visual*);
 const void* rsf_anomaly_geometry_borrow_draw();
-const void* rsf_anomaly_geometry_capture(const rsf_anomaly_geometry_platform*, const rsf_anomaly_geometry_writer*, void*);
-const void* rsf_anomaly_geometry_observe(const rsf_anomaly_geometry_platform*, const rsf_anomaly_geometry_writer*, void*,
+const rsf::anomaly::geometry::DrawCapture* rsf_anomaly_geometry_capture(const rsf_anomaly_geometry_platform*, const rsf_anomaly_geometry_writer*, void*);
+const rsf::anomaly::geometry::DrawCapture* rsf_anomaly_geometry_observe(const rsf_anomaly_geometry_platform*, const rsf_anomaly_geometry_writer*, void*,
     rsf_anomaly_geometry_facts*);
 void rsf_anomaly_geometry_stats_read(rsf_anomaly_geometry_stats*);
 void rsf_anomaly_geometry_coverage_read(rsf_anomaly_geometry_coverage*);

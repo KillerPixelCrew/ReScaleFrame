@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "native_geometry.h"
 #include "build_profile.h"
-#include "geometry_retirement.h"
 #include <array>
 #include <cstddef>
-#include <cstring>
-#include <limits>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -41,30 +38,10 @@ std::optional<InstanceKey> IdentityRegistry::find(std::uint64_t owner, std::uint
 {
     return identity(owner, visual, rsf_anomaly_geometry_find(state_, owner, visual));
 }
-std::optional<InstanceKey> IdentityRegistry::find_visual(std::uint64_t visual) const
-{
-    return probe_visual(visual).key;
-}
-VisualProbe IdentityRegistry::probe_visual(std::uint64_t visual) const
-{
-    rsf_anomaly_geometry_probe result{};
-    rsf_anomaly_geometry_probe_visual(state_, visual, &result);
-    return {static_cast<VisualLookup>(result.lookup),
-        identity(result.key.owner, result.key.visual, result.key.generation)};
-}
 std::optional<InstanceKey> IdentityRegistry::retire(std::uint64_t owner, std::uint64_t visual)
 {
     return identity(owner, visual, rsf_anomaly_geometry_retire(state_, owner, visual));
 }
-std::size_t IdentityRegistry::retire_all(void (*apply)(void*, InstanceKey), void* user)
-{
-    RetirementCall call{apply, user};
-    const auto count = rsf_anomaly_geometry_retire_all(state_, apply ? RetirementCall::visit : nullptr, &call);
-    if (call.exception) std::rethrow_exception(call.exception);
-    return count;
-}
-
-
 namespace {
 using Engine = rsf_anomaly_geometry_engine;
 using Matrix = rsf_anomaly_geometry_matrix;
@@ -76,7 +53,7 @@ static_assert(sizeof(rsf_anomaly_geometry_facts) == 32 && sizeof(rsf_anomaly_geo
     offsetof(rsf_anomaly_geometry_platform, bones) == 64);
 static_assert(sizeof(GeometryStats) == 40 && sizeof(GeometryCoverage) == 1472);
 static_assert(sizeof(rsf_anomaly_geometry_layout) == 16 && sizeof(rsf_anomaly_geometry_native_matrix) == 64);
-static_assert(sizeof(rsf_anomaly_geometry_child_range) == 24 && sizeof(rsf_anomaly_geometry_callback) == 24);
+static_assert(sizeof(rsf_anomaly_geometry_child_range) == 24);
 static_assert(sizeof(rsf_anomaly_geometry_hierarchy) == 32 && offsetof(rsf_anomaly_geometry_hierarchy, read) == 24);
 static_assert(sizeof(rsf_anomaly_geometry_writer) == 16 && sizeof(Matrix) == 128 &&
     alignof(Matrix) == alignof(double) && offsetof(Matrix, values) == 0);
@@ -158,15 +135,11 @@ rsf_anomaly_geometry_layout layout(Engine engine) noexcept
         build.native->device_frame_rva, build.geometry->world_matrix_rva};
 }
 
-bool bones(std::uintptr_t instances, std::uint32_t first, std::uint32_t count,
+bool bones(std::uintptr_t first, std::size_t stride, std::uint32_t count,
     rsf_anomaly_geometry_native_matrix* out) noexcept
 {
-    if (!instances || !count) return false;
-    const auto last = std::uintptr_t{first} + count - 1;
-    const auto end = last * bone_instance_stride + render_transform_offset + sizeof(*out);
-    if (instances > (std::numeric_limits<std::uintptr_t>::max)() - end) return false;
     for (std::uint32_t i = 0; i < count; ++i) {
-        const auto address = instances + (std::uintptr_t{first} + i) * bone_instance_stride + render_transform_offset;
+        const auto address = first + std::size_t{i} * stride;
         if (!guarded_copy(&out[i], reinterpret_cast<const void*>(address), sizeof(*out))) return false;
     }
     return true;
@@ -202,13 +175,23 @@ constexpr rsf_anomaly_geometry_writer writer{
         catch (...) { return nullptr; }
         return capture.bones.data();
     },
-    [](void* user, std::uint64_t layout) noexcept -> const void* {
+    [](void* user, std::uint64_t layout) noexcept -> const DrawCapture* {
         auto& capture = **static_cast<CaptureStorage*>(user);
         if (!layout) capture.bones.clear();
         capture.palette_layout = layout;
         return &capture;
     },
 };
+
+void observe_draw_facts(DrawTimeFacts& facts, CaptureStorage& capture) noexcept
+{
+    rsf_anomaly_geometry_facts raw;
+    const auto* kept = rsf_anomaly_geometry_observe(&platform, &writer, &capture, &raw);
+    facts = {raw.in_visual, static_cast<DrawPass>(raw.pass), classification(raw.visual_pass, raw.type, raw.verdict),
+        static_cast<DrawKind>(raw.kind), optional_enum<temporal::ViewId>(raw.view),
+        optional_enum<temporal::ProjectionDomain>(raw.domain), kept, raw.visual,
+        static_cast<VisualType>(raw.type), raw.tree_lod, raw.detail};
+}
 
 struct FactoryScope {
     FactoryScope() noexcept { rsf_anomaly_geometry_factory_enter(); }
@@ -408,58 +391,24 @@ const char* verdict_name(DrawVerdict verdict) noexcept
     return rsf_anomaly_geometry_verdict_name(static_cast<std::uint8_t>(verdict));
 }
 
-void observe_draw_facts(DrawTimeFacts& facts, CaptureStorage& capture) noexcept
-{
-    rsf_anomaly_geometry_facts raw;
-    const auto* kept = rsf_anomaly_geometry_observe(&platform, &writer, &capture, &raw);
-    facts = {raw.in_visual, static_cast<DrawPass>(raw.pass), classification(raw.visual_pass, raw.type, raw.verdict),
-        static_cast<DrawKind>(raw.kind), optional_enum<temporal::ViewId>(raw.view),
-        optional_enum<temporal::ProjectionDomain>(raw.domain), static_cast<const DrawCapture*>(kept), raw.visual,
-        static_cast<VisualType>(raw.type), raw.tree_lod, raw.detail};
-}
-
-void geometry_observe_draw() noexcept
-{
-    DrawTimeFacts facts;
-    CaptureStorage capture;
-    observe_draw_facts(facts, capture);
-}
-
 void geometry_set_flush_callback(FlushCallback value) noexcept
 {
-    rsf_anomaly_geometry_set_flush({reinterpret_cast<rsf_anomaly_geometry_fn>(value), 0,
-        [](rsf_anomaly_geometry_fn fn, std::uintptr_t, const void* facts) noexcept {
-            reinterpret_cast<FlushCallback>(fn)(*static_cast<const DrawTimeFacts*>(facts));
-        }});
+    rsf_anomaly_geometry_set_flush(value);
 }
 
 void geometry_set_rm_near_callback(RmNearCallback value) noexcept
 {
-    rsf_anomaly_geometry_set_near({reinterpret_cast<rsf_anomaly_geometry_fn>(value), 0,
-        [](rsf_anomaly_geometry_fn fn, std::uintptr_t, const void* self) noexcept {
-            reinterpret_cast<RmNearCallback>(fn)(const_cast<void*>(self));
-        }});
+    rsf_anomaly_geometry_set_near(value);
 }
 
 void geometry_set_sink(GeometrySink value) noexcept
 {
-    rsf_anomaly_geometry_set_retired({reinterpret_cast<rsf_anomaly_geometry_fn>(value.retired),
-        reinterpret_cast<std::uintptr_t>(value.context),
-        [](rsf_anomaly_geometry_fn fn, std::uintptr_t user, const void* payload) noexcept {
-            const auto& key = *static_cast<const rsf_anomaly_geometry_key*>(payload);
-            reinterpret_cast<decltype(GeometrySink::retired)>(fn)(reinterpret_cast<void*>(user),
-                {key.owner, key.visual, key.generation});
-        }});
+    rsf_anomaly_geometry_set_retired(reinterpret_cast<std::uintptr_t>(value.context), value.retired);
 }
 
 void geometry_set_draw_sink(DrawSink value) noexcept
 {
-    rsf_anomaly_geometry_set_draw({reinterpret_cast<rsf_anomaly_geometry_fn>(value.draw),
-        reinterpret_cast<std::uintptr_t>(value.context),
-        [](rsf_anomaly_geometry_fn fn, std::uintptr_t user, const void* payload) noexcept {
-            reinterpret_cast<decltype(DrawSink::draw)>(fn)(reinterpret_cast<void*>(user),
-                *static_cast<const DrawCapture*>(payload));
-        }});
+    rsf_anomaly_geometry_set_draw(reinterpret_cast<std::uintptr_t>(value.context), value.draw);
 }
 
 void geometry_enable_foliage_identity(bool value) noexcept { rsf_anomaly_geometry_set_foliage(value); }
@@ -551,6 +500,15 @@ void geometry_report_coverage(void (*emit)(void*, const char*), void* user) noex
 }
 
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING
+extern "C" bool rsf_test_anomaly_geometry_seed(std::byte*, uint32_t,
+    const rsf_anomaly_geometry_guard_profile*) noexcept;
+
+bool geometry_test_seed(std::byte* module, const BuildProfile& build) noexcept
+{
+    const auto profile = guard_profile(bind(module, build));
+    return rsf_test_anomaly_geometry_seed(module, build.image_size(), &profile);
+}
+
 void geometry_test_bind_module(std::byte* module, const BuildProfile& build) noexcept
 {
     rsf_anomaly_geometry_test_bind(bind(module, build));

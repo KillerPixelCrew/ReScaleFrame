@@ -19,7 +19,6 @@ endif()
 # detours on fixture functions plus the production guarded install against a synthetic image. No game code runs.
 set(RSF_ANOMALY_GEOMETRY_SOURCES
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_geometry.cpp"
-    "${PROJECT_SOURCE_DIR}/games/anomaly/src/geometry_feed.cpp"
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_hooks.cpp")
 add_executable(rsf_anomaly_geometry_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_tests.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")

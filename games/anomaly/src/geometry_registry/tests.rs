@@ -5,19 +5,18 @@ use super::*;
 fn visual_lookup_distinguishes_absent_unique_and_ambiguous() {
     let registry = IdentityRegistry::default();
     let lookup = |visual| {
-        let mut probe = Probe::default();
-        rsf_anomaly_geometry_probe_visual(&registry, visual, &mut probe);
+        let probe = probe_visual(&registry, visual);
         (probe.lookup as i32, probe.key.generation)
     };
     assert_eq!(lookup(0x500), (RSF_ANOMALY_VISUAL_MISSING, 0));
-    let first = rsf_anomaly_geometry_register(&registry, 1, 0x500);
+    let first = register(&registry, 1, 0x500);
     assert_ne!(first, 0);
     assert_eq!(lookup(0x500), (RSF_ANOMALY_VISUAL_UNIQUE, first));
     assert_eq!(lookup(0x4ff), (RSF_ANOMALY_VISUAL_MISSING, 0));
     assert_eq!(lookup(0x501), (RSF_ANOMALY_VISUAL_MISSING, 0));
-    assert_ne!(rsf_anomaly_geometry_register(&registry, 2, 0x500), 0);
+    assert_ne!(register(&registry, 2, 0x500), 0);
     assert_eq!(lookup(0x500), (RSF_ANOMALY_VISUAL_AMBIGUOUS, 0));
-    assert_ne!(rsf_anomaly_geometry_retire(&registry, 2, 0x500), 0);
+    assert_ne!(retire(&registry, 2, 0x500), 0);
     assert_eq!(lookup(0x500), (RSF_ANOMALY_VISUAL_UNIQUE, first));
 }
 
@@ -177,4 +176,37 @@ fn classification_preserves_shadow_identity_and_deformation_precedence() {
         };
         assert_eq!(classify(&draw), expected);
     }
+}
+
+#[test]
+fn retirement_invalidates_the_batch_before_delivery_and_preserves_generation() {
+    let registry = IdentityRegistry::default();
+    assert_eq!(find(&registry, 0x10, 0x20), 0);
+    let first = register(&registry, 0x10, 0x20);
+    assert_ne!(first, 0);
+    assert_eq!(find(&registry, 0x10, 0x20), first);
+    assert_eq!(register(&registry, 0, 0x20), 0);
+    assert_eq!(register(&registry, 0x10, 0), 0);
+    assert_eq!(register(&registry, 0x10, 0x20), 0);
+    assert_eq!(retire(&registry, 0x10, 0x20), first);
+    assert_eq!(find(&registry, 0x10, 0x20), 0);
+    assert_eq!(retire(&registry, 0x10, 0x20), 0);
+
+    let recycled = register(&registry, 0x10, 0x20);
+    assert!(recycled > first);
+    let other = register(&registry, 0x30, 0x20);
+    let batch = take_live(&registry);
+    assert_eq!(batch.len(), 2);
+    let mut seen = Vec::new();
+    for key in batch {
+        assert_eq!(find(&registry, 0x10, 0x20), 0);
+        assert_eq!(find(&registry, 0x30, 0x20), 0);
+        seen.push((key.owner, key.visual, key.generation));
+    }
+    assert_eq!(seen, [(0x10, 0x20, recycled), (0x30, 0x20, other)]);
+    assert_eq!(
+        probe_visual(&registry, 0x20).lookup,
+        RSF_ANOMALY_VISUAL_MISSING as u32
+    );
+    assert!(register(&registry, 0x10, 0x20) > other);
 }

@@ -4,6 +4,8 @@
 //! or C++ unwind crosses Rust. Engine reads have separate guarded native leaves.
 
 mod coverage;
+#[cfg(windows)]
+mod fixture;
 mod scopes;
 #[cfg(test)]
 mod tests;
@@ -12,13 +14,10 @@ mod vertex_constants;
 use crate::engine_guards::read_bytes;
 use crate::engine_guards::{Image, Read};
 use crate::geometry_registry::{
-    IdentityRegistry, Registry, classify, rsf_anomaly_geometry_find as find,
-    rsf_anomaly_geometry_probe_visual as probe_visual, rsf_anomaly_geometry_register as register,
-    rsf_anomaly_geometry_retire as retire, rsf_anomaly_geometry_retire_all as retire_all,
+    IdentityRegistry, Registry, classify, find, probe_visual, register, retire, take_live,
 };
 use crate::geometry_registry_abi::{
-    rsf_anomaly_geometry_draw as Draw, rsf_anomaly_geometry_key as Key,
-    rsf_anomaly_geometry_probe as Probe, *,
+    rsf_anomaly_geometry_draw as Draw, rsf_anomaly_geometry_key as Key, *,
 };
 use crate::motion::from_engine_matrix;
 use crate::native_geometry_abi::*;
@@ -36,6 +35,8 @@ const BONE_BATCH: usize = 64;
 const SKELETON_PARENT_OFFSET: usize = 8;
 const SKELETON_MODE_OFFSET: usize = 56;
 const SKELETON_COUNT_OFFSET: usize = 60;
+const BONE_INSTANCE_STRIDE: usize = 168;
+const BONE_RENDER_TRANSFORM_OFFSET: usize = 64;
 const BONE_INSTANCES_OFFSET: usize = 208; // CKinematics+128 IKinematics +0x50.
 const TREE_PM_LAST_LOD_OFFSET: usize = 0x108;
 const SBONES_PALETTE_LAYOUT: u64 = 0x53424f4e45530001; // Three float4 columns per bone.
@@ -53,36 +54,10 @@ static ENGINE: RwLock<Engine> = RwLock::new(Engine {
 static HOOKS: AtomicBool = AtomicBool::new(false);
 static CAPTURE: AtomicBool = AtomicBool::new(false);
 static FOLIAGE: AtomicBool = AtomicBool::new(false);
-static RETIRED: CallbackSlot = CallbackSlot::new();
-static DRAW: CallbackSlot = CallbackSlot::new();
-static FLUSH: CallbackSlot = CallbackSlot::new();
-static NEAR: CallbackSlot = CallbackSlot::new();
-
-struct CallbackSlot(RwLock<Callback>);
-
-impl CallbackSlot {
-    const fn new() -> Self {
-        Self(RwLock::new(Callback {
-            function: None,
-            user: 0,
-            invoke: None,
-        }))
-    }
-
-    fn set(&self, callback: Callback) {
-        *self.0.write().unwrap() = callback;
-    }
-
-    fn call(&self, payload: *const c_void) -> bool {
-        let callback = *self.0.read().unwrap();
-        let (Some(function), Some(invoke)) = (callback.function, callback.invoke) else {
-            return false;
-        };
-        // The facade supplies a typed decoder for each opaque callback and payload.
-        unsafe { invoke(function, callback.user, payload) };
-        true
-    }
-}
+static RETIRED: RwLock<(usize, Option<Retired>)> = RwLock::new((0, None));
+static DRAW: RwLock<(usize, Option<DrawSink>)> = RwLock::new((0, None));
+static FLUSH: RwLock<Option<Flush>> = RwLock::new(None);
+static NEAR: RwLock<Option<Near>> = RwLock::new(None);
 
 fn capturing() -> bool {
     CAPTURE.load(Ordering::Acquire)
@@ -177,34 +152,41 @@ extern "C" fn rsf_anomaly_geometry_test_bind(engine: Engine) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_set_retired(callback: Callback) {
+extern "C" fn rsf_anomaly_geometry_set_retired(user: usize, callback: Option<Retired>) {
     let _models = MODELS.lock().unwrap();
-    RETIRED.set(callback);
+    *RETIRED.write().unwrap() = (user, callback);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_set_draw(callback: Callback) {
-    DRAW.set(callback);
+extern "C" fn rsf_anomaly_geometry_set_draw(user: usize, callback: Option<DrawSink>) {
+    *DRAW.write().unwrap() = (user, callback);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_set_flush(callback: Callback) {
-    FLUSH.set(callback);
+extern "C" fn rsf_anomaly_geometry_set_flush(callback: Option<Flush>) {
+    *FLUSH.write().unwrap() = callback;
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_set_near(callback: Callback) {
-    NEAR.set(callback);
+extern "C" fn rsf_anomaly_geometry_set_near(callback: Option<Near>) {
+    *NEAR.write().unwrap() = callback;
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_publish_flush(facts: *const c_void) {
-    FLUSH.call(facts);
+extern "C" fn rsf_anomaly_geometry_publish_flush(facts: *const NativeDrawFacts) {
+    let callback = *FLUSH.read().unwrap();
+    if let Some(callback) = callback {
+        // The native flush supplies a live stack record for this call.
+        unsafe { callback(facts) };
+    }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_geometry_publish_near(render: *mut c_void) {
-    NEAR.call(render.cast_const());
+    let callback = *NEAR.read().unwrap();
+    if let Some(callback) = callback {
+        unsafe { callback(render) };
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -221,15 +203,16 @@ fn report_retired(key: &Key) {
     COUNTERS.models_retired.increment();
     #[cfg(windows)]
     crate::motion::record_retirement(*key);
-    RETIRED.call(ptr::from_ref(key).cast());
-}
-
-unsafe extern "C" fn visit_retired(_: *mut c_void, key: *const Key) {
-    report_retired(unsafe { &*key });
+    let (user, callback) = *RETIRED.read().unwrap();
+    if let Some(callback) = callback {
+        unsafe { callback(ptr::with_exposed_provenance_mut(user), key) };
+    }
 }
 
 fn reset_registry() {
-    unsafe { retire_all(&REGISTRY, Some(visit_retired), ptr::null_mut()) };
+    for key in take_live(&REGISTRY) {
+        report_retired(&key);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -439,10 +422,11 @@ extern "C" fn rsf_anomaly_geometry_classify_visual(platform: &Platform, visual: 
     let engine = rsf_anomaly_geometry_binding();
     let pass = read_pass(platform, engine);
     let capturing = capturing() && !scopes::in_factory();
-    let mut probe = Probe::default();
-    if capturing {
-        probe_visual(&REGISTRY, visual.visual, &mut probe);
-    }
+    let probe = if capturing {
+        probe_visual(&REGISTRY, visual.visual)
+    } else {
+        rsf_anomaly_geometry_probe::default()
+    };
     let world = world_address(platform, engine).unwrap_or(0);
     let world_for_classification = (capturing
         && probe.lookup == RSF_ANOMALY_VISUAL_MISSING as u32
@@ -519,13 +503,35 @@ fn palette(platform: &Platform, visual: &Visual) -> Option<(usize, u32)> {
     (instances != 0).then_some((instances, count))
 }
 
+fn bone_span(instances: usize, first: usize, count: usize) -> Option<usize> {
+    if instances == 0 {
+        return None;
+    }
+    let start = instances
+        .checked_add(first.checked_mul(BONE_INSTANCE_STRIDE)?)?
+        .checked_add(BONE_RENDER_TRANSFORM_OFFSET)?;
+    start
+        .checked_add(count.checked_sub(1)?.checked_mul(BONE_INSTANCE_STRIDE)?)?
+        .checked_add(size_of::<NativeMatrix>())?;
+    Some(start)
+}
+
 fn write_palette(read: ReadBones, instances: usize, output: &mut [Matrix]) -> bool {
     let mut native = [[0.; 16]; BONE_BATCH];
     for (batch, output) in output.chunks_mut(BONE_BATCH).enumerate() {
-        let first = (batch * BONE_BATCH) as u32;
+        let Some(first) = bone_span(instances, batch * BONE_BATCH, output.len()) else {
+            return false;
+        };
         // The native leaf guards each strided read and initializes the entire
         // requested batch on success. The output remains private until finish.
-        if !unsafe { read(instances, first, output.len() as u32, native.as_mut_ptr()) } {
+        if !unsafe {
+            read(
+                first,
+                BONE_INSTANCE_STRIDE,
+                output.len() as u32,
+                native.as_mut_ptr(),
+            )
+        } {
             return false;
         }
         for (source, target) in native.iter().zip(output) {
@@ -539,7 +545,7 @@ fn write_palette(read: ReadBones, instances: usize, output: &mut [Matrix]) -> bo
 }
 
 struct Snapshot {
-    data: *const c_void,
+    data: *const NativeDrawCapture,
     has_world: bool,
     has_palette: bool,
 }
@@ -588,7 +594,7 @@ extern "C" fn rsf_anomaly_geometry_capture(
     platform: &Platform,
     writer: &Writer,
     user: *mut c_void,
-) -> *const c_void {
+) -> *const NativeDrawCapture {
     unsafe { scopes::visual().as_ref() }
         .and_then(|visual| snapshot(platform, writer, user, visual))
         .map_or(ptr::null(), |capture| capture.data)
@@ -600,7 +606,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_observe(
     writer: &Writer,
     user: *mut c_void,
     out: *mut Facts,
-) -> *const c_void {
+) -> *const NativeDrawCapture {
     let visual = unsafe { scopes::visual().as_ref() };
     let (view, domain) = scopes::context();
     let pass = read_pass(platform, rsf_anomaly_geometry_binding());
@@ -668,7 +674,10 @@ unsafe extern "C" fn rsf_anomaly_geometry_observe(
     if visual.kind == HARDWARE_SKINNED && !capture.has_palette {
         COUNTERS.capture_no_palette.increment();
     }
-    if DRAW.call(capture.data) {
+    let (user, callback) = *DRAW.read().unwrap();
+    if let Some(callback) = callback {
+        // The writer keeps the capture alive through this synchronous callback.
+        unsafe { callback(ptr::with_exposed_provenance_mut(user), capture.data) };
         COUNTERS.sunk.increment();
     }
     capture.data

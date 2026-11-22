@@ -1131,6 +1131,12 @@ at a time. A failed read or invalid transform discards the whole palette.
 The geometry fixtures and live checks remain unrun.
 [Geometry reads and palette transfer](research/rust-anomaly-native-geometry.md#geometry-reads-and-palette-transfer)
 
+The N03 follow-up moved palette-span admission, typed geometry callbacks,
+registry retirement and guarded synthetic image seeding into Rust. Both
+exact profile banks, the Standard and AVX native fixture entry points,
+and the SR and FG stage selection were preserved. Source checks passed.
+[Remaining geometry source and fixtures](research/rust-anomaly-native-geometry.md#remaining-geometry-source-and-fixtures)
+
 Anomaly's Rust geometry owner now distinguishes owned and borrowed
 child ranges before model reuse and retirement. The selected profile
 and guarded memory reads remain native. The expanded geometry fixture

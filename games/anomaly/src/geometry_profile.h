@@ -65,8 +65,7 @@ inline constexpr std::uint32_t detail_batch_instances = 61;
 inline constexpr std::uint32_t skeleton_st_offset = 160;
 inline constexpr std::uint32_t skeleton_pm_offset = 208;
 inline constexpr std::uint32_t hierarchy_children_offset = 96;
-inline constexpr std::uint32_t bone_instance_stride = 168;
-inline constexpr std::uint32_t render_transform_offset = 64;
+// Bone instance stride and transform offset are consumed by the Rust palette reader.
 
 // ---- Standard 1.5.3 DX11 (AnomalyDX11.exe) -------------------------------------------------------------------------
 inline constexpr std::array<UniqueGuard, 9> geometry_standard_unique{{

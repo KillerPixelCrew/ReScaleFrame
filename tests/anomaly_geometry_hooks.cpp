@@ -211,10 +211,10 @@ __declspec(noinline) void __fastcall emissive_fixture(void* self)
     }
     // A function that leaves without rmNormal must still close the window before the enclosing scopes unwind.
 }
-void retired(void*, temporal::InstanceKey key) noexcept
+void retired(void*, const rsf_anomaly_geometry_key* key) noexcept
 {
     retiring = true;
-    retirements.push_back(key);
+    retirements.push_back({key->owner, key->visual, key->generation});
     retiring = false;
 }
 void collect_draw(void* context, const DrawCapture& capture) noexcept
@@ -728,14 +728,7 @@ int main(int argc, char** argv)
     fixture_pe->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
     fixture_pe->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
     fixture_pe->OptionalHeader.SizeOfImage = build.image_size();
-    for (const auto& site : gp.geometry_sites) std::memcpy(image + site.rva, site.expected.data(), 16);
-    for (const auto& site : gp.geometry_layout_sites) std::memcpy(image + site.rva, site.expected.data(), 16);
-    // Extended unique guards (sites whose 16 bytes are not unique in .text): the longer prefix must also match.
-    const auto put_hex = [&](std::uint32_t rva, const char* hex) {
-        const auto digit = [](char c) { return c <= '9' ? c - '0' : c - 'a' + 10; };
-        for (std::size_t i = 0; hex[2 * i]; ++i) image[rva + i] = static_cast<std::byte>(digit(hex[2 * i]) * 16 + digit(hex[2 * i + 1]));
-    };
-    for (const auto& guard : gp.geometry_unique_guards) put_hex(guard.rva, guard.expected_hex);
+    CHECK(geometry_test_seed(image, build));
     for (const auto& guard : gp.geometry_unique_guards) {
         const auto last = guard.rva + std::strlen(guard.expected_hex) / 2 - 1;
         image[last] ^= std::byte{1};
