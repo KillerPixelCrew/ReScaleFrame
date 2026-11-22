@@ -18,14 +18,11 @@ use super::session_records_abi::rsf_xess_capture_desc as Desc;
 use super::{Handle, Platform};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-const VALUE_CAPACITY: usize = 32;
-const DIRECTORY_CAPACITY: usize = 32_768;
 const DEFAULT_FIRST: u64 = 30;
 const DEFAULT_COUNT: u64 = 4;
 const MAX_COUNT: u64 = 16;
@@ -139,49 +136,8 @@ struct Config {
 #[path = "../../diagnostic_preferences.rs"]
 mod diagnostic_preferences;
 
-fn read_variable(name: &str) -> Option<Vec<u16>> {
-    let value = diagnostic_preferences::value(name)?;
-    let wide: Vec<u16> = value.encode_wide().take(VALUE_CAPACITY).collect();
-    (!wide.is_empty() && wide.len() < VALUE_CAPACITY).then_some(wide)
-}
-
-// wcstoull with base 10: leading white space, an optional sign that negates
-// modulo 2^64, and saturation on overflow.
-fn parse_unsigned(buffer: &[u16]) -> u64 {
-    let mut units = buffer
-        .iter()
-        .copied()
-        .skip_while(|&unit| unit == 0x20 || (0x09..=0x0d).contains(&unit))
-        .peekable();
-    let negative = match units.peek() {
-        Some(0x2d) => {
-            units.next();
-            true
-        }
-        Some(0x2b) => {
-            units.next();
-            false
-        }
-        _ => false,
-    };
-    let mut value = 0u64;
-    let mut overflow = false;
-    for unit in units.take_while(|unit| (0x30..=0x39).contains(unit)) {
-        let next = value
-            .checked_mul(10)
-            .and_then(|value| value.checked_add(u64::from(unit - 0x30)));
-        match next {
-            Some(next) => value = next,
-            None => overflow = true,
-        }
-    }
-    if overflow {
-        u64::MAX
-    } else if negative {
-        value.wrapping_neg()
-    } else {
-        value
-    }
+fn read_number(name: &str) -> Option<u64> {
+    diagnostic_preferences::value(name)?.to_str()?.trim().parse().ok()
 }
 
 impl Config {
@@ -195,19 +151,17 @@ impl Config {
         let Some(path) = diagnostic_preferences::value("RSF_VULKAN_FRAME_CAPTURE_DIR") else {
             return config;
         };
-        if path.is_empty()
-            || path.encode_wide().take(DIRECTORY_CAPACITY).count() == DIRECTORY_CAPACITY
-        {
+        if path.is_empty() {
             return config;
         }
-        if let Some(value) = read_variable("RSF_FRAME_CAPTURE_FIRST") {
-            config.first = parse_unsigned(&value);
+        if let Some(first) = read_number("RSF_FRAME_CAPTURE_FIRST") {
+            config.first = first;
         }
-        if let Some(value) = read_variable("RSF_FRAME_CAPTURE_COUNT") {
-            config.count = parse_unsigned(&value).min(MAX_COUNT);
+        if let Some(count) = read_number("RSF_FRAME_CAPTURE_COUNT") {
+            config.count = count.min(MAX_COUNT);
         }
-        config.probe = read_variable("RSF_XESS_DIAGNOSTIC_PROBE")
-            .is_some_and(|value| value == [u16::from(b'1')]);
+        config.probe = diagnostic_preferences::value("RSF_XESS_DIAGNOSTIC_PROBE")
+            .is_some_and(|value| value == "1");
         // A directory that cannot be created leaves capture disabled.
         if std::fs::create_dir_all(&path).is_ok() {
             config.directory = Some(path.into());
