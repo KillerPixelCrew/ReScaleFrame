@@ -14,8 +14,9 @@
 #include <cstdint>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
+#include "sdk_records_checks.h"
 #include "wsi_abi.h"
-#include <sl.h>
 #include <sl_dlss_g.h>
 #include <sl_reflex.h>
 #include <sl_pcl.h>
@@ -30,11 +31,12 @@
 struct RsfSlLifecyclePlatform {
     void* (*openVerified)(const wchar_t* path);
     int32_t (*resolve)(void* module);
-    int32_t (*init)(uint32_t features, const char* projectId, const wchar_t** pluginPaths);
+    int32_t (*init)(const rsf_slvk_sdk_preferences*, uint64_t);
     uint32_t (*shutdown)(int32_t* result);
     void (*clear)();
+    rsf_slvk_sdk_log log;
 };
-static_assert(sizeof(RsfSlLifecyclePlatform) == 5 * sizeof(void*));
+static_assert(sizeof(RsfSlLifecyclePlatform) == 6 * sizeof(void*));
 
 struct RsfSlFgOptions {
     uint32_t count, width, height, format, backBuffers;
@@ -61,7 +63,6 @@ void* rsf_slvk_life_module();
 void rsf_slvk_diagnostic_present_error(int32_t result);
 int32_t rsf_slvk_diagnostic_take_present_error();
 uint64_t rsf_slvk_diagnostic_worker_timeout_epoch();
-void rsf_slvk_diagnostic_set_verbose(uint32_t verbose);
 uint32_t rsf_slvk_diagnostic_message(const char* message, uint32_t info);
 int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
 int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
@@ -189,19 +190,6 @@ struct TaggedImage {
     uint32_t usage;
 };
 
-/// @brief Camera matrices, vectors, jitter and motion scales for matching Streamline frame tags.
-/// @details Matrix pointers reference caller-owned column-major 4x4 floats valid during the tagging call; rowMajor converts them for Streamline.
-struct FrameCamera {
-    const float* viewToClip;
-    const float* clipToView;
-    const float* clipToPrevClip;
-    const float* prevClipToClip;
-    float nearPlane, farPlane, fov, aspect;
-    float jitterX, jitterY, mvecScaleX, mvecScaleY;
-    float position[3], up[3], right[3], forward[3];
-    uint32_t reset;
-};
-
 /// @brief Builds a borrowed Streamline 2D resource description from one C-ABI image record.
 sl::Resource resource(const TaggedImage& image) {
     sl::Resource value{sl::ResourceType::eTex2d,
@@ -212,13 +200,6 @@ sl::Resource resource(const TaggedImage& image) {
     value.flags = 0;
     value.usage = image.usage;
     return value;
-}
-
-/// @brief Converts caller column-vector matrices to Streamline's row-vector convention.
-void rowMajor(sl::float4x4& target, const float* columnMajor) {
-    for (int row = 0; row < 4; ++row)
-        for (int col = 0; col < 4; ++col)
-            (&target[row].x)[col] = columnMajor[row * 4 + col];
 }
 
 // Called by Streamline's present thread. Keep it lock-free and let the render
@@ -308,7 +289,8 @@ int32_t emitFrameMarker(uintptr_t token, uint32_t marker) {
 }
 
 /// @brief Writes SDK warnings/errors and enabled verbose messages to stderr.
-void onStreamlineMessage(sl::LogType type, const char* message) {
+void onStreamlineMessage(uint32_t nativeType, const char* message) {
+    const auto type = static_cast<sl::LogType>(nativeType);
     if (!rsf_slvk_diagnostic_message(message, type == sl::LogType::eInfo)) return;
     std::fprintf(stderr, "[Streamline %s] %s\n",
         type == sl::LogType::eError ? "error" : type == sl::LogType::eWarn ? "warning" : "info", message);
@@ -330,36 +312,11 @@ int32_t lifecycleResolve(void* handle) noexcept {
         setConstants && freeResources ? 0 : -1;
 }
 
-// Feature bits chosen by the Rust lifecycle, loaded in this order.
-constexpr uint32_t featurePcl = 1u, featureReflex = 2u, featureDlssG = 4u, featureDlss = 8u;
-
-/// @brief Calls slInit for the Vulkan custom engine with manual hooking and frame-based tagging.
-/// @details The project identity and plugin path array are owned by the Rust lifecycle until the next initialization.
-/// @return The native Streamline result.
-int32_t lifecycleInit(uint32_t mask, const char* projectId, const wchar_t** pluginPaths) noexcept try {
+int32_t lifecycleInit(const rsf_slvk_sdk_preferences* request, uint64_t sdkVersion) noexcept try {
     if (!init) return -4;
-    sl::Feature features[4]{};
-    uint32_t featureCount = 0;
-    if (mask & featurePcl) features[featureCount++] = sl::kFeaturePCL;
-    if (mask & featureReflex) features[featureCount++] = sl::kFeatureReflex;
-    if (mask & featureDlssG) features[featureCount++] = sl::kFeatureDLSS_G;
-    if (mask & featureDlss) features[featureCount++] = sl::kFeatureDLSS;
     sl::Preferences preferences{};
-    preferences.featuresToLoad = features;
-    preferences.numFeaturesToLoad = featureCount;
-    preferences.projectId = projectId;
-    preferences.engine = sl::EngineType::eCustom;
-    preferences.engineVersion = "0.3";
-    preferences.renderAPI = sl::RenderAPI::eVulkan;
-    const bool verbose = GetEnvironmentVariableA("VULKANSTORY_STREAMLINE_VERBOSE", nullptr, 0) > 0;
-    rsf_slvk_diagnostic_set_verbose(verbose);
-    if (verbose) preferences.logLevel = sl::LogLevel::eVerbose;
-    preferences.logMessageCallback = onStreamlineMessage;
-    preferences.flags = sl::PreferenceFlags::eUseManualHooking |
-        sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-    preferences.pathsToPlugins = pluginPaths;
-    preferences.numPathsToPlugins = 1;
-    return static_cast<int32_t>(init(preferences, sl::kSDKVersion));
+    std::memcpy(static_cast<void*>(&preferences), request, sizeof(preferences));
+    return static_cast<int32_t>(init(preferences, sdkVersion));
 } catch (...) {
     return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
 }
@@ -377,7 +334,7 @@ uint32_t lifecycleShutdown(int32_t* result) noexcept {
 }
 
 constexpr RsfSlLifecyclePlatform lifecycle{
-    openVerifiedRelease, lifecycleResolve, lifecycleInit, lifecycleShutdown, clearSdkFunctions,
+    openVerifiedRelease, lifecycleResolve, lifecycleInit, lifecycleShutdown, clearSdkFunctions, onStreamlineMessage,
 };
 }
 
@@ -562,32 +519,12 @@ RSF_SL_VK_EXPORT int VulkanStorySlMarkerForToken(uintptr_t token, uint32_t marke
 
 static int tagFrame(const sl::FrameToken& frame, VkCommandBuffer commandBuffer,
     const TaggedImage* depth, const TaggedImage* motion, const TaggedImage* hudless,
-    const TaggedImage* ui, const FrameCamera* camera) {
-    if (!setTagForFrame || !setConstants || !depth || !motion ||
-        !hudless || !ui || !camera || !camera->viewToClip || !camera->clipToView ||
-        !camera->clipToPrevClip || !camera->prevClipToClip) return -1;
-
+    const TaggedImage* ui, const rsf_slvk_legacy_camera* camera) {
+    if (!setTagForFrame || !setConstants || !depth || !motion || !hudless || !ui) return -1;
+    rsf_slvk_sdk_constants packed{};
+    if (!rsf_slvk_pack_legacy_camera(camera, &packed)) return -1;
     sl::Constants constants{};
-    rowMajor(constants.cameraViewToClip, camera->viewToClip);
-    rowMajor(constants.clipToCameraView, camera->clipToView);
-    rowMajor(constants.clipToPrevClip, camera->clipToPrevClip);
-    rowMajor(constants.prevClipToClip, camera->prevClipToClip);
-    constants.jitterOffset = {camera->jitterX, camera->jitterY};
-    constants.mvecScale = {camera->mvecScaleX, camera->mvecScaleY};
-    // The game camera has no lens/pinhole shift; jitter is supplied separately.
-    constants.cameraPinholeOffset = {0.f, 0.f};
-    constants.cameraPos = {camera->position[0], camera->position[1], camera->position[2]};
-    constants.cameraUp = {camera->up[0], camera->up[1], camera->up[2]};
-    constants.cameraRight = {camera->right[0], camera->right[1], camera->right[2]};
-    constants.cameraFwd = {camera->forward[0], camera->forward[1], camera->forward[2]};
-    constants.cameraNear = camera->nearPlane;
-    constants.cameraFar = camera->farPlane;
-    constants.cameraFOV = camera->fov;
-    constants.cameraAspectRatio = camera->aspect;
-    constants.depthInverted = sl::Boolean::eFalse;
-    constants.cameraMotionIncluded = sl::Boolean::eTrue;
-    constants.motionVectors3D = sl::Boolean::eFalse;
-    constants.reset = camera->reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    std::memcpy(static_cast<void*>(&constants), &packed, sizeof(constants));
     auto result = setConstants(constants, frame, viewport);
     if (result != sl::Result::eOk) return static_cast<int>(result);
 
@@ -620,7 +557,7 @@ static int tagFrame(const sl::FrameToken& frame, VkCommandBuffer commandBuffer,
 /// @return SDK result, or -1 for missing required bindings/pointers.
 RSF_SL_VK_EXPORT int VulkanStorySlTagFrame(VkCommandBuffer commandBuffer,
     const TaggedImage* depth, const TaggedImage* motion, const TaggedImage* hudless,
-    const TaggedImage* ui, const FrameCamera* camera) {
+    const TaggedImage* ui, const rsf_slvk_legacy_camera* camera) {
     return withFrameToken(0, [&](const sl::FrameToken& frame) {
         return tagFrame(frame, commandBuffer, depth, motion, hudless, ui, camera);
     });

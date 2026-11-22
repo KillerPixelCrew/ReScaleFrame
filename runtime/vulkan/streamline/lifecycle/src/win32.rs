@@ -43,6 +43,10 @@ impl System for Win32 {
     unsafe fn loaded(&self, path: *const u16) -> *mut c_void {
         unsafe { GetModuleHandleW(path) }
     }
+
+    fn verbose(&self) -> bool {
+        std::env::var_os("VULKANSTORY_STREAMLINE_VERBOSE").is_some_and(|value| !value.is_empty())
+    }
 }
 
 static LIFECYCLE: Lifecycle = Lifecycle::new();
@@ -60,11 +64,6 @@ extern "C" fn rsf_slvk_diagnostic_take_present_error() -> i32 {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_slvk_diagnostic_worker_timeout_epoch() -> u64 {
     LIFECYCLE.diagnostics.worker_timeout_epoch()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_slvk_diagnostic_set_verbose(verbose: u32) {
-    LIFECYCLE.diagnostics.set_verbose(verbose != 0);
 }
 
 #[unsafe(no_mangle)]

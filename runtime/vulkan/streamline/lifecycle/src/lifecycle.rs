@@ -7,6 +7,8 @@ use crate::diagnostics::Diagnostics;
 use crate::frame_generation::{FrameGeneration, Swapchain};
 #[cfg(windows)]
 use crate::frame_token::FrameToken;
+use crate::sdk_records;
+use crate::sdk_records_abi::{rsf_slvk_sdk_log, rsf_slvk_sdk_preferences};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null, null_mut, without_provenance_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -65,17 +67,18 @@ pub(crate) struct Platform {
     pub open_verified: unsafe extern "C" fn(*const u16) -> *mut c_void,
     /// Resolves the typed SDK exports from the module. Zero when all resolve.
     pub resolve: unsafe extern "C" fn(*mut c_void) -> i32,
-    /// Calls slInit with the feature bits, project identity and the plugin
-    /// path array, which this crate keeps alive until the next initialization.
-    pub init: unsafe extern "C" fn(u32, *const c_char, *const *const u16) -> i32,
+    /// Calls slInit with the packed preferences. The project and plugin-path
+    /// array stay live until the next initialization.
+    pub init: unsafe extern "C" fn(*const rsf_slvk_sdk_preferences, u64) -> i32,
     /// Calls slShutdown when it was resolved and writes its result. Returns
     /// nonzero when the SDK was called.
     pub shutdown: unsafe extern "C" fn(*mut i32) -> u32,
     /// Clears the typed SDK entry points.
     pub clear: unsafe extern "C" fn(),
+    pub log: rsf_slvk_sdk_log,
 }
 
-const _: () = assert!(size_of::<Platform>() == 5 * size_of::<*mut c_void>());
+const _: () = assert!(size_of::<Platform>() == 6 * size_of::<*mut c_void>());
 
 pub(crate) trait System {
     unsafe fn load(&self, path: *const u16) -> *mut c_void;
@@ -83,6 +86,7 @@ pub(crate) trait System {
     unsafe fn close(&self, handle: *mut c_void);
     unsafe fn symbol(&self, module: *mut c_void, name: *const c_char) -> *mut c_void;
     unsafe fn loaded(&self, path: *const u16) -> *mut c_void;
+    fn verbose(&self) -> bool;
 }
 
 struct Paths {
@@ -305,7 +309,17 @@ impl Lifecycle {
         // The previous strings belong to a session that has already shut down.
         session.paths = Some(paths);
         self.set_common(&directory);
-        let result = unsafe { (platform.init)(features, project, plugin) };
+        let mut selected = [0; 4];
+        let mut count = 0;
+        for feature in sdk_records::features(features) {
+            selected[count] = feature;
+            count += 1;
+        }
+        let verbose = system.verbose();
+        self.diagnostics.set_verbose(verbose);
+        let preferences =
+            sdk_records::preferences(&selected[..count], plugin, project, verbose, platform.log);
+        let result = unsafe { (platform.init)(&preferences, sdk_records::VERSION) };
         if result != 0 {
             unsafe { self.abandon(system, platform, &mut session, loaded_here) };
             return result;

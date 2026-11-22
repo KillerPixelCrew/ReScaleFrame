@@ -457,6 +457,8 @@ generate("runtime/orchestrator/src/vulkan_sharpening_abi.rs", "runtime/orchestra
           "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_platform;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_setup};"])
+generate("runtime/vulkan/streamline/lifecycle/src/sdk_records_abi.rs", "runtime/vulkan/streamline/sdk_records.h",
+         "rsf_slvk_(sdk_.*|legacy_camera)", "NOTHING", [], ["--with-derive-default"])
 generate("runtime/orchestrator/src/vulkan_dlss_sr_abi.rs", "runtime/orchestrator/src/native_dlss_vulkan_platform.h",
          "rsf_vkdlss_(platform|images|commands)", "NOTHING",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],

@@ -12,7 +12,7 @@ struct State {
     resolve: i32,
     init: i32,
     shutdown: i32,
-    features: u32,
+    features: Vec<u32>,
     plugin: Vec<u16>,
     common: Vec<u16>,
 }
@@ -25,7 +25,7 @@ thread_local! {
             resolve: 0,
             init: 0,
             shutdown: 0,
-            features: 0,
+            features: Vec::new(),
             plugin: Vec::new(),
             common: Vec::new(),
         })
@@ -71,6 +71,10 @@ impl System for Fake {
         STATE.with_borrow_mut(|state| state.common = path);
         without_provenance_mut(MODULE)
     }
+
+    fn verbose(&self) -> bool {
+        false
+    }
 }
 
 unsafe extern "C" fn open_verified(_: *const u16) -> *mut c_void {
@@ -86,12 +90,21 @@ unsafe extern "C" fn resolve(_: *mut c_void) -> i32 {
     STATE.with_borrow(|state| state.resolve)
 }
 
-unsafe extern "C" fn init(features: u32, project: *const c_char, paths: *const *const u16) -> i32 {
+unsafe extern "C" fn init(preferences: *const rsf_slvk_sdk_preferences, version: u64) -> i32 {
     record("init");
-    assert!(!project.is_null());
-    let plugin = unsafe { terminated(*paths) };
+    let preferences = unsafe { &*preferences };
+    assert_eq!(version, sdk_records::VERSION);
+    assert_eq!(preferences.base.version, 1);
+    assert_eq!(preferences.render_api, 2);
+    assert_eq!(preferences.flags, 132);
+    assert_eq!(preferences.log_level, 1);
+    assert!(!preferences.project.is_null());
+    let plugin = unsafe { terminated(*preferences.plugin_paths) };
+    let features = unsafe {
+        std::slice::from_raw_parts(preferences.features, preferences.num_features as usize)
+    };
     STATE.with_borrow_mut(|state| {
-        state.features = features;
+        state.features = features.to_vec();
         state.plugin = plugin;
         state.init
     })
@@ -113,6 +126,7 @@ const PLATFORM: Platform = Platform {
     init,
     shutdown,
     clear,
+    log: None,
 };
 
 fn wide(text: &str) -> Vec<u16> {
@@ -155,10 +169,7 @@ fn verified_handle_spans_the_load_and_keeps_the_plugin_path() {
     assert_eq!(lifecycle.module().addr(), MODULE);
     STATE.with_borrow(|state| {
         assert_eq!(state.plugin, wide("C:\\sl").strip_suffix(&[0]).unwrap());
-        assert_eq!(
-            state.features,
-            FEATURE_PCL | FEATURE_REFLEX | FEATURE_DLSS_G
-        );
+        assert_eq!(state.features, [4, 3, 1000]);
     });
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
     assert_eq!(start(&lifecycle, "C:\\other"), OTHER_DIRECTORY);

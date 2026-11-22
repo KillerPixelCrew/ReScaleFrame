@@ -20,5 +20,9 @@ mod frame_generation;
 mod frame_token;
 #[cfg(any(windows, test))]
 mod lifecycle;
+#[cfg(any(windows, test))]
+mod sdk_records;
+#[cfg(any(windows, test))]
+mod sdk_records_abi;
 #[cfg(windows)]
 mod win32;
