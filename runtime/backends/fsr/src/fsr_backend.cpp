@@ -104,10 +104,22 @@ extern "C" rsf_backend_result rsf_core_d3d12_sr_provider_fsr_open(const rsf_sr_o
 
 namespace {
 
-rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
+rsf_backend_result sr_open_managed(const rsf_sr_open_desc* desc, void** out)
 {
     const auto result = rsf::validate_open(desc, out);
     return result == RSF_BACKEND_OK ? rsf_core_d3d12_sr_provider_fsr_open(desc, out, &fsr_ops) : result;
+}
+
+rsf_backend_result sr_open(const rsf_sr_open_desc* desc, void** out)
+{
+    const auto result = sr_open_managed(desc, out);
+    if (result == RSF_BACKEND_OK && desc->log) {
+        uint64_t version_id = 0;
+        const char* name = nullptr;
+        if (rsf_core_d3d12_sr_provider_version(*out, &version_id, &name) == RSF_BACKEND_OK && name)
+            desc->log(desc->log_user, name);
+    }
+    return result;
 }
 
 #endif
@@ -132,6 +144,14 @@ const rsf_sr_provider sr_provider = {
 #endif
 };
 
+#if defined(RSF_HAVE_FFX)
+const rsf_sr_provider managed_sr_provider = [] {
+    auto provider = sr_provider;
+    provider.open = sr_open_managed;
+    return provider;
+}();
+#endif
+
 const rsf_fg_provider fg_provider = {
     sizeof(rsf_fg_provider), probe,   fg_create, fg_options,   fg_tag,       fg_after_present,
     fg_resize,               fg_marker, fg_sleep, fg_generated, fg_destroy,
@@ -140,4 +160,14 @@ const rsf_fg_provider fg_provider = {
 } // namespace
 
 extern "C" const rsf_sr_provider* rsf_fsr_sr_provider(void) { return &sr_provider; }
+// The session announces the committed version after planning succeeds.
+extern "C" const rsf_sr_provider* rsf_fsr_managed_sr_provider(void)
+{
+#if defined(RSF_HAVE_FFX)
+    return &managed_sr_provider;
+#else
+    return &sr_provider;
+#endif
+}
+
 extern "C" const rsf_fg_provider* rsf_fsr_fg_provider(void) { return &fg_provider; }

@@ -9,6 +9,11 @@ namespace {
 bool passed = true;
 uint32_t closes = 0;
 uint32_t reset_seen = 0;
+uint32_t version_announcements = 0;
+void log_message(void*, const char* message)
+{
+    if (std::strcmp(message, "fixture") == 0) ++version_announcements;
+}
 bool fail_open = false, empty_open = false, fail_plan = false, fail_frame = false;
 struct Fake { uint32_t family; };
 void check(bool ok, const char* text) { if (!ok) { std::fprintf(stderr, "FAIL: %s\n", text); passed = false; } }
@@ -41,7 +46,7 @@ rsf_backend_result version(void* pointer, uint64_t* id, const char** name)
 }
 const rsf_sr_provider provider{sizeof(provider), probe, open, plan, evaluate, release, close, version};
 }
-extern "C" const rsf_sr_provider* rsf_fsr_sr_provider() { return &provider; }
+extern "C" const rsf_sr_provider* rsf_fsr_managed_sr_provider() { return &provider; }
 extern "C" const rsf_sr_provider* rsf_xess_sr_provider() { return &provider; }
 int main()
 {
@@ -51,11 +56,13 @@ int main()
     setup.open.struct_size = sizeof(setup.open); setup.open.abi_version = RSF_BACKEND_ABI_VERSION;
     setup.open.api = RSF_API_D3D12; setup.open.device = &setup;
     setup.open.output_width = setup.open.output_height = 128;
+    setup.open.log = log_message;
     setup.fsr2_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = setup.xess_directory_utf8 = path;
     rsf_sr_session* session = nullptr;
     check(rsf_sr_session_create(&setup, &session) == RSF_BACKEND_OK, "create");
     path[0] = 'X';
     check(rsf_sr_session_select(session, RSF_SR_FSR2, RSF_QUALITY_QUALITY, 0) == 0, "select FSR2");
+    check(version_announcements == 1, "successful select announces the committed version once");
     fail_open = true;
     check(rsf_sr_session_select(session, RSF_SR_FSR4, RSF_QUALITY_QUALITY, 0) == RSF_BACKEND_ERROR_NOT_SUPPORTED, "refuse FSR4");
     rsf_sr_session_status status{}; status.struct_size = sizeof(status);
@@ -69,6 +76,7 @@ int main()
     empty_open = false;
     fail_open = false; fail_plan = true;
     check(rsf_sr_session_select(session, RSF_SR_XESS, RSF_QUALITY_QUALITY, 0) != 0 && closes == 1, "failed plan closes replacement only");
+    check(version_announcements == 1, "refused candidates never announce an active version");
     fail_plan = false;
     check(rsf_sr_session_select(session, RSF_SR_XESS, RSF_QUALITY_QUALITY, 0) == 0 && closes == 2, "commit replacement closes original");
     rsf_frame_record record{};

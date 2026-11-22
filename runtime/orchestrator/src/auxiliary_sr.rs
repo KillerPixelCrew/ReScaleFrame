@@ -1078,7 +1078,6 @@ unsafe extern "C" fn rsf_auxiliary_sr_restore(handle: *mut AuxiliarySr) -> i32 {
 mod tests {
     use super::*;
     use crate::com_ref::test::{Fake, add_ref};
-    use crate::d3d11_output_abi::rsf_d3d11_state;
 
     #[repr(C)]
     struct FakeCom {
