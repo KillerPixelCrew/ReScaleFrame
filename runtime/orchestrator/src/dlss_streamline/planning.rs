@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, OK, Plan, Startup, Support};
-use crate::streamline_sr::dlss_mode;
+use crate::streamline_sr::{Dimensions, Optimal, dimensions};
 use std::ptr::{addr_of, addr_of_mut};
 
 const NOT_SUPPORTED: i32 = -7;
@@ -17,14 +17,6 @@ struct DriverVersions {
     detected_minor: u32,
 }
 
-#[repr(C)]
-#[derive(Default)]
-struct RenderSizes {
-    optimal: [u32; 2],
-    minimum: [u32; 2],
-    maximum: [u32; 2],
-}
-
 type GetLuid = unsafe extern "C" fn(Handle, &mut u64) -> i32;
 
 #[repr(C)]
@@ -33,13 +25,12 @@ pub(super) struct Platform {
     device_luid: GetLuid,
     query_support: unsafe extern "C" fn(Handle, u64, &mut u32) -> i32,
     requirements: unsafe extern "C" fn(Handle, &mut DriverVersions) -> i32,
-    optimal: unsafe extern "C" fn(Handle, u32, u32, u32, &mut RenderSizes) -> i32,
+    optimal: unsafe extern "C" fn(Handle, &Dimensions, &mut Optimal) -> i32,
 }
 
 const _: () = {
     assert!(size_of::<Platform>() == 5 * size_of::<Handle>());
     assert!(size_of::<DriverVersions>() == 16);
-    assert!(size_of::<RenderSizes>() == 24);
 };
 
 impl Platform {
@@ -119,20 +110,20 @@ impl Platform {
                 addr_of!((*out).quality).read(),
             )
         };
-        let mut sizes = RenderSizes::default();
+        let mut sizes = Optimal::default();
         let status =
-            unsafe { (self.optimal)(native, dlss_mode(quality), width, height, &mut sizes) };
+            unsafe { (self.optimal)(native, &dimensions(quality, width, height), &mut sizes) };
         if status != OK {
             return status;
         }
-        let [render_width, render_height] = sizes.optimal;
+        let (render_width, render_height) = (sizes.width, sizes.height);
         unsafe {
             addr_of_mut!((*out).render_width).write(render_width);
             addr_of_mut!((*out).render_height).write(render_height);
-            addr_of_mut!((*out).render_width_min).write(sizes.minimum[0]);
-            addr_of_mut!((*out).render_height_min).write(sizes.minimum[1]);
-            addr_of_mut!((*out).render_width_max).write(sizes.maximum[0]);
-            addr_of_mut!((*out).render_height_max).write(sizes.maximum[1]);
+            addr_of_mut!((*out).render_width_min).write(sizes.width_min);
+            addr_of_mut!((*out).render_height_min).write(sizes.height_min);
+            addr_of_mut!((*out).render_width_max).write(sizes.width_max);
+            addr_of_mut!((*out).render_height_max).write(sizes.height_max);
         }
         startup.report_text(format!(
             "DLSS wants {render_width}x{render_height} to produce {width}x{height}"

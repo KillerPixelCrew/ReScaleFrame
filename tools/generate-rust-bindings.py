@@ -1132,3 +1132,7 @@ generate("tests/vulkan-fg/src/dlss_abi.rs", "tests/vulkan-fg/dlss_abi.h",
          ["--allowlist-function", "rsf_(fixture_dlss_.*|dlssgvk_.*|core_dlss_capture_(remember|detach|close))", "--no-prepend-enum-name",
           "--blocklist-type", "rsf_(frame_record|camera_frame|frame_id|frame_phase|screen_class)",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;", "--with-derive-default"])
+
+generate("runtime/orchestrator/src/streamline_sr/payload_abi.rs",
+         "runtime/backends/dlss/src/streamline_sr_payload.h",
+         "^rsf_sl_sr_.*$", "NOTHING", [], ["--with-derive-default"])

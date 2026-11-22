@@ -5,7 +5,9 @@ use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
-use crate::streamline_sr::{Options, TagBatch, dlss_mode};
+use crate::streamline_sr::{
+    Constants, Dimensions, Optimal, OptionPayload, Options, TagBatch, dimensions, dlss_mode,
+};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
@@ -106,20 +108,8 @@ struct Preferences {
     feature: u32,
 }
 
-#[repr(C)]
-struct Constants<'a> {
-    frame: &'a Frame,
-    previous_to_current: [f32; 16],
-    motion_scale: [f32; 2],
-    forward: [f32; 3],
-    aspect: f32,
-    invalid_motion: f32,
-}
-
 const _: () = {
     assert!(size_of::<Preferences>() == 40);
-    assert!(size_of::<Constants>() == 104);
-    assert!(std::mem::offset_of!(Constants, aspect) == 92);
 };
 
 // C++ owns the Streamline types and SDK calls. The table is static in each consumer.
@@ -138,13 +128,13 @@ struct Platform {
     shutdown: unsafe extern "C" fn(Handle) -> i32,
     close: unsafe extern "C" fn(Handle),
     present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
-    plan: unsafe extern "C" fn(Handle, u32, u32, u32, &mut u32, &mut u32) -> i32,
+    plan: unsafe extern "C" fn(Handle, &Dimensions, &mut Optimal) -> i32,
     validate: unsafe extern "C" fn(Handle, *const Frame) -> i32,
     token: unsafe extern "C" fn(Handle, u32, &mut Handle) -> i32,
     shared_token: unsafe extern "C" fn(Handle, u64) -> Handle,
     inverse: unsafe extern "C" fn(&[f32; 16], &mut [f32; 16]) -> f32,
     constants: unsafe extern "C" fn(Handle, Handle, u32, &Constants) -> i32,
-    options: unsafe extern "C" fn(Handle, u32, &Options) -> i32,
+    options: unsafe extern "C" fn(Handle, u32, &OptionPayload) -> i32,
     dispatch: unsafe extern "C" fn(Handle, Handle, u32, Handle, &TagBatch) -> i32,
     free_viewport: unsafe extern "C" fn(Handle, u32),
 }
@@ -537,17 +527,15 @@ unsafe fn rsf_core_dlss_native12_plan(
     render_height: *mut u32,
 ) -> i32 {
     let registration = &context.registration;
-    let (mut planned_width, mut planned_height) = (0, 0);
+    let mut optimal = Optimal::default();
     let result = unsafe {
         (registration.platform.plan)(
             registration.native.as_ptr(),
-            width,
-            height,
-            dlss_mode(quality),
-            &mut planned_width,
-            &mut planned_height,
+            &dimensions(quality, width, height),
+            &mut optimal,
         )
     };
+    let (planned_width, planned_height) = (optimal.width, optimal.height);
     if result != OK {
         return result;
     }
@@ -594,19 +582,33 @@ unsafe fn rsf_core_dlss_native12_evaluate(
         return INVALID;
     }
     let constants = Constants {
-        frame,
-        previous_to_current,
+        view_to_clip: camera.view_to_clip,
+        clip_to_view: camera.clip_to_view,
+        clip_to_previous: camera.clip_to_previous_clip,
+        previous_to_clip: previous_to_current,
+        jitter: [frame.jitter_x, frame.jitter_y],
         motion_scale: [
             1.0 / record.render_width as f32,
             1.0 / record.render_height as f32,
         ],
+        pinhole: [0.0; 2],
+        position: std::array::from_fn(|i| camera.view_to_world[12 + i]),
+        right: std::array::from_fn(|i| camera.view_to_world[i]),
+        up: std::array::from_fn(|i| camera.view_to_world[4 + i]),
         forward: crate::streamline_policy::camera_forward(
             &camera.view_to_world,
             &camera.view_to_clip,
             -1.0,
         ),
+        near_plane: camera.near_plane,
+        far_plane: camera.far_plane,
+        fov: camera.vertical_fov_radians,
         aspect: record.output_width as f32 / record.output_height as f32,
         invalid_motion: f32::MAX,
+        depth_inverted: u8::from(camera.depth_inverted != 0),
+        camera_motion: 1,
+        motion_3d: 0,
+        reset: u8::from(frame.reset != 0),
     };
     let constants = unsafe { (platform.constants)(native, token, viewport, &constants) };
     if constants != OK {
@@ -624,7 +626,7 @@ unsafe fn rsf_core_dlss_native12_evaluate(
         alpha: 0,
         preset: context.preset,
     };
-    let result = unsafe { (platform.options)(native, viewport, &options) };
+    let result = unsafe { (platform.options)(native, viewport, &options.payload()) };
     if result != OK {
         return result;
     }

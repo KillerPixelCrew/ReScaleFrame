@@ -2,7 +2,7 @@
 #include <rescaleframe/dlss_native12.h>
 
 #if RSF_HAVE_STREAMLINE
-#include "streamline_frame.h"
+#include <rescaleframe/streamline_host.h>
 #include "streamline_sr.h"
 #include <sl_consts.h>
 #include <DirectXMath.h>
@@ -20,12 +20,7 @@ struct Preferences {
     const char* project_id;
     uint32_t engine, application_id, render_api, feature;
 };
-struct ConstantsInput {
-    const rsf_sr_frame* frame;
-    float previous_to_current[16], motion_scale[2], forward[3], aspect, invalid_motion;
-};
-static_assert(sizeof(Preferences) == 40 && sizeof(ConstantsInput) == 104 &&
-    offsetof(ConstantsInput, aspect) == 92);
+static_assert(sizeof(Preferences) == 40);
 static_assert(uint64_t(sl::PreferenceFlags::eUseManualHooking) == (1ull << 2) &&
     uint64_t(sl::PreferenceFlags::eUseFrameBasedResourceTagging) == (1ull << 7) &&
     uint32_t(sl::EngineType::eCustom) == 0 && uint32_t(sl::EngineType::eUnreal) == RSF_DLSS_ENGINE_UNREAL &&
@@ -157,19 +152,11 @@ rsf_backend_result native_present(void* handle, void* swapchain, uint32_t interv
     return SUCCEEDED(result) && !skip ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-rsf_backend_result native_plan(void* handle, uint32_t width, uint32_t height, uint32_t mode,
-    uint32_t* render_width, uint32_t* render_height) noexcept try
+rsf_backend_result native_plan(void* handle, const rsf_sl_sr_dimensions* dimensions,
+    rsf_sl_sr_optimal* out) noexcept try
 {
-    sl::DLSSOptions options{};
-    options.mode = static_cast<sl::DLSSMode>(mode);
-    options.outputWidth = width;
-    options.outputHeight = height;
-    sl::DLSSOptimalSettings settings{};
-    if (static_cast<Native*>(handle)->optimal(options, settings) != sl::Result::eOk)
-        return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    *render_width = settings.optimalRenderWidth;
-    *render_height = settings.optimalRenderHeight;
-    return RSF_BACKEND_OK;
+    return rsf::sr_optimal(static_cast<Native*>(handle)->optimal, *dimensions, *out) == sl::Result::eOk
+        ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 rsf_backend_result native_token(void* handle, uint32_t index, void** out) noexcept try
@@ -198,41 +185,18 @@ float native_inverse(const float (*matrix)[16], float (*inverse)[16]) noexcept
 }
 
 rsf_backend_result native_constants(void* handle, void* token_ptr, uint32_t viewport_id,
-    const ConstantsInput* input) noexcept try
+    const rsf_sl_sr_constants* input) noexcept try
 {
-    const auto* frame = input->frame;
     const auto& native = *static_cast<Native*>(handle);
     const auto* token = static_cast<sl::FrameToken*>(token_ptr);
     const sl::ViewportHandle viewport(viewport_id);
-    const auto& record = *frame->record;
-    const auto& camera = record.camera;
-    sl::Constants constants{};
-    constants.cameraViewToClip = rsf::sl_matrix(camera.view_to_clip);
-    constants.clipToCameraView = rsf::sl_matrix(camera.clip_to_view);
-    constants.clipToPrevClip = rsf::sl_matrix(camera.clip_to_previous_clip);
-    constants.prevClipToClip = rsf::sl_matrix(input->previous_to_current);
-    constants.jitterOffset = {frame->jitter_x, frame->jitter_y};
-    constants.mvecScale = {input->motion_scale[0], input->motion_scale[1]};
-    constants.cameraPinholeOffset = {0, 0};
-    constants.cameraPos = {camera.view_to_world[12], camera.view_to_world[13], camera.view_to_world[14]};
-    constants.cameraRight = {camera.view_to_world[0], camera.view_to_world[1], camera.view_to_world[2]};
-    constants.cameraUp = {camera.view_to_world[4], camera.view_to_world[5], camera.view_to_world[6]};
-    constants.cameraFwd = {input->forward[0], input->forward[1], input->forward[2]};
-    constants.cameraNear = camera.near_plane;
-    constants.cameraFar = camera.far_plane;
-    constants.cameraFOV = camera.vertical_fov_radians;
-    constants.cameraAspectRatio = input->aspect;
-    constants.depthInverted = camera.depth_inverted ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-    constants.cameraMotionIncluded = sl::Boolean::eTrue;
-    constants.motionVectors3D = sl::Boolean::eFalse;
+    auto constants = rsf::sr_constants(*input);
     constants.motionVectorsJittered = sl::Boolean::eFalse;
-    constants.motionVectorsInvalidValue = input->invalid_motion;
-    constants.reset = frame->reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-    return native.constants(constants, *token, viewport) == sl::Result::eOk ?
-        RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
+    return native.constants(constants, *token, viewport) == sl::Result::eOk
+        ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-rsf_backend_result native_options(void* handle, uint32_t viewport, const rsf_streamline_sr_options* input) noexcept try
+rsf_backend_result native_options(void* handle, uint32_t viewport, const rsf_sl_sr_options* input) noexcept try
 {
     const auto& native = *static_cast<Native*>(handle);
     const auto options = rsf::sr_options(*input);

@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Frame, Handle};
+use crate::streamline_sr::Constants;
 use std::ptr::{from_ref, null};
-
-#[repr(C)]
-struct Constants<'a> {
-    frame: &'a Frame,
-    camera_pinhole: [f32; 2],
-    motion_vectors_3d: u32,
-}
 
 #[repr(C)]
 pub(super) struct Platform {
@@ -18,8 +12,6 @@ pub(super) struct Platform {
 }
 
 const _: () = {
-    assert!(size_of::<Constants>() == 24);
-    assert!(std::mem::offset_of!(Constants, motion_vectors_3d) == 16);
     assert!(size_of::<Platform>() == 4 * size_of::<Handle>());
 };
 
@@ -54,9 +46,26 @@ impl Platform {
         frame: &Frame,
     ) -> i32 {
         let constants = Constants {
-            frame,
-            camera_pinhole: [0.0; 2],
-            motion_vectors_3d: 0,
+            view_to_clip: frame.camera_view_to_clip,
+            clip_to_view: frame.clip_to_camera_view,
+            clip_to_previous: frame.clip_to_prev_clip,
+            previous_to_clip: frame.prev_clip_to_clip,
+            jitter: [frame.jitter_x, frame.jitter_y],
+            motion_scale: [frame.motion_scale_x, frame.motion_scale_y],
+            pinhole: [0.0; 2],
+            position: frame.camera_position,
+            up: frame.camera_up,
+            right: frame.camera_right,
+            forward: frame.camera_forward,
+            near_plane: frame.near_plane,
+            far_plane: frame.far_plane,
+            fov: frame.vertical_fov,
+            aspect: frame.aspect_ratio,
+            invalid_motion: frame.motion_invalid_value,
+            depth_inverted: u8::from(frame.depth_inverted != 0),
+            camera_motion: u8::from(frame.camera_motion_included != 0),
+            motion_3d: 0,
+            reset: u8::from(frame.reset != 0),
         };
         if host.is_null() {
             unsafe { (self.owned_constants)(native, token, slot, &constants) }
@@ -91,11 +100,8 @@ fn frame_routes_preserve_optional_index_and_common_viewport() {
         constants: &Constants,
     ) -> i32 {
         assert_eq!((token.addr(), slot), (2, 1));
-        assert_eq!(constants.frame.viewport, 1);
-        assert_eq!(
-            (constants.camera_pinhole, constants.motion_vectors_3d),
-            ([0.0; 2], 0)
-        );
+        assert_eq!(constants.jitter, [0.25, -0.5]);
+        assert_eq!((constants.pinhole, constants.motion_3d), ([0.0; 2], 0));
         0
     }
 
@@ -106,10 +112,7 @@ fn frame_routes_preserve_optional_index_and_common_viewport() {
         constants: &Constants,
     ) -> i32 {
         assert_eq!((host.addr(), source, viewport), (3, 42, 1));
-        assert_eq!(
-            (constants.camera_pinhole, constants.motion_vectors_3d),
-            ([0.0; 2], 0)
-        );
+        assert_eq!((constants.pinhole, constants.motion_3d), ([0.0; 2], 0));
         0
     }
 
@@ -121,6 +124,8 @@ fn frame_routes_preserve_optional_index_and_common_viewport() {
     };
     let mut frame: Frame = unsafe { std::mem::zeroed() };
     frame.viewport = 1;
+    frame.jitter_x = 0.25;
+    frame.jitter_y = -0.5;
     let slot = frame.viewport;
     assert_eq!(platform.token(null_mut(), null_mut(), 0, 0).addr(), 1);
     let owned = platform.token(null_mut(), null_mut(), 0, 9);

@@ -16,17 +16,5 @@ inline sl::float3 sl_camera_forward(const rsf_camera_frame& camera, float orthog
     rsf_streamline_camera_forward(camera.view_to_world, camera.view_to_clip, orthographic_sign, forward);
     return {forward[0], forward[1], forward[2]};
 }
-// Row major on both sides, so a copy rather than a transpose.
-inline sl::float4x4 sl_matrix(const float* values)
-{
-    sl::float4x4 matrix{};
-    for (int row = 0; row < 4; ++row) {
-        matrix.row[row].x = values[row * 4 + 0];
-        matrix.row[row].y = values[row * 4 + 1];
-        matrix.row[row].z = values[row * 4 + 2];
-        matrix.row[row].w = values[row * 4 + 3];
-    }
-    return matrix;
-}
 }
 #endif

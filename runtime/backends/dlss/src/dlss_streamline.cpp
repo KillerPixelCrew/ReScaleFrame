@@ -30,6 +30,7 @@
 #include <cstdio>
 
 using rsf_streamline_sr_entry_addresses = void*[12];
+using rsf_streamline_sr_present_entries = void*[2];
 
 struct rsf_streamline_sr_preferences {
     const wchar_t* plugins;
@@ -58,42 +59,34 @@ struct rsf_streamline_sr_startup {
 struct rsf_streamline_sr_versions {
     uint32_t required_major, required_minor, detected_major, detected_minor;
 };
-struct rsf_streamline_sr_sizes {
-    uint32_t optimal[2], minimum[2], maximum[2];
-};
 struct rsf_streamline_sr_planning {
     int32_t (*d3d11_luid)(void*, uint64_t*);
     int32_t (*device_luid)(void*, uint64_t*);
     int32_t (*query_support)(void*, uint64_t, uint32_t*);
     int32_t (*requirements)(void*, rsf_streamline_sr_versions*);
-    int32_t (*optimal)(void*, uint32_t, uint32_t, uint32_t, rsf_streamline_sr_sizes*);
+    int32_t (*optimal)(void*, const rsf_sl_sr_dimensions*, rsf_sl_sr_optimal*);
 };
 
-struct rsf_streamline_sr_constants {
-    const rsf_dlss_frame* frame;
-    float camera_pinhole[2];
-    uint32_t motion_vectors_3d;
-};
 struct rsf_streamline_sr_frame_ops {
     void* (*owned_token)(void*, const uint32_t*);
     void* (*host_token)(void*, uint64_t);
-    int32_t (*owned_constants)(void*, void*, uint32_t, const rsf_streamline_sr_constants*);
-    int32_t (*host_constants)(void*, uint64_t, uint32_t, const rsf_streamline_sr_constants*);
+    int32_t (*owned_constants)(void*, void*, uint32_t, const rsf_sl_sr_constants*);
+    int32_t (*host_constants)(void*, uint64_t, uint32_t, const rsf_sl_sr_constants*);
 };
 
 struct rsf_streamline_sr_platform {
     void* (*load)(const wchar_t*, const rsf_dlss_setup*);
     const rsf_streamline_sr_startup* startup;
     const rsf_streamline_sr_planning* planning;
-    int32_t (*present)(void*, void*, uint32_t, uint32_t, uint32_t);
+    int32_t (*lookup_present)(void*, const char*, void**);
+    int32_t (*present)(const rsf_streamline_sr_present_entries*, void*, uint32_t, uint32_t, uint32_t);
     const rsf_streamline_sr_frame_ops* frame;
-    int32_t (*options)(void*, uint32_t, const rsf_streamline_sr_options*);
+    int32_t (*options)(void*, uint32_t, const rsf_sl_sr_options*);
     int32_t (*tags)(void*, void*, void*, uint32_t, const rsf_streamline_sr_tags*);
     int32_t (*evaluate)(void*, void*, void*, uint32_t);
     uint32_t (*drain)(void*);
     int32_t (*release_viewport)(void*, uint32_t);
     int32_t (*shutdown)(void*);
-    void (*destroy)(void*);
 };
 
 // sl_security.h defines globals, so it belongs in exactly one translation unit.
@@ -142,8 +135,6 @@ struct Native {
     Entries sl{};
     PFun_slDLSSGetOptimalSettings* get_optimal_settings = nullptr;
     PFun_slDLSSSetOptions* set_options = nullptr;
-    HRESULT (*present)(IDXGISwapChain*, UINT, UINT, bool&){};
-    HRESULT (*after_present)(UINT){};
 
     // The SDK borrows this array and Rust owns the strings through shutdown.
     const wchar_t* plugin_paths[1]{};
@@ -205,11 +196,6 @@ void bind_entries(void* native, const rsf_streamline_sr_entry_addresses* address
     entries.set_device = reinterpret_cast<PFun_slSetD3DDevice*>(set_device);
     entries.get_new_frame_token = reinterpret_cast<PFun_slGetNewFrameToken*>(get_new_frame_token);
     entries.allocate_resources = reinterpret_cast<PFun_slAllocateResources*>(allocate_resources);
-}
-
-sl::Boolean flag(uint32_t value)
-{
-    return value ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 }
 
 const sl::ViewportHandle& viewport_handle(uint32_t slot)
@@ -281,19 +267,22 @@ int32_t register_device(void* native, void* device) noexcept try
     return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
-int32_t present(void* native, void* swapchain, uint32_t interval, uint32_t flags, uint32_t begin) noexcept try
+int32_t lookup_present(void* native, const char* name, void** address) noexcept try
 {
-    auto& self = *static_cast<Native*>(native);
-    if (!self.present || !self.after_present) {
-        void* before = nullptr; void* after = nullptr;
-        if (self.sl.get_feature_function(sl::kFeatureCommon, "slHookPresent", before) != sl::Result::eOk ||
-            self.sl.get_feature_function(sl::kFeatureCommon, "slHookAfterPresent", after) != sl::Result::eOk || !before || !after)
-            return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
-        self.present = reinterpret_cast<decltype(self.present)>(before);
-        self.after_present = reinterpret_cast<decltype(self.after_present)>(after);
-    }
+    const auto& self = *static_cast<Native*>(native);
+    return self.sl.get_feature_function(sl::kFeatureCommon, name, *address) == sl::Result::eOk
+        ? RSF_DLSS_OK : RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
+
+int32_t present(const rsf_streamline_sr_present_entries* entries, void* swapchain,
+    uint32_t interval, uint32_t flags, uint32_t begin) noexcept try
+{
+    using Before = HRESULT (*)(IDXGISwapChain*, UINT, UINT, bool&);
+    using After = HRESULT (*)(UINT);
+    const auto& [before, after] = *entries;
     bool skip = false;
-    const auto result = begin ? self.present(static_cast<IDXGISwapChain*>(swapchain), interval, flags, skip) : self.after_present(flags);
+    const auto result = begin ? reinterpret_cast<Before>(before)(static_cast<IDXGISwapChain*>(swapchain), interval, flags, skip)
+        : reinterpret_cast<After>(after)(flags);
     return SUCCEEDED(result) && !skip ? RSF_DLSS_OK : RSF_DLSS_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
@@ -316,21 +305,14 @@ int32_t requirements(void* native, rsf_streamline_sr_versions* out) noexcept try
     return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
-int32_t optimal(void* native, uint32_t mode, uint32_t width, uint32_t height,
-    rsf_streamline_sr_sizes* out) noexcept try
+int32_t optimal(void* native, const rsf_sl_sr_dimensions* dimensions,
+    rsf_sl_sr_optimal* out) noexcept try
 {
-    sl::DLSSOptions options{};
-    options.mode = static_cast<sl::DLSSMode>(mode);
-    options.outputWidth = width;
-    options.outputHeight = height;
-    sl::DLSSOptimalSettings settings{};
-    const auto result = static_cast<Native*>(native)->get_optimal_settings(options, settings);
+    const auto result = rsf::sr_optimal(static_cast<Native*>(native)->get_optimal_settings, *dimensions, *out);
     if (result != sl::Result::eOk) {
         say("slDLSSGetOptimalSettings failed with result %u", static_cast<unsigned>(result));
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
-    *out = {{settings.optimalRenderWidth, settings.optimalRenderHeight},
-        {settings.renderWidthMin, settings.renderHeightMin}, {settings.renderWidthMax, settings.renderHeightMax}};
     return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
@@ -346,36 +328,6 @@ void* host_token(void* host, uint64_t source) noexcept try
     return rsf_streamline_host_token(static_cast<rsf_streamline_host*>(host), source);
 } catch (...) { return nullptr; }
 
-void fill_constants(sl::Constants& constants, const rsf_streamline_sr_constants& input) noexcept
-{
-    const auto* frame = input.frame;
-    constants.cameraViewToClip = rsf::sl_matrix(frame->camera_view_to_clip);
-    constants.clipToCameraView = rsf::sl_matrix(frame->clip_to_camera_view);
-    constants.clipToPrevClip = rsf::sl_matrix(frame->clip_to_prev_clip);
-    constants.prevClipToClip = rsf::sl_matrix(frame->prev_clip_to_clip);
-    constants.jitterOffset = {frame->jitter_x, frame->jitter_y};
-    constants.cameraPinholeOffset = {input.camera_pinhole[0], input.camera_pinhole[1]};
-    constants.mvecScale = {frame->motion_scale_x, frame->motion_scale_y};
-    constants.cameraPos = {frame->camera_position[0], frame->camera_position[1],
-                           frame->camera_position[2]};
-    constants.cameraUp = {frame->camera_up[0], frame->camera_up[1], frame->camera_up[2]};
-    constants.cameraRight = {frame->camera_right[0], frame->camera_right[1],
-                             frame->camera_right[2]};
-    constants.cameraFwd = {frame->camera_forward[0], frame->camera_forward[1],
-                           frame->camera_forward[2]};
-    constants.cameraNear = frame->near_plane;
-    constants.cameraFar = frame->far_plane;
-    constants.cameraFOV = frame->vertical_fov;
-    constants.cameraAspectRatio = frame->aspect_ratio;
-    constants.depthInverted = flag(frame->depth_inverted);
-    constants.cameraMotionIncluded = flag(frame->camera_motion_included);
-    constants.motionVectors3D = flag(input.motion_vectors_3d);
-    constants.reset = flag(frame->reset);
-    // The caller supplies the invalid-motion value for its producer.
-    constants.motionVectorsInvalidValue = frame->motion_invalid_value;
-
-}
-
 int32_t constants_result(bool submitted) noexcept
 {
     if (!submitted) {
@@ -385,23 +337,21 @@ int32_t constants_result(bool submitted) noexcept
     return RSF_DLSS_OK;
 }
 
-int32_t owned_constants(void* native, void* token, uint32_t slot, const rsf_streamline_sr_constants* input) noexcept try
+int32_t owned_constants(void* native, void* token, uint32_t slot, const rsf_sl_sr_constants* input) noexcept try
 {
-    sl::Constants constants{};
-    fill_constants(constants, *input);
+    const auto constants = rsf::sr_constants(*input);
     auto& self = *static_cast<Native*>(native);
     return constants_result(
         self.sl.set_constants(constants, *static_cast<sl::FrameToken*>(token), viewport_handle(slot)) == sl::Result::eOk);
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
-int32_t host_constants(void* host, uint64_t source, uint32_t viewport, const rsf_streamline_sr_constants* input) noexcept try
+int32_t host_constants(void* host, uint64_t source, uint32_t viewport, const rsf_sl_sr_constants* input) noexcept try
 {
-    sl::Constants constants{};
-    fill_constants(constants, *input);
+    const auto constants = rsf::sr_constants(*input);
     return constants_result(rsf_streamline_common_set(static_cast<rsf_streamline_host*>(host), source, viewport, constants));
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
-int32_t set_options(void* native, uint32_t slot, const rsf_streamline_sr_options* input) noexcept try
+int32_t set_options(void* native, uint32_t slot, const rsf_sl_sr_options* input) noexcept try
 {
     auto& self = *static_cast<Native*>(native);
     const auto options = rsf::sr_options(*input);
@@ -454,12 +404,6 @@ int32_t shutdown(void* native) noexcept try
         ? RSF_DLSS_OK : RSF_DLSS_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
-void destroy(void* native) noexcept
-{
-    say("streamline shut down");
-    dispose_native(native);
-}
-
 constexpr rsf_streamline_sr_startup startup{
     allocate_native, dispose_native, set_log, missing_entry, bind_entries, init_owned,
     [](void* host) { return rsf_streamline_host_module(static_cast<rsf_streamline_host*>(host)); },
@@ -476,7 +420,7 @@ static_assert(uint32_t(sl::EngineType::eCustom) == 0 && uint32_t(sl::EngineType:
 constexpr rsf_streamline_sr_planning planning{
     rsf_dlss_sr_d3d11_luid, rsf_dlss_sr_d3d12_luid, query_support, requirements, optimal,
 };
-static_assert(sizeof(wchar_t) == sizeof(uint16_t) && sizeof(LUID) == 8 && sizeof(rsf_streamline_sr_versions) == 16 && sizeof(rsf_streamline_sr_sizes) == 24);
+static_assert(sizeof(wchar_t) == sizeof(uint16_t) && sizeof(LUID) == 8 && sizeof(rsf_streamline_sr_versions) == 16);
 static_assert(sizeof(rsf_streamline_sr_planning) == 5 * sizeof(void*));
 static_assert(uint32_t(sl::Result::eOk) == 0 && uint32_t(sl::Result::eErrorDriverOutOfDate) == 2 &&
     uint32_t(sl::Result::eErrorOSOutOfDate) == 3 && uint32_t(sl::Result::eErrorNoSupportedAdapterFound) == 6);
@@ -485,10 +429,9 @@ static_assert(uint32_t(sl::DLSSMode::eOff) == 0 && uint32_t(sl::DLSSMode::eMaxPe
     uint32_t(sl::DLSSMode::eUltraPerformance) == 4 && uint32_t(sl::DLSSMode::eDLAA) == 6);
 constexpr rsf_streamline_sr_frame_ops frame_ops{owned_token, host_token, owned_constants, host_constants};
 static_assert(sizeof(rsf_streamline_sr_frame_ops) == 4 * sizeof(void*));
-static_assert(sizeof(rsf_streamline_sr_constants) == 24 && offsetof(rsf_streamline_sr_constants, motion_vectors_3d) == 16);
 constexpr rsf_streamline_sr_platform platform{rsf_dlss_sr_load_sdk, &startup, &planning,
-    present, &frame_ops, set_options, set_tags, evaluate, drain,
-    release_viewport, shutdown, destroy};
+    lookup_present, present, &frame_ops, set_options, set_tags, evaluate, drain,
+    release_viewport, shutdown};
 static_assert(sizeof(rsf_streamline_sr_platform) == 12 * sizeof(void*));
 static_assert(RSF_DLSS_ERROR_LOAD_FAILED == -4);
 static_assert(sizeof(rsf_dlss_setup) == 88 && sizeof(rsf_dlss_support) == 36 &&

@@ -10,7 +10,7 @@ use crate::gl_pipeline_abi::{rsf_dlss_log_fn as Log, rsf_dlss_setup as Setup};
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
-use crate::streamline_sr::{Options, TagBatch, dlss_mode};
+use crate::streamline_sr::{OptionPayload, Options, TagBatch, dlss_mode};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{NonNull, addr_of, null, null_mut};
 use std::sync::Mutex;
@@ -51,6 +51,7 @@ const ENTRY_NAMES: [&CStr; 12] = [
 ];
 
 type Entries = [Handle; ENTRY_NAMES.len()];
+type PresentEntries = [Handle; 2];
 
 unsafe fn resolve_entries(
     module: Handle,
@@ -295,19 +296,18 @@ struct Platform {
     load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
     startup: &'static Startup,
     planning: &'static planning::Platform,
-    present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
+    lookup_present: unsafe extern "C" fn(Handle, *const c_char, &mut Handle) -> i32,
+    present: unsafe extern "C" fn(&PresentEntries, Handle, u32, u32, u32) -> i32,
     frame: &'static frame::Platform,
-    options: unsafe extern "C" fn(Handle, u32, &Options) -> i32,
+    options: unsafe extern "C" fn(Handle, u32, &OptionPayload) -> i32,
     tags: unsafe extern "C" fn(Handle, Handle, Handle, u32, &TagBatch) -> i32,
     evaluate: unsafe extern "C" fn(Handle, Handle, Handle, u32) -> i32,
     drain: unsafe extern "C" fn(Handle) -> u32,
     release_viewport: unsafe extern "C" fn(Handle, u32) -> i32,
     shutdown: unsafe extern "C" fn(Handle) -> i32,
-    destroy: unsafe extern "C" fn(Handle),
 }
 
 const _: () = {
-    assert!(size_of::<Options>() == 28);
     assert!(size_of::<InitPreferences>() == 64);
     assert!(std::mem::offset_of!(InitPreferences, flags) == 32);
     assert!(size_of::<Startup>() == 12 * size_of::<Handle>());
@@ -343,6 +343,7 @@ struct Session {
     route: Route,
     features: u32,
     applied: [Option<Options>; 2],
+    present_entries: Option<PresentEntries>,
     shutdown_failure: Option<i32>,
     _module: Option<SdkModule>,
     _directories: [Option<Vec<u16>>; 2],
@@ -414,6 +415,7 @@ unsafe fn rsf_core_dlss_streamline_load(setup: *const Setup, platform: &Platform
         route: Route::Owned(None),
         features: 0,
         applied: [None; 2],
+        present_entries: None,
         shutdown_failure: None,
         _module: Some(module),
         _directories: directories,
@@ -445,6 +447,7 @@ unsafe fn rsf_core_dlss_streamline_share_host(
         route: Route::Shared { host, device },
         features: OPTIMAL | OPTIONS,
         applied: [None; 2],
+        present_entries: None,
         shutdown_failure: None,
         _module: None,
         _directories: [None, None],
@@ -545,10 +548,10 @@ unsafe fn rsf_core_dlss_streamline_present(
     if chain.is_null() || begin > 1 {
         return INVALID;
     }
-    let Ok(state) = SESSION.try_lock() else {
+    let Ok(mut state) = SESSION.try_lock() else {
         return NOT_READY;
     };
-    let Some(session) = state.as_ref().filter(|session| session.active()) else {
+    let Some(session) = state.as_mut().filter(|session| session.active()) else {
         return NOT_READY;
     };
     if !session.route.host().is_null() {
@@ -557,7 +560,29 @@ unsafe fn rsf_core_dlss_streamline_present(
     if session.route.device().is_none() {
         return NOT_READY;
     }
-    unsafe { (platform.present)(session.native.as_ptr(), chain, interval, flags, begin) }
+    let entries = match session.present_entries {
+        Some(entries) => entries,
+        None => {
+            let mut entries = [null_mut(); 2];
+            for (name, entry) in [c"slHookPresent", c"slHookAfterPresent"]
+                .into_iter()
+                .zip(&mut entries)
+            {
+                let result = unsafe {
+                    (platform.lookup_present)(session.native.as_ptr(), name.as_ptr(), entry)
+                };
+                if result != OK {
+                    return result;
+                }
+            }
+            if entries.iter().any(|entry| entry.is_null()) {
+                return MISSING_ENTRY;
+            }
+            session.present_entries = Some(entries);
+            entries
+        }
+    };
+    unsafe { (platform.present)(&entries, chain, interval, flags, begin) }
 }
 
 unsafe fn rsf_core_dlss_streamline_evaluate(
@@ -627,7 +652,7 @@ unsafe fn rsf_core_dlss_streamline_evaluate(
     };
     let applied = &mut session.applied[slot as usize];
     if *applied != Some(options) {
-        let status = unsafe { (platform.options)(native, slot, &options) };
+        let status = unsafe { (platform.options)(native, slot, &options.payload()) };
         if status != OK {
             if status != INVALID {
                 *applied = None;
@@ -687,7 +712,10 @@ unsafe fn rsf_core_dlss_streamline_shutdown(platform: &Platform) -> i32 {
     }
     // Keep the COM device, module and borrowed directories through native cleanup.
     let retired = state.take();
-    unsafe { (platform.destroy)(native) };
+    unsafe {
+        (platform.startup.report)(c"streamline shut down".as_ptr());
+        (platform.startup.dispose)(native);
+    };
     drop(retired);
     OK
 }

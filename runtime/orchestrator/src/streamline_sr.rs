@@ -7,6 +7,13 @@ use std::ptr::null_mut;
 #[cfg(not(test))]
 mod native;
 
+#[path = "streamline_sr/payload_abi.rs"]
+mod payload_abi;
+pub(super) use payload_abi::{
+    rsf_sl_sr_constants as Constants, rsf_sl_sr_dimensions as Dimensions,
+    rsf_sl_sr_optimal as Optimal, rsf_sl_sr_options as OptionPayload,
+};
+
 fn luid_bits(luid: windows::Win32::Foundation::LUID) -> u64 {
     u64::from(luid.LowPart) | (u64::from(luid.HighPart as u32) << 32)
 }
@@ -28,6 +35,30 @@ pub(super) struct Options {
     pub(super) auto_exposure: u32,
     pub(super) alpha: u32,
     pub(super) preset: u32,
+}
+
+impl Options {
+    pub(super) fn payload(self) -> OptionPayload {
+        OptionPayload {
+            dimensions: Dimensions {
+                mode: self.mode,
+                width: self.width,
+                height: self.height,
+            },
+            presets: [self.preset; 6],
+            hdr: u8::from(self.hdr != 0),
+            auto_exposure: u8::from(self.auto_exposure != 0),
+            alpha: u8::from(self.alpha != 0),
+        }
+    }
+}
+
+pub(super) fn dimensions(quality: u32, width: u32, height: u32) -> Dimensions {
+    Dimensions {
+        mode: dlss_mode(quality),
+        width,
+        height,
+    }
 }
 
 pub(super) fn preset_valid(preset: u32) -> bool {

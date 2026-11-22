@@ -86,3 +86,37 @@ assertions now match the actual tables. Public headers and reused generated reco
 the base after stripping comments and whitespace.
 No generated declaration required regeneration. Builds, tests, lint, devices and game
 acceptance remain user-owned. This follow-up has source evidence only.
+
+## Streamline SR payloads after `fb27ab2f`
+
+Checked Streamline 2.14.1 at `2122257e0fce486f91b385aa63b9a09b0a34b363`. The SR
+owners in Rust now select the camera fields and options, pack the six preset
+slots, and consume one common optimal-settings record. The D3D11 planner keeps
+the reported minimum and maximum sizes. Native D3D12 continues to reject a
+successful plan with a zero optimal dimension before publishing its quality.
+
+With MSVC x64, `sl::Constants` is 456 bytes. SR writes offsets 32 through
+159 and 224 through 447, leaving the native version header, optional lens
+matrix and later defaults alone. D3D12 still sets the motion-jittered flag
+explicitly to false. The 88-byte `sl::DLSSOptions` has dimensions at
+offsets 32 through 43 and six presets at 60 through 83. Planning applies
+dimensions only. The SDK optimal-settings object is 64 bytes, with its
+seven contiguous result fields at offsets 32 through 59. The C++ shim
+asserts the copied field sizes and relative offsets against the SDK headers.
+Bindgen derives the Rust layout of the private C payloads.
+
+The owned D3D11 session caches the two common Present hooks after both
+lookups succeed. The shared route still delegates Present to the D3D12 host.
+C++ guards the vendor calls, including the Present hook's `bool&` skip
+argument. It also constructs the versioned SDK objects, frame and viewport
+arguments, and the resource and tag arrays. SDK preferences still borrow
+native arrays through shutdown. Signature verification stays in its single
+translation unit. Native D3D12 keeps the DirectXMath inverse and determinant
+as its singularity oracle. `streamline_frame.h` still declares the shared
+constants entry and `streamline_load.h` still serves the D06/MFG callers.
+
+MSVC syntax passed with the pinned headers present and with Streamline
+compiled out. The unmodified D06 generation source also passed SDK-enabled
+syntax against the shared headers. Bindgen 0.72.1 regeneration, Rust 1.94.1
+formatting and locked offline Cargo metadata passed. Build, link, runtime
+and device behavior remain unverified.
