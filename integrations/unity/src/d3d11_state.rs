@@ -45,11 +45,6 @@ pub(crate) mod graphics;
 const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
 /// Colour, depth, motion, output, the HUD-less scene and the Editor preview source.
 const SURFACES: usize = 6;
-// Initialization results.
-const DEVICE_BUSY: u32 = 0;
-const DEVICE_FAILED: u32 = 1;
-const DEVICE_READY: u32 = 2;
-const DEVICE_STOPPED: u32 = 3;
 
 /// Transferred COM references and the shared fence. A copy is a view borrowed under a frame
 /// callback, the creation claim or the checked close.
@@ -392,26 +387,22 @@ fn retired(ring: &SubmissionHandle, completed: u64, shared: u64) -> bool {
     ring.drained(completed) && ring.copy_drained(shared)
 }
 
-unsafe fn rsf_unity_d3d11_initialize(
-    services: *const rsf_game_host_services,
-    ops: *const DeviceOps,
-    view: *mut DeviceHandles,
-) -> u32 {
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
-        return DEVICE_FAILED;
-    };
-    if view.is_null() {
-        return DEVICE_FAILED;
-    }
+enum Device {
+    Ready(DeviceHandles),
+    Busy,
+    /// Creation failed now.
+    Failed,
+    /// An earlier creation failed; nothing is retried until release.
+    Stopped,
+}
+
+fn initialize(services: *const rsf_game_host_services, ops: &DeviceOps) -> Device {
     // Bind first, so the state guard ends before any arm runs.
     let claim = lock().claim();
     match claim {
-        Claim::Ready(handles) => {
-            unsafe { view.write(handles) };
-            return DEVICE_READY;
-        }
-        Claim::Busy => return DEVICE_BUSY,
-        Claim::Stopped => return DEVICE_STOPPED,
+        Claim::Ready(handles) => return Device::Ready(handles),
+        Claim::Busy => return Device::Busy,
+        Claim::Stopped => return Device::Stopped,
         Claim::Create => {}
     }
 
@@ -420,44 +411,29 @@ unsafe fn rsf_unity_d3d11_initialize(
         // Roll back before ending the claim, so a later caller never sees partial objects.
         drop(device);
         lock().creation_failed();
-        return DEVICE_FAILED;
+        return Device::Failed;
     }
     let handles = device.handles;
     let previous = lock().creation.publish(device);
     drop(previous);
-    unsafe { view.write(handles) };
-    DEVICE_READY
+    Device::Ready(handles)
 }
 
 #[cfg(test)]
-unsafe fn rsf_unity_d3d11_device_view(view: *mut DeviceHandles) -> bool {
-    if view.is_null() {
-        return false;
-    }
-    let Some(handles) = lock().view() else {
-        return false;
-    };
-    unsafe { view.write(handles) };
-    true
+fn device_view() -> Option<DeviceHandles> {
+    lock().view()
 }
 
-unsafe fn rsf_unity_d3d11_command_slot(index: u32, view: *mut CommandSlot) -> bool {
-    if view.is_null() {
-        return false;
-    }
-    let Some(slot) = lock().slot(index as usize) else {
-        return false;
-    };
-    unsafe { view.write(slot) };
-    true
+fn command_slot(index: usize) -> Option<CommandSlot> {
+    lock().slot(index)
 }
 
-fn rsf_unity_d3d11_surfaces_begin() -> bool {
+fn surfaces_begin() -> bool {
     lock().begin_surfaces()
 }
 
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
-fn rsf_unity_d3d11_surfaces_end() {
+fn surfaces_end() {
     lock().end_surfaces();
 }
 
@@ -532,31 +508,20 @@ fn prepare_surface(
 }
 
 /// The shared format is chosen from the slot and the source format (`d3d11_pass::shared_format`).
-unsafe fn rsf_unity_d3d11_prepare_surface(
+fn shared_surface(
     index: u32,
     services: *const rsf_game_host_services,
     width: u32,
     height: u32,
     source_format: u32,
-    view: *mut *mut c_void,
-) -> bool {
-    if view.is_null() {
-        return false;
-    }
+) -> Option<*mut c_void> {
     let key = SurfaceKey {
         width,
         height,
         format: source_format,
     };
-    let Some(shared) = shared_format(index, source_format) else {
-        return false;
-    };
-    let Some(surface) = prepare_surface(&STATE, index as usize, services, key, shared, &D3D11)
-    else {
-        return false;
-    };
-    unsafe { view.write(surface) };
-    true
+    let shared = shared_format(index, source_format)?;
+    prepare_surface(&STATE, index as usize, services, key, shared, &D3D11)
 }
 
 /// A frame callback's wait for the completion fence to reach `value`, through the record's wait
@@ -1006,29 +971,5 @@ mod tests {
             ]
         );
         lock_state(&state).released();
-    }
-
-    #[test]
-    fn exports_check_their_pointers() {
-        assert_eq!(
-            unsafe { rsf_unity_d3d11_initialize(ptr::null(), ptr::null(), ptr::null_mut()) },
-            DEVICE_FAILED
-        );
-        let mut view = DeviceHandles::EMPTY;
-        assert_eq!(
-            unsafe { rsf_unity_d3d11_initialize(ptr::null(), &OPS, ptr::null_mut()) },
-            DEVICE_FAILED
-        );
-        assert!(!unsafe { rsf_unity_d3d11_device_view(ptr::null_mut()) });
-        assert!(!unsafe { rsf_unity_d3d11_command_slot(0, ptr::null_mut()) });
-        assert!(!unsafe {
-            rsf_unity_d3d11_prepare_surface(0, ptr::null(), 1, 1, 10, ptr::null_mut())
-        });
-        // No record, so no surface lease.
-        assert!(!rsf_unity_d3d11_surfaces_begin());
-        // Without leaves or a packet nothing is admitted.
-        // Nothing was published by these refusals.
-        assert!(!unsafe { rsf_unity_d3d11_device_view(&mut view) });
-        assert_eq!(view, DeviceHandles::EMPTY);
     }
 }

@@ -235,17 +235,13 @@ struct SurfaceLease;
 
 impl SurfaceLease {
     fn acquire() -> Option<Self> {
-        if rsf_unity_d3d11_surfaces_begin() {
-            Some(Self)
-        } else {
-            None
-        }
+        surfaces_begin().then_some(Self)
     }
 }
 
 impl Drop for SurfaceLease {
     fn drop(&mut self) {
-        rsf_unity_d3d11_surfaces_end();
+        surfaces_end();
     }
 }
 
@@ -281,18 +277,7 @@ unsafe fn surface(
     {
         return None;
     }
-    let mut raw = null_mut();
-    unsafe {
-        rsf_unity_d3d11_prepare_surface(
-            index,
-            host,
-            desc.Width,
-            desc.Height,
-            desc.Format.0 as u32,
-            &mut raw,
-        )
-    }
-    .then_some(raw.cast())
+    shared_surface(index, host, desc.Width, desc.Height, desc.Format.0 as u32).map(<*mut _>::cast)
 }
 
 unsafe fn barrier(
@@ -409,10 +394,7 @@ impl Interop<'_> {
         // Keep every surface live through output copy and the closing pass notification.
         let _lease = SurfaceLease::acquire()?;
         let (index, retired) = D3D11.lock().slot();
-        let mut slot = CommandSlot::EMPTY;
-        if !unsafe { rsf_unity_d3d11_command_slot(index as u32, &mut slot) } {
-            return None;
-        }
+        let slot = command_slot(index)?;
         if !unsafe { wait(self.device, retired) } {
             log(self.host, c"Unity DX11 command-slot retirement timed out.");
             return None;
@@ -531,16 +513,18 @@ pub(crate) unsafe fn render_packet(
     if !rsf_unity_frames_active() {
         return;
     }
-    let mut device = DeviceHandles::EMPTY;
-    let ready = unsafe { rsf_unity_d3d11_initialize(host, &OPS, &mut device) };
-    if ready == DEVICE_FAILED {
+    let ready = initialize(host, &OPS);
+    if matches!(ready, Device::Failed) {
         // RSF_BACKEND_ERROR_INIT_FAILED is a C cast macro.
         rsf_unity_package_bridge_failed(-6);
         unsafe {
             rsf_unity_package_log(c"Unity DX11 shared device/fence initialization failed; native output remains in place.".as_ptr())
         };
     }
-    if ready != DEVICE_READY || host.render_pass.is_none() {
+    let Device::Ready(device) = ready else {
+        return;
+    };
+    if host.render_pass.is_none() {
         return;
     }
     let f11 = unsafe { rsf_shared_fence_d3d11(device.sharing.cast()) };
