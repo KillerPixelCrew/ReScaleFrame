@@ -589,11 +589,14 @@ void hooked_rhi_frame_end(void* list)
 {
     OuterGuard lifetime;
     if (full_frame_ticket) {
-        if (!rsf_ac7_render_scope_close(full_frame_ticket, list)) {
+        if (rsf_ac7_render_scope_close(full_frame_ticket, list)) {
+            full_frame_ticket = nullptr;
+        } else {
+            // Only the originating recording list can retire this ticket. Keep it reachable
+            // while the renderer is deactivated and the EndFrame hook can still drain it.
             auto* self = installed.load(std::memory_order_acquire);
             if (self) { self->active.store(false); log(*self, "AC7 full RHI frame refused: EndFrame could not queue"); }
         }
-        full_frame_ticket = nullptr;
     }
     reinterpret_cast<void(*)(void*)>(sites[hook_rhi_frame_end].original)(list);
 }

@@ -16,6 +16,8 @@ markers are recorded, while the execute callback receives the engine's execution
 This accepts a flush segment on the same recording list, as exercised by the existing Rust
 fixture. A different list cannot close the ticket. A list discarded by the engine or never
 available again can still keep an open scope and its owner pinned.
+The full-frame hook keeps its ticket on refusal and deactivates rendering. The still-installed
+EndFrame hook can close it when the originating list becomes recordable again.
 
 ## View and effects
 
@@ -29,6 +31,16 @@ with the same view extent. This excludes ordinary uploads to other full-target v
 The frame tap supplies a recently bound pixel-stage buffer and has no native view or family
 identity. Slot selection and same-allocation reuse at the same extent therefore remain
 limitations of the compatibility path. The native path does not consume this heuristic.
+
+A verified compatibility receipt would need a native AC7 scene-pass producer to supply the
+session, source/native frame, view and family keys alongside its exact context, constant-buffer
+identity and active rectangle. The frame tap would correlate the receipt at the actual draw
+with the buffer bound at the verified stage and slot. To consume an earlier upload at
+recombine, it would also need the current frame's upload generation to detect subsequent
+overwrites, invalidated mappings and pooled buffer reuse. Carry only numeric identities and
+copied camera data past the callback, or retain a buffer reference for identity comparison
+and release it on replacement, invalidation, frame reset or uninstall as appropriate. The
+adapter supplies the native facts and decides primary-camera admission.
 
 The [TrueSky depth evidence](../research/ue418-hook-map.md) still governs effect size, expected
 code and first-party shader choice. A mismatched composite draw fingerprint logs one terminal
