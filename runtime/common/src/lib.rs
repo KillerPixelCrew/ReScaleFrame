@@ -37,7 +37,11 @@ impl Drop for Hash {
     }
 }
 
-unsafe fn hash_file(path: *const u16, sharing: u32) -> Option<[u8; 32]> {
+/// SHA-256 of a file opened for reading with `sharing`.
+///
+/// # Safety
+/// `path` must be a NUL-terminated UTF-16 path.
+pub unsafe fn hash_file(path: *const u16, sharing: u32) -> Option<[u8; 32]> {
     let file = unsafe {
         CreateFileW(
             path,

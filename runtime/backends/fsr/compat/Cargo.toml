@@ -19,6 +19,8 @@ rsf-bindgen = { path = "../../../../tools/bindgen" }
 workspace = true
 
 [target."cfg(windows)".dependencies]
+rsf-minhook-sys = { path = "../../../../third_party/minhook" }
+rsf-runtime-common = { path = "../../../common" }
 ash = { workspace = true }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",

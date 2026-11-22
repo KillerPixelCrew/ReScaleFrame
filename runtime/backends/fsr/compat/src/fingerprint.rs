@@ -12,26 +12,16 @@ use windows::{
     core::PCWSTR,
 };
 
-unsafe extern "C" {
-    fn rsf_common_sha256_file(path: *const u16, sharing: u32, digest: *mut u8) -> u32;
-}
-
-pub(super) unsafe extern "C" fn rsf_fsr4_compat_module_digest(
-    module: *mut c_void,
-    sizes: *const u32,
-    size_count: usize,
-    size: *mut u32,
-    digest: *mut u8,
-) -> bool {
+/// Returns the module file's size and SHA-256 when the size is one of `sizes`.
+/// The digest is read only for an admitted size.
+pub(super) unsafe fn module_digest(module: *mut c_void, sizes: &[u32]) -> Option<(u32, [u8; 32])> {
     const CAPACITY: usize = 32768;
     let mut path = Vec::new();
-    if path.try_reserve_exact(CAPACITY).is_err() {
-        return false;
-    }
+    path.try_reserve_exact(CAPACITY).ok()?;
     path.resize(CAPACITY, 0);
     let len = unsafe { GetModuleFileNameW(Some(HMODULE(module)), &mut path) } as usize;
     if len == 0 || len >= path.len() {
-        return false;
+        return None;
     }
     let mut attributes = WIN32_FILE_ATTRIBUTE_DATA::default();
     if unsafe {
@@ -44,29 +34,21 @@ pub(super) unsafe extern "C" fn rsf_fsr4_compat_module_digest(
     .is_err()
         || attributes.nFileSizeHigh != 0
     {
-        return false;
+        return None;
     }
     let file_size = attributes.nFileSizeLow;
-    let allowed = unsafe { slice::from_raw_parts(sizes, size_count) };
-    if !allowed.contains(&file_size)
-        || unsafe { rsf_common_sha256_file(path.as_ptr(), FILE_SHARE_READ.0, digest) } == 0
-    {
-        return false;
+    if !sizes.contains(&file_size) {
+        return None;
     }
-    unsafe { size.write(file_size) };
-    true
+    let digest = unsafe { rsf_runtime_common::hash_file(path.as_ptr(), FILE_SHARE_READ.0) }?;
+    Some((file_size, digest))
 }
 
-pub(super) unsafe extern "C" fn rsf_fsr4_compat_match_entry(
-    module: *mut c_void,
-    rva: usize,
-    expected: *const u8,
-    length: usize,
-) -> *mut c_void {
+/// The entry at `rva` when its first bytes are `expected`, otherwise null.
+pub(super) unsafe fn match_entry(module: *mut c_void, rva: usize, expected: &[u8]) -> *mut c_void {
     // Admission has matched an exact SDK fingerprint before using the recorded RVA.
     let target = unsafe { module.cast::<u8>().add(rva) };
-    let bytes = unsafe { slice::from_raw_parts(target, length) };
-    let expected = unsafe { slice::from_raw_parts(expected, length) };
+    let bytes = unsafe { slice::from_raw_parts(target, expected.len()) };
     if bytes == expected {
         target.cast()
     } else {
