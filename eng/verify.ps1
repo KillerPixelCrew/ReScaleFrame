@@ -30,6 +30,11 @@ try {
     Invoke-Checked cmake @('--build', '--preset', $preset)
     Invoke-Checked ctest @('--preset', $preset)
     Invoke-Checked cargo @('fmt', '--all', '--', '--check')
+    # The committed bindings drift silently from their headers without this. It needs bindgen-cli 0.72.1;
+    # the vendor-header generators take their SDK checkouts as arguments and are run by hand with --check.
+    if (Get-Command bindgen -ErrorAction SilentlyContinue) {
+        Invoke-Checked python @('-I', 'tools/generate-rust-bindings.py', '--check')
+    }
     # Features are additive. The default pass lints the not(feature) code; the all-features pass lints
     # the shipping plugin entries (native-entry, mono-plugin) and every fixture feature.
     Invoke-Checked cargo @('clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')

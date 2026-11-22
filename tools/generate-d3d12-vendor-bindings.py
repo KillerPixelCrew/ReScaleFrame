@@ -4,27 +4,22 @@ Stays committed: the XeSS, FidelityFX and NVAPI headers live in the gitignored v
 Pass --check to compare the committed outputs instead of writing them.
 """
 import argparse
-import os
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from committed_bindings import emit, finish  # noqa: E402
+from committed_bindings import bindgen, emit, finish  # noqa: E402
 
 
-def generate(bindgen, header, pattern, output, aliases, clang_args, constants='NOTHING', *, recursive=False):
-    emit(output, subprocess.check_output([
-        bindgen, str(header), "--allowlist-type", pattern,
+def generate(header, pattern, output, aliases, clang_args, constants='NOTHING', *, recursive=False):
+    emit(output, bindgen(
+        header, "--allowlist-type", pattern,
         "--allowlist-var", constants, *([] if recursive else ["--no-recursive-allowlist"]),
         "--no-prepend-enum-name", "--with-derive-default",
-        "--no-derive-debug", "--no-doc-comments", "--use-core",
-        "--rust-edition", "2024", "--rust-target", "1.85",
         "--raw-line", "#![allow(dead_code, non_camel_case_types, non_snake_case)]",
         *[item for alias in aliases for item in ("--raw-line", alias)],
-        "--", "--target=x86_64-pc-windows-msvc", "-DCINTERFACE", "-include", "stdbool.h",
-        *clang_args,
-    ]))
+        clang=["-DCINTERFACE", "-include", "stdbool.h", *clang_args],
+    ))
 
 
 def main():
@@ -35,12 +30,9 @@ def main():
     parser.add_argument("--vulkan", type=Path, help="Vulkan SDK Include directory for XeSS Vulkan records")
     parser.add_argument("--nvapi", type=Path, help="Regenerate only the NVAPI records from this SDK directory")
     args = parser.parse_args()
-    bindgen = os.environ.get("BINDGEN", "bindgen")
-    if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
-        raise SystemExit("Install bindgen-cli 0.72.1 to regenerate the vendor ABI records")
 
     if args.nvapi:
-        generate(bindgen, args.nvapi / "nvapi.h",
+        generate(args.nvapi / "nvapi.h",
                  r"NV_(GET_SLEEP_STATUS|SET_SLEEP_MODE|LATENCY_MARKER|SET_REFLEX_SYNC|ASYNC_FRAME_MARKER)_PARAMS",
                  root / "runtime/orchestrator/src/reflex_nvapi_abi.rs",
                  ["#![allow(non_upper_case_globals, clippy::useless_transmute)]"],
@@ -51,12 +43,12 @@ def main():
 
     aliases = [f"type ID3D12{name} = ::core::ffi::c_void;"
                for name in ("Resource", "DescriptorHeap", "Heap", "PipelineLibrary")]
-    generate(bindgen, args.xess / "xess/xess_d3d12.h",
+    generate(args.xess / "xess/xess_d3d12.h",
              r"_?xess_(2d|coord|d3d12_init_params|d3d12_execute_params|quality_settings|init_flags|version|result)_t",
              root / "runtime/orchestrator/src/d3d12_sr/xess_abi.rs", aliases, [])
 
 
-    generate(bindgen, args.xess / "xess_fg/xefg_swapchain_d3d12.h",
+    generate(args.xess / "xess_fg/xefg_swapchain_d3d12.h",
              r"_?xefg_swapchain_(d3d12_(resource_data|init_params)|init_flags|ui_mode|version|2d|frame_constant_data|properties|"
              r"present_status|result|resource_type|resource_validity)_t|xefg_swapchain_ui_composition_state_t|"
              r"_?xell_sleep_params_t",
@@ -68,7 +60,7 @@ def main():
              ["-x", "c++", "-std=c++20", "-include", "d3d12.h", "-include", "dxgi1_5.h",
               "-include", str(args.xess / "xell/xell.h")])
     if args.vulkan:
-        generate(bindgen, args.xess / "xess/xess_vk.h",
+        generate(args.xess / "xess/xess_vk.h",
                  r"_?xess_(vk_(init_params_t|execute_params_t|image_view_info)|2d_t|coord_t|quality_settings_t|version_t)|"
                  r"VkImageSubresourceRange",
                  root / "runtime/orchestrator/src/vulkan_sr/xess_sdk_abi.rs",
@@ -77,7 +69,7 @@ def main():
                  + ["type VkFormat = i32;", "type VkImageAspectFlags = u32;"],
                  ["-x", "c++", "-std=c++20", "-DVK_NO_PROTOTYPES", f"-I{args.vulkan}"])
     api = args.fidelityfx / "api/include"
-    generate(bindgen, root / "runtime/backends/fsr/src/ffx_descriptor_types.h",
+    generate(root / "runtime/backends/fsr/src/ffx_descriptor_types.h",
              r"ffx(ApiHeader|StructType_t|ApiMessage|Context|ReturnCode_t|AllocationCallbacks|Alloc|Dealloc|"
              r"CreateContextDescHeader|DispatchDescHeader|QueryDescHeader|QueryDescGetVersions|OverrideVersion|"
              r"QueryGetProviderVersion|CreateBackendDX12Desc|CreateContextDescUpscale|DispatchDescUpscale|"
@@ -90,7 +82,7 @@ def main():
              r"QUERY_DESC_TYPE_(GET_VERSIONS|GET_PROVIDER_VERSION|UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE)|"
              r"DESC_TYPE_OVERRIDE_VERSION)")
 
-    generate(bindgen, root / "runtime/backends/fsr/src/ffx_generation_descriptor_types.h",
+    generate(root / "runtime/backends/fsr/src/ffx_generation_descriptor_types.h",
              r"ffx(CreateContextDescFrameGeneration(Version|SwapChain(ForHwnd|Version)DX12)?|DispatchDescFrameGeneration(PrepareV2)?|"
              r"CallbackDescFrameGenerationPresent|ConfigureDescFrameGeneration|ConfigureDescHeader)|"
              r"PfnFfxConfigure|FfxApi(Rect2D|PresentCallbackFunc|FrameGenerationDispatchFunc)|rsf_ffx_fg_descriptor_type",

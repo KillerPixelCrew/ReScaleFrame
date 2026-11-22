@@ -7,12 +7,11 @@ skipped with a note.
 """
 import argparse
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from committed_bindings import emit, finish  # noqa: E402
+from committed_bindings import bindgen, emit, finish  # noqa: E402
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -21,18 +20,12 @@ parser.add_argument("--vulkan-sdk", type=Path, default=os.environ.get("VULKAN_SD
 parser.add_argument("--minhook", type=Path, default=root / "build/windows-x64/_deps/minhook-src",
                     help="MinHook v1.3.4 source tree for the HDE64 records")
 args = parser.parse_args()
-bindgen = os.environ.get("BINDGEN", "bindgen")
-if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
-    raise SystemExit("Install bindgen-cli 0.72.1 to regenerate the committed bindings")
 
 
 def generate(output, header, types, constants, clang_args, extra=()):
-    emit(root / output, subprocess.check_output([
-        bindgen, str(header), "--allowlist-type", types, "--allowlist-var", constants,
-        "--raw-line", "#![allow(non_camel_case_types)]",
-        "--no-derive-debug", "--use-core", "--no-doc-comments", "--rust-edition", "2024",
-        "--rust-target", "1.85", *extra, "--", "--target=x86_64-pc-windows-msvc", *clang_args,
-    ], cwd=root))
+    emit(root / output, bindgen(header, "--allowlist-type", types, "--allowlist-var", constants,
+                                "--raw-line", "#![allow(non_camel_case_types)]", *extra,
+                                clang=clang_args, cwd=root))
 
 
 # runtime/vulkan/xess-fg/build.ps1 compiles session.rs, which includes these, with bare rustc.
@@ -86,13 +79,10 @@ else:
 # hde64.h comes from the MinHook checkout CMake fetches (CMakeLists.txt pins v1.3.4).
 hde = args.minhook / "src/hde/hde64.h"
 if hde.exists():
-    emit(root / "runtime/orchestrator/src/d3d11_observer_hooks/hde_abi.rs", subprocess.check_output([
-        bindgen, str(hde), "--allowlist-type", "hde64s",
+    emit(root / "runtime/orchestrator/src/d3d11_observer_hooks/hde_abi.rs", bindgen(
+        hde, "--allowlist-type", "hde64s",
         "--allowlist-var", "^F_(MODRM|IMM(8|16|32|64)|DISP32|RELATIVE|ERROR|PREFIX_67)$",
-        "--allowlist-function", "hde64_disasm", "--with-derive-default", "--no-derive-debug",
-        "--no-doc-comments", "--use-core", "--rust-edition", "2024", "--rust-target", "1.85",
-        "--", "--target=x86_64-pc-windows-msvc",
-    ]))
+        "--allowlist-function", "hde64_disasm", "--with-derive-default"))
 else:
     print(f"skipped runtime/orchestrator/src/d3d11_observer_hooks/hde_abi.rs: no {hde}")
 finish()

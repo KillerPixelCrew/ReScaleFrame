@@ -4,27 +4,19 @@ Stays committed: SCons and the CMake graph fixture compile the module with bare 
 Windows targets, so neither build script nor crate dependency can supply these bindings. Pass
 --check to compare the committed outputs instead of writing them.
 """
-import os
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from committed_bindings import emit, finish  # noqa: E402
+from committed_bindings import bindgen, emit, finish  # noqa: E402
 
 root = Path(__file__).resolve().parents[1]
 module = Path("integrations/godot/modules/rescaleframe")
-bindgen = os.environ.get("BINDGEN", "bindgen")
-if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
-    raise SystemExit("Use bindgen-cli 0.72.1")
 
 
 def generate(output, header, types, constants, extra, clang_args=()):
-    emit(root / module / output, subprocess.check_output([
-        bindgen, str(header), "--allowlist-type", types, "--allowlist-var", constants, *extra,
-        "--use-core", "--no-doc-comments", "--no-derive-debug", "--rust-edition", "2024",
-        "--rust-target", "1.85", "--", "--target=x86_64-pc-windows-msvc", *clang_args,
-    ], cwd=root))
+    emit(root / module / output, bindgen(header, "--allowlist-type", types, "--allowlist-var", constants, *extra,
+                                         clang=clang_args, cwd=root))
 
 
 frame_types = "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame)"

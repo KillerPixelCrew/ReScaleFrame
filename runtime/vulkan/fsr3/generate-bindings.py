@@ -3,22 +3,18 @@
 Stays committed: the FidelityFX SDK checkout is not part of the repository. Pass --check to
 compare the committed output instead of writing it.
 """
-import os
 from pathlib import Path
 import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-from committed_bindings import emit, finish  # noqa: E402
+from committed_bindings import bindgen, emit, finish  # noqa: E402
 
 sdk = Path(sys.argv[1]).resolve()
 vulkan = Path(sys.argv[2]).resolve()
 revision = subprocess.check_output(["git", "-C", sdk, "rev-parse", "HEAD"], text=True).strip()
 if revision != "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55":
     raise SystemExit("Expected the pinned FidelityFX Vulkan SDK 1.1.4 revision")
-bindgen = os.environ.get("BINDGEN", "bindgen")
-if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
-    raise SystemExit("Use bindgen-cli 0.72.1 to regenerate the FSR3 bindings")
 
 include = sdk / "ffx-api" / "include"
 types = (
@@ -32,20 +28,18 @@ types = (
     "ffxDispatchDesc(Upscale|FrameGeneration(Prepare(CameraInfo)?|SwapChainWaitForPresentsVK)?)"
 )
 constants = "FFX_API_.*DESC_TYPE_.*"
-result = subprocess.check_output([
-    bindgen, str(include / "ffx_api/vk/ffx_api_vk.h"),
+result = bindgen(
+    include / "ffx_api/vk/ffx_api_vk.h",
     "--allowlist-type", types, "--allowlist-var", constants,
     "--blocklist-type", "Vk(StructureType|Format)",
     "--raw-line", "#![allow(dead_code, non_camel_case_types)]",
     "--raw-line", "#![allow(non_snake_case, non_upper_case_globals)]",
     "--raw-line", "type VkStructureType = ::core::ffi::c_int;",
     "--raw-line", "type VkFormat = ::core::ffi::c_int;",
-    "--no-prepend-enum-name", "--with-derive-default", "--no-derive-debug", "--no-doc-comments",
-    "--use-core", "--rust-edition", "2024", "--rust-target", "1.85",
-    "--", "-x", "c++", "--target=x86_64-pc-windows-msvc",
-    "-include", "stddef.h", "-include", "ffx_api/ffx_upscale.h",
-    "-include", "ffx_api/ffx_framegeneration.h",
-    "-I" + str(include), "-I" + str(vulkan / "Include"),
-])
+    "--no-prepend-enum-name", "--with-derive-default",
+    clang=["-x", "c++", "-include", "stddef.h", "-include", "ffx_api/ffx_upscale.h",
+           "-include", "ffx_api/ffx_framegeneration.h",
+           "-I" + str(include), "-I" + str(vulkan / "Include")],
+)
 emit(Path(__file__).with_name("sdk_abi.rs"), result)
 finish()

@@ -5,20 +5,15 @@ the committed output instead of writing it.
 """
 
 import argparse
-import os
 import re
-import subprocess
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from committed_bindings import emit, finish  # noqa: E402
+from committed_bindings import bindgen, emit, finish  # noqa: E402
 
 root = Path(__file__).resolve().parents[1]
-bindgen = os.environ.get("BINDGEN", "bindgen")
-if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
-    raise SystemExit("Use bindgen-cli 0.72.1")
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("include", type=Path, help="Godot engine thirdparty/vulkan/include")
 include = parser.parse_args().include.resolve()
@@ -95,8 +90,8 @@ with TemporaryDirectory() as directory:
         "input_dump_(cancel|poll|requested|wants|begin_record|complete|pass_metadata|result))"
     )
     def generate(*extra):
-        return subprocess.check_output(
-            [bindgen, str(header), "--allowlist-type", f"^({types})$", "--allowlist-function", f"^{functions}$",
+        return bindgen(
+            header, "--allowlist-type", f"^({types})$", "--allowlist-function", f"^{functions}$",
              "--blocklist-type", "^VkStructureType$", "--no-prepend-enum-name",
              "--allowlist-var", "^RSF_(LATENCYVK_(DEVICE_)?ABI_VERSION|SLVK_(ABI_VERSION|DLSS_SR|DLSS_FG)|"
              "XESSVK_REQUIREMENTS_ABI_VERSION|SRVK_(SPLIT_)?ABI_VERSION|FGVK_(HOST_)?ABI_VERSION|"
@@ -106,12 +101,10 @@ with TemporaryDirectory() as directory:
              "--raw-line", "#![allow(non_upper_case_globals)]",
              "--raw-line", "use rsf_game_sys::rsf_sharpening_options;",
              "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};",
-             "--raw-line", "pub type VkStructureType = ::core::ffi::c_int;", "--use-core",
-             "--no-doc-comments", "--no-derive-debug", "--with-derive-default", *extra,
-             "--rust-edition", "2024", "--rust-target", "1.85",
-             "--", "--target=x86_64-pc-windows-msvc", f"-I{include}",
-             "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
-             "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include", f"-I{root}"],
+             "--raw-line", "pub type VkStructureType = ::core::ffi::c_int;",
+             "--with-derive-default", *extra,
+             clang=[f"-I{include}", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+                    "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include", f"-I{root}"],
             cwd=root,
         )
 
