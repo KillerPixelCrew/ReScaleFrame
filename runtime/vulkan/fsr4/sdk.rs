@@ -19,6 +19,10 @@ mod dx12;
 #[cfg(windows)]
 #[path = "../dx12_provider_module.rs"]
 mod provider_module;
+// The lease entry points live in the archive's non-test native module.
+#[cfg(all(windows, not(test)))]
+#[path = "native.rs"]
+mod native;
 #[cfg(windows)]
 use windows::Win32::Foundation::FARPROC;
 
@@ -119,7 +123,8 @@ unsafe extern "C" fn rsf_core_fsr4sr_release_provider_objects(
     unsafe { provider_module::release(objects, event, module) };
 }
 
-// Function-like FidelityFX macros are checked against both native headers.
+// Function-like FidelityFX macros of the pinned 2.4.0 headers; see
+// docs/research/rust-vulkan-ffx-v05.md.
 const UPSCALE_CREATE: u32 = 0x10000;
 const UPSCALE_DISPATCH: u32 = 0x10001;
 const UPSCALE_PLAN: u32 = 0x10003;

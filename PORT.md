@@ -1565,28 +1565,28 @@ Port the FSR3 and FSR4 bridge owners, private ABI and SDK patch payloads alongsi
 
 **Port files (22)**
 
-- [ ] [runtime/orchestrator/src/native_fg_fsr4_vulkan.cpp](runtime/orchestrator/src/native_fg_fsr4_vulkan.cpp)
+- [x] [runtime/orchestrator/src/native_fg_fsr4_vulkan.cpp](runtime/orchestrator/src/native_fg_fsr4_vulkan.cpp) (removed; `vulkan_fsr4_fg.rs` builds the production table and exports the probe and create entries)
 - [x] [runtime/orchestrator/src/native_fg_fsr4_vulkan.h](runtime/orchestrator/src/native_fg_fsr4_vulkan.h)
-- [ ] [runtime/orchestrator/src/native_fg_fsr4_vulkan_platform.h](runtime/orchestrator/src/native_fg_fsr4_vulkan_platform.h)
-- [ ] [runtime/orchestrator/src/native_sr_fsr4_vulkan.cpp](runtime/orchestrator/src/native_sr_fsr4_vulkan.cpp)
+- [x] [runtime/orchestrator/src/native_fg_fsr4_vulkan_platform.h](runtime/orchestrator/src/native_fg_fsr4_vulkan_platform.h) (C declarations only; it includes V03's `native_fg_dx12_vulkan_platform.h` for the importer and graphics records)
+- [x] [runtime/orchestrator/src/native_sr_fsr4_vulkan.cpp](runtime/orchestrator/src/native_sr_fsr4_vulkan.cpp) (converted to the C11 leaf `native_sr_fsr4_vulkan.c`, which keeps SEH containment of host and SDK C++ exceptions)
 - [x] [runtime/orchestrator/src/native_sr_fsr4_vulkan.h](runtime/orchestrator/src/native_sr_fsr4_vulkan.h)
 - [x] [runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h](runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h)
 - [x] [runtime/vulkan/fsr3/bridge.cpp](runtime/vulkan/fsr3/bridge.cpp)
 - [x] [runtime/vulkan/fsr3/bridge_platform.h](runtime/vulkan/fsr3/bridge_platform.h)
-- [ ] [runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json](runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json) (C++ edits applied to the FidelityFX SDK)
-- [ ] [runtime/vulkan/fsr3/sdk-fixes/line-width.json](runtime/vulkan/fsr3/sdk-fixes/line-width.json) (C++ edits applied to the FidelityFX SDK)
-- [ ] [runtime/vulkan/fsr3/sdk-fixes/presenter-cpu-drain.json](runtime/vulkan/fsr3/sdk-fixes/presenter-cpu-drain.json) (C++ edits applied to the FidelityFX SDK)
-- [ ] [runtime/vulkan/fsr3/sdk-fixes/swapchain-lifetime.json](runtime/vulkan/fsr3/sdk-fixes/swapchain-lifetime.json) (C++ edits applied to the FidelityFX SDK)
-- [ ] [runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.h](runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.h)
-- [ ] [runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.json](runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.json) (C++ edits applied to the FidelityFX SDK)
-- [ ] [runtime/vulkan/fsr3/wsi-dispatch.h](runtime/vulkan/fsr3/wsi-dispatch.h)
-- [ ] [runtime/vulkan/fsr4-fg/bridge.cpp](runtime/vulkan/fsr4-fg/bridge.cpp)
+- [ ] [runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json](runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json) (C++ edits applied to the FidelityFX SDK). Blocked: `runtime/vulkan/fsr3/build-sdk.ps1` applies it to the pinned FidelityFX Vulkan SDK sources (`c6efa6bf`) before building `amd_fidelityfx_vk.dll`, so the correction changes the vendor's own C++ and has no first-party translation unit to port (`sdk/src/backends/vk/ffx_vk.cpp` global descriptor pool).
+- [ ] [runtime/vulkan/fsr3/sdk-fixes/line-width.json](runtime/vulkan/fsr3/sdk-fixes/line-width.json) (C++ edits applied to the FidelityFX SDK). Blocked: `runtime/vulkan/fsr3/build-sdk.ps1` applies it to the pinned FidelityFX Vulkan SDK sources (`c6efa6bf`) before building `amd_fidelityfx_vk.dll`, so the correction changes the vendor's own C++ and has no first-party translation unit to port (pipeline state in `FrameInterpolationSwapchainVK_DebugPacing.cpp` and `_UiComposition.cpp`).
+- [ ] [runtime/vulkan/fsr3/sdk-fixes/presenter-cpu-drain.json](runtime/vulkan/fsr3/sdk-fixes/presenter-cpu-drain.json) (C++ edits applied to the FidelityFX SDK). Blocked: `runtime/vulkan/fsr3/build-sdk.ps1` applies it to the pinned FidelityFX Vulkan SDK sources (`c6efa6bf`) before building `amd_fidelityfx_vk.dll`, so the correction changes the vendor's own C++ and has no first-party translation unit to port (presenter thread state and `waitForPresents` in `FrameInterpolationSwapchainVK.h` and `.cpp`).
+- [ ] [runtime/vulkan/fsr3/sdk-fixes/swapchain-lifetime.json](runtime/vulkan/fsr3/sdk-fixes/swapchain-lifetime.json) (C++ edits applied to the FidelityFX SDK). Blocked: `runtime/vulkan/fsr3/build-sdk.ps1` applies it to the pinned FidelityFX Vulkan SDK sources (`c6efa6bf`) before building `amd_fidelityfx_vk.dll`, so the correction changes the vendor's own C++ and has no first-party translation unit to port (swapchain, semaphore and UI composition lifetimes in `FrameInterpolationSwapchainVK*.cpp`). Its WSI call sites now use the C entries of `wsi-dispatch.h`.
+- [ ] [runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.h](runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.h). Blocked: `build-sdk.ps1 -SwapchainTrace` copies it into the pinned SDK as `rsf-swapchain-trace.h`, compiled only inside the vendor C++ units that `swapchain-trace.json` instruments. Its RAII `Frame`/`Scope` objects and `call()` lambda wrapper close a row on every return path of those vendor functions; a C form needs an explicit finish at each vendor exit.
+- [ ] [runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.json](runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.json) (C++ edits applied to the FidelityFX SDK). Blocked: `runtime/vulkan/fsr3/build-sdk.ps1` applies it to the pinned FidelityFX Vulkan SDK sources (`c6efa6bf`) before building `amd_fidelityfx_vk.dll`, so the correction changes the vendor's own C++ and has no first-party translation unit to port (optional `-SwapchainTrace` diagnostics in `FrameInterpolationSwapchainVK*.cpp`).
+- [x] [runtime/vulkan/fsr3/wsi-dispatch.h](runtime/vulkan/fsr3/wsi-dispatch.h) (C declarations plus a C11 implementation section, compiled inside the corrected SDK unit and the WSI fixture)
+- [x] [runtime/vulkan/fsr4-fg/bridge.cpp](runtime/vulkan/fsr4-fg/bridge.cpp) (ported to `runtime/vulkan/fsr4-fg/native.rs`)
 - [x] [runtime/vulkan/fsr4-fg/bridge_api.h](runtime/vulkan/fsr4-fg/bridge_api.h)
 - [x] [runtime/vulkan/fsr4-fg/bridge_contract.h](runtime/vulkan/fsr4-fg/bridge_contract.h)
-- [ ] [runtime/vulkan/fsr4-fg/bridge_platform.h](runtime/vulkan/fsr4-fg/bridge_platform.h)
-- [ ] [runtime/vulkan/fsr4/bridge.cpp](runtime/vulkan/fsr4/bridge.cpp)
+- [x] [runtime/vulkan/fsr4-fg/bridge_platform.h](runtime/vulkan/fsr4-fg/bridge_platform.h) (removed; Rust owns both sides of the private table)
+- [x] [runtime/vulkan/fsr4/bridge.cpp](runtime/vulkan/fsr4/bridge.cpp) (ported to `runtime/vulkan/fsr4/native.rs`; the standalone DLL links only Rust and MinHook)
 - [x] [runtime/vulkan/fsr4/bridge_api.h](runtime/vulkan/fsr4/bridge_api.h)
-- [ ] [runtime/vulkan/fsr4/bridge_platform.h](runtime/vulkan/fsr4/bridge_platform.h)
+- [x] [runtime/vulkan/fsr4/bridge_platform.h](runtime/vulkan/fsr4/bridge_platform.h) (removed; Rust owns both sides of the private table)
 
 **Fixtures (5)**
 

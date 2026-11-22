@@ -9,3 +9,18 @@ EXPORTS
     VulkanStoryFsr4Probe=rsf_vk_fsr4_probe
     VulkanStoryFsr4ReleaseImage=rsf_vk_fsr4_release_image
     VulkanStoryFsr4WaitIdle=rsf_vk_fsr4_wait_idle
+    RsfFsr4BridgeCreate
+    RsfFsr4BridgeEvaluate
+    RsfFsr4BridgeInfo
+    RsfFsr4BridgePlan
+    RsfFsr4BridgeSharpness
+    rsf_vk_fsr4_create
+    rsf_vk_fsr4_create_shared_fence
+    rsf_vk_fsr4_create_shared_image
+    rsf_vk_fsr4_destroy
+    rsf_vk_fsr4_destroy_checked
+    rsf_vk_fsr4_evaluate
+    rsf_vk_fsr4_prepare_destroy
+    rsf_vk_fsr4_probe
+    rsf_vk_fsr4_release_image
+    rsf_vk_fsr4_wait_idle

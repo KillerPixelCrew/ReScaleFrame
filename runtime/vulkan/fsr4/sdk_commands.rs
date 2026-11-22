@@ -19,7 +19,7 @@ use windows::{
 type Describe = unsafe extern "C" fn(Handle, u32, *mut FfxApiResource);
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_find_adapter(
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_find_adapter(
     luid: u64,
     factory_out: &mut Handle,
     adapter_out: &mut Handle,
@@ -55,7 +55,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_find_adapter(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_create_device(
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_create_device(
     adapter: Handle,
     device_out: &mut Handle,
     queue_out: &mut Handle,
@@ -78,17 +78,17 @@ unsafe extern "C" fn rsf_core_fsr4sr_create_device(
 const ALLOCATORS: usize = 3;
 
 #[repr(C)]
-struct CommandObjects {
-    completion: Handle,
-    event: Handle,
-    allocators: [Handle; ALLOCATORS],
-    list: Handle,
+pub(super) struct CommandObjects {
+    pub(super) completion: Handle,
+    pub(super) event: Handle,
+    pub(super) allocators: [Handle; ALLOCATORS],
+    pub(super) list: Handle,
 }
 
 const _: () = assert!(size_of::<CommandObjects>() == 6 * size_of::<Handle>());
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_create_commands(
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_create_commands(
     device: Handle,
     out: &mut CommandObjects,
 ) -> i32 {
@@ -122,12 +122,12 @@ unsafe extern "C" fn rsf_core_fsr4sr_create_commands(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_completed(fence: Handle) -> u64 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_completed(fence: Handle) -> u64 {
     unsafe { dx12::borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_wait_event(
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_wait_event(
     fence: Handle,
     event: Handle,
     value: u64,
@@ -146,7 +146,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_wait_event(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_shared_fence(
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_shared_fence(
     device: Handle,
     fence: &mut Handle,
     handle: &mut Handle,
@@ -155,12 +155,15 @@ unsafe extern "C" fn rsf_core_fsr4sr_shared_fence(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_release_image(image: Handle) {
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_release_image(image: Handle) {
     unsafe { dx12::release_image(image) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_describe(image: Handle, output: &mut super::super::Texture) {
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_describe(
+    image: Handle,
+    output: &mut super::super::Texture,
+) {
     let desc = unsafe { dx12::borrow::<ID3D12Resource>(&image).GetDesc() };
     output.width = desc.Width;
     output.height = desc.Height;
@@ -168,7 +171,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_describe(image: Handle, output: &mut super:
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_shared_image(
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_shared_image(
     device: Handle,
     width: u32,
     height: u32,
@@ -207,7 +210,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_shared_image(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_record(
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_record(
     commands: Handle,
     allocator: Handle,
     frame: &Dispatch,
@@ -256,12 +259,12 @@ unsafe extern "C" fn rsf_core_fsr4sr_record(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_execute(queue: Handle, commands: Handle) {
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_execute(queue: Handle, commands: Handle) {
     unsafe { dx12::execute(queue, commands) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_queue_fence(
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_queue_fence(
     queue: Handle,
     fence: Handle,
     value: u64,

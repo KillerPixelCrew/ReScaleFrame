@@ -73,3 +73,5 @@ table layouts. The targeted bindings reproduced with bindgen 0.72.1. Rust
 service binder. MinGW `-fsyntax-only -Wall -Wextra -Werror` also passed for the
 standalone SR bridge. Compilation, linking and runtime verification remain
 pending.
+
+The FSR4 bridges, their platform tables and the SR service table have since left C++; see [rust-vulkan-ffx-v05.md](rust-vulkan-ffx-v05.md).

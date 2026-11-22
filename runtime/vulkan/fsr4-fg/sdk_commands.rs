@@ -20,7 +20,7 @@ use windows::Win32::{
 use windows::core::{BOOL, Interface};
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_release_chain(graphics: &mut Graphics) {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_release_chain(graphics: &mut Graphics) {
     if !graphics.chain.is_null() {
         drop(unsafe { IDXGISwapChain4::from_raw(graphics.chain) });
         graphics.chain = core::ptr::null_mut();
@@ -28,7 +28,10 @@ unsafe extern "C" fn rsf_core_fsr4fg_release_chain(graphics: &mut Graphics) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create_factory(graphics: &mut Graphics, flags: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_factory(
+    graphics: &mut Graphics,
+    flags: u32,
+) -> i32 {
     dx12::store_interface(
         unsafe { CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(flags)) },
         &mut graphics.factory,
@@ -36,7 +39,10 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_factory(graphics: &mut Graphics, fla
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_find_adapter(graphics: &mut Graphics, luid: u64) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_find_adapter(
+    graphics: &mut Graphics,
+    luid: u64,
+) -> i32 {
     let factory: &IDXGIFactory4 = unsafe { dx12::borrow(&graphics.factory) };
     let luid = LUID {
         LowPart: luid as u32,
@@ -49,7 +55,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_find_adapter(graphics: &mut Graphics, luid:
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_get_adapter_vendor(
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_get_adapter_vendor(
     graphics: &Graphics,
     vendor: &mut u32,
 ) -> i32 {
@@ -58,7 +64,10 @@ unsafe extern "C" fn rsf_core_fsr4fg_get_adapter_vendor(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create_device(graphics: &mut Graphics, level: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_device(
+    graphics: &mut Graphics,
+    level: u32,
+) -> i32 {
     unsafe {
         dx12::create_device(
             graphics.adapter,
@@ -69,7 +78,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_device(graphics: &mut Graphics, leve
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create_event(
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_event(
     graphics: &mut Graphics,
     manual: u32,
     initial: u32,
@@ -91,7 +100,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_event(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create_queue(
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_queue(
     graphics: &mut Graphics,
     desc: &QueueDesc,
 ) -> i32 {
@@ -109,7 +118,10 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_queue(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create_allocator(graphics: &mut Graphics, kind: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_allocator(
+    graphics: &mut Graphics,
+    kind: u32,
+) -> i32 {
     let device: &ID3D12Device = unsafe { dx12::borrow(&graphics.device) };
     let kind = D3D12_COMMAND_LIST_TYPE(kind as i32);
     dx12::store_interface(
@@ -119,7 +131,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_allocator(graphics: &mut Graphics, k
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create_list(
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_list(
     graphics: &mut Graphics,
     node_mask: u32,
     kind: u32,
@@ -138,7 +150,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_list(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create_completion_fence(
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_create_completion_fence(
     graphics: &mut Graphics,
     value: u64,
     flags: u32,
@@ -150,7 +162,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_completion_fence(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_shared_fence(
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_shared_fence(
     graphics: &mut Graphics,
     handle: &mut Handle,
 ) -> i32 {
@@ -163,14 +175,14 @@ pub(crate) unsafe extern "C" fn RsfFsr4FgReleaseImage(image: Handle) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_reset_commands(graphics: &Graphics) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_reset_commands(graphics: &Graphics) -> i32 {
     dx12::status(unsafe {
         dx12::reset_commands(dx12::borrow(&graphics.commands), graphics.allocator)
     })
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_close_commands(graphics: &Graphics) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_close_commands(graphics: &Graphics) -> i32 {
     dx12::status(unsafe { dx12::borrow::<ID3D12GraphicsCommandList>(&graphics.commands).Close() })
 }
 
@@ -181,7 +193,7 @@ const _: () = {
 };
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_dxgi_description(
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_dxgi_description(
     desc: &mut DXGI_SWAP_CHAIN_DESC1,
     setup: &SwapchainDesc,
     first_attempt: u32,
@@ -203,7 +215,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_dxgi_description(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_shared_image(
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_shared_image(
     graphics: &Graphics,
     width: u32,
     height: u32,
@@ -231,7 +243,10 @@ unsafe extern "C" fn rsf_core_fsr4fg_shared_image(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_describe_texture(resource: Handle, out: *mut Texture) {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_describe_texture(
+    resource: Handle,
+    out: *mut Texture,
+) {
     let desc = unsafe { dx12::borrow::<ID3D12Resource>(&resource).GetDesc() };
     unsafe {
         out.write(Texture {
@@ -246,7 +261,11 @@ unsafe extern "C" fn rsf_core_fsr4fg_describe_texture(resource: Handle, out: *mu
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_shader_read(graphics: &Graphics, image: Handle, enter: u32) {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_shader_read(
+    graphics: &Graphics,
+    image: Handle,
+    enter: u32,
+) {
     let commands = unsafe { dx12::borrow(&graphics.commands) };
     let image = unsafe { dx12::borrow(&image) };
     let common = D3D12_RESOURCE_STATE_COMMON;
@@ -260,7 +279,10 @@ unsafe extern "C" fn rsf_core_fsr4fg_shader_read(graphics: &Graphics, image: Han
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_copy_to_backbuffer(graphics: &Graphics, color: Handle) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_copy_to_backbuffer(
+    graphics: &Graphics,
+    color: Handle,
+) -> i32 {
     let chain: &IDXGISwapChain4 = unsafe { dx12::borrow(&graphics.chain) };
     let backbuffer: ID3D12Resource =
         match unsafe { chain.GetBuffer(chain.GetCurrentBackBufferIndex()) } {
@@ -284,12 +306,16 @@ unsafe extern "C" fn rsf_core_fsr4fg_copy_to_backbuffer(graphics: &Graphics, col
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_execute(graphics: &Graphics) {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_execute(graphics: &Graphics) {
     unsafe { dx12::execute(graphics.queue, graphics.commands) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_signal(graphics: &Graphics, value: u64, shared: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_signal(
+    graphics: &Graphics,
+    value: u64,
+    shared: u32,
+) -> i32 {
     let fence = if shared != 0 {
         graphics.shared
     } else {
@@ -299,13 +325,19 @@ unsafe extern "C" fn rsf_core_fsr4fg_signal(graphics: &Graphics, value: u64, sha
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_present_dxgi(graphics: &Graphics, vsync: u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_present_dxgi(
+    graphics: &Graphics,
+    vsync: u32,
+) -> i32 {
     let chain: &IDXGISwapChain4 = unsafe { dx12::borrow(&graphics.chain) };
     dx12::status(unsafe { chain.Present(vsync, DXGI_PRESENT(0)) }.ok())
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_present_count(graphics: &Graphics, count: *mut u32) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_present_count(
+    graphics: &Graphics,
+    count: *mut u32,
+) -> i32 {
     let chain: &IDXGISwapChain4 = unsafe { dx12::borrow(&graphics.chain) };
     dx12::status(
         unsafe { chain.GetLastPresentCount() }.map(|presented| unsafe { count.write(presented) }),
@@ -313,11 +345,14 @@ unsafe extern "C" fn rsf_core_fsr4fg_present_count(graphics: &Graphics, count: *
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_wait_shared(graphics: &Graphics, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_wait_shared(
+    graphics: &Graphics,
+    value: u64,
+) -> i32 {
     unsafe { dx12::queue_fence(graphics.queue, graphics.shared, value, false) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_wait_local(graphics: &Graphics, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4fg_wait_local(graphics: &Graphics, value: u64) -> i32 {
     unsafe { rsf_core_d3d12_wait_native_fence(graphics.completion, value, graphics.event, 10_000) }
 }

@@ -10,6 +10,8 @@ use std::ptr;
 mod abi;
 use abi::*;
 
+#[path = "native.rs"]
+mod native;
 #[path = "../dx12_provider_module.rs"]
 mod provider_module;
 use windows::Win32::Foundation::FARPROC;
@@ -86,8 +88,8 @@ unsafe extern "C" fn rsf_core_fsr4fg_release_provider_objects(
     unsafe { provider_module::release(&objects, graphics.event, module) };
 }
 
-// Bindgen skips the SDK's function-like descriptor macros. The native
-// consumer checks these IDs against the header selected for that build.
+// Bindgen skips the SDK's function-like descriptor macros. These are the pinned
+// 2.4.0 values; docs/research/rust-vulkan-ffx-v05.md records how they were read.
 const FG_CREATE: u32 = 0x20001;
 const FG_CONFIGURE: u32 = 0x20002;
 const FG_PREPARE_V2: u32 = 0x2000c;

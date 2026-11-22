@@ -23,7 +23,7 @@ fn entry(name: &core::ffi::CStr) -> FARPROC {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_probe_physical(physical: Handle) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_probe_physical(physical: Handle) -> i32 {
     if physical.is_null() {
         return FAILED;
     }
@@ -43,7 +43,7 @@ unsafe extern "C" fn rsf_core_fsr4sr_probe_physical(physical: Handle) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4sr_create_physical(
+pub(super) unsafe extern "C" fn rsf_core_fsr4sr_create_physical(
     ops: *const Platform,
     physical: Handle,
     render_width: u32,

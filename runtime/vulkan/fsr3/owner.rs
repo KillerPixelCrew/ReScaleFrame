@@ -630,7 +630,8 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_create(
         return -2;
     };
     let owner = Box::into_raw(owner);
-    let failed = |code: i32| {
+    // Copies the two pointers so the SDK can still write through `owner`.
+    let failed = move |code: i32| {
         unsafe {
             (ops.wsi_release)(native.as_ptr());
             drop(Box::from_raw(owner));

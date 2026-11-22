@@ -2,6 +2,7 @@
 use crate::dx12_vulkan_interop::{self, Owner as Importer};
 use crate::dx12_vulkan_interop_abi::{
     RSF_DX12VK_INTEROP_ABI_VERSION, rsf_dx12vk_interop_callbacks as ImportCallbacks,
+    rsf_dx12vk_shared_image as SharedImage,
 };
 use crate::fsr4_fg_bridge::{
     BRIDGE_ABI, BridgeCreate, BridgeFrame, BridgeInfo, BridgeStatus, RsfFsr4FgCreateFence,
@@ -18,6 +19,7 @@ use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CStr, c_void};
 use std::ptr;
+use std::sync::LazyLock;
 
 #[repr(C)]
 struct Options {
@@ -46,7 +48,92 @@ struct Ops {
 const _: () = {
     assert!(size_of::<Options>() == 24);
     assert!(size_of::<Ops>() == 43 * size_of::<Handle>());
+    assert!(size_of::<BridgeCreate>() == 48 && size_of::<BridgeInfo>() == 32);
+    assert!(size_of::<BridgeFrame>() == 80 && size_of::<BridgeStatus>() == 32);
 };
+
+// The bridge, importer and shared graphics entries by address, as the
+// production table binds them. Each is defined in this crate.
+unsafe extern "C" {
+    fn RsfFsr4FgProbe(luid: u64, directory: *const u16, info: *mut BridgeInfo) -> i32;
+    fn RsfFsr4FgCreate(setup: *const BridgeCreate, output: *mut Handle) -> i32;
+    fn RsfFsr4FgInfo(bridge: Handle, info: *mut BridgeInfo) -> i32;
+    fn RsfFsr4FgStart(bridge: Handle, window: Handle) -> i32;
+    fn RsfFsr4FgPresent(
+        bridge: Handle,
+        frame: *const BridgeFrame,
+        status: *mut BridgeStatus,
+    ) -> i32;
+    fn RsfFsr4FgDrain(bridge: Handle) -> i32;
+    fn RsfFsr4FgPrepareDestroy(bridge: Handle) -> i32;
+    fn RsfFsr4FgDestroy(bridge: Handle) -> i32;
+    fn rsf_dx12vk_interop_image(
+        owner: Handle,
+        format: u32,
+        width: u32,
+        height: u32,
+        output: *mut SharedImage,
+    ) -> i32;
+    fn rsf_dx12vk_interop_timeline(owner: Handle) -> u64;
+    fn rsf_dx12vk_interop_destroy(owner: Handle, queues_drained: u32) -> i32;
+    fn rsf_dx12vk_interop_release_guides(owner: Handle, depth: u64, motion: u64) -> i32;
+    fn rsf_dx12gvk_graphics() -> *const GraphicsOps;
+}
+
+unsafe extern "C" fn interop_create(
+    setup: *const Graphics,
+    bridge: Handle,
+    luid: u64,
+    enabled: u32,
+    output: *mut Handle,
+) -> i32 {
+    unsafe { rsf_fsr4gvk_interop_create(setup, bridge, luid, enabled, output.cast()) }
+}
+
+struct ProductionOps(Ops);
+
+// Immutable after initialization: function addresses and the static image table.
+unsafe impl Send for ProductionOps {}
+unsafe impl Sync for ProductionOps {}
+
+static PRODUCTION: LazyLock<ProductionOps> = LazyLock::new(|| {
+    ProductionOps(Ops {
+        probe: RsfFsr4FgProbe,
+        bridge_create: RsfFsr4FgCreate,
+        bridge_info: RsfFsr4FgInfo,
+        bridge_start: RsfFsr4FgStart,
+        bridge_present: RsfFsr4FgPresent,
+        bridge_drain: RsfFsr4FgDrain,
+        bridge_prepare_destroy: RsfFsr4FgPrepareDestroy,
+        bridge_destroy: RsfFsr4FgDestroy,
+        interop_create,
+        importer: InteropOps {
+            image: rsf_dx12vk_interop_image,
+            timeline: rsf_dx12vk_interop_timeline,
+            destroy: rsf_dx12vk_interop_destroy,
+            release_guides: rsf_dx12vk_interop_release_guides,
+        },
+        // A bitwise copy of the immutable shared table, as the native binding embedded it.
+        graphics: unsafe { ptr::read(rsf_dx12gvk_graphics()) },
+    })
+});
+
+/// Queries the matching DX12 device's exact major-4 provider without HWND or WSI calls.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fsr4gvk_probe(setup: *const Graphics, info: *mut BridgeInfo) -> i32 {
+    unsafe { rsf_core_fsr4gvk_probe(&PRODUCTION.0, setup, info) }
+}
+
+/// Rust admits the setup before it asks the shared graphics table to describe create_info.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fsr4gvk_create(
+    setup: *const Setup,
+    options: *const Options,
+    output: *mut *mut Owner,
+    chain: *mut u64,
+) -> i32 {
+    unsafe { rsf_core_fsr4gvk_create(&PRODUCTION.0, setup, options, output, chain) }
+}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fsr4gvk_interop_create(

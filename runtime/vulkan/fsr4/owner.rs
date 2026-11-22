@@ -2,8 +2,8 @@
 //! Owner of the FSR 4 DX12 bridge behind the Vulkan SR path.
 //!
 //! Compiled into the rsf-fsr4-compat archive, which the integrated Runtime and
-//! the standalone VulkanStoryFsr4.dll both link. bridge.cpp keeps the typed
-//! FidelityFX descriptor and INT8 compatibility boundaries.
+//! the standalone VulkanStoryFsr4.dll both link. The capsule in native.rs holds
+//! the typed FidelityFX descriptors, COM owners and the INT8 compatibility lease.
 
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use core::ffi::{CStr, c_void};
@@ -52,7 +52,7 @@ const WAIT_MS: u32 = 10_000;
 const SLOTS: usize = 3;
 const MAX_QUALITY: u32 = 4;
 
-// Native objects (bridge_platform.h).
+// Objects currently held by the native capsule (native.rs).
 const DEVICE: u32 = 1 << 0;
 const QUEUE: u32 = 1 << 1;
 const EFFECT: u32 = 1 << 2;
@@ -65,7 +65,7 @@ const DEPTH_INVERTED: u32 = 1 << 0;
 const DEPTH_INFINITE: u32 = 1 << 1;
 const MOTION_JITTERED: u32 = 1 << 2;
 
-// DXGI_FORMAT values the public frame accepts; bridge.cpp asserts them.
+// DXGI_FORMAT values the public frame accepts.
 const RGBA16_FLOAT: u32 = 10;
 const RG16_FLOAT: u32 = 34;
 const R32_FLOAT: u32 = 41;
@@ -206,7 +206,7 @@ fn candidate(vendor: u32) -> bool {
 
 /// Whether the effective provider's display name identifies FSR 4.
 ///
-/// `parsed` is the native leaf's `%u.%u.%u` result for the name. A parsed
+/// `parsed` is the provider query's `%u.%u.%u` result for the name. A parsed
 /// name, including family 0, is FSR 4 only for family 4. Labels without that
 /// shape are accepted only when they say "FSR4" or "FSR 4".
 fn is_fsr4(version: &Version, parsed: bool) -> bool {

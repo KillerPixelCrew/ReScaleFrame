@@ -2,7 +2,7 @@
 .SYNOPSIS
 Compiles the retained FSR4 Vulkan/DX12 bridge DLL.
 .DESCRIPTION
-Builds the INT8, bridge owner and file hashing Rust archives for Windows GNU, compiles MinHook with gcc, and links them with the C++20 bridge through g++. Builds a sibling temporary DLL, replacing Output only after success.
+Builds the INT8, bridge owner and file hashing Rust archives for Windows GNU, compiles MinHook with gcc, and links them with the Rust bridge exports through the g++ driver. Builds a sibling temporary DLL, replacing Output only after success.
 .PARAMETER SdkRoot
 FidelityFX SDK root containing Kits/FidelityFX/api/include/dx12/ffx_api_dx12.h.
 .PARAMETER Output
@@ -67,10 +67,12 @@ try {
         & $cCompiler -O2 -c -I (Join-Path $minHook 'include') $minHookSources[$index] -o $minHookObjects[$index]
         if ($LASTEXITCODE -ne 0) { throw "MinHook compilation failed ($($minHookSources[$index])): $LASTEXITCODE" }
     }
-    & $compiler -std=c++20 -O2 -shared -static -Wall -Wextra -I (Join-Path $sdk 'Kits/FidelityFX') -I $vulkan `
-        -I (Join-Path $minHook 'include') -I (Join-Path $PSScriptRoot '../../backends/fsr/src') -I (Join-Path $PSScriptRoot '../../common/include') `
-        (Join-Path $PSScriptRoot 'bridge.cpp') $minHookObjects `
-        (Join-Path $PSScriptRoot '../../../integrations/vulkanstory/native/fsr4.def') `
+    # Every export is defined in the Rust archive. --undefined pulls each one in for the .def file.
+    $definition = Join-Path $PSScriptRoot '../../../integrations/vulkanstory/native/fsr4.def'
+    $exports = @(Get-Content -LiteralPath $definition | ForEach-Object {
+        if ($_ -match '^\s+(?:\w+=)?(\w+)\s*$') { "-Wl,--undefined=$($Matches[1])" }
+    })
+    & $compiler -O2 -shared -static $minHookObjects $exports $definition `
         $rustArchive $commonArchive -o $temporary -ld3d12 -ldxgi -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp
     if ($LASTEXITCODE -ne 0) { throw "FSR 4 bridge compilation failed: $LASTEXITCODE" }
     Move-Item -LiteralPath $temporary -Destination $target -Force
