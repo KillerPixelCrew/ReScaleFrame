@@ -58,8 +58,7 @@ unsafe impl Send for State {}
 
 pub(crate) struct Lifecycle(Mutex<State>);
 
-/// The renderer options for a validated host. Diagnostics stay off; the native side still honours
-/// RSF_AC7_PIXEL_DIAGNOSTICS.
+/// The renderer options for a validated host. The renderer reads its startup diagnostics.
 pub(crate) fn options(host: &rsf_game_host_services) -> rsf_ac7_native_renderer_options {
     rsf_ac7_native_renderer_options {
         struct_size: size_of::<rsf_ac7_native_renderer_options>() as u32,

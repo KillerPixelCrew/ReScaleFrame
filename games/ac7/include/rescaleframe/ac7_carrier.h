@@ -49,7 +49,7 @@ void rsf_ac7_carrier_try_auto_start(int enabled, int started, unsigned long (*re
     int (*present_extent)(uint32_t* width, uint32_t* height), void (*start)(uint32_t width, uint32_t height));
 /* Numeric startup choices defined by the adapter. A returned key and label live for the process.
    Returns null at the end of the list without writing the output pointers. */
-#define RSF_AC7_CARRIER_START_OPTION_COUNT 7u
+#define RSF_AC7_CARRIER_START_OPTION_COUNT 8u
 const char* rsf_ac7_carrier_start_option(uint32_t index, const char** label,
     uint32_t* fallback, uint32_t* maximum);
 

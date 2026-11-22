@@ -61,7 +61,7 @@ const OUTPUT_HEIGHT: StartupOption = StartupOption::new(
     0,
     16384,
 );
-const STARTUP_OPTIONS: [StartupOption; 7] = [
+const STARTUP_OPTIONS: [StartupOption; 8] = [
     JITTER,
     JITTER_ALL_VIEWS,
     TRANSLUCENT_VELOCITY,
@@ -69,6 +69,12 @@ const STARTUP_OPTIONS: [StartupOption; 7] = [
     MOTION_CAPTURE,
     OUTPUT_WIDTH,
     OUTPUT_HEIGHT,
+    StartupOption::new(
+        c"RSF_AC7_PIXEL_DIAGNOSTICS",
+        c"Pixel binding diagnostics",
+        0,
+        1,
+    ),
 ];
 
 /// The output pointers are writable for one value each.

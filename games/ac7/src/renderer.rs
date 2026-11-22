@@ -27,7 +27,10 @@ use crate::platform_abi::{RSF_AC7_DIAG_PIXEL_BINDINGS, rsf_ac7_native_renderer_o
 use crate::sites::{self, Code, CodeView, HOOK_SITES, NativeCode};
 use crate::sites_abi::{RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches, rsf_ac7_renderer_leaves};
 use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
+use windows::Win32::System::WindowsProgramming::GetPrivateProfileIntW;
+use windows::core::{PCWSTR, w};
 
 const HOOKS: usize = RSF_AC7_HOOK_SITE_COUNT as usize;
 const DIAGNOSTICS_VARIABLE: &str = "RSF_AC7_PIXEL_DIAGNOSTICS";
@@ -491,7 +494,22 @@ impl Native for NativeLeaves {
         rsf_ac7_guards_held(outer_too)
     }
     fn pixel_diagnostics(&self) -> bool {
-        environment_flag(std::env::var_os(DIAGNOSTICS_VARIABLE).as_deref())
+        let fallback = environment_flag(std::env::var_os(DIAGNOSTICS_VARIABLE).as_deref());
+        let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|path| !path.is_empty()) else {
+            return fallback;
+        };
+        let path = std::path::PathBuf::from(local)
+            .join("ReScaleFrame")
+            .join("AC7.ini");
+        let path: Vec<_> = path.as_os_str().encode_wide().chain([0]).collect();
+        unsafe {
+            GetPrivateProfileIntW(
+                w!("Startup"),
+                w!("RSF_AC7_PIXEL_DIAGNOSTICS"),
+                i32::from(fallback),
+                PCWSTR(path.as_ptr()),
+            ) != 0
+        }
     }
 }
 
