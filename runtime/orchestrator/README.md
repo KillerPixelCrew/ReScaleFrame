@@ -41,3 +41,11 @@ Vulkan and the OpenGL/D3D12 bridge share the same storage and metadata service.
 New integrations can submit additional named resources through the C API without
 changing vendor backends. Unproduced HUD/guide resources remain explicit in the
 manifest. See the [capture contract and evidence](../../docs/research/core-frame-dump.md).
+
+## Test fixtures
+
+The `test-fixtures` feature compiles the fixture exports the ctest executables call (`tests/graphics_fixture.rs` and
+the `fixture` modules next to their owners). CMake builds that second archive only under `BUILD_TESTING` and links
+it into the executables that set `RSF_ORCHESTRATOR_FIXTURES` (end of `tests/CMakeLists.txt`); the Runtime DLL and
+the carriers always link the archive without it. `cargo check -p rsf-orchestrator --features test-fixtures`
+compiles the fixtures.
