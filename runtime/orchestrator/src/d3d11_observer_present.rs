@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_observer_callbacks::snapshot;
 use crate::d3d11_observer_capture::{adopt_device, dump_presenter, needs_presenter};
 use crate::d3d11_observer_hooks::{forward_target, installed};
@@ -12,6 +12,7 @@ use std::ffi::{CString, c_void};
 use std::ptr::null_mut;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
 
@@ -87,10 +88,10 @@ fn count_present(flags: u32, result: i32) {
 }
 
 impl Platform {
-    fn d3d11_device(&self, chain: Handle) -> Option<ComRef> {
+    fn d3d11_device(&self, chain: Handle) -> Option<IUnknown> {
         let mut out = null_mut();
         let result = unsafe { (self.device)(chain, &mut out) };
-        unsafe { ComRef::from_owned(out) }.filter(|_| result >= 0)
+        unsafe { com_ref::owned(out) }.filter(|_| result >= 0)
     }
 
     fn forward(&self, event: &Event, parameters: *const c_void, nested: u32) -> i32 {
@@ -114,7 +115,7 @@ fn say(message: String) {
     }
 }
 
-fn update_presenter(chain: Handle, device: Option<ComRef>, platform: &Platform) {
+fn update_presenter(chain: Handle, device: Option<IUnknown>, platform: &Platform) {
     // Resize can follow the first frame. Refresh the swap chain dimensions every Present.
     let (mut width, mut height) = (0, 0);
     if unsafe { (platform.describe)(chain, &mut width, &mut height) } != 0 && width != 0 {
@@ -136,8 +137,8 @@ fn update_presenter(chain: Handle, device: Option<ComRef>, platform: &Platform) 
         if let Some(previous) = adopt_device(device.clone()) {
             say(format!(
                 "observer: adopted presenting device {:p}, replacing provisional device {:p}",
-                device.as_ptr(),
-                previous.as_ptr(),
+                device.as_raw(),
+                previous.as_raw(),
             ));
         }
         dump_presenter(&device);

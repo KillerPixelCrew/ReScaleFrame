@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::{FullscreenBlit, GraphicsCache, SavedBindings, texture_desc};
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::native_regions::SourceView;
 use crate::sys::*;
 use std::ffi::c_void;
 use std::ptr::NonNull;
+use windows::core::{IUnknown, Interface};
 
 struct Rect {
     left: u32,
@@ -54,14 +55,14 @@ struct Output {
 impl Output {
     unsafe fn preflight(
         texture: NonNull<c_void>,
-        device: &ComRef,
+        device: &IUnknown,
         source: &rsf_d3d11_texture_desc,
         rect: &Rect,
     ) -> Option<Self> {
         let ptr = texture.as_ptr();
-        let owner = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(ptr)) }?;
+        let owner = unsafe { com_ref::owned(rsf_d3d11_output_child_device(ptr)) }?;
         let dest = unsafe { texture_desc(ptr) };
-        if owner.as_ptr() != device.as_ptr()
+        if owner.as_raw() != device.as_raw()
             || dest.layers != 1
             || dest.samples != 1
             || dest.width < rect.right
@@ -89,8 +90,8 @@ impl Output {
 }
 
 struct Conversion {
-    target: ComRef,
-    texture: ComRef,
+    target: IUnknown,
+    texture: IUnknown,
     format: u32,
     width: u32,
     height: u32,
@@ -100,7 +101,7 @@ struct Conversions {
     blit: FullscreenBlit,
     slots: [Option<Conversion>; 2],
     source: Option<SourceView>,
-    device: ComRef,
+    device: IUnknown,
 }
 
 // SAFETY: this cache owns D3D11 device children and the fullscreen pass.
@@ -129,12 +130,11 @@ impl Conversions {
                 bind_flags: RSF_D3D11_BIND_RENDER_TARGET,
                 ..Default::default()
             };
-            let device = self.device.as_ptr();
+            let device = self.device.as_raw();
             let texture =
-                unsafe { ComRef::from_owned(rsf_d3d11_output_create_texture(device, &desc)) }?;
-            let target = unsafe {
-                ComRef::from_owned(rsf_d3d11_output_create_rtv(device, texture.as_ptr()))
-            }?;
+                unsafe { com_ref::owned(rsf_d3d11_output_create_texture(device, &desc)) }?;
+            let target =
+                unsafe { com_ref::owned(rsf_d3d11_output_create_rtv(device, texture.as_raw())) }?;
             *slot = Some(Conversion {
                 texture,
                 target,
@@ -157,7 +157,7 @@ impl Conversions {
         let view = unsafe {
             SourceView::get(
                 &mut self.source,
-                self.device.as_ptr(),
+                self.device.as_raw(),
                 source.as_ptr(),
                 source_format,
             )
@@ -172,7 +172,7 @@ impl Conversions {
             if !unsafe {
                 self.blit.draw(
                     context,
-                    output.target.as_ptr(),
+                    output.target.as_raw(),
                     view,
                     rect.width(),
                     rect.height(),
@@ -180,7 +180,7 @@ impl Conversions {
             } {
                 return None;
             }
-            *copy = output.texture.as_ptr();
+            *copy = output.texture.as_raw();
         }
         Some(copies)
     }
@@ -207,10 +207,9 @@ unsafe fn reinsert(
     {
         return None;
     }
-    let device = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) }?;
-    let source_device =
-        unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(source.as_ptr())) }?;
-    if source_device.as_ptr() != device.as_ptr() {
+    let device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }?;
+    let source_device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(source.as_ptr())) }?;
+    if source_device.as_raw() != device.as_raw() {
         return None;
     }
     let target = unsafe { Output::preflight(destination, &device, &src, &rect) }?;
@@ -230,7 +229,7 @@ unsafe fn reinsert(
     let copies = if formats.iter().any(Option::is_some) {
         let conversions = if let Some(conversions) = cache
             .as_mut()
-            .filter(|entry| entry.device.as_ptr() == device.as_ptr())
+            .filter(|entry| entry.device.as_raw() == device.as_raw())
         {
             conversions
         } else {
@@ -266,7 +265,7 @@ unsafe fn reinsert(
             };
         }
     }
-    (unsafe { rsf_d3d11_output_device_ok(device.as_ptr()) } != 0).then_some(())
+    (unsafe { rsf_d3d11_output_device_ok(device.as_raw()) } != 0).then_some(())
 }
 
 #[unsafe(no_mangle)]

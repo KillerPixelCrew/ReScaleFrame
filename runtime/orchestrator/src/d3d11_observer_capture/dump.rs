@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::{Constant, DumpResult, Handle, OK, Request};
-use crate::com_ref::ComRef;
 use crate::input_dump::{
     DECODED_MOTION, ENCODED_MOTION, Log, MotionEncoding, MotionTextureOptions, TextureOptions,
 };
@@ -11,6 +10,7 @@ use rsf_game_sys::rsf_motion_decode_params as DecodeParams;
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::ptr::{NonNull, null_mut};
+use windows::core::{IUnknown, Interface};
 
 const FOREIGN_CONSTANT: i32 = -6;
 
@@ -174,7 +174,7 @@ impl Writer<'_> {
             rsf_read_constant_buffer(
                 self.device,
                 self.context,
-                entry.buffer.as_ptr(),
+                entry.buffer.as_raw(),
                 contents.as_mut_ptr().cast(),
                 bytes,
             )
@@ -199,9 +199,9 @@ impl Writer<'_> {
 pub(super) fn write(
     settings: &DumpSettings,
     request: &Request,
-    device: &ComRef,
-    context: Option<&ComRef>,
-    textures: &[ComRef],
+    device: &IUnknown,
+    context: Option<&IUnknown>,
+    textures: &[IUnknown],
     buffers: &[Constant],
 ) -> DumpResult {
     let log = Log::new(settings.log, settings.log_user);
@@ -216,22 +216,22 @@ pub(super) fn write(
             let writer = Writer {
                 settings,
                 log,
-                device: device.as_ptr(),
-                context: context.as_ptr(),
+                device: device.as_raw(),
+                context: context.as_raw(),
             };
             for (index, texture) in textures.iter().enumerate() {
                 let path = format!("{prefix}_{index}");
                 let native_path = CString::new(path.as_str()).expect("prefix is a C string");
                 let number = index + 1;
                 log.say(&format!("texture {number} of {}", textures.len()));
-                let written = writer.texture(texture.as_ptr(), &native_path, request.view);
+                let written = writer.texture(texture.as_raw(), &native_path, request.view);
                 if written == OK {
                     result.textures += 1;
                 } else {
                     log.say(&format!("texture {number} refused, result {written}"));
                 }
                 if settings.decode_motion != 0 {
-                    writer.decoded(texture.as_ptr(), &path);
+                    writer.decoded(texture.as_raw(), &path);
                 }
             }
             for entry in buffers {

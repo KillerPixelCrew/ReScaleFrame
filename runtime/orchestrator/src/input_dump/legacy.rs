@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use windows::core::Interface;
 
 unsafe fn capture_batch(
     context: *mut c_void,
@@ -333,7 +334,7 @@ unsafe extern "C" fn rsf_input_dump_present(
         (true, None)
     });
     if let Some(ticket) = ticket
-        && let Some(buffer) = unsafe { ComRef::from_owned(native::backbuffer(chain)) }
+        && let Some(buffer) = unsafe { com_ref::owned(native::backbuffer(chain)) }
     {
         unsafe {
             capture_batch(
@@ -342,7 +343,7 @@ unsafe extern "C" fn rsf_input_dump_present(
                 [Texture::new(
                     "final_color",
                     "Final real frame with game HUD, before the RSF overlay and interpolation",
-                    buffer.as_ptr(),
+                    buffer.as_raw(),
                     HDR,
                     1.0,
                 )],

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Graphics-owner products and the reduced-frame ticket of the D3D11 host.
 use crate::auxiliary_sr::SurfaceKey;
-use crate::com_ref::ComRef;
 use crate::d3d11_host_abi::{
     Pass, RSF_D3D11_REDUCED_CANCELLED, RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED, Surface,
     rsf_d3d11_reduced_frame,
 };
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::c_void;
+use windows::core::{IUnknown, Interface};
 
 pub(crate) type Raw = *mut c_void;
 pub(crate) const MAX_RESERVED: usize = 8;
@@ -60,9 +60,9 @@ pub(crate) struct Ticket {
     pub(crate) products: Box<dyn Products>,
     pub(crate) owner: Pass,
     pub(crate) surfaces: [Surface; MAX_SURFACES],
-    pub(crate) leases: Vec<ComRef>,
-    pub(crate) context: Option<ComRef>,
-    pub(crate) chain: Option<ComRef>,
+    pub(crate) leases: Vec<IUnknown>,
+    pub(crate) context: Option<IUnknown>,
+    pub(crate) chain: Option<IUnknown>,
     pub(crate) token: u64,
     pub(crate) generation: u32,
     pub(crate) count: u32,
@@ -102,7 +102,7 @@ impl Ticket {
     pub(crate) fn context_ptr(&self) -> Raw {
         self.context
             .as_ref()
-            .map_or(std::ptr::null_mut(), ComRef::as_ptr)
+            .map_or(std::ptr::null_mut(), Interface::as_raw)
     }
 
     pub(crate) fn matches(&self, p: &Pass, crop: bool) -> bool {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 pub(super) use crate::d3d12_fence::FenceState;
 use crate::sys::{rsf_backend_result, rsf_fg_retirement};
 use rsf_game_sys::backend_result::{
@@ -8,6 +8,7 @@ use rsf_game_sys::backend_result::{
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::slice;
+use windows::core::IUnknown;
 
 const MAX_LEASES: usize = 16;
 const MAX_RESOURCES: usize = 5;
@@ -39,7 +40,7 @@ unsafe fn same_device(first: *mut c_void, second: *mut c_void) -> bool {
 
 #[derive(Clone)]
 pub(super) struct FencePoint {
-    pub(super) fence: ComRef,
+    pub(super) fence: IUnknown,
     pub(super) value: u64,
 }
 
@@ -48,7 +49,7 @@ unsafe impl Send for FencePoint {}
 
 impl FencePoint {
     pub(super) fn state(&self) -> FenceState {
-        let completed = unsafe { rsf_d3d12_fence_completed(self.fence.0.as_ptr()) };
+        let completed = unsafe { rsf_d3d12_fence_completed(self.fence.as_raw()) };
         FenceState::check(completed, self.value)
     }
 }
@@ -83,8 +84,8 @@ enum VendorRetirement {
 struct Lease {
     id: u64,
     _generation: u32,
-    first: ComRef,
-    _additional: [Option<ComRef>; MAX_RESOURCES - 1],
+    first: IUnknown,
+    _additional: [Option<IUnknown>; MAX_RESOURCES - 1],
     queue: Option<FencePoint>,
     vendor: Option<VendorRetirement>,
 }
@@ -187,11 +188,11 @@ unsafe extern "C" fn rsf_fg_leases_acquire(
     *slot = Some(Lease {
         id,
         _generation: generation,
-        first: unsafe { ComRef::retain(first) },
+        first: unsafe { com_ref::retain(first) },
         _additional: std::array::from_fn(|index| {
             additional
                 .get(index)
-                .map(|&resource| unsafe { ComRef::retain(resource) })
+                .map(|&resource| unsafe { com_ref::retain(resource) })
         }),
         queue: None,
         vendor: None,
@@ -216,11 +217,11 @@ unsafe extern "C" fn rsf_fg_leases_submit(
     if lease.queue.is_some() {
         return NOT_READY;
     }
-    if !unsafe { same_device(lease.first.0.as_ptr(), fence) } {
+    if !unsafe { same_device(lease.first.as_raw(), fence) } {
         return INVALID_ARGUMENT;
     }
     lease.queue = Some(FencePoint {
-        fence: unsafe { ComRef::retain(fence) },
+        fence: unsafe { com_ref::retain(fence) },
         value,
     });
     OK
@@ -244,11 +245,11 @@ unsafe extern "C" fn rsf_fg_leases_seal(
     lease.vendor = Some(match retirement {
         Retirement::Immediate => VendorRetirement::Complete,
         Retirement::Fenced { fence, value } => {
-            if !unsafe { same_device(lease.first.0.as_ptr(), fence.as_ptr()) } {
+            if !unsafe { same_device(lease.first.as_raw(), fence.as_ptr()) } {
                 return INVALID_ARGUMENT;
             }
             VendorRetirement::Fence(FencePoint {
-                fence: unsafe { ComRef::retain(fence.as_ptr()) },
+                fence: unsafe { com_ref::retain(fence.as_ptr()) },
                 value,
             })
         }

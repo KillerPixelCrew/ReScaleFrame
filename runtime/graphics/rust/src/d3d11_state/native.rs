@@ -28,11 +28,11 @@ const _: () = {
 
 const KEEP_COUNTS: [u32; UAVS] = [u32::MAX; UAVS];
 
-fn raw(binding: &Option<ComRef>) -> Handle {
-    binding.as_ref().map_or(null_mut(), ComRef::as_ptr)
+fn raw(binding: &Option<IUnknown>) -> Handle {
+    binding.as_ref().map_or(null_mut(), Interface::as_raw)
 }
 
-fn out(binding: &mut Option<ComRef>) -> *mut Handle {
+fn out(binding: &mut Option<IUnknown>) -> *mut Handle {
     ptr::from_mut(binding).cast()
 }
 
@@ -182,7 +182,7 @@ unsafe extern "C" fn context1(context: Handle) -> Handle {
             &mut extended,
         )
     };
-    unsafe { ComRef::from_result(status, extended) }.map_or(null_mut(), ComRef::into_raw)
+    unsafe { com_ref::from_result(status, extended) }.map_or(null_mut(), Interface::into_raw)
 }
 
 unsafe fn get_ranges(context1: Handle, index: usize) -> GetRanges {
@@ -612,5 +612,5 @@ unsafe extern "C" fn rsf_d3d11_create_shader_view(device: Handle, texture: Handl
             &mut view,
         )
     };
-    unsafe { ComRef::from_result(status, view) }.map_or(null_mut(), ComRef::into_raw)
+    unsafe { com_ref::from_result(status, view) }.map_or(null_mut(), Interface::into_raw)
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::attachment::{Query, query, query_interface};
 use super::{Handle, foreign};
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::sync::lock;
 use crate::win32_diagnostics::module_location;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -13,6 +13,7 @@ use windows::Win32::Graphics::Direct3D12::{
     ID3D12Debug, ID3D12DeviceRemovedExtendedData, ID3D12DeviceRemovedExtendedDataSettings,
     ID3D12InfoQueue1,
 };
+use windows::core::IUnknown;
 use windows::core::{Interface, PCSTR};
 use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 
@@ -104,10 +105,10 @@ unsafe extern "C" fn breadcrumb_operation(node: *const c_void, index: u32) -> u3
     unsafe { (*node.pCommandHistory.add(index as usize)).0 as u32 }
 }
 
-fn query_debug(query: DebugQuery) -> Option<ComRef> {
+fn query_debug(query: DebugQuery) -> Option<IUnknown> {
     let mut object = null_mut();
     let result = unsafe { query(&mut object) };
-    unsafe { ComRef::from_owned(object) }.filter(|_| result >= 0)
+    unsafe { com_ref::owned(object) }.filter(|_| result >= 0)
 }
 
 #[derive(Clone, Copy)]
@@ -151,13 +152,13 @@ pub(crate) extern "C" fn rsf_d3d12_diagnostics_enable(log: Option<Log>, user: Ha
     let settings = query_debug(platform.query_settings);
     if let Some(settings) = &settings {
         unsafe {
-            (platform.enable_breadcrumbs)(settings.as_ptr());
-            (platform.enable_page_faults)(settings.as_ptr());
+            (platform.enable_breadcrumbs)(settings.as_raw());
+            (platform.enable_page_faults)(settings.as_raw());
         }
     }
     let debug = query_debug(platform.query_debug);
     let enabled =
-        debug.is_some_and(|debug| unsafe { (platform.enable_debug)(debug.as_ptr()) } != 0);
+        debug.is_some_and(|debug| unsafe { (platform.enable_debug)(debug.as_raw()) } != 0);
     drop(settings);
     if !enabled {
         selected.say(c"D3D12 diagnostics: debug layer unavailable; DRED requested.");
@@ -173,7 +174,7 @@ pub(super) fn enabled() -> bool {
 
 pub(super) unsafe extern "C" fn register_debug(device: Handle) {
     if let Some(info) = query_interface(query::<ID3D12InfoQueue1>, device) {
-        unsafe { foreign::register_debug(info.as_ptr(), Some(debug_message)) }
+        unsafe { foreign::register_debug(info.as_raw(), Some(debug_message)) }
     }
 }
 
@@ -236,7 +237,7 @@ pub(super) fn report_removal(queue: Handle, platform: &Removal) {
     let Some(device) = query_interface(platform.queue_device, queue) else {
         return;
     };
-    let reason = unsafe { (platform.removed_reason)(device.as_ptr()) };
+    let reason = unsafe { (platform.removed_reason)(device.as_raw()) };
     if reason >= 0 {
         return;
     }
@@ -250,14 +251,14 @@ pub(super) fn report_removal(queue: Handle, platform: &Removal) {
         "D3D12 device removal reason=0x{:08x}.",
         reason as u32
     ));
-    report_dred(device.as_ptr(), platform, sink);
+    report_dred(device.as_raw(), platform, sink);
 }
 
 fn report_dred(device: Handle, platform: &Removal, sink: Sink) {
     let Some(dred) = query_interface(platform.query_dred, device) else {
         return;
     };
-    let mut node = unsafe { (platform.breadcrumb_head)(dred.as_ptr()) };
+    let mut node = unsafe { (platform.breadcrumb_head)(dred.as_raw()) };
     for _ in 0..BREADCRUMB_LIMIT {
         if node.is_null() {
             break;
@@ -277,7 +278,7 @@ fn report_dred(device: Handle, platform: &Removal, sink: Sink) {
         node = row.next;
     }
     let mut address = 0;
-    if unsafe { (platform.page_fault)(dred.as_ptr(), &mut address) } >= 0 {
+    if unsafe { (platform.page_fault)(dred.as_raw(), &mut address) } >= 0 {
         sink.line(format!("DRED page fault address=0x{address:x}."));
     }
 }

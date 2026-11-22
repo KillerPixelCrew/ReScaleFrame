@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{
     GROUP_EDGE, Handle, SourceInfo, SourceViews, compute_shader, compute_texture, constant_buffer,
@@ -14,6 +14,7 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R32_FLOAT};
+use windows::core::IUnknown;
 use windows::core::Interface;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
@@ -109,8 +110,8 @@ const _: () = {
 
 pub(super) struct Pass {
     sources: Mutex<SourceViews<8>>,
-    resources: [ComRef; 6],
-    device: ComRef,
+    resources: [IUnknown; 6],
+    device: IUnknown,
     width: u32,
     height: u32,
 }
@@ -118,7 +119,7 @@ pub(super) struct Pass {
 impl Pass {
     fn source(&self, texture: Handle) -> Option<SourceInfo> {
         let mut info = SourceInfo::default();
-        if unsafe { describe_source(self.device.as_ptr(), texture, &mut info) } == 0
+        if unsafe { describe_source(self.device.as_raw(), texture, &mut info) } == 0
             || !info.single_surface()
             || info.width < self.width
             || info.height < self.height
@@ -174,7 +175,7 @@ pub(super) unsafe extern "C" fn rsf_motion_resolve_create(
             &mut raw,
         )
     };
-    let resources = unsafe { ComRef::adopt_all(raw) };
+    let resources = unsafe { com_ref::adopt_all(raw) };
     if status == 0 {
         return 0;
     }
@@ -184,7 +185,7 @@ pub(super) unsafe extern "C" fn rsf_motion_resolve_create(
     let pass = crate::allocate_handle(Pass {
         sources: Mutex::new(SourceViews::new()),
         resources,
-        device: unsafe { ComRef::retain(device) },
+        device: unsafe { com_ref::retain(device) },
         width,
         height,
     });
@@ -212,7 +213,7 @@ pub(super) unsafe extern "C" fn rsf_motion_resolve_run(
     let Some(mut constants) = constants(&params, pass.width, pass.height) else {
         return 0;
     };
-    let device = pass.device.as_ptr();
+    let device = pass.device.as_raw();
     if unsafe { context_matches(device, context) } == 0 {
         return 0;
     }
@@ -258,11 +259,11 @@ pub(super) unsafe extern "C" fn rsf_motion_resolve_run(
     };
     constants.has_layer = layer_view.is_some().into();
     let bindings = [
-        motion_view.as_ptr(),
-        depth_view.as_ptr(),
-        layer_view.as_ref().map_or(null_mut(), ComRef::as_ptr),
+        motion_view.as_raw(),
+        depth_view.as_raw(),
+        layer_view.as_ref().map_or(null_mut(), Interface::as_raw),
     ];
-    let resources = std::array::from_fn(|i| pass.resources[i].as_ptr());
+    let resources = std::array::from_fn(|i| pass.resources[i].as_raw());
     unsafe {
         dispatch(
             context,
@@ -279,7 +280,7 @@ unsafe fn resolve_texture(pass: *const Pass, output: usize) -> Handle {
     let Some(pass) = (unsafe { pass.as_ref() }) else {
         return null_mut();
     };
-    pass.resources[output].as_ptr()
+    pass.resources[output].as_raw()
 }
 
 #[unsafe(no_mangle)]

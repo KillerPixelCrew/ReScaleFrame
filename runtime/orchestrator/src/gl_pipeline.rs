@@ -4,7 +4,7 @@
 // identity, surface and SR session lifetime, configuration admission, SR backend switching and
 // fallback, the FG provider request and teardown order. `native` (linked.rs; fakes under test)
 // connects the runtime owners. Graphics work stays on the caller's GL context and graphics thread.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::owned_handle::OwnedHandle as Owned;
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
@@ -34,6 +34,7 @@ use std::mem::MaybeUninit;
 use std::ptr::{self};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard};
+use windows::core::{IUnknown, Interface};
 
 #[cfg_attr(test, allow(dead_code))]
 mod dxgi;
@@ -192,7 +193,7 @@ struct State {
     device: Handle,
     queue: Handle,
     window: Handle,
-    chain: Option<ComRef>,
+    chain: Option<IUnknown>,
     shown: bool,
     closed: bool,
     retry_registration: bool,
@@ -480,7 +481,10 @@ impl Pipeline {
                 self.restore_window(state);
                 return Err(FEATURE_FAILED);
             }
-            let chain = state.chain.as_ref().map_or(ptr::null_mut(), ComRef::as_ptr);
+            let chain = state
+                .chain
+                .as_ref()
+                .map_or(ptr::null_mut(), Interface::as_raw);
             let resized = unsafe {
                 native::chain_resize(
                     chain,
@@ -705,8 +709,7 @@ impl Pipeline {
         let (Some(active), Some(chain)) = (state.active.as_ref(), state.chain.as_ref()) else {
             return INVALID_ARGUMENT;
         };
-        let Some(buffer) =
-            (unsafe { ComRef::from_owned(native::chain_back_buffer(chain.as_ptr())) })
+        let Some(buffer) = (unsafe { com_ref::owned(native::chain_back_buffer(chain.as_raw())) })
         else {
             return FEATURE_FAILED;
         };
@@ -714,9 +717,9 @@ impl Pipeline {
         let copied = self.transaction(state, &active.handles[COMPOSED..=COMPOSED], |list, _| {
             unsafe {
                 native::transition(list, composed, STATE_COMMON, STATE_COPY_SOURCE);
-                native::transition(list, buffer.as_ptr(), STATE_PRESENT, STATE_COPY_DEST);
-                native::copy_resource(list, buffer.as_ptr(), composed);
-                native::transition(list, buffer.as_ptr(), STATE_COPY_DEST, STATE_PRESENT);
+                native::transition(list, buffer.as_raw(), STATE_PRESENT, STATE_COPY_DEST);
+                native::copy_resource(list, buffer.as_raw(), composed);
+                native::transition(list, buffer.as_raw(), STATE_COPY_DEST, STATE_PRESENT);
                 native::transition(list, composed, STATE_COPY_SOURCE, STATE_COMMON);
             }
             OK
@@ -725,7 +728,7 @@ impl Pipeline {
             return result;
         }
         if state.overlay {
-            settings::present(self, state, chain.as_ptr(), buffer.as_ptr(), frame);
+            settings::present(self, state, chain.as_raw(), buffer.as_raw(), frame);
         }
         let mut window: Pass = unsafe { std::mem::zeroed() };
         window.struct_size = size_of::<Pass>() as u32;
@@ -733,9 +736,9 @@ impl Pipeline {
         window.session_id = self.session;
         window.source_frame_id = frame;
         window.view_key = view;
-        window.swapchain = chain.as_ptr();
+        window.swapchain = chain.as_raw();
         unsafe { native::fg_window(&window) };
-        let presented = unsafe { native::chain_present(chain.as_ptr(), u32::from(vsync != 0)) };
+        let presented = unsafe { native::chain_present(chain.as_raw(), u32::from(vsync != 0)) };
         drop(buffer);
         if failed(presented) {
             return FEATURE_FAILED;
@@ -979,9 +982,9 @@ fn open(setup: &rsf_gl_pipeline_setup, cleanup: &mut Option<Pipeline>) -> Result
     let mut chain = ptr::null_mut();
     let created =
         unsafe { native::chain_create(queue, window, CHAIN_BUFFERS, CHAIN_FORMAT, &mut chain) };
-    let chain = unsafe { ComRef::from_owned(chain) };
+    let chain = unsafe { com_ref::owned(chain) };
     let owner = chain.as_ref().map_or(0, |chain| unsafe {
-        native::present_is_owner(chain.as_ptr())
+        native::present_is_owner(chain.as_raw())
     });
     if failed(created) || owner == 0 {
         shared.log(&format!(
@@ -994,7 +997,7 @@ fn open(setup: &rsf_gl_pipeline_setup, cleanup: &mut Option<Pipeline>) -> Result
         return Err(INIT_FAILED);
     }
     let chain = chain.expect("created chain");
-    unsafe { native::chain_associate(chain.as_ptr(), window) };
+    unsafe { native::chain_associate(chain.as_raw(), window) };
     let state = pipeline.state.get_mut().unwrap();
     state.chain = Some(chain);
     state.retry_registration = false;

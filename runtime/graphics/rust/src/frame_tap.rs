@@ -3,7 +3,7 @@
 mod detours;
 mod platform;
 
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::constant_buffer_read::{MAP_WRITE_DISCARD, Map, MappedResource, Unmap, slot};
 use crate::sys::*;
 use std::cell::{Cell, UnsafeCell};
@@ -15,6 +15,7 @@ use std::slice;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
 struct Platform {
@@ -292,7 +293,7 @@ unsafe fn store_fn<F: Copy>(slot: &AtomicPtr<c_void>, value: F) {
 // table was restored still forwards, and a later install reads them from the vtable again.
 struct Hooks {
     vtable: AtomicPtr<Handle>,
-    context: UnsafeCell<Option<ComRef>>,
+    context: UnsafeCell<Option<IUnknown>>,
     sentinel: AtomicPtr<c_void>,
     slots: [AtomicUsize; HOOKS],
     // Null where the hook is not patched.
@@ -429,7 +430,7 @@ fn observed(context: Handle) -> bool {
 // the set is shadowed across calls and reported at the draw. The texture behind each view is held.
 struct Slot {
     view: Handle,
-    texture: Option<ComRef>,
+    texture: Option<IUnknown>,
     facts: rsf_texture_facts,
 }
 
@@ -449,7 +450,7 @@ struct Render {
     shadow_live: bool,
     // Render target slot 0, shadowed so a draw knows its target without asking the context.
     target_view: Handle,
-    target_texture: Option<ComRef>,
+    target_texture: Option<IUnknown>,
     target_facts: rsf_texture_facts,
     target_view_format: u32,
     // Draws into the current target since it was bound: a pass, not a frame.
@@ -525,8 +526,8 @@ fn pending() -> MutexGuard<'static, [Option<Pending>; PENDING_MAPS]> {
 // Biased clones of the game's samplers, keyed by the game's sampler, which is pinned so its
 // address cannot be reused while it keys an entry.
 struct Biased {
-    _pinned: ComRef,
-    clone: Option<ComRef>,
+    _pinned: IUnknown,
+    clone: Option<IUnknown>,
     bias: f32,
 }
 
@@ -569,31 +570,30 @@ impl Samplers {
             .biased
             .entry(original as usize)
             .or_insert_with(|| Biased {
-                _pinned: unsafe { ComRef::retain(original) },
+                _pinned: unsafe { com_ref::retain(original) },
                 clone: None,
                 bias: 0.0,
             });
         if entry.bias == bias {
-            return entry.clone.as_ref().map_or(original, ComRef::as_ptr);
+            return entry.clone.as_ref().map_or(original, Interface::as_raw);
         }
         if let Some(previous) = entry.clone.take() {
-            self.clones.remove(&(previous.as_ptr() as usize));
+            self.clones.remove(&(previous.as_raw() as usize));
         }
         entry.bias = bias;
-        let clone =
-            unsafe { ComRef::from_owned((platform.clone_sampler)(context, original, bias)) };
+        let clone = unsafe { com_ref::owned((platform.clone_sampler)(context, original, bias)) };
         let Some(clone) = clone else {
             return original;
         };
-        let raw = clone.as_ptr();
+        let raw = clone.as_raw();
         self.clones.insert(raw as usize, original);
         entry.clone = Some(clone);
         raw
     }
 }
 
-fn texture_behind(platform: &Platform, view: Handle) -> Option<ComRef> {
-    unsafe { ComRef::from_owned((platform.texture_behind)(view)) }
+fn texture_behind(platform: &Platform, view: Handle) -> Option<IUnknown> {
+    unsafe { com_ref::owned((platform.texture_behind)(view)) }
 }
 
 fn facts_of(platform: &Platform, texture: Handle) -> rsf_texture_facts {
@@ -643,14 +643,14 @@ fn slot_texture(render: &Render, index: usize) -> Handle {
     render.slots[index]
         .texture
         .as_ref()
-        .map_or(null_mut(), ComRef::as_ptr)
+        .map_or(null_mut(), Interface::as_raw)
 }
 
 fn target_texture(render: &Render) -> Handle {
     render
         .target_texture
         .as_ref()
-        .map_or(null_mut(), ComRef::as_ptr)
+        .map_or(null_mut(), Interface::as_raw)
 }
 
 fn forget_target(render: &mut Render) {
@@ -663,7 +663,12 @@ fn forget_target(render: &mut Render) {
 
 // Record what render target slot 0 now holds. `resolved` is the texture behind `view` when the
 // caller already took it.
-fn shadow_target(platform: &Platform, render: &mut Render, view: Handle, resolved: Option<ComRef>) {
+fn shadow_target(
+    platform: &Platform,
+    render: &mut Render,
+    view: Handle,
+    resolved: Option<IUnknown>,
+) {
     if render.target_view == view {
         // The same view rebound is not a new pass, so the draw ordinal continues.
         return;
@@ -675,7 +680,7 @@ fn shadow_target(platform: &Platform, render: &mut Render, view: Handle, resolve
     }
     let texture = resolved.or_else(|| texture_behind(platform, view));
     if let Some(texture) = &texture {
-        render.target_facts = facts_of(platform, texture.as_ptr());
+        render.target_facts = facts_of(platform, texture.as_raw());
     }
     render.target_texture = texture;
     // For a typeless target the view, not the texture, says whether output is encoded.
@@ -824,7 +829,7 @@ fn shadow_view(
     render: &mut Render,
     index: usize,
     view: Handle,
-    resolved: Option<ComRef>,
+    resolved: Option<IUnknown>,
 ) {
     drop_slot(render, index);
     if view.is_null() {
@@ -836,12 +841,12 @@ fn shadow_view(
     let Some(texture) = resolved.or_else(|| texture_behind(platform, view)) else {
         return;
     };
-    if texture.as_ptr() == target_texture(render) {
+    if texture.as_raw() == target_texture(render) {
         // PSSetShaderResources refuses a read conflicting with the current output.
         drop_slot(render, index);
         return;
     }
-    render.slots[index].facts = facts_of(platform, texture.as_ptr());
+    render.slots[index].facts = facts_of(platform, texture.as_raw());
     render.slots[index].texture = Some(texture);
 }
 
@@ -862,8 +867,8 @@ fn sync_shadow(platform: &Platform, render: &mut Render, context: Handle) {
     let mut views = [null_mut(); VIEWS];
     unsafe { (platform.shader_views)(context, views.as_mut_ptr()) };
     for (index, view) in views.into_iter().enumerate() {
-        if let Some(view) = unsafe { ComRef::from_owned(view) } {
-            shadow_view(platform, render, index, view.as_ptr(), None);
+        if let Some(view) = unsafe { com_ref::owned(view) } {
+            shadow_view(platform, render, index, view.as_raw(), None);
         }
     }
 }
@@ -900,7 +905,7 @@ fn seed_geometry(platform: &Platform, render: &mut Render, context: Handle) {
             render.blend_state,
             render.depth_stencil_state,
         ] {
-            drop(ComRef::from_owned(object));
+            drop(com_ref::owned(object));
         }
     }
     render.geometry_valid = true;
@@ -1084,7 +1089,7 @@ unsafe fn rsf_core_frame_tap_install(
 
     // Keep the context alive until all writes back to its table have succeeded.
     let vtable = unsafe { *context.cast::<*mut Handle>() };
-    unsafe { *HOOK_TABLE.context.get() = Some(ComRef::retain(context)) };
+    unsafe { *HOOK_TABLE.context.get() = Some(com_ref::retain(context)) };
     HOOK_TABLE.vtable.store(vtable, Relaxed);
     let hooks = unsafe { slice::from_raw_parts(hooks, HOOKS) };
     HOOK_TABLE
@@ -1199,10 +1204,10 @@ fn rsf_core_frame_tap_set_sampler_bias(platform: &Platform, bias: f32) -> i32 {
     // old clone's mapping, and a later slot holding it would be biased twice.
     let mut current = [null_mut(); SAMPLERS];
     unsafe { (platform.samplers)(context, current.as_mut_ptr()) };
-    let current = current.map(|sampler| unsafe { ComRef::from_owned(sampler) });
+    let current = current.map(|sampler| unsafe { com_ref::owned(sampler) });
     let originals = current
         .each_ref()
-        .map(|sampler| state.original_of(sampler.as_ref().map_or(null_mut(), ComRef::as_ptr)));
+        .map(|sampler| state.original_of(sampler.as_ref().map_or(null_mut(), Interface::as_raw)));
     let bound = originals.map(|sampler| state.biased(platform, context, sampler));
     unsafe { (platform.set_samplers)(forward, context, 0, SAMPLERS as u32, bound.as_ptr()) };
     drop(current);

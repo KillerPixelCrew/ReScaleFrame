@@ -212,14 +212,14 @@ fn pending(owner: &Owner) -> usize {
 }
 
 fn buffer(owner: &Owner, index: usize) -> usize {
-    owner.lock().pending[index].buffer.as_ptr() as usize
+    owner.lock().pending[index].buffer.as_raw() as usize
 }
 
 fn fence(owner: &Owner, index: usize) -> Option<usize> {
     owner.lock().pending[index]
         .completion
         .as_ref()
-        .map(|fence| fence.as_ptr() as usize)
+        .map(|fence| fence.as_raw() as usize)
 }
 
 // The fake GPU writes copied bytes only when a test says the copy executed.

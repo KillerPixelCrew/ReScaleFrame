@@ -5,7 +5,7 @@
 //! commit, SR context lifetime, recording slots, fence retirement, scene and Present matching,
 //! the frontend status and overlay routing. Settings keys and text belong to settings_store.rs,
 //! SR vendor selection to rsf_gpu_select_sr_backend and FG provider admission to fg_choice.rs.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d12_observer::ObserverSetup;
 use crate::fg_choice;
 use crate::overlay_settings::{
@@ -54,6 +54,7 @@ use std::ffi::{CString, c_char, c_int, c_void};
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
+use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileStringW;
@@ -340,10 +341,10 @@ struct ContextKey {
 }
 
 struct State {
-    device: Option<ComRef>,
-    fence: Option<ComRef>,
-    queue: Option<ComRef>,
-    overlay_queue: Option<ComRef>,
+    device: Option<IUnknown>,
+    fence: Option<IUnknown>,
+    queue: Option<IUnknown>,
+    overlay_queue: Option<IUnknown>,
     context: Handle,
     // The game retains native NGX handles for pause and fallback. Global SDK shutdown during a
     // backend change invalidates those handles, so the registration belongs to the session.
@@ -417,8 +418,8 @@ pub(crate) struct Host {
 static FRONTEND: AtomicPtr<Host> = AtomicPtr::new(null_mut());
 static CREATION: Mutex<()> = Mutex::new(());
 
-fn retain(object: Handle) -> Option<ComRef> {
-    (!object.is_null()).then(|| unsafe { ComRef::retain(object) })
+fn retain(object: Handle) -> Option<IUnknown> {
+    (!object.is_null()).then(|| unsafe { com_ref::retain(object) })
 }
 
 fn has(mask: u32, bit: u32) -> bool {
@@ -563,7 +564,7 @@ impl Host {
     fn adapter(&self, s: &State) -> Option<Adapter> {
         let device = s.device.as_ref()?;
         let mut adapter = Adapter::default();
-        (unsafe { self.p.adapter(device.as_ptr(), &mut adapter) } != 0).then_some(adapter)
+        (unsafe { self.p.adapter(device.as_raw(), &mut adapter) } != 0).then_some(adapter)
     }
 
     fn resolve_backend(&self, s: &State) -> u32 {
@@ -651,8 +652,8 @@ impl Host {
         }
     }
 
-    fn completed(&self, fence: &ComRef) -> Option<u64> {
-        let completed = unsafe { self.p.fence_completed(fence.as_ptr()) };
+    fn completed(&self, fence: &IUnknown) -> Option<u64> {
+        let completed = unsafe { self.p.fence_completed(fence.as_raw()) };
         if completed == u64::MAX {
             self.poisoned.store(true, Ordering::Relaxed);
             None
@@ -674,7 +675,7 @@ impl Host {
         if completed >= value {
             return true;
         }
-        match unsafe { self.p.fence_wait(fence.as_ptr(), value, FENCE_TIMEOUT_MS) } {
+        match unsafe { self.p.fence_wait(fence.as_raw(), value, FENCE_TIMEOUT_MS) } {
             0 => false,
             result if result > 0 => self.completed(fence).is_some_and(|done| done >= value),
             _ => {
@@ -716,7 +717,7 @@ impl Host {
         let quality = key.quality;
         let p = self.p;
         let camera = &pass.camera;
-        let device = s.device.as_ref().map_or(null_mut(), ComRef::as_ptr);
+        let device = s.device.as_ref().map_or(null_mut(), Interface::as_raw);
         let mut setup = SrSetup {
             struct_size: size_of::<SrSetup>() as u32,
             abi_version: 2,
@@ -825,12 +826,11 @@ impl Host {
             s.reset = true;
             return NOT_READY;
         }
-        let Some(owner) = (unsafe { ComRef::from_owned(p.list_device(commands)) }) else {
+        let Some(owner) = (unsafe { com_ref::owned(p.list_device(commands)) }) else {
             return NOT_READY;
         };
         if s.device.is_none() {
-            let Some(fence) = (unsafe { ComRef::from_owned(p.create_fence(owner.as_ptr())) })
-            else {
+            let Some(fence) = (unsafe { com_ref::owned(p.create_fence(owner.as_raw())) }) else {
                 return NOT_READY;
             };
             s.device = Some(owner.clone());
@@ -838,7 +838,7 @@ impl Host {
         }
         if s.device
             .as_ref()
-            .is_some_and(|device| device.as_ptr() != owner.as_ptr())
+            .is_some_and(|device| device.as_raw() != owner.as_raw())
         {
             return NATIVE_REFUSED;
         }
@@ -927,7 +927,7 @@ impl Host {
         if s.context.is_null() {
             return;
         }
-        let Some(fence) = s.fence.as_ref().map(ComRef::as_ptr) else {
+        let Some(fence) = s.fence.as_ref().map(Interface::as_raw) else {
             return;
         };
         if begin {
@@ -955,7 +955,7 @@ impl Host {
         };
         if s.queue
             .as_ref()
-            .is_some_and(|queue| queue.as_ptr() != native_queue)
+            .is_some_and(|queue| queue.as_raw() != native_queue)
         {
             self.poisoned.store(true, Ordering::Relaxed);
             self.log("Native renderer SR refused: its recordings reached multiple DIRECT queues.");
@@ -1312,7 +1312,7 @@ impl Host {
         let Some(queue) = queue else {
             return;
         };
-        let Some(device) = (unsafe { ComRef::from_owned(p.queue_device(queue.as_ptr())) }) else {
+        let Some(device) = (unsafe { com_ref::owned(p.queue_device(queue.as_raw())) }) else {
             return;
         };
         let mut fresh = Self::empty_fg();
@@ -1416,8 +1416,8 @@ impl Host {
         };
         let shown = unsafe {
             p.overlay_present(
-                device.as_ptr(),
-                queue.as_ptr(),
+                device.as_raw(),
+                queue.as_raw(),
                 chain,
                 &stats,
                 &mut intent,

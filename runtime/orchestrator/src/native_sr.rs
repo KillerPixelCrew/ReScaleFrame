@@ -12,7 +12,8 @@ use crate::{
     native_translucency::rsf_native_translucency_take,
 };
 
-use crate::com_ref::ComRef;
+#[cfg(not(test))]
+use crate::com_ref;
 use crate::d3d11_output::GraphicsCache;
 #[cfg(not(test))]
 use crate::d3d11_output::{SavedBindings, texture_desc};
@@ -56,6 +57,7 @@ use rsf_game_sys::{
 use std::ffi::c_void;
 #[cfg(not(test))]
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
+use windows::core::IUnknown;
 #[cfg(not(test))]
 use windows::core::Interface;
 
@@ -76,7 +78,7 @@ unsafe fn validate_device(context: *mut c_void, pass: &Pass) -> bool {
     let Ok(device) = (unsafe { context.GetDevice() }) else {
         return false;
     };
-    let Some(identity) = (unsafe { ComRef::identity(device.as_raw()) }) else {
+    let Some(identity) = (unsafe { com_ref::identity(device.as_raw()) }) else {
         return false;
     };
     let textures = [
@@ -92,9 +94,9 @@ unsafe fn validate_device(context: *mut c_void, pass: &Pass) -> bool {
         .into_iter()
         .filter(|texture| !texture.is_null())
         .all(|texture| {
-            unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(texture)) }
-                .and_then(|owner| unsafe { ComRef::identity(owner.as_ptr()) })
-                .is_some_and(|other| other.as_ptr() == identity.as_ptr())
+            unsafe { com_ref::owned(rsf_d3d11_output_child_device(texture)) }
+                .and_then(|owner| unsafe { com_ref::identity(owner.as_raw()) })
+                .is_some_and(|other| other.as_raw() == identity.as_raw())
         })
 }
 
@@ -292,7 +294,7 @@ struct FgInputs {
     decode: OwnedHandle,
     resolve: OwnedHandle,
     extent: [u32; 2],
-    device: ComRef,
+    device: IUnknown,
 }
 
 // SAFETY: these D3D11 passes are used serially on the graphics owner, and
@@ -307,7 +309,7 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
     let _bindings =
         unsafe { SavedBindings::new(context, rsf_d3d11_state_save, rsf_d3d11_state_restore) }?;
     unsafe { clear_predication(context) };
-    let device = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) }?;
+    let device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }?;
     let stage = |name: &std::ffi::CStr| unsafe {
         rsf_native_fg_stage(name.as_ptr(), pass.source_frame_id, pass.native_frame, 0)
     };
@@ -316,18 +318,18 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
     FG_INPUTS
         .with(|cache| {
             let inputs = if let Some(inputs) = cache.as_ref().filter(|inputs| {
-                inputs.device.as_ptr() == device.as_ptr() && inputs.extent == render
+                inputs.device.as_raw() == device.as_raw() && inputs.extent == render
             }) {
                 inputs
             } else {
                 *cache = None;
                 reset_history(FG);
                 let decode = OwnedHandle::new(
-                    unsafe { platform::create_decode(device.as_ptr(), width, height) },
+                    unsafe { platform::create_decode(device.as_raw(), width, height) },
                     platform::destroy_decode,
                 )?;
                 let resolve = OwnedHandle::new(
-                    unsafe { platform::create_resolve(device.as_ptr(), width, height) },
+                    unsafe { platform::create_resolve(device.as_raw(), width, height) },
                     platform::destroy_resolve,
                 )?;
                 cache.insert(FgInputs {

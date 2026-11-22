@@ -2,7 +2,7 @@
 //! D3D12 platform leaves with the same raw output and HRESULT contracts used by
 //! the fake platform and the C++ state capsule.
 use super::{E_FAIL, S_OK};
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_present_abi::Raw;
 use rsf_game_sys::backend_result::FEATURE_FAILED;
 use std::mem::ManuallyDrop;
@@ -94,7 +94,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_create_slot(
             &mut allocator,
         )
     };
-    let owner = unsafe { ComRef::from_owned(allocator) };
+    let owner = unsafe { com_ref::owned(allocator) };
     if !allocated.is_ok() || owner.is_none() {
         return E_FAIL;
     }
@@ -109,7 +109,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_create_slot(
             &mut list,
         )
     };
-    let recording = unsafe { ComRef::from_owned(list) };
+    let recording = unsafe { com_ref::owned(list) };
     let (Some(owner), Some(recording)) = (owner, recording) else {
         return E_FAIL;
     };

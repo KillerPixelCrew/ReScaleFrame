@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::capture_names::{ALPHA, DENSE_MOTION, DEPTH, HDR, SCALAR};
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::sr_session::checked;
 use crate::sync::lock;
 use crate::sys::{rsf_backend_log_fn, rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
@@ -15,6 +15,7 @@ use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
+use windows::core::Interface;
 
 pub(super) use crate::capture_pixels::Pixels;
 pub(super) use rsf_graphics::dump_options::{
@@ -682,15 +683,14 @@ unsafe fn write_texture(
 ) -> ImageResult {
     let mut surface = Surface::default();
     let mut encoding = Encoding::INVALID;
-    let texture =
-        unsafe { ComRef::from_owned(native::open_texture(context, source, &mut surface)) };
+    let texture = unsafe { com_ref::owned(native::open_texture(context, source, &mut surface)) };
     let view = preview_view(work.view, surface.format, false);
     if let Some(texture) = texture {
         match prefix(&work.prefix) {
             Ok(prefix) => unsafe {
                 native::encode_texture(
                     context,
-                    texture.as_ptr(),
+                    texture.as_raw(),
                     &work.options(&prefix, view),
                     u32::from(raw),
                     &mut encoding,

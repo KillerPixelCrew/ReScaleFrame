@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::{SavedBindings, same_device, texture_desc};
 use crate::graphics_d3d11::{
     compute_shader, constant_buffer, dispatch_compute, rsf_d3d11_state_restore,
@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_STRICTNESS;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+use windows::core::IUnknown;
 use windows::core::Interface;
 
 type Handle = *mut c_void;
@@ -49,21 +50,21 @@ struct ScratchKey {
 }
 
 struct Scratch {
-    target: ComRef,
-    texture: ComRef,
+    target: IUnknown,
+    texture: IUnknown,
     key: ScratchKey,
 }
 
 struct Device {
-    shaders: [Option<ComRef>; 3],
-    constants: Option<ComRef>,
+    shaders: [Option<IUnknown>; 3],
+    constants: Option<IUnknown>,
     scratch: Option<Scratch>,
-    device: ComRef,
+    device: IUnknown,
 }
 
 impl Device {
     fn prepare(&mut self, output: &Texture) -> Option<()> {
-        let raw = self.device.as_ptr();
+        let raw = self.device.as_raw();
         let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }?;
         for (shader, mode) in self.shaders.iter_mut().zip(FILTERS) {
             if shader.is_none() {
@@ -80,12 +81,12 @@ impl Device {
                     D3DCOMPILE_ENABLE_STRICTNESS,
                 )
                 .ok()?;
-                *shader = unsafe { ComRef::from_owned(compute_shader(device, &code)?.into_raw()) };
+                *shader = unsafe { com_ref::owned(compute_shader(device, &code)?.into_raw()) };
             }
         }
         if self.constants.is_none() {
             self.constants = unsafe {
-                ComRef::from_owned(
+                com_ref::owned(
                     constant_buffer(device, CONSTANT_WORDS as u32 * 4, false)?.into_raw(),
                 )
             };
@@ -119,8 +120,8 @@ impl Device {
             let texture = texture?;
             self.scratch = Some(complete_scratch(
                 key,
-                unsafe { ComRef::from_owned(texture.clone().into_raw()) }?,
-                || unsafe { ComRef::from_owned(target_view(device, &texture, 0)?.into_raw()) },
+                unsafe { com_ref::owned(texture.clone().into_raw()) }?,
+                || unsafe { com_ref::owned(target_view(device, &texture, 0)?.into_raw()) },
             )?);
         }
         Some(())
@@ -130,8 +131,8 @@ impl Device {
 // A texture without its view must never become the cached scratch target.
 fn complete_scratch(
     key: ScratchKey,
-    texture: ComRef,
-    create_view: impl FnOnce() -> Option<ComRef>,
+    texture: IUnknown,
+    create_view: impl FnOnce() -> Option<IUnknown>,
 ) -> Option<Scratch> {
     Some(Scratch {
         key,
@@ -171,8 +172,8 @@ impl Owner {
             return None;
         }
         let mode = effective_mode(options.mode, !depth.is_null())?;
-        let device = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) }?;
-        let native = device.as_ptr();
+        let device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }?;
+        let native = device.as_raw();
         let desc = input_texture(native, output)?;
         if desc.width == 0
             || desc.height == 0
@@ -206,12 +207,12 @@ impl Owner {
             }
             let format = unsafe { rsf_d3d11_output_srv_format(input.format) };
             views[index] = Some(unsafe {
-                ComRef::from_owned(rsf_d3d11_output_create_srv(native, texture, format))
+                com_ref::owned(rsf_d3d11_output_create_srv(native, texture, format))
             }?);
         }
         if cache
             .as_ref()
-            .is_none_or(|current| current.device.as_ptr() != native)
+            .is_none_or(|current| current.device.as_raw() != native)
         {
             *cache = Some(Device {
                 device,
@@ -225,10 +226,10 @@ impl Owner {
         let scratch = cache.scratch.as_ref()?;
         let sources = views
             .each_ref()
-            .map(|view| view.as_ref().map_or(null_mut(), ComRef::as_ptr));
-        let shader = cache.shaders[(mode - 1) as usize].as_ref()?.as_ptr();
-        let buffer = cache.constants.as_ref()?.as_ptr();
-        let scratch_texture = scratch.texture.as_ptr();
+            .map(|view| view.as_ref().map_or(null_mut(), Interface::as_raw));
+        let shader = cache.shaders[(mode - 1) as usize].as_ref()?.as_raw();
+        let buffer = cache.constants.as_ref()?.as_raw();
+        let scratch_texture = scratch.texture.as_raw();
         let context_native = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }?;
         let shader = unsafe { ID3D11ComputeShader::from_raw_borrowed(&shader) }?;
         let native_buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&buffer) }?;
@@ -279,7 +280,7 @@ impl Owner {
             context_native,
             shader,
             &sources,
-            &[scratch.target.as_ptr()],
+            &[scratch.target.as_raw()],
             None,
             [extent[0].div_ceil(16), extent[1].div_ceil(16)],
             true,
@@ -337,15 +338,15 @@ mod tests {
             format: RSF_D3D11_FORMAT_RGBA16_FLOAT,
             sample_quality: 0,
         };
-        let retain_texture = || unsafe { ComRef::retain(raw(&texture)) };
+        let retain_texture = || unsafe { com_ref::retain(raw(&texture)) };
         assert!(complete_scratch(key, retain_texture(), || None).is_none());
         assert_eq!(texture.refs.get(), 1);
 
         let scratch = complete_scratch(key, retain_texture(), || {
-            Some(unsafe { ComRef::retain(raw(&target)) })
+            Some(unsafe { com_ref::retain(raw(&target)) })
         })
         .unwrap();
-        assert_eq!(scratch.texture.as_ptr(), raw(&texture));
-        assert_eq!(scratch.target.as_ptr(), raw(&target));
+        assert_eq!(scratch.texture.as_raw(), raw(&texture));
+        assert_eq!(scratch.target.as_raw(), raw(&target));
     }
 }

@@ -17,7 +17,7 @@ use platform as native;
 #[cfg(test)]
 use tests::native;
 
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::owned_handle::OwnedHandle as Owned;
 use crate::sr_session::has_capacity;
 use crate::sys::*;
@@ -25,8 +25,9 @@ use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
 use std::ffi::{CString, c_void};
-use std::ptr::{self, NonNull};
+use std::ptr;
 use std::time::Instant;
+use windows::core::{IUnknown, Interface};
 
 const API_D3D11: u32 = 1;
 
@@ -66,12 +67,12 @@ pub(crate) struct TextureDesc {
     array_size: u32,
 }
 
-fn owned_com(object: Handle) -> Option<ComRef> {
-    NonNull::new(object).map(ComRef)
+fn owned_com(object: Handle) -> Option<IUnknown> {
+    unsafe { com_ref::owned(object) }
 }
 
-fn com(object: &ComRef) -> Handle {
-    object.0.as_ptr()
+fn com(object: &IUnknown) -> Handle {
+    object.as_raw()
 }
 
 struct SharedFence {
@@ -99,12 +100,12 @@ struct Shape {
 struct Prepared {
     shape: Shape,
     surfaces: Surfaces,
-    output: ComRef,
+    output: IUnknown,
 }
 
 struct Commands {
-    allocator: ComRef,
-    list: ComRef,
+    allocator: IUnknown,
+    list: IUnknown,
     complete: u64,
 }
 
@@ -112,17 +113,17 @@ struct Commands {
 // texture while the description is cached.
 #[derive(Default)]
 struct Validated {
-    texture: Option<ComRef>,
+    texture: Option<IUnknown>,
     desc: TextureDesc,
 }
 
 // A warm-up dispatch whose GPU completion was not observed. The submitted list references these
 // objects and the session's SDK context, so all of them stay alive until it is reaped.
 struct PendingWarmUp {
-    _resources: [Option<ComRef>; 4],
-    _target: ComRef,
+    _resources: [Option<IUnknown>; 4],
+    _target: IUnknown,
     _commands: Commands,
-    fence: ComRef,
+    fence: IUnknown,
     event: Owned,
     // Whether a signal of 1 on `fence` is queued behind the list. Without one, the fence value
     // proves nothing about the list.
@@ -146,13 +147,13 @@ pub(crate) struct Bridge {
     validated: [Validated; SLOTS],
     commands: Vec<Commands>,
     next_commands: usize,
-    queue: ComRef,
-    device12: ComRef,
-    context: ComRef,
+    queue: IUnknown,
+    device12: IUnknown,
+    context: IUnknown,
     // The immediate context as GetImmediateContext returned it, which is the pointer callers pass,
     // so the per-frame identity check needs no QueryInterface.
-    immediate: ComRef,
-    device11: ComRef,
+    immediate: IUnknown,
+    device11: IUnknown,
     log: Log,
     log_user: Handle,
     tick: u64,
@@ -209,7 +210,7 @@ fn mask_accepted(desc: &TextureDesc, record: &rsf_frame_record) -> bool {
 impl Bridge {
     fn open(setup: &rsf_sr_session_setup) -> Result<Self, i32> {
         let (log, log_user) = (setup.open.log, setup.open.log_user);
-        let device11 = unsafe { ComRef::retain(setup.open.device) };
+        let device11 = unsafe { com_ref::retain(setup.open.device) };
         let immediate = owned_com(unsafe { native::immediate_context(com(&device11)) });
         let immediate = immediate.ok_or(NOT_SUPPORTED)?;
         let context = owned_com(unsafe { native::query_context4(com(&immediate)) });
@@ -351,7 +352,7 @@ impl Bridge {
             return None;
         }
         cached.desc = desc;
-        cached.texture = Some(unsafe { ComRef::retain(resource) });
+        cached.texture = Some(unsafe { com_ref::retain(resource) });
         Some(desc)
     }
 
@@ -697,7 +698,7 @@ impl Bridge {
             (1, 1, SCALAR_FORMAT),
         ];
         let count = if manual_exposure { 4 } else { 3 };
-        let mut resources: [Option<ComRef>; 4] = Default::default();
+        let mut resources: [Option<IUnknown>; 4] = Default::default();
         for (resource, &(width, height, format)) in resources.iter_mut().zip(&inputs).take(count) {
             *resource = owned_com(unsafe { native::create_texture(device, width, height, format) });
             if resource.is_none() {
@@ -810,7 +811,7 @@ impl Bridge {
     }
 }
 
-fn create_commands(device12: &ComRef) -> Option<Commands> {
+fn create_commands(device12: &IUnknown) -> Option<Commands> {
     let (mut allocator, mut list) = (ptr::null_mut(), ptr::null_mut());
     if unsafe { native::create_commands(com(device12), &mut allocator, &mut list) } == 0 {
         return None;

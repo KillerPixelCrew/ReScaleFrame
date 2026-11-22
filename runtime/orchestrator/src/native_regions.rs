@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::{ComRef, vtable};
+use crate::com_ref::{self, vtable};
 use crate::d3d11_output::{GraphicsCache, texture_desc};
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS, R32_TYPELESS,
@@ -373,15 +373,15 @@ pub(super) unsafe fn compile_compute(
     source: &[u8],
     name: &CStr,
     flags: u32,
-) -> Option<ComRef> {
+) -> Option<IUnknown> {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }?;
     let code = shader_code(source, name, c"main", c"cs_5_0", flags).ok()?;
     let shader = compute_shader(device, &code)?;
-    unsafe { ComRef::from_owned(shader.into_raw()) }
+    unsafe { com_ref::owned(shader.into_raw()) }
 }
 
 impl Kernel {
-    unsafe fn compile(self, device: Object) -> Option<ComRef> {
+    unsafe fn compile(self, device: Object) -> Option<IUnknown> {
         let (source, name): (&[u8], &CStr) = match self {
             Self::Depth => (
                 include_bytes!("composition_shaders/depth_region.hlsl"),
@@ -410,15 +410,15 @@ struct Dispatch {
     groups: [u32; 2],
 }
 
-pub(super) unsafe fn device_identity(device: Object) -> Option<ComRef> {
+pub(super) unsafe fn device_identity(device: Object) -> Option<IUnknown> {
     let mut identity = NONE;
     let status = unsafe {
         (vtable::<IUnknown>(&device).QueryInterface)(device, &IUnknown::IID, &mut identity)
     };
-    unsafe { ComRef::from_result(status, identity) }
+    unsafe { com_ref::from_result(status, identity) }
 }
 
-pub(super) unsafe fn create_constants(device: Object, size: usize) -> Option<ComRef> {
+pub(super) unsafe fn create_constants(device: Object, size: usize) -> Option<IUnknown> {
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: size as u32,
         Usage: D3D11_USAGE_DEFAULT,
@@ -429,10 +429,10 @@ pub(super) unsafe fn create_constants(device: Object, size: usize) -> Option<Com
     let status = unsafe {
         (vtable::<ID3D11Device>(&device).CreateBuffer)(device, &desc, ptr::null(), &mut buffer)
     };
-    unsafe { ComRef::from_result(status, buffer) }
+    unsafe { com_ref::from_result(status, buffer) }
 }
 
-unsafe fn create_uav(device: Object, texture: Object) -> Option<ComRef> {
+unsafe fn create_uav(device: Object, texture: Object) -> Option<IUnknown> {
     let mut view = NONE;
     let status = unsafe {
         (vtable::<ID3D11Device>(&device).CreateUnorderedAccessView)(
@@ -442,7 +442,7 @@ unsafe fn create_uav(device: Object, texture: Object) -> Option<ComRef> {
             &mut view,
         )
     };
-    unsafe { ComRef::from_result(status, view) }
+    unsafe { com_ref::from_result(status, view) }
 }
 
 pub(super) unsafe fn crop(
@@ -508,14 +508,14 @@ unsafe fn dispatch(context: Object, pass: &Dispatch) {
 }
 
 pub(super) struct SourceView {
-    view: ComRef,
-    texture: ComRef,
+    view: IUnknown,
+    texture: IUnknown,
     format: u32,
 }
 
 impl SourceView {
     pub(super) fn matching(&self, texture: Object, format: u32) -> Option<Object> {
-        (self.texture.as_ptr() == texture && self.format == format).then(|| self.view.as_ptr())
+        (self.texture.as_raw() == texture && self.format == format).then(|| self.view.as_raw())
     }
 
     pub(super) unsafe fn get(
@@ -530,10 +530,9 @@ impl SourceView {
         {
             return Some(view);
         }
-        let view =
-            unsafe { ComRef::from_owned(rsf_d3d11_output_create_srv(device, texture, format)) }?;
+        let view = unsafe { com_ref::owned(rsf_d3d11_output_create_srv(device, texture, format)) }?;
         // Keep the allocation alive so its identity cannot be reused while cached.
-        let texture = unsafe { ComRef::retain(texture) };
+        let texture = unsafe { com_ref::retain(texture) };
         Some(
             cache
                 .insert(Self {
@@ -542,7 +541,7 @@ impl SourceView {
                     format,
                 })
                 .view
-                .as_ptr(),
+                .as_raw(),
         )
     }
 }
@@ -558,12 +557,12 @@ fn readable_desc(mut source: rsf_d3d11_texture_desc, format: u32) -> rsf_d3d11_t
 
 unsafe fn readable_copy(
     device: Object,
-    cached: &mut Option<ComRef>,
+    cached: &mut Option<IUnknown>,
     view: &mut Option<SourceView>,
     desc: &rsf_d3d11_texture_desc,
 ) -> Option<Object> {
     if let Some(texture) = cached.as_ref() {
-        let previous = unsafe { texture_desc(texture.as_ptr()) };
+        let previous = unsafe { texture_desc(texture.as_raw()) };
         if (
             previous.width,
             previous.height,
@@ -571,13 +570,13 @@ unsafe fn readable_copy(
             previous.mips,
         ) == (desc.width, desc.height, desc.format, desc.mips)
         {
-            return Some(texture.as_ptr());
+            return Some(texture.as_raw());
         }
     }
     *view = None;
     *cached = None;
-    let texture = unsafe { ComRef::from_owned(rsf_d3d11_output_create_texture(device, desc)) }?;
-    Some(cached.insert(texture).as_ptr())
+    let texture = unsafe { com_ref::owned(rsf_d3d11_output_create_texture(device, desc)) }?;
+    Some(cached.insert(texture).as_raw())
 }
 
 unsafe fn output_texture(
@@ -585,7 +584,7 @@ unsafe fn output_texture(
     extent: [u32; 2],
     format: u32,
     unordered: bool,
-) -> Option<ComRef> {
+) -> Option<IUnknown> {
     let desc = rsf_d3d11_texture_desc {
         width: extent[0],
         height: extent[1],
@@ -598,13 +597,13 @@ unsafe fn output_texture(
             | if unordered { BIND_UNORDERED_ACCESS } else { 0 },
         ..Default::default()
     };
-    unsafe { ComRef::from_owned(rsf_d3d11_output_create_texture(device, &desc)) }
+    unsafe { com_ref::owned(rsf_d3d11_output_create_texture(device, &desc)) }
 }
 
 struct RegionShaders {
-    depth: ComRef,
-    color: ComRef,
-    constants: ComRef,
+    depth: IUnknown,
+    color: IUnknown,
+    constants: IUnknown,
 }
 
 impl RegionShaders {
@@ -625,11 +624,11 @@ struct RegionKey {
 }
 
 struct RegionOutput {
-    color: ComRef,
-    depth: ComRef,
-    motion: ComRef,
-    depth_target: ComRef,
-    color_target: ComRef,
+    color: IUnknown,
+    depth: IUnknown,
+    motion: IUnknown,
+    depth_target: IUnknown,
+    color_target: IUnknown,
     key: RegionKey,
 }
 
@@ -640,8 +639,8 @@ impl RegionOutput {
         let depth =
             unsafe { output_texture(device, key.extent, RSF_D3D11_FORMAT_R32_FLOAT, true) }?;
         let motion = unsafe { output_texture(device, key.extent, key.motion_format, false) }?;
-        let depth_target = unsafe { create_uav(device, depth.as_ptr()) }?;
-        let color_target = unsafe { create_uav(device, color.as_ptr()) }?;
+        let depth_target = unsafe { create_uav(device, depth.as_raw()) }?;
+        let color_target = unsafe { create_uav(device, color.as_raw()) }?;
         Some(Self {
             color,
             depth,
@@ -654,8 +653,8 @@ impl RegionOutput {
 }
 
 struct MaskShader {
-    shader: ComRef,
-    constants: ComRef,
+    shader: IUnknown,
+    constants: IUnknown,
 }
 
 impl MaskShader {
@@ -668,14 +667,14 @@ impl MaskShader {
 }
 
 pub(super) struct MaskTarget {
-    pub(super) texture: ComRef,
-    pub(super) view: ComRef,
+    pub(super) texture: IUnknown,
+    pub(super) view: IUnknown,
 }
 
 impl MaskTarget {
     pub(super) unsafe fn new(device: Object, extent: [u32; 2]) -> Option<Self> {
         let texture = unsafe { output_texture(device, extent, RSF_D3D11_FORMAT_R32_FLOAT, true) }?;
-        let view = unsafe { create_uav(device, texture.as_ptr()) }?;
+        let view = unsafe { create_uav(device, texture.as_raw()) }?;
         Some(Self { texture, view })
     }
 }
@@ -689,7 +688,7 @@ struct MaskOutput {
 struct TemporalMask {
     shader: Option<MaskShader>,
     output: Option<MaskOutput>,
-    readable: Option<ComRef>,
+    readable: Option<IUnknown>,
     source: Option<SourceView>,
     hints: [Option<SourceView>; 2],
 }
@@ -697,11 +696,11 @@ struct TemporalMask {
 struct Resources {
     shaders: Option<RegionShaders>,
     output: Option<RegionOutput>,
-    readable_depth: Option<ComRef>,
+    readable_depth: Option<IUnknown>,
     depth_source: Option<SourceView>,
     color_source: Option<SourceView>,
     temporal: TemporalMask,
-    device: ComRef,
+    device: IUnknown,
 }
 
 // SAFETY: only D3D11 resources are retained. The caller owns the execution
@@ -710,10 +709,10 @@ unsafe impl Send for Resources {}
 
 static RESOURCES: GraphicsCache<Option<Resources>> = GraphicsCache::new(None);
 
-fn for_device(cache: &mut Option<Resources>, device: ComRef) -> &mut Resources {
+fn for_device(cache: &mut Option<Resources>, device: IUnknown) -> &mut Resources {
     if cache
         .as_ref()
-        .is_some_and(|entry| entry.device.as_ptr() != device.as_ptr())
+        .is_some_and(|entry| entry.device.as_raw() != device.as_raw())
     {
         *cache = None;
     }
@@ -728,12 +727,12 @@ fn for_device(cache: &mut Option<Resources>, device: ComRef) -> &mut Resources {
     })
 }
 
-unsafe fn identity(device: Object) -> Option<ComRef> {
+unsafe fn identity(device: Object) -> Option<IUnknown> {
     unsafe { device_identity(device) }
 }
 
-unsafe fn child_device(child: Object) -> Option<ComRef> {
-    unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(child)) }
+unsafe fn child_device(child: Object) -> Option<IUnknown> {
+    unsafe { com_ref::owned(rsf_d3d11_output_child_device(child)) }
 }
 
 unsafe fn prepare(
@@ -748,10 +747,10 @@ unsafe fn prepare(
     if unsafe { rsf_d3d11_output_is_immediate(context) } == 0 {
         return None;
     }
-    let device_identity = unsafe { identity(device.as_ptr()) }?;
+    let device_identity = unsafe { identity(device.as_raw()) }?;
     for input in inputs {
         let owner = unsafe { child_device(input) }?;
-        if unsafe { identity(owner.as_ptr()) }?.as_ptr() != device_identity.as_ptr() {
+        if unsafe { identity(owner.as_raw()) }?.as_raw() != device_identity.as_raw() {
             return None;
         }
     }
@@ -766,7 +765,7 @@ unsafe fn prepare(
 
     RESOURCES.with(|cache| {
         let r = for_device(cache, device);
-        let device = r.device.as_ptr();
+        let device = r.device.as_raw();
         let shaders = match &r.shaders {
             Some(shaders) => shaders,
             None => r.shaders.insert(unsafe { RegionShaders::new(device) }?),
@@ -813,19 +812,19 @@ unsafe fn prepare(
 
         let groups = region.groups();
         let depth_pass = Dispatch {
-            shader: shaders.depth.as_ptr(),
-            constants: shaders.constants.as_ptr(),
+            shader: shaders.depth.as_raw(),
+            constants: shaders.constants.as_raw(),
             views: [depth_view?, NONE, NONE],
-            targets: [output.depth_target.as_ptr(), NONE],
+            targets: [output.depth_target.as_raw(), NONE],
             view_count: 1,
             target_count: 1,
             groups,
         };
         let color_pass = Dispatch {
-            shader: shaders.color.as_ptr(),
+            shader: shaders.color.as_raw(),
             constants: NONE, // Depth bound the shared buffer to b0.
             views: [color_view?, NONE, NONE],
-            targets: [output.color_target.as_ptr(), NONE],
+            targets: [output.color_target.as_raw(), NONE],
             ..depth_pass
         };
         unsafe {
@@ -833,15 +832,15 @@ unsafe fn prepare(
             if copy_depth {
                 rsf_d3d11_output_copy_resource(context, readable, depth);
             }
-            crop(context, output.motion.as_ptr(), motion, &region.bounds);
-            update_constants(context, shaders.constants.as_ptr(), &constants);
+            crop(context, output.motion.as_raw(), motion, &region.bounds);
+            update_constants(context, shaders.constants.as_raw(), &constants);
             dispatch(context, &depth_pass);
             dispatch(context, &color_pass);
         }
         Some([
-            output.color.as_ptr(),
-            output.depth.as_ptr(),
-            output.motion.as_ptr(),
+            output.color.as_raw(),
+            output.depth.as_raw(),
+            output.motion.as_raw(),
         ])
     })?
 }
@@ -861,7 +860,7 @@ unsafe fn temporal_mask(
         .filter(|input| !input.is_null())
     {
         // The temporal-mask path historically requires the same device interface.
-        if unsafe { child_device(input) }?.as_ptr() != device.as_ptr() {
+        if unsafe { child_device(input) }?.as_raw() != device.as_raw() {
             return None;
         }
     }
@@ -886,7 +885,7 @@ unsafe fn temporal_mask(
 
     RESOURCES.with(|cache| {
         let r = for_device(cache, device);
-        let device = r.device.as_ptr();
+        let device = r.device.as_raw();
         let temporal = &mut r.temporal;
         let shader = match &temporal.shader {
             Some(shader) => shader,
@@ -932,23 +931,23 @@ unsafe fn temporal_mask(
             weights,
         };
         let pass = Dispatch {
-            shader: shader.shader.as_ptr(),
-            constants: shader.constants.as_ptr(),
+            shader: shader.shader.as_raw(),
+            constants: shader.constants.as_raw(),
             views,
-            targets: output.targets.each_ref().map(|target| target.view.as_ptr()),
+            targets: output.targets.each_ref().map(|target| target.view.as_raw()),
             view_count: 3,
             target_count: 2,
             groups: region.groups(),
         };
         unsafe {
-            update_constants(context, shader.constants.as_ptr(), &constants);
+            update_constants(context, shader.constants.as_raw(), &constants);
             dispatch(context, &pass);
         }
         Some(
             output
                 .targets
                 .each_ref()
-                .map(|target| target.texture.as_ptr()),
+                .map(|target| target.texture.as_raw()),
         )
     })?
 }

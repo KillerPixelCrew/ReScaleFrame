@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::same_device;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::sr_session::has_capacity;
@@ -12,6 +12,7 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, TryLockError};
+use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
 #[path = "fullscreen_pass/d3d11.rs"]
@@ -42,15 +43,15 @@ const _: () = {
 };
 
 pub(super) struct Pass {
-    resources: [ComRef; 9],
-    device: ComRef,
+    resources: [IUnknown; 9],
+    device: IUnknown,
     filter: AtomicU32,
     drawing: Mutex<()>,
 }
 
 impl Pass {
     fn draw(&self, context: Handle, target: Handle, source: Handle, parameters: &Draw) -> i32 {
-        let device = self.device.as_ptr();
+        let device = self.device.as_raw();
         if parameters.mode > COPY_RGBA
             || unsafe { rsf_d3d11_output_is_immediate(context) } == 0
             || [context, target, source]
@@ -123,7 +124,7 @@ unsafe fn create(device: Handle, setup: *const Setup, out: *mut *mut Pass) -> i3
     };
     let pass = crate::allocate_handle(Pass {
         resources,
-        device: unsafe { ComRef::retain(device) },
+        device: unsafe { com_ref::retain(device) },
         filter: AtomicU32::new(POINT),
         drawing: Mutex::new(()),
     });

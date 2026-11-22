@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::{SavedBindings, same_device, texture_desc};
 use crate::d3d11_output_platform::srv_format;
 use crate::graphics_d3d11::{
@@ -23,6 +23,7 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11SamplerState, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
+use windows::core::IUnknown;
 use windows::core::Interface;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
@@ -54,7 +55,7 @@ struct Program {
     shaders: [ID3D11ComputeShader; 2],
     constants: ID3D11Buffer,
     sampler: ID3D11SamplerState,
-    device: ComRef,
+    device: IUnknown,
 }
 
 impl Program {
@@ -65,8 +66,8 @@ impl Program {
         entries: [&CStr; 2],
         mip_linear: bool,
     ) -> Option<Self> {
-        let device = unsafe { ComRef::retain(device) };
-        let raw = device.as_ptr();
+        let device = unsafe { com_ref::retain(device) };
+        let raw = device.as_raw();
         let native = unsafe { ID3D11Device::from_raw_borrowed(&raw) }?;
         let compile = |entry: &CStr| {
             let code =
@@ -85,7 +86,7 @@ impl Program {
     }
 
     fn same_device(&self, child: Handle) -> bool {
-        unsafe { same_device(self.device.as_ptr(), child) }
+        unsafe { same_device(self.device.as_raw(), child) }
     }
 
     fn accepts_context(&self, context: Handle) -> bool {
@@ -102,13 +103,13 @@ impl Program {
         cache: &mut SourceViews<8>,
         texture: Handle,
         desc: &TextureDesc,
-    ) -> Option<ComRef> {
+    ) -> Option<IUnknown> {
         let format = srv_format(DXGI_FORMAT(desc.format as i32)).0 as u32;
         // A batch can touch several cache entries at the same clock tick.
         // Retain each selected view so a later lookup cannot evict it mid-batch.
         unsafe {
             cache.get(
-                self.device.as_ptr(),
+                self.device.as_raw(),
                 texture,
                 format,
                 GetTickCount64(),
@@ -154,7 +155,7 @@ impl Program {
             context,
             shader,
             sources,
-            &[target.view.as_ptr()],
+            &[target.view.as_raw()],
             None,
             [width.div_ceil(GROUP_EDGE), height.div_ceil(GROUP_EDGE)],
             clear_sources,
@@ -184,13 +185,13 @@ struct TargetSpec {
 }
 
 struct Target {
-    view: ComRef,
-    texture: ComRef,
+    view: IUnknown,
+    texture: IUnknown,
 }
 
 impl Target {
     fn new(program: &Program, spec: TargetSpec, view_format: u32) -> Option<Self> {
-        let device = program.device.as_ptr();
+        let device = program.device.as_raw();
         let desc = TextureDesc {
             width: spec.size[0],
             height: spec.size[1],
@@ -202,13 +203,12 @@ impl Target {
             bind_flags: RSF_D3D11_BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS,
             ..Default::default()
         };
-        let texture =
-            unsafe { ComRef::from_owned(rsf_d3d11_output_create_texture(device, &desc)) }?;
-        let raw = texture.as_ptr();
+        let texture = unsafe { com_ref::owned(rsf_d3d11_output_create_texture(device, &desc)) }?;
+        let raw = texture.as_raw();
         let native_device = unsafe { ID3D11Device::from_raw_borrowed(&device) }?;
         let native_texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }?;
         let view = target_view(native_device, native_texture, view_format)?;
-        let view = unsafe { ComRef::from_owned(view.into_raw()) }?;
+        let view = unsafe { com_ref::owned(view.into_raw()) }?;
         Some(Self { view, texture })
     }
 }
@@ -247,7 +247,7 @@ impl Transport {
         exposure: Handle,
         size: Extent,
         highlights: Option<Highlights>,
-    ) -> Option<([Option<ComRef>; 3], TransportConstants)> {
+    ) -> Option<([Option<IUnknown>; 3], TransportConstants)> {
         if !covers(desc, size) {
             return None;
         }
@@ -294,7 +294,7 @@ impl Transport {
         &self,
         context: Handle,
         shader: &ID3D11ComputeShader,
-        views: &[Option<ComRef>; 3],
+        views: &[Option<IUnknown>; 3],
         target: &Target,
         constants: &TransportConstants,
     ) -> Option<()> {
@@ -304,7 +304,7 @@ impl Transport {
         prepare_compute(native);
         self.program.bind(context, constants);
         let sources: [Handle; 3] =
-            std::array::from_fn(|i| views[i].as_ref().map_or(null_mut(), ComRef::as_ptr));
+            std::array::from_fn(|i| views[i].as_ref().map_or(null_mut(), Interface::as_raw));
         self.program
             .dispatch(context, shader, &sources, target, constants.size, false);
         Some(())
@@ -333,7 +333,7 @@ impl Transport {
             Some((spec, Target::new(&self.program, spec, 0)?))
         };
         let (_, target) = replacement.as_ref().or(self.encoded.as_ref())?;
-        let encoded = target.texture.as_ptr();
+        let encoded = target.texture.as_raw();
         if source == encoded {
             return None;
         }
@@ -390,7 +390,7 @@ impl Transport {
             rsf_d3d11_output_copy_region(
                 context,
                 target,
-                scratch.texture.as_ptr(),
+                scratch.texture.as_raw(),
                 0,
                 0,
                 size[0],
@@ -413,7 +413,7 @@ struct FidelityConstants {
 const _: () = assert!(size_of::<FidelityConstants>() == 32);
 
 struct FidelityTarget {
-    source_view: ComRef,
+    source_view: IUnknown,
     target: Target,
 }
 
@@ -429,9 +429,9 @@ impl FidelityTarget {
             0,
         )?;
         let source_view = unsafe {
-            ComRef::from_owned(source_view(
-                program.device.as_ptr(),
-                target.texture.as_ptr(),
+            com_ref::owned(source_view(
+                program.device.as_raw(),
+                target.texture.as_raw(),
                 0,
             ))
         }?;
@@ -536,10 +536,10 @@ impl Fidelity {
             },
         );
         let mut inputs = [
-            scene_view.as_ptr(),
-            output_view.as_ptr(),
+            scene_view.as_raw(),
+            output_view.as_raw(),
             null_mut(),
-            depth_view.as_ptr(),
+            depth_view.as_raw(),
         ];
         for corrected in [
             &targets.corrected[0],
@@ -555,7 +555,7 @@ impl Fidelity {
                 render,
                 true,
             );
-            inputs[2] = targets.residual.source_view.as_ptr();
+            inputs[2] = targets.residual.source_view.as_raw();
             self.program.dispatch(
                 context,
                 &self.program.shaders[1],
@@ -564,13 +564,13 @@ impl Fidelity {
                 size,
                 true,
             );
-            inputs[1] = corrected.source_view.as_ptr();
+            inputs[1] = corrected.source_view.as_raw();
         }
         unsafe {
             rsf_d3d11_output_copy_resource(
                 context,
                 output,
-                targets.corrected[0].target.texture.as_ptr(),
+                targets.corrected[0].target.texture.as_raw(),
             )
         };
         Some(())

@@ -30,7 +30,7 @@ impl VendorUse {
 #[cfg(test)]
 mod tests {
     use super::VendorUse;
-    use crate::com_ref::ComRef;
+    use crate::com_ref;
     use crate::fg_leases::FencePoint;
     use std::ffi::c_void;
     use std::ptr;
@@ -92,7 +92,7 @@ mod tests {
             completion: AtomicU64::new(2),
         };
         let joined = VendorUse::Joined(FencePoint {
-            fence: unsafe { ComRef::retain(ptr::from_mut(&mut native).cast()) },
+            fence: unsafe { com_ref::retain(ptr::from_mut(&mut native).cast()) },
             value: 3,
         });
         assert!(!joined.needs_join(7, true));

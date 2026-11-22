@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::{ComRef, vtable};
+use crate::com_ref::{self, vtable};
 use crate::sys::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_device_ok, rsf_d3d11_output_is_immediate,
 };
-use std::borrow::Borrow;
 use std::ffi::c_void;
-use std::ptr::{self, NonNull};
+use std::ptr;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, D3D11_MIP_LOD_BIAS_MAX, D3D11_MIP_LOD_BIAS_MIN,
     D3D11_SAMPLER_DESC, ID3D11Device, ID3D11DeviceContext, ID3D11SamplerState,
 };
+use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 const SLOT_COUNT: usize = D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT as usize;
@@ -34,14 +34,14 @@ unsafe fn sampler_desc(sampler: *mut c_void) -> D3D11_SAMPLER_DESC {
     desc
 }
 
-unsafe fn clone_sampler(device: *mut c_void, original: *mut c_void, bias: f32) -> Option<ComRef> {
+unsafe fn clone_sampler(device: *mut c_void, original: *mut c_void, bias: f32) -> Option<IUnknown> {
     let mut desc = unsafe { sampler_desc(original) };
     desc.MipLODBias = bias;
     let mut replacement = ptr::null_mut();
     let status = unsafe {
         (vtable::<ID3D11Device>(&device).CreateSamplerState)(device, &desc, &mut replacement)
     };
-    unsafe { ComRef::from_result(status, replacement) }
+    unsafe { com_ref::from_result(status, replacement) }
 }
 
 struct Entry<T> {
@@ -86,10 +86,8 @@ impl<T: Clone> Cache<T> {
         slot_mask: u32,
         bias: f32,
         create: impl Fn(K) -> Option<(T, T)>,
-    ) -> Option<Update<T, K>>
-    where
-        T: Borrow<K>,
-    {
+        key: impl Fn(&T) -> K,
+    ) -> Option<Update<T, K>> {
         let mut update = Update {
             entries: [const { None }; CACHE_CAPACITY],
             next: self.next,
@@ -97,8 +95,8 @@ impl<T: Clone> Cache<T> {
             applied_mask: 0,
         };
         for (slot, (&baseline, current)) in baselines.iter().zip(current).enumerate() {
-            let current = current.as_ref().map(|sampler| *sampler.borrow());
-            let owned = self.owned[slot].as_ref().map(|sampler| *sampler.borrow());
+            let current = current.as_ref().map(&key);
+            let owned = self.owned[slot].as_ref().map(&key);
             if current != baseline && (owned.is_none() || current != owned) {
                 continue;
             }
@@ -115,7 +113,7 @@ impl<T: Clone> Cache<T> {
                 .iter()
                 .zip(&self.entries)
                 .filter_map(|(staged, cached)| staged.as_ref().or(cached.as_ref()))
-                .find(|entry| *entry.original.borrow() == original && entry.bias == bias);
+                .find(|entry| key(&entry.original) == original && entry.bias == bias);
             let replacement = if let Some(entry) = cached {
                 entry.replacement.clone()
             } else {
@@ -152,11 +150,11 @@ impl<T: Clone> Cache<T> {
 struct Owner {
     context: *mut c_void,
     thread: u32,
-    device: ComRef,
+    device: IUnknown,
 }
 
 struct SamplerBias {
-    cache: Cache<ComRef>,
+    cache: Cache<IUnknown>,
     owner: Option<Owner>,
 }
 
@@ -208,42 +206,45 @@ unsafe extern "C" fn rsf_sampler_bias_apply(
     {
         return 0;
     }
-    let Some(device) = (unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) })
-    else {
+    let Some(device) = (unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }) else {
         return 0;
     };
     if state
         .owner
         .as_ref()
-        .is_some_and(|owner| owner.device.0 != device.0)
+        .is_some_and(|owner| owner.device != device)
     {
         return 0;
     }
 
-    let baselines = baselines.map(NonNull::new);
-    for sampler in baselines.iter().flatten() {
-        let owner = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(sampler.as_ptr())) };
-        if owner.is_none_or(|owner| owner.0 != device.0) {
+    let baselines = baselines.map(|sampler| (!sampler.is_null()).then_some(sampler));
+    for &sampler in baselines.iter().flatten() {
+        let owner = unsafe { com_ref::owned(rsf_d3d11_output_child_device(sampler)) };
+        if owner.is_none_or(|owner| owner != device) {
             return 0;
         }
     }
 
     let mut current = [ptr::null_mut(); SLOT_COUNT];
     unsafe { read_slots(context, current.as_mut_ptr()) };
-    let current = current.map(|sampler| NonNull::new(sampler).map(ComRef));
-    let device_ptr = device.0.as_ptr();
-    let Some(update) = state
-        .cache
-        .prepare(&current, &baselines, slot_mask, bias, |original| {
-            let original_ptr = original.as_ptr();
+    let current = current.map(|sampler| unsafe { com_ref::owned(sampler) });
+    let device_ptr = device.as_raw();
+    let Some(update) = state.cache.prepare(
+        &current,
+        &baselines,
+        slot_mask,
+        bias,
+        |original| {
+            let original_ptr = original;
             let adjusted = unsafe { sampler_desc(original_ptr) }.MipLODBias + bias;
             if !(D3D11_MIP_LOD_BIAS_MIN..=D3D11_MIP_LOD_BIAS_MAX).contains(&adjusted) {
                 return None;
             }
             let replacement = unsafe { clone_sampler(device_ptr, original_ptr, adjusted) }?;
-            Some((unsafe { ComRef::retain(original_ptr) }, replacement))
-        })
-    else {
+            Some((unsafe { com_ref::retain(original_ptr) }, replacement))
+        },
+        Interface::as_raw,
+    ) else {
         return 0;
     };
     if unsafe { rsf_d3d11_output_device_ok(device_ptr) } == 0 {
@@ -254,10 +255,10 @@ unsafe extern "C" fn rsf_sampler_bias_apply(
         let selected = match binding {
             Binding::Keep => continue,
             Binding::Restore(baseline) => *baseline,
-            Binding::Replace(replacement) => Some(replacement.0),
+            Binding::Replace(replacement) => Some(replacement.as_raw()),
         };
-        if selected != current.as_ref().map(|sampler| sampler.0) {
-            let selected = selected.map_or(ptr::null_mut(), NonNull::as_ptr);
+        if selected != current.as_ref().map(Interface::as_raw) {
+            let selected = selected.unwrap_or(ptr::null_mut());
             unsafe { write_slot(context, slot as u32, selected) };
         }
     }
@@ -283,24 +284,41 @@ mod tests {
         let mut baselines = [None; SLOT_COUNT];
         baselines[..2].copy_from_slice(&[Some(1), Some(2)]);
         let initial = cache
-            .prepare(&baselines, &baselines, 1, -1.0, |original| {
-                Some((original, 3))
-            })
+            .prepare(
+                &baselines,
+                &baselines,
+                1,
+                -1.0,
+                |original| Some((original, 3)),
+                |&value| value,
+            )
             .unwrap();
         cache.commit(initial);
         let mut current = baselines;
         current[0] = Some(3);
 
-        let failed = cache.prepare(&current, &baselines, 3, -2.0, |original| {
-            (original == 1).then_some((original, 4))
-        });
+        let failed = cache.prepare(
+            &current,
+            &baselines,
+            3,
+            -2.0,
+            |original| (original == 1).then_some((original, 4)),
+            |&value| value,
+        );
         assert!(failed.is_none());
         assert_eq!(cache.owned[0], Some(3));
         assert_eq!(cache.next, 1);
         assert!(cache.entries[1].is_none());
 
         let drain = cache
-            .prepare(&current, &baselines, 0, 0.0, |_| unreachable!())
+            .prepare(
+                &current,
+                &baselines,
+                0,
+                0.0,
+                |_| unreachable!(),
+                |&value| value,
+            )
             .unwrap();
         assert!(matches!(drain.bindings[0], Binding::Restore(Some(1))));
         assert_eq!(drain.applied_mask, 0);

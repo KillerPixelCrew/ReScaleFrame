@@ -3,7 +3,7 @@
 // This module decides admission and
 // publication, provider switching, frame and slot sequencing, accepted Present,
 // fallback, resize and retirement, status and callback order, and latency routing.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_host_abi::{
     RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_DISPATCH_PRESENT1, RSF_D3D11_DISPATCH_RELEASE,
     RSF_D3D11_DISPATCH_RESIZE_BUFFERS, RSF_D3D11_DISPATCH_RESIZE_BUFFERS1,
@@ -35,6 +35,7 @@ use std::sync::atomic::{
     AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering,
 };
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
+use windows::core::{IUnknown, Interface};
 
 #[path = "d3d11_present_device.rs"]
 mod device;
@@ -107,10 +108,10 @@ fn failed(result: i32) -> bool {
     result < 0
 }
 
-fn acquire_resource(create: impl FnOnce(*mut Raw) -> i32) -> Result<ComRef, i32> {
+fn acquire_resource(create: impl FnOnce(*mut Raw) -> i32) -> Result<IUnknown, i32> {
     let mut resource = null_mut();
     let result = create(&mut resource);
-    let owned = unsafe { ComRef::from_owned(resource) };
+    let owned = unsafe { com_ref::owned(resource) };
     if failed(result) {
         Err(result)
     } else {
@@ -488,18 +489,18 @@ impl Timing {
 
 enum ApplicationBuffer {
     Shared(Surface),
-    Render(ComRef),
+    Render(IUnknown),
 }
 
 impl ApplicationBuffer {
-    fn application(&self) -> &ComRef {
+    fn application(&self) -> &IUnknown {
         match self {
             Self::Shared(surface) => &surface.texture11,
             Self::Render(resource) => resource,
         }
     }
 
-    fn copy_source(&self) -> Option<&ComRef> {
+    fn copy_source(&self) -> Option<&IUnknown> {
         match self {
             Self::Shared(surface) => surface.texture12.as_ref(),
             Self::Render(resource) => Some(resource),
@@ -511,8 +512,8 @@ type ApplicationBuffers = [Option<ApplicationBuffer>; MAX_BUFFERS as usize];
 
 pub(crate) struct Physical {
     // Release the chain before its creation queue.
-    chain: ComRef,
-    queue: ComRef,
+    chain: IUnknown,
+    queue: IUnknown,
 }
 
 // The DXGI chain and D3D12 queue can be referenced from the render and window threads.
@@ -523,8 +524,8 @@ unsafe impl Sync for Physical {}
 // One direct allocator and closed list on the graphics device (Streamline's proxy device when a
 // host exists). The list is declared first so it releases before its allocator.
 struct Commands {
-    list: ComRef,
-    allocator: ComRef,
+    list: IUnknown,
+    allocator: IUnknown,
 }
 
 // The slot pairs in slot order, fewer than SLOTS only after a refused initialization.
@@ -566,9 +567,9 @@ impl Drop for EventLease {
 struct PresentationSync {
     // Borrowed for drain. The facade or its host owns this queue.
     graphics_queue: Option<NonNull<c_void>>,
-    interop_queue: Option<ComRef>,
+    interop_queue: Option<IUnknown>,
     completion_event: Option<EventLease>,
-    completion_fence: Option<ComRef>,
+    completion_fence: Option<IUnknown>,
     application_ready: Option<EventLease>,
 }
 
@@ -578,11 +579,11 @@ impl PresentationSync {
     fn initialize(&mut self, p: &Platform, facts: &rsf_d3d11p_facts, ready: bool) -> i32 {
         self.graphics_queue = NonNull::new(facts.graphics.queue);
         if facts.native12 != 0 {
-            self.interop_queue = Some(unsafe { ComRef::retain(facts.direct_queue) });
+            self.interop_queue = Some(unsafe { com_ref::retain(facts.direct_queue) });
         } else {
             let mut queue = null_mut();
             let result = unsafe { (p.create_interop_queue)(facts.graphics.device, &mut queue) };
-            self.interop_queue = unsafe { ComRef::from_owned(queue) };
+            self.interop_queue = unsafe { com_ref::owned(queue) };
             if failed(result) {
                 return E_FAIL;
             }
@@ -593,7 +594,7 @@ impl PresentationSync {
         }
         let mut fence = null_mut();
         let result = unsafe { (p.create_completion_fence)(facts.graphics.device, &mut fence) };
-        self.completion_fence = unsafe { ComRef::from_owned(fence) };
+        self.completion_fence = unsafe { com_ref::owned(fence) };
         if failed(result) {
             return E_FAIL;
         }
@@ -609,14 +610,14 @@ impl PresentationSync {
     fn queue(&self) -> Raw {
         self.interop_queue
             .as_ref()
-            .map_or(null_mut(), ComRef::as_ptr)
+            .map_or(null_mut(), Interface::as_raw)
     }
 
     fn completion(&self) -> (Raw, Raw) {
         (
             self.completion_fence
                 .as_ref()
-                .map_or(null_mut(), ComRef::as_ptr),
+                .map_or(null_mut(), Interface::as_raw),
             self.completion_event
                 .as_ref()
                 .map_or(null_mut(), EventLease::as_ptr),
@@ -632,7 +633,7 @@ impl PresentationSync {
 
 #[derive(Default)]
 struct ProviderRetirement {
-    fence: Option<ComRef>,
+    fence: Option<IUnknown>,
     serial: u64,
 }
 
@@ -858,14 +859,14 @@ impl Owner {
         lock(&self.physical).clone()
     }
 
-    fn publish_physical(&self, chain: Result<ComRef, i32>, queue: Raw) -> i32 {
+    fn publish_physical(&self, chain: Result<IUnknown, i32>, queue: Raw) -> i32 {
         let Ok(chain) = chain else { return INIT_FAILED };
         if queue.is_null() {
             return INIT_FAILED;
         }
         let physical = Arc::new(Physical {
             chain,
-            queue: unsafe { ComRef::retain(queue) },
+            queue: unsafe { com_ref::retain(queue) },
         });
         let mut current = lock(&self.physical);
         if current.is_some() {
@@ -1097,7 +1098,7 @@ impl Owner {
         self.physical_creation
             .store(PhysicalCreation::Idle as u8, Ordering::Release);
         if self.facts().windowed == 0
-            && failed(unsafe { (p.set_fullscreen)(physical.chain.as_ptr(), 1, null_mut()) })
+            && failed(unsafe { (p.set_fullscreen)(physical.chain.as_raw(), 1, null_mut()) })
         {
             return Err(E_FAIL);
         }
@@ -1161,7 +1162,7 @@ impl Owner {
 
     fn buffers_referenced(&self) -> bool {
         lock(&self.buffers).iter().flatten().any(|buffer| unsafe {
-            (self.p().buffer_referenced)(buffer.application().as_ptr()) != 0
+            (self.p().buffer_referenced)(buffer.application().as_raw()) != 0
         })
     }
 
@@ -1174,7 +1175,7 @@ impl Owner {
                 .and_then(Option::as_ref)
                 .map(|buffer| buffer.application().clone());
             return buffer.map_or(DXGI_ERROR_INVALID_CALL, |buffer| unsafe {
-                (p.query_buffer_interface)(buffer.as_ptr(), iid, out)
+                (p.query_buffer_interface)(buffer.as_raw(), iid, out)
             });
         }
         let physical = match self.ensure_physical() {
@@ -1187,16 +1188,16 @@ impl Owner {
                 return error;
             }
         };
-        unsafe { (p.get_physical_buffer)(physical.chain.as_ptr(), index, iid, out) }
+        unsafe { (p.get_physical_buffer)(physical.chain.as_raw(), index, iid, out) }
     }
 
-    fn acquire_backbuffer(&self, physical: &Physical) -> Result<ComRef, i32> {
+    fn acquire_backbuffer(&self, physical: &Physical) -> Result<IUnknown, i32> {
         acquire_resource(|out| unsafe {
-            (self.p().acquire_backbuffer)(physical.chain.as_ptr(), out)
+            (self.p().acquire_backbuffer)(physical.chain.as_raw(), out)
         })
     }
 
-    fn copy_source(&self, index: u32) -> Option<ComRef> {
+    fn copy_source(&self, index: u32) -> Option<IUnknown> {
         lock(&self.buffers)
             .get(index as usize)
             .and_then(Option::as_ref)
@@ -1213,8 +1214,8 @@ impl Owner {
         while pairs.len() < SLOTS {
             let (mut allocator, mut list) = (null_mut(), null_mut());
             let created = unsafe { (p.create_slot)(self.b(), &mut allocator, &mut list) };
-            let list = unsafe { ComRef::from_owned(list) };
-            let allocator = unsafe { ComRef::from_owned(allocator) };
+            let list = unsafe { com_ref::owned(list) };
+            let allocator = unsafe { com_ref::owned(allocator) };
             match (list, allocator) {
                 (Some(list), Some(allocator)) if !failed(created) => {
                     pairs.push(Commands { list, allocator });
@@ -1419,7 +1420,7 @@ impl Owner {
         }
         if request.windowed == 0
             && let Some(physical) = self.physical()
-            && failed(unsafe { (p.set_fullscreen)(physical.chain.as_ptr(), 1, null_mut()) })
+            && failed(unsafe { (p.set_fullscreen)(physical.chain.as_raw(), 1, null_mut()) })
         {
             return E_FAIL;
         }
@@ -1557,7 +1558,7 @@ impl Owner {
         let mut fullscreen = lock(&self.switch_fullscreen).unwrap_or(0);
         let old_chain = outgoing
             .as_ref()
-            .map_or(null_mut(), |pair| pair.chain.as_ptr());
+            .map_or(null_mut(), |pair| pair.chain.as_raw());
         if !old_chain.is_null() {
             let _ = unsafe { (p.get_fullscreen)(old_chain, &mut fullscreen) };
             if fullscreen != 0 {
@@ -1618,7 +1619,7 @@ impl Owner {
         if fullscreen != 0
             && let Some(physical) = &physical
         {
-            let _ = unsafe { (p.set_fullscreen)(physical.chain.as_ptr(), 1, null_mut()) };
+            let _ = unsafe { (p.set_fullscreen)(physical.chain.as_raw(), 1, null_mut()) };
         }
         ACTIVE_BACKEND.store(effective, Ordering::SeqCst);
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
@@ -1640,7 +1641,7 @@ impl Owner {
             hex(b),
             hex(physical
                 .as_ref()
-                .map_or(null_mut(), |pair| pair.chain.as_ptr())),
+                .map_or(null_mut(), |pair| pair.chain.as_raw())),
             hex(self.provider())
         ));
     }
@@ -1747,7 +1748,7 @@ impl Owner {
         result
     }
 
-    fn prepare_callback(&self, context: Raw, command: Raw, backbuffer: &ComRef, sync: u32) {
+    fn prepare_callback(&self, context: Raw, command: Raw, backbuffer: &IUnknown, sync: u32) {
         let setup = settings();
         if let Some(prepare) = setup.prepare {
             unsafe {
@@ -1756,7 +1757,7 @@ impl Owner {
                     self.b(),
                     context,
                     command,
-                    backbuffer.as_ptr(),
+                    backbuffer.as_raw(),
                     self.host().cast::<rsf_streamline_host>(),
                     self.provider(),
                     sync,
@@ -1777,7 +1778,7 @@ impl Owner {
         if flags & DXGI_PRESENT_TEST != 0 {
             return self.ensure_physical().map_or_else(
                 |error| error,
-                |physical| unsafe { (p.physical_present)(physical.chain.as_ptr(), sync, flags) },
+                |physical| unsafe { (p.physical_present)(physical.chain.as_raw(), sync, flags) },
             );
         }
         // An incomplete provider teardown has no physical chain to present on.
@@ -1793,8 +1794,8 @@ impl Owner {
         let Some(commands) = self.command_slots() else {
             return E_UNEXPECTED;
         };
-        let chain = physical.chain.as_ptr();
-        let queue = physical.queue.as_ptr();
+        let chain = physical.chain.as_raw();
+        let queue = physical.queue.as_raw();
         // Legacy discard chains cannot request the flip-model tearing creation flag. Translate
         // VSync Off to the supported windowed immediate-present contract.
         let mut physical_flags = flags & !DXGI_PRESENT_ALLOW_TEARING;
@@ -1838,7 +1839,7 @@ impl Owner {
             .store((index + 1) % SLOTS as u32, Ordering::Relaxed);
         let slot = &self.slot_fences[index as usize];
         let pair = &commands.0[index as usize];
-        let (allocator, list) = (pair.allocator.as_ptr(), pair.list.as_ptr());
+        let (allocator, list) = (pair.allocator.as_raw(), pair.list.as_raw());
         // The facade pins these borrowed references through Present, just like the slot set.
         let (source_queue, (completion_fence, completion_event)) = {
             let sync = lock(&self.sync);
@@ -1886,7 +1887,7 @@ impl Owner {
                         } else {
                             if let Some(source) = &source {
                                 unsafe {
-                                    (p.record_copy)(b, list, backbuffer.as_ptr(), source.as_ptr())
+                                    (p.record_copy)(b, list, backbuffer.as_raw(), source.as_raw())
                                 };
                             }
                             let command = unsafe { (p.command_list)(b, queue, list) };
@@ -1997,7 +1998,7 @@ impl Owner {
                 && let Some(source) = self.copy_source(0)
             {
                 // The application writes slot zero. Generated frames use the physical backbuffer.
-                unsafe { (p.record_copy)(b, list, backbuffer.as_ptr(), source.as_ptr()) };
+                unsafe { (p.record_copy)(b, list, backbuffer.as_raw(), source.as_raw()) };
                 let command = unsafe { (p.command_list)(b, queue, list) };
                 if !command.is_null() {
                     self.prepare_callback(unsafe { (p.context11)(b) }, command, &backbuffer, sync);
@@ -2121,7 +2122,7 @@ impl Owner {
         if failed(self.drain()) {
             return E_FAIL;
         }
-        unsafe { (self.p().set_fullscreen)(physical.chain.as_ptr(), fullscreen, target) }
+        unsafe { (self.p().set_fullscreen)(physical.chain.as_raw(), fullscreen, target) }
     }
 
     fn resize(
@@ -2201,7 +2202,7 @@ impl Owner {
         let result = unsafe {
             (p.resize_physical)(
                 b,
-                physical.chain.as_ptr(),
+                physical.chain.as_raw(),
                 physical_count,
                 width,
                 height,
@@ -2248,13 +2249,13 @@ impl Owner {
         if state.fence.is_none() {
             let mut acquired = null_mut();
             let result = unsafe { (p.create_retirement_fence)(b, &mut acquired) };
-            let acquired = unsafe { ComRef::from_owned(acquired) };
+            let acquired = unsafe { com_ref::owned(acquired) };
             if failed(result) || acquired.is_none() {
                 return INIT_FAILED;
             }
             state.fence = acquired;
         }
-        let retired = state.fence.as_ref().map_or(null_mut(), ComRef::as_ptr);
+        let retired = state.fence.as_ref().map_or(null_mut(), Interface::as_raw);
         let Some(next) = state
             .serial
             .checked_add(1)
@@ -2274,7 +2275,7 @@ impl Owner {
         let result = unsafe {
             (p.retire_submit)(
                 b,
-                physical.queue.as_ptr(),
+                physical.queue.as_raw(),
                 retired,
                 vendor.fence,
                 vendor.value,
@@ -2662,7 +2663,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_acquire_physical(
     };
     match pair {
         Ok(pair) => {
-            *physical = pair.chain.as_ptr();
+            *physical = pair.chain.as_raw();
             *lease = Arc::into_raw(pair);
             S_OK
         }
@@ -2789,7 +2790,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_queue(platform: *const Platform)
     }
     active()
         .and_then(Owner::physical)
-        .map_or(null_mut(), |physical| physical.queue.as_ptr())
+        .map_or(null_mut(), |physical| physical.queue.as_raw())
 }
 
 #[unsafe(no_mangle)]
@@ -2824,7 +2825,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_command_list(
     let physical = owner.physical();
     let queue = physical
         .as_ref()
-        .map_or(null_mut(), |pair| pair.queue.as_ptr());
+        .map_or(null_mut(), |pair| pair.queue.as_raw());
     // Pending creation used the native-list path when a host was already available.
     unsafe { (p.command_list)(owner.b(), queue, list) }
 }
@@ -2992,7 +2993,7 @@ unsafe extern "C" fn rsf_core_d3d11p_dispatch_owned(
         unsafe { result.write(DXGI_ERROR_INVALID_CALL) };
     } else {
         // The caller holds a live COM reference. No host lock spans the owned call.
-        let _lease = unsafe { ComRef::retain(receiver) };
+        let _lease = unsafe { com_ref::retain(receiver) };
         unsafe { result.write(invoke_owned(request)) };
     }
 }

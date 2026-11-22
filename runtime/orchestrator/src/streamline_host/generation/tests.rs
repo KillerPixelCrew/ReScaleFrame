@@ -214,7 +214,7 @@ fn failed_generation_configure_publishes_reflex_and_retry_reconciles_the_host() 
     let chain = com::fake();
     let session = Session {
         host: NonNull::from(host.as_mut()),
-        chain: unsafe { ComRef::from_owned(com::raw(&chain)) },
+        chain: unsafe { com_ref::owned(com::raw(&chain)) },
         copied: Copied::new(),
         ui_mode: UI_NONE,
     };

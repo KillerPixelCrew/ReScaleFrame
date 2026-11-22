@@ -4,7 +4,7 @@ use crate::sys::{
     rsf_observer_present_event,
 };
 use crate::{
-    com_ref::ComRef,
+    com_ref,
     native_scene::{rsf_native_scene_classify_present, rsf_native_scene_for_window},
 };
 use core::{
@@ -12,6 +12,7 @@ use core::{
     ffi::c_void,
 };
 use rsf_game_sys::{RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
+use windows::core::Interface;
 use windows_sys::Win32::{
     Foundation::S_OK,
     System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
@@ -123,9 +124,9 @@ pub(super) unsafe extern "C" fn rsf_native_window_scope(
 unsafe fn match_window(swapchain: *mut c_void) -> Option<rsf_game_render_pass> {
     // The active scope leases its swapchain. Release the TLS borrow before calling COM.
     let current = SCOPES.with_borrow(|scopes| scopes.current().copied())?;
-    let observed = unsafe { ComRef::identity(swapchain) }?;
-    let owned = unsafe { ComRef::identity(current.swapchain) }?;
-    (observed.as_ptr() == owned.as_ptr()).then_some(current)
+    let observed = unsafe { com_ref::identity(swapchain) }?;
+    let owned = unsafe { com_ref::identity(current.swapchain) }?;
+    (observed.as_raw() == owned.as_raw()).then_some(current)
 }
 
 #[unsafe(no_mangle)]

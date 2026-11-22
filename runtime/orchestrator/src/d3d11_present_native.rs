@@ -4,7 +4,7 @@ use super::{
     DXGI_ERROR_UNSUPPORTED, E_FAIL, S_OK, device::*, facade::*, factory::*, gpu::*, log, settings,
 };
 use crate::allocate_handle;
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_present_abi::*;
 use crate::shared_surface::{
     Fence, rsf_shared_fence_create, rsf_shared_fence_d3d11, rsf_shared_fence_d3d12,
@@ -37,12 +37,12 @@ unsafe extern "C" {
 
 #[derive(Default)]
 struct BridgeState {
-    direct_queue: Option<ComRef>,
-    direct_device: Option<ComRef>,
-    parent: Option<ComRef>,
-    adapter: Option<ComRef>,
-    context: Option<ComRef>,
-    device: Option<ComRef>,
+    direct_queue: Option<IUnknown>,
+    direct_device: Option<IUnknown>,
+    parent: Option<IUnknown>,
+    adapter: Option<IUnknown>,
+    context: Option<IUnknown>,
+    device: Option<IUnknown>,
     tearing: u32,
     host: Raw,
     graphics: rsf_streamline_graphics,
@@ -59,8 +59,8 @@ struct FacadeState {
     resources: UnsafeCell<BridgeState>,
 }
 
-fn raw(object: &Option<ComRef>) -> Raw {
-    object.as_ref().map_or(null_mut(), ComRef::as_ptr)
+fn raw(object: &Option<IUnknown>) -> Raw {
+    object.as_ref().map_or(null_mut(), Interface::as_raw)
 }
 
 unsafe fn state<'a>(facade: Raw) -> &'a BridgeState {
@@ -152,17 +152,17 @@ unsafe extern "C" fn rsf_d3d11p_native_client_size(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11p_native_canonical_identity(receiver: Raw) -> Raw {
-    unsafe { ComRef::identity(receiver) }.map_or(null_mut(), |identity| identity.as_ptr())
+    unsafe { com_ref::identity(receiver) }.map_or(null_mut(), |identity| identity.as_raw())
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11p_native_add_ref(object: Raw) {
-    unsafe { ComRef::retain(object) }.into_raw();
+    unsafe { com_ref::retain(object) }.into_raw();
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11p_native_release(object: Raw) {
-    drop(unsafe { ComRef::from_owned(object) });
+    drop(unsafe { com_ref::owned(object) });
 }
 
 #[unsafe(no_mangle)]
@@ -216,11 +216,11 @@ unsafe extern "C" fn rsf_d3d11p_native_init_source(
     let s = unsafe { state_mut(facade) };
     let capsule = unsafe { capsule(rsf_d3d11p_facade_state(facade)) };
     *capsule.description.write().unwrap() = unsafe { *desc.cast() };
-    s.parent = Some(unsafe { ComRef::retain(factory) });
+    s.parent = Some(unsafe { com_ref::retain(factory) });
     s.graphics.struct_size = size_of::<rsf_streamline_graphics>() as u32;
     let queue = unsafe { IUnknown::from_raw_borrowed(&source) }
         .and_then(|source| source.cast::<ID3D12CommandQueue>().ok());
-    s.direct_queue = queue.and_then(|queue| unsafe { ComRef::from_owned(queue.into_raw()) });
+    s.direct_queue = queue.and_then(|queue| unsafe { com_ref::owned(queue.into_raw()) });
     s.native12 = u32::from(s.direct_queue.is_some());
     s.native12
 }
@@ -231,7 +231,7 @@ unsafe extern "C" fn rsf_d3d11p_native_queue_device(facade: Raw) -> i32 {
     s.direct_device = None;
     let mut device = null_mut();
     let result = unsafe { rsf_d3d11p_device_queue_device(raw(&s.direct_queue), &mut device) };
-    s.direct_device = unsafe { ComRef::from_owned(device) };
+    s.direct_device = unsafe { com_ref::owned(device) };
     result
 }
 
@@ -275,7 +275,7 @@ unsafe extern "C" fn rsf_d3d11p_native_adopt_host(
     if unsafe { rsf_d3d11p_device_native_adapter(raw(&s.direct_device), &mut adapter) } < 0 {
         return 0;
     }
-    let adapter = unsafe { ComRef::from_owned(adapter) };
+    let adapter = unsafe { com_ref::owned(adapter) };
     let setup = host_setup(raw(&adapter));
     let status = if identity != 0 {
         unsafe {
@@ -302,9 +302,9 @@ unsafe extern "C" fn rsf_d3d11p_native_d3d11_device(facade: Raw, source: Raw) ->
     let [mut device, mut context, mut adapter] = [null_mut(); 3];
     let result =
         unsafe { rsf_d3d11p_device_immediate(source, &mut device, &mut context, &mut adapter) };
-    s.device = unsafe { ComRef::from_owned(device) };
-    s.context = unsafe { ComRef::from_owned(context) };
-    s.adapter = unsafe { ComRef::from_owned(adapter) };
+    s.device = unsafe { com_ref::owned(device) };
+    s.context = unsafe { com_ref::owned(context) };
+    s.adapter = unsafe { com_ref::owned(adapter) };
     result
 }
 
@@ -337,14 +337,14 @@ unsafe extern "C" fn rsf_d3d11p_native_resolve_graphics(facade: Raw) -> i32 {
         if unsafe { rsf_d3d11p_device_create12(raw(&adapter), &mut device) } < 0 {
             return DXGI_ERROR_UNSUPPORTED;
         }
-        s.direct_device = unsafe { ComRef::from_owned(device) };
+        s.direct_device = unsafe { com_ref::owned(device) };
     }
     if s.direct_queue.is_none() {
         let mut queue = null_mut();
         if unsafe { rsf_d3d11p_gpu_queue(raw(&s.direct_device), &mut queue) } < 0 {
             return E_FAIL;
         }
-        s.direct_queue = unsafe { ComRef::from_owned(queue) };
+        s.direct_queue = unsafe { com_ref::owned(queue) };
     }
     s.graphics.device = raw(&s.direct_device);
     s.graphics.native_device = s.graphics.device;
@@ -678,7 +678,7 @@ unsafe extern "C" fn rsf_d3d11p_native_source_queue(facade: Raw, mut queue: Raw)
         queue = unsafe { rsf_d3d11p_unwrap_guarded(s.host, queue) };
     }
     if !queue.is_null() {
-        unsafe { ComRef::retain(queue) }.into_raw();
+        unsafe { com_ref::retain(queue) }.into_raw();
     }
     queue
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Constants, Handle, RESOURCE_FAILED, SHADER_FAILED, Setup};
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{
     constant_buffer, depth_state, pixel_shader, rasterizer, rsf_call_native_log,
@@ -11,6 +11,7 @@ use rsf_shader_compiler::Request;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::*;
+use windows::core::IUnknown;
 use windows::core::Interface;
 
 const SHADER: &[u8] = include_bytes!("../../../graphics/shaders/fullscreen_pass.hlsl");
@@ -52,7 +53,7 @@ fn blend(device: &ID3D11Device, premultiplied: bool) -> Option<ID3D11BlendState>
     blend
 }
 
-pub(super) unsafe fn make(device: Handle, setup: &Setup) -> Result<[ComRef; 9], i32> {
+pub(super) unsafe fn make(device: Handle, setup: &Setup) -> Result<[IUnknown; 9], i32> {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
     let compile = |entry, target| {
         shader_with_log(
@@ -109,7 +110,7 @@ pub(super) unsafe fn make(device: Handle, setup: &Setup) -> Result<[ComRef; 9], 
         let raster = rasterizer(device)?;
         let constants = constant_buffer(device, size_of::<Constants>() as u32, true)?;
         unsafe {
-            ComRef::adopt_all([
+            com_ref::adopt_all([
                 vs.into_raw(),
                 ps.into_raw(),
                 point.into_raw(),
@@ -165,7 +166,7 @@ pub(super) unsafe fn draw(
     raw: Handle,
     target: Handle,
     source: Handle,
-    resources: &[ComRef; 9],
+    resources: &[IUnknown; 9],
     viewport: [u32; 2],
     linear: bool,
     blend: bool,
@@ -182,7 +183,7 @@ pub(super) unsafe fn draw(
         depth,
         raster,
         buffer,
-    ] = resources.each_ref().map(ComRef::as_ptr);
+    ] = resources.each_ref().map(Interface::as_raw);
     let cb = unsafe { ID3D11Buffer::from_raw_borrowed(&buffer) }?;
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     unsafe {

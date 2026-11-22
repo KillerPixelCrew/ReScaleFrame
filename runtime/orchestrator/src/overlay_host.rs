@@ -6,7 +6,7 @@
 // startup hint, visibility, input and texture sequencing, admits draws and targets, handles
 // failures and keeps frame time. The native functions only make the
 // loader, COM, input, renderer and Win32 calls.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::overlay_panel::{LoadError, PanelEntries, elapsed_seconds};
 use crate::sync::lock;
@@ -17,6 +17,7 @@ use std::fmt::Display;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
+use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
 
@@ -169,8 +170,8 @@ impl Display for Pointer {
     }
 }
 
-fn pointer(value: Option<&ComRef>) -> Pointer {
-    Pointer(value.map_or(ptr::null(), |value| value.as_ptr()))
+fn pointer(value: Option<&IUnknown>) -> Pointer {
+    Pointer(value.map_or(ptr::null(), |value| value.as_raw()))
 }
 
 struct Hr(i32);
@@ -214,7 +215,7 @@ impl Drop for SavedTargets<'_> {
     fn drop(&mut self) {
         unsafe { (self.platform.restore_targets)(self.context, &self.targets) };
         for saved in self.targets.views.into_iter().chain([self.targets.depth]) {
-            drop(unsafe { ComRef::from_owned(saved) });
+            drop(unsafe { com_ref::owned(saved) });
         }
     }
 }
@@ -223,7 +224,7 @@ struct Host {
     api: Option<PanelEntries>,
     panel: *mut rsf_overlay,
     renderer: Handle,
-    device: Option<ComRef>,
+    device: Option<IUnknown>,
     started: bool,
     /* Set when a start or frame failed in a way that will fail again every frame. The panel is
     closed and left closed rather than reporting the same line sixty times a second. A
@@ -284,7 +285,7 @@ impl Host {
     fn build(
         &mut self,
         p: &Platform,
-        device: ComRef,
+        device: IUnknown,
         window: impl FnOnce() -> Handle,
         refusals: Refusals,
     ) -> i32 {
@@ -301,7 +302,7 @@ impl Host {
         let mut renderer = null_mut();
         let built = unsafe {
             (p.renderer_create)(
-                device.as_ptr(),
+                device.as_raw(),
                 Some(log_from_module),
                 null_mut(),
                 &mut renderer,
@@ -355,7 +356,7 @@ impl Host {
         }
         let mut raw = null_mut();
         let got = unsafe { (p.chain_device)(chain, &mut raw) };
-        let device = unsafe { ComRef::from_owned(raw) };
+        let device = unsafe { com_ref::owned(raw) };
         let Some(device) = device.filter(|_| got >= 0) else {
             say(format_args!(
                 "overlay: presenting swap chain has no D3D11 device, hr {}",
@@ -366,7 +367,7 @@ impl Host {
         say(format_args!(
             "overlay: swap chain {} selects device {}",
             Pointer(chain),
-            Pointer(device.as_ptr())
+            Pointer(device.as_raw())
         ));
         let window = || unsafe { (p.chain_window)(chain) };
         if self.build(p, device, window, Refusals::CHAIN) == 0 {
@@ -394,7 +395,7 @@ impl Host {
             return 0;
         }
         set_logger(log, user);
-        let device = unsafe { ComRef::retain(device) };
+        let device = unsafe { com_ref::retain(device) };
         if self.build(p, device, || window, Refusals::DEVICE) == 0 {
             // The wrapped caller owns retry admission for a refused device start.
             self.failed = false;
@@ -616,10 +617,10 @@ impl Host {
         }
         let mut raw = null_mut();
         let got = unsafe { (p.chain_device)(chain, &mut raw) };
-        let chain_device = unsafe { ComRef::from_owned(raw) };
-        let same = |first: Option<&ComRef>, second: Option<&ComRef>| match (first, second) {
+        let chain_device = unsafe { com_ref::owned(raw) };
+        let same = |first: Option<&IUnknown>, second: Option<&IUnknown>| match (first, second) {
             (Some(first), Some(second)) => {
-                (unsafe { (p.same_object)(first.as_ptr(), second.as_ptr()) }) != 0
+                (unsafe { (p.same_object)(first.as_raw(), second.as_raw()) }) != 0
             }
             _ => false,
         };
@@ -639,13 +640,13 @@ impl Host {
         }
         let chain_device = chain_device.expect("matched device");
         let Some(context) =
-            (unsafe { ComRef::from_owned((p.immediate_context)(chain_device.as_ptr())) })
+            (unsafe { com_ref::owned((p.immediate_context)(chain_device.as_raw())) })
         else {
             return 0;
         };
         let mut raw = null_mut();
         let got = unsafe { (p.chain_buffer)(chain, &mut raw) };
-        let buffer = unsafe { ComRef::from_owned(raw) };
+        let buffer = unsafe { com_ref::owned(raw) };
         let Some(buffer) = buffer.filter(|_| got >= 0) else {
             if trace {
                 say(format_args!("overlay: GetBuffer failed, hr {}", Hr(got)));
@@ -653,18 +654,18 @@ impl Host {
             }
             return 0;
         };
-        let owner = unsafe { ComRef::from_owned((p.texture_device)(buffer.as_ptr())) };
+        let owner = unsafe { com_ref::owned((p.texture_device)(buffer.as_raw())) };
         if !same(Some(&chain_device), owner.as_ref()) {
             say(format_args!(
                 "overlay: back buffer {} belongs to device {}, chain device {}. Closing panel",
-                Pointer(buffer.as_ptr()),
+                Pointer(buffer.as_raw()),
                 pointer(owner.as_ref()),
-                Pointer(chain_device.as_ptr())
+                Pointer(chain_device.as_raw())
             ));
             return self.close_after_failure(p);
         }
         let mut desc = TextureDesc::default();
-        unsafe { (p.texture_desc)(buffer.as_ptr(), &mut desc) };
+        unsafe { (p.texture_desc)(buffer.as_raw(), &mut desc) };
         if desc.width == 0 || desc.height == 0 {
             return 0;
         }
@@ -672,9 +673,9 @@ impl Host {
             say(format_args!(
                 "overlay view: chain {}, device {}, context {}, buffer {}, owner {}, {}x{} format {} bind 0x{:x}. Creating view",
                 Pointer(chain),
-                Pointer(chain_device.as_ptr()),
-                Pointer(context.as_ptr()),
-                Pointer(buffer.as_ptr()),
+                Pointer(chain_device.as_raw()),
+                Pointer(context.as_raw()),
+                Pointer(buffer.as_raw()),
                 pointer(owner.as_ref()),
                 desc.width,
                 desc.height,
@@ -683,8 +684,8 @@ impl Host {
             ));
         }
         let mut raw = null_mut();
-        let made = unsafe { (p.create_view)(chain_device.as_ptr(), buffer.as_ptr(), &mut raw) };
-        let view = unsafe { ComRef::from_owned(raw) };
+        let made = unsafe { (p.create_view)(chain_device.as_raw(), buffer.as_raw(), &mut raw) };
+        let view = unsafe { com_ref::owned(raw) };
         if trace {
             say(format_args!(
                 "overlay view: CreateRenderTargetView returned hr {}, view {}",
@@ -721,7 +722,7 @@ impl Host {
                 data.vertex_count, data.index_count, data.call_count
             ));
         }
-        let drawn = self.paint(p, &api, context.as_ptr(), view.as_ptr(), dimensions, &data);
+        let drawn = self.paint(p, &api, context.as_raw(), view.as_raw(), dimensions, &data);
         if trace {
             say(format_args!(
                 "overlay frame: drawn into the back buffer, result {drawn}"
@@ -768,7 +769,7 @@ impl Host {
     fn owns_device(&self, device: Handle) -> bool {
         self.device
             .as_ref()
-            .is_some_and(|current| current.as_ptr() == device)
+            .is_some_and(|current| current.as_raw() == device)
     }
 
     fn stop_device(&mut self, p: &Platform, device: Handle) {

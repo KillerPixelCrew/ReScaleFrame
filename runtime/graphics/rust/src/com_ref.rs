@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
-use std::borrow::Borrow;
 use std::ffi::c_void;
-use std::ptr::{NonNull, null_mut};
-use windows::core::{HRESULT, IUnknown, IUnknown_Vtbl, Interface};
+use windows::core::{HRESULT, IUnknown, Interface};
 
 /// Borrow the generated vtable for a live interface of type `I`.
 ///
@@ -15,110 +13,68 @@ pub unsafe fn vtable<'a, I: Interface + 'a>(object: &'a *mut c_void) -> &'a I::V
         .vtable()
 }
 
-// Owns one reference to a live COM interface. Returned COM getters transfer
-// a retained reference to this type without incrementing it again.
-// Transparent, so Option<ComRef> is a nullable interface pointer in C structures.
-#[repr(transparent)]
-pub struct ComRef(pub NonNull<c_void>);
+// COM references are windows-crate interfaces: `IUnknown` owns one reference, clones with AddRef
+// and releases on drop, reading only those vtable slots, so test doubles need no QueryInterface.
+// It is a transparent non-null pointer, so `Option<IUnknown>` is a nullable pointer in C records.
+// These take raw pointers that C callers and the Windows bindings hand over.
 
-impl ComRef {
-    /// # Safety
-    ///
-    /// `object` is null or a live COM interface whose reference the caller transfers.
-    pub unsafe fn from_owned(object: *mut c_void) -> Option<Self> {
-        NonNull::new(object).map(Self)
-    }
-
-    /// # Safety
-    ///
-    /// `object` is null or a live COM interface.
-    pub unsafe fn identity(object: *mut c_void) -> Option<Self> {
-        let object = unsafe { IUnknown::from_raw_borrowed(&object) }?;
-        let mut identity = null_mut();
-        let result = unsafe { object.query(&IUnknown::IID, &mut identity) };
-        unsafe { Self::from_result(result, identity) }
-    }
-
-    /// Every non-null slot transfers one reference, including partial results.
-    ///
-    /// # Safety
-    ///
-    /// Each slot is null or a live COM interface whose reference the caller transfers.
-    pub unsafe fn adopt_all<const N: usize>(objects: [*mut c_void; N]) -> Option<[Self; N]> {
-        let resources = objects.map(|object| unsafe { Self::from_owned(object) });
-        if resources.iter().any(Option::is_none) {
-            return None;
-        }
-        Some(resources.map(Option::unwrap))
-    }
-
-    /// An output reference belongs to the caller even if the COM method reports failure.
-    ///
-    /// # Safety
-    ///
-    /// `object` is null or a live COM interface whose reference the caller transfers.
-    pub unsafe fn from_result(status: HRESULT, object: *mut c_void) -> Option<Self> {
-        let owned = unsafe { Self::from_owned(object) };
-        if status.is_ok() { owned } else { None }
-    }
-
-    pub fn as_ptr(&self) -> *mut c_void {
-        self.0.as_ptr()
-    }
-
-    pub fn into_raw(self) -> *mut c_void {
-        let raw = self.as_ptr();
-        std::mem::forget(self);
-        raw
-    }
-
-    unsafe fn unknown_vtable(raw: *mut c_void) -> *const IUnknown_Vtbl {
-        unsafe { *raw.cast::<*const IUnknown_Vtbl>() }
-    }
-
-    /// # Safety
-    ///
-    /// `object` must be a live COM interface; the result holds one more reference.
-    pub unsafe fn retain(object: *mut c_void) -> Self {
-        let object = NonNull::new(object).expect("live COM interface");
-        let raw = object.as_ptr();
-        // Read only the invoked slot. Test doubles need not implement QueryInterface.
-        unsafe { ((*Self::unknown_vtable(raw)).AddRef)(raw) };
-        Self(object)
-    }
+/// # Safety
+///
+/// `object` is null or a live COM interface whose reference the caller transfers.
+pub unsafe fn owned(object: *mut c_void) -> Option<IUnknown> {
+    (!object.is_null()).then(|| unsafe { IUnknown::from_raw(object) })
 }
 
-impl Clone for ComRef {
-    fn clone(&self) -> Self {
-        unsafe { Self::retain(self.0.as_ptr()) }
-    }
+/// # Safety
+///
+/// `object` must be a live COM interface; the result holds one more reference.
+pub unsafe fn retain(object: *mut c_void) -> IUnknown {
+    unsafe { IUnknown::from_raw_borrowed(&object) }
+        .expect("live COM interface")
+        .clone()
 }
 
-impl Drop for ComRef {
-    fn drop(&mut self) {
-        let raw = self.as_ptr();
-        unsafe { ((*Self::unknown_vtable(raw)).Release)(raw) };
-    }
+/// # Safety
+///
+/// `object` is null or a live COM interface.
+pub unsafe fn identity(object: *mut c_void) -> Option<IUnknown> {
+    unsafe { IUnknown::from_raw_borrowed(&object) }?.cast().ok()
 }
 
-impl Borrow<NonNull<c_void>> for ComRef {
-    fn borrow(&self) -> &NonNull<c_void> {
-        &self.0
+/// Every non-null slot transfers one reference, including partial results.
+///
+/// # Safety
+///
+/// Each slot is null or a live COM interface whose reference the caller transfers.
+pub unsafe fn adopt_all<const N: usize>(objects: [*mut c_void; N]) -> Option<[IUnknown; N]> {
+    let resources = objects.map(|object| unsafe { owned(object) });
+    if resources.iter().any(Option::is_none) {
+        return None;
     }
+    Some(resources.map(Option::unwrap))
 }
 
+/// An output reference belongs to the caller even if the COM method reports failure.
+///
+/// # Safety
+///
+/// `object` is null or a live COM interface whose reference the caller transfers.
+pub unsafe fn from_result(status: HRESULT, object: *mut c_void) -> Option<IUnknown> {
+    let owned = unsafe { owned(object) };
+    if status.is_ok() { owned } else { None }
+}
 // C callers own these leases explicitly. Forget the Rust owner on retain and adopt
 // that same reference on release. Both entry points accept an absent resource.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_resource_retain(resource: *mut c_void) {
     if !resource.is_null() {
-        unsafe { ComRef::retain(resource) }.into_raw();
+        unsafe { retain(resource) }.into_raw();
     }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_resource_release(resource: *mut c_void) {
-    drop(unsafe { ComRef::from_owned(resource) });
+    drop(unsafe { owned(resource) });
 }
 
 #[unsafe(no_mangle)]
@@ -148,7 +104,7 @@ unsafe extern "C" fn rsf_swapchain_back_buffer(swapchain: *mut c_void) -> *mut c
             &mut buffer,
         )
     };
-    unsafe { ComRef::from_result(status, buffer) }.map_or(std::ptr::null_mut(), ComRef::into_raw)
+    unsafe { from_result(status, buffer) }.map_or(std::ptr::null_mut(), Interface::into_raw)
 }
 
 // Fake COM objects for unit tests here and in the Runtime (its dev-dependency enables the feature).
@@ -243,13 +199,13 @@ pub mod test {
 
     #[test]
     fn partial_adoption_releases_every_returned_reference() {
-        use super::ComRef;
+        use windows::core::Interface;
         let (first, last) = (fake(), fake());
         let result = unsafe {
-            ComRef::adopt_all([
-                ComRef::retain(raw(&first)).into_raw(),
+            super::adopt_all([
+                super::retain(raw(&first)).into_raw(),
                 ptr::null_mut(),
-                ComRef::retain(raw(&last)).into_raw(),
+                super::retain(raw(&last)).into_raw(),
             ])
         };
         assert!(result.is_none());

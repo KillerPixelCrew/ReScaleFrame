@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The production entry points live in `native`, which unit tests do not build.
 #![cfg_attr(test, allow(dead_code))]
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d12_fence::FenceState;
 use crate::overlay_geometry::{
     borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
@@ -19,6 +19,7 @@ use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::ptr::{NonNull, null_mut};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::{
     Foundation::WAIT_OBJECT_0,
     System::{
@@ -204,7 +205,7 @@ impl Ring {
 }
 
 struct Fence {
-    reference: ComRef,
+    reference: IUnknown,
     event: Option<OwnedHandle>,
     armed: Option<u64>,
 }
@@ -223,7 +224,7 @@ unsafe impl Send for Fence {}
 
 impl Fence {
     fn completed(&self, platform: &Platform) -> u64 {
-        unsafe { (platform.completed)(self.reference.as_ptr()) }
+        unsafe { (platform.completed)(self.reference.as_raw()) }
     }
 
     fn wait_for_slot(&mut self, platform: &Platform, value: u64) -> bool {
@@ -238,7 +239,7 @@ impl Fence {
             return false;
         };
         let event = event.as_raw_handle();
-        if unsafe { (platform.arm)(self.reference.as_ptr(), event, value) } == 0 {
+        if unsafe { (platform.arm)(self.reference.as_raw(), event, value) } == 0 {
             return false;
         }
         self.armed = Some(value);
@@ -262,7 +263,7 @@ impl Fence {
 }
 
 struct Upload {
-    resource: ComRef,
+    resource: IUnknown,
     capacity: u64,
 }
 
@@ -274,21 +275,21 @@ fn upload(
 ) -> Option<*mut c_void> {
     let bytes = u64::from(bytes);
     if let Some(buffer) = buffer.as_ref().filter(|buffer| buffer.capacity >= bytes) {
-        return Some(buffer.resource.as_ptr());
+        return Some(buffer.resource.as_raw());
     }
     let mut capacity = 0;
     let resource =
-        unsafe { ComRef::from_owned((platform.create_upload)(native, bytes, &mut capacity)) }?;
+        unsafe { com_ref::owned((platform.create_upload)(native, bytes, &mut capacity)) }?;
     if capacity < bytes {
         return None;
     }
-    let handle = resource.as_ptr();
+    let handle = resource.as_raw();
     *buffer = Some(Upload { resource, capacity });
     Some(handle)
 }
 
 struct DrawSlot {
-    pipeline: Option<ComRef>,
+    pipeline: Option<IUnknown>,
     vertices: Option<Upload>,
     indices: Option<Upload>,
 }
@@ -326,7 +327,7 @@ impl DrawSlot {
 }
 
 struct Graphics {
-    pipeline: Option<(u32, ComRef)>,
+    pipeline: Option<(u32, IUnknown)>,
     slots: [DrawSlot; SLOTS],
 }
 
@@ -353,13 +354,12 @@ impl Graphics {
             .as_ref()
             .is_none_or(|(active, _)| *active != format)
         {
-            let pipeline =
-                unsafe { ComRef::from_owned((platform.create_pipeline)(native, format)) }?;
+            let pipeline = unsafe { com_ref::owned((platform.create_pipeline)(native, format)) }?;
             self.pipeline = Some((format, pipeline));
         }
         let (_, pipeline) = self.pipeline.as_ref()?;
         self.slots[slot].pipeline = Some(pipeline.clone());
-        Some(pipeline.as_ptr())
+        Some(pipeline.as_raw())
     }
 }
 
@@ -367,12 +367,12 @@ struct Texture {
     id: u64,
     width: u32,
     height: u32,
-    resource: ComRef,
+    resource: IUnknown,
 }
 
 struct Atlas {
     textures: Vec<Texture>,
-    retained: [Vec<ComRef>; SLOTS],
+    retained: [Vec<IUnknown>; SLOTS],
 }
 
 // Only thread-safe D3D12 resource references enter the atlas. All changes,
@@ -410,7 +410,7 @@ impl Atlas {
                 return None;
             }
             let resource = unsafe {
-                ComRef::from_owned((platform.create_texture)(
+                com_ref::owned((platform.create_texture)(
                     native,
                     update.width,
                     update.height,
@@ -433,10 +433,10 @@ impl Atlas {
             return None;
         }
         let upload = unsafe {
-            ComRef::from_owned((platform.upload_texture)(
+            com_ref::owned((platform.upload_texture)(
                 native,
                 &lease.frame,
-                texture.resource.as_ptr(),
+                texture.resource.as_raw(),
                 update,
             ))
         }?;
@@ -504,7 +504,7 @@ impl Atlas {
         let calls = unsafe { self.draw_calls(data, binding) }?;
         let mut bindings = [std::ptr::null_mut(); TEXTURES];
         for (binding, texture) in bindings.iter_mut().zip(&self.textures) {
-            *binding = texture.resource.as_ptr();
+            *binding = texture.resource.as_raw();
             self.retained[lease.slot].push(texture.resource.clone());
         }
         let recorded = unsafe {
@@ -544,29 +544,29 @@ impl Atlas {
 // former native members did.
 #[derive(Default)]
 struct Frame {
-    rtv: Option<ComRef>,
-    srv: Option<ComRef>,
-    commands: Option<ComRef>,
-    allocator: Option<ComRef>,
+    rtv: Option<IUnknown>,
+    srv: Option<IUnknown>,
+    commands: Option<IUnknown>,
+    allocator: Option<IUnknown>,
 }
 
 impl Frame {
     // The leaf transfers every reference it acquired, including on refusal.
     unsafe fn adopt(table: FrameTable) -> Self {
         Self {
-            rtv: unsafe { ComRef::from_owned(table.rtv) },
-            srv: unsafe { ComRef::from_owned(table.srv) },
-            commands: unsafe { ComRef::from_owned(table.commands) },
-            allocator: unsafe { ComRef::from_owned(table.allocator) },
+            rtv: unsafe { com_ref::owned(table.rtv) },
+            srv: unsafe { com_ref::owned(table.srv) },
+            commands: unsafe { com_ref::owned(table.commands) },
+            allocator: unsafe { com_ref::owned(table.allocator) },
         }
     }
 
     fn table(&self) -> Option<FrameTable> {
         Some(FrameTable {
-            allocator: self.allocator.as_ref()?.as_ptr(),
-            commands: self.commands.as_ref()?.as_ptr(),
-            srv: self.srv.as_ref()?.as_ptr(),
-            rtv: self.rtv.as_ref()?.as_ptr(),
+            allocator: self.allocator.as_ref()?.as_raw(),
+            commands: self.commands.as_ref()?.as_raw(),
+            srv: self.srv.as_ref()?.as_raw(),
+            rtv: self.rtv.as_ref()?.as_raw(),
         })
     }
 }
@@ -684,7 +684,7 @@ impl Started {
         let mut ui = Ui::open()?;
         let mut fence = null_mut();
         let native = unsafe { (platform.initialize)(device, queue, &mut fence) };
-        let fence = unsafe { ComRef::from_owned(fence) };
+        let fence = unsafe { com_ref::owned(fence) };
         let mut renderer = Renderer {
             handle: NonNull::new(native)?,
             destroy: platform.destroy,
@@ -750,7 +750,7 @@ impl Started {
                 if unsafe {
                     (platform.signal)(
                         self.renderer.handle.as_ptr(),
-                        self.fence.reference.as_ptr(),
+                        self.fence.reference.as_raw(),
                         value,
                     )
                 } != 0
@@ -916,8 +916,7 @@ impl Started {
             height: 0,
             format: 0,
         };
-        let target =
-            unsafe { ComRef::from_owned((platform.begin)(&lease.frame, chain, &mut frame)) };
+        let target = unsafe { com_ref::owned((platform.begin)(&lease.frame, chain, &mut frame)) };
         let Some(target) = target else {
             self.fail(platform);
             return None;
@@ -977,7 +976,7 @@ impl Started {
             self.log(c"Overlay12: atlas uploads and draw recording");
         }
         let mut binding = Draw {
-            target: target.as_ptr(),
+            target: target.as_raw(),
             pipeline,
             vertices: std::ptr::null_mut(),
             indices: std::ptr::null_mut(),
@@ -1016,7 +1015,7 @@ impl Started {
         if trace {
             self.log(c"Overlay12: queue submission begin");
         }
-        let fence = self.fence.reference.as_ptr();
+        let fence = self.fence.reference.as_raw();
         unsafe { (platform.execute)(native, &lease.frame) };
         if unsafe { (platform.signal)(native, fence, value) } == 0 {
             // Execute already happened. The failed owner stays alive until a signal proves retirement.
@@ -1239,7 +1238,7 @@ mod tests {
     fn replacement_and_free_keep_each_slots_draw_and_upload_resources() {
         let mut fixture = fixture();
         let target_resource = fake();
-        let target = unsafe { ComRef::from_owned(raw(&target_resource)).unwrap() };
+        let target = unsafe { com_ref::owned(raw(&target_resource)).unwrap() };
         let vertices = [rsf_overlay_vertex::default()];
         let indices = [0u32; 3];
         let valid = crate::sys::rsf_overlay_draw_call {
@@ -1272,7 +1271,7 @@ mod tests {
             call_count: calls.len() as u32,
         };
         let binding = Draw {
-            target: target.as_ptr(),
+            target: target.as_raw(),
             pipeline: null_mut(),
             vertices: null_mut(),
             indices: null_mut(),
@@ -1350,7 +1349,7 @@ mod tests {
         let native = from_mut(&mut fixture).cast();
         assert!(atlas.update(&PLATFORM, native, &slot, &UPDATE).is_none());
         assert_eq!(
-            atlas.textures[0].resource.as_ptr(),
+            atlas.textures[0].resource.as_raw(),
             raw(&fixture.textures[0])
         );
         assert_eq!(fixture.textures[1].refs.get(), 1);
@@ -1492,7 +1491,7 @@ mod tests {
         let fence = fake();
         let reference = unsafe {
             add_ref(raw(&fence).cast());
-            ComRef::from_owned(raw(&fence)).unwrap()
+            com_ref::owned(raw(&fence)).unwrap()
         };
         let owner = Owner {
             device: 1,

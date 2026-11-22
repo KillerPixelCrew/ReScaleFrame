@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::render_host_methods::{Adapter, ResourceDesc};
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d12_host::{borrow, device_of, rsf_core_d3d12_wait_native_fence};
 use crate::dlss_native12::{Registration, exports::rsf_dlss_native12_registration_borrow};
 use crate::sys::rsf_dlss_setup;
@@ -47,7 +47,7 @@ pub(super) unsafe fn native_object(object: Handle) -> Handle {
     {
         return native;
     }
-    unsafe { ComRef::retain(object) }.into_raw()
+    unsafe { com_ref::retain(object) }.into_raw()
 }
 
 pub(super) unsafe fn registration_borrow(

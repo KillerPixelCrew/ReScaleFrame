@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::{ComRef, Draw, Handle, RawPipeline, Update, Vertex};
+use super::{Draw, Handle, IUnknown, RawPipeline, Update, Vertex};
+use crate::com_ref;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use windows::{
@@ -38,7 +39,7 @@ pub(super) unsafe fn valid_context(device: Handle, context: Handle) -> bool {
     }
 }
 
-pub(super) unsafe fn texture(device: Handle, update: &Update, row_pitch: u32) -> Option<ComRef> {
+pub(super) unsafe fn texture(device: Handle, update: &Update, row_pitch: u32) -> Option<IUnknown> {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }?;
     let desc = D3D11_TEXTURE2D_DESC {
         Width: update.width,
@@ -61,15 +62,15 @@ pub(super) unsafe fn texture(device: Handle, update: &Update, row_pitch: u32) ->
     };
     let mut texture = None;
     unsafe { device.CreateTexture2D(&desc, Some(&initial), Some(&mut texture)) }.ok()?;
-    unsafe { ComRef::from_owned(texture?.into_raw()) }
+    unsafe { com_ref::owned(texture?.into_raw()) }
 }
 
-pub(super) unsafe fn view(device: Handle, texture: Handle) -> Option<ComRef> {
+pub(super) unsafe fn view(device: Handle, texture: Handle) -> Option<IUnknown> {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }?;
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }?;
     let mut view = None;
     unsafe { device.CreateShaderResourceView(texture, None, Some(&mut view)) }.ok()?;
-    unsafe { ComRef::from_owned(view?.into_raw()) }
+    unsafe { com_ref::owned(view?.into_raw()) }
 }
 
 pub(super) unsafe fn patch(context: Handle, texture: Handle, update: &Update, pitch: u32) {
@@ -96,7 +97,7 @@ pub(super) unsafe fn patch(context: Handle, texture: Handle, update: &Update, pi
     }
 }
 
-pub(super) unsafe fn buffer(device: Handle, bytes: u32, bind_flags: u32) -> Option<ComRef> {
+pub(super) unsafe fn buffer(device: Handle, bytes: u32, bind_flags: u32) -> Option<IUnknown> {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }?;
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: bytes,
@@ -107,7 +108,7 @@ pub(super) unsafe fn buffer(device: Handle, bytes: u32, bind_flags: u32) -> Opti
     };
     let mut buffer = None;
     unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer)) }.ok()?;
-    unsafe { ComRef::from_owned(buffer?.into_raw()) }
+    unsafe { com_ref::owned(buffer?.into_raw()) }
 }
 
 pub(super) unsafe fn write(
@@ -154,8 +155,8 @@ const CLASS_INSTANCES: usize = D3D11_SHADER_MAX_INTERFACES as usize;
 const VIEWPORTS: usize = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE as usize;
 
 struct Shader {
-    shader: Option<ComRef>,
-    instances: [Option<ComRef>; CLASS_INSTANCES],
+    shader: Option<IUnknown>,
+    instances: [Option<IUnknown>; CLASS_INSTANCES],
     count: u32,
 }
 
@@ -169,45 +170,45 @@ impl Default for Shader {
     }
 }
 
-fn raw(reference: &Option<ComRef>) -> Handle {
-    reference.as_ref().map_or(null_mut(), ComRef::as_ptr)
+fn raw(reference: &Option<IUnknown>) -> Handle {
+    reference.as_ref().map_or(null_mut(), Interface::as_raw)
 }
 
-// Option<ComRef> is a nullable interface pointer. D3D getters write one owned
+// Option<IUnknown> is a nullable interface pointer. D3D getters write one owned
 // reference per slot, including class instances.
-fn output(reference: &mut Option<ComRef>) -> *mut Handle {
+fn output(reference: &mut Option<IUnknown>) -> *mut Handle {
     std::ptr::from_mut(reference).cast()
 }
 
 #[derive(Default)]
 struct Snapshot {
-    predicate: Option<ComRef>,
+    predicate: Option<IUnknown>,
     predicate_value: BOOL,
-    input_layout: Option<ComRef>,
+    input_layout: Option<IUnknown>,
     topology: D3D_PRIMITIVE_TOPOLOGY,
-    vertex_buffer: Option<ComRef>,
+    vertex_buffer: Option<IUnknown>,
     vertex_stride: u32,
     vertex_offset: u32,
-    index_buffer: Option<ComRef>,
+    index_buffer: Option<IUnknown>,
     index_format: DXGI_FORMAT,
     index_offset: u32,
     vs: Shader,
-    vertex_constants: Option<ComRef>,
+    vertex_constants: Option<IUnknown>,
     ps: Shader,
-    pixel_resource: Option<ComRef>,
-    pixel_sampler: Option<ComRef>,
+    pixel_resource: Option<IUnknown>,
+    pixel_sampler: Option<IUnknown>,
     gs: Shader,
     hs: Shader,
     ds: Shader,
-    rasterizer: Option<ComRef>,
+    rasterizer: Option<IUnknown>,
     viewports: [D3D11_VIEWPORT; VIEWPORTS],
     viewport_count: u32,
     scissors: [RECT; VIEWPORTS],
     scissor_count: u32,
-    blend: Option<ComRef>,
+    blend: Option<IUnknown>,
     blend_factor: [f32; 4],
     sample_mask: u32,
-    depth_stencil: Option<ComRef>,
+    depth_stencil: Option<IUnknown>,
     stencil_reference: u32,
 }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::texture_dump::{PackedRows, pixel_bytes};
+use windows::core::Interface;
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_input_dump_configure(
@@ -332,7 +333,7 @@ unsafe extern "C" fn rsf_input_dump_named_texture(
     }
     let mut surface = Surface::default();
     let Some(texture) =
-        (unsafe { ComRef::from_owned(native::open_texture(context, source, &mut surface)) })
+        (unsafe { com_ref::owned(native::open_texture(context, source, &mut surface)) })
     else {
         return INVALID;
     };
@@ -350,7 +351,7 @@ unsafe extern "C" fn rsf_input_dump_named_texture(
         Log::new(request.log, request.log_user),
     );
     let mut encoding = Encoding::INVALID;
-    unsafe { native::encode_texture(context, texture.as_ptr(), &options, 0, &mut encoding) };
+    unsafe { native::encode_texture(context, texture.as_raw(), &options, 0, &mut encoding) };
     if encoding.preview == 0
         && !report.is_null()
         && unsafe { report.cast::<u32>().read() } as usize >= size_of::<NamedReport>()

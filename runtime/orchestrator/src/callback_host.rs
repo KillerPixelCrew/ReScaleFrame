@@ -8,7 +8,7 @@
 //! Settings keys belong to settings_store.rs, SR vendor selection to rsf_gpu_select_sr_backend.
 //! The adapter's only policy input is `set_engine_spatial`, which learns whether the engine
 //! upscales spatially itself, never the vendor.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
 #[cfg(not(test))]
 use crate::plugin_session::Session;
@@ -51,6 +51,7 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard};
+use windows::core::Interface;
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::core::{PCWSTR, w};
 
@@ -422,7 +423,7 @@ impl Host {
         let mut guard = self.lock();
         let s = &mut *guard;
         unsafe { p.fg_window(pass) };
-        let Some(device) = (unsafe { ComRef::from_owned(p.queue_device(queue)) }) else {
+        let Some(device) = (unsafe { com_ref::owned(p.queue_device(queue)) }) else {
             return;
         };
         if s.save_pending {
@@ -545,7 +546,7 @@ impl Host {
         drop(guard);
         let drawn = unsafe {
             p.overlay_frame(
-                device.as_ptr(),
+                device.as_raw(),
                 queue,
                 pass.swapchain,
                 &stats,
@@ -737,13 +738,13 @@ impl Host {
                 || s.input_height != camera.render_height
             {
                 self.destroy(&mut s.inputs);
-                let Some(device) = (unsafe { ComRef::from_owned(p.list_device(commands)) }) else {
+                let Some(device) = (unsafe { com_ref::owned(p.list_device(commands)) }) else {
                     return;
                 };
                 let setup = SrSetup {
                     struct_size: size_of::<SrSetup>() as u32,
                     abi_version: 1,
-                    device: device.as_ptr(),
+                    device: device.as_raw(),
                     output_width: camera.output_width,
                     output_height: camera.output_height,
                     render_width: camera.render_width,
@@ -837,8 +838,8 @@ impl Host {
         };
         if s.automatic {
             let mut adapter = Adapter::default();
-            let identified = unsafe { ComRef::from_owned(p.list_device(commands)) }
-                .is_some_and(|device| unsafe { p.adapter(device.as_ptr(), &mut adapter) } != 0);
+            let identified = unsafe { com_ref::owned(p.list_device(commands)) }
+                .is_some_and(|device| unsafe { p.adapter(device.as_raw(), &mut adapter) } != 0);
             if !identified {
                 s.last_result = BACKEND_NOT_SUPPORTED;
                 self.log("Automatic SR refused: owning D3D12 adapter could not be identified.");
@@ -881,13 +882,13 @@ impl Host {
             self.log("Engine spatial upscaling plan accepted.");
             return true;
         }
-        let Some(device) = (unsafe { ComRef::from_owned(p.list_device(commands)) }) else {
+        let Some(device) = (unsafe { com_ref::owned(p.list_device(commands)) }) else {
             return false;
         };
         let setup = SrSetup {
             struct_size: size_of::<SrSetup>() as u32,
             abi_version: 1,
-            device: device.as_ptr(),
+            device: device.as_raw(),
             backend: s.backend,
             quality: s.quality,
             streamline_host: unsafe { p.present_host() },

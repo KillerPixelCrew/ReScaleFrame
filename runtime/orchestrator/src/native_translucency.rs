@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Shared D3D11 translucency hints and cloud-depth handover.
-use crate::com_ref::{ComRef, vtable};
+use crate::com_ref::{self, vtable};
 use crate::d3d11_output::{SavedBindings, texture_desc};
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::native_regions::{
@@ -24,6 +24,7 @@ use std::ptr;
 use std::sync::Mutex;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::BOOL;
+use windows::core::{IUnknown, Interface};
 
 type Object = *mut c_void;
 const NONE: Object = ptr::null_mut();
@@ -60,7 +61,7 @@ const _: () = {
     assert!(std::mem::offset_of!(Constants, mode) == 24);
 };
 
-unsafe fn create_sampler(device: Object) -> Option<ComRef> {
+unsafe fn create_sampler(device: Object) -> Option<IUnknown> {
     let desc = D3D11_SAMPLER_DESC {
         Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
@@ -73,7 +74,7 @@ unsafe fn create_sampler(device: Object) -> Option<ComRef> {
     let status = unsafe {
         (vtable::<ID3D11Device>(&device).CreateSamplerState)(device, &desc, &mut sampler)
     };
-    unsafe { ComRef::from_result(status, sampler) }
+    unsafe { com_ref::from_result(status, sampler) }
 }
 
 unsafe fn dispatch(context: Object, pass: &Dispatch) {
@@ -310,33 +311,33 @@ impl<T> Exclusive<T> {
 }
 
 struct Kernel {
-    shader: ComRef,
-    constants: ComRef,
-    sampler: ComRef,
+    shader: IUnknown,
+    constants: IUnknown,
+    sampler: IUnknown,
 }
 
 struct Targets {
     extent: [u32; 2],
     format: u32,
-    opaque: ComRef,
-    opaque_view: ComRef,
+    opaque: IUnknown,
+    opaque_view: IUnknown,
     // Reactive, coverage and bias.
     masks: [MaskTarget; 3],
 }
 
 struct Layer {
     format: u32,
-    texture: ComRef,
+    texture: IUnknown,
 }
 
 struct Cloud {
     extent: [u32; 2],
-    texture: ComRef,
+    texture: IUnknown,
 }
 
 struct Owner {
-    device: ComRef,
-    identity: ComRef,
+    device: IUnknown,
+    identity: IUnknown,
     kernel: Option<Kernel>,
     kernel_failed: bool,
     targets: Option<Targets>,
@@ -358,8 +359,8 @@ unsafe impl Send for Owner {}
 static OWNER: Exclusive<Owner> = Exclusive::new();
 
 struct Device {
-    device: ComRef,
-    identity: ComRef,
+    device: IUnknown,
+    identity: IUnknown,
 }
 
 impl Device {
@@ -368,8 +369,8 @@ impl Device {
         if unsafe { rsf_d3d11_output_is_immediate(context) } == 0 {
             return None;
         }
-        let device = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) }?;
-        let identity = unsafe { device_identity(device.as_ptr()) }?;
+        let device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }?;
+        let identity = unsafe { device_identity(device.as_raw()) }?;
         Some(Self { device, identity })
     }
 
@@ -379,18 +380,18 @@ impl Device {
 }
 
 // Resources of another device are refused, never copied across.
-unsafe fn owned_by(identity: &ComRef, child: Object) -> bool {
-    let Some(owner) = (unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(child)) }) else {
+unsafe fn owned_by(identity: &IUnknown, child: Object) -> bool {
+    let Some(owner) = (unsafe { com_ref::owned(rsf_d3d11_output_child_device(child)) }) else {
         return false;
     };
-    unsafe { device_identity(owner.as_ptr()) }
-        .is_some_and(|owner| owner.as_ptr() == identity.as_ptr())
+    unsafe { device_identity(owner.as_raw()) }
+        .is_some_and(|owner| owner.as_raw() == identity.as_raw())
 }
 
 fn for_device(owner: &mut Option<Owner>, device: Device) -> &mut Owner {
     if owner
         .as_ref()
-        .is_some_and(|owner| owner.identity.as_ptr() != device.identity.as_ptr())
+        .is_some_and(|owner| owner.identity.as_raw() != device.identity.as_raw())
     {
         *owner = None;
     }
@@ -414,7 +415,7 @@ unsafe fn texture(
     extent: [u32; 2],
     format: u32,
     bind_flags: u32,
-) -> Option<ComRef> {
+) -> Option<IUnknown> {
     let desc = rsf_d3d11_texture_desc {
         width: extent[0],
         height: extent[1],
@@ -426,7 +427,7 @@ unsafe fn texture(
         bind_flags,
         ..Default::default()
     };
-    unsafe { ComRef::from_owned(rsf_d3d11_output_create_texture(device, &desc)) }
+    unsafe { com_ref::owned(rsf_d3d11_output_create_texture(device, &desc)) }
 }
 
 impl Kernel {
@@ -450,7 +451,7 @@ impl Targets {
     unsafe fn new(device: Object, extent: [u32; 2], format: u32) -> Option<Self> {
         let opaque = unsafe { texture(device, extent, format, RSF_D3D11_BIND_SHADER_RESOURCE) }?;
         let opaque_view = unsafe {
-            ComRef::from_owned(rsf_d3d11_output_create_srv(device, opaque.as_ptr(), format))
+            com_ref::owned(rsf_d3d11_output_create_srv(device, opaque.as_raw(), format))
         }?;
         Some(Self {
             extent,
@@ -475,7 +476,7 @@ impl Owner {
         if self.kernel_failed {
             return false;
         }
-        self.kernel = unsafe { Kernel::new(self.device.as_ptr()) };
+        self.kernel = unsafe { Kernel::new(self.device.as_raw()) };
         self.kernel_failed = self.kernel.is_none();
         !self.kernel_failed
     }
@@ -490,7 +491,7 @@ impl Owner {
         }
         self.targets = None;
         self.layer = None;
-        self.targets = unsafe { Targets::new(self.device.as_ptr(), extent, format) };
+        self.targets = unsafe { Targets::new(self.device.as_raw(), extent, format) };
         self.targets.is_some()
     }
 
@@ -515,7 +516,7 @@ impl Owner {
         let Some(targets) = &self.targets else {
             return;
         };
-        unsafe { crop(context, targets.opaque.as_ptr(), scene, &region.bounds) };
+        unsafe { crop(context, targets.opaque.as_raw(), scene, &region.bounds) };
         self.ledger.snapshot_taken(key);
     }
 
@@ -526,7 +527,7 @@ impl Owner {
         layer: Option<(Object, &rsf_d3d11_texture_desc)>,
         region: Region,
     ) -> bool {
-        let device = self.device.as_ptr();
+        let device = self.device.as_raw();
         let (Some(kernel), Some(targets)) = (&self.kernel, &self.targets) else {
             return false;
         };
@@ -563,11 +564,11 @@ impl Owner {
             coverage_scale: COVERAGE_SCALE,
         };
         let pass = Dispatch {
-            shader: kernel.shader.as_ptr(),
-            constants: kernel.constants.as_ptr(),
-            sampler: kernel.sampler.as_ptr(),
-            views: [scene_view, targets.opaque_view.as_ptr(), layer_view],
-            targets: targets.masks.each_ref().map(|mask| mask.view.as_ptr()),
+            shader: kernel.shader.as_raw(),
+            constants: kernel.constants.as_raw(),
+            sampler: kernel.sampler.as_raw(),
+            views: [scene_view, targets.opaque_view.as_raw(), layer_view],
+            targets: targets.masks.each_ref().map(|mask| mask.view.as_raw()),
             groups: region.groups(),
         };
         let Some(_bindings) =
@@ -578,7 +579,7 @@ impl Owner {
         unsafe {
             (vtable::<ID3D11DeviceContext>(&context).SetPredication)(context, NONE, BOOL(0));
             rsf_d3d11_output_unbind_targets(context);
-            update_constants(context, kernel.constants.as_ptr(), &constants);
+            update_constants(context, kernel.constants.as_raw(), &constants);
             dispatch(context, &pass);
         }
         true
@@ -623,7 +624,7 @@ impl Owner {
             self.layer = None;
             let Some(texture) = (unsafe {
                 texture(
-                    self.device.as_ptr(),
+                    self.device.as_raw(),
                     extent,
                     format,
                     RSF_D3D11_BIND_SHADER_RESOURCE,
@@ -636,7 +637,7 @@ impl Owner {
         let Some(copy) = &self.layer else {
             return;
         };
-        unsafe { crop(context, copy.texture.as_ptr(), layer, &region.bounds) };
+        unsafe { crop(context, copy.texture.as_raw(), layer, &region.bounds) };
         self.ledger.layer_copied(key);
     }
 
@@ -652,7 +653,7 @@ impl Owner {
             *slot = None;
             let Some(texture) = (unsafe {
                 texture(
-                    self.device.as_ptr(),
+                    self.device.as_raw(),
                     extent,
                     RSF_D3D11_FORMAT_R32_FLOAT,
                     RSF_D3D11_BIND_SHADER_RESOURCE,
@@ -665,7 +666,7 @@ impl Owner {
         let Some(stored) = slot.as_ref() else {
             return;
         };
-        unsafe { rsf_d3d11_output_copy_resource(context, stored.texture.as_ptr(), cloud) };
+        unsafe { rsf_d3d11_output_copy_resource(context, stored.texture.as_raw(), cloud) };
         self.ledger.cloud_stored(tag);
     }
 }
@@ -804,15 +805,15 @@ pub(super) unsafe extern "C" fn rsf_native_translucency_take(
         let clouds = owner.clouds[owner.published]
             .as_ref()
             .filter(|_| frame.clouds);
-        let [reactive, coverage, bias] = targets.masks.each_ref().map(|mask| mask.texture.as_ptr());
+        let [reactive, coverage, bias] = targets.masks.each_ref().map(|mask| mask.texture.as_raw());
         Some(Masks {
             struct_size: 0,
-            color_before_transparency: targets.opaque.as_ptr(),
-            transparency_layer: layer.map_or(NONE, |layer| layer.texture.as_ptr()),
+            color_before_transparency: targets.opaque.as_raw(),
+            transparency_layer: layer.map_or(NONE, |layer| layer.texture.as_raw()),
             reactive,
             coverage,
             bias,
-            motion_depth: clouds.map_or(NONE, |cloud| cloud.texture.as_ptr()),
+            motion_depth: clouds.map_or(NONE, |cloud| cloud.texture.as_raw()),
         })
     });
     let Some(masks) = published.flatten() else {

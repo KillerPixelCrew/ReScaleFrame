@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::{same_device, texture_desc};
 use crate::d3d11_output_platform::srv_format;
 use crate::sys::rsf_backend_log_fn as LogFn;
@@ -11,6 +11,7 @@ use std::ptr;
 use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+use windows::core::IUnknown;
 use windows::core::Interface;
 
 pub(super) type Handle = *mut c_void;
@@ -320,8 +321,8 @@ impl SourceInfo {
 }
 
 struct Entry {
-    view: ComRef,
-    texture: ComRef,
+    view: IUnknown,
+    texture: IUnknown,
     format: u32,
     used: u64,
 }
@@ -345,7 +346,7 @@ impl<const N: usize> SourceViews<N> {
         format: u32,
         now: u64,
         make: MakeView,
-    ) -> Option<&ComRef> {
+    ) -> Option<&IUnknown> {
         for entry in &mut self.entries {
             if entry
                 .as_ref()
@@ -357,7 +358,7 @@ impl<const N: usize> SourceViews<N> {
         if let Some(index) = self.entries.iter().position(|entry| {
             entry
                 .as_ref()
-                .is_some_and(|entry| entry.texture.as_ptr() == texture && entry.format == format)
+                .is_some_and(|entry| entry.texture.as_raw() == texture && entry.format == format)
         }) {
             let entry = self.entries[index].as_mut()?;
             entry.used = now;
@@ -371,10 +372,10 @@ impl<const N: usize> SourceViews<N> {
                 .min_by_key(|&(_, used)| used)
                 .map(|(index, _)| index)
         })?;
-        let view = unsafe { ComRef::from_owned(make(device, texture, format)) }?;
+        let view = unsafe { com_ref::owned(make(device, texture, format)) }?;
         self.entries[index] = Some(Entry {
             view,
-            texture: unsafe { ComRef::retain(texture) },
+            texture: unsafe { com_ref::retain(texture) },
             format,
             used: now,
         });
@@ -410,7 +411,7 @@ mod tests {
     use crate::com_ref::test::{fake, raw};
 
     unsafe extern "C" fn make_view(_: Handle, texture: Handle, _: u32) -> Handle {
-        unsafe { ComRef::retain(texture) }.into_raw()
+        unsafe { com_ref::retain(texture) }.into_raw()
     }
 
     #[test]
@@ -421,7 +422,7 @@ mod tests {
             .cloned()
             .unwrap();
         assert!(unsafe { cache.get(raw(&device), raw(&second), 0, 1, make_view) }.is_some());
-        assert_eq!(held.as_ptr(), raw(&first));
+        assert_eq!(held.as_raw(), raw(&first));
         assert_eq!(first.refs.get(), 2);
         drop(held);
         assert_eq!(first.refs.get(), 1);

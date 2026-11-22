@@ -4,7 +4,7 @@
 // history, the normalization dispatch, capture ordering, sharpening, output reinsertion and the
 // handoff of accepted normalized depth and motion to the D3D12 frame generation owner.
 // Its native calls go through `native` (sr12/native.rs; fakes under test).
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
     R32_TYPELESS, R32G8X24_TYPELESS, RGBA16_FLOAT, RGBA32_FLOAT, half_to_f32,
@@ -27,6 +27,7 @@ use std::ffi::{CStr, c_char, c_void};
 use std::mem::{MaybeUninit, offset_of};
 use std::ptr::{self, NonNull};
 use std::sync::Mutex;
+use windows::core::{IUnknown, Interface};
 
 #[cfg(not(test))]
 mod native;
@@ -102,12 +103,12 @@ pub(crate) struct TextureDesc {
     srv_format: u32,
 }
 
-unsafe fn retain(object: Handle) -> Option<ComRef> {
-    (!object.is_null()).then(|| unsafe { ComRef::retain(object) })
+unsafe fn retain(object: Handle) -> Option<IUnknown> {
+    (!object.is_null()).then(|| unsafe { com_ref::retain(object) })
 }
 
-fn raw(object: Option<&ComRef>) -> Handle {
-    object.map_or(ptr::null_mut(), ComRef::as_ptr)
+fn raw(object: Option<&IUnknown>) -> Handle {
+    object.map_or(ptr::null_mut(), Interface::as_raw)
 }
 
 fn preview(input_sdr: bool) -> u32 {
@@ -252,13 +253,13 @@ impl Drop for Native {
 }
 
 struct Gpu {
-    root: ComRef,
-    pipeline: ComRef,
-    heaps: [ComRef; SLOTS],
-    normalized: [ComRef; 3],
-    output: Option<ComRef>,
-    exposure: Option<ComRef>,
-    exposure_upload: Option<ComRef>,
+    root: IUnknown,
+    pipeline: IUnknown,
+    heaps: [IUnknown; SLOTS],
+    normalized: [IUnknown; 3],
+    output: Option<IUnknown>,
+    exposure: Option<IUnknown>,
+    exposure_upload: Option<IUnknown>,
 }
 
 struct Captured {
@@ -272,15 +273,15 @@ struct State {
     // Colour, depth, motion and engine output as last validated, with the generation they were
     // validated in and the SRV formats they read with. The references keep a freed resource's
     // address from passing for the cached one.
-    validated: [Option<ComRef>; 4],
+    validated: [Option<IUnknown>; 4],
     view_formats: [u32; 3],
     validated_generation: u32,
-    validated_list: Option<ComRef>,
-    exposure_input: Option<(ComRef, u32)>,
+    validated_list: Option<IUnknown>,
+    exposure_input: Option<(IUnknown, u32)>,
     exposure_initialized: bool,
     history: History,
     captured: [Captured; SLOTS],
-    motion_readback: [Option<ComRef>; SLOTS],
+    motion_readback: [Option<IUnknown>; SLOTS],
     motion_pending: [bool; SLOTS],
     diagnostic_frames: u32,
     sharpen_reported: bool,
@@ -290,7 +291,7 @@ pub(crate) struct Sr12 {
     // Fields drop in order: vendor contexts first, then the resources they referenced.
     native: Native,
     gpu: Gpu,
-    device: ComRef,
+    device: IUnknown,
     log: rsf_backend_log_fn,
     user: Handle,
     backend: u32,
@@ -433,12 +434,12 @@ unsafe fn create_gpu(
     {
         return None;
     }
-    let root = unsafe { ComRef::from_owned(root) }?;
-    let pipeline = unsafe { ComRef::from_owned(pipeline) }?;
-    let heap = || unsafe { ComRef::from_owned(native::create_heap(device)) };
+    let root = unsafe { com_ref::owned(root) }?;
+    let pipeline = unsafe { com_ref::owned(pipeline) }?;
+    let heap = || unsafe { com_ref::owned(native::create_heap(device)) };
     let heaps = [heap()?, heap()?, heap()?];
     let texture =
-        |w, h, format| unsafe { ComRef::from_owned(native::create_texture(device, w, h, format)) };
+        |w, h, format| unsafe { com_ref::owned(native::create_texture(device, w, h, format)) };
     let (color_width, color_height) = if normalize_color {
         (width, height)
     } else {
@@ -466,14 +467,14 @@ unsafe fn create_gpu(
     {
         // SDR has no changing pre-exposure. XeSS requires an exposure texture when auto
         // exposure is disabled; feed the actual constant scale, not HDR adaptation.
-        let texture = unsafe { ComRef::from_owned(native::create_exposure_texture(device)) }?;
+        let texture = unsafe { com_ref::owned(native::create_exposure_texture(device)) }?;
         let upload = unsafe {
-            ComRef::from_owned(native::create_exposure_upload(
+            com_ref::owned(native::create_exposure_upload(
                 device,
                 EXPOSURE_UPLOAD_BYTES,
             ))
         }?;
-        if unsafe { native::write_exposure_upload(upload.as_ptr(), 1.0) } == 0 {
+        if unsafe { native::write_exposure_upload(upload.as_raw(), 1.0) } == 0 {
             return None;
         }
         (exposure, exposure_upload) = (Some(texture), Some(upload));
@@ -532,7 +533,7 @@ unsafe fn create(setup: *const Setup) -> Result<Sr12, i32> {
         capture,
         sharpen,
     };
-    let device = unsafe { ComRef::retain(s.device) };
+    let device = unsafe { com_ref::retain(s.device) };
     let external_exposure = abi2 && s.external_exposure != 0;
     let (vendor, result, mut width, mut height) =
         unsafe { open_vendor(setup, &s, abi2, external_exposure) };
@@ -600,7 +601,7 @@ impl Sr12 {
     }
 
     unsafe fn owned(&self, child: Handle) -> bool {
-        unsafe { native::owned_by(child, self.device.as_ptr()) != 0 }
+        unsafe { native::owned_by(child, self.device.as_raw()) != 0 }
     }
 
     fn camera_matches(&self, pass: &Pass) -> bool {
@@ -688,12 +689,12 @@ impl Sr12 {
         }
         if state.motion_pending[slot] {
             if let Some(buffer) = state.motion_readback[slot].as_ref() {
-                let mapped = unsafe { native::map(buffer.as_ptr(), READBACK_BYTES) };
+                let mapped = unsafe { native::map(buffer.as_raw(), READBACK_BYTES) };
                 if !mapped.is_null() {
                     let bytes =
                         unsafe { std::slice::from_raw_parts(mapped, READBACK_BYTES as usize) };
                     let (mean, maximum, invalid) = motion_statistics(bytes);
-                    unsafe { native::unmap(buffer.as_ptr()) };
+                    unsafe { native::unmap(buffer.as_raw()) };
                     let text = format!(
                         "Normalized motion samples: mean={mean:.6} max={maximum:.6} render pixels invalid={invalid}"
                     );
@@ -710,8 +711,8 @@ impl Sr12 {
         }
         if state.motion_readback[slot].is_none() {
             state.motion_readback[slot] = unsafe {
-                ComRef::from_owned(native::create_readback(
-                    self.device.as_ptr(),
+                com_ref::owned(native::create_readback(
+                    self.device.as_raw(),
                     READBACK_BYTES,
                 ))
             };
@@ -719,14 +720,14 @@ impl Sr12 {
         let Some(buffer) = state.motion_readback[slot].as_ref() else {
             return;
         };
-        let motion = self.gpu.normalized[MOTION].as_ptr();
+        let motion = self.gpu.normalized[MOTION].as_raw();
         unsafe {
             native::transition(list, motion, SHADER_READ, COPY_SOURCE);
             for tile in 0..4 {
                 let (x, y) = tile_origin(tile, self.width, self.height);
                 native::copy_motion_tile(
                     list,
-                    buffer.as_ptr(),
+                    buffer.as_raw(),
                     u64::from(tile) * TILE_BYTES,
                     motion,
                     x,
@@ -795,8 +796,8 @@ impl Sr12 {
     }
 
     unsafe fn normalize(&self, state: &State, list: Handle, pass: &Pass, slot: usize) {
-        let device = self.device.as_ptr();
-        let heap = self.gpu.heaps[slot].as_ptr();
+        let device = self.device.as_raw();
+        let heap = self.gpu.heaps[slot].as_raw();
         let inputs = [pass.color_input, pass.depth, pass.motion];
         unsafe {
             for (index, &input) in inputs.iter().enumerate() {
@@ -806,7 +807,7 @@ impl Sr12 {
                 .exposure_input
                 .as_ref()
                 .map_or((ptr::null_mut(), R32_FLOAT), |(texture, view)| {
-                    (texture.as_ptr(), *view)
+                    (texture.as_raw(), *view)
                 });
             native::write_srv(device, heap, EXPOSURE_SRV, exposure_input, exposure_view);
             for (index, texture) in self.gpu.normalized.iter().enumerate() {
@@ -814,7 +815,7 @@ impl Sr12 {
                     device,
                     heap,
                     NORMALIZED_UAV + index as u32,
-                    texture.as_ptr(),
+                    texture.as_raw(),
                     NORMALIZED_FORMATS[index],
                 );
             }
@@ -828,8 +829,8 @@ impl Sr12 {
             native::dispatch(
                 list,
                 heap,
-                self.gpu.root.as_ptr(),
-                self.gpu.pipeline.as_ptr(),
+                self.gpu.root.as_raw(),
+                self.gpu.pipeline.as_raw(),
                 constants.as_ptr(),
                 self.width.div_ceil(8),
                 self.height.div_ceil(8),
@@ -852,7 +853,7 @@ impl Sr12 {
     unsafe fn transition_inputs(&self, list: Handle, before: u32, after: u32) {
         unsafe {
             for texture in &self.gpu.normalized {
-                native::transition(list, texture.as_ptr(), before, after);
+                native::transition(list, texture.as_raw(), before, after);
             }
             if self.external_exposure {
                 native::transition(list, raw(self.gpu.exposure.as_ref()), before, after);
@@ -925,7 +926,7 @@ impl Sr12 {
         }
         let reset = !state.history.continues(pass);
         let record = self.record(pass, reset);
-        let normalized = self.gpu.normalized.each_ref().map(ComRef::as_ptr);
+        let normalized = self.gpu.normalized.each_ref().map(Interface::as_raw);
         let view = preview(self.input_sdr);
         unsafe {
             if native::dump_begin_record(&record, self.backend) != 0 {
@@ -986,13 +987,13 @@ impl Sr12 {
                 && let Some(upload) = self.gpu.exposure_upload.as_ref()
             {
                 unsafe {
-                    native::copy_unit_exposure(list, exposure.as_ptr(), upload.as_ptr());
-                    native::transition(list, exposure.as_ptr(), COPY_DEST, SHADER_READ);
+                    native::copy_unit_exposure(list, exposure.as_raw(), upload.as_raw());
+                    native::transition(list, exposure.as_raw(), COPY_DEST, SHADER_READ);
                 }
                 state.exposure_initialized = true;
             }
             frame.exposure =
-                unsafe { self.resource(exposure.as_ptr(), false, record.resource_generation) };
+                unsafe { self.resource(exposure.as_raw(), false, record.resource_generation) };
             (frame.exposure.width, frame.exposure.height) = (1, 1);
         }
         let output = raw(self.gpu.output.as_ref());
@@ -1083,8 +1084,8 @@ impl Sr12 {
                 self.native.sharpen.as_ptr(),
                 list,
                 raw(self.gpu.output.as_ref()),
-                self.gpu.normalized[MOTION].as_ptr(),
-                self.gpu.normalized[DEPTH].as_ptr(),
+                self.gpu.normalized[MOTION].as_raw(),
+                self.gpu.normalized[DEPTH].as_raw(),
                 frame.exposure.resource,
                 options,
                 u32::from(!self.input_sdr),

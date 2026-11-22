@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::sr_session::has_capacity;
 use crate::sys::rsf_backend_log_fn;
 use crate::{allocate_handle, owned_win32_handle};
@@ -19,6 +19,7 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
     DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource1,
 };
+use windows::core::IUnknown;
 use windows::core::{Interface, PCWSTR};
 
 type Handle = *mut c_void;
@@ -193,15 +194,15 @@ pub(super) unsafe extern "C" fn rsf_shared_fence_create(
 
 // Rust drops fields in declaration order. Close the NT handle after the COM interfaces.
 pub(super) struct Surface {
-    pub(super) texture12: Option<ComRef>,
-    target: Option<ComRef>,
-    pub(super) texture11: ComRef,
+    pub(super) texture12: Option<IUnknown>,
+    target: Option<IUnknown>,
+    pub(super) texture11: IUnknown,
     handle: OwnedHandle,
 }
 
 pub(super) struct Fence {
-    fence12: Option<ComRef>,
-    fence11: ComRef,
+    fence12: Option<IUnknown>,
+    fence11: IUnknown,
     handle: OwnedHandle,
 }
 
@@ -247,8 +248,8 @@ fn acquire<T>(
     if hr < 0 { Err(hr) } else { owned.ok_or(hr) }
 }
 
-fn com(create: impl FnOnce(*mut Handle) -> i32) -> Result<ComRef, i32> {
-    acquire(create, |raw| unsafe { ComRef::from_owned(raw) })
+fn com(create: impl FnOnce(*mut Handle) -> i32) -> Result<IUnknown, i32> {
+    acquire(create, |raw| unsafe { com_ref::owned(raw) })
 }
 
 fn nt_handle(create: impl FnOnce(*mut Handle) -> i32) -> Result<OwnedHandle, i32> {
@@ -291,7 +292,7 @@ pub(super) unsafe fn create_surface(
     })?;
     let target = if setup.render_target != 0 {
         Some(
-            com(|out| unsafe { (p.target)(device11, texture11.as_ptr(), out) })
+            com(|out| unsafe { (p.target)(device11, texture11.as_raw(), out) })
                 .map_err(|_| CREATE_FAILED)?,
         )
     } else {
@@ -299,7 +300,7 @@ pub(super) unsafe fn create_surface(
     };
     let handle = {
         let resource =
-            com(|out| unsafe { (p.query_resource)(texture11.as_ptr(), out) }).map_err(|hr| {
+            com(|out| unsafe { (p.query_resource)(texture11.as_raw(), out) }).map_err(|hr| {
                 say(
                     setup.log,
                     setup.log_user,
@@ -310,7 +311,7 @@ pub(super) unsafe fn create_surface(
                 );
                 NO_HANDLE
             })?;
-        nt_handle(|out| unsafe { (p.resource_handle)(resource.as_ptr(), out) }).map_err(|hr| {
+        nt_handle(|out| unsafe { (p.resource_handle)(resource.as_raw(), out) }).map_err(|hr| {
             say(
                 setup.log,
                 setup.log_user,
@@ -359,7 +360,7 @@ fn create_fence(
         );
         CREATE_FAILED
     })?;
-    let fence11 = com(|out| unsafe { (p.fence)(device5.as_ptr(), out) }).map_err(|hr| {
+    let fence11 = com(|out| unsafe { (p.fence)(device5.as_raw(), out) }).map_err(|hr| {
         say(
             log,
             user,
@@ -368,7 +369,7 @@ fn create_fence(
         CREATE_FAILED
     })?;
     let handle =
-        nt_handle(|out| unsafe { (p.fence_handle)(fence11.as_ptr(), out) }).map_err(|hr| {
+        nt_handle(|out| unsafe { (p.fence_handle)(fence11.as_raw(), out) }).map_err(|hr| {
             say(
                 log,
                 user,
@@ -459,21 +460,21 @@ pub(super) unsafe extern "C" fn rsf_shared_surface_destroy(surface: *mut Surface
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_shared_surface_d3d11(surface: *const Surface) -> Handle {
-    unsafe { surface.as_ref() }.map_or(null_mut(), |surface| surface.texture11.as_ptr())
+    unsafe { surface.as_ref() }.map_or(null_mut(), |surface| surface.texture11.as_raw())
 }
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_shared_surface_d3d12(surface: *const Surface) -> Handle {
     unsafe { surface.as_ref() }
         .and_then(|surface| surface.texture12.as_ref())
-        .map_or(null_mut(), ComRef::as_ptr)
+        .map_or(null_mut(), Interface::as_raw)
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_shared_surface_target(surface: *const Surface) -> Handle {
     unsafe { surface.as_ref() }
         .and_then(|surface| surface.target.as_ref())
-        .map_or(null_mut(), ComRef::as_ptr)
+        .map_or(null_mut(), Interface::as_raw)
 }
 
 #[unsafe(no_mangle)]
@@ -485,14 +486,14 @@ pub(super) unsafe extern "C" fn rsf_shared_fence_destroy(fence: *mut Fence) {
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_shared_fence_d3d11(fence: *const Fence) -> Handle {
-    unsafe { fence.as_ref() }.map_or(null_mut(), |fence| fence.fence11.as_ptr())
+    unsafe { fence.as_ref() }.map_or(null_mut(), |fence| fence.fence11.as_raw())
 }
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_shared_fence_d3d12(fence: *const Fence) -> Handle {
     unsafe { fence.as_ref() }
         .and_then(|fence| fence.fence12.as_ref())
-        .map_or(null_mut(), ComRef::as_ptr)
+        .map_or(null_mut(), Interface::as_raw)
 }
 
 #[cfg(test)]

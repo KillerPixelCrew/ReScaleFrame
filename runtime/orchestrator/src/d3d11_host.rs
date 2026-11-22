@@ -4,7 +4,7 @@
 // Every D3D11, DXGI, SDK, overlay and capture call goes through `native`
 // (d3d11_host_platform.rs; fakes under test). Native calls cross individually
 // guarded boundaries.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_host_abi::*;
 #[cfg(not(test))]
 use crate::d3d11_host_platform as native;
@@ -39,6 +39,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 #[cfg(test)]
 use tests::native;
+use windows::core::{IUnknown, Interface};
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -115,8 +116,8 @@ unsafe fn prefix_size(object: *const c_void) -> u32 {
     unsafe { object.cast::<u32>().read() }
 }
 
-fn ptr_of(object: &Option<ComRef>) -> Raw {
-    object.as_ref().map_or(null_mut(), ComRef::as_ptr)
+fn ptr_of(object: &Option<IUnknown>) -> Raw {
+    object.as_ref().map_or(null_mut(), Interface::as_raw)
 }
 
 struct Text {
@@ -181,9 +182,9 @@ struct Graphics {
     reduced: Option<Ticket>,
     next_reduced_token: u64,
     sampler_bias: Raw,
-    chain: Option<ComRef>,
-    creation_outer: Option<ComRef>,
-    device: Option<ComRef>,
+    chain: Option<IUnknown>,
+    creation_outer: Option<IUnknown>,
+    device: Option<IUnknown>,
     capture_record: rsf_frame_record,
     capture_view: u64,
     capture_native_frame: u64,
@@ -540,8 +541,8 @@ impl Host {
         unsafe { native::same_object(left, right) != 0 }
     }
 
-    fn child_device(&self, child: Raw) -> Option<ComRef> {
-        unsafe { ComRef::from_owned(native::child_device(child)) }
+    fn child_device(&self, child: Raw) -> Option<IUnknown> {
+        unsafe { com_ref::owned(native::child_device(child)) }
     }
 
     fn on_device(&self, child: Raw, device: Raw) -> bool {
@@ -797,7 +798,7 @@ impl Host {
         }
         self.shared().desired = applied;
         g.execution_thread = current_thread();
-        g.chain = Some(unsafe { ComRef::retain(swapchain) });
+        g.chain = Some(unsafe { com_ref::retain(swapchain) });
         if unsafe { native::present_is_owner(swapchain) } != 0 {
             g.observer = true;
             self.log(
@@ -1373,7 +1374,7 @@ impl Host {
             return NOT_READY;
         }
         let device = self.child_device(context);
-        let immediate = unsafe { ComRef::from_owned(native::immediate_context(g.device_ptr())) };
+        let immediate = unsafe { com_ref::owned(native::immediate_context(g.device_ptr())) };
         if context != ptr_of(&immediate)
             || !self.same(ptr_of(&device), g.device_ptr())
             || !self.is_immediate(context)
@@ -1461,12 +1462,12 @@ impl Host {
         ticket.owner = owner;
         ticket.surfaces = surfaces;
         ticket.count = count as u32;
-        ticket.context = Some(unsafe { ComRef::retain(context) });
+        ticket.context = Some(unsafe { com_ref::retain(context) });
         ticket.chain = g.chain.clone();
         ticket.generation = generation;
         ticket.leases = std::iter::once(pass.color_input)
             .chain(surfaces[..total].iter().map(|surface| surface.texture))
-            .map(|texture| unsafe { ComRef::retain(texture) })
+            .map(|texture| unsafe { com_ref::retain(texture) })
             .collect();
         ticket.token = g.next_reduced_token;
         g.next_reduced_token += 1;
@@ -1867,16 +1868,15 @@ impl Host {
         }
         if g.capture_pending && self.dump_wants(&g.capture_record) {
             if event.completed == 0 {
-                let context =
-                    unsafe { ComRef::from_owned(native::immediate_context(g.device_ptr())) };
-                let buffer = unsafe { ComRef::from_owned(native::chain_buffer(g.chain_ptr())) };
+                let context = unsafe { com_ref::owned(native::immediate_context(g.device_ptr())) };
+                let buffer = unsafe { com_ref::owned(native::chain_buffer(g.chain_ptr())) };
                 if let Some(buffer) = &buffer {
                     self.dump_texture(
                         ptr_of(&context),
                         &g.capture_record,
                         c"final_color".as_ptr(),
                         c"Actual native Present colour before shared overlay",
-                        buffer.as_ptr(),
+                        buffer.as_raw(),
                         DUMP_HDR,
                     );
                 }
@@ -2021,13 +2021,13 @@ impl Host {
             }
             return OK;
         }
-        let Some(device) = (unsafe { ComRef::from_owned(native::chain_device(swapchain)) }) else {
+        let Some(device) = (unsafe { com_ref::owned(native::chain_device(swapchain)) }) else {
             return INVALID;
         };
         if unsafe { native::chain_window(swapchain) }.is_null() {
             return INVALID;
         }
-        let context = unsafe { ComRef::from_owned(native::immediate_context(device.as_ptr())) };
+        let context = unsafe { com_ref::owned(native::immediate_context(device.as_raw())) };
         if !self.initialize(g, ptr_of(&context), swapchain) {
             return NOT_READY;
         }
@@ -2056,30 +2056,30 @@ impl Host {
         let result = unsafe { native::wrap_native(request.device, native, &mut facade) };
         // A set out pointer owns one facade reference even beside a failed
         // HRESULT; filtering drops (releases) it so a refusal never leaks it.
-        let Some(facade) = (unsafe { ComRef::from_owned(facade) }).filter(|_| result >= 0) else {
+        let Some(facade) = (unsafe { com_ref::owned(facade) }).filter(|_| result >= 0) else {
             self.log(&format!(
                 "D3D11 outer creation facade refused HRESULT=0x{:08x}; native outputs preserved",
                 result as u32
             ));
             return NOT_READY;
         };
-        if unsafe { native::present_is_owner(facade.as_ptr()) } == 0 {
+        if unsafe { native::present_is_owner(facade.as_raw()) } == 0 {
             drop(facade);
             self.log("D3D11 outer creation refused non-owner facade; native outputs preserved.");
             return NOT_READY;
         }
-        let native_identity = unsafe { ComRef::from_owned(native::com_identity(native)) };
-        let facade_identity = unsafe { ComRef::from_owned(native::com_identity(facade.as_ptr())) };
+        let native_identity = unsafe { com_ref::owned(native::com_identity(native)) };
+        let facade_identity = unsafe { com_ref::owned(native::com_identity(facade.as_raw())) };
         let native_unknown = ptr_of(&native_identity);
         self.log(&format!(
             "D3D11 outer creation identity native={} unknown={} Present={} facade={} unknown={} Present={} owner={}",
             msvc_pointer(native),
             msvc_pointer(native_unknown),
             msvc_pointer(unsafe { native::chain_present(native) }),
-            msvc_pointer(facade.as_ptr()),
+            msvc_pointer(facade.as_raw()),
             msvc_pointer(ptr_of(&facade_identity)),
-            msvc_pointer(unsafe { native::chain_present(facade.as_ptr()) }),
-            unsafe { native::present_is_owner(facade.as_ptr()) },
+            msvc_pointer(unsafe { native::chain_present(facade.as_raw()) }),
+            unsafe { native::present_is_owner(facade.as_raw()) },
         ));
         // SAFETY: the slot is writable caller storage; it now owns the facade reference.
         unsafe { *request.swapchain = facade.into_raw() };
@@ -2556,7 +2556,7 @@ unsafe extern "C" fn rsf_d3d11_host_creation_end(
         return NATIVE_REFUSED;
     }
     // Keep the explicitly verified alias alive; never replace it.
-    g.creation_outer = (!outer.is_null()).then(|| unsafe { ComRef::retain(outer) });
+    g.creation_outer = (!outer.is_null()).then(|| unsafe { com_ref::retain(outer) });
     OK
 }
 

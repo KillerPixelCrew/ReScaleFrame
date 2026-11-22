@@ -4,7 +4,7 @@
 // that fill them, HUD-less copies, provider admission at Prepare, retirement, Present observation and
 // window-end sequencing, and the requested/observed FG status. The platform module owns native
 // calls. native_fg_cpu.rs owns CPU pacing and latency markers.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::fg_scene::{read_scene, set_scene, with_capture_scene};
 use crate::fg_status;
 use crate::native_cpu::{
@@ -48,6 +48,7 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 };
 use windows::Win32::Graphics::Dxgi::{Common::*, DXGI_PRESENT_TEST};
+use windows::core::{IUnknown, Interface};
 
 mod platform;
 
@@ -232,8 +233,8 @@ fn d3d12(surface: &Option<Surface>) -> Handle {
 // Process-owned because CPU/vendor callbacks and presentation hooks remain installed. Explicit
 // ownership transitions are cold-start only; no shutdown callback frees in-flight inputs.
 struct Device {
-    _device11: ComRef,
-    context: ComRef,
+    _device11: IUnknown,
+    context: IUnknown,
     // Borrowed from the presentation bridge for the process lifetime.
     device12: Handle,
     queue: Handle,
@@ -267,19 +268,19 @@ fn initialize(context: Handle) -> Option<&'static Device> {
     {
         return None;
     }
-    let device11 = unsafe { ComRef::from_owned(call!(context_device, context)) }?;
-    let context4 = unsafe { ComRef::from_owned(call!(query_context4, context)) }?;
+    let device11 = unsafe { com_ref::owned(call!(context_device, context)) }?;
+    let context4 = unsafe { com_ref::owned(call!(query_context4, context)) }?;
     let event = call!(create_event);
     if event.is_null() {
         return None;
     }
-    let fence = call!(fence_create, device11.as_ptr(), native_device);
+    let fence = call!(fence_create, device11.as_raw(), native_device);
     if fence.is_null() {
         call!(close_event, event);
         return None;
     }
     let device = Box::leak(Box::new(Device {
-        device11: device11.as_ptr(),
+        device11: device11.as_raw(),
         _device11: device11,
         context: context4,
         device12,
@@ -299,7 +300,7 @@ impl Device {
     // Flush later in the frame submit it, ahead of any CPU wait for slot reuse.
     fn signal11(&self, serial: &mut u64) -> bool {
         *serial = self.serial.fetch_add(1, Ordering::Relaxed) + 1;
-        call!(context_signal, self.context.as_ptr(), self.fence11, *serial) != 0
+        call!(context_signal, self.context.as_raw(), self.fence11, *serial) != 0
     }
 
     fn surface(&self, width: u32, height: u32, format: u32) -> Option<Surface> {
@@ -321,8 +322,8 @@ impl Device {
 }
 
 struct Commands {
-    allocator: ComRef,
-    list: ComRef,
+    allocator: IUnknown,
+    list: IUnknown,
 }
 
 fn create_commands(device: &Device) -> Option<Commands> {
@@ -331,16 +332,16 @@ fn create_commands(device: &Device) -> Option<Commands> {
         return None;
     }
     Some(Commands {
-        allocator: unsafe { ComRef::from_owned(allocator) }?,
-        list: unsafe { ComRef::from_owned(list) }?,
+        allocator: unsafe { com_ref::owned(allocator) }?,
+        list: unsafe { com_ref::owned(list) }?,
     })
 }
 
 fn reset(commands: &Commands) -> bool {
     call!(
         reset_commands,
-        commands.allocator.as_ptr(),
-        commands.list.as_ptr()
+        commands.allocator.as_raw(),
+        commands.list.as_raw()
     ) != 0
 }
 
@@ -352,7 +353,7 @@ struct Slot {
     // Prepare moved depth, motion and HUD-less colour to the read state; retire restores them.
     restore: bool,
     // SR-only storage (surfaces 0, 3 and 4 plus output) exists only once SR evaluated here.
-    output: Option<ComRef>,
+    output: Option<IUnknown>,
     surfaces: [Option<Surface>; 5],
     hudless: Option<Surface>,
     hudless_format: u32,
@@ -419,7 +420,7 @@ unsafe impl Send for Slot {}
 
 // Vendor reads of a slot's inputs, written by retirement on the present thread.
 struct Vendor {
-    fence: Option<ComRef>,
+    fence: Option<IUnknown>,
     value: u64,
     // Retirement failed, so nothing says when the vendor stopped reading. Held until a later
     // retirement covers it or the provider generation changes (a drained transition).
@@ -554,7 +555,7 @@ fn restore_read_state(device: &Device, slot: &mut Slot) -> bool {
     let list = slot
         .retirement
         .as_ref()
-        .map_or(ptr::null_mut(), |c| c.list.as_ptr());
+        .map_or(ptr::null_mut(), |c| c.list.as_raw());
     for surface in [&slot.surfaces[DEPTH], &slot.surfaces[MOTION], &slot.hudless] {
         if surface.is_some() {
             call!(transition, list, d3d12(surface), READ, COMMON);
@@ -598,11 +599,11 @@ fn resources(
     // D3D11 signals are queued unflushed. Submit them before blocking on one, which happens when the
     // same frame reuses the slot, e.g. capture after a failed SR evaluation.
     if slot.complete != 0 && call!(fence_completed, device.fence12) < slot.complete {
-        call!(flush, device.context.as_ptr());
+        call!(flush, device.context.as_raw());
     }
     let vendor_fence = vendor_fence
         .as_ref()
-        .map_or(ptr::null_mut(), ComRef::as_ptr);
+        .map_or(ptr::null_mut(), Interface::as_raw);
     if call!(wait_fence, device.fence12, slot.complete, device.event) == 0
         || call!(wait_fence, vendor_fence, vendor_value, device.event) == 0
     {
@@ -682,7 +683,7 @@ fn resources(
         }
     }
     slot.output = unsafe {
-        ComRef::from_owned(call!(
+        com_ref::owned(call!(
             create_output,
             device.device12,
             frame.output_width,
@@ -849,11 +850,11 @@ pub(super) unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *cons
         return;
     }
     slot.hudless_ready = false;
-    let Some(texture) = (unsafe { ComRef::from_owned(call!(query_texture, pass.scene_surface)) })
+    let Some(texture) = (unsafe { com_ref::owned(call!(query_texture, pass.scene_surface)) })
     else {
         return;
     };
-    let desc = texture_info(texture.as_ptr());
+    let desc = texture_info(texture.as_raw());
     if desc.width != slot.output_width
         || desc.height != slot.output_height
         || desc.samples != 1
@@ -899,9 +900,9 @@ pub(super) unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *cons
     stage(c"final-copy", source, native, 0);
     call!(
         copy_resource,
-        device.context.as_ptr(),
+        device.context.as_raw(),
         d3d11(&slot.hudless),
-        texture.as_ptr()
+        texture.as_raw()
     );
     let mut complete = 0;
     slot.hudless_ready = device.signal11(&mut complete);
@@ -967,7 +968,7 @@ fn capture(context: Handle, frame: *const DlssFrame) {
     }
     stage(c"capture-copy", source, native, 0);
     slot.prepared = false;
-    let context4 = device.context.as_ptr();
+    let context4 = device.context.as_raw();
     call!(
         copy_resource,
         context4,
@@ -1060,7 +1061,7 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
     let Some(commands) = slot.commands.as_ref().filter(|c| reset(c)) else {
         return FEATURE_FAILED;
     };
-    let list = commands.list.as_ptr();
+    let list = commands.list.as_raw();
     let mut translated = *frame;
     // Dense motion has no unwritten sentinel. Valid zero displacement must remain valid.
     translated.motion_invalid_value = f32::MAX;
@@ -1077,7 +1078,7 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
         settings.was_generating = generating;
     }
     call!(dump_sr, context, &translated, RSF_SR_DLSS);
-    let context4 = device.context.as_ptr();
+    let context4 = device.context.as_raw();
     let inputs = [frame.color_in, frame.depth, frame.motion, frame.exposure];
     let mut targets = [ptr::null_mut(); 4];
     for (i, input) in inputs.into_iter().enumerate() {
@@ -1134,7 +1135,10 @@ unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssF
         translated.bias_current_color,
     ] = hint_targets;
     translated.motion_depth_layer = ptr::null_mut(); // Consumed by the D3D11 resolve already.
-    let output = slot.output.as_ref().map_or(ptr::null_mut(), ComRef::as_ptr);
+    let output = slot
+        .output
+        .as_ref()
+        .map_or(ptr::null_mut(), Interface::as_raw);
     translated.color_out = output;
     // This Flush stays: the D3D12 queue waits on the signal below within this frame.
     let mut uploaded = 0;
@@ -1741,7 +1745,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Han
         && let Some(slot) = slot.as_deref()
         && let Some(retirement) = slot.retirement.as_ref().filter(|c| reset(c))
     {
-        let list = retirement.list.as_ptr();
+        let list = retirement.list.as_raw();
         for surface in [&slot.surfaces[DEPTH], &slot.surfaces[MOTION], &slot.hudless] {
             if surface.is_some() {
                 call!(transition, list, d3d12(surface), READ, COMMON);
@@ -1764,7 +1768,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Han
     {
         let mut vendor = lock(&VENDOR);
         if result == OK && !fence.is_null() {
-            let joined = unsafe { ComRef::retain(fence) };
+            let joined = unsafe { com_ref::retain(fence) };
             if let Some(index) = index {
                 let own = &mut vendor[index];
                 own.fence = Some(joined.clone());

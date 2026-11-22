@@ -12,7 +12,7 @@
 // frame-thread entry refuses instead of racing. Cross-thread fields sit behind a second lock that
 // is never held across a leaf call or a log line. The sink has its own lock, so vendor lines
 // forwarded from inside a leaf never wait on either.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::dlss_pipeline_abi::*;
 use crate::frame_assembly::rsf_assemble_dlss_frame;
 use crate::frame_capture_vk::general;
@@ -45,6 +45,7 @@ use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
+use windows::core::{IUnknown, Interface};
 
 type P = rsf_dlssp_platform;
 type Setup = rsf_dlss_pipeline_setup;
@@ -251,8 +252,8 @@ impl DlssSettings {
 
 /// Owned by the thread that drives frames.
 struct Owned {
-    device: Option<ComRef>,
-    output: Option<ComRef>,
+    device: Option<IUnknown>,
+    output: Option<IUnknown>,
     streamline_loaded: bool,
     dlss_settings: DlssSettings,
     // A cold viewport has no DLSS resources to release.
@@ -285,8 +286,8 @@ struct Owned {
     sharpen: Raw,
     sharpen_reported: bool,
     // The layer feature: viewport 1, one to one, with its own history.
-    layer_output: Option<ComRef>,
-    layer_motion: Option<ComRef>,
+    layer_output: Option<IUnknown>,
+    layer_motion: Option<IUnknown>,
     layer_extent: [u32; 2],
     layer_rebuilt: bool,
     layer_failures: u32,
@@ -345,11 +346,11 @@ impl Owned {
     }
 
     fn device(&self) -> Raw {
-        self.device.as_ref().map_or(null_mut(), ComRef::as_ptr)
+        self.device.as_ref().map_or(null_mut(), Interface::as_raw)
     }
 
     fn output(&self) -> Raw {
-        self.output.as_ref().map_or(null_mut(), ComRef::as_ptr)
+        self.output.as_ref().map_or(null_mut(), Interface::as_raw)
     }
 
     fn directory_pointers(&self) -> [*const c_char; 4] {
@@ -527,8 +528,8 @@ impl Pipeline {
         self.emit(&line);
     }
 
-    fn set_output(&self, owned: &mut Owned, output: Option<ComRef>) -> Option<ComRef> {
-        let raw = output.as_ref().map_or(null_mut(), ComRef::as_ptr);
+    fn set_output(&self, owned: &mut Owned, output: Option<IUnknown>) -> Option<IUnknown> {
+        let raw = output.as_ref().map_or(null_mut(), Interface::as_raw);
         let previous = std::mem::replace(&mut owned.output, output);
         self.output.store(raw, Ordering::Release);
         previous
@@ -582,15 +583,15 @@ impl Pipeline {
         device: Raw,
         width: u32,
         height: u32,
-    ) -> Option<ComRef> {
+    ) -> Option<IUnknown> {
         let desc = texture_desc(
             width,
             height,
             RSF_D3D11_FORMAT_RGBA16_FLOAT,
             RSF_D3D11_BIND_RENDER_TARGET | RSF_D3D11_BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS,
         );
-        let target = unsafe { ComRef::from_owned((p.create_texture)(device, &desc)) }?;
-        unsafe { (p.clear_black)(device, target.as_ptr()) };
+        let target = unsafe { com_ref::owned((p.create_texture)(device, &desc)) }?;
+        unsafe { (p.clear_black)(device, target.as_raw()) };
         Some(target)
     }
 
@@ -881,7 +882,7 @@ impl Pipeline {
             engine: setup.engine,
             require_signature: setup.require_signature,
         };
-        owned.device = Some(unsafe { ComRef::retain(device) });
+        owned.device = Some(unsafe { com_ref::retain(device) });
         let [width, height] = [setup.output_width, setup.output_height];
         let mut range = Range::alternate([width, height]);
         let result = if backend == RSF_SR_DLSS {
@@ -1774,7 +1775,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             .as_ref()
             .filter(|_| o.layer_extent == [width, height])
         {
-            unsafe { out.write(layer.as_ptr()) };
+            unsafe { out.write(layer.as_raw()) };
             return OK;
         }
         if o.layer_output.is_some() {
@@ -1804,14 +1805,14 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             RSF_D3D11_BIND_SHADER_RESOURCE,
         );
         let Some(motion) =
-            (unsafe { ComRef::from_owned((p.create_zeroed)(o.device(), &desc, width * 4)) })
+            (unsafe { com_ref::owned((p.create_zeroed)(o.device(), &desc, width * 4)) })
         else {
             drop(output);
             self.say("the layer's zero motion could not be created");
             self.release_layer(o);
             return RESOURCE_FAILED;
         };
-        let raw = output.as_ptr();
+        let raw = output.as_raw();
         o.layer_output = Some(output);
         o.layer_motion = Some(motion);
         o.layer_extent = [width, height];
@@ -1844,7 +1845,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         if backend != RSF_SR_DLSS || o.device.is_none() || !o.streamline_loaded {
             return NOT_RUNNING;
         }
-        let (output, motion) = (output.as_ptr(), motion.as_ptr());
+        let (output, motion) = (output.as_raw(), motion.as_raw());
         if o.layer_given_up {
             return self.count(true, EVALUATE_FAILED);
         }
@@ -2098,8 +2099,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         unsafe { (p.texture_desc)(o.output(), &mut desc) };
         desc.width = width;
         desc.height = height;
-        let Some(replacement) =
-            (unsafe { ComRef::from_owned((p.create_texture)(o.device(), &desc)) })
+        let Some(replacement) = (unsafe { com_ref::owned((p.create_texture)(o.device(), &desc)) })
         else {
             unsafe { rsf_sr_legacy_destroy(next_alternate) };
             return RESOURCE_FAILED;
@@ -2110,7 +2110,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             }
             o.dlss_evaluation_attempted = false;
         }
-        unsafe { (p.clear_black)(o.device(), replacement.as_ptr()) };
+        unsafe { (p.clear_black)(o.device(), replacement.as_raw()) };
         let previous_output = self.set_output(o, Some(replacement));
         let previous_alternate = std::mem::replace(&mut o.alternate, next_alternate);
         if !o.decode.is_null() {

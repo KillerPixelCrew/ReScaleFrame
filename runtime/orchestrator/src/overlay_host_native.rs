@@ -7,6 +7,7 @@ use crate::overlay_input::{
 use crate::sys::{RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay_input_options as Options};
 use std::mem::{offset_of, transmute};
 use std::ptr::null;
+use windows::core::Interface;
 use windows_sys::Win32::System::{
     Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
     SystemInformation::GetTickCount64,
@@ -140,10 +141,10 @@ unsafe extern "C" fn same_object(first: Handle, second: Handle) -> u32 {
             &UNKNOWN,
             &mut raw
         );
-        unsafe { ComRef::from_owned(raw) }.filter(|_| status >= 0)
+        unsafe { com_ref::owned(raw) }.filter(|_| status >= 0)
     };
     u32::from(
-        identity(first).is_some_and(|a| identity(second).is_some_and(|b| a.as_ptr() == b.as_ptr())),
+        identity(first).is_some_and(|a| identity(second).is_some_and(|b| a.as_raw() == b.as_raw())),
     )
 }
 

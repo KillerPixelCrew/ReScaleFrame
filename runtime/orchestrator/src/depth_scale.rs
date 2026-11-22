@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::sr_session::has_capacity;
@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
+use windows::core::IUnknown;
 use windows::core::Interface;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
@@ -41,7 +42,7 @@ const SNAPSHOT: usize = 0;
 const OUTPUT: usize = 1;
 
 struct Reserved {
-    surfaces: [ComRef; 5],
+    surfaces: [IUnknown; 5],
     size: [u32; 2],
 }
 
@@ -49,7 +50,7 @@ struct Reserved {
 struct Transaction {
     reserved: Option<Reserved>,
     // The leased native texture, from a successful prepare until restore or discard.
-    original: Option<ComRef>,
+    original: Option<IUnknown>,
     committed: bool,
 }
 
@@ -59,7 +60,7 @@ pub(super) struct DepthScale {
     thread: u32,
     context: ID3D11DeviceContext,
     device: ID3D11Device,
-    pipeline: [ComRef; 14],
+    pipeline: [IUnknown; 14],
     transaction: RefCell<Transaction>,
 }
 
@@ -141,9 +142,9 @@ impl DepthScale {
         unsafe { rsf_d3d11_output_clear_state(self.context.as_raw()) };
     }
 
-    fn copy(&self, destination: &ComRef, source: Handle) {
+    fn copy(&self, destination: &IUnknown, source: Handle) {
         unsafe {
-            rsf_d3d11_output_copy_resource(self.context.as_raw(), destination.as_ptr(), source)
+            rsf_d3d11_output_copy_resource(self.context.as_raw(), destination.as_raw(), source)
         };
     }
 
@@ -180,7 +181,7 @@ impl DepthScale {
         let original = transaction
             .original
             .as_ref()
-            .map_or(null_mut(), ComRef::as_ptr);
+            .map_or(null_mut(), Interface::as_raw);
         let held = if capture {
             !original.is_null()
         } else {
@@ -213,9 +214,9 @@ impl DepthScale {
         if capture {
             self.copy(&surfaces[SNAPSHOT], texture);
         }
-        self.copy(&surfaces[OUTPUT], surfaces[SNAPSHOT].as_ptr());
-        let pipeline: Pipeline = std::array::from_fn(|i| self.pipeline[i].as_ptr());
-        let views: Surfaces = std::array::from_fn(|i| surfaces[i].as_ptr());
+        self.copy(&surfaces[OUTPUT], surfaces[SNAPSHOT].as_raw());
+        let pipeline: Pipeline = std::array::from_fn(|i| self.pipeline[i].as_raw());
+        let views: Surfaces = std::array::from_fn(|i| surfaces[i].as_raw());
         let mut constants = Constants {
             source: frame.source_rect.map(|value| value as f32),
             output: frame.output_rect.map(|value| value as f32),
@@ -233,7 +234,7 @@ impl DepthScale {
             return RESOURCE_FAILED;
         }
         drop(bindings);
-        transaction.original = Some(unsafe { ComRef::retain(texture) });
+        transaction.original = Some(unsafe { com_ref::retain(texture) });
         OK
     }
 
@@ -252,7 +253,7 @@ impl DepthScale {
             return RESOURCE_FAILED;
         };
         self.clear();
-        self.copy(original, reserved.surfaces[OUTPUT].as_ptr());
+        self.copy(original, reserved.surfaces[OUTPUT].as_raw());
         drop(bindings);
         transaction.committed = true;
         if self.ready() { OK } else { RESOURCE_FAILED }
@@ -272,7 +273,7 @@ impl DepthScale {
                 return RESOURCE_FAILED;
             };
             self.clear();
-            self.copy(original, reserved.surfaces[SNAPSHOT].as_ptr());
+            self.copy(original, reserved.surfaces[SNAPSHOT].as_raw());
             drop(bindings);
             if !self.ready() {
                 return RESOURCE_FAILED;

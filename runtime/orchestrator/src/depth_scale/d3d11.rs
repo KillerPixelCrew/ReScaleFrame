@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Constants, Handle, Pipeline, Setup, Surfaces};
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::{same_device, texture_desc};
 use crate::graphics_d3d11::{
     constant_buffer, depth_state, pixel_shader, rasterizer, shader_with_log, source_view,
@@ -18,6 +18,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_R24_UNORM_X8_TYPELESS, DXGI_FORMAT_R24G8_TYPELESS,
     DXGI_FORMAT_X24_TYPELESS_G8_UINT,
 };
+use windows::core::IUnknown;
 use windows::core::Interface;
 
 const SHADER: &[u8] = include_bytes!("../../../graphics/shaders/depth_scale.hlsl");
@@ -30,7 +31,7 @@ pub(super) unsafe fn immediate_device(context: Handle) -> Option<ID3D11Device> {
     unsafe { context.GetDevice() }.ok()
 }
 
-pub(super) fn make_pipeline(device: &ID3D11Device, setup: &Setup) -> Option<[ComRef; 14]> {
+pub(super) fn make_pipeline(device: &ID3D11Device, setup: &Setup) -> Option<[IUnknown; 14]> {
     if unsafe { device.GetFeatureLevel() }.0 < D3D_FEATURE_LEVEL_11_0.0 {
         return None;
     }
@@ -79,7 +80,7 @@ pub(super) fn make_pipeline(device: &ID3D11Device, setup: &Setup) -> Option<[Com
     let [s0, s1, s2, s3, s4, s5, s6, s7] =
         stencil.map(|state| state.expect("all stencil states created").into_raw());
     unsafe {
-        ComRef::adopt_all([
+        com_ref::adopt_all([
             vs.into_raw(),
             depth_shader.into_raw(),
             stencil_shader.into_raw(),
@@ -113,7 +114,7 @@ pub(super) unsafe fn describe(device: &ID3D11Device, texture: Handle) -> Option<
     Some([desc.width, desc.height])
 }
 
-pub(super) unsafe fn make_surfaces(device: &ID3D11Device, source: Handle) -> Option<[ComRef; 5]> {
+pub(super) unsafe fn make_surfaces(device: &ID3D11Device, source: Handle) -> Option<[IUnknown; 5]> {
     let source = unsafe { ID3D11Texture2D::from_raw_borrowed(&source) }?;
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { source.GetDesc(&mut desc) };
@@ -127,9 +128,8 @@ pub(super) unsafe fn make_surfaces(device: &ID3D11Device, source: Handle) -> Opt
     };
     let snapshot = make_texture()?;
     let output = make_texture()?;
-    let read_plane = |format| unsafe {
-        ComRef::from_owned(source_view(device.as_raw(), snapshot.as_raw(), format))
-    };
+    let read_plane =
+        |format| unsafe { com_ref::owned(source_view(device.as_raw(), snapshot.as_raw(), format)) };
     let depth = read_plane(DXGI_FORMAT_R24_UNORM_X8_TYPELESS.0 as u32)?;
     let stencil = read_plane(DXGI_FORMAT_X24_TYPELESS_G8_UINT.0 as u32)?;
     let dsv = D3D11_DEPTH_STENCIL_VIEW_DESC {
@@ -140,11 +140,11 @@ pub(super) unsafe fn make_surfaces(device: &ID3D11Device, source: Handle) -> Opt
     let mut target = None;
     unsafe { device.CreateDepthStencilView(&output, Some(&dsv), Some(&mut target)) }.ok()?;
     Some([
-        unsafe { ComRef::from_owned(snapshot.into_raw()) }?,
-        unsafe { ComRef::from_owned(output.into_raw()) }?,
+        unsafe { com_ref::owned(snapshot.into_raw()) }?,
+        unsafe { com_ref::owned(output.into_raw()) }?,
         depth,
         stencil,
-        unsafe { ComRef::from_owned(target?.into_raw()) }?,
+        unsafe { com_ref::owned(target?.into_raw()) }?,
     ])
 }
 

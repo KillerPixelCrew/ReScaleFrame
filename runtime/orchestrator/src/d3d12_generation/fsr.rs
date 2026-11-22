@@ -5,7 +5,7 @@ mod native;
 pub(crate) use native::rsf_generation_fsr4_supported;
 
 use super::*;
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::frame_capture12::Owner as Capture;
 use crate::sdk_module::FFX_CONTEXT_EXPORTS;
@@ -16,6 +16,7 @@ use crate::sys::{
 use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering::Relaxed};
+use windows::core::{IUnknown, Interface};
 
 const CAPTURE_SLOTS: usize = 64;
 const NON_PIXEL_READ: u32 = 0x40; // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
@@ -270,8 +271,8 @@ struct Counters {
 struct Fsr {
     ops: &'static Ops,
     sdk: Bindings,
-    device: ComRef,
-    queue: ComRef,
+    device: IUnknown,
+    queue: IUnknown,
     log: Log,
     ui_mode: u32,
     depth_inverted: bool,
@@ -284,7 +285,7 @@ struct Fsr {
     generation: AtomicPtr<c_void>,
     generation_ready: Cell<bool>,
     swapchain: Cell<Raw>,
-    chain: RefCell<Option<ComRef>>,
+    chain: RefCell<Option<IUnknown>>,
     extent: Cell<Extent>,
     sequence: Cell<u64>,
     counters: Cell<Counters>,
@@ -304,7 +305,7 @@ impl Fsr {
         self.chain
             .borrow()
             .as_ref()
-            .map_or(null_mut(), ComRef::as_ptr)
+            .map_or(null_mut(), Interface::as_raw)
     }
 
     fn next_sequence(&self) -> u64 {
@@ -529,7 +530,7 @@ impl Session for Fsr {
 
     unsafe fn prepare(&self, command: Raw, frame: *const Frame) -> i32 {
         let (frame, record) =
-            match unsafe { read_frame(self.ops.check, frame, self.device.as_ptr()) } {
+            match unsafe { read_frame(self.ops.check, frame, self.device.as_raw()) } {
                 Ok(frame) => frame,
                 Err(result) => return result,
             };
@@ -541,7 +542,7 @@ impl Session for Fsr {
         let enabled = frame.interpolate != 0 && before.mode() != RSF_FG_OFF;
         let hudless = enabled && self.ui_mode == HUDLESS;
         if enabled {
-            let result = unsafe { (self.ops.check.command)(command, self.device.as_ptr()) };
+            let result = unsafe { (self.ops.check.command)(command, self.device.as_raw()) };
             if result != OK {
                 return result;
             }
@@ -650,7 +651,7 @@ impl Session for Fsr {
         }
         let before = self.state.read();
         self.capture
-            .flush_after_queue(self.queue.as_ptr(), || self.wait());
+            .flush_after_queue(self.queue.as_raw(), || self.wait());
         let copy_present = self.ui_mode == UI_NONE;
         let dispatched = self.dispatched.load(Relaxed);
         let generated = if copy_present {
@@ -706,7 +707,7 @@ impl Session for Fsr {
         }
         // A callback may have recorded readbacks during that wait. Snapshot
         // only afterward and retire them on the game queue before dropping.
-        if !self.capture.retire_after_wait(self.queue.as_ptr()) || !self.destroy_generation() {
+        if !self.capture.retire_after_wait(self.queue.as_raw()) || !self.destroy_generation() {
             return false;
         }
         let chain = self.chain.borrow_mut().take();
@@ -794,8 +795,8 @@ unsafe extern "C" fn rsf_core_fsr12_create(
         ops,
         sdk,
         log: Log::new(setup),
-        device: unsafe { ComRef::retain(setup.chain.d3d12_device) },
-        queue: unsafe { ComRef::retain(setup.chain.d3d12_queue) },
+        device: unsafe { com_ref::retain(setup.chain.d3d12_device) },
+        queue: unsafe { com_ref::retain(setup.chain.d3d12_queue) },
         ui_mode: setup.chain.ui_mode,
         depth_inverted: setup.depth_inverted != 0,
         motion_jittered: setup.motion_jittered != 0,
@@ -855,7 +856,7 @@ unsafe extern "C" fn rsf_core_fsr12_create(
             ));
             // Adopt the SDK's swapchain reference only from a successful create.
             if ffx == 0 && !created.is_null() {
-                *owner.chain.borrow_mut() = unsafe { ComRef::from_owned(created) };
+                *owner.chain.borrow_mut() = unsafe { com_ref::owned(created) };
             } else {
                 result = INIT_FAILED;
             }

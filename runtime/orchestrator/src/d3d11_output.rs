@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
 use crate::fullscreen_pass::{
     COPY, COPY_RGBA, rsf_fullscreen_pass_create, rsf_fullscreen_pass_destroy,
     rsf_fullscreen_pass_draw,
@@ -9,6 +8,7 @@ use crate::sys::{RSF_FULLSCREEN_PASS_ABI_VERSION, rsf_fullscreen_draw, rsf_fulls
 use std::ffi::c_void;
 use std::ptr;
 use std::ptr::NonNull;
+use windows::core::{IUnknown, Interface};
 
 pub(super) type CreateBlit = unsafe extern "C" fn(*mut c_void) -> *mut rsf_fullscreen_pass;
 pub(super) type DrawBlit = unsafe extern "C" fn(
@@ -65,7 +65,7 @@ unsafe extern "C" fn destroy_copy(pass: *mut rsf_fullscreen_pass) {
 }
 
 impl FullscreenBlit {
-    pub(super) unsafe fn new_copy(device: &ComRef, rgba: bool) -> Option<Self> {
+    pub(super) unsafe fn new_copy(device: &IUnknown, rgba: bool) -> Option<Self> {
         let draw = if rgba {
             draw_copy::<COPY_RGBA>
         } else {
@@ -75,12 +75,12 @@ impl FullscreenBlit {
     }
 
     pub(super) unsafe fn new(
-        device: &ComRef,
+        device: &IUnknown,
         create: CreateBlit,
         draw: DrawBlit,
         destroy: DestroyBlit,
     ) -> Option<Self> {
-        let pass = NonNull::new(unsafe { create(device.as_ptr()) })?;
+        let pass = NonNull::new(unsafe { create(device.as_raw()) })?;
         Some(Self {
             pass,
             draw,

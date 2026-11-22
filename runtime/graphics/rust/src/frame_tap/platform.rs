@@ -3,6 +3,7 @@ use super::*;
 use crate::d3d11_output::texture_desc;
 use crate::sys::{rsf_d3d11_output_child_device, rsf_d3d11_output_query_texture};
 use std::sync::OnceLock;
+use windows::core::IUnknown;
 use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
 use windows_sys::core::GUID;
 
@@ -79,7 +80,7 @@ unsafe extern "C" fn context1(context: Handle) -> i32 {
     i32::from(unsafe { context1_ref(context) }.is_some())
 }
 
-pub(super) unsafe fn context1_ref(context: Handle) -> Option<ComRef> {
+pub(super) unsafe fn context1_ref(context: Handle) -> Option<IUnknown> {
     // IID_ID3D11DeviceContext1, d3d11_1.h.
     const IID: GUID = GUID {
         data1: 0xbb2c6faa,
@@ -93,7 +94,7 @@ pub(super) unsafe fn context1_ref(context: Handle) -> Option<ComRef> {
     if unsafe { query(context, &IID, &mut result) } < 0 {
         return None;
     }
-    unsafe { ComRef::from_owned(result) }
+    unsafe { com_ref::owned(result) }
 }
 
 unsafe fn view_resource(view: Handle) -> Handle {
@@ -105,10 +106,10 @@ unsafe fn view_resource(view: Handle) -> Handle {
 }
 
 unsafe extern "C" fn texture_behind(view: Handle) -> Handle {
-    let Some(resource) = (unsafe { ComRef::from_owned(view_resource(view)) }) else {
+    let Some(resource) = (unsafe { com_ref::owned(view_resource(view)) }) else {
         return null_mut();
     };
-    unsafe { rsf_d3d11_output_query_texture(resource.as_ptr()) }
+    unsafe { rsf_d3d11_output_query_texture(resource.as_raw()) }
 }
 
 unsafe extern "C" fn texture_facts(texture: Handle, result: *mut rsf_texture_facts) {
@@ -247,11 +248,10 @@ unsafe extern "C" fn clone_sampler(context: Handle, sampler: Handle, bias: f32) 
         return null_mut();
     }
     desc.bias = (desc.bias + bias).clamp(-16.0, 15.99);
-    let Some(device) = (unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) })
-    else {
+    let Some(device) = (unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }) else {
         return null_mut();
     };
-    let device = device.as_ptr();
+    let device = device.as_raw();
     let mut sampler = null_mut();
     unsafe { method!(device, 23, Create)(device, &desc, &mut sampler) };
     sampler
@@ -260,7 +260,7 @@ unsafe extern "C" fn clone_sampler(context: Handle, sampler: Handle, bias: f32) 
 // The context retains the live bindings; release the temporary getter references.
 unsafe fn release_range(buffer: *const Handle, count: usize) {
     for &resource in unsafe { slice::from_raw_parts(buffer, count) } {
-        drop(unsafe { ComRef::from_owned(resource) });
+        drop(unsafe { com_ref::owned(resource) });
     }
 }
 
@@ -312,9 +312,9 @@ unsafe extern "C" fn seed_geometry(
             &mut geometry.index_format,
             &mut geometry.index_offset,
         );
-        drop(ComRef::from_owned(geometry.index_buffer));
+        drop(com_ref::owned(geometry.index_buffer));
         method!(context, 78, GetLayout)(context, &mut geometry.input_layout);
-        drop(ComRef::from_owned(geometry.input_layout));
+        drop(com_ref::owned(geometry.input_layout));
         method!(context, 83, GetTopology)(context, &mut geometry.topology);
         method!(context, 76, GetShader)(
             context,
@@ -322,7 +322,7 @@ unsafe extern "C" fn seed_geometry(
             null_mut(),
             null_mut(),
         );
-        drop(ComRef::from_owned(geometry.vertex_shader));
+        drop(com_ref::owned(geometry.vertex_shader));
         get_constants(context, 72, geometry.vertex_constants.as_mut_ptr());
         get_constants(context, 77, pixel);
     }

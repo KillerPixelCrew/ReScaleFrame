@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Windows operations shared by the D3D11-to-D3D12 SR and FG paths.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::shared_surface::{
     rsf_shared_fence_d3d11, rsf_shared_fence_d3d12, rsf_shared_surface_d3d11,
     rsf_shared_surface_d3d12, rsf_shared_surface_destroy,
@@ -12,6 +12,7 @@ use windows::Win32::{
     Foundation::HANDLE,
     Graphics::{Direct3D11::*, Direct3D12::*, Dxgi::Common::*},
 };
+use windows::core::IUnknown;
 use windows::core::{HRESULT, Interface};
 use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateEventW};
 
@@ -22,15 +23,15 @@ pub(crate) unsafe fn borrow<T: Interface>(raw: &Handle) -> &T {
     unsafe { T::from_raw_borrowed(raw) }.expect("live graphics interface")
 }
 
-pub(crate) fn output(create: impl FnOnce(*mut Handle) -> HRESULT) -> Option<ComRef> {
+pub(crate) fn output(create: impl FnOnce(*mut Handle) -> HRESULT) -> Option<IUnknown> {
     let mut raw = null_mut();
     let result = create(&mut raw);
-    unsafe { ComRef::from_result(result, raw) }
+    unsafe { com_ref::from_result(result, raw) }
 }
 
 pub(crate) unsafe extern "C" fn query<S: Interface, T: Interface>(object: Handle) -> Handle {
     let source = unsafe { borrow::<S>(&object) };
-    output(|out| unsafe { source.query(&T::IID, out) }).map_or(null_mut(), ComRef::into_raw)
+    output(|out| unsafe { source.query(&T::IID, out) }).map_or(null_mut(), Interface::into_raw)
 }
 
 pub(crate) unsafe extern "C" fn create_event() -> Handle {
@@ -118,7 +119,7 @@ pub(crate) unsafe extern "C" fn create_commands(
             device,
             0,
             kind,
-            new_allocator.as_ptr(),
+            new_allocator.as_raw(),
             null_mut(),
             &ID3D12GraphicsCommandList::IID,
             out,
@@ -126,7 +127,7 @@ pub(crate) unsafe extern "C" fn create_commands(
     }) else {
         return 0;
     };
-    if unsafe { close_commands(new_list.as_ptr()) } == 0 {
+    if unsafe { close_commands(new_list.as_raw()) } == 0 {
         return 0;
     }
     unsafe {
@@ -193,7 +194,7 @@ pub(crate) unsafe fn create_texture12(
             out,
         )
     })
-    .map_or(null_mut(), ComRef::into_raw)
+    .map_or(null_mut(), Interface::into_raw)
 }
 
 pub(crate) unsafe extern "C" fn reset_commands(allocator: Handle, list: Handle) -> i32 {

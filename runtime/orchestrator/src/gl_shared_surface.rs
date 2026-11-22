@@ -9,7 +9,7 @@
 // ExecuteCommandLists leaves the transaction unsignalled: its slot, its resource leases and the GL
 // acquire stay pending until a later queue signal succeeds. The executed list is never closed or
 // submitted again, and GL never waits on a value that the queue has not been asked to signal.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d12_fence::FenceState;
 use crate::sr_session::has_capacity;
 use crate::sys::rsf_backend_log_fn;
@@ -22,6 +22,7 @@ use rsf_game_sys::backend_result::{
 use std::ffi::{CStr, CString, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, MutexGuard};
+use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 // GL operations return glGetError after their call. D3D12 and DXGI calls return an HRESULT.
@@ -172,13 +173,13 @@ impl Batch {
 }
 
 struct Slot {
-    allocator: ComRef,
-    list: ComRef,
+    allocator: IUnknown,
+    list: IUnknown,
     // The fence value that proves this slot's last submission complete.
     completion: u64,
     // References to the resources its last transaction released to D3D12, held until completion is
     // proven. Preallocated for one batch.
-    leases: Vec<ComRef>,
+    leases: Vec<IUnknown>,
 }
 
 // A transaction whose queue work has ended without a successful completion signal. GL still waits
@@ -220,9 +221,9 @@ pub(crate) struct Context {
     semaphore: u32,
     _fence_handle: NtHandle,
     event: NtHandle,
-    fence: ComRef,
-    queue: ComRef,
-    device: ComRef,
+    fence: IUnknown,
+    queue: IUnknown,
+    device: IUnknown,
 }
 
 impl Drop for Context {
@@ -242,7 +243,7 @@ pub(crate) struct Texture {
     // Kept through the imported object's lifetime; some drivers import on their GL server thread
     // after the creating call returns. Closed before the resource reference is released.
     _handle: NtHandle,
-    resource: ComRef,
+    resource: IUnknown,
 }
 
 impl Context {
@@ -294,7 +295,7 @@ impl Context {
                 return None;
             }
             batch.names[i] = texture.texture;
-            batch.resources[i] = texture.resource.as_ptr();
+            batch.resources[i] = texture.resource.as_raw();
         }
         Some(batch)
     }
@@ -303,18 +304,18 @@ impl Context {
         if value == 0 {
             return true;
         }
-        let completed = unsafe { native::fence_completed(self.fence.as_ptr()) };
+        let completed = unsafe { native::fence_completed(self.fence.as_raw()) };
         match FenceState::check(completed, value) {
             FenceState::Complete => true,
             FenceState::DeviceRemoved => false,
             FenceState::Pending => unsafe {
-                native::fence_wait(self.fence.as_ptr(), value, self.event.get(), CPU_WAIT_MS) != 0
+                native::fence_wait(self.fence.as_raw(), value, self.event.get(), CPU_WAIT_MS) != 0
             },
         }
     }
 
     fn signal(&self, value: u64) -> i32 {
-        unsafe { native::queue_signal(self.queue.as_ptr(), self.fence.as_ptr(), value) }
+        unsafe { native::queue_signal(self.queue.as_raw(), self.fence.as_raw(), value) }
     }
 
     // GL releases the batch to D3D12 at `value` and flushes so the queue can observe it.
@@ -397,7 +398,7 @@ impl Context {
         }
         let current = &mut state.slots[index];
         current.leases.clear();
-        if failed(unsafe { native::slot_reset(current.allocator.as_ptr(), current.list.as_ptr()) })
+        if failed(unsafe { native::slot_reset(current.allocator.as_raw(), current.list.as_raw()) })
         {
             return FEATURE_FAILED;
         }
@@ -406,7 +407,7 @@ impl Context {
         let released = self.release(ready, batch);
         let current = &mut state.slots[index];
         if released != GL_NO_ERROR {
-            unsafe { native::list_close(current.list.as_ptr()) };
+            unsafe { native::list_close(current.list.as_raw()) };
             state.phase = Phase::ReleaseFailed;
             self.failure("GL semaphore release", released);
             return FEATURE_FAILED;
@@ -415,10 +416,10 @@ impl Context {
             slot: index,
             batch: *batch,
         };
-        let waited = unsafe { native::queue_wait(self.queue.as_ptr(), self.fence.as_ptr(), ready) };
+        let waited = unsafe { native::queue_wait(self.queue.as_raw(), self.fence.as_raw(), ready) };
         if failed(waited) {
             self.failure("D3D12 queue wait", waited as u32);
-            unsafe { native::list_close(current.list.as_ptr()) };
+            unsafe { native::list_close(current.list.as_raw()) };
             // GL's own signal satisfies `ready`, so the textures return to GL unchanged.
             state.phase = Phase::AwaitingAcquire {
                 handoff,
@@ -429,11 +430,11 @@ impl Context {
             return FEATURE_FAILED;
         }
         for &resource in &batch.resources[..batch.count] {
-            current.leases.push(unsafe { ComRef::retain(resource) });
+            current.leases.push(unsafe { com_ref::retain(resource) });
         }
         state.phase = Phase::Recording(handoff);
         unsafe {
-            list.write(current.list.as_ptr());
+            list.write(current.list.as_raw());
             slot.write(index as u32);
         }
         OK
@@ -446,7 +447,7 @@ impl Context {
         if handoff.batch != *batch {
             return INVALID_ARGUMENT;
         }
-        let list = state.slots[handoff.slot].list.as_ptr();
+        let list = state.slots[handoff.slot].list.as_raw();
         state.phase = Phase::Unsignalled(handoff);
         let closed = unsafe { native::list_close(list) };
         if failed(closed) {
@@ -456,7 +457,7 @@ impl Context {
             self.settle(state);
             return FEATURE_FAILED;
         }
-        unsafe { native::queue_execute(self.queue.as_ptr(), list) };
+        unsafe { native::queue_execute(self.queue.as_raw(), list) };
         if self.settle(state) {
             OK
         } else {
@@ -486,23 +487,23 @@ impl Context {
     }
 }
 
-fn create_context_device(luid: &[u8; 8]) -> Result<ComRef, i32> {
+fn create_context_device(luid: &[u8; 8]) -> Result<IUnknown, i32> {
     let mut factory = ptr::null_mut();
     let result = unsafe { native::factory_create(&mut factory) };
-    let factory = unsafe { ComRef::from_owned(factory) }
+    let factory = unsafe { com_ref::owned(factory) }
         .filter(|_| !failed(result))
         .ok_or(NOT_SUPPORTED)?;
 
     let mut adapter = ptr::null_mut();
-    let result = unsafe { native::adapter_find(factory.as_ptr(), luid.as_ptr(), &mut adapter) };
-    let adapter = unsafe { ComRef::from_owned(adapter) }
+    let result = unsafe { native::adapter_find(factory.as_raw(), luid.as_ptr(), &mut adapter) };
+    let adapter = unsafe { com_ref::owned(adapter) }
         .filter(|_| !failed(result))
         .ok_or(NOT_SUPPORTED)?;
 
     let mut device = ptr::null_mut();
     let result =
-        unsafe { native::device_create(adapter.as_ptr(), FEATURE_LEVEL_11_0, &mut device) };
-    unsafe { ComRef::from_owned(device) }
+        unsafe { native::device_create(adapter.as_raw(), FEATURE_LEVEL_11_0, &mut device) };
+    unsafe { com_ref::owned(device) }
         .filter(|_| !failed(result))
         .ok_or(NOT_SUPPORTED)
 }
@@ -519,33 +520,33 @@ fn open(setup: &rsf_gl_setup, gl_context: Handle) -> Result<Context, i32> {
         return Err(FEATURE_FAILED);
     }
     let (device, queue) = if !setup.device.is_null() {
-        let device = unsafe { ComRef::retain(setup.device) };
-        let queue = unsafe { ComRef::retain(setup.queue) };
+        let device = unsafe { com_ref::retain(setup.device) };
+        let queue = unsafe { com_ref::retain(setup.queue) };
         let mut native = [0u8; 8];
-        unsafe { native::device_luid(device.as_ptr(), native.as_mut_ptr()) };
+        unsafe { native::device_luid(device.as_raw(), native.as_mut_ptr()) };
         let mut owner = ptr::null_mut();
-        let found = unsafe { native::queue_device(queue.as_ptr(), &mut owner) };
-        let owner = unsafe { ComRef::from_owned(owner) };
-        if luid != native || failed(found) || owner.is_none_or(|owner| owner.0 != device.0) {
+        let found = unsafe { native::queue_device(queue.as_raw(), &mut owner) };
+        let owner = unsafe { com_ref::owned(owner) };
+        if luid != native || failed(found) || owner.is_none_or(|owner| owner != device) {
             return Err(INVALID_ARGUMENT);
         }
         (device, queue)
     } else {
         let device = create_context_device(&luid)?;
         let mut queue = ptr::null_mut();
-        let created = unsafe { native::queue_create(device.as_ptr(), &mut queue) };
-        let queue = unsafe { ComRef::from_owned(queue) }
+        let created = unsafe { native::queue_create(device.as_raw(), &mut queue) };
+        let queue = unsafe { com_ref::owned(queue) }
             .filter(|_| !failed(created))
             .ok_or(FEATURE_FAILED)?;
         (device, queue)
     };
     let mut fence = ptr::null_mut();
-    let created = unsafe { native::fence_create(device.as_ptr(), &mut fence) };
-    let fence = unsafe { ComRef::from_owned(fence) }
+    let created = unsafe { native::fence_create(device.as_raw(), &mut fence) };
+    let fence = unsafe { com_ref::owned(fence) }
         .filter(|_| !failed(created))
         .ok_or(FEATURE_FAILED)?;
     let mut shared = ptr::null_mut();
-    let created = unsafe { native::shared_handle(device.as_ptr(), fence.as_ptr(), &mut shared) };
+    let created = unsafe { native::shared_handle(device.as_raw(), fence.as_raw(), &mut shared) };
     let fence_handle = NtHandle::new(shared)
         .filter(|_| !failed(created))
         .ok_or(FEATURE_FAILED)?;
@@ -553,9 +554,9 @@ fn open(setup: &rsf_gl_setup, gl_context: Handle) -> Result<Context, i32> {
     let mut slots = Vec::with_capacity(SLOTS);
     for _ in 0..SLOTS {
         let (mut allocator, mut list) = (ptr::null_mut(), ptr::null_mut());
-        let created = unsafe { native::slot_create(device.as_ptr(), &mut allocator, &mut list) };
-        let allocator = unsafe { ComRef::from_owned(allocator) };
-        let list = unsafe { ComRef::from_owned(list) };
+        let created = unsafe { native::slot_create(device.as_raw(), &mut allocator, &mut list) };
+        let allocator = unsafe { com_ref::owned(allocator) };
+        let list = unsafe { com_ref::owned(list) };
         let (Some(allocator), Some(list)) = (allocator, list) else {
             return Err(FEATURE_FAILED);
         };
@@ -603,16 +604,16 @@ fn create_texture(owner: &Context, width: u32, height: u32, format: u32) -> Resu
     let (native, internal) = native_format(format).ok_or(INVALID_ARGUMENT)?;
     let mut resource = ptr::null_mut();
     let created = unsafe {
-        native::resource_create(owner.device.as_ptr(), width, height, native, &mut resource)
+        native::resource_create(owner.device.as_raw(), width, height, native, &mut resource)
     };
-    let resource = unsafe { ComRef::from_owned(resource) };
+    let resource = unsafe { com_ref::owned(resource) };
     let Some(resource) = resource.filter(|_| !failed(created)) else {
         owner.failure("shared D3D12 resource", created as u32);
         return Err(FEATURE_FAILED);
     };
     let mut shared = ptr::null_mut();
     let created =
-        unsafe { native::shared_handle(owner.device.as_ptr(), resource.as_ptr(), &mut shared) };
+        unsafe { native::shared_handle(owner.device.as_raw(), resource.as_raw(), &mut shared) };
     let handle = NtHandle::new(shared)
         .filter(|_| !failed(created))
         .ok_or(FEATURE_FAILED)?;
@@ -701,8 +702,8 @@ pub(crate) unsafe extern "C" fn rsf_gl_graphics(
         return INVALID_ARGUMENT;
     }
     unsafe {
-        device.write(context.device.as_ptr());
-        queue.write(context.queue.as_ptr());
+        device.write(context.device.as_raw());
+        queue.write(context.queue.as_raw());
     }
     OK
 }
@@ -753,7 +754,7 @@ pub(crate) unsafe extern "C" fn rsf_gl_texture_get(
             width: texture.width,
             height: texture.height,
             format: texture.format,
-            resource: texture.resource.as_ptr(),
+            resource: texture.resource.as_raw(),
         })
     };
     OK

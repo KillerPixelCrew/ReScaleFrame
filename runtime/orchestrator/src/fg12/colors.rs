@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: MIT
 use super::{
-    ComRef, FencePoint, FenceState, PRESENT_STATE, Present, SHADER_READ, log, texture_desc,
+    FencePoint, FenceState, IUnknown, PRESENT_STATE, Present, SHADER_READ, log, texture_desc,
 };
+use crate::com_ref;
 use crate::sys::*;
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use windows::core::Interface;
 
 const RGBA8: u32 = 28;
 const BGRA8: u32 = 87;
 
 struct Readback {
-    buffer: ComRef,
+    buffer: IUnknown,
     layout: rsf_fg12_readback_layout,
 }
 
@@ -25,7 +27,7 @@ impl Readback {
         let mut layout = std::mem::MaybeUninit::uninit();
         let raw = unsafe { native!(readback(source, layout.as_mut_ptr())) };
         Some(Self {
-            buffer: unsafe { ComRef::from_owned(raw) }?,
+            buffer: unsafe { com_ref::owned(raw) }?,
             layout: unsafe { layout.assume_init() },
         })
     }
@@ -36,7 +38,7 @@ impl Readback {
                 list,
                 source,
                 state,
-                self.buffer.as_ptr(),
+                self.buffer.as_raw(),
                 &self.layout
             ))
         };
@@ -44,14 +46,14 @@ impl Readback {
 
     fn write(&self, path: &Path) -> io::Result<()> {
         let layout = self.layout;
-        let mapped = unsafe { native!(map(self.buffer.as_ptr(), layout.bytes)) };
+        let mapped = unsafe { native!(map(self.buffer.as_raw(), layout.bytes)) };
         if mapped.is_null() {
             return Err(io::Error::other("FG readback mapping failed"));
         }
-        struct Mapping<'a>(&'a ComRef);
+        struct Mapping<'a>(&'a IUnknown);
         impl Drop for Mapping<'_> {
             fn drop(&mut self) {
-                unsafe { native!(unmap(self.0.as_ptr())) };
+                unsafe { native!(unmap(self.0.as_raw())) };
             }
         }
         let _mapping = Mapping(&self.buffer);
@@ -201,10 +203,10 @@ impl Colors {
         {
             return;
         }
-        let Some(fence) = (unsafe { ComRef::from_owned(native!(fence(queue))) }) else {
+        let Some(fence) = (unsafe { com_ref::owned(native!(fence(queue))) }) else {
             return;
         };
-        if unsafe { native!(signal(queue, fence.as_ptr(), 1)) } != 0 {
+        if unsafe { native!(signal(queue, fence.as_raw(), 1)) } != 0 {
             pair.completion = Some(FencePoint { fence, value: 1 });
         }
     }

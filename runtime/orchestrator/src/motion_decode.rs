@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{
     GROUP_EDGE, Handle, SourceInfo, SourceViews, compute_shader, compute_texture, constant_buffer,
@@ -18,6 +18,7 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R16G16_FLOAT};
+use windows::core::IUnknown;
 use windows::core::Interface;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
@@ -147,8 +148,8 @@ const _: () = {
 
 pub(super) struct Pass {
     sources: Mutex<SourceViews<2>>,
-    resources: [ComRef; 4],
-    device: ComRef,
+    resources: [IUnknown; 4],
+    device: IUnknown,
     setup: Setup,
 }
 
@@ -201,7 +202,7 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_create(
     unsafe { out.write(null_mut()) };
     let mut raw = [null_mut(); 4];
     let status = unsafe { make_resources(device, setup, size_of::<Constants>() as u32, &mut raw) };
-    let resources = unsafe { ComRef::adopt_all(raw) };
+    let resources = unsafe { com_ref::adopt_all(raw) };
     if status != OK {
         return status;
     }
@@ -211,7 +212,7 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_create(
     let owner = crate::allocate_handle(Pass {
         sources: Mutex::new(SourceViews::new()),
         resources,
-        device: unsafe { ComRef::retain(device) },
+        device: unsafe { com_ref::retain(device) },
         setup: *setup,
     });
     let Some(pass) = (unsafe { owner.as_ref() }) else {
@@ -241,7 +242,7 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_run(
     let Some(params) = (unsafe { copy_params(params, PARAMS_V1) }) else {
         return INVALID;
     };
-    let device = pass.device.as_ptr();
+    let device = pass.device.as_raw();
     if unsafe { context_matches(device, context) } == 0 {
         return SOURCE_MISMATCH;
     }
@@ -275,12 +276,12 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_run(
         say(&pass.setup, "source view could not be created");
         return RESOURCE_FAILED;
     };
-    let resources = std::array::from_fn(|i| pass.resources[i].as_ptr());
+    let resources = std::array::from_fn(|i| pass.resources[i].as_raw());
     if unsafe {
         dispatch(
             context,
             &resources,
-            view.as_ptr(),
+            view.as_raw(),
             ptr::from_ref(&constants).cast(),
             size_of::<Constants>(),
             width.div_ceil(GROUP_EDGE),
@@ -296,7 +297,7 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_run(
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_motion_decode_texture(pass: *const Pass) -> Handle {
-    unsafe { pass.as_ref() }.map_or(null_mut(), |pass| pass.resources[1].as_ptr())
+    unsafe { pass.as_ref() }.map_or(null_mut(), |pass| pass.resources[1].as_raw())
 }
 
 #[unsafe(no_mangle)]

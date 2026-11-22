@@ -1534,7 +1534,7 @@ fn creation_admission_publication_and_retirement() {
     let source_queue = unsafe { rsf_core_d3d11p_source_queue(&PLATFORM) };
     assert_eq!(source_queue, interop);
     assert_eq!(with(|fake| fake.interop().refs.get()), 3);
-    drop(unsafe { ComRef::from_owned(source_queue) });
+    drop(unsafe { com_ref::owned(source_queue) });
     assert!(unsafe { rsf_core_d3d11p_duplicate_application_ready(chain_of(bridge)) }.is_null());
 
     unsafe { bridge_release_owned(bridge) };
@@ -2160,7 +2160,7 @@ fn resize_normalizes_and_preserves_shared_surfaces_on_allocation_failure() {
     );
     let (result, pointer) = get_buffer(chain, 1);
     assert_eq!(result, S_OK);
-    let retained = unsafe { ComRef::from_owned(pointer) }.unwrap();
+    let retained = unsafe { com_ref::owned(pointer) }.unwrap();
     assert_eq!(
         unsafe { rsf_core_d3d11p_resize(chain, 2, 320, 200, 0, 0) },
         DXGI_ERROR_INVALID_CALL
@@ -2178,7 +2178,7 @@ fn resize_normalizes_and_preserves_shared_surfaces_on_allocation_failure() {
     assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 0);
     let (result, still_old) = get_buffer(chain, 1);
     assert_eq!((result, still_old), (S_OK, pointer));
-    drop(unsafe { ComRef::from_owned(still_old) });
+    drop(unsafe { com_ref::owned(still_old) });
     with(|fake| {
         assert_eq!(fake.buffers.len(), 6);
         assert_eq!(fake.target_view.refs.get(), 3);
@@ -2228,7 +2228,7 @@ fn failed_render_buffer_resize_exposes_no_partial_batch() {
         (result, old),
         (S_OK, with(|fake| com_raw(&fake.buffers[0].application)))
     );
-    drop(unsafe { ComRef::from_owned(old) });
+    drop(unsafe { com_ref::owned(old) });
     with(|fake| {
         assert_eq!(fake.buffers.len(), 4);
         assert!(
@@ -2252,7 +2252,7 @@ fn native_resize_publishes_new_bounds_only_after_physical_success() {
 
     let (result, old) = get_buffer(chain, 1);
     assert_eq!(result, S_OK);
-    let held = unsafe { ComRef::from_owned(old) };
+    let held = unsafe { com_ref::owned(old) };
     let resize = || unsafe { rsf_core_d3d11p_resize(chain, 3, 320, 200, 24, 0) };
     let configuration_calls = with(|fake| fake.configuration_calls);
     assert_eq!(resize(), DXGI_ERROR_INVALID_CALL);
@@ -2263,7 +2263,7 @@ fn native_resize_publishes_new_bounds_only_after_physical_success() {
     assert_eq!(unsafe { rsf_core_d3d11p_render_index(chain) }, 1);
     let (result, still_old) = get_buffer(chain, 1);
     assert_eq!((result, still_old), (S_OK, old));
-    drop(unsafe { ComRef::from_owned(still_old) });
+    drop(unsafe { com_ref::owned(still_old) });
     assert_eq!(get_buffer(chain, 2), (DXGI_ERROR_INVALID_CALL, null_mut()));
     with(|fake| {
         assert_eq!(fake.buffers.len(), 5);
@@ -2291,7 +2291,7 @@ fn native_resize_publishes_new_bounds_only_after_physical_success() {
         (result, new),
         (S_OK, with(|fake| com_raw(&fake.buffers[7].application)))
     );
-    drop(unsafe { ComRef::from_owned(new) });
+    drop(unsafe { com_ref::owned(new) });
     unsafe { bridge_release_owned(bridge) };
 }
 
@@ -2330,7 +2330,7 @@ fn application_buffers_are_queryable_before_physical_creation() {
         });
         unsafe { bridge_release_owned(bridge) };
         assert_eq!(with(|fake| fake.buffers[1].application.refs.get()), 2);
-        drop(unsafe { ComRef::from_owned(pointer) });
+        drop(unsafe { com_ref::owned(pointer) });
         assert_eq!(with(|fake| fake.buffers[1].application.refs.get()), 1);
     }
 }
@@ -2347,7 +2347,7 @@ fn strict_native_buffer_queries_use_dxgi_and_clear_refused_output() {
     assert_eq!(result, S_OK);
     assert_eq!(pointer, with(|fake| com_raw(&fake.backbuffer)));
     assert!(take_calls().contains(&"physical GetBuffer 2".to_owned()));
-    drop(unsafe { ComRef::from_owned(pointer) });
+    drop(unsafe { com_ref::owned(pointer) });
     assert_eq!(
         unsafe { rsf_core_d3d11p_resize(chain, 4, 320, 200, 28, 0) },
         S_OK

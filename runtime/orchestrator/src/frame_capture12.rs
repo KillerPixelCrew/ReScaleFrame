@@ -6,7 +6,7 @@
 //! readback buffer, source and fence leases. Native operations live in the D3D12 module.
 use crate::capture_names::CaptureName;
 use crate::capture_pixels::Pixels;
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d12_fence::FenceState;
 use crate::frame_capture_vk::Legacy;
 use crate::sr_session::has_capacity;
@@ -16,6 +16,7 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
+use windows::core::{IUnknown, Interface};
 
 pub(super) mod native;
 #[cfg(not(test))]
@@ -50,9 +51,9 @@ const _: () = {
 };
 
 struct Readback {
-    buffer: ComRef,
+    buffer: IUnknown,
     // The source stays alive until its copy is retired.
-    _source: ComRef,
+    _source: IUnknown,
     layout: Layout,
     identity: Record,
     role: String,
@@ -62,7 +63,7 @@ struct Readback {
     legacy: bool,
     ticket: u64,
     name: CString,
-    completion: Option<ComRef>,
+    completion: Option<IUnknown>,
 }
 
 impl Readback {
@@ -184,13 +185,12 @@ impl Owner {
             return false;
         }
         let mut layout = Layout::default();
-        let Some(buffer) = (unsafe { ComRef::from_owned(ops::allocate(source, &mut layout)) })
-        else {
+        let Some(buffer) = (unsafe { com_ref::owned(ops::allocate(source, &mut layout)) }) else {
             return false;
         };
         let mut readback = Readback {
             buffer,
-            _source: unsafe { ComRef::retain(source) },
+            _source: unsafe { com_ref::retain(source) },
             layout,
             identity: *identity,
             role: role.to_string_lossy().into_owned(),
@@ -230,7 +230,7 @@ impl Owner {
                 list,
                 source,
                 resource_state,
-                readback.buffer.as_ptr(),
+                readback.buffer.as_raw(),
                 &readback.layout,
             )
         };
@@ -265,7 +265,7 @@ impl Owner {
                     index += 1;
                     continue;
                 };
-                let completed = unsafe { ops::completed(fence.as_ptr()) };
+                let completed = unsafe { ops::completed(fence.as_raw()) };
                 match FenceState::check(completed, SUBMITTED) {
                     FenceState::DeviceRemoved => {
                         self.fail(value, MAP_FAILED);
@@ -280,7 +280,7 @@ impl Owner {
                     FenceState::Complete => {}
                 }
             }
-            let data = unsafe { ops::map(value.buffer.as_ptr(), value.layout.bytes) };
+            let data = unsafe { ops::map(value.buffer.as_raw(), value.layout.bytes) };
             if data.is_null() {
                 // Retained with its ticket; a later flush retries.
                 okay = false;
@@ -317,7 +317,7 @@ impl Owner {
             } != 0;
         }
         if !value.legacy {
-            unsafe { ops::unmap(value.buffer.as_ptr()) };
+            unsafe { ops::unmap(value.buffer.as_raw()) };
             return okay;
         }
         let directory = legacy.directory.as_deref().unwrap_or(Path::new(""));
@@ -330,7 +330,7 @@ impl Owner {
             bytes,
             &legacy_json(value),
         );
-        unsafe { ops::unmap(value.buffer.as_ptr()) };
+        unsafe { ops::unmap(value.buffer.as_raw()) };
         okay && written.is_ok()
     }
 
@@ -340,7 +340,7 @@ impl Owner {
         if queue.is_null() || !state.pending.iter().any(matching) {
             return true;
         }
-        let Some(fence) = (unsafe { ComRef::from_owned(ops::signal(queue)) }) else {
+        let Some(fence) = (unsafe { com_ref::owned(ops::signal(queue)) }) else {
             return false;
         };
         for value in state.pending.iter_mut().filter(|value| matching(value)) {
@@ -405,7 +405,7 @@ impl Owner {
         Some(self.flush_matching(&mut self.lock(), false, |value| {
             batch
                 .iter()
-                .any(|buffer| buffer.as_ptr() == value.buffer.as_ptr())
+                .any(|buffer| buffer.as_raw() == value.buffer.as_raw())
         }))
     }
 

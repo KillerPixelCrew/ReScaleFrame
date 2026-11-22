@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 // The production entry points live in `native`, which unit tests do not build.
 #![cfg_attr(test, allow(dead_code))]
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::overlay_native12::OverlayLog;
 use crate::sr_session::has_capacity;
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats};
 use rsf_game_sys::backend_result::NOT_SUPPORTED;
 use std::ffi::{CStr, c_void};
 use std::sync::Mutex;
+use windows::core::{IUnknown, Interface};
 #[cfg(not(test))]
 pub(super) mod native;
 
@@ -65,11 +66,11 @@ struct Platform {
 type Handle = *mut c_void;
 
 struct Binding {
-    interop: ComRef,
-    context: ComRef,
-    device: ComRef,
-    owner: ComRef,
-    queue: ComRef,
+    interop: IUnknown,
+    context: IUnknown,
+    device: IUnknown,
+    owner: IUnknown,
+    queue: IUnknown,
     started: bool,
 }
 
@@ -79,30 +80,30 @@ unsafe impl Send for Binding {}
 
 impl Binding {
     fn matches(&self, device: Handle, queue: Handle) -> bool {
-        self.owner.as_ptr() == device && self.queue.as_ptr() == queue
+        self.owner.as_raw() == device && self.queue.as_raw() == queue
     }
 }
 
 struct Wrapped<'a> {
     platform: &'a Platform,
     binding: &'a Binding,
-    view: Option<ComRef>,
-    resource: Option<ComRef>,
-    _backbuffer: ComRef,
+    view: Option<IUnknown>,
+    resource: Option<IUnknown>,
+    _backbuffer: IUnknown,
 }
 
 impl Drop for Wrapped<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.platform.release)(
-                self.binding.interop.as_ptr(),
-                self.resource.as_ref().unwrap().as_ptr(),
+                self.binding.interop.as_raw(),
+                self.resource.as_ref().unwrap().as_raw(),
             );
             // Release D3D11 references first. Flush also retires their deferred
             // destruction, so they do not hold a backbuffer across ResizeBuffers.
             self.view = None;
             self.resource = None;
-            (self.platform.flush)(self.binding.context.as_ptr());
+            (self.platform.flush)(self.binding.context.as_raw());
         }
     }
 }
@@ -159,9 +160,9 @@ impl State {
             }
             let (0, Some(device), Some(context), Some(interop)) = (
                 result,
-                unsafe { ComRef::from_owned(native.device) },
-                unsafe { ComRef::from_owned(native.context) },
-                unsafe { ComRef::from_owned(native.interop) },
+                unsafe { com_ref::owned(native.device) },
+                unsafe { com_ref::owned(native.context) },
+                unsafe { com_ref::owned(native.interop) },
             ) else {
                 return self.refuse(
                     frame,
@@ -172,8 +173,8 @@ impl State {
                 interop,
                 context,
                 device,
-                owner: unsafe { ComRef::retain(frame.device) },
-                queue: unsafe { ComRef::retain(frame.queue) },
+                owner: unsafe { com_ref::retain(frame.device) },
+                queue: unsafe { com_ref::retain(frame.queue) },
                 started: false,
             });
         }
@@ -187,7 +188,7 @@ impl State {
                 return 0;
             }
             if unsafe {
-                (platform.start)(binding.device.as_ptr(), window, frame.logger, frame.user)
+                (platform.start)(binding.device.as_raw(), window, frame.logger, frame.user)
             } == 0
             {
                 return self.refuse(
@@ -207,8 +208,8 @@ impl State {
         let mut native: WrappedTarget = unsafe { std::mem::zeroed() };
         if unsafe {
             (platform.target)(
-                binding.device.as_ptr(),
-                binding.interop.as_ptr(),
+                binding.device.as_raw(),
+                binding.interop.as_raw(),
                 frame.chain,
                 &mut native,
             )
@@ -217,13 +218,13 @@ impl State {
             return 0;
         }
         let (Some(backbuffer), Some(resource), Some(view)) = (
-            unsafe { ComRef::from_owned(native.backbuffer) },
-            unsafe { ComRef::from_owned(native.wrapped) },
-            unsafe { ComRef::from_owned(native.view) },
+            unsafe { com_ref::owned(native.backbuffer) },
+            unsafe { com_ref::owned(native.wrapped) },
+            unsafe { com_ref::owned(native.view) },
         ) else {
             return 0;
         };
-        unsafe { (platform.acquire)(binding.interop.as_ptr(), resource.as_ptr()) };
+        unsafe { (platform.acquire)(binding.interop.as_raw(), resource.as_raw()) };
         let wrapped = Wrapped {
             platform,
             binding,
@@ -233,8 +234,8 @@ impl State {
         };
         unsafe {
             (platform.draw)(
-                binding.context.as_ptr(),
-                wrapped.view.as_ref().unwrap().as_ptr(),
+                binding.context.as_raw(),
+                wrapped.view.as_ref().unwrap().as_raw(),
                 native.width,
                 native.height,
                 frame.stats,
@@ -249,7 +250,7 @@ impl State {
         if let Some(binding) = &self.binding
             && binding.started
         {
-            unsafe { (platform.stop)(binding.device.as_ptr()) };
+            unsafe { (platform.stop)(binding.device.as_raw()) };
         }
         *self = Self::default();
     }

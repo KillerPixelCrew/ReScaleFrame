@@ -7,7 +7,7 @@ use super::{
     rsf_core_d3d11p_create, rsf_core_d3d11p_is_owner, rsf_core_d3d11p_prepare,
     rsf_core_d3d11p_set_scoped, settings,
 };
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_present_abi::{Raw, rsf_d3d11p_plain_plan, rsf_d3d11p_request};
 use crate::sys::rsf_d3d11_present_setup;
 use std::ffi::c_void;
@@ -212,14 +212,14 @@ unsafe extern "C" fn rsf_d3d11p_factory_wrap_native(
     let result = unsafe {
         rsf_d3d11p_factory_create(platform, factory.as_raw(), device, &desc, &mut facade)
     };
-    let owned = unsafe { ComRef::from_owned(facade) };
+    let owned = unsafe { com_ref::owned(facade) };
     if failed(result) {
         return result;
     }
     let Some(owned) = owned else {
         return E_UNEXPECTED;
     };
-    if unsafe { rsf_core_d3d11p_is_owner(platform, owned.as_ptr()) } == 0 {
+    if unsafe { rsf_core_d3d11p_is_owner(platform, owned.as_raw()) } == 0 {
         return E_UNEXPECTED;
     }
     unsafe { out.write(owned.into_raw()) };
@@ -341,12 +341,12 @@ unsafe extern "C" fn rsf_d3d11p_factory_install(
     // Keep Factory2 live through the install result and its success log, as in
     // the native bootstrap.
     let factory = if unsafe { rsf_core_d3d11p_prepare(setup, 0) } != 0 {
-        unsafe { ComRef::from_owned((calls.bootstrap)()) }
+        unsafe { com_ref::owned((calls.bootstrap)()) }
     } else {
         None
     };
     let state = factory.as_ref().map_or(IDLE, |factory| {
-        install_hooks(calls, factory.as_ptr(), legacy_detour, hwnd_detour)
+        install_hooks(calls, factory.as_raw(), legacy_detour, hwnd_detour)
     });
     if state != READY && scoped != 0 {
         rsf_core_d3d11p_set_scoped(0);
@@ -393,7 +393,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_factory_create_plain(
                 .0
         }
     };
-    let chain = unsafe { ComRef::from_owned(candidate) };
+    let chain = unsafe { com_ref::owned(candidate) };
     if failed(result) {
         let mode = &desc.BufferDesc;
         log(&format!(
@@ -427,7 +427,7 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_factory_create_plain(
     let bound = unsafe { IDXGISwapChain::from_raw_borrowed(&candidate) }.unwrap();
     let mut physical = null_mut();
     let queried = unsafe { bound.query(&IDXGISwapChain4::IID, &mut physical) };
-    let replacement = unsafe { ComRef::from_owned(physical) };
+    let replacement = unsafe { com_ref::owned(physical) };
     // Keep the creation reference live through QI, even on provider refusal.
     drop(chain);
     let Some(replacement) = replacement else {

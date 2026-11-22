@@ -7,7 +7,7 @@ mod platform;
 #[cfg(not(test))]
 pub(super) use platform::rsf_auxiliary_sr_platform;
 
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::SavedBindings;
 use crate::depth_scale::{DepthScale, jitter_valid, rect_valid};
 use crate::sys::rsf_d3d11_state;
@@ -22,6 +22,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
     DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
 };
+use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 const MAX_AUXILIARIES: usize = 8;
@@ -96,8 +97,8 @@ impl Default for AuxColourPipeline {
 }
 
 struct Owner {
-    context: ComRef,
-    device: ComRef,
+    context: IUnknown,
+    device: IUnknown,
     thread: u32,
 }
 
@@ -126,31 +127,31 @@ impl From<AuxTextureInfo> for TextureKey {
 
 struct Snapshot {
     key: TextureKey,
-    texture: ComRef,
+    texture: IUnknown,
 }
 
 struct ColourProducts {
-    target: ComRef,
-    view: ComRef,
-    output: ComRef,
+    target: IUnknown,
+    view: IUnknown,
+    output: IUnknown,
     source: Snapshot,
     destination: TextureKey,
 }
 
 struct Pipeline {
-    vertex: ComRef,
-    pixel: ComRef,
-    raster: ComRef,
-    constants: ComRef,
+    vertex: IUnknown,
+    pixel: IUnknown,
+    raster: IUnknown,
+    constants: IUnknown,
 }
 
 impl Pipeline {
     fn borrow(&self) -> AuxColourPipeline {
         AuxColourPipeline {
-            vertex: self.vertex.0.as_ptr(),
-            pixel: self.pixel.0.as_ptr(),
-            raster: self.raster.0.as_ptr(),
-            constants: self.constants.0.as_ptr(),
+            vertex: self.vertex.as_raw(),
+            pixel: self.pixel.as_raw(),
+            raster: self.raster.as_raw(),
+            constants: self.constants.as_raw(),
         }
     }
 }
@@ -275,17 +276,17 @@ impl SurfacePlan {
 
 struct Surface {
     plan: SurfacePlan,
-    _original: ComRef,
-    _distinct_source: Option<ComRef>,
+    _original: IUnknown,
+    _distinct_source: Option<IUnknown>,
 }
 
 impl Surface {
     fn retain(plan: SurfacePlan) -> Self {
         // Reservation holds all the borrowed resources through allocation.
         Self {
-            _original: unsafe { ComRef::retain(plan.original) },
+            _original: unsafe { com_ref::retain(plan.original) },
             _distinct_source: (plan.source != plan.original)
-                .then(|| unsafe { ComRef::retain(plan.source) }),
+                .then(|| unsafe { com_ref::retain(plan.source) }),
             plan,
         }
     }
@@ -306,7 +307,7 @@ struct Frame {
     surfaces: [Option<Surface>; MAX_SURFACES],
     count: usize,
     main_begin: usize,
-    originals: [Option<ComRef>; 2],
+    originals: [Option<IUnknown>; 2],
     backups_captured: bool,
     depth_restore: Option<bool>,
     published_colours: usize,
@@ -417,13 +418,13 @@ impl AuxiliarySr {
         }
         let thread = current_thread();
         if let Some(owner) = &self.owner {
-            return (owner.context.0.as_ptr() == context && owner.thread == thread)
-                .then_some(owner.device.0.as_ptr());
+            return (owner.context.as_raw() == context && owner.thread == thread)
+                .then_some(owner.device.as_raw());
         }
-        let device = unsafe { ComRef::from_owned((self.platform.immediate_device)(context)) }?;
-        let device_ptr = device.0.as_ptr();
+        let device = unsafe { com_ref::owned((self.platform.immediate_device)(context)) }?;
+        let device_ptr = device.as_raw();
         self.owner = Some(Owner {
-            context: unsafe { ComRef::retain(context) },
+            context: unsafe { com_ref::retain(context) },
             device,
             thread,
         });
@@ -548,8 +549,8 @@ impl AuxiliarySr {
         device: *mut c_void,
         desc: &AuxTextureInfo,
         usage: u32,
-    ) -> Option<ComRef> {
-        unsafe { ComRef::from_owned((self.platform.create_texture)(device, desc, usage)) }
+    ) -> Option<IUnknown> {
+        unsafe { com_ref::owned((self.platform.create_texture)(device, desc, usage)) }
     }
 
     fn reserve_backup(
@@ -588,14 +589,13 @@ impl AuxiliarySr {
         let snapshot = self.create_texture(device, &plan.source_desc, AUX_TEXTURE_SOURCE)?;
         let output = self.create_texture(device, &plan.original_desc, AUX_TEXTURE_OUTPUT)?;
         let view = unsafe {
-            ComRef::from_owned((self.platform.create_source_view)(
+            com_ref::owned((self.platform.create_source_view)(
                 device,
-                snapshot.as_ptr(),
+                snapshot.as_raw(),
             ))
         }?;
-        let target = unsafe {
-            ComRef::from_owned((self.platform.create_output_view)(device, output.as_ptr()))
-        }?;
+        let target =
+            unsafe { com_ref::owned((self.platform.create_output_view)(device, output.as_raw())) }?;
         self.colours[index] = Some(ColourProducts {
             source: Snapshot {
                 key: source_key,
@@ -633,10 +633,10 @@ impl AuxiliarySr {
             }
             let (Some(vertex), Some(pixel), Some(raster), Some(constants)) = (unsafe {
                 (
-                    ComRef::from_owned(pipeline.vertex),
-                    ComRef::from_owned(pipeline.pixel),
-                    ComRef::from_owned(pipeline.raster),
-                    ComRef::from_owned(pipeline.constants),
+                    com_ref::owned(pipeline.vertex),
+                    com_ref::owned(pipeline.pixel),
+                    com_ref::owned(pipeline.raster),
+                    com_ref::owned(pipeline.constants),
                 )
             }) else {
                 return None;
@@ -683,8 +683,8 @@ impl AuxiliarySr {
             count: inputs.len(),
             main_begin,
             originals: [
-                Some(unsafe { ComRef::retain(pass.color_output) }),
-                readable.map(|texture| unsafe { ComRef::retain(texture) }),
+                Some(unsafe { com_ref::retain(pass.color_output) }),
+                readable.map(|texture| unsafe { com_ref::retain(texture) }),
             ],
             backups_captured: false,
             depth_restore: None,
@@ -730,7 +730,7 @@ impl AuxiliarySr {
         }
         self.colours[frame.main_begin]
             .as_ref()
-            .map_or(ptr::null_mut(), |colour| colour.source.texture.0.as_ptr())
+            .map_or(ptr::null_mut(), |colour| colour.source.texture.as_raw())
     }
 
     fn render(&mut self, capture: bool, temporal: Option<&[rsf_d3d11_auxiliary_surface]>) -> bool {
@@ -738,7 +738,7 @@ impl AuxiliarySr {
             return false;
         }
         let owner = self.owner.as_ref().unwrap();
-        let device = owner.device.0.as_ptr();
+        let device = owner.device.as_raw();
         let Some(frame) = &mut self.frame else {
             return false;
         };
@@ -763,7 +763,7 @@ impl AuxiliarySr {
         if !capture {
             frame.phase = Phase::Sealed;
         }
-        let Some(bindings) = Bindings::new(&self.platform, owner.context.0.as_ptr()) else {
+        let Some(bindings) = Bindings::new(&self.platform, owner.context.as_raw()) else {
             return false;
         };
         if capture {
@@ -771,8 +771,8 @@ impl AuxiliarySr {
             for (index, original) in frame.originals.iter().enumerate() {
                 if let Some(original) = original {
                     bindings.copy(
-                        self.backups[index].as_ref().unwrap().texture.0.as_ptr(),
-                        original.0.as_ptr(),
+                        self.backups[index].as_ref().unwrap().texture.as_raw(),
+                        original.as_raw(),
                     );
                 }
             }
@@ -802,7 +802,7 @@ impl AuxiliarySr {
                 frame.depth_restore = Some(plan.restore_contents());
             } else {
                 let colour = self.colours[index].as_ref().unwrap();
-                let source = colour.source.texture.0.as_ptr();
+                let source = colour.source.texture.as_raw();
                 if capture {
                     bindings.copy(source, plan.source);
                 }
@@ -812,18 +812,18 @@ impl AuxiliarySr {
                     if let Some(backup) = frame.originals.iter().position(|original| {
                         original
                             .as_ref()
-                            .is_some_and(|original| original.0.as_ptr() == plan.original)
+                            .is_some_and(|original| original.as_raw() == plan.original)
                     }) {
-                        baseline = self.backups[backup].as_ref().unwrap().texture.0.as_ptr();
+                        baseline = self.backups[backup].as_ref().unwrap().texture.as_raw();
                     }
                 }
-                bindings.copy(colour.output.0.as_ptr(), baseline);
+                bindings.copy(colour.output.as_raw(), baseline);
                 unsafe {
                     (self.platform.draw)(
                         bindings.context,
                         &pipeline,
-                        colour.view.0.as_ptr(),
-                        colour.target.0.as_ptr(),
+                        colour.view.as_raw(),
+                        colour.target.as_raw(),
                         &mapping.colour_constants(),
                     )
                 };
@@ -869,7 +869,7 @@ impl AuxiliarySr {
         if count > prepared {
             return false;
         }
-        let Some(bindings) = Bindings::new(&self.platform, owner.context.0.as_ptr()) else {
+        let Some(bindings) = Bindings::new(&self.platform, owner.context.as_raw()) else {
             return false;
         };
         frame.phase = Phase::Publishing;
@@ -885,12 +885,12 @@ impl AuxiliarySr {
             if !surface.plan.depth() {
                 bindings.copy(
                     surface.plan.original,
-                    self.colours[index].as_ref().unwrap().output.0.as_ptr(),
+                    self.colours[index].as_ref().unwrap().output.as_raw(),
                 );
             }
         }
         frame.published_colours = count;
-        if !device_ready(&self.platform, owner.device.0.as_ptr()) {
+        if !device_ready(&self.platform, owner.device.as_raw()) {
             return false;
         }
         frame.phase = Phase::Accepted;
@@ -909,7 +909,7 @@ impl AuxiliarySr {
         if owner.thread != current_thread() {
             return false;
         }
-        let Some(bindings) = Bindings::new(&self.platform, owner.context.0.as_ptr()) else {
+        let Some(bindings) = Bindings::new(&self.platform, owner.context.as_raw()) else {
             return false;
         };
         let accepted = frame.phase == Phase::Accepted;
@@ -940,8 +940,7 @@ impl AuxiliarySr {
                         .unwrap()
                         .source
                         .texture
-                        .0
-                        .as_ptr(),
+                        .as_raw(),
                 );
             }
         }
@@ -949,13 +948,13 @@ impl AuxiliarySr {
             for (index, original) in frame.originals.iter().enumerate() {
                 if let Some(original) = original {
                     bindings.copy(
-                        original.0.as_ptr(),
-                        self.backups[index].as_ref().unwrap().texture.0.as_ptr(),
+                        original.as_raw(),
+                        self.backups[index].as_ref().unwrap().texture.as_raw(),
                     );
                 }
             }
         }
-        if !device_ready(&self.platform, owner.device.0.as_ptr()) {
+        if !device_ready(&self.platform, owner.device.as_raw()) {
             return false;
         }
         // Release frame references after the game's bindings are back.
@@ -1292,10 +1291,10 @@ mod tests {
         };
         let mut owner = AuxiliarySr::new(&platform).expect("complete fixture platform");
         owner.pipeline = Some(Pipeline {
-            vertex: unsafe { ComRef::retain(context.raw()) },
-            pixel: unsafe { ComRef::retain(context.raw()) },
-            raster: unsafe { ComRef::retain(context.raw()) },
-            constants: unsafe { ComRef::retain(context.raw()) },
+            vertex: unsafe { com_ref::retain(context.raw()) },
+            pixel: unsafe { com_ref::retain(context.raw()) },
+            raster: unsafe { com_ref::retain(context.raw()) },
+            constants: unsafe { com_ref::retain(context.raw()) },
         });
         // All fields in the generated pass are numeric values or raw pointers.
         let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };

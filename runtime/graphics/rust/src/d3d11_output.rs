@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! D3D11 binding snapshots, texture descriptions, device identity and the per-owner cache.
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::sys::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_texture_desc, rsf_d3d11_state,
     rsf_d3d11_texture_desc,
 };
 use std::ffi::c_void;
 use std::sync::Mutex;
+use windows::core::Interface;
 
 pub type SaveBindings = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state) -> u32;
 pub type RestoreBindings = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state);
@@ -59,8 +60,8 @@ pub unsafe fn texture_desc(texture: *mut c_void) -> rsf_d3d11_texture_desc {
 /// A non-null `child` must be a live `ID3D11DeviceChild` interface.
 pub unsafe fn same_device(device: *mut c_void, child: *mut c_void) -> bool {
     !child.is_null()
-        && unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(child)) }
-            .is_some_and(|owner| owner.as_ptr() == device)
+        && unsafe { com_ref::owned(rsf_d3d11_output_child_device(child)) }
+            .is_some_and(|owner| owner.as_raw() == device)
 }
 
 pub struct GraphicsCache<T>(Mutex<Option<T>>);

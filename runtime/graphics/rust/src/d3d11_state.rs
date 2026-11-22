@@ -2,13 +2,15 @@
 // D3D11 binding snapshots and ownership behind rescaleframe/d3d11_state.h.
 mod native;
 
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::sys::rsf_d3d11_state as State;
 use std::alloc::{Layout, alloc_zeroed};
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
+use windows::core::IUnknown;
+use windows::core::Interface;
 
 type Handle = *mut c_void;
 
@@ -27,71 +29,71 @@ const TARGETS: usize = 8;
 type Viewport = [f32; 6];
 type Rect = [i32; 4];
 
-// Each interface is one reference from a D3D11 getter. Option<ComRef> stores a nullable pointer,
+// Each interface is one reference from a D3D11 getter. Option<IUnknown> stores a nullable pointer,
 // so the native operations can fill each slot directly and Drop releases the retained references.
 #[repr(C)]
 struct Stage {
-    resources: [Option<ComRef>; RESOURCES],
-    samplers: [Option<ComRef>; SAMPLERS],
-    constants: [Option<ComRef>; CONSTANTS],
+    resources: [Option<IUnknown>; RESOURCES],
+    samplers: [Option<IUnknown>; SAMPLERS],
+    constants: [Option<IUnknown>; CONSTANTS],
     first_constants: [u32; CONSTANTS],
     constant_counts: [u32; CONSTANTS],
-    classes: [Option<ComRef>; INTERFACES],
+    classes: [Option<IUnknown>; INTERFACES],
     class_count: u32,
 }
 
 #[repr(C)]
 struct Snapshot {
-    context1: Option<ComRef>,
+    context1: Option<IUnknown>,
     uav_count: u32,
     constant_ranges: u32,
-    layout: Option<ComRef>,
-    index_buffer: Option<ComRef>,
+    layout: Option<IUnknown>,
+    index_buffer: Option<IUnknown>,
     topology: u32,
     index_format: u32,
     index_offset: u32,
-    vertex_buffers: [Option<ComRef>; VERTEX_BUFFERS],
+    vertex_buffers: [Option<IUnknown>; VERTEX_BUFFERS],
     vertex_strides: [u32; VERTEX_BUFFERS],
     vertex_offsets: [u32; VERTEX_BUFFERS],
     // Vertex, hull, domain, geometry, pixel and compute, in that order.
-    shaders: [Option<ComRef>; 6],
+    shaders: [Option<IUnknown>; 6],
     stages: [Stage; 6],
-    compute_uavs: [Option<ComRef>; UAVS],
-    pixel_uavs: [Option<ComRef>; UAVS],
-    stream_targets: [Option<ComRef>; STREAM_TARGETS],
-    predicate: Option<ComRef>,
+    compute_uavs: [Option<IUnknown>; UAVS],
+    pixel_uavs: [Option<IUnknown>; UAVS],
+    stream_targets: [Option<IUnknown>; STREAM_TARGETS],
+    predicate: Option<IUnknown>,
     predicate_value: i32,
-    raster: Option<ComRef>,
+    raster: Option<IUnknown>,
     viewport_count: u32,
     viewports: [Viewport; VIEWPORTS],
     scissor_count: u32,
     scissors: [Rect; VIEWPORTS],
-    targets: [Option<ComRef>; TARGETS],
-    depth_view: Option<ComRef>,
-    blend: Option<ComRef>,
+    targets: [Option<IUnknown>; TARGETS],
+    depth_view: Option<IUnknown>,
+    blend: Option<IUnknown>,
     blend_factor: [f32; 4],
     blend_mask: u32,
-    depth_state: Option<ComRef>,
+    depth_state: Option<IUnknown>,
     stencil_reference: u32,
 }
 
 #[repr(C)]
 struct DrawSnapshot {
-    targets: [Option<ComRef>; TARGETS],
-    depth_view: Option<ComRef>,
-    vertex_shader: Option<ComRef>,
-    pixel_shader: Option<ComRef>,
-    layout: Option<ComRef>,
+    targets: [Option<IUnknown>; TARGETS],
+    depth_view: Option<IUnknown>,
+    vertex_shader: Option<IUnknown>,
+    pixel_shader: Option<IUnknown>,
+    layout: Option<IUnknown>,
     topology: u32,
-    resource: Option<ComRef>,
-    sampler: Option<ComRef>,
-    constants: Option<ComRef>,
-    blend: Option<ComRef>,
+    resource: Option<IUnknown>,
+    sampler: Option<IUnknown>,
+    constants: Option<IUnknown>,
+    blend: Option<IUnknown>,
     blend_factor: [f32; 4],
     blend_mask: u32,
-    depth_state: Option<ComRef>,
+    depth_state: Option<IUnknown>,
     stencil_reference: u32,
-    raster: Option<ComRef>,
+    raster: Option<IUnknown>,
     viewport_count: u32,
     viewports: [Viewport; VIEWPORTS],
     scissor_count: u32,
@@ -196,15 +198,15 @@ fn give_back(mut snapshot: Box<Snapshot>) {
 }
 
 unsafe fn traits(platform: &Platform, context: Handle) -> Traits {
-    let device = unsafe { ComRef::from_owned((platform.device)(context)) };
-    let address = device.as_ref().map_or(0, |device| device.as_ptr() as usize);
+    let device = unsafe { com_ref::owned((platform.device)(context)) };
+    let address = device.as_ref().map_or(0, |device| device.as_raw() as usize);
     let cached = TRAITS.get();
     if cached.device == address {
         return cached;
     }
     let mut features = Features::default();
     if let Some(device) = &device {
-        unsafe { (platform.features)(device.as_ptr(), &mut features) };
+        unsafe { (platform.features)(device.as_raw(), &mut features) };
     }
     let traits = Traits {
         device: address,
@@ -243,7 +245,7 @@ unsafe fn rsf_core_d3d11_state_save(
     let traits = unsafe { traits(platform, context) };
     snapshot.uav_count = traits.uav_count;
     if traits.constant_ranges {
-        snapshot.context1 = unsafe { ComRef::from_owned((platform.context1)(context)) };
+        snapshot.context1 = unsafe { com_ref::owned((platform.context1)(context)) };
         snapshot.constant_ranges = snapshot.context1.is_some().into();
     }
     unsafe {
@@ -355,8 +357,8 @@ mod tests {
         WRITES.set(0);
     }
 
-    fn retained() -> Option<ComRef> {
-        Some(unsafe { ComRef::retain(OBJECT.get()) })
+    fn retained() -> Option<IUnknown> {
+        Some(unsafe { com_ref::retain(OBJECT.get()) })
     }
 
     unsafe extern "C" fn immediate(context: Handle) -> u32 {
@@ -364,7 +366,7 @@ mod tests {
     }
 
     unsafe extern "C" fn device(_: Handle) -> Handle {
-        retained().map_or(null_mut(), ComRef::into_raw)
+        retained().map_or(null_mut(), Interface::into_raw)
     }
 
     unsafe extern "C" fn features(_: Handle, out: &mut Features) {

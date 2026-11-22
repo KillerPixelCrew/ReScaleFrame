@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{BUFFER, LAYOUT, PRESENT, SLOT_COUNT, STAGE_BASE, Slot, TEXTURE, detours};
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use windows::Win32::Foundation::HWND;
@@ -10,6 +10,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_CHAIN_DESC, DXGI_USAGE, IDXGISwapChain_Vtbl, IDXGISwapChain1_Vtbl,
 };
 use windows::core::BOOL;
+use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
     GetModuleHandleW,
@@ -233,9 +234,9 @@ const _: () = {
 
 // The context, chain and device retire in the order used by the native probe.
 struct Objects {
-    _context: Option<ComRef>,
-    chain: Option<ComRef>,
-    device: Option<ComRef>,
+    _context: Option<IUnknown>,
+    chain: Option<IUnknown>,
+    device: Option<IUnknown>,
 }
 
 enum CreateFailure {
@@ -249,9 +250,9 @@ impl Objects {
         unsafe { (platform.create)(window, driver, &DESCRIPTION, &mut attempt) };
         let objects = unsafe {
             Self {
-                _context: ComRef::from_owned(attempt.context),
-                chain: ComRef::from_owned(attempt.chain),
-                device: ComRef::from_owned(attempt.device),
+                _context: com_ref::owned(attempt.context),
+                chain: com_ref::owned(attempt.chain),
+                device: com_ref::owned(attempt.device),
             }
         };
         if attempt.returned == 0 {
@@ -270,8 +271,8 @@ fn probe(platform: &Platform, window: Handle) -> Option<Tables> {
         Err(CreateFailure::DriverRefused) => Objects::create(platform, window, WARP).ok()?,
         Err(CreateFailure::Exception) => return None,
     };
-    let device_object = objects.device.as_ref()?.as_ptr();
-    let chain_object = objects.chain.as_ref()?.as_ptr();
+    let device_object = objects.device.as_ref()?.as_raw();
+    let chain_object = objects.chain.as_ref()?.as_raw();
     let device = unsafe { (platform.vtable)(device_object, DEVICE_SLOTS) };
     let chain = unsafe { (platform.vtable)(chain_object, CHAIN_SLOTS) };
     if device.is_null() || chain.is_null() {
@@ -279,14 +280,14 @@ fn probe(platform: &Platform, window: Handle) -> Option<Tables> {
     }
     let (mut extended, mut result) = (null_mut(), 0);
     let returned = unsafe { (platform.query_chain1)(chain_object, &mut extended, &mut result) };
-    let extended = unsafe { ComRef::from_owned(extended) };
+    let extended = unsafe { com_ref::owned(extended) };
     if returned == 0 {
         return None;
     }
     let chain1 = extended
         .filter(|_| result >= 0)
         .map_or(null_mut(), |extended| unsafe {
-            (platform.vtable)(extended.as_ptr(), CHAIN1_SLOTS)
+            (platform.vtable)(extended.as_raw(), CHAIN1_SLOTS)
         });
     Some(Tables {
         device,

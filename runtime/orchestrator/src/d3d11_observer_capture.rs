@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_device_identity::identity as device_identity;
 use crate::d3d11_observer_hooks::installed;
 use crate::d3d11_observer_present::{frames, present_size};
@@ -53,20 +53,20 @@ struct Request {
 #[derive(Clone)]
 struct Constant {
     bytes: u32,
-    buffer: ComRef,
+    buffer: IUnknown,
 }
 
 struct Resources {
     identity: IUnknown,
-    textures: Vec<ComRef>,
+    textures: Vec<IUnknown>,
     constants: Vec<Constant>,
 }
 
 struct Retained {
     candidates: VecDeque<Resources>,
     identity: Option<IUnknown>,
-    context: Option<ComRef>,
-    device: Option<ComRef>,
+    context: Option<IUnknown>,
+    device: Option<IUnknown>,
 }
 
 impl Retained {
@@ -100,7 +100,7 @@ impl Retained {
             return (None, None);
         }
         if self.device.is_none() {
-            self.device = Some(unsafe { ComRef::retain(device) });
+            self.device = Some(unsafe { com_ref::retain(device) });
             self.identity = Some(identity.clone());
         }
         let mut retired = None;
@@ -210,7 +210,7 @@ pub(super) unsafe fn record_texture(
     if let Some(resources) = resources
         && resources.textures.len() < filter.capacity as usize
     {
-        resources.textures.push(unsafe { ComRef::retain(texture) });
+        resources.textures.push(unsafe { com_ref::retain(texture) });
     }
     drop(state);
     drop(retired);
@@ -239,13 +239,13 @@ pub(super) unsafe fn record_buffer(device: Handle, buffer: Handle, bytes: u32, b
         let buffers = &mut resources.constants;
         if let Some(entry) = buffers.iter_mut().find(|entry| entry.bytes == bytes) {
             previous = Some(std::mem::replace(&mut entry.buffer, unsafe {
-                ComRef::retain(buffer)
+                com_ref::retain(buffer)
             }));
             matched = true;
         } else if buffers.len() < CONSTANT_LIMIT {
             buffers.push(Constant {
                 bytes,
-                buffer: unsafe { ComRef::retain(buffer) },
+                buffer: unsafe { com_ref::retain(buffer) },
             });
             matched = true;
         }
@@ -262,8 +262,8 @@ pub(super) fn needs_presenter() -> bool {
     !PRESENTING_DEVICE.load(Ordering::Acquire) || REQUESTED.load(Ordering::Acquire)
 }
 
-pub(super) fn adopt_device(incoming: ComRef) -> Option<ComRef> {
-    let identity = (unsafe { device_identity(incoming.as_ptr()) })?;
+pub(super) fn adopt_device(incoming: IUnknown) -> Option<IUnknown> {
+    let identity = (unsafe { device_identity(incoming.as_raw()) })?;
     let (old, context, old_identity, discarded) = {
         let mut state = lock();
         if PRESENTING_DEVICE.swap(true, Ordering::AcqRel) {
@@ -310,26 +310,26 @@ pub(super) fn clear() {
     drop(retained);
 }
 
-fn cache_context(retained: &mut Retained, device: &ComRef, context: &ComRef) {
+fn cache_context(retained: &mut Retained, device: &IUnknown, context: &IUnknown) {
     if retained.context.is_none()
         && retained
             .device
             .as_ref()
-            .is_some_and(|selected| selected.as_ptr() == device.as_ptr())
+            .is_some_and(|selected| selected.as_raw() == device.as_raw())
     {
         retained.context = Some(context.clone());
     }
 }
 
 fn resolve_context(
-    device: &ComRef,
-    cached: Option<ComRef>,
+    device: &IUnknown,
+    cached: Option<IUnknown>,
     immediate: Immediate,
-) -> Option<ComRef> {
+) -> Option<IUnknown> {
     if cached.is_some() {
         return cached;
     }
-    let context = unsafe { ComRef::from_owned(immediate(device.as_ptr())) }?;
+    let context = unsafe { com_ref::owned(immediate(device.as_raw())) }?;
     cache_context(&mut lock().retained, device, &context);
     Some(context)
 }
@@ -365,7 +365,7 @@ unsafe extern "C" fn rsf_observer_acquire_device(
         unsafe { device_out.write(device.into_raw()) };
     }
     if !context_out.is_null() {
-        unsafe { context_out.write(context.map_or(ptr::null_mut(), ComRef::into_raw)) };
+        unsafe { context_out.write(context.map_or(ptr::null_mut(), Interface::into_raw)) };
     }
     OK
 }
@@ -417,11 +417,11 @@ unsafe extern "C" fn rsf_observer_request_dump(prefix: *const c_char, view: u32)
     OK
 }
 
-pub(super) fn dump_presenter(presenter: &ComRef) {
+pub(super) fn dump_presenter(presenter: &IUnknown) {
     if !REQUESTED.load(Ordering::Acquire) {
         return;
     }
-    let Some(presenter) = (unsafe { device_identity(presenter.as_ptr()) }) else {
+    let Some(presenter) = (unsafe { device_identity(presenter.as_raw()) }) else {
         return;
     };
     let (request, settings, device, context, textures, buffers) = {
@@ -499,14 +499,14 @@ mod tests {
     #[test]
     fn context_from_a_replaced_device_is_not_cached() {
         let (first, second, context) = (fake(), fake(), fake());
-        let first_ref = unsafe { ComRef::retain(raw(&first)) };
-        let context_ref = unsafe { ComRef::retain(raw(&context)) };
+        let first_ref = unsafe { com_ref::retain(raw(&first)) };
+        let context_ref = unsafe { com_ref::retain(raw(&context)) };
         let mut retained = Retained::new();
-        retained.device = Some(unsafe { ComRef::retain(raw(&second)) });
+        retained.device = Some(unsafe { com_ref::retain(raw(&second)) });
         cache_context(&mut retained, &first_ref, &context_ref);
         assert!(retained.context.is_none());
         let second_ref = retained.device.as_ref().unwrap().clone();
         cache_context(&mut retained, &second_ref, &context_ref);
-        assert_eq!(retained.context.as_ref().unwrap().as_ptr(), raw(&context));
+        assert_eq!(retained.context.as_ref().unwrap().as_raw(), raw(&context));
     }
 }

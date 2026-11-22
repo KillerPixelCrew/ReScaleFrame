@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::{FullscreenBlit, GraphicsCache, texture_desc};
 use crate::native_regions::SourceView;
 use crate::sys::*;
 use std::ffi::c_void;
 use std::ptr;
+use windows::core::{IUnknown, Interface};
 
 #[derive(Debug, PartialEq, Eq)]
 enum ExposureInput {
@@ -32,11 +33,11 @@ fn exposure_input(desc: &rsf_d3d11_texture_desc) -> Option<ExposureInput> {
 
 struct Exposure {
     blit: FullscreenBlit,
-    target: ComRef,
-    scalar: ComRef,
+    target: IUnknown,
+    scalar: IUnknown,
     sources: [Option<SourceView>; 2],
     next: usize,
-    device: ComRef,
+    device: IUnknown,
 }
 
 // SAFETY: the cache owns only D3D11 device children and a fullscreen pass.
@@ -44,7 +45,7 @@ struct Exposure {
 unsafe impl Send for Exposure {}
 
 impl Exposure {
-    unsafe fn new(device: ComRef) -> Option<Self> {
+    unsafe fn new(device: IUnknown) -> Option<Self> {
         let desc = rsf_d3d11_texture_desc {
             width: 1,
             height: 1,
@@ -57,11 +58,11 @@ impl Exposure {
             ..Default::default()
         };
         let scalar =
-            unsafe { ComRef::from_owned(rsf_d3d11_output_create_texture(device.as_ptr(), &desc)) }?;
+            unsafe { com_ref::owned(rsf_d3d11_output_create_texture(device.as_raw(), &desc)) }?;
         let target = unsafe {
-            ComRef::from_owned(rsf_d3d11_output_create_rtv(
-                device.as_ptr(),
-                scalar.as_ptr(),
+            com_ref::owned(rsf_d3d11_output_create_rtv(
+                device.as_raw(),
+                scalar.as_raw(),
             ))
         }?;
         let blit = unsafe { FullscreenBlit::new_copy(&device, false) }?;
@@ -87,7 +88,7 @@ impl Exposure {
         let output = unsafe {
             SourceView::get(
                 &mut self.sources[self.next],
-                self.device.as_ptr(),
+                self.device.as_raw(),
                 input,
                 format,
             )
@@ -116,10 +117,10 @@ pub(super) unsafe extern "C" fn rsf_native_scalar_exposure(
     };
     EXPOSURE
         .with(|cache| {
-            let device = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) }?;
+            let device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }?;
             let exposure = if let Some(exposure) = cache
                 .as_mut()
-                .filter(|entry| entry.device.as_ptr() == device.as_ptr())
+                .filter(|entry| entry.device.as_raw() == device.as_raw())
             {
                 exposure
             } else {
@@ -130,9 +131,9 @@ pub(super) unsafe extern "C" fn rsf_native_scalar_exposure(
             unsafe {
                 exposure
                     .blit
-                    .draw(context, exposure.target.as_ptr(), view, 1, 1)
+                    .draw(context, exposure.target.as_raw(), view, 1, 1)
             }
-            .then_some(exposure.scalar.as_ptr())
+            .then_some(exposure.scalar.as_raw())
         })
         .flatten()
         .unwrap_or(ptr::null_mut())

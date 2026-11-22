@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::same_device;
 use crate::sys::rsf_d3d11_output_is_immediate;
 use std::ffi::c_void;
 use std::ptr;
+use windows::core::IUnknown;
+use windows::core::Interface;
 
 type Handle = *mut c_void;
 
@@ -64,7 +66,7 @@ unsafe fn buffer_desc(buffer: Handle) -> BufferDesc {
     desc
 }
 
-unsafe fn create_buffer(device: Handle, desc: &BufferDesc) -> Option<ComRef> {
+unsafe fn create_buffer(device: Handle, desc: &BufferDesc) -> Option<IUnknown> {
     type CreateBuffer =
         unsafe extern "system" fn(Handle, *const BufferDesc, Handle, *mut Handle) -> i32;
     let create: CreateBuffer = unsafe { std::mem::transmute(slot(device, 3)) };
@@ -72,13 +74,13 @@ unsafe fn create_buffer(device: Handle, desc: &BufferDesc) -> Option<ComRef> {
     if unsafe { create(device, desc, ptr::null_mut(), &mut buffer) } < 0 {
         return None;
     }
-    unsafe { ComRef::from_owned(buffer) }
+    unsafe { com_ref::owned(buffer) }
 }
 
 /// # Safety
 ///
 /// `device` must be a live `ID3D11Device`.
-pub unsafe fn make_dynamic(device: Handle, bytes: u32) -> Option<ComRef> {
+pub unsafe fn make_dynamic(device: Handle, bytes: u32) -> Option<IUnknown> {
     unsafe {
         create_buffer(
             device,
@@ -195,8 +197,8 @@ unsafe extern "C" fn rsf_read_constant_buffer(
     };
     type CopyResource = unsafe extern "system" fn(Handle, Handle, Handle);
     let copy: CopyResource = unsafe { std::mem::transmute(slot(context, 47)) };
-    unsafe { copy(context, staging.as_ptr(), buffer) };
-    let Some(mapped) = (unsafe { map(context, staging.as_ptr(), MAP_READ) }) else {
+    unsafe { copy(context, staging.as_raw(), buffer) };
+    let Some(mapped) = (unsafe { map(context, staging.as_raw(), MAP_READ) }) else {
         return MAP_FAILED;
     };
     let result = if mapped.data.is_null() {
@@ -211,6 +213,6 @@ unsafe extern "C" fn rsf_read_constant_buffer(
         };
         OK
     };
-    unsafe { unmap(context, staging.as_ptr()) };
+    unsafe { unmap(context, staging.as_raw()) };
     result
 }

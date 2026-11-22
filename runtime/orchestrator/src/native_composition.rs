@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d11_output::{GraphicsCache, texture_desc};
 use crate::sys::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_USAGE_DEFAULT, rsf_d3d11_output_child_device,
@@ -12,6 +12,7 @@ use rsf_game_sys::{
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
+use windows::core::{IUnknown, Interface};
 
 struct Request {
     remaining: u32,
@@ -97,8 +98,8 @@ impl Capture {
 }
 
 struct Image {
-    texture: ComRef,
-    device: ComRef,
+    texture: IUnknown,
+    device: IUnknown,
     width: u32,
     height: u32,
     format: u32,
@@ -118,19 +119,19 @@ impl Image {
         if source.is_null() {
             return None;
         }
-        let input = unsafe { ComRef::from_owned(rsf_d3d11_output_query_texture(source)) }?;
-        let mut desc = unsafe { texture_desc(input.as_ptr()) };
+        let input = unsafe { com_ref::owned(rsf_d3d11_output_query_texture(source)) }?;
+        let mut desc = unsafe { texture_desc(input.as_raw()) };
         if desc.samples != 1 || desc.layers != 1 || desc.mips != 1 {
             return None;
         }
-        let device = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) }?;
+        let device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }?;
         let input_device =
-            unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(input.as_ptr())) }?;
-        if input_device.as_ptr() != device.as_ptr() {
+            unsafe { com_ref::owned(rsf_d3d11_output_child_device(input.as_raw())) }?;
+        if input_device.as_raw() != device.as_raw() {
             return None;
         }
         let snapshot = if let Some(image) = slot.as_ref().filter(|image| {
-            image.device.as_ptr() == device.as_ptr()
+            image.device.as_raw() == device.as_raw()
                 && image.width == desc.width
                 && image.height == desc.height
                 && image.format == desc.format
@@ -141,9 +142,8 @@ impl Image {
             desc.cpu_access_flags = 0;
             desc.misc_flags = 0;
             desc.bind_flags = RSF_D3D11_BIND_SHADER_RESOURCE;
-            let texture = unsafe {
-                ComRef::from_owned(rsf_d3d11_output_create_texture(device.as_ptr(), &desc))
-            }?;
+            let texture =
+                unsafe { com_ref::owned(rsf_d3d11_output_create_texture(device.as_raw(), &desc)) }?;
             *generation = generation.wrapping_add(1);
             slot.insert(Self {
                 texture,
@@ -154,7 +154,7 @@ impl Image {
             })
         };
         unsafe {
-            rsf_d3d11_output_copy_resource(context, snapshot.texture.as_ptr(), input.as_ptr())
+            rsf_d3d11_output_copy_resource(context, snapshot.texture.as_raw(), input.as_raw())
         };
         Some(())
     }
@@ -236,13 +236,13 @@ impl Composition {
             scope_id: key.scope_id,
             resource_generation: self.generation,
             output_rect: key.output_rect,
-            scene: self.scene.as_ref()?.texture.as_ptr(),
+            scene: self.scene.as_ref()?.texture.as_raw(),
             ui_raster: if scope.has_ui {
-                self.ui.as_ref()?.texture.as_ptr()
+                self.ui.as_ref()?.texture.as_raw()
             } else {
                 ptr::null_mut()
             },
-            composed: self.composed.as_ref()?.texture.as_ptr(),
+            composed: self.composed.as_ref()?.texture.as_raw(),
             source_frame_id: key.source_frame_id,
             submission_id: key.submission_id,
             flags: scope.flags,

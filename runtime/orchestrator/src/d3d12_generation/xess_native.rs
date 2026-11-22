@@ -192,7 +192,7 @@ unsafe extern "C" fn create_chain(
     let mut chain = null_mut();
     let result = unsafe { (sdk.chain_ptr)(context, &IDXGISwapChain4::IID, &mut chain) };
     if result != XEFG_SWAPCHAIN_RESULT_SUCCESS {
-        drop(unsafe { ComRef::from_owned(chain) });
+        drop(unsafe { com_ref::owned(chain) });
         return INIT_FAILED;
     }
     unsafe { out.write(chain) };

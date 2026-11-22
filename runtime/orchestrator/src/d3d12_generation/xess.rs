@@ -3,13 +3,14 @@
 mod native;
 
 use super::*;
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::sys::{
     RSF_FG_FIXED, RSF_FG_STAT_ACTIVITY, RSF_FG_STAT_TOTAL_PRESENTED, RSF_PACING_XELL,
     RSF_REFLEX_OFF, rsf_backend_resource as Resource,
 };
 use std::cell::{Cell, RefCell};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
+use windows::core::{IUnknown, Interface};
 
 const REFLEX_ON: u32 = 1;
 const INPUT_SAMPLE: u32 = 6;
@@ -82,7 +83,7 @@ impl SleepMode {
 
 #[derive(Default)]
 struct SettingsFence {
-    fence: Option<ComRef>,
+    fence: Option<IUnknown>,
     event: Option<OwnedHandle>,
     serial: u64,
 }
@@ -90,7 +91,7 @@ struct SettingsFence {
 impl SettingsFence {
     fn drain(&mut self, ops: &Ops, device: Raw, queue: Raw) -> i32 {
         if self.fence.is_none() {
-            self.fence = unsafe { ComRef::from_owned((ops.create_fence)(device)) };
+            self.fence = unsafe { com_ref::owned((ops.create_fence)(device)) };
         }
         let Some(fence) = &self.fence else {
             return INIT_FAILED;
@@ -102,7 +103,7 @@ impl SettingsFence {
             return INIT_FAILED;
         };
         self.serial = self.serial.wrapping_add(1);
-        if unsafe { (ops.drain)(queue, fence.as_ptr(), event.as_raw_handle(), self.serial) } >= 0 {
+        if unsafe { (ops.drain)(queue, fence.as_raw(), event.as_raw_handle(), self.serial) } >= 0 {
             OK
         } else {
             FEATURE_FAILED
@@ -125,14 +126,14 @@ struct Latency {
 struct Xess {
     ops: &'static Ops,
     sdk: Bindings,
-    device: ComRef,
-    queue: ComRef,
+    device: IUnknown,
+    queue: IUnknown,
     log: Log,
     ui_mode: u32,
     state: State,
     fg: Cell<Raw>,
     xell: Cell<Raw>,
-    chain: RefCell<Option<ComRef>>,
+    chain: RefCell<Option<IUnknown>>,
     reserved: Cell<u32>,
     latency: Mutex<Latency>,
     // Sleep may depend on older frames progressing. Neither their marker
@@ -151,7 +152,7 @@ impl Xess {
         self.chain
             .borrow()
             .as_ref()
-            .map_or(null_mut(), ComRef::as_ptr)
+            .map_or(null_mut(), Interface::as_raw)
     }
 
     fn enabled(&self, on: bool) -> bool {
@@ -160,12 +161,12 @@ impl Xess {
 
     unsafe fn initialize(&mut self, setup: &Setup) -> i32 {
         let result =
-            unsafe { (self.ops.create_fg)(self.sdk.raw, self.device.as_ptr(), self.fg.get_mut()) };
+            unsafe { (self.ops.create_fg)(self.sdk.raw, self.device.as_raw(), self.fg.get_mut()) };
         if result != 0 || self.fg.get().is_null() {
             return NOT_SUPPORTED;
         }
         let result = unsafe {
-            (self.ops.create_xell)(self.sdk.raw, self.device.as_ptr(), self.xell.get_mut())
+            (self.ops.create_xell)(self.sdk.raw, self.device.as_raw(), self.xell.get_mut())
         };
         if result != 0 || self.xell.get().is_null() {
             return NOT_SUPPORTED;
@@ -198,7 +199,7 @@ impl Xess {
             let result = unsafe {
                 (self.ops.create_chain)(self.sdk.raw, self.fg.get(), setup, reserved, &mut chain)
             };
-            *self.chain.get_mut() = unsafe { ComRef::from_owned(chain) };
+            *self.chain.get_mut() = unsafe { com_ref::owned(chain) };
             if result != OK {
                 return result;
             }
@@ -262,8 +263,8 @@ impl Session for Xess {
             };
             let result = self.settings_fence.borrow_mut().drain(
                 self.ops,
-                self.device.as_ptr(),
-                self.queue.as_ptr(),
+                self.device.as_raw(),
+                self.queue.as_raw(),
             );
             if result != OK {
                 return result;
@@ -362,7 +363,7 @@ impl Session for Xess {
 
     unsafe fn prepare(&self, list: Raw, frame: *const Frame) -> i32 {
         let (frame, record) =
-            match unsafe { read_frame(self.ops.check, frame, self.device.as_ptr()) } {
+            match unsafe { read_frame(self.ops.check, frame, self.device.as_raw()) } {
                 Ok(frame) => frame,
                 Err(result) => return result,
             };
@@ -397,7 +398,7 @@ impl Session for Xess {
                 FEATURE_FAILED
             };
         }
-        let result = unsafe { (self.ops.check.command)(list, self.device.as_ptr()) };
+        let result = unsafe { (self.ops.check.command)(list, self.device.as_raw()) };
         if result != OK {
             return result;
         }
@@ -527,8 +528,8 @@ unsafe extern "C" fn rsf_core_xeg12_create(
         ops,
         sdk,
         log: Log::new(setup),
-        device: unsafe { ComRef::retain(setup.chain.d3d12_device) },
-        queue: unsafe { ComRef::retain(setup.chain.d3d12_queue) },
+        device: unsafe { com_ref::retain(setup.chain.d3d12_device) },
+        queue: unsafe { com_ref::retain(setup.chain.d3d12_queue) },
         ui_mode: setup.chain.ui_mode,
         state: State::new(initial_status(0)),
         fg: Cell::new(null_mut()),

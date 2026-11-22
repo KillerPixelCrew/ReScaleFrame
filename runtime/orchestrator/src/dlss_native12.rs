@@ -9,7 +9,7 @@ mod sdk;
 // Also the Vulkan DLSS SR and DLSS-G singularity gate (vulkan_streamline_camera).
 pub(crate) use rsf_game_sys::xm;
 
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::streamline_sr::sdk::{
     FEATURE_DLSS, PREFERENCE_FRAME_TAGGING, PREFERENCE_MANUAL_HOOKING, RENDER_API_D3D12,
@@ -23,6 +23,7 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleFileNameW, GetModuleHandleExW,
     GetModuleHandleW, GetProcAddress,
@@ -214,7 +215,7 @@ impl Route {
 }
 
 struct RegistrationResources {
-    device: ComRef,
+    device: IUnknown,
     _module: Option<SdkModule>,
     // The typed Streamline preferences borrow the directory through SDK shutdown.
     _directory: Vec<u16>,
@@ -239,7 +240,7 @@ impl DeviceRegistration {
             .as_ref()
             .expect("live registration")
             .device
-            .as_ptr()
+            .as_raw()
     }
 
     unsafe fn open(
@@ -281,7 +282,7 @@ impl DeviceRegistration {
             route,
             initialized: false,
             resources: Some(RegistrationResources {
-                device: unsafe { ComRef::retain(device) },
+                device: unsafe { com_ref::retain(device) },
                 _module: lease,
                 _directory: directory,
             }),

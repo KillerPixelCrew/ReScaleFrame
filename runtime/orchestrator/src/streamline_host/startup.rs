@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::com_ref::ComRef;
+use crate::com_ref;
+use windows::core::IUnknown;
 
 const NVIDIA_VENDOR: u32 = 0x10de;
 const DIRECT_QUEUE: u32 = 0;
@@ -72,7 +73,7 @@ impl Startup {
         if unsafe { (self.adapter_vendor)(setup.dxgi_adapter, &mut vendor, &mut adapter) } == 0 {
             return Err(INVALID);
         }
-        let adapter = unsafe { ComRef::from_owned(adapter) };
+        let adapter = unsafe { com_ref::owned(adapter) };
         if vendor != NVIDIA_VENDOR {
             unsafe { (self.report_vendor)(setup.log, setup.log_user, vendor) };
             return Err(NOT_SUPPORTED);
@@ -91,7 +92,7 @@ impl Startup {
         host: &Host,
         adapter: Handle,
         [device, queue]: [Handle; 2],
-        refused_queue_device: &mut Option<ComRef>,
+        refused_queue_device: &mut Option<IUnknown>,
         mut symbol: impl FnMut(&CStr) -> FARPROC,
     ) -> Result<(), i32> {
         let mut entries = [null_mut(); ENTRY_NAMES.len()];
@@ -150,7 +151,7 @@ impl Startup {
             }
             let mut queue_device = null_mut();
             let matched = unsafe { (self.queue_matches_device)(native, queue, &mut queue_device) };
-            let queue_device = unsafe { ComRef::from_owned(queue_device) };
+            let queue_device = unsafe { com_ref::owned(queue_device) };
             if matched == 0 {
                 // The queue's GetDevice reference outlives native disposal on refusal.
                 *refused_queue_device = queue_device;

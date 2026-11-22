@@ -2,7 +2,7 @@
 // DLSS-G sessions borrowed from a Streamline host: admission against the host, option and
 // status handoff, prepare ordering on the frame token and vendor retirement.
 use super::*;
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::d3d12_generation::{PrepareOrder, read_options};
 use crate::sys::{
     RSF_FG_AUTO, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_FG_STAT_ACTIVITY,
@@ -10,6 +10,7 @@ use crate::sys::{
     rsf_generation_setup as GenerationSetup,
 };
 use rsf_game_sys::RSF_FRAME_SOURCE_RENDERED;
+use windows::core::{IUnknown, Interface};
 
 const UI_NONE: u32 = 1;
 const HUDLESS: u32 = 4;
@@ -171,7 +172,7 @@ impl Copied {
 
 struct Session {
     host: NonNull<Host>,
-    chain: Option<ComRef>,
+    chain: Option<IUnknown>,
     copied: Copied,
     ui_mode: u32,
 }
@@ -368,7 +369,7 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_create(
         }
         let mut created = null_mut();
         let result = unsafe { (platform.chain)(host.native, &setup.chain, &mut created) };
-        let created = unsafe { ComRef::from_owned(created) };
+        let created = unsafe { com_ref::owned(created) };
         if result != OK || created.is_none() {
             drop(created);
             release(session, platform);
@@ -377,7 +378,7 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_create(
         session.chain = created;
     }
     unsafe {
-        chain.write(session.chain.as_ref().map_or(null_mut(), ComRef::as_ptr));
+        chain.write(session.chain.as_ref().map_or(null_mut(), Interface::as_raw));
         out.write(Box::into_raw(session).cast());
     }
     OK

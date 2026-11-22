@@ -9,7 +9,7 @@ mod planning;
 #[cfg(not(test))]
 mod sdk;
 
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::diagnostic_output::Output;
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
@@ -24,6 +24,7 @@ use crate::sys::{rsf_dlss_plan as Plan, rsf_dlss_support as Support};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{NonNull, addr_of, null, null_mut};
 use std::sync::Mutex;
+use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::core::w;
 
@@ -235,7 +236,7 @@ impl Startup {
         host: Handle,
         log: Log,
         user: Handle,
-    ) -> Result<(NonNull<c_void>, ComRef), i32> {
+    ) -> Result<(NonNull<c_void>, IUnknown), i32> {
         let module = unsafe { (self.host_module)(host) };
         if module.is_null() {
             return Err(NOT_READY);
@@ -267,7 +268,7 @@ impl Startup {
             (self.set_log)(log, user);
             (self.report)(c"DLSS SR shares the D3D12 FG host and CPU frame token".as_ptr());
         }
-        Ok((native, unsafe { ComRef::retain(device) }))
+        Ok((native, unsafe { com_ref::retain(device) }))
     }
 
     fn set_device(&self, native: Handle, device: Handle, features: &mut u32) -> i32 {
@@ -315,10 +316,10 @@ const _: () = {
 };
 
 enum Route {
-    Owned(Option<ComRef>),
+    Owned(Option<IUnknown>),
     Shared {
         host: NonNull<c_void>,
-        device: ComRef,
+        device: IUnknown,
     },
 }
 
@@ -330,7 +331,7 @@ impl Route {
         }
     }
 
-    fn device(&self) -> Option<&ComRef> {
+    fn device(&self) -> Option<&IUnknown> {
         match self {
             Self::Owned(device) => device.as_ref(),
             Self::Shared { device, .. } => Some(device),
@@ -476,7 +477,7 @@ unsafe fn rsf_core_dlss_streamline_set_device(device: Handle, platform: &Platfor
         .startup
         .set_device(session.native.as_ptr(), device, &mut capabilities);
     if matches!(result, OK | MISSING_ENTRY_POINT) {
-        session.route = Route::Owned(Some(unsafe { ComRef::retain(device) }));
+        session.route = Route::Owned(Some(unsafe { com_ref::retain(device) }));
         session.features = capabilities;
         session.applied = [None; 2];
     }
@@ -500,7 +501,7 @@ unsafe fn rsf_core_dlss_streamline_support(support: *mut Support, platform: &Pla
     unsafe {
         platform.planning.support(
             session.native.as_ptr(),
-            device.as_ptr(),
+            device.as_raw(),
             shared,
             support,
             platform.startup,

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::{ComRef, Handle, RESOURCE_FAILED, SHADER_FAILED, Setup, Vertex};
+use super::{Handle, IUnknown, RESOURCE_FAILED, SHADER_FAILED, Setup, Vertex};
+use crate::com_ref;
 use rsf_shader_compiler::{Compiler, Request, compile};
 use std::{ffi::CStr, mem::offset_of, ptr::null_mut};
 use windows::{
@@ -62,11 +63,11 @@ fn resource<T: Interface>(
     setup: &Setup,
     diagnostic: &str,
     create: impl FnOnce(&mut Option<T>) -> windows::core::Result<()>,
-) -> Result<ComRef, i32> {
+) -> Result<IUnknown, i32> {
     let mut object = None;
     if create(&mut object).is_ok()
         && let Some(object) = object
-        && let Some(reference) = unsafe { ComRef::from_owned(object.into_raw()) }
+        && let Some(reference) = unsafe { com_ref::owned(object.into_raw()) }
     {
         return Ok(reference);
     }
@@ -74,7 +75,7 @@ fn resource<T: Interface>(
     Err(RESOURCE_FAILED)
 }
 
-pub(super) unsafe fn create(device: Handle, setup: &Setup) -> Result<[ComRef; 8], i32> {
+pub(super) unsafe fn create(device: Handle, setup: &Setup) -> Result<[IUnknown; 8], i32> {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.ok_or(RESOURCE_FAILED)?;
     let vertex_code = shader_code(setup, c"vertex_main", c"vs_4_0").ok_or(SHADER_FAILED)?;
     let pixel_code = shader_code(setup, c"pixel_main", c"ps_4_0").ok_or(SHADER_FAILED)?;
@@ -89,8 +90,8 @@ pub(super) unsafe fn create(device: Handle, setup: &Setup) -> Result<[ComRef; 8]
         setup.say("overlay shaders could not be created");
         return Err(SHADER_FAILED);
     };
-    let vertex = unsafe { ComRef::from_owned(vertex.into_raw()) }.ok_or(SHADER_FAILED)?;
-    let pixel = unsafe { ComRef::from_owned(pixel.into_raw()) }.ok_or(SHADER_FAILED)?;
+    let vertex = unsafe { com_ref::owned(vertex.into_raw()) }.ok_or(SHADER_FAILED)?;
+    let pixel = unsafe { com_ref::owned(pixel.into_raw()) }.ok_or(SHADER_FAILED)?;
 
     let elements = [
         (c"POSITION", DXGI_FORMAT_R32G32_FLOAT, 0),

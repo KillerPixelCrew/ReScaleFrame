@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, OBSERVER, Observer, diagnostics, foreign, notify_present};
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_LIST_TYPE_DIRECT, ID3D12CommandQueue, ID3D12CommandQueue_Vtbl, ID3D12Device,
     ID3D12Device_Vtbl,
 };
 use windows::Win32::Graphics::Dxgi::{IDXGIFactory2, IDXGIFactory2_Vtbl, IDXGISwapChain_Vtbl};
+use windows::core::IUnknown;
 use windows::core::Interface;
 
 const FACTORY: u32 = 0;
@@ -48,23 +49,23 @@ pub(super) const NATIVE: Platform = Platform {
     describe_window: foreign::describe_window,
 };
 
-pub(super) fn query_interface(query: Query, pointer: Handle) -> Option<ComRef> {
+pub(super) fn query_interface(query: Query, pointer: Handle) -> Option<IUnknown> {
     if pointer.is_null() {
         return None;
     }
     let mut object = ptr::null_mut();
     let result = unsafe { query(pointer, &mut object) };
-    unsafe { ComRef::from_owned(object) }.filter(|_| result >= 0)
+    unsafe { com_ref::owned(object) }.filter(|_| result >= 0)
 }
 
 impl Platform {
-    fn direct_queue(&self, pointer: Handle) -> Option<ComRef> {
+    fn direct_queue(&self, pointer: Handle) -> Option<IUnknown> {
         query_interface(self.query_queue, pointer)
-            .filter(|queue| unsafe { (self.queue_type)(queue.as_ptr()) } == DIRECT)
+            .filter(|queue| unsafe { (self.queue_type)(queue.as_raw()) } == DIRECT)
     }
 
-    fn bind_queue(&self, queue: &ComRef) {
-        unsafe { (self.bind_interface)(QUEUE, queue.as_ptr(), EXECUTE_COMMAND_LISTS) };
+    fn bind_queue(&self, queue: &IUnknown) {
+        unsafe { (self.bind_interface)(QUEUE, queue.as_raw(), EXECUTE_COMMAND_LISTS) };
     }
 }
 
@@ -81,9 +82,9 @@ fn attach(observer: *const Observer, pointer: Handle, kind: u32, platform: &Plat
         return -1;
     };
     if kind == DEVICE && diagnostics::enabled() {
-        unsafe { (platform.register_debug)(object.as_ptr()) };
+        unsafe { (platform.register_debug)(object.as_raw()) };
     }
-    if unsafe { (platform.bind_interface)(kind, object.as_ptr(), slot) } != 0 {
+    if unsafe { (platform.bind_interface)(kind, object.as_raw(), slot) } != 0 {
         0
     } else {
         -3
@@ -142,7 +143,7 @@ fn observe_swapchain(
     platform.bind_queue(&queue);
     unsafe { (platform.bind_interface)(CHAIN, chain, PRESENT) };
     if let Some(swapchain) = owner.setup.swapchain {
-        unsafe { swapchain(owner.setup.user, queue.as_ptr(), chain, window) };
+        unsafe { swapchain(owner.setup.user, queue.as_raw(), chain, window) };
     }
 }
 

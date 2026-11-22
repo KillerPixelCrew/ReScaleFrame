@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::overlay_geometry::{
     TEXTURE_EDGE, borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
@@ -15,6 +15,7 @@ use std::ffi::{CString, c_void};
 use std::mem;
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, TryLockError};
+use windows::core::{IUnknown, Interface};
 
 mod pipeline;
 mod platform;
@@ -68,12 +69,12 @@ struct Texture {
     id: u64,
     width: u32,
     height: u32,
-    view: ComRef,
-    resource: ComRef,
+    view: IUnknown,
+    resource: IUnknown,
 }
 
 struct Buffer {
-    resource: ComRef,
+    resource: IUnknown,
     capacity: u32,
 }
 
@@ -90,8 +91,8 @@ struct State {
 struct Renderer {
     state: Mutex<State>,
     pending_free: Mutex<Vec<u64>>,
-    pipeline: [ComRef; 8],
-    device: ComRef,
+    pipeline: [IUnknown; 8],
+    device: IUnknown,
     setup: Setup,
 }
 
@@ -114,7 +115,7 @@ impl Renderer {
     }
 
     fn context_valid(&self, context: Handle) -> bool {
-        unsafe { platform::valid_context(self.device.as_ptr(), context) }
+        unsafe { platform::valid_context(self.device.as_raw(), context) }
     }
 
     fn upload(&self, context: Handle, update: &Update) -> (i32, Option<String>) {
@@ -127,7 +128,7 @@ impl Renderer {
             .position(|texture| texture.id == update.id);
         let pitch = update.width * 4;
         if update.is_whole_texture != 0 {
-            let device = self.device.as_ptr();
+            let device = self.device.as_raw();
             let texture = unsafe { platform::texture(device, update, pitch) };
             let Some(resource) = texture else {
                 return (
@@ -138,7 +139,7 @@ impl Renderer {
                     )),
                 );
             };
-            let view = unsafe { platform::view(device, resource.as_ptr()) };
+            let view = unsafe { platform::view(device, resource.as_raw()) };
             let Some(view) = view else {
                 return (
                     RESOURCE_FAILED,
@@ -188,7 +189,7 @@ impl Renderer {
                     )),
                 );
             }
-            unsafe { platform::patch(context, texture.resource.as_ptr(), update, pitch) };
+            unsafe { platform::patch(context, texture.resource.as_raw(), update, pitch) };
         }
         (OK, None)
     }
@@ -208,7 +209,7 @@ impl Renderer {
         }
         let capacity = count.div_ceil(GROWTH) * GROWTH;
         let resource =
-            unsafe { platform::buffer(self.device.as_ptr(), capacity * stride, bind) }.ok_or(())?;
+            unsafe { platform::buffer(self.device.as_raw(), capacity * stride, bind) }.ok_or(())?;
         Ok(Some(Buffer { resource, capacity }))
     }
 
@@ -286,7 +287,7 @@ impl Renderer {
                 continue;
             };
             plan.push(Draw {
-                view: texture.view.as_ptr(),
+                view: texture.view.as_raw(),
                 index_count: call.index_count,
                 index_offset: call.index_offset,
                 vertex_offset: call.vertex_offset as i32,
@@ -316,8 +317,8 @@ impl Renderer {
         if let Some(indices) = indices {
             state.indices = Some(indices);
         }
-        let vertices = state.vertices.as_ref().unwrap().resource.as_ptr();
-        let indices = state.indices.as_ref().unwrap().resource.as_ptr();
+        let vertices = state.vertices.as_ref().unwrap().resource.as_raw();
+        let indices = state.indices.as_ref().unwrap().resource.as_raw();
         let constants = [2.0f32 / width as f32, 2.0f32 / height as f32, 0.0, 0.0];
         let writes = [
             (
@@ -331,7 +332,7 @@ impl Renderer {
                 (data.index_count * index_size) as usize,
             ),
             (
-                self.pipeline[CONSTANTS].as_ptr(),
+                self.pipeline[CONSTANTS].as_raw(),
                 constants.as_ptr().cast(),
                 size_of_val(&constants),
             ),
@@ -359,7 +360,7 @@ impl Renderer {
                 _ => state.checked_target = true,
             }
         }
-        let pipeline = std::array::from_fn(|i| self.pipeline[i].as_ptr());
+        let pipeline = std::array::from_fn(|i| self.pipeline[i].as_raw());
         unsafe {
             platform::draw(
                 context,
@@ -412,7 +413,7 @@ unsafe extern "C" fn rsf_overlay_renderer_create(
         state: Mutex::new(State::default()),
         pending_free: Mutex::new(Vec::new()),
         pipeline,
-        device: unsafe { ComRef::retain(device) },
+        device: unsafe { com_ref::retain(device) },
         setup: *setup,
     });
     let Some(owner) = (unsafe { renderer.as_ref() }) else {

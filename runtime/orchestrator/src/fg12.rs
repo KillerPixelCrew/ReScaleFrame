@@ -2,7 +2,7 @@
 // The owner is reached through the native platform, which unit tests do not build; they cover
 // the retirement policy only.
 #![cfg_attr(test, allow(dead_code))]
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::fg_leases::{FencePoint, FenceState};
 use crate::sr_session::{checked, has_capacity};
 use crate::sys::rsf_native_cpu_frame;
@@ -10,6 +10,7 @@ use crate::sys::*;
 use rsf_game_sys::backend_result::{
     INIT_FAILED, INVALID_ARGUMENT, NEEDS_RESTART, NOT_READY, NOT_SUPPORTED, OK,
 };
+use windows::core::{IUnknown, Interface};
 
 use crate::native_cpu::rsf_native_cpu_read;
 use crate::sys::rsf_native_latency_status;
@@ -214,15 +215,15 @@ impl Cpu {
 }
 
 struct Texture {
-    resource: ComRef,
+    resource: IUnknown,
     state: u32,
 }
 
 impl Texture {
     unsafe fn allocate(list: *mut c_void, source: *mut c_void, old: Option<&Self>) -> Option<Self> {
-        let reuse = old.map_or(null_mut(), |texture| texture.resource.as_ptr());
+        let reuse = old.map_or(null_mut(), |texture| texture.resource.as_raw());
         let raw = unsafe { native!(texture(list, source, reuse)) };
-        let resource = unsafe { ComRef::from_owned(raw) }?;
+        let resource = unsafe { com_ref::owned(raw) }?;
         Some(Self {
             resource,
             state: if raw == reuse {
@@ -234,12 +235,12 @@ impl Texture {
     }
 
     unsafe fn copy_from(&mut self, list: *mut c_void, src: *mut c_void, state: u32) {
-        unsafe { native!(copy(list, src, state, self.resource.as_ptr(), self.state)) };
+        unsafe { native!(copy(list, src, state, self.resource.as_raw(), self.state)) };
         self.state = COMMON;
     }
 
     unsafe fn read(&mut self, list: *mut c_void) -> *mut c_void {
-        let raw = self.resource.as_ptr();
+        let raw = self.resource.as_raw();
         unsafe { native!(transition(list, raw, self.state, SHADER_READ)) };
         self.state = SHADER_READ;
         raw
@@ -251,7 +252,7 @@ struct Slot {
     depth: Texture,
     motion: Texture,
     hudless: Option<Texture>,
-    source_queue: ComRef,
+    source_queue: IUnknown,
     source_fence: Option<FencePoint>,
     // A submit callback covers exactly the copies recorded for this frame so far.
     submitted: bool,
@@ -282,8 +283,8 @@ impl Slot {
 }
 
 struct SourceFence {
-    queue: ComRef,
-    fence: ComRef,
+    queue: IUnknown,
+    fence: IUnknown,
     serial: u64,
 }
 
@@ -293,7 +294,7 @@ impl SourceFence {
             .serial
             .checked_add(1)
             .filter(|&value| value < u64::MAX)?;
-        if unsafe { native!(signal(self.queue.as_ptr(), self.fence.as_ptr(), value)) } == 0 {
+        if unsafe { native!(signal(self.queue.as_raw(), self.fence.as_raw(), value)) } == 0 {
             return None;
         }
         self.serial = value;
@@ -637,7 +638,7 @@ unsafe extern "C" fn rsf_core_fg12_capture(
     {
         return;
     }
-    let Some(source_queue) = (unsafe { ComRef::from_owned(native!(source_queue())) }) else {
+    let Some(source_queue) = (unsafe { com_ref::owned(native!(source_queue())) }) else {
         return;
     };
     let mut owner = OWNER.lock().unwrap();
@@ -659,7 +660,7 @@ unsafe extern "C" fn rsf_core_fg12_capture(
         !matches!(
             slot.vendor,
             VendorUse::Unfenced(_) | VendorUse::Preparing(_)
-        ) && slot.source_queue.as_ptr() == source_queue.as_ptr()
+        ) && slot.source_queue.as_raw() == source_queue.as_raw()
     });
     let Some(mut depth_copy) =
         (unsafe { Texture::allocate(list, depth, reuse.map(|slot| &slot.depth)) })
@@ -816,9 +817,9 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_submitted(session: u64, id: u64) {
     let queue = &slot.source_queue;
     if source_fence
         .as_ref()
-        .is_none_or(|fence| queue.as_ptr() != fence.queue.as_ptr())
+        .is_none_or(|fence| queue.as_raw() != fence.queue.as_raw())
     {
-        let fence = unsafe { ComRef::from_owned(native!(fence(queue.as_ptr()))) };
+        let fence = unsafe { com_ref::owned(native!(fence(queue.as_raw()))) };
         *source_fence = fence.map(|fence| SourceFence {
             queue: queue.clone(),
             fence,
@@ -1208,7 +1209,7 @@ unsafe extern "C" fn retire(_: *mut c_void, context: *mut c_void) {
     let point = if result == OK && !fence.is_null() && value != 0 && value != u64::MAX {
         // The bridge returns a borrowed fence inside the Present callback lease.
         Some(FencePoint {
-            fence: unsafe { ComRef::retain(fence) },
+            fence: unsafe { com_ref::retain(fence) },
             value,
         })
     } else {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref;
 use crate::sr_session::has_capacity;
 use crate::sys::{
     RSF_NATIVE_SCENE_PRESENT_DIRECT, RSF_NATIVE_SCENE_PRESENT_NONE,
@@ -235,7 +235,7 @@ pub(super) extern "C" fn rsf_native_scene_reset() {
 }
 
 unsafe extern "C" fn resource_identity(resource: *mut c_void) -> u64 {
-    unsafe { ComRef::identity(resource) }.map_or(0, |identity| identity.as_ptr() as usize as u64)
+    unsafe { com_ref::identity(resource) }.map_or(0, |identity| identity.as_raw() as usize as u64)
 }
 
 unsafe extern "C" fn backbuffer_identity(
@@ -249,10 +249,10 @@ unsafe extern "C" fn backbuffer_identity(
     let mut raw = null_mut();
     let result =
         unsafe { (chain.vtable().GetBuffer)(chain.as_raw(), 0, &ID3D11Texture2D::IID, &mut raw) };
-    let Some(buffer) = (unsafe { ComRef::from_result(result, raw) }) else {
+    let Some(buffer) = (unsafe { com_ref::from_result(result, raw) }) else {
         return 0;
     };
-    let raw = buffer.as_ptr();
+    let raw = buffer.as_raw();
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.expect("retained backbuffer");
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe {
