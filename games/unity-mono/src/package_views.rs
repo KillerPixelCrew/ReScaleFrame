@@ -12,7 +12,7 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 
 /// rsf_sr12_evaluate's recording slots.
-const SLOTS: usize = 3;
+pub(super) const SLOTS: usize = 3;
 const IDLE_SOURCE_FRAMES: u64 = 120;
 
 #[derive(Clone, Copy, PartialEq, Eq)]

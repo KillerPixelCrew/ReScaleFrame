@@ -234,6 +234,10 @@ uint64_t rsf_unity_package_sr_ring_begin(void);
 void rsf_unity_package_sr_recording(void* commands, uint64_t epoch, uint32_t slot,
     uint64_t recording, uint64_t retired_through);
 void rsf_unity_package_sr_ring_retired(uint64_t epoch);
+/* D3D bridge helpers that own the epoch and serials. The bridge reports a verified reset
+   before its package render callback and reports release only after a checked full drain. */
+void rsf_unity_package_sr_slot_reset(uint32_t bridge, void* commands, uint32_t slot);
+void rsf_unity_package_sr_slots_released(uint32_t bridge);
 
 /* Presentation, outside package.cpp's mutex except where a locked export calls it. load runs at
    plugin load, before any session: it stores whether this is the Editor, reads the identity from

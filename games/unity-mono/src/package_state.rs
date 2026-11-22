@@ -35,7 +35,7 @@ use crate::package_abi::{
     rsf_sr12, rsf_unity_frame_counters, rsf_unity_package_platform, rsf_unity_package_settings,
     rsf_unity_package_status, rsf_unity_package_view_setup,
 };
-use crate::package_views::{Recording, View, Views};
+use crate::package_views::{Recording, SLOTS, View, Views};
 use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_abi::{
     RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
@@ -393,6 +393,68 @@ struct Package {
 
 static PACKAGE: Package = Package::new();
 static NEXT_RING_EPOCH: AtomicU64 = AtomicU64::new(1);
+// These bridge owners prove fence retirement or discard before reporting each reset.
+static D3D11_RECORDINGS: Mutex<ProducerRing> = Mutex::new(ProducerRing::new());
+static D3D12_RECORDINGS: Mutex<ProducerRing> = Mutex::new(ProducerRing::new());
+
+struct ProducerRing {
+    epoch: u64,
+    serials: [u64; SLOTS],
+}
+
+impl ProducerRing {
+    const fn new() -> Self {
+        Self {
+            epoch: 0,
+            serials: [0; SLOTS],
+        }
+    }
+
+    fn reset(&mut self, commands: *mut c_void, slot: u32) {
+        let Some(serial) = self.serials.get_mut(slot as usize) else {
+            RECORDING.set(None);
+            return;
+        };
+        if self.epoch == 0 {
+            self.epoch = rsf_unity_package_sr_ring_begin();
+        }
+        let retired = *serial;
+        let Some(next) = retired.checked_add(1) else {
+            RECORDING.set(None);
+            return;
+        };
+        *serial = next;
+        rsf_unity_package_sr_recording(commands, self.epoch, slot, next, retired);
+    }
+
+    fn released(&mut self) {
+        rsf_unity_package_sr_ring_retired(self.epoch);
+        *self = Self::new();
+    }
+}
+
+fn d3d_ring(bridge: u32) -> Option<MutexGuard<'static, ProducerRing>> {
+    let owner = match bridge {
+        11 => &D3D11_RECORDINGS,
+        12 => &D3D12_RECORDINGS,
+        _ => return None,
+    };
+    Some(owner.lock().unwrap_or_else(PoisonError::into_inner))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_package_sr_slot_reset(bridge: u32, commands: *mut c_void, slot: u32) {
+    if let Some(mut ring) = d3d_ring(bridge) {
+        ring.reset(commands, slot);
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_package_sr_slots_released(bridge: u32) {
+    if let Some(mut ring) = d3d_ring(bridge) {
+        ring.released();
+    }
+}
 
 thread_local! {
     // A bridge publishes the reset on the render thread before it forwards the pass.
@@ -415,7 +477,12 @@ extern "C" fn rsf_unity_package_sr_recording(
     retired_through: u64,
 ) {
     RECORDING.set(None);
-    if commands.is_null() || epoch == 0 || slot >= 3 || serial == 0 || retired_through >= serial {
+    if commands.is_null()
+        || epoch == 0
+        || slot as usize >= SLOTS
+        || serial == 0
+        || retired_through >= serial
+    {
         return;
     }
     if retired_through != 0 {

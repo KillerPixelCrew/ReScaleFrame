@@ -128,11 +128,18 @@ void log(const char* text) { if (services.log) services.log(services.user, text)
 bool wait(const DeviceView& graphics, uint64_t value)
 {
     auto* completion = graphics.completion();
-    if (!value || (completion && completion->GetCompletedValue() >= value)) return true;
+    if (!completion) return false;
+    const auto completed = completion->GetCompletedValue();
+    if (completed == UINT64_MAX) return false;
+    if (completed >= value) return true;
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!event) return false;
-    const bool result = completion && SUCCEEDED(completion->SetEventOnCompletion(value, event)) && WaitForSingleObject(event, 10000) == WAIT_OBJECT_0;
-    CloseHandle(event); return result;
+    const bool ready = SUCCEEDED(completion->SetEventOnCompletion(value, event)) &&
+        WaitForSingleObject(event, 10000) == WAIT_OBJECT_0;
+    CloseHandle(event);
+    if (!ready) return false;
+    const auto retired = completion->GetCompletedValue();
+    return retired != UINT64_MAX && retired >= value;
 }
 void barrier(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
 {
@@ -359,6 +366,7 @@ void execute11(int id, const rsf_unity_packet& packet)
     // A policy change applies on the next reconstruction once every submission completed; it
     // stays pending, and config keeps the bridge disabled, until then.
     if (!rsf_unity_d3d11_apply_change(&plan)) return;
+    rsf_unity_package_sr_slot_reset(11, slot.list(), index);
     services.render_pass(services.user, slot.list(), &pass, 1);
     for (uint32_t i = 0; i < 4; ++i) if (resources[i])
         barrier(slot.list(), resources[i], static_cast<D3D12_RESOURCE_STATES>(plan.states[i]), D3D12_RESOURCE_STATE_COMMON);
@@ -473,8 +481,13 @@ void rsf_unity_package_bridge_finish_retirement(bool commit) noexcept
     // The Vulkan bridge releases the ring itself, only together with the objects that used it.
     // Otherwise the D3D11 record destroys its surfaces, slots, fences, queue and devices, then
     // forgets the ring. It refuses without the checked close and keeps everything.
-    if (!vulkan && !rsf_unity_d3d11_release())
-        log("Unity DX11 bridge release refused without a checked close; its graphics remain owned.");
+    if (!vulkan) {
+        if (rsf_unity_d3d11_release()) {
+            rsf_unity_package_sr_slots_released(11);
+        } else {
+            log("Unity DX11 bridge release refused without a checked close; its graphics remain owned.");
+        }
+    }
     services = {};
     // Releases any packet lease still held. The frame owner stays closed. The next session
     // activates it after preparation.
