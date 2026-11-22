@@ -41,8 +41,8 @@ const SR_FSR4: u32 = 4;
 const SR_XESS: u32 = 5;
 const SR_SPATIAL: u32 = 6;
 const SR_AUTO: u32 = 7;
-// Automatic selection keeps the first backend whose session the SDKs actually create.
-const AUTO_ORDER: [u32; 5] = [SR_DLSS, SR_FSR4, SR_XESS, SR_FSR3, SR_FSR2];
+const SR_CHOICES: u32 =
+    (1 << SR_DLSS) | (1 << SR_FSR2) | (1 << SR_FSR3) | (1 << SR_FSR4) | (1 << SR_XESS);
 const MAX_QUALITY: u32 = 5;
 const DLSS_ENGINE_CUSTOM: u32 = 0;
 const SR12_ABI_VERSION: u32 = 1;
@@ -112,6 +112,7 @@ pub(crate) struct Platform {
     present_host: unsafe extern "C" fn() -> Handle,
     present_is_owner: unsafe extern "C" fn(Handle) -> c_int,
     present_backend: unsafe extern "C" fn() -> u32,
+    present_backend_choices: unsafe extern "C" fn() -> u32,
     present_request: unsafe extern "C" fn(u32) -> i32,
     present_switch_result: unsafe extern "C" fn() -> i32,
     present_abort: unsafe extern "C" fn(u64) -> i32,
@@ -203,6 +204,7 @@ struct Surfaces {
     render_width: u32,
     render_height: u32,
     shape: Shape,
+    selection_result: i32,
 }
 
 impl Surfaces {
@@ -219,11 +221,25 @@ struct State {
     chain: Option<ComRef>,
     shown: bool,
     closed: bool,
+    window_dirty: bool,
     width: u32,
     height: u32,
     generation: u32,
     status: rsf_gl_pipeline_status,
+    evaluation_result: i32,
+    frame_view: Option<(u64, Option<u64>)>,
     active: Option<Surfaces>,
+}
+
+impl State {
+    fn record_view(&mut self, pass: &Pass) {
+        self.frame_view = Some(match self.frame_view {
+            Some((frame, view)) if frame == pass.source_frame_id => {
+                (frame, view.filter(|key| *key == pass.view_key))
+            }
+            _ => (pass.source_frame_id, Some(pass.view_key)),
+        });
+    }
 }
 
 pub(crate) struct Pipeline {
@@ -398,12 +414,20 @@ impl Pipeline {
         let mut selected = options.sr_backend;
         let (mut result, mut sr) = (INVALID, None);
         if selected == SR_AUTO {
-            for candidate in AUTO_ORDER {
+            let (mut vendor, mut software) = (0, 0);
+            unsafe { (self.platform.adapter_identity)(state.device, &mut vendor, &mut software) };
+            let mut choices = SR_CHOICES;
+            loop {
+                let candidate = crate::rsf_gpu_select_sr_backend(vendor, software, choices);
+                if candidate == SR_NONE {
+                    break;
+                }
                 (result, sr) = self.create_sr(state, candidate, options, width, height);
-                if result == OK {
+                if result == OK && sr.is_some() {
                     selected = candidate;
                     break;
                 }
+                choices &= !(1 << candidate);
             }
         } else {
             (result, sr) = self.create_sr(state, selected, options, width, height);
@@ -439,6 +463,7 @@ impl Pipeline {
             render_width,
             render_height,
             shape,
+            selection_result: state.status.sr_result,
         };
         for slot in 0..SURFACES {
             let (width, height) = if slot <= MOTION {
@@ -467,6 +492,7 @@ impl Pipeline {
         if (state.width, state.height) != (shape.width, shape.height) {
             if unsafe { (p.window_resize)(state.window, shape.width, shape.height) } == 0 {
                 self.log("OpenGL: event-thread window resize refused.");
+                self.restore_window(state);
                 return Err(FEATURE_FAILED);
             }
             let chain = state.chain.as_ref().map_or(ptr::null_mut(), ComRef::as_ptr);
@@ -484,10 +510,22 @@ impl Pipeline {
                     "OpenGL: DXGI resize {}x{} failed (0x{:08x})",
                     shape.width, shape.height, resized as u32
                 ));
+                self.restore_window(state);
                 return Err(FEATURE_FAILED);
             }
+            state.window_dirty = false;
         }
         Ok((selected, surfaces))
+    }
+
+    fn restore_window(&self, state: &mut State) {
+        let (width, height) = if state.active.is_some() {
+            (state.width, state.height)
+        } else {
+            (32, 32) // initial child and swapchain extent
+        };
+        state.window_dirty =
+            unsafe { (self.platform.window_resize)(state.window, width, height) } == 0;
     }
 
     fn request_fg(&self, state: &mut State, requested: u32) {
@@ -495,12 +533,11 @@ impl Pipeline {
         let mut backend = requested;
         if backend == RSF_FG_BACKEND_AUTO {
             let (mut vendor, mut software) = (0, 0);
-            backend =
-                if unsafe { (p.adapter_identity)(state.device, &mut vendor, &mut software) } != 0 {
-                    unsafe { (p.fg_default_backend)(vendor, software) }
-                } else {
-                    0
-                };
+            unsafe { (p.adapter_identity)(state.device, &mut vendor, &mut software) };
+            backend = crate::fg_choice::rsf_fg_select_auto_backend(
+                unsafe { (p.fg_default_backend)(vendor, software) },
+                unsafe { (p.present_backend_choices)() },
+            );
         }
         if backend != unsafe { (p.present_backend)() } {
             state.status.fg_switch_result = unsafe { (p.present_request)(backend) };
@@ -531,7 +568,14 @@ impl Pipeline {
         } else {
             sharpening_policy::defaults()
         };
+        if state.window_dirty {
+            self.restore_window(state);
+            if state.window_dirty {
+                return FEATURE_FAILED;
+            }
+        }
         if let Some(active) = state.active.as_ref().filter(|active| active.shape == shape) {
+            state.status.sr_result = active.selection_result;
             return unsafe { (p.sr_set_sharpening)(active.sr.get(), &sharpening) };
         }
         let drained = unsafe { (p.gl_drain)(state.sharing) };
@@ -548,6 +592,8 @@ impl Pipeline {
         state.height = height;
         state.status.effective_sr = selected;
         state.status.evaluated = 0;
+        state.evaluation_result = OK;
+        state.frame_view = None;
         if let Some(active) = &state.active {
             unsafe { (p.sr_set_sharpening)(active.sr.get(), &sharpening) };
         }
@@ -624,14 +670,15 @@ impl Pipeline {
             Err(result) => return result,
         };
         unsafe { (p.fg_submitted)(self.session, pass.source_frame_id) };
-        state.status.sr_result = result;
+        state.evaluation_result = result;
+        state.record_view(&pass);
         if result == OK && state.status.effective_sr != SR_NONE {
             state.status.evaluated += 1;
         }
         result
     }
 
-    fn hudless(&self, state: &State, input: &Pass) -> i32 {
+    fn hudless(&self, state: &mut State, input: &Pass) -> i32 {
         let p = self.platform;
         let Some(active) = state.active.as_ref() else {
             return INVALID;
@@ -651,6 +698,7 @@ impl Pipeline {
         match result {
             Ok(_) => {
                 unsafe { (p.fg_submitted)(self.session, pass.source_frame_id) };
+                state.record_view(&pass);
                 OK
             }
             Err(result) => result,
@@ -659,6 +707,11 @@ impl Pipeline {
 
     fn present(&self, state: &mut State, frame: u64, vsync: u32) -> i32 {
         let p = self.platform;
+        let view = match state.frame_view {
+            Some((captured, None)) if captured == frame => return INVALID,
+            Some((captured, Some(view))) if captured == frame => view,
+            _ => 0,
+        };
         let (Some(active), Some(chain)) = (state.active.as_ref(), state.chain.as_ref()) else {
             return INVALID;
         };
@@ -685,7 +738,7 @@ impl Pipeline {
         window.role = RSF_GAME_RENDER_WINDOW;
         window.session_id = self.session;
         window.source_frame_id = frame;
-        window.view_key = 1;
+        window.view_key = view;
         window.swapchain = chain.as_ptr();
         unsafe { (p.fg_window)(&window) };
         let presented = unsafe { (p.chain_present)(chain.as_ptr(), u32::from(vsync != 0)) };
@@ -714,22 +767,24 @@ impl Pipeline {
             state.active = None;
             state.chain = None;
         }
-        let closed = unsafe { (p.gl_close)(state.sharing) };
-        if closed != OK {
-            return closed;
+        if !state.sharing.is_null() {
+            let closed = unsafe { (p.gl_close)(state.sharing) };
+            if closed != OK {
+                return closed;
+            }
+            state.sharing = ptr::null_mut();
+            state.device = ptr::null_mut();
+            state.queue = ptr::null_mut();
+            unsafe {
+                (p.latency_end_session)(self.session);
+                (p.dump_cancel)(self.session);
+            }
         }
-        state.sharing = ptr::null_mut();
-        state.device = ptr::null_mut();
-        state.queue = ptr::null_mut();
-        unsafe {
-            (p.latency_end_session)(self.session);
-            (p.dump_cancel)(self.session);
-        }
-        if self.own_window {
-            unsafe { (p.window_destroy)(state.window) };
+        self.shared.window.store(ptr::null_mut(), Ordering::Release);
+        if self.own_window && unsafe { (p.window_destroy)(state.window) } == 0 {
+            return FEATURE_FAILED;
         }
         state.window = ptr::null_mut();
-        self.shared.window.store(ptr::null_mut(), Ordering::Release);
         state.closed = true;
         OK
     }
@@ -911,10 +966,13 @@ fn open(setup: &rsf_gl_pipeline_setup, platform: &'static Platform) -> Result<Pi
             chain: Some(chain),
             shown: false,
             closed: false,
+            window_dirty: false,
             width: 0,
             height: 0,
             generation: 0,
             status: new_status(),
+            evaluation_result: OK,
+            frame_view: None,
             active: None,
         }),
     })
@@ -990,7 +1048,11 @@ unsafe extern "C" fn rsf_gl_pipeline_configure(
         return INVALID;
     }
     with_state(pipeline, |pipeline, state| {
-        pipeline.configure(state, &options, width, height)
+        let result = pipeline.configure(state, &options, width, height);
+        if result != OK {
+            state.status.sr_result = result;
+        }
+        result
     })
 }
 
@@ -1112,6 +1174,9 @@ unsafe extern "C" fn rsf_gl_pipeline_status_get(
     };
     let p = pipeline.platform;
     let mut status = state.status;
+    if status.sr_result == OK {
+        status.sr_result = state.evaluation_result;
+    }
     drop(state);
     status.struct_size = size_of::<rsf_gl_pipeline_status>() as u32;
     status.effective_fg = unsafe { (p.present_backend)() };

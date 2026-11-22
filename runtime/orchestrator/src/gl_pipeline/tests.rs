@@ -74,6 +74,8 @@ struct World {
     fail_texture: Option<usize>,
     textures_created: usize,
     resize_refused: bool,
+    chain_resize_refused: bool,
+    destroy_refused: bool,
     close_refused: bool,
     present_backend: u32,
     cpu_frames: HashMap<u64, bool>,
@@ -233,6 +235,9 @@ unsafe extern "C" fn window_create(parent: Handle) -> Handle {
 }
 unsafe extern "C" fn window_destroy(window: Handle) -> c_int {
     event(format!("destroy {}", name(window)));
+    if world(|world| world.destroy_refused) {
+        return 0;
+    }
     retire(window);
     1
 }
@@ -265,7 +270,11 @@ unsafe extern "C" fn chain_create(
 unsafe extern "C" fn chain_associate(_: Handle, _: Handle) {}
 unsafe extern "C" fn chain_resize(_: Handle, _: u32, width: u32, height: u32, _: u32) -> i32 {
     event(format!("chain {width}x{height}"));
-    OK
+    if world(|world| world.chain_resize_refused) {
+        FEATURE_FAILED
+    } else {
+        OK
+    }
 }
 unsafe extern "C" fn chain_back_buffer(_: Handle) -> Handle {
     fake_com("back buffer").cast()
@@ -367,6 +376,9 @@ unsafe extern "C" fn present_is_owner(chain: Handle) -> c_int {
 unsafe extern "C" fn present_backend() -> u32 {
     world(|world| world.present_backend)
 }
+unsafe extern "C" fn present_backend_choices() -> u32 {
+    (1 << 1) | (1 << 3) | (1 << 5)
+}
 unsafe extern "C" fn present_request(backend: u32) -> i32 {
     event(format!("request fg {backend}"));
     OK
@@ -453,6 +465,7 @@ static PLATFORM: Platform = Platform {
     present_host,
     present_is_owner,
     present_backend,
+    present_backend_choices,
     present_request,
     present_switch_result,
     present_abort,
@@ -536,7 +549,28 @@ fn pass(frame: u64) -> Pass {
     let mut pass: Pass = unsafe { std::mem::zeroed() };
     pass.struct_size = size_of::<Pass>() as u32;
     pass.source_frame_id = frame;
+    pass.view_key = 17;
     pass
+}
+
+#[test]
+fn refused_chain_resize_restores_the_published_window_extent() {
+    let pipeline = open_pipeline();
+    let options = options(SR_DLSS, 1);
+    let configure = |w, h| unsafe { rsf_gl_pipeline_configure(pipeline, &options, w, h) };
+    assert_eq!(configure(640, 480), OK);
+    let previous = surfaces(pipeline);
+    events();
+    world(|world| world.chain_resize_refused = true);
+    assert_eq!(configure(1280, 720), FEATURE_FAILED);
+    let calls = events();
+    assert!(calls.windows(3).any(|calls| calls == [
+        "window 1280x720", "chain 1280x720", "window 640x480"
+    ]));
+    assert_eq!(surfaces(pipeline).composed, previous.composed);
+    assert_eq!(configure(640, 480), OK);
+    assert_eq!(status(pipeline).sr_result, OK);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
 }
 
 #[test]
@@ -614,7 +648,7 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
     let failed = status(pipeline);
     assert_eq!(
         (failed.requested_sr, failed.effective_sr, failed.sr_result),
-        (SR_FSR3, SR_DLSS, OK)
+        (SR_FSR3, SR_DLSS, FEATURE_FAILED)
     );
 
     // The same request is retried rather than treated as already applied.
@@ -646,13 +680,13 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
 #[test]
 fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
     let pipeline = open_pipeline();
-    world(|world| world.failing_backends = [SR_DLSS, SR_FSR4].into());
+    world(|world| world.failing_backends = [SR_DLSS, SR_FSR3].into());
     assert_eq!(
         unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_AUTO, 1), 1280, 720) },
         OK
     );
     let created = world(|world| std::mem::take(&mut world.created_backends));
-    assert_eq!(created, [SR_DLSS, SR_FSR4, SR_XESS]);
+    assert_eq!(created, [SR_DLSS, SR_FSR3, SR_XESS]);
     let selected = status(pipeline);
     assert_eq!(
         (
@@ -663,7 +697,7 @@ fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
         (SR_AUTO, SR_XESS, OK)
     );
 
-    world(|world| world.failing_backends = AUTO_ORDER.into());
+    world(|world| world.failing_backends = [SR_DLSS, SR_FSR3, SR_XESS].into());
     assert_eq!(
         unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_AUTO, 2), 1280, 720) },
         OK
@@ -671,7 +705,7 @@ fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
     let created = world(|world| std::mem::take(&mut world.created_backends));
     assert_eq!(
         created,
-        [SR_DLSS, SR_FSR4, SR_XESS, SR_FSR3, SR_FSR2, SR_NONE]
+        [SR_DLSS, SR_FSR3, SR_XESS, SR_NONE]
     );
     let fallback = status(pipeline);
     assert_eq!(
@@ -725,6 +759,8 @@ fn evaluation_and_presentation_carry_session_frame_identity() {
     assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, 0, 0) }, INVALID);
     for frame in [9, 10] {
         assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, frame, 1) }, OK);
+        let window = world(|world| world.window_pass).unwrap();
+        assert_eq!(window.view_key, if frame == 9 { 17 } else { 0 });
     }
     let presented = events();
     assert_eq!(
@@ -753,7 +789,7 @@ fn evaluation_and_presentation_carry_session_frame_identity() {
     let window = world(|world| world.window_pass).unwrap();
     assert_eq!(
         (window.role, window.source_frame_id, window.view_key),
-        (RSF_GAME_RENDER_WINDOW, 10, 1)
+        (RSF_GAME_RENDER_WINDOW, 10, 0)
     );
     assert_eq!(window.swapchain as usize, world(|world| world.chain));
     assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
@@ -808,6 +844,17 @@ fn surfaces_template() -> rsf_gl_pipeline_surfaces {
         struct_size: size_of::<rsf_gl_pipeline_surfaces>() as u32,
         ..Default::default()
     }
+}
+
+#[test]
+fn refused_window_destroy_retries_only_the_window() {
+    let pipeline = open_pipeline();
+    world(|world| world.destroy_refused = true);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, FEATURE_FAILED);
+    assert!(events().iter().any(|event| event == "gl_close"));
+    world(|world| world.destroy_refused = false);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
+    assert_eq!(events(), ["destroy window1"]);
 }
 
 #[test]

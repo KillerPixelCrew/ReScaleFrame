@@ -63,7 +63,11 @@ bool surface_message(HWND window, UINT operation, WPARAM wparam = 0, LPARAM lpar
 
 int window_valid(void* window) { return IsWindow(static_cast<HWND>(window)) ? 1 : 0; }
 void* window_create(void* parent) { return create_surface(static_cast<HWND>(parent)); }
-int window_destroy(void* window) { return surface_message(static_cast<HWND>(window), surface_destroy) ? 1 : 0; }
+int window_destroy(void* window)
+{
+    const auto hwnd = static_cast<HWND>(window);
+    return !IsWindow(hwnd) || surface_message(hwnd, surface_destroy);
+}
 int window_child_of(void* window, void* parent)
 {
     const auto child = static_cast<HWND>(window), owner = static_cast<HWND>(parent);
@@ -209,6 +213,7 @@ struct Platform {
     decltype(&present_host) present_host;
     decltype(&rsf_d3d11_present_is_owner) present_is_owner;
     decltype(&rsf_d3d11_present_backend) present_backend;
+    decltype(&rsf_d3d11_present_backend_choices) present_backend_choices;
     decltype(&rsf_d3d11_present_request) present_request;
     decltype(&rsf_d3d11_present_switch_result) present_switch_result;
     decltype(&rsf_d3d11_present_abort) present_abort;
@@ -229,7 +234,8 @@ constexpr Platform platform{
     adapter_identity, transition, copy_resource, rsf_sr12_create, rsf_sr12_plan, rsf_sr12_evaluate,
     rsf_sr12_set_sharpening, rsf_sr12_destroy, rsf_fg12_install, rsf_fg12_options, rsf_fg12_cpu, rsf_fg12_hudless,
     rsf_fg12_submitted, rsf_fg12_window, rsf_fg12_status, present_host, rsf_d3d11_present_is_owner,
-    rsf_d3d11_present_backend, rsf_d3d11_present_request, rsf_d3d11_present_switch_result, rsf_d3d11_present_abort,
+    rsf_d3d11_present_backend, rsf_d3d11_present_backend_choices, rsf_d3d11_present_request,
+    rsf_d3d11_present_switch_result, rsf_d3d11_present_abort,
     pcl_message, rsf_native_cpu_read, latency_completed, rsf_native_latency_end_session, rsf_input_dump_cancel,
     dlss_preset_valid, fg_default_backend, depth_domains_requested,
 };
