@@ -35,7 +35,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 type Flat = [f32; 16];
 type Identity = rsf_fallout4_cpu_identity;
-type Report = Option<unsafe extern "C" fn(*const c_char)>;
+type Report = Option<ReportFn>;
+type ReportFn = unsafe extern "C" fn(*const c_char);
 
 const GRAPHICS_RVA: usize = 0x3d871a0;
 const TARGETS_RVA: usize = 0x2f4d750;
@@ -181,14 +182,14 @@ struct ViewFacts {
 
 unsafe extern "C" {
     fn rsf_fallout4_depth_report_refusal(
-        report: Report,
+        report: ReportFn,
         stage: *const c_char,
         snapshot: &Snapshot,
         detail: *const MathFailure,
         math: u32,
     );
     fn rsf_fallout4_depth_report_lease(
-        report: Report,
+        report: ReportFn,
         snapshot: &Snapshot,
         current: &Snapshot,
         reached: u32,
@@ -460,7 +461,7 @@ fn same_identity(a: &Identity, b: &Identity) -> bool {
 
 /// Reports `stage` once for the process when a callback is supplied. Always refuses.
 fn refuse(stage: Stage, snapshot: &Snapshot, report: Report, detail: Option<&MathFailure>) -> bool {
-    if report.is_some() {
+    if let Some(report) = report {
         let bit = 1u64 << stage as u32;
         if REPORTED.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
             let math = match (detail, stage) {
@@ -1367,7 +1368,7 @@ pub(crate) fn snapshot_current(snapshot: &Snapshot, report: Report) -> bool {
         && check(16, sample(&snapshot.identity, &mut current, &mut stage))
         && check(32, same(snapshot, &current))
         && check(64, render_source_is_current(&snapshot.identity));
-    if !okay && report.is_some() {
+    if !okay && let Some(report) = report {
         let mut changed = 0u32;
         if passed & 16 != 0 {
             if snapshot.mode != current.mode

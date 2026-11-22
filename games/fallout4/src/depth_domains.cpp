@@ -11,7 +11,7 @@ static_assert(sizeof(NativeDepthMathFailure) == 64 && offsetof(NativeDepthMathFa
 // The text the former refuse() wrote; Rust decides the stage and its once-per-stage receipt.
 extern "C" void rsf_fallout4_depth_report_refusal(NativeDepthReport report, const char* stage, const NativeDepthSnapshot* snapshot,
     const NativeDepthMathFailure* detail, uint32_t math) noexcept {
-    if (!report || !stage || !snapshot) return;
+    if (!stage || !snapshot) return;
     const auto& s = *snapshot;
     try {
         char text[800]{};
@@ -49,7 +49,7 @@ extern "C" void rsf_fallout4_depth_report_refusal(NativeDepthReport report, cons
 // The text the former lease check wrote; Rust keeps its budget of sixteen.
 extern "C" void rsf_fallout4_depth_report_lease(NativeDepthReport report, const NativeDepthSnapshot* snapshot, const NativeDepthSnapshot* current,
     uint32_t reached, uint32_t passed, uint32_t stage, uint32_t changed) noexcept {
-    if (!report || !snapshot || !current) return;
+    if (!snapshot || !current) return;
     try {
         char text[600]{};
         std::snprintf(text,sizeof(text),

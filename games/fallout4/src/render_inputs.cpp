@@ -24,7 +24,7 @@ static_assert(sizeof(NativeInputLease) == 8 * sizeof(void*) && offsetof(NativeIn
 // The text the former reader receipt wrote; Rust decides the stage and its once-per-stage mask.
 extern "C" void rsf_fallout4_inputs_report_reader(NativeInputReport report, const char* stage, const NativeInputReceipt* receipt,
     const rsf_game_render_pass* pass) noexcept {
-    if (!report || !stage || !receipt || !pass) return;
+    if (!stage || !receipt || !pass) return;
     try {
         const auto& r = *receipt;
         const auto& before = r.before;
@@ -66,7 +66,7 @@ extern "C" void rsf_fallout4_inputs_report_reader(NativeInputReport report, cons
 // The text of the former state reread mismatch; Rust keeps the per-mask and sixteen-text budget.
 extern "C" void rsf_fallout4_inputs_report_mismatch(NativeInputReport report, const detail::NativeState* first, const detail::NativeState* second,
     uint32_t mask) noexcept {
-    if (!report || !first || !second) return;
+    if (!first || !second) return;
     try {
         const auto& before = *first;
         const auto& after = *second;
@@ -84,7 +84,7 @@ extern "C" void rsf_fallout4_inputs_report_mismatch(NativeInputReport report, co
 }
 // The text of the former camera history receipt; Rust keeps the per-reason and 32-text budget.
 extern "C" void rsf_fallout4_inputs_report_history(NativeInputReport report, const NativeInputHistoryReceipt* receipt) noexcept {
-    if (!report || !receipt) return;
+    if (!receipt) return;
     try {
         const auto& h = *receipt;
         char text[350]{};
@@ -99,7 +99,7 @@ extern "C" void rsf_fallout4_inputs_report_history(NativeInputReport report, con
 // The text of the former framebuffer receipt; Rust keeps its once-per-stage mask.
 extern "C" void rsf_fallout4_inputs_report_framebuffer(NativeInputReport report, const char* stage, const char* owner_stage,
     const NativeFramebufferReceipt* receipt) noexcept {
-    if (!report || !stage || !owner_stage || !receipt) return;
+    if (!stage || !owner_stage || !receipt) return;
     try {
         const auto& r = *receipt;
         const auto& before = r.before;

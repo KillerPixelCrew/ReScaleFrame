@@ -34,7 +34,8 @@ use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11Texture2D}
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 
 type Flat = [f32; 16];
-pub(crate) type Report = Option<unsafe extern "C" fn(*const c_char)>;
+pub(crate) type Report = Option<ReportFn>;
+type ReportFn = unsafe extern "C" fn(*const c_char);
 
 const STATE_RVA: usize = 0x3d871a0;
 const TARGETS_RVA: usize = 0x2f4d750;
@@ -232,20 +233,20 @@ pub(crate) struct FramebufferLease {
 
 unsafe extern "C" {
     fn rsf_fallout4_inputs_report_reader(
-        report: Report,
+        report: ReportFn,
         stage: *const c_char,
         receipt: &Receipt,
         pass: &rsf_game_render_pass,
     );
     fn rsf_fallout4_inputs_report_mismatch(
-        report: Report,
+        report: ReportFn,
         before: &State,
         after: &State,
         mask: u32,
     );
-    fn rsf_fallout4_inputs_report_history(report: Report, receipt: &HistoryReceipt);
+    fn rsf_fallout4_inputs_report_history(report: ReportFn, receipt: &HistoryReceipt);
     fn rsf_fallout4_inputs_report_framebuffer(
-        report: Report,
+        report: ReportFn,
         stage: *const c_char,
         owner_stage: *const c_char,
         receipt: &FramebufferReceipt,
@@ -822,9 +823,9 @@ impl Reading {
 /// One bundle per named stage, at most one per stage per process. Loading cannot spend the
 /// budget reserved for a later distinct refusal stage.
 fn receipt(report: Report, stage: Stage, reading: &mut Reading) {
-    if report.is_none() {
+    let Some(report) = report else {
         return;
-    }
+    };
     let bit = 1u64 << stage as u32;
     if REPORTED.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
         return;
@@ -1179,7 +1180,7 @@ fn read_inputs(
             .iter()
             .enumerate()
             .fold(0u32, |mask, (bit, &value)| mask | (u32::from(value) << bit));
-        if report.is_some()
+        if let Some(report) = report
             && !SEEN_CHANGES[mask as usize].swap(true, Ordering::Relaxed)
             && CHANGE_BUDGET.fetch_add(1, Ordering::Relaxed) < 16
         {
@@ -1237,7 +1238,7 @@ fn read_inputs(
             .enumerate()
             .fold(0u32, |mask, (bit, &value)| mask | (u32::from(value) << bit));
         next.reset = reasons != 0;
-        if report.is_some()
+        if let Some(report) = report
             && !SEEN_REASONS[reasons as usize].swap(true, Ordering::Relaxed)
             && REASON_BUDGET.fetch_add(1, Ordering::Relaxed) < 32
         {
@@ -1543,9 +1544,9 @@ fn framebuffer_receipt(
     owner_failure: Stage,
     r: &FramebufferReceipt,
 ) {
-    if report.is_none() {
+    let Some(report) = report else {
         return;
-    }
+    };
     let bit = 1u32 << stage as u32;
     if FRAMEBUFFER_REPORTED.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
         return;
