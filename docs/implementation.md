@@ -7784,3 +7784,7 @@ resolves the saved VRR policy from display refresh and effective FG state.
 The [O02 source record](research/rust-shared-overlay-o02.md) lists each
 port, fixture and finding. Binding reproduction and pinned formatting
 completed. Builds, lint, fixture execution and device checks remain pending.
+
+Fallout 4 now compares the executable digest in Rust using the shared nonallocating
+lowercase SHA-256 encoder. The Unity and XeSS raw digest checks call the C ABI with
+their original sharing flags. Header syntax and source caller checks passed.

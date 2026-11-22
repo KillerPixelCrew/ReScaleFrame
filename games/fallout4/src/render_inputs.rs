@@ -1591,7 +1591,7 @@ pub(crate) fn verify_for_build(_build: &creation::ExactBuild) -> bool {
 /// Checks the executable and the expected bytes of every native site the readers depend on.
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_fallout4_inputs_verify() -> bool {
-    verify(|| crate::ops().is_some_and(|ops| creation::verify_executable(ops).unwrap_or(false)))
+    verify(|| crate::ops().is_some() && creation::verify_executable())
 }
 
 /// The reader's exception receipt is due: its stage bit was not yet spent.

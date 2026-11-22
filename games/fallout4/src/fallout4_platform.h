@@ -41,8 +41,6 @@ typedef struct rsf_fallout4_create_call {
 // Linked native exception guards. False signals a native exception.
 #ifdef __cplusplus
 bool rsf_fallout4_native_log(rsf_game_log_fn log, void* user, const char* message) noexcept;
-// The digest buffer holds 64 lowercase hex characters, without a terminator.
-bool rsf_fallout4_native_file_sha256(const wchar_t* path, char* digest, bool* hashed) noexcept;
 bool rsf_fallout4_native_host_create(rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup,
     rsf_game_host_services* services, int32_t* result) noexcept;
 bool rsf_fallout4_native_host_set_active(rsf_fallout4_host_active_fn activate, void* user, uint32_t active,

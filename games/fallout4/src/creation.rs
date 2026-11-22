@@ -163,12 +163,15 @@ fn executable_name(leaf: &[u16]) -> bool {
 pub(crate) struct ExactBuild(());
 
 /// Checks the executable name and recognized SHA-256 once for the calling transaction.
-pub(crate) fn admit_build(ops: &Ops) -> Result<Option<ExactBuild>, Threw> {
+pub(crate) fn admit_build() -> Option<ExactBuild> {
+    unsafe extern "C" {
+        fn rsf_common_sha256_file_hex(path: *const u16, output: *mut [u8; 64]) -> u32;
+    }
     let mut path = [0u16; 32768];
     let length = unsafe { GetModuleFileNameW(std::ptr::null_mut(), path.as_mut_ptr(), 32768) };
     let length = length as usize;
     if length == 0 || length >= path.len() {
-        return Ok(None);
+        return None;
     }
     let name = &path[..length];
     let leaf = name
@@ -176,17 +179,16 @@ pub(crate) fn admit_build(ops: &Ops) -> Result<Option<ExactBuild>, Threw> {
         .rposition(|&unit| unit == u16::from(b'\\'))
         .map_or(name, |separator| &name[separator + 1..]);
     if !executable_name(leaf) {
-        return Ok(None);
+        return None;
     }
-    Ok(ops
-        .file_sha256(&path[..=length])?
-        .filter(|digest| *digest == *EXECUTABLE_SHA256.to_bytes())
-        .map(|_| ExactBuild(())))
+    let mut digest = [0; 64];
+    let hashed = unsafe { rsf_common_sha256_file_hex(path.as_ptr(), &raw mut digest) } != 0;
+    (hashed && digest == *EXECUTABLE_SHA256.to_bytes()).then_some(ExactBuild(()))
 }
 
 // Called by independent native reader verification outside the preparation transaction.
-pub(crate) fn verify_executable(ops: &Ops) -> Result<bool, Threw> {
-    Ok(admit_build(ops)?.is_some())
+pub(crate) fn verify_executable() -> bool {
+    admit_build().is_some()
 }
 
 pub(crate) fn preflight() -> bool {

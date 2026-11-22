@@ -183,7 +183,7 @@ impl Session {
         if self.prepared || self.busy() {
             return Ok(RSF_ERROR_BUSY);
         }
-        let Some(build) = creation::admit_build(ops)? else {
+        let Some(build) = creation::admit_build() else {
             return self.refuse(
                 ops,
                 host,

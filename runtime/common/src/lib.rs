@@ -9,7 +9,8 @@ use windows_sys::Win32::Security::Cryptography::{
     BCryptOpenAlgorithmProvider,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING, ReadFile,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    OPEN_EXISTING, ReadFile,
 };
 
 struct File(HANDLE);
@@ -109,5 +110,24 @@ unsafe extern "C" fn rsf_common_sha256_file(
         return 0;
     };
     unsafe { output.write(digest) };
+    1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_common_sha256_file_hex(path: *const u16, output: *mut [u8; 64]) -> u32 {
+    if path.is_null() || output.is_null() {
+        return 0;
+    }
+    let sharing = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    let Some(digest) = (unsafe { hash_file(path, sharing) }) else {
+        return 0;
+    };
+    let hex = b"0123456789abcdef";
+    let mut encoded = [0; 64];
+    for (pair, byte) in encoded.chunks_exact_mut(2).zip(digest) {
+        pair[0] = hex[usize::from(byte >> 4)];
+        pair[1] = hex[usize::from(byte & 15)];
+    }
+    unsafe { output.write(encoded) };
     1
 }

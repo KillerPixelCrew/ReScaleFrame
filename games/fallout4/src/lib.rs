@@ -97,11 +97,6 @@ unsafe extern "C" {
         user: *mut ::core::ffi::c_void,
         message: *const ::core::ffi::c_char,
     ) -> bool;
-    fn rsf_fallout4_native_file_sha256(
-        path: *const u16,
-        digest: *mut ::core::ffi::c_char,
-        hashed: *mut bool,
-    ) -> bool;
     fn rsf_fallout4_native_host_create(
         create: rsf_fallout4_host_create_fn,
         setup: *const rsf_d3d11_host_setup,
@@ -162,16 +157,6 @@ impl Ops {
         message: &CStr,
     ) -> Result<(), Threw> {
         self.log(host.log, host.user, message)
-    }
-
-    /// `path` is a terminated wide path.
-    pub(crate) fn file_sha256(&self, path: &[u16]) -> Result<Option<[u8; 64]>, Threw> {
-        let mut digest = [0u8; 64];
-        let mut hashed = false;
-        completed(unsafe {
-            rsf_fallout4_native_file_sha256(path.as_ptr(), digest.as_mut_ptr().cast(), &mut hashed)
-        })?;
-        Ok(hashed.then_some(digest))
     }
 
     pub(crate) fn initialize_hooks(&self) -> bool {

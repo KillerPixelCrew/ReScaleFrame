@@ -2,11 +2,8 @@
 // C++ exception guards and the render bridge used by the Rust GameSDK export.
 #include "fallout4_platform.h"
 #include "render_hooks_platform.h"
-#include <rescaleframe/sha256_file.h>
 #include <d3d11.h>
 #include <cstddef>
-#include <cstring>
-#include <string>
 
 namespace {
 
@@ -20,14 +17,6 @@ template<class Call> bool guarded(Call&& call) noexcept {
 
 extern "C" bool rsf_fallout4_native_log(rsf_game_log_fn log, void* user, const char* message) noexcept {
     return guarded([&] { if (log) log(user, message); });
-}
-
-extern "C" bool rsf_fallout4_native_file_sha256(const wchar_t* path, char* digest, bool* hashed) noexcept {
-    return guarded([&] {
-        std::string hash;
-        *hashed = rsf::sha256_file(path, hash) && hash.size() == 64;
-        if (*hashed) std::memcpy(digest, hash.data(), hash.size());
-    });
 }
 
 extern "C" bool rsf_fallout4_native_host_create(rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup, rsf_game_host_services* services,

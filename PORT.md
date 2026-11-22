@@ -248,7 +248,7 @@ Port settings storage, formatting, hashes and shared utilities. Consolidate sett
 
 - [x] [runtime/common/include/rescaleframe/capture_names.h](runtime/common/include/rescaleframe/capture_names.h)
 - [ ] [runtime/common/include/rescaleframe/log.h](runtime/common/include/rescaleframe/log.h)
-- [ ] [runtime/common/include/rescaleframe/sha256_file.h](runtime/common/include/rescaleframe/sha256_file.h)
+- [x] [runtime/common/include/rescaleframe/sha256_file.h](runtime/common/include/rescaleframe/sha256_file.h)
 - [x] [runtime/orchestrator/src/render_settings_store.cpp](runtime/orchestrator/src/render_settings_store.cpp)
 - [ ] [runtime/orchestrator/src/render_settings_store.h](runtime/orchestrator/src/render_settings_store.h)
 - [x] [runtime/orchestrator/src/settings_store_format.cpp](runtime/orchestrator/src/settings_store_format.cpp)
