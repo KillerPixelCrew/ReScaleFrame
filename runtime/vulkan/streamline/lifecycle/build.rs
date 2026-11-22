@@ -19,6 +19,7 @@ fn main() {
     // The corrected interposer digest verify-receipt.cmake hands the build (admission.rs).
     println!("cargo:rerun-if-env-changed=RSF_CORRECTED_STREAMLINE_SHA256");
     println!("cargo:rerun-if-changed=../sdk_guard.c");
+    println!("cargo:rerun-if-changed=../../../../sdk/game/include/rescaleframe/foreign_guard.h");
     let mut build = cc::Build::new();
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         // The final CMake binary selects its CRT, including Debug.
@@ -28,6 +29,7 @@ fn main() {
     }
     build
         .warnings_into_errors(true)
+        .include("../../../../sdk/game/include")
         .file("../sdk_guard.c")
         .compile("rsf_slvk_guard");
 }
