@@ -1,5 +1,11 @@
 # Implementation tracker
 
+C01 moves the shared frame and depth-domain predicates to GameSDK and the
+FG provider queries to the Runtime's Rust choice owner. Native plugin
+exception guards and the throwing fixture remain in C++. Source checks
+passed. Native link and runtime validation are pending.
+[C01 header policy evidence](research/rust-c01-header-policy.md)
+
 V01 moves FidelityFX Vulkan SR graphics ownership and recording into Rust
 and ports the native SR contract and device fixture bodies. The shared
 Vulkan recording, sharpening and capture proofs remain in use, and the

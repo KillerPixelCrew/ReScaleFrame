@@ -5,9 +5,9 @@ use crate::d3d11_present::{
     rsf_core_d3d11p_has_owner, rsf_core_d3d11p_host,
 };
 use crate::d3d11_present_abi::rsf_streamline_graphics;
-use crate::fg_session::rsf_core_frame_allows_fg;
 use crate::native_cpu::rsf_native_cpu_rendered_source_set;
 use diagnostics::rsf_core_native_fg_stage;
+use rsf_game_sys::rsf_frame_allows_fg;
 use std::ffi::c_char;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{
@@ -62,7 +62,7 @@ pub(crate) static rsf_native_fg_cpu_platform: Platform = Platform {
     create_antilag: Some(rsf_native_antilag_context_create),
     fixture_owned_window_thread: None,
     fixture_wait_completion: None,
-    allows_fg: Some(rsf_core_frame_allows_fg),
+    allows_fg: Some(rsf_frame_allows_fg),
 };
 
 unsafe extern "C" fn native_device() -> Handle {

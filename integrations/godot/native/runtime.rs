@@ -63,7 +63,7 @@ unsafe extern "C" fn rsfg_render(
     let Some(pass) = (unsafe { sized_pass(pass) }) else {
         return 0;
     };
-    if crate::depth_domains_requested(&pass.depth_domains) {
+    if rsf_game_sys::depth_domains_requested(&pass.depth_domains) {
         return 0;
     }
     unsafe {

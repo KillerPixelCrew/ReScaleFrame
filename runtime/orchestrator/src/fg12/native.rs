@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d12_host::fg::*;
-use crate::fg_session::rsf_core_frame_allows_fg;
+use crate::d3d12_host::pass_depth_domains;
 use crate::frame_capture12::native::{
     rsf_fg12_platform_map, rsf_fg12_platform_readback, rsf_fg12_platform_readback_copy,
     rsf_fg12_platform_unmap,
 };
 use crate::native_cpu::rsf_native_cpu_dispatch;
 use crate::render_abi::rsf_generation_provider;
+use rsf_game_sys::frame_policy::rsf_frame_allows_fg;
 
 unsafe extern "C" {
     fn rsf_input_dump_fg_prepare(
@@ -20,7 +21,6 @@ unsafe extern "C" {
         setup: *const rsf_d3d11_present_setup,
         explicit_creation: i32,
     ) -> i32;
-    fn rsf_core_depth_domains(pass: *const rsf_game_render_pass) -> u32;
     fn rsf_fg12_platform_dump_record(
         list: *mut c_void,
         source: *mut c_void,
@@ -67,7 +67,7 @@ unsafe extern "C" {
 }
 
 unsafe extern "C" fn allows_fg(record: *const rsf_frame_record) -> u32 {
-    unsafe { rsf_core_frame_allows_fg(record) as u32 }
+    unsafe { rsf_frame_allows_fg(record) as u32 }
 }
 
 unsafe extern "C" fn dump_prepare(frame: *const rsf_fg_frame, result: i32) {
@@ -93,7 +93,7 @@ pub(super) static CALLS: rsf_fg12_calls = rsf_fg12_calls {
     buffer_index: Some(rsf_fg12_platform_buffer_index),
     install: Some(rsf_fg12_platform_install),
     allows_fg: Some(allows_fg),
-    depth_domains: Some(rsf_core_depth_domains),
+    depth_domains: Some(pass_depth_domains),
     texture_desc: Some(rsf_fg12_platform_texture_desc),
     texture: Some(rsf_fg12_platform_texture),
     copy: Some(rsf_fg12_platform_copy),

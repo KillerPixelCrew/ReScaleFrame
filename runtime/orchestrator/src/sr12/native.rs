@@ -41,7 +41,6 @@ unsafe extern "C" {
     ) -> i32;
     fn rsf_sr12_platform_capture_wants(capture: Handle, frame: u64) -> i32;
     fn rsf_sr12_platform_capture_force_reset(capture: Handle, frame: u64) -> i32;
-    fn rsf_core_depth_domains(pass: *const Pass) -> u32;
     fn rsf_dlss_native12_create(
         device: Handle,
         setup: *const rsf_dlss_setup,
@@ -150,7 +149,7 @@ pub(super) static PLATFORM: Platform = Platform {
     copy_motion_tile,
     map: rsf_fg12_platform_map,
     unmap: rsf_fg12_platform_unmap,
-    depth_domains: rsf_core_depth_domains,
+    depth_domains: crate::d3d12_host::pass_depth_domains,
     capture_create: rsf_sr12_platform_capture_create,
     capture_destroy: rsf_sr12_platform_capture_destroy,
     capture_enabled: rsf_sr12_platform_capture_enabled,

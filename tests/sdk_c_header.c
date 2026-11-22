@@ -13,9 +13,7 @@ int rsf_sdk_c_header_check(void)
     return api.detect == 0;
 }
 
-/* The eligibility rules are inline in the header, so they are compiled here as C as well as being
-   exercised as C++ in the contract test. A rule that only builds in one language is a rule a plugin
-   cannot use, and plugins are the reason this SDK is MIT and header-only. */
+/* Compile calls to the GameSDK predicates as C. */
 int rsf_sdk_c_frame_check(void)
 {
     rsf_frame_record record = {0};

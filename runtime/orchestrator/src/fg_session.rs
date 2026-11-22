@@ -5,7 +5,8 @@ use crate::render_abi::*;
 use crate::sr_session::has_capacity;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_INPUT,
-    RSF_FRAME_SOURCE_RENDERED, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
+    RSF_FRAME_SOURCE_RENDERED, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_allows_fg,
+    rsf_frame_has_rendered_source, rsf_frame_record,
 };
 use std::ffi::c_void;
 use std::ptr;
@@ -19,10 +20,6 @@ const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 
 type FenceCompleted = unsafe extern "C" fn(*mut c_void) -> u64;
-unsafe extern "C" {
-    pub(super) fn rsf_core_frame_allows_fg(frame: *const rsf_frame_record) -> i32;
-    fn rsf_core_frame_has_rendered_source(frame: *const rsf_frame_record) -> i32;
-}
 
 struct Session {
     host: Host,
@@ -495,7 +492,7 @@ unsafe extern "C" fn rsf_fg_session_prepare(
         if provenance != record.source_provenance {
             return INVALID;
         }
-        let interpolate = if unsafe { rsf_core_frame_allows_fg(record) } == 0
+        let interpolate = if unsafe { rsf_frame_allows_fg(record) } == 0
             || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID) != 0
         {
             0
@@ -503,7 +500,7 @@ unsafe extern "C" fn rsf_fg_session_prepare(
             unsafe { (*frame).interpolate }
         };
         if provenance == RSF_FRAME_SOURCE_RENDERED {
-            if unsafe { rsf_core_frame_has_rendered_source(record) } == 0
+            if unsafe { rsf_frame_has_rendered_source(record) } == 0
                 || record.source_qpc != timestamp
             {
                 return INVALID;

@@ -180,53 +180,11 @@ typedef struct rsf_frame_record {
 } rsf_frame_record;
 #define RSF_FRAME_SOURCE_INPUT 0u
 #define RSF_FRAME_SOURCE_RENDERED 1u
-static inline int rsf_frame_has_rendered_source(const rsf_frame_record* record)
-{
-    return record && record->struct_size >= sizeof(*record) &&
-        record->source_provenance == RSF_FRAME_SOURCE_RENDERED && !record->input_qpc &&
-        record->source_qpc && record->source_qpc_frequency;
-}
-
-/* Whether a frame may be reconstructed or generated around, given its record.
- *
- * A function rather than a rule each caller repeats: this is asked in at least four places and the
- * answer has to be the same in all of them, or the counters disagree with the picture. */
-static inline int rsf_frame_allows_sr(const rsf_frame_record* record)
-{
-    if (!record || record->struct_size < sizeof(rsf_frame_record)) {
-        return 0;
-    }
-    if ((record->flags & RSF_FRAME_FLAG_NO_SR) != 0) {
-        return 0;
-    }
-    switch (record->screen) {
-    case RSF_SCREEN_VIDEO:
-    case RSF_SCREEN_LOADING:
-        return 0;
-    default:
-        return 1;
-    }
-}
-
-static inline int rsf_frame_allows_fg(const rsf_frame_record* record)
-{
-    if (!rsf_frame_allows_sr(record)) {
-        return 0;
-    }
-    if ((record->flags & RSF_FRAME_FLAG_NO_FG) != 0) {
-        return 0;
-    }
-    /* A menu holds still and then jumps, which is the worst case for an interpolator: there is no
-       motion to interpolate and then a discontinuity to smear. Unknown is refused for the same
-       reason it is never treated as flight. */
-    switch (record->screen) {
-    case RSF_SCREEN_MENU:
-    case RSF_SCREEN_UNKNOWN:
-        return 0;
-    default:
-        return 1;
-    }
-}
+/* Link these predicates from a GameSDK archive consumer or the Runtime. A null pointer
+   or a record with a short struct_size returns false. */
+int rsf_frame_has_rendered_source(const rsf_frame_record* record);
+int rsf_frame_allows_sr(const rsf_frame_record* record);
+int rsf_frame_allows_fg(const rsf_frame_record* record);
 
 #ifdef __cplusplus
 } /* extern "C" */

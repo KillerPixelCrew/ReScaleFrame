@@ -184,6 +184,10 @@ generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
           "--raw-line", "pub mod d3d11_reduced_abi;",
           "--raw-line", "pub mod d3d11_sr_admission_abi;",
           "--raw-line", "pub mod ffi_util;",
+          "--raw-line", "mod frame_policy;",
+          "--raw-line", "pub use frame_policy::*;",
+          "--raw-line", "mod renderer_policy;",
+          "--raw-line", "pub use renderer_policy::*;",
           "--raw-line", "pub mod plugin_session_abi;",
           "--raw-line", "pub mod presentation_result;",
           "--raw-line", "pub mod profile_text;",
@@ -1020,3 +1024,8 @@ generate("tests/game-sdk/src/render_host_fixture_abi.rs", "tests/game-sdk/render
 
 generate("runtime/orchestrator/src/ffx_version_abi.rs", "runtime/backends/fsr/src/ffx_version.h",
          "rsf_ffx_version", "RSF_FFX_MAX_VERSIONS", [], ["--with-derive-default"])
+
+generate("runtime/orchestrator/src/fg_registry_abi.rs",
+         "runtime/contract/include/rescaleframe/frame_generation.h",
+         "^rsf_fg_backend_info$", "^RSF_FG_BACKEND_(DLSS|FSR3|FSR4|XESS)$",
+         ["-Iruntime/contract/include", "-Isdk/game/include"])

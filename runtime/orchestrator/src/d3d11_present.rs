@@ -8,6 +8,7 @@
 use crate::com_ref::ComRef;
 use crate::d3d11_host_abi::{RSF_D3D11_DISPATCH_RELEASE, rsf_d3d11_chain_dispatch};
 use crate::d3d11_present_abi::*;
+use crate::fg_choice::known;
 use crate::fg_choice::rsf_fg_select_auto_backend;
 use crate::fg12_abi::{rsf_d3d11_present_setup as Setup, rsf_streamline_host};
 use crate::native_fg_cpu_abi::rsf_d3d11_present_status as PresentStatus;
@@ -117,11 +118,6 @@ fn acquire_resource(create: impl FnOnce(*mut Raw) -> i32) -> Result<ComRef, i32>
 
 fn bit(backend: u32) -> u32 {
     1u32.checked_shl(backend).unwrap_or(0)
-}
-
-// Implemented generation providers, the same set as rsf_fg_backend_known.
-pub(crate) fn known(backend: u32) -> bool {
-    bit(backend) & RSF_FG_BACKEND_ALL != 0
 }
 
 // The single backend to provider family mapping. FidelityFX serves FSR3 and FSR4.

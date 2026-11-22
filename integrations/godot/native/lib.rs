@@ -9,7 +9,7 @@
 //! The GDExtension entry and godot-cpp classes stay C++. Native control uses the same C ABI.
 //! `runtime.rs` handles the engine entry points, and `host.rs` implements the D3D12,
 //! DXGI and Win32 leaves and calls the shared Runtime capture owner. `runtime.cpp`
-//! wires the platform table, C header helpers and CMake-selected Vulkan capabilities.
+//! wires the platform table, Runtime calls and CMake-selected Vulkan capabilities.
 //! `effect.cpp` lends godot-cpp leaves for each compositor callback.
 mod control;
 mod d3d12;
@@ -36,25 +36,6 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::LazyLock;
 
 static CONTROL: LazyLock<Control> = LazyLock::new(Control::new);
-
-#[cfg(all(windows, not(test)))]
-fn depth_domains_requested(domains: &rsf_game_sys::rsf_game_depth_domains) -> bool {
-    use rsf_game_sys::{rsf_game_depth_domain, rsf_game_depth_domains};
-    const {
-        assert!(size_of::<rsf_game_depth_domain>() == 26 * 4);
-        assert!(size_of::<rsf_game_depth_domains>() == 60 * 4);
-    }
-    // The C wire types contain only u32/f32 fields, with no padding. Any
-    // nonzero byte requests mapping, including malformed records.
-    unsafe {
-        std::slice::from_raw_parts(
-            std::ptr::from_ref(domains).cast::<u8>(),
-            std::mem::size_of_val(domains),
-        )
-    }
-    .iter()
-    .any(|byte| *byte != 0)
-}
 
 /// # Safety
 /// A non-null record has a readable size word. When the size covers T, its version word is

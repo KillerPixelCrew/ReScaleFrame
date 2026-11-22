@@ -5,7 +5,6 @@ use crate::d3d11_present::{rsf_core_d3d11p_graphics, rsf_core_d3d11p_host};
 use crate::d3d11_present_abi::rsf_streamline_graphics;
 use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
 use crate::fg_leases::rsf_d3d12_fence_completed;
-use crate::fg_session::rsf_core_frame_allows_fg;
 use crate::native_fg_abi::*;
 use crate::native_fg_cpu::rsf_native_fg_cpu_platform;
 use crate::native_scene::{rsf_native_scene_classify_present, rsf_native_scene_for_window};
@@ -13,6 +12,7 @@ use crate::native_window::rsf_native_window_match;
 use crate::shared_surface::{
     ABI_VERSION as SURFACE_ABI, SurfaceSetup, rsf_shared_fence_create, rsf_shared_surface_create,
 };
+use rsf_game_sys::rsf_frame_allows_fg;
 use std::ffi::c_char;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{
@@ -88,7 +88,7 @@ pub(super) static NATIVE_PLATFORM: Platform = Platform {
     window_match: rsf_native_window_match,
     scene_for_window: rsf_native_scene_for_window,
     scene_present_path: rsf_native_scene_classify_present,
-    allows_fg: rsf_core_frame_allows_fg,
+    allows_fg: rsf_frame_allows_fg,
     context_device,
     query_context4: query::<ID3D11DeviceContext, ID3D11DeviceContext4>,
     query_texture: query::<IUnknown, ID3D11Texture2D>,

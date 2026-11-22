@@ -173,6 +173,8 @@ mod fg_leases;
 #[path = "../../../ui/overlay/src/fg_reasons.rs"]
 mod fg_reasons;
 #[cfg(windows)]
+mod fg_registry_abi;
+#[cfg(windows)]
 mod fg_scene;
 #[cfg(windows)]
 mod fg_session;

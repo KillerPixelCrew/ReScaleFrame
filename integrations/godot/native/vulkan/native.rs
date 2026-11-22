@@ -723,7 +723,7 @@ unsafe fn render(
     }
 
     let _guard = guard();
-    if crate::depth_domains_requested(&pass.depth_domains) {
+    if rsf_game_sys::depth_domains_requested(&pass.depth_domains) {
         return 0;
     }
 

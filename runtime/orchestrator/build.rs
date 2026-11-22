@@ -78,7 +78,6 @@ fn main() {
     for source in sources {
         println!("cargo:rerun-if-changed={source}");
     }
-    println!("cargo:rerun-if-changed=src/depth_domains_abi.c");
     println!("cargo:rerun-if-changed=src/d3d11_output_platform.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/d3d11_state.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/srv_format.h");
@@ -86,16 +85,6 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         shader_patch_parser();
         sharpening_payload();
-        let mut depth_domains = cc::Build::new();
-        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-            depth_domains.flag("/Zl");
-        }
-        depth_domains
-            .std("c11")
-            .warnings_into_errors(true)
-            .include("../../sdk/game/include")
-            .file("src/depth_domains_abi.c")
-            .compile("rsf_depth_domains_abi");
         let mut build = cc::Build::new();
         if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
             // The final CMake or Cargo binary selects its CRT, including Debug.

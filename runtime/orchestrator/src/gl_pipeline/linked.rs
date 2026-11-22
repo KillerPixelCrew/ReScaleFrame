@@ -16,8 +16,6 @@ unsafe extern "C" {
     fn rsf_native_latency_end_session(session: u64);
     fn rsf_input_dump_cancel(session: u64);
     fn rsf_gl_contract_dlss_preset_valid(preset: u32) -> c_int;
-    fn rsf_gl_contract_fg_default_backend(vendor: u32, software: u32) -> u32;
-    fn rsf_gl_contract_depth_domains_requested(pass: *const Pass) -> u32;
     fn rsf_overlay_configure_bound(setup: *const rsf_overlay_service_setup) -> i32;
     fn rsf_overlay_present_bound(
         device: Handle,
@@ -141,6 +139,12 @@ unsafe extern "C" fn sr_destroy(owner: Handle) {
     unsafe { sr12::rsf_core_sr12_destroy(owner.cast()) }
 }
 
+unsafe extern "C" fn depth_domains_requested(pass: *const Pass) -> u32 {
+    u32::from(rsf_game_sys::depth_domains_requested(unsafe {
+        &(*pass).depth_domains
+    }))
+}
+
 pub(super) static PLATFORM: Platform = Platform {
     gl_open,
     gl_graphics,
@@ -190,8 +194,8 @@ pub(super) static PLATFORM: Platform = Platform {
     latency_end_session: rsf_native_latency_end_session,
     dump_cancel: rsf_input_dump_cancel,
     dlss_preset_valid: rsf_gl_contract_dlss_preset_valid,
-    fg_default_backend: rsf_gl_contract_fg_default_backend,
-    depth_domains_requested: rsf_gl_contract_depth_domains_requested,
+    fg_default_backend: crate::fg_choice::rsf_fg_default_backend,
+    depth_domains_requested,
     overlay_configure: rsf_overlay_configure_bound,
     overlay_present: rsf_overlay_present_bound,
     overlay_notify: rsf_overlay_notify_bound,

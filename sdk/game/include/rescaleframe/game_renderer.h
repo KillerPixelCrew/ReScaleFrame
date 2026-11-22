@@ -41,13 +41,9 @@ typedef struct rsf_game_depth_domains {
    Ordered disjoint intervals must cover [0,1], with optional clear-only endpoints/gap.
    Viewport unmapping permits at most one source-format quantization step at endpoints.
    CPU bounds validation guarantees finite arithmetic and positive W; Z/W is explicitly
-   clipped to [0,1]. Unknown versions/partial coverage refuse, never fall back to raw. */
-static inline uint32_t rsf_game_depth_domains_requested(const rsf_game_depth_domains* value) {
-    const unsigned char* bytes = (const unsigned char*)value;
-    uint32_t i;
-    for (i = 0; i < (uint32_t)sizeof(*value); ++i) if (bytes[i]) return 1u;
-    return 0u;
-}
+   clipped to [0,1]. Unknown versions/partial coverage refuse, never fall back to raw.
+   Link this predicate from a GameSDK archive consumer or the Runtime. */
+uint32_t rsf_game_depth_domains_requested(const rsf_game_depth_domains* value);
 
 /* Copied engine rendering identity. Keys identify owners and must not be dereferenced by a host.
    native_frame is not an input/simulation frame ID and does not authorize frame generation. */

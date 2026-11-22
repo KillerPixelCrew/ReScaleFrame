@@ -8,7 +8,7 @@ use crate::dxgi_format::{
 use crate::graphics_d3d11::{compute_shader, shader_code};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
-    rsf_game_depth_domain, rsf_game_depth_domains,
+    depth_domains_requested, rsf_game_depth_domain, rsf_game_depth_domains,
 };
 use std::{
     ffi::{CStr, c_void},
@@ -276,9 +276,7 @@ fn depth_constants(
         size: region.extent,
         ..Default::default()
     };
-    let Some(facts) =
-        facts.filter(|facts| unsafe { rsf_regions_depth_domains_requested(facts) } != 0)
-    else {
+    let Some(facts) = facts.filter(|facts| depth_domains_requested(facts)) else {
         return Some(constants);
     };
     if facts.struct_size as usize != size_of::<rsf_game_depth_domains>()
@@ -410,10 +408,6 @@ struct Dispatch {
     view_count: u32,
     target_count: u32,
     groups: [u32; 2],
-}
-
-unsafe extern "C" {
-    fn rsf_regions_depth_domains_requested(facts: &rsf_game_depth_domains) -> u32;
 }
 
 pub(super) unsafe fn device_identity(device: Object) -> Option<ComRef> {
