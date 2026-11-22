@@ -9,12 +9,11 @@ use std::ptr::null;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_begin(
-    shared: *const DeviceHandles,
-    slot: *const CommandSlot,
+pub(crate) unsafe fn rsf_uvk_gpu_begin(
+    shared: &DeviceHandles,
+    slot: &CommandSlot,
     ring: u32,
 ) -> bool {
-    let (shared, slot) = unsafe { (&*shared, &*slot) };
     let dispatch = unsafe { shared.dispatch() };
     let fence = vk::Fence::from_raw(slot.complete);
     if unsafe { (dispatch.wait_fences)(shared.vk_device(), 1, &fence, vk::TRUE, 10_000_000_000) }
@@ -50,13 +49,12 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_begin(
     true
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_upload(
-    shared: *const DeviceHandles,
-    slot: *const CommandSlot,
+pub(crate) unsafe fn rsf_uvk_gpu_upload(
+    shared: &DeviceHandles,
+    slot: &CommandSlot,
     waits: *const vk::Semaphore,
     count: u32,
 ) -> bool {
-    let (shared, slot) = unsafe { (&*shared, &*slot) };
     let dispatch = unsafe { shared.dispatch() };
     let command = vk::CommandBuffer::from_raw(slot.vk[0]);
     if unsafe { (dispatch.end_buffer)(command) } != SUCCESS {
@@ -106,13 +104,12 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_upload(
     unsafe { queue.Wait(fence, value).is_ok() }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_submit(
-    shared: *const DeviceHandles,
-    slot: *const CommandSlot,
+pub(crate) unsafe fn rsf_uvk_gpu_submit(
+    shared: &DeviceHandles,
+    slot: &CommandSlot,
     ring: u32,
     ready: u64,
 ) -> bool {
-    let (shared, slot) = unsafe { (&*shared, &*slot) };
     let dispatch = unsafe { shared.dispatch() };
     let command = vk::CommandBuffer::from_raw(slot.vk[1]);
     let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&slot.commands) };
@@ -153,7 +150,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_submit(
     true
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_dx_barrier(
+pub(crate) unsafe fn rsf_uvk_gpu_dx_barrier(
     list: *mut c_void,
     resource: *mut c_void,
     before: i32,
@@ -174,7 +171,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_dx_barrier(
     unsafe { borrow::<ID3D12GraphicsCommandList>(&list).ResourceBarrier(&[barrier]) };
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_dx_copy(
+pub(crate) unsafe fn rsf_uvk_gpu_dx_copy(
     list: *mut c_void,
     target: *mut c_void,
     source: *mut c_void,
@@ -211,15 +208,14 @@ unsafe fn image_barrier(dispatch: &Dispatch, command: u64, barrier: &vk::ImageMe
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_image_transition(
-    shared: *const DeviceHandles,
+pub(crate) unsafe fn rsf_uvk_gpu_image_transition(
+    shared: &DeviceHandles,
     command: u64,
     image: u64,
     index: u32,
     output: bool,
     acquire: bool,
 ) {
-    let shared = unsafe { &*shared };
     let (transfer_layout, transfer_access) = if output {
         (
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
@@ -265,8 +261,8 @@ fn color_range() -> vk::ImageSubresourceRange {
         .layer_count(1)
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_copy(
-    shared: *const DeviceHandles,
+pub(crate) unsafe fn rsf_uvk_gpu_copy(
+    shared: &DeviceHandles,
     command: u64,
     source: u64,
     source_layout: i32,
@@ -285,7 +281,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_copy(
             depth: 1,
         });
     unsafe {
-        ((&*shared).dispatch().copy_image)(
+        (shared.dispatch().copy_image)(
             vk::CommandBuffer::from_raw(command),
             vk::Image::from_raw(source),
             vk::ImageLayout::from_raw(source_layout),
@@ -297,15 +293,15 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_copy(
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_blit_present(
-    shared: *const DeviceHandles,
+pub(crate) unsafe fn rsf_uvk_gpu_blit_present(
+    shared: &DeviceHandles,
     command: u64,
     presented: u64,
     target: u64,
     width: u32,
     height: u32,
 ) {
-    let dispatch = unsafe { (&*shared).dispatch() };
+    let dispatch = unsafe { shared.dispatch() };
     let presented = vk::Image::from_raw(presented);
     let barrier = vk::ImageMemoryBarrier::default()
         .image(presented)

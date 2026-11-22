@@ -867,6 +867,11 @@ pub(crate) fn rsf_unity_frames_drained(completed: u64) -> bool {
     state.callbacks == 0 && state.drained(completed)
 }
 
+/// A line to the host's log, guarded against a foreign exception.
+pub(crate) fn log(host: &rsf_game_host_services, text: &std::ffi::CStr) {
+    unsafe { rsf_game_sys::rsf_game_log_guarded(host.log, host.user, text.as_ptr()) };
+}
+
 pub(crate) fn rsf_unity_frames_release() {
     let leases = lock().release();
     MANAGED_STAGE.store(0, Ordering::SeqCst);

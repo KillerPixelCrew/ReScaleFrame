@@ -240,7 +240,7 @@ extern "C" fn rsfu_preview_region(
 #[unsafe(no_mangle)]
 extern "C" fn rsfu_shutdown() -> c_int {
     if PACKAGE.services.editor.load(SeqCst) {
-        rsf_unity_preview_hide();
+        hide();
     }
     c_int::from(routing::shutdown())
 }

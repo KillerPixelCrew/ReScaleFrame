@@ -2,7 +2,7 @@
 //! The Unity package's D3D11-to-D3D12 recording and hand-back.
 
 use super::*;
-use crate::bridge_state::{rsf_unity_frames_activate, rsf_unity_frames_active};
+use crate::bridge_state::{log, rsf_unity_frames_activate, rsf_unity_frames_active};
 use crate::d3d11_pass::{
     self, HANDBACK_FAILED, PassPlan, RETIRED, ROUTE_NONE, ROUTE_PREVIEW, ROUTE_WINDOW,
 };
@@ -257,10 +257,6 @@ impl Drop for Recording<'_> {
     fn drop(&mut self) {
         let _ = self.close();
     }
-}
-
-fn log(host: &rsf_game_host_services, text: &CStr) {
-    unsafe { rsf_game_sys::rsf_game_log_guarded(host.log, host.user, text.as_ptr()) };
 }
 
 unsafe fn surface(

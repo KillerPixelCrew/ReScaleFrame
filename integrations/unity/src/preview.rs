@@ -215,7 +215,7 @@ fn discard(window: Window) {
     }
 }
 
-fn hide() {
+pub(crate) fn hide() {
     let mut state = state();
     state.hide_revision = state.hide_revision.wrapping_add(1);
     state.window.visible = false;
@@ -311,10 +311,6 @@ pub(crate) extern "C" fn rsf_unity_preview_parent() -> HWND {
 pub(crate) extern "C" fn rsf_unity_preview_owns(child: HWND) -> bool {
     let state = state();
     state.window.child() == child && state.window.live()
-}
-
-pub(crate) extern "C" fn rsf_unity_preview_hide() {
-    hide();
 }
 
 fn target() -> Option<rsf_d3d12_window_target> {
