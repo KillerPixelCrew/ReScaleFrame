@@ -49,13 +49,13 @@ fn settings(change: impl FnOnce(&mut Settings)) -> Settings {
 }
 
 fn status(vulkan: &Vulkan) -> Status {
-    vulkan.status(&fake::LEAVES).0
+    vulkan.status().0
 }
 
 #[test]
 fn boot_resets_the_session_under_the_guard() {
     let vulkan = Vulkan::new();
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
+    assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 1);
     assert_eq!(fake::take_calls(), ["facts", "start"]);
     assert!(vulkan.booted());
     let value = status(&vulkan);
@@ -66,7 +66,7 @@ fn boot_resets_the_session_under_the_guard() {
     assert_eq!(value.fg_result, BACKEND_ERROR_NOT_SUPPORTED);
     assert_eq!(vulkan.settings(), (default_settings(), 1));
     // A booted session refuses another boot.
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 0);
     assert_eq!(fake::take_calls(), Vec::<&str>::new());
 }
 
@@ -76,20 +76,20 @@ fn boot_refusals() {
     let vulkan = Vulkan::new();
     let mut missing = setup(c"C:/game/runtime");
     missing.runtime_directory = ptr::null();
-    assert_eq!(vulkan.boot(&fake::LEAVES, &missing), 0);
+    assert_eq!(vulkan.boot(&missing), 0);
     fake::VK_SUPPORTED.set(false);
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 0);
     fake::VK_SUPPORTED.set(true);
     assert!(fake::take_calls().is_empty());
     fake::VK_FACTS.set(VkFacts {
         sdk_shutdown_pending: 1,
         ..VkFacts::default()
     });
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 0);
     assert_eq!(fake::take_calls(), ["facts"]);
     fake::VK_FACTS.set(VkFacts::default());
     fake::VK_START.set(0);
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 0);
     assert!(!vulkan.booted());
     fake::VK_START.set(1);
 }
@@ -99,17 +99,17 @@ fn shutdown_keeps_a_refused_session_and_releases_an_ended_one() {
     fake::VK_RELEASED.set(None);
     let vulkan = booted();
     fake::VK_STOP.set(0);
-    assert_eq!(vulkan.shutdown(&fake::LEAVES), 0);
+    assert_eq!(vulkan.shutdown(), 0);
     assert!(vulkan.booted());
     assert_eq!(fake::VK_RELEASED.get(), None);
     fake::VK_STOP.set(1);
-    assert_eq!(vulkan.shutdown(&fake::LEAVES), 1);
+    assert_eq!(vulkan.shutdown(), 1);
     assert!(!vulkan.booted());
     assert_eq!(fake::take_calls(), ["stop", "stop", "release"]);
     assert_eq!(fake::VK_RELEASED.get(), Some(42));
-    assert_eq!(vulkan.shutdown(&fake::LEAVES), 1);
+    assert_eq!(vulkan.shutdown(), 1);
     assert!(fake::take_calls().is_empty());
-    let (value, active) = vulkan.status(&fake::LEAVES);
+    let (value, active) = vulkan.status();
     assert_eq!(active, 0);
     assert_eq!(
         (value.active_sr, value.sr_result),
@@ -121,20 +121,14 @@ fn shutdown_keeps_a_refused_session_and_releases_an_ended_one() {
 fn generation_counts_sr_identity_across_sessions() {
     let vulkan = booted();
     fake::VK_FACTS.set(ready());
-    assert_eq!(
-        vulkan.configure(&fake::LEAVES, &settings(|s| s.latency_mode = 1)),
-        1
-    );
+    assert_eq!(vulkan.configure(&settings(|s| s.latency_mode = 1)), 1);
     assert_eq!(fake::VK_LATENCY_OPTIONS.get(), Some((1, 0)));
-    assert_eq!(vulkan.view(&fake::LEAVES).0.generation, 1);
-    assert_eq!(
-        vulkan.configure(&fake::LEAVES, &settings(|s| s.dlss_preset = 3)),
-        1
-    );
-    assert_eq!(vulkan.view(&fake::LEAVES).0.generation, 2);
-    vulkan.shutdown(&fake::LEAVES);
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
-    let (view, active) = vulkan.view(&fake::LEAVES);
+    assert_eq!(vulkan.view().0.generation, 1);
+    assert_eq!(vulkan.configure(&settings(|s| s.dlss_preset = 3)), 1);
+    assert_eq!(vulkan.view().0.generation, 2);
+    vulkan.shutdown();
+    assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 1);
+    let (view, active) = vulkan.view();
     assert_eq!(active, 1);
     assert_eq!((view.settings, view.generation), (default_settings(), 2));
     assert_eq!((view.sr_backend, view.fg_backend), (SR_FSR3, FG_FSR3));
@@ -144,7 +138,7 @@ fn generation_counts_sr_identity_across_sessions() {
 fn an_unbooted_session_refuses_configuration() {
     fake::take_calls();
     let vulkan = Vulkan::new();
-    assert_eq!(vulkan.configure(&fake::LEAVES, &default_settings()), 0);
+    assert_eq!(vulkan.configure(&default_settings()), 0);
     assert!(fake::take_calls().is_empty());
 }
 
@@ -211,7 +205,7 @@ fn device_and_provider_refusals_keep_the_request() {
     ];
     for (facts, request) in refusals {
         fake::VK_FACTS.set(facts);
-        assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0, "{request:?}");
+        assert_eq!(vulkan.configure(&request), 0, "{request:?}");
         assert_eq!(vulkan.settings().0, default_settings());
         assert!(!fake::take_calls().contains(&"latency_options"));
     }
@@ -225,21 +219,21 @@ fn device_and_provider_refusals_keep_the_request() {
     fake::VK_FACTS.set(ready());
     for ((xess, interop), request) in unready {
         vulkan.creation().report_ready(xess, interop);
-        assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0, "{request:?}");
+        assert_eq!(vulkan.configure(&request), 0, "{request:?}");
         assert_eq!(vulkan.settings().0, default_settings());
         assert!(!fake::take_calls().contains(&"latency_options"));
         vulkan.creation().report_ready(true, true);
-        assert_eq!(vulkan.configure(&fake::LEAVES, &request), 1, "{request:?}");
-        assert_eq!(vulkan.configure(&fake::LEAVES, &default_settings()), 1);
+        assert_eq!(vulkan.configure(&request), 1, "{request:?}");
+        assert_eq!(vulkan.configure(&default_settings()), 1);
         fake::take_calls();
     }
-    assert_eq!(vulkan.view(&fake::LEAVES).0.generation, 5);
+    assert_eq!(vulkan.view().0.generation, 5);
 }
 
 #[test]
 fn interop_fg_needs_the_primary_window_reported_since_the_start() {
     let vulkan = Vulkan::new();
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
+    assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 1);
     vulkan.creation().report_ready(true, true);
     fake::VK_FACTS.set(ready());
     fake::VK_PROBE.set(1);
@@ -247,20 +241,20 @@ fn interop_fg_needs_the_primary_window_reported_since_the_start() {
     let xess = settings(|s| s.fg_backend = FG_XESS);
     fake::take_calls();
     // Refused before the probe without a reported window.
-    assert_eq!(vulkan.configure(&fake::LEAVES, &fsr4), 0);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &xess), 0);
+    assert_eq!(vulkan.configure(&fsr4), 0);
+    assert_eq!(vulkan.configure(&xess), 0);
     assert_eq!(fake::take_calls(), ["facts", "facts"]);
     vulkan.report_window(ptr::without_provenance_mut(WINDOW));
     assert_eq!(vulkan.primary_window().addr(), WINDOW);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &fsr4), 1);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &xess), 1);
+    assert_eq!(vulkan.configure(&fsr4), 1);
+    assert_eq!(vulkan.configure(&xess), 1);
     // A refused boot keeps it; the next start clears it, also when the start refuses.
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 0);
     assert_eq!(vulkan.primary_window().addr(), WINDOW);
-    assert_eq!(vulkan.shutdown(&fake::LEAVES), 1);
+    assert_eq!(vulkan.shutdown(), 1);
     fake::VK_FACTS.set(VkFacts::default());
     fake::VK_START.set(0);
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 0);
     assert!(vulkan.primary_window().is_null());
     fake::VK_START.set(1);
     fake::VK_PROBE.set(0);
@@ -274,14 +268,14 @@ fn the_fsr4_probe_runs_only_after_the_cheaper_refusals() {
         presenter: 0,
         ..ready()
     });
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0);
+    assert_eq!(vulkan.configure(&request), 0);
     assert_eq!(fake::take_calls(), ["facts"]);
     fake::VK_FACTS.set(ready());
     fake::VK_PROBE.set(0);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0);
+    assert_eq!(vulkan.configure(&request), 0);
     assert_eq!(fake::take_calls(), ["facts", "fsr4_fg_probe"]);
     fake::VK_PROBE.set(1);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 1);
+    assert_eq!(vulkan.configure(&request), 1);
     assert_eq!(
         fake::take_calls(),
         ["facts", "fsr4_fg_probe", "latency_options"]
@@ -302,11 +296,11 @@ fn presenter_capacity_bounds_the_owned_provider() {
         s.generated_frames = 3;
     });
     fake::VK_PRESENTER_MAX.set(None);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0);
+    assert_eq!(vulkan.configure(&request), 0);
     fake::VK_PRESENTER_MAX.set(Some(2));
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0);
+    assert_eq!(vulkan.configure(&request), 0);
     fake::VK_PRESENTER_MAX.set(Some(3));
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 1);
+    assert_eq!(vulkan.configure(&request), 1);
     // A different provider is not bounded by the live presenter's capacity.
     fake::VK_PRESENTER_MAX.set(None);
     fake::take_calls();
@@ -315,7 +309,7 @@ fn presenter_capacity_bounds_the_owned_provider() {
         s.fg_mode = 1;
         s.generated_frames = 3;
     });
-    assert_eq!(vulkan.configure(&fake::LEAVES, &other), 1);
+    assert_eq!(vulkan.configure(&other), 1);
     assert_eq!(fake::take_calls(), ["facts", "latency_options"]);
 }
 
@@ -324,11 +318,8 @@ fn a_refused_latency_option_keeps_the_request() {
     let vulkan = booted();
     fake::VK_FACTS.set(ready());
     fake::VK_LATENCY_RESULT.set(-7);
-    assert_eq!(
-        vulkan.configure(&fake::LEAVES, &settings(|s| s.quality = 3)),
-        0
-    );
-    assert_eq!(vulkan.view(&fake::LEAVES).0.generation, 1);
+    assert_eq!(vulkan.configure(&settings(|s| s.quality = 3)), 0);
+    assert_eq!(vulkan.view().0.generation, 1);
     fake::VK_LATENCY_RESULT.set(0);
 }
 
@@ -384,20 +375,14 @@ fn fg_runs_only_in_requested_gameplay_on_the_flight_screen() {
         );
     };
     run(SCREEN_FLIGHT, 0);
-    assert_eq!(
-        vulkan.configure(&fake::LEAVES, &settings(|s| s.fg_mode = 1)),
-        1
-    );
+    assert_eq!(vulkan.configure(&settings(|s| s.fg_mode = 1)), 1);
     run(SCREEN_FLIGHT, 1);
     run(0, 0);
     assert_eq!(
-        vulkan.configure(
-            &fake::LEAVES,
-            &settings(|s| {
-                s.fg_mode = 1;
-                s.gameplay = 0;
-            })
-        ),
+        vulkan.configure(&settings(|s| {
+            s.fg_mode = 1;
+            s.gameplay = 0;
+        })),
         1
     );
     run(SCREEN_FLIGHT, 0);
@@ -409,21 +394,18 @@ fn sr_plan_changes_leave_the_runtime_presenter_current() {
     let vulkan = booted();
     vulkan.presenter_created(true, FG_FSR4, 1);
     assert_eq!(status(&vulkan).fg_available, 1);
-    assert!(!vulkan.presenter_current(&fake::LEAVES, FG_FSR4));
+    assert!(!vulkan.presenter_current(FG_FSR4));
     fake::VK_FACTS.set(ready());
     fake::VK_PROBE.set(1);
     for quality in [2, 3] {
         assert_eq!(
-            vulkan.configure(
-                &fake::LEAVES,
-                &settings(|s| {
-                    s.fg_backend = FG_FSR4;
-                    s.quality = quality;
-                })
-            ),
+            vulkan.configure(&settings(|s| {
+                s.fg_backend = FG_FSR4;
+                s.quality = quality;
+            })),
             1
         );
-        assert!(vulkan.presenter_current(&fake::LEAVES, FG_FSR4));
+        assert!(vulkan.presenter_current(FG_FSR4));
     }
     vulkan.presenter_retired();
     let value = status(&vulkan);
@@ -498,7 +480,7 @@ fn sr_frames_count_each_outcome() {
         (value.requested_sr, value.active_sr, value.evaluated_frames),
         (SR_AUTO, SR_FSR3, 1)
     );
-    assert_eq!(vulkan.view(&fake::LEAVES).0.output_width, 1920);
+    assert_eq!(vulkan.view().0.output_width, 1920);
     // A refused retirement keeps the previous identity.
     vulkan.sr_frame(&VkSrFrame {
         identity: 0,
@@ -558,7 +540,7 @@ fn auto_resolves_through_the_runtime_policy_for_the_device_adapter() {
         vulkan.creation().report_adapter(facts);
         fake::SR_SELECTED.set(expected.0);
         fake::FG_SELECTED.set(expected.1);
-        let view = vulkan.view(&fake::LEAVES).0;
+        let view = vulkan.view().0;
         assert_eq!((view.sr_backend, view.fg_backend), expected, "{facts:?}");
         let identity = facts.map_or((0, 0), |value| (value.vendor, value.software));
         assert_eq!(
@@ -572,18 +554,15 @@ fn auto_resolves_through_the_runtime_policy_for_the_device_adapter() {
     // Explicit requests pass unchanged and ask neither the policy nor the facts.
     vulkan.creation().report_adapter(adapter(0x10de, 0));
     assert_eq!(
-        vulkan.configure(
-            &fake::LEAVES,
-            &settings(|s| {
-                s.sr_backend = SR_FSR3;
-                s.fg_backend = FG_XESS;
-            })
-        ),
+        vulkan.configure(&settings(|s| {
+            s.sr_backend = SR_FSR3;
+            s.fg_backend = FG_XESS;
+        })),
         1
     );
     fake::take_calls();
     fake::take_auto();
-    let view = vulkan.view(&fake::LEAVES).0;
+    let view = vulkan.view().0;
     assert_eq!((view.sr_backend, view.fg_backend), (SR_FSR3, FG_XESS));
     assert_eq!(fake::take_auto(), (None, None));
     assert!(fake::take_calls().is_empty());
@@ -595,13 +574,13 @@ fn auto_passes_only_providers_the_session_can_serve() {
     // NVIDIA without the Streamline session: DLSS is not served, FSR3 remains.
     vulkan.creation().report_adapter(adapter(0x10de, 0));
     fake::VK_FACTS.set(ready());
-    let view = vulkan.view(&fake::LEAVES).0;
+    let view = vulkan.view().0;
     assert_eq!((view.sr_backend, view.fg_backend), (SR_FSR3, FG_FSR3));
     // Intel without the XeSS device, the interop device or the primary window.
     vulkan.creation().report_adapter(adapter(0x8086, 0));
     vulkan.creation().report_ready(false, false);
     fake::take_auto();
-    let view = vulkan.view(&fake::LEAVES).0;
+    let view = vulkan.view().0;
     assert_eq!((view.sr_backend, view.fg_backend), (SR_FSR3, FG_FSR3));
     assert_eq!(
         fake::take_auto(),
@@ -613,15 +592,15 @@ fn auto_passes_only_providers_the_session_can_serve() {
     // The XeSS device serves XeSS SR; XeSS FG also needs interop and the primary window.
     vulkan.creation().report_ready(true, true);
     let fresh = Vulkan::new();
-    assert_eq!(fresh.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
+    assert_eq!(fresh.boot(&setup(c"C:/game/runtime")), 1);
     fresh.creation().report_adapter(adapter(0x8086, 0));
     fresh.creation().report_ready(true, true);
-    fresh.view(&fake::LEAVES);
+    fresh.view();
     let (sr, fg) = fake::take_auto();
     assert_ne!(sr.unwrap().2 & bits(&[SR_XESS]), 0);
     assert_eq!(fg.unwrap().2 & bits(&[FG_XESS]), 0);
     fresh.report_window(ptr::without_provenance_mut(WINDOW));
-    fresh.view(&fake::LEAVES);
+    fresh.view();
     assert_ne!(fake::take_auto().1.unwrap().2 & bits(&[FG_XESS]), 0);
     // FSR4 SR is served only with its build, the graph lease capability and interop; FSR4 FG is
     // never offered to Auto, so its probe is not asked.
@@ -630,7 +609,7 @@ fn auto_passes_only_providers_the_session_can_serve() {
         ..ready()
     });
     fake::take_auto();
-    fresh.view(&fake::LEAVES);
+    fresh.view();
     let (sr, fg) = fake::take_auto();
     assert_eq!(sr.map(|asked| asked.2 & bits(&[SR_FSR4])), Some(0));
     assert_eq!(fg.map(|asked| asked.2 & bits(&[FG_FSR4])), Some(0));
@@ -653,13 +632,10 @@ fn auto_admission_and_presenter_follow_the_resolved_provider() {
         s.generated_frames = 3;
     });
     fake::VK_PRESENTER_MAX.set(Some(1));
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0);
-    assert_eq!(
-        vulkan.configure(&fake::LEAVES, &settings(|s| s.fg_mode = 1)),
-        1
-    );
-    assert!(vulkan.presenter_current(&fake::LEAVES, FG_FSR3));
-    assert!(!vulkan.presenter_current(&fake::LEAVES, FG_DLSS));
+    assert_eq!(vulkan.configure(&request), 0);
+    assert_eq!(vulkan.configure(&settings(|s| s.fg_mode = 1)), 1);
+    assert!(vulkan.presenter_current(FG_FSR3));
+    assert!(!vulkan.presenter_current(FG_DLSS));
     // An explicit DLSS-G request keeps its documented admission: not bounded by the live FSR3
     // presenter's capacity, and the FSR3 presenter is no longer current.
     let explicit = settings(|s| {
@@ -668,28 +644,25 @@ fn auto_admission_and_presenter_follow_the_resolved_provider() {
         s.generated_frames = 3;
     });
     fake::VK_PRESENTER_MAX.set(None);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &explicit), 1);
-    assert!(!vulkan.presenter_current(&fake::LEAVES, FG_FSR3));
-    assert!(vulkan.presenter_current(&fake::LEAVES, FG_DLSS));
+    assert_eq!(vulkan.configure(&explicit), 1);
+    assert!(!vulkan.presenter_current(FG_FSR3));
+    assert!(vulkan.presenter_current(FG_DLSS));
     // Auto FG on Intel before the primary window is reported resolves to FSR3 instead of
     // refusing the request for XeSS's missing window.
     let intel = Vulkan::new();
-    assert_eq!(intel.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
+    assert_eq!(intel.boot(&setup(c"C:/game/runtime")), 1);
     intel.creation().report_adapter(adapter(0x8086, 0));
     intel.creation().report_ready(true, true);
     fake::VK_FACTS.set(ready());
     fake::VK_PRESENTER_MAX.set(Some(1));
-    assert_eq!(
-        intel.configure(&fake::LEAVES, &settings(|s| s.fg_mode = 1)),
-        1
-    );
-    assert!(intel.presenter_current(&fake::LEAVES, FG_FSR3));
+    assert_eq!(intel.configure(&settings(|s| s.fg_mode = 1)), 1);
+    assert!(intel.presenter_current(FG_FSR3));
     // Once reported, XeSS is served: the FSR3 owner is recreated as a fixed-guide XeSS owner.
     intel.report_window(ptr::without_provenance_mut(WINDOW));
     fake::FG_SELECTED.set(FG_XESS);
-    assert!(!intel.presenter_current(&fake::LEAVES, FG_FSR3));
+    assert!(!intel.presenter_current(FG_FSR3));
     intel.presenter_created(true, FG_XESS, 1);
-    assert!(intel.presenter_current(&fake::LEAVES, FG_XESS));
+    assert!(intel.presenter_current(FG_XESS));
     fake::VK_PRESENTER_MAX.set(None);
 }
 

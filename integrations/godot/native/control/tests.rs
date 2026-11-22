@@ -4,17 +4,17 @@ use crate::platform::fake;
 use crate::platform::fake::setup;
 use std::ptr;
 
-fn status(control: &Control, platform: &Platform) -> (c_int, Status) {
+fn status(control: &Control) -> (c_int, Status) {
     let mut value = fake::status_header();
     // SAFETY: a complete local record.
-    (unsafe { control.status(platform, &mut value) }, value)
+    (unsafe { control.status(&mut value) }, value)
 }
 
 #[test]
 fn a_boot_in_progress_refuses_another_install() {
     let control = Control::new();
     let _reserved = control.boot_gate.lock().unwrap();
-    assert_eq!(control.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert_eq!(control.boot(&setup(c"C:/game/runtime")), 0);
     assert!(!control.booted());
 }
 
@@ -24,7 +24,7 @@ fn configure_advances_the_generation_only_for_sr_identity() {
     let mut settings = default_settings();
     settings.fg_mode = FG_FIXED;
     settings.latency_mode = 1;
-    assert_eq!(control.configure(&fake::LEAVES, &settings), 1);
+    assert_eq!(control.configure(&settings), 1);
     assert_eq!(control.snapshot(), (settings, 1));
     assert_eq!(
         fake::FG_OPTIONS.get(),
@@ -37,10 +37,10 @@ fn configure_advances_the_generation_only_for_sr_identity() {
         })
     );
     settings.quality = 2;
-    assert_eq!(control.configure(&fake::LEAVES, &settings), 1);
+    assert_eq!(control.configure(&settings), 1);
     assert_eq!(control.snapshot().1, 2);
     settings.dlss_preset = 4;
-    assert_eq!(control.configure(&fake::LEAVES, &settings), 1);
+    assert_eq!(control.configure(&settings), 1);
     assert_eq!(control.snapshot().1, 3);
 }
 
@@ -64,13 +64,13 @@ fn configure_refusals_keep_the_request() {
     for change in refused {
         let mut settings = default_settings();
         change(&mut settings);
-        assert_eq!(control.configure(&fake::LEAVES, &settings), 0);
+        assert_eq!(control.configure(&settings), 0);
         assert_eq!(control.snapshot(), (default_settings(), 1));
     }
     let mut sharpening = default_settings();
     sharpening.sharpening = fake::sharpening_defaults();
     sharpening.sharpening.mode = 5;
-    assert_eq!(control.configure(&fake::LEAVES, &sharpening), 0);
+    assert_eq!(control.configure(&sharpening), 0);
 }
 
 fn vulkan_booted() -> Control {
@@ -86,11 +86,11 @@ fn vulkan_receives_only_accepted_settings() {
     let control = vulkan_booted();
     let mut accepted = default_settings();
     accepted.quality = 2;
-    assert_eq!(control.configure(&fake::LEAVES, &accepted), 1);
+    assert_eq!(control.configure(&accepted), 1);
     assert_eq!(fake::take_calls(), ["facts", "latency_options"]);
     let mut refused = accepted;
     refused.generated_frames = 0;
-    assert_eq!(control.configure(&fake::LEAVES, &refused), 0);
+    assert_eq!(control.configure(&refused), 0);
     assert!(fake::take_calls().is_empty());
     // The D3D12 request is untouched while Vulkan owns the session.
     assert_eq!(control.snapshot(), (default_settings(), 1));
@@ -132,7 +132,7 @@ fn boot_derives_the_session() {
     assert_eq!(text(paths.xess_directory), "C:/game/runtime/xess");
     assert_eq!(text(paths.engine_version), "4.7.2");
     let installs = fake::INSTALLS.get();
-    assert_eq!(control.boot(&fake::LEAVES, &setup(c"C:/other")), 1);
+    assert_eq!(control.boot(&setup(c"C:/other")), 1);
     assert_eq!(fake::INSTALLS.get(), installs);
 }
 
@@ -141,11 +141,11 @@ fn boot_refusals() {
     let control = Control::new();
     let mut missing = setup(c"C:/game/runtime");
     missing.project_id = ptr::null();
-    assert_eq!(control.boot(&fake::LEAVES, &missing), 0);
+    assert_eq!(control.boot(&missing), 0);
     fake::INSTALL_RESULT.set(-3);
-    assert_eq!(control.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert_eq!(control.boot(&setup(c"C:/game/runtime")), 0);
     assert!(!control.booted());
-    assert_eq!(status(&control, &fake::LEAVES).0, 0);
+    assert_eq!(status(&control).0, 0);
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn d3d12_status_assembles_runtime_facts() {
         total_presented: 12,
         ..FgFacts::default()
     });
-    let (result, value) = status(&control, &fake::LEAVES);
+    let (result, value) = status(&control);
     assert_eq!(result, 1);
     assert_eq!(value.abi_version, ABI_VERSION);
     assert_eq!(value.session_id, 42);
@@ -196,7 +196,7 @@ fn d3d12_status_assembles_runtime_facts() {
         inputs: fake::INPUTS,
         ..LatencyFacts::default()
     }));
-    let (_, value) = status(&control, &fake::LEAVES);
+    let (_, value) = status(&control);
     assert_eq!(value.fg_result, -5);
     assert_eq!(
         (value.sleep_calls, value.latency_owner, value.mouse_inputs),
@@ -209,7 +209,7 @@ fn d3d12_status_assembles_runtime_facts() {
 #[test]
 fn vulkan_status_adds_inputs_and_window() {
     let control = vulkan_booted();
-    let (result, value) = status(&control, &fake::LEAVES);
+    let (result, value) = status(&control);
     assert_eq!(result, 1);
     assert_eq!(value.abi_version, ABI_VERSION);
     assert_eq!(value.session_id, 42);
@@ -238,7 +238,7 @@ fn sr_frames_report_the_effective_backend() {
         output_height: 1080,
     };
     control.sr_frame(&frame);
-    let (_, value) = status(&control, &fake::LEAVES);
+    let (_, value) = status(&control);
     assert_eq!(
         (value.active_sr, value.requested_sr, value.evaluated_frames),
         (SR_SPATIAL, SR_SPATIAL, 1)
@@ -250,7 +250,7 @@ fn sr_frames_report_the_effective_backend() {
         evaluated: -1,
         ..frame
     });
-    let (_, value) = status(&control, &fake::LEAVES);
+    let (_, value) = status(&control);
     assert_eq!(
         (value.active_sr, value.sr_result, value.refused_frames),
         (0, -4, 1)
@@ -260,9 +260,9 @@ fn sr_frames_report_the_effective_backend() {
         context_backend: 3,
         ..frame
     });
-    assert_eq!(status(&control, &fake::LEAVES).1.active_sr, 3);
+    assert_eq!(status(&control).1.active_sr, 3);
     control.sr_missed();
-    assert_eq!(status(&control, &fake::LEAVES).1.active_sr, 0);
+    assert_eq!(status(&control).1.active_sr, 0);
 }
 
 unsafe extern "C" fn engine_configure(_: *const Settings, viewport: u64) -> c_int {

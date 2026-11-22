@@ -176,7 +176,7 @@ extern "C" fn log(_: Handle, message: *const c_char) {
 }
 
 unsafe extern "C" fn accept(_: Handle, window: Handle) -> i32 {
-    crate::CONTROL.window.accept(&Platform, window).into()
+    crate::CONTROL.window.accept(window).into()
 }
 
 fn native_fg_options(options: &FgOptions) -> rsf_native_fg_options {
@@ -230,7 +230,7 @@ unsafe extern "C" {
     fn rsf_latencyvk_cpu_service() -> *const CpuService;
 }
 
-// The D3D12, DXGI and Win32 side of the platform. Device, queue, command list and context
+// The D3D12, DXGI and Win32 side of the Platform. Device, queue, command list and context
 // pointers are the engine's or the Runtime's live objects for the call; this crate only compares
 // and passes them. The Vulkan side is in `vulkan/native.rs`.
 impl Platform {

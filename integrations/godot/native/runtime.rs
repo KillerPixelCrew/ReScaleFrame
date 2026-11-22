@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Engine ABI entry points backed by the existing Rust session and execution receipts.
 
-use crate::platform::{Platform, Settings, Setup};
+use crate::platform::{Settings, Setup};
 use crate::sys::*;
 use crate::vulkan::native::{rsf_godot_vk_capture_present, rsf_godot_vk_render_begin};
 use rsf_game_sys::{RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_PRESENT, rsf_game_render_pass};
@@ -64,7 +64,7 @@ unsafe extern "C" fn rsfg_render(
     }
     crate::CONTROL
         .d3d12
-        .render(&crate::CONTROL, &Platform, device, queue, commands, pass)
+        .render(&crate::CONTROL, device, queue, commands, pass)
 }
 
 #[unsafe(no_mangle)]
@@ -72,9 +72,7 @@ extern "C" fn rsfg_render_begin(frame: u64) {
     if crate::CONTROL.vulkan.booted() {
         rsf_godot_vk_render_begin(frame, 0);
     } else if crate::CONTROL.booted() {
-        crate::CONTROL
-            .d3d12
-            .render_begin(&crate::CONTROL, &Platform, frame);
+        crate::CONTROL.d3d12.render_begin(&crate::CONTROL, frame);
     }
 }
 
@@ -82,7 +80,7 @@ extern "C" fn rsfg_render_begin(frame: u64) {
 extern "C" fn rsfg_vk_present_marker(window: u64, begin: u32) -> i32 {
     let admitted: i32 = crate::CONTROL
         .window
-        .present_marker(&Platform, crate::CONTROL.vulkan.booted(), window, begin)
+        .present_marker(crate::CONTROL.vulkan.booted(), window, begin)
         .into();
     if admitted != 0 {
         CAPTURE_NATIVE_PRESENT.set(begin != 0);
@@ -169,11 +167,11 @@ unsafe extern "C" fn rsfg_vk_foreign_call(callback: rsf_vk_wsi_call, user: Handl
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_shutdown() -> i32 {
     let control = &crate::CONTROL;
-    control.window.release(&Platform);
+    control.window.release();
     let result = if control.vulkan.booted() {
-        control.vulkan.shutdown(&Platform)
+        control.vulkan.shutdown()
     } else {
-        control.d3d12.shutdown(control, &Platform)
+        control.d3d12.shutdown(control)
     };
     if result != 0 {
         control.window.bind_cpu_service(None);

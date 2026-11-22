@@ -145,12 +145,7 @@ impl Vulkan {
     /// admission asks a provider probe, which Auto does not trigger, and the Runtime never prefers
     /// it. Without adapter facts (no device yet, or the properties read failed) vendor and software
     /// are zero, the Runtime's unknown adapter.
-    fn providers(
-        &self,
-        platform: &Platform,
-        settings: &Settings,
-        capabilities: Option<&Capabilities>,
-    ) -> Providers {
+    fn providers(&self, settings: &Settings, capabilities: Option<&Capabilities>) -> Providers {
         let auto_sr = settings.sr_backend == SR_AUTO;
         let auto_fg = settings.fg_backend == FG_BACKEND_AUTO;
         let mut providers = Providers {
@@ -164,20 +159,20 @@ impl Vulkan {
         let capabilities = match capabilities {
             Some(capabilities) => capabilities,
             None => {
-                snapshot = self.capabilities(platform);
+                snapshot = self.capabilities();
                 &snapshot
             }
         };
         let adapter = capabilities.device.adapter.unwrap_or_default();
         if auto_sr {
-            providers.sr = platform.sr_select_backend(
+            providers.sr = Platform.sr_select_backend(
                 adapter.vendor,
                 adapter.software,
                 capabilities.sr_choices(),
             );
         }
         if auto_fg {
-            providers.fg = platform.fg_select_backend(
+            providers.fg = Platform.fg_select_backend(
                 adapter.vendor,
                 adapter.software,
                 capabilities.fg_choices(),
@@ -200,12 +195,12 @@ impl Vulkan {
     }
 
     /// `setup` passed the size and ABI checks; its strings are borrowed for the call.
-    pub(crate) fn boot(&self, platform: &Platform, setup: &Setup) -> c_int {
-        if setup.runtime_directory.is_null() || !platform.vulkan_supported() {
+    pub(crate) fn boot(&self, setup: &Setup) -> c_int {
+        if setup.runtime_directory.is_null() || !Platform.vulkan_supported() {
             return 0;
         }
-        platform.vulkan_locked(|| {
-            if self.booted() || platform.vulkan_facts().sdk_shutdown_pending != 0 {
+        Platform.vulkan_locked(|| {
+            if self.booted() || Platform.vulkan_facts().sdk_shutdown_pending != 0 {
                 return 0;
             }
             {
@@ -213,7 +208,7 @@ impl Vulkan {
                 let mut state = self.state();
                 state.settings = default_settings();
                 state.status = initial_status();
-                state.status.session_id = platform.tick_count().wrapping_add(1);
+                state.status.session_id = Platform.tick_count().wrapping_add(1);
                 state.status.fg_result = BACKEND_ERROR_NOT_SUPPORTED;
             }
             // Each session logs its own refusals.
@@ -221,7 +216,7 @@ impl Vulkan {
             // The start leaf cleared the primary window first, also when it then refused.
             self.primary_window
                 .store(ptr::null_mut(), Ordering::Release);
-            if platform.vulkan_start(setup) == 0 {
+            if Platform.vulkan_start(setup) == 0 {
                 return 0;
             }
             self.active.store(true, Ordering::Release);
@@ -232,14 +227,14 @@ impl Vulkan {
     /// The caller found the session booted. The presenter is disabled and drained, then the SR
     /// contexts retire before the capture, XeSS and SDK stop. A refused step keeps the session
     /// booted.
-    pub(crate) fn shutdown(&self, platform: &Platform) -> c_int {
-        platform.vulkan_locked(|| {
+    pub(crate) fn shutdown(&self) -> c_int {
+        Platform.vulkan_locked(|| {
             if !self.booted() {
                 return 1;
             }
-            if platform.vulkan_presenter_drain(true) != BACKEND_OK
-                || !self.retire_contexts(platform)
-                || platform.vulkan_stop() == 0
+            if Platform.vulkan_presenter_drain(true) != BACKEND_OK
+                || !self.retire_contexts()
+                || Platform.vulkan_stop() == 0
             {
                 return 0;
             }
@@ -252,21 +247,21 @@ impl Vulkan {
             };
             // The device borrow ends with the session.
             self.contexts().release_device();
-            platform.vulkan_release(session);
+            Platform.vulkan_release(session);
             1
         })
     }
 
     /// `settings` passed the shared `rsfg_configure` refusal rules.
-    pub(crate) fn configure(&self, platform: &Platform, settings: &Settings) -> c_int {
+    pub(crate) fn configure(&self, settings: &Settings) -> c_int {
         if !self.booted() {
             return 0;
         }
-        platform.vulkan_locked(|| {
-            if !self.booted() || !self.admit(platform, settings) {
+        Platform.vulkan_locked(|| {
+            if !self.booted() || !self.admit(settings) {
                 return 0;
             }
-            if platform.vulkan_latency_options(settings.latency_mode, settings.frame_limit_us)
+            if Platform.vulkan_latency_options(settings.latency_mode, settings.frame_limit_us)
                 != BACKEND_OK
             {
                 return 0;
@@ -280,9 +275,9 @@ impl Vulkan {
         })
     }
 
-    fn capabilities(&self, platform: &Platform) -> Capabilities {
+    fn capabilities(&self) -> Capabilities {
         Capabilities {
-            facts: platform.vulkan_facts(),
+            facts: Platform.vulkan_facts(),
             device: self.creation.render_receipt(),
             primary: !self.primary_window().is_null(),
         }
@@ -290,8 +285,8 @@ impl Vulkan {
 
     /// Device readiness and provider refusals, in the order `vulkan.cpp` applied them. Runs under
     /// the guard; the FSR4 FG probe and the presenter capacity are asked only when reached.
-    fn admit(&self, platform: &Platform, value: &Settings) -> bool {
-        let capabilities = self.capabilities(platform);
+    fn admit(&self, value: &Settings) -> bool {
+        let capabilities = self.capabilities();
         let facts = capabilities.facts;
         let on = |flag: u32| flag != 0;
         // DLSS admission is still verified by its live provider at evaluation.
@@ -300,7 +295,7 @@ impl Vulkan {
         {
             return false;
         }
-        let selected = self.providers(platform, value, Some(&capabilities)).fg;
+        let selected = self.providers(value, Some(&capabilities)).fg;
         if !matches!(selected, FG_DLSS | FG_FSR3 | FG_FSR4 | FG_XESS) {
             return false;
         }
@@ -314,7 +309,7 @@ impl Vulkan {
                 return false;
             }
             // Refuse before asking the engine to retire its working WSI owner.
-            if platform.vulkan_fsr4_fg_probe() < 1 {
+            if Platform.vulkan_fsr4_fg_probe() < 1 {
                 return false;
             }
         }
@@ -327,7 +322,7 @@ impl Vulkan {
             return false;
         }
         if value.fg_mode != 0 && facts.presenter_backend == selected {
-            match platform.vulkan_presenter_max() {
+            match Platform.vulkan_presenter_max() {
                 Some(maximum) if value.generated_frames <= maximum => {}
                 _ => return false,
             }
@@ -341,9 +336,9 @@ impl Vulkan {
 
     /// The record with the Streamline Vulkan latency overlay. Fills the record even when the
     /// session is not booted, as before.
-    pub(crate) fn status(&self, platform: &Platform) -> (Status, c_int) {
+    pub(crate) fn status(&self) -> (Status, c_int) {
         let mut value = self.state().status;
-        if let Some(latency) = platform.vulkan_latency_facts() {
+        if let Some(latency) = Platform.vulkan_latency_facts() {
             apply_latency(&mut value, &latency);
         }
         (value, c_int::from(self.booted()))
@@ -351,11 +346,11 @@ impl Vulkan {
 
     /// Under the guard: what the render, presentation and capture leaves read. Auto is resolved
     /// from one settings snapshot after the state lock is released.
-    pub(crate) fn view(&self, platform: &Platform) -> (VkView, c_int) {
-        self.view_for_device(platform, None)
+    pub(crate) fn view(&self) -> (VkView, c_int) {
+        self.view_for_device(None)
     }
 
-    fn view_for_device(&self, platform: &Platform, device: Option<usize>) -> (VkView, c_int) {
+    fn view_for_device(&self, device: Option<usize>) -> (VkView, c_int) {
         let mut view = {
             let state = self.state();
             VkView {
@@ -372,13 +367,13 @@ impl Vulkan {
             if view.settings.sr_backend == SR_AUTO || view.settings.fg_backend == FG_BACKEND_AUTO {
                 device.map(|device| Capabilities {
                     device: self.creation.device_receipt(device),
-                    facts: platform.vulkan_facts(),
+                    facts: Platform.vulkan_facts(),
                     primary: !self.primary_window().is_null(),
                 })
             } else {
                 None
             };
-        let providers = self.providers(platform, &view.settings, capabilities.as_ref());
+        let providers = self.providers(&view.settings, capabilities.as_ref());
         view.sr_backend = providers.sr;
         view.fg_backend = providers.fg;
         (view, c_int::from(self.booted()))
@@ -395,9 +390,9 @@ impl Vulkan {
 
     /// Provider changes still require the engine to recreate its WSI owner.
     /// The Runtime presenter manages guide sizes at retired slot reuse.
-    pub(crate) fn presenter_current(&self, platform: &Platform, backend: u32) -> bool {
+    pub(crate) fn presenter_current(&self, backend: u32) -> bool {
         let settings = self.state().settings;
-        backend == self.providers(platform, &settings, None).fg
+        backend == self.providers(&settings, None).fg
     }
 
     pub(crate) fn presented(&self, facts: &VkPresentFacts) {

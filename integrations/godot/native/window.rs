@@ -55,9 +55,7 @@ unsafe extern "system" fn procedure(
     lparam: isize,
 ) -> isize {
     let control = &*crate::CONTROL;
-    control
-        .window
-        .message(&Platform, window, message, wparam, lparam)
+    control.window.message(window, message, wparam, lparam)
 }
 
 /// `WNDPROC`.
@@ -109,11 +107,11 @@ impl Window {
 
     /// Admits `window` when it belongs to this process and has the `Engine` class and no other
     /// window was admitted first. True for the admitted window.
-    pub(crate) fn accept(&self, platform: &Platform, window: *mut c_void) -> bool {
+    pub(crate) fn accept(&self, window: *mut c_void) -> bool {
         if window.is_null() {
             return false;
         }
-        let identity = platform.window_identity(window);
+        let identity = Platform.window_identity(window);
         let length = identity.class_length as usize;
         if identity.process_id != identity.current_process_id
             || identity.class_name.get(..length) != Some(&ENGINE_CLASS[..])
@@ -131,13 +129,13 @@ impl Window {
 
     /// `rsfg_cpu` after its boot and record checks: keeps the session, attaches the procedure at a
     /// frame begin, then reports the event to the session's backend.
-    pub(crate) fn cpu(&self, platform: &Platform, event: &rsf_game_cpu_event) {
+    pub(crate) fn cpu(&self, event: &rsf_game_cpu_event) {
         let Some(service) = self.cpu_service() else {
             return;
         };
         self.session.store(event.session_id, Ordering::Release);
         if event.stage == RSF_GAME_CPU_FRAME_BEGIN {
-            self.attach(platform);
+            self.attach();
         }
         // SAFETY: the event is borrowed for the Runtime report. No routing lock is held.
         unsafe { (service.report)(event) };
@@ -145,13 +143,13 @@ impl Window {
 
     /// Replaces the admitted window's procedure once. A failed replacement leaves nothing
     /// attached, and the next frame begin tries again.
-    fn attach(&self, platform: &Platform) {
+    fn attach(&self) {
         let mut procedures = self.previous.lock().unwrap_or_else(|err| err.into_inner());
         let window = self.input();
         if window.is_null() || procedures.iter().any(|(owner, _)| *owner == window.addr()) {
             return;
         }
-        let previous = platform.window_procedure_set(window, procedure_address());
+        let previous = Platform.window_procedure_set(window, procedure_address());
         if previous != 0 {
             procedures.push((window.addr(), previous));
         }
@@ -161,7 +159,6 @@ impl Window {
     /// forwarded to the replaced procedure.
     pub(crate) fn message(
         &self,
-        platform: &Platform,
         window: *mut c_void,
         message: u32,
         wparam: usize,
@@ -181,7 +178,7 @@ impl Window {
                 })
         };
         if self.input() != window {
-            return platform.window_forward(previous, window, message, wparam, lparam);
+            return Platform.window_forward(previous, window, message, wparam, lparam);
         }
         if message == WM_NCDESTROY {
             let _ = self.input.compare_exchange(
@@ -191,7 +188,7 @@ impl Window {
                 Ordering::Acquire,
             );
         }
-        let (counter, frequency) = platform.query_counter();
+        let (counter, frequency) = Platform.query_counter();
         let event = rsf_game_cpu_event {
             struct_size: size_of::<rsf_game_cpu_event>() as u32,
             stage: RSF_GAME_CPU_INPUT_EVENT,
@@ -209,20 +206,20 @@ impl Window {
             // SAFETY: the event is borrowed for the Runtime report.
             unsafe { (service.report)(&event) };
         }
-        platform.window_forward(previous, window, message, wparam, lparam)
+        Platform.window_forward(previous, window, message, wparam, lparam)
     }
 
     /// The window part of `rsfg_shutdown`. The procedure is restored only while it is still the
     /// window's own and the restore succeeds. A refused restore or an intervening subclass
     /// keeps forwarding to the replaced procedure. The admission and session end either way.
-    pub(crate) fn release(&self, platform: &Platform) {
+    pub(crate) fn release(&self) {
         let mut procedures = self.previous.lock().unwrap_or_else(|err| err.into_inner());
         self.input.store(ptr::null_mut(), Ordering::Release);
         self.session.store(0, Ordering::Release);
         procedures.retain(|&(owner, previous)| {
             let window = ptr::without_provenance_mut(owner);
-            platform.window_procedure_get(window) != procedure_address()
-                || platform.window_procedure_set(window, previous) == 0
+            Platform.window_procedure_get(window) != procedure_address()
+                || Platform.window_procedure_set(window, previous) == 0
         });
     }
 
@@ -273,17 +270,11 @@ impl Window {
 
     /// `rsfg_vk_present_marker`: only the booted Vulkan session's admitted window marks its
     /// Present. True when the marker was reported.
-    pub(crate) fn present_marker(
-        &self,
-        platform: &Platform,
-        vulkan: bool,
-        window: u64,
-        begin: u32,
-    ) -> bool {
+    pub(crate) fn present_marker(&self, vulkan: bool, window: u64, begin: u32) -> bool {
         if !vulkan || !self.admits_present(window) {
             return false;
         }
-        platform.vulkan_present_marker(begin);
+        Platform.vulkan_present_marker(begin);
         true
     }
 }

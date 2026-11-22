@@ -44,7 +44,7 @@ fn booted() -> Vulkan {
 fn configure(vulkan: &Vulkan, change: impl FnOnce(&mut Settings)) {
     let mut value = default_settings();
     change(&mut value);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &value), 1);
+    assert_eq!(vulkan.configure(&value), 1);
     fake::take_calls();
 }
 
@@ -68,11 +68,11 @@ fn pass(device: usize, output: (u32, u32)) -> VkSrPass {
 
 // vulkan/native.rs calls the SR section with the owner guard held.
 fn render(vulkan: &Vulkan, pass: &VkSrPass) -> c_int {
-    fake::LEAVES.vulkan_locked(|| vulkan.sr_render(&fake::LEAVES, pass))
+    Platform.vulkan_locked(|| vulkan.sr_render(pass))
 }
 
 fn status(vulkan: &Vulkan) -> Status {
-    vulkan.status(&fake::LEAVES).0
+    vulkan.status().0
 }
 
 fn handles(vulkan: &Vulkan) -> (u64, u64) {
@@ -226,11 +226,11 @@ fn four_refusals_are_logged_per_session() {
         .filter(|call| call.0 == "log")
         .count();
     assert_eq!(logs, 4);
-    vulkan.shutdown(&fake::LEAVES);
+    vulkan.shutdown();
     let mut setup = fake::setup(c"C:/game/runtime");
     setup.engine_version = ptr::null();
     setup.project_id = ptr::null();
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup), 1);
+    assert_eq!(vulkan.boot(&setup), 1);
     fake::take_vk_sr_calls();
     render(&vulkan, &pass(DEVICE, OUTPUT));
     assert!(fake::take_vk_sr_calls().contains(&("log", u64::from(VK_LOG_REJECTED))));
@@ -399,17 +399,17 @@ fn diagnostic_failures_preserve_fallback_and_evaluation_outcomes() {
     fake::VK_THROWS.set(Some("dump"));
     assert_eq!(render(&vulkan, &input), 1);
     assert!(fake::take_vk_sr_calls().contains(&("fallback", 0)));
-    assert_eq!(vulkan.status(&fake::LEAVES).0.refused_frames, 1);
+    assert_eq!(vulkan.status().0.refused_frames, 1);
 
     fake::VK_THROWS.set(Some("log"));
     assert_eq!(render(&vulkan, &input), 1);
     assert!(fake::take_vk_sr_calls().contains(&("fallback", 0)));
-    assert_eq!(vulkan.status(&fake::LEAVES).0.refused_frames, 2);
+    assert_eq!(vulkan.status().0.refused_frames, 2);
 
     fake::VK_EVALUATED.set(BACKEND_OK);
     fake::VK_THROWS.set(Some("dump"));
     assert_eq!(render(&vulkan, &input), 1);
-    assert_eq!(vulkan.status(&fake::LEAVES).0.evaluated_frames, 1);
+    assert_eq!(vulkan.status().0.evaluated_frames, 1);
     fake::VK_THROWS.set(None);
 }
 
@@ -422,13 +422,13 @@ fn shutdown_retires_the_contexts_between_the_presenter_drain_and_the_stop() {
     // The pass read the owner facts to resolve Auto.
     assert_eq!(fake::take_calls(), ["facts"]);
     fake::VK_DESTROY.set(-9);
-    assert_eq!(vulkan.shutdown(&fake::LEAVES), 0);
+    assert_eq!(vulkan.shutdown(), 0);
     assert!(vulkan.booted());
     assert!(fake::take_calls().is_empty());
     assert_eq!(handles(&vulkan), (context, 0));
     fake::VK_DESTROY.set(0);
     fake::take_vk_sr_calls();
-    assert_eq!(vulkan.shutdown(&fake::LEAVES), 1);
+    assert_eq!(vulkan.shutdown(), 1);
     assert_eq!(
         fake::take_vk_sr_calls(),
         [("drain", 1), ("idle", DEVICE as u64), ("destroy", context)]
@@ -440,7 +440,7 @@ fn shutdown_retires_the_contexts_between_the_presenter_drain_and_the_stop() {
     render(&vulkan, &pass(DEVICE, OUTPUT));
     fake::take_vk_sr_calls();
     fake::VK_DRAIN.set(-8);
-    assert_eq!(vulkan.shutdown(&fake::LEAVES), 0);
+    assert_eq!(vulkan.shutdown(), 0);
     assert_eq!(fake::take_vk_sr_calls(), [("drain", 1)]);
     fake::VK_DRAIN.set(0);
 }

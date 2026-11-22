@@ -25,12 +25,12 @@ pub(crate) fn setup(runtime: &CStr) -> Setup {
 pub(crate) fn boot_d3d12() -> crate::Control {
     let control = crate::Control::new();
     INSTALL_RESULT.set(0);
-    assert_eq!(control.boot(&LEAVES, &setup(c"C:/game/runtime")), 1);
+    assert_eq!(control.boot(&setup(c"C:/game/runtime")), 1);
     control
 }
 
 pub(crate) fn boot_vulkan(vulkan: &crate::vulkan::Vulkan, runtime: &CStr) {
-    assert_eq!(vulkan.boot(&LEAVES, &setup(runtime)), 1);
+    assert_eq!(vulkan.boot(&setup(runtime)), 1);
 }
 
 pub(crate) fn status_header() -> Status {
@@ -146,8 +146,6 @@ pub(crate) fn sharpening_defaults() -> Sharpening {
 }
 
 /// The test platform: every method records its call or answers from the thread-local settings.
-pub(crate) static LEAVES: Platform = Platform;
-
 impl Platform {
     pub(crate) fn tick_count(&self) -> u64 {
         41

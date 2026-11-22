@@ -13,7 +13,7 @@ const SR_DLSS: u32 = 1;
 fn configure(control: &Control, change: impl FnOnce(&mut Settings)) {
     let mut settings = default_settings();
     change(&mut settings);
-    assert_eq!(control.configure(&fake::LEAVES, &settings), 1);
+    assert_eq!(control.configure(&settings), 1);
 }
 
 fn pass(role: u32, frame: u64) -> rsf_game_render_pass {
@@ -44,7 +44,6 @@ fn list(frame: u64) -> usize {
 fn render_on(control: &Control, pass: &rsf_game_render_pass, commands: usize) -> c_int {
     control.d3d12.render(
         control,
-        &fake::LEAVES,
         ptr::without_provenance_mut(DEVICE),
         ptr::without_provenance_mut(QUEUE),
         ptr::without_provenance_mut(commands),
@@ -59,13 +58,13 @@ fn render(control: &Control, pass: &rsf_game_render_pass) -> c_int {
 fn submit(control: &Control, lists: &[usize]) {
     control
         .d3d12
-        .submitted(&fake::LEAVES, ptr::without_provenance_mut(QUEUE), lists);
+        .submitted(ptr::without_provenance_mut(QUEUE), lists);
 }
 
 fn status(control: &Control) -> Status {
     let mut value = fake::status_header();
     // SAFETY: a complete local record.
-    assert_eq!(unsafe { control.status(&fake::LEAVES, &mut value) }, 1);
+    assert_eq!(unsafe { control.status(&mut value) }, 1);
     value
 }
 
@@ -113,7 +112,6 @@ fn failed_fence_creation_retries_before_publishing_the_binding() {
     );
     let other = control.d3d12.render(
         &control,
-        &fake::LEAVES,
         ptr::without_provenance_mut(DEVICE + 1),
         ptr::without_provenance_mut(QUEUE),
         ptr::without_provenance_mut(list(3)),
@@ -259,11 +257,9 @@ fn each_slot_waits_for_its_own_last_submission() {
     assert_eq!(fake::take_d3d12_calls(), [("wait", 1), ("evaluate", 0)]);
     // An unmatched list or another queue signals nothing.
     submit(&control, &[list(9)]);
-    control.d3d12.submitted(
-        &fake::LEAVES,
-        ptr::without_provenance_mut(QUEUE + 1),
-        &[list(4)],
-    );
+    control
+        .d3d12
+        .submitted(ptr::without_provenance_mut(QUEUE + 1), &[list(4)]);
     assert!(fake::take_d3d12_calls().is_empty());
     submit(&control, &[list(4)]);
     assert_eq!(fake::take_d3d12_calls(), [("signal", 4)]);
@@ -280,7 +276,7 @@ fn a_slot_stays_owned_until_its_recording_is_fenced() {
     fake::take_d3d12_calls();
     assert_eq!(render(&control, &sr(4)), 0);
     assert_eq!(render(&control, &pass(RSF_GAME_RENDER_FINAL_SCENE, 4)), 0);
-    assert_eq!(control.d3d12.shutdown(&control, &fake::LEAVES), 0);
+    assert_eq!(control.d3d12.shutdown(&control), 0);
     assert!(fake::take_d3d12_calls().is_empty());
     submit(&control, &[list(1)]);
     assert_eq!(fake::take_d3d12_calls(), [("signal", 1)]);
@@ -387,21 +383,21 @@ fn input_refusals_are_logged_four_times_and_each_is_counted() {
 fn present_reuses_the_rendered_identity_or_reports_a_miss() {
     let control = fake::boot_d3d12();
     let chain = ptr::without_provenance_mut(CHAIN);
-    control.d3d12.present(&control, &fake::LEAVES, chain);
+    control.d3d12.present(&control, chain);
     assert_eq!(fake::WINDOW.get(), None);
-    control.d3d12.render_begin(&control, &fake::LEAVES, 1);
+    control.d3d12.render_begin(&control, 1);
     assert_eq!(render(&control, &sr(1)), 1);
-    control.d3d12.present(&control, &fake::LEAVES, chain);
+    control.d3d12.present(&control, chain);
     assert_eq!(
         fake::WINDOW.get(),
         Some((1, 42, RSF_GAME_RENDER_WINDOW, SCREEN_FLIGHT, CHAIN, 0))
     );
     assert_eq!(status(&control).active_sr, 1);
-    control.d3d12.render_begin(&control, &fake::LEAVES, 2);
+    control.d3d12.render_begin(&control, 2);
     fake::CAPTURE_SR_BEGIN.set(0);
     assert_eq!(render(&control, &sr(2)), 0);
     fake::CAPTURE_SR_BEGIN.set(1);
-    control.d3d12.present(&control, &fake::LEAVES, chain);
+    control.d3d12.present(&control, chain);
     assert_eq!(
         fake::WINDOW.get(),
         Some((2, 42, RSF_GAME_RENDER_WINDOW, SCREEN_UNKNOWN, CHAIN, 0))
@@ -410,8 +406,8 @@ fn present_reuses_the_rendered_identity_or_reports_a_miss() {
     // A render-begin leaf exception clears the frame, so Present has nothing to show.
     fake::WINDOW.set(None);
     fake::RENDER_BEGIN.set(0);
-    control.d3d12.render_begin(&control, &fake::LEAVES, 3);
-    control.d3d12.present(&control, &fake::LEAVES, chain);
+    control.d3d12.render_begin(&control, 3);
+    control.d3d12.present(&control, chain);
     assert_eq!(fake::WINDOW.get(), None);
 }
 
@@ -422,10 +418,10 @@ fn shutdown_drains_ends_the_fg_session_and_releases_the_context() {
     submit(&control, &[list(1)]);
     fake::take_d3d12_calls();
     fake::END_SESSION.set(0);
-    assert_eq!(control.d3d12.shutdown(&control, &fake::LEAVES), 0);
+    assert_eq!(control.d3d12.shutdown(&control), 0);
     assert_eq!(fake::take_d3d12_calls(), [("wait", 1), ("end_session", 42)]);
     fake::END_SESSION.set(1);
-    assert_eq!(control.d3d12.shutdown(&control, &fake::LEAVES), 1);
+    assert_eq!(control.d3d12.shutdown(&control), 1);
     assert_eq!(
         fake::take_d3d12_calls(),
         [

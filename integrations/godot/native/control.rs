@@ -72,16 +72,16 @@ pub(crate) const fn default_settings() -> Settings {
 }
 
 /// The refusal rules of `rsfg_configure`, applied before either backend sees the settings.
-pub(crate) fn settings_valid(platform: &Platform, value: &Settings) -> bool {
+pub(crate) fn settings_valid(value: &Settings) -> bool {
     value.sr_backend <= SR_AUTO
         && value.quality <= QUALITY_ULTRA_QUALITY
-        && platform.dlss_preset_valid(value.dlss_preset)
-        && (value.sharpening.struct_size == 0 || platform.sharpening_valid(&value.sharpening))
+        && Platform.dlss_preset_valid(value.dlss_preset)
+        && (value.sharpening.struct_size == 0 || Platform.sharpening_valid(&value.sharpening))
         && value.fg_mode <= FG_FIXED
         && value.latency_mode <= REFLEX_BOOST
         && (1..=MAX_GENERATED_FRAMES).contains(&value.generated_frames)
         && value.gameplay <= 1
-        && (platform.fg_backend_known(value.fg_backend) || value.fg_backend == FG_BACKEND_AUTO)
+        && (Platform.fg_backend_known(value.fg_backend) || value.fg_backend == FG_BACKEND_AUTO)
         && !(value.sr_backend == SR_DLSS && value.quality == QUALITY_ULTRA_QUALITY)
 }
 
@@ -242,7 +242,7 @@ impl Control {
 
     /// The D3D12 session. `setup` passed the size and ABI checks; its strings are borrowed for
     /// the call. A booted session stays booted for the process.
-    pub(crate) fn boot(&self, platform: &Platform, setup: &Setup) -> c_int {
+    pub(crate) fn boot(&self, setup: &Setup) -> c_int {
         if setup.runtime_directory.is_null()
             || setup.engine_version.is_null()
             || setup.project_id.is_null()
@@ -259,7 +259,7 @@ impl Control {
         if self.booted() {
             return 1;
         }
-        if !platform.prepare_capture() {
+        if !Platform.prepare_capture() {
             return 0;
         }
         // SAFETY: non-null NUL-terminated strings borrowed for the call.
@@ -271,7 +271,7 @@ impl Control {
             )
         };
         let paths = Box::leak(Box::new(SessionPaths::new(runtime, version, project)));
-        let session_id = platform.tick_count().wrapping_add(1);
+        let session_id = Platform.tick_count().wrapping_add(1);
         {
             let mut session = self.session();
             session.paths = Some(paths);
@@ -279,7 +279,7 @@ impl Control {
             session.log_user = setup.log_user as usize;
             session.status.session_id = session_id;
         }
-        let result = platform.fg_install(&paths.fg_install());
+        let result = Platform.fg_install(&paths.fg_install());
         self.session().status.fg_result = result;
         let booted = result == BACKEND_OK;
         self.booted.store(booted, Ordering::Release);
@@ -287,12 +287,12 @@ impl Control {
     }
 
     /// `settings` passed the size and ABI checks.
-    pub(crate) fn configure(&self, platform: &Platform, settings: &Settings) -> c_int {
-        if !settings_valid(platform, settings) {
+    pub(crate) fn configure(&self, settings: &Settings) -> c_int {
+        if !settings_valid(settings) {
             return 0;
         }
         if self.vulkan.booted() {
-            return self.vulkan.configure(platform, settings);
+            return self.vulkan.configure(settings);
         }
         {
             let mut session = self.session();
@@ -301,7 +301,7 @@ impl Control {
             }
             session.settings = *settings;
         }
-        platform.fg_options(&FgOptions {
+        Platform.fg_options(&FgOptions {
             mode: settings.fg_mode,
             generated_frames: settings.generated_frames,
             reflex_mode: settings.latency_mode,
@@ -331,12 +331,12 @@ impl Control {
 
     /// # Safety
     /// `output` passed the size and ABI checks and is writable for `rsf_godot_status`.
-    pub(crate) unsafe fn status(&self, platform: &Platform, output: *mut Status) -> c_int {
+    pub(crate) unsafe fn status(&self, output: *mut Status) -> c_int {
         if self.vulkan.booted() {
-            let (mut value, result) = self.vulkan.status(platform);
+            let (mut value, result) = self.vulkan.status();
             if result != 0 {
-                apply_inputs(&mut value, &platform.cpu_counters());
-                apply_window(&mut value, &platform.window_facts(self.window.input()));
+                apply_inputs(&mut value, &Platform.cpu_counters());
+                apply_window(&mut value, &Platform.window_facts(self.window.input()));
             }
             // SAFETY: the caller's guarantee.
             unsafe { output.write(value) };
@@ -346,9 +346,9 @@ impl Control {
             return 0;
         }
         let mut value = self.session().status;
-        apply_fg(&mut value, &platform.fg_facts());
-        apply_window(&mut value, &platform.window_facts(self.window.input()));
-        if let Some(latency) = platform.latency_facts() {
+        apply_fg(&mut value, &Platform.fg_facts());
+        apply_window(&mut value, &Platform.window_facts(self.window.input()));
+        if let Some(latency) = Platform.latency_facts() {
             apply_latency(&mut value, &latency);
         }
         // SAFETY: the caller's guarantee.

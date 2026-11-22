@@ -81,10 +81,7 @@ pub(crate) static FIELDS: FieldTable = FieldTable([
 /// The requested settings, or `None` when a checked field has the wrong type or range. Absent
 /// fields keep the defaults; present integers truncate to 32 bits and reals narrow to `f32`, the
 /// conversions the C++ class applied.
-pub(crate) fn compose(
-    platform: &Platform,
-    values: &[OptionValue; FIELD_COUNT],
-) -> Option<Settings> {
+pub(crate) fn compose(values: &[OptionValue; FIELD_COUNT]) -> Option<Settings> {
     let refused = values[..CHECKED].iter().any(|value| {
         value.present != 0
             && (!matches!(value.variant, VARIANT_INT | VARIANT_BOOL)
@@ -119,7 +116,7 @@ pub(crate) fn compose(
     settings.latency_mode = integer(LATENCY_MODE, settings.latency_mode);
     settings.frame_limit_us = integer(FRAME_LIMIT_US, settings.frame_limit_us);
     settings.gameplay = integer(GAMEPLAY, settings.gameplay);
-    let mut sharpening = platform.sharpening_defaults();
+    let mut sharpening = Platform.sharpening_defaults();
     sharpening.mode = integer(SHARPENING_MODE, sharpening.mode);
     sharpening.sharpness = real(SHARPENING_SHARPNESS, sharpening.sharpness);
     sharpening.mas = integer(SHARPENING_MAS, sharpening.mas);
@@ -173,8 +170,7 @@ pub(crate) unsafe extern "C" fn rsf_godot_extension_configure(
             return 0;
         }
     }
-    compose(&crate::platform::Platform, &values)
-        .map_or(0, |value| crate::CONTROL.configure_engine(&value, viewport))
+    compose(&values).map_or(0, |value| crate::CONTROL.configure_engine(&value, viewport))
 }
 
 /// The scripting status schema. Godot's callback materializes the scalar values

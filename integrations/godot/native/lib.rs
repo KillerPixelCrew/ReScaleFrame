@@ -114,7 +114,7 @@ unsafe fn rsf_godot_boot(setup: *const Setup) -> c_int {
     let Some(setup) = (unsafe { checked(setup, ABI_VERSION) }) else {
         return 0;
     };
-    let result = CONTROL.boot(&Platform, setup);
+    let result = CONTROL.boot(setup);
     if result != 0 {
         CONTROL.window.bind_cpu_service(Platform.cpu_service(false));
     }
@@ -126,7 +126,7 @@ unsafe fn rsf_godot_boot(setup: *const Setup) -> c_int {
 unsafe fn rsf_godot_configure(settings: *const Settings) -> c_int {
     // SAFETY: the caller's guarantee.
     unsafe { checked(settings, SETTINGS_ABI_VERSION) }
-        .map_or(0, |settings| CONTROL.configure(&Platform, settings))
+        .map_or(0, |settings| CONTROL.configure(settings))
 }
 
 /// # Safety
@@ -144,7 +144,7 @@ unsafe extern "C" fn rsfg_settings(settings: *mut Settings) -> c_int {
 unsafe extern "C" fn rsfg_status(status: *mut Status) -> c_int {
     // SAFETY: the caller's guarantee; checked_output established the record.
     unsafe { checked_output(status, ABI_VERSION) }
-        .map_or(0, |status| unsafe { CONTROL.status(&Platform, status) })
+        .map_or(0, |status| unsafe { CONTROL.status(status) })
 }
 
 // The D3D12 SR context and submission owner (d3d12.rs), called by the rsfg_* entries in runtime.rs
@@ -159,7 +159,7 @@ unsafe extern "C" fn rsfg_submitted(queue: *mut c_void, lists: *const *mut c_voi
     }
     // SAFETY: `count` readable command list pointers, compared by address only.
     let lists = unsafe { std::slice::from_raw_parts(lists.cast::<usize>(), count as usize) };
-    CONTROL.d3d12.submitted(&Platform, queue, lists);
+    CONTROL.d3d12.submitted(queue, lists);
 }
 
 /// # Safety
@@ -167,7 +167,7 @@ unsafe extern "C" fn rsfg_submitted(queue: *mut c_void, lists: *const *mut c_voi
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_present(chain: *mut c_void) {
     if CONTROL.booted() && !chain.is_null() {
-        CONTROL.d3d12.present(&CONTROL, &Platform, chain);
+        CONTROL.d3d12.present(&CONTROL, chain);
     }
 }
 
@@ -233,7 +233,7 @@ unsafe extern "C" fn rsfg_cpu(event: *const rsf_game_cpu_event) {
         Some(&size) if size as usize >= size_of::<rsf_game_cpu_event>() => unsafe { &*event },
         _ => return,
     };
-    CONTROL.window.cpu(&Platform, event);
+    CONTROL.window.cpu(event);
 }
 
 /// Request a PCL ping for the admitted window.
@@ -247,7 +247,7 @@ extern "C" fn rsfg_request_latency_ping() -> c_int {
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_vk_window(window: *mut c_void) {
     if CONTROL.vulkan.booted() {
-        CONTROL.window.accept(&Platform, window);
+        CONTROL.window.accept(window);
         CONTROL.vulkan.report_window(window);
     }
 }

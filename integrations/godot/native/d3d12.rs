@@ -178,7 +178,6 @@ impl D3d12 {
     pub(crate) fn render(
         &self,
         control: &Control,
-        platform: &Platform,
         device: *mut c_void,
         queue: *mut c_void,
         commands: *mut c_void,
@@ -193,26 +192,26 @@ impl D3d12 {
             }
             match ledger.bound {
                 // Binding creates the fence and calls no owner.
-                None if platform.d3d12_bind(device, queue) => ledger.bound = Some(identity),
+                None if Platform.d3d12_bind(device, queue) => ledger.bound = Some(identity),
                 Some(bound) if bound == identity => {}
                 _ => return 0,
             }
         }
-        if pass.role == RSF_GAME_RENDER_SR && !platform.capture_sr_begin(pass) {
+        if pass.role == RSF_GAME_RENDER_SR && !Platform.capture_sr_begin(pass) {
             return 0;
         }
         if pass.role == RSF_GAME_RENDER_FINAL_SCENE {
-            return self.final_scene(platform, commands, pass);
+            return self.final_scene(commands, pass);
         }
         let (settings, generation) = control.snapshot();
         let fg = match settings.fg_backend {
-            FG_BACKEND_AUTO => platform.fg_default_backend(),
+            FG_BACKEND_AUTO => Platform.fg_default_backend(),
             backend => backend,
         };
-        if let Some(current) = platform.present_owner()
+        if let Some(current) = Platform.present_owner()
             && fg != current
         {
-            platform.present_request(fg);
+            Platform.present_request(fg);
         }
         let camera = &pass.camera;
         let output = (camera.output_width, camera.output_height);
@@ -229,28 +228,28 @@ impl D3d12 {
         };
         if let Some((handle, submitted)) = retire {
             // All submitted work drains before the context is destroyed.
-            if !platform.d3d12_wait(submitted) {
+            if !Platform.d3d12_wait(submitted) {
                 return 0;
             }
-            platform.sr_destroy(handle as *mut c_void);
+            Platform.sr_destroy(handle as *mut c_void);
             self.ledger().context = None;
         }
         let existing = self.ledger().context;
-        let Some(context) = existing
-            .or_else(|| self.create(control, platform, &settings, generation, output, render))
+        let Some(context) =
+            existing.or_else(|| self.create(control, &settings, generation, output, render))
         else {
             return 0;
         };
-        let Some(slot) = self.acquire_slot(platform) else {
+        let Some(slot) = self.acquire_slot() else {
             return 0;
         };
         let request = SrEvaluate {
             slot,
             screen: screen(&settings, pass.screen),
-            sharpening: sharpening(platform, &settings),
+            sharpening: sharpening(&settings),
         };
         let Some(evaluated) =
-            platform.sr_evaluate(context.handle as *mut c_void, commands, pass, &request)
+            Platform.sr_evaluate(context.handle as *mut c_void, commands, pass, &request)
         else {
             return 0;
         };
@@ -264,7 +263,7 @@ impl D3d12 {
             (ledger.plan, diagnose)
         };
         if diagnose {
-            platform.sr_refusal_log(pass, plan);
+            Platform.sr_refusal_log(pass, plan);
         }
         // The driver submission callback signals this pending slot after recording is submitted.
         let context_result = {
@@ -299,7 +298,7 @@ impl D3d12 {
     }
 
     /// Reuse descriptors only after the slot's last submission completed.
-    fn acquire_slot(&self, platform: &Platform) -> Option<u32> {
+    fn acquire_slot(&self) -> Option<u32> {
         let (slot, fence) = {
             let ledger = self.ledger();
             let slot = ledger.next_slot % SLOTS;
@@ -310,7 +309,7 @@ impl D3d12 {
             }
             (slot, ledger.slots[slot as usize])
         };
-        if !platform.d3d12_wait(fence) {
+        if !Platform.d3d12_wait(fence) {
             return None;
         }
         self.ledger().next_slot = (slot + 1) % SLOTS;
@@ -319,12 +318,7 @@ impl D3d12 {
 
     /// The HUD-less record can share this source's admitted SR slot while its lists are pending
     /// on the same queue. After submission it must wait for that slot's completion fence.
-    fn final_scene(
-        &self,
-        platform: &Platform,
-        commands: *mut c_void,
-        pass: &rsf_game_render_pass,
-    ) -> c_int {
+    fn final_scene(&self, commands: *mut c_void, pass: &rsf_game_render_pass) -> c_int {
         let source = (pass.session_id, pass.source_frame_id);
         let (attempted, admitted) = {
             let mut ledger = self.ledger();
@@ -348,7 +342,7 @@ impl D3d12 {
                     Some(ledger.slots[slot as usize])
                 }
             };
-            if fence.is_some_and(|fence| !platform.d3d12_wait(fence)) {
+            if fence.is_some_and(|fence| !Platform.d3d12_wait(fence)) {
                 return 0;
             }
             slot
@@ -356,12 +350,12 @@ impl D3d12 {
             if attempted {
                 return 0;
             }
-            let Some(slot) = self.acquire_slot(platform) else {
+            let Some(slot) = self.acquire_slot() else {
                 return 0;
             };
             slot
         };
-        if !platform.final_scene(commands, pass, slot) {
+        if !Platform.final_scene(commands, pass, slot) {
             return 0;
         }
         let mut ledger = self.ledger();
@@ -384,7 +378,6 @@ impl D3d12 {
     fn create(
         &self,
         control: &Control,
-        platform: &Platform,
         settings: &Settings,
         generation: u64,
         output: (u32, u32),
@@ -393,7 +386,7 @@ impl D3d12 {
         let paths = control.paths()?;
         let mut backend = settings.sr_backend;
         if backend == SR_AUTO {
-            backend = platform.sr_default_backend();
+            backend = Platform.sr_default_backend();
         }
         // Godot evaluates FSR1 before the callback; the context only normalises its inputs.
         if backend == SR_SPATIAL {
@@ -410,12 +403,12 @@ impl D3d12 {
             paths,
         };
         let plan = self.ledger().plan;
-        let mut created = platform.sr_create(&request, plan)?;
+        let mut created = Platform.sr_create(&request, plan)?;
         self.ledger().context_result = created.result;
         if created.handle.is_null() && backend != SR_NONE {
             request.backend = SR_NONE;
             created =
-                platform.sr_create(&request, (created.desired_width, created.desired_height))?;
+                Platform.sr_create(&request, (created.desired_width, created.desired_height))?;
             backend = SR_NONE;
         }
         if created.handle.is_null() {
@@ -435,7 +428,7 @@ impl D3d12 {
 
     /// `rsfg_submitted`: one engine submission on `queue`. When it carries pending command
     /// lists, the fence is signalled once for all of them and each slot takes that value.
-    pub(crate) fn submitted(&self, platform: &Platform, queue: *mut c_void, lists: &[usize]) {
+    pub(crate) fn submitted(&self, queue: *mut c_void, lists: &[usize]) {
         let hudless = {
             let mut ledger = self.ledger();
             if ledger
@@ -452,7 +445,7 @@ impl D3d12 {
             }
             // A later signal on this queue also covers previously reported lists.
             let value = ledger.submitted.wrapping_add(1);
-            if !platform.d3d12_signal(value) {
+            if !Platform.d3d12_signal(value) {
                 return;
             }
             ledger.submitted = value;
@@ -475,12 +468,12 @@ impl D3d12 {
             hudless
         };
         for (session, frame) in hudless {
-            platform.fg_submitted(session, frame);
+            Platform.fg_submitted(session, frame);
         }
     }
 
     /// `rsfg_render_begin` on a booted session. A leaf exception clears the frame, as before.
-    pub(crate) fn render_begin(&self, control: &Control, platform: &Platform, frame: u64) {
+    pub(crate) fn render_begin(&self, control: &Control, frame: u64) {
         {
             let mut ledger = self.ledger();
             ledger.current_frame = frame;
@@ -488,14 +481,14 @@ impl D3d12 {
             ledger.attempted_sr = None;
             ledger.sr_slot = None;
         }
-        if frame != 0 && !platform.render_begin(control.session_id(), frame) {
+        if frame != 0 && !Platform.render_begin(control.session_id(), frame) {
             self.ledger().current_frame = 0;
         }
     }
 
     /// `rsfg_present` on a booted session: the current frame's rendered identity, or a bare
     /// identity and a missed SR report when no pass rendered it.
-    pub(crate) fn present(&self, control: &Control, platform: &Platform, chain: *mut c_void) {
+    pub(crate) fn present(&self, control: &Control, chain: *mut c_void) {
         let (current, rendered) = {
             let ledger = self.ledger();
             (ledger.current_frame, ledger.rendered)
@@ -521,13 +514,13 @@ impl D3d12 {
         };
         pass.role = RSF_GAME_RENDER_WINDOW;
         pass.swapchain = chain;
-        platform.present_window(&pass);
+        Platform.present_window(&pass);
     }
 
     /// The D3D12 branch of `rsfg_shutdown`: drain every submission, end the FG session, then
     /// flush capture, destroy the context and cancel the session's frame dump. A refusal at any
     /// step keeps the context.
-    pub(crate) fn shutdown(&self, control: &Control, platform: &Platform) -> c_int {
+    pub(crate) fn shutdown(&self, control: &Control) -> c_int {
         let session = control.session_id();
         let (submitted, handle) = {
             let ledger = self.ledger();
@@ -539,10 +532,10 @@ impl D3d12 {
                 ledger.context.map_or(0, |context| context.handle),
             )
         };
-        if !platform.d3d12_wait(submitted) || !platform.fg_end_session(session) {
+        if !Platform.d3d12_wait(submitted) || !Platform.fg_end_session(session) {
             return 0;
         }
-        if !platform.d3d12_release(handle as *mut c_void, session) {
+        if !Platform.d3d12_release(handle as *mut c_void, session) {
             return 0;
         }
         self.ledger().context = None;
@@ -552,11 +545,11 @@ impl D3d12 {
 
 /// The requested sharpening, or the Runtime defaults when none was requested. The Vulkan SR
 /// owner (`vulkan/sr.rs`) applies the same rule.
-pub(crate) fn sharpening(platform: &Platform, settings: &Settings) -> Sharpening {
+pub(crate) fn sharpening(settings: &Settings) -> Sharpening {
     if settings.sharpening.struct_size != 0 {
         settings.sharpening
     } else {
-        platform.sharpening_defaults()
+        Platform.sharpening_defaults()
     }
 }
 

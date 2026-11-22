@@ -122,7 +122,7 @@ pub(super) extern "C" fn rsfg_vulkan_supported() -> i32 {
     i32::from(features().sr != 0)
 }
 
-// The Vulkan side of the platform. The graphics guard serializes these calls, which only
+// The Vulkan side of the Platform. The graphics guard serializes these calls, which only
 // `Control`/`vulkan.rs` make inside `vulkan_locked`; context handles are the Runtime's, and `call`
 // is the live pass record of `render`. A `None` completion means the call was refused.
 impl Platform {
@@ -366,7 +366,7 @@ unsafe extern "C" fn rsfg_boot_vulkan(setup: *const Setup) -> i32 {
     let Some(setup) = (unsafe { crate::checked(setup, ABI_VERSION) }) else {
         return 0;
     };
-    let result = CONTROL.vulkan.boot(&Platform, setup);
+    let result = CONTROL.vulkan.boot(setup);
     if result != 0 {
         CONTROL.window.bind_cpu_service(Platform.cpu_service(true));
     }
@@ -404,7 +404,7 @@ unsafe extern "C" fn rsfg_vk_create(
         .vulkan
         .creation()
         .report_render_device(setup.graphics.device);
-    let (view, _) = CONTROL.vulkan.view(&Platform);
+    let (view, _) = CONTROL.vulkan.view();
     let requested = view.settings;
     let selected = view.fg_backend;
     let mut value = *setup;
@@ -507,7 +507,7 @@ unsafe extern "C" fn rsfg_vk_acquire(
     if unsafe { rsf_fgvk_backend(owner.cast(), &mut backend) } != BACKEND_OK {
         return VK_INIT_FAILED;
     }
-    if !CONTROL.vulkan.presenter_current(&Platform, backend) {
+    if !CONTROL.vulkan.presenter_current(backend) {
         return vk::Result::ERROR_OUT_OF_DATE_KHR.as_raw();
     }
     unsafe { rsf_fgvk_acquire(owner.cast(), timeout, semaphore, fence, index) }
@@ -541,7 +541,7 @@ fn capture_present(owner: *mut rsf_fgvk, info: *const c_void, result: i32, begin
     if frame == 0 {
         return;
     }
-    let (view, _) = CONTROL.vulkan.view(&Platform);
+    let (view, _) = CONTROL.vulkan.view();
     let refused = state()
         .capture
         .present(owner, info, result, begin, &view, frame);
@@ -785,7 +785,7 @@ unsafe fn render(
         render_width: camera.render_width,
         render_height: camera.render_height,
     };
-    CONTROL.vulkan.sr_render(&Platform, &sr)
+    CONTROL.vulkan.sr_render(&sr)
 }
 
 #[unsafe(no_mangle)]
