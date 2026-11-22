@@ -318,7 +318,6 @@ unsafe fn copy_text<const N: usize>(destination: &mut [c_char; N], source: *cons
     true
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_create(
     setup: *const Setup,
     device: Handle,
@@ -391,7 +390,6 @@ unsafe fn create_host(
     Ok(())
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_destroy(host: *mut Host, platform: &Platform) -> i32 {
     if Output::active_here() {
         return NOT_READY;
@@ -412,7 +410,6 @@ unsafe extern "C" fn rsf_core_slhost_destroy(host: *mut Host, platform: &Platfor
 
 // Only the presentation owner calls this around physical Presents that bypass the proxy.
 // No lock spans the vendor lookup or either hook.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_present_common(
     host: *const Host,
     chain: Handle,
@@ -451,12 +448,10 @@ unsafe extern "C" fn rsf_core_slhost_present_common(
 }
 
 // The native state of a live host, for the native-only graphics and presentation entries.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_native(host: *mut Host) -> Handle {
     unsafe { host.as_ref() }.map_or(null_mut(), |host| host.native)
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_module(host: *const Host) -> Handle {
     unsafe { host.as_ref() }
         .and_then(|host| host.module.as_ref())
@@ -477,7 +472,6 @@ pub(crate) unsafe fn rsf_core_slhost_token(host: *mut Host, id: u64) -> Handle {
         .map_or(null_mut(), |token| token.handle.as_ptr())
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_begin(host: *mut Host, id: u64, platform: &Platform) -> i32 {
     let Some(host) = (unsafe { host.as_ref() }) else {
         return INVALID;
@@ -497,12 +491,10 @@ fn begin(host: &Host, id: u64, platform: &Platform) -> i32 {
     result
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_acquire(host: *mut Host, id: u64, platform: &Platform) -> i32 {
     unsafe { host.as_ref() }.map_or(INVALID, |host| acquire(host, id, platform))
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_sleep(host: *mut Host, id: u64, platform: &Platform) -> i32 {
     unsafe { host.as_ref() }.map_or(INVALID, |host| sleep(host, id, platform))
 }
@@ -644,7 +636,6 @@ fn latency_ring(host: &Host, platform: &Platform, reason: &CStr, source: u64) {
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_marker(
     host: *mut Host,
     id: u64,
@@ -711,7 +702,6 @@ fn controller_sample(host: &Host, frames: &mut Frames, slot: usize, platform: &P
 }
 
 // SR's shared constants for this frame's token. Each viewport is set once per frame.
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_common(
     host: *mut Host,
     id: u64,
@@ -749,7 +739,6 @@ fn common_for(
     true
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_presented(host: *mut Host, id: u64) -> i32 {
     let Some(host) = (unsafe { host.as_ref() }) else {
         return 0;
@@ -762,7 +751,6 @@ unsafe extern "C" fn rsf_core_slhost_presented(host: *mut Host, id: u64) -> i32 
         .into()
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_input(
     host: *mut Host,
     id: u64,
@@ -826,12 +814,10 @@ fn abort_for(host: &Host, id: u64) -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_abort(host: *mut Host, id: u64) -> i32 {
     unsafe { host.as_ref() }.map_or(INVALID, |host| abort_for(host, id))
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_reset_sources(host: *mut Host) -> i32 {
     let Some(host) = (unsafe { host.as_ref() }) else {
         return INVALID;
@@ -844,7 +830,6 @@ unsafe extern "C" fn rsf_core_slhost_reset_sources(host: *mut Host) -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_retire_through(host: *mut Host, id: u64) -> i32 {
     let Some(host) = (unsafe { host.as_ref() }) else {
         return INVALID;
@@ -860,7 +845,6 @@ unsafe extern "C" fn rsf_core_slhost_retire_through(host: *mut Host, id: u64) ->
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_reflex(
     host: *mut Host,
     mode: u32,
@@ -901,7 +885,6 @@ fn reflex(host: &Host, mode: u32, limit: u32, platform: &Platform) -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_latency_status(
     host: *mut Host,
     out: *mut LatencyStatus,
@@ -954,7 +937,6 @@ unsafe extern "C" fn rsf_core_slhost_latency_status(
     OK
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_generation_load(
     host: *mut Host,
     enabled: u32,

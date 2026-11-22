@@ -275,7 +275,6 @@ unsafe fn same_text(requested: *const c_char, owned: &[c_char]) -> bool {
 }
 
 // The native entry validated the setup header and cleared both outputs.
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_create(
     setup: *const GenerationSetup,
     out: *mut Handle,
@@ -388,7 +387,6 @@ unsafe fn session<'a>(pointer: Handle) -> Option<&'a Session> {
     unsafe { pointer.cast::<Session>().as_ref() }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_configure(
     pointer: Handle,
     options: *const Options,
@@ -468,7 +466,6 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_configure(
     OK
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_begin(
     pointer: Handle,
     id: u64,
@@ -488,7 +485,6 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_begin(
     result
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_marker(
     pointer: Handle,
     marker: u32,
@@ -501,7 +497,6 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_marker(
     })
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_prepare(
     pointer: Handle,
     command: Handle,
@@ -611,7 +606,6 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_prepare(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_after(
     pointer: Handle,
     platform: &Platform,
@@ -619,7 +613,6 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_after(
     unsafe { session(pointer) }.map_or(INVALID, |session| poll(session, platform))
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_status(
     pointer: Handle,
     out: *mut Status,
@@ -634,7 +627,6 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_status(
     OK
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_retirement(
     pointer: Handle,
     out: *mut Retirement,
@@ -653,7 +645,6 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_retirement(
     OK
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_destroy(
     pointer: Handle,
     platform: &Platform,
@@ -666,7 +657,6 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_destroy(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_slhost_session_abort(pointer: Handle, id: u64) -> i32 {
     let Some(session) = (unsafe { session(pointer) }) else {
         return INVALID;
