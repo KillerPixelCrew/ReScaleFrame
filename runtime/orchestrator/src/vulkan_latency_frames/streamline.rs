@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{FRAMES, Frame, INVALID_ARGUMENT, LegacyPresent, NOT_READY};
 use crate::input_receipts::streamline_input;
-use crate::sys::rsf_vk_token_calls as SdkTokens;
+use crate::vulkan_latency::TokenCalls as SdkTokens;
 use crate::vulkan_latency::rsf_core_latencyvk_sdk_result as sdk_result;
 use rsf_game_sys::backend_result::FEATURE_FAILED;
 

@@ -4,13 +4,6 @@
    contexts and teardown. This unit checks the SDK C layouts and values that the
    Rust owner mirrors while those records are hand-written. */
 #include "native_xess_vulkan.h"
-#include "rust_export.h"
-
-/* The public entry points are Rust (vulkan_sr/xess.rs); the Runtime DLL exports them here. */
-RSF_EXPORT(rsf_xessvk_initialize)
-RSF_EXPORT(rsf_xessvk_instance_requirements)
-RSF_EXPORT(rsf_xessvk_device_requirements)
-RSF_EXPORT(rsf_xessvk_shutdown)
 
 #if defined(RSF_HAVE_XESS_VK)
 #define VK_NO_PROTOTYPES

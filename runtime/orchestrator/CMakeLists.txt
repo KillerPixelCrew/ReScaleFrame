@@ -44,11 +44,17 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_STREAMLINE AND EXISTS "${RSF_STREAMLINE_VK_RUNTI
     include("${CMAKE_SOURCE_DIR}/runtime/vulkan/streamline/verify-receipt.cmake")
     rsf_streamline_receipt("${RSF_STREAMLINE_VK_RUNTIME}" RSF_STREAMLINE_VK_DIGEST)
     set(rsf_orchestrator_env ENV "RSF_CORRECTED_STREAMLINE_SHA256=${RSF_STREAMLINE_VK_DIGEST}")
-endif()# The vendor headers cmake/vendor.cmake found select the D3D12 FidelityFX and XeSS providers and the
-# XeSS Vulkan SR table.
+endif()# The vendor headers cmake/vendor.cmake found select the D3D12 FidelityFX and XeSS providers, the
+# XeSS Vulkan SR table, AMD Anti-Lag 2 for Vulkan and, with a verified runtime, Streamline Vulkan.
 set(rsf_orchestrator_features)
 if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_VK)
     list(APPEND rsf_orchestrator_features --features xess-vk)
+endif()
+if(RSF_HAVE_VULKAN)
+    list(APPEND rsf_orchestrator_features --features antilag-vk)
+endif()
+if(RSF_HAVE_VULKAN AND RSF_STREAMLINE_VK_DIGEST)
+    list(APPEND rsf_orchestrator_features --features streamline-vk)
 endif()
 foreach(rsf_vendor "FFX;ffx" "FFX_FG;ffx-fg" "XESS;xess" "XESS_FG;xess-fg")
     list(GET rsf_vendor 0 rsf_vendor_flag)
@@ -87,10 +93,9 @@ target_link_libraries(rsf_orchestrator_core PRIVATE d3dcompiler bcrypt)
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::FrameDump)
 add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
-add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.c src/native_dlss_vulkan.c src/native_xess_vulkan.c src/native_fg_vulkan.c src/native_fg_vulkan_dispatch.c src/native_fg_dlss_vulkan.c src/native_latency_vulkan.c)
-target_sources(rsf_native_vulkan PRIVATE src/latency_amd_vulkan.c)
+add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.c src/native_dlss_vulkan.c src/native_xess_vulkan.c src/native_fg_vulkan.c src/native_fg_vulkan_dispatch.c src/native_fg_dlss_vulkan.c
+    src/native_vulkan_exports.c)
 if(RSF_HAVE_VULKAN)
-    target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_ANTILAG_VK=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()
 target_include_directories(rsf_native_vulkan PUBLIC include)
@@ -132,7 +137,6 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_FG)
     target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust d3d12 dxgi)
 endif()
 if(RSF_STREAMLINE_VK_DIGEST)
-    target_sources(rsf_native_vulkan PRIVATE src/native_latency_streamline_exceptions.c)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_STREAMLINE_VK=1 RSF_STREAMLINE_VULKAN_STATIC=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_STREAMLINE_INCLUDE}")
     # The interposer lifecycle is Rust (rsf-streamline-vk, inside the Runtime archive); the standalone

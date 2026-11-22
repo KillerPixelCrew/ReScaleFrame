@@ -34,6 +34,10 @@ xess = []
 xess-fg = []
 # The XeSS Vulkan SR table, built with the Vulkan and XeSS Vulkan headers.
 xess-vk = []
+# Streamline Vulkan Reflex/PCL through rsf-streamline-vk, set when CMake verified the corrected runtime.
+streamline-vk = []
+# AMD Anti-Lag 2 for Vulkan, built with the Vulkan headers.
+antilag-vk = []
 
 [dev-dependencies]
 rsf-graphics = { path = "../graphics/rust", features = ["test-support"] }

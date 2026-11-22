@@ -184,9 +184,15 @@ unsafe extern "C" {
 
 /// Runs one SDK call. A foreign C++ exception from the SDK returns
 /// eErrorExceptionHandler.
-pub fn guarded<F: FnMut() -> i32>(mut call: F) -> i32 {
+pub fn guarded<F: FnMut() -> i32>(call: F) -> i32 {
+    guarded_or(EXCEPTION_HANDLER, call)
+}
+
+/// Runs call, which may enter foreign C++ code through C-unwind calls; a foreign C++ exception
+/// (MSVC SEH code 0xE06D7363) returns 	hrown. Other faults propagate.
+pub fn guarded_or<F: FnMut() -> i32>(thrown: i32, mut call: F) -> i32 {
     unsafe extern "C-unwind" fn thunk<F: FnMut() -> i32>(user: *mut c_void) -> i32 {
         unsafe { (*user.cast::<F>())() }
     }
-    unsafe { rsf_slvk_guarded(thunk::<F>, (&raw mut call).cast(), EXCEPTION_HANDLER) }
+    unsafe { rsf_slvk_guarded(thunk::<F>, (&raw mut call).cast(), thrown) }
 }

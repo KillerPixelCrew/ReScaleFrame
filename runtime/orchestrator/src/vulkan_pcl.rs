@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::native_cpu::rsf_native_cpu_ping_message;
-use crate::sys::rsf_vk_pcl_calls as Sdk;
+use crate::vulkan_latency::PclCalls as Sdk;
 use crate::vulkan_latency::rsf_core_latencyvk_sdk_result as sdk_result;
 use rsf_game_sys::backend_result::{FEATURE_FAILED, NOT_READY};
 use rsf_game_sys::{

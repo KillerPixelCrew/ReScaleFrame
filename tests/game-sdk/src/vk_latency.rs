@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::*;
+use rsf_orchestrator::vulkan_latency_api::*;
 use std::ffi::{c_char, c_void};
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
@@ -153,8 +154,7 @@ impl Drop for PresentationLease {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_fgvk_backend(context: *const rsf_fgvk, backend: *mut u32) -> i32 {
+unsafe extern "C" fn fake_fgvk_backend(context: *const rsf_fgvk, backend: *mut u32) -> i32 {
     if AMD_FIXTURE.load(Relaxed) && context != identity(4) {
         return NOT_READY;
     }
@@ -165,8 +165,7 @@ unsafe extern "C" fn rsf_test_fgvk_backend(context: *const rsf_fgvk, backend: *m
     OK
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_test_fgvk_latency_options(context: *mut rsf_fgvk, mode: u32, _: u32) -> i32 {
+extern "C" fn fake_fgvk_latency_options(context: *mut rsf_fgvk, mode: u32, _: u32) -> i32 {
     if AMD_FIXTURE.load(Relaxed) {
         return if context == identity(4) {
             OK
@@ -177,24 +176,21 @@ extern "C" fn rsf_test_fgvk_latency_options(context: *mut rsf_fgvk, mode: u32, _
     streamline::xell_options(mode)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_test_fgvk_latency_sleep(context: *mut rsf_fgvk, _: u64) -> i32 {
+extern "C" fn fake_fgvk_latency_sleep(context: *mut rsf_fgvk, _: u64) -> i32 {
     if AMD_FIXTURE.load(Relaxed) {
         return NOT_READY;
     }
     streamline::xell_sleep(context)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_test_fgvk_latency_marker(_: *mut rsf_fgvk, frame: u64, kind: u32) -> i32 {
+extern "C" fn fake_fgvk_latency_marker(_: *mut rsf_fgvk, frame: u64, kind: u32) -> i32 {
     if AMD_FIXTURE.load(Relaxed) {
         return NOT_READY;
     }
     streamline::xell_marker(frame, kind)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_test_fgvk_latency_get_status(
+unsafe extern "C" fn fake_fgvk_latency_get_status(
     _: *mut rsf_fgvk,
     out: *mut rsf_fgvk_latency_status,
 ) -> i32 {
@@ -214,4 +210,89 @@ extern "C" fn rsf_native_antilag_vulkan_fixture() -> i32 {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_native_latency_vulkan_fixture() -> i32 {
     crate::run(streamline::run)
+}
+
+// The latency owner with this fixture's FG endpoints and, outside the Anti-Lag case, the fake
+// Streamline; the public names below call it as the Runtime's exports call the production table.
+static STREAMLINE_PLATFORM: Platform = Platform {
+    streamline: &streamline::SDK,
+    backend: Some(fake_fgvk_backend),
+    options: Some(fake_fgvk_latency_options),
+    sleep: Some(fake_fgvk_latency_sleep),
+    marker: Some(fake_fgvk_latency_marker),
+    status: Some(fake_fgvk_latency_get_status),
+};
+static AMD_PLATFORM: Platform = Platform {
+    streamline: null(),
+    ..STREAMLINE_PLATFORM
+};
+
+fn platform() -> &'static Platform {
+    if AMD_FIXTURE.load(Relaxed) {
+        &AMD_PLATFORM
+    } else {
+        &STREAMLINE_PLATFORM
+    }
+}
+
+fn amd() -> bool {
+    AMD_FIXTURE.load(Relaxed)
+}
+
+unsafe fn rsf_latencyvk_initialize(setup: *const rsf_latencyvk_setup) -> i32 {
+    unsafe { rsf_core_latencyvk_initialize(platform(), setup) }
+}
+unsafe fn rsf_slvk_initialize(setup: *const rsf_slvk_setup) -> i32 {
+    unsafe { rsf_core_slvk_initialize(platform(), setup) }
+}
+unsafe fn rsf_slvk_invoke(call: *const rsf_slvk_call) -> i32 {
+    unsafe { rsf_core_slvk_invoke(platform(), call) }
+}
+unsafe fn rsf_latencyvk_options(mode: u32, limit: u32) -> i32 {
+    rsf_core_latencyvk_options(platform(), mode, limit)
+}
+unsafe fn rsf_latencyvk_presentation(context: *mut c_void) -> i32 {
+    rsf_core_latencyvk_presentation(platform(), context.cast())
+}
+unsafe fn rsf_latencyvk_submit_end(frame: u64) {
+    rsf_core_latencyvk_submit_end(platform(), frame);
+}
+unsafe fn rsf_latencyvk_cpu(event: *const rsf_game_cpu_event) {
+    unsafe { rsf_core_latencyvk_cpu(platform(), event) };
+}
+unsafe fn rsf_latencyvk_input(frame: u64, kind: u32, message: u32) -> i32 {
+    rsf_core_latencyvk_input(platform(), 0, frame, kind, message)
+}
+unsafe fn rsf_latencyvk_render(frame: u64) {
+    rsf_core_latencyvk_render(platform(), frame);
+}
+unsafe fn rsf_latencyvk_present(begin: u32) {
+    rsf_core_latencyvk_present(platform(), begin);
+}
+unsafe fn rsf_latencyvk_execution(pass: *const rsf_game_render_pass, begin: u32) -> i32 {
+    unsafe { rsf_core_latencyvk_submit(platform(), pass, begin) }
+}
+unsafe fn rsf_latencyvk_get_status(status: *mut rsf_latencyvk_status) -> i32 {
+    unsafe { rsf_core_latencyvk_get_status(platform(), status) }
+}
+unsafe fn rsf_latencyvk_shutdown() -> i32 {
+    rsf_core_latencyvk_shutdown(platform())
+}
+unsafe fn rsf_slvk_without_dlssg(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
+    let scope = if amd() { None } else { streamline::WITHOUT_DLSS_G };
+    unsafe { rsf_core_slvk_without_dlssg(scope, callback, user) }
+}
+// The Anti-Lag fixture ran the device entries with the Vulkan headers present, the latency
+// fixture without.
+unsafe fn rsf_latencyvk_require_device(
+    query: *const rsf_latencyvk_device_query,
+    out: *mut rsf_latencyvk_device_requirements,
+) -> i32 {
+    unsafe { rsf_core_amd_vk_require(u32::from(amd()), query, out) }
+}
+unsafe fn rsf_latencyvk_device_created(facts: *const rsf_latencyvk_created_device) -> i32 {
+    unsafe { rsf_core_amd_vk_device_created(u32::from(amd()), facts) }
+}
+unsafe fn rsf_latencyvk_device_destroyed(device: *mut c_void) {
+    rsf_core_amd_vk_device_destroyed(device);
 }

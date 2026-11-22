@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::rsf_fgvk_setup;
 use crate::sys::{rsf_vk_function, rsf_vk_get_proc};
-use crate::sys::{rsf_vk_synchronized_present, rsf_vk_wsi_call, rsf_vk_wsi_scope};
+use crate::sys::rsf_vk_wsi_call;
+
+/// A Streamline scope that runs a borrowed WSI callback (rsf-streamline-vk's bridge exports).
+pub type WsiScope = Option<unsafe extern "C" fn(rsf_vk_wsi_call, *mut c_void) -> i32>;
+/// Streamline's present that also carries the frame token.
+pub type SynchronizedPresent = Option<unsafe extern "C" fn(usize, *mut c_void, *const c_void) -> i32>;
 use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle};
@@ -61,9 +66,8 @@ pub(crate) unsafe fn rsf_core_vkfg_drain(
     if ready { 0 } else { NOT_READY }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slvk_without_dlssg(
-    scope: rsf_vk_wsi_scope,
+pub unsafe fn rsf_core_slvk_without_dlssg(
+    scope: WsiScope,
     callback: rsf_vk_wsi_call,
     user: *mut c_void,
 ) -> i32 {
@@ -76,8 +80,7 @@ unsafe extern "C" fn rsf_core_slvk_without_dlssg(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_latencyvk_instance_proc(
+pub unsafe fn rsf_core_latencyvk_instance_proc(
     resolve: rsf_vk_get_proc,
     instance: *mut c_void,
     name: *const c_char,
@@ -89,9 +92,8 @@ unsafe extern "C" fn rsf_core_latencyvk_instance_proc(
     unsafe { resolve(instance, name) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_latencyvk_queue_present(
-    synchronized: rsf_vk_synchronized_present,
+pub unsafe fn rsf_core_latencyvk_queue_present(
+    synchronized: SynchronizedPresent,
     callback: rsf_vk_function,
     queue: *mut c_void,
     info: *const c_void,
@@ -114,9 +116,8 @@ unsafe extern "C" fn rsf_core_latencyvk_queue_present(
     unsafe { present(vk::Queue::from_raw(queue as usize as u64), info.cast()).as_raw() }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_latencyvk_wsi_call(
-    scope: rsf_vk_wsi_scope,
+pub unsafe fn rsf_core_latencyvk_wsi_call(
+    scope: WsiScope,
     callback: rsf_vk_wsi_call,
     user: *mut c_void,
 ) -> i32 {

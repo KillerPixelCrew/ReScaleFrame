@@ -321,6 +321,25 @@ mod vulkan_fsr4_fg;
 mod vulkan_fsr4_sr;
 #[cfg(windows)]
 mod vulkan_latency;
+/// The Vulkan latency owner's table and entry points, for the latency fixtures in tests/game-sdk.
+#[cfg(windows)]
+#[doc(hidden)]
+pub mod vulkan_latency_api {
+    pub use crate::vulkan_antilag::{
+        rsf_core_amd_vk_device_created, rsf_core_amd_vk_device_destroyed, rsf_core_amd_vk_require,
+    };
+    pub use crate::vulkan_fg_wsi::{
+        SynchronizedPresent, WsiScope, rsf_core_latencyvk_instance_proc,
+        rsf_core_latencyvk_queue_present, rsf_core_latencyvk_wsi_call, rsf_core_slvk_without_dlssg,
+    };
+    pub use crate::vulkan_latency::{
+        PclCalls, Platform, Streamline, TokenCalls, rsf_core_latencyvk_cpu,
+        rsf_core_latencyvk_get_status, rsf_core_latencyvk_initialize, rsf_core_latencyvk_input,
+        rsf_core_latencyvk_options, rsf_core_latencyvk_present, rsf_core_latencyvk_presentation,
+        rsf_core_latencyvk_render, rsf_core_latencyvk_shutdown, rsf_core_latencyvk_submit,
+        rsf_core_latencyvk_submit_end, rsf_core_slvk_initialize, rsf_core_slvk_invoke,
+    };
+}
 #[cfg(windows)]
 mod vulkan_latency_frames;
 #[cfg(windows)]

@@ -302,7 +302,7 @@ unsafe extern "C" fn rsf_fgvk_enable_options(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fgvk_backend(handle: *const rsf_fgvk, backend: *mut u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_fgvk_backend(handle: *const rsf_fgvk, backend: *mut u32) -> i32 {
     let Some(owner) = (unsafe { owner_ref(handle) }) else {
         return INVALID;
     };
@@ -350,7 +350,7 @@ unsafe extern "C" fn rsf_fgvk_max_generated(handle: *mut rsf_fgvk, count: *mut u
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fgvk_latency_options(
+pub(crate) unsafe extern "C" fn rsf_fgvk_latency_options(
     handle: *mut rsf_fgvk,
     mode: u32,
     minimum_interval_us: u32,
@@ -371,7 +371,7 @@ unsafe extern "C" fn rsf_fgvk_latency_options(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fgvk_latency_sleep(handle: *mut rsf_fgvk, frame: u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_fgvk_latency_sleep(handle: *mut rsf_fgvk, frame: u64) -> i32 {
     let owner = match unsafe { work_owner(handle) } {
         Ok(owner) => owner,
         Err(result) => return result,
@@ -388,7 +388,7 @@ unsafe extern "C" fn rsf_fgvk_latency_sleep(handle: *mut rsf_fgvk, frame: u64) -
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fgvk_latency_marker(
+pub(crate) unsafe extern "C" fn rsf_fgvk_latency_marker(
     handle: *mut rsf_fgvk,
     frame: u64,
     marker: u32,
@@ -409,7 +409,7 @@ unsafe extern "C" fn rsf_fgvk_latency_marker(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fgvk_latency_get_status(
+pub(crate) unsafe extern "C" fn rsf_fgvk_latency_get_status(
     handle: *mut rsf_fgvk,
     status: *mut rsf_fgvk_latency_status,
 ) -> i32 {

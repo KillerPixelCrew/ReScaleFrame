@@ -142,9 +142,8 @@ pub(super) fn xell_status() -> rsf_fgvk_latency_status {
     }
 }
 
-// Synthetic Streamline SDK exports for the native consumer. The token handles
+// Synthetic Streamline bridge calls for the latency owner (SDK below). The token handles
 // address six mock slots and never leave this fixture executable.
-#[unsafe(export_name = "rsf_vk_sl_initialize_features")]
 extern "C" fn sdk_initialize_features(
     _: *const u16,
     _: *const c_char,
@@ -156,7 +155,6 @@ extern "C" fn sdk_initialize_features(
     FG.store(fg, Relaxed);
     OK
 }
-#[unsafe(export_name = "rsf_vk_sl_shutdown_checked")]
 extern "C" fn sdk_shutdown_checked() -> i32 {
     if SHUTDOWN_ALLOWED.load(Relaxed) {
         OK
@@ -164,19 +162,12 @@ extern "C" fn sdk_shutdown_checked() -> i32 {
         INVALID
     }
 }
-#[unsafe(export_name = "rsf_vk_sl_module")]
 extern "C" fn sdk_module() -> *mut c_void {
     identity(1)
 }
-#[unsafe(export_name = "rsf_vk_sl_get_instance_proc_addr")]
-extern "C" fn sdk_get_instance_proc_addr(_: *mut c_void, _: *const c_char) -> rsf_vk_function {
-    None
-}
-#[unsafe(export_name = "rsf_vk_sl_bind_reflex")]
 extern "C" fn sdk_bind_reflex() -> i32 {
     OK
 }
-#[unsafe(export_name = "rsf_vk_sl_bind_pcl")]
 extern "C" fn sdk_bind_pcl() -> i32 {
     PCL_BINDS.fetch_add(1, Relaxed);
     if PCL_BIND_FAIL.load(Relaxed) {
@@ -185,11 +176,9 @@ extern "C" fn sdk_bind_pcl() -> i32 {
     PCL_THREAD.store(unsafe { GetCurrentThreadId() }, Relaxed);
     OK
 }
-#[unsafe(export_name = "rsf_vk_sl_pcl_window_message")]
 extern "C" fn sdk_pcl_window_message() -> u32 {
     PCL_MESSAGE
 }
-#[unsafe(export_name = "rsf_vk_sl_get_reflex_state")]
 unsafe extern "C" fn sdk_get_reflex_state(available: *mut u32, reports: *mut u32) -> i32 {
     unsafe {
         available.write(LOW_LATENCY.load(Relaxed));
@@ -197,7 +186,6 @@ unsafe extern "C" fn sdk_get_reflex_state(available: *mut u32, reports: *mut u32
     }
     OK
 }
-#[unsafe(export_name = "rsf_vk_sl_set_reflex_interval")]
 extern "C" fn sdk_set_reflex_interval(mode: i32, interval: u32) -> i32 {
     if !verify(
         (mode == 1 && interval == 12345)
@@ -208,8 +196,7 @@ extern "C" fn sdk_set_reflex_interval(mode: i32, interval: u32) -> i32 {
     OPTIONS.fetch_add(1, Relaxed);
     OK
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_vk_sl_begin_frame_checked(frame: u32, token: *mut usize) -> i32 {
+unsafe extern "C" fn sdk_begin_frame_checked(frame: u32, token: *mut usize) -> i32 {
     let mut tokens = TOKENS.lock().unwrap();
     let cursor = tokens.cursor;
     tokens.slots[cursor] = frame;
@@ -222,15 +209,12 @@ unsafe extern "C" fn rsf_vk_sl_begin_frame_checked(frame: u32, token: *mut usize
     CURRENT.store(next, Relaxed);
     OK
 }
-#[unsafe(export_name = "rsf_vk_sl_current_frame_token")]
 extern "C" fn sdk_current_frame_token() -> usize {
     CURRENT.load(Relaxed)
 }
-#[unsafe(export_name = "rsf_vk_sl_token_matches")]
 extern "C" fn sdk_token_matches(token: usize, index: u32) -> i32 {
     i32::from(token_index(token) == Some(index))
 }
-#[unsafe(export_name = "rsf_vk_sl_reflex_sleep")]
 extern "C" fn sdk_reflex_sleep() -> i32 {
     check_registration();
     if !verify(REFLEX_SLEEP.pause()) {
@@ -239,7 +223,6 @@ extern "C" fn sdk_reflex_sleep() -> i32 {
     SLEPT.fetch_add(1, Relaxed);
     OK
 }
-#[unsafe(export_name = "rsf_vk_sl_marker_for_token")]
 extern "C" fn sdk_marker_for_token(token: usize, kind: u32) -> i32 {
     check_registration();
     let Some(frame) = token_index(token) else {
@@ -249,15 +232,6 @@ extern "C" fn sdk_marker_for_token(token: usize, kind: u32) -> i32 {
     MARKERS.lock().unwrap().push(Marker { frame, kind });
     OK
 }
-#[unsafe(export_name = "rsf_vk_sl_queue_present_synchronized")]
-extern "C" fn sdk_queue_present_synchronized(_: usize, _: *mut c_void, _: *const c_void) -> i32 {
-    OK
-}
-#[unsafe(export_name = "rsf_vk_sl_vulkan_wsi_call")]
-unsafe extern "C" fn sdk_vulkan_wsi_call(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
-    unsafe { callback.unwrap()(user) }
-}
-#[unsafe(export_name = "rsf_vk_sl_without_dlss_g")]
 unsafe extern "C" fn sdk_without_dlss_g(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
     unsafe { callback.unwrap()(user) }
 }
@@ -267,3 +241,36 @@ pub(super) fn run() -> i32 {
     assert_eq!(CALLBACK_FAILURES.load(Relaxed), 0);
     0
 }
+
+/// A borrowed callback runs directly; the fixture's callbacks never throw.
+unsafe extern "C" fn sdk_invoke(
+    callback: rsf_slvk_callback,
+    module: *mut c_void,
+    token: usize,
+    user: *mut c_void,
+) -> i32 {
+    callback.map_or(FEATURE_FAILED, |callback| unsafe { callback(module, token, user) })
+}
+
+/// The fake Streamline the latency owner calls in place of rsf-streamline-vk.
+pub(super) static SDK: Streamline = Streamline {
+    initialize: Some(sdk_initialize_features),
+    shutdown: Some(sdk_shutdown_checked),
+    module: Some(sdk_module),
+    invoke: Some(sdk_invoke),
+    set_interval: Some(sdk_set_reflex_interval),
+    sleep: Some(sdk_reflex_sleep),
+    tokens: TokenCalls {
+        begin: Some(sdk_begin_frame_checked),
+        current: Some(sdk_current_frame_token),
+        matches: Some(sdk_token_matches),
+        mark: Some(sdk_marker_for_token),
+    },
+    pcl: PclCalls {
+        bind: Some(sdk_bind_pcl),
+        message: Some(sdk_pcl_window_message),
+        bind_reflex: Some(sdk_bind_reflex),
+        reflex: Some(sdk_get_reflex_state),
+    },
+};
+pub(super) const WITHOUT_DLSS_G: WsiScope = Some(sdk_without_dlss_g);

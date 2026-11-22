@@ -8,7 +8,6 @@ use crate::sr_session::has_capacity;
 use crate::sys::*;
 use crate::sys::{RSF_FGVK_LATENCY_ABI_VERSION, rsf_fgvk, rsf_fgvk_latency_status};
 use crate::sys::{RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL};
-use crate::sys::{rsf_vk_latency_platform as Platform, rsf_vk_streamline_calls as Streamline};
 use crate::vulkan_antilag::*;
 use crate::vulkan_latency_frames::{streamline::*, *};
 use crate::vulkan_pcl::{
@@ -29,6 +28,49 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::Mutex;
 
+use crate::sys::{rsf_slvk_callback, rsf_vk_function, rsf_vk_wsi_call};
+
+/// The Streamline frame-token calls of the latency owner.
+pub struct TokenCalls {
+    pub begin: Option<unsafe extern "C" fn(u32, *mut usize) -> i32>,
+    pub current: Option<unsafe extern "C" fn() -> usize>,
+    pub matches: Option<unsafe extern "C" fn(usize, u32) -> i32>,
+    pub mark: Option<unsafe extern "C" fn(usize, u32) -> i32>,
+}
+
+/// The Streamline PCL and Reflex-state calls.
+pub struct PclCalls {
+    pub bind: Option<unsafe extern "C" fn() -> i32>,
+    pub message: Option<unsafe extern "C" fn() -> u32>,
+    pub bind_reflex: Option<unsafe extern "C" fn() -> i32>,
+    pub reflex: Option<unsafe extern "C" fn(*mut u32, *mut u32) -> i32>,
+}
+
+/// The Streamline Vulkan interposer calls (rsf-streamline-vk's bridge exports).
+pub struct Streamline {
+    pub initialize: Option<unsafe extern "C" fn(*const u16, *const c_char, u32, u32, u32) -> i32>,
+    pub shutdown: Option<unsafe extern "C" fn() -> i32>,
+    pub module: Option<unsafe extern "C" fn() -> *mut c_void>,
+    pub invoke: Option<unsafe extern "C" fn(rsf_slvk_callback, *mut c_void, usize, *mut c_void) -> i32>,
+    pub set_interval: Option<unsafe extern "C" fn(i32, u32) -> i32>,
+    pub sleep: Option<unsafe extern "C" fn() -> i32>,
+    pub tokens: TokenCalls,
+    pub pcl: PclCalls,
+}
+
+/// What the latency owner calls: Streamline when the build has it, and the FG provider's latency
+/// entries. PLATFORM is the production table; the latency fixtures build their own.
+pub struct Platform {
+    pub streamline: *const Streamline,
+    pub backend: Option<unsafe extern "C" fn(*const rsf_fgvk, *mut u32) -> i32>,
+    pub options: Option<unsafe extern "C" fn(*mut rsf_fgvk, u32, u32) -> i32>,
+    pub sleep: Option<unsafe extern "C" fn(*mut rsf_fgvk, u64) -> i32>,
+    pub marker: Option<unsafe extern "C" fn(*mut rsf_fgvk, u64, u32) -> i32>,
+    pub status: Option<unsafe extern "C" fn(*mut rsf_fgvk, *mut rsf_fgvk_latency_status) -> i32>,
+}
+
+// SAFETY: the tables hold only function addresses and a pointer to a static table.
+unsafe impl Sync for Platform {}
 const AMD: u32 = 4;
 const XE_SS_FG: u32 = 5;
 const CLIENT: u32 = 2;
@@ -226,8 +268,7 @@ fn initialize(
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_latencyvk_initialize(
+pub unsafe fn rsf_core_latencyvk_initialize(
     platform: &Platform,
     setup: *const rsf_latencyvk_setup,
 ) -> i32 {
@@ -241,8 +282,7 @@ unsafe extern "C" fn rsf_core_latencyvk_initialize(
     initialize(platform, setup.runtime_directory_utf8, setup.project_id, 0)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slvk_initialize(
+pub unsafe fn rsf_core_slvk_initialize(
     platform: &Platform,
     setup: *const rsf_slvk_setup,
 ) -> i32 {
@@ -261,8 +301,7 @@ unsafe extern "C" fn rsf_core_slvk_initialize(
     )
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_slvk_invoke(platform: &Platform, call: *const rsf_slvk_call) -> i32 {
+pub unsafe fn rsf_core_slvk_invoke(platform: &Platform, call: *const rsf_slvk_call) -> i32 {
     if !unsafe { has_capacity(call) } {
         return INVALID_ARGUMENT;
     }
@@ -319,16 +358,14 @@ fn options(platform: &Platform, settings: Option<(u32, u32)>) -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_options(platform: &Platform, requested: u32, limit: u32) -> i32 {
+pub fn rsf_core_latencyvk_options(platform: &Platform, requested: u32, limit: u32) -> i32 {
     if requested > 2 {
         return INVALID_ARGUMENT;
     }
     options(platform, Some((requested, limit)))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_presentation(platform: &Platform, context: *mut rsf_fgvk) -> i32 {
+pub fn rsf_core_latencyvk_presentation(platform: &Platform, context: *mut rsf_fgvk) -> i32 {
     if context.is_null() {
         return rsf_core_fgvk_presentation_unbind();
     }
@@ -339,8 +376,7 @@ extern "C" fn rsf_core_latencyvk_presentation(platform: &Platform, context: *mut
     options(platform, None)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_input(
+pub fn rsf_core_latencyvk_input(
     platform: &Platform,
     session: u64,
     frame: u64,
@@ -489,8 +525,7 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_latencyvk_cpu(platform: &Platform, event: *const rsf_game_cpu_event) {
+pub unsafe fn rsf_core_latencyvk_cpu(platform: &Platform, event: *const rsf_game_cpu_event) {
     if !unsafe { has_capacity(event) } {
         return;
     }
@@ -514,8 +549,7 @@ unsafe extern "C" fn rsf_core_latencyvk_cpu(platform: &Platform, event: *const r
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_submit_end(platform: &Platform, frame: u64) {
+pub fn rsf_core_latencyvk_submit_end(platform: &Platform, frame: u64) {
     let lease = PresentationLease::borrow();
     let owner = HOST.lock().unwrap().owner;
     lease.mark(platform, owner, frame, 3);
@@ -524,8 +558,7 @@ extern "C" fn rsf_core_latencyvk_submit_end(platform: &Platform, frame: u64) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_render(platform: &Platform, frame: u64) {
+pub fn rsf_core_latencyvk_render(platform: &Platform, frame: u64) {
     let lease = PresentationLease::borrow();
     let owner = HOST.lock().unwrap().owner;
     lease.mark(platform, owner, frame, 2);
@@ -534,8 +567,7 @@ extern "C" fn rsf_core_latencyvk_render(platform: &Platform, frame: u64) {
     host.mark(platform, 0, frame, 2);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_present(platform: &Platform, begin: u32) {
+pub fn rsf_core_latencyvk_present(platform: &Platform, begin: u32) {
     let (owner, frame) = {
         let host = HOST.lock().unwrap();
         let frame = rsf_core_latencyvk_legacy_present(begin);
@@ -547,8 +579,7 @@ extern "C" fn rsf_core_latencyvk_present(platform: &Platform, begin: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_latencyvk_submit(
+pub unsafe fn rsf_core_latencyvk_submit(
     platform: &Platform,
     pass: *const rsf_game_render_pass,
     begin: u32,
@@ -577,8 +608,7 @@ unsafe extern "C" fn rsf_core_latencyvk_submit(
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_latencyvk_get_status(
+pub unsafe fn rsf_core_latencyvk_get_status(
     platform: &Platform,
     output: *mut rsf_latencyvk_status,
 ) -> i32 {
@@ -663,8 +693,7 @@ unsafe extern "C" fn rsf_core_latencyvk_get_status(
     if ready { OK } else { NOT_READY }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_shutdown(platform: &Platform) -> i32 {
+pub fn rsf_core_latencyvk_shutdown(platform: &Platform) -> i32 {
     let Some(mut presentation) = Shutdown::enter(
         rsf_core_fgvk_presentation_shutdown_begin,
         rsf_core_fgvk_presentation_shutdown_end,
@@ -704,4 +733,264 @@ extern "C" fn rsf_core_latencyvk_shutdown(platform: &Platform) -> i32 {
     host.claimed_owner = RSF_PACING_NONE;
     host.closing = false;
     OK
+}
+
+// ---- Production table and the public rsf_latencyvk_*/rsf_slvk_* entry points ----
+
+/// rsf-streamline-vk's bridge exports (the VulkanStoryStreamline.dll ABI, sl.def), linked from the
+/// same Runtime archive. The streamline-vk feature is CMake's verified corrected Streamline runtime.
+#[cfg(feature = "streamline-vk")]
+mod streamline_bridge {
+    use super::*;
+    use crate::vulkan_fg_wsi::{SynchronizedPresent, WsiScope};
+
+    unsafe extern "C" {
+        fn rsf_vk_sl_initialize_features(
+            path: *const u16,
+            application: *const c_char,
+            features: u32,
+            flags: u32,
+            reflex: u32,
+        ) -> i32;
+        fn rsf_vk_sl_module() -> *mut c_void;
+        fn rsf_vk_sl_shutdown_checked() -> i32;
+        fn rsf_vk_sl_get_instance_proc_addr(instance: *mut c_void, name: *const c_char)
+        -> rsf_vk_function;
+        fn rsf_vk_sl_bind_reflex() -> i32;
+        fn rsf_vk_sl_bind_pcl() -> i32;
+        fn rsf_vk_sl_pcl_window_message() -> u32;
+        fn rsf_vk_sl_get_reflex_state(available: *mut u32, reports: *mut u32) -> i32;
+        fn rsf_vk_sl_set_reflex_interval(mode: i32, interval: u32) -> i32;
+        fn rsf_vk_sl_begin_frame_checked(index: u32, token: *mut usize) -> i32;
+        fn rsf_vk_sl_current_frame_token() -> usize;
+        fn rsf_vk_sl_token_matches(token: usize, index: u32) -> i32;
+        fn rsf_vk_sl_reflex_sleep() -> i32;
+        fn rsf_vk_sl_marker_for_token(token: usize, marker: u32) -> i32;
+        fn rsf_vk_sl_queue_present_synchronized(
+            token: usize,
+            queue: *mut c_void,
+            info: *const c_void,
+        ) -> i32;
+        fn rsf_vk_sl_vulkan_wsi_call(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32;
+        fn rsf_vk_sl_without_dlss_g(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32;
+    }
+
+    /// A borrowed callback can enter foreign C++ code; a C++ exception becomes FEATURE_FAILED.
+    unsafe extern "C" fn invoke_checked(
+        callback: rsf_slvk_callback,
+        module: *mut c_void,
+        token: usize,
+        user: *mut c_void,
+    ) -> i32 {
+        let Some(callback) = callback else {
+            return FEATURE_FAILED;
+        };
+        // The same callback, called with the C-unwind ABI so the guard can contain the exception.
+        let callback = unsafe {
+            std::mem::transmute::<
+                unsafe extern "C" fn(*mut c_void, usize, *mut c_void) -> i32,
+                unsafe extern "C-unwind" fn(*mut c_void, usize, *mut c_void) -> i32,
+            >(callback)
+        };
+        rsf_streamline_vk::sdk_api::guarded_or(FEATURE_FAILED, || unsafe {
+            callback(module, token, user)
+        })
+    }
+
+    pub(super) static CALLS: Streamline = Streamline {
+        initialize: Some(rsf_vk_sl_initialize_features),
+        shutdown: Some(rsf_vk_sl_shutdown_checked),
+        module: Some(rsf_vk_sl_module),
+        invoke: Some(invoke_checked),
+        set_interval: Some(rsf_vk_sl_set_reflex_interval),
+        sleep: Some(rsf_vk_sl_reflex_sleep),
+        tokens: TokenCalls {
+            begin: Some(rsf_vk_sl_begin_frame_checked),
+            current: Some(rsf_vk_sl_current_frame_token),
+            matches: Some(rsf_vk_sl_token_matches),
+            mark: Some(rsf_vk_sl_marker_for_token),
+        },
+        pcl: PclCalls {
+            bind: Some(rsf_vk_sl_bind_pcl),
+            message: Some(rsf_vk_sl_pcl_window_message),
+            bind_reflex: Some(rsf_vk_sl_bind_reflex),
+            reflex: Some(rsf_vk_sl_get_reflex_state),
+        },
+    };
+    pub(super) const RESOLVE: rsf_vk_get_proc = Some(rsf_vk_sl_get_instance_proc_addr);
+    pub(super) const PRESENT: SynchronizedPresent = Some(rsf_vk_sl_queue_present_synchronized);
+    pub(super) const WSI: WsiScope = Some(rsf_vk_sl_vulkan_wsi_call);
+    pub(super) const WITHOUT_DLSS_G: WsiScope = Some(rsf_vk_sl_without_dlss_g);
+}
+
+#[cfg(not(feature = "streamline-vk"))]
+mod streamline_bridge {
+    use super::*;
+    use crate::vulkan_fg_wsi::{SynchronizedPresent, WsiScope};
+    pub(super) const RESOLVE: rsf_vk_get_proc = None;
+    pub(super) const PRESENT: SynchronizedPresent = None;
+    pub(super) const WSI: WsiScope = None;
+    pub(super) const WITHOUT_DLSS_G: WsiScope = None;
+}
+
+static PLATFORM: Platform = Platform {
+    #[cfg(feature = "streamline-vk")]
+    streamline: &streamline_bridge::CALLS,
+    #[cfg(not(feature = "streamline-vk"))]
+    streamline: ptr::null(),
+    backend: Some(crate::vulkan_fg::rsf_fgvk_backend),
+    options: Some(crate::vulkan_fg::rsf_fgvk_latency_options),
+    sleep: Some(crate::vulkan_fg::rsf_fgvk_latency_sleep),
+    marker: Some(crate::vulkan_fg::rsf_fgvk_latency_marker),
+    status: Some(crate::vulkan_fg::rsf_fgvk_latency_get_status),
+};
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_latencyvk_initialize(setup: *const rsf_latencyvk_setup) -> i32 {
+    unsafe { rsf_core_latencyvk_initialize(&PLATFORM, setup) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_initialize(setup: *const rsf_slvk_setup) -> i32 {
+    unsafe { rsf_core_slvk_initialize(&PLATFORM, setup) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_invoke(call: *const rsf_slvk_call) -> i32 {
+    unsafe { rsf_core_slvk_invoke(&PLATFORM, call) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_options(mode: u32, limit: u32) -> i32 {
+    rsf_core_latencyvk_options(&PLATFORM, mode, limit)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_presentation(context: *mut c_void) -> i32 {
+    rsf_core_latencyvk_presentation(&PLATFORM, context.cast())
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_submit_end(frame: u64) {
+    rsf_core_latencyvk_submit_end(&PLATFORM, frame);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_ping(window: *mut c_void) -> i32 {
+    pcl::rsf_core_latencyvk_pcl_ping(window)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_latencyvk_cpu(event: *const rsf_game_cpu_event) {
+    unsafe { rsf_core_latencyvk_cpu(&PLATFORM, event) };
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_input(frame: u64, kind: u32, message: u32) -> i32 {
+    rsf_core_latencyvk_input(&PLATFORM, 0, frame, kind, message)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_render(frame: u64) {
+    rsf_core_latencyvk_render(&PLATFORM, frame);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_present(begin: u32) {
+    rsf_core_latencyvk_present(&PLATFORM, begin);
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_latencyvk_execution(pass: *const rsf_game_render_pass, begin: u32) -> i32 {
+    unsafe { rsf_core_latencyvk_submit(&PLATFORM, pass, begin) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_latencyvk_get_status(status: *mut rsf_latencyvk_status) -> i32 {
+    unsafe { rsf_core_latencyvk_get_status(&PLATFORM, status) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_shutdown() -> i32 {
+    rsf_core_latencyvk_shutdown(&PLATFORM)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_without_dlssg(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
+    unsafe {
+        crate::vulkan_fg_wsi::rsf_core_slvk_without_dlssg(
+            streamline_bridge::WITHOUT_DLSS_G,
+            callback,
+            user,
+        )
+    }
+}
+
+/// The resolver stays usable after slShutdown for Vulkan object destruction.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_latencyvk_instance_proc(
+    instance: *mut c_void,
+    name: *const c_char,
+) -> rsf_vk_function {
+    unsafe {
+        crate::vulkan_fg_wsi::rsf_core_latencyvk_instance_proc(
+            streamline_bridge::RESOLVE,
+            instance,
+            name,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_latencyvk_queue_present(
+    callback: rsf_vk_function,
+    queue: *mut c_void,
+    info: *const c_void,
+) -> i32 {
+    unsafe {
+        crate::vulkan_fg_wsi::rsf_core_latencyvk_queue_present(
+            streamline_bridge::PRESENT,
+            callback,
+            queue,
+            info,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_latencyvk_wsi_call(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
+    unsafe { crate::vulkan_fg_wsi::rsf_core_latencyvk_wsi_call(streamline_bridge::WSI, callback, user) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_cpu_service() -> *const rsf_cpu_session_service {
+    static SERVICE: rsf_cpu_session_service = rsf_cpu_session_service {
+        struct_size: size_of::<rsf_cpu_session_service>() as u32,
+        version: RSF_CPU_SESSION_SERVICE_VERSION,
+        report: Some(rsf_latencyvk_cpu),
+        ping: Some(rsf_latencyvk_ping),
+        execution: Some(rsf_latencyvk_execution),
+    };
+    &SERVICE
+}
+
+// The AMD Anti-Lag 2 device entries; the antilag-vk feature is CMake's Vulkan header detection.
+const ANTILAG: u32 = cfg!(feature = "antilag-vk") as u32;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_latencyvk_require_device(
+    query: *const rsf_latencyvk_device_query,
+    out: *mut rsf_latencyvk_device_requirements,
+) -> i32 {
+    unsafe { rsf_core_amd_vk_require(ANTILAG, query, out) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_latencyvk_device_created(facts: *const rsf_latencyvk_created_device) -> i32 {
+    unsafe { rsf_core_amd_vk_device_created(ANTILAG, facts) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_latencyvk_device_destroyed(device: *mut c_void) {
+    rsf_core_amd_vk_device_destroyed(device);
 }

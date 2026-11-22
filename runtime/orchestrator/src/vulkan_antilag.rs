@@ -324,8 +324,7 @@ impl Drop for Update {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_amd_vk_require(
+pub unsafe fn rsf_core_amd_vk_require(
     enabled: u32,
     query: *const Query,
     out: *mut Requirements,
@@ -362,8 +361,7 @@ unsafe extern "C" fn rsf_core_amd_vk_require(
     0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_amd_vk_device_created(enabled: u32, facts: *const Created) -> i32 {
+pub unsafe fn rsf_core_amd_vk_device_created(enabled: u32, facts: *const Created) -> i32 {
     if !unsafe { has_capacity(facts) } {
         return INVALID_ARGUMENT;
     }
@@ -619,8 +617,7 @@ pub(crate) extern "C" fn rsf_core_amd_vk_shutdown_end(committed: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_amd_vk_device_destroyed(device: *mut c_void) {
+pub fn rsf_core_amd_vk_device_destroyed(device: *mut c_void) {
     let state = STATE.lock().unwrap();
     let mut state = DRAINED
         .wait_while(state, |state| {

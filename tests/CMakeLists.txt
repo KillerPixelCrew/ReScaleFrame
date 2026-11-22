@@ -627,23 +627,10 @@ set_tests_properties(fg_switching PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 add_executable(rsf_latency_host_test fixture_main_args.c)
 target_compile_definitions(rsf_latency_host_test PRIVATE RSF_FIXTURE_ENTRY=rsf_test_latency_host)
 
-# These latency fixtures supply fake FG endpoints while linking the production Rust lease.
-set(rsf_vulkan_latency_test_endpoints
-    rsf_fgvk_backend=rsf_test_fgvk_backend
-    rsf_fgvk_latency_options=rsf_test_fgvk_latency_options
-    rsf_fgvk_latency_sleep=rsf_test_fgvk_latency_sleep
-    rsf_fgvk_latency_marker=rsf_test_fgvk_latency_marker
-    rsf_fgvk_latency_get_status=rsf_test_fgvk_latency_get_status)
-add_executable(rsf_native_latency_vulkan_test fixture_main.c ../runtime/orchestrator/src/native_latency_vulkan.c)
-target_sources(rsf_native_latency_vulkan_test PRIVATE
-    ../runtime/orchestrator/src/latency_amd_vulkan.c
-    ../runtime/orchestrator/src/native_latency_streamline_exceptions.c)
-target_include_directories(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/include)
-target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1
-    RSF_FIXTURE_ENTRY=rsf_native_latency_vulkan_fixture
-    ${rsf_vulkan_latency_test_endpoints})
-target_link_libraries(rsf_native_latency_vulkan_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
-add_test(NAME native_latency_vulkan_contract COMMAND rsf_native_latency_vulkan_test)
+# The latency fixture drives the Rust latency owner with its own FG endpoints and fake Streamline table.
+add_executable(rsf_native_latency_vulkan_test fixture_main.c)
+target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_FIXTURE_ENTRY=rsf_native_latency_vulkan_fixture)
+target_link_libraries(rsf_native_latency_vulkan_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)add_test(NAME native_latency_vulkan_contract COMMAND rsf_native_latency_vulkan_test)
 find_program(RSF_DOTNET_EXECUTABLE NAMES dotnet)
 if(RSF_DOTNET_EXECUTABLE)
     execute_process(COMMAND "${RSF_DOTNET_EXECUTABLE}" --list-sdks OUTPUT_VARIABLE rsf_dotnet_sdks ERROR_QUIET)
@@ -866,12 +853,8 @@ if(RSF_HAVE_VULKAN)
     target_include_directories(rsf_streamline_vulkan_dispatch_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
     target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME streamline_vulkan_dispatch_contract COMMAND rsf_streamline_vulkan_dispatch_test)
-    add_executable(rsf_native_antilag_vulkan_test fixture_main.c
-        ../runtime/orchestrator/src/native_latency_vulkan.c ../runtime/orchestrator/src/latency_amd_vulkan.c)
-    target_compile_definitions(rsf_native_antilag_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_ANTILAG_VK=1
-        RSF_FIXTURE_ENTRY=rsf_native_antilag_vulkan_fixture
-        ${rsf_vulkan_latency_test_endpoints})
-    target_include_directories(rsf_native_antilag_vulkan_test PRIVATE ../runtime/orchestrator/include)
+    add_executable(rsf_native_antilag_vulkan_test fixture_main.c)
+    target_compile_definitions(rsf_native_antilag_vulkan_test PRIVATE RSF_FIXTURE_ENTRY=rsf_native_antilag_vulkan_fixture)
     target_link_libraries(rsf_native_antilag_vulkan_test PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
     add_test(NAME native_antilag_vulkan_contract COMMAND rsf_native_antilag_vulkan_test)
     set_tests_properties(native_antilag_vulkan_contract PROPERTIES TIMEOUT 20)
