@@ -5,7 +5,7 @@ mod wsi;
 
 use self::wsi::Wsi;
 use crate::sr_session::has_capacity;
-use crate::vulkan_dlss_fg_abi::{ChainSupport, Handle, Platform, Sample, SdkCall};
+use crate::vulkan_dlss_fg_abi::{ChainSupport, Handle, Platform, Sample, SdkCall, Tag};
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_dlssgvk_status as Status,
     rsf_fgvk_frame as Frame, rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup,
@@ -177,6 +177,51 @@ struct RecordWork<'a> {
     staged: bool,
 }
 
+fn tag_plan(images: &[Image], record: &Record, guides: bool) -> [Tag; 2] {
+    const DEPTH: u32 = 0;
+    const MOTION: u32 = 1;
+    const HUDLESS: u32 = 2;
+    const UI: u32 = 23;
+    const ONLY_VALID_NOW: u32 = 0;
+    const UNTIL_PRESENT: u32 = 1;
+    // Streamline copies these on the leased recording before the engine reuses
+    // its guides. HUD-less recording also clears any stale UI tag.
+    let tag = |image: &Image, kind, width, height| Tag {
+        image,
+        kind,
+        lifetime: ONLY_VALID_NOW,
+        width,
+        height,
+    };
+    if guides {
+        [
+            tag(&images[0], DEPTH, record.render_width, record.render_height),
+            tag(
+                &images[1],
+                MOTION,
+                record.render_width,
+                record.render_height,
+            ),
+        ]
+    } else {
+        [
+            tag(
+                &images[0],
+                HUDLESS,
+                record.output_width,
+                record.output_height,
+            ),
+            Tag {
+                image: ptr::null(),
+                kind: UI,
+                lifetime: UNTIL_PRESENT,
+                width: 0,
+                height: 0,
+            },
+        ]
+    }
+}
+
 unsafe extern "C" fn record_inputs(module: Handle, token: usize, user: Handle) -> i32 {
     let work = unsafe { &mut *user.cast::<RecordWork<'_>>() };
     if token == 0 {
@@ -205,9 +250,10 @@ unsafe extern "C" fn record_inputs(module: Handle, token: usize, user: Handle) -
         image.initialized = 1;
     }
     work.staged = true;
-    sdk.images = work.images.as_ptr();
-    sdk.count = work.images.len() as u32;
+    let tags = tag_plan(work.images, unsafe { &*sdk.record }, work.first_role == 0);
+    sdk.tags = tags.as_ptr();
     let result = unsafe { (work.platform.tag.unwrap())(module, token, ptr::from_mut(sdk).cast()) };
+    sdk.tags = ptr::null();
     if result == OK {
         for (index, source) in work.sources.iter().enumerate() {
             unsafe {

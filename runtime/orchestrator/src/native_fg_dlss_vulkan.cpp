@@ -48,12 +48,17 @@ struct Native {
 };
 
 static_assert(sizeof(rsf_dlgvk_sample) == 40);
+static_assert(sizeof(rsf_dlgvk_tag) == 24);
 static_assert(sizeof(rsf_dlgvk_sdk_call) == 96);
+static_assert(offsetof(rsf_dlgvk_sdk_call, tags) == 80);
 static_assert(offsetof(rsf_dlgvk_sdk_call, options) == 88);
 static_assert(sizeof(rsf_dlgvk_chain_support) == 8);
 static_assert(sizeof(rsf_dlgvk_platform) == 160);
 static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 &&
     VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44);
+static_assert(sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 &&
+    sl::kBufferTypeHUDLessColor == 2 && sl::kBufferTypeUIColorAndAlpha == 23);
+static_assert(sl::ResourceLifecycle::eOnlyValidNow == 0 && sl::ResourceLifecycle::eValidUntilPresent == 1);
 
 rsf_backend_result sdk_result(rsf_dlgvk_sdk_call& call, sl::Result result) {
     call.result = static_cast<int32_t>(result);
@@ -145,19 +150,16 @@ rsf_backend_result tag(void*, uintptr_t token, void* user) {
     const auto& self = *static_cast<Native*>(call.native);
     const auto& frame = *reinterpret_cast<sl::FrameToken*>(token);
     auto* commands = reinterpret_cast<sl::CommandBuffer*>(call.commands);
-    auto first = resource(call.images[0]);
-    // Engine guides are overwritten before Present. Streamline copies the tags
-    // on this recording list while the original CPU token is leased.
-    if (call.count == 2) {
-        auto motion = resource(call.images[1]);
-        const sl::Extent render{0, 0, call.record->render_width, call.record->render_height};
-        sl::ResourceTag tags[] = {{&first, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &render},
-            {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &render}};
-        return sdk_result(call, self.tags(frame, viewport, tags, 2, commands));
+    sl::Resource resources[2]{};
+    sl::ResourceTag tags[2]{};
+    for (size_t i = 0; i < 2; ++i) {
+        const auto& plan = call.tags[i];
+        const sl::Extent extent{0, 0, plan.width, plan.height};
+        if (plan.image) resources[i] = resource(*plan.image);
+        tags[i] = sl::ResourceTag{
+            plan.image ? &resources[i] : nullptr, plan.kind,
+            static_cast<sl::ResourceLifecycle>(plan.lifetime), plan.image ? &extent : nullptr};
     }
-    const sl::Extent extent{0, 0, self.info.imageExtent.width, self.info.imageExtent.height};
-    sl::ResourceTag tags[] = {{&first, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, &extent},
-        {nullptr, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, nullptr}};
     return sdk_result(call, self.tags(frame, viewport, tags, 2, commands));
 }
 rsf_backend_result release(void*, uintptr_t, void* user) {

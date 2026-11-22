@@ -26,16 +26,24 @@ pub(super) struct Sample {
 }
 
 #[repr(C)]
+pub(super) struct Tag {
+    pub image: *const Image,
+    pub kind: u32,
+    pub lifetime: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[repr(C)]
 #[derive(Default)]
 pub(super) struct SdkCall {
     pub native: Handle,
     pub result: i32,
-    pub count: u32,
     pub sample: Sample,
     pub commands: Handle,
     pub input: *const Frame,
     pub record: *const Record,
-    pub images: *const Image,
+    pub tags: *const Tag,
     pub options: *const Packed,
 }
 
@@ -72,7 +80,9 @@ pub(super) struct Platform {
 
 const _: () = {
     assert!(size_of::<Sample>() == 40);
+    assert!(size_of::<Tag>() == 24);
     assert!(size_of::<SdkCall>() == 96);
+    assert!(std::mem::offset_of!(SdkCall, tags) == 80);
     assert!(std::mem::offset_of!(SdkCall, options) == 88);
     assert!(size_of::<ChainSupport>() == 8);
     assert!(size_of::<Platform>() == 160);

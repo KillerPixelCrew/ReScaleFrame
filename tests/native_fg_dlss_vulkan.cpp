@@ -70,9 +70,15 @@ sl::Result set_tags(const sl::FrameToken& token, const sl::ViewportHandle&, cons
         reinterpret_cast<uint64_t>(tags[0].resource->native) >= 1000, "tag uses an owned Vulkan image, not the engine image");
     if (commands == reinterpret_cast<sl::CommandBuffer*>(prepare_list)) {
         require(tags[0].type == sl::kBufferTypeDepth && tags[1].type == sl::kBufferTypeMotionVectors, "prepare uses typed guide tags");
+        require(tags[0].extent.width == 640 && tags[0].extent.height == 360 &&
+            tags[1].extent == tags[0].extent && tags[1].lifecycle == sl::ResourceLifecycle::eOnlyValidNow,
+            "both staged guides carry the render extent and copy lifetime");
     } else {
         require(commands == reinterpret_cast<sl::CommandBuffer*>(color_list) && tags[0].type == sl::kBufferTypeHUDLessColor &&
             tags[1].type == sl::kBufferTypeUIColorAndAlpha && !tags[1].resource, "HUD-less explicitly clears absent UI recomposition input");
+        require(tags[0].extent.width == 1280 && tags[0].extent.height == 720 &&
+            tags[1].lifecycle == sl::ResourceLifecycle::eValidUntilPresent && !tags[1].extent,
+            "HUD-less uses the presented extent and the cleared UI tag has no extent");
     }
     return refuse_tags ? sl::Result::eErrorInvalidParameter : sl::Result::eOk;
 }

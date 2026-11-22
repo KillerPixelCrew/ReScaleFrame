@@ -10,15 +10,19 @@ struct rsf_dlgvk_sample {
     uint32_t actual_presents, max_generated, status, min_dimension, vsync, dynamic_mfg;
 };
 
+struct rsf_dlgvk_tag {
+    const rsf_vkfg_image* image;
+    uint32_t kind, lifetime, width, height;
+};
+
 struct rsf_dlgvk_sdk_call {
     void* native;
     int32_t result;
-    uint32_t count; // Staged image count for tag.
     rsf_dlgvk_sample sample;
     void* commands;
     const rsf_fgvk_frame* input;
     const rsf_frame_record* record;
-    const rsf_vkfg_image* images;
+    const rsf_dlgvk_tag* tags; // Two tags for the leased recording.
     const rsf_slvk_sdk_fg_options* options;
 };
 
