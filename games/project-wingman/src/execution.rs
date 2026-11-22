@@ -9,15 +9,15 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
-// Install the tracked-allocation destructor before any hook can publish a packet.
-const RVAS: [usize; 5] = [0x591_d000, 0x5c4_4910, 0x5c2_d4a0, 0x656_9660, 0x5c4_c9c0];
+// Install allocator retirement before any hook can publish a packet.
+const RVAS: [usize; 5] = [0x538_21d0, 0x5c4_4910, 0x5c2_d4a0, 0x656_9660, 0x5c4_c9c0];
 const EXPECTED: [[u8; 16]; 5] = [
     [
-        0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xf6, 0xc2, 0x01, 0x74, 0x0a, 0xba,
-        0x20,
+        0x48, 0x8b, 0xc4, 0x48, 0x89, 0x50, 0x10, 0x53, 0x41, 0x57, 0x48, 0x83, 0xec, 0x48, 0x48,
+        0x8b,
     ],
     [
         0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41,
@@ -42,7 +42,9 @@ const UAV_RESOURCE: usize = 0x28;
 const PASS_PARAMETERS: usize = 0xf0;
 const TRACKED_PASS_OFFSET: usize = 8;
 const TRACKED_VTABLE: usize = 0x839_0f78;
+const TRACKED_DESTRUCTOR: usize = 0x591_d000;
 const COMPUTE_VTABLE: usize = 0x83f_6838;
+const GRAPH_MEM_STACK: usize = 0x10;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -99,6 +101,7 @@ impl State {
 
     fn disable_hooks(&mut self, disable: unsafe extern "C" fn(usize) -> bool) -> bool {
         self.pending.clear();
+        HAS_PENDING.store(false, Ordering::Release);
         for (site, installed) in self.sites.into_iter().zip(&mut self.installed).rev() {
             if *installed && !unsafe { disable(site) } {
                 return false;
@@ -123,6 +126,7 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
 static EXECUTING: AtomicU32 = AtomicU32::new(0);
 static QUEUED: AtomicU32 = AtomicU32::new(0);
 static NEXT_LOG: AtomicU64 = AtomicU64::new(0);
+static HAS_PENDING: AtomicBool = AtomicBool::new(false);
 static ORIGINAL: [AtomicUsize; RVAS.len()] = [const { AtomicUsize::new(0) }; RVAS.len()];
 
 thread_local! {
@@ -137,7 +141,7 @@ fn state() -> MutexGuard<'static, State> {
 pub(crate) fn prepare(platform: &Platform) -> bool {
     let mut state = state();
     let image = unsafe { (platform.image_base)() };
-    if unsafe { read(platform.copy, image, TRACKED_VTABLE) } != Some(image + RVAS[0])
+    if unsafe { read(platform.copy, image, TRACKED_VTABLE) } != Some(image + TRACKED_DESTRUCTOR)
         || unsafe { read(platform.copy, image, COMPUTE_VTABLE + size_of::<usize>()) }
             != Some(image + RVAS[4])
     {
@@ -151,7 +155,7 @@ pub(crate) fn prepare(platform: &Platform) -> bool {
     }
     state.sites = RVAS.map(|rva| image + rva);
     let detours = [
-        delete_tracked as *const (),
+        free_chunks as *const (),
         add_taa as *const (),
         add_compute as *const (),
         setup_pass as *const (),
@@ -251,13 +255,23 @@ fn bind_pass(graph: usize, pass: usize) {
         && state.pending.try_reserve(1).is_ok()
     {
         state.pending.insert(pass, candidate.packet);
+        HAS_PENDING.store(true, Ordering::Release);
     }
 }
 
-fn discard(pending: &mut HashMap<usize, Packet>, owner: usize) {
-    if let Some(pass) = owner.checked_add(TRACKED_PASS_OFFSET) {
-        pending.remove(&pass);
+fn discard_graph(pending: &mut HashMap<usize, Packet>, stack: usize) {
+    if let Some(graph) = stack.checked_sub(GRAPH_MEM_STACK) {
+        pending.retain(|_, packet| packet.graph != graph);
     }
+}
+
+fn take_pass(pass: usize) -> Option<Packet> {
+    let mut state = state();
+    let packet = state.pending.remove(&pass);
+    if state.pending.is_empty() {
+        HAS_PENDING.store(false, Ordering::Release);
+    }
+    packet
 }
 
 fn reserve() -> bool {
@@ -282,19 +296,27 @@ fn diagnostic_due(now: u64) -> bool {
             .is_ok()
 }
 
-type DeleteTracked = unsafe extern "C-unwind" fn(usize, u32) -> usize;
+type FreeChunks = unsafe extern "C-unwind" fn(usize, usize);
 type AddTaa = unsafe extern "C-unwind" fn(usize, usize, usize, usize, usize, usize) -> usize;
 type AddCompute = unsafe extern "C-unwind" fn(usize, usize, u8, usize, usize, usize);
 type PassCall = unsafe extern "C-unwind" fn(usize, usize);
 
 // The native originals can unwind through these detours. Keep the counters and nested
 // construction scopes under Drop, and contain optional-consumer exceptions in the native leaf.
-unsafe extern "C-unwind" fn delete_tracked(owner: usize, flags: u32) -> usize {
+unsafe extern "C-unwind" fn free_chunks(stack: usize, new_top: usize) {
     let _entry = Entry::new(&EXECUTING);
-    discard(&mut state().pending, owner);
-    let original: DeleteTracked =
-        unsafe { std::mem::transmute(ORIGINAL[0].load(Ordering::Acquire)) };
-    unsafe { original(owner, flags) }
+    // Clear and the inlined builder destructor both reach FreeChunks(nullptr). Only a
+    // matching graph allocator's full release can retire a packet. Other stacks and partial
+    // releases keep their native behavior, even while several graphs are pending.
+    if new_top == 0 && HAS_PENDING.load(Ordering::Acquire) {
+        let mut state = state();
+        discard_graph(&mut state.pending, stack);
+        if state.pending.is_empty() {
+            HAS_PENDING.store(false, Ordering::Release);
+        }
+    }
+    let original: FreeChunks = unsafe { std::mem::transmute(ORIGINAL[0].load(Ordering::Acquire)) };
+    unsafe { original(stack, new_top) };
 }
 
 struct Restore<T: Copy + 'static>(&'static std::thread::LocalKey<Cell<Option<T>>>, Option<T>);
@@ -385,7 +407,7 @@ const _: () = assert!(std::mem::offset_of!(Command, next) == 8);
 
 impl Command {
     fn acquire(pass: usize) -> Option<Box<Self>> {
-        let packet = state().pending.remove(&pass)?;
+        let packet = take_pass(pass)?;
         let host = observer::active_host()?;
         let platform = observer::platform()?;
         // A failed diagnostic allocation must leave the native pass playable.
@@ -485,22 +507,40 @@ mod tests {
     #[test]
     fn skipped_passes_release_capacity_and_cannot_survive_address_reuse() {
         let mut pending = HashMap::new();
-        for index in 0..CAPACITY as usize {
-            let pass = 0x1000 + index * 0x120;
-            let packet = Packet {
-                pass: unsafe { std::mem::zeroed() },
-                rdg: [100, 200, 300, 400],
-                graph: 1,
-            };
-            pending.insert(pass, packet);
+        const GRAPH: usize = 0x1000;
+        const OTHER_GRAPH: usize = 0x2000;
+        const PASS: usize = 0x4000;
+        let packet = Packet {
+            pass: unsafe { std::mem::zeroed() },
+            rdg: [100, 200, 300, 400],
+            graph: GRAPH,
+        };
+        for index in 0..CAPACITY as usize - 1 {
+            pending.insert(PASS + index * 0x120, packet);
         }
+        pending.insert(
+            0x1000,
+            Packet {
+                graph: OTHER_GRAPH,
+                ..packet
+            },
+        );
         assert_eq!(pending.len(), CAPACITY as usize);
-        for index in 0..CAPACITY as usize {
-            let pass = 0x1000 + index * 0x120;
-            // No execute callback occurred. The allocator still destroys every tracked pass.
-            discard(&mut pending, pass - TRACKED_PASS_OFFSET);
-            assert!(pending.remove(&pass).is_none());
-        }
+        // Construction finished but none of this graph's passes executed.
+        discard_graph(&mut pending, GRAPH + GRAPH_MEM_STACK);
+        // A new graph can reuse the address without seeing the old inputs.
+        assert!(pending.remove(&PASS).is_none());
+        pending.insert(
+            PASS,
+            Packet {
+                graph: 0x3000,
+                rdg: [1, 2, 3, 4],
+                ..packet
+            },
+        );
+        assert_eq!(pending.remove(&PASS).unwrap().rdg, [1, 2, 3, 4]);
+        assert_eq!(pending.len(), 1);
+        discard_graph(&mut pending, OTHER_GRAPH + GRAPH_MEM_STACK);
         assert!(pending.is_empty());
     }
 
