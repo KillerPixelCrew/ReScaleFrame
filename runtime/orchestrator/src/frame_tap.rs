@@ -3,6 +3,8 @@
 // callback state, gates and substitution, classification, capture routing, and every reference the
 // tap holds. runtime/graphics/src/frame_tap.cpp supplies the remaining typed detours and D3D11
 // leaves through `rsf_frame_tap_platform`.
+mod detours;
+
 use crate::com_ref::ComRef;
 use crate::constant_buffer_read::{MAP_WRITE_DISCARD, Map, MappedResource, Unmap, slot};
 use crate::frame_tap_abi::*;
