@@ -11,7 +11,7 @@ use crate::vulkan_fg_abi::{
 use crate::vulkan_fsr4_sr::directory;
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
 use rsf_game_sys::rsf_frame_record as Record;
-use std::ffi::CStr;
+use std::ffi::{CStr, c_void};
 use std::ptr;
 
 #[repr(C)]
@@ -364,6 +364,41 @@ unsafe extern "C" fn rsf_core_fsr4gvk_present(
     explicit: u32,
 ) -> i32 {
     unsafe { shared::present(owner, info, source, explicit) }
+}
+
+type PresentCallback = unsafe extern "C" fn(Handle, &PresentInfo, *const Record, u32) -> i32;
+
+unsafe extern "C" {
+    fn rsf_dx12gvk_present_marshaled(
+        call: PresentCallback,
+        owner: Handle,
+        info: *const c_void,
+        source: *const Record,
+        explicit: u32,
+    ) -> i32;
+}
+
+unsafe extern "C" fn present_marshaled(
+    owner: Handle,
+    info: &PresentInfo,
+    source: *const Record,
+    explicit: u32,
+) -> i32 {
+    unsafe { rsf_core_fsr4gvk_present(owner.cast(), info, source, explicit) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fsr4gvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
+    unsafe { rsf_dx12gvk_present_marshaled(present_marshaled, owner.cast(), info, ptr::null(), 0) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fsr4gvk_present_source(
+    owner: *mut Owner,
+    info: *const c_void,
+    source: *const Record,
+) -> i32 {
+    unsafe { rsf_dx12gvk_present_marshaled(present_marshaled, owner.cast(), info, source, 1) }
 }
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fsr4gvk_status(owner: *const Owner, status: *mut Status) -> i32 {

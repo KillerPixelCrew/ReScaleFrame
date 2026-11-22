@@ -29,14 +29,3 @@ int32_t rsf_fsr4gvk_create(const rsf_fgvk_setup* setup, const rsf_fsr4gvk_option
     // Rust admits the setup before it asks the embedded graphics table to describe create_info.
     return rsf_core_fsr4gvk_create(&operations(), setup, options, output, chain);
 }
-namespace {
-int32_t present(rsf_fsr4gvk* owner, const void* info, const rsf_frame_record* source, uint32_t explicit_source) {
-    return rsf_dx12gvk_present_marshaled([](void* context, const auto* present_info, const auto* identity, uint32_t exact) {
-        return rsf_core_fsr4gvk_present(static_cast<rsf_fsr4gvk*>(context), present_info, identity, exact);
-    }, owner, info, source, explicit_source);
-}
-}
-int32_t rsf_fsr4gvk_present(rsf_fsr4gvk* owner, const void* info) { return present(owner, info, nullptr, 0); }
-int32_t rsf_fsr4gvk_present_source(rsf_fsr4gvk* owner, const void* info, const rsf_frame_record* source) {
-    return present(owner, info, source, 1);
-}

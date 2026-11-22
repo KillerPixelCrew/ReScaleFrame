@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstdio>
+#include <string_view>
 
 namespace {
 int failures = 0;
@@ -268,6 +269,11 @@ void bridge_retirement() {
 namespace {
 constexpr uint64_t completion_timeline = 40, adapter = 41;
 constexpr int injected_error = -93;
+struct Capture {
+    void* commands;
+    uint64_t frame, group, image;
+    std::string_view role;
+};
 struct Calls {
     uint64_t next_handle = 100;
     uint64_t provider_luid = adapter;
@@ -280,6 +286,7 @@ struct Calls {
     bool fail_marker = false, fail_start = false, fail_importer_destroy = false;
     std::vector<uint64_t> waits, markers, marked_complete, discarded;
     std::vector<uint32_t> initialized_copies;
+    std::vector<Capture> captures;
 } calls;
 
 const rsf_vkfg_platform images{
@@ -422,7 +429,10 @@ const rsf_fsr4gvk_ops platform{
         [](auto*, uint64_t) {},
         [](auto*) -> int32_t { ++calls.idles; return 0; },
         [](auto*, uint64_t provider, uint32_t backend) { CHECK(provider == 700 && backend == 4); },
-        [](auto*, void*, const auto*, const auto*, const char*, uint64_t group) { CHECK(group != 0); },
+        [](auto*, void* commands, const auto* image, const auto* source, const char* role, uint64_t group) {
+            CHECK(group && image && source && role);
+            if (image && source && role) calls.captures.push_back({commands, source->frame_id, group, image->image, role});
+        },
         [](auto*, uint64_t group) { calls.marked_complete.push_back(group); },
         [](auto*, uint64_t group) { calls.discarded.push_back(group); },
         [](auto*) -> int32_t { return 0; },
@@ -489,10 +499,7 @@ void present(rsf_fsr4gvk* owner, uint64_t chain, const rsf_frame_record* record,
     VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     info.waitSemaphoreCount = 1; info.pWaitSemaphores = &semaphore;
     info.swapchainCount = 1; info.pSwapchains = &swapchain; info.pImageIndices = &index; info.pResults = &written;
-    const int32_t code = rsf_dx12gvk_present_marshaled(
-        [](void* context, const rsf_dx12gvk_present_info* admitted, const rsf_frame_record* identity, uint32_t exact) {
-            return rsf_core_fsr4gvk_present(static_cast<rsf_fsr4gvk*>(context), admitted, identity, exact);
-        }, owner, &info, record, 1);
+    const int32_t code = rsf_fsr4gvk_present_source(owner, &info, record);
     CHECK(code == 0 && written == VK_SUCCESS);
     CHECK(calls.presented == expected);
     rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
@@ -517,6 +524,18 @@ void prove_identity_and_completion() {
     CHECK(rsf_fsr4gvk_prepare(owner, guides, &initial) == 0);
     CHECK(rsf_fsr4gvk_hudless(owner, hudless, &mismatch) == RSF_FSR4FG_INVALID_ARGUMENT);
     CHECK(rsf_fsr4gvk_hudless(owner, hudless, &initial) == 0);
+    CHECK(calls.captures.size() == 3);
+    uint64_t guide_group = 0, hudless_group = 0;
+    if (calls.captures.size() == 3) {
+        const auto& d = calls.captures[0];
+        const auto& m = calls.captures[1];
+        const auto& h = calls.captures[2];
+        CHECK(d.commands == guides && d.frame == 1 && d.image == 21 && d.role == "fg-depth");
+        CHECK(m.commands == guides && m.frame == 1 && m.image == 22 && m.role == "fg-motion-uv");
+        CHECK(h.commands == hudless && h.frame == 1 && h.image == 23 && h.role == "fg-hudless-color");
+        CHECK(d.group == m.group && d.group != h.group);
+        guide_group = d.group; hudless_group = h.group;
+    }
     rsf_fsr4gvk_submitted(owner, &guides, 1);
     CHECK(rsf_fsr4gvk_drain(owner) == VK_NOT_READY && calls.idles == 0);
     present(owner, chain, &invalid, 0, 0);
@@ -524,7 +543,8 @@ void prove_identity_and_completion() {
     CHECK(calls.marked_complete.empty() && calls.markers.size() == 1);
     rsf_fsr4gvk_submitted(owner, &hudless, 1);
     rsf_fsr4gvk_submitted(owner, &hudless, 1);
-    CHECK(calls.markers.size() == 2 && calls.markers[0] != calls.markers[1] && calls.waits.empty());
+    CHECK(calls.markers.size() == 2 && calls.markers[0] != calls.markers[1] && calls.waits.empty() &&
+        calls.marked_complete.empty());
 
     // A newer recording does not supply any resources for an exact older Present.
     const auto older_discarded = source(2);
@@ -556,6 +576,7 @@ void prove_identity_and_completion() {
     const auto reused_inputs = inputs(reused);
     CHECK(rsf_fsr4gvk_prepare(owner, guides, &reused_inputs) == 0);
     CHECK(calls.waits.size() == 2 && calls.marked_complete.size() == 2);
+    CHECK((calls.marked_complete == std::vector{guide_group, hudless_group}));
     CHECK(calls.guide_releases == 1);
     CHECK(calls.initialized_copies[calls.initialized_copies.size() - 1] == 0);
     CHECK(calls.initialized_copies[calls.initialized_copies.size() - 2] == 0);
