@@ -410,13 +410,20 @@ generate("runtime/orchestrator/src/vulkan_fg_abi.rs", "runtime/orchestrator/src/
           "--raw-line", "use rsf_game_sys::rsf_frame_record;", "--raw-line", "type rsf_backend_result = i32;",
           "--with-derive-custom-struct", "rsf_dlss_capture_source=Copy,Clone"])
 generate("runtime/orchestrator/src/vulkan_latency_abi.rs", "runtime/orchestrator/include/rescaleframe/native_latency_vulkan.h",
-         "rsf_(latencyvk_(setup|status|device_query|device_requirements|created_device)|slvk_(setup|call|callback)|amd_vk_(update|device_info|platform))",
+         "rsf_(latencyvk_(setup|status|device_query|device_requirements|created_device)|slvk_(setup|call|callback))",
          "RSF_(LATENCYVK_(ABI_VERSION|DEVICE_ABI_VERSION)|SLVK_(ABI_VERSION|DLSS_SR|DLSS_FG))",
          ["-include", "rescaleframe/native_streamline_vulkan.h",
-          "-include", "runtime/orchestrator/src/latency_amd_vulkan_platform.h", "-Iruntime/orchestrator/include",
+          "-include", "rescaleframe/native_latency_vulkan_requirements.h", "-Iruntime/orchestrator/include",
           "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "type rsf_backend_result = i32;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_vk_function, rsf_vk_get_proc};"])
+generate("runtime/orchestrator/src/vulkan_latency_platform_abi.rs", "runtime/orchestrator/src/native_latency_vulkan_platform.h",
+         "rsf_vk_(latency_platform|streamline_calls|token_calls|pcl_calls)", "NOTHING",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist",
+          "--raw-line", "use crate::vulkan_fg_abi::{rsf_fgvk, rsf_fgvk_latency_status};",
+          "--raw-line", "use crate::vulkan_latency_abi::rsf_slvk_call;",
+          "--raw-line", "type rsf_backend_result = i32;"])
 generate("runtime/orchestrator/src/dx12_vulkan_interop_abi.rs", "runtime/orchestrator/src/native_dx12_vulkan_platform.h",
          "rsf_dx12vk_(platform|shared_image|interop_callbacks)", "RSF_DX12VK_INTEROP_.*",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
@@ -471,6 +478,15 @@ generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/re
          "rsf_native_(cpu_(frame|counters|reservation|reservation_counters)|input_receipts)",
          "RSF_NATIVE_CPU_(RESERVATION_.*|DEPENDENCY_.*|PRESENT_.*)",
          ["-Iruntime/orchestrator/include", "-Isdk/game/include"])
+generate("tests/game-sdk/src/antilag_abi.rs", "runtime/orchestrator/src/latency_antilag.h",
+         "AntiLag(Callbacks|Context|State)", "NOTHING", [],
+         ["--allowlist-function", "rsf_core_antilag_.*", "--with-derive-default"])
+generate("tests/game-sdk/src/cpu_calls.rs", "runtime/orchestrator/include/rescaleframe/native_cpu.h",
+         "NOTHING", "NOTHING", ["-Iruntime/orchestrator/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist",
+          "--allowlist-function", "rsf_native_(cpu_(event|dispatch|read|release|release_session|marker|ping_message|counters_get)|input_receipts_get)",
+          "--raw-line", "use crate::cpu_abi::{rsf_native_cpu_counters, rsf_native_cpu_frame, rsf_native_input_receipts};",
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_cpu_event_fn};"])
 generate("runtime/orchestrator/src/scene_abi.rs", "runtime/orchestrator/include/rescaleframe/native_window.h",
          "rsf_(native_present_record|observer_present_event|native_scene_identity)",
          "RSF_NATIVE_SCENE_PRESENT_.*",

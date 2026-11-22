@@ -3,18 +3,22 @@ use crate::latency_lease::{
     pacing_owner, rsf_native_latency_claim, rsf_native_latency_has_claim,
     rsf_native_latency_release_claim,
 };
-use crate::native_cpu::rsf_native_cpu_release_session;
+use crate::native_cpu::{rsf_native_cpu_dispatch, rsf_native_cpu_release_session};
 use crate::render_abi::{RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL};
 use crate::sr_session::has_capacity;
 use crate::vulkan_antilag::*;
 use crate::vulkan_fg_abi::{RSF_FGVK_LATENCY_ABI_VERSION, rsf_fgvk, rsf_fgvk_latency_status};
 use crate::vulkan_latency_abi::*;
 use crate::vulkan_latency_frames::{streamline::*, *};
+use crate::vulkan_latency_platform_abi::{
+    rsf_vk_latency_platform as Platform, rsf_vk_streamline_calls as Streamline,
+};
 use crate::vulkan_pcl::{
-    self as pcl, Sdk as PclSdk, rsf_core_latencyvk_pcl_bind as bind_pcl,
-    rsf_core_latencyvk_pcl_reset, rsf_core_latencyvk_pcl_status,
+    self as pcl, rsf_core_latencyvk_pcl_bind as bind_pcl, rsf_core_latencyvk_pcl_reset,
+    rsf_core_latencyvk_pcl_status,
 };
 use crate::vulkan_presentation::*;
+use crate::vulkan_timing::{timing_begin, timing_end};
 use rsf_game_sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
@@ -30,29 +34,6 @@ const FEATURE_FAILED: i32 = -9;
 const AMD: u32 = 4;
 const XE_SS_FG: u32 = 5;
 const CLIENT: u32 = 2;
-
-#[repr(C)]
-struct Streamline {
-    initialize: unsafe extern "C" fn(*const u16, *const c_char, u32, *mut i32) -> i32,
-    shutdown: unsafe extern "C" fn() -> i32,
-    module: unsafe extern "C" fn() -> *mut c_void,
-    invoke: unsafe extern "C" fn(*const rsf_slvk_call, *mut c_void, usize) -> i32,
-    pace: unsafe extern "C" fn(u64, u32, u32, u32, *mut i32),
-    tokens: SdkTokens,
-    pcl: PclSdk,
-}
-
-#[repr(C)]
-struct Platform {
-    streamline: *const Streamline,
-    dispatch:
-        unsafe extern "C" fn(*const rsf_game_cpu_event, rsf_game_cpu_event_fn, *mut c_void) -> i32,
-    backend: unsafe extern "C" fn(*const rsf_fgvk, *mut u32) -> i32,
-    options: unsafe extern "C" fn(*mut rsf_fgvk, u32, u32) -> i32,
-    sleep: unsafe extern "C" fn(*mut rsf_fgvk, u64) -> i32,
-    marker: unsafe extern "C" fn(*mut rsf_fgvk, u64, u32) -> i32,
-    status: unsafe extern "C" fn(*mut rsf_fgvk, *mut rsf_fgvk_latency_status) -> i32,
-}
 
 #[derive(Clone, Copy, Default)]
 struct Stats {
@@ -73,8 +54,7 @@ static STATS: Mutex<Stats> = Mutex::new(Stats {
 
 // SDK leaf calls report their raw results. This lock is independent of the
 // SDK session guard and never spans a foreign call.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_sdk_result(result: i32, marker: u32) {
+pub(super) fn rsf_core_latencyvk_sdk_result(result: i32, marker: u32) {
     let mut stats = STATS.lock().unwrap();
     stats.last_result = result;
     stats.marker_calls += u64::from(result == OK && marker != 0);
@@ -107,13 +87,15 @@ impl PresentationLease {
     fn xell(&self, platform: &Platform) -> bool {
         let mut backend = 0;
         !self.context.is_null()
-            && unsafe { (platform.backend)(self.context, &mut backend) } == OK
+            && unsafe { (platform.backend.unwrap())(self.context, &mut backend) } == OK
             && backend == XE_SS_FG
     }
 
     fn mark(&self, platform: &Platform, owner: u32, id: u64, kind: u32) {
         if owner == RSF_PACING_XELL && !self.context.is_null() {
-            self.record_latency_result(unsafe { (platform.marker)(self.context, id, kind) });
+            self.record_latency_result(unsafe {
+                (platform.marker.unwrap())(self.context, id, kind)
+            });
         }
     }
 }
@@ -223,7 +205,16 @@ fn initialize(
     wide.extend(directory.encode_utf16());
     wide.push(0);
     let mut result = 0;
-    let bridge = unsafe { (sdk.initialize)(wide.as_ptr(), project, features, &mut result) };
+    let bridge = unsafe {
+        (sdk.initialize.unwrap())(
+            wide.as_ptr(),
+            project,
+            1,
+            u32::from(features & RSF_SLVK_DLSS_FG != 0),
+            u32::from(features & RSF_SLVK_DLSS_SR != 0),
+            &mut result,
+        )
+    };
     if bridge != OK {
         return bridge;
     }
@@ -301,11 +292,11 @@ unsafe extern "C" fn rsf_core_slvk_invoke(platform: &Platform, call: *const rsf_
         }
         token
     };
-    let module = unsafe { (sdk.module)() };
+    let module = unsafe { (sdk.module.unwrap())() };
     if module.is_null() {
         return NOT_READY;
     }
-    unsafe { (sdk.invoke)(call, module, token) }
+    unsafe { (sdk.invoke.unwrap())(call, module, token) }
 }
 
 fn options(platform: &Platform, settings: Option<(u32, u32)>) -> i32 {
@@ -322,7 +313,7 @@ fn options(platform: &Platform, settings: Option<(u32, u32)>) -> i32 {
         (host.choose(platform, &lease), host.requested, host.limit)
     };
     if owner == RSF_PACING_XELL {
-        lease.record_latency_result(unsafe { (platform.options)(lease.context, 1, limit) })
+        lease.record_latency_result(unsafe { (platform.options.unwrap())(lease.context, 1, limit) })
     } else if owner == RSF_PACING_NONE && (requested != 0 || limit != 0) {
         NOT_SUPPORTED
     } else {
@@ -425,10 +416,11 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
         }
         if owner == RSF_PACING_XELL
             && !lease.context.is_null()
-            && lease.record_latency_result(unsafe { (platform.options)(lease.context, 1, limit) })
-                == OK
+            && lease.record_latency_result(unsafe {
+                (platform.options.unwrap())(lease.context, 1, limit)
+            }) == OK
         {
-            lease.record_latency_result(unsafe { (platform.sleep)(lease.context, id) });
+            lease.record_latency_result(unsafe { (platform.sleep.unwrap())(lease.context, id) });
         }
     }
     let marker = match stage {
@@ -467,22 +459,28 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
     {
         drop(host);
         let reflex = owner == RSF_PACING_REFLEX;
-        let mut results = [0; 2];
-        unsafe {
-            (sdk.pace)(
-                id,
-                if reflex { requested } else { 0 },
+        let started = timing_begin();
+        let options_started = timing_begin();
+        let options = unsafe {
+            (sdk.set_interval.unwrap())(
+                if reflex { requested as i32 } else { 0 },
                 if reflex { limit } else { 0 },
-                u32::from(reflex),
-                results.as_mut_ptr(),
-            );
+            )
+        };
+        timing_end("reflex_options", id, options_started);
+        let mut slept = OK;
+        if options == OK && reflex {
+            let sleep_started = timing_begin();
+            slept = unsafe { (sdk.sleep.unwrap())() };
+            timing_end("reflex_sleep", id, sleep_started);
         }
+        timing_end("cpu_pacing_total", id, started);
         let _host = HOST.lock().unwrap();
         rsf_core_latencyvk_token_pace_end();
-        rsf_core_latencyvk_sdk_result(results[0], 0);
-        if results[0] == OK {
-            rsf_core_latencyvk_sdk_result(results[1], 0);
-            if results[1] == OK {
+        rsf_core_latencyvk_sdk_result(options, 0);
+        if options == OK {
+            rsf_core_latencyvk_sdk_result(slept, 0);
+            if slept == OK {
                 let mut stats = STATS.lock().unwrap();
                 stats.mode = if reflex { requested } else { 0 };
                 stats.sleep_calls += u64::from(reflex);
@@ -499,13 +497,21 @@ unsafe extern "C" fn rsf_core_latencyvk_cpu(platform: &Platform, event: *const r
         return;
     }
     let user = ptr::from_ref(platform).cast_mut().cast();
-    if unsafe { (*event).event_version } == RSF_GAME_CPU_EVENT_VERSION {
-        if unsafe { (platform.dispatch)(event, Some(fact), user) } != 0 {
+    let version = unsafe { (*event).event_version };
+    if matches!(
+        version,
+        RSF_GAME_CPU_EVENT_VERSION
+            | RSF_GAME_CPU_EVENT_VERSION_SOURCE
+            | RSF_GAME_CPU_EVENT_VERSION_RECEIPT
+    ) {
+        if unsafe { rsf_native_cpu_dispatch(event, Some(fact), user) } != 0
+            && version == RSF_GAME_CPU_EVENT_VERSION
+        {
             pcl::pump(unsafe { &*event }, |ping| unsafe {
-                (platform.dispatch)(ping, Some(fact), user);
+                rsf_native_cpu_dispatch(ping, Some(fact), user);
             });
         }
-    } else {
+    } else if version == 0 {
         unsafe { fact(user, event) };
     }
 }
@@ -629,7 +635,7 @@ unsafe extern "C" fn rsf_core_latencyvk_get_status(
         let query = if lease.context.is_null() {
             NOT_READY
         } else {
-            unsafe { (platform.status)(lease.context, &mut status) }
+            unsafe { (platform.status.unwrap())(lease.context, &mut status) }
         };
         let (last, refused) = lease.latency_outcome();
         result.mode = 0;
@@ -678,7 +684,7 @@ extern "C" fn rsf_core_latencyvk_shutdown(platform: &Platform) -> i32 {
             return NOT_READY;
         }
         if let Some(sdk) = host.sdk(platform) {
-            let result = unsafe { (sdk.shutdown)() };
+            let result = unsafe { (sdk.shutdown.unwrap())() };
             rsf_core_latencyvk_sdk_result(result, 0);
             if result != OK {
                 return FEATURE_FAILED;

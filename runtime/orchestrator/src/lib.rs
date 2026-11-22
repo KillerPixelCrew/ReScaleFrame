@@ -350,6 +350,7 @@ mod vulkan_latency;
 mod vulkan_latency_abi;
 #[cfg(windows)]
 mod vulkan_latency_frames;
+mod vulkan_latency_platform_abi;
 #[cfg(windows)]
 mod vulkan_ownership;
 #[cfg(windows)]

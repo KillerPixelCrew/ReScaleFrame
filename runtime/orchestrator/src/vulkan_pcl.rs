@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::native_cpu::rsf_native_cpu_ping_message;
+use crate::vulkan_latency::rsf_core_latencyvk_sdk_result as sdk_result;
+use crate::vulkan_latency_platform_abi::rsf_vk_pcl_calls as Sdk;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_INPUT_EVENT,
     RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_INPUT_UNFRAMED,
@@ -56,14 +58,6 @@ static PCL: Mutex<Pcl> = Mutex::new(Pcl {
     registered: None,
 });
 
-#[repr(C)]
-pub(crate) struct Sdk {
-    bind: unsafe extern "C" fn() -> i32,
-    message: unsafe extern "C" fn() -> u32,
-    reflex: unsafe extern "C" fn(*mut u32, *mut u32),
-    report: unsafe extern "C" fn(i32),
-}
-
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_pcl_reset() {
     if PCL.lock().unwrap().registered.take().is_some() {
@@ -99,25 +93,29 @@ pub(crate) extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk:
     };
     let mut message = MSG::default();
     unsafe { PeekMessageW(&mut message, THREAD_MESSAGES, WM_USER, WM_USER, PM_NOREMOVE) };
-    let result = unsafe { (sdk.bind)() };
-    unsafe { (sdk.report)(result) };
+    let result = unsafe { (sdk.bind.unwrap())() };
+    sdk_result(result, 0);
     if result != 0 {
         PCL.lock().unwrap().registered = previous;
         return 0;
     }
-    let id = unsafe { (sdk.message)() };
+    let id = unsafe { (sdk.message.unwrap())() };
     if !(0xc000..=0xffff).contains(&id) {
         if previous.is_some() {
             rsf_native_cpu_ping_message(0);
         }
-        unsafe { (sdk.report)(NOT_READY) };
+        sdk_result(NOT_READY, 0);
         return 0;
     }
     let mut status = Status {
         message: id,
         ..Status::default()
     };
-    unsafe { (sdk.reflex)(&mut status.available, &mut status.reports) };
+    unsafe {
+        if (sdk.bind_reflex.unwrap())() == 0 {
+            (sdk.reflex.unwrap())(&mut status.available, &mut status.reports);
+        }
+    }
     let posted = {
         let mut pcl = PCL.lock().unwrap();
         pcl.cookie = pcl.cookie.wrapping_add(1).max(1);
@@ -133,7 +131,7 @@ pub(crate) extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk:
         rsf_native_cpu_ping_message(if posted { id } else { 0 });
     }
     if !posted {
-        unsafe { (sdk.report)(FEATURE_FAILED) };
+        sdk_result(FEATURE_FAILED, 0);
     }
     i32::from(posted)
 }

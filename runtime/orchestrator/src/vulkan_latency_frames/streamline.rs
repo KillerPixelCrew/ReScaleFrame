@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::{FRAMES, Frame, INVALID, LegacyPresent, NOT_READY};
 use crate::input_receipts::streamline_input;
+use crate::vulkan_latency::rsf_core_latencyvk_sdk_result as sdk_result;
+use crate::vulkan_latency_platform_abi::rsf_vk_token_calls as SdkTokens;
 
 const TOKEN_SLOTS: usize = 6; // The pinned SDK's retained frame-token ring.
 const FEATURE_FAILED: i32 = -9;
@@ -40,14 +42,6 @@ impl StreamlineFrames {
     }
 }
 
-#[repr(C)]
-pub(crate) struct SdkTokens {
-    begin: unsafe extern "C" fn(u32) -> usize,
-    current: unsafe extern "C" fn() -> usize,
-    matches: unsafe extern "C" fn(usize, u32) -> i32,
-    mark: unsafe extern "C" fn(usize, u32) -> i32,
-}
-
 // The host serializes ledger operations. It drops its guard for Reflex sleep
 // so older Present markers can still look up and use their retained tokens.
 // The frame lock only covers bookkeeping.
@@ -56,7 +50,7 @@ fn validated(sdk: &SdkTokens, session: u64, id: u64) -> Option<Token> {
     let token = (*FRAMES.lock().unwrap().streamline.slot(id))?;
     (token.frame.id == id
         && (session == 0 || token.frame.session == session)
-        && unsafe { (sdk.matches)(token.handle, index) } != 0)
+        && unsafe { (sdk.matches.unwrap())(token.handle, index) } != 0)
         .then_some(token)
 }
 
@@ -67,7 +61,9 @@ fn emit(sdk: &SdkTokens, token: &mut Token, kind: u32) -> i32 {
     if token.marked & mask != 0 {
         return 0;
     }
-    if unsafe { (sdk.mark)(token.handle, kind) } != 0 {
+    let result = unsafe { (sdk.mark.unwrap())(token.handle, kind) };
+    sdk_result(result, 1);
+    if result != 0 {
         return FEATURE_FAILED;
     }
     token.marked |= mask;
@@ -100,8 +96,10 @@ pub(crate) extern "C" fn rsf_core_latencyvk_token_begin(session: u64, id: u64, s
         *slot = None;
         index
     };
-    let handle = unsafe { (sdk.begin)(index) };
-    if handle != 0 {
+    let mut handle = 0;
+    let result = unsafe { (sdk.begin.unwrap())(index, &mut handle) };
+    sdk_result(result, 0);
+    if result == 0 && handle != 0 {
         *FRAMES.lock().unwrap().streamline.slot(id) = Some(Token {
             frame,
             handle,
@@ -129,7 +127,7 @@ pub(crate) extern "C" fn rsf_core_latencyvk_token_pace_begin(
     let Some(mut token) = validated(sdk, session, id) else {
         return 0;
     };
-    if token.pacing_attempted || unsafe { (sdk.current)() } != token.handle {
+    if token.pacing_attempted || unsafe { (sdk.current.unwrap())() } != token.handle {
         return 0;
     }
     let mut frames = FRAMES.lock().unwrap();

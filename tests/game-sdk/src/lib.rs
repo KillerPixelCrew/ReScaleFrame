@@ -2,8 +2,22 @@
 #![cfg(windows)]
 
 mod anomaly;
+#[cfg(feature = "cpu-fixtures")]
+mod antilag;
+#[cfg(feature = "cpu-fixtures")]
+mod antilag_abi;
 mod contract;
+#[cfg(feature = "cpu-fixtures")]
+#[allow(dead_code)]
+#[path = "../../../runtime/orchestrator/src/cpu_abi.rs"]
+mod cpu_abi;
+#[cfg(feature = "cpu-fixtures")]
+mod cpu_calls;
+#[cfg(feature = "cpu-fixtures")]
+mod cpu_events;
 mod domains;
+#[cfg(feature = "cpu-fixtures")]
+mod input_receipts;
 mod session;
 
 use std::ffi::{CStr, OsStr};

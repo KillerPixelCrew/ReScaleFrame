@@ -2,11 +2,11 @@
 use crate::latency_antilag::{AMD_VENDOR_ID, fps_from_interval};
 use crate::sr_session::has_capacity;
 use crate::vulkan_latency_abi::{
-    RSF_LATENCYVK_DEVICE_ABI_VERSION, rsf_amd_vk_device_info as DeviceInfo,
-    rsf_amd_vk_platform as Platform, rsf_latencyvk_created_device as Created,
+    RSF_LATENCYVK_DEVICE_ABI_VERSION, rsf_latencyvk_created_device as Created,
     rsf_latencyvk_device_query as Query, rsf_latencyvk_device_requirements as Requirements,
 };
 use crate::vulkan_sr_abi::rsf_vk_function;
+use ash::vk::{self, Handle as _};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
@@ -16,12 +16,17 @@ const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const NOT_READY: i32 = -8;
 const NOT_SUPPORTED: i32 = -7;
+const FEATURE_FAILED: i32 = -9;
 const INPUT: u32 = 0;
 const PRESENT: u32 = 1;
 const MODE_ONLY: u32 = u32::MAX;
 const FRAME_SLOTS: usize = 128;
 const FEATURES_2: u32 = 1_000_059_000;
 const ANTI_LAG_FEATURE: u32 = 1_000_476_000;
+const ANTI_LAG_DATA: i32 = 1_000_476_001;
+const ANTI_LAG_PRESENTATION_INFO: i32 = 1_000_476_002;
+const ANTI_LAG_ON: i32 = 1;
+const ANTI_LAG_OFF: i32 = 2;
 const ANTI_LAG_EXTENSION: &CStr = c"VK_AMD_anti_lag";
 
 #[repr(C)]
@@ -106,30 +111,56 @@ unsafe fn enable_feature(out: *mut Requirements) -> i32 {
     0
 }
 
-unsafe fn anti_lag_enabled(info: &DeviceInfo) -> bool {
-    if info.extension_count == 0 || info.extension_count > 4096 || info.extensions.is_null() {
+unsafe fn anti_lag_enabled(info: &vk::DeviceCreateInfo<'_>) -> bool {
+    let count = info.enabled_extension_count as usize;
+    if count == 0 || count > 4096 || info.pp_enabled_extension_names.is_null() {
         return false;
     }
     let Some((_, feature)) =
-        (unsafe { feature_chain(info.features.cast_mut().cast::<FeatureHeader>()) })
+        (unsafe { feature_chain(info.p_next.cast_mut().cast::<FeatureHeader>()) })
     else {
         return false;
     };
     if feature.is_null() || unsafe { (*feature).enabled } == 0 {
         return false;
     }
-    unsafe { std::slice::from_raw_parts(info.extensions, info.extension_count as usize) }
+    unsafe { std::slice::from_raw_parts(info.pp_enabled_extension_names, count) }
         .iter()
         .any(|&name| !name.is_null() && unsafe { CStr::from_ptr(name) } == ANTI_LAG_EXTENSION)
 }
 
-type Invoke = unsafe extern "C" fn(*mut c_void, rsf_vk_function, u32, u64, u32, u32);
+// VK_AMD_anti_lag is newer than the pinned ash Vulkan registry. These are the
+// extension's x64 C layouts from Vulkan-Headers 1.4.357.
+#[repr(C)]
+struct PresentationInfo {
+    kind: i32,
+    next: *mut c_void,
+    stage: i32,
+    frame_index: u64,
+}
+
+#[repr(C)]
+struct AntiLagData {
+    kind: i32,
+    next: *const c_void,
+    mode: i32,
+    max_fps: u32,
+    presentation: *const PresentationInfo,
+}
+
+const _: () = {
+    assert!(size_of::<PresentationInfo>() == 32);
+    assert!(std::mem::offset_of!(PresentationInfo, frame_index) == 24);
+    assert!(size_of::<AntiLagData>() == 32);
+    assert!(std::mem::offset_of!(AntiLagData, presentation) == 24);
+};
+
+type UpdateDevice = unsafe extern "system" fn(vk::Device, *const AntiLagData);
 
 #[derive(Clone, Copy)]
 struct Device {
     handle: *mut c_void,
-    update: rsf_vk_function,
-    invoke: Invoke,
+    update: UpdateDevice,
 }
 
 // The opaque Vulkan handle is borrowed until all admitted SDK calls retire.
@@ -137,16 +168,24 @@ unsafe impl Send for Device {}
 
 impl Device {
     fn call(self, stage: u32, frame: u64, enabled: bool, fps: u32) {
-        unsafe {
-            (self.invoke)(
-                self.handle,
-                self.update,
-                stage,
-                frame,
-                u32::from(enabled),
-                fps,
-            )
+        let present = PresentationInfo {
+            kind: ANTI_LAG_PRESENTATION_INFO,
+            next: ptr::null_mut(),
+            stage: stage as i32,
+            frame_index: frame,
         };
+        let data = AntiLagData {
+            kind: ANTI_LAG_DATA,
+            next: ptr::null(),
+            mode: if enabled { ANTI_LAG_ON } else { ANTI_LAG_OFF },
+            max_fps: fps,
+            presentation: if stage == MODE_ONLY {
+                ptr::null()
+            } else {
+                &present
+            },
+        };
+        unsafe { (self.update)(vk::Device::from_raw(self.handle as u64), &data) };
     }
 }
 
@@ -289,7 +328,7 @@ impl Drop for Update {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_amd_vk_require(
-    platform: Option<&Platform>,
+    enabled: u32,
     query: *const Query,
     out: *mut Requirements,
 ) -> i32 {
@@ -315,18 +354,9 @@ unsafe extern "C" fn rsf_core_amd_vk_require(
             features: query.features,
         });
     }
-    if let Some(platform) = platform {
-        match amd_device(platform, query) {
-            Ok(true) => {
-                let mut supported = 0;
-                let result = unsafe { (platform.supported.unwrap())(query, &mut supported) };
-                if result != 0 {
-                    return result;
-                }
-                if supported != 0 {
-                    return unsafe { enable_feature(out) };
-                }
-            }
+    if enabled != 0 && unsafe { amd_device(query) } {
+        match unsafe { supported(query) } {
+            Ok(true) => return unsafe { enable_feature(out) },
             Ok(false) => {}
             Err(result) => return result,
         }
@@ -335,10 +365,7 @@ unsafe extern "C" fn rsf_core_amd_vk_require(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_amd_vk_device_created(
-    platform: Option<&Platform>,
-    facts: *const Created,
-) -> i32 {
+unsafe extern "C" fn rsf_core_amd_vk_device_created(enabled: u32, facts: *const Created) -> i32 {
     if !unsafe { has_capacity(facts) } {
         return INVALID;
     }
@@ -349,9 +376,9 @@ unsafe extern "C" fn rsf_core_amd_vk_device_created(
     if facts.abi_version != RSF_LATENCYVK_DEVICE_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let Some(platform) = platform else {
+    if enabled == 0 {
         return NOT_SUPPORTED;
-    };
+    }
     if facts.instance.is_null() || facts.physical_device.is_null() || facts.instance_proc.is_none()
     {
         return NOT_SUPPORTED;
@@ -364,51 +391,116 @@ unsafe extern "C" fn rsf_core_amd_vk_device_created(
         instance_proc: facts.instance_proc,
         features: ptr::null_mut(),
     };
-    match amd_device(platform, &query) {
-        Ok(true) => {}
-        Ok(false) => return NOT_SUPPORTED,
-        Err(result) => return result,
+    if !unsafe { amd_device(&query) } || !unsafe { anti_lag_enabled(&*facts.create_info.cast()) } {
+        return NOT_SUPPORTED;
     }
-    let mut info = DeviceInfo {
-        features: ptr::null(),
-        extension_count: 0,
-        extensions: ptr::null(),
+    let Some(get_device) = (unsafe { get_proc(&query, c"vkGetDeviceProcAddr") }) else {
+        return NOT_SUPPORTED;
     };
-    unsafe { (platform.device_info.unwrap())(facts, &mut info) };
-    if !unsafe { anti_lag_enabled(&info) } {
+    let get_device = unsafe {
+        std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetDeviceProcAddr>(get_device)
+    };
+    let handle = vk::Device::from_raw(facts.device as u64);
+    let Some(update) = (unsafe { get_device(handle, c"vkAntiLagUpdateAMD".as_ptr()) }) else {
         return NOT_SUPPORTED;
-    }
-    let mut update = None;
-    let result = unsafe { (platform.device_update.unwrap())(facts, &mut update) };
-    if result != 0 {
-        return result;
-    }
-    if update.is_none() {
-        return NOT_SUPPORTED;
-    }
-    bind(facts.device, update, platform.invoke_update.unwrap())
+    };
+    let update =
+        unsafe { std::mem::transmute::<unsafe extern "system" fn(), UpdateDevice>(update) };
+    bind(facts.device, update)
 }
 
-fn amd_device(platform: &Platform, query: &Query) -> Result<bool, i32> {
-    let mut vendor = 0;
-    let result = unsafe { (platform.vendor.unwrap())(query, &mut vendor) };
-    if result != 0 {
-        return Err(result);
-    }
-    Ok(vendor == AMD_VENDOR_ID)
+unsafe fn get_proc(query: &Query, name: &CStr) -> rsf_vk_function {
+    unsafe { (query.instance_proc.unwrap())(query.instance, name.as_ptr()) }
 }
 
-fn bind(handle: *mut c_void, update: rsf_vk_function, invoke: Invoke) -> i32 {
+unsafe fn amd_device(query: &Query) -> bool {
+    let Some(properties) = (unsafe { get_proc(query, c"vkGetPhysicalDeviceProperties") }) else {
+        return false;
+    };
+    let properties = unsafe {
+        std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetPhysicalDeviceProperties>(
+            properties,
+        )
+    };
+    let mut value = vk::PhysicalDeviceProperties::default();
+    unsafe {
+        properties(
+            vk::PhysicalDevice::from_raw(query.physical_device as u64),
+            &mut value,
+        )
+    };
+    value.vendor_id == AMD_VENDOR_ID
+}
+
+unsafe fn supported(query: &Query) -> Result<bool, i32> {
+    let Some(enumerate) = (unsafe { get_proc(query, c"vkEnumerateDeviceExtensionProperties") })
+    else {
+        return Ok(false);
+    };
+    let features = unsafe { get_proc(query, c"vkGetPhysicalDeviceFeatures2") }
+        .or_else(|| unsafe { get_proc(query, c"vkGetPhysicalDeviceFeatures2KHR") });
+    let Some(features) = features else {
+        return Ok(false);
+    };
+    let enumerate = unsafe {
+        std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkEnumerateDeviceExtensionProperties>(
+            enumerate,
+        )
+    };
+    let features = unsafe {
+        std::mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetPhysicalDeviceFeatures2>(
+            features,
+        )
+    };
+    let physical = vk::PhysicalDevice::from_raw(query.physical_device as u64);
+    let mut count = 0;
+    if unsafe { enumerate(physical, ptr::null(), &mut count, ptr::null_mut()) }
+        != vk::Result::SUCCESS
+        || count == 0
+        || count > 4096
+    {
+        return Ok(false);
+    }
+    let mut extensions = Vec::new();
+    extensions
+        .try_reserve_exact(count as usize)
+        .map_err(|_| FEATURE_FAILED)?;
+    extensions.resize(count as usize, vk::ExtensionProperties::default());
+    if unsafe { enumerate(physical, ptr::null(), &mut count, extensions.as_mut_ptr()) }
+        != vk::Result::SUCCESS
+        || count as usize > extensions.len()
+    {
+        return Ok(false);
+    }
+    if !extensions[..count as usize].iter().any(|entry| {
+        entry
+            .extension_name_as_c_str()
+            .is_ok_and(|name| name == ANTI_LAG_EXTENSION)
+    }) {
+        return Ok(false);
+    }
+    let mut supported = AntiLagFeature {
+        header: FeatureHeader {
+            kind: ANTI_LAG_FEATURE,
+            next: ptr::null_mut(),
+        },
+        enabled: 0,
+    };
+    let mut root = vk::PhysicalDeviceFeatures2 {
+        p_next: (&raw mut supported).cast(),
+        ..Default::default()
+    };
+    unsafe { features(physical, &mut root) };
+    Ok(supported.enabled != 0)
+}
+
+fn bind(handle: *mut c_void, update: UpdateDevice) -> i32 {
     let mut state = STATE.lock().unwrap();
     if state.phase != Phase::Open || (state.device.is_some() && !state.for_device(handle)) {
         return NOT_READY;
     }
     if state.device.is_none() {
-        state.device = Some(Device {
-            handle,
-            update,
-            invoke,
-        });
+        state.device = Some(Device { handle, update });
     }
     0
 }

@@ -116,6 +116,10 @@ fn begin(timing: &Timing) -> i64 {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_vk_timing_begin() -> i64 {
+    timing_begin()
+}
+
+pub(crate) fn timing_begin() -> i64 {
     INITIALIZE.call_once(|| {
         let Some(timing) =
             std::env::var_os("RSF_VULKAN_TIMING_FILE").and_then(|path| Timing::open(&path))
@@ -136,16 +140,23 @@ extern "C" fn rsf_core_vk_timing_begin() -> i64 {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_vk_timing_end(stage: *const c_char, frame: u64, start: i64) {
-    if start <= 0 || stage.is_null() {
+    if start > 0
+        && !stage.is_null()
+        && let Ok(stage) = unsafe { CStr::from_ptr(stage) }.to_str()
+    {
+        timing_end(stage, frame, start);
+    }
+}
+
+pub(crate) fn timing_end(stage: &str, frame: u64, start: i64) {
+    if start <= 0 {
         return;
     }
     let end = counter();
     let Some(timing) = (unsafe { TIMING.load(Ordering::Acquire).as_ref() }) else {
         return;
     };
-    if end >= start
-        && let Ok(stage) = unsafe { CStr::from_ptr(stage) }.to_str()
-    {
+    if end >= start {
         timing.write(stage, frame, unsafe { GetCurrentThreadId() }, start, end);
     }
 }
