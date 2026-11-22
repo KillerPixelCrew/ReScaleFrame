@@ -15,8 +15,6 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
 
-type FenceCompleted = unsafe extern "C" fn(*mut c_void) -> u64;
-
 struct Session {
     host: Host,
     // The switching thread takes the state out while draining the host and
@@ -66,7 +64,7 @@ impl Context {
         if result != 0 { Err(result) } else { Ok(status) }
     }
 
-    fn retired(&self, completed: FenceCompleted) -> i32 {
+    fn retired(&self) -> i32 {
         let mut retirement = rsf_fg_retirement {
             struct_size: size_of::<rsf_fg_retirement>() as u32,
             fence: ptr::null_mut(),
@@ -80,7 +78,8 @@ impl Context {
             None => INVALID_ARGUMENT,
             Some(Retirement::Immediate) => 0,
             Some(Retirement::Fenced { fence, value }) => {
-                match FenceState::check(unsafe { completed(fence.as_ptr()) }, value) {
+                match FenceState::check(unsafe { rsf_d3d12_fence_completed(fence.as_ptr()) }, value)
+                {
                     FenceState::Pending => NOT_READY,
                     FenceState::Complete => 0,
                     FenceState::DeviceRemoved => FEATURE_FAILED,
@@ -253,7 +252,7 @@ impl Session {
             }
         }
         if let Some(ref current) = state.active {
-            let result = current.retired(rsf_d3d12_fence_completed);
+            let result = current.retired();
             if result != 0 {
                 return result;
             }
