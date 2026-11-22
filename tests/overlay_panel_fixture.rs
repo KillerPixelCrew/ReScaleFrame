@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Deterministic triangle and one atlas upload for the native overlay host fixtures.
 
-#[allow(dead_code)]
+#[allow(dead_code, unused_imports)]
 #[path = "../ui/overlay/src/abi.rs"]
 mod abi;
 

@@ -2,7 +2,7 @@
 use crate::com_ref::ComRef;
 use crate::overlay_abi::rsf_overlay_texture_update as Update;
 use crate::overlay_geometry::{
-    TEXTURE_EDGE, borrowed_draw_slice, patch_fits, valid_indices, valid_texture,
+    TEXTURE_EDGE, borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
 };
 use crate::overlay_host_abi::{
     rsf_overlay_draw_call as DrawCall, rsf_overlay_draw_data as DrawData,
@@ -275,16 +275,13 @@ impl Renderer {
             return RESOURCE_FAILED;
         }
         for (index, call) in calls.iter().enumerate() {
-            if call.index_count == 0 {
+            let Ok(Some(clip)) = draw_clip(call, width, height) else {
                 continue;
-            }
+            };
             if !valid_indices(call, indices, data.vertex_count) {
                 notes.invalid_call.get_or_insert(index);
                 continue;
             }
-            let Some(clip) = clip_rect(call, width, height) else {
-                continue;
-            };
             let Some(texture) = state
                 .textures
                 .iter()
@@ -399,20 +396,6 @@ struct DrawNotes {
     invalid_call: Option<usize>,
     missing_texture: Option<u64>,
     target: Option<&'static str>,
-}
-
-fn clip_rect(call: &DrawCall, width: u32, height: u32) -> Option<[i32; 4]> {
-    let right = call.clip_x.saturating_add(call.clip_width).min(width);
-    let bottom = call.clip_y.saturating_add(call.clip_height).min(height);
-    if call.clip_x >= right || call.clip_y >= bottom {
-        return None;
-    }
-    Some([
-        i32::try_from(call.clip_x).ok()?,
-        i32::try_from(call.clip_y).ok()?,
-        i32::try_from(right).ok()?,
-        i32::try_from(bottom).ok()?,
-    ])
 }
 
 #[unsafe(no_mangle)]

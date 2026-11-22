@@ -13,7 +13,7 @@ pub const RSF_OVERLAY_SR_CHANGE_REFUSED: u32 = 3;
 pub const RSF_OVERLAY_FRAME_LIMIT_VRR: u32 = 2147483647;
 pub type rsf_overlay_quality = u32;
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct rsf_overlay_host_option {
     pub label: *const ::core::ffi::c_char,
     pub kind: u32,
@@ -60,7 +60,7 @@ impl Default for rsf_overlay_host_option {
     }
 }
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct rsf_overlay_stats {
     pub struct_size: u32,
     pub backend_loaded: u32,
@@ -345,7 +345,7 @@ impl Default for rsf_overlay_stats {
     }
 }
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct rsf_overlay_intent {
     pub struct_size: u32,
     pub quality_changed: u32,

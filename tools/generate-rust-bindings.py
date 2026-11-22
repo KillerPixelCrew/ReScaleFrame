@@ -9,11 +9,11 @@ bindgen = os.environ.get("BINDGEN", "bindgen")
 if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
     raise SystemExit("Install bindgen-cli 0.72.1 to regenerate the SDK bindings")
 
-def generate(output, header, types, constants, clang_args, extra=(), *, use_core=True):
+def generate(output, header, types, constants, clang_args, extra=(), *, use_core=True, derive_debug=False):
     bindings = subprocess.check_output([
         bindgen, header, "--allowlist-type", types, "--allowlist-var", constants,
         "--raw-line", "#![allow(non_camel_case_types)]",
-        "--no-derive-debug", *(["--use-core"] if use_core else []),
+        *([] if derive_debug else ["--no-derive-debug"]), *(["--use-core"] if use_core else []),
         "--no-doc-comments", "--rust-edition", "2024",
         "--rust-target", "1.85", *extra, "--", "--target=x86_64-pc-windows-msvc", *clang_args,
     ], cwd=root).replace(b"\r\n", b"\n")
@@ -490,7 +490,8 @@ generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/incl
 overlay_wire = "rsf_overlay_(host_option|intent|quality|stats)"
 generate("ui/overlay/src/wire.rs", "ui/overlay/include/rescaleframe/overlay.h",
          overlay_wire, "RSF_OVERLAY_(ABI_VERSION|QUALITY_ULTRA_QUALITY|SR_QUALITY_.*|SR_CHANGE_.*|FRAME_LIMIT_VRR)",
-         [], ["--with-derive-default", "--raw-line", "#![allow(missing_docs, dead_code)]"])
+         [], ["--with-derive-default", "--with-derive-partialeq", "--no-default", "rsf_overlay_intent",
+              "--raw-line", "#![allow(missing_docs, dead_code)]"], derive_debug=True)
 generate("ui/overlay/src/fg_reason_codes.rs", "runtime/orchestrator/include/rescaleframe/native_fg.h",
          "NOTHING", "RSF_NATIVE_FG_REASON_.*",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/presentation/include",
@@ -522,6 +523,9 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
           "--raw-line", "pub use overlay_wire::{RSF_OVERLAY_FRAME_LIMIT_VRR, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK, RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,\n"
                         "    RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,\n"
                         "    rsf_overlay_host_option, rsf_overlay_intent, rsf_overlay_stats};",
+          "--raw-line", "impl Default for rsf_overlay_intent {\n"
+                        "    fn default() -> Self { unsafe { std::mem::zeroed() } }\n"
+                        "}",
           "--raw-line", "use crate::cpu_abi::rsf_native_cpu_counters;",
           "--raw-line", "use crate::render_abi::{\n"
                         "    rsf_generation_provider, rsf_native_fg_options, rsf_native_fg_status, rsf_render_settings,\n"

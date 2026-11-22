@@ -255,6 +255,16 @@ unsafe fn fits<T>(pointer: *const T) -> bool {
     declared as usize >= size_of::<T>()
 }
 
+impl Default for RsfOverlayIntent {
+    fn default() -> Self {
+        encode_intent(crate::model::Intent {
+            backend: 1,
+            fg_generated: 1,
+            ..Default::default()
+        })
+    }
+}
+
 fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
     RsfOverlayIntent {
         struct_size: size_of::<RsfOverlayIntent>() as u32,
@@ -624,7 +634,7 @@ mod tests {
         let input = input();
         let stats = stats();
         let mut draw = RsfOverlayDrawData::default();
-        let mut intent = encode_intent(crate::model::Intent::default());
+        let mut intent = RsfOverlayIntent::default();
         // More than one, because egui lays a new window out invisibly to size it first.
         for _ in 0..3 {
             let code =
@@ -767,6 +777,10 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
         assert_eq!(RSF_OVERLAY_ABI_VERSION, 19);
+        let intent = RsfOverlayIntent::default();
+        assert_eq!(intent.struct_size, size_of::<RsfOverlayIntent>() as u32);
+        assert_eq!((intent.backend, intent.fg_generated), (1, 1));
+        assert_eq!(intent.sr_change_id, 0);
     }
 
     #[test]

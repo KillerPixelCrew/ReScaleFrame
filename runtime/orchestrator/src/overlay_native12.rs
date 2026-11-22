@@ -2,7 +2,9 @@
 use crate::com_ref::ComRef;
 use crate::d3d12_fence::FenceState;
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
-use crate::overlay_geometry::{borrowed_draw_slice, patch_fits, valid_indices, valid_texture};
+use crate::overlay_geometry::{
+    borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
+};
 use crate::overlay_host_abi::{
     RSF_OVERLAY_ABI_VERSION, RSF_OVERLAY_HOST_PANEL_LOADED, rsf_overlay,
     rsf_overlay_draw_data as DrawData, rsf_overlay_host_panel, rsf_overlay_input,
@@ -378,25 +380,20 @@ impl Atlas {
         let calls = unsafe { borrowed_draw_slice(data.calls, data.call_count) }?;
         let mut planned = Vec::new();
         planned.try_reserve_exact(calls.len()).ok()?;
-        let edge = |origin: u32, offset: u32, limit: u32| {
-            i32::try_from(origin.saturating_add(offset).min(limit)).ok()
-        };
         for call in calls {
-            let descriptor = self.position(call.texture_id)? as u32;
+            let Some(clip) = draw_clip(call, binding.width, binding.height).ok()? else {
+                continue;
+            };
             if !valid_indices(call, indices, data.vertex_count) {
                 return None;
             }
+            let descriptor = self.position(call.texture_id)? as u32;
             planned.push(DrawCall {
                 descriptor,
                 first_index: call.index_offset,
                 index_count: call.index_count,
                 vertex_offset: i32::try_from(call.vertex_offset).ok()?,
-                clip: [
-                    edge(call.clip_x, 0, binding.width)?,
-                    edge(call.clip_y, 0, binding.height)?,
-                    edge(call.clip_x, call.clip_width, binding.width)?,
-                    edge(call.clip_y, call.clip_height, binding.height)?,
-                ],
+                clip,
             });
         }
         Some(planned)
@@ -1164,13 +1161,26 @@ mod tests {
         let target = unsafe { ComRef::from_owned(raw(&target_resource)).unwrap() };
         let vertices = [rsf_overlay_vertex::default()];
         let indices = [0u32; 3];
-        let calls = [crate::overlay_host_abi::rsf_overlay_draw_call {
+        let valid = crate::overlay_host_abi::rsf_overlay_draw_call {
             index_count: 3,
             clip_width: 4,
             clip_height: 4,
             texture_id: UPDATE.id,
             ..Default::default()
-        }];
+        };
+        let calls = [
+            crate::overlay_host_abi::rsf_overlay_draw_call {
+                index_count: 0,
+                texture_id: u64::MAX,
+                ..valid
+            },
+            crate::overlay_host_abi::rsf_overlay_draw_call {
+                clip_x: 4,
+                texture_id: u64::MAX,
+                ..valid
+            },
+            valid,
+        ];
         let data = DrawData {
             struct_size: size_of::<DrawData>() as u32,
             vertices: vertices.as_ptr(),
@@ -1178,7 +1188,7 @@ mod tests {
             indices: indices.as_ptr(),
             index_count: 3,
             calls: calls.as_ptr(),
-            call_count: 1,
+            call_count: calls.len() as u32,
         };
         let binding = Draw {
             target: target.as_ptr(),
