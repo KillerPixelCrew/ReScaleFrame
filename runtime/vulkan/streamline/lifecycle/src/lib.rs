@@ -2,7 +2,7 @@
 //! Lifecycle owner for the Streamline Vulkan interposer.
 //!
 //! The crate owns the `rsf_vk_sl_*` exports of the standalone bridge and its
-//! typed SDK calls (`win32/bridge.rs`). `win32/verified.rs` admits the interposer by the
+//! typed SDK calls (`win32/bridge.rs`). `admission.rs` admits the interposer by the
 //! digest the build selects, and `sdk_guard.c` keeps the exception containment and
 //! the `sl::FrameToken` virtual call. The crate decides when the interposer is
 //! admitted, loaded, initialized, shut down and unloaded, which features slInit
@@ -26,6 +26,9 @@ pub mod sys {
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
+/// Interposer admission by pinned digest or NVIDIA's signing key, shared with the Runtime.
+#[cfg(windows)]
+pub mod admission;
 #[cfg(any(windows, test))]
 mod diagnostics;
 #[cfg(windows)]
@@ -43,7 +46,8 @@ pub mod sdk_camera_defaults;
 /// DLSS-G options packing, shared with the Runtime.
 #[cfg(windows)]
 pub mod sdk_fg_options;
+/// Option and camera records for the SDK calls, shared with the Runtime.
 #[cfg(any(windows, test))]
-mod sdk_records;
+pub mod sdk_records;
 #[cfg(windows)]
 mod win32;

@@ -3,7 +3,6 @@
 //! the native Vulkan services read.
 
 mod bridge;
-mod verified;
 mod wsi;
 
 use crate::lifecycle::{Lifecycle, System};

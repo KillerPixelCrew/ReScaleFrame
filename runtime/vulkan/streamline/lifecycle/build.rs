@@ -16,7 +16,7 @@ fn main() {
     );
     rsf_bindgen::write(bindings, "sys.rs");
 
-    // The corrected interposer digest verify-receipt.cmake hands the build (win32/verified.rs).
+    // The corrected interposer digest verify-receipt.cmake hands the build (admission.rs).
     println!("cargo:rerun-if-env-changed=RSF_CORRECTED_STREAMLINE_SHA256");
     println!("cargo:rerun-if-changed=../sdk_guard.c");
     let mut build = cc::Build::new();

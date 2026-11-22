@@ -2,7 +2,7 @@
 //! The `rsf_vk_sl_*` exports of the Streamline Vulkan bridge and its typed SDK
 //! calls, formerly bridge.cpp. The lifecycle owner admits, loads, initializes,
 //! shuts down and unloads the interposer; these calls run under its session or
-//! frame-token lease. verified.rs admits the interposer by the digest the build
+//! frame-token lease. admission.rs admits the interposer by the digest the build
 //! selects.
 use super::{GetCurrentThreadId, GetProcAddress, LIFECYCLE, Win32, rsf_slvk_log_message};
 use crate::frame_generation::{Options, Platform as FgPlatform};
@@ -81,7 +81,7 @@ fn bind<T: Copy>(entry: &Entry<T>, feature: u32, name: &CStr) -> bool {
 // Lifecycle leaves, in the owner's Platform order.
 
 unsafe extern "C" fn open_verified(path: *const u16) -> *mut c_void {
-    unsafe { super::verified::open_interposer(path) }
+    unsafe { crate::admission::open_by_digest(path) }
 }
 
 unsafe extern "C" fn resolve(module: *mut c_void) -> i32 {
@@ -311,17 +311,10 @@ extern "C" fn rsf_vk_sl_bind_frame_generation() -> i32 {
 
 fn reflex_state() -> rsf_slvk_sdk_reflex_state {
     rsf_slvk_sdk_reflex_state {
-        base: sdk_api::header(
-            0xf0bb_5985,
-            0xdaf9,
-            0x4728,
-            [0xb2, 0xfd, 0xae, 0x80, 0xa2, 0xbd, 0x79, 0x89],
-            2,
-        ),
-        low_latency_available: 0,
-        latency_report_available: 0,
-        window_message: 0,
-        reports: [0; 12808],
+        base: sdk_api::REFLEX_STATE,
+
+        // The SDK writes the frame reports; this caller reads only the leading facts.
+        ..Default::default()
     }
 }
 
@@ -381,13 +374,8 @@ extern "C" fn rsf_vk_sl_pcl_window_message() -> u32 {
             return -1;
         };
         let mut state = rsf_slvk_sdk_pcl_state {
-            base: sdk_api::header(
-                0xcfa3_2f9b,
-                0x023c,
-                0x420e,
-                [0x90, 0x56, 0x68, 0x32, 0xb7, 0x4f, 0x89, 0xb5],
-                1,
-            ),
+            base: sdk_api::PCL_STATE,
+
             window_message: 0,
         };
         let result = guarded(|| unsafe { read(&mut state) });
