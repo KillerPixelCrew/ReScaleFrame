@@ -37,6 +37,9 @@ mod sharpening_settings;
 mod sharpening_vulkan;
 #[path = "sharpening_vulkan_cpu.rs"]
 mod sharpening_vulkan_cpu;
+/// The Vulkan device setup native_sr_vulkan and sharpening_vulkan share.
+#[path = "vulkan_gpu.rs"]
+mod vulkan_gpu;
 
 type Handle = *mut c_void;
 

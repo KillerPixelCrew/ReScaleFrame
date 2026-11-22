@@ -22,22 +22,9 @@ fn render_scope(check: &mut impl FnMut(bool, &str)) {
     let caller = base + WORLD_RETURN;
     let (session, source) = (9, 17);
     // These C records contain integers, booleans and raw pointers. Zero is their empty state.
-    let (mut state, mut pass, mut event, mut sample): (
-        RenderState,
-        rsf_game_render_pass,
-        rsf_game_cpu_event,
-        rsf_game_cpu_source_event,
-    ) = unsafe { std::mem::zeroed() };
+    let (mut state, mut pass): (RenderState, rsf_game_render_pass) = unsafe { std::mem::zeroed() };
     let (mut outer, mut nested) = (RenderReceipt::default(), RenderReceipt::default());
-    rsf_skyrim_cpu_frame_event(
-        &mut event,
-        &state,
-        RSF_GAME_CPU_FRAME_END,
-        session,
-        source,
-        20,
-        50,
-    );
+    let event = rsf_skyrim_cpu_frame_event(&state, RSF_GAME_CPU_FRAME_END, session, source, 20, 50);
     check(
         event.flags == (RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_RENDER_SKIPPED)
             && event.render_expected == 0,
@@ -117,15 +104,7 @@ fn render_scope(check: &mut impl FnMut(bool, &str)) {
         !rsf_skyrim_cpu_render_identity(&state, &mut pass, source, true),
         "closed render has no live identity",
     );
-    rsf_skyrim_cpu_frame_event(
-        &mut event,
-        &state,
-        RSF_GAME_CPU_FRAME_END,
-        session,
-        source,
-        30,
-        50,
-    );
+    let event = rsf_skyrim_cpu_frame_event(&state, RSF_GAME_CPU_FRAME_END, session, source, 30, 50);
     check(
         event.render_expected == 2
             && event.flags == RSF_GAME_CPU_INPUT_KEYED
@@ -139,8 +118,7 @@ fn render_scope(check: &mut impl FnMut(bool, &str)) {
         rsf_skyrim_cpu_sample_tick(&mut state) && !rsf_skyrim_cpu_sample_tick(&mut state),
         "tick reports the unreserved native sample once",
     );
-    rsf_skyrim_cpu_source_event(
-        &mut sample,
+    let sample = rsf_skyrim_cpu_source_event(
         RSF_GAME_CPU_SOURCE_SAMPLED,
         session,
         source,

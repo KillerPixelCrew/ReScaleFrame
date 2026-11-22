@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use super::vulkan_gpu::{self, Library, NO_LOADER};
 use super::{TestResult, check};
 use crate::dxgi_format::half_to_f32;
 use crate::sharpening_policy::defaults;
@@ -21,12 +22,9 @@ use std::{
     ffi::{CStr, CString, c_char, c_void},
     ptr,
 };
-use vulkan_gpu::{Library, NO_LOADER};
 
 #[path = "native_sr_fsr4_vulkan.rs"]
 mod fsr4;
-#[path = "vulkan_gpu.rs"]
-mod vulkan_gpu;
 
 type Handle = *mut c_void;
 

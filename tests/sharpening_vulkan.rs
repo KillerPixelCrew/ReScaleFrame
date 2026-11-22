@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use super::vulkan_gpu::{self, Library, NO_DEVICE, NO_LOADER};
 use super::{TestResult, check};
 use crate::dxgi_format::half_to_f32;
 use crate::sharpening_policy::defaults;
@@ -13,10 +14,6 @@ use ash::vk::{self, Handle};
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
 use std::ptr;
-use vulkan_gpu::{Library, NO_DEVICE, NO_LOADER};
-
-#[path = "vulkan_gpu.rs"]
-mod vulkan_gpu;
 
 const W: usize = 33;
 const H: usize = 17;

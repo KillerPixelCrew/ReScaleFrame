@@ -196,7 +196,7 @@ impl History {
     pub fn new() -> Self {
         static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
         let owner = NEXT_OWNER
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
                 next.checked_add(1)
             })
             .unwrap_or(0);

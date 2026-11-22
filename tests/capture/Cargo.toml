@@ -13,7 +13,7 @@ crate-type = ["staticlib"]
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-test-support = { path = "../support" }
 ash = { workspace = true, optional = true }
-windows = { workspace = true, features = [
+windows = { workspace = true, optional = true, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Direct3D12",
@@ -36,11 +36,11 @@ windows-sys = { workspace = true, features = [
 
 [features]
 metadata = []
-d3d12 = []
-d3d11 = []
-vulkan = ["dep:ash"]
-vulkan-cpu = ["dep:ash"]
-texture = []
+d3d12 = ["dep:windows"]
+d3d11 = ["dep:windows"]
+vulkan = ["dep:ash", "dep:windows"]
+vulkan-cpu = ["dep:ash", "dep:windows"]
+texture = ["dep:windows"]
 
 [build-dependencies]
 rsf-bindgen = { path = "../../tools/bindgen" }
