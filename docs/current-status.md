@@ -181,11 +181,11 @@ physical scanout, a latency reduction, or an in-game performance gain.
 
 | Contract | Current version | Source |
 | --- | --- | --- |
-| Game plugin lifecycle and renderer callbacks | 13 | `sdk/game/include/rescaleframe/game_api.h`, `game_renderer.h` |
-| Frame/camera record | 1 | `sdk/game/include/rescaleframe/game_frame.h` |
-| Vendor-neutral backend | 3 | `runtime/contract/include/rescaleframe/backend.h` |
+| Game plugin lifecycle and renderer callbacks | 24 | `sdk/game/include/rescaleframe/game_api.h`, `game_renderer.h` |
+| Frame record / camera record | 2 / 1 | `sdk/game/include/rescaleframe/game_frame.h` |
+| Vendor-neutral backend | 4 | `runtime/contract/include/rescaleframe/backend.h` |
 | FG provider | 2 | `runtime/contract/include/rescaleframe/frame_generation.h` |
-| Overlay | 12 | `ui/overlay/include/rescaleframe/overlay.h` |
+| Overlay | 20 | `ui/overlay/include/rescaleframe/overlay.h` |
 
 `VERSION` and the Cargo workspace both specify 0.1.1. Equal component versions do not imply equal
 builds or ABI compatibility; deploy matched artifacts. SDK headers are optional, and absent headers
