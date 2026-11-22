@@ -9,8 +9,19 @@
 #include <dx12/ffx_api_framegeneration_dx12.h>
 #include <cstring>
 #include <new>
-#include "bridge_contract.h"
+#include "bridge_platform.h"
 #include "../../backends/common/d3d12_helpers.h"
+
+extern "C" int32_t rsf_core_fsr4fg_sdk_versions(PfnFfxQuery, void*, rsf_ffx_version*, uint64_t*);
+extern "C" int32_t rsf_core_fsr4fg_sdk_provider(PfnFfxQuery, ffxContext*, uint64_t*);
+extern "C" void rsf_core_fsr4fg_sdk_prepare(const rsf_fsr4fg_frame*, uint64_t, uint32_t,
+    ffxDispatchDescFrameGenerationPrepareV2*);
+
+static_assert(sizeof(ffxQueryDescGetVersions) == 56 && sizeof(ffxQueryGetProviderVersion) == 32);
+static_assert(sizeof(ffxDispatchDescFrameGenerationPrepareV2) == 232 &&
+    offsetof(ffxDispatchDescFrameGenerationPrepareV2, commandList) == 32 &&
+    offsetof(ffxDispatchDescFrameGenerationPrepareV2, depth) == 88 &&
+    offsetof(ffxDispatchDescFrameGenerationPrepareV2, cameraPosition) == 184);
 
 struct rsf_fsr4fg_native {
     HMODULE module{};
@@ -120,7 +131,7 @@ int32_t load(Native* self, const uint16_t* path) {
 }
 
 int32_t versions(Native* self, rsf_ffx_version* out, uint64_t* count) {
-    return rsf::fsr4fg::versions(self->query, self->device, out, *count);
+    return rsf_core_fsr4fg_sdk_versions(self->query, self->device, out, count);
 }
 
 int32_t create_generation(Native* self, const rsf_fsr4fg_create* setup, uint64_t provider) {
@@ -143,7 +154,7 @@ int32_t create_generation(Native* self, const rsf_fsr4fg_create* setup, uint64_t
 }
 
 int32_t get_provider(Native* self, uint64_t* actual) {
-    return rsf::fsr4fg::provider_version(self->query, &self->generation, *actual);
+    return rsf_core_fsr4fg_sdk_provider(self->query, &self->generation, actual);
 }
 
 int32_t create_queue(Native* self, const rsf_fsr4fg_queue_desc* setup) {
@@ -288,7 +299,7 @@ void shader_read(Native* self, void* resource, uint32_t enter) {
 
 int32_t prepare(Native* self, const rsf_fsr4fg_frame* frame, uint64_t sequence, uint32_t reset) {
     ffxDispatchDescFrameGenerationPrepareV2 desc{};
-    rsf::fsr4fg::prepare_constants(*frame, sequence, reset != 0, desc);
+    rsf_core_fsr4fg_sdk_prepare(frame, sequence, reset, &desc);
     desc.commandList = self->commands;
     desc.depth = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->depth), FFX_API_RESOURCE_STATE_COMPUTE_READ);
     desc.motionVectors = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->motion), FFX_API_RESOURCE_STATE_COMPUTE_READ);

@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering::SeqCst};
 #[path = "../../vulkan/fsr4/completion.rs"]
 mod completion;
 use completion::next_local_completion;
+#[path = "../../vulkan/fsr4-fg/sdk.rs"]
+mod sdk;
 #[path = "../../vulkan/timeline_pair.rs"]
 mod timeline_pair;
 
@@ -721,17 +723,6 @@ fn select_version(versions: &[Version], count: u64) -> u64 {
         return 0;
     }
     ffx_version::select(&versions[..count as usize], 4, 0).map_or(0, |version| version.id)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_select_version(versions: *const Version, count: u64) -> u64 {
-    if versions.is_null() || count > MAX_VERSIONS as u64 {
-        return 0;
-    }
-    select_version(
-        unsafe { std::slice::from_raw_parts(versions, count as usize) },
-        count,
-    )
 }
 
 #[unsafe(no_mangle)]
