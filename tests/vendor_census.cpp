@@ -35,6 +35,10 @@ extern "C" {
 int rsf_test_census_budget(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
                            decltype(&rsf_census_get_counters), decltype(&rsf_census_shutdown), int (*)(int));
 int rsf_test_census_dllmain(const char*, void (*)(int*));
+int rsf_test_census_vulkan(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
+                           decltype(&rsf_census_shutdown), int (*)());
+int rsf_test_census_ffx(const char*, decltype(&rsf_census_install), decltype(&rsf_census_flush),
+                        decltype(&rsf_census_shutdown), int (*)());
 int rsf_test_census_creation(const char*, decltype(&rsf_census_install), decltype(&rsf_census_shutdown));
 __declspec(dllimport) int ffxFsr2ContextDispatch(void* context, const void* desc);
 __declspec(dllimport) int ffxFsr2GetJitterOffset(float* x, float* y, int index, int phase_count);
@@ -1246,16 +1250,7 @@ void put(unsigned char* base, size_t offset, T value) {
     std::memcpy(base + offset, &value, sizeof(T));
 }
 
-int vulkan_mode(const std::string& dir) {
-    rsf_census_options opt{};
-    opt.struct_size = sizeof(opt);
-    opt.abi_version = RSF_CENSUS_ABI_VERSION;
-    opt.output_dir_utf8 = dir.c_str();
-    opt.full_record_cap = 8;
-    opt.summary_period_ms = 50;
-    opt.flags = RSF_CENSUS_FLAG_NO_STATIC_SCAN;
-    CHECK(rsf_census_install(&opt) == RSF_CENSUS_OK);
-
+int probe_vulkan() {
     HMODULE vk = load_fixture(L"rsf_fixture_vulkan.dll");
     HMODULE sl = load_fixture(L"sl.interposer.dll");
     if (!vk || !sl) return 1;
@@ -1416,139 +1411,12 @@ int vulkan_mode(const std::string& dir) {
     put<uint32_t>(options, 68, 1080);
     CHECK(reinterpret_cast<int (*)(const void*, const void*)>(dlssg_options)(viewport, options) == 0x33);
 
-    CHECK(rsf_census_flush() == RSF_CENSUS_OK);
-    int bad_lines = 0;
-    const std::vector<Json> all = read_records(dir + "\\census.jsonl", bad_lines);
-    CHECK(bad_lines == 0);
-    Json summary;
-    CHECK(parse_json(read_file(dir + "\\census-summary.json"), summary));
-
-    auto one = [&](const char* fn) -> const Json* {
-        auto r = by_fn(all, fn);
-        CHECK(r.size() >= 1);
-        return r.empty() ? nullptr : r[0]->get("args");
-    };
-    if (const Json* a = one("vkCreateInstance")) {
-        CHECK(a->get("application")->is("CensusGame") && a->get("engine")->is("CensusEngine"));
-        CHECK(a->get("api_major")->n == 1 && a->get("api_minor")->n == 3);
-        CHECK(a->get("extensions")->has_string("VK_KHR_win32_surface"));
-        CHECK(parse_hex(a->get("instance")) == 0x1001);
-    }
-    if (const Json* a = one("vkCreateDevice")) {
-        CHECK(a->get("queue_families")->a.size() == 2);
-        CHECK(a->get("queue_families")->a[1].get("family")->n == 1 && a->get("queue_families")->a[1].get("count")->n == 2);
-        CHECK(a->get("extensions")->has_string("VK_KHR_swapchain"));
-    }
-    if (const Json* a = one("vkCreateSwapchainKHR")) {
-        CHECK(a->get("width")->n == 2560 && a->get("height")->n == 1440);
-        CHECK(a->get("image_format")->n == 50 && a->get("min_image_count")->n == 3);
-        CHECK(a->get("present_mode_name")->is("MAILBOX"));
-        CHECK(parse_hex(a->get("swapchain")) == 0x4004);
-    }
-    auto presents_rec = by_fn(all, "vkQueuePresentKHR");
-    CHECK(presents_rec.size() == 3);
-    for (size_t i = 0; i < presents_rec.size(); ++i) {
-        CHECK(presents_rec[i]->get("present")->n == static_cast<double>(i + 1));
-        CHECK(presents_rec[i]->at({"args", "swapchains"})->a.size() == 1);
-        CHECK(presents_rec[i]->at({"args", "image_indices"})->a[0].n == 1);
-        CHECK(presents_rec[i]->get("module")->is(exe_basename().c_str()));
-    }
-    auto submits_rec = by_fn(all, "vkQueueSubmit");
-    CHECK(submits_rec.size() >= 2);
-    if (!submits_rec.empty()) {
-        CHECK(submits_rec[0]->at({"args", "batches"})->n == 2);
-        CHECK(submits_rec[0]->at({"args", "command_buffers_in_first_16"})->n == 4);
-    }
-    if (const Json* a = one("vkQueueSubmit2")) CHECK(a->get("command_buffers_in_first_16")->n == 2);
-
-    const Json* queues = summary.get("queues");
-    CHECK(queues && queues->a.size() == 2);
-    int seen_queues = 0;
-    if (queues) {
-        for (const Json& q : queues->a) {
-            CHECK(q.get("kind")->is("vulkan"));
-            if (parse_hex(q.get("queue")) == 0x3000) {
-                ++seen_queues;
-                CHECK(q.get("family")->n == 0 && q.get("index")->n == 0);
-                CHECK(q.get("submit_calls")->n == 6 && q.get("lists_or_batches")->n == 9);
-                CHECK(q.at({"calls_per_present", "2"}) && q.at({"calls_per_present", "2"})->n == 3);
-            } else if (parse_hex(q.get("queue")) == 0x3011) {
-                ++seen_queues;
-                CHECK(q.get("family")->n == 1 && q.get("index")->n == 1);
-                CHECK(q.get("submit_calls")->n == 3);
-                CHECK(q.at({"calls_per_present", "1"}) && q.at({"calls_per_present", "1"})->n == 3);
-            }
-        }
-    }
-    CHECK(seen_queues == 2);
-    CHECK(summary.get("present_index")->n == 3);
-
-    if (const Json* a = one("slInit")) {
-        CHECK(a->get("application_id")->n == 0x1234 && a->get("engine")->n == 1);
-        CHECK(a->get("engine_version")->is("5.4") && a->get("project_id")->is("census-project"));
-        CHECK(a->get("log_level")->n == 2 && a->get("show_console")->b);
-        CHECK(a->get("features_to_load")->a.size() == 2 && a->get("features_to_load")->a[1].n == 1000);
-        CHECK(a->get("path_to_logs_and_data")->is("C:\\census\\logs"));
-    }
-    if (const Json* a = one("slReflexSleep")) CHECK(a->get("frame")->n == 42);
-    if (const Json* a = one("slSetConstants")) {
-        CHECK(a->get("frame")->n == 42 && a->get("viewport")->n == 7);
-        const Json* c = a->get("constants");
-        CHECK(c && c->get("struct_version")->n == 1);
-        if (c) {
-            const char* matrices[] = {"camera_view_to_clip", "clip_to_camera_view", "clip_to_lens_clip",
-                "clip_to_prev_clip", "prev_clip_to_clip"};
-            for (size_t matrix = 0; matrix < std::size(matrices); ++matrix) {
-                const Json* values = c->get(matrices[matrix]);
-                CHECK(values && values->a.size() == 16);
-                if (values && values->a.size() == 16)
-                    for (size_t i = 0; i < 16; ++i)
-                        CHECK_NEAR(values->a[i].n, static_cast<float>(matrix * 16 + i) - 17.25f);
-            }
-            const char* vectors[] = {"camera_pos", "camera_up", "camera_right", "camera_fwd"};
-            for (size_t vector = 0; vector < std::size(vectors); ++vector) {
-                const Json* values = c->get(vectors[vector]);
-                CHECK(values && values->a.size() == 3);
-                if (values && values->a.size() == 3)
-                    for (size_t i = 0; i < 3; ++i) CHECK_NEAR(values->a[i].n, 6 + vector * 3 + i + 0.125);
-            }
-            CHECK_NEAR(c->get("camera_near")->n, 0.1);
-            CHECK_NEAR(c->get("camera_far")->n, 10000.0);
-            CHECK(c->get("depth_inverted")->b);
-        }
-    }
-    if (const Json* a = one("slPCLSetMarker")) {
-        CHECK(a->get("marker")->n == 4 && a->get("marker_name")->is("PresentStart") && a->get("frame")->n == 42);
-    }
-    if (const Json* a = one("slDLSSGSetOptions")) {
-        CHECK(a->get("viewport")->n == 7 && a->get("mode_name")->is("On"));
-        CHECK(a->get("num_frames_to_generate")->n == 2);
-        CHECK(a->get("color_width")->n == 1920 && a->get("color_height")->n == 1080);
-    }
-    // slGetFeatureFunction swapped the entry points for thunks and the summary says so.
-    int sl_thunks = 0;
-    for (const Json& hk : summary.get("hooks")->a) {
-        if (hk.get("api")->is("streamline") && hk.get("binding")->is("getprocaddress_thunk")) ++sl_thunks;
-    }
-    CHECK(sl_thunks == 3);
-
-    CHECK(rsf_census_shutdown() == RSF_CENSUS_OK);
-    std::printf("vendor_census vulkan_streamline: %d failure(s)\n", g_failures);
     return g_failures ? 1 : 0;
 }
 
 // FidelityFX API (FSR 3.1 and later): context creation with a descriptor chain, dispatch,
 // configure. Descriptor offsets are the ones tests/vendor_census_layouts.cpp checks.
-int ffx_mode(const std::string& dir) {
-    rsf_census_options opt{};
-    opt.struct_size = sizeof(opt);
-    opt.abi_version = RSF_CENSUS_ABI_VERSION;
-    opt.output_dir_utf8 = dir.c_str();
-    opt.full_record_cap = 8;
-    opt.summary_period_ms = 50;
-    opt.flags = RSF_CENSUS_FLAG_NO_STATIC_SCAN;
-    CHECK(rsf_census_install(&opt) == RSF_CENSUS_OK);
-
+int probe_ffx() {
     HMODULE m = load_fixture(L"amd_fidelityfx_dx12.dll");
     if (!m) return 1;
     auto create = proc<unsigned (*)(void**, void*, const void*)>(m, "ffxCreateContext");
@@ -1654,76 +1522,6 @@ int ffx_mode(const std::string& dir) {
     CHECK(query(&context, qry) == 0x42);
     CHECK(destroy(&context, nullptr) == 0x43);
 
-    CHECK(rsf_census_flush() == RSF_CENSUS_OK);
-    int bad_lines = 0;
-    const std::vector<Json> all = read_records(dir + "\\census.jsonl", bad_lines);
-    CHECK(bad_lines == 0);
-
-    auto creates = by_fn(all, "ffxCreateContext");
-    CHECK(creates.size() == 2);
-    if (creates.size() == 2) {
-        const Json* chain = creates[0]->at({"args", "chain"});
-        CHECK(chain && chain->a.size() == 2);
-        if (chain && chain->a.size() == 2) {
-            CHECK(chain->a[0].get("name")->is("create_upscale"));
-            CHECK(chain->a[0].get("max_render_width")->n == 1280 && chain->a[0].get("max_upscale_height")->n == 1080);
-            CHECK(chain->a[1].get("name")->is("create_backend_dx12"));
-            CHECK(parse_hex(chain->a[1].get("device")) == 0xDE71CE);
-        }
-        CHECK(parse_hex(creates[0]->at({"args", "context"})) == 0xF00D);
-        const Json* sc = creates[1]->at({"args", "chain"});
-        CHECK(sc && sc->a.size() == 1 && sc->a[0].get("name")->is("create_swapchain_for_hwnd_dx12"));
-        if (sc && sc->a.size() == 1) {
-            CHECK(sc->a[0].at({"swapchain_desc1", "width"})->n == 3840);
-            CHECK(sc->a[0].at({"swapchain_desc1", "format_name"})->is("R10G10B10A2_UNORM"));
-            CHECK(sc->a[0].at({"swapchain_desc1", "buffer_count"})->n == 3);
-            CHECK(parse_hex(sc->a[0].get("game_queue")) == 0x9E3E);
-        }
-    }
-    auto dispatches = by_fn(all, "ffxDispatch");
-    CHECK(dispatches.size() == 2);
-    if (dispatches.size() == 2) {
-        CHECK(parse_hex(dispatches[0]->get("ret")) == 0x40);
-        const Json* node = dispatches[0]->at({"args", "chain"});
-        CHECK(node && node->a.size() == 1 && node->a[0].get("name")->is("dispatch_upscale"));
-        if (node && node->a.size() == 1) {
-            const Json& d = node->a[0];
-            CHECK(d.at({"resources", "color", "d3d12", "width"})->n == 1280);
-            CHECK(d.at({"resources", "depth", "d3d12", "format_name"})->is("D32_FLOAT"));
-            CHECK(d.at({"resources", "output", "d3d12", "width"})->n == 1920);
-            CHECK(d.at({"resources", "output", "state"})->is("0x4"));
-            CHECK_NEAR(d.at({"scalars", "jitter_x"})->n, 0.5);
-            CHECK_NEAR(d.at({"scalars", "jitter_y"})->n, -0.25);
-            CHECK(d.at({"scalars", "render_width"})->n == 1280 && d.at({"scalars", "upscale_height"})->n == 1080);
-            CHECK(d.at({"scalars", "enable_sharpening"})->b && d.at({"scalars", "reset"})->b);
-            CHECK_NEAR(d.at({"scalars", "frame_time_delta_ms"})->n, 8.3);
-            CHECK_NEAR(d.at({"scalars", "camera_far"})->n, 10000.0);
-            CHECK_NEAR(d.at({"scalars", "camera_fov_vertical"})->n, 0.9);
-            CHECK(d.at({"scalars", "flags"})->is("0x2"));
-        }
-        const Json* fgnode = dispatches[1]->at({"args", "chain"});
-        CHECK(fgnode && fgnode->a.size() == 1 && fgnode->a[0].get("name")->is("dispatch_framegeneration"));
-        if (fgnode && fgnode->a.size() == 1) {
-            const Json& d = fgnode->a[0];
-            CHECK(d.get("num_generated_frames")->n == 1 && d.get("reset")->b);
-            CHECK(d.get("backbuffer_transfer_function")->n == 2);
-            CHECK(d.get("frame_id")->n == 1234);
-            CHECK_NEAR(d.get("max_luminance")->n, 1000.0);
-        }
-    }
-    auto configs = by_fn(all, "ffxConfigure");
-    CHECK(configs.size() == 1);
-    if (configs.size() == 1) {
-        const Json& n = configs[0]->at({"args", "chain"})->a[0];
-        CHECK(n.get("name")->is("configure_framegeneration"));
-        CHECK(parse_hex(n.get("swap_chain")) == 0x5C5C && n.get("frame_generation_enabled")->b);
-        CHECK(n.get("frame_id")->n == 99);
-    }
-    CHECK(by_fn(all, "ffxQuery").size() == 1);
-    CHECK(by_fn(all, "ffxDestroyContext").size() == 1);
-
-    CHECK(rsf_census_shutdown() == RSF_CENSUS_OK);
-    std::printf("vendor_census fidelityfx_api: %d failure(s)\n", g_failures);
     return g_failures ? 1 : 0;
 }
 
@@ -1747,8 +1545,8 @@ int main(int argc, char** argv) {
     if (mode == "functional") return functional(argv[2]);
     if (mode == "budget") return rsf_test_census_budget(argv[2], rsf_census_install, rsf_census_flush,
                                                            rsf_census_get_counters, rsf_census_shutdown, jitter_noise);
-    if (mode == "vulkan") return vulkan_mode(argv[2]);
-    if (mode == "ffx") return ffx_mode(argv[2]);
+    if (mode == "vulkan") return rsf_test_census_vulkan(argv[2], rsf_census_install, rsf_census_flush, rsf_census_shutdown, probe_vulkan);
+    if (mode == "ffx") return rsf_test_census_ffx(argv[2], rsf_census_install, rsf_census_flush, rsf_census_shutdown, probe_ffx);
     if (mode == "dllmain") return rsf_test_census_dllmain(argv[2], dispatch_twice);
     if (mode == "creation") return rsf_test_census_creation(argv[2], rsf_census_install, rsf_census_shutdown);
     return 2;

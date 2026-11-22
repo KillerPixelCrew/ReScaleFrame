@@ -280,6 +280,16 @@ The assertions retain the byte and counter limits, dropped-record accounting, si
 accepted dispatch layout and caller module. The JSON parser dependency is scoped to the
 Windows MSVC fixture crate.
 
+## Vulkan, Streamline and FidelityFX fixture modes
+
+Rust now installs, flushes and shuts down these modes and checks the recorded JSONL and
+summaries. The native fixture still constructs the exact payload bytes, preserves the
+compiler-emitted Streamline frame-token vtable and checks return values and pointers directly.
+The comparison carries forward the adapter and swapchain fields, submit and present sequence,
+queue histograms, Streamline matrices and axes, feature thunks, FidelityFX chain entries and
+resource descriptions. The original native producers and their pass-through assertions were
+compared byte for byte after extraction.
+
 ## Inventory at the end of the 82b39a63 continuation
 
 Eleven additional baseline paths have source cutovers. The two public header paths retain
