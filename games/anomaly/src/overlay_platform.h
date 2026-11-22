@@ -24,12 +24,18 @@ typedef struct rsf_anomaly_overlay_options {
     uint32_t install_hooks;
 } rsf_anomaly_overlay_options;
 
+#include "native_hook_ops.h"
 #ifdef __cplusplus
-namespace rsf::anomaly { struct HookOps; }
+#define RSF_OVERLAY_NOEXCEPT noexcept
 extern "C" {
-uint32_t rsf_anomaly_overlay_start(const rsf_anomaly_overlay_options*, const rsf::anomaly::HookOps*,
-    const char** reason) noexcept;
-bool rsf_anomaly_overlay_install_default_input(const rsf::anomaly::HookOps*, const char** reason) noexcept;
-void rsf_anomaly_overlay_present(void* user, void* chain) noexcept;
+#else
+#define RSF_OVERLAY_NOEXCEPT
+#endif
+uint32_t rsf_anomaly_overlay_start(const rsf_anomaly_overlay_options*, const rsf_anomaly_hook_ops*,
+    const char** reason) RSF_OVERLAY_NOEXCEPT;
+bool rsf_anomaly_overlay_install_default_input(const rsf_anomaly_hook_ops*, const char** reason) RSF_OVERLAY_NOEXCEPT;
+void rsf_anomaly_overlay_present(void* user, void* chain) RSF_OVERLAY_NOEXCEPT;
+#ifdef __cplusplus
 }
 #endif
+#undef RSF_OVERLAY_NOEXCEPT

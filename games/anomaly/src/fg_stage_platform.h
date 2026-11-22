@@ -51,18 +51,24 @@ bool rsf_anomaly_fg_configure_ini(const wchar_t*, bool apply, void* runtime, uin
     ;
 
 #ifdef __cplusplus
+#define RSF_FG_NOEXCEPT noexcept
 extern "C" {
-bool rsf_anomaly_fg_installed() noexcept;
-void rsf_anomaly_fg_set_overlay_sink(rsf_anomaly_fg_overlay_present, void*) noexcept;
-void rsf_anomaly_fg_stage_camera(const float*, const float*) noexcept;
-void rsf_anomaly_fg_stage_input_begin(uint32_t) noexcept;
-void rsf_anomaly_fg_stage_input_received(uint32_t kinds, uint32_t message) noexcept;
-void rsf_anomaly_fg_stage_render_begin(uint32_t engine_frame, uint32_t width, uint32_t height) noexcept;
-void rsf_anomaly_fg_stage_scope() noexcept;
-void rsf_anomaly_fg_stage_ui_boundary() noexcept;
-void rsf_anomaly_fg_stage_end_before() noexcept;
-void rsf_anomaly_fg_stage_end_after() noexcept;
-void rsf_anomaly_fg_stage_device_reset() noexcept;
-void rsf_anomaly_fg_stage_report(rsf_game_log_fn emit, void* user) noexcept;
+#else
+#define RSF_FG_NOEXCEPT
+#endif
+bool rsf_anomaly_fg_installed(void) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_set_overlay_sink(rsf_anomaly_fg_overlay_present, void*) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_camera(const float*, const float*) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_input_begin(uint32_t) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_input_received(uint32_t kinds, uint32_t message) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_render_begin(uint32_t engine_frame, uint32_t width, uint32_t height) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_scope(void) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_ui_boundary(void) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_end_before(void) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_end_after(void) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_device_reset(void) RSF_FG_NOEXCEPT;
+void rsf_anomaly_fg_stage_report(rsf_game_log_fn emit, void* user) RSF_FG_NOEXCEPT;
+#ifdef __cplusplus
 }
 #endif
+#undef RSF_FG_NOEXCEPT

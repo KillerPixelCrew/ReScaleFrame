@@ -21,7 +21,7 @@ static_assert(sizeof(Facts) == 7);
 
 Sink sink{};
 unsigned original_calls{};
-HookSet hooks;
+rsf_anomaly_hook_set hooks{};
 
 __declspec(noinline) void __fastcall flush_fixture()
 {
@@ -47,15 +47,15 @@ bool install(Sink emit) noexcept
     auto* base = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto* pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-    HookSite redirect = native_geometry_hook_sites(standard_build)[geometry_site_flush];
+    rsf_anomaly_hook_site redirect = native_geometry_hook_sites(standard_build)[geometry_site_flush];
     redirect.rva = static_cast<uint32_t>(reinterpret_cast<std::byte*>(&flush_fixture) - base);
-    std::memcpy(redirect.expected.data(), reinterpret_cast<const void*>(&flush_fixture), redirect.expected.size());
-    return hooks.install(base, pe->OptionalHeader.SizeOfImage, {&redirect, 1});
+    std::memcpy(redirect.expected, reinterpret_cast<const void*>(&flush_fixture), sizeof(redirect.expected));
+    return rsf_anomaly_hooks_install(&hooks, base, pe->OptionalHeader.SizeOfImage, &redirect, 1);
 }
 
 void observe(bool enabled) noexcept { geometry_set_flush_callback(enabled ? callback : nullptr); }
 void flush() noexcept { flush_fixture(); }
-bool disable() noexcept { return hooks.disable(); }
+bool disable() noexcept { return rsf_anomaly_hooks_disable(&hooks); }
 void flush_scoped()
 {
     const DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::World);

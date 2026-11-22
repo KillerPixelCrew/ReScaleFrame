@@ -1898,17 +1898,17 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 
 **Port files (19)**
 
-- [ ] [games/anomaly/src/bootstrap_platform.cpp](games/anomaly/src/bootstrap_platform.cpp) (native profile and stage table)
+- [x] [games/anomaly/src/bootstrap_platform.cpp](games/anomaly/src/bootstrap_platform.cpp) (native profile and stage table; replaced by the C11 leaf `bootstrap_platform.c`)
 - [x] [games/anomaly/src/bootstrap.cpp](games/anomaly/src/bootstrap.cpp)
-- [ ] [games/anomaly/src/build_profile.h](games/anomaly/src/build_profile.h)
-- [ ] [games/anomaly/src/engine_guards.h](games/anomaly/src/engine_guards.h)
+- [ ] [games/anomaly/src/build_profile.h](games/anomaly/src/build_profile.h) (blocked: aggregates the C++ `constexpr` records of `geometry_profile.h`, `sr_profile.h` and `motion_profile.h`, which use `std::array`, `std::span` and the `consteval` decoder, for the C++ callers `native_geometry.cpp` (N03), `motion_stage.cpp` (N04), `sr_stage.cpp` (N06) and the fixtures `anomaly_sr_profile.cpp`, `anomaly_sr_hook_bridge.cpp`, `anomaly_geometry_hooks.cpp`, `anomaly_motion_hooks_native.cpp` and `anomaly_native_hook_leaves.cpp`; closes once those records have a C or Rust projection like `native_profile.h`)
+- [x] [games/anomaly/src/engine_guards.h](games/anomaly/src/engine_guards.h) (C declarations only)
 - [x] [games/anomaly/src/engine_slots.h](games/anomaly/src/engine_slots.h)
-- [ ] [games/anomaly/src/native_hook_ops.h](games/anomaly/src/native_hook_ops.h)
-- [ ] [games/anomaly/src/native_hooks.cpp](games/anomaly/src/native_hooks.cpp)
-- [ ] [games/anomaly/src/native_hooks.h](games/anomaly/src/native_hooks.h)
+- [x] [games/anomaly/src/native_hook_ops.h](games/anomaly/src/native_hook_ops.h) (C declarations only)
+- [x] [games/anomaly/src/native_hooks.cpp](games/anomaly/src/native_hooks.cpp) (replaced by the C11 leaf `native_hooks_platform.c`)
+- [x] [games/anomaly/src/native_hooks.h](games/anomaly/src/native_hooks.h) (C declarations only)
 - [x] [games/anomaly/src/native_memory.h](games/anomaly/src/native_memory.h)
 - [x] [games/anomaly/src/native_observer.h](games/anomaly/src/native_observer.h)
-- [ ] [games/anomaly/src/native_observer_platform.cpp](games/anomaly/src/native_observer_platform.cpp)
+- [x] [games/anomaly/src/native_observer_platform.cpp](games/anomaly/src/native_observer_platform.cpp) (replaced by the C11 leaf `native_observer_platform.c`)
 - [x] [games/anomaly/src/native_observer_platform.h](games/anomaly/src/native_observer_platform.h)
 - [x] [games/anomaly/src/native_profile.h](games/anomaly/src/native_profile.h) (generated projection from the Rust profile owner)
 - [x] [games/anomaly/src/plugin.cpp](games/anomaly/src/plugin.cpp)
@@ -1921,9 +1921,9 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 **Fixtures (6)**
 
 - [x] [tests/anomaly_bootstrap.cpp](tests/anomaly_bootstrap.cpp)
-- [ ] [tests/anomaly_build_select.h](tests/anomaly_build_select.h)
+- [x] [tests/anomaly_build_select.h](tests/anomaly_build_select.h) (C declarations only)
 - [x] [tests/anomaly_lifecycle.cpp](tests/anomaly_lifecycle.cpp)
-- [ ] [tests/anomaly_native_hook_leaves.cpp](tests/anomaly_native_hook_leaves.cpp) (native detour fixture functions)
+- [ ] [tests/anomaly_native_hook_leaves.cpp](tests/anomaly_native_hook_leaves.cpp) (native detour fixture functions; blocked: lends the motion and SR site banks and the five `sr::site_*` indices from the C++ `motion_profile.h` and `sr_profile.h` records through `build_profile.h`; its target functions, guarded copy and platform pointer are already C-compatible)
 - [x] [tests/anomaly_native_hooks.cpp](tests/anomaly_native_hooks.cpp)
 - [x] [tests/anomaly_plugin.cpp](tests/anomaly_plugin.cpp)
 

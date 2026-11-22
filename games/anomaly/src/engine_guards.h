@@ -1,27 +1,29 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "native_memory.h"
-#include "native_profile.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
-struct rsf_anomaly_guard_image {
-    const std::byte* base;
-    uint32_t size;
-    decltype(&rsf::anomaly::guarded_copy) read;
-};
-static_assert(sizeof(rsf_anomaly_guard_image) == 24 && offsetof(rsf_anomaly_guard_image, read) == 16);
-
+#ifdef __cplusplus
+#define RSF_GUARD_NOEXCEPT noexcept
 extern "C" {
-bool rsf_anomaly_guard_site(const rsf_anomaly_guard_image*, uint32_t rva, const std::byte* expected) noexcept;
+#else
+#define RSF_GUARD_NOEXCEPT
+#endif
+
+// The guarded image borrowed by the Rust guard owner (engine_guards.rs). `read` is the fault-contained copy.
+typedef bool (*rsf_anomaly_guard_read_fn)(void*, const void*, size_t) RSF_GUARD_NOEXCEPT;
+typedef struct rsf_anomaly_guard_image {
+    const uint8_t* base;
+    uint32_t size;
+    rsf_anomaly_guard_read_fn read;
+} rsf_anomaly_guard_image;
+
+bool rsf_anomaly_guard_site(const rsf_anomaly_guard_image*, uint32_t rva, const uint8_t* expected) RSF_GUARD_NOEXCEPT;
 bool rsf_anomaly_guard_first_person(const rsf_anomaly_guard_image*, uint32_t set_p_call, uint32_t rm_near_call,
-    uint32_t set_p, uint32_t rm_near) noexcept;
-}
+    uint32_t set_p, uint32_t rm_near) RSF_GUARD_NOEXCEPT;
 
-namespace rsf::anomaly {
-inline rsf_anomaly_guard_image guard_image(const std::byte* base, uint32_t size) noexcept {
-    return {base, size, guarded_copy};
+#ifdef __cplusplus
 }
-
-inline bool matches(const rsf_anomaly_guard_image& image, const NativeSite& site) noexcept {
-    return rsf_anomaly_guard_site(&image, site.rva, site.expected.data());
-}
-}
+#endif
+#undef RSF_GUARD_NOEXCEPT

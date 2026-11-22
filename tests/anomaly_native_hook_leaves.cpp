@@ -2,6 +2,7 @@
 // Native target functions and the existing exact profiles for the Rust fixture.
 #include "build_profile.h"
 #include "native_memory.h"
+#include "native_hooks.h"
 
 namespace {
 using namespace rsf::anomaly;
@@ -34,11 +35,10 @@ constexpr auto fixture_profiles = [] {
 }();
 }
 
-extern "C" const void* rsf_anomaly_hook_native_platform() noexcept;
 extern "C" int rsf_test_anomaly_native_hooks(const void*, decltype(&rsf::anomaly::guarded_copy),
     Function, Function, const FixtureProfile*, size_t, const size_t*) noexcept;
 
 int main() {
-    return rsf_test_anomaly_native_hooks(rsf_anomaly_hook_native_platform(), rsf::anomaly::guarded_copy,
+    return rsf_test_anomaly_native_hooks(&rsf_anomaly_native_hook_platform, rsf::anomaly::guarded_copy,
         target, untouched, fixture_profiles.data(), fixture_profiles.size(), sr_detours.data());
 }

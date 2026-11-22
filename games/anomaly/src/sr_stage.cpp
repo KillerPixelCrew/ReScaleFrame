@@ -9,6 +9,8 @@
 #include "engine_slots.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
+#include "native_memory.h"
+#include "stage_entries.h"
 #include "native_observer.h"
 #include "motion_stage.h"
 #include "runtime_module.h"
@@ -254,7 +256,7 @@ struct SwapOwner {
 };
 SwapOwner swap;
 constexpr rsf_anomaly_swap_view unavailable{.refusal = "The SR swap owner could not be created."};
-HookSet hooks;
+rsf_anomaly_hook_set hooks{};
 
 std::array<void*, 5> originals{};
 using Unary = void(__fastcall*)(void*);
@@ -283,8 +285,9 @@ void __fastcall position_setup_hook(void* self, void* constant) {
 // both builds instead of detouring the body. The slot must hold the profiled function, and the function its guard.
 bool install_position_slot(std::byte* module) noexcept {
     const auto& site = srp().sr_function_sites[site_position_setup];
-    const auto checked = guard_image(module, build->image_size());
-    return matches(checked, site) && rsf_anomaly_slot_install(RSF_ANOMALY_POSITION_SLOT, &checked,
+    const rsf_anomaly_guard_image checked{reinterpret_cast<const uint8_t*>(module), build->image_size(), guarded_copy};
+    return rsf_anomaly_guard_site(&checked, site.rva, reinterpret_cast<const uint8_t*>(site.expected.data())) &&
+        rsf_anomaly_slot_install(RSF_ANOMALY_POSITION_SLOT, &checked,
         srp().position_setup_vtable_rva, site.rva, 0, reinterpret_cast<void*>(&position_setup_hook), rsf_anomaly_compare_slot);
 }
 void __fastcall sun_cascades_hook(void* self) {
@@ -300,18 +303,20 @@ void __fastcall combine_hook(void* self) {
 void rm_near_callback(void*) noexcept { rsf_anomaly_sr_stage_rm_near(); }
 
 bool install_hooks() noexcept {
-    if (hooks.created()) return hooks.enable();
+    if (rsf_anomaly_hooks_created(&hooks)) return rsf_anomaly_hooks_enable(&hooks);
     if (!build || !image) return false;
     const auto site = [](std::size_t index, void* detour, std::size_t original) {
         const auto& s = srp().sr_function_sites[index];
-        return HookSite{s.name, s.rva, s.expected, detour, &originals[original]};
+        rsf_anomaly_hook_site hook{s.name, s.rva, {}, detour, &originals[original]};
+        std::memcpy(hook.expected, s.expected.data(), sizeof(hook.expected));
+        return hook;
     };
-    const std::array<HookSite, 5> sites{{site(site_phase_scene_prepare, reinterpret_cast<void*>(&prepare_hook), 0),
+    const std::array<rsf_anomaly_hook_site, 5> sites{{site(site_phase_scene_prepare, reinterpret_cast<void*>(&prepare_hook), 0),
         site(site_phase_combine, reinterpret_cast<void*>(&combine_hook), 1),
         site(site_phase_sunshafts, reinterpret_cast<void*>(&sunshafts_hook), 2),
         site(site_phase_blur, reinterpret_cast<void*>(&blur_hook), 3),
         site(site_sun_cascades, reinterpret_cast<void*>(&sun_cascades_hook), 4)}};
-    return hooks.install(image, build->image_size(), sites);
+    return rsf_anomaly_hooks_install(&hooks, image, build->image_size(), sites.data(), sites.size());
 }
 
 // ---- the leaf table ---------------------------------------------------------------------------------------------
@@ -473,10 +478,10 @@ const rsf_anomaly_sr_stage_platform platform{
             .ssao_rva = profile.ssao_set_viewport_rva,
             .rm_near_rva = sites[site_rm_near].rva,
         };
-        const auto checked = guard_image(static_cast<const std::byte*>(module), image_size);
+        const rsf_anomaly_guard_image checked{static_cast<const uint8_t*>(module), image_size, guarded_copy};
         return rsf_anomaly_sr_guard_failure(&checked, &guards, world_window, temporal);
     },
-    .hooks_created = [] { return hooks.created(); },
+    .hooks_created = [] { return rsf_anomaly_hooks_created(&hooks); },
     .set_engine = [](void* module, const void* selected, bool temporal) {
         build = static_cast<const BuildProfile*>(selected);
         image = static_cast<std::byte*>(module);
@@ -489,13 +494,13 @@ const rsf_anomaly_sr_stage_platform platform{
     .install_position_slot = [] { return image && install_position_slot(image); },
     .disable_hooks = [] {
         (void)rsf_anomaly_slot_set(RSF_ANOMALY_POSITION_SLOT, false);
-        (void)hooks.disable();
+        (void)rsf_anomaly_hooks_disable(&hooks);
     },
     .set_rm_near = [](bool on) { geometry::geometry_set_rm_near_callback(on ? &rm_near_callback : nullptr); },
     .remove_hooks = [] {
         geometry::geometry_set_rm_near_callback(nullptr);
         const bool restored = rsf_anomaly_slot_set(RSF_ANOMALY_POSITION_SLOT, false);
-        const bool disabled = hooks.disable();
+        const bool disabled = rsf_anomaly_hooks_disable(&hooks);
         return restored && disabled;
     },
     .ini_int = rsf_anomaly_sr_ini_int,
@@ -536,4 +541,17 @@ bool quiesce() noexcept { return rsf_anomaly_sr_stage_quiesce(); }
 void frame_end() noexcept { rsf_anomaly_sr_stage_frame_end(); }
 void report(void (*emit)(void*, const char*), void* user) noexcept { rsf_anomaly_sr_stage_report(emit, user); }
 
+}
+
+// C entries for the bootstrap and observer leaves (stage_entries.h).
+extern "C" bool rsf_anomaly_sr_configure_native(const wchar_t* ini, bool apply, rsf_game_log_fn log) noexcept {
+    return rsf::anomaly::sr::configure(ini, apply, log, nullptr);
+}
+extern "C" bool rsf_anomaly_sr_install_native(void* image, size_t build) noexcept {
+    if (build >= rsf::anomaly::build_profiles.size()) return false;
+    const auto& selected = rsf::anomaly::build_profiles[build];
+    return rsf::anomaly::sr::install(static_cast<std::byte*>(image), selected.image_size(), selected);
+}
+extern "C" uint32_t rsf_anomaly_sr_depth_rva(size_t build) noexcept {
+    return build < rsf::anomaly::build_profiles.size() ? rsf::anomaly::build_profiles[build].sr->hw_base_zb_rva : 0;
 }

@@ -22,7 +22,7 @@ endif()
 # detours on fixture functions plus the production guarded install against a synthetic image. No game code runs.
 set(RSF_ANOMALY_GEOMETRY_SOURCES
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_geometry.cpp"
-    "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_hooks.cpp")
+    "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_hooks_platform.c")
 add_executable(rsf_anomaly_geometry_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_tests.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 target_link_libraries(rsf_anomaly_geometry_test PRIVATE rsf_anomaly_sr_fixture_rust minhook rsf_build_options)
@@ -67,7 +67,9 @@ add_test(NAME anomaly_sr_swap_unknown_selection COMMAND rsf_anomaly_sr_swap_test
 set_tests_properties(anomaly_sr_swap_unknown_selection PROPERTIES WILL_FAIL TRUE)
 add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hook_bridge.cpp"
     "${RSF_ANOMALY_SR_SRC}/sr_stage.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/engine_slots.c"
-    "${RSF_ANOMALY_SR_SRC}/native_observer_platform.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
+    "${RSF_ANOMALY_SR_SRC}/native_observer_platform.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
+# The observer leaf retires its invocations during a C++ unwind (cleanup handlers under GCC).
+target_compile_options(rsf_anomaly_sr_hooks_test PRIVATE $<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<C_COMPILER_ID:MSVC>>>:-fexceptions>)
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon
     ReScaleFrame::Graphics minhook d3d11 rsf_build_options)

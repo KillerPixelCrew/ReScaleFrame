@@ -305,3 +305,73 @@ comparison against `f4871e47` confirmed the pinned Rust records,
 generated guard data, native observer actors and SEH leaves. N04
 and N05 owners were untouched. Linking, fixture replays and game
 or device validation remain open.
+
+## C11 platform leaves
+
+The startup, observer and hook-set native code is now C11. No first-party
+C++ remains in the N01 platform files.
+
+| Path | Disposition |
+| --- | --- |
+| `games/anomaly/src/native_hooks.cpp` | Replaced by `native_hooks_platform.c`. It holds the MinHook table, the guarded and mapped PE header leaves and the hook-set entries `rsf_anomaly_hooks_install`, `_install_resolved`, `_enable`, `_disable` and `_created` bound to that platform. The production table is exported directly, so the fixture no longer needs its `RSF_ANOMALY_HOOK_FIXTURE` accessor. |
+| `games/anomaly/src/bootstrap_platform.cpp` | Replaced by `bootstrap_platform.c`. The record layout, the stage order and the CInput detour are unchanged. The input ticket is retired by `__finally` under MSVC and by a cleanup handler under GCC. Both run on return and during a C++ unwind. |
+| `games/anomaly/src/native_observer_platform.cpp` | Replaced by `native_observer_platform.c`. The eight actors call one invocation helper. It admits the boundary, calls the typed trampoline, records the Begin, End, camera and copy facts after the original, and retires the invocation in a termination or cleanup handler. Scene calls its original through `rsf_anomaly_geometry_render_scene`, so the existing render-view scope still opens inside the invocation and closes before it. |
+| `games/anomaly/src/native_hook_ops.h`, `native_hooks.h`, `engine_guards.h` | C declarations only. The C++ `HookOps`, `HookSet`, `HookSite`, `ResolvedHookSite`, header aliases and the `guard_image` and `matches` helpers were removed. `rsf_anomaly_hook_site::expected` is `uint8_t[16]` in both languages, and the guard image base is `const uint8_t*`. Layouts are asserted in `native_hooks_platform.c`. |
+| `games/anomaly/src/stage_entries.h` | New declaration-only C header for the stage entries the two leaves call. |
+| `tests/anomaly_build_select.h` | C declarations of the Rust selector and banner only. Its sole C++ user, `anomaly_geometry_hooks.cpp`, indexes the build table itself and keeps the opposite-build choice by reference identity. |
+
+The stage owners keep their C++ and gained thin C entries:
+`rsf_anomaly_sr_configure_native`, `rsf_anomaly_sr_install_native` and
+`rsf_anomaly_sr_depth_rva` in `sr_stage.cpp`,
+`rsf_anomaly_motion_configure_native` and `rsf_anomaly_motion_install_native`
+in `motion_stage.cpp`, and `rsf_anomaly_geometry_install_native`,
+`rsf_anomaly_geometry_disable_native` and
+`rsf_anomaly_geometry_render_scene` in `native_geometry.cpp`. Each takes
+the admitted build index and selects the native profile there. An unknown
+index refuses or returns depth RVA 0, which the FG depth reader already
+treats as unavailable. SR and motion quiesce and the SR frame end call the
+Rust exports directly, as the old wrappers did. The SR, motion and geometry
+owners and their fixture hosts replaced `HookSet` with
+`rsf_anomaly_hook_set` and copy the 16 expected bytes into the C site.
+`fg_stage_platform.h` and `overlay_platform.h` now declare their entry
+points for C as well. No bindgen-allowlisted type changed.
+
+The host log leaf still contains a C++ exception from the log callback.
+Under MSVC an SEH filter accepts only the MSVC C++ exception code, which
+matches `catch (...)` under `/EHsc`. The handler abandons the exception
+object rather than destroying it. GCC C has no handler for a foreign C++
+exception, so the MinGW cross build calls the callback directly. The
+Runtime's log callbacks are Rust and cannot unwind. `rsf_game_anomaly`
+and `rsf_anomaly_sr_hooks_test` compile their C sources with `-fexceptions`
+outside MSVC so the cleanup handlers run during an unwind.
+
+Still open, both blocked by the C++ profile tables:
+
+- `games/anomaly/src/build_profile.h` aggregates `geometry_profile.h`,
+  `sr_profile.h` and `motion_profile.h`. Those records use `std::array`,
+  `std::span` and the `consteval` signature decoder. They are consumed as C++
+  by `native_geometry.cpp` (N03), `motion_stage.cpp` (N04), `sr_stage.cpp`
+  (N06) and the fixtures `anomaly_sr_profile.cpp`, `anomaly_sr_hook_bridge.cpp`,
+  `anomaly_geometry_hooks.cpp`, `anomaly_motion_hooks_native.cpp` and
+  `anomaly_native_hook_leaves.cpp`. It can close once those records have a
+  generated C or Rust projection like `native_profile.h`.
+- `tests/anomaly_native_hook_leaves.cpp` lends the motion and SR site banks
+  and the five `sr::site_*` indices from those same C++ tables. Its target
+  functions, guarded copy and platform pointer are already C-compatible.
+
+### Checks
+
+MSVC 14.52 `/Zs /W4 /WX /utf-8` passed for the four Anomaly C leaves and
+`engine_slots.c` in C11, and in C++20 for `sr_stage.cpp`,
+`native_geometry.cpp` (with and without `RSF_ANOMALY_GEOMETRY_TESTING`),
+`motion_bridge.cpp` and the geometry, geometry-hooks, motion-hooks, SR hook
+bridge, SR profile and native hook leaf fixtures. `motion_stage.cpp` already
+fails at the base commit because it uses `ID3D11DeviceContext` without
+including `d3d11.h`. It passed with `/FId3d11.h`. MinGW-w64 GCC 16.2
+`-std=c11 -fsyntax-only -fexceptions -Wall -Wextra -Werror` passed for the
+bootstrap, observer, hook-set and FG leaves. Pinned Rust 1.94.1
+`cargo fmt --all -- --check` passed. The `rsf-anomaly` library does not
+compile at the base for any feature set because of errors in the FG, motion,
+overlay, shader-loader and SR temporal modules. The two N01 Rust edits are
+comments. Native linking, CTest, clippy, cargo tests and bindgen
+regeneration (no libclang on this machine) remain open.

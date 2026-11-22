@@ -21,7 +21,7 @@
 using namespace rsf::anomaly;
 using namespace rsf::anomaly::geometry;
 extern "C" bool rsf_test_anomaly_geometry_redirects(const std::byte*, std::uint32_t,
-    decltype(&guarded_copy), const HookSite*, std::size_t, void* const (*)[15], HookSite*) noexcept;
+    decltype(&guarded_copy), const rsf_anomaly_hook_site*, std::size_t, void* const (*)[15], rsf_anomaly_hook_site*) noexcept;
 namespace {
 using Create = void*(__fastcall*)(void*, const char*, void*);
 using Duplicate = void*(__fastcall*)(void*, void*);
@@ -252,10 +252,11 @@ static std::byte* allocate_fixture_image(std::uint32_t size)
 }
 int main(int argc, char** argv)
 {
-    const auto& build = testing::selected_build(argc, argv);
-    const auto& other = testing::other_build(build);
+    const auto& build = build_profiles[rsf_test_anomaly_select_build(argc, argv)];
+    // The other executable's tables must never be accepted on this build's image.
+    const auto& other = &build == &standard_build ? avx_build : standard_build;
     const auto& gp = *build.geometry;
-    testing::announce(build);
+    rsf_test_anomaly_announce_build(build.label, build.executable);
     std::vector<std::byte> module(build.image_size());
     CHECK(!install_native_geometry(nullptr, build.image_size(), build));
     CHECK(!install_native_geometry(module.data(), build.image_size(), other));
@@ -290,11 +291,11 @@ int main(int argc, char** argv)
         reinterpret_cast<void*>(&near_fixture), reinterpret_cast<void*>(&normal_fixture),
         reinterpret_cast<void*>(&tree_st_fixture), reinterpret_cast<void*>(&tree_pm_fixture),
         reinterpret_cast<void*>(&detail_fixture)};
-    std::array<HookSite, 15> redirects;
+    std::array<rsf_anomaly_hook_site, 15> redirects;
     CHECK(rsf_test_anomaly_geometry_redirects(base, pe->OptionalHeader.SizeOfImage, guarded_copy,
         sites.data(), sites.size(), &fixtures, redirects.data()));
-    HookSet hooks;
-    CHECK(hooks.install(base, pe->OptionalHeader.SizeOfImage, redirects));
+    rsf_anomaly_hook_set hooks{};
+    CHECK(rsf_anomaly_hooks_install(&hooks, base, pe->OptionalHeader.SizeOfImage, redirects.data(), redirects.size()));
     const auto create = reinterpret_cast<Create>(fixtures[0]);
     const auto duplicate = reinterpret_cast<Duplicate>(fixtures[1]);
     const auto destroy = reinterpret_cast<Delete>(fixtures[2]);
@@ -749,7 +750,7 @@ int main(int argc, char** argv)
     };
 
     const auto run_release = [&] {
-        CHECK(hooks.disable());
+        CHECK(rsf_anomaly_hooks_disable(&hooks));
         geometry_retire_all();
         geometry_set_sink({});
         const auto stats = geometry_stats();

@@ -290,7 +290,7 @@ unsafe extern "C" fn rsf_anomaly_hook_set_install(
     count: usize,
 ) -> bool {
     let _guard = transaction();
-    // Native HookSet owns this handle and borrows the caller's span for this call.
+    // The native rsf_anomaly_hook_set owns this handle and borrows the caller's span for this call.
     let batch = unsafe { &mut *batch };
     if !batch.is_null() || !valid_count(count) || sites.is_null() {
         return false;

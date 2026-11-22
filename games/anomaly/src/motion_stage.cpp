@@ -6,6 +6,7 @@
 #include "native_hooks.h"
 #include "native_memory.h"
 #include "native_observer.h"
+#include "stage_entries.h"
 #include "sr_profile.h"
 #include "sr_stage.h"
 #include <d3dcompiler.h>
@@ -49,7 +50,7 @@ const sr::SrProfile& srp() noexcept { static constexpr sr::SrProfile none{}; ret
 const NativeProfile& np() noexcept { static constexpr NativeProfile none{}; return build ? *build->native : none; }
 template<class T> bool read_global(uint32_t rva, T& value) noexcept { return image && guarded_copy(&value, image + rva, sizeof(T)); }
 
-HookSet hooks;
+rsf_anomaly_hook_set hooks{};
 std::array<void*, motion_site_count> originals{};
 using Unary = void(__fastcall*)(void*);
 using CreateShader = long long(__fastcall*)(const char*, const void*, unsigned, const char*, void**, char);
@@ -58,7 +59,7 @@ using DrawIndexedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT,
 using DrawFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT);
 using DrawIndexedInstancedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
 using DrawInstancedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, UINT);
-HookSet draw_hooks;
+rsf_anomaly_hook_set draw_hooks{};
 std::array<void*, 4> draw_originals{};
 
 static_assert(sizeof(MotionDrawScope) == 176 && alignof(MotionDrawScope) == 8 &&
@@ -112,11 +113,11 @@ bool install_draw_hooks(void* context) noexcept {
     if (!rsf_anomaly_motion_resolve_draws(guarded_copy, context, &targets)) return false;
     const std::array<void*, 4> replacements{reinterpret_cast<void*>(&draw_indexed_hook), reinterpret_cast<void*>(&draw_hook),
         reinterpret_cast<void*>(&draw_indexed_instanced_hook), reinterpret_cast<void*>(&draw_instanced_hook)};
-    std::array<ResolvedHookSite, 4> sites{};
+    std::array<rsf_anomaly_hook_target, 4> sites{};
     for (std::size_t i = 0; i < sites.size(); ++i) {
         sites[i] = {targets[i], replacements[i], &draw_originals[i]};
     }
-    return draw_hooks.install_resolved(sites);
+    return rsf_anomaly_hooks_install_resolved(&draw_hooks, sites.data(), sites.size());
 }
 
 // Lends the selected build's tables; Rust returns the first mismatching check's name or null.
@@ -138,7 +139,7 @@ const char* guard_failure(void* module, uint32_t image_size, const void* selecte
         .tess_dispatch_rva = profile.tess_dispatch_rva,
         .source_name_rva = profile.source_name_rva,
     };
-    const auto checked = guard_image(static_cast<const std::byte*>(module), image_size);
+    const rsf_anomaly_guard_image checked{static_cast<const uint8_t*>(module), image_size, guarded_copy};
     return rsf_anomaly_motion_guard_failure(&checked, &guards);
 }
 
@@ -185,16 +186,18 @@ void flush(const geometry::DrawTimeFacts& facts) noexcept {
 bool install_hooks(void* module, uint32_t size, const void* profile) noexcept {
     build = static_cast<const BuildProfile*>(profile);
     image = static_cast<std::byte*>(module);
-    if (hooks.created()) return hooks.enable();
+    if (rsf_anomaly_hooks_created(&hooks)) return rsf_anomaly_hooks_enable(&hooks);
     const auto& s = mp().motion_sites;
-    const std::array<HookSite, motion_site_count> sites{{
-        {s[site_create_shader].name, s[site_create_shader].rva, s[site_create_shader].expected,
-            reinterpret_cast<void*>(&create_shader_hook), &originals[site_create_shader]},
-        {s[site_phase_scene_begin].name, s[site_phase_scene_begin].rva, s[site_phase_scene_begin].expected,
-            reinterpret_cast<void*>(&scene_begin_hook), &originals[site_phase_scene_begin]},
-        {s[site_phase_scene_end].name, s[site_phase_scene_end].rva, s[site_phase_scene_end].expected,
-            reinterpret_cast<void*>(&scene_end_hook), &originals[site_phase_scene_end]}}};
-    return hooks.install(image, size, sites);
+    const auto site = [&s](std::size_t index, void* detour) {
+        rsf_anomaly_hook_site hook{s[index].name, s[index].rva, {}, detour, &originals[index]};
+        std::memcpy(hook.expected, s[index].expected.data(), sizeof(hook.expected));
+        return hook;
+    };
+    const std::array<rsf_anomaly_hook_site, motion_site_count> sites{{
+        site(site_create_shader, reinterpret_cast<void*>(&create_shader_hook)),
+        site(site_phase_scene_begin, reinterpret_cast<void*>(&scene_begin_hook)),
+        site(site_phase_scene_end, reinterpret_cast<void*>(&scene_end_hook))}};
+    return rsf_anomaly_hooks_install(&hooks, image, size, sites.data(), sites.size());
 }
 void* render_target() noexcept {
     std::byte* target{};
@@ -250,7 +253,7 @@ const MotionPlatform platform{
     guard_failure,
     geometry::geometry_hooks_active,
     [](bool enabled) { geometry::geometry_set_flush_callback(enabled ? flush : nullptr); },
-    geometry::geometry_enable_foliage_identity, install_hooks, [] { return hooks.disable(); }, [] { return hooks.created(); },
+    geometry::geometry_enable_foliage_identity, install_hooks, [] { return rsf_anomaly_hooks_disable(&hooks); }, [] { return rsf_anomaly_hooks_created(&hooks); },
     install_draw_hooks, render_target, position_views, native_frame, render_view, reset_generation,
     options_word3, rsf_anomaly_motion_target_facts, backend, hw_context, hw_device,
     rsf_anomaly_motion_clear_target,
@@ -306,4 +309,14 @@ FrameTarget frame_target() noexcept {
     rsf_anomaly_motion_stage_frame_target(&target);
     return target;
 }
+}
+
+// C entries for the bootstrap and observer leaves (stage_entries.h).
+extern "C" void rsf_anomaly_motion_configure_native(const wchar_t* ini, rsf_game_log_fn log) noexcept {
+    rsf::anomaly::motion::configure(ini, log, nullptr);
+}
+extern "C" bool rsf_anomaly_motion_install_native(void* image, size_t build) noexcept {
+    if (build >= rsf::anomaly::build_profiles.size()) return false;
+    const auto& selected = rsf::anomaly::build_profiles[build];
+    return rsf::anomaly::motion::install(static_cast<std::byte*>(image), selected.image_size(), selected);
 }

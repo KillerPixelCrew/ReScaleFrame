@@ -50,7 +50,7 @@ unsafe extern "C" fn rsf_anomaly_observer_identify(
         return c"Native observer build index is out of range.".as_ptr();
     };
     let image = unsafe { GetModuleHandleW(ptr::null()) };
-    // HookSet adds a mapped-region check and an NT header extent check on install.
+    // Hook-set installation adds a mapped-region check and an NT header extent check.
     if !headers.matches(image, profile.image_size, usize::MAX) {
         return c"Running image size differs from the verified build.".as_ptr();
     }

@@ -37,18 +37,18 @@ int exercise_near_slot() {
     auto* base = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     const auto* pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-    HookSite redirect = sites[geometry::geometry_site_rm_near];
+    rsf_anomaly_hook_site redirect = sites[geometry::geometry_site_rm_near];
     redirect.rva = static_cast<uint32_t>(reinterpret_cast<std::byte*>(&near_fixture) - base);
-    std::memcpy(redirect.expected.data(), reinterpret_cast<const void*>(&near_fixture), 16);
-    HookSet hooks;
-    if (!hooks.install(base, pe->OptionalHeader.SizeOfImage, std::span<const HookSite>(&redirect, 1))) {
+    std::memcpy(redirect.expected, reinterpret_cast<const void*>(&near_fixture), sizeof(redirect.expected));
+    rsf_anomaly_hook_set hooks{};
+    if (!rsf_anomaly_hooks_install(&hooks, base, pe->OptionalHeader.SizeOfImage, &redirect, 1)) {
         std::puts("FAIL installing the geometry rmNear fixture detour");
         return 1;
     }
     const NearCalls calls{
         near_fixture,
         [](bool on) { geometry::geometry_set_rm_near_callback(on ? &callback : nullptr); },
-        [](void* owner) { return static_cast<HookSet*>(owner)->disable(); },
+        [](void* owner) { return rsf_anomaly_hooks_disable(static_cast<rsf_anomaly_hook_set*>(owner)); },
         [](int* near_count, int* callbacks, void** seen) {
             *near_count = near_calls;
             *callbacks = callback_calls;

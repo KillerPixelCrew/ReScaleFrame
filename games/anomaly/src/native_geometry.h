@@ -190,7 +190,7 @@ bool write_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std
 // The world matrix in force for this draw (RCache.xforms.m_w), row-vector Fmatrix floats. False when unreadable.
 bool read_world_matrix(float (&out)[16]) noexcept;
 // The detour table of `build` (geometry_profile.h order). Valid until the next call.
-std::span<const HookSite> native_geometry_hook_sites(const BuildProfile& build) noexcept;
+std::span<const rsf_anomaly_hook_site> native_geometry_hook_sites(const BuildProfile& build) noexcept;
 // `build` is the profile selected for the running executable by its exact name and SHA-256 (build_profile.h);
 // `image_size` must be that build's SizeOfImage. Every site and unique guard of that build is checked first.
 bool install_native_geometry(std::byte* module, std::uint32_t image_size, const BuildProfile& build) noexcept;

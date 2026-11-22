@@ -2,6 +2,7 @@
 #include "native_geometry.h"
 #include "build_profile.h"
 #include "geometry_retirement.h"
+#include "stage_entries.h"
 #include <array>
 #include <cstddef>
 #ifndef NOMINMAX
@@ -22,7 +23,7 @@ extern "C" bool rsf_anomaly_geometry_write_vertex(const VertexConstantTable*, st
     std::uint32_t expected_size, std::uint32_t offset, const void* in, std::uint32_t bytes,
     decltype(&rsf::anomaly::guarded_copy)) noexcept;
 extern "C" void rsf_anomaly_geometry_build_hook_sites(const rsf::anomaly::NativeSite*, void* const* replacements,
-    void** originals, rsf::anomaly::HookSite*, std::size_t count) noexcept;
+    void** originals, rsf_anomaly_hook_site*, std::size_t count) noexcept;
 
 namespace rsf::anomaly::geometry {
 namespace {
@@ -63,8 +64,8 @@ static_assert(sizeof(rsf_anomaly_geometry_child_range) == 24);
 static_assert(sizeof(rsf_anomaly_geometry_hierarchy) == 32 && offsetof(rsf_anomaly_geometry_hierarchy, read) == 24);
 static_assert(sizeof(rsf_anomaly_geometry_writer) == 16 && sizeof(Matrix) == 128 &&
     alignof(Matrix) == alignof(double) && offsetof(Matrix, values) == 0);
-static_assert(sizeof(HookSite) == 48 && offsetof(HookSite, expected) == 12 &&
-    offsetof(HookSite, replacement) == 32 && offsetof(HookSite, original) == 40);
+static_assert(sizeof(rsf_anomaly_hook_site) == 48 && offsetof(rsf_anomaly_hook_site, expected) == 12 &&
+    offsetof(rsf_anomaly_hook_site, replacement) == 32 && offsetof(rsf_anomaly_hook_site, original) == 40);
 static_assert(sizeof(NativeSite) == 32 && offsetof(NativeSite, rva) == 8 && offsetof(NativeSite, expected) == 12);
 static_assert(sizeof(UniqueGuard) == 24 && offsetof(UniqueGuard, rva) == 8 && offsetof(UniqueGuard, expected_hex) == 16);
 static_assert(sizeof(rsf_anomaly_geometry_guard_profile) == 64 &&
@@ -112,7 +113,7 @@ using Render = void(__fastcall*)(void*, float);
 using Flush = void(__fastcall*)();
 using Unary = void(__fastcall*)(void*);
 std::array<void*, geometry_site_count> originals{};
-HookSet native_hooks;
+rsf_anomaly_hook_set native_hooks{};
 
 // Rust checks the image size, then every layout guard, then every detour entry, each with its unique prefix.
 rsf_anomaly_geometry_guard_profile guard_profile(Engine engine) noexcept
@@ -127,7 +128,8 @@ rsf_anomaly_geometry_guard_profile guard_profile(Engine engine) noexcept
 bool hook_install(Engine engine, std::uint32_t size) noexcept
 {
     auto* module = reinterpret_cast<std::byte*>(engine.module);
-    return native_hooks.install(module, size, native_geometry_hook_sites(build_of(engine)));
+    const auto sites = native_geometry_hook_sites(build_of(engine));
+    return rsf_anomaly_hooks_install(&native_hooks, module, size, sites.data(), sites.size());
 }
 
 rsf_anomaly_geometry_hierarchy hierarchy(Engine engine) noexcept
@@ -155,10 +157,10 @@ bool bones(std::uintptr_t first, std::size_t stride, std::uint32_t count,
 
 constexpr rsf_anomaly_geometry_platform platform{
     guard_profile,
-    []() noexcept { return native_hooks.created(); },
+    []() noexcept { return rsf_anomaly_hooks_created(&native_hooks); },
     hook_install,
-    []() noexcept { return native_hooks.enable(); },
-    []() noexcept { return native_hooks.disable(); },
+    []() noexcept { return rsf_anomaly_hooks_enable(&native_hooks); },
+    []() noexcept { return rsf_anomaly_hooks_disable(&native_hooks); },
     hierarchy,
     layout, guarded_copy, bones,
 };
@@ -458,9 +460,9 @@ RenderViewScope::~RenderViewScope()
     if (entered_) rsf_anomaly_geometry_context_leave(&scope_);
 }
 
-std::span<const HookSite> native_geometry_hook_sites(const BuildProfile& build) noexcept
+std::span<const rsf_anomaly_hook_site> native_geometry_hook_sites(const BuildProfile& build) noexcept
 {
-    static std::array<HookSite, geometry_site_count> sites;
+    static std::array<rsf_anomaly_hook_site, geometry_site_count> sites;
     const std::array<void*, geometry_site_count> replacements{reinterpret_cast<void*>(&create_hook),
         reinterpret_cast<void*>(&child_hook), reinterpret_cast<void*>(&duplicate_hook), reinterpret_cast<void*>(&delete_hook),
         reinterpret_cast<void*>(&rigid_hook), reinterpret_cast<void*>(&progressive_hook), reinterpret_cast<void*>(&skeleton_st_hook),
@@ -507,6 +509,23 @@ void geometry_report_coverage(void (*emit)(void*, const char*), void* user) noex
         const auto& report = *static_cast<const Report*>(context);
         report.emit_line(report.user, line);
     }, &report);
+}
+
+// C entries for the observer leaf (stage_entries.h).
+extern "C" bool rsf_anomaly_geometry_install_native(void* image, size_t build) noexcept
+{
+    if (build >= build_profiles.size()) return false;
+    const auto& selected = build_profiles[build];
+    return install_native_geometry(static_cast<std::byte*>(image), selected.image_size(), selected);
+}
+
+extern "C" bool rsf_anomaly_geometry_disable_native() noexcept { return disable_native_geometry(); }
+
+// The scope's destructor leaves it during a C++ unwind out of the original.
+extern "C" void rsf_anomaly_geometry_render_scene(void (*original)(void*), void* self)
+{
+    const RenderViewScope view;
+    original(self);
 }
 
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING
