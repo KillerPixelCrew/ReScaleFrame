@@ -809,7 +809,8 @@ fn cpu_allows_fg(frame: Frame, timing: Cpu, generation: u64) -> bool {
         ..unsafe { std::mem::zeroed() }
     };
     (unsafe { rsf_native_cpu_read(frame.session, frame.id, &mut facts) != 0 })
-        && facts.stage_mask & 15 == 15
+        && facts.stage_mask & crate::native_cpu::THROUGH_SIM_END
+            == crate::native_cpu::THROUGH_SIM_END
         && facts.failed == 0
         && facts.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE == 0
 }
