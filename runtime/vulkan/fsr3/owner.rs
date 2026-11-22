@@ -420,8 +420,10 @@ unsafe extern "C" fn rsf_core_fsr3_plan(
     render_width: *mut u32,
     render_height: *mut u32,
 ) -> i32 {
-    let query = sdk().query;
-    if query.is_null() || render_width.is_null() || render_height.is_null() {
+    let Some(sdk) = SDK.get() else {
+        return -1;
+    };
+    if render_width.is_null() || render_height.is_null() {
         return -1;
     }
     let Some(ops) = (unsafe { platform(ops) }) else {
@@ -429,7 +431,7 @@ unsafe extern "C" fn rsf_core_fsr3_plan(
     };
     unsafe {
         (ops.plan)(
-            query,
+            sdk.query,
             display_width,
             display_height,
             quality,
@@ -453,12 +455,13 @@ unsafe extern "C" fn rsf_core_fsr3_create(
     request: *const Request,
     result: *mut *mut Context,
 ) -> i32 {
-    let create = sdk().create;
+    let Some(sdk) = SDK.get() else {
+        return -1;
+    };
     let Some(request) = (unsafe { request.as_ref() }) else {
         return -1;
     };
-    if create.is_null()
-        || result.is_null()
+    if result.is_null()
         || request.device.is_null()
         || request.physical.is_null()
         || request.render_width == 0
@@ -490,7 +493,7 @@ unsafe extern "C" fn rsf_core_fsr3_create(
     if vulkan & VULKAN_READY != VULKAN_READY {
         return failed(-3);
     }
-    let code = unsafe { (ops.create)(native.as_ptr(), create, request) };
+    let code = unsafe { (ops.create)(native.as_ptr(), sdk.create, request) };
     if code != 0 {
         return failed(code);
     }
@@ -503,21 +506,18 @@ unsafe extern "C" fn rsf_core_fsr3_create(
 
 /// Records SR with independent R8 reactive and composition masks.
 ///
-/// Returns the SDK result, -1 for a missing context, frame or dispatch, and
+/// Returns the SDK result, -1 for a missing context or frame, and
 /// -2 when a required image format differs.
 ///
 /// # Safety
 /// Non-null pointers must be a live context and a readable 184-byte frame.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const Frame) -> i32 {
-    let dispatch = sdk().dispatch;
     let (Some(context), Some(frame)) = (unsafe { context.as_ref() }, unsafe { frame.as_ref() })
     else {
         return -1;
     };
-    if dispatch.is_null() {
-        return -1;
-    }
+    let dispatch = SDK.get().expect("live SR context has a bound SDK").dispatch;
     if !frame.formats_supported() {
         return -2;
     }
@@ -534,8 +534,8 @@ unsafe extern "C" fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const
 /// Destroys the SR effect, then releases the owner after SDK success.
 ///
 /// The caller first completes Vulkan work that references the effect. Returns
-/// 0 for null or success, -1 when a live effect has no destroy export, or the
-/// SDK release result; a nonzero result keeps the context attached.
+/// 0 for null or success, or the SDK release result. A nonzero result keeps
+/// the context attached.
 ///
 /// # Safety
 /// `context` is null or a live context from `rsf_core_fsr3_create`.
@@ -544,12 +544,9 @@ unsafe extern "C" fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
     let Some(owner) = (unsafe { context.as_ref() }) else {
         return 0;
     };
-    let destroy = sdk().destroy;
+    let destroy = SDK.get().expect("live SR context has a bound SDK").destroy;
     let native = owner.native.as_ptr();
     let effect = unsafe { (owner.ops.has_effect)(native) } != 0;
-    if effect && destroy.is_null() {
-        return -1;
-    }
     let code = if effect {
         unsafe { (owner.ops.destroy)(native, destroy) }
     } else {
