@@ -30,6 +30,12 @@ The ASI fixture still calls installation from its native `DllMain` and exports t
 symbols. Rust reads the bounded environment value, builds the v1 options and stores the result.
 The existing functional census fixture still provides the static xref case.
 
+The eight fake vendor DLLs keep their original export sets and creation aliases through module
+definition files. Rust supplies their argument receipts, typed return values and dynamic symbol
+dispatches. DirectX creation still resolves its exports under the loader lock before post-load
+hooks. The NGX leaf keeps the native compiler's parameter vtable and the fixture still disables
+identical-code folding and incremental linker thunks.
+
 ## Verification scope
 
 The port was checked by source comparison, generated x64 layout assertions, pinned Bindgen

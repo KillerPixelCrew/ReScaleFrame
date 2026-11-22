@@ -1,0 +1,11 @@
+EXPORTS
+    fixture_CreateDXGIFactory
+    fixture_CreateDXGIFactory1
+    fixture_CreateDXGIFactory2
+    fixture_D3D12CreateDevice
+    fixture_creation_identity
+    fixture_creation_raw
+    CreateDXGIFactory=fixture_CreateDXGIFactory
+    CreateDXGIFactory1=fixture_CreateDXGIFactory1
+    CreateDXGIFactory2=fixture_CreateDXGIFactory2
+    D3D12CreateDevice=fixture_D3D12CreateDevice

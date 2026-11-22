@@ -1,0 +1,7 @@
+EXPORTS
+    ffxCreateContext
+    ffxDestroyContext
+    ffxConfigure
+    ffxQuery
+    ffxDispatch
+    fixture_ffx_seen

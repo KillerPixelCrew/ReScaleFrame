@@ -6,6 +6,8 @@ mod thin;
 mod vendor_census_asi;
 #[cfg(target_env = "msvc")]
 mod vendor_census_asi_abi;
+#[cfg(target_env = "msvc")]
+mod vendor_census_fixture;
 
 use std::ffi::{CStr, OsStr};
 use std::os::windows::ffi::OsStrExt;

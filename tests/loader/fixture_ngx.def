@@ -1,0 +1,6 @@
+EXPORTS
+    NVSDK_NGX_D3D12_GetParameters
+    NVSDK_NGX_D3D12_CreateFeature
+    NVSDK_NGX_D3D12_EvaluateFeature
+    NVSDK_NGX_D3D12_ReleaseFeature
+    fixture_ngx_seen
