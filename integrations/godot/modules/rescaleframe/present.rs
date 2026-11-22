@@ -6,7 +6,13 @@ use core::{
     mem::{offset_of, size_of},
 };
 
-use crate::{frame, host, packet_abi::rsf_godot_present_calls};
+use crate::packet_abi::{
+    RSF_GAME_RENDER_PRESENT, RSF_GAME_RENDER_SUBMISSION, rsf_godot_present_calls,
+};
+use crate::{frame, host};
+
+type ExecutionEvent = unsafe extern "C" fn(u32, u64, u64, u64, u32) -> u32;
+type LegacyMarker = unsafe extern "C" fn(u64, u32) -> u32;
 
 const FEATURE_NOT_PRESENT: i32 = -8;
 
@@ -52,31 +58,54 @@ pub unsafe extern "C" fn rsf_godot_execution_start(
 }
 
 /// # Safety
-/// `receipt` must be the initialized receipt from the current engine execution scope.
+/// A non-null receipt must be initialized and borrowed from the current engine scope.
+/// The event callback must remain callable for this synchronous report.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_godot_execution_submit(
     receipt: *mut ExecutionReceipt,
     queue: u64,
     fence: u64,
     begin: u32,
-) -> u32 {
-    let receipt = unsafe { &mut *receipt };
+    event: ExecutionEvent,
+) {
+    let Some(receipt) = (unsafe { receipt.as_mut() }) else {
+        return;
+    };
     if receipt.session == 0
         || receipt.source == 0
         || receipt.queue != queue
         || receipt.fence != fence
     {
-        return 0;
+        return;
     }
     receipt.submitted = (begin == 0) as u32;
-    1
+    let (session, source) = (receipt.session, receipt.source);
+    unsafe { event(RSF_GAME_RENDER_SUBMISSION, session, source, 0, begin) };
 }
 
 /// # Safety
-/// `receipt` must be the initialized receipt from the current engine execution scope.
+/// A non-null receipt must be initialized and borrowed from the current engine scope.
+/// Both callbacks must remain callable for this synchronous report.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_godot_execution_present(receipt: *const ExecutionReceipt) -> u32 {
-    unsafe { (*receipt).submitted }
+pub unsafe extern "C" fn rsf_godot_execution_present(
+    receipt: *const ExecutionReceipt,
+    supported: u32,
+    window: u64,
+    begin: u32,
+    event: ExecutionEvent,
+    legacy: LegacyMarker,
+) -> u32 {
+    if supported == 0 {
+        return unsafe { legacy(window, begin) };
+    }
+    let Some(receipt) = (unsafe { receipt.as_ref() }) else {
+        return 0;
+    };
+    if receipt.submitted == 0 {
+        return 0;
+    }
+    let (session, source) = (receipt.session, receipt.source);
+    unsafe { event(RSF_GAME_RENDER_PRESENT, session, source, window, begin) }
 }
 
 /// # Safety

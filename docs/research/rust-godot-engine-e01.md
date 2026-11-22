@@ -133,3 +133,19 @@ compares the exact typed command ID, invokes the Vulkan methods and changes the
 borrowed command reference only after consuming the source. Fixture assertions
 in `tests/godot_graph_handoff.rs` now check the actual generated handoff header,
 including its driver identity and callback, through the C++ graph lease.
+
+`present.rs` dispatches submit and Present reports with the session and source
+captured by the existing thread-local execution scope. Submit still requires the
+exact queue and fence. Present still requires a successful receipt when the
+execution callback is available, and uses the legacy window marker only when
+that callback is unavailable. `vulkan.cpp` keeps the typed callbacks, scope
+nesting, queue locks and native Vulkan submit and Present calls. The pinned patch
+still brackets real submit and reports its end only after the success check.
+
+`packet.rs` now owns proxy admission and swapchain create and release order.
+It registers capture before checking native WSI, timeline support and the
+four-queue minimum. It preserves an owner returned during a refused create
+for later retirement. Release still stops on capture refusal or failed proxy
+destruction and clears native fields only after both owners retire. Typed
+swapchain fields and the native fallback stay in `vulkan.cpp` and the pinned
+driver patch.

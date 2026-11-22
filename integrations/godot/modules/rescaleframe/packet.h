@@ -31,9 +31,18 @@ typedef struct rsf_godot_packet_calls {
 
 typedef struct rsf_godot_swapchain_calls {
     void (*capture)(const void *setup);
-    uint32_t (*allow_proxy)(void *context);
+    uint32_t (*native_wsi)(void *context);
+    uint32_t (*timeline)(void *context);
+    uint32_t (*queue_count)(void *context);
     uint32_t (*create)(const void *setup, void **owner, uint64_t *chain);
+    void (*install)(void *context, uint64_t handle);
 } rsf_godot_swapchain_calls;
+
+typedef struct rsf_godot_swapchain_release_calls {
+    uint32_t (*release_capture)(void *chain);
+    uint32_t (*destroy_proxy)(void *owner);
+    void (*clear_proxy)(void *chain);
+} rsf_godot_swapchain_release_calls;
 
 typedef struct rsf_godot_present_calls {
     uint32_t (*proxy_at)(void *context, uint32_t index);
@@ -60,10 +69,6 @@ typedef struct rsf_godot_graph_calls {
     void *(*continuation)(void *scope);
 } rsf_godot_graph_calls;
 
-#define RSF_GODOT_CHAIN_SKIPPED 0u
-#define RSF_GODOT_CHAIN_REFUSED 1u
-#define RSF_GODOT_CHAIN_CREATED 2u
-
 #ifdef __cplusplus
 struct rsf_godot_pass_record;
 extern "C" void rsf_godot_packet_prepare(const rsf_godot_pass_record *record,
@@ -72,7 +77,9 @@ extern "C" void rsf_godot_packet_prepare(const rsf_godot_pass_record *record,
 extern "C" void rsf_godot_packet_execute(const rsf_godot_driver_packet *packet,
         const rsf_godot_packet_calls *calls, void *context);
 extern "C" uint32_t rsf_godot_swapchain_setup(rsf_fgvk_setup *setup,
-        const rsf_godot_swapchain_calls *calls, void *context, void **owner, uint64_t *chain);
+        const rsf_godot_swapchain_calls *calls, void *context, void **owner);
+extern "C" uint32_t rsf_godot_swapchain_release(const rsf_godot_swapchain_release_calls *calls,
+        void *chain, void *const *owner);
 extern "C" void rsf_godot_graph_pack(rsf_godot_vk_handoff *out, uint32_t family, void *driver,
         rsf_godot_graph_split_fn split);
 extern "C" int32_t rsf_godot_graph_split(const rsf_godot_graph_calls *calls, void *scope, void *current,

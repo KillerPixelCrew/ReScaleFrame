@@ -6,10 +6,10 @@ use core::ptr;
 
 use crate::frame_event_abi::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR};
 use crate::packet_abi::{
-    RSF_FGVK_ABI_VERSION, RSF_GODOT_ABI_VERSION, RSF_GODOT_CHAIN_CREATED, RSF_GODOT_CHAIN_REFUSED,
-    RSF_GODOT_CHAIN_SKIPPED, RSF_SRVK_ABI_VERSION, rsf_fgvk_setup, rsf_game_render_pass,
-    rsf_godot_driver_packet, rsf_godot_packet_calls, rsf_godot_packet_sources,
-    rsf_godot_swapchain_calls, rsf_godot_vk_image, rsf_godot_vk_packet, rsf_srvk_setup,
+    RSF_FGVK_ABI_VERSION, RSF_GODOT_ABI_VERSION, RSF_SRVK_ABI_VERSION, rsf_fgvk_setup,
+    rsf_game_render_pass, rsf_godot_driver_packet, rsf_godot_packet_calls,
+    rsf_godot_packet_sources, rsf_godot_swapchain_calls, rsf_godot_swapchain_release_calls,
+    rsf_godot_vk_image, rsf_godot_vk_packet, rsf_srvk_setup,
 };
 use crate::pass::Record;
 use crate::primary::DRIVER_VULKAN;
@@ -45,7 +45,6 @@ pub unsafe extern "C" fn rsf_godot_swapchain_setup(
     calls: *const rsf_godot_swapchain_calls,
     context: *mut c_void,
     owner: *mut *mut c_void,
-    chain: *mut u64,
 ) -> u32 {
     // Godot owns the storage and the Vulkan creation lease for these synchronous calls.
     let calls = unsafe { &*calls };
@@ -56,15 +55,43 @@ pub unsafe extern "C" fn rsf_godot_swapchain_setup(
         (*setup).graphics.abi_version = RSF_SRVK_ABI_VERSION;
         (*setup).graphics.depth_inverted = 1;
         (calls.capture.unwrap_unchecked())(setup.cast());
-        if (calls.allow_proxy.unwrap_unchecked())(context) == 0 {
-            return RSF_GODOT_CHAIN_SKIPPED;
+        if calls.native_wsi.unwrap_unchecked()(context) != 0
+            || calls.timeline.unwrap_unchecked()(context) == 0
+            || calls.queue_count.unwrap_unchecked()(context) < 4
+        {
+            return 0;
         }
-        if (calls.create.unwrap_unchecked())(setup.cast(), owner, chain) != 0 {
-            RSF_GODOT_CHAIN_CREATED
-        } else {
-            RSF_GODOT_CHAIN_REFUSED
+        let mut chain = 0;
+        let created = calls.create.unwrap_unchecked()(setup.cast(), owner, &mut chain) != 0;
+        // A refused proxy can still leave an owner that the engine has to retire.
+        if created || !(*owner).is_null() {
+            calls.install.unwrap_unchecked()(context, chain);
         }
+        u32::from(created)
     }
+}
+
+/// # Safety
+/// The chain, its owner field and all callbacks must be valid through this synchronous call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_godot_swapchain_release(
+    calls: *const rsf_godot_swapchain_release_calls,
+    chain: *mut c_void,
+    owner: *const *mut c_void,
+) -> u32 {
+    let calls = unsafe { &*calls };
+    if unsafe { calls.release_capture.unwrap_unchecked()(chain) } == 0 {
+        return 0;
+    }
+    let owner = unsafe { *owner };
+    if owner.is_null() {
+        return 1;
+    }
+    if unsafe { calls.destroy_proxy.unwrap_unchecked()(owner) } == 0 {
+        return 0;
+    }
+    unsafe { calls.clear_proxy.unwrap_unchecked()(chain) };
+    1
 }
 
 /// # Safety

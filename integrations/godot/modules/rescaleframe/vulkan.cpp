@@ -12,12 +12,21 @@ static_assert(VK_ERROR_FEATURE_NOT_PRESENT == -8);
 static_assert(sizeof(ExecutionReceipt) == 40 && offsetof(ExecutionReceipt, submitted) == 32);
 extern "C" void rsf_godot_execution_start(ExecutionReceipt *receipt, uint64_t queue, uint64_t fence,
         uint32_t supported);
-extern "C" uint32_t rsf_godot_execution_submit(ExecutionReceipt *receipt, uint64_t queue, uint64_t fence,
-        uint32_t begin);
-extern "C" uint32_t rsf_godot_execution_present(const ExecutionReceipt *receipt);
+using ExecutionEvent = uint32_t (*)(uint32_t, uint64_t, uint64_t, uint64_t, uint32_t);
+using LegacyMarker = uint32_t (*)(uint64_t, uint32_t);
+extern "C" void rsf_godot_execution_submit(ExecutionReceipt *receipt, uint64_t queue, uint64_t fence,
+        uint32_t begin, ExecutionEvent event);
+extern "C" uint32_t rsf_godot_execution_present(const ExecutionReceipt *receipt, uint32_t supported,
+        uint64_t window, uint32_t begin, ExecutionEvent event, LegacyMarker legacy);
 }
 
 namespace {
+uint32_t report_execution(uint32_t role, uint64_t session, uint64_t source, uint64_t window, uint32_t begin) {
+    return RSFGodot::vk_execution(role, session, source, window, begin);
+}
+uint32_t report_legacy_present(uint64_t window, uint32_t begin) {
+    return RSFGodot::vk_present_marker(window, begin);
+}
 thread_local RSFGodot::VulkanExecutionScope *execution_scope = nullptr;
 }
 
@@ -30,14 +39,12 @@ RSFGodot::VulkanExecutionScope::~VulkanExecutionScope() { execution_scope = prev
 
 void RSFGodot::VulkanExecutionScope::submit(uint64_t queue, uint64_t fence, bool begin) {
     auto *scope = execution_scope;
-    if (!scope || !rsf_godot_execution_submit(&scope->receipt, queue, fence, begin)) return;
-    vk_execution(RSF_GAME_RENDER_SUBMISSION, scope->receipt.session, scope->receipt.source, 0, begin);
+    rsf_godot_execution_submit(scope ? &scope->receipt : nullptr, queue, fence, begin, report_execution);
 }
 bool RSFGodot::VulkanExecutionScope::present(uint64_t window, bool begin) {
-    if (!vk_execution_supported()) return vk_present_marker(window, begin);
     const auto *scope = execution_scope;
-    return scope && rsf_godot_execution_present(&scope->receipt) &&
-        vk_execution(RSF_GAME_RENDER_PRESENT, scope->receipt.session, scope->receipt.source, window, begin);
+    return rsf_godot_execution_present(scope ? &scope->receipt : nullptr, vk_execution_supported(),
+            window, begin, report_execution, report_legacy_present) != 0;
 }
 
 int32_t RenderingDeviceDriverVulkan::rescaleframe_submit(void *user, uint32_t count, const void *submits, uint64_t fence) {
@@ -79,33 +86,37 @@ bool RenderingDeviceDriverVulkan::rescaleframe_create(CommandQueueID queue_id, v
     setup.queue_family = queue->queue_family; setup.create_info = info; setup.allocator = allocation_callbacks;
     setup.graphics_submit = rescaleframe_submit; setup.lock_queues = rescaleframe_lock_queues;
     setup.unlock_queues = rescaleframe_unlock_queues; setup.queue_user = chain;
-    struct Context { RenderingDeviceDriverVulkan *driver; uint32_t family; };
-    Context context{this, queue->queue_family};
+    struct Context { RenderingDeviceDriverVulkan *driver; SwapChain *chain; uint32_t family; };
+    Context context{this, chain, queue->queue_family};
     static constexpr rsf_godot_swapchain_calls calls{
         RSFGodot::vk_capture_setup,
+        [](void *) -> uint32_t { return OS::get_singleton()->get_environment("RSF_GODOT_NATIVE_WSI") == "1"; },
+        [](void *opaque) -> uint32_t { return static_cast<Context *>(opaque)->driver->rescaleframe_timeline; },
         [](void *opaque) -> uint32_t {
             const auto &lease = *static_cast<Context *>(opaque);
-            return OS::get_singleton()->get_environment("RSF_GODOT_NATIVE_WSI") != "1" &&
-                lease.driver->rescaleframe_timeline && lease.driver->queue_families[lease.family].size() >= 4;
+            return lease.driver->queue_families[lease.family].size();
         },
         [](const void *setup, void **owner, uint64_t *chain) -> uint32_t {
             return RSFGodot::vk_create(setup, owner, chain);
         },
+        [](void *opaque, uint64_t handle) {
+            static_cast<Context *>(opaque)->chain->vk_swapchain = reinterpret_cast<VkSwapchainKHR>(handle);
+        },
     };
-    uint64_t handle = 0;
-    const uint32_t result = rsf_godot_swapchain_setup(&setup, &calls, &context, &chain->rescaleframe_owner, &handle);
-    if (result == RSF_GODOT_CHAIN_CREATED ||
-            (result == RSF_GODOT_CHAIN_REFUSED && chain->rescaleframe_owner)) {
-        chain->vk_swapchain = reinterpret_cast<VkSwapchainKHR>(handle);
-    }
-    return result == RSF_GODOT_CHAIN_CREATED;
+    return rsf_godot_swapchain_setup(&setup, &calls, &context, &chain->rescaleframe_owner) != 0;
 }
 bool RenderingDeviceDriverVulkan::rescaleframe_release(void *opaque_chain) {
     auto *chain = static_cast<SwapChain *>(opaque_chain);
-    if (!RSFGodot::vk_capture_release(chain)) return false;
-    if (!chain->rescaleframe_owner) return true;
-    if (!RSFGodot::vk_destroy(chain->rescaleframe_owner)) return false;
-    chain->rescaleframe_owner = nullptr; chain->vk_swapchain = VK_NULL_HANDLE; return true;
+    static constexpr rsf_godot_swapchain_release_calls calls{
+        [](void *chain) -> uint32_t { return RSFGodot::vk_capture_release(chain); },
+        [](void *owner) -> uint32_t { return RSFGodot::vk_destroy(owner); },
+        [](void *opaque) {
+            auto *chain = static_cast<SwapChain *>(opaque);
+            chain->rescaleframe_owner = nullptr;
+            chain->vk_swapchain = VK_NULL_HANDLE;
+        },
+    };
+    return rsf_godot_swapchain_release(&calls, chain, &chain->rescaleframe_owner) != 0;
 }
 bool RenderingDeviceDriverVulkan::rescaleframe_drain(void *opaque_chain) {
     auto *chain = static_cast<SwapChain *>(opaque_chain);

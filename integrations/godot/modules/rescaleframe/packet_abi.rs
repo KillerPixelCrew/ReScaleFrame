@@ -3,13 +3,12 @@
 #![allow(non_camel_case_types, dead_code)]
 use crate::frame_abi::rsf_camera_frame;
 
+pub const RSF_GAME_RENDER_SUBMISSION: u32 = 12;
+pub const RSF_GAME_RENDER_PRESENT: u32 = 20;
 pub const RSF_SRVK_ABI_VERSION: u32 = 2;
 pub const RSF_FGVK_ABI_VERSION: u32 = 1;
 pub const RSF_GODOT_ABI_VERSION: u32 = 3;
 pub const RSF_GODOT_VK_HANDOFF_ABI_VERSION: u32 = 1;
-pub const RSF_GODOT_CHAIN_SKIPPED: u32 = 0;
-pub const RSF_GODOT_CHAIN_REFUSED: u32 = 1;
-pub const RSF_GODOT_CHAIN_CREATED: u32 = 2;
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_game_depth_domain {
@@ -315,7 +314,11 @@ pub struct rsf_godot_packet_calls {
 #[derive(Default, Copy, Clone)]
 pub struct rsf_godot_swapchain_calls {
     pub capture: ::core::option::Option<unsafe extern "C" fn(setup: *const ::core::ffi::c_void)>,
-    pub allow_proxy:
+    pub native_wsi:
+        ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> u32>,
+    pub timeline:
+        ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> u32>,
+    pub queue_count:
         ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> u32>,
     pub create: ::core::option::Option<
         unsafe extern "C" fn(
@@ -324,6 +327,18 @@ pub struct rsf_godot_swapchain_calls {
             chain: *mut u64,
         ) -> u32,
     >,
+    pub install: ::core::option::Option<
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void, handle: u64),
+    >,
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_godot_swapchain_release_calls {
+    pub release_capture:
+        ::core::option::Option<unsafe extern "C" fn(chain: *mut ::core::ffi::c_void) -> u32>,
+    pub destroy_proxy:
+        ::core::option::Option<unsafe extern "C" fn(owner: *mut ::core::ffi::c_void) -> u32>,
+    pub clear_proxy: ::core::option::Option<unsafe extern "C" fn(chain: *mut ::core::ffi::c_void)>,
 }
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
