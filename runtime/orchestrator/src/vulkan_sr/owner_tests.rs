@@ -435,9 +435,6 @@ pub(super) static PLATFORM: Platform = Platform {
 };
 
 unsafe extern "C" fn unused() {}
-unsafe extern "C" fn sharpen_valid(_: &rsf_sharpening_options) -> i32 {
-    1
-}
 
 fn frame_record() -> rsf_frame_record {
     let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
@@ -474,12 +471,9 @@ fn frame_input(setup: &Setup, record: &rsf_frame_record) -> Frame {
         layout: SHADER_READ,
         copy_source: 1,
     };
-    let sharpening = rsf_sharpening_options {
-        struct_size: size_of::<rsf_sharpening_options>() as u32,
-        mode: SHARPENING_VENDOR,
-        sharpness: 0.75,
-        ..unsafe { std::mem::zeroed() }
-    };
+    let mut sharpening = sharpening_policy::defaults();
+    sharpening.mode = SHARPENING_VENDOR;
+    sharpening.sharpness = 0.75;
     Frame {
         struct_size: size_of::<Frame>() as u32,
         abi_version: RSF_SRVK_ABI_VERSION,
@@ -546,14 +540,14 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
             refused.depth.width += 1;
             let previous = state.calls.len();
             assert_eq!(
-                unsafe { rsf_core_srvk_evaluate(owner, commands, &refused, sharpen_valid) },
+                unsafe { rsf_core_srvk_evaluate(owner, commands, &refused) },
                 INVALID
             );
             assert_eq!(state.calls.len(), previous);
         }
         let previous = state.calls.len();
         assert_eq!(
-            unsafe { rsf_core_srvk_evaluate(owner, commands, &frame, sharpen_valid) },
+            unsafe { rsf_core_srvk_evaluate(owner, commands, &frame) },
             state.dispatch_result
         );
         let mut expected = vec![Call::Capture("sr-source-jittered".into())];
@@ -741,7 +735,7 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
         frame.depth.format = R32_FLOAT;
         frame.bias_current_color.image = 0;
         assert_eq!(
-            unsafe { rsf_core_srvk_evaluate(owner, commands, &frame, sharpen_valid) },
+            unsafe { rsf_core_srvk_evaluate(owner, commands, &frame) },
             result
         );
         let mut expected = vec![

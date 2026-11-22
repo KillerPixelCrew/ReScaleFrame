@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::{RSF_SR_FSR2, RSF_SR_XESS, rsf_sharpening_options as Options};
+use crate::render_abi::{RSF_SHARPENING_ABI_VERSION, rsf_sharpening_options as Options};
 
+const VENDOR: u32 = 4;
 const RCAS: u32 = 1;
 const DEPTH_RCAS: u32 = 2;
 const DEPTH_DAS: u32 = 3;
-const VENDOR: u32 = 4;
 pub(super) const FILTERS: [u32; 3] = [RCAS, DEPTH_RCAS, DEPTH_DAS];
 
 // Modes that need depth use the same RCAS fallback on each graphics API.
@@ -17,84 +17,101 @@ pub(super) fn effective_mode(mode: u32, has_depth: bool) -> Option<u32> {
     }
 }
 
-fn bounded(value: f32, minimum: f32, maximum: f32, default: f32) -> f32 {
-    if value.is_finite() {
-        value.clamp(minimum, maximum)
-    } else {
-        default
-    }
-}
-
-fn option(value: u32, maximum: u32, default: u32) -> u32 {
-    if value <= maximum { value } else { default }
-}
-
-fn sanitize(options: Options, defaults: &Options) -> Options {
+pub(crate) const fn defaults() -> Options {
     Options {
-        struct_size: defaults.struct_size,
-        abi_version: defaults.abi_version,
-        mode: option(options.mode, VENDOR, defaults.mode),
-        sharpness: bounded(options.sharpness, 0.0, 1.0, defaults.sharpness),
-        mas: option(options.mas, 1, defaults.mas),
-        motion_sharpness: bounded(
-            options.motion_sharpness,
-            -1.0,
-            1.0,
-            defaults.motion_sharpness,
-        ),
-        motion_threshold: bounded(
-            options.motion_threshold,
-            0.0,
-            100.0,
-            defaults.motion_threshold,
-        ),
-        motion_scale_limit: bounded(
-            options.motion_scale_limit,
-            0.01,
-            100.0,
-            defaults.motion_scale_limit,
-        ),
-        contrast_enabled: option(options.contrast_enabled, 1, defaults.contrast_enabled),
-        contrast: bounded(options.contrast, 0.0, 2.0, defaults.contrast),
-        depth_scale: bounded(options.depth_scale, 0.0, 600.0, defaults.depth_scale),
-        depth_bias: bounded(options.depth_bias, 0.0, 1.0, defaults.depth_bias),
-        clamp_output: option(options.clamp_output, 1, defaults.clamp_output),
-        debug: option(options.debug, 1, defaults.debug),
+        struct_size: size_of::<Options>() as u32,
+        abi_version: RSF_SHARPENING_ABI_VERSION,
+        mode: 0,
+        sharpness: 0.4,
+        mas: 0,
+        motion_sharpness: 0.2,
+        motion_threshold: 0.0,
+        motion_scale_limit: 10.0,
+        contrast_enabled: 0,
+        contrast: 0.0,
+        depth_scale: 35.0,
+        depth_bias: 0.001,
+        clamp_output: 0,
+        debug: 0,
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_sharpening_sanitize(options: &mut Options, defaults: &Options) {
-    *options = sanitize(*options, defaults);
+// Use the same ranges for strict admission and stored-value recovery.
+macro_rules! options_policy {
+    (
+        integers { $( $integer:ident <= $max:expr ),+ $(,)? }
+        decimals { $( $decimal:ident : ($low:expr, $high:expr) ),+ $(,)? }
+    ) => {
+        pub(crate) fn fields_are_zero(o: &Options) -> bool {
+            true $(&& o.$integer == 0)+ $(&& o.$decimal == 0.0)+
+        }
+
+        pub(crate) fn valid(o: &Options) -> bool {
+            o.struct_size as usize >= size_of::<Options>()
+                && o.abi_version == RSF_SHARPENING_ABI_VERSION
+                $(&& o.$integer <= $max)+
+                $(&& ($low..=$high).contains(&o.$decimal))+
+        }
+
+        pub(crate) fn sanitize(o: Options) -> Options {
+            let defaults = defaults();
+            Options {
+                $($integer: if o.$integer <= $max { o.$integer } else { defaults.$integer },)+
+                $($decimal: if o.$decimal.is_finite() {
+                    o.$decimal.clamp($low, $high)
+                } else {
+                    defaults.$decimal
+                },)+
+                ..defaults
+            }
+        }
+    };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_sharpening_valid(options: &Options, defaults: &Options) -> u32 {
-    if options.struct_size < defaults.struct_size || options.abi_version != defaults.abi_version {
-        return 0;
+options_policy! {
+    integers {
+        mode <= VENDOR,
+        mas <= 1,
+        contrast_enabled <= 1,
+        clamp_output <= 1,
+        debug <= 1,
     }
-    let valid = sanitize(*options, defaults);
-    u32::from(
-        options.mode == valid.mode
-            && options.sharpness == valid.sharpness
-            && options.mas == valid.mas
-            && options.motion_sharpness == valid.motion_sharpness
-            && options.motion_threshold == valid.motion_threshold
-            && options.motion_scale_limit == valid.motion_scale_limit
-            && options.contrast_enabled == valid.contrast_enabled
-            && options.contrast == valid.contrast
-            && options.depth_scale == valid.depth_scale
-            && options.depth_bias == valid.depth_bias
-            && options.clamp_output == valid.clamp_output
-            && options.debug == valid.debug,
-    )
+    decimals {
+        sharpness: (0.0, 1.0),
+        motion_sharpness: (-1.0, 1.0),
+        motion_threshold: (0.0, 100.0),
+        motion_scale_limit: (0.01, 100.0),
+        contrast: (0.0, 2.0),
+        depth_scale: (0.0, 600.0),
+        depth_bias: (0.0, 1.0),
+    }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_sharpening_vendor_amount(options: &Options, backend: u32) -> f32 {
-    if options.mode == VENDOR && (RSF_SR_FSR2..RSF_SR_XESS).contains(&backend) {
-        options.sharpness
+pub(crate) fn vendor_sharpness(o: &Options, backend: u32) -> f32 {
+    if o.mode == VENDOR && (2..=4).contains(&backend) {
+        o.sharpness
     } else {
         0.0
     }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_sharpening_core_defaults() -> Options {
+    defaults()
+}
+
+// The by-value wrappers receive a complete options record even for a mismatched ABI prefix.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_sharpening_core_sanitize(options: Options) -> Options {
+    sanitize(options)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_sharpening_core_valid(options: Options) -> u32 {
+    u32::from(valid(&options))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_sharpening_core_vendor_sharpness(options: Options, backend: u32) -> f32 {
+    vendor_sharpness(&options, backend)
 }

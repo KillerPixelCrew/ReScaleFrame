@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
-use crate::render_abi::rsf_sharpening_options;
 use crate::sdk_module::{FFX_CONTEXT_EXPORTS, FIDELITYFX_DLL, Loader, SdkModule};
+use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
 use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_fg_copy::{Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED};
@@ -893,7 +893,6 @@ unsafe extern "C" fn rsf_core_srvk_evaluate(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
-    sharpening_valid: unsafe extern "C" fn(&rsf_sharpening_options) -> i32,
 ) -> i32 {
     if owner.is_null() || commands.is_null() {
         return INVALID;
@@ -902,7 +901,7 @@ unsafe extern "C" fn rsf_core_srvk_evaluate(
         Ok(frame) => frame,
         Err(error) => return error,
     };
-    if frame.sharpening.struct_size != 0 && unsafe { sharpening_valid(&frame.sharpening) } == 0 {
+    if frame.sharpening.struct_size != 0 && !sharpening_policy::valid(&frame.sharpening) {
         return INVALID;
     }
     let owner = unsafe { &mut *owner };

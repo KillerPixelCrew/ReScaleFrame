@@ -86,9 +86,6 @@ typedef struct rsf_dlssp_platform {
     /* Sharpening settings and the post-SR pass. sharpen returns one when the options are inactive
        or the pass ran, zero when an active pass was unavailable or refused; it creates the pass in
        *pass on first active use. */
-    int32_t (*sharpening_valid)(const rsf_sharpening_options* options);
-    void (*sharpening_defaults)(rsf_sharpening_options* options);
-    float (*vendor_sharpness)(const rsf_sharpening_options* options, uint32_t backend);
     int32_t (*sharpen)(void** pass, void* context, void* output, void* motion, void* depth, void* exposure,
         const rsf_sharpening_options* options, const rsf_dlssp_sharpen_frame* frame);
     void (*sharpen_destroy)(void* pass);

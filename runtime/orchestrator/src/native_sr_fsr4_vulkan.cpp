@@ -133,9 +133,6 @@ int32_t split(const rsf_fsr4vk_handoff* handoff, void* commands, uint64_t timeli
     return handoff->split_record(handoff->user, commands, timeline, previous, ready, done, continuation);
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-int32_t sharpening_valid(const rsf_sharpening_options* settings) {
-    return rsf::sharpening_settings::valid(*settings) ? 1 : 0;
-}
 
 void sharpen(void* graphics, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t image) noexcept try {
     (void)static_cast<Graphics*>(graphics)->sharpen.run(*setup, static_cast<VkCommandBuffer>(commands), *frame, reinterpret_cast<VkImage>(image));
@@ -165,7 +162,7 @@ const rsf_fsr4vk_platform& platform() {
     static const rsf_fsr4vk_platform ops{
         rsf_dx12vk_platform_ops(), open, close, checked<RsfFsr4BridgeCreate>, checked<RsfFsr4BridgePlan>,
         checked<RsfFsr4BridgeInfo>, create_fence, create_image, release_image, capture_initialize, capture_begin,
-        capture_record, capture_parameters, capture_flush, transition, copy, split, sharpening_valid,
+        capture_record, capture_parameters, capture_flush, transition, copy, split, nullptr,
         checked<RsfFsr4BridgeSharpness>, checked<RsfFsr4BridgeEvaluate>, sharpen, retire, clear_sharpen, wait, idle,
         checked<VulkanStoryFsr4PrepareDestroy>, checked<VulkanStoryFsr4DestroyChecked>,
     };

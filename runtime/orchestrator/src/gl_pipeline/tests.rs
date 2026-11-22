@@ -326,7 +326,7 @@ unsafe extern "C" fn sr_evaluate(sr: Handle, _: Handle, pass: *const Pass, slot:
     OK
 }
 unsafe extern "C" fn sr_set_sharpening(sr: Handle, options: *const rsf_sharpening_options) -> i32 {
-    assert_eq!(unsafe { sharpening_valid(options) }, 1);
+    assert!(sharpening_policy::valid(unsafe { &*options }));
     event(format!("sharpen {}", name(sr)));
     OK
 }
@@ -402,20 +402,6 @@ unsafe extern "C" fn dump_cancel(_: u64) {
 unsafe extern "C" fn dlss_preset_valid(preset: u32) -> c_int {
     c_int::from(matches!(preset, 0 | 5 | 6 | 10..=13))
 }
-unsafe extern "C" fn sharpening_valid(options: *const rsf_sharpening_options) -> c_int {
-    let options = unsafe { &*options };
-    c_int::from(
-        options.struct_size as usize >= size_of::<rsf_sharpening_options>()
-            && (0.0..=1.0).contains(&options.sharpness),
-    )
-}
-unsafe extern "C" fn sharpening_defaults(out: *mut rsf_sharpening_options) {
-    let mut options: rsf_sharpening_options = unsafe { std::mem::zeroed() };
-    options.struct_size = size_of::<rsf_sharpening_options>() as u32;
-    options.abi_version = 1;
-    options.sharpness = 0.4;
-    unsafe { out.write(options) };
-}
 unsafe extern "C" fn fg_default_backend(vendor: u32, software: u32) -> u32 {
     u32::from(vendor == 0x10de && software == 0)
 }
@@ -475,8 +461,6 @@ static PLATFORM: Platform = Platform {
     latency_end_session,
     dump_cancel,
     dlss_preset_valid,
-    sharpening_valid,
-    sharpening_defaults,
     fg_default_backend,
     depth_domains_requested,
 };
@@ -919,7 +903,7 @@ fn rejected_options_do_not_touch_the_graphics_owner() {
         options(SR_DLSS, 1),
     ];
     invalid[3].dlss_preset = 7;
-    invalid[4].sharpening = PLATFORM.sharpening_defaults();
+    invalid[4].sharpening = sharpening_policy::defaults();
     invalid[4].sharpening.sharpness = 2.0;
     for options in &invalid {
         assert_eq!(

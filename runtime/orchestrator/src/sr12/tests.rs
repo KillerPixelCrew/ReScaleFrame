@@ -399,18 +399,6 @@ unsafe extern "C" fn sharpen_create() -> Handle {
 unsafe extern "C" fn sharpen_destroy(_: Handle) {
     event("sharpen-destroy".into());
 }
-unsafe extern "C" fn sharpening_valid(options: *const rsf_sharpening_options) -> i32 {
-    i32::from(unsafe { (*options).mode } <= 4)
-}
-unsafe extern "C" fn sharpening_defaults(options: *mut rsf_sharpening_options) {
-    unsafe {
-        (*options).struct_size = size_of::<rsf_sharpening_options>() as u32;
-        (*options).abi_version = RSF_SHARPENING_ABI_VERSION;
-    }
-}
-unsafe extern "C" fn vendor_sharpness(_: *const rsf_sharpening_options, _: u32) -> f32 {
-    0.0
-}
 unsafe extern "C" fn sharpen_run(
     _: Handle,
     _: Handle,
@@ -482,9 +470,6 @@ static PLATFORM: Platform = Platform {
     capture_force_reset,
     sharpen_create,
     sharpen_destroy,
-    sharpening_valid,
-    sharpening_defaults,
-    vendor_sharpness,
     sharpen_run,
     dump_begin_record,
     dump_pass_metadata,
@@ -1101,7 +1086,7 @@ fn sharpening_refusal_is_reported_once_and_options_are_checked() {
         .filter(|line| line.starts_with("D3D12 sharpening unavailable"))
         .count();
     assert_eq!(reported, 1);
-    let mut options: rsf_sharpening_options = unsafe { std::mem::zeroed() };
+    let mut options = sharpening_policy::defaults();
     options.struct_size = size_of::<rsf_sharpening_options>() as u32 - 4;
     options.abi_version = RSF_SHARPENING_ABI_VERSION;
     assert_eq!(

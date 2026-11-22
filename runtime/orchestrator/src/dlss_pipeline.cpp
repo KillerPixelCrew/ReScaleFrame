@@ -65,7 +65,7 @@ int32_t rsf_core_dlss_pipeline_on_layer(const rsf_dlssp_platform*, void*, const 
 void* rsf_core_dlss_pipeline_layer_output(void);
 void rsf_core_dlss_pipeline_set_colour_correction(uint32_t);
 void rsf_core_dlss_pipeline_set_colour_transport(uint32_t);
-int32_t rsf_core_dlss_pipeline_set_sharpening(const rsf_dlssp_platform*, const rsf_sharpening_options*);
+int32_t rsf_core_dlss_pipeline_set_sharpening(const rsf_sharpening_options*);
 int32_t rsf_core_dlss_pipeline_set_preset(const rsf_dlssp_platform*, uint32_t);
 int32_t rsf_core_dlss_pipeline_set_quality(const rsf_dlssp_platform*, uint32_t, uint32_t*, uint32_t*);
 int32_t rsf_core_dlss_pipeline_resize_output(const rsf_dlssp_platform*, uint32_t, uint32_t, uint32_t*, uint32_t*);
@@ -300,18 +300,6 @@ void transport_destroy(void* transport) noexcept try
 catch (...) {}
 
 /* Sharpening settings and the post-SR pass. */
-int32_t sharpening_valid(const rsf_sharpening_options* options) noexcept
-{
-    return rsf::sharpening_settings::valid(*options);
-}
-
-void sharpening_defaults(rsf_sharpening_options* options) noexcept { *options = rsf_sharpening_defaults(); }
-
-float vendor_sharpness(const rsf_sharpening_options* options, uint32_t backend) noexcept
-{
-    return rsf::sharpening_settings::vendor_sharpness(*options, backend);
-}
-
 // One when the options are inactive or the pass ran, zero when an active pass was unavailable or
 // refused. No allocation happens while the options are inactive.
 int32_t sharpen(void** pass, void* context, void* output, void* motion, void* depth, void* exposure,
@@ -395,7 +383,7 @@ constexpr rsf_dlssp_platform leaves{
     resolve_create, resolve_run, resolve_motion, resolve_depth, resolve_destroy,
     fidelity_create, fidelity_run, fidelity_destroy,
     transport_create, transport_encode, transport_decode, transport_destroy,
-    sharpening_valid, sharpening_defaults, vendor_sharpness, sharpen, sharpen_destroy,
+    sharpen, sharpen_destroy,
     alternate_create,
     input_dump, dump_bytes, dump_image,
 };
@@ -449,7 +437,7 @@ extern "C" void rsf_dlss_pipeline_set_colour_transport(uint32_t enabled)
 
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_sharpening(const rsf_sharpening_options* options)
 {
-    return rsf_core_dlss_pipeline_set_sharpening(&leaves, options);
+    return rsf_core_dlss_pipeline_set_sharpening(options);
 }
 
 extern "C" rsf_dlss_pipeline_result rsf_dlss_pipeline_set_preset(uint32_t preset)

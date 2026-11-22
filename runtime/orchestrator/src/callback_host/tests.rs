@@ -178,34 +178,6 @@ unsafe extern "C" fn depth_domains(pass: *const Pass) -> u32 {
 unsafe extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
     u32::from(preset <= 15)
 }
-unsafe extern "C" fn sharpening_defaults(out: *mut Sharpening) {
-    unsafe {
-        out.write(Sharpening {
-            struct_size: size_of::<Sharpening>() as u32,
-            abi_version: crate::render_abi::RSF_SHARPENING_ABI_VERSION,
-            mode: 0,
-            sharpness: 0.4,
-            mas: 0,
-            motion_sharpness: 0.2,
-            motion_threshold: 0.0,
-            motion_scale_limit: 10.0,
-            contrast_enabled: 0,
-            contrast: 0.0,
-            depth_scale: 35.0,
-            depth_bias: 0.001,
-            clamp_output: 0,
-            debug: 0,
-        })
-    };
-}
-unsafe extern "C" fn sharpening_valid(options: *const Sharpening) -> i32 {
-    let options = unsafe { &*options };
-    i32::from(options.mode <= 4 && (0.0..=1.0).contains(&options.sharpness))
-}
-unsafe extern "C" fn sharpening_sanitize(options: *mut Sharpening) {
-    let options = unsafe { &mut *options };
-    options.sharpness = options.sharpness.clamp(0.0, 1.0);
-}
 unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
     let setup = unsafe { &*setup };
     let dlss = &setup.dlss;
@@ -387,9 +359,6 @@ static PLATFORM: Platform = Platform {
     resource_desc,
     depth_domains,
     dlss_preset_valid,
-    sharpening_defaults,
-    sharpening_valid,
-    sharpening_sanitize,
     sr12_create,
     sr12_plan,
     sr12_destroy,

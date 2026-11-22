@@ -27,6 +27,7 @@ use crate::settings_store::{
     read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
     rsf_settings_store_write_layout, set_sharpening, sharpening_of,
 };
+use crate::sharpening_policy;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RESET,
     RSF_GAME_RENDER_WINDOW, rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
@@ -160,9 +161,6 @@ pub(crate) struct Platform {
     native_object: unsafe extern "C" fn(Handle) -> Handle,
     depth_domains: unsafe extern "C" fn(*const Pass) -> u32,
     dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
-    sharpening_defaults: unsafe extern "C" fn(*mut Sharpening),
-    sharpening_valid: unsafe extern "C" fn(*const Sharpening) -> i32,
-    sharpening_sanitize: unsafe extern "C" fn(*mut Sharpening),
     fg_default_backend: unsafe extern "C" fn(u32, u32) -> u32,
     sr12_create: unsafe extern "C" fn(*const SrSetup, *mut Handle) -> i32,
     sr12_destroy: unsafe extern "C" fn(Handle),
@@ -479,12 +477,6 @@ impl Host {
         self.fg_installed.load(Ordering::Acquire)
     }
 
-    fn sharpening_defaults(&self) -> Sharpening {
-        let mut options: Sharpening = unsafe { std::mem::zeroed() };
-        unsafe { (self.p.sharpening_defaults)(&mut options) };
-        options
-    }
-
     // The saved section with the frontend defaults and sanitized post-pass values.
     fn read_settings(&self) -> Settings {
         self.read_settings_and_fg_mode().0
@@ -492,7 +484,7 @@ impl Host {
 
     // One section read: the public settings and the stored FG value FG12 takes as its mode.
     fn read_settings_and_fg_mode(&self) -> (Settings, u32) {
-        let defaults = self.sharpening_defaults();
+        let defaults = sharpening_policy::defaults();
         let (mut value, fg_mode) = unsafe {
             read_settings_and_fg_mode(
                 self.ini.as_ptr(),
@@ -502,8 +494,7 @@ impl Host {
             )
         }
         .unwrap_or((DEFAULTS, DEFAULTS.fg_enabled));
-        let mut options = sharpening_of(&value, &defaults);
-        unsafe { (self.p.sharpening_sanitize)(&mut options) };
+        let options = sharpening_policy::sanitize(sharpening_of(&value, &defaults));
         set_sharpening(&mut value, &options);
         (value, fg_mode)
     }
@@ -544,7 +535,7 @@ impl Host {
         }
         s.poll_tick = now + 1000;
         let (values, fg_mode) = self.read_settings_and_fg_mode();
-        s.sharpening = sharpening_of(&values, &self.sharpening_defaults());
+        s.sharpening = sharpening_of(&values, &sharpening_policy::defaults());
         if !s.context.is_null() {
             let _ = unsafe { (p.sr12_set_sharpening)(s.context, &s.sharpening) };
         }
@@ -1185,8 +1176,8 @@ impl Host {
     // Validated against the whole request, then saved in one section write and applied.
     fn settings_apply(&self, request: &Settings) -> i32 {
         let p = self.p;
-        let sharpening = sharpening_of(request, &self.sharpening_defaults());
-        if unsafe { (p.sharpening_valid)(&sharpening) } == 0
+        let sharpening = sharpening_of(request, &sharpening_policy::defaults());
+        if !sharpening_policy::valid(&sharpening)
             || request.sr_enabled > 1
             || request.fg_enabled > 1
             || request.status_overlay > 1
@@ -1411,7 +1402,7 @@ impl Host {
                 self.log("RSF overlay: panel layout applied for this session; the save failed.");
             }
         }
-        if !apply_intent(&mut prefs, &intent, &self.sharpening_defaults()) {
+        if !apply_intent(&mut prefs, &intent, &sharpening_policy::defaults()) {
             return;
         }
         if self.settings_apply(&prefs) == OK {

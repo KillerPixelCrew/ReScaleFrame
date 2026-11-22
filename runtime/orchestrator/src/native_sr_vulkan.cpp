@@ -4,16 +4,12 @@
 
 namespace {
 struct Platform;
-int32_t sharpening_valid(const rsf_sharpening_options* options) noexcept
-{
-    return rsf::sharpening_settings::valid(*options);
-}
 }
 
 extern "C" {
 int32_t rsf_core_srvk_create(const Platform*, const rsf_srvk_setup*, rsf_srvk**);
 int32_t rsf_core_srvk_plan(const rsf_srvk*, uint32_t*, uint32_t*);
-int32_t rsf_core_srvk_evaluate(rsf_srvk*, void*, const rsf_srvk_frame*, int32_t (*)(const rsf_sharpening_options*));
+int32_t rsf_core_srvk_evaluate(rsf_srvk*, void*, const rsf_srvk_frame*);
 void rsf_core_srvk_retire_commands(rsf_srvk*, void*);
 int32_t rsf_core_srvk_destroy(rsf_srvk*);
 int32_t rsf_core_srvk_dlss_preset(rsf_srvk*, uint32_t);
@@ -433,7 +429,7 @@ rsf_backend_result rsf_srvk_plan(const rsf_srvk* owner, uint32_t* width, uint32_
 }
 rsf_backend_result rsf_srvk_evaluate(rsf_srvk* owner, void* commands, const rsf_srvk_frame* frame)
 {
-    return rsf_core_srvk_evaluate(owner, commands, frame, sharpening_valid);
+    return rsf_core_srvk_evaluate(owner, commands, frame);
 }
 void rsf_srvk_retire_commands(rsf_srvk* owner, void* commands)
 {

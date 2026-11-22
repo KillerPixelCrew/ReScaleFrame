@@ -104,9 +104,6 @@ pub struct rsf_dlssp_platform {
     pub transport_decode:
         unsafe extern "C" fn(Raw, Raw, Raw, Raw, u32, u32, Raw, u32, u32, *const f32) -> i32,
     pub transport_destroy: unsafe extern "C" fn(Raw),
-    pub sharpening_valid: unsafe extern "C" fn(*const rsf_sharpening_options) -> i32,
-    pub sharpening_defaults: unsafe extern "C" fn(*mut rsf_sharpening_options),
-    pub vendor_sharpness: unsafe extern "C" fn(*const rsf_sharpening_options, u32) -> f32,
     pub sharpen: unsafe extern "C" fn(
         *mut Raw,
         Raw,

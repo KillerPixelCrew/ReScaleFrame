@@ -54,26 +54,7 @@ int stop() noexcept try
     return 0;
 } catch (...) { return -1; }
 
-// Use the same inline contracts as the other render hosts.
-void initialize_sharpening(rsf_render_settings* settings, rsf_sharpening_options* defaults) noexcept
-{
-    rsf::render_settings::initialize_sharpening(*settings);
-    *defaults = rsf_sharpening_defaults();
-}
-
-uint32_t valid_settings(const rsf_render_settings* settings) noexcept
-{
-    return rsf_dlss_preset_valid(settings->dlss_preset) &&
-        rsf::sharpening_settings::valid(rsf::render_settings::sharpening(*settings));
-}
-
 uint32_t valid_preset(uint32_t preset) noexcept { return rsf_dlss_preset_valid(preset); }
-
-void sanitize_sharpening(rsf_render_settings* settings) noexcept
-{
-    rsf::render_settings::sharpening(*settings,
-        rsf::sharpening_settings::sanitize(rsf::render_settings::sharpening(*settings)));
-}
 
 void set_sharpening(const rsf_render_settings* settings) noexcept
 {
@@ -84,8 +65,8 @@ void set_sharpening(const rsf_render_settings* settings) noexcept
 constexpr rsf_overlay_platform platform{
     .window = window, .refresh = refresh, .foreground = foreground, .tick = tick,
     .start = start, .present = present, .stop = stop,
-    .initialize_sharpening = initialize_sharpening, .valid_settings = valid_settings,
-    .valid_preset = valid_preset, .sanitize_sharpening = sanitize_sharpening,
+    .initialize_sharpening = nullptr, .valid_settings = nullptr,
+    .valid_preset = valid_preset, .sanitize_sharpening = nullptr,
     .set_sharpening = set_sharpening,
     .input_visible = rsf_overlay_input_visible, .input_set_visible = rsf_overlay_input_set_visible,
     .input_counters_get = rsf_overlay_input_counters_get, .input_routes_get = rsf_native_input_routes_get,

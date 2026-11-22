@@ -30,6 +30,7 @@ use crate::render_abi::{
     rsf_frame_resources, rsf_motion_resolve_params, rsf_pipeline_camera_frame as Camera,
     rsf_sharpening_options as Sharpening,
 };
+use crate::sharpening_policy;
 use crate::sr_legacy::{
     Adapter, rsf_sr_legacy_destroy, rsf_sr_legacy_evaluate, rsf_sr_legacy_fg_inputs,
     rsf_sr_legacy_select, rsf_sr_legacy_warm_up,
@@ -1147,7 +1148,7 @@ impl Pipeline {
         let sharpen = self
             .shared()
             .sharpening
-            .unwrap_or_else(|| unsafe { defaults(p) });
+            .unwrap_or_else(sharpening_policy::defaults);
         let evaluated = if backend == SR_DLSS {
             o.dlss_evaluation_attempted = true;
             unsafe { (p.fg_evaluate)(context, &dlss) }
@@ -1165,7 +1166,7 @@ impl Pipeline {
                     context,
                     &alternate,
                     u32::from(marks_unwritten(&o.motion)),
-                    (p.vendor_sharpness)(&sharpen, backend),
+                    sharpening_policy::vendor_sharpness(&sharpen, backend),
                 )
             }
         };
@@ -1830,7 +1831,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         self.colour_transport.store(enabled != 0, Ordering::Release);
     }
 
-    pub(super) unsafe fn set_sharpening(&self, p: &P, options: *const Sharpening) -> i32 {
+    pub(super) unsafe fn set_sharpening(&self, options: *const Sharpening) -> i32 {
         if !unsafe { has_capacity(options) } {
             return INVALID;
         }
@@ -1838,7 +1839,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         if options.abi_version != RSF_SHARPENING_ABI_VERSION {
             return ABI_MISMATCH;
         }
-        if unsafe { (p.sharpening_valid)(&options) } == 0 {
+        if !sharpening_policy::valid(&options) {
             return INVALID;
         }
         self.shared().sharpening = Some(options);
@@ -2168,12 +2169,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
     }
 }
 
-unsafe fn defaults(p: &P) -> Sharpening {
-    let mut options: Sharpening = unsafe { std::mem::zeroed() };
-    unsafe { (p.sharpening_defaults)(&mut options) };
-    options
-}
-
 fn frame_record(frame: &Frame, dlss: &DlssFrame, backend: u32, output: [u32; 2]) -> String {
     let f = |value: f32| g9(f64::from(value));
     let clip = dlss
@@ -2270,11 +2265,8 @@ extern "C" fn rsf_core_dlss_pipeline_set_colour_transport(enabled: u32) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_set_sharpening(
-    p: &P,
-    options: *const Sharpening,
-) -> i32 {
-    unsafe { PROCESS.set_sharpening(p, options) }
+unsafe extern "C" fn rsf_core_dlss_pipeline_set_sharpening(options: *const Sharpening) -> i32 {
+    unsafe { PROCESS.set_sharpening(options) }
 }
 
 #[unsafe(no_mangle)]

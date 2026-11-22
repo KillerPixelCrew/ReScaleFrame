@@ -166,8 +166,6 @@ void* present_host() { return rsf_d3d11_present_host(); }
 
 // Header-inline contract predicates, kept single-sourced in the published headers.
 int dlss_preset_valid(uint32_t preset) { return rsf_dlss_preset_valid(preset); }
-int sharpening_valid(const rsf_sharpening_options* options) { return rsf::sharpening_settings::valid(*options) ? 1 : 0; }
-void sharpening_defaults(rsf_sharpening_options* out) { *out = rsf_sharpening_defaults(); }
 uint32_t fg_default_backend(uint32_t vendor, uint32_t software) { return rsf_fg_default_backend(vendor, software); }
 uint32_t depth_domains_requested(const rsf_game_render_pass* pass) { return rsf_game_depth_domains_requested(&pass->depth_domains); }
 
@@ -220,8 +218,6 @@ struct Platform {
     decltype(&rsf_native_latency_end_session) latency_end_session;
     decltype(&rsf_input_dump_cancel) dump_cancel;
     decltype(&dlss_preset_valid) dlss_preset_valid;
-    decltype(&sharpening_valid) sharpening_valid;
-    decltype(&sharpening_defaults) sharpening_defaults;
     decltype(&fg_default_backend) fg_default_backend;
     decltype(&depth_domains_requested) depth_domains_requested;
 };
@@ -235,7 +231,7 @@ constexpr Platform platform{
     rsf_fg12_submitted, rsf_fg12_window, rsf_fg12_status, present_host, rsf_d3d11_present_is_owner,
     rsf_d3d11_present_backend, rsf_d3d11_present_request, rsf_d3d11_present_switch_result, rsf_d3d11_present_abort,
     pcl_message, rsf_native_cpu_read, latency_completed, rsf_native_latency_end_session, rsf_input_dump_cancel,
-    dlss_preset_valid, sharpening_valid, sharpening_defaults, fg_default_backend, depth_domains_requested,
+    dlss_preset_valid, fg_default_backend, depth_domains_requested,
 };
 }
 

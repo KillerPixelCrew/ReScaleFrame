@@ -277,12 +277,6 @@ int capture_force_reset(void* capture, uint64_t frame)
 
 void* sharpen_create() { return new (std::nothrow) rsf::sharpening::D3D12(); }
 void sharpen_destroy(void* pass) { delete static_cast<rsf::sharpening::D3D12*>(pass); }
-int sharpening_valid(const rsf_sharpening_options* options) { return rsf::sharpening_settings::valid(*options); }
-void sharpening_defaults(rsf_sharpening_options* options) { *options = rsf_sharpening_defaults(); }
-float vendor_sharpness(const rsf_sharpening_options* options, uint32_t backend)
-{
-    return rsf::sharpening_settings::vendor_sharpness(*options, backend);
-}
 // One when the options are inactive or the pass was recorded, zero when an active pass refused.
 int sharpen_run(void* pass, void* list, void* output, void* motion, void* depth, void* exposure,
     const rsf_sharpening_options* sharpen, uint32_t hdr, uint32_t depth_inverted, float near_plane, float far_plane,
@@ -348,9 +342,6 @@ struct Platform {
     decltype(&capture_force_reset) capture_force_reset;
     decltype(&sharpen_create) sharpen_create;
     decltype(&sharpen_destroy) sharpen_destroy;
-    decltype(&sharpening_valid) sharpening_valid;
-    decltype(&sharpening_defaults) sharpening_defaults;
-    decltype(&vendor_sharpness) vendor_sharpness;
     decltype(&sharpen_run) sharpen_run;
     decltype(&rsf_input_dump_begin_record) dump_begin_record;
     decltype(&rsf_input_dump_pass_metadata) dump_pass_metadata;
@@ -370,7 +361,7 @@ constexpr Platform platform{
     describe, owned_by, write_srv, write_uav, dispatch, transition, copy_region, copy_unit_exposure,
     copy_motion_tile, map, unmap, depth_domains, capture_create, capture_destroy, capture_enabled,
     capture_configure, capture_flush, capture_record, capture_event, capture_wants, capture_force_reset,
-    sharpen_create, sharpen_destroy, sharpening_valid, sharpening_defaults, vendor_sharpness, sharpen_run,
+    sharpen_create, sharpen_destroy, sharpen_run,
     rsf_input_dump_begin_record, rsf_input_dump_pass_metadata, rsf_input_dump_sr_frame, rsf_input_dump_result,
     fg_bind,
 };

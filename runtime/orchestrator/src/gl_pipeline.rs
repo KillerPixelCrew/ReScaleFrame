@@ -12,6 +12,7 @@ use crate::render_abi::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_REFLEX_OFF, rsf_backend_log_fn,
     rsf_native_fg_options, rsf_native_fg_status, rsf_sharpening_options,
 };
+use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
@@ -120,19 +121,11 @@ pub(crate) struct Platform {
     dump_cancel: unsafe extern "C" fn(u64),
     // Header-inline contract predicates, single-sourced in the published headers.
     dlss_preset_valid: unsafe extern "C" fn(u32) -> c_int,
-    sharpening_valid: unsafe extern "C" fn(*const rsf_sharpening_options) -> c_int,
-    sharpening_defaults: unsafe extern "C" fn(*mut rsf_sharpening_options),
     fg_default_backend: unsafe extern "C" fn(u32, u32) -> u32,
     depth_domains_requested: unsafe extern "C" fn(*const Pass) -> u32,
 }
 
 impl Platform {
-    fn sharpening_defaults(&self) -> rsf_sharpening_options {
-        let mut options = unsafe { std::mem::zeroed() };
-        unsafe { (self.sharpening_defaults)(&mut options) };
-        options
-    }
-
     fn depth_domains_requested(&self, pass: &Pass) -> bool {
         unsafe { (self.depth_domains_requested)(pass) != 0 }
     }
@@ -146,7 +139,7 @@ impl Platform {
             && unsafe { (self.dlss_preset_valid)(options.dlss_preset) } != 0
             && options.generation.struct_size as usize >= size_of::<rsf_native_fg_options>()
             && (options.sharpening.struct_size == 0
-                || unsafe { (self.sharpening_valid)(&options.sharpening) } != 0)
+                || sharpening_policy::valid(&options.sharpening))
     }
 }
 
@@ -557,7 +550,7 @@ impl Pipeline {
         let sharpening = if options.sharpening.struct_size != 0 {
             options.sharpening
         } else {
-            p.sharpening_defaults()
+            sharpening_policy::defaults()
         };
         if let Some(active) = state.active.as_ref().filter(|active| active.shape == shape) {
             return unsafe { (p.sr_set_sharpening)(active.sr.get(), &sharpening) };

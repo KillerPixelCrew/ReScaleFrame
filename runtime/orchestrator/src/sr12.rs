@@ -11,6 +11,7 @@ use crate::dxgi_format::{
 };
 use crate::gl_pipeline_abi::{rsf_dlss_setup, rsf_sr12_setup as Setup};
 use crate::render_abi::*;
+use crate::sharpening_policy;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_NO_FG,
@@ -154,9 +155,6 @@ pub(crate) struct Platform {
     capture_force_reset: unsafe extern "C" fn(Handle, u64) -> i32,
     sharpen_create: unsafe extern "C" fn() -> Handle,
     sharpen_destroy: unsafe extern "C" fn(Handle),
-    sharpening_valid: unsafe extern "C" fn(*const rsf_sharpening_options) -> i32,
-    sharpening_defaults: unsafe extern "C" fn(*mut rsf_sharpening_options),
-    vendor_sharpness: unsafe extern "C" fn(*const rsf_sharpening_options, u32) -> f32,
     sharpen_run: unsafe extern "C" fn(
         Handle,
         Handle,
@@ -632,8 +630,7 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
         s.backend != SR_NONE || unsafe { (p.capture_enabled)(capture.as_ptr()) } != 0;
     let gpu = unsafe { create_gpu(p, &s, (width, height), normalize_color, external_exposure) }
         .ok_or(INIT_FAILED)?;
-    let mut sharpening: rsf_sharpening_options = unsafe { std::mem::zeroed() };
-    unsafe { (p.sharpening_defaults)(&mut sharpening) };
+    let sharpening = sharpening_policy::defaults();
     Ok(Sr12 {
         native,
         gpu,
@@ -1086,7 +1083,7 @@ impl Sr12 {
             frame.depth = self.resource(normalized[DEPTH], false, record.resource_generation);
             frame.motion = self.resource(normalized[MOTION], false, record.resource_generation);
             frame.output = self.resource(output, true, record.resource_generation);
-            frame.sharpness = (p.vendor_sharpness)(&sharpen, self.backend);
+            frame.sharpness = sharpening_policy::vendor_sharpness(&sharpen, self.backend);
         }
         frame.jitter_x = pass.camera.jitter_pixels[0];
         frame.jitter_y = pass.camera.jitter_pixels[1];
@@ -1363,7 +1360,7 @@ unsafe extern "C" fn rsf_core_sr12_set_sharpening(
     if options.abi_version != RSF_SHARPENING_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    if unsafe { (owner.p().sharpening_valid)(&options) } == 0 {
+    if !sharpening_policy::valid(&options) {
         return INVALID;
     }
     *lock(&owner.sharpening) = options;

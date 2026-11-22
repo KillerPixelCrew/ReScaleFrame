@@ -375,18 +375,6 @@ unsafe extern "C" fn transport_decode(
 unsafe extern "C" fn transport_destroy(_: Raw) {
     call("transport_destroy");
 }
-unsafe extern "C" fn sharpening_valid(options: *const Sharpening) -> i32 {
-    i32::from(unsafe { (*options).sharpness } <= 1.0)
-}
-unsafe extern "C" fn sharpening_defaults(out: *mut Sharpening) {
-    unsafe {
-        (*out).struct_size = size_of::<Sharpening>() as u32;
-        (*out).abi_version = RSF_SHARPENING_ABI_VERSION;
-    }
-}
-unsafe extern "C" fn vendor_sharpness(_: *const Sharpening, _: u32) -> f32 {
-    0.0
-}
 unsafe extern "C" fn sharpen(
     _: *mut Raw,
     _: Raw,
@@ -493,9 +481,6 @@ static PLATFORM: P = P {
     transport_encode,
     transport_decode,
     transport_destroy,
-    sharpening_valid,
-    sharpening_defaults,
-    vendor_sharpness,
     sharpen,
     sharpen_destroy: destroy,
     alternate_create,
@@ -1213,16 +1198,18 @@ fn request_dump_writes_the_evaluated_frame_inputs_and_record() {
 #[test]
 fn sharpening_and_preset_settings_are_validated_through_their_owners() {
     let pipeline = Pipeline::new();
-    let mut options: Sharpening = unsafe { std::mem::zeroed() };
+    let mut options = sharpening_policy::defaults();
+    options.struct_size = 0;
+    options.abi_version = 0;
     unsafe {
-        assert_eq!(pipeline.set_sharpening(&PLATFORM, &options), INVALID);
+        assert_eq!(pipeline.set_sharpening(&options), INVALID);
         options.struct_size = size_of::<Sharpening>() as u32;
-        assert_eq!(pipeline.set_sharpening(&PLATFORM, &options), ABI_MISMATCH);
+        assert_eq!(pipeline.set_sharpening(&options), ABI_MISMATCH);
         options.abi_version = RSF_SHARPENING_ABI_VERSION;
         options.sharpness = 2.0;
-        assert_eq!(pipeline.set_sharpening(&PLATFORM, &options), INVALID);
+        assert_eq!(pipeline.set_sharpening(&options), INVALID);
         options.sharpness = 0.5;
-        assert_eq!(pipeline.set_sharpening(&PLATFORM, &options), OK);
+        assert_eq!(pipeline.set_sharpening(&options), OK);
     }
     assert_eq!(pipeline.shared().sharpening.map(|o| o.sharpness), Some(0.5));
 }

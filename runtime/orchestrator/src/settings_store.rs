@@ -2,12 +2,13 @@
 //! Shared persistence for rsf_render_settings in an adapter-supplied INI section.
 //!
 //! The key names and text formats belong to the render frontend; the file and section always
-//! come from the adapter. Range checks and sanitization stay with the public
-//! sharpening_settings.h helpers that the C++ facade applies around these calls.
+//! come from the adapter. The frontend ABI exposes FG as an enable flag, so the store
+//! also tracks the original mode when reading or rewriting saved preferences.
 use crate::render_abi::{
     RSF_RENDER_FRONTEND_ABI_VERSION, RSF_SHARPENING_ABI_VERSION, rsf_render_settings as Settings,
     rsf_sharpening_options as Sharpening,
 };
+use crate::sharpening_policy;
 use std::ptr::null;
 use std::sync::Mutex;
 use windows_sys::Win32::System::WindowsProgramming::{
@@ -33,6 +34,7 @@ const NUMBER_CAPACITY: usize = 80;
 // overlay interprets it. A separate key rather than a field of rsf_render_settings, which other
 // ABIs embed; a settings write keeps it because it is not an owned key.
 const OVERLAY_LAYOUT: &str = "OverlayLayout";
+const FG: &str = "FG";
 const DLSS_PRESET: &str = "DLSSPreset";
 
 #[derive(Clone, Copy)]
@@ -41,131 +43,124 @@ enum Value {
     Decimal(f32),
 }
 
-// Owned keys in file order. The last twelve are the shared post-pass keys that callback hosts
-// persist on their own.
-const KEYS: [&str; 22] = [
-    "SR",
-    "SRBackend",
-    DLSS_PRESET,
-    "FG",
-    "FGBackend",
-    "FGGeneratedFrames",
-    "Latency",
-    "FrameLimitUs",
-    "StatusOverlay",
-    "SRQuality",
-    "SharpeningMode",
-    "Sharpness",
-    "MAS",
-    "MotionSharpness",
-    "MotionThreshold",
-    "MotionScaleLimit",
-    "ContrastEnabled",
-    "Contrast",
-    "DADepthScale",
-    "DADepthBias",
-    "DAClampOutput",
-    "SharpeningDebug",
-];
-const SHARPENING_START: usize = 10;
-
-fn settings_values(s: &Settings) -> [Value; 22] {
-    use Value::{Decimal as D, Integer as I};
-    [
-        I(s.sr_enabled),
-        I(s.sr_backend),
-        I(s.dlss_preset),
-        I(s.fg_enabled),
-        I(s.fg_backend),
-        I(s.generated_frames),
-        I(s.latency),
-        I(s.frame_limit_us),
-        I(s.status_overlay),
-        I(s.sr_quality),
-        I(s.sharpening_mode),
-        D(s.sharpening_sharpness),
-        I(s.sharpening_mas),
-        D(s.sharpening_motion_sharpness),
-        D(s.sharpening_motion_threshold),
-        D(s.sharpening_motion_scale_limit),
-        I(s.sharpening_contrast_enabled),
-        D(s.sharpening_contrast),
-        D(s.sharpening_depth_scale),
-        D(s.sharpening_depth_bias),
-        I(s.sharpening_clamp_output),
-        I(s.sharpening_debug),
-    ]
-}
-
-fn sharpening_values(o: &Sharpening) -> [Value; 12] {
-    use Value::{Decimal as D, Integer as I};
-    [
-        I(o.mode),
-        D(o.sharpness),
-        I(o.mas),
-        D(o.motion_sharpness),
-        D(o.motion_threshold),
-        D(o.motion_scale_limit),
-        I(o.contrast_enabled),
-        D(o.contrast),
-        D(o.depth_scale),
-        D(o.depth_bias),
-        I(o.clamp_output),
-        I(o.debug),
-    ]
-}
-
-/// The shared post-pass fields of `s` over `base`, which supplies the header and ABI.
-pub(crate) fn sharpening_of(s: &Settings, base: &Sharpening) -> Sharpening {
-    Sharpening {
-        mode: s.sharpening_mode,
-        sharpness: s.sharpening_sharpness,
-        mas: s.sharpening_mas,
-        motion_sharpness: s.sharpening_motion_sharpness,
-        motion_threshold: s.sharpening_motion_threshold,
-        motion_scale_limit: s.sharpening_motion_scale_limit,
-        contrast_enabled: s.sharpening_contrast_enabled,
-        contrast: s.sharpening_contrast,
-        depth_scale: s.sharpening_depth_scale,
-        depth_bias: s.sharpening_depth_bias,
-        clamp_output: s.sharpening_clamp_output,
-        debug: s.sharpening_debug,
-        ..*base
+impl From<u32> for Value {
+    fn from(value: u32) -> Self {
+        Self::Integer(value)
     }
 }
 
-pub(crate) fn set_sharpening(s: &mut Settings, o: &Sharpening) {
-    s.sharpening_mode = o.mode;
-    s.sharpening_sharpness = o.sharpness;
-    s.sharpening_mas = o.mas;
-    s.sharpening_motion_sharpness = o.motion_sharpness;
-    s.sharpening_motion_threshold = o.motion_threshold;
-    s.sharpening_motion_scale_limit = o.motion_scale_limit;
-    s.sharpening_contrast_enabled = o.contrast_enabled;
-    s.sharpening_contrast = o.contrast;
-    s.sharpening_depth_scale = o.depth_scale;
-    s.sharpening_depth_bias = o.depth_bias;
-    s.sharpening_clamp_output = o.clamp_output;
-    s.sharpening_debug = o.debug;
+impl From<f32> for Value {
+    fn from(value: f32) -> Self {
+        Self::Decimal(value)
+    }
 }
 
-fn wide(text: &str) -> Vec<u16> {
+// One mapping supplies the read fallbacks, write values and owned-key filtering.
+macro_rules! fields {
+    (
+        frontend { $( $key:expr => $field:ident : $kind:ident ),+ $(,)? }
+        sharpening { $( $sharp_key:expr => $sharp_field:ident / $embedded:ident : $sharp_kind:ident ),+ $(,)? }
+    ) => {
+        const KEYS: &[&str] = &[$($key,)+ $($sharp_key,)+];
+
+        fn frontend_values(s: &Settings) -> [(&'static str, Value); 10] {
+            [$(($key, Value::from(s.$field))),+]
+        }
+
+        fn sharpening_values(o: &Sharpening) -> [(&'static str, Value); 12] {
+            [$(($sharp_key, Value::from(o.$sharp_field))),+]
+        }
+
+        fn read_frontend(file: &File, s: &mut Settings) {
+            $(s.$field = file.$kind($key, s.$field);)+
+        }
+
+        fn read_sharpening_values(file: &File, o: &mut Sharpening) {
+            $(o.$sharp_field = file.$sharp_kind($sharp_key, o.$sharp_field);)+
+        }
+
+        pub(crate) fn sharpening_of(s: &Settings, base: &Sharpening) -> Sharpening {
+            Sharpening {
+                $($sharp_field: s.$embedded,)+
+                ..*base
+            }
+        }
+        pub(crate) fn set_sharpening(s: &mut Settings, o: &Sharpening) {
+            $(s.$embedded = o.$sharp_field;)+
+        }
+    };
+}
+
+fields! {
+    frontend {
+        "SR" => sr_enabled: integer,
+        "SRBackend" => sr_backend: integer,
+        DLSS_PRESET => dlss_preset: integer,
+        FG => fg_enabled: integer,
+        "FGBackend" => fg_backend: integer,
+        "FGGeneratedFrames" => generated_frames: integer,
+        "Latency" => latency: integer,
+        "FrameLimitUs" => frame_limit_us: integer,
+        "StatusOverlay" => status_overlay: integer,
+        "SRQuality" => sr_quality: integer,
+    }
+    sharpening {
+        "SharpeningMode" => mode / sharpening_mode: integer,
+        "Sharpness" => sharpness / sharpening_sharpness: decimal,
+        "MAS" => mas / sharpening_mas: integer,
+        "MotionSharpness" => motion_sharpness / sharpening_motion_sharpness: decimal,
+        "MotionThreshold" => motion_threshold / sharpening_motion_threshold: decimal,
+        "MotionScaleLimit" => motion_scale_limit / sharpening_motion_scale_limit: decimal,
+        "ContrastEnabled" => contrast_enabled / sharpening_contrast_enabled: integer,
+        "Contrast" => contrast / sharpening_contrast: decimal,
+        "DADepthScale" => depth_scale / sharpening_depth_scale: decimal,
+        "DADepthBias" => depth_bias / sharpening_depth_bias: decimal,
+        "DAClampOutput" => clamp_output / sharpening_clamp_output: integer,
+        "SharpeningDebug" => debug / sharpening_debug: integer,
+    }
+}
+
+pub(crate) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 unsafe extern "C" {
-    // The CRT's "%.9g" through a C++ leaf, so locale, rounding and inf/nan spellings are the CRT's.
-    fn rsf_settings_store_format_decimal(value: f32, text: *mut u16, capacity: usize) -> i32;
     // The CRT parser the store has always used, so locale, hex, inf and nan spellings match.
     fn wcstof(text: *const u16, end: *mut *mut u16) -> f32;
+}
+
+// MSVC's inline bounded swprintf forwards to _vswprintf_c. Use the bounded
+// variadic entry point from the same CRT so locale, rounding and spellings agree.
+#[cfg(target_env = "msvc")]
+#[link(name = "legacy_stdio_definitions", kind = "static")]
+unsafe extern "C" {
+    #[link_name = "_swprintf_c"]
+    fn format_decimal(text: *mut u16, capacity: usize, format: *const u16, ...) -> i32;
+}
+
+#[cfg(target_env = "gnu")]
+unsafe extern "C" {
+    #[link_name = "__mingw_swprintf"]
+    fn format_decimal(text: *mut u16, capacity: usize, format: *const u16, ...) -> i32;
 }
 
 // Terminated UTF-16 text. "%.9g" of a float needs at most 16 characters.
 fn decimal(value: f32) -> Vec<u16> {
     let mut text = [0u16; 32];
-    let length = unsafe { rsf_settings_store_format_decimal(value, text.as_mut_ptr(), text.len()) };
+    let format = [b'%' as u16, b'.' as u16, b'9' as u16, b'g' as u16, 0];
+    let length = unsafe {
+        format_decimal(
+            text.as_mut_ptr(),
+            text.len(),
+            format.as_ptr(),
+            f64::from(value),
+        )
+    };
     // Unreachable for a float; an empty value would read back as the key's fallback.
-    usize::try_from(length).map_or_else(|_| vec![0], |length| text[..=length].to_vec())
+    usize::try_from(length)
+        .ok()
+        .and_then(|length| text.get(..=length))
+        .map_or_else(|| vec![0], <[u16]>::to_vec)
 }
 
 fn text(value: Value) -> Vec<u16> {
@@ -277,35 +272,20 @@ fn read(file: &File, defaults: &Settings, sharpening: &Sharpening) -> Settings {
 // as their rsf_fg_mode, so a saved 2 (Auto) or 3 (Dynamic) still reaches them.
 fn read_with_fg_mode(file: &File, defaults: &Settings, sharpening: &Sharpening) -> (Settings, u32) {
     let _io = PROFILE_IO.lock().unwrap();
-    let value = |key, fallback| file.integer(key, fallback);
-    let number = |key, fallback| file.decimal(key, fallback);
-    let fg_mode = value("FG", defaults.fg_enabled);
-    let settings = Settings {
+    let mut settings = Settings {
         struct_size: size_of::<Settings>() as u32,
         abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
-        sr_enabled: u32::from(value("SR", defaults.sr_enabled) != 0),
-        sr_backend: value("SRBackend", defaults.sr_backend),
-        dlss_preset: value(DLSS_PRESET, defaults.dlss_preset),
-        fg_enabled: u32::from(fg_mode != 0),
-        fg_backend: value("FGBackend", defaults.fg_backend),
-        generated_frames: value("FGGeneratedFrames", defaults.generated_frames),
-        latency: value("Latency", defaults.latency),
-        frame_limit_us: value("FrameLimitUs", defaults.frame_limit_us),
-        status_overlay: u32::from(value("StatusOverlay", defaults.status_overlay) != 0),
-        sr_quality: value("SRQuality", defaults.sr_quality),
-        sharpening_mode: value("SharpeningMode", sharpening.mode),
-        sharpening_sharpness: number("Sharpness", sharpening.sharpness),
-        sharpening_mas: value("MAS", sharpening.mas),
-        sharpening_motion_sharpness: number("MotionSharpness", sharpening.motion_sharpness),
-        sharpening_motion_threshold: number("MotionThreshold", sharpening.motion_threshold),
-        sharpening_motion_scale_limit: number("MotionScaleLimit", sharpening.motion_scale_limit),
-        sharpening_contrast_enabled: value("ContrastEnabled", sharpening.contrast_enabled),
-        sharpening_contrast: number("Contrast", sharpening.contrast),
-        sharpening_depth_scale: number("DADepthScale", sharpening.depth_scale),
-        sharpening_depth_bias: number("DADepthBias", sharpening.depth_bias),
-        sharpening_clamp_output: value("DAClampOutput", sharpening.clamp_output),
-        sharpening_debug: value("SharpeningDebug", sharpening.debug),
+        ..*defaults
     };
+    let mut options = *sharpening;
+    read_frontend(file, &mut settings);
+    read_sharpening_values(file, &mut options);
+    set_sharpening(&mut settings, &options);
+
+    let fg_mode = settings.fg_enabled;
+    settings.fg_enabled = u32::from(fg_mode != 0);
+    settings.sr_enabled = u32::from(settings.sr_enabled != 0);
+    settings.status_overlay = u32::from(settings.status_overlay != 0);
     (settings, fg_mode)
 }
 
@@ -359,7 +339,20 @@ fn write(file: &File, request: &Settings) -> i32 {
             updated.push(0);
         }
     }
-    for (key, value) in KEYS.iter().zip(settings_values(request)) {
+    let mut stored = *request;
+    // A Boolean enable leaves an existing Auto or Dynamic request intact. Explicit disable
+    // and legacy callers writing a mode directly retain their original behavior.
+    if stored.fg_enabled == 1 {
+        let existing_mode = file.integer(FG, 1);
+        if matches!(existing_mode, 2 | 3) {
+            stored.fg_enabled = existing_mode;
+        }
+    }
+    let sharpening = sharpening_of(&stored, &sharpening_policy::defaults());
+    for (key, value) in frontend_values(&stored)
+        .into_iter()
+        .chain(sharpening_values(&sharpening))
+    {
         updated.extend(key.encode_utf16());
         updated.push(u16::from(b'='));
         updated.extend(text(value));
@@ -380,12 +373,10 @@ fn write_sharpening(
     store: &mut dyn FnMut(&File, &[u16], PCWSTR) -> bool,
 ) -> i32 {
     let _io = PROFILE_IO.lock().unwrap();
-    let keys: Vec<Vec<u16>> = KEYS[SHARPENING_START..]
-        .iter()
-        .map(|key| wide(key))
-        .collect();
+    let values = sharpening_values(options);
+    let keys = values.map(|(key, _)| wide(key));
     let previous: Vec<Option<Vec<u16>>> = keys.iter().map(|key| file.previous(key)).collect();
-    for (index, (key, value)) in keys.iter().zip(sharpening_values(options)).enumerate() {
+    for (index, (key, (_, value))) in keys.iter().zip(values).enumerate() {
         let value = text(value);
         if !store(file, key, value.as_ptr()) {
             for (key, old) in keys[..=index].iter().zip(&previous) {
@@ -479,7 +470,6 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_write_layout(
 }
 
 /// Persists only the shared post-pass keys for hosts that own their base SR settings.
-/// The caller has range-checked `options`.
 ///
 /// # Safety
 /// `ini` and `section` are terminated UTF-16 strings; `options` is readable for `struct_size`.
@@ -495,9 +485,36 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_write_sharpening(
     let Some(options) = (unsafe { sharpening_options(options) }) else {
         return INVALID_ARGUMENT;
     };
+    if !sharpening_policy::valid(options) {
+        return INVALID_ARGUMENT;
+    }
     write_sharpening(&file, options, &mut |file, key, value| {
         file.write(key, value)
     })
+}
+
+/// Reads just the shared post-pass keys and applies the same policy used for live settings.
+///
+/// # Safety
+/// Non-null pointers are terminated UTF-16 strings.
+pub(crate) unsafe fn read_sharpening(ini: PCWSTR, section: PCWSTR) -> Sharpening {
+    let mut options = sharpening_policy::defaults();
+    if let Some(file) = File::new(ini, section) {
+        let _io = PROFILE_IO.lock().unwrap();
+        read_sharpening_values(&file, &mut options);
+    }
+    sharpening_policy::sanitize(options)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_settings_store_read_sharpening(
+    ini: PCWSTR,
+    section: PCWSTR,
+    output: *mut Sharpening,
+) {
+    if !output.is_null() {
+        unsafe { output.write(read_sharpening(ini, section)) };
+    }
 }
 
 /// Reads only the DLSS preset key for hosts that own their other SR settings.
@@ -533,10 +550,11 @@ pub(crate) unsafe extern "C" fn write_dlss_preset(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::temporary_ini::TemporaryIni;
 
     #[test]
     fn decimal_matches_general_nine_digit_format() {
-        // Smoke cases for the CRT leaf; the native fixture compares it with swprintf at scale.
+        // Smoke cases for the CRT entry; the native fixture compares it with swprintf at scale.
         let cases: [(f32, &str); 17] = [
             (0.4, "0.400000006"),
             (0.2, "0.200000003"),
@@ -571,30 +589,6 @@ mod tests {
         assert!(!owned(&entry("SR")));
     }
 
-    struct Temporary(Vec<u16>);
-    impl Temporary {
-        fn new(name: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "rsf-settings-store-{}-{name}.ini",
-                std::process::id()
-            ));
-            let _ = std::fs::remove_file(&path);
-            Self(wide(path.to_str().unwrap()))
-        }
-        fn contents(&self) -> String {
-            let path = String::from_utf16_lossy(&self.0[..self.0.len() - 1]);
-            std::fs::read(path)
-                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                .unwrap_or_default()
-        }
-    }
-    impl Drop for Temporary {
-        fn drop(&mut self) {
-            let path = String::from_utf16_lossy(&self.0[..self.0.len() - 1]);
-            let _ = std::fs::remove_file(path);
-        }
-    }
-
     fn sharpening() -> Sharpening {
         Sharpening {
             struct_size: size_of::<Sharpening>() as u32,
@@ -616,13 +610,13 @@ mod tests {
 
     #[test]
     fn failed_sharpening_write_restores_previous_keys() {
-        let ini = Temporary::new("rollback");
+        let ini = TemporaryIni::new("settings-store", "rollback");
         let section = wide("Rendering");
-        let file = File::new(ini.0.as_ptr(), section.as_ptr()).unwrap();
+        let file = File::new(ini.wide().as_ptr(), section.as_ptr()).unwrap();
         assert!(file.write(&wide("EngineQuality"), wide("untouched").as_ptr()));
         assert!(file.write(&wide("Sharpness"), wide("0.25").as_ptr()));
         assert!(file.write(&wide("MAS"), wide("0").as_ptr()));
-        let before = ini.contents();
+        let before = ini.contents().unwrap().expect("settings file exists");
         for failing in 0..12 {
             let mut calls = 0;
             let result = write_sharpening(&file, &sharpening(), &mut |file, key, value| {
@@ -630,7 +624,11 @@ mod tests {
                 calls <= failing && file.write(key, value)
             });
             assert_eq!(result, NOT_READY);
-            assert_eq!(ini.contents(), before, "failure at write {failing}");
+            assert_eq!(
+                ini.contents().unwrap().expect("settings file exists"),
+                before,
+                "failure at write {failing}"
+            );
         }
         assert_eq!(
             write_sharpening(&file, &sharpening(), &mut |file, key, value| file
@@ -647,14 +645,19 @@ mod tests {
         assert_eq!(read.sharpening_sharpness, 0.64);
         assert_eq!(read.sharpening_depth_bias, 0.0037);
         assert_eq!(read.sharpening_debug, 1);
-        assert!(ini.contents().contains("EngineQuality=untouched"));
+        assert!(
+            ini.contents()
+                .unwrap()
+                .expect("settings file exists")
+                .contains("EngineQuality=untouched")
+        );
     }
 
     #[test]
     fn settings_write_replaces_owned_keys_and_keeps_others() {
-        let ini = Temporary::new("section");
+        let ini = TemporaryIni::new("settings-store", "section");
         let section = wide("Adapter");
-        let file = File::new(ini.0.as_ptr(), section.as_ptr()).unwrap();
+        let file = File::new(ini.wide().as_ptr(), section.as_ptr()).unwrap();
         assert!(file.write(&wide("Foreign"), wide("kept").as_ptr()));
         assert!(file.write(&wide("sr"), wide("0").as_ptr()));
         assert!(file.write(&wide(OVERLAY_LAYOUT), wide("5").as_ptr()));
@@ -678,7 +681,7 @@ mod tests {
         request.generated_frames = 3;
         request.sharpening_contrast = 1.1;
         assert_eq!(write(&file, &request), OK);
-        let contents = ini.contents();
+        let contents = ini.contents().unwrap().expect("settings file exists");
         assert!(contents.contains("Foreign=kept"));
         assert!(contents.contains("OverlayLayout=5"));
         assert!(!contents.contains("sr=0"));
@@ -692,32 +695,41 @@ mod tests {
 
     #[test]
     fn fg_mode_keeps_the_stored_value_beside_the_boolean() {
-        let ini = Temporary::new("fg-mode");
+        let ini = TemporaryIni::new("settings-store", "fg-mode");
         let section = wide("Adapter");
-        let file = File::new(ini.0.as_ptr(), section.as_ptr()).unwrap();
+        let file = File::new(ini.wide().as_ptr(), section.as_ptr()).unwrap();
         let defaults: Settings = unsafe { std::mem::zeroed() };
         for (stored, mode) in [("3", 3), ("2", 2), ("1", 1), ("0", 0)] {
             assert!(file.write(&wide("FG"), wide(stored).as_ptr()));
             let (settings, fg_mode) = read_with_fg_mode(&file, &defaults, &sharpening());
             assert_eq!(fg_mode, mode);
             assert_eq!(settings.fg_enabled, u32::from(mode != 0));
+            let updated = Settings {
+                status_overlay: 1,
+                ..settings
+            };
+            assert_eq!(write(&file, &updated), OK);
+            let (saved, saved_mode) = read_with_fg_mode(&file, &defaults, &sharpening());
+            assert_eq!(saved_mode, mode);
+            assert_eq!(saved.status_overlay, 1);
         }
     }
 
     #[test]
     fn preset_round_trip_keeps_fallback_and_other_keys() {
-        let ini = Temporary::new("preset");
+        let ini = TemporaryIni::new("settings-store", "preset");
         let section = wide("Rendering");
-        let file = File::new(ini.0.as_ptr(), section.as_ptr()).unwrap();
-        let read_preset =
-            || unsafe { rsf_settings_store_read_dlss_preset(ini.0.as_ptr(), section.as_ptr(), 4) };
+        let file = File::new(ini.wide().as_ptr(), section.as_ptr()).unwrap();
+        let read_preset = || unsafe {
+            rsf_settings_store_read_dlss_preset(ini.wide().as_ptr(), section.as_ptr(), 4)
+        };
         assert_eq!(read_preset(), 4);
         // Callback hosts saved the key as DlssPreset; profile keys match case-insensitively.
         assert!(file.write(&wide("DlssPreset"), wide("2").as_ptr()));
         assert_eq!(read_preset(), 2);
         assert!(file.write(&wide("Sharpness"), wide("0.25").as_ptr()));
         assert_eq!(
-            unsafe { write_dlss_preset(ini.0.as_ptr(), section.as_ptr(), 11) },
+            unsafe { write_dlss_preset(ini.wide().as_ptr(), section.as_ptr(), 11) },
             OK
         );
         assert_eq!(file.integer("DlssPreset", 0), 11);
@@ -725,6 +737,8 @@ mod tests {
         assert_eq!(file.decimal("Sharpness", 0.0), 0.25);
         assert_eq!(
             ini.contents()
+                .unwrap()
+                .expect("settings file exists")
                 .to_ascii_lowercase()
                 .matches("dlsspreset")
                 .count(),
@@ -738,9 +752,9 @@ mod tests {
 
     #[test]
     fn unparsable_decimals_fall_back() {
-        let ini = Temporary::new("decimal");
+        let ini = TemporaryIni::new("settings-store", "decimal");
         let section = wide("S");
-        let file = File::new(ini.0.as_ptr(), section.as_ptr()).unwrap();
+        let file = File::new(ini.wide().as_ptr(), section.as_ptr()).unwrap();
         assert!(file.write(&wide("A"), wide("0.5x").as_ptr()));
         assert!(file.write(&wide("B"), wide("").as_ptr()));
         assert!(file.write(&wide("C"), wide("-8").as_ptr()));
@@ -754,20 +768,20 @@ mod tests {
 
     #[test]
     fn short_sharpening_options_are_refused_from_their_prefix() {
-        let ini = Temporary::new("short");
+        let ini = TemporaryIni::new("settings-store", "short");
         let section = wide("Rendering");
         // Only the four-byte prefix exists; nothing past it may be read.
         let short = [4u32];
         let options = short.as_ptr().cast::<Sharpening>();
         let result = unsafe {
-            rsf_settings_store_write_sharpening(ini.0.as_ptr(), section.as_ptr(), options)
+            rsf_settings_store_write_sharpening(ini.wide().as_ptr(), section.as_ptr(), options)
         };
         assert_eq!(result, INVALID_ARGUMENT);
         let defaults: Settings = unsafe { std::mem::zeroed() };
         let mut output: Settings = unsafe { std::mem::zeroed() };
         let result = unsafe {
             rsf_settings_store_read(
-                ini.0.as_ptr(),
+                ini.wide().as_ptr(),
                 section.as_ptr(),
                 &defaults,
                 options,
@@ -778,9 +792,9 @@ mod tests {
         let mut wrong = sharpening();
         wrong.abi_version += 1;
         let result = unsafe {
-            rsf_settings_store_write_sharpening(ini.0.as_ptr(), section.as_ptr(), &wrong)
+            rsf_settings_store_write_sharpening(ini.wide().as_ptr(), section.as_ptr(), &wrong)
         };
         assert_eq!(result, INVALID_ARGUMENT);
-        assert!(ini.contents().is_empty());
+        assert_eq!(ini.contents().unwrap(), None);
     }
 }

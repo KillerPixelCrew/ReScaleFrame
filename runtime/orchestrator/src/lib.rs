@@ -259,6 +259,8 @@ mod streamline_host;
 mod streamline_log;
 #[cfg(windows)]
 mod streamline_sr;
+#[cfg(all(windows, test))]
+mod temporary_ini;
 #[cfg(windows)]
 mod texture_dump;
 #[cfg(windows)]

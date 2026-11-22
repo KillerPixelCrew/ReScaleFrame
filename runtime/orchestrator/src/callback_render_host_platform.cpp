@@ -79,9 +79,6 @@ void resource_desc(void* resource, ResourceDesc* out)
 }
 uint32_t depth_domains(const rsf_game_render_pass* pass) { return rsf_game_depth_domains_requested(&pass->depth_domains); }
 uint32_t dlss_preset_valid(uint32_t preset) { return rsf_dlss_preset_valid(preset) ? 1u : 0u; }
-void sharpening_defaults(rsf_sharpening_options* options) { *options = rsf_sharpening_defaults(); }
-int32_t sharpening_valid(const rsf_sharpening_options* options) { return rsf::sharpening_settings::valid(*options); }
-void sharpening_sanitize(rsf_sharpening_options* options) { *options = rsf::sharpening_settings::sanitize(*options); }
 int32_t sr12_create(const rsf_sr12_setup* setup, void** out)
 {
     return rsf_sr12_create(setup, reinterpret_cast<rsf_sr12**>(out));
@@ -137,9 +134,6 @@ struct Platform {
     decltype(&resource_desc) resource_desc;
     decltype(&depth_domains) depth_domains;
     decltype(&dlss_preset_valid) dlss_preset_valid;
-    decltype(&sharpening_defaults) sharpening_defaults;
-    decltype(&sharpening_valid) sharpening_valid;
-    decltype(&sharpening_sanitize) sharpening_sanitize;
     decltype(&sr12_create) sr12_create;
     decltype(&sr12_plan) sr12_plan;
     decltype(&sr12_destroy) sr12_destroy;
@@ -169,7 +163,7 @@ struct Platform {
 constexpr Platform platform{
     sizeof(Platform),
     tick, list_device, queue_device, adapter, last_present_count, resource_desc, depth_domains, dlss_preset_valid,
-    sharpening_defaults, sharpening_valid, sharpening_sanitize, sr12_create, sr12_plan, sr12_destroy, sr12_evaluate,
+    sr12_create, sr12_plan, sr12_destroy, sr12_evaluate,
     sr12_set_sharpening, fg_cpu, fg_submitted, fg_hudless, fg_window, fg_status, fg_options, fg_choice_save,
     present_host, present_request, present_backend, present_switch_result, overlay_frame, overlay_stop,
     overlay_fill_fg, input_dump_cancel, session_prepare, session_start, session_quiesce, session_stop,

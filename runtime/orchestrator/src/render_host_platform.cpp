@@ -109,9 +109,6 @@ void* native_object(void* object)
 }
 uint32_t depth_domains(const rsf_game_render_pass* pass) { return rsf_game_depth_domains_requested(&pass->depth_domains); }
 uint32_t dlss_preset_valid(uint32_t preset) { return rsf_dlss_preset_valid(preset) ? 1u : 0u; }
-void sharpening_defaults(rsf_sharpening_options* options) { *options = rsf_sharpening_defaults(); }
-int32_t sharpening_valid(const rsf_sharpening_options* options) { return rsf::sharpening_settings::valid(*options); }
-void sharpening_sanitize(rsf_sharpening_options* options) { *options = rsf::sharpening_settings::sanitize(*options); }
 uint32_t fg_default_backend(uint32_t vendor, uint32_t software) { return rsf_fg_default_backend(vendor, software); }
 int32_t sr12_create(const rsf_sr12_setup* setup, void** out)
 {
@@ -206,9 +203,6 @@ struct Platform {
     decltype(&native_object) native_object;
     decltype(&depth_domains) depth_domains;
     decltype(&dlss_preset_valid) dlss_preset_valid;
-    decltype(&sharpening_defaults) sharpening_defaults;
-    decltype(&sharpening_valid) sharpening_valid;
-    decltype(&sharpening_sanitize) sharpening_sanitize;
     decltype(&fg_default_backend) fg_default_backend;
     decltype(&sr12_create) sr12_create;
     decltype(&sr12_destroy) sr12_destroy;
@@ -248,8 +242,8 @@ struct Platform {
 constexpr Platform platform{
     sizeof(Platform),
     tick, foreground, hide_cursor, list_device, queue_device, queue_direct, create_fence, fence_completed,
-    fence_wait, queue_signal, adapter, native_object, depth_domains, dlss_preset_valid, sharpening_defaults,
-    sharpening_valid, sharpening_sanitize, fg_default_backend, sr12_create, sr12_destroy, sr12_evaluate,
+    fence_wait, queue_signal, adapter, native_object, depth_domains, dlss_preset_valid,
+    fg_default_backend, sr12_create, sr12_destroy, sr12_evaluate,
     sr12_set_sharpening, sr12_present, sr12_capture, sr12_capture_flush, sr12_capture_scene, registration_create,
     registration_borrow, registration_present, fg_install, fg_options, fg_latency, fg_cpu, fg_submitted, fg_hudless,
     fg_window, fg_status_try, fg_capture_outputs, present_host, present_has_owner, present_request,

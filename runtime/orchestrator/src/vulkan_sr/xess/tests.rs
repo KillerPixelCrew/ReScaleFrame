@@ -747,9 +747,6 @@ fn refused_creation_unwinds_partial_state_and_releases_the_sdk_reference() {
 
 #[test]
 fn shared_srvk_owner_routes_xess_and_refuses_presets() {
-    unsafe extern "C" fn sharpening(_: &rsf_sharpening_options) -> i32 {
-        1
-    }
     with_state(|fake| unsafe {
         let platform = &super::super::owner_tests::PLATFORM;
         assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), &requirements()), 0);
@@ -767,10 +764,7 @@ fn shared_srvk_owner_routes_xess_and_refuses_presets() {
         let input = frame(&record);
         fake.calls.clear();
         let commands = ptr::dangling_mut::<u32>().cast();
-        assert_eq!(
-            rsf_core_srvk_evaluate(owner, commands, &input, sharpening),
-            0
-        );
+        assert_eq!(rsf_core_srvk_evaluate(owner, commands, &input), 0);
         assert!(
             fake.calls
                 .contains(&Call::Execute(1100, 600, 1920, 1080, 1))

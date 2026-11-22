@@ -2,6 +2,7 @@
 use crate::allocate_handle;
 use crate::dx12_vulkan_interop::{Owner as Interop, checked};
 use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image;
+use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
 use crate::vulkan_fsr4_sr_abi::{
     RSF_FSR4_BRIDGE_ABI_VERSION, rsf_fsr4_bridge_create as BridgeCreate,
@@ -584,9 +585,7 @@ unsafe extern "C" fn rsf_core_fsr4vk_evaluate(
     if frame.abi_version != RSF_SRVK_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    if frame.sharpening.struct_size != 0
-        && unsafe { (owner.ops().sharpening_valid.unwrap())(&frame.sharpening) } == 0
-    {
+    if frame.sharpening.struct_size != 0 && !sharpening_policy::valid(&frame.sharpening) {
         return INVALID;
     }
     if !unsafe { has_capacity(frame.record) } {

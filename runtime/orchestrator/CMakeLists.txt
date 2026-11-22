@@ -31,7 +31,6 @@ add_library(rsf_orchestrator_core OBJECT
     src/sr12_platform.cpp
     src/gl_pipeline_platform.cpp
     src/rust_exports.c
-    src/render_settings_store.cpp
     src/callback_render_host_platform.cpp
     src/render_host_platform.cpp
     src/overlay_d3d12.cpp

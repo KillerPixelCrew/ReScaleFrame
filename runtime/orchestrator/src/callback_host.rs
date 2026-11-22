@@ -14,14 +14,14 @@ use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use crate::overlay_abi::{rsf_overlay_intent as Intent, rsf_overlay_stats as Stats};
 use crate::render_abi::{
-    RSF_DLSS_ABI_VERSION, RSF_RENDER_FRONTEND_ABI_VERSION, rsf_native_fg_options as FgOptions,
-    rsf_native_fg_status as FgStatus, rsf_render_settings as Settings,
+    RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
     rsf_sharpening_options as Sharpening,
 };
 use crate::settings_store::{
-    read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write_layout,
-    rsf_settings_store_write_sharpening, sharpening_of, write_dlss_preset,
+    rsf_settings_store_read_layout, rsf_settings_store_write_layout,
+    rsf_settings_store_write_sharpening, write_dlss_preset,
 };
+use crate::sharpening_policy;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
     RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
@@ -145,9 +145,6 @@ pub(crate) struct Platform {
     resource_desc: unsafe extern "C" fn(Handle, *mut ResourceDesc),
     depth_domains: unsafe extern "C" fn(*const Pass) -> u32,
     dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
-    sharpening_defaults: unsafe extern "C" fn(*mut Sharpening),
-    sharpening_valid: unsafe extern "C" fn(*const Sharpening) -> i32,
-    sharpening_sanitize: unsafe extern "C" fn(*mut Sharpening),
     sr12_create: unsafe extern "C" fn(*const SrSetup, *mut Handle) -> i32,
     sr12_plan: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> i32,
     sr12_destroy: unsafe extern "C" fn(Handle),
@@ -340,26 +337,9 @@ impl Host {
         unsafe { (self.set_engine_spatial)(u32::from(backend == SR_SPATIAL), quality) != 0 }
     }
 
-    fn sharpening_defaults(&self) -> Sharpening {
-        let mut options: Sharpening = unsafe { std::mem::zeroed() };
-        unsafe { (self.p.sharpening_defaults)(&mut options) };
-        options
-    }
-
     // The shared post-pass keys of the preferences section, sanitized.
     fn read_sharpening(&self) -> Sharpening {
-        let base = self.sharpening_defaults();
-        let defaults = Settings {
-            struct_size: size_of::<Settings>() as u32,
-            abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
-            ..unsafe { std::mem::zeroed() }
-        };
-        let mut options = unsafe {
-            read_settings_and_fg_mode(self.preferences.as_ptr(), SECTION, &defaults, &base)
-        }
-        .map_or(base, |(settings, _)| sharpening_of(&settings, &base));
-        unsafe { (self.p.sharpening_sanitize)(&mut options) };
-        options
+        unsafe { crate::settings_store::read_sharpening(self.preferences.as_ptr(), SECTION) }
     }
 
     fn destroy(&self, context: &mut Handle) {
@@ -592,16 +572,11 @@ impl Host {
                 depth_bias: intent.sharpening_depth_bias,
                 clamp_output: intent.sharpening_clamp_output,
                 debug: intent.sharpening_debug,
-                ..self.sharpening_defaults()
+                ..sharpening_policy::defaults()
             };
-            if unsafe { (p.sharpening_valid)(&requested) } != 0
-                && unsafe {
-                    rsf_settings_store_write_sharpening(
-                        self.preferences.as_ptr(),
-                        SECTION,
-                        &requested,
-                    )
-                } == OK
+            if unsafe {
+                rsf_settings_store_write_sharpening(self.preferences.as_ptr(), SECTION, &requested)
+            } == OK
             {
                 s.sharpening = requested;
                 if !s.sr.is_null() {

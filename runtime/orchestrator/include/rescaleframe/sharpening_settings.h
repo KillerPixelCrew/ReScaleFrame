@@ -23,31 +23,38 @@ typedef struct rsf_sharpening_options {
     uint32_t clamp_output;
     uint32_t debug;
 } rsf_sharpening_options;
+#ifdef __cplusplus
+extern "C" {
+#endif
+rsf_sharpening_options rsf_sharpening_core_defaults(void);
+rsf_sharpening_options rsf_sharpening_core_sanitize(rsf_sharpening_options options);
+uint32_t rsf_sharpening_core_valid(rsf_sharpening_options options);
+float rsf_sharpening_core_vendor_sharpness(rsf_sharpening_options options, uint32_t backend);
+#ifdef __cplusplus
+}
+#endif
+#ifdef RSF_RUNTIME_BUILD
+static inline rsf_sharpening_options rsf_sharpening_defaults(void) {
+    return rsf_sharpening_core_defaults();
+}
+#else
+/* Also used by adapters which build against the header without linking the Runtime. */
 static inline rsf_sharpening_options rsf_sharpening_defaults(void) {
     rsf_sharpening_options o = {sizeof(rsf_sharpening_options), RSF_SHARPENING_ABI_VERSION,
     0, 0.4f, 0, 0.2f, 0, 10, 0, 0, 35, 0.001f, 0, 0};
     return o;
 }
+#endif
 #ifdef __cplusplus
-// Static Runtime linkage for the in-tree C++ settings consumers.
-extern "C" {
-void rsf_core_sharpening_sanitize(rsf_sharpening_options*, const rsf_sharpening_options* defaults);
-uint32_t rsf_core_sharpening_valid(const rsf_sharpening_options*, const rsf_sharpening_options* defaults);
-float rsf_core_sharpening_vendor_amount(const rsf_sharpening_options*, uint32_t backend);
-}
-
 namespace rsf::sharpening_settings {
-inline float vendor_sharpness(const rsf_sharpening_options& options, uint32_t backend) {
-    return rsf_core_sharpening_vendor_amount(&options, backend);
+inline float vendor_sharpness(const rsf_sharpening_options& o, uint32_t backend) {
+    return rsf_sharpening_core_vendor_sharpness(o, backend);
 }
-inline rsf_sharpening_options sanitize(rsf_sharpening_options options) {
-    const auto defaults = rsf_sharpening_defaults();
-    rsf_core_sharpening_sanitize(&options, &defaults);
-    return options;
+inline rsf_sharpening_options sanitize(rsf_sharpening_options o) {
+    return rsf_sharpening_core_sanitize(o);
 }
-inline bool valid(const rsf_sharpening_options& options) {
-    const auto defaults = rsf_sharpening_defaults();
-    return rsf_core_sharpening_valid(&options, &defaults) != 0;
+inline bool valid(const rsf_sharpening_options& o) {
+    return o.struct_size >= sizeof(o) && rsf_sharpening_core_valid(o) != 0;
 }
 }
 #endif

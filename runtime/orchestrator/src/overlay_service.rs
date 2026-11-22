@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The runtime DLL's shared overlay service. Graphics and callbacks stay on the caller's
 //! Present thread. Published settings and the last sampled frame can be read by any thread.
+use crate::sharpening_policy;
 use crate::{
     cpu_abi::rsf_native_input_receipts,
     fg_status,
@@ -15,7 +16,7 @@ use crate::{
     },
     settings_store::{
         rsf_settings_store_read, rsf_settings_store_read_layout, rsf_settings_store_write,
-        rsf_settings_store_write_layout,
+        rsf_settings_store_write_layout, set_sharpening, sharpening_of,
     },
 };
 use rsf_game_sys::{RSF_FRAME_SOURCE_RENDERED, rsf_game_log_fn};
@@ -254,10 +255,11 @@ impl Config {
             return Err(ABI_MISMATCH);
         }
         let mut defaults = setup.defaults;
-        let mut sharpening = std::mem::MaybeUninit::<Sharpening>::uninit();
-        unsafe {
-            (platform().initialize_sharpening.unwrap())(&mut defaults, sharpening.as_mut_ptr())
-        };
+        let sharpening = sharpening_policy::defaults();
+        let embedded = sharpening_of(&defaults, &sharpening);
+        if sharpening_policy::fields_are_zero(&embedded) {
+            set_sharpening(&mut defaults, &sharpening);
+        }
         defaults.struct_size = abi_size::<Settings>();
         let config = Self {
             ini: unsafe { copy_wide(setup.configuration_path) },
@@ -289,7 +291,7 @@ impl Config {
         if !config.valid(&defaults) {
             return Err(INVALID_ARGUMENT);
         }
-        Ok((config, unsafe { sharpening.assume_init() }))
+        Ok((config, sharpening))
     }
 
     fn valid(&self, value: &Settings) -> bool {
@@ -310,7 +312,8 @@ impl Config {
             && fg_valid
             && has(self.latency_choices, value.latency)
             && (1..=self.max_generated).contains(&value.generated_frames)
-            && unsafe { (platform().valid_settings.unwrap())(value) } != 0
+            && unsafe { (platform().valid_preset.unwrap())(value.dlss_preset) } != 0
+            && sharpening_policy::valid(&sharpening_of(value, &sharpening_policy::defaults()))
     }
 
     fn sanitize(&self, mut value: Settings) -> Settings {
@@ -342,7 +345,9 @@ impl Config {
         if unsafe { (platform().valid_preset.unwrap())(value.dlss_preset) } == 0 {
             value.dlss_preset = defaults.dlss_preset;
         }
-        unsafe { (platform().sanitize_sharpening.unwrap())(&mut value) };
+        let options =
+            sharpening_policy::sanitize(sharpening_of(&value, &sharpening_policy::defaults()));
+        set_sharpening(&mut value, &options);
         value
     }
 }

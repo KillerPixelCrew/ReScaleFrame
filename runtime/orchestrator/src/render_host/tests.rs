@@ -165,34 +165,6 @@ unsafe extern "C" fn depth_domains(_: *const Pass) -> u32 {
 unsafe extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
     u32::from(preset <= 15)
 }
-unsafe extern "C" fn sharpening_defaults(out: *mut Sharpening) {
-    unsafe {
-        out.write(Sharpening {
-            struct_size: size_of::<Sharpening>() as u32,
-            abi_version: crate::render_abi::RSF_SHARPENING_ABI_VERSION,
-            mode: 0,
-            sharpness: 0.4,
-            mas: 0,
-            motion_sharpness: 0.2,
-            motion_threshold: 0.0,
-            motion_scale_limit: 10.0,
-            contrast_enabled: 0,
-            contrast: 0.0,
-            depth_scale: 35.0,
-            depth_bias: 0.001,
-            clamp_output: 0,
-            debug: 0,
-        })
-    };
-}
-unsafe extern "C" fn sharpening_valid(options: *const Sharpening) -> i32 {
-    let options = unsafe { &*options };
-    i32::from(options.mode <= 4 && (0.0..=1.0).contains(&options.sharpness))
-}
-unsafe extern "C" fn sharpening_sanitize(options: *mut Sharpening) {
-    let options = unsafe { &mut *options };
-    options.sharpness = options.sharpness.clamp(0.0, 1.0);
-}
 unsafe extern "C" fn fg_default_backend(vendor: u32, _: u32) -> u32 {
     if vendor == 0x10de { 1 } else { 3 }
 }
@@ -382,9 +354,6 @@ static PLATFORM: Platform = Platform {
     native_object,
     depth_domains,
     dlss_preset_valid,
-    sharpening_defaults,
-    sharpening_valid,
-    sharpening_sanitize,
     fg_default_backend,
     sr12_create,
     sr12_destroy,
@@ -427,23 +396,19 @@ unsafe extern "C" fn record_log(_: *mut c_void, message: *const c_char) {
 }
 
 struct Temporary {
-    path: Vec<u16>,
+    ini: crate::temporary_ini::TemporaryIni,
     directory: Vec<u16>,
 }
 
 impl Temporary {
     fn new(name: &str) -> Self {
-        let directory = std::env::temp_dir();
-        let path = directory.join(format!("rsf-render-host-{}-{name}.ini", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        Self {
-            path: wide(path.to_str().unwrap()),
-            directory: wide(directory.to_str().unwrap()),
-        }
+        let ini = crate::temporary_ini::TemporaryIni::new("render-host", name);
+        let directory = ini.directory_wide();
+        Self { ini, directory }
     }
+
     fn write(&self, key: &str, value: &str) {
-        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        use crate::settings_store::wide;
         let section = wide("Adapter");
         assert_ne!(
             unsafe {
@@ -451,34 +416,25 @@ impl Temporary {
                     section.as_ptr(),
                     wide(key).as_ptr(),
                     wide(value).as_ptr(),
-                    self.path.as_ptr(),
+                    self.ini.wide().as_ptr(),
                 )
             },
             0
         );
     }
     fn integer(&self, key: &str) -> u32 {
-        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        use crate::settings_store::wide;
         unsafe {
             GetPrivateProfileIntW(
                 wide("Adapter").as_ptr(),
                 wide(key).as_ptr(),
                 -1,
-                self.path.as_ptr(),
+                self.ini.wide().as_ptr(),
             ) as u32
         }
     }
     fn contents(&self) -> String {
-        let path = String::from_utf16_lossy(&self.path[..self.path.len() - 1]);
-        std::fs::read(path)
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .unwrap_or_default()
-    }
-}
-
-impl Drop for Temporary {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(String::from_utf16_lossy(&self.path[..self.path.len() - 1]));
+        self.ini.contents().unwrap().expect("settings file exists")
     }
 }
 
@@ -489,7 +445,7 @@ fn setup(ini: &Temporary, owner: u32) -> Setup {
     Setup {
         struct_size: size_of::<Setup>() as u32,
         abi_version: HOST_ABI_VERSION,
-        configuration_path: ini.path.as_ptr(),
+        configuration_path: ini.ini.wide().as_ptr(),
         runtime_directory: ini.directory.as_ptr(),
         configuration_section: SECTION.as_ptr(),
         presentation_owner: owner,
@@ -915,6 +871,10 @@ fn polling_passes_the_stored_fg_mode_and_keeps_the_public_boolean() {
             enabled,
             "FG={stored}"
         );
+        let mut update = host.settings_get().unwrap();
+        update.status_overlay ^= 1;
+        assert_eq!(host.settings_apply(&update), OK);
+        assert_eq!(ini.integer("FG"), mode);
     }
     // A section without FG keeps FG12 Off.
     let fresh = Temporary::new("fg-mode-missing");
