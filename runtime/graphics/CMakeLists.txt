@@ -6,19 +6,16 @@ add_library(rsf_graphics STATIC
     src/sharpening/d3d12.cpp
     src/colour_fidelity.cpp
     src/colour_transport.cpp
-    src/constant_buffer_read.cpp
     src/resource_ref.cpp
     src/frame_tap.cpp
     src/depth_replay.cpp
     src/depth_scale.cpp
     src/d3d11_state.cpp
-    src/scene_promote.cpp
     src/present_blit.cpp
     src/fullscreen_pass.cpp
     src/ui_layer.cpp
     src/overlay_renderer.cpp
     src/overlay_input.cpp
-    src/constant_twin.cpp
     src/d3d11_observer.cpp)
 target_sources(rsf_graphics PRIVATE src/d3d12_observer.cpp)
 # The overlay's C ABI lives with the Rust crate that implements it, because that crate is the side

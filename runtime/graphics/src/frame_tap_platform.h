@@ -2,8 +2,8 @@
 #pragma once
 /* Internal to rsf_graphics: the native leaves the Rust frame tap owner calls, and its entries.
    Rust owns hook admission and retirement, plan and callback state, gates, substitution,
-   classification, capture routing and the references the tap holds. The typed COM detours and
-   every D3D11 call stay here. */
+   classification, capture routing and the references the tap holds. This contract supplies the
+   remaining native detours and D3D11 leaves. */
 #include <rescaleframe/frame_tap.h>
 
 #include <stdint.h>
@@ -198,27 +198,8 @@ rsf_frame_tap_result rsf_core_frame_tap_install(rsf_frame_tap_platform_ref, void
 rsf_frame_tap_result rsf_core_frame_tap_uninstall(rsf_frame_tap_platform_ref);
 rsf_frame_tap_result rsf_core_frame_tap_refresh(rsf_frame_tap_platform_ref);
 rsf_frame_tap_result rsf_core_frame_tap_set_sampler_bias(rsf_frame_tap_platform_ref, float bias);
-rsf_frame_tap_result rsf_core_frame_tap_set_plan(const rsf_frame_tap_plan* plan);
-rsf_frame_tap_result rsf_core_frame_tap_end_frame(void);
-rsf_frame_tap_result rsf_core_frame_tap_watch_input(void* texture);
-rsf_frame_tap_result rsf_core_frame_tap_set_constant_watch(uint32_t bytes,
-                                                           rsf_frame_tap_constants_fn fn,
-                                                           void* user);
-void rsf_core_frame_tap_set_constant_watch_writable(uint32_t writable);
-rsf_frame_tap_result rsf_core_frame_tap_set_research(rsf_frame_tap_target_fn before,
-                                                     rsf_frame_tap_target_fn after,
-                                                     rsf_frame_tap_compute_fn compute,
-                                                     void* user);
-void* rsf_core_frame_tap_bound_target(void);
-rsf_frame_tap_result rsf_core_frame_tap_set_constant_override(
-    rsf_frame_tap_constant_override_fn fn, void* user);
-void rsf_core_frame_tap_set_constant_override_format(uint32_t format);
 rsf_frame_tap_result rsf_core_frame_tap_set_divert(rsf_frame_tap_platform_ref,
                                                    const rsf_frame_tap_divert_setup* setup);
-rsf_frame_tap_result rsf_core_frame_tap_set_candidates(const rsf_frame_tap_candidates* candidates);
-rsf_frame_tap_result rsf_core_frame_tap_watch_target(uint32_t index, void* texture,
-                                                     uint32_t limit);
-rsf_frame_tap_result rsf_core_frame_tap_get_status(rsf_frame_tap_status* status);
 
 /* Hook entries. `enter` re-applies a rewritten vtable and returns the hook's current original;
    `leave` re-applies it after a call that may have rewritten it.

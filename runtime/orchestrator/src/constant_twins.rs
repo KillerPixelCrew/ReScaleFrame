@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
+use crate::constant_buffer_read::{constant_size, make_dynamic, upload};
+use crate::d3d11_output::same_device;
 use std::cmp::Reverse;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
@@ -8,16 +10,6 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 type Handle = *mut c_void;
 type Identity = *const c_void;
 const CAPACITY: usize = 32;
-
-#[repr(C)]
-struct Platform {
-    owns_context: unsafe extern "C" fn(Handle, Handle) -> u32,
-    make_buffer: unsafe extern "C" fn(Handle, u32) -> Handle,
-    upload: unsafe extern "C" fn(Handle, Handle, *const c_void, u32) -> u32,
-    matches_size: unsafe extern "C" fn(Identity, u32) -> u32,
-}
-
-const _: () = assert!(size_of::<Platform>() == 4 * size_of::<Handle>());
 
 #[derive(Default)]
 struct Slot {
@@ -59,7 +51,6 @@ struct Twins {
     cache: Mutex<Cache>,
     device: ComRef,
     bytes: u32,
-    platform: &'static Platform,
 }
 
 impl Twins {
@@ -76,7 +67,7 @@ impl Twins {
         if context.is_null()
             || original.is_null()
             || contents.is_null()
-            || unsafe { (self.platform.owns_context)(self.device.as_ptr(), context) } == 0
+            || !unsafe { same_device(self.device.as_ptr(), context) }
         {
             return None;
         }
@@ -96,14 +87,9 @@ impl Twins {
         };
 
         // Map and Unmap can enter the frame tap. Hide this slot until the upload publishes.
-        let buffer = buffer.or_else(|| unsafe {
-            ComRef::from_owned((self.platform.make_buffer)(
-                self.device.as_ptr(),
-                self.bytes,
-            ))
-        });
+        let buffer = buffer.or_else(|| unsafe { make_dynamic(self.device.as_ptr(), self.bytes) });
         let uploaded = buffer.as_ref().is_some_and(|buffer| unsafe {
-            (self.platform.upload)(context, buffer.as_ptr(), contents, self.bytes) != 0
+            upload(context, buffer.as_ptr(), contents, self.bytes)
         });
 
         let mut cache = self.cache();
@@ -122,11 +108,7 @@ impl Twins {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_constant_twins_create(
-    device: Handle,
-    bytes: u32,
-    platform: &'static Platform,
-) -> *mut Twins {
+unsafe extern "C" fn rsf_constant_twins_create(device: Handle, bytes: u32) -> *mut Twins {
     if device.is_null() || bytes == 0 || !bytes.is_multiple_of(16) {
         return null_mut();
     }
@@ -134,19 +116,18 @@ unsafe extern "C" fn rsf_core_constant_twins_create(
         cache: Mutex::default(),
         device: unsafe { ComRef::retain(device) },
         bytes,
-        platform,
     })
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_constant_twins_destroy(twins: *mut Twins) {
+unsafe extern "C" fn rsf_constant_twins_destroy(twins: *mut Twins) {
     if !twins.is_null() {
         drop(unsafe { Box::from_raw(twins) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_constant_twins_write(
+unsafe extern "C" fn rsf_constant_twins_write(
     twins: *const Twins,
     context: Handle,
     original: Identity,
@@ -158,10 +139,7 @@ unsafe extern "C" fn rsf_core_constant_twins_write(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_constant_twins_find(
-    twins: *const Twins,
-    original: Identity,
-) -> Handle {
+unsafe extern "C" fn rsf_constant_twins_find(twins: *const Twins, original: Identity) -> Handle {
     let Some(twins) = (unsafe { twins.as_ref() }).filter(|_| !original.is_null()) else {
         return null_mut();
     };
@@ -170,7 +148,7 @@ unsafe extern "C" fn rsf_core_constant_twins_find(
         return null_mut();
     };
     // A reused address can now name a differently sized buffer.
-    if unsafe { (twins.platform.matches_size)(original, twins.bytes) } == 0 {
+    if !unsafe { constant_size(original.cast_mut(), twins.bytes) } {
         return null_mut();
     }
     cache.slots[index]
@@ -180,7 +158,7 @@ unsafe extern "C" fn rsf_core_constant_twins_find(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_constant_twins_forget(twins: *const Twins, original: Identity) {
+unsafe extern "C" fn rsf_constant_twins_forget(twins: *const Twins, original: Identity) {
     let Some(twins) = (unsafe { twins.as_ref() }).filter(|_| !original.is_null()) else {
         return;
     };

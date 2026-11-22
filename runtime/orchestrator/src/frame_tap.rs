@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 // The shared D3D11 frame tap. This owns hook admission, refresh and retirement, the plan and
 // callback state, gates and substitution, classification, capture routing, and every reference the
-// tap holds. runtime/graphics/src/frame_tap.cpp keeps the typed detours and every D3D11 call, which
-// it supplies as `rsf_frame_tap_platform` leaves.
+// tap holds. runtime/graphics/src/frame_tap.cpp supplies the remaining typed detours and D3D11
+// leaves through `rsf_frame_tap_platform`.
 use crate::com_ref::ComRef;
+use crate::constant_buffer_read::{MAP_WRITE_DISCARD, Map, MappedResource, Unmap, slot};
 use crate::frame_tap_abi::*;
 use crate::resource_roles::matching_rule;
 use crate::resource_roles_abi::{
@@ -15,7 +16,7 @@ use std::ffi::{CString, c_void};
 use std::mem::{MaybeUninit, transmute_copy, zeroed};
 use std::ptr::{null, null_mut};
 use std::slice;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
@@ -37,7 +38,6 @@ const LEAVE: u32 = 0;
 const DIVERT_PATCH_ALPHA: u32 = 2;
 // D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, D3D11_MAP_WRITE_DISCARD, D3D11_BIND_CONSTANT_BUFFER.
 const KEEP_TARGETS: u32 = u32::MAX;
-const MAP_WRITE_DISCARD: u32 = 4;
 const BIND_CONSTANT_BUFFER: u32 = 4;
 // Slot 13 is Draw. One comparison against its replacement says whether the runtime has rewritten
 // the work-submission family since the last look.
@@ -1839,6 +1839,31 @@ fn seed_geometry(platform: &Platform, render: &mut Render, context: Handle) {
             render.pixel_constants.as_mut_ptr(),
         )
     };
+    // ID3D11DeviceContext::PSGetShader, OMGetBlendState and OMGetDepthStencilState.
+    // Like the IA/VS queries above, these only seed handles the context currently owns.
+    type GetShader = unsafe extern "system" fn(Handle, *mut Handle, *mut Handle, *mut u32);
+    type GetBlend = unsafe extern "system" fn(Handle, *mut Handle, *mut f32, *mut u32);
+    type GetDepth = unsafe extern "system" fn(Handle, *mut Handle, *mut u32);
+    unsafe {
+        let get_shader: GetShader = std::mem::transmute(slot(context, 74));
+        let get_blend: GetBlend = std::mem::transmute(slot(context, 91));
+        let get_depth: GetDepth = std::mem::transmute(slot(context, 92));
+        get_shader(context, &mut render.pixel_shader, null_mut(), null_mut());
+        get_blend(
+            context,
+            &mut render.blend_state,
+            [0.0; 4].as_mut_ptr(),
+            &mut 0,
+        );
+        get_depth(context, &mut render.depth_stencil_state, &mut 0);
+        for object in [
+            render.pixel_shader,
+            render.blend_state,
+            render.depth_stencil_state,
+        ] {
+            drop(ComRef::from_owned(object));
+        }
+    }
     render.geometry_valid = true;
 }
 
@@ -2260,7 +2285,7 @@ extern "C" fn rsf_core_frame_tap_set_sampler_bias(platform: &Platform, bias: f32
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_set_plan(plan: *const rsf_frame_tap_plan) -> i32 {
+unsafe extern "C" fn rsf_frame_tap_set_plan(plan: *const rsf_frame_tap_plan) -> i32 {
     // Everything that can refuse comes before the first change, so a refused call keeps the old
     // plan. A caller inside a hook is refused with INVALID_ARGUMENT when it would have to wait for
     // another thread.
@@ -2328,7 +2353,7 @@ unsafe extern "C" fn rsf_core_frame_tap_set_plan(plan: *const rsf_frame_tap_plan
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_end_frame() -> i32 {
+extern "C" fn rsf_frame_tap_end_frame() -> i32 {
     TAP.verdict_epoch.fetch_add(1, Relaxed);
     // No lock: the present hook runs on the render thread, which is where the gates open.
     if TAP.plan_active.load(Acquire) {
@@ -2338,7 +2363,7 @@ extern "C" fn rsf_core_frame_tap_end_frame() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_watch_input(texture: Handle) -> i32 {
+extern "C" fn rsf_frame_tap_watch_input(texture: Handle) -> i32 {
     if !TAP.installed.load(Acquire) {
         return NOT_INSTALLED;
     }
@@ -2348,7 +2373,7 @@ extern "C" fn rsf_core_frame_tap_watch_input(texture: Handle) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_set_constant_watch(
+extern "C" fn rsf_frame_tap_set_constant_watch(
     bytes: u32,
     watch: rsf_frame_tap_constants_fn,
     user: Handle,
@@ -2378,7 +2403,7 @@ extern "C" fn rsf_frame_tap_set_constant_observer(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_set_constant_watch_writable(writable: u32) {
+extern "C" fn rsf_frame_tap_set_constant_watch_writable(writable: u32) {
     if let Some(watch) = constant_watch().as_mut()
         && let ConstantCallback::Legacy(_, mode) = &mut watch.callback
     {
@@ -2387,7 +2412,16 @@ extern "C" fn rsf_core_frame_tap_set_constant_watch_writable(writable: u32) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_set_research(
+extern "C" fn rsf_frame_tap_set_research_callbacks(
+    draw: rsf_frame_tap_target_fn,
+    compute: rsf_frame_tap_compute_fn,
+    user: Handle,
+) -> i32 {
+    rsf_frame_tap_set_research_phase_callbacks(None, draw, compute, user)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_frame_tap_set_research_phase_callbacks(
     before: rsf_frame_tap_target_fn,
     after: rsf_frame_tap_target_fn,
     compute: rsf_frame_tap_compute_fn,
@@ -2410,12 +2444,12 @@ extern "C" fn rsf_core_frame_tap_set_research(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_bound_target() -> Handle {
+extern "C" fn rsf_frame_tap_bound_target() -> Handle {
     TAP.bound_target.load(Relaxed)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_set_constant_override(
+extern "C" fn rsf_frame_tap_set_constant_override(
     callback: rsf_frame_tap_constant_override_fn,
     user: Handle,
 ) -> i32 {
@@ -2426,7 +2460,7 @@ extern "C" fn rsf_core_frame_tap_set_constant_override(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_set_constant_override_format(format: u32) {
+extern "C" fn rsf_frame_tap_set_constant_override_format(format: u32) {
     TAP.constant_override_format.store(format, Release);
 }
 
@@ -2467,7 +2501,7 @@ unsafe extern "C" fn rsf_core_frame_tap_set_divert(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_set_candidates(
+unsafe extern "C" fn rsf_frame_tap_set_candidates(
     candidates: *const rsf_frame_tap_candidates,
 ) -> i32 {
     let sets = &TAP.candidates;
@@ -2516,7 +2550,7 @@ unsafe extern "C" fn rsf_core_frame_tap_set_candidates(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_watch_target(index: u32, texture: Handle, limit: u32) -> i32 {
+extern "C" fn rsf_frame_tap_watch_target(index: u32, texture: Handle, limit: u32) -> i32 {
     let index = index as usize;
     if index >= WATCH_SLOTS {
         return INVALID;
@@ -2539,7 +2573,7 @@ extern "C" fn rsf_core_frame_tap_watch_target(index: u32, texture: Handle, limit
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_get_status(status: *mut rsf_frame_tap_status) -> i32 {
+unsafe extern "C" fn rsf_frame_tap_get_status(status: *mut rsf_frame_tap_status) -> i32 {
     if status.is_null()
         || unsafe { (*status).struct_size } < size_of::<rsf_frame_tap_status>() as u32
     {
@@ -2975,6 +3009,9 @@ extern "C" fn rsf_core_frame_tap_draw(
     let before = call.kind < 2;
     let elements = call.count;
     sync_shadow(platform, render, context);
+    if !render.geometry_valid {
+        seed_geometry(platform, render, context);
+    }
     let moved = try_divert(platform, render, context, indexed, elements);
     if !moved {
         begin_constant_override(platform, render, context, indexed, elements);
@@ -3204,14 +3241,6 @@ extern "C" fn rsf_core_frame_tap_invalidate(context: Handle, restore: u32) {
     }
 }
 
-// A constant buffer being filled: remember where, so its contents can be read at Unmap.
-#[repr(C)]
-struct MappedResource {
-    data: Handle,
-    row_pitch: u32,
-    depth_pitch: u32,
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_frame_tap_map(
     platform: &Platform,
@@ -3222,7 +3251,6 @@ unsafe extern "C" fn rsf_core_frame_tap_map(
     flags: u32,
     mapped: *mut MappedResource,
 ) -> i32 {
-    type Map = unsafe extern "system" fn(Handle, Handle, u32, u32, u32, *mut MappedResource) -> i32;
     refresh(platform);
     let admission = Admission::enter(context);
     let forward: Map = unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_MAP as usize)) };
@@ -3273,7 +3301,6 @@ unsafe extern "C" fn rsf_core_frame_tap_unmap(
     resource: Handle,
     subresource: u32,
 ) {
-    type Unmap = unsafe extern "system" fn(Handle, Handle, u32);
     refresh(platform);
     let admission = Admission::enter(context);
     let forward: Unmap =

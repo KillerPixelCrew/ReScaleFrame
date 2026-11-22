@@ -1693,6 +1693,7 @@ static void on_target_draw(void* user, const rsf_frame_tap_target_draw* draw)
    is noticed in the present hook, which runs long before that. */
 static int install_reinsert_plan(void);
 static void stop_reinsert(void);
+static void refresh_constant_watch(void);
 
 /* Notice that reinsertion has stopped doing anything, and go and find the tail again.
 
@@ -1785,8 +1786,12 @@ static void watch_for_stalled_plan(void)
     }
     /* Let go of what the plan named before looking, so a stale composite cannot be re-found by
        being the thing already held. The tail walk re-identifies both from the frame itself. */
-    rsf_frame_tap_set_plan(NULL);
+    if (rsf_frame_tap_set_plan(NULL) != RSF_FRAME_TAP_OK) {
+        bridge.tail_restaking = 0;
+        return;
+    }
     bridge.size_patch_target = NULL;
+    refresh_constant_watch();
     rsf_resource_release(bridge.composite);
     bridge.composite = NULL;
     bridge.composite_view_format = 0;
@@ -3530,8 +3535,13 @@ void rsf_bridge_set_actions(const rsf_bridge_actions* actions)
 /* Stop substituting and put the frame back the way the game draws it. */
 static void stop_reinsert(void)
 {
-    rsf_frame_tap_set_plan(NULL);
+    const rsf_frame_tap_result detached = rsf_frame_tap_set_plan(NULL);
+    if (detached != RSF_FRAME_TAP_OK && detached != RSF_FRAME_TAP_ERROR_NOT_INSTALLED) {
+        say("reinsert: the frame tap could not detach the active plan");
+        return;
+    }
     bridge.size_patch_target = NULL;
+    refresh_constant_watch();
     bridge.last_tail_valid = 0;
     rsf_frame_tap_end_frame();
     bridge.reinsert_on = 0;
@@ -3615,31 +3625,38 @@ void rsf_bridge_toggle_reinsert(void)
    whether reinsertion should be on; it only makes the plan describe the frame that is actually
    being drawn now. */
 /* Prepare a replacement only after the tap has detached the previous plan. */
-static int apply_tail(const rsf_promote_frame_tail* tail)
+typedef enum reinsert_plan_result {
+    REINSERT_PLAN_FAILED,
+    REINSERT_PLAN_APPLIED,
+    REINSERT_PLAN_ATTACHED
+} reinsert_plan_result;
+
+static reinsert_plan_result apply_tail(const rsf_promote_frame_tail* tail)
 {
     rsf_frame_tap_plan plan;
     rsf_promote_result prepared;
 
     if (rsf_frame_tap_set_plan(NULL) != RSF_FRAME_TAP_OK) {
         say("reinsert: the frame tap could not detach the active plan");
-        return 0;
+        return REINSERT_PLAN_ATTACHED;
     }
     bridge.size_patch_target = NULL;
+    refresh_constant_watch();
     prepared = rsf_promote_prepare(bridge.promote, tail);
     if (prepared == RSF_PROMOTE_ERROR_NOT_SCALED) {
         say("reinsert: press F9 to put the render scale back first, there is nothing to upscale");
-        return 0;
+        return REINSERT_PLAN_FAILED;
     }
     if (prepared != RSF_PROMOTE_OK) {
         say("reinsert: the replacements could not be prepared, result %d", (int)prepared);
-        return 0;
+        return REINSERT_PLAN_FAILED;
     }
 
     memset(&plan, 0, sizeof(plan));
     plan.struct_size = sizeof(plan);
     if (rsf_promote_fill_plan(bridge.promote, &plan) != RSF_PROMOTE_OK) {
         say("reinsert: the plan could not be built");
-        return 0;
+        return REINSERT_PLAN_FAILED;
     }
     plan.on_gate = on_gate;
     /* A promoted target and the game's render resolution depth are a pair D3D11 rejects, so
@@ -3652,12 +3669,12 @@ static int apply_tail(const rsf_promote_frame_tail* tail)
 
     if (rsf_frame_tap_set_plan(&plan) != RSF_FRAME_TAP_OK) {
         say("reinsert: the frame tap refused the plan");
-        return 0;
+        return REINSERT_PLAN_FAILED;
     }
     /* The recombine's size constants follow the plan: promoted while its target is bound. */
     bridge.size_patch_target = tail->composed;
     refresh_constant_watch();
-    return 1;
+    return REINSERT_PLAN_APPLIED;
 }
 
 static int install_reinsert_plan(void)
@@ -3701,10 +3718,12 @@ static int install_reinsert_plan(void)
     }
     tail.ui_target_view_format = bridge.ui_target_view_format;
     tail.chain_view_format = bridge.chain_view_format;
-    if (!apply_tail(&tail)) {
-        /* The frame must not go unpromoted for a tail that failed to build. The last tail that
-           worked goes back, and the new one is tried again later rather than on every present. */
-        if (bridge.last_tail_valid && apply_tail(&bridge.last_tail)) {
+    const reinsert_plan_result applied = apply_tail(&tail);
+    if (applied != REINSERT_PLAN_APPLIED) {
+        /* When detach is refused the old plan is still live. A failed build after detach
+           can be recovered by reinstalling the last working tail. */
+        if (applied == REINSERT_PLAN_FAILED && bridge.last_tail_valid &&
+            apply_tail(&bridge.last_tail) == REINSERT_PLAN_APPLIED) {
             ++bridge.plan_restores;
             say("reinsert: the previous plan is back until the new tail can be built");
         }

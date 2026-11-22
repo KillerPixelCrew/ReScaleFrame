@@ -1,18 +1,24 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::d3d11_output::{CreateBlit, DestroyBlit, DrawBlit, FullscreenBlit};
+use crate::constant_buffer_read::slot;
+use crate::d3d11_output::{FullscreenBlit, same_device, texture_desc};
+use crate::d3d11_output_abi::{
+    RSF_D3D11_BIND_RENDER_TARGET, RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_USAGE_DEFAULT,
+    rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv, rsf_d3d11_output_create_texture,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_texture_desc,
+    rsf_fullscreen_pass,
+};
 use crate::frame_tap_abi::{
     RSF_FRAME_TAP_MAX_SUBSTITUTIONS, rsf_frame_tap_plan as Plan, rsf_frame_tap_substitution as Item,
 };
 use crate::scene_promote_abi::{
     RSF_PROMOTE_ABI_VERSION, RSF_PROMOTE_MAX_CHAIN_TARGETS, RSF_PROMOTE_MAX_UI_TARGETS,
-    rsf_promote_frame_tail as Tail, rsf_promote_log_fn, rsf_promote_setup as Setup,
-    rsf_promote_status as Status,
+    rsf_promote_frame_tail as Tail, rsf_promote_setup as Setup, rsf_promote_status as Status,
 };
 use crate::sr_session::has_capacity;
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::fmt::Display;
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 
 type Handle = *mut c_void;
@@ -41,8 +47,6 @@ fn typeless_family(format: u32) -> u32 {
     }
 }
 
-#[repr(C)]
-#[derive(Default)]
 struct TextureFacts {
     width: u32,
     height: u32,
@@ -63,24 +67,111 @@ impl TextureFacts {
     }
 }
 
+// The fullscreen pass remains behind its public C ABI.
 #[repr(C)]
-struct Platform {
-    owns_texture: unsafe extern "C" fn(Handle, Handle) -> u32,
-    describe: unsafe extern "C" fn(Handle, &mut TextureFacts) -> u32,
-    log_replacement: unsafe extern "C" fn(&Setup, Handle, *const c_char, &TextureFacts) -> u32,
-    make_texture: unsafe extern "C" fn(Handle, u32, u32, u32) -> Handle,
-    make_target: unsafe extern "C" fn(Handle, Handle, u32) -> Handle,
-    make_view: unsafe extern "C" fn(Handle, Handle, u32, u32) -> Handle,
-    copy: unsafe extern "C" fn(Handle, Handle, Handle, Handle) -> u32,
-    create_blit: CreateBlit,
-    draw_blit: DrawBlit,
-    destroy_blit: DestroyBlit,
-    log: unsafe extern "C" fn(rsf_promote_log_fn, Handle, *const c_char),
+struct FullscreenSetup {
+    struct_size: u32,
+    abi_version: u32,
+    log: Option<unsafe extern "C" fn(Handle, *const std::ffi::c_char)>,
+    log_user: Handle,
+}
+
+#[repr(C)]
+struct FullscreenDraw {
+    struct_size: u32,
+    mode: u32,
+    exposure: f32,
+    width: u32,
+    height: u32,
+}
+
+unsafe extern "C" {
+    fn rsf_fullscreen_pass_create(
+        device: Handle,
+        setup: *const FullscreenSetup,
+        pass: *mut *mut rsf_fullscreen_pass,
+    ) -> i32;
+    fn rsf_fullscreen_pass_draw(
+        pass: *mut rsf_fullscreen_pass,
+        context: Handle,
+        target: Handle,
+        source: Handle,
+        draw: *const FullscreenDraw,
+    ) -> i32;
+    fn rsf_fullscreen_pass_destroy(pass: *mut rsf_fullscreen_pass);
+}
+
+unsafe extern "C" fn create_blit(device: Handle) -> *mut rsf_fullscreen_pass {
+    let setup = FullscreenSetup {
+        struct_size: size_of::<FullscreenSetup>() as u32,
+        abi_version: 1,
+        log: None,
+        log_user: null_mut(),
+    };
+    let mut pass = null_mut();
+    if unsafe { rsf_fullscreen_pass_create(device, &setup, &mut pass) } == OK {
+        pass
+    } else {
+        null_mut()
+    }
+}
+
+unsafe extern "C" fn draw_blit(
+    pass: *mut rsf_fullscreen_pass,
+    context: Handle,
+    target: Handle,
+    source: Handle,
+    width: u32,
+    height: u32,
+) -> u32 {
+    let draw = FullscreenDraw {
+        struct_size: size_of::<FullscreenDraw>() as u32,
+        mode: 0, // RSF_FULLSCREEN_COPY
+        exposure: 0.0,
+        width,
+        height,
+    };
+    u32::from(unsafe { rsf_fullscreen_pass_draw(pass, context, target, source, &draw) } == OK)
+}
+
+// ID3D11Device::CreateRenderTargetView takes a D3D11_RENDER_TARGET_VIEW_DESC.
+// Its largest union member occupies three UINTs and Texture2D uses only the first.
+#[repr(C)]
+struct TargetDesc {
+    format: u32,
+    dimension: u32,
+    union_fields: [u32; 3],
+}
+
+unsafe fn make_target(device: Handle, texture: Handle, format: u32) -> Option<ComRef> {
+    type Create = unsafe extern "system" fn(Handle, Handle, *const TargetDesc, *mut Handle) -> i32;
+    let create: Create = unsafe { std::mem::transmute(slot(device, 9)) };
+    let desc = TargetDesc {
+        format,
+        dimension: 4, // D3D11_RTV_DIMENSION_TEXTURE2D
+        union_fields: [0; 3],
+    };
+    let mut view = null_mut();
+    if unsafe { create(device, texture, &desc, &mut view) } < 0 {
+        return None;
+    }
+    unsafe { ComRef::from_owned(view) }
+}
+
+unsafe fn make_default_view(device: Handle, texture: Handle) -> Handle {
+    type Create = unsafe extern "system" fn(Handle, Handle, *const c_void, *mut Handle) -> i32;
+    let create: Create = unsafe { std::mem::transmute(slot(device, 7)) };
+    let mut view = null_mut();
+    if unsafe { create(device, texture, null(), &mut view) } < 0 {
+        return null_mut();
+    }
+    view
 }
 
 const _: () = {
-    assert!(size_of::<TextureFacts>() == 16);
-    assert!(size_of::<Platform>() == 11 * size_of::<Handle>());
+    assert!(size_of::<TargetDesc>() == 20);
+    assert!(size_of::<FullscreenDraw>() == 20);
+    assert!(size_of::<FullscreenSetup>() == 8 + 2 * size_of::<Handle>());
 };
 
 struct Replacement {
@@ -131,7 +222,6 @@ struct Promote {
     state: Mutex<State>,
     device: ComRef,
     setup: Setup,
-    platform: &'static Platform,
 }
 
 enum Draw {
@@ -149,35 +239,39 @@ impl Promote {
     }
 
     fn log(&self, message: impl Display) {
-        if self.setup.log.is_some()
+        if let Some(log) = self.setup.log
             && let Ok(message) = CString::new(message.to_string())
         {
-            unsafe { (self.platform.log)(self.setup.log, self.setup.log_user, message.as_ptr()) };
+            unsafe { log(self.setup.log_user, message.as_ptr()) };
         }
     }
 
-    fn describe(&self, texture: Handle) -> Option<TextureFacts> {
-        let mut facts = TextureFacts::default();
-        (unsafe { (self.platform.describe)(texture, &mut facts) } != 0).then_some(facts)
+    fn describe(&self, texture: Handle) -> TextureFacts {
+        let desc = unsafe { texture_desc(texture) };
+        TextureFacts {
+            width: desc.width,
+            height: desc.height,
+            format: desc.format,
+            default_view_format: unsafe { rsf_d3d11_output_srv_format(desc.format) },
+        }
     }
 
     fn view(&self, texture: Handle, format: Option<u32>) -> Option<ComRef> {
+        let device = self.device.as_ptr();
         unsafe {
-            ComRef::from_owned((self.platform.make_view)(
-                self.device.as_ptr(),
-                texture,
-                u32::from(format.is_some()),
-                format.unwrap_or(0),
-            ))
+            ComRef::from_owned(match format {
+                Some(format) => rsf_d3d11_output_create_srv(device, texture, format),
+                None => make_default_view(device, texture),
+            })
         }
     }
 
     fn source_view(&self, texture: Handle, typed: bool) -> Option<ComRef> {
-        if unsafe { (self.platform.owns_texture)(self.device.as_ptr(), texture) } == 0 {
+        if !unsafe { same_device(self.device.as_ptr(), texture) } {
             return None;
         }
         let format = if typed {
-            Some(self.describe(texture)?.view_format(0))
+            Some(self.describe(texture).view_format(0))
         } else {
             None
         };
@@ -187,27 +281,32 @@ impl Promote {
     fn make_replacement(&self, original: Handle, hint: u32, role: &CStr) -> Option<Replacement> {
         let device = self.device.as_ptr();
         let role_name = role.to_string_lossy();
-        if unsafe { (self.platform.owns_texture)(device, original) } == 0 {
+        if !unsafe { same_device(device, original) } {
             self.log(format_args!(
                 "promote: the {role_name} belongs to another device"
             ));
             return None;
         }
-        let facts = self.describe(original)?;
-        if unsafe { (self.platform.log_replacement)(&self.setup, original, role.as_ptr(), &facts) }
-            == 0
-        {
-            return None;
-        }
+        let facts = self.describe(original);
         let (width, height) = (self.setup.output_width, self.setup.output_height);
-        let texture = unsafe {
-            ComRef::from_owned((self.platform.make_texture)(
-                device,
-                width,
-                height,
-                facts.format,
-            ))
+        self.log(format_args!(
+            "promote: the {role_name} {original:p}, {}x{} format {}, becomes {width}x{height}",
+            facts.width, facts.height, facts.format
+        ));
+        let desc = rsf_d3d11_texture_desc {
+            width,
+            height,
+            mips: 1,
+            layers: 1,
+            format: facts.format,
+            samples: 1,
+            sample_quality: 0,
+            usage: RSF_D3D11_USAGE_DEFAULT,
+            bind_flags: RSF_D3D11_BIND_RENDER_TARGET | RSF_D3D11_BIND_SHADER_RESOURCE,
+            cpu_access_flags: 0,
+            misc_flags: 0,
         };
+        let texture = unsafe { ComRef::from_owned(rsf_d3d11_output_create_texture(device, &desc)) };
         let Some(texture) = texture else {
             self.log(format_args!(
                 "promote: the {role_name} replacement could not be created"
@@ -215,13 +314,7 @@ impl Promote {
             return None;
         };
         let format = facts.view_format(hint);
-        let target = unsafe {
-            ComRef::from_owned((self.platform.make_target)(
-                device,
-                texture.as_ptr(),
-                format,
-            ))
-        };
+        let target = unsafe { make_target(device, texture.as_ptr(), format) };
         let view = target
             .as_ref()
             .and_then(|_| self.view(texture.as_ptr(), Some(format)));
@@ -290,9 +383,9 @@ impl Promote {
                 *seed_pass = unsafe {
                     FullscreenBlit::new(
                         &self.device,
-                        self.platform.create_blit,
-                        self.platform.draw_blit,
-                        self.platform.destroy_blit,
+                        create_blit,
+                        draw_blit,
+                        rsf_fullscreen_pass_destroy,
                     )
                 };
                 if seed_pass.is_none() {
@@ -436,19 +529,20 @@ impl Promote {
         };
         let source = match draw {
             Draw::Finish if recombine.scene.format == recombine.composed.format => {
-                let copied = unsafe {
-                    (self.platform.copy)(
-                        self.device.as_ptr(),
+                if !unsafe {
+                    rsf_d3d11_output_is_immediate(context) != 0
+                        && same_device(self.device.as_ptr(), context)
+                } {
+                    return Err(RESOURCE_FAILED);
+                }
+                unsafe {
+                    rsf_d3d11_output_copy_resource(
                         context,
                         recombine.scene.texture.as_ptr(),
                         recombine.composed.texture.as_ptr(),
-                    )
-                };
-                return if copied != 0 {
-                    Ok(())
-                } else {
-                    Err(RESOURCE_FAILED)
-                };
+                    );
+                }
+                return Ok(());
             }
             Draw::Finish => &recombine.composed.view,
             Draw::Seed {
@@ -476,11 +570,7 @@ impl Promote {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_promote_create(
-    setup: *const Setup,
-    out: *mut *mut Promote,
-    platform: &'static Platform,
-) -> i32 {
+unsafe extern "C" fn rsf_promote_create(setup: *const Setup, out: *mut *mut Promote) -> i32 {
     if out.is_null() || !unsafe { has_capacity(setup) } {
         return INVALID_ARGUMENT;
     }
@@ -495,7 +585,6 @@ unsafe extern "C" fn rsf_core_promote_create(
         state: Mutex::default(),
         device: unsafe { ComRef::retain(setup.device) },
         setup,
-        platform,
     });
     if promote.is_null() {
         return RESOURCE_FAILED;
@@ -505,7 +594,7 @@ unsafe extern "C" fn rsf_core_promote_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_promote_prepare(promote: *const Promote, tail: *const Tail) -> i32 {
+unsafe extern "C" fn rsf_promote_prepare(promote: *const Promote, tail: *const Tail) -> i32 {
     let Some(promote) = (unsafe { promote.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
@@ -516,7 +605,7 @@ unsafe extern "C" fn rsf_core_promote_prepare(promote: *const Promote, tail: *co
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_promote_fill_plan(promote: *const Promote, plan: *mut Plan) -> i32 {
+unsafe extern "C" fn rsf_promote_fill_plan(promote: *const Promote, plan: *mut Plan) -> i32 {
     let Some(promote) = (unsafe { promote.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
@@ -533,7 +622,7 @@ unsafe extern "C" fn rsf_core_promote_fill_plan(promote: *const Promote, plan: *
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_promote_seed(
+unsafe extern "C" fn rsf_promote_seed(
     promote: *const Promote,
     context: Handle,
     reconstructed: u32,
@@ -553,7 +642,7 @@ unsafe extern "C" fn rsf_core_promote_seed(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_promote_finish(promote: *const Promote, context: Handle) -> i32 {
+unsafe extern "C" fn rsf_promote_finish(promote: *const Promote, context: Handle) -> i32 {
     let Some(promote) = (unsafe { promote.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
@@ -561,7 +650,7 @@ unsafe extern "C" fn rsf_core_promote_finish(promote: *const Promote, context: H
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_promote_get_stand_ins(
+unsafe extern "C" fn rsf_promote_get_stand_ins(
     promote: *const Promote,
     scene: *mut Handle,
     composed: *mut Handle,
@@ -594,10 +683,7 @@ unsafe extern "C" fn rsf_core_promote_get_stand_ins(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_promote_get_status(
-    promote: *const Promote,
-    status: *mut Status,
-) -> i32 {
+unsafe extern "C" fn rsf_promote_get_status(promote: *const Promote, status: *mut Status) -> i32 {
     let Some(promote) = (unsafe { promote.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
@@ -627,7 +713,7 @@ unsafe extern "C" fn rsf_core_promote_get_status(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_promote_destroy(promote: *mut Promote) {
+unsafe extern "C" fn rsf_promote_destroy(promote: *mut Promote) {
     if !promote.is_null() {
         // The caller must clear the tap before releasing the views borrowed by its plan.
         drop(unsafe { Box::from_raw(promote) });
