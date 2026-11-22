@@ -4,6 +4,7 @@
 
 mod cpu_facts;
 mod frame;
+mod host;
 mod primary;
 
 // Settings values from sr_session.h and local mode values from viewport.h.
