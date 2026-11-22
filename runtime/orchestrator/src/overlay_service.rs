@@ -7,6 +7,7 @@ use crate::{
     fg_status,
     native_cpu::rsf_native_input_receipts_get,
     overlay_abi::*,
+    present_rates::Rates,
     render_abi::{
         RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
         RSF_FG_STAT_TOTAL_PRESENTED, RSF_NATIVE_FG_REASON_NONE, RSF_REFLEX_BOOST, RSF_REFLEX_OFF,
@@ -349,45 +350,6 @@ impl Config {
             sharpening_policy::sanitize(sharpening_of(&value, &sharpening_policy::defaults()));
         set_sharpening(&mut value, &options);
         value
-    }
-}
-
-#[derive(Default)]
-struct Rates {
-    tick: u64,
-    base: u64,
-    output: u64,
-    backend: u32,
-    base_fps: f32,
-    output_fps: f32,
-    output_valid: bool,
-}
-
-impl Rates {
-    fn sample(&mut self, presents: u64, backend: u32, fg: &FgStatus, now: u64) {
-        let output = fg.vendor.total_presented;
-        if self.tick == 0 || self.backend != backend || output < self.output {
-            *self = Self {
-                tick: now,
-                base: presents,
-                output,
-                backend,
-                ..Self::default()
-            };
-        } else if now.wrapping_sub(self.tick) >= 500 {
-            let seconds = now.wrapping_sub(self.tick) as f32 / 1000.0;
-            self.base_fps = presents.wrapping_sub(self.base) as f32 / seconds;
-            self.output_valid =
-                fg.available != 0 && fg.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED != 0;
-            self.output_fps = if self.output_valid {
-                (output - self.output) as f32 / seconds
-            } else {
-                0.0
-            };
-            self.tick = now;
-            self.base = presents;
-            self.output = output;
-        }
     }
 }
 
@@ -798,8 +760,14 @@ impl State {
         self.presents = self.presents.wrapping_add(1);
         self.sampled = true;
         self.chain_size = size;
-        self.rates
-            .sample(self.presents, sample.fg_backend, &sample.fg, now);
+        self.rates.sample(
+            self.presents,
+            sample.fg_backend,
+            sample.fg.vendor.total_presented,
+            sample.fg.available != 0
+                && sample.fg.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED != 0,
+            now,
+        );
         self.sample = sample;
     }
 

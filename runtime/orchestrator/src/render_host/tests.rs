@@ -696,7 +696,7 @@ fn submission_retires_snapshotted_slots_on_one_direct_queue() {
         events(),
         [
             "signal direct queue 1",
-            &format!("fg submitted {SESSION} 20")
+            &format!("fg submitted {SESSION} 99")
         ]
     );
     {
@@ -937,11 +937,16 @@ fn status_reports_renderer_refusals_and_rates() {
     assert_eq!((status.base_fps, status.output_fps), (60.0, 120.0));
     assert_eq!(status.output_fps_valid, 1);
     ini.write("FG", "0");
+    assert_ne!(host.status_get().unwrap().fg_requested, 0);
+    with(|world| world.now += 1000);
+    host.poll(&mut host.lock());
     let status = host.status_get().unwrap();
     assert_eq!(text(&status), "Disabled by setting");
     assert_eq!(status.fg_requested_backend, 0);
     host.poisoned.store(true, Ordering::Relaxed);
     ini.write("FG", "1");
+    with(|world| world.now += 1000);
+    host.poll(&mut host.lock());
     assert_eq!(
         text(&host.status_get().unwrap()),
         "GPU submission or presentation failed"

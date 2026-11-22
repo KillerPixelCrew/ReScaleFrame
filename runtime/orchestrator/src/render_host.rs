@@ -235,6 +235,16 @@ struct Scene {
     captured: bool,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct ContextKey {
+    backend: u32,
+    quality: u32,
+    preset: u32,
+    exposure: bool,
+    render: (u32, u32),
+    output: (u32, u32),
+}
+
 struct State {
     device: Option<ComRef>,
     fence: Option<ComRef>,
@@ -254,14 +264,8 @@ struct State {
     sharpening: Sharpening,
     enabled: bool,
     reset: bool,
-    context_backend: u32,
-    quality: u32,
-    width: u32,
-    height: u32,
-    output_width: u32,
-    output_height: u32,
-    context_preset: u32,
-    context_exposure: bool,
+    key: ContextKey,
+    settings: Settings,
     fg_backend_requested: u32,
     fg_switch_result: i32,
     slots: [Slot; SLOTS],
@@ -272,13 +276,7 @@ struct State {
     feedback_tick: u64,
     native_frame: u64,
     application_presents: u64,
-    rate_tick: u64,
-    rate_base: u64,
-    rate_output: u64,
-    rate_backend: u32,
-    base_fps: f32,
-    output_fps: f32,
-    output_fps_valid: bool,
+    rates: Rates,
     // Recording serials snapshotted before Execute, so a recycled list cannot retire a newer slot.
     submitting: HashMap<u64, Vec<(usize, u64)>>,
     last_result: i32,
@@ -418,14 +416,8 @@ impl State {
             sharpening: unsafe { std::mem::zeroed() },
             enabled: true,
             reset: true,
-            context_backend: 0,
-            quality: 0,
-            width: 0,
-            height: 0,
-            output_width: 0,
-            output_height: 0,
-            context_preset: 0,
-            context_exposure: false,
+            key: ContextKey::default(),
+            settings: DEFAULTS,
             fg_backend_requested: u32::MAX,
             fg_switch_result: i32::MAX,
             slots: [EMPTY_SLOT; SLOTS],
@@ -436,13 +428,7 @@ impl State {
             feedback_tick: 0,
             native_frame: 0,
             application_presents: 0,
-            rate_tick: 0,
-            rate_base: 0,
-            rate_output: 0,
-            rate_backend: 0,
-            base_fps: 0.0,
-            output_fps: 0.0,
-            output_fps_valid: false,
+            rates: Rates::default(),
             submitting: HashMap::new(),
             last_result: i32::MAX,
             last_dispatch: i32::MAX,
@@ -475,11 +461,6 @@ impl Host {
 
     fn fg_installed(&self) -> bool {
         self.fg_installed.load(Ordering::Acquire)
-    }
-
-    // The saved section with the frontend defaults and sanitized post-pass values.
-    fn read_settings(&self) -> Settings {
-        self.read_settings_and_fg_mode().0
     }
 
     // One section read: the public settings and the stored FG value FG12 takes as its mode.
@@ -535,6 +516,7 @@ impl Host {
         }
         s.poll_tick = now + 1000;
         let (values, fg_mode) = self.read_settings_and_fg_mode();
+        s.settings = values;
         s.sharpening = sharpening_of(&values, &sharpening_policy::defaults());
         if !s.context.is_null() {
             let _ = unsafe { (p.sr12_set_sharpening)(s.context, &s.sharpening) };
@@ -650,7 +632,8 @@ impl Host {
     }
 
     // Replaces the SR context for a changed backend, quality, preset, exposure or extent.
-    fn configure(&self, s: &mut State, pass: &Pass, quality: u32) -> i32 {
+    fn configure(&self, s: &mut State, pass: &Pass, key: ContextKey) -> i32 {
+        let quality = key.quality;
         let p = self.p;
         let camera = &pass.camera;
         let device = s.device.as_ref().map_or(null_mut(), ComRef::as_ptr);
@@ -741,18 +724,11 @@ impl Host {
         {
             self.log("Native renderer bounded SR capture configuration refused.");
         }
-        s.context_backend = s.backend;
-        s.quality = quality;
-        s.context_preset = s.preset;
-        s.context_exposure = !pass.exposure.is_null();
-        s.width = camera.render_width;
-        s.height = camera.render_height;
-        s.output_width = camera.output_width;
-        s.output_height = camera.output_height;
+        s.key = key;
         s.reset = true;
         self.log(&format!(
             "Native renderer SR context backend={} quality={} input={}x{} output={}x{}.",
-            s.backend, s.quality, s.width, s.height, s.output_width, s.output_height
+            key.backend, key.quality, key.render.0, key.render.1, key.output.0, key.output.1
         ));
         BACKEND_OK
     }
@@ -805,22 +781,19 @@ impl Host {
             return NOT_READY;
         }
         let camera = &pass.camera;
-        let quality = infer_quality(camera.render_width, camera.output_width);
-        let has_exposure = !pass.exposure.is_null();
-        if s.context.is_null()
-            || s.context_backend != s.backend
-            || s.quality != quality
-            || s.context_preset != s.preset
-            || s.context_exposure != has_exposure
-            || s.width != camera.render_width
-            || s.height != camera.render_height
-            || s.output_width != camera.output_width
-            || s.output_height != camera.output_height
-        {
+        let key = ContextKey {
+            backend: s.backend,
+            quality: infer_quality(camera.render_width, camera.output_width),
+            preset: s.preset,
+            exposure: !pass.exposure.is_null(),
+            render: (camera.render_width, camera.render_height),
+            output: (camera.output_width, camera.output_height),
+        };
+        if s.context.is_null() || s.key != key {
             if !self.drain(s) {
                 return BUSY;
             }
-            let result = self.configure(s, pass, quality);
+            let result = self.configure(s, pass, key);
             if result != BACKEND_OK {
                 return result;
             }
@@ -939,7 +912,7 @@ impl Host {
             let scene = &mut s.scenes[(frame % SCENES as u64) as usize];
             if scene.frame == frame && scene.recording == recording {
                 scene.submitted = true;
-                unsafe { (p.fg_submitted)(self.session, frame) };
+                unsafe { (p.fg_submitted)(self.session, scene.source) };
             }
         }
     }
@@ -1037,30 +1010,13 @@ impl Host {
         let backend = unsafe { (p.present_backend)() };
         let valid =
             fg.available != 0 && fg.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED != 0;
-        if s.rate_tick == 0
-            || s.rate_backend != backend
-            || fg.vendor.total_presented < s.rate_output
-        {
-            s.rate_tick = now;
-            s.rate_base = s.application_presents;
-            s.rate_output = fg.vendor.total_presented;
-            s.rate_backend = backend;
-            s.base_fps = 0.0;
-            s.output_fps = 0.0;
-            s.output_fps_valid = false;
-        } else if now.wrapping_sub(s.rate_tick) >= 500 {
-            let seconds = now.wrapping_sub(s.rate_tick) as f32 / 1000.0;
-            s.base_fps = (s.application_presents - s.rate_base) as f32 / seconds;
-            s.output_fps = if valid {
-                (fg.vendor.total_presented - s.rate_output) as f32 / seconds
-            } else {
-                0.0
-            };
-            s.output_fps_valid = valid;
-            s.rate_tick = now;
-            s.rate_base = s.application_presents;
-            s.rate_output = fg.vendor.total_presented;
-        }
+        s.rates.sample(
+            s.application_presents,
+            backend,
+            fg.vendor.total_presented,
+            valid,
+            now,
+        );
         let recent = s.feedback_tick != 0 && now.wrapping_sub(s.feedback_tick) < 1000;
         let mut value = Status {
             struct_size: size_of::<Status>() as u32,
@@ -1072,14 +1028,14 @@ impl Host {
                 && s.last_dispatch == 0
                 && now.wrapping_sub(s.feedback_tick) < 1000
             {
-                s.context_backend
+                s.key.backend
             } else {
                 0
             },
-            render_width: s.width,
-            render_height: s.height,
-            output_width: s.output_width,
-            output_height: s.output_height,
+            render_width: s.key.render.0,
+            render_height: s.key.render.1,
+            output_width: s.key.output.0,
+            output_height: s.key.output.1,
             fg_requested_backend: values.fg_backend,
             fg_effective_backend: backend,
             fg_requested: u32::from(values.fg_enabled != 0),
@@ -1095,12 +1051,12 @@ impl Host {
             sr_result: s.last_dispatch,
             fg_result: fg.last_result,
             fg_vendor_result: fg.vendor.vendor_status,
-            output_fps_valid: u32::from(s.output_fps_valid && valid),
+            output_fps_valid: u32::from(s.rates.output_valid && valid),
             status_overlay: u32::from(s.status_overlay),
             sr_backend_choices: self.sr_choices,
             fg_backend_choices: unsafe { (p.present_backend_choices)() },
-            base_fps: s.base_fps,
-            output_fps: s.output_fps,
+            base_fps: s.rates.base_fps,
+            output_fps: s.rates.output_fps,
             native_frame: s.native_frame,
             source_frame: fg.source_frame_id,
             tagged_frames: fg.tagged_frames,
@@ -1163,14 +1119,13 @@ impl Host {
             return Err(BUSY);
         }
         let mut state = self.try_lock().ok_or(BUSY)?;
-        let values = self.read_settings();
+        let values = state.settings;
         let now = unsafe { (self.p.tick)() };
         Ok(self.status(&mut state, &values, &fg, now))
     }
 
     fn settings_get(&self) -> Result<Settings, i32> {
-        let _state = self.try_lock().ok_or(BUSY)?;
-        Ok(self.read_settings())
+        Ok(self.try_lock().ok_or(BUSY)?.settings)
     }
 
     // Validated against the whole request, then saved in one section write and applied.
@@ -1264,7 +1219,7 @@ impl Host {
             let s = self.lock();
             (
                 s.overlay_queue.clone().or_else(|| s.queue.clone()),
-                s.quality,
+                s.key.quality,
             )
         };
         let Some(queue) = queue else {
@@ -1275,9 +1230,9 @@ impl Host {
         };
         let mut fresh = Self::empty_fg();
         let fg_fresh = unsafe { (p.fg_status_try)(&mut fresh) } != 0;
-        // One locked read serves both the status and the panel's settings.
+        // One published snapshot serves both status and panel settings.
         if let Some(mut state) = self.try_lock() {
-            let values = self.read_settings();
+            let values = state.settings;
             if fg_fresh || !self.fg_installed() {
                 let now = unsafe { (p.tick)() };
                 STATUS.set(self.status(&mut state, &values, &fresh, now));
@@ -1654,7 +1609,7 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
             unsafe { std::ffi::CStr::from_ptr(value) }.to_owned()
         }
     };
-    Host {
+    let host = Host {
         p,
         state: Mutex::new(State::new()),
         probe: Mutex::new(Probe {
@@ -1687,7 +1642,9 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
         observed_commands: [const { AtomicPtr::new(null_mut()) }; SLOTS],
         graphics_ready: AtomicBool::new(false),
         ui_preferences: AtomicU32::new(0),
-    }
+    };
+    host.lock().settings = host.read_settings_and_fg_mode().0;
+    host
 }
 
 // Installs the host's diagnostics, FG presentation or graphics observer. The host address is
