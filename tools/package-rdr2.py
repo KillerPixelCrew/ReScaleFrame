@@ -4,20 +4,17 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import time
 import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-# Reuse the AC7 packager's hashing, copying and Rust notice collection rather than forking them.
-_spec = importlib.util.spec_from_file_location("package_ac7", ROOT / "tools/package-ac7.py")
-ac7 = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(ac7)
-git, digest, copy = ac7.git, ac7.digest, ac7.copy
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from package_common import RUNTIME, copy, dependency_notices, digest, git, release_identity  # noqa: E402
 
 # Portable defaults. Overlay changes are written back to this file; diagnostics stay off.
 CONFIG = """[RDR2]
@@ -38,7 +35,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
     parser.add_argument("--xess-root", type=Path, default=ROOT / "vendor/xess")
     parser.add_argument("--output", type=Path, default=ROOT / "build/releases/rdr2")
     args = parser.parse_args(argv)
-    revision = ac7.release_identity(release_revision)
+    revision = release_identity(release_revision)
     version = (ROOT / "VERSION").read_text().strip()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -84,7 +81,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
         (args.xess_root / "third-party-programs.txt", "ReScaleFrame/xess/third-party-programs.txt"),
     ):
         copy(source, stage / relative)
-    for name in ac7.RUNTIME:
+    for name in RUNTIME:
         copy(args.streamline_root / "bin/x64" / name, stage / "ReScaleFrame/streamline" / name)
     (stage / "ReScaleFrame.ini").write_text(CONFIG, encoding="utf-8")
     (stage / "ReScaleFrame/licenses/README.md").write_text(
@@ -95,7 +92,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
         "or in this directory. Vendor binaries are unmodified. Rust dependency notices and\n"
         "MinHook are also included. ScriptHookRDR2 and the ASI loader are not redistributed.\n",
         encoding="utf-8")
-    ac7.dependency_notices(stage)
+    dependency_notices(stage)
     engine = json.loads((ROOT / "games/rdr2/engine.json").read_text(encoding="utf-8"))
     manifest = {
         "product": "ReScaleFrame for Red Dead Redemption 2", "version": version, "source_commit": revision,
@@ -124,7 +121,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
             if hashlib.sha256(bundle.read(name)).hexdigest() != expected:
                 raise RuntimeError(f"Archive hash mismatch: {name}")
     if game_only:
-        ac7.release_identity(revision)
+        release_identity(revision)
         return {"archive": str(archive), "revision": revision}
     source = output / f"ReScaleFrame-{version}-RDR2-source.zip"
     subprocess.run(["git", "archive", "--format=zip", f"--prefix=ReScaleFrame-{version}/",

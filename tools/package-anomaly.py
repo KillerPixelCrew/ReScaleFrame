@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import configparser
 import hashlib
-import importlib.util
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -22,18 +21,10 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load(name, filename):
-    spec = importlib.util.spec_from_file_location(name, ROOT / 'tools' / filename)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-ac7 = load('package_ac7', 'package-ac7.py')
-motion = load('anomaly_motion_deploy', 'anomaly_motion_deploy.py')
-shader_pack = load('rsf_shader_pack', 'rsf_shader_pack.py')
-git, digest, copy = ac7.git, ac7.digest, ac7.copy
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import anomaly_motion_deploy as motion  # noqa: E402
+import rsf_shader_pack as shader_pack  # noqa: E402
+from package_common import RUNTIME, copy, dependency_notices, digest, git, release_identity  # noqa: E402
 
 CONFIG = """[Loader]
 AutoStart=1
@@ -170,7 +161,7 @@ def input_plan(args):
         'ReScaleFrame/xess/third-party-programs.txt': args.xess_root / 'third-party-programs.txt',
     }
     for name in VENDOR_HASHES:
-        family, source = ('streamline', args.streamline_root / 'bin/x64' / name) if name in ac7.RUNTIME else (
+        family, source = ('streamline', args.streamline_root / 'bin/x64' / name) if name in RUNTIME else (
             ('fidelityfx', fx / name) if name.startswith('amd_') else ('xess', xe / name))
         if digest(source) != VENDOR_HASHES[name]:
             raise RuntimeError('Vendor binary differs from the pinned SDK: ' + name)
@@ -232,7 +223,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
     args = parser.parse_args(argv)
     if args.dry_run and release_revision is not None:
         raise ValueError('Release-set callers cannot bypass source checks with Anomaly dry-run.')
-    revision = (ac7.release_identity(release_revision) if release_revision is not None else
+    revision = (release_identity(release_revision) if release_revision is not None else
                 git('rev-parse', 'HEAD') if args.dry_run else require_clean())
     version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
     validate_config(CONFIG)
@@ -257,7 +248,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
                                     'Motion shader rules and additions are RSF-authored; game source is never packaged.\n'
                                     'See the per-family notices, Sharpening-THIRD_PARTY.md and RUST-DEPENDENCIES.md.\n'}.items():
         (stage / 'ReScaleFrame/licenses' / name).write_text(text, encoding='utf-8', newline='\n')
-    ac7.dependency_notices(stage)
+    dependency_notices(stage)
     build_profile = (ROOT / 'games/anomaly/src/native_profile.h').read_text(encoding='utf-8')
     hashes = re.findall(r'inline constexpr char (?:dx11|avx)_hash\[\] = "([0-9a-f]{64})"', build_profile)
     if len(hashes) != 2:
@@ -276,7 +267,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
     archive_stage(stage, archive, stamp)
     verify_archive(archive)
     if game_only:
-        ac7.release_identity(revision)
+        release_identity(revision)
         return {'archive': str(archive), 'revision': revision}
     source = output / f'ReScaleFrame-{version}-Anomaly-source.zip'
     subprocess.run(['git', 'archive', '--format=zip', f'--prefix=ReScaleFrame-{version}/', '-o', str(source), revision],

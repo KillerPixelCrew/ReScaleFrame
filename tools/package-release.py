@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import hashlib
 import importlib.util
 import json
 from pathlib import Path, PurePosixPath
@@ -17,24 +16,10 @@ import time
 import tomllib
 import zipfile
 
-ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from package_common import ROOT, digest, digest_stream, git  # noqa: E402
+
 GAMES = ("AC7", "RDR2", "Anomaly", "DragNWash")
-
-
-def git(*args):
-    return subprocess.check_output(["git", *args], cwd=ROOT, text=True, encoding="utf-8").strip()
-
-
-def digest_stream(stream):
-    value = hashlib.sha256()
-    for data in iter(lambda: stream.read(1024 * 1024), b""):
-        value.update(data)
-    return value.hexdigest()
-
-
-def digest(path):
-    with path.open("rb") as stream:
-        return digest_stream(stream)
 
 
 def require_clean():
