@@ -699,9 +699,11 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}
     add_test(NAME native_sr_fsr4_state_contract COMMAND rsf_native_sr_fsr4_state_test)
 endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xell/xell_d3d12.h")
+    rsf_add_rust_static(rsf_xess_device_fixture_rust rsf_rust_xess_device_fixture
+        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features xess-device)
     add_executable(rsf_native_fg_xess_vulkan_test native_fg_xess_vulkan_interop.cpp native_fg_xess_vulkan_present.cpp)
     target_include_directories(rsf_native_fg_xess_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_native_fg_xess_vulkan_test PRIVATE ReScaleFrame::NativeVulkan rsf_build_options)
+    target_link_libraries(rsf_native_fg_xess_vulkan_test PRIVATE rsf_xess_device_fixture_rust ReScaleFrame::NativeVulkan rsf_build_options)
     add_test(NAME native_fg_xess_vulkan_contract COMMAND rsf_native_fg_xess_vulkan_test)
 endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")

@@ -18,7 +18,8 @@ template<typename T> T proc(const rsf_srvk_setup& setup, const char* name) {
 }
 }
 
-int RunXessPresentationFixture(const rsf_srvk_setup& graphics, uint32_t family, const wchar_t* runtime) {
+extern "C" int rsf_fixture_xess_present(const rsf_srvk_setup* setup_graphics, uint32_t family, const wchar_t* runtime, bool* retired) {
+    const auto& graphics = *setup_graphics;
     WNDCLASSW klass{}; klass.lpfnWndProc = DefWindowProcW; klass.hInstance = GetModuleHandleW(nullptr);
     klass.lpszClassName = L"RsfXeSSInteropFixture";
     if (!RegisterClassW(&klass)) return 100;
@@ -231,6 +232,7 @@ int RunXessPresentationFixture(const rsf_srvk_setup& graphics, uint32_t family, 
         if (render_pass) proc<PFN_vkDestroyRenderPass>(graphics, "vkDestroyRenderPass")(device, render_pass, nullptr);
     }
     int release = drain ? -1 : rsf_xessgvk_destroy(owner);
+    *retired = !drain && !release;
     // No dependent owner is released if the presenter could not drain.
     if (!drain && !release) {
         idle(device);

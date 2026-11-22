@@ -12,6 +12,9 @@
 typedef rsf_dx12vk_interop rsf_xessvk_interop;
 typedef rsf_dx12vk_shared_image rsf_xessvk_shared_image;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 int32_t rsf_xessvk_interop_create(const rsf_srvk_setup*, rsf_xess_bridge*,
     uint32_t timeline_enabled, rsf_xessvk_interop**);
 /* Dedicated D3D12_RESOURCE import. Transfer-only optimal image, initial UNDEFINED.
@@ -51,3 +54,6 @@ int32_t rsf_xessgvk_latency_status(rsf_xessgvk*, rsf_fgvk_latency_status*);
 int32_t rsf_xessgvk_status(rsf_xessgvk*, rsf_fgvk_status*);
 int32_t rsf_xessgvk_drain(rsf_xessgvk*);
 int32_t rsf_xessgvk_destroy(rsf_xessgvk*);
+#ifdef __cplusplus
+}
+#endif

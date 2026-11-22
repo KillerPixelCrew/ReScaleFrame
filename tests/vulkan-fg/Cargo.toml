@@ -13,10 +13,16 @@ crate-type = ["staticlib"]
 dispatch = []
 ffx = []
 fsr4-state = ["dep:ash"]
+xess-device = ["dep:ash", "dep:windows-sys"]
 
 [dependencies]
 ash = { version = "=0.38.0", default-features = false, features = ["std"], optional = true }
 rsf-game-sys = { path = "../../sdk/game" }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_System_LibraryLoader",
+], optional = true }
 
 [lints]
 workspace = true

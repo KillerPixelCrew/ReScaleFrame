@@ -83,3 +83,15 @@ Source checks cover binding regeneration with bindgen 0.72.1, Rust 1.94.1
 formatting, locked offline Windows x64 Cargo metadata, whitespace, bridge
 export names and required symbol order. Build and runtime validation remain
 pending.
+
+## Device fixture follow-up from `9716068b`
+
+The FG interop executable keeps its UTF-16 command line and uses the original
+integrated bridge create export and V03 importer. Rust runs the four ABI
+preflight checks without loading Vulkan, then on explicit request selects the
+first physical device and graphics family, reads the DXGI-compatible LUID,
+and requests Vulkan 1.2 with Win32 external memory and semaphore extensions
+and timeline support. It imports BGRA8, R32F and RG16F at 640 × 360. Both
+queue drains still gate interop and bridge destruction. The JSON keys and
+status meanings are preserved. When the optional presenter reports failed
+retirement, the caller also retains the Vulkan loader and device.
