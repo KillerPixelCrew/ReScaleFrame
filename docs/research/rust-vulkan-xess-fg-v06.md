@@ -40,7 +40,7 @@ at version 1.
 | `runtime/vulkan/xess-fg/bridge.cpp`, `bridge_api.h`, `capture_api.h`, `diagnostic-capture.h`, `session_abi.h` in that directory | Moved bridge admission, generated-count decisions and publication out of C++. Public ABI headers, the typed SDK table and native GPU calls remain at the boundary. |
 | `tests/native_fg_xess_vulkan_interop.cpp`, `tests/native_fg_xess_vulkan_present.cpp` | Added a size-only prefix check to the interop fixture. Both keep native device setup. The presentation fixture keeps its Win32 window and Vulkan queue and resource setup. |
 
-The environment-only diagnostic options finding remains open. The shared overlay
+At the initial port, the environment-only diagnostic options finding remained open. The shared overlay
 only carries numeric and toggle options. Directory and timing-file controls
 need shared path settings and an overlay service route. The XeSS configuration
 also registers the fingerprint-gated SDK callbacks at presenter startup, so live
@@ -77,8 +77,9 @@ the extent from the actual allocation through the local view constructor.
 The producer, shaders, copy command order, fence ownership, public exports
 and V02/V03 table layouts follow the existing paths.
 
-The native device fixtures, SDK diagnostic registration and shared editable
-diagnostic settings still need follow-up. The settings work belongs to O02.
+At the SDK record follow-up, the device fixtures, SDK diagnostic registration
+and shared editable diagnostic settings still needed work. The saved Unicode
+settings landed in `6814dd3e` before the fixture follow-up below.
 Source checks cover binding regeneration with bindgen 0.72.1, Rust 1.94.1
 formatting, locked offline Windows x64 Cargo metadata, whitespace, bridge
 export names and required symbol order. Build and runtime validation remain
@@ -111,3 +112,31 @@ quality selection and shutdown in Rust. It preserves the return-77 decisions
 and the device-before-SDK retirement order. Native leaves still own Vulkan
 setup, both quality runs' frame recording and pixel comparison, and the
 separately compiled typed SDK input-range mock.
+
+### Source boundaries and disposition
+
+| PORT path | Disposition at this follow-up |
+| --- | --- |
+| `native_fg_xess_vulkan.cpp`, `native_fg_xess_vulkan.h`, `native_fg_xess_vulkan_platform.h` | Rust maps the V03 results for image and fence access and checked destruction. C++ creates the native COM callback table. The private adapter declarations use C linkage for the fixture driver. |
+| `native_fg_xess_vulkan_present.cpp` | Retained native binding seam. It selects the existing V02 graphics table and marshals both Present variants through V02. Its entry points are also the substitution seam for the synthetic provider-dispatch fixture. |
+| `native_xess_vulkan.cpp`, `native_xess_vulkan.h`, `native_xess_vulkan_requirements.h` | Retained typed platform table, direct SDK calls, requirements ABI and SDK-disabled seam. The integrated base already uses the Rust loader/export, record, transfer and frame owner. The fixture's typed SDK mock still exercises this platform table. |
+| `bridge.cpp`, `diagnostic-capture.h` | Rust compares the exact diagnosed module SHA-256 and resolves the private setter on that same module, in that order. Native leaves read the loaded module digest, bind the typed setter and register or unregister the original typed callbacks. Other native leaves still issue DXGI, D3D12 and direct SDK calls. |
+| `bridge_api.h`, `capture_api.h`, `session_abi.h` | Retained ABI contracts. Public bridge ABI 1 and all DLL export names stay fixed. The private platform stays 552 bytes and moves to version 8 for its digest and setter-binding slots. |
+| `tests/native_fg_xess_vulkan_interop.cpp` | Driver ported. C++ provides the UTF-16 CRT entry point. |
+| `tests/native_fg_xess_vulkan_present.cpp` | Driver ported. C++ provides Win32, Vulkan allocation and drawing leaves. |
+| `tests/native_xess_vulkan.cpp` | Partial. Rust owns preflight and device-run admission. Native GPU setup, the per-quality evaluation and pixel verification, and the typed input-range mock remain. |
+
+The saved Unicode overlay integration at `6814dd3e` supplies the existing
+diagnostic profile to both bridge builds. The fingerprint still gates the
+private diagnostic export, and queue-completed capture publication remains
+in the same owner. The public export list and regular SDK lookup order
+compare equal to `9716068b`. The V02 presenter and V03 importer source,
+shared synchronization contracts and V05 fixture paths remain outside this
+change.
+
+The source checks used Rust 1.94.1 formatting, bindgen 0.72.1 regeneration
+for the V06 ABI and pinned XeSS SDK records, locked offline Windows x64
+Cargo metadata, and whitespace and source ordering comparisons. Full
+workspace binding generation with IDA's libclang hit a bindgen panic in the
+V05 fixture header. Scoped V06 regeneration succeeded. Device, game, build,
+test and Clippy verification were outside the requested scope.

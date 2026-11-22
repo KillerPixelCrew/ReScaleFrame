@@ -396,11 +396,9 @@ static int32_t CreateRecorders(VulkanStoryXessFg* value) {
     return static_cast<int>(value->commandList->Close());
 }
 
-// The session admits the exact SDK binary before looking up its private setter.
-static int32_t FindDiagnostics(VulkanStoryXessFg* value, void* module) {
-    value->setDiagnostics = reinterpret_cast<rsf_xess_capture::SetDiagnostics>(
-        GetProcAddress(static_cast<HMODULE>(module), "xefgSwapChainD3D12SetDiagnosticCallbacks"));
-    return value->setDiagnostics ? 0 : -1;
+// The session admits the exact SDK binary before resolving its private setter.
+static void BindDiagnostics(VulkanStoryXessFg* value, void* address) {
+    value->setDiagnostics = reinterpret_cast<rsf_xess_capture::SetDiagnostics>(address);
 }
 
 static int32_t RegisterDiagnostics(VulkanStoryXessFg* value) {
@@ -757,7 +755,7 @@ static constexpr rsf_xess_bridge_platform Platform{
     },
     .open_event = []() -> void* { return CreateEventW(nullptr, FALSE, FALSE, nullptr); },
     .create_recorders = CreateRecorders,
-    .find_diagnostics = FindDiagnostics,
+    .bind_diagnostics = BindDiagnostics,
     .set_generated = SetGenerated,
     .read_completion = ReadCompletion,
     .arm_completion = [](VulkanStoryXessFg* value, uint64_t target, void* event) -> int32_t {
@@ -820,7 +818,7 @@ static constexpr rsf_xess_bridge_platform Platform{
     },
     .attach_capture = [](VulkanStoryXessFg* value, rsf_xess_capture_owner* capture) { value->capture = capture; },
     .register_diagnostics = RegisterDiagnostics,
-    .capture_fingerprint = rsf_xess_capture::Fingerprint,
+    .capture_digest = rsf_xess_capture::Digest,
     .capture_describe = rsf_xess_capture::Describe,
     .capture_footprint = rsf_xess_capture::QueryFootprint,
     .capture_readback = rsf_xess_capture::CreateReadback,

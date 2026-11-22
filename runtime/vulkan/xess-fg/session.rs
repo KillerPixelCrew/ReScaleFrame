@@ -108,8 +108,8 @@ struct Platform {
     create_completion_fence: Step,
     open_event: unsafe extern "C" fn() -> Handle,
     create_recorders: Step,
-    // Stores the SDK diagnostic setter. Nonzero when the export is missing.
-    find_diagnostics: unsafe extern "C" fn(Handle, Handle) -> i32,
+    // Binds the resolved private setter after exact fingerprint admission.
+    bind_diagnostics: unsafe extern "C" fn(Handle, Handle),
     set_generated: unsafe extern "C" fn(Handle, u32) -> i32,
     read_completion: unsafe extern "C" fn(Handle, *mut u64) -> i32,
     arm_completion: unsafe extern "C" fn(Handle, u64, Handle) -> i32,
@@ -152,7 +152,7 @@ struct Platform {
     // Lends the session's capture owner to the capsule as the SDK callback user.
     attach_capture: unsafe extern "C" fn(Handle, *const Capture),
     register_diagnostics: Step,
-    capture_fingerprint: unsafe extern "C" fn(Handle) -> u32,
+    capture_digest: unsafe extern "C" fn(Handle, *mut u8) -> u32,
     capture_describe: unsafe extern "C" fn(Handle, *mut Desc),
     // Writes the footprint, its byte size and a device reference. Nonzero
     // when the resource has no device.
@@ -211,7 +211,7 @@ const _: () = {
     assert!(size_of::<Platform>() == 552 && align_of::<Platform>() == 8);
     assert!(std::mem::offset_of!(Platform, allocate) == 8);
     assert!(std::mem::offset_of!(Platform, init_swapchain) == 112);
-    assert!(std::mem::offset_of!(Platform, find_diagnostics) == 168);
+    assert!(std::mem::offset_of!(Platform, bind_diagnostics) == 168);
     assert!(std::mem::offset_of!(Platform, read_completion) == 184);
     assert!(std::mem::offset_of!(Platform, unregister_diagnostics) == 216);
     assert!(std::mem::offset_of!(Platform, destroy_xell) == 240);

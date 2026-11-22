@@ -2,7 +2,7 @@
 #pragma once
 #include <stdint.h>
 
-#define RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION 7u
+#define RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION 8u
 #define RSF_XESS_BRIDGE_ALLOCATOR_COUNT 3u
 
 /* Resource description fields needed by the capture owner and its receipts. */

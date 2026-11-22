@@ -7952,7 +7952,12 @@ FG session admits the required XeSS-FG and XeLL exports. Native leaves issue
 the Windows, Vulkan and SDK calls. Generated legacy Present and integrated
 options records retain the wire formats. See the
 [V06 follow-up](research/rust-vulkan-xess-fg-v06.md#sdk-record-and-fixture-follow-up-from-821642ae)
-for the source comparison, fixture coverage and outstanding O02 settings.
+for the original source comparison. The
+[fixture follow-up](research/rust-vulkan-xess-fg-v06.md#device-fixture-follow-up-from-9716068b)
+ports the interop and Present drivers, moves SR fixture entry and SDK session
+control to Rust, and records the remaining native Vulkan SR workload and
+mock. Rust checks the exact diagnostic SDK fingerprint before resolving the
+private setter, and both bridge builds read the saved Unicode profile.
 Build, fixture execution and device checks remain pending.
 ### D3D12 Streamline generation follow-up (D06)
 

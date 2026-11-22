@@ -2,6 +2,7 @@
 use crate::dx12_vulkan_interop_abi::{
     RSF_DX12VK_INTEROP_ABI_MISMATCH, RSF_DX12VK_INTEROP_ABI_VERSION,
     RSF_DX12VK_INTEROP_INVALID_ARGUMENT, rsf_dx12vk_interop_callbacks as InteropCallbacks,
+    rsf_dx12vk_shared_image as InteropImage,
 };
 use crate::sr_session::has_capacity;
 use crate::vulkan_dx12_fg::{self as shared, *};
@@ -23,6 +24,7 @@ use bridge_abi::{
     rsf_xess_bridge_frame as BridgeFrame, rsf_xess_bridge_present_status as BridgeStatus,
     rsf_xess_bridge_start as BridgeStart,
 };
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard};
 
@@ -117,9 +119,38 @@ unsafe extern "C" fn rsf_core_xessvk_interop_create(
     status_result(unsafe { (ops.create)(setup, &callbacks, timeline_enabled, output) })
 }
 
+unsafe extern "C" {
+    fn rsf_dx12vk_interop_image(
+        owner: Handle,
+        format: u32,
+        width: u32,
+        height: u32,
+        output: *mut InteropImage,
+    ) -> i32;
+    fn rsf_dx12vk_interop_timeline(owner: *const c_void) -> u64;
+    fn rsf_dx12vk_interop_destroy(owner: Handle, queues_drained: u32) -> i32;
+
+}
+
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_xessvk_interop_result(result: i32) -> i32 {
-    status_result(result)
+unsafe extern "C" fn rsf_xessvk_interop_image(
+    owner: Handle,
+    format: u32,
+    width: u32,
+    height: u32,
+    output: *mut InteropImage,
+) -> i32 {
+    status_result(unsafe { rsf_dx12vk_interop_image(owner, format, width, height, output) })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_xessvk_interop_timeline(owner: *const c_void) -> u64 {
+    unsafe { rsf_dx12vk_interop_timeline(owner) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_xessvk_interop_destroy(owner: Handle, queues_drained: u32) -> i32 {
+    status_result(unsafe { rsf_dx12vk_interop_destroy(owner, queues_drained) })
 }
 
 #[derive(Clone, Copy, Default)]

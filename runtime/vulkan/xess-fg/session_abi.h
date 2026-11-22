@@ -58,7 +58,7 @@ struct rsf_xess_bridge_platform {
     int32_t (*create_completion_fence)(rsf_xess_bridge*);
     void* (*open_event)();
     int32_t (*create_recorders)(rsf_xess_bridge*);
-    int32_t (*find_diagnostics)(rsf_xess_bridge*, void*);
+    void (*bind_diagnostics)(rsf_xess_bridge*, void* address);
     int32_t (*set_generated)(rsf_xess_bridge*, uint32_t);
     int32_t (*read_completion)(rsf_xess_bridge*, uint64_t*);
     int32_t (*arm_completion)(rsf_xess_bridge*, uint64_t, void*);
@@ -99,7 +99,7 @@ struct rsf_xess_bridge_platform {
     // publication. These callbacks keep the typed SDK and DX12 calls.
     void (*attach_capture)(rsf_xess_bridge*, rsf_xess_capture_owner*);
     int32_t (*register_diagnostics)(rsf_xess_bridge*);
-    uint32_t (*capture_fingerprint)(void*);
+    uint32_t (*capture_digest)(void* module, unsigned char* sha256);
     void (*capture_describe)(void*, rsf_xess_capture_desc*);
     int32_t (*capture_footprint)(void*, void*, uint64_t*, void**);
     void* (*capture_readback)(void*, uint64_t);
@@ -120,7 +120,7 @@ static_assert(sizeof(rsf_xess_bridge_sdk_entries) == 18 * sizeof(void*));
 static_assert(sizeof(rsf_xess_bridge_platform) == 552 && alignof(rsf_xess_bridge_platform) == 8);
 static_assert(offsetof(rsf_xess_bridge_platform, allocate) == 8);
 static_assert(offsetof(rsf_xess_bridge_platform, init_swapchain) == 112);
-static_assert(offsetof(rsf_xess_bridge_platform, find_diagnostics) == 168);
+static_assert(offsetof(rsf_xess_bridge_platform, bind_diagnostics) == 168);
 static_assert(offsetof(rsf_xess_bridge_platform, read_completion) == 184);
 static_assert(offsetof(rsf_xess_bridge_platform, unregister_diagnostics) == 216);
 static_assert(offsetof(rsf_xess_bridge_platform, destroy_xell) == 240);

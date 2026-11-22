@@ -32,13 +32,3 @@ int32_t rsf_xessvk_interop_create(const rsf_srvk_setup* setup, rsf_xess_bridge* 
     uint32_t timeline_enabled, rsf_xessvk_interop** output) {
     return rsf_core_xessvk_interop_create(&operations, setup, bridge, timeline_enabled, output);
 }
-int32_t rsf_xessvk_interop_image(rsf_xessvk_interop* owner, uint32_t format,
-    uint32_t width, uint32_t height, rsf_xessvk_shared_image* output) {
-    return rsf_core_xessvk_interop_result(rsf_dx12vk_interop_image(owner, format, width, height, output));
-}
-uint64_t rsf_xessvk_interop_timeline(const rsf_xessvk_interop* owner) {
-    return rsf_dx12vk_interop_timeline(owner);
-}
-int32_t rsf_xessvk_interop_destroy(rsf_xessvk_interop* owner, uint32_t queues_drained) {
-    return rsf_core_xessvk_interop_result(rsf_dx12vk_interop_destroy(owner, queues_drained));
-}

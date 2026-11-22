@@ -4,7 +4,7 @@
 //! Rust owns the configuration, frame source identity, callback counter,
 //! admission budgets, duplicate detection, the pending readbacks and their
 //! publication after the bridge has drained its DX12 queue. The native leaves
-//! keep the fixed fingerprint admission, the typed SDK callback table, the
+//! provide the loaded module digest, the typed SDK callback table, and the
 //! DX12 readback, copy and map calls.
 //!
 //! The shared `rsf::FrameCapture12` owner does not fit this path: it records
@@ -40,6 +40,7 @@ const TEXTURE2D: u32 = 3;
 const BGRA8: u32 = 87;
 const STATE_COMMON: u32 = 0;
 const PROVIDER_SHA256: &str = "ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27";
+const _: () = assert!(PROVIDER_SHA256.len() == 64);
 // RsfXessBridgeCaptureSource result when the source cannot be bound.
 const SOURCE_FAILED: i32 = -7012;
 
@@ -261,14 +262,26 @@ impl Capture {
             return true;
         }
         let ops = self.ops;
-        if unsafe { (ops.capture_fingerprint)(module) } == 0 {
+        let mut digest = [0; 32];
+        let hex = b"0123456789abcdef";
+        let expected = PROVIDER_SHA256.as_bytes().chunks_exact(2);
+        if unsafe { (ops.capture_digest)(module, digest.as_mut_ptr()) } == 0
+            || !digest
+                .iter()
+                .zip(expected)
+                .all(|(&byte, pair)| pair == [hex[(byte >> 4) as usize], hex[(byte & 15) as usize]])
+        {
             self.failure("diagnostic-runtime-fingerprint");
             return false;
         }
-        if unsafe { (ops.find_diagnostics)(native, module) } != 0 {
+        let setter = unsafe {
+            (ops.lookup_export)(module, c"xefgSwapChainD3D12SetDiagnosticCallbacks".as_ptr())
+        };
+        if setter.is_null() {
             self.failure("diagnostic-export");
             return false;
         }
+        unsafe { (ops.bind_diagnostics)(native, setter) };
         if unsafe { (ops.register_diagnostics)(native) } < 0 {
             self.failure("diagnostic-registration");
             return false;

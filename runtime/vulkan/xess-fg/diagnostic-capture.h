@@ -63,15 +63,11 @@ inline void BeforeOutputs(void* user, uint64_t token, ID3D12GraphicsCommandList*
     if (user) rsf_core_xess_capture_before_outputs(static_cast<rsf_xess_capture_owner*>(user), token, count);
 }
 
-inline uint32_t Fingerprint(void* module) {
+inline uint32_t Digest(void* module, unsigned char* sha256) {
     wchar_t path[32768]{};
     DWORD size = GetModuleFileNameW(static_cast<HMODULE>(module), path, 32768);
     if (!size || size >= 32768) return 0;
-    unsigned char actual[32]{};
-    constexpr unsigned char expected[32]{0xec,0x5e,0x0c,0x65,0xe0,0x75,0x57,0x0c,0x6e,0xde,0x72,0x61,0x8b,0xb6,0x66,0xd0,
-        0xbe,0x0c,0x2e,0x10,0xb2,0xea,0x97,0x62,0xc0,0xfe,0x8c,0xb8,0xe3,0x75,0xab,0x27};
-    return rsf_common_sha256_file(path, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, actual) &&
-        std::memcmp(actual, expected, sizeof(actual)) == 0;
+    return rsf_common_sha256_file(path, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, sha256);
 }
 
 inline void Describe(void* resource, rsf_xess_capture_desc* output) {
