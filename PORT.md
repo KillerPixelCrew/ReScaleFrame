@@ -1477,8 +1477,8 @@ Port SDK loading, DLSS SR and FG, capture and session lifetime across the Runtim
 
 **Port files (18)**
 
-- [ ] [runtime/orchestrator/include/rescaleframe/native_fg_dlss_vulkan.h](runtime/orchestrator/include/rescaleframe/native_fg_dlss_vulkan.h)
-- [ ] [runtime/orchestrator/include/rescaleframe/native_streamline_vulkan.h](runtime/orchestrator/include/rescaleframe/native_streamline_vulkan.h)
+- [x] [runtime/orchestrator/include/rescaleframe/native_fg_dlss_vulkan.h](runtime/orchestrator/include/rescaleframe/native_fg_dlss_vulkan.h)
+- [x] [runtime/orchestrator/include/rescaleframe/native_streamline_vulkan.h](runtime/orchestrator/include/rescaleframe/native_streamline_vulkan.h)
 - [ ] [runtime/orchestrator/src/native_dlss_vulkan.cpp](runtime/orchestrator/src/native_dlss_vulkan.cpp)
 - [ ] [runtime/orchestrator/src/native_dlss_vulkan_platform.h](runtime/orchestrator/src/native_dlss_vulkan_platform.h)
 - [ ] [runtime/orchestrator/src/native_fg_dlss_vulkan.cpp](runtime/orchestrator/src/native_fg_dlss_vulkan.cpp)
@@ -2386,7 +2386,7 @@ Port hook lifetime, render scopes, imagespace, publication and rollback in their
 **Port files (3)**
 
 - [ ] [games/fallout4/src/render_hooks.cpp](games/fallout4/src/render_hooks.cpp)
-- [ ] [games/fallout4/src/render_hooks.h](games/fallout4/src/render_hooks.h)
+- [x] [games/fallout4/src/render_hooks.h](games/fallout4/src/render_hooks.h)
 - [ ] [games/fallout4/src/render_hooks_platform.h](games/fallout4/src/render_hooks_platform.h)
 
 **Rust review findings (12)**

@@ -11,7 +11,6 @@
 // detours they are not noexcept and swallow nothing. A scope guard retires each entry if the original unwinds.
 // The per-call receipt lives on the shell's stack.
 #include "cpu_events_platform.h"
-#include "render_hooks.h"
 #include <windows.h>
 #include <array>
 #if defined(_MSC_VER)
@@ -195,7 +194,6 @@ const std::array<void*, RSF_FALLOUT4_CPU_HOOK_COUNT> detours{
 
 extern "C" void* rsf_fallout4_cpu_detour(uint32_t hook) noexcept { return detours[hook]; }
 extern "C" void* rsf_fallout4_cpu_peek_thunk() noexcept { return reinterpret_cast<void*>(&observe_peek); }
-extern "C" void rsf_fallout4_cpu_finish_render_scope() noexcept { finish_render_scope(); }
 
 extern "C" bool rsf_fallout4_cpu_deliver(
     rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event) noexcept {

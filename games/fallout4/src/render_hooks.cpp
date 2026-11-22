@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include "render_hooks.h"
 #include "render_hooks_platform.h"
 #include "cpu_events_platform.h"
 #include "render_inputs.h"
@@ -529,7 +528,7 @@ extern "C" void rsf_fallout4_render_bind_exports(const NativeRenderExports* expo
 }
 extern "C" void rsf_fallout4_render_bind_host(const rsf_game_host_services* services) noexcept { host = *services; }
 // Rust (render_hooks/scope.rs) sequences the post-Swap scope end.
-void finish_render_scope() noexcept {
+extern "C" void rsf_fallout4_cpu_finish_render_scope(void) noexcept {
     rsf_fallout4_render_finish_scope(&scope_leaves,&recovery_leaves);
 }
 }
