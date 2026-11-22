@@ -7720,3 +7720,13 @@ package callback catches native Runtime observer exceptions. The D3D11 presentat
 export and its linked Rust fixture launcher compile as C11, preserving the table and its
 slot signatures. MinGW syntax passed for both C translation units and caught a deliberately
 mismatched slot. Linking and fixture execution remain pending.
+
+### Skyrim startup and Vulkan FidelityFX follow-up
+
+Skyrim uses the shared GameSDK host records and the Steam C ABI directly. Rust owns
+MinHook operations, input and subsystem routing, and the input fixture body. Native
+original calls, caller-address facts and exception guards remain. FidelityFX Vulkan
+SR and FG build their SDK descriptors in Rust and the FG admission fixture keeps the
+existing CTest entry. Native COM and capture paths remain. Formatting, binding and
+locked metadata checks cover the source changes. Native linking, tests and device
+checks remain pending.

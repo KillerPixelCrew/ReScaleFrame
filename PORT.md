@@ -1562,7 +1562,7 @@ Port the FSR3 and FSR4 bridge owners, private ABI and SDK patch payloads alongsi
 
 **Fixtures (5)**
 
-- [ ] [tests/native_fsr4_fg_bridge.cpp](tests/native_fsr4_fg_bridge.cpp)
+- [x] [tests/native_fsr4_fg_bridge.cpp](tests/native_fsr4_fg_bridge.cpp)
 - [x] [tests/native_fsr4_fg_contract.cpp](tests/native_fsr4_fg_contract.cpp)
 - [ ] [tests/native_fsr4_fg_state.cpp](tests/native_fsr4_fg_state.cpp)
 - [ ] [tests/native_sr_fsr4_state.cpp](tests/native_sr_fsr4_state.cpp)
@@ -1869,9 +1869,10 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 
 - Anomaly session startup, quiesce and callback retirement ([N02](#n02), [N03](#n03), [N04](#n04), [N06](#n06), [N08](#n08)).
 
-**Port files (18)**
+**Port files (19)**
 
-- [ ] [games/anomaly/src/bootstrap.cpp](games/anomaly/src/bootstrap.cpp)
+- [ ] [games/anomaly/src/bootstrap_platform.cpp](games/anomaly/src/bootstrap_platform.cpp) (native profile and stage table)
+- [x] [games/anomaly/src/bootstrap.cpp](games/anomaly/src/bootstrap.cpp)
 - [ ] [games/anomaly/src/build_profile.h](games/anomaly/src/build_profile.h)
 - [ ] [games/anomaly/src/engine_guards.h](games/anomaly/src/engine_guards.h)
 - [ ] [games/anomaly/src/engine_slots.h](games/anomaly/src/engine_slots.h)
@@ -1883,20 +1884,21 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 - [ ] [games/anomaly/src/native_observer_platform.cpp](games/anomaly/src/native_observer_platform.cpp)
 - [ ] [games/anomaly/src/native_observer_platform.h](games/anomaly/src/native_observer_platform.h)
 - [ ] [games/anomaly/src/native_profile.h](games/anomaly/src/native_profile.h)
-- [ ] [games/anomaly/src/plugin.cpp](games/anomaly/src/plugin.cpp)
+- [x] [games/anomaly/src/plugin.cpp](games/anomaly/src/plugin.cpp)
 - [ ] [games/anomaly/src/runtime_module.h](games/anomaly/src/runtime_module.h)
 - [ ] [games/anomaly/temporal/frame_plan.h](games/anomaly/temporal/frame_plan.h)
 - [ ] [games/anomaly/temporal/history.h](games/anomaly/temporal/history.h)
 - [ ] [games/anomaly/temporal/math.h](games/anomaly/temporal/math.h)
 - [ ] [games/anomaly/temporal/planning.h](games/anomaly/temporal/planning.h)
 
-**Fixtures (5)**
+**Fixtures (6)**
 
 - [x] [tests/anomaly_bootstrap.cpp](tests/anomaly_bootstrap.cpp)
 - [ ] [tests/anomaly_build_select.h](tests/anomaly_build_select.h)
-- [ ] [tests/anomaly_lifecycle.cpp](tests/anomaly_lifecycle.cpp)
-- [ ] [tests/anomaly_native_hooks.cpp](tests/anomaly_native_hooks.cpp)
-- [ ] [tests/anomaly_plugin.cpp](tests/anomaly_plugin.cpp)
+- [x] [tests/anomaly_lifecycle.cpp](tests/anomaly_lifecycle.cpp)
+- [ ] [tests/anomaly_native_hook_leaves.cpp](tests/anomaly_native_hook_leaves.cpp) (native detour fixture functions)
+- [x] [tests/anomaly_native_hooks.cpp](tests/anomaly_native_hooks.cpp)
+- [x] [tests/anomaly_plugin.cpp](tests/anomaly_plugin.cpp)
 
 **Rust review findings (8)**
 
@@ -2067,10 +2069,11 @@ Port shader loading, reflection and interception. Track shader-language assets s
 
 - Motion history, shader identity and published frame resources ([N04](#n04), [N07](#n07), [N08](#n08)).
 
-**Port files (8)**
+**Port files (9)**
 
-- [ ] [games/anomaly/src/runtime_shaders.cpp](games/anomaly/src/runtime_shaders.cpp)
-- [ ] [games/anomaly/src/runtime_shaders.h](games/anomaly/src/runtime_shaders.h)
+- [ ] [games/anomaly/src/engine_shader_includes.cpp](games/anomaly/src/engine_shader_includes.cpp) (guarded native engine includes)
+- [x] [games/anomaly/src/runtime_shaders.cpp](games/anomaly/src/runtime_shaders.cpp)
+- [x] [games/anomaly/src/runtime_shaders.h](games/anomaly/src/runtime_shaders.h)
 - [ ] [games/anomaly/src/shader_d3d.cpp](games/anomaly/src/shader_d3d.cpp)
 - [ ] [games/anomaly/src/shader_d3d.h](games/anomaly/src/shader_d3d.h)
 - [ ] [games/anomaly/src/shader_loader.cpp](games/anomaly/src/shader_loader.cpp)
@@ -2080,7 +2083,7 @@ Port shader loading, reflection and interception. Track shader-language assets s
 
 **Fixtures (1)**
 
-- [ ] [tests/anomaly_temporal_shader_device.cpp](tests/anomaly_temporal_shader_device.cpp)
+- [x] [tests/anomaly_temporal_shader_device.cpp](tests/anomaly_temporal_shader_device.cpp)
 
 **Rust review findings (2)**
 
@@ -2549,51 +2552,52 @@ Port the cold creation routes, session, event proofs and compatibility handoff.
 - Steam chain installation and cold device creation ([F01](#f01), [I01](#i01)).
 - Session retirement and the callbacks consuming Skyrim render inputs ([S02](#s02)).
 
-**Port files (11)**
+**Port files (12)**
 
 - [ ] [games/skyrim-se/src/compatibility.cpp](games/skyrim-se/src/compatibility.cpp)
-- [ ] [games/skyrim-se/src/compatibility.h](games/skyrim-se/src/compatibility.h)
+- [x] [games/skyrim-se/src/compatibility.h](games/skyrim-se/src/compatibility.h)
 - [ ] [games/skyrim-se/src/cpu_events.cpp](games/skyrim-se/src/cpu_events.cpp)
-- [ ] [games/skyrim-se/src/cpu_events.h](games/skyrim-se/src/cpu_events.h)
-- [ ] [games/skyrim-se/src/cpu_policy.h](games/skyrim-se/src/cpu_policy.h)
-- [ ] [games/skyrim-se/src/input_ownership.h](games/skyrim-se/src/input_ownership.h)
+- [x] [games/skyrim-se/src/cpu_events.h](games/skyrim-se/src/cpu_events.h)
+- [x] [games/skyrim-se/src/cpu_policy.h](games/skyrim-se/src/cpu_policy.h)
+- [x] [games/skyrim-se/src/input_ownership.h](games/skyrim-se/src/input_ownership.h)
 - [ ] [games/skyrim-se/src/native_creation.cpp](games/skyrim-se/src/native_creation.cpp)
-- [ ] [games/skyrim-se/src/native_creation_platform.h](games/skyrim-se/src/native_creation_platform.h)
-- [ ] [games/skyrim-se/src/observer_platform.h](games/skyrim-se/src/observer_platform.h)
+- [x] [games/skyrim-se/src/native_creation_platform.h](games/skyrim-se/src/native_creation_platform.h)
+- [x] [games/skyrim-se/src/observer_platform.h](games/skyrim-se/src/observer_platform.h)
 - [ ] [games/skyrim-se/src/plugin.cpp](games/skyrim-se/src/plugin.cpp)
-- [ ] [games/skyrim-se/src/session_platform.h](games/skyrim-se/src/session_platform.h)
+- [x] [games/skyrim-se/src/session_platform.h](games/skyrim-se/src/session_platform.h)
+- [ ] [games/skyrim-se/src/guarded_read.cpp](games/skyrim-se/src/guarded_read.cpp) (native SEH read and write guards)
 
 **Fixtures (1)**
 
-- [ ] [tests/skyrim_input.cpp](tests/skyrim_input.cpp)
+- [x] [tests/skyrim_input.cpp](tests/skyrim_input.cpp)
 
 **Rust review findings (13)**
 
-- [ ] **Altitude | Medium | Keep repeated initializer lookups under the same Community Shaders handoff.** The GetProcAddress detour replaces SKSEPlugin_Load only while the phase is Armed. The first lookup sets Captured, so a second lookup of the same module and function before invocation receives the unwrapped entry and can initialize without exclusion or withdrawal. In Captured, return the same wrapper for the same original/module identity and make the initializer transaction enforce its single-invocation rule. [games/skyrim-se/src/compatibility/initializer.rs:262](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/compatibility/initializer.rs#L262)
+- [x] **Altitude | Medium | Keep repeated initializer lookups under the same Community Shaders handoff.** The GetProcAddress detour replaces SKSEPlugin_Load only while the phase is Armed. The first lookup sets Captured, so a second lookup of the same module and function before invocation receives the unwrapped entry and can initialize without exclusion or withdrawal. In Captured, return the same wrapper for the same original/module identity and make the initializer transaction enforce its single-invocation rule. [games/skyrim-se/src/compatibility/initializer.rs:262](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/compatibility/initializer.rs#L262)
 
-- [ ] **Duplication | Medium | Centralize Skyrim's shared frame, window and target-table addresses.** games/skyrim-se/src/camera/render.rs:11, games/skyrim-se/src/cpu_policy.rs:31 and games/skyrim-se/src/presentation.rs:20 each spell out the same frame/window RVAs. The camera reader at camera/render.rs:99, CPU identity producer at cpu_policy.rs:364 and presentation recheck at presentation.rs:194 must agree for the same frame. games/skyrim-se/src/auxiliary.rs:11 and games/skyrim-se/src/render_inputs.rs:18 likewise repeat the same target base and 0x30 stride for different slots. Put these verified addresses and the target-index operation in the existing Skyrim layout module. Preserve each owner's live reads and checks so a build update changes each native fact in one place. [games/skyrim-se/src/cpu_policy.rs:31](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/cpu_policy.rs#L31)
+- [x] **Duplication | Medium | Centralize Skyrim's shared frame, window and target-table addresses.** games/skyrim-se/src/camera/render.rs:11, games/skyrim-se/src/cpu_policy.rs:31 and games/skyrim-se/src/presentation.rs:20 each spell out the same frame/window RVAs. The camera reader at camera/render.rs:99, CPU identity producer at cpu_policy.rs:364 and presentation recheck at presentation.rs:194 must agree for the same frame. games/skyrim-se/src/auxiliary.rs:11 and games/skyrim-se/src/render_inputs.rs:18 likewise repeat the same target base and 0x30 stride for different slots. Put these verified addresses and the target-index operation in the existing Skyrim layout module. Preserve each owner's live reads and checks so a build update changes each native fact in one place. [games/skyrim-se/src/cpu_policy.rs:31](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/cpu_policy.rs#L31)
 
-- [ ] **Altitude | Medium | Restore the screen classification with a nested Skyrim render scope.** cpu_events.cpp:743 saves only the previous scope ID before begin_render changes both scope and screen. end_render restores just the ID. If a native render callback nests, a parent pass subsequently receives the child's screen via render_identity, which also uses it to determine FG eligibility. Have begin_render return a receipt for both scope-local values and restore them together while retaining frame-wide counters. [games/skyrim-se/src/cpu_policy.rs:295](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/cpu_policy.rs#L295)
+- [x] **Altitude | Medium | Restore the screen classification with a nested Skyrim render scope.** cpu_events.cpp:743 saves only the previous scope ID before begin_render changes both scope and screen. end_render restores just the ID. If a native render callback nests, a parent pass subsequently receives the child's screen via render_identity, which also uses it to determine FG eligibility. Have begin_render return a receipt for both scope-local values and restore them together while retaining frame-wide counters. [games/skyrim-se/src/cpu_policy.rs:295](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/cpu_policy.rs#L295)
 
-- [ ] **Quality | Medium | Commit poll completion atomically with the Skyrim overlap check.** An exclusive poll can pass the conflicts check at end_poll, then pause before storing its generation. A poll on another thread can enter and finish in that interval, increment conflicts and store zero. The first poll then overwrites zero with its old generation. Once both writers leave, epochs.snapshot and the poll_sample_status caller in cpu_events.cpp:652 can report a sampled source despite the overlap. Serialize poll begin/end/invalidation bookkeeping or use a generation-checked atomic publication, and test this interleaving with synchronized threads. [games/skyrim-se/src/cpu_sources.rs:188](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/cpu_sources.rs#L188)
+- [x] **Quality | Medium | Commit poll completion atomically with the Skyrim overlap check.** An exclusive poll can pass the conflicts check at end_poll, then pause before storing its generation. A poll on another thread can enter and finish in that interval, increment conflicts and store zero. The first poll then overwrites zero with its old generation. Once both writers leave, epochs.snapshot and the poll_sample_status caller in cpu_events.cpp:652 can report a sampled source despite the overlap. Serialize poll begin/end/invalidation bookkeeping or use a generation-checked atomic publication, and test this interleaving with synchronized threads. [games/skyrim-se/src/cpu_sources.rs:188](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/cpu_sources.rs#L188)
 
-- [ ] **Duplication | Medium | Use the same cold renderer-owner predicate for Skyrim creation and compatibility.** games/skyrim-se/src/creation.rs:166 reads OWNER and OWNER_DEVICE to decide Steam preparation at :187. games/skyrim-se/src/compatibility.rs:176 repeats that pointer chain to decide whether the original Community Shaders initializer may run at games/skyrim-se/src/compatibility/initializer.rs:290 and :336. Both accept a missing owner or device and refuse unreadable memory, but only the latter rejects zero module base explicitly, uses checked addition and preserves read failure as None. Put the checked observation beside the shared owner offsets, accepting a guarded read callback. Both admission callers can then require Some(true). [games/skyrim-se/src/creation.rs:166](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/creation.rs#L166)
+- [x] **Duplication | Medium | Use the same cold renderer-owner predicate for Skyrim creation and compatibility.** games/skyrim-se/src/creation.rs:166 reads OWNER and OWNER_DEVICE to decide Steam preparation at :187. games/skyrim-se/src/compatibility.rs:176 repeats that pointer chain to decide whether the original Community Shaders initializer may run at games/skyrim-se/src/compatibility/initializer.rs:290 and :336. Both accept a missing owner or device and refuse unreadable memory, but only the latter rejects zero module base explicitly, uses checked addition and preserves read failure as None. Put the checked observation beside the shared owner offsets, accepting a guarded read callback. Both admission callers can then require Some(true). [games/skyrim-se/src/creation.rs:166](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/creation.rs#L166)
 
-- [ ] **Duplication | Medium | Use one D3D11 creation-scope and native-chain binding on both sides of device creation.** games/fallout4/src/platform_abi.rs:132 and :157 contain generated chain and scope records. Skyrim manually defines the identical wire objects at games/skyrim-se/src/platform.rs:28 and :50, initializes them at games/skyrim-se/src/creation.rs:304, and lends the final device/context/swapchain fields on return. Runtime interprets a third pair at runtime/orchestrator/src/d3d11_host_abi.rs:110 and :119 through d3d11_host.rs:2447 and :2480. The manual Skyrim checks cover record sizes but could miss same-sized pointer fields exchanged within the chain. Share the generated public records and keep adapter-specific call frames private. [games/skyrim-se/src/platform.rs:28](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/platform.rs#L28)
+- [x] **Duplication | Medium | Use one D3D11 creation-scope and native-chain binding on both sides of device creation.** games/fallout4/src/platform_abi.rs:132 and :157 contain generated chain and scope records. Skyrim manually defines the identical wire objects at games/skyrim-se/src/platform.rs:28 and :50, initializes them at games/skyrim-se/src/creation.rs:304, and lends the final device/context/swapchain fields on return. Runtime interprets a third pair at runtime/orchestrator/src/d3d11_host_abi.rs:110 and :119 through d3d11_host.rs:2447 and :2480. The manual Skyrim checks cover record sizes but could miss same-sized pointer fields exchanged within the chain. Share the generated public records and keep adapter-specific call frames private. [games/skyrim-se/src/platform.rs:28](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/platform.rs#L28)
 
-- [ ] **Duplication | Medium | Use one public D3D11 host setup binding for adapters and runtime.** games/fallout4/src/platform_abi.rs:61 already has the generated 160-byte rsf_d3d11_host_setup used for creation at games/fallout4/src/session.rs:201. Skyrim builds the same payload with handwritten HostSetup and nested MotionDecode at games/skyrim-se/src/session.rs:110 and :529. The runtime interprets it using a third definition at runtime/orchestrator/src/d3d11_host_abi.rs:58 before validation at runtime/orchestrator/src/d3d11_host.rs:2273. The two manual versions depend on selected offset assertions and can silently reinterpret same-size fields after a header change. Generate the public setup, motion parameters and callback signature once from d3d11_host.h in a shared ABI crate. Keep adapter settings and private platform callbacks local. [games/skyrim-se/src/session.rs:110](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L110)
+- [x] **Duplication | Medium | Use one public D3D11 host setup binding for adapters and runtime.** games/fallout4/src/platform_abi.rs:61 already has the generated 160-byte rsf_d3d11_host_setup used for creation at games/fallout4/src/session.rs:201. Skyrim builds the same payload with handwritten HostSetup and nested MotionDecode at games/skyrim-se/src/session.rs:110 and :529. The runtime interprets it using a third definition at runtime/orchestrator/src/d3d11_host_abi.rs:58 before validation at runtime/orchestrator/src/d3d11_host.rs:2273. The two manual versions depend on selected offset assertions and can silently reinterpret same-size fields after a header change. Generate the public setup, motion parameters and callback signature once from d3d11_host.h in a shared ABI crate. Keep adapter settings and private platform callbacks local. [games/skyrim-se/src/session.rs:110](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L110)
 
-- [ ] **Altitude | Medium | Propagate the Runtime's Skyrim host activation result.** Leaves::set_active returns Ok whenever the native wrapper did not throw, irrespective of the returned status. The Runtime returns INVALID for an unknown host. Session::start can consequently enable admission for an inactive host, and suspend_host can report success after a refused deactivation. Preserve both the exception and Runtime result and publish the new lifecycle state only after RSF_OK. [games/skyrim-se/src/session.rs:245](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L245)
+- [x] **Altitude | Medium | Propagate the Runtime's Skyrim host activation result.** Leaves::set_active returns Ok whenever the native wrapper did not throw, irrespective of the returned status. The Runtime returns INVALID for an unknown host. Session::start can consequently enable admission for an inactive host, and suspend_host can report success after a refused deactivation. Preserve both the exception and Runtime result and publish the new lifecycle state only after RSF_OK. [games/skyrim-se/src/session.rs:245](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L245)
 
-- [ ] **Altitude | Medium | Keep failed Skyrim subsystem rollback visible to the session owner.** Stage::retire tests is_ok() on Result<bool, Threw>, so normal false from a busy presentation or sampling stop, or a refused CPU disable, counts as successful cleanup. Creation discards stop's boolean too. After a later stage fails, Session::start can report a clean refusal while a prior subsystem still owns live hooks or leases. Track outstanding rollback stages and return BUSY until each stop acknowledges release; exercise a false stop separately from a thrown stop. [games/skyrim-se/src/session.rs:376](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L376)
+- [x] **Altitude | Medium | Keep failed Skyrim subsystem rollback visible to the session owner.** Stage::retire tests is_ok() on Result<bool, Threw>, so normal false from a busy presentation or sampling stop, or a refused CPU disable, counts as successful cleanup. Creation discards stop's boolean too. After a later stage fails, Session::start can report a clean refusal while a prior subsystem still owns live hooks or leases. Track outstanding rollback stages and return BUSY until each stop acknowledges release; exercise a false stop separately from a thrown stop. [games/skyrim-se/src/session.rs:376](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L376)
 
-- [ ] **Duplication | Medium | Bind Skyrim CPU services without repeating native hook preparation.** Session::prepare calls CPU_PREPARE first with the upstream host at games/skyrim-se/src/session.rs:476, then with the bound runtime services at :574. games/skyrim-se/src/cpu_events.cpp:762 routes both to the same Control::prepare, which rereads the named callback and 13 hook guards at games/skyrim-se/src/cpu_hooks.rs:227, requeries clock frequency at :248 and overwrites the saved services. The second call needs the bound callbacks but the hooks are already prepared and pinned. Separate native preparation from service binding, publish the final table once, and retain the independent live admission check at cpu_hooks.rs:286 before enabling. [games/skyrim-se/src/session.rs:574](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L574)
+- [x] **Duplication | Medium | Bind Skyrim CPU services without repeating native hook preparation.** Session::prepare calls CPU_PREPARE first with the upstream host at games/skyrim-se/src/session.rs:476, then with the bound runtime services at :574. games/skyrim-se/src/cpu_events.cpp:762 routes both to the same Control::prepare, which rereads the named callback and 13 hook guards at games/skyrim-se/src/cpu_hooks.rs:227, requeries clock frequency at :248 and overwrites the saved services. The second call needs the bound callbacks but the hooks are already prepared and pinned. Separate native preparation from service binding, publish the final table once, and retain the independent live admission check at cpu_hooks.rs:286 before enabling. [games/skyrim-se/src/session.rs:574](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L574)
 
-- [ ] **Quality | Medium | Do not report a successful Skyrim restart while admission is withdrawn.** start returns OK whenever self.enabled is true. After a successful start, quiesce clears ACCEPTING and quiesces the subsystems but leaves enabled true, so a caller invoking the public start hook again gets success while status.active stays zero. An activation exception also leaves enabled true before returning NOT_READY, causing the same false success on retry. Distinguish installed-but-quiesced hooks from an accepting session and either resume all required stages or return an explicit refusal until stop/prepare. [games/skyrim-se/src/session.rs:597](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L597)
+- [x] **Quality | Medium | Do not report a successful Skyrim restart while admission is withdrawn.** start returns OK whenever self.enabled is true. After a successful start, quiesce clears ACCEPTING and quiesces the subsystems but leaves enabled true, so a caller invoking the public start hook again gets success while status.active stays zero. An activation exception also leaves enabled true before returning NOT_READY, causing the same false success on retry. Distinguish installed-but-quiesced hooks from an accepting session and either resume all required stages or return an explicit refusal until stop/prepare. [games/skyrim-se/src/session.rs:597](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L597)
 
-- [ ] **Simplicity | Low | Skyrim threads the one static platform table through every export and re-validates it per call.** platform.rs already has register/get for the process-lived table, but about twenty exports (auxiliary, compatibility/initializer, cpu_hooks, cpu_policy, plugin, postprocess, presentation, render_inputs, render_observer, resolution, sampling) take platform: *const Platform and call platform::inspect on every call, re-reading the size/version header (30 inspect/get sites across 14 files). Every C++ caller passes the same creation_platform() static (sampling.cpp:72, resolution.cpp:94, render_inputs.cpp:134/138, presentation_inputs.cpp:97, plugin.cpp:218, auxiliary.cpp:139), and session::publish already inspects leaves.platform before any lifecycle call, yet register only runs late in Session::prepare, so earlier exports cannot use get() and cpu_policy.rs:236 has to explain "the upstream CPU prepare runs before session registration of this same platform". Simpler: register the table once in session::publish, drop the platform parameter from the exports, and read platform::get() (or take &Platform internally). Tradeoff: the C++ export signatures change, and a fixture that wants a private table must publish it first instead of passing it per call. [games/skyrim-se/src/platform.rs:161](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/platform.rs#L161)
+- [x] **Simplicity | Low | Skyrim threads the one static platform table through every export and re-validates it per call.** platform.rs already has register/get for the process-lived table, but about twenty exports (auxiliary, compatibility/initializer, cpu_hooks, cpu_policy, plugin, postprocess, presentation, render_inputs, render_observer, resolution, sampling) take platform: *const Platform and call platform::inspect on every call, re-reading the size/version header (30 inspect/get sites across 14 files). Every C++ caller passes the same creation_platform() static (sampling.cpp:72, resolution.cpp:94, render_inputs.cpp:134/138, presentation_inputs.cpp:97, plugin.cpp:218, auxiliary.cpp:139), and session::publish already inspects leaves.platform before any lifecycle call, yet register only runs late in Session::prepare, so earlier exports cannot use get() and cpu_policy.rs:236 has to explain "the upstream CPU prepare runs before session registration of this same platform". Simpler: register the table once in session::publish, drop the platform parameter from the exports, and read platform::get() (or take &Platform internally). Tradeoff: the C++ export signatures change, and a fixture that wants a private table must publish it first instead of passing it per call. [games/skyrim-se/src/platform.rs:161](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/platform.rs#L161)
 
-- [ ] **Duplication | Low | Use one identity predicate for reusing a process-lived D3D11 host.** games/skyrim-se/src/session.rs:296 and games/fallout4/src/session.rs:100 compare exactly four fields of the same rsf_game_host_services type: session ID, user pointer, log callback and CPU-event callback. Skyrim uses its copy to admit a cached host at :553 and Fallout uses its copy at :260. Adding a callback that participates in rebinding identity currently requires finding and updating both predicates. Give the shared D3D11 host support code a named upstream-identity comparison, preserve the existing four-field contract, and test each field independently. [games/skyrim-se/src/session.rs:296](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L296)
+- [x] **Duplication | Low | Use one identity predicate for reusing a process-lived D3D11 host.** games/skyrim-se/src/session.rs:296 and games/fallout4/src/session.rs:100 compare exactly four fields of the same rsf_game_host_services type: session ID, user pointer, log callback and CPU-event callback. Skyrim uses its copy to admit a cached host at :553 and Fallout uses its copy at :260. Adding a callback that participates in rebinding identity currently requires finding and updating both predicates. Give the shared D3D11 host support code a named upstream-identity comparison, preserve the existing four-field contract, and test each field independently. [games/skyrim-se/src/session.rs:296](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/skyrim-se/src/session.rs#L296)
 
 <a id="s02"></a>
 
@@ -2743,7 +2747,7 @@ Port the Steam chain and Windows input facts, coordinating shared Steam interfac
 
 **Port files (4)**
 
-- [ ] [integrations/steam/include/rescaleframe/steam_d3d11_chain.h](integrations/steam/include/rescaleframe/steam_d3d11_chain.h)
+- [x] [integrations/steam/include/rescaleframe/steam_d3d11_chain.h](integrations/steam/include/rescaleframe/steam_d3d11_chain.h)
 - [x] [integrations/steam/src/d3d11_chain.cpp](integrations/steam/src/d3d11_chain.cpp)
 - [x] [integrations/steam/src/d3d11_chain_platform.h](integrations/steam/src/d3d11_chain_platform.h)
 - [x] [integrations/windows/xinput_facts.h](integrations/windows/xinput_facts.h)

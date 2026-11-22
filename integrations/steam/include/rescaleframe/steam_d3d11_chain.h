@@ -14,17 +14,4 @@ bool rsf_steam_d3d11_chain_prepare_with_user(const rsf_game_host_services* host,
     bool (*cold_owner)(const void*), const void* cold_user);
 #ifdef __cplusplus
 }
-
-namespace rsf::steam {
-// Preserve the existing C++ caller and contain exceptions from its cold-owner callback.
-inline bool prepare_d3d11_chain(const rsf_game_host_services& host, bool (*cold_owner)()) noexcept
-{
-    using ColdOwner = bool (*)();
-    const auto cold = [](const void* user) noexcept {
-        try { return (*static_cast<const ColdOwner*>(user))(); }
-        catch (...) { return false; }
-    };
-    return rsf_steam_d3d11_chain_prepare_with_user(&host, cold_owner ? +cold : nullptr, &cold_owner);
-}
-}
 #endif
