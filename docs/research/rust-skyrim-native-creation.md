@@ -411,3 +411,32 @@ unchanged S02 retirement files. Bindgen 0.72.1 reproduced the private CPU record
 passed. MSVC `/Zs /W4 /WX` parsed all five Skyrim C++ source files and their layout assertions
 without producing objects. No Rust compilation, links, fixtures, device checks or game runs
 were performed.
+
+## S01 and S02 source replay from e5d73636
+
+Replay the CPU sequencing and observer trampoline port (`45145e79`) first. The follow-up moves
+production session, observer and creation table construction to Rust. The GameSDK DLL export
+now forwards from a C11 shim. Render observer activity and the render-config and upscale result
+handling are Rust-owned. The renderer-end, upload and pre-HDR calls retain their native order.
+Runtime host creation and activation still distinguish a thrown callback from its returned status.
+The native menu call now returns only three booleans. The screen classifier and live before/after
+owner checks are Rust-owned, and the former screen-classification header is retired.
+
+The remaining native source files have these responsibilities:
+
+| File | Native responsibility |
+| --- | --- |
+| `plugin.c` | C11 GameSDK DLL export forwarding to Rust. |
+| `native_creation.cpp` | Typed D3D11 continuation captures the caller and preserves the original HRESULT, output pointers, native last error and scope end across unwind. Guarded calls contain Runtime begin/end exceptions. |
+| `compatibility.cpp` | Native GetProcAddress continuation and last error, initializer exception result, configuration exclusion cleanup, and typed HDR original call with its caller address and scoped restore. |
+| `cpu_events.cpp` | Typed engine continuations, four detour-local caller addresses, Rust receipt destruction on unwind, and guarded native menu and CPU-event calls. |
+| `render_detours.cpp` | Five typed observer continuations, the actual pre-HDR caller address and TAA restore receipt, and guarded host/render callbacks. Rust supplies the trampolines and owns activity and retirement decisions. |
+| `guarded_read.cpp` | Guarded native copy with MSVC SEH and the existing MinGW region check. The Skyrim input fixture still uses this same source. |
+
+The source audit compared the 13 CPU entries and exact admission predicates, the Community
+Shaders loader/phase predicates, the screen classifications and the S02 quiesce, rollback and
+stop bodies with `e5d73636`. The creation owner and its direct I01 Steam call match that base.
+The Windows x64 CPU call stays 344 bytes, aligned to 8 with receipt storage at byte 24. Its
+new menu record is three bytes. Bindgen 0.72.1 recreated the checked-in bindings, and Rust
+1.94.1 formatting and locked offline Cargo metadata passed. MSVC `/Zs /W4 /WX` parsed the C11
+entry and all five C++ leaves. No builds, links, fixtures, lint, devices or game runs were used.

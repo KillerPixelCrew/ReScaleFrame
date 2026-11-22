@@ -4,6 +4,8 @@
 mod initializer;
 pub(crate) use initializer::matches_postprocess;
 pub(crate) use initializer::rsf_skyrim_cs_render_allowed as render_allowed;
+#[cfg(not(test))]
+pub(crate) use initializer::{checkpoint, status};
 #[path = "../../../runtime/common/src/pe32_plus.rs"]
 mod pe32_plus;
 

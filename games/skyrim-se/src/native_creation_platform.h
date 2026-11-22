@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Internal boundary between the native leaves in native_creation.cpp and the Rust native-creation
-// owner (src/creation.rs, crate rsf-skyrim-se). Not a DLL ABI: both sides link into
-// ReScaleFrame.Game.SkyrimSE.dll. src/platform.rs mirrors these layouts by hand (bindgen-cli 0.72.1
-// was not available) and both sides assert sizes and offsets. No Skyrim address, expected byte,
-// route profile or admission decision lives in the leaves.
+// owner (src/creation.rs). Both sides link into ReScaleFrame.Game.SkyrimSE.dll.
+// src/platform.rs mirrors the call record and both sides assert sizes and offsets.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -36,25 +34,6 @@ typedef struct rsf_skyrim_creation_call {
     rsf_d3d11_creation_scope scope;
     rsf_d3d11_native_chain outputs;
 } rsf_skyrim_creation_call;
-
-typedef struct rsf_skyrim_creation_platform {
-    uint32_t struct_size, version;
-    uint32_t d3d11_host_abi; // RSF_D3D11_HOST_ABI_VERSION these leaves were built against
-    uint32_t reserved;
-    // Fault-guarded copy from the process.
-    bool (*read)(uintptr_t address, void* out, size_t size);
-    // D3D11CreateDeviceAndSwapChain-shaped detour that captures the native return address.
-    const void* create_detour;
-    // Logs through borrowed host services. A thrown exception is swallowed.
-    void (*log)(const rsf_game_host_services* host, const char* message);
-    // Call the Runtime's rsf_d3d11_host_creation_begin/end at service. A thrown exception
-    // reports RSF_ERROR_NOT_READY.
-    int32_t (*creation_begin)(uintptr_t service, void* user, rsf_d3d11_creation_scope* scope);
-    int32_t (*creation_end)(uintptr_t service, void* user, const rsf_d3d11_creation_scope* scope,
-        const rsf_d3d11_native_chain* outputs);
-    // The Community Shaders compatibility gate (compatibility/initializer.rs).
-    bool (*render_allowed)(void);
-} rsf_skyrim_creation_platform;
 
 // Detour entry points (src/lib.rs). The Rust session (src/session.rs) registers the platform and
 // prepares, starts, quiesces and stops the creation owner. Opens the call's lease and returns the original routine. leave is mandatory after enter, on

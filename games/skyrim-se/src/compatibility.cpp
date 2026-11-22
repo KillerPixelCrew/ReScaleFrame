@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include "compatibility.h"
 #include "postprocess_platform.h"
 #include <windows.h>
 #include <cstddef>

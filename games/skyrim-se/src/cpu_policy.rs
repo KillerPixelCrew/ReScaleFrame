@@ -4,6 +4,7 @@
 
 mod fixture;
 
+use crate::cpu_call_abi::rsf_skyrim_menu_observation;
 use crate::cpu_native::{JOB_MANAGER, MAIN, PLAYER, REQUESTED_MODE, RUNNING_MODE};
 use crate::cpu_sources::{self, Consumer, Stamp};
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
@@ -53,9 +54,8 @@ const MENU_QUERIES: [(usize, [u8; 19]); 2] = [
 static NEXT_SOURCE: AtomicU64 = AtomicU64::new(1);
 static NEXT_RENDER_SCOPE: AtomicU64 = AtomicU64::new(1);
 
-#[repr(C)]
 #[derive(Default)]
-pub(crate) struct ScreenFacts {
+struct ScreenFacts {
     readable: bool,
     owned_main: bool,
     primary_world: bool,
@@ -95,8 +95,6 @@ pub(crate) struct FrameInput {
 }
 
 const _: () = {
-    assert!(size_of::<ScreenFacts>() == 24);
-    assert!(std::mem::offset_of!(ScreenFacts, pause_count) == 8);
     assert!(size_of::<RenderState>() == 24);
     assert!(std::mem::offset_of!(RenderState, render_entered) == 20);
     assert!(size_of::<FrameInput>() == 40);
@@ -277,8 +275,14 @@ impl NativeScreen {
     }
 }
 
-type MenuQueries =
-    unsafe extern "C" fn(usize, usize, usize, usize, usize, &mut ScreenFacts) -> bool;
+type MenuQueries = unsafe extern "C" fn(
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    &mut rsf_skyrim_menu_observation,
+) -> bool;
 
 pub(crate) fn bad_screen_query(platform: &Platform, base: usize) -> u32 {
     MENU_QUERIES
@@ -299,7 +303,11 @@ pub(crate) fn rsf_skyrim_cpu_screen(
     let Some(before) = NativeScreen::read(platform, base).filter(|state| state.main == main) else {
         return SCREEN_UNKNOWN;
     };
-    let mut facts = ScreenFacts::default();
+    let mut menu = rsf_skyrim_menu_observation {
+        loading_menu: false,
+        main_menu: false,
+        frozen_background: false,
+    };
     // Native menu calls take the engine's own map synchronization and borrow its names.
     if !unsafe {
         menus(
@@ -308,21 +316,25 @@ pub(crate) fn rsf_skyrim_cpu_screen(
             before.ui,
             before.names + LOADING_NAME_OFFSET,
             before.names + MAIN_NAME_OFFSET,
-            &mut facts,
+            &mut menu,
         )
     } || NativeScreen::read(platform, base).as_ref() != Some(&before)
     {
         return SCREEN_UNKNOWN;
     }
-    facts.readable = true;
-    facts.owned_main = true;
-    facts.primary_world = primary;
-    facts.pause_count = before.pause;
-    facts.requested_mode = before.requested;
-    facts.running_mode = before.running;
-    facts.freeze_time = before.freeze != 0;
-    facts.parent_cell = before.cell != 0;
-    rsf_skyrim_classify_screen(&facts)
+    rsf_skyrim_classify_screen(&ScreenFacts {
+        readable: true,
+        owned_main: true,
+        primary_world: primary,
+        loading_menu: menu.loading_menu,
+        main_menu: menu.main_menu,
+        frozen_background: menu.frozen_background,
+        pause_count: before.pause,
+        requested_mode: before.requested,
+        running_mode: before.running,
+        freeze_time: before.freeze != 0,
+        parent_cell: before.cell != 0,
+    })
 }
 
 #[repr(C)]

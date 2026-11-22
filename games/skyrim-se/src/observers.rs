@@ -4,7 +4,7 @@
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 
 use crate::hook_set::HookSet;
 
@@ -21,7 +21,7 @@ pub(crate) struct Control {
     pinned: bool,
 }
 
-/// `rsf_skyrim_observer_leaves`, lent by `plugin.cpp` for the process.
+/// Hook operations used by the process owner and the injectable fixtures.
 #[repr(C)]
 pub(crate) struct Leaves {
     pub(crate) initialize: unsafe extern "C" fn() -> bool,
@@ -34,6 +34,27 @@ pub(crate) struct Leaves {
 }
 
 const _: () = assert!(size_of::<Leaves>() == 56);
+
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn rsf_skyrim_call_log(host: *const rsf_game_host_services, message: *const c_char) -> bool;
+}
+
+#[cfg(not(test))]
+unsafe extern "C" fn log(host: *const rsf_game_host_services, message: *const c_char) {
+    unsafe { rsf_skyrim_call_log(host, message) };
+}
+
+#[cfg(not(test))]
+pub(crate) static NATIVE_LEAVES: Leaves = Leaves {
+    initialize: rsf_skyrim_observer_initialize,
+    create: rsf_skyrim_observer_create,
+    remove: rsf_skyrim_observer_remove,
+    enable: rsf_skyrim_observer_enable,
+    disable: rsf_skyrim_observer_disable,
+    pin: rsf_skyrim_observer_pin,
+    log,
+};
 
 impl Control {
     pub(crate) const fn new() -> Self {
@@ -105,6 +126,23 @@ impl Control {
         }
         true
     }
+}
+
+static CALLS: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_observer_enter() {
+    CALLS.fetch_add(1, Ordering::AcqRel);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_observer_leave() {
+    CALLS.fetch_sub(1, Ordering::AcqRel);
+}
+
+#[cfg(not(test))]
+pub(crate) extern "C" fn busy() -> bool {
+    CALLS.load(Ordering::Acquire) != 0
 }
 
 // Admission and MinHook control run under the session lock. Trampolines are published

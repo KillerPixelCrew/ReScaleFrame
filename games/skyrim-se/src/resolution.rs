@@ -128,7 +128,7 @@ fn reconfigure(
         unsafe { rsf_skyrim_call_upscale(host, ptr::with_exposed_provenance_mut(context), &pass) };
     }
     let mut config = rsf_game_render_config::request();
-    unsafe { rsf_skyrim_call_render_config(host, &mut config) };
+    rsf_skyrim_call_render_config(host, &mut config);
     config.checked_render_extent(output)
 }
 

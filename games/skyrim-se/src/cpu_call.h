@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -27,4 +28,11 @@ struct rsf_skyrim_cpu_call {
     uintptr_t argument;
     uintptr_t caller;
     uint64_t storage[RSF_SKYRIM_CPU_STORAGE_WORDS];
+};
+
+// Only the three facts produced by the guarded native calls cross this boundary.
+struct rsf_skyrim_menu_observation {
+    bool loading_menu;
+    bool main_menu;
+    bool frozen_background;
 };

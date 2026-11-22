@@ -76,6 +76,70 @@ pub(crate) struct Platform {
     render_allowed: unsafe extern "C" fn() -> bool,
 }
 
+#[cfg(not(test))]
+mod native {
+    use super::*;
+    use winapi::shared::dxgi::{DXGI_SWAP_CHAIN_DESC, IDXGIAdapter, IDXGISwapChain};
+    use winapi::shared::minwindef::{HMODULE, UINT};
+    use winapi::shared::ntdef::HRESULT;
+    use winapi::um::d3d11::{ID3D11Device, ID3D11DeviceContext};
+    use winapi::um::d3dcommon::{D3D_DRIVER_TYPE, D3D_FEATURE_LEVEL};
+
+    unsafe extern "system" {
+        fn rsf_skyrim_create_detour(
+            adapter: *mut IDXGIAdapter,
+            driver: D3D_DRIVER_TYPE,
+            software: HMODULE,
+            flags: UINT,
+            levels: *const D3D_FEATURE_LEVEL,
+            level_count: UINT,
+            sdk: UINT,
+            description: *const DXGI_SWAP_CHAIN_DESC,
+            chain: *mut *mut IDXGISwapChain,
+            device: *mut *mut ID3D11Device,
+            selected: *mut D3D_FEATURE_LEVEL,
+            context: *mut *mut ID3D11DeviceContext,
+        ) -> HRESULT;
+    }
+
+    unsafe extern "C" {
+        fn rsf_skyrim_guarded_read(address: usize, out: *mut c_void, size: usize) -> bool;
+        fn rsf_skyrim_call_log(host: *const rsf_game_host_services, message: *const c_char)
+        -> bool;
+        fn rsf_skyrim_creation_begin_guarded(
+            service: usize,
+            user: *mut c_void,
+            scope: *mut CreationScope,
+        ) -> i32;
+        fn rsf_skyrim_creation_end_guarded(
+            service: usize,
+            user: *mut c_void,
+            scope: *const CreationScope,
+            outputs: *const NativeChain,
+        ) -> i32;
+    }
+
+    unsafe extern "C" fn log(host: *const rsf_game_host_services, message: *const c_char) {
+        unsafe { rsf_skyrim_call_log(host, message) };
+    }
+
+    pub(crate) static NATIVE_PLATFORM: Platform = Platform {
+        _struct_size: size_of::<Platform>() as u32,
+        _version: PLATFORM_VERSION,
+        d3d11_host_abi: rsf_game_sys::d3d11_chain_abi::RSF_D3D11_HOST_ABI_VERSION,
+        _reserved: 0,
+        read: rsf_skyrim_guarded_read,
+        create_detour: rsf_skyrim_create_detour as *const c_void,
+        log,
+        creation_begin: rsf_skyrim_creation_begin_guarded,
+        creation_end: rsf_skyrim_creation_end_guarded,
+        render_allowed: crate::compatibility::render_allowed,
+    };
+}
+
+#[cfg(not(test))]
+pub(crate) use native::NATIVE_PLATFORM;
+
 const _: () = {
     assert!(size_of::<MemoryRegion>() == 32);
     assert!(size_of::<CreationScope>() == 24);
@@ -89,7 +153,7 @@ const _: () = {
     assert!(std::mem::offset_of!(Platform, create_detour) == 16 + size_of::<usize>());
 };
 
-// The native table is a constant with static storage in the adapter DLL.
+// The platform record is immutable and lives for the process.
 unsafe impl Sync for Platform {}
 
 static PLATFORM: AtomicPtr<Platform> = AtomicPtr::new(ptr::null_mut());

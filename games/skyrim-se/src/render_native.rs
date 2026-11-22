@@ -18,15 +18,33 @@ unsafe extern "C" {
         pass: &rsf_game_render_pass,
         begin: u32,
     ) -> bool;
-    pub(crate) fn rsf_skyrim_call_upscale(
+    fn rsf_skyrim_upscale_guarded(
         host: &rsf_game_host_services,
         context: *mut c_void,
         pass: &rsf_game_render_pass,
-    ) -> bool;
-    pub(crate) fn rsf_skyrim_call_render_config(
+    ) -> i32;
+    fn rsf_skyrim_render_config_guarded(
         host: &rsf_game_host_services,
         config: &mut rsf_game_render_config,
-    );
+    ) -> bool;
+}
+
+pub(crate) unsafe fn rsf_skyrim_call_upscale(
+    host: &rsf_game_host_services,
+    context: *mut c_void,
+    pass: &rsf_game_render_pass,
+) -> bool {
+    host.process_upscale.is_some()
+        && unsafe { rsf_skyrim_upscale_guarded(host, context, pass) } == 0
+}
+
+pub(crate) fn rsf_skyrim_call_render_config(
+    host: &rsf_game_host_services,
+    config: &mut rsf_game_render_config,
+) {
+    if host.render_config.is_none() || !unsafe { rsf_skyrim_render_config_guarded(host, config) } {
+        *config = rsf_game_render_config::request();
+    }
 }
 
 pub(crate) struct ComRef<T: Interface>(NonNull<T>);

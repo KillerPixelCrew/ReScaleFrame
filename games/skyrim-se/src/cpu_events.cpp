@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "cpu_events.h"
 #include "cpu_call.h"
-#include "screen_classification.h"
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -21,6 +20,7 @@ extern "C" void rsf_skyrim_cpu_after(rsf_skyrim_cpu_hook, rsf_skyrim_cpu_call*, 
 static_assert(sizeof(rsf_skyrim_cpu_call) == 344 && alignof(rsf_skyrim_cpu_call) == 8);
 static_assert(offsetof(rsf_skyrim_cpu_call, storage) == 24);
 static_assert(RSF_SKYRIM_CPU_HOOK_COUNT == 13);
+static_assert(sizeof(rsf_skyrim_menu_observation) == 3);
 
 namespace {
 struct CpuDetours {
@@ -176,7 +176,7 @@ extern "C" bool rsf_skyrim_cpu_prepare() noexcept
 }
 
 extern "C" bool rsf_skyrim_query_menus(uintptr_t open_address, uintptr_t frozen_address, uintptr_t ui,
-    uintptr_t loading, uintptr_t main, rsf::skyrim::NativeScreenFacts* facts) noexcept try
+    uintptr_t loading, uintptr_t main, rsf_skyrim_menu_observation* facts) noexcept try
 {
     const auto open = reinterpret_cast<bool (*)(void*, const void*)>(open_address);
     const auto frozen = reinterpret_cast<bool (*)(void*)>(frozen_address);

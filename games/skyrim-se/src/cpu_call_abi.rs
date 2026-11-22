@@ -37,3 +37,23 @@ const _: () = {
     ["Offset of field: rsf_skyrim_cpu_call::storage"]
         [::std::mem::offset_of!(rsf_skyrim_cpu_call, storage) - 24usize];
 };
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rsf_skyrim_menu_observation {
+    pub loading_menu: bool,
+    pub main_menu: bool,
+    pub frozen_background: bool,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_skyrim_menu_observation"]
+        [::std::mem::size_of::<rsf_skyrim_menu_observation>() - 3usize];
+    ["Alignment of rsf_skyrim_menu_observation"]
+        [::std::mem::align_of::<rsf_skyrim_menu_observation>() - 1usize];
+    ["Offset of field: rsf_skyrim_menu_observation::loading_menu"]
+        [::std::mem::offset_of!(rsf_skyrim_menu_observation, loading_menu) - 0usize];
+    ["Offset of field: rsf_skyrim_menu_observation::main_menu"]
+        [::std::mem::offset_of!(rsf_skyrim_menu_observation, main_menu) - 1usize];
+    ["Offset of field: rsf_skyrim_menu_observation::frozen_background"]
+        [::std::mem::offset_of!(rsf_skyrim_menu_observation, frozen_background) - 2usize];
+};

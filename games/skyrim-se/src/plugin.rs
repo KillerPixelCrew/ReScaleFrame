@@ -8,6 +8,8 @@ use rsf_game_sys::{
     rsf_game_probe, rsf_result,
 };
 use std::ffi::{CStr, c_char};
+#[cfg(not(test))]
+use std::ptr;
 
 pub(crate) const INVALID_ARGUMENT: rsf_result = -1;
 pub(crate) const ABI_MISMATCH: rsf_result = -2;
@@ -32,7 +34,7 @@ fn executable(path: &[u16]) -> bool {
 
 /// The public lifecycle serializes observer admission and installation.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observer_admit() -> i32 {
+pub(crate) extern "C" fn rsf_skyrim_observer_admit() -> i32 {
     let mut path = [0u16; 32_768];
     let length = platform::module_path(0, &mut path);
     if length == 0 || length >= path.len() || !executable(&path[..length]) {
@@ -102,10 +104,19 @@ unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
 /// Publishes the GameSDK table backed by the Rust session. A short output may contain only size.
 ///
 /// # Safety
-/// `out` is null or a caller-owned table readable for its size prefix. `leaves` is null or a
-/// table that, when accepted, lives for the process.
+/// `out` is null or points to the caller's writable sized API table.
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_publish_api(
+    requested: u32,
+    out: *mut rsf_game_plugin_api,
+) -> rsf_result {
+    unsafe { publish_api(requested, out, ptr::from_ref(&session::NATIVE_LEAVES)) }
+}
+
+/// The optional leaf record, if accepted, lives for the process.
+#[cfg_attr(test, unsafe(export_name = "rsf_skyrim_publish_api_fixture"))]
+unsafe extern "C" fn publish_api(
     requested: u32,
     out: *mut rsf_game_plugin_api,
     leaves: *const Leaves,

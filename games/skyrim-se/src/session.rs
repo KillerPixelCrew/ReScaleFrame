@@ -32,7 +32,7 @@ const BUSY: rsf_result = -4;
 const NATIVE_REFUSED: rsf_result = -5;
 
 const LEAVES_VERSION: u32 = 4;
-// Native subsystem operations, RSF_SKYRIM_* in session_platform.h.
+// Subsystem operation tags also drive the injectable lifecycle fixture.
 const ADMIT_OBSERVERS: u32 = 0;
 const OBSERVERS_BUSY: u32 = 1;
 const RESET_OBSERVATIONS: u32 = 2;
@@ -89,7 +89,7 @@ const STOPPED: &CStr = c"Native observer stopped; no host services retained.";
 type AcceptWindow = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
 type SetDpi = unsafe extern "system" fn(*mut c_void) -> i32;
 
-/// `rsf_skyrim_session_leaves`, lent by `plugin.cpp` for the process.
+/// The process-lived native services and injectable fixture callbacks.
 #[repr(C)]
 pub(crate) struct Leaves {
     _struct_size: u32,
@@ -117,6 +117,46 @@ pub(crate) struct Leaves {
 
 const _: () = {
     assert!(size_of::<Leaves>() == 8 + (12 + cfg!(test) as usize) * size_of::<usize>());
+};
+
+// The production record borrows only immutable process-lived tables.
+#[cfg(not(test))]
+unsafe impl Sync for Leaves {}
+
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn rsf_skyrim_cpu_prepare() -> bool;
+    fn rsf_skyrim_call_log(host: *const rsf_game_host_services, message: *const c_char) -> bool;
+    fn rsf_skyrim_host_create_guarded(
+        create: usize,
+        setup: *const HostSetup,
+        services: *mut rsf_game_host_services,
+        result: *mut i32,
+    ) -> bool;
+    fn rsf_skyrim_host_active_guarded(
+        activate: usize,
+        user: *mut c_void,
+        active: u32,
+        result: *mut i32,
+    ) -> bool;
+}
+
+#[cfg(not(test))]
+pub(crate) static NATIVE_LEAVES: Leaves = Leaves {
+    _struct_size: size_of::<Leaves>() as u32,
+    _version: LEAVES_VERSION,
+    platform: &platform::NATIVE_PLATFORM,
+    observers: &observers::NATIVE_LEAVES,
+    admit_observers: crate::plugin::rsf_skyrim_observer_admit,
+    observers_busy: observers::busy,
+    cpu_prepare: rsf_skyrim_cpu_prepare,
+    cpu_start: crate::cpu_events::rsf_skyrim_cpu_start,
+    checkpoint: crate::compatibility::checkpoint,
+    compatibility_status: crate::compatibility::status,
+    log: rsf_skyrim_call_log,
+    host_create: rsf_skyrim_host_create_guarded,
+    host_set_active: rsf_skyrim_host_active_guarded,
+    accept_window: crate::render_observer::rsf_skyrim_render_accept_window,
 };
 
 /// A native leaf threw. A lifecycle entry reports RSF_ERROR_NOT_READY as the former C++ catch did.
@@ -868,7 +908,7 @@ pub(crate) unsafe extern "C" fn rsf_skyrim_session_lease(
 
 /// The compatibility withdraw callback, from any thread.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_session_withdraw() {
+pub(crate) extern "C" fn rsf_skyrim_session_withdraw() {
     let was_active = ACCEPTING.swap(false, Ordering::AcqRel);
     let Some(leaves) = leaves() else {
         return;

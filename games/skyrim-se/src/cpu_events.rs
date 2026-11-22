@@ -27,7 +27,7 @@ unsafe extern "C" {
         ui: usize,
         loading: usize,
         main: usize,
-        facts: &mut ScreenFacts,
+        facts: &mut rsf_skyrim_menu_observation,
     ) -> bool;
     fn rsf_skyrim_call_cpu_event(host: &rsf_game_host_services, event: &rsf_game_cpu_event);
     fn rsf_skyrim_call_log(host: &rsf_game_host_services, message: *const c_char) -> bool;
@@ -918,7 +918,7 @@ unsafe extern "C" fn rsf_skyrim_cpu_after(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_start() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_cpu_start() -> bool {
     match cpu_hooks::start() {
         Ok(()) => true,
         Err(refusal) => {

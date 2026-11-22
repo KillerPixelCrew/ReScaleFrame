@@ -173,7 +173,10 @@ extern "C" fn rsf_skyrim_render_jitter_observed(state: usize) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_render_accept_window(_user: *mut c_void, window: *mut c_void) -> i32 {
+pub(crate) extern "C" fn rsf_skyrim_render_accept_window(
+    _user: *mut c_void,
+    window: *mut c_void,
+) -> i32 {
     if window.is_null() {
         return 0;
     }

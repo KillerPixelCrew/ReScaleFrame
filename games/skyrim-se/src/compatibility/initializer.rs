@@ -329,11 +329,14 @@ fn arm(platform: &Platform) -> Result<(), &'static CStr> {
     Ok(())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_cs_checkpoint(
-    refusal: &mut *const c_char,
-    withdraw: Option<Withdraw>,
-) -> bool {
+#[cfg(not(test))]
+pub(crate) unsafe extern "C" fn checkpoint(refusal: *mut *const c_char, arm: bool) -> bool {
+    let withdraw: Option<Withdraw> =
+        arm.then_some(crate::session::rsf_skyrim_session_withdraw as Withdraw);
+    checkpoint_with(unsafe { &mut *refusal }, withdraw)
+}
+
+fn checkpoint_with(refusal: &mut *const c_char, withdraw: Option<Withdraw>) -> bool {
     let Some(platform) = platform::get() else {
         return false;
     };
@@ -573,8 +576,7 @@ pub(crate) extern "C" fn rsf_skyrim_cs_render_allowed() -> bool {
     render_allowed(current_module())
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cs_status() -> *const c_char {
+pub(crate) extern "C" fn status() -> *const c_char {
     let module = current_module();
     let (phase, reason) = {
         let state = state();
