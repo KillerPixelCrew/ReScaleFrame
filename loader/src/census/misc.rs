@@ -2,16 +2,16 @@
 #![allow(non_upper_case_globals)]
 use super::hooks::{bind_named, rsf_census_hook_bind_thunk, rsf_census_hook_original};
 use super::json::{Json, emit_decimal, rsf_census_json_bytes, rsf_census_json_wide};
+use super::memory::{plausible, read, u16_at, u32_at, u64_at};
 use super::platform;
 use super::rsf_census_call_state;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::io::Write;
-use std::mem::{MaybeUninit, transmute};
+use std::mem::MaybeUninit;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
-use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 
 type Ptr = *mut c_void;
 type Args = [u64; 8];
@@ -27,24 +27,6 @@ fn id(entry: Entry) -> u16 {
     SERVICES.get().unwrap().entries[entry as usize]
 }
 
-macro_rules! caller {
-    () => {{
-        let mut caller = null_mut();
-        unsafe { RtlCaptureStackBackTrace(1, 1, &mut caller, null_mut()) };
-        caller
-    }};
-}
-macro_rules! original {
-    ($entry:expr, $signature:ty) => {{
-        let function = rsf_census_hook_original(id($entry));
-        if function.is_null() {
-            None
-        } else {
-            Some(unsafe { transmute::<Ptr, $signature>(function) })
-        }
-    }};
-}
-
 fn start(
     slot: &mut MaybeUninit<rsf_census_call_state>,
     entry: Entry,
@@ -55,26 +37,6 @@ fn start(
     state
 }
 
-fn plausible(address: u64) -> bool {
-    (0x1_0000..0x0000_7fff_ffff_0000).contains(&address)
-}
-fn read<const N: usize>(address: u64, offset: usize) -> Option<[u8; N]> {
-    if !plausible(address) {
-        return None;
-    }
-    let address = address.checked_add(offset as u64)?;
-    let mut bytes = [0; N];
-    unsafe { platform().read.unwrap()(address as _, bytes.as_mut_ptr().cast(), N) }.then_some(bytes)
-}
-fn u16_at(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
-}
-fn u32_at(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
-}
-fn u64_at(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
-}
 fn read_name(address: u64, text: &mut [u8]) -> bool {
     unsafe { platform().read_string.unwrap()(address as _, text.as_mut_ptr().cast(), text.len()) }
 }

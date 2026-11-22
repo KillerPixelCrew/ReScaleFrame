@@ -6,16 +6,15 @@ use super::hooks::rsf_census_hook_original;
 use super::json::{
     Json, emit_decimal, rsf_census_json_bytes, rsf_census_json_string, rsf_census_json_wide,
 };
+use super::memory::{plausible, read, u32_at, u64_at};
 use super::platform;
 use super::rsf_census_call_state;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
 use crate::sys::*;
 use std::ffi::{CStr, c_void};
-use std::mem::{MaybeUninit, transmute};
-use std::ptr::null_mut;
+use std::mem::MaybeUninit;
 use std::sync::OnceLock;
 use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_DESC1};
-use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 
 type Ptr = *mut c_void;
 type Args = [u64; 8];
@@ -42,23 +41,6 @@ fn id(entry: Entry) -> u16 {
     SERVICES.get().unwrap().entries[entry as usize]
 }
 
-macro_rules! caller {
-    () => {{
-        let mut caller = null_mut();
-        unsafe { RtlCaptureStackBackTrace(1, 1, &mut caller, null_mut()) };
-        caller
-    }};
-}
-macro_rules! original {
-    ($entry:expr, $signature:ty) => {{
-        let target = rsf_census_hook_original(id($entry));
-        if target.is_null() {
-            None
-        } else {
-            Some(unsafe { transmute::<Ptr, $signature>(target) })
-        }
-    }};
-}
 fn start(
     slot: &mut MaybeUninit<rsf_census_call_state>,
     entry: Entry,
@@ -69,27 +51,11 @@ fn start(
     call
 }
 
-fn plausible(address: u64) -> bool {
-    (0x1_0000..0x0000_7fff_ffff_0000).contains(&address)
-}
-fn read<const N: usize>(address: u64) -> Option<[u8; N]> {
-    if !plausible(address) {
-        return None;
-    }
-    let mut bytes = [0; N];
-    unsafe { platform().read.unwrap()(address as _, bytes.as_mut_ptr().cast(), N) }.then_some(bytes)
-}
-fn dword(data: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
-}
-fn word(data: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
-}
 fn float(data: &[u8], offset: usize) -> f32 {
-    f32::from_bits(dword(data, offset))
+    f32::from_bits(u32_at(data, offset))
 }
 fn pointed_word(address: u64) -> Option<u64> {
-    read::<8>(address).map(u64::from_le_bytes)
+    read::<8>(address, 0).map(u64::from_le_bytes)
 }
 
 trait FsrJson {
@@ -119,7 +85,7 @@ impl FsrJson for Json<'_> {
     }
     fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]) {
         for &(key, offset) in fields {
-            self.number(key, dword(data, offset));
+            self.number(key, u32_at(data, offset));
         }
     }
     fn decimals(&mut self, data: &[u8], fields: &[(&CStr, usize)]) {
@@ -195,18 +161,18 @@ fn fsr2_check(data: &[u8; FSR2_DISPATCH]) -> Option<&'static CStr> {
         .chunks_exact(FSR2_RESOURCE)
         .filter(|resource| {
             ascii_name_ok(resource)
-                && dword(resource, 136) <= 3
-                && dword(resource, 140) < 64
-                && dword(resource, 144) <= 16_384
-                && dword(resource, 148) <= 16_384
-                && dword(resource, 164) >> 16 == 0
+                && u32_at(resource, 136) <= 3
+                && u32_at(resource, 140) < 64
+                && u32_at(resource, 144) <= 16_384
+                && u32_at(resource, 148) <= 16_384
+                && u32_at(resource, 164) >> 16 == 0
                 && resource[168] <= 1
         })
         .count();
     if plausible_resources < 5 {
         return Some(c"resource_names_or_descriptions_implausible");
     }
-    if word(data, 8) == 0 || word(data, 1112) == 0 {
+    if u64_at(data, 8) == 0 || u64_at(data, 1112) == 0 {
         return Some(c"color_or_output_null");
     }
     if !finite(data, 1296, 16.0) || !finite(data, 1300, 16.0) {
@@ -217,7 +183,7 @@ fn fsr2_check(data: &[u8; FSR2_DISPATCH]) -> Option<&'static CStr> {
     }
     if ![1312, 1316]
         .into_iter()
-        .all(|offset| (1..=16_384).contains(&dword(data, offset)))
+        .all(|offset| (1..=16_384).contains(&u32_at(data, offset)))
     {
         return Some(c"render_size_implausible");
     }
@@ -235,7 +201,7 @@ fn fsr2_check(data: &[u8; FSR2_DISPATCH]) -> Option<&'static CStr> {
 
 fn fsr2_resource(json: &mut Json<'_>, key: &CStr, resource: &[u8]) {
     json.open(Some(key), b'{');
-    let address = word(resource, 0);
+    let address = u64_at(resource, 0);
     json.ptr(c"ptr", address);
     let name = fsr2_name(resource);
     unsafe { rsf_census_json_wide(json.0, c"name".as_ptr(), name.as_ptr()) };
@@ -250,8 +216,8 @@ fn fsr2_resource(json: &mut Json<'_>, key: &CStr, resource: &[u8]) {
             (c"mips", 156),
         ],
     );
-    json.hex(Some(c"flags"), dword(resource, 160).into());
-    json.hex(Some(c"state"), dword(resource, 164).into());
+    json.hex(Some(c"flags"), u32_at(resource, 160).into());
+    json.hex(Some(c"state"), u32_at(resource, 164).into());
     json.flag(c"is_depth", resource[168] != 0);
     json.resource(c"d3d12", address, true);
     json.close(b'}');
@@ -263,7 +229,7 @@ fn fsr2_dispatch(json: &mut Json<'_>, args: &Args) {
         Some(c"layout"),
         c"fsr2-2.1.2 (dispatch description 1352 bytes)",
     );
-    let Some(data) = read::<FSR2_DISPATCH>(args[1]) else {
+    let Some(data) = read::<FSR2_DISPATCH>(args[1], 0) else {
         json.text(Some(c"layout_check"), c"unreadable");
         json.number(c"raw_bytes_len", 0u32);
         return;
@@ -275,7 +241,7 @@ fn fsr2_dispatch(json: &mut Json<'_>, args: &Args) {
         return;
     }
     json.text(Some(c"layout_check"), c"ok");
-    json.hex(Some(c"command_list"), word(&data, 0));
+    json.hex(Some(c"command_list"), u64_at(&data, 0));
     json.open(Some(c"resources"), b'{');
     for (key, resource) in RESOURCE_KEYS
         .into_iter()
@@ -318,8 +284,8 @@ fn fsr2_dispatch(json: &mut Json<'_>, args: &Args) {
 
 fn fsr2_create(json: &mut Json<'_>, args: &Args) {
     json.hex(Some(c"context"), args[0]);
-    if let Some(data) = read::<28>(args[1]) {
-        let flags = dword(&data, 0);
+    if let Some(data) = read::<28>(args[1], 0) {
+        let flags = u32_at(&data, 0);
         json.hex(Some(c"flags"), flags.into());
         json.open(Some(c"flag_names"), b'[');
         for (index, key) in [
@@ -389,7 +355,7 @@ fn api_type_name(kind: u64) -> Option<&'static CStr> {
 
 fn api_resource(json: &mut Json<'_>, key: &CStr, data: &[u8]) {
     json.open(Some(key), b'{');
-    let address = word(data, 0);
+    let address = u64_at(data, 0);
     json.ptr(c"ptr", address);
     json.fields(
         data,
@@ -402,9 +368,9 @@ fn api_resource(json: &mut Json<'_>, key: &CStr, data: &[u8]) {
             (c"mips", 28),
         ],
     );
-    json.hex(Some(c"flags"), dword(data, 32).into());
-    json.hex(Some(c"usage"), dword(data, 36).into());
-    json.hex(Some(c"state"), dword(data, 40).into());
+    json.hex(Some(c"flags"), u32_at(data, 32).into());
+    json.hex(Some(c"usage"), u32_at(data, 36).into());
+    json.hex(Some(c"state"), u32_at(data, 40).into());
     json.resource(c"d3d12", address, true);
     json.close(b'}');
 }
@@ -470,7 +436,7 @@ fn chain_desc(json: &mut Json<'_>, address: u64, legacy: bool) {
 }
 
 fn dispatch_upscale(json: &mut Json<'_>, data: &[u8; 432]) {
-    json.hex(Some(c"command_list"), word(data, 16));
+    json.hex(Some(c"command_list"), u64_at(data, 16));
     json.open(Some(c"resources"), b'{');
     for (key, resource) in RESOURCE_KEYS
         .into_iter()
@@ -517,19 +483,19 @@ fn dispatch_upscale(json: &mut Json<'_>, data: &[u8; 432]) {
             (c"view_space_to_meters", 424),
         ],
     );
-    json.hex(Some(c"flags"), dword(data, 428).into());
+    json.hex(Some(c"flags"), u32_at(data, 428).into());
     json.close(b'}');
 }
 
 fn framegen_dispatch(json: &mut Json<'_>, data: &[u8; 312]) {
-    json.hex(Some(c"command_list"), word(data, 16));
+    json.hex(Some(c"command_list"), u64_at(data, 16));
     api_resource(json, c"present_color", &data[24..72]);
     api_resource(json, c"output0", &data[72..120]);
-    json.number(c"num_generated_frames", dword(data, 264));
+    json.number(c"num_generated_frames", u32_at(data, 264));
     json.flag(c"reset", data[268] != 0);
-    json.number(c"backbuffer_transfer_function", dword(data, 272));
+    json.number(c"backbuffer_transfer_function", u32_at(data, 272));
     json.decimals(data, &[(c"min_luminance", 276), (c"max_luminance", 280)]);
-    json.number(c"frame_id", word(data, 304));
+    json.number(c"frame_id", u64_at(data, 304));
 }
 
 fn framegen_configure(json: &mut Json<'_>, data: &[u8; 144]) {
@@ -538,20 +504,20 @@ fn framegen_configure(json: &mut Json<'_>, data: &[u8; 144]) {
         (c"present_callback", 24),
         (c"frame_generation_callback", 40),
     ] {
-        json.ptr(key, word(data, offset));
+        json.ptr(key, u64_at(data, offset));
     }
     json.flag(c"frame_generation_enabled", data[56] != 0);
     json.flag(c"allow_async_workloads", data[57] != 0);
     api_resource(json, c"hudless_color", &data[64..112]);
-    json.hex(Some(c"flags"), dword(data, 112).into());
+    json.hex(Some(c"flags"), u32_at(data, 112).into());
     json.flag(c"only_present_generated", data[116] != 0);
-    json.number(c"frame_id", word(data, 136));
+    json.number(c"frame_id", u64_at(data, 136));
 }
 
 fn framegen_prepare(json: &mut Json<'_>, data: &[u8; 232]) {
-    json.number(c"frame_id", word(data, 16));
-    json.hex(Some(c"flags"), dword(data, 24).into());
-    json.hex(Some(c"command_list"), word(data, 32));
+    json.number(c"frame_id", u64_at(data, 16));
+    json.hex(Some(c"flags"), u32_at(data, 24).into());
+    json.hex(Some(c"command_list"), u64_at(data, 32));
     json.fields(data, &[(c"render_width", 40), (c"render_height", 44)]);
     json.decimals(
         data,
@@ -579,8 +545,8 @@ fn framegen_prepare(json: &mut Json<'_>, data: &[u8; 232]) {
 fn api_payload(json: &mut Json<'_>, kind: u64, address: u64) {
     match kind {
         0x0001_0000 => {
-            if let Some(data) = read::<40>(address) {
-                json.hex(Some(c"flags"), dword(&data, 16).into());
+            if let Some(data) = read::<40>(address, 0) {
+                json.hex(Some(c"flags"), u32_at(&data, 16).into());
                 json.fields(
                     &data,
                     &[
@@ -593,8 +559,8 @@ fn api_payload(json: &mut Json<'_>, kind: u64, address: u64) {
             }
         }
         0x0002_0001 => {
-            if let Some(data) = read::<40>(address) {
-                json.hex(Some(c"flags"), dword(&data, 16).into());
+            if let Some(data) = read::<40>(address, 0) {
+                json.hex(Some(c"flags"), u32_at(&data, 16).into());
                 json.fields(
                     &data,
                     &[
@@ -608,48 +574,48 @@ fn api_payload(json: &mut Json<'_>, kind: u64, address: u64) {
             }
         }
         0x0003_0001 => {
-            if let Some(data) = read::<32>(address) {
-                json.ptr(c"game_queue", word(&data, 24));
-                json.output(c"input_swapchain", word(&data, 16));
+            if let Some(data) = read::<32>(address, 0) {
+                json.ptr(c"game_queue", u64_at(&data, 24));
+                json.output(c"input_swapchain", u64_at(&data, 16));
             }
         }
         0x0003_0005 => {
-            if let Some(data) = read::<48>(address) {
-                json.ptr(c"game_queue", word(&data, 40));
-                json.ptr(c"factory", word(&data, 32));
-                chain_desc(json, word(&data, 24), true);
+            if let Some(data) = read::<48>(address, 0) {
+                json.ptr(c"game_queue", u64_at(&data, 40));
+                json.ptr(c"factory", u64_at(&data, 32));
+                chain_desc(json, u64_at(&data, 24), true);
             }
         }
         0x0003_0006 => {
-            if let Some(data) = read::<64>(address) {
-                json.ptr(c"hwnd", word(&data, 24));
-                json.ptr(c"game_queue", word(&data, 56));
-                json.ptr(c"factory", word(&data, 48));
-                chain_desc(json, word(&data, 32), false);
+            if let Some(data) = read::<64>(address, 0) {
+                json.ptr(c"hwnd", u64_at(&data, 24));
+                json.ptr(c"game_queue", u64_at(&data, 56));
+                json.ptr(c"factory", u64_at(&data, 48));
+                chain_desc(json, u64_at(&data, 32), false);
             }
         }
         0x0000_0002 => {
-            if let Some(data) = read::<24>(address) {
-                json.ptr(c"device", word(&data, 16));
+            if let Some(data) = read::<24>(address, 0) {
+                json.ptr(c"device", u64_at(&data, 16));
             }
         }
         0x0001_0001 => {
-            if let Some(data) = read::<432>(address) {
+            if let Some(data) = read::<432>(address, 0) {
                 dispatch_upscale(json, &data);
             }
         }
         0x0002_0003 => {
-            if let Some(data) = read::<312>(address) {
+            if let Some(data) = read::<312>(address, 0) {
                 framegen_dispatch(json, &data);
             }
         }
         0x0002_0002 => {
-            if let Some(data) = read::<144>(address) {
+            if let Some(data) = read::<144>(address, 0) {
                 framegen_configure(json, &data);
             }
         }
         0x0002_000c => {
-            if let Some(data) = read::<232>(address) {
+            if let Some(data) = read::<232>(address, 0) {
                 framegen_prepare(json, &data);
             }
         }
@@ -660,10 +626,10 @@ fn api_payload(json: &mut Json<'_>, kind: u64, address: u64) {
 fn api_chain(json: &mut Json<'_>, mut address: u64) {
     json.open(Some(c"chain"), b'[');
     for _ in 0..12 {
-        let Some(header) = read::<16>(address) else {
+        let Some(header) = read::<16>(address, 0) else {
             break;
         };
-        let kind = word(&header, 0);
+        let kind = u64_at(&header, 0);
         json.open(None, b'{');
         json.hex(Some(c"type"), kind);
         if let Some(name) = api_type_name(kind) {
@@ -671,14 +637,14 @@ fn api_chain(json: &mut Json<'_>, mut address: u64) {
         }
         api_payload(json, kind, address);
         json.close(b'}');
-        address = word(&header, 8);
+        address = u64_at(&header, 8);
     }
     json.close(b']');
 }
 
 fn xess_init(json: &mut Json<'_>, args: &Args) {
     json.hex(Some(c"context"), args[0]);
-    if let Some(data) = read::<24>(args[1]) {
+    if let Some(data) = read::<24>(args[1], 0) {
         json.fields(
             &data,
             &[
@@ -687,7 +653,7 @@ fn xess_init(json: &mut Json<'_>, args: &Args) {
                 (c"quality_setting", 8),
             ],
         );
-        json.hex(Some(c"init_flags"), dword(&data, 12).into());
+        json.hex(Some(c"init_flags"), u32_at(&data, 12).into());
         json.fields(
             &data,
             &[(c"creation_node_mask", 16), (c"visible_node_mask", 20)],
@@ -698,7 +664,7 @@ fn xess_init(json: &mut Json<'_>, args: &Args) {
 fn xess_execute(json: &mut Json<'_>, args: &Args) {
     json.hex(Some(c"context"), args[0]);
     json.hex(Some(c"command_list"), args[1]);
-    let Some(data) = read::<136>(args[2]) else {
+    let Some(data) = read::<136>(args[2], 0) else {
         json.flag(c"params_unreadable", true);
         return;
     };
@@ -714,7 +680,7 @@ fn xess_execute(json: &mut Json<'_>, args: &Args) {
     .into_iter()
     .enumerate()
     {
-        json.resource(key, word(&data, index * 8), false);
+        json.resource(key, u64_at(&data, index * 8), false);
     }
     json.close(b'}');
     json.open(Some(c"scalars"), b'{');
@@ -781,7 +747,7 @@ fn pre(entry: Entry, json: &mut Json<'_>, args: &Args) {
         }
         RSF_FSR_XellSetSleepMode | RSF_FSR_XellGetSleepMode => {
             json.hex(Some(c"context"), args[0]);
-            if let Some(data) = read::<16>(args[1]) {
+            if let Some(data) = read::<16>(args[1], 0) {
                 unsafe {
                     rsf_census_json_bytes(
                         json.0,
@@ -824,14 +790,14 @@ fn post(entry: Entry, json: &mut Json<'_>, args: &Args) {
     match entry {
         RSF_FSR_Fsr2GetJitterOffset => {
             for (key, address) in [(c"jitter_x", args[0]), (c"jitter_y", args[1])] {
-                if let Some(data) = read::<4>(address) {
+                if let Some(data) = read::<4>(address, 0) {
                     json.decimal(key, float(&data, 0));
                 }
             }
         }
         RSF_FSR_Fsr2GetRenderResolution => {
             for (key, address) in [(c"render_width", args[0]), (c"render_height", args[1])] {
-                if let Some(data) = read::<4>(address) {
+                if let Some(data) = read::<4>(address, 0) {
                     json.number(key, u32::from_le_bytes(data));
                 }
             }
@@ -839,9 +805,9 @@ fn post(entry: Entry, json: &mut Json<'_>, args: &Args) {
         RSF_FSR_FfxGetResourceDX12 => {
             // The hidden output pointer for the structure return occupies the first integer word.
             json.args(&args[..5]);
-            if let Some(data) = read::<FSR2_RESOURCE>(args[0])
+            if let Some(data) = read::<FSR2_RESOURCE>(args[0], 0)
                 && ascii_name_ok(&data)
-                && dword(&data, 136) <= 3
+                && u32_at(&data, 136) <= 3
             {
                 fsr2_resource(json, c"returned_resource", &data);
             }

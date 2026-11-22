@@ -43,10 +43,7 @@ use windows::{
     core::{GUID, Interface, PCSTR},
 };
 use windows_sys::{
-    Win32::System::{
-        Diagnostics::Debug::RtlCaptureStackBackTrace,
-        LibraryLoader::{GetModuleHandleW, GetProcAddress},
-    },
+    Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
     core::w,
 };
 
@@ -117,25 +114,6 @@ fn services() -> &'static Services {
 }
 fn id(entry: Entry) -> u16 {
     services().entries[entry as usize]
-}
-
-macro_rules! caller {
-    () => {{
-        let mut address = null_mut();
-        unsafe { RtlCaptureStackBackTrace(1, 1, &mut address, null_mut()) };
-        address
-    }};
-}
-
-macro_rules! original {
-    ($entry:expr, $signature:ty) => {{
-        let raw = rsf_census_hook_original(id($entry));
-        if raw.is_null() {
-            None
-        } else {
-            Some(unsafe { transmute::<Ptr, $signature>(raw) })
-        }
-    }};
 }
 
 struct Call<'a> {

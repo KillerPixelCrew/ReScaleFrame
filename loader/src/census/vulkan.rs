@@ -11,10 +11,9 @@ use super::stats::{
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::marker::PhantomData;
-use std::mem::{MaybeUninit, transmute};
+use std::mem::MaybeUninit;
 use std::ptr::null_mut;
 use std::sync::OnceLock;
-use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 
 type Handle = *mut c_void;
 type Info = *const c_void;
@@ -39,25 +38,6 @@ fn id(entry: Entry) -> u16 {
 }
 
 // Capture from the actual entry wrapper, before going through another Rust or native call frame.
-macro_rules! caller {
-    () => {{
-        let mut pc = null_mut();
-        unsafe { RtlCaptureStackBackTrace(1, 1, &mut pc, null_mut()) };
-        pc
-    }};
-}
-
-macro_rules! original {
-    ($entry:expr, $signature:ty) => {{
-        let ptr = rsf_census_hook_original(id($entry));
-        if ptr.is_null() {
-            None
-        } else {
-            Some(unsafe { transmute::<Handle, $signature>(ptr) })
-        }
-    }};
-}
-
 struct Call<'a> {
     storage: *mut rsf_census_call_state,
     _borrow: PhantomData<&'a mut MaybeUninit<rsf_census_call_state>>,

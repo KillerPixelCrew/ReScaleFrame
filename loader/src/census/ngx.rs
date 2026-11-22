@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::hooks::rsf_census_hook_original;
 use super::json::{Json, emit_decimal, rsf_census_json_i64, rsf_census_json_wide};
+use super::memory::{plausible, read};
 use super::platform;
 use super::rsf_census_call_state;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
@@ -78,7 +79,7 @@ fn observe_result(operation: usize, args: &Args, result: u64) {
             let callback = CREATED.load(Acquire);
             let first = operation - 10;
             if !callback.is_null()
-                && let Some(handle) = read::<8>(args[first + 3])
+                && let Some(handle) = read::<8>(args[first + 3], 0)
                 && u64::from_le_bytes(handle) != 0
             {
                 let callback = unsafe { transmute::<Ptr, Created>(callback) };
@@ -101,18 +102,6 @@ fn observe_result(operation: usize, args: &Args, result: u64) {
         }
         _ => {}
     }
-}
-
-fn plausible(address: u64) -> bool {
-    (0x1_0000..0x0000_7fff_ffff_0000).contains(&address)
-}
-
-fn read<const N: usize>(address: u64) -> Option<[u8; N]> {
-    if !plausible(address) {
-        return None;
-    }
-    let mut data = [0; N];
-    unsafe { platform().read.unwrap()(address as _, data.as_mut_ptr().cast(), N) }.then_some(data)
 }
 
 fn parameter<T: Default>(params: u64, slot: usize, name: &CStr) -> Option<T> {
@@ -172,7 +161,7 @@ impl NgxJson for Json<'_> {
         }
     }
     fn output(&mut self, key: &CStr, address: u64) {
-        if let Some(bytes) = read::<8>(address) {
+        if let Some(bytes) = read::<8>(address, 0) {
             self.hex(Some(key), u64::from_le_bytes(bytes));
         } else {
             self.raw(key, c"null");
@@ -275,7 +264,7 @@ fn vulkan_resource(json: &mut Json<'_>, key: &CStr, resource: u64) {
     }
     json.open(Some(key), b'{');
     json.hex(Some(c"ptr"), resource);
-    if let Some(raw) = read::<64>(resource) {
+    if let Some(raw) = read::<64>(resource, 0) {
         // The census marks these offsets as assumed until independently verified.
         json.hex(
             Some(c"image_view"),

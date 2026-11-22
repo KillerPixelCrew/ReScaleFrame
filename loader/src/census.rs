@@ -1,11 +1,40 @@
 // SPDX-License-Identifier: MIT
 #![allow(non_camel_case_types)]
+// The wrapper's return address, captured in the wrapper itself before any other call frame.
+macro_rules! caller {
+    () => {{
+        let mut address = std::ptr::null_mut();
+        unsafe {
+            windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(
+                1,
+                1,
+                &mut address,
+                std::ptr::null_mut(),
+            )
+        };
+        address
+    }};
+}
+
+// The original function a hook saved for `$entry`, as `$signature`, or `None` when it has none.
+macro_rules! original {
+    ($entry:expr, $signature:ty) => {{
+        let address = rsf_census_hook_original(id($entry));
+        if address.is_null() {
+            None
+        } else {
+            Some(unsafe { std::mem::transmute::<*mut std::ffi::c_void, $signature>(address) })
+        }
+    }};
+}
+
 mod d3d;
 mod decode;
 mod fsr;
 mod hooks;
 mod identity;
 mod json;
+mod memory;
 mod misc;
 mod ngx;
 mod output;
