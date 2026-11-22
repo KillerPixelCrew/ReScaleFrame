@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
-// IDXGISwapChain4 facade and native leaves of the shared presentation bridge. The Rust owner in
-// runtime/orchestrator/src/d3d11_present.rs decides admission, publication, provider switching,
-// frame and slot sequencing, Present, fallback, resize, retirement, status and latency routing.
-// Each leaf here is one DXGI, D3D12, D3D11, Win32, MinHook or SDK step on this object.
+// Native state, factory interception and SDK calls for the shared presentation bridge.
+// Rust owns the IDXGISwapChain4 facade, presentation and its physical-chain leases.
 #include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/shared_surface.h>
 #include "../../backends/common/d3d12_helpers.h"

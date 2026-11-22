@@ -2965,7 +2965,8 @@ Build, fixture and device verification are pending.
 
 The native continuation moves the application's IDXGISwapChain4 object,
 interfaces and reference lifetime into Rust. The linked shared-surface
-device fixture now runs from Rust through the production C API. Source
+device fixture now runs from Rust through the production C API. The Runtime
+DLL fixture also runs its checks in Rust behind the C++ import and type checks. Source
 review covered the typed vtable, guarded private dispatch and D08's
 existing resize path. Native builds, detour entry inspection and device
 verification are pending. [Native facade evidence](research/rust-d3d11-present-cutover.md#native-facade-continuation)

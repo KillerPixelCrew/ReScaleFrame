@@ -521,6 +521,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-presentation-api-fixtures"
+version = "0.1.2"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "rsf-presentation-fixtures"
 version = "0.1.2"
 dependencies = [

@@ -42,6 +42,16 @@ generate("loader/src/census/json_abi.rs", "loader/census/src/json_platform.h",
 generate("loader/src/census/decode_abi.rs", "loader/census/src/decode_platform.h",
          "rsf_census_(resource_desc|read_resource)", "NOTHING", [],
          ["--with-derive-default"])
+generate("tests/presentation/api/src/abi.rs",
+         "runtime/orchestrator/include/rescaleframe/d3d11_present_api.h",
+         "rsf_(d3d11_present_(api|setup)|get_d3d11_present_api_fn)",
+         "RSF_D3D11_PRESENT_API_(VERSION|ENTRY_POINT)",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include", "-Iruntime/contract/include"],
+         ["--no-recursive-allowlist",
+          "--raw-line", "use crate::{rsf_backend_log_fn, rsf_generation_provider, rsf_latency_marker, "
+                        "rsf_observer_present_event_fn, rsf_observer_present_fn, rsf_result, "
+                        "rsf_streamline_graphics, rsf_streamline_host};"])
 generate("tests/presentation/src/shared_surface_abi.rs",
          "runtime/presentation/include/rescaleframe/shared_surface.h",
          "rsf_shared_.*", "RSF_SHARED_SURFACE_ABI_VERSION", [],

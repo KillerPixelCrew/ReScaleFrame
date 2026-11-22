@@ -3,6 +3,7 @@ members = [
   "ui/overlay",
   "tests/overlay",
   "tests/presentation",
+  "tests/presentation/api",
   "tests/game-sdk",
   "runtime/backends/fsr/compat",
   "runtime/vulkan/ngx",

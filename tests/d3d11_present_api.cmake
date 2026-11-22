@@ -1,5 +1,7 @@
 # Include at the end of the root build (or from tests/CMakeLists.txt).
 # Keep these clients free of OrchestratorCore and its public RSF_RUNTIME_BUILD define.
+rsf_add_rust_static(rsf_presentation_api_fixtures_rust rsf_rust_presentation_api_fixtures
+    rsf-presentation-api-fixtures rsf_presentation_api_fixtures)
 add_executable(rsf_d3d11_present_api_test "${CMAKE_CURRENT_LIST_DIR}/d3d11_present_api.cpp")
 add_executable(rsf_d3d11_present_api_c11 "${CMAKE_CURRENT_LIST_DIR}/d3d11_present_api_c11.c")
 set_target_properties(rsf_d3d11_present_api_c11 PROPERTIES
@@ -11,6 +13,7 @@ foreach(client rsf_d3d11_present_api_test rsf_d3d11_present_api_c11)
     target_link_libraries(${client} PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
     add_dependencies(${client} rsf_orchestrator)
 endforeach()
+target_link_libraries(rsf_d3d11_present_api_test PRIVATE rsf_presentation_api_fixtures_rust)
 add_test(NAME d3d11_present_api_contract COMMAND rsf_d3d11_present_api_test)
 add_test(NAME d3d11_present_api_c11_contract COMMAND rsf_d3d11_present_api_c11)
 set_tests_properties(d3d11_present_api_contract d3d11_present_api_c11_contract PROPERTIES TIMEOUT 30)

@@ -137,7 +137,15 @@ round trip, bad arguments and null destroy. It skips if adapter identity
 cannot be established. The synthetic facade case checks identity through
 generated DXGI interfaces and one final native-state destruction.
 
+The Runtime import fixture still compiles all 22 slot types against the
+public C++ header and links only the Runtime import library and its Rust
+fixture. Rust checks the exported name, slot ownership, short and
+mismatched records, protected refusal pages, canaries, concurrent queries
+and the public setup refusal for infinity. The separate C11 import fixture
+continues to exercise the native header directly.
+
 The factory and provider platform declarations and remaining C++ native
 leaves still serve the live backends. The full D3D11 and FG device harnesses
-still exercise AC7 proxy and vendor-backed paths. Native Windows builds,
-device execution and binary inspection remain user-owned.
+still exercise AC7 proxy and vendor-backed paths. Pinned Rust formatting, bindgen regeneration, locked Windows-target Cargo metadata and
+source layout checks passed. Native Windows builds, fixture execution, lint,
+device checks and binary inspection remain user-owned.
