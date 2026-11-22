@@ -191,7 +191,8 @@ endif()
 # (<root>/{streamline,fidelityfx,xess}) and an NVIDIA adapter, and is registered when RSF_ANOMALY_SR_VENDOR_ROOT exists.
 foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_device_test)
     if(rsf_sr5_client STREQUAL "rsf_anomaly_sr_runtime_api_test")
-        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_runtime_api_bridge.cpp")
+        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_runtime_api_bridge.c")
+        set_target_properties(${rsf_sr5_client} PROPERTIES LINKER_LANGUAGE CXX)
         target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust)
     else()
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.cpp"

@@ -2133,7 +2133,7 @@ Port the live SR stage, D3D11 pass and reconstruction, including refusing a fram
 **Fixtures (9)**
 
 - [ ] [tests/anomaly_sr_hook_bridge.cpp](tests/anomaly_sr_hook_bridge.cpp) (native detour and PE fixture seam)
-- [ ] [tests/anomaly_sr_runtime_api_bridge.cpp](tests/anomaly_sr_runtime_api_bridge.cpp) (actual Runtime import and fixture entry)
+- [x] [tests/anomaly_sr_runtime_api_bridge.cpp](tests/anomaly_sr_runtime_api_bridge.cpp) (actual Runtime import and fixture entry)
 - [x] [tests/anomaly_sr_hooks.cpp](tests/anomaly_sr_hooks.cpp)
 - [x] [tests/anomaly_sr_pass.cpp](tests/anomaly_sr_pass.cpp)
 - [x] [tests/anomaly_sr_plan.cpp](tests/anomaly_sr_plan.cpp)
