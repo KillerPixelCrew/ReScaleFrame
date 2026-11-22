@@ -25,6 +25,7 @@ static_assert(sizeof(rsf_d3d11p_request) == 48 && offsetof(rsf_d3d11p_request, r
 static_assert(sizeof(rsf_d3d11p_facts) == 112 && offsetof(rsf_d3d11p_facts, graphics) == 40 &&
     offsetof(rsf_d3d11p_facts, direct_queue) == 88 && offsetof(rsf_d3d11p_facts, device11) == 96 &&
     offsetof(rsf_d3d11p_facts, buffer_usage) == 104);
+static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9);
 static_assert(sizeof(rsf_d3d11p_plain_plan) == 24 && offsetof(rsf_d3d11p_plain_plan, swap_effect) == 8);
 static_assert(sizeof(rsf_d3d11p_adapter) == 16);
 static_assert(sizeof(rsf_d3d11p_platform) == 72 * sizeof(void*));
@@ -304,34 +305,21 @@ int32_t create_plain(void* b, const rsf_d3d11p_plain_plan* plan, void** physical
         uint32_t(self.native12), original_create ? create_original : nullptr, physical, queue);
 }
 int32_t resize_physical(void* b, void* physical, uint32_t count, uint32_t width, uint32_t height, uint32_t format) {
-    auto& self = *as_bridge(b);
-    return static_cast<IDXGISwapChain4*>(physical)->ResizeBuffers(count, width, height, DXGI_FORMAT(format),
-        self.tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+    return rsf_d3d11p_gpu_resize(physical, count, width, height, format, uint32_t(as_bridge(b)->tearing_supported));
 }
-
-// Signal with the preceding D3D11 work submitted before D3D12 waits on it.
-// Flushing before Signal leaves the dependency buffered until a later frame.
 int32_t upload_wait(void* b, void* queue, uint64_t value) {
     auto& self = *as_bridge(b);
-    auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(self.shared_fence));
-    auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(self.shared_fence));
-    const auto signaled = self.context->Signal(fence11, value);
-    if (FAILED(signaled)) return signaled;
-    self.context->Flush();
-    return static_cast<ID3D12CommandQueue*>(queue)->Wait(fence12, value);
+    return rsf_d3d11p_gpu_upload_wait(self.context.Get(), queue, rsf_shared_fence_d3d11(self.shared_fence),
+        rsf_shared_fence_d3d12(self.shared_fence), value);
 }
 void record_copy(void* b, void* raw_list, void* backbuffer, void* source) {
     rsf_d3d11p_gpu_record_copy(raw_list, backbuffer, source, uint32_t(as_bridge(b)->native12));
 }
 void* context11(void* b) { return as_bridge(b)->context.Get(); }
-int32_t upload_return(void* b, void* raw_queue, uint64_t value) {
-    auto& self = *as_bridge(b); auto* queue = static_cast<ID3D12CommandQueue*>(raw_queue);
-    auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(self.shared_fence));
-    auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(self.shared_fence));
-    HRESULT result = queue->Signal(fence12, value);
-    if (SUCCEEDED(result)) result = queue->Wait(fence12, value);
-    if (SUCCEEDED(result)) result = self.context->Wait(fence11, value);
-    return result;
+int32_t upload_return(void* b, void* queue, uint64_t value) {
+    auto& self = *as_bridge(b);
+    return rsf_d3d11p_gpu_upload_return(self.context.Get(), queue, rsf_shared_fence_d3d11(self.shared_fence),
+        rsf_shared_fence_d3d12(self.shared_fence), value);
 }
 void report_device_failure(void* b, int32_t result, uint32_t backend) {
     auto& self = *as_bridge(b);
@@ -378,16 +366,14 @@ void set_description(void* b, uint32_t count, uint32_t width, uint32_t height, u
 int32_t create_retirement_fence(void* b, void** out) {
     return rsf_d3d11p_gpu_fence(as_bridge(b)->graphics.native_device, out);
 }
-int32_t retire_submit(void* b, void* raw_queue, void* retirement_fence, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value) {
-    auto& self = *as_bridge(b); auto* queue = static_cast<ID3D12CommandQueue*>(raw_queue);
-    if (vendor_fence && FAILED(queue->Wait(static_cast<ID3D12Fence*>(vendor_fence), vendor_value)))
-        return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (list) {
-        auto* command = static_cast<ID3D12GraphicsCommandList*>(self.provider_list(queue, static_cast<ID3D12GraphicsCommandList*>(list)));
-        if (!command) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        ID3D12CommandList* lists[]{command}; queue->ExecuteCommandLists(1, lists);
-    }
-    return FAILED(rsf_d3d11p_gpu_signal(queue, retirement_fence, value)) ? RSF_BACKEND_ERROR_FEATURE_FAILED : RSF_BACKEND_OK;
+void* retirement_command(void* b, void* queue, void* list) noexcept try {
+    return as_bridge(b)->provider_list(queue, static_cast<ID3D12GraphicsCommandList*>(list));
+} catch (...) {
+    return nullptr;
+}
+int32_t retire_submit(void* b, void* queue, void* retirement_fence, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value) {
+    return rsf_d3d11p_gpu_retire_submit(b, queue, retirement_fence, vendor_fence, vendor_value,
+        list, value, retirement_command);
 }
 // On device failure retain GPU-reachable storage for the process rather than free it.
 // The Rust owner has already retained its synchronization resources and slots.

@@ -219,6 +219,11 @@ int32_t rsf_d3d11p_gpu_close_execute(void*, void*, void*);
 int32_t rsf_d3d11p_gpu_application_ready(void*, void*, uint64_t);
 uint32_t rsf_d3d11p_gpu_buffer_referenced(void*);
 void rsf_d3d11p_gpu_record_copy(void*, void*, void*, uint32_t);
+int32_t rsf_d3d11p_gpu_resize(void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+int32_t rsf_d3d11p_gpu_upload_wait(void*, void*, void*, void*, uint64_t);
+int32_t rsf_d3d11p_gpu_upload_return(void*, void*, void*, void*, uint64_t);
+int32_t rsf_d3d11p_gpu_retire_submit(void*, void*, void*, void*, uint64_t, void*, uint64_t,
+    void* (*)(void*, void*, void*));
 
 /* Facade methods. */
 void rsf_core_d3d11p_chain_destroy(rsf_d3d11p_chain* chain);

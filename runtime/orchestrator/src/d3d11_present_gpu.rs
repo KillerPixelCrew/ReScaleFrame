@@ -7,8 +7,10 @@ use crate::d3d11_present_abi::Raw;
 use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11DeviceContext4};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, IDXGISwapChain};
 use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle};
 use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcess, SetEvent};
@@ -175,8 +177,12 @@ unsafe extern "C" fn rsf_d3d11p_gpu_join(source: Raw, target: Raw, fence: Raw, v
     if signaled < 0 {
         return signaled;
     }
-    let bound = unsafe { borrow::<ID3D12CommandQueue>(&target) };
-    unsafe { (bound.vtable().Wait)(target, fence, value) }.0
+    unsafe { queue_wait(target, fence, value) }
+}
+
+unsafe fn queue_wait(queue: Raw, fence: Raw, value: u64) -> i32 {
+    let bound = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
+    unsafe { (bound.vtable().Wait)(queue, fence, value) }.0
 }
 
 unsafe extern "C" fn completed(fence: Raw) -> u64 {
@@ -238,10 +244,14 @@ unsafe extern "C" fn rsf_d3d11p_gpu_close_execute(queue: Raw, list: Raw, command
     let bound = unsafe { borrow::<ID3D12GraphicsCommandList>(&list) };
     let closed = unsafe { (bound.vtable().Close)(list) };
     if closed.is_ok() {
-        let bound = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
-        unsafe { (bound.vtable().ExecuteCommandLists)(queue, 1, &command) };
+        unsafe { execute(queue, command) };
     }
     closed.0
+}
+
+unsafe fn execute(queue: Raw, command: Raw) {
+    let bound = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
+    unsafe { (bound.vtable().ExecuteCommandLists)(queue, 1, &command) };
 }
 
 #[unsafe(no_mangle)]
@@ -330,4 +340,95 @@ unsafe extern "C" fn rsf_d3d11p_gpu_record_copy(
             source_state,
         );
     }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11p_gpu_resize(
+    physical: Raw,
+    count: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    tearing: u32,
+) -> i32 {
+    let chain = unsafe { borrow::<IDXGISwapChain>(&physical) };
+    let flags = if tearing != 0 {
+        DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32
+    } else {
+        0
+    };
+    unsafe {
+        (chain.vtable().ResizeBuffers)(
+            physical,
+            count,
+            width,
+            height,
+            DXGI_FORMAT(format as i32),
+            flags,
+        )
+    }
+    .0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11p_gpu_upload_wait(
+    context: Raw,
+    queue: Raw,
+    fence11: Raw,
+    fence12: Raw,
+    value: u64,
+) -> i32 {
+    let immediate = unsafe { borrow::<ID3D11DeviceContext4>(&context) };
+    let signaled = unsafe { (immediate.vtable().Signal)(context, fence11, value) };
+    if !signaled.is_ok() {
+        return signaled.0;
+    }
+    // Flush after the D3D11 signal so the D3D12 queue waits on submitted work.
+    unsafe { borrow::<ID3D11DeviceContext>(&context).Flush() };
+    unsafe { queue_wait(queue, fence12, value) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11p_gpu_upload_return(
+    context: Raw,
+    queue: Raw,
+    fence11: Raw,
+    fence12: Raw,
+    value: u64,
+) -> i32 {
+    let joined = unsafe { rsf_d3d11p_gpu_join(queue, queue, fence12, value) };
+    if joined < 0 {
+        return joined;
+    }
+    let immediate = unsafe { borrow::<ID3D11DeviceContext4>(&context) };
+    unsafe { (immediate.vtable().Wait)(context, fence11, value) }.0
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn rsf_d3d11p_gpu_retire_submit(
+    facade: Raw,
+    queue: Raw,
+    retirement_fence: Raw,
+    vendor_fence: Raw,
+    vendor_value: u64,
+    list: Raw,
+    value: u64,
+    unwrap_list: unsafe extern "C" fn(Raw, Raw, Raw) -> Raw,
+) -> i32 {
+    const FEATURE_FAILED: i32 = -9;
+    if !vendor_fence.is_null() && unsafe { queue_wait(queue, vendor_fence, vendor_value) } < 0 {
+        return FEATURE_FAILED;
+    }
+    if !list.is_null() {
+        let command = unsafe { unwrap_list(facade, queue, list) };
+        if command.is_null() {
+            return FEATURE_FAILED;
+        }
+        unsafe { execute(queue, command) };
+    }
+    if unsafe { rsf_d3d11p_gpu_signal(queue, retirement_fence, value) } < 0 {
+        return FEATURE_FAILED;
+    }
+    S_OK
 }

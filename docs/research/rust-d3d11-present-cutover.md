@@ -168,14 +168,17 @@ owned reference.
 D3D12 command queues, fences, events, slot allocation, waits, resets,
 close and execution, application-ready signaling, render buffers and
 copy barriers now execute through typed Rust leaves. The same 72-slot
-platform table and native return values remain in use. D3D11 upload
-signal, flush and wait, Streamline proxy ownership, vendor retirement,
-the present receipts and resize publication use their established
-paths. The D08 OpenGL and G03 files were outside this change.
+platform table and native return values remain in use. Rust also issues
+the D3D11 upload signal, flush and queue wait, the return fence, physical
+ResizeBuffers and the retirement wait, execution and signal. A guarded
+native callback resolves the provider list between retirement wait and
+execution. Streamline proxy ownership, present receipts and resize
+publication use their established paths. The D08 OpenGL and G03 files
+were outside this change.
 
 | PORT entry | Source disposition |
 | --- | --- |
-| `runtime/presentation/src/d3d11_present_bridge.cpp` | Factory policy and graphics leaves moved. The file still owns native WRL state, vendor wiring, D3D11 upload and return, retirement submission, scoped identity checks and the guarded MinHook trampolines. Keep open for remaining native ownership. |
+| `runtime/presentation/src/d3d11_present_bridge.cpp` | Factory policy and graphics leaves moved. The file still owns native WRL state, vendor wiring, the shared-fence and provider-list lookups, scoped identity checks and the guarded MinHook trampolines. Keep open for remaining native ownership. |
 | `runtime/presentation/src/d3d11_present_platform.h` | Added typed factory and graphics entry declarations. The existing platform declaration still serves the native state and SDK callback table. Keep open while the native bridge uses it. |
 | `tests/d3d11_present_bridge.cpp` | Rust now runs the native command-list traversal and the linked CPU/Present marker scenario, including legacy ordering, keyed input, synchronous reentry, provider-refused starts and the pre-poll reservation. Native AC7 startup, proxy loading, device work and the linked render-scope harness remain. Keep open for the remaining device body. |
 | `tests/fg_present_bridge.cpp` | Rust now records FG inputs, frame and camera records, HUD-less and MFG scene commands, and cached buffer-zero pixel copy. It also plans source epochs, overlay visibility, tag refusals and provider switch frames. The native runner still owns the Windows focus lease, device creation, vendor calls, actual overlay/present ordering and readback diagnostics. Keep open for the remaining device body. |
