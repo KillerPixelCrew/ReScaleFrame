@@ -77,7 +77,7 @@ typedef struct rsf_unity_vulkan_command_handles {
 bool rsf_unity_vulkan_command_slot(uint32_t index, rsf_unity_vulkan_command_handles* view);
 
 /* Rust owns these handles. A successful prepare lends a view under the caller's presentation
-   lease. The native create leaf drains before allocating. */
+   lease. Replacing an image first drains all its GPU users. */
 typedef struct rsf_unity_vulkan_image_handles {
     void* resource;
     uint64_t image, memory;
@@ -96,6 +96,7 @@ typedef struct rsf_unity_vulkan_device_ops {
     void (*destroy_image)(const rsf_unity_vulkan_device_handles*, const rsf_unity_vulkan_image_handles*);
     bool (*fence_ready)(const rsf_unity_vulkan_device_handles*, uint64_t fence);
     uint64_t (*shared_completed)(const rsf_unity_vulkan_device_handles*);
+    bool (*drain_images)(const rsf_unity_vulkan_device_handles*);
     void (*report_created)(const rsf_game_host_services*);
 } rsf_unity_vulkan_device_ops;
 /* The caller holds an entry or running event. READY lends a view under that hold. Creation is

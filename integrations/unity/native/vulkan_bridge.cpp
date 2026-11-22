@@ -33,7 +33,7 @@ static_assert(sizeof(rsf_unity_vulkan_image_handles) == 24);
 static_assert(sizeof(rsf_unity_vulkan_device_handles) == 64);
 static_assert(offsetof(rsf_unity_vulkan_device_handles, vk_device) == 24);
 static_assert(offsetof(rsf_unity_vulkan_device_handles, vk_queue_family) == 56);
-static_assert(sizeof(rsf_unity_vulkan_device_ops) == 11 * sizeof(void*));
+static_assert(sizeof(rsf_unity_vulkan_device_ops) == 12 * sizeof(void*));
 static_assert(sizeof(rsf_unity_vulkan_surface_ops) == 5 * sizeof(void*));
 static_assert(sizeof(rsf_unity_vulkan_command_handles) == 40);
 static_assert(offsetof(rsf_unity_vulkan_command_handles, commands) == 8);
@@ -130,7 +130,8 @@ bool drain(const DeviceView& graphics)
         const bool done = SUCCEEDED(graphics.shared_fence()->SetEventOnCompletion(rsf_unity_interop_submitted(), event)) &&
             WaitForSingleObject(event, 10000) == WAIT_OBJECT_0;
         CloseHandle(event);
-        return done && shared_completed(&graphics.handles) != UINT64_MAX;
+        const uint64_t after_wait = shared_completed(&graphics.handles);
+        return done && after_wait != UINT64_MAX && rsf_unity_interop_drained(after_wait);
     }
     return true;
 }
@@ -156,7 +157,6 @@ bool create_shared_image(const rsf_unity_vulkan_device_handles* shared, uint32_t
     const auto format = static_cast<VkFormat>(format_value);
     const auto dx_format = static_cast<DXGI_FORMAT>(dx_format_value);
     const DeviceView graphics{*shared};
-    if (!drain(graphics)) return false;
     ComPtr<ID3D12Resource> resource;
     D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
     D3D12_RESOURCE_DESC description{}; description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -309,7 +309,9 @@ void report_created(const rsf_game_host_services* services) noexcept try
 constexpr rsf_unity_vulkan_device_ops device_ops{
     create_shared, destroy_shared, create_command_pool, destroy_command_pool,
     create_command_slot, destroy_command_slot, create_shared_image, destroy_image,
-    command_fence_ready, shared_completed, report_created,
+    command_fence_ready, shared_completed,
+    [](const rsf_unity_vulkan_device_handles* shared) noexcept { return drain(DeviceView{*shared}); },
+    report_created,
 };
 uint32_t initialize(DeviceView& graphics, const rsf_game_host_services* services = nullptr)
 {

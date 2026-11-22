@@ -214,10 +214,11 @@ struct DeviceOps {
     destroy_image: unsafe extern "C" fn(*const DeviceHandles, *const ImageHandles),
     fence_ready: unsafe extern "C" fn(*const DeviceHandles, u64) -> bool,
     shared_completed: unsafe extern "C" fn(*const DeviceHandles) -> u64,
+    drain_images: unsafe extern "C" fn(*const DeviceHandles) -> bool,
     report_created: unsafe extern "C" fn(*const rsf_game_host_services),
 }
 
-const _: () = assert!(size_of::<DeviceOps>() == 11 * size_of::<usize>());
+const _: () = assert!(size_of::<DeviceOps>() == 12 * size_of::<usize>());
 
 struct SharedDevice {
     handles: DeviceHandles,
@@ -289,16 +290,21 @@ impl Drop for Surface {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Admission {
+    Open,
+    Retiring,
+    Closed,
+}
+
 struct State {
     /// Set before invoking the first creation leaf and cleared after publication or rollback.
     creating: bool,
     device: Option<SharedDevice>,
     /// A failed step stopped the bridge until release.
     faulted: bool,
-    /// Refuse new bridge entries while existing entries and queued events finish.
-    retiring: bool,
-    /// CPU ownership is idle. Only retirement may access the resources.
-    closed: bool,
+    /// Retiring refuses new entries; Closed allows only retirement to access the resources.
+    admission: Admission,
     events: [Event; EVENTS],
     /// Present interceptions and surface updates in progress.
     entries: u32,
@@ -329,8 +335,7 @@ impl State {
             creating: false,
             device: None,
             faulted: false,
-            retiring: false,
-            closed: false,
+            admission: Admission::Open,
             events: [FREE; EVENTS],
             entries: 0,
             window: None,
@@ -342,7 +347,7 @@ impl State {
     }
 
     fn open(&self) -> bool {
-        !self.faulted && !self.closed
+        !self.faulted && self.admission != Admission::Closed
     }
 
     fn set_window(&mut self, frame: &Frame) -> bool {
@@ -404,7 +409,7 @@ impl State {
     }
 
     fn enter(&mut self) -> bool {
-        if self.retiring || self.closed {
+        if self.admission != Admission::Open {
             return false;
         }
         self.entries += 1;
@@ -416,7 +421,7 @@ impl State {
     }
 
     fn claim_device(&mut self) -> bool {
-        if self.closed || self.creating || self.device.is_some() {
+        if self.admission == Admission::Closed || self.creating || self.device.is_some() {
             return false;
         }
         self.creating = true;
@@ -424,7 +429,7 @@ impl State {
     }
 
     fn can_borrow_device(&self) -> bool {
-        !self.closed
+        self.admission != Admission::Closed
             && (self.entries != 0
                 || self
                     .events
@@ -476,25 +481,23 @@ impl State {
     }
 
     fn close(&mut self) -> bool {
-        if self.closed || !self.idle() {
+        if self.admission == Admission::Closed || !self.idle() {
             return false;
         }
-        self.closed = true;
+        self.admission = Admission::Closed;
         true
     }
 
     fn reopen(&mut self) {
-        self.retiring = false;
-        self.closed = false;
+        self.admission = Admission::Open;
     }
 
     fn release(&mut self) {
-        debug_assert!(self.closed);
+        debug_assert_eq!(self.admission, Admission::Closed);
         debug_assert!(self.device.is_none() && self.surface.is_none());
         debug_assert!(self.images.iter().all(Option::is_none));
         *self = Self {
-            retiring: true,
-            closed: true,
+            admission: Admission::Closed,
             ..Self::new()
         };
     }
@@ -664,7 +667,9 @@ unsafe extern "C" fn rsf_unity_vulkan_command_slot(index: u32, view: *mut Comman
 fn commands_retired() -> bool {
     let proof = {
         let state = lock();
-        if !state.closed || (state.device.is_none() && state.images.iter().any(Option::is_some)) {
+        if state.admission != Admission::Closed
+            || (state.device.is_none() && state.images.iter().any(Option::is_some))
+        {
             return false;
         }
         state.device.as_ref().map(|device| {
@@ -691,6 +696,59 @@ fn commands_retired() -> bool {
 }
 
 /// The caller holds the presentation lease throughout native replacement.
+fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<ImageHandles> {
+    let lock = || state.lock().unwrap_or_else(PoisonError::into_inner);
+    let (device, ops, replacing) = {
+        let state = lock();
+        if !state.open() || state.partial_submission {
+            return None;
+        }
+        let device = state.device.as_ref()?;
+        let current = state.images.get(index)?;
+        if let Some(image) = current.filter(|image| image.key == key) {
+            return Some(image.handles);
+        }
+        (device.handles, device.ops, current.is_some())
+    };
+    // Every slot shares this image. The current slot's fence only makes its command
+    // resources reusable. Drain both APIs before replacing an image in the shared store.
+    if replacing && !unsafe { (ops.drain_images)(&device) } {
+        return None;
+    }
+    let mut handles = ImageHandles::EMPTY;
+    if !unsafe {
+        (ops.create_image)(
+            &device,
+            key.width,
+            key.height,
+            key.format,
+            key.dx_format,
+            &mut handles,
+        )
+    } || !handles.complete()
+    {
+        unsafe { (ops.destroy_image)(&device, &handles) };
+        return None;
+    }
+    let previous = {
+        let mut state = lock();
+        if !state.open() || state.partial_submission {
+            drop(state);
+            unsafe { (ops.destroy_image)(&device, &handles) };
+            return None;
+        }
+        state.images[index].replace(Image {
+            key,
+            handles,
+            initialized: false,
+        })
+    };
+    if let Some(previous) = previous {
+        unsafe { (ops.destroy_image)(&device, &previous.handles) };
+    }
+    Some(handles)
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vulkan_prepare_image(
     index: u32,
@@ -709,55 +767,9 @@ unsafe extern "C" fn rsf_unity_vulkan_prepare_image(
         format,
         dx_format,
     };
-    let index_usize = index as usize;
-    let (device, create, destroy) = {
-        let state = lock();
-        if !state.open() || state.partial_submission {
-            return false;
-        }
-        let Some(device) = &state.device else {
-            return false;
-        };
-        let Some(current) = state.images.get(index_usize) else {
-            return false;
-        };
-        if let Some(image) = current.filter(|image| image.key == key) {
-            unsafe { view.write(image.handles) };
-            return true;
-        }
-        (
-            device.handles,
-            device.ops.create_image,
-            device.ops.destroy_image,
-        )
-    };
-    let mut handles = ImageHandles::EMPTY;
-    if !unsafe { create(&device, width, height, format, dx_format, &mut handles) }
-        || !handles.complete()
-    {
-        unsafe { destroy(&device, &handles) };
+    let Some(handles) = prepare_image(&STATE, index as usize, key) else {
         return false;
-    }
-    let (publish, previous) = {
-        let mut state = lock();
-        if state.open() && !state.partial_submission {
-            let previous = state.images[index_usize].replace(Image {
-                key,
-                handles,
-                initialized: false,
-            });
-            (true, previous)
-        } else {
-            (false, None)
-        }
     };
-    if !publish {
-        unsafe { destroy(&device, &handles) };
-        return false;
-    }
-    if let Some(previous) = previous {
-        unsafe { destroy(&device, &previous.handles) };
-    }
     unsafe { view.write(handles) };
     true
 }
@@ -794,14 +806,17 @@ extern "C" fn rsf_unity_vulkan_faulted() -> u32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_vulkan_stop_admission() {
-    lock().retiring = true;
+    let mut state = lock();
+    if state.admission == Admission::Open {
+        state.admission = Admission::Retiring;
+    }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_vulkan_try_close() -> bool {
     {
         let mut state = lock();
-        if !state.closed && !state.close() {
+        if state.admission != Admission::Closed && !state.close() {
             return false;
         }
     }
@@ -1137,6 +1152,99 @@ mod tests {
     }
 
     #[test]
+    fn shared_image_resize_preserves_old_owner_while_another_slot_is_outstanding() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+
+        static VULKAN_IDLE: AtomicBool = AtomicBool::new(false);
+        static D3D12_IDLE: AtomicBool = AtomicBool::new(false);
+        static DESTROYED: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn drain(_: *const DeviceHandles) -> bool {
+            VULKAN_IDLE.load(Relaxed) && D3D12_IDLE.load(Relaxed)
+        }
+        unsafe extern "C" fn create_image(
+            _: *const DeviceHandles,
+            width: u32,
+            _: u32,
+            _: u32,
+            _: u32,
+            output: *mut ImageHandles,
+        ) -> bool {
+            unsafe {
+                output.write(ImageHandles {
+                    resource: ptr::dangling_mut::<u8>().cast(),
+                    image: u64::from(width),
+                    memory: 1,
+                });
+            }
+            true
+        }
+        unsafe extern "C" fn destroy_image(_: *const DeviceHandles, image: *const ImageHandles) {
+            DESTROYED.store(unsafe { (*image).image } as usize, Relaxed);
+        }
+        let ops = DeviceOps {
+            create: unused_create,
+            destroy: unused_device,
+            create_pool: unused_pool,
+            destroy_pool: unused_handle,
+            create_slot: unused_slot,
+            destroy_slot: unused_destroy_slot,
+            create_image,
+            destroy_image,
+            fence_ready: unused_fence,
+            shared_completed: unused_pool,
+            drain_images: drain,
+            report_created: unused_report,
+        };
+        unsafe extern "C" fn unused_create(
+            _: *const rsf_game_host_services,
+            _: *mut DeviceHandles,
+        ) -> bool {
+            false
+        }
+        unsafe extern "C" fn unused_device(_: *const DeviceHandles) {}
+        unsafe extern "C" fn unused_pool(_: *const DeviceHandles) -> u64 {
+            0
+        }
+        unsafe extern "C" fn unused_handle(_: *const DeviceHandles, _: u64) {}
+        unsafe extern "C" fn unused_slot(
+            _: *const DeviceHandles,
+            _: u64,
+            _: *mut CommandSlot,
+        ) -> bool {
+            false
+        }
+        unsafe extern "C" fn unused_destroy_slot(_: *const DeviceHandles, _: *const CommandSlot) {}
+        unsafe extern "C" fn unused_fence(_: *const DeviceHandles, _: u64) -> bool {
+            false
+        }
+        unsafe extern "C" fn unused_report(_: *const rsf_game_host_services) {}
+
+        let state = Mutex::new(State {
+            device: Some(SharedDevice::new(ops)),
+            ..State::new()
+        });
+        let old = ImageKey {
+            width: 1280,
+            height: 720,
+            format: 1,
+            dx_format: 1,
+        };
+        let new = ImageKey { width: 1920, ..old };
+        assert_eq!(prepare_image(&state, 0, old).unwrap().image, 1280);
+
+        // Slot 1 is free to record. Slot 0 still holds both Vulkan and D3D12 users.
+        assert!(prepare_image(&state, 0, new).is_none());
+        VULKAN_IDLE.store(true, Relaxed);
+        assert!(prepare_image(&state, 0, new).is_none());
+        assert_eq!(prepare_image(&state, 0, old).unwrap().image, 1280);
+        assert_eq!(DESTROYED.load(Relaxed), 0);
+        D3D12_IDLE.store(true, Relaxed);
+        assert_eq!(prepare_image(&state, 0, new).unwrap().image, 1920);
+        assert_eq!(DESTROYED.load(Relaxed), 1280);
+    }
+
+    #[test]
     fn an_accepted_upload_publishes_image_layout_and_blocks_release_until_fenced() {
         let mut state = State::new();
         state.images[0] = Some(Image {
@@ -1245,7 +1353,7 @@ mod tests {
     fn close_waits_for_entries_and_blocks_new_work() {
         let mut state = State::new();
         assert!(state.enter());
-        state.retiring = true;
+        state.admission = Admission::Retiring;
         assert!(!state.enter());
         assert!(!state.close());
         state.leave();
