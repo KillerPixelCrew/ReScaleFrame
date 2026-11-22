@@ -4,7 +4,6 @@ use super::*;
 use rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION;
 use rsf_game_sys::rsf_d3d11_auxiliary_pass;
 use rsf_game_sys::rsf_dlss_pipeline_status;
-use rsf_game_sys::*;
 use rsf_game_sys::{
     RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END, RSF_GAME_RENDER_AFTER_SIMULATION,
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RECONFIGURE,
@@ -23,10 +22,6 @@ const DLSS: u32 = 1;
 // Result macros in the public dlss_pipeline.h.
 const PIPELINE_INVALID_ARGUMENT: i32 = -1;
 const PIPELINE_EVALUATE_FAILED: i32 = -10;
-
-fn require(ok: bool, label: &'static str) -> Result<(), &'static str> {
-    ok.then_some(()).ok_or(label)
-}
 
 fn bundles(root: &Path) -> Result<Vec<PathBuf>, &'static str> {
     let mut bundles = Vec::new();

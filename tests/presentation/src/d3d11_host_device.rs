@@ -23,6 +23,10 @@ use crate::sys::*;
 type Raw = *mut c_void;
 const SCENE_COLOUR: [f32; 4] = [0.25, 0.5, 0.75, 1.0];
 
+fn require(ok: bool, label: &'static str) -> Result<(), &'static str> {
+    ok.then_some(()).ok_or(label)
+}
+
 fn identity() -> [f32; 16] {
     let mut matrix = [0.0; 16];
     for diagonal in [0, 5, 10, 15] {

@@ -5,7 +5,7 @@ use std::ptr;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_DRIVER_TYPE_WARP,
-    D3D_FEATURE_LEVEL_11_0,
+    D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
@@ -115,28 +115,29 @@ pub(super) unsafe extern "C" fn rsf_present_fixture_adapter(
     }
 }
 
-fn create11(
+/// A device and its immediate context, or the failing HRESULT.
+pub(crate) fn create11(
     adapter: Option<&IDXGIAdapter>,
     driver: D3D_DRIVER_TYPE,
-) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
+    levels: Option<&[D3D_FEATURE_LEVEL]>,
+) -> Result<(ID3D11Device, ID3D11DeviceContext), i32> {
     let mut device = None;
     let mut context = None;
-    // These linked runners pass no feature-level list and no creation flags.
     unsafe {
         D3D11CreateDevice(
             adapter,
             driver,
             HMODULE::default(),
             D3D11_CREATE_DEVICE_FLAG(0),
-            None,
+            levels,
             D3D11_SDK_VERSION,
             Some(&mut device),
             None,
             Some(&mut context),
         )
     }
-    .ok()?;
-    Some((device?, context?))
+    .map_err(|error| error.code().0)?;
+    device.zip(context).ok_or(0)
 }
 
 #[unsafe(no_mangle)]
@@ -146,7 +147,7 @@ pub(super) unsafe extern "C" fn rsf_present_fixture_device11(
     context: *mut Raw,
 ) -> i32 {
     let adapter = unsafe { IDXGIAdapter::from_raw_borrowed(&adapter) };
-    let Some((created, immediate)) = create11(adapter, D3D_DRIVER_TYPE_UNKNOWN) else {
+    let Some((created, immediate)) = create11(adapter, D3D_DRIVER_TYPE_UNKNOWN, None).ok() else {
         return 1;
     };
     unsafe {
@@ -241,9 +242,9 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_proxy_smoke(proxy_path: *const
     let Ok(_factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory2>() }) else {
         return 1;
     };
-    if create11(None, D3D_DRIVER_TYPE_HARDWARE)
-        .or_else(|| create11(None, D3D_DRIVER_TYPE_WARP))
-        .is_none()
+    if create11(None, D3D_DRIVER_TYPE_HARDWARE, None)
+        .or_else(|_| create11(None, D3D_DRIVER_TYPE_WARP, None))
+        .is_err()
     {
         return 1;
     }

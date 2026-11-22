@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Drive resource-only recovery on the real shared-SR device fixture.
-use super::rsf_d3d11_host_fixture_cpu;
+use super::{require, rsf_d3d11_host_fixture_cpu};
 use crate::sys::*;
 use rsf_game_sys::{
     RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END, RSF_GAME_RENDER_RECONFIGURE,
@@ -20,10 +20,6 @@ struct Callbacks {
     present: unsafe extern "C" fn(Raw) -> i32,
     disable_sr: unsafe extern "C" fn(Raw) -> i32,
     settings_user: Raw,
-}
-
-fn require(ok: bool, check: &'static str) -> Result<(), &'static str> {
-    ok.then_some(()).ok_or(check)
 }
 
 unsafe fn run_source(

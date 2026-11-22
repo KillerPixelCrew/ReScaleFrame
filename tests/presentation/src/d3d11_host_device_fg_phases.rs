@@ -121,10 +121,6 @@ impl Scenario<'_> {
     }
 }
 
-fn require(ok: bool, label: &'static str) -> Result<(), &'static str> {
-    ok.then_some(()).ok_or(label)
-}
-
 fn fg_status() -> (bool, rsf_native_fg_status) {
     let mut status = rsf_native_fg_status {
         struct_size: size_of::<rsf_native_fg_status>() as u32,

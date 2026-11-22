@@ -41,13 +41,11 @@ use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::time::Duration;
-use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
-    ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Fence,
+    ID3D11Device, ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Fence,
 };
 use windows::Win32::Graphics::Direct3D12::{
     D3D12CreateDevice, ID3D12Device, ID3D12Fence, ID3D12Resource,
@@ -55,7 +53,7 @@ use windows::Win32::Graphics::Direct3D12::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM,
 };
-use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
+use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::core::{IUnknown, Interface};
 
 const SKIP: i32 = 77;
@@ -96,29 +94,13 @@ impl Drop for Fence {
     }
 }
 
-fn create_d3d11() -> Result<(ID3D11Device, Option<ID3D11DeviceContext>), FixtureError> {
+fn create_d3d11() -> Result<(ID3D11Device, ID3D11DeviceContext), FixtureError> {
     let mut failure = 0;
     let levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0];
     for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
-        let mut device = None;
-        let mut context = None;
-        let result = unsafe {
-            D3D11CreateDevice(
-                None::<&IDXGIAdapter>,
-                driver,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_FLAG(0),
-                Some(&levels),
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            )
-        };
-        match (result, device) {
-            (Ok(()), Some(device)) => return Ok((device, context)),
-            (Err(error), _) => failure = error.code().0,
-            (Ok(()), None) => {}
+        match fixture_device::create11(None, driver, Some(&levels)) {
+            Ok(created) => return Ok(created),
+            Err(code) => failure = code,
         }
     }
     Err(FixtureError::Skip("no D3D11 device", failure))
@@ -239,7 +221,7 @@ fn surface_checks(device11: *mut c_void, device12: *mut c_void) -> Result<(), Fi
 fn fence_checks(
     device11: &ID3D11Device,
     device12: &ID3D12Device,
-    context: Option<ID3D11DeviceContext>,
+    context: ID3D11DeviceContext,
 ) -> Result<(), FixtureError> {
     eprintln!("[stage] D3D11 signals a fence opened by D3D12");
     let mut fence = Fence(null_mut());
@@ -267,8 +249,7 @@ fn fence_checks(
     else {
         return Err(FixtureError::Fail("both fence views must exist"));
     };
-    let Some(context) = context.and_then(|context| context.cast::<ID3D11DeviceContext4>().ok())
-    else {
+    let Ok(context) = context.cast::<ID3D11DeviceContext4>() else {
         eprintln!("  no ID3D11DeviceContext4, so the signal round trip is untested");
         return Ok(());
     };
