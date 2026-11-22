@@ -2321,8 +2321,8 @@ Port camera, depth domains, render-input selection and resolution recovery with 
 - [x] [games/fallout4/src/camera.h](games/fallout4/src/camera.h)
 - [ ] [games/fallout4/src/depth_domains.cpp](games/fallout4/src/depth_domains.cpp)
 - [ ] [games/fallout4/src/depth_domains.h](games/fallout4/src/depth_domains.h)
-- [ ] [games/fallout4/src/depth_domains_platform.h](games/fallout4/src/depth_domains_platform.h)
-- [ ] [games/fallout4/src/native_input_state.h](games/fallout4/src/native_input_state.h)
+- [x] [games/fallout4/src/depth_domains_platform.h](games/fallout4/src/depth_domains_platform.h)
+- [x] [games/fallout4/src/native_input_state.h](games/fallout4/src/native_input_state.h)
 - [ ] [games/fallout4/src/render_inputs.cpp](games/fallout4/src/render_inputs.cpp)
 - [ ] [games/fallout4/src/render_inputs.h](games/fallout4/src/render_inputs.h)
 - [ ] [games/fallout4/src/render_inputs_platform.h](games/fallout4/src/render_inputs_platform.h)
@@ -2335,7 +2335,7 @@ Port camera, depth domains, render-input selection and resolution recovery with 
 **Fixtures (2)**
 
 - [x] [tests/fallout4_camera.cpp](tests/fallout4_camera.cpp)
-- [ ] [tests/fallout4_input_state.cpp](tests/fallout4_input_state.cpp)
+- [x] [tests/fallout4_input_state.cpp](tests/fallout4_input_state.cpp)
 
 **Rust review findings (10)**
 
