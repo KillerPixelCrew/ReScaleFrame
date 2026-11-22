@@ -433,7 +433,10 @@ for, so the cuts are repeated helpers, forwarding layers and C-shaped signatures
 - `tests/presentation`: `lib.rs` and `fixture_device.rs` each wrote the hardware-then-WARP `D3D11CreateDevice`; one `create11` now serves both. Three `d3d11_host_device_*` modules defined the same `require`; one in the parent.
 - `tests/vulkan_gpu.rs` (new, shared by `native_sr_vulkan.rs` and `sharpening_vulkan.rs`): loader `Library`/`entry`, physical-device choice with feature chain and device creation, memory-type allocation. Not shared: the FSR4 interop device (different error codes and extensions) and the fake-Vulkan CPU fixture.
 - `tests/overlay/src/hotkey.rs`: the five hand-declared `MH_*` externs now come from `rsf-minhook-sys`.
-- Reviewed and kept, in coverage terms: the other `tests/**` modules assert distinct contracts (scope and present lifetimes in `tests/game-sdk`, retirement order in `tests/presentation`, vendor ABI facts in `tests/vulkan-fg` and `tests/loader`). The survey's window-class and WARP-device copies differ in handle type (`windows` against `windows-sys`), swap-chain use or custom window procedures, so they were not merged. Not reached: `tools/exposure_probe/src/ngx.rs` still declares `MH_*` (outside this area), and the top-level `tests/*.rs` that build as standalone `rustc` units (`anomaly_bootstrap`, `engine_sharpening`, `native_vulkan_exports`, `unity_mono_runtime` hand-declare Win32 loaders because they have no dependencies).
+- `tools/exposure_probe/src/ngx.rs`: the five hand-declared `MH_*` externs come from `rsf-minhook-sys`.
+- `tests/generation` (`check!` in `leases.rs` and `session.rs`) and `tests/godot_graph_handoff.rs` (the same local `check!` in both entry points): one macro each. Header comments narrating the deleted C++ file a fixture replaced are removed (`ac7_native_graph.rs`, `streamline_dispatch.rs`, `dlss/sdk.rs`).
+- Reviewed and kept (second pass, `tests/**` is 52k lines of Rust): the fixtures assert distinct contracts (scope and present lifetimes in `tests/game-sdk`, retirement order in `tests/presentation`, vendor ABI facts in `tests/vulkan-fg` and `tests/loader`), and no exact duplicate function of 8 lines or more remains outside the includes above. The near-copies were not merged because they differ in a value a test may depend on and nothing here can run them: the ~18 `rsf_frame_record` builders (resolution, near plane, which of the five matrices are identity, flags), the fake Vulkan entry tables in `ffx_gpu.rs`, `dlss/vulkan.rs` and `xess_input_range.rs` (each records different counters and uses typed against `c_void` pointers), the CPU-event `fact()` helpers in `tests/game-sdk` (real against fixed QPC frequency, `render_expected`), and the window-class and WARP-device copies (`windows` against `windows-sys` handles, custom window procedures, swap-chain use).
+- Standalone `rustc` fixtures (`anomaly_bootstrap`, `engine_sharpening`, `native_vulkan_exports`, `unity_mono_runtime`) keep their hand-declared `LoadLibrary*`/`GetProcAddress`: `tests/CMakeLists.txt` builds them with bare `rustc` and `rsf_rust_fixture_externs` supplies only the `rsf-game-sys`, `rsf-ac7` and `rsf-orchestrator` rlibs, so the `windows` crate or `rsf-test-support` (hash-named rlibs) is not reachable without changing how they are built. Moving them into a Cargo fixture crate is the way to remove the declarations.
 
 ### Round 2: games/rdr2, project-wingman, minecraft
 
@@ -508,6 +511,7 @@ nothing sets or reads, per-frame work only tests consume, and C++ buffer limits 
   reachable after disable), `shader_loader` (the deployed-tree path is already fixture-only), `sr_d3d11`
   (`Texture`/`rsf_sr_texture` stay with the C D3D11 table and its C device tests, GM-G1.2).
 - Outside the area: `docs/research/rust-anomaly-sr-stage.md` (removed `struct_size` and destroy wording).
+
 
 ## Scope
 
