@@ -121,9 +121,9 @@ static void run(const invocation* call, bool completes)
 static void observe(const invocation* call)
 {
     const bool completes = rsf_anomaly_observer_before(&platform, call->boundary);
-    __try {
+    RSF_FOREIGN_TRY {
         run(call, completes);
-    } __finally {
+    } RSF_FOREIGN_FINALLY {
         rsf_anomaly_observer_leave();
     }
 }

@@ -34,9 +34,9 @@ static void call_input_frame(void* self)
 static void input_frame(void* self)
 {
     const uint32_t ticket = rsf_anomaly_input_frame_begin(guarded_copy, rsf_anomaly_fg_stage_input_begin);
-    __try {
+    RSF_FOREIGN_TRY {
         call_input_frame(self);
-    } __finally {
+    } RSF_FOREIGN_FINALLY {
         rsf_anomaly_input_frame_exit(ticket);
     }
 }

@@ -9,8 +9,8 @@
 
 #ifdef _MSC_VER
 /* MSVC unwinds through a detour when the engine raises. Each scope must still be left. */
-#define RSF_TRY __try {
-#define RSF_FINALLY } __finally {
+#define RSF_TRY RSF_FOREIGN_TRY {
+#define RSF_FINALLY } RSF_FOREIGN_FINALLY {
 #define RSF_END_TRY }
 #else
 #define RSF_TRY {

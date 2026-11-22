@@ -13,15 +13,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <rescaleframe/foreign_guard.h>
 
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
-
-#if defined(_MSC_VER)
-#define RSF_FOREIGN_TRY __try
-#define RSF_FOREIGN_CATCH(on_exception) \
-    __except (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER \
-                                                           : EXCEPTION_CONTINUE_SEARCH) { on_exception; }
-#else
+#if !defined(_MSC_VER)
 #error "Foreign C++ exception containment needs MSVC structured exception handling"
 #endif
 
@@ -32,7 +26,7 @@ static bool notify(rsf_ac7_render_scope_fn callback, void* user, void* command_l
     RSF_FOREIGN_TRY {
         callback(user, command_list, scope, begin);
         return true;
-    } RSF_FOREIGN_CATCH(return false)
+    } RSF_FOREIGN_CATCH { return false; }
 }
 
 static bool resolve(const rsf_ac7_scope_lease* lease, rsf_ac7_render_scope* scope)
@@ -40,7 +34,7 @@ static bool resolve(const rsf_ac7_scope_lease* lease, rsf_ac7_render_scope* scop
     RSF_FOREIGN_TRY {
         lease->resolve(lease->object, scope);
         return true;
-    } RSF_FOREIGN_CATCH(return false)
+    } RSF_FOREIGN_CATCH { return false; }
 }
 
 static bool release(const rsf_ac7_scope_lease* lease)
@@ -48,7 +42,7 @@ static bool release(const rsf_ac7_scope_lease* lease)
     RSF_FOREIGN_TRY {
         lease->release(lease->object);
         return true;
-    } RSF_FOREIGN_CATCH(return false)
+    } RSF_FOREIGN_CATCH { return false; }
 }
 
 const rsf_ac7_scope_calls rsf_ac7_scope_exception_calls = { notify, resolve, release };

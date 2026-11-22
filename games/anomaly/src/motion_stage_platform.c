@@ -79,10 +79,10 @@ static void replay_draw(const rsf_anomaly_motion_draw_scope* scope, const draw_c
     rsf_anomaly_motion_replay_scope replay;
     if (!rsf_anomaly_motion_stage_replay_begin(scope, &replay)) return;
     volatile bool completed = false;
-    __try {
+    RSF_FOREIGN_TRY {
         call_draw(call);
         completed = true;
-    } __finally {
+    } RSF_FOREIGN_FINALLY {
         rsf_anomaly_motion_stage_replay_end(scope, &replay, completed);
     }
 }
@@ -92,11 +92,11 @@ static void around_draw(const draw_call* call)
     rsf_anomaly_motion_draw_scope scope;
     const uint8_t route = rsf_anomaly_motion_stage_draw_begin(call->context, &scope);
     volatile bool completed = false;
-    __try {
+    RSF_FOREIGN_TRY {
         call_draw(call);
         completed = true;
         if (route == RSF_ANOMALY_MOTION_REPLAY_DRAW) replay_draw(&scope, call);
-    } __finally {
+    } RSF_FOREIGN_FINALLY {
         if (route != RSF_ANOMALY_MOTION_NO_DRAW) rsf_anomaly_motion_stage_draw_end(&scope, completed);
     }
 }
@@ -306,9 +306,9 @@ static bool include_open(void* table, const char* name, const void** data, uint3
 {
     ID3DInclude* object = (ID3DInclude*)&table;
 #ifdef _MSC_VER
-    __try {
+    RSF_FOREIGN_TRY {
         return SUCCEEDED(object->lpVtbl->Open(object, D3D_INCLUDE_LOCAL, name, NULL, data, size));
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         return false;
     }
 #else
@@ -319,9 +319,9 @@ static void include_close(void* table, const void* data)
 {
     ID3DInclude* object = (ID3DInclude*)&table;
 #ifdef _MSC_VER
-    __try {
+    RSF_FOREIGN_TRY {
         object->lpVtbl->Close(object, data);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
     }
 #else
     object->lpVtbl->Close(object, data);

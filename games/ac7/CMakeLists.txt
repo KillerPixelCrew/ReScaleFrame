@@ -37,7 +37,7 @@ add_library(ReScaleFrame::AC7VelocityPass ALIAS rsf_ac7_graphics)
 
 add_library(rsf_ac7_memory STATIC src/ac7_memory.c)
 target_include_directories(rsf_ac7_memory PUBLIC include)
-target_link_libraries(rsf_ac7_memory PRIVATE rsf_build_options)
+target_link_libraries(rsf_ac7_memory PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 
 add_library(rsf_ac7_capture_trampolines STATIC
     src/motion_capture_trampolines.c src/ac7_hooks.c)

@@ -27,7 +27,7 @@ add_test(NAME anomaly_geometry_contract COMMAND rsf_anomaly_geometry_test)
 add_executable(rsf_anomaly_geometry_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_hooks.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 target_compile_definitions(rsf_anomaly_geometry_hooks_test PRIVATE RSF_ANOMALY_GEOMETRY_TESTING)
-target_link_libraries(rsf_anomaly_geometry_hooks_test PRIVATE rsf_anomaly_fixtures_rust minhook rsf_build_options)
+target_link_libraries(rsf_anomaly_geometry_hooks_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::GameSDK minhook rsf_build_options)
 add_test(NAME anomaly_geometry_hooks_contract COMMAND rsf_anomaly_geometry_hooks_test)
 set_tests_properties(anomaly_geometry_contract anomaly_geometry_hooks_contract PROPERTIES TIMEOUT 60)
 

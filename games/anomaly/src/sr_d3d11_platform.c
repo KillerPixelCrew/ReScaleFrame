@@ -54,7 +54,7 @@ static void restore_state(void* context, void* snapshot)
     free(snapshot);
 }
 
-static const rsf_sr_d3d11_foreign foreign = {default_view, guarded_log, save_state, restore_state};
+static const rsf_sr_d3d11_foreign foreign = {default_view, rsf_game_log_guarded, save_state, restore_state};
 
 const rsf_sr_d3d11* rsf_anomaly_sr_d3d11_platform(void)
 {

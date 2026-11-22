@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include <rescaleframe/foreign_guard.h>
 #include <rescaleframe/ac7_memory.h>
 #include <string.h>
 #include <windows.h>
@@ -7,10 +8,10 @@ bool rsf_ac7_copy_memory(void* output, const void* input, size_t size)
 {
     if (!output || !input) return false;
 #if defined(_MSC_VER)
-    __try {
+    RSF_FOREIGN_TRY {
         memcpy(output, input, size);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         return false;
     }
 #else

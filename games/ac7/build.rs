@@ -28,7 +28,7 @@ fn main() {
     println!("cargo::rerun-if-changed=include");
     let out = std::env::var("OUT_DIR").expect("Cargo output directory");
     println!("cargo::rustc-link-search=native={out}");
-    leaf("rsf_ac7_memory", &["src/ac7_memory.c"], &["include"]);
+    leaf("rsf_ac7_memory", &["src/ac7_memory.c"], &["include", "../../sdk/game/include"]);
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }

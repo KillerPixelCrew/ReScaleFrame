@@ -59,9 +59,9 @@ static void __fastcall blur_hook(void* self)
 static void __fastcall sun_cascades_hook(void* self)
 {
     const bool suspended = rsf_anomaly_sr_stage_sun_begin();
-    __try {
+    RSF_FOREIGN_TRY {
         ((unary_fn)originals[SUN_CASCADES])(self);
-    } __finally {
+    } RSF_FOREIGN_FINALLY {
         rsf_anomaly_sr_stage_sun_end(suspended);
     }
 }
@@ -110,10 +110,10 @@ typedef unsigned char* (__fastcall *constant_buffer_fn)(void* constants, void* c
 static bool set_projection(void* function, void* xforms, const void* matrix)
 {
 #ifdef _MSC_VER
-    __try {
+    RSF_FOREIGN_TRY {
         ((set_projection_fn)function)(xforms, matrix);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         return false;
     }
 #else
@@ -125,10 +125,10 @@ static bool set_projection(void* function, void* xforms, const void* matrix)
 static bool set_mip_bias(void* function, void* cache, float bias)
 {
 #ifdef _MSC_VER
-    __try {
+    RSF_FOREIGN_TRY {
         ((set_mip_bias_fn)function)(cache, bias);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         return false;
     }
 #else
@@ -140,9 +140,9 @@ static bool set_mip_bias(void* function, void* cache, float bias)
 static uintptr_t constant_buffer(void* function, void* constants, uintptr_t constant, uint32_t stage)
 {
 #ifdef _MSC_VER
-    __try {
+    RSF_FOREIGN_TRY {
         return (uintptr_t)((constant_buffer_fn)function)(constants, (void*)constant, stage);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         return 0;
     }
 #else

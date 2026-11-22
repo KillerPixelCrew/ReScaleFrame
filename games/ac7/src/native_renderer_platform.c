@@ -12,6 +12,7 @@
 #include "../../../integrations/windows/xinput_facts.h"
 #include <MinHook.h>
 #include <windows.h>
+#include <rescaleframe/foreign_guard.h>
 
 static int32_t hook_initialize(void) { return (int32_t)MH_Initialize(); }
 static int32_t hook_create(void* target, void* detour, void** original)
@@ -35,17 +36,12 @@ typedef void* (*rsf_ac7_shader_factory_fn)(void* rhi, void* result, const void* 
 static bool shader_factory(void* factory, void* rhi, void* result, const void* code, void** created)
 {
     const rsf_ac7_shader_factory_fn create = (rsf_ac7_shader_factory_fn)factory;
-#if defined(_MSC_VER)
-    __try {
-#endif
+    RSF_FOREIGN_TRY {
         *created = create(rhi, result, code);
         return true;
-#if defined(_MSC_VER)
-    } __except (GetExceptionCode() == 0xE06D7363u ? EXCEPTION_EXECUTE_HANDLER
-                                                    : EXCEPTION_CONTINUE_SEARCH) {
+    } RSF_FOREIGN_CATCH {
         return false;
     }
-#endif
 }
 
 const rsf_ac7_native_calls rsf_ac7_native_calls_table = {

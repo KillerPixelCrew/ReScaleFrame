@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /* Typed Unreal detours and guarded engine calls for the F9 capture. Only Rust interprets the
    numeric observations. This leaf keeps what Rust cannot express: SEH around a raw engine call,
-   and __try/__finally termination handlers that restore the Rust-owned engine and root scopes
+   and RSF_FOREIGN_TRY/RSF_FOREIGN_FINALLY termination handlers that restore the Rust-owned engine and root scopes
    when an original call unwinds, as the former C++ scope destructors did. Without MSVC the
    calls are unguarded, as they were in the C++ build. */
+#include <rescaleframe/foreign_guard.h>
 #include <rescaleframe/ac7_hooks.h>
 #include <rescaleframe/ac7_memory.h>
 #include <stdalign.h>
@@ -21,8 +22,8 @@
 
 #if defined(_MSC_VER)
 /* MSVC unwinds through the detour when an original call raises. The restore must still run. */
-#define RSF_SCOPE_TRY __try {
-#define RSF_SCOPE_FINALLY(cleanup) } __finally { cleanup; }
+#define RSF_SCOPE_TRY RSF_FOREIGN_TRY {
+#define RSF_SCOPE_FINALLY(cleanup) } RSF_FOREIGN_FINALLY { cleanup; }
 #else
 #define RSF_SCOPE_TRY {
 #define RSF_SCOPE_FINALLY(cleanup) } cleanup;
@@ -74,13 +75,13 @@ bool rsf_ac7_capture_get_graph_output(uint64_t getter, uint64_t node, uint32_t i
     bool read = false;
     if (!getter) return false;
 #if defined(_MSC_VER)
-    __try {
+    RSF_FOREIGN_TRY {
 #endif
         const get_output_fn call = (get_output_fn)(uintptr_t)getter;
         *output = address(call((void*)(uintptr_t)node, index));
         read = true;
 #if defined(_MSC_VER)
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         read = false;
     }
 #endif
