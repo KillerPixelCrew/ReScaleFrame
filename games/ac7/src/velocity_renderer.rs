@@ -2,16 +2,17 @@
 //! The translucent velocity pass's per-device renderer lifetime: which renderer is published and
 //! for which D3D11 device, admission of a draw's device, replacement when the device changes,
 //! the history, variant and profile resets that follow a publication, and teardown at release.
-//! velocity_pass.cpp lends the leaves that create and destroy the native renderer, which keeps
-//! its D3D11 objects, HLSL, variant list and the resources at the history slots.
-//! The native replay lock spans admission through the last renderer use. A replacement or release
-//! can therefore only retire the renderer after all native borrows have ended.
+//! velocity_pass.cpp lends the D3D11 allocation and submission leaves. The replay lock spans
+//! admission through the final use of the shader variants and history resources.
 
 use crate::{velocity_commit, velocity_history, velocity_pass_cache};
 use std::ffi::c_void;
 use std::mem::offset_of;
 use std::ptr::{NonNull, null_mut};
 use std::sync::{LazyLock, Mutex, MutexGuard};
+
+#[cfg(windows)]
+mod replay;
 
 /// Creates and initializes a renderer for the device, or returns null. Must not throw.
 type CreateRenderer = unsafe extern "C" fn(device: *mut c_void) -> *mut c_void;
@@ -191,8 +192,7 @@ extern "C" fn rsf_ac7_velocity_renderer_for(device: *mut c_void) -> *mut c_void 
 
 /// Destroys the published renderer and forgets the observed sources, layouts, variants, history
 /// and profile.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_renderer_release() {
+fn release_renderer() {
     release(&LIFETIME, || {
         velocity_pass_cache::release();
         velocity_history::reset();

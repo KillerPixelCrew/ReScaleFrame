@@ -3,29 +3,37 @@
 
 use crate::dxbc_chunks::Chunk;
 use crate::velocity_container::{
-    Semantic, SemanticView, borrowed, chunk_index, read_signature, resize_bytes, shader_index,
-    valid_container_size, write_container, write_signature,
+    Semantic, chunk_index, read_signature, shader_index, write_container, write_signature,
 };
+#[cfg(windows)]
+use crate::velocity_container::{borrowed, resize_bytes, valid_container_size};
 use crate::velocity_tokens::{
     DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, instructions, rewrite_operands,
     write_instructions,
 };
+#[cfg(windows)]
 use std::ffi::{CStr, c_char, c_void};
+#[cfg(windows)]
 use std::sync::OnceLock;
 
 pub(crate) const REGISTER_COUNT: usize = 32;
+#[cfg(windows)]
 type CompileSink = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32;
-pub(crate) type CompileHelper = unsafe extern "C" fn(
-    *const u8,
-    usize,
-    *const c_char,
-    *const c_char,
-    *const c_char,
-    u32,
-    *mut c_void,
-    CompileSink,
-    CompileSink,
-) -> i32;
+#[cfg(windows)]
+unsafe extern "C" {
+    fn rsf_compile_system_shader(
+        source: *const u8,
+        length: usize,
+        name: *const c_char,
+        entry: *const c_char,
+        profile: *const c_char,
+        flags: u32,
+        user: *mut c_void,
+        code: CompileSink,
+        errors: CompileSink,
+    ) -> i32;
+}
+#[cfg(windows)]
 pub(crate) type HelperCache = OnceLock<Option<Vec<u8>>>;
 
 pub(crate) type RegisterMap<T> = [Option<T>; REGISTER_COUNT];
@@ -75,19 +83,16 @@ pub(crate) fn stage<'a>(
     })
 }
 
-pub(crate) fn write_stage<'a>(
+pub(crate) fn write_stage(
     chunks: &[Chunk<'_>],
     stage: &StageChunks,
     inputs: &[Semantic<'_>],
     outputs: &[Semantic<'_>],
     code: &[u32],
-    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
+    destination: &mut Vec<u8>,
 ) -> Option<()> {
     let mut output = Vec::new();
-    let output_allocation = &mut output;
-    write_signature(outputs, chunks[stage.output].tag == b"OSG5", move |size| {
-        resize_bytes(output_allocation, size)
-    })?;
+    write_signature(outputs, chunks[stage.output].tag == b"OSG5", &mut output)?;
 
     write_stage_inputs(
         chunks,
@@ -96,27 +101,23 @@ pub(crate) fn write_stage<'a>(
         inputs,
         code,
         Some((stage.output, &output)),
-        allocate,
+        destination,
     )
 }
 
-pub(crate) fn write_stage_inputs<'a>(
+pub(crate) fn write_stage_inputs(
     chunks: &[Chunk<'_>],
     shader_index: usize,
     input_index: usize,
     inputs: &[Semantic<'_>],
     code: &[u32],
     output: Option<(usize, &[u8])>,
-    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
+    destination: &mut Vec<u8>,
 ) -> Option<()> {
     let mut shader = Vec::new();
     let mut input = Vec::new();
-    let shader_allocation = &mut shader;
-    write_instructions(code, move |size| resize_bytes(shader_allocation, size))?;
-    let input_allocation = &mut input;
-    write_signature(inputs, false, move |size| {
-        resize_bytes(input_allocation, size)
-    })?;
+    write_instructions(code, &mut shader)?;
+    write_signature(inputs, false, &mut input)?;
     let mut linked = Vec::new();
     linked.try_reserve_exact(chunks.len()).ok()?;
     for (index, chunk) in chunks.iter().enumerate() {
@@ -134,7 +135,7 @@ pub(crate) fn write_stage_inputs<'a>(
             data,
         });
     }
-    write_container(&linked, allocate)
+    write_container(&linked, destination)
 }
 
 /// Rebase a compiled VS helper for injection into a different shader stage.
@@ -206,45 +207,40 @@ pub(crate) fn mapped<T: Copy>(map: &RegisterMap<T>, register: u32) -> Option<T> 
     map.get(register as usize).copied().flatten()
 }
 
-pub(crate) fn vertex_outputs(views: &[SemanticView]) -> Option<Vec<Semantic<'_>>> {
-    let mut outputs = Vec::new();
-    outputs.try_reserve_exact(views.len()).ok()?;
-    for view in views {
-        outputs.push(unsafe { view.borrow() }?);
-    }
-    Some(outputs)
-}
-
 /// The shared System32 compiler lends its blob during the sink call. Copy once into
 /// the Rust cache and keep the immutable bytecode alive through all later link calls.
+#[cfg(windows)]
 pub(crate) fn compile_bytecode<'a>(
     cache: &'a HelperCache,
-    compile: CompileHelper,
     source: &str,
     name: &CStr,
     target: &CStr,
 ) -> Option<&'a [u8]> {
     cache
-        .get_or_init(|| {
-            let mut bytecode = Vec::new();
-            let status = unsafe {
-                compile(
-                    source.as_ptr(),
-                    source.len(),
-                    name.as_ptr(),
-                    c"main".as_ptr(),
-                    target.as_ptr(),
-                    1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
-                    (&mut bytecode as *mut Vec<u8>).cast(),
-                    copy_code,
-                    ignore_errors,
-                )
-            };
-            (status == 0 && valid_container_size(bytecode.len())).then_some(bytecode)
-        })
+        .get_or_init(|| compile_source(source, name, target))
         .as_deref()
 }
 
+#[cfg(windows)]
+pub(crate) fn compile_source(source: &str, name: &CStr, target: &CStr) -> Option<Vec<u8>> {
+    let mut bytecode = Vec::new();
+    let status = unsafe {
+        rsf_compile_system_shader(
+            source.as_ptr(),
+            source.len(),
+            name.as_ptr(),
+            c"main".as_ptr(),
+            target.as_ptr(),
+            1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
+            (&mut bytecode as *mut Vec<u8>).cast(),
+            copy_code,
+            ignore_errors,
+        )
+    };
+    (status == 0 && valid_container_size(bytecode.len())).then_some(bytecode)
+}
+
+#[cfg(windows)]
 unsafe extern "C" fn copy_code(user: *mut c_void, bytes: *const u8, size: usize) -> i32 {
     if !valid_container_size(size) {
         return -1;
@@ -260,20 +256,16 @@ unsafe extern "C" fn copy_code(user: *mut c_void, bytes: *const u8, size: usize)
     0
 }
 
+#[cfg(windows)]
 unsafe extern "C" fn ignore_errors(_: *mut c_void, _: *const u8, _: usize) -> i32 {
     0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_ac7_velocity_history_source() -> *const c_char {
-    concat!(
-        include_str!("velocity_history_table.hlsl"),
-        include_str!("velocity_history_writer.hlsl"),
-        "\0",
-    )
-    .as_ptr()
-    .cast()
-}
+#[cfg(windows)]
+pub(crate) const HISTORY_WRITER: &str = concat!(
+    include_str!("velocity_history_table.hlsl"),
+    include_str!("velocity_history_writer.hlsl"),
+);
 
 #[cfg(test)]
 mod tests {
@@ -301,9 +293,15 @@ mod tests {
             },
         ];
         let mut output = Vec::new();
-        write_stage_inputs(&native, 0, 1, &[], &[0x50, 0, 0x0100_003e], None, |size| {
-            resize_bytes(&mut output, size)
-        })
+        write_stage_inputs(
+            &native,
+            0,
+            1,
+            &[],
+            &[0x50, 0, 0x0100_003e],
+            None,
+            &mut output,
+        )
         .unwrap();
         let linked = chunks(&output).unwrap();
         assert_ne!(linked[0].data, native[0].data);

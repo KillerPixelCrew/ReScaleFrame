@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! The translucent velocity pass's observed shader sources and input layouts, and its variant
 //! admission: stage-checked source lookup, the beam/trail layout decision, the history identity of
-//! generated geometry, variant identity, reuse and the refusal cache. velocity_pass.cpp keeps the
-//! DXBC transform calls, every typed D3D11 object and the bytecode-keyed object caches in the
-//! builder it lends, and stores each built variant at the slot recorded here.
+//! generated geometry, variant identity, reuse and the refusal cache. The device owner builds
+//! and retains D3D11 variants at the slots recorded here.
 
 use crate::contact_shadow::container_crc;
 use crate::d3d11_observer_layout_abi::rsf_observer_layout_element as LayoutElement;
 use crate::velocity_container::borrowed;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::mem::offset_of;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
 const SOURCE_BUDGET: usize = 64 * 1024 * 1024;
@@ -27,8 +25,8 @@ const DOMAIN: usize = 4;
 const STAGES: usize = 5;
 
 // Builder outcomes. Anything else leaves the key unrecorded, so a later draw builds again.
-const REFUSED: i32 = 0;
-const BUILT: i32 = 1;
+pub(crate) const REFUSED: i32 = 0;
+pub(crate) const BUILT: i32 = 1;
 
 // The beam/trail vertex factory declaration: semantics 0 to 4 once each in stream 0 of an
 // 80-byte vertex, an optional semantic 5 at the start of stream 1, all per vertex, float4 except
@@ -49,35 +47,14 @@ struct Layout {
     serial: u64,
 }
 
-/// The draw's bound shaders in stage order, its input layout, material blend and first stream
-/// stride. Absent stages are null.
-#[repr(C)]
-#[allow(dead_code)] // constructed by velocity_pass.cpp
-struct VariantRequest {
-    shaders: [*mut c_void; STAGES],
-    layout: *mut c_void,
-    material_blend: u32,
-    stride: u32,
-}
+pub(crate) use crate::velocity_device_abi::rsf_ac7_velocity_variant_request as VariantRequest;
 
-/// Lent to the builder for its call. Absent stages are empty.
-#[repr(C)]
-#[allow(dead_code)] // read by velocity_pass.cpp
-struct VariantSources {
-    bytes: [*const u8; STAGES],
-    sizes: [usize; STAGES],
-    elements: *const LayoutElement,
-    element_count: u32,
-    geometry_hash: u32,
-    beam_layout: bool,
+pub(crate) struct VariantSources<'a> {
+    pub(crate) bytes: [&'a [u8]; STAGES],
+    pub(crate) elements: &'a [LayoutElement],
+    pub(crate) geometry_hash: u32,
+    pub(crate) beam_layout: bool,
 }
-
-const _: () = {
-    assert!(size_of::<VariantRequest>() == 56 && offset_of!(VariantRequest, stride) == 52);
-    assert!(size_of::<VariantSources>() == 104);
-    assert!(offset_of!(VariantSources, elements) == 80);
-    assert!(offset_of!(VariantSources, beam_layout) == 96);
-};
 
 /// Interface addresses alone are not identity: D3D11 reuses released addresses, so the
 /// bytecode hashes and the layout's creation serial are part of the key.
@@ -286,7 +263,7 @@ fn admit(
     state: &Mutex<Cache>,
     request: &VariantRequest,
     vertex_hash: &mut u32,
-    build: impl FnOnce(&VariantSources, &mut u32) -> i32,
+    build: impl FnOnce(&VariantSources<'_>, &mut u32) -> i32,
 ) -> u32 {
     let (generation, key, lease) = {
         let cache = lock(state);
@@ -296,15 +273,13 @@ fn admit(
             Admission::Build(key, lease) => (cache.generation, key, lease),
         }
     };
-    let stages = lease.bytes.each_ref().map(|bytes| {
+    let bytes = lease.bytes.each_ref().map(|bytes| {
         // The stage interfaces accept an empty span backed by a non-null pointer.
         bytes.as_deref().map_or(&[][..], Vec::as_slice)
     });
     let sources = VariantSources {
-        bytes: stages.map(<[u8]>::as_ptr),
-        sizes: stages.map(<[u8]>::len),
-        elements: lease.elements.as_ptr(),
-        element_count: lease.elements.len() as u32,
+        bytes,
+        elements: &lease.elements,
         geometry_hash: lease.geometry_hash,
         beam_layout: lease.beam_layout,
     };
@@ -317,8 +292,6 @@ fn admit(
     };
     lock(state).record(generation, key, entry)
 }
-
-type BuildVariant = unsafe extern "C" fn(*mut c_void, *const VariantSources, *mut u32) -> i32;
 
 pub(crate) fn observes_stage(stage: u32) -> bool {
     stage as usize <= DOMAIN
@@ -350,26 +323,17 @@ unsafe extern "C" fn rsf_ac7_velocity_layout_seen(
     lock(&CACHE).observe_layout(layout.addr(), elements);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_admit_variant(
-    request: *const VariantRequest,
-    user: *mut c_void,
-    build: Option<BuildVariant>,
-    vertex_hash: *mut u32,
+#[cfg(windows)]
+pub(crate) fn admit_variant(
+    request: &VariantRequest,
+    vertex_hash: &mut u32,
+    build: impl FnOnce(&VariantSources<'_>, &mut u32) -> i32,
 ) -> u32 {
-    // SAFETY: The draw callback lends its request and hash output for this call.
-    let (request, vertex_hash) = unsafe { (request.as_ref(), vertex_hash.as_mut()) };
-    let (Some(request), Some(build), Some(vertex_hash)) = (request, build, vertex_hash) else {
-        return NO_VARIANT;
-    };
-    admit(&CACHE, request, vertex_hash, |sources, slot| {
-        // SAFETY: The builder borrows the sources, its context and the slot for this call.
-        unsafe { build(user, sources, slot) }
-    })
+    admit(&CACHE, request, vertex_hash, build)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_variant_count() -> usize {
+#[cfg(windows)]
+pub(crate) fn variant_count() -> usize {
     lock(&CACHE).variants.len()
 }
 

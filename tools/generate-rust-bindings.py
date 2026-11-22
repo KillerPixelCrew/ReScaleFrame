@@ -24,6 +24,8 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
         Path(temporary.name).replace(output)
 
 
+generate("games/ac7/src/velocity_device_abi.rs", "games/ac7/src/velocity_device.h",
+         "rsf_ac7_velocity_(variant|variant_request|kernels|refusal_fn)", "NOTHING", [])
 generate("games/fallout4/src/resolution_stages.rs", "games/fallout4/src/resolution_stages.h",
          "NOTHING", "RSF_FALLOUT4_STAGE_.*", [])
 generate("sdk/game/src/d3d11_reduced_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_host.h",

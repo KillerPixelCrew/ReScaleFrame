@@ -6,7 +6,6 @@
 #include "ac7_scope_owner.h"
 #include "cloud_depth_platform.h"
 #include "contact_shadow.h"
-#include "shader_bytes.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <algorithm>
@@ -501,35 +500,43 @@ void* hooked_create_pixel_shader(void* rhi, void* result, const NativeShaderCode
         !copy_memory(&optional, input.data + input.count - 4, 4) || optional < 4 || optional > size_t(input.count) - offset ||
         !copy_memory(&dxbc_size, input.data + offset + 24, 4) || dxbc_size != size_t(input.count) - offset - optional)
         return original(rhi, result, code);
-    std::vector<uint8_t> transformed;
-    const auto patched = rsf_ac7_contact_shadow_correct(input.data + offset, size_t(input.count) - offset,
-        rsf::ac7::resize_shader_bytes, &transformed);
-    if (patched != RSF_AC7_CONTACT_PATCHED) {
-        if (patched == RSF_AC7_CONTACT_REFUSED && self->contact_reports.fetch_add(1) < 8)
-            log(*self, "AC7 contact-shadow correction refused: shader fingerprint matched but transform validation failed");
-        return original(rhi, result, code);
-    }
-    try {
-        std::vector<uint8_t> complete(offset + transformed.size());
-        std::memcpy(complete.data(), input.data, offset);
-        std::memcpy(complete.data() + offset, transformed.data(), transformed.size());
-        NativeShaderCode replacement{complete.data(), int32_t(complete.size()), int32_t(complete.size())};
-        auto* created = original(rhi, result, &replacement);
-        uint64_t shader = 0, native = 0;
-        const bool accepted = copy_memory(&shader, result, sizeof(shader)) && read(shader, 0xa0, native) && native;
-        if (self->contact_reports.fetch_add(1) < 8) {
-            char message[288]{};
-            std::snprintf(message, sizeof(message),
-                "AC7 contact-shadow correction: native factory resource=%u RHI=%llx D3D11=%llx CRC=%u; View noise phase and depth quantisation bias, native light/ray parameters preserved",
-                accepted ? 1u : 0u, static_cast<unsigned long long>(shader), static_cast<unsigned long long>(native),
-                rsf_ac7_contact_shadow_crc(transformed.data(), transformed.size()));
-            log(*self, message);
-        }
-        return created;
-    } catch (...) {
-        log(*self, "AC7 contact-shadow correction refused: temporary native shader code allocation failed");
-        return original(rhi, result, code);
-    }
+    struct Factory {
+        Create original;
+        rsf_ac7_native_renderer* owner;
+        void* rhi;
+        void* result;
+        void* created = nullptr;
+        bool failed = false;
+    } factory{original, self, rhi, result};
+    const auto patched = rsf_ac7_contact_shadow_correct(input.data, size_t(input.count), offset,
+        [](void* user, const uint8_t* transformed, size_t size, uint32_t crc) noexcept {
+            auto& factory = *static_cast<Factory*>(user);
+            try {
+                NativeShaderCode replacement{transformed, int32_t(size), int32_t(size)};
+                factory.created = factory.original(factory.rhi, factory.result, &replacement);
+                uint64_t shader = 0, native = 0;
+                const bool accepted = copy_memory(&shader, factory.result, sizeof(shader)) &&
+                    read(shader, 0xa0, native) && native;
+                if (factory.owner->contact_reports.fetch_add(1) < 8) {
+                    char message[288]{};
+                    std::snprintf(message, sizeof(message),
+                        "AC7 contact-shadow correction: native factory resource=%u RHI=%llx D3D11=%llx CRC=%u; View noise phase and depth quantisation bias, native light/ray parameters preserved",
+                        accepted ? 1u : 0u, static_cast<unsigned long long>(shader), static_cast<unsigned long long>(native),
+                        crc);
+                    log(*factory.owner, message);
+                }
+                return true;
+            } catch (...) {
+                factory.failed = true;
+                log(*factory.owner, "AC7 contact-shadow correction refused: native shader factory failed");
+                return false;
+            }
+        }, &factory);
+    if (patched == RSF_AC7_CONTACT_PATCHED)
+        return factory.created;
+    if (patched == RSF_AC7_CONTACT_REFUSED && !factory.failed && self->contact_reports.fetch_add(1) < 8)
+        log(*self, "AC7 contact-shadow correction refused: shader fingerprint matched but transform validation failed");
+    return original(rhi, result, code);
 }
 thread_local uint64_t frame_task_source = 0;
 thread_local rsf_ac7_render_ticket* full_frame_ticket = nullptr;

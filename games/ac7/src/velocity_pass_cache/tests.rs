@@ -197,11 +197,10 @@ fn built_variants_are_reused_and_refusals_cached() {
     let slot = admit(&state, &first, &mut hash, |sources, slot| {
         builds.set(builds.get() + 1);
         assert!(sources.beam_layout);
-        assert_eq!(sources.element_count, 6);
-        assert_eq!(sources.sizes, [64, 64, 0, 0, 0]);
+        assert_eq!(sources.elements.len(), 6);
+        assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 0, 0, 0]);
         assert_eq!(sources.geometry_hash, 0);
-        let lent =
-            unsafe { std::slice::from_raw_parts(sources.bytes[PIXEL], sources.sizes[PIXEL]) };
+        let lent = sources.bytes[PIXEL];
         assert_eq!(lent, container(64, 2));
         *slot = 3;
         BUILT
@@ -225,7 +224,7 @@ fn built_variants_are_reused_and_refusals_cached() {
     // A new layout object at the same address takes a new serial and a new variant.
     lock(&state).observe_layout(LAYOUT, Some(beam(false).as_slice()));
     let rebuilt = admit(&state, &first, &mut hash, |sources, slot| {
-        assert_eq!(sources.element_count, 5);
+        assert_eq!(sources.elements.len(), 5);
         *slot = 4;
         BUILT
     });
@@ -244,7 +243,7 @@ fn unstored_outcomes_build_again() {
     assert!(lock(&state).variants.is_empty());
     let slot = admit(&state, &plain, &mut hash, |sources, slot| {
         assert!(!sources.beam_layout);
-        assert_eq!(sources.element_count, 0);
+        assert_eq!(sources.elements.len(), 0);
         *slot = 0;
         BUILT
     });
@@ -286,10 +285,9 @@ fn builder_leases_payload_across_replacement() {
     let mut hash = 0;
     admit(&state, &draw, &mut hash, |source, _| {
         lock(&state).observe_shader(VS, VERTEX as u32, None);
-        assert_eq!(source.bytes[VERTEX], bytes);
+        assert_eq!(source.bytes[VERTEX].as_ptr(), bytes);
         // SAFETY: The callback still holds the lease after the cache forgot the source.
-        let lent =
-            unsafe { std::slice::from_raw_parts(source.bytes[VERTEX], source.sizes[VERTEX]) };
+        let lent = source.bytes[VERTEX];
         assert_eq!(lent, container(64, 1));
         REFUSED
     });
@@ -315,7 +313,7 @@ fn generated_geometry_history_identity() {
         &mut hash,
         |sources, slot| {
             assert_eq!(sources.geometry_hash, gs);
-            assert_eq!(sources.sizes, [64, 64, 64, 0, 0]);
+            assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 64, 0, 0]);
             *slot = 0;
             BUILT
         },
@@ -326,7 +324,7 @@ fn generated_geometry_history_identity() {
         &mut hash,
         |sources, slot| {
             assert_eq!(sources.geometry_hash, hs ^ (ds << 1) ^ (ds >> 31));
-            assert_eq!(sources.sizes, [64, 64, 0, 64, 64]);
+            assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 0, 64, 64]);
             *slot = 1;
             BUILT
         },

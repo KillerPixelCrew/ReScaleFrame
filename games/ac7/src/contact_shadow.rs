@@ -64,7 +64,7 @@ const BIASED_START: [u32; 7] = [
 ];
 
 const GROWTH: usize = (PHASE.len() + BIAS.len() + BIASED_START.len() - RAY_START.len()) * 4;
-type Resize = unsafe extern "C" fn(*mut c_void, usize) -> *mut u8;
+type UseShader = unsafe extern "C" fn(*mut c_void, *const u8, usize, u32) -> bool;
 
 #[cfg(windows)]
 fn sha256(input: &[u8]) -> Option<[u8; 32]> {
@@ -194,18 +194,23 @@ fn rewrite(input: &[u8], output: &mut [u8]) -> bool {
     true
 }
 
-/// The native caller lends the input and, on successful resize, a nonoverlapping output span.
+/// The native caller lends the input. On success the factory borrows Rust-owned output.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
     bytes: *const u8,
     size: usize,
-    resize: Resize,
+    offset: usize,
+    use_shader: UseShader,
     user: *mut c_void,
 ) -> i32 {
-    if bytes.is_null() || !(ORIGINAL_SIZE..=MAX_INPUT).contains(&size) {
+    let Some(shader_size) = size.checked_sub(offset) else {
+        return UNMATCHED;
+    };
+    if bytes.is_null() || size > MAX_INPUT || shader_size < ORIGINAL_SIZE {
         return UNMATCHED;
     }
-    let input = unsafe { slice::from_raw_parts(bytes, size) };
+    let source = unsafe { slice::from_raw_parts(bytes, size) };
+    let (prefix, input) = source.split_at(offset);
     if &input[..4] != b"DXBC" || word(input, 24) != ORIGINAL_SIZE as u32 {
         return UNMATCHED;
     }
@@ -215,13 +220,17 @@ unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
     if !layout_matches(input) {
         return REFUSED;
     }
-    let size = size + GROWTH;
-    let output = unsafe { resize(user, size) };
-    if output.is_null() {
+    let mut buffer = Vec::new();
+    let Some(output) = crate::velocity_container::resize_bytes(&mut buffer, size + GROWTH) else {
+        return REFUSED;
+    };
+    let (output_prefix, shader) = output.split_at_mut(offset);
+    output_prefix.copy_from_slice(prefix);
+    if !rewrite(input, shader) {
         return REFUSED;
     }
-    let output = unsafe { slice::from_raw_parts_mut(output, size) };
-    if rewrite(input, output) {
+    let crc = container_crc(shader);
+    if unsafe { use_shader(user, output.as_ptr(), output.len(), crc) } {
         PATCHED
     } else {
         REFUSED
@@ -235,13 +244,4 @@ pub(crate) fn container_crc(data: &[u8]) -> u32 {
         return 0;
     }
     data.get(..word(data, 24) as usize).map_or(0, crc32c)
-}
-
-/// The caller lends the shader bytes, including any engine trailer.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_contact_shadow_crc(bytes: *const u8, size: usize) -> u32 {
-    if bytes.is_null() || size < 28 || size > isize::MAX as usize {
-        return 0;
-    }
-    container_crc(unsafe { slice::from_raw_parts(bytes, size) })
 }

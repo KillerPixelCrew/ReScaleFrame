@@ -981,13 +981,14 @@ arguments and token literals. The superseded private C++ codecs were
 removed. Build, emitted-bytecode parity and replay remain open.
 [Tessellation audit](research/rust-ac7-velocity-tessellation.md)
 
-A04 moves the helper compile requests and module caches into Rust and
-links the ordinary hull, corner hull and domain programs in one call.
-The history writer and readers share their HLSL table contract. The
-native pass keeps D3D11 shader and stream-output creation. Source checks
-and pinned formatting are complete. The Rust fixtures, WARP replay and
-game verification are pending.
-[A04 port evidence](research/rust-ac7-velocity-a04.md)
+A04 and A05 keep shader compilation, DXBC writes, D3D11 shader creation,
+variant publication and replay lease ownership in Rust. The native pass
+keeps GPU resource setup and the existing capture, motion, history and merge
+submissions. The WARP driver lends its device to Rust shader-link and retained
+DXBC fixtures. Source comparisons, pinned formatting, binding regeneration and
+locked offline metadata passed. Build, emitted DXBC and runtime validation
+remain open.
+[A04 and A05 source dispositions](research/rust-ac7-velocity-a04-a05-residual.md)
 
 AC7 motion capture now stores its bounded engine and renderer-root
 records and associates native queued commands in Rust. The typed

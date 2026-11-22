@@ -8,14 +8,10 @@
 //! rollback and retirement (`truesky.rs`), all reached through ac7_sites.h. The queued RHI render
 //! scopes of ac7_render_scope.h (`render_scope.rs`) export that header's calls except the two
 //! create calls, which render_scope.cpp keeps to lend its exception leaves (ac7_scope_owner.h).
-//! The translucent velocity pass's shader and layout observations and its variant admission are
-//! `velocity_pass_cache.rs`, and its model and view history identity, validity, commit state and
-//! epoch retirement are `velocity_history.rs`, and its draw admission, record bounds, buffer
-//! sizing, indirect range and cbuffer packing are `velocity_stream.rs`, and its commit admission,
-//! motion target check, log budgets and CPU profile are `velocity_commit.rs`, and its per-device
-//! renderer publication, replacement and teardown are `velocity_renderer.rs`; velocity_pass.cpp
-//! keeps its D3D11 work and the resources at those history slots, and lends the variant builder
-//! and the renderer's create and destroy leaves.
+//! The translucent velocity pass keeps shader compilation, DXBC transforms, D3D11 shader
+//! objects and variant publication in Rust. The Rust renderer owns the replay and scope lease,
+//! the history and stream modules own their decisions, and the commit module owns admission
+//! and reports. velocity_pass.cpp lends the D3D11 resource allocation, draw and merge leaves.
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
 //! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
@@ -61,15 +57,27 @@ mod ui;
 mod ui_abi;
 mod velocity_commit;
 mod velocity_container;
+#[cfg(windows)]
+mod velocity_device;
+mod velocity_device_abi;
+#[cfg(windows)]
 mod velocity_geometry;
 mod velocity_history;
 mod velocity_pass_cache;
+#[cfg(windows)]
 mod velocity_pixel;
 mod velocity_renderer;
+#[cfg(windows)]
+#[path = "../../../tests/ac7_velocity_shader_fixture.rs"]
+mod velocity_shader_fixture;
+#[cfg(any(windows, test))]
 mod velocity_stage;
 mod velocity_stream;
+#[cfg(windows)]
 mod velocity_tessellation;
+#[cfg(any(windows, test))]
 mod velocity_tokens;
+#[cfg(windows)]
 mod velocity_vertex;
 mod view;
 mod view_abi;

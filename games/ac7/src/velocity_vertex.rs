@@ -2,17 +2,14 @@
 //! AC7 translucent velocity vertex shader admission and assembly.
 
 use crate::dxbc_chunks::Chunk;
-use crate::velocity_container::{
-    AppendSemantic, Resize, Semantic, borrowed, chunks, native_output, valid_container_size,
-};
+use crate::velocity_container::{Semantic, chunks};
 use crate::velocity_stage::{
-    CompileHelper, HelperCache, REGISTER_COUNT, Stage, compile_bytecode, stage, write_stage,
+    HelperCache, REGISTER_COUNT, Stage, compile_bytecode, stage, write_stage,
 };
 use crate::velocity_tokens::{
     DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, read_operands, rewrite_operands,
     temp_count,
 };
-use std::ffi::c_void;
 
 const VERTEX_PROFILE: u32 = 0x10050;
 const POSITION: u32 = 1;
@@ -89,14 +86,6 @@ enum Particle {
     Mesh = 2,
     Beam = 3,
 }
-
-#[repr(C)]
-struct VertexMetadata {
-    particle: u32,
-    position_register: u32,
-}
-
-const _: () = assert!(size_of::<VertexMetadata>() == 8);
 
 fn vertex_stage<'a>(chunks: &[Chunk<'a>]) -> Option<Stage<'a>> {
     let stage = stage(chunks, VERTEX_PROFILE, &[*b"OSGN"])?;
@@ -342,22 +331,21 @@ fn assemble(native: &[Instruction], added: Vec<Instruction>, link: &Link) -> Opt
     Some(code)
 }
 
-fn patch<'a, 'output>(
+fn patch<'a>(
     bytes: &'a [u8],
     tessellation: bool,
     beam: bool,
-    compile: impl FnOnce(u32) -> Option<&'a [u8]>,
-    allocate: impl FnOnce(usize) -> Option<&'output mut [u8]>,
-) -> Option<(VertexMetadata, Vec<Semantic<'a>>)> {
+    destination: &mut Vec<u8>,
+) -> Option<(u32, Vec<Semantic<'a>>)> {
     let native_chunks = chunks(bytes)?;
     let mut native = vertex_stage(&native_chunks)?;
     let particle = particle_mode(&native.inputs, beam) as u32;
-    let position_register = position_register(&native.outputs, tessellation)?;
+    position_register(&native.outputs, tessellation)?;
     if next_register(&native.outputs) as usize + 4 > REGISTER_COUNT {
         return None;
     }
 
-    let helper = vertex_stage(&chunks(compile(particle)?)?)?;
+    let helper = vertex_stage(&chunks(vertex_helper(particle)?)?)?;
     let link = link_signatures(&mut native, helper.inputs, helper.outputs)?;
     let code = assemble(&native.code, helper.code, &link)?;
     write_stage(
@@ -366,18 +354,12 @@ fn patch<'a, 'output>(
         &native.inputs,
         &native.outputs,
         &code,
-        allocate,
+        destination,
     )?;
-    Some((
-        VertexMetadata {
-            particle,
-            position_register,
-        },
-        native.outputs,
-    ))
+    Some((particle, native.outputs))
 }
 
-fn vertex_helper(compile: CompileHelper, particle: u32) -> Option<&'static [u8]> {
+fn vertex_helper(particle: u32) -> Option<&'static [u8]> {
     static CACHE: [HelperCache; 4] = [const { HelperCache::new() }; 4];
     let sources = [
         (GENERIC_SOURCE, c"ac7-geometry-key"),
@@ -388,7 +370,7 @@ fn vertex_helper(compile: CompileHelper, particle: u32) -> Option<&'static [u8]>
     // Keep the original initialization order, including for the first particle draw.
     let mut selected = None;
     for (index, (source, name)) in sources.into_iter().enumerate() {
-        let code = compile_bytecode(&CACHE[index], compile, source, name, c"vs_5_0");
+        let code = compile_bytecode(&CACHE[index], source, name, c"vs_5_0");
         if index as u32 == particle {
             selected = code;
         }
@@ -396,40 +378,12 @@ fn vertex_helper(compile: CompileHelper, particle: u32) -> Option<&'static [u8]>
     selected
 }
 
-/// Resizing borrows a separate native destination and append copies each semantic.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_vertex_shader(
-    bytes: *const u8,
-    size: usize,
+pub(crate) fn transform(
+    bytes: &[u8],
     tessellation: bool,
     beam: bool,
-    compile: CompileHelper,
-    user: *mut c_void,
-    resize: Resize,
-    append: AppendSemantic,
-    metadata: *mut VertexMetadata,
-) -> bool {
-    if !valid_container_size(size) || metadata.is_null() {
-        return false;
-    }
-    let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
-        return false;
-    };
-    let Some((value, outputs)) = patch(
-        bytes,
-        tessellation,
-        beam,
-        |particle| vertex_helper(compile, particle),
-        |size| unsafe { native_output(user, resize, size) },
-    ) else {
-        return false;
-    };
-    // Keep the link order in the metadata passed to downstream stages.
-    for semantic in outputs {
-        if !unsafe { append(user, &semantic.view()) } {
-            return false;
-        }
-    }
-    unsafe { metadata.write(value) };
-    true
+) -> Option<(Vec<u8>, u32, Vec<Semantic<'_>>)> {
+    let mut code = Vec::new();
+    let (particle, semantics) = patch(bytes, tessellation, beam, &mut code)?;
+    Some((code, particle, semantics))
 }

@@ -4,10 +4,12 @@
 //! refusal and commit log budgets, and the per-frame CPU profile with its report thresholds.
 //! velocity_pass.cpp keeps the renderer and context checks, the view's native depth identity, the
 //! target's description and device check, the state scope, the merge draw, the copies, the clock,
-//! the shader object count and every log line's text.
+//! and the device shader object count.
 
 use crate::velocity_history::{self, UNAVAILABLE_VIEW, VIEW_COMMIT, ViewDecision, ViewDraw};
 use rsf_game_sys::rsf_game_render_pass;
+#[cfg(windows)]
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::offset_of;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
@@ -151,8 +153,28 @@ impl Profile {
     }
 }
 
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+pub(crate) struct Log {
+    pub(crate) write: unsafe extern "C" fn(*mut c_void, *const c_char),
+    pub(crate) user: *mut c_void,
+}
+
+// The carrier owns the logger and userdata and registers both for synchronized replay.
+#[cfg(windows)]
+unsafe impl Send for Log {}
+
+#[cfg(windows)]
+impl Log {
+    fn emit(self, message: &CStr) {
+        unsafe { (self.write)(self.user, message.as_ptr()) };
+    }
+}
+
 #[derive(Default)]
 struct Pass {
+    #[cfg(windows)]
+    log: Option<Log>,
     reports: Reports,
     profile: Profile,
 }
@@ -201,16 +223,40 @@ unsafe extern "C" fn rsf_ac7_velocity_commit_target(
     i32::from(target_matches(view, target))
 }
 
-/// Nonzero when a report of this kind may be logged; it counts against the budget.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_report(kind: u32) -> i32 {
-    i32::from(lock().reports.take(kind))
+#[cfg(windows)]
+pub(crate) fn set_log(log: Option<Log>) {
+    let mut pass = lock();
+    pass.log = log;
+    pass.reports = Reports::default();
 }
 
-/// A new log attachment restores every budget.
+#[cfg(windows)]
+fn take_log(kind: u32) -> Option<Log> {
+    let mut pass = lock();
+    pass.log.filter(|_| pass.reports.take(kind))
+}
+
+#[cfg(windows)]
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_reports_reset() {
-    lock().reports = Reports::default();
+unsafe extern "C" fn rsf_ac7_velocity_log_refusal(reason: *const c_char) {
+    if let Some(log) = take_log(REPORT_REFUSAL) {
+        let reason = unsafe { CStr::from_ptr(reason) };
+        let message = format!(
+            "AC7 translucent velocity refused: {}",
+            reason.to_string_lossy()
+        );
+        if let Ok(message) = CString::new(message) {
+            log.emit(&message);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_velocity_log_commit() {
+    if let Some(log) = take_log(REPORT_COMMIT) {
+        log.emit(c"AC7 translucent velocity: opacity-clipped generated-geometry motion and depth committed before native post-processing");
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -221,20 +267,31 @@ unsafe extern "C" fn rsf_ac7_velocity_profile_sample(sample: *const ProfileSampl
     }
 }
 
-/// Nonzero with the report written when the frame crossed a threshold. The totals restart
-/// either way, also without an output.
+/// The totals restart on every renderer frame end, even without a log attachment.
+#[cfg(windows)]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_profile_frame_end(output: *mut ProfileReport) -> i32 {
-    let Some(report) = lock().profile.end_frame() else {
-        return 0;
+extern "C" fn rsf_ac7_velocity_log_frame_end(shader_objects: u32) {
+    let (report, log) = {
+        let mut pass = lock();
+        (pass.profile.end_frame(), pass.log)
     };
-    // SAFETY: The frame end lends its report for this call.
-    match unsafe { output.as_mut() } {
-        Some(output) => {
-            *output = report;
-            1
-        }
-        None => 0,
+    let (Some(report), Some(log)) = (report, log) else {
+        return;
+    };
+    let message = format!(
+        "AC7 velocity CPU frame={} callbacks={} total_ms={:.2} shader_ms={:.2} resource_ms={:.2} peak_ms={:.2} largest_records={} models={} variants={} shader_objects={shader_objects}",
+        report.frame,
+        report.callbacks,
+        report.total_ms,
+        report.shader_ms,
+        report.resource_ms,
+        report.peak_ms,
+        report.largest_records,
+        velocity_history::model_count(),
+        crate::velocity_pass_cache::variant_count(),
+    );
+    if let Ok(message) = CString::new(message) {
+        log.emit(&message);
     }
 }
 
@@ -243,24 +300,18 @@ pub(crate) fn reset_profile() {
     lock().profile = Profile::default();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_merge_source() -> *const std::ffi::c_char {
-    cr#"
+#[cfg(windows)]
+pub(crate) const MERGE_SOURCE: &str = r#"
 Texture2D<float2> Native:register(t0);Texture2D<float2> Layer:register(t1);
 float2 main(float4 pixel:SV_Position):SV_Target0 {
     int3 address=int3(int2(pixel.xy),0);float2 layer=Layer.Load(address);
     return layer.x>0 ? layer : Native.Load(address);
-}"#
-    .as_ptr()
-}
+}"#;
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_fullscreen_source() -> *const std::ffi::c_char {
-    cr#"
+#[cfg(windows)]
+pub(crate) const FULLSCREEN_SOURCE: &str = r#"
 float4 main(uint id:SV_VertexID):SV_Position {return float4(id==2?3:-1,id==1?3:-1,0,1);}
-"#
-    .as_ptr()
-}
+"#;
 
 #[cfg(test)]
 mod tests;

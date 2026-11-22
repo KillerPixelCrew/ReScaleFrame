@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! AC7 velocity hull control-point relay and native domain evaluation.
 
-use crate::velocity_container::{
-    AppendSemantic, Semantic, SemanticView, borrowed, chunk_index, chunks,
-};
+use crate::velocity_container::{Semantic, chunk_index, chunks};
 use crate::velocity_stage::{
-    CompileHelper, HelperCache, REGISTER_COUNT, RegisterMap, Stage, compile_bytecode, insert,
-    mapped, next_register, rewrite_helper, signature, stage, vertex_outputs, write_stage,
+    HelperCache, REGISTER_COUNT, RegisterMap, Stage, compile_bytecode, insert, mapped,
+    next_register, rewrite_helper, signature, stage, write_stage,
 };
 use crate::velocity_tokens::{
     DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, rewrite_operands, temp_count,
 };
 use std::collections::BTreeMap;
-use std::ffi::c_void;
 
 const HULL_PROFILE: u32 = 0x30050;
 const DOMAIN_PROFILE: u32 = 0x40050;
@@ -442,19 +439,16 @@ fn link_domain_inputs<'a>(
     Some(mapping)
 }
 
-#[repr(C)]
-struct DomainRegisters {
-    previous: *mut u32,
-    current: *mut u32,
+#[derive(Default)]
+pub(crate) struct DomainRegisters {
+    pub(crate) previous: u32,
+    pub(crate) current: u32,
 }
-
-const _: () = assert!(size_of::<DomainRegisters>() == 16);
-
 fn link_domain_outputs<'a>(
     outputs: &mut Vec<Semantic<'a>>,
     helper: Vec<Semantic<'a>>,
     next: u32,
-    registers: &DomainRegisters,
+    registers: &mut DomainRegisters,
 ) -> Option<RegisterMap<u32>> {
     let mut mapping = [None; REGISTER_COUNT];
     outputs.try_reserve(helper.len()).ok()?;
@@ -466,8 +460,8 @@ fn link_domain_outputs<'a>(
         semantic.reg = reg;
         // Keep the report order even when caller scalars alias, or an assembly step refuses.
         match semantic.name {
-            b"RSFPREV" => unsafe { registers.previous.write(reg) },
-            b"RSFCUR" => unsafe { registers.current.write(reg) },
+            b"RSFPREV" => registers.previous = reg,
+            b"RSFCUR" => registers.current = reg,
             _ => {}
         }
         outputs.push(semantic);
@@ -587,7 +581,7 @@ fn evaluate_domain(
 fn domain_program<'a>(
     native: &mut Stage<'a>,
     hull: &[Semantic<'a>],
-    registers: &DomainRegisters,
+    registers: &mut DomainRegisters,
     compile: impl FnOnce() -> Option<&'a [u8]>,
 ) -> Option<Vec<u32>> {
     let layout = admit_domain(native)?;
@@ -608,74 +602,48 @@ fn domain_program<'a>(
     Some(code)
 }
 
-/// Links the two hull variants and the domain shader while hull metadata is still borrowed
-/// from the native hull bytecode. Only final domain semantics cross the boundary.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_tessellation(
-    hull_bytes: *const u8,
-    hull_size: usize,
-    domain_bytes: *const u8,
-    domain_size: usize,
-    vertex: *const SemanticView,
-    count: usize,
-    compile: CompileHelper,
-    user: *mut c_void,
-    resize: unsafe extern "C" fn(*mut c_void, u32, usize) -> *mut u8,
-    append: AppendSemantic,
-    input_points: *mut u32,
-    registers: *const DomainRegisters,
-) -> bool {
-    let assemble = || {
-        let registers = unsafe { registers.as_ref() }?;
-        if input_points.is_null() || registers.previous.is_null() || registers.current.is_null() {
-            return None;
-        }
-        let hull_chunks = chunks(unsafe { borrowed(hull_bytes, hull_size) }?)?;
-        let patch = chunk_index(&hull_chunks, b"PCSG")?;
-        let mut hull = stage(&hull_chunks, HULL_PROFILE, &[*b"OSGN"])?;
-        let constants = signature(&hull_chunks[patch])?;
-        let vertex = vertex_outputs(unsafe { borrowed(vertex, count) }?)?;
-        let programs = hull_programs(&mut hull, &constants, &vertex, |points| unsafe {
-            input_points.write(points);
-        })?;
+pub(crate) fn transform<'a>(
+    hull_bytes: &'a [u8],
+    domain_bytes: &'a [u8],
+    vertex: &[Semantic<'a>],
+    input_points: &mut u32,
+    registers: &mut DomainRegisters,
+) -> Option<([Vec<u8>; 3], Vec<Semantic<'a>>)> {
+    let hull_chunks = chunks(hull_bytes)?;
+    let patch = chunk_index(&hull_chunks, b"PCSG")?;
+    let mut hull = stage(&hull_chunks, HULL_PROFILE, &[*b"OSGN"])?;
+    let constants = signature(&hull_chunks[patch])?;
+    let programs = hull_programs(&mut hull, &constants, vertex, |points| {
+        *input_points = points
+    })?;
 
-        let domain_chunks = chunks(unsafe { borrowed(domain_bytes, domain_size) }?)?;
-        let mut domain = stage(&domain_chunks, DOMAIN_PROFILE, &[*b"OSGN"])?;
-        let code = domain_program(&mut domain, &hull.outputs, registers, || {
-            static HELPER: HelperCache = HelperCache::new();
-            compile_bytecode(
-                &HELPER,
-                compile,
-                DOMAIN_SOURCE,
-                c"ac7-tessellated-control-motion",
-                c"vs_5_0",
-            )
-        })?;
-        for (index, chunks, stage, code) in [
-            (0, &hull_chunks, &hull, &programs.ordinary),
-            (1, &hull_chunks, &hull, &programs.corners),
-            (2, &domain_chunks, &domain, &code),
-        ] {
-            write_stage(
-                chunks,
-                &stage.chunks,
-                &stage.inputs,
-                &stage.outputs,
-                code,
-                |size| unsafe {
-                    // The caller lends a separate native destination for each product.
-                    let bytes = resize(user, index, size);
-                    (!bytes.is_null()).then(|| std::slice::from_raw_parts_mut(bytes, size))
-                },
-            )?;
-        }
-        domain
-            .outputs
-            .iter()
-            .all(|s| unsafe { append(user, &s.view()) })
-            .then_some(())
-    };
-    assemble().is_some()
+    let domain_chunks = chunks(domain_bytes)?;
+    let mut domain = stage(&domain_chunks, DOMAIN_PROFILE, &[*b"OSGN"])?;
+    let code = domain_program(&mut domain, &hull.outputs, registers, || {
+        static HELPER: HelperCache = HelperCache::new();
+        compile_bytecode(
+            &HELPER,
+            DOMAIN_SOURCE,
+            c"ac7-tessellated-control-motion",
+            c"vs_5_0",
+        )
+    })?;
+    let mut products = [Vec::new(), Vec::new(), Vec::new()];
+    for (product, (chunks, stage, code)) in products.iter_mut().zip([
+        (&hull_chunks, &hull, &programs.ordinary),
+        (&hull_chunks, &hull, &programs.corners),
+        (&domain_chunks, &domain, &code),
+    ]) {
+        write_stage(
+            chunks,
+            &stage.chunks,
+            &stage.inputs,
+            &stage.outputs,
+            code,
+            product,
+        )?;
+    }
+    Some((products, domain.outputs))
 }
 
 const DOMAIN_SOURCE: &str = concat!(

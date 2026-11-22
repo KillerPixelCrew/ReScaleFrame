@@ -1,19 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! AC7 velocity geometry shader linkage and native emission augmentation.
 
-use crate::velocity_container::{
-    AppendSemantic, Resize, Semantic, SemanticView, borrowed, chunks, native_output,
-    valid_container_size,
-};
+use crate::velocity_container::{Semantic, chunks};
 use crate::velocity_stage::{
-    CompileHelper, HelperCache, REGISTER_COUNT, RegisterMap, Stage, compile_bytecode, insert,
-    mapped, next_register, rewrite_helper, stage, vertex_outputs, write_stage,
+    HelperCache, REGISTER_COUNT, RegisterMap, Stage, compile_bytecode, insert, mapped,
+    next_register, rewrite_helper, stage, write_stage,
 };
 use crate::velocity_tokens::{
     DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, read_operands, rewrite_operands,
     temp_count,
 };
-use std::ffi::c_void;
 
 const GEOMETRY_PROFILE: u32 = 0x20050;
 const VERTEX_PROFILE: u32 = 0x10050;
@@ -45,39 +41,28 @@ const DCL_RESOURCE_RAW: u32 = 161;
 const DCL_RESOURCE_STRUCTURED: u32 = 162;
 const DCL_GS_INSTANCE_COUNT: u32 = 206;
 
-#[repr(C)]
-struct GeometryRegisters {
-    previous: *mut u32,
-    current: *mut u32,
-    maximum_vertices: *mut u32,
+#[derive(Default)]
+pub(crate) struct GeometryRegisters {
+    pub(crate) previous: u32,
+    pub(crate) current: u32,
+    pub(crate) maximum_vertices: u32,
 }
 
-const _: () = assert!(size_of::<GeometryRegisters>() == 24);
-
 impl GeometryRegisters {
-    // These are caller-owned scalars. Raw writes keep their original order even when
-    // the C++ references alias, and preserve values already reported before a refusal.
-    fn history_clip(&self, next: u32) -> (u32, u32) {
-        unsafe {
-            self.current.write(next);
-            self.previous.write(next + 1);
-            (self.current.read(), self.previous.read())
-        }
+    fn history_clip(&mut self, next: u32) -> (u32, u32) {
+        self.current = next;
+        self.previous = next + 1;
+        (self.current, self.previous)
     }
 
-    fn report_clip(&self, semantic: &Semantic<'_>) {
+    fn report_clip(&mut self, semantic: &Semantic<'_>) {
         match semantic.name {
-            b"RSFPREV" => unsafe { self.previous.write(semantic.reg) },
-            b"RSFCUR" => unsafe { self.current.write(semantic.reg) },
+            b"RSFPREV" => self.previous = semantic.reg,
+            b"RSFCUR" => self.current = semantic.reg,
             _ => {}
         }
     }
-
-    fn report_maximum(&self, maximum: u32) {
-        unsafe { self.maximum_vertices.write(maximum) };
-    }
 }
-
 fn clip_semantic(name: &'static [u8], reg: u32) -> Semantic<'static> {
     Semantic {
         name,
@@ -233,11 +218,11 @@ fn history_body(
     (emissions == 3).then_some(body)
 }
 
-fn link_history<'a>(
+fn link_history(
     prototype: &[u8],
     mut vertex: Vec<Semantic<'_>>,
-    registers: &GeometryRegisters,
-    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
+    registers: &mut GeometryRegisters,
+    destination: &mut Vec<u8>,
 ) -> Option<()> {
     let chunks = chunks(prototype)?;
     let stage = stage(&chunks, GEOMETRY_PROFILE, &[*b"OSG5", *b"OSGN"])?;
@@ -252,7 +237,7 @@ fn link_history<'a>(
     history_declarations(&mut code, inputs, &vertex)?;
     let body = history_body(&stage, inputs, current, previous, &mut code)?;
     append_words(&mut code, &body)?;
-    write_stage(&chunks, &stage.chunks, inputs, &vertex, &code, allocate)
+    write_stage(&chunks, &stage.chunks, inputs, &vertex, &code, destination)
 }
 
 struct NativeGeometry {
@@ -260,7 +245,7 @@ struct NativeGeometry {
     next_output: u32,
 }
 
-fn admit_native(stage: &Stage<'_>, registers: &GeometryRegisters) -> Option<NativeGeometry> {
+fn admit_native(stage: &Stage<'_>, registers: &mut GeometryRegisters) -> Option<NativeGeometry> {
     if stage
         .code
         .iter()
@@ -284,7 +269,7 @@ fn admit_native(stage: &Stage<'_>, registers: &GeometryRegisters) -> Option<Nati
             DCL_GS_INPUT_PRIMITIVE => triangle = (inst.words[0] >> 11) & 63 == 3,
             DCL_MAX_OUTPUT_VERTEX_COUNT if inst.words.len() == 2 => {
                 maximum_vertices = inst.words[1];
-                registers.report_maximum(maximum_vertices);
+                registers.maximum_vertices = maximum_vertices;
             }
             DCL_GS_INSTANCE_COUNT if inst.words.len() != 2 || inst.words[1] != 1 => return None,
             DCL_RESOURCE | DCL_RESOURCE_RAW | DCL_RESOURCE_STRUCTURED
@@ -383,7 +368,7 @@ fn link_native_outputs<'a>(
     outputs: &mut Vec<Semantic<'a>>,
     helper: Vec<Semantic<'a>>,
     next: u32,
-    registers: &GeometryRegisters,
+    registers: &mut GeometryRegisters,
 ) -> Option<RegisterMap<u32>> {
     if next as usize + helper.len() > REGISTER_COUNT {
         return None;
@@ -479,12 +464,12 @@ fn native_body(
     Some(())
 }
 
-fn patch_native<'a, 'out>(
+fn patch_native<'a>(
     bytes: &'a [u8],
     vertex: &[Semantic<'a>],
-    registers: &GeometryRegisters,
+    registers: &mut GeometryRegisters,
     compile: impl FnOnce() -> Option<&'a [u8]>,
-    allocate: impl FnOnce(usize) -> Option<&'out mut [u8]>,
+    destination: &mut Vec<u8>,
 ) -> Option<Vec<Semantic<'a>>> {
     let native_chunks = chunks(bytes)?;
     let mut native = stage(&native_chunks, GEOMETRY_PROFILE, &[*b"OSGN", *b"OSG5"])?;
@@ -523,103 +508,55 @@ fn patch_native<'a, 'out>(
         &native.inputs,
         &native.outputs,
         &code,
-        allocate,
+        destination,
     )?;
     Some(native.outputs)
 }
 
-/// The wrapper keeps all input views and names alive, lends scalar outputs, and resizes a
-/// separate native byte vector.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_geometry_shader(
-    vertex: *const SemanticView,
-    count: usize,
-    compile: CompileHelper,
-    user: *mut c_void,
-    resize: Resize,
-    registers: *const GeometryRegisters,
-) -> bool {
-    let Some(registers) = (unsafe { registers.as_ref() }) else {
-        return false;
-    };
-    if registers.previous.is_null() || registers.current.is_null() {
-        return false;
-    }
-    let Some(vertex) = (unsafe { borrowed(vertex, count) }).and_then(vertex_outputs) else {
-        return false;
-    };
-    let Some(prototype) = compile_bytecode(
+pub(crate) fn history(
+    vertex: &[Semantic<'_>],
+    registers: &mut GeometryRegisters,
+) -> Option<Vec<u8>> {
+    let prototype = compile_bytecode(
         &HISTORY,
-        compile,
         HISTORY_SOURCE,
         c"ac7-previous-geometry",
         c"gs_5_0",
-    ) else {
-        return false;
-    };
-    link_history(prototype, vertex, registers, |size| unsafe {
-        native_output(user, resize, size)
-    })
-    .is_some()
+    )?;
+    let mut code = Vec::new();
+    let mut inputs = Vec::new();
+    inputs.try_reserve_exact(vertex.len()).ok()?;
+    inputs.extend_from_slice(vertex);
+    link_history(prototype, inputs, registers, &mut code)?;
+    Some(code)
 }
 
-/// The wrapper also lends the original GS and copies each output semantic into a separate
-/// destination before returning. Scalar outputs can alias one another.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_native_geometry_shader(
-    bytes: *const u8,
-    size: usize,
-    vertex: *const SemanticView,
-    count: usize,
-    compile: CompileHelper,
-    user: *mut c_void,
-    resize: Resize,
-    append: AppendSemantic,
-    registers: *const GeometryRegisters,
-) -> bool {
-    let Some(registers) = (unsafe { registers.as_ref() }) else {
-        return false;
-    };
-    if !valid_container_size(size)
-        || registers.previous.is_null()
-        || registers.current.is_null()
-        || registers.maximum_vertices.is_null()
-    {
-        return false;
-    }
-    let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
-        return false;
-    };
-    let Some(vertex) = (unsafe { borrowed(vertex, count) }).and_then(vertex_outputs) else {
-        return false;
-    };
-    let Some(outputs) = patch_native(
+pub(crate) fn native<'a>(
+    bytes: &'a [u8],
+    vertex: &[Semantic<'a>],
+    registers: &mut GeometryRegisters,
+) -> Option<(Vec<u8>, Vec<Semantic<'a>>)> {
+    let mut code = Vec::new();
+    let outputs = patch_native(
         bytes,
-        &vertex,
+        vertex,
         registers,
         || {
             static HELPER: HelperCache = HelperCache::new();
             compile_bytecode(
                 &HELPER,
-                compile,
                 NATIVE_HELPER_SOURCE,
                 c"ac7-native-generated-geometry",
                 c"vs_5_0",
             )
         },
-        |size| unsafe { native_output(user, resize, size) },
-    ) else {
-        return false;
-    };
-    outputs
-        .iter()
-        .all(|semantic| unsafe { append(user, &semantic.view()) })
+        &mut code,
+    )?;
+    Some((code, outputs))
 }
-
 static HISTORY: HelperCache = HelperCache::new();
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_ac7_velocity_geometry_compile_count() -> u32 {
+pub(crate) fn history_compile_count() -> u32 {
     u32::from(HISTORY.get().is_some())
 }
 

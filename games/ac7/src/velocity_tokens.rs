@@ -183,10 +183,7 @@ pub(crate) fn temp_count(code: &[Instruction]) -> u32 {
         .map_or(0, |inst| inst.words[1])
 }
 
-pub(crate) fn write_instructions<'a>(
-    code: &[u32],
-    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
-) -> Option<()> {
+pub(crate) fn write_instructions(code: &[u32], destination: &mut Vec<u8>) -> Option<()> {
     let count = u32::try_from(code.len()).ok()?;
     let mut remaining = code.get(2..)?;
     while !remaining.is_empty() {
@@ -194,7 +191,7 @@ pub(crate) fn write_instructions<'a>(
         remaining = &remaining[words.len()..];
     }
     let size = code.len().checked_mul(4)?;
-    let bytes = allocate(size)?.get_mut(..size)?;
+    let bytes = crate::velocity_container::resize_bytes(destination, size)?;
     for (dst, &value) in bytes.chunks_exact_mut(4).zip(code) {
         dst.copy_from_slice(&value.to_le_bytes());
     }

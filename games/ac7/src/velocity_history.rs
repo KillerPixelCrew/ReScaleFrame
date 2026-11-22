@@ -493,8 +493,8 @@ extern "C" fn rsf_ac7_velocity_view_committed(slot: u32) {
     lock().mark_written(slot, false);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_model_count() -> usize {
+#[cfg(windows)]
+pub(crate) fn model_count() -> usize {
     lock().models.len()
 }
 

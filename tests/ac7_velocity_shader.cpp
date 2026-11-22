@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MIT
-#include "../games/ac7/src/velocity_shader.h"
+#include <cstddef>
+extern "C" {
+bool rsf_ac7_velocity_fixture_links(void* device, const wchar_t* directory);
+bool rsf_ac7_velocity_fixture_retained(void* device, const wchar_t* directory);
+int rsf_ac7_velocity_fixture_pixel(void* device, const void* bytes, size_t size, unsigned blend, void* output);
+unsigned rsf_ac7_velocity_device_shader_creation_count() noexcept;
+}
 #include <rescaleframe/shader_compile.h>
 #include <rescaleframe/ac7_velocity_pass.h>
 #include <rescaleframe/frame_tap.h>
@@ -31,83 +37,14 @@ struct V {float4 position:SV_Position;float4 previous:RSFPREV0;float4 current:RS
 V main(uint id:SV_VertexID) {V o;o.position=float4(id==2?3:-1,id==1?3:-1,.75,1);
 o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0");
     ComPtr<ID3D11VertexShader> vs; check(SUCCEEDED(device->CreateVertexShader(vertex.data(),vertex.size(),nullptr,&vs)),"create VS");
-    {
-        auto original=compile("float4 main(uint id:SV_VertexID):SV_Position"
-            "{return float4(id==2?3:-1,id==1?3:-1,.75,1);}","vs_5_0");
-        std::vector<uint8_t> keyed; rsf_ac7_velocity_vertex_info info;
-        check(rsf_ac7_velocity_vertex_shader(original.data(),original.size(),keyed,info)==rsf_ac7_velocity_shader_result::patched,
-            "augment generated geometry with stable vertex/instance keys");
-        ComPtr<ID3D11VertexShader> key_shader;
-        check(SUCCEEDED(device->CreateVertexShader(keyed.data(),keyed.size(),nullptr,&key_shader)),"create keyed geometry VS");
-        std::vector<uint8_t> geometry;uint32_t previous=0,current_clip=0;
-        check(rsf_ac7_velocity_geometry_shader(info,geometry,previous,current_clip),"compile previous-generated-geometry GS");
-        ComPtr<ID3D11GeometryShader> gs;
-        check(SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&gs)),"create previous-generated-geometry GS");
-        auto native_gs=compile("struct V{float4 p:SV_Position;};ByteAddressBuffer native:register(t126);"
-            "[maxvertexcount(3)]void main(triangle V v[3],inout TriangleStream<V> s)"
-            "{[unroll]for(uint i=0;i<3;i++){V o;o.p=v[i].p+float4(asfloat(native.Load(4*i)),0,0,0);s.Append(o);}}","gs_5_0");
-        rsf_ac7_velocity_vertex_info generated;uint32_t maximum=0;
-        check(rsf_ac7_velocity_native_geometry_shader(native_gs.data(),native_gs.size(),info,geometry,
-            generated,maximum,previous,current_clip)==rsf_ac7_velocity_shader_result::patched && maximum==3,
-            "augment native GS at emission preserving generated position");
-        gs.Reset();
-        check(SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&gs)),"create augmented native GS with its original raw SRV at t126");
-    }
+    const auto retained = argc == 2 ? std::filesystem::path(argv[1]) : std::filesystem::path{};
+    check(rsf_ac7_velocity_fixture_links(device.Get(), retained.c_str()), "validate velocity stage linkage");
     const char* materials[]{
         "Texture2D<float4> data:register(t0);float4 main(float4 p:SV_Position):SV_Target0"
         "{float4 c=data.Load(int3(int2(p.xy),0));return float4(max(c.xyz,0),saturate(c.w));}",
         "Texture2D<float4> data:register(t0);float4 main(float4 p:SV_Position):SV_Target0"
         "{float4 c=data.Load(int3(int2(p.xy),0));float a=saturate(c.w);return float4(max(c.xyz,0)*a,0);}",
     };
-    {
-        auto tess_vertex=compile("struct V{float4 p:VS_To_DS_Position;};V main(uint i:SV_VertexID)"
-            "{V o;o.p=float4(i==2?3:-1,i==1?3:-1,.75,1);return o;}","vs_5_0");
-        auto tess_hull=compile("struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};"
-            "C constants(InputPatch<V,3> p){C o;o.e[0]=o.e[1]=o.e[2]=4;o.i=4;return o;}"
-            "[domain(\"tri\")][partitioning(\"integer\")][outputtopology(\"triangle_cw\")]"
-            "[outputcontrolpoints(3)][patchconstantfunc(\"constants\")]"
-            "V main(InputPatch<V,3> p,uint i:SV_OutputControlPointID){return p[i];}","hs_5_0");
-        auto tess_domain=compile("struct V{float4 p:VS_To_DS_Position;};struct C{float e[3]:SV_TessFactor;float i:SV_InsideTessFactor;};"
-            "[domain(\"tri\")]float4 main(C c,const OutputPatch<V,3> p,float3 d:SV_DomainLocation):SV_Position"
-            "{return p[0].p*d.x+p[1].p*d.y+p[2].p*d.z;}","ds_5_0");
-        std::vector<uint8_t> v,h,d,corners;rsf_ac7_velocity_vertex_info vi,di;uint32_t points=0,previous=0,current_clip=0;
-        check(rsf_ac7_velocity_vertex_shader(tess_vertex.data(),tess_vertex.size(),v,vi,true)==rsf_ac7_velocity_shader_result::patched,"key tessellation VS world-position outputs");
-        check(rsf_ac7_velocity_tessellation(tess_hull.data(),tess_hull.size(),tess_domain.data(),tess_domain.size(),
-            vi,h,corners,d,di,points,previous,current_clip)==rsf_ac7_velocity_shader_result::patched && points==3,
-            "relay native hull patch keys and augment native domain evaluation");
-        ComPtr<ID3D11VertexShader> tv;ComPtr<ID3D11HullShader> th,tc;ComPtr<ID3D11DomainShader> td;
-        check(SUCCEEDED(device->CreateVertexShader(v.data(),v.size(),nullptr,&tv)),"create tessellation keyed VS");
-        check(SUCCEEDED(device->CreateHullShader(h.data(),h.size(),nullptr,&th)) && SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&tc)),"create normal/corner native HS variants");
-        check(SUCCEEDED(device->CreateDomainShader(d.data(),d.size(),nullptr,&td)),"create native domain motion shader");
-        if (argc==2) {
-            for (const auto& item:{std::pair{"tess-v",&v},std::pair{"tess-h",&h},std::pair{"tess-d",&d}}) {
-                std::ofstream file(std::filesystem::path(argv[1])/(std::string(item.first)+".dxbc"),std::ios::binary);
-                file.write(reinterpret_cast<const char*>(item.second->data()),std::streamsize(item.second->size()));
-            }
-            const auto native_h=std::filesystem::path(argv[1])/"native-tess-h.dxbc";
-            const auto native_d=std::filesystem::path(argv[1])/"native-tess-d.dxbc";
-            const auto native_v=std::filesystem::path(argv[1])/"native-tess-v.dxbc";
-            if (std::filesystem::exists(native_h) && std::filesystem::exists(native_d)) {
-                auto matched_vertex=compile("struct V{float4 a:TEXCOORD10;float4 b:TEXCOORD11;float4 c:TEXCOORD7;float3 n:TEXCOORD9;"
-                    "float4 p:VS_To_DS_Position;uint id:VS_To_DS_VertexID;};V main(uint i:SV_VertexID){V o;"
-                    "o.a=o.b=o.c=0;o.n=float3(0,0,1);o.p=float4(i,0,0,1);o.id=i;return o;}","vs_5_0");
-                if (std::filesystem::exists(native_v)) {
-                    std::ifstream vf(native_v,std::ios::binary);
-                    matched_vertex.assign(std::istreambuf_iterator<char>(vf),std::istreambuf_iterator<char>());
-                }
-                std::ifstream hf(native_h,std::ios::binary),df(native_d,std::ios::binary);
-                std::vector<uint8_t> hb{std::istreambuf_iterator<char>(hf),std::istreambuf_iterator<char>()},db{std::istreambuf_iterator<char>(df),std::istreambuf_iterator<char>()};
-                check(rsf_ac7_velocity_vertex_shader(matched_vertex.data(),matched_vertex.size(),v,vi,true)==rsf_ac7_velocity_shader_result::patched &&
-                    rsf_ac7_velocity_tessellation(hb.data(),hb.size(),db.data(),db.size(),vi,h,corners,d,di,points,previous,current_clip)==
-                        rsf_ac7_velocity_shader_result::patched && points==12,
-                    "transform retained native 12-control-point PN tessellation with matching VS inputs");
-                tv.Reset();th.Reset();tc.Reset();td.Reset();
-                check(SUCCEEDED(device->CreateVertexShader(v.data(),v.size(),nullptr,&tv)) &&
-                    SUCCEEDED(device->CreateHullShader(h.data(),h.size(),nullptr,&th)) && SUCCEEDED(device->CreateHullShader(corners.data(),corners.size(),nullptr,&tc)) &&
-                    SUCCEEDED(device->CreateDomainShader(d.data(),d.size(),nullptr,&td)),"create retained native PN tessellation variants");
-            }
-        }
-    }
     D3D11_TEXTURE2D_DESC desc{}; desc.Width=2; desc.Height=1; desc.MipLevels=desc.ArraySize=1;
     desc.SampleDesc.Count=1; desc.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
     desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
@@ -135,14 +72,13 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
     const D3D11_SUBRESOURCE_DATA constants{&params,0,0}; ComPtr<ID3D11Buffer> cb;
     check(SUCCEEDED(device->CreateBuffer(&buffer,&constants,&cb)),"create pass constants");
     for (uint32_t mode=0;mode<2;++mode) {
-        auto native=compile(materials[mode],"ps_5_0"); std::vector<uint8_t> patched;
+        auto native=compile(materials[mode],"ps_5_0");
         if (argc==2) {
             std::ofstream artifact(std::filesystem::path(argv[1])/("fixture-"+std::to_string(mode)+".dxbc"),std::ios::binary);
             artifact.write(reinterpret_cast<const char*>(native.data()),std::streamsize(native.size()));
         }
-        check(rsf_ac7_velocity_pixel_shader(native.data(),native.size(),mode+2,patched)==rsf_ac7_velocity_shader_result::patched,"transform material velocity/opacity shader");
         ComPtr<ID3D11PixelShader> ps;
-        const HRESULT made=device->CreatePixelShader(patched.data(),patched.size(),nullptr,&ps);
+        const HRESULT made=rsf_ac7_velocity_fixture_pixel(device.Get(),native.data(),native.size(),mode+2,ps.GetAddressOf());
         if (FAILED(made)) { std::fprintf(stderr,"PS validation failed %08lx\n",static_cast<unsigned long>(made)); ok=false; continue; }
         const float clear[4]{}; context->ClearRenderTargetView(target.Get(),clear);
         context->ClearDepthStencilView(depth_view.Get(),D3D11_CLEAR_DEPTH,.1f,0);
@@ -554,39 +490,6 @@ o.previous=o.position+float4(.2,0,0,0);o.current=o.position;return o;})","vs_5_0
         rsf_ac7_velocity_frame_end();
     }
     rsf_ac7_velocity_release();
-    if (argc==2) for (const auto& entry:std::filesystem::directory_iterator(argv[1])) {
-        const auto name=entry.path().filename().string();
-        if ((!name.starts_with("1-") && !name.starts_with("0-")) || entry.path().extension()!=".dxbc") continue;
-        std::ifstream file(entry.path(),std::ios::binary); std::vector<uint8_t> native{
-            std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};
-        std::vector<uint8_t> patched;
-        if (name.starts_with("0-")) {
-            rsf_ac7_velocity_vertex_info info;
-            if (rsf_ac7_velocity_vertex_shader(native.data(),native.size(),patched,info)!=rsf_ac7_velocity_shader_result::patched) {
-                std::fprintf(stderr,"retained VS refused: %s\n",name.c_str());ok=false;continue;
-            }
-            ComPtr<ID3D11VertexShader> created;
-            if (FAILED(device->CreateVertexShader(patched.data(),patched.size(),nullptr,&created))) {
-                std::fprintf(stderr,"retained VS creation refused: %s\n",name.c_str());ok=false;
-            }
-            std::vector<uint8_t> geometry;uint32_t previous=0,current_clip=0;
-            if (!rsf_ac7_velocity_geometry_shader(info,geometry,previous,current_clip)) {
-                std::fprintf(stderr,"retained GS compile refused: %s\n",name.c_str());ok=false;continue;
-            }
-            ComPtr<ID3D11GeometryShader> gs;
-            if (FAILED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&gs))) {
-                std::fprintf(stderr,"retained GS creation refused: %s\n",name.c_str());ok=false;
-            }
-            continue;
-        }
-        if (rsf_ac7_velocity_pixel_shader(native.data(),native.size(),2,patched)!=rsf_ac7_velocity_shader_result::patched) {
-            std::fprintf(stderr,"retained shader refused: %s\n",name.c_str()); ok=false; continue;
-        }
-        ComPtr<ID3D11PixelShader> ps;
-        if (FAILED(device->CreatePixelShader(patched.data(),patched.size(),nullptr,&ps))) {
-            std::fprintf(stderr,"retained shader creation refused: %s\n",name.c_str()); ok=false;
-        }
-    }
-    check(rsf_core_ac7_velocity_geometry_compile_count()==1,"native/material interface changes link DXBC without repeating history-GS HLSL compilation");
+    check(rsf_ac7_velocity_fixture_retained(device.Get(), retained.c_str()), "validate retained DXBC and history GS compile reuse");
     return ok ? 0 : 1;
 }

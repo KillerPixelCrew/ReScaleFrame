@@ -2,17 +2,13 @@
 //! AC7 translucent velocity pixel shader admission and assembly.
 
 use crate::dxbc_chunks::Chunk;
-use crate::velocity_container::{
-    Resize, Semantic, borrowed, chunk_index, chunks, native_output, read_signature, shader_index,
-    valid_container_size,
-};
-use crate::velocity_stage::{CompileHelper, HelperCache, compile_bytecode, write_stage_inputs};
+use crate::velocity_container::{Semantic, chunk_index, chunks, read_signature, shader_index};
+use crate::velocity_stage::{HelperCache, compile_bytecode, write_stage_inputs};
 use crate::velocity_tokens::{
     DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, OperandView, append_words, instructions,
     read_operands, rewrite_operands, temp_count,
 };
 use std::borrow::Cow;
-use std::ffi::c_void;
 
 const PIXEL_PROFILE: u32 = 0x50;
 const MAX_INPUTS: u32 = 32;
@@ -349,13 +345,13 @@ fn assemble(
     Some(code)
 }
 
-fn patch<'a>(
+fn patch(
     native: &[Chunk<'_>],
     helper: &[Chunk<'_>],
     blend: u32,
     previous: u32,
     current: u32,
-    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
+    destination: &mut Vec<u8>,
 ) -> Option<()> {
     let shader = shader_index(native)?;
     let input = chunk_index(native, b"ISGN")?;
@@ -369,41 +365,22 @@ fn patch<'a>(
     let extra_inputs = helper_inputs(helper[extra_input].data)?;
     let code = assemble(original, added, extra_inputs, previous, current, blend)?;
 
-    write_stage_inputs(native, shader, input, &inputs, &code, None, allocate)
+    write_stage_inputs(native, shader, input, &inputs, &code, None, destination)
 }
 
-/// The caller lends native bytecode and a separate destination. The compiler leaf returns a
-/// borrow of its immutable cached bytecode that is valid throughout this call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_pixel_shader(
-    bytes: *const u8,
-    size: usize,
-    blend: u32,
-    previous: u32,
-    current: u32,
-    compile_helper: CompileHelper,
-    user: *mut c_void,
-    resize: Resize,
-) -> bool {
-    if !(2..=5).contains(&blend) || !valid_container_size(size) {
-        return false;
+pub(crate) fn transform(bytes: &[u8], blend: u32, previous: u32, current: u32) -> Option<Vec<u8>> {
+    if !(2..=5).contains(&blend) {
+        return None;
     }
-    let Some(native) = unsafe { borrowed(bytes, size) }.and_then(chunks) else {
-        return false;
-    };
+    let native = chunks(bytes)?;
     static HELPER: HelperCache = HelperCache::new();
-    let Some(helper) = compile_bytecode(
+    let helper = chunks(compile_bytecode(
         &HELPER,
-        compile_helper,
         HELPER_SOURCE,
         c"ac7-translucent-velocity",
         c"ps_5_0",
-    )
-    .and_then(chunks) else {
-        return false;
-    };
-    patch(&native, &helper, blend, previous, current, |size| unsafe {
-        native_output(user, resize, size)
-    })
-    .is_some()
+    )?)?;
+    let mut code = Vec::new();
+    patch(&native, &helper, blend, previous, current, &mut code)?;
+    Some(code)
 }

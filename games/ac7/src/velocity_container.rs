@@ -1,47 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! DXBC containers and signatures for AC7's velocity shader transforms.
-//! The native callers keep their vectors and their typed compiler and shader operations.
 use crate::dxbc_chunks::{Chunk, chunk_table, word};
 use crate::shader_hash::{dxbc_checksum, dxbc_digest_bytes};
-use std::ffi::{c_char, c_void};
 use std::slice;
 
 const HEADER: usize = 32;
 const MAX_CONTAINER_SIZE: usize = 8 * 1024 * 1024;
 const SIGNATURE_HEADER: usize = 8;
 const MAX_SEMANTICS: usize = 64;
-
-#[repr(C)]
-pub(crate) struct SemanticView {
-    name: *const c_char,
-    name_size: usize,
-    index: u32,
-    system: u32,
-    ty: u32,
-    reg: u32,
-    mask: u8,
-    used: u8,
-}
-
-const _: () = assert!(size_of::<SemanticView>() == 40);
-
-impl SemanticView {
-    /// The native call keeps the referenced name readable for the duration of the borrow.
-    pub(crate) unsafe fn borrow(&self) -> Option<Semantic<'_>> {
-        Some(Semantic {
-            name: unsafe { borrowed(self.name.cast::<u8>(), self.name_size) }?,
-            index: self.index,
-            system: self.system,
-            ty: self.ty,
-            reg: self.reg,
-            mask: self.mask,
-            used: self.used,
-        })
-    }
-}
-
-pub(crate) type AppendSemantic = unsafe extern "C" fn(*mut c_void, *const SemanticView) -> bool;
-pub(crate) type Resize = unsafe extern "C" fn(*mut c_void, usize) -> *mut u8;
 
 #[derive(Clone)]
 pub(crate) struct Semantic<'a> {
@@ -52,21 +18,6 @@ pub(crate) struct Semantic<'a> {
     pub(crate) reg: u32,
     pub(crate) mask: u8,
     pub(crate) used: u8,
-}
-
-impl Semantic<'_> {
-    pub(crate) fn view(&self) -> SemanticView {
-        SemanticView {
-            name: self.name.as_ptr().cast(),
-            name_size: self.name.len(),
-            index: self.index,
-            system: self.system,
-            ty: self.ty,
-            reg: self.reg,
-            mask: self.mask,
-            used: self.used,
-        }
-    }
 }
 
 pub(crate) fn valid_container_size(size: usize) -> bool {
@@ -82,22 +33,6 @@ pub(crate) unsafe fn borrowed<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T
         return None;
     }
     Some(unsafe { slice::from_raw_parts(ptr, len) })
-}
-
-/// The callback must lend a writable span, separate from the inputs, through encoding.
-pub(crate) unsafe fn native_output<'a>(
-    user: *mut c_void,
-    resize: Resize,
-    size: usize,
-) -> Option<&'a mut [u8]> {
-    if size > isize::MAX as usize {
-        return None;
-    }
-    let bytes = unsafe { resize(user, size) };
-    if bytes.is_null() {
-        return None;
-    }
-    Some(unsafe { slice::from_raw_parts_mut(bytes, size) })
 }
 
 pub(crate) fn resize_bytes(bytes: &mut Vec<u8>, size: usize) -> Option<&mut [u8]> {
@@ -150,17 +85,14 @@ pub(crate) fn shader_index(chunks: &[Chunk<'_>]) -> Option<usize> {
     chunk_index(chunks, b"SHEX").or_else(|| chunk_index(chunks, b"SHDR"))
 }
 
-pub(crate) fn write_container<'a>(
-    chunks: &[Chunk<'_>],
-    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
-) -> Option<()> {
+pub(crate) fn write_container(chunks: &[Chunk<'_>], destination: &mut Vec<u8>) -> Option<()> {
     let count = chunks.len();
     let table_end = HEADER.checked_add(count.checked_mul(4)?)?;
     let size = chunks.iter().try_fold(table_end, |size, chunk| {
         size.checked_add(8)?.checked_add(chunk.data.len())
     })?;
     let total = u32::try_from(size).ok()?;
-    let output = allocate(size)?.get_mut(..size)?;
+    let output = resize_bytes(destination, size)?;
     output[..table_end].fill(0);
     output[..4].copy_from_slice(b"DXBC");
     store(output, 20, 1);
@@ -225,10 +157,10 @@ pub(crate) fn read_signature<'a>(
     Some(())
 }
 
-pub(crate) fn write_signature<'a>(
+pub(crate) fn write_signature(
     semantics: &[Semantic<'_>],
     streams: bool,
-    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
+    destination: &mut Vec<u8>,
 ) -> Option<()> {
     let count = semantics.len();
     let (stride, fields_offset) = signature_layout(streams);
@@ -245,7 +177,7 @@ pub(crate) fn write_signature<'a>(
     order.try_reserve_exact(count).ok()?;
     order.extend(0..count);
     order.sort_unstable_by_key(|&i| (semantics[i].reg, semantics[i].mask, i));
-    let output = allocate(size)?.get_mut(..size)?;
+    let output = resize_bytes(destination, size)?;
     output.fill(0);
     store(output, 0, count as u32);
     store(output, 4, SIGNATURE_HEADER as u32);

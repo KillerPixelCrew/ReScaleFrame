@@ -43,9 +43,7 @@ struct VelocityHashDispatch {
 };
 
 extern "C" {
-const char* rsf_ac7_velocity_indirect_source(void);
-// Nonzero when a primary translucent mesh scope with a camera draws single-sample with depth.
-int32_t rsf_ac7_velocity_stream_draw(const rsf_game_render_pass* scope, const rsf_frame_tap_geometry* draw);
+// Route the bound stages and native primitive topology.
 uint32_t rsf_ac7_velocity_stream_route(uint32_t topology, uint32_t stages);
 // Nonzero with the plan written when the draw's records fit.
 int32_t rsf_ac7_velocity_stream_plan(const rsf_frame_tap_geometry* draw, uint32_t stages,

@@ -2,9 +2,8 @@
 //! The translucent velocity pass's per-draw stream policy: scope and draw admission, the
 //! pipeline route, the input vertex and stream-output record bounds, the indirect packing and
 //! argument range, capture and zero-source sizing, the hash build's record count and dispatch,
-//! and the packed b13 draw parameters. velocity_pass.cpp keeps every D3D11 call, the context
-//! type check, the argument copy and GPU validation, the buffers and their creation, both draws,
-//! the hash build and the merge, and carries out these decisions.
+//! and the packed b13 draw parameters. The native submission leaf applies these decisions to
+//! the borrowed context, including the argument copy, GPU validation, draws and hash build.
 
 use crate::scene_color_abi::rsf_frame_tap_geometry;
 use crate::velocity_history::{MIN_CAPACITY, RECORD_LIMIT};
@@ -121,7 +120,7 @@ const _: () = {
 
 /// A primary translucent mesh scope with a camera, and a single-sample draw with depth of a
 /// known kind that has vertices when it is direct.
-fn draw_admitted(scope: &rsf_game_render_pass, draw: &rsf_frame_tap_geometry) -> bool {
+pub(crate) fn draw_admitted(scope: &rsf_game_render_pass, draw: &rsf_frame_tap_geometry) -> bool {
     scope.role == RSF_GAME_RENDER_TRANSLUCENT_MESH
         && scope.camera_valid != 0
         && scope.flags & RSF_GAME_RENDER_PRIMARY != 0
@@ -290,9 +289,9 @@ fn hash_dispatch(
     })
 }
 
-/// Nonzero when the draw callback should continue. The context type stays native.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_stream_draw(
+/// Pointer-boundary fixture for draw admission.
+#[cfg(test)]
+unsafe fn rsf_ac7_velocity_stream_draw(
     scope: *const rsf_game_render_pass,
     draw: *const rsf_frame_tap_geometry,
 ) -> i32 {
@@ -385,9 +384,8 @@ unsafe extern "C" fn rsf_ac7_velocity_hash_dispatch(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_indirect_source() -> *const std::ffi::c_char {
-    cr#"
+#[cfg(windows)]
+pub(crate) const INDIRECT_SOURCE: &str = r#"
 RWByteAddressBuffer Arguments:register(u0);
 cbuffer Parameters:register(b0) {uint Capacity;uint OutputCapacity;uint Packing;uint Points;};
 [numthreads(1,1,1)]void main(uint3 id:SV_DispatchThreadID) {
@@ -401,8 +399,7 @@ cbuffer Parameters:register(b0) {uint Capacity;uint OutputCapacity;uint Packing;
     }
     uint groups=(records+63)/64;
     Arguments.Store(32,records);Arguments.Store3(36,uint3(min(groups,65535),(groups+65534)/65535,1));
-}"#.as_ptr()
-}
+}"#;
 
 #[cfg(test)]
 mod tests;

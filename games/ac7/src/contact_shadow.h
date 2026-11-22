@@ -8,11 +8,7 @@ enum rsf_ac7_contact_shadow_result : int32_t {
     RSF_AC7_CONTACT_REFUSED = 2,
 };
 
-// Internal plugin helper for AC7's directional light shader (SHA-256 60a2ca61...): adds the
-// View's noise phase and a depth quantisation bias to the contact-shadow ray. Input starts at
-// DXBC; any engine trailer is retained. The caller provides writable storage on demand
-// and uses it only when the result is RSF_AC7_CONTACT_PATCHED.
-extern "C" int32_t rsf_ac7_contact_shadow_correct(const uint8_t* bytes, size_t size,
-    uint8_t* (*resize)(void*, size_t), void* user) noexcept;
-// CRC-32C of the DXBC container, matching the shader hash captures record.
-extern "C" uint32_t rsf_ac7_contact_shadow_crc(const uint8_t* bytes, size_t size) noexcept;
+// Input contains the RHI prefix, followed by DXBC at offset and any engine trailer.
+// On success the factory borrows the complete replacement and its DXBC CRC for the call.
+extern "C" int32_t rsf_ac7_contact_shadow_correct(const uint8_t* bytes, size_t size, size_t offset,
+    bool (*use_shader)(void*, const uint8_t*, size_t, uint32_t), void* user) noexcept;

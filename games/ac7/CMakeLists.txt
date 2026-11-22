@@ -48,19 +48,15 @@ target_link_libraries(rsf_ac7_motion_capture INTERFACE
     rsf_ac7_rust ReScaleFrame::Graphics)
 add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
-add_library(rsf_ac7_render_scope STATIC src/render_scope.cpp src/native_renderer.cpp src/velocity_shader.cpp)
+add_library(rsf_ac7_render_scope STATIC src/render_scope.cpp src/native_renderer.cpp)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
 target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_view rsf_windows_input_facts minhook rsf_build_options ReScaleFrame::RuntimeCommon)
 # The shader compiler is available without linking the Graphics library.
 target_link_libraries(rsf_ac7_render_scope PUBLIC rsf_shader_compiler)
 target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/runtime/graphics/include")
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)
-# The pass keeps its D3D11 work native. Its shader/layout observations and variant admission are
-# src/velocity_pass_cache.rs, its model/view history decisions src/velocity_history.rs, its
-# draw admission, record bounds and cbuffer packing src/velocity_stream.rs, its commit
-# admission, target check, log budgets and CPU profile src/velocity_commit.rs and its per-device
-# renderer publication and teardown src/velocity_renderer.rs, so the Rust archive follows the
-# render scope on the link line.
+# Rust owns the velocity shader objects and replay lease. The native pass supplies
+# the D3D11 resource, draw and merge leaves.
 add_library(rsf_ac7_velocity_pass STATIC src/velocity_pass.cpp)
 target_include_directories(rsf_ac7_velocity_pass PUBLIC include)
 target_link_libraries(rsf_ac7_velocity_pass PRIVATE ReScaleFrame::AC7RenderScope ReScaleFrame::Graphics rsf_ac7_rust rsf_build_options)
