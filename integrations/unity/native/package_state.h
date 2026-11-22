@@ -9,9 +9,9 @@
    (Runtime/Native.cs, rsfu_*) and keep their layout. Rust owns the stored settings and their
    validation, the status snapshot, the render plan, temporal readiness, the pending
    reconfiguration, the session lifecycle with its result codes, the D3D12 SR views of the
-   render callback (package_views.rs): one Runtime SR context per Unity view key, its backend
-   choice and fallback, its replacement on new extents or reconfiguration, and the recording
-   slots bound to the bridge's command lists, the presentation (package_state/presentation.rs):
+   render callback (package_views.rs): one Runtime-planned SR context per Unity view key,
+   its replacement on new extents or reconfiguration, and the recording slots bound to the
+   bridge's command lists, the presentation (package_state/presentation.rs):
    the package identity (SDK root and directories, Unity version and project id), the one
    generation install and the window pass's provider request, and the session services
    (package_state/services.rs): the host services and bridge API of each session, the log file,
@@ -19,8 +19,8 @@
    and rsfu_input into the Runtime, and the routing (package_state/routing.rs): the render
    callback's window, final-scene, SR and submitted passes with the Editor preview's admission and
    diagnostic budget, the generation window guard and Unity's device lifecycle. package.cpp keeps
-   the Unity, DXGI, Vulkan and preview work and lends the typed Unity, Win32, SDK and Runtime
-   calls through rsf_unity_package_platform. package.cpp's mutex still serializes the exports,
+   the Unity, DXGI, Vulkan and preview work and lends the typed platform and Runtime calls
+   through rsf_unity_package_platform. package.cpp's mutex still serializes the exports,
    Unity device events and the SR pass; nothing here takes it. Rust never holds its state lock while it calls
    a leaf; its view lock is held across the SR leaves and its presentation lock across the install
    leaf, none of which re-enter, and both are always taken before the state lock. Its log lock is
@@ -67,7 +67,7 @@ typedef struct rsf_sr12 rsf_sr12;
 /* Defined by rescaleframe/native_fg_d3d12.h; the generation install. */
 typedef struct rsf_fg12_setup rsf_fg12_setup;
 
-/* The Runtime SR context a view asks for: its resolved backend (0 is the spatial or native path),
+/* The Runtime SR context a view asks for: its requested backend (0 is the spatial or native path),
    the stored quality and DLSS model, the pass camera's extents and depth convention, and the
    package identity as UTF-8, borrowed for the call: the SDK root, its streamline, fidelityfx and
    xess directories, the Streamline interposer, Unity's version and the project id. package.cpp
@@ -221,7 +221,7 @@ int rsf_unity_package_plan(rsf_game_render_config* output);
 /* The render callback's SR pass (begin, role RSF_GAME_RENDER_SR) on the bridge's command list,
    after the editor preview is prepared. Applies the stored gameplay screen to a copy of the pass,
    releases every view on a reconfiguring pass, replaces a view whose extents no longer fit,
-   creates a missing one (Auto resolved, a failed vendor backend retried as backend 0) and
+   creates a missing one from the Runtime's planned result and
    evaluates it in the slot bound to commands once the camera is valid and no reconfiguration is
    pending. */
 void rsf_unity_package_render(void* commands, const rsf_game_render_pass* pass);
