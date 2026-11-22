@@ -18,7 +18,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_start_backend(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_pipeline_on_frame(context: Raw, frame: *const Frame) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_on_frame(context: Raw, frame: *const Frame) -> i32 {
     unsafe { PROCESS.on_frame(&LEAVES, context, frame) }
 }
 

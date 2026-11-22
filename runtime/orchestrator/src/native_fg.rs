@@ -911,7 +911,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *cons
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_capture(context: Handle, frame: *const DlssFrame) {
+pub(crate) unsafe extern "C" fn rsf_native_fg_capture(context: Handle, frame: *const DlssFrame) {
     capture(context, frame);
 }
 

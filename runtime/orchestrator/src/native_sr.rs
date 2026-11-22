@@ -1,14 +1,27 @@
 // SPDX-License-Identifier: MIT
 #[cfg(not(test))]
-mod platform;
-#[cfg(not(test))]
 use crate::d3d11_output_platform::{rsf_d3d11_output_child_device, rsf_d3d11_output_is_immediate};
+#[cfg(not(test))]
 use crate::{
+    dlss_pipeline::exports::{
+        rsf_dlss_pipeline_on_frame, rsf_dlss_pipeline_output_texture, rsf_dlss_pipeline_resize_output,
+    },
     graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save},
-    motion_decode::{rsf_motion_decode_run, rsf_motion_decode_texture},
-    motion_resolve::{rsf_motion_resolve_depth, rsf_motion_resolve_motion, rsf_motion_resolve_run},
+    motion_decode::{
+        rsf_motion_decode_create, rsf_motion_decode_destroy, rsf_motion_decode_run,
+        rsf_motion_decode_texture,
+    },
+    motion_resolve::{
+        rsf_motion_resolve_create, rsf_motion_resolve_depth, rsf_motion_resolve_destroy,
+        rsf_motion_resolve_motion, rsf_motion_resolve_run,
+    },
     native_exposure::rsf_native_scalar_exposure,
-    native_fg::{rsf_native_fg_inputs_ready, rsf_native_fg_scene},
+    native_fg::{rsf_native_fg_capture, rsf_native_fg_inputs_ready, rsf_native_fg_scene},
+    native_regions::{
+        rsf_native_regions_depth_valid, rsf_native_regions_prepare,
+        rsf_native_regions_temporal_mask,
+    },
+    native_reinsert::rsf_native_reinsert,
     native_fg_cpu::platform::rsf_native_fg_stage,
     native_translucency::rsf_native_translucency_take,
 };
@@ -41,8 +54,8 @@ use crate::sys::RSF_D3D11_FORMAT_RGBA16_FLOAT;
 use crate::sys::rsf_native_translucency_masks as Masks;
 #[cfg(not(test))]
 use crate::sys::{
-    RSF_DLSS_PIPELINE_ABI_VERSION, rsf_dlss_pipeline_frame as Frame,
-    rsf_motion_decode_params as DecodeParams,
+    RSF_DLSS_PIPELINE_ABI_VERSION, RSF_MOTION_DECODE_ABI_VERSION, rsf_dlss_pipeline_frame as Frame,
+    rsf_motion_decode_params as DecodeParams, rsf_motion_decode_setup,
 };
 #[cfg(not(test))]
 use crate::sys::{rsf_dlss_frame as DlssFrame, rsf_frame_resources};
@@ -51,11 +64,14 @@ use rsf_game_sys::rsf_game_render_pass as Pass;
 #[cfg(not(test))]
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_NO_FG,
-    RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_camera_frame, rsf_game_render_pass as Pass,
+    RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, depth_domains_requested, rsf_camera_frame,
+    rsf_game_render_pass as Pass,
 };
 use std::ffi::c_void;
 #[cfg(not(test))]
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
+#[cfg(not(test))]
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32_FLOAT;
 use windows::core::IUnknown;
 #[cfg(not(test))]
 use windows::core::Interface;
@@ -154,6 +170,43 @@ unsafe fn input_is_local(pass: &Pass, depth_domains: bool) -> bool {
         })
 }
 
+/// None when the depth layout is refused, otherwise whether depth domains are requested.
+#[cfg(not(test))]
+unsafe fn depth_layout(pass: &Pass) -> Option<bool> {
+    let desc = unsafe { texture_desc(pass.depth) };
+    unsafe { rsf_native_regions_depth_valid(&pass.depth_domains, desc.format, &pass.render_rect) }
+        .then(|| depth_domains_requested(&pass.depth_domains))
+}
+
+#[cfg(not(test))]
+unsafe fn prepare(context: Texture, pass: &Pass, out: &mut [Texture; 3]) -> bool {
+    let [color, depth, motion] = out;
+    unsafe {
+        rsf_native_regions_prepare(
+            context,
+            pass.color_input,
+            pass.depth,
+            pass.motion,
+            &pass.render_rect,
+            color,
+            depth,
+            motion,
+            &pass.depth_domains,
+            pass.camera.depth_inverted != 0,
+        )
+    }
+}
+
+#[cfg(not(test))]
+unsafe extern "C" fn destroy_decode(pass: Texture) {
+    unsafe { rsf_motion_decode_destroy(pass.cast()) };
+}
+
+#[cfg(not(test))]
+unsafe extern "C" fn destroy_resolve(pass: Texture) {
+    unsafe { rsf_motion_resolve_destroy(pass.cast()) };
+}
+
 fn discard_history(owner: u32, result: i32) -> i32 {
     reset_history(owner);
     result
@@ -220,7 +273,7 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
     if !unsafe { validate_device(context, pass) } {
         return INVALID;
     }
-    let Some(depth_domains) = (unsafe { platform::depth_layout(pass) }) else {
+    let Some(depth_domains) = (unsafe { depth_layout(pass) }) else {
         return INVALID;
     };
     let Some(_bindings) =
@@ -229,7 +282,14 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
         return RESOURCE_FAILED;
     };
     unsafe { clear_predication(context) };
-    let resized = unsafe { platform::resize_output(output_width, output_height) };
+    let resized = unsafe {
+        rsf_dlss_pipeline_resize_output(
+            output_width,
+            output_height,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
     if resized != 0 {
         return discard_history(SR, resized);
     }
@@ -237,7 +297,7 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
     let textures = if unsafe { input_is_local(pass, depth_domains) } {
         [pass.color_input, pass.depth, pass.motion]
     } else {
-        match unsafe { prepare_regions(platform::prepare, context, pass) } {
+        match unsafe { prepare_regions(prepare, context, pass) } {
             Ok(textures) => textures,
             Err(code) => return code,
         }
@@ -270,18 +330,41 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
             frame.motion_depth_layer = masks.motion_depth;
         }
     }
-    if !pass.temporal_mask.is_null() && !unsafe { platform::merge_mask(context, pass, &mut frame) }
-    {
-        return RESOURCE_FAILED;
+    if !pass.temporal_mask.is_null() {
+        let (mut reactive, mut bias) = (std::ptr::null_mut(), std::ptr::null_mut());
+        if !unsafe {
+            rsf_native_regions_temporal_mask(
+                context,
+                pass.temporal_mask,
+                &pass.render_rect,
+                &pass.temporal_mask_weights,
+                frame.reactive_mask,
+                frame.bias_mask,
+                &mut reactive,
+                &mut bias,
+            )
+        } {
+            return RESOURCE_FAILED;
+        }
+        frame.reactive_mask = reactive;
+        frame.bias_mask = bias;
     }
 
-    let result = with_scene(pass, || unsafe { platform::run_frame(context, &frame) });
+    let result = with_scene(pass, || unsafe { rsf_dlss_pipeline_on_frame(context, &frame) });
     if result != 0 {
         return discard_history(SR, result);
     }
     // The provider output stays private until the current immediate stream
     // publishes it into the adapter's leased native destinations.
-    if !unsafe { platform::publish_output(context, pass) } {
+    if !unsafe {
+        rsf_native_reinsert(
+            context,
+            rsf_dlss_pipeline_output_texture(),
+            pass.color_output,
+            pass.color_output_readable,
+            &pass.output_rect,
+        )
+    } {
         return discard_history(SR, RESOURCE_FAILED);
     }
     commit_history(SR, pass);
@@ -323,13 +406,29 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
             } else {
                 *cache = None;
                 reset_history(FG);
+                let setup = rsf_motion_decode_setup {
+                    struct_size: size_of::<rsf_motion_decode_setup>() as u32,
+                    abi_version: RSF_MOTION_DECODE_ABI_VERSION,
+                    width,
+                    height,
+                    output_format: DXGI_FORMAT_R32G32_FLOAT.0 as u32,
+                    log: None,
+                    log_user: std::ptr::null_mut(),
+                };
+                let mut decode = std::ptr::null_mut();
+                let created =
+                    unsafe { rsf_motion_decode_create(device.as_raw(), &setup, &mut decode) };
                 let decode = OwnedHandle::new(
-                    unsafe { platform::create_decode(device.as_raw(), width, height) },
-                    platform::destroy_decode,
+                    if created == 0 { decode.cast() } else { std::ptr::null_mut() },
+                    destroy_decode,
                 )?;
+                let mut resolve = std::ptr::null_mut();
+                let created = unsafe {
+                    rsf_motion_resolve_create(device.as_raw(), width, height, &mut resolve)
+                };
                 let resolve = OwnedHandle::new(
-                    unsafe { platform::create_resolve(device.as_raw(), width, height) },
-                    platform::destroy_resolve,
+                    if created != 0 { resolve.cast() } else { std::ptr::null_mut() },
+                    destroy_resolve,
                 )?;
                 cache.insert(FgInputs {
                     decode,
@@ -340,7 +439,7 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
             };
             stage(c"normalize-regions-decode");
             let [color, depth, vectors] =
-                unsafe { prepare_regions(platform::prepare, context, pass) }.ok()?;
+                unsafe { prepare_regions(prepare, context, pass) }.ok()?;
             if unsafe {
                 rsf_motion_decode_run(inputs.decode.get().cast(), context, vectors, motion)
             } != 0
@@ -399,7 +498,7 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
             }
             let accepted = with_scene(&captured, || unsafe {
                 stage(c"normalize-capture");
-                platform::capture_fg(context, &frame);
+                rsf_native_fg_capture(context, &frame);
                 stage(c"normalize-captured");
                 rsf_native_fg_inputs_ready(pass.source_frame_id)
             });
@@ -448,7 +547,7 @@ unsafe fn capture_validated(context: Texture, pass: &Pass, motion: &DecodeParams
         )
     };
     if !unsafe { validate_device(context, pass) }
-        || unsafe { platform::depth_layout(pass) }.is_none()
+        || unsafe { depth_layout(pass) }.is_none()
     {
         return INVALID;
     }
