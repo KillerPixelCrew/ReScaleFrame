@@ -1167,22 +1167,22 @@ Port Streamline startup, DLSS frame planning, evaluate and shutdown across share
 
 **Port files (11)**
 
-- [ ] [runtime/backends/dlss/include/rescaleframe/dlss.h](runtime/backends/dlss/include/rescaleframe/dlss.h)
-- [ ] [runtime/backends/dlss/include/rescaleframe/dlss_native12.h](runtime/backends/dlss/include/rescaleframe/dlss_native12.h)
-- [ ] [runtime/backends/dlss/include/rescaleframe/dlss_preset.h](runtime/backends/dlss/include/rescaleframe/dlss_preset.h)
+- [x] [runtime/backends/dlss/include/rescaleframe/dlss.h](runtime/backends/dlss/include/rescaleframe/dlss.h)
+- [x] [runtime/backends/dlss/include/rescaleframe/dlss_native12.h](runtime/backends/dlss/include/rescaleframe/dlss_native12.h)
+- [x] [runtime/backends/dlss/include/rescaleframe/dlss_preset.h](runtime/backends/dlss/include/rescaleframe/dlss_preset.h)
 - [ ] [runtime/backends/dlss/src/dlss_native12.cpp](runtime/backends/dlss/src/dlss_native12.cpp)
 - [ ] [runtime/backends/dlss/src/dlss_streamline.cpp](runtime/backends/dlss/src/dlss_streamline.cpp)
 - [ ] [runtime/backends/dlss/src/streamline_frame.h](runtime/backends/dlss/src/streamline_frame.h)
 - [ ] [runtime/backends/dlss/src/streamline_load.h](runtime/backends/dlss/src/streamline_load.h)
 - [ ] [runtime/backends/dlss/src/streamline_sr.h](runtime/backends/dlss/src/streamline_sr.h)
-- [ ] [runtime/orchestrator/include/rescaleframe/dlss_pipeline.h](runtime/orchestrator/include/rescaleframe/dlss_pipeline.h)
-- [ ] [runtime/orchestrator/src/dlss_pipeline.cpp](runtime/orchestrator/src/dlss_pipeline.cpp)
-- [ ] [runtime/orchestrator/src/dlss_pipeline_platform.h](runtime/orchestrator/src/dlss_pipeline_platform.h)
+- [x] [runtime/orchestrator/include/rescaleframe/dlss_pipeline.h](runtime/orchestrator/include/rescaleframe/dlss_pipeline.h)
+- [x] [runtime/orchestrator/src/dlss_pipeline.cpp](runtime/orchestrator/src/dlss_pipeline.cpp)
+- [x] [runtime/orchestrator/src/dlss_pipeline_platform.h](runtime/orchestrator/src/dlss_pipeline_platform.h)
 
 **Fixtures (2)**
 
-- [ ] [tests/dlss_backend.cpp](tests/dlss_backend.cpp)
-- [ ] [tests/sr_pipeline.cpp](tests/sr_pipeline.cpp)
+- [x] [tests/dlss_backend.cpp](tests/dlss_backend.cpp)
+- [x] [tests/sr_pipeline.cpp](tests/sr_pipeline.cpp)
 
 **Rust review findings (12)**
 
