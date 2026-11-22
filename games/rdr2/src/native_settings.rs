@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in, bounded settings evidence collection. The detours never change native data.
-use crate::asi::{self, AsiPlatform, DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
+use crate::asi::{self, DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
 use crate::layout::settings_probe::{BIND, GETTER_SLOT, KEYS, METADATA_KEY, READ};
 use crate::platform::lock;
 use crate::runtime_worker::log;
@@ -68,8 +68,10 @@ pub(crate) fn install(path: &[u16]) -> bool {
     if path.is_empty() || probe.is_some() {
         return false;
     }
-    let image = unsafe { (platform.main_module)() };
-    let Some((_, facts)) = crate::platform::image_header(platform.read, image) else {
+    let image = unsafe { asi::main_module() };
+    let Some((_, facts)) =
+        crate::platform::image_header(crate::platform::read_process_memory, image)
+    else {
         return false;
     };
     let installed = match install_diagnostic_hooks(platform, image, [BIND, READ], &hooks, enable) {
@@ -114,10 +116,13 @@ impl Probe {
     }
 }
 
-fn hex_bytes(platform: &AsiPlatform, address: usize, size: usize) -> String {
+fn hex_bytes(address: usize, size: usize) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut source = [0u8; 256];
-    if size > source.len() || !unsafe { (platform.read)(address, source.as_mut_ptr().cast(), size) }
+    if size > source.len()
+        || !unsafe {
+            crate::platform::read_process_memory(address, source.as_mut_ptr().cast(), size)
+        }
     {
         return String::from("null");
     }
@@ -159,12 +164,12 @@ fn row(destination: *const c_void, context: *const c_void, metadata: *const c_vo
         return;
     };
     let table = platform.read_value::<usize>(destination);
-    let thread = unsafe { (platform.current_thread)() };
+    let thread = unsafe { asi::current_thread() };
     let (rva, table_address) = probe.address_fields(table);
-    let destination_bytes = hex_bytes(platform, destination, 128);
-    let context = hex_bytes(platform, context as usize, 128);
-    let metadata = hex_bytes(platform, metadata, 128);
-    let table = table.map_or_else(|| "null".into(), |table| hex_bytes(platform, table, 256));
+    let destination_bytes = hex_bytes(destination, 128);
+    let context = hex_bytes(context as usize, 128);
+    let metadata = hex_bytes(metadata, 128);
+    let table = table.map_or_else(|| "null".into(), |table| hex_bytes(table, 256));
     let _ = writeln!(
         file,
         "{{\"event\":\"row\",\"thread\":{thread},\"key\":\"{key:08x}\",\"destination\":\"{destination:016X}\",\"vtable_rva\":{rva},\"vtable_address\":{table_address},\"destination_bytes\":{destination_bytes},\"context\":{context},\"metadata\":{metadata},\"destination_vtable\":{table}}}"
@@ -202,13 +207,13 @@ fn value(
         .filter(|&address| address != 0)
         .and_then(|address| address.checked_add(GETTER_SLOT))
         .and_then(|address| platform.read_value::<usize>(address));
-    let thread = unsafe { (platform.current_thread)() };
+    let thread = unsafe { asi::current_thread() };
     let (rva, table_address) = probe.address_fields(table);
     let (getter_rva, getter_address) = probe.address_fields(getter);
-    let path = hex_bytes(platform, path as usize, 128);
-    let source_bytes = hex_bytes(platform, source, 128);
-    let kind = hex_bytes(platform, kind as usize, 32);
-    let value = hex_bytes(platform, destination as usize, 32);
+    let path = hex_bytes(path as usize, 128);
+    let source_bytes = hex_bytes(source, 128);
+    let kind = hex_bytes(kind as usize, 32);
+    let value = hex_bytes(destination as usize, 32);
     let _ = writeln!(
         file,
         "{{\"event\":\"value\",\"thread\":{thread},\"source\":\"{source:016X}\",\"vtable_rva\":{rva},\"vtable_address\":{table_address},\"getter_rva\":{getter_rva},\"getter_address\":{getter_address},\"flags\":{flags},\"path\":{path},\"source_bytes\":{source_bytes},\"type\":{kind},\"value\":{value}}}"

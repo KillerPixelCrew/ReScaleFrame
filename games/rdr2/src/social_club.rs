@@ -68,14 +68,9 @@ unsafe extern "C" fn trace_render(
 }
 
 #[cfg_attr(test, allow(dead_code))]
-fn create(
-    asi: &AsiPlatform,
-    target: usize,
-    detour: *const c_void,
-    original: &AtomicPtr<c_void>,
-) -> i32 {
+fn create(target: usize, detour: *const c_void, original: &AtomicPtr<c_void>) -> i32 {
     // Publish the trampoline inside MH_CreateHook before a separate census caller can enable it.
-    unsafe { (asi.hook_create)(target, detour, original.as_ptr()) }
+    unsafe { asi::hook_create(target, detour, original.as_ptr()) }
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -99,7 +94,7 @@ pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
     let Some(asi) = asi::platform() else {
         return false;
     };
-    let image = unsafe { (asi.main_module)() };
+    let image = unsafe { asi::main_module() };
     let Some(site) = image
         .checked_add(SOCIAL_CLUB_DISPATCHER as usize)
         .filter(|_| image != 0)
@@ -109,7 +104,7 @@ pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
     if !asi.matches(site, &profile::DISPATCH_BYTES) {
         return false;
     }
-    let initialized = unsafe { (asi.hook_initialize)() };
+    let initialized = unsafe { asi::hook_initialize() };
     if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
         return false;
     }
@@ -122,13 +117,12 @@ pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
     {
         return false;
     }
-    create(asi, site, dispatch as *const c_void, &ORIGINAL_DISPATCH) == MH_OK
-        && enable(site) == MH_OK
+    create(site, dispatch as *const c_void, &ORIGINAL_DISPATCH) == MH_OK && enable(site) == MH_OK
 }
 
 #[cfg_attr(test, allow(dead_code))]
 fn renderer_matches(asi: &AsiPlatform, base: usize) -> bool {
-    asi::pe_header(asi, base).is_some_and(|(_, signature, timestamp, size)| {
+    asi::pe_header(base).is_some_and(|(_, signature, timestamp, size)| {
         signature == asi::PE_SIGNATURE
             && timestamp == profile::IMAGE_TIMESTAMP
             && size == profile::IMAGE_SIZE
@@ -191,7 +185,7 @@ fn observe_dispatch() {
     let mut status = MH_ERROR_MEMORY_PROTECT;
     let mut registered = false;
     if published {
-        status = unsafe { (asi.hook_create)(target, page, null_mut()) };
+        status = unsafe { asi::hook_create(target, page, null_mut()) };
         if status == MH_OK {
             registered = true;
             status = enable(target);
@@ -207,8 +201,8 @@ fn observe_dispatch() {
         if registered {
             // Census can enable hooks concurrently. A registered gate remains process-lived
             // after a refused enable so an already entered callback cannot jump to freed code.
-            unsafe { (asi.hook_disable)(target) };
-            unsafe { (asi.hook_remove)(target) };
+            unsafe { asi::hook_disable(target) };
+            unsafe { asi::hook_remove(target) };
         } else {
             unsafe { VirtualFree(page, 0, MEM_RELEASE) };
         }
@@ -216,7 +210,7 @@ fn observe_dispatch() {
     }
     if options.trace {
         let target = base + profile::ENTRY;
-        let mut status = create(asi, target, trace_render as *const c_void, &ORIGINAL_RENDER);
+        let mut status = create(target, trace_render as *const c_void, &ORIGINAL_RENDER);
         if status == MH_OK {
             status = enable(target);
         }

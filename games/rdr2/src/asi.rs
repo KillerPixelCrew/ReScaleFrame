@@ -5,11 +5,19 @@
 //! loads the module during CRT startup, after decryption and before the engine reads its settings.
 //!
 //! Platform callbacks also allow startup policy to be exercised in synthetic fixtures.
-#[cfg(all(windows, not(test)))]
+#[cfg(windows)]
 #[path = "asi/windows.rs"]
 mod windows;
 #[cfg(all(windows, feature = "capture-fixture", not(test)))]
 pub(crate) use windows::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
+#[cfg(windows)]
+pub(crate) use windows::{
+    adapter_vendor, camera_probe, camera_reference, census, current_thread, d3d12_trace,
+    desktop_refresh, engine_find, engine_manager, engine_owner, executable_path, frame_probe,
+    hook_apply_queued, hook_create, hook_disable, hook_initialize, hook_queue_enable, hook_remove,
+    main_module, module_path, native_capture, profile_int, profile_string, social_club,
+    start_worker,
+};
 
 use crate::engine_settings;
 use crate::layout::{self, asi};
@@ -17,9 +25,8 @@ use std::borrow::Cow;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-pub(crate) const ASI_PLATFORM_VERSION: u32 = 1;
 const MAX_PATH: u32 = 260;
 const LONG_PATH: u32 = 32768;
 pub(crate) const MH_OK: i32 = 0;
@@ -61,16 +68,16 @@ pub(crate) fn install_diagnostic_hooks(
     {
         return DiagnosticInstall::Refused;
     }
-    let initialized = unsafe { (platform.hook_initialize)() };
+    let initialized = unsafe { hook_initialize() };
     if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
         return DiagnosticInstall::Refused;
     }
     let targets = sites.map(|site| image + site.rva);
     for (index, (&target, hook)) in targets.iter().zip(hooks).enumerate() {
-        if unsafe { (platform.hook_create)(target, hook.detour, hook.original) } != MH_OK {
+        if unsafe { hook_create(target, hook.detour, hook.original) } != MH_OK {
             let removed = targets[..index]
                 .iter()
-                .all(|&created| unsafe { (platform.hook_remove)(created) } == MH_OK);
+                .all(|&created| unsafe { hook_remove(created) } == MH_OK);
             return if removed {
                 DiagnosticInstall::Refused
             } else {
@@ -87,109 +94,19 @@ pub(crate) fn install_diagnostic_hooks(
     // A partially enabled set can leave a callback on the stack. Disable both sites and keep
     // their trampolines until process exit.
     for target in targets {
-        unsafe { (platform.hook_disable)(target) };
+        unsafe { hook_disable(target) };
     }
     DiagnosticInstall::Retained
 }
 
-/// Process-lived Win32, native engine and diagnostic callbacks for ASI admission.
-#[repr(C)]
-pub(crate) struct AsiPlatform {
-    _struct_size: u32,
-    _version: u32,
-    // Process, image and memory. `read` is a non-faulting ReadProcessMemory copy.
-    pub(crate) main_module: unsafe extern "C" fn() -> usize,
-    pub(crate) read: unsafe extern "C" fn(address: usize, out: *mut c_void, size: usize) -> bool,
-    /// GetModuleFileNameW of the executable and of this ASI.
-    pub(crate) executable_path: unsafe extern "C" fn(out: *mut u16, capacity: u32) -> u32,
-    pub(crate) module_path: unsafe extern "C" fn(out: *mut u16, capacity: u32) -> u32,
-    pub(crate) current_thread: unsafe extern "C" fn() -> u32,
-    // GetPrivateProfileIntW and GetPrivateProfileStringW.
-    pub(crate) profile_int: unsafe extern "C" fn(
-        path: *const u16,
-        section: *const u16,
-        key: *const u16,
-        fallback: i32,
-    ) -> u32,
-    pub(crate) profile_string: unsafe extern "C" fn(
-        path: *const u16,
-        section: *const u16,
-        key: *const u16,
-        out: *mut u16,
-        capacity: u32,
-    ) -> u32,
-    // This module's MinHook instance, shared with the census and the diagnostic owners. Raw
-    // MH_STATUS values.
-    pub(crate) hook_initialize: unsafe extern "C" fn() -> i32,
-    pub(crate) hook_create: unsafe extern "C" fn(
-        target: usize,
-        detour: *const c_void,
-        original: *mut *mut c_void,
-    ) -> i32,
-    pub(crate) hook_queue_enable: unsafe extern "C" fn(target: usize) -> i32,
-    pub(crate) hook_apply_queued: unsafe extern "C" fn() -> i32,
-    pub(crate) hook_disable: unsafe extern "C" fn(target: usize) -> i32,
-    pub(crate) hook_remove: unsafe extern "C" fn(target: usize) -> i32,
-    pub(crate) hook_status: unsafe extern "C" fn(status: i32) -> *const c_char,
-    // DXGI adapter vendor by enumeration index (0 when unavailable) and the desktop refresh rate.
-    pub(crate) adapter_vendor: unsafe extern "C" fn(index: u32) -> u32,
-    pub(crate) desktop_refresh: unsafe extern "C" fn() -> u32,
-    // Calls into engine functions whose bytes this crate verified.
-    pub(crate) engine_manager: unsafe extern "C" fn(function: usize) -> *mut c_void,
-    pub(crate) engine_owner:
-        unsafe extern "C" fn(function: usize, manager: *mut c_void) -> *mut c_void,
-    pub(crate) engine_find: unsafe extern "C" fn(
-        function: usize,
-        manager: *mut c_void,
-        ids: *const u32,
-        count: u64,
-        scratch: *mut c_void,
-    ) -> *mut c_void,
-    // Native diagnostic owners of the ASI. `frame_probe` is null without RenderDoc support.
-    pub(crate) d3d12_trace:
-        unsafe extern "C" fn(target: usize, image_size: u32, path: *const u16) -> i32,
-    pub(crate) native_capture: unsafe extern "C" fn(directory: *const u16) -> bool,
-    pub(crate) frame_probe:
-        Option<unsafe extern "C" fn(library: *const u16, prefix: *const u16) -> i32>,
-    pub(crate) census: unsafe extern "C" fn(directory: *const u16, flags: u32) -> i32,
-    pub(crate) camera_probe: unsafe extern "C" fn(directory: *const u16) -> bool,
-    pub(crate) camera_reference: unsafe extern "C" fn(library: *const u16) -> bool,
-    pub(crate) social_club: unsafe extern "C" fn(trace: bool) -> bool,
-    /// Starts the runtime session worker thread.
-    pub(crate) start_worker: unsafe extern "C" fn(),
-}
+/// The ASI's Win32, native engine and diagnostic services (`asi/windows.rs`), available once the
+/// ASI attached; the game plugin and unit tests link the same code without attaching.
+pub(crate) struct AsiPlatform;
 
-const _: () = {
-    assert!(size_of::<AsiPlatform>() == 8 + 27 * size_of::<usize>());
-    assert!(std::mem::offset_of!(AsiPlatform, hook_initialize) == 8 + 7 * 8);
-    assert!(std::mem::offset_of!(AsiPlatform, adapter_vendor) == 8 + 14 * 8);
-    assert!(std::mem::offset_of!(AsiPlatform, d3d12_trace) == 8 + 19 * 8);
-    assert!(std::mem::offset_of!(AsiPlatform, start_worker) == 8 + 26 * 8);
-};
-
-// The native table is a constant with static storage in the ASI.
-unsafe impl Sync for AsiPlatform {}
-
-static PLATFORM: AtomicPtr<AsiPlatform> = AtomicPtr::new(ptr::null_mut());
-
-fn register(platform: *const AsiPlatform) -> bool {
-    if platform.is_null() {
-        return false;
-    }
-    // Only the leading header is readable from a short or foreign table.
-    let header = platform.cast::<u32>();
-    let size = unsafe { header.read() };
-    let accepted = size as usize == size_of::<AsiPlatform>()
-        && unsafe { header.add(1).read() } == ASI_PLATFORM_VERSION;
-    if accepted {
-        PLATFORM.store(platform.cast_mut(), Ordering::Release);
-    }
-    accepted
-}
+static ATTACHED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn platform() -> Option<&'static AsiPlatform> {
-    // A registered table lives in the ASI's constant data; the ASI is never unloaded.
-    unsafe { PLATFORM.load(Ordering::Acquire).as_ref() }
+    ATTACHED.load(Ordering::Acquire).then_some(&AsiPlatform)
 }
 
 impl AsiPlatform {
@@ -197,19 +114,31 @@ impl AsiPlatform {
     pub(crate) fn read_value<T: Copy + Default>(&self, address: usize) -> Option<T> {
         let mut value = T::default();
         let read = address != 0
-            && unsafe { (self.read)(address, (&raw mut value).cast(), size_of::<T>()) };
+            && unsafe {
+                crate::platform::read_process_memory(
+                    address,
+                    (&raw mut value).cast(),
+                    size_of::<T>(),
+                )
+            };
         read.then_some(value)
     }
 
     pub(crate) fn matches(&self, address: usize, expected: &[u8]) -> bool {
         let mut bytes = vec![0; expected.len()];
         address != 0
-            && unsafe { (self.read)(address, bytes.as_mut_ptr().cast(), bytes.len()) }
+            && unsafe {
+                crate::platform::read_process_memory(
+                    address,
+                    bytes.as_mut_ptr().cast(),
+                    bytes.len(),
+                )
+            }
             && bytes == expected
     }
 
     pub(crate) fn status_text(&self, status: i32) -> Cow<'static, str> {
-        let text = unsafe { (self.hook_status)(status) };
+        let text = unsafe { rsf_minhook_sys::MH_StatusToString(status) };
         if text.is_null() {
             return Cow::Owned(format!("MH_STATUS {status}"));
         }
@@ -281,17 +210,16 @@ pub(crate) fn reads_parameter(site_rva: u32, opcode: [u8; 3], bytes: [u8; 7]) ->
     bytes[..3] == opcode && site_rva.wrapping_add(7).wrapping_add(displacement) == asi::API_OVERRIDE
 }
 
-struct Configuration<'a> {
-    platform: &'a AsiPlatform,
+struct Configuration {
     section: Vec<u16>,
     path: Vec<u16>,
 }
 
-impl Configuration<'_> {
+impl Configuration {
     fn int(&self, key: &str, fallback: i32) -> u32 {
         let key = wide(key);
         unsafe {
-            (self.platform.profile_int)(
+            profile_int(
                 self.path.as_ptr(),
                 self.section.as_ptr(),
                 key.as_ptr(),
@@ -310,7 +238,7 @@ impl Configuration<'_> {
         let read_capacity = rsf_game_sys::profile_text::read_capacity(capacity as usize);
         let mut value = vec![0; read_capacity];
         let length = unsafe {
-            (self.platform.profile_string)(
+            profile_string(
                 self.path.as_ptr(),
                 self.section.as_ptr(),
                 key.as_ptr(),
@@ -345,8 +273,8 @@ enum Force {
     Refused(String),
 }
 
-pub(crate) fn pe_header(platform: &AsiPlatform, base: usize) -> Option<(usize, u32, u32, u32)> {
-    let (nt, facts) = crate::platform::image_header(platform.read, base)?;
+pub(crate) fn pe_header(base: usize) -> Option<(usize, u32, u32, u32)> {
+    let (nt, facts) = crate::platform::image_header(crate::platform::read_process_memory, base)?;
     Some((nt, PE_SIGNATURE, facts.timestamp, facts.image_size))
 }
 
@@ -355,8 +283,8 @@ pub(crate) use crate::platform::PE_SIGNATURE;
 /// Writes "d3d12" to the engine's API parameter when the image, the parameter's section and every
 /// read site match the supported build and nothing else has set it.
 fn force_d3d12(platform: &AsiPlatform) -> Force {
-    let base = unsafe { (platform.main_module)() };
-    let Some((nt, signature, timestamp, image_size)) = pe_header(platform, base) else {
+    let base = unsafe { main_module() };
+    let Some((nt, signature, timestamp, image_size)) = pe_header(base) else {
         return Force::Refused("ForceD3D12 refused: no main image.".into());
     };
     if signature != PE_SIGNATURE
@@ -416,11 +344,11 @@ fn trace_d3d12(platform: &AsiPlatform, applied: bool, path: &[u16]) -> Cow<'stat
     if !applied {
         return "D3D12 result trace refused: build not validated.".into();
     }
-    let target = unsafe { (platform.main_module)() } + asi::RESULT_CHECK.rva;
+    let target = unsafe { main_module() } + asi::RESULT_CHECK.rva;
     if !platform.matches(target, &asi::RESULT_CHECK.expected) {
         return "D3D12 result trace refused: unexpected helper bytes.".into();
     }
-    let status = unsafe { (platform.d3d12_trace)(target, layout::IMAGE_SIZE, path.as_ptr()) };
+    let status = unsafe { d3d12_trace(target, layout::IMAGE_SIZE, path.as_ptr()) };
     format!(
         "D3D12 result trace at RVA 0x{:x}: {}",
         asi::RESULT_CHECK.rva,
@@ -430,17 +358,15 @@ fn trace_d3d12(platform: &AsiPlatform, applied: bool, path: &[u16]) -> Cow<'stat
 }
 
 fn attach(platform: &AsiPlatform) {
-    let Some(executable) = read_path(platform.executable_path, true) else {
+    let Some(executable) = read_path(executable_path, true) else {
         return;
     };
     if !is_game(&executable) {
         return;
     }
-    if let Some((root, path)) =
-        read_path(platform.module_path, false).and_then(|module| deployment(&module))
+    if let Some((root, path)) = read_path(module_path, false).and_then(|module| deployment(&module))
     {
         let config = Configuration {
-            platform,
             section: wide("RDR2"),
             path,
         };
@@ -448,7 +374,7 @@ fn attach(platform: &AsiPlatform) {
             arm(platform, &config, &root);
         }
     }
-    unsafe { (platform.start_worker)() };
+    unsafe { start_worker() };
 }
 
 /// Arms the enabled startup owners in their required order.
@@ -474,10 +400,10 @@ fn arm(platform: &AsiPlatform, config: &Configuration, root: &[u16]) {
     if applied && config.enabled("NativeCapture") {
         let directory = config.string("CameraProbeDirectory", MAX_PATH);
         if !directory.is_empty() {
-            unsafe { (platform.native_capture)(terminated(&directory).as_ptr()) };
+            unsafe { native_capture(terminated(&directory).as_ptr()) };
         }
     }
-    if let Some(frame_probe) = platform.frame_probe
+    if let Some(frame_probe) = frame_probe()
         && config.enabled("FrameProbe")
     {
         let library = config.string("FrameProbeLibrary", MAX_PATH);
@@ -498,7 +424,7 @@ fn arm(platform: &AsiPlatform, config: &Configuration, root: &[u16]) {
         }
         // RSF_CENSUS_FLAG_* bits, for isolating a hook family during a failing run.
         let flags = config.int("CensusFlags", 0);
-        let result = unsafe { (platform.census)(terminated(&directory).as_ptr(), flags) };
+        let result = unsafe { census(terminated(&directory).as_ptr(), flags) };
         record(|results| {
             results.census = format!(
                 "Vendor census install result={result} flags=0x{flags:x} output={}",
@@ -519,13 +445,13 @@ fn arm(platform: &AsiPlatform, config: &Configuration, root: &[u16]) {
     if applied {
         if config.enabled("CameraProbe") {
             let directory = config.string("CameraProbeDirectory", MAX_PATH);
-            let armed = !directory.is_empty()
-                && unsafe { (platform.camera_probe)(terminated(&directory).as_ptr()) };
+            let armed =
+                !directory.is_empty() && unsafe { camera_probe(terminated(&directory).as_ptr()) };
             let mut message = format!("Camera probe: {}", if armed { "armed" } else { "refused" });
             if armed && config.enabled("CameraReference") {
                 let library = config.string("CameraReferenceLibrary", MAX_PATH);
                 let reference = !library.is_empty()
-                    && unsafe { (platform.camera_reference)(terminated(&library).as_ptr()) };
+                    && unsafe { camera_reference(terminated(&library).as_ptr()) };
                 message = format!(
                     "Camera probe: armed; ScriptHook reference: {}",
                     if reference {
@@ -537,7 +463,7 @@ fn arm(platform: &AsiPlatform, config: &Configuration, root: &[u16]) {
             }
             record(|results| results.camera = message.into());
         }
-        let installed = unsafe { (platform.social_club)(trace) };
+        let installed = unsafe { social_club(trace) };
         record(|results| {
             results.social_club = format!(
                 "Social Club backbuffer dispatcher at RVA 0x{:x}: {}",
@@ -549,14 +475,11 @@ fn arm(platform: &AsiPlatform, config: &Configuration, root: &[u16]) {
     }
 }
 
-/// DllMain process attach of `ReScaleFrame.RDR2.asi`. A short or foreign table is refused.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_asi_attach(table: *const AsiPlatform) {
-    if register(table)
-        && let Some(platform) = platform()
-    {
-        attach(platform);
-    }
+/// DllMain process attach of `ReScaleFrame.RDR2.asi`.
+#[cfg(windows)]
+fn attach_process() {
+    ATTACHED.store(true, Ordering::Release);
+    attach(&AsiPlatform);
 }
 
 /// Logs the startup results from the runtime session worker.

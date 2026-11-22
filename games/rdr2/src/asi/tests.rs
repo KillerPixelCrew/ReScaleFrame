@@ -45,13 +45,3 @@ fn read_sites_resolve_to_the_api_parameter() {
         assert!(!reads_parameter(rva, opcode, other));
     }
 }
-
-#[test]
-fn short_or_foreign_tables_are_refused() {
-    assert!(!register(ptr::null()));
-    let header = [size_of::<AsiPlatform>() as u32 - 8, ASI_PLATFORM_VERSION];
-    assert!(!register(header.as_ptr().cast()));
-    let header = [size_of::<AsiPlatform>() as u32, ASI_PLATFORM_VERSION + 1];
-    assert!(!register(header.as_ptr().cast()));
-    assert!(platform().is_none());
-}

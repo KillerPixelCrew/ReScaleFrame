@@ -31,15 +31,14 @@ static TRACE: Mutex<Option<Trace>> = Mutex::new(None);
 
 /// The caller lends the expected target and a terminated path.
 pub(crate) unsafe extern "C" fn install(target: usize, image_size: u32, path: *const u16) -> i32 {
-    let Some(platform) = asi::platform() else {
+    if asi::platform().is_none() {
         return MH_ERROR_NOT_INITIALIZED;
-    };
-    let initialized = unsafe { (platform.hook_initialize)() };
+    }
+    let initialized = unsafe { asi::hook_initialize() };
     if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
         return initialized;
     }
-    let created =
-        unsafe { (platform.hook_create)(target, detour as *const c_void, &raw mut ORIGINAL) };
+    let created = unsafe { asi::hook_create(target, detour as *const c_void, &raw mut ORIGINAL) };
     if created != MH_OK {
         return created;
     }

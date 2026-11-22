@@ -26,7 +26,7 @@ pub(super) unsafe extern "C" fn install_frame_probe(
     unsafe { rsf_rdr2_start_frame_probe(library, prefix, initialise, trigger) }
 }
 
-pub(super) unsafe extern "C" fn install_census(directory: *const u16, flags: u32) -> i32 {
+pub(crate) unsafe extern "C" fn install_census(directory: *const u16, flags: u32) -> i32 {
     let Some(install) = services().census_install else {
         return INVALID_CENSUS_ARGUMENT;
     };

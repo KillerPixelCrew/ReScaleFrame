@@ -194,9 +194,15 @@ fn adapter_vendor(cache: &AtomicU64, index: u32, detect: impl FnOnce(u32) -> u32
 
 type Collection = [u8; collection::BYTES];
 
-fn snapshot(platform: &AsiPlatform, object: *mut u8) -> Option<Collection> {
+fn snapshot(object: *mut u8) -> Option<Collection> {
     let mut current = [0; collection::BYTES];
-    if !unsafe { (platform.read)(object as usize, current.as_mut_ptr().cast(), current.len()) } {
+    if !unsafe {
+        crate::platform::read_process_memory(
+            object as usize,
+            current.as_mut_ptr().cast(),
+            current.len(),
+        )
+    } {
         return None;
     }
     let version = u16::from_le_bytes([
@@ -206,11 +212,11 @@ fn snapshot(platform: &AsiPlatform, object: *mut u8) -> Option<Collection> {
     collection::VERSIONS.contains(&version).then_some(current)
 }
 
-fn collection_vendor(platform: &AsiPlatform, current: &Collection) -> u32 {
+fn collection_vendor(current: &Collection) -> u32 {
     adapter_vendor(
         &ADAPTER,
         get(current, collection::VIDEO_ADAPTER),
-        |index| unsafe { (platform.adapter_vendor)(index) },
+        |index| unsafe { asi::adapter_vendor(index) },
     )
 }
 
@@ -219,21 +225,21 @@ fn collection_vendor(platform: &AsiPlatform, current: &Collection) -> u32 {
 /// # Safety
 /// `object` points at a live settings collection of at least `collection::BYTES`.
 unsafe fn own(object: *mut u8) {
-    let Some(platform) = asi::platform() else {
+    if asi::platform().is_none() {
+        FAILURES.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    let Some(current) = snapshot(object) else {
         FAILURES.fetch_add(1, Ordering::SeqCst);
         return;
     };
-    let Some(current) = snapshot(platform, object) else {
-        FAILURES.fetch_add(1, Ordering::SeqCst);
-        return;
-    };
-    let vendor = collection_vendor(platform, &current);
+    let vendor = collection_vendor(&current);
     let selection = SELECTION.load(Ordering::SeqCst);
     let Some(expected) = plan_collection(current, vendor, selection) else {
         FAILURES.fetch_add(1, Ordering::SeqCst);
         return;
     };
-    unsafe { apply_collection(platform, object, &current, &expected, vendor) };
+    unsafe { apply_collection(object, &current, &expected, vendor) };
 }
 
 fn plan_collection(mut expected: Collection, vendor: u32, selection: u64) -> Option<Collection> {
@@ -250,7 +256,6 @@ fn plan_collection(mut expected: Collection, vendor: u32, selection: u64) -> Opt
 
 /// The snapshot and requested quality were validated before any engine writes.
 unsafe fn apply_collection(
-    platform: &AsiPlatform,
     object: *mut u8,
     current: &Collection,
     expected: &Collection,
@@ -280,7 +285,7 @@ unsafe fn apply_collection(
     let mut numerator = get(current, collection::REFRESH_NUMERATOR);
     let mut denominator = get(current, collection::REFRESH_DENOMINATOR);
     let (old_numerator, old_denominator) = (numerator, denominator);
-    let desktop_hz = unsafe { (platform.desktop_refresh)() };
+    let desktop_hz = unsafe { asi::desktop_refresh() };
     if storable_refresh(&mut numerator, &mut denominator, desktop_hz) {
         unsafe {
             object
@@ -382,9 +387,9 @@ unsafe extern "C" fn refresh_dimensions() {
     if let Some(native) = unsafe { trampoline::<RefreshFn>(&ORIGINAL_REFRESH) } {
         unsafe { native() };
     }
-    let Some(platform) = asi::platform() else {
+    if asi::platform().is_none() {
         return;
-    };
+    }
     if !logging() {
         return;
     }
@@ -395,7 +400,7 @@ unsafe extern "C" fn refresh_dimensions() {
             image.add(site::RENDER_OUTPUT),
         )
     };
-    let thread = unsafe { (platform.current_thread)() };
+    let thread = unsafe { asi::current_thread() };
     let message = unsafe {
         format!(
             "RDR2 renderer dimensions refreshed: quality={} input={}x{} output={}x{} thread={thread}.",
@@ -414,13 +419,13 @@ unsafe extern "C" fn refresh_dimensions() {
 ///
 /// # Safety
 /// `manager_object` is the engine's live settings manager.
-unsafe fn pin_pending(platform: &AsiPlatform, manager_object: *mut c_void, quality: u32) -> bool {
+unsafe fn pin_pending(manager_object: *mut c_void, quality: u32) -> bool {
     let image = IMAGE.load(Ordering::Acquire);
     let ids = [manager::GRAPHICS_ID];
     let (active, pending) = unsafe {
         (
-            (platform.engine_owner)(image + site::OWNER.rva, manager_object).cast::<u8>(),
-            (platform.engine_find)(
+            asi::engine_owner(image + site::OWNER.rva, manager_object).cast::<u8>(),
+            asi::engine_find(
                 image + site::FIND.rva,
                 manager_object,
                 ids.as_ptr(),
@@ -438,18 +443,16 @@ unsafe fn pin_pending(platform: &AsiPlatform, manager_object: *mut c_void, quali
     }
     let first = unsafe { pending.add(manager::OWNER_COLLECTION) };
     let second = unsafe { pending.add(manager::PENDING_SECOND_COLLECTION) };
-    let (Some(first_values), Some(second_values)) =
-        (snapshot(platform, first), snapshot(platform, second))
-    else {
+    let (Some(first_values), Some(second_values)) = (snapshot(first), snapshot(second)) else {
         return false;
     };
-    let first_vendor = collection_vendor(platform, &first_values);
+    let first_vendor = collection_vendor(&first_values);
     let second_vendor = if get(&first_values, collection::VIDEO_ADAPTER)
         == get(&second_values, collection::VIDEO_ADAPTER)
     {
         first_vendor
     } else {
-        collection_vendor(platform, &second_values)
+        collection_vendor(&second_values)
     };
     let mut native_index = u32::MAX;
     if first_vendor == NVIDIA || second_vendor == NVIDIA {
@@ -473,14 +476,8 @@ unsafe fn pin_pending(platform: &AsiPlatform, manager_object: *mut c_void, quali
         return false;
     };
     unsafe {
-        apply_collection(platform, first, &first_values, &first_plan, first_vendor);
-        apply_collection(
-            platform,
-            second,
-            &second_values,
-            &second_plan,
-            second_vendor,
-        );
+        apply_collection(first, &first_values, &first_plan, first_vendor);
+        apply_collection(second, &second_values, &second_plan, second_vendor);
     }
     SELECTION.store(selection, Ordering::SeqCst);
     true
@@ -489,9 +486,8 @@ unsafe fn pin_pending(platform: &AsiPlatform, manager_object: *mut c_void, quali
 unsafe extern "C" fn reconfigure(manager_object: *mut c_void) {
     // Also covers stock Apply: native Off or another native quality cannot replace the RSF
     // carrier when the game consumes its pending settings.
-    let pinned = asi::platform().is_some_and(|platform| unsafe {
-        pin_pending(platform, manager_object, requested_quality())
-    });
+    let pinned =
+        asi::platform().is_some() && unsafe { pin_pending(manager_object, requested_quality()) };
     if !pinned {
         FAILURES.fetch_add(1, Ordering::SeqCst);
     }
@@ -521,7 +517,7 @@ pub(crate) fn install(platform: &AsiPlatform, configured_quality: u32) -> bool {
         ((u32::MAX as u64) << 32) | u64::from(quality),
         Ordering::SeqCst,
     );
-    let image = unsafe { (platform.main_module)() };
+    let image = unsafe { asi::main_module() };
     IMAGE.store(image, Ordering::Release);
     let hooks = [
         Hook {
@@ -572,20 +568,18 @@ pub(crate) fn install(platform: &AsiPlatform, configured_quality: u32) -> bool {
     {
         return false;
     }
-    let initialized = unsafe { (platform.hook_initialize)() };
+    let initialized = unsafe { asi::hook_initialize() };
     if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
         return false;
     }
     let remove = |hooks: &[Hook]| {
         for hook in hooks {
-            unsafe { (platform.hook_remove)(image + hook.site.rva) };
+            unsafe { asi::hook_remove(image + hook.site.rva) };
         }
     };
     for (created, hook) in hooks.iter().enumerate() {
         let mut native = ptr::null_mut();
-        if unsafe { (platform.hook_create)(image + hook.site.rva, hook.detour, &mut native) }
-            != MH_OK
-        {
+        if unsafe { asi::hook_create(image + hook.site.rva, hook.detour, &mut native) } != MH_OK {
             remove(&hooks[..created]);
             return false;
         }
@@ -593,15 +587,15 @@ pub(crate) fn install(platform: &AsiPlatform, configured_quality: u32) -> bool {
     }
     if hooks
         .iter()
-        .any(|hook| unsafe { (platform.hook_queue_enable)(image + hook.site.rva) } != MH_OK)
+        .any(|hook| unsafe { asi::hook_queue_enable(image + hook.site.rva) } != MH_OK)
     {
         remove(&hooks[..]);
         return false;
     }
-    let installed = unsafe { (platform.hook_apply_queued)() } == MH_OK;
+    let installed = unsafe { asi::hook_apply_queued() } == MH_OK;
     if !installed {
         for hook in &hooks {
-            unsafe { (platform.hook_disable)(image + hook.site.rva) };
+            unsafe { asi::hook_disable(image + hook.site.rva) };
         }
         remove(&hooks[..]);
     }
@@ -616,15 +610,15 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_engine_quality_tick(quality: u32) {
     if !INSTALLED.load(Ordering::SeqCst) || quality > QUALITY_LIMIT {
         return;
     }
-    let Some(platform) = asi::platform() else {
+    if asi::platform().is_none() {
         return;
-    };
+    }
     let changed = requested_quality() != quality;
     if PENDING_INITIALIZED.load(Ordering::SeqCst) && !changed {
         return;
     }
     let image = IMAGE.load(Ordering::Acquire);
-    let manager_object = unsafe { (platform.engine_manager)(image + site::MANAGER.rva) };
+    let manager_object = unsafe { asi::engine_manager(image + site::MANAGER.rva) };
     if manager_object.is_null() {
         return;
     }
@@ -634,7 +628,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_engine_quality_tick(quality: u32) {
     if stage <= 2 || stage == 8 || stage == 9 {
         return;
     }
-    if !unsafe { pin_pending(platform, manager_object, quality) } {
+    if !unsafe { pin_pending(manager_object, quality) } {
         return;
     }
     PENDING_INITIALIZED.store(true, Ordering::SeqCst);

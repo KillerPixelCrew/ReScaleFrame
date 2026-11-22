@@ -92,8 +92,8 @@ fn timestamp() -> u64 {
     qpc as u64
 }
 
-fn read_bytes(platform: &AsiPlatform, address: usize, bytes: &mut [u8]) -> bool {
-    unsafe { (platform.read)(address, bytes.as_mut_ptr().cast(), bytes.len()) }
+fn read_bytes(address: usize, bytes: &mut [u8]) -> bool {
+    unsafe { crate::platform::read_process_memory(address, bytes.as_mut_ptr().cast(), bytes.len()) }
 }
 
 impl Snapshot {
@@ -125,12 +125,8 @@ impl Snapshot {
         self.job = platform
             .read_value(block.wrapping_add(camera_probe::JOB))
             .unwrap_or(0);
-        read_bytes(platform, self.job as usize, &mut self.job_bytes);
-        self.valid_view = u32::from(read_bytes(
-            platform,
-            self.view as usize,
-            &mut self.view_bytes,
-        ));
+        read_bytes(self.job as usize, &mut self.job_bytes);
+        self.valid_view = u32::from(read_bytes(self.view as usize, &mut self.view_bytes));
     }
 
     fn bytes(&self) -> &[u8] {
@@ -196,8 +192,8 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const 
     if probe.is_some() {
         return false;
     }
-    let image = unsafe { (platform.main_module)() };
-    let Some((_, signature, timestamp, size)) = asi::pe_header(platform, image) else {
+    let image = unsafe { asi::main_module() };
+    let Some((_, signature, timestamp, size)) = asi::pe_header(image) else {
         return false;
     };
     if signature != asi::PE_SIGNATURE
@@ -272,11 +268,8 @@ fn capture(provider: u32, context: *const c_void, parameters: *const c_void, cal
     record.parameters = parameters as u64;
     record.return_rva = (caller as u64).wrapping_sub(record.image_base);
     record.read_worker(platform, probe.image);
-    record.valid_parameters = u32::from(read_bytes(
-        platform,
-        parameters as usize,
-        &mut record.parameter_bytes,
-    ));
+    record.valid_parameters =
+        u32::from(read_bytes(parameters as usize, &mut record.parameter_bytes));
     if let Some(colour) = platform
         .read_value::<usize>(parameters as usize)
         .filter(|&colour| colour != 0)
