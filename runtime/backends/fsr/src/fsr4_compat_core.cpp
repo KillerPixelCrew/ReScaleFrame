@@ -4,7 +4,6 @@
 #include <rescaleframe/sha256_file.h>
 #include <MinHook.h>
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
 #include <new>
 #include <utility>
@@ -96,28 +95,11 @@ struct Fsr4Compatibility {
 };
 
 const rsf_fsr4_compat_lease* rsf_fsr4_acquire_int8_adapter(HMODULE module,
-    IDXGIAdapter1* adapter, ID3D12Device* device, Fsr4Log log, void* user) try
+    IDXGIAdapter1* adapter, ID3D12Device* device, Fsr4Log log, void* user)
 {
-    if (!module || !adapter || !device) return {};
-    rsf_fsr4_compat_diagnostic diagnostic{};
-    NativeLease lease(rsf_fsr4_compat_acquire(&platform, module, adapter, device, &diagnostic),
-        rsf_fsr4_compat_release);
-    if (!lease) {
-        if (log && diagnostic.refusal) log(user, diagnostic.refusal);
-        return {};
-    }
-    if (log && diagnostic.sdk_version) {
-        char message[160]{};
-        std::snprintf(message, sizeof(message), "FSR4 INT8 compatibility active: SDK %s, device-scoped predicate RVA 0x%llx; real adapter identity preserved",
-            diagnostic.sdk_version, static_cast<unsigned long long>(diagnostic.capability_rva));
-        log(user, message);
-    }
-    return lease.release();
+    return rsf_fsr4_compat_acquire_logged(&platform, module, adapter, device, log, user);
 }
-catch (...) {
-    if (log) log(user, "FSR4 INT8 compatibility preparation failed");
-    return {};
-}
+
 
 std::shared_ptr<Fsr4Compatibility> rsf_fsr4_enable_int8_adapter(HMODULE module,
     IDXGIAdapter1* adapter, ID3D12Device* device, Fsr4Log log, void* user) try
@@ -130,4 +112,19 @@ std::shared_ptr<Fsr4Compatibility> rsf_fsr4_enable_int8_adapter(HMODULE module,
 catch (...) {
     if (log) log(user, "FSR4 INT8 compatibility preparation failed");
     return {};
+}
+
+const rsf_fsr4_compat_lease* rsf_fsr4_acquire_int8(HMODULE module, ID3D12Device* device,
+    Fsr4Log log, void* user)
+{
+    if (!module || !device) return nullptr;
+    IDXGIFactory4* factory = nullptr;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return nullptr;
+    IDXGIAdapter1* adapter = nullptr;
+    const auto result = factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter));
+    factory->Release();
+    if (FAILED(result)) return nullptr;
+    const auto* lease = rsf_fsr4_acquire_int8_adapter(module, adapter, device, log, user);
+    adapter->Release();
+    return lease;
 }

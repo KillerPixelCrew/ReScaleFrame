@@ -8,6 +8,9 @@ pub type rsf_fsr4_compat_capability_fn = ::core::option::Option<
 >;
 pub type rsf_fsr4_compat_device_ref_fn =
     ::core::option::Option<unsafe extern "C" fn(device: *mut ::core::ffi::c_void)>;
+pub type rsf_fsr4_compat_log_fn = ::core::option::Option<
+    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
+>;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_fsr4_compat_lease {

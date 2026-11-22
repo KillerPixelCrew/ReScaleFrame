@@ -288,6 +288,40 @@ pub unsafe extern "C" fn rsf_fsr4_compat_acquire(
 }
 
 /// # Safety
+/// Borrowing and callback requirements are the same as for acquire. The log
+/// callback consumes a borrowed message during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_fsr4_compat_acquire_logged(
+    platform: *const rsf_fsr4_compat_platform,
+    module: *mut c_void,
+    adapter: *mut c_void,
+    device: *mut c_void,
+    log: rsf_fsr4_compat_log_fn,
+    user: *mut c_void,
+) -> *const rsf_fsr4_compat_lease {
+    let mut diagnostic = rsf_fsr4_compat_diagnostic {
+        refusal: ptr::null(),
+        sdk_version: ptr::null(),
+        capability_rva: 0,
+    };
+    let lease =
+        unsafe { rsf_fsr4_compat_acquire(platform, module, adapter, device, &mut diagnostic) };
+    if let Some(log) = log {
+        if lease.is_null() && !diagnostic.refusal.is_null() {
+            unsafe { log(user, diagnostic.refusal) };
+        } else if !diagnostic.sdk_version.is_null() {
+            let version = unsafe { CStr::from_ptr(diagnostic.sdk_version) }.to_string_lossy();
+            let message = format!(
+                "FSR4 INT8 compatibility active: SDK {version}, device-scoped predicate RVA {:#x}; real adapter identity preserved\0",
+                diagnostic.capability_rva
+            );
+            unsafe { log(user, message.as_ptr().cast()) };
+        }
+    }
+    lease
+}
+
+/// # Safety
 /// A non-null reference must come from acquire and be released exactly once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_fsr4_compat_release(lease: *const rsf_fsr4_compat_lease) {

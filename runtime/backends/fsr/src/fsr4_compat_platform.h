@@ -12,6 +12,7 @@ extern "C" {
 
 typedef bool (*rsf_fsr4_compat_capability_fn)(void* api, void* device);
 typedef void (*rsf_fsr4_compat_device_ref_fn)(void* device);
+typedef void (*rsf_fsr4_compat_log_fn)(void* user, const char* message);
 typedef struct rsf_fsr4_compat_lease rsf_fsr4_compat_lease;
 
 typedef struct rsf_fsr4_compat_platform {
@@ -40,6 +41,8 @@ typedef struct rsf_fsr4_compat_diagnostic {
    The adapter must already match the device. Diagnostic strings are static. */
 const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire(const rsf_fsr4_compat_platform* platform,
     void* module, void* adapter, void* device, rsf_fsr4_compat_diagnostic* diagnostic);
+const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire_logged(const rsf_fsr4_compat_platform* platform,
+    void* module, void* adapter, void* device, rsf_fsr4_compat_log_fn log, void* user);
 void rsf_fsr4_compat_release(const rsf_fsr4_compat_lease* lease);
 
 #ifdef __cplusplus

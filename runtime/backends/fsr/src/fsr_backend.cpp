@@ -8,7 +8,7 @@
 #include "../../common/sr_helpers.h"
 #if defined(RSF_HAVE_FFX)
 #include "../../common/sr12_platform.h"
-#include "fsr4_compat.h"
+#include "fsr4_compat_core.h"
 #include <ffx_api.h>
 #include <ffx_upscale.h>
 #include <dx12/ffx_api_dx12.h>

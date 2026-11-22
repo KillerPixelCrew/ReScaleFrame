@@ -10,7 +10,10 @@
 #include "fsr4_compat_platform.h"
 
 struct Fsr4Compatibility;
-using Fsr4Log = void (*)(void*, const char*);
+using Fsr4Log = rsf_fsr4_compat_log_fn;
+
+const rsf_fsr4_compat_lease* rsf_fsr4_acquire_int8(HMODULE module, ID3D12Device* device,
+    Fsr4Log log, void* user);
 // The caller has already matched this adapter to the graphics device. The lease outlives
 // the FFX context; the resident hook only changes capability answers for the leased device.
 const rsf_fsr4_compat_lease* rsf_fsr4_acquire_int8_adapter(HMODULE module,
