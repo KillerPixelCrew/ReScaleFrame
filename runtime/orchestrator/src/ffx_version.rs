@@ -32,6 +32,50 @@ pub(super) fn select(versions: &[Version], major: u32, wanted: u64) -> Option<&V
     best
 }
 
+// SDK names start with a three-component version and may append a label.
+#[cfg(windows)]
+#[allow(dead_code)] // The standalone Vulkan SR archive also includes this module.
+pub(super) unsafe fn from_sdk(id: u64, name: *const c_char) -> Version {
+    let mut version = Version {
+        id,
+        name,
+        ..Default::default()
+    };
+    if !name.is_null() {
+        let text = unsafe { std::ffi::CStr::from_ptr(name) }.to_bytes();
+        if let Some([major, minor, patch]) = version_components(text) {
+            (version.major, version.minor, version.patch) = (major, minor, patch);
+        }
+    }
+    version
+}
+
+#[cfg(windows)]
+fn version_components(mut text: &[u8]) -> Option<[u32; 3]> {
+    // Preserve the native %u.%u.%u parsing, including a suffix after the patch.
+    let mut parts = [0; 3];
+    for (index, part) in parts.iter_mut().enumerate() {
+        if index != 0 {
+            text = text.strip_prefix(b".")?;
+        }
+        text = text.trim_ascii_start();
+        let negative = text.starts_with(b"-");
+        if negative || text.starts_with(b"+") {
+            text = &text[1..];
+        }
+        let digits = text.iter().take_while(|byte| byte.is_ascii_digit()).count();
+        *part = std::str::from_utf8(&text[..digits])
+            .ok()?
+            .parse::<u32>()
+            .ok()?;
+        if negative {
+            *part = part.wrapping_neg();
+        }
+        text = &text[digits..];
+    }
+    Some(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,9 +4,7 @@ use crate::ffx_version::{self, MAX_VERSIONS, Version as ProviderVersion};
 use std::ffi::{CStr, CString};
 use std::ptr::NonNull;
 
-#[path = "fsr_abi.rs"]
-mod abi;
-use abi::*;
+use super::ffx_abi::*;
 
 const FFX_OK: u32 = FFX_API_RETURN_OK as u32;
 
@@ -78,47 +76,6 @@ fn header(kind: u32) -> ffxApiHeader {
         type_: u64::from(kind),
         pNext: null_mut(),
     }
-}
-
-// SDK names start with a three-component version and may append a label.
-unsafe fn version_from_sdk(id: u64, name: *const c_char) -> ProviderVersion {
-    let mut version = ProviderVersion {
-        id,
-        name,
-        ..Default::default()
-    };
-    if !name.is_null() {
-        let text = unsafe { CStr::from_ptr(name) }.to_bytes();
-        if let Some([major, minor, patch]) = version_components(text) {
-            (version.major, version.minor, version.patch) = (major, minor, patch);
-        }
-    }
-    version
-}
-
-fn version_components(mut text: &[u8]) -> Option<[u32; 3]> {
-    // Preserve the native %u.%u.%u parsing, including a suffix after the patch.
-    let mut parts = [0; 3];
-    for (index, part) in parts.iter_mut().enumerate() {
-        if index != 0 {
-            text = text.strip_prefix(b".")?;
-        }
-        text = text.trim_ascii_start();
-        let negative = text.starts_with(b"-");
-        if negative || text.starts_with(b"+") {
-            text = &text[1..];
-        }
-        let digits = text.iter().take_while(|byte| byte.is_ascii_digit()).count();
-        *part = std::str::from_utf8(&text[..digits])
-            .ok()?
-            .parse::<u32>()
-            .ok()?;
-        if negative {
-            *part = part.wrapping_neg();
-        }
-        text = &text[digits..];
-    }
-    Some(parts)
 }
 
 struct Compatibility {
@@ -244,7 +201,7 @@ impl Owner {
             return Err(NOT_SUPPORTED);
         }
         let versions: [ProviderVersion; MAX_VERSIONS] =
-            std::array::from_fn(|index| unsafe { version_from_sdk(ids[index], names[index]) });
+            std::array::from_fn(|index| unsafe { ffx_version::from_sdk(ids[index], names[index]) });
         let versions = &versions[..count as usize];
         let best = ffx_version::select(versions, self.major, desc.version_id);
         if let Some(best) = best.filter(|best| best.id != 0) {

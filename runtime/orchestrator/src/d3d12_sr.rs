@@ -7,6 +7,8 @@ use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
 
+#[path = "d3d12_sr/fsr_abi.rs"]
+pub(crate) mod ffx_abi;
 mod fsr;
 mod xess;
 

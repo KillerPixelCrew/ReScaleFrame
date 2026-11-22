@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+#[path = "fsr_native.rs"]
+mod native;
+
 use super::*;
 use crate::com_ref::ComRef;
 use crate::ffx_version::{self, MAX_VERSIONS, Version};

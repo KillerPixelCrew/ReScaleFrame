@@ -59,6 +59,14 @@ def main():
              r"QUERY_DESC_TYPE_(GET_VERSIONS|GET_PROVIDER_VERSION|UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE)|"
              r"DESC_TYPE_OVERRIDE_VERSION)")
 
+    generate(bindgen, root / "runtime/backends/fsr/src/ffx_generation_descriptor_types.h",
+             r"ffx(CreateContextDescFrameGeneration(Version)?|DispatchDescFrameGeneration(PrepareV2)?|"
+             r"CallbackDescFrameGenerationPresent|ConfigureDescFrameGeneration|ConfigureDescHeader)|"
+             r"PfnFfxConfigure|FfxApi(Rect2D|PresentCallbackFunc|FrameGenerationDispatchFunc)|rsf_ffx_fg_descriptor_type",
+             root / "runtime/orchestrator/src/d3d12_generation/fsr_abi.rs",
+             ["use crate::d3d12_sr::ffx_abi::*;"],
+             [f"-I{api}", f"-I{args.fidelityfx / 'framegeneration/include'}"])
+
 
 if __name__ == "__main__":
     main()
