@@ -300,7 +300,8 @@ add_test(NAME ui_identify COMMAND rsf_ui_identify)
 
 # A vendor that is not compiled in still has to answer, and has to answer differently from one
 # whose runtime is missing. Runs in both configurations and CI builds it both ways.
-add_executable(rsf_fsr_backend fsr_backend.cpp)
+add_executable(rsf_fsr_backend fsr_backend.c)
+set_target_properties(rsf_fsr_backend PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_fsr_backend PRIVATE ReScaleFrame::FSR ReScaleFrame::XeSS rsf_build_options)
 add_test(NAME fsr_backend COMMAND rsf_fsr_backend)
 
