@@ -199,6 +199,7 @@ struct Counters {
     resizes: u64,
     resize_failures: u64,
     bilinear: u64,
+    bilinear_failed: u64,
     motion_missing: u64,
     prepared: u64,
     select_announced: u64,
@@ -272,7 +273,7 @@ const _: () = {
     assert!(size_of::<Settings>() == 16);
     assert!(std::mem::offset_of!(Settings, backend) == 4);
     assert!(size_of::<ResetFacts>() == 5);
-    assert!(size_of::<Counters>() == 424);
+    assert!(size_of::<Counters>() == 432);
     assert!(size_of::<Status>() == 288);
     assert!(std::mem::offset_of!(Status, reason) == 188);
 };
@@ -901,9 +902,7 @@ impl Published {
             _ => {
                 self.status.last_evaluated = false;
                 match reason {
-                    Refusal::Reinsert => self
-                        .status
-                        .reason("SR output pass failed; bilinear fallback drawn"),
+                    Refusal::Reinsert => self.status.reason("SR output pass failed"),
                     Refusal::Prepare => self.status.reason("SR input preparation failed"),
                     Refusal::Disabled => self.status.reason("SR disabled by setting"),
                     Refusal::NotRunning if self.status.reason[0] == 0 => {
@@ -1023,15 +1022,29 @@ unsafe extern "C" fn rsf_anomaly_sr_request_dump(driver: &Driver, prefix: *const
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_count(driver: &Driver, reason: u8) {
+extern "C" fn rsf_anomaly_sr_fallback(driver: &Driver, reason: u8, drawn: bool) {
+    let mut published = driver.published();
     if let Some(reason) = REFUSALS.get(reason as usize) {
-        driver.published().count(*reason);
+        published.count(*reason);
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_count_bilinear(driver: &Driver) {
-    driver.published().counters.bilinear += 1;
+    if drawn {
+        published.counters.bilinear += 1;
+        if reason == Refusal::Reinsert as u8 {
+            published
+                .status
+                .reason("SR output pass failed; bilinear recovery drawn");
+        }
+    } else {
+        published.counters.bilinear_failed += 1;
+        published.status.last_evaluated = false;
+        published.status.reason(match reason {
+            2 => "SR input preparation and bilinear recovery failed",
+            5 => "SR output pass and bilinear recovery failed",
+            7 => "SR evaluation and bilinear recovery failed",
+            8 => "Bilinear recovery after camera restore failed",
+            _ => "Bilinear pass failed",
+        });
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1156,7 +1169,7 @@ extern "C" fn rsf_anomaly_sr_report(
             "Anomaly SR stage {stage} evaluated dlss={} fsr3={} fsr4={} xess={} | refused not_running={} disabled={} prepare={} \
          pass={} (sizes={} camera={} projection={} jitter={} resources={}) pipeline={} (invalid={} abi={} not_running={} \
          streamline={} not_supported={} resource={} decode={} frame={} evaluate={} other={}) reinsert={} | resets first={} \
-         device={} settings={} sequence={} cut={} | prepared={} bilinear={} motion_missing={}",
+         device={} settings={} sequence={} cut={} | prepared={} bilinear={} bilinear_failed={} motion_missing={}",
             evaluated(DLSS),
             evaluated(FSR3),
             evaluated(FSR4),
@@ -1189,6 +1202,7 @@ extern "C" fn rsf_anomaly_sr_report(
             resets(3),
             delta(now.prepared, old.prepared),
             delta(now.bilinear, old.bilinear),
+            delta(now.bilinear_failed, old.bilinear_failed),
             delta(now.motion_missing, old.motion_missing)
         ),
     );
@@ -1264,4 +1278,49 @@ pub(super) extern "C" fn report_fixture(
         }),
     };
     rsf_anomaly_sr_report(&driver, exposure_auto, first_person_zero, log, user);
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn setting_admission_keeps_the_current_unsupported_fields() {
+        let current = Settings {
+            enabled: true,
+            backend: XESS,
+            quality: 2,
+            preset: 0,
+        };
+        let admit = |wanted: Settings| {
+            wanted.admitted(
+                current,
+                RSF_ANOMALY_SR_ADAPTER_BACKENDS,
+                RSF_ANOMALY_SR_ADAPTER_QUALITIES,
+            )
+        };
+        for backend in [DLSS, FSR3, FSR4, XESS] {
+            assert_eq!(admit(Settings { backend, ..current }).backend, backend);
+        }
+        for backend in [0, 2, 6, 7, 40] {
+            assert_eq!(admit(Settings { backend, ..current }).backend, XESS);
+        }
+        for quality in 0..5 {
+            assert_eq!(admit(Settings { quality, ..current }).quality, quality);
+        }
+        for quality in [5, 6] {
+            assert_eq!(admit(Settings { quality, ..current }).quality, 2);
+        }
+        let actual = admit(Settings {
+            enabled: false,
+            backend: 2,
+            quality: 5,
+            preset: 3,
+        });
+        assert!(!actual.enabled);
+        assert_eq!(
+            (actual.backend, actual.quality, actual.preset),
+            (XESS, 2, 3)
+        );
+    }
 }

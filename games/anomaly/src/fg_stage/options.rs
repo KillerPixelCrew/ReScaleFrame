@@ -3,7 +3,7 @@ use super::Frontend;
 use crate::fg_stage_abi::*;
 use crate::ini;
 use std::ffi::{CString, OsString};
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::{ptr, slice};
@@ -133,50 +133,58 @@ impl Options {
             capture_interval: capture.interval,
             ..Default::default()
         };
-        let ini_path = PathBuf::from(OsString::from_wide(unsafe { wide(ini) }));
+        let ini_units = unsafe { wide(ini) };
+        let ini_path = PathBuf::from(OsString::from_wide(ini_units));
         let base = ini_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new(""));
-        let text = |key, fallback: PathBuf| {
+        let text = |key| {
             let mut buffer = [0u16; MAX_PATH as usize];
             let len = unsafe { ini::read_text(ini, key, w!(""), &mut buffer) };
-            if len > 0 {
-                String::from_utf16_lossy(&buffer[..len])
-            } else {
-                String::from_utf16_lossy(&fallback.as_os_str().encode_wide().collect::<Vec<_>>())
-            }
+            buffer[..len].to_vec()
         };
-        let vendors = base.join("ReScaleFrame");
-        Self::admit(
-            &native,
-            text(
-                w!("FGCaptureDir"),
-                base.join("RSF-FGCapture").join(local_timestamp()),
-            ),
-            text(w!("SRStreamlineDir"), vendors.join("streamline")),
-            text(w!("SRFidelityFXDir"), vendors.join("fidelityfx")),
-            text(w!("SRXeSSDir"), vendors.join("xess")),
-        )
+        let capture = text(w!("FGCaptureDir"));
+        let capture_dir = if capture.is_empty() {
+            base.join("RSF-FGCapture")
+                .join(local_timestamp())
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            String::from_utf16_lossy(&capture)
+        };
+        let vendors = crate::sr_stage::vendor_directories(ini_units, |key| {
+            let mut buffer = [0u16; MAX_PATH as usize];
+            let length = unsafe {
+                ini::rsf_anomaly_sr_ini_text(
+                    ini.cast(),
+                    key.as_ptr(),
+                    c"".as_ptr(),
+                    buffer.as_mut_ptr(),
+                    MAX_PATH,
+                )
+            };
+            buffer[..length as usize].to_vec()
+        });
+        Self::admit(&native, capture_dir, vendors)
     }
 
     pub(super) fn from_native(native: &rsf_anomaly_fg_config) -> Self {
-        let path = |value| String::from_utf16_lossy(unsafe { wide(value) });
+        let vendors = [
+            native.streamline_dir,
+            native.fidelityfx_dir,
+            native.xess_dir,
+        ]
+        .map(|path| crate::sr_stage::plain_directory(unsafe { wide(path) }));
         Self::admit(
             native,
-            path(native.capture_dir),
-            path(native.streamline_dir),
-            path(native.fidelityfx_dir),
-            path(native.xess_dir),
+            String::from_utf16_lossy(unsafe { wide(native.capture_dir) }),
+            vendors,
         )
     }
 
-    fn admit(
-        native: &rsf_anomaly_fg_config,
-        capture_dir: String,
-        streamline: String,
-        fidelityfx: String,
-        xess: String,
-    ) -> Self {
+    fn admit(native: &rsf_anomaly_fg_config, capture_dir: String, vendors: [Vec<u16>; 3]) -> Self {
+        let [streamline, fidelityfx, xess] =
+            vendors.map(|dir| c_string(String::from_utf16_lossy(&dir)));
         let backend = native.backend;
         let known = RSF_FG_BACKEND_ALL.checked_shr(backend).unwrap_or(0) & 1 != 0;
         Self {
@@ -194,9 +202,9 @@ impl Options {
                     native.capture_interval,
                 ),
             )),
-            streamline: c_string(plain_directory(streamline)),
-            fidelityfx: c_string(plain_directory(fidelityfx)),
-            xess: c_string(plain_directory(xess)),
+            streamline,
+            fidelityfx,
+            xess,
             frontend: Frontend {
                 enabled: u32::from(native.enabled),
                 backend: if known { backend } else { RSF_FG_BACKEND_AUTO },
@@ -218,12 +226,6 @@ unsafe fn wide<'a>(value: PCWSTR) -> &'a [u16] {
         size += 1;
     }
     unsafe { slice::from_raw_parts(value, size) }
-}
-
-// The SR stage's rule: Streamline appends '/' to these paths, which a verbatim Win32 path rejects.
-fn plain_directory(path: String) -> String {
-    let units: Vec<u16> = path.encode_utf16().collect();
-    String::from_utf16_lossy(&crate::sr_stage::plain_directory(&units))
 }
 
 fn c_string(text: String) -> CString {

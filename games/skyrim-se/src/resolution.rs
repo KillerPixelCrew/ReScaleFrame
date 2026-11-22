@@ -7,6 +7,7 @@ use crate::render_native::{
     ComRef, rsf_skyrim_call_render_config, rsf_skyrim_call_upscale, thread,
 };
 use crate::taa;
+use rsf_game_sys::sampling::halton_f32 as halton;
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,
     rsf_game_render_config, rsf_game_render_pass,
@@ -87,17 +88,6 @@ fn reset_history(platform: &Platform, base: usize) -> Option<()> {
     let manager = platform.read_usize(base + TAA_MANAGER)?;
     let taa = taa::owner(platform, manager).filter(|&taa| taa != 0)?;
     taa::clear_main_history(platform, taa)
-}
-
-fn halton(mut index: u32, base: u32) -> f32 {
-    let mut value = 0.0;
-    let mut factor = 1.0;
-    while index != 0 {
-        factor /= base as f32;
-        value += factor * (index % base) as f32;
-        index /= base;
-    }
-    value
 }
 
 fn reconfigure(

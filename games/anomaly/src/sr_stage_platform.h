@@ -5,8 +5,7 @@
 // capture and burst bookkeeping, the retained configuration (INI path, vendor directories, live options) and status.
 // The leaves keep guarded engine reads, the stage hooks and trampolines, the SwapController and its D3D11 host, typed
 // INI and file calls, and the C++ TemporalDriver facade.
-// Every callback runs on the calling thread; none of them re-enters the Rust stage lock except the seam passes,
-// which receive the locked state as `cookie` from the seam or prepare call that holds it.
+// Every callback runs on the calling thread. The Rust stage lock serializes the native controller.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -38,7 +37,7 @@ typedef struct rsf_anomaly_sr_stage_config {
     rsf_anomaly_sr_settings settings;
 } rsf_anomaly_sr_stage_config;
 
-// JitterState, JitterSample and JitterUv (sr_jitter.h), ScalePlan (sr_plan.h).
+// JitterState, JitterSample and JitterUv (sr_jitter.h).
 typedef struct rsf_anomaly_sr_jitter_state {
     uint64_t frame;
     uint32_t sequence_index, phase_count;
@@ -83,11 +82,7 @@ typedef struct rsf_anomaly_sr_burst_verdict {
 #ifdef __cplusplus
 extern "C" {
 #endif
-float rsf_anomaly_sr_clamp_scale(float);
-uint32_t rsf_anomaly_sr_render_extent(uint32_t output, float scale);
 bool rsf_anomaly_sr_make_plan(uint32_t output_width, uint32_t output_height, float scale, rsf_anomaly_sr_plan*);
-bool rsf_anomaly_sr_plan_for_render(uint32_t output_width, uint32_t output_height, uint32_t render_width,
-    uint32_t render_height, rsf_anomaly_sr_plan*);
 float rsf_anomaly_sr_clamp_mip_offset(float);
 float rsf_anomaly_sr_mip_delta(uint32_t render_width, uint32_t output_width, float offset);
 double rsf_anomaly_sr_halton(uint32_t index, uint32_t base);
@@ -225,7 +220,7 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*close_stale)(void);
     bool (*prepare)(const rsf_anomaly_sr_frame_facts*, rsf_anomaly_sr_log, void* log_user);
     void (*prepared)(void);
-    bool (*seam)(void* cookie);
+    void* (*swap_handle)(void);
     void (*combine_end)(void);
     void (*frame_end)(void);
     void (*rm_near)(void);
@@ -240,8 +235,8 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void* (*timer_retain_device)(void* device);
     void* (*timer_create_query)(void* device, bool disjoint);
     void (*timer_issue)(void* context, void* query, bool begin);
-    bool (*timer_clock)(void* context, void* query, uint64_t* frequency, bool* disjoint);
-    bool (*timer_timestamp)(void* context, void* query, uint64_t* ticks);
+    int32_t (*timer_clock)(void* context, void* query, uint64_t* frequency, bool* disjoint);
+    int32_t (*timer_timestamp)(void* context, void* query, uint64_t* ticks);
     // D3D11 host. The seam calls act on the seam the controller is closing.
     void (*host_stats)(uint64_t* twin_bytes, uint64_t* drop_refs);
     void (*host_reset)(void);
@@ -271,8 +266,7 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*driver_boundary)(uint32_t output_width, uint32_t output_height);
     bool (*driver_evaluate)(rsf_anomaly_sr_pass_inputs*, struct rsf_camera_frame*, uint32_t*);
     bool (*driver_request_dump)(const char* prefix_utf8);
-    void (*driver_count)(uint8_t refusal);
-    void (*driver_count_bilinear)(void);
+    void (*driver_fallback)(uint8_t reason, bool drawn);
     void (*driver_count_prepared)(bool motion_missing);
     void (*driver_stop)(void);
     void (*driver_report)(bool exposure_auto, bool first_person_zero, rsf_anomaly_sr_log, void*);

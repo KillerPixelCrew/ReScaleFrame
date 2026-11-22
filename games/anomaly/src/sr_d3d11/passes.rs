@@ -115,14 +115,17 @@ impl Compiler<'_> {
         let Some(constants) = self.constants() else {
             return Ok(None);
         };
-        let Some(States { depth, .. }) = States::new(self.platform, self.device, false) else {
+        let Some(no_depth) = self
+            .platform
+            .lease(unsafe { (self.platform.depth_state)(self.device, 0) })
+        else {
             return Ok(None);
         };
         Ok(Some(TemporalPass {
             prepare,
             reinsert,
             constants,
-            no_depth: depth,
+            no_depth,
         }))
     }
 }

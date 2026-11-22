@@ -31,6 +31,9 @@ struct Fake {
     engine_frame: u32,
     evaluate: bool,
     reinsert: bool,
+    fail_bilinear: bool,
+    timer_tick: u64,
+    timer_result: i32,
     hooks_created: bool,
     refuse_remove_hooks: bool,
     refuse_shutdown: bool,
@@ -161,10 +164,10 @@ unsafe extern "C" fn now(counter: *mut i64, frequency: *mut i64) {
         frequency.write(10_000);
     }
 }
-extern "C" fn seam(cookie: *mut c_void) -> bool {
+fn seam(run: &mut dyn FnMut(crate::sr_swap::SeamPass<'_>) -> bool) {
     record("controller seam");
     if !fake(|f| f.window_open) {
-        return false;
+        return;
     }
     fake(|f| f.window_open = false);
     let colour = TargetFields {
@@ -208,8 +211,7 @@ extern "C" fn seam(cookie: *mut c_void) -> bool {
         output_height: 1080,
         spatial_recovery: fake(|f| f.spatial_recovery),
     };
-    // The real controller reaches the Rust seam pass through the host exactly like this.
-    unsafe { rsf_anomaly_sr_stage_upscale(cookie, &input) }
+    run(crate::sr_swap::SeamPass::Upscale(&input));
 }
 extern "C" fn context() -> *mut c_void {
     CONTEXT
@@ -262,7 +264,7 @@ unsafe extern "C" fn draw_pass(kind: u32, views: *const DrawViews) -> bool {
             if kind == UPSCALE {
                 assert!(views.inputs[4].is_null());
                 record("bilinear");
-                true
+                !fake(|f| f.fail_bilinear)
             } else {
                 assert!(!views.inputs[4].is_null());
                 record("reinsert");
@@ -275,11 +277,15 @@ unsafe extern "C" fn draw_pass(kind: u32, views: *const DrawViews) -> bool {
 extern "C" fn driver_enabled() -> bool {
     fake(|f| f.driver_enabled)
 }
-extern "C" fn driver_count(reason: u8) {
-    record(format!("refused {reason}"));
-}
-extern "C" fn driver_count_bilinear() {
-    record("count bilinear");
+extern "C" fn driver_fallback(reason: u8, drawn: bool) {
+    if reason <= REFUSAL_REINSERT {
+        record(format!("refused {reason}"));
+    }
+    record(if drawn {
+        "count bilinear"
+    } else {
+        "bilinear failed"
+    });
 }
 extern "C" fn driver_count_prepared(missing: bool) {
     record(format!("prepared missing={missing}"));
@@ -445,6 +451,16 @@ unsafe extern "C" fn log(_: *mut c_void, text: *const c_char) {
     fake(|f| f.logs.push(text));
 }
 
+unsafe extern "C" fn verify_guards(
+    _: *mut c_void,
+    _: u32,
+    _: *const c_void,
+    _: bool,
+    _: bool,
+) -> *const c_char {
+    std::ptr::null()
+}
+
 fn platform() -> Box<Platform> {
     Box::new(Platform {
         render_target: Some(render_target),
@@ -459,7 +475,6 @@ fn platform() -> Box<Platform> {
         now: Some(now),
         geometry_active: Some(geometry_active),
         prepare: Some(prepare),
-        seam: Some(seam),
         frame_end: Some(controller_frame_end),
         shutdown: Some(shutdown),
         set_swap_enabled: Some(set_swap_enabled),
@@ -475,12 +490,12 @@ fn platform() -> Box<Platform> {
         driver_enabled: Some(driver_enabled),
         driver_boundary: Some(driver_boundary),
         driver_evaluate: Some(driver_evaluate),
-        driver_count: Some(driver_count),
-        driver_count_bilinear: Some(driver_count_bilinear),
+        driver_fallback: Some(driver_fallback),
         driver_count_prepared: Some(driver_count_prepared),
         driver_stop: Some(driver_stop),
         driver_report: Some(crate::sr_temporal::report_fixture),
         hooks_created: Some(hooks_created),
+        verify_guards: Some(verify_guards),
         set_engine: Some(set_engine),
         install_hooks: Some(install_hooks),
         install_position_slot: Some(install_position_slot),
@@ -680,7 +695,7 @@ fn quiesce_releases_hooks_before_state_and_the_pipeline_before_resources() {
     assert!(!fake(|f| f.window_open) && !driver.jitter().applied);
     driver.prepare(null_mut());
     driver.prepared();
-    driver.seam(null_mut());
+    driver.seam_with(null_mut(), seam);
     driver.frame_end();
     assert!(!driver.sun_begin());
     assert!(calls().is_empty());
@@ -725,7 +740,7 @@ fn scope_frames_neither_jitter_nor_read_the_main_camera() {
     driver.prepare(null_mut());
     let order = calls();
     assert!(!order.iter().any(|c| c == "camera"));
-    assert_eq!(driver.lock().as_ref().unwrap().sequence.frames, 0);
+    assert_eq!(driver.lock().sequence.frames, 0);
     assert!(driver.jitter().scope);
     fake(|f| f.scope = false);
     driver.prepare(null_mut());
@@ -760,7 +775,7 @@ fn scope_frames_neither_jitter_nor_read_the_main_camera() {
 fn h1_detects_a_cut_from_the_previous_main_camera() {
     let table = platform();
     let driver = installed(5, &table);
-    let cut = || driver.lock().as_ref().unwrap().frame_cut;
+    let cut = || driver.lock().frame_cut;
     driver.prepare(null_mut());
     assert!(!cut());
     driver.frame_end();
@@ -784,7 +799,7 @@ fn live_jitter_off_skips_the_sample() {
     driver.set_option(RSF_ANOMALY_SR_OPTION_JITTER, 0);
     assert_eq!(calls(), ["save SRJitter=0"]);
     driver.prepare(null_mut());
-    assert_eq!(driver.lock().as_ref().unwrap().sequence.frames, 0);
+    assert_eq!(driver.lock().sequence.frames, 0);
     assert!(!driver.jitter().applied);
 }
 
@@ -795,24 +810,24 @@ fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
     // Not ready: one Prepare refusal, then the bilinear pass.
     driver.prepare(null_mut());
     calls();
-    driver.seam(null_mut());
+    driver.seam_with(null_mut(), seam);
     assert_eq!(
         calls(),
-        ["controller seam", "refused 2", "count bilinear", "bilinear"]
+        ["controller seam", "bilinear", "refused 2", "count bilinear"]
     );
     // Ready but the pipeline is not enabled: the inputs are prepared and the bilinear pass draws.
     fake(|f| f.temporal_ready = true);
     driver.prepare(null_mut());
     calls();
-    driver.seam(null_mut());
+    driver.seam_with(null_mut(), seam);
     assert_eq!(
         calls(),
         [
             "controller seam",
             "seam prepare motion=false fp_zero=true",
             "prepared missing=true",
-            "count bilinear",
-            "bilinear"
+            "bilinear",
+            "count bilinear"
         ]
     );
     // Evaluation that the Runtime refuses: no extra refusal reason, bilinear output.
@@ -830,7 +845,7 @@ fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
     });
     driver.prepare(null_mut());
     calls();
-    driver.seam(null_mut());
+    driver.seam_with(null_mut(), seam);
     assert_eq!(
         calls(),
         [
@@ -838,8 +853,8 @@ fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
             "seam prepare motion=true fp_zero=true",
             "prepared missing=false",
             "evaluate",
-            "count bilinear",
-            "bilinear"
+            "bilinear",
+            "count bilinear"
         ]
     );
     let pass = fake(|f| f.passes.pop()).unwrap();
@@ -853,7 +868,7 @@ fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
     });
     driver.prepare(null_mut());
     calls();
-    driver.seam(null_mut());
+    driver.seam_with(null_mut(), seam);
     assert_eq!(
         calls(),
         [
@@ -862,16 +877,16 @@ fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
             "prepared missing=true",
             "evaluate",
             "reinsert",
+            "bilinear",
             "refused 5",
-            "count bilinear",
-            "bilinear"
+            "count bilinear"
         ]
     );
     // Success reinserts and draws no fallback.
     fake(|f| f.reinsert = true);
     driver.prepare(null_mut());
     calls();
-    driver.seam(null_mut());
+    driver.seam_with(null_mut(), seam);
     assert_eq!(
         calls(),
         [
@@ -882,15 +897,26 @@ fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
             "reinsert"
         ]
     );
+    fake(|f| {
+        f.reinsert = false;
+        f.fail_bilinear = true;
+    });
+    driver.prepare(null_mut());
+    calls();
+    driver.seam_with(null_mut(), seam);
+    let failed = calls();
+    assert!(position(&failed, "bilinear") < position(&failed, "bilinear failed"));
+    assert!(!failed.iter().any(|line| line == "count bilinear"));
+    fake(|f| f.fail_bilinear = false);
     // Refused input targets are logged and refused before any input is prepared.
-    driver.lock().as_mut().unwrap().temporal_targets = None;
+    driver.lock().temporal_targets = None;
     crate::sr_d3d11::refuse_fixture_target_view();
     driver.prepare(null_mut());
     calls();
-    driver.seam(null_mut());
+    driver.seam_with(null_mut(), seam);
     assert_eq!(
         calls(),
-        ["controller seam", "refused 2", "count bilinear", "bilinear"]
+        ["controller seam", "bilinear", "refused 2", "count bilinear"]
     );
     assert!(fake(|f| f.logs.iter().any(|l| l.contains(
         "SR input targets refused at render 1280x720, output 1920x1080"
@@ -967,8 +993,8 @@ fn sun_camera_recovery_runs_spatial_seam_without_temporal_evaluation() {
     });
     driver.prepare(null_mut());
     calls();
-    driver.seam(null_mut());
-    assert_eq!(calls(), ["controller seam", "count bilinear", "bilinear"]);
+    driver.seam_with(null_mut(), seam);
+    assert_eq!(calls(), ["controller seam", "bilinear", "count bilinear"]);
 }
 
 #[test]
@@ -993,11 +1019,52 @@ fn report_uses_live_exposure_and_first_person_options() {
     assert!(pipeline_report().contains("exposure=auto first_person_zero=0"));
 }
 
+extern "C" fn retain_timer(device: *mut c_void) -> *mut c_void {
+    device
+}
+extern "C" fn create_timer_query(device: *mut c_void, _: bool) -> *mut c_void {
+    device
+}
+extern "C" fn issue_timer_query(_: *mut c_void, _: *mut c_void, _: bool) {}
+extern "C" fn release_timer(_: *mut c_void) {}
+unsafe extern "C" fn timer_clock(
+    _: *mut c_void,
+    _: *mut c_void,
+    hz: *mut u64,
+    disjoint: *mut bool,
+) -> i32 {
+    unsafe {
+        hz.write(1000);
+        disjoint.write(false)
+    };
+    fake(|f| f.timer_result)
+}
+unsafe extern "C" fn timer_timestamp(_: *mut c_void, _: *mut c_void, ticks: *mut u64) -> i32 {
+    let tick = fake(|f| {
+        f.timer_tick += 2;
+        f.timer_tick
+    });
+    unsafe { ticks.write(tick) };
+    0
+}
+
 #[test]
 fn report_emits_deltas_and_survives_a_timer_reset() {
-    let table = platform();
+    let mut table = platform();
+    table.release = Some(release_timer);
+    table.timer_retain_device = Some(retain_timer);
+    table.timer_create_query = Some(create_timer_query);
+    table.timer_issue = Some(issue_timer_query);
+    table.timer_clock = Some(timer_clock);
+    table.timer_timestamp = Some(timer_timestamp);
     let driver = installed(3, &table);
     driver.frame_end();
+    let current = device();
+    driver.with(|state| {
+        state.timer.begin(&table, current, CONTEXT);
+        state.timer.seam(&table, current, CONTEXT, true);
+        state.timer.finish(&table, current, CONTEXT);
+    });
     let mut lines = Vec::new();
     driver.report(&mut |line| lines.push(line.to_owned()));
     assert!(lines[0].starts_with("Anomaly SR stage window frames=1 no_world=1 "));
@@ -1006,9 +1073,68 @@ fn report_emits_deltas_and_survives_a_timer_reset() {
             .iter()
             .any(|l| l.starts_with("Anomaly SR stage 3 window"))
     );
+    assert!(lines[0].contains("swapped=2.000 (n=1)"));
+    let replacement = std::ptr::without_provenance_mut(0x1200);
+    driver.with(|state| state.timer.begin(&table, replacement, CONTEXT));
     lines.clear();
     driver.report(&mut |line| lines.push(line.to_owned()));
     assert!(lines[0].starts_with("Anomaly SR stage window frames=0 no_world=0 "));
+    assert!(lines[0].contains("swapped=0.000 (n=0)"));
+}
+
+#[test]
+fn missing_native_guard_refuses_before_hook_installation() {
+    let mut table = platform();
+    table.verify_guards = None;
+    let driver = Stage::new();
+    driver.register(&*table);
+    let config = Config {
+        stage: 3,
+        ..default_config()
+    };
+    assert!(driver.configure(&config, Paths::default(), Some(log), null_mut()));
+    calls();
+    assert!(!driver.install(0x10000 as *mut c_void, 64, 64, 0x20 as *const c_void));
+    assert!(!driver.active());
+    assert!(calls().is_empty());
+    assert!(fake(|f| f
+        .logs
+        .iter()
+        .any(|line| line.contains("guard verification unavailable"))));
+}
+
+#[test]
+fn timer_retires_failed_queries_and_keeps_pending_samples() {
+    let table = Platform {
+        release: Some(release_timer),
+        timer_retain_device: Some(retain_timer),
+        timer_create_query: Some(create_timer_query),
+        timer_issue: Some(issue_timer_query),
+        timer_clock: Some(timer_clock),
+        timer_timestamp: Some(timer_timestamp),
+        ..Default::default()
+    };
+    let mut timer = gpu_timer::Timer::default();
+    let device = device();
+    let issue = |timer: &mut gpu_timer::Timer| {
+        timer.begin(&table, device, CONTEXT);
+        timer.seam(&table, device, CONTEXT, false);
+        timer.finish(&table, device, CONTEXT);
+    };
+    issue(&mut timer);
+    fake(|f| f.timer_result = 1);
+    let pending = timer.sample(&table, device, CONTEXT);
+    assert_eq!((pending.samples, pending.skipped), ([0, 0], 0));
+    fake(|f| f.timer_result = -1);
+    for _ in 0..8 {
+        issue(&mut timer);
+    }
+    let failed = timer.sample(&table, device, CONTEXT);
+    assert_eq!((failed.samples, failed.skipped), ([0, 0], 9));
+    fake(|f| f.timer_result = 0);
+    issue(&mut timer);
+    let ready = timer.sample(&table, device, CONTEXT);
+    assert_eq!((ready.samples, ready.skipped), ([1, 0], 9));
 }
 
 #[cfg(windows)]
@@ -1172,53 +1298,38 @@ fn live_options_keep_their_panel_labels_and_ranges() {
                 true
             ),
             ("Texture mip bias", 1, 0, 0, 1, 1, 1, true),
-            ("Mip bias offset", 0, 0, -20, 0, 1, 10, true),
+            ("Mip bias offset", 0, 0, -20, 10, 1, 10, true),
+            ("SR fallback scale", 0, 0, 33, 100, 1, 100, true),
+            ("SR capture start frame", 0, 0, 0, i32::MAX, 1, 1, true),
+            ("SR capture frame count", 0, 0, 0, 32, 1, 1, true),
+            ("SR capture interval", 0, 0, 1, i32::MAX, 1, 1, true),
+            ("SR camera cut distance (m)", 0, 0, 1, 10000, 1, 10, true),
+            ("SR camera cut angle (deg)", 0, 0, 10, 1800, 1, 10, true),
+            ("Require signed SR libraries", 1, 1, 0, 1, 1, 1, true),
         ]
     );
     // Each getter reads its own live value of the process stage (the INI defaults until configured).
     let values = options.map(|o| unsafe { o.get.unwrap()() });
-    assert_eq!(values, [1, 0, 1, 1, 1, 0]);
+    assert_eq!(values, [1, 0, 1, 1, 1, 0, 67, 600, 3, 300, 40, 450, 0]);
+    let table = platform();
+    let driver = Stage::new();
+    driver.register(&*table);
+    let mip = &options[5];
+    for value in [mip.minimum, 5, mip.maximum] {
+        driver.set_option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET, value);
+        assert_eq!(driver.option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET), value);
+    }
 }
 
 // The real Win32 INI and file calls the native leaves make, against a package on disk.
 #[cfg(windows)]
 mod win32 {
     use super::*;
+    use crate::ini::{rsf_anomaly_sr_ini_int as ini_int, rsf_anomaly_sr_ini_text as ini_text};
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_DIRECTORY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
     };
-    use windows_sys::Win32::System::WindowsProgramming::{
-        GetPrivateProfileIntW, GetPrivateProfileStringW,
-    };
-    use windows_sys::core::w;
 
-    fn key(text: *const c_char) -> Vec<u16> {
-        let text = unsafe { CStr::from_ptr(text) }.to_string_lossy();
-        text.encode_utf16().chain([0]).collect()
-    }
-    unsafe extern "C" fn ini_int(ini: *const c_void, name: *const c_char, fallback: i32) -> i32 {
-        (unsafe { GetPrivateProfileIntW(w!("Anomaly"), key(name).as_ptr(), fallback, ini.cast()) })
-            as i32
-    }
-    unsafe extern "C" fn ini_text(
-        ini: *const c_void,
-        name: *const c_char,
-        fallback: *const c_char,
-        out: *mut u16,
-        capacity: u32,
-    ) -> u32 {
-        let (name, fallback) = (key(name), key(fallback));
-        unsafe {
-            GetPrivateProfileStringW(
-                w!("Anomaly"),
-                name.as_ptr(),
-                fallback.as_ptr(),
-                out,
-                capacity,
-                ini.cast(),
-            )
-        }
-    }
     unsafe extern "C" fn file_exists(path: *const u16) -> bool {
         let attributes = unsafe { GetFileAttributesW(path) };
         attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_DIRECTORY == 0

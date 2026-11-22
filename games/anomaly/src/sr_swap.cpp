@@ -87,7 +87,7 @@ bool upscale(void* user, const rsf_anomaly_swap_upscale* inputs) noexcept { retu
 void set_viewport(void* user, uint32_t width, uint32_t height) noexcept { host_of(user).set_viewport(width, height); }
 bool upload_projection(void* user, const void* matrix) noexcept { return host_of(user).upload_projection(matrix); }
 bool set_mip_bias(void* user, float value) noexcept { return host_of(user).set_mip_bias(value); }
-bool correct_position_constant(void* user, void* constant, float x, float y) noexcept {
+uint32_t correct_position_constant(void* user, void* constant, float x, float y) noexcept {
     return host_of(user).correct_position_constant(constant, x, y);
 }
 // Shown only if creation failed, which a complete platform and this layout never cause.

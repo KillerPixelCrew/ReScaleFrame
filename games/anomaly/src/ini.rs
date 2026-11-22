@@ -64,7 +64,7 @@ pub(crate) unsafe fn widen(text: *const c_char) -> Vec<u16> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_ini_int(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ini_int(
     path: *const c_void,
     key: *const c_char,
     fallback: i32,
@@ -74,7 +74,7 @@ unsafe extern "C" fn rsf_anomaly_sr_ini_int(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_ini_text(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ini_text(
     path: *const c_void,
     key: *const c_char,
     fallback: *const c_char,

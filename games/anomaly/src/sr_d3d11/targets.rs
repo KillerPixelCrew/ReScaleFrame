@@ -548,7 +548,8 @@ const _: () = {
 };
 
 pub(crate) struct TemporalTargets {
-    platform: &'static Platform,
+    // The owned textures keep the creating device alive.
+    device: Ptr,
     render: Extent,
     output_size: Extent,
     output_format: u32,
@@ -623,7 +624,7 @@ impl TemporalTargets {
             size_of::<f32>() as u32,
         )?;
         Ok(Self {
-            platform,
+            device: handle,
             render,
             output_size,
             output_format,
@@ -658,13 +659,10 @@ impl TemporalTargets {
     }
 
     pub(crate) fn matches(&self, device: Ptr, render: Extent, output: Extent, format: u32) -> bool {
-        let handle = unsafe { (self.platform.texture_device)(self.colour.as_ptr()) };
-        self.platform.lease(handle).is_some_and(|owner| {
-            owner.as_ptr() == device
-                && self.render == render
-                && self.output_size == output
-                && self.output_format == format
-        })
+        self.device == device
+            && self.render == render
+            && self.output_size == output
+            && self.output_format == format
     }
 }
 

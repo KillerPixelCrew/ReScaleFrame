@@ -11,6 +11,7 @@ mod render_config;
 mod render_pass;
 pub mod presentation_result;
 pub mod session;
+pub mod sampling;
 pub mod shader_patch_abi;
 pub mod sharpening_abi;
 pub mod sr_abi;

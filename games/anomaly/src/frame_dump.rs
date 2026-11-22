@@ -34,6 +34,16 @@ pub(crate) struct DumpApi {
 }
 
 impl DumpApi {
+    pub fn admit(&self, record: &rsf_frame_record, scheduled: bool) -> bool {
+        unsafe {
+            (self.poll)();
+            if scheduled {
+                (self.request)();
+            }
+            (self.requested)() != 0 && (self.begin_record)(record, 0) != 0
+        }
+    }
+
     #[cfg(windows)]
     pub fn bind() -> Option<Self> {
         use crate::runtime_module::{export, rsf_anomaly_runtime_module};

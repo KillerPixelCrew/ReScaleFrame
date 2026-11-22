@@ -4,7 +4,6 @@
 // static viewport for Stage 2. Every exit path must leave the engine bytes exactly as they were.
 // No game code, D3D device or executable is involved.
 #include "sr_jitter.h"
-#include "sr_plan.h"
 #include "sr_profile.h"
 #include "sr_swap.h"
 
@@ -112,8 +111,8 @@ struct Engine {
     FrameFacts facts() { return {target.data(), backend.data(), reinterpret_cast<void*>(uintptr_t{0x1234}), 0, width, height, false, false}; }
     FrameFacts facts2(float scale = 0.67f) {
         auto f = facts();
-        ScalePlan plan{};
-        make_plan(width, height, scale, plan);
+        rsf_anomaly_sr_plan plan{};
+        rsf_anomaly_sr_make_plan(width, height, scale, &plan);
         f.stage = 2;
         f.render_width = plan.render_width;
         f.render_height = plan.render_height;
@@ -259,8 +258,8 @@ struct FakeHost final : SwapHost {
     std::vector<std::array<float, 2>> position_jitters;
     void* position_constant{};
     bool position_ok{true};
-    bool correct_position_constant(void* c, float x, float y) noexcept override {
-        position_constant = c; position_jitters.push_back({x,y}); return position_ok;
+    uint32_t correct_position_constant(void* c, float x, float y) noexcept override {
+        position_constant = c; position_jitters.push_back({x,y}); return position_ok ? 1u : 0u;
     }
     bool set_mip_bias(float value) noexcept override {
         if (bias_calls++ == fail_bias_at) return false;

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "sr_temporal.h"
-#include "sr_plan.h"
 #include <d3d11.h>
 
 namespace rsf::anomaly::sr {
@@ -14,7 +13,7 @@ static_assert(sizeof(rsf_d3d11_sr_api) == 112 && offsetof(rsf_d3d11_sr_api, star
 static_assert(sizeof(SrSettings) == 16 && offsetof(SrSettings, backend) == 4);
 static_assert(sizeof(TemporalStatusData) == 288 &&
     offsetof(TemporalStatusData, reason_utf8) == 188);
-static_assert(sizeof(TemporalCounters) == 424);
+static_assert(sizeof(TemporalCounters) == 432);
 
 }
 
@@ -35,8 +34,7 @@ void rsf_anomaly_sr_boundary(TemporalState*, void*, uint32_t, uint32_t) noexcept
 bool rsf_anomaly_sr_evaluate(TemporalState*, void*, rsf_anomaly_sr_pass_inputs*, const rsf_anomaly_sr_reset_facts*,
     rsf_camera_frame*, uint32_t*) noexcept;
 bool rsf_anomaly_sr_request_dump(const TemporalState*, const char*) noexcept;
-void rsf_anomaly_sr_count(TemporalState*, Refusal) noexcept;
-void rsf_anomaly_sr_count_bilinear(TemporalState*) noexcept;
+void rsf_anomaly_sr_fallback(TemporalState*, uint8_t, bool) noexcept;
 void rsf_anomaly_sr_count_prepared(TemporalState*, bool) noexcept;
 void rsf_anomaly_sr_stop(TemporalState*) noexcept;
 void rsf_anomaly_sr_status(const TemporalState*, TemporalStatusData*) noexcept;
@@ -107,8 +105,7 @@ bool TemporalDriver::evaluate(ID3D11DeviceContext* context, rsf_anomaly_sr_pass_
 bool TemporalDriver::request_dump(const std::string& prefix) noexcept {
     return rsf_anomaly_sr_request_dump(state_, prefix.c_str());
 }
-void TemporalDriver::count(Refusal reason) noexcept { rsf_anomaly_sr_count(state_, reason); }
-void TemporalDriver::count_bilinear() noexcept { rsf_anomaly_sr_count_bilinear(state_); }
+void TemporalDriver::fallback(uint8_t reason, bool drawn) noexcept { rsf_anomaly_sr_fallback(state_, reason, drawn); }
 void TemporalDriver::count_prepared(bool missing) noexcept { rsf_anomaly_sr_count_prepared(state_, missing); }
 void TemporalDriver::stop() noexcept { rsf_anomaly_sr_stop(state_); }
 TemporalStatus TemporalDriver::status() const noexcept {

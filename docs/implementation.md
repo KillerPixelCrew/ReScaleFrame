@@ -29,6 +29,14 @@ The diagnostic C++ bridge and restart overlay controls remain open.
 Build, fixture and device checks are pending.
 [RDR2 startup source evidence](research/rust-rdr2-asi.md#r01-follow-up)
 
+The Anomaly SR stage calls the Rust swap owner directly at the seam.
+Guard admission, constant rollback outcomes, spatial recovery reporting,
+GPU query retirement and the seven SR overlay controls have been
+source-reviewed. The D3D11 startup dependency on DLSS still blocks
+Runtime-owned backend selection for this adapter. Builds, fixtures and
+game acceptance are pending.
+[Anomaly SR checkpoint](research/rust-anomaly-sr-stage.md#n06-source-review-and-port-checkpoint)
+
 The Unity package now routes render callbacks, admits preview and
 generation windows, and handles device events in Rust. The managed
 exports matched in source, and pinned binding regeneration matched the

@@ -227,7 +227,10 @@ fn map_reads_subresource_zero_and_unmaps_it_on_drop() {
         ),
         (4, 2, 10, 8)
     );
-    assert_eq!((layout.data, layout.row_pitch), (ROWS.as_ptr().cast(), 32));
+    assert_eq!(
+        mapping.rows().unwrap().next().unwrap().as_ptr(),
+        ROWS.as_ptr()
+    );
     assert_eq!(
         calls(),
         [
@@ -256,14 +259,13 @@ fn map_refusals_keep_the_size_and_format_and_never_unmap() {
     let (layout, mapping) = map(&p, context(), &held);
     assert!(mapping.is_none());
     assert_eq!((layout.width, layout.height, layout.format), (4, 2, 10));
-    assert!(layout.data.is_null());
     assert_eq!(calls(), ["pixel 10", "GetDevice", "GetType"]);
     leaves(|state| state.immediate = true);
 
     leaves(|state| state.map = false);
     let (layout, mapping) = map(&p, context(), &held);
     assert!(mapping.is_none());
-    assert_eq!((layout.row_pitch, layout.pixel_bytes), (0, 8));
+    assert_eq!(layout.pixel_bytes, 8);
     assert_eq!(
         calls().last().map(|call| call.starts_with("map ")),
         Some(true)

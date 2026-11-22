@@ -174,7 +174,8 @@ typedef struct rsf_anomaly_swap_platform {
     void (*set_viewport)(void* user, uint32_t width, uint32_t height);
     bool (*upload_projection)(void* user, const void* matrix);
     bool (*set_mip_bias)(void* user, float value);
-    bool (*correct_position_constant)(void* user, void* constant, float x, float y);
+    // 0: clean refusal, 1: corrected, 2: incomplete rollback.
+    uint32_t (*correct_position_constant)(void* user, void* constant, float x, float y);
 } rsf_anomaly_swap_platform;
 
 // What the native leaf reads between calls. Owned by the swap handle and updated by every call.

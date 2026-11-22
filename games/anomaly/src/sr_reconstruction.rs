@@ -82,21 +82,34 @@ impl Slot {
         }
     }
 
-    fn restore(&self, platform: &Platform) {
-        unsafe {
-            (platform.write)(
-                platform.user,
-                self.data,
-                from_ref(&self.stock).cast(),
-                VECTOR_BYTES,
-            );
-            (platform.write)(
-                platform.user,
-                self.dirty,
-                from_ref(&self.was_dirty).cast(),
-                1,
-            );
+    fn restore(&self, platform: &Platform) -> bool {
+        // A failed write can still have changed part of the destination. Verify
+        // both values while the engine's staging slot is still in scope.
+        for _ in 0..2 {
+            unsafe {
+                (platform.write)(
+                    platform.user,
+                    self.data,
+                    from_ref(&self.stock).cast(),
+                    VECTOR_BYTES,
+                );
+                (platform.write)(
+                    platform.user,
+                    self.dirty,
+                    from_ref(&self.was_dirty).cast(),
+                    1,
+                );
+            }
+            if platform.read::<VECTOR_BYTES>(self.data, 0)
+                == Some(std::array::from_fn(|i| {
+                    self.stock[i / 4].to_le_bytes()[i % 4]
+                }))
+                && platform.read::<1>(self.dirty, 0) == Some([self.was_dirty])
+            {
+                return true;
+            }
         }
+        false
     }
 }
 
@@ -138,15 +151,15 @@ extern "C" fn rsf_anomaly_sr_correct_position_constant(
     constant: usize,
     x: f32,
     y: f32,
-) -> bool {
+) -> u32 {
     let Some(destination) = platform
         .read(constant, layout.destination as usize)
         .map(u32::from_le_bytes)
     else {
-        return false;
+        return 0;
     };
     if destination & 0x7b == 0 || destination & 0x84 != 0 {
-        return false;
+        return 0;
     }
     let mut slots = [Slot::default(); 6];
     let mut count = 0;
@@ -160,10 +173,10 @@ extern "C" fn rsf_anomaly_sr_correct_position_constant(
             continue;
         }
         if ((destination >> shift) & 15) >= layout.buffer_slots {
-            return false;
+            return 0;
         }
         let Some(slot) = prepare_slot(layout, platform, constant, stage as u32, x, y) else {
-            return false;
+            return 0;
         };
         // Multiple stages may use the same vector. Overlapping distinct vectors would overwrite one another.
         if let Some(other) = slots[..count]
@@ -171,7 +184,7 @@ extern "C" fn rsf_anomaly_sr_correct_position_constant(
             .find(|other| other.data.abs_diff(slot.data) < VECTOR_BYTES)
         {
             if other.data != slot.data || other.dirty != slot.dirty {
-                return false;
+                return 0;
             }
             continue;
         }
@@ -180,11 +193,12 @@ extern "C" fn rsf_anomaly_sr_correct_position_constant(
     }
     for (i, slot) in slots[..count].iter().enumerate() {
         if !slot.write(platform, &slot.corrected, 1) {
+            let mut restored = true;
             for restore in &slots[..=i] {
-                restore.restore(platform);
+                restored &= restore.restore(platform);
             }
-            return false;
+            return if restored { 0 } else { 2 };
         }
     }
-    count != 0
+    u32::from(count != 0)
 }

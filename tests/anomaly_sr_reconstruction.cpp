@@ -46,6 +46,7 @@ struct Engine final : PositionConstantHost {
     std::array<std::array<std::byte, 128>, 6> data{};
     std::array<std::byte*, 6> selected{};
     int writes{}, fail_write{-1}, gets{};
+    bool fail_restoration{};
     static constexpr PositionVector stock{0.8f, -0.5f, 0.001f, -0.002f};
     Engine() {
         const uint32_t destinations = 0x7b;
@@ -60,7 +61,8 @@ struct Engine final : PositionConstantHost {
     }
     bool read(const void* p, void* out, std::size_t n) noexcept override { if (!p) return false; std::memcpy(out,p,n); return true; }
     bool write(void* p, const void* in, std::size_t n) noexcept override {
-        if (writes++ == fail_write) return false;
+        const int index = writes++;
+        if (index == fail_write || (fail_restoration && index > fail_write)) return false;
         std::memcpy(p,in,n); return true;
     }
     std::byte* buffer(void* c, uint32_t stage) noexcept override { CHECK(c == constant.data()); ++gets; return selected[stage]; }
@@ -98,6 +100,12 @@ void staging_contract() {
         CHECK(!correct_position_constant(bad,bad.constant.data(),0.25f,-0.125f));
         CHECK(bad.data == data && bad.cb == cb);
     }
+    Engine incomplete;
+    // The corrected vector was written before setting the dirty byte failed.
+    incomplete.fail_write = 1;
+    incomplete.fail_restoration = true;
+    CHECK(correct_position_constant(incomplete, incomplete.constant.data(), 0.25f, -0.125f) == 2);
+    CHECK(incomplete.value(0) != Engine::stock);
     for (int failure=0; failure < 5; ++failure) {
         Engine bad;
         if (failure==0) { const uint16_t cls=3; put(bad.constant,0x16+5*4,cls); }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_stage_abi::*;
+use rsf_game_sys::sampling::halton_f64 as halton;
 use std::mem::MaybeUninit;
 
 type Plan = rsf_anomaly_sr_plan;
@@ -80,20 +81,6 @@ pub(super) fn mip_delta(render: u32, output: u32, offset: f32) -> f32 {
     let delta =
         (f64::from(render) / f64::from(output)).log2() + f64::from(clamp_mip_offset(offset));
     delta.clamp(-3.0, 1.0) as f32
-}
-
-fn halton(mut index: u32, base: u32) -> f64 {
-    if base < 2 {
-        return 0.0;
-    }
-    let mut result = 0.0;
-    let mut fraction = 1.0;
-    while index != 0 {
-        fraction /= f64::from(base);
-        result += fraction * f64::from(index % base);
-        index /= base;
-    }
-    result
 }
 
 fn phase_count(render: u32, output: u32) -> u32 {
@@ -263,16 +250,6 @@ impl BurstGate {
 }
 
 // The native fixtures exercise these same rules through the private ABI.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_clamp_scale(value: f32) -> f32 {
-    clamp_scale(value)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_render_extent(output: u32, scale: f32) -> u32 {
-    render_extent(output, clamp_scale(scale))
-}
-
 fn copy_plan(plan: Option<Plan>, out: &mut MaybeUninit<Plan>) -> bool {
     out.write(plan.unwrap_or(Plan {
         scale: 1.0,
@@ -289,17 +266,6 @@ extern "C" fn rsf_anomaly_sr_make_plan(
     out: &mut MaybeUninit<Plan>,
 ) -> bool {
     copy_plan(make_plan(ow, oh, scale), out)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_plan_for_render(
-    ow: u32,
-    oh: u32,
-    rw: u32,
-    rh: u32,
-    out: &mut MaybeUninit<Plan>,
-) -> bool {
-    copy_plan(plan_for_render(ow, oh, rw, rh), out)
 }
 
 #[unsafe(no_mangle)]
@@ -369,4 +335,81 @@ extern "C" fn rsf_anomaly_sr_burst_frame(
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_burst_interrupted(gate: &mut BurstGate) {
     gate.interrupted();
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    #[test]
+    fn scale_defaults_and_bounds() {
+        for scale in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+            assert_eq!(clamp_scale(scale), 0.67);
+        }
+        for (requested, expected) in [
+            (0.30, 0.33),
+            (0.33, 0.33),
+            (0.5, 0.5),
+            (0.67, 0.67),
+            (1.0, 1.0),
+            (1.5, 1.0),
+            (100.0, 1.0),
+        ] {
+            assert_eq!(clamp_scale(requested), expected);
+        }
+    }
+
+    #[test]
+    fn backend_render_sizes_keep_the_requested_rectangles() {
+        for (rw, rh) in [(1280, 720), (960, 540), (1920, 1080), (640, 360)] {
+            let plan = plan_for_render(1920, 1080, rw, rh).unwrap();
+            assert_eq!([plan.render_width, plan.render_height], [rw, rh]);
+            assert!((f64::from(plan.scale) - f64::from(rw) / 1920.0).abs() < 1e-6);
+        }
+        assert!(plan_for_render(1920, 1080, 600, 340).is_none());
+        assert!(plan_for_render(1920, 1080, 2000, 1080).is_none());
+        assert!(plan_for_render(0, 1080, 960, 540).is_none());
+        assert!(plan_for_render(1921, 1081, 634, 356).is_none());
+        assert!(plan_for_render(1921, 1081, 634, 357).is_some());
+    }
+
+    #[test]
+    fn render_sizes_round_per_axis_and_stay_in_bounds() {
+        for (output, scale, render) in [
+            ([1920, 1080], 0.67, [1286, 724]),
+            ([2560, 1440], 0.67, [1715, 965]),
+            ([3840, 2160], 0.77, [2957, 1663]),
+            ([1280, 720], 0.67, [858, 482]),
+            ([1919, 1079], 0.67, [1286, 723]),
+            ([1921, 1081], 0.5, [961, 541]),
+            ([1920, 1080], 0.5, [960, 540]),
+            ([1920, 1080], 0.3, [634, 357]),
+            ([2560, 1600], 1.0 / 3.0, [853, 533]),
+            ([1, 2], 0.5, [1, 1]),
+            ([3, 1], 0.5, [2, 1]),
+            ([1, 1], 0.67, [1, 1]),
+            ([7, 7], 2.0, [7, 7]),
+            ([1920, 1080], 7.0, [1920, 1080]),
+            ([1920, 1080], f32::NAN, [1286, 724]),
+        ] {
+            let plan = make_plan(output[0], output[1], scale).unwrap();
+            assert_eq!([plan.output_width, plan.output_height], output);
+            assert_eq!([plan.render_width, plan.render_height], render);
+            assert_eq!(plan.scale, clamp_scale(scale));
+        }
+        assert_eq!(render_extent(0, 0.67), 0);
+        assert!(make_plan(0, 1080, 0.67).is_none());
+        assert!(make_plan(1920, 0, 0.67).is_none());
+        for scale in [
+            0.34, 0.4, 0.5, 0.55, 0.6, 0.6667, 0.67, 0.75, 0.77, 0.9, 1.0,
+        ] {
+            for output in 1..=8192 {
+                let render = render_extent(output, scale);
+                let exact = f64::from(output) * f64::from(scale);
+                let lowest = (f64::from(output) * f64::from(0.33f32)).ceil() as u32;
+                assert!((lowest..=output).contains(&render));
+                assert!(render == lowest || (f64::from(render) - exact).abs() <= 0.5 + 1e-9);
+            }
+        }
+    }
 }
