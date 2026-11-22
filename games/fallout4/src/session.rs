@@ -252,7 +252,7 @@ impl Session {
             }
         }
         let services = self.services;
-        if !creation::prepare(ops, &services, &build) {
+        if !creation::prepare(&services, &build) {
             return self.refuse(
                 ops,
                 host,

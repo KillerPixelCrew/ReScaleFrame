@@ -87,7 +87,6 @@ pub(crate) struct Ops {
         digest: *mut ::core::ffi::c_char,
         hashed: *mut bool,
     ) -> bool,
-    prepare_steam_chain: unsafe extern "C" fn(host: *const rsf_game_host_services) -> bool,
     call_create: unsafe extern "C" fn(call: *const platform_abi::rsf_fallout4_create_call) -> i32,
     host_create: unsafe extern "C" fn(
         create: rsf_fallout4_host_create_fn,
@@ -156,7 +155,6 @@ impl Ops {
         Some(Self {
             log: table.log?,
             file_sha256: table.file_sha256?,
-            prepare_steam_chain: table.prepare_steam_chain?,
             call_create: table.call_create?,
             host_create: table.host_create?,
             host_set_active: table.host_set_active?,
@@ -191,10 +189,6 @@ impl Ops {
         let mut hashed = false;
         completed(unsafe { leaf(path.as_ptr(), digest.as_mut_ptr().cast(), &mut hashed) })?;
         Ok(hashed.then_some(digest))
-    }
-
-    pub(crate) fn prepare_steam_chain(&self, host: &rsf_game_host_services) -> bool {
-        unsafe { (self.prepare_steam_chain)(host) }
     }
 
     pub(crate) fn initialize_hooks(&self) -> bool {

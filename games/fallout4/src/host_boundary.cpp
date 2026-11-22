@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MIT
-// C++ exception guards and the Steam and render bridges used by the Rust GameSDK export.
+// C++ exception guards and the render bridge used by the Rust GameSDK export.
 #include "fallout4_platform.h"
 #include "render_hooks_platform.h"
 #include <rescaleframe/sha256_file.h>
-#include <rescaleframe/steam_d3d11_chain.h>
 #include <cstring>
 #include <string>
 
 namespace {
 using namespace rsf::fallout4;
-static_assert(sizeof(rsf_fallout4_platform) == 9 * sizeof(void*));
+static_assert(sizeof(rsf_fallout4_platform) == 8 * sizeof(void*));
 
 // A native call that throws reports false; the Rust lifecycle then answers RSF_ERROR_NOT_READY
 // as the previous native catch did.
@@ -27,9 +26,6 @@ constexpr rsf_fallout4_platform platform{
             *hashed = rsf::sha256_file(path, hash) && hash.size() == 64;
             if (*hashed) std::memcpy(digest, hash.data(), hash.size());
         });
-    },
-    [](const rsf_game_host_services* host) noexcept {
-        return rsf::steam::prepare_d3d11_chain(*host, [] { return rsf_fallout4_cold_owner(); });
     },
     rsf_fallout4_call_creation,
     [](rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup, rsf_game_host_services* services,

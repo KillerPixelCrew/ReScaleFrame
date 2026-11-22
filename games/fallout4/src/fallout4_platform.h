@@ -48,8 +48,6 @@ typedef struct rsf_fallout4_platform {
     bool (*log)(rsf_game_log_fn log, void* user, const char* message);
     // Guarded lower-case hex SHA-256 of a file into 64 characters, without a terminator.
     bool (*file_sha256)(const wchar_t* path, char* digest, bool* hashed);
-    // The shared Steam D3D11 chain facade, given this adapter's cold-owner check.
-    bool (*prepare_steam_chain)(const rsf_game_host_services* host);
     // The original creation through its trampoline, with the thread's last error unchanged.
     int32_t (*call_create)(const rsf_fallout4_create_call* call);
     // Guarded Runtime calls.
@@ -72,8 +70,6 @@ int32_t rsf_fallout4_call_creation(const rsf_fallout4_create_call* call) noexcep
 #endif
 // The creation thunk detour body. caller is the detour's return address.
 int32_t rsf_fallout4_creation_observe(uintptr_t caller, const rsf_fallout4_create_call* call);
-// The renderer owner has not created its device yet.
-bool rsf_fallout4_cold_owner(void);
 
 #ifdef __cplusplus
 }

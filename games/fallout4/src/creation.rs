@@ -86,6 +86,10 @@ static ENTERED: AtomicU32 = AtomicU32::new(0);
 static ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 unsafe extern "C" {
+    fn rsf_steam_d3d11_chain_prepare(
+        host: *const rsf_game_host_services,
+        cold_owner: Option<unsafe extern "C" fn() -> bool>,
+    ) -> bool;
     fn rsf_fallout4_creation_detour() -> *mut c_void;
 }
 
@@ -119,7 +123,7 @@ fn renderer() -> Option<usize> {
 }
 
 /// The renderer owner is absent or has not created its device.
-pub(crate) fn cold_owner() -> bool {
+extern "C" fn cold_owner() -> bool {
     match renderer() {
         Some(0) => true,
         Some(renderer) => read::<usize>(renderer.wrapping_add(DEVICE)) == Some(0),
@@ -200,7 +204,7 @@ pub(crate) fn busy() -> bool {
 
 /// Resolves the Runtime creation exports, prepares Steam's chain forwarding and creates the
 /// disabled creation hook.
-pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, _build: &ExactBuild) -> bool {
+pub(crate) fn prepare(services: &rsf_game_host_services, _build: &ExactBuild) -> bool {
     if !preflight() {
         return false;
     }
@@ -219,7 +223,7 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, _build: &Exa
     let (Some(begin), Some(end), Some(bind)) = (begin, end, bind) else {
         return false;
     };
-    if !ops.prepare_steam_chain(services) {
+    if !prepare_steam_chain(services) {
         return false;
     }
     if !hook_created() && !create_hook() {
@@ -277,7 +281,6 @@ impl Drop for Entry {
 
 // The exact engine call for the renderer owner's outputs and window, before its device exists.
 fn owner_call(
-    ops: &Ops,
     scoped: Option<&Scoped>,
     caller: usize,
     call: &rsf_fallout4_create_call,
@@ -299,7 +302,7 @@ fn owner_call(
     let description = read::<SwapChainDesc>(call.swapchain_desc as usize)?;
     let owned = description.output_window == window
         && cold_owner()
-        && scoped.is_some_and(|scoped| ops.prepare_steam_chain(&scoped.host));
+        && scoped.is_some_and(|scoped| prepare_steam_chain(&scoped.host));
     owned.then_some(window)
 }
 
@@ -353,7 +356,7 @@ fn observe(ops: &Ops, caller: usize, call: &rsf_fallout4_create_call) -> i32 {
         token: 0,
     };
     let mut open = None;
-    if let Some(window) = owner_call(ops, scoped.as_ref(), caller, call)
+    if let Some(window) = owner_call(scoped.as_ref(), caller, call)
         && let Some(scoped) = scoped.as_ref()
     {
         scope.window = window as *mut c_void;
@@ -415,7 +418,7 @@ pub(crate) unsafe extern "C" fn rsf_fallout4_accept_window(
     i32::from(accept_window(window))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cold_owner() -> bool {
-    cold_owner()
+fn prepare_steam_chain(host: &rsf_game_host_services) -> bool {
+    // The linked Steam owner borrows this host and the callback synchronously.
+    unsafe { rsf_steam_d3d11_chain_prepare(host, Some(cold_owner)) }
 }
