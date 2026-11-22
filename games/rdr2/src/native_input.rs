@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Observes dequeued window messages and successful public XInput reads.
 use super::{Scope, lock, trampoline};
+use crate::scene;
 use rsf_minhook_sys::*;
 use rsf_windows::rsf_win32_input_kind;
 use std::sync::Mutex;
@@ -14,12 +15,8 @@ use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::w;
 
-type Message = unsafe extern "C" fn(u32, u32);
-type Controller = unsafe extern "C" fn();
 type XInputRead = unsafe extern "system" fn(u32, *mut c_void) -> u32;
 
-static MESSAGE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
-static CONTROLLER: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static MESSAGE_READERS: AtomicU32 = AtomicU32::new(0);
 static CONTROLLER_READERS: AtomicU32 = AtomicU32::new(0);
 static INPUT_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -32,14 +29,11 @@ unsafe extern "system" fn received_message(code: i32, removed: WPARAM, arg: LPAR
     if code >= 0
         && removed == PM_REMOVE as usize
         && let Some(message) = unsafe { (arg as *const MSG).as_ref() }
-        && let Some(callback) = unsafe { trampoline::<Message>(&MESSAGE) }
     {
-        unsafe {
-            callback(
-                rsf_win32_input_kind(message.message, message.lParam),
-                message.message,
-            )
-        };
+        scene::received_message(
+            rsf_win32_input_kind(message.message, message.lParam),
+            message.message,
+        );
     }
     unsafe { CallNextHookEx(ptr::null_mut(), code, removed, arg) }
 }
@@ -53,20 +47,13 @@ unsafe extern "system" fn controller_read<const SLOT: usize>(
         return 1167; // ERROR_DEVICE_NOT_CONNECTED. Only reachable without a trampoline.
     };
     let result = unsafe { native(index, state) };
-    if INPUT_ENABLED.load(Ordering::SeqCst)
-        && result == 0
-        && index < 4
-        && !state.is_null()
-        && let Some(callback) = unsafe { trampoline::<Controller>(&CONTROLLER) }
-    {
-        unsafe { callback() };
+    if INPUT_ENABLED.load(Ordering::SeqCst) && result == 0 && index < 4 && !state.is_null() {
+        scene::controller_received();
     }
     result
 }
 
-pub(crate) unsafe extern "C" fn install(message: Message, controller: Controller) {
-    MESSAGE.store(message as *mut c_void, Ordering::Release);
-    CONTROLLER.store(controller as *mut c_void, Ordering::Release);
+pub(crate) unsafe fn install() {
     INPUT_ENABLED.store(true, Ordering::SeqCst);
     {
         let mut hook = lock(&MESSAGE_HOOK);

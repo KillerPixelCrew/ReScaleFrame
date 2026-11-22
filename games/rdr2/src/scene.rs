@@ -174,13 +174,13 @@ fn received_input(kind: u32, message: u32) {
 }
 
 /// A window message removed by the game's input thread, classified by the native leaf.
-unsafe extern "C" fn received_message(kind: u32, message: u32) {
+pub(crate) fn received_message(kind: u32, message: u32) {
     let _scope = Scope::enter(&READERS);
     received_input(kind, message);
 }
 
 /// A successful public XInput read.
-unsafe extern "C" fn controller_received() {
+pub(crate) fn controller_received() {
     let _scope = Scope::enter(&READERS);
     if INPUT_SOURCE.load(Ordering::SeqCst) != 0 {
         received_input(RSF_GAME_INPUT_CONTROLLER, 0);
@@ -189,7 +189,7 @@ unsafe extern "C" fn controller_received() {
 
 fn input_thread(frame: u64) {
     INPUT_SOURCE.store(frame, Ordering::SeqCst);
-    unsafe { platform::input_install(received_message, controller_received) };
+    unsafe { platform::input_install() };
 }
 
 unsafe extern "C" fn sleep() -> bool {
