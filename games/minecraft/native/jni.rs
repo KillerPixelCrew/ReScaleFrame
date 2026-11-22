@@ -43,7 +43,7 @@ fn write_log(message: &[u8]) {
     let Some(file) = file.as_mut() else {
         return;
     };
-    // The C runtime text stream wrote CRLF line ends; keep the file byte-compatible.
+    // The log keeps CRLF line ends.
     let mut line = Vec::with_capacity(message.len() + 2);
     for &byte in message {
         if byte == b'\n' {
@@ -56,7 +56,7 @@ fn write_log(message: &[u8]) {
     let _ = file.flush();
 }
 
-/// The Runtime and capture log. Lines written before the log opens are dropped, as before.
+/// The Runtime and capture log. Lines written before the log opens are dropped.
 unsafe extern "C" fn log(_user: *mut c_void, message: *const c_char) {
     if message.is_null() {
         return;

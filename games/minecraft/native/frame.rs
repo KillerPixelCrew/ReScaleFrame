@@ -13,8 +13,7 @@ use rsf_game_sys::{
 
 pub(crate) const CAMERA_FLOATS: usize = 88;
 pub(crate) const SHARPENING_FIELDS: usize = 12;
-// RSF_SCREEN_FLIGHT in game_frame.h.
-pub(crate) const FLIGHT_SCREEN: u32 = 4;
+pub(crate) const FLIGHT_SCREEN: u32 = rsf_game_sys::RSF_SCREEN_FLIGHT;
 const SURFACE_FIELDS: usize = 10;
 
 pub(crate) struct Configuration {
@@ -38,11 +37,10 @@ const fn struct_size<T>() -> u32 {
     size_of::<T>() as u32
 }
 
-/// A pass with only its size. The Runtime refuses it; a missing or short camera buffer
-/// submitted this before the port as well.
+/// A pass with only its size, which the Runtime refuses: a missing or short camera buffer.
 pub(crate) fn empty_pass() -> rsf_game_render_pass {
     // SAFETY: rsf_game_render_pass holds only integers, floats, arrays of them and raw pointers,
-    // for which all-zero is valid; C++ value-initialised it the same way.
+    // for which all-zero is valid.
     let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
     pass.struct_size = struct_size::<rsf_game_render_pass>();
     pass
