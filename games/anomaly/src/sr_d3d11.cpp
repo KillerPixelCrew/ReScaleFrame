@@ -4,9 +4,7 @@
 #include "sr_upscale_hlsl.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/shader_compile.h>
-#include <array>
 #include <bit>
-#include <cstring>
 #include <iterator>
 #include <new>
 
@@ -33,127 +31,19 @@ static_assert((D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_LOAD
     D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW == 0x02000000);
 static_assert(d3dfmt_a16b16g16r16f == 113);
 
-template<class View, class Desc>
-void describe_view(void* raw, Desc& desc, rsf_sr_view& out, uint32_t texture2d) noexcept {
-    static_assert(sizeof(Desc) <= sizeof(out.descriptor));
-    static_cast<View*>(raw)->GetDesc(&desc);
-    out.texture2d = uint32_t(desc.ViewDimension) == texture2d;
-    out.format = desc.Format;
-    std::memcpy(out.descriptor, &desc, sizeof(desc));
-}
-
-template<class Desc>
-const Desc* view_template(const rsf_sr_view* source, Desc& desc) noexcept {
-    if (!source) return nullptr;
-    std::memcpy(&desc, source->descriptor, sizeof(desc));
-    return &desc;
-}
-
-template<class T, std::size_t Size>
-std::array<T*, Size> views(void* const* pointers, uint32_t count) noexcept {
-    std::array<T*, Size> result{};
-    for (uint32_t i = 0; i < count; ++i) result[i] = static_cast<T*>(pointers[i]);
-    return result;
-}
-
-void viewport(ID3D11DeviceContext* context, rsf_sr_extent size) noexcept {
-    const D3D11_VIEWPORT value{0, 0, float(size.width), float(size.height), 0, 1};
-    context->RSSetViewports(1, &value);
-}
-
 const rsf_sr_d3d11 platform{
-    .retain = [](void* object) { static_cast<IUnknown*>(object)->AddRef(); },
-    .release = [](void* object) { static_cast<IUnknown*>(object)->Release(); },
-    .as_texture = [](void* resource) -> void* {
-        ComPtr<ID3D11Texture2D> texture;
-        if (FAILED(static_cast<ID3D11Resource*>(resource)->QueryInterface(IID_PPV_ARGS(&texture)))) return nullptr;
-        return texture.Detach();
-    },
-    .view_resource = [](void* view) -> void* {
-        ID3D11Resource* resource{};
-        static_cast<ID3D11DepthStencilView*>(view)->GetResource(&resource);
-        return resource;
-    },
-    .texture_device = [](void* texture) -> void* {
-        ID3D11Device* device{};
-        static_cast<ID3D11Texture2D*>(texture)->GetDevice(&device);
-        return device;
-    },
-    .describe_texture = [](void* texture, rsf_sr_texture* out) {
-        D3D11_TEXTURE2D_DESC desc{};
-        static_cast<ID3D11Texture2D*>(texture)->GetDesc(&desc);
-        *out = std::bit_cast<rsf_sr_texture>(desc);
-    },
-    .describe_view = [](void* raw, uint32_t kind, rsf_sr_view* out) {
-        if (kind == RSF_SR_RTV) {
-            D3D11_RENDER_TARGET_VIEW_DESC desc{};
-            describe_view<ID3D11RenderTargetView>(raw, desc, *out, D3D11_RTV_DIMENSION_TEXTURE2D);
-        } else if (kind == RSF_SR_SRV) {
-            D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
-            describe_view<ID3D11ShaderResourceView>(raw, desc, *out, D3D11_SRV_DIMENSION_TEXTURE2D);
-        } else if (kind == RSF_SR_UAV) {
-            D3D11_UNORDERED_ACCESS_VIEW_DESC desc{};
-            describe_view<ID3D11UnorderedAccessView>(raw, desc, *out, D3D11_UAV_DIMENSION_TEXTURE2D);
-        } else {
-            D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
-            describe_view<ID3D11DepthStencilView>(raw, desc, *out, D3D11_DSV_DIMENSION_TEXTURE2D);
-            out->flags = desc.Flags;
-        }
-    },
-    .format_support = [](void* device, uint32_t format) -> uint32_t {
-        UINT support{};
-        return SUCCEEDED(static_cast<ID3D11Device*>(device)->CheckFormatSupport(DXGI_FORMAT(format), &support)) ? support : 0;
-    },
-    .texture = [](void* device, const rsf_sr_texture* input, const void* initial, uint32_t pitch) -> void* {
-        const auto desc = std::bit_cast<D3D11_TEXTURE2D_DESC>(*input);
-        const D3D11_SUBRESOURCE_DATA data{initial, pitch, 0};
-        ComPtr<ID3D11Texture2D> texture;
-        if (FAILED(static_cast<ID3D11Device*>(device)->CreateTexture2D(&desc, initial ? &data : nullptr, &texture))) return nullptr;
-        return texture.Detach();
-    },
-    .view = [](void* raw, void* texture, uint32_t kind, const rsf_sr_view* source) -> void* {
-        auto* device = static_cast<ID3D11Device*>(raw);
-        auto* resource = static_cast<ID3D11Texture2D*>(texture);
-        switch (kind) {
-        case RSF_SR_RTV: {
-            D3D11_RENDER_TARGET_VIEW_DESC desc{};
-            ComPtr<ID3D11RenderTargetView> view;
-            if (FAILED(device->CreateRenderTargetView(resource, view_template(source, desc), &view))) return nullptr;
-            return view.Detach();
-        }
-        case RSF_SR_UAV: {
-            D3D11_UNORDERED_ACCESS_VIEW_DESC desc{};
-            ComPtr<ID3D11UnorderedAccessView> view;
-            if (FAILED(device->CreateUnorderedAccessView(resource, view_template(source, desc), &view))) return nullptr;
-            return view.Detach();
-        }
-        case RSF_SR_DSV: {
-            D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
-            desc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-            desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-            ComPtr<ID3D11DepthStencilView> view;
-            if (FAILED(device->CreateDepthStencilView(resource, &desc, &view))) return nullptr;
-            return view.Detach();
-        }
-        case RSF_SR_DEPTH_SRV:
-        case RSF_SR_SRV: {
-            if (kind == RSF_SR_SRV && !source)
-                return rsf_d3d11_create_shader_view(device, static_cast<ID3D11Resource*>(resource));
-            D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
-            const auto* selected = view_template(source, desc);
-            if (kind == RSF_SR_DEPTH_SRV) {
-                desc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-                desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                desc.Texture2D.MipLevels = 1;
-                selected = &desc;
-            }
-            ComPtr<ID3D11ShaderResourceView> view;
-            if (FAILED(device->CreateShaderResourceView(resource, selected, &view))) return nullptr;
-            return view.Detach();
-        }
-        default:
-            return nullptr;
-        }
+    .retain = rsf_anomaly_sr_retain,
+    .release = rsf_anomaly_sr_release,
+    .as_texture = rsf_anomaly_sr_as_texture,
+    .view_resource = rsf_anomaly_sr_view_resource,
+    .texture_device = rsf_anomaly_sr_texture_device,
+    .describe_texture = rsf_anomaly_sr_describe_texture,
+    .describe_view = rsf_anomaly_sr_describe_view,
+    .format_support = rsf_anomaly_sr_format_support,
+    .texture = rsf_anomaly_sr_texture,
+    .view = [](void* device, void* texture, uint32_t kind, const rsf_sr_view* source) {
+        if (kind == RSF_SR_SRV && !source) return rsf_d3d11_create_shader_view(device, texture);
+        return rsf_anomaly_sr_view(device, texture, kind, source);
     },
     .shader = [](void* raw, uint32_t kind, uint32_t vertex, const char* entry, rsf_sr_log log, void* user, void** out) -> int32_t {
         auto* device = static_cast<ID3D11Device*>(raw);
@@ -175,42 +65,10 @@ const rsf_sr_d3d11 platform{
             return -1;
         }
     },
-    .constant_buffer = [](void* raw) -> void* {
-        auto* device = static_cast<ID3D11Device*>(raw);
-        const D3D11_BUFFER_DESC desc{16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
-        ComPtr<ID3D11Buffer> buffer;
-        if (FAILED(device->CreateBuffer(&desc, nullptr, &buffer))) return nullptr;
-        return buffer.Detach();
-    },
-    .raster_state = [](void* raw) -> void* {
-        auto* device = static_cast<ID3D11Device*>(raw);
-        D3D11_RASTERIZER_DESC desc{};
-        desc.FillMode = D3D11_FILL_SOLID;
-        desc.CullMode = D3D11_CULL_NONE;
-        desc.DepthClipEnable = TRUE;
-        ComPtr<ID3D11RasterizerState> state;
-        if (FAILED(device->CreateRasterizerState(&desc, &state))) return nullptr;
-        return state.Detach();
-    },
-    .blend_state = [](void* raw) -> void* {
-        auto* device = static_cast<ID3D11Device*>(raw);
-        D3D11_BLEND_DESC desc{};
-        desc.IndependentBlendEnable = FALSE;
-        desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-        ComPtr<ID3D11BlendState> state;
-        if (FAILED(device->CreateBlendState(&desc, &state))) return nullptr;
-        return state.Detach();
-    },
-    .depth_state = [](void* raw, uint32_t write_depth) -> void* {
-        auto* device = static_cast<ID3D11Device*>(raw);
-        D3D11_DEPTH_STENCIL_DESC desc{};
-        desc.DepthEnable = write_depth ? TRUE : FALSE;
-        desc.DepthWriteMask = write_depth ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
-        desc.DepthFunc = D3D11_COMPARISON_ALWAYS;
-        ComPtr<ID3D11DepthStencilState> state;
-        if (FAILED(device->CreateDepthStencilState(&desc, &state))) return nullptr;
-        return state.Detach();
-    },
+    .constant_buffer = rsf_anomaly_sr_constant_buffer,
+    .raster_state = rsf_anomaly_sr_raster_state,
+    .blend_state = rsf_anomaly_sr_blend_state,
+    .depth_state = rsf_anomaly_sr_depth_state,
     .save_state = [](void* raw) -> void* {
         auto state = std::unique_ptr<rsf_d3d11_state>(new (std::nothrow) rsf_d3d11_state{});
         if (!state || !rsf_d3d11_state_save(raw, state.get())) return nullptr;
@@ -220,50 +78,12 @@ const rsf_sr_d3d11 platform{
         std::unique_ptr<rsf_d3d11_state> state(static_cast<rsf_d3d11_state*>(snapshot));
         rsf_d3d11_state_restore(raw, state.get());
     },
-    .update_constants = [](void* raw, void* buffer, const uint32_t* data) {
-        static_cast<ID3D11DeviceContext*>(raw)->UpdateSubresource(static_cast<ID3D11Buffer*>(buffer), 0, nullptr, data, 0, 0);
-    },
-    .ps_constant = [](void* raw, uint32_t slot, void* buffer) {
-        auto* constants = static_cast<ID3D11Buffer*>(buffer);
-        static_cast<ID3D11DeviceContext*>(raw)->PSSetConstantBuffers(slot, 1, &constants);
-    },
-    .targets = [](void* raw, uint32_t count, void* const* targets, void* depth) {
-        const auto rtvs = views<ID3D11RenderTargetView, 3>(targets, count);
-        static_cast<ID3D11DeviceContext*>(raw)->OMSetRenderTargetsAndUnorderedAccessViews(
-            count, rtvs.data(), static_cast<ID3D11DepthStencilView*>(depth), 0, 0, nullptr, nullptr);
-    },
-    .ps_resources = [](void* raw, uint32_t slot, uint32_t count, void* const* inputs) {
-        const auto srvs = views<ID3D11ShaderResourceView, 6>(inputs, count);
-        static_cast<ID3D11DeviceContext*>(raw)->PSSetShaderResources(slot, count, srvs.data());
-    },
-    .clear_stencil = [](void* raw, void* depth) {
-        static_cast<ID3D11DeviceContext*>(raw)->ClearDepthStencilView(
-            static_cast<ID3D11DepthStencilView*>(depth), D3D11_CLEAR_STENCIL, 1.0f, 0);
-    },
-    .draw = [](void* raw, const rsf_sr_draw* draw) {
-        auto* context = static_cast<ID3D11DeviceContext*>(raw);
-        context->IASetInputLayout(nullptr);
-        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        context->VSSetShader(static_cast<ID3D11VertexShader*>(draw->vertex), nullptr, 0);
-        context->HSSetShader(nullptr, nullptr, 0);
-        context->DSSetShader(nullptr, nullptr, 0);
-        context->GSSetShader(nullptr, nullptr, 0);
-        context->PSSetShader(static_cast<ID3D11PixelShader*>(draw->pixel), nullptr, 0);
-        auto* constants = static_cast<ID3D11Buffer*>(draw->constants);
-        context->PSSetConstantBuffers(0, 1, &constants);
-        context->RSSetState(static_cast<ID3D11RasterizerState*>(draw->raster));
-        viewport(context, draw->size);
-        const float factor[4]{};
-        context->OMSetBlendState(static_cast<ID3D11BlendState*>(draw->blend), factor, 0xffffffff);
-        context->OMSetDepthStencilState(static_cast<ID3D11DepthStencilState*>(draw->depth), 0);
-        ID3D11Predicate* predicate{};
-        BOOL predicate_value{};
-        context->GetPredication(&predicate, &predicate_value);
-        context->SetPredication(nullptr, FALSE);
-        context->Draw(3, 0);
-        context->SetPredication(predicate, predicate_value);
-        if (predicate) predicate->Release();
-    },
+    .update_constants = rsf_anomaly_sr_update_constants,
+    .ps_constant = rsf_anomaly_sr_ps_constant,
+    .targets = rsf_anomaly_sr_targets,
+    .ps_resources = rsf_anomaly_sr_ps_resources,
+    .clear_stencil = rsf_anomaly_sr_clear_stencil,
+    .draw = rsf_anomaly_sr_draw,
 };
 
 }
@@ -370,7 +190,7 @@ TwinError make_temporal_targets(ID3D11Device* device, uint32_t rw, uint32_t rh, 
 }
 
 void set_full_viewport(ID3D11DeviceContext* context, uint32_t width, uint32_t height) noexcept {
-    if (context && width && height) viewport(context, {width, height});
+    rsf_anomaly_sr_set_full_viewport(context, width, height);
 }
 
 bool RoundTripPass::create(ID3D11Device* device, rsf_sr_log log, void* user) noexcept {

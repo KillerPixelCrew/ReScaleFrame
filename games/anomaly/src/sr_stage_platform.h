@@ -34,7 +34,7 @@ extern "C" uint32_t rsf_anomaly_sr_correct_position_constant(
     const rsf_anomaly_position_layout*, const rsf_anomaly_position_platform*, uintptr_t, float, float) noexcept;
 #endif
 
-// SrSettings (sr_settings.h).
+// Adapter settings supplied to the temporal driver.
 typedef struct rsf_anomaly_sr_settings {
     bool enabled;
     uint32_t backend, quality, preset;

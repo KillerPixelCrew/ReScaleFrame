@@ -2,8 +2,6 @@
 #include "sr_temporal.h"
 
 namespace rsf::anomaly::sr {
-static_assert(backend_dlss == RSF_SR_DLSS && backend_fsr3 == RSF_SR_FSR3 &&
-    backend_fsr4 == RSF_SR_FSR4 && backend_xess == RSF_SR_XESS && backend_auto == RSF_SR_AUTO);
 static_assert(motion_validity_channel == 2, "the core motion target stores validity in Z");
 static_assert(RSF_DLSS_ENGINE_CUSTOM == 0);
 namespace {
@@ -19,11 +17,8 @@ static_assert(sizeof(TemporalCounters) == 432);
 extern "C" {
 TemporalState* rsf_anomaly_sr_create() noexcept;
 void rsf_anomaly_sr_destroy(TemporalState*) noexcept;
-ApiStatus rsf_anomaly_sr_query(rsf_get_d3d11_sr_api_fn, rsf_d3d11_sr_api*, const char**) noexcept;
 void rsf_anomaly_sr_configure(TemporalState*, const rsf_anomaly_sr_driver_config*, rsf_game_log_fn, void*) noexcept;
 bool rsf_anomaly_sr_bind_runtime(TemporalState*, HMODULE) noexcept;
-uint64_t rsf_anomaly_sr_session_id() noexcept;
-bool rsf_anomaly_sr_bind_table(TemporalState*, const rsf_d3d11_sr_api*, uint64_t) noexcept;
 void rsf_anomaly_sr_request(TemporalState*, const SrSettings*) noexcept;
 bool rsf_anomaly_sr_enabled(const TemporalState*) noexcept;
 bool rsf_anomaly_sr_running(const TemporalState*) noexcept;
@@ -40,7 +35,6 @@ void rsf_anomaly_sr_status(const TemporalState*, TemporalStatusData*) noexcept;
 void rsf_anomaly_sr_counters(const TemporalState*, TemporalCounters*) noexcept;
 void rsf_anomaly_sr_overlay_report(const TemporalState*, rsf_overlay_sr_report*) noexcept;
 void rsf_anomaly_sr_report(TemporalState*, bool, bool, rsf_game_log_fn, void*) noexcept;
-void rsf_anomaly_sr_start_refusal(int32_t, char*, std::size_t) noexcept;
 }
 
 TemporalDriver::TemporalDriver() noexcept : state_(rsf_anomaly_sr_create()) {}
@@ -63,15 +57,9 @@ void TemporalDriver::configure(const rsf_anomaly_sr_driver_config& config, rsf_g
     rsf_anomaly_sr_configure(state_, &config, log ? &LogSink::call : nullptr, log ? &log_ : nullptr);
 }
 
-ApiStatus bind_sr_api(rsf_get_d3d11_sr_api_fn query, rsf_d3d11_sr_api& out, const char** reason) noexcept {
-    return rsf_anomaly_sr_query(query, &out, reason);
-}
 
 bool TemporalDriver::bind(HMODULE runtime) noexcept {
     return rsf_anomaly_sr_bind_runtime(state_, runtime);
-}
-bool TemporalDriver::bind_table(const rsf_d3d11_sr_api& table) noexcept {
-    return rsf_anomaly_sr_bind_table(state_, &table, rsf_anomaly_sr_session_id());
 }
 void TemporalDriver::request(const SrSettings& settings) noexcept { rsf_anomaly_sr_request(state_, &settings); }
 bool TemporalDriver::enabled() const noexcept { return rsf_anomaly_sr_enabled(state_); }
@@ -124,9 +112,4 @@ void TemporalDriver::report(bool exposure_auto, bool first_person_zero, rsf_game
     rsf_anomaly_sr_report(state_, exposure_auto, first_person_zero, &LogSink::call, &sink);
 }
 
-std::string start_refusal_reason(int32_t result) {
-    char reason[96]{};
-    rsf_anomaly_sr_start_refusal(result, reason, sizeof(reason));
-    return reason;
-}
 }

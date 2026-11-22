@@ -150,33 +150,6 @@ static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 600 &&
     offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 328 && offsetof(rsf_anomaly_sr_stage_platform, draw_pass) == 336);
 static_assert(first_person_depth_limit == 0.02f && RSF_SR_ROUND_TRIP == 0 && RSF_SR_UPSCALE == 1 &&
     RSF_SR_PREPARE == 2 && RSF_SR_REINSERT == 3);
-// Predication is cleared for the copy and restored afterwards, as the burst always did.
-void copy_subresource(void* context, void* destination, uint32_t destination_subresource, void* source,
-    uint32_t source_subresource) noexcept {
-    auto* ctx = static_cast<ID3D11DeviceContext*>(context);
-    ComPtr<ID3D11Predicate> predicate;
-    BOOL predicate_value{};
-    ctx->GetPredication(&predicate, &predicate_value);
-    ctx->SetPredication(nullptr, FALSE);
-    ctx->CopySubresourceRegion(static_cast<ID3D11Resource*>(destination), destination_subresource, 0, 0, 0,
-        static_cast<ID3D11Resource*>(source), source_subresource, nullptr);
-    ctx->SetPredication(predicate.Get(), predicate_value);
-}
-bool map_read(void* context, void* texture, uint32_t subresource, const void** data, uint32_t* row_pitch) noexcept {
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(static_cast<ID3D11DeviceContext*>(context)->Map(static_cast<ID3D11Resource*>(texture), subresource,
-            D3D11_MAP_READ, 0, &mapped))) return false;
-    *data = mapped.pData;
-    *row_pitch = mapped.RowPitch;
-    return true;
-}
-
-uint32_t twin_refs(void* raw) {
-    auto* texture = static_cast<ID3D11Texture2D*>(raw);
-    texture->AddRef();
-    return texture->Release() - 1;
-}
-
 // ---- the D3D11/engine host behind the swap controller --------------------------------------------------------
 struct TwinLog {
     rsf_anomaly_sr_log callback{};
@@ -243,8 +216,12 @@ struct Host final : SwapHost {
     void drop_twins() noexcept override {
         // Reference counts after our own views are gone. The engine's surface_get() before its generic_temp copy
         // takes references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
-        rsf_anomaly_sr_stage_retire_twins(resources, twin_refs);
+        rsf_anomaly_sr_stage_retire_twins(resources, rsf_anomaly_sr_twin_refs);
     }
+    // Production supplies the scoped Rust operation to the swap owner. These
+    // virtual slots are for native callers of the legacy fixture seam.
+    bool round_trip(const TargetFields&, const TargetFields&) noexcept override { return false; }
+    bool upscale(const UpscaleInputs&) noexcept override { return false; }
     void set_viewport(uint32_t width, uint32_t height) noexcept override { set_full_viewport(context(), width, height); }
     bool upload_projection(const void* matrix) noexcept override { return call_set_projection(matrix); }
     bool set_mip_bias(float value) noexcept override { return call_set_mip_bias(value); }
@@ -374,9 +351,7 @@ const rsf_anomaly_sr_stage_platform platform{
     .back_buffer = []() -> void* {
         ID3D11RenderTargetView* base{};
         if (!read_global(srp().hw_base_rt_rva, base) || !base) return nullptr;
-        ID3D11Resource* back{};
-        base->GetResource(&back);
-        return back;
+        return rsf_anomaly_sr_view_resource(base);
     },
     .context = []() -> void* { return host.context(); },
     .device = []() -> void* { return host.device(); },
@@ -414,50 +389,19 @@ const rsf_anomaly_sr_stage_platform platform{
             controller.saved_mip_bias(), controller.twin_generation(), controller.refusal()};
     },
     .swap_counters = [](rsf_anomaly_sr_swap_counters* out) { *out = controller.counters(); },
-    .timer_retain_device = [](void* device) {
-        static_cast<ID3D11Device*>(device)->AddRef();
-        return device;
-    },
-    .timer_create_query = [](void* device, bool disjoint) -> void* {
-        const D3D11_QUERY_DESC desc{disjoint ? D3D11_QUERY_TIMESTAMP_DISJOINT : D3D11_QUERY_TIMESTAMP, 0};
-        ComPtr<ID3D11Query> query;
-        return SUCCEEDED(static_cast<ID3D11Device*>(device)->CreateQuery(&desc, &query)) ? query.Detach() : nullptr;
-    },
-    .timer_issue = [](void* context, void* query, bool begin) {
-        auto* ctx = static_cast<ID3D11DeviceContext*>(context);
-        auto* timestamp = static_cast<ID3D11Query*>(query);
-        if (begin) ctx->Begin(timestamp); else ctx->End(timestamp);
-    },
-    .timer_clock = [](void* context, void* query, uint64_t* frequency, bool* disjoint) -> int32_t {
-        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT clock{};
-        const HRESULT result = static_cast<ID3D11DeviceContext*>(context)->GetData(static_cast<ID3D11Query*>(query),
-            &clock, sizeof(clock), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-        if (result == S_OK) {
-            *frequency = clock.Frequency;
-            *disjoint = clock.Disjoint != FALSE;
-        }
-        return result;
-    },
-    .timer_timestamp = [](void* context, void* query, uint64_t* ticks) -> int32_t {
-        return static_cast<ID3D11DeviceContext*>(context)->GetData(static_cast<ID3D11Query*>(query),
-            ticks, sizeof(*ticks), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-    },
+    .timer_retain_device = rsf_anomaly_sr_timer_retain_device,
+    .timer_create_query = rsf_anomaly_sr_timer_create_query,
+    .timer_issue = rsf_anomaly_sr_timer_issue,
+    .timer_clock = rsf_anomaly_sr_timer_clock,
+    .timer_timestamp = rsf_anomaly_sr_timer_timestamp,
     .host_stats = [](uint64_t* bytes, uint64_t* refs) { rsf_anomaly_sr_stage_resource_stats(host.resources, bytes, refs); },
     .host_reset = [] { rsf_anomaly_sr_stage_reset_pass(host.resources); },
-    .immediate_context = [](void* context) {
-        return static_cast<ID3D11DeviceContext*>(context)->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;
-    },
-    .context_device = [](void* context) -> void* {
-        ID3D11Device* device{};
-        static_cast<ID3D11DeviceContext*>(context)->GetDevice(&device);
-        return device;
-    },
-    .copy_subresource = copy_subresource,
-    .release = [](void* object) { if (object) static_cast<IUnknown*>(object)->Release(); },
-    .map_read = map_read,
-    .unmap = [](void* context, void* texture, uint32_t subresource) {
-        static_cast<ID3D11DeviceContext*>(context)->Unmap(static_cast<ID3D11Resource*>(texture), subresource);
-    },
+    .immediate_context = rsf_anomaly_sr_immediate_context,
+    .context_device = rsf_anomaly_sr_context_device,
+    .copy_subresource = rsf_anomaly_sr_copy_subresource,
+    .release = rsf_anomaly_sr_release,
+    .map_read = rsf_anomaly_sr_map_read,
+    .unmap = rsf_anomaly_sr_unmap,
     .pixel_bytes = rsf_texture_pixel_bytes,
     .draw_pass = [](uint32_t kind, const rsf_sr_draw_views* views) {
         return rsf_anomaly_sr_run_pass(host.pass(), host.context(), kind, views) != 0;

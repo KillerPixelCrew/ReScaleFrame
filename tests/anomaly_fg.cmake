@@ -25,7 +25,6 @@ endif()
 
 # native_observer.cpp calls the FG stage from its boundaries.
 target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_FG_SRC}/fg_stage_platform.cpp" "${RSF_ANOMALY_FG_SRC}/fg_inputs.cpp")
-target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_rust)
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
 
 add_test(NAME anomaly_input_events_standard_contract COMMAND rsf_anomaly_fg_device_test --input-contract standard)

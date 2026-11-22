@@ -185,6 +185,8 @@ impl Seam {
 
 mod burst_file;
 mod gpu_timer;
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod hook_fixture;
 mod staging;
 
 fn default_jitter() -> JitterState {
@@ -463,7 +465,7 @@ impl Ini<'_> {
         out.cut_degrees = self.float(c"SRCutAngle", 45.0, 1.0, 180.0);
         out.require_signature = self.int(c"SRRequireSignature", 0) != 0;
         // The shared frontend keys the overlay persists in the same section; a value the adapter cannot apply keeps
-        // the default (sanitize, sr_settings.h).
+        // the default.
         let backend = self.int(c"SRBackend", BACKEND_AUTO as i32) as u32;
         let quality = self.int(c"SRQuality", 1) as u32;
         out.settings = rsf_anomaly_sr_settings {

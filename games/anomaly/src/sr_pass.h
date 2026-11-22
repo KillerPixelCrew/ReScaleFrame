@@ -9,7 +9,7 @@
 // mul(float4, M) on row_major matrices). So engine matrices are copied, not transposed; only inverses and products
 // are computed in Rust, in double precision. Jitter is RSF render pixels (+X right, +Y down), the Stage 3 unit.
 #include "sr_jitter.h"
-#include "sr_settings.h"
+#include "sr_stage_platform.h"
 #include <rescaleframe/game_renderer.h>
 #include <rescaleframe/motion_decode.h>
 #include <algorithm>
@@ -18,13 +18,6 @@
 #include <cstdint>
 
 namespace rsf::anomaly::sr {
-// ---- engine identity: adapter-supplied metadata for Streamline/NGX, never a runtime switch ------------------------
-inline constexpr char engine_version[] = RSF_ANOMALY_SR_ENGINE_VERSION;
-inline constexpr char project_id[] = RSF_ANOMALY_SR_PROJECT_ID;
-inline constexpr float view_space_to_meters = RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS;   // X-Ray world units are metres
-
-// ---- shared settings values: sr_settings.h -----------------------------------------------------------------------
-
 // ---- motion: the Anomaly motion target (RTV2, R16G16B16A16_FLOAT) -------------------------------------------------
 // Channels (current-minus-previous UV x, UV y down, validity, 0) (shaders/core/README.md). A valid stationary pixel is
 // (0, 0, 1, 0) and must stay zero motion; an unwritten or invalid pixel is (0, 0, 0, 0) and must be reconstructed

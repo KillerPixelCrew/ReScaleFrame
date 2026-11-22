@@ -94,6 +94,43 @@ enum : uint32_t {
 enum : uint32_t { RSF_SR_ROUND_TRIP, RSF_SR_UPSCALE, RSF_SR_PREPARE, RSF_SR_REINSERT };
 
 extern "C" {
+// Typed Rust leaves used by the native table. The native shader and context-state
+// adapters continue to supply their existing failure and allocation contracts.
+void rsf_anomaly_sr_retain(void*) noexcept;
+void rsf_anomaly_sr_release(void*) noexcept;
+void* rsf_anomaly_sr_as_texture(void*) noexcept;
+void* rsf_anomaly_sr_view_resource(void*) noexcept;
+void* rsf_anomaly_sr_texture_device(void*) noexcept;
+void rsf_anomaly_sr_describe_texture(void*, rsf_sr_texture*) noexcept;
+void rsf_anomaly_sr_describe_view(void*, uint32_t, rsf_sr_view*) noexcept;
+uint32_t rsf_anomaly_sr_format_support(void*, uint32_t) noexcept;
+void* rsf_anomaly_sr_texture(void*, const rsf_sr_texture*, const void*, uint32_t) noexcept;
+void* rsf_anomaly_sr_view(void*, void*, uint32_t, const rsf_sr_view*) noexcept;
+void* rsf_anomaly_sr_constant_buffer(void*) noexcept;
+void* rsf_anomaly_sr_raster_state(void*) noexcept;
+void* rsf_anomaly_sr_blend_state(void*) noexcept;
+void* rsf_anomaly_sr_depth_state(void*, uint32_t) noexcept;
+void rsf_anomaly_sr_update_constants(void*, void*, const uint32_t*) noexcept;
+void rsf_anomaly_sr_ps_constant(void*, uint32_t, void*) noexcept;
+void rsf_anomaly_sr_targets(void*, uint32_t, void* const*, void*) noexcept;
+void rsf_anomaly_sr_ps_resources(void*, uint32_t, uint32_t, void* const*) noexcept;
+void rsf_anomaly_sr_clear_stencil(void*, void*) noexcept;
+void rsf_anomaly_sr_draw(void*, const rsf_sr_draw*) noexcept;
+void rsf_anomaly_sr_set_full_viewport(void*, uint32_t, uint32_t) noexcept;
+
+// Stage query and readback leaves. Capture owns the map lifetime.
+void* rsf_anomaly_sr_timer_retain_device(void*) noexcept;
+void* rsf_anomaly_sr_timer_create_query(void*, bool) noexcept;
+void rsf_anomaly_sr_timer_issue(void*, void*, bool) noexcept;
+int32_t rsf_anomaly_sr_timer_clock(void*, void*, uint64_t*, bool*) noexcept;
+int32_t rsf_anomaly_sr_timer_timestamp(void*, void*, uint64_t*) noexcept;
+bool rsf_anomaly_sr_immediate_context(void*) noexcept;
+void* rsf_anomaly_sr_context_device(void*) noexcept;
+void rsf_anomaly_sr_copy_subresource(void*, void*, uint32_t, void*, uint32_t) noexcept;
+bool rsf_anomaly_sr_map_read(void*, void*, uint32_t, const void**, uint32_t*) noexcept;
+void rsf_anomaly_sr_unmap(void*, void*, uint32_t) noexcept;
+uint32_t rsf_anomaly_sr_twin_refs(void*) noexcept;
+
 // The swap host serializes access. Pass and depth pointers borrow the current resources.
 uint32_t rsf_anomaly_sr_stage_make_twins(rsf_sr_stage_resources**, const rsf_sr_d3d11*, void*, const rsf_anomaly_swap_request*,
     rsf_anomaly_swap_twins*, rsf_sr_twin_batch_info*, rsf_sr_log, void*) noexcept;

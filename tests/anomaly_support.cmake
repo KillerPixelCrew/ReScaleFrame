@@ -44,11 +44,14 @@ target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE
 add_test(NAME anomaly_overlay_hooks_contract COMMAND rsf_anomaly_overlay_hooks_test)
 set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
+rsf_add_rust_static(rsf_anomaly_sr_fixture_rust rsf_rust_anomaly_sr_fixture
+    rsf-anomaly rsf_anomaly --features sr-fixtures)
+
 # SR Stage 0 site profile: compile-time consistency and runtime build selection. The guards are checked against the installed executable by
 # tests/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.
 add_executable(rsf_anomaly_sr_profile_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_profile.cpp")
 target_include_directories(rsf_anomaly_sr_profile_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
-target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_anomaly_rust rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_anomaly_sr_fixture_rust rsf_build_options)
 add_test(NAME anomaly_sr_profile_contract COMMAND rsf_anomaly_sr_profile_test)
 set_tests_properties(anomaly_sr_profile_contract PROPERTIES TIMEOUT 30)
 
@@ -63,7 +66,7 @@ target_link_libraries(rsf_anomaly_sr_swap_test PRIVATE rsf_anomaly_rust rsf_buil
 add_test(NAME anomaly_sr_swap_contract COMMAND rsf_anomaly_sr_swap_test)
 add_test(NAME anomaly_sr_swap_unknown_selection COMMAND rsf_anomaly_sr_swap_test unknown-case)
 set_tests_properties(anomaly_sr_swap_unknown_selection PROPERTIES WILL_FAIL TRUE)
-add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hooks.cpp"
+add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hook_bridge.cpp"
     "${RSF_ANOMALY_SR_SRC}/sr_stage.cpp" "${RSF_ANOMALY_SR_SRC}/sr_swap.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp"
     "${RSF_ANOMALY_SR_SRC}/native_observer_platform.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
@@ -72,7 +75,7 @@ target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK Re
 add_test(NAME anomaly_sr_hooks_contract COMMAND rsf_anomaly_sr_hooks_test)
 add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
 target_include_directories(rsf_anomaly_sr_roundtrip_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_rust ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection anomaly_sr_hooks_contract
@@ -162,8 +165,8 @@ target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_mot
 add_test(NAME anomaly_motion_far_device COMMAND rsf_anomaly_motion_far_device_test)
 set_tests_properties(anomaly_motion_far_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 # rsf_anomaly_sr_hooks_test links the native observer, which installs/reports/quiesces the motion stage.
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/motion_stage.cpp")
-target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_motion_bridge bcrypt dxguid d3dcompiler)
+target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/motion_stage.cpp" "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp")
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE bcrypt dxguid d3dcompiler)
 # SR Stage 3 (jitter and mip bias). The jitter test checks the Halton sequence, the row-vector NDC offset, the
 # first-person rule, the mip bias delta and the published motion/SR state on the CPU; the Stage 3 swap cases (projection
 # and bias restore on every exit path) live in anomaly_sr_swap_contract. The device fixture runs the unchanged core
@@ -194,16 +197,17 @@ endif()
 # (<root>/{streamline,fidelityfx,xess}) and an NVIDIA adapter, and is registered when RSF_ANOMALY_SR_VENDOR_ROOT exists.
 foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_device_test)
     if(rsf_sr5_client STREQUAL "rsf_anomaly_sr_runtime_api_test")
-        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_runtime_api.cpp")
+        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_runtime_api_bridge.cpp")
+        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust)
     else()
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.cpp"
             "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
-        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_rust ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi d3dcompiler)
+        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_temporal rsf_anomaly_rust ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi d3dcompiler)
     endif()
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
         "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
         "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-    target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_temporal rsf_anomaly_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK ReScaleFrame::Contract
+    target_link_libraries(${rsf_sr5_client} PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK ReScaleFrame::Contract
         rsf_build_options)
     add_dependencies(${rsf_sr5_client} rsf_orchestrator)
 endforeach()
@@ -265,7 +269,7 @@ set_tests_properties(anomaly_sr_reconstruction_window_contract PROPERTIES TIMEOU
 
 target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/input_hooks.cpp")
 # input_hooks.cpp keeps the native leaves; admission and routing are the production Rust library.
-target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_rust)
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_sr_fixture_rust)
 
 add_executable(rsf_anomaly_input_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_input_hooks.cpp" "${RSF_ANOMALY_SR_SRC}/input_hooks.cpp")
 target_include_directories(rsf_anomaly_input_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")

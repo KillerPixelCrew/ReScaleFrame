@@ -23,46 +23,26 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <span>
 #include <vector>
+
+extern "C" uint16_t rsf_anomaly_sr_float_to_half(float) noexcept;
+using RunRoundTrip = bool (*)(void*, const uint16_t*, uint32_t, uint32_t, uint8_t*, uint32_t, uint32_t);
+extern "C" int32_t rsf_anomaly_sr_roundtrip_numerics(void*, RunRoundTrip) noexcept;
+
+struct UpscaleReadback {
+    uint32_t input[2], output[2];
+    const uint16_t *source_colour, *source_position;
+    const uint8_t *source_distort, *colour, *position, *distort, *depth, *twin_depth;
+};
+static_assert(sizeof(UpscaleReadback) == 80);
+extern "C" int32_t rsf_anomaly_sr_upscale_numerics(const UpscaleReadback*) noexcept;
 
 namespace {
 using namespace rsf::anomaly::sr;
 using Microsoft::WRL::ComPtr;
 int failures = 0;
 #define CHECK(condition) do { if (!(condition)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #condition); ++failures; } } while (0)
-
-float half_to_float(uint16_t h) {
-    const uint32_t sign = uint32_t(h & 0x8000) << 16, exponent = (h >> 10) & 0x1f, mantissa = h & 0x3ff;
-    uint32_t bits;
-    if (exponent == 0x1f) bits = sign | 0x7f800000 | (mantissa << 13);
-    else if (exponent) bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
-    else if (!mantissa) bits = sign;
-    else {
-        int e = -1;
-        uint32_t m = mantissa;
-        do { ++e; m <<= 1; } while (!(m & 0x400));
-        bits = sign | uint32_t(112 - e) << 23 | ((m & 0x3ff) << 13);
-    }
-    float value;
-    std::memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-// Round to nearest even, as a GPU stores a float shader output into an FP16 target.
-uint16_t float_to_half(float value) {
-    uint32_t bits;
-    std::memcpy(&bits, &value, sizeof(bits));
-    const uint16_t sign = uint16_t((bits >> 16) & 0x8000);
-    const uint32_t magnitude = bits & 0x7fffffff;
-    if (magnitude >= 0x7f800000) return uint16_t(sign | 0x7c00 | (magnitude > 0x7f800000 ? 0x200 : 0));
-    if (magnitude >= 0x477ff000) return uint16_t(sign | 0x7c00);   // rounds above 65504
-    if (magnitude < 0x38800000) {                                    // subnormal half
-        const float scaled = std::fabs(value) * 16777216.0f;          // 2^24
-        return uint16_t(sign | uint16_t(std::nearbyint(scaled)));
-    }
-    const uint32_t rebased = magnitude - (112u << 23);
-    const uint32_t rounded = rebased + 0xfff + ((rebased >> 13) & 1);
-    return uint16_t(sign | (rounded >> 13));
-}
 
 struct Device {
     ComPtr<ID3D11Device> device;
@@ -128,7 +108,7 @@ std::vector<uint8_t> read_rgba8(Device& d, ID3D11Texture2D* source, uint32_t w, 
     return pixels;
 }
 // Runs the pass on an FP16 source given as half bit patterns (4 per pixel) and returns the UNORM8 output.
-std::vector<uint8_t> run_pass(Device& d, RoundTripPass& pass, const std::vector<uint16_t>& halves, uint32_t w, uint32_t h,
+std::vector<uint8_t> run_pass(Device& d, RoundTripPass& pass, std::span<const uint16_t> halves, uint32_t w, uint32_t h,
     uint32_t out_w, uint32_t out_h) {
     auto source = texture(d.device.Get(), w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
         halves.data(), w * 8);
@@ -143,85 +123,19 @@ std::vector<uint8_t> run_pass(Device& d, RoundTripPass& pass, const std::vector<
     return read_rgba8(d, target.Get(), out_w, out_h);
 }
 
-void every_half(Device& d, RoundTripPass& pass) {
-    constexpr uint32_t w = 256, h = 256;
-    std::vector<uint16_t> halves(size_t(w) * h * 4);
-    for (uint32_t i = 0; i < w * h; ++i) {
-        const auto bits = uint16_t(i);
-        halves[i * 4 + 0] = halves[i * 4 + 1] = halves[i * 4 + 2] = halves[i * 4 + 3] = bits;
-    }
-    const auto out = run_pass(d, pass, halves, w, h, w, h);
-    CHECK(out.size() == size_t(w) * h * 4);
-    if (out.empty()) return;
-    int worst = 0;
-    uint64_t exact = 0, compared = 0, nans = 0;
-    for (uint32_t i = 0; i < w * h; ++i) {
-        const float y = half_to_float(uint16_t(i));
-        const int expected = std::isnan(y) ? 0 : unorm8(y);   // stock UNORM8 conversion: NaN -> 0, saturate, round
-        if (std::isnan(y)) ++nans;
-        for (int c = 0; c < 4; ++c) {
-            const int diff = std::abs(int(out[size_t(i) * 4 + c]) - expected);
-            worst = std::max(worst, diff);
-            exact += diff == 0;
-            ++compared;
-        }
-    }
-    std::printf("every FP16 pattern: %llu channels, %llu exact, worst %d code value(s), %llu NaN patterns\n",
-        static_cast<unsigned long long>(compared), static_cast<unsigned long long>(exact), worst, static_cast<unsigned long long>(nans));
-    CHECK(worst <= 1);
-}
+struct RoundTripRig { Device& device; RoundTripPass& pass; };
 
-void stock_curve(Device& d, RoundTripPass& pass) {
-    constexpr uint32_t w = 256, h = 256;
-    std::vector<uint16_t> halves(size_t(w) * h * 4);
-    std::vector<double> x(size_t(w) * h);
-    for (uint32_t i = 0; i < w * h; ++i) {
-        // First half linear over [0, 2] where UNORM8 codes are dense, second half logarithmic up to 1e4.
-        x[i] = i < w * h / 2 ? 2.0 * i / (w * h / 2) : std::pow(10.0, std::log10(2.0) + (4.0 - std::log10(2.0)) * (i - w * h / 2) / (w * h / 2 - 1));
-        const auto y = float_to_half(float(tonemap_forward(x[i])));
-        halves[i * 4 + 0] = halves[i * 4 + 1] = halves[i * 4 + 2] = y;
-        halves[i * 4 + 3] = float_to_half(1.0f);
+bool run_round_trip(void* owner, const uint16_t* input, uint32_t width, uint32_t height,
+    uint8_t* output, uint32_t out_width, uint32_t out_height) noexcept {
+    auto& rig = *static_cast<RoundTripRig*>(owner);
+    try {
+        const auto pixels = run_pass(rig.device, rig.pass, {input, size_t(width) * height * 4}, width, height, out_width, out_height);
+        if (pixels.size() != size_t(out_width) * out_height * 4) return false;
+        std::memcpy(output, pixels.data(), pixels.size());
+        return true;
+    } catch (...) {
+        return false;
     }
-    const auto out = run_pass(d, pass, halves, w, h, w, h);
-    CHECK(!out.empty());
-    if (out.empty()) return;
-    int worst = 0;
-    uint64_t exact = 0;
-    double worst_x = 0;
-    for (uint32_t i = 0; i < w * h; ++i) {
-        const int expected = unorm8(tonemap_forward(x[i]));   // stock: combine_1 output f(x) written to UNORM8
-        const int diff = std::abs(int(out[size_t(i) * 4]) - expected);
-        if (diff > worst) { worst = diff; worst_x = x[i]; }
-        exact += diff == 0;
-        CHECK(out[size_t(i) * 4 + 3] == 255);
-    }
-    std::printf("stock curve x in [0, 1e4]: %u samples, %llu exact, worst %d code value(s) at x=%.6g\n", w * h,
-        static_cast<unsigned long long>(exact), worst, worst_x);
-    CHECK(worst <= 1);
-    // CPU reference of the inverse itself (same check as .local/anomaly/sr-seam/tonemap_inverse_check.py).
-    double worst_inverse = 0;
-    for (double value = 1e-6; value <= 20.0; value *= 1.01)
-        worst_inverse = std::max(worst_inverse, std::fabs(tonemap_inverse(tonemap_forward(value)) - value) / value);
-    std::printf("float64 f^-1(f(x)) relative error up to x=20: %.3g\n", worst_inverse);
-    CHECK(worst_inverse < 1e-12);
-}
-
-void nearest_mapping(Device& d, RoundTripPass& pass) {
-    constexpr uint32_t w = 4, h = 4;
-    std::vector<uint16_t> halves(size_t(w) * h * 4);
-    for (uint32_t i = 0; i < w * h; ++i) {
-        halves[i * 4 + 0] = float_to_half(float(tonemap_forward(tonemap_inverse((i + 1) / 17.0))));
-        halves[i * 4 + 1] = halves[i * 4 + 2] = 0;
-        halves[i * 4 + 3] = float_to_half(1.0f);
-    }
-    const auto out = run_pass(d, pass, halves, w, h, 8, 8);
-    CHECK(out.size() == 8u * 8 * 4);
-    if (out.empty()) return;
-    for (uint32_t y = 0; y < 8; ++y)
-        for (uint32_t x = 0; x < 8; ++x) {
-            const uint32_t source = (y / 2) * w + x / 2;
-            CHECK(std::abs(int(out[(y * 8 + x) * 4]) - unorm8((source + 1) / 17.0)) <= 1);
-        }
 }
 
 void state_preserved(Device& d, RoundTripPass& pass) {
@@ -407,9 +321,9 @@ Rig make_rig(Device& d, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh, cons
             for (int c = 0; c < 3; ++c) {
                 // x in [0, 6]: covers the UNORM8 knee at W = 1.7 and the clipped range above it.
                 const double x = 6.0 * double(hash(uint32_t(i * 4 + c)) % 10000u) / 9999.0;
-                r.colour[i * 4 + c] = float_to_half(float(tonemap_forward(x)));
+                r.colour[i * 4 + c] = rsf_anomaly_sr_float_to_half(float(tonemap_forward(x)));
             }
-            r.colour[i * 4 + 3] = float_to_half(float(hash(uint32_t(i)) % 256u) / 255.0f);
+            r.colour[i * 4 + 3] = rsf_anomaly_sr_float_to_half(float(hash(uint32_t(i)) % 256u) / 255.0f);
         }
     }
     r.position.resize(n * 4);
@@ -459,62 +373,18 @@ Output run_upscale(Device& d, UpscalePass& pass, Rig& r) {
     return out;
 }
 
-// CPU reference of the seam pass for one output pixel and channel, at source coordinate `coord` (two candidates are
-// tried where a coordinate sits within float rounding of a texel centre: D3D11 float division is not exact).
-double reference_colour(const Rig& r, double cx, double cy, int c) {
-    const double bx = std::floor(cx), by = std::floor(cy), wx = cx - bx, wy = cy - by;
-    const auto clampi = [](double v, uint32_t n) { return int(std::min<double>(std::max<double>(v, 0.0), double(n - 1))); };
-    const int x0 = clampi(bx, r.rw), x1 = clampi(bx + 1, r.rw), y0 = clampi(by, r.rh), y1 = clampi(by + 1, r.rh);
-    const auto lin = [&](int x, int y) {
-        float y_value = half_to_float(r.colour[(size_t(y) * r.rw + x) * 4 + c]);
-        y_value = std::min(std::max(y_value, 0.0f), 65504.0f);
-        return tonemap_inverse(y_value);
-    };
-    const double top = lin(x0, y0) + (lin(x1, y0) - lin(x0, y0)) * wx, bottom = lin(x0, y1) + (lin(x1, y1) - lin(x0, y1)) * wx;
-    return tonemap_forward(top + (bottom - top) * wy);
-}
-double reference_distort(const Rig& r, double cx, double cy, int c) {
-    const double bx = std::floor(cx), by = std::floor(cy), wx = cx - bx, wy = cy - by;
-    const auto clampi = [](double v, uint32_t n) { return int(std::min<double>(std::max<double>(v, 0.0), double(n - 1))); };
-    const int x0 = clampi(bx, r.rw), x1 = clampi(bx + 1, r.rw), y0 = clampi(by, r.rh), y1 = clampi(by + 1, r.rh);
-    const auto v = [&](int x, int y) { return r.distort[(size_t(y) * r.rw + x) * 4 + c] / 255.0; };
-    const double top = v(x0, y0) + (v(x1, y0) - v(x0, y0)) * wx, bottom = v(x0, y1) + (v(x1, y1) - v(x0, y1)) * wx;
-    return top + (bottom - top) * wy;
-}
-
 void check_upscale(Device& d, UpscalePass& pass, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
     auto rig = make_rig(d, rw, rh, ow, oh);
-    CHECK(rig.ok);
     const auto out = run_upscale(d, pass, rig);
-    CHECK(!out.colour.empty() && !out.depth.empty() && !out.twin_depth.empty());
-    if (out.colour.empty() || out.depth.empty() || out.twin_depth.empty()) return;
-    int worst_colour = 0, worst_distort = 0, alpha_bad = 0, position_bad = 0, depth_bad = 0, stencil_bad = 0;
-    for (uint32_t y = 0; y < oh; ++y)
-        for (uint32_t x = 0; x < ow; ++x) {
-            const size_t o = size_t(y) * ow + x;
-            const uint32_t nx = std::min(x * rw / ow, rw - 1), ny = std::min(y * rh / oh, rh - 1);
-            const size_t s = size_t(ny) * rw + nx;
-            const double cx = (x + 0.5) * rw / ow - 0.5, cy = (y + 0.5) * rh / oh - 0.5;
-            for (int c = 0; c < 3; ++c) {
-                int best = 255, best_d = 255;
-                for (const double e : {0.0, 1e-4, -1e-4}) {
-                    best = std::min(best, std::abs(int(out.colour[o * 4 + c]) - unorm8(reference_colour(rig, cx + e, cy + e, c))));
-                    best_d = std::min(best_d, std::abs(int(out.distort[o * 4 + c]) - unorm8(reference_distort(rig, cx + e, cy + e, c))));
-                }
-                worst_colour = std::max(worst_colour, best);
-                worst_distort = std::max(worst_distort, best_d);
-            }
-            const float a = half_to_float(rig.colour[s * 4 + 3]);
-            alpha_bad += std::abs(int(out.colour[o * 4 + 3]) - unorm8(a)) > 1;
-            for (int c = 0; c < 4; ++c) position_bad += at<uint16_t>(out.position, o * 4 + c) != rig.position[s * 4 + c];
-            const uint32_t engine = at<uint32_t>(out.depth, o), twin = at<uint32_t>(out.twin_depth, s);
-            depth_bad += (engine & 0xffffff) != (twin & 0xffffff);
-            stencil_bad += (engine >> 24) != 0;
-        }
-    std::printf("upscale %ux%u -> %ux%u: colour worst %d code(s) vs float64 bilinear in f^-1 space, generic1 worst %d, "
-        "alpha mismatches %d, position bit mismatches %d, depth mismatches %d, stencil not cleared %d\n",
-        rw, rh, ow, oh, worst_colour, worst_distort, alpha_bad, position_bad, depth_bad, stencil_bad);
-    CHECK(worst_colour <= 1 && worst_distort <= 1 && alpha_bad == 0 && position_bad == 0 && depth_bad == 0 && stencil_bad == 0);
+    const size_t source = size_t(rw) * rh, output = size_t(ow) * oh;
+    const bool ready = rig.ok && rig.colour.size() == source * 4 && rig.position.size() == source * 4 &&
+        rig.distort.size() == source * 4 && out.colour.size() == output * 4 && out.position.size() == output * 8 &&
+        out.distort.size() == output * 4 && out.depth.size() == output * 4 && out.twin_depth.size() == source * 4;
+    CHECK(ready);
+    if (!ready) return;
+    const UpscaleReadback readback{{rw, rh}, {ow, oh}, rig.colour.data(), rig.position.data(), rig.distort.data(),
+        out.colour.data(), out.position.data(), out.distort.data(), out.depth.data(), out.twin_depth.data()};
+    failures += rsf_anomaly_sr_upscale_numerics(&readback);
 }
 
 // At scale 1.0 the seam pass must equal the Stage 1 round trip bit for bit, and copy position/generic1/depth exactly.
@@ -697,9 +567,8 @@ int main() {
         std::puts("FAIL: round-trip pass could not be created (d3dcompiler_47)");
         return 1;
     }
-    every_half(d, pass);
-    stock_curve(d, pass);
-    nearest_mapping(d, pass);
+    RoundTripRig rig{d, pass};
+    failures += rsf_anomaly_sr_roundtrip_numerics(&rig, run_round_trip);
     state_preserved(d, pass);
     twins(d);
     debug_layer(d, pass);

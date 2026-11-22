@@ -19,6 +19,9 @@ use std::ptr::{null, null_mut};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod runtime_fixture;
+
 type Raw = *mut c_void;
 const OK: i32 = 0;
 const STREAMLINE_FAILED: i32 = -5;
@@ -812,26 +815,6 @@ unsafe extern "C" fn rsf_anomaly_sr_destroy(driver: *mut Driver) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_query(
-    query: rsf_get_d3d11_sr_api_fn,
-    out: &mut rsf_d3d11_sr_api,
-    reason: *mut *const c_char,
-) -> ApiStatus {
-    match query_api(query) {
-        Ok(table) => {
-            *out = table;
-            ApiStatus::Bound
-        }
-        Err((status, text)) => {
-            if !reason.is_null() {
-                unsafe { reason.write(text.as_ptr()) };
-            }
-            status
-        }
-    }
-}
-
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_configure(
     driver: &Driver,
     options: &rsf_anomaly_sr_driver_config,
@@ -923,21 +906,6 @@ unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_bind_table(
-    driver: &Driver,
-    table: &rsf_d3d11_sr_api,
-    session: u64,
-) -> bool {
-    let render = unsafe { &mut *driver.render.get() };
-    let result = validate_api(*table);
-    let bound = driver.bind(render, result, session);
-    if let Err(reason) = result {
-        render.say(&format!("Anomaly SR stage 5: {}", reason.to_string_lossy()));
-    }
-    bound
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_request(driver: &Driver, wanted: &Settings) {
     let mut published = driver.published();
     published.status.requested = wanted.admitted(
@@ -960,21 +928,15 @@ extern "C" fn rsf_anomaly_sr_running(driver: &Driver) -> bool {
 #[cfg(windows)]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_output_format(driver: &Driver) -> u32 {
-    use windows::Win32::Graphics::Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Texture2D};
-    use windows::core::Interface;
-
-    // The render guard keeps the Runtime's borrowed texture live until GetDesc returns.
+    // This borrowed texture is used under the Stage render guard before another table call.
     let render = unsafe { &*driver.render.get() };
-    let Some(api) = render.api.filter(|_| !render.device.is_null()) else {
-        return 0;
-    };
-    let raw = unsafe { api.output_texture.expect("validated SR output texture")() };
-    let Some(texture) = (unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }) else {
-        return 0;
-    };
-    let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe { texture.GetDesc(&mut desc) };
-    desc.Format.0 as u32
+    match render.api {
+        Some(api) if !render.device.is_null() => unsafe {
+            let texture = api.output_texture.expect("validated SR output texture")();
+            crate::sr_d3d11::texture_format(texture)
+        },
+        _ => 0,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1247,14 +1209,6 @@ extern "C" fn rsf_anomaly_sr_overlay_report(driver: &Driver, out: &mut rsf_overl
     };
     copy_text(&mut report.reason, reason);
     *out = report;
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_start_refusal(result: i32, out: *mut c_char, size: usize) {
-    copy_text(
-        unsafe { std::slice::from_raw_parts_mut(out, size) },
-        &start_refusal(result),
-    );
 }
 
 #[unsafe(no_mangle)]

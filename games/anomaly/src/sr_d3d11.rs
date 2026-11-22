@@ -9,6 +9,10 @@ use std::ffi::{c_char, c_void};
 use std::ptr::{from_ref, null, null_mut};
 use targets::{TwinBatch, TwinBatchInfo, allocate_twins};
 
+#[cfg(windows)]
+mod native;
+#[cfg(windows)]
+pub(crate) use native::texture_format;
 mod passes;
 mod targets;
 #[cfg(test)]

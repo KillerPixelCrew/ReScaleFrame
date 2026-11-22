@@ -7888,3 +7888,13 @@ diagnostic readers use the saved option routes. The
 owner paths and remaining execution checks. Binding, formatting and locked
 offline metadata checks completed. Build, lint, fixture and device execution
 remain pending.
+### Anomaly SR typed D3D11 and fixture follow-up
+
+Rust now implements the typed SR D3D11 passes, timestamp queries, staging
+leaves and output-format lookup. The hook and Runtime API fixtures run from
+Rust through the native detour and DLL import bridges. Profile selection and
+the round-trip and upscale numeric comparisons also moved. Native profile
+assertions and part of the real-device harness remain.
+The [N06 source record](research/rust-anomaly-sr-stage.md#n06-typed-d3d11-and-fixture-follow-up)
+records the retained seams and verification. Builds, links, fixture execution
+and device checks remain pending.

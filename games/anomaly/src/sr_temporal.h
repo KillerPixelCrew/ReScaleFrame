@@ -10,6 +10,7 @@
 #include "sr_pass.h"
 #include <rescaleframe/d3d11_sr_api.h>
 #include <rescaleframe/overlay_api.h>
+#include <rescaleframe/sr_session.h>
 #include <windows.h>
 #include <array>
 #include <cstdint>
@@ -19,10 +20,10 @@ struct ID3D11Device;
 struct ID3D11DeviceContext;
 
 namespace rsf::anomaly::sr {
-enum class ApiStatus : uint8_t { Bound, Missing, Refused };
-// Validates a table from `query` exactly like overlay::bind_api: size, version, pipeline ABI and every entry. On
-// failure `out` is untouched and `reason` names the refusal. Null `query` is Missing.
-ApiStatus bind_sr_api(rsf_get_d3d11_sr_api_fn query, rsf_d3d11_sr_api& out, const char** reason) noexcept;
+using SrSettings = rsf_anomaly_sr_settings;
+inline constexpr uint32_t backend_dlss = RSF_SR_DLSS, backend_fsr3 = RSF_SR_FSR3,
+    backend_fsr4 = RSF_SR_FSR4, backend_xess = RSF_SR_XESS, backend_auto = RSF_SR_AUTO;
+inline constexpr SrSettings default_sr_settings{true, RSF_SR_AUTO, 1, 0};
 
 struct TemporalOptions {
     uint32_t stage{};                    // 4: inputs only (bilinear output), 5: temporal SR
@@ -47,9 +48,6 @@ enum class Refusal : uint8_t {
     Reinsert,     // evaluated, but the output pass failed: followed by a bilinear recovery attempt
     Count
 };
-// The overlay/status reason for a refused pipeline start (fits rsf_overlay_sr_report::reason, 96 bytes).
-std::string start_refusal_reason(int32_t result);
-
 struct TemporalCounters {
     std::array<uint64_t, 8> evaluated{};               // by RSF_SR_* backend id
     std::array<uint64_t, static_cast<std::size_t>(Refusal::Count)> refused{};
@@ -93,8 +91,6 @@ public:
     void configure(const rsf_anomaly_sr_driver_config&, rsf_game_log_fn log, void* user) noexcept;
     // Install time: query the Runtime's table. Stage 4 does not need it; Stage 5 refuses SR without it.
     bool bind(HMODULE runtime) noexcept;
-    // Test seam: a table supplied directly (validated the same way).
-    bool bind_table(const rsf_d3d11_sr_api& table) noexcept;
     // Any thread: the shared settings the overlay or the INI asks for. Applied at the next boundary().
     void request(const SrSettings&) noexcept;
     // Render thread, after the frame's last SR use and before Present (IRenderDeviceRender::End): start the pipeline

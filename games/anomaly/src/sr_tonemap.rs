@@ -2,6 +2,9 @@
 //! CPU oracle for the low tonemap and the stock UNORM8 conversion in the D3D11 fixtures.
 //! See docs/research/anomaly-sr-seam.md section 2.2.
 
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod roundtrip_fixture;
+
 const WHITE_SQUARED: f64 = 1.7 * 1.7;
 
 #[unsafe(no_mangle)]

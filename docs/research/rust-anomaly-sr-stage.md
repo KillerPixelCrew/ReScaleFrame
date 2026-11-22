@@ -404,3 +404,42 @@ names. The named-table bind seam used by synthetic Runtime API fixtures
 continues to exercise legacy startup directly. Production Stage 5 requires
 the admission and selected-provider exports. Git whitespace checks passed.
 Binding regeneration, builds, lint, fixtures and device runs remain pending.
+
+## N06 typed D3D11 and fixture follow-up
+
+Base `821642ae` already owns stage policy, pass sequencing and swap restoration
+in Rust. This change moves the typed COM instructions behind those owners.
+`sr_d3d11/native.rs` now retains and releases interfaces, describes textures and
+views, creates resources and fixed-function states, binds and draws the pass,
+and sets the viewport. It also acquires the back-buffer resource, creates and
+reads timestamp queries, and performs the staging copy, Map and Unmap.
+
+The timer reads the raw GetData HRESULT with DONOTFLUSH and only publishes
+disjoint data on S_OK. The copy and fullscreen draw clear predication and
+restore the predicate and its original BOOL before dropping the acquired
+reference. The CPU readback owner still checks the immediate context, exact
+device and one-sample descriptor. Its Mapping still lends rows until Drop
+unmaps subresource zero. The Runtime output-format lookup now inspects the
+borrowed texture in Rust during the same render-thread operation.
+
+| Path | Source result |
+| --- | --- |
+| `games/anomaly/src/sr_d3d11.cpp`, `sr_d3d11.h`, `sr_d3d11_platform.h` | Typed adapter COM leaves moved. C++ retains the private table, default SRV forwarding, the shared state-snapshot allocation seam, shader compiler exception translation, and typed consumer facades. |
+| `games/anomaly/src/sr_stage.cpp`, `sr_stage.h`, `sr_stage_platform.h` | Timer, staging, viewport and reference-count instructions moved. The guarded engine reads, original calls, hook registration and facade stay native. The production host now declines the two fixture seam virtual methods explicitly. At the base these methods were pure virtual and lacked overrides, so the host was abstract. The stage still uses `swap_handle` and the same scoped Rust operation. |
+| `games/anomaly/src/sr_settings.h`, `sr_pass.h` | Removed the standalone settings facade and the unreferenced native engine identity declarations. The temporal facade takes backend constants from the Runtime header. The pass header stays for typed consumers, including the device fixture's independent motion reference and the first-person depth bound used by FG. |
+| `games/anomaly/src/sr_profile.h`, `tests/anomaly_sr_profile.cpp` | Wide-name and SHA selection cases moved to Rust using the real C ABI and production identities. Standard and AVX native address/byte tables, the evidence reader and the native compile-time cross-domain assertions remain. |
+| `tests/anomaly_sr_hooks.cpp` | Removed. Rust owns the rmNear sequence and the Stage 1 to 3 guard/refusal cases with the same CTest entries. The bridge owns the actual MinHook detour, PE facts and the native build-table lease. |
+| `tests/anomaly_sr_runtime_api.cpp` | Removed. Rust owns all six cases, including the real DLL query, idle and binding checks, and synthetic lifecycle, refusal and backend announcement. The bridge links the Runtime import and forwards argv selection. |
+| `tests/anomaly_sr_roundtrip.cpp` | Rust owns every FP16 bit pattern, stock curve, nearest mapping and three bilinear/nearest upscale numeric comparisons. The device harness still owns hardware/WARP selection, debug layer, state and refusal checks, upscale identity and real twin/depth descriptor cases. |
+
+The Runtime's Auto admission and selected-provider startup remain in
+`sr_temporal.rs`. N04 motion capture, N05 shader owners, N07 swap and the CPU
+staging proof sources compare byte for byte with the base. The source check
+matched the 23 D3D11 and 75 stage slots, the designated initializers and the
+CTest registrations. Pinned Rust 1.94.1 formatting passed for the Anomaly
+package. Bindgen 0.72.1 with libclang 18.1.1 reproduced the scoped stage, swap,
+SR, motion and shader bindings. The full C++ parse with libclang 18 failed
+against the local MSVC STL, which requires Clang 22. MSVC `/Zs /W4 /WX`
+then accepted the seven touched C++ translation units. Locked offline
+Windows Cargo metadata and Git whitespace checks passed. These are source
+checks. Builds, links, fixtures and device execution remain pending.

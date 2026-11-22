@@ -169,29 +169,10 @@ static_assert(sr::backend_texture_list_offset + 24 == sr::backend_textures_ps_of
 static_assert(sr::xforms_project_offset == sr::xforms_view_offset + 64);
 }
 
+extern "C" int32_t rsf_anomaly_sr_build_selection_fixture(const rsf_anomaly_build_identity*) noexcept;
+
 int main() {
-    int failures = 0;
-    // Runtime selection, the path bootstrap and the observer take: wide file names, either hash case, no partial match.
-    struct Case { const wchar_t* name; const char* hash; const BuildProfile* expected; };
-    const Case cases[] = {
-        {L"AnomalyDX11.exe", dx11_hash, &standard_build},
-        {L"anomalydx11.exe", "C857B6F49D32C62245611B26106862A773185533856E8B858A7D7E849ED2FB4E", &standard_build},
-        {L"AnomalyDX11AVX.exe", avx_hash, &avx_build},
-        {L"ANOMALYDX11AVX.EXE", "2032ACFC041E215508692EF4079EF504C7BBABF1793D5668084099F734B92F12", &avx_build},
-        {L"AnomalyDX11AVX.exe", dx11_hash, nullptr},       // right hash, wrong executable
-        {L"AnomalyDX11.exe", avx_hash, nullptr},
-        {L"AnomalyDX10AVX.exe", avx_hash, nullptr},        // other renderers are not profiled
-        {L"AnomalyDX11.exe", "c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4", nullptr},   // truncated
-        {L"AnomalyDX11Ãƒâ€ž.exe", dx11_hash, nullptr},     // non-ASCII never matches
-        {L"", "", nullptr},
-    };
-    for (const auto& c : cases) {
-        if (find_build(std::wstring_view{c.name}, c.hash) != c.expected) {
-            std::printf("FAIL: find_build(%ls) selected %s\n", c.name, find_build(std::wstring_view{c.name}, c.hash)
-                ? find_build(std::wstring_view{c.name}, c.hash)->label : "none");
-            ++failures;
-        }
-    }
+    const auto failures = rsf_anomaly_sr_build_selection_fixture(build_identities.data());
     for (const auto& build : build_profiles)
         std::printf("%s (%s): image 0x%x; %zu native, %zu geometry + %zu layout, %zu SR function + %zu call-site, %zu motion sites; "
                     "unique guards native %zu geometry %zu SR %zu motion %zu; %zu first-person sites; %zu target slots\n",
