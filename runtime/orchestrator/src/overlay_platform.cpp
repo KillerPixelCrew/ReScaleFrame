@@ -53,18 +53,12 @@ int stop() noexcept try
 
 uint32_t valid_preset(uint32_t preset) noexcept { return rsf_dlss_preset_valid(preset); }
 
-void set_sharpening(const rsf_render_settings* settings) noexcept
-{
-    const auto options = rsf::render_settings::sharpening(*settings);
-    (void)rsf_dlss_pipeline_set_sharpening(&options);
-}
-
 constexpr rsf_overlay_platform platform{
     .window = window, .refresh = rsf_core_overlay_refresh_mhz, .foreground = foreground, .tick = tick,
     .start = start, .present = present, .stop = stop,
     .initialize_sharpening = nullptr, .valid_settings = nullptr,
     .valid_preset = valid_preset, .sanitize_sharpening = nullptr,
-    .set_sharpening = set_sharpening,
+    .set_sharpening = rsf_core_dlss_pipeline_apply_sharpening,
     .input_visible = rsf_overlay_input_visible, .input_set_visible = rsf_overlay_input_set_visible,
     .input_counters_get = rsf_overlay_input_counters_get, .input_routes_get = rsf_native_input_routes_get,
     .latency_status_get = rsf_native_latency_status_get, .fg_status_get = rsf_native_fg_status_get,

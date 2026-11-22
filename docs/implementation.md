@@ -7899,3 +7899,8 @@ assertions and part of the real-device harness remain.
 The [N06 source record](research/rust-anomaly-sr-stage.md#n06-typed-d3d11-and-fixture-follow-up)
 records the retained seams and verification. Builds, links, fixture execution
 and device checks remain pending.
+
+The D3D11 host and shared overlay now apply the same Rust sharpening projection.
+The settings header contains only the shared C declarations, and the embedded
+carrier still uses the original persistence entries. C11 and C++ syntax checks
+passed.

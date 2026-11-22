@@ -166,11 +166,6 @@ int32_t pipeline_preset(uint32_t preset) noexcept try
 {
     return rsf_dlss_pipeline_set_preset(preset);
 } catch (...) { return RSF_ERROR_NOT_READY; }
-void pipeline_sharpen(const rsf_render_settings* settings) noexcept try
-{
-    const auto sharpen = rsf::render_settings::sharpening(*settings);
-    (void)rsf_dlss_pipeline_set_sharpening(&sharpen);
-} catch (...) {}
 int32_t pipeline_status(rsf_d3d11h_pipeline_status* output) noexcept try
 {
     rsf_dlss_pipeline_status status{}; status.struct_size = sizeof(status);
@@ -296,7 +291,7 @@ const rsf_d3d11h_platform& platform()
         .pipeline_select = pipeline_select,
         .pipeline_quality = pipeline_quality,
         .pipeline_preset = pipeline_preset,
-        .pipeline_sharpen = pipeline_sharpen,
+        .pipeline_sharpen = rsf_core_dlss_pipeline_apply_sharpening,
         .pipeline_status = pipeline_status,
         .pipeline_colour = pipeline_colour,
         .pipeline_output = pipeline_output,
