@@ -299,9 +299,9 @@ generate("games/ac7/src/carrier_abi.rs", "games/ac7/include/rescaleframe/ac7_car
 generate("games/ac7/src/platform_abi.rs", "games/ac7/src/ac7_platform.h",
          "rsf_ac7_(platform|native_renderer(_options)?|renderer_log_fn|render_scope(_fn)?)", "RSF_AC7_DIAG_.*",
          ["-Isdk/game/include", "-Igames/ac7/include"],
-         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]", "--raw-line",
-          "use rsf_game_sys::{rsf_game_cpu_event_fn, rsf_game_render_config_fn, rsf_game_render_pass};",
+         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::sites_abi::rsf_ac7_renderer_leaves;",
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event_fn, rsf_game_render_config_fn, rsf_game_render_pass};",
           "--with-derive-custom-struct", "rsf_ac7_native_renderer_options=Copy,Clone"])
 generate("games/ac7/src/sites_abi.rs", "games/ac7/src/ac7_sites.h",
          "rsf_ac7_(code_(leaves|patch|patches)|renderer_leaves|call_relay|truesky_(patches|leaves))",
