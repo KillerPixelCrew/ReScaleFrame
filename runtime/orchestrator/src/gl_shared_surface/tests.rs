@@ -98,6 +98,8 @@ struct World {
     stall: bool,
     fail_signal: u32,
     fail_queue_wait: bool,
+    fail_release: bool,
+    fail_acquire: bool,
     fail_close: bool,
     fail_semaphore: bool,
     fail_memory: bool,
@@ -227,11 +229,15 @@ unsafe extern "C" fn gl_release(
     count: u32,
     textures: *const u32,
     layouts: *const u32,
-) {
+) -> u32 {
     let layouts = unsafe { std::slice::from_raw_parts(layouts, count as usize) };
     assert!(layouts.iter().all(|layout| *layout == LAYOUT_GENERAL));
     event(format!("release {value} [{}]", names(count, textures)));
+    if world(|world| std::mem::take(&mut world.fail_release)) {
+        return 0x502;
+    }
     world(|world| world.signalled = world.signalled.max(value));
+    GL_NO_ERROR
 }
 unsafe extern "C" fn gl_acquire(
     _: *const GlProcs,
@@ -240,8 +246,12 @@ unsafe extern "C" fn gl_acquire(
     count: u32,
     textures: *const u32,
     _: *const u32,
-) {
+) -> u32 {
     event(format!("acquire {value} [{}]", names(count, textures)));
+    if world(|world| std::mem::take(&mut world.fail_acquire)) {
+        return 0x502;
+    }
+    GL_NO_ERROR
 }
 unsafe extern "C" fn finish() {
     event("finish".into());
@@ -586,6 +596,34 @@ fn submit_must_match_the_batch_released_by_begin() {
     assert!(events().is_empty());
     assert_eq!(submit(context, &[scene, output]), OK);
     close_all(context, &[scene, output]);
+}
+
+#[test]
+fn refused_gl_release_never_queues_a_wait() {
+    let context = open_context();
+    let output = texture(context, RSF_GL_RGBA8);
+    events();
+    world(|world| world.fail_release = true);
+    assert_eq!(begin(context, &[output]).0, FEATURE_FAILED);
+    assert_eq!(events(), ["reset list7", "release 1 [3]", "close list7"]);
+    assert_eq!(begin(context, &[output]).0, FEATURE_FAILED);
+    assert!(events().is_empty());
+    close_all(context, &[output]);
+}
+
+#[test]
+fn refused_gl_acquire_retries_the_signalled_value() {
+    let context = open_context();
+    let output = texture(context, RSF_GL_RGBA8);
+    assert_eq!(begin(context, &[output]).0, OK);
+    events();
+    world(|world| world.fail_acquire = true);
+    assert_eq!(submit(context, &[output]), FEATURE_FAILED);
+    assert_eq!(events(), ["close list7", "execute list7", "signal 2", "acquire 2 [3]"]);
+    assert_eq!(begin(context, &[output]).0, OK);
+    assert_eq!(events(), ["acquire 2 [3]", "reset list9", "release 3 [3]", "queue wait 3"]);
+    assert_eq!(submit(context, &[output]), OK);
+    close_all(context, &[output]);
 }
 
 #[test]

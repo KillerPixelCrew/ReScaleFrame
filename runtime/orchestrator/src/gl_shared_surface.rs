@@ -91,8 +91,8 @@ pub(crate) struct Leaves {
     memory_delete: unsafe extern "C" fn(*const GlProcs, u32),
     texture_store: unsafe extern "C" fn(*const GlProcs, u32, u32, u32, u32, *mut u32) -> u32,
     texture_delete: unsafe extern "C" fn(u32),
-    release: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32),
-    acquire: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32),
+    release: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32) -> u32,
+    acquire: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32) -> u32,
     finish: unsafe extern "C" fn(),
     factory_create: unsafe extern "C" fn(*mut Handle) -> i32,
     adapter_find: unsafe extern "C" fn(Handle, *const u8, *mut Handle) -> i32,
@@ -237,6 +237,12 @@ enum Phase {
     Idle,
     Recording(Handoff),
     Unsignalled(Handoff),
+    AwaitingAcquire {
+        handoff: Handoff,
+        value: u64,
+        submitted: bool,
+    },
+    ReleaseFailed,
 }
 
 struct State {
@@ -362,7 +368,8 @@ impl Context {
     }
 
     // GL releases the batch to D3D12 at `value` and flushes so the queue can observe it.
-    fn release(&self, value: u64, batch: &Batch) {
+    fn release(&self, value: u64, batch: &Batch) -> u32 {
+        self.prior_errors();
         let layouts = [LAYOUT_GENERAL; BATCH];
         unsafe {
             (self.leaves.release)(
@@ -373,11 +380,12 @@ impl Context {
                 batch.names.as_ptr(),
                 layouts.as_ptr(),
             )
-        };
+        }
     }
 
     // GL reacquires the batch once the fence reaches `value`.
-    fn acquire(&self, value: u64, batch: &Batch) {
+    fn acquire(&self, value: u64, batch: &Batch) -> u32 {
+        self.prior_errors();
         let layouts = [LAYOUT_GENERAL; BATCH];
         unsafe {
             (self.leaves.acquire)(
@@ -388,25 +396,38 @@ impl Context {
                 batch.names.as_ptr(),
                 layouts.as_ptr(),
             )
-        };
+        }
     }
 
     // Completes an unsignalled handoff with a queue signal ordered after its commands. Only then
     // does GL wait to reacquire the textures and the slot gain a completion value.
     fn settle(&self, state: &mut State) -> bool {
-        let Phase::Unsignalled(handoff) = state.phase else {
-            return true;
+        if let Phase::Unsignalled(handoff) = state.phase {
+            state.serial += 1;
+            let value = state.serial;
+            let signalled = self.signal(value);
+            if failed(signalled) {
+                self.failure("D3D12 completion signal", signalled as u32);
+                return false;
+            }
+            state.phase = Phase::AwaitingAcquire {
+                handoff,
+                value,
+                submitted: true,
+            };
+        }
+        let Phase::AwaitingAcquire { handoff, value, submitted } = state.phase else {
+            return matches!(state.phase, Phase::Idle);
         };
-        state.serial += 1;
-        let complete = state.serial;
-        let signalled = self.signal(complete);
-        if failed(signalled) {
-            self.failure("D3D12 completion signal", signalled as u32);
+        let result = self.acquire(value, &handoff.batch);
+        if result != GL_NO_ERROR {
+            self.failure("GL semaphore acquire", result);
             return false;
         }
-        self.acquire(complete, &handoff.batch);
-        state.slots[handoff.slot].completion = complete;
-        state.next = (handoff.slot + 1) % SLOTS;
+        if submitted {
+            state.slots[handoff.slot].completion = value;
+            state.next = (handoff.slot + 1) % SLOTS;
+        }
         state.phase = Phase::Idle;
         true
     }
@@ -427,23 +448,32 @@ impl Context {
         }
         state.serial += 1;
         let ready = state.serial;
-        self.release(ready, batch);
+        let released = self.release(ready, batch);
         let current = &mut state.slots[index];
+        if released != GL_NO_ERROR {
+            unsafe { (l.list_close)(current.list.as_ptr()) };
+            state.phase = Phase::ReleaseFailed;
+            self.failure("GL semaphore release", released);
+            return FEATURE_FAILED;
+        }
+        let handoff = Handoff { slot: index, batch: *batch };
         let waited = unsafe { (l.queue_wait)(self.queue.as_ptr(), self.fence.as_ptr(), ready) };
         if failed(waited) {
             self.failure("D3D12 queue wait", waited as u32);
             unsafe { (l.list_close)(current.list.as_ptr()) };
             // GL's own signal satisfies `ready`, so the textures return to GL unchanged.
-            self.acquire(ready, batch);
+            state.phase = Phase::AwaitingAcquire {
+                handoff,
+                value: ready,
+                submitted: false,
+            };
+            self.settle(state);
             return FEATURE_FAILED;
         }
         for &resource in &batch.resources[..batch.count] {
             current.leases.push(unsafe { ComRef::retain(resource) });
         }
-        state.phase = Phase::Recording(Handoff {
-            slot: index,
-            batch: *batch,
-        });
+        state.phase = Phase::Recording(handoff);
         unsafe {
             list.write(current.list.as_ptr());
             slot.write(index as u32);
@@ -481,7 +511,9 @@ impl Context {
         if matches!(state.phase, Phase::Recording(_)) {
             return INVALID;
         }
-        if !self.settle(state) {
+        // A refused GL release never installed a D3D12 wait. Drain can retire the
+        // resources, but the context cannot record another ownership transfer.
+        if !matches!(state.phase, Phase::ReleaseFailed) && !self.settle(state) {
             return FEATURE_FAILED;
         }
         unsafe { (self.leaves.finish)() };
@@ -861,8 +893,11 @@ unsafe extern "C" fn rsf_gl_texture_destroy(texture: *mut Texture) {
     {
         return;
     }
-    if let Phase::Unsignalled(handoff) = &mut state.phase {
-        handoff.batch.forget(value.texture);
+    match &mut state.phase {
+        Phase::Unsignalled(handoff) | Phase::AwaitingAcquire { handoff, .. } => {
+            handoff.batch.forget(value.texture);
+        }
+        _ => {}
     }
     drop(state);
     let l = owner.leaves;

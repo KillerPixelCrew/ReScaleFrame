@@ -104,19 +104,24 @@ uint32_t texture_store(const Gl* gl, uint32_t memory, uint32_t internal, uint32_
 void texture_delete(uint32_t texture) { glDeleteTextures(1, &texture); }
 
 // Signals `value` after GL's prior work, releasing the textures, and flushes so the queue sees it.
-void release(const Gl* gl, uint32_t semaphore, uint64_t value, uint32_t count, const uint32_t* textures,
+uint32_t release(const Gl* gl, uint32_t semaphore, uint64_t value, uint32_t count, const uint32_t* textures,
              const uint32_t* layouts)
 {
     gl->semaphore_parameter(semaphore, fence_value, &value);
+    if (const auto error = glGetError(); error != GL_NO_ERROR) return error;
     gl->signal(semaphore, 0, nullptr, count, textures, layouts);
+    if (const auto error = glGetError(); error != GL_NO_ERROR) return error;
     glFlush();
+    return glGetError();
 }
 // Makes later GL work wait for `value` and reacquire the textures.
-void acquire(const Gl* gl, uint32_t semaphore, uint64_t value, uint32_t count, const uint32_t* textures,
+uint32_t acquire(const Gl* gl, uint32_t semaphore, uint64_t value, uint32_t count, const uint32_t* textures,
              const uint32_t* layouts)
 {
     gl->semaphore_parameter(semaphore, fence_value, &value);
+    if (const auto error = glGetError(); error != GL_NO_ERROR) return error;
     gl->wait(semaphore, 0, nullptr, count, textures, layouts);
+    return glGetError();
 }
 void finish() { glFinish(); }
 
