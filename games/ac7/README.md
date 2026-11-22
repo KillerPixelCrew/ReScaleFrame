@@ -97,33 +97,19 @@ AC7 uses a modified UE4.18 renderer on D3D11. The proxy loads the game plugin, w
 engine hooks, per-view resources and reconstruction insertion before bloom, exposure and tonemapping.
 The shared runtime owns vendor SDKs and the GPU-ordered D3D11/D3D12 SR bridge.
 
-Exact-build identity, the GameSDK table and the renderer lifecycle of
-`ReScaleFrame.Game.AC7.dll` are owned by the Rust crate `rsf-ac7` (`src/lib.rs`,
-`src/lifecycle.rs`), linked into the same DLL. `src/plugin.c` keeps the exported entry point
-and lends the renderer leaf snapshot; both DirectInput carriers stay native. See [the migration note](../../docs/research/rust-ac7-entry.md) for the
-moved behaviour and the remaining AC7 owners.
+`ReScaleFrame.Game.AC7.dll` is the Rust crate `rsf-ac7` plus a few C leaves; both DirectInput carriers
+stay native.
 
-The same crate owns the native renderer's exact-build code sites and their admission
-(`src/sites.rs`), the scene-precision and temporal velocity patch transactions (`src/patches.rs`)
-and the hook body guards (`src/guards.rs`). The renderer object, MinHook records, detours,
-engine relays, pass leases and protected code writes are `src/native_renderer.rs` (formerly
-`native_renderer.cpp`, see [its migration note](../../docs/research/rust-ac7-native-renderer.md));
-the SEH-guarded reads stay in `src/ac7_memory.c`. See [the site migration note](../../docs/research/rust-ac7-native-sites.md).
-The prepare/start/quiesce/stop transaction of those five renderer calls, with the pinned partial
-activation and retirement admission, is `src/renderer.rs`; `src/native_renderer.rs` lends the
-renderer object, MinHook, pinning, scopes, input hook, controller facts and TrueSky restores as
-leaves. See
-[the transaction migration note](../../docs/research/rust-ac7-renderer-transaction.md).
-The TrueSky plugin patches and call relays (sites, bytes, effect fingerprint, install, rollback and
-retirement) are `src/truesky.rs`; the relay handlers with their D3D11 checks and shaders, the
-module lookup and relay memory are `src/native_renderer/sky.rs`. See
-[the TrueSky migration note](../../docs/research/rust-ac7-truesky-relays.md).
-The queued RHI render scopes behind `ac7_render_scope.h` (admission, identity, serials, the
-begin/end stack and callbacks, lease order, the native list append and the engine-called marker
-function, quiesce/idle/destroy) are `src/render_scope.rs`; the C11 `src/render_scope_entry.c` keeps the two
-create calls and the SEH exception leaves that call consumer code. See
-[the render scope migration note](../../docs/research/rust-ac7-render-scopes.md).
+| Owner | Files |
+| --- | --- |
+| Exact-build identity, GameSDK table, renderer lifecycle (prepare, start, quiesce, stop, with pinned partial activation and retirement admission) | `lib.rs`, `lifecycle.rs`, `renderer.rs`; `plugin.c` keeps the exported entry point |
+| Exact-build code sites and their admission; scene-precision and temporal velocity patch transactions; hook body guards | `sites.rs`, `patches.rs`, `guards.rs` |
+| Renderer object, MinHook records, detours, engine relays, pass leases, protected code writes | `native_renderer.rs`, `native_renderer_platform.c`; SEH-guarded engine reads in `ac7_memory.c` |
+| TrueSky plugin patches and call relays (sites, bytes, effect fingerprint, install, rollback, retirement); relay handlers, D3D11 checks and shaders | `truesky.rs`, `native_renderer/sky.rs` |
+| Queued RHI render scopes behind `ac7_render_scope.h` (admission, identity, serials, begin/end stack, lease order, native list append, engine-called marker function) | `render_scope.rs`; `render_scope_entry.c` keeps the two create calls and the SEH leaves that call consumer code |
 
+Per-owner research is in the surviving `docs/research/rust-ac7-*.md` notes and
+[`ue418-hook-map.md`](../../docs/research/ue418-hook-map.md).
 The view reader handles the game's 4096-byte uniform buffer. Scene motion needs UE encoding
 removal, and the engine's camera transform supplies camera motion. The native integration sizes the
 game's own UI targets through engine owners, preserving grading and glow; texture promotion
