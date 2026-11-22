@@ -144,8 +144,6 @@ const SEPARATE_TRANSLUCENCY_GATE: &[u8; 15] =
 const SEPARATE_TRANSLUCENCY_PATCH: &[u8; 15] =
     b"\x66\x0f\x1f\x44\x00\x00\xb8\x00\x00\x80\x3f\x66\x0f\x6e\xc8";
 
-static EXECUTABLE_WIDE: [u16; EXECUTABLE.to_bytes_with_nul().len()] =
-    ascii_wide(EXECUTABLE.to_bytes_with_nul());
 static GAME_DLL: [u16; b"ReScaleFrame.Game.AC7.dll\0".len()] =
     ascii_wide(b"ReScaleFrame.Game.AC7.dll\0");
 static WINDOW_CLASS: [u16; b"UnrealWindow\0".len()] = ascii_wide(b"UnrealWindow\0");
@@ -270,11 +268,6 @@ unsafe extern "C" fn rsf_ac7_carrier_translucency_scale(
     } else {
         requested.clamp(0.25, 4.0)
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_carrier_executable() -> *const u16 {
-    EXECUTABLE_WIDE.as_ptr()
 }
 
 #[unsafe(no_mangle)]

@@ -2,7 +2,7 @@
 #ifndef RESCALEFRAME_AC7_CARRIER_H
 #define RESCALEFRAME_AC7_CARRIER_H
 
-/* Private interface between rsf-ac7 and the two combined carriers. */
+/* Private interface between rsf-ac7 and the AC7 carrier. */
 #include <stddef.h>
 #include <rescaleframe/game_api.h>
 
@@ -10,8 +10,6 @@
 extern "C" {
 #endif
 
-/* Process selection is a name check. GameSDK detection still checks the executable hash. */
-const wchar_t* rsf_ac7_carrier_executable(void);
 const wchar_t* rsf_ac7_carrier_game_dll(void);
 const wchar_t* rsf_ac7_carrier_window_class(void);
 /* Borrows sha256 for the same duration as the caller's GameSDK probe. */

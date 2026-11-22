@@ -120,16 +120,8 @@ struct AttachPath(UnsafeCell<[u16; PATH_CAPACITY]>);
 unsafe impl Sync for AttachPath {}
 static EXECUTABLE: AttachPath = AttachPath(UnsafeCell::new([0; PATH_CAPACITY]));
 
-type Ac7Executable = unsafe extern "C" fn() -> *const u16;
-type Ac7Attach = unsafe extern "system" fn(HMODULE, u32, *mut c_void) -> BOOL;
-
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_shim_attach(
-    instance: HMODULE,
-    event: u32,
-    ac7_executable: Ac7Executable,
-    ac7_attach: Ac7Attach,
-) -> BOOL {
+unsafe extern "C" fn rsf_shim_attach(instance: HMODULE, event: u32) -> BOOL {
     if event != DLL_PROCESS_ATTACH {
         return 1;
     }
@@ -143,10 +135,6 @@ unsafe extern "C" fn rsf_shim_attach(
             .unwrap_or(path);
         let matches =
             |name| unsafe { CompareStringOrdinal(leaf.as_ptr(), -1, name, -1, 1) == CSTR_EQUAL };
-        if matches(unsafe { ac7_executable() }) {
-            unsafe { DisableThreadLibraryCalls(instance) };
-            return unsafe { ac7_attach(instance, event, null_mut()) };
-        }
         // Unity's crash reporter imports this shim for version forwarding.
         const CRASH64: [u16; 24] = wide_literal(b"UnityCrashHandler64.exe");
         const CRASH32: [u16; 24] = wide_literal(b"UnityCrashHandler32.exe");
