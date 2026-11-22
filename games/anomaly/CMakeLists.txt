@@ -1,7 +1,6 @@
 add_library(rsf_game_anomaly SHARED src/plugin.def src/bootstrap_platform.c src/native_observer_platform.c src/native_hooks_platform.c
     src/native_geometry_platform.c src/engine_slots.c
     src/sr_d3d11_platform.c src/sr_stage_platform.c)
-rsf_add_rust_static(rsf_anomaly_rust rsf_rust_anomaly rsf-anomaly rsf_anomaly)
 rsf_add_rust_static(rsf_anomaly_plugin_rust rsf_rust_anomaly_plugin rsf-anomaly rsf_anomaly
     --features native-entry)
 foreach(symbol IN ITEMS rsf_anomaly_start rsf_anomaly_observation rsf_get_game_plugin_api)

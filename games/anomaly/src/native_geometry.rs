@@ -4,7 +4,7 @@
 //! or C++ unwind crosses Rust. Engine reads have separate guarded native leaves.
 
 mod coverage;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "sr-fixtures"))]
 mod fixture;
 mod hook_sites;
 mod profile;

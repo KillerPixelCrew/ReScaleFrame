@@ -133,7 +133,7 @@ fn idle_contract(query: Query) {
         assert_eq!(api.stop.unwrap()(), NOT_RUNNING);
         assert!(api.output_texture.unwrap()().is_null());
         assert_eq!(api.reset.unwrap()(), OK);
-        assert_eq!(api.request_dump.unwrap()(null()), INVALID_ARGUMENT);
+        assert_eq!(api.request_dump.unwrap()(ptr::null()), INVALID_ARGUMENT);
         assert_eq!(api.request_dump.unwrap()(c"x".as_ptr()), NOT_RUNNING);
         assert_eq!(
             api.select_backend.unwrap()(XESS, null_mut(), null_mut()),
@@ -184,7 +184,7 @@ fn idle_contract(query: Query) {
         let mut pass: rsf_game_render_pass = MaybeUninit::zeroed().assume_init();
         pass.struct_size = size_of::<rsf_game_render_pass>() as u32 - 8;
         assert_eq!(evaluate(null_mut(), &pass), INVALID_ARGUMENT);
-        assert_eq!(evaluate(fake, null()), INVALID_ARGUMENT);
+        assert_eq!(evaluate(fake, ptr::null()), INVALID_ARGUMENT);
         assert_eq!(evaluate(fake, &pass), INVALID_ARGUMENT);
         pass.struct_size += 8;
         pass.role = RSF_GAME_RENDER_SR;
@@ -222,7 +222,7 @@ fn adapter_binding(query: Query) {
     let mut real = header();
     assert_eq!(unsafe { query(&mut real) }, OK);
     let mut out = rsf_d3d11_sr_api::default();
-    let mut reason = null();
+    let mut reason = ptr::null();
     assert!(matches!(
         unsafe { rsf_anomaly_sr_query(None, &mut out, &mut reason) },
         ApiStatus::Missing
