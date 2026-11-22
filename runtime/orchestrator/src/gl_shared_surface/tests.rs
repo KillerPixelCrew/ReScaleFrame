@@ -574,6 +574,21 @@ fn normal_transactions_keep_the_native_order() {
 }
 
 #[test]
+fn submit_must_match_the_batch_released_by_begin() {
+    let context = open_context();
+    let scene = texture(context, RSF_GL_RGBA16F);
+    let output = texture(context, RSF_GL_RGBA8);
+    assert_eq!(begin(context, &[scene, output]).0, OK);
+    events();
+    assert_eq!(submit(context, &[]), INVALID);
+    assert_eq!(submit(context, &[output, scene]), INVALID);
+    assert_eq!(submit(context, &[scene, scene]), INVALID);
+    assert!(events().is_empty());
+    assert_eq!(submit(context, &[scene, output]), OK);
+    close_all(context, &[scene, output]);
+}
+
+#[test]
 fn signal_refused_after_execute_retains_the_transaction() {
     let context = open_context();
     let scene = texture(context, RSF_GL_RGBA16F);

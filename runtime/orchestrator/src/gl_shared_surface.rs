@@ -192,7 +192,7 @@ impl Drop for NtHandle {
 }
 
 // Textures named by one begin or submit call, validated against their owner.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Batch {
     names: [u32; BATCH],
     resources: [Handle; BATCH],
@@ -235,7 +235,7 @@ struct Handoff {
 #[derive(Clone, Copy)]
 enum Phase {
     Idle,
-    Recording(usize),
+    Recording(Handoff),
     Unsignalled(Handoff),
 }
 
@@ -440,7 +440,10 @@ impl Context {
         for &resource in &batch.resources[..batch.count] {
             current.leases.push(unsafe { ComRef::retain(resource) });
         }
-        state.phase = Phase::Recording(index);
+        state.phase = Phase::Recording(Handoff {
+            slot: index,
+            batch: *batch,
+        });
         unsafe {
             list.write(current.list.as_ptr());
             slot.write(index as u32);
@@ -450,14 +453,14 @@ impl Context {
 
     fn submit(&self, state: &mut State, batch: &Batch) -> i32 {
         let l = self.leaves;
-        let Phase::Recording(index) = state.phase else {
+        let Phase::Recording(handoff) = state.phase else {
             return INVALID;
         };
-        let list = state.slots[index].list.as_ptr();
-        state.phase = Phase::Unsignalled(Handoff {
-            slot: index,
-            batch: *batch,
-        });
+        if handoff.batch != *batch {
+            return INVALID;
+        }
+        let list = state.slots[handoff.slot].list.as_ptr();
+        state.phase = Phase::Unsignalled(handoff);
         let closed = unsafe { (l.list_close)(list) };
         if failed(closed) {
             // Nothing executes. The queue still holds its wait for GL, so the handoff is
@@ -853,6 +856,11 @@ unsafe extern "C" fn rsf_gl_texture_destroy(texture: *mut Texture) {
     let Some(mut state) = owner.lock() else {
         return;
     };
+    if matches!(state.phase, Phase::Recording(handoff)
+        if handoff.batch.names[..handoff.batch.count].contains(&value.texture))
+    {
+        return;
+    }
     if let Phase::Unsignalled(handoff) = &mut state.phase {
         handoff.batch.forget(value.texture);
     }

@@ -27,7 +27,8 @@ rsf_backend_result rsf_gl_graphics(rsf_gl_context*, void** device, void** queue)
 rsf_backend_result rsf_gl_texture_create(rsf_gl_context*, uint32_t width, uint32_t height, uint32_t format, rsf_gl_texture**);
 rsf_backend_result rsf_gl_texture_get(rsf_gl_texture*, rsf_gl_texture_info*);
 // Releases GL textures to D3D12 and returns an open list. Resources enter/leave
-// D3D12 in COMMON. Submit even when evaluation refuses, so the GL wait is signalled.
+// D3D12 in COMMON. Submit the identical ordered batch even when evaluation refuses,
+// so the GL wait is signalled. A mismatched submit leaves the recording open.
 rsf_backend_result rsf_gl_begin(rsf_gl_context*, uint32_t count, rsf_gl_texture* const*, void** list, uint32_t* slot);
 rsf_backend_result rsf_gl_submit(rsf_gl_context*, uint32_t count, rsf_gl_texture* const*);
 // CPU waits are limited to command-slot reuse and explicit resource retirement.
