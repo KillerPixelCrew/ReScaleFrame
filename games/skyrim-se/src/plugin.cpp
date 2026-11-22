@@ -157,10 +157,8 @@ void observe_upload(void* renderer, uint8_t flags) noexcept
 
 int32_t admit_observers()
 {
-    wchar_t path[32768]{};
-    const auto length = GetModuleFileNameW(nullptr, path, 32768);
     rsf_skyrim_observer_targets sites{};
-    const auto result = rsf_skyrim_observer_admit(path, length,
+    const auto result = rsf_skyrim_observer_admit(
         []() noexcept -> int32_t { return rsf_skyrim_sampling_guard(); },
         []() noexcept -> int32_t { return rsf_skyrim_presentation_guard(); }, &sites);
     if (result == 1) {
@@ -271,9 +269,6 @@ const rsf_skyrim_session_leaves session_leaves{
     [](const rsf_game_host_services* host, const char* message) noexcept {
         try { if (host && host->log) host->log(host->user, message); return true; }
         catch (...) { return false; }
-    },
-    [](uintptr_t module, wchar_t* path, uint32_t capacity) noexcept {
-        return uint32_t(GetModuleFileNameW(reinterpret_cast<HMODULE>(module), path, capacity));
     },
     [](uintptr_t create, const rsf_d3d11_host_setup* setup, rsf_game_host_services* services, int32_t* result) noexcept {
         try { *result = reinterpret_cast<CreateHost>(create)(setup, services); return true; }

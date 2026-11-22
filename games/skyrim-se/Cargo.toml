@@ -11,6 +11,14 @@ crate-type = ["staticlib"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-windows = { path = "../../integrations/windows" }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+] }
 winapi = { version = "=0.3.9", features = ["d3d11", "dxgi", "processthreadsapi", "profileapi", "winuser"] }
 
 [lints]

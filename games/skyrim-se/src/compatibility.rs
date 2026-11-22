@@ -4,8 +4,7 @@
 mod initializer;
 
 use std::cell::Cell;
-use std::ffi::{c_char, c_void};
-use std::slice;
+use std::ffi::c_void;
 
 use crate::layout;
 
@@ -141,26 +140,9 @@ fn validate(image: &[u8]) -> Option<()> {
     Some(())
 }
 
-/// The native verifier lends the hex digest while its read-only file handle is held.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_cs_hash_matches(bytes: *const c_char, len: usize) -> bool {
-    len == SHA256.len()
-        && !bytes.is_null()
-        && unsafe { slice::from_raw_parts(bytes.cast::<u8>(), len) } == SHA256
-}
-
-/// The caller keeps the read-only file mapping live. The optional loaded image is read through a guarded leaf.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_cs_profile(
-    image: *const u8,
-    len: usize,
-    module: usize,
-    read: Read,
-) -> bool {
-    if image.is_null()
-        || !(1..=MAX_IMAGE_BYTES).contains(&len)
-        || validate(unsafe { slice::from_raw_parts(image, len) }).is_none()
-    {
+/// Verify the protected file mapping and optionally the matching live module.
+fn profile_matches(image: &[u8], module: usize, read: Read) -> bool {
+    if !(1..=MAX_IMAGE_BYTES).contains(&image.len()) || validate(image).is_none() {
         return false;
     }
     module == 0

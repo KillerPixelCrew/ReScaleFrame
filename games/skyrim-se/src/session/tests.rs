@@ -48,10 +48,6 @@ unsafe extern "C" fn log(_: *const rsf_game_host_services, _: *const c_char) -> 
     true
 }
 
-unsafe extern "C" fn module_path(_: usize, _: *mut u16, _: u32) -> u32 {
-    0
-}
-
 unsafe extern "C" fn host_create(
     _: usize,
     _: *const HostSetup,
@@ -110,7 +106,6 @@ fn leaves() -> Leaves {
         checkpoint,
         compatibility_status,
         log,
-        module_path,
         host_create,
         host_set_active,
         accept_window,

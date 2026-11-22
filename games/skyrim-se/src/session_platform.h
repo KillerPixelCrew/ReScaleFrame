@@ -8,7 +8,7 @@
 // services. The leaves keep the C++ subsystems, the detours and their engine facts.
 #include "observer_platform.h"
 
-#define RSF_SKYRIM_SESSION_LEAVES_VERSION 2u
+#define RSF_SKYRIM_SESSION_LEAVES_VERSION 3u
 
 // Native subsystem operations (plugin.cpp). value is 0 or 1 unless stated. services is read only
 // by the operations marked "services".
@@ -45,8 +45,6 @@ struct rsf_skyrim_session_leaves {
     const char* (*compatibility_status)();
     // Guarded host log. A null log completes without a call.
     bool (*log)(const rsf_game_host_services* host, const char* message);
-    // GetModuleFileNameW: the length written, or 0.
-    uint32_t (*module_path)(uintptr_t module, wchar_t* path, uint32_t capacity);
     // Guarded Runtime rsf_d3d11_host_create and rsf_d3d11_host_set_active at the given exports.
     bool (*host_create)(uintptr_t create, const rsf_d3d11_host_setup* setup,
         rsf_game_host_services* services, int32_t* result);
@@ -54,7 +52,7 @@ struct rsf_skyrim_session_leaves {
     // The game window class policy lent to the presentation bridge.
     int (*accept_window)(void* user, void* window);
 };
-static_assert(sizeof(rsf_skyrim_session_leaves) == 8 + 11 * sizeof(void*));
+static_assert(sizeof(rsf_skyrim_session_leaves) == 8 + 10 * sizeof(void*));
 static_assert(sizeof(rsf_motion_decode_params) == 48);
 static_assert(offsetof(rsf_d3d11_host_setup, depth_far_plane) == 160 && offsetof(rsf_d3d11_host_setup, motion) == 80 &&
     offsetof(rsf_d3d11_host_setup, quality_choices) == 128 &&

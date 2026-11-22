@@ -587,7 +587,9 @@ name = "rsf-skyrim-se"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "rsf-windows",
  "winapi",
+ "windows-sys",
 ]
 
 [[package]]

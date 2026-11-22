@@ -316,3 +316,30 @@ Deliberate differences, all on exception paths the former code left partial:
 Checks: source comparison against the removed C++, `rustfmt --edition 2024 --check` with rustfmt
 1.11.0, `cargo metadata --locked --offline` and `git diff --check`. Two Rust regressions in
 `session/tests.rs` cover the refused and the throwing start stage; they remain unrun.
+
+## Startup and CPU follow-up
+
+S01 publishes the checked platform before compatibility and observer admission. Native creation
+calls the I01 Steam ABI directly after MinHook and the cold renderer-owner guard. Community Shaders
+uses the same guarded owner observation. Repeated lookups of the captured initializer keep the
+wrapper, and only its first invocation can claim the handoff. Rust now owns the Win32 module
+lookup and pin, fingerprint, compatibility file mapping and startup observations. The
+compatibility probe holds a read-only file handle across fingerprinting and mapping to preserve the
+existing file sharing contract.
+
+CPU preparation checks the native sites and captures the clock once per prepare. A separate bind
+publishes the final Runtime services. Start still rechecks the live hooks before enabling them.
+Poll completion and conflict checks share a publication lock. A nested RenderEntry restores its
+parent scope and classification from a receipt and retains frame-wide counters. The native detours
+keep return-address capture, engine original calls and guarded native exception boundaries.
+
+Runtime activation errors propagate through startup and control calls. Failed rollback records
+which stages still owe cleanup. Quiesce can retry that cleanup before the Runtime moves to stop.
+Start refuses a session with withdrawn admission. The S02 auxiliary and resolution retirement
+checks and session render leases remain part of the lifecycle.
+
+The public D3D11 setup and creation records now share generated SDK bindings across Skyrim,
+Fallout 4 and the Runtime. The portable CPU policy assertions moved to Rust. The
+`skyrim_input_contract` CTest executable still exercises real guarded input-list reads and the
+native RenderEntry ABI. Verification covered source checks, Rust 1.94.1 formatting, locked offline
+metadata and focused bindgen 0.72.1 regeneration. Builds and fixtures remain unrun.

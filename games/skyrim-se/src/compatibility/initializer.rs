@@ -2,16 +2,33 @@
 //! Process-lived Community Shaders resolver and initializer transaction.
 
 use super::{
-    CONFIGURE, HDR_PROCESS, HdrCall, INITIALIZE, Read, allowed, before_device, excluded_byte,
-    features_inactive,
+    CONFIGURE, HDR_PROCESS, HdrCall, INITIALIZE, MAX_IMAGE_BYTES, Read, SHA256, allowed,
+    before_device, excluded_byte, features_inactive, profile_matches,
 };
 use crate::platform::{self, Platform};
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, OsString, c_char, c_void};
+use std::fs::OpenOptions;
+use std::os::windows::{ffi::OsStringExt, fs::OpenOptionsExt, io::AsRawHandle};
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, FreeLibrary, GetLastError, HANDLE,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_DIRECTORY, FILE_SHARE_READ, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+};
+use windows_sys::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleHandleExW, GetModuleHandleW,
+};
+
+use windows_sys::Win32::System::Memory::{
+    CreateFileMappingW, FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, PAGE_READONLY,
+    UnmapViewOfFile,
+};
 
 const PATH_LIMIT: usize = 32768;
+const MODULE_NAME: *const u16 = windows_sys::w!("CommunityShaders.dll");
 const EXCEPTION: &CStr = c"CS initializer exception; RSF coexistence refused for this process.";
 const ARMED: &CStr = c"CS initializer interception armed before module load; awaiting exact-profile initialization if present.";
 const EXCLUDED: &CStr = c"CS 1.9.1 Upscaling lifecycle excluded; original configuration and other feature initialization forwarded; runtime coexistence unvalidated.";
@@ -21,14 +38,7 @@ type Withdraw = unsafe extern "C" fn();
 #[repr(C)]
 struct Leaves {
     read: Read,
-    current_module: unsafe extern "C" fn() -> usize,
-    borrow_module: unsafe extern "C" fn(usize) -> usize,
-    release_module: unsafe extern "C" fn(usize),
-    module_path: unsafe extern "C" fn(usize, *mut u16, u32) -> u32,
-    file_kind: unsafe extern "C" fn(*const u16) -> u32,
-    profile: unsafe extern "C" fn(*const u16, usize) -> bool,
     hook_initialize: unsafe extern "C" fn() -> bool,
-    loader_callout: unsafe extern "C" fn(usize) -> bool,
     initialize: unsafe extern "C" fn(usize, *const c_void) -> u32,
     resolver_detour: *const c_void,
     initialize_detour: usize,
@@ -36,7 +46,7 @@ struct Leaves {
     hdr_detour: *const c_void,
 }
 
-const _: () = assert!(size_of::<Leaves>() == 112);
+const _: () = assert!(size_of::<Leaves>() == 56);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -104,35 +114,120 @@ fn refuse(reason: &'static CStr, withdraw: bool) {
     }
 }
 
-struct Module<'a> {
-    value: usize,
-    leaves: &'a Leaves,
+fn current_module() -> usize {
+    unsafe { GetModuleHandleW(MODULE_NAME) as usize }
 }
 
-impl<'a> Module<'a> {
-    fn borrow(leaves: &'a Leaves, address: usize) -> Option<Self> {
-        let value = unsafe { (leaves.borrow_module)(address) };
-        (value != 0).then(|| Self { value, leaves })
+struct Module(usize);
+
+impl Module {
+    fn borrow(address: usize) -> Option<Self> {
+        let (flags, name) = if address == 0 {
+            (0, MODULE_NAME)
+        } else {
+            (
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                address as *const u16,
+            )
+        };
+        let mut hold = ptr::null_mut();
+        // A reference keeps the exact module loaded throughout the handoff.
+        let loaded = unsafe { GetModuleHandleExW(flags, name, &mut hold) };
+        (loaded != 0).then(|| Self(hold as usize))
     }
 }
 
-impl Drop for Module<'_> {
+impl Drop for Module {
     fn drop(&mut self) {
-        unsafe { (self.leaves.release_module)(self.value) };
+        unsafe { FreeLibrary(self.0 as _) };
     }
 }
 
-fn module_path(leaves: &Leaves, module: usize, buffer: &mut [u16; PATH_LIMIT]) -> Option<usize> {
-    let len =
-        unsafe { (leaves.module_path)(module, buffer.as_mut_ptr(), PATH_LIMIT as u32) } as usize;
+fn module_path(module: usize, buffer: &mut [u16; PATH_LIMIT]) -> Option<usize> {
+    let len = platform::module_path(module, buffer);
     (len != 0 && len < PATH_LIMIT).then_some(len)
+}
+
+fn file_kind(path: &[u16]) -> u32 {
+    let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
+    if attributes != INVALID_FILE_ATTRIBUTES {
+        return if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+            3
+        } else {
+            2
+        };
+    }
+    match unsafe { GetLastError() } {
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => 1,
+        _ => 0,
+    }
+}
+
+fn loader_callout(address: usize) -> bool {
+    // Checked ntdll RtlIsThreadWithinLoaderCallout export.
+    let query = unsafe { std::mem::transmute::<usize, unsafe extern "system" fn() -> u8>(address) };
+    unsafe { query() != 0 }
+}
+
+struct Mapping(HANDLE);
+
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+struct View(MEMORY_MAPPED_VIEW_ADDRESS);
+
+impl Drop for View {
+    fn drop(&mut self) {
+        unsafe { UnmapViewOfFile(self.0) };
+    }
+}
+
+fn inspect_profile(path: &[u16], module: usize, read: Read) -> Option<bool> {
+    let path = OsString::from_wide(path);
+    let path = std::path::Path::new(&path);
+    // This read-only handle denies writes and replacement through fingerprinting and mapping.
+    let file = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(path)
+        .ok()?;
+    let length = usize::try_from(file.metadata().ok()?.len()).ok()?;
+    if !(1..=MAX_IMAGE_BYTES).contains(&length)
+        || platform::hex_sha256(path).as_ref() != Some(SHA256)
+    {
+        return Some(false);
+    }
+    let mapping = unsafe {
+        CreateFileMappingW(
+            file.as_raw_handle().cast(),
+            ptr::null(),
+            PAGE_READONLY,
+            0,
+            0,
+            ptr::null(),
+        )
+    };
+    if mapping.is_null() {
+        return None;
+    }
+    let mapping = Mapping(mapping);
+    let view = unsafe { MapViewOfFile(mapping.0, FILE_MAP_READ, 0, 0, length) };
+    if view.Value.is_null() {
+        return None;
+    }
+    let view = View(view);
+    let bytes = unsafe { std::slice::from_raw_parts(view.0.Value.cast::<u8>(), length) };
+    Some(profile_matches(bytes, module, read))
 }
 
 fn installed_profile(leaves: &Leaves) -> Result<(), &'static CStr> {
     let mut path = [0; PATH_LIMIT];
-    if let Some(module) = Module::borrow(leaves, 0) {
-        return if module_path(leaves, module.value, &mut path).is_some()
-            && unsafe { (leaves.profile)(path.as_ptr(), module.value) }
+    if let Some(module) = Module::borrow(0) {
+        return if module_path(module.0, &mut path)
+            .is_some_and(|len| inspect_profile(&path[..len], module.0, leaves.read) == Some(true))
         {
             Err(c"Community Shaders 1.9.1 already present before interception; prior initialization cannot be excluded.")
         } else {
@@ -140,7 +235,7 @@ fn installed_profile(leaves: &Leaves) -> Result<(), &'static CStr> {
         };
     }
     let unavailable = c"Community Shaders presence check failed: executable directory unavailable.";
-    let length = module_path(leaves, 0, &mut path).ok_or(unavailable)?;
+    let length = module_path(0, &mut path).ok_or(unavailable)?;
     let directory = path[..length]
         .iter()
         .rposition(|&unit| unit == u16::from(b'\\'))
@@ -154,9 +249,11 @@ fn installed_profile(leaves: &Leaves) -> Result<(), &'static CStr> {
     candidate.extend_from_slice(&path[..directory]);
     candidate.extend(suffix.encode_utf16());
     candidate.push(0);
-    match unsafe { (leaves.file_kind)(candidate.as_ptr()) } {
+    match file_kind(&candidate) {
         1 => Ok(()), // absent file or path
-        2 if unsafe { (leaves.profile)(candidate.as_ptr(), 0) } => Ok(()),
+        2 if inspect_profile(&candidate[..candidate.len() - 1], 0, leaves.read) == Some(true) => {
+            Ok(())
+        }
         0 => Err(c"Community Shaders presence check failed: installed plugin path unreadable."),
         _ => Err(
             c"Community Shaders installed profile unknown or unreadable; early handover refused.",
@@ -184,7 +281,7 @@ fn arm(platform: &Platform, leaves: &Leaves) -> Result<(), &'static CStr> {
     );
     if target == 0
         || callout == 0
-        || unsafe { (leaves.loader_callout)(callout) }
+        || loader_callout(callout)
         || platform.pin_module(leaves.resolver_detour.addr()) == 0
         || !create_hook(platform, 0, target, leaves.resolver_detour)
     {
@@ -202,7 +299,7 @@ fn arm(platform: &Platform, leaves: &Leaves) -> Result<(), &'static CStr> {
         platform.hook_disable(target);
         return Err(reason);
     }
-    if unsafe { (leaves.current_module)() } != 0 {
+    if current_module() != 0 {
         let mut state = state();
         if state.phase == Phase::Armed {
             let reason = c"CS appeared before initializer interception completed; startup ordering ambiguous.";
@@ -271,7 +368,7 @@ unsafe extern "C" fn rsf_skyrim_cs_resolved(
         || module == 0
         || name.addr() <= 0xffff
         || unsafe { CStr::from_ptr(name) } != c"SKSEPlugin_Load"
-        || module != unsafe { (leaves.current_module)() }
+        || module != current_module()
     {
         return result;
     }
@@ -311,7 +408,7 @@ fn initialize(platform: &Platform, leaves: &Leaves, skse: *const c_void) -> bool
     let Some((module, original, callout)) = claim else {
         return false;
     };
-    if callout == 0 || unsafe { (leaves.loader_callout)(callout) } {
+    if callout == 0 || loader_callout(callout) {
         refuse(
             c"CS handover refused: initializer entered from a loader callout.",
             false,
@@ -321,9 +418,9 @@ fn initialize(platform: &Platform, leaves: &Leaves, skse: *const c_void) -> bool
     let borrowed = if module == 0 {
         None
     } else {
-        Module::borrow(leaves, module)
+        Module::borrow(module)
     };
-    let Some(_module) = borrowed.filter(|hold| hold.value == module) else {
+    let Some(_module) = borrowed.filter(|hold| hold.0 == module) else {
         refuse(
             c"CS initializer module no longer available; ownership refused.",
             false,
@@ -331,10 +428,10 @@ fn initialize(platform: &Platform, leaves: &Leaves, skse: *const c_void) -> bool
         return false;
     };
     let mut path = [0; PATH_LIMIT];
-    let length = module_path(leaves, module, &mut path);
+    let length = module_path(module, &mut path);
     if module.checked_add(INITIALIZE) != Some(original)
-        || length.is_none()
-        || !unsafe { (leaves.profile)(path.as_ptr(), module) }
+        || !length
+            .is_some_and(|len| inspect_profile(&path[..len], module, leaves.read) == Some(true))
         || features_inactive(module, false, leaves.read) != Some(true)
         || before_device(platform.main_module(), leaves.read) != Some(true)
     {
@@ -458,12 +555,12 @@ fn render_allowed(leaves: &Leaves, module: usize) -> bool {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_cs_render_allowed(leaves: &Leaves) -> bool {
-    render_allowed(leaves, unsafe { (leaves.current_module)() })
+    render_allowed(leaves, current_module())
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_cs_status(leaves: &Leaves) -> *const c_char {
-    let module = unsafe { (leaves.current_module)() };
+    let module = current_module();
     let (phase, reason) = {
         let state = state();
         (state.phase, state.reason)

@@ -2,20 +2,17 @@
 // Native leaves of the Skyrim SE native-creation owner. The Rust crate rsf-skyrim-se
 // (src/creation.rs, src/layout.rs) owns the guarded thunk and route profiles, the cold-owner
 // rule, admission order, Runtime scope transaction, refusals and messages. This file keeps the
-// fault-guarded read, Win32 module/memory/last-error calls, MinHook, exception guards around host
+// fault-guarded read, MinHook, exception guards around host
 // and Runtime callbacks, the Community Shaders gate, and the detour that
 // captures the native return address and calls the original on its own frame.
 #include "native_creation_platform.h"
 #include "observer_platform.h"
 #include "compatibility.h"
-#include <rescaleframe/sha256_file.h>
 #include <MinHook.h>
 #include <windows.h>
 #include <d3d11.h>
 #include <cstddef>
 #include <cstring>
-#include <iterator>
-#include <string>
 #if defined(_MSC_VER)
 #include <intrin.h>
 #endif
@@ -27,13 +24,12 @@ using Begin = decltype(&rsf_d3d11_host_creation_begin);
 using End = decltype(&rsf_d3d11_host_creation_end);
 // creation.rs reads OutputWindow from the borrowed description at this offset.
 static_assert(sizeof(DXGI_SWAP_CHAIN_DESC) == 72 && offsetof(DXGI_SWAP_CHAIN_DESC, OutputWindow) == 48);
-static_assert(sizeof(rsf_skyrim_memory_region) == 32);
 static_assert(sizeof(rsf_d3d11_creation_scope) == 24 && sizeof(rsf_d3d11_native_chain) == 32);
 static_assert(sizeof(rsf_skyrim_creation_call) == 136 && offsetof(rsf_skyrim_creation_call, native_result) == 48 &&
     offsetof(rsf_skyrim_creation_call, owner) == 56 && offsetof(rsf_skyrim_creation_call, scope) == 80 &&
     offsetof(rsf_skyrim_creation_call, outputs) == 104);
-static_assert(sizeof(rsf_skyrim_creation_platform) == 16 + 17 * sizeof(void*) &&
-    offsetof(rsf_skyrim_creation_platform, create_detour) == 16 + 12 * sizeof(void*));
+static_assert(sizeof(rsf_skyrim_creation_platform) == 16 + 9 * sizeof(void*) &&
+    offsetof(rsf_skyrim_creation_platform, create_detour) == 16 + 4 * sizeof(void*));
 
 bool read(uintptr_t address, void* destination, size_t size) noexcept {
 #if defined(_MSC_VER)
@@ -47,24 +43,6 @@ bool read(uintptr_t address, void* destination, size_t size) noexcept {
     std::memcpy(destination, reinterpret_cast<const void*>(address), size); return true;
 #endif
 }
-
-bool query(uintptr_t address, rsf_skyrim_memory_region* out) noexcept {
-    MEMORY_BASIC_INFORMATION memory{};
-    if (!out || !VirtualQuery(reinterpret_cast<void*>(address), &memory, sizeof(memory))) return false;
-    *out = {uintptr_t(memory.BaseAddress), uintptr_t(memory.AllocationBase), uintptr_t(memory.RegionSize),
-        uint32_t(memory.State), uint32_t(memory.Protect)};
-    return true;
-}
-
-bool module_sha256(uintptr_t module, char* digest) noexcept try {
-    wchar_t path[32768]{};
-    const auto length = GetModuleFileNameW(reinterpret_cast<HMODULE>(module), path, DWORD(std::size(path)));
-    std::string hash;
-    if (!digest || !length || length >= std::size(path) || !rsf::sha256_file(path, hash) || hash.size() != 64)
-        return false;
-    std::memcpy(digest, hash.data(), hash.size());
-    return true;
-} catch (...) { return false; }
 
 HRESULT WINAPI create(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driver, HMODULE software, UINT flags,
     const D3D_FEATURE_LEVEL* levels, UINT level_count, UINT sdk, const DXGI_SWAP_CHAIN_DESC* description,
@@ -99,21 +77,7 @@ HRESULT WINAPI create(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driver, HMODULE sof
 
 const rsf_skyrim_creation_platform platform{
     sizeof(rsf_skyrim_creation_platform), RSF_SKYRIM_CREATION_PLATFORM_VERSION, RSF_D3D11_HOST_ABI_VERSION, 0,
-    []() noexcept { return uintptr_t(GetModuleHandleW(nullptr)); },
-    [](const wchar_t* name) noexcept { return uintptr_t(GetModuleHandleW(name)); },
-    [](uintptr_t module, const char* name) noexcept {
-        return module ? reinterpret_cast<uintptr_t>(GetProcAddress(reinterpret_cast<HMODULE>(module), name)) : 0;
-    },
     [](uintptr_t address, void* out, size_t size) noexcept { return out && read(address, out, size); },
-    query,
-    module_sha256,
-    [](uintptr_t address) noexcept {
-        HMODULE pinned{};
-        return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-            reinterpret_cast<LPCWSTR>(address), &pinned) ? uintptr_t(pinned) : uintptr_t(0);
-    },
-    []() noexcept { return uint32_t(GetLastError()); },
-    [](uint32_t error) noexcept { SetLastError(error); },
     [](uintptr_t target, const void* detour, void** original) noexcept {
         return MH_CreateHook(reinterpret_cast<void*>(target), const_cast<void*>(detour), original) == MH_OK;
     },

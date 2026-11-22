@@ -8,7 +8,6 @@ use rsf_game_sys::{
     rsf_game_probe, rsf_result,
 };
 use std::ffi::{CStr, c_char, c_void};
-use std::slice;
 
 pub(crate) const INVALID_ARGUMENT: rsf_result = -1;
 pub(crate) const ABI_MISMATCH: rsf_result = -2;
@@ -49,20 +48,17 @@ extern "C" fn rsf_skyrim_executable_sha256() -> *const c_char {
     SHA256.as_ptr()
 }
 
-/// The supplied path is readable for `length` units, the callbacks are process-lived, and
-/// `out` is null or writable for one record. The public lifecycle serializes admission.
+/// The callbacks are process-lived and `out` is null or writable for one record. The public
+/// lifecycle serializes admission.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_observer_admit(
-    path: *const u16,
-    length: usize,
     sampling: Guard,
     presentation_inputs: Guard,
     out: *mut ObserverTargets,
 ) -> i32 {
-    if path.is_null() || out.is_null() || length == 0 || length >= 32_768 {
-        return 0;
-    }
-    if !executable(unsafe { slice::from_raw_parts(path, length) }) {
+    let mut path = [0u16; 32_768];
+    let length = platform::module_path(0, &mut path);
+    if out.is_null() || length == 0 || length >= path.len() || !executable(&path[..length]) {
         return 0;
     }
     let Some(platform) = platform::get() else {

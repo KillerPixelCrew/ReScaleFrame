@@ -31,7 +31,7 @@ const NOT_READY: rsf_result = -3;
 const BUSY: rsf_result = -4;
 const NATIVE_REFUSED: rsf_result = -5;
 
-const LEAVES_VERSION: u32 = 2;
+const LEAVES_VERSION: u32 = 3;
 // Native subsystem operations, RSF_SKYRIM_* in session_platform.h.
 const ADMIT_OBSERVERS: u32 = 0;
 const OBSERVERS_BUSY: u32 = 1;
@@ -100,7 +100,6 @@ pub(crate) struct Leaves {
     checkpoint: unsafe extern "C" fn(*mut *const c_char, bool) -> bool,
     compatibility_status: unsafe extern "C" fn() -> *const c_char,
     log: unsafe extern "C" fn(*const rsf_game_host_services, *const c_char) -> bool,
-    module_path: unsafe extern "C" fn(usize, *mut u16, u32) -> u32,
     host_create: unsafe extern "C" fn(
         usize,
         *const HostSetup,
@@ -112,7 +111,7 @@ pub(crate) struct Leaves {
 }
 
 const _: () = {
-    assert!(size_of::<Leaves>() == 8 + 11 * size_of::<usize>());
+    assert!(size_of::<Leaves>() == 8 + 10 * size_of::<usize>());
 };
 
 /// A native leaf threw. A lifecycle entry reports RSF_ERROR_NOT_READY as the former C++ catch did.
@@ -172,11 +171,6 @@ impl Leaves {
             Ok(text) => self.log(host, text.as_ptr()),
             Err(_) => Ok(()),
         }
-    }
-
-    fn module_path(&self, module: usize, path: &mut [u16]) -> usize {
-        let capacity = u32::try_from(path.len()).unwrap_or(u32::MAX);
-        unsafe { (self.module_path)(module, path.as_mut_ptr(), capacity) as usize }
     }
 
     fn host_create(
@@ -452,7 +446,7 @@ impl Session {
         let length = if runtime == 0 {
             0
         } else {
-            leaves.module_path(runtime, &mut path)
+            platform::module_path(runtime, &mut path)
         };
         if create == 0
             || self.activate == 0

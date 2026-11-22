@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: MIT
-//! Native leaves lent by `native_creation.cpp`, mirrored by hand from `native_creation_platform.h`
-//! (bindgen-cli 0.72.1 was not available). Both sides assert sizes and offsets. The leaves carry
-//! fault-guarded reads, Win32 module, memory and last-error calls, MinHook, exception guards around
-//! host and Runtime callbacks, the Community Shaders gate and the Steam facade; every Skyrim
-//! address, expected byte and decision stays in this crate. The archive imports no native symbol.
+//! Checked process platform and native exception boundary for the Skyrim adapter.
 pub(crate) use rsf_game_sys::d3d11_host_abi::{
     rsf_d3d11_creation_scope as CreationScope, rsf_d3d11_native_chain as NativeChain,
 };
 use rsf_game_sys::rsf_game_host_services;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, OsString, c_char, c_void};
+use std::os::windows::ffi::OsStringExt;
+use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
+use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+use windows_sys::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleFileNameW,
+    GetModuleHandleExW, GetModuleHandleW, GetProcAddress,
+};
+use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
 
-pub(crate) const PLATFORM_VERSION: u32 = 2;
+pub(crate) const PLATFORM_VERSION: u32 = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -58,15 +62,7 @@ pub(crate) struct Platform {
     _version: u32,
     pub(crate) d3d11_host_abi: u32,
     _reserved: u32,
-    main_module: unsafe extern "C" fn() -> usize,
-    module_handle: unsafe extern "C" fn(name: *const u16) -> usize,
-    export_address: unsafe extern "C" fn(module: usize, name: *const c_char) -> usize,
     read: unsafe extern "C" fn(address: usize, out: *mut c_void, size: usize) -> bool,
-    query: unsafe extern "C" fn(address: usize, out: *mut MemoryRegion) -> bool,
-    module_sha256: unsafe extern "C" fn(module: usize, digest: *mut c_char) -> bool,
-    pin_module: unsafe extern "C" fn(address: usize) -> usize,
-    last_error: unsafe extern "C" fn() -> u32,
-    set_last_error: unsafe extern "C" fn(error: u32),
     hook_create: unsafe extern "C" fn(
         target: usize,
         detour: *const c_void,
@@ -96,8 +92,8 @@ const _: () = {
     assert!(std::mem::offset_of!(CreationCall, owner) == 56);
     assert!(std::mem::offset_of!(CreationCall, scope) == 80);
     assert!(std::mem::offset_of!(CreationCall, outputs) == 104);
-    assert!(size_of::<Platform>() == 16 + 17 * size_of::<usize>());
-    assert!(std::mem::offset_of!(Platform, create_detour) == 16 + 12 * size_of::<usize>());
+    assert!(size_of::<Platform>() == 16 + 9 * size_of::<usize>());
+    assert!(std::mem::offset_of!(Platform, create_detour) == 16 + 4 * size_of::<usize>());
 };
 
 // The native table is a constant with static storage in the adapter DLL.
@@ -155,18 +151,38 @@ pub(crate) fn wide(name: &str) -> Vec<u16> {
     name.encode_utf16().chain(Some(0)).collect()
 }
 
+pub(crate) fn module_path(module: usize, path: &mut [u16]) -> usize {
+    let capacity = u32::try_from(path.len()).unwrap_or(u32::MAX);
+    unsafe { GetModuleFileNameW(module as _, path.as_mut_ptr(), capacity) as usize }
+}
+
+pub(super) fn hex_sha256(path: &Path) -> Option<[u8; 64]> {
+    let digest = rsf_windows::sha256_file(path)?;
+    let mut hex = [0; 64];
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    for (byte, pair) in digest.into_iter().zip(hex.chunks_exact_mut(2)) {
+        pair[0] = DIGITS[usize::from(byte >> 4)];
+        pair[1] = DIGITS[usize::from(byte & 0x0f)];
+    }
+    Some(hex)
+}
+
 impl Platform {
     pub(crate) fn main_module(&self) -> usize {
-        unsafe { (self.main_module)() }
+        unsafe { GetModuleHandleW(ptr::null()) as usize }
     }
 
     pub(crate) fn module_handle(&self, name: &str) -> usize {
         let name = wide(name);
-        unsafe { (self.module_handle)(name.as_ptr()) }
+        unsafe { GetModuleHandleW(name.as_ptr()) as usize }
     }
 
     pub(crate) fn export_address(&self, module: usize, name: &CStr) -> usize {
-        unsafe { (self.export_address)(module, name.as_ptr()) }
+        if module == 0 {
+            return 0;
+        }
+        unsafe { GetProcAddress(module as _, name.as_ptr().cast()) }
+            .map_or(0, |address| address as usize)
     }
 
     pub(crate) fn read(&self, address: usize, out: &mut [u8]) -> bool {
@@ -195,28 +211,53 @@ impl Platform {
     }
 
     pub(crate) fn query(&self, address: usize) -> Option<MemoryRegion> {
-        let mut region = MemoryRegion::default();
-        unsafe { (self.query)(address, &mut region) }.then_some(region)
+        let mut region = MEMORY_BASIC_INFORMATION::default();
+        let read = unsafe {
+            VirtualQuery(
+                address as *const c_void,
+                &mut region,
+                size_of::<MEMORY_BASIC_INFORMATION>(),
+            )
+        };
+        (read != 0).then_some(MemoryRegion {
+            base: region.BaseAddress as usize,
+            allocation_base: region.AllocationBase as usize,
+            size: region.RegionSize,
+            state: region.State,
+            protect: region.Protect,
+        })
     }
 
     pub(crate) fn module_sha256(&self, module: usize) -> Option<[u8; 64]> {
-        let mut digest = [0u8; 64];
-        unsafe { (self.module_sha256)(module, digest.as_mut_ptr().cast()) }.then_some(digest)
+        let mut path = [0u16; 32_768];
+        let length = module_path(module, &mut path);
+        if length == 0 || length >= path.len() {
+            return None;
+        }
+        let path = OsString::from_wide(&path[..length]);
+        hex_sha256(Path::new(&path))
     }
 
     pub(crate) fn pin_module(&self, address: usize) -> usize {
-        unsafe { (self.pin_module)(address) }
+        let mut pinned = ptr::null_mut();
+        let result = unsafe {
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                address as *const u16,
+                &mut pinned,
+            )
+        };
+        if result == 0 { 0 } else { pinned as usize }
     }
 
     pub(crate) fn last_error(&self) -> u32 {
-        unsafe { (self.last_error)() }
+        unsafe { GetLastError() }
     }
 
     pub(crate) fn set_last_error(&self, error: u32) {
-        unsafe { (self.set_last_error)(error) }
+        unsafe { SetLastError(error) };
     }
 
-    /// Creates a disabled hook and returns its non-null trampoline.
     pub(crate) fn hook_create(&self, target: usize, detour: *const c_void) -> Option<*mut c_void> {
         let mut original = ptr::null_mut();
         let created = unsafe { (self.hook_create)(target, detour, &mut original) };

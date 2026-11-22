@@ -16,16 +16,7 @@
 extern "C" {
 #endif
 
-#define RSF_SKYRIM_CREATION_PLATFORM_VERSION 2u
-
-// VirtualQuery facts for one address.
-typedef struct rsf_skyrim_memory_region {
-    uintptr_t base;
-    uintptr_t allocation_base;
-    uintptr_t size;
-    uint32_t state;
-    uint32_t protect;
-} rsf_skyrim_memory_region;
+#define RSF_SKYRIM_CREATION_PLATFORM_VERSION 3u
 
 // One guarded creation call, on the detour's stack from enter to leave. The detour fills the
 // argument fields and native_result/returned; the Rust owner writes the rest.
@@ -50,18 +41,8 @@ typedef struct rsf_skyrim_creation_platform {
     uint32_t struct_size, version;
     uint32_t d3d11_host_abi; // RSF_D3D11_HOST_ABI_VERSION these leaves were built against
     uint32_t reserved;
-    // Process image, modules and memory. read is a fault-guarded copy.
-    uintptr_t (*main_module)(void);
-    uintptr_t (*module_handle)(const wchar_t* name);
-    uintptr_t (*export_address)(uintptr_t module, const char* name);
+    // Fault-guarded copy from the process.
     bool (*read)(uintptr_t address, void* out, size_t size);
-    bool (*query)(uintptr_t address, rsf_skyrim_memory_region* out);
-    // Lower-case hex SHA-256 of the module's file into 64 characters, without a terminator.
-    bool (*module_sha256)(uintptr_t module, char* digest);
-    // GetModuleHandleExW(FROM_ADDRESS | PIN); returns the pinned module or 0.
-    uintptr_t (*pin_module)(uintptr_t address);
-    uint32_t (*last_error)(void);
-    void (*set_last_error)(uint32_t error);
     // MinHook on the adapter's process instance. Enable also accepts an already enabled hook and
     // disable an already disabled one.
     bool (*hook_create)(uintptr_t target, const void* detour, void** original);
