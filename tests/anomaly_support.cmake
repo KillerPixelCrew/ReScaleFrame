@@ -106,24 +106,10 @@ target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE rsf_anomaly_fixtures
 add_test(NAME anomaly_motion_hooks_contract COMMAND rsf_anomaly_motion_hooks_test)
 set_tests_properties(anomaly_motion_hooks_contract PROPERTIES TIMEOUT 60)
 # Why the motion variant pair is refused under a bound hull/domain shader (first-party HLSL probe; 77 without hardware).
-find_program(RSF_CARGO cargo REQUIRED)
-if(MSVC)
-    set(RSF_ANOMALY_MOTION_TESS_TRIPLE x86_64-pc-windows-msvc)
-else()
-    set(RSF_ANOMALY_MOTION_TESS_TRIPLE x86_64-pc-windows-gnu)
-endif()
-set(RSF_ANOMALY_MOTION_TESS_CARGO_DIR "${CMAKE_BINARY_DIR}/cargo")
-set(RSF_ANOMALY_MOTION_TESS_PROFILE "$<IF:$<CONFIG:Debug>,debug,release>")
-set(RSF_ANOMALY_MOTION_TESS_EXE
-    "${RSF_ANOMALY_MOTION_TESS_CARGO_DIR}/${RSF_ANOMALY_MOTION_TESS_TRIPLE}/${RSF_ANOMALY_MOTION_TESS_PROFILE}/examples/anomaly_motion_tess_device.exe")
-add_custom_target(rsf_anomaly_motion_tess_device_test ALL
-    COMMAND "${RSF_CARGO}" build --locked -p rsf-anomaly --example anomaly_motion_tess_device
-        --target ${RSF_ANOMALY_MOTION_TESS_TRIPLE} --target-dir "${RSF_ANOMALY_MOTION_TESS_CARGO_DIR}"
-        $<$<NOT:$<CONFIG:Debug>>:--release>
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    BYPRODUCTS "${RSF_ANOMALY_MOTION_TESS_EXE}"
-    COMMAND_EXPAND_LISTS VERBATIM)
-add_test(NAME anomaly_motion_tess_device COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} "${RSF_ANOMALY_MOTION_TESS_EXE}")
+rsf_add_rust_artifacts(rsf_anomaly_motion_tess_device_test rsf-anomaly "" ALL
+    FILES examples/anomaly_motion_tess_device.exe ARGS --example anomaly_motion_tess_device)
+add_test(NAME anomaly_motion_tess_device COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
+    "${RSF_CARGO_ARTIFACTS}/examples/anomaly_motion_tess_device.exe")
 set_tests_properties(anomaly_motion_tess_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 # The real VS+HS+DS+PS motion chain of the tessellation pass (local deployment with the dx11/tess roots, NVIDIA adapter
 # preferred; 77 without deployment, d3dcompiler_43 or hardware): a skinned PN/HM mover against the CPU model.

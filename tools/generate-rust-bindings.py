@@ -38,16 +38,17 @@ generate("runtime/vulkan/xess-fg/session_records_abi.rs", "runtime/vulkan/xess-f
          "RSF_XESS_BRIDGE_(PLATFORM_ABI_VERSION|ALLOCATOR_COUNT)", [],
          ["--with-derive-default", "--with-derive-custom-struct", "rsf_xess_bridge_resource_desc=PartialEq,Eq"])
 
-# tests/CMakeLists.txt compiles these test-only headers' fixtures with bare rustc.
+# The fixtures built from these test-only headers (rsf-ac7 with its fixture features and the
+# rsf-ac7-render-scope-fixture crate) include the committed records as modules.
 generate("tests/ac7_render_scope_fixture_abi.rs", "tests/ac7_render_scope_fixture.h",
          "rsf_ac7_fixture_lease", "NOTHING", ["-Isdk/game/include", "-Igames/ac7/include"])
 generate("tests/ac7_graph_replay_abi.rs", "tests/ac7_graph_replay.h",
          "rsf_ac7_graph_(particle_replay|check_fn|screen_fn|sky_(apply|restore)_fn)",
          "RSF_SCREEN_(UNKNOWN|FLIGHT|REPLAY)", ["-Isdk/game/include"])
 
-# tests/CMakeLists.txt links engine_sharpening.rs into an executable with bare rustc. The Unity
-# and Godot owner rlibs cannot be linked there (their C imports would come along), so it keeps
-# these two settings records; the shared records come from rsf_game_sys.
+# engine_sharpening.rs (tests/process) loads the Godot and Unity DLLs. Their owner crates cannot be
+# linked there (their C imports would come along), so it keeps these two settings records; the
+# shared records come from rsf_game_sys.
 generate("tests/engine_sharpening_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(godot_settings|unity_package_settings)",
          "RSF_(GODOT_ABI_VERSION|GODOT_SETTINGS_ABI_VERSION|UNITY_SETTINGS_ABI_VERSION)",

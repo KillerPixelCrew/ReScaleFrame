@@ -1,5 +1,4 @@
 add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
-rsf_rust_fixture_externs(RSF_FIXTURE_EXTERNS)
 
 # One archive per fixture crate, built with every one of its fixture features. The features only
 # add optional dependencies and windows-sys flags, and each executable names its entry symbol at
@@ -29,26 +28,15 @@ add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_share
 set_target_properties(rsf_d3d11_host_shared_sr_device PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE
     rsf_presentation_fixtures_rust rsf_orchestrator rsf_build_options d3d11 dxgi dxguid)
-find_program(RSF_TEST_RUSTC rustc REQUIRED)
-if(MSVC)
-    set(rsf_test_rust_target x86_64-pc-windows-msvc)
-else()
-    set(rsf_test_rust_target x86_64-pc-windows-gnu)
-endif()
-set(rsf_vulkan_exports_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
-set(rsf_vulkan_exports_exe "${rsf_vulkan_exports_dir}/rsf_native_vulkan_exports_test.exe")
-set(rsf_vulkan_exports_source "${CMAKE_CURRENT_SOURCE_DIR}/native_vulkan_exports.rs")
-add_custom_command(OUTPUT "${rsf_vulkan_exports_exe}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${rsf_vulkan_exports_dir}"
-    COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
-        -D warnings "${rsf_vulkan_exports_source}" -o "${rsf_vulkan_exports_exe}"
-    DEPENDS "${rsf_vulkan_exports_source}"
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    VERBATIM)
-add_custom_target(rsf_native_vulkan_exports_test ALL DEPENDS "${rsf_vulkan_exports_exe}")
-add_dependencies(rsf_native_vulkan_exports_test rsf_orchestrator)
+# Executables that load a built DLL in a process of their own: the Vulkan exports, the Anomaly cold
+# start, the engine sharpening settings and the isolated Mono host.
+set(rsf_process_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+rsf_add_rust_artifacts(rsf_rust_process_fixtures rsf-process-fixtures "${rsf_process_dir}" ALL
+    FILES rsf_native_vulkan_exports_test.exe rsf_anomaly_bootstrap_test.exe
+        rsf_engine_sharpening_test.exe rsf_unity_mono_runtime_test.exe)
+add_dependencies(rsf_rust_process_fixtures rsf_orchestrator rsf_game_anomaly)
 add_test(NAME native_vulkan_dll_exports COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
-    "${rsf_vulkan_exports_exe}" "$<TARGET_FILE:rsf_orchestrator>")
+    "${rsf_process_dir}/rsf_native_vulkan_exports_test.exe" "$<TARGET_FILE:rsf_orchestrator>")
 # Corpus parity run by hand, documented in runtime/shader_patch/README.md; the device test below is the CTest one.
 add_executable(rsf_shader_patch_test EXCLUDE_FROM_ALL fixture_main.c)
 target_compile_definitions(rsf_shader_patch_test PRIVATE RSF_FIXTURE_ENTRY=rsf_shader_patch_corpus_main)
@@ -85,19 +73,8 @@ target_include_directories(rsf_anomaly_native_hooks_test PRIVATE ../games/anomal
 target_link_libraries(rsf_anomaly_native_hooks_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::GameSDK minhook rsf_build_options)
 add_test(NAME anomaly_native_hooks_contract COMMAND rsf_anomaly_native_hooks_test)
 set_tests_properties(anomaly_native_hooks_contract PROPERTIES TIMEOUT 30)
-set(rsf_anomaly_bootstrap_exe "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_anomaly_bootstrap_test.exe")
-set(rsf_anomaly_bootstrap_source "${CMAKE_CURRENT_SOURCE_DIR}/anomaly_bootstrap.rs")
-add_custom_command(OUTPUT "${rsf_anomaly_bootstrap_exe}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
-    COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
-        -D warnings "${rsf_anomaly_bootstrap_source}" -o "${rsf_anomaly_bootstrap_exe}"
-    DEPENDS "${rsf_anomaly_bootstrap_source}"
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    VERBATIM)
-add_custom_target(rsf_anomaly_bootstrap_test ALL DEPENDS "${rsf_anomaly_bootstrap_exe}")
-add_dependencies(rsf_anomaly_bootstrap_test rsf_game_anomaly)
 add_test(NAME anomaly_bootstrap_contract COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
-    "${rsf_anomaly_bootstrap_exe}"
+    "${rsf_process_dir}/rsf_anomaly_bootstrap_test.exe"
     "$<TARGET_FILE:rsf_game_anomaly>" "${CMAKE_CURRENT_BINARY_DIR}/anomaly-bootstrap")
 set_tests_properties(anomaly_bootstrap_contract PROPERTIES TIMEOUT 130)
 find_program(RSF_PWSH_EXECUTABLE pwsh)
@@ -174,22 +151,6 @@ add_dependencies(rsf_plugin_session_test rsf_plugin_session_fixture)
 add_test(NAME plugin_session_lifetime COMMAND rsf_plugin_session_test $<TARGET_FILE:rsf_plugin_session_fixture>)
 set_tests_properties(plugin_session_lifetime PROPERTIES TIMEOUT 30)
 
-find_program(RSF_RUSTC rustc REQUIRED)
-if(MSVC)
-    set(unity_mono_fixture_target x86_64-pc-windows-msvc)
-else()
-    set(unity_mono_fixture_target x86_64-pc-windows-gnu)
-endif()
-set(unity_mono_fixture_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
-set(unity_mono_fixture_exe "${unity_mono_fixture_dir}/rsf_unity_mono_runtime_test.exe")
-add_custom_command(OUTPUT "${unity_mono_fixture_exe}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${unity_mono_fixture_dir}"
-    COMMAND "${RSF_RUSTC}" --edition=2024 --target ${unity_mono_fixture_target}
-        -Dwarnings "${CMAKE_CURRENT_SOURCE_DIR}/unity_mono_runtime.rs" -o "${unity_mono_fixture_exe}"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/unity_mono_runtime.rs" "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    VERBATIM)
-add_custom_target(rsf_unity_mono_runtime_test ALL DEPENDS "${unity_mono_fixture_exe}")
 if(MSVC)
     rsf_add_loader_test(rsf_plugin_carrier_test rsf_test_xinput_carrier)
     add_dependencies(rsf_plugin_carrier_test rsf_proxy_plugin)
@@ -303,52 +264,18 @@ target_link_libraries(rsf_ac7_capture_io PRIVATE rsf_ac7_capture_fixture_rust
 add_test(NAME ac7_capture_io COMMAND rsf_ac7_capture_io)
 set_tests_properties(ac7_capture_io PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-if(DEFINED ENV{RUSTC} AND NOT "$ENV{RUSTC}" STREQUAL "")
-    set(ac7_fixture_rustc "$ENV{RUSTC}")
-else()
-    find_program(ac7_fixture_rustc rustc REQUIRED)
-endif()
-if(MSVC)
-    set(ac7_fixture_target x86_64-pc-windows-msvc)
-else()
-    set(ac7_fixture_target x86_64-pc-windows-gnu)
-endif()
-function(rsf_ac7_fixture_object output stem)
-    set(object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_${stem}.obj")
-    add_custom_command(OUTPUT "${object}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
-        COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
-            --crate-name "rsf_${stem}" --crate-type lib --emit obj -C codegen-units=1
-            -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3> ${RSF_FIXTURE_EXTERNS}
-            -o "${object}" "${CMAKE_CURRENT_SOURCE_DIR}/${stem}.rs"
-        DEPENDS "${stem}.rs" rsf_rust_fixture_rlibs ${ARGN}
-        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-        VERBATIM)
-    set_source_files_properties("${object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
-    set(${output} "${object}" PARENT_SCOPE)
-endfunction()
-
-rsf_ac7_fixture_object(ac7_view_probe_object ac7_view_probe)
-add_executable(rsf_ac7_view_test ac7_view.c "${ac7_view_probe_object}")
+# rsf-ac7 with the view probe and session launchers' Rust halves; it replaces the shipping
+# ReScaleFrame::AC7View archive in those executables.
+rsf_add_rust_static(rsf_ac7_view_fixture_rust rsf_rust_ac7_view_fixture rsf-ac7 rsf_ac7 --features view-fixtures)
+add_executable(rsf_ac7_view_test ac7_view.c)
 set_target_properties(rsf_ac7_view_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View ReScaleFrame::GraphicsLeaves rsf_build_options)
+target_link_libraries(rsf_ac7_view_test PRIVATE rsf_ac7_view_fixture_rust ReScaleFrame::GraphicsLeaves rsf_build_options)
 add_test(NAME ac7_view COMMAND rsf_ac7_view_test)
 
-set(ac7_session_object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_ac7_session.obj")
-add_custom_command(OUTPUT "${ac7_session_object}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
-    COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
-        --crate-name rsf_ac7_session --crate-type lib --emit obj -C codegen-units=1
-        -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3> ${RSF_FIXTURE_EXTERNS}
-        -o "${ac7_session_object}" "${CMAKE_CURRENT_SOURCE_DIR}/ac7_session.rs"
-    DEPENDS ac7_session.rs rsf_rust_fixture_rlibs
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    VERBATIM)
-set_source_files_properties("${ac7_session_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
-add_executable(rsf_ac7_session fixture_main.c "${ac7_session_object}")
+add_executable(rsf_ac7_session fixture_main.c)
 target_compile_definitions(rsf_ac7_session PRIVATE RSF_FIXTURE_ENTRY=rsf_ac7_session_fixture)
 set_target_properties(rsf_ac7_session PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7View ReScaleFrame::GraphicsLeaves rsf_build_options)
+target_link_libraries(rsf_ac7_session PRIVATE rsf_ac7_view_fixture_rust ReScaleFrame::GraphicsLeaves rsf_build_options)
 add_test(NAME ac7_session COMMAND rsf_ac7_session)
 
 # A vendor that is not compiled in still has to answer, and has to answer differently from one
@@ -451,25 +378,9 @@ add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_
 # a couple of minutes rather than hanging the suite.
 set_tests_properties(d3d11_observer texture_dump PROPERTIES TIMEOUT 120)
 
-find_program(RSF_RUSTC rustc REQUIRED)
-if(MSVC)
-    set(overlay_fixture_rust_target x86_64-pc-windows-msvc)
-else()
-    set(overlay_fixture_rust_target x86_64-pc-windows-gnu)
-endif()
-set(overlay_fixture_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
-set(overlay_fixture_dll "${overlay_fixture_dir}/rsf_overlay_panel_fixture.dll")
-set(overlay_fixture_source "${CMAKE_CURRENT_SOURCE_DIR}/overlay_panel_fixture.rs")
-add_custom_command(OUTPUT "${overlay_fixture_dll}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${overlay_fixture_dir}"
-    COMMAND "${RSF_RUSTC}" --edition=2024 --crate-type=cdylib --target ${overlay_fixture_rust_target}
-        -Cpanic=abort -Dwarnings ${RSF_FIXTURE_EXTERNS} "${overlay_fixture_source}"
-        -o "${overlay_fixture_dll}"
-    DEPENDS "${overlay_fixture_source}" "${PROJECT_SOURCE_DIR}/ui/overlay/src/abi.rs"
-        "${PROJECT_SOURCE_DIR}/rust-toolchain.toml" rsf_rust_fixture_rlibs
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    VERBATIM)
-add_custom_target(rsf_overlay_panel_fixture DEPENDS "${overlay_fixture_dll}")
+set(overlay_fixture_dll "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_overlay_panel_fixture.dll")
+rsf_add_rust_artifacts(rsf_overlay_panel_fixture rsf-overlay-panel-fixture "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+    FILES rsf_overlay_panel_fixture.dll)
 rsf_add_rust_static(rsf_overlay_fixtures_rust rsf_rust_overlay_fixtures
     rsf-overlay-fixtures rsf_overlay_fixtures)
 add_executable(rsf_overlay_host fixture_main.c)
@@ -640,15 +551,13 @@ if(RSF_DOTNET_EXECUTABLE)
         set_tests_properties(unity_input_facts_contract PROPERTIES TIMEOUT 120)
     endif()
 endif()
-if(MSVC)
-    set(godot_graph_rust_target x86_64-pc-windows-msvc)
-else()
-    set(godot_graph_rust_target x86_64-pc-windows-gnu)
-endif()
+# The Godot module is built by the engine with a bare rustc object, so its graph fixture compiles the
+# same file the same way.
+find_program(RSF_RUSTC rustc REQUIRED)
 set(godot_module "${PROJECT_SOURCE_DIR}/integrations/godot/modules/rescaleframe")
 set(godot_graph_object "${CMAKE_CURRENT_BINARY_DIR}/godot_graph_module${CMAKE_CXX_OUTPUT_EXTENSION}")
 add_custom_command(OUTPUT "${godot_graph_object}"
-    COMMAND "${RSF_RUSTC}" --edition=2024 --crate-type=lib --emit=obj --target ${godot_graph_rust_target}
+    COMMAND "${RSF_RUSTC}" --edition=2024 --crate-type=lib --emit=obj --target ${RSF_RUST_TARGET}
         --cfg rsf_graph_fixture -Cpanic=abort -Copt-level=2 -Ccodegen-units=1 -Dwarnings
         "${godot_module}/viewport.rs" -o "${godot_graph_object}"
     DEPENDS "${godot_module}/viewport.rs" "${godot_module}/cpu_facts.rs" "${godot_module}/frame.rs"
@@ -723,9 +632,10 @@ target_link_libraries(rsf_render_links_test PRIVATE rsf_game_sdk_fixtures_rust r
 add_test(NAME render_links COMMAND rsf_render_links_test)
 set_tests_properties(render_links PROPERTIES TIMEOUT 120)
 
-rsf_ac7_fixture_object(ac7_scope_fixture_object ac7_render_scope ac7_render_scope_fixture_abi.rs)
-add_executable(rsf_ac7_render_scope_test ac7_render_scope.c "${ac7_scope_fixture_object}")
-target_link_libraries(rsf_ac7_render_scope_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_plugin_rust ReScaleFrame::GraphicsLeaves minhook rsf_build_options)
+rsf_add_rust_static(rsf_ac7_render_scope_fixture_rust rsf_rust_ac7_render_scope_fixture
+    rsf-ac7-render-scope-fixture rsf_ac7_render_scope_fixture)
+add_executable(rsf_ac7_render_scope_test ac7_render_scope.c)
+target_link_libraries(rsf_ac7_render_scope_test PRIVATE rsf_ac7_render_scope_fixture_rust ReScaleFrame::AC7RenderScope rsf_ac7_plugin_rust ReScaleFrame::GraphicsLeaves minhook rsf_build_options)
 add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 
@@ -749,21 +659,11 @@ if(EXISTS "${RSF_NGX_PROBE_INCLUDE}/nvsdk_ngx_defs.h")
     target_compile_definitions(rsf_exposure_probe PRIVATE RSF_PROBE_NGX_PARAMS=1)
 endif()
 
-set(ac7_view_fixture_object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_ac7_view_fixture.obj")
-add_custom_command(OUTPUT "${ac7_view_fixture_object}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
-    COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
-        --crate-name rsf_ac7_view_fixture --crate-type lib --emit obj -C codegen-units=1
-        -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3> ${RSF_FIXTURE_EXTERNS}
-        -o "${ac7_view_fixture_object}" "${CMAKE_CURRENT_SOURCE_DIR}/ac7_view_fixture.rs"
-    DEPENDS ac7_view_fixture.rs ac7_graph_replay.rs ac7_graph_replay_abi.rs rsf_rust_fixture_rlibs
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    VERBATIM)
-set_source_files_properties("${ac7_view_fixture_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
-# The C launcher hands the replay helpers above, rsf_native_sr_evaluate, the render scope create
+# The C launcher hands the replay helpers (tests/ac7_view_fixture.rs, mounted in rsf-ac7 by its warp-fixture
+# feature), rsf_native_sr_evaluate, the render scope create
 # call and the native renderer's call table to the Rust fixture (ac7_native_graph.rs), which the
 # rsf-ac7-plugin crate builds with its warp-fixture feature beside games/ac7/plugin/src/native_renderer.rs.
-add_executable(rsf_ac7_native_graph_test ac7_native_graph.c "${ac7_view_fixture_object}")
+add_executable(rsf_ac7_native_graph_test ac7_native_graph.c)
 set_target_properties(rsf_ac7_native_graph_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_fixture_rust ReScaleFrame::GraphicsLeaves rsf_orchestrator minhook rsf_build_options)
 add_test(NAME ac7_native_graph COMMAND rsf_ac7_native_graph_test)
@@ -1019,22 +919,10 @@ if(RSF_HAVE_VULKAN)
 endif()
 
 if(TARGET rsf_godot AND TARGET rsf_unity_package)
-    set(rsf_engine_sharpening_exe "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_engine_sharpening_test.exe")
-    set(rsf_engine_sharpening_source "${CMAKE_CURRENT_SOURCE_DIR}/engine_sharpening.rs")
-    add_custom_command(OUTPUT "${rsf_engine_sharpening_exe}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
-        COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
-            -D warnings ${RSF_FIXTURE_EXTERNS} "${rsf_engine_sharpening_source}"
-            -o "${rsf_engine_sharpening_exe}"
-        DEPENDS "${rsf_engine_sharpening_source}" engine_sharpening_abi.rs rsf_rust_fixture_rlibs
-        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-        VERBATIM)
-    add_custom_target(rsf_engine_sharpening_test ALL DEPENDS "${rsf_engine_sharpening_exe}")
-    add_dependencies(rsf_engine_sharpening_test rsf_godot rsf_unity_package)
+    add_dependencies(rsf_rust_process_fixtures rsf_godot rsf_unity_package)
     add_test(NAME engine_sharpening_settings COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
-        "${rsf_engine_sharpening_exe}" "$<TARGET_FILE:rsf_godot>" "$<TARGET_FILE:rsf_unity_package>")
+        "${rsf_process_dir}/rsf_engine_sharpening_test.exe" "$<TARGET_FILE:rsf_godot>" "$<TARGET_FILE:rsf_unity_package>")
 endif()
-
 
 rsf_add_capture_fixture(rsf_capture_metadata rsf_fixture_capture_metadata capture_fixture_main.c)
 target_link_libraries(rsf_capture_metadata PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options windowscodecs ole32)
