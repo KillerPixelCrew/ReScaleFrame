@@ -4,6 +4,7 @@
 
 pub(super) mod abi;
 mod capture;
+mod d3d11;
 mod draw;
 mod options;
 mod report;
@@ -16,10 +17,11 @@ use self::report::Counters;
 use self::shaders::{Chain, Loader, Pack, Registry};
 use super::{foliage, window, *};
 use crate::geometry_registry::RetirementQueue;
+use crate::host_log::Log;
 use crate::lease::Lease;
 use crate::motion_device::*;
 use crate::motion_device_abi::{
-    RSF_MOTION_CREATED, RSF_MOTION_FAILED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_READY,
+    RSF_MOTION_CREATED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_READY,
     rsf_anomaly_motion_device_view as DeviceView,
 };
 use crate::motion_target::{rsf_anomaly_motion_bind_close, rsf_anomaly_motion_bind_draw};
@@ -125,28 +127,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
-}
-
-#[derive(Clone, Copy, Default)]
-struct Log {
-    callback: rsf_game_log_fn,
-    user: usize,
-}
-
-impl Log {
-    fn text(self, text: &CStr) {
-        if let Some(callback) = self.callback {
-            unsafe { callback(self.user as Raw, text.as_ptr()) };
-        }
-    }
-
-    fn say(self, text: String) {
-        if self.callback.is_some()
-            && let Ok(text) = CString::new(text)
-        {
-            self.text(&text);
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -454,9 +434,9 @@ impl Stage {
         }
         let current = render.device_view();
         if render.binder.cache_may_hold_motion != 0
-            && !current.rtv.is_null()
             && !render.close_binding(p, facts.context, facts.backend)
         {
+            window::reset(&mut render.window);
             return;
         }
         if current.device != facts.device {
@@ -489,57 +469,42 @@ impl Stage {
             }
             let mut desc = MaybeUninit::uninit();
             let mut options = 0;
-            let observed =
-                if !unsafe { (p.options_word3)(&mut options) } || options & DX10_MSAA != 0 {
-                    RSF_MOTION_MULTISAMPLED
-                } else if unsafe { (p.target_facts)(facts.position_surface, desc.as_mut_ptr()) } {
-                    RSF_MOTION_READY
-                } else {
-                    RSF_MOTION_FAILED
-                };
-            let result = if observed == RSF_MOTION_READY {
+            if !unsafe { (p.options_word3)(&mut options) } {
+                render.counters.options_unreadable += 1;
+            } else if options & DX10_MSAA != 0 {
+                render.counters.msaa_frames += 1;
+            } else if !unsafe { (p.target_facts)(facts.position_surface, desc.as_mut_ptr()) } {
+                render.counters.descriptor_unreadable += 1;
+            } else {
                 let desc = unsafe { desc.assume_init() };
-                rsf_anomaly_motion_device_target(
+                match rsf_anomaly_motion_device_target(
                     render.device.as_mut(),
                     desc.width,
                     desc.height,
                     desc.samples,
                     desc.layers,
-                )
-            } else {
-                observed
-            };
-            match result {
-                RSF_MOTION_CREATED => {
-                    render.counters.target_created += 1;
-                    target_ok = true;
+                ) {
+                    RSF_MOTION_CREATED => {
+                        render.counters.target_created += 1;
+                        target_ok = true;
+                    }
+                    RSF_MOTION_READY => target_ok = true,
+                    RSF_MOTION_MULTISAMPLED => render.counters.target_samples_or_layers += 1,
+                    _ => render.counters.target_failed += 1,
                 }
-                RSF_MOTION_READY => target_ok = true,
-                RSF_MOTION_MULTISAMPLED => render.counters.msaa_frames += 1,
-                _ if observed == RSF_MOTION_READY => render.counters.target_failed += 1,
-                _ => {}
             }
             if target_ok {
                 let view = render.device_view();
                 unsafe { (p.clear_target)(facts.context, view.rtv) };
                 render.counters.clears += 1;
-                render.history.begin(
-                    lane(facts.view),
-                    FrameIdentity {
-                        source: u64::from(facts.frame),
-                        generation: facts.generation,
-                        width: view.width,
-                        height: view.height,
-                    },
-                );
-                foliage::rsf_anomaly_foliage_begin(
-                    &mut render.foliage,
-                    facts.view,
-                    u64::from(facts.frame),
-                    facts.generation,
-                    view.width,
-                    view.height,
-                );
+                let identity = FrameIdentity {
+                    source: u64::from(facts.frame),
+                    generation: facts.generation,
+                    width: view.width,
+                    height: view.height,
+                };
+                render.history.begin(lane(facts.view), identity);
+                render.foliage.begin(facts.view, identity);
                 render.counters.foliage_table_overflows =
                     foliage::rsf_anomaly_foliage_overflows(Some(&render.foliage));
             }
@@ -626,8 +591,8 @@ impl Stage {
                 let view = render.device_view();
                 let leases =
                     [view.rtv, view.zero_shader, view.no_depth, view.equal_depth].map(|raw| {
-                        Lease::new(raw, p.device.release.unwrap()).inspect(|lease| {
-                            unsafe { (p.device.retain.unwrap())(lease.as_ptr()) };
+                        Lease::new(raw, p.device.release).inspect(|lease| {
+                            unsafe { (p.device.retain)(lease.as_ptr()) };
                         })
                     });
                 ActiveDraw::Replay {
@@ -724,10 +689,12 @@ extern "C" fn rsf_anomaly_motion_stage_report(emit: rsf_game_log_fn, user: Raw) 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_stage_frame_target(target: &mut FrameTarget) {
-    *target = STAGE
-        .get()
-        .map_or_else(FrameTarget::default, Stage::frame_target);
+extern "C" fn rsf_anomaly_motion_stage_frame_target(target: &mut MaybeUninit<FrameTarget>) {
+    target.write(
+        STAGE
+            .get()
+            .map_or_else(FrameTarget::default, Stage::frame_target),
+    );
 }
 
 #[unsafe(no_mangle)]

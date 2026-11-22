@@ -36,7 +36,7 @@ if(BUILD_TESTING)
     target_link_libraries(rsf_anomaly_motion_bridge PRIVATE rsf_anomaly_rust rsf_build_options)
 endif()
 target_sources(rsf_game_anomaly PRIVATE src/motion_foliage.cpp
-    src/motion_target.cpp src/motion_d3d11.cpp src/motion_stage.cpp src/shader_loader.cpp src/shader_d3d.cpp)
+    src/motion_stage.cpp src/shader_loader.cpp src/shader_d3d.cpp)
 target_link_libraries(rsf_game_anomaly PRIVATE bcrypt dxguid)
 target_sources(rsf_game_anomaly PRIVATE src/runtime_shaders.cpp)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

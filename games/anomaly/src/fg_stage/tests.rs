@@ -130,7 +130,7 @@ fn sr_off_motion_requires_the_current_engine_frame_and_view() {
         ..Default::default()
     };
     let texture = ptr::dangling_mut::<u8>().cast();
-    let mut target = rsf_anomaly_fg_motion_target {
+    let mut target = rsf_anomaly_motion_frame_target {
         texture,
         width: 1280,
         height: 720,
@@ -557,6 +557,6 @@ unsafe extern "C" fn sr_owns_depth(_: u32) -> bool {
     true
 }
 
-unsafe extern "C" fn no_motion() -> rsf_anomaly_fg_motion_target {
+unsafe extern "C" fn no_motion() -> rsf_anomaly_motion_frame_target {
     Default::default()
 }

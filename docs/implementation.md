@@ -1268,6 +1268,12 @@ frame facts. The motion target leases, history and capture sequence
 match in source. Device and game checks remain open.
 [Motion window admission](research/rust-anomaly-motion-stage.md#motion-window-admission)
 
+Anomaly's motion device, stock shader bindings and replay COM calls now have
+Rust implementations. Motion windows check the identity of the position surface
+and preserve a cached RTV until the matching backend can confirm cleanup.
+Source checks passed. Build, device and game checks remain open.
+[N04 D3D11 leaves and target cleanup](research/rust-anomaly-motion-stage.md#n04-d3d11-leaves-and-target-cleanup)
+
 Anomaly now admits successful stock shader creation and reads its
 guarded interface and filename in Rust. The native detour still
 supplies its own return address and stack to the compiler-frame

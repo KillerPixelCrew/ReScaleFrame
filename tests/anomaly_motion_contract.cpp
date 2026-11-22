@@ -527,6 +527,12 @@ void binder_state_machine()
     // Window close outside a draw: drop from the cache like set_RT does.
     binder.on_draw(base, true, position, motion);
     const int clears = host.clears;
+    require(binder.close(nullptr, motion) == BindAction::Fault && engine.rt(2) == motion,
+        "unavailable cache cannot prove the borrowed RTV is clear");
+    FakeBackend foreign;
+    require(binder.close(foreign.memory.data(), motion) == BindAction::Fault &&
+        binder.cache_may_hold_motion() && engine.rt(2) == motion,
+        "an empty foreign cache cannot authorize retirement of the old target");
     require(binder.close(base, motion) == BindAction::Unbound && engine.rt(2) == nullptr && engine.changed() &&
         host.clears == clears + 1, "close dirties a clean cache and unbinds");
     engine.engine_bind(position, color, nullptr);
@@ -1301,7 +1307,7 @@ void foliage_policy()
     x = detail; x.route_found = false;
     require(decide_detail(x).reason == HistoryReason::FoliageNoPrevious, "route not drawn last frame");
     require(std::string(history_reason_name(HistoryReason::FoliageXformChanged)) == "foliage_xform_changed" &&
-        static_cast<std::size_t>(HistoryReason::Count) == 16, "reason names and counter width (MotionCounters::reasons)");
+        static_cast<std::size_t>(HistoryReason::Count) == 17, "reason names and counter width (MotionCounters::reasons)");
 }
 
 // ---- tessellation chain (DX11\tess.hs / DX11\tess.ds) ----------------------------------------------------------

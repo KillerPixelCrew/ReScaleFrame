@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 use crate::fg_inputs_abi::rsf_anomaly_input_platform;
+use crate::motion_frame_target_abi::rsf_anomaly_motion_frame_target;
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass, rsf_result};
 type wchar_t = u16;
 type rsf_streamline_host = ::core::ffi::c_void;
@@ -760,44 +761,6 @@ const _: () = {
     ["Offset of field: rsf_anomaly_fg_status::captures"]
         [::core::mem::offset_of!(rsf_anomaly_fg_status, captures) - 96usize];
 };
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_anomaly_fg_motion_target {
-    pub texture: *mut ::core::ffi::c_void,
-    pub width: u32,
-    pub height: u32,
-    pub frame: u32,
-    pub written: bool,
-    pub main: bool,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_fg_motion_target"]
-        [::core::mem::size_of::<rsf_anomaly_fg_motion_target>() - 24usize];
-    ["Alignment of rsf_anomaly_fg_motion_target"]
-        [::core::mem::align_of::<rsf_anomaly_fg_motion_target>() - 8usize];
-    ["Offset of field: rsf_anomaly_fg_motion_target::texture"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, texture) - 0usize];
-    ["Offset of field: rsf_anomaly_fg_motion_target::width"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, width) - 8usize];
-    ["Offset of field: rsf_anomaly_fg_motion_target::height"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, height) - 12usize];
-    ["Offset of field: rsf_anomaly_fg_motion_target::frame"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, frame) - 16usize];
-    ["Offset of field: rsf_anomaly_fg_motion_target::written"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, written) - 20usize];
-    ["Offset of field: rsf_anomaly_fg_motion_target::main"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, main) - 21usize];
-};
-impl Default for rsf_anomaly_fg_motion_target {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
 pub type rsf_anomaly_fg_swap_chain = ::core::ffi::c_void;
 pub type rsf_anomaly_fg_overlay_present = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, chain: *mut rsf_anomaly_fg_swap_chain),
@@ -816,7 +779,7 @@ pub struct rsf_anomaly_fg_platform {
         ::core::option::Option<unsafe extern "C" fn(rva: u32) -> *mut ::core::ffi::c_void>,
     pub sr_owns_depth: ::core::option::Option<unsafe extern "C" fn(native_frame: u32) -> bool>,
     pub motion_target:
-        ::core::option::Option<unsafe extern "C" fn() -> rsf_anomaly_fg_motion_target>,
+        ::core::option::Option<unsafe extern "C" fn() -> rsf_anomaly_motion_frame_target>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {

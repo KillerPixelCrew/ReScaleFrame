@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: MIT
 use rsf_game_sys::{rsf_frame_record, rsf_game_log_fn};
 use std::ffi::{c_char, c_void};
+use std::path::PathBuf;
+
+pub(crate) fn anomaly_directory() -> Option<PathBuf> {
+    // Match the existing SR path admission before choosing the fallback.
+    let bounded = |value: &std::ffi::OsString| !value.is_empty() && value.len() < 32_768;
+    if let Some(custom) = std::env::var_os("RSF_DUMP_DIR").filter(bounded) {
+        return Some(custom.into());
+    }
+    let local = std::env::var_os("LOCALAPPDATA").filter(bounded)?;
+    Some(PathBuf::from(local).join("ReScaleFrame").join("Anomaly"))
+}
 
 type Configure =
     unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, rsf_game_log_fn, *mut c_void);

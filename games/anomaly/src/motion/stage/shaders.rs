@@ -3,8 +3,8 @@ use super::*;
 use crate::digest::sha256;
 use crate::shader_family::{FAMILY_COUNT, NO_FAMILY, diagnostic_family_name};
 use crate::shader_loader::{
-    DecodedFrame, Entry, FrameLayout, Manifest, OUTCOME_NAMES, Reflection, RuntimePack,
-    decode_frame, outcome_name,
+    DecodedFrame, Entry, FrameLayout, Manifest, OUTCOME_NAMES, Reflection, decode_frame,
+    outcome_name,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -229,6 +229,7 @@ pub(super) struct Pack {
     // Admitted by Rust and owned by the native pack, which frees it only after
     // `lease` closes the Runtime session. Rows are immutable until then.
     manifest: ptr::NonNull<Manifest>,
+    constant_ops: ConstantOps,
 }
 
 // The native pack and its compiler/include scratch storage are serialized by
@@ -261,7 +262,14 @@ impl Pack {
         let info = unsafe { info.assume_init() };
         let manifest = ptr::NonNull::new(info.manifest.cast_mut())
             .ok_or_else(|| String::from("pack manifest unavailable"))?;
-        Ok(Self { lease, manifest })
+        let constant_ops = unsafe { info.api.as_ref() }
+            .and_then(ConstantOps::from_api)
+            .ok_or_else(|| String::from("pack constant operations unavailable"))?;
+        Ok(Self {
+            lease,
+            manifest,
+            constant_ops,
+        })
     }
 
     pub fn ptr(&self) -> Raw {
@@ -269,8 +277,7 @@ impl Pack {
     }
 
     pub fn constant_ops(&self) -> ConstantOps {
-        // open_pack returns a RuntimePack that this lease keeps alive.
-        unsafe { &*self.ptr().cast::<RuntimePack>() }.constant_ops()
+        self.constant_ops
     }
 
     fn manifest(&self) -> &Manifest {
@@ -428,7 +435,7 @@ impl Replacement {
                 &mut refused,
             )
         };
-        let shader = Lease::new(shader, platform.device.release.unwrap()).ok_or_else(|| {
+        let shader = Lease::new(shader, platform.device.release).ok_or_else(|| {
             (
                 CREATE_FAILED,
                 if refused {
@@ -456,8 +463,8 @@ impl Replacement {
         entry: &Entry,
         device: Raw,
     ) -> Arc<Variant> {
-        let release = platform.device.release.unwrap();
-        let retain = platform.device.retain.unwrap();
+        let release = platform.device.release;
+        let retain = platform.device.retain;
         let stock = Lease::new(stock, release).expect("created stock shader is non-null");
         let device = Lease::new(device, release).expect("shader creation requires a device");
         unsafe {

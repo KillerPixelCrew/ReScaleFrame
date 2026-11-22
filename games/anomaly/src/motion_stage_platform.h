@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "motion_device_platform.h"
+#include "motion_frame_target.h"
 #include "motion_target_platform.h"
 #include "shader_loader_platform.h"
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/texture_dump.h>
 
+struct rsf_shader_patch_api;
+
 namespace rsf::anomaly::geometry { struct SnapshotFacts; }
 
 namespace rsf::anomaly::motion {
-struct FrameTarget;
+using FrameTarget = rsf_anomaly_motion_frame_target;
 struct FoliageLayout;
 
 // Private static-library ABI. Engine objects borrow their native lifetime.
@@ -41,8 +44,11 @@ struct ShaderCreation {
     int32_t status;
     uint32_t size;
 };
-// The pack's Rust-admitted manifest, owned by the pack until close_pack.
-struct PackInfo { const rsf_anomaly_shader_admitted* manifest; };
+// These pointers are owned by the pack until close_pack.
+struct PackInfo {
+    const rsf_anomaly_shader_admitted* manifest;
+    const rsf_shader_patch_api* api;
+};
 struct PatchCounters { uint64_t intercepted, built, cache_hits, refused, refusals[11]; };
 enum : uint8_t { NoMotionDraw, RestoreMotionDraw, ReplayMotionDraw };
 // Begin initializes the opaque owner for the Restore and Replay routes.
@@ -92,7 +98,7 @@ struct MotionPlatform {
     bool (*link_shaders)(const void*, const void*, const void*, const void*);
     void* (*create_shader)(void*, const char*, void*, void*, bool, bool*);
 };
-inline constexpr uint32_t motion_platform_abi = 9;
+inline constexpr uint32_t motion_platform_abi = 10;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;
@@ -101,6 +107,9 @@ bool rsf_anomaly_motion_stage_quiesce() noexcept;
 bool rsf_anomaly_motion_stage_enabled() noexcept;
 void rsf_anomaly_motion_stage_report(rsf_dump_log_fn, void*) noexcept;
 void rsf_anomaly_motion_stage_frame_target(FrameTarget*) noexcept;
+bool rsf_anomaly_motion_target_facts(void*, TargetFacts*) noexcept;
+void rsf_anomaly_motion_bound_shaders(void*, ShaderObjects*, bool) noexcept;
+void rsf_anomaly_motion_set_shaders(void*, const ShaderObjects*, bool) noexcept;
 void rsf_anomaly_motion_stage_cancel_draw() noexcept;
 uint8_t rsf_anomaly_motion_stage_draw_begin(void*, MotionDrawScope*) noexcept;
 void rsf_anomaly_motion_stage_draw_end(MotionDrawScope*, bool completed) noexcept;

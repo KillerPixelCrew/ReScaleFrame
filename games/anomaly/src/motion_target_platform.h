@@ -14,12 +14,15 @@ enum {
 
 typedef struct rsf_anomaly_motion_bind_state {
     uint32_t bound, cache_may_hold_motion;
+    void* backend;
+    void* host;
 } rsf_anomaly_motion_bind_state;
 
 typedef struct rsf_anomaly_motion_bind_layout {
     uint32_t rt_offset, zb_offset, changed_offset;
 } rsf_anomaly_motion_bind_layout;
 
+// Every callback is required and the table is immutable for each call.
 typedef struct rsf_anomaly_motion_bind_platform {
     uint32_t (*read)(void* host, const void* address, void* out, size_t);
     uint32_t (*write)(void* host, void* address, const void* in, size_t);

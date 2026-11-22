@@ -15,6 +15,7 @@ pub(crate) const RIGID: u8 = 0;
 pub(crate) const HARDWARE_SKINNED: u8 = 1;
 pub(crate) const SINGLE_BONE: u8 = 2;
 pub(crate) const SOFTWARE_SKINNED: u8 = 3;
+pub(crate) const TREE: u8 = 4;
 pub(crate) const MAIN: u8 = 0;
 pub(crate) const SCOPE: u8 = 1;
 pub(crate) const WORLD: u8 = 0;

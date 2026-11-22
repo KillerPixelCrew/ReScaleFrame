@@ -252,6 +252,8 @@ generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_plat
 generate("games/anomaly/src/fg_policy_abi.rs", "games/anomaly/src/fg_policy_platform.h",
          "rsf_anomaly_fg_(decision|counters)", "RSF_ANOMALY_(GAMEPLAY_SCREEN|HELD_SCREEN|SKIP_.*|RESET_.*)",
          ["-Isdk/game/include"], ["--no-recursive-allowlist", "--with-derive-default"])
+generate("games/anomaly/src/motion_frame_target_abi.rs", "games/anomaly/src/motion_frame_target.h",
+         "rsf_anomaly_motion_frame_target", "NOTHING", [], ["--with-derive-default"])
 generate("games/anomaly/src/fg_stage_abi.rs", "games/anomaly/src/fg_stage_platform.h",
          "rsf_(anomaly_fg_.*|d3d11_(present_(api|setup)|fg_api)|get_d3d11_(present|fg)_api_fn|"
          "native_fg_(options|status)|fg_status|d3d11_fg_inputs|observer_present(_event)?(_fn)?|backend_log_fn)",
@@ -261,6 +263,7 @@ generate("games/anomaly/src/fg_stage_abi.rs", "games/anomaly/src/fg_stage_platfo
           "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::fg_inputs_abi::rsf_anomaly_input_platform;",
+          "--raw-line", "use crate::motion_frame_target_abi::rsf_anomaly_motion_frame_target;",
           "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass, rsf_result};",
           "--raw-line", "type wchar_t = u16;",
           "--raw-line", "type rsf_streamline_host = ::core::ffi::c_void;",

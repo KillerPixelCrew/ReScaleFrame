@@ -28,6 +28,7 @@ enum class HistoryReason : std::uint8_t {
     FoliageLodChanged,   // the progressive tree draws a different slide window than last frame
     FoliageXformChanged, // the visual address now carries a different m_xform: a recycled address, not the same tree
     FoliageWorld,        // the detail draw's world matrix is not exactly identity (the transform assumes it)
+    InvalidMatrix,
     Count
 };
 const char* history_reason_name(HistoryReason) noexcept;

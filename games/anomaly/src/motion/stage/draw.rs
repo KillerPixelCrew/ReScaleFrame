@@ -308,7 +308,7 @@ impl Render {
         let (decision, reason) = match unsafe { decide_core(&input) } {
             Ok(decision) => {
                 let packed = unsafe {
-                    rsf_anomaly_motion_pack_core(
+                    pack_core(
                         &decision.previous_wvp,
                         decision.bones.data,
                         decision.bones.count,
@@ -316,14 +316,7 @@ impl Render {
                         &mut bytes,
                     )
                 };
-                (
-                    decision,
-                    if packed {
-                        HistoryReason::Valid
-                    } else {
-                        HistoryReason::TooManyBones
-                    },
-                )
+                (decision, packed.err().unwrap_or(HistoryReason::Valid))
             }
             Err(reason) => {
                 rsf_anomaly_motion_pack_core_invalid(&mut bytes);

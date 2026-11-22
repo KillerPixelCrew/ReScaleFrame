@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "motion_frame_target.h"
 // Motion MRT for the standard 1.5.3 DX11 executable. Opt-in, rides on Mode=Observe:
 //   [Anomaly] Motion=1                 load motion shader variants, bind RTV2 during the G-buffer pass
 //   Pack: <INI directory>\ReScaleFrame\patches\motion.rsfpatch. No shipped game shader bodies.
@@ -49,10 +50,6 @@ void report(void (*emit)(void*, const char*), void* user) noexcept;
 // only. `texture` is the R16G16B16A16_FLOAT target (ID3D11Texture2D*, owned here, not reference counted, valid until
 // the next window resizes it or quiesce); `frame` and `main` identify that window (engine frame, main view);
 // `written` is false when the window did not get a usable target. All zero while the stage is inactive.
-struct FrameTarget {
-    void* texture{};
-    std::uint32_t width{}, height{}, frame{};
-    bool main{}, written{};
-};
+using FrameTarget = rsf_anomaly_motion_frame_target;
 FrameTarget frame_target() noexcept;
 }

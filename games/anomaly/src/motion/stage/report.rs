@@ -25,11 +25,14 @@ pub(super) struct Counters {
     pub target_created: u64,
     pub target_failed: u64,
     pub msaa_frames: u64,
+    pub options_unreadable: u64,
+    pub descriptor_unreadable: u64,
+    pub target_samples_or_layers: u64,
     pub window_draws: u64,
     pub motion_draws: u64,
     valid_draws: u64,
     invalid_draws: u64,
-    reasons: [u64; 16],
+    reasons: [u64; HistoryReason::InvalidMatrix as usize + 1],
     pub unpaired_draws: u64,
     pub replays: u64,
     pub replay_skipped_no_depth_write: u64,
@@ -175,6 +178,11 @@ impl Stage {
             );
         }
         log.say(reasons);
+        log.say(format!(
+            "Anomaly motion target options_unreadable={} descriptor_unreadable={} samples_or_layers={} allocation_failed={}",
+            d(|s| s.options_unreadable), d(|s| s.descriptor_unreadable),
+            d(|s| s.target_samples_or_layers), d(|s| s.target_failed),
+        ));
         log.say(format!(
             "Anomaly motion foliage tree replaced={} stock={} valid={} invalid={} | detail replaced={} stock={} \
              valid={} invalid={} | detail items={} matched={} unmatched={} conflicts={} | rows poisoned={} \

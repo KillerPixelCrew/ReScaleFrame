@@ -3,7 +3,7 @@ use crate::motion_target_abi::{
     RSF_ANOMALY_MOTION_BIND_ALREADY_BOUND as ALREADY_BOUND, RSF_ANOMALY_MOTION_BIND_BOUND as BOUND,
     RSF_ANOMALY_MOTION_BIND_CONFLICT as CONFLICT, RSF_ANOMALY_MOTION_BIND_FAULT as FAULT,
     RSF_ANOMALY_MOTION_BIND_NONE as NONE, RSF_ANOMALY_MOTION_BIND_UNBOUND as UNBOUND,
-    rsf_anomaly_motion_bind_layout as Layout, rsf_anomaly_motion_bind_platform as Platform,
+    rsf_anomaly_motion_bind_layout as Layout, rsf_anomaly_motion_bind_platform as NativePlatform,
     rsf_anomaly_motion_bind_state as State,
 };
 use std::ffi::c_void;
@@ -11,6 +11,33 @@ use std::mem::MaybeUninit;
 use std::ptr;
 
 type Target = *mut c_void;
+
+#[repr(C)]
+pub(crate) struct Platform {
+    read: unsafe extern "C" fn(Target, *const c_void, Target, usize) -> u32,
+    write: unsafe extern "C" fn(Target, Target, *const c_void, usize) -> u32,
+    set_targets: unsafe extern "C" fn(Target, *const Target, Target),
+    clear_targets: unsafe extern "C" fn(Target),
+}
+
+const _: () = {
+    assert!(size_of::<Platform>() == size_of::<NativePlatform>());
+    assert!(align_of::<Platform>() == align_of::<NativePlatform>());
+    assert!(std::mem::offset_of!(Platform, read) == std::mem::offset_of!(NativePlatform, read));
+    assert!(std::mem::offset_of!(Platform, write) == std::mem::offset_of!(NativePlatform, write));
+    assert!(
+        std::mem::offset_of!(Platform, set_targets)
+            == std::mem::offset_of!(NativePlatform, set_targets)
+    );
+    assert!(
+        std::mem::offset_of!(Platform, clear_targets)
+            == std::mem::offset_of!(NativePlatform, clear_targets)
+    );
+};
+
+fn cache_available(state: &State, backend: *mut u8, host: Target) -> bool {
+    state.cache_may_hold_motion == 0 || (state.backend == backend.cast() && state.host == host)
+}
 
 struct Cache<'a> {
     platform: &'a Platform,
@@ -39,7 +66,7 @@ impl<'a> Cache<'a> {
         // Cache reads use only raw pointers and bytes, which admit any bit pattern.
         let mut value = MaybeUninit::<T>::uninit();
         let accepted = unsafe {
-            (self.platform.read.unwrap())(
+            (self.platform.read)(
                 self.host,
                 address.cast(),
                 value.as_mut_ptr().cast(),
@@ -51,7 +78,7 @@ impl<'a> Cache<'a> {
 
     fn write<T>(&self, address: *mut u8, value: T) -> bool {
         unsafe {
-            (self.platform.write.unwrap())(
+            (self.platform.write)(
                 self.host,
                 address.cast(),
                 ptr::from_ref(&value).cast(),
@@ -100,8 +127,15 @@ pub(crate) extern "C" fn rsf_anomaly_motion_bind_draw(
     motion_rtv: Target,
 ) -> i32 {
     state.bound = 0;
+    if !cache_available(state, backend, host) {
+        return FAULT;
+    }
     if backend.is_null() || motion_rtv.is_null() {
-        return NONE;
+        return if state.cache_may_hold_motion != 0 {
+            FAULT
+        } else {
+            NONE
+        };
     }
     let cache = Cache::new(platform, host, layout, backend);
     let Some(mut targets) =
@@ -110,6 +144,8 @@ pub(crate) extern "C" fn rsf_anomaly_motion_bind_draw(
         return FAULT;
     };
     let original = targets[2];
+    state.backend = backend.cast();
+    state.host = host;
     state.cache_may_hold_motion = u32::from(original == motion_rtv);
     let Some(depth) = cache.read::<Target>(backend.wrapping_add(layout.zb_offset as usize)) else {
         return FAULT;
@@ -142,7 +178,7 @@ pub(crate) extern "C" fn rsf_anomaly_motion_bind_draw(
         }
     }
     targets[2] = target;
-    unsafe { (platform.set_targets.unwrap())(host, targets.as_ptr(), depth) };
+    unsafe { (platform.set_targets)(host, targets.as_ptr(), depth) };
     state.bound = u32::from(gbuffer);
     state.cache_may_hold_motion = state.bound;
     if gbuffer { BOUND } else { UNBOUND }
@@ -158,8 +194,15 @@ pub(crate) extern "C" fn rsf_anomaly_motion_bind_close(
     motion_rtv: Target,
 ) -> i32 {
     state.bound = 0;
+    if !cache_available(state, backend, host) {
+        return FAULT;
+    }
     if backend.is_null() || motion_rtv.is_null() {
-        return NONE;
+        return if state.cache_may_hold_motion != 0 {
+            FAULT
+        } else {
+            NONE
+        };
     }
     let cache = Cache::new(platform, host, layout, backend);
     let Some(slot) = cache.read::<Target>(cache.slot_two) else {
@@ -180,7 +223,7 @@ pub(crate) extern "C" fn rsf_anomaly_motion_bind_close(
     }
     state.cache_may_hold_motion = 0;
     if changed == 0 {
-        unsafe { (platform.clear_targets.unwrap())(host) };
+        unsafe { (platform.clear_targets)(host) };
     }
     UNBOUND
 }

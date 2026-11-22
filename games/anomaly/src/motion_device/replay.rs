@@ -6,28 +6,28 @@ use std::ptr::{drop_in_place, null, null_mut};
 pub(crate) const REPLAY_READY: u8 = 0;
 pub(crate) const REPLAY_NO_DEPTH_WRITE: u8 = 1;
 const FAILED: u8 = 2;
-const RENDER_TARGETS: usize = 8;
-const CLASS_INTERFACES: usize = 253;
+pub(super) const RENDER_TARGETS: usize = 8;
+pub(super) const CLASS_INTERFACES: usize = 253;
 
 #[repr(C)]
 #[derive(Default)]
-struct Depth {
-    targets: [Raw; RENDER_TARGETS],
-    view: Raw,
-    state: Raw,
-    reference: u32,
-    enabled: bool,
-    writable: bool,
+pub(super) struct Depth {
+    pub(super) targets: [Raw; RENDER_TARGETS],
+    pub(super) view: Raw,
+    pub(super) state: Raw,
+    pub(super) reference: u32,
+    pub(super) enabled: bool,
+    pub(super) writable: bool,
 }
 
 #[repr(C)]
-struct Pixel {
-    blend: Raw,
-    factor: [f32; 4],
-    mask: u32,
-    shader: Raw,
-    classes: [Raw; CLASS_INTERFACES],
-    count: u32,
+pub(super) struct Pixel {
+    pub(super) blend: Raw,
+    pub(super) factor: [f32; 4],
+    pub(super) mask: u32,
+    pub(super) shader: Raw,
+    pub(super) classes: [Raw; CLASS_INTERFACES],
+    pub(super) count: u32,
 }
 
 impl Default for Pixel {
@@ -45,13 +45,13 @@ impl Default for Pixel {
 
 #[repr(C)]
 pub(crate) struct Platform {
-    release: unsafe extern "C" fn(Raw),
-    read_depth: unsafe extern "C" fn(Raw, &mut Depth),
-    read_pixel: unsafe extern "C" fn(Raw, &mut Pixel),
-    targets: unsafe extern "C" fn(Raw, u32, *const Raw, Raw),
-    depth: unsafe extern "C" fn(Raw, Raw, u32),
-    blend: unsafe extern "C" fn(Raw, Raw, *const f32, u32),
-    shader: unsafe extern "C" fn(Raw, Raw, *const Raw, u32),
+    pub(super) release: unsafe extern "C" fn(Raw),
+    pub(super) read_depth: unsafe extern "C" fn(Raw, &mut Depth),
+    pub(super) read_pixel: unsafe extern "C" fn(Raw, &mut Pixel),
+    pub(super) targets: unsafe extern "C" fn(Raw, u32, *const Raw, Raw),
+    pub(super) depth: unsafe extern "C" fn(Raw, Raw, u32),
+    pub(super) blend: unsafe extern "C" fn(Raw, Raw, *const f32, u32),
+    pub(super) shader: unsafe extern "C" fn(Raw, Raw, *const Raw, u32),
 }
 
 const _: () = {

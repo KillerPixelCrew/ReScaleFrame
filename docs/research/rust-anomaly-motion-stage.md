@@ -215,3 +215,100 @@ and shader pack match the baseline in source. The motion device
 fixture now injects a C++ exception during replay and checks that the
 depth state, render targets and pixel shader are restored. The fixture
 and live Standard and AVX checks remain unrun.
+
+## N04 D3D11 leaves and target cleanup
+
+Source baseline: `846e3a45` and the producer and shader evidence above.
+The N04 port moves resource creation, upload, RTV clear and binding, shader
+binding and replay state reads and writes to Rust. It uses the pinned Windows
+COM declarations and the shared System32 compiler. The engine-specific thunk
+keeps its C++ call frame for compiler stack capture and guaranteed restoration
+when an original native draw unwinds. Guarded engine reads and executable
+fingerprints are unchanged. The fixture facades still lend their existing
+records to the Rust owners.
+
+The replay call snapshots eight RTVs and the DSV, depth state and stencil
+reference, blend state and factors and sample mask, plus the pixel shader and
+up to 253 class interfaces. The Rust scope restores this state after the
+original draw and releases each received COM reference, including the path that
+refuses depth-read-only replay. The stock shader binding query releases only
+the GetShader reference. Its render callback borrows the engine binding and
+the selected replacement chain separately pins its stock and replacement
+objects through restoration.
+
+A window now revalidates the position RTV and surface on replacement even if
+the source frame, view, generation and context are unchanged. Window admission
+reports unreadable options, the observed MSAA bit, unreadable descriptors,
+unsupported sample or array counts and allocation failure independently.
+When an RTV may still be borrowed by RCache, cleanup checks the matching
+backend and context. A missing or foreign cache refuses cleanup and leaves
+the device owner live. The contract fixture now checks both refusal routes
+and a successful retry on the original cache.
+
+Model and foliage history share the same frame identity and rotation decision.
+Foliage reuses its maps and model history keeps retirement watermarks. Motion
+reads the geometry verdicts and draw kinds from their shared definitions.
+Core packing reports invalid matrices separately from bone overflow while the
+native boolean wrapper still emits invalid b13 bytes on either refusal. Pack
+constant operations now come from the opened pack's API table, without
+interpreting its handle. The motion platform ABI is 10. Motion and FG share
+one generated target payload, with the FG caller's existing flag offsets.
+
+Pinned Rust formatting, scoped bindgen regeneration, locked offline Cargo
+metadata and Git whitespace checks passed. This is source evidence. Builds,
+lint, fixture execution, device checks and game acceptance remain user-owned.
+The device fixtures continue to cover native D3D11 entry points, including
+deployed or hardware-dependent cases. The foliage shader device harness is
+still built by its Python driver.
+
+### N04 checklist handoff
+
+Source port closures with retained FFI or fixture declarations:
+
+- `games/anomaly/src/motion_bridge.cpp`
+- `games/anomaly/src/motion_constants.h`
+- `games/anomaly/src/motion_d3d11.cpp`
+- `games/anomaly/src/motion_d3d11.h`
+- `games/anomaly/src/motion_device_platform.h`
+- `games/anomaly/src/motion_foliage.cpp`
+- `games/anomaly/src/motion_foliage.h`
+- `games/anomaly/src/motion_history.h`
+- `games/anomaly/src/motion_policy.h`
+- `games/anomaly/src/motion_stage.h`
+- `games/anomaly/src/motion_stage_platform.h`
+- `games/anomaly/src/motion_target.cpp`
+- `games/anomaly/src/motion_target.h`
+- `games/anomaly/src/motion_target_platform.h`
+
+Closed Rust findings:
+
+- Use the geometry producer's draw kinds and verdicts in motion history selection.
+- Distinguish an unreadable render option from observed multisampling.
+- Rotate Anomaly model and foliage histories from one frame identity.
+- Use one motion frame-target description between Anomaly motion and FG.
+- Keep the motion pack's opaque handle opaque to the draw stage.
+- Invalidate window readiness when the engine replaces the position surface.
+- Distinguish no binding from a binding that cannot be inspected.
+- Reuse the Anomaly host-log callback wrapper in motion and FG.
+- Keep matrix validation failures distinct from bone-count refusals.
+- Anomaly motion device and binder tables unwrap bindgen Option leaves on every use.
+
+Open port paths are `games/anomaly/src/motion_stage.cpp` (native draw trampolines,
+guarded engine reads and shader callback interop) and
+`games/anomaly/src/motion_profile.h` (fingerprinted build data shared by the
+native stage and shader loader). All seven N04 fixture checkboxes remain open.
+`tests/anomaly_motion_contract.cpp` has additional cleanup coverage. The three
+existing device fixtures that use MotionDevice now reach the Rust D3D11 and
+replay calls through the same compatibility surface.
+
+Two Rust findings need coordinated caller edits:
+
+- Use the range-aware option builder for Anomaly motion controls. Motion now
+  uses an explicit inclusive range and advertises a minimum of one for the
+  interval. Share the descriptor builder with adapter_options after integrating
+  N02's boolean setter ABI; take `*const c_char` so the mutable pack label and
+  static labels can use the same builder.
+- Use one Anomaly frame-dump directory resolver for SR and motion. Motion uses
+  `frame_dump::anomaly_directory` with the SR size rule. N06 can import it in
+  place of `sr_stage::dump_directory`; existing SR schedule and diagnostics
+  stay in the SR owner.

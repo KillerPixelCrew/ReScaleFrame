@@ -235,56 +235,16 @@ uint64_t reset_generation() noexcept {
     return rsf_anomaly_observation(&observation) == RSF_OK ? observation.resets : 0;
 }
 bool options_word3(uint32_t* options) noexcept { return read_global(srp().render_options_word3_rva, *options); }
-bool target_facts(void* surface, TargetFacts* out) noexcept {
-    ComPtr<ID3D11Texture2D> texture;
-    if (FAILED(static_cast<IUnknown*>(surface)->QueryInterface(IID_PPV_ARGS(&texture)))) return false;
-    D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
-    *out = {desc.Width, desc.Height, desc.SampleDesc.Count, desc.ArraySize};
-    return true;
-}
 bool camera(float (*view)[16], float (*projection)[16]) noexcept {
     const auto* xforms = image + srp().backend_rva + sr::backend_xforms_offset;
     return guarded_copy(view, xforms + sr::xforms_view_offset, sizeof(*view)) &&
         guarded_copy(projection, xforms + sr::xforms_project_offset, sizeof(*projection));
 }
 
-template<class Shader, auto Get>
-void* bound_shader(ID3D11DeviceContext* context) noexcept {
-    ComPtr<Shader> shader;
-    (context->*Get)(&shader, nullptr, nullptr);
-    // The caller is inside constants.flush. The engine retains its stock shader.
-    return shader.Get();
-}
-void bound_shaders(void* raw, ShaderObjects* out, bool all_stages) noexcept {
-    auto* c = static_cast<ID3D11DeviceContext*>(raw);
-    const auto vs = bound_shader<ID3D11VertexShader, &ID3D11DeviceContext::VSGetShader>(c);
-    if (!all_stages) { *out = {vs, nullptr, nullptr, nullptr, nullptr}; return; }
-    *out = {
-        vs,
-        bound_shader<ID3D11HullShader, &ID3D11DeviceContext::HSGetShader>(c),
-        bound_shader<ID3D11DomainShader, &ID3D11DeviceContext::DSGetShader>(c),
-        bound_shader<ID3D11PixelShader, &ID3D11DeviceContext::PSGetShader>(c),
-        bound_shader<ID3D11GeometryShader, &ID3D11DeviceContext::GSGetShader>(c)
-    };
-}
-void set_shaders(void* raw, const ShaderObjects* shader, bool tess) noexcept {
-    auto* c = static_cast<ID3D11DeviceContext*>(raw);
-    c->VSSetShader(static_cast<ID3D11VertexShader*>(shader->vs), nullptr, 0);
-    c->PSSetShader(static_cast<ID3D11PixelShader*>(shader->ps), nullptr, 0);
-    if (tess) {
-        c->HSSetShader(static_cast<ID3D11HullShader*>(shader->hs), nullptr, 0);
-        c->DSSetShader(static_cast<ID3D11DomainShader*>(shader->ds), nullptr, 0);
-    }
-}
 constexpr rsf_anomaly_motion_bind_platform bind_platform{
     [](void*, const void* address, void* out, size_t size) -> uint32_t { return guarded_copy(out, address, size); },
     [](void*, void* address, const void* in, size_t size) -> uint32_t { return guarded_copy(address, in, size); },
-    [](void* context, void* const* targets, void* depth) {
-        if (context) static_cast<ID3D11DeviceContext*>(context)->OMSetRenderTargets(4,
-            reinterpret_cast<ID3D11RenderTargetView* const*>(targets), static_cast<ID3D11DepthStencilView*>(depth));
-    },
-    [](void* context) { if (context) static_cast<ID3D11DeviceContext*>(context)->OMSetRenderTargets(0, nullptr, nullptr); }
+    rsf_anomaly_motion_bind_targets, rsf_anomaly_motion_clear_targets
 };
 
 void* open_pack(void* module, const void* profile, const wchar_t* pack, const wchar_t* cache,
@@ -292,7 +252,7 @@ void* open_pack(void* module, const void* profile, const wchar_t* pack, const wc
     std::string error;
     if (auto* result = open_runtime_pack(pack, cache, static_cast<std::byte*>(module),
             *static_cast<const BuildProfile*>(profile)->motion, error)) {
-        *info = {rsf_anomaly_runtime_pack_manifest(result)};
+        *info = {rsf_anomaly_runtime_pack_manifest(result), rsf_anomaly_runtime_pack_api(result)};
         return result;
     }
     std::snprintf(message, size, "%s", error.c_str());
@@ -322,20 +282,17 @@ void* create_shader(void* pack, const char* target, void* device, void* reflecti
     return nullptr;
 }
 const MotionPlatform platform{
-    sizeof(MotionPlatform), motion_platform_abi, &motion_device_platform(), &bind_platform,
+    sizeof(MotionPlatform), motion_platform_abi, rsf_anomaly_motion_device_platform_get(), &bind_platform,
     {sr::backend_rt_offset, sr::backend_zb_offset, sr::backend_rt_changed_offset},
     guard_failure,
     geometry::geometry_hooks_active,
     [](bool enabled) { geometry::geometry_set_flush_callback(enabled ? flush : nullptr); },
     geometry::geometry_enable_foliage_identity, install_hooks, [] { return hooks.disable(); }, [] { return hooks.created(); },
     install_draw_hooks, render_target, position_views, native_frame, render_view, reset_generation,
-    options_word3, target_facts, backend, hw_context, hw_device,
-    [](void* c, void* rtv) {
-        static constexpr float zero[4]{};
-        static_cast<ID3D11DeviceContext*>(c)->ClearRenderTargetView(static_cast<ID3D11RenderTargetView*>(rtv), zero);
-    },
-    bound_shaders, set_shaders,
-    &motion_replay_platform(),
+    options_word3, rsf_anomaly_motion_target_facts, backend, hw_context, hw_device,
+    rsf_anomaly_motion_clear_target,
+    rsf_anomaly_motion_bound_shaders, rsf_anomaly_motion_set_shaders,
+    rsf_anomaly_motion_replay_platform_get(),
     camera, [](float (*world)[16]) { return geometry::read_world_matrix(*world); },
     geometry::read_vertex_constants, geometry::write_vertex_constants,
     [](void* raw, MotionDrawState* out) {
@@ -375,12 +332,12 @@ const MotionPlatform platform{
 };
 
 static_assert(sizeof(PositionViews) == 16 && sizeof(TargetFacts) == 16 && sizeof(DrawFacts) == 32);
-static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderResult) == 32 && sizeof(PackInfo) == 8);
+static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderResult) == 32 && sizeof(PackInfo) == 16);
 static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
 static_assert(sizeof(MotionPlatform) == 352 && offsetof(MotionPlatform, guards) == 40 &&
     offsetof(MotionPlatform, render_target) == 104 && offsetof(MotionPlatform, target_facts) == 152 &&
     offsetof(MotionPlatform, frame_layout) == 296 && offsetof(MotionPlatform, create_shader) == 344);
-static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, main) == 20);
+static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, written) == 20 && offsetof(FrameTarget, main) == 21);
 static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);
 }

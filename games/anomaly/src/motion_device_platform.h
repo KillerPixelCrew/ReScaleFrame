@@ -8,6 +8,7 @@ enum { RSF_MOTION_CORE, RSF_MOTION_FOLIAGE, RSF_MOTION_PIXEL, RSF_MOTION_TESS };
 enum { RSF_MOTION_READY, RSF_MOTION_CREATED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_FAILED };
 
 typedef void (*rsf_anomaly_motion_log)(void*, const char*);
+// Every callback is required and the immutable table must outlive the owner.
 typedef struct rsf_anomaly_motion_device_platform {
     void (*retain)(void*);
     void (*release)(void*);
@@ -64,6 +65,11 @@ typedef struct rsf_anomaly_motion_replay_scope {
 #ifdef __cplusplus
 extern "C" {
 #endif
+void rsf_anomaly_motion_clear_target(void* context, void* target);
+void rsf_anomaly_motion_bind_targets(void* context, void* const* targets, void* depth);
+void rsf_anomaly_motion_clear_targets(void* context);
+const rsf_anomaly_motion_device_platform* rsf_anomaly_motion_device_platform_get(void);
+const rsf_anomaly_motion_replay_platform* rsf_anomaly_motion_replay_platform_get(void);
 void* rsf_anomaly_motion_device_new(const rsf_anomaly_motion_device_platform*);
 void rsf_anomaly_motion_device_drop(void*);
 void rsf_anomaly_motion_device_reset(void*);

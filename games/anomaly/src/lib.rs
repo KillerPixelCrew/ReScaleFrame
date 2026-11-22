@@ -30,12 +30,16 @@ mod frame_dump;
 mod geometry_registry;
 mod geometry_registry_abi;
 #[cfg(windows)]
+mod host_log;
+#[cfg(windows)]
 mod ini;
 mod input;
 mod lease;
 mod motion;
 mod motion_device;
 mod motion_device_abi;
+#[cfg(windows)]
+mod motion_frame_target_abi;
 mod motion_target;
 mod motion_target_abi;
 mod native_geometry;

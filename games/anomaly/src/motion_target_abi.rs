@@ -10,22 +10,37 @@ pub const RSF_ANOMALY_MOTION_BIND_CONFLICT: _bindgen_ty_1 = 4;
 pub const RSF_ANOMALY_MOTION_BIND_FAULT: _bindgen_ty_1 = 5;
 pub type _bindgen_ty_1 = ::core::ffi::c_int;
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct rsf_anomaly_motion_bind_state {
     pub bound: u32,
     pub cache_may_hold_motion: u32,
+    pub backend: *mut ::core::ffi::c_void,
+    pub host: *mut ::core::ffi::c_void,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_motion_bind_state"]
-        [::core::mem::size_of::<rsf_anomaly_motion_bind_state>() - 8usize];
+        [::core::mem::size_of::<rsf_anomaly_motion_bind_state>() - 24usize];
     ["Alignment of rsf_anomaly_motion_bind_state"]
-        [::core::mem::align_of::<rsf_anomaly_motion_bind_state>() - 4usize];
+        [::core::mem::align_of::<rsf_anomaly_motion_bind_state>() - 8usize];
     ["Offset of field: rsf_anomaly_motion_bind_state::bound"]
         [::core::mem::offset_of!(rsf_anomaly_motion_bind_state, bound) - 0usize];
     ["Offset of field: rsf_anomaly_motion_bind_state::cache_may_hold_motion"]
         [::core::mem::offset_of!(rsf_anomaly_motion_bind_state, cache_may_hold_motion) - 4usize];
+    ["Offset of field: rsf_anomaly_motion_bind_state::backend"]
+        [::core::mem::offset_of!(rsf_anomaly_motion_bind_state, backend) - 8usize];
+    ["Offset of field: rsf_anomaly_motion_bind_state::host"]
+        [::core::mem::offset_of!(rsf_anomaly_motion_bind_state, host) - 16usize];
 };
+impl Default for rsf_anomaly_motion_bind_state {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_motion_bind_layout {

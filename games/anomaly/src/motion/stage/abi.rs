@@ -1,19 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! Private call-scoped ABI with motion_stage_platform.h.
 use super::*;
-use crate::motion_device::ReplayPlatform;
-use crate::motion_device_abi::{
-    rsf_anomaly_motion_device_platform as DevicePlatform,
-    rsf_anomaly_motion_device_view as DeviceView,
-};
-use crate::motion_target_abi::{
-    rsf_anomaly_motion_bind_layout as BindLayout, rsf_anomaly_motion_bind_platform as BindPlatform,
-};
+use crate::motion_device::{Platform as DevicePlatform, ReplayPlatform};
+use crate::motion_device_abi::rsf_anomaly_motion_device_view as DeviceView;
+use crate::motion_target::Platform as BindPlatform;
+use crate::motion_target_abi::rsf_anomaly_motion_bind_layout as BindLayout;
 use crate::shader_loader::{Bytes, Entry, FrameLayout, Manifest, Read, Request as ShaderRequest};
 use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
-pub(super) const PLATFORM_ABI: u32 = 9;
+pub(super) const PLATFORM_ABI: u32 = 10;
 
 #[repr(C)]
 pub(super) struct DrawScope([std::mem::MaybeUninit<u64>; 22]);
@@ -98,6 +94,7 @@ impl Default for ShaderResult {
 pub(super) struct PackInfo {
     // Owned by the native pack and immutable until its close leaf runs.
     pub manifest: *const Manifest,
+    pub api: *const rsf_game_sys::shader_patch_abi::rsf_shader_patch_api,
 }
 
 #[repr(C)]
@@ -188,16 +185,7 @@ pub(super) struct FoliageLayout {
     pub usable: bool,
 }
 
-#[repr(C)]
-#[derive(Default)]
-pub(super) struct FrameTarget {
-    pub texture: Raw,
-    pub width: u32,
-    pub height: u32,
-    pub frame: u32,
-    pub main: bool,
-    pub written: bool,
-}
+pub(super) use crate::motion_frame_target_abi::rsf_anomaly_motion_frame_target as FrameTarget;
 
 const _: () = {
     assert!(size_of::<PositionViews>() == 16);
@@ -207,7 +195,7 @@ const _: () = {
     assert!(size_of::<ShaderCreation>() == 56);
     assert!(std::mem::offset_of!(ShaderCreation, return_address) == 32);
     assert!(std::mem::offset_of!(ShaderCreation, status) == 48);
-    assert!(size_of::<PackInfo>() == 8);
+    assert!(size_of::<PackInfo>() == 16);
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);

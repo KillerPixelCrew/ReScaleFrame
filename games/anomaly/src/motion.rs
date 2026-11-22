@@ -11,7 +11,11 @@ mod stage;
 mod window;
 
 use crate::ffi::borrow_span;
-use crate::geometry_registry_abi::rsf_anomaly_geometry_key as InstanceKey;
+use crate::geometry_registry_abi::{
+    RSF_ANOMALY_DRAW_IDENTIFIED, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE,
+    RSF_ANOMALY_DRAW_IGNORED_STATIC_WORLD, rsf_anomaly_geometry_key as InstanceKey,
+};
+use crate::native_geometry_abi::{HARDWARE_SKINNED, RIGID, SINGLE_BONE, TREE};
 use crate::shader_family::{CORE_MODEL, CORE_STATIC, FOLIAGE_DETAIL, FOLIAGE_TREE};
 #[cfg(windows)]
 pub(crate) use stage::record_retirement;
@@ -322,7 +326,21 @@ struct FrameIdentity {
     height: u32,
 }
 
+enum Rotation {
+    Reuse,
+    Advance,
+    Reset,
+}
+
 impl FrameIdentity {
+    fn rotation(self, current: Option<Self>) -> Rotation {
+        match current {
+            Some(current) if self == current => Rotation::Reuse,
+            Some(current) if self.follows(current) => Rotation::Advance,
+            _ => Rotation::Reset,
+        }
+    }
+
     fn follows(self, previous: Self) -> bool {
         // Source counters may skip between draws of a given view.
         self.source > previous.source
@@ -361,15 +379,10 @@ struct MotionHistoryState {
 impl MotionHistoryState {
     fn begin(&mut self, view: usize, id: FrameIdentity) -> bool {
         let state = &mut self.views[view];
-        if let Some(current) = &state.current {
-            if id == current.id {
-                return state.previous.is_some();
-            }
-            state.previous = if id.follows(current.id) {
-                state.current.take()
-            } else {
-                None
-            };
+        match id.rotation(state.current.as_ref().map(|frame| frame.id)) {
+            Rotation::Reuse => return state.previous.is_some(),
+            Rotation::Advance => state.previous = state.current.take(),
+            Rotation::Reset => state.previous = None,
         }
         state.current = Some(Frame {
             id,
@@ -621,13 +634,26 @@ unsafe extern "C" fn rsf_anomaly_motion_pack_core(
     history: &CoreHistory,
     out: &mut MaybeUninit<[u8; CORE_BYTES]>,
 ) -> bool {
+    unsafe { pack_core(wvp, bones, count, history, out) }.is_ok()
+}
+
+unsafe fn pack_core(
+    wvp: &Mat4,
+    bones: *const Mat4,
+    count: usize,
+    history: &CoreHistory,
+    out: &mut MaybeUninit<[u8; CORE_BYTES]>,
+) -> Result<(), HistoryReason> {
     let out = initialized_invalid(out, CORE_HISTORY);
-    if count > CORE_MAX_BONES || !wvp.usable() {
-        return false;
+    if count > CORE_MAX_BONES {
+        return Err(HistoryReason::TooManyBones);
+    }
+    if !wvp.usable() {
+        return Err(HistoryReason::InvalidMatrix);
     }
     let bones = unsafe { borrow_span(bones, count) };
     if bones.iter().any(|bone| !bone.usable()) {
-        return false;
+        return Err(HistoryReason::InvalidMatrix);
     }
     put_matrix(out, 0, wvp, 4);
     for (i, bone) in bones.iter().enumerate() {
@@ -642,7 +668,7 @@ unsafe extern "C" fn rsf_anomaly_motion_pack_core(
             history.rigid as u8 as f32,
         ],
     );
-    true
+    Ok(())
 }
 
 #[unsafe(no_mangle)]
@@ -832,11 +858,12 @@ enum HistoryReason {
     FoliageLodChanged = 13,
     FoliageXformChanged = 14,
     FoliageWorld = 15,
+    InvalidMatrix = 16,
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_history_reason_name(reason: u8) -> *const c_char {
-    const NAMES: [&std::ffi::CStr; 16] = [
+    const NAMES: [&std::ffi::CStr; 17] = [
         c"valid",
         c"no_visual",
         c"unidentified",
@@ -853,6 +880,7 @@ extern "C" fn rsf_anomaly_motion_history_reason_name(reason: u8) -> *const c_cha
         c"foliage_lod_changed",
         c"foliage_xform_changed",
         c"foliage_world",
+        c"invalid_matrix",
     ];
     NAMES
         .get(reason as usize)
@@ -861,14 +889,9 @@ extern "C" fn rsf_anomaly_motion_history_reason_name(reason: u8) -> *const c_cha
         .as_ptr()
 }
 
-const RIGID: u8 = 0;
-const HARDWARE_SKINNED: u8 = 1;
-const SINGLE_BONE: u8 = 2;
-const TREE: u8 = 4;
-
-const IDENTIFIED: u8 = 0;
-const STATIC_WORLD: u8 = 2;
-const IDENTIFIED_FOLIAGE: u8 = 8;
+const IDENTIFIED: u8 = RSF_ANOMALY_DRAW_IDENTIFIED as u8;
+const STATIC_WORLD: u8 = RSF_ANOMALY_DRAW_IGNORED_STATIC_WORLD as u8;
+const IDENTIFIED_FOLIAGE: u8 = RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE as u8;
 
 #[repr(C)]
 struct CoreDrawInput {

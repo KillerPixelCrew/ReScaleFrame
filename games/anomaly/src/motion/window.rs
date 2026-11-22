@@ -55,7 +55,9 @@ pub(super) fn begin(
         || window.frame != frame
         || window.view != view
         || window.generation != generation
-        || window.context != context;
+        || window.context != context
+        || window.position_rtv != rtv
+        || window.position_surface != surface;
     window.context = context;
     window.position_rtv = rtv;
     window.position_surface = surface;
@@ -124,6 +126,12 @@ mod tests {
         open(&mut window, true);
         assert!(begin(&mut window, 1, 1));
         assert!(!window.target_ok);
+        let other = ptr::dangling_mut::<u64>().cast();
+        for (rtv, surface) in [(context, other), (other, other)] {
+            open(&mut window, true);
+            assert!(super::begin(&mut window, context, rtv, surface, 7, 1, 1));
+            assert!(!window.target_ok);
+        }
         reset(&mut window);
         assert!(!window.have_frame);
     }

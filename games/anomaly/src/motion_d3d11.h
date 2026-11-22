@@ -19,8 +19,6 @@
 #include <type_traits>
 
 namespace rsf::anomaly::motion {
-const rsf_anomaly_motion_device_platform& motion_device_platform() noexcept;
-const rsf_anomaly_motion_replay_platform& motion_replay_platform() noexcept;
 using Microsoft::WRL::ComPtr;
 using LogFn = void (*)(void*, const char*);
 
@@ -58,7 +56,7 @@ public:
         const auto resources = view();
         rsf_anomaly_motion_replay_scope scope;
         const auto result = static_cast<ReplayResult>(
-            rsf_anomaly_motion_replay_begin(&motion_replay_platform(), &resources, context, &scope));
+            rsf_anomaly_motion_replay_begin(rsf_anomaly_motion_replay_platform_get(), &resources, context, &scope));
         if (result == ReplayResult::Done) {
             struct Restore {
                 rsf_anomaly_motion_replay_scope* scope;
@@ -78,6 +76,4 @@ private:
     }
     void* owner_{};
 };
-// First-party HLSL of the invalidation writer (no inputs, so it links with any vertex shader).
-inline constexpr char zero_motion_hlsl[] = "float4 main() : SV_Target2 { return float4(0, 0, 0, 0); }";
 }

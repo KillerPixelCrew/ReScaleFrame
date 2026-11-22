@@ -62,15 +62,15 @@ unsafe extern "C" fn bind(context: *mut c_void, _: *mut c_void, stage: c_char) -
 }
 
 static PLATFORM: Platform = Platform {
-    retain: Some(retain),
-    release: Some(release),
-    buffer: Some(resource),
-    zero_shader: Some(shader),
-    depth_state: Some(resource),
-    texture: Some(texture),
-    view: Some(view),
-    upload: Some(upload),
-    bind: Some(bind),
+    retain: retain,
+    release: release,
+    buffer: resource,
+    zero_shader: shader,
+    depth_state: resource,
+    texture: texture,
+    view: view,
+    upload: upload,
+    bind: bind,
 };
 
 fn make_owner(calls: &Calls) -> Box<Owner> {

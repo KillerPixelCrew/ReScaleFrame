@@ -2,8 +2,6 @@
 use super::capture::Schedule;
 use super::*;
 use crate::ini;
-use crate::overlay::rsf_anomaly_overlay_option_add;
-use crate::overlay_abi::rsf_anomaly_overlay_option as OptionEntry;
 use std::cell::UnsafeCell;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -85,69 +83,71 @@ static PACK_LABEL: Label = Label(UnsafeCell::new({
 type Get = unsafe extern "C" fn() -> i32;
 type Set = unsafe extern "C" fn(i32) -> bool;
 
-fn entry(label: *const c_char, bound: i32, restart: bool, get: Get, set: Set) {
-    let option = OptionEntry {
-        label,
-        toggle: (bound == 1).into(),
-        restart: restart.into(),
-        minimum: 0,
-        maximum: bound,
-        step: 1,
-        divisor: 1,
-        get: Some(get),
-        set: Some(set),
-    };
-    unsafe { rsf_anomaly_overlay_option_add(&option) };
+fn entry(
+    label: *const c_char,
+    range: std::ops::RangeInclusive<i32>,
+    restart: bool,
+    get: Get,
+    set: Set,
+) {
+    // The pack label is static storage and each other label is a C string literal.
+    unsafe { crate::adapter_options::register_option(label, range, restart, get, set) };
 }
 
 fn register() {
-    entry(PACK_LABEL.0.get().cast(), 1, false, pack_get, pack_set);
+    entry(PACK_LABEL.0.get().cast(), 0..=1, false, pack_get, pack_set);
     entry(
         c"Reload motion shader pack".as_ptr(),
-        1,
+        0..=1,
         false,
         zero,
         reload,
     );
-    entry(c"Dump intercepted shaders".as_ptr(), 1, false, zero, dump);
+    entry(
+        c"Dump intercepted shaders".as_ptr(),
+        0..=1,
+        false,
+        zero,
+        dump,
+    );
     entry(
         c"Tree and grass motion".as_ptr(),
-        1,
+        0..=1,
         false,
         foliage_get,
         foliage_set,
     );
     entry(
         c"Invalidate motion under stock draws".as_ptr(),
-        1,
+        0..=1,
         false,
         invalidate_get,
         invalidate_set,
     );
     entry(
         c"Motion target capture".as_ptr(),
-        1,
+        0..=1,
         true,
         capture_get,
         capture_set,
     );
     entry(
         c"Motion capture start (main frames)".as_ptr(),
-        i32::MAX,
+        0..=i32::MAX,
         true,
         start_get,
         start_set,
     );
     entry(
         c"Motion capture count".as_ptr(),
-        16,
+        0..=16,
         true,
         count_get,
         count_set,
     );
     entry(
         c"Motion capture interval (main frames)".as_ptr(),
-        i32::MAX,
+        1..=i32::MAX,
         true,
         interval_get,
         interval_set,

@@ -55,19 +55,8 @@ impl Capture {
             log.text(c"Anomaly motion capture refused: Runtime frame dump exports missing.");
             return None;
         };
-        let path = std::env::var_os("RSF_DUMP_DIR")
-            .filter(|path| !path.is_empty())
-            .or_else(|| {
-                std::env::var_os("LOCALAPPDATA")
-                    .filter(|path| !path.is_empty())
-                    .map(|root| {
-                        Path::new(&root)
-                            .join("ReScaleFrame")
-                            .join("Anomaly")
-                            .into_os_string()
-                    })
-            });
-        let Some(path) = path.and_then(|path| CString::new(path.to_string_lossy().as_bytes()).ok())
+        let Some(path) = crate::frame_dump::anomaly_directory()
+            .and_then(|path| CString::new(path.to_string_lossy().as_bytes()).ok())
         else {
             log.text(c"Anomaly motion capture refused: LOCALAPPDATA unavailable.");
             return None;

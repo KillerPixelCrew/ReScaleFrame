@@ -19,7 +19,9 @@ use crate::fg_policy_abi::{
     rsf_anomaly_fg_decision as Decision,
 };
 use crate::fg_stage_abi::*;
+use crate::host_log::Log;
 use crate::lease::Lease;
+use crate::motion_frame_target_abi::rsf_anomaly_motion_frame_target;
 use rsf_game_sys::*;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -45,29 +47,6 @@ const MAIN_VIEW: u64 = 1;
 const VIEWPORT: u64 = 1;
 const RHI_VIEWPORT: u64 = 1;
 const DXGI_PRESENT_TEST: u32 = 1;
-
-#[derive(Clone, Copy)]
-struct Log {
-    callback: rsf_game_log_fn,
-    user: usize,
-}
-
-impl Log {
-    fn text(self, text: &CStr) {
-        if let Some(callback) = self.callback {
-            // The native log sink borrows the UTF-8 string during this call.
-            unsafe { callback(self.user as Raw, text.as_ptr()) };
-        }
-    }
-
-    fn say(self, text: String) {
-        if self.callback.is_some()
-            && let Ok(text) = CString::new(text)
-        {
-            self.text(&text);
-        }
-    }
-}
 
 #[derive(Clone, Copy)]
 struct PresentBindings {
@@ -128,7 +107,7 @@ struct EngineBindings {
     units_to_meters: f32,
     engine_depth_view: unsafe extern "C" fn(rva: u32) -> *mut c_void,
     sr_owns_depth: unsafe extern "C" fn(native_frame: u32) -> bool,
-    motion_target: unsafe extern "C" fn() -> rsf_anomaly_fg_motion_target,
+    motion_target: unsafe extern "C" fn() -> rsf_anomaly_motion_frame_target,
     immediate_context: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
     backbuffer: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
     depth_texture: unsafe extern "C" fn(view: *mut c_void) -> *mut c_void,
@@ -295,7 +274,7 @@ struct Render {
 }
 
 impl Render {
-    fn motion_input(&self, target: rsf_anomaly_fg_motion_target) -> Raw {
+    fn motion_input(&self, target: rsf_anomaly_motion_frame_target) -> Raw {
         if target.written
             && target.main
             && target.frame == self.native_frame

@@ -24,8 +24,7 @@ const rsf_anomaly_fg_platform& platform() noexcept {
         &engine_depth_view,
         rsf_anomaly_sr_stage_owns_depth,
         [] {
-            const auto target = motion::frame_target();
-            return rsf_anomaly_fg_motion_target{target.texture, target.width, target.height, target.frame, target.written, target.main};
+            return motion::frame_target();
         },
     };
     return value;

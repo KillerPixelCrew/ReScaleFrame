@@ -18,7 +18,7 @@ use self::math::{
     jitter_to_uv, make_plan, mip_delta, next_jitter,
 };
 use crate::camera;
-use crate::frame_dump::DumpApi;
+use crate::frame_dump::{DumpApi, anomaly_directory};
 use crate::lease::Lease;
 use crate::native_geometry_abi::SCOPE;
 use crate::sr_d3d11::{
@@ -695,15 +695,6 @@ fn emit(log: rsf_anomaly_sr_log, user: Raw, text: &str) {
         // The configured host log accepts any NUL-terminated message for the duration of the call.
         unsafe { log(user.0, text.as_ptr()) };
     }
-}
-
-fn dump_directory() -> Option<PathBuf> {
-    let limit = |v: &std::ffi::OsString| !v.is_empty() && v.len() < 32768;
-    if let Some(custom) = std::env::var_os("RSF_DUMP_DIR").filter(limit) {
-        return Some(custom.into());
-    }
-    let local = std::env::var_os("LOCALAPPDATA").filter(limit)?;
-    Some(PathBuf::from(local).join("ReScaleFrame").join("Anomaly"))
 }
 
 // A path's UTF-16 units, without a terminator.
@@ -1408,7 +1399,7 @@ impl Stage {
             );
             return;
         };
-        let Some(directory) = dump_directory() else {
+        let Some(directory) = anomaly_directory() else {
             self.say(
                 state,
                 "Anomaly SR stage capture refused: LOCALAPPDATA unavailable.",
@@ -1440,7 +1431,7 @@ impl Stage {
     }
 
     fn bind_burst(&self, state: &mut State) {
-        let Some(directory) = dump_directory() else {
+        let Some(directory) = anomaly_directory() else {
             self.say(
                 state,
                 "Anomaly SR stage 3 burst refused: LOCALAPPDATA unavailable.",
@@ -2229,7 +2220,7 @@ impl Stage {
         };
         // A captured frame also asks the pipeline for its own guides beside the core dump record.
         if state.capture.active
-            && let Some(directory) = dump_directory()
+            && let Some(directory) = anomaly_directory()
         {
             let directory = directory.join(format!("sr-pipeline-{:016x}", state.session));
             let _ = std::fs::create_dir(&directory);

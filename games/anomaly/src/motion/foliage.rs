@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{
-    FOLIAGE_MAX_GROUPS, FoliageConstants, FoliageItem, FrameIdentity, TreeRecord, finite, lane,
+    FOLIAGE_MAX_GROUPS, FoliageConstants, FoliageItem, FrameIdentity, Rotation, TreeRecord, finite,
+    lane,
 };
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -94,20 +95,17 @@ struct View {
 
 impl View {
     fn begin(&mut self, id: FrameIdentity) -> bool {
-        if self.current.as_ref().is_some_and(|frame| frame.id == id) {
-            return self.previous.is_some();
-        }
-        let mut new = if self
-            .current
-            .as_ref()
-            .is_some_and(|frame| id.follows(frame.id))
-        {
-            let reusable = self.previous.take();
-            self.previous = self.current.take();
-            reusable.unwrap_or_default()
-        } else {
-            self.previous = None;
-            self.current.take().unwrap_or_default()
+        let mut new = match id.rotation(self.current.as_ref().map(|frame| frame.id)) {
+            Rotation::Reuse => return self.previous.is_some(),
+            Rotation::Advance => {
+                let reusable = self.previous.take();
+                self.previous = self.current.take();
+                reusable.unwrap_or_default()
+            }
+            Rotation::Reset => {
+                self.previous = None;
+                self.current.take().unwrap_or_default()
+            }
         };
         new.id = id;
         new.trees.clear();
@@ -126,6 +124,10 @@ pub(super) struct History {
 }
 
 impl History {
+    pub(super) fn begin(&mut self, view: u8, id: FrameIdentity) -> bool {
+        self.views[lane(view)].begin(id)
+    }
+
     fn tree(&mut self, view: u8, visual: u64, record: &TreeRecord) -> Option<&TreeRecord> {
         let slot = &mut self.views[lane(view)];
         if visual == 0 {
@@ -241,12 +243,15 @@ pub(super) extern "C" fn rsf_anomaly_foliage_begin(
     width: u32,
     height: u32,
 ) -> bool {
-    history.views[lane(view)].begin(FrameIdentity {
-        source,
-        generation,
-        width,
-        height,
-    })
+    history.begin(
+        view,
+        FrameIdentity {
+            source,
+            generation,
+            width,
+            height,
+        },
+    )
 }
 
 #[unsafe(no_mangle)]

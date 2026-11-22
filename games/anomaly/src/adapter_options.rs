@@ -42,8 +42,19 @@ fn register_panel_option(
     get: extern "C" fn() -> i32,
     set: extern "C" fn(i32) -> bool,
 ) {
+    unsafe { register_option(label.as_ptr(), range, restart, get, set) };
+}
+
+/// The label must remain readable through the lifetime of the panel entry.
+pub(crate) unsafe fn register_option(
+    label: *const c_char,
+    range: RangeInclusive<i32>,
+    restart: bool,
+    get: unsafe extern "C" fn() -> i32,
+    set: unsafe extern "C" fn(i32) -> bool,
+) {
     let option = rsf_anomaly_overlay_option {
-        label: label.as_ptr(),
+        label,
         toggle: (range == (0..=1)).into(),
         restart: restart.into(),
         minimum: *range.start(),

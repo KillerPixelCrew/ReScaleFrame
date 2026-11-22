@@ -4,7 +4,7 @@ use crate::motion::{CORE_BYTES, FOLIAGE_BYTES, PIXEL_BYTES, TESS_BYTES};
 use crate::motion_device_abi::{
     RSF_MOTION_CORE, RSF_MOTION_CREATED, RSF_MOTION_FAILED, RSF_MOTION_FOLIAGE,
     RSF_MOTION_MULTISAMPLED, RSF_MOTION_PIXEL, RSF_MOTION_READY, RSF_MOTION_TESS,
-    rsf_anomaly_motion_device_platform as Platform, rsf_anomaly_motion_device_view as View,
+    rsf_anomaly_motion_device_platform as NativePlatform, rsf_anomaly_motion_device_view as View,
     rsf_anomaly_motion_log as Log,
 };
 #[cfg(windows)]
@@ -14,6 +14,8 @@ use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::slice;
 
+#[cfg(windows)]
+mod d3d11;
 mod replay;
 #[cfg(windows)]
 pub(crate) use replay::{
@@ -36,6 +38,43 @@ struct Target {
 
 type Raw = *mut c_void;
 
+#[repr(C)]
+pub(crate) struct Platform {
+    pub(crate) retain: unsafe extern "C" fn(Raw),
+    pub(crate) release: unsafe extern "C" fn(Raw),
+    buffer: unsafe extern "C" fn(Raw, u32) -> Raw,
+    zero_shader: unsafe extern "C" fn(Raw, Log, Raw) -> Raw,
+    depth_state: unsafe extern "C" fn(Raw, u32) -> Raw,
+    texture: unsafe extern "C" fn(Raw, u32, u32) -> Raw,
+    view: unsafe extern "C" fn(Raw, Raw) -> Raw,
+    upload: unsafe extern "C" fn(Raw, Raw, *const c_void, usize) -> u32,
+    bind: unsafe extern "C" fn(Raw, Raw, c_char) -> u32,
+}
+
+const _: () = {
+    assert!(size_of::<Platform>() == size_of::<NativePlatform>());
+    assert!(align_of::<Platform>() == align_of::<NativePlatform>());
+    assert!(std::mem::offset_of!(Platform, retain) == std::mem::offset_of!(NativePlatform, retain));
+    assert!(
+        std::mem::offset_of!(Platform, release) == std::mem::offset_of!(NativePlatform, release)
+    );
+    assert!(std::mem::offset_of!(Platform, buffer) == std::mem::offset_of!(NativePlatform, buffer));
+    assert!(
+        std::mem::offset_of!(Platform, zero_shader)
+            == std::mem::offset_of!(NativePlatform, zero_shader)
+    );
+    assert!(
+        std::mem::offset_of!(Platform, depth_state)
+            == std::mem::offset_of!(NativePlatform, depth_state)
+    );
+    assert!(
+        std::mem::offset_of!(Platform, texture) == std::mem::offset_of!(NativePlatform, texture)
+    );
+    assert!(std::mem::offset_of!(Platform, view) == std::mem::offset_of!(NativePlatform, view));
+    assert!(std::mem::offset_of!(Platform, upload) == std::mem::offset_of!(NativePlatform, upload));
+    assert!(std::mem::offset_of!(Platform, bind) == std::mem::offset_of!(NativePlatform, bind));
+};
+
 #[derive(Clone, Copy)]
 pub(crate) struct ConstantOps {
     buffer: unsafe extern "C" fn(Raw, u32, *mut Raw) -> i32,
@@ -45,13 +84,12 @@ pub(crate) struct ConstantOps {
 
 #[cfg(windows)]
 impl ConstantOps {
-    pub(crate) fn from_api(api: &rsf_shader_patch_api) -> Self {
-        // The Runtime pack checked these operations when it opened.
-        Self {
-            buffer: api.constant_buffer.unwrap(),
-            upload: api.upload_constant.unwrap(),
-            bind: api.bind_constant.unwrap(),
-        }
+    pub(crate) fn from_api(api: &rsf_shader_patch_api) -> Option<Self> {
+        Some(Self {
+            buffer: api.constant_buffer?,
+            upload: api.upload_constant?,
+            bind: api.bind_constant?,
+        })
     }
 }
 
@@ -73,9 +111,9 @@ impl Device {
         log: Log,
         user: Raw,
     ) -> Option<Self> {
-        let release = platform.release.unwrap();
+        let release = platform.release;
         let device = Lease::new(pointer, release)?;
-        unsafe { (platform.retain.unwrap())(pointer) };
+        unsafe { (platform.retain)(pointer) };
         let buffer = |size: usize, stage: u8| {
             let resource = if let Some(runtime) = runtime {
                 let mut handle = std::ptr::null_mut();
@@ -86,7 +124,7 @@ impl Device {
                 }
                 lease?
             } else {
-                let handle = unsafe { (platform.buffer.unwrap())(pointer, size as u32) };
+                let handle = unsafe { (platform.buffer)(pointer, size as u32) };
                 Lease::new(handle, release)?
             };
             Some(Buffer {
@@ -102,10 +140,10 @@ impl Device {
             buffer(PIXEL_BYTES, b'p')?,
             buffer(TESS_BYTES, b'd')?,
         ];
-        let shader = unsafe { (platform.zero_shader.unwrap())(pointer, log, user) };
+        let shader = unsafe { (platform.zero_shader)(pointer, log, user) };
         let zero_shader = Lease::new(shader, release)?;
         let depth = |equal| {
-            let handle = unsafe { (platform.depth_state.unwrap())(pointer, equal) };
+            let handle = unsafe { (platform.depth_state)(pointer, equal) };
             Lease::new(handle, release)
         };
         Some(Self {
@@ -125,10 +163,10 @@ impl Device {
         }
         self.target = None;
         let device = self.device.as_ptr();
-        let release = platform.release.unwrap();
-        let texture = unsafe { (platform.texture.unwrap())(device, extent[0], extent[1]) };
+        let release = platform.release;
+        let texture = unsafe { (platform.texture)(device, extent[0], extent[1]) };
         let texture = Lease::new(texture, release)?;
-        let view = unsafe { (platform.view.unwrap())(device, texture.as_ptr()) };
+        let view = unsafe { (platform.view)(device, texture.as_ptr()) };
         self.target = Some(Target {
             view: Lease::new(view, release)?,
             texture,
@@ -278,7 +316,7 @@ pub(crate) extern "C" fn rsf_anomaly_motion_device_upload(
             };
             unsafe { (runtime.upload)(context, resource, input) == RSF_PATCH_OK }
         } else {
-            unsafe { (owner.platform.upload.unwrap())(context, resource, data.cast(), size) != 0 }
+            unsafe { (owner.platform.upload)(context, resource, data.cast(), size) != 0 }
         };
         if !buffer.uploaded {
             return 0;
@@ -291,7 +329,7 @@ pub(crate) extern "C" fn rsf_anomaly_motion_device_upload(
             unsafe { (runtime.bind)(context, buffer.stage as u32, 13, resource) } == RSF_PATCH_OK,
         )
     } else {
-        unsafe { (owner.platform.bind.unwrap())(context, resource, buffer.stage) }
+        unsafe { (owner.platform.bind)(context, resource, buffer.stage) }
     }
 }
 
