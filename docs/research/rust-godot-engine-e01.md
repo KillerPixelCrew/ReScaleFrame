@@ -120,3 +120,16 @@ Checks cover the in-memory pinned source plan, Rust 1.94.1 formatting,
 bindgen 0.72.1 regeneration, locked offline Cargo metadata and a C++ syntax-only
 check of the graph seam. Compilation and linking of the Godot module, fixture
 execution and device behavior remain unverified.
+
+## Engine policy follow-up from `818a5ede`
+
+`graph.rs` now assembles the handoff and owns the pair allocation and rollback.
+On a pool miss it creates the semaphore first. If command allocation fails, it
+releases the semaphore. After append, Godot owns both resources even if command
+begin fails. The pinned Vulkan driver exposes separate semaphore retirement
+(`rendering_device_driver_vulkan.cpp:3101`) and the graph ties the paired pool
+cursor to the engine frame. `graph.cpp` still verifies the live graph scope,
+compares the exact typed command ID, invokes the Vulkan methods and changes the
+borrowed command reference only after consuming the source. Fixture assertions
+in `tests/godot_graph_handoff.rs` now check the actual generated handoff header,
+including its driver identity and callback, through the C++ graph lease.

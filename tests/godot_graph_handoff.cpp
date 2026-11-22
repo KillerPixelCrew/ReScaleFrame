@@ -42,11 +42,10 @@ extern "C" uint32_t rsf_fixture_graph_handoff(void *context, uint32_t foreign, u
     return RSFGodot::GraphScope::handoff(driver, commands, f.handoff);
 }
 
-extern "C" uint32_t rsf_fixture_graph_header(void *context) {
-    const auto &f = *static_cast<Fixture *>(context);
-    return f.handoff.user == &f.driver && f.handoff.queue_family == 3 &&
-            f.handoff.timeline_enabled == 1 && f.handoff.struct_size == sizeof(f.handoff) &&
-            f.handoff.abi_version == RSF_GODOT_VK_HANDOFF_ABI_VERSION;
+extern "C" const rsf_godot_vk_handoff *rsf_fixture_graph_header(void *context, void **driver) {
+    auto &f = *static_cast<Fixture *>(context);
+    *driver = &f.driver;
+    return &f.handoff;
 }
 
 extern "C" int32_t rsf_fixture_graph_split(void *context, uint32_t foreign, size_t command_override,

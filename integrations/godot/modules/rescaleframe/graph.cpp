@@ -1,21 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "graph.h"
+#include "packet.h"
 #include "drivers/vulkan/rendering_device_driver_vulkan.h"
 
 namespace RSFGodot {
-struct GraphCalls {
-    void *(*current)(void *scope);
-    uint64_t (*pooled)(void *scope);
-    uint64_t (*allocate)(void *scope);
-    uint32_t (*begin)(void *scope, uint64_t next);
-    void (*labels)(void *scope, uint32_t reopen);
-    void (*consume)(void *scope, uint64_t next, uint64_t timeline, uint64_t previous_done, uint64_t ready, uint64_t done);
-    void *(*continuation)(void *scope);
-};
-static_assert(sizeof(GraphCalls) == 7 * sizeof(void *));
 static_assert(VK_ERROR_INITIALIZATION_FAILED == -3 && VK_ERROR_OUT_OF_HOST_MEMORY == -1);
-extern "C" int32_t rsf_godot_graph_split(const GraphCalls *calls, void *scope, void *current,
-        uint64_t timeline, uint64_t previous_done, uint64_t ready, uint64_t done, void **out);
 
 thread_local GraphScope *GraphScope::active = nullptr;
 
@@ -25,13 +14,13 @@ bool GraphScope::handoff(RenderingDeviceDriver *driver, RenderingDeviceDriver::C
     auto *vk = static_cast<RenderingDeviceDriverVulkan *>(driver);
     uint32_t family = 0;
     if (!vk->rescaleframe_graph_info(commands, family)) return false;
-    out = {sizeof(out), RSF_GODOT_VK_HANDOFF_ABI_VERSION, 1, family, driver, split_record};
+    rsf_godot_graph_pack(&out, family, driver, split_record);
     return true;
 }
 
 int32_t GraphScope::split_record(void *user, void *current_commands, uint64_t timeline,
         uint64_t previous_done, uint64_t ready, uint64_t done, void **continuation_commands) {
-    static constexpr GraphCalls calls{
+    static constexpr rsf_godot_graph_calls calls{
         [](void *context) -> void * {
             auto &scope = *static_cast<GraphScope *>(context);
             auto *vk = static_cast<RenderingDeviceDriverVulkan *>(scope.driver);
@@ -45,19 +34,28 @@ int32_t GraphScope::split_record(void *user, void *current_commands, uint64_t ti
         [](void *context) -> uint64_t {
             auto &scope = *static_cast<GraphScope *>(context);
             auto *vk = static_cast<RenderingDeviceDriverVulkan *>(scope.driver);
-            // The engine frame fence owns every pooled buffer and its binary links.
-            auto &pool = scope.pool;
-            // Godot can free a semaphore on its own. It retires command buffers with the pool.
-            const auto semaphore = vk->semaphore_create();
-            if (!semaphore) return 0;
-            const auto next = vk->command_buffer_create(pool.pool);
-            if (!next) {
-                vk->semaphore_free(semaphore);
-                return 0;
-            }
-            pool.buffers.push_back(next);
+            return vk->semaphore_create().id;
+        },
+        [](void *context) -> uint64_t {
+            auto &scope = *static_cast<GraphScope *>(context);
+            auto *vk = static_cast<RenderingDeviceDriverVulkan *>(scope.driver);
+            return vk->command_buffer_create(scope.pool.pool).id;
+        },
+        [](void *context, uint64_t id) {
+            auto &scope = *static_cast<GraphScope *>(context);
+            auto *vk = static_cast<RenderingDeviceDriverVulkan *>(scope.driver);
+            RenderingDeviceDriver::SemaphoreID semaphore;
+            semaphore.id = id;
+            vk->semaphore_free(semaphore);
+        },
+        [](void *context, uint64_t command_id, uint64_t semaphore_id) {
+            auto &pool = static_cast<GraphScope *>(context)->pool;
+            RenderingDeviceDriver::CommandBufferID command;
+            RenderingDeviceDriver::SemaphoreID semaphore;
+            command.id = command_id;
+            semaphore.id = semaphore_id;
+            pool.buffers.push_back(command);
             pool.semaphores.push_back(semaphore);
-            return next.id;
         },
         [](void *context, uint64_t id) -> uint32_t {
             const auto &scope = *static_cast<GraphScope *>(context);

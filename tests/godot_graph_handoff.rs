@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 use core::ffi::c_void;
-use core::ptr;
+use core::{mem::size_of, ptr};
+
+use crate::packet_abi::{RSF_GODOT_VK_HANDOFF_ABI_VERSION, rsf_godot_vk_handoff};
 
 unsafe extern "C" {
     fn rsf_fixture_graph_scope(context: *mut c_void, active: u32);
     fn rsf_fixture_graph_handoff(context: *mut c_void, foreign: u32, command: u64) -> u32;
-    fn rsf_fixture_graph_header(context: *mut c_void) -> u32;
+    fn rsf_fixture_graph_header(
+        context: *mut c_void,
+        driver: *mut *mut c_void,
+    ) -> *const rsf_godot_vk_handoff;
     fn rsf_fixture_graph_split(
         context: *mut c_void,
         foreign: u32,
@@ -214,6 +219,16 @@ extern "C" fn rsf_fixture_graph_cases(
     // output and snapshot storage live through the corresponding calls.
     unsafe {
         let handoff = |foreign, command| rsf_fixture_graph_handoff(context, foreign, command) != 0;
+        let valid_header = || {
+            let mut driver = ptr::null_mut();
+            let header = &*rsf_fixture_graph_header(context, &mut driver);
+            header.user == driver
+                && header.queue_family == 3
+                && header.timeline_enabled == 1
+                && header.struct_size as usize == size_of::<rsf_godot_vk_handoff>()
+                && header.abi_version == RSF_GODOT_VK_HANDOFF_ABI_VERSION
+                && header.split_record.is_some()
+        };
         let split = |foreign, command, timeline, previous, ready, done, out| {
             rsf_fixture_graph_split(
                 context, foreign, command, timeline, previous, ready, done, out,
@@ -252,7 +267,7 @@ extern "C" fn rsf_fixture_graph_cases(
         rsf_fixture_graph_scope(context, 1);
         if refusals == 0 {
             check!(handoff(0, 0));
-            check!(rsf_fixture_graph_header(context) != 0);
+            check!(valid_header());
             check!(split(0, 0, 77, 4, 5, 6, &mut next) == 0);
             check!(next == 2 * 16);
             check!(snapshot() == [2, 1, 1, 1, 2, 1, 1, 0, 77, 4, 5, 77, 6, 0, 1, 1, 1]);
@@ -269,7 +284,7 @@ extern "C" fn rsf_fixture_graph_cases(
             check!(!handoff(0, 0));
             (*state).fault = Fault::None;
             check!(handoff(0, 0));
-            check!(rsf_fixture_graph_header(context) != 0);
+            check!(valid_header());
             check!(split(1, 0, 77, 4, 5, 6, &mut next) != 0);
             check!(split(0, 17, 77, 4, 5, 6, &mut next) != 0);
             check!(split(0, 0, 0, 4, 5, 6, &mut next) != 0);

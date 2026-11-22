@@ -46,6 +46,20 @@ typedef struct rsf_godot_present_calls {
     int32_t (*present_item)(void *context, uint32_t index);
 } rsf_godot_present_calls;
 
+typedef int32_t (*rsf_godot_graph_split_fn)(void *, void *, uint64_t, uint64_t, uint64_t, uint64_t, void **);
+typedef struct rsf_godot_graph_calls {
+    void *(*current)(void *scope);
+    uint64_t (*pooled)(void *scope);
+    uint64_t (*create_semaphore)(void *scope);
+    uint64_t (*create_command)(void *scope);
+    void (*free_semaphore)(void *scope, uint64_t semaphore);
+    void (*append_pair)(void *scope, uint64_t command, uint64_t semaphore);
+    uint32_t (*begin)(void *scope, uint64_t next);
+    void (*labels)(void *scope, uint32_t reopen);
+    void (*consume)(void *scope, uint64_t next, uint64_t timeline, uint64_t previous_done, uint64_t ready, uint64_t done);
+    void *(*continuation)(void *scope);
+} rsf_godot_graph_calls;
+
 #define RSF_GODOT_CHAIN_SKIPPED 0u
 #define RSF_GODOT_CHAIN_REFUSED 1u
 #define RSF_GODOT_CHAIN_CREATED 2u
@@ -59,6 +73,10 @@ extern "C" void rsf_godot_packet_execute(const rsf_godot_driver_packet *packet,
         const rsf_godot_packet_calls *calls, void *context);
 extern "C" uint32_t rsf_godot_swapchain_setup(rsf_fgvk_setup *setup,
         const rsf_godot_swapchain_calls *calls, void *context, void **owner, uint64_t *chain);
+extern "C" void rsf_godot_graph_pack(rsf_godot_vk_handoff *out, uint32_t family, void *driver,
+        rsf_godot_graph_split_fn split);
+extern "C" int32_t rsf_godot_graph_split(const rsf_godot_graph_calls *calls, void *scope, void *current,
+        uint64_t timeline, uint64_t previous_done, uint64_t ready, uint64_t done, void **out);
 extern "C" int32_t rsf_godot_present_batch(const rsf_godot_present_calls *calls, void *context,
         uint32_t count, uint32_t has_extensions, uint32_t submitted);
 extern "C" void rsf_godot_execution_pass(uint32_t role, uint64_t session, uint64_t source, uint64_t window,

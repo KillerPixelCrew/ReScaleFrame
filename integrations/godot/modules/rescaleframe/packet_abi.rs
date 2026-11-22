@@ -6,6 +6,7 @@ use crate::frame_abi::rsf_camera_frame;
 pub const RSF_SRVK_ABI_VERSION: u32 = 2;
 pub const RSF_FGVK_ABI_VERSION: u32 = 1;
 pub const RSF_GODOT_ABI_VERSION: u32 = 3;
+pub const RSF_GODOT_VK_HANDOFF_ABI_VERSION: u32 = 1;
 pub const RSF_GODOT_CHAIN_SKIPPED: u32 = 0;
 pub const RSF_GODOT_CHAIN_REFUSED: u32 = 1;
 pub const RSF_GODOT_CHAIN_CREATED: u32 = 2;
@@ -348,5 +349,53 @@ pub struct rsf_godot_present_calls {
         ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> i32>,
     pub present_item: ::core::option::Option<
         unsafe extern "C" fn(context: *mut ::core::ffi::c_void, index: u32) -> i32,
+    >,
+}
+pub type rsf_godot_graph_split_fn = ::core::option::Option<
+    unsafe extern "C" fn(
+        arg1: *mut ::core::ffi::c_void,
+        arg2: *mut ::core::ffi::c_void,
+        arg3: u64,
+        arg4: u64,
+        arg5: u64,
+        arg6: u64,
+        arg7: *mut *mut ::core::ffi::c_void,
+    ) -> i32,
+>;
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_godot_graph_calls {
+    pub current: ::core::option::Option<
+        unsafe extern "C" fn(scope: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    >,
+    pub pooled:
+        ::core::option::Option<unsafe extern "C" fn(scope: *mut ::core::ffi::c_void) -> u64>,
+    pub create_semaphore:
+        ::core::option::Option<unsafe extern "C" fn(scope: *mut ::core::ffi::c_void) -> u64>,
+    pub create_command:
+        ::core::option::Option<unsafe extern "C" fn(scope: *mut ::core::ffi::c_void) -> u64>,
+    pub free_semaphore: ::core::option::Option<
+        unsafe extern "C" fn(scope: *mut ::core::ffi::c_void, semaphore: u64),
+    >,
+    pub append_pair: ::core::option::Option<
+        unsafe extern "C" fn(scope: *mut ::core::ffi::c_void, command: u64, semaphore: u64),
+    >,
+    pub begin: ::core::option::Option<
+        unsafe extern "C" fn(scope: *mut ::core::ffi::c_void, next: u64) -> u32,
+    >,
+    pub labels:
+        ::core::option::Option<unsafe extern "C" fn(scope: *mut ::core::ffi::c_void, reopen: u32)>,
+    pub consume: ::core::option::Option<
+        unsafe extern "C" fn(
+            scope: *mut ::core::ffi::c_void,
+            next: u64,
+            timeline: u64,
+            previous_done: u64,
+            ready: u64,
+            done: u64,
+        ),
+    >,
+    pub continuation: ::core::option::Option<
+        unsafe extern "C" fn(scope: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
     >,
 }
