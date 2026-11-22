@@ -543,7 +543,7 @@ unsafe extern "C" fn hook_remove(hook: u32) -> bool {
 
 unsafe extern "C" fn pin() {
     let mut pinned = HMODULE::default();
-    let address = rsf_ac7_get_renderer_leaves as *const u16;
+    let address = renderer_leaves as *const u16;
     let _ = unsafe {
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
@@ -603,18 +603,9 @@ unsafe extern "C" fn truesky_restore(renderer: *mut rsf_ac7_native_renderer) -> 
     restore_truesky(unsafe { renderer_ref(renderer) })
 }
 
-/// Creates a per-call snapshot, including the loaded image base. Every entry is set.
-///
-/// # Safety
-/// `out` is null or writable.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_get_renderer_leaves(
-    out: *mut rsf_ac7_renderer_leaves,
-) -> bool {
-    let Some(out) = (unsafe { out.as_mut() }) else {
-        return false;
-    };
-    *out = rsf_ac7_renderer_leaves {
+/// A per-call snapshot, including the loaded image base. Every entry is set.
+pub(crate) fn renderer_leaves() -> rsf_ac7_renderer_leaves {
+    rsf_ac7_renderer_leaves {
         code: code_leaves(None, null_mut()),
         base: game_module(),
         installed: Some(installed),
@@ -646,6 +637,5 @@ pub(crate) unsafe extern "C" fn rsf_ac7_get_renderer_leaves(
         controller_disable: Some(controller_disable),
         controller_remove: Some(controller_remove),
         truesky_restore: Some(truesky_restore),
-    };
-    true
+    }
 }

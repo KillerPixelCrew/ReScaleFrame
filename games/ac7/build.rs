@@ -58,7 +58,6 @@ fn bindings() {
     headers.sort();
     println!("cargo:rerun-if-changed=include/rescaleframe");
     for private in [
-        "ac7_platform.h",
         "ac7_scope_owner.h",
         "ac7_sites.h",
         "cloud_depth_platform.h",

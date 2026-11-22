@@ -49,6 +49,7 @@ mod evidence;
 mod frame;
 mod graph;
 mod leaves;
+pub(crate) use leaves::renderer_leaves;
 mod particles;
 mod shaders;
 mod sky;

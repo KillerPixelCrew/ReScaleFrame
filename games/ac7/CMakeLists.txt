@@ -9,8 +9,8 @@ target_include_directories(rsf_ac7_rust INTERFACE include)
 add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_rust)
 
 # Exact-build identity, the GameSDK table and the renderer lifecycle are the Rust crate rsf-ac7
-# (src/lib.rs, src/lifecycle.rs). plugin.c keeps the export and lends the renderer leaf snapshot
-# through src/ac7_platform.h. The crate also owns the native renderer: its code sites, patch
+# (src/lib.rs, src/lifecycle.rs). plugin.c keeps the export and binds the native renderer's
+# call table. The crate also owns the native renderer: its code sites, patch
 # transactions, hook guards, prepare/start/quiesce/stop transaction, TrueSky patches and relays
 # (src/sites.rs, patches.rs, guards.rs, renderer.rs, truesky.rs) and the renderer object, detours
 # and pass leases (src/native_renderer.rs). That module reaches MinHook, the Windows input facts,

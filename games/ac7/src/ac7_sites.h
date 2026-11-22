@@ -191,9 +191,6 @@ void rsf_ac7_truesky_refuse_full_grid(rsf_ac7_truesky_patches* patches,
 // Retirement in the former order. False, logged, keeps everything not yet restored for a retry.
 bool rsf_ac7_truesky_restore(rsf_ac7_truesky_patches* patches, const rsf_ac7_truesky_leaves* leaves);
 
-// Creates a per-call snapshot, including the loaded image base. False means acquisition threw.
-bool rsf_ac7_get_renderer_leaves(rsf_ac7_renderer_leaves* out);
-
 // Native calls of the native renderer, bound at run time by plugin.c and the native graph fixture
 // so that MinHook, the Windows input facts, the render scope create call and the shader factory
 // leaf stay off the link line of every other rsf-ac7 consumer. native_renderer_platform.c defines

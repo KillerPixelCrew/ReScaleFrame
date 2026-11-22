@@ -4,14 +4,13 @@ use rsf_game_sys::RSF_GAME_ABI_VERSION;
 use std::cell::Cell;
 use std::ffi::c_void;
 
-/// Scripted native results; `None` is a leaf that threw.
+/// Scripted native results.
 struct Script {
     renderer: Renderer,
-    prepare: Option<bool>,
-    start: Option<bool>,
-    active: Option<bool>,
-    quiesce: Option<()>,
-    stop: Option<bool>,
+    prepare: bool,
+    start: bool,
+    active: bool,
+    stop: bool,
     calls: Cell<u32>,
     options: Cell<Option<rsf_ac7_native_renderer_options>>,
 }
@@ -20,41 +19,36 @@ impl Script {
     fn new() -> Self {
         Self {
             renderer: std::ptr::dangling_mut(),
-            prepare: Some(true),
-            start: Some(true),
-            active: Some(true),
-            quiesce: Some(()),
-            stop: Some(true),
+            prepare: true,
+            start: true,
+            active: true,
+            stop: true,
             calls: Cell::new(0),
             options: Cell::new(None),
         }
     }
 
-    fn call<T>(&self, result: Option<T>) -> Result<T, Threw> {
+    fn call<T>(&self, result: T) -> T {
         self.calls.set(self.calls.get() + 1);
-        result.ok_or(Threw)
+        result
     }
 }
 
 impl Leaves for Script {
-    fn prepare(
-        &self,
-        options: &rsf_ac7_native_renderer_options,
-    ) -> Result<(Renderer, bool), Threw> {
+    fn prepare(&self, options: &rsf_ac7_native_renderer_options) -> (Renderer, bool) {
         self.options.set(Some(*options));
-        self.call(self.prepare)
-            .map(|prepared| (self.renderer, prepared))
+        (self.renderer, self.call(self.prepare))
     }
-    fn start(&self, _: Renderer) -> Result<bool, Threw> {
+    fn start(&self, _: Renderer) -> bool {
         self.call(self.start)
     }
-    fn is_active(&self, _: Renderer) -> Result<bool, Threw> {
+    fn is_active(&self, _: Renderer) -> bool {
         self.call(self.active)
     }
-    fn quiesce(&self, _: Renderer) -> Result<(), Threw> {
-        self.call(self.quiesce)
+    fn quiesce(&self, _: Renderer) {
+        self.call(());
     }
-    fn stop(&self, _: Renderer) -> Result<bool, Threw> {
+    fn stop(&self, _: Renderer) -> bool {
         self.call(self.stop)
     }
 }
@@ -139,7 +133,7 @@ fn accepted_path_matches_the_former_plugin() {
 fn preparation_and_activation_refusals_are_distinct() {
     let lifecycle = Lifecycle::new();
     let mut leaves = Script::new();
-    leaves.prepare = Some(false);
+    leaves.prepare = false;
     assert_eq!(
         lifecycle.prepare(&leaves, &host()),
         RSF_ERROR_NATIVE_REFUSED
@@ -148,16 +142,16 @@ fn preparation_and_activation_refusals_are_distinct() {
     assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(REFUSED)));
     assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
     assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_ERROR_BUSY);
-    leaves.stop = Some(false);
+    leaves.stop = false;
     assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_BUSY);
     assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(DRAINING)));
-    leaves.stop = Some(true);
+    leaves.stop = true;
     assert_eq!(lifecycle.stop(&leaves), RSF_OK);
 
     let lifecycle = Lifecycle::new();
     let mut leaves = Script::new();
     leaves.renderer = std::ptr::null_mut();
-    leaves.prepare = Some(false);
+    leaves.prepare = false;
     assert_eq!(
         lifecycle.prepare(&leaves, &host()),
         RSF_ERROR_NATIVE_REFUSED
@@ -167,7 +161,7 @@ fn preparation_and_activation_refusals_are_distinct() {
 
     let lifecycle = Lifecycle::new();
     let mut leaves = Script::new();
-    leaves.start = Some(false);
+    leaves.start = false;
     assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
     assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
     assert_eq!(
@@ -177,8 +171,8 @@ fn preparation_and_activation_refusals_are_distinct() {
 
     let lifecycle = Lifecycle::new();
     let mut leaves = Script::new();
-    leaves.active = Some(false);
-    leaves.stop = Some(false);
+    leaves.active = false;
+    leaves.stop = false;
     assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
     assert_eq!(lifecycle.start(&leaves), RSF_OK);
     assert_eq!(
@@ -188,36 +182,6 @@ fn preparation_and_activation_refusals_are_distinct() {
     assert_eq!(lifecycle.quiesce(&leaves), RSF_OK);
     assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_BUSY);
     assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(DRAINING)));
-}
-
-#[test]
-fn a_native_throw_reports_not_ready_and_clears_the_transition() {
-    let lifecycle = Lifecycle::new();
-    let mut leaves = Script::new();
-    leaves.prepare = None;
-    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_ERROR_NOT_READY);
-    assert_eq!(
-        status(&lifecycle, &leaves),
-        (RSF_OK, 0, 0, text(NOT_PREPARED))
-    );
-
-    let mut leaves = Script::new();
-    leaves.start = None;
-    leaves.quiesce = None;
-    leaves.stop = None;
-    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
-    assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(PREPARED)));
-    assert_eq!(lifecycle.quiesce(&leaves), RSF_ERROR_NOT_READY);
-    assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_NOT_READY);
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(PREPARED)));
-
-    let lifecycle = Lifecycle::new();
-    let mut leaves = Script::new();
-    leaves.active = None;
-    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
-    assert_eq!(lifecycle.start(&leaves), RSF_OK);
-    assert_eq!(status(&lifecycle, &leaves).0, RSF_ERROR_NOT_READY);
 }
 
 #[test]

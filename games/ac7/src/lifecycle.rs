@@ -7,7 +7,7 @@
 //! native renderer (native_renderer.rs) verifies its bytes, owns every hook and reports native
 //! facts; vendor, SR, FG and pacing decisions stay in the Runtime.
 use crate::sys::{rsf_ac7_native_renderer, rsf_ac7_native_renderer_options};
-use crate::{RSF_ERROR_BUSY, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw};
+use crate::{RSF_ERROR_BUSY, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK};
 use rsf_game_sys::{rsf_game_host_services, rsf_game_renderer_status, rsf_result};
 use std::ffi::CStr;
 use std::ptr::null_mut;
@@ -33,15 +33,14 @@ pub(crate) const DEACTIVATED: &CStr =
 
 pub(crate) type Renderer = *mut rsf_ac7_native_renderer;
 
-/// The guarded native renderer entry points. `Err(Threw)` is a native exception.
+/// The native renderer entry points.
 pub(crate) trait Leaves {
     /// The native output and whether preparation succeeded. The output is kept either way.
-    fn prepare(&self, options: &rsf_ac7_native_renderer_options)
-    -> Result<(Renderer, bool), Threw>;
-    fn start(&self, renderer: Renderer) -> Result<bool, Threw>;
-    fn is_active(&self, renderer: Renderer) -> Result<bool, Threw>;
-    fn quiesce(&self, renderer: Renderer) -> Result<(), Threw>;
-    fn stop(&self, renderer: Renderer) -> Result<bool, Threw>;
+    fn prepare(&self, options: &rsf_ac7_native_renderer_options) -> (Renderer, bool);
+    fn start(&self, renderer: Renderer) -> bool;
+    fn is_active(&self, renderer: Renderer) -> bool;
+    fn quiesce(&self, renderer: Renderer);
+    fn stop(&self, renderer: Renderer) -> bool;
 }
 
 struct State {
@@ -102,12 +101,9 @@ impl Lifecycle {
             }
             state.transitioning = true;
         }
-        let outcome = leaves.prepare(&options(host));
+        let (created, prepared) = leaves.prepare(&options(host));
         let mut state = self.lock();
         state.transitioning = false;
-        let Ok((created, prepared)) = outcome else {
-            return RSF_ERROR_NOT_READY;
-        };
         state.renderer = created;
         state.prepared = prepared && !created.is_null();
         if state.prepared {
@@ -124,7 +120,7 @@ impl Lifecycle {
     fn transition(
         &self,
         check: impl FnOnce(&State) -> rsf_result,
-        work: impl FnOnce(Renderer) -> Result<bool, Threw>,
+        work: impl FnOnce(Renderer) -> bool,
         finish: impl FnOnce(&mut State, bool) -> rsf_result,
     ) -> rsf_result {
         let current = {
@@ -139,13 +135,10 @@ impl Lifecycle {
             state.transitioning = true;
             state.renderer
         };
-        let outcome = work(current);
+        let succeeded = work(current);
         let mut state = self.lock();
         state.transitioning = false;
-        match outcome {
-            Ok(succeeded) => finish(&mut state, succeeded),
-            Err(Threw) => RSF_ERROR_NOT_READY,
-        }
+        finish(&mut state, succeeded)
     }
 
     pub(crate) fn start(&self, leaves: &impl Leaves) -> rsf_result {
@@ -176,9 +169,9 @@ impl Lifecycle {
             |_| RSF_OK,
             |current| {
                 if !current.is_null() {
-                    leaves.quiesce(current)?;
+                    leaves.quiesce(current);
                 }
-                Ok(true)
+                true
             },
             |state, _| {
                 state.active = false;
@@ -191,13 +184,7 @@ impl Lifecycle {
     pub(crate) fn stop(&self, leaves: &impl Leaves) -> rsf_result {
         self.transition(
             |state| if state.active { RSF_ERROR_BUSY } else { RSF_OK },
-            |current| {
-                if current.is_null() {
-                    Ok(true)
-                } else {
-                    leaves.stop(current)
-                }
-            },
+            |current| current.is_null() || leaves.stop(current),
             |state, stopped| {
                 if stopped {
                     state.renderer = null_mut();
@@ -222,17 +209,9 @@ impl Lifecycle {
         if state.transitioning {
             return RSF_ERROR_BUSY;
         }
-        // Written in the former order: prepared stays written if the native check throws.
         output.prepared = u32::from(state.prepared);
         // The native check runs only while the adapter believes the renderer active.
-        let active = if state.active {
-            match leaves.is_active(state.renderer) {
-                Ok(active) => active,
-                Err(Threw) => return RSF_ERROR_NOT_READY,
-            }
-        } else {
-            false
-        };
+        let active = state.active && leaves.is_active(state.renderer);
         output.active = u32::from(active);
         output.rendering_ready = 0;
         output.reason = if state.active && !active {

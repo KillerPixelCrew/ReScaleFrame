@@ -77,31 +77,20 @@ fn publication_refuses_before_retaining_the_table() {
             status: None,
         },
     };
-    let incomplete = rsf_ac7_platform {
-        renderer_leaves: None,
-    };
     assert_eq!(
-        unsafe { rsf_ac7_publish_api(RSF_GAME_ABI_VERSION, null_mut(), &incomplete) },
+        unsafe { rsf_ac7_publish_api(RSF_GAME_ABI_VERSION, null_mut()) },
         RSF_ERROR_INVALID_ARGUMENT
     );
     assert_eq!(
-        unsafe { rsf_ac7_publish_api(RSF_GAME_ABI_VERSION, &mut api, &incomplete) },
+        unsafe { rsf_ac7_publish_api(RSF_GAME_ABI_VERSION, &mut api) },
         RSF_ERROR_INVALID_ARGUMENT
     );
     api.struct_size = size_of::<rsf_game_plugin_api>() as u32;
     assert_eq!(
-        unsafe { rsf_ac7_publish_api(RSF_GAME_ABI_VERSION + 1, &mut api, &incomplete) },
+        unsafe { rsf_ac7_publish_api(RSF_GAME_ABI_VERSION + 1, &mut api) },
         RSF_ERROR_ABI_MISMATCH
     );
-    assert_eq!(
-        unsafe { rsf_ac7_publish_api(RSF_GAME_ABI_VERSION, &mut api, null()) },
-        RSF_ERROR_NOT_READY
-    );
-    assert_eq!(
-        unsafe { rsf_ac7_publish_api(RSF_GAME_ABI_VERSION, &mut api, &incomplete) },
-        RSF_ERROR_NOT_READY
-    );
-    assert!(api.detect.is_none() && OPS.get().is_none());
+    assert!(api.detect.is_none());
 }
 
 #[test]

@@ -1,30 +1,19 @@
 // SPDX-License-Identifier: MIT
-// Native leaves of ReScaleFrame.Game.AC7.dll. Exact-build identity, the GameSDK table, the
-// renderer lifecycle and the native renderer are owned by the Rust crate rsf-ac7 (src/lib.rs,
-// src/lifecycle.rs, src/native_renderer.rs). This file keeps the exported entry point, binds the
-// native renderer's call table and lends the renderer leaf snapshot.
-#include "ac7_platform.h"
+// The exported entry point of ReScaleFrame.Game.AC7.dll. Exact-build identity, the GameSDK table,
+// the renderer lifecycle and the native renderer are owned by the Rust crate rsf-ac7 (src/lib.rs,
+// src/lifecycle.rs, src/native_renderer.rs); this file binds the native renderer's call table,
+// which only this DLL links, and asks Rust for the table.
 #include "ac7_sites.h"
 
-#include <stddef.h>
+#include <rescaleframe/game_api.h>
 
-#define RSF_ASSERT(condition) _Static_assert(condition, #condition)
-RSF_ASSERT(sizeof(rsf_ac7_platform) == sizeof(void*));
-// Mirrored by src/platform_abi.rs.
-RSF_ASSERT(sizeof(rsf_ac7_native_renderer_options) == 72);
-RSF_ASSERT(offsetof(rsf_ac7_native_renderer_options, session_id) == 8);
-RSF_ASSERT(offsetof(rsf_ac7_native_renderer_options, on_stage) == 16);
-RSF_ASSERT(offsetof(rsf_ac7_native_renderer_options, render_config) == 40);
-RSF_ASSERT(offsetof(rsf_ac7_native_renderer_options, on_state) == 56);
-RSF_ASSERT(offsetof(rsf_ac7_native_renderer_options, diagnostics) == 64);
-#undef RSF_ASSERT
-
-static const rsf_ac7_platform platform = {rsf_ac7_get_renderer_leaves};
+// Rust (lib.rs): validates `requested_abi` and `api` and fills the GameSDK table.
+rsf_result rsf_ac7_publish_api(uint32_t requested_abi, rsf_game_plugin_api* api);
 
 __declspec(dllexport) rsf_result rsf_get_game_plugin_api(
     uint32_t requested_abi, rsf_game_plugin_api* api)
 {
     // Only this DLL lends the native renderer's MinHook, input fact, scope and factory calls.
     rsf_ac7_native_renderer_bind(&rsf_ac7_native_calls_table);
-    return rsf_ac7_publish_api(requested_abi, api, &platform);
+    return rsf_ac7_publish_api(requested_abi, api);
 }
