@@ -7,6 +7,14 @@ metadata and the source public header and carrier definition comparison
 passed. Binary ABI, fixture, device and game results are pending.
 [Candidate checks](rust-migration.md#candidate-9f53f1b0)
 
+Steam D3D11 uses a static C entry for both Rust adapters and the existing
+C++ callers. Rust owns fingerprinting, MinHook installation and the typed
+relay, while C++ guards exceptions at the foreign calls. AC7 and RDR2
+retain their XInput observation interface with a shared Rust owner.
+Pinned binding regeneration and source checks passed. Native linking,
+Steam cold creation, Present forwarding and controller observation
+remain to be verified. [Steam continuation evidence](research/skyrim-steam-present-continuation-20261116.md)
+
 The Unity package now routes render callbacks, admits preview and
 generation windows, and handles device events in Rust. The managed
 exports matched in source, and pinned binding regeneration matched the

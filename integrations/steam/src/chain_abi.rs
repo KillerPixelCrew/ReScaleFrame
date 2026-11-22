@@ -2,8 +2,6 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-type wchar_t = u16;
-use rsf_game_sys::rsf_game_host_services;
 
 pub const RSF_D3D11_DISPATCH_RELEASE: u32 = 1;
 pub const RSF_D3D11_DISPATCH_PRESENT: u32 = 2;
@@ -265,60 +263,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_d3d11_chain_dispatch, args) - 24usize];
     ["Offset of field: rsf_d3d11_chain_dispatch::result"]
         [::core::mem::offset_of!(rsf_d3d11_chain_dispatch, result) - 64usize];
-};
-pub type rsf_steam_chain_service_fn = ::core::option::Option<
-    unsafe extern "C" fn(
-        services_user: *mut ::core::ffi::c_void,
-        request: *mut rsf_d3d11_chain_dispatch,
-    ) -> i32,
->;
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_steam_chain_platform {
-    pub create_hook: ::core::option::Option<
-        unsafe extern "C" fn(
-            target: *mut ::core::ffi::c_void,
-            detour: *mut ::core::ffi::c_void,
-            original: *mut *mut ::core::ffi::c_void,
-        ) -> bool,
-    >,
-    pub queue_hook: ::core::option::Option<
-        unsafe extern "C" fn(target: *mut ::core::ffi::c_void, enable: bool) -> bool,
-    >,
-    pub apply_queued: ::core::option::Option<unsafe extern "C" fn() -> bool>,
-    pub dispatch: ::core::option::Option<
-        unsafe extern "C" fn(
-            service: rsf_steam_chain_service_fn,
-            services_user: *mut ::core::ffi::c_void,
-            request: *mut rsf_d3d11_chain_dispatch,
-        ) -> i32,
-    >,
-    pub log: ::core::option::Option<
-        unsafe extern "C" fn(
-            host: *const rsf_game_host_services,
-            message: *const ::core::ffi::c_char,
-        ),
-    >,
-    pub file_sha256: ::core::option::Option<
-        unsafe extern "C" fn(path: *const wchar_t, digest: *mut ::core::ffi::c_char) -> bool,
-    >,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_steam_chain_platform"]
-        [::core::mem::size_of::<rsf_steam_chain_platform>() - 48usize];
-    ["Alignment of rsf_steam_chain_platform"]
-        [::core::mem::align_of::<rsf_steam_chain_platform>() - 8usize];
-    ["Offset of field: rsf_steam_chain_platform::create_hook"]
-        [::core::mem::offset_of!(rsf_steam_chain_platform, create_hook) - 0usize];
-    ["Offset of field: rsf_steam_chain_platform::queue_hook"]
-        [::core::mem::offset_of!(rsf_steam_chain_platform, queue_hook) - 8usize];
-    ["Offset of field: rsf_steam_chain_platform::apply_queued"]
-        [::core::mem::offset_of!(rsf_steam_chain_platform, apply_queued) - 16usize];
-    ["Offset of field: rsf_steam_chain_platform::dispatch"]
-        [::core::mem::offset_of!(rsf_steam_chain_platform, dispatch) - 24usize];
-    ["Offset of field: rsf_steam_chain_platform::log"]
-        [::core::mem::offset_of!(rsf_steam_chain_platform, log) - 32usize];
-    ["Offset of field: rsf_steam_chain_platform::file_sha256"]
-        [::core::mem::offset_of!(rsf_steam_chain_platform, file_sha256) - 40usize];
 };

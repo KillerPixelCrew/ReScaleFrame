@@ -78,6 +78,7 @@ add_custom_target(rsf_overlay_panel_stage ALL
     VERBATIM)
 add_dependencies(rsf_overlay_panel_stage rsf_orchestrator)
 add_subdirectory(games/anomaly)
+add_subdirectory(integrations/windows)
 add_subdirectory(games/ac7)
 add_subdirectory(games/project-wingman)
 add_subdirectory(integrations/steam)

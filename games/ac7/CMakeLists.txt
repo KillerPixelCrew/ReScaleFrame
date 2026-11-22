@@ -41,7 +41,7 @@ add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
 add_library(rsf_ac7_render_scope STATIC src/render_scope.cpp src/native_renderer.cpp src/truesky_depth.cpp src/truesky_motion.cpp src/contact_shadow.cpp src/velocity_shader.cpp)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
-target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_view minhook rsf_build_options ReScaleFrame::RuntimeCommon)
+target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_view rsf_windows_input_facts minhook rsf_build_options ReScaleFrame::RuntimeCommon)
 # The shader compiler is available without linking the Graphics library.
 target_link_libraries(rsf_ac7_render_scope PUBLIC rsf_shader_compiler)
 target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/runtime/graphics/include")

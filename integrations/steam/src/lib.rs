@@ -4,8 +4,7 @@
 //! This crate owns the exact gameoverlayrenderer64.dll profile: its fingerprint, the guarded
 //! load sites and Present entries, the relay page, the forwarding handlers and the one-shot
 //! installation. What a forwarded call means is the Runtime's decision through its
-//! rsf_d3d11_host_dispatch_chain export. d3d11_chain.cpp keeps the adapters' C++ entry point and
-//! supplies MinHook, exception guards and the shared file hash through rsf_steam_chain_platform.
+//! rsf_d3d11_host_dispatch_chain export. Native exception guards protect the two foreign calls.
 #![cfg(windows)]
 
 mod chain_abi;
@@ -20,15 +19,16 @@ use chain_abi::{
     rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_3 as FullscreenArgs,
     rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_4 as ResizeArgs,
     rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_5 as ColorSpaceArgs,
-    rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_6 as Resize1Args, rsf_steam_chain_platform,
-    rsf_steam_chain_service_fn,
+    rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_6 as Resize1Args,
 };
-use rsf_game_sys::{rsf_game_host_services, rsf_result};
+use rsf_game_sys::{RSF_GAME_ABI_VERSION, rsf_game_host_services};
+use rsf_windows::minhook;
 use std::ffi::{CStr, c_char, c_void};
+use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::{self, null_mut};
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::Diagnostics::Debug::{FlushInstructionCache, ReadProcessMemory};
 use windows_sys::Win32::System::LibraryLoader::{
@@ -43,12 +43,14 @@ use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::core::{s, w};
 
-const RSF_OK: rsf_result = 0;
-const RSF_ERROR_NOT_READY: rsf_result = -3;
+const RSF_OK: i32 = 0;
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 
 // The only recognized overlay build. Every RVA and byte below belongs to it.
-const STEAM_SHA256: &[u8; 64] = b"21c0c1ddb4259c1156356bdfe8432dff504d52c7b96d19718688cff2d5a6e52f";
+const STEAM_SHA256: [u8; 32] = [
+    0x21, 0xc0, 0xc1, 0xdd, 0xb4, 0x25, 0x9c, 0x11, 0x56, 0x35, 0x6b, 0xdf, 0xe8, 0x43, 0x2d, 0xff,
+    0x50, 0x4d, 0x52, 0xc7, 0xb9, 0x6d, 0x19, 0x71, 0x86, 0x88, 0xcf, 0xf2, 0xd5, 0xa6, 0xe5, 0x2f,
+];
 
 // A complete MOV RAX/R10,[RIP+disp32] that loads Steam's saved original method, followed by the
 // bytes that call or tail-jump through it.
@@ -72,6 +74,7 @@ const SITES: [Site; 10] = [
     Site { rva: 0x9c630, method: RSF_D3D11_DISPATCH_SET_COLOR_SPACE1, load: [0x48,0x8b,0x05,0xa1,0x6e,0x0e,0x00], following: [0x8b,0xd3,0x48,0x8b,0xce,0x48,0x83,0xc4,0x28,0x5f,0x5e,0x5d,0x5b,0x48,0xff,0xe0] },
     Site { rva: 0x9c4df, method: RSF_D3D11_DISPATCH_RESIZE_BUFFERS1, load: [0x4c,0x8b,0x15,0xfa,0x6f,0x0e,0x00], following: [0x45,0x8b,0xc4,0x48,0x89,0x9c,0x24,0xf8,0x00,0x00,0x00,0x8b,0xd5,0x48,0x89,0xbc] },
 ];
+
 // Steam's saved original methods, indexed by dispatch method - 1.
 const SLOTS: [usize; 7] = [
     0x1834b0, 0x1834b8, 0x1834c8, 0x1834c0, 0x1834d0, 0x1834d8, 0x1834e0,
@@ -114,11 +117,31 @@ type Resize1Fn = unsafe extern "system" fn(
     *const *mut c_void,
 ) -> i32;
 
-// Published once before any hook is created; the relays and hooks read them for process lifetime.
-static SERVICE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
-static SERVICE_USER: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
-static PLATFORM: AtomicPtr<rsf_steam_chain_platform> = AtomicPtr::new(null_mut());
-static STEAM_BASE: AtomicUsize = AtomicUsize::new(0);
+type Service = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_chain_dispatch) -> i32;
+type ColdOwner = unsafe extern "C" fn() -> bool;
+type ColdOwnerWithUser = unsafe extern "C" fn(*const c_void) -> bool;
+
+unsafe extern "C" {
+    fn rsf_steam_dispatch_guard(
+        service: Service,
+        user: *mut c_void,
+        request: *mut rsf_d3d11_chain_dispatch,
+    ) -> i32;
+    fn rsf_steam_log_guard(host: *const rsf_game_host_services, message: *const c_char);
+}
+
+struct Relay {
+    service: Service,
+    user: *mut c_void,
+    base: usize,
+}
+
+// Runtime owns the opaque user, guarantees concurrent dispatch, and is pinned before publication.
+unsafe impl Send for Relay {}
+unsafe impl Sync for Relay {}
+
+// Published before any hooks are created. All hooks and relays borrow this process-lived record.
+static RELAY: OnceLock<Relay> = OnceLock::new();
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 // Serializes installation and records that an attempt published state.
 static ATTEMPTED: Mutex<bool> = Mutex::new(false);
@@ -174,18 +197,14 @@ fn request_for(method: u32, receiver: Receiver) -> rsf_d3d11_chain_dispatch {
     request
 }
 
+fn relay() -> &'static Relay {
+    RELAY.get().expect("Steam hooks require a published relay")
+}
+
 // True when the Runtime answered the call. A failed service fails closed without native forwarding.
 fn handled(request: &mut rsf_d3d11_chain_dispatch) -> bool {
-    let service = unsafe {
-        std::mem::transmute::<*mut c_void, rsf_steam_chain_service_fn>(
-            SERVICE.load(Ordering::Acquire),
-        )
-    };
-    let platform = unsafe { PLATFORM.load(Ordering::Acquire).as_ref() };
-    let mut status = RSF_ERROR_NOT_READY;
-    if let (Some(_), Some(dispatch)) = (service, platform.and_then(|platform| platform.dispatch)) {
-        status = unsafe { dispatch(service, SERVICE_USER.load(Ordering::Acquire), request) };
-    }
+    let relay = relay();
+    let status = unsafe { rsf_steam_dispatch_guard(relay.service, relay.user, request) };
     if status != RSF_OK {
         // Release has no HRESULT channel. Fail closed without native forwarding.
         if request.method == RSF_D3D11_DISPATCH_RELEASE {
@@ -201,25 +220,42 @@ fn handled(request: &mut rsf_d3d11_chain_dispatch) -> bool {
 // Steam's saved original method, unless it is missing or would re-enter this handler.
 fn continuation(method: u32) -> Option<usize> {
     let index = method as usize - 1;
-    let slot = STEAM_BASE
-        .load(Ordering::Acquire)
-        .wrapping_add(SLOTS[index]);
+    let slot = relay().base.wrapping_add(SLOTS[index]);
     let mut next = 0usize;
     let copied = read(slot, (&raw mut next).cast(), size_of::<usize>());
     (copied && next != 0 && next != handlers()[index]).then_some(next)
+}
+
+fn dispatch_present(receiver: Receiver, interval: u32, flags: u32) -> Option<i32> {
+    let mut request = request_for(RSF_D3D11_DISPATCH_PRESENT, receiver);
+    request.args.present = PresentArgs {
+        sync_interval: interval,
+        flags,
+    };
+    handled(&mut request).then(|| unsafe { request.result.hresult })
+}
+
+fn dispatch_present1(
+    receiver: Receiver,
+    interval: u32,
+    flags: u32,
+    parameters: *const c_void,
+) -> Option<i32> {
+    let mut request = request_for(RSF_D3D11_DISPATCH_PRESENT1, receiver);
+    request.args.present1 = Present1Args {
+        sync_interval: interval,
+        flags,
+        parameters,
+    };
+    handled(&mut request).then(|| unsafe { request.result.hresult })
 }
 
 // A facade must enter RSF before Steam acquires its global Present lock.
 // XeSS's physical presenter runs on another thread and needs that same lock.
 // Native receivers retain Steam's entire handler, including its overlay work.
 unsafe extern "system" fn present_entry(receiver: Receiver, interval: u32, flags: u32) -> i32 {
-    let mut request = request_for(RSF_D3D11_DISPATCH_PRESENT, receiver);
-    request.args.present = PresentArgs {
-        sync_interval: interval,
-        flags,
-    };
-    if handled(&mut request) {
-        return unsafe { request.result.hresult };
+    if let Some(result) = dispatch_present(receiver, interval, flags) {
+        return result;
     }
     match ORIGINAL_PRESENT_ENTRY.load(Ordering::Acquire) as usize {
         0 => E_FAIL,
@@ -233,14 +269,8 @@ unsafe extern "system" fn present1_entry(
     flags: u32,
     parameters: *const c_void,
 ) -> i32 {
-    let mut request = request_for(RSF_D3D11_DISPATCH_PRESENT1, receiver);
-    request.args.present1 = Present1Args {
-        sync_interval: interval,
-        flags,
-        parameters,
-    };
-    if handled(&mut request) {
-        return unsafe { request.result.hresult };
+    if let Some(result) = dispatch_present1(receiver, interval, flags, parameters) {
+        return result;
     }
     match ORIGINAL_PRESENT1_ENTRY.load(Ordering::Acquire) as usize {
         0 => E_FAIL,
@@ -261,15 +291,10 @@ unsafe extern "system" fn forward_release(receiver: Receiver) -> u32 {
 }
 
 unsafe extern "system" fn forward_present(receiver: Receiver, interval: u32, flags: u32) -> i32 {
-    let mut request = request_for(RSF_D3D11_DISPATCH_PRESENT, receiver);
-    request.args.present = PresentArgs {
-        sync_interval: interval,
-        flags,
-    };
-    if handled(&mut request) {
-        return unsafe { request.result.hresult };
+    if let Some(result) = dispatch_present(receiver, interval, flags) {
+        return result;
     }
-    match continuation(request.method) {
+    match continuation(RSF_D3D11_DISPATCH_PRESENT) {
         Some(next) => unsafe { function::<PresentFn>(next)(receiver, interval, flags) },
         None => E_FAIL,
     }
@@ -327,16 +352,10 @@ unsafe extern "system" fn forward_present1(
     flags: u32,
     parameters: *const c_void,
 ) -> i32 {
-    let mut request = request_for(RSF_D3D11_DISPATCH_PRESENT1, receiver);
-    request.args.present1 = Present1Args {
-        sync_interval: interval,
-        flags,
-        parameters,
-    };
-    if handled(&mut request) {
-        return unsafe { request.result.hresult };
+    if let Some(result) = dispatch_present1(receiver, interval, flags, parameters) {
+        return result;
     }
-    match continuation(request.method) {
+    match continuation(RSF_D3D11_DISPATCH_PRESENT1) {
         Some(next) => unsafe {
             function::<Present1Fn>(next)(receiver, interval, flags, parameters)
         },
@@ -447,54 +466,26 @@ fn guarded(base: usize) -> bool {
         })
 }
 
-struct Ops {
-    create: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> bool,
-    queue: unsafe extern "C" fn(*mut c_void, bool) -> bool,
-    apply: unsafe extern "C" fn() -> bool,
-    log: unsafe extern "C" fn(*const rsf_game_host_services, *const c_char),
-    file_sha256: unsafe extern "C" fn(*const u16, *mut c_char) -> bool,
+fn log(host: &rsf_game_host_services, message: &CStr) {
+    unsafe { rsf_steam_log_guard(host, message.as_ptr()) };
 }
 
-impl Ops {
-    // The facade fills every entry; an incomplete table refuses before any state changes.
-    fn resolve(platform: &rsf_steam_chain_platform) -> Option<Self> {
-        platform.dispatch?;
-        Some(Self {
-            create: platform.create_hook?,
-            queue: platform.queue_hook?,
-            apply: platform.apply_queued?,
-            log: platform.log?,
-            file_sha256: platform.file_sha256?,
-        })
-    }
-
-    fn log(&self, host: &rsf_game_host_services, message: &CStr) {
-        unsafe { (self.log)(host, message.as_ptr()) };
-    }
-
-    fn fail(&self, host: &rsf_game_host_services, message: &CStr) -> bool {
-        self.log(host, message);
-        false
-    }
-
-    fn recognized(&self, module: HMODULE) -> bool {
-        let mut path = vec![0u16; 32768];
-        let length = unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) };
-        let mut digest = [0u8; 64];
-        length != 0
-            && (length as usize) < path.len()
-            && unsafe { (self.file_sha256)(path.as_ptr(), digest.as_mut_ptr().cast()) }
-            && digest == *STEAM_SHA256
-    }
+fn fail(host: &rsf_game_host_services, message: &CStr) -> bool {
+    log(host, message);
+    false
 }
 
-fn prepare(
-    host: &rsf_game_host_services,
-    cold_owner: Option<unsafe extern "C" fn(*const c_void) -> bool>,
-    cold_user: *const c_void,
-    platform: &'static rsf_steam_chain_platform,
-    ops: &Ops,
-) -> bool {
+fn recognized(module: HMODULE) -> bool {
+    let mut path = vec![0u16; 32768];
+    let length = unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) };
+    if length == 0 || length as usize >= path.len() {
+        return false;
+    }
+    let path = std::ffi::OsString::from_wide(&path[..length as usize]);
+    rsf_windows::sha256_file(path.as_ref()) == Some(STEAM_SHA256)
+}
+
+fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> bool {
     if INSTALLED.load(Ordering::Acquire) {
         return true;
     }
@@ -503,7 +494,7 @@ fn prepare(
         return true;
     }
     if *attempted {
-        return ops.fail(
+        return fail(
             host,
             c"Steam swapchain forwarding installation previously refused; process restart required.",
         );
@@ -512,21 +503,21 @@ fn prepare(
     if module.is_null() {
         return true; // Rechecked at the guarded cold creation call.
     }
-    if !cold_owner.is_some_and(|cold| unsafe { cold(cold_user) }) {
-        return ops.fail(
+    if !cold_owner() {
+        return fail(
             host,
             c"Steam swapchain forwarding refused late installation after native device creation.",
         );
     }
-    if !ops.recognized(module) {
-        return ops.fail(
+    if !recognized(module) {
+        return fail(
             host,
             c"Steam swapchain forwarding refused: unrecognized overlay fingerprint.",
         );
     }
     let base = module as usize;
     if !guarded(base) {
-        return ops.fail(
+        return fail(
             host,
             c"Steam swapchain forwarding refused: load/call continuation bytes differ.",
         );
@@ -537,17 +528,23 @@ fn prepare(
     } else {
         unsafe { GetProcAddress(runtime, s!("rsf_d3d11_host_dispatch_chain")) }
     };
-    let service = service.map_or(null_mut(), |service| service as *mut c_void);
+    let Some(service) = service else {
+        return fail(
+            host,
+            c"Steam swapchain forwarding refused: typed chain service unavailable.",
+        );
+    };
+    let service_address = service as *const c_void;
     let adapter = forward_present as PresentFn as *const c_void;
-    if service.is_null() || !pin(module) || !pin(adapter) || !pin(service) {
-        return ops.fail(
+    if !pin(module) || !pin(adapter) || !pin(service_address) {
+        return fail(
             host,
             c"Steam swapchain forwarding refused: typed chain service or process-lifetime modules unavailable.",
         );
     }
     let page = near_page(base + SITES[0].rva);
     if page.is_null() {
-        return ops.fail(
+        return fail(
             host,
             c"Steam swapchain forwarding refused: no near relay page.",
         );
@@ -574,7 +571,7 @@ fn prepare(
             .wrapping_sub(5);
         if i32::try_from(reach).is_err() {
             release(page);
-            return ops.fail(
+            return fail(
                 host,
                 c"Steam swapchain forwarding refused: relay outside rel32 reach.",
             );
@@ -595,20 +592,28 @@ fn prepare(
     };
     if !published {
         release(page);
-        return ops.fail(
+        return fail(
             host,
             c"Steam swapchain forwarding refused: relay publication failed.",
         );
     }
-    SERVICE_USER.store(host.user, Ordering::Release);
-    STEAM_BASE.store(base, Ordering::Release);
-    PLATFORM.store(ptr::from_ref(platform).cast_mut(), Ordering::Release);
-    SERVICE.store(service, Ordering::Release);
+    let record = Relay {
+        service: unsafe { function::<Service>(service as usize) },
+        user: host.user,
+        base,
+    };
+    if RELAY.set(record).is_err() {
+        release(page);
+        return fail(
+            host,
+            c"Steam swapchain forwarding refused: relay already published.",
+        );
+    }
     *attempted = true; // Relays/modules/trampolines remain process-lived after hook publication.
     let mut created = 0;
     while created < SITES.len()
         && unsafe {
-            (ops.create)(
+            minhook::create(
                 targets[created],
                 page.wrapping_add(created * STUB_BYTES).cast(),
                 null_mut(),
@@ -621,7 +626,7 @@ fn prepare(
         targets[created] = (base + PRESENT_ENTRIES[0]) as *mut c_void;
         let detour = present_entry as PresentFn as *mut c_void;
         let mut original = null_mut();
-        if unsafe { (ops.create)(targets[created], detour, &mut original) } {
+        if unsafe { minhook::create(targets[created], detour, &mut original) } {
             ORIGINAL_PRESENT_ENTRY.store(original, Ordering::Release);
             created += 1;
         }
@@ -630,7 +635,7 @@ fn prepare(
         targets[created] = (base + PRESENT_ENTRIES[1]) as *mut c_void;
         let detour = present1_entry as Present1Fn as *mut c_void;
         let mut original = null_mut();
-        if unsafe { (ops.create)(targets[created], detour, &mut original) } {
+        if unsafe { minhook::create(targets[created], detour, &mut original) } {
             ORIGINAL_PRESENT1_ENTRY.store(original, Ordering::Release);
             created += 1;
         }
@@ -638,52 +643,61 @@ fn prepare(
     let mut queued = created == HOOK_COUNT && guarded(base);
     if queued {
         for &target in &targets {
-            if !unsafe { (ops.queue)(target, true) } {
+            if !unsafe { minhook::queue(target, true) } {
                 queued = false;
             }
         }
     }
-    if !queued || !unsafe { (ops.apply)() } {
+    if !queued || !unsafe { minhook::apply() } {
         // Queue removal too: a failed Apply may have enabled only the first site.
         // Keep all backing memory valid even if rollback itself refuses.
         for &target in &targets[..created] {
-            let _ = unsafe { (ops.queue)(target, false) };
+            let _ = unsafe { minhook::queue(target, false) };
         }
-        let _ = unsafe { (ops.apply)() };
-        return ops.fail(
+        let _ = unsafe { minhook::apply() };
+        return fail(
             host,
             c"Steam swapchain forwarding refused: complete hook set enable failed; no facade admitted.",
         );
     }
     INSTALLED.store(true, Ordering::Release);
-    ops.log(
+    log(
         host,
         c"Steam swapchain forwarding installed at seven methods/ten guarded loads and two pre-lock Present entries; native receivers retain Steam handlers; original installer/global untouched; process-lived relays.",
     );
     true
 }
 
-/// Installs the forwarding for the adapter whose native owner `cold_owner` reports cold.
-///
-/// # Safety
-/// `host` and `cold_user` are borrowed for this call. `platform` must point to a complete table
-/// that lives for the process, because published relays and hooks call through it afterwards.
+// The ABI prefix must be readable; the full host is borrowed only after validation.
+unsafe fn prepare_from_abi(
+    host: *const rsf_game_host_services,
+    cold_owner: impl FnOnce() -> bool,
+) -> bool {
+    if host.is_null()
+        || unsafe { (*host).struct_size } < size_of::<rsf_game_host_services>() as u32
+        || unsafe { (*host).abi_version } != RSF_GAME_ABI_VERSION
+    {
+        return false;
+    }
+    catch_unwind(AssertUnwindSafe(|| prepare(unsafe { &*host }, cold_owner))).unwrap_or(false)
+}
+
+// MinHook must already be initialized. The callback is borrowed for the duration of the call
+// and must return without unwinding. The dispatch service's opaque user stays valid for hooks.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_steam_d3d11_chain_prepare(
     host: *const rsf_game_host_services,
-    cold_owner: Option<unsafe extern "C" fn(*const c_void) -> bool>,
-    cold_user: *const c_void,
-    platform: *const rsf_steam_chain_platform,
+    cold_owner: Option<ColdOwner>,
 ) -> bool {
-    let (Some(host), Some(platform)) = (unsafe { host.as_ref() }, unsafe { platform.as_ref() })
-    else {
-        return false;
-    };
-    let Some(ops) = Ops::resolve(platform) else {
-        return false;
-    };
-    catch_unwind(AssertUnwindSafe(|| {
-        prepare(host, cold_owner, cold_user, platform, &ops)
-    }))
-    .unwrap_or(false)
+    unsafe { prepare_from_abi(host, || cold_owner.is_some_and(|cold| cold())) }
+}
+
+// Supports the legacy C++ caller with a borrowed context and a no-throw thunk.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_steam_d3d11_chain_prepare_with_user(
+    host: *const rsf_game_host_services,
+    cold_owner: Option<ColdOwnerWithUser>,
+    cold_user: *const c_void,
+) -> bool {
+    unsafe { prepare_from_abi(host, || cold_owner.is_some_and(|cold| cold(cold_user))) }
 }

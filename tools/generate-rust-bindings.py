@@ -81,12 +81,11 @@ generate("runtime/orchestrator/src/scene_promote_abi.rs", "runtime/graphics/incl
          "rsf_promote_(setup|frame_tail|status|log_fn)",
          "RSF_PROMOTE_(ABI_VERSION|MAX_(UI|CHAIN)_TARGETS)",
          ["-Iruntime/graphics/include"], ["--no-recursive-allowlist", "--with-derive-default"])
-generate("integrations/steam/src/chain_abi.rs", "integrations/steam/src/d3d11_chain_platform.h",
-         "rsf_(steam_chain_(platform|service_fn)|d3d11_chain_dispatch.*)", "RSF_D3D11_(HOST_ABI_VERSION|DISPATCH_.*)",
+generate("integrations/steam/src/chain_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_host.h",
+         "rsf_d3d11_chain_dispatch.*", "RSF_D3D11_(HOST_ABI_VERSION|DISPATCH_.*)",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include"],
-         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]", "--raw-line", "type wchar_t = u16;",
-          "--raw-line", "use rsf_game_sys::rsf_game_host_services;"])
+         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]"])
 generate("games/fallout4/src/platform_abi.rs", "games/fallout4/src/fallout4_platform.h",
          "rsf_(fallout4_.*|d3d11_(host_setup|creation_scope|native_chain|presentation_binding)|motion_decode_params)",
          "RSF_(FALLOUT4_.*|D3D11_HOST_(ABI_VERSION|CAP_.*))",
