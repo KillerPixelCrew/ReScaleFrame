@@ -33,7 +33,7 @@ int32_t rsf_core_srvk_spatial_fallback(Lookup, const rsf_srvk_fallback*);
 extern "C" const rsf_vkfg_platform rsf_core_vkfg_platform;
 
 namespace {
-constexpr auto max_versions = rsf::max_ffx_versions;
+constexpr auto max_versions = RSF_FFX_MAX_VERSIONS;
 
 using Version = rsf_ffx_version;
 struct FfxDispatch {
@@ -181,7 +181,7 @@ int32_t versions(FfxNative* native, Version* out, uint64_t* count) noexcept try
     if (native->sdk.query(nullptr, &query.header) != FFX_API_RETURN_OK || *count > max_versions)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     for (uint64_t index = 0; index < *count; ++index) {
-        out[index] = rsf::ffx_version(ids[index], names[index]);
+        (void)rsf_fsr4_parse_version(ids[index], names[index], &out[index]);
     }
     return RSF_BACKEND_OK;
 }

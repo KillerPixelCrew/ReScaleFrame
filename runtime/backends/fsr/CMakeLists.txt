@@ -1,7 +1,7 @@
 set(RSF_FFX_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/fidelityfx/Kits/FidelityFX/api/include" CACHE PATH
     "Directory holding FidelityFX's ffx_api.h")
 
-add_library(rsf_fsr STATIC src/fsr_backend.cpp src/fsr_generation.cpp src/fsr4_compat_core.cpp)
+add_library(rsf_fsr STATIC src/fsr_backend.c src/fsr_generation.cpp src/fsr4_compat_core.cpp)
 target_include_directories(rsf_fsr PUBLIC include)
 rsf_add_rust_static(rsf_fsr4_compat_rust rsf_rust_fsr4_compat rsf-fsr4-compat rsf_fsr4_compat)
 target_link_libraries(rsf_fsr4_compat_rust INTERFACE minhook ReScaleFrame::RuntimeCommon)

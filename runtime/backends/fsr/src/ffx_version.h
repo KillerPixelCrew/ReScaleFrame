@@ -21,16 +21,4 @@ bool rsf_fsr4_parse_version(uint64_t id, const char* name, rsf_ffx_version* out)
 
 #ifdef __cplusplus
 }
-
-namespace rsf {
-inline constexpr size_t max_ffx_versions = RSF_FFX_MAX_VERSIONS;
-
-inline rsf_ffx_version ffx_version(uint64_t id, const char* name, bool* parsed = nullptr)
-{
-    rsf_ffx_version version{};
-    const bool numeric = rsf_fsr4_parse_version(id, name, &version);
-    if (parsed) *parsed = numeric;
-    return version;
-}
-}
 #endif

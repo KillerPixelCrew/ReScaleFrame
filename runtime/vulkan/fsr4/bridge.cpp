@@ -218,9 +218,7 @@ int32_t Provider(rsf_fsr4sr_native* native, rsf_ffx_version* out, uint32_t* pars
     const char* name{};
     const auto result = rsf_core_fsr4sr_sdk_provider(native->query, &native->effect, &id, &name);
     if (result) return result;
-    bool numeric = false;
-    *out = rsf::ffx_version(id, name, &numeric);
-    *parsed = numeric ? 1u : 0u;
+    *parsed = rsf_fsr4_parse_version(id, name, out) ? 1u : 0u;
     return 0;
 }
 

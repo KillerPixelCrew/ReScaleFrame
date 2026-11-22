@@ -230,3 +230,8 @@ regenerated the stage and fixture ABI records. Rust 1.94.1 formatting,
 locked offline Windows Cargo metadata with `rsf-anomaly/fg-fixture`,
 and Git whitespace checks were the verification for this pass.
 Build, fixture execution and game/device acceptance remain unverified.
+
+The integrated N02 profile facts now come from the Rust input owner. The FG
+fixture uses a C11 entry and retains its imported Runtime functions and all
+six registered scenarios. The native carrier still provides guarded depth,
+state save/restore and observer callbacks. Strict MinGW C11 syntax passed.

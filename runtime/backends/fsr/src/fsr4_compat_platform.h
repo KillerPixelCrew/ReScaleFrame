@@ -44,6 +44,8 @@ const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire(const rsf_fsr4_compat_platf
 const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire_logged(const rsf_fsr4_compat_platform* platform,
     void* module, void* adapter, void* device, rsf_fsr4_compat_log_fn log, void* user);
 void rsf_fsr4_compat_release(const rsf_fsr4_compat_lease* lease);
+const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire_native_device(
+    void* module, void* device, rsf_fsr4_compat_log_fn log, void* user);
 
 #ifdef __cplusplus
 }

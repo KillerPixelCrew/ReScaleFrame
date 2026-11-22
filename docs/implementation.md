@@ -7964,3 +7964,8 @@ listed in the [V05 source record](research/rust-vulkan-ffx-residual-port.md).
 Pinned binding generation, formatting and locked offline metadata completed.
 Compilation, linking, fixture execution, lint and device verification remain
 pending.
+
+D3D12 FidelityFX and XeSS SR provider selection uses Rust with C11 feature
+selection entries. The Vulkan callers invoke the shared Rust version parser
+directly. Native FG SDK callbacks and the Vulkan shared_ptr lease stay in
+C++. Strict C11 syntax passed with both provider switches on and off.

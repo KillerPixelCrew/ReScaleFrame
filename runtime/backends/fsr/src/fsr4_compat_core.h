@@ -12,9 +12,6 @@
 struct Fsr4Compatibility;
 using Fsr4Log = rsf_fsr4_compat_log_fn;
 
-extern "C" const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire_native_device(
-    void* module, void* device, Fsr4Log log, void* user);
-
 // The caller has already matched this adapter to the graphics device. The lease outlives
 // the FFX context; the resident hook only changes capability answers for the leased device.
 std::shared_ptr<Fsr4Compatibility> rsf_fsr4_enable_int8_adapter(HMODULE module,

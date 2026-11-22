@@ -1270,16 +1270,16 @@ Port the two providers and FSR4 compatibility controls, coordinating the shared 
 **Port files (12)**
 
 - [x] [runtime/backends/fsr/include/rescaleframe/fsr_backend.h](runtime/backends/fsr/include/rescaleframe/fsr_backend.h)
-- [ ] [runtime/backends/fsr/src/ffx_version.h](runtime/backends/fsr/src/ffx_version.h)
+- [x] [runtime/backends/fsr/src/ffx_version.h](runtime/backends/fsr/src/ffx_version.h)
 - [x] [runtime/backends/fsr/src/fsr4_compat.cpp](runtime/backends/fsr/src/fsr4_compat.cpp)
 - [x] [runtime/backends/fsr/src/fsr4_compat.h](runtime/backends/fsr/src/fsr4_compat.h)
 - [ ] [runtime/backends/fsr/src/fsr4_compat_core.cpp](runtime/backends/fsr/src/fsr4_compat_core.cpp)
 - [ ] [runtime/backends/fsr/src/fsr4_compat_core.h](runtime/backends/fsr/src/fsr4_compat_core.h)
 - [x] [runtime/backends/fsr/src/fsr4_compat_platform.h](runtime/backends/fsr/src/fsr4_compat_platform.h)
-- [ ] [runtime/backends/fsr/src/fsr_backend.cpp](runtime/backends/fsr/src/fsr_backend.cpp)
+- [x] [runtime/backends/fsr/src/fsr_backend.cpp](runtime/backends/fsr/src/fsr_backend.cpp)
 - [ ] [runtime/backends/fsr/src/fsr_generation.cpp](runtime/backends/fsr/src/fsr_generation.cpp)
 - [x] [runtime/backends/xess/include/rescaleframe/xess_backend.h](runtime/backends/xess/include/rescaleframe/xess_backend.h)
-- [ ] [runtime/backends/xess/src/xess_backend.cpp](runtime/backends/xess/src/xess_backend.cpp)
+- [x] [runtime/backends/xess/src/xess_backend.cpp](runtime/backends/xess/src/xess_backend.cpp)
 - [ ] [runtime/backends/xess/src/xess_generation.cpp](runtime/backends/xess/src/xess_generation.cpp)
 
 **Fixtures (1)**
@@ -2241,17 +2241,17 @@ Port FG configuration, window and input ownership, and the generation-stage call
 
 **Port files (7)**
 
-- [ ] [games/anomaly/src/fg_inputs.cpp](games/anomaly/src/fg_inputs.cpp)
-- [ ] [games/anomaly/src/fg_inputs_platform.h](games/anomaly/src/fg_inputs_platform.h)
+- [x] [games/anomaly/src/fg_inputs.cpp](games/anomaly/src/fg_inputs.cpp)
+- [x] [games/anomaly/src/fg_inputs_platform.h](games/anomaly/src/fg_inputs_platform.h)
 - [x] [games/anomaly/src/fg_policy.h](games/anomaly/src/fg_policy.h)
-- [ ] [games/anomaly/src/fg_policy_platform.h](games/anomaly/src/fg_policy_platform.h)
+- [x] [games/anomaly/src/fg_policy_platform.h](games/anomaly/src/fg_policy_platform.h)
 - [ ] [games/anomaly/src/fg_stage.h](games/anomaly/src/fg_stage.h)
 - [ ] [games/anomaly/src/fg_stage_platform.cpp](games/anomaly/src/fg_stage_platform.cpp)
-- [ ] [games/anomaly/src/fg_stage_platform.h](games/anomaly/src/fg_stage_platform.h)
+- [x] [games/anomaly/src/fg_stage_platform.h](games/anomaly/src/fg_stage_platform.h)
 
 **Fixtures (2)**
 
-- [ ] [tests/anomaly_fg_device.cpp](tests/anomaly_fg_device.cpp)
+- [x] [tests/anomaly_fg_device.cpp](tests/anomaly_fg_device.cpp)
 - [x] [tests/anomaly_fg_policy.cpp](tests/anomaly_fg_policy.cpp)
 
 **Rust review findings (8)**
