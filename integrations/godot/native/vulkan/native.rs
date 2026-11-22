@@ -5,6 +5,7 @@
 
 use super::creation::abi::{self, *};
 use super::{BACKEND_ERROR_NOT_READY, BACKEND_ERROR_NOT_SUPPORTED, BACKEND_OK};
+use crate::host::native_platform as platform;
 use crate::platform::*;
 use crate::{CONTROL, rsf_godot_vk_creation_resolver};
 use rsf_game_sys::ffi_util::ascii_wide;
@@ -26,24 +27,20 @@ type Handle = *mut c_void;
 const INVALID: i32 = -1;
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x800;
 const VK_INIT_FAILED: i32 = -3;
-const CAPABILITY_SR: u32 = 1;
-const CAPABILITY_FSR4_SR: u32 = 2;
-const CAPABILITY_FSR4_FG: u32 = 4;
-const CAPABILITY_XESS_FG: u32 = 8;
 const SHADER_READ: u32 = 5;
 const TRANSFER_DST: u32 = 7;
 const PRESENT_LAYOUT: u32 = 1_000_001_002;
 
 #[repr(C)]
 struct NativeFeatures {
-    flags: u32,
-    reserved: u32,
+    sr: u32,
+    fsr4_sr: u32,
+    xess_fg: u32,
     fsr4_probe: Option<unsafe extern "C" fn(*const rsf_srvk_setup, *mut rsf_fsr4fg_info) -> i32>,
     capture: capture::Ops,
 }
 
 unsafe extern "C" {
-    fn rsf_godot_platform_leaves() -> *const Platform;
     fn rsf_godot_vk_native_features() -> *const NativeFeatures;
 }
 
@@ -53,18 +50,13 @@ unsafe extern "system" {
 }
 
 const _: () = {
-    assert!(size_of::<NativeFeatures>() == 48);
-    assert!(std::mem::offset_of!(NativeFeatures, capture) == 16);
+    assert!(size_of::<NativeFeatures>() == 56);
+    assert!(std::mem::offset_of!(NativeFeatures, capture) == 24);
 };
 
 fn features() -> &'static NativeFeatures {
     // The CMake-configured native table is immutable and part of this module.
     unsafe { &*rsf_godot_vk_native_features() }
-}
-
-fn platform() -> &'static Platform {
-    // Native entry points and their checked Godot table ship in the same DLL.
-    unsafe { &*rsf_godot_platform_leaves() }
 }
 
 static GUARD: Mutex<()> = Mutex::new(());
@@ -144,16 +136,14 @@ fn system_resolver() -> Option<VkProc> {
 
 #[unsafe(no_mangle)]
 pub(super) extern "C" fn rsfg_vulkan_supported() -> i32 {
-    i32::from(features().flags & CAPABILITY_SR != 0)
+    i32::from(features().sr != 0)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_leaf_supported() -> u32 {
+pub(crate) extern "C" fn rsf_godot_vk_leaf_supported() -> u32 {
     rsfg_vulkan_supported() as u32
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_locked(
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_locked(
     body: unsafe extern "C" fn(Handle) -> i32,
     user: Handle,
 ) -> i32 {
@@ -161,8 +151,7 @@ unsafe extern "C" fn rsf_godot_vk_leaf_locked(
     unsafe { body(user) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_start(setup: *const Setup) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_start(setup: *const Setup) -> i32 {
     let setup = unsafe { &*setup };
     let root = unsafe { CStr::from_ptr(setup.runtime_directory) };
     let (streamline, xess) = {
@@ -225,8 +214,7 @@ unsafe extern "C" fn rsf_godot_vk_leaf_start(setup: *const Setup) -> i32 {
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_leaf_stop() -> i32 {
+pub(crate) extern "C" fn rsf_godot_vk_leaf_stop() -> i32 {
     {
         let mut state = state();
         let user = state.capture.user();
@@ -253,14 +241,12 @@ extern "C" fn rsf_godot_vk_leaf_stop() -> i32 {
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_leaf_release(session: u64) {
+pub(crate) extern "C" fn rsf_godot_vk_leaf_release(session: u64) {
     unsafe { rsf_input_dump_cancel(session) };
     state().directory = CString::default();
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_latency_facts(out: *mut VkLatencyFacts) -> u32 {
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_latency_facts(out: *mut VkLatencyFacts) -> u32 {
     let mut latency = rsf_latencyvk_status {
         struct_size: size_of::<rsf_latencyvk_status>() as u32,
         abi_version: RSF_LATENCYVK_ABI_VERSION,
@@ -284,22 +270,21 @@ unsafe extern "C" fn rsf_godot_vk_leaf_latency_facts(out: *mut VkLatencyFacts) -
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_facts(out: *mut VkFacts) {
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_facts(out: *mut VkFacts) {
     let state = state();
     let mut backend = 0;
     let present = !state.presenter.is_null();
     if present {
         let _ = unsafe { rsf_fgvk_backend(state.presenter, &mut backend) };
     }
-    let flags = features().flags;
+    let features = features();
     unsafe {
         out.write(VkFacts {
             streamline_ready: u32::from(state.streamline_ready),
             graph_handoff: u32::from(state.graph_handoff),
-            fsr4_sr_compiled: u32::from(flags & CAPABILITY_FSR4_SR != 0),
-            fsr4_fg_compiled: u32::from(flags & CAPABILITY_FSR4_FG != 0),
-            xess_fg_compiled: u32::from(flags & CAPABILITY_XESS_FG != 0),
+            fsr4_sr_compiled: features.fsr4_sr,
+            fsr4_fg_compiled: u32::from(features.fsr4_probe.is_some()),
+            xess_fg_compiled: features.xess_fg,
             presenter: u32::from(present),
             presenter_backend: backend,
             sdk_shutdown_pending: u32::from(state.shutdown_pending),
@@ -308,8 +293,7 @@ unsafe extern "C" fn rsf_godot_vk_leaf_facts(out: *mut VkFacts) {
     };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_presenter_max(count: *mut u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_presenter_max(count: *mut u32) -> i32 {
     let owner = state().presenter;
     if owner.is_null() {
         return BACKEND_ERROR_NOT_READY;
@@ -317,8 +301,7 @@ unsafe extern "C" fn rsf_godot_vk_leaf_presenter_max(count: *mut u32) -> i32 {
     unsafe { rsf_fgvk_max_generated(owner, count) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_leaf_fsr4_fg_probe() -> u32 {
+pub(crate) extern "C" fn rsf_godot_vk_leaf_fsr4_fg_probe() -> u32 {
     let Some(probe) = features().fsr4_probe else {
         return 0;
     };
@@ -341,13 +324,14 @@ extern "C" fn rsf_godot_vk_leaf_fsr4_fg_probe() -> u32 {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_latency_options(mode: u32, frame_limit: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_latency_options(
+    mode: u32,
+    frame_limit: u32,
+) -> i32 {
     unsafe { rsf_latencyvk_options(mode, frame_limit) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_leaf_presenter_drain(disable: u32) -> i32 {
+pub(crate) extern "C" fn rsf_godot_vk_leaf_presenter_drain(disable: u32) -> i32 {
     let owner = state().presenter;
     if owner.is_null() {
         return BACKEND_OK;
@@ -358,8 +342,10 @@ extern "C" fn rsf_godot_vk_leaf_presenter_drain(disable: u32) -> i32 {
     unsafe { rsf_fgvk_drain(owner) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_device_idle(device: Handle, proc: Option<VkProc>) -> u32 {
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_device_idle(
+    device: Handle,
+    proc: Option<VkProc>,
+) -> u32 {
     let wait = proc.and_then(|get| {
         // Win64 Vulkan dispatch uses PFN_vkVoidFunction as its transport.
         unsafe {
@@ -835,13 +821,11 @@ unsafe extern "C" fn rsfg_render_vulkan_handoff(
     unsafe { render(commands, packet, Some(handoff), continuation) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_sr_destroy(owner: Handle) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_sr_destroy(owner: Handle) -> i32 {
     unsafe { linked::rsf_core_srvk_session_close(owner) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_sr_create(
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_sr_create(
     call: Handle,
     request: *const VkSrCreate,
     out: *mut VkSrContext,
@@ -902,8 +886,7 @@ unsafe extern "C" fn rsf_godot_vk_leaf_sr_create(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_sr_plan(
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_sr_plan(
     call: Handle,
     owner: Handle,
     width: *mut u32,
@@ -920,8 +903,7 @@ unsafe extern "C" fn rsf_godot_vk_leaf_sr_plan(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_sr_record(
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_sr_record(
     call: Handle,
     owner: Handle,
     sharpening: *const Sharpening,
@@ -990,8 +972,7 @@ unsafe extern "C" fn rsf_godot_vk_leaf_sr_record(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_sr_log(
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_sr_log(
     call: Handle,
     kind: u32,
     provider: i32,
@@ -1041,8 +1022,7 @@ unsafe extern "C" fn rsf_godot_vk_leaf_sr_log(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_leaf_sr_dump_result(
+pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_sr_dump_result(
     call: Handle,
     backend: u32,
     result: i32,

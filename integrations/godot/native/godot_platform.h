@@ -368,10 +368,7 @@ typedef struct rsf_godot_option_value {
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* runtime.cpp: the table runtime_control.cpp passes to the owner. */
-const rsf_godot_platform* rsf_godot_platform_leaves(void);
-
-/* Rust owner. platform is the process-lived table above; the first accepted one is kept. */
+/* Rust owner. The first accepted process-lived platform table is kept. */
 int rsf_godot_boot(const rsf_godot_platform* platform, const rsf_godot_setup* setup);
 int rsf_godot_configure(const rsf_godot_platform* platform, const rsf_godot_settings* settings);
 void rsf_godot_log(const char* message);
@@ -397,6 +394,11 @@ rsf_godot_effect* rsf_godot_effect_create(void);
 void rsf_godot_effect_destroy(rsf_godot_effect* effect);
 void rsf_godot_effect_request_capture(rsf_godot_effect* effect);
 void rsf_godot_effect_render(rsf_godot_effect* effect, const rsf_godot_effect_leaves* leaves, void* call);
+/* Synchronous capture recording with borrowed SDK objects and a four-entry validity array. */
+uint32_t rsf_godot_effect_record_motion(void* call, const rsf_godot_effect_readback* plan,
+    uint32_t (*compile)(void*, const rsf_godot_effect_readback*),
+    uint32_t (*prepare)(void*, const rsf_godot_effect_readback*, uint32_t*),
+    uint32_t (*dispatch)(void*, const rsf_godot_effect_readback*));
 /* Nonzero when the record's header matched and it was filled. */
 int rsf_godot_effect_status_get(const rsf_godot_effect* effect, rsf_godot_effect_status* status);
 
@@ -412,11 +414,11 @@ int rsf_godot_execution(const rsf_game_render_pass* pass, uint32_t begin);
 int rsf_godot_vk_present_marker(const rsf_godot_platform* platform, uint64_t window, uint32_t begin);
 
 /* Extension control (runtime_control.cpp). */
-int rsf_godot_extension_configure(const rsf_godot_platform* platform, uint32_t admitted,
+int rsf_godot_extension_configure(uint32_t admitted,
     uint64_t viewport, const void* dictionary,
     uint32_t (*read)(const void*, const rsf_godot_option_field*, rsf_godot_option_value*));
-/* Bit 0: active session status. Bit 1: requested settings. */
-uint32_t rsf_godot_extension_status(rsf_godot_status* status, rsf_godot_settings* settings);
+/* Emits integer and boolean fields into a borrowed scripting Dictionary. */
+void rsf_godot_extension_status(void* dictionary, void (*emit)(void*, const char*, int64_t, uint32_t));
 void rsf_godot_extension_capture(void);
 /* Null names are unsupported. Returns RSF_GODOT_ADMIT_* bits. */
 uint32_t rsf_godot_renderer_admission(const char* driver, const char* method, uint32_t vulkan_supported);

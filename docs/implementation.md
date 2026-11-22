@@ -121,6 +121,13 @@ Binding regeneration, pinned formatting and locked offline metadata passed.
 Build and runtime checks remain pending.
 [E02 source evidence](../integrations/godot/NATIVE.md#e02-first-party-native-leaves)
 
+The E02 extension continuation also moves platform wiring, readback admission
+and scripting status fields into Rust. The pinned Godot classes keep typed SDK
+calls, and the native translation unit supplies optional provider symbols and
+DLL unload. Source, targeted bindgen, pinned formatting, locked metadata and
+MSVC syntax-only checks passed.
+[Extension continuation evidence](../integrations/godot/NATIVE.md#e02-extension-wiring-and-readback-continuation)
+
 RDR2's ASI startup leaves, research-attach worker and native settings probe
 now run in Rust. Settings fixtures share the measured vectors with the
 Rust policy, and refused startup sessions retain their cleanup owner.

@@ -156,6 +156,26 @@ impl Effect {
     }
 }
 
+/// The SDK owns RIDs and bytes through this synchronous call. Record only after
+/// shader creation and all four input leases have succeeded.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_effect_record_motion(
+    call: *mut c_void,
+    plan: *const EffectReadback,
+    compile: unsafe extern "C" fn(*mut c_void, *const EffectReadback) -> u32,
+    prepare: unsafe extern "C" fn(*mut c_void, *const EffectReadback, *mut u32) -> u32,
+    dispatch: unsafe extern "C" fn(*mut c_void, *const EffectReadback) -> u32,
+) -> u32 {
+    let mut valid = [0; 4];
+    if unsafe { compile(call, plan) } == 0
+        || unsafe { prepare(call, plan, valid.as_mut_ptr()) } == 0
+        || valid.contains(&0)
+    {
+        return 0;
+    }
+    unsafe { dispatch(call, plan) }
+}
+
 /// One view with a nonempty internal extent and valid color, depth and velocity layers.
 pub(crate) fn buffers_admitted(frame: &EffectFrame) -> bool {
     frame.views == 1

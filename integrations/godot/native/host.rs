@@ -4,6 +4,7 @@
 use crate::host_abi::*;
 use crate::platform::*;
 use crate::rsf_godot_log;
+use crate::vulkan::native::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_RESET, rsf_frame_record,
     rsf_game_render_pass,
@@ -36,8 +37,6 @@ use windows_sys::Win32::{
 type Handle = *mut c_void;
 
 unsafe extern "C" {
-    fn rsf_godot_platform_leaves() -> *const Platform;
-    fn rsf_godot_fg_preferred(vendor: u32) -> u32;
     // Runtime capture owner, as declared in runtime/backends/common/frame_capture12.h.
     fn rsf_core_capture12_create(environment: u32) -> Handle;
     fn rsf_core_capture12_destroy(owner: Handle);
@@ -179,16 +178,14 @@ extern "C" fn log(_: Handle, message: *const c_char) {
 }
 
 unsafe extern "C" fn accept(_: Handle, window: Handle) -> i32 {
-    unsafe { crate::rsf_godot_accept_window(rsf_godot_platform_leaves(), window) }
+    unsafe { crate::rsf_godot_accept_window(native_platform(), window) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_tick_count() -> u64 {
+extern "C" fn tick_count() -> u64 {
     unsafe { GetTickCount64() }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_prepare_capture() -> u32 {
+extern "C" fn prepare_capture() -> u32 {
     let capture = unsafe { rsf_core_capture12_create(1) };
     let retired = CAPTURE
         .lock()
@@ -199,7 +196,7 @@ extern "C" fn rsf_godot_host_prepare_capture() -> u32 {
     1
 }
 
-fn fg_options(options: &FgOptions) -> rsf_native_fg_options {
+fn native_fg_options(options: &FgOptions) -> rsf_native_fg_options {
     rsf_native_fg_options {
         struct_size: size_of::<rsf_native_fg_options>() as u32,
         mode: options.mode,
@@ -210,8 +207,7 @@ fn fg_options(options: &FgOptions) -> rsf_native_fg_options {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_fg_install(install: *const FgInstall) -> i32 {
+unsafe extern "C" fn fg_install(install: *const FgInstall) -> i32 {
     let install = unsafe { &*install };
     let setup = rsf_fg12_setup {
         struct_size: size_of::<rsf_fg12_setup>() as u32,
@@ -219,7 +215,7 @@ unsafe extern "C" fn rsf_godot_host_fg_install(install: *const FgInstall) -> i32
         max_generated_frames: install.max_generated_frames,
         runtime_switching: install.runtime_switching,
         ui_mode: install.ui_mode,
-        options: fg_options(&install.options),
+        options: native_fg_options(&install.options),
         depth_inverted: install.depth_inverted,
         depth_infinite: install.depth_infinite,
         units_to_meters: install.units_to_meters,
@@ -238,9 +234,8 @@ unsafe extern "C" fn rsf_godot_host_fg_install(install: *const FgInstall) -> i32
     unsafe { rsf_fg12_install_explicit(&setup) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_fg_options(value: *const FgOptions) {
-    unsafe { rsf_fg12_options(&fg_options(&*value)) };
+unsafe extern "C" fn fg_options(value: *const FgOptions) {
+    unsafe { rsf_fg12_options(&native_fg_options(&*value)) };
 }
 
 fn input_facts(inputs: &rsf_native_cpu_counters, boundaries: u64) -> InputFacts {
@@ -255,8 +250,7 @@ fn input_facts(inputs: &rsf_native_cpu_counters, boundaries: u64) -> InputFacts 
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_cpu_counters(facts: *mut InputFacts) {
+unsafe extern "C" fn cpu_counters(facts: *mut InputFacts) {
     let mut inputs = rsf_native_cpu_counters {
         struct_size: size_of::<rsf_native_cpu_counters>() as u32,
         ..Default::default()
@@ -267,8 +261,7 @@ unsafe extern "C" fn rsf_godot_host_cpu_counters(facts: *mut InputFacts) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_window_facts(window: Handle, facts: *mut WindowFacts) {
+unsafe extern "C" fn window_facts(window: Handle, facts: *mut WindowFacts) {
     let mut foreground = 0;
     unsafe {
         GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground);
@@ -281,8 +274,7 @@ unsafe extern "C" fn rsf_godot_host_window_facts(window: Handle, facts: *mut Win
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_window_identity(window: Handle, identity: *mut WindowIdentity) {
+unsafe extern "C" fn window_identity(window: Handle, identity: *mut WindowIdentity) {
     let mut value = WindowIdentity::default();
     unsafe {
         GetWindowThreadProcessId(window, &mut value.process_id);
@@ -297,18 +289,15 @@ unsafe extern "C" fn rsf_godot_host_window_identity(window: Handle, identity: *m
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_window_procedure_get(window: Handle) -> isize {
+extern "C" fn window_procedure_get(window: Handle) -> isize {
     unsafe { GetWindowLongPtrW(window, GWLP_WNDPROC) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_window_procedure_set(window: Handle, procedure: isize) -> isize {
+extern "C" fn window_procedure_set(window: Handle, procedure: isize) -> isize {
     unsafe { SetWindowLongPtrW(window, GWLP_WNDPROC, procedure) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_window_forward(
+extern "C" fn window_forward(
     previous: isize,
     window: Handle,
     message: u32,
@@ -326,8 +315,7 @@ extern "C" fn rsf_godot_host_window_forward(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_query_counter(counter: *mut u64, frequency: *mut u64) {
+unsafe extern "C" fn query_counter(counter: *mut u64, frequency: *mut u64) {
     let (mut now, mut rate) = (0, 0);
     unsafe {
         QueryPerformanceCounter(&mut now);
@@ -337,8 +325,7 @@ unsafe extern "C" fn rsf_godot_host_query_counter(counter: *mut u64, frequency: 
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_fg_facts(facts: *mut FgFacts) {
+unsafe extern "C" fn fg_facts(facts: *mut FgFacts) {
     let mut fg = rsf_native_fg_status {
         struct_size: size_of::<rsf_native_fg_status>() as u32,
         ..Default::default()
@@ -366,8 +353,7 @@ unsafe extern "C" fn rsf_godot_host_fg_facts(facts: *mut FgFacts) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_latency_facts(facts: *mut LatencyFacts) -> u32 {
+unsafe extern "C" fn latency_facts(facts: *mut LatencyFacts) -> u32 {
     let mut latency = rsf_native_latency_status {
         struct_size: size_of::<rsf_native_latency_status>() as u32,
         version: 1,
@@ -392,8 +378,7 @@ unsafe extern "C" fn rsf_godot_host_latency_facts(facts: *mut LatencyFacts) -> u
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_d3d12_bind(device: Handle, queue: Handle) -> u32 {
+unsafe extern "C" fn d3d12_bind(device: Handle, queue: Handle) -> u32 {
     let (Some(device), Some(queue)) = (
         unsafe { ID3D12Device::from_raw_borrowed(&device) },
         unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) },
@@ -415,8 +400,7 @@ unsafe extern "C" fn rsf_godot_host_d3d12_bind(device: Handle, queue: Handle) ->
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_d3d12_wait(value: u64) -> u32 {
+extern "C" fn d3d12_wait(value: u64) -> u32 {
     if value == 0 {
         return 1;
     }
@@ -441,8 +425,7 @@ extern "C" fn rsf_godot_host_d3d12_wait(value: u64) -> u32 {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_d3d12_signal(value: u64) -> u32 {
+extern "C" fn d3d12_signal(value: u64) -> u32 {
     u32::from(
         binding()
             .is_some_and(|binding| unsafe { binding.queue.Signal(&binding.fence, value).is_ok() }),
@@ -463,18 +446,15 @@ fn vendor_id() -> u32 {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_sr_default_backend() -> u32 {
+extern "C" fn sr_default_backend() -> u32 {
     unsafe { rsf_gpu_default_sr_backend(vendor_id(), 0) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_fg_default_backend() -> u32 {
-    unsafe { rsf_godot_fg_preferred(vendor_id()) }
+extern "C" fn fg_default_backend() -> u32 {
+    unsafe { rsf_fg_default_backend(vendor_id(), 0) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_present_owner(backend: *mut u32) -> u32 {
+unsafe extern "C" fn present_owner(backend: *mut u32) -> u32 {
     unsafe {
         if rsf_d3d11_present_has_owner() == 0 {
             return 0;
@@ -484,16 +464,11 @@ unsafe extern "C" fn rsf_godot_host_present_owner(backend: *mut u32) -> u32 {
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_present_request(backend: u32) {
+extern "C" fn present_request(backend: u32) {
     unsafe { rsf_d3d11_present_request(backend) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_sr_create(
-    request: *const SrCreate,
-    created: *mut SrContext,
-) -> u32 {
+unsafe extern "C" fn sr_create(request: *const SrCreate, created: *mut SrContext) -> u32 {
     let Some(binding) = binding() else {
         return 0;
     };
@@ -549,13 +524,11 @@ unsafe extern "C" fn rsf_godot_host_sr_create(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_sr_destroy(context: Handle) {
+unsafe extern "C" fn sr_destroy(context: Handle) {
     unsafe { rsf_sr12_destroy(context.cast()) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_sr_evaluate(
+unsafe extern "C" fn sr_evaluate(
     context: Handle,
     commands: Handle,
     pass: *const rsf_game_render_pass,
@@ -583,8 +556,7 @@ fn log_text(message: String) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_sr_refusal_log(
+unsafe extern "C" fn sr_refusal_log(
     pass: *const rsf_game_render_pass,
     desired_width: u32,
     desired_height: u32,
@@ -622,8 +594,7 @@ unsafe extern "C" fn rsf_godot_host_sr_refusal_log(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_capture_sr_begin(pass: *const rsf_game_render_pass) -> u32 {
+unsafe extern "C" fn capture_sr_begin(pass: *const rsf_game_render_pass) -> u32 {
     if let Some(capture) = capture() {
         let pass = unsafe { &*pass };
         capture.event(pass.session_id, pass.source_frame_id, c"native-sr-begin", 0);
@@ -631,8 +602,7 @@ unsafe extern "C" fn rsf_godot_host_capture_sr_begin(pass: *const rsf_game_rende
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_final_scene(
+unsafe extern "C" fn final_scene(
     commands: Handle,
     pass: *const rsf_game_render_pass,
     slot: u32,
@@ -645,8 +615,7 @@ unsafe extern "C" fn rsf_godot_host_final_scene(
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_render_begin(session: u64, frame: u64) -> u32 {
+extern "C" fn render_begin(session: u64, frame: u64) -> u32 {
     let result = unsafe { rsf_fg12_render_begin(session, frame) };
     if let Some(capture) = capture() {
         capture.event(session, frame, c"render-submit-begin", result);
@@ -654,13 +623,11 @@ extern "C" fn rsf_godot_host_render_begin(session: u64, frame: u64) -> u32 {
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_host_fg_end_session(session: u64) -> u32 {
+extern "C" fn fg_end_session(session: u64) -> u32 {
     u32::from(unsafe { rsf_fg12_end_session(session) } != 0)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_host_d3d12_release(context: Handle, session: u64) -> u32 {
+unsafe extern "C" fn d3d12_release(context: Handle, session: u64) -> u32 {
     if let Some(capture) = capture() {
         capture.flush(u32::MAX);
     }
@@ -669,4 +636,95 @@ unsafe extern "C" fn rsf_godot_host_d3d12_release(context: Handle, session: u64)
         rsf_input_dump_cancel(session);
     }
     1
+}
+
+unsafe extern "C" fn leaf_dlss_preset_valid(preset: u32) -> u32 {
+    u32::from(preset <= 13 && (RSF_DLSS_PRESET_MASK & (1 << preset)) != 0)
+}
+
+unsafe extern "C" fn leaf_sharpening_valid(options: *const Sharpening) -> u32 {
+    let size = unsafe { options.cast::<u32>().read() };
+    if (size as usize) < size_of::<Sharpening>() {
+        return 0;
+    }
+    unsafe { rsf_sharpening_core_valid(options.read()) }
+}
+
+unsafe extern "C" fn leaf_sharpening_defaults(options: *mut Sharpening) {
+    unsafe { options.write(rsf_sharpening_core_defaults()) };
+}
+
+unsafe extern "C" fn leaf_fg_backend_known(backend: u32) -> u32 {
+    u32::from(unsafe { rsf_fg_backend_known(backend) } != 0)
+}
+
+unsafe extern "C" fn leaf_fg_select_backend(vendor: u32, software: u32, choices: u32) -> u32 {
+    unsafe { rsf_fg_select_auto_backend(rsf_fg_default_backend(vendor, software), choices) }
+}
+
+static PLATFORM: Platform = Platform {
+    struct_size: size_of::<Platform>() as u32,
+    version: PLATFORM_VERSION,
+    tick_count,
+    prepare_capture,
+    fg_install,
+    fg_options,
+    dlss_preset_valid: leaf_dlss_preset_valid,
+    sharpening_valid: leaf_sharpening_valid,
+    sharpening_defaults: leaf_sharpening_defaults,
+    fg_backend_known: leaf_fg_backend_known,
+    vulkan_supported: rsf_godot_vk_leaf_supported,
+    vulkan_latency_facts: rsf_godot_vk_leaf_latency_facts,
+    vulkan_locked: rsf_godot_vk_leaf_locked,
+    vulkan_start: rsf_godot_vk_leaf_start,
+    vulkan_stop: rsf_godot_vk_leaf_stop,
+    vulkan_release: rsf_godot_vk_leaf_release,
+    vulkan_facts: rsf_godot_vk_leaf_facts,
+    vulkan_presenter_max: rsf_godot_vk_leaf_presenter_max,
+    vulkan_fsr4_fg_probe: rsf_godot_vk_leaf_fsr4_fg_probe,
+    vulkan_latency_options: rsf_godot_vk_leaf_latency_options,
+    cpu_counters,
+    window_facts,
+    fg_facts,
+    latency_facts,
+    d3d12_bind,
+    d3d12_wait,
+    d3d12_signal,
+    sr_default_backend,
+    fg_default_backend,
+    present_owner,
+    present_request,
+    sr_create,
+    sr_destroy,
+    sr_evaluate,
+    sr_refusal_log,
+    capture_sr_begin,
+    final_scene,
+    fg_submitted: rsf_fg12_submitted,
+    render_begin,
+    present_window: rsf_fg12_window,
+    fg_end_session,
+    d3d12_release,
+    vulkan_presenter_drain: rsf_godot_vk_leaf_presenter_drain,
+    vulkan_device_idle: rsf_godot_vk_leaf_device_idle,
+    vulkan_sr_destroy: rsf_godot_vk_leaf_sr_destroy,
+    vulkan_sr_create: rsf_godot_vk_leaf_sr_create,
+    vulkan_sr_plan: rsf_godot_vk_leaf_sr_plan,
+    vulkan_sr_record: rsf_godot_vk_leaf_sr_record,
+    vulkan_sr_log: rsf_godot_vk_leaf_sr_log,
+    vulkan_sr_dump_result: rsf_godot_vk_leaf_sr_dump_result,
+    window_identity,
+    window_procedure_get,
+    window_procedure_set,
+    window_forward,
+    query_counter,
+    d3d12_cpu_service: rsf_fg12_cpu_service,
+    vulkan_cpu_service: rsf_latencyvk_cpu_service,
+    vulkan_present_marker: rsf_latencyvk_present,
+    sr_select_backend: rsf_gpu_select_sr_backend,
+    fg_select_backend: leaf_fg_select_backend,
+};
+
+pub(crate) fn native_platform() -> &'static Platform {
+    &PLATFORM
 }

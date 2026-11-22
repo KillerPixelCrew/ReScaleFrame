@@ -5,7 +5,7 @@
 //! godot-cpp `Dictionary`, `RID` and `RenderingServer` calls.
 use crate::control::default_settings;
 use crate::platform::{OptionField, OptionValue, Platform, Settings};
-use std::ffi::CStr;
+use std::ffi::{CStr, c_char, c_void};
 
 pub(crate) const INTEGER: u32 = 0;
 pub(crate) const REAL: u32 = 1;
@@ -150,6 +150,128 @@ pub(crate) fn admission(
     };
     let renderer = method == Some(b"forward_plus".as_slice());
     (if driver { ADMIT_DRIVER } else { 0 }) | (if renderer { ADMIT_RENDERER } else { 0 })
+}
+
+/// Compose the options from a borrowed Godot Dictionary, then call the registered
+/// engine service with the typed settings. Only the leaf can interpret Variants.
+#[cfg(all(windows, not(test)))]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_extension_configure(
+    admitted: u32,
+    viewport: u64,
+    dictionary: *const c_void,
+    read: unsafe extern "C" fn(*const c_void, *const OptionField, *mut OptionValue) -> u32,
+) -> i32 {
+    let required = ADMIT_DRIVER | ADMIT_RENDERER;
+    if admitted & required != required {
+        return 0;
+    }
+    let mut values = [OptionValue::default(); FIELD_COUNT];
+    for (field, value) in FIELDS.0.iter().zip(&mut values) {
+        if unsafe { read(dictionary, field, value) } == 0 {
+            return 0;
+        }
+    }
+    let Some(platform) = (unsafe { crate::leaves(crate::host::native_platform()) }) else {
+        return 0;
+    };
+    compose(platform, &values).map_or(0, |value| crate::CONTROL.configure_engine(&value, viewport))
+}
+
+/// The scripting status schema. Godot's callback materializes the scalar values
+/// as Variants in its own Dictionary.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_extension_status(
+    dictionary: *mut c_void,
+    emit: unsafe extern "C" fn(*mut c_void, *const c_char, i64, u32),
+) {
+    use crate::platform::{ABI_VERSION, SETTINGS_ABI_VERSION, Status};
+    let mut status = Status {
+        struct_size: size_of::<Status>() as u32,
+        abi_version: ABI_VERSION,
+        ..Default::default()
+    };
+    let available = unsafe { crate::rsfg_status(&mut status) } != 0 && status.session_id != 0;
+    unsafe {
+        emit(
+            dictionary,
+            c"engine_bridge_ready".as_ptr(),
+            i64::from(available),
+            1,
+        )
+    };
+    if !available {
+        return;
+    }
+
+    let scalar = |name: &CStr, value| unsafe { emit(dictionary, name.as_ptr(), value, 0) };
+    let mut requested = Settings {
+        struct_size: size_of::<Settings>() as u32,
+        abi_version: SETTINGS_ABI_VERSION,
+        ..Default::default()
+    };
+    if unsafe { crate::rsfg_settings(&mut requested) } != 0 {
+        scalar(c"requested_dlss_preset", i64::from(requested.dlss_preset));
+        scalar(c"requested_fg_backend", i64::from(requested.fg_backend));
+        scalar(c"requested_fg_mode", i64::from(requested.fg_mode));
+        scalar(
+            c"requested_generated_frames",
+            i64::from(requested.generated_frames),
+        );
+        scalar(c"requested_latency_mode", i64::from(requested.latency_mode));
+    }
+
+    macro_rules! fields {
+        ($($field:ident),* $(,)?) => {
+            $(unsafe {
+                emit(dictionary, concat!(stringify!($field), "\0").as_ptr().cast(), status.$field as i64, 0);
+            })*
+        };
+    }
+    fields!(
+        session_id,
+        requested_sr,
+        active_sr,
+        render_width,
+        render_height,
+        output_width,
+        output_height,
+        sr_result,
+        fg_result,
+        fg_backend,
+        fg_available,
+        fg_active,
+        max_generated_frames,
+        generated_frames,
+        latency_available,
+        latency_mode,
+        reason,
+        pcl_available,
+        latency_report_available,
+        evaluated_frames,
+        refused_frames,
+        tagged_frames,
+        sleep_calls,
+        marker_calls,
+        total_presented,
+        generated_presented,
+        presentation_statistics_valid,
+        presentation_statistics_flags,
+        source_frame_id,
+        provider_generation,
+        generated_callbacks,
+        window_foreground,
+        window_visible,
+        foreground_process_id,
+        latency_owner,
+        input_substitutes,
+        order_violations,
+        derived_boundaries,
+        keyboard_inputs,
+        mouse_inputs,
+        controller_inputs,
+        pcl_pings,
+    );
 }
 
 #[cfg(test)]

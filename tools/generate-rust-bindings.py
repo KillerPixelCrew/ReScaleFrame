@@ -1020,16 +1020,18 @@ generate("integrations/godot/native/host_abi.rs", "integrations/godot/native/hos
          "rsf_(sr12(_setup)?|dlss_setup|backend_(result|log_fn)|dlss_(log_fn|engine)|"
          "fg12_setup|native_(fg_(options|status)|cpu_counters|latency_status)|"
          "fg_status|pacing_owner|reflex_mode|fg_mode|streamline_host|vk_wsi_call)",
-         "RSF_DLSS_ABI_VERSION",
+         "RSF_DLSS_(ABI_VERSION|PRESET_MASK)",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
           "--allowlist-function", "rsf_(sr12_(create|plan|evaluate|set_sharpening|destroy)|"
-          "fg12_(install_explicit|options|status|hudless|render_begin|end_session)|"
+          "fg12_(install_explicit|options|status|hudless|render_begin|end_session|submitted|window|cpu_service)|"
           "d3d11_present_(backend|generation|switch_result|has_owner|request|host|create_for_hwnd)|"
-          "gpu_default_sr_backend|native_cpu_counters_get|native_latency_status_get|"
-          "input_dump_(cancel|request)|slvk_without_dlssg|latencyvk_(queue_present|wsi_call))",
+          "gpu_(default_sr_backend|select_sr_backend)|native_cpu_counters_get|native_latency_status_get|"
+          "fg_(default_backend|backend_known|select_auto_backend)|sharpening_core_(defaults|valid)|"
+          "input_dump_(cancel|request)|slvk_without_dlssg|latencyvk_(queue_present|wsi_call|cpu_service|present))",
+          "--raw-line", "use crate::platform::CpuService as rsf_cpu_session_service;",
           "--raw-line", "use crate::vulkan::creation::abi::rsf_vk_function;",
           "--raw-line", "use rsf_game_sys::{rsf_game_render_pass, sharpening_abi::rsf_sharpening_options};"])
 

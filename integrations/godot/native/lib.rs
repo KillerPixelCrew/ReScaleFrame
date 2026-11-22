@@ -28,8 +28,8 @@ mod window;
 use control::Control;
 use effect::Effect;
 use platform::{
-    ABI_VERSION, EFFECT_VERSION, EffectLeaves, EffectStatus, EngineServices, OptionField,
-    OptionValue, Platform, SETTINGS_ABI_VERSION, Settings, Setup, Status, VkFunction, VkProc,
+    ABI_VERSION, EFFECT_VERSION, EffectLeaves, EffectStatus, EngineServices, Platform,
+    SETTINGS_ABI_VERSION, Settings, Setup, Status, VkFunction, VkProc,
 };
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -497,62 +497,6 @@ unsafe extern "C" fn rsf_godot_effect_status_get(
         }
         _ => 0,
     }
-}
-
-/// Compose the options from a borrowed Godot Dictionary, then call the registered
-/// engine service with the typed settings. Only the leaf can interpret Variants.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_extension_configure(
-    table: *const Platform,
-    admitted: u32,
-    viewport: u64,
-    dictionary: *const c_void,
-    read: unsafe extern "C" fn(*const c_void, *const OptionField, *mut OptionValue) -> u32,
-) -> c_int {
-    let required = extension::ADMIT_DRIVER | extension::ADMIT_RENDERER;
-    if admitted & required != required {
-        return 0;
-    }
-    let mut values = [OptionValue::default(); extension::FIELD_COUNT];
-    for (field, value) in extension::FIELDS.0.iter().zip(&mut values) {
-        if unsafe { read(dictionary, field, value) } == 0 {
-            return 0;
-        }
-    }
-    let Some(platform) = (unsafe { leaves(table) }) else {
-        return 0;
-    };
-    extension::compose(platform, &values)
-        .map_or(0, |value| CONTROL.configure_engine(&value, viewport))
-}
-
-/// The first bit admits a status snapshot; the second admits requested settings.
-/// The C++ class only materializes the corresponding Dictionary entries.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_extension_status(
-    status: *mut Status,
-    settings: *mut Settings,
-) -> u32 {
-    let mut current = Status {
-        struct_size: size_of::<Status>() as u32,
-        abi_version: ABI_VERSION,
-        ..Default::default()
-    };
-    if unsafe { rsfg_status(&mut current) } == 0 || current.session_id == 0 {
-        return 0;
-    }
-    unsafe { status.write(current) };
-
-    let mut requested = Settings {
-        struct_size: size_of::<Settings>() as u32,
-        abi_version: SETTINGS_ABI_VERSION,
-        ..Default::default()
-    };
-    if unsafe { rsfg_settings(&mut requested) } == 0 {
-        return 1;
-    }
-    unsafe { settings.write(requested) };
-    3
 }
 
 /// # Safety

@@ -125,6 +125,56 @@ Validation covers source comparison, bindgen-cli 0.72.1, Rust 1.94.1 formatting,
 locked offline Windows x64 Cargo metadata, and Git whitespace checks.
 Compilation, linking, fixtures and live rendering remain unverified.
 
+### E02 extension wiring and readback continuation
+
+Relative to `3066e6ad`, `host.rs` initializes the production platform with named Rust
+fields. The 58 callbacks match the old positional table in `runtime.cpp`. SR and FG still
+ask the Runtime for the default and selectable providers. `fg_choice.rs` owns FG preference,
+known provider IDs and Auto fallback. The host calls `rsf_sharpening_core_defaults` and
+`rsf_sharpening_core_valid` from the existing Runtime and checks size before validation.
+The DLSS check uses the generated `RSF_DLSS_PRESET_MASK` from `dlss_preset.h` with the same
+upper bound of 13.
+
+`runtime.cpp` supplies the optional Vulkan link symbols and direct compile facts from
+`runtime/orchestrator/CMakeLists.txt`. Its FSR4 FG probe and capture entries still exist
+only under their corresponding CMake definitions. Vulkan Rust derives compiled FSR4 FG
+availability from the presence of its optional probe. The CRT destructor continues to
+invoke `rsf_godot_host_unload` and the two-sided layout checks cover the private symbol
+record. No engine-facing signature, export name, or Present path changed.
+
+`effect.rs` now runs the synchronous shader, input admission and dispatch sequence through
+three typed leaves. It requires all four valid Godot RIDs before dispatch. `effect.cpp`
+holds the Godot shader and uniform references through the sequence and frees valid RIDs in
+uniform-set, buffer, sampler, pipeline, shader order as before. It also frees RIDs created
+before an exception in a leaf. Refusal still reaches Rust's existing empty-readback
+classification. Godot owns the PackedByteArray until the effect callback returns, and the
+SDK calls keep their shader bindings, work-group counts, list order and readback point.
+
+`extension.rs` now owns the ordered Runtime status keys and their conditional inclusion.
+The 42 session status fields, five requested settings and Boolean bridge readiness retain
+their previous keys and types. At pinned godot-cpp revision
+`8070599885b6df675fcad033dd032ce44be2b850`, `variant.hpp` delegates 32-bit and unsigned
+64-bit integer construction to `Variant(int64_t)`. The C++ leaf uses the same conversion
+and constructs a Boolean Variant for bridge readiness. `runtime_control.cpp` still handles
+the four renderer and driver entries through typed Godot calls, the option Variant reads,
+RID validation, Callable scheduling and ClassDB method binding.
+
+The six E02 residual files still have these boundaries. `runtime.cpp` retains optional
+CMake/SDK linkage, record assertions and DLL unload. `extension.cpp` retains
+`GDExtensionBinding::InitObject` and scene class registration. `effect.h` and `effect.cpp`
+retain the typed `CompositorEffect` class, scene reads, resource lifetimes and probe
+Dictionary conversion. `runtime_control.h` and `runtime_control.cpp` retain the typed
+`RefCounted` class and Dictionary, Variant, RID and RenderingServer calls. The pinned
+`extension_api-4-7.json` and generated `compositor_effect.hpp`, `rendering_device.hpp`
+and `rendering_server.hpp` define the virtual callback and typed SDK boundary.
+
+Source comparison matched the callback and status sequences, class headers and public
+exports. Pinned Rust 1.94.1 formatting, targeted bindgen 0.72.1 and locked offline Windows
+x64 Cargo metadata passed. MSVC `/Zs` accepted the four extension translation units with
+the optional provider definitions and `runtime.cpp` with those definitions absent. The
+syntax invocation needed `/Zc:__cplusplus` and system SDK include handling to match godot-cpp's
+requirements. Builds, linkage, fixture execution and device verification remain open.
+
 ## Rust control owner, first slice
 
 `ReScaleFrame.Godot.Native.dll` now links the `rsf-godot` staticlib (`native/lib.rs`) next to the

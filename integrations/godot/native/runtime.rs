@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! Engine ABI entry points backed by the existing Rust session and execution receipts.
 
+use crate::host::native_platform;
 use crate::host_abi::*;
-use crate::platform::{Platform, Settings, Setup};
+use crate::platform::{Settings, Setup};
 use crate::vulkan::native::{rsf_godot_vk_capture_present, rsf_godot_vk_render_begin};
 use rsf_game_sys::{RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_PRESENT, rsf_game_render_pass};
 use std::cell::Cell;
 use std::ffi::c_void;
 
 type Handle = *mut c_void;
-
-unsafe extern "C" {
-    fn rsf_godot_platform_leaves() -> *const Platform;
-}
 
 thread_local! {
     // Set only by an admitted Present boundary, on the thread that issues native WSI.
@@ -21,7 +18,7 @@ thread_local! {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_boot(setup: *const Setup) -> i32 {
-    unsafe { crate::rsf_godot_boot(rsf_godot_platform_leaves(), setup) }
+    unsafe { crate::rsf_godot_boot(native_platform(), setup) }
 }
 
 #[unsafe(no_mangle)]
@@ -40,7 +37,7 @@ unsafe extern "C" fn rsfg_create_swapchain(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_configure(settings: *const Settings) -> i32 {
-    unsafe { crate::rsf_godot_configure(rsf_godot_platform_leaves(), settings) }
+    unsafe { crate::rsf_godot_configure(native_platform(), settings) }
 }
 
 /// The engine's declared size word is safe to read before borrowing the full pass.
@@ -66,9 +63,7 @@ unsafe extern "C" fn rsfg_render(
     if rsf_game_sys::depth_domains_requested(&pass.depth_domains) {
         return 0;
     }
-    unsafe {
-        crate::rsf_godot_d3d12_render(rsf_godot_platform_leaves(), device, queue, commands, pass)
-    }
+    unsafe { crate::rsf_godot_d3d12_render(native_platform(), device, queue, commands, pass) }
 }
 
 #[unsafe(no_mangle)]
@@ -76,14 +71,13 @@ extern "C" fn rsfg_render_begin(frame: u64) {
     if crate::CONTROL.vulkan.booted() {
         rsf_godot_vk_render_begin(frame, 0);
     } else if crate::CONTROL.booted() {
-        unsafe { crate::rsf_godot_d3d12_render_begin(rsf_godot_platform_leaves(), frame) };
+        unsafe { crate::rsf_godot_d3d12_render_begin(native_platform(), frame) };
     }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_vk_present_marker(window: u64, begin: u32) -> i32 {
-    let admitted =
-        unsafe { crate::rsf_godot_vk_present_marker(rsf_godot_platform_leaves(), window, begin) };
+    let admitted = unsafe { crate::rsf_godot_vk_present_marker(native_platform(), window, begin) };
     if admitted != 0 {
         CAPTURE_NATIVE_PRESENT.set(begin != 0);
     }
@@ -170,7 +164,7 @@ unsafe extern "C" fn rsfg_vk_foreign_call(callback: rsf_vk_wsi_call, user: Handl
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_shutdown() -> i32 {
     unsafe {
-        let platform = rsf_godot_platform_leaves();
+        let platform = native_platform();
         crate::rsf_godot_window_release(platform);
         if crate::CONTROL.vulkan.booted() {
             crate::rsf_godot_shutdown_vulkan(platform)

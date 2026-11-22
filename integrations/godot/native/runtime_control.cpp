@@ -32,6 +32,13 @@ uint32_t read_option(const void* dictionary, const rsf_godot_option_field* field
     else value->integer = static_cast<int64_t>(raw);
     return 1;
 } catch (...) { return 0; }
+void emit_status(void* dictionary, const char* key, int64_t value, uint32_t boolean) noexcept try
+{
+    auto& result = *static_cast<Dictionary*>(dictionary);
+    if (boolean) result[key] = value != 0;
+    else result[key] = value;
+} catch (...) {}
+
 }
 void ReScaleFrameRuntime::_bind_methods()
 {
@@ -44,8 +51,7 @@ void ReScaleFrameRuntime::_bind_methods()
 bool ReScaleFrameRuntime::configure(const Dictionary& options, RID viewport)
 {
     if (!viewport.is_valid()) return false;
-    return rsf_godot_extension_configure(rsf_godot_platform_leaves(),
-        admission(RenderingServer::get_singleton()), viewport.get_id(), &options, read_option) != 0;
+    return rsf_godot_extension_configure(admission(RenderingServer::get_singleton()), viewport.get_id(), &options, read_option) != 0;
 }
 Dictionary ReScaleFrameRuntime::get_status() const
 {
@@ -56,32 +62,7 @@ Dictionary ReScaleFrameRuntime::get_status() const
     result["renderer"] = rendering ? rendering->get_current_rendering_method() : String();
     result["graphics_driver_supported"] = (admitted & RSF_GODOT_ADMIT_DRIVER) != 0;
     result["renderer_supported"] = (admitted & RSF_GODOT_ADMIT_RENDERER) != 0;
-    rsf_godot_status status;
-    rsf_godot_settings requested;
-    const uint32_t snapshot = rsf_godot_extension_status(&status, &requested);
-    result["engine_bridge_ready"] = (snapshot & 1u) != 0;
-    if (!(snapshot & 1u)) return result;
-    if (snapshot & 2u) {
-        result["requested_dlss_preset"] = requested.dlss_preset;
-        result["requested_fg_backend"] = requested.fg_backend;
-        result["requested_fg_mode"] = requested.fg_mode;
-        result["requested_generated_frames"] = requested.generated_frames;
-        result["requested_latency_mode"] = requested.latency_mode;
-    }
-#define RSF_FIELD(name) result[#name] = status.name
-    RSF_FIELD(session_id); RSF_FIELD(requested_sr); RSF_FIELD(active_sr);
-    RSF_FIELD(render_width); RSF_FIELD(render_height); RSF_FIELD(output_width); RSF_FIELD(output_height);
-    RSF_FIELD(sr_result); RSF_FIELD(fg_result); RSF_FIELD(fg_backend); RSF_FIELD(fg_available);
-    RSF_FIELD(fg_active); RSF_FIELD(max_generated_frames); RSF_FIELD(generated_frames);
-    RSF_FIELD(latency_available); RSF_FIELD(latency_mode); RSF_FIELD(reason); RSF_FIELD(pcl_available);
-    RSF_FIELD(latency_report_available); RSF_FIELD(evaluated_frames); RSF_FIELD(refused_frames);
-    RSF_FIELD(tagged_frames); RSF_FIELD(sleep_calls); RSF_FIELD(marker_calls);
-    RSF_FIELD(total_presented); RSF_FIELD(generated_presented); RSF_FIELD(presentation_statistics_valid);
-    RSF_FIELD(presentation_statistics_flags); RSF_FIELD(source_frame_id); RSF_FIELD(provider_generation); RSF_FIELD(generated_callbacks);
-    RSF_FIELD(window_foreground); RSF_FIELD(window_visible); RSF_FIELD(foreground_process_id);
-    RSF_FIELD(latency_owner); RSF_FIELD(input_substitutes); RSF_FIELD(order_violations); RSF_FIELD(derived_boundaries);
-    RSF_FIELD(keyboard_inputs); RSF_FIELD(mouse_inputs); RSF_FIELD(controller_inputs); RSF_FIELD(pcl_pings);
-#undef RSF_FIELD
+    rsf_godot_extension_status(&result, emit_status);
     return result;
 }
 void ReScaleFrameRuntime::reset_history() { rsfg_reset_history(); }

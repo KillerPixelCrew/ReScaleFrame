@@ -17,6 +17,7 @@
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/vector2i.hpp>
 #include <cstddef>
+#include <initializer_list>
 
 // The snapshot, callback count, capture request, buffer and capture admission, the motion
 // classification and the probe's published stage, reason and inactive pipeline claims are owned by
@@ -51,53 +52,74 @@ struct Call {
 };
 Call& call_of(void* call) { return *static_cast<Call*>(call); }
 
-PackedByteArray read_motion(RenderingDevice* rd, RID motion, const rsf_godot_effect_readback& plan)
-{
-    // The engine velocity target is sampleable, but deliberately is not a copy source.
-    // Convert into an owned buffer through the graph before bounded CPU readback.
+// The stack-owned SDK objects live through Rust's synchronous capture sequence.
+struct MotionReadback {
+    RenderingDevice* rd;
+    RID motion;
+    PackedByteArray& bytes;
+    RID shader, pipeline, sampler, buffer, uniform_set;
     Ref<RDShaderSource> source;
-    source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, plan.shader);
-    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-    if (spirv.is_null() || !spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE).is_empty()) return {};
-    const RID shader = rd->shader_create_from_spirv(spirv);
-    if (!shader.is_valid()) return {};
-    const RID pipeline = rd->compute_pipeline_create(shader);
+    Ref<RDShaderSPIRV> spirv;
     Ref<RDSamplerState> sampler_state;
-    sampler_state.instantiate();
-    const RID sampler = rd->sampler_create(sampler_state);
-    const RID buffer = rd->storage_buffer_create(plan.bytes);
-    Ref<RDUniform> texture_uniform;
-    texture_uniform.instantiate();
-    texture_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
-    texture_uniform->set_binding(0);
-    texture_uniform->add_id(sampler);
-    texture_uniform->add_id(motion);
-    Ref<RDUniform> buffer_uniform;
-    buffer_uniform.instantiate();
-    buffer_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-    buffer_uniform->set_binding(1);
-    buffer_uniform->add_id(buffer);
+    Ref<RDUniform> texture_uniform, buffer_uniform;
     TypedArray<RDUniform> uniforms;
-    uniforms.push_back(texture_uniform);
-    uniforms.push_back(buffer_uniform);
-    const RID uniform_set = rd->uniform_set_create(uniforms, shader, 0);
-    PackedByteArray result;
-    if (pipeline.is_valid() && sampler.is_valid() && buffer.is_valid() && uniform_set.is_valid()) {
-        const int64_t list = rd->compute_list_begin();
-        rd->compute_list_bind_compute_pipeline(list, pipeline);
-        rd->compute_list_bind_uniform_set(list, uniform_set, 0);
-        rd->compute_list_dispatch(list, plan.groups_x, plan.groups_y, 1);
-        rd->compute_list_end();
-        result = rd->buffer_get_data(buffer);
+
+    MotionReadback(RenderingDevice* device, RID motion_layer, PackedByteArray& result)
+        : rd(device), motion(motion_layer), bytes(result) {}
+
+    void release()
+    {
+        for (const RID& rid : {uniform_set, buffer, sampler, pipeline, shader}) {
+            if (rid.is_valid()) rd->free_rid(rid);
+        }
     }
-    if (uniform_set.is_valid()) rd->free_rid(uniform_set);
-    if (buffer.is_valid()) rd->free_rid(buffer);
-    if (sampler.is_valid()) rd->free_rid(sampler);
-    if (pipeline.is_valid()) rd->free_rid(pipeline);
-    rd->free_rid(shader);
-    return result;
-}
+};
+
+uint32_t compile_motion(void* call, const rsf_godot_effect_readback* plan) noexcept try {
+    auto& value = *static_cast<MotionReadback*>(call);
+    value.source.instantiate();
+    value.source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, plan->shader);
+    value.spirv = value.rd->shader_compile_spirv_from_source(value.source);
+    if (value.spirv.is_null() || !value.spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE).is_empty()) return 0;
+    value.shader = value.rd->shader_create_from_spirv(value.spirv);
+    return value.shader.is_valid();
+} catch (...) { return 0; }
+
+uint32_t prepare_motion(void* call, const rsf_godot_effect_readback* plan, uint32_t valid[4]) noexcept try {
+    auto& value = *static_cast<MotionReadback*>(call);
+    value.pipeline = value.rd->compute_pipeline_create(value.shader);
+    value.sampler_state.instantiate();
+    value.sampler = value.rd->sampler_create(value.sampler_state);
+    value.buffer = value.rd->storage_buffer_create(plan->bytes);
+    value.texture_uniform.instantiate();
+    value.texture_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+    value.texture_uniform->set_binding(0);
+    value.texture_uniform->add_id(value.sampler);
+    value.texture_uniform->add_id(value.motion);
+    value.buffer_uniform.instantiate();
+    value.buffer_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+    value.buffer_uniform->set_binding(1);
+    value.buffer_uniform->add_id(value.buffer);
+    value.uniforms.push_back(value.texture_uniform);
+    value.uniforms.push_back(value.buffer_uniform);
+    value.uniform_set = value.rd->uniform_set_create(value.uniforms, value.shader, 0);
+    valid[0] = value.pipeline.is_valid();
+    valid[1] = value.sampler.is_valid();
+    valid[2] = value.buffer.is_valid();
+    valid[3] = value.uniform_set.is_valid();
+    return 1;
+} catch (...) { return 0; }
+
+uint32_t dispatch_motion(void* call, const rsf_godot_effect_readback* plan) noexcept try {
+    auto& value = *static_cast<MotionReadback*>(call);
+    const int64_t list = value.rd->compute_list_begin();
+    value.rd->compute_list_bind_compute_pipeline(list, value.pipeline);
+    value.rd->compute_list_bind_uniform_set(list, value.uniform_set, 0);
+    value.rd->compute_list_dispatch(list, plan->groups_x, plan->groups_y, 1);
+    value.rd->compute_list_end();
+    value.bytes = value.rd->buffer_get_data(value.buffer);
+    return 1;
+} catch (...) { return 0; }
 
 uint32_t leaf_frame(void* call, rsf_godot_effect_frame* frame) noexcept try {
     auto& value = call_of(call);
@@ -151,7 +173,10 @@ uint32_t leaf_read_motion(void* call, const rsf_godot_effect_readback* plan, con
     *data = nullptr;
     *size = 0;
     // Packed data owns its CPU storage; the borrowed texture never leaves the callback.
-    value.bytes = read_motion(value.rd, value.motion, *plan);
+    MotionReadback readback{value.rd, value.motion, value.bytes};
+    const bool recorded = rsf_godot_effect_record_motion(&readback, plan, compile_motion, prepare_motion, dispatch_motion) != 0;
+    readback.release();
+    if (!recorded) return 0;
     *data = value.bytes.ptr();
     *size = static_cast<uint64_t>(value.bytes.size());
     return 1;

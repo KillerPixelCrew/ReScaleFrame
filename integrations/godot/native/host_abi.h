@@ -4,6 +4,9 @@
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_cpu.h>
+#include <rescaleframe/native_cpu_service.h>
+#include <rescaleframe/dlss_preset.h>
+#include "../../../runtime/orchestrator/src/fg_auto_choice.h"
 #include <rescaleframe/gpu_policy.h>
 #include <rescaleframe/input_dump.h>
 #include <rescaleframe/native_latency_vulkan.h>
