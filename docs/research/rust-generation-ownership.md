@@ -89,10 +89,23 @@ only copied identity values in the registry.
   collection of a different slot, and terminal teardown while removal persists.
   The WARP case keeps the device-unavailable skip, real resource retention and
   independent CPU-signaled queue and provider fences.
-- tests/fg_provider.cpp and tests/fg_switching.cpp retain native provider,
-  swap-chain, device and window paths.
+- tests/fg_provider.cpp moved to tests/generation/src/provider.rs. The fixture
+  keeps opt-in argument parsing, physical adapter admission, the early
+  Streamline host path, D3D12 debug messages, a hidden DXGI window, real
+  backbuffer and disabled Present, queue drain and provider retirement. A
+  removed fence or refused retirement keeps resources alive through process
+  exit.
+- tests/fg_switching.cpp moved to tests/generation/src/switching.rs. The
+  public session callbacks still coordinate fence quiesce, borrowed provider
+  chains and an owned plain chain. The fixture presents on each FSR3, XeFG
+  and second FSR3 chain before restoring plain DXGI presentation. It
+  preserves the opt-in arguments, unsupported-provider skip and CTest target.
 
 Source verification covers pinned Rust formatting, regeneration of the changed
 bindings with bindgen 0.72.1, locked offline Cargo metadata, and the C entry
-point and CMake source lists. Build, test, lint, DLL export inspection and
-device execution are pending.
+point and CMake source lists. The fixture follow-up compared public session
+and sequencer call counts with the C++ baseline, matched generated fixture
+record sizes against the Runtime bindings, checked the import-only DLL link
+and C11 companion, and checked real window, backbuffer, Present and fence
+operations alongside the original CTest names, timeouts and skip codes.
+Build, test, lint, DLL export inspection and device execution are pending.
