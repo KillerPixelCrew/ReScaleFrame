@@ -223,27 +223,3 @@ pub(super) unsafe fn describe_address(address: u64, output: *mut c_char, capacit
     }
     text.len()
 }
-
-// Entry points used by the native Win32 diagnostics fixture.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_nfg_duplicate_render_thread() -> HANDLE {
-    duplicate_render_thread()
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_nfg_sample_render_thread(
-    thread: HANDLE,
-    addresses: *mut u64,
-    capacity: usize,
-) -> usize {
-    unsafe { sample_render_thread(thread, addresses, capacity) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_nfg_describe_address(
-    address: u64,
-    output: *mut c_char,
-    capacity: usize,
-) -> usize {
-    unsafe { describe_address(address, output, capacity) }
-}

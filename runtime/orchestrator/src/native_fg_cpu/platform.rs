@@ -62,34 +62,6 @@ pub(crate) static NATIVE_PLATFORM: Platform = Platform {
     allows_fg: rsf_frame_allows_fg,
 };
 
-#[unsafe(no_mangle)]
-pub(crate) static rsf_native_fg_cpu_platform: rsf_nfg_cpu_platform = rsf_nfg_cpu_platform {
-    has_owner: Some(NATIVE_PLATFORM.has_owner),
-    generation: Some(NATIVE_PLATFORM.generation),
-    backend: Some(NATIVE_PLATFORM.backend),
-    status: Some(NATIVE_PLATFORM.status),
-    device: Some(NATIVE_PLATFORM.device),
-    adapter_vendor: Some(NATIVE_PLATFORM.adapter_vendor),
-    host: Some(NATIVE_PLATFORM.host),
-    host_status: Some(NATIVE_PLATFORM.host_status),
-    host_reflex: Some(NATIVE_PLATFORM.host_reflex),
-    host_token: Some(NATIVE_PLATFORM.host_token),
-    host_presented: Some(NATIVE_PLATFORM.host_presented),
-    host_abort: Some(NATIVE_PLATFORM.host_abort),
-    host_retire: Some(NATIVE_PLATFORM.host_retire),
-    host_reset: Some(NATIVE_PLATFORM.host_reset),
-    acquire: Some(NATIVE_PLATFORM.acquire),
-    pace: Some(NATIVE_PLATFORM.pace),
-    marker: Some(NATIVE_PLATFORM.marker),
-    input: Some(NATIVE_PLATFORM.input),
-    receipt: Some(NATIVE_PLATFORM.receipt),
-    abort: Some(NATIVE_PLATFORM.abort),
-    create_antilag: Some(NATIVE_PLATFORM.create_antilag),
-    fixture_owned_window_thread: NATIVE_PLATFORM.fixture_owned_window_thread,
-    fixture_wait_completion: NATIVE_PLATFORM.fixture_wait_completion,
-    allows_fg: Some(NATIVE_PLATFORM.allows_fg),
-};
-
 unsafe extern "C" fn native_device() -> Handle {
     let mut graphics = rsf_streamline_graphics {
         struct_size: size_of::<rsf_streamline_graphics>() as u32,

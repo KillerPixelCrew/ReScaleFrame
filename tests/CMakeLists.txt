@@ -9,7 +9,7 @@ rsf_add_rust_static(rsf_presentation_fixtures_rust rsf_rust_presentation_fixture
     --features d3d11-host-device-fixtures,gl-device-fixture)
 rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures
-    --features render-host-fixtures,cpu-fixtures,unity-sr-d3d12-fixture,plugin-session-fixture,fg-cpu-fixture,d3d11-host-fixture,vk-latency-fixtures,xell-fixture)
+    --features render-host-fixtures,cpu-fixtures,unity-sr-d3d12-fixture,plugin-session-fixture,d3d11-host-fixture,vk-latency-fixtures,xell-fixture)
 rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
     rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures
     --features dispatch,ffx,wsi-dispatch,fsr4-state,dlss,streamline-selected,streamline-dispatch,xess-sr,xess-input-range,xess-device)
@@ -290,7 +290,7 @@ rsf_add_fixture_test(rsf_native_cpu_reservation_test NAME native_cpu_reservation
     ENTRY rsf_cpu_reservation_fixture LIBS rsf_game_sdk_fixtures_rust rsf_native_cpu)
 
 rsf_add_fixture_test(rsf_native_fg_cpu_test NAME native_fg_cpu_contract ENTRY rsf_native_fg_cpu_fixture
-    LIBS rsf_game_sdk_fixtures_rust ReScaleFrame::OrchestratorCore TIMEOUT 15)
+    LIBS ReScaleFrame::OrchestratorCore TIMEOUT 15)
 
 rsf_add_fixture_test(rsf_sampler_bias NAME sampler_bias_device ENTRY rsf_sampler_bias_fixture
     LIBS rsf_orchestrator_rust ReScaleFrame::Graphics ReScaleFrame::GameSDK TIMEOUT 60 SKIP77)

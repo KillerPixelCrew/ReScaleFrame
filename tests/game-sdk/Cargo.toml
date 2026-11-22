@@ -13,7 +13,6 @@ unity-sr-d3d12-fixture = [
 ]
 xell-fixture = ["windows-sys/Win32_Security", "windows-sys/Win32_System_Threading"]
 vk-latency-fixtures = ["dep:ash", "windows-sys/Win32_System_Performance", "windows-sys/Win32_System_Threading", "windows-sys/Win32_UI_WindowsAndMessaging"]
-fg-cpu-fixture = ["windows-sys/Win32_System_Performance", "windows-sys/Win32_System_Threading"]
 cpu-fixtures = ["windows-sys/Win32_System_Memory", "windows-sys/Win32_System_SystemInformation"]
 d3d11-host-fixture = []
 plugin-session-fixture = []

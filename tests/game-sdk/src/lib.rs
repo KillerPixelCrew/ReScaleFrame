@@ -22,12 +22,10 @@ mod anomaly;
 mod contract;
 #[cfg(any(
     feature = "cpu-fixtures",
-    feature = "fg-cpu-fixture",
     feature = "vk-latency-fixtures"
 ))]
 #[cfg(any(
     feature = "cpu-fixtures",
-    feature = "fg-cpu-fixture",
     feature = "vk-latency-fixtures"
 ))]
 #[cfg(feature = "cpu-fixtures")]
@@ -35,8 +33,6 @@ mod cpu_events;
 #[cfg(feature = "d3d11-host-fixture")]
 mod d3d11_host;
 mod domains;
-#[cfg(feature = "fg-cpu-fixture")]
-mod fg_cpu;
 #[cfg(feature = "cpu-fixtures")]
 mod input_receipts;
 #[cfg(feature = "plugin-session-fixture")]

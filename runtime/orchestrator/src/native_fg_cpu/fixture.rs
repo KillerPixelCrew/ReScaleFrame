@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: MIT
-use crate::sys::*;
-use std::ffi::c_void;
+//! The ctest native_fg_cpu_contract: the D3D CPU owner with recording leaves in place of the
+//! presentation bridge.
+use super::platform::rsf_native_fg_rendered_source_set;
+use super::win32::{describe_address, duplicate_render_thread, sample_render_thread};
+use super::*;
+use crate::latency_lease::rsf_native_latency_has_claim;
+use crate::native_cpu::{
+    rsf_native_cpu_dispatch, rsf_native_cpu_present_result, rsf_native_cpu_read,
+};
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::{Condvar, Mutex, OnceLock, mpsc};
@@ -13,15 +20,12 @@ use windows_sys::Win32::{
     },
 };
 
-#[path = "fg_cpu_cases.rs"]
 mod cases;
 
 const SESSION: u64 = 41;
 const PRIMARY_WINDOW: u64 = 51;
 const REPLACEMENT_WINDOW: u64 = 52;
-const XELL: u32 = crate::sys::RSF_PACING_XELL;
-type Event = rsf_game_cpu_event;
-type Platform = rsf_nfg_cpu_platform;
+const XELL: u32 = RSF_PACING_XELL;
 
 static GENERATION: AtomicU64 = AtomicU64::new(11);
 static PACE_CALLS: AtomicU32 = AtomicU32::new(0);
@@ -90,7 +94,7 @@ fn fact(source_frame_id: u64, stage: u32) -> Event {
 }
 
 unsafe extern "C" fn sink(_: *mut c_void, event: *const Event) {
-    unsafe { rsf_core_native_fg_cpu(event, platform()) };
+    unsafe { fg_cpu(event, platform()) };
 }
 
 fn dispatch(event: *const Event) -> bool {
@@ -133,7 +137,7 @@ fn bind(window_key: u64) -> i32 {
         session_id: SESSION,
         window_key,
     };
-    unsafe { rsf_core_native_latency_window_bind(&binding, platform()) }
+    unsafe { latency_window_bind(&binding, platform()) }
 }
 
 fn receipt(receipt_id: u64, window_key: u64) -> bool {
@@ -248,19 +252,19 @@ extern "C" fn pace(source: u64, owner: u32, expected: u64) -> i32 {
             .wait_timeout_while(state, Duration::from_secs(3), |state| !state.may_wake)
             .unwrap();
         if !state.may_wake {
-            return RSF_NFG_CPU_NOT_READY;
+            return NOT_READY;
         }
     }
     0
 }
 extern "C" fn marker(expected: u64, source: u64, kind: u32, controller: u32) -> i32 {
     if FAIL_MARKER.load(Relaxed) {
-        verify(kind == RSF_NFG_CPU_SIM_START);
+        verify(kind == SIM_START);
         return -9;
     }
     verify(expected == generation() && controller == 0);
     STATE.lock().unwrap().markers.push((source, kind));
-    if source == 1 && kind == RSF_NFG_CPU_PRESENT_END {
+    if source == 1 && kind == PRESENT_END {
         wake();
     }
     0
@@ -295,22 +299,22 @@ extern "C" fn owned_window_thread(key: u64) -> u32 {
 
 fn platform() -> &'static Platform {
     PLATFORM.get_or_init(|| Platform {
-        has_owner: Some(has_owner),
-        generation: Some(generation),
-        backend: Some(backend),
-        device: Some(device),
-        adapter_vendor: Some(vendor),
-        host: Some(host),
-        host_retire: Some(host_retire),
-        status: Some(status),
-        acquire: Some(acquire),
-        pace: Some(pace),
-        marker: Some(marker),
-        receipt: Some(route_receipt),
-        abort: Some(abort),
+        has_owner,
+        generation,
+        backend,
+        device,
+        adapter_vendor: vendor,
+        host,
+        host_retire,
+        status,
+        acquire,
+        pace,
+        marker,
+        receipt: route_receipt,
+        abort,
         fixture_wait_completion: Some(wait_completion),
         fixture_owned_window_thread: Some(owned_window_thread),
-        ..unsafe { rsf_native_fg_cpu_platform }
+        ..NATIVE_PLATFORM
     })
 }
 
@@ -319,20 +323,18 @@ fn sample_native_thread() {
     let (release, done) = mpsc::channel();
     std::thread::scope(|scope| {
         let renderer = scope.spawn(move || {
-            let thread = unsafe { rsf_core_nfg_duplicate_render_thread() } as usize;
+            let thread = duplicate_render_thread() as usize;
             let _ = duplicate.send(thread);
             let _ = done.recv_timeout(Duration::from_secs(3));
         });
         let thread = handle.recv_timeout(Duration::from_secs(2)).unwrap() as *mut c_void;
         assert!(!thread.is_null());
         let mut addresses = [0; 9];
-        let count = unsafe {
-            rsf_core_nfg_sample_render_thread(thread, addresses.as_mut_ptr(), addresses.len())
-        };
+        let count =
+            unsafe { sample_render_thread(thread, addresses.as_mut_ptr(), addresses.len()) };
         let mut location = [0; 384];
-        let length = unsafe {
-            rsf_core_nfg_describe_address(addresses[0], location.as_mut_ptr(), location.len())
-        };
+        let length =
+            unsafe { describe_address(addresses[0], location.as_mut_ptr(), location.len()) };
         let _ = release.send(());
         renderer.join().unwrap();
         unsafe { CloseHandle(thread) };
@@ -342,5 +344,5 @@ fn sample_native_thread() {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_native_fg_cpu_fixture() -> i32 {
-    crate::run(cases::run)
+    std::panic::catch_unwind(cases::run).unwrap_or(1)
 }

@@ -60,38 +60,6 @@ pub(crate) struct Platform {
     allows_fg: unsafe extern "C" fn(*const rsf_frame_record) -> i32,
 }
 
-impl Platform {
-    #[cfg(feature = "test-fixtures")]
-    fn checked(raw: &rsf_nfg_cpu_platform) -> Option<Self> {
-        Some(Self {
-            has_owner: raw.has_owner?,
-            generation: raw.generation?,
-            backend: raw.backend?,
-            status: raw.status?,
-            device: raw.device?,
-            adapter_vendor: raw.adapter_vendor?,
-            host: raw.host?,
-            host_status: raw.host_status?,
-            host_reflex: raw.host_reflex?,
-            host_token: raw.host_token?,
-            host_presented: raw.host_presented?,
-            host_abort: raw.host_abort?,
-            host_retire: raw.host_retire?,
-            host_reset: raw.host_reset?,
-            acquire: raw.acquire?,
-            pace: raw.pace?,
-            marker: raw.marker?,
-            input: raw.input?,
-            receipt: raw.receipt?,
-            abort: raw.abort?,
-            create_antilag: raw.create_antilag?,
-            fixture_owned_window_thread: raw.fixture_owned_window_thread,
-            fixture_wait_completion: raw.fixture_wait_completion,
-            allows_fg: raw.allows_fg?,
-        })
-    }
-}
-
 type Event = rsf_game_cpu_event;
 type Pass = rsf_game_render_pass;
 type Reservation = rsf_native_cpu_reservation;
@@ -99,10 +67,18 @@ type Facts = rsf_native_cpu_frame;
 type Window = rsf_native_latency_window;
 type Handle = *mut c_void;
 
-const CAPACITY: usize = RSF_NFG_CPU_CAPACITY as usize;
+const CAPACITY: usize = 128;
 const D3D_CLAIM: u32 = 1;
-const NOT_READY: i32 = RSF_NFG_CPU_NOT_READY;
-const INVALID: i32 = RSF_NFG_CPU_INVALID;
+const NOT_READY: i32 = -8;
+const INVALID: i32 = -1;
+const ABI_MISMATCH: i32 = -2;
+// The latency markers the presentation bridge takes, in frame order (rsf_d3d11_present_marker).
+const SIM_START: u32 = 0;
+const SIM_END: u32 = 1;
+const SUBMIT_START: u32 = 2;
+const SUBMIT_END: u32 = 3;
+const PRESENT_START: u32 = 4;
+const PRESENT_END: u32 = 5;
 macro_rules! call {
     ($p:expr, $f:ident $(, $a:expr)* $(,)?) => {{
         #[allow(unused_unsafe)]
@@ -113,7 +89,7 @@ macro_rules! call {
 
 mod diagnostics;
 #[cfg(feature = "test-fixtures")]
-mod fixture_calls;
+mod fixture;
 mod hitch;
 pub(super) mod platform;
 pub(crate) use platform::NATIVE_PLATFORM;
@@ -236,7 +212,7 @@ impl Frame {
             && self.session == source.session
             && !self.failed
             && !self.submitted
-            && !self.attempted(RSF_NFG_CPU_SUBMIT_START)
+            && !self.attempted(SUBMIT_START)
             && !self.pacing_in_flight()
     }
 
@@ -454,7 +430,7 @@ fn settle_marker(source: Source, marker: u32, marked: bool, marker_failed: bool)
         frame.markers[marker as usize] = if marked { Attempt::Done } else { Attempt::Idle };
         frame.marker_failed |= marker_failed;
         // Preserve the existing render-stage failure signal to FG admission.
-        frame.failed |= marker_failed && marker >= RSF_NFG_CPU_SUBMIT_START;
+        frame.failed |= marker_failed && marker >= SUBMIT_START;
     }
 }
 
@@ -557,7 +533,7 @@ fn antilag(p: &Platform) -> Option<&'static AntiLag> {
 }
 
 fn fsr(backend: u32) -> bool {
-    matches!(backend, RSF_NFG_CPU_FSR3 | RSF_NFG_CPU_FSR4)
+    matches!(backend, RSF_FG_BACKEND_FSR3 | RSF_FG_BACKEND_FSR4)
 }
 
 fn provider_status(p: &Platform) -> Option<rsf_d3d11_present_status> {
@@ -641,7 +617,7 @@ fn select_pacer(p: &Platform, id: u64, mode: u32, limit: u32) -> Selection {
     // DLSS-G configures its shared Reflex host at Prepare using this frame's
     // eligibility. Other providers use the last effective presentation ratio.
     let mut configured = lock(&REFLEX_CONFIGURATION);
-    if reflex_available && backend != RSF_NFG_CPU_DLSS {
+    if reflex_available && backend != RSF_FG_BACKEND_DLSS {
         let wanted = if owner == RSF_PACING_REFLEX {
             let presents = if state.effective_mode == RSF_FG_FIXED {
                 state.effective_generated_frames.saturating_add(1)
@@ -852,10 +828,7 @@ fn withdraw_reserved(p: &Platform, session: u64) {
             })
         {
             frame.failed = true;
-            if !frame.attempted(RSF_NFG_CPU_SUBMIT_START)
-                && !frame.submitted
-                && !frame.pacing_in_flight()
-            {
+            if !frame.attempted(SUBMIT_START) && !frame.submitted && !frame.pacing_in_flight() {
                 *out = frame.id;
             }
         }
@@ -880,7 +853,7 @@ fn reserve(p: &Platform, source: Source) {
             || frame.pacing_in_flight()
             || (frame.id != 0
                 && !frame.ended
-                && !(frame.failed && !frame.marked(RSF_NFG_CPU_SUBMIT_START) && !frame.submitted))
+                && !(frame.failed && !frame.marked(SUBMIT_START) && !frame.submitted))
         {
             return;
         }
@@ -1030,7 +1003,7 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
                     || frame.failed
                     || frame.marker_failed
                     || frame.ended
-                    || frame.attempted(RSF_NFG_CPU_SUBMIT_START)
+                    || frame.attempted(SUBMIT_START)
                     || frame.submitted
                 {
                     continue;
@@ -1163,10 +1136,10 @@ fn dispatch_boundary(p: &Platform, event: &Event, source: Source) {
     }
     match event.stage {
         RSF_GAME_CPU_SIMULATION_BEGIN if bound.is_none_or(|r| r.poll_begin_qpc != 0) => {
-            simulation_marker(p, source, RSF_NFG_CPU_SIM_START, "actual simulation begin");
+            simulation_marker(p, source, SIM_START, "actual simulation begin");
         }
         RSF_GAME_CPU_SIMULATION_END => {
-            simulation_marker(p, source, RSF_NFG_CPU_SIM_END, "simulation end");
+            simulation_marker(p, source, SIM_END, "simulation end");
         }
         RSF_GAME_CPU_INPUT_EVENT
             if !frame.marker_failed
@@ -1199,14 +1172,14 @@ fn start_render_marker(p: &Platform, id: u64) {
             failure(Failure::RenderOwner, source, NOT_READY, 1, 0, None, None);
             return;
         }
-        let Some(frame) = claim_marker(frame, RSF_NFG_CPU_SUBMIT_START) else {
+        let Some(frame) = claim_marker(frame, SUBMIT_START) else {
             return;
         };
         frame
     };
     let source = frame.source();
     let finish = |accepted, failed| {
-        settle_marker(source, RSF_NFG_CPU_SUBMIT_START, accepted, failed);
+        settle_marker(source, SUBMIT_START, accepted, failed);
     };
     if rendered_source() {
         finish(true, false);
@@ -1261,8 +1234,8 @@ fn start_render_marker(p: &Platform, id: u64) {
     }
     // Only the real simulation interval authorizes vendor submission timing.
     if f.stage_mask & THROUGH_SIM_END != THROUGH_SIM_END
-        || !frame.marked(RSF_NFG_CPU_SIM_START)
-        || !frame.marked(RSF_NFG_CPU_SIM_END)
+        || !frame.marked(SIM_START)
+        || !frame.marked(SIM_END)
         || f.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE != 0
     {
         finish(false, false);
@@ -1277,7 +1250,7 @@ fn start_render_marker(p: &Platform, id: u64) {
         );
         return;
     }
-    let (result, marked) = deliver_marker(p, frame, RSF_NFG_CPU_SUBMIT_START);
+    let (result, marked) = deliver_marker(p, frame, SUBMIT_START);
     trace("actual graphics submit begin", id, result);
     if !marked || result != OK {
         failure(
@@ -1298,24 +1271,24 @@ fn end_render_marker(p: &Platform, id: u64, stage: &str) {
         let Some(frame) = ledger.frame(id) else {
             return;
         };
-        if !frame.marked(RSF_NFG_CPU_SUBMIT_START) {
+        if !frame.marked(SUBMIT_START) {
             return;
         }
-        let Some(frame) = claim_marker(frame, RSF_NFG_CPU_SUBMIT_END) else {
+        let Some(frame) = claim_marker(frame, SUBMIT_END) else {
             return;
         };
         frame
     };
     if !rendered_source()
         && !frame.source().facts().is_some_and(|f| {
-            let required = marker_prerequisites(f.flags, RSF_NFG_CPU_SUBMIT_END);
+            let required = marker_prerequisites(f.flags, SUBMIT_END);
             f.failed == 0 && f.marker_mask & required == required
         })
     {
-        settle_marker(frame.source(), RSF_NFG_CPU_SUBMIT_END, false, false);
+        settle_marker(frame.source(), SUBMIT_END, false, false);
         return;
     }
-    let (result, _) = deliver_marker(p, frame, RSF_NFG_CPU_SUBMIT_END);
+    let (result, _) = deliver_marker(p, frame, SUBMIT_END);
     trace(stage, id, result);
 }
 
@@ -1333,11 +1306,11 @@ pub(crate) fn latency_present(p: &Platform, id: u64, chain: Handle, begin: bool)
             let Some(frame) = ledger.frame(id) else {
                 return;
             };
-            if !frame.marked(RSF_NFG_CPU_SUBMIT_START) {
+            if !frame.marked(SUBMIT_START) {
                 let frame = *frame;
                 drop(ledger);
                 if !frame.submitted
-                    && !frame.attempted(RSF_NFG_CPU_SUBMIT_START)
+                    && !frame.attempted(SUBMIT_START)
                     && !frame.failed
                     && !frame.marker_failed
                     && !rendered_source()
@@ -1354,7 +1327,7 @@ pub(crate) fn latency_present(p: &Platform, id: u64, chain: Handle, begin: bool)
                 }
                 return;
             }
-            let Some(frame) = claim_marker(frame, RSF_NFG_CPU_PRESENT_START) else {
+            let Some(frame) = claim_marker(frame, PRESENT_START) else {
                 return;
             };
             frame
@@ -1362,30 +1335,30 @@ pub(crate) fn latency_present(p: &Platform, id: u64, chain: Handle, begin: bool)
         let rendered = rendered_source();
         let facts = frame.source().facts();
         let keyed = facts.is_some_and(|f| f.flags & RSF_GAME_CPU_INPUT_KEYED != 0);
-        if ((keyed || !threaded) && !frame.marked(RSF_NFG_CPU_SUBMIT_END))
+        if ((keyed || !threaded) && !frame.marked(SUBMIT_END))
             || (!rendered
                 && !facts.is_some_and(|f| {
-                    let required = marker_prerequisites(f.flags, RSF_NFG_CPU_PRESENT_START);
+                    let required = marker_prerequisites(f.flags, PRESENT_START);
                     f.failed == 0 && f.marker_mask & required == required
                 }))
         {
-            settle_marker(frame.source(), RSF_NFG_CPU_PRESENT_START, false, false);
+            settle_marker(frame.source(), PRESENT_START, false, false);
             return;
         }
         if !rendered && let Some(anti) = antilag(p) {
             anti.end_render(id, chain, u32::from(fsr(call!(p, backend))));
         }
-        let (result, _) = deliver_marker(p, frame, RSF_NFG_CPU_PRESENT_START);
+        let (result, _) = deliver_marker(p, frame, PRESENT_START);
         trace("present begin", id, result);
     } else {
         let frame = lock(&LEDGER).frame(id).and_then(|frame| {
-            if !frame.marked(RSF_NFG_CPU_PRESENT_START) {
+            if !frame.marked(PRESENT_START) {
                 return None;
             }
-            claim_marker(frame, RSF_NFG_CPU_PRESENT_END)
+            claim_marker(frame, PRESENT_END)
         });
         if let Some(frame) = frame {
-            let (result, _) = deliver_marker(p, frame, RSF_NFG_CPU_PRESENT_END);
+            let (result, _) = deliver_marker(p, frame, PRESENT_END);
             trace("present end", id, result);
         }
         complete(id);
@@ -1520,12 +1493,10 @@ unsafe fn fg_submission(pass: *const Pass, begin: u32, p: &Platform) {
     }
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_core_native_fg_reflex_ordering_set(threaded: u32) {
     THREADED.store(threaded != 0, Ordering::Relaxed);
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_core_native_latency_graphics(api: u32) {
     if matches!(api, 11 | 12) {
         GRAPHICS_API.store(api, Ordering::Relaxed);
@@ -1567,7 +1538,7 @@ unsafe fn latency_window_bind(binding: *const Window, p: &Platform) -> i32 {
         return INVALID;
     }
     if binding.version != 1 {
-        return RSF_NFG_CPU_ABI_MISMATCH;
+        return ABI_MISMATCH;
     }
     bind_window(binding.session_id, binding.window_key, p)
 }
@@ -1600,7 +1571,6 @@ fn bind_window(session_id: u64, window_key: u64, p: &Platform) -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_native_input_routes_get(out: *mut Routes) -> i32 {
     if !unsafe { has_capacity(out) } || unsafe { (*out).version } != 1 {
         return 0;
@@ -1609,7 +1579,6 @@ pub(crate) unsafe extern "C" fn rsf_core_native_input_routes_get(out: *mut Route
     1
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_native_latency_frame_get(out: *mut LatencyFrame) -> i32 {
     if !unsafe { has_capacity(out) } || unsafe { (*out).version } != 1 {
         return 0;
@@ -1680,7 +1649,7 @@ fn latency_retire(session: u64, through: u64, p: &Platform) {
         if frame.session == session
             && frame.id != 0
             && frame.id <= through
-            && !frame.marked(RSF_NFG_CPU_SUBMIT_START)
+            && !frame.marked(SUBMIT_START)
         {
             frame.failed = true;
         }
