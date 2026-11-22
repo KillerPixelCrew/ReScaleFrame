@@ -750,17 +750,23 @@ endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     rsf_add_rust_static(rsf_vulkan_fg_fixtures_rust rsf_rust_vulkan_fg_fixtures
         rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features wsi-dispatch)
-    add_executable(rsf_ffx_vulkan_wsi_dispatch_test ffx_vulkan_wsi_dispatch.cpp)
+    add_executable(rsf_ffx_vulkan_wsi_dispatch_test ffx_vulkan_wsi_dispatch.c)
+    set_target_properties(rsf_ffx_vulkan_wsi_dispatch_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+        LINKER_LANGUAGE CXX)
     target_include_directories(rsf_ffx_vulkan_wsi_dispatch_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
     target_link_libraries(rsf_ffx_vulkan_wsi_dispatch_test PRIVATE rsf_vulkan_fg_fixtures_rust rsf_build_options)
     add_test(NAME ffx_vulkan_wsi_dispatch COMMAND rsf_ffx_vulkan_wsi_dispatch_test)
     if(EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
         rsf_add_rust_static(rsf_native_ffx_fixtures_rust rsf_rust_native_ffx_fixtures
             rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features ffx)
-        add_executable(rsf_native_ffx_vulkan_fixture vulkan-fg/ffx_fixture.cpp)
+        # The scenarios replace the SDK module through the host table, so the
+        # production leaf is linked without RSF_HAVE_FFX_VK and its host.
+        add_executable(rsf_native_ffx_vulkan_fixture vulkan-fg/ffx_fixture.c
+            ../runtime/orchestrator/src/native_fg_vulkan.c)
+        set_target_properties(rsf_native_ffx_vulkan_fixture PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+            LINKER_LANGUAGE CXX)
         target_include_directories(rsf_native_ffx_vulkan_fixture PRIVATE ../runtime/orchestrator/include)
-        target_include_directories(rsf_native_ffx_vulkan_fixture SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_FFX_VK_INCLUDE}")
-        target_compile_definitions(rsf_native_ffx_vulkan_fixture PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_FFX_VK=1)
+        target_compile_definitions(rsf_native_ffx_vulkan_fixture PRIVATE RSF_RUNTIME_BUILD)
         target_link_libraries(rsf_native_ffx_vulkan_fixture PRIVATE rsf_native_ffx_fixtures_rust rsf_orchestrator_rust
             ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options)
         add_test(NAME native_ffx_vulkan_reset_contract COMMAND rsf_native_ffx_vulkan_fixture 0)
@@ -865,19 +871,22 @@ endif()
 rsf_add_rust_static(rsf_vulkan_dispatch_fixtures_rust rsf_rust_vulkan_dispatch_fixtures
     rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features dispatch)
 add_executable(rsf_native_fg_vulkan_dispatch_test vulkan-fg/dispatch_fixture.c
-    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp)
+    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.c)
+set_target_properties(rsf_native_fg_vulkan_dispatch_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_test PRIVATE RSF_RUNTIME_BUILD)
 target_include_directories(rsf_native_fg_vulkan_dispatch_test PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_native_fg_vulkan_dispatch_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME native_fg_vulkan_dispatch_contract COMMAND rsf_native_fg_vulkan_dispatch_test)
 add_executable(rsf_native_fg_vulkan_dispatch_xess_test vulkan-fg/dispatch_fixture.c
-    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp)
+    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.c)
+set_target_properties(rsf_native_fg_vulkan_dispatch_xess_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_XESS_FG_VK=1)
 target_include_directories(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_native_fg_vulkan_dispatch_xess_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME native_fg_vulkan_dispatch_xess_contract COMMAND rsf_native_fg_vulkan_dispatch_xess_test)
 add_executable(rsf_native_fg_vulkan_dispatch_fsr4_test vulkan-fg/dispatch_fixture.c
-    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp)
+    ../runtime/orchestrator/src/native_fg_vulkan_dispatch.c)
+set_target_properties(rsf_native_fg_vulkan_dispatch_fsr4_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_FSR4_FG_VK=1)
 target_include_directories(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)

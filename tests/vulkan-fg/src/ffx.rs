@@ -222,8 +222,14 @@ fn reset() {
             "explicit disable still retires presenter activation"
         );
         let mut status = status_record();
-        assert!(rsf_ffxgvk_get_status(owner, &mut status) == FIXTURE_OK && status.enabled != 0 == 0 && status.generated_callbacks == 4 &&
-        status.prepared == 4 && status.tagged == 4, "status counts only enabled preparation and SDK generation");
+        assert!(
+            rsf_ffxgvk_get_status(owner, &mut status) == FIXTURE_OK
+                && status.enabled == 0
+                && status.generated_callbacks == 4
+                && status.prepared == 4
+                && status.tagged == 4,
+            "status counts only enabled preparation and SDK generation"
+        );
 
         assert!(rsf_ffxgvk_enable(owner, 1) == FIXTURE_OK, "FG can resume");
         let failed_wait = record(7, 6, 0, 1, RSF_FRAME_FLAG_RESET);
@@ -560,7 +566,7 @@ fn submission() {
             implicit(owner, chain) == VK_SUCCESS
                 && f!(enabled)
                 && rsf_ffxgvk_get_status(owner, &mut status) == FIXTURE_OK
-                && status.enabled
+                && status.enabled != 0
                 && status.source_frame == 2,
             "presentation admission uses the local recording order, not old session frame IDs"
         );
@@ -626,7 +632,15 @@ fn submission() {
             implicit(owner, chain) == VK_SUCCESS && !f!(enabled),
             "implicit presentation applies the prepared source's veto"
         );
-        let mut late_veto = record(99, 7, 8, 3, 0);
+        // Frame 7 maps to the slot whose HUD-less completion stayed unknown.
+        let stuck = record(99, 7, 8, 3, 0);
+        let records = f!(sdk_records);
+        assert!(
+            rsf_ffxgvk_prepare(owner, a, &frame(&stuck)) == FIXTURE_NOT_READY
+                && f!(sdk_records) == records,
+            "a slot with unknown completion is never reused"
+        );
+        let mut late_veto = record(99, 9, 8, 3, 0);
         complete(owner, &late_veto, a, a);
         rsf_ffxgvk_submitted(owner, &a, 1);
         late_veto.flags |= RSF_FRAME_FLAG_NO_FG;

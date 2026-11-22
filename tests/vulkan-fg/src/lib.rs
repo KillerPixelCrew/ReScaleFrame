@@ -18,6 +18,11 @@ mod ffx;
 mod ffx_abi;
 #[cfg(feature = "ffx")]
 mod ffx_gpu;
+#[cfg(feature = "ffx")]
+mod ffx_sdk;
+#[cfg(feature = "ffx")]
+#[path = "../../../runtime/vulkan/fsr3/sdk_abi.rs"]
+mod ffx_sdk_abi;
 #[cfg(feature = "fsr4-state")]
 mod fsr4_state;
 #[cfg(feature = "fsr4-state")]

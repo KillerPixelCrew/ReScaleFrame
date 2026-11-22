@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
-// FidelityFX 3 Vulkan frame-generation owner. The native leaf in
-// native_fg_vulkan.cpp keeps the SDK module, its contexts, hook entry points
-// and capture. This owner
+// FidelityFX 3 Vulkan frame-generation owner. The SDK leaf in sdk.rs keeps the
+// SDK module entries, its contexts, hook entry points and capture. This owner
 // decides admission, including WSI registration and the process-wide route, slot reuse,
 // copy transitions, completion evidence, presentation admission and retirement order.
+mod sdk;
 mod startup;
 
 use crate::allocate_handle;
-use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
+use crate::sdk_module::{FIDELITYFX_DLL, SdkModule};
 use crate::sr_session::has_capacity;
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame as Frame,
@@ -28,6 +28,7 @@ use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record as Record;
 #[cfg(test)]
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION};
+use sdk::Host;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -55,7 +56,6 @@ const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
 type Handle = *mut c_void;
 
 /// Facts read from the borrowed VkSwapchainCreateInfoKHR.
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct Swapchain {
     width: u32,
@@ -97,10 +97,19 @@ impl Swapchain {
     }
 }
 
-#[repr(C)]
+/// Steps of the SDK leaf. sdk::OPS is the production table; the unit tests
+/// below substitute fakes. Status-returning steps report rsf_backend_result and
+/// WSI steps return the VkResult unchanged.
 struct Ops {
-    loader: Loader,
-    open: unsafe extern "C" fn(*const Setup, Handle, u32, u32, *mut Handle, *mut Handle) -> i32,
+    open: unsafe extern "C" fn(
+        *const Setup,
+        &'static Host,
+        Handle,
+        u32,
+        u32,
+        *mut Handle,
+        *mut Handle,
+    ) -> i32,
     close: unsafe extern "C" fn(Handle),
     set_wsi: unsafe extern "C" fn(Handle, u32) -> i32,
     create_swapchain: unsafe extern "C" fn(Handle, *mut u64, *mut u32) -> i32,
@@ -127,11 +136,6 @@ struct Ops {
     timing_end: unsafe extern "C" fn(*const c_char, u64, i64),
     resources: &'static Resources,
 }
-
-const _: () = {
-    assert!(size_of::<Swapchain>() == 32);
-    assert!(size_of::<Ops>() == 27 * size_of::<Handle>());
-};
 
 /// The process-wide WSI route. The corrected SDK keeps one WSI dispatch table
 /// whose hooks carry no user pointer, so one owner holds the route from
@@ -271,6 +275,7 @@ impl Default for Slot {
 // of the configured source from the route without borrowing this owner.
 struct Owner {
     ops: &'static Ops,
+    host: &'static Host,
     native: Handle,
     module: Option<SdkModule>,
     resources: Handle,
@@ -293,9 +298,10 @@ struct Owner {
 }
 
 impl Owner {
-    fn new(ops: &'static Ops, setup: &Setup, swapchain: Swapchain) -> Self {
+    fn new(ops: &'static Ops, host: &'static Host, setup: &Setup, swapchain: Swapchain) -> Self {
         Self {
             ops,
+            host,
             native: ptr::null_mut(),
             module: None,
             resources: ptr::null_mut(),
@@ -342,7 +348,7 @@ impl Owner {
         }
         let module = match unsafe {
             SdkModule::open(
-                ops.loader,
+                self.host.loader,
                 setup.graphics.runtime_directory_utf8,
                 FIDELITYFX_DLL,
             )
@@ -355,6 +361,7 @@ impl Owner {
         let opened = unsafe {
             (ops.open)(
                 setup,
+                self.host,
                 library,
                 self.width,
                 self.height,
@@ -810,14 +817,18 @@ unsafe fn live<'a>(owner: *mut Owner) -> Option<&'a mut Owner> {
     unsafe { owner.as_mut() }.filter(|owner| !owner.retiring)
 }
 
+/// Creates an owner over the SDK leaf with the native host table from
+/// native_fg_vulkan.c. The table outlives every owner. A null host is the
+/// disabled build, which validates the arguments and reports NOT_COMPILED.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_create_native(
-    ops: *const Ops,
+unsafe extern "C" fn rsf_core_ffxgvk_create_sdk(
+    host: *const Host,
     setup: *const Setup,
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
-    let description = if unsafe { has_capacity(setup) } {
+    let host = unsafe { host.as_ref() };
+    let description = if host.is_some() && unsafe { has_capacity(setup) } {
         let setup = unsafe { &*setup };
         (setup.abi_version == RSF_FGVK_ABI_VERSION
             && unsafe { has_capacity(&setup.graphics) }
@@ -828,21 +839,21 @@ unsafe extern "C" fn rsf_core_ffxgvk_create_native(
         None
     };
     unsafe {
-        rsf_core_ffxgvk_create(
-            ops,
+        create(
+            host.map(|host| (&sdk::OPS, host)),
             setup,
-            description.as_ref().map_or(ptr::null(), ptr::from_ref),
+            description,
             output,
             chain,
         )
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ffxgvk_create(
-    ops: *const Ops,
+/// `leaf` is None in the disabled build.
+unsafe fn create(
+    leaf: Option<(&'static Ops, &'static Host)>,
     setup: *const Setup,
-    swapchain: *const Swapchain,
+    swapchain: Option<Swapchain>,
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
@@ -889,16 +900,16 @@ unsafe extern "C" fn rsf_core_ffxgvk_create(
             return INVALID;
         }
     }
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
+    let Some((ops, host)) = leaf else {
         return NOT_COMPILED;
     };
-    let Some(&swapchain) = (unsafe { swapchain.as_ref() }) else {
+    let Some(swapchain) = swapchain else {
         return INVALID;
     };
     if !swapchain.supported() {
         return NOT_SUPPORTED;
     }
-    let owner = allocate_handle(Owner::new(ops, setup, swapchain));
+    let owner = allocate_handle(Owner::new(ops, host, setup, swapchain));
     if owner.is_null() {
         return INIT_FAILED;
     }
@@ -1163,6 +1174,7 @@ mod tests {
 
     unsafe extern "C" fn open(
         _: *const Setup,
+        _: &'static Host,
         _: Handle,
         _: u32,
         _: u32,
@@ -1349,8 +1361,37 @@ mod tests {
         reset_fence: Some(fence_ok),
         submit_fence: Some(submit_fence),
     };
+    unsafe extern "C" fn symbol(_: Handle, _: *const c_char) -> rsf_vk_function {
+        None
+    }
+    unsafe extern "C" fn resolve(
+        _: crate::vulkan_sr_abi::rsf_vk_get_proc,
+        _: Handle,
+        _: *const c_char,
+        _: *mut rsf_vk_function,
+    ) -> i32 {
+        OK
+    }
+    unsafe extern "C" fn memory(_: rsf_vk_function, _: Handle, _: Handle) -> i32 {
+        OK
+    }
+    unsafe extern "C" fn scope(call: unsafe extern "C" fn(Handle) -> i32, user: Handle) -> i32 {
+        unsafe { call(user) }
+    }
+    unsafe extern "C" fn queue_present(_: rsf_vk_function, _: Handle, _: *const c_void) -> i32 {
+        OK
+    }
+
+    static HOST: Host = Host {
+        loader: crate::sdk_module::Loader { load, unload },
+        symbol,
+        resolve,
+        memory_properties: memory,
+        without_dlssg: scope,
+        wsi_call: scope,
+        queue_present,
+    };
     static OPS: Ops = Ops {
-        loader: Loader { load, unload },
         open,
         close,
         set_wsi,
@@ -1420,8 +1461,15 @@ mod tests {
 
     fn create(setup: &Setup, swapchain: &Swapchain) -> (i32, *mut Owner, u64) {
         let (mut owner, mut chain) = (ptr::null_mut(), 0);
-        let result =
-            unsafe { rsf_core_ffxgvk_create(&OPS, setup, swapchain, &mut owner, &mut chain) };
+        let result = unsafe {
+            super::create(
+                Some((&OPS, &HOST)),
+                setup,
+                Some(*swapchain),
+                &mut owner,
+                &mut chain,
+            )
+        };
         (result, owner, chain)
     }
 
@@ -1499,9 +1547,8 @@ mod tests {
         };
         assert_eq!(create(&setup(), &recreated).0, NOT_SUPPORTED);
         let (mut owner, mut chain) = (ptr::null_mut(), 0);
-        let disabled = unsafe {
-            rsf_core_ffxgvk_create(ptr::null(), &setup(), &SWAPCHAIN, &mut owner, &mut chain)
-        };
+        let disabled =
+            unsafe { rsf_core_ffxgvk_create_sdk(ptr::null(), &setup(), &mut owner, &mut chain) };
         assert_eq!((disabled, owner.is_null(), chain), (NOT_COMPILED, true, 0));
         assert_eq!(calls(|c| c.opens), 0);
     }

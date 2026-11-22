@@ -115,7 +115,7 @@ fn begin(timing: &Timing) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vk_timing_begin() -> i64 {
+pub(crate) extern "C" fn rsf_core_vk_timing_begin() -> i64 {
     timing_begin()
 }
 
@@ -139,7 +139,11 @@ pub(crate) fn timing_begin() -> i64 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vk_timing_end(stage: *const c_char, frame: u64, start: i64) {
+pub(crate) unsafe extern "C" fn rsf_core_vk_timing_end(
+    stage: *const c_char,
+    frame: u64,
+    start: i64,
+) {
     if start > 0
         && !stage.is_null()
         && let Ok(stage) = unsafe { CStr::from_ptr(stage) }.to_str()

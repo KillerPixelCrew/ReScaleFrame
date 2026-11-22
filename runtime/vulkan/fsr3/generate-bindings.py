@@ -16,7 +16,8 @@ if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindge
 include = sdk / "ffx-api" / "include"
 types = (
     "FfxApi(ReturnCodes|SurfaceFormat|Resource(Usage|State|Type)|BackbufferTransferFunction|"
-    "CreateContextUpscaleFlags|DispatchFramegenerationFlags|UiCompositionFlags)|"
+    "CreateContext(Upscale|Framegeneration)Flags|DispatchFramegenerationFlags|UiCompositionFlags)|"
+    "ffxQueryGetProviderVersion|"
     "PfnFfx(CreateContext|DestroyContext|Configure|Query|Dispatch)|PFN_vkGetDeviceProcAddr|"
     "ffxCreateBackendVKDesc|ffxCreateContextDesc(Upscale|FrameGeneration(Hudless|SwapChainVK)?)|"
     "ffxConfigureDesc(FrameGeneration|FrameGenerationSwapChainRegisterUiResourceVK)|"

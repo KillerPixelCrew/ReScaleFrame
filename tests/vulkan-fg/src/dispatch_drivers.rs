@@ -20,13 +20,15 @@ pub(super) fn fixture_state() -> *mut rsf_dispatch_fixture_state {
 }
 
 pub(super) fn initialize() {
-    let mut state = rsf_dispatch_fixture_state::default();
-    state.generated_count = 1;
-    state.xell = rsf_fgvk_latency_status {
-        struct_size: size_of::<rsf_fgvk_latency_status>() as u32,
-        abi_version: RSF_FGVK_LATENCY_ABI_VERSION,
-        available: 1,
-        mode: 1,
+    let state = rsf_dispatch_fixture_state {
+        generated_count: 1,
+        xell: rsf_fgvk_latency_status {
+            struct_size: size_of::<rsf_fgvk_latency_status>() as u32,
+            abi_version: RSF_FGVK_LATENCY_ABI_VERSION,
+            available: 1,
+            mode: 1,
+            ..Default::default()
+        },
         ..Default::default()
     };
     unsafe { fixture_state().write(state) };

@@ -46,3 +46,8 @@ production native dispatch source separately with their existing provider
 defines. The Rust fakes and CTest entries are unchanged. Strict C11 and
 MinGW C++ syntax checks passed for the disabled, XeSS and FSR4 variants.
 Linking and execution remain pending.
+
+The FidelityFX SDK leaf, the provider table and both remaining fixture
+adapters left C++ later; see
+[rust-vulkan-ffx-fg-sdk-leaf.md](rust-vulkan-ffx-fg-sdk-leaf.md). The table
+rows above describe the earlier boundary.

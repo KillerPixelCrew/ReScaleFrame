@@ -107,7 +107,7 @@ impl Device {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_load_device(
+pub(crate) unsafe extern "C" fn rsf_core_vkfg_load_device(
     graphics: &rsf_srvk_setup,
     fg: *const rsf_fgvk_setup,
     with_view: bool,
@@ -143,7 +143,7 @@ pub(crate) extern "C" fn rsf_core_vkfg_device_memory(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_device_wait_timing(
+pub(crate) unsafe extern "C" fn rsf_core_vkfg_device_wait_timing(
     device: &mut Device,
     stage: *const c_char,
     frame: u64,

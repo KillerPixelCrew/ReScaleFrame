@@ -1098,10 +1098,11 @@ if vulkan_sdk:
 for fixture in ("dispatch", "ffx"):
     symbols = (r"rsf_(fgvk_.*|core_fgvk_presentation_.*)"
                if fixture == "dispatch" else
-               r"rsf_(ffxgvk_.*|fixture_(ffx|wsi)_.*|core_vkfg_(ensure_image|release_image))")
+               r"rsf_(ffxgvk_.*|fixture_(ffx|wsi)_.*|core_ffxgvk_(create_sdk|wsi_borrow|wsi_return)|"
+               r"core_vkfg_(ensure_image|release_image|load_device|device_memory|device_destroy))")
     generate(f"tests/vulkan-fg/src/{fixture}_abi.rs", f"tests/vulkan-fg/{fixture}_abi.h",
              "rsf_fixture_result|rsf_(dispatch_fixture_state|ffxgvk|dlssgvk(_status)?|fsr4gvk(_options)?|xessgvk(_options)?)",
-             "RSF_(FGVK_.*|SRVK_ABI_VERSION|FSR4FG_NOT_SUPPORTED|DLSSGVK_ABI_VERSION)",
+             "RSF_(FGVK_.*|SRVK_ABI_VERSION|FSR4FG_NOT_SUPPORTED|DLSSGVK_ABI_VERSION)|rsf_core_vkfg_platform",
              ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Isdk/game/include",
               "-x", "c++", "-std=c++17", "-Wno-pragma-once-outside-header",
               *(["-include", "runtime/orchestrator/src/native_fg_ffx_vulkan.h",

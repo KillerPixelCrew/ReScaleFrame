@@ -11,8 +11,7 @@ use std::ffi::{CStr, c_char, c_void};
 
 const INIT_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_device_proc(
+pub(crate) unsafe fn rsf_core_vkfg_device_proc(
     lookup: unsafe extern "C" fn(
         rsf_vk_get_proc,
         *mut c_void,
@@ -35,8 +34,7 @@ unsafe extern "C" fn rsf_core_vkfg_device_proc(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_graphics_submit(
+pub(crate) unsafe fn rsf_core_vkfg_graphics_submit(
     setup: &rsf_fgvk_setup,
     count: u32,
     submits: *const vk::SubmitInfo<'_>,
@@ -48,8 +46,7 @@ unsafe extern "C" fn rsf_core_vkfg_graphics_submit(
     vk::Result::from_raw(unsafe { submit(setup.queue_user, count, submits.cast(), fence.as_raw()) })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_drain(
+pub(crate) unsafe fn rsf_core_vkfg_drain(
     setup: &rsf_fgvk_setup,
     wait_for_presents: Callback,
     user: *mut c_void,
@@ -129,9 +126,10 @@ unsafe extern "C" fn rsf_core_latencyvk_wsi_call(
     unsafe { rsf_core_slvk_without_dlssg(scope, callback, user) }
 }
 
-type Callback = unsafe extern "C" fn(*mut c_void) -> i32;
-type Scope = unsafe extern "C" fn(Callback, *mut c_void) -> i32;
-type QueuePresent = unsafe extern "C" fn(rsf_vk_function, *mut c_void, *const c_void) -> i32;
+pub(crate) type Callback = unsafe extern "C" fn(*mut c_void) -> i32;
+pub(crate) type Scope = unsafe extern "C" fn(Callback, *mut c_void) -> i32;
+pub(crate) type QueuePresent =
+    unsafe extern "C" fn(rsf_vk_function, *mut c_void, *const c_void) -> i32;
 
 // Both native scopes are synchronous and invoke the borrowed closure at most once.
 unsafe fn scoped<F: FnMut() -> vk::Result>(scope: Scope, mut invoke: F) -> vk::Result {
@@ -141,8 +139,7 @@ unsafe fn scoped<F: FnMut() -> vk::Result>(scope: Scope, mut invoke: F) -> vk::R
     vk::Result::from_raw(unsafe { scope(call::<F>, (&mut invoke as *mut F).cast()) })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_wsi_create(
+pub(crate) unsafe fn rsf_core_vkfg_wsi_create(
     without_fg: Scope,
     create: vk::PFN_vkCreateSwapchainKHR,
     device: vk::Device,
@@ -154,8 +151,7 @@ unsafe extern "C" fn rsf_core_vkfg_wsi_create(
     unsafe { scoped(without_fg, || create(device, info, allocator, chain)) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_wsi_destroy(
+pub(crate) unsafe fn rsf_core_vkfg_wsi_destroy(
     without_fg: Scope,
     destroy: vk::PFN_vkDestroySwapchainKHR,
     device: vk::Device,
@@ -170,8 +166,7 @@ unsafe extern "C" fn rsf_core_vkfg_wsi_destroy(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_wsi_acquire(
+pub(crate) unsafe fn rsf_core_vkfg_wsi_acquire(
     without_fg: Scope,
     synchronized: Scope,
     acquire: vk::PFN_vkAcquireNextImageKHR,
@@ -194,8 +189,7 @@ unsafe extern "C" fn rsf_core_vkfg_wsi_acquire(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_wsi_images(
+pub(crate) unsafe fn rsf_core_vkfg_wsi_images(
     without_fg: Scope,
     synchronized: Scope,
     images: vk::PFN_vkGetSwapchainImagesKHR,
@@ -211,8 +205,7 @@ unsafe extern "C" fn rsf_core_vkfg_wsi_images(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkfg_wsi_present(
+pub(crate) unsafe fn rsf_core_vkfg_wsi_present(
     without_fg: Scope,
     synchronized_present: QueuePresent,
     present: vk::PFN_vkQueuePresentKHR,

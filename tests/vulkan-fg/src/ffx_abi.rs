@@ -341,6 +341,72 @@ const _: () = {
 pub struct rsf_ffxgvk {
     _unused: [u8; 0],
 }
+pub type rsf_ffxgvk_scope = ::core::option::Option<
+    unsafe extern "C" fn(
+        callback: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> i32,
+        >,
+        user: *mut ::core::ffi::c_void,
+    ) -> i32,
+>;
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_ffxgvk_host {
+    pub load:
+        ::core::option::Option<unsafe extern "C" fn(path: *const u16) -> *mut ::core::ffi::c_void>,
+    pub unload: ::core::option::Option<unsafe extern "C" fn(module: *mut ::core::ffi::c_void)>,
+    pub symbol: ::core::option::Option<
+        unsafe extern "C" fn(
+            module: *mut ::core::ffi::c_void,
+            name: *const ::core::ffi::c_char,
+        ) -> rsf_vk_function,
+    >,
+    pub resolve: ::core::option::Option<
+        unsafe extern "C" fn(
+            resolve: rsf_vk_get_proc,
+            object: *mut ::core::ffi::c_void,
+            name: *const ::core::ffi::c_char,
+            out: *mut rsf_vk_function,
+        ) -> i32,
+    >,
+    pub memory_properties: ::core::option::Option<
+        unsafe extern "C" fn(
+            query: rsf_vk_function,
+            physical_device: *mut ::core::ffi::c_void,
+            properties: *mut ::core::ffi::c_void,
+        ) -> i32,
+    >,
+    pub without_dlssg: rsf_ffxgvk_scope,
+    pub wsi_call: rsf_ffxgvk_scope,
+    pub queue_present: ::core::option::Option<
+        unsafe extern "C" fn(
+            present: rsf_vk_function,
+            queue: *mut ::core::ffi::c_void,
+            info: *const ::core::ffi::c_void,
+        ) -> i32,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_ffxgvk_host"][::core::mem::size_of::<rsf_ffxgvk_host>() - 64usize];
+    ["Alignment of rsf_ffxgvk_host"][::core::mem::align_of::<rsf_ffxgvk_host>() - 8usize];
+    ["Offset of field: rsf_ffxgvk_host::load"]
+        [::core::mem::offset_of!(rsf_ffxgvk_host, load) - 0usize];
+    ["Offset of field: rsf_ffxgvk_host::unload"]
+        [::core::mem::offset_of!(rsf_ffxgvk_host, unload) - 8usize];
+    ["Offset of field: rsf_ffxgvk_host::symbol"]
+        [::core::mem::offset_of!(rsf_ffxgvk_host, symbol) - 16usize];
+    ["Offset of field: rsf_ffxgvk_host::resolve"]
+        [::core::mem::offset_of!(rsf_ffxgvk_host, resolve) - 24usize];
+    ["Offset of field: rsf_ffxgvk_host::memory_properties"]
+        [::core::mem::offset_of!(rsf_ffxgvk_host, memory_properties) - 32usize];
+    ["Offset of field: rsf_ffxgvk_host::without_dlssg"]
+        [::core::mem::offset_of!(rsf_ffxgvk_host, without_dlssg) - 40usize];
+    ["Offset of field: rsf_ffxgvk_host::wsi_call"]
+        [::core::mem::offset_of!(rsf_ffxgvk_host, wsi_call) - 48usize];
+    ["Offset of field: rsf_ffxgvk_host::queue_present"]
+        [::core::mem::offset_of!(rsf_ffxgvk_host, queue_present) - 56usize];
+};
 unsafe extern "C" {
     pub fn rsf_ffxgvk_create(
         arg1: *const rsf_fgvk_setup,
@@ -408,6 +474,38 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn rsf_ffxgvk_destroy(arg1: *mut rsf_ffxgvk) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_ffxgvk_guard_resolve(
+        resolve: rsf_vk_get_proc,
+        object: *mut ::core::ffi::c_void,
+        name: *const ::core::ffi::c_char,
+        out: *mut rsf_vk_function,
+    ) -> i32;
+}
+unsafe extern "C" {
+    pub fn rsf_ffxgvk_guard_memory(
+        query: rsf_vk_function,
+        physical_device: *mut ::core::ffi::c_void,
+        properties: *mut ::core::ffi::c_void,
+    ) -> i32;
+}
+unsafe extern "C" {
+    pub fn rsf_core_ffxgvk_create_sdk(
+        arg1: *const rsf_ffxgvk_host,
+        arg2: *const rsf_fgvk_setup,
+        arg3: *mut *mut rsf_ffxgvk,
+        chain: *mut u64,
+    ) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_core_ffxgvk_wsi_borrow(
+        device: *const ::core::ffi::c_void,
+        match_device: u32,
+    ) -> *mut ::core::ffi::c_void;
+}
+unsafe extern "C" {
+    pub fn rsf_core_ffxgvk_wsi_return();
 }
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
@@ -538,6 +636,35 @@ const _: () = {
     ["Offset of field: rsf_vkfg_platform::submit_fence"]
         [::core::mem::offset_of!(rsf_vkfg_platform, submit_fence) - 104usize];
 };
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_vkfg_device {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct VkPhysicalDeviceMemoryProperties {
+    _unused: [u8; 0],
+}
+unsafe extern "C" {
+    pub static rsf_core_vkfg_platform: rsf_vkfg_platform;
+}
+unsafe extern "C" {
+    pub fn rsf_core_vkfg_load_device(
+        arg1: *const rsf_srvk_setup,
+        arg2: *const rsf_fgvk_setup,
+        with_view: bool,
+    ) -> *mut rsf_vkfg_device;
+}
+unsafe extern "C" {
+    pub fn rsf_core_vkfg_device_destroy(arg1: *mut rsf_vkfg_device);
+}
+unsafe extern "C" {
+    pub fn rsf_core_vkfg_device_memory(
+        arg1: *mut rsf_vkfg_device,
+        arg2: *const VkPhysicalDeviceMemoryProperties,
+    );
+}
 unsafe extern "C" {
     pub fn rsf_core_vkfg_ensure_image(
         arg1: *const rsf_vkfg_platform,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Handle, INIT_FAILED, OK, Setup};
+use super::{Handle, Host, INIT_FAILED, OK, Setup};
 use crate::sdk_module::FFX_CONTEXT_EXPORTS;
 use crate::vulkan_sr_abi::rsf_vk_function;
 use std::ffi::{CStr, c_char};
@@ -7,7 +7,7 @@ use std::ptr;
 
 const MISSING_ENTRY_POINT: i32 = -5;
 
-// The native binder gives these entries their SDK function pointer types.
+// The SDK leaf's binders give these entries their function pointer types.
 const SDK_ENTRY_COUNT: usize = 1 + FFX_CONTEXT_EXPORTS.len();
 const DEVICE_NAMES: [&CStr; 3] = [
     c"vkCmdPipelineBarrier",
@@ -22,25 +22,26 @@ const WSI_NAMES: [&CStr; 5] = [
     c"vkDestroySwapchainKHR",
 ];
 
-type CoreEntries = [rsf_vk_function; SDK_ENTRY_COUNT + DEVICE_NAMES.len()];
-type WsiEntries = [rsf_vk_function; 1 + WSI_NAMES.len()];
+pub(super) type CoreEntries = [rsf_vk_function; SDK_ENTRY_COUNT + DEVICE_NAMES.len()];
+pub(super) type WsiEntries = [rsf_vk_function; 1 + WSI_NAMES.len()];
 
-#[repr(C)]
-struct Platform {
-    allocate: unsafe extern "C" fn(*const Setup, u32, u32) -> Handle,
-    close: unsafe extern "C" fn(Handle),
-    symbol: unsafe extern "C" fn(Handle, *const c_char) -> rsf_vk_function,
-    device_proc: unsafe extern "C" fn(Handle, *const c_char, u32, &mut rsf_vk_function) -> i32,
-    instance_proc: unsafe extern "C" fn(Handle, *const c_char, &mut rsf_vk_function) -> i32,
-    bind_core: unsafe extern "C" fn(Handle, &CoreEntries),
-    read_memory: unsafe extern "C" fn(Handle, rsf_vk_function) -> i32,
-    load_resources: unsafe extern "C" fn(Handle) -> i32,
-    initialize_capture: unsafe extern "C" fn(Handle, &mut Handle) -> i32,
-    bind_wsi: unsafe extern "C" fn(Handle, &WsiEntries),
+/// Startup steps of the SDK leaf, in the order `open` runs them.
+pub(super) struct Platform {
+    pub(super) allocate: unsafe extern "C" fn(*const Setup, *const Host, u32, u32) -> Handle,
+    pub(super) close: unsafe extern "C" fn(Handle),
+    pub(super) symbol: unsafe extern "C" fn(Handle, *const c_char) -> rsf_vk_function,
+    pub(super) device_proc:
+        unsafe extern "C" fn(Handle, *const c_char, u32, &mut rsf_vk_function) -> i32,
+    pub(super) instance_proc:
+        unsafe extern "C" fn(Handle, *const c_char, &mut rsf_vk_function) -> i32,
+    pub(super) bind_core: unsafe extern "C" fn(Handle, &CoreEntries),
+    pub(super) read_memory: unsafe extern "C" fn(Handle, rsf_vk_function) -> i32,
+    pub(super) load_resources: unsafe extern "C" fn(Handle) -> i32,
+    pub(super) initialize_capture: unsafe extern "C" fn(Handle, &mut Handle) -> i32,
+    pub(super) bind_wsi: unsafe extern "C" fn(Handle, &WsiEntries),
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 10 * size_of::<Handle>());
     assert!(size_of::<CoreEntries>() == 8 * size_of::<Handle>());
     assert!(size_of::<WsiEntries>() == 6 * size_of::<Handle>());
 };
@@ -99,17 +100,20 @@ impl Platform {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_ffxgvk_open(
+/// Allocates a leaf, binds its SDK, device and WSI entries, and closes the
+/// unpublished leaf again when any step fails.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn open(
     platform: &Platform,
     setup: *const Setup,
+    host: *const Host,
     module: Handle,
     width: u32,
     height: u32,
     out: &mut Handle,
     resources: &mut Handle,
 ) -> i32 {
-    let native = unsafe { (platform.allocate)(setup, width, height) };
+    let native = unsafe { (platform.allocate)(setup, host, width, height) };
     if native.is_null() {
         return INIT_FAILED;
     }
@@ -141,7 +145,7 @@ mod tests {
 
     unsafe extern "C" fn entry() {}
 
-    unsafe extern "C" fn allocate(_: *const Setup, _: u32, _: u32) -> Handle {
+    unsafe extern "C" fn allocate(_: *const Setup, _: *const Host, _: u32, _: u32) -> Handle {
         record("allocate");
         ptr::without_provenance_mut(1)
     }
@@ -223,8 +227,9 @@ mod tests {
         };
         let (mut native, mut resources) = (ptr::null_mut(), ptr::null_mut());
         assert_eq!(
-            rsf_core_ffxgvk_open(
+            open(
                 &platform,
+                ptr::null(),
                 ptr::null(),
                 ptr::null_mut(),
                 640,

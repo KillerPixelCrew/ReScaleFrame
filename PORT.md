@@ -1414,8 +1414,8 @@ Port common frame-generation resources, transfers, submission and swapchain life
 
 - [x] [runtime/orchestrator/include/rescaleframe/native_fg_vulkan.h](runtime/orchestrator/include/rescaleframe/native_fg_vulkan.h)
 - [x] [runtime/orchestrator/src/native_fg_ffx_vulkan.h](runtime/orchestrator/src/native_fg_ffx_vulkan.h)
-- [ ] [runtime/orchestrator/src/native_fg_vulkan.cpp](runtime/orchestrator/src/native_fg_vulkan.cpp)
-- [ ] [runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp](runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp)
+- [x] [runtime/orchestrator/src/native_fg_vulkan.cpp](runtime/orchestrator/src/native_fg_vulkan.cpp) (SDK leaf in `vulkan_ffx_fg/sdk.rs`; the C11 leaf `native_fg_vulkan.c` keeps the `RSF_HAVE_FFX_VK` gate, the provider symbols and the resolver exception guards)
+- [x] [runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp](runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp) (C11 provider table `native_fg_vulkan_dispatch.c`, kept native for the CMake provider gates and link-time fixture providers)
 - [x] [runtime/orchestrator/src/native_fg_vulkan_platform.h](runtime/orchestrator/src/native_fg_vulkan_platform.h)
 - [x] [runtime/orchestrator/src/vulkan_fg_copy.h](runtime/orchestrator/src/vulkan_fg_copy.h)
 - [x] [runtime/orchestrator/src/vulkan_fg_frames.h](runtime/orchestrator/src/vulkan_fg_frames.h)
@@ -1425,8 +1425,8 @@ Port common frame-generation resources, transfers, submission and swapchain life
 **Fixtures (8)**
 
 - [x] [tests/vulkan-fg/dispatch_fixture.cpp](tests/vulkan-fg/dispatch_fixture.cpp) (fake provider callbacks)
-- [ ] [tests/vulkan-fg/ffx_fixture.cpp](tests/vulkan-fg/ffx_fixture.cpp) (SDK records and Vulkan callbacks)
-- [ ] [tests/ffx_vulkan_wsi_dispatch.cpp](tests/ffx_vulkan_wsi_dispatch.cpp)
+- [x] [tests/vulkan-fg/ffx_fixture.cpp](tests/vulkan-fg/ffx_fixture.cpp) (SDK records and Vulkan callbacks; fake SDK module in `src/ffx_sdk.rs`, C11 launcher `ffx_fixture.c`)
+- [x] [tests/ffx_vulkan_wsi_dispatch.cpp](tests/ffx_vulkan_wsi_dispatch.cpp) (C11 `ffx_vulkan_wsi_dispatch.c` over the C11 `wsi-dispatch.h` section)
 - [x] [tests/native_ffx_vulkan_harness.h](tests/native_ffx_vulkan_harness.h)
 - [x] [tests/native_ffx_vulkan_reset.cpp](tests/native_ffx_vulkan_reset.cpp)
 - [x] [tests/native_ffx_vulkan_submission.cpp](tests/native_ffx_vulkan_submission.cpp)

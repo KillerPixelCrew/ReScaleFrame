@@ -23,8 +23,7 @@ extern "C" fn rsf_fixture_wsi_route_state() -> *mut rsf_wsi_route_fixture_state 
     route()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "system" fn rsf_fixture_ffx_images(
+pub(crate) unsafe extern "system" fn rsf_fixture_ffx_images(
     _: vk::Device,
     chain: vk::SwapchainKHR,
     count: *mut u32,
@@ -53,8 +52,7 @@ unsafe extern "system" fn rsf_fixture_ffx_images(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "system" fn rsf_fixture_ffx_acquire(
+pub(crate) unsafe extern "system" fn rsf_fixture_ffx_acquire(
     _: vk::Device,
     _: vk::SwapchainKHR,
     _: u64,
@@ -66,8 +64,7 @@ unsafe extern "system" fn rsf_fixture_ffx_acquire(
     vk::Result::SUCCESS
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_ffx_present_count(_: vk::SwapchainKHR) -> u64 {
+pub(crate) extern "C" fn rsf_fixture_ffx_present_count(_: vk::SwapchainKHR) -> u64 {
     u64::from(unsafe { (*state()).present_calls })
 }
 

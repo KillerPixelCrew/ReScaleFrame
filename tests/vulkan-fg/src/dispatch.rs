@@ -86,7 +86,7 @@ extern "C" fn rsf_fixture_vulkan_dispatch_run(fsr4: bool, xess: bool) -> i32 {
     }
     unsafe {
         let mut identity = rsf_frame_record {
-            struct_size: offset_of!(rsf_frame_record, phase) as u32,
+            struct_size: std::mem::offset_of!(rsf_frame_record, phase) as u32,
             ..std::mem::zeroed()
         };
         identity.abi_version = RSF_GAME_FRAME_ABI_VERSION;

@@ -77,6 +77,35 @@ pub type ffxQueryDescHeader = ffxApiHeader;
 pub type ffxDispatchDescHeader = ffxApiHeader;
 pub type ffxApiMessage =
     ::core::option::Option<unsafe extern "C" fn(type_: u32, message: *const u16)>;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct ffxQueryGetProviderVersion {
+    pub header: ffxQueryDescHeader,
+    pub versionId: u64,
+    pub versionName: *const ::core::ffi::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of ffxQueryGetProviderVersion"]
+        [::core::mem::size_of::<ffxQueryGetProviderVersion>() - 32usize];
+    ["Alignment of ffxQueryGetProviderVersion"]
+        [::core::mem::align_of::<ffxQueryGetProviderVersion>() - 8usize];
+    ["Offset of field: ffxQueryGetProviderVersion::header"]
+        [::core::mem::offset_of!(ffxQueryGetProviderVersion, header) - 0usize];
+    ["Offset of field: ffxQueryGetProviderVersion::versionId"]
+        [::core::mem::offset_of!(ffxQueryGetProviderVersion, versionId) - 16usize];
+    ["Offset of field: ffxQueryGetProviderVersion::versionName"]
+        [::core::mem::offset_of!(ffxQueryGetProviderVersion, versionName) - 24usize];
+};
+impl Default for ffxQueryGetProviderVersion {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 pub type ffxAlloc = ::core::option::Option<
     unsafe extern "C" fn(
         pUserData: *mut ::core::ffi::c_void,
@@ -594,6 +623,18 @@ impl Default for ffxQueryDescUpscaleGetRenderResolutionFromQualityMode {
         }
     }
 }
+pub const FFX_FRAMEGENERATION_ENABLE_ASYNC_WORKLOAD_SUPPORT:
+    FfxApiCreateContextFramegenerationFlags = 1;
+pub const FFX_FRAMEGENERATION_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS:
+    FfxApiCreateContextFramegenerationFlags = 2;
+pub const FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION:
+    FfxApiCreateContextFramegenerationFlags = 4;
+pub const FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED: FfxApiCreateContextFramegenerationFlags = 8;
+pub const FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE: FfxApiCreateContextFramegenerationFlags = 16;
+pub const FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE: FfxApiCreateContextFramegenerationFlags =
+    32;
+pub const FFX_FRAMEGENERATION_ENABLE_DEBUG_CHECKING: FfxApiCreateContextFramegenerationFlags = 64;
+pub type FfxApiCreateContextFramegenerationFlags = ::core::ffi::c_int;
 pub const FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES: FfxApiDispatchFramegenerationFlags = 1;
 pub const FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_RESET_INDICATORS: FfxApiDispatchFramegenerationFlags =
     2;
