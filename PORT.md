@@ -1809,10 +1809,10 @@ Finish the shader container and stage transforms, keeping emitted bytecode and s
 
 **Port files (4)**
 
-- [ ] [games/ac7/src/shader_bytes.h](games/ac7/src/shader_bytes.h)
+- [x] [games/ac7/src/shader_bytes.h](games/ac7/src/shader_bytes.h)
 - [x] [games/ac7/src/velocity_container.h](games/ac7/src/velocity_container.h)
-- [ ] [games/ac7/src/velocity_shader.cpp](games/ac7/src/velocity_shader.cpp)
-- [ ] [games/ac7/src/velocity_shader.h](games/ac7/src/velocity_shader.h)
+- [x] [games/ac7/src/velocity_shader.cpp](games/ac7/src/velocity_shader.cpp)
+- [x] [games/ac7/src/velocity_shader.h](games/ac7/src/velocity_shader.h)
 
 **Fixtures (1)**
 
@@ -1847,13 +1847,13 @@ Port the velocity pass and consolidate variant publication, frame history and st
 
 **Port files (7)**
 
-- [ ] [games/ac7/include/rescaleframe/ac7_velocity_pass.h](games/ac7/include/rescaleframe/ac7_velocity_pass.h)
-- [ ] [games/ac7/src/velocity_commit.h](games/ac7/src/velocity_commit.h)
-- [ ] [games/ac7/src/velocity_history.h](games/ac7/src/velocity_history.h)
+- [x] [games/ac7/include/rescaleframe/ac7_velocity_pass.h](games/ac7/include/rescaleframe/ac7_velocity_pass.h)
+- [x] [games/ac7/src/velocity_commit.h](games/ac7/src/velocity_commit.h)
+- [x] [games/ac7/src/velocity_history.h](games/ac7/src/velocity_history.h)
 - [ ] [games/ac7/src/velocity_pass.cpp](games/ac7/src/velocity_pass.cpp)
-- [ ] [games/ac7/src/velocity_pass_cache.h](games/ac7/src/velocity_pass_cache.h)
-- [ ] [games/ac7/src/velocity_renderer.h](games/ac7/src/velocity_renderer.h)
-- [ ] [games/ac7/src/velocity_stream.h](games/ac7/src/velocity_stream.h)
+- [x] [games/ac7/src/velocity_pass_cache.h](games/ac7/src/velocity_pass_cache.h)
+- [x] [games/ac7/src/velocity_renderer.h](games/ac7/src/velocity_renderer.h)
+- [x] [games/ac7/src/velocity_stream.h](games/ac7/src/velocity_stream.h)
 
 **Rust review findings (7)**
 
@@ -2830,8 +2830,8 @@ Port settings, host services, routing and window admission, including safe subcl
 **Port files (3)**
 
 - [ ] [integrations/unity/native/package.cpp](integrations/unity/native/package.cpp)
-- [ ] [integrations/unity/native/package.h](integrations/unity/native/package.h)
-- [ ] [integrations/unity/native/package_state.h](integrations/unity/native/package_state.h)
+- [x] [integrations/unity/native/package.h](integrations/unity/native/package.h)
+- [x] [integrations/unity/native/package_state.h](integrations/unity/native/package_state.h)
 
 **Rust review findings (9)**
 
@@ -2845,7 +2845,7 @@ Port settings, host services, routing and window admission, including safe subcl
 
 - [x] **Altitude | Medium | Tie Unity's cached Auto FG decision to the graphics device.** request_generation keeps the first nonzero adapter-derived backend for the entire process. A successful device shutdown and subsequent initialization in routing.rs:161-175 reloads the graphics bridge without invalidating that value, so Auto can request the previous adapter's provider. Let the Runtime resolve Auto for the live device or invalidate a device-keyed decision when the Unity device is retired. [games/unity-mono/src/package_state/presentation.rs:183](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/unity-mono/src/package_state/presentation.rs#L183)
 
-- [ ] **Duplication | Medium | Give Win32 input message classification a single implementation.** The Unity package at games/unity-mono/src/package_state/services.rs:389, Unity Mono at games/unity-mono/src/bridge.cpp:266, RDR2 at games/rdr2/src/native_platform.cpp:111 and AC7 at games/ac7/src/native_renderer.cpp:297 repeat the same keyboard/mouse ranges and raw-input device mapping. The package uses a raw-type leaf while the three native callbacks call GetRawInputData directly. They then attach different source-frame and lifetime facts to the same input kind. Put the Win32 message-to-GameSDK-kind operation in shared Windows support, let the package call it through its native leaf, and keep callback admission and frame attribution at each integration. [games/unity-mono/src/package_state/services.rs:389](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/unity-mono/src/package_state/services.rs#L389)
+- [x] **Duplication | Medium | Give Win32 input message classification a single implementation.** The Unity package at games/unity-mono/src/package_state/services.rs:389, Unity Mono at games/unity-mono/src/bridge.cpp:266, RDR2 at games/rdr2/src/native_platform.cpp:111 and AC7 at games/ac7/src/native_renderer.cpp:297 repeat the same keyboard/mouse ranges and raw-input device mapping. The package uses a raw-type leaf while the three native callbacks call GetRawInputData directly. They then attach different source-frame and lifetime facts to the same input kind. Put the Win32 message-to-GameSDK-kind operation in shared Windows support, let the package call it through its native leaf, and keep callback admission and frame attribution at each integration. [games/unity-mono/src/package_state/services.rs:389](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/unity-mono/src/package_state/services.rs#L389)
 
 - [x] **Boundaries | Medium | Retire Unity SR contexts when their camera disappears.** ReScaleFrameUpscaler.cs:104 sends the camera entity ID as the view key. Views::entry appends each new ID, while take drains the entire table only on global reconfiguration or session retirement. A scene that repeatedly creates and destroys cameras retains every old SR context and its GPU resources until one of those global events. Have the integration report when a camera is removed, or age out inactive views, and have the Runtime release each context once its last submission retires. Cover camera churn with other cameras still rendering. [games/unity-mono/src/package_views.rs:84](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/unity-mono/src/package_views.rs#L84)
 

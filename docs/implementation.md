@@ -7976,3 +7976,9 @@ D3D12 FidelityFX and XeSS SR provider selection uses Rust with C11 feature
 selection entries. The Vulkan callers invoke the shared Rust version parser
 directly. Native FG SDK callbacks and the Vulkan shared_ptr lease stay in
 C++. Strict C11 syntax passed with both provider switches on and off.
+
+Unity package routing and device-event policy now run in Rust. Its native SDK
+registration, COM handoff and exception guards remain. Unity, AC7 and RDR2
+use the shared Win32 message classifier while retaining their own attribution
+and callback admission. AC7 velocity declarations were syntax-checked after
+the Rust bytecode and replay port. Build and runtime validation remain pending.
