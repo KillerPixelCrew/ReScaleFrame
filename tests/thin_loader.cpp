@@ -56,10 +56,12 @@ void pe_test(const wchar_t* path)
     for (; imports->Name; ++imports) {
         const char* name = reinterpret_cast<const char*>(base + imports->Name);
         const bool allowed = _stricmp(name, "kernel32.dll") == 0 ||
+            _stricmp(name, "ntdll.dll") == 0 ||
+            _stricmp(name, "api-ms-win-core-synch-l1-2-0.dll") == 0 ||
             _stricmp(name, "vcruntime140.dll") == 0 || _stricmp(name, "vcruntime140d.dll") == 0 ||
             _stricmp(name, "vcruntime140_1.dll") == 0 || _stricmp(name, "vcruntime140_1d.dll") == 0 ||
             _stricmp(name, "msvcp140.dll") == 0 || _stricmp(name, "msvcp140d.dll") == 0 ||
-            _stricmp(name, "ucrtbased.dll") == 0 ||
+            _stricmp(name, "ucrtbased.dll") == 0 || _stricmp(name, "msvcrt.dll") == 0 ||
             _strnicmp(name, "api-ms-win-crt-", 15) == 0;
         if (!allowed) std::fprintf(stderr, "unexpected import: %s\n", name);
         require(allowed, "only OS/CRT imports; no runtime, graphics, or adapter dependency");

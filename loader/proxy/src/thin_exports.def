@@ -1,8 +1,8 @@
 LIBRARY dinput8
 EXPORTS
-    DirectInput8Create @1
-    DllCanUnloadNow @2 PRIVATE
-    DllGetClassObject @3 PRIVATE
-    DllRegisterServer @4 PRIVATE
-    DllUnregisterServer @5 PRIVATE
-    GetdfDIJoystick @6
+    DirectInput8Create=rsf_thin_create @1
+    DllCanUnloadNow=rsf_thin_can_unload @2 PRIVATE
+    DllGetClassObject=rsf_thin_get_class_object @3 PRIVATE
+    DllRegisterServer=rsf_thin_register_server @4 PRIVATE
+    DllUnregisterServer=rsf_thin_unregister_server @5 PRIVATE
+    GetdfDIJoystick=rsf_thin_joystick_format @6

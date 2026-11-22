@@ -22,11 +22,9 @@ set_target_properties(rsf_proxy_dinput8 PROPERTIES OUTPUT_NAME "dinput8" PREFIX 
 add_dependencies(rsf_proxy_dinput8 rsf_game_ac7)
 if(MSVC)
     add_library(rsf_proxy_plugin SHARED
-        src/plugin_carrier.cpp src/xinput_forwarding.cpp src/xinput_forwarders.asm src/wingman_exports.def)
-    target_include_directories(rsf_proxy_plugin PRIVATE ../../runtime/orchestrator/include)
+        src/plugin_carrier.c src/xinput_forwarders.asm src/wingman_exports.def)
     target_link_libraries(rsf_proxy_plugin PRIVATE
-        ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
-    target_compile_definitions(rsf_proxy_plugin PRIVATE _CRT_SECURE_NO_WARNINGS)
+        rsf_loader_rust bcrypt rsf_build_options)
     foreach(config Debug Release RelWithDebInfo MinSizeRel)
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rsf_proxy_plugin.dir/${config}/src")
     endforeach()
@@ -36,7 +34,7 @@ if(MSVC)
         PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugin-carrier/bin/$<CONFIG>")
 
     enable_language(ASM_MASM)
-    target_sources(rsf_proxy_dinput8 PRIVATE src/shim_loader.cpp src/version_forwarders.asm src/shim_exports.def)
+    target_sources(rsf_proxy_dinput8 PRIVATE src/shim_entry.c src/version_forwarders.asm src/shim_exports.def)
     foreach(config Debug Release RelWithDebInfo MinSizeRel)
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rsf_proxy_dinput8.dir/${config}/src")
     endforeach()
@@ -53,9 +51,9 @@ endif()
 
 if(MSVC)
     add_library(rsf_proxy_wingman SHARED
-        src/wingman_loader.cpp src/xinput_forwarding.cpp src/xinput_forwarders.asm src/wingman_exports.def)
+        src/wingman_loader.cpp src/xinput_forwarders.asm src/wingman_exports.def)
     target_link_libraries(rsf_proxy_wingman PRIVATE
-        rsf_wingman_rust ReScaleFrame::RuntimeCommon rsf_build_options)
+        rsf_wingman_rust rsf_loader_rust ReScaleFrame::RuntimeCommon rsf_build_options)
     target_compile_definitions(rsf_proxy_wingman PRIVATE _CRT_SECURE_NO_WARNINGS)
     foreach(config Debug Release RelWithDebInfo MinSizeRel)
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rsf_proxy_wingman.dir/${config}/src")
@@ -86,16 +84,17 @@ add_dependencies(rsf_proxy_ac7 rsf_game_ac7)
 if(MSVC)
     target_sources(rsf_proxy_ac7 PRIVATE src/ac7_exports.def)
     target_link_options(rsf_proxy_ac7 PRIVATE "/MAP:$<TARGET_FILE_DIR:rsf_proxy_ac7>/dinput8.map")
+    target_link_libraries(rsf_proxy_dinput8 PRIVATE rsf_loader_rust)
 endif()
 
 # Standalone DirectInput carrier: OS forwarding and configured DLL entry only.
 # Do not inherit the combined proxy's object libraries or dependency graph.
 add_library(rsf_proxy_thin_dinput8 SHARED
-    src/thin_loader.cpp src/thin_startup.cpp src/thin_config.cpp src/thin_exports.def)
-target_link_libraries(rsf_proxy_thin_dinput8 PRIVATE rsf_build_options)
+    src/thin_entry.c src/thin_exports.def)
+target_link_libraries(rsf_proxy_thin_dinput8 PRIVATE rsf_loader_rust rsf_build_options)
 if(MSVC)
     # COM exports intentionally retain the system DirectInput ordinal contract.
-    target_link_options(rsf_proxy_thin_dinput8 PRIVATE /IGNORE:4222 "/PDBALTPATH:%_PDB%")
+    target_link_options(rsf_proxy_thin_dinput8 PRIVATE /INCREMENTAL:NO /OPT:REF /IGNORE:4222 "/PDBALTPATH:%_PDB%")
 endif()
 set_target_properties(rsf_proxy_thin_dinput8 PROPERTIES OUTPUT_NAME "dinput8" PREFIX ""
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/thin/bin/$<CONFIG>"
