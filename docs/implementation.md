@@ -224,6 +224,11 @@ retires their registration. Guarded reads, MinHook calls and engine
 trampolines stay native. [Godot engine module](../integrations/godot/NATIVE.md) ·
 [AC7 F9 roots](research/rust-ac7-motion-root-admission.md)
 
+Godot's SCons Rust object now assembles driver packets, matches Vulkan submission
+receipts, chooses graph pool reuse and owns the motion decoder RIDs. Engine
+resource leases, class registration and driver calls remain in Godot C++.
+Source checks only. [Engine ownership and evidence](research/rust-godot-engine-e01.md)
+
 RDR2's pending and ready readbacks and retained final draw live in Rust.
 The native submission and Map leaves keep the exact list, generation,
 queue, fence and value receipt. The pending owner caps simultaneous

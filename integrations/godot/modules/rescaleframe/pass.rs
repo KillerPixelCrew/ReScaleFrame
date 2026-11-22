@@ -4,13 +4,13 @@
 //!
 //! The C++ side keeps every Godot read, the camera matrix math, the previous camera and
 //! projection, motion resolve, native texture handles, the Vulkan image descriptions and the
-//! driver callback. It copies a `Record` into the public `rsf_game_render_pass` and sets the
-//! native resource pointers per route. Everything here runs on Godot's rendering server thread.
+//! driver callback's engine calls. Everything here runs on Godot's rendering server thread.
 
 use core::cell::UnsafeCell;
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::host;
+use crate::packet_abi::rsf_game_render_pass;
 use crate::primary::{self, Admission, DRIVER_VULKAN, History};
 
 use crate::frame_abi::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};
@@ -18,7 +18,7 @@ use crate::frame_event_abi::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
 };
 
-/// The non-pointer pass fields, private to the module. The C++ copies them into the public pass.
+/// The non-pointer pass fields, private to the module.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Record {
@@ -26,12 +26,12 @@ pub struct Record {
     source_frame_id: u64,
     /// The view, history and viewport key: the primary render target.
     key: u64,
-    role: u32,
+    pub(crate) role: u32,
     flags: u32,
     resource_generation: u32,
     screen: u32,
     /// `primary.h` driver of this route.
-    driver: u32,
+    pub(crate) driver: u32,
     /// The SR depth input is the motion pass's R32 copy rather than Godot's depth texture.
     normalized_depth: u32,
     motion_to_uv: [f32; 2],
@@ -40,6 +40,30 @@ pub struct Record {
     previous_clip_to_clip: [f32; 16],
     camera: rsf_camera_frame,
     reset_generation: u64,
+}
+
+impl Record {
+    pub(crate) fn public_pass(&self) -> rsf_game_render_pass {
+        rsf_game_render_pass {
+            struct_size: size_of::<rsf_game_render_pass>() as u32,
+            role: self.role,
+            session_id: self.session_id,
+            source_frame_id: self.source_frame_id,
+            native_frame: self.source_frame_id,
+            view_key: self.key,
+            history_key: self.key,
+            viewport_key: self.key,
+            flags: self.flags,
+            resource_generation: self.resource_generation,
+            screen: self.screen,
+            motion_to_uv: self.motion_to_uv,
+            motion_camera_included: self.motion_camera_included,
+            camera_valid: self.camera_valid,
+            camera: self.camera,
+            previous_clip_to_clip: self.previous_clip_to_clip,
+            ..Default::default()
+        }
+    }
 }
 
 /// Engine facts read by the SR hook after admission and valid textures.

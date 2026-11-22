@@ -35,19 +35,23 @@ void present(void *swapchain);
 void render_size(RID target, const Vector2i &output, Vector2i &internal);
 void camera_changed(RID target);
 RID resolve_motion(const Ref<RenderSceneBuffersRD> &buffers, RID depth, RID motion,
-    const Projection &to_previous, const Vector2 &jitter);
+    const Projection &to_previous, const Vector2 &jitter, bool normalize_depth, RID &resolved_depth);
 void release_motion();
 bool vulkan_enabled();
 uint64_t vk_resolver();
 bool vk_execution_supported();
 bool vk_execution(uint32_t role, uint64_t session, uint64_t source, uint64_t window, uint32_t begin);
 
+struct ExecutionReceipt {
+    uint64_t queue, fence, session, source;
+    uint32_t submitted;
+};
+
 // One RenderingDevice::_execute_frame call. A successful final submit owns the receipt
 // across either the same driver call or Godot's separate presentation queue call.
 class VulkanExecutionScope {
     VulkanExecutionScope *previous;
-    uint64_t queue, fence, session = 0, source = 0;
-    bool submitted = false;
+    ExecutionReceipt receipt{};
 
 public:
     VulkanExecutionScope(uint64_t queue, uint64_t fence, bool eligible);

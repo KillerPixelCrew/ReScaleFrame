@@ -5,13 +5,15 @@
 namespace RSFGodot {
 struct GraphCalls {
     void *(*current)(void *scope);
-    int32_t (*prepare)(void *scope, uint64_t *next);
+    uint64_t (*pooled)(void *scope);
+    uint64_t (*allocate)(void *scope);
+    uint32_t (*begin)(void *scope, uint64_t next);
     void (*labels)(void *scope, uint32_t reopen);
     void (*consume)(void *scope, uint64_t next, uint64_t timeline, uint64_t previous_done, uint64_t ready, uint64_t done);
     void *(*continuation)(void *scope);
 };
-static_assert(sizeof(GraphCalls) == 5 * sizeof(void *));
-static_assert(VK_ERROR_INITIALIZATION_FAILED == -3);
+static_assert(sizeof(GraphCalls) == 7 * sizeof(void *));
+static_assert(VK_ERROR_INITIALIZATION_FAILED == -3 && VK_ERROR_OUT_OF_HOST_MEMORY == -1);
 extern "C" int32_t rsf_godot_graph_split(const GraphCalls *calls, void *scope, void *current,
         uint64_t timeline, uint64_t previous_done, uint64_t ready, uint64_t done, void **out);
 
@@ -36,23 +38,32 @@ int32_t GraphScope::split_record(void *user, void *current_commands, uint64_t ti
             uint32_t family;
             return vk->rescaleframe_graph_info(scope.commands, family) ? vk->rescaleframe_begin(scope.commands) : nullptr;
         },
-        [](void *context, uint64_t *out) -> int32_t {
+        [](void *context) -> uint64_t {
+            const auto &pool = static_cast<GraphScope *>(context)->pool;
+            return pool.buffers_used < pool.buffers.size() ? pool.buffers[pool.buffers_used].id : 0;
+        },
+        [](void *context) -> uint64_t {
             auto &scope = *static_cast<GraphScope *>(context);
             auto *vk = static_cast<RenderingDeviceDriverVulkan *>(scope.driver);
             // The engine frame fence owns every pooled buffer and its binary links.
             auto &pool = scope.pool;
-            if (pool.buffers_used >= pool.buffers.size()) {
-                const auto next = vk->command_buffer_create(pool.pool);
-                if (!next) return VK_ERROR_OUT_OF_HOST_MEMORY;
-                const auto semaphore = vk->semaphore_create();
-                if (!semaphore) return VK_ERROR_OUT_OF_HOST_MEMORY;
-                pool.buffers.push_back(next);
-                pool.semaphores.push_back(semaphore);
+            // Godot can free a semaphore on its own. It retires command buffers with the pool.
+            const auto semaphore = vk->semaphore_create();
+            if (!semaphore) return 0;
+            const auto next = vk->command_buffer_create(pool.pool);
+            if (!next) {
+                vk->semaphore_free(semaphore);
+                return 0;
             }
-            const auto next = pool.buffers[pool.buffers_used];
-            if (!vk->command_buffer_begin(next)) return VK_ERROR_INITIALIZATION_FAILED;
-            *out = next.id;
-            return VK_SUCCESS;
+            pool.buffers.push_back(next);
+            pool.semaphores.push_back(semaphore);
+            return next.id;
+        },
+        [](void *context, uint64_t id) -> uint32_t {
+            const auto &scope = *static_cast<GraphScope *>(context);
+            RenderingDeviceDriver::CommandBufferID next;
+            next.id = id;
+            return static_cast<RenderingDeviceDriverVulkan *>(scope.driver)->command_buffer_begin(next);
         },
         [](void *context, uint32_t reopen) {
             auto &scope = *static_cast<GraphScope *>(context);

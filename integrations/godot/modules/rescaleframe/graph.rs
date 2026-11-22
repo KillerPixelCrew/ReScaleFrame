@@ -5,11 +5,14 @@ use core::ffi::c_void;
 use core::ptr;
 
 const INITIALIZATION_FAILED: i32 = -3;
+const OUT_OF_HOST_MEMORY: i32 = -1;
 
 #[repr(C)]
 pub struct GraphCalls {
     current: unsafe extern "C" fn(scope: *mut c_void) -> *mut c_void,
-    prepare: unsafe extern "C" fn(scope: *mut c_void, next: *mut u64) -> i32,
+    pooled: unsafe extern "C" fn(scope: *mut c_void) -> u64,
+    allocate: unsafe extern "C" fn(scope: *mut c_void) -> u64,
+    begin: unsafe extern "C" fn(scope: *mut c_void, next: u64) -> u32,
     labels: unsafe extern "C" fn(scope: *mut c_void, reopen: u32),
     consume: unsafe extern "C" fn(
         scope: *mut c_void,
@@ -53,10 +56,15 @@ pub unsafe extern "C" fn rsf_godot_graph_split(
         return INITIALIZATION_FAILED;
     }
 
-    let mut next = 0;
-    let result = unsafe { (calls.prepare)(scope, &mut next) };
-    if result != 0 {
-        return result;
+    let mut next = unsafe { (calls.pooled)(scope) };
+    if next == 0 {
+        next = unsafe { (calls.allocate)(scope) };
+        if next == 0 {
+            return OUT_OF_HOST_MEMORY;
+        }
+    }
+    if unsafe { (calls.begin)(scope, next) } == 0 {
+        return INITIALIZATION_FAILED;
     }
 
     // After the source is consumed, its continuation belongs to the graph even if the

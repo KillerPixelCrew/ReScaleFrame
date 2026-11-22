@@ -204,7 +204,7 @@ pub extern "C" fn rsf_godot_render_frame_begin(source_frame_id: u64, gameplay: u
 /// `out` must point to writable, aligned storage for one `rsf_godot_render_frame`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_godot_render_frame_read(out: *mut RenderFrame) {
-    let frame = RENDER.frame.load(R);
+    let frame = render_source();
     let value = RenderFrame {
         source_frame_id: frame,
         frame_seconds: f64::from_bits(RENDER.seconds.load(R)),
@@ -212,6 +212,10 @@ pub unsafe extern "C" fn rsf_godot_render_frame_read(out: *mut RenderFrame) {
         sequence_break: (RENDER.last_evaluated.load(R).wrapping_add(1) != frame) as u32,
     };
     unsafe { out.write(value) };
+}
+
+pub(crate) fn render_source() -> u64 {
+    RENDER.frame.load(R)
 }
 
 /// Render thread: the current frame's SR pass was recorded (`primary.rs`).

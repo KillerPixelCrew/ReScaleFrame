@@ -5,6 +5,7 @@
 #include "frame.h"
 #include "graph.h"
 #include "host.h"
+#include "packet.h"
 #include "pass.h"
 #include "primary.h"
 #include "viewport.h"
@@ -28,7 +29,6 @@
 #include "scene/main/window.h"
 #include "servers/display/display_server.h"
 #include <windows.h>
-#include <cstring>
 
 namespace {
 decltype(&rsfg_boot) native_boot = nullptr;
@@ -135,19 +135,6 @@ void matrix(float *out, const Projection &value) {
     for (int row = 0; row < 4; ++row)
         for (int column = 0; column < 4; ++column) out[row * 4 + column] = value.columns[row][column];
 }
-// The public pass from pass.rs's record. The native resource pointers stay null for the caller.
-rsf_game_render_pass pass_from(const rsf_godot_pass_record &record) {
-    rsf_game_render_pass pass{};
-    pass.struct_size = sizeof(pass); pass.role = record.role;
-    pass.session_id = record.session_id; pass.source_frame_id = pass.native_frame = record.source_frame_id;
-    pass.view_key = pass.history_key = pass.viewport_key = record.key;
-    pass.flags = record.flags; pass.resource_generation = record.resource_generation; pass.screen = record.screen;
-    pass.motion_to_uv[0] = record.motion_to_uv[0]; pass.motion_to_uv[1] = record.motion_to_uv[1];
-    pass.motion_camera_included = record.motion_camera_included; pass.camera_valid = record.camera_valid;
-    pass.camera = record.camera;
-    std::memcpy(pass.previous_clip_to_clip, record.previous_clip_to_clip, sizeof(pass.previous_clip_to_clip));
-    return pass;
-}
 String disk_path(const String &value) {
     auto *project_settings = ProjectSettings::get_singleton();
     String path = project_settings->globalize_path(value);
@@ -158,34 +145,31 @@ String disk_path(const String &value) {
     }
     return path.simplify_path();
 }
-struct Packet {
-    rsf_game_render_pass pass{};
-    void *device = nullptr;
-    void *queue = nullptr;
-    bool vulkan = false;
-    rsf_godot_vk_packet vk{};
-};
 void execute(RenderingDeviceDriver *driver, RenderingDeviceDriver::CommandBufferID commands, void *userdata) {
-    Packet *packet = static_cast<Packet *>(userdata);
-    if (packet->vulkan) {
-        auto *vk = static_cast<RenderingDeviceDriverVulkan *>(driver);
-        if (void *list = vk->rescaleframe_begin(commands)) {
-            rsf_godot_vk_handoff handoff{};
-            if (RSFGodot::GraphScope::handoff(driver, commands, handoff)) {
-                void *continuation = nullptr;
-                native_render_vulkan_handoff(list, &packet->vk, &handoff, &continuation);
-                // GraphScope replaced the graph's reference even when the SDK
-                // refused the frame and the native host recorded its fallback.
-            } else {
-                native_render_vulkan(list, &packet->vk);
+    struct Context {
+        RenderingDeviceDriver *driver;
+        RenderingDeviceDriver::CommandBufferID commands;
+    } context{driver, commands};
+    const rsf_godot_packet_calls calls{
+        [](void *opaque, uint32_t route) -> void * {
+            const auto &lease = *static_cast<Context *>(opaque);
+            if (route == RSF_GODOT_DRIVER_VULKAN) {
+                return static_cast<RenderingDeviceDriverVulkan *>(lease.driver)->rescaleframe_begin(lease.commands);
             }
-        }
-    } else {
-        auto *d3d = static_cast<RenderingDeviceDriverD3D12 *>(driver);
-        void *list = d3d->rescaleframe_begin(commands);
-        native_render(packet->device, packet->queue, list, &packet->pass);
-        d3d->rescaleframe_end(commands);
-    }
+            return static_cast<RenderingDeviceDriverD3D12 *>(lease.driver)->rescaleframe_begin(lease.commands);
+        },
+        [](void *opaque) {
+            const auto &lease = *static_cast<Context *>(opaque);
+            static_cast<RenderingDeviceDriverD3D12 *>(lease.driver)->rescaleframe_end(lease.commands);
+        },
+        [](void *opaque, rsf_godot_vk_handoff *out) -> uint32_t {
+            const auto &lease = *static_cast<Context *>(opaque);
+            return RSFGodot::GraphScope::handoff(lease.driver, lease.commands, *out);
+        },
+        native_render, native_render_vulkan, native_render_vulkan_handoff,
+    };
+    auto *packet = static_cast<rsf_godot_driver_packet *>(userdata);
+    rsf_godot_packet_execute(packet, &calls, &context);
     memdelete(packet);
 }
 // Engine facts for primary.rs's admission. Every read is a pure query.
@@ -200,14 +184,39 @@ rsf_godot_render_admission admission(const RenderDataRD *data, uint64_t frame) {
     facts.driver = driver == "d3d12" ? RSF_GODOT_DRIVER_D3D12 : driver == "vulkan" ? RSF_GODOT_DRIVER_VULKAN : RSF_GODOT_DRIVER_OTHER;
     return facts;
 }
-// The admitted route's driver, which admission read from the same rendering driver name.
-Packet *packet_for(const rsf_game_render_pass &pass, bool vulkan) {
-    RD *rd = RD::get_singleton();
-    Packet *packet = memnew(Packet);
-    packet->pass = pass;
-    packet->vulkan = vulkan;
-    packet->device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_LOGICAL_DEVICE));
-    if (!packet->vulkan) packet->queue = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_COMMAND_QUEUE));
+rsf_godot_driver_packet *packet_for(RD *rd, const rsf_godot_pass_record &record,
+        RID color, RID depth = RID(), RID motion = RID(), RID output = RID()) {
+    rsf_godot_packet_facts facts{};
+    facts.device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_LOGICAL_DEVICE));
+    if (record.driver == RSF_GODOT_DRIVER_VULKAN) {
+        if (record.role == RSF_GAME_RENDER_SR) {
+            facts.instance = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TOPMOST_OBJECT));
+            facts.physical_device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_PHYSICAL_DEVICE));
+        }
+        facts.instance_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_instance_proc());
+        facts.device_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_device_proc());
+        auto describe = [rd](RID texture) -> rsf_godot_vk_image {
+            if (!texture.is_valid()) return {};
+            return {rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture),
+                uint32_t(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE_DATA_FORMAT, texture)), 0, 0,
+                uint32_t((rd->texture_get_format(texture).usage_bits & RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT) != 0)};
+        };
+        facts.vk_color = describe(color);
+        facts.vk_depth = describe(depth);
+        facts.vk_motion = describe(motion);
+        facts.vk_output = describe(output);
+    } else {
+        facts.queue = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_COMMAND_QUEUE));
+        auto native = [rd](RID texture) -> void * {
+            return texture.is_valid() ? reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture)) : nullptr;
+        };
+        facts.color = native(color);
+        facts.depth = native(depth);
+        facts.motion = native(motion);
+        facts.output = native(output);
+    }
+    auto *packet = memnew(rsf_godot_driver_packet);
+    rsf_godot_packet_prepare(&record, &facts, packet);
     return packet;
 }
 }
@@ -384,11 +393,7 @@ bool vk_execution_supported() { return vulkan_enabled() && native_vk_execution; 
 bool vk_execution(uint32_t role, uint64_t session, uint64_t source, uint64_t window, uint32_t begin) {
     if (!vk_execution_supported()) return false;
     rsf_game_render_pass pass{};
-    pass.struct_size = sizeof(pass);
-    pass.role = role;
-    pass.session_id = session;
-    pass.source_frame_id = source;
-    pass.window_key = window;
+    rsf_godot_execution_pass(role, session, source, window, &pass);
     return native_vk_execution(&pass, begin) != 0;
 }
 
@@ -472,40 +477,19 @@ void upscale(const RenderDataRD *data, double) {
         previous_projection * Projection(previous_camera.affine_inverse() * scene->cam_transform) * projection.inverse();
     matrix(camera.clip_to_previous_clip, to_previous);
     matrix(record.previous_clip_to_clip, to_previous.inverse());
-    const RID resolved_motion = resolve_motion(rb, depth, motion, to_previous, scene->taa_jitter);
-    if (!resolved_motion.is_valid()) return;
-    const RID resolved_depth = record.normalized_depth ? rb->get_texture(StringName("rescaleframe"), StringName("depth_r32")) : depth;
-    if (!resolved_depth.is_valid()) return;
+    RID resolved_depth;
+    const RID resolved_motion = resolve_motion(rb, depth, motion, to_previous, scene->taa_jitter,
+            record.normalized_depth != 0, resolved_depth);
+    if (!resolved_motion.is_valid() || !resolved_depth.is_valid()) return;
     previous_projection = projection; previous_camera = scene->cam_transform;
     rsf_godot_sr_record(&sr, &record);
-    rsf_game_render_pass pass = pass_from(record);
-    auto native = [rd](RID texture) { return reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture)); };
-    pass.color_input = native(color); pass.color_output = native(output);
-    pass.depth = native(resolved_depth); pass.motion = native(resolved_motion);
     RD::CallbackResource resources[] = {
         {color, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
         {resolved_depth, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
         {resolved_motion, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
         {output, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_COPY_TO}};
-    Packet *packet = packet_for(pass, record.driver == RSF_GODOT_DRIVER_VULKAN);
-    if (packet->vulkan) {
-        auto &vk = packet->vk;
-        vk.struct_size = sizeof(vk); vk.abi_version = RSF_GODOT_ABI_VERSION; vk.pass = pass;
-        vk.pass.color_input = vk.pass.color_output = vk.pass.depth = vk.pass.motion = nullptr;
-        vk.instance = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TOPMOST_OBJECT));
-        vk.physical_device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_PHYSICAL_DEVICE));
-        vk.device = packet->device;
-        vk.instance_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_instance_proc());
-        vk.device_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_device_proc());
-        auto describe = [rd](RID texture, const Size2i &size) {
-            return rsf_godot_vk_image{rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture),
-                uint32_t(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE_DATA_FORMAT, texture)), uint32_t(size.x), uint32_t(size.y),
-                uint32_t((rd->texture_get_format(texture).usage_bits & RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT) != 0)};
-        };
-        vk.color = describe(color, rb->get_internal_size()); vk.depth = describe(resolved_depth, rb->get_internal_size());
-        vk.motion = describe(resolved_motion, rb->get_internal_size()); vk.output = describe(output, rb->get_target_size());
-    }
-    rd->driver_callback_add(execute, packet, VectorView<RD::CallbackResource>(resources, 4));
+    rd->driver_callback_add(execute, packet_for(rd, record, color, resolved_depth, resolved_motion, output),
+            VectorView<RD::CallbackResource>(resources, 4));
 }
 void hudless(const RenderDataRD *data) {
     rsf_godot_render_frame frame;
@@ -518,23 +502,10 @@ void hudless(const RenderDataRD *data) {
     RID color = RendererRD::TextureStorage::get_singleton()->render_target_get_rd_texture_slice(data->render_buffers->get_render_target(), 0);
     if (!color.is_valid()) return;
     // The last recorded SR pass with the final-scene role and no SR resources.
-    rsf_game_render_pass pass = pass_from(record);
-    pass.color_input = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, color));
     const bool vulkan = record.driver == RSF_GODOT_DRIVER_VULKAN;
     RD::CallbackResource resource{color, RD::CALLBACK_RESOURCE_TYPE_TEXTURE,
         vulkan ? RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE : RD::CALLBACK_RESOURCE_USAGE_ATTACHMENT_COLOR_READ_WRITE};
-    Packet *packet = packet_for(pass, vulkan);
-    if (vulkan) {
-        packet->vk.struct_size = sizeof(packet->vk); packet->vk.abi_version = RSF_GODOT_ABI_VERSION;
-        packet->vk.pass = pass; packet->vk.pass.color_input = nullptr;
-        packet->vk.device = packet->device;
-        packet->vk.instance_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_instance_proc());
-        packet->vk.device_proc = reinterpret_cast<rsf_godot_vk_proc>(RenderingDeviceDriverVulkan::rescaleframe_device_proc());
-        packet->vk.color = {rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, color),
-            uint32_t(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE_DATA_FORMAT, color)), pass.camera.output_width, pass.camera.output_height,
-            uint32_t((rd->texture_get_format(color).usage_bits & RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT) != 0)};
-    }
-    rd->driver_callback_add(execute, packet, VectorView<RD::CallbackResource>(&resource, 1));
+    rd->driver_callback_add(execute, packet_for(rd, record, color), VectorView<RD::CallbackResource>(&resource, 1));
 }
 void submitted(void *queue, void *const *commands, uint32_t count) { if (rsf_godot_host_active()) native_submitted(queue, commands, count); }
 void present(void *chain) { if (rsf_godot_host_active()) native_present(chain); }

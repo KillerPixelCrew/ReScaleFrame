@@ -10,7 +10,7 @@ class RenderingDeviceDriverVulkan : public RenderingDeviceDriver {
 public:
     struct BufferState { bool begun = false, ended = false; uint64_t timeline = 0, wait = 0, signal = 0; };
     std::array<BufferState, 16> state{};
-    uint32_t family = 3, allocated = 1, semaphores = 0, begins = 0, splits = 0;
+    uint32_t family = 3, allocated = 1, semaphores = 0, freed_semaphores = 0, begins = 0, splits = 0;
     bool timeline_enabled = true, fail_allocate = false, fail_semaphore = false, fail_begin = false;
     bool rescaleframe_graph_info(CommandBufferID id, uint32_t &out) {
         out = family;
@@ -19,6 +19,7 @@ public:
     void *rescaleframe_begin(CommandBufferID id) { return reinterpret_cast<void *>(id.id * 16); }
     CommandBufferID command_buffer_create(CommandPoolID) { return fail_allocate ? CommandBufferID{} : CommandBufferID{++allocated}; }
     SemaphoreID semaphore_create() { return fail_semaphore ? SemaphoreID{} : SemaphoreID{++semaphores}; }
+    void semaphore_free(SemaphoreID) { ++freed_semaphores; }
     bool command_buffer_begin(CommandBufferID id) {
         ++begins;
         if (fail_begin) return false;

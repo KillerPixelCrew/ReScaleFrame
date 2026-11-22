@@ -65,11 +65,13 @@ void refusals() {
     CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 5, &next) != 0);
     CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, nullptr) != 0);
     vk.fail_allocate = true;
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) != 0);
+    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) == VK_ERROR_OUT_OF_HOST_MEMORY);
+    CHECK(vk.freed_semaphores == 1 && pool.buffers.empty() && pool.semaphores.empty());
     vk.fail_allocate = false; vk.fail_semaphore = true;
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) != 0);
+    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) == VK_ERROR_OUT_OF_HOST_MEMORY);
+    CHECK(vk.allocated == 1 && pool.buffers.empty() && pool.semaphores.empty());
     vk.fail_semaphore = false; vk.fail_begin = true;
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) != 0);
+    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) == VK_ERROR_INITIALIZATION_FAILED);
     CHECK(!next && commands.id == 1 && pool.buffers_used == 0 && vk.splits == 0 && !labels_changed);
 }
 }

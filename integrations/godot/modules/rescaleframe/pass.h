@@ -7,8 +7,7 @@
 
 // Private SR and final-scene pass records in the SCons Rust object (pass.rs). Rust decides the
 // identity, keys, flags, screen class, driver route and camera scalars and keeps the last
-// recorded SR pass. The C++ fills the camera matrices, copies the record into the public pass
-// and sets the native resource pointers per route.
+// recorded SR pass. The C++ fills the camera matrices and supplies driver resource facts.
 
 struct rsf_godot_pass_record {
     uint64_t session_id;

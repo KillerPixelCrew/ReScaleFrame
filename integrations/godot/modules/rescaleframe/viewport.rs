@@ -4,12 +4,15 @@
 
 mod cpu_facts;
 mod frame;
-#[path = "../../../../sdk/game/src/frame_event_abi.rs"]
-mod frame_event_abi;
 #[path = "../../../../sdk/game/src/frame_abi.rs"]
 mod frame_abi;
+#[path = "../../../../sdk/game/src/frame_event_abi.rs"]
+mod frame_event_abi;
 mod graph;
 mod host;
+mod motion;
+mod packet;
+mod packet_abi;
 mod pass;
 mod present;
 mod primary;
