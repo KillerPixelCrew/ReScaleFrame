@@ -32,7 +32,12 @@ unsafe extern "C" fn shader_seen(
     unsafe { rsf_ac7_motion_capture_shader(shader, stage, bytes, size) };
 }
 
-unsafe extern "C" fn uploaded(_: *mut c_void, buffer: *mut c_void, bytes: *const c_void, size: u32) {
+unsafe extern "C" fn uploaded(
+    _: *mut c_void,
+    buffer: *mut c_void,
+    bytes: *const c_void,
+    size: u32,
+) {
     unsafe { rsf_ac7_motion_capture_upload(buffer, bytes, size) };
 }
 

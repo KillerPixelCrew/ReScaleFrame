@@ -62,7 +62,6 @@ pub(super) struct ReflectionSink {
 }
 
 pub(super) struct Platform {
-
     pub compile: unsafe fn(call: *const CompileCall) -> i32,
     pub reflect: unsafe fn(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32,
     pub disassemble: unsafe fn(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i32,

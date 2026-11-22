@@ -75,7 +75,6 @@ struct Snapshot {
     stencil_reference: u32,
 }
 
-
 #[repr(C)]
 struct DrawSnapshot {
     targets: [Option<ComRef>; TARGETS],
@@ -317,7 +316,6 @@ unsafe fn restore_inline<T>(
     }
 }
 
-
 unsafe fn rsf_core_d3d11_draw_state_save(
     context: Handle,
     storage: *mut State,
@@ -389,7 +387,6 @@ mod tests {
         WRITES.set(WRITES.get() + 1);
         WRITTEN.set([target_count, snapshot.uav_count]);
     }
-
 
     unsafe extern "C" fn read_draw(_: Handle, snapshot: *mut DrawSnapshot) {
         unsafe { (*snapshot).raster = retained() };

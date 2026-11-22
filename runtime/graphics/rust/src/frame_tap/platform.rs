@@ -218,7 +218,6 @@ unsafe extern "C" fn viewport(context: Handle, result: *mut rsf_frame_tap_viewpo
     count
 }
 
-
 #[repr(C)]
 #[derive(Default)]
 struct SamplerDesc {

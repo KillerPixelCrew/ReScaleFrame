@@ -9,7 +9,6 @@ use std::ffi::CStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::AtomicUsize;
 
-
 pub(super) const DYNAMIC_USAGE: u32 = 2;
 pub(super) const CPU_WRITE: u32 = 0x10000;
 pub(super) const CONSTANT_SLOTS: u32 = 14;

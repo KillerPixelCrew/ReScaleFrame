@@ -813,8 +813,8 @@ fn consider_target_draw(
 // Whether anything reads the shader resource shadow. Without a reader, keeping it is a resource
 // query per binding for nothing.
 fn refresh_shadow_need() {
-    let needed = !TAP.research_draw.load(Relaxed).is_null()
-        || !TAP.research_before.load(Relaxed).is_null();
+    let needed =
+        !TAP.research_draw.load(Relaxed).is_null() || !TAP.research_before.load(Relaxed).is_null();
     TAP.shadow_needed.store(needed, Relaxed);
 }
 
@@ -1008,7 +1008,9 @@ unsafe extern "C" {
 
 impl ConstantWatch {
     unsafe fn notify(self, resource: Handle, data: *const c_void, bytes: u32) {
-        unsafe { rsf_frame_tap_call_constant_observer(self.callback, self.user, resource, data, bytes) }
+        unsafe {
+            rsf_frame_tap_call_constant_observer(self.callback, self.user, resource, data, bytes)
+        }
     }
 }
 
@@ -1063,7 +1065,6 @@ unsafe fn rsf_core_frame_tap_install(
         return ABI_MISMATCH;
     }
 
-
     // A caller inside a hook belongs to a session that is installed or still retiring, so a busy
     // lock is the same answer as the check below.
     let Some(lock) = control() else {
@@ -1115,7 +1116,6 @@ unsafe fn rsf_core_frame_tap_install(
     drop(lock);
     OK
 }
-
 
 fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     // Everything that can refuse comes before the first change. A caller inside a hook is refused

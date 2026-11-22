@@ -541,7 +541,16 @@ pub unsafe extern "C" fn rsf_dump_texture_bytes(
     source: Handle,
     options: *const TextureOptions,
 ) -> i32 {
-    unsafe { dump(device, context, source, options, std::ptr::null_mut(), Output::Raw) }
+    unsafe {
+        dump(
+            device,
+            context,
+            source,
+            options,
+            std::ptr::null_mut(),
+            Output::Raw,
+        )
+    }
 }
 
 /// texture_dump.h: a PNG of CPU pixels, with an optional report.

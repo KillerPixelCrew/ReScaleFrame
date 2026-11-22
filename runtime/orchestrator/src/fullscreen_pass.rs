@@ -131,7 +131,9 @@ unsafe fn create(device: Handle, setup: *const Setup, out: *mut *mut Pass) -> i3
         return RESOURCE_FAILED;
     }
     if setup.log.is_some() {
-        unsafe { rsf_call_native_log(setup.log, setup.log_user, c"fullscreen pass ready".as_ptr()) };
+        unsafe {
+            rsf_call_native_log(setup.log, setup.log_user, c"fullscreen pass ready".as_ptr())
+        };
     }
     unsafe { out.write(pass) };
     OK

@@ -149,10 +149,20 @@ impl<'de> Visitor<'de> for Node<'_> {
 #[cfg(test)]
 #[test]
 fn reader_rejects_duplicate_keys_nuls_and_deep_nesting() {
-    let reason = |text: &str| json(text.as_bytes()).err().map(|refusal| refusal.reason.into_owned());
-    assert_eq!(reason(r#"{"key":1,"key":2}"#), Some(b"duplicate JSON key".to_vec()));
+    let reason = |text: &str| {
+        json(text.as_bytes())
+            .err()
+            .map(|refusal| refusal.reason.into_owned())
+    };
+    assert_eq!(
+        reason(r#"{"key":1,"key":2}"#),
+        Some(b"duplicate JSON key".to_vec())
+    );
     assert_eq!(reason(r#"{"\u0000":1}"#), Some(b"embedded NUL".to_vec()));
-    assert_eq!(reason(&"[".repeat(JSON_DEPTH + 1)), Some(b"JSON nesting".to_vec()));
+    assert_eq!(
+        reason(&"[".repeat(JSON_DEPTH + 1)),
+        Some(b"JSON nesting".to_vec())
+    );
     let deepest = "[".repeat(JSON_DEPTH) + &"]".repeat(JSON_DEPTH);
     assert!(json(deepest.as_bytes()).is_ok());
     assert_eq!(reason("{} x"), Some(b"invalid JSON".to_vec()));

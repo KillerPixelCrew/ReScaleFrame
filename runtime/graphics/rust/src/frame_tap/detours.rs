@@ -321,7 +321,17 @@ unsafe extern "system" fn update(
     depth: u32,
 ) {
     let whole = region.is_null();
-    unsafe { rsf_core_frame_tap_update(platform(), context, destination, subresource, whole, data, row) };
+    unsafe {
+        rsf_core_frame_tap_update(
+            platform(),
+            context,
+            destination,
+            subresource,
+            whole,
+            data,
+            row,
+        )
+    };
     forward!(RSF_FRAME_TAP_HOOK_UPDATE; context => Handle, destination => Handle, subresource => u32,
         region => *const c_void, data => *const c_void, row => u32, depth => u32);
     rsf_core_frame_tap_leave(platform(), 0);
@@ -338,7 +348,17 @@ unsafe extern "system" fn update1(
     flags: u32,
 ) {
     let whole = region.is_null();
-    unsafe { rsf_core_frame_tap_update(platform(), context, destination, subresource, whole, data, row) };
+    unsafe {
+        rsf_core_frame_tap_update(
+            platform(),
+            context,
+            destination,
+            subresource,
+            whole,
+            data,
+            row,
+        )
+    };
     forward!(RSF_FRAME_TAP_HOOK_UPDATE1; context => Handle, destination => Handle, subresource => u32,
         region => *const c_void, data => *const c_void, row => u32, depth => u32, flags => u32);
     rsf_core_frame_tap_leave(platform(), 0);
@@ -448,4 +468,3 @@ extern "C" fn rsf_frame_tap_uninstall() -> i32 {
     };
     rsf_core_frame_tap_uninstall(platform)
 }
-

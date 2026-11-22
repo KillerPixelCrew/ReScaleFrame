@@ -2,11 +2,11 @@
 //! Shared DXBC stage linkage for AC7 velocity shaders.
 
 use crate::dxbc_chunks::Chunk;
+#[cfg(windows)]
+use crate::velocity_container::valid_container_size;
 use crate::velocity_container::{
     Semantic, chunk_index, read_signature, shader_index, write_container, write_signature,
 };
-#[cfg(windows)]
-use crate::velocity_container::valid_container_size;
 use crate::velocity_tokens::{
     DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, instructions, rewrite_operands,
     write_instructions,

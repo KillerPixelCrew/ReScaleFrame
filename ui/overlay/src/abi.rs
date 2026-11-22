@@ -57,12 +57,12 @@ pub(crate) use rsf_game_sys::{
     RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
 };
 
-/// One frame of input, in physical pixels.
-pub use rsf_game_sys::rsf_overlay_input as RsfOverlayInput;
 /// One draw call; indices are call-local and `vertex_offset` is added as `BaseVertexLocation`.
 pub use rsf_game_sys::rsf_overlay_draw_call as RsfOverlayDrawCall;
 /// The triangles for one frame, owned by the overlay until the next frame call.
 pub use rsf_game_sys::rsf_overlay_draw_data as RsfOverlayDrawData;
+/// One frame of input, in physical pixels.
+pub use rsf_game_sys::rsf_overlay_input as RsfOverlayInput;
 /// A change to the overlay's texture atlas, borrowed until the next frame call.
 pub use rsf_game_sys::rsf_overlay_texture_update as RsfOverlayTextureUpdate;
 /// One vertex in egui's layout; `color` is premultiplied RGBA with red in the low byte.

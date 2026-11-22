@@ -96,7 +96,6 @@ pub(super) fn executable_hash(path: &[u16]) -> String {
     hash
 }
 
-
 struct Predicate<'a> {
     context: &'a ID3D11DeviceContext,
     saved: Option<ID3D11Predicate>,
@@ -140,10 +139,16 @@ pub(super) unsafe fn encode_texture(
         immediate.GetPredication(Some(&mut predicate.saved), Some(&mut predicate.value));
         immediate.SetPredication(None::<&ID3D11Predicate>, false);
         if include_raw != 0 {
-            result.raw = texture_dump::rsf_dump_texture_bytes(device.as_raw(), context, source, options);
+            result.raw =
+                texture_dump::rsf_dump_texture_bytes(device.as_raw(), context, source, options);
         }
-        result.preview =
-            texture_dump::rsf_dump_texture_png(device.as_raw(), context, source, options, ptr::null_mut());
+        result.preview = texture_dump::rsf_dump_texture_png(
+            device.as_raw(),
+            context,
+            source,
+            options,
+            ptr::null_mut(),
+        );
     }
 }
 

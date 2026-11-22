@@ -96,7 +96,8 @@ fn configure(module: HMODULE) -> Option<u32> {
         sha256: hash,
     };
     let mut services = host_services(unsafe { GetTickCount64() }, Some(log));
-    services.cpu_event = CPU_SINK.get().map(|_| cpu_event as _);    let mut session = null_mut();
+    services.cpu_event = CPU_SINK.get().map(|_| cpu_event as _);
+    let mut session = null_mut();
     let prepared = with_session_options(&plugin_path, probe, &services, |options| unsafe {
         prepare(options, &mut session)
     }) as u32;

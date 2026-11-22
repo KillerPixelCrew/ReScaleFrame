@@ -16,7 +16,6 @@ use windows::core::{HRESULT, Interface, PCSTR};
 const E_FAIL: HRESULT = HRESULT(0x8000_4005_u32 as i32);
 const E_INVALIDARG: HRESULT = HRESULT(0x8007_0057_u32 as i32);
 
-
 use rsf_minhook_sys::{
     MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED, MH_ERROR_ENABLED, MH_EnableHook,
     MH_Initialize, MH_OK, MH_RemoveHook,
