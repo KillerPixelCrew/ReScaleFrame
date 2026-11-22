@@ -27,9 +27,10 @@ class ReleasePackageTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "repo"
         self.root.mkdir()
-        self.root_patch = mock.patch.object(package, "ROOT", self.root)
-        self.root_patch.start()
-        self.addCleanup(self.root_patch.stop)
+        for module in (package, package_common):
+            patch = mock.patch.object(module, "ROOT", self.root)
+            patch.start()
+            self.addCleanup(patch.stop)
         self.write(".gitignore", "build/\ntarget/\nvendor/\nsdk/\ngames/minecraft/build/\n")
         self.write("VERSION", "2.3.4\n")
         self.write("Cargo.toml", '[workspace.package]\nversion = "2.3.4"\n')
