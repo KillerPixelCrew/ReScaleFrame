@@ -2879,7 +2879,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_cancel(hook: u32, scope: *mut rsf_fallout4
 // ---------------------------------------------------------------------------------------------
 // Render producer queries, on the Swap thread.
 
-fn current_identity() -> CpuIdentity {
+pub(crate) fn current_identity() -> CpuIdentity {
     if SWAP_ADMITTED.get() && SWAP_DEPTH.get() == 1 && IDLE_DEPTH.get() <= 1 {
         IDENTITY.get()
     } else {
@@ -2899,7 +2899,7 @@ fn swap_scope() -> bool {
 
 /// Existing render association only: later input receipts do not erase rendered resources. This
 /// does not certify sampled input, latency markers or FG eligibility.
-fn render_source_is_current(expected: &CpuIdentity) -> bool {
+pub(crate) fn render_source_is_current(expected: &CpuIdentity) -> bool {
     if !swap_scope() || FUTURE_CLAIMED.get() || !same_rendered_identity(expected) {
         return false;
     }

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Producer resolution and the synchronous full-output borrow for Fallout 4 AE 1.11.240.
 
-use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
-use crate::cpu_events::{
-    rsf_fallout4_cpu_current_identity, rsf_fallout4_cpu_render_source_is_current,
+use crate::build_layout::{
+    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_OBJECT, RENDERER_POINTER, RENDERER_WINDOW,
 };
+use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
+use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::depth_domains::{self, Leaves as DepthLeaves, Snapshot};
 use crate::{Plain, image, read, screen::WORLD_LEASE_INVALID};
 use rsf_game_sys::{
@@ -121,11 +122,12 @@ impl FrameOwner {
     }
 
     fn renderer_current(self, base: usize) -> bool {
-        let renderer = base + 0x3a25d10;
-        read::<usize>(base + 0x38e13a0) == Some(renderer)
-            && read::<usize>(renderer + 0x58).map(|value| value as u64) == Some(self.window)
-            && read::<usize>(renderer + 0x50) == Some(self.device_context)
-            && read::<usize>(renderer + 0x70) == Some(self.chain)
+        let renderer = base + RENDERER_OBJECT;
+        read::<usize>(base + RENDERER_POINTER) == Some(renderer)
+            && read::<usize>(renderer + RENDERER_WINDOW).map(|value| value as u64)
+                == Some(self.window)
+            && read::<usize>(renderer + RENDERER_CONTEXT) == Some(self.device_context)
+            && read::<usize>(renderer + RENDERER_CHAIN) == Some(self.chain)
             && read::<usize>(base + 0x32dd338)
                 .filter(|&graph| graph != 0)
                 .and_then(|graph| read::<usize>(graph.wrapping_add(0x140)))
@@ -473,18 +475,11 @@ unsafe fn configure(
     {
         return None;
     }
-    let mut cpu = CpuIdentity {
-        session: 0,
-        source: 0,
-        submission: 0,
-        began_qpc: 0,
-        frequency: 0,
-    };
-    unsafe { rsf_fallout4_cpu_current_identity(&mut cpu) };
+    let cpu = current_identity();
     let pass = unsafe { frame.read() };
     if (cpu.session, cpu.source, cpu.submission)
         != (pass.session_id, pass.source_frame_id, pass.submission_id)
-        || !unsafe { rsf_fallout4_cpu_render_source_is_current(&cpu) }
+        || !render_source_is_current(&cpu)
     {
         return None;
     }
@@ -497,7 +492,7 @@ unsafe fn configure(
         return None;
     }
     let render = configured_targets(leaves, host, &pass, context, size)?;
-    if !unsafe { rsf_fallout4_cpu_render_source_is_current(&cpu) }
+    if !render_source_is_current(&cpu)
         || unsafe { (leaves.screen_refusals)(&cpu) } != WORLD_LEASE_INVALID
         || !input_enabled(base)
     {

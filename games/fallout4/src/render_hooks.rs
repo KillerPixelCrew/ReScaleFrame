@@ -19,10 +19,15 @@ mod publication;
 mod recovery;
 mod scope;
 
+use crate::build_layout::{
+    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
+    RENDERER_WINDOW,
+};
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::{rsf_fallout4_cpu_begin_render, rsf_fallout4_cpu_render_source_is_current};
+use crate::creation::{ExactBuild, accept_window};
 use crate::depth_domains::rsf_fallout4_depth_verify;
-use crate::render_inputs::rsf_fallout4_inputs_verify;
+use crate::render_inputs::verify_for_build;
 use crate::resolution::{is_busy as resolution_busy, rsf_fallout4_resolution_verify};
 use crate::screen::rsf_fallout4_verify_screen_queries;
 use crate::{Ops, image, read};
@@ -36,6 +41,56 @@ use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::core::{s, w};
+
+fn read_owner(base: usize) -> Option<scope::Owner> {
+    let renderer =
+        read::<usize>(base + RENDERER_POINTER).filter(|&value| value == base + RENDERER_OBJECT)?;
+    let device = read::<usize>(renderer + RENDERER_DEVICE).filter(|&value| value != 0)?;
+    let context = read::<usize>(renderer + RENDERER_CONTEXT).filter(|&value| value != 0)?;
+    let window = read::<usize>(renderer + RENDERER_WINDOW).filter(|&value| value != 0)?;
+    let chain = read::<usize>(renderer + RENDERER_CHAIN).filter(|&value| value != 0)?;
+    let graph = read::<usize>(base + 0x32dd338).filter(|&value| value != 0)?;
+    let view = read::<usize>(graph + 0x140).filter(|&value| value != 0)?;
+    let frame = read::<u32>(base + 0x3d871a0 + 0x98)?;
+    accept_window(window as *mut c_void).then_some(scope::Owner {
+        renderer,
+        device,
+        context,
+        chain,
+        window,
+        graph,
+        view,
+        frame,
+    })
+}
+
+/// The supplied output points to the native caller's owner record.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_render_read_owner(output: &mut scope::Owner) -> bool {
+    let Some(owner) = read_owner(image()) else {
+        return false;
+    };
+    *output = owner;
+    true
+}
+
+/// The supplied output points to the native caller's outer chain slot.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_render_read_outer_chain(
+    renderer: usize,
+    chain: &mut usize,
+) -> bool {
+    let Some(window_cell) =
+        read::<usize>(image() + 0x38e13b0).filter(|&value| value == renderer + RENDERER_WINDOW)
+    else {
+        return false;
+    };
+    let Some(outer) = read::<usize>(window_cell + 0x18) else {
+        return false;
+    };
+    *chain = outer;
+    true
+}
 
 // Return addresses of the guarded MainDraw and Swap calls in verify.
 const ORDINARY_WORLD_RETURN: usize = 0xc3_82a5;
@@ -200,8 +255,8 @@ pub(crate) fn verify() -> bool {
 }
 
 /// The render hook guards, then the render-input reader guards.
-pub(crate) fn verify_with_inputs() -> bool {
-    verify() && rsf_fallout4_inputs_verify()
+pub(crate) fn verify_with_inputs(build: &ExactBuild) -> bool {
+    verify() && verify_for_build(build)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -336,7 +391,7 @@ pub(crate) fn busy() -> bool {
 /// Checks the guards and the synchronous services, negotiates the Runtime exports and creates
 /// every missing detour disabled. A creation failure removes the hooks this call created, in
 /// reverse order; a removal MinHook refuses keeps its record and trampoline.
-pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services) -> bool {
+pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services, build: &ExactBuild) -> bool {
     let Some(leaves) = leaves() else {
         return false;
     };
@@ -344,8 +399,7 @@ pub(crate) fn prepare(ops: &Ops, services: &rsf_game_host_services) -> bool {
         || busy()
         || services.process_upscale.is_none()
         || services.render_pass.is_none()
-        || !verify()
-        || !rsf_fallout4_inputs_verify()
+        || !verify_with_inputs(build)
     {
         return false;
     }

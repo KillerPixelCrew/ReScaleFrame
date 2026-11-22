@@ -13,6 +13,10 @@
 //! callback is supplied. Fields written before the failing step remain in the reported copy. A
 //! pass is written only on admission; the lease the C++ wrapper discards on refusal.
 
+use crate::build_layout::{
+    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
+    RENDERER_WINDOW,
+};
 use crate::camera::{self, CameraRaster, NativeCamera};
 use crate::creation;
 use crate::depth_domains::{self, Snapshot};
@@ -29,8 +33,6 @@ type Report = Option<unsafe extern "C" fn(*const c_char)>;
 /// render_inputs.cpp `NativeInputLease`, opaque here.
 type Lease = *mut c_void;
 
-const RENDERER_POINTER: usize = 0x38e13a0;
-const RENDERER: usize = 0x3a25d10;
 const STATE_RVA: usize = 0x3d871a0;
 const TARGETS_RVA: usize = 0x2f4d750;
 const WORLD_GRAPH_POINTER: usize = 0x32dd338;
@@ -597,14 +599,17 @@ fn owner(out: &mut State) -> Result<(), Stage> {
     let base = image();
     let graphics = base.wrapping_add(STATE_RVA);
     if !load(base.wrapping_add(RENDERER_POINTER), &mut out.renderer)
-        || out.renderer != base.wrapping_add(RENDERER)
-        || !load(out.renderer.wrapping_add(0x48), &mut out.device)
+        || out.renderer != base.wrapping_add(RENDERER_OBJECT)
+        || !load(out.renderer.wrapping_add(RENDERER_DEVICE), &mut out.device)
         || out.device == 0
-        || !load(out.renderer.wrapping_add(0x50), &mut out.context)
+        || !load(
+            out.renderer.wrapping_add(RENDERER_CONTEXT),
+            &mut out.context,
+        )
         || out.context == 0
-        || !load(out.renderer.wrapping_add(0x58), &mut out.window)
+        || !load(out.renderer.wrapping_add(RENDERER_WINDOW), &mut out.window)
         || out.window == 0
-        || !load(out.renderer.wrapping_add(0x70), &mut out.chain)
+        || !load(out.renderer.wrapping_add(RENDERER_CHAIN), &mut out.chain)
         || out.chain == 0
     {
         return Err(Stage::Owner);
@@ -880,7 +885,7 @@ impl Reading {
                 views: [ResourceFacts::default(); 3],
                 rtv: ResourceFacts::default(),
                 swap: SwapFacts::default(),
-                expected_renderer: image().wrapping_add(RENDERER) as u64,
+                expected_renderer: image().wrapping_add(RENDERER_OBJECT) as u64,
                 selected: 0,
                 last_key: 0,
                 expected: [0; 3],
@@ -927,9 +932,9 @@ fn receipt(leaves: &Leaves, report: Report, stage: Stage, reading: &mut Reading)
     }
 }
 
-fn verify() -> bool {
+fn verify(admit: impl FnOnce() -> bool) -> bool {
     VERIFIED.store(false, Ordering::Release);
-    let okay = crate::ops().is_some_and(|ops| creation::verify_executable(ops).unwrap_or(false))
+    let okay = admit()
         && guard(0x18a246, b"\x48\x8d\x1d\xc3\xba\x89\x03")
         && guard(0x18a28c, b"\x48\x89\x1d\x0d\x71\x75\x03")
         && guard(
@@ -1668,10 +1673,14 @@ fn complete<'a>(leaves: *const Leaves) -> Option<&'a Leaves> {
     unsafe { leaves.as_ref() }.filter(|leaves| leaves.complete())
 }
 
+pub(crate) fn verify_for_build(_build: &creation::ExactBuild) -> bool {
+    verify(|| true)
+}
+
 /// Checks the executable and the expected bytes of every native site the readers depend on.
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_fallout4_inputs_verify() -> bool {
-    verify()
+    verify(|| crate::ops().is_some_and(|ops| creation::verify_executable(ops).unwrap_or(false)))
 }
 
 /// The reader's exception receipt is due: its stage bit was not yet spent.

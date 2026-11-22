@@ -18,8 +18,9 @@ use crate::{
     EXECUTABLE, EXECUTABLE_SHA256, MH_CreateHook, MH_OK, Ops, Plain, RSF_ERROR_NOT_READY, RSF_OK,
     Threw,
 };
-use crate::{image, message, ops, read, typed_export};
+use crate::{image, message, ops, read};
 use rsf_game_sys::rsf_game_host_services;
+use rsf_game_sys::win32::typed_export;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -406,7 +407,6 @@ unsafe extern "C" fn rsf_fallout4_creation_observe(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fallout4_accept_window(
     _user: *mut c_void,
     window: *mut c_void,

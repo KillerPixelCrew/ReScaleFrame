@@ -5,7 +5,6 @@
 #include "render_inputs.h"
 #include "resolution.h"
 #include "screen.h"
-#include "native_creation.h"
 #include "depth_domains.h"
 #include <rescaleframe/d3d11_host.h>
 #include <MinHook.h>
@@ -98,15 +97,6 @@ void notify(const rsf_game_render_pass& pass, void* context, uint32_t begin) noe
     if (host.render_pass) try { host.render_pass(host.user, context, &pass, begin); } catch (...) {}
 }
 using Owner = NativeRenderOwner;
-bool owner(Owner& value) {
-    const auto base=image();
-    const auto get=[](uintptr_t address, auto& output) { return read(address,&output,sizeof(output)); };
-    return get(base+0x38e13a0,value.renderer) && value.renderer==base+0x3a25d10 &&
-        get(value.renderer+0x48,value.device) && value.device && get(value.renderer+0x50,value.context) && value.context &&
-        get(value.renderer+0x58,value.window) && value.window && get(value.renderer+0x70,value.chain) && value.chain &&
-        get(base+0x32dd338,value.graph) && value.graph && get(value.graph+0x140,value.view) && value.view &&
-        get(base+0x3d871a0+0x98,value.frame) && accept_window(nullptr,reinterpret_cast<void*>(value.window));
-}
 bool same_object(IUnknown* a, IUnknown* b) {
     Microsoft::WRL::ComPtr<IUnknown> left,right;
     return a && b && SUCCEEDED(a->QueryInterface(IID_PPV_ARGS(&left))) &&
@@ -335,7 +325,7 @@ void scope_world(NativeScopeWorld* out) noexcept {
         world.inputs,world.published,world.window_open,world.frame_open,world.submission_open,world.refused,
         world.auxiliary_open};
 }
-bool scope_read_owner(NativeRenderOwner* value) noexcept { return owner(*value); }
+bool scope_read_owner(NativeRenderOwner* value) noexcept { return rsf_fallout4_render_read_owner(value); }
 bool scope_lease_owner(const NativeRenderOwner* before) noexcept try {
     world.owner_context=reinterpret_cast<ID3D11DeviceContext*>(before->context);
     world.owner_chain=reinterpret_cast<IDXGISwapChain*>(before->chain);
@@ -539,10 +529,8 @@ bool observe_taa(void* effect) {
 }
 bool read_present_owner(NativeRenderScopeKey* key, uintptr_t* outer_chain) noexcept {
     Owner current{};
-    uintptr_t current_window{};
-    if (!owner(current) ||
-        !read(image()+0x38e13b0,&current_window,sizeof(current_window)) || current_window!=current.renderer+0x58 ||
-        !read(current_window+0x18,outer_chain,sizeof(*outer_chain))) return false;
+    if (!rsf_fallout4_render_read_owner(&current) ||
+        !rsf_fallout4_render_read_outer_chain(current.renderer, outer_chain)) return false;
     *key={current.frame,current.view,current.window,current.context,current.chain};
     return true;
 }

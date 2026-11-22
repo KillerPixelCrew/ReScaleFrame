@@ -48,7 +48,7 @@ use std::sync::OnceLock;
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
-    GetModuleHandleW, GetProcAddress,
+    GetModuleHandleW,
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -313,21 +313,6 @@ pub(crate) fn read<T: Plain>(address: usize) -> Option<T> {
 
 pub(crate) fn image() -> usize {
     unsafe { GetModuleHandleW(std::ptr::null()) as usize }
-}
-
-/// Resolves a function export from a borrowed module.
-///
-/// # Safety
-/// The module must remain loaded through lookup and every use of the result.
-/// F must be the function pointer with the exact ABI and signature of name.
-pub(crate) unsafe fn typed_export<F: Copy>(module: *mut c_void, name: &CStr) -> Option<F> {
-    type Export = unsafe extern "system" fn() -> isize;
-    const { assert!(size_of::<F>() == size_of::<Export>()) };
-    if module.is_null() {
-        return None;
-    }
-    unsafe { GetProcAddress(module, name.as_ptr().cast()) }
-        .map(|address| unsafe { std::mem::transmute_copy::<Export, F>(&address) })
 }
 
 /// Pins the module that contains `address` for the process.

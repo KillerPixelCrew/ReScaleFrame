@@ -13,12 +13,14 @@
 //! is supplied, and leaves fields written before the failing step in the reported copy. Outputs
 //! are cleared on entry and written only on admission.
 
+use crate::build_layout::{
+    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
+    RENDERER_WINDOW,
+};
 use crate::camera::xm::{self, Matrix};
 use crate::camera::{self, CameraDepthBound, CameraRaster};
 use crate::cpu_abi::rsf_fallout4_cpu_identity;
-use crate::cpu_events::{
-    rsf_fallout4_cpu_current_identity, rsf_fallout4_cpu_render_source_is_current,
-};
+use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::{Plain, image, read};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
@@ -242,13 +244,7 @@ const _: () = {
     assert!(size_of::<Leaves>() == 9 * 8);
 };
 
-const NO_IDENTITY: Identity = Identity {
-    session: 0,
-    source: 0,
-    submission: 0,
-    began_qpc: 0,
-    frequency: 0,
-};
+const NO_IDENTITY: Identity = Identity::ZERO;
 
 const NO_CAMERA: DepthCamera = DepthCamera {
     view: [0.0; 16],
@@ -586,23 +582,9 @@ fn same_camera(a: &DepthCamera, b: &DepthCamera) -> bool {
         && bits(&a.port) == bits(&b.port)
 }
 
-fn current_identity() -> Identity {
-    let mut value = NO_IDENTITY;
-    unsafe { rsf_fallout4_cpu_current_identity(&mut value) };
-    value
-}
-
-fn render_source_is_current(identity: &Identity) -> bool {
-    unsafe { rsf_fallout4_cpu_render_source_is_current(identity) }
-}
-
 /// A nonzero session, source and submission, and every field equal.
 fn same_identity(a: &Identity, b: &Identity) -> bool {
-    a.session != 0
-        && a.source != 0
-        && a.submission != 0
-        && [a.session, a.source, a.submission, a.began_qpc, a.frequency]
-            == [b.session, b.source, b.submission, b.began_qpc, b.frequency]
+    a.session != 0 && a.source != 0 && a.submission != 0 && a == b
 }
 
 /// Reports `stage` once for the process when a callback is supplied. Always refuses.
@@ -755,16 +737,19 @@ fn sample(leaves: &Leaves, cpu: &Identity, out: &mut Snapshot, stage: &mut Stage
     out.context_key = context;
     *stage = Stage::Owner;
     if context == 0
-        || !load(base.wrapping_add(0x38e13a0), &mut out.renderer_key)
-        || out.renderer_key != base.wrapping_add(0x3a25d10) as u64
-        || !load(at(out.renderer_key, 0x48), &mut out.device_key)
+        || !load(base.wrapping_add(RENDERER_POINTER), &mut out.renderer_key)
+        || out.renderer_key != base.wrapping_add(RENDERER_OBJECT) as u64
+        || !load(at(out.renderer_key, RENDERER_DEVICE), &mut out.device_key)
         || out.device_key == 0
-        || !load(at(out.renderer_key, 0x50), &mut out.device_context_key)
+        || !load(
+            at(out.renderer_key, RENDERER_CONTEXT),
+            &mut out.device_context_key,
+        )
         || out.device_context_key == 0
         || tls_device_context != out.device_context_key
-        || !load(at(out.renderer_key, 0x58), &mut out.window_key)
+        || !load(at(out.renderer_key, RENDERER_WINDOW), &mut out.window_key)
         || out.window_key == 0
-        || !load(at(out.renderer_key, 0x70), &mut out.chain_key)
+        || !load(at(out.renderer_key, RENDERER_CHAIN), &mut out.chain_key)
         || out.chain_key == 0
     {
         return false;
@@ -1284,16 +1269,19 @@ fn raster_owner(leaves: &Leaves, cpu: &Identity, out: &mut Snapshot) -> bool {
         return false;
     }
     if out.context_key == 0
-        || !load(base.wrapping_add(0x38e13a0), &mut out.renderer_key)
-        || out.renderer_key != base.wrapping_add(0x3a25d10) as u64
-        || !load(at(out.renderer_key, 0x48), &mut out.device_key)
+        || !load(base.wrapping_add(RENDERER_POINTER), &mut out.renderer_key)
+        || out.renderer_key != base.wrapping_add(RENDERER_OBJECT) as u64
+        || !load(at(out.renderer_key, RENDERER_DEVICE), &mut out.device_key)
         || out.device_key == 0
-        || !load(at(out.renderer_key, 0x50), &mut out.device_context_key)
+        || !load(
+            at(out.renderer_key, RENDERER_CONTEXT),
+            &mut out.device_context_key,
+        )
         || out.device_context_key == 0
         || tls_device != out.device_context_key
-        || !load(at(out.renderer_key, 0x58), &mut out.window_key)
+        || !load(at(out.renderer_key, RENDERER_WINDOW), &mut out.window_key)
         || out.window_key == 0
-        || !load(at(out.renderer_key, 0x70), &mut out.chain_key)
+        || !load(at(out.renderer_key, RENDERER_CHAIN), &mut out.chain_key)
         || out.chain_key == 0
         || !load(state.wrapping_add(0x98), &mut frame)
         || !load(state.wrapping_add(0x78), &mut out.width)

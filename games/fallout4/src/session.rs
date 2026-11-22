@@ -14,8 +14,9 @@ use crate::platform_abi::{
 use crate::{
     EXECUTABLE_SHA256, Ops, PENDING, RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY,
     RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw,
-    cpu_events, dpi, ops, pin, render_hooks, typed_export,
+    cpu_events, dpi, ops, pin, render_hooks,
 };
+use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
     rsf_game_renderer_status, rsf_game_start_args, rsf_result,
@@ -226,7 +227,7 @@ impl Session {
             ops.log_host(host, refusal)?;
             return Ok(RSF_ERROR_NATIVE_REFUSED);
         }
-        if !render_hooks::verify_with_inputs() {
+        if !render_hooks::verify_with_inputs(&build) {
             return self.refuse(
                 ops,
                 host,
@@ -276,7 +277,7 @@ impl Session {
                 c"Fallout4 cold creation refused: native bytes, owner, Steam forwarding or scoped services unavailable.",
             );
         }
-        if !render_hooks::prepare(ops, &services) {
+        if !render_hooks::prepare(ops, &services, &build) {
             return self.refuse(
                 ops,
                 host,

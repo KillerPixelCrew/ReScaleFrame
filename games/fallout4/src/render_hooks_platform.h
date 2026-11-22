@@ -219,6 +219,9 @@ struct NativeRenderOwner {
     uintptr_t renderer, device, context, chain, window, graph, view;
     uint32_t frame;
 };
+extern "C" bool rsf_fallout4_render_read_owner(NativeRenderOwner*);
+extern "C" bool rsf_fallout4_render_read_outer_chain(uintptr_t renderer, uintptr_t* chain);
+
 struct NativeScopeWorld {
     rsf_fallout4_cpu_identity cpu;
     rsf_game_render_pass* pass;                // World pass

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // C++ exception guards and the Steam and render bridges used by the Rust GameSDK export.
 #include "fallout4_platform.h"
-#include "native_creation.h"
 #include "render_hooks_platform.h"
 #include <rescaleframe/sha256_file.h>
 #include <rescaleframe/steam_d3d11_chain.h>
@@ -32,7 +31,7 @@ constexpr rsf_fallout4_platform platform{
     [](const rsf_game_host_services* host) noexcept {
         return rsf::steam::prepare_d3d11_chain(*host, [] { return rsf_fallout4_cold_owner(); });
     },
-    [](const rsf_fallout4_create_call* call) noexcept { return call_creation(call); },
+    rsf_fallout4_call_creation,
     [](rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup, rsf_game_host_services* services,
         int32_t* result) noexcept {
         return guarded([&] { *result = create ? create(setup, services) : RSF_ERROR_NOT_READY; });

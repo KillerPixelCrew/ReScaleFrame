@@ -2,7 +2,7 @@
 // Native leaves of the Rust creation owner (creation.rs). The detour on the creation import thunk
 // passes the engine's own arguments and its return address to Rust; Rust decides the scope and
 // calls the unchanged native creation through call_creation.
-#include "native_creation.h"
+#include "fallout4_platform.h"
 #include <d3d11.h>
 #include <windows.h>
 #include <cstddef>
@@ -33,7 +33,7 @@ HRESULT WINAPI observe_create(IDXGIAdapter* adapter, D3D_DRIVER_TYPE type, HMODU
 extern "C" void* rsf_fallout4_creation_detour() noexcept {
     return reinterpret_cast<void*>(&observe_create);
 }
-int32_t call_creation(const rsf_fallout4_create_call* call) noexcept {
+extern "C" int32_t rsf_fallout4_call_creation(const rsf_fallout4_create_call* call) noexcept {
     const auto native_create = reinterpret_cast<NativeCreate>(rsf_fallout4_creation_original());
     if (!native_create) return E_FAIL;
     return native_create(static_cast<IDXGIAdapter*>(call->adapter), D3D_DRIVER_TYPE(call->driver_type),

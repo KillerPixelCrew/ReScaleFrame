@@ -67,10 +67,11 @@ typedef struct rsf_fallout4_platform {
 
 // Rust owner entry points.
 void* rsf_fallout4_creation_original(void);
+#ifdef __cplusplus
+int32_t rsf_fallout4_call_creation(const rsf_fallout4_create_call* call) noexcept;
+#endif
 // The creation thunk detour body. caller is the detour's return address.
 int32_t rsf_fallout4_creation_observe(uintptr_t caller, const rsf_fallout4_create_call* call);
-// The native renderer owner's window in this process.
-int rsf_fallout4_accept_window(void* user, void* window);
 // The renderer owner has not created its device yet.
 bool rsf_fallout4_cold_owner(void);
 
