@@ -13,8 +13,7 @@ fn sample(view: &[u8], pass: &mut rsf_game_render_pass) -> bool {
     read_camera(view, pass, copy, read_jitter(view, copy))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_camera_fixture() -> bool {
+fn camera_fixture() -> bool {
     let mut view = [0_u8; 0x5700];
     let mut family = [0_u8; 0xd0];
     store(&mut view, 0, family.as_ptr() as usize);
@@ -84,5 +83,5 @@ extern "C" fn rsf_wingman_camera_fixture() -> bool {
 
 #[test]
 fn decodes_guarded_camera_record() {
-    assert!(rsf_wingman_camera_fixture());
+    assert!(camera_fixture());
 }

@@ -109,9 +109,6 @@ target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_o
 
 add_executable(rsf_plugin_contract game-sdk/contract_main.c)
 
-add_executable(rsf_wingman_camera wingman_camera.c)
-target_link_libraries(rsf_wingman_camera PRIVATE rsf_wingman_rust ReScaleFrame::GameSDK rsf_build_options)
-add_test(NAME wingman_camera_contract COMMAND rsf_wingman_camera)
 target_link_libraries(rsf_plugin_contract PRIVATE rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK rsf_build_options)
 add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_rdr2 rsf_game_unity_mono)
 add_dependencies(rsf_plugin_contract rsf_game_skyrim_se)

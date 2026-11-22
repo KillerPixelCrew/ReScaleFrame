@@ -155,6 +155,6 @@ pub(crate) fn read_camera(
     valid
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 #[path = "camera_fixture.rs"]
 mod fixture;
