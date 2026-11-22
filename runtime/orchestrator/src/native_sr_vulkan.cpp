@@ -4,6 +4,7 @@
 
 namespace {
 struct Platform;
+using Lookup = int32_t (*)(rsf_vk_get_proc, void*, const char*, rsf_vk_function*);
 }
 
 extern "C" {
@@ -13,7 +14,7 @@ int32_t rsf_core_srvk_evaluate(rsf_srvk*, void*, const rsf_srvk_frame*);
 void rsf_core_srvk_retire_commands(rsf_srvk*, void*);
 int32_t rsf_core_srvk_destroy(rsf_srvk*);
 int32_t rsf_core_srvk_dlss_preset(rsf_srvk*, uint32_t);
-int32_t rsf_core_srvk_spatial_fallback(const Platform*, const rsf_srvk_fallback*);
+int32_t rsf_core_srvk_spatial_fallback(Lookup, const rsf_srvk_fallback*);
 }
 
 #if defined(RSF_HAVE_FFX_VK)
@@ -35,10 +36,6 @@ namespace {
 constexpr auto max_versions = rsf::max_ffx_versions;
 
 using Version = rsf_ffx_version;
-struct Blit {
-    rsf_vk_function barrier, blit;
-    uint32_t features;
-};
 struct FfxDispatch {
     const rsf_srvk_frame* frame;
     rsf_srvk_image reactive, composition, output;
@@ -82,13 +79,11 @@ struct Platform {
     const rsf_vkdlss_platform* dlss;
     const rsf::xess_vk::Ops* xess;
     FfxOps ffx;
-    int32_t (*fallback_probe)(const rsf_srvk_fallback*, Blit*);
-    int32_t (*fallback_record)(const rsf_srvk_fallback*, const Blit*);
     int32_t (*dump_begin)(const rsf_frame_record*, uint32_t);
     int32_t (*dump_wants)(const rsf_frame_record*);
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
-static_assert(sizeof(FfxOps) == 28 * sizeof(void*) && sizeof(Platform) == 280 && sizeof(Blit) == 24);
+static_assert(sizeof(FfxOps) == 28 * sizeof(void*) && sizeof(Platform) == 264);
 static_assert(sizeof(FfxExports) == 4 * sizeof(void*) && sizeof(FfxDeviceEntries) == 9 * sizeof(void*));
 static_assert(offsetof(FfxOps, barrier) == 16 * 8 && offsetof(FfxOps, clear_color_zero) == 17 * 8 &&
     offsetof(FfxOps, dispatch) == 18 * 8 && offsetof(FfxOps, copy) == 19 * 8 && offsetof(FfxOps, sharpen) == 20 * 8);
@@ -249,21 +244,6 @@ int32_t plan(FfxNative* native, const rsf_srvk_setup* setup, uint32_t* width, ui
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-VkImageMemoryBarrier image_barrier(VkImage image, VkImageLayout from, VkImageLayout to,
-    VkAccessFlags source, VkAccessFlags target) noexcept
-{
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = from;
-    barrier.newLayout = to;
-    barrier.srcAccessMask = source;
-    barrier.dstAccessMask = target;
-    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    return barrier;
-}
-
 void record_barrier(FfxNative* native, void* commands, const rsf_vkfg_barrier* plan) noexcept
 {
     rsf::vkfg::record_barrier(native->barrier, static_cast<VkCommandBuffer>(commands), *plan);
@@ -334,46 +314,6 @@ int32_t dispatch(FfxNative* native, void* commands, const FfxDispatch* call) noe
 }
 catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-int32_t fallback_probe(const rsf_srvk_fallback* call, Blit* out) noexcept try
-{
-    const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(
-        call->instance_proc(call->instance, "vkGetPhysicalDeviceFormatProperties"));
-    out->barrier = call->device_proc(call->device, "vkCmdPipelineBarrier");
-    out->blit = call->device_proc(call->device, "vkCmdBlitImage");
-    if (!properties || !out->barrier || !out->blit) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    VkFormatProperties format{};
-    properties(static_cast<VkPhysicalDevice>(call->physical_device), static_cast<VkFormat>(call->color.format), &format);
-    out->features = format.optimalTilingFeatures;
-    return RSF_BACKEND_OK;
-}
-catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-
-int32_t fallback_record(const rsf_srvk_fallback* call, const Blit* ops) noexcept try
-{
-    const auto& source = call->color;
-    const auto& output = call->output;
-    const auto list = static_cast<VkCommandBuffer>(call->command_buffer);
-    const auto barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(ops->barrier);
-    const auto blit = reinterpret_cast<PFN_vkCmdBlitImage>(ops->blit);
-    auto change = image_barrier(reinterpret_cast<VkImage>(source.image), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-    barrier(list, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &change);
-    const auto target = image_barrier(reinterpret_cast<VkImage>(output.image), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_MEMORY_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    barrier(list, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &target);
-    VkImageBlit region{};
-    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.srcOffsets[1] = {static_cast<int32_t>(source.width), static_cast<int32_t>(source.height), 1};
-    region.dstOffsets[1] = {static_cast<int32_t>(output.width), static_cast<int32_t>(output.height), 1};
-    blit(list, change.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1, &region, VK_FILTER_LINEAR);
-    change = image_barrier(change.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
-    barrier(list, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &change);
-    return RSF_BACKEND_OK;
-}
-catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-
 constexpr Platform native{
     rsf::dlss_vk::platform,
     rsf::xess_vk::platform,
@@ -401,13 +341,15 @@ constexpr Platform native{
             owner->capture.retire_commands(static_cast<VkCommandBuffer>(commands));
         },
         [](FfxNative* owner) { (void)owner->capture.flush(); }},
-    fallback_probe, fallback_record, rsf_input_dump_begin_record, rsf_input_dump_wants, rsf_input_dump_result,
+    rsf_input_dump_begin_record, rsf_input_dump_wants, rsf_input_dump_result,
 };
 constexpr const Platform* platform = &native;
+constexpr Lookup fallback_lookup = call_device_proc;
 }
 #else
 namespace {
 constexpr const Platform* platform = nullptr;
+constexpr Lookup fallback_lookup = nullptr;
 }
 #endif
 
@@ -438,6 +380,6 @@ rsf_backend_result rsf_srvk_dlss_preset(rsf_srvk* owner, uint32_t preset)
 }
 rsf_backend_result rsf_srvk_spatial_fallback(const rsf_srvk_fallback* call)
 {
-    return rsf_core_srvk_spatial_fallback(platform, call);
+    return rsf_core_srvk_spatial_fallback(fallback_lookup, call);
 }
 }

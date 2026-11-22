@@ -39,7 +39,6 @@ enum Call {
 struct Fake {
     calls: Vec<Call>,
     effective: u64,
-    blit_features: u32,
     fail_allocation: bool,
     dispatch_result: i32,
     destroy_result: i32,
@@ -50,7 +49,6 @@ impl Default for Fake {
         Self {
             calls: Vec::new(),
             effective: 33,
-            blit_features: 0,
             fail_allocation: false,
             dispatch_result: 0,
             destroy_result: 0,
@@ -499,13 +497,6 @@ pub(super) static PLATFORM: Platform = Platform {
             unsafe { fake(handle).calls.push(Call::Flush) }
         }),
     },
-    fallback_probe: leaf!(|call: &rsf_srvk_fallback, out: &mut Blit| -> i32 {
-        out.barrier = Some(unused);
-        out.blit = Some(unused);
-        out.features = unsafe { fake(call.device) }.blit_features;
-        0
-    }),
-    fallback_record: leaf!(|_: &rsf_srvk_fallback, _: &Blit| -> i32 { 123 }),
     dump_begin: leaf!(|_: &rsf_frame_record, _: u32| -> i32 { 1 }),
     dump_wants: leaf!(|_: &rsf_frame_record| -> i32 { 1 }),
     dump_result: leaf!(|_: &rsf_frame_record, _: *const c_char, _: u32, _: i32| -> () {}),
@@ -921,43 +912,5 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
             Call::Release(4, 0),
             Call::Close,
         ]
-    );
-}
-
-#[test]
-fn fallback_checks_admission_and_linear_blit_capabilities_before_recording() {
-    let mut state = Fake::default();
-    let setup = state.setup(RSF_SR_FSR3);
-    let record = frame_record();
-    let frame = frame_input(&setup, &record);
-    let mut call = rsf_srvk_fallback {
-        struct_size: size_of::<rsf_srvk_fallback>() as u32,
-        abi_version: RSF_SRVK_ABI_VERSION,
-        instance: setup.instance,
-        physical_device: setup.physical_device,
-        device: setup.device,
-        instance_proc: setup.instance_proc,
-        device_proc: setup.device_proc,
-        command_buffer: setup.device,
-        color: frame.color,
-        output: frame.output,
-    };
-    assert_eq!(
-        unsafe { rsf_core_srvk_spatial_fallback(None, &call) },
-        NOT_SUPPORTED
-    );
-    assert_eq!(
-        unsafe { rsf_core_srvk_spatial_fallback(Some(&PLATFORM), &call) },
-        NOT_SUPPORTED
-    );
-    state.blit_features = LINEAR_BLIT;
-    assert_eq!(
-        unsafe { rsf_core_srvk_spatial_fallback(Some(&PLATFORM), &call) },
-        123
-    );
-    call.output.image = call.color.image;
-    assert_eq!(
-        unsafe { rsf_core_srvk_spatial_fallback(Some(&PLATFORM), &call) },
-        INVALID
     );
 }

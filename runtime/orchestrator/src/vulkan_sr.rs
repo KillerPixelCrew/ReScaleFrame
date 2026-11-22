@@ -45,7 +45,6 @@ const SHADER_READ_ACCESS: u32 = 0x20;
 const SHADER_WRITE_ACCESS: u32 = 0x40;
 const TRANSFER_READ_ACCESS: u32 = 0x800;
 const TRANSFER_WRITE_ACCESS: u32 = 0x1000;
-const LINEAR_BLIT: u32 = 0x400 | 0x800 | 0x1000;
 
 const FFX_HDR: u32 = 1;
 const FFX_JITTER_CANCELLATION: u32 = 4;
@@ -347,8 +346,6 @@ struct Platform {
     dlss: Option<&'static crate::vulkan_dlss_sr_abi::rsf_vkdlss_platform>,
     xess: Option<&'static xess::XessOps>,
     ffx: FfxOps,
-    fallback_probe: unsafe extern "C" fn(&rsf_srvk_fallback, &mut Blit) -> i32,
-    fallback_record: unsafe extern "C" fn(&rsf_srvk_fallback, &Blit) -> i32,
     dump_begin: unsafe extern "C" fn(&rsf_frame_record, u32) -> i32,
     dump_wants: unsafe extern "C" fn(&rsf_frame_record) -> i32,
     dump_result: unsafe extern "C" fn(&rsf_frame_record, *const c_char, u32, i32),
@@ -389,14 +386,6 @@ struct FfxOps {
 }
 
 #[repr(C)]
-#[derive(Default)]
-struct Blit {
-    barrier: rsf_vk_function,
-    blit: rsf_vk_function,
-    features: u32,
-}
-
-#[repr(C)]
 struct FfxDispatch<'a> {
     frame: &'a Frame,
     reactive: Image,
@@ -416,8 +405,7 @@ const _: () = {
     assert!(std::mem::offset_of!(FfxOps, dispatch) == 18 * 8);
     assert!(std::mem::offset_of!(FfxOps, copy) == 19 * 8);
     assert!(std::mem::offset_of!(FfxOps, sharpen) == 20 * 8);
-    assert!(size_of::<Platform>() == 280);
-    assert!(size_of::<Blit>() == 24);
+    assert!(size_of::<Platform>() == 264);
     assert!(size_of::<FfxDispatch>() == 144);
     assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
 };
@@ -976,30 +964,6 @@ unsafe extern "C" fn rsf_core_srvk_dlss_preset(owner: *mut Owner, preset: u32) -
     NOT_SUPPORTED
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_spatial_fallback(
-    platform: Option<&Platform>,
-    call: *const rsf_srvk_fallback,
-) -> i32 {
-    let admission = unsafe { fallback_admit(call) };
-    if admission != 0 {
-        return admission;
-    }
-    let Some(platform) = platform else {
-        return NOT_SUPPORTED;
-    };
-    let call = unsafe { &*call };
-    let mut blit = Blit::default();
-    let result = unsafe { (platform.fallback_probe)(call, &mut blit) };
-    if result != 0 {
-        return result;
-    }
-    if blit.barrier.is_none() || blit.blit.is_none() || blit.features & LINEAR_BLIT != LINEAR_BLIT {
-        return NOT_SUPPORTED;
-    }
-    unsafe { (platform.fallback_record)(call, &blit) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1130,4 +1094,5 @@ macro_rules! leaf {
 #[cfg(test)]
 mod owner_tests;
 
+mod fallback;
 mod xess;

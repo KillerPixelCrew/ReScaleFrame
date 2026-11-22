@@ -7650,3 +7650,13 @@ SR12 ABI fixtures preserve their DLL and embedded registrations. The
 [D04 source record](research/d04-d3d12-host-port.md) lists the five remaining
 C++ paths and the Rust review resolutions. Verification covers source syntax,
 bindings and pinned formatting. Build, test and device execution remain pending.
+
+### Vulkan SR native port follow-up (V01)
+
+The split SR dispatcher marshals provider info in Rust and the C export
+forwarder supplies the optional provider. Rust owns the timing file through
+CRT cleanup and records the spatial recovery blit through typed Vulkan
+functions. The split contract and live DLL export checks have Rust fixtures.
+[Source evidence and remaining native paths](research/vulkan-sr-native-port-followup.md)
+record the SDK and Vulkan revisions. Build, test, lint and device verification
+remain pending.
