@@ -93,3 +93,13 @@ now depends on Windows unwinding reaching the caller. Source checks cover table 
 field names, layout spans, bounds and the existing functional fixture's paths. Binary checks
 still need to exercise caller attribution, thunk conflicts, Vulkan result forwarding and
 cross-API nested presents.
+
+## Module-dump schema fixture
+
+`tests/module_dump_v2.cpp` is replaced by the Rust fixture and a small native RTTI specimen.
+The executable keeps the native vtable and inheritance records under test. Rust starts and names
+the worker, checks its reported RVA, validates the exception, names and RTTI sections, and
+compares section digests with BCrypt across the bytes in the file. The short v1 report has a
+sentinel immediately after its ABI prefix to detect writes into the extension. CTest retains
+the same fixture target, output directory and timeout. The CLI expects the UTF-8 directory
+already required by the dump API.

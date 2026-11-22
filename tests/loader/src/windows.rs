@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 mod fixture;
 mod forwarding;
+mod module_dump;
+mod module_dump_abi;
 mod thin;
 #[cfg(target_env = "msvc")]
 mod vendor_census_asi;

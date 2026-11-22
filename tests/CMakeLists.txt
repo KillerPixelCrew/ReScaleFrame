@@ -776,8 +776,9 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_I
 endif()
 
 
-add_executable(rsf_module_dump_v2 module_dump_v2.cpp)
-target_link_libraries(rsf_module_dump_v2 PRIVATE ReScaleFrame::LoaderDiagnostics rsf_build_options bcrypt)
+add_executable(rsf_module_dump_v2 loader/module_dump_rtti_fixture.cpp)
+target_link_libraries(rsf_module_dump_v2 PRIVATE
+    rsf_loader_fixtures_rust ReScaleFrame::LoaderDiagnostics rsf_build_options bcrypt)
 add_test(NAME module_dump_v2 COMMAND rsf_module_dump_v2 "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(module_dump_v2 PROPERTIES TIMEOUT 120)
 
