@@ -49,12 +49,12 @@ def main():
             if domain == 'sr':
                 # The build's extended guards are its STANDARD_UNIQUE / AVX_UNIQUE table, ahead of PROFILES.
                 unique = text.index('const ' + build.upper() + '_UNIQUE')
-                sun = re.search(r'UniqueGuard::new\(c"CRender::render_sun_cascades", (0x[0-9a-f]+), c"([0-9a-f]+)"',
+                sun = re.search(r'UniqueGuard::new\(\s*c"CRender::render_sun_cascades",\s*(0x[0-9a-f]+),\s*c"([0-9a-f]+)"',
                                 text[unique:])
                 assert sun
                 # Alter the extended guard beyond expected16, and the separately guarded call's displacement.
                 mutations.append(('sun_extended', unique, sun))
-                sun_call = re.search(r'site\(c"CRender::Render -> render_sun_cascades[^\n]+b"([0-9a-f]+)"', selected)
+                sun_call = re.search(r'site\(\s*c"CRender::Render -> render_sun_cascades[^"]*",\s*0x[0-9a-f]+,\s*b"([0-9a-f]+)"', selected)
                 assert sun_call
                 mutations.append(('sun_call', start, sun_call))
                 for field in ('get_constant_buffer_rva', 'position_setup_vtable_rva'):
@@ -63,7 +63,7 @@ def main():
                     mutations.append((field, start, match))
                 for name in ('position binder body', 'R_constants::GetCBuffer',
                              'position binder registration', 'constant buffer reflected size'):
-                    match = re.search(r'UniqueGuard::new\(c"' + name + r'", (0x[0-9a-f]+), c"([0-9a-f]+)"', selected)
+                    match = re.search(r'UniqueGuard::new\(\s*c"' + name + r'",\s*(0x[0-9a-f]+),\s*c"([0-9a-f]+)"', selected)
                     assert match
                     mutations.append(('reconstruction_guard', start, match))
             with tempfile.TemporaryDirectory(prefix='rsf-anomaly-evidence-') as temp:

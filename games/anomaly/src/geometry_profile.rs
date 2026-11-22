@@ -43,6 +43,7 @@
 // CSkeletonX subobject offsets are consumed by the Rust draw source setup.
 // Bone instance stride and transform offset are consumed by the Rust palette reader.
 use crate::engine_guards::{NativeSite, UniqueGuard, site};
+use crate::native_profile::ENGINE;
 
 pub(crate) const SITE_COUNT: usize = 17;
 pub(crate) const LAYOUT_COUNT: usize = 7;
@@ -123,26 +124,10 @@ pub(crate) static PROFILES: [Profile; 2] = [
                 0x84b930,
                 b"48895c2408574883ec20488d1da78551",
             ),
-            site(
-                c"R_dsgraph_structure::r_dsgraph_render_hud",
-                0x84ffa0,
-                b"488bc448897010574881ec500100000f",
-            ),
-            site(
-                c"R_dsgraph_structure::r_dsgraph_render_sorted",
-                0x850cc0,
-                b"488bc44889580848897010574881ec10",
-            ),
-            site(
-                c"R_dsgraph_structure::r_dsgraph_render_emissive",
-                0x84ec80,
-                b"488bc44889580848897010574881ec10",
-            ),
-            site(
-                c"CRender::rmNear",
-                0x83a450,
-                b"40534883ec40488b01ff507848c74424",
-            ),
+            ENGINE[0].render_hud,
+            ENGINE[0].render_sorted,
+            ENGINE[0].render_emissive,
+            ENGINE[0].rm_near,
             site(
                 c"CRender::rmNormal",
                 0x83a4d0,
@@ -222,11 +207,7 @@ pub(crate) static PROFILES: [Profile; 2] = [
                 0x84ec80,
                 c"488bc44889580848897010574881ec1001000083b958",
             ),
-            UniqueGuard::new(
-                c"CRender::rmNear",
-                0x83a450,
-                c"40534883ec40488b01ff507848c744242000000000488bc8488bd8488b10ff52508bc80f57c0f3480f2ac1488bcbf30f11442428488b13ff5258488b0d47",
-            ),
+            ENGINE[0].rm_near_unique,
             UniqueGuard::new(
                 c"CRender::rmNormal",
                 0x83a4d0,
@@ -302,26 +283,10 @@ pub(crate) static PROFILES: [Profile; 2] = [
                 0x842490,
                 b"48895c2408574883ec20488d1d47fa50",
             ),
-            site(
-                c"R_dsgraph_structure::r_dsgraph_render_hud",
-                0x846aa0,
-                b"488bc448897010574881ec80010000c5",
-            ),
-            site(
-                c"R_dsgraph_structure::r_dsgraph_render_sorted",
-                0x8476a0,
-                b"488bc44889580848897010574881ec40",
-            ),
-            site(
-                c"R_dsgraph_structure::r_dsgraph_render_emissive",
-                0x8457e0,
-                b"488bc44889580848897010574881ec40",
-            ),
-            site(
-                c"CRender::rmNear",
-                0x831700,
-                b"40534883ec50488b01c5f829742440ff",
-            ),
+            ENGINE[1].render_hud,
+            ENGINE[1].render_sorted,
+            ENGINE[1].render_emissive,
+            ENGINE[1].rm_near,
             site(
                 c"CRender::rmNormal",
                 0x8317a0,
@@ -401,11 +366,7 @@ pub(crate) static PROFILES: [Profile; 2] = [
                 0x8457e0,
                 c"488bc44889580848897010574881ec4001000083b958",
             ),
-            UniqueGuard::new(
-                c"CRender::rmNear",
-                0x831700,
-                c"40534883ec50488b01c5f829742440ff5078c5c857f6c5fa11742420c5fa11742424488b10488bc8488bd8ff52508bc8c5f857c0c4e1fa2ac1c5fa11442428488b13488bcbff5258488b0d89",
-            ),
+            ENGINE[1].rm_near_unique,
             UniqueGuard::new(
                 c"CRender::rmNormal",
                 0x8317a0,

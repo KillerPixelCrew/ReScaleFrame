@@ -49,6 +49,23 @@ def _read(path):
     return pathlib.Path(path).read_text(encoding='utf-8')
 
 
+def _engine():
+    """native_profile.rs ENGINE: {(build index, field): its site(...) / UniqueGuard::new(...) source}."""
+    body = re.search(r'const ENGINE: \[Engine; 2\] = \[(.*?)\n\];', _read(NATIVE), re.S)[1]
+    records = re.split(r'\n    Engine \{', body)[1:]
+    return {(index, field): call for index, record in enumerate(records)
+            for field, call in re.findall(r'\n        (\w+): ((?:site|UniqueGuard::new)\(.*?\)),', record)}
+
+
+def _expand(text):
+    """Writes the shared engine records the geometry and SR owners name as ENGINE[i].field in place."""
+    engine = _engine()
+
+    def replace(match):
+        call = engine[(int(match[1]), match[2])]
+        return re.search(r'(0x[0-9a-f]+)', call)[1] if match[3] else call
+    return re.sub(r'\bENGINE\[(\d)\]\.(\w+)(\.rva)?', replace, text)
+
 def _record(text, build):
     body = re.search(r'static PROFILES: \[Profile; 2\] = \[(.*?)\n\];', text, re.S)[1]
     records = re.split(r'\n    Profile \{', body)[1:]
@@ -79,7 +96,7 @@ def native(build, path=NATIVE):
 
 
 def geometry(build, path=GEOMETRY):
-    text = _read(path)
+    text = _expand(_read(path))
     record = _record(text, build)
     profile = constants(text) | _scalars(record)
     # The layout the native geometry readers use lives with them.
@@ -95,7 +112,7 @@ def geometry(build, path=GEOMETRY):
 
 
 def sr(build, path=SR):
-    text = _read(path)
+    text = _expand(_read(path))
     record = _record(text, build)
     profile = constants(text) | _scalars(record)
     unique = re.search(r'unique_guards: &(\w+),', record)[1]

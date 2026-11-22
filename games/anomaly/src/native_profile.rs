@@ -18,6 +18,36 @@ pub(crate) struct Profile {
     pub(crate) guards: [UniqueGuard; 2],
 }
 
+/// Engine functions both the geometry profile and the SR profile name, per build in PROFILES order: rmNear (a
+/// geometry detour, the SR H4 hook and the end of every first-person site) and the three r_dsgraph renders the
+/// geometry context hooks and the SR first-person sites share. A game update changes them here once.
+pub(crate) struct Engine {
+    pub(crate) rm_near: NativeSite,
+    pub(crate) rm_near_unique: UniqueGuard,
+    pub(crate) render_hud: NativeSite,
+    pub(crate) render_sorted: NativeSite,
+    pub(crate) render_emissive: NativeSite,
+}
+
+pub(crate) const ENGINE: [Engine; 2] = [
+    // Standard
+    Engine {
+        rm_near: site(c"CRender::rmNear", 0x83a450, b"40534883ec40488b01ff507848c74424"),
+        rm_near_unique: UniqueGuard::new(c"CRender::rmNear", 0x83a450, c"40534883ec40488b01ff507848c744242000000000488bc8488bd8488b10ff52508bc80f57c0f3480f2ac1488bcbf30f11442428488b13ff5258488b0d47"),
+        render_hud: site(c"R_dsgraph_structure::r_dsgraph_render_hud", 0x84ffa0, b"488bc448897010574881ec500100000f"),
+        render_sorted: site(c"R_dsgraph_structure::r_dsgraph_render_sorted", 0x850cc0, b"488bc44889580848897010574881ec10"),
+        render_emissive: site(c"R_dsgraph_structure::r_dsgraph_render_emissive", 0x84ec80, b"488bc44889580848897010574881ec10"),
+    },
+    // AVX
+    Engine {
+        rm_near: site(c"CRender::rmNear", 0x831700, b"40534883ec50488b01c5f829742440ff"),
+        rm_near_unique: UniqueGuard::new(c"CRender::rmNear", 0x831700, c"40534883ec50488b01c5f829742440ff5078c5c857f6c5fa11742420c5fa11742424488b10488bc8488bd8ff52508bc8c5f857c0c4e1fa2ac1c5fa11442428488b13488bcbff5258488b0d89"),
+        render_hud: site(c"R_dsgraph_structure::r_dsgraph_render_hud", 0x846aa0, b"488bc448897010574881ec80010000c5"),
+        render_sorted: site(c"R_dsgraph_structure::r_dsgraph_render_sorted", 0x8476a0, b"488bc44889580848897010574881ec40"),
+        render_emissive: site(c"R_dsgraph_structure::r_dsgraph_render_emissive", 0x8457e0, b"488bc44889580848897010574881ec40"),
+    },
+];
+
 // SAFETY: the only raw pointers in the two immutable records point to static
 // C string literals. The records are never written through those pointers.
 unsafe impl Sync for Profile {}

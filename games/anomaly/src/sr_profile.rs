@@ -99,6 +99,7 @@
 #![allow(dead_code)]
 
 use crate::engine_guards::{NativeSite, UniqueGuard, site};
+use crate::native_profile::ENGINE;
 use std::ffi::CStr;
 
 // ---- layout shared by both builds (documented above) ----
@@ -323,19 +324,39 @@ unsafe impl Sync for WorldTarget {}
 const STANDARD_UNIQUE: [UniqueGuard; 7] = [
     UniqueGuard::new(c"CRender::render_sun_cascades", 0x815a30, c"48895c240848896c2410488974241848897c242041564883ec20488bd948"),
     UniqueGuard::new(c"CRenderTarget::phase_blur", 0x8f2590, c"48895c242055565741564157488bec4881"),
-    UniqueGuard::new(c"CRender::rmNear", 0x83a450, c"40534883ec40488b01ff507848c744242000000000488bc8488bd8488b10ff52508bc80f57c0f3480f2ac1488bcbf30f11442428488b13ff5258488b0d47"),
+    ENGINE[0].rm_near_unique,
     UniqueGuard::new(c"CRender::rmFar", 0x83a3c0, c"40534883ec40488b01ff507848c744242000000000488bc8488bd8488b10ff52508bc80f57c0f3480f2ac1488bcbf30f11442428488b13ff5258488b0dd7"),
     UniqueGuard::new(c"R_xforms::set_P", 0x83ecd0, c"48895c240848896c2410488974241848897c242041564883ec208b02"),
     UniqueGuard::new(c"R_xforms::set_V", 0x83f970, c"48895c240848896c2410488974241857415641574883ec208b02"),
     UniqueGuard::new(c"CBackend::Invalidate", 0x842c50, c"48895c240848896c24104889742418574883ec2033ed488bd94889a9"),
 ];
 const AVX_UNIQUE: [UniqueGuard; 6] = [
-    UniqueGuard::new(c"CRender::render_sun_cascades", 0x80dfd0, c"48895c240848896c2410488974241848897c242041564883ec20488bd948"),
-    UniqueGuard::new(c"CRenderTarget::phase_blur", 0x8e6e40, c"488bc44889582055565741564157488d68a14881eca0"),
-    UniqueGuard::new(c"CRender::rmNear", 0x831700, c"40534883ec50488b01c5f829742440ff5078c5c857f6c5fa11742420c5fa11742424488b10488bc8488bd8ff52508bc8c5f857c0c4e1fa2ac1c5fa11442428488b13488bcbff5258488b0d89"),
-    UniqueGuard::new(c"R_xforms::set_P", 0x835fc0, c"48895c240848896c2410488974241848897c242041564883ec208b02"),
-    UniqueGuard::new(c"R_xforms::set_V", 0x836c60, c"48895c240848896c2410488974241857415641574883ec208b02"),
-    UniqueGuard::new(c"CBackend::Invalidate", 0x839f80, c"48895c240848896c24104889742418574883ec2033ed488bd94889a9"),
+    UniqueGuard::new(
+        c"CRender::render_sun_cascades",
+        0x80dfd0,
+        c"48895c240848896c2410488974241848897c242041564883ec20488bd948",
+    ),
+    UniqueGuard::new(
+        c"CRenderTarget::phase_blur",
+        0x8e6e40,
+        c"488bc44889582055565741564157488d68a14881eca0",
+    ),
+    ENGINE[1].rm_near_unique,
+    UniqueGuard::new(
+        c"R_xforms::set_P",
+        0x835fc0,
+        c"48895c240848896c2410488974241848897c242041564883ec208b02",
+    ),
+    UniqueGuard::new(
+        c"R_xforms::set_V",
+        0x836c60,
+        c"48895c240848896c2410488974241857415641574883ec208b02",
+    ),
+    UniqueGuard::new(
+        c"CBackend::Invalidate",
+        0x839f80,
+        c"48895c240848896c24104889742418574883ec2033ed488bd94889a9",
+    ),
 ];
 
 /// In native_profile.rs order (the build index Rust admits).
@@ -348,7 +369,7 @@ pub(crate) static PROFILES: [Profile; 2] = [
             site(c"CRenderTarget::phase_combine", 0x8bc980, b"488bc45556415441554156488da888fe"),
             site(c"CRenderTarget::phase_sunshafts", 0x8f07c0, b"4c8bdc554156498d6ba14881ece80000"),
             site(c"CRenderTarget::phase_blur", 0x8f2590, b"48895c242055565741564157488bec48"),
-            site(c"CRender::rmNear", 0x83a450, b"40534883ec40488b01ff507848c74424"),
+            ENGINE[0].rm_near,
             site(c"CRender::rmFar", 0x83a3c0, b"40534883ec40488b01ff507848c74424"),
             site(c"R_xforms::set_P", 0x83ecd0, b"48895c240848896c2410488974241848"),
             site(c"R_xforms::set_V", 0x83f970, b"48895c240848896c2410488974241857"),
@@ -372,10 +393,10 @@ pub(crate) static PROFILES: [Profile; 2] = [
             site(c"CRender::Render -> render_sun_cascades (r4_R_render.cpp:492)", 0x8984a8, b"e883d5f7ffeb15e8ecd6f7ff488bcee8"),
         ],
         first_person_sites: [
-            first_person(c"r_dsgraph_render_hud (r__dsgraph_render.cpp:502-520)", 0x84ffa0, 0x850410, 0x85041b),
+            first_person(c"r_dsgraph_render_hud (r__dsgraph_render.cpp:502-520)", ENGINE[0].render_hud.rva, 0x850410, 0x85041b),
             first_person(c"r_dsgraph_render_hud_ui (r__dsgraph_render.cpp:538-583)", 0x8505a0, 0x8509b5, 0x850ab4),
-            first_person(c"r_dsgraph_render_sorted (r__dsgraph_render.cpp:595-613)", 0x850cc0, 0x851135, 0x851140),
-            first_person(c"r_dsgraph_render_emissive (r__dsgraph_render.cpp:626-645)", 0x84ec80, 0x84f0f5, 0x84f100),
+            first_person(c"r_dsgraph_render_sorted (r__dsgraph_render.cpp:595-613)", ENGINE[0].render_sorted.rva, 0x851135, 0x851140),
+            first_person(c"r_dsgraph_render_emissive (r__dsgraph_render.cpp:626-645)", ENGINE[0].render_emissive.rva, 0x84f0f5, 0x84f100),
             first_person(c"CParticleEffect::Render HUD mode (ParticleEffect.cpp:599-611)", 0x8d8420, 0x8d8a8e, 0x8d8a9a),
             first_person(c"CRenderTarget::accum_point HUD light (r4_rendertarget_accum_point.cpp:19-31)", 0x90dca0, 0x90e16c, 0x90e178),
         ],
@@ -419,7 +440,7 @@ pub(crate) static PROFILES: [Profile; 2] = [
             site(c"CRenderTarget::phase_combine", 0x8b2950, b"488bc45556415441554156488da888fe"),
             site(c"CRenderTarget::phase_sunshafts", 0x8e5090, b"4c8bdc554156498d6ba14881ecf80000"),
             site(c"CRenderTarget::phase_blur", 0x8e6e40, b"488bc44889582055565741564157488d"),
-            site(c"CRender::rmNear", 0x831700, b"40534883ec50488b01c5f829742440ff"),
+            ENGINE[1].rm_near,
             site(c"CRender::rmFar", 0x831670, b"40534883ec40488b01ff5078c5f857c0"),
             site(c"R_xforms::set_P", 0x835fc0, b"48895c240848896c2410488974241848"),
             site(c"R_xforms::set_V", 0x836c60, b"48895c240848896c2410488974241857"),
@@ -443,10 +464,10 @@ pub(crate) static PROFILES: [Profile; 2] = [
             site(c"CRender::Render -> render_sun_cascades (r4_R_render.cpp:492)", 0x88e0d6, b"e8f5fef7ffeb15e85e00f8ff488bcee8"),
         ],
         first_person_sites: [
-            first_person(c"r_dsgraph_render_hud (r__dsgraph_render.cpp:502-520)", 0x846aa0, 0x846e95, 0x846ea0),
+            first_person(c"r_dsgraph_render_hud (r__dsgraph_render.cpp:502-520)", ENGINE[1].render_hud.rva, 0x846e95, 0x846ea0),
             first_person(c"r_dsgraph_render_hud_ui (r__dsgraph_render.cpp:538-583)", 0x847000, 0x8473ac, 0x8474ab),
-            first_person(c"r_dsgraph_render_sorted (r__dsgraph_render.cpp:595-613)", 0x8476a0, 0x847ab3, 0x847abe),
-            first_person(c"r_dsgraph_render_emissive (r__dsgraph_render.cpp:626-645)", 0x8457e0, 0x845bf3, 0x845bfe),
+            first_person(c"r_dsgraph_render_sorted (r__dsgraph_render.cpp:595-613)", ENGINE[1].render_sorted.rva, 0x847ab3, 0x847abe),
+            first_person(c"r_dsgraph_render_emissive (r__dsgraph_render.cpp:626-645)", ENGINE[1].render_emissive.rva, 0x845bf3, 0x845bfe),
             first_person(c"CParticleEffect::Render HUD mode (ParticleEffect.cpp:599-611)", 0x8cd840, 0x8cddcb, 0x8cddd7),
             first_person(c"CRenderTarget::accum_point HUD light (r4_rendertarget_accum_point.cpp:19-31)", 0x9021d0, 0x90260d, 0x902619),
         ],
