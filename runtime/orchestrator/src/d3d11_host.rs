@@ -356,8 +356,7 @@ fn validate_setup(setup: &rsf_d3d11_host_setup, services: &rsf_game_host_service
         || setup.engine_version_utf8.is_null()
         || setup.project_id_utf8.is_null()
         || services.session_id == 0
-        || !setup.units_to_meters.is_finite()
-        || setup.units_to_meters <= 0.0
+        || !crate::sr_session::valid_unit_scale(setup.units_to_meters)
         || setup.quality_choices == 0
         || setup.quality_choices & !0x1f != 0
         || motion.struct_size < size_of_val(motion) as u32

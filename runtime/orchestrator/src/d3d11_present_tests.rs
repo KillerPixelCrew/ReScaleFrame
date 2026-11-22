@@ -69,9 +69,12 @@ struct Fake {
     join_result: i32,
     queue_missing: bool,
     host_available: bool,
+    host_load_result: i32,
     host: usize,
     adapter_default: u32,
     present_result: i32,
+    signal_result: i32,
+    status_reads: u32,
     resize_result: i32,
     configuration_calls: usize,
     create_results: HashMap<u32, i32>,
@@ -137,9 +140,12 @@ impl Fake {
             join_result: S_OK,
             queue_missing: false,
             host_available: false,
+            host_load_result: OK,
             host: 0,
             adapter_default: XESS,
             present_result: S_OK,
+            signal_result: S_OK,
+            status_reads: 0,
             resize_result: S_OK,
             configuration_calls: 0,
             create_results: HashMap::new(),
@@ -258,7 +264,11 @@ unsafe extern "C" fn p_after(_: Raw) -> i32 {
     OK
 }
 unsafe extern "C" fn p_status(_: Raw, status: *mut rsf_fg_status) -> i32 {
-    unsafe { *status = with(|fake| fake.status) };
+    let snapshot = with(|fake| {
+        fake.status_reads += 1;
+        fake.status
+    });
+    unsafe { *status = snapshot };
     OK
 }
 unsafe extern "C" fn p_retirement(_: Raw, retirement: *mut rsf_fg_retirement) -> i32 {
@@ -362,7 +372,7 @@ unsafe extern "C" fn host_reflex_off(_: Raw) -> i32 {
 }
 unsafe extern "C" fn host_generation_load(_: Raw, enabled: u32) -> i32 {
     call(format!("host_load {enabled}"));
-    OK
+    with(|fake| fake.host_load_result)
 }
 unsafe extern "C" fn host_present_common(_: Raw, chain: Raw, _: u32, _: u32, begin: u32) -> i32 {
     assert_chain(chain);
@@ -888,7 +898,7 @@ unsafe extern "C" fn signal_slot(queue: Raw, fence: Raw, value: u64) -> i32 {
         assert_eq!(fake.backbuffer.refs.get(), 1 + u32::from(held));
     });
     call(format!("slot_signal {value}"));
-    S_OK
+    with(|fake| fake.signal_result)
 }
 unsafe extern "C" fn application_ready(event: Raw, fence: Raw, value: u64) -> i32 {
     assert_eq!(event, raw(READY_EVENT));
@@ -1400,14 +1410,13 @@ fn prepare_refuses_invalid_setup_and_selects_cold_backend() {
     value.struct_size -= 1;
     assert_eq!(prepare(&value), 0);
     value.struct_size += 1;
-    for units in [0.0, -1.0, f32::NAN] {
+    for units in [0.0, -1.0, f32::NAN, f32::INFINITY] {
         value.units_to_meters = units;
         assert_eq!(prepare(&value), 0);
     }
-    assert!(with(|fake| fake
-        .logs
-        .iter()
-        .all(|line| line.contains("units_to_meters must be positive"))));
+    assert!(with(|fake| fake.logs.iter().all(
+        |line| line.contains("units_to_meters must be finite and positive")
+    )));
     value.units_to_meters = 1.0;
     value.backend = 2;
     assert_eq!(prepare(&value), 0, "unknown backend");
@@ -1466,8 +1475,8 @@ fn creation_admission_publication_and_retirement() {
     assert_eq!(rsf_core_d3d11p_active_bridge(), bridge);
     assert_eq!(unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, bridge) }, 1);
     assert_eq!(rsf_core_d3d11p_has_owner(), 1);
-    assert_eq!(rsf_core_d3d11p_dispatch_admit(bridge), 1);
-    assert_eq!(rsf_core_d3d11p_dispatch_admit(raw(0x1234)), 0);
+    assert_eq!(dispatch_admit(bridge), 1);
+    assert_eq!(dispatch_admit(raw(0x1234)), 0);
     assert_eq!(
         rsf_core_d3d11p_backend_choices() & (1 << FSR4),
         0,
@@ -2110,8 +2119,10 @@ fn resize_normalizes_and_preserves_shared_surfaces_on_allocation_failure() {
         assert_eq!(fake.buffers.len(), 6);
         assert_eq!(fake.target_view.refs.get(), 3);
         assert!(
-            fake.buffers[4..].iter().all(|buffer| buffer.application.refs.get() == 1
-                && buffer.peer.as_ref().unwrap().refs.get() == 1)
+            fake.buffers[4..]
+                .iter()
+                .all(|buffer| buffer.application.refs.get() == 1
+                    && buffer.peer.as_ref().unwrap().refs.get() == 1)
         );
     });
     assert_eq!(present(bridge, 1, 0), S_OK);
@@ -2156,7 +2167,11 @@ fn failed_render_buffer_resize_exposes_no_partial_batch() {
     drop(unsafe { ComRef::from_owned(old) });
     with(|fake| {
         assert_eq!(fake.buffers.len(), 4);
-        assert!(fake.buffers[2..].iter().all(|b| b.application.refs.get() == 1));
+        assert!(
+            fake.buffers[2..]
+                .iter()
+                .all(|b| b.application.refs.get() == 1)
+        );
     });
     unsafe { bridge_release_owned(bridge) };
 }
@@ -2188,7 +2203,11 @@ fn native_resize_publishes_new_bounds_only_after_physical_success() {
     assert_eq!(get_buffer(chain, 2), (DXGI_ERROR_INVALID_CALL, null_mut()));
     with(|fake| {
         assert_eq!(fake.buffers.len(), 5);
-        assert!(fake.buffers[2..].iter().all(|b| b.application.refs.get() == 1));
+        assert!(
+            fake.buffers[2..]
+                .iter()
+                .all(|b| b.application.refs.get() == 1)
+        );
     });
 
     with(|fake| fake.resize_result = S_OK);
@@ -2503,7 +2522,7 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
     );
     assert_eq!(unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, bridge) }, 0);
     assert_eq!(rsf_core_d3d11p_has_owner(), 0);
-    assert_eq!(rsf_core_d3d11p_dispatch_admit(bridge), 2);
+    assert_eq!(dispatch_admit(bridge), 2);
     let outer = raw(0x500);
     assert_eq!(
         unsafe {
@@ -2528,7 +2547,7 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
         0,
         "the alias was unpublished while its identity query ran"
     );
-    assert_eq!(rsf_core_d3d11p_dispatch_admit(bridge), 1);
+    assert_eq!(dispatch_admit(bridge), 1);
     unsafe { bridge_release_owned(bridge) };
 
     // A refused transaction faults its captured facade and keeps it unadmitted.
@@ -2545,7 +2564,7 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
         E_INVALIDARG
     );
     assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain_of(bridge)) }, 1);
-    assert_eq!(rsf_core_d3d11p_dispatch_admit(bridge), 2);
+    assert_eq!(dispatch_admit(bridge), 2);
     assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
     unsafe { bridge_release_owned(bridge) };
     rsf_core_d3d11p_set_scoped(0);
@@ -2685,4 +2704,126 @@ fn early_present_failures_complete_the_notification_and_fault() {
     assert!(calls.iter().any(|call| call.starts_with("slot_signal")));
     assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain_of(bridge)) }, 1);
     unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn lazy_creation_retries_after_host_load_refusal() {
+    let _guard = reset();
+    let mut value = setup(FSR3, 1);
+    value.streamline_directory_utf8 = c"streamline".as_ptr();
+    assert_eq!(prepare(&value), 1);
+    with(|fake| {
+        fake.host_available = true;
+        fake.host_load_result = NOT_READY;
+        fake.status.pacing_owner = RSF_PACING_REFLEX;
+    });
+    let bridge = create();
+    let chain = chain_of(bridge);
+    assert_eq!(present(bridge, 0, DXGI_PRESENT_TEST), E_FAIL);
+    assert_eq!(unsafe { rsf_core_d3d11p_physical_pending(chain) }, 1);
+    assert!(with(|fake| fake.physical.is_empty()));
+    assert!(rsf_core_d3d11p_session().is_null());
+    with(|fake| fake.host_load_result = OK);
+    assert_eq!(present(bridge, 0, DXGI_PRESENT_TEST), S_OK);
+    assert_eq!(unsafe { rsf_core_d3d11p_physical_pending(chain) }, 0);
+    assert!(HOST_PACED.load(Ordering::SeqCst));
+    assert_eq!(with(|fake| fake.status_reads), 1);
+    assert_eq!(status().0, OK);
+    unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn eager_creation_publishes_and_logs_one_status_snapshot() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 0)), 1);
+    let bridge = create();
+    assert_eq!(with(|fake| fake.status_reads), 1);
+    assert_eq!(status().0, OK);
+    assert!(with(|fake| fake
+        .logs
+        .iter()
+        .any(|line| line.starts_with("Generation support="))));
+    unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn a_nonblocking_present_is_retryable_only_when_submission_is_fenced() {
+    use windows::Win32::Graphics::Dxgi::DXGI_PRESENT_DO_NOT_WAIT;
+
+    for native12 in [false, true] {
+        let _guard = reset();
+        assert_eq!(prepare(&setup(FSR3, 1)), 1);
+        with(|fake| {
+            fake.native12 = native12;
+            fake.present_result = DXGI_ERROR_WAS_STILL_DRAWING;
+        });
+        let bridge = create();
+        let chain = chain_of(bridge);
+        let flags = DXGI_PRESENT_DO_NOT_WAIT.0;
+        assert_eq!(present(bridge, 1, flags), DXGI_ERROR_WAS_STILL_DRAWING);
+        assert_eq!(with(|fake| fake.presents.last().copied()), Some((1, flags)));
+        assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 0);
+        assert_eq!(unsafe { rsf_core_d3d11p_render_index(chain) }, 0);
+        assert!(
+            take_calls()
+                .iter()
+                .any(|call| call.starts_with("slot_signal"))
+        );
+        with(|fake| fake.present_result = S_OK);
+        assert_eq!(present(bridge, 1, flags), S_OK);
+        assert_eq!(
+            unsafe { rsf_core_d3d11p_render_index(chain) },
+            u32::from(native12)
+        );
+
+        with(|fake| {
+            fake.present_result = DXGI_ERROR_WAS_STILL_DRAWING;
+            fake.signal_result = E_FAIL;
+        });
+        assert_eq!(present(bridge, 1, flags), DXGI_ERROR_DEVICE_REMOVED);
+        assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 1);
+        assert_eq!(present(bridge, 1, flags), DXGI_ERROR_DEVICE_REMOVED);
+        unsafe { bridge_release_owned(bridge) };
+    }
+}
+
+#[test]
+fn linked_chain_dispatch_pins_calls_and_consumes_only_the_release_reference() {
+    use crate::d3d11_host_abi::{RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_HOST_ABI_VERSION};
+
+    unsafe extern "C" fn release(receiver: Raw) -> u32 {
+        unsafe { crate::com_ref::test::release(receiver.cast()) }
+    }
+    unsafe extern "C" fn invoke(request: *mut rsf_d3d11_chain_dispatch) -> i32 {
+        let receiver = unsafe { &*((*request).receiver.cast::<FakeCom>()) };
+        assert_eq!(receiver.refs.get(), 2);
+        S_OK
+    }
+
+    let _guard = reset();
+    let receiver = fake_com();
+    let raw_receiver = com_raw(&receiver);
+    ACTIVE_BRIDGE.store(raw_receiver, Ordering::Release);
+    let mut request: rsf_d3d11_chain_dispatch = unsafe { std::mem::zeroed() };
+    request.struct_size = size_of::<rsf_d3d11_chain_dispatch>() as u32;
+    request.abi_version = RSF_D3D11_HOST_ABI_VERSION;
+    request.receiver = raw_receiver;
+    request.method = RSF_D3D11_DISPATCH_PRESENT;
+    unsafe { rsf_core_d3d11p_dispatch_owned(&mut request, release, invoke) };
+    let result = unsafe { dispatch_result_slot(&mut request).read() };
+    assert_eq!((request.handled, result, receiver.refs.get()), (1, S_OK, 1));
+
+    SCOPED.store(true, Ordering::Release);
+    SCOPED_ADMITTED.store(false, Ordering::Release);
+    unsafe { rsf_core_d3d11p_dispatch_owned(&mut request, release, invoke) };
+    assert_eq!(
+        unsafe { dispatch_result_slot(&mut request).read() },
+        DXGI_ERROR_INVALID_CALL
+    );
+
+    request.method = RSF_D3D11_DISPATCH_RELEASE;
+    unsafe { rsf_core_d3d11p_dispatch_owned(&mut request, release, invoke) };
+    let result = unsafe { dispatch_result_slot(&mut request).read() };
+    assert_eq!((request.handled, result, receiver.refs.get()), (1, 0, 0));
+    ACTIVE_BRIDGE.store(null_mut(), Ordering::Release);
 }

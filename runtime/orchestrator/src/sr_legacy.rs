@@ -116,7 +116,7 @@ unsafe extern "C" fn rsf_core_sr_legacy_create(
     services: &'static Services,
     out: *mut *mut Adapter,
 ) -> i32 {
-    if out.is_null() || !units_to_meters.is_finite() || units_to_meters <= 0.0 {
+    if out.is_null() || !crate::sr_session::valid_unit_scale(units_to_meters) {
         return INVALID;
     }
     unsafe { out.write(ptr::null_mut()) };

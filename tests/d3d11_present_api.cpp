@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <initializer_list>
+#include <limits>
 #include <type_traits>
 #include <thread>
 #include <atomic>
@@ -85,6 +86,21 @@ void refusal_prefix_guard_page() {
     }
     VirtualFree(memory, 0, MEM_RELEASE);
 }
+void refuses_infinite_view_scale(const rsf_d3d11_present_api& api) {
+    if (!api.prepare) return;
+    bool reported_units = false;
+    rsf_d3d11_present_setup setup{};
+    setup.struct_size = sizeof(setup);
+    setup.runtime_directory_utf8 = ".";
+    setup.user = &reported_units;
+    setup.log = [](void* user, const char* message) {
+        *static_cast<bool*>(user) = std::strstr(message, "units_to_meters") != nullptr;
+    };
+    setup.accept_window = [](void*, void*) { return 1; };
+    setup.units_to_meters = std::numeric_limits<float>::infinity();
+    check(api.prepare(&setup) == 0 && reported_units, "public setup refuses positive infinity");
+}
+
 void populated_table_contract() {
     const auto runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
     check(runtime != nullptr, "real Runtime DLL is imported");
@@ -177,6 +193,7 @@ void populated_table_contract() {
     }
     for (auto& thread : threads) thread.join();
     check(equal.load(), "parallel queries return the same complete table");
+    refuses_infinite_view_scale(api);
 }
 }
 

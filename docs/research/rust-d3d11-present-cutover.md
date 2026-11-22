@@ -48,3 +48,54 @@ Both are visible in the C++ source and were demonstrated with synthetic leaf tes
 - The native12 path and the D3D11 path are exercised only through the fake leaf table. Queue joins, fence values, Streamline proxy unwrapping, info-queue reports and DXGI fullscreen behavior are unverified on a device in this branch.
 - The scoped creation transaction is exercised synthetically. AC7, Fallout 4 and Skyrim scoped creation, Unity and RDR2 native D3D12 switching, and Anomaly D3D11 presentation were not run.
 - `tests/d3d11_present_bridge.cpp`, `tests/fg_present_bridge.cpp`, `fg_switching` and `fg_provider` are device or SDK fixtures and were not run.
+
+
+
+## D02 follow-up
+
+Starting from `846e3a45`, including the staged application buffers from
+`25744aba`, D02 traced the Runtime import table, host dispatch, the
+Presentation static archive and the OpenGL resize caller. The application
+buffers still stage before physical ResizeBuffers and publish only after
+success. The OpenGL compositor retains its own preview and composition route.
+
+| Source finding | Change and fixture |
+| --- | --- |
+| Reject nonfinite view-space scales consistently at presentation setup. | Host, legacy SR and presentation use the same finite-positive check before forwarding meters per view-space unit. The Rust setup fixture and the real DLL table fixture refuse positive infinity. |
+| Preserve pending physical-chain creation across a host-load refusal. | A lazy owner claims creation before calling the Streamline host. A refusal restores pending, and later calls can create and publish the owner. Terminal physical creation failures fault the facade. The synthetic fixture retries with the same facade after the host becomes ready. |
+| Read one provider status snapshot when publishing a presentation owner. | Initial publication, lazy creation and provider switching share one cached provider read for pacing and status. Initial logging uses that same record. Per-frame status refreshes remain in the Present path. The synthetic fixtures count provider reads at eager and lazy publication. |
+| Keep a retryable physical Present result distinct from device loss. | D3D11 and native D3D12 return WAS_STILL_DRAWING without faulting when the slot fence was signaled. A fence signal failure remains terminal. A refused attempt completes its notification, and the native D3D12 logical render index advances only on success. The synthetic fixture covers both paths and the failed fence case. |
+
+The shared surface production symbols now use the `windows` 0.62.2
+D3D11, DXGI and D3D12 bindings. The vtable calls preserve HRESULTs and
+raw outputs so the existing adoption code releases partial objects.
+Texture usage, resource access flags, interface queries and the fence
+initial value match the former native implementation. The shared-surface
+device fixture still links the public C entry points, checks the opened resource's
+description and observes the D3D11-to-D3D12 fence signal. Compile-time C++
+checks retain the public record and result layout assertions.
+
+Chain dispatch now admits the exact facade and maintains its live
+reference in Rust. The guarded C++ calls address the private owned
+methods directly because the public COM vtable may be patched by a
+linked consumer. Release still consumes the caller's reference. The
+synthetic dispatch fixture checks that reference and scoped refusal.
+The Runtime query uses Rust for size, version and output copy. The
+C++ export thunk supplies the original typed callback table from the
+Runtime DLL. This keeps the Presentation dependency directed toward
+the Rust archive and keeps the export spelling and caller-side types.
+
+The `IDXGISwapChain4` facade, MinHook installation, native graphics and
+provider callback leaves, and their platform declaration remain in C++.
+The facade's owned methods are shared by the public virtual methods
+and the linked Steam and host detours. A full move must preserve that
+entry-point identity and the native exception guards. The shared FG
+and D3D11 bridge device harnesses still cover real swapchain, provider,
+overlay and AC7 proxy paths. The public API harness still checks the
+separately linked Runtime DLL, typed slots and guard-page refusal.
+
+Checked source signatures against the pinned Windows crate and generated
+Windows x64 records with bindgen 0.72.1. Pinned Rust 1.94.1 formatting
+and Git whitespace checks passed. The user owns native and Rust build,
+test and lint execution, binary exports, real DXGI and vendor checks,
+and the Minecraft GL preview and resize run.

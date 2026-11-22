@@ -26,8 +26,8 @@ typedef struct rsf_d3d11_present_setup {
     /* Cold-start generation owner, independent of SR. Zero retains the DLSS default.
        Also accepts native D3D12 queues; no D3D11 facade or upload is used on that path. */
     uint32_t backend, max_generated_frames;
-    /* The plugin's depth conventions. units_to_meters must be > 0; install refuses otherwise,
-       since the bridge cannot tell an engine's units from its graphics API. */
+    /* The plugin's depth conventions. Setup requires a finite, positive units_to_meters
+       because the bridge cannot infer the engine's units from its graphics API. */
     uint32_t depth_inverted, depth_infinite;
     float units_to_meters;
     /* Native D3D12 keeps engine buffers stable while swapping the physical presentation

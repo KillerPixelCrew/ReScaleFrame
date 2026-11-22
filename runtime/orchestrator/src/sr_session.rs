@@ -50,6 +50,10 @@ struct Session {
     last: FrameIdentity,
 }
 
+pub(crate) fn valid_unit_scale(units_to_meters: f32) -> bool {
+    units_to_meters.is_finite() && units_to_meters > 0.0
+}
+
 // A caller may provide only the size field when reporting a short structure.
 pub(crate) unsafe fn has_capacity<T>(value: *const T) -> bool {
     !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()

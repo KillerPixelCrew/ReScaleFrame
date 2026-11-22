@@ -212,7 +212,8 @@ void* rsf_core_d3d11p_source_queue(const rsf_d3d11p_platform* platform);
 void* rsf_core_d3d11p_command_list(const rsf_d3d11p_platform* platform, void* list);
 int rsf_core_d3d11p_is_owner(const rsf_d3d11p_platform* platform, void* swapchain);
 /* 0 not the active facade, 1 admitted, 2 the facade of a refused scoped transaction. */
-uint32_t rsf_core_d3d11p_dispatch_admit(void* receiver);
+void rsf_core_d3d11p_dispatch_owned(rsf_d3d11_chain_dispatch* request,
+    uint32_t (*release_owned)(void*), int32_t (*invoke_owned)(rsf_d3d11_chain_dispatch*));
 int rsf_core_d3d11p_has_owner(void);
 const rsf_generation_provider* rsf_core_d3d11p_provider(const rsf_d3d11p_platform* platform);
 int32_t rsf_core_d3d11p_status_get(rsf_d3d11_present_status* status);

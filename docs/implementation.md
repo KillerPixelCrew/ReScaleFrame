@@ -2914,6 +2914,15 @@ the facade. The merged queue and command-list queries hold the read
 lease through the native lookup and refuse during retirement.
 See [the D3D11 presentation audit](research/rust-d3d11-present-cutover.md).
 
+D02 moved native shared texture and fence calls, public table validation,
+and owned-chain dispatch admission and reference handling to Rust. Setup
+rejects nonfinite unit scales, lazy creation retries after a host-load
+refusal, provider publication uses one snapshot, and a fenced nonblocking
+Present may be retried. The C ABI clients and device fixtures remain linked.
+The source and binding review is recorded in the
+[D02 follow-up](research/rust-d3d11-present-cutover.md#d02-follow-up).
+Build, fixture and device verification are pending.
+
 The scoped owner check now queries the caller's live COM receiver for
 its canonical identity and compares that address with the published
 facade. It rechecks publication after the query. The synthetic scoped

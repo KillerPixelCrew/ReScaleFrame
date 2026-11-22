@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Shared D3D11/native D3D12 presentation bridge owner. The C++ facade in
-// runtime/presentation keeps the IDXGISwapChain4 object and every DXGI, D3D12,
-// D3D11, Win32, MinHook and SDK call; this module decides admission and
+// runtime/presentation keeps the IDXGISwapChain4 object and its native calls.
+// This module decides admission and
 // publication, provider switching, frame and slot sequencing, accepted Present,
 // fallback, resize and retirement, status and callback order, and latency routing.
 use crate::com_ref::ComRef;
+use crate::d3d11_host_abi::{RSF_D3D11_DISPATCH_RELEASE, rsf_d3d11_chain_dispatch};
 use crate::d3d11_present_abi::*;
 use crate::fg_choice::rsf_fg_select_auto_backend;
 use crate::fg12_abi::{rsf_d3d11_present_setup as Setup, rsf_streamline_host};
@@ -16,12 +17,14 @@ use crate::render_abi::{
 };
 use crate::scene_abi::rsf_observer_present_event as Event;
 use crate::shared_surface::{self, Surface, SurfaceSetup};
-use crate::sr_session::has_capacity;
+use crate::sr_session::{has_capacity, valid_unit_scale};
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write as _;
 use std::ptr::{self, NonNull, null_mut};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering,
+};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
 
 type Platform = rsf_d3d11p_platform;
@@ -67,6 +70,13 @@ const MAX_BUFFERS: u32 = 8;
 const SLOTS: usize = 3;
 const APPLICATION_FENCES: usize = 16;
 const STEPS: [&str; 3] = ["slot fence wait", "allocator reset", "command list reset"];
+
+#[repr(u8)]
+enum PhysicalCreation {
+    Idle,
+    Pending,
+    Creating,
+}
 
 const FG_OFF: rsf_fg_options = rsf_fg_options {
     struct_size: size_of::<rsf_fg_options>() as u32,
@@ -207,10 +217,10 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_prepare(
         return 0;
     }
     // Depth units are the plugin's to state; the bridge never guesses them from the API.
-    if input.units_to_meters.is_nan() || input.units_to_meters <= 0.0 {
+    if !valid_unit_scale(input.units_to_meters) {
         if let Some(log) = input.log {
             let text =
-                c"presentation bridge: units_to_meters must be positive; interception refused";
+                c"presentation bridge: units_to_meters must be finite and positive; interception refused";
             unsafe { log(input.user, text.as_ptr()) };
         }
         return 0;
@@ -610,7 +620,7 @@ pub(crate) struct Owner {
     provider: AtomicPtr<c_void>,
     provider_backend: AtomicU32,
     physical: Mutex<Option<Arc<Physical>>>,
-    physical_pending: AtomicBool,
+    physical_creation: AtomicU8,
     faulted: AtomicBool,
     serial: AtomicU64,
     next_slot: AtomicU32,
@@ -644,7 +654,7 @@ impl Owner {
             provider: AtomicPtr::new(null_mut()),
             provider_backend: AtomicU32::new(0),
             physical: Mutex::default(),
-            physical_pending: AtomicBool::new(false),
+            physical_creation: AtomicU8::new(PhysicalCreation::Idle as u8),
             faulted: AtomicBool::new(false),
             serial: AtomicU64::new(0),
             next_slot: AtomicU32::new(0),
@@ -726,21 +736,32 @@ impl Owner {
     }
 
     fn publish_status(&self) {
+        let snapshot = self.provider_status();
+        let mut status = lock(&STATUS);
+        self.write_status(&mut status, snapshot.as_ref());
+    }
+
+    fn write_status(&self, status: &mut Snapshot, snapshot: Option<&rsf_fg_status>) {
         let backend = self.provider_backend.load(Ordering::Relaxed);
-        match self.provider_status() {
-            Some(state) => {
-                let _ = lock(&STATUS).publish(backend, generation(), &state);
-            }
-            None => lock(&STATUS).clear(),
+        if let Some(snapshot) = snapshot {
+            let _ = status.publish(backend, generation(), snapshot);
+        } else {
+            status.clear();
         }
     }
 
-    // The provider session is the latency owner only when it does not pace through the host.
-    fn paced_by_host(&self) -> bool {
-        !self.host().is_null()
-            && self
-                .provider_status()
-                .is_some_and(|state| state.pacing_owner == RSF_PACING_REFLEX)
+    fn publish_owner_status(&self) -> Option<rsf_fg_status> {
+        let snapshot = self.provider_status();
+        // A Reflex-paced provider with a shared host leaves pacing with that host.
+        let host_paced = !self.host().is_null()
+            && snapshot
+                .as_ref()
+                .is_some_and(|state| state.pacing_owner == RSF_PACING_REFLEX);
+        HOST_PACED.store(host_paced, Ordering::SeqCst);
+        let mut status = lock(&STATUS);
+        status.activate(ACTIVE_BACKEND.load(Ordering::SeqCst), generation());
+        self.write_status(&mut status, snapshot.as_ref());
+        snapshot
     }
 
     fn receipt(&self, stage: &str, result: i32) {
@@ -951,14 +972,30 @@ impl Owner {
         S_OK
     }
 
+    fn creation_pending(&self) -> bool {
+        self.physical_creation.load(Ordering::Acquire) != PhysicalCreation::Idle as u8
+    }
+
     fn ensure_physical(&self) -> Result<Arc<Physical>, i32> {
         let p = self.p();
         // Never create the HWND owner from an outer wrapper's constructor query.
         if SCOPED.load(Ordering::Acquire) && SCOPE_TOKEN.get() != 0 {
             return Err(DXGI_ERROR_WAS_STILL_DRAWING);
         }
-        if !self.physical_pending.swap(false, Ordering::AcqRel) {
-            return self.physical().ok_or(DXGI_ERROR_WAS_STILL_DRAWING);
+        if self.faulted.load(Ordering::Acquire) {
+            return Err(DXGI_ERROR_DEVICE_REMOVED);
+        }
+        match self.physical_creation.compare_exchange(
+            PhysicalCreation::Pending as u8,
+            PhysicalCreation::Creating as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {}
+            Err(state) if state == PhysicalCreation::Creating as u8 => {
+                return Err(DXGI_ERROR_WAS_STILL_DRAWING);
+            }
+            Err(_) => return self.physical().ok_or(DXGI_ERROR_WAS_STILL_DRAWING),
         }
         // Overlay creation callbacks retain per-call device and queue state. A provider's
         // nested native creation happens after the engine's factory call returns.
@@ -974,6 +1011,8 @@ impl Owner {
             && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS
             && unsafe { (p.host_generation_load)(host, 0) } != OK
         {
+            self.physical_creation
+                .store(PhysicalCreation::Pending as u8, Ordering::Release);
             return Err(E_FAIL);
         }
         let result = self.create_physical(ACTIVE_BACKEND.load(Ordering::SeqCst));
@@ -982,16 +1021,23 @@ impl Owner {
             ACTIVE_BACKEND.store(0, Ordering::SeqCst);
             if self.create_physical(0) != OK {
                 self.faulted.store(true, Ordering::Release);
+                self.physical_creation
+                    .store(PhysicalCreation::Idle as u8, Ordering::Release);
                 return Err(E_FAIL);
             }
         }
-        let physical = self.physical().ok_or(DXGI_ERROR_WAS_STILL_DRAWING)?;
+        let Some(physical) = self.physical() else {
+            self.faulted.store(true, Ordering::Release);
+            self.physical_creation
+                .store(PhysicalCreation::Idle as u8, Ordering::Release);
+            return Err(E_FAIL);
+        };
         // Publish the created chain before fullscreen entry. A refused entry fails this call,
         // but the chain stays and later calls present through it, so its session must be visible.
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
-        HOST_PACED.store(self.paced_by_host(), Ordering::SeqCst);
-        lock(&STATUS).activate(ACTIVE_BACKEND.load(Ordering::SeqCst), generation());
-        self.publish_status();
+        let _ = self.publish_owner_status();
+        self.physical_creation
+            .store(PhysicalCreation::Idle as u8, Ordering::Release);
         if self.facts().windowed == 0
             && failed(unsafe { (p.set_fullscreen)(physical.chain.as_ptr(), 1, null_mut()) })
         {
@@ -1000,7 +1046,10 @@ impl Owner {
         Ok(physical)
     }
 
-    fn allocate_application_buffers(&self, facts: &rsf_d3d11p_facts) -> Result<ApplicationBuffers, i32> {
+    fn allocate_application_buffers(
+        &self,
+        facts: &rsf_d3d11p_facts,
+    ) -> Result<ApplicationBuffers, i32> {
         let p = self.p();
         let mut batch = ApplicationBuffers::default();
         let slots = batch
@@ -1074,7 +1123,7 @@ impl Owner {
             Ok(physical) => physical,
             Err(error) => {
                 if self.failed_buffer_reports.fetch_add(1, Ordering::Relaxed) < 4 {
-                    let pending = u32::from(self.physical_pending.load(Ordering::Acquire));
+                    let pending = u32::from(self.creation_pending());
                     unsafe { (p.log_buffer_refusal)(self.b(), index, iid, error, pending) };
                 }
                 return error;
@@ -1298,7 +1347,8 @@ impl Owner {
                 }
                 self.reset_application_frames();
             }
-            self.physical_pending.store(true, Ordering::Release);
+            self.physical_creation
+                .store(PhysicalCreation::Pending as u8, Ordering::Release);
         } else {
             let backend = ACTIVE_BACKEND.load(Ordering::SeqCst);
             let result = self.create_physical(backend);
@@ -1323,7 +1373,6 @@ impl Owner {
         let facts = self.facts();
         ACTIVE_HOST.store(self.host(), Ordering::Release);
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
-        HOST_PACED.store(self.paced_by_host(), Ordering::SeqCst);
         let interop_queue = lock(&self.sync).queue();
         lock(&ACTIVE_GRAPHICS).0 = Graphics {
             queue: interop_queue,
@@ -1332,10 +1381,9 @@ impl Owner {
         };
         ACTIVE_BRIDGE.store(b, Ordering::Release);
         ACTIVE_CHAIN.store(ptr::from_ref(self).cast_mut(), Ordering::Release);
-        lock(&STATUS).activate(ACTIVE_BACKEND.load(Ordering::SeqCst), generation());
-        self.publish_status();
+        let snapshot = self.publish_owner_status();
         if setup.log.is_some()
-            && let Some(status) = self.provider_status()
+            && let Some(status) = snapshot
         {
             let version = unsafe { CStr::from_ptr(status.version_name.as_ptr()) };
             log(&format!(
@@ -1494,10 +1542,8 @@ impl Owner {
         }
         ACTIVE_BACKEND.store(effective, Ordering::SeqCst);
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
-        HOST_PACED.store(self.paced_by_host(), Ordering::SeqCst);
         CHAIN_GENERATION.fetch_add(1, Ordering::SeqCst);
-        lock(&STATUS).activate(effective, generation());
-        self.publish_status();
+        let _ = self.publish_owner_status();
         {
             let mut timing = lock(&self.timing);
             timing.epoch = 0;
@@ -1701,6 +1747,7 @@ impl Owner {
             ticks[1] = tick();
         }
         let mut result = E_FAIL;
+        let mut submission_fenced = false;
         // The fence serial advances three times per frame, so it cannot also select the slot.
         let index = self.next_slot.load(Ordering::Relaxed);
         self.next_slot
@@ -1718,7 +1765,7 @@ impl Owner {
             // not the engine queue. Join the engine's source work into it, and the copy back out.
             let joined = queue != source_queue;
             // Each step before the physical Present keeps its own HRESULT for the failure report.
-            // Every failure still completes the application notification and faults the facade.
+            // Each attempt completes the application notification, including nonblocking refusal.
             let mut step = "source queue join";
             let mut stage = DXGI_ERROR_DEVICE_REMOVED;
             let source_joined = !joined
@@ -1800,8 +1847,12 @@ impl Owner {
                 }
                 let fence = self.next_serial();
                 slot.store(fence, Ordering::Relaxed);
-                if failed(unsafe { (p.signal_slot)(queue, completion_fence, fence) }) {
-                    result = DXGI_ERROR_DEVICE_REMOVED;
+                submission_fenced =
+                    !failed(unsafe { (p.signal_slot)(queue, completion_fence, fence) });
+                if !submission_fenced {
+                    step = "slot fence signal";
+                    stage = DXGI_ERROR_DEVICE_REMOVED;
+                    result = stage;
                 }
                 drop(backbuffer);
             }
@@ -1829,7 +1880,9 @@ impl Owner {
                 self.render_index.store(next, Ordering::Relaxed);
                 self.switch_if_requested();
             }
-            if failed(result) {
+            // Only physical Present supplies this result. A failed slot signal replaces it
+            // with DEVICE_REMOVED because the submitted list cannot be reused safely.
+            if failed(result) && !(submission_fenced && result == DXGI_ERROR_WAS_STILL_DRAWING) {
                 unsafe {
                     (p.report_device_failure)(b, result, ACTIVE_BACKEND.load(Ordering::SeqCst))
                 };
@@ -1880,7 +1933,8 @@ impl Owner {
             }
             let fence = self.next_serial();
             slot.store(fence, Ordering::Relaxed);
-            if failed(unsafe { (p.signal_slot)(queue, completion_fence, fence) }) {
+            submission_fenced = !failed(unsafe { (p.signal_slot)(queue, completion_fence, fence) });
+            if !submission_fenced {
                 result = DXGI_ERROR_DEVICE_REMOVED;
             }
         }
@@ -1898,7 +1952,7 @@ impl Owner {
         if !failed(result) && switching {
             self.switch_if_requested();
         }
-        if failed(result) {
+        if failed(result) && !(submission_fenced && result == DXGI_ERROR_WAS_STILL_DRAWING) {
             self.faulted.store(true, Ordering::Release);
         }
         result
@@ -2556,7 +2610,7 @@ facade!(
 );
 facade!(rsf_core_d3d11p_faulted() -> u32, 1, |o| u32::from(o.faulted.load(Ordering::Acquire)));
 facade!(rsf_core_d3d11p_physical_pending() -> u32, 0,
-    |o| u32::from(o.physical_pending.load(Ordering::Acquire)));
+    |o| u32::from(o.creation_pending()));
 facade!(rsf_core_d3d11p_render_index() -> u32, 0, |o| o.render_index.load(Ordering::Relaxed));
 facade!(rsf_core_d3d11p_application_presents() -> u32, 0,
     |o| o.application_presents.load(Ordering::Relaxed));
@@ -2700,8 +2754,7 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_is_owner(
     )
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_d3d11p_dispatch_admit(receiver: Raw) -> u32 {
+fn dispatch_admit(receiver: Raw) -> u32 {
     let active = ACTIVE_BRIDGE.load(Ordering::Acquire);
     if receiver.is_null() || receiver != active {
         0
@@ -2710,6 +2763,54 @@ pub(crate) extern "C" fn rsf_core_d3d11p_dispatch_admit(receiver: Raw) -> u32 {
     } else {
         1
     }
+}
+
+unsafe fn dispatch_result_slot(request: *mut rsf_d3d11_chain_dispatch) -> *mut i32 {
+    // The C union's HRESULT and reference count have the same 32-bit storage.
+    unsafe { (&raw mut (*request).result).cast::<i32>() }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_d3d11p_dispatch_owned(
+    request: *mut rsf_d3d11_chain_dispatch,
+    release_owned: unsafe extern "C" fn(Raw) -> u32,
+    invoke_owned: unsafe extern "C" fn(*mut rsf_d3d11_chain_dispatch) -> i32,
+) {
+    if request.is_null() {
+        return;
+    }
+    let receiver = unsafe { (*request).receiver };
+    let admission = dispatch_admit(receiver);
+    if admission == 0 {
+        return;
+    }
+    unsafe { (*request).handled = 1 };
+    let result = unsafe { dispatch_result_slot(request) };
+    if unsafe { (*request).method } == RSF_D3D11_DISPATCH_RELEASE {
+        // Release consumes the caller's reference, including during scope refusal.
+        unsafe { result.write(release_owned(receiver) as i32) };
+    } else if admission == 2 {
+        unsafe { result.write(DXGI_ERROR_INVALID_CALL) };
+    } else {
+        // The caller holds a live COM reference. No host lock spans the owned call.
+        let _lease = unsafe { ComRef::retain(receiver) };
+        unsafe { result.write(invoke_owned(request)) };
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_d3d11p_get_api(out: *mut u8, table: *const u8) -> i32 {
+    // The native export thunk supplies the typed function table. The Rust owner
+    // treats the client storage as raw bytes until size and version are accepted.
+    const TABLE_SIZE: usize = 184;
+    if out.is_null() || (unsafe { out.cast::<u32>().read() } as usize) < TABLE_SIZE {
+        return INVALID_ARGUMENT;
+    }
+    if unsafe { out.cast::<u32>().add(1).read() } != 1 {
+        return ABI_MISMATCH;
+    }
+    unsafe { ptr::copy_nonoverlapping(table, out, TABLE_SIZE) };
+    OK
 }
 
 #[unsafe(no_mangle)]
