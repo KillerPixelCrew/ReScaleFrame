@@ -2,8 +2,7 @@
 #include <rescaleframe/native_cpu.h>
 #include "api.h"
 #include "godot_platform.h"
-#include <rescaleframe/input_dump_vulkan.h>
-#include "../../../runtime/orchestrator/src/native_fg_fsr4_vulkan.h"
+#include "vulkan_features.h"
 
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_latency_vulkan.h>
@@ -67,15 +66,7 @@ const HostLifetime host_lifetime;
 
 // These symbols only exist in configurations which compile the corresponding
 // provider. Supply raw build facts and optional functions to the Rust owner.
-struct rsf_godot_vk_features {
-    uint32_t sr, fsr4_sr, xess_fg;
-    decltype(&rsf_fsr4gvk_probe) fsr4_probe;
-    decltype(&rsf_input_dump_vk_create) capture_create;
-    decltype(&rsf_input_dump_vk_snapshot) capture_snapshot;
-    decltype(&rsf_input_dump_vk_drain) capture_drain;
-    decltype(&rsf_input_dump_vk_destroy) capture_destroy;
-};
-static_assert(sizeof(rsf_godot_vk_features) == 56 && offsetof(rsf_godot_vk_features, capture_create) == 24);
+static_assert(sizeof(rsf_godot_vk_features) == 56 && offsetof(rsf_godot_vk_features, capture) == 24);
 
 extern "C" const rsf_godot_vk_features* rsf_godot_vk_native_features()
 {
@@ -101,9 +92,9 @@ extern "C" const rsf_godot_vk_features* rsf_godot_vk_native_features()
         nullptr,
 #endif
 #if defined(RSF_FRAME_DUMP_VULKAN)
-        rsf_input_dump_vk_create, rsf_input_dump_vk_snapshot, rsf_input_dump_vk_drain, rsf_input_dump_vk_destroy,
+        {rsf_input_dump_vk_create, rsf_input_dump_vk_snapshot, rsf_input_dump_vk_drain, rsf_input_dump_vk_destroy},
 #else
-        nullptr, nullptr, nullptr, nullptr,
+        {},
 #endif
     };
     return &features;

@@ -150,6 +150,12 @@ DLL unload. Source, targeted bindgen, pinned formatting, locked metadata and
 MSVC syntax-only checks passed.
 [Extension continuation evidence](../integrations/godot/NATIVE.md#e02-extension-wiring-and-readback-continuation)
 
+E02 also moves motion readback completion and retirement and the full script
+property schemas into Rust. A generated record binds optional Vulkan symbols.
+The SDK classes and DLL unload remain native. Source, binding, formatting,
+metadata and C++ syntax-only checks passed.
+[Capture and property evidence](../integrations/godot/NATIVE.md#e02-capture-properties-and-optional-provider-wiring)
+
 RDR2's ASI startup leaves, research-attach worker and native settings probe
 now run in Rust. Settings fixtures share the measured vectors with the
 Rust policy, and refused startup sessions retain their cleanup owner.

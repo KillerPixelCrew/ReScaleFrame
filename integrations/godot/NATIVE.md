@@ -175,6 +175,50 @@ the optional provider definitions and `runtime.cpp` with those definitions absen
 syntax invocation needed `/Zc:__cplusplus` and system SDK include handling to match godot-cpp's
 requirements. Builds, linkage, fixture execution and device verification remain open.
 
+### E02 capture, properties and optional provider wiring
+
+Relative to `818a5ede`, `effect.rs` owns the capture sequence from shader admission
+through recording, CPU readback and releasing the five capture resources. The dispatch
+requires the same four valid input RIDs. The release order remains uniform set, storage
+buffer, sampler, compute pipeline, shader. If a release reports an exception, the sequence
+tries the remaining resources and refuses the capture. As before, Godot borrows the velocity
+texture for the callback and owns the CPU PackedByteArray until Rust finishes classifying it.
+`effect.cpp` retains direct SDK shader compilation, typed resource and uniform creation,
+compute-list calls, buffer readback, and per-RID validity and free calls. Shader bytes,
+descriptor indices and dispatch dimensions are unchanged.
+
+The Rust effect and extension owners now emit all 32 probe properties and 52 possible
+Runtime properties in their prior order. The property sink receives copied scalar values
+and synchronous C-string or matrix borrows. `script_dictionary.h` converts them through
+the pinned `Dictionary` and `Variant` wrappers, including the existing rowwise Transform3D
+basis and origin and columnwise Projection conversion. The pinned generated
+`rendering_server.hpp` returns `String` for both renderer and driver methods. The effect
+now emits empty names if the RenderingServer singleton is unavailable, matching the
+Runtime status path. The build version is still the CMake-generated version supplied
+by the class. The owner continues to report Vulkan admission through the production
+platform's capability, alongside the same Forward+ and D3D12 checks.
+
+`vulkan_features.h` is now the binding source for the optional provider record used
+by `runtime.cpp` and the Rust Vulkan owner. It replaces both handwritten Rust structs.
+The three build facts, optional FSR4 probe and four optional capture functions retain
+the same layout and CMake guards. Rust still derives FSR4 FG availability from the optional
+probe and consumes exactly the same capture operations. `runtime.cpp` retains the actual
+conditional symbol references, native ABI assertions and CRT destructor. `api.h`,
+`exports.def`, `runtime.rs`, the class headers and `extension.cpp` match the base.
+
+Residual `effect.cpp` and `effect.h` own the godot-cpp class construction and destruction,
+the POST_TRANSPARENT virtual callback, the typed compositor flag setters, and the
+RenderingDevice leaves. `runtime_control.cpp` and `runtime_control.h` retain the
+RefCounted class, Variant option reads, RID validation and render-thread Callable.
+`extension.cpp` retains scene registration through the pinned GDExtensionBinding and
+ClassDB. No engine-module or engine fixture files are in this slice.
+
+Source comparison checked the full property-key sequences and unchanged public entry
+files. Targeted bindgen 0.72.1, Rust 1.94.1 formatting, locked offline Windows x64 Cargo
+metadata and Git whitespace checks passed. MSVC `/Zs` accepted all four extension
+translation units with optional providers and `runtime.cpp` with those definitions absent.
+Linkage, builds, tests and device behavior remain unverified.
+
 ## Rust control owner, first slice
 
 `ReScaleFrame.Godot.Native.dll` now links the `rsf-godot` staticlib (`native/lib.rs`) next to the

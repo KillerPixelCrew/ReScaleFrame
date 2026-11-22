@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "effect.h"
 #include "godot_platform.h"
+#include "script_dictionary.h"
 #include <rescaleframe/version.h>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -17,13 +18,11 @@
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/vector2i.hpp>
 #include <cstddef>
-#include <initializer_list>
 
 // The snapshot, callback count, capture request, buffer and capture admission, the motion
 // classification and the probe's published stage, reason and inactive pipeline claims are owned by
 // native/effect.rs. This class keeps its registration and callback contract, the scene buffer,
-// scene data and RenderingDevice reads, the readback recording calls and the status Dictionary keys,
-// and lends them as rsf_godot_effect_leaves (godot_platform.h).
+// scene data and direct RenderingDevice calls. It materializes Rust properties with Godot Variants.
 static_assert(sizeof(rsf_godot_effect_frame) == 272 && offsetof(rsf_godot_effect_frame, motion_valid) == 36 &&
     offsetof(rsf_godot_effect_frame, camera_transform) == 48 &&
     offsetof(rsf_godot_effect_frame, jittered_projection) == 144 && sizeof(rsf_godot_effect_resources) == 24 &&
@@ -67,12 +66,6 @@ struct MotionReadback {
     MotionReadback(RenderingDevice* device, RID motion_layer, PackedByteArray& result)
         : rd(device), motion(motion_layer), bytes(result) {}
 
-    void release()
-    {
-        for (const RID& rid : {uniform_set, buffer, sampler, pipeline, shader}) {
-            if (rid.is_valid()) rd->free_rid(rid);
-        }
-    }
 };
 
 uint32_t compile_motion(void* call, const rsf_godot_effect_readback* plan) noexcept try {
@@ -117,9 +110,33 @@ uint32_t dispatch_motion(void* call, const rsf_godot_effect_readback* plan) noex
     value.rd->compute_list_bind_uniform_set(list, value.uniform_set, 0);
     value.rd->compute_list_dispatch(list, plan->groups_x, plan->groups_y, 1);
     value.rd->compute_list_end();
+    return 1;
+} catch (...) { return 0; }
+
+uint32_t read_motion(void* call) noexcept try {
+    auto& value = *static_cast<MotionReadback*>(call);
     value.bytes = value.rd->buffer_get_data(value.buffer);
     return 1;
 } catch (...) { return 0; }
+
+uint32_t free_motion_resource(void* call, uint32_t resource) noexcept try {
+    auto& value = *static_cast<MotionReadback*>(call);
+    RID rid;
+    switch (resource) {
+    case RSF_GODOT_MOTION_SHADER: rid = value.shader; break;
+    case RSF_GODOT_MOTION_PIPELINE: rid = value.pipeline; break;
+    case RSF_GODOT_MOTION_SAMPLER: rid = value.sampler; break;
+    case RSF_GODOT_MOTION_BUFFER: rid = value.buffer; break;
+    case RSF_GODOT_MOTION_UNIFORMS: rid = value.uniform_set; break;
+    default: return 0;
+    }
+    if (rid.is_valid()) value.rd->free_rid(rid);
+    return 1;
+} catch (...) { return 0; }
+
+const rsf_godot_motion_calls motion_calls{
+    compile_motion, prepare_motion, dispatch_motion, read_motion, free_motion_resource
+};
 
 uint32_t leaf_frame(void* call, rsf_godot_effect_frame* frame) noexcept try {
     auto& value = call_of(call);
@@ -174,9 +191,7 @@ uint32_t leaf_read_motion(void* call, const rsf_godot_effect_readback* plan, con
     *size = 0;
     // Packed data owns its CPU storage; the borrowed texture never leaves the callback.
     MotionReadback readback{value.rd, value.motion, value.bytes};
-    const bool recorded = rsf_godot_effect_record_motion(&readback, plan, compile_motion, prepare_motion, dispatch_motion) != 0;
-    readback.release();
-    if (!recorded) return 0;
+    if (!rsf_godot_effect_record_motion(&readback, plan, &motion_calls)) return 0;
     *data = value.bytes.ptr();
     *size = static_cast<uint64_t>(value.bytes.size());
     return 1;
@@ -221,53 +236,9 @@ void ReScaleFrameEffect::_render_callback(int32_t type, RenderData* data)
 
 Dictionary ReScaleFrameEffect::get_status() const
 {
-    rsf_godot_effect_status value{};
-    value.struct_size = sizeof(value);
-    value.version = RSF_GODOT_EFFECT_VERSION;
     Dictionary result;
-    if (!rsf_godot_effect_status_get(probe, &value)) return result;
-    Transform3D camera;
-    for (int row = 0; row < 3; ++row) {
-        for (int column = 0; column < 3; ++column)
-            camera.basis[row][column] = static_cast<real_t>(value.frame.camera_transform[row * 3 + column]);
-        camera.origin[row] = static_cast<real_t>(value.frame.camera_transform[9 + row]);
-    }
-    Projection projection;
-    for (int column = 0; column < 4; ++column)
-        for (int row = 0; row < 4; ++row)
-            projection[column][row] = static_cast<real_t>(value.frame.jittered_projection[column * 4 + row]);
-    result["version"] = RSF_VERSION_STRING;
-    result["stage"] = value.stage;
-    result["rendering_ready"] = value.rendering_ready != 0;
-    result["sr_active"] = value.sr_active != 0;
-    result["fg_active"] = value.fg_active != 0;
-    result["latency_active"] = value.latency_active != 0;
-    result["reason"] = value.reason;
-    result["renderer"] = RenderingServer::get_singleton()->get_current_rendering_method();
-    result["driver"] = RenderingServer::get_singleton()->get_current_rendering_driver_name();
-    result["snapshot_scope"] = value.snapshot_scope;
-    result["callbacks"] = static_cast<int64_t>(value.callbacks);
-    result["render_target_id"] = static_cast<int64_t>(value.frame.render_target);
-    result["view_count"] = value.frame.views;
-    result["internal_size"] = Vector2i(value.frame.internal_width, value.frame.internal_height);
-    result["output_size"] = Vector2i(value.frame.output_width, value.frame.output_height);
-    result["camera_transform"] = camera;
-    result["jittered_projection"] = projection;
-    result["color_format"] = value.resources.color_format;
-    result["depth_format"] = value.resources.depth_format;
-    result["motion_format"] = value.resources.motion_format;
-    result["buffers_available"] = value.buffers_available != 0;
-    result["native_device_available"] = value.resources.native_device != 0;
-    result["native_queue_available"] = value.resources.native_queue != 0;
-    result["native_textures_available"] = value.resources.native_textures != 0;
-    result["motion_captures"] = static_cast<int64_t>(value.captures);
-    result["capture_callback"] = static_cast<int64_t>(value.capture_callback);
-    result["capture_succeeded"] = value.capture_succeeded != 0;
-    result["capture_pixels"] = static_cast<int64_t>(value.capture_pixels);
-    result["capture_moving_pixels"] = static_cast<int64_t>(value.capture_moving_pixels);
-    result["capture_nonfinite_pixels"] = static_cast<int64_t>(value.capture_nonfinite_pixels);
-    result["capture_unwritten_pixels"] = static_cast<int64_t>(value.capture_unwritten_pixels);
-    result["capture_max_abs_uv"] = value.capture_max_abs_uv;
+    ScriptDictionary writer{result, RenderingServer::get_singleton()};
+    rsf_godot_effect_properties(probe, RSF_VERSION_STRING, &writer, ScriptDictionary::emit);
     return result;
 }
 }

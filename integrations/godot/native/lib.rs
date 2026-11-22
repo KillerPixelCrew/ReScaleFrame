@@ -9,20 +9,24 @@
 //! The GDExtension entry and godot-cpp classes stay C++. Native control uses the same C ABI.
 //! `runtime.rs` handles the engine entry points, and `host.rs` implements the D3D12,
 //! DXGI and Win32 leaves and calls the shared Runtime capture owner. `runtime.cpp`
-//! wires the platform table, Runtime calls and CMake-selected Vulkan capabilities.
+//! supplies CMake-selected Vulkan symbols and the DLL unload callback.
 //! `effect.cpp` lends godot-cpp leaves for each compositor callback.
 mod control;
 mod d3d12;
 mod effect;
 mod extension;
+mod extension_abi;
 #[cfg(all(windows, not(test)))]
 mod host;
 #[cfg(all(windows, not(test)))]
 mod host_abi;
 mod platform;
+mod properties;
 #[cfg(all(windows, not(test)))]
 mod runtime;
 mod vulkan;
+#[cfg(all(windows, not(test)))]
+mod vulkan_features;
 mod window;
 
 use control::Control;
@@ -32,7 +36,7 @@ use platform::{
     SETTINGS_ABI_VERSION, Settings, Setup, Status, VkFunction, VkProc,
 };
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void};
 use std::sync::LazyLock;
 
 static CONTROL: LazyLock<Control> = LazyLock::new(Control::new);
@@ -497,19 +501,4 @@ unsafe extern "C" fn rsf_godot_effect_status_get(
         }
         _ => 0,
     }
-}
-
-/// # Safety
-/// `driver` and `method` are null or NUL-terminated for the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_renderer_admission(
-    driver: *const c_char,
-    method: *const c_char,
-    vulkan_supported: u32,
-) -> u32 {
-    let name = |value: *const c_char| {
-        // SAFETY: the caller's guarantee.
-        (!value.is_null()).then(|| unsafe { CStr::from_ptr(value) }.to_bytes())
-    };
-    extension::admission(name(driver), name(method), vulkan_supported != 0)
 }

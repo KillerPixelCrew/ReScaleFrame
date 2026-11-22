@@ -5,21 +5,6 @@ use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR};
 const TRANSFER_SRC: u32 = 1;
 const SWAPCHAIN_IMAGES: usize = 16;
 
-#[repr(C)]
-pub(super) struct Ops {
-    create: Option<unsafe extern "C" fn(*const rsf_input_dump_vk_setup, *mut Handle) -> i32>,
-    snapshot: Option<
-        unsafe extern "C" fn(
-            Handle,
-            *const rsf_frame_record,
-            *const rsf_srvk_image,
-            *const c_char,
-        ) -> i32,
-    >,
-    drain: Option<unsafe extern "C" fn(Handle) -> i32>,
-    destroy: Option<unsafe extern "C" fn(Handle) -> i32>,
-}
-
 unsafe extern "C" {
     fn rsf_core_capture_vk_create(command_completion: u32) -> Handle;
     fn rsf_core_capture_vk_initialize(

@@ -2,6 +2,7 @@
 #include "runtime_control.h"
 #include "api.h"
 #include "godot_platform.h"
+#include "script_dictionary.h"
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/variant/callable_method_pointer.hpp>
@@ -17,7 +18,7 @@ uint32_t admission(RenderingServer* rendering)
     if (!rendering) return 0;
     const CharString driver = rendering->get_current_rendering_driver_name().utf8();
     const CharString method = rendering->get_current_rendering_method().utf8();
-    return rsf_godot_renderer_admission(driver.get_data(), method.get_data(), rsfg_vulkan_supported() ? 1u : 0u);
+    return rsf_godot_renderer_admission(driver.get_data(), method.get_data());
 }
 uint32_t read_option(const void* dictionary, const rsf_godot_option_field* field,
     rsf_godot_option_value* value) noexcept try
@@ -32,13 +33,6 @@ uint32_t read_option(const void* dictionary, const rsf_godot_option_field* field
     else value->integer = static_cast<int64_t>(raw);
     return 1;
 } catch (...) { return 0; }
-void emit_status(void* dictionary, const char* key, int64_t value, uint32_t boolean) noexcept try
-{
-    auto& result = *static_cast<Dictionary*>(dictionary);
-    if (boolean) result[key] = value != 0;
-    else result[key] = value;
-} catch (...) {}
-
 }
 void ReScaleFrameRuntime::_bind_methods()
 {
@@ -57,12 +51,8 @@ Dictionary ReScaleFrameRuntime::get_status() const
 {
     Dictionary result;
     auto* rendering = RenderingServer::get_singleton();
-    const uint32_t admitted = admission(rendering);
-    result["graphics_driver"] = rendering ? rendering->get_current_rendering_driver_name() : String();
-    result["renderer"] = rendering ? rendering->get_current_rendering_method() : String();
-    result["graphics_driver_supported"] = (admitted & RSF_GODOT_ADMIT_DRIVER) != 0;
-    result["renderer_supported"] = (admitted & RSF_GODOT_ADMIT_RENDERER) != 0;
-    rsf_godot_extension_status(&result, emit_status);
+    ScriptDictionary writer{result, rendering};
+    rsf_godot_extension_status(admission(rendering), &writer, ScriptDictionary::emit);
     return result;
 }
 void ReScaleFrameRuntime::reset_history() { rsfg_reset_history(); }

@@ -1209,5 +1209,21 @@ generate("tests/vulkan-fg/src/dlss_abi.rs", "tests/vulkan-fg/dlss_abi.h",
 generate("runtime/orchestrator/src/streamline_sr/payload_abi.rs",
          "runtime/backends/dlss/src/streamline_sr_payload.h",
          "^rsf_sl_sr_.*$", "NOTHING", [], ["--with-derive-default"])
+
 generate("tests/vulkan-fg/src/streamline_abi.rs", "tests/vulkan-fg/streamline_abi.h",
          "NOTHING", "NOTHING", [], ["--allowlist-function", "rsf_fixture_sl_.*"])
+
+generate("integrations/godot/native/extension_abi.rs", "integrations/godot/native/extension_abi.h",
+         "rsf_godot_(property(_emit)?|motion_calls)", "RSF_GODOT_(PROPERTY_.*|MOTION_.*)",
+         [], ["--no-recursive-allowlist",
+              "--raw-line", "use crate::platform::EffectReadback as rsf_godot_effect_readback;"])
+
+generate("integrations/godot/native/vulkan_features.rs", "integrations/godot/native/vulkan_features.h",
+         "rsf_godot_vk_(features|capture_ops)", "NOTHING",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/graphics/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--allowlist-function", "rsf_godot_vk_native_features",
+          "--raw-line", "use crate::vulkan::creation::abi::{\n"
+                        "    rsf_fsr4fg_info, rsf_input_dump_vk_setup, rsf_srvk_image, rsf_srvk_setup,\n};",
+          "--raw-line", "use rsf_game_sys::rsf_frame_record;",
+          "--raw-line", "type rsf_input_dump_vk = core::ffi::c_void;"])

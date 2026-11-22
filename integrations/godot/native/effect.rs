@@ -6,15 +6,17 @@
 //!
 //! The class keeps its godot-cpp registration and callback contract (`POST_TRANSPARENT`, resolved
 //! color and depth, motion vectors), the scene buffer, scene data and RenderingDevice reads, the
-//! readback compute pass and the status Dictionary keys, and lends them as `EffectLeaves`. Scene
+//! readback compute calls and the typed Variant conversions. Scene
 //! objects, RIDs and native pointers stay in the leaves' callback record; this owner keeps copied
 //! CPU facts only, and no resource lease or GPU completion is implied. The effect reads no
 //! Runtime settings or status: `ReScaleFrameRuntime` reports active SR, FG and latency.
+use crate::extension_abi::*;
 use crate::platform::{
     EFFECT_MOTION_FORMAT, EFFECT_VERSION, EffectFrame, EffectLeaves, EffectReadback,
     EffectResources, EffectStatus,
 };
-use std::ffi::{CStr, c_void};
+use crate::properties::Properties;
+use std::ffi::{CStr, c_char, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -156,24 +158,105 @@ impl Effect {
     }
 }
 
-/// The SDK owns RIDs and bytes through this synchronous call. Record only after
-/// shader creation and all four input leases have succeeded.
+/// Only the SDK leaves can allocate, record and release Godot resources. Finish
+/// by releasing the resources created up to that point, even after a refusal.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_godot_effect_record_motion(
     call: *mut c_void,
     plan: *const EffectReadback,
-    compile: unsafe extern "C" fn(*mut c_void, *const EffectReadback) -> u32,
-    prepare: unsafe extern "C" fn(*mut c_void, *const EffectReadback, *mut u32) -> u32,
-    dispatch: unsafe extern "C" fn(*mut c_void, *const EffectReadback) -> u32,
+    calls: *const rsf_godot_motion_calls,
 ) -> u32 {
-    let mut valid = [0; 4];
-    if unsafe { compile(call, plan) } == 0
-        || unsafe { prepare(call, plan, valid.as_mut_ptr()) } == 0
-        || valid.contains(&0)
-    {
+    let Some(rsf_godot_motion_calls {
+        compile: Some(compile),
+        prepare: Some(prepare),
+        dispatch: Some(dispatch),
+        read: Some(read),
+        free_resource: Some(free),
+    }) = (unsafe { calls.as_ref() })
+    else {
         return 0;
+    };
+    let mut valid = [0; 4];
+    let mut completed = unsafe { compile(call, plan) } != 0
+        && unsafe { prepare(call, plan, valid.as_mut_ptr()) } != 0
+        && !valid.contains(&0)
+        && unsafe { dispatch(call, plan) } != 0
+        && unsafe { read(call) } != 0;
+
+    for resource in [
+        RSF_GODOT_MOTION_UNIFORMS,
+        RSF_GODOT_MOTION_BUFFER,
+        RSF_GODOT_MOTION_SAMPLER,
+        RSF_GODOT_MOTION_PIPELINE,
+        RSF_GODOT_MOTION_SHADER,
+    ] {
+        completed &= unsafe { free(call, resource) } != 0;
     }
-    unsafe { dispatch(call, plan) }
+    u32::from(completed)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_effect_properties(
+    effect: *const Effect,
+    version: *const c_char,
+    user: *mut c_void,
+    emit: rsf_godot_property_emit,
+) {
+    if version.is_null() {
+        return;
+    }
+    let (Some(effect), Some(fields)) = (unsafe { effect.as_ref() }, unsafe {
+        Properties::new(user, emit)
+    }) else {
+        return;
+    };
+    let status = effect.status();
+    fields.text(c"version", unsafe { CStr::from_ptr(version) });
+    fields.text(c"stage", STAGE);
+    fields.boolean(c"rendering_ready", status.rendering_ready != 0);
+    fields.boolean(c"sr_active", status.sr_active != 0);
+    fields.boolean(c"fg_active", status.fg_active != 0);
+    fields.boolean(c"latency_active", status.latency_active != 0);
+    fields.text(c"reason", REASON);
+    fields.renderer(c"renderer");
+    fields.driver(c"driver");
+    fields.text(c"snapshot_scope", SNAPSHOT_SCOPE);
+    fields.integer(c"callbacks", status.callbacks as i64);
+    let frame = &status.frame;
+    fields.integer(c"render_target_id", frame.render_target as i64);
+    fields.integer(c"view_count", i64::from(frame.views));
+    fields.extent(
+        c"internal_size",
+        [frame.internal_width, frame.internal_height],
+    );
+    fields.extent(c"output_size", [frame.output_width, frame.output_height]);
+    fields.transform(c"camera_transform", &frame.camera_transform);
+    fields.projection(c"jittered_projection", &frame.jittered_projection);
+    let resources = &status.resources;
+    fields.integer(c"color_format", i64::from(resources.color_format));
+    fields.integer(c"depth_format", i64::from(resources.depth_format));
+    fields.integer(c"motion_format", i64::from(resources.motion_format));
+    fields.boolean(c"buffers_available", status.buffers_available != 0);
+    fields.boolean(c"native_device_available", resources.native_device != 0);
+    fields.boolean(c"native_queue_available", resources.native_queue != 0);
+    fields.boolean(c"native_textures_available", resources.native_textures != 0);
+    fields.integer(c"motion_captures", status.captures as i64);
+    fields.integer(c"capture_callback", status.capture_callback as i64);
+    fields.boolean(c"capture_succeeded", status.capture_succeeded != 0);
+    fields.integer(c"capture_pixels", status.capture_pixels as i64);
+    fields.integer(
+        c"capture_moving_pixels",
+        status.capture_moving_pixels as i64,
+    );
+    fields.integer(
+        c"capture_nonfinite_pixels",
+        status.capture_nonfinite_pixels as i64,
+    );
+    fields.integer(
+        c"capture_unwritten_pixels",
+        status.capture_unwritten_pixels as i64,
+    );
+    fields.real(c"capture_max_abs_uv", status.capture_max_abs_uv);
 }
 
 /// One view with a nonempty internal extent and valid color, depth and velocity layers.

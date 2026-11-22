@@ -4,8 +4,10 @@
 //! the renderer admission both `configure` and `get_status` report. The class keeps the typed
 //! godot-cpp `Dictionary`, `RID` and `RenderingServer` calls.
 use crate::control::default_settings;
+use crate::extension_abi::rsf_godot_property_emit;
 use crate::platform::{OptionField, OptionValue, Platform, Settings};
-use std::ffi::{CStr, c_char, c_void};
+use crate::properties::Properties;
+use std::ffi::{CStr, c_void};
 
 pub(crate) const INTEGER: u32 = 0;
 pub(crate) const REAL: u32 = 1;
@@ -152,6 +154,24 @@ pub(crate) fn admission(
     (if driver { ADMIT_DRIVER } else { 0 }) | (if renderer { ADMIT_RENDERER } else { 0 })
 }
 
+/// The renderer names are borrowed UTF-8 from Godot. Read Vulkan availability from
+/// the same production platform used by the engine entry points.
+#[cfg(all(windows, not(test)))]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_renderer_admission(
+    driver: *const std::ffi::c_char,
+    method: *const std::ffi::c_char,
+) -> u32 {
+    let name = |p: *const std::ffi::c_char| {
+        (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_bytes())
+    };
+    admission(
+        name(driver),
+        name(method),
+        crate::host::native_platform().vulkan_supported(),
+    )
+}
+
 /// Compose the options from a borrowed Godot Dictionary, then call the registered
 /// engine service with the typed settings. Only the leaf can interpret Variants.
 #[cfg(all(windows, not(test)))]
@@ -182,50 +202,53 @@ unsafe extern "C" fn rsf_godot_extension_configure(
 /// as Variants in its own Dictionary.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_godot_extension_status(
+    admitted: u32,
     dictionary: *mut c_void,
-    emit: unsafe extern "C" fn(*mut c_void, *const c_char, i64, u32),
+    emit: rsf_godot_property_emit,
 ) {
     use crate::platform::{ABI_VERSION, SETTINGS_ABI_VERSION, Status};
+    let Some(fields) = (unsafe { Properties::new(dictionary, emit) }) else {
+        return;
+    };
+    fields.driver(c"graphics_driver");
+    fields.renderer(c"renderer");
+    fields.boolean(c"graphics_driver_supported", admitted & ADMIT_DRIVER != 0);
+    fields.boolean(c"renderer_supported", admitted & ADMIT_RENDERER != 0);
     let mut status = Status {
         struct_size: size_of::<Status>() as u32,
         abi_version: ABI_VERSION,
         ..Default::default()
     };
     let available = unsafe { crate::rsfg_status(&mut status) } != 0 && status.session_id != 0;
-    unsafe {
-        emit(
-            dictionary,
-            c"engine_bridge_ready".as_ptr(),
-            i64::from(available),
-            1,
-        )
-    };
+    fields.boolean(c"engine_bridge_ready", available);
     if !available {
         return;
     }
 
-    let scalar = |name: &CStr, value| unsafe { emit(dictionary, name.as_ptr(), value, 0) };
     let mut requested = Settings {
         struct_size: size_of::<Settings>() as u32,
         abi_version: SETTINGS_ABI_VERSION,
         ..Default::default()
     };
     if unsafe { crate::rsfg_settings(&mut requested) } != 0 {
-        scalar(c"requested_dlss_preset", i64::from(requested.dlss_preset));
-        scalar(c"requested_fg_backend", i64::from(requested.fg_backend));
-        scalar(c"requested_fg_mode", i64::from(requested.fg_mode));
-        scalar(
+        fields.integer(c"requested_dlss_preset", i64::from(requested.dlss_preset));
+        fields.integer(c"requested_fg_backend", i64::from(requested.fg_backend));
+        fields.integer(c"requested_fg_mode", i64::from(requested.fg_mode));
+        fields.integer(
             c"requested_generated_frames",
             i64::from(requested.generated_frames),
         );
-        scalar(c"requested_latency_mode", i64::from(requested.latency_mode));
+        fields.integer(c"requested_latency_mode", i64::from(requested.latency_mode));
     }
 
+    macro_rules! c_key {
+        ($field:ident) => {
+            CStr::from_bytes_with_nul(concat!(stringify!($field), "\0").as_bytes()).unwrap()
+        };
+    }
     macro_rules! fields {
         ($($field:ident),* $(,)?) => {
-            $(unsafe {
-                emit(dictionary, concat!(stringify!($field), "\0").as_ptr().cast(), status.$field as i64, 0);
-            })*
+            $(fields.integer(c_key!($field), status.$field as i64);)*
         };
     }
     fields!(

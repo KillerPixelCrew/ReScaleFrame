@@ -7,6 +7,7 @@ use super::creation::abi::{self, *};
 use super::{BACKEND_ERROR_NOT_READY, BACKEND_ERROR_NOT_SUPPORTED, BACKEND_OK};
 use crate::host::native_platform as platform;
 use crate::platform::*;
+use crate::vulkan_features::{rsf_godot_vk_features, rsf_godot_vk_native_features};
 use crate::{CONTROL, rsf_godot_vk_creation_resolver};
 use rsf_game_sys::ffi_util::ascii_wide;
 use rsf_game_sys::win32::typed_export;
@@ -31,30 +32,12 @@ const SHADER_READ: u32 = 5;
 const TRANSFER_DST: u32 = 7;
 const PRESENT_LAYOUT: u32 = 1_000_001_002;
 
-#[repr(C)]
-struct NativeFeatures {
-    sr: u32,
-    fsr4_sr: u32,
-    xess_fg: u32,
-    fsr4_probe: Option<unsafe extern "C" fn(*const rsf_srvk_setup, *mut rsf_fsr4fg_info) -> i32>,
-    capture: capture::Ops,
-}
-
-unsafe extern "C" {
-    fn rsf_godot_vk_native_features() -> *const NativeFeatures;
-}
-
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn LoadLibraryExW(path: *const u16, file: Handle, flags: u32) -> Handle;
 }
 
-const _: () = {
-    assert!(size_of::<NativeFeatures>() == 56);
-    assert!(std::mem::offset_of!(NativeFeatures, capture) == 24);
-};
-
-fn features() -> &'static NativeFeatures {
+fn features() -> &'static rsf_godot_vk_features {
     // The CMake-configured native table is immutable and part of this module.
     unsafe { &*rsf_godot_vk_native_features() }
 }

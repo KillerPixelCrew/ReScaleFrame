@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
+#include "extension_abi.h"
 /* Internal boundary between the typed leaves in runtime.cpp and runtime_control.cpp and the Rust
    control owner (crate rsf-godot, native/lib.rs). Not a DLL ABI: both link into
    ReScaleFrame.Godot.Native.dll next to the same OrchestratorCore, and the rsfg_* exports in
@@ -396,9 +397,9 @@ void rsf_godot_effect_request_capture(rsf_godot_effect* effect);
 void rsf_godot_effect_render(rsf_godot_effect* effect, const rsf_godot_effect_leaves* leaves, void* call);
 /* Synchronous capture recording with borrowed SDK objects and a four-entry validity array. */
 uint32_t rsf_godot_effect_record_motion(void* call, const rsf_godot_effect_readback* plan,
-    uint32_t (*compile)(void*, const rsf_godot_effect_readback*),
-    uint32_t (*prepare)(void*, const rsf_godot_effect_readback*, uint32_t*),
-    uint32_t (*dispatch)(void*, const rsf_godot_effect_readback*));
+    const rsf_godot_motion_calls* calls);
+void rsf_godot_effect_properties(const rsf_godot_effect* effect, const char* version,
+    void* user, rsf_godot_property_emit emit);
 /* Nonzero when the record's header matched and it was filled. */
 int rsf_godot_effect_status_get(const rsf_godot_effect* effect, rsf_godot_effect_status* status);
 
@@ -417,11 +418,11 @@ int rsf_godot_vk_present_marker(const rsf_godot_platform* platform, uint64_t win
 int rsf_godot_extension_configure(uint32_t admitted,
     uint64_t viewport, const void* dictionary,
     uint32_t (*read)(const void*, const rsf_godot_option_field*, rsf_godot_option_value*));
-/* Emits integer and boolean fields into a borrowed scripting Dictionary. */
-void rsf_godot_extension_status(void* dictionary, void (*emit)(void*, const char*, int64_t, uint32_t));
+/* Emits script status fields into a borrowed scripting Dictionary. */
+void rsf_godot_extension_status(uint32_t admitted, void* dictionary, rsf_godot_property_emit emit);
 void rsf_godot_extension_capture(void);
 /* Null names are unsupported. Returns RSF_GODOT_ADMIT_* bits. */
-uint32_t rsf_godot_renderer_admission(const char* driver, const char* method, uint32_t vulkan_supported);
+uint32_t rsf_godot_renderer_admission(const char* driver, const char* method);
 #ifdef __cplusplus
 }
 #endif
