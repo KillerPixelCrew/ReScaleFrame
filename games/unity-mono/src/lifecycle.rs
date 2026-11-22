@@ -20,11 +20,11 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleFileNameW, GetModuleHandleExW,
 };
 
-pub(crate) const OK: rsf_result = 0;
-pub(crate) const INVALID_ARGUMENT: rsf_result = -1;
-pub(crate) const ABI_MISMATCH: rsf_result = -2;
-const NOT_READY: rsf_result = -3;
-const BUSY: rsf_result = -4;
+pub(crate) use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT,
+    RSF_OK as OK,
+};
+use rsf_game_sys::{RSF_ERROR_BUSY as BUSY, RSF_ERROR_NOT_READY as NOT_READY};
 
 /// Managed helper stages reported through the bridge (Bootstrap.cs).
 const MANAGED_INSTALLED: u32 = 2;

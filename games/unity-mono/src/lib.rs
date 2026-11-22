@@ -60,9 +60,7 @@ use rsf_game_sys::{rsf_detection, rsf_game_probe};
 use std::ffi::CStr;
 
 #[cfg(any(test, all(windows, feature = "mono-plugin")))]
-const UNKNOWN: rsf_detection = 0;
-#[cfg(any(test, all(windows, feature = "mono-plugin")))]
-const RECOGNIZED: rsf_detection = 1;
+use rsf_game_sys::{RSF_GAME_RECOGNIZED as RECOGNIZED, RSF_GAME_UNKNOWN as UNKNOWN};
 #[cfg(any(test, all(windows, feature = "mono-plugin")))]
 const AMD64: u16 = 0x8664;
 
