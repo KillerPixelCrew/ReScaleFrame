@@ -23,7 +23,8 @@ typedef struct rsf_ac7_native_renderer_options {
     uint32_t diagnostics; /* RSF_AC7_DIAG_*; zero for none */
 } rsf_ac7_native_renderer_options;
 /* After decryption, before graphics activation. Expected bytes are checked before any hook.
-   Owns native pass boundaries and queued metadata; no vendor library is loaded here. */
+   Owns native pass boundaries and queued metadata. No vendor library is loaded here.
+   A refused install may return a handle for quiesce and stop when hooks are still draining. */
 int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_options*, rsf_ac7_native_renderer** out);
 int rsf_ac7_native_renderer_start(rsf_ac7_native_renderer*);
 int rsf_ac7_native_renderer_is_active(rsf_ac7_native_renderer*);

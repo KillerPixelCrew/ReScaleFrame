@@ -56,6 +56,7 @@ typedef struct rsf_ac7_code_patches {
 
 // Exact-build admission: every hooked entry site, then the enlarged UI depth/view gates, then the
 // helper sites, compared at `base`. Logs the first difference and returns false.
+/* Admission uses matches and the optional logger. A writer is required only for patch calls. */
 bool rsf_ac7_build_admit(const unsigned char* base, const rsf_ac7_code_leaves* leaves);
 // RVA and pass role of a hooked entry site; zero out of range. Only Process sites have a role.
 uint32_t rsf_ac7_hook_rva(uint32_t hook);

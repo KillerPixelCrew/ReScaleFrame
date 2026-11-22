@@ -34,6 +34,7 @@ mod d3d11_observer_layout_abi;
 #[path = "../../../runtime/graphics/src/dxbc_chunks.rs"]
 mod dxbc_chunks;
 mod guards;
+mod hook_batch;
 mod lifecycle;
 mod motion_capture_observations;
 mod motion_capture_records;
@@ -72,6 +73,7 @@ mod fake_code;
 
 use lifecycle::{Leaves, Lifecycle, Renderer};
 use platform_abi::{rsf_ac7_native_renderer_options, rsf_ac7_platform};
+use rsf_game_sys::call_header::validate;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detection, rsf_game_control_args, rsf_game_hooks_api, rsf_game_info,
     rsf_game_plugin_api, rsf_game_prepare_args, rsf_game_probe, rsf_game_renderer_status,
@@ -106,7 +108,17 @@ const STATUS: &CStr =
 pub(crate) struct Threw;
 
 /// The validated native leaf table. Every entry is present.
-struct Ops(rsf_ac7_platform);
+type PrepareFn =
+    unsafe extern "C" fn(*const rsf_ac7_native_renderer_options, *mut Renderer, *mut bool) -> bool;
+type QueryFn = unsafe extern "C" fn(Renderer, *mut bool) -> bool;
+
+struct Ops {
+    prepare: PrepareFn,
+    start: QueryFn,
+    is_active: QueryFn,
+    quiesce: unsafe extern "C" fn(Renderer) -> bool,
+    stop: QueryFn,
+}
 
 static OPS: OnceLock<Ops> = OnceLock::new();
 static LIFECYCLE: Lifecycle = Lifecycle::new();
@@ -116,12 +128,14 @@ fn completed(returned: bool) -> Result<(), Threw> {
 }
 
 impl Ops {
-    fn complete(table: &rsf_ac7_platform) -> bool {
-        table.prepare.is_some()
-            && table.start.is_some()
-            && table.is_active.is_some()
-            && table.quiesce.is_some()
-            && table.stop.is_some()
+    fn new(table: &rsf_ac7_platform) -> Option<Self> {
+        Some(Self {
+            prepare: table.prepare?,
+            start: table.start?,
+            is_active: table.is_active?,
+            quiesce: table.quiesce?,
+            stop: table.stop?,
+        })
     }
 }
 
@@ -130,7 +144,7 @@ impl Leaves for Ops {
         &self,
         options: &rsf_ac7_native_renderer_options,
     ) -> Result<(Renderer, bool), Threw> {
-        let leaf = self.0.prepare.ok_or(Threw)?;
+        let leaf = self.prepare;
         let mut created = null_mut();
         let mut prepared = false;
         completed(unsafe { leaf(options, &mut created, &mut prepared) })?;
@@ -138,48 +152,29 @@ impl Leaves for Ops {
     }
 
     fn start(&self, renderer: Renderer) -> Result<bool, Threw> {
-        let leaf = self.0.start.ok_or(Threw)?;
+        let leaf = self.start;
         let mut started = false;
         completed(unsafe { leaf(renderer, &mut started) })?;
         Ok(started)
     }
 
     fn is_active(&self, renderer: Renderer) -> Result<bool, Threw> {
-        let leaf = self.0.is_active.ok_or(Threw)?;
+        let leaf = self.is_active;
         let mut active = false;
         completed(unsafe { leaf(renderer, &mut active) })?;
         Ok(active)
     }
 
     fn quiesce(&self, renderer: Renderer) -> Result<(), Threw> {
-        let leaf = self.0.quiesce.ok_or(Threw)?;
+        let leaf = self.quiesce;
         completed(unsafe { leaf(renderer) })
     }
 
     fn stop(&self, renderer: Renderer) -> Result<bool, Threw> {
-        let leaf = self.0.stop.ok_or(Threw)?;
+        let leaf = self.stop;
         let mut stopped = false;
         completed(unsafe { leaf(renderer, &mut stopped) })?;
         Ok(stopped)
-    }
-}
-
-/// The GameSDK size and ABI check on a caller structure that leads with struct_size and
-/// abi_version.
-///
-/// # Safety
-/// A nonnull `value` points to at least its two leading fields.
-unsafe fn validate<T>(value: *const T) -> rsf_result {
-    if value.is_null() {
-        return RSF_ERROR_INVALID_ARGUMENT;
-    }
-    let header = value.cast::<u32>();
-    if unsafe { header.read() } < size_of::<T>() as u32 {
-        RSF_ERROR_INVALID_ARGUMENT
-    } else if unsafe { header.add(1).read() } != RSF_GAME_ABI_VERSION {
-        RSF_ERROR_ABI_MISMATCH
-    } else {
-        RSF_OK
     }
 }
 
@@ -303,10 +298,10 @@ unsafe extern "C" fn rsf_ac7_publish_api(
     let Some(table) = (unsafe { platform.as_ref() }) else {
         return RSF_ERROR_NOT_READY;
     };
-    if !Ops::complete(table) {
+    let Some(ops) = Ops::new(table) else {
         return RSF_ERROR_NOT_READY;
-    }
-    let _ = OPS.get_or_init(|| Ops(*table));
+    };
+    let _ = OPS.get_or_init(|| ops);
     let api = rsf_game_plugin_api {
         struct_size: size_of::<rsf_game_plugin_api>() as u32,
         abi_version: RSF_GAME_ABI_VERSION,

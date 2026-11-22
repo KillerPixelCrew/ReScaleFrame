@@ -122,10 +122,16 @@ impl Fake {
     }
 }
 
-impl Code for Fake {
+impl CodeView for Fake {
     fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
         self.image.matches(address, expected)
     }
+    fn log(&self, message: &str) {
+        self.image.log(message);
+    }
+}
+
+impl Code for Fake {
     fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
         if self.outcomes.borrow_mut().pop_front() == Some(false) {
             return false;
@@ -135,9 +141,6 @@ impl Code for Fake {
             self.written.borrow_mut().push(site.addr());
         }
         written
-    }
-    fn log(&self, message: &str) {
-        self.image.log(message);
     }
 }
 

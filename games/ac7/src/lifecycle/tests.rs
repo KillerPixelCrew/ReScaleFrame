@@ -136,7 +136,7 @@ fn accepted_path_matches_the_former_plugin() {
 }
 
 #[test]
-fn refusals_match_the_former_plugin() {
+fn preparation_and_activation_refusals_are_distinct() {
     let lifecycle = Lifecycle::new();
     let mut leaves = Script::new();
     leaves.prepare = Some(false);
@@ -145,7 +145,14 @@ fn refusals_match_the_former_plugin() {
         RSF_ERROR_NATIVE_REFUSED
     );
     // The native output is retained even on refusal, as the pinned partial activation needs.
-    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(REFUSED)));
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(REFUSED)));
+    assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
+    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_ERROR_BUSY);
+    leaves.stop = Some(false);
+    assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_BUSY);
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(DRAINING)));
+    leaves.stop = Some(true);
+    assert_eq!(lifecycle.stop(&leaves), RSF_OK);
 
     let lifecycle = Lifecycle::new();
     let mut leaves = Script::new();

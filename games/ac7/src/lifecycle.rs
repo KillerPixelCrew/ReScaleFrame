@@ -47,6 +47,7 @@ pub(crate) trait Leaves {
 struct State {
     renderer: Renderer,
     transitioning: bool,
+    prepared: bool,
     active: bool,
     reason: &'static CStr,
 }
@@ -79,6 +80,7 @@ impl Lifecycle {
         Self(Mutex::new(State {
             renderer: null_mut(),
             transitioning: false,
+            prepared: false,
             active: false,
             reason: NOT_PREPARED,
         }))
@@ -108,7 +110,8 @@ impl Lifecycle {
             return RSF_ERROR_NOT_READY;
         };
         state.renderer = created;
-        if prepared {
+        state.prepared = prepared && !created.is_null();
+        if state.prepared {
             state.reason = PREPARED;
             RSF_OK
         } else {
@@ -149,7 +152,7 @@ impl Lifecycle {
     pub(crate) fn start(&self, leaves: &impl Leaves) -> rsf_result {
         self.transition(
             |state| {
-                if state.renderer.is_null() {
+                if !state.prepared {
                     RSF_ERROR_NOT_READY
                 } else {
                     RSF_OK
@@ -199,6 +202,7 @@ impl Lifecycle {
             |state, stopped| {
                 if stopped {
                     state.renderer = null_mut();
+                    state.prepared = false;
                     state.reason = STOPPED;
                     RSF_OK
                 } else {
@@ -220,7 +224,7 @@ impl Lifecycle {
             return RSF_ERROR_BUSY;
         }
         // Written in the former order: prepared stays written if the native check throws.
-        output.prepared = u32::from(!state.renderer.is_null());
+        output.prepared = u32::from(state.prepared);
         // The native check runs only while the adapter believes the renderer active.
         let active = if state.active {
             match leaves.is_active(state.renderer) {

@@ -12,14 +12,15 @@ use crate::platform_abi::{
     rsf_motion_decode_params,
 };
 use crate::{
-    EXECUTABLE_SHA256, Ops, PENDING, RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY,
-    RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw,
-    cpu_events, dpi, ops, pin, render_hooks,
+    EXECUTABLE_SHA256, Ops, PENDING, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT,
+    RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw, cpu_events, dpi, ops, pin,
+    render_hooks,
 };
+use rsf_game_sys::call_header::validate;
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
-    RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
-    rsf_game_renderer_status, rsf_game_start_args, rsf_result,
+    rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args, rsf_game_renderer_status,
+    rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -69,25 +70,6 @@ static SESSION: Mutex<Session> = Mutex::new(Session {
 
 fn session() -> MutexGuard<'static, Session> {
     SESSION.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The GameSDK size and ABI check on a caller structure that leads with struct_size and
-/// abi_version.
-///
-/// # Safety
-/// A nonnull `value` points to at least its two leading fields.
-unsafe fn validate<T>(value: *const T) -> rsf_result {
-    if value.is_null() {
-        return RSF_ERROR_INVALID_ARGUMENT;
-    }
-    let header = value.cast::<u32>();
-    if unsafe { header.read() } < size_of::<T>() as u32 {
-        RSF_ERROR_INVALID_ARGUMENT
-    } else if unsafe { header.add(1).read() } != RSF_GAME_ABI_VERSION {
-        RSF_ERROR_ABI_MISMATCH
-    } else {
-        RSF_OK
-    }
 }
 
 fn same_session(upstream: &rsf_game_host_services, host: &rsf_game_host_services) -> bool {

@@ -13,62 +13,89 @@ use crate::sites_abi::{
 };
 use std::ffi::CString;
 
-/// The code leaves the owner needs: compare live code, replace verified code, log.
-pub(crate) trait Code {
-    /// True when the code at `address` equals `expected`. Unreadable memory differs.
+/// Read-only access needed for exact-build admission.
+pub(crate) trait CodeView {
     fn matches(&self, address: *const u8, expected: &[u8]) -> bool;
-    /// Replaces `expected` at `site` with `replacement` of the same length. False leaves the
-    /// code unchanged.
-    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool;
     fn log(&self, message: &str);
 }
 
-/// The native leaf table lent for one call.
-pub(crate) struct NativeCode<'a>(&'a rsf_ac7_code_leaves);
+/// A writer replaces verified code, leaving the code unchanged on refusal.
+pub(crate) trait Code: CodeView {
+    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool;
+}
 
-impl<'a> NativeCode<'a> {
-    /// The table when it has both code leaves.
-    ///
-    /// # Safety
-    /// `leaves` is null or points to a table that stays valid for the returned borrow.
-    pub(crate) unsafe fn new(leaves: *const rsf_ac7_code_leaves) -> Option<Self> {
-        let leaves = unsafe { leaves.as_ref() }?;
-        (leaves.matches.is_some() && leaves.write.is_some()).then_some(Self(leaves))
+type CompareFn = unsafe extern "C" fn(*const u8, *const u8, usize) -> bool;
+type WriteFn = unsafe extern "C" fn(*mut u8, *const u8, *const u8, usize) -> bool;
+
+pub(crate) struct NativeCodeView {
+    compare: CompareFn,
+    pub(crate) log: rsf_game_sys::rsf_game_log_fn,
+    pub(crate) user: *mut std::ffi::c_void,
+}
+
+impl NativeCodeView {
+    fn new(leaves: &rsf_ac7_code_leaves) -> Option<Self> {
+        Some(Self {
+            compare: leaves.matches?,
+            log: leaves.log,
+            user: leaves.user,
+        })
     }
 }
 
-impl Code for NativeCode<'_> {
+impl CodeView for NativeCodeView {
     fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
-        let Some(matches) = self.0.matches else {
-            return false;
-        };
-        // SAFETY: the native leaf reads `address` under an exception guard and `expected` is a
-        // live slice of the given length.
-        unsafe { matches(address, expected.as_ptr(), expected.len()) }
+        // The native leaf guards access to the live image.
+        unsafe { (self.compare)(address, expected.as_ptr(), expected.len()) }
     }
 
+    fn log(&self, message: &str) {
+        if let (Some(log), Ok(text)) = (self.log, CString::new(message)) {
+            unsafe { log(self.user, text.as_ptr()) };
+        }
+    }
+}
+
+pub(crate) struct NativeCode {
+    pub(crate) view: NativeCodeView,
+    write: WriteFn,
+}
+
+impl NativeCode {
+    /// # Safety
+    /// The table, user and callbacks must be valid for all uses of the returned code access.
+    pub(crate) unsafe fn new(leaves: *const rsf_ac7_code_leaves) -> Option<Self> {
+        let leaves = unsafe { leaves.as_ref() }?;
+        Some(Self {
+            view: NativeCodeView::new(leaves)?,
+            write: leaves.write?,
+        })
+    }
+}
+
+impl CodeView for NativeCode {
+    fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
+        self.view.matches(address, expected)
+    }
+
+    fn log(&self, message: &str) {
+        self.view.log(message);
+    }
+}
+
+impl Code for NativeCode {
     fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
-        let Some(write) = self.0.write else {
-            return false;
-        };
         if expected.len() != replacement.len() {
             return false;
         }
-        // SAFETY: the native leaf writes only after `expected` matches at `site`.
+        // The native leaf writes only after checking the live bytes.
         unsafe {
-            write(
+            (self.write)(
                 site,
                 expected.as_ptr(),
                 replacement.as_ptr(),
                 expected.len(),
             )
-        }
-    }
-
-    fn log(&self, message: &str) {
-        if let (Some(log), Ok(text)) = (self.0.log, CString::new(message)) {
-            // SAFETY: the host log callback borrows the text for the call.
-            unsafe { log(self.0.user, text.as_ptr()) };
         }
     }
 }
@@ -147,7 +174,7 @@ pub(crate) static HOOK_SITES: [Site; RSF_AC7_HOOK_SITE_COUNT as usize] = [
     Site::new(0x113a0c0, b"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\xfa\x48\x8b\xd9"), // 20 renderer_retire
     Site::new(0xcea130, b"\x83\xb9\xb0\x01\x00\x00\x00\x48\x8b\xd1\x75\x22\xf2\x0f\x10\x82"), // 21 poll_input
     Site::new(0x3cd130, b"\x48\x89\x5c\x24\x10\x48\x89\x74\x24\x18\x48\x89\x7c\x24\x20\x55"), // 22 game_instance_init
-    Site::new(0x1ab0200, b"\x0f\xb6\x44\x24\x28\x83\xe0\x01\x89\x91\xd0\x00\x00\x00\x44\x89"), // 23 target_init
+    Site::new(0x1ab0200, b"\x0f\xb6\x44\x24\x28\x83\xe0\x01\x89\x91\xd0\x00\x00\x00\x44\x89"), // 23 target_init, also called directly by the viewport target path
     Site::new(0x3c7a30, b"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x30\x0f\x29\x74\x24\x20\x41"), // 24 simulation_a
     Site::new(0x1781e80, b"\x48\x8b\xc4\x44\x88\x40\x18\x48\x89\x48\x08\x55\x53\x56\x57\x41"), // 25 simulation_b
     Site::new(0x177cdd0, b"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\xd9\x0f\xb6\xfa"), // 26 redraw
@@ -203,7 +230,7 @@ pub(crate) const PROCESS_ROLES: [u32; RSF_AC7_PROCESS_HOOKS as usize] = [
 
 /// Engine functions the detours call or whose layout they read; never hooked.
 #[rustfmt::skip]
-pub(crate) static HELPERS: [Site; 26] = [
+pub(crate) static HELPERS: [Site; 25] = [
     Site::new(0xfb7a00, b"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x40\x48\x8b\x01\x48\x8b\xda"),
     Site::new(0x1126090, b"\x83\xb9\xb0\x09\x00\x00\x02\x4c\x8b\x89\x10\x14\x00\x00\x75\x58"),
     Site::new(0x12183c0, b"\x40\x53\x48\x83\xec\x20\x8b\x1d\x94\x0c\xa6\x02\x85\xdb\x0f\x84"),
@@ -220,7 +247,6 @@ pub(crate) static HELPERS: [Site; 26] = [
     Site::new(0x1b495f0, b"\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x52\x6b\x17\x02\x48\x85"),
     Site::new(0x8c1bd0, b"\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\xb2\x50\x1b\x03\x48\x85"),
     Site::new(0xfcf880, b"\x48\x8b\xc4\x55\x53\x57\x41\x55\x48\x8d\x68\xa1\x48\x81\xec\x88"),
-    Site::new(0x1ab0200, b"\x0f\xb6\x44\x24\x28\x83\xe0\x01\x89\x91\xd0\x00\x00\x00\x44\x89"),
     Site::new(0x1ab7dc0, b"\x48\x89\x5c\x24\x10\x57\x48\x83\xec\x40\x48\x83\x79\x70\x00\x0f"),
     Site::new(0xde5cf0, b"\x40\x53\x48\x83\xec\x20\x48\x8b\xd9\x48\x3b\xca\x0f\x84\xbe\x00"),
     Site::new(0x19b6fe0, b"\x48\x83\xec\x28\x8b\x41\x08\x45\x32\xc0\x0f\x57\xd2\x4c\x8b\xd9"),
@@ -259,7 +285,7 @@ pub(crate) fn at(base: *const u8, rva: u32) -> *const u8 {
 
 /// Exact-build admission in the former order: hooked entry sites, enlarged UI depth/view gates,
 /// helper sites. The first difference is logged and refuses the build.
-pub(crate) fn admit(base: *const u8, code: &impl Code) -> bool {
+pub(crate) fn admit(base: *const u8, code: &impl CodeView) -> bool {
     if let Some(site) = HOOK_SITES
         .iter()
         .find(|site| !code.matches(at(base, site.rva), &site.expected))
@@ -307,7 +333,7 @@ unsafe extern "C" fn rsf_ac7_build_admit(
     base: *const u8,
     leaves: *const rsf_ac7_code_leaves,
 ) -> bool {
-    match unsafe { NativeCode::new(leaves) } {
+    match unsafe { leaves.as_ref() }.and_then(NativeCodeView::new) {
         Some(code) => admit(base, &code),
         None => false,
     }

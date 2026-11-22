@@ -1,5 +1,12 @@
 # Implementation tracker
 
+AC7 carrier startup passes the admitted Present size directly to the backend
+and exposes its install-time settings in the shared panel. A refused native
+install stays reachable for retirement and reports unprepared. The session
+fixture and capture hook batch policy moved to Rust. Source checks passed.
+Native build, fixtures and game validation remain pending.
+[A01 scope and checks](research/rust-ac7-a01.md)
+
 The active migration build candidate is `9f53f1b0`. It includes the
 Rust Godot SR and final-scene records and the merged Streamline,
 FidelityFX, Vulkan and Unity batches. Pinned formatting, locked offline

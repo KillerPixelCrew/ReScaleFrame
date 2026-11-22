@@ -2107,7 +2107,7 @@ void hooked_widget_targets(void* converter)
         if (!read(address, offset, target) || !read(target, 0xd0, extent) ||
             (extent[0] == desired[0] && extent[1] == desired[1])) continue;
         auto* object = reinterpret_cast<void*>(uintptr_t(target));
-        engine<Init>(0x1ab0200)(object, desired[0], desired[1], 2, 1);
+        engine<Init>(rsf_ac7_hook_rva(hook_target_init))(object, desired[0], desired[1], 2, 1);
         engine<Update>(0x1ab7dc0)(object, 0);
     }
 }

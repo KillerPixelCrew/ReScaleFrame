@@ -242,7 +242,29 @@ target_link_libraries(rsf_ac7_capture_io PRIVATE ReScaleFrame::AC7MotionCapture 
 add_test(NAME ac7_capture_io COMMAND rsf_ac7_capture_io)
 set_tests_properties(ac7_capture_io PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_ac7_session ac7_session.cpp ../loader/proxy/src/preferences.c)
+if(DEFINED ENV{RUSTC} AND NOT "$ENV{RUSTC}" STREQUAL "")
+    set(ac7_fixture_rustc "$ENV{RUSTC}")
+else()
+    find_program(ac7_fixture_rustc rustc REQUIRED)
+endif()
+if(MSVC)
+    set(ac7_fixture_target x86_64-pc-windows-msvc)
+else()
+    set(ac7_fixture_target x86_64-pc-windows-gnu)
+endif()
+set(ac7_session_object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_ac7_session.obj")
+add_custom_command(OUTPUT "${ac7_session_object}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+    COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
+        --crate-name rsf_ac7_session --crate-type lib --emit obj -C codegen-units=1
+        -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3>
+        -o "${ac7_session_object}" "${CMAKE_CURRENT_SOURCE_DIR}/ac7_session.rs"
+    DEPENDS ac7_session.rs "${PROJECT_SOURCE_DIR}/games/ac7/src/scene_color_abi.rs"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+set_source_files_properties("${ac7_session_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
+add_executable(rsf_ac7_session ac7_session.c "${ac7_session_object}" ../loader/proxy/src/preferences.c)
+set_target_properties(rsf_ac7_session PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7SceneColor rsf_build_options)
 add_test(NAME ac7_session COMMAND rsf_ac7_session)
 

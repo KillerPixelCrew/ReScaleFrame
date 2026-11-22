@@ -191,7 +191,7 @@ pub(crate) fn restore(state: &mut rsf_ac7_code_patches, code: &impl Code) -> boo
 unsafe fn native<'a>(
     patches: *mut rsf_ac7_code_patches,
     leaves: *const rsf_ac7_code_leaves,
-) -> Option<(&'a mut rsf_ac7_code_patches, NativeCode<'a>)> {
+) -> Option<(&'a mut rsf_ac7_code_patches, NativeCode)> {
     let patches = unsafe { patches.as_mut() }?;
     let code = unsafe { NativeCode::new(leaves) }?;
     Some((patches, code))

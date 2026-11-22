@@ -5,6 +5,7 @@ mod frame_abi;
 pub use frame_abi::*;
 mod frame_event_abi;
 pub use frame_event_abi::*;
+pub mod call_header;
 pub mod callback_host_abi;
 pub mod camera_math;
 pub mod d3d11_host_abi;

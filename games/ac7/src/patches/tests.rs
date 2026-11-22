@@ -20,13 +20,7 @@ fn owned() -> rsf_ac7_code_patches {
 /// The unpatched sites of the exact build.
 fn native_image() -> Image {
     let image = Image::default();
-    for patch in &VELOCITY {
-        image.put(BASE + patch.rva as usize, patch.native);
-    }
-    image.put(
-        BASE + SCENE_PRECISION_RVA as usize,
-        &SCENE_PRECISION_EXPECTED,
-    );
+    image.seed_temporal_patches(BASE);
     image
 }
 

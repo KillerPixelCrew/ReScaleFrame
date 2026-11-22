@@ -27,6 +27,7 @@
 #include <rescaleframe/input_dump.h>
 #include <rescaleframe/fg_choice.h>
 #include <rescaleframe/overlay_fg_stats.h>
+#include <rescaleframe/overlay_api.h>
 #include <rescaleframe/ac7_ui_rules.h>
 #include <rescaleframe/fullscreen_pass.h>
 #include <rescaleframe/resource_ref.h>
@@ -2964,6 +2965,11 @@ static void overlay_tick(void* swapchain)
     }
 
     fill_overlay_stats(&stats);
+    rsf_overlay_host_option host_options[RSF_OVERLAY_SERVICE_OPTION_LIMIT];
+    if (bridge.actions.read_host_options) {
+        stats.host_option_count = bridge.actions.read_host_options(host_options, RSF_OVERLAY_SERVICE_OPTION_LIMIT);
+        stats.host_options = host_options;
+    }
     /* The switch runs at a later Present, so the choice is saved once it has taken effect and
        dropped when the switch reported a failure. */
     if (pending_fg_save != UINT32_MAX) {
@@ -2978,6 +2984,13 @@ static void overlay_tick(void* swapchain)
     intent.struct_size = sizeof(intent);
     if (!rsf_overlay_host_present(swapchain, &stats, &intent)) {
         return;
+    }
+    if (intent.host_option_changed && bridge.actions.save_host_option) {
+        if (!bridge.actions.save_host_option(intent.host_option_index, intent.host_option_value)) {
+            bridge.setting_error = "Could not save startup setting";
+        } else {
+            bridge.setting_error = NULL;
+        }
     }
     if (intent.fg_backend_changed) {
         const rsf_backend_result result = rsf_d3d11_present_request(intent.fg_backend);
@@ -3228,7 +3241,7 @@ static void on_present(void* user, void* swapchain)
         }
     }
     rsf_ac7_carrier_try_auto_start(bridge.enabled_requested, bridge.started,
-        bridge.actions.startup_ready, rsf_bridge_present_extent, bridge.actions.start_backend);
+        bridge.actions.startup_ready, rsf_bridge_present_extent, bridge.actions.start_backend_at_extent);
     if (bridge.started && rsf_bridge_native_owned()) {
         uint32_t width = 0, height = 0;
         if (rsf_bridge_present_extent(&width, &height) &&

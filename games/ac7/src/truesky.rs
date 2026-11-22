@@ -16,7 +16,7 @@
 //! `rsf_ac7_truesky_leaves`.
 use crate::guards::rsf_ac7_guards_held;
 use crate::platform_abi::rsf_ac7_native_renderer;
-use crate::sites::{Code, NativeCode};
+use crate::sites::{Code, CodeView, NativeCode};
 use crate::sites_abi::{
     RSF_AC7_RELAY_BYTES, rsf_ac7_call_relay, rsf_ac7_truesky_leaves, rsf_ac7_truesky_patches,
 };
@@ -446,8 +446,8 @@ pub(crate) fn restore(state: &mut rsf_ac7_truesky_patches, plugin: &impl Plugin)
 }
 
 /// The validated leaf table of one call.
-struct NativePlugin<'a> {
-    code: NativeCode<'a>,
+struct NativePlugin {
+    code: NativeCode,
     renderer: *mut rsf_ac7_native_renderer,
     module: unsafe extern "C" fn(*const u16) -> *mut u8,
     relay_allocate: unsafe extern "C" fn(*mut u8, *mut c_void) -> *mut c_void,
@@ -459,7 +459,7 @@ struct NativePlugin<'a> {
     depth_release: unsafe extern "C" fn(*mut rsf_ac7_native_renderer),
 }
 
-impl NativePlugin<'_> {
+impl NativePlugin {
     /// The table when every leaf, both handlers and the renderer are present.
     ///
     /// # Safety
@@ -487,21 +487,24 @@ impl NativePlugin<'_> {
     }
 }
 
-impl Code for NativePlugin<'_> {
+impl CodeView for NativePlugin {
     fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
         self.code.matches(address, expected)
-    }
-    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
-        self.code.write(site, expected, replacement)
     }
     fn log(&self, message: &str) {
         self.code.log(message);
     }
 }
 
+impl Code for NativePlugin {
+    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
+        self.code.write(site, expected, replacement)
+    }
+}
+
 // SAFETY, for every call below: the leaves were lent for this call with the contracts of
 // ac7_sites.h, and the renderer is the live one whose record is being changed.
-impl Plugin for NativePlugin<'_> {
+impl Plugin for NativePlugin {
     fn module(&self) -> *mut u8 {
         unsafe { (self.module)(MODULE.as_ptr()) }
     }
@@ -540,7 +543,7 @@ impl Plugin for NativePlugin<'_> {
 unsafe fn native<'a>(
     patches: *mut rsf_ac7_truesky_patches,
     leaves: *const rsf_ac7_truesky_leaves,
-) -> Option<(&'a mut rsf_ac7_truesky_patches, NativePlugin<'a>)> {
+) -> Option<(&'a mut rsf_ac7_truesky_patches, NativePlugin)> {
     let patches = unsafe { patches.as_mut() }?;
     let plugin = unsafe { NativePlugin::new(leaves) }?;
     Some((patches, plugin))

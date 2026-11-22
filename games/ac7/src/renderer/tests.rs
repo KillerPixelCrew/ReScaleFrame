@@ -2,7 +2,6 @@
 use super::*;
 use crate::fake_code::Image;
 use crate::patches::{SCENE_PRECISION_EXPECTED, SCENE_PRECISION_RVA, VELOCITY};
-use crate::sites::{DEPTH_GATES, HELPERS};
 use crate::sites_abi::{RSF_AC7_EVIDENCE_FIRST, RSF_AC7_EVIDENCE_LAST};
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ffi::OsString;
@@ -45,16 +44,8 @@ struct Fake {
 impl Fake {
     fn new() -> Self {
         let image = Image::default();
-        for site in HOOK_SITES.iter().chain(&HELPERS) {
-            image.put(site.rva as usize, &site.expected);
-        }
-        for gate in &DEPTH_GATES {
-            image.put(gate.rva as usize, gate.expected);
-        }
-        for patch in &VELOCITY {
-            image.put(patch.rva as usize, patch.native);
-        }
-        image.put(SCENE_PRECISION_RVA as usize, &SCENE_PRECISION_EXPECTED);
+        image.seed_admission(0);
+        image.seed_temporal_patches(0);
         Self {
             image,
             calls: RefCell::default(),
@@ -144,15 +135,18 @@ impl Fake {
     }
 }
 
-impl Code for Fake {
+impl CodeView for Fake {
     fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
         self.image.matches(address, expected)
     }
-    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
-        self.image.write(site, expected, replacement)
-    }
     fn log(&self, message: &str) {
         self.image.log(message);
+    }
+}
+
+impl Code for Fake {
+    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
+        self.image.write(site, expected, replacement)
     }
 }
 

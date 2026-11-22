@@ -17,6 +17,11 @@ rsf_result rsf_settings_store_read(const wchar_t* ini, const wchar_t* section,
     rsf_render_settings* output);
 rsf_result rsf_settings_store_write(const wchar_t* ini, const wchar_t* section,
     const rsf_render_settings* request);
+/* Adapter-owned numeric keys. Section and path are UTF-16, and key is UTF-8. */
+uint32_t rsf_settings_store_read_integer(const wchar_t* ini, const wchar_t* section,
+    const char* key, uint32_t fallback);
+rsf_result rsf_settings_store_write_integer(const wchar_t* ini, const wchar_t* section,
+    const char* key, uint32_t value);
 uint32_t rsf_settings_store_read_layout(const wchar_t* ini, const wchar_t* section);
 rsf_result rsf_settings_store_write_layout(const wchar_t* ini, const wchar_t* section, uint32_t value);
 uint32_t rsf_settings_store_read_dlss_preset(const wchar_t* ini, const wchar_t* section, uint32_t fallback);
