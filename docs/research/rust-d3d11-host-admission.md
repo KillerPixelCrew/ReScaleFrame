@@ -37,17 +37,19 @@ or an unavailable saved choice through the existing Runtime GPU preference.
 Package evidence says which runtime files exist. Provider startup still owns
 SDK loading, hardware support and plan admission.
 
-D05 commit `03ed9661` supplies the Runtime host's selected-provider start
-record and uses provider-specific startup. Its startup function is private to
-the Runtime. Anomaly still needs the admission binding in its overlay and driver
-and a public additive route to that startup function. The existing Anomaly SR
-table stays compatible during that follow-up.
+Integrated D05 commit `6c01497a` supplies the Runtime host's selected-provider
+start record and uses provider-specific startup. D01 exports that same entry
+point and the Anomaly driver binds it by name. A Runtime that exposes it starts
+the requested provider directly. The legacy API table and its DLSS-first
+startup remain available to older consumers. The Anomaly overlay's Auto row
+and its use of Runtime package and device admission remain follow-up work.
 
 ## Fixture and native boundaries
 
 Synthetic Rust fixtures cover all depth-direction/far-plane combinations,
 foreign-session refusal, SR input receipts through configuration, CPU packet
-sizes, and package/GPU preference. The public DLL contract fixture also probes
+sizes, package/GPU preference, and direct alternate-provider startup in the
+Anomaly driver. The public DLL contract fixture also probes
 the legacy/padded setup boundary and a foreign session with unreadable graphics
 sentinels. The two device fixtures explicitly request the infinite far plane
 they relied on before.

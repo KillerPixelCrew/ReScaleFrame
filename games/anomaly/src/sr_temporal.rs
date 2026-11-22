@@ -57,7 +57,7 @@ fn result_name(result: i32) -> &'static str {
 
 fn start_refusal(result: i32) -> String {
     match result {
-        NOT_SUPPORTED => "SR off: the SR pipeline needs DLSS support on this GPU".into(),
+        NOT_SUPPORTED => "SR off: the selected SR provider is unsupported on this GPU".into(),
         STREAMLINE_FAILED => {
             "SR off (bilinear): Streamline failed to start; check SRStreamlineDir in the log".into()
         }
@@ -369,11 +369,29 @@ struct StartRequest {
     settings: Settings,
 }
 
+type StartBackend = unsafe extern "C" fn(Raw, *const rsf_dlss_pipeline_setup, u32) -> i32;
+
+unsafe fn start_selected(
+    start_backend: Option<StartBackend>,
+    api: rsf_d3d11_sr_api,
+    device: Raw,
+    setup: &rsf_dlss_pipeline_setup,
+    requested: u32,
+) -> (i32, u32) {
+    if let Some(start) = start_backend {
+        return (unsafe { start(device, setup, requested) }, requested);
+    }
+    // Older Runtime builds expose only the DLSS-first startup in their service table.
+    let start = api.start.expect("validated SR start");
+    (unsafe { start(device, setup) }, DLSS)
+}
+
 #[derive(Default)]
 struct RenderState {
     setup: Option<Setup>,
     colour_transport: bool,
     api: Option<rsf_d3d11_sr_api>,
+    start_backend: Option<StartBackend>,
     device: Raw, // identity only: the running Runtime owns its device reference
     failed_start: Option<StartRequest>,
     applied: Settings,
@@ -421,6 +439,7 @@ impl Driver {
             return false; // the bound table still owns a live device
         }
         render.api = result.ok();
+        render.start_backend = None;
         render.session = session;
         render.failed_start = None;
         let mut published = self.published();
@@ -448,7 +467,15 @@ impl Driver {
             backend_name(wanted.backend), wanted.quality, wanted.preset
         ));
         // The device is borrowed from the engine, and the setup strings span the call.
-        let result = unsafe { api.start.expect("validated SR start")(request.device, &setup) };
+        let (result, backend) = unsafe {
+            start_selected(
+                render.start_backend,
+                api,
+                request.device,
+                &setup,
+                wanted.backend,
+            )
+        };
         let mut published = self.published();
         published.status.start_result = result;
         if result != OK {
@@ -456,13 +483,8 @@ impl Driver {
             published.status.reason(&start_refusal(result));
             drop(published);
             render.failed_start = Some(request);
-            let detail = if result == NOT_SUPPORTED {
-                ". The shared D3D11 pipeline starts only where DLSS is supported; FSR and XeSS are reached through it"
-            } else {
-                ""
-            };
             render.say(&format!(
-                "Anomaly SR stage 5: the SR pipeline did not start ({result}, {}){detail}; the seam stays bilinear.",
+                "Anomaly SR stage 5: the SR pipeline did not start ({result}, {}); the seam stays bilinear.",
                 result_name(result)
             ));
             render.say(&format!(
@@ -475,8 +497,9 @@ impl Driver {
         render.device = request.device;
         render.failed_start = None;
         render.resets.first = true;
+        render.prepared_backends |= 1 << backend;
         render.applied = Settings {
-            backend: DLSS,
+            backend,
             preset: 0,
             ..wanted
         };
@@ -770,7 +793,19 @@ unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) 
             c"rsf_dlss_pipeline_set_colour_transport".to_bytes_with_nul(),
         )
     };
-    unsafe { rsf_anomaly_sr_bind(driver, query, set_transport, rsf_anomaly_sr_session_id()) }
+    let start_backend = unsafe {
+        export::<StartBackend>(
+            runtime,
+            c"rsf_dlss_pipeline_start_backend".to_bytes_with_nul(),
+        )
+    };
+    let bound =
+        unsafe { rsf_anomaly_sr_bind(driver, query, set_transport, rsf_anomaly_sr_session_id()) };
+    if bound {
+        // The same setup lease used to bind the table owns this field.
+        unsafe { (*driver.render.get()).start_backend = start_backend };
+    }
+    bound
 }
 
 type SetTransport = Option<unsafe extern "C" fn(u32)>;
@@ -1283,6 +1318,21 @@ pub(super) extern "C" fn report_fixture(
 #[cfg(test)]
 mod settings_tests {
     use super::*;
+
+    #[test]
+    fn provider_start_opens_requested_alternate_without_legacy_start() {
+        unsafe extern "C" fn start_backend(
+            _: Raw,
+            _: *const rsf_dlss_pipeline_setup,
+            backend: u32,
+        ) -> i32 {
+            if backend == XESS { OK } else { NOT_SUPPORTED }
+        }
+        let api = rsf_d3d11_sr_api::default();
+        let setup = rsf_dlss_pipeline_setup::default();
+        let receipt = unsafe { start_selected(Some(start_backend), api, null_mut(), &setup, XESS) };
+        assert_eq!(receipt, (OK, XESS));
+    }
 
     #[test]
     fn setting_admission_keeps_the_current_unsupported_fields() {
