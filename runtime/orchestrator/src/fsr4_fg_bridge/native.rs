@@ -7,8 +7,9 @@
 //! callbacks. The owner in fsr4_fg_bridge.rs reaches it only through the
 //! private platform table and releases it last.
 
-use super::super::commands::{self, Graphics};
-use super::super::{
+use super::commands::{self, Graphics};
+use super::sdk;
+use super::{
     Bridge, BridgeCreate, BridgeFrame, BridgeInfo, GeneratedFn, Handle, INVALID, Platform,
     QueueDesc, SwapchainDesc, Version, rsf_core_fsr4fg_create, rsf_core_fsr4fg_probe,
 };
@@ -112,7 +113,7 @@ unsafe extern "C" fn allocate(telemetry: Handle, generated: GeneratedFn) -> Hand
 unsafe extern "C" fn release(native: Handle) {
     let owner = unsafe { capsule(native) };
     unsafe {
-        super::release_provider_objects(&owner.graphics, owner.module);
+        sdk::release_provider_objects(&owner.graphics, owner.module);
         dealloc(native.cast(), Layout::new::<Native>());
     }
 }
@@ -168,7 +169,7 @@ unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
     let native = unsafe { capsule(native) };
     let mut module = ptr::null_mut();
     let code = unsafe {
-        super::load_provider(
+        sdk::load_provider(
             path,
             &mut module,
             &mut native.create,
@@ -184,7 +185,7 @@ unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
 
 unsafe extern "C" fn versions(native: Handle, out: *mut Version, count: *mut u64) -> i32 {
     let native = unsafe { capsule(native) };
-    unsafe { super::sdk_versions(native.query, native.graphics.device, out, count) }
+    unsafe { sdk::sdk_versions(native.query, native.graphics.device, out, count) }
 }
 
 unsafe extern "C" fn create_generation(
@@ -199,7 +200,7 @@ unsafe extern "C" fn create_generation(
     native.backend.header.type_ = BACKEND_DX12;
     native.backend.device = native.graphics.device;
     unsafe {
-        super::sdk_generation(
+        sdk::sdk_generation(
             &*setup,
             provider,
             FRAMEGENERATION_VERSION,
@@ -219,7 +220,7 @@ unsafe extern "C" fn create_generation(
 
 unsafe extern "C" fn get_provider(native: Handle, actual: *mut u64) -> i32 {
     let native = unsafe { capsule(native) };
-    unsafe { super::sdk_provider(native.query, &mut native.generation, actual) }
+    unsafe { sdk::sdk_provider(native.query, &mut native.generation, actual) }
 }
 
 unsafe extern "C" fn objects(native: Handle) -> u32 {
@@ -309,7 +310,7 @@ unsafe extern "C" fn configure(
     let user = native;
     let native = unsafe { capsule(native) };
     unsafe {
-        super::sdk_configure(
+        sdk::sdk_configure(
             native.graphics.chain,
             sequence,
             width,
@@ -333,7 +334,7 @@ unsafe extern "C" fn prepare(
 ) -> i32 {
     let native = unsafe { capsule(native) };
     unsafe {
-        super::sdk_prepare(
+        sdk::sdk_prepare(
             &*frame,
             sequence,
             reset,
@@ -347,7 +348,7 @@ unsafe extern "C" fn prepare(
 
 unsafe extern "C" fn wait_presents(native: Handle) -> i32 {
     let native = unsafe { capsule(native) };
-    unsafe { super::sdk_wait_presents(native.dispatch, &mut native.swapchain) }
+    unsafe { sdk::sdk_wait_presents(native.dispatch, &mut native.swapchain) }
 }
 
 fn destroy_context(destroy: PfnFfxDestroyContext, context: &mut ffxContext) -> i32 {

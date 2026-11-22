@@ -14,22 +14,13 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering::SeqCst};
 
-#[path = "../../vulkan/fsr4/completion.rs"]
-mod completion;
-use completion::next_local_completion;
-#[path = "../../vulkan/fsr4-fg/sdk_commands.rs"]
+use rsf_fsr4_compat::dx12_bridge::{self as dx12, can_signal_done, next_local_completion};
 mod commands;
 pub(super) use commands::RsfFsr4FgReleaseImage;
-#[path = "../../vulkan/dx12_bridge_commands.rs"]
-mod dx12;
-#[path = "../../vulkan/fsr4-fg/sdk.rs"]
+mod native;
 mod sdk;
 #[cfg(feature = "test-fixtures")]
 mod state_fixture;
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
-#[path = "../../vulkan/timeline_pair.rs"]
-mod timeline_pair;
-
 type Handle = *mut c_void;
 
 use crate::sys::{RSF_FSR4FG_ABI_MISMATCH as ABI_MISMATCH, RSF_FSR4FG_INVALID_ARGUMENT as INVALID};
@@ -426,7 +417,7 @@ impl Bridge {
 
     fn handoff(&mut self, frame: &BridgeFrame, result: i32) -> i32 {
         if self.prepared_destroy
-            || !timeline_pair::can_signal_done(frame.ready_value, frame.done_value, self.done)
+            || !can_signal_done(frame.ready_value, frame.done_value, self.done)
             || !self.has(LOCAL_FENCE | SHARED_FENCE)
         {
             return result;

@@ -17,24 +17,16 @@ use crate::sys::{
     RSF_FSR4_BRIDGE_INVALID_ARGUMENT as INVALID_ARGUMENT, rsf_fsr4_bridge_create as BridgeCreate,
     rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as BridgeInfo,
 };
-#[path = "completion.rs"]
-mod completion;
-use completion::next_local_completion;
+use crate::dx12_bridge::{self as dx12, can_signal_done, next_local_completion};
 #[path = "sdk_commands.rs"]
 mod commands;
-#[path = "../dx12_bridge_commands.rs"]
-mod dx12;
 #[path = "native.rs"]
 mod native;
 use native::Capsule;
-#[path = "../dx12_provider_module.rs"]
-mod provider_module;
 #[path = "sdk.rs"]
 mod sdk;
 #[path = "standalone.rs"]
 mod standalone;
-#[path = "../timeline_pair.rs"]
-mod timeline_pair;
 
 type Handle = *mut c_void;
 const UNEXPECTED: i32 = 0x8000_ffff_u32 as i32; // E_UNEXPECTED
@@ -552,7 +544,7 @@ impl Session {
     ///
     /// Every failure still waits for producer readiness before signalling.
     fn finish(&mut self, ready: u64, done: u64, result: i32) -> i32 {
-        if !timeline_pair::can_signal_done(ready, done, self.last_done)
+        if !can_signal_done(ready, done, self.last_done)
             || !self.has(QUEUE | SHARED_FENCE)
         {
             return result;

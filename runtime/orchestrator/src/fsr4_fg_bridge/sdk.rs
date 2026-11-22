@@ -9,10 +9,7 @@ use std::ptr;
 use crate::d3d12_generation::fsr_abi::*;
 use crate::d3d12_sr::ffx_abi::*;
 
-#[path = "native.rs"]
-mod native;
-#[path = "../dx12_provider_module.rs"]
-mod provider_module;
+use rsf_fsr4_compat::dx12_bridge as provider_module;
 use windows::Win32::Foundation::FARPROC;
 
 pub(super) unsafe fn load_provider(
@@ -24,30 +21,30 @@ pub(super) unsafe fn load_provider(
     dispatch: &mut PfnFfxDispatch,
     query: &mut PfnFfxQuery,
 ) -> i32 {
-    let module = match unsafe { provider_module::load(path) } {
+    let module = match unsafe { provider_module::load_module(path) } {
         Ok(module) => module,
         Err(error) => return error.code().0,
     };
     *out = module.0;
     // Each optional export uses its SDK signature on Windows x64.
     unsafe {
-        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(provider_module::export(
+        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(provider_module::module_export(
             module,
             c"ffxCreateContext",
         ));
-        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(provider_module::export(
+        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(provider_module::module_export(
             module,
             c"ffxDestroyContext",
         ));
-        *configure = core::mem::transmute::<FARPROC, PfnFfxConfigure>(provider_module::export(
+        *configure = core::mem::transmute::<FARPROC, PfnFfxConfigure>(provider_module::module_export(
             module,
             c"ffxConfigure",
         ));
-        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(provider_module::export(
+        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(provider_module::module_export(
             module,
             c"ffxDispatch",
         ));
-        *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::export(
+        *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::module_export(
             module,
             c"ffxQuery",
         ));
@@ -82,7 +79,7 @@ pub(super) unsafe fn release_provider_objects(
         graphics.adapter,
         graphics.factory,
     ];
-    unsafe { provider_module::release(&objects, graphics.event, module) };
+    unsafe { provider_module::release_objects(&objects, graphics.event, module) };
 }
 
 // Bindgen skips the SDK's function-like descriptor macros. These are the pinned

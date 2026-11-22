@@ -9,8 +9,8 @@
 
 use super::{
     BridgeCreate, BridgeFrame, BridgeInfo, Context, DEVICE, Dispatch, EFFECT, EVENT, FAILED,
-    Handle, LOCAL_FENCE, LegacyFrame, QUEUE, SHARED_FENCE, Session, Texture, Version, commands,
-    provider_module, sdk, standalone,
+    Handle, LOCAL_FENCE, LegacyFrame, QUEUE, SHARED_FENCE, Session, Texture, Version, commands, dx12,
+    sdk, standalone,
 };
 use crate::CompatLease as Lease;
 use crate::ffx_abi::{
@@ -88,7 +88,7 @@ impl Drop for Capsule {
             self.adapter,
             self.factory,
         ];
-        unsafe { provider_module::release(&objects, self.completion_event, self.module) };
+        unsafe { dx12::release_objects(&objects, self.completion_event, self.module) };
     }
 }
 

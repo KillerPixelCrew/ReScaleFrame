@@ -19,8 +19,6 @@ mod capture;
 mod sdk;
 #[path = "session_records_abi.rs"]
 pub(crate) mod session_records_abi;
-#[path = "../timeline_pair.rs"]
-mod timeline_pair;
 #[path = "timing.rs"]
 pub(crate) mod timing;
 
@@ -42,6 +40,12 @@ use timing::{Accumulator, Phase as TimingPhase, Report as TimingReport};
 
 type Handle = *mut c_void;
 type Step = unsafe extern "C" fn(Handle) -> i32;
+
+/// A failure may release the consumer only after an actual producer signal
+/// (the same rule as rsf_fsr4_compat::dx12_bridge::can_signal_done).
+fn can_signal_done(ready: u64, done: u64, last_done: u64) -> bool {
+    ready != 0 && done > ready && done > last_done
+}
 
 impl Frame {
     fn has_resources(&self) -> bool {
@@ -677,7 +681,7 @@ impl Session {
 
     fn present_frame(&mut self, frame: &Frame) -> Result<(PresentResult, Option<i64>), i32> {
         if frame.frame_id == 0
-            || !timeline_pair::can_signal_done(frame.ready, frame.done, self.last_done_signalled)
+            || !can_signal_done(frame.ready, frame.done, self.last_done_signalled)
             || !frame.has_resources()
             || (!self.backbuffer_hudless && frame.ui.is_null())
         {
@@ -789,7 +793,7 @@ impl Session {
         } else {
             Err(-1)
         };
-        if timeline_pair::can_signal_done(frame.ready, frame.done, self.last_done_signalled)
+        if can_signal_done(frame.ready, frame.done, self.last_done_signalled)
             && let Err(code) = self.recover_handoff(frame)
         {
             self.retain_failure(code);
@@ -1173,7 +1177,7 @@ unsafe extern "C" fn rsf_core_xess_bridge_present_integrated(
         || input.motion.is_null()
         || input.hudless.is_null()
         || input.ready_fence_value <= owner.last_done_signalled
-        || !timeline_pair::can_signal_done(
+        || !can_signal_done(
             input.ready_fence_value,
             input.done_fence_value,
             owner.last_done_signalled,

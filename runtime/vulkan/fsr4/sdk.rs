@@ -4,7 +4,7 @@ use super::{
     Context, DEPTH_INFINITE, DEPTH_INVERTED, Dispatch, FAILED, Handle, MAX_VERSIONS,
     MOTION_JITTERED, Version, ffx_version,
 };
-use super::provider_module;
+use crate::dx12_bridge as provider_module;
 use crate::ffx_abi::*;
 use core::ptr;
 use windows::Win32::Foundation::FARPROC;
@@ -64,25 +64,25 @@ pub(super) unsafe fn load_provider(
     dispatch: &mut PfnFfxDispatch,
     query: &mut PfnFfxQuery,
 ) -> i32 {
-    let Ok(module) = (unsafe { provider_module::load(path) }) else {
+    let Ok(module) = (unsafe { provider_module::load_module(path) }) else {
         return -7;
     };
     *out = module.0;
     // Each optional export uses its SDK signature on Windows x64.
     unsafe {
-        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(provider_module::export(
+        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(provider_module::module_export(
             module,
             c"ffxCreateContext",
         ));
-        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(provider_module::export(
+        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(provider_module::module_export(
             module,
             c"ffxDestroyContext",
         ));
-        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(provider_module::export(
+        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(provider_module::module_export(
             module,
             c"ffxDispatch",
         ));
-        *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::export(
+        *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::module_export(
             module,
             c"ffxQuery",
         ));

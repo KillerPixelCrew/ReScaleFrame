@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
-//! Borrowed COM calls shared by the FidelityFX Vulkan bridge archives.
+//! Borrowed COM calls, provider-module loading and fence-handoff rules shared by the
+//! FSR4 Vulkan SR bridge and the Runtime's FSR4 Vulkan FG bridge.
 use core::{ffi::c_void, mem::ManuallyDrop};
+use windows::Win32::{
+    Foundation::{CloseHandle, FARPROC, FreeLibrary, HANDLE, HMODULE},
+    System::LibraryLoader::{
+        GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+        LoadLibraryExW,
+    },
+};
 use windows::{
     Win32::{
         Foundation::{E_POINTER, GENERIC_ALL},
@@ -10,24 +18,24 @@ use windows::{
             Dxgi::{Common::*, IDXGIAdapter1},
         },
     },
-    core::{Interface, PCWSTR, Result},
+    core::{IUnknown, Interface, PCSTR, PCWSTR, Result},
 };
 
-pub(super) type Handle = *mut c_void;
+pub type Handle = *mut c_void;
 
-pub(super) unsafe fn borrow<T: Interface>(raw: &Handle) -> &T {
+pub unsafe fn borrow<T: Interface>(raw: &Handle) -> &T {
     unsafe { T::from_raw_borrowed(raw) }.expect("live bridge COM interface")
 }
 
-pub(super) fn status(result: Result<()>) -> i32 {
+pub fn status(result: Result<()>) -> i32 {
     result.map_or_else(|error| error.code().0, |()| 0)
 }
 
-pub(super) fn store_interface<T: Interface>(result: Result<T>, output: &mut Handle) -> i32 {
+pub fn store_interface<T: Interface>(result: Result<T>, output: &mut Handle) -> i32 {
     status(result.map(|owned| *output = owned.into_raw()))
 }
 
-pub(super) unsafe fn create_device(
+pub unsafe fn create_device(
     adapter: Handle,
     feature_level: D3D_FEATURE_LEVEL,
     output: &mut Handle,
@@ -41,7 +49,7 @@ pub(super) unsafe fn create_device(
     code
 }
 
-pub(super) fn create_list(
+pub fn create_list(
     device: &ID3D12Device,
     allocator: &ID3D12CommandAllocator,
     node_mask: u32,
@@ -50,13 +58,13 @@ pub(super) fn create_list(
     unsafe { device.CreateCommandList(node_mask, kind, allocator, None) }
 }
 
-pub(super) unsafe fn release_image(image: Handle) {
+pub unsafe fn release_image(image: Handle) {
     if !image.is_null() {
         drop(unsafe { ID3D12Resource::from_raw(image) });
     }
 }
 
-pub(super) unsafe fn create_shared_fence(
+pub unsafe fn create_shared_fence(
     device: Handle,
     owned_fence: &mut Handle,
     handle: &mut Handle,
@@ -77,7 +85,7 @@ pub(super) unsafe fn create_shared_fence(
     )
 }
 
-pub(super) unsafe fn reset_commands(
+pub unsafe fn reset_commands(
     list: &ID3D12GraphicsCommandList,
     allocator: Handle,
 ) -> Result<()> {
@@ -86,7 +94,7 @@ pub(super) unsafe fn reset_commands(
     unsafe { list.Reset(allocator, None) }
 }
 
-pub(super) fn create_shared_texture(
+pub fn create_shared_texture(
     device: &ID3D12Device,
     width: u32,
     height: u32,
@@ -127,7 +135,7 @@ pub(super) fn create_shared_texture(
     Ok((handle.0, image.into_raw()))
 }
 
-pub(super) fn transition(
+pub fn transition(
     commands: &ID3D12GraphicsCommandList,
     resource: &ID3D12Resource,
     before: D3D12_RESOURCE_STATES,
@@ -151,13 +159,13 @@ pub(super) fn transition(
     unsafe { commands.ResourceBarrier(&[barrier]) };
 }
 
-pub(super) unsafe fn execute(queue: Handle, list: Handle) {
+pub unsafe fn execute(queue: Handle, list: Handle) {
     let queue: &ID3D12CommandQueue = unsafe { borrow(&queue) };
     let list = ManuallyDrop::new(Some(unsafe { ID3D12CommandList::from_raw(list) }));
     unsafe { queue.ExecuteCommandLists(core::slice::from_ref(&*list)) };
 }
 
-pub(super) unsafe fn queue_fence(queue: Handle, fence: Handle, value: u64, signal: bool) -> i32 {
+pub unsafe fn queue_fence(queue: Handle, fence: Handle, value: u64, signal: bool) -> i32 {
     let queue: &ID3D12CommandQueue = unsafe { borrow(&queue) };
     let Some(fence) = (unsafe { ID3D12Fence::from_raw_borrowed(&fence) }) else {
         return E_POINTER.0;
@@ -169,4 +177,68 @@ pub(super) unsafe fn queue_fence(queue: Handle, fence: Handle, value: u64, signa
             queue.Wait(fence, value)
         }
     })
+}
+
+/// The validated path is NUL-terminated and readable for this call. The
+/// receiving capsule owns the module reference even if export admission fails.
+pub unsafe fn load_module(path: *const u16) -> Result<HMODULE> {
+    unsafe {
+        LoadLibraryExW(
+            PCWSTR(path),
+            None,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+        )
+    }
+}
+
+pub unsafe fn module_export(module: HMODULE, name: &core::ffi::CStr) -> FARPROC {
+    unsafe { GetProcAddress(module, PCSTR(name.as_ptr().cast())) }
+}
+
+/// Release the capsule's transferred COM references in the supplied order,
+/// then the event and library. The caller has already retired SDK consumers.
+pub unsafe fn release_objects(objects: &[*mut c_void], event: *mut c_void, module: *mut c_void) {
+    for &object in objects {
+        if !object.is_null() {
+            drop(unsafe { IUnknown::from_raw(object) });
+        }
+    }
+    if !event.is_null() {
+        let _ = unsafe { CloseHandle(HANDLE(event)) };
+    }
+    if !module.is_null() {
+        let _ = unsafe { FreeLibrary(HMODULE(module)) };
+    }
+}
+
+/// D3D12 reserves UINT64_MAX as the device-removed completion value.
+pub fn next_local_completion(current: u64) -> Option<u64> {
+    current.checked_add(1).filter(|&value| value != u64::MAX)
+}
+
+/// A failure may release the consumer only after an actual producer signal.
+pub fn can_signal_done(ready: u64, done: u64, last_done: u64) -> bool {
+    ready != 0 && done > ready && done > last_done
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reserves_the_removed_device_sentinel() {
+        assert_eq!(next_local_completion(0), Some(1));
+        assert_eq!(next_local_completion(u64::MAX - 2), Some(u64::MAX - 1));
+        assert_eq!(next_local_completion(u64::MAX - 1), None);
+        assert_eq!(next_local_completion(u64::MAX), None);
+    }
+
+    #[test]
+    fn failed_handoff_requires_producer_readiness_and_a_new_done_value() {
+        assert!(!can_signal_done(0, 2, 0));
+        assert!(!can_signal_done(2, 2, 0));
+        assert!(!can_signal_done(2, 1, 0));
+        assert!(!can_signal_done(2, 3, 3));
+        assert!(can_signal_done(2, 4, 3));
+    }
 }
