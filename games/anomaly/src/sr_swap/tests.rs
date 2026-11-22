@@ -141,6 +141,7 @@ fn get<T: Copy>(bytes: &[u8], offset: u32) -> T {
 struct Host {
     writes: usize,
     fail_write_at: Option<usize>,
+    partial_write_at: Option<usize>,
     fail_address: *mut c_void,
     upload_calls: usize,
     fail_upload_at: Option<usize>,
@@ -188,6 +189,10 @@ unsafe extern "C" fn write(
     let index = host.writes;
     host.writes += 1;
     if address.is_null() || host.fail_address == address || host.fail_write_at == Some(index) {
+        return false;
+    }
+    if host.partial_write_at == Some(index) {
+        unsafe { ptr::copy_nonoverlapping(input.cast::<u8>(), address.cast::<u8>(), size / 2) };
         return false;
     }
     // Test addresses point into the boxed fake engine.
@@ -849,6 +854,24 @@ fn a_failed_exchange_rolls_every_write_back() {
 }
 
 #[test]
+fn a_partially_written_cache_range_rolls_back_before_drawing() {
+    let c = Case::new(true);
+    // 99 target fields, four globals, then the texture-list pointer and PS range.
+    c.host().partial_write_at = Some(SLOTS * 11 + 5);
+    assert!(!c.prepare(&c.facts2()));
+    assert!(c.stock() && !c.view().open && c.texture_cache_cleared());
+    assert_eq!(c.view().counters.swapped, 0);
+    let mut expected = c.original.backend;
+    expected[0x640..0x648].fill(0);
+    expected[0x5c8..0x5d0].fill(0);
+    for (offset, count) in TEXTURE_RANGES {
+        let offset = offset as usize;
+        expected[offset..offset + count as usize * POINTER as usize].fill(0);
+    }
+    assert_eq!(c.engine().backend, expected);
+}
+
+#[test]
 fn a_failed_restore_keeps_twins_until_shutdown_can_verify_the_fields() {
     for global in [false, true] {
         let c = Case::new(true);
@@ -872,6 +895,14 @@ fn a_failed_restore_keeps_twins_until_shutdown_can_verify_the_fields() {
         assert_eq!((c.host().drops, c.host().upscales), (0, 0));
         assert!(!c.prepare(&c.facts2()));
         c.host().fail_address = null_mut();
+        if !global {
+            let (offset, _, _, _) = WORLD[GENERIC0];
+            let saved = get::<usize>(&c.engine().target, offset);
+            put(&mut c.engine().target, offset, 0usize);
+            assert!(!rsf_anomaly_swap_shutdown(c.swap));
+            assert_eq!(c.host().drops, 0);
+            put(&mut c.engine().target, offset, saved);
+        }
         assert!(rsf_anomaly_swap_shutdown(c.swap));
         assert!(c.stock());
         assert_eq!(c.host().drops, 1);

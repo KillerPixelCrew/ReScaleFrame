@@ -240,7 +240,6 @@ struct RestoreState {
     globals: bool,
     caches: bool,
     reason: u32,
-    engine_ran: bool,
 }
 
 impl RestoreState {
@@ -618,7 +617,7 @@ impl Swap {
     }
 
     fn release_twins(&mut self) {
-        if !self.have_twins || self.restore_state.pending() {
+        if !self.have_twins || self.view.open || self.restore_state.pending() {
             return;
         }
         if let Some(drop_twins) = self.platform.drop_twins {
@@ -849,14 +848,10 @@ impl Swap {
         }
     }
 
-    /// `engine_ran` applies only to a rollback: false when the exchange itself failed in H1's prologue, true when a
-    /// refusal closes the window after the engine has drawn into it.
-    fn restore(&mut self, reason: u32, engine_ran: bool) -> bool {
+    fn restore(&mut self, reason: u32) -> bool {
         let closing = std::mem::take(&mut self.view.open);
         if closing {
             self.restore_state.reason = reason;
-            self.restore_state.engine_ran =
-                reason != RSF_ANOMALY_SWAP_RESTORE_ROLLBACK || engine_ran;
             self.restore_state.caches = true;
             self.restore_temporal(reason);
         } else if !self.restore_state.pending() {
@@ -868,6 +863,22 @@ impl Swap {
             let bit = 1 << slot;
             if self.restore_state.targets & bit == 0 {
                 continue;
+            }
+            if !closing {
+                // A later cleanup retry must still see the original binding
+                // chain before it writes through saved engine addresses.
+                let mut crt = Addr::default();
+                let mut texture = Addr::default();
+                if !self.read(
+                    self.render_target.at(self.layout.world[slot].offset),
+                    &mut crt,
+                ) || crt.0 != target.crt
+                    || !self.read(crt.at(self.layout.crt_texture), &mut texture)
+                    || texture.0 != target.texture
+                {
+                    self.fault(c"The engine target changed before restoration could be verified.");
+                    continue;
+                }
             }
             // Inside the window nothing but the engine's own binds should touch these fields. A different value means
             // something replaced them (surface_set on a twinned texture): restore anyway and refuse further swaps.
@@ -888,8 +899,8 @@ impl Swap {
             }
         }
         if self.restore_state.globals {
-            self.restore_state.globals =
-                !self.restore_globals(checked, self.restore_state.engine_ran);
+            let engine_ran = self.restore_state.reason != RSF_ANOMALY_SWAP_RESTORE_ROLLBACK;
+            self.restore_state.globals = !self.restore_globals(checked, engine_ran);
         }
         // If an engine reference is still live, invalidate again after the retry:
         // the engine may have cached the same twin in the meantime.
@@ -904,8 +915,7 @@ impl Swap {
     /// Restores after the engine has drawn into the window and puts the viewport back to output size, like every
     /// other exit that closes a window mid-frame.
     fn close_with_output(&mut self, reason: u32) {
-        let engine_ran = reason == RSF_ANOMALY_SWAP_RESTORE_ROLLBACK;
-        self.restore(reason, engine_ran);
+        self.restore(reason);
         if self.view.stage == 2 {
             self.set_viewport(self.view.output_width, self.view.output_height);
         }
@@ -1083,16 +1093,16 @@ impl Swap {
         }
         if !written {
             self.fault(c"An engine field write failed during the twin exchange.");
-            self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK, false);
+            self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK);
             return false;
         }
         if !self.invalidate_caches() {
-            self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK, false);
+            self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK);
             return false;
         }
         if stage2 && !self.open_temporal(facts) {
             self.fault(c"The Stage 3 projection or mip bias could not be applied.");
-            self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK, false);
+            self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK);
             return false;
         }
         self.view.counters.swapped += 1;
@@ -1113,7 +1123,7 @@ impl Swap {
             return false;
         }
         self.view.counters.seams += 1;
-        if !self.restore(RSF_ANOMALY_SWAP_RESTORE_SEAM, false) {
+        if !self.restore(RSF_ANOMALY_SWAP_RESTORE_SEAM) {
             if self.view.stage == 2 {
                 self.set_viewport(self.view.output_width, self.view.output_height);
             }
@@ -1319,7 +1329,7 @@ impl Swap {
     }
 
     fn shutdown(&mut self) -> bool {
-        if !self.restore(RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN, false) {
+        if !self.restore(RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN) {
             return false;
         }
         self.release_twins();
