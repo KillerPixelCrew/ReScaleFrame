@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, Window, check, require, send};
 use crate::sys::*;
+use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::thread::sleep;
@@ -32,13 +33,6 @@ unsafe extern "system" fn foreground_window() -> HWND {
     HWND(FOREGROUND.load(Ordering::Relaxed))
 }
 
-unsafe extern "system" {
-    fn MH_Initialize() -> i32;
-    fn MH_CreateHook(target: Handle, detour: Handle, original: *mut Handle) -> i32;
-    fn MH_EnableHook(target: Handle) -> i32;
-    fn MH_DisableHook(target: Handle) -> i32;
-    fn MH_RemoveHook(target: Handle) -> i32;
-}
 
 fn poll(down: bool) {
     DOWN.store(down, Ordering::Relaxed);
