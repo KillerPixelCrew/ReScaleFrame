@@ -2,6 +2,7 @@
 //! CPU and render facts for the matched Skyrim executable. The native detours own the
 //! callback leases and original calls. The host receives these facts at the native boundaries.
 
+use crate::cpu_native::{JOB_MANAGER, MAIN, PLAYER, REQUESTED_MODE, RUNNING_MODE};
 use crate::cpu_sources::{self, Consumer, Stamp};
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
@@ -23,11 +24,8 @@ const SCREEN_LOADING: rsf_screen_class = 7;
 const SCREEN_GAMEPLAY: rsf_screen_class = 8;
 
 const WORLD_RETURN: usize = 0x65_6e32;
-const MAIN: usize = 0x323_0530;
 const UI: usize = 0x219_e5c0;
 const UI_NAMES: usize = 0x21a_05c8;
-const PLAYER: usize = 0x323_0778;
-const MANAGER: usize = 0x322_0a90;
 const CAMERA_ROOT: usize = 0x323_0740;
 const MENU_OPEN: usize = 0x116_9530;
 const FROZEN_BACKGROUND: usize = 0x116_9590;
@@ -193,7 +191,7 @@ impl NativeScreen {
         let loading_name = nonzero(names.checked_add(LOADING_NAME_OFFSET)?)?;
         let main_name = nonzero(names.checked_add(MAIN_NAME_OFFSET)?)?;
         let player = nonzero(base + PLAYER)?;
-        let manager = nonzero(base + MANAGER)?;
+        let manager = nonzero(base + JOB_MANAGER)?;
         let cell = platform.read_usize(player.checked_add(0x60)?)?;
         let pause = platform.read_u32(ui.checked_add(0x160)?)?;
         let mut freeze = [0];
@@ -211,8 +209,8 @@ impl NativeScreen {
             cell,
             pause,
             freeze: freeze[0],
-            requested: platform.read_u32(manager.checked_add(0x68)?)?,
-            running: platform.read_u32(manager.checked_add(0x6c)?)?,
+            requested: platform.read_u32(manager.checked_add(REQUESTED_MODE)?)?,
+            running: platform.read_u32(manager.checked_add(RUNNING_MODE)?)?,
         })
     }
 }

@@ -353,6 +353,8 @@ struct Session {
     // The observers and every stage are enabled; accepting is separate.
     enabled: bool,
     retirement_pending: bool,
+    rollback_stages: u8,
+    rollback_observers: bool,
     dpi_requested: bool,
     // Borrowed by the detours through the lease while accepting, and by the renderer-end
     // detour as retained.
@@ -377,6 +379,8 @@ impl Session {
             prepared: false,
             enabled: false,
             retirement_pending: false,
+            rollback_stages: 0,
+            rollback_observers: false,
             dpi_requested: false,
             services: empty_services(),
             bound_services: empty_services(),
@@ -540,16 +544,29 @@ impl Session {
         Ok(NATIVE_REFUSED)
     }
 
+    fn rollback(&mut self, leaves: &Leaves) -> bool {
+        for (index, stage) in STAGES.into_iter().enumerate().rev() {
+            let bit = 1 << index;
+            if self.rollback_stages & bit != 0 && stage.retire(leaves) {
+                self.rollback_stages &= !bit;
+            }
+        }
+        if self.rollback_observers {
+            self.rollback_observers = !self.observers.disable(leaves.observers(), true);
+        }
+        self.rollback_stages == 0 && !self.rollback_observers
+    }
+
     fn start(&mut self, leaves: &Leaves) -> Result<rsf_result, Threw> {
         if !self.prepared {
             return Ok(NOT_READY);
         }
+        if self.retirement_pending {
+            return Ok(BUSY);
+        }
         if !leaves.checkpoint(&mut self.reason, false) {
             leaves.log(&self.services, self.reason)?;
             return Ok(NATIVE_REFUSED);
-        }
-        if self.retirement_pending {
-            return Ok(BUSY);
         }
         if self.enabled {
             return Ok(if rsf_skyrim_session_accepting() {
@@ -569,12 +586,10 @@ impl Session {
         }
         let services = self.services;
         if !self.observers.start(leaves.observers(), &services) {
-            self.retirement_pending = !self.observers.disable(leaves.observers(), true);
-            return Ok(if self.retirement_pending {
-                BUSY
-            } else {
-                NATIVE_REFUSED
-            });
+            self.rollback_observers = true;
+            let retired = self.rollback(leaves);
+            self.retirement_pending = !retired;
+            return Ok(if retired { NATIVE_REFUSED } else { BUSY });
         }
         for (index, stage) in STAGES.into_iter().enumerate() {
             let (started, threw) = match stage.start(leaves, &services) {
@@ -585,11 +600,9 @@ impl Session {
                 continue;
             }
             // Start can refuse after acquiring a subset of its hooks. Retire it too.
-            let mut retired = true;
-            for earlier in STAGES[..=index].iter().rev() {
-                retired &= earlier.retire(leaves);
-            }
-            retired &= self.observers.disable(leaves.observers(), true);
+            self.rollback_stages = (1 << (index + 1)) - 1;
+            self.rollback_observers = true;
+            let retired = self.rollback(leaves);
             self.retirement_pending = !retired;
             if !retired {
                 return Ok(BUSY);
@@ -631,6 +644,7 @@ impl Session {
     fn quiesce(&mut self, leaves: &Leaves) -> Result<rsf_result, Threw> {
         // A start holding the lock could have published after the public entry cleared it.
         ACCEPTING.store(false, Ordering::Release);
+        self.retirement_pending |= self.prepared;
         let suspended = self.suspend_host(leaves);
         let quiesced = quiesce_subsystems(leaves, true);
         let suspended = suspended?;
@@ -640,15 +654,19 @@ impl Session {
         if !quiesced {
             return Err(Threw);
         }
-        let busy = self.retirement_pending
-            || leaves.check(OBSERVERS_BUSY)?
+        let busy = leaves.check(OBSERVERS_BUSY)?
             || leaves.check(CPU_BUSY)?
             || leaves.check(RESOLUTION_OWNED)?
             || leaves.check(AUXILIARIES_PENDING)?
             || leaves.check(SAMPLING_BUSY)?
             || leaves.check(PRESENTATION_BUSY)?
             || creation::busy();
-        Ok(if busy { BUSY } else { OK })
+        // The Runtime cannot call stop until quiesce succeeds. Retry failed start cleanup here.
+        Ok(if busy || !self.rollback(leaves) {
+            BUSY
+        } else {
+            OK
+        })
     }
 
     /// Each refusal is retryable: a later stop resumes from the first stage that remains.
@@ -676,6 +694,8 @@ impl Session {
         self.services = empty_services();
         self.prepared = false;
         self.retirement_pending = false;
+        self.rollback_stages = 0;
+        self.rollback_observers = false;
         self.reason = STOPPED.as_ptr();
         Ok(OK)
     }

@@ -33,12 +33,26 @@ struct CpuStartRefusal {
     uint32_t rva;
     int32_t status;
 };
+struct ManagerState {
+    uintptr_t manager{}, main{};
+    uint32_t requested{}, running{};
+    bool read() noexcept;
+};
+static_assert(sizeof(ManagerState) == 24);
 static_assert(sizeof(CpuHookLeaves) == 48);
 static_assert(sizeof(CpuServices) == sizeof(rsf_game_host_services) + 8 &&
     offsetof(CpuServices, frequency) == sizeof(rsf_game_host_services));
 static_assert(sizeof(CpuStartRefusal) == 16);
 }
 extern "C" {
+bool rsf_skyrim_cpu_manager_state(ManagerState*) noexcept;
+bool rsf_skyrim_cpu_is_input_manager(uintptr_t) noexcept;
+bool rsf_skyrim_cpu_is_player_controls(uintptr_t) noexcept;
+bool rsf_skyrim_cpu_is_player(uintptr_t) noexcept;
+bool rsf_skyrim_cpu_is_player_camera(uintptr_t) noexcept;
+bool rsf_skyrim_cpu_camera_consumes(uintptr_t) noexcept;
+bool rsf_skyrim_cpu_queued_move(bool*) noexcept;
+bool rsf_skyrim_cpu_free_camera(bool*) noexcept;
 bool rsf_skyrim_cpu_rust_bind(const rsf_game_host_services*) noexcept;
 bool rsf_skyrim_cpu_rust_prepare(const CpuHookLeaves*) noexcept;
 bool rsf_skyrim_cpu_rust_start(const CpuHookLeaves*, CpuStartRefusal*) noexcept;
@@ -73,8 +87,7 @@ void rsf_skyrim_poll_begin(PollScope*, uintptr_t manager) noexcept;
 void rsf_skyrim_poll_end(const PollScope*, bool nested) noexcept;
 void rsf_skyrim_poll_record_kinds(PollScope*, uint32_t kinds) noexcept;
 void rsf_skyrim_poll_sink_produced(PollScope*) noexcept;
-bool rsf_skyrim_poll_provenance(CpuPollProvenance*, const PollScope*, const NativeJobOwnership::Ticket*,
-    uintptr_t base, bool (*read_managers)(uintptr_t, uintptr_t, uintptr_t)) noexcept;
+bool rsf_skyrim_poll_provenance(CpuPollProvenance*, const PollScope*, const NativeJobOwnership::Ticket*) noexcept;
 PollSample rsf_skyrim_poll_sample_status(const PollScope*, uint64_t source) noexcept;
 void rsf_skyrim_worker_bind(uint64_t source) noexcept;
 void rsf_skyrim_worker_release() noexcept;
@@ -95,6 +108,8 @@ void rsf_skyrim_sources_release(const void*, ProspectiveSources::Reservation*, u
 void rsf_skyrim_sources_reset(const void*) noexcept;
 uint32_t rsf_skyrim_bind_refusal(bool, bool, bool, bool) noexcept;
 }
+
+bool ManagerState::read() noexcept { return rsf_skyrim_cpu_manager_state(this); }
 
 static_assert(sizeof(CpuPollProvenance) == 32 && offsetof(CpuPollProvenance, poll_generation) == 24);
 
@@ -327,25 +342,6 @@ bool copy_input(void* out, const void* pointer, size_t size) noexcept {
     std::memcpy(out, pointer, size); return true;
 #endif
 }
-struct ManagerState {
-    uintptr_t manager{}, main{};
-    uint32_t requested{}, running{};
-    bool read() noexcept {
-        const auto base = uintptr_t(GetModuleHandleW(nullptr));
-        const auto load = [](auto& value, uintptr_t address) {
-            return copy_input(&value, reinterpret_cast<const void*>(address), sizeof(value));
-        };
-        return load(manager, base + 0x3220a90) && manager && load(main, base + 0x3230530) && main &&
-            load(requested, manager + 0x68) && load(running, manager + 0x6c);
-    }
-};
-bool read_poll_managers(uintptr_t base, uintptr_t job_manager, uintptr_t poll_manager) noexcept {
-    ManagerState native{};
-    uintptr_t input_manager{};
-    return native.read() && native.manager == job_manager && native.requested <= 1 && native.running == 1 &&
-        copy_input(&input_manager, reinterpret_cast<const void*>(base + 0x3204b30), sizeof(input_manager)) &&
-        input_manager && input_manager == poll_manager;
-}
 uint32_t jobs_submit()
 {
     Entry lease;
@@ -369,14 +365,12 @@ uint32_t jobs_submit()
             // consumers are observed by the stamp counters, not assumed.
             if (current->reservation.source) {
                 // 0x659ea0 runs next, at 0x658b17: free camera there bypasses the 0x745200 envelope.
-                uintptr_t camera{}, state{}, free_state{};
-                const bool camera_read = copy_input(&camera, reinterpret_cast<const void*>(base + 0x31a5478), sizeof(camera)) &&
-                    camera && copy_input(&state, reinterpret_cast<const void*>(camera + 0x28), sizeof(state)) &&
-                    copy_input(&free_state, reinterpret_cast<const void*>(camera + 0xd0), sizeof(free_state));
+                bool free_camera{};
+                const bool camera_read = rsf_skyrim_cpu_free_camera(&free_camera);
                 current->refusal = bind_refusal(current->entry_readable && camera_read, current->queued_move,
                     current->input.player_update_calls || current->input.movement_calls ||
                         current->input.camera_updates || current->input.player_camera_updates,
-                    state == free_state); // the native test, including both null
+                    free_camera);
                 const auto stamp = input_ownership.snapshot();
                 if (current->refusal != BindRefusal::none) {
                     if (prospective.release(current->source).source) {
@@ -503,10 +497,7 @@ int dispatch(void* manager, void* list) {
     Entry lease;
     rsf_game_cpu_event event{};
     rsf_game_host_services host{};
-    const auto base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
-    uintptr_t native_manager{};
-    if (rsf_skyrim_cpu_active() && copy_input(&native_manager, base + 0x3204b30, sizeof(native_manager)) &&
-        uintptr_t(manager) == native_manager) {
+    if (rsf_skyrim_cpu_active() && rsf_skyrim_cpu_is_input_manager(uintptr_t(manager))) {
         if (const auto kinds = cpu_input_kinds(list)) {
             const auto services = cpu_services();
             host = services.host;
@@ -544,12 +535,7 @@ short tick(void* main)
         // 0x40 (test at 0x7430ed) or byte +0x692 (0x74314e) is set; its queued-move path reaches
         // camera update 0x7468b0 through 0x75ed50. Only 0xec1c40 and GetAsyncKeyState run between
         // this read and those tests on this thread.
-        const auto base = uintptr_t(GetModuleHandleW(nullptr));
-        uintptr_t player{}; uint8_t flags{}, pending{};
-        frame.entry_readable = copy_input(&player, reinterpret_cast<const void*>(base + 0x3230778), sizeof(player)) &&
-            player && copy_input(&flags, reinterpret_cast<const void*>(player + 0xbec), sizeof(flags)) &&
-            copy_input(&pending, reinterpret_cast<const void*>(player + 0x692), sizeof(pending));
-        frame.queued_move = (flags & 0x40) || pending;
+        frame.entry_readable = rsf_skyrim_cpu_queued_move(&frame.queued_move);
     } else {
         if (const auto withdrawn = prospective.withdraw_pending())
             abort_source(frame.services, withdrawn, RSF_GAME_CPU_ABORT_STATE_CHANGED);
@@ -670,28 +656,18 @@ uintptr_t controls(void* owner, void* list, void* source)
     input_ownership.begin_write();
     if (!current_poll || !list || list != dispatched_list) input_ownership.invalidate();
     const auto result = continuation<uintptr_t (*)(void*, void*, void*)>(controls_hook)(owner, list, source);
-    uintptr_t singleton{};
-    const auto base = uintptr_t(GetModuleHandleW(nullptr));
     if (rsf_skyrim_cpu_active() && current_poll && list && list == dispatched_list &&
-        copy_input(&singleton, reinterpret_cast<const void*>(base + 0x31a5698), sizeof(singleton)) &&
-        singleton == uintptr_t(owner)) rsf_skyrim_poll_sink_produced(current_poll);
+        rsf_skyrim_cpu_is_player_controls(uintptr_t(owner))) rsf_skyrim_poll_sink_produced(current_poll);
     input_ownership.end_write();
     return result;
-}
-bool is_player(void* actor) noexcept
-{
-    uintptr_t singleton{};
-    const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    return copy_input(&singleton, reinterpret_cast<const void*>(base + 0x3230778), sizeof(singleton)) &&
-        singleton && singleton == uintptr_t(actor);
 }
 void movement(void* actor, float timestep, void* argument, float* output)
 {
     Entry lease;
     const auto stamp = input_ownership.snapshot();
-    const bool player = is_player(actor);
+    const bool player = rsf_skyrim_cpu_is_player(uintptr_t(actor));
     continuation<void (*)(void*, float, void*, float*)>(movement_hook)(actor, timestep, argument, output);
-    if (rsf_skyrim_cpu_active() && player && is_player(actor)) {
+    if (rsf_skyrim_cpu_active() && player && rsf_skyrim_cpu_is_player(uintptr_t(actor))) {
         if (current) rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::movement, true);
         else rsf_skyrim_worker_record_consumer(&stamp, CpuConsumer::movement);
     }
@@ -700,9 +676,9 @@ uintptr_t player_update(void* actor, float timestep)
 {
     Entry lease;
     const auto stamp = input_ownership.snapshot();
-    const bool player = is_player(actor);
+    const bool player = rsf_skyrim_cpu_is_player(uintptr_t(actor));
     const auto result = continuation<uintptr_t (*)(void*, float)>(player_update_hook)(actor, timestep);
-    if (rsf_skyrim_cpu_active() && player && is_player(actor)) {
+    if (rsf_skyrim_cpu_active() && player && rsf_skyrim_cpu_is_player(uintptr_t(actor))) {
         if (current) rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::player_update, true);
         else rsf_skyrim_worker_record_consumer(&stamp, CpuConsumer::player_update);
     }
@@ -712,8 +688,7 @@ uintptr_t camera_update(void* state)
 {
     Entry lease;
     const auto stamp = input_ownership.snapshot();
-    uint8_t disabled{1};
-    const bool consumes = copy_input(&disabled, static_cast<const unsigned char*>(state) + 0xe0, sizeof(disabled)) && !disabled;
+    const bool consumes = rsf_skyrim_cpu_camera_consumes(uintptr_t(state));
     const auto result = continuation<uintptr_t (*)(void*)>(camera_update_hook)(state);
     if (rsf_skyrim_cpu_active() && current) {
         rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::camera, consumes);
@@ -729,10 +704,7 @@ void player_camera_update(void* camera)
 {
     Entry lease;
     const auto stamp = input_ownership.snapshot();
-    uintptr_t singleton{};
-    const bool player_camera = copy_input(&singleton,
-        reinterpret_cast<const void*>(uintptr_t(GetModuleHandleW(nullptr)) + 0x31a5478), sizeof(singleton)) &&
-        singleton && singleton == uintptr_t(camera);
+    const bool player_camera = rsf_skyrim_cpu_is_player_camera(uintptr_t(camera));
     continuation<void (*)(void*)>(player_camera_update_hook)(camera);
     if (rsf_skyrim_cpu_active() && current && player_camera)
         rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::player_camera, true);
@@ -740,10 +712,14 @@ void player_camera_update(void* camera)
 uintptr_t render(void* main)
 {
     Entry lease;
-    rsf_skyrim_cpu_render_receipt previous{};
+    struct Restore {
+        Frame* frame;
+        rsf_skyrim_cpu_render_receipt previous{};
+        ~Restore() { if (frame) rsf_skyrim_cpu_end_render(&frame->render, &previous); }
+    } restore{current};
     if (current) {
         const auto screen = rsf_skyrim_cpu_screen(uintptr_t(main), false, query_menus);
-        if (rsf_skyrim_cpu_begin_render(&current->render, screen, &previous)) {
+        if (rsf_skyrim_cpu_begin_render(&current->render, screen, &restore.previous)) {
             emit(*current, RSF_GAME_CPU_SIMULATION_END);
         }
     }
@@ -752,7 +728,6 @@ uintptr_t render(void* main)
     const auto result = continuation<uintptr_t (*)(void*)>(render_hook)(main);
     if (current) (void)cpu_render_identity(pass);
     report_render(pass, 0);
-    if (current) rsf_skyrim_cpu_end_render(&current->render, &previous);
     return result;
 }
 }
@@ -831,9 +806,8 @@ bool cpu_input_consumption(CpuInputConsumption& result) noexcept {
 bool cpu_poll_provenance(CpuPollProvenance& result) noexcept {
     result = {};
     CpuPollProvenance proof{};
-    const auto base = uintptr_t(GetModuleHandleW(nullptr));
     if (!rsf_skyrim_cpu_active() || !current_poll ||
-        !rsf_skyrim_poll_provenance(&proof, current_poll, &named_poll_jobs, base, read_poll_managers) ||
+        !rsf_skyrim_poll_provenance(&proof, current_poll, &named_poll_jobs) ||
         !rsf_skyrim_cpu_active()) return false;
     result = proof;
     return true;

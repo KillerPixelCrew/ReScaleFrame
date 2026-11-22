@@ -11,6 +11,7 @@ mod auxiliary;
 mod camera;
 mod compatibility;
 mod cpu_hooks;
+mod cpu_native;
 mod cpu_policy;
 mod cpu_sources;
 mod creation;

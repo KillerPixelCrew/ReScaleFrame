@@ -5,6 +5,7 @@ use std::cell::{Cell, RefCell};
 thread_local! {
     static OPERATIONS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static CPU_START_THROWS: Cell<bool> = const { Cell::new(false) };
+    static OBSERVER_BUSY: Cell<bool> = const { Cell::new(false) };
     static ROLLBACK: Cell<i32> = const { Cell::new(1) };
     static ACTIVE_RESULT: Cell<i32> = const { Cell::new(OK) };
     static DISABLED: Cell<u32> = const { Cell::new(0) };
@@ -25,7 +26,13 @@ unsafe extern "C" fn subsystem(
         unsafe { value.write(outcome) };
         return true;
     }
-    unsafe { value.write(i32::from(operation != CPU_START)) };
+    let value_for_operation = match operation {
+        OBSERVERS_BUSY => OBSERVER_BUSY.get(),
+        CPU_START | CPU_BUSY | RESOLUTION_OWNED | AUXILIARIES_PENDING | SAMPLING_BUSY
+        | PRESENTATION_BUSY => false,
+        _ => true,
+    };
+    unsafe { value.write(i32::from(value_for_operation)) };
     operation != CPU_START || !CPU_START_THROWS.get()
 }
 
@@ -173,8 +180,12 @@ fn quiesce_withdraws_a_start_that_published_while_it_waited() {
     // The public entry withdrew before acquiring the session lock. An in-flight start
     // then published while quiesce was waiting for the lock.
     ACCEPTING.store(true, Ordering::Release);
+    OBSERVER_BUSY.set(true);
     assert!(matches!(session.quiesce(&leaves), Ok(BUSY)));
+    OBSERVER_BUSY.set(false);
     assert!(!ACCEPTING.load(Ordering::Acquire));
+    assert!(matches!(session.start(&leaves), Ok(BUSY)));
+    assert!(matches!(session.quiesce(&leaves), Ok(OK)));
 }
 
 #[test]
@@ -188,6 +199,11 @@ fn refused_and_throwing_rollback_both_leave_stop_owed() {
         OPERATIONS.take();
         assert!(matches!(session.start(&leaves), Ok(BUSY)));
         assert!(OPERATIONS.take().is_empty());
+        assert!(matches!(session.quiesce(&leaves), Ok(BUSY)));
+        ROLLBACK.set(1);
+        assert!(matches!(session.quiesce(&leaves), Ok(OK)));
+        assert_eq!(session.rollback_stages, 0);
+        assert!(matches!(session.start(&leaves), Ok(BUSY)));
     }
     ROLLBACK.set(1);
 }

@@ -185,6 +185,10 @@ impl InputEpochs {
     }
 
     fn end_poll(&self, poll: PollTicket, produced: bool) {
+        self.publish_poll(poll, produced, || {});
+    }
+
+    fn publish_poll(&self, poll: PollTicket, produced: bool, before_publish: impl FnOnce()) {
         let _guard = self
             .publication
             .lock()
@@ -195,6 +199,7 @@ impl InputEpochs {
             } else {
                 0
             };
+        before_publish();
         self.completed.store(completed, SeqCst);
         self.polls.fetch_sub(1, SeqCst);
         self.end_write();
@@ -421,21 +426,17 @@ extern "C" fn rsf_skyrim_poll_sink_produced(scope: &mut PollScope) {
     scope.produced = true;
 }
 
-type ReadPollManagers = unsafe extern "C" fn(usize, usize, usize) -> bool;
-
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_poll_provenance(
     out: &mut PollProvenance,
     scope: &PollScope,
     ticket: &JobTicket,
-    base: usize,
-    read_managers: ReadPollManagers,
 ) -> bool {
-    // Read the live manager fields between the two proof checks. The C++ leaf
-    // performs guarded reads and does not call engine code or the host.
+    // Read live manager fields between the two proof checks. These guarded observations
+    // make no engine or host calls.
     if !EPOCHS.owns_poll(scope.ticket)
         || !JOBS.matches(*ticket)
-        || !unsafe { read_managers(base, ticket.manager, scope.manager) }
+        || !crate::cpu_native::poll_managers_match(ticket.manager, scope.manager)
         || !JOBS.matches(*ticket)
         || !EPOCHS.owns_poll(scope.ticket)
     {
@@ -866,6 +867,33 @@ extern "C" fn rsf_skyrim_bind_refusal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_poll_cannot_enter_between_the_overlap_check_and_commit() {
+        use std::sync::{Barrier, TryLockError};
+
+        let epochs = InputEpochs::new();
+        let first = epochs.begin_poll();
+        let checked = Barrier::new(2);
+        let release = Barrier::new(2);
+        std::thread::scope(|threads| {
+            threads.spawn(|| {
+                epochs.publish_poll(first, true, || {
+                    checked.wait();
+                    release.wait();
+                });
+            });
+            checked.wait();
+            let could_enter =
+                !matches!(epochs.publication.try_lock(), Err(TryLockError::WouldBlock));
+            release.wait();
+            assert!(!could_enter);
+            let next = epochs.begin_poll();
+            assert!(epochs.owns_poll(next));
+            epochs.end_poll(next, false);
+        });
+        assert_eq!(epochs.snapshot().generation, 0);
+    }
 
     #[test]
     fn a_completed_overlap_invalidates_the_first_poll() {
