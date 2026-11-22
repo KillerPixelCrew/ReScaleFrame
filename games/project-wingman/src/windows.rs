@@ -1,21 +1,38 @@
 // SPDX-License-Identifier: MIT
-//! Process identity and guarded native reads for the Wingman plugin.
+//! Process identity, guarded native reads, MinHook and the native exception leaves.
 use rsf_game_sys::win32::module_path;
-use std::ffi::{OsString, c_void};
-use std::io::Read;
+use rsf_game_sys::{rsf_game_host_services, rsf_game_log_fn, rsf_game_render_pass};
+use std::ffi::{OsString, c_char, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
-use windows_sys::Win32::Security::Cryptography::{
-    BCRYPT_HASH_HANDLE, BCRYPT_SHA256_ALG_HANDLE, BCryptCreateHash, BCryptDestroyHash,
-    BCryptFinishHash, BCryptHashData,
-};
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+    GetModuleHandleW,
+};
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-pub(crate) fn matches_executable(path: &[u16]) -> bool {
+// The native leaves contain every engine fault or foreign C++ exception (native_platform.c).
+unsafe extern "C" {
+    /// The D3D11 texture behind an RDG texture, referenced, or null.
+    pub(crate) fn rsf_wingman_acquire_texture(rdg: usize) -> *mut c_void;
+    pub(crate) fn rsf_wingman_release_texture(texture: *mut c_void);
+    pub(crate) fn rsf_wingman_report_execution(
+        host: *const rsf_game_host_services,
+        list: usize,
+        pass: *const rsf_game_render_pass,
+        log: bool,
+    );
+    pub(crate) fn rsf_wingman_guarded_log(
+        log: rsf_game_log_fn,
+        user: *mut c_void,
+        message: *const c_char,
+    );
+}
+
+fn matches_executable(path: &[u16]) -> bool {
     let leaf = path
         .rsplit(|&unit| matches!(unit, 0x5c | 0x2f))
         .next()
@@ -27,56 +44,9 @@ pub(crate) fn matches_executable(path: &[u16]) -> bool {
         })
 }
 
-pub(crate) fn fingerprint(path: &[u16]) -> Option<[u8; 65]> {
-    struct Hash(BCRYPT_HASH_HANDLE);
-    impl Drop for Hash {
-        fn drop(&mut self) {
-            unsafe { BCryptDestroyHash(self.0) };
-        }
-    }
-    let path = PathBuf::from(OsString::from_wide(path));
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut handle = null_mut();
-    let status = unsafe {
-        BCryptCreateHash(
-            BCRYPT_SHA256_ALG_HANDLE,
-            &mut handle,
-            null_mut(),
-            0,
-            null(),
-            0,
-            0,
-        )
-    };
-    if status < 0 || handle.is_null() {
-        return None;
-    }
-    let hash = Hash(handle);
-    let mut buffer = [0; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer).ok()?;
-        if count == 0 {
-            break;
-        }
-        if unsafe { BCryptHashData(hash.0, buffer.as_ptr(), count as u32, 0) } < 0 {
-            return None;
-        }
-    }
-    let mut digest = [0_u8; 32];
-    if unsafe { BCryptFinishHash(hash.0, digest.as_mut_ptr(), digest.len() as u32, 0) } < 0 {
-        return None;
-    }
-    let mut hex = [0; 65];
-    let alphabet = b"0123456789abcdef";
-    for (pair, byte) in hex[..64].as_chunks_mut::<2>().0.iter_mut().zip(digest) {
-        pair[0] = alphabet[usize::from(byte >> 4)];
-        pair[1] = alphabet[usize::from(byte & 15)];
-    }
-    Some(hex)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_wingman_copy(
+/// Also the native texture reader's copy.
+#[unsafe(export_name = "rsf_wingman_copy")]
+pub(crate) unsafe extern "C" fn copy(
     output: *mut c_void,
     input: *const c_void,
     bytes: usize,
@@ -88,20 +58,53 @@ pub(crate) unsafe extern "C" fn rsf_wingman_copy(
         && copied == bytes
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_verify_executable() -> bool {
+pub(crate) fn verify_executable() -> bool {
     unsafe { module_path(null_mut()) }
         .filter(|path| matches_executable(path.units()))
-        .and_then(|path| fingerprint(path.units()))
+        .and_then(|path| {
+            rsf_windows::sha256_file_hex(&PathBuf::from(OsString::from_wide(path.units())))
+        })
         .is_some_and(|digest| &digest[..64] == crate::SHA256.to_bytes())
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_image_base() -> usize {
+pub(crate) fn image_base() -> usize {
     unsafe { GetModuleHandleW(null()) as usize }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_wingman_tick_count() -> u64 {
+pub(crate) fn tick_count() -> u64 {
     unsafe { GetTickCount64() }
+}
+
+/// Creates a hook whose trampoline stays reachable during native unwinding and after disable:
+/// the module holding `detour` is pinned first.
+pub(crate) fn create_hook(target: usize, detour: usize, original: &mut usize) -> bool {
+    let mut pinned = null_mut();
+    let mut trampoline = null_mut();
+    let created = rsf_windows::minhook::initialize()
+        && unsafe {
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                detour as *const u16,
+                &mut pinned,
+            )
+        } != 0
+        && unsafe {
+            rsf_windows::minhook::create(
+                target as *mut c_void,
+                detour as *mut c_void,
+                &mut trampoline,
+            )
+        };
+    if created {
+        *original = trampoline as usize;
+    }
+    created
+}
+
+pub(crate) unsafe fn enable_hook(target: usize) -> bool {
+    unsafe { rsf_windows::minhook::enable_status(target as *mut c_void) == 0 }
+}
+
+pub(crate) unsafe fn disable_hook(target: usize) -> bool {
+    unsafe { rsf_windows::minhook::disable(target as *mut c_void) }
 }

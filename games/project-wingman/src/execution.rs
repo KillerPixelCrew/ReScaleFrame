@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Admission and retirement of native temporal graph packets and RHI callbacks.
 use crate::camera::{read, read_camera, read_jitter};
-use crate::observer::{self, CAMERA_CUT, Entry, HISTORY, Platform, install_trampoline};
+use crate::observer::{self, CAMERA_CUT, Entry, HISTORY, install_trampoline};
+use crate::windows::{
+    copy, disable_hook, enable_hook, image_base, rsf_wingman_acquire_texture,
+    rsf_wingman_release_texture, rsf_wingman_report_execution, tick_count,
+};
 use rsf_game_sys::{
     RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_game_host_services, rsf_game_render_pass,
 };
@@ -88,7 +92,7 @@ struct State {
 }
 
 impl State {
-    fn enable_hooks(&mut self, enable: unsafe extern "C" fn(usize) -> bool) -> bool {
+    fn enable_hooks(&mut self, enable: unsafe fn(usize) -> bool) -> bool {
         for (site, installed) in self.sites.into_iter().zip(&mut self.installed) {
             if !*installed && !unsafe { enable(site) } {
                 return false;
@@ -98,7 +102,7 @@ impl State {
         true
     }
 
-    fn disable_hooks(&mut self, disable: unsafe extern "C" fn(usize) -> bool) -> bool {
+    fn disable_hooks(&mut self, disable: unsafe fn(usize) -> bool) -> bool {
         self.pending.clear();
         HAS_PENDING.store(false, Ordering::Release);
         for (site, installed) in self.sites.into_iter().zip(&mut self.installed).rev() {
@@ -137,17 +141,17 @@ fn state() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-pub(crate) fn prepare(platform: &Platform) -> bool {
+pub(crate) fn prepare() -> bool {
     let mut state = state();
-    let image = unsafe { (platform.image_base)() };
-    if unsafe { read(platform.copy, image, TRACKED_VTABLE) } != Some(image + TRACKED_DESTRUCTOR)
-        || unsafe { read(platform.copy, image, COMPUTE_VTABLE + size_of::<usize>()) }
+    let image = image_base();
+    if unsafe { read(copy, image, TRACKED_VTABLE) } != Some(image + TRACKED_DESTRUCTOR)
+        || unsafe { read(copy, image, COMPUTE_VTABLE + size_of::<usize>()) }
             != Some(image + RVAS[4])
     {
         return false;
     }
     for (&rva, expected) in RVAS.iter().zip(&EXPECTED) {
-        let bytes: Option<[u8; 16]> = unsafe { read(platform.copy, image, rva) };
+        let bytes: Option<[u8; 16]> = unsafe { read(copy, image, rva) };
         if bytes.as_ref() != Some(expected) {
             return false;
         }
@@ -165,22 +169,20 @@ pub(crate) fn prepare(platform: &Platform) -> bool {
         .into_iter()
         .zip(detours)
         .zip(&ORIGINAL)
-        .all(|((site, detour), original)| {
-            install_trampoline(platform, site, detour as usize, original)
-        })
+        .all(|((site, detour), original)| install_trampoline(site, detour as usize, original))
 }
 
-pub(crate) fn start(platform: &Platform) -> bool {
+pub(crate) fn start() -> bool {
     let mut state = state();
-    if !state.enable_hooks(platform.enable_hook) {
-        state.disable_hooks(platform.disable_hook);
+    if !state.enable_hooks(enable_hook) {
+        state.disable_hooks(disable_hook);
         return false;
     }
     true
 }
 
-pub(crate) fn stop(platform: &Platform) -> bool {
-    state().disable_hooks(platform.disable_hook)
+pub(crate) fn stop() -> bool {
+    state().disable_hooks(disable_hook)
         && EXECUTING.load(Ordering::Acquire) == 0
         && QUEUED.load(Ordering::Acquire) == 0
 }
@@ -189,8 +191,7 @@ fn capture(graph: usize, view: usize, parameters: usize, history: usize) -> Opti
     if !observer::accepting() {
         return None;
     }
-    let platform = observer::platform()?;
-    let input: TaaParameters = unsafe { read(platform.copy, parameters, 0) }?;
+    let input: TaaParameters = unsafe { read(copy, parameters, 0) }?;
     if input.kind >= 3 || input.divisor != 1 {
         return None;
     }
@@ -201,14 +202,14 @@ fn capture(graph: usize, view: usize, parameters: usize, history: usize) -> Opti
     pass.view_key = view as u64;
     pass.render_rect = input.input;
     pass.output_rect = input.output;
-    pass.history_key = unsafe { read(platform.copy, view, HISTORY) }.unwrap_or(0);
-    let jitter = read_jitter(view, platform.copy);
-    let cut: u8 = unsafe { read(platform.copy, view, CAMERA_CUT) }.unwrap_or(0);
-    let old_history: usize = unsafe { read(platform.copy, history, 0) }.unwrap_or(0);
+    pass.history_key = unsafe { read(copy, view, HISTORY) }.unwrap_or(0);
+    let jitter = read_jitter(view, copy);
+    let cut: u8 = unsafe { read(copy, view, CAMERA_CUT) }.unwrap_or(0);
+    let old_history: usize = unsafe { read(copy, history, 0) }.unwrap_or(0);
     if cut != 0 || old_history == 0 {
         pass.flags = RSF_GAME_RENDER_RESET;
     }
-    read_camera(view, &mut pass, platform.copy, jitter);
+    read_camera(view, &mut pass, copy, jitter);
     Some(Packet {
         pass,
         rdg: [input.colour, input.depth, input.motion, 0],
@@ -224,9 +225,8 @@ fn compute(graph: usize, parameters: usize) -> Option<Construction> {
     if packet.graph != graph {
         return None;
     }
-    let platform = observer::platform()?;
-    let uav = unsafe { read(platform.copy, parameters, COMPUTE_OUTPUT_UAV) }?;
-    packet.rdg[3] = unsafe { read(platform.copy, uav, UAV_RESOURCE) }?;
+    let uav = unsafe { read(copy, parameters, COMPUTE_OUTPUT_UAV) }?;
+    packet.rdg[3] = unsafe { read(copy, uav, UAV_RESOURCE) }?;
     Some(Construction { parameters, packet })
 }
 
@@ -234,17 +234,14 @@ fn bind_pass(graph: usize, pass: usize) {
     let Some(candidate) = COMPUTE.get() else {
         return;
     };
-    let Some(platform) = observer::platform() else {
-        return;
-    };
     let Some(owner) = pass.checked_sub(TRACKED_PASS_OFFSET) else {
         return;
     };
-    let image = unsafe { (platform.image_base)() };
+    let image = image_base();
     if candidate.packet.graph != graph
-        || unsafe { read(platform.copy, pass, PASS_PARAMETERS) } != Some(candidate.parameters)
-        || unsafe { read(platform.copy, pass, 0) } != Some(image + COMPUTE_VTABLE)
-        || unsafe { read(platform.copy, owner, 0) } != Some(image + TRACKED_VTABLE)
+        || unsafe { read(copy, pass, PASS_PARAMETERS) } != Some(candidate.parameters)
+        || unsafe { read(copy, pass, 0) } != Some(image + COMPUTE_VTABLE)
+        || unsafe { read(copy, owner, 0) } != Some(image + TRACKED_VTABLE)
     {
         return;
     }
@@ -399,7 +396,6 @@ struct Command {
     pass: rsf_game_render_pass,
     host: rsf_game_host_services,
     reserved: bool,
-    platform: &'static Platform,
 }
 
 const _: () = assert!(std::mem::offset_of!(Command, next) == 8);
@@ -408,7 +404,6 @@ impl Command {
     fn acquire(pass: usize) -> Option<Box<Self>> {
         let packet = take_pass(pass)?;
         let host = observer::active_host()?;
-        let platform = observer::platform()?;
         // A failed diagnostic allocation must leave the native pass playable.
         let raw = unsafe { std::alloc::alloc(std::alloc::Layout::new::<Self>()) }.cast::<Self>();
         if raw.is_null() {
@@ -427,7 +422,6 @@ impl Command {
                 pass,
                 host,
                 reserved: false,
-                platform,
             });
         }
         let mut command = unsafe { Box::from_raw(raw) };
@@ -441,7 +435,7 @@ impl Command {
         .into_iter()
         .zip(packet.rdg)
         {
-            *out = unsafe { (platform.acquire_texture)(rdg) };
+            *out = unsafe { rsf_wingman_acquire_texture(rdg) };
             if out.is_null() {
                 return None;
             }
@@ -459,7 +453,7 @@ impl Drop for Command {
             self.pass.color_output,
         ] {
             if !texture.is_null() {
-                unsafe { (self.platform.release_texture)(texture) };
+                unsafe { rsf_wingman_release_texture(texture) };
             }
         }
         if self.reserved {
@@ -470,15 +464,11 @@ impl Drop for Command {
 
 unsafe extern "C" fn run_command(command: *mut Command, list: usize, _: usize) {
     let command = unsafe { Box::from_raw(command) };
-    let platform = command.platform;
-    let log = diagnostic_due(unsafe { (platform.tick_count)() });
-    unsafe {
-        (platform.report_execution)(&command.host, list, &command.pass, log);
-    }
+    let log = diagnostic_due(tick_count());
+    unsafe { rsf_wingman_report_execution(&command.host, list, &command.pass, log) };
 }
 
 unsafe fn append(list: usize, command: *mut Command) -> bool {
-    let copy = unsafe { (*command).platform.copy };
     let Some(tail): Option<usize> = (unsafe { read(copy, list, 8) }) else {
         return false;
     };
@@ -545,10 +535,10 @@ mod tests {
 
     #[test]
     fn partial_enable_can_retry_after_rollback() {
-        unsafe extern "C" fn refuse_one(site: usize) -> bool {
+        unsafe fn refuse_one(site: usize) -> bool {
             site != RVAS[2]
         }
-        unsafe extern "C" fn succeed(_: usize) -> bool {
+        unsafe fn succeed(_: usize) -> bool {
             true
         }
         let mut state = State {

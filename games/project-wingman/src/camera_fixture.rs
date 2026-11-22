@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{read_camera, read_jitter};
-use crate::windows::rsf_wingman_copy as copy;
+use crate::windows::copy;
 use rsf_game_sys::rsf_game_render_pass;
 
 fn store<T: Copy>(bytes: &mut [u8], offset: usize, value: T) {

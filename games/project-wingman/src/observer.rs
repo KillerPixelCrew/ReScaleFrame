@@ -2,15 +2,18 @@
 //! Guarded temporal graph observation and its GameSDK lifecycle.
 use crate::camera::{CopyMemory, JITTER, read};
 use crate::execution;
+use crate::windows::{
+    copy, create_hook, disable_hook, enable_hook, image_base, rsf_wingman_guarded_log, tick_count,
+    verify_executable,
+};
 use crate::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_game_sys::{
-    RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_log_fn,
-    rsf_game_prepare_args, rsf_game_render_pass, rsf_game_renderer_status, rsf_game_start_args,
-    rsf_result,
+    RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
+    rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const OK: rsf_result = 0;
 const NOT_READY: rsf_result = -3;
@@ -25,30 +28,6 @@ const INPUT_RECT: usize = 0x1670;
 pub(crate) const HISTORY: usize = 0x1680;
 pub(crate) const CAMERA_CUT: usize = 0xd90;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct Platform {
-    verify_executable: unsafe extern "C" fn() -> bool,
-    pub(crate) image_base: unsafe extern "C" fn() -> usize,
-    pub(crate) copy: CopyMemory,
-    pub(crate) tick_count: unsafe extern "C" fn() -> u64,
-    pub(crate) create_hook: unsafe extern "C" fn(usize, usize, *mut usize) -> bool,
-    pub(crate) enable_hook: unsafe extern "C" fn(usize) -> bool,
-    pub(crate) disable_hook: unsafe extern "C" fn(usize) -> bool,
-    pub(crate) acquire_texture: unsafe extern "C" fn(usize) -> *mut c_void,
-    pub(crate) release_texture: unsafe extern "C" fn(*mut c_void),
-    pub(crate) report_execution: unsafe extern "C" fn(
-        *const rsf_game_host_services,
-        usize,
-        *const rsf_game_render_pass,
-        bool,
-    ),
-    log: unsafe extern "C" fn(rsf_game_log_fn, *mut c_void, *const c_char),
-}
-
-const _: () = assert!(size_of::<Platform>() == 11 * size_of::<usize>());
-
-static PLATFORM: OnceLock<Platform> = OnceLock::new();
 static ACCEPTING: AtomicBool = AtomicBool::new(false);
 static CALLS: AtomicU32 = AtomicU32::new(0);
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
@@ -60,14 +39,6 @@ static STATE: Mutex<State> = Mutex::new(State {
     samples: [Sample::EMPTY; 16],
     serial: 0,
 });
-
-pub(crate) fn bind(platform: &Platform) {
-    let _ = PLATFORM.get_or_init(|| *platform);
-}
-
-pub(crate) fn platform() -> Option<&'static Platform> {
-    PLATFORM.get()
-}
 
 pub(crate) fn accepting() -> bool {
     ACCEPTING.load(Ordering::Acquire)
@@ -83,17 +54,12 @@ pub(crate) fn active_host() -> Option<rsf_game_host_services> {
     state.host.filter(|_| accepting())
 }
 
-pub(crate) fn install_trampoline(
-    platform: &Platform,
-    target: usize,
-    detour: usize,
-    original: &AtomicUsize,
-) -> bool {
+pub(crate) fn install_trampoline(target: usize, detour: usize, original: &AtomicUsize) -> bool {
     if original.load(Ordering::Acquire) != 0 {
         return true;
     }
     let mut address = 0;
-    if !unsafe { (platform.create_hook)(target, detour, &mut address) } || address == 0 {
+    if !create_hook(target, detour, &mut address) || address == 0 {
         return false;
     }
     original.store(address, Ordering::Release);
@@ -161,12 +127,12 @@ unsafe fn validate<T>(value: *const T) -> Result<(), rsf_result> {
     Ok(())
 }
 
-fn target(platform: &Platform) -> Option<usize> {
-    if !unsafe { (platform.verify_executable)() } {
+fn target() -> Option<usize> {
+    if !verify_executable() {
         return None;
     }
-    let image = unsafe { (platform.image_base)() };
-    let entry: [u8; ADD_PASSES_BYTES.len()] = unsafe { read(platform.copy, image, ADD_PASSES) }?;
+    let image = image_base();
+    let entry: [u8; ADD_PASSES_BYTES.len()] = unsafe { read(copy, image, ADD_PASSES) }?;
     (entry == ADD_PASSES_BYTES).then_some(image + ADD_PASSES)
 }
 
@@ -182,27 +148,19 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
     if host.session_id == 0 {
         return INVALID_ARGUMENT;
     }
-    let Some(platform) = PLATFORM.get() else {
-        return NOT_READY;
-    };
     let mut state = state();
     if state.host.is_some() || CALLS.load(Ordering::Acquire) != 0 {
         return BUSY;
     }
-    let Some(target) = target(platform) else {
+    let Some(target) = target() else {
         state.reason =
             c"Native temporal observer refused: executable identity or entry bytes differ.";
         return NATIVE_REFUSED;
     };
-    if !install_trampoline(
-        platform,
-        target,
-        add_passes as *const () as usize,
-        &ORIGINAL,
-    ) {
+    if !install_trampoline(target, add_passes as *const () as usize, &ORIGINAL) {
         return NATIVE_REFUSED;
     }
-    if !execution::prepare(platform) {
+    if !execution::prepare() {
         state.reason = c"Native temporal execution refused: queued-pass entry bytes differ or hooks could not be created.";
         return NATIVE_REFUSED;
     }
@@ -218,18 +176,15 @@ pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_r
     if let Err(result) = unsafe { validate(args) } {
         return result;
     }
-    let Some(platform) = PLATFORM.get() else {
-        return NOT_READY;
-    };
     let mut state = state();
     if state.host.is_none() {
         return NOT_READY;
     }
-    if !execution::start(platform) {
+    if !execution::start() {
         return NATIVE_REFUSED;
     }
-    if !state.installed && !unsafe { (platform.enable_hook)(state.target) } {
-        execution::stop(platform);
+    if !state.installed && !unsafe { enable_hook(state.target) } {
+        execution::stop();
         return NATIVE_REFUSED;
     }
     state.installed = true;
@@ -250,15 +205,12 @@ pub(crate) unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_
     if let Err(result) = unsafe { validate(args) } {
         return result;
     }
-    let Some(platform) = PLATFORM.get() else {
-        return NOT_READY;
-    };
     let mut state = state();
     ACCEPTING.store(false, Ordering::Release);
-    if !execution::stop(platform) {
+    if !execution::stop() {
         return BUSY;
     }
-    if state.installed && !unsafe { (platform.disable_hook)(state.target) } {
+    if state.installed && !unsafe { disable_hook(state.target) } {
         return BUSY;
     }
     state.installed = false;
@@ -330,11 +282,7 @@ impl Observation {
     }
 }
 
-fn sample(
-    platform: &Platform,
-    view: usize,
-    data: &Observation,
-) -> Option<(rsf_game_host_services, u64)> {
+fn sample(view: usize, data: &Observation) -> Option<(rsf_game_host_services, u64)> {
     let mut state = state();
     if !ACCEPTING.load(Ordering::Acquire) {
         return None;
@@ -356,7 +304,7 @@ fn sample(
         }
     }
     let last = &mut state.samples[index];
-    let now = unsafe { (platform.tick_count)() };
+    let now = tick_count();
     if last.owner == key
         && last.input == data.render
         && last.output == data.result
@@ -425,13 +373,10 @@ fn observe(
     if !ACCEPTING.load(Ordering::Acquire) {
         return;
     }
-    let Some(platform) = PLATFORM.get() else {
-        return;
-    };
     let mut data = Observation::default();
     let readable = data
         .capture(
-            platform.copy,
+            copy,
             view as usize,
             input as usize,
             output as usize,
@@ -440,11 +385,11 @@ fn observe(
         )
         .is_some();
     let half_rect: Rect = if data.half_output != 0 {
-        unsafe { read(platform.copy, half_rect as usize, 0) }.unwrap_or_default()
+        unsafe { read(copy, half_rect as usize, 0) }.unwrap_or_default()
     } else {
         [0; 4]
     };
-    let Some((host, serial)) = sample(platform, view as usize, &data) else {
+    let Some((host, serial)) = sample(view as usize, &data) else {
         return;
     };
     if host.log.is_none() {
@@ -506,6 +451,6 @@ fn observe(
         downsample,
         downsample_format,
     )) {
-        unsafe { (platform.log)(host.log, host.user, message.as_ptr()) };
+        unsafe { rsf_wingman_guarded_log(host.log, host.user, message.as_ptr()) };
     }
 }
