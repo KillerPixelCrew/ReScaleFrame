@@ -7,11 +7,7 @@
 #include <span>
 
 namespace rsf::anomaly {
-// Anomaly 1.5.3 ships the DX11 renderer as two executables built from the same source: the standard build and the AVX
-// build (same code, AVX codegen). Each has its own exact profile below; build_profile.h selects one by file name and
-// SHA-256 at startup. RVAs, expected bytes and frame layouts of one build never apply to the other.
-inline constexpr char dx11_hash[] = "c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4e";
-inline constexpr char avx_hash[] = "2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12";
+// Native compile-time types. The records below are projected from native_profile.rs.
 struct NativeSite {
     const char* name;
     uint32_t rva;
@@ -45,7 +41,13 @@ struct NativeProfile {
     std::span<const UniqueGuard> native_unique_guards;
 };
 
-// ---- Standard 1.5.3 DX11 (AnomalyDX11.exe) -------------------------------------------------------------------------
+// BEGIN GENERATED ANOMALY PROFILES
+// Generated from native_profile.rs by tools/generate-anomaly-native-profile.py.
+// ---- Standard 1.5.3 DX11 (AnomalyDX11.exe) ----
+inline constexpr char standard_label[] = "standard";
+inline constexpr char standard_executable[] = "AnomalyDX11.exe";
+inline constexpr wchar_t standard_executable_wide[] = L"AnomalyDX11.exe";
+inline constexpr char dx11_hash[] = "c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4e";
 inline constexpr std::array<UniqueGuard, 2> native_standard_unique{{
     {"CRender::Render", 0x8977c0, "488bc44889480853565741544155415641574881ec20"},
     {"CRender::reset_begin", 0x83a020, "48894c2408565741564883ec3048c7442420feffffff48895c2460488bf9"},
@@ -68,9 +70,11 @@ inline constexpr NativeProfile native_standard{
     .native_unique_guards = native_standard_unique,
 };
 
-// ---- AVX 1.5.3 DX11 (AnomalyDX11AVX.exe) ---------------------------------------------------------------------------
-// Same functions, transferred by RTTI slot and call-graph position and re-read (docs/research/anomaly-avx-profile.md).
-// .data/.bss lie 0x12000 lower than in the standard build; each global is still proven from its own references.
+// ---- AVX 1.5.3 DX11 (AnomalyDX11AVX.exe) ----
+inline constexpr char avx_label[] = "avx";
+inline constexpr char avx_executable[] = "AnomalyDX11AVX.exe";
+inline constexpr wchar_t avx_executable_wide[] = L"AnomalyDX11AVX.exe";
+inline constexpr char avx_hash[] = "2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12";
 inline constexpr std::array<UniqueGuard, 2> native_avx_unique{{
     {"CRender::Render", 0x88d420, "488bc44889480853565741544155415641574881ec50"},
     {"CRender::reset_begin", 0x8312d0, "48894c2408565741564883ec3048c7442420feffffff48895c2460488bf9"},
@@ -92,6 +96,8 @@ inline constexpr NativeProfile native_avx{
     }},
     .native_unique_guards = native_avx_unique,
 };
+
+// END GENERATED ANOMALY PROFILES
 static_assert(native_standard.device_height_rva == native_standard.device_width_rva + 4, "Device.dwHeight follows dwWidth");
 static_assert(native_avx.device_height_rva == native_avx.device_width_rva + 4, "Device.dwHeight follows dwWidth");
 }

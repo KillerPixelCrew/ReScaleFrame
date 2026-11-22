@@ -24,10 +24,6 @@ pub type wchar_t = ::core::ffi::c_ushort;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_anomaly_bootstrap_platform {
-    pub builds: *const rsf_anomaly_build_identity,
-    pub build_count: usize,
-    pub label:
-        ::core::option::Option<unsafe extern "C" fn(arg1: usize) -> *const ::core::ffi::c_char>,
     pub sr: ::core::option::Option<
         unsafe extern "C" fn(arg1: *const wchar_t, arg2: bool, arg3: rsf_game_log_fn) -> bool,
     >,
@@ -65,31 +61,25 @@ pub struct rsf_anomaly_bootstrap_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_bootstrap_platform"]
-        [::core::mem::size_of::<rsf_anomaly_bootstrap_platform>() - 96usize];
+        [::core::mem::size_of::<rsf_anomaly_bootstrap_platform>() - 72usize];
     ["Alignment of rsf_anomaly_bootstrap_platform"]
         [::core::mem::align_of::<rsf_anomaly_bootstrap_platform>() - 8usize];
-    ["Offset of field: rsf_anomaly_bootstrap_platform::builds"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, builds) - 0usize];
-    ["Offset of field: rsf_anomaly_bootstrap_platform::build_count"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, build_count) - 8usize];
-    ["Offset of field: rsf_anomaly_bootstrap_platform::label"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, label) - 16usize];
     ["Offset of field: rsf_anomaly_bootstrap_platform::sr"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, sr) - 24usize];
+        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, sr) - 0usize];
     ["Offset of field: rsf_anomaly_bootstrap_platform::motion"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, motion) - 32usize];
+        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, motion) - 8usize];
     ["Offset of field: rsf_anomaly_bootstrap_platform::fg"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, fg) - 40usize];
+        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, fg) - 16usize];
     ["Offset of field: rsf_anomaly_bootstrap_platform::fg_installed"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, fg_installed) - 48usize];
+        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, fg_installed) - 24usize];
     ["Offset of field: rsf_anomaly_bootstrap_platform::input_observation"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, input_observation) - 56usize];
+        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, input_observation) - 32usize];
     ["Offset of field: rsf_anomaly_bootstrap_platform::publish_input_observer"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, publish_input_observer) - 64usize];
+        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, publish_input_observer) - 40usize];
     ["Offset of field: rsf_anomaly_bootstrap_platform::input_hook"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, input_hook) - 72usize];
+        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, input_hook) - 48usize];
     ["Offset of field: rsf_anomaly_bootstrap_platform::overlay"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, overlay) - 80usize];
+        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, overlay) - 56usize];
     ["Offset of field: rsf_anomaly_bootstrap_platform::overlay_sink"]
-        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, overlay_sink) - 88usize];
+        [::core::mem::offset_of!(rsf_anomaly_bootstrap_platform, overlay_sink) - 64usize];
 };

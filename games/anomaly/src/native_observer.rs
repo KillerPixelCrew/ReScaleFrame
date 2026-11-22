@@ -4,25 +4,27 @@
 #[cfg(test)]
 mod tests;
 
-use crate::engine_guards::{Image, NativeSite, Read, UniqueGuard};
+use crate::engine_guards::{Image, Read};
 use crate::executable::observer_build;
 use crate::native_hooks::{ImageHeaders, Site};
 use crate::native_observer_abi::{
-    RSF_ANOMALY_OBSERVATION_ABI, RSF_ANOMALY_OBSERVER_HOOK_COUNT,
+    RSF_ANOMALY_OBSERVATION_ABI, RSF_ANOMALY_OBSERVER_BEGIN, RSF_ANOMALY_OBSERVER_CAMERA,
+    RSF_ANOMALY_OBSERVER_END, RSF_ANOMALY_OBSERVER_RESET_BEGIN, RSF_ANOMALY_OBSERVER_RESET_END,
+    RSF_ANOMALY_OBSERVER_SCENE, RSF_ANOMALY_OBSERVER_TARGET_COPY, RSF_ANOMALY_OBSERVER_UI,
     rsf_anomaly_native_observation as Observation, rsf_anomaly_observer_binding as Binding,
     rsf_anomaly_observer_camera as Camera, rsf_anomaly_observer_engine as Engine,
     rsf_anomaly_observer_frame as Frame, rsf_anomaly_observer_platform as Platform,
-    rsf_anomaly_observer_profile as Profile,
 };
-use crate::{ABI_MISMATCH, BuildIdentity, INVALID_ARGUMENT};
+use crate::native_profile::{HOOK_COUNT, PROFILES};
+use crate::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_log_fn,
     rsf_game_prepare_args, rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
-use std::{ptr, slice};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
     GetModuleHandleW,
@@ -36,58 +38,35 @@ const NATIVE_REFUSED: rsf_result = -5;
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_observer_identify(
     out: &mut Engine,
-    builds: *const BuildIdentity,
-    profiles: *const Profile,
-    count: usize,
     headers: &ImageHeaders,
     read: Read,
 ) -> *const c_char {
-    // Both tables borrow the same static C++ build order as the native detours.
-    let builds = unsafe { slice::from_raw_parts(builds, count) };
-    let build = match observer_build(builds) {
+    let build = match observer_build() {
         Ok(build) => build,
         Err(reason) => return reason.as_ptr(),
     };
-    let profile = unsafe { &*profiles.add(build) };
-    if profile.site_count != HOOK_COUNT
-        || profile.sites.is_null()
-        || (profile.unique_guard_count != 0 && profile.unique_guards.is_null())
-    {
-        return c"Native observer profile does not describe all hook boundaries.".as_ptr();
-    }
+    let Some(profile) = PROFILES.get(build) else {
+        return c"Native observer build index is out of range.".as_ptr();
+    };
     let image = unsafe { GetModuleHandleW(ptr::null()) };
     // HookSet adds a mapped-region check and an NT header extent check on install.
     if !headers.matches(image, profile.image_size, usize::MAX) {
         return c"Running image size differs from the verified build.".as_ptr();
     }
     let checked = Image::new(image.cast(), profile.image_size, read);
-    let sites =
-        unsafe { slice::from_raw_parts(profile.sites.cast::<NativeSite>(), profile.site_count) };
-    let guards = if profile.unique_guard_count == 0 {
-        &[]
-    } else {
-        unsafe {
-            slice::from_raw_parts(
-                profile.unique_guards.cast::<UniqueGuard>(),
-                profile.unique_guard_count,
-            )
-        }
-    };
-    if !unsafe { checked.matches_sites(sites, guards) } {
+    if !unsafe { checked.matches_sites(&profile.sites, &profile.guards) } {
         return c"A native hook's expected instructions do not match; no hook was written."
             .as_ptr();
     }
     *out = Engine {
         image,
         build,
-        label: profile.label,
-        executable: builds[build].executable,
-        profile,
+        label: profile.label.as_ptr(),
+        executable: profile.executable.as_ptr(),
     };
     ptr::null()
 }
 
-const HOOK_COUNT: usize = RSF_ANOMALY_OBSERVER_HOOK_COUNT as usize;
 type Install = unsafe extern "C" fn(*mut c_void, u32, *const Site, usize) -> bool;
 
 #[unsafe(no_mangle)]
@@ -96,17 +75,11 @@ unsafe extern "C" fn rsf_anomaly_observer_install(
     bindings: &[Binding; HOOK_COUNT],
     install: Install,
 ) -> bool {
-    let Some(profile) = (unsafe { engine.profile.as_ref() }) else {
+    let Some(profile) = PROFILES.get(engine.build) else {
         return false;
     };
-    if profile.site_count != bindings.len() || profile.sites.is_null() {
-        return false;
-    }
-    // The prepared engine owns this exact bank. The C++ actor lends one
-    // typed detour and a process-lifetime trampoline slot per entry.
-    let native_sites: &[NativeSite; HOOK_COUNT] = unsafe { &*profile.sites.cast() };
     let sites: [Site; HOOK_COUNT] = std::array::from_fn(|index| {
-        let site = &native_sites[index];
+        let site = &profile.sites[index];
         let binding = &bindings[index];
         Site {
             _name: site.name,
@@ -132,15 +105,15 @@ unsafe extern "C" fn rsf_anomaly_observer_read_frame(
     read: Read,
     out: &mut Frame,
 ) -> bool {
-    let Some(profile) = (unsafe { engine.profile.as_ref() }) else {
+    let Some(profile) = PROFILES.get(engine.build) else {
         return false;
     };
     let image = Image::new(engine.image.cast(), profile.image_size, read);
     let sample = || {
         Some(Frame {
-            id: u32::from_le_bytes(image.copy(profile.frame_rva)?),
-            width: u32::from_le_bytes(image.copy(profile.width_rva)?),
-            height: u32::from_le_bytes(image.copy(profile.height_rva)?),
+            id: u32::from_le_bytes(image.copy(profile.device_frame_rva)?),
+            width: u32::from_le_bytes(image.copy(profile.device_width_rva)?),
+            height: u32::from_le_bytes(image.copy(profile.device_height_rva)?),
         })
     };
     let Some(frame) = sample() else {
@@ -684,68 +657,64 @@ unsafe extern "C" fn rsf_anomaly_observation(out: *mut Observation) -> rsf_resul
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_enter() -> bool {
-    OBSERVER.enter()
+extern "C" fn rsf_anomaly_observer_before(platform: &Platform, boundary: u32) -> bool {
+    let observing = OBSERVER.enter();
+    if boundary == RSF_ANOMALY_OBSERVER_END {
+        // A frame opened before quiesce can still own the matching End.
+        return OBSERVER.end_before(platform, observing);
+    }
+    if !observing || boundary == RSF_ANOMALY_OBSERVER_RESET_END {
+        return false;
+    }
+    match boundary {
+        RSF_ANOMALY_OBSERVER_BEGIN
+        | RSF_ANOMALY_OBSERVER_CAMERA
+        | RSF_ANOMALY_OBSERVER_TARGET_COPY => return true,
+        RSF_ANOMALY_OBSERVER_SCENE => {
+            OBSERVER.update(|o| o.scene_passes = o.scene_passes.wrapping_add(1))
+        }
+        RSF_ANOMALY_OBSERVER_UI => {
+            OBSERVER.update(|o| o.hud_passes = o.hud_passes.wrapping_add(1));
+            unsafe { (platform.ui_boundary.unwrap())() };
+        }
+        RSF_ANOMALY_OBSERVER_RESET_BEGIN => {
+            OBSERVER.update(|o| {
+                o.resets = o.resets.wrapping_add(1);
+                o.generation = o.generation.wrapping_add(1);
+                o.camera_finite = 0;
+            });
+            unsafe { (platform.device_reset.unwrap())() };
+        }
+        _ => {}
+    }
+    false
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_after(
+    platform: &Platform,
+    boundary: u32,
+    view: *const f32,
+    projection: *const f32,
+    target: u32,
+) {
+    match boundary {
+        RSF_ANOMALY_OBSERVER_BEGIN => OBSERVER.render_begin(platform),
+        RSF_ANOMALY_OBSERVER_END => OBSERVER.end_after(platform),
+        RSF_ANOMALY_OBSERVER_CAMERA => OBSERVER.camera(platform, view, projection),
+        RSF_ANOMALY_OBSERVER_TARGET_COPY => match target {
+            1 => OBSERVER.update(|o| o.pda_copies = o.pda_copies.wrapping_add(1)),
+            2 => {
+                OBSERVER.update(|o| o.scope_copies = o.scope_copies.wrapping_add(1));
+                unsafe { (platform.scope_frame.unwrap())() };
+            }
+            _ => {}
+        },
+        _ => {}
+    }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_observer_leave() {
     OBSERVER.leave();
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_render_begin(platform: &Platform) {
-    OBSERVER.render_begin(platform);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_end_before(platform: &Platform, observing: bool) -> bool {
-    OBSERVER.end_before(platform, observing)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_end_after(platform: &Platform) {
-    OBSERVER.end_after(platform);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_camera_sample(
-    platform: &Platform,
-    view: *const f32,
-    projection: *const f32,
-) {
-    OBSERVER.camera(platform, view, projection);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_scene() {
-    OBSERVER.update(|o| o.scene_passes = o.scene_passes.wrapping_add(1));
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_ui(platform: &Platform) {
-    OBSERVER.update(|o| o.hud_passes = o.hud_passes.wrapping_add(1));
-    unsafe { (platform.ui_boundary.unwrap())() };
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_copy_target(platform: &Platform, target: u32) {
-    match target {
-        1 => OBSERVER.update(|o| o.pda_copies = o.pda_copies.wrapping_add(1)),
-        2 => {
-            OBSERVER.update(|o| o.scope_copies = o.scope_copies.wrapping_add(1));
-            unsafe { (platform.scope_frame.unwrap())() };
-        }
-        _ => (),
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_reset(platform: &Platform) {
-    OBSERVER.update(|o| {
-        o.resets = o.resets.wrapping_add(1);
-        o.generation = o.generation.wrapping_add(1);
-        o.camera_finite = 0;
-    });
-    unsafe { (platform.device_reset.unwrap())() };
 }

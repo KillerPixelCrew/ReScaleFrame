@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::engine_guards::{NativeSite, Read};
-use std::ffi::CStr;
+use crate::native_profile::{PROFILES, Profile};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
@@ -342,30 +342,32 @@ struct SiteBank {
 
 #[repr(C)]
 struct FixtureProfile {
-    label: *const c_char,
-    image_size: u32,
-    banks: [SiteBank; 3],
+    banks: [SiteBank; 2],
 }
 
 const _: () = {
     assert!(size_of::<SiteBank>() == 16);
-    assert!(size_of::<FixtureProfile>() == 64 && std::mem::offset_of!(FixtureProfile, banks) == 16);
+    assert!(size_of::<FixtureProfile>() == 32);
 };
 
-fn profile_contract(platform: &Platform, profile: &FixtureProfile) {
+fn profile_contract(platform: &Platform, profile: &Profile, fixture: &FixtureProfile) {
     println!(
         "Anomaly HookSet profile: {}",
-        unsafe { CStr::from_ptr(profile.label) }.to_string_lossy()
+        profile.label.to_string_lossy()
     );
     let size = profile.image_size;
     let image = Image::new(size, PAGE_EXECUTE_READWRITE);
     image.write_headers(size);
-    let count = profile.banks.iter().map(|bank| bank.count).sum();
+    let count = profile.sites.len() + fixture.banks.iter().map(|bank| bank.count).sum::<usize>();
     let mut originals = vec![ptr::null_mut(); count];
-    let mut sites: Vec<_> = profile
+    let other_sites = fixture
         .banks
         .iter()
-        .flat_map(|bank| unsafe { slice::from_raw_parts(bank.sites, bank.count) })
+        .flat_map(|bank| unsafe { slice::from_raw_parts(bank.sites, bank.count) });
+    let mut sites: Vec<_> = profile
+        .sites
+        .iter()
+        .chain(other_sites)
         .zip(&mut originals)
         .map(|(site, original)| {
             unsafe {
@@ -416,8 +418,10 @@ unsafe extern "C" fn rsf_test_anomaly_native_hooks(
         copy_contract(copy, page);
         executable_contract(platform, target, untouched);
         mapping_contract(platform, page);
-        for profile in unsafe { slice::from_raw_parts(profiles, count) } {
-            profile_contract(platform, profile);
+        assert_eq!(count, PROFILES.len());
+        let fixtures = unsafe { slice::from_raw_parts(profiles, count) };
+        for (profile, fixture) in PROFILES.iter().zip(fixtures) {
+            profile_contract(platform, profile, fixture);
         }
         println!("Anomaly guarded native hooks: PASS");
         0

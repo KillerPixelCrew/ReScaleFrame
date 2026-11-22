@@ -37,11 +37,44 @@ pub(super) struct NativeSite {
     pub(super) expected: [u8; 16],
 }
 
+#[cfg(windows)]
+pub(super) const fn site(name: &'static CStr, rva: u32, hex: &[u8; 32]) -> NativeSite {
+    const fn digit(value: u8) -> u8 {
+        match value {
+            b'0'..=b'9' => value - b'0',
+            b'a'..=b'f' => value - b'a' + 10,
+            _ => panic!("invalid native guard digit"),
+        }
+    }
+    let mut expected = [0; 16];
+    let mut i = 0;
+    while i < expected.len() {
+        expected[i] = digit(hex[2 * i]) << 4 | digit(hex[2 * i + 1]);
+        i += 1;
+    }
+    NativeSite {
+        name: name.as_ptr(),
+        rva,
+        expected,
+    }
+}
+
 #[repr(C)]
 pub(super) struct UniqueGuard {
     name: *const c_char,
     pub(super) rva: u32,
     pub(super) expected_hex: *const c_char,
+}
+
+#[cfg(windows)]
+impl UniqueGuard {
+    pub(super) const fn new(name: &'static CStr, rva: u32, expected: &'static CStr) -> Self {
+        Self {
+            name: name.as_ptr(),
+            rva,
+            expected_hex: expected.as_ptr(),
+        }
+    }
 }
 
 const _: () = {

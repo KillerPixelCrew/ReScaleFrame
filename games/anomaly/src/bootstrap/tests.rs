@@ -24,9 +24,6 @@ static STOP_RESULT: AtomicI32 = AtomicI32::new(-4);
 static OPTIONS_VALID: AtomicBool = AtomicBool::new(true);
 static SESSION: u8 = 0;
 
-unsafe extern "C" fn label(_: usize) -> *const c_char {
-    c"standard".as_ptr()
-}
 fn register_options(_: &[u16]) {
     REGISTERED.fetch_add(1, SeqCst);
 }
@@ -134,14 +131,7 @@ fn counts() -> [u32; 9] {
 // refused session, the motion pack row) twice, and reconfigured stages beside a partial Runtime session.
 #[test]
 fn retry_repeats_only_unfinished_steps() {
-    let builds = [BuildIdentity {
-        executable: c"AnomalyDX11.exe".as_ptr(),
-        sha256: c"00".as_ptr(),
-    }];
     let leaves = Leaves {
-        builds: builds.as_ptr(),
-        build_count: builds.len(),
-        label: Some(label),
         sr: Some(sr),
         motion: Some(motion),
         fg: Some(fg),
@@ -156,7 +146,6 @@ fn retry_repeats_only_unfinished_steps() {
     let request = Request {
         ini: &ini,
         build: 0,
-        builds: &builds,
         observe: true,
         overlay: true,
     };

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use std::slice;
 use std::sync::atomic::AtomicBool;
 
 static INPUT_IDLE: AtomicBool = AtomicBool::new(false);
@@ -49,11 +50,11 @@ unsafe extern "C" fn check_selected_hooks(
 ) -> bool {
     let sites = unsafe { slice::from_raw_parts(sites, count) };
     image.addr() == 0x1234
-        && size == 4096
+        && size == PROFILES[1].image_size
         && count == HOOK_COUNT
         && sites.iter().enumerate().all(|(i, site)| {
-            site.rva == 32 + i as u32 * 16
-                && site.expected == [i as u8; 16]
+            site.rva == PROFILES[1].sites[i].rva
+                && site.expected == PROFILES[1].sites[i].expected
                 && site.replacement.addr() == 0x2000 + i
                 && site.original.addr() == 0x4000 + i * size_of::<usize>()
         })
@@ -61,28 +62,17 @@ unsafe extern "C" fn check_selected_hooks(
 
 #[test]
 fn verified_profile_stays_with_the_hook_batch() {
-    let bank: [NativeSite; HOOK_COUNT] = std::array::from_fn(|i| NativeSite {
-        name: c"fixture".as_ptr(),
-        rva: 32 + i as u32 * 16,
-        expected: [i as u8; 16],
-    });
     let bindings = std::array::from_fn(|i| Binding {
         replacement: ptr::without_provenance_mut(0x2000 + i),
         original: ptr::without_provenance_mut(0x4000 + i * size_of::<usize>()),
     });
-    let profile = Profile {
-        image_size: 4096,
-        sites: bank.as_ptr().cast(),
-        site_count: bank.len(),
-        ..Profile::default()
-    };
     let mut engine = Engine {
         image: ptr::without_provenance_mut(0x1234),
-        profile: &profile,
+        build: 1,
         ..Engine::default()
     };
     assert!(unsafe { rsf_anomaly_observer_install(&engine, &bindings, check_selected_hooks) });
-    engine.profile = ptr::null();
+    engine.build = PROFILES.len();
     assert!(!unsafe { rsf_anomaly_observer_install(&engine, &bindings, check_selected_hooks) });
 }
 

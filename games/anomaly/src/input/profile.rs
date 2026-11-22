@@ -1,31 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Verified CInput profiles for the two admitted Anomaly DX11 executables.
 use super::InputProfile;
-use crate::engine_guards::NativeSite;
-use std::ffi::CStr;
+use crate::engine_guards::site;
 
 // OnFrame tests pKeyboard +0x28 before KeyUpdate, then pMouse +0x20 before MouseUpdate.
-const fn site(name: &'static CStr, rva: u32, hex: &[u8; 32]) -> NativeSite {
-    const fn digit(value: u8) -> u8 {
-        match value {
-            b'0'..=b'9' => value - b'0',
-            b'a'..=b'f' => value - b'a' + 10,
-            _ => panic!("invalid CInput guard digit"),
-        }
-    }
-    let mut expected = [0; 16];
-    let mut i = 0;
-    while i < expected.len() {
-        expected[i] = digit(hex[2 * i]) << 4 | digit(hex[2 * i + 1]);
-        i += 1;
-    }
-    NativeSite {
-        name: name.as_ptr(),
-        rva,
-        expected,
-    }
-}
-
 // Bootstrap passes the index from the exact executable name and hash match.
 pub(super) const fn for_build(build: usize) -> Option<InputProfile> {
     match build {

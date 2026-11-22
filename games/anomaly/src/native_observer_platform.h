@@ -14,18 +14,16 @@ typedef struct rsf_anomaly_native_observation {
     float view[16], projection[16];
 } rsf_anomaly_native_observation;
 
-// The immutable projection of one native profile. Site banks are NativeSite
-// and UniqueGuard arrays whose layouts are checked by the native and Rust owners.
-typedef struct rsf_anomaly_observer_profile {
-    const char* label;
-    uint32_t image_size, frame_rva, width_rva, height_rva;
-    const void* sites;
-    size_t site_count;
-    const void* unique_guards;
-    size_t unique_guard_count;
-} rsf_anomaly_observer_profile;
+// Native actor order is the same as the two verified hook banks.
+#define RSF_ANOMALY_OBSERVER_BEGIN 0
+#define RSF_ANOMALY_OBSERVER_END 1
+#define RSF_ANOMALY_OBSERVER_CAMERA 2
+#define RSF_ANOMALY_OBSERVER_SCENE 3
+#define RSF_ANOMALY_OBSERVER_UI 4
+#define RSF_ANOMALY_OBSERVER_TARGET_COPY 5
+#define RSF_ANOMALY_OBSERVER_RESET_BEGIN 6
+#define RSF_ANOMALY_OBSERVER_RESET_END 7
 
-#define RSF_ANOMALY_OBSERVER_HOOK_COUNT 8
 typedef struct rsf_anomaly_observer_binding {
     void* replacement;
     void** original;
@@ -36,7 +34,6 @@ typedef struct rsf_anomaly_observer_engine {
     size_t build;
     const char* label;
     const char* executable;
-    const rsf_anomaly_observer_profile* profile;
 } rsf_anomaly_observer_engine;
 
 typedef struct rsf_anomaly_observer_frame {

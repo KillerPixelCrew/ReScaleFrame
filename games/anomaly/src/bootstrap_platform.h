@@ -6,9 +6,6 @@
 #include <stddef.h>
 
 typedef struct rsf_anomaly_bootstrap_platform {
-    const rsf_anomaly_build_identity* builds;
-    size_t build_count;
-    const char* (*label)(size_t);
     bool (*sr)(const wchar_t*, bool, rsf_game_log_fn);
     void (*motion)(const wchar_t*, rsf_game_log_fn);
     bool (*fg)(const wchar_t*, bool, void*, size_t, rsf_game_log_fn);

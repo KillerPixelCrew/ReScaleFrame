@@ -14,8 +14,8 @@ namespace {
 using namespace rsf::anomaly;
 
 static_assert(sizeof(wchar_t) == 2 && sizeof(rsf_anomaly_build_identity) == 16);
-static_assert(sizeof(rsf_anomaly_bootstrap_platform) == 96 &&
-    offsetof(rsf_anomaly_bootstrap_platform, input_hook) == 72);
+static_assert(sizeof(rsf_anomaly_bootstrap_platform) == 72 &&
+    offsetof(rsf_anomaly_bootstrap_platform, input_hook) == 48);
 
 using InputFrame = void(__fastcall*)(void*);
 void __fastcall input_frame(void* self) {
@@ -27,8 +27,6 @@ void __fastcall input_frame(void* self) {
 }
 
 constexpr rsf_anomaly_bootstrap_platform leaves{
-    build_identities.data(), build_identities.size(),
-    [](size_t build) noexcept { return build_profiles[build].label; },
     [](const wchar_t* ini, bool configure, rsf_game_log_fn log) noexcept { return sr::configure(ini, configure, log, nullptr); },
     [](const wchar_t* ini, rsf_game_log_fn log) noexcept {
         motion::configure(ini, log, nullptr);

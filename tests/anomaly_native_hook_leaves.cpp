@@ -25,21 +25,17 @@ struct SiteBank {
     size_t count;
 };
 struct FixtureProfile {
-    const char* label;
-    uint32_t image_size;
-    SiteBank banks[3];
+    SiteBank banks[2];
 };
 static_assert(sizeof(SiteBank) == 16);
-static_assert(sizeof(FixtureProfile) == 64 && offsetof(FixtureProfile, banks) == 16);
+static_assert(sizeof(FixtureProfile) == 32);
 constexpr auto fixture_profiles = [] {
     std::array<FixtureProfile, build_profiles.size()> result{};
     for (size_t build = 0; build < build_profiles.size(); ++build) {
         const auto& profile = build_profiles[build];
-        const auto& native = profile.native->native_sites;
         const auto& motion = profile.motion->motion_sites;
         const auto& sr = sr_sites[build];
-        result[build] = {profile.label, profile.image_size(),
-            {{native.data(), native.size()}, {motion.data(), motion.size()}, {sr.data(), sr.size()}}};
+        result[build] = {{{motion.data(), motion.size()}, {sr.data(), sr.size()}}};
     }
     return result;
 }();

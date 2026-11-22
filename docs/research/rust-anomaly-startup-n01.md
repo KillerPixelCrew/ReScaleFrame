@@ -171,3 +171,54 @@ matched the base. Targeted bindgen 0.72.1 regeneration, pinned Rust
 1.94.1 formatting, locked offline Cargo metadata and `git diff --check`
 passed. Added guarded-camera and selected-profile batch fixtures remain
 unrun. Builds, test execution, lint and game or device checks remain open.
+
+## Canonical profile and native events from `0251a81a`
+
+The immutable Standard and AVX records now live in
+`games/anomaly/src/native_profile.rs`. Cold startup and GameSDK
+recognition read the same name and digest records. The observer keeps
+the admitted index and uses it for PE and guard checks, hook assembly,
+and frame reads. Synchronous Runtime prepare can borrow the verified
+index on the calling thread. Standalone prepare still resolves the
+process executable and verifies its hash.
+
+`tools/generate-anomaly-native-profile.py` projects those records into
+`games/anomaly/src/native_profile.h`. The generated block retains the
+field names, section markers, and guard syntax consumed by the
+existing profile evidence readers. Run the generator after editing
+the Rust records. The source-only `--check` mode verifies that the
+projection matches, checks Standard and AVX index order, and checks
+both builds' extended guard prefixes. `build_profile.h` uses the
+generated names and keeps the native geometry, SR and motion links and
+the compile-time fixture interfaces.
+
+| Paths | Source disposition |
+| --- | --- |
+| `bootstrap.rs`, `bootstrap_platform.cpp`, `bootstrap_platform.h`, `bootstrap_abi.rs`, `executable.rs`, `lib.rs`, `plugin_entry.rs` | Rust owns runtime identity and labels. The native bootstrap record now contains stage calls and native input installation leaves. |
+| `native_profile.rs`, `native_profile.h`, `build_profile.h`, `tools/generate-anomaly-native-profile.py` | Rust owns the identity, observer sites, extended guards and frame facts. The generated C++ block projects those facts for native callers and source evidence. |
+| `engine_guards.rs`, `input/profile.rs` | Both profile owners use the same compile-time 16-byte guard decoder. The CInput evidence records retain their original bytes. |
+| `native_observer.rs`, `native_observer_platform.cpp`, `native_observer_platform.h`, `native_observer_abi.rs` | Rust owns before and after event dispatch. Native actors keep the original calls, the invocation destructor and the scene geometry scope. The existing Rust FG C entries serve the observer table directly. |
+| `native_hooks/fixture.rs`, `tests/anomaly_native_hook_leaves.cpp` | The fixture uses the same canonical native sites as production. Native leaves supply the motion and selected SR banks, guarded copying and compiler-emitted functions. |
+| `bootstrap/tests.rs`, `native_observer/tests.rs`, `tools/generate-rust-bindings.py` | Updated fixture inputs and generated private bindings. The selected-hook fixture exercises the canonical AVX bank and an invalid index. |
+
+The End actor keeps its late completion path for a frame opened
+before quiesce. Scene, UI and reset-begin facts precede their
+original calls. Begin, camera and copy facts follow their original
+calls. Reset end retains the invocation lease without emitting a
+fact. The native RAII destructor still retires every detour during
+C++ unwinding. The public observation payload stays at ABI 1.
+
+The remaining native edges are the generated compile-time profile
+adapter, typed engine trampoline calls, SEH copy and slot exchange,
+MinHook operations, geometry scope and native stage/report leaves.
+The fixture still borrows stage-owned site banks and native functions.
+No N04 or N06 owner or caller interface needed an edit.
+
+Source comparison against `0251a81a` matched two hashes, eight
+layout values, sixteen fixed guards and four extended guards.
+It also matched all eight original-call argument lists, trampoline
+bindings and the public observation declaration. Targeted bindgen
+0.72.1 regeneration, the native profile projection check, pinned
+Rust 1.94.1 formatting, locked offline Cargo metadata and
+`git diff --check` passed. Build, fixture execution, lint and game
+or device checks remain open.

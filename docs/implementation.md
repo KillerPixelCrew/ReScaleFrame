@@ -1130,6 +1130,13 @@ boundaries. The exact profiles and public observation ABI passed
 source comparison. Build and runtime verification remain open.
 [Verified profile and native actor follow-up](research/rust-anomaly-startup-n01.md#verified-profile-and-native-actor-follow-up-from-8df04a40)
 
+Rust now owns the two exact Anomaly profile records and the observer's
+before and after event dispatch. Native callers use a checked source
+projection and keep their typed original calls and SEH reads. The
+profile values and public observation declaration matched the base;
+build and runtime validation remain open.
+[Canonical profiles and native events](research/rust-anomaly-startup-n01.md#canonical-profile-and-native-events-from-0251a81a)
+
 ## Rust orchestrator and first Anomaly port
 
 Anomaly's Rust geometry owner now reads and interprets draw-time producer

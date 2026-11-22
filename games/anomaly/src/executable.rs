@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: MIT
-use crate::{BuildIdentity, digest::sha256_file, match_build};
+use crate::digest::sha256_file;
+use crate::native_profile::{PROFILES, find};
 use rsf_game_sys::win32::module_path;
 use std::cell::Cell;
 use std::ffi::{CStr, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::ptr;
-pub(crate) fn identity_name(identity: &BuildIdentity) -> &CStr {
-    // The native profile table supplies immutable, NUL-terminated strings.
-    unsafe { CStr::from_ptr(identity.executable) }
-}
 
 /// Only a profiled ASCII filename is eligible for hashing.
-pub(crate) fn running_build(builds: &[BuildIdentity]) -> Result<usize, &'static CStr> {
+pub(crate) fn running_build() -> Result<usize, &'static CStr> {
     let path = unsafe { module_path(ptr::null_mut()) }
         .ok_or(c"Could not read the running executable path.")?;
     let path = OsString::from_wide(path.units());
@@ -22,55 +19,34 @@ pub(crate) fn running_build(builds: &[BuildIdentity]) -> Result<usize, &'static 
         .and_then(|name| name.to_str())
         .filter(|name| {
             name.is_ascii()
-                && builds
+                && PROFILES
                     .iter()
-                    .any(|build| identity_name(build).to_bytes().eq_ignore_ascii_case(name.as_bytes()))
+                    .any(|build| build.executable.to_bytes().eq_ignore_ascii_case(name.as_bytes()))
         })
         .ok_or(c"Native sites belong to the profiled DX11 executables (standard or AVX), not this process.")?;
     sha256_file(path)
-        .and_then(|hash| match_build(builds, name.as_bytes(), &hash))
+        .and_then(|hash| find(name.as_bytes(), &hash))
         .ok_or(c"Running executable SHA-256 does not match a guarded native profile.")
 }
 
-// The Runtime calls prepare synchronously. Only the same thread and exact static
-// profile table can reuse this admission, and only until that call returns.
-#[derive(Clone, Copy)]
-struct VerifiedBuild {
-    table: *const BuildIdentity,
-    count: usize,
-    index: usize,
-}
-
+// The runtime executes prepare synchronously. The verified index is visible on
+// this thread only while that call uses the immutable profile table.
 thread_local! {
-    static VERIFIED_BUILD: Cell<Option<VerifiedBuild>> = const { Cell::new(None) };
+    static VERIFIED_BUILD: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
-pub(crate) fn with_verified_build<T>(
-    builds: &[BuildIdentity],
-    index: usize,
-    prepare: impl FnOnce() -> T,
-) -> T {
-    struct Restore(Option<VerifiedBuild>);
+pub(crate) fn with_verified_build<T>(index: usize, prepare: impl FnOnce() -> T) -> T {
+    struct Restore(Option<usize>);
     impl Drop for Restore {
         fn drop(&mut self) {
             VERIFIED_BUILD.set(self.0);
         }
     }
 
-    let _restore = Restore(VERIFIED_BUILD.replace(Some(VerifiedBuild {
-        table: builds.as_ptr(),
-        count: builds.len(),
-        index,
-    })));
+    let _restore = Restore(VERIFIED_BUILD.replace(Some(index)));
     prepare()
 }
 
-pub(crate) fn observer_build(builds: &[BuildIdentity]) -> Result<usize, &'static CStr> {
-    if let Some(verified) = VERIFIED_BUILD.get()
-        && verified.table == builds.as_ptr()
-        && verified.count == builds.len()
-    {
-        return Ok(verified.index);
-    }
-    running_build(builds)
+pub(crate) fn observer_build() -> Result<usize, &'static CStr> {
+    VERIFIED_BUILD.get().map_or_else(running_build, Ok)
 }

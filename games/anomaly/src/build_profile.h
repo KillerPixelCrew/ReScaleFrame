@@ -30,9 +30,9 @@ struct BuildProfile {
     constexpr uint32_t image_size() const noexcept { return native->image_size; }
 };
 inline constexpr std::array<BuildProfile, 2> build_profiles{{
-    {"standard", "AnomalyDX11.exe", L"AnomalyDX11.exe", dx11_hash, &native_standard, &geometry::geometry_standard,
+    {standard_label, standard_executable, standard_executable_wide, dx11_hash, &native_standard, &geometry::geometry_standard,
         &sr::sr_standard, &motion::motion_standard},
-    {"avx", "AnomalyDX11AVX.exe", L"AnomalyDX11AVX.exe", avx_hash, &native_avx, &geometry::geometry_avx,
+    {avx_label, avx_executable, avx_executable_wide, avx_hash, &native_avx, &geometry::geometry_avx,
         &sr::sr_avx, &motion::motion_avx},
 }};
 inline constexpr const BuildProfile& standard_build = build_profiles[0];

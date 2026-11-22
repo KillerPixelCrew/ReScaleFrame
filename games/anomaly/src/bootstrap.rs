@@ -5,10 +5,9 @@
 //! order, refusals, retry state and adapter log. The native platform table supplies the typed stage calls.
 
 use crate::AMD64;
-use crate::bootstrap_abi::{
-    rsf_anomaly_bootstrap_platform as Leaves, rsf_anomaly_build_identity as BuildIdentity,
-};
-use crate::executable::{identity_name, running_build, with_verified_build};
+use crate::bootstrap_abi::rsf_anomaly_bootstrap_platform as Leaves;
+use crate::executable::{running_build, with_verified_build};
+use crate::native_profile::PROFILES;
 #[cfg(test)]
 use rsf_game_sys::RSF_GAME_ABI_VERSION;
 #[cfg(test)]
@@ -23,8 +22,8 @@ use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
+use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::{ptr, slice};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
@@ -90,7 +89,6 @@ impl Runtime {
 struct Request<'a> {
     ini: &'a [u16],
     build: usize,
-    builds: &'a [BuildIdentity],
     observe: bool,
     overlay: bool,
 }
@@ -187,20 +185,18 @@ unsafe fn enter(configuration: *const u16, leaves: &Leaves) -> u32 {
     if entry.started {
         return READY;
     }
-    let builds = unsafe { slice::from_raw_parts(leaves.builds, leaves.build_count) };
-    let Ok(build) = running_build(builds) else {
+    let Ok(build) = running_build() else {
         return BUILD_REFUSED;
     };
     *lock(&LOG) = path
         .parent()
         .map(|directory| directory.join("ReScaleFrame.Anomaly.log"));
-    let identity = &builds[build];
-    let label = unsafe { CStr::from_ptr((leaves.label.unwrap())(build)) };
+    let profile = &PROFILES[build];
     write_log(
         format!(
             "Anomaly executable {}: {} build profile selected by exact SHA-256.",
-            identity_name(identity).to_string_lossy(),
-            label.to_string_lossy()
+            profile.executable.to_string_lossy(),
+            profile.label.to_string_lossy()
         )
         .as_bytes(),
     );
@@ -218,7 +214,6 @@ unsafe fn enter(configuration: *const u16, leaves: &Leaves) -> u32 {
     let request = Request {
         ini,
         build,
-        builds,
         observe,
         overlay,
     };
@@ -393,18 +388,17 @@ fn prepare_observation(entry: &mut Entry, request: &Request, prepare: PrepareFn)
     if unsafe { QueryPerformanceCounter(&mut counter) } == 0 || counter <= 0 {
         return RUNTIME_REFUSED;
     }
-    let identity = &request.builds[request.build];
+    let profile = &PROFILES[request.build];
     let probe = Probe {
         machine: AMD64,
-        executable: identity_name(identity),
-        // Borrow the selected immutable profile's verified hash.
-        sha256: unsafe { CStr::from_ptr(identity.sha256) },
+        executable: profile.executable,
+        sha256: profile.sha256,
     };
     let mut services = host_services(counter as u64, LOG_FN);
     services.session_id = counter as u64;
     write_log(b"Anomaly Observe cold startup; borrowing existing Runtime, before DirectInput/device creation.");
     let prepared = with_session_options(plugin.terminated(), probe, &services, |options| {
-        with_verified_build(request.builds, request.build, || unsafe {
+        with_verified_build(request.build, || unsafe {
             prepare(options, &mut entry.session)
         })
     });
