@@ -7605,3 +7605,13 @@ production dispatcher, and a Rust fixture checks the Runtime DLL export
 inventory. [V01 port evidence](research/vulkan-sr-provider-admission-port.md)
 records the source checks, fixture changes and remaining C++ paths. Build,
 test, lint and device validation are pending.
+
+### Shared SR sessions and bridging (D03)
+
+Rust owns shared SR frame admission, auxiliary binding restoration and
+cross-API retirement. Checked close exposes a retained bridge for retry, and
+an output-only size change retires and reallocates the prepared surfaces.
+Provider switch logs distinguish a committed FidelityFX version from a
+candidate still under review. See [D03 source evidence](research/rust-sr-sessions-bridge-port.md)
+for the D01 startup dependency, pending Anomaly Auto admission and fixture
+coverage. Build, test, lint and device execution remain pending.
