@@ -194,7 +194,7 @@ fn note_hook(entry: u16, detour: bool, status: i32, target: Ptr, module: &[u8]) 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_census_hook_original(entry: u16) -> Ptr {
+pub(super) extern "C" fn rsf_census_hook_original(entry: u16) -> Ptr {
     ORIGINALS
         .get(entry as usize)
         .map_or(null_mut(), |original| original.load(Acquire))

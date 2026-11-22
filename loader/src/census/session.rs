@@ -388,7 +388,7 @@ extern "C" fn rsf_census_flags() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_call_begin(
+pub(super) unsafe extern "C" fn rsf_census_call_begin(
     state: *mut rsf_census_call_state,
     entry: u16,
     caller: *mut c_void,
@@ -447,7 +447,10 @@ unsafe extern "C" fn rsf_census_call_begin(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_call_finish(state: *mut rsf_census_call_state, result: u64) {
+pub(super) unsafe extern "C" fn rsf_census_call_finish(
+    state: *mut rsf_census_call_state,
+    result: u64,
+) {
     if !unsafe { (*state).full } || !rsf_census_active() {
         return;
     }

@@ -196,3 +196,16 @@ the prior admitted-byte accounting semantics.
 Source checks compare the API validation, exported names and struct layout, JSON field inventory,
 worker deadlines, file names and output caps. The remaining native wrapper and SEH leaves
 continue to own borrowed SDK calls.
+
+## NGX vendor wrapper cutover
+
+`loader/census/src/wrap_ngx.cpp` is removed. Rust registers all 42 D3D12, D3D11 and Vulkan NGX
+wrappers in the native catalog's order. The version-dependent entry points keep the existing
+eight-word Windows x64 forwarding convention. Rust owns parameter selection, feature and quality
+decoding, NGX Vulkan resource fields and the D3D12 notification sequence. Create and release
+observers still require success. Evaluation observers still run before and after the original
+regardless of record sampling.
+
+Native leaves keep the guarded virtual getter calls, D3D resource description probes and CRT
+float formatting. The D3D12 registration API keeps its public signature. Source checks compare
+all catalog and decoder names, getter order and observer phases with the previous wrapper.

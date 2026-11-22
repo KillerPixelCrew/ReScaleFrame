@@ -5,6 +5,7 @@
 #include <new>
 
 #include "census_internal.h"
+#include "ngx_platform.h"
 #include "wrapper_platform.h"
 
 namespace rsf_census {
@@ -52,6 +53,41 @@ void register_wrappers_vk(void** table) noexcept {
     void* wrappers[RSF_CENSUS_VK_COUNT]{};
     rsf_census_vk_bind(&services, wrappers);
     for (size_t i = 0; i < std::size(entries); ++i) table[idx(entries[i])] = wrappers[i];
+}
+
+void register_wrappers_ngx(void** table) noexcept {
+    static constexpr uint16_t entries[] = {
+#define RSF_CENSUS_NGX_ID(name, api, symbol, modules) static_cast<uint16_t>(Fn::name),
+        RSF_NGX_FUNCS(RSF_CENSUS_NGX_ID, D3D12, nullptr, nullptr)
+        RSF_NGX_FUNCS(RSF_CENSUS_NGX_ID, D3D11, nullptr, nullptr)
+        RSF_NGX_FUNCS(RSF_CENSUS_NGX_ID, VULKAN, nullptr, nullptr)
+#undef RSF_CENSUS_NGX_ID
+    };
+    static_assert(std::size(entries) == RSF_CENSUS_NGX_ENTRIES);
+    static const rsf_census_ngx_platform platform = {
+        safe_read,
+        read_arg_string,
+        [](const void* address, uint16_t* text, size_t capacity) {
+            return read_arg_wstring(address, reinterpret_cast<wchar_t*>(text), capacity);
+        },
+        [](const void* parameters, size_t slot, const char* name, void* output) {
+            using Getter = int32_t (*)(const void*, const char*, void*);
+            auto get = reinterpret_cast<Getter>(vtable_slot(parameters, slot));
+            int32_t result = 0;
+            return get && guard([&] { result = get(parameters, name, output); }) && result == 1;
+        },
+        [](rsf_census_json* state, const char* key, const void* resource, bool d3d12) {
+            Json json(state);
+            if (d3d12) json_d3d12_resource(json, key, resource);
+            else json_d3d11_resource(json, key, resource);
+        },
+        [](rsf_census_json* state, const char* key, double value) {
+            Json(state).f32(key, value);
+        },
+    };
+    void* wrappers[RSF_CENSUS_NGX_ENTRIES]{};
+    rsf_census_ngx_bind(&platform, entries, wrappers);
+    for (size_t i = 0; i < std::size(entries); ++i) table[entries[i]] = wrappers[i];
 }
 
 void Json::f32(const char* key, double value) noexcept {

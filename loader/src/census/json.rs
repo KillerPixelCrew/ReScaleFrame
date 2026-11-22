@@ -112,7 +112,7 @@ pub(super) unsafe extern "C" fn rsf_census_json_string(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_json_wide(
+pub(super) unsafe extern "C" fn rsf_census_json_wide(
     json: &mut rsf_census_json,
     key: *const c_char,
     value: *const u16,
