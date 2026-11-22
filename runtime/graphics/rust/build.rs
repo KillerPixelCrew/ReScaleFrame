@@ -1,17 +1,11 @@
 // SPDX-License-Identifier: MIT
-/// Binds the two private headers this crate's leaves implement or call. The public headers come
-/// from rsf-game-sys; the Runtime takes these from here.
+/// Binds the private frame-tap header this crate's leaves implement or call. The public headers
+/// come from rsf-game-sys; the Runtime takes these from here.
 fn bindings() {
     let builder = rsf_bindgen::owner(
-        &[
-            "runtime/orchestrator/src/d3d11_output_platform.h",
-            "runtime/graphics/src/frame_tap_platform.h",
-        ],
+        &["runtime/graphics/src/frame_tap_platform.h"],
         &[],
-        &[
-            "runtime/orchestrator/src/d3d11_output_platform.h",
-            "runtime/graphics/src/frame_tap_platform.h",
-        ],
+        &["runtime/graphics/src/frame_tap_platform.h"],
         &[],
         &[],
     );
@@ -24,7 +18,6 @@ fn main() {
     bindings();
     println!("cargo:rerun-if-changed=../src/frame_tap_callbacks.c");
     println!("cargo:rerun-if-changed=../src/frame_tap_platform.h");
-    println!("cargo:rerun-if-changed=../../orchestrator/src/d3d11_output_platform.h");
     println!("cargo:rerun-if-changed=../include/rescaleframe/frame_tap.h");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;

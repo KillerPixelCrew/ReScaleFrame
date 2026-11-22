@@ -1,33 +1,26 @@
 // SPDX-License-Identifier: MIT
 use crate::fullscreen_pass::{
-    COPY, COPY_RGBA, rsf_fullscreen_pass_create, rsf_fullscreen_pass_destroy,
+    COPY, COPY_RGBA, Pass, rsf_fullscreen_pass_create, rsf_fullscreen_pass_destroy,
     rsf_fullscreen_pass_draw,
 };
-use crate::sys::rsf_fullscreen_pass;
 use crate::sys::{RSF_FULLSCREEN_PASS_ABI_VERSION, rsf_fullscreen_draw, rsf_fullscreen_setup};
 use std::ffi::c_void;
 use std::ptr;
 use std::ptr::NonNull;
 use windows::core::{IUnknown, Interface};
 
-pub(super) type CreateBlit = unsafe extern "C" fn(*mut c_void) -> *mut rsf_fullscreen_pass;
-pub(super) type DrawBlit = unsafe extern "C" fn(
-    *mut rsf_fullscreen_pass,
-    *mut c_void,
-    *mut c_void,
-    *mut c_void,
-    u32,
-    u32,
-) -> u32;
-pub(super) type DestroyBlit = unsafe extern "C" fn(*mut rsf_fullscreen_pass);
+pub(super) type CreateBlit = unsafe extern "C" fn(*mut c_void) -> *mut Pass;
+pub(super) type DrawBlit =
+    unsafe extern "C" fn(*mut Pass, *mut c_void, *mut c_void, *mut c_void, u32, u32) -> u32;
+pub(super) type DestroyBlit = unsafe extern "C" fn(*mut Pass);
 
 pub(super) struct FullscreenBlit {
-    pass: NonNull<rsf_fullscreen_pass>,
+    pass: NonNull<Pass>,
     draw: DrawBlit,
     destroy: DestroyBlit,
 }
 
-unsafe extern "C" fn create_copy(device: *mut c_void) -> *mut rsf_fullscreen_pass {
+unsafe extern "C" fn create_copy(device: *mut c_void) -> *mut Pass {
     let setup = rsf_fullscreen_setup {
         struct_size: size_of::<rsf_fullscreen_setup>() as u32,
         abi_version: RSF_FULLSCREEN_PASS_ABI_VERSION,
@@ -43,7 +36,7 @@ unsafe extern "C" fn create_copy(device: *mut c_void) -> *mut rsf_fullscreen_pas
 }
 
 unsafe extern "C" fn draw_copy<const MODE: u32>(
-    pass: *mut rsf_fullscreen_pass,
+    pass: *mut Pass,
     context: *mut c_void,
     target: *mut c_void,
     source: *mut c_void,
@@ -60,7 +53,7 @@ unsafe extern "C" fn draw_copy<const MODE: u32>(
     u32::from(unsafe { rsf_fullscreen_pass_draw(pass.cast(), context, target, source, &draw) } == 0)
 }
 
-unsafe extern "C" fn destroy_copy(pass: *mut rsf_fullscreen_pass) {
+unsafe extern "C" fn destroy_copy(pass: *mut Pass) {
     unsafe { rsf_fullscreen_pass_destroy(pass.cast()) };
 }
 

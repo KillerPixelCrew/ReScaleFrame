@@ -104,7 +104,7 @@ fn native_leaves() {
 
 /// Binds the private Runtime headers that only this crate and its test crates read. The public
 /// headers come from rsf-game-sys, the FSR 4 ones from rsf-fsr4-compat, the Streamline records
-/// from rsf-streamline-vk and the D3D11 output and frame-tap platform headers from rsf-graphics.
+/// from rsf-streamline-vk and the frame-tap platform header from rsf-graphics.
 fn bindings() {
     const HEADERS: &[&str] = &[
         "runtime/orchestrator/src/d3d11_host_foreign.h",
@@ -148,8 +148,7 @@ fn bindings() {
             "runtime/backends/fsr/src",
             "runtime/vulkan/fsr4",
             "runtime/vulkan/streamline",
-            // rsf-graphics owns the D3D11 output and frame-tap platform headers.
-            "runtime/orchestrator/src/d3d11_output_platform.h",
+            // rsf-graphics owns the frame-tap platform header.
             "runtime/graphics/src/frame_tap_platform.h",
         ],
         &[],

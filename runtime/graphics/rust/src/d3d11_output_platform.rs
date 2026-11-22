@@ -1,12 +1,41 @@
 // SPDX-License-Identifier: MIT
 //! Typed D3D11 leaves shared by the Rust render paths. The functions the orchestrator's platform tables point at keep the C calling convention.
-use crate::sys::rsf_d3d11_texture_desc as Desc;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
+
+// The DXGI format, usage and bind codes the render paths compare against texture descriptions.
+pub const RSF_D3D11_FORMAT_RGBA32_FLOAT: u32 = 2;
+pub const RSF_D3D11_FORMAT_RGBA16_FLOAT: u32 = 10;
+pub const RSF_D3D11_FORMAT_RG32_FLOAT: u32 = 16;
+pub const RSF_D3D11_FORMAT_R11G11B10_FLOAT: u32 = 26;
+pub const RSF_D3D11_FORMAT_RG16_FLOAT: u32 = 34;
+pub const RSF_D3D11_FORMAT_R32_FLOAT: u32 = 41;
+pub const RSF_D3D11_USAGE_DEFAULT: u32 = 0;
+pub const RSF_D3D11_USAGE_IMMUTABLE: u32 = 1;
+pub const RSF_D3D11_BIND_SHADER_RESOURCE: u32 = 8;
+pub const RSF_D3D11_BIND_RENDER_TARGET: u32 = 32;
+
+/// The D3D11 texture description the Rust render paths share.
+#[derive(Clone, Copy, Default)]
+#[allow(non_camel_case_types)]
+pub struct rsf_d3d11_texture_desc {
+    pub width: u32,
+    pub height: u32,
+    pub mips: u32,
+    pub layers: u32,
+    pub format: u32,
+    pub samples: u32,
+    pub sample_quality: u32,
+    pub usage: u32,
+    pub bind_flags: u32,
+    pub cpu_access_flags: u32,
+    pub misc_flags: u32,
+}
+use rsf_d3d11_texture_desc as Desc;
 
 type Raw = *mut c_void;
 
