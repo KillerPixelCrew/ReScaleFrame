@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::entropy::{entropy, sampled};
-use super::memory::{read, readable_extent, rsf_dump_read_guarded};
-use super::memory_abi::rsf_mem_cache;
+use super::memory::{MemoryCache, read, read_guarded, readable_extent};
 use super::names::escape_unit;
-use super::sections::{Stream, Write, rsf_dump_now_ms};
+use super::sections::{Stream, rsf_dump_now_ms};
 use super::sections_abi::{
     rsf_dump_image_info, rsf_dump_image_stats, rsf_module_entry, rsf_section_digest,
 };
 use super::sha256;
-use std::ffi::{OsString, c_void};
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write as _};
@@ -101,7 +100,7 @@ impl LiveImage {
             return;
         };
         let mut buffer = [0u8; IMPORT_NAME_BYTES];
-        let mut cache = rsf_mem_cache::default();
+        let mut cache = MemoryCache::default();
         let length = readable_extent(&mut cache, address, length);
         if length != 0 {
             let (_, copied) = unsafe { read(address, buffer.as_mut_ptr(), length) };
@@ -265,13 +264,7 @@ pub(super) unsafe fn dump_image(
     }
     let padding = &mut header[section_end..];
     if !padding.is_empty() {
-        unsafe {
-            rsf_dump_read_guarded(
-                (header_source + section_end) as _,
-                padding.as_mut_ptr(),
-                padding.len(),
-            )
-        };
+        read_guarded(header_source + section_end, padding);
     }
     scrub_optional(
         &mut header[optional..section_start],
@@ -306,7 +299,7 @@ pub(super) unsafe fn dump_image(
         let source = image.address(rva, len)?;
         resize(&mut buffer, len)?;
         let buffer = &mut buffer[..len];
-        let readable = unsafe { rsf_dump_read_guarded(source as _, buffer.as_mut_ptr(), len) };
+        let readable = read_guarded(source, buffer);
         if !digests.is_null() {
             let started = rsf_dump_now_ms();
             let digest = rsf_section_digest {
@@ -335,10 +328,8 @@ pub(super) unsafe fn dump_image(
     Some(stats)
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dump_imports_impl(
-    stream: *mut c_void,
-    write: Write,
+pub(super) unsafe fn write_imports(
+    output: &mut Stream,
     base: *const u8,
     image_size: u32,
     directory: u32,
@@ -354,7 +345,6 @@ pub(super) unsafe extern "C" fn rsf_dump_imports_impl(
     } else {
         unsafe { slice::from_raw_parts(modules, module_count) }
     };
-    let mut output = Stream::new(stream, write);
     let mut count = 0u32;
     image.walk_imports(directory, |library, slot, thunk| {
         let Some(value) = image.bytes::<8>(slot).map(u64::from_le_bytes) else {
@@ -362,14 +352,14 @@ pub(super) unsafe extern "C" fn rsf_dump_imports_impl(
         };
         let comma = if count == 0 { "" } else { "," };
         let _ = write!(output, "{comma}\n    {{\"dll\": \"");
-        image.import_text(&mut output, library);
+        image.import_text(output, library);
         output.emit("\", ");
         if thunk & IMPORT_ORDINAL != 0 {
             let _ = write!(output, "\"ordinal\": {}", thunk & 0xffff);
         } else {
             output.emit("\"name\": \"");
             if let Some(name) = (thunk as u32).checked_add(2) {
-                image.import_text(&mut output, name);
+                image.import_text(output, name);
             }
             output.emit("\"");
         }
@@ -384,7 +374,7 @@ pub(super) unsafe extern "C" fn rsf_dump_imports_impl(
         }) {
             output.emit(", \"resolves_into\": \"");
             for &unit in owner.path.iter().take_while(|&&unit| unit != 0) {
-                escape_unit(&mut output, unit);
+                escape_unit(output, unit);
             }
             output.emit("\"");
         }

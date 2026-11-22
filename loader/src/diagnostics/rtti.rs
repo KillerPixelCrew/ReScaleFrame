@@ -2,8 +2,7 @@
 // MSVC x64 CompleteObjectLocator and class hierarchy recovery from a live PE image.
 use super::image::{Section, sidecar_section};
 use super::measure::record;
-use super::memory::{Region, read, readable_extent, rsf_dump_read_exact};
-use super::memory_abi::rsf_mem_cache;
+use super::memory::{MemoryCache, Region, read, read_exact, readable_extent};
 use super::names::escape_unit;
 use super::sections::{Stream, rsf_dump_now_ms};
 use super::sections_abi::rsf_dump_image_info;
@@ -155,7 +154,7 @@ enum Stop {
 struct Scan {
     base: usize,
     size: u32,
-    cache: rsf_mem_cache,
+    cache: MemoryCache,
     sections: Vec<Section>,
     excluded: [IMAGE_DATA_DIRECTORY; 3],
     names: Vec<CachedName>,
@@ -176,11 +175,7 @@ impl Scan {
 
     fn exact<const N: usize>(&mut self, rva: u32) -> Option<[u8; N]> {
         let address = self.address(rva, N)?;
-        let mut bytes = [0; N];
-        let ok = unsafe {
-            rsf_dump_read_exact(&mut self.cache, address as _, bytes.as_mut_ptr().cast(), N)
-        };
-        (ok != 0).then_some(bytes)
+        read_exact(&mut self.cache, address)
     }
 
     fn decorated(&mut self, rva: u32, output: &mut [u8; NAME_BYTES]) -> Option<usize> {
@@ -419,7 +414,7 @@ fn prepare(image: &rsf_dump_image_info, deadline: f64) -> Result<Scan, &'static 
     Ok(Scan {
         base,
         size: image.image_size,
-        cache: rsf_mem_cache::default(),
+        cache: MemoryCache::default(),
         sections,
         excluded,
         names,

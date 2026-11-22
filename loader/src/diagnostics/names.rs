@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-use std::ffi::{CStr, OsString, c_char, c_void};
+use super::sections::Stream;
+use std::ffi::{CStr, OsString};
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -12,8 +13,6 @@ use windows_sys::Win32::{
 const MAX_NAME_BYTES: usize = 1024;
 const LINE_BYTES: usize = MAX_NAME_BYTES + 63;
 const MAX_LINES: u32 = 2_000_000;
-type Write = unsafe extern "C" fn(*mut c_void, *const u8, usize);
-
 fn parse_rva(bytes: &[u8]) -> Option<u32> {
     let (digits, radix) = if let Some(digits) = bytes
         .strip_prefix(b"0x")
@@ -91,19 +90,8 @@ fn name_entry(line: &[u8]) -> Option<(u32, &[u8])> {
     Some((parse_rva(&line[..tab])?, name))
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dump_names_impl(
-    file: *mut c_void,
-    path: *const c_char,
-    write: Write,
-) {
-    let emit = |text: &str| unsafe { write(file, text.as_ptr(), text.len()) };
-    let path = if path.is_null() {
-        None
-    } else {
-        Some(unsafe { CStr::from_ptr(path) })
-    };
-    emit("  \"names\": {\"entries\": [");
+pub(super) fn write_names(out: &mut Stream, path: Option<&CStr>) {
+    out.emit("  \"names\": {\"entries\": [");
     let mut accepted = 0;
     let mut skipped = 0;
     let mut reason = None;
@@ -148,7 +136,7 @@ pub(super) unsafe extern "C" fn rsf_dump_names_impl(
                     let _ = write!(output, "\n    {{\"rva\": \"{rva:#x}\", \"name\": ");
                     json_string(&mut output, name);
                     output.push('}');
-                    emit(&output);
+                    out.emit(&output);
                     accepted += 1;
                 }
             }
@@ -171,5 +159,5 @@ pub(super) unsafe extern "C" fn rsf_dump_names_impl(
         json_string(&mut output, reason.as_bytes());
     }
     output.push_str("},\n");
-    emit(&output);
+    out.emit(&output);
 }

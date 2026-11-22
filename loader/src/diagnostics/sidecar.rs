@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
-use super::image::{Section, rsf_dump_imports_impl, sidecar_section};
-use super::names::{escape_unit, rsf_dump_names_impl};
+use super::image::{Section, sidecar_section, write_imports};
+use super::names::{escape_unit, write_names};
 use super::rtti::write_rtti;
-use super::sections::{
-    Stream, Write, rsf_dump_functions_impl, rsf_dump_now_ms, rsf_dump_threads_impl,
-};
+use super::sections::{Stream, rsf_dump_now_ms, write_functions, write_threads};
 use super::sections_abi::{rsf_dump_sidecar_info, rsf_dump_sidecar_stats};
-use std::ffi::{CStr, c_void};
+use std::ffi::CStr;
 use std::fmt::Write as _;
 use std::slice;
 
@@ -31,15 +29,11 @@ unsafe fn path(out: &mut Stream, source: *const u16) {
     wide(out, unsafe { slice::from_raw_parts(source, length) });
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dump_sidecar_impl(
-    context: *mut c_void,
-    write: Write,
+pub(super) unsafe fn write_sidecar(
+    out: &mut Stream,
     info: &rsf_dump_sidecar_info,
-    stats: *mut rsf_dump_sidecar_stats,
-) {
+) -> rsf_dump_sidecar_stats {
     let image = unsafe { &*info.image };
-    let mut out = Stream::new(context, write);
     out.emit("{\n  \"tool\": \"rescaleframe-module-dump\",\n");
     let _ = write!(
         out,
@@ -47,7 +41,7 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
         info.abi_version, info.schema_version
     );
     out.emit("  \"module\": {\"path\": \"");
-    unsafe { path(&mut out, info.module_path) };
+    unsafe { path(out, info.module_path) };
     let _ = write!(
         out,
         "\", \"load_base\": \"{:#x}\", \"preferred_base\": \"{:#x}\", \
@@ -55,7 +49,7 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
         image.base as usize, info.preferred_base, image.image_size, info.entry_rva
     );
     out.emit("  \"code_entropy\": ");
-    fixed(&mut out, info.code_entropy);
+    fixed(out, info.code_entropy);
     let _ = write!(out, ",\n  \"iat_references\": {},\n", info.iat_references);
 
     out.emit("  \"sections\": [");
@@ -74,7 +68,7 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
         let _ = write!(out, "{comma}\n    {{\"name\": \"");
         comma = ",";
         for byte in name.into_iter().take_while(|&byte| byte != 0) {
-            escape_unit(&mut out, byte.into());
+            escape_unit(out, byte.into());
         }
         let _ = write!(
             out,
@@ -88,7 +82,7 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
                     ", \"dumped_size\": {}, \"readable_bytes\": {}, \"entropy\": ",
                     digest.dumped_size, digest.readable_bytes
                 );
-                fixed(&mut out, digest.entropy);
+                fixed(out, digest.entropy);
                 let text = unsafe { CStr::from_ptr(digest.sha256.as_ptr()) }
                     .to_str()
                     .unwrap_or("");
@@ -103,7 +97,7 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
         for (index, module) in modules.iter().enumerate() {
             let comma = if index == 0 { "" } else { "," };
             let _ = write!(out, "{comma}\n    {{\"path\": \"");
-            wide(&mut out, &module.path);
+            wide(out, &module.path);
             let _ = write!(
                 out,
                 "\", \"base\": \"{:#x}\", \"size\": {}}}",
@@ -116,9 +110,8 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
         0
     } else {
         unsafe {
-            rsf_dump_imports_impl(
-                context,
-                write,
+            write_imports(
+                out,
                 image.base,
                 image.image_size,
                 image.import_directory,
@@ -129,18 +122,17 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
     };
     out.emit("\n  ],\n");
     let structured = rsf_dump_now_ms();
-    let threads_listed =
-        unsafe { rsf_dump_threads_impl(context, write, info.modules, info.module_count) };
-    let rtti_classes = write_rtti(&mut out, image, info.rtti_budget_ms);
-    let function_starts = rsf_dump_functions_impl(
-        context,
-        write,
+    let threads_listed = unsafe { write_threads(out, info.modules, info.module_count) };
+    let rtti_classes = write_rtti(out, image, info.rtti_budget_ms);
+    let function_starts = write_functions(
+        out,
         image.base,
         image.image_size,
         info.exception_rva,
         info.exception_bytes,
     );
-    unsafe { rsf_dump_names_impl(context, info.name_list, write) };
+    let name_list = (!info.name_list.is_null()).then(|| unsafe { CStr::from_ptr(info.name_list) });
+    write_names(out, name_list);
     let now = rsf_dump_now_ms();
     let _ = write!(
         out,
@@ -150,12 +142,10 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
         (now - info.started_ms + 0.5) as u32
     );
     out.emit("  \"limits\": \"Section raw offsets equal virtual addresses, so the dump maps one to one onto runtime addresses. It is not runnable: the entry point is unchanged and no import table was rebuilt. Import values are the addresses resolved in this process at dump time. Threads, RTTI and function starts describe the process at dump time.\"\n}\n");
-    unsafe {
-        stats.write(rsf_dump_sidecar_stats {
-            imports_described,
-            threads_listed,
-            rtti_classes,
-            function_starts,
-        })
-    };
+    rsf_dump_sidecar_stats {
+        imports_described,
+        threads_listed,
+        rtti_classes,
+        function_starts,
+    }
 }

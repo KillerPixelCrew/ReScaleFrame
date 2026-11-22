@@ -280,23 +280,3 @@ rsf_dump_result rsf_write_module_list(const char* path_utf8, const char* label)
     fclose(stream);
     return failed ? RSF_DUMP_ERROR_WRITE_FAILED : RSF_DUMP_OK;
 }
-
-rsf_dump_result rsf_dump_when_decrypted(const rsf_dump_options* options, uint32_t poll_interval_ms,
-                                        uint32_t timeout_ms, uint32_t stable_samples,
-                                        rsf_dump_report* report)
-{
-    if (!options || options->struct_size < RSF_DUMP_OPTIONS_V1_SIZE) {
-        return RSF_DUMP_ERROR_INVALID_ARGUMENT;
-    }
-    double entropy = 0.0;
-    const rsf_dump_result result = rsf_dump_poll_code(options->entropy_threshold, poll_interval_ms,
-                                                      timeout_ms, stable_samples, &entropy);
-    if (result == RSF_DUMP_OK) {
-        return rsf_dump_module(NULL, options, report);
-    }
-    if (result == RSF_DUMP_ERROR_STILL_ENCRYPTED && report &&
-        report->struct_size >= sizeof(rsf_dump_report)) {
-        report->code_entropy = entropy;
-    }
-    return result;
-}

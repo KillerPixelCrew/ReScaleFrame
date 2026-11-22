@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::memory_abi::rsf_mem_cache;
-use std::ffi::{c_int, c_void};
-use std::ptr;
+use std::ffi::c_void;
 use windows_sys::Win32::System::{
     Diagnostics::Debug::ReadProcessMemory,
     Memory::{
@@ -46,21 +44,27 @@ impl Region {
     }
 }
 
-pub(super) fn readable_extent(cache: &mut rsf_mem_cache, start: usize, size: usize) -> usize {
+#[derive(Default)]
+pub(super) struct MemoryCache {
+    low: usize,
+    high: usize,
+}
+
+pub(super) fn readable_extent(cache: &mut MemoryCache, start: usize, size: usize) -> usize {
     let mut offset = 0;
     while offset < size {
         let Some(address) = start.checked_add(offset) else {
             break;
         };
-        if !(cache.low as usize..cache.high as usize).contains(&address) {
+        if !(cache.low..cache.high).contains(&address) {
             let Some(region) = Region::containing(address).filter(|region| region.readable) else {
-                *cache = rsf_mem_cache::default();
+                *cache = MemoryCache::default();
                 break;
             };
-            cache.low = region.start as *const u8;
-            cache.high = region.end as *const u8;
+            cache.low = region.start;
+            cache.high = region.end;
         }
-        offset += (cache.high as usize - address).min(size - offset);
+        offset += (cache.high - address).min(size - offset);
     }
     offset
 }
@@ -79,63 +83,29 @@ pub(super) unsafe fn read(source: usize, destination: *mut u8, size: usize) -> (
     (result != 0, copied.min(size))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_dump_readable_extent(
-    cache: &mut rsf_mem_cache,
-    address: *const c_void,
-    wanted: usize,
-) -> usize {
-    readable_extent(cache, address as usize, wanted)
+pub(super) fn read_exact<const N: usize>(
+    cache: &mut MemoryCache,
+    address: usize,
+) -> Option<[u8; N]> {
+    if readable_extent(cache, address, N) != N {
+        return None;
+    }
+    let mut bytes = [0; N];
+    let (ok, copied) = unsafe { read(address, bytes.as_mut_ptr(), N) };
+    if !ok || copied != N {
+        *cache = MemoryCache::default();
+        return None;
+    }
+    Some(bytes)
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dump_read_exact(
-    cache: &mut rsf_mem_cache,
-    address: *const c_void,
-    destination: *mut c_void,
-    size: usize,
-) -> c_int {
-    if size == 0 {
-        return 1;
-    }
-    if readable_extent(cache, address as usize, size) != size {
-        return 0;
-    }
-    // A region can disappear after VirtualQuery. Commit an exact result only once copied.
-    let mut small = [0u8; 256];
-    let mut large = Vec::new();
-    let scratch = if size <= small.len() {
-        &mut small[..size]
-    } else {
-        if large.try_reserve_exact(size).is_err() {
-            return 0;
-        }
-        large.resize(size, 0);
-        &mut large
-    };
-    let (ok, copied) = unsafe { read(address as usize, scratch.as_mut_ptr(), size) };
-    if !ok || copied != size {
-        *cache = rsf_mem_cache::default();
-        return 0;
-    }
-    unsafe { ptr::copy_nonoverlapping(scratch.as_ptr(), destination.cast(), size) };
-    1
-}
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dump_read_guarded(
-    source: *const u8,
-    destination: *mut u8,
-    size: usize,
-) -> usize {
-    if size == 0 {
-        return 0;
-    }
-    unsafe { destination.write_bytes(0, size) };
+pub(super) fn read_guarded(source: usize, destination: &mut [u8]) -> usize {
+    destination.fill(0);
+    let size = destination.len();
     let mut copied = 0;
     let mut offset = 0;
     while offset < size {
-        let Some(address) = (source as usize).checked_add(offset) else {
+        let Some(address) = source.checked_add(offset) else {
             break;
         };
         let Some(region) = Region::containing(address) else {
@@ -143,13 +113,9 @@ pub(super) unsafe extern "C" fn rsf_dump_read_guarded(
         };
         let available = (region.end - address).min(size - offset);
         if region.readable {
-            let output = unsafe { destination.add(offset) };
-            let (_, read_bytes) = unsafe { read(address, output, available) };
-            unsafe {
-                output
-                    .add(read_bytes)
-                    .write_bytes(0, available - read_bytes)
-            };
+            let chunk = &mut destination[offset..offset + available];
+            let (_, read_bytes) = unsafe { read(address, chunk.as_mut_ptr(), available) };
+            chunk[read_bytes..].fill(0);
             copied += read_bytes;
         }
         offset += available;

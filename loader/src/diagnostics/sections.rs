@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-use super::memory::{read, readable_extent, rsf_dump_read_exact};
-use super::memory_abi::rsf_mem_cache;
+use super::memory::{MemoryCache, read, read_exact, readable_extent};
 use super::names::escape_unit;
 use super::sections_abi::rsf_module_entry;
-use std::ffi::c_void;
+use std::ffi::{OsStr, c_void};
 use std::fmt::{self, Write as _};
+use std::fs::File;
+use std::io::{self, BufWriter, Write as _};
 use std::mem::transmute;
 use std::ptr::null_mut;
 use std::slice;
@@ -26,20 +27,27 @@ use windows_sys::{
     core::w,
 };
 
-pub(super) type Write = unsafe extern "C" fn(*mut c_void, *const u8, usize);
-
 pub(super) struct Stream {
-    context: *mut c_void,
-    write: Write,
+    output: BufWriter<File>,
+    failed: bool,
 }
 
 impl Stream {
-    pub(super) fn new(context: *mut c_void, write: Write) -> Self {
-        Self { context, write }
+    pub(super) fn open(path: &OsStr) -> io::Result<Self> {
+        Ok(Self {
+            output: BufWriter::new(File::create(path)?),
+            failed: false,
+        })
     }
 
     pub(super) fn emit(&mut self, text: &str) {
-        unsafe { (self.write)(self.context, text.as_ptr(), text.len()) };
+        if !self.failed {
+            self.failed = self.output.write_all(text.as_bytes()).is_err();
+        }
+    }
+
+    pub(super) fn finish(mut self) -> bool {
+        !self.failed && self.output.flush().is_ok()
     }
 }
 
@@ -50,8 +58,7 @@ impl fmt::Write for Stream {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_dump_now_ms() -> f64 {
+pub(super) fn rsf_dump_now_ms() -> f64 {
     let (mut freq, mut counter) = (0, 0);
     if unsafe { QueryPerformanceFrequency(&mut freq) } != 0
         && freq != 0
@@ -225,10 +232,8 @@ impl ThreadView<'_> {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dump_threads_impl(
-    stream: *mut c_void,
-    write: Write,
+pub(super) unsafe fn write_threads(
+    out: &mut Stream,
     modules: *const rsf_module_entry,
     count: usize,
 ) -> u32 {
@@ -259,7 +264,6 @@ pub(super) unsafe extern "C" fn rsf_dump_threads_impl(
         dumping: unsafe { GetCurrentThreadId() },
     };
     let process = unsafe { GetCurrentProcessId() };
-    let mut out = Stream::new(stream, write);
     out.emit("  \"threads\": {\"list\": [");
     let mut listed = 0;
     let mut truncated = false;
@@ -277,7 +281,7 @@ pub(super) unsafe extern "C" fn rsf_dump_threads_impl(
                     truncated = true;
                     break;
                 }
-                view.emit(&mut out, &entry, if listed == 0 { "" } else { "," });
+                view.emit(out, &entry, if listed == 0 { "" } else { "," });
                 listed += 1;
             }
             has_entry = unsafe { Thread32Next(snapshot.0, &mut entry) } != 0;
@@ -338,7 +342,7 @@ impl Functions {
 
     fn read_entries(&mut self, base: usize, image_size: u32, location: usize, size: usize) {
         let wanted = size / ENTRY_BYTES;
-        let mut cache = rsf_mem_cache::default();
+        let mut cache = MemoryCache::default();
         let readable = readable_extent(&mut cache, location, wanted * ENTRY_BYTES) / ENTRY_BYTES;
         if self.entries.try_reserve_exact(readable).is_err() {
             self.reason = Some("allocation failed");
@@ -366,13 +370,7 @@ impl Functions {
         self.entries.dedup_by_key(|entry| entry.begin);
     }
 
-    fn read_entry(
-        &mut self,
-        base: usize,
-        image_size: u32,
-        cache: &mut rsf_mem_cache,
-        entry: &[u8],
-    ) {
+    fn read_entry(&mut self, base: usize, image_size: u32, cache: &mut MemoryCache, entry: &[u8]) {
         self.raw += 1;
         let begin = u32::from_le_bytes(entry[0..4].try_into().unwrap());
         let end = u32::from_le_bytes(entry[4..8].try_into().unwrap());
@@ -381,18 +379,10 @@ impl Functions {
             self.invalid += 1;
             return;
         }
-        let mut flags = 0u8;
         let chained = unwind & 1 == 0
             && unwind < image_size
-            && unsafe {
-                rsf_dump_read_exact(
-                    cache,
-                    (base + unwind as usize) as _,
-                    (&raw mut flags).cast(),
-                    1,
-                )
-            } != 0
-            && (flags >> 3) & UNW_FLAG_CHAININFO != 0;
+            && read_exact::<1>(cache, base + unwind as usize)
+                .is_some_and(|[flags]| (flags >> 3) & UNW_FLAG_CHAININFO != 0);
         self.entries.push(Entry {
             begin,
             end,
@@ -402,10 +392,8 @@ impl Functions {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_dump_functions_impl(
-    stream: *mut c_void,
-    write: Write,
+pub(super) fn write_functions(
+    out: &mut Stream,
     base: *const u8,
     image_size: u32,
     directory: u32,
@@ -415,7 +403,6 @@ pub(super) extern "C" fn rsf_dump_functions_impl(
     let table = Functions::read(base as usize, image_size, directory, size);
     let count = table.entries.len();
     let mut chained = 0;
-    let mut out = Stream::new(stream, write);
     out.emit("  \"functions\": {\"entries\": [");
     for (index, row) in table.entries.iter().enumerate() {
         let comma = if index == 0 { "" } else { "," };

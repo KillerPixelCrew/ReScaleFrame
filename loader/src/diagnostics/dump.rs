@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::dump_abi::*;
 use super::image::dump_image;
-use super::measure::{record, rsf_measure_module_code};
-use super::sections::{rsf_dump_collect_modules, rsf_dump_now_ms};
+use super::measure::{record, rsf_dump_poll_code, rsf_measure_module_code};
+use super::sections::{Stream, rsf_dump_collect_modules, rsf_dump_now_ms};
 use super::sections_abi::*;
-use std::ffi::{c_char, c_void};
+use super::sidecar::write_sidecar;
+use std::ffi::{OsString, c_char, c_void};
 use std::mem::offset_of;
+use std::os::windows::ffi::OsStringExt;
 use std::ptr::{self, null_mut};
 use windows_sys::Win32::{
     Globalization::{CP_UTF8, MultiByteToWideChar},
@@ -199,11 +201,10 @@ fn zeroed_vec<T>(length: usize, zero: impl Fn() -> T) -> Vec<T> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dump_module_impl(
+unsafe extern "C" fn rsf_dump_module(
     module: *const c_void,
     options: *const rsf_dump_options,
     out: *mut rsf_dump_report,
-    platform: &rsf_dump_module_platform,
 ) -> rsf_dump_result {
     let options = match unsafe { load_options(options) } {
         Ok(options) => options,
@@ -278,7 +279,6 @@ unsafe extern "C" fn rsf_dump_module_impl(
     report.modules_listed = module_count as u32;
     let sidecar = rsf_dump_sidecar_info {
         image: &info,
-        headers: (base + image.nt_offset as usize) as _,
         module_path: module_path.as_ptr(),
         modules: modules.as_ptr(),
         module_count,
@@ -297,19 +297,52 @@ unsafe extern "C" fn rsf_dump_module_impl(
         exception_bytes: exception.Size,
         rtti_budget_ms: options.rtti_budget_ms,
     };
-    let mut stats = rsf_dump_sidecar_stats {
-        imports_described: 0,
-        threads_listed: 0,
-        rtti_classes: 0,
-        function_starts: 0,
-    };
-    let status = platform.write_sidecar.map_or(WRITE_FAILED, |write| unsafe {
-        write(sidecar_path.as_ptr(), &sidecar, &mut stats)
-    });
-    report.imports_described = stats.imports_described;
-    report.threads_listed = stats.threads_listed;
-    report.rtti_classes = stats.rtti_classes;
-    report.function_starts = stats.function_starts;
+    let status =
+        if let Ok(mut stream) = Stream::open(&OsString::from_wide(unterminated(&sidecar_path))) {
+            let stats = unsafe { write_sidecar(&mut stream, &sidecar) };
+            report.imports_described = stats.imports_described;
+            report.threads_listed = stats.threads_listed;
+            report.rtti_classes = stats.rtti_classes;
+            report.function_starts = stats.function_starts;
+            if stream.finish() { OK } else { WRITE_FAILED }
+        } else {
+            WRITE_FAILED
+        };
     unsafe { copy_report(out, report, report_size) };
     status
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_dump_when_decrypted(
+    options: *const rsf_dump_options,
+    poll_interval_ms: u32,
+    timeout_ms: u32,
+    stable_samples: u32,
+    report: *mut rsf_dump_report,
+) -> rsf_dump_result {
+    if options.is_null()
+        || (unsafe { (&raw const (*options).struct_size).read() } as usize) < OPTIONS_V1
+    {
+        return INVALID_ARGUMENT;
+    }
+    let threshold = unsafe { (&raw const (*options).entropy_threshold).read() };
+    let mut entropy = 0.0;
+    let result = rsf_dump_poll_code(
+        threshold,
+        poll_interval_ms,
+        timeout_ms,
+        stable_samples,
+        &mut entropy,
+    );
+    if result == OK {
+        return unsafe { rsf_dump_module(ptr::null(), options, report) };
+    }
+    if result == STILL_ENCRYPTED
+        && !report.is_null()
+        && (unsafe { (&raw const (*report).struct_size).read() }) as usize
+            >= size_of::<rsf_dump_report>()
+    {
+        unsafe { (&raw mut (*report).code_entropy).write(entropy) };
+    }
+    result
 }

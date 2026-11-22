@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::entropy::{entropy, sampled};
-use super::memory::{read, rsf_dump_read_guarded};
+use super::memory::{read, read_guarded};
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of_val};
 use std::ptr::null;
@@ -94,17 +94,14 @@ pub(super) unsafe extern "C" fn rsf_measure_module_code(
     }
     buffer.resize(WINDOW.min(size), 0);
     let result = sampled(size, WINDOW, SAMPLES, |offset, length| {
-        unsafe {
-            rsf_dump_read_guarded((address + offset) as *const u8, buffer.as_mut_ptr(), length)
-        };
+        read_guarded(address + offset, &mut buffer[..length]);
         entropy(&buffer[..length])
     });
     unsafe { output.write(result) };
     OK
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_dump_poll_code(
+pub(super) fn rsf_dump_poll_code(
     threshold: f64,
     poll_ms: u32,
     timeout_ms: u32,

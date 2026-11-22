@@ -45,10 +45,8 @@ generate("sdk/game/src/d3d11_reduced_abi.rs", "runtime/orchestrator/include/resc
           "--raw-line", "use crate::rsf_game_render_pass;"])
 generate("loader/src/diagnostics/frame_capture_abi.rs", "loader/diagnostics/src/frame_capture_platform.h",
          "rsf_capture_(result|calls|connect)", "NOTHING", ["-Iloader/diagnostics/include"])
-generate("loader/src/diagnostics/memory_abi.rs", "loader/diagnostics/src/module_dump_memory.h",
-         "rsf_mem_cache", "NOTHING", [], ["--with-derive-default"])
 generate("loader/src/diagnostics/sections_abi.rs", "loader/diagnostics/src/module_dump_records.h",
-         "rsf_(module_entry|section_digest|dump_((image|sidecar)_(info|stats)|module_platform))",
+         "rsf_(module_entry|section_digest|dump_(image|sidecar)_(info|stats))",
          "RSF_(MAX_MODULES|DUMP_MODULE_PATH_UNITS)", [])
 generate("loader/src/diagnostics/dump_abi.rs", "loader/diagnostics/include/rescaleframe/module_dump.h",
          "rsf_dump_(options|report|result)", "RSF_MODULE_DUMP_(ABI|SCHEMA)_VERSION", [],

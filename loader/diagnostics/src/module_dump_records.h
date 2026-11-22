@@ -15,8 +15,6 @@ typedef struct rsf_module_entry {
     size_t size;
 } rsf_module_entry;
 
-typedef void (*rsf_dump_stream_write)(void* stream, const unsigned char* data, size_t size);
-
 typedef struct rsf_section_digest {
     int valid;
     uint64_t dumped_size;
@@ -46,7 +44,6 @@ typedef struct rsf_dump_image_stats {
 
 typedef struct rsf_dump_sidecar_info {
     const rsf_dump_image_info* image;
-    const void* headers;
     const wchar_t* module_path;
     const rsf_module_entry* modules;
     size_t module_count;
@@ -72,9 +69,5 @@ typedef struct rsf_dump_sidecar_stats {
     uint32_t rtti_classes;
     uint32_t function_starts;
 } rsf_dump_sidecar_stats;
-
-typedef struct rsf_dump_module_platform {
-    int32_t (*write_sidecar)(const wchar_t* path, const rsf_dump_sidecar_info*, rsf_dump_sidecar_stats*);
-} rsf_dump_module_platform;
 
 #endif

@@ -422,3 +422,8 @@ cache, class and base bounds, and output fields. It copies committed image regio
 bounded chunks and checks the time budget even when no plausible locator appears.
 DbgHelp still resolves complex names through the same System32 entry point. The live
 compiler-emitted RTTI specimen and its independent checks are unchanged.
+
+The dump and decrypted-poll entry points and the buffered sidecar stream now run in
+Rust. `module_dump_writer.c` and its private memory-read ABI were removed. The public
+header and size checks remain intact. The legacy module-list text writer and engine
+controls still use the native ABI file.

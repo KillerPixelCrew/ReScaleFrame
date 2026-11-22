@@ -7,7 +7,6 @@ mod frame_capture_abi;
 mod image;
 mod measure;
 mod memory;
-mod memory_abi;
 mod names;
 mod rtti;
 mod sections;
