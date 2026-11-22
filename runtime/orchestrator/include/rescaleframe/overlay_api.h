@@ -243,6 +243,12 @@ typedef rsf_result (*rsf_get_overlay_diagnostics_fn)(rsf_overlay_diagnostics* ou
 RSF_RUNTIME_API rsf_result rsf_get_overlay_api(rsf_overlay_api* api);
 typedef rsf_result (*rsf_get_overlay_api_fn)(rsf_overlay_api* api);
 
+/* Configure the shared panel and drive it from real D3D11/DXGI Present events for an
+   adapter without a presentation bridge. Call once from cold startup outside DllMain.
+   The observer leaves native Present in charge. Setup lifetime matches configure(). */
+typedef rsf_result (*rsf_start_d3d11_overlay_fn)(const rsf_overlay_service_setup* setup);
+RSF_RUNTIME_API rsf_result rsf_start_d3d11_overlay(const rsf_overlay_service_setup* setup);
+
 #ifdef __cplusplus
 }
 #endif
