@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Display-range colour transport on WARP, with the analytic curve and highlight recovery.
 use super::*;
+use crate::d3d11_output_platform::srv_format;
 use windows::core::Interface;
 
 unsafe extern "C" {
@@ -43,6 +44,58 @@ fn read_red(warp: &Device, source: &ID3D11Texture2D) -> TestResult<Vec<f32>> {
             .map(|pixel| pixel[0])
             .collect())
     }
+}
+
+fn check_view_formats() -> TestResult {
+    for (source, view) in [
+        (
+            DXGI_FORMAT_R32G8X24_TYPELESS,
+            DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS,
+        ),
+        (
+            DXGI_FORMAT_D32_FLOAT_S8X24_UINT,
+            DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS,
+        ),
+        (
+            DXGI_FORMAT_R24G8_TYPELESS,
+            DXGI_FORMAT_R24_UNORM_X8_TYPELESS,
+        ),
+        (
+            DXGI_FORMAT_D24_UNORM_S8_UINT,
+            DXGI_FORMAT_R24_UNORM_X8_TYPELESS,
+        ),
+        (DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_R32_FLOAT),
+        (DXGI_FORMAT_D32_FLOAT, DXGI_FORMAT_R32_FLOAT),
+        (DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R16_UNORM),
+        (DXGI_FORMAT_D16_UNORM, DXGI_FORMAT_R16_UNORM),
+        (
+            DXGI_FORMAT_R32G32B32A32_TYPELESS,
+            DXGI_FORMAT_R32G32B32A32_FLOAT,
+        ),
+        (
+            DXGI_FORMAT_R16G16B16A16_TYPELESS,
+            DXGI_FORMAT_R16G16B16A16_FLOAT,
+        ),
+        (DXGI_FORMAT_R32G32_TYPELESS, DXGI_FORMAT_R32G32_FLOAT),
+        (DXGI_FORMAT_R16G16_TYPELESS, DXGI_FORMAT_R16G16_FLOAT),
+        (
+            DXGI_FORMAT_R10G10B10A2_TYPELESS,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
+        ),
+        (DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM),
+        (DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_UNORM),
+        (
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+        ),
+        (DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R11G11B10_FLOAT),
+    ] {
+        check(
+            srv_format(source) == view,
+            &format!("unexpected SRV format for {source:?}"),
+        )?;
+    }
+    Ok(())
 }
 
 fn run(warp: &Device) -> TestResult {
@@ -91,6 +144,34 @@ fn run(warp: &Device) -> TestResult {
         let expected = (scaled / (scaled + 4.0)).powf(1.0 / 2.2);
         passed &= (display - expected).abs() < 1e-3 && (0.0..1.0).contains(&display);
     }
+
+    // The same pixels through a typeless resource must use the shared FP32 SRV mapping.
+    let typeless_desc = D3D11_TEXTURE2D_DESC {
+        Format: DXGI_FORMAT_R32G32B32A32_TYPELESS,
+        ..colour_desc
+    };
+    let typeless = warp.initialized(&typeless_desc, &source, count * 16)?;
+    let mut typeless_encoded = ptr::null_mut();
+    check(
+        unsafe {
+            rsf_colour_transport_encode(
+                pass.raw,
+                context,
+                typeless.as_raw(),
+                exposure.as_raw(),
+                count,
+                1,
+                &mut typeless_encoded,
+            )
+        } != 0,
+        "encode with typeless source",
+    )?;
+    let typeless_encoded = unsafe { ID3D11Texture2D::from_raw_borrowed(&typeless_encoded) }
+        .ok_or("missing encoded texture for typeless source")?;
+    check(
+        read_red(warp, typeless_encoded)? == display,
+        "typed and typeless source bytes encode identically",
+    )?;
 
     // Identity reconstruction, with an FP32 target for decoding.
     let staged: Vec<_> = display
@@ -153,5 +234,9 @@ fn run(warp: &Device) -> TestResult {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_colour_transport_fixture() -> i32 {
+    if let Err(error) = check_view_formats() {
+        eprintln!("colour_transport FAILED: {error}");
+        return 1;
+    }
     run_warp("colour_transport", run)
 }

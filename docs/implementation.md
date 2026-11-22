@@ -19,7 +19,8 @@ Native build, fixtures and game validation remain pending.
 
 G04 moves D3D11 colour, motion, depth and fullscreen passes and six fixture bodies to Rust.
 Source comparison covers the public C signatures, exact shader bytes and fixture wiring. The
-standalone exposure probe keeps its optional SDK calls in native leaves. Native and GPU
+standalone exposure probe uses Rust for Streamline, NGX hook lifecycle and raw dump sequencing.
+The optional NGX virtual parameter and RenderDoc calls remain native. Native and GPU
 verification remains user-owned. [G04 evidence](research/rust-graphics-passes.md)
 
 The D3D11 generation port moves FG dispatch and scene ownership into Rust,

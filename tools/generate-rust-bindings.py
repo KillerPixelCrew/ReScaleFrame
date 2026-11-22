@@ -659,8 +659,12 @@ generate("runtime/orchestrator/src/graphics_pass_abi.rs", "runtime/graphics/incl
           "-include", "rescaleframe/present_blit.h", "-include", "rescaleframe/depth_replay.h"],
          ["--with-derive-default"])
 generate("tools/exposure_probe/src/abi.rs", "runtime/backends/dlss/include/rescaleframe/dlss.h",
-         "rsf_dlss_frame", "RSF_DLSS_ABI_VERSION",
-         ["-Iruntime/backends/dlss/include"])
+         "rsf_(dlss_(frame|setup)|texture_dump_options)",
+         "RSF_(DLSS_(ABI_VERSION|ENGINE_UNREAL|QUALITY_PERFORMANCE)|TEXTURE_DUMP_ABI_VERSION)",
+         ["-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
+          "-include", "rescaleframe/texture_dump.h"],
+         ["--with-derive-default", "--allowlist-function",
+          "rsf_(dlss_(load|set_device|evaluate|shutdown)|dump_texture_bytes)"])
 generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr.h",
          "rsf_dlss_pipeline_frame", "NOTHING",
          ["-include", "rescaleframe/native_translucency.h", "-Iruntime/orchestrator/include",

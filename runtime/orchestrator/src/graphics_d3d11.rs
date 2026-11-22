@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{same_device, texture_desc};
-use crate::d3d11_output_abi::{
-    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_state,
-};
+use crate::d3d11_output_abi::{rsf_d3d11_output_is_immediate, rsf_d3d11_state};
+use crate::d3d11_output_platform::srv_format;
 use crate::render_abi::rsf_backend_log_fn as LogFn;
 use rsf_shader_compiler::{Compiler, Request, compile};
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -243,7 +242,7 @@ pub(super) unsafe fn describe_source(device: Handle, source: Handle, out: &mut S
         slices: desc.layers,
         samples: desc.samples,
         format: desc.format,
-        view_format: unsafe { rsf_d3d11_output_srv_format(desc.format) },
+        view_format: srv_format(DXGI_FORMAT(desc.format as i32)).0 as u32,
     };
     1
 }

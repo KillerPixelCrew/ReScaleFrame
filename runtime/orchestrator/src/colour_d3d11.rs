@@ -5,9 +5,9 @@ use crate::d3d11_output_abi::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT,
     RSF_D3D11_FORMAT_RGBA32_FLOAT, RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_clear_state,
     rsf_d3d11_output_copy_region, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_texture,
-    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
-    rsf_d3d11_texture_desc as TextureDesc,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_texture_desc as TextureDesc,
 };
+use crate::d3d11_output_platform::srv_format;
 use crate::graphics_d3d11::{
     GROUP_EDGE, Handle, SourceViews, bind_compute_parameters, compute_shader, constant_buffer,
     dispatch_compute, prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code,
@@ -22,6 +22,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_SAMPLER_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, ID3D11Buffer, ID3D11ComputeShader,
     ID3D11Device, ID3D11DeviceContext, ID3D11SamplerState, ID3D11Texture2D,
 };
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
 use windows::core::Interface;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
@@ -102,7 +103,7 @@ impl Program {
         texture: Handle,
         desc: &TextureDesc,
     ) -> Option<ComRef> {
-        let format = unsafe { rsf_d3d11_output_srv_format(desc.format) };
+        let format = srv_format(DXGI_FORMAT(desc.format as i32)).0 as u32;
         // A batch can touch several cache entries at the same clock tick.
         // Retain each selected view so a later lookup cannot evict it mid-batch.
         unsafe {
@@ -373,7 +374,7 @@ impl Transport {
             sample_quality: desc.sample_quality,
         };
         if self.scratch.as_ref().is_none_or(|(last, _)| *last != spec) {
-            let format = unsafe { rsf_d3d11_output_srv_format(spec.format) };
+            let format = srv_format(DXGI_FORMAT(spec.format as i32)).0 as u32;
             self.scratch = Some((spec, Target::new(&self.program, spec, format)?));
         }
         let (_, scratch) = self.scratch.as_ref()?;

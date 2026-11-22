@@ -59,12 +59,14 @@ layers. The depth fixture keeps the packed 256-value stencil, alias, append coun
 viewport, wrong-thread and rollback checks. The fullscreen and decode fixtures keep their
 hardware-first and WARP fallback behavior.
 
-`tools/exposure-probe.cpp` now contains the optional NGX and RenderDoc SDK leaves, the
-Streamline setup and the texture dump call. `tools/exposure_probe/src/lib.rs` owns the CLI
-inputs, adapter selection, frozen resources, 60 evaluations, colour transport, fidelity timing
-and output sequencing. The optional SDK leaves still use their real headers. Capture starts
-before the sixtieth evaluation, and Streamline shuts down while its tagged resources remain alive.
-The probe remains an explicit hardware experiment outside CTest.
+`tools/exposure_probe/src/lib.rs` owns the CLI inputs, adapter selection, frozen resources,
+Streamline setup and teardown, 60 evaluations, colour transport, fidelity timing and raw dump.
+`tools/exposure_probe/src/ngx.rs` owns the optional NGX hooks and forwards all original arguments.
+`tools/exposure_probe/ngx.cpp` builds only with the NGX headers and retains the SDK's C++ virtual
+parameter calls and their diagnostics. `tools/exposure-probe.c` provides the CRT entry point and
+the optional RenderDoc 1.6.0 C API. Capture starts before the sixtieth evaluation. Streamline
+shuts down while the original and encoded resources remain alive. The probe is an explicit
+hardware experiment outside CTest.
 
 ## Checks
 
@@ -75,3 +77,28 @@ The probe remains an explicit hardware experiment outside CTest.
   restored to the baseline.
 - Locked offline Cargo metadata, C entry-point inventory, shader literal comparison, fixture
   wiring checks and `git diff --check` passed.
+
+## Residual port on 3665aef0
+
+The integrated base already contains the G03 typed D3D11 state, resource lifetime and fixture
+owners, and the G05 sharpening owners. The G04 source-description and colour paths now call
+the G03 typed SRV format helper directly. The exported C function delegates to that same match.
+The colour transport fixture covers each alias and mapped format, typed passthrough, and
+identical WARP encode results from typed and typeless FP32 allocations. The six CTest targets
+retain their device selection, names, timeouts and skip codes. The eight public G04 headers
+remain in use as C contracts.
+
+The probe keeps its NVIDIA adapter selection and the original SDK feature gates. The NGX path
+keeps the optional pre-exposure, exposure-scale and LDR overrides, the creation and evaluation
+diagnostics, and the resource format report. The RenderDoc path keeps the wide library path
+and the NVIDIA extension option before device creation. The linked DLSS and raw dump signatures
+now come from their C headers through bindgen.
+
+Rust 1.94.1 package formatting passed. Bindgen 0.72.1 reproduced the scoped output byte for
+byte. Locked offline Cargo metadata resolved 111 packages using the existing user cache.
+The alternate pinned-toolchain cache lacked the `ash` index entry. MSVC syntax-only checks
+passed for the C11 launcher without SDKs, with RenderDoc, and with both SDK switches, and for
+the optional NGX C++ leaf. Source comparison against `3665aef0` verified all six HLSL files,
+eight C headers, all SRV format match arms and six CTest target declarations. Shader source,
+SDK diagnostics and fixture wiring were reviewed. Linking, test execution, Clippy, and device
+or game verification remain outside this check.

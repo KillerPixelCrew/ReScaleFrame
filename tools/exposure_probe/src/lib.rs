@@ -3,11 +3,17 @@
 #![cfg(all(windows, not(test)))]
 
 mod abi;
+mod ngx;
 
-use abi::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
-use std::ffi::{c_char, c_void};
+use abi::{
+    RSF_DLSS_ABI_VERSION, RSF_DLSS_ENGINE_UNREAL, RSF_DLSS_QUALITY_PERFORMANCE,
+    RSF_TEXTURE_DUMP_ABI_VERSION, rsf_dlss_evaluate, rsf_dlss_frame as Frame, rsf_dlss_load,
+    rsf_dlss_set_device, rsf_dlss_setup, rsf_dlss_shutdown, rsf_dump_texture_bytes,
+    rsf_texture_dump_options,
+};
+use std::ffi::{CStr, c_char, c_void};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::ptr::{self, null_mut};
 use std::slice;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
@@ -22,7 +28,6 @@ type ProbeResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 const OUTPUT: [u32; 2] = [1600, 900];
 const NVIDIA: u32 = 0x10de;
-const PERFORMANCE: u32 = 3;
 
 unsafe extern "C" {
     fn strtoul(text: *const c_char, end: *mut *mut c_char, base: i32) -> u32;
@@ -31,16 +36,6 @@ unsafe extern "C" {
     fn rsf_probe_capture_open(prefix: *const c_char) -> i32;
     fn rsf_probe_capture_start(device: Handle);
     fn rsf_probe_capture_end(device: Handle) -> i32;
-    fn rsf_probe_load(interposer: *const c_char, device: Handle) -> i32;
-    fn rsf_probe_shutdown();
-    fn rsf_probe_dump(
-        device: Handle,
-        context: Handle,
-        texture: Handle,
-        prefix: *const c_char,
-    ) -> i32;
-    fn rsf_dlss_evaluate(context: Handle, frame: *const Frame) -> i32;
-
     fn rsf_colour_transport_create(device: Handle, pass: *mut Handle) -> i32;
     fn rsf_colour_transport_encode(
         pass: Handle,
@@ -77,11 +72,53 @@ unsafe extern "C" {
     fn rsf_colour_fidelity_destroy(pass: Handle);
 }
 
-struct Session;
+unsafe extern "C" fn log_line(_: Handle, message: *const c_char) {
+    if !message.is_null() {
+        let mut stderr = std::io::stderr().lock();
+        let _ = stderr.write_all(unsafe { CStr::from_ptr(message) }.to_bytes());
+        let _ = stderr.write_all(b"\n");
+    }
+}
+
+struct Session(Option<ngx::Trace>);
+
+impl Session {
+    fn load(interposer: *const c_char, device: &ID3D11Device) -> ProbeResult<Self> {
+        let setup = rsf_dlss_setup {
+            struct_size: size_of::<rsf_dlss_setup>() as u32,
+            abi_version: RSF_DLSS_ABI_VERSION,
+            interposer_path_utf8: interposer,
+            engine: RSF_DLSS_ENGINE_UNREAL,
+            engine_version_utf8: c"4.18".as_ptr(),
+            project_id_utf8: c"a3ed1f08-3542-4698-b85c-e1a9908e861a".as_ptr(),
+            log: Some(log_line),
+            ..Default::default()
+        };
+        if unsafe { rsf_dlss_load(&setup) } != 0 {
+            return Err("could not initialize Streamline or set the device".into());
+        }
+        if unsafe { rsf_dlss_set_device(device.as_raw()) } != 0 {
+            unsafe { rsf_dlss_shutdown() };
+            return Err("could not initialize Streamline or set the device".into());
+        }
+        Ok(Self(ngx::Trace::install()))
+    }
+}
 
 impl Drop for Session {
     fn drop(&mut self) {
-        unsafe { rsf_probe_shutdown() };
+        drop(self.0.take());
+        unsafe { rsf_dlss_shutdown() };
+    }
+}
+
+struct Transport(Handle);
+
+impl Drop for Transport {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { rsf_colour_transport_destroy(self.0) };
+        }
     }
 }
 
@@ -124,7 +161,7 @@ impl Inputs {
         File::open(input)?.read_exact(&mut pixels)?;
         Ok(Self {
             render,
-            quality: number(5, PERFORMANCE),
+            quality: number(5, RSF_DLSS_QUALITY_PERFORMANCE),
             input_format,
             output_format,
             pixel_bytes,
@@ -418,24 +455,21 @@ fn run(args: &[*const c_char]) -> ProbeResult<bool> {
     let (device, context) = native_device()?;
     let dev = device.as_raw();
     let ctx = context.as_raw();
-    if unsafe { rsf_probe_load(args[1], dev) } == 0 {
-        return Err("could not initialize Streamline or set the device".into());
-    }
-    let session = Session;
+    let session = Session::load(args[1], &device)?;
     let surfaces = Surfaces::create(&device, &inputs)?;
+    let mut transport = Transport(null_mut());
     // Shut down Streamline before retiring the resources it was given.
     let _session = session;
     let mut frame = surfaces.frame(&inputs);
     let [width, height] = inputs.render;
 
     let mut ok = true;
-    let mut transport = null_mut();
     if enabled("RSF_PROBE_TRANSPORT") {
         let mut encoded = null_mut();
         ok = unsafe {
-            rsf_colour_transport_create(dev, &mut transport) != 0
+            rsf_colour_transport_create(dev, &mut transport.0) != 0
                 && rsf_colour_transport_encode(
-                    transport,
+                    transport.0,
                     ctx,
                     surfaces.color.as_raw(),
                     surfaces.exposure(),
@@ -465,10 +499,10 @@ fn run(args: &[*const c_char]) -> ProbeResult<bool> {
         }
     }
     ok &= unsafe { rsf_probe_capture_end(dev) } != 0;
-    if !transport.is_null() {
+    if !transport.0.is_null() {
         ok &= unsafe {
             rsf_colour_transport_decode(
-                transport,
+                transport.0,
                 ctx,
                 surfaces.output.as_raw(),
                 surfaces.exposure(),
@@ -480,12 +514,17 @@ fn run(args: &[*const c_char]) -> ProbeResult<bool> {
                 [0.0; 2].as_ptr(),
             )
         } != 0;
-        unsafe { rsf_colour_transport_destroy(transport) };
     }
     if enabled("RSF_PROBE_COLOUR_FIDELITY") {
         ok &= apply_fidelity(&device, &context, &surfaces);
     }
-    ok &= unsafe { rsf_probe_dump(dev, ctx, surfaces.output.as_raw(), prefix) } == 0;
+    let dump = rsf_texture_dump_options {
+        struct_size: size_of::<rsf_texture_dump_options>() as u32,
+        abi_version: RSF_TEXTURE_DUMP_ABI_VERSION,
+        output_prefix_utf8: prefix,
+        ..Default::default()
+    };
+    ok &= unsafe { rsf_dump_texture_bytes(dev, ctx, surfaces.output.as_raw(), &dump) } == 0;
     Ok(ok)
 }
 

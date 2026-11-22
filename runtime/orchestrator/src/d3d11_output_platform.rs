@@ -110,7 +110,11 @@ pub(super) unsafe extern "C" fn rsf_d3d11_output_create_rtv(device: Raw, texture
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_d3d11_output_srv_format(format: u32) -> u32 {
-    let readable = match DXGI_FORMAT(format as i32) {
+    srv_format(DXGI_FORMAT(format as i32)).0 as u32
+}
+
+pub(crate) fn srv_format(format: DXGI_FORMAT) -> DXGI_FORMAT {
+    match format {
         DXGI_FORMAT_R32G8X24_TYPELESS | DXGI_FORMAT_D32_FLOAT_S8X24_UINT => {
             DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS
         }
@@ -127,8 +131,7 @@ extern "C" fn rsf_d3d11_output_srv_format(format: u32) -> u32 {
         DXGI_FORMAT_R8G8B8A8_TYPELESS => DXGI_FORMAT_R8G8B8A8_UNORM,
         DXGI_FORMAT_B8G8R8A8_TYPELESS => DXGI_FORMAT_B8G8R8A8_UNORM,
         typed => typed,
-    };
-    readable.0 as u32
+    }
 }
 
 #[unsafe(no_mangle)]
