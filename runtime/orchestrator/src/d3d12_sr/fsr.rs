@@ -128,9 +128,6 @@ impl Owner {
         {
             return Err(NOT_SUPPORTED);
         }
-        if let Some(log) = desc.log {
-            unsafe { log(desc.log_user, version.name.as_ptr()) };
-        }
         Ok((Backend::Fsr(owner), version))
     }
 

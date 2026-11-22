@@ -114,12 +114,12 @@ fn discard_history(owner: u32, result: i32) -> i32 {
 }
 
 unsafe fn prepare_regions(
-    services: &Services,
+    prepare: unsafe extern "C" fn(Texture, *const Pass, *mut Texture) -> i32,
     context: Texture,
     pass: &Pass,
 ) -> Result<[Texture; 3], i32> {
     let mut textures = [std::ptr::null_mut(); 3];
-    match unsafe { (services.prepare_regions)(context, pass, textures.as_mut_ptr()) } {
+    match unsafe { prepare(context, pass, textures.as_mut_ptr()) } {
         1 if textures.iter().all(|texture| !texture.is_null()) => Ok(textures),
         LEAF_FAULT => Err(LEAF_FAULT),
         _ => Err(RESOURCE_FAILED),
@@ -188,7 +188,7 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass, services: &Services)
     let textures = if unsafe { input_is_local(pass, depth_layout) } {
         [pass.color_input, pass.depth, pass.motion]
     } else {
-        match unsafe { prepare_regions(services, context, pass) } {
+        match unsafe { prepare_regions(services.prepare_regions, context, pass) } {
             Ok(textures) => textures,
             Err(code) => return code,
         }
@@ -323,14 +323,15 @@ unsafe fn capture_on_stream(
                 })
             };
             stage(c"normalize-regions-decode");
-            let [color, depth, vectors] = match unsafe { prepare_regions(sr, context, pass) } {
-                Ok(textures) => textures,
-                Err(LEAF_FAULT) => {
-                    reset_history(FG);
-                    return None;
-                }
-                Err(_) => return None,
-            };
+            let [color, depth, vectors] =
+                match unsafe { prepare_regions(sr.prepare_regions, context, pass) } {
+                    Ok(textures) => textures,
+                    Err(LEAF_FAULT) => {
+                        reset_history(FG);
+                        return None;
+                    }
+                    Err(_) => return None,
+                };
             if unsafe { (fg.decode)(inputs.decode.get(), context, vectors, motion) } == 0 {
                 return None;
             }
@@ -500,6 +501,37 @@ extern "C" fn rsf_native_sr_release_resources() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_fg_preparation_resets_only_fg_history() {
+        unsafe extern "C" fn fault(_: Texture, _: *const Pass, _: *mut Texture) -> i32 {
+            LEAF_FAULT
+        }
+        unsafe extern "C" fn incomplete(_: Texture, _: *const Pass, _: *mut Texture) -> i32 {
+            1
+        }
+        let mut pass: Pass = unsafe { std::mem::zeroed() };
+        pass.session_id = 1;
+        pass.native_frame = 1;
+        commit_history(SR, &pass);
+        commit_history(FG, &pass);
+        pass.native_frame = 2;
+        assert_eq!(camera_for(SR, &pass).reset, 0);
+        assert_eq!(camera_for(FG, &pass).reset, 0);
+
+        assert_eq!(
+            unsafe { prepare_regions(incomplete, std::ptr::null_mut(), &pass) },
+            Err(RESOURCE_FAILED)
+        );
+        assert_eq!(
+            unsafe { prepare_regions(fault, std::ptr::null_mut(), &pass) },
+            Err(LEAF_FAULT)
+        );
+        assert_eq!(discard_history(FG, NOT_READY), NOT_READY);
+        assert_eq!(camera_for(SR, &pass).reset, 0);
+        assert_eq!(camera_for(FG, &pass).reset, 1);
+        reset_history(SR);
+    }
 
     #[test]
     fn invalid_extents_refuse_before_subtraction() {
