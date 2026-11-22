@@ -67,7 +67,8 @@
 // D3DFORMAT passed at creation: 21 A8R8G8B8, 113 A16B16G16R16F, 75 D24S8, 0 = not checked
 // CTexture* t_LUM_src / t_LUM_dest, re-pointed with surface_set at the start of every phase_combine.
 // SR Stage 2 world targets: every CRenderTarget target the world window (phase_scene_prepare .. S-B seam) renders
-// into, in the RSF_ANOMALY_SWAP_SLOT_* order (sr_swap.h). Each entry repeats its target_slots offset and format (a
+// into, in the swap owner's world-slot order: generic0, generic_temp (the two Stage 1 slots), position, albedo,
+// accumulator, generic1, generic2, half_depth, ssao_temp. Each entry repeats its target_slots offset and format (a
 // compile-time check in sr_profile.rs, and the verifier). d3d_format 0 accepts R16F (111) or R32F (114): rt_half_depth is R32F on NVIDIA and
 // R16F elsewhere (r4_rendertarget.cpp:717), rt_ssao_temp is R16F with a UAV (749). Optional targets exist only with
 // their option (generic2: o.advancedpp; half_depth: o.ssao_opt_data; ssao_temp: o.ssao_hdao && o.ssao_ultra).
@@ -526,7 +527,7 @@ const fn same(a: &CStr, b: &CStr) -> bool {
     true
 }
 
-// Every world target is the verified CRenderTarget slot with the same offset and format, in sr_swap.h slot order.
+// Every world target is the verified CRenderTarget slot with the same offset and format, in the swap owner's world-slot order.
 const fn world_targets_match_slots() -> bool {
     let mut w = 0;
     while w < WORLD_TARGETS.len() {
@@ -644,7 +645,6 @@ const fn engine_layout() -> SwapLayout {
 static ENGINE_LAYOUT: SwapLayout = engine_layout();
 
 /// The verified engine layout shared by both executable profiles, in the swap owner's form.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_sr_engine_layout() -> &'static SwapLayout {
+pub(crate) fn rsf_anomaly_sr_engine_layout() -> &'static SwapLayout {
     &ENGINE_LAYOUT
 }

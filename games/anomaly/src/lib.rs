@@ -85,7 +85,7 @@ mod sr_stage;
 mod sr_swap;
 mod sr_temporal;
 mod sr_tonemap;
-#[cfg(all(windows, feature = "sr-fixtures"))]
+#[cfg(any(test, all(windows, feature = "sr-fixtures")))]
 mod temporal_fixture;
 mod wide;
 

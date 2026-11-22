@@ -913,5 +913,27 @@ fn stage3_position_reconstruction() {
     assert!(crate::sr_swap::shutdown(c.swap) && c.stock());
 }
 
-#[cfg(all(windows, feature = "sr-fixtures"))]
-mod entry;
+/// The jittered main and first-person cameras against the independent native camera oracle (temporal_fixture.rs).
+#[cfg_attr(test, test)]
+fn stage3_matches_the_independent_camera_oracle() {
+    for i in [0, 1, 2, 5, 17] {
+        let c = Case::new(true);
+        let sample = crate::sr_stage::math::jitter_sample(i, 18);
+        let (x, y) = (sample.x, sample.y);
+        let expected = |projection: &Matrix| {
+            crate::temporal_fixture::swap_camera(projection, &c.original.view, x, y, [1286, 724])
+                .unwrap()
+        };
+        assert!(c.prepare(&c.facts3(x, y)));
+        assert_eq!(
+            (c.engine().project, c.engine().full),
+            expected(&c.original.project)
+        );
+        let main = (c.engine().project, c.engine().full);
+        let hud = first_person(&c);
+        crate::sr_swap::rm_near(c.swap);
+        assert_eq!((c.engine().project, c.engine().full), expected(&hud));
+        (c.engine().project, c.engine().full) = main;
+        assert!(c.seam() && c.stock());
+    }
+}

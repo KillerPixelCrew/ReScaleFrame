@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The swap owner on fake CRenderTarget, CRT, CTexture, RCache and Device memory laid out with the sr_profile.rs
-//! offsets. The CTest entry also compares the profile and independent native camera oracle.
+//! offsets, run by cargo test.
 
 use super::*;
 use std::ptr;
@@ -1118,4 +1118,48 @@ fn layout_and_platform_are_checked_at_creation() {
     assert!(crate::sr_swap::shutdown(swap));
     unsafe { crate::sr_swap::destroy(swap) };
     assert!(!crate::sr_swap::prepare(null_mut(), Some(&c.facts())));
+}
+
+/// The production engine layout (sr_profile.rs) matches this fixture's independent copy.
+#[cfg_attr(test, test)]
+fn engine_layout_matches_the_fixture() {
+    let native = crate::sr_profile::rsf_anomaly_sr_engine_layout();
+    let fixture = layout();
+    macro_rules! equal {
+        ($($field:ident),+ $(,)?) => {
+            $(assert_eq!(native.$field, fixture.$field, stringify!($field));)+
+        };
+    }
+    equal!(
+        crt_surface,
+        crt_rtv,
+        crt_dsv,
+        crt_uav,
+        crt_texture,
+        crt_width,
+        crt_height,
+        crt_format,
+        texture_surface,
+        texture_desc_cache,
+        texture_desc,
+        texture_srv,
+        target_width,
+        target_height,
+        backend_texture_list,
+        backend_ctable,
+        ssao_viewport_width,
+        format_a16b16g16r16f,
+        format_r16f,
+        format_r32f,
+        absent,
+    );
+    for (a, b) in native.backend_textures.iter().zip(fixture.backend_textures) {
+        assert_eq!((a.offset, a.count), (b.offset, b.count));
+    }
+    for (a, b) in native.world.iter().zip(fixture.world) {
+        assert_eq!(
+            (a.offset, a.d3d_format, a.optional, a.half_allowed),
+            (b.offset, b.d3d_format, b.optional, b.half_allowed)
+        );
+    }
 }

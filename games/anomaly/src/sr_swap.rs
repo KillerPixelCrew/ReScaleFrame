@@ -1401,7 +1401,7 @@ pub(crate) fn create(layout: &Layout, platform: Platform) -> *mut Handle {
 }
 
 /// Shutdown must succeed before normal unload. Destroy alone does not retire retained twins.
-#[cfg(any(test, all(windows, feature = "sr-fixtures")))]
+#[cfg(test)]
 pub(crate) unsafe fn destroy(swap: *mut Handle) {
     if !swap.is_null() {
         drop(unsafe { Box::from_raw(swap) });
@@ -1469,5 +1469,5 @@ pub(crate) fn shutdown(swap: *mut Handle) -> bool {
     with(swap, true, Swap::shutdown)
 }
 
-#[cfg(any(test, all(windows, feature = "sr-fixtures")))]
+#[cfg(test)]
 mod tests;

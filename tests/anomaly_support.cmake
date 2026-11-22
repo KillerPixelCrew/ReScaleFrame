@@ -51,15 +51,11 @@ target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_anomaly_fixtures_r
 add_test(NAME anomaly_sr_profile_contract COMMAND rsf_anomaly_sr_profile_test)
 set_tests_properties(anomaly_sr_profile_contract PROPERTIES TIMEOUT 30)
 
-# SR Stage 1 (scale-1.0 twin swap). The swap test drives the Rust swap owner on fake CRT/CTexture/RCache memory
-# laid out with the sr_profile.rs offsets; the hooks test checks the shared rmNear slot and every install refusal on a
+# SR Stage 1 (scale-1.0 twin swap). The swap owner's cases on fake CRT/CTexture/RCache memory laid out with the
+# sr_profile.rs offsets are cargo tests (games/anomaly/src/sr_swap/tests); the hooks test checks the shared rmNear slot and every install refusal on a
 # synthetic image; the round-trip fixture runs the production pass and shader on a real D3D11 device (hardware
 # with the debug layer when present, else WARP; 77 when neither exists). None of them runs game code.
 set(RSF_ANOMALY_SR_SRC "${PROJECT_SOURCE_DIR}/games/anomaly/src")
-add_executable(rsf_anomaly_sr_swap_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_swap.c")
-target_include_directories(rsf_anomaly_sr_swap_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_swap_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
-add_test(NAME anomaly_sr_swap_contract COMMAND rsf_anomaly_sr_swap_test)
 add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hook_bridge.c"
     "${RSF_ANOMALY_SR_SRC}/sr_stage_platform.c" "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c" "${RSF_ANOMALY_SR_SRC}/engine_slots.c"
     "${RSF_ANOMALY_SR_SRC}/native_observer_platform.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
@@ -75,7 +71,7 @@ target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_fixtures
     ReScaleFrame::Graphics d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
-set_tests_properties(anomaly_sr_swap_contract anomaly_sr_hooks_contract
+set_tests_properties(anomaly_sr_hooks_contract
     anomaly_sr_roundtrip_device PROPERTIES TIMEOUT 120)
 
 # Motion MRT. The contract test checks the b13 layouts against the shader READMEs/headers, the history policy, the
@@ -134,7 +130,7 @@ target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/motion_s
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE bcrypt dxguid d3dcompiler)
 # SR Stage 3 (jitter and mip bias). The jitter test checks the Halton sequence, the row-vector NDC offset, the
 # first-person rule, the mip bias delta and the published motion/SR state on the CPU; the Stage 3 swap cases (projection
-# and bias restore on every exit path) live in anomaly_sr_swap_contract. The device fixture runs the unchanged core
+# and bias restore on every exit path) are cargo tests in games/anomaly/src/sr_swap/tests. The device fixture runs the unchanged core
 # motion PS writer with production b13 bytes and jitter (77 when no D3D11 device exists). None of them runs game code.
 add_executable(rsf_anomaly_sr_jitter_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter.c")
 set_target_properties(rsf_anomaly_sr_jitter_test PROPERTIES LINKER_LANGUAGE CXX)
@@ -224,15 +220,6 @@ target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${PROJECT_SOURCE_D
 add_test(NAME anomaly_geometry_hooks_avx_contract COMMAND rsf_anomaly_geometry_hooks_test avx)
 add_test(NAME anomaly_sr_hooks_avx_contract COMMAND rsf_anomaly_sr_hooks_test avx)
 set_tests_properties(anomaly_geometry_hooks_avx_contract anomaly_sr_hooks_avx_contract PROPERTIES TIMEOUT 120)
-
-# Shadow-frustum jitter suspension and restoration, including fault rollback and no-jitter paths.
-add_test(NAME anomaly_sr_sun_cascades_contract COMMAND rsf_anomaly_sr_swap_test stage3_sun_cascades)
-set_tests_properties(anomaly_sr_sun_cascades_contract PROPERTIES TIMEOUT 30)
-
-
-# Jittered deferred reconstruction: float-precision round trips and all six native constant-buffer stages.
-add_test(NAME anomaly_sr_reconstruction_window_contract COMMAND rsf_anomaly_sr_swap_test stage3_position_reconstruction)
-set_tests_properties(anomaly_sr_reconstruction_window_contract PROPERTIES TIMEOUT 30)
 
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_fixtures_rust)
 

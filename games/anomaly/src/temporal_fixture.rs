@@ -92,6 +92,8 @@ fn token(t: Token) -> (u64, u64, u64, u8) {
     (t.source_frame, t.serial, t.owner, t.view)
 }
 
+/// The jittered camera by the independent oracle, for the swap owner's cargo test.
+#[cfg(test)]
 pub(crate) fn swap_camera(
     projection: &[f32; 16],
     view: &[f32; 16],
