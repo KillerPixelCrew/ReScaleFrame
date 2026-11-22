@@ -64,6 +64,11 @@ and the engine retains its exact submission and Present receipts. Source ABI
 comparison and pinned formatting passed. Build, fixture and device checks remain
 open. [Godot Vulkan E03 evidence](research/rust-godot-vulkan-e03.md)
 
+Godot Vulkan creation now calls the loader from Rust using generated layouts for the
+pinned engine Vulkan headers. The typed creation fixture moved to Cargo, and Godot's
+Windows window-class admission uses the shared GameSDK ASCII widening helper.
+[Godot Vulkan follow-up evidence](research/rust-godot-vulkan-e03.md#native-inventory)
+
 The Unity package now routes render callbacks, admits preview and
 generation windows, and handles device events in Rust. The managed
 exports matched in source, and pinned binding regeneration matched the

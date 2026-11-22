@@ -1146,23 +1146,6 @@ impl Platform {
     }
 }
 
-/// The creation table from `vulkan_creation.cpp`, when its header matches.
-///
-/// # Safety
-/// `table` is null or a process-lived `rsf_godot_vk_creation_leaves`.
-pub(crate) unsafe fn creation_leaves(
-    table: *const VkCreationLeaves,
-) -> Option<&'static VkCreationLeaves> {
-    // Read the header size before borrowing the complete table.
-    if table.is_null()
-        || (unsafe { table.cast::<u32>().read() } as usize) < size_of::<VkCreationLeaves>()
-    {
-        return None;
-    }
-    let table = unsafe { &*table };
-    (table.version == VK_CREATION_VERSION).then_some(table)
-}
-
 /// The effect table from `effect.cpp`, when its header matches.
 ///
 /// # Safety

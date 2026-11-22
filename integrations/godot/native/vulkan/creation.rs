@@ -128,6 +128,7 @@ impl Creation {
         receipts.get(&device).copied().unwrap_or_default()
     }
 
+    #[cfg(test)]
     pub(crate) fn xess_ready(&self) -> bool {
         self.render_receipt().xess
     }
@@ -353,3 +354,6 @@ impl Creation {
 
 #[cfg(test)]
 mod tests;
+
+mod abi;
+pub(crate) mod typed;

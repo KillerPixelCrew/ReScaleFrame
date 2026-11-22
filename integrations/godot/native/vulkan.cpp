@@ -2,6 +2,7 @@
 #include "vulkan_control.h"
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/native_latency_vulkan.h>
+#include <rescaleframe/native_latency_vulkan_requirements.h>
 #include <rescaleframe/native_streamline_vulkan.h>
 #include <rescaleframe/native_xess_vulkan_requirements.h>
 #include <rescaleframe/input_dump.h>
@@ -232,7 +233,17 @@ int32_t leaf_start(const rsf_godot_setup* setup) try {
         static HMODULE vulkan = LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (vulkan) base = reinterpret_cast<rsf_godot_vk_proc>(GetProcAddress(vulkan, "vkGetInstanceProcAddr"));
     }
-    resolver = rsf_godot_vk_creation_resolver(base, xess_result == RSF_BACKEND_OK ? 1u : 0u, setup->log, setup->log_user);
+#if defined(RSF_VULKAN_SR_ENABLED)
+    static const rsf_godot_vk_requirements requirements{sizeof(requirements), 1,
+        rsf_xessvk_instance_requirements, rsf_xessvk_device_requirements, rsf_latencyvk_require_device,
+        rsf_latencyvk_device_created, rsf_latencyvk_device_destroyed};
+    static_assert(sizeof(requirements) == 48 && offsetof(rsf_godot_vk_requirements, latency_require) == 24);
+    resolver = rsf_godot_vk_creation_resolver(base, xess_result == RSF_BACKEND_OK ? 1u : 0u,
+        setup->log, setup->log_user, &requirements);
+#else
+    (void)xess_result;
+    resolver = base;
+#endif
     streamline_ready = latency_result == RSF_BACKEND_OK;
     if (setup->log) setup->log(setup->log_user, latency_result == RSF_BACKEND_OK ?
         "Godot Vulkan host ready with Streamline Vulkan dispatch and PCL startup." : "Godot Vulkan host ready. Streamline Vulkan initialization failed; platform latency capabilities are queried at device creation.");
