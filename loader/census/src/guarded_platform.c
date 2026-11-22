@@ -7,10 +7,10 @@
 /* ---- Safe memory ------------------------------------------------------------------------------ */
 bool rsf_census_safe_read(const void* src, void* dst, size_t n)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         memcpy(dst, src, n);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         return false;
     }
 }
@@ -18,7 +18,7 @@ bool rsf_census_safe_read(const void* src, void* dst, size_t n)
 bool rsf_census_safe_read_cstr(const char* src, char* dst, size_t cap)
 {
     if (!cap) return false;
-    __try {
+    RSF_FOREIGN_TRY {
         size_t i = 0;
         for (; i + 1 < cap; ++i) {
             char c = src[i];
@@ -27,7 +27,7 @@ bool rsf_census_safe_read_cstr(const char* src, char* dst, size_t cap)
         }
         dst[i] = 0;
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         dst[0] = 0;
         return false;
     }
@@ -36,7 +36,7 @@ bool rsf_census_safe_read_cstr(const char* src, char* dst, size_t cap)
 bool rsf_census_safe_read_wstr(const wchar_t* src, wchar_t* dst, size_t cap)
 {
     if (!cap) return false;
-    __try {
+    RSF_FOREIGN_TRY {
         size_t i = 0;
         for (; i + 1 < cap; ++i) {
             wchar_t c = src[i];
@@ -45,7 +45,7 @@ bool rsf_census_safe_read_wstr(const wchar_t* src, wchar_t* dst, size_t cap)
         }
         dst[i] = 0;
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         dst[0] = 0;
         return false;
     }

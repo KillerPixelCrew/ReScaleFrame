@@ -30,10 +30,10 @@ static bool read_ngx_parameter(const void* parameters, size_t slot, const char* 
     typedef int32_t (*Getter)(const void*, const char*, void*);
     Getter get = (Getter)rsf_census_vtable_slot(parameters, slot);
     if (!get) return false;
-    __try {
+    RSF_FOREIGN_TRY {
         *result = get(parameters, name, output);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         return false;
     }
 }
@@ -43,19 +43,19 @@ static bool read_streamline_frame(const void* token, uint32_t* value)
     typedef uint32_t (*Getter)(const void*);
     Getter get = (Getter)rsf_census_vtable_slot(token, 0);
     if (!get) return false;
-    __try {
+    RSF_FOREIGN_TRY {
         *value = get(token);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         return false;
     }
 }
 
 static void write_streamline_output(void** output, void* value)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         *output = value;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
     }
 }
 

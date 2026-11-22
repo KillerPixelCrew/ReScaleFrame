@@ -3,6 +3,7 @@
 #ifndef RSF_CENSUS_INTERNAL_H
 #define RSF_CENSUS_INTERNAL_H
 
+#include <rescaleframe/foreign_guard.h>
 #include <windows.h>
 
 #include <stdbool.h>
