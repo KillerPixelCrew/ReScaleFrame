@@ -153,8 +153,15 @@ int main()
     std::string capture_directory;
     for (uint32_t interval = 0; interval <= 60; ++interval) {
         char prefix[640]{};
-        if (rsf_ac7_motion_capture_present(chain.Get(), prefix, sizeof(prefix)) && capture_directory.empty())
-            capture_directory = std::filesystem::path(prefix).parent_path().string();
+        const bool sampled = rsf_ac7_motion_capture_present(chain.Get(), prefix, sizeof(prefix)) != 0;
+        const char* expected_sample = interval == 0 ? "f000" : interval == 30 ? "f030" : interval == 59 ? "f059" : nullptr;
+        check(sampled == (expected_sample != nullptr), "Capture must sample only intervals 0, 30 and 59.");
+        if (sampled && expected_sample) {
+            const std::filesystem::path sample(prefix);
+            check(sample.filename() == expected_sample, "Sample prefix identifies the active interval.");
+            if (capture_directory.empty()) capture_directory = sample.parent_path().string();
+            check(sample.parent_path() == std::filesystem::path(capture_directory), "All samples use the same session directory.");
+        }
         ID3D11RenderTargetView* rt = rtv.Get(); context->OMSetRenderTargets(1, &rt, nullptr);
         context->VSSetShader(vs.Get(), nullptr, 0); context->PSSetShader(ps.Get(), nullptr, 0);
         ID3D11Buffer* constant = cb.Get(); context->PSSetConstantBuffers(0, 1, &constant);
@@ -204,6 +211,8 @@ int main()
     check(summary.find("\"files_written\":true") != std::string::npos, "Session must finish and write successfully.");
     check(draws.find("\"kind\":\"draw\"") != std::string::npos &&
           draws.find("\"kind\":\"dispatch\"") != std::string::npos, "Draw and compute records must both exist.");
+    const auto expected_context = "\"context\":" + std::to_string(uintptr_t(context.Get()));
+    check(draws.find(expected_context) != std::string::npos, "Draw rows retain the context used for phase matching.");
     check(draws.find("\"blob\":0") == std::string::npos, "Initial CB contents must be captured.");
     check(read_file(captured / "cb_1.bin").size() == 16, "Exact CB bytes must be saved.");
     check(draws.find("\"kind\":\"geometry\"") != std::string::npos &&
