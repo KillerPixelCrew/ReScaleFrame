@@ -484,7 +484,8 @@ fn timed_out_copy_blocks_reuse_and_flush_until_its_own_fence_completes() {
     );
     assert_eq!(test.present(&packet), VK_SUCCESS);
     let events = test.take();
-    assert_eq!(events[2..4], ["wait 2".to_string(), "reset pool 1".into()]);
+    // After the trace, target and the two swapchain image queries.
+    assert_eq!(events[4..6], ["wait 2".to_string(), "reset pool 1".into()]);
     assert!(events.ends_with(&["flush".into(), "present 0".into()]));
 }
 

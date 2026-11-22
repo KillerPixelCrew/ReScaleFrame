@@ -585,7 +585,12 @@ mod tests {
         let added = unsafe { CStr::from_ptr(merged[3]) };
         assert_eq!(added, c"VK_KHR_external_semaphore_win32");
         let empty = unsafe { merge(&[]) }.unwrap();
-        assert_eq!(empty, INTEROP.map(CStr::as_ptr));
+        // Constants carry no address identity; compare the names.
+        let names: Vec<&CStr> = empty
+            .iter()
+            .map(|&name| unsafe { CStr::from_ptr(name) })
+            .collect();
+        assert_eq!(names, INTEROP);
     }
 
     /// Lookups made and how many of them succeed.

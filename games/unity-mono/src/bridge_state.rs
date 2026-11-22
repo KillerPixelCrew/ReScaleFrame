@@ -1372,6 +1372,8 @@ mod tests {
         let mut state = State::new();
         assert!(state.set_policy(1, 4, true));
         let admitted = state.admit_frame(&packet(1), 0).unwrap();
+        // Delivery settles the change the admission carried.
+        assert!(state.settle_change(admitted.pending_generation));
         assert!(state.submitted(&admitted, 3, &source(1)));
         state.release();
         assert_eq!(

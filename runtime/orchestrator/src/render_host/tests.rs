@@ -936,9 +936,10 @@ fn polling_passes_the_stored_fg_mode_and_keeps_the_public_boolean() {
 #[test]
 fn status_reports_renderer_refusals_and_rates() {
     let ini = Temporary::new("status");
-    let host = host(&ini, 0);
+    // The host reads its settings at install and on poll.
     ini.write("FG", "1");
     ini.write("FGBackend", "3");
+    let host = host(&ini, 0);
     // An installed FG owner that cannot report is busy.
     with(|world| world.fg_status = None);
     assert_eq!(host.status_get().err(), Some(BUSY));
@@ -1030,9 +1031,10 @@ fn overlay_routes_the_panel_through_one_settings_commit() {
     unsafe { present(host.user(), null_mut(), 1, 0, 1) };
     assert!(events().contains(&"overlay direct queue".to_string()));
     let stats = with(|world| world.stats.take()).unwrap();
-    // Auto is shown as its resolved provider; FG Auto follows the provider the bridge reports.
+    // SR Auto is shown as its resolved provider. FG Auto stays the selected panel choice, which
+    // the panel marks without a pending change beside the provider the bridge reports.
     assert_eq!((stats.backend, stats.requested_backend), (SR_XESS, SR_XESS));
-    assert_eq!(stats.fg_requested_backend, 3);
+    assert_eq!(stats.fg_requested_backend, RSF_FG_BACKEND_AUTO);
     assert_eq!(stats.fg_requested_mode, RSF_FG_FIXED);
     assert_eq!(stats.sharpening_available, 1);
     assert_ne!(stats.fg_backend_choices & RSF_OVERLAY_FG_RUNTIME_SWITCH, 0);

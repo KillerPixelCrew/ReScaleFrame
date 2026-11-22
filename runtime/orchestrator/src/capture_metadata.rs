@@ -33,7 +33,14 @@ pub(super) fn legacy_float(value: f32, precision: i32) -> String {
     }
 }
 
-pub(super) fn legacy_json(record: &rsf_frame_record, role: &str, fields: &str) -> String {
+/// `fields` follow the identity; `trailer` follows the camera matrices (the D3D12 legacy files
+/// end with the SDK dispatch reset).
+pub(super) fn legacy_json(
+    record: &rsf_frame_record,
+    role: &str,
+    fields: &str,
+    trailer: &str,
+) -> String {
     let camera = &record.camera;
     let f = |value| legacy_float(value, 9);
     let mut json = format!(
@@ -62,6 +69,7 @@ pub(super) fn legacy_json(record: &rsf_frame_record, role: &str, fields: &str) -
         let joined: Vec<String> = values.iter().copied().map(f).collect();
         let _ = write!(json, ",\n\"{key}\":[{}]", joined.join(","));
     }
+    json.push_str(trailer);
     json.push_str("\n}\n");
     json
 }

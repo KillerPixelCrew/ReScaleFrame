@@ -1144,6 +1144,8 @@ fn the_overlay_reports_host_state_and_persists_panel_intent() {
         sharpening_changed: 1,
         sharpening_mode: 2,
         sharpening_sharpness: 0.75,
+        // The panel always sends every field; 0.01 is the lowest valid motion scale limit.
+        sharpening_motion_scale_limit: 10.0,
         sharpening_depth_scale: 35.0,
         ..intent()
     };
@@ -1192,6 +1194,8 @@ fn the_overlay_reports_host_state_and_persists_panel_intent() {
         unsafe { CStr::from_ptr(stats.refusal_reason) },
         c"Applying requested configuration after GPU completion"
     );
+    // A preset the SDK refuses is neither saved nor applied.
+    with(|world| world.refused_preset = Some(40));
     window(
         &host,
         queue,

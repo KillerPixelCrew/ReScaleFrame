@@ -967,7 +967,10 @@ fn sdr_session_initializes_unit_exposure_once() {
 #[test]
 fn inferred_frame_id_carries_the_same_dump_provenance() {
     let scene = Scene::new(RENDER, OUTPUT);
-    let (result, owner) = create_with(&scene.setup(SR_NONE, 1, OUTPUT));
+    // Without a vendor the owner takes its input extent from the setup, defaulting to the output.
+    let mut setup = scene.setup(SR_NONE, 1, OUTPUT);
+    (setup.render_width, setup.render_height) = RENDER;
+    let (result, owner) = create_with(&setup);
     assert_eq!(result, OK);
     take_events();
     let mut pass = scene.pass(5, RENDER, OUTPUT);

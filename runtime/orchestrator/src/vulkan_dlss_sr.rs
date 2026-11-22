@@ -97,7 +97,10 @@ impl Drop for Owner {
             &mut self.images.output,
             &mut self.images.bias,
         ] {
-            unsafe { (platform.free_image.unwrap())(self.native, image) };
+            // A refused create allocated nothing; only images it holds are released.
+            if image.image != 0 || image.memory != 0 || image.view != 0 {
+                unsafe { (platform.free_image.unwrap())(self.native, image) };
+            }
         }
         unsafe { (platform.close.unwrap())(self.native) };
     }

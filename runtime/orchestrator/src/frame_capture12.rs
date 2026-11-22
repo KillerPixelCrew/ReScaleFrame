@@ -12,7 +12,6 @@ use crate::frame_capture_vk::Legacy;
 use crate::sr_session::has_capacity;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -502,14 +501,16 @@ fn event_json(identity: &Record, sequence: u64, reset: bool, result: i32) -> Str
 
 fn legacy_json(value: &Readback) -> String {
     let layout = &value.layout;
-    let mut fields = format!(
+    let fields = format!(
         ",\n\"width\":{},\n\"height\":{},\n\"row_pitch\":{},\n\"offset\":{},\n\"dxgi_format\":{},\n\"bytes\":{}",
         layout.width, layout.height, layout.row_pitch, layout.offset, layout.format, layout.bytes,
     );
-    if value.reset != NO_RESET {
-        let _ = write!(fields, ",\n\"sdk_dispatch_reset\":{}", value.reset);
-    }
-    crate::capture_metadata::legacy_json(&value.identity, &value.role, &fields)
+    let reset = if value.reset != NO_RESET {
+        format!(",\n\"sdk_dispatch_reset\":{}", value.reset)
+    } else {
+        String::new()
+    };
+    crate::capture_metadata::legacy_json(&value.identity, &value.role, &fields, &reset)
 }
 
 unsafe fn owner<'a>(owner: *const Owner) -> Option<&'a Owner> {

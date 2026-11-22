@@ -615,7 +615,7 @@ fn legacy_json(value: &Readback, drained_command: bool, provider: &Provider) -> 
         provider.backend,
         provider.version,
     );
-    crate::capture_metadata::legacy_json(&value.identity, &value.role, &fields)
+    crate::capture_metadata::legacy_json(&value.identity, &value.role, &fields, "")
 }
 
 fn publish_legacy(

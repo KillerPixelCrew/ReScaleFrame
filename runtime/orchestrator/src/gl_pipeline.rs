@@ -1311,7 +1311,8 @@ unsafe extern "C" fn rsf_gl_pipeline_status_get(
     let Some(state) = lock(pipeline) else {
         return NOT_READY;
     };
-    if !pipeline.ready.load(Ordering::Acquire) {
+    // A cleanup-only handle from a failed open has no status; a closed one keeps its last status.
+    if !pipeline.ready.load(Ordering::Acquire) && !state.closed {
         return NOT_READY;
     }
     let p = pipeline.platform;
