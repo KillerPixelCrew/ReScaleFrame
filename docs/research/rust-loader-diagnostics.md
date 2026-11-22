@@ -308,6 +308,11 @@ D3D11 Texture2D description faults. The remaining native COM calls use the exist
 SEH boundary in `loader/census/src/d3d_guarded_platform.cpp`. Both languages assert
 the description sizes and alignments used by the transfer.
 
+The D3D debug and DRED configuration and info-queue callback setup now use the typed
+Windows interfaces in Rust. The still-guarded QueryInterface boundary transfers the
+exact HRESULT. The debug registration also preserves its raw HRESULT, callback flags,
+cookie and lifetime, along with the original severity filter and diagnostic fields.
+
 ## Module thread and function sidecar sections
 
 Rust now owns the thread snapshot, optional thread descriptions and Win32 start addresses,

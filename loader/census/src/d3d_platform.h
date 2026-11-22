@@ -19,18 +19,14 @@ typedef enum rsf_census_d3d_entry {
     RSF_D3D_COUNT
 } rsf_census_d3d_entry;
 
-typedef void (*rsf_census_debug_message)(int32_t, int32_t, int32_t, const char*, void*);
-
 typedef struct rsf_census_d3d_platform {
     bool (*read)(const void*, void*, size_t);
     bool (*read_name)(const char*, char*, size_t);
     void* (*slot)(const void*, size_t);
-    void* (*query)(void* object, const void* iid);
+    int32_t (*query)(void* object, const void* iid, void** result);
     void (*release)(void* object);
     bool (*queue_desc)(const void*, void* desc);
     bool (*swapchain_desc)(const void*, void* desc);
-    void (*debug_layer)(int32_t* layer, int32_t* dred);
-    int32_t (*info_queue)(void* device, rsf_census_debug_message, uint32_t* cookie);
     bool (*present_enter)(bool test);
     void (*present_leave)(void);
 } rsf_census_d3d_platform;

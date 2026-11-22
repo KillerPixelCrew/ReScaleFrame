@@ -2,7 +2,6 @@
 // Guarded SDK queries used by the typed Rust DXGI and D3D12 wrappers.
 #include <d3d11.h>
 #include <d3d12.h>
-#include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
 #include <iterator>
 
@@ -15,14 +14,14 @@ static_assert(sizeof(D3D11_TEXTURE2D_DESC) == 44 && alignof(D3D11_TEXTURE2D_DESC
 namespace rsf_census {
 namespace {
 
-void* query_interface(void* object, const void* iid) noexcept {
-    if (!vtable_slot(object, 0)) return nullptr;
-    void* result = nullptr;
+int32_t query_interface(void* object, const void* iid, void** result) noexcept {
+    *result = nullptr;
+    if (!vtable_slot(object, 0)) return E_NOINTERFACE;
     HRESULT status = E_NOINTERFACE;
     if (!guard([&] {
-            status = static_cast<IUnknown*>(object)->QueryInterface(*static_cast<const GUID*>(iid), &result);
-        })) return nullptr;
-    return SUCCEEDED(status) ? result : nullptr;
+            status = static_cast<IUnknown*>(object)->QueryInterface(*static_cast<const GUID*>(iid), result);
+        })) return E_NOINTERFACE;
+    return status;
 }
 
 void release_interface(void* object) noexcept {
@@ -70,55 +69,6 @@ bool resource11_desc(const void* resource, void* description) noexcept {
     });
 }
 
-void enable_debug(int32_t* layer, int32_t* dred) noexcept {
-    HMODULE d3d12 = GetModuleHandleW(L"d3d12.dll");
-    using Get = HRESULT (WINAPI*)(REFIID, void**);
-    auto get = d3d12 ? reinterpret_cast<Get>(
-        reinterpret_cast<void*>(GetProcAddress(d3d12, "D3D12GetDebugInterface"))) : nullptr;
-    *layer = *dred = E_NOINTERFACE;
-    if (!get) return;
-    ID3D12Debug* debug = nullptr;
-    *layer = get(IID_PPV_ARGS(&debug));
-    if (SUCCEEDED(*layer) && debug) {
-        debug->EnableDebugLayer();
-        debug->Release();
-    }
-    ID3D12DeviceRemovedExtendedDataSettings* settings = nullptr;
-    *dred = get(IID_PPV_ARGS(&settings));
-    if (SUCCEEDED(*dred) && settings) {
-        settings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-        settings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-        settings->Release();
-    }
-}
-
-std::atomic<rsf_census_debug_message> message_callback{nullptr};
-
-void CALLBACK debug_message(D3D12_MESSAGE_CATEGORY category, D3D12_MESSAGE_SEVERITY severity,
-                            D3D12_MESSAGE_ID id, LPCSTR text, void* device) {
-    if (auto callback = message_callback.load(std::memory_order_acquire)) {
-        callback(static_cast<int32_t>(category), static_cast<int32_t>(severity),
-                 static_cast<int32_t>(id), text, device);
-    }
-}
-
-int32_t info_queue(void* device, rsf_census_debug_message callback, uint32_t* cookie) noexcept {
-    ID3D12InfoQueue1* queue = nullptr;
-    auto result = static_cast<IUnknown*>(device)->QueryInterface(IID_PPV_ARGS(&queue));
-    if (FAILED(result) || !queue) return result;
-    queue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
-    queue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
-    queue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
-    message_callback.store(callback, std::memory_order_release);
-    DWORD native_cookie = 0;
-    result = queue->RegisterMessageCallback(debug_message, D3D12_MESSAGE_CALLBACK_IGNORE_FILTERS,
-                                           device, &native_cookie);
-    *cookie = native_cookie;
-    // Keep this interface as long as its registered callback can receive messages.
-    if (FAILED(result)) queue->Release();
-    return result;
-}
-
 } // namespace
 
 void describe_d3d_resource(rsf_census_json* json, const char* key, const void* resource,
@@ -138,7 +88,7 @@ void register_wrappers_d3d(void** table) noexcept {
     static_assert(std::size(entries) == static_cast<size_t>(RSF_D3D_COUNT));
     static const rsf_census_d3d_platform platform = {
         safe_read, safe_read_cstr, vtable_slot, query_interface, release_interface,
-        queue_desc, swapchain_desc, enable_debug, info_queue,
+        queue_desc, swapchain_desc,
         rsf_census_present_enter, rsf_census_present_leave,
     };
     void* wrappers[RSF_D3D_COUNT]{};

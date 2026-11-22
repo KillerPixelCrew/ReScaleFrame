@@ -23,17 +23,32 @@ use std::sync::{
     atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering::*},
 };
 use windows::{
-    Win32::Graphics::{
-        Direct3D12::D3D12_COMMAND_QUEUE_DESC,
-        Dxgi::{
-            DXGI_PRESENT_PARAMETERS, DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_DESC1,
-            DXGI_SWAP_CHAIN_FULLSCREEN_DESC, IDXGIFactory2, IDXGISwapChain1, IDXGISwapChain2,
-            IDXGISwapChain3,
+    Win32::{
+        Foundation::E_NOINTERFACE,
+        Graphics::{
+            Direct3D12::{
+                D3D12_COMMAND_QUEUE_DESC, D3D12_DRED_ENABLEMENT_FORCED_ON,
+                D3D12_MESSAGE_CALLBACK_IGNORE_FILTERS, D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_ID,
+                D3D12_MESSAGE_SEVERITY, D3D12_MESSAGE_SEVERITY_CORRUPTION,
+                D3D12_MESSAGE_SEVERITY_ERROR, D3D12_MESSAGE_SEVERITY_WARNING, ID3D12Debug,
+                ID3D12DeviceRemovedExtendedDataSettings, ID3D12InfoQueue1,
+            },
+            Dxgi::{
+                DXGI_PRESENT_PARAMETERS, DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_DESC1,
+                DXGI_SWAP_CHAIN_FULLSCREEN_DESC, IDXGIFactory2, IDXGISwapChain1, IDXGISwapChain2,
+                IDXGISwapChain3,
+            },
         },
     },
-    core::{GUID, Interface},
+    core::{GUID, Interface, PCSTR},
 };
-use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
+use windows_sys::{
+    Win32::System::{
+        Diagnostics::Debug::RtlCaptureStackBackTrace,
+        LibraryLoader::{GetModuleHandleW, GetProcAddress},
+    },
+    core::w,
+};
 
 type Ptr = *mut c_void;
 type Info = *const c_void;
@@ -243,8 +258,9 @@ fn bind(entry: Entry, object: Ptr, slot: usize, interface: &CStr) {
 
 fn with_interface<T: Interface>(object: Ptr, visit: impl FnOnce(Ptr)) {
     let iid = T::IID;
-    let iface = unsafe { platform().query.unwrap()(object, (&raw const iid).cast()) };
-    if !iface.is_null() {
+    let mut iface = null_mut();
+    let status = unsafe { platform().query.unwrap()(object, (&raw const iid).cast(), &mut iface) };
+    if status >= 0 && !iface.is_null() {
         visit(iface);
         unsafe { platform().release.unwrap()(iface) };
     }
@@ -378,39 +394,77 @@ extern "system" fn factory2(flags: u32, iid: *const GUID, out: *mut Ptr) -> i32 
     create_factory(RSF_D3D_CreateDXGIFactory2, caller!(), iid, out, Some(flags))
 }
 
-unsafe extern "C" fn debug_message(
-    category: i32,
-    level: i32,
-    id: i32,
-    text: *const c_char,
+unsafe extern "system" fn debug_message(
+    category: D3D12_MESSAGE_CATEGORY,
+    level: D3D12_MESSAGE_SEVERITY,
+    id: D3D12_MESSAGE_ID,
+    text: PCSTR,
     device: Ptr,
 ) {
-    if level > 2 {
+    if level.0 > D3D12_MESSAGE_SEVERITY_WARNING.0 {
         return;
     }
     const LEVELS: [&CStr; 5] = [c"corruption", c"error", c"warning", c"info", c"message"];
-    let pc = (0x1_0000u32.wrapping_add(id as u32)) as Ptr;
+    let pc = (0x1_0000u32.wrapping_add(id.0 as u32)) as Ptr;
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, RSF_D3D_D3d12DebugMessage, pc);
     if let Some(mut json) = call.json() {
-        json.number(c"id", id as u32);
+        json.number(c"id", id.0 as u32);
         json.ptr(c"device", device);
-        json.number(c"category", category as u32);
+        json.number(c"category", category.0 as u32);
         json.text(
             Some(c"severity"),
-            LEVELS.get(level as usize).copied().unwrap_or(c"unknown"),
+            LEVELS.get(level.0 as usize).copied().unwrap_or(c"unknown"),
         );
         let mut message = [0u8; 1024];
-        if !text.is_null()
+        if !text.0.is_null()
             && unsafe {
-                platform().read_name.unwrap()(text, message.as_mut_ptr().cast(), message.len())
+                platform().read_name.unwrap()(
+                    text.0.cast(),
+                    message.as_mut_ptr().cast(),
+                    message.len(),
+                )
             }
             && let Ok(text) = CStr::from_bytes_until_nul(&message)
         {
             json.text(Some(c"text"), text);
         }
     }
-    call.finish(result(level));
+    call.finish(result(level.0));
+}
+
+type DebugInterface = unsafe extern "system" fn(*const GUID, *mut Ptr) -> i32;
+
+fn debug_interface<T: Interface>(get: DebugInterface) -> (i32, Option<T>) {
+    let iid = T::IID;
+    let mut raw = null_mut();
+    let status = unsafe { get(&iid, &mut raw) };
+    let interface = (status >= 0 && !raw.is_null()).then(|| unsafe { T::from_raw(raw) });
+    (status, interface)
+}
+
+fn enable_debug() -> (i32, i32) {
+    let module = unsafe { GetModuleHandleW(w!("d3d12.dll")) };
+    if module.is_null() {
+        return (E_NOINTERFACE.0, E_NOINTERFACE.0);
+    }
+    let Some(get) = (unsafe { GetProcAddress(module, c"D3D12GetDebugInterface".as_ptr().cast()) })
+    else {
+        return (E_NOINTERFACE.0, E_NOINTERFACE.0);
+    };
+    let get = unsafe { transmute::<unsafe extern "system" fn() -> isize, DebugInterface>(get) };
+    let (layer, debug) = debug_interface::<ID3D12Debug>(get);
+    if let Some(debug) = debug {
+        unsafe { debug.EnableDebugLayer() };
+    }
+    let (dred, settings) = debug_interface::<ID3D12DeviceRemovedExtendedDataSettings>(get);
+    if let Some(settings) = settings {
+        unsafe {
+            settings.SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            settings.SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+        }
+    }
+    (layer, dred)
 }
 
 fn start_debug() {
@@ -426,8 +480,7 @@ fn start_debug() {
     if let Some(mut json) = call.json() {
         json.text(Some(c"event"), c"d3d12_debug_layer");
     }
-    let (mut layer, mut dred) = (0, 0);
-    unsafe { platform().debug_layer.unwrap()(&mut layer, &mut dred) };
+    let (layer, dred) = enable_debug();
     if let Some(mut json) = call.json() {
         json.hex(Some(c"debug_layer_hr"), result(layer));
         json.hex(Some(c"dred_hr"), result(dred));
@@ -440,8 +493,7 @@ fn attach_info(device: Ptr) {
         return;
     }
     let mut cookie = 0;
-    let status =
-        unsafe { platform().info_queue.unwrap()(device, Some(debug_message), &mut cookie) };
+    let status = register_info_queue(device, &mut cookie);
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, RSF_D3D_CensusEvent, attach_info as Ptr);
     if let Some(mut json) = call.json() {
@@ -451,6 +503,38 @@ fn attach_info(device: Ptr) {
         json.number(c"cookie", cookie);
     }
     call.finish(result(status));
+}
+
+fn register_info_queue(device: Ptr, cookie: &mut u32) -> i32 {
+    let mut raw = null_mut();
+    let iid = ID3D12InfoQueue1::IID;
+    let query = unsafe { platform().query.unwrap()(device, (&raw const iid).cast(), &mut raw) };
+    if query < 0 || raw.is_null() {
+        return query;
+    }
+    let queue = unsafe { ID3D12InfoQueue1::from_raw(raw) };
+    let status = unsafe {
+        for severity in [
+            D3D12_MESSAGE_SEVERITY_CORRUPTION,
+            D3D12_MESSAGE_SEVERITY_ERROR,
+            D3D12_MESSAGE_SEVERITY_WARNING,
+        ] {
+            let _ = queue.SetBreakOnSeverity(severity, false);
+        }
+        (queue.vtable().RegisterMessageCallback)(
+            queue.as_raw(),
+            Some(debug_message),
+            D3D12_MESSAGE_CALLBACK_IGNORE_FILTERS,
+            device,
+            cookie,
+        )
+        .0
+    };
+    if status >= 0 {
+        // Keep the callback's COM reference alive for the same process lifetime as the native path.
+        let _ = queue.into_raw();
+    }
+    status
 }
 
 #[inline(never)]

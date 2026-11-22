@@ -23,15 +23,6 @@ pub const RSF_D3D_D3d12DebugMessage: rsf_census_d3d_entry = 16;
 pub const RSF_D3D_CensusEvent: rsf_census_d3d_entry = 17;
 pub const RSF_D3D_COUNT: rsf_census_d3d_entry = 18;
 pub type rsf_census_d3d_entry = ::core::ffi::c_int;
-pub type rsf_census_debug_message = ::core::option::Option<
-    unsafe extern "C" fn(
-        arg1: i32,
-        arg2: i32,
-        arg3: i32,
-        arg4: *const ::core::ffi::c_char,
-        arg5: *mut ::core::ffi::c_void,
-    ),
->;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_census_d3d_platform {
@@ -59,7 +50,8 @@ pub struct rsf_census_d3d_platform {
         unsafe extern "C" fn(
             object: *mut ::core::ffi::c_void,
             iid: *const ::core::ffi::c_void,
-        ) -> *mut ::core::ffi::c_void,
+            result: *mut *mut ::core::ffi::c_void,
+        ) -> i32,
     >,
     pub release: ::core::option::Option<unsafe extern "C" fn(object: *mut ::core::ffi::c_void)>,
     pub queue_desc: ::core::option::Option<
@@ -74,21 +66,13 @@ pub struct rsf_census_d3d_platform {
             desc: *mut ::core::ffi::c_void,
         ) -> bool,
     >,
-    pub debug_layer: ::core::option::Option<unsafe extern "C" fn(layer: *mut i32, dred: *mut i32)>,
-    pub info_queue: ::core::option::Option<
-        unsafe extern "C" fn(
-            device: *mut ::core::ffi::c_void,
-            arg1: rsf_census_debug_message,
-            cookie: *mut u32,
-        ) -> i32,
-    >,
     pub present_enter: ::core::option::Option<unsafe extern "C" fn(test: bool) -> bool>,
     pub present_leave: ::core::option::Option<unsafe extern "C" fn()>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_census_d3d_platform"]
-        [::core::mem::size_of::<rsf_census_d3d_platform>() - 88usize];
+        [::core::mem::size_of::<rsf_census_d3d_platform>() - 72usize];
     ["Alignment of rsf_census_d3d_platform"]
         [::core::mem::align_of::<rsf_census_d3d_platform>() - 8usize];
     ["Offset of field: rsf_census_d3d_platform::read"]
@@ -105,12 +89,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_census_d3d_platform, queue_desc) - 40usize];
     ["Offset of field: rsf_census_d3d_platform::swapchain_desc"]
         [::core::mem::offset_of!(rsf_census_d3d_platform, swapchain_desc) - 48usize];
-    ["Offset of field: rsf_census_d3d_platform::debug_layer"]
-        [::core::mem::offset_of!(rsf_census_d3d_platform, debug_layer) - 56usize];
-    ["Offset of field: rsf_census_d3d_platform::info_queue"]
-        [::core::mem::offset_of!(rsf_census_d3d_platform, info_queue) - 64usize];
     ["Offset of field: rsf_census_d3d_platform::present_enter"]
-        [::core::mem::offset_of!(rsf_census_d3d_platform, present_enter) - 72usize];
+        [::core::mem::offset_of!(rsf_census_d3d_platform, present_enter) - 56usize];
     ["Offset of field: rsf_census_d3d_platform::present_leave"]
-        [::core::mem::offset_of!(rsf_census_d3d_platform, present_leave) - 80usize];
+        [::core::mem::offset_of!(rsf_census_d3d_platform, present_leave) - 64usize];
 };
