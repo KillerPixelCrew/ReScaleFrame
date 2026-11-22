@@ -198,7 +198,7 @@ crate::render_host_methods::impl_host_methods! {
         unsafe { crate::render_host_native::queue_signal(queue, fence, value) }
     }
     fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
-        unsafe { crate::sr12::create_for_host(setup, out.cast()) }
+        unsafe { crate::sr12::rsf_core_sr12_create(setup, out.cast()) }
     }
     fn sr12_destroy(context: Handle) { unsafe { crate::sr12::rsf_core_sr12_destroy(context.cast()) } }
     fn sr12_evaluate(context: Handle, commands: Handle, pass: *const Pass, slot: u32) -> i32 {

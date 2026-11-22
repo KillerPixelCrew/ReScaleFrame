@@ -3,7 +3,7 @@
 // admission, vendor selection, resource lifetime, input validation and its cache, temporal
 // history, the normalization dispatch, capture ordering, sharpening, output reinsertion and the
 // handoff of accepted normalized depth and motion to the D3D12 frame generation owner.
-// The native bindings compose the platform calls used by this owner.
+// Its native calls go through `native` (sr12/native.rs; fakes under test).
 use crate::com_ref::ComRef;
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
@@ -28,8 +28,12 @@ use std::mem::{MaybeUninit, offset_of};
 use std::ptr::{self, NonNull};
 use std::sync::Mutex;
 
+#[cfg(not(test))]
+mod native;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+use tests::native;
 
 // ABI values consumed by the SR planner and normalization pass.
 const MAX_QUALITY: u32 = 5;
@@ -96,92 +100,6 @@ pub(crate) struct TextureDesc {
     samples: u32,
     format: u32,
     srv_format: u32,
-}
-
-// Production and fixture callbacks share this table.
-#[repr(C)]
-pub(crate) struct Platform {
-    struct_size: u32,
-    dlss_create: unsafe extern "C" fn(Handle, *const rsf_dlss_setup, *mut Handle) -> i32,
-    dlss_create_shared:
-        unsafe extern "C" fn(Handle, *const rsf_dlss_setup, Handle, *mut Handle) -> i32,
-    dlss_create_registered:
-        unsafe extern "C" fn(Handle, *const rsf_dlss_setup, Handle, *mut Handle) -> i32,
-    dlss_plan: unsafe extern "C" fn(Handle, u32, u32, u32, *mut u32, *mut u32) -> i32,
-    dlss_set_sdr: unsafe extern "C" fn(Handle, u32),
-    dlss_evaluate: unsafe extern "C" fn(Handle, Handle, *const rsf_sr_frame) -> i32,
-    dlss_evaluate_borrowed:
-        unsafe extern "C" fn(Handle, Handle, *const rsf_sr_frame, Handle) -> i32,
-    dlss_present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
-    dlss_destroy: unsafe extern "C" fn(Handle),
-    session_create: unsafe extern "C" fn(*const rsf_sr_session_setup, *mut Handle) -> i32,
-    session_select: unsafe extern "C" fn(Handle, u32, u32, u64) -> i32,
-    session_get_status: unsafe extern "C" fn(Handle, *mut rsf_sr_session_status) -> i32,
-    session_evaluate: unsafe extern "C" fn(Handle, Handle, *const rsf_sr_frame) -> i32,
-    session_destroy: unsafe extern "C" fn(Handle),
-    create_pipeline:
-        unsafe extern "C" fn(Handle, rsf_backend_log_fn, Handle, *mut Handle, *mut Handle) -> i32,
-    create_heap: unsafe extern "C" fn(Handle) -> Handle,
-    create_texture: unsafe extern "C" fn(Handle, u32, u32, u32) -> Handle,
-    create_exposure_texture: unsafe extern "C" fn(Handle) -> Handle,
-    create_exposure_upload: unsafe extern "C" fn(Handle, u64) -> Handle,
-    write_exposure_upload: unsafe extern "C" fn(Handle, f32) -> i32,
-    create_readback: unsafe extern "C" fn(Handle, u64) -> Handle,
-    describe: unsafe extern "C" fn(Handle, *mut TextureDesc),
-    owned_by: unsafe extern "C" fn(Handle, Handle) -> i32,
-    write_srv: unsafe extern "C" fn(Handle, Handle, u32, Handle, u32),
-    write_uav: unsafe extern "C" fn(Handle, Handle, u32, Handle, u32),
-    dispatch: unsafe extern "C" fn(Handle, Handle, Handle, Handle, *const u32, u32, u32),
-    transition: unsafe extern "C" fn(Handle, Handle, u32, u32),
-    copy_region: unsafe extern "C" fn(Handle, Handle, Handle, u32, u32),
-    copy_unit_exposure: unsafe extern "C" fn(Handle, Handle, Handle),
-    copy_motion_tile: unsafe extern "C" fn(Handle, Handle, u64, Handle, u32, u32),
-    map: unsafe extern "C" fn(Handle, u64) -> *const u8,
-    unmap: unsafe extern "C" fn(Handle),
-    depth_domains: unsafe extern "C" fn(*const Pass) -> u32,
-    // Hands the accepted normalized depth and motion to the FG owner.
-    fg_handoff: unsafe fn(Handle, &rsf_frame_record, Handle, Handle),
-    capture_create: unsafe extern "C" fn() -> Handle,
-    capture_destroy: unsafe extern "C" fn(Handle),
-    capture_enabled: unsafe extern "C" fn(Handle) -> i32,
-    capture_configure: unsafe extern "C" fn(Handle, *const c_char, u64, u32) -> i32,
-    capture_flush: unsafe extern "C" fn(Handle, u32) -> i32,
-    capture_record: unsafe extern "C" fn(
-        Handle,
-        Handle,
-        Handle,
-        u32,
-        *const rsf_frame_record,
-        *const c_char,
-        u32,
-        u32,
-        u32,
-        u32,
-    ) -> i32,
-    capture_event:
-        unsafe extern "C" fn(Handle, *const rsf_frame_record, *const c_char, u64, u32, i32) -> i32,
-    capture_wants: unsafe extern "C" fn(Handle, u64) -> i32,
-    capture_force_reset: unsafe extern "C" fn(Handle, u64) -> i32,
-    sharpen_create: unsafe extern "C" fn() -> Handle,
-    sharpen_destroy: unsafe extern "C" fn(Handle),
-    sharpen_run: unsafe extern "C" fn(
-        Handle,
-        Handle,
-        Handle,
-        Handle,
-        Handle,
-        Handle,
-        *const rsf_sharpening_options,
-        u32,
-        u32,
-        f32,
-        f32,
-        u32,
-    ) -> i32,
-    dump_begin_record: unsafe extern "C" fn(*const rsf_frame_record, u32) -> i32,
-    dump_pass_metadata: unsafe extern "C" fn(*const Pass),
-    dump_sr_frame: unsafe extern "C" fn(*const rsf_sr_frame, u32, u32),
-    dump_result: unsafe extern "C" fn(*const rsf_frame_record, *const c_char, u32, i32),
 }
 
 unsafe fn retain(object: Handle) -> Option<ComRef> {
@@ -314,7 +232,6 @@ enum Vendor {
 
 // Vendor context and native helper objects. Dropped before the GPU resources.
 struct Native {
-    p: &'static Platform,
     vendor: Vendor,
     capture: Handle,
     sharpen: NonNull<c_void>,
@@ -322,15 +239,14 @@ struct Native {
 
 impl Drop for Native {
     fn drop(&mut self) {
-        let p = self.p;
         unsafe {
             match self.vendor {
                 Vendor::None => {}
-                Vendor::Dlss(context) => (p.dlss_destroy)(context.as_ptr()),
-                Vendor::Session(session) => (p.session_destroy)(session.as_ptr()),
+                Vendor::Dlss(context) => native::dlss_destroy(context.as_ptr()),
+                Vendor::Session(session) => native::session_destroy(session.as_ptr()),
             }
-            (p.capture_destroy)(self.capture);
-            (p.sharpen_destroy)(self.sharpen.as_ptr());
+            native::capture_destroy(self.capture);
+            native::sharpen_destroy(self.sharpen.as_ptr());
         }
     }
 }
@@ -392,13 +308,13 @@ pub(crate) struct Sr12 {
 impl Drop for Sr12 {
     fn drop(&mut self) {
         // The caller drained all submitted work before destruction.
-        unsafe { (self.native.p.capture_flush)(self.native.capture, ALL_SLOTS) };
+        unsafe { native::capture_flush(self.native.capture, ALL_SLOTS) };
     }
 }
 
-unsafe fn describe(p: &Platform, resource: Handle) -> TextureDesc {
+unsafe fn describe(resource: Handle) -> TextureDesc {
     let mut desc = TextureDesc::default();
-    unsafe { (p.describe)(resource, &mut desc) };
+    unsafe { native::describe(resource, &mut desc) };
     desc
 }
 
@@ -417,7 +333,6 @@ unsafe fn read_setup(setup: *const Setup) -> Option<(Setup, u32)> {
 }
 
 unsafe fn open_vendor(
-    p: &'static Platform,
     caller: *const Setup,
     setup: &Setup,
     abi2: bool,
@@ -443,18 +358,18 @@ unsafe fn open_vendor(
         let mut context = ptr::null_mut();
         let mut result = unsafe {
             if abi2 && !setup.dlss_registration.is_null() {
-                (p.dlss_create_registered)(device, dlss, setup.dlss_registration, &mut context)
+                native::dlss_create_registered(device, dlss, setup.dlss_registration, &mut context)
             } else if !setup.streamline_host.is_null() {
-                (p.dlss_create_shared)(device, dlss, setup.streamline_host, &mut context)
+                native::dlss_create_shared(device, dlss, setup.streamline_host, &mut context)
             } else {
-                (p.dlss_create)(device, dlss, &mut context)
+                native::dlss_create(device, dlss, &mut context)
             }
         };
         let vendor = NonNull::new(context).map_or(Vendor::None, Vendor::Dlss);
         let (mut width, mut height) = (0, 0);
         if result == OK {
             result = unsafe {
-                (p.dlss_plan)(
+                native::dlss_plan(
                     context,
                     setup.output_width,
                     setup.output_height,
@@ -465,7 +380,7 @@ unsafe fn open_vendor(
             };
         }
         if result == OK {
-            unsafe { (p.dlss_set_sdr)(context, setup.input_sdr) };
+            unsafe { native::dlss_set_sdr(context, setup.input_sdr) };
         }
         return (vendor, result, width, height);
     }
@@ -490,23 +405,22 @@ unsafe fn open_vendor(
     alternate.fsr4_directory_utf8 = setup.fsr4_directory_utf8;
     alternate.xess_directory_utf8 = setup.xess_directory_utf8;
     let mut session = ptr::null_mut();
-    let mut result = unsafe { (p.session_create)(&alternate, &mut session) };
+    let mut result = unsafe { native::session_create(&alternate, &mut session) };
     let vendor = NonNull::new(session).map_or(Vendor::None, Vendor::Session);
     if result == OK {
-        result = unsafe { (p.session_select)(session, setup.backend, setup.quality, 0) };
+        result = unsafe { native::session_select(session, setup.backend, setup.quality, 0) };
     }
     let (mut width, mut height) = (0, 0);
     if result == OK {
         let mut status: rsf_sr_session_status = unsafe { std::mem::zeroed() };
         status.struct_size = size_of::<rsf_sr_session_status>() as u32;
-        result = unsafe { (p.session_get_status)(session, &mut status) };
+        result = unsafe { native::session_get_status(session, &mut status) };
         (width, height) = (status.render_width, status.render_height);
     }
     (vendor, result, width, height)
 }
 
 unsafe fn create_gpu(
-    p: &Platform,
     setup: &Setup,
     (width, height): (u32, u32),
     normalize_color: bool,
@@ -514,16 +428,16 @@ unsafe fn create_gpu(
 ) -> Option<Gpu> {
     let device = setup.device;
     let (mut root, mut pipeline) = (ptr::null_mut(), ptr::null_mut());
-    if unsafe { (p.create_pipeline)(device, setup.log, setup.user, &mut root, &mut pipeline) } == 0
+    if unsafe { native::create_pipeline(device, setup.log, setup.user, &mut root, &mut pipeline) } == 0
     {
         return None;
     }
     let root = unsafe { ComRef::from_owned(root) }?;
     let pipeline = unsafe { ComRef::from_owned(pipeline) }?;
-    let heap = || unsafe { ComRef::from_owned((p.create_heap)(device)) };
+    let heap = || unsafe { ComRef::from_owned(native::create_heap(device)) };
     let heaps = [heap()?, heap()?, heap()?];
     let texture =
-        |w, h, format| unsafe { ComRef::from_owned((p.create_texture)(device, w, h, format)) };
+        |w, h, format| unsafe { ComRef::from_owned(native::create_texture(device, w, h, format)) };
     let (color_width, color_height) = if normalize_color {
         (width, height)
     } else {
@@ -551,11 +465,11 @@ unsafe fn create_gpu(
     {
         // SDR has no changing pre-exposure. XeSS requires an exposure texture when auto
         // exposure is disabled; feed the actual constant scale, not HDR adaptation.
-        let texture = unsafe { ComRef::from_owned((p.create_exposure_texture)(device)) }?;
+        let texture = unsafe { ComRef::from_owned(native::create_exposure_texture(device)) }?;
         let upload = unsafe {
-            ComRef::from_owned((p.create_exposure_upload)(device, EXPOSURE_UPLOAD_BYTES))
+            ComRef::from_owned(native::create_exposure_upload(device, EXPOSURE_UPLOAD_BYTES))
         }?;
-        if unsafe { (p.write_exposure_upload)(upload.as_ptr(), 1.0) } == 0 {
+        if unsafe { native::write_exposure_upload(upload.as_ptr(), 1.0) } == 0 {
             return None;
         }
         (exposure, exposure_upload) = (Some(texture), Some(upload));
@@ -574,7 +488,7 @@ unsafe fn create_gpu(
     })
 }
 
-unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32> {
+unsafe fn create(setup: *const Setup) -> Result<Sr12, i32> {
     let Some((s, size)) = (unsafe { read_setup(setup) }) else {
         return Err(INVALID_ARGUMENT);
     };
@@ -604,13 +518,12 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
         return Err(INVALID_ARGUMENT);
     }
     // Capture is optional. An allocation failure leaves SR usable and capture unavailable.
-    let capture = unsafe { (p.capture_create)() };
-    let Some(sharpen) = NonNull::new(unsafe { (p.sharpen_create)() }) else {
-        unsafe { (p.capture_destroy)(capture) };
+    let capture = native::capture_create();
+    let Some(sharpen) = NonNull::new(native::sharpen_create()) else {
+        unsafe { native::capture_destroy(capture) };
         return Err(INIT_FAILED);
     };
     let mut native = Native {
-        p,
         vendor: Vendor::None,
         capture,
         sharpen,
@@ -618,7 +531,7 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
     let device = unsafe { ComRef::retain(s.device) };
     let external_exposure = abi2 && s.external_exposure != 0;
     let (vendor, result, mut width, mut height) =
-        unsafe { open_vendor(p, setup, &s, abi2, external_exposure) };
+        unsafe { open_vendor(setup, &s, abi2, external_exposure) };
     // A vendor that reports success must hand out its context.
     let opened = s.backend == RSF_SR_NONE || !matches!(vendor, Vendor::None);
     native.vendor = vendor;
@@ -631,8 +544,8 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
     if engine_extents {
         (width, height) = (s.render_width, s.render_height);
     }
-    let normalize_color = s.backend != RSF_SR_NONE || unsafe { (p.capture_enabled)(capture) } != 0;
-    let gpu = unsafe { create_gpu(p, &s, (width, height), normalize_color, external_exposure) }
+    let normalize_color = s.backend != RSF_SR_NONE || unsafe { native::capture_enabled(capture) } != 0;
+    let gpu = unsafe { create_gpu(&s, (width, height), normalize_color, external_exposure) }
         .ok_or(INIT_FAILED)?;
     let sharpening = sharpening_policy::defaults();
     Ok(Sr12 {
@@ -671,10 +584,6 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
 }
 
 impl Sr12 {
-    fn p(&self) -> &'static Platform {
-        self.native.p
-    }
-
     fn capture(&self) -> Handle {
         self.native.capture
     }
@@ -686,7 +595,7 @@ impl Sr12 {
     }
 
     unsafe fn owned(&self, child: Handle) -> bool {
-        unsafe { (self.p().owned_by)(child, self.device.as_ptr()) != 0 }
+        unsafe { native::owned_by(child, self.device.as_ptr()) != 0 }
     }
 
     fn camera_matches(&self, pass: &Pass) -> bool {
@@ -708,15 +617,14 @@ impl Sr12 {
     }
 
     unsafe fn inputs_valid(&self, state: &mut State, pass: &Pass) -> bool {
-        let p = self.p();
-        if unsafe { (p.depth_domains)(pass) } != 0 || !self.camera_matches(pass) {
+        if unsafe { native::depth_domains(pass) } != 0 || !self.camera_matches(pass) {
             return false;
         }
         if self.external_exposure {
             if pass.exposure.is_null() {
                 return false;
             }
-            let desc = unsafe { describe(p, pass.exposure) };
+            let desc = unsafe { describe(pass.exposure) };
             if !unsafe { self.owned(pass.exposure) } || !exposure_accepted(&desc) {
                 return false;
             }
@@ -744,7 +652,7 @@ impl Sr12 {
             if resource.is_null() {
                 return false;
             }
-            let desc = unsafe { describe(p, resource) };
+            let desc = unsafe { describe(resource) };
             let (width, height) = if index == OUTPUT {
                 (self.output_width, self.output_height)
             } else {
@@ -773,15 +681,14 @@ impl Sr12 {
         if self.log.is_none() {
             return;
         }
-        let p = self.p();
         if state.motion_pending[slot] {
             if let Some(buffer) = state.motion_readback[slot].as_ref() {
-                let mapped = unsafe { (p.map)(buffer.as_ptr(), READBACK_BYTES) };
+                let mapped = unsafe { native::map(buffer.as_ptr(), READBACK_BYTES) };
                 if !mapped.is_null() {
                     let bytes =
                         unsafe { std::slice::from_raw_parts(mapped, READBACK_BYTES as usize) };
                     let (mean, maximum, invalid) = motion_statistics(bytes);
-                    unsafe { (p.unmap)(buffer.as_ptr()) };
+                    unsafe { native::unmap(buffer.as_ptr()) };
                     let text = format!(
                         "Normalized motion samples: mean={mean:.6} max={maximum:.6} render pixels invalid={invalid}"
                     );
@@ -798,7 +705,7 @@ impl Sr12 {
         }
         if state.motion_readback[slot].is_none() {
             state.motion_readback[slot] = unsafe {
-                ComRef::from_owned((p.create_readback)(self.device.as_ptr(), READBACK_BYTES))
+                ComRef::from_owned(native::create_readback(self.device.as_ptr(), READBACK_BYTES))
             };
         }
         let Some(buffer) = state.motion_readback[slot].as_ref() else {
@@ -806,10 +713,10 @@ impl Sr12 {
         };
         let motion = self.gpu.normalized[MOTION].as_ptr();
         unsafe {
-            (p.transition)(list, motion, SHADER_READ, COPY_SOURCE);
+            native::transition(list, motion, SHADER_READ, COPY_SOURCE);
             for tile in 0..4 {
                 let (x, y) = tile_origin(tile, self.width, self.height);
-                (p.copy_motion_tile)(
+                native::copy_motion_tile(
                     list,
                     buffer.as_ptr(),
                     u64::from(tile) * TILE_BYTES,
@@ -818,7 +725,7 @@ impl Sr12 {
                     y,
                 );
             }
-            (p.transition)(list, motion, COPY_SOURCE, SHADER_READ);
+            native::transition(list, motion, COPY_SOURCE, SHADER_READ);
         }
         state.motion_pending[slot] = true;
         state.diagnostic_frames += 1;
@@ -864,7 +771,7 @@ impl Sr12 {
         view: u32,
     ) {
         unsafe {
-            (self.p().capture_record)(
+            native::capture_record(
                 self.capture(),
                 list,
                 source,
@@ -880,13 +787,12 @@ impl Sr12 {
     }
 
     unsafe fn normalize(&self, state: &State, list: Handle, pass: &Pass, slot: usize) {
-        let p = self.p();
         let device = self.device.as_ptr();
         let heap = self.gpu.heaps[slot].as_ptr();
         let inputs = [pass.color_input, pass.depth, pass.motion];
         unsafe {
             for (index, &input) in inputs.iter().enumerate() {
-                (p.write_srv)(device, heap, index as u32, input, state.view_formats[index]);
+                native::write_srv(device, heap, index as u32, input, state.view_formats[index]);
             }
             let (exposure_input, exposure_view) = state
                 .exposure_input
@@ -894,9 +800,9 @@ impl Sr12 {
                 .map_or((ptr::null_mut(), R32_FLOAT), |(texture, view)| {
                     (texture.as_ptr(), *view)
                 });
-            (p.write_srv)(device, heap, EXPOSURE_SRV, exposure_input, exposure_view);
+            native::write_srv(device, heap, EXPOSURE_SRV, exposure_input, exposure_view);
             for (index, texture) in self.gpu.normalized.iter().enumerate() {
-                (p.write_uav)(
+                native::write_uav(
                     device,
                     heap,
                     NORMALIZED_UAV + index as u32,
@@ -909,9 +815,9 @@ impl Sr12 {
             } else {
                 ptr::null_mut()
             };
-            (p.write_uav)(device, heap, EXPOSURE_UAV, exposure_output, R32_FLOAT);
+            native::write_uav(device, heap, EXPOSURE_UAV, exposure_output, R32_FLOAT);
             let constants = self.constants(pass);
-            (p.dispatch)(
+            native::dispatch(
                 list,
                 heap,
                 self.gpu.root.as_ptr(),
@@ -936,13 +842,12 @@ impl Sr12 {
     }
 
     unsafe fn transition_inputs(&self, list: Handle, before: u32, after: u32) {
-        let p = self.p();
         unsafe {
             for texture in &self.gpu.normalized {
-                (p.transition)(list, texture.as_ptr(), before, after);
+                native::transition(list, texture.as_ptr(), before, after);
             }
             if self.external_exposure {
-                (p.transition)(list, raw(self.gpu.exposure.as_ref()), before, after);
+                native::transition(list, raw(self.gpu.exposure.as_ref()), before, after);
             }
         }
     }
@@ -971,28 +876,26 @@ impl Sr12 {
     }
 
     unsafe fn vendor_evaluate(&self, list: Handle, frame: &rsf_sr_frame, pass: &Pass) -> i32 {
-        let p = self.p();
         match self.native.vendor {
             Vendor::None => OK,
             Vendor::Dlss(context) if !pass.native_frame_context.is_null() => unsafe {
-                (p.dlss_evaluate_borrowed)(context.as_ptr(), list, frame, pass.native_frame_context)
+                native::dlss_evaluate_borrowed(context.as_ptr(), list, frame, pass.native_frame_context)
             },
-            Vendor::Dlss(context) => unsafe { (p.dlss_evaluate)(context.as_ptr(), list, frame) },
+            Vendor::Dlss(context) => unsafe { native::dlss_evaluate(context.as_ptr(), list, frame) },
             Vendor::Session(session) => unsafe {
-                (p.session_evaluate)(session.as_ptr(), list, frame)
+                native::session_evaluate(session.as_ptr(), list, frame)
             },
         }
     }
 
     unsafe fn evaluate(&self, list: Handle, pass: &Pass, slot: usize) -> i32 {
-        let p = self.p();
         let mut guard = lock(&self.state);
         let state = &mut *guard;
         if !unsafe { self.inputs_valid(state, pass) } {
             return INVALID_ARGUMENT;
         }
         let sharpen = *lock(&self.sharpening);
-        unsafe { (p.capture_flush)(self.capture(), slot as u32) };
+        unsafe { native::capture_flush(self.capture(), slot as u32) };
         if raw(state.validated_list.as_ref()) != list {
             if !unsafe { self.owned(list) } {
                 return INVALID_ARGUMENT;
@@ -1010,8 +913,8 @@ impl Sr12 {
         let normalized = self.gpu.normalized.each_ref().map(ComRef::as_ptr);
         let view = preview(self.input_sdr);
         unsafe {
-            if (p.dump_begin_record)(&record, self.backend) != 0 {
-                (p.dump_pass_metadata)(pass);
+            if native::dump_begin_record(&record, self.backend) != 0 {
+                native::dump_pass_metadata(pass);
                 let none = NO_PREVIEW;
                 for (source, role, shown) in [
                     (pass.color_input, c"sr-source-jittered", view),
@@ -1068,8 +971,8 @@ impl Sr12 {
                 && let Some(upload) = self.gpu.exposure_upload.as_ref()
             {
                 unsafe {
-                    (p.copy_unit_exposure)(list, exposure.as_ptr(), upload.as_ptr());
-                    (p.transition)(list, exposure.as_ptr(), COPY_DEST, SHADER_READ);
+                    native::copy_unit_exposure(list, exposure.as_ptr(), upload.as_ptr());
+                    native::transition(list, exposure.as_ptr(), COPY_DEST, SHADER_READ);
                 }
                 state.exposure_initialized = true;
             }
@@ -1092,10 +995,10 @@ impl Sr12 {
         (frame.motion_scale_x, frame.motion_scale_y) = (1.0, 1.0);
         (frame.pre_exposure, frame.view_space_to_meters) = (1.0, 1.0);
         frame.reset = u32::from(
-            reset || unsafe { (p.capture_force_reset)(self.capture(), record.frame_id) } != 0,
+            reset || unsafe { native::capture_force_reset(self.capture(), record.frame_id) } != 0,
         );
         unsafe {
-            (p.dump_sr_frame)(&frame, self.backend, u32::from(self.input_sdr));
+            native::dump_sr_frame(&frame, self.backend, u32::from(self.input_sdr));
             if !frame.exposure.resource.is_null() {
                 self.capture_record(
                     list,
@@ -1111,8 +1014,8 @@ impl Sr12 {
         }
         let result = unsafe { self.vendor_evaluate(list, &frame, pass) };
         unsafe {
-            (p.dump_result)(&record, c"sr".as_ptr(), self.backend, result);
-            (p.capture_event)(
+            native::dump_result(&record, c"sr".as_ptr(), self.backend, result);
+            native::capture_event(
                 self.capture(),
                 &record,
                 c"sr-evaluate".as_ptr(),
@@ -1126,7 +1029,7 @@ impl Sr12 {
             // the vendor read them and before sharpening or reinsertion. The FG owner holds
             // them until the producer's submission confirmation and queue retirement.
             unsafe {
-                (p.fg_handoff)(list, &record, normalized[DEPTH], normalized[MOTION]);
+                native::fg_handoff(list, &record, normalized[DEPTH], normalized[MOTION]);
             }
         }
         if result == OK && self.backend != RSF_SR_NONE {
@@ -1160,9 +1063,8 @@ impl Sr12 {
         options: &rsf_sharpening_options,
         slot: usize,
     ) {
-        let p = self.p();
         let accepted = unsafe {
-            (p.sharpen_run)(
+            native::sharpen_run(
                 self.native.sharpen.as_ptr(),
                 list,
                 raw(self.gpu.output.as_ref()),
@@ -1192,7 +1094,6 @@ impl Sr12 {
         reset: bool,
         slot: usize,
     ) {
-        let p = self.p();
         let output = raw(self.gpu.output.as_ref());
         let view = preview(self.input_sdr);
         let reset = u32::from(reset);
@@ -1207,8 +1108,8 @@ impl Sr12 {
                 reset,
                 view,
             );
-            (p.transition)(list, output, UNORDERED_ACCESS, COPY_SOURCE);
-            (p.copy_region)(
+            native::transition(list, output, UNORDERED_ACCESS, COPY_SOURCE);
+            native::copy_region(
                 list,
                 pass.color_output,
                 output,
@@ -1225,13 +1126,12 @@ impl Sr12 {
                 reset,
                 view,
             );
-            (p.transition)(list, output, COPY_SOURCE, UNORDERED_ACCESS);
+            native::transition(list, output, COPY_SOURCE, UNORDERED_ACCESS);
         }
     }
 
     unsafe fn capture_scene(&self, list: Handle, pass: &Pass, slot: usize) -> i32 {
-        let p = self.p();
-        if unsafe { (p.depth_domains)(pass) } != 0 {
+        if unsafe { native::depth_domains(pass) } != 0 {
             return INVALID_ARGUMENT;
         }
         let state = lock(&self.state);
@@ -1245,7 +1145,7 @@ impl Sr12 {
         }
         drop(state);
         let scene = pass.color_input;
-        let desc = unsafe { describe(p, scene) };
+        let desc = unsafe { describe(scene) };
         if !unsafe { self.owned(scene) }
             || desc.width != u64::from(record.output_width)
             || desc.height != record.output_height
@@ -1253,11 +1153,11 @@ impl Sr12 {
         {
             return INVALID_ARGUMENT;
         }
-        if unsafe { (p.capture_wants)(self.capture(), record.frame_id) } == 0 {
+        if unsafe { native::capture_wants(self.capture(), record.frame_id) } == 0 {
             return NOT_READY;
         }
         let recorded = unsafe {
-            (p.capture_record)(
+            native::capture_record(
                 self.capture(),
                 list,
                 scene,
@@ -1274,53 +1174,16 @@ impl Sr12 {
     }
 }
 
-#[cfg(not(test))]
-mod native;
-
-#[cfg(not(test))]
-pub(super) unsafe fn create_for_host(setup: *const Setup, out: *mut *mut Sr12) -> i32 {
-    unsafe { rsf_core_sr12_create(setup, out, &native::PLATFORM) }
-}
-
-#[cfg(not(test))]
 #[unsafe(export_name = "rsf_sr12_create")]
-unsafe extern "C" fn rsf_core_sr12_create_native(setup: *const Setup, out: *mut *mut Sr12) -> i32 {
-    unsafe { create_for_host(setup, out) }
-}
-
-#[cfg(not(test))]
-#[unsafe(export_name = "rsf_sr12_create_planned")]
-unsafe extern "C" fn rsf_core_sr12_create_planned_native(
-    setup: *const Setup,
-    plan: *mut PlanResult,
-    out: *mut *mut Sr12,
-) -> i32 {
-    unsafe {
-        rsf_core_sr12_create_planned(
-            setup,
-            plan,
-            out,
-            &native::PLATFORM,
-            crate::d3d12_host::sr::rsf_core_sr12_adapter_identity,
-        )
-    }
-}
-
-unsafe extern "C" fn rsf_core_sr12_create(
+pub(crate) unsafe extern "C" fn rsf_core_sr12_create(
     setup: *const Setup,
     out: *mut *mut Sr12,
-    platform: *const Platform,
 ) -> i32 {
     if out.is_null() {
         return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
-    // Production and fixture tables have static lifetime.
-    let Some(platform): Option<&'static Platform> = (unsafe { platform.as_ref() }) else {
-        return INVALID_ARGUMENT;
-    };
-    assert_eq!(platform.struct_size as usize, size_of::<Platform>());
-    match unsafe { create(setup, platform) } {
+    match unsafe { create(setup) } {
         Ok(owner) => {
             let handle = crate::allocate_handle(owner);
             if handle.is_null() {
@@ -1343,11 +1206,11 @@ extern "C" fn rsf_core_sr12_quality_supported(backend: u32, quality: u32) -> u32
 }
 
 #[cfg(not(test))]
-unsafe fn create_checked(setup: &Setup, platform: &'static Platform) -> Result<Sr12, i32> {
+unsafe fn create_checked(setup: &Setup) -> Result<Sr12, i32> {
     if rsf_core_sr12_quality_supported(setup.backend, setup.quality) == 0 {
         return Err(INVALID_ARGUMENT);
     }
-    let owner = unsafe { create(setup, platform) }?;
+    let owner = unsafe { create(setup) }?;
     if owner.width == 0
         || owner.height == 0
         || owner.width > owner.output_width
@@ -1359,12 +1222,11 @@ unsafe fn create_checked(setup: &Setup, platform: &'static Platform) -> Result<S
 }
 
 #[cfg(not(test))]
+#[unsafe(export_name = "rsf_sr12_create_planned")]
 unsafe extern "C" fn rsf_core_sr12_create_planned(
     setup: *const Setup,
     plan: *mut PlanResult,
     out: *mut *mut Sr12,
-    platform: *const Platform,
-    adapter_identity: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> u32,
 ) -> i32 {
     if out.is_null() {
         return INVALID_ARGUMENT;
@@ -1406,19 +1268,16 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
     if setup.abi_version == 2 && (size as usize) < size_of::<Setup>() {
         return INVALID_ARGUMENT;
     }
-    let Some(platform): Option<&'static Platform> = (unsafe { platform.as_ref() }) else {
-        return INVALID_ARGUMENT;
-    };
-    assert_eq!(platform.struct_size as usize, size_of::<Platform>());
     if setup.backend == RSF_SR_AUTO {
         let (mut vendor, mut software) = (0, 0);
-        if unsafe { adapter_identity(setup.device, &mut vendor, &mut software) } == 0 {
+        let identity = crate::d3d12_host::sr::rsf_core_sr12_adapter_identity;
+        if unsafe { identity(setup.device, &mut vendor, &mut software) } == 0 {
             plan.requested_result = NOT_READY;
             return NOT_READY;
         }
         setup.backend = crate::rsf_gpu_default_sr_backend(vendor, software);
     }
-    let owner = match unsafe { create_checked(&setup, platform) } {
+    let owner = match unsafe { create_checked(&setup) } {
         Ok(owner) => {
             plan.requested_result = OK;
             owner
@@ -1429,7 +1288,7 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
                 return result;
             }
             setup.backend = RSF_SR_NONE;
-            match unsafe { create_checked(&setup, platform) } {
+            match unsafe { create_checked(&setup) } {
                 Ok(owner) => owner,
                 Err(result) => return result,
             }
@@ -1532,7 +1391,7 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_present(
     }
     match owner.native.vendor {
         Vendor::Dlss(context) => unsafe {
-            (owner.p().dlss_present)(context.as_ptr(), swapchain, sync_interval, flags, begin)
+            native::dlss_present(context.as_ptr(), swapchain, sync_interval, flags, begin)
         },
         _ => OK,
     }
@@ -1548,7 +1407,7 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_capture(
     match unsafe { owner.as_ref() } {
         Some(owner)
             if unsafe {
-                (owner.p().capture_configure)(owner.capture(), directory, first_frame, frames)
+                native::capture_configure(owner.capture(), directory, first_frame, frames)
             } != 0 =>
         {
             OK
@@ -1565,7 +1424,7 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_capture_flush(owner: *mut Sr12, sl
     if slot as usize >= SLOTS {
         return INVALID_ARGUMENT;
     }
-    if unsafe { (owner.p().capture_flush)(owner.capture(), slot) } != 0 {
+    if unsafe { native::capture_flush(owner.capture(), slot) } != 0 {
         OK
     } else {
         FEATURE_FAILED

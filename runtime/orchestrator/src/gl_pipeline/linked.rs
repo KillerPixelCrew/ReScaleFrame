@@ -111,7 +111,7 @@ unsafe extern "C" fn gl_close(ctx: Handle) -> i32 {
 }
 
 unsafe extern "C" fn sr_create(setup: *const rsf_sr12_setup, out: *mut Handle) -> i32 {
-    unsafe { sr12::create_for_host(setup, out.cast()) }
+    unsafe { sr12::rsf_core_sr12_create(setup, out.cast()) }
 }
 
 unsafe extern "C" fn sr_plan(owner: Handle, width: *mut u32, height: *mut u32) -> i32 {

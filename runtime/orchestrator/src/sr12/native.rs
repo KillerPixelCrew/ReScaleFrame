@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::d3d12_host::sr::*;
-use crate::d3d12_host::{borrow, rsf_core_d3d12_create_uav_texture, rsf_core_d3d12_transition};
-use crate::d3d12_sharpening as sharpening;
-use crate::frame_capture12::native::{rsf_fg12_platform_map, rsf_fg12_platform_unmap};
+use crate::d3d12_host::borrow;
 use crate::frame_capture12::{self as capture, Owner as Capture};
 use crate::sys::rsf_d3d11_output_srv_format;
 use std::mem::ManuallyDrop;
@@ -40,25 +37,27 @@ const _: () = {
     assert!(size_of::<PlanResult>() == 24);
 };
 
+// The owner's leaves, by the names sr12.rs calls them; sr12/tests.rs fakes the same names.
 unsafe extern "C" {
-    fn rsf_dlss_native12_create(
-        device: Handle,
-        setup: *const rsf_dlss_setup,
-        out: *mut Handle,
-    ) -> i32;
-    fn rsf_dlss_native12_create_shared(
+    #[link_name = "rsf_dlss_native12_create"]
+    pub(super) fn dlss_create(device: Handle, setup: *const rsf_dlss_setup, out: *mut Handle)
+    -> i32;
+    #[link_name = "rsf_dlss_native12_create_shared"]
+    pub(super) fn dlss_create_shared(
         device: Handle,
         setup: *const rsf_dlss_setup,
         host: Handle,
         out: *mut Handle,
     ) -> i32;
-    fn rsf_dlss_native12_create_registered(
+    #[link_name = "rsf_dlss_native12_create_registered"]
+    pub(super) fn dlss_create_registered(
         device: Handle,
         setup: *const rsf_dlss_setup,
         registration: Handle,
         out: *mut Handle,
     ) -> i32;
-    fn rsf_dlss_native12_plan(
+    #[link_name = "rsf_dlss_native12_plan"]
+    pub(super) fn dlss_plan(
         context: Handle,
         width: u32,
         height: u32,
@@ -66,32 +65,46 @@ unsafe extern "C" {
         render_width: *mut u32,
         render_height: *mut u32,
     ) -> i32;
-    fn rsf_dlss_native12_set_sdr(context: Handle, sdr: u32);
-    fn rsf_dlss_native12_evaluate(context: Handle, list: Handle, frame: *const rsf_sr_frame)
-    -> i32;
-    fn rsf_dlss_native12_evaluate_borrowed(
+    #[link_name = "rsf_dlss_native12_set_sdr"]
+    pub(super) fn dlss_set_sdr(context: Handle, sdr: u32);
+    #[link_name = "rsf_dlss_native12_evaluate"]
+    pub(super) fn dlss_evaluate(context: Handle, list: Handle, frame: *const rsf_sr_frame) -> i32;
+    #[link_name = "rsf_dlss_native12_evaluate_borrowed"]
+    pub(super) fn dlss_evaluate_borrowed(
         context: Handle,
         list: Handle,
         frame: *const rsf_sr_frame,
         latency_token: Handle,
     ) -> i32;
-    fn rsf_dlss_native12_present(
+    #[link_name = "rsf_dlss_native12_present"]
+    pub(super) fn dlss_present(
         context: Handle,
         chain: Handle,
         sync_interval: u32,
         flags: u32,
         begin: u32,
     ) -> i32;
-    fn rsf_dlss_native12_destroy(context: Handle);
-    fn rsf_sr_session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32;
-    fn rsf_sr_session_select(session: Handle, backend: u32, quality: u32, version: u64) -> i32;
-    fn rsf_sr_session_get_status(session: Handle, status: *mut rsf_sr_session_status) -> i32;
-    fn rsf_sr_session_evaluate(session: Handle, list: Handle, frame: *const rsf_sr_frame) -> i32;
-    fn rsf_sr_session_destroy(session: Handle);
-    fn rsf_input_dump_begin_record(record: *const rsf_frame_record, backend: u32) -> i32;
-    fn rsf_input_dump_pass_metadata(pass: *const Pass);
-    fn rsf_input_dump_sr_frame(frame: *const rsf_sr_frame, backend: u32, sdr: u32);
-    fn rsf_input_dump_result(
+    #[link_name = "rsf_dlss_native12_destroy"]
+    pub(super) fn dlss_destroy(context: Handle);
+    #[link_name = "rsf_sr_session_create"]
+    pub(super) fn session_create(setup: *const rsf_sr_session_setup, out: *mut Handle) -> i32;
+    #[link_name = "rsf_sr_session_select"]
+    pub(super) fn session_select(session: Handle, backend: u32, quality: u32, version: u64) -> i32;
+    #[link_name = "rsf_sr_session_get_status"]
+    pub(super) fn session_get_status(session: Handle, status: *mut rsf_sr_session_status) -> i32;
+    #[link_name = "rsf_sr_session_evaluate"]
+    pub(super) fn session_evaluate(session: Handle, list: Handle, frame: *const rsf_sr_frame)
+    -> i32;
+    #[link_name = "rsf_sr_session_destroy"]
+    pub(super) fn session_destroy(session: Handle);
+    #[link_name = "rsf_input_dump_begin_record"]
+    pub(super) fn dump_begin_record(record: *const rsf_frame_record, backend: u32) -> i32;
+    #[link_name = "rsf_input_dump_pass_metadata"]
+    pub(super) fn dump_pass_metadata(pass: *const Pass);
+    #[link_name = "rsf_input_dump_sr_frame"]
+    pub(super) fn dump_sr_frame(frame: *const rsf_sr_frame, backend: u32, sdr: u32);
+    #[link_name = "rsf_input_dump_result"]
+    pub(super) fn dump_result(
         record: *const rsf_frame_record,
         stage: *const c_char,
         backend: u32,
@@ -99,61 +112,23 @@ unsafe extern "C" {
     );
 }
 
-pub(super) static PLATFORM: Platform = Platform {
-    struct_size: size_of::<Platform>() as u32,
-    dlss_create: rsf_dlss_native12_create,
-    dlss_create_shared: rsf_dlss_native12_create_shared,
-    dlss_create_registered: rsf_dlss_native12_create_registered,
-    dlss_plan: rsf_dlss_native12_plan,
-    dlss_set_sdr: rsf_dlss_native12_set_sdr,
-    dlss_evaluate: rsf_dlss_native12_evaluate,
-    dlss_evaluate_borrowed: rsf_dlss_native12_evaluate_borrowed,
-    dlss_present: rsf_dlss_native12_present,
-    dlss_destroy: rsf_dlss_native12_destroy,
-    session_create: rsf_sr_session_create,
-    session_select: rsf_sr_session_select,
-    session_get_status: rsf_sr_session_get_status,
-    session_evaluate: rsf_sr_session_evaluate,
-    session_destroy: rsf_sr_session_destroy,
-    create_pipeline: rsf_core_sr12_create_pipeline,
-    create_heap: rsf_core_sr12_create_heap,
-    create_texture: rsf_core_d3d12_create_uav_texture,
-    create_exposure_texture: rsf_core_sr12_create_exposure_texture,
-    create_exposure_upload: rsf_core_sr12_create_exposure_upload,
-    write_exposure_upload,
-    create_readback: rsf_core_sr12_create_readback,
-    describe,
-    owned_by: rsf_core_sr12_owned_by,
-    write_srv,
-    write_uav,
-    dispatch,
-    transition: rsf_core_d3d12_transition,
-    copy_region,
-    copy_unit_exposure,
-    copy_motion_tile,
-    map: rsf_fg12_platform_map,
-    unmap: rsf_fg12_platform_unmap,
-    depth_domains: crate::d3d12_host::pass_depth_domains,
-    fg_handoff: crate::fg12::handoff_inputs,
-    capture_create,
-    capture_destroy,
-    capture_enabled,
-    capture_configure,
-    capture_flush,
-    capture_record,
-    capture_event,
-    capture_wants,
-    capture_force_reset,
-    sharpen_create: sharpening::create_host,
-    sharpen_destroy: sharpening::destroy_host,
-    sharpen_run: sharpening::run_host,
-    dump_begin_record: rsf_input_dump_begin_record,
-    dump_pass_metadata: rsf_input_dump_pass_metadata,
-    dump_sr_frame: rsf_input_dump_sr_frame,
-    dump_result: rsf_input_dump_result,
+pub(super) use crate::d3d12_host::pass_depth_domains as depth_domains;
+pub(super) use crate::d3d12_host::rsf_core_d3d12_create_uav_texture as create_texture;
+pub(super) use crate::d3d12_host::rsf_core_d3d12_transition as transition;
+pub(super) use crate::d3d12_host::sr::{
+    rsf_core_sr12_create_exposure_texture as create_exposure_texture,
+    rsf_core_sr12_create_exposure_upload as create_exposure_upload,
+    rsf_core_sr12_create_heap as create_heap, rsf_core_sr12_create_pipeline as create_pipeline,
+    rsf_core_sr12_create_readback as create_readback, rsf_core_sr12_owned_by as owned_by,
 };
-
-unsafe extern "C" fn write_exposure_upload(resource: Handle, value: f32) -> i32 {
+pub(super) use crate::d3d12_sharpening::{
+    create_host as sharpen_create, destroy_host as sharpen_destroy, run_host as sharpen_run,
+};
+pub(super) use crate::fg12::handoff_inputs as fg_handoff;
+pub(super) use crate::frame_capture12::native::{
+    rsf_fg12_platform_map as map, rsf_fg12_platform_unmap as unmap,
+};
+pub(super) unsafe extern "C" fn write_exposure_upload(resource: Handle, value: f32) -> i32 {
     let upload: &ID3D12Resource = unsafe { borrow(&resource) };
     let mut mapped: Handle = ptr::null_mut();
     let empty = D3D12_RANGE { Begin: 0, End: 0 };
@@ -169,7 +144,7 @@ unsafe extern "C" fn write_exposure_upload(resource: Handle, value: f32) -> i32 
     i32::from(!mapped.is_null())
 }
 
-unsafe extern "C" fn describe(resource: Handle, out: *mut TextureDesc) {
+pub(super) unsafe extern "C" fn describe(resource: Handle, out: *mut TextureDesc) {
     let desc = unsafe { borrow::<ID3D12Resource>(&resource).GetDesc() };
     let format = desc.Format.0 as u32;
     unsafe {
@@ -199,7 +174,7 @@ fn descriptor(
     }
 }
 
-unsafe extern "C" fn write_srv(
+pub(super) unsafe extern "C" fn write_srv(
     device: Handle,
     heap: Handle,
     index: u32,
@@ -223,7 +198,7 @@ unsafe extern "C" fn write_srv(
     unsafe { device.CreateShaderResourceView(resource, Some(&view), cpu) };
 }
 
-unsafe extern "C" fn write_uav(
+pub(super) unsafe extern "C" fn write_uav(
     device: Handle,
     heap: Handle,
     index: u32,
@@ -243,7 +218,7 @@ unsafe extern "C" fn write_uav(
     };
 }
 
-unsafe extern "C" fn dispatch(
+pub(super) unsafe extern "C" fn dispatch(
     list: Handle,
     heap: Handle,
     root: Handle,
@@ -311,7 +286,7 @@ fn footprint(
     }
 }
 
-unsafe extern "C" fn copy_region(
+pub(super) unsafe extern "C" fn copy_region(
     list: Handle,
     target: Handle,
     source: Handle,
@@ -332,14 +307,14 @@ unsafe extern "C" fn copy_region(
     unsafe { commands.CopyTextureRegion(&to, 0, 0, 0, &from, Some(&rectangle)) };
 }
 
-unsafe extern "C" fn copy_unit_exposure(list: Handle, target: Handle, upload: Handle) {
+pub(super) unsafe extern "C" fn copy_unit_exposure(list: Handle, target: Handle, upload: Handle) {
     let commands: &ID3D12GraphicsCommandList = unsafe { borrow(&list) };
     let from = texture_copy(&upload, Some(footprint(0, DXGI_FORMAT_R32_FLOAT, 1, 1)));
     let to = texture_copy(&target, None);
     unsafe { commands.CopyTextureRegion(&to, 0, 0, 0, &from, None) };
 }
 
-unsafe extern "C" fn copy_motion_tile(
+pub(super) unsafe extern "C" fn copy_motion_tile(
     list: Handle,
     buffer: Handle,
     offset: u64,
@@ -364,19 +339,19 @@ unsafe extern "C" fn copy_motion_tile(
     unsafe { commands.CopyTextureRegion(&to, 0, 0, 0, &from, Some(&rectangle)) };
 }
 
-extern "C" fn capture_create() -> Handle {
+pub(super) extern "C" fn capture_create() -> Handle {
     capture::rsf_core_capture12_create(1).cast()
 }
 
-unsafe extern "C" fn capture_destroy(owner: Handle) {
+pub(super) unsafe extern "C" fn capture_destroy(owner: Handle) {
     unsafe { capture::rsf_core_capture12_destroy(owner.cast::<Capture>()) };
 }
 
-unsafe extern "C" fn capture_enabled(owner: Handle) -> i32 {
+pub(super) unsafe extern "C" fn capture_enabled(owner: Handle) -> i32 {
     unsafe { capture::rsf_core_capture12_enabled(owner.cast::<Capture>()) }
 }
 
-unsafe extern "C" fn capture_configure(
+pub(super) unsafe extern "C" fn capture_configure(
     owner: Handle,
     directory: *const c_char,
     first: u64,
@@ -387,12 +362,12 @@ unsafe extern "C" fn capture_configure(
     }
 }
 
-unsafe extern "C" fn capture_flush(owner: Handle, slot: u32) -> i32 {
+pub(super) unsafe extern "C" fn capture_flush(owner: Handle, slot: u32) -> i32 {
     unsafe { capture::rsf_core_capture12_flush(owner.cast::<Capture>(), slot, 0) }
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn capture_record(
+pub(super) unsafe extern "C" fn capture_record(
     owner: Handle,
     list: Handle,
     source: Handle,
@@ -421,7 +396,7 @@ unsafe extern "C" fn capture_record(
     }
 }
 
-unsafe extern "C" fn capture_event(
+pub(super) unsafe extern "C" fn capture_event(
     owner: Handle,
     record: *const rsf_frame_record,
     name: *const c_char,
@@ -441,10 +416,10 @@ unsafe extern "C" fn capture_event(
     }
 }
 
-unsafe extern "C" fn capture_wants(owner: Handle, frame: u64) -> i32 {
+pub(super) unsafe extern "C" fn capture_wants(owner: Handle, frame: u64) -> i32 {
     unsafe { capture::rsf_core_capture12_wants(owner.cast::<Capture>(), frame) }
 }
 
-unsafe extern "C" fn capture_force_reset(owner: Handle, frame: u64) -> i32 {
+pub(super) unsafe extern "C" fn capture_force_reset(owner: Handle, frame: u64) -> i32 {
     unsafe { capture::rsf_core_capture12_force_reset(owner.cast::<Capture>(), frame) }
 }

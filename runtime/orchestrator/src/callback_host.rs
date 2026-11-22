@@ -137,7 +137,7 @@ crate::render_host_methods::impl_host_methods! {
         unsafe { crate::render_host_native::resource_desc(resource, out) }
     }
     fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
-        unsafe { crate::sr12::create_for_host(setup, out.cast()) }
+        unsafe { crate::sr12::rsf_core_sr12_create(setup, out.cast()) }
     }
     fn sr12_plan(context: Handle, width: *mut u32, height: *mut u32) -> i32 {
         unsafe { crate::sr12::rsf_core_sr12_plan(context.cast(), width, height) }
