@@ -2,12 +2,11 @@
 
 use super::observations;
 use crate::motion_capture_session::{
-    CaptureInterval, rsf_ac7_capture_enabled, rsf_ac7_capture_fail,
+    CaptureInterval, capture_enabled, rsf_ac7_capture_fail,
 };
 use crate::velocity_container::borrowed;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::mem::offset_of;
 
 const MAX_BUFFER_BYTES: usize = 8192;
 const MAX_UPLOADS: usize = 2048;
@@ -131,7 +130,7 @@ unsafe fn store_upload(
     size: u32,
     created: bool,
 ) -> bool {
-    if !rsf_ac7_capture_enabled() || buffer.is_null() {
+    if !capture_enabled() || buffer.is_null() {
         return true;
     }
     let size = size as usize;
@@ -160,18 +159,12 @@ unsafe fn store_upload(
     constants.store(identity, bytes)
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct ConstantRecord {
     pub(crate) buffer: u64,
     pub(crate) upload_serial: u64,
 }
 
-const _: () = {
-    assert!(size_of::<ConstantRecord>() == 16 && offset_of!(ConstantRecord, upload_serial) == 8);
-};
-
-#[repr(u32)]
 pub(crate) enum ConstantSource {
     Stopped,
     Uploaded,
@@ -180,16 +173,13 @@ pub(crate) enum ConstantSource {
     Failed,
 }
 
-type CopyUpload = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> bool;
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_capture_constant_source(
+/// Copies an uploaded buffer's bytes into `bytes`, or says whether a readback may fill them.
+pub(crate) fn constant_source(
     capture: CaptureInterval,
     buffer: *mut c_void,
     lighting: bool,
     record: &mut ConstantRecord,
-    user: *mut c_void,
-    copy: CopyUpload,
+    bytes: &mut Vec<u8>,
 ) -> ConstantSource {
     let mut observations = observations();
     if !capture.active() || CaptureInterval::load() != capture {
@@ -207,10 +197,10 @@ pub(crate) unsafe extern "C" fn rsf_ac7_capture_constant_source(
     record.buffer = identity as u64;
     record.upload_serial = 0;
     if !lighting && let Some(upload) = constants.uploads.get(&identity) {
-        // SAFETY: Native only copies into its local byte vector while the cache lends this span.
-        if !unsafe { copy(user, upload.bytes.as_ptr(), upload.bytes.len()) } {
+        if bytes.try_reserve_exact(upload.bytes.len()).is_err() {
             return ConstantSource::Failed;
         }
+        bytes.extend_from_slice(&upload.bytes);
         record.upload_serial = upload.serial;
         return ConstantSource::Uploaded;
     }
@@ -221,15 +211,13 @@ pub(crate) unsafe extern "C" fn rsf_ac7_capture_constant_source(
     }
 }
 
-#[repr(u32)]
 pub(crate) enum ConstantRead {
     Stopped,
     Skipped,
     Reserved,
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_reserve_constant_read(
+pub(crate) fn reserve_constant_read(
     capture: CaptureInterval,
     width: u32,
     lighting: bool,
@@ -251,8 +239,7 @@ pub(crate) extern "C" fn rsf_ac7_capture_reserve_constant_read(
     ConstantRead::Reserved
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_constant_read_failed(capture: CaptureInterval) {
+pub(crate) fn constant_read_failed(capture: CaptureInterval) {
     let mut observations = observations();
     let current = CaptureInterval::load();
     if current.active() && current.session == capture.session {

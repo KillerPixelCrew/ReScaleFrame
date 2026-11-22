@@ -37,15 +37,6 @@ void rsf_ac7_motion_capture_native_pass(const rsf_game_render_pass* pass, uint32
    requests paired backend images for the next evaluation. */
 int rsf_ac7_motion_capture_present(void* swapchain, char* prefix, uint32_t capacity);
 
-typedef struct rsf_ac7_velocity_facts {
-    uint32_t fields_valid, accepted, visible, mobility, relevance, has_velocity_called;
-    uint32_t has_velocity, camera_cut, always_velocity, history_checked, history_found;
-    float radius, distance_squared, lod_factor, minimum_size;
-} rsf_ac7_velocity_facts;
-
-/* Pure interpretation of observed native facts. Unknown reasons stay unknown. */
-const char* rsf_ac7_velocity_reason(const rsf_ac7_velocity_facts* facts);
-
 #ifdef __cplusplus
 }
 #endif

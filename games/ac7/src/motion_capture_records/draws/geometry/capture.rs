@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-use super::{Geometry, GeometryStream, GeometryVsBuffer, rsf_ac7_capture_record_geometry};
+use super::{Geometry, GeometryStream, GeometryVsBuffer, record_geometry};
 use crate::motion_capture_observations::geometry::{
-    GeometryAdmission, GeometryPlan, rsf_ac7_capture_geometry_read, rsf_ac7_capture_plan_geometry,
+    geometry_read, plan_geometry,
 };
 use crate::motion_capture_records::{
     draws::gpu::{queued_draw, tick},
-    rsf_ac7_capture_geometry_scope, store_blob,
+    geometry_scope, store_blob,
 };
 use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_fail, rsf_ac7_capture_sample,
@@ -76,7 +76,7 @@ fn read_buffer(
     offset: u32,
     bytes: u32,
 ) -> Result<(u32, u32), fmt::Error> {
-    if bytes == 0 || !rsf_ac7_capture_geometry_read(capture, bucket, true) {
+    if bytes == 0 || !geometry_read(capture, bucket, true) {
         return Ok((0, 0));
     }
     let staging = D3D11_BUFFER_DESC {
@@ -129,19 +129,16 @@ unsafe extern "C" fn rsf_ac7_motion_capture_geometry(draw: *const rsf_frame_tap_
 }
 
 unsafe fn capture_geometry(capture: CaptureInterval, draw: &rsf_frame_tap_geometry) -> fmt::Result {
-    let mut plan = GeometryPlan::default();
-    match rsf_ac7_capture_plan_geometry(
+    let Some(plan) = plan_geometry(
         capture,
         draw.format,
         !draw.depth_view.is_null(),
         draw.input_layout,
         draw.vertex_shader,
-        &mut plan,
-    ) {
-        GeometryAdmission::Skipped => return Ok(()),
-        GeometryAdmission::Failed => return Err(fmt::Error),
-        GeometryAdmission::Admitted => {}
-    }
+    )?
+    else {
+        return Ok(());
+    };
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&draw.context) }) else {
         return Ok(());
     };
@@ -152,7 +149,7 @@ unsafe fn capture_geometry(capture: CaptureInterval, draw: &rsf_frame_tap_geomet
         return Ok(());
     };
     let mut row = Geometry {
-        scope: rsf_ac7_capture_geometry_scope(),
+        scope: geometry_scope(),
         qpc: tick(),
         layout: draw.input_layout.addr() as u64,
         kind: draw.kind,
@@ -163,7 +160,7 @@ unsafe fn capture_geometry(capture: CaptureInterval, draw: &rsf_frame_tap_geomet
         start_instance: draw.start_instance,
         ..Default::default()
     };
-    let can_read = || rsf_ac7_capture_geometry_read(capture, plan.bucket, false);
+    let can_read = || geometry_read(capture, plan.bucket, false);
     let _predication = Predication::disable(context);
     for (slot, raw) in draw.vertex_buffers.iter().enumerate() {
         if plan.ia_slots & (1 << slot) == 0 {
@@ -263,7 +260,7 @@ unsafe fn capture_geometry(capture: CaptureInterval, draw: &rsf_frame_tap_geomet
         row.vs_buffer_count += 1;
     }
     row.queued = queued_draw();
-    if rsf_ac7_capture_record_geometry(capture, &plan, &row) {
+    if record_geometry(capture, &plan, &row) {
         Ok(())
     } else {
         Err(fmt::Error)

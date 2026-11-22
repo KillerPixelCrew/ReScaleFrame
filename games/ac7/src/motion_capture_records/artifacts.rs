@@ -4,13 +4,13 @@
 use super::{EngineRecord, NativeRecordCounts, ROOT_NAMES, RootRecord, observe_velocity, records};
 use crate::motion_capture_observations::PublicationObservations;
 use crate::motion_capture_session::{
-    CaptureInterval, capture_prefix, rsf_ac7_capture_current, rsf_ac7_capture_fail,
-    rsf_ac7_capture_sampled, say, say_path,
+    CaptureInterval, capture_prefix, is_current, rsf_ac7_capture_fail,
+    is_sampled, say, say_path,
 };
-use std::ffi::{CStr, c_char};
+use std::ffi::CStr;
 use std::fmt::{self, Write as _};
 use std::io::Write as _;
-use std::mem::{offset_of, size_of, take};
+use std::mem::take;
 
 #[derive(Default)]
 pub(crate) struct Bytes(pub(crate) Vec<u8>);
@@ -263,7 +263,6 @@ impl Drop for Snapshot {
 }
 
 // Counters sampled by the capture session after attempting artifact writes.
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct Stats {
     qpc_frequency: i64,
@@ -288,10 +287,6 @@ impl Stats {
         }
     }
 }
-
-const _: () = {
-    assert!(size_of::<Stats>() == 24 && offset_of!(Stats, capture_failures) == 16);
-};
 
 fn write_summary(
     out: &mut Bytes,
@@ -341,7 +336,8 @@ fn write_summary(
     )
 }
 
-pub(crate) type WriteFile = unsafe extern "C" fn(*const c_char, *const u8, usize) -> bool;
+/// Replaces the file at a narrow path with the bytes; false when any part failed.
+pub(crate) type WriteFile = fn(&CStr, &[u8]) -> bool;
 
 struct Publisher<'a> {
     prefix: &'a CStr,
@@ -365,9 +361,9 @@ impl<'a> Publisher<'a> {
         self.path.extend(self.prefix.to_bytes())?;
         self.path.write_fmt(suffix)?;
         self.path.write_char('\0')?;
-        // SAFETY: The native writer borrows this terminated narrow path and payload only
-        // for the call. An I/O failure still allows attempts at the remaining files.
-        self.ok &= unsafe { (self.write)(self.path.0.as_ptr().cast(), data.as_ptr(), data.len()) };
+        let path = CStr::from_bytes_with_nul(&self.path.0).map_err(|_| fmt::Error)?;
+        // An I/O failure still allows attempts at the remaining files.
+        self.ok &= (self.write)(path, data);
         Ok(())
     }
 
@@ -386,7 +382,7 @@ impl<'a> Publisher<'a> {
         Ok(self.ok)
     }
 
-    fn finish(mut self, stats: unsafe extern "C" fn() -> Stats) -> Result<bool, fmt::Error> {
+    fn finish(mut self, stats: fn() -> Stats) -> Result<bool, fmt::Error> {
         let observations = PublicationObservations::snapshot().map_err(|_| fmt::Error)?;
         let snapshot = Snapshot::finish();
         let mut text = Bytes::default();
@@ -414,8 +410,8 @@ impl<'a> Publisher<'a> {
                 &shader.data,
             )?;
         }
-        // SAFETY: The native callback samples completion counters after the other file attempts.
-        let stats = unsafe { stats() };
+        // Completion counters are sampled after the other file attempts.
+        let stats = stats();
         text.0.clear();
         write_summary(
             &mut text,
@@ -430,12 +426,11 @@ impl<'a> Publisher<'a> {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_publish_checkpoint(
+pub(crate) fn publish_checkpoint(
     write: WriteFile,
     capture: CaptureInterval,
 ) {
-    if !rsf_ac7_capture_sampled(capture.interval) {
+    if !is_sampled(capture.interval) {
         return;
     }
     let Some(prefix) = capture_prefix(capture.session) else {
@@ -443,7 +438,7 @@ pub(crate) extern "C" fn rsf_ac7_capture_publish_checkpoint(
     };
     let result = (|| {
         let records = records();
-        if !rsf_ac7_capture_current(capture.session) {
+        if !is_current(capture.session) {
             return Ok(true);
         }
         let mut roots = Vec::new();
@@ -473,7 +468,7 @@ pub(crate) extern "C" fn rsf_ac7_capture_publish_checkpoint(
 pub(crate) fn publish_finish(
     capture: CaptureInterval,
     write: WriteFile,
-    stats: unsafe extern "C" fn() -> Stats,
+    stats: fn() -> Stats,
 ) {
     let Some(prefix) = capture_prefix(capture.session) else {
         rsf_ac7_capture_fail(capture);

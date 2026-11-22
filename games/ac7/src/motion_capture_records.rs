@@ -8,7 +8,7 @@ pub(crate) mod draws;
 mod native;
 pub(crate) mod root_hooks;
 
-use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
+use crate::motion_capture_session::{CaptureInterval, is_current};
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -154,9 +154,8 @@ pub struct NativeRootScope {
     view: u64,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
-pub struct QueuedScope {
+pub(crate) struct QueuedScope {
     scope: u64,
     view: u64,
     family: u64,
@@ -165,9 +164,8 @@ pub struct QueuedScope {
     queue_uid: u32,
 }
 
-#[repr(C)]
 #[derive(Default)]
-pub struct GeometryScope {
+pub(crate) struct GeometryScope {
     native_frame: u64,
     primitive: u64,
     material: u64,
@@ -186,8 +184,7 @@ struct NativeRecordCounts {
     blob_dropped: u32,
 }
 
-#[repr(u32)]
-pub enum CommandAdvance {
+enum CommandAdvance {
     Stop,
     Next,
     Failed,
@@ -198,8 +195,7 @@ const _: () = {
     assert!(size_of::<EngineRecord>() == 264 && offset_of!(EngineRecord, previous) == 200);
     assert!(size_of::<RootRecord>() == 376 && offset_of!(RootRecord, output_name) == 304);
     assert!(align_of::<EngineRecord>() == 8 && align_of::<RootRecord>() == 8);
-    assert!(size_of::<NativeRootScope>() == 16 && size_of::<QueuedScope>() == 40);
-    assert!(size_of::<GeometryScope>() == 32);
+    assert!(size_of::<NativeRootScope>() == 16);
 };
 
 #[derive(Clone, Copy)]
@@ -282,12 +278,6 @@ fn observe_velocity(facts: Option<&VelocityFacts>) -> &'static CStr {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_velocity_reason(facts: *const VelocityFacts) -> *const c_char {
-    // SAFETY: The public ABI accepts either a live VelocityFacts or null.
-    observe_velocity(unsafe { facts.as_ref() }).as_ptr()
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_ac7_capture_swap_engine(
     event: *mut EngineRecord,
 ) -> *mut EngineRecord {
@@ -340,7 +330,7 @@ unsafe extern "C" fn rsf_ac7_capture_record_engine(
     accepted: bool,
 ) -> bool {
     let mut records = records();
-    if !rsf_ac7_capture_current(capture.session) {
+    if !is_current(capture.session) {
         return true;
     }
     if records.engine.len() >= MAX_ENGINE {
@@ -357,18 +347,14 @@ unsafe extern "C" fn rsf_ac7_capture_record_engine(
     true
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_init_root(root: *mut RootRecord, kind: u32, owner: u64) {
-    // SAFETY: The native detour passes its zero-initialized root record.
-    let root = unsafe { &mut *root };
+fn init_root(root: &mut RootRecord, kind: u32, owner: u64) {
     root.kind = kind;
     root.owner = owner;
     root.id = ROOT_SERIAL.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     root.parent = ROOT.get().id;
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_ac7_capture_root_scope() -> NativeRootScope {
+pub(crate) fn root_scope() -> NativeRootScope {
     ROOT.get()
 }
 
@@ -392,10 +378,7 @@ pub unsafe extern "C" fn rsf_ac7_capture_restore_root(scope: *const NativeRootSc
     ROOT.set(unsafe { *scope });
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_end_root(root: *mut RootRecord, qpc: u64) {
-    // SAFETY: The native detour passes its live root record after the original call returns.
-    let root = unsafe { &mut *root };
+fn end_root(root: &mut RootRecord, qpc: u64) {
     root.kind = match root.kind {
         POSTPROCESS_BEGIN
         | WIDGET_PREPARE_BEFORE
@@ -408,12 +391,9 @@ pub unsafe extern "C" fn rsf_ac7_capture_end_root(root: *mut RootRecord, qpc: u6
     root.qpc = qpc;
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_record_root(root: *const RootRecord) -> bool {
-    // SAFETY: The native detour passes its live, fully initialized record.
-    let root = unsafe { *root };
+fn record_root(root: &RootRecord) -> bool {
     let mut records = records();
-    if !rsf_ac7_capture_current(root.session) {
+    if !is_current(root.session) {
         return true;
     }
     if records.roots.len() >= MAX_ROOTS {
@@ -422,32 +402,18 @@ pub unsafe extern "C" fn rsf_ac7_capture_record_root(root: *const RootRecord) ->
         if records.roots.try_reserve(1).is_err() {
             return false;
         }
-        records.roots.push(root);
+        records.roots.push(*root);
     }
     true
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_commands_changed(
-    root: *const RootRecord,
-    link: u64,
-    uid: u32,
-) -> bool {
-    // SAFETY: The native detour passes its live graph root and freshly read queue identity.
-    let root = unsafe { &*root };
+fn commands_changed(root: &RootRecord, link: u64, uid: u32) -> bool {
     uid == root.queue_uid && root.queue_begin != 0 && root.queue_begin != link
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_associate_command(
-    root: *mut RootRecord,
-    command: u64,
-    execute: u64,
-) -> CommandAdvance {
-    // SAFETY: The native detour passes its live graph root after reading the command prefix.
-    let root = unsafe { &mut *root };
+fn associate_command(root: &mut RootRecord, command: u64, execute: u64) -> CommandAdvance {
     let mut records = records();
-    if !rsf_ac7_capture_current(root.session) {
+    if !is_current(root.session) {
         return CommandAdvance::Stop;
     }
     let association = Association {
@@ -488,8 +454,7 @@ pub unsafe extern "C" fn rsf_ac7_capture_associate_command(
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_ac7_capture_queued_scope(
+pub(crate) fn queued_scope(
     command: u64,
     execute: u64,
     observed: bool,
@@ -515,8 +480,9 @@ pub extern "C" fn rsf_ac7_capture_queued_scope(
     scope
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_execution_pass(pass: *const rsf_game_render_pass) -> bool {
+/// # Safety
+/// `pass` is null or a header-sized pass whose full size the header admits.
+unsafe fn execution_pass(pass: *const rsf_game_render_pass) -> bool {
     // SAFETY: The callback lends a header or null, with the full pass valid when size admits it.
     if pass.is_null()
         || unsafe { pass.cast::<u32>().read() } < size_of::<rsf_game_render_pass>() as u32
@@ -529,12 +495,9 @@ pub unsafe extern "C" fn rsf_ac7_capture_execution_pass(pass: *const rsf_game_re
     true
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_execution_root(root: *mut RootRecord) {
+fn execution_root(root: &mut RootRecord) {
     PASS.with_borrow(|pass| {
         if let Some(pass) = pass.as_ref() {
-            // SAFETY: The native callback passes its live RHI root on the same thread.
-            let root = unsafe { &mut *root };
             root.owner = pass.pass_key;
             root.view = pass.view_key;
             root.family = pass.family_key;
@@ -552,8 +515,7 @@ pub unsafe extern "C" fn rsf_ac7_capture_execution_root(root: *mut RootRecord) {
     });
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_ac7_capture_geometry_scope() -> GeometryScope {
+pub(crate) fn geometry_scope() -> GeometryScope {
     PASS.with_borrow(|pass| {
         pass.as_ref()
             .map_or_else(GeometryScope::default, |pass| GeometryScope {
@@ -569,7 +531,7 @@ pub extern "C" fn rsf_ac7_capture_geometry_scope() -> GeometryScope {
 #[cfg(any(windows, test))]
 pub(super) fn store_blob(capture: CaptureInterval, bytes: &[u8]) -> Option<u32> {
     let mut records = records();
-    if bytes.is_empty() || !rsf_ac7_capture_current(capture.session) {
+    if bytes.is_empty() || !is_current(capture.session) {
         return Some(0);
     }
     if let Some(index) = records.blobs.iter().position(|blob| blob == bytes) {
@@ -608,7 +570,7 @@ pub(super) fn reset_records() {
 
 #[cfg(test)]
 mod velocity_reason_tests {
-    use super::{VelocityFacts, rsf_ac7_velocity_reason};
+    use super::{VelocityFacts, observe_velocity};
     use std::ffi::CStr;
 
     #[test]
@@ -631,9 +593,7 @@ mod velocity_reason_tests {
             minimum_size: 0.5,
         };
         let check = |facts: &VelocityFacts, expected: &CStr| {
-            // SAFETY: The fixture lends a live record and the classifier returns a static C string.
-            let reason = unsafe { CStr::from_ptr(rsf_ac7_velocity_reason(facts)) };
-            assert_eq!(reason, expected);
+            assert_eq!(observe_velocity(Some(facts)), expected);
         };
         check(&facts, c"size");
         facts.minimum_size = 50.0;

@@ -6,13 +6,11 @@ use crate::motion_capture_observations::geometry::GeometryPlan;
 use crate::motion_capture_records::{GeometryScope, artifacts::Bytes};
 use crate::motion_capture_session::CaptureInterval;
 use std::fmt::{self, Write as _};
-use std::mem::{offset_of, size_of};
 
 #[cfg(all(windows, not(test)))]
 mod capture;
 
 // Buffer identities are opaque numbers.
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct GeometryStream {
     buffer: u64,
@@ -24,7 +22,6 @@ struct GeometryStream {
     blob: u32,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct GeometryVsBuffer {
     resource: u64,
@@ -36,7 +33,6 @@ struct GeometryVsBuffer {
     blob: u32,
 }
 
-#[repr(C)]
 #[derive(Default)]
 struct Geometry {
     queued: QueuedDraw,
@@ -54,14 +50,6 @@ struct Geometry {
     streams: [GeometryStream; 32],
     vs_buffers: [GeometryVsBuffer; 3],
 }
-
-const _: () = {
-    assert!(size_of::<GeometryStream>() == 32 && offset_of!(GeometryStream, blob) == 28);
-    assert!(size_of::<GeometryVsBuffer>() == 32 && offset_of!(GeometryVsBuffer, blob) == 28);
-    assert!(size_of::<Geometry>() == 1256 && offset_of!(Geometry, qpc) == 88);
-    assert!(offset_of!(Geometry, base_vertex) == 116 && offset_of!(Geometry, streams) == 136);
-    assert!(offset_of!(Geometry, vs_buffers) == 1160);
-};
 
 fn write_geometry(
     out: &mut Bytes,
@@ -166,8 +154,7 @@ fn write_geometry(
     out.write_char('}')
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_record_geometry(
+fn record_geometry(
     capture: CaptureInterval,
     plan: &GeometryPlan,
     draw: &Geometry,

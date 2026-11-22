@@ -8,7 +8,7 @@ pub(super) mod geometry;
 mod shader;
 
 use crate::motion_capture_session::{
-    CaptureInterval, rsf_ac7_capture_enabled, rsf_ac7_capture_fail,
+    CaptureInterval, capture_enabled, rsf_ac7_capture_fail,
 };
 use crate::shader_hash::crc32c;
 use crate::sys::rsf_observer_layout_element as LayoutElement;
@@ -19,7 +19,6 @@ use colour::ColourReadbacks;
 use geometry::GeometryReads;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::mem::offset_of;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
 const MAX_SHADER_BYTES: usize = 1024 * 1024;
@@ -30,7 +29,6 @@ const MAX_LAYOUT_ELEMENTS: usize = 16;
 const CONSTANT_SLOTS: u32 = 14;
 const ALL_CONSTANTS: u32 = (1 << CONSTANT_SLOTS) - 1;
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct ShaderFacts {
     pub(crate) hash: u32,
@@ -51,18 +49,12 @@ impl Shader {
     }
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct LayoutSnapshot {
     pub(super) count: u32,
     pub(super) copied: u32,
     pub(super) elements: [LayoutElement; MAX_LAYOUT_ELEMENTS],
 }
-
-const _: () = {
-    assert!(size_of::<ShaderFacts>() == 8 && offset_of!(ShaderFacts, constant_mask) == 4);
-    assert!(size_of::<LayoutSnapshot>() == 328 && offset_of!(LayoutSnapshot, elements) == 8);
-};
 
 #[derive(Default)]
 pub(super) struct Observations {
@@ -167,7 +159,8 @@ impl Observations {
     }
 }
 
-type DisassembleConstants = unsafe extern "C" fn(*const c_void, usize) -> u32;
+/// The constant-buffer slot mask the shader's disassembly declares.
+type DisassembleConstants = fn(&[u8]) -> u32;
 
 fn shader_bytes(bytes: &[u8]) -> Option<Arc<Vec<u8>>> {
     let mut data = Vec::new();
@@ -176,8 +169,11 @@ fn shader_bytes(bytes: &[u8]) -> Option<Arc<Vec<u8>>> {
     Some(Arc::new(data))
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_observe_shader(
+/// False when an allocation failed.
+///
+/// # Safety
+/// `bytes` is null or `size` readable bytes for the call.
+unsafe fn observe_shader(
     shader: *mut c_void,
     stage: u32,
     bytes: *const c_void,
@@ -193,7 +189,7 @@ unsafe extern "C" fn rsf_ac7_capture_observe_shader(
     if disassemble.is_some() {
         observations().forget_shader(identity, stage);
     }
-    let capture = disassemble.filter(|_| rsf_ac7_capture_enabled());
+    let capture = disassemble.filter(|_| capture_enabled());
     if !(1..=MAX_SHADER_BYTES).contains(&size) {
         velocity_pass_cache::observe_shader(identity, stage, None);
         return true;
@@ -213,7 +209,7 @@ unsafe extern "C" fn rsf_ac7_capture_observe_shader(
     };
     let Some(data) = data else { return false };
     // Disassembly can load the compiler DLL. Keep it outside the cache lock.
-    let constant_mask = unsafe { disassemble(bytes.as_ptr().cast(), size) };
+    let constant_mask = disassemble(bytes);
     observations().retain_shader(identity, stage, data, constant_mask)
 }
 
@@ -225,14 +221,10 @@ unsafe extern "C" fn rsf_ac7_velocity_shader_seen(
     size: u32,
 ) {
     // SAFETY: The velocity-only fixture lends the same creation callback byte span.
-    unsafe { rsf_ac7_capture_observe_shader(shader, stage, bytes, size, None) };
+    unsafe { observe_shader(shader, stage, bytes, size, None) };
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_shader_facts(
-    shader: *mut c_void,
-    stage: u32,
-) -> ShaderFacts {
+pub(crate) fn shader_facts(shader: *mut c_void, stage: u32) -> ShaderFacts {
     observations().shader_facts(shader.addr(), stage)
 }
 
@@ -258,15 +250,7 @@ fn declaration_slot(text: &[u8]) -> Option<u32> {
     Some(if negative { slot.wrapping_neg() } else { slot })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_declared_constants(text: *const u8, size: usize) -> u32 {
-    if text.is_null() {
-        return ALL_CONSTANTS;
-    }
-    // SAFETY: The native disassembly blob remains live and readable for this call.
-    let Some(text) = (unsafe { borrowed(text, size) }) else {
-        return ALL_CONSTANTS;
-    };
+fn declared_constants(text: &[u8]) -> u32 {
     const DECLARATION: &[u8] = b"dcl_constantbuffer CB";
     let mut mask = 0;
     for (offset, window) in text.windows(DECLARATION.len()).enumerate() {
@@ -300,7 +284,7 @@ unsafe fn observe_layout(
     count: u32,
 ) -> bool {
     let len = copied as usize;
-    if !rsf_ac7_capture_enabled() || layout.is_null() || !(1..=MAX_LAYOUT_ELEMENTS).contains(&len) {
+    if !capture_enabled() || layout.is_null() || !(1..=MAX_LAYOUT_ELEMENTS).contains(&len) {
         return true;
     }
     // SAFETY: The creation callback lends the translated descriptors for this call.

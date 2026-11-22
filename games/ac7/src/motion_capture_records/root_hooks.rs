@@ -6,7 +6,6 @@ mod native;
 
 use crate::sites::{POSTPROCESS_ENTRY, POSTPROCESS_RVA, WIDGET_QUEUE_ENTRY, WIDGET_QUEUE_RVA};
 use std::ffi::c_void;
-use std::mem::{offset_of, size_of};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -92,7 +91,6 @@ const ROOT_SITES: [RootSite; 6] = [
     },
 ];
 
-#[repr(u32)]
 enum RootInstall {
     AlreadyInstalled,
     RhiRefused,
@@ -104,16 +102,11 @@ enum RootInstall {
 
 // The native leaves keep typed trampolines and MinHook effects, including rollback.
 // The target array is borrowed for each call.
-#[repr(C)]
 struct RootHookEffects {
     copy: unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool,
     install: unsafe extern "C" fn(*mut *mut c_void, u32) -> bool,
     remove: unsafe extern "C" fn(*mut *mut c_void, u32),
 }
-
-const _: () = {
-    assert!(size_of::<RootHookEffects>() == 24 && offset_of!(RootHookEffects, remove) == 16);
-};
 
 struct HookTargets<const N: usize> {
     entries: [*mut c_void; N],
@@ -190,17 +183,11 @@ impl RootHookEffects {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_install_roots(
-    base: *mut u8,
-    effects: *const RootHookEffects,
-) -> RootInstall {
+fn install_roots(base: *mut u8, effects: &RootHookEffects) -> RootInstall {
     let mut registration = lock(&REGISTRATION);
     if let Some(status) = registration.status() {
         return status;
     }
-    // SAFETY: The native wrapper passes its live table of synchronous capture leaves.
-    let effects = unsafe { &*effects };
     if base.is_null() || !effects.matches(base.wrapping_add(RHI_WRITE_RVA), RHI_WRITE) {
         return RootInstall::RhiRefused;
     }
@@ -228,16 +215,14 @@ unsafe extern "C" fn rsf_ac7_capture_install_roots(
     result
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_remove_roots(effects: &RootHookEffects) -> bool {
+fn remove_roots(effects: &RootHookEffects) -> bool {
     let mut registration = lock(&REGISTRATION);
     let removed = registration.remove(effects);
     CURRENT_COMMAND.store(null_mut(), Ordering::Release);
     removed
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_install_engine(
+fn install_engine(
     base: *mut u8,
     effects: &RootHookEffects,
 ) -> RootInstall {
@@ -264,18 +249,15 @@ extern "C" fn rsf_ac7_capture_install_engine(
     engine.install(targets, effects)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_remove_engine(effects: &RootHookEffects) -> bool {
+fn remove_engine(effects: &RootHookEffects) -> bool {
     lock(&ENGINE).remove(effects)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_engine_installed() -> bool {
+pub(crate) fn engine_installed() -> bool {
     lock(&ENGINE).installed
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_current_command_address() -> *const c_void {
+pub(crate) fn current_command_address() -> *const c_void {
     CURRENT_COMMAND.load(Ordering::Acquire)
 }
 

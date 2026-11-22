@@ -32,8 +32,12 @@ mod carrier;
 pub mod contact_shadow;
 use rsf_game_sys::dxbc_chunks;
 mod hook_batch;
+// Unit tests leave out the D3D11 and engine leaves (cfg(not(test))) that drive the capture.
+#[cfg_attr(test, allow(dead_code))]
 mod motion_capture_observations;
+#[cfg_attr(test, allow(dead_code))]
 mod motion_capture_records;
+#[cfg_attr(test, allow(dead_code))]
 mod motion_capture_session;
 use rsf_game_sys::shader_hash;
 pub mod sites;

@@ -9,16 +9,14 @@ mod ordinary;
 
 use super::{NativeRootScope, QueuedScope, Records, artifacts::Bytes, records};
 use crate::motion_capture_observations::colour::ColourSnapshot;
-use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
+use crate::motion_capture_session::{CaptureInterval, is_current};
 use std::fmt::{self, Write as _};
-use std::mem::{offset_of, size_of};
 
 const MAX_DRAWS: usize = 12000;
 const TEXTURE_2D: u32 = 3;
 const TEXTURE_3D: u32 = 4;
 
 // IDs are numeric and never dereferenced by the writers.
-#[repr(C)]
 #[derive(Default)]
 struct QueuedDraw {
     command: u64,
@@ -26,7 +24,6 @@ struct QueuedDraw {
     scope: QueuedScope,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct Resource {
     resource: u64,
@@ -37,14 +34,12 @@ struct Resource {
     format: u32,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct BoundView {
     resource: Resource,
     slot: u32,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct BoundConstant {
     buffer: u64,
@@ -54,14 +49,12 @@ struct BoundConstant {
     readback: u32,
 }
 
-#[repr(C)]
 #[derive(Default)]
 struct DrawTarget {
     view: BoundView,
     snapshot: ColourSnapshot,
 }
 
-#[repr(C)]
 struct Dispatch {
     root: NativeRootScope,
     queued: QueuedDraw,
@@ -79,20 +72,9 @@ struct Dispatch {
     constants: [BoundConstant; 14],
 }
 
-const _: () = {
-    assert!(size_of::<QueuedDraw>() == 56 && size_of::<Resource>() == 32);
-    assert!(size_of::<BoundView>() == 40 && offset_of!(BoundView, slot) == 32);
-    assert!(size_of::<BoundConstant>() == 32 && offset_of!(BoundConstant, readback) == 24);
-    assert!(size_of::<ColourSnapshot>() == 100 && offset_of!(ColourSnapshot, result) == 96);
-    assert!(size_of::<DrawTarget>() == 144 && offset_of!(DrawTarget, snapshot) == 40);
-    assert!(size_of::<Dispatch>() == 6016 && offset_of!(Dispatch, qpc) == 72);
-    assert!(offset_of!(Dispatch, inputs) == 128 && offset_of!(Dispatch, outputs) == 5248);
-    assert!(offset_of!(Dispatch, constants) == 5568);
-};
-
 fn draw_available(records: &mut Records, capture: CaptureInterval) -> bool {
     // A row can finish after its sample interval but before that same session retires.
-    if !rsf_ac7_capture_current(capture.session) {
+    if !is_current(capture.session) {
         return false;
     }
     if records.draws.len() >= MAX_DRAWS {
@@ -102,8 +84,7 @@ fn draw_available(records: &mut Records, capture: CaptureInterval) -> bool {
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_can_record_draw(capture: CaptureInterval) -> bool {
+fn can_record_draw(capture: CaptureInterval) -> bool {
     draw_available(&mut records(), capture)
 }
 
@@ -255,8 +236,7 @@ fn write_dispatch(out: &mut Bytes, interval: u32, d: &Dispatch) -> fmt::Result {
     out.write_char('}')
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_record_dispatch(
+fn record_dispatch(
     capture: CaptureInterval,
     dispatch: &Dispatch,
 ) -> bool {

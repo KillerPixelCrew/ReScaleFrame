@@ -11,14 +11,12 @@ use crate::motion_capture_observations::colour::{
 use crate::motion_capture_records::artifacts::{Bytes, write_float_with_precision};
 use crate::motion_capture_session::CaptureInterval;
 use std::fmt::{self, Write as _};
-use std::mem::{offset_of, size_of};
 
 #[cfg(all(windows, not(test)))]
 mod capture;
 #[cfg(all(windows, not(test)))]
 pub(super) use capture::observe;
 
-#[repr(C)]
 #[derive(Default)]
 struct Sampler {
     slot: u32,
@@ -29,7 +27,6 @@ struct Sampler {
     max_lod: f32,
 }
 
-#[repr(C)]
 struct BeforeDraw {
     queued: QueuedDraw,
     qpc: u64,
@@ -45,14 +42,6 @@ struct BeforeDraw {
     constants: [BoundConstant; 2],
     context: u64,
 }
-
-const _: () = {
-    assert!(size_of::<Sampler>() == 32 && offset_of!(Sampler, min_lod) == 24);
-    assert!(size_of::<BeforeDraw>() == 1504 && offset_of!(BeforeDraw, colour) == 88);
-    assert!(offset_of!(BeforeDraw, context) == 1496);
-    assert!(offset_of!(BeforeDraw, inputs) == 376 && offset_of!(BeforeDraw, samplers) == 1240);
-    assert!(offset_of!(BeforeDraw, constants) == 1432);
-};
 
 fn write_sampled_view(out: &mut Bytes, target: &DrawTarget) -> fmt::Result {
     out.write_str("{\"view\":")?;
@@ -86,7 +75,7 @@ fn write_before(
     plan: &BeforeDrawPlan,
     draw: &BeforeDraw,
 ) -> fmt::Result {
-    let lighting = plan.lighting != 0;
+    let lighting = plan.lighting;
     let kind = if lighting {
         "contact_light_before"
     } else {
@@ -138,8 +127,7 @@ fn write_before(
     out.write_char('}')
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_record_before_draw(
+fn record_before_draw(
     capture: CaptureInterval,
     plan: &BeforeDrawPlan,
     draw: &BeforeDraw,
@@ -152,7 +140,7 @@ extern "C" fn rsf_ac7_capture_record_before_draw(
         Commit::Failed => false,
         Commit::Skipped => true,
         Commit::Recorded => {
-            if plan.lighting != 0
+            if plan.lighting
                 && draw.colour.snapshot.name[0] != 0
                 && draw.colour.snapshot.result == 0
             {

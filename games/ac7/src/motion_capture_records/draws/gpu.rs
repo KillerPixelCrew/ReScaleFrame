@@ -4,19 +4,19 @@
 use super::{BoundConstant, BoundView, Dispatch, QueuedDraw, Resource};
 use crate::motion_capture_observations::buffers::*;
 use crate::motion_capture_observations::colour::{
-    ColourSnapshot, rsf_ac7_capture_colour_snapshot, rsf_ac7_capture_colour_snapshot_available,
+    ColourSnapshot, colour_snapshot, colour_snapshot_available,
 };
-use crate::motion_capture_observations::rsf_ac7_capture_shader_facts;
-use crate::motion_capture_records::root_hooks::rsf_ac7_capture_current_command_address;
+use crate::motion_capture_observations::shader_facts;
+use crate::motion_capture_records::root_hooks::current_command_address;
 use crate::motion_capture_records::{
-    rsf_ac7_capture_queued_scope, rsf_ac7_capture_root_scope, store_blob,
+    queued_scope, root_scope, store_blob,
 };
 use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_fail, rsf_ac7_capture_sample,
 };
 use crate::sys::rsf_ac7_copy_memory;
 use crate::sys::*;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::fmt;
 use std::ops::Deref;
 use std::ptr::null_mut;
@@ -33,14 +33,14 @@ pub(super) fn tick() -> u64 {
 
 pub(super) fn queued_draw() -> QueuedDraw {
     let mut draw = QueuedDraw::default();
-    let address = rsf_ac7_capture_current_command_address();
+    let address = current_command_address();
     let observed = read_u64(address, &mut draw.command)
         && draw.command != 0
         && read_u64(
             (draw.command as usize).wrapping_add(8) as *const c_void,
             &mut draw.execute,
         );
-    draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, observed);
+    draw.scope = queued_scope(draw.command, draw.execute, observed);
     draw
 }
 
@@ -98,63 +98,41 @@ pub(super) fn snapshot(
     capture: CaptureInterval,
     context: &ID3D11DeviceContext,
     resource: &ID3D11Resource,
-    role: *const c_char,
+    role: Option<&str>,
     lighting: bool,
 ) -> Result<ColourSnapshot, fmt::Error> {
     let mut snapshot = ColourSnapshot::default();
-    if role.is_null() || !rsf_ac7_capture_colour_snapshot_available(capture, lighting) {
+    let Some(role) = role.filter(|_| colour_snapshot_available(capture, lighting)) else {
         return Ok(snapshot);
-    }
+    };
     let Ok(texture) = resource.cast::<ID3D11Texture2D>() else {
         return Ok(snapshot);
     };
-    let mut input = (context, &texture);
-    // The receipt writer invokes the dump synchronously while the context and texture are live.
-    if unsafe {
-        rsf_ac7_capture_colour_snapshot(
-            capture,
-            role,
-            lighting,
-            std::ptr::from_mut(&mut input).cast(),
-            dump_colour,
-            &mut snapshot,
-        )
-    } {
+    let dump = |path: &CStr| {
+        let options = rsf_texture_dump_options {
+            struct_size: size_of::<rsf_texture_dump_options>() as u32,
+            abi_version: RSF_TEXTURE_DUMP_ABI_VERSION,
+            output_prefix_utf8: path.as_ptr(),
+            ..Default::default()
+        };
+        let Ok(device) = (unsafe { context.GetDevice() }) else {
+            return -1;
+        };
+        unsafe {
+            rsf_dump_texture_bytes(
+                device.as_raw(),
+                context.as_raw(),
+                texture.as_raw(),
+                &options,
+            )
+        }
+    };
+    // The dump runs synchronously while the context and texture are live.
+    if colour_snapshot(capture, role, lighting, dump, &mut snapshot) {
         Ok(snapshot)
     } else {
         Err(fmt::Error)
     }
-}
-
-unsafe extern "C" fn dump_colour(user: *mut c_void, path: *const c_char) -> i32 {
-    let (context, texture) = unsafe { *user.cast::<(&ID3D11DeviceContext, &ID3D11Texture2D)>() };
-    let options = rsf_texture_dump_options {
-        struct_size: size_of::<rsf_texture_dump_options>() as u32,
-        abi_version: RSF_TEXTURE_DUMP_ABI_VERSION,
-        output_prefix_utf8: path,
-        ..Default::default()
-    };
-    let Ok(device) = (unsafe { context.GetDevice() }) else {
-        return -1;
-    };
-    unsafe {
-        rsf_dump_texture_bytes(
-            device.as_raw(),
-            context.as_raw(),
-            texture.as_raw(),
-            &options,
-        )
-    }
-}
-
-unsafe extern "C" fn copy_upload(user: *mut c_void, bytes: *const u8, size: usize) -> bool {
-    let out = unsafe { &mut *user.cast::<Vec<u8>>() };
-    if out.try_reserve_exact(size).is_err() {
-        return false;
-    }
-    let data = unsafe { std::slice::from_raw_parts(bytes, size) };
-    out.extend_from_slice(data);
-    true
 }
 
 pub(super) unsafe fn visit_constants(
@@ -174,16 +152,7 @@ pub(super) unsafe fn visit_constants(
         };
         let mut bytes = Vec::<u8>::new();
         let mut record = ConstantRecord::default();
-        let source = unsafe {
-            rsf_ac7_capture_constant_source(
-                capture,
-                *raw,
-                lighting,
-                &mut record,
-                std::ptr::from_mut(&mut bytes).cast(),
-                copy_upload,
-            )
-        };
+        let source = constant_source(capture, *raw, lighting, &mut record, &mut bytes);
         let mut readback = false;
         match source {
             ConstantSource::Stopped => break,
@@ -191,7 +160,7 @@ pub(super) unsafe fn visit_constants(
             ConstantSource::TryRead => {
                 let mut desc = D3D11_BUFFER_DESC::default();
                 unsafe { buffer.GetDesc(&mut desc) };
-                match rsf_ac7_capture_reserve_constant_read(capture, desc.ByteWidth, lighting) {
+                match reserve_constant_read(capture, desc.ByteWidth, lighting) {
                     ConstantRead::Stopped => break,
                     ConstantRead::Skipped => {}
                     ConstantRead::Reserved => {
@@ -212,7 +181,7 @@ pub(super) unsafe fn visit_constants(
                         });
                         if !copied {
                             bytes.clear();
-                            rsf_ac7_capture_constant_read_failed(capture);
+                            constant_read_failed(capture);
                         }
                     }
                 }
@@ -234,8 +203,7 @@ pub(super) fn identity<T: Interface>(object: &Option<T>) -> *mut c_void {
     object.as_ref().map_or(null_mut(), Interface::as_raw)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_set_sample(enabled: bool) {
+pub(crate) fn set_sample(enabled: bool) {
     unsafe {
         if enabled {
             rsf_frame_tap_set_research_phase_callbacks(
@@ -260,7 +228,7 @@ unsafe extern "C" fn dispatch(
     offset: u32,
 ) {
     let capture = rsf_ac7_capture_sample();
-    if !capture.active() || !super::rsf_ac7_capture_can_record_draw(capture) {
+    if !capture.active() || !super::can_record_draw(capture) {
         return;
     }
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }) else {
@@ -268,9 +236,9 @@ unsafe extern "C" fn dispatch(
     };
     let mut shader = None;
     unsafe { context.CSGetShader(&mut shader, None, None) };
-    let shader = rsf_ac7_capture_shader_facts(identity(&shader), 5);
+    let shader = shader_facts(identity(&shader), 5);
     let mut row = Dispatch {
-        root: rsf_ac7_capture_root_scope(),
+        root: root_scope(),
         queued: QueuedDraw::default(),
         qpc: tick(),
         indirect: indirect.addr() as u64,
@@ -316,7 +284,7 @@ unsafe extern "C" fn dispatch(
         )
     };
     row.queued = queued_draw();
-    if result.is_err() || !super::rsf_ac7_capture_record_dispatch(capture, &row) {
+    if result.is_err() || !super::record_dispatch(capture, &row) {
         rsf_ac7_capture_fail(capture);
     }
 }

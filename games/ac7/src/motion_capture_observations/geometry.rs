@@ -2,12 +2,12 @@
 //! Sample-local admission for AC7 geometry diagnostics and their native buffer reads.
 
 use super::{LayoutSnapshot, observations};
-use crate::motion_capture_records::rsf_ac7_capture_geometry_scope;
+use crate::motion_capture_records::geometry_scope;
 use crate::motion_capture_session::CaptureInterval;
 use rsf_game_sys::{RSF_GAME_RENDER_TRANSLUCENCY, RSF_GAME_RENDER_TRANSLUCENT_MESH};
 use std::collections::HashSet;
 use std::ffi::c_void;
-use std::mem::{offset_of, size_of};
+use std::fmt;
 
 // DXGI resource formats used in the original AC7 captures.
 const FLOAT4: u32 = 2;
@@ -22,15 +22,8 @@ pub(super) struct GeometryReads {
     particle_candidates: [HashSet<(u32, usize)>; 3],
 }
 
-#[repr(u32)]
-pub(crate) enum GeometryAdmission {
-    Skipped,
-    Admitted,
-    Failed,
-}
 
-#[repr(C)]
-#[derive(Default)]
+/// An admitted draw's layout, bucket and the slots whose buffers it may read.
 pub(crate) struct GeometryPlan {
     pub(crate) layout: LayoutSnapshot,
     pub(crate) vs_hash: u32,
@@ -39,11 +32,6 @@ pub(crate) struct GeometryPlan {
     pub(crate) vs_slot_count: u32,
     pub(crate) vs_slots: [u32; 3],
 }
-
-const _: () = {
-    assert!(size_of::<GeometryPlan>() == 356 && offset_of!(GeometryPlan, vs_hash) == 328);
-    assert!(offset_of!(GeometryPlan, ia_slots) == 336 && offset_of!(GeometryPlan, vs_slots) == 344);
-};
 
 fn classify(layout: &LayoutSnapshot, native_velocity: bool) -> (usize, u32) {
     let mut slots = 0;
@@ -73,29 +61,27 @@ fn classify(layout: &LayoutSnapshot, native_velocity: bool) -> (usize, u32) {
     (bucket, slots)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_plan_geometry(
+pub(crate) fn plan_geometry(
     capture: CaptureInterval,
     format: u32,
     depth_bound: bool,
     layout: *mut c_void,
     vertex_shader: *mut c_void,
-    plan: &mut GeometryPlan,
-) -> GeometryAdmission {
+) -> Result<Option<GeometryPlan>, fmt::Error> {
     let native_velocity = format == R16G16_UNORM && depth_bound;
     if !capture.active()
         || (!native_velocity
             && !matches!(
-                rsf_ac7_capture_geometry_scope().role,
+                geometry_scope().role,
                 RSF_GAME_RENDER_TRANSLUCENCY | RSF_GAME_RENDER_TRANSLUCENT_MESH
             ))
     {
-        return GeometryAdmission::Skipped;
+        return Ok(None);
     }
 
     let mut observations = observations();
     if CaptureInterval::load() != capture {
-        return GeometryAdmission::Skipped;
+        return Ok(None);
     }
     if observations.geometry.sample != Some(capture) {
         observations.geometry = GeometryReads {
@@ -105,23 +91,23 @@ pub(crate) extern "C" fn rsf_ac7_capture_plan_geometry(
     }
     let identity = layout.addr();
     let Some(&layout) = observations.layouts.get(&identity) else {
-        return GeometryAdmission::Skipped;
+        return Ok(None);
     };
     let (bucket, ia_slots) = classify(&layout, native_velocity);
     let vs_hash = observations.shader_facts(vertex_shader.addr(), 0).hash;
     let geometry = &mut observations.geometry;
     // Present can advance during the layout and shader lookup.
     if CaptureInterval::load() != capture || geometry.reads[bucket] >= READ_LIMITS[bucket] {
-        return GeometryAdmission::Skipped;
+        return Ok(None);
     }
     if (1..=3).contains(&bucket) {
         let seen = &mut geometry.particle_candidates[bucket - 1];
         let key = (vs_hash, identity);
         if seen.contains(&key) {
-            return GeometryAdmission::Skipped;
+            return Ok(None);
         }
         if seen.try_reserve(1).is_err() {
-            return GeometryAdmission::Failed;
+            return Err(fmt::Error);
         }
         seen.insert(key);
     }
@@ -130,19 +116,17 @@ pub(crate) extern "C" fn rsf_ac7_capture_plan_geometry(
         2 => (1, [127, 0, 0]),
         _ => (0, [0; 3]),
     };
-    *plan = GeometryPlan {
+    Ok(Some(GeometryPlan {
         layout,
         vs_hash,
         bucket: bucket as u32,
         ia_slots,
         vs_slot_count,
         vs_slots,
-    };
-    GeometryAdmission::Admitted
+    }))
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_geometry_read(
+pub(crate) fn geometry_read(
     capture: CaptureInterval,
     bucket: u32,
     reserve: bool,

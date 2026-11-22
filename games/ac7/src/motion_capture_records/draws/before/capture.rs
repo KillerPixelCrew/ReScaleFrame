@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::{BeforeDraw, Sampler, rsf_ac7_capture_record_before_draw};
-use crate::motion_capture_observations::colour::{
-    BeforeDrawPlan, rsf_ac7_capture_plan_before_draw,
-};
+use super::{BeforeDraw, Sampler, record_before_draw};
+use crate::motion_capture_observations::colour::plan_before_draw;
 use crate::motion_capture_records::draws::{
     BoundConstant, BoundView, DrawTarget, QueuedDraw, gpu::*,
 };
@@ -10,7 +8,7 @@ use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_fail, rsf_ac7_capture_sample,
 };
 use crate::sys::rsf_frame_tap_target_draw;
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::fmt;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::Interface;
@@ -32,16 +30,14 @@ unsafe fn observe_before(
     capture: CaptureInterval,
     draw: &rsf_frame_tap_target_draw,
 ) -> fmt::Result {
-    let mut plan = BeforeDrawPlan::default();
-    if !rsf_ac7_capture_plan_before_draw(
+    let Some(plan) = plan_before_draw(
         capture,
         draw.target_width,
         draw.target_height,
         draw.pixel_shader,
-        &mut plan,
-    ) {
+    ) else {
         return Ok(());
-    }
+    };
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&draw.context) }) else {
         return Ok(());
     };
@@ -49,9 +45,9 @@ unsafe fn observe_before(
     let Some(resource) = (unsafe { ID3D11Resource::from_raw_borrowed(&draw.render_target) }) else {
         return Ok(());
     };
-    let lighting = plan.lighting != 0;
+    let lighting = plan.lighting;
     let sample =
-        |resource: &ID3D11Resource, role: *const c_char, slot| -> Result<DrawTarget, fmt::Error> {
+        |resource: &ID3D11Resource, role: Option<&str>, slot| -> Result<DrawTarget, fmt::Error> {
             Ok(DrawTarget {
                 view: BoundView {
                     resource: facts(resource),
@@ -75,7 +71,7 @@ unsafe fn observe_before(
         constants: [BoundConstant::default(); 2],
         context: draw.context.addr() as u64,
     };
-    if !plan.loss_role.is_null() {
+    if plan.loss_role.is_some() {
         let mut targets = [None, None];
         unsafe { context.OMGetRenderTargets(Some(&mut targets), None) };
         if let Some(target) = &targets[1]
@@ -137,7 +133,7 @@ unsafe fn observe_before(
         }?;
         row.queued = queued_draw();
     }
-    if rsf_ac7_capture_record_before_draw(capture, &plan, &row) {
+    if record_before_draw(capture, &plan, &row) {
         Ok(())
     } else {
         Err(fmt::Error)

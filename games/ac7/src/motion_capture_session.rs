@@ -128,35 +128,32 @@ static CLOCK: Mutex<PresentClock> = Mutex::new(PresentClock {
     callbacks_armed: false,
 });
 
-// Private ABI kept with the native capture. Leaves are synchronous, do not throw, and do not
-// reenter Present or shutdown. The Present lock serializes these effects and never gates hooks.
-#[repr(C)]
-struct CaptureEffects {
-    poll: unsafe extern "C" fn(*mut c_void, *mut bool) -> bool,
-    stamp: unsafe extern "C" fn(*mut CaptureStamp),
-    create_directory: unsafe extern "C" fn(*const c_char) -> bool,
-    set_sample: unsafe extern "C" fn(bool),
-    write: WriteFile,
-    stats: unsafe extern "C" fn() -> Stats,
+// The scheduler's platform effects (native.rs; the unit test fakes them). They are synchronous,
+// do not reenter Present or shutdown, and run under the Present lock, which never gates hooks.
+pub(super) struct CaptureEffects {
+    /// Whether F9 is down in the foreground game window, or None when the swap chain cannot
+    /// describe itself.
+    pub(super) poll: unsafe fn(*mut c_void) -> Option<bool>,
+    pub(super) stamp: fn() -> CaptureStamp,
+    pub(super) create_directory: fn(&CStr) -> bool,
+    pub(super) set_sample: fn(bool),
+    pub(super) write: WriteFile,
+    pub(super) stats: fn() -> Stats,
 }
 
-#[repr(C)]
 #[derive(Default)]
-struct CaptureStamp {
-    year: u32,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-    second: u32,
-    process: u32,
+pub(super) struct CaptureStamp {
+    pub(super) year: u32,
+    pub(super) month: u32,
+    pub(super) day: u32,
+    pub(super) hour: u32,
+    pub(super) minute: u32,
+    pub(super) second: u32,
+    pub(super) process: u32,
 }
 
-const _: () = {
-    assert!(size_of::<CaptureInterval>() == 8 && offset_of!(CaptureInterval, interval) == 4);
-    assert!(size_of::<CaptureStamp>() == 28 && offset_of!(CaptureStamp, process) == 24);
-    assert!(size_of::<CaptureEffects>() == 48 && offset_of!(CaptureEffects, stats) == 40);
-};
+// C passes the interval by value (motion_capture_trampolines.c).
+const _: () = assert!(size_of::<CaptureInterval>() == 8 && offset_of!(CaptureInterval, interval) == 4);
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_ac7_motion_capture_configure(
@@ -189,9 +186,6 @@ unsafe extern "C" fn rsf_ac7_motion_capture_configure(
 }
 
 fn prepare_output(session: u32, effects: &CaptureEffects) -> Result<bool, fmt::Error> {
-    let mut stamp = CaptureStamp::default();
-    // SAFETY: Native supplies Win32 time and process ID in our writable stamp.
-    unsafe { (effects.stamp)(&mut stamp) };
     let CaptureStamp {
         year,
         month,
@@ -200,7 +194,7 @@ fn prepare_output(session: u32, effects: &CaptureEffects) -> Result<bool, fmt::E
         minute,
         second,
         process,
-    } = stamp;
+    } = (effects.stamp)();
     let mut path = Bytes::default();
     path.extend(&output().directory)?;
     write!(
@@ -208,8 +202,7 @@ fn prepare_output(session: u32, effects: &CaptureEffects) -> Result<bool, fmt::E
         "\\motion-{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}-{process}-{session}\0"
     )?;
     let path = CStr::from_bytes_with_nul(&path.0).map_err(|_| fmt::Error)?;
-    // SAFETY: The native directory leaf borrows the original narrow path only for the call.
-    if !unsafe { (effects.create_directory)(path.as_ptr()) } {
+    if !(effects.create_directory)(path) {
         say(c"motion capture: output directory could not be created");
         return Ok(false);
     }
@@ -217,8 +210,7 @@ fn prepare_output(session: u32, effects: &CaptureEffects) -> Result<bool, fmt::E
     Ok(true)
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_ac7_capture_enabled() -> bool {
+pub(super) fn capture_enabled() -> bool {
     ENABLED.load(Ordering::Acquire)
 }
 
@@ -232,22 +224,21 @@ extern "C" fn rsf_ac7_capture_interval() -> CaptureInterval {
     CaptureInterval::load()
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_ac7_capture_sampled(interval: u32) -> bool {
+pub(super) fn is_sampled(interval: u32) -> bool {
     matches!(interval, 0 | 30 | 59)
 }
 
 #[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_ac7_capture_sample() -> CaptureInterval {
     let observed = CaptureInterval::load();
-    if rsf_ac7_capture_sampled(observed.interval) {
+    if is_sampled(observed.interval) {
         observed
     } else {
         CaptureInterval::inactive(observed.session)
     }
 }
 
-pub(super) fn rsf_ac7_capture_current(session: u32) -> bool {
+pub(super) fn is_current(session: u32) -> bool {
     let observed = CaptureInterval::load();
     observed.active() && observed.session == session
 }
@@ -269,38 +260,37 @@ pub(super) extern "C" fn rsf_ac7_capture_fail(observed: CaptureInterval) {
     say(c"motion capture stopped after an allocation or serialization failure; game decisions are unchanged");
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_ac7_capture_failures() -> u32 {
+pub(super) fn failure_count() -> u32 {
     FAILURES.load(Ordering::Relaxed)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_present(
+/// True with the sample's narrow path prefix in `prefix` (never empty) on a sampled Present.
+///
+/// # Safety
+/// `swapchain` is the live swap chain being presented.
+pub(super) unsafe fn present(
     swapchain: *mut c_void,
-    prefix: *mut c_char,
-    capacity: u32,
+    prefix: &mut [c_char],
     effects: &CaptureEffects,
 ) -> bool {
-    if swapchain.is_null() || prefix.is_null() || capacity == 0 || !rsf_ac7_capture_enabled() {
+    if !capture_enabled() {
         return false;
     }
     let mut clock = CLOCK.lock().unwrap_or_else(|error| error.into_inner());
-    // SAFETY: The caller lends capacity writable bytes for the returned narrow path.
-    unsafe { prefix.write(0) };
+    prefix[0] = 0;
     clock.presents = clock.presents.wrapping_add(1);
 
-    let mut pressed = false;
-    if !unsafe { (effects.poll)(swapchain, &mut pressed) } {
+    let Some(pressed) = (unsafe { (effects.poll)(swapchain) }) else {
         // GetDesc failure still increments the clock, but does not consume a trigger or change
         // the key latch, callbacks or interval until a successful poll.
         return false;
-    }
+    };
     let trigger = REQUEST.swap(false, Ordering::AcqRel) || (pressed && !clock.key_down);
     clock.key_down = pressed;
     let current = CaptureInterval::load();
     if trigger && !current.active() {
         if clock.callbacks_armed {
-            unsafe { (effects.set_sample)(false) };
+            (effects.set_sample)(false);
             clock.callbacks_armed = false;
         }
         let session = current.session.wrapping_add(1);
@@ -330,7 +320,7 @@ unsafe extern "C" fn rsf_ac7_capture_present(
         let age = clock.presents.wrapping_sub(clock.start) as u32;
         if age >= INTERVALS {
             if current.replace(CaptureInterval::inactive(current.session)) {
-                unsafe { (effects.set_sample)(false) };
+                (effects.set_sample)(false);
                 clock.callbacks_armed = false;
                 publish_finish(current, effects.write, effects.stats);
                 return false;
@@ -339,8 +329,8 @@ unsafe extern "C" fn rsf_ac7_capture_present(
             session: current.session,
             interval: age,
         }) {
-            let sample = rsf_ac7_capture_sampled(age);
-            unsafe { (effects.set_sample)(sample) };
+            let sample = is_sampled(age);
+            (effects.set_sample)(sample);
             clock.callbacks_armed = sample;
             if !sample {
                 return false;
@@ -354,46 +344,39 @@ unsafe extern "C" fn rsf_ac7_capture_present(
                     b'0' + (age % 10) as u8,
                 ];
                 let path = path.to_bytes();
-                let path_len = path.len().min(capacity as usize - 1);
-                let suffix_len = suffix.len().min(capacity as usize - 1 - path_len);
-                // SAFETY: Both slices are independent of the caller buffer and the copy is bounded.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(path.as_ptr(), prefix.cast(), path_len);
-                    std::ptr::copy_nonoverlapping(
-                        suffix.as_ptr(),
-                        prefix.add(path_len).cast(),
-                        suffix_len,
-                    );
-                    prefix.add(path_len + suffix_len).write(0);
+                let path_len = path.len().min(prefix.len() - 1);
+                let suffix_len = suffix.len().min(prefix.len() - 1 - path_len);
+                let text = path[..path_len].iter().chain(&suffix[..suffix_len]);
+                for (out, &byte) in prefix.iter_mut().zip(text) {
+                    *out = byte as c_char;
                 }
-                if rsf_ac7_capture_current(current.session) {
+                prefix[path_len + suffix_len] = 0;
+                if is_current(current.session) {
                     return true;
                 }
             }
             // A failure raced callback registration. Suppress this prefix before returning.
-            unsafe { prefix.write(0) };
+            prefix[0] = 0;
         }
     }
 
     // An observation can fail on another thread. Its lease is already inactive. Retire
     // the tap here, serialized with a possible new session's callback registration.
     if clock.callbacks_armed {
-        unsafe { (effects.set_sample)(false) };
+        (effects.set_sample)(false);
         clock.callbacks_armed = false;
     }
     false
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_shutdown(effects: &CaptureEffects) {
+pub(super) fn shutdown(effects: &CaptureEffects) {
     let mut clock = CLOCK.lock().unwrap_or_else(|error| error.into_inner());
     let current = CaptureInterval::load();
     CURRENT.store(
         CaptureInterval::inactive(current.session).key(),
         Ordering::Release,
     );
-    // SAFETY: This only clears the tap callbacks.
-    unsafe { (effects.set_sample)(false) };
+    (effects.set_sample)(false);
     clock.callbacks_armed = false;
 }
 
@@ -422,16 +405,9 @@ mod tests {
         rsf_ac7_motion_capture_request();
         for interval in 0..=INTERVALS {
             let mut prefix = [0 as c_char; 128];
-            // SAFETY: The fake poll does not dereference its non-null swap chain identity, and the
-            // output lends the capacity passed to Present.
-            let sampled = unsafe {
-                rsf_ac7_capture_present(
-                    std::ptr::dangling_mut::<c_void>(),
-                    prefix.as_mut_ptr(),
-                    prefix.len() as u32,
-                    &effects,
-                )
-            };
+            // SAFETY: The fake poll does not dereference its swap chain identity.
+            let sampled =
+                unsafe { present(std::ptr::dangling_mut::<c_void>(), &mut prefix, &effects) };
             assert_eq!(sampled, matches!(interval, 0 | 30 | 59));
             assert_eq!(TAP_ARMED.load(Ordering::Relaxed), sampled);
             // SAFETY: The stack buffer is zeroed before the call and Present preserves a terminator.
@@ -469,48 +445,39 @@ mod tests {
                 &[SESSION_PATH.to_bytes(), b"\\session.json"].concat()
             );
         }
-        // SAFETY: The fixture supplies the same live effects table for shutdown.
-        unsafe { rsf_ac7_capture_shutdown(&effects) };
+        shutdown(&effects);
     }
 
-    unsafe extern "C" fn poll(_: *mut c_void, pressed: *mut bool) -> bool {
-        // SAFETY: Present lends its writable key state.
-        unsafe { pressed.write(false) };
-        true
+    unsafe fn poll(_: *mut c_void) -> Option<bool> {
+        Some(false)
     }
 
-    unsafe extern "C" fn stamp(output: *mut CaptureStamp) {
-        // SAFETY: Present lends its writable Win32 stamp.
-        unsafe {
-            output.write(CaptureStamp {
-                year: 2026,
-                month: 11,
-                day: 22,
-                hour: 10,
-                minute: 15,
-                second: 19,
-                process: 42,
-            })
-        };
+    fn stamp() -> CaptureStamp {
+        CaptureStamp {
+            year: 2026,
+            month: 11,
+            day: 22,
+            hour: 10,
+            minute: 15,
+            second: 19,
+            process: 42,
+        }
     }
 
-    unsafe extern "C" fn create_directory(path: *const c_char) -> bool {
-        // SAFETY: Present lends its terminated path.
-        unsafe { CStr::from_ptr(path) == SESSION_PATH }
+    fn create_directory(path: &CStr) -> bool {
+        path == SESSION_PATH
     }
 
-    extern "C" fn set_sample(enabled: bool) {
+    fn set_sample(enabled: bool) {
         TAP_ARMED.store(enabled, Ordering::Relaxed);
     }
 
-    unsafe extern "C" fn write(path: *const c_char, _: *const u8, _: usize) -> bool {
-        // SAFETY: The publication lends its terminated filename until this call returns.
-        let path = unsafe { CStr::from_ptr(path) };
+    fn write(path: &CStr, _: &[u8]) -> bool {
         WRITES.lock().unwrap().push(path.to_bytes().to_vec());
         true
     }
 
-    extern "C" fn empty_stats() -> Stats {
+    fn empty_stats() -> Stats {
         Stats::default()
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::motion_capture_session::native::rsf_ac7_capture_end_session;
-use crate::motion_capture_session::{rsf_ac7_capture_enabled, say};
+use crate::motion_capture_session::native::end_session;
+use crate::motion_capture_session::{capture_enabled, say};
 use crate::sys::{
     rsf_ac7_capture_initialize_minhook, rsf_ac7_capture_install_engine_batch,
     rsf_ac7_capture_install_root_batch, rsf_ac7_capture_remove_hook_batch, rsf_ac7_copy_memory,
@@ -22,10 +22,10 @@ const ENGINE_EFFECTS: RootHookEffects = RootHookEffects {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_motion_capture_install() -> i32 {
-    if rsf_ac7_capture_engine_installed() {
+    if engine_installed() {
         return 1;
     }
-    if !rsf_ac7_capture_enabled() {
+    if !capture_enabled() {
         return 0;
     }
     let base =
@@ -34,7 +34,7 @@ extern "C" fn rsf_ac7_motion_capture_install() -> i32 {
         say(c"motion capture: MinHook unavailable");
         return 0;
     }
-    let root = unsafe { rsf_ac7_capture_install_roots(base, &ROOT_EFFECTS) };
+    let root = install_roots(base, &ROOT_EFFECTS);
     let message = match root {
         RootInstall::AlreadyInstalled => None,
         RootInstall::RhiRefused => Some(c"renderer root capture refused: RHI current-command write differs"),
@@ -46,7 +46,7 @@ extern "C" fn rsf_ac7_motion_capture_install() -> i32 {
     if let Some(message) = message {
         say(message);
     }
-    let (installed, message) = match rsf_ac7_capture_install_engine(base, &ENGINE_EFFECTS) {
+    let (installed, message) = match install_engine(base, &ENGINE_EFFECTS) {
         RootInstall::AlreadyInstalled => return 1,
         RootInstall::RhiRefused | RootInstall::EntryRefused => (
             0,
@@ -68,11 +68,11 @@ extern "C" fn rsf_ac7_motion_capture_install() -> i32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_motion_capture_shutdown() {
-    rsf_ac7_capture_end_session();
-    if !rsf_ac7_capture_remove_engine(&ENGINE_EFFECTS) {
+    end_session();
+    if !remove_engine(&ENGINE_EFFECTS) {
         say(c"motion capture engine hooks pending removal");
     }
-    if !rsf_ac7_capture_remove_roots(&ROOT_EFFECTS) {
+    if !remove_roots(&ROOT_EFFECTS) {
         say(c"renderer root capture shutdown left hooks pending removal");
     }
 }

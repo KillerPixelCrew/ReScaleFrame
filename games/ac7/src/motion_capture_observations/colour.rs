@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Admission for sampled colour reads and the contact-light before/after pair.
 
-use super::{observations, rsf_ac7_capture_shader_facts};
+use super::{observations, shader_facts};
 use crate::motion_capture_records::artifacts::Bytes;
-use crate::motion_capture_session::{CaptureInterval, capture_prefix, rsf_ac7_capture_current};
+use crate::motion_capture_session::{CaptureInterval, capture_prefix, is_current};
 use std::cell::Cell;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::fmt::{self, Write as _};
-use std::mem::{offset_of, size_of};
 
 const SHARED_READ_LIMIT: u32 = 48;
 const TOTAL_READ_LIMIT: u32 = 72;
@@ -18,99 +17,77 @@ fn is_contact_light(hash: u32) -> bool {
     matches!(hash, 3619939816 | 4154163049)
 }
 
-#[repr(C)]
+/// The snapshot roles name the sampled images; an input without a role is recorded unsampled.
+#[derive(Default)]
 pub(crate) struct BeforeDrawPlan {
-    pub(crate) colour_role: *const c_char,
-    pub(crate) loss_role: *const c_char,
-    pub(crate) input_roles: [*const c_char; 6],
+    pub(crate) colour_role: Option<&'static str>,
+    pub(crate) loss_role: Option<&'static str>,
+    pub(crate) input_roles: [Option<&'static str>; 6],
     pub(crate) input_slots: u32,
     pub(crate) sampler_slots: u32,
     pub(crate) constant_slots: u32,
     pub(crate) ps_hash: u32,
-    pub(crate) lighting: u32,
+    pub(crate) lighting: bool,
 }
 
-impl Default for BeforeDrawPlan {
-    fn default() -> Self {
-        Self {
-            colour_role: std::ptr::null(),
-            loss_role: std::ptr::null(),
-            input_roles: [std::ptr::null(); 6],
-            input_slots: 0,
-            sampler_slots: 0,
-            constant_slots: 0,
-            ps_hash: 0,
-            lighting: 0,
-        }
-    }
-}
-
-const _: () = {
-    assert!(size_of::<BeforeDrawPlan>() == 88 && offset_of!(BeforeDrawPlan, input_slots) == 64);
-    assert!(offset_of!(BeforeDrawPlan, ps_hash) == 76);
-};
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_is_cloud_composite(hash: u32) -> bool {
+pub(crate) fn is_cloud_composite(hash: u32) -> bool {
     hash == CLOUD_COMPOSITE
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_plan_before_draw(
+pub(crate) fn plan_before_draw(
     capture: CaptureInterval,
     width: u32,
     height: u32,
     pixel_shader: *mut c_void,
-    plan: &mut BeforeDrawPlan,
-) -> bool {
+) -> Option<BeforeDrawPlan> {
     LIGHTING_BEFORE.set(None);
     if !capture.active() || width < 400 || height < 200 {
-        return false;
+        return None;
     }
-    let ps_hash = rsf_ac7_capture_shader_facts(pixel_shader, 1).hash;
-    *plan = if is_contact_light(ps_hash) {
+    let ps_hash = shader_facts(pixel_shader, 1).hash;
+    let plan = if is_contact_light(ps_hash) {
         if !begin_lighting_pair(capture) {
-            return false;
+            return None;
         }
         BeforeDrawPlan {
-            colour_role: c"contact_light_before".as_ptr(),
-            loss_role: std::ptr::null(),
+            colour_role: Some("contact_light_before"),
+            loss_role: None,
             input_roles: [
-                c"contact_ps_input_0".as_ptr(),
-                c"contact_ps_input_1".as_ptr(),
-                c"contact_ps_input_2".as_ptr(),
-                c"contact_light_mask".as_ptr(),
-                c"contact_scene_depth".as_ptr(),
-                c"contact_static_shadow".as_ptr(),
+                Some("contact_ps_input_0"),
+                Some("contact_ps_input_1"),
+                Some("contact_ps_input_2"),
+                Some("contact_light_mask"),
+                Some("contact_scene_depth"),
+                Some("contact_static_shadow"),
             ],
             input_slots: 6,
             sampler_slots: 6,
             constant_slots: 2,
             ps_hash,
-            lighting: 1,
+            lighting: true,
         }
-    } else if rsf_ac7_capture_is_cloud_composite(ps_hash) {
+    } else if is_cloud_composite(ps_hash) {
         BeforeDrawPlan {
-            colour_role: c"cloud_composite_before".as_ptr(),
-            loss_role: c"cloud_loss_before".as_ptr(),
+            colour_role: Some("cloud_composite_before"),
+            loss_role: Some("cloud_loss_before"),
             input_roles: [
-                c"cloud_near".as_ptr(),
-                c"cloud_far".as_ptr(),
-                c"cloud_near_far_depth".as_ptr(),
-                c"cloud_scene_depth".as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
+                Some("cloud_near"),
+                Some("cloud_far"),
+                Some("cloud_near_far_depth"),
+                Some("cloud_scene_depth"),
+                None,
+                None,
             ],
             input_slots: 4,
             sampler_slots: 0,
             constant_slots: 0,
             ps_hash,
-            lighting: 0,
+            lighting: false,
         }
     } else {
-        return false;
+        return None;
     };
-    true
+    Some(plan)
 }
 
 #[derive(Default)]
@@ -120,7 +97,6 @@ pub(super) struct ColourReadbacks {
     lighting_interval: Option<u32>,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LightingDraw {
     pub(crate) context: u64,
@@ -166,8 +142,7 @@ fn begin_lighting_pair(capture: CaptureInterval) -> bool {
     true
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_take_lighting_after(
+pub(crate) fn take_lighting_after(
     capture: CaptureInterval,
     draw: &LightingDraw,
 ) -> bool {
@@ -175,8 +150,7 @@ pub(crate) extern "C" fn rsf_ac7_capture_take_lighting_after(
     capture.active() && CaptureInterval::load() == capture && before == Some((capture, *draw))
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_capture_colour_snapshot_available(
+pub(crate) fn colour_snapshot_available(
     capture: CaptureInterval,
     lighting: bool,
 ) -> bool {
@@ -194,7 +168,6 @@ fn reserve_colour_snapshot(capture: CaptureInterval, lighting: bool) -> Option<u
     Some(ordinal)
 }
 
-#[repr(C)]
 pub(crate) struct ColourSnapshot {
     pub(crate) name: [u8; 96],
     pub(crate) result: i32,
@@ -209,15 +182,13 @@ impl Default for ColourSnapshot {
     }
 }
 
-type ReadColour = unsafe extern "C" fn(*mut c_void, *const c_char) -> i32;
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_capture_colour_snapshot(
+/// Reserves a snapshot of the sample's `role` image and names it in `snapshot`; `read` dumps it
+/// to the given narrow path prefix and returns the dump result. False on a formatting failure.
+pub(crate) fn colour_snapshot(
     capture: CaptureInterval,
-    role: *const c_char,
+    role: &str,
     lighting: bool,
-    user: *mut c_void,
-    read: ReadColour,
+    read: impl FnOnce(&CStr) -> i32,
     snapshot: &mut ColourSnapshot,
 ) -> bool {
     let Some(prefix) = capture_prefix(capture.session) else {
@@ -225,10 +196,6 @@ pub(crate) unsafe extern "C" fn rsf_ac7_capture_colour_snapshot(
     };
     let Some(ordinal) = reserve_colour_snapshot(capture, lighting) else {
         return true;
-    };
-    // SAFETY: The native capture supplies a static terminated role string.
-    let Ok(role) = unsafe { CStr::from_ptr(role) }.to_str() else {
-        return false;
     };
     let result = (|| -> fmt::Result {
         use std::io::Write as _;
@@ -242,11 +209,10 @@ pub(crate) unsafe extern "C" fn rsf_ac7_capture_colour_snapshot(
         path.write_char('\\')?;
         path.extend(&snapshot.name[..name_len])?;
         path.write_char('\0')?;
-        // SAFETY: The native leaf borrows the path and its original COM state for this call.
-        snapshot.result = unsafe { read(user, path.0.as_ptr().cast()) };
+        snapshot.result = read(CStr::from_bytes_with_nul(&path.0).map_err(|_| fmt::Error)?);
         if snapshot.result != 0 {
             let mut observations = observations();
-            if rsf_ac7_capture_current(capture.session) {
+            if is_current(capture.session) {
                 observations.colour.failed += 1;
             }
         }

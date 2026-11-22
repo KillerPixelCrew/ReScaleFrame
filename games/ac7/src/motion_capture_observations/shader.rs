@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{rsf_ac7_capture_declared_constants, rsf_ac7_capture_observe_shader};
+use super::{declared_constants, observe_shader};
 use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_fail};
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -28,15 +28,20 @@ fn disassembler() -> Option<Disassemble> {
     })
 }
 
-unsafe extern "C" fn disassemble_constants(bytes: *const c_void, size: usize) -> u32 {
+fn disassemble_constants(bytes: &[u8]) -> u32 {
     let mut code = None;
     if let Some(disassemble) = disassembler()
-        && unsafe { disassemble(bytes, size, 0, PCSTR::null(), &mut code) }.is_ok()
+        && unsafe {
+            disassemble(bytes.as_ptr().cast(), bytes.len(), 0, PCSTR::null(), &mut code)
+        }
+        .is_ok()
         && let Some(code) = code
     {
-        return unsafe {
-            rsf_ac7_capture_declared_constants(code.GetBufferPointer().cast(), code.GetBufferSize())
+        // SAFETY: The blob owns its buffer until it is released at the end of this scope.
+        let text = unsafe {
+            std::slice::from_raw_parts(code.GetBufferPointer().cast::<u8>(), code.GetBufferSize())
         };
+        return declared_constants(text);
     }
     super::ALL_CONSTANTS
 }
@@ -50,7 +55,7 @@ unsafe extern "C" fn rsf_ac7_motion_capture_shader(
 ) {
     // The observer carries live shader bytecode for this creation callback.
     if !unsafe {
-        rsf_ac7_capture_observe_shader(shader, stage, bytes, size, Some(disassemble_constants))
+        observe_shader(shader, stage, bytes, size, Some(disassemble_constants))
     } {
         rsf_ac7_capture_fail(CaptureInterval::load());
     }

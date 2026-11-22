@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: MIT
-use super::{Draw, DrawInput, rsf_ac7_capture_record_draw};
+use super::{Draw, DrawInput, record_draw};
 use crate::motion_capture_observations::{
     colour::{
-        LightingDraw, rsf_ac7_capture_is_cloud_composite, rsf_ac7_capture_take_lighting_after,
+        LightingDraw, is_cloud_composite, take_lighting_after,
     },
-    rsf_ac7_capture_shader_facts,
+    shader_facts,
 };
 use crate::motion_capture_records::{
-    draws::{BoundView, DrawTarget, QueuedDraw, gpu::*, rsf_ac7_capture_can_record_draw},
-    rsf_ac7_capture_root_scope,
+    draws::{BoundView, DrawTarget, QueuedDraw, gpu::*, can_record_draw},
+    root_scope,
 };
 use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_fail, rsf_ac7_capture_sample,
 };
 use crate::sys::rsf_frame_tap_target_draw;
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::fmt;
-use std::ptr::null;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::Interface;
 
@@ -34,15 +33,15 @@ pub(in crate::motion_capture_records::draws) unsafe extern "C" fn observe(
 }
 
 unsafe fn observe_draw(capture: CaptureInterval, draw: &rsf_frame_tap_target_draw) -> fmt::Result {
-    let ps = rsf_ac7_capture_shader_facts(draw.pixel_shader, 1);
+    let ps = shader_facts(draw.pixel_shader, 1);
     let identity_of_draw = LightingDraw {
         context: draw.context.addr() as u64,
         target: draw.render_target.addr() as u64,
         index: draw.draw_index,
         hash: ps.hash,
     };
-    let matched_light = rsf_ac7_capture_take_lighting_after(capture, &identity_of_draw);
-    if !rsf_ac7_capture_can_record_draw(capture) {
+    let matched_light = take_lighting_after(capture, &identity_of_draw);
+    if !can_record_draw(capture) {
         return Ok(());
     }
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&draw.context) }) else {
@@ -67,11 +66,11 @@ unsafe fn observe_draw(capture: CaptureInterval, draw: &rsf_frame_tap_target_dra
         if index == 1 {
             ps
         } else {
-            rsf_ac7_capture_shader_facts(shaders[index], index as u32)
+            shader_facts(shaders[index], index as u32)
         }
     });
     let mut row = Draw {
-        root: rsf_ac7_capture_root_scope(),
+        root: root_scope(),
         queued: QueuedDraw::default(),
         qpc: tick(),
         target: identity_of_draw.target,
@@ -149,12 +148,10 @@ unsafe fn observe_draw(capture: CaptureInterval, draw: &rsf_frame_tap_target_dra
         let light_after =
             slot == 0 && matched_light && view.resource.resource == identity_of_draw.target;
         let role = match slot {
-            0 if light_after => c"contact_light_after".as_ptr(),
+            0 if light_after => Some("contact_light_after"),
             0 if large => colour_stage(ps.hash),
-            1 if large && rsf_ac7_capture_is_cloud_composite(ps.hash) => {
-                c"cloud_loss_after".as_ptr()
-            }
-            _ => null(),
+            1 if large && is_cloud_composite(ps.hash) => Some("cloud_loss_after"),
+            _ => None,
         };
         row.render_targets[row.render_target_count as usize] = DrawTarget {
             view,
@@ -194,21 +191,21 @@ unsafe fn observe_draw(capture: CaptureInterval, draw: &rsf_frame_tap_target_dra
         }?;
     }
     row.queued = queued_draw();
-    if rsf_ac7_capture_record_draw(capture, &row) {
+    if record_draw(capture, &row) {
         Ok(())
     } else {
         Err(fmt::Error)
     }
 }
 
-fn colour_stage(hash: u32) -> *const c_char {
+fn colour_stage(hash: u32) -> Option<&'static str> {
     // Diagnostic producer labels from the original AC7 DXBC and RenoDX AC7 reference.
     match hash {
-        0x6bcbd787 | 0x5fb31417 => c"tonemap".as_ptr(),
-        0xa5c9147b => c"scene_effect".as_ptr(),
-        0xb2f7719d => c"hud".as_ptr(),
-        0x2136e125 | 0xa7441be5 => c"composite".as_ptr(),
-        hash if rsf_ac7_capture_is_cloud_composite(hash) => c"cloud_composite_after".as_ptr(),
-        _ => null(),
+        0x6bcbd787 | 0x5fb31417 => Some("tonemap"),
+        0xa5c9147b => Some("scene_effect"),
+        0xb2f7719d => Some("hud"),
+        0x2136e125 | 0xa7441be5 => Some("composite"),
+        hash if is_cloud_composite(hash) => Some("cloud_composite_after"),
+        _ => None,
     }
 }

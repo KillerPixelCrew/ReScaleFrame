@@ -3,9 +3,9 @@
 //! reads go through the guarded platform copy.
 
 use super::*;
-use crate::motion_capture_session::native::rsf_ac7_capture_checkpoint_native;
+use crate::motion_capture_session::native::checkpoint_native;
 use crate::motion_capture_session::{
-    rsf_ac7_capture_fail, rsf_ac7_capture_sample, rsf_ac7_capture_sampled,
+    rsf_ac7_capture_fail, rsf_ac7_capture_sample, is_sampled,
 };
 use crate::sys::rsf_ac7_read_memory;
 use std::ptr::from_mut;
@@ -97,7 +97,7 @@ extern "C" fn rsf_ac7_capture_begin_engine(
 
 fn initialize_root(root: &mut RootRecord, capture: CaptureInterval, kind: u32, owner: u64) {
     // The fields are numeric observations with zero denoting absence. The helper assigns scope IDs.
-    unsafe { rsf_ac7_capture_init_root(root, kind, owner) };
+    init_root(root, kind, owner);
     root.qpc = tick();
     root.thread = unsafe { GetCurrentThreadId() };
     root.session = capture.session;
@@ -105,7 +105,7 @@ fn initialize_root(root: &mut RootRecord, capture: CaptureInterval, kind: u32, o
 }
 
 fn capture_blob<const N: usize>(base: u64, capture: CaptureInterval) -> u32 {
-    if !rsf_ac7_capture_sampled(capture.interval) {
+    if !is_sampled(capture.interval) {
         return 0;
     }
     let mut bytes = Vec::new();
@@ -173,7 +173,7 @@ fn associate_commands(root: &mut RootRecord) {
     let (mut link, mut command, mut uid) = (0, 0, 0);
     if !(read(root.command_list, 8, &mut link)
         && read(root.command_list, 0x18, &mut uid)
-        && unsafe { rsf_ac7_capture_commands_changed(root, link, uid) }
+        && commands_changed(root, link, uid)
         && read(root.queue_begin, 0, &mut command))
     {
         return;
@@ -184,7 +184,7 @@ fn associate_commands(root: &mut RootRecord) {
         if !read(command, 0, &mut next) || !read(command, 8, &mut execute) {
             break;
         }
-        match unsafe { rsf_ac7_capture_associate_command(root, command, execute) } {
+        match associate_command(root, command, execute) {
             CommandAdvance::Next => command = next,
             CommandAdvance::Stop => break,
             CommandAdvance::Failed => {
@@ -199,7 +199,7 @@ fn associate_commands(root: &mut RootRecord) {
 }
 
 fn record(root: &RootRecord) {
-    if !unsafe { rsf_ac7_capture_record_root(root) } {
+    if !record_root(root) {
         rsf_ac7_capture_fail(CaptureInterval {
             session: root.session,
             interval: root.interval,
@@ -270,7 +270,7 @@ extern "C" fn rsf_ac7_capture_root_before(
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_capture_root_after(root: &mut RootRecord, capture: CaptureInterval) {
     let begin = root.kind;
-    unsafe { rsf_ac7_capture_end_root(root, tick()) };
+    end_root(root, tick());
     match begin {
         WIDGET_PREPARE_BEFORE | WIDGET_QUEUE_BEFORE => widget_fields(root),
         MAIN_TEMPORAL_BUILD_BEFORE => {
@@ -289,7 +289,7 @@ extern "C" fn rsf_ac7_capture_root_after(root: &mut RootRecord, capture: Capture
     }
     record(root);
     if begin == POSTPROCESS_BEGIN {
-        rsf_ac7_capture_checkpoint_native(capture);
+        checkpoint_native(capture);
     }
 }
 
@@ -298,7 +298,7 @@ unsafe extern "C" fn rsf_ac7_motion_capture_native_pass(
     pass: *const rsf_game_render_pass,
     begin: u32,
 ) {
-    if !unsafe { rsf_ac7_capture_execution_pass(pass) } {
+    if !unsafe { execution_pass(pass) } {
         return;
     }
     let capture = rsf_ac7_capture_sample();
@@ -311,7 +311,7 @@ unsafe extern "C" fn rsf_ac7_motion_capture_native_pass(
             RHI_SCOPE_RESTORE
         };
         initialize_root(&mut root, capture, kind, 0);
-        unsafe { rsf_ac7_capture_execution_root(&mut root) };
+        execution_root(&mut root);
         record(&root);
     }
 }

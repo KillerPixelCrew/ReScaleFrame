@@ -11,14 +11,12 @@ use crate::motion_capture_records::{
 };
 use crate::motion_capture_session::CaptureInterval;
 use std::fmt::{self, Write as _};
-use std::mem::{offset_of, size_of};
 
 #[cfg(all(windows, not(test)))]
 mod capture;
 #[cfg(all(windows, not(test)))]
 pub(super) use capture::observe;
 
-#[repr(C)]
 #[derive(Default)]
 struct DrawInput {
     resource: u64,
@@ -28,7 +26,6 @@ struct DrawInput {
     format: u32,
 }
 
-#[repr(C)]
 #[derive(Default)]
 struct DrawConstants {
     entries: [BoundConstant; 14],
@@ -36,7 +33,6 @@ struct DrawConstants {
 }
 
 // Copied observations for the ordinary draw writer.
-#[repr(C)]
 struct Draw {
     root: NativeRootScope,
     queued: QueuedDraw,
@@ -71,17 +67,6 @@ struct Draw {
     constants: [DrawConstants; 5],
     context: u64,
 }
-
-const _: () = {
-    assert!(size_of::<DrawInput>() == 24 && offset_of!(DrawInput, slot) == 8);
-    assert!(size_of::<DrawConstants>() == 456 && offset_of!(DrawConstants, count) == 448);
-    assert!(size_of::<Draw>() == 14288 && offset_of!(Draw, qpc) == 72);
-    assert!(offset_of!(Draw, context) == 14280);
-    assert!(offset_of!(Draw, shader_hashes) == 132 && offset_of!(Draw, viewport_x) == 160);
-    assert!(offset_of!(Draw, inputs) == 192 && offset_of!(Draw, ps_resources) == 576);
-    assert!(offset_of!(Draw, vs_resources) == 5696 && offset_of!(Draw, render_targets) == 10816);
-    assert!(offset_of!(Draw, depth) == 11968 && offset_of!(Draw, constants) == 12000);
-};
 
 fn write_inputs(out: &mut Bytes, inputs: &[DrawInput]) -> fmt::Result {
     for (index, input) in inputs.iter().enumerate() {
@@ -182,8 +167,7 @@ fn write_draw(out: &mut Bytes, interval: u32, d: &Draw) -> fmt::Result {
     out.write_char('}')
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_record_draw(capture: CaptureInterval, draw: &Draw) -> bool {
+fn record_draw(capture: CaptureInterval, draw: &Draw) -> bool {
     let mut row = Bytes::default();
     write_draw(&mut row, capture.interval, draw).is_ok()
         && commit(capture, row) != super::Commit::Failed
