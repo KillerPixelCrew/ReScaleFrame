@@ -9,6 +9,7 @@ namespace {
 void check(bool ok, int line) { if (!ok) { std::fprintf(stderr, "FG contract failed at %d\n", line); std::exit(1); } }
 #define CHECK(x) check((x), __LINE__)
 struct Context { bool physical; };
+bool fail_marker = false, reserved_retirement = false;
 bool fail_probe = false, fail_chain = false, fail_retire = false, quiescent = false;
 uint32_t physical = 0, destroyed = 0, restored = 0, mock_pacing = RSF_PACING_REFLEX, begins = 0, markers = 0;
 uint32_t preparations = 0;
@@ -25,7 +26,11 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** context, voi
 }
 rsf_backend_result configure(void*, const rsf_fg_options*) { CHECK(quiescent); return RSF_BACKEND_OK; }
 rsf_backend_result begin(void*, uint64_t) { ++begins; return RSF_BACKEND_OK; }
-rsf_backend_result marker(void*, rsf_latency_marker, uint64_t, uint32_t) { ++markers; return RSF_BACKEND_OK; }
+rsf_backend_result marker(void*, rsf_latency_marker, uint64_t, uint32_t)
+{
+    ++markers;
+    return fail_marker ? RSF_BACKEND_ERROR_FEATURE_FAILED : RSF_BACKEND_OK;
+}
 rsf_backend_result prepare(void*, void*, const rsf_fg_frame*) { ++preparations; return RSF_BACKEND_OK; }
 rsf_backend_result after(void*) { return RSF_BACKEND_OK; }
 rsf_backend_result status(void*, rsf_fg_status* out)
@@ -33,9 +38,10 @@ rsf_backend_result status(void*, rsf_fg_status* out)
     out->supported = 1; out->max_generated_frames = 1; out->pacing_owner = mock_pacing;
     return RSF_BACKEND_OK;
 }
-rsf_backend_result retire(void*, rsf_fg_retirement* out)
+rsf_backend_result retire(void* context, rsf_fg_retirement* out)
 {
-    out->fence = nullptr; out->value = 0;
+    out->fence = reserved_retirement ? context : nullptr;
+    out->value = reserved_retirement ? UINT64_MAX : 0;
     return fail_retire ? RSF_BACKEND_ERROR_NOT_READY : RSF_BACKEND_OK;
 }
 void destroy(void* c)
@@ -103,6 +109,30 @@ int main()
     CHECK(rsf_fg_session_marker(live_session,2,RSF_LATENCY_SIMULATION_START,21,0) != RSF_BACKEND_OK);
     CHECK(markers == after_abort_markers && preparations == after_abort_preparations);
     record.frame_id = 1; record.input_qpc = 10;
+    record.frame_id = 3; record.input_qpc = 30;
+    CHECK(rsf_fg_session_begin(live_session, 3) == RSF_BACKEND_OK);
+    fail_marker = true;
+    CHECK(rsf_fg_session_marker(live_session, 3, RSF_LATENCY_INPUT_SAMPLE, 30, 0) == RSF_BACKEND_ERROR_FEATURE_FAILED);
+    fail_marker = false;
+    CHECK(rsf_fg_session_marker(live_session, 3, RSF_LATENCY_SIMULATION_START, 31, 0) == RSF_BACKEND_ERROR_NOT_READY);
+    CHECK(rsf_fg_session_prepare(live_session, nullptr, &frame) == RSF_BACKEND_ERROR_NOT_READY);
+    CHECK(rsf_fg_session_select(live_session, nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_NOT_READY);
+    CHECK(rsf_fg_session_abort(live_session, 3) == RSF_BACKEND_OK);
+    record.frame_id = 4; record.input_qpc = 40;
+    CHECK(rsf_fg_session_begin(live_session, 4) == RSF_BACKEND_OK);
+    CHECK(rsf_fg_session_marker(live_session, 4, RSF_LATENCY_INPUT_SAMPLE, 40, 0) == RSF_BACKEND_OK);
+    for (uint32_t i = 0; i < 4; ++i) CHECK(rsf_fg_session_marker(live_session, 4, i, 41 + i, 0) == RSF_BACKEND_OK);
+    CHECK(rsf_fg_session_prepare(live_session, nullptr, &frame) == RSF_BACKEND_OK);
+    fail_marker = true;
+    CHECK(rsf_fg_session_marker(live_session, 4, RSF_LATENCY_PRESENT_START, 45, 0) == RSF_BACKEND_ERROR_FEATURE_FAILED);
+    fail_marker = false;
+    CHECK(rsf_fg_session_after_present(live_session, 4) == RSF_BACKEND_ERROR_NOT_READY);
+    CHECK(rsf_fg_session_abort(live_session, 4) == RSF_BACKEND_OK);
+    record.frame_id = 1; record.input_qpc = 10;
+    reserved_retirement = true;
+    CHECK(rsf_fg_session_destroy(live_session) == RSF_BACKEND_ERROR_INVALID_ARGUMENT);
+    CHECK(physical == 1 && destroyed == 0);
+    reserved_retirement = false;
     fail_retire = true;
     CHECK(rsf_fg_session_destroy(live_session) == RSF_BACKEND_ERROR_NOT_READY);
     CHECK(physical == 1 && destroyed == 0); fail_retire = false;

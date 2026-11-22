@@ -137,6 +137,19 @@ impl Ledger {
         0
     }
 
+    #[cfg(windows)]
+    pub(super) fn invalidate(&mut self, id: u64) {
+        let index = self.index(id);
+        if self.slots[index].frame_id == id {
+            self.slots[index].failed = 1;
+        }
+    }
+
+    #[cfg(windows)]
+    pub(super) fn failed(&self, id: u64) -> bool {
+        self.get(id).is_some_and(|slot| slot.failed != 0)
+    }
+
     pub(super) fn finish(&mut self, id: u64) -> i32 {
         if id == 0 {
             return INVALID_ARGUMENT;

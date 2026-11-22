@@ -6,6 +6,7 @@ members = [
   "tests/presentation/api",
   "tests/game-sdk",
   "tests/ac7-capture",
+  "tests/generation",
   "runtime/backends/fsr/compat",
   "runtime/vulkan/ngx",
   "runtime/vulkan/streamline/lifecycle",

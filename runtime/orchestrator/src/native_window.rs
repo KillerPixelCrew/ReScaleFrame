@@ -3,7 +3,10 @@ use crate::scene_abi::{
     RSF_NATIVE_SCENE_PRESENT_DIRECT, rsf_native_present_record, rsf_native_scene_identity,
     rsf_observer_present_event,
 };
-use crate::{com_ref::ComRef, native_scene::rsf_native_scene_for_window};
+use crate::{
+    com_ref::ComRef,
+    native_scene::{rsf_native_scene_classify_present, rsf_native_scene_for_window},
+};
 use core::{
     cell::{Cell, RefCell},
     ffi::c_void,
@@ -26,10 +29,6 @@ const IID_IUNKNOWN: GUID = GUID {
     data3: 0,
     data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
 };
-
-unsafe extern "C" {
-    fn rsf_native_scene_present_path(window: *const rsf_game_render_pass) -> u32;
-}
 
 unsafe fn com_identity(object: *mut c_void) -> Option<ComRef> {
     type Query = unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32;
@@ -219,7 +218,7 @@ unsafe extern "C" fn rsf_native_window_present(event: *const rsf_observer_presen
                     scene.texture_bound != 0 && scene.bound_window_key == window.window_key,
                 );
                 record.scene_direct_present = u32::from(
-                    unsafe { rsf_native_scene_present_path(&window) }
+                    unsafe { rsf_native_scene_classify_present(&window, &scene) }
                         == RSF_NATIVE_SCENE_PRESENT_DIRECT,
                 );
                 record.scene_view_key = scene.view_key;

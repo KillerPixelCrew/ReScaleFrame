@@ -10,6 +10,11 @@ use rsf_game_sys::{
 };
 use std::cell::RefCell;
 use std::ffi::c_void;
+use windows::Win32::Graphics::{
+    Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Texture2D},
+    Dxgi::IDXGISwapChain,
+};
+use windows::core::{IUnknown, Interface};
 
 const CAPACITY: usize = 64;
 const EMPTY: Scene = unsafe { std::mem::zeroed() };
@@ -31,8 +36,7 @@ fn same_source(scene: &Scene, pass: &Pass) -> bool {
     scene.session_id == pass.session_id && scene.source_frame_id == pass.source_frame_id
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_scene_pass(
+unsafe fn rsf_core_native_scene_pass(
     pass: *const Pass,
     begin: u32,
     identity: ResourceIdentity,
@@ -105,8 +109,7 @@ unsafe extern "C" fn rsf_core_native_scene_pass(
     })
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_scene_texture_binding(
+unsafe fn rsf_core_native_scene_texture_binding(
     pass: *const Pass,
     identity: ResourceIdentity,
 ) -> i32 {
@@ -179,8 +182,7 @@ pub(super) unsafe extern "C" fn rsf_native_scene_for_window(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_scene_present_path(
+unsafe fn rsf_core_native_scene_present_path(
     window: *const Pass,
     backbuffer: BackbufferIdentity,
 ) -> u32 {
@@ -191,6 +193,21 @@ unsafe extern "C" fn rsf_core_native_scene_present_path(
     let Some(scene) = find_window(window) else {
         return RSF_NATIVE_SCENE_PRESENT_NONE;
     };
+    classify_present_path(window, &scene, backbuffer)
+}
+
+unsafe fn rsf_core_native_scene_classify_present(
+    window: *const Pass,
+    scene: *const Scene,
+    backbuffer: BackbufferIdentity,
+) -> u32 {
+    if !unsafe { full_prefix(window) && full_prefix(scene) } {
+        return RSF_NATIVE_SCENE_PRESENT_NONE;
+    }
+    classify_present_path(unsafe { &*window }, unsafe { &*scene }, backbuffer)
+}
+
+fn classify_present_path(window: &Pass, scene: &Scene, backbuffer: BackbufferIdentity) -> u32 {
     if scene.texture_bound != 0 && scene.bound_window_key == window.window_key {
         return RSF_NATIVE_SCENE_PRESENT_SAMPLED;
     }
@@ -213,6 +230,55 @@ pub(super) extern "C" fn rsf_native_scene_reset() {
             *scenes = [EMPTY; CAPACITY];
         }
     });
+}
+
+unsafe extern "C" fn resource_identity(resource: *mut c_void) -> u64 {
+    unsafe { IUnknown::from_raw_borrowed(&resource) }
+        .and_then(|resource| resource.cast::<IUnknown>().ok())
+        .map_or(0, |identity| identity.as_raw() as usize as u64)
+}
+
+unsafe extern "C" fn backbuffer_identity(
+    chain: *mut c_void,
+    width: *mut u32,
+    height: *mut u32,
+) -> u64 {
+    let Some(chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }) else {
+        return 0;
+    };
+    let Ok(buffer) = (unsafe { chain.GetBuffer::<ID3D11Texture2D>(0) }) else {
+        return 0;
+    };
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe {
+        buffer.GetDesc(&mut desc);
+        width.write(desc.Width);
+        height.write(desc.Height);
+        resource_identity(buffer.as_raw())
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_native_scene_pass(pass: *const Pass, begin: u32) -> i32 {
+    unsafe { rsf_core_native_scene_pass(pass, begin, resource_identity) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_native_scene_texture_binding(pass: *const Pass) -> i32 {
+    unsafe { rsf_core_native_scene_texture_binding(pass, resource_identity) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_native_scene_present_path(window: *const Pass) -> u32 {
+    unsafe { rsf_core_native_scene_present_path(window, backbuffer_identity) }
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_native_scene_classify_present(
+    window: *const Pass,
+    scene: *const Scene,
+) -> u32 {
+    unsafe { rsf_core_native_scene_classify_present(window, scene, backbuffer_identity) }
 }
 
 #[cfg(test)]

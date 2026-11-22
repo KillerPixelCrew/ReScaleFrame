@@ -69,13 +69,15 @@ fn apply_bound(pass: &mut Pass) {
     }
 }
 
-pub(super) fn with_scene<R>(pass: &Pass, call: impl FnOnce() -> R) -> R {
-    struct Restore(Pass);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            SCENE.set(self.0);
-        }
+struct Restore(Pass);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        SCENE.set(self.0);
     }
+}
+
+pub(super) fn with_scene<R>(pass: &Pass, call: impl FnOnce() -> R) -> R {
     let mut scene = Pass {
         struct_size: PASS_SIZE,
         ..*pass
@@ -84,6 +86,16 @@ pub(super) fn with_scene<R>(pass: &Pass, call: impl FnOnce() -> R) -> R {
         apply_bound(&mut scene);
     }
     let _restore = Restore(SCENE.replace(scene));
+    call()
+}
+
+pub(super) fn with_capture_scene<R>(
+    pass: &Pass,
+    refuse_held_inputs: impl FnOnce(&Pass),
+    call: impl FnOnce() -> R,
+) -> R {
+    let _restore = Restore(SCENE.get());
+    unsafe { set_scene(pass, refuse_held_inputs) };
     call()
 }
 
@@ -142,4 +154,57 @@ pub(crate) unsafe fn set_scene(pass: *const Pass, refuse_held_inputs: impl FnOnc
 
 pub(crate) fn read_scene() -> Pass {
     SCENE.get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scoped_capture_applies_binding_and_restores_the_outer_scene() {
+        let outer = Pass {
+            struct_size: PASS_SIZE,
+            source_frame_id: 27,
+            ..EMPTY
+        };
+        let bound = Pass {
+            struct_size: PASS_SIZE,
+            source_frame_id: 42,
+            ..EMPTY
+        };
+        let unkeyed = Pass {
+            struct_size: PASS_SIZE,
+            ..EMPTY
+        };
+        unsafe { rsf_native_fg_bind_source(&bound) };
+        with_scene(&outer, || {
+            with_capture_scene(
+                &unkeyed,
+                |_| panic!("unkeyed capture refused"),
+                || {
+                    assert_eq!(read_scene().source_frame_id, 42);
+                },
+            );
+            let refusal = Pass {
+                role: RSF_GAME_RENDER_FG_INPUTS,
+                flags: RSF_GAME_RENDER_NO_FG,
+                ..bound
+            };
+            let mut refused = false;
+            with_capture_scene(
+                &refusal,
+                |_| refused = true,
+                || {
+                    assert_eq!(
+                        read_scene().flags & RSF_GAME_RENDER_NO_FG,
+                        RSF_GAME_RENDER_NO_FG
+                    );
+                },
+            );
+            assert!(refused);
+            assert_eq!(read_scene().source_frame_id, 27);
+        });
+        unsafe { rsf_native_fg_bind_source(std::ptr::null()) };
+        assert_eq!(read_scene().source_frame_id, 0);
+    }
 }

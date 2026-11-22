@@ -97,8 +97,12 @@ pub struct rsf_nfg_platform {
             out: *mut rsf_native_scene_identity,
         ) -> i32,
     >,
-    pub scene_present_path:
-        ::core::option::Option<unsafe extern "C" fn(window: *const rsf_game_render_pass) -> u32>,
+    pub scene_present_path: ::core::option::Option<
+        unsafe extern "C" fn(
+            window: *const rsf_game_render_pass,
+            scene: *const rsf_native_scene_identity,
+        ) -> u32,
+    >,
     pub allows_fg:
         ::core::option::Option<unsafe extern "C" fn(record: *const rsf_frame_record) -> i32>,
     pub context_device: ::core::option::Option<

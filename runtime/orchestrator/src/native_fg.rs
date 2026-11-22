@@ -10,7 +10,7 @@ use crate::cpu_abi::{
     RSF_NATIVE_CPU_RESERVATION_CLOSED, rsf_native_cpu_frame as CpuFrame,
     rsf_native_cpu_reservation as Reservation,
 };
-use crate::fg_scene::{read_scene, set_scene};
+use crate::fg_scene::{read_scene, set_scene, with_capture_scene};
 use crate::fg_status;
 use crate::native_cpu::{
     rendered_source, rsf_native_cpu_present_result, rsf_native_cpu_read,
@@ -44,7 +44,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 type Handle = *mut c_void;
-type Platform = rsf_nfg_platform;
 
 const OK: i32 = RSF_NFG_RESULT_OK as i32;
 const NOT_READY: i32 = RSF_NFG_RESULT_NOT_READY;
@@ -61,12 +60,235 @@ const MOTION: usize = 2;
 const EXPOSURE: usize = 3;
 const STAGING: usize = 4;
 
+// The private native table is fixed for the lifetime of the linked runtime.
+struct Platform {
+    cpu: &'static rsf_nfg_cpu_platform,
+    present_has_owner: unsafe extern "C" fn() -> i32,
+    present_is_owner: unsafe extern "C" fn(swapchain: *mut ::core::ffi::c_void) -> i32,
+    present_host: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
+    present_provider: unsafe extern "C" fn() -> *const rsf_generation_provider,
+    present_session: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
+    present_backend: unsafe extern "C" fn() -> u32,
+    present_generation: unsafe extern "C" fn() -> u64,
+    present_graphics: unsafe extern "C" fn(
+        device12: *mut *mut ::core::ffi::c_void,
+        queue12: *mut *mut ::core::ffi::c_void,
+        native_device: *mut *mut ::core::ffi::c_void,
+    ) -> i32,
+    present_retire: unsafe extern "C" fn(
+        provider: *mut ::core::ffi::c_void,
+        list: *mut ::core::ffi::c_void,
+        fence: *mut *mut ::core::ffi::c_void,
+        value: *mut u64,
+    ) -> i32,
+    present_abort: unsafe extern "C" fn(id: u64) -> i32,
+    host_token: unsafe extern "C" fn(host: *mut ::core::ffi::c_void, id: u64) -> i32,
+    window_match: unsafe extern "C" fn(
+        swapchain: *mut ::core::ffi::c_void,
+        out: *mut rsf_game_render_pass,
+    ) -> i32,
+    scene_for_window: unsafe extern "C" fn(
+        window: *const rsf_game_render_pass,
+        out: *mut rsf_native_scene_identity,
+    ) -> i32,
+    scene_present_path: unsafe extern "C" fn(
+        window: *const rsf_game_render_pass,
+        scene: *const rsf_native_scene_identity,
+    ) -> u32,
+    allows_fg: unsafe extern "C" fn(record: *const rsf_frame_record) -> i32,
+    context_device:
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    query_context4:
+        unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    query_texture:
+        unsafe extern "C" fn(object: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    texture_info: unsafe extern "C" fn(
+        texture: *mut ::core::ffi::c_void,
+        out: *mut rsf_nfg_texture_info,
+    ) -> i32,
+    create_event: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
+    close_event: unsafe extern "C" fn(event: *mut ::core::ffi::c_void),
+    fence_create: unsafe extern "C" fn(
+        device11: *mut ::core::ffi::c_void,
+        native_device: *mut ::core::ffi::c_void,
+    ) -> *mut ::core::ffi::c_void,
+    fence_d3d11: unsafe extern "C" fn(fence: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    fence_d3d12: unsafe extern "C" fn(fence: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    surface_create: unsafe extern "C" fn(
+        device11: *mut ::core::ffi::c_void,
+        native_device: *mut ::core::ffi::c_void,
+        width: u32,
+        height: u32,
+        format: u32,
+    ) -> *mut ::core::ffi::c_void,
+    surface_destroy: unsafe extern "C" fn(surface: *mut ::core::ffi::c_void),
+    surface_d3d11:
+        unsafe extern "C" fn(surface: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    surface_d3d12:
+        unsafe extern "C" fn(surface: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    fence_completed: unsafe extern "C" fn(fence12: *mut ::core::ffi::c_void) -> u64,
+    wait_fence: unsafe extern "C" fn(
+        fence12: *mut ::core::ffi::c_void,
+        value: u64,
+        event: *mut ::core::ffi::c_void,
+    ) -> i32,
+    flush: unsafe extern "C" fn(context4: *mut ::core::ffi::c_void),
+    copy_resource: unsafe extern "C" fn(
+        context4: *mut ::core::ffi::c_void,
+        destination: *mut ::core::ffi::c_void,
+        source: *mut ::core::ffi::c_void,
+    ),
+    context_signal: unsafe extern "C" fn(
+        context4: *mut ::core::ffi::c_void,
+        fence11: *mut ::core::ffi::c_void,
+        value: u64,
+    ) -> i32,
+    context_wait: unsafe extern "C" fn(
+        context4: *mut ::core::ffi::c_void,
+        fence11: *mut ::core::ffi::c_void,
+        value: u64,
+    ) -> i32,
+    create_commands: unsafe extern "C" fn(
+        device12: *mut ::core::ffi::c_void,
+        allocator: *mut *mut ::core::ffi::c_void,
+        list: *mut *mut ::core::ffi::c_void,
+    ) -> i32,
+    create_output: unsafe extern "C" fn(
+        device12: *mut ::core::ffi::c_void,
+        width: u32,
+        height: u32,
+        format: u32,
+    ) -> *mut ::core::ffi::c_void,
+    reset_commands: unsafe extern "C" fn(
+        allocator: *mut ::core::ffi::c_void,
+        list: *mut ::core::ffi::c_void,
+    ) -> i32,
+    close_commands: unsafe extern "C" fn(list: *mut ::core::ffi::c_void) -> i32,
+    execute: unsafe extern "C" fn(queue: *mut ::core::ffi::c_void, list: *mut ::core::ffi::c_void),
+    transition: unsafe extern "C" fn(
+        list: *mut ::core::ffi::c_void,
+        resource: *mut ::core::ffi::c_void,
+        before: u32,
+        after: u32,
+    ),
+    copy_transitioned: unsafe extern "C" fn(
+        list: *mut ::core::ffi::c_void,
+        destination: *mut ::core::ffi::c_void,
+        destination_before: u32,
+        destination_after: u32,
+        source: *mut ::core::ffi::c_void,
+        source_before: u32,
+        source_after: u32,
+    ),
+    queue_signal: unsafe extern "C" fn(
+        queue: *mut ::core::ffi::c_void,
+        fence12: *mut ::core::ffi::c_void,
+        value: u64,
+    ) -> i32,
+    queue_wait: unsafe extern "C" fn(
+        queue: *mut ::core::ffi::c_void,
+        fence12: *mut ::core::ffi::c_void,
+        value: u64,
+    ) -> i32,
+    dlss_evaluate: unsafe extern "C" fn(
+        context: *mut ::core::ffi::c_void,
+        frame: *const rsf_dlss_frame,
+    ) -> i32,
+    dlss_evaluate_shared: unsafe extern "C" fn(
+        list: *mut ::core::ffi::c_void,
+        frame: *const rsf_dlss_frame,
+        source: u64,
+    ) -> i32,
+    dump_sr: unsafe extern "C" fn(
+        context: *mut ::core::ffi::c_void,
+        frame: *const rsf_dlss_frame,
+        backend: u32,
+    ),
+    dump_fg: unsafe extern "C" fn(
+        context: *mut ::core::ffi::c_void,
+        pass: *const rsf_game_render_pass,
+        frame: *const rsf_dlss_frame,
+    ),
+    dump_fg_prepare: unsafe extern "C" fn(
+        pass: *const rsf_game_render_pass,
+        frame: *const rsf_fg_frame,
+        result: i32,
+    ),
+    dump_named: unsafe extern "C" fn(
+        context: *mut ::core::ffi::c_void,
+        texture: *mut ::core::ffi::c_void,
+        directory: *const ::core::ffi::c_char,
+        name: *const ::core::ffi::c_char,
+        view: u32,
+        scale: f32,
+        log: rsf_backend_log_fn,
+        log_user: *mut ::core::ffi::c_void,
+    ) -> i32,
+}
+
+impl Platform {
+    fn checked(raw: &'static rsf_nfg_platform) -> Option<Self> {
+        Some(Self {
+            cpu: unsafe { raw.cpu.as_ref()? },
+            present_has_owner: raw.present_has_owner?,
+            present_is_owner: raw.present_is_owner?,
+            present_host: raw.present_host?,
+            present_provider: raw.present_provider?,
+            present_session: raw.present_session?,
+            present_backend: raw.present_backend?,
+            present_generation: raw.present_generation?,
+            present_graphics: raw.present_graphics?,
+            present_retire: raw.present_retire?,
+            present_abort: raw.present_abort?,
+            host_token: raw.host_token?,
+            window_match: raw.window_match?,
+            scene_for_window: raw.scene_for_window?,
+            scene_present_path: raw.scene_present_path?,
+            allows_fg: raw.allows_fg?,
+            context_device: raw.context_device?,
+            query_context4: raw.query_context4?,
+            query_texture: raw.query_texture?,
+            texture_info: raw.texture_info?,
+            create_event: raw.create_event?,
+            close_event: raw.close_event?,
+            fence_create: raw.fence_create?,
+            fence_d3d11: raw.fence_d3d11?,
+            fence_d3d12: raw.fence_d3d12?,
+            surface_create: raw.surface_create?,
+            surface_destroy: raw.surface_destroy?,
+            surface_d3d11: raw.surface_d3d11?,
+            surface_d3d12: raw.surface_d3d12?,
+            fence_completed: raw.fence_completed?,
+            wait_fence: raw.wait_fence?,
+            flush: raw.flush?,
+            copy_resource: raw.copy_resource?,
+            context_signal: raw.context_signal?,
+            context_wait: raw.context_wait?,
+            create_commands: raw.create_commands?,
+            create_output: raw.create_output?,
+            reset_commands: raw.reset_commands?,
+            close_commands: raw.close_commands?,
+            execute: raw.execute?,
+            transition: raw.transition?,
+            copy_transitioned: raw.copy_transitioned?,
+            queue_signal: raw.queue_signal?,
+            queue_wait: raw.queue_wait?,
+            dlss_evaluate: raw.dlss_evaluate?,
+            dlss_evaluate_shared: raw.dlss_evaluate_shared?,
+            dump_sr: raw.dump_sr?,
+            dump_fg: raw.dump_fg?,
+            dump_fg_prepare: raw.dump_fg_prepare?,
+            dump_named: raw.dump_named?,
+        })
+    }
+}
+
 macro_rules! call {
     ($p:expr, $f:ident $(, $a:expr)* $(,)?) => {{
         // Every entry is present and takes the caller's validated or owned handles.
         #[allow(unused_unsafe)]
         let result =
-            unsafe { ($p.$f.expect(concat!("native FG platform entry ", stringify!($f))))($($a),*) };
+            unsafe { ($p.$f)($($a),*) };
         result
     }};
 }
@@ -174,7 +396,7 @@ fn trace(name: &CStr, source: u64, result: i32) {
 
 fn cpu_platform(p: &Platform) -> &rsf_nfg_cpu_platform {
     // The native graphics callback table supplies a process-lifetime CPU platform.
-    unsafe { &*p.cpu }
+    p.cpu
 }
 
 // The game's screen class decides, through the one rule every generation consumer applies.
@@ -300,9 +522,7 @@ impl Device {
         Some(Surface {
             d3d11: call!(p, surface_d3d11, handle.as_ptr()),
             d3d12: call!(p, surface_d3d12, handle.as_ptr()),
-            destroy: p
-                .surface_destroy
-                .expect("native FG platform entry surface_destroy"),
+            destroy: p.surface_destroy,
             handle,
         })
     }
@@ -443,11 +663,67 @@ unsafe impl Send for Vendor {}
 // Lock order: one slot, then VENDOR or SETTINGS. The render thread blocks on its slot; the present
 // thread's Prepare only tries it and refuses generation when the render thread holds it.
 static SLOTS: [Mutex<Slot>; SLOT_COUNT] = [const { Mutex::new(Slot::new()) }; SLOT_COUNT];
+// SR uses private upload and command storage when the FG slot already owns explicit inputs.
+static SR_SLOTS: [Mutex<Slot>; SLOT_COUNT] = [const { Mutex::new(Slot::new()) }; SLOT_COUNT];
 static VENDOR: Mutex<[Vendor; SLOT_COUNT]> = Mutex::new([const { Vendor::new() }; SLOT_COUNT]);
-static PREVIOUS_INPUT_QPC: AtomicU64 = AtomicU64::new(0);
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SourceTimeline {
+    session: u64,
+    generation: u64,
+    viewport: u64,
+    view: u64,
+    chain: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct InputSample {
+    timeline: SourceTimeline,
+    source: u64,
+    qpc: u64,
+    frequency: u64,
+}
+
+impl InputSample {
+    fn delta_from(self, previous: Self) -> Option<f32> {
+        if self.timeline != previous.timeline
+            || previous.source.checked_add(1) != Some(self.source)
+            || previous.frequency != self.frequency
+            || previous.qpc == 0
+            || self.qpc <= previous.qpc
+            || self.frequency == 0
+        {
+            return None;
+        }
+        let delta = (self.qpc - previous.qpc) as f64 * 1000.0 / self.frequency as f64;
+        (delta <= 1000.0).then_some(delta as f32)
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct InputTiming {
+    last: Option<InputSample>,
+    delta: Option<f32>,
+}
+
+impl InputTiming {
+    fn observe(&mut self, sample: Option<InputSample>) -> Option<f32> {
+        if self.last != sample {
+            self.delta = sample
+                .zip(self.last)
+                .and_then(|(sample, previous)| sample.delta_from(previous));
+            self.last = sample;
+        }
+        self.delta
+    }
+}
+
+fn positive_delta(delta: f32) -> Option<f32> {
+    (delta.is_finite() && delta > 0.0).then_some(delta)
+}
 static REFUSED_HUDLESS: Mutex<[u32; 4]> = Mutex::new([0; 4]);
 
 thread_local! {
+    static INPUT_TIMING: Cell<InputTiming> = const { Cell::new(InputTiming { last: None, delta: None }) };
     // Prepare's tagged slot, retired by the same present thread.
     static TAGGED: Cell<Option<usize>> = const { Cell::new(None) };
     static PRESENTING: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
@@ -519,13 +795,13 @@ fn restore_read_state(p: &Platform, device: &Device, slot: &mut Slot) -> bool {
 fn resources(
     p: &Platform,
     device: &Device,
-    index: usize,
+    fg_index: Option<usize>,
     slot: &mut Slot,
     frame: &DlssFrame,
     reconstruct: bool,
 ) -> bool {
     let generation = call!(p, present_generation);
-    let (vendor_fence, vendor_value, read_state) = {
+    let (vendor_fence, vendor_value, read_state) = if let Some(index) = fg_index {
         let mut vendor = lock(&VENDOR);
         let vendor = &mut vendor[index];
         if vendor.unknown {
@@ -536,6 +812,8 @@ fn resources(
             vendor.unknown = false;
         }
         (vendor.fence.clone(), vendor.value, vendor.read_state)
+    } else {
+        (None, 0, false)
     };
     let started = now_qpc();
     // D3D11 signals are queued unflushed. Submit them before blocking on one, which happens when the
@@ -564,7 +842,7 @@ fn resources(
             return false;
         }
     }
-    if read_state {
+    if let Some(index) = fg_index.filter(|_| read_state) {
         if !restore_read_state(p, device, slot) {
             return false;
         }
@@ -660,12 +938,18 @@ fn depth_domains_bytes(pass: &Pass) -> &[u8] {
     unsafe { std::slice::from_raw_parts(ptr::from_ref(domains).cast::<u8>(), size_of_val(domains)) }
 }
 
-fn platform<'a>(platform: *const Platform) -> Option<&'a Platform> {
-    unsafe { platform.as_ref() }
+fn platform() -> Option<&'static Platform> {
+    unsafe extern "C" {
+        static rsf_native_fg_platform: rsf_nfg_platform;
+    }
+    static CHECKED: std::sync::OnceLock<Option<Platform>> = std::sync::OnceLock::new();
+    CHECKED
+        .get_or_init(|| Platform::checked(unsafe { &rsf_native_fg_platform }))
+        .as_ref()
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_options_set(options: *const Options) {
+unsafe extern "C" fn rsf_native_fg_options_set(options: *const Options) {
     if options.is_null() || unsafe { options.cast::<u32>().read() } < size_of::<Options>() as u32 {
         return;
     }
@@ -683,18 +967,15 @@ unsafe extern "C" fn rsf_core_native_fg_options_set(options: *const Options) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_set_log(log: Log, user: Handle) {
+unsafe extern "C" fn rsf_native_fg_set_log(log: Log, user: Handle) {
     let mut settings = lock(&SETTINGS);
     settings.log = log;
     settings.log_user = user;
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_status_get(
-    status: *mut NativeStatus,
-    platform: *const Platform,
-) -> i32 {
-    let Some(p) = self::platform(platform) else {
+unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStatus) -> i32 {
+    let Some(p) = platform() else {
         return 0;
     };
     if status.is_null() || unsafe { status.cast::<u32>().read() } < size_of::<NativeStatus>() as u32
@@ -745,29 +1026,47 @@ unsafe extern "C" fn rsf_core_native_fg_status_get(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_scene(pass: *const Pass, platform: *const Platform) {
-    let Some(p) = self::platform(platform) else {
+unsafe extern "C" fn rsf_native_fg_scene(pass: *const Pass) {
+    let Some(p) = platform() else {
         return;
     };
-    unsafe {
-        set_scene(pass, |pass| {
-            if call!(p, present_has_owner) != 0 {
-                let mut held = slot(pass.source_frame_id);
-                if held.prepared && held.holds(pass) {
-                    held.pass.flags |= RSF_GAME_RENDER_NO_FG;
-                }
-            }
-        })
-    };
+    unsafe { set_scene(pass, |pass| refuse_held_inputs(p, pass)) };
+}
+
+fn refuse_held_inputs(p: &Platform, pass: &Pass) {
+    if call!(p, present_has_owner) != 0 {
+        let mut held = slot(pass.source_frame_id);
+        if held.prepared && held.holds(pass) {
+            held.pass.flags |= RSF_GAME_RENDER_NO_FG;
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_final(
+unsafe extern "C" fn rsf_native_fg_capture_scoped(
     context: Handle,
-    pass: *const Pass,
-    platform: *const Platform,
+    identity: *const Pass,
+    frame: *const DlssFrame,
 ) {
-    let (Some(p), Some(pass)) = (self::platform(platform), unsafe { pass.as_ref() }) else {
+    if context.is_null()
+        || identity.is_null()
+        || frame.is_null()
+        || unsafe { identity.cast::<u32>().read() } < PASS_SIZE
+        || (unsafe { frame.cast::<u32>().read() } as usize) < size_of::<DlssFrame>()
+    {
+        return;
+    }
+    let Some(p) = platform() else { return };
+    with_capture_scene(
+        unsafe { &*identity },
+        |pass| refuse_held_inputs(p, pass),
+        || capture(p, context, frame),
+    );
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_native_fg_final(context: Handle, pass: *const Pass) {
+    let (Some(p), Some(pass)) = (platform(), unsafe { pass.as_ref() }) else {
         return;
     };
     if context.is_null()
@@ -858,14 +1157,14 @@ unsafe extern "C" fn rsf_core_native_fg_final(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_capture(
-    context: Handle,
-    frame: *const DlssFrame,
-    platform: *const Platform,
-) {
-    let Some(p) = self::platform(platform) else {
+unsafe extern "C" fn rsf_native_fg_capture(context: Handle, frame: *const DlssFrame) {
+    let Some(p) = platform() else {
         return;
     };
+    capture(p, context, frame);
+}
+
+fn capture(p: &Platform, context: Handle, frame: *const DlssFrame) {
     let scene = read_scene();
     let frame = unsafe { frame.as_ref() };
     if let Some(frame) = frame
@@ -911,7 +1210,7 @@ unsafe extern "C" fn rsf_core_native_fg_capture(
     stage(p, c"capture-resources", source, native, 0);
     if frame.depth.is_null()
         || frame.motion.is_null()
-        || !resources(p, device, index, &mut slot, frame, false)
+        || !resources(p, device, Some(index), &mut slot, frame, false)
     {
         return;
     }
@@ -947,12 +1246,8 @@ unsafe extern "C" fn rsf_core_native_fg_capture(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_evaluate(
-    context: Handle,
-    frame: *const DlssFrame,
-    platform: *const Platform,
-) -> i32 {
-    let Some(p) = self::platform(platform) else {
+unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssFrame) -> i32 {
+    let Some(p) = platform() else {
         return NOT_READY;
     };
     let started = now_qpc();
@@ -998,10 +1293,22 @@ unsafe extern "C" fn rsf_core_native_fg_evaluate(
         return NOT_READY;
     };
     let index = slot_index(source);
-    let mut slot = slot(source);
-    let explicit_inputs =
-        slot.prepared && slot.holds(&scene) && slot.pass.role == RSF_GAME_RENDER_FG_INPUTS;
-    if !resources(p, device, index, &mut slot, frame, true) {
+    let fg_slot = slot(source);
+    // A secondary SR view of this source also has no authority to replace its explicit FG lease.
+    let explicit_inputs = fg_slot.prepared
+        && fg_slot.source == source
+        && fg_slot.pass.session_id == scene.session_id
+        && fg_slot.pass.role == RSF_GAME_RENDER_FG_INPUTS;
+    let mut slot = if explicit_inputs {
+        drop(fg_slot);
+        lock(&SR_SLOTS[index])
+    } else {
+        fg_slot
+    };
+    // A failed SR evaluation cannot keep an inferred FG lease eligible after overwriting it.
+    slot.prepared = false;
+    let fg_index = (!explicit_inputs).then_some(index);
+    if !resources(p, device, fg_index, &mut slot, frame, true) {
         return FEATURE_FAILED;
     }
     let Some(commands) = slot.commands.as_ref().filter(|c| reset(p, c)) else {
@@ -1138,14 +1445,12 @@ unsafe extern "C" fn rsf_core_native_fg_evaluate(
     if !signalled {
         return FEATURE_FAILED;
     }
-    slot.source = source;
-    // SR may carry conservative NO_FG metadata even after the native producer supplied eligible FG
-    // inputs. Retain that matching explicit provenance.
     if !explicit_inputs {
+        slot.source = source;
         slot.pass = scene;
+        slot.prepared = result == OK;
+        slot.hudless_ready = false;
     }
-    slot.prepared = result == OK;
-    slot.hudless_ready = false;
     slot.evaluate_ticks = now_qpc() - started;
     result
 }
@@ -1164,6 +1469,7 @@ struct Admission {
     continuous: bool,
     vsync: bool,
     cpu_valid: bool,
+    timing_valid: bool,
     rendered: bool,
     no_pacer: bool,
     reserved_bound: bool,
@@ -1180,6 +1486,7 @@ impl Admission {
             && self.continuous
             && self.vsync
             && self.cpu_valid
+            && self.timing_valid
     }
 
     fn reason(&self) -> u32 {
@@ -1228,6 +1535,7 @@ impl Admission {
             | (self.presentation_path << 10)
             | (screen << 12)
             | (u32::from(self.hudless) << 16)
+            | (u32::from(self.timing_valid) << 17)
     }
 }
 
@@ -1245,15 +1553,17 @@ fn provider_configure(provider: &Provider, session: Handle, options: &rsf_fg_opt
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_prepare(
+unsafe extern "C" fn rsf_native_fg_prepare(
+    _user: Handle,
     chain: Handle,
+    _context: Handle,
     list: Handle,
     buffer: Handle,
+    _host: Handle,
     session: Handle,
     sync: u32,
-    platform: *const Platform,
 ) {
-    let Some(p) = self::platform(platform) else {
+    let Some(p) = platform() else {
         return;
     };
     TAGGED.set(None);
@@ -1264,6 +1574,7 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
     let options = requested();
     let provider = unsafe { call!(p, present_provider).as_ref() };
     let Some(provider) = provider.filter(|_| !session.is_null()) else {
+        INPUT_TIMING.set(InputTiming::default());
         let mut settings = lock(&SETTINGS);
         settings.cached.vendor = empty();
         settings.cached.last_result = 0;
@@ -1275,7 +1586,7 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
     let scene_matched =
         window_matched && call!(p, scene_for_window, &window, &mut final_scene) != 0;
     let presentation_path = if scene_matched {
-        call!(p, scene_present_path, &window)
+        call!(p, scene_present_path, &window, &final_scene)
     } else {
         RSF_NATIVE_SCENE_PRESENT_NONE
     };
@@ -1360,6 +1671,44 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
         && (owner.paced || (owner.prospective && no_pacer))
         && !owner.failed
         && reserved_bound;
+    let input_qpc = cpu
+        .input_ready_qpc
+        .max(cpu.timestamps_qpc[RSF_GAME_CPU_INPUT_SAMPLE as usize]);
+    // A discontinuity clears the predecessor. Only verified input from the same presentation
+    // timeline can replace a missing engine delta.
+    let sample = (measured_valid
+        && submitted
+        && identity
+        && pass_flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_NO_FG) == 0
+        && window.flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_NO_FG) == 0
+        && input_qpc != 0
+        && cpu.qpc_frequency != 0)
+        .then_some(InputSample {
+            timeline: SourceTimeline {
+                session: window.session_id,
+                generation,
+                viewport: window.viewport_key,
+                view: window.view_key,
+                chain: chain as usize,
+            },
+            source,
+            qpc: input_qpc,
+            frequency: cpu.qpc_frequency,
+        });
+    let input_delta = INPUT_TIMING.with(|history| {
+        let mut timing = history.get();
+        let delta = timing.observe(sample);
+        history.set(timing);
+        delta
+    });
+    let measured_delta = if rendered {
+        positive_delta(owner.source_delta_ms)
+    } else {
+        input_delta
+    };
+    let frame_time_ms = held
+        .and_then(|slot| positive_delta(slot.pass.camera.frame_time_seconds * 1000.0))
+        .or(measured_delta);
     let admission = Admission {
         window_matched,
         scene_matched,
@@ -1377,6 +1726,7 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
         } else {
             measured_valid
         },
+        timing_valid: frame_time_ms.is_some(),
         rendered,
         no_pacer,
         reserved_bound,
@@ -1503,12 +1853,7 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
     record.frame_id = source;
     record.resource_generation = selected.generation;
     record.view_id = selected.pass.view_key as u32;
-    record.input_qpc = if rendered {
-        0
-    } else {
-        cpu.input_ready_qpc
-            .max(cpu.timestamps_qpc[RSF_GAME_CPU_INPUT_SAMPLE as usize])
-    };
+    record.input_qpc = if rendered { 0 } else { input_qpc };
     if rendered {
         record.source_provenance = RSF_FRAME_SOURCE_RENDERED;
         record.source_qpc = owner.source_qpc;
@@ -1521,42 +1866,11 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
     record.output_width = selected.output_width;
     record.output_height = selected.output_height;
     record.camera = selected.pass.camera;
-    // One meaning for every provider: the source-frame delta. CPU simulation time is not a frame
-    // time, and may not even have ended yet on UE's overlapped render thread.
-    let engine_delta = record.camera.frame_time_seconds * 1000.0;
-    let engine_valid = engine_delta.is_finite() && engine_delta > 0.0;
-    let input = if rendered {
-        record.source_qpc
-    } else {
-        record.input_qpc
-    };
-    let measured_delta = owner.source_delta_ms;
-    if rendered && !engine_valid && !(measured_delta.is_finite() && measured_delta > 0.0) {
+    let Some(frame_time_ms) = frame_time_ms else {
         return;
-    }
-    let previous = PREVIOUS_INPUT_QPC.load(Ordering::Relaxed);
-    let frequency = if rendered {
-        record.source_qpc_frequency
-    } else {
-        cpu.qpc_frequency
     };
-    record.frame_time_ms = if rendered {
-        if engine_valid {
-            engine_delta
-        } else {
-            measured_delta
-        }
-    } else {
-        PREVIOUS_INPUT_QPC.store(input, Ordering::Relaxed);
-        let delta = if engine_valid {
-            engine_delta
-        } else if previous != 0 && input > previous {
-            ((input - previous) as f64 * 1000.0 / frequency as f64) as f32
-        } else {
-            16.67
-        };
-        delta.clamp(0.01, 1000.0)
-    };
+    record.frame_time_ms = frame_time_ms;
+
     {
         let mut settings = lock(&SETTINGS);
         settings.cached.input_qpc = record.input_qpc;
@@ -1624,8 +1938,8 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_retire(session: Handle, platform: *const Platform) {
-    let Some(p) = self::platform(platform) else {
+unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Handle) {
+    let Some(p) = platform() else {
         return;
     };
     let provider = unsafe { call!(p, present_provider).as_ref() };
@@ -1758,11 +2072,8 @@ unsafe extern "C" fn rsf_core_native_fg_retire(session: Handle, platform: *const
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_present(
-    event: *const PresentEvent,
-    platform: *const Platform,
-) {
-    let (Some(p), Some(event)) = (self::platform(platform), unsafe { event.as_ref() }) else {
+unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent) {
+    let (Some(p), Some(event)) = (platform(), unsafe { event.as_ref() }) else {
         return;
     };
     if event.flags & RSF_NFG_PRESENT_TEST != 0 || call!(p, present_has_owner) == 0 {
@@ -1802,8 +2113,8 @@ unsafe extern "C" fn rsf_core_native_fg_present(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_window_end(pass: *const Pass, platform: *const Platform) {
-    let Some(p) = self::platform(platform) else {
+unsafe extern "C" fn rsf_native_fg_window_end(pass: *const Pass) {
+    let Some(p) = platform() else {
         return;
     };
     if pass.is_null() || unsafe { pass.cast::<u32>().read() } < PASS_SIZE {
@@ -1829,7 +2140,7 @@ unsafe extern "C" fn rsf_core_native_fg_window_end(pass: *const Pass, platform: 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_fg_inputs_ready(source: u64) -> i32 {
+extern "C" fn rsf_native_fg_inputs_ready(source: u64) -> i32 {
     if source == 0 {
         return 0;
     }
@@ -1843,14 +2154,13 @@ extern "C" fn rsf_core_native_fg_inputs_ready(source: u64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_dump_inputs(
+unsafe extern "C" fn rsf_native_fg_dump_inputs(
     context: Handle,
     source: u64,
     directory: *const c_char,
     prefix: *const c_char,
-    platform: *const Platform,
 ) -> i32 {
-    let Some(p) = self::platform(platform) else {
+    let Some(p) = platform() else {
         return 0;
     };
     if context.is_null()
@@ -1975,6 +2285,7 @@ mod tests {
             continuous: true,
             vsync: true,
             cpu_valid: true,
+            timing_valid: true,
             rendered: false,
             no_pacer: false,
             reserved_bound: true,
@@ -2013,8 +2324,46 @@ mod tests {
         let facts = admission();
         assert_eq!(
             facts.eligibility(3),
-            0x3ff | (2 << 10) | (3 << 12) | (1 << 16)
+            0x3ff | (2 << 10) | (3 << 12) | (1 << 16) | (1 << 17)
         );
+    }
+
+    #[test]
+    fn measured_input_time_requires_a_consecutive_matching_timeline() {
+        let previous = InputSample {
+            timeline: SourceTimeline {
+                session: 1,
+                generation: 2,
+                viewport: 3,
+                view: 4,
+                chain: 5,
+            },
+            source: 6,
+            qpc: 1000,
+            frequency: 1000,
+        };
+        let mut current = InputSample {
+            source: 7,
+            qpc: 1020,
+            ..previous
+        };
+        assert_eq!(current.delta_from(previous), Some(20.0));
+        let mut timing = InputTiming::default();
+        assert_eq!(timing.observe(Some(previous)), None);
+        assert_eq!(timing.observe(Some(current)), Some(20.0));
+        assert_eq!(timing.observe(Some(current)), Some(20.0));
+        assert_eq!(timing.observe(None), None);
+        assert_eq!(timing.observe(Some(current)), None);
+        current.timeline.session += 1;
+        assert_eq!(current.delta_from(previous), None);
+        current.timeline = previous.timeline;
+        current.timeline.generation += 1;
+        assert_eq!(current.delta_from(previous), None);
+        current.timeline = previous.timeline;
+        current.source += 1;
+        assert_eq!(current.delta_from(previous), None);
+        assert_eq!(positive_delta(0.0), None);
+        assert_eq!(positive_delta(f32::NAN), None);
     }
 
     #[test]

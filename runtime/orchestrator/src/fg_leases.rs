@@ -16,23 +16,29 @@ const NOT_READY: rsf_backend_result = -8;
 const FEATURE_FAILED: rsf_backend_result = -9;
 const STALE_RESOURCES: rsf_backend_result = -10;
 
-unsafe extern "C" {
-    fn rsf_fg_lease_com_get_device(child: *mut c_void, device: *mut *mut c_void) -> i32;
-    fn rsf_d3d12_fence_completed(fence: *mut c_void) -> u64;
+use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12DeviceChild, ID3D12Fence};
+use windows::core::Interface;
+
+unsafe fn device(child: *mut c_void) -> Option<ID3D12Device> {
+    let child = unsafe { ID3D12DeviceChild::from_raw_borrowed(&child) }?;
+    let mut device = None;
+    unsafe { child.GetDevice(&mut device) }.ok()?;
+    device
 }
 
-unsafe fn device(child: *mut c_void) -> Option<ComRef> {
-    let mut device = ptr::null_mut();
-    let result = unsafe { rsf_fg_lease_com_get_device(child, &mut device) };
-    let device = NonNull::new(device).map(ComRef);
-    if result < 0 { None } else { device }
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d12_fence_completed(fence: *mut c_void) -> u64 {
+    let Some(fence) = (unsafe { ID3D12Fence::from_raw_borrowed(&fence) }) else {
+        return u64::MAX;
+    };
+    unsafe { fence.GetCompletedValue() }
 }
 
 unsafe fn same_device(first: *mut c_void, second: *mut c_void) -> bool {
     let Some(first) = (unsafe { device(first) }) else {
         return false;
     };
-    unsafe { device(second) }.is_some_and(|second| first.0 == second.0)
+    unsafe { device(second) }.is_some_and(|second| first.as_raw() == second.as_raw())
 }
 
 #[derive(Clone)]
@@ -48,6 +54,28 @@ impl FencePoint {
     pub(super) fn state(&self) -> FenceState {
         let completed = unsafe { rsf_d3d12_fence_completed(self.fence.0.as_ptr()) };
         FenceState::check(completed, self.value)
+    }
+}
+
+pub(super) enum Retirement {
+    Immediate,
+    Fenced { fence: NonNull<c_void>, value: u64 },
+}
+
+impl Retirement {
+    // The caller may supply only the size prefix.
+    pub(super) unsafe fn read(raw: *const rsf_fg_retirement) -> Option<Self> {
+        if raw.is_null()
+            || (unsafe { raw.cast::<u32>().read() } as usize) < size_of::<rsf_fg_retirement>()
+        {
+            return None;
+        }
+        let rsf_fg_retirement { fence, value, .. } = unsafe { raw.read() };
+        match NonNull::new(fence) {
+            None if value == 0 => Some(Self::Immediate),
+            Some(fence) if value != u64::MAX => Some(Self::Fenced { fence, value }),
+            _ => None,
+        }
     }
 }
 
@@ -211,29 +239,23 @@ unsafe extern "C" fn rsf_fg_leases_seal(
     let Some(lease) = (unsafe { leases.as_mut() }).and_then(|leases| leases.find(id)) else {
         return INVALID;
     };
-    // A short descriptor may contain only struct_size.
-    if retirement.is_null()
-        || (unsafe { retirement.cast::<u32>().read() } as usize) < size_of::<rsf_fg_retirement>()
-    {
+    let Some(retirement) = (unsafe { Retirement::read(retirement) }) else {
         return INVALID;
-    }
-    let rsf_fg_retirement { fence, value, .. } = unsafe { retirement.read() };
-    if (fence.is_null() && value != 0) || value == u64::MAX {
-        return INVALID;
-    }
+    };
     if lease.queue.is_none() || lease.vendor.is_some() {
         return NOT_READY;
     }
-    lease.vendor = Some(if fence.is_null() {
-        VendorRetirement::Complete
-    } else {
-        if !unsafe { same_device(lease.first.0.as_ptr(), fence) } {
-            return INVALID;
+    lease.vendor = Some(match retirement {
+        Retirement::Immediate => VendorRetirement::Complete,
+        Retirement::Fenced { fence, value } => {
+            if !unsafe { same_device(lease.first.0.as_ptr(), fence.as_ptr()) } {
+                return INVALID;
+            }
+            VendorRetirement::Fence(FencePoint {
+                fence: unsafe { ComRef::retain(fence.as_ptr()) },
+                value,
+            })
         }
-        VendorRetirement::Fence(FencePoint {
-            fence: unsafe { ComRef::retain(fence) },
-            value,
-        })
     });
     OK
 }
@@ -281,6 +303,17 @@ unsafe extern "C" fn rsf_fg_leases_destroy(leases: *mut Leases) -> rsf_backend_r
     }
     if pending != 0 {
         return NOT_READY;
+    }
+    drop(unsafe { Box::from_raw(leases) });
+    OK
+}
+
+// The caller has stopped all users and torn down GPU work on every device represented by
+// this owner. Dropping the references here makes no claim that the work completed.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_leases_abandon_device_lost(leases: *mut Leases) -> rsf_backend_result {
+    if leases.is_null() {
+        return INVALID;
     }
     drop(unsafe { Box::from_raw(leases) });
     OK

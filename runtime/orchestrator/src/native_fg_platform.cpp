@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Presentation-bridge, D3D11, D3D12, shared-surface, SR and frame-dump operations for the Rust D3D11
-// frame generation owner in native_fg.rs, and the stable exported entry points that pass this table.
+// frame generation owner in native_fg.rs.
 // Each leaf performs one platform call. Resources, ordering, leases, admission, retirement and
 // fallback are decided in Rust. Returned COM interfaces carry one reference for the caller.
 #include "native_fg_platform.h"
@@ -41,6 +41,8 @@ static_assert(RSF_NFG_RESULT_NOT_READY == RSF_BACKEND_ERROR_NOT_READY &&
               RSF_NFG_RESULT_NOT_READY == RSF_DLSS_ERROR_NOT_READY);
 static_assert(RSF_NFG_RESULT_FEATURE_FAILED == RSF_BACKEND_ERROR_FEATURE_FAILED &&
               RSF_NFG_RESULT_FEATURE_FAILED == RSF_DLSS_ERROR_FEATURE_FAILED);
+
+extern "C" uint32_t rsf_native_scene_classify_present(const rsf_game_render_pass*, const rsf_native_scene_identity*);
 
 namespace {
 template<class T> void* transfer(HRESULT result, T* object)
@@ -205,10 +207,12 @@ int32_t dump_named(void* context, void* texture, const char* directory, const ch
     return rsf_input_dump_named_texture(context, texture, &request, nullptr);
 }
 
-constexpr rsf_nfg_platform platform{
+}
+
+extern "C" const rsf_nfg_platform rsf_native_fg_platform{
     present_has_owner, present_is_owner, present_host, rsf_d3d11_present_provider, rsf_d3d11_present_session,
     rsf_d3d11_present_backend, rsf_d3d11_present_generation, present_graphics, rsf_d3d11_present_retire,
-    present_abort, host_token, window_match, scene_for_window, rsf_native_scene_present_path, allows_fg,
+    present_abort, host_token, window_match, scene_for_window, rsf_native_scene_classify_present, allows_fg,
     context_device, query_context4, query_texture, texture_info, create_event, close_event, fence_create,
     fence_d3d11, fence_d3d12, surface_create, surface_destroy, surface_d3d11, surface_d3d12,
     fence_completed, wait_fence, flush, copy_resource, context_signal, context_wait, create_commands, create_output,
@@ -216,59 +220,3 @@ constexpr rsf_nfg_platform platform{
     dlss_evaluate, dlss_evaluate_shared, dump_sr, rsf_input_dump_fg, rsf_input_dump_fg_prepare, dump_named,
     &rsf_native_fg_cpu_platform,
 };
-}
-
-extern "C" RSF_RUNTIME_API void rsf_native_fg_options_set(const rsf_native_fg_options* options)
-{
-    rsf_core_native_fg_options_set(options);
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_set_log(rsf_backend_log_fn sink, void* user)
-{
-    rsf_core_native_fg_set_log(sink, user);
-}
-extern "C" RSF_RUNTIME_API int rsf_native_fg_status_get(rsf_native_fg_status* status)
-{
-    return rsf_core_native_fg_status_get(status, &platform);
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass* pass)
-{
-    rsf_core_native_fg_scene(pass, &platform);
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_final(void* context, const rsf_game_render_pass* pass)
-{
-    rsf_core_native_fg_final(context, pass, &platform);
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_capture(void* context, const rsf_dlss_frame* frame)
-{
-    rsf_core_native_fg_capture(context, frame, &platform);
-}
-extern "C" RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context, const rsf_dlss_frame* frame)
-{
-    return static_cast<rsf_dlss_result>(rsf_core_native_fg_evaluate(context, frame, &platform));
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*, void* list, void* buffer,
-    rsf_streamline_host*, void* provider, uint32_t sync)
-{
-    rsf_core_native_fg_prepare(chain, list, buffer, provider, sync, &platform);
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_retire(void*, void* provider)
-{
-    rsf_core_native_fg_retire(provider, &platform);
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_present(const rsf_observer_present_event* event)
-{
-    rsf_core_native_fg_present(event, &platform);
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_window_end(const rsf_game_render_pass* pass)
-{
-    rsf_core_native_fg_window_end(pass, &platform);
-}
-extern "C" RSF_RUNTIME_API int rsf_native_fg_inputs_ready(uint64_t source)
-{
-    return rsf_core_native_fg_inputs_ready(source);
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_native_fg_dump_inputs(void* context, uint64_t source,
-    const char* directory, const char* prefix)
-{
-    return rsf_core_native_fg_dump_inputs(context, source, directory, prefix, &platform);
-}

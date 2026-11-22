@@ -141,6 +141,8 @@ mod native_translucency;
 mod owned_handle;
 
 #[cfg(windows)]
+mod d3d11_fg_api_abi;
+#[cfg(windows)]
 mod ffx_version;
 #[cfg(windows)]
 mod fg12;

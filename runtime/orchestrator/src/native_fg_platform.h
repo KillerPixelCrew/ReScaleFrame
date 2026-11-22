@@ -58,7 +58,7 @@ typedef struct rsf_nfg_platform {
     int32_t (*host_token)(void* host, uint64_t id);
     int32_t (*window_match)(void* swapchain, rsf_game_render_pass* out);
     int32_t (*scene_for_window)(const rsf_game_render_pass* window, rsf_native_scene_identity* out);
-    uint32_t (*scene_present_path)(const rsf_game_render_pass* window);
+    uint32_t (*scene_present_path)(const rsf_game_render_pass* window, const rsf_native_scene_identity* scene);
     int32_t (*allows_fg)(const rsf_frame_record* record);
     /* D3D11, D3D12 and the shared surface/fence service. */
     void* (*context_device)(void* context);
@@ -100,23 +100,6 @@ typedef struct rsf_nfg_platform {
         float scale, rsf_backend_log_fn log, void* log_user);
     const rsf_nfg_cpu_platform* cpu;
 } rsf_nfg_platform;
-
-/* Rust graphics owner. */
-void rsf_core_native_fg_options_set(const rsf_native_fg_options* options);
-void rsf_core_native_fg_set_log(rsf_backend_log_fn sink, void* user);
-int rsf_core_native_fg_status_get(rsf_native_fg_status* status, const rsf_nfg_platform* platform);
-void rsf_core_native_fg_scene(const rsf_game_render_pass* pass, const rsf_nfg_platform* platform);
-void rsf_core_native_fg_final(void* context, const rsf_game_render_pass* pass, const rsf_nfg_platform* platform);
-void rsf_core_native_fg_capture(void* context, const rsf_dlss_frame* frame, const rsf_nfg_platform* platform);
-int32_t rsf_core_native_fg_evaluate(void* context, const rsf_dlss_frame* frame, const rsf_nfg_platform* platform);
-void rsf_core_native_fg_prepare(void* chain, void* list, void* buffer, void* provider, uint32_t sync,
-    const rsf_nfg_platform* platform);
-void rsf_core_native_fg_retire(void* provider, const rsf_nfg_platform* platform);
-void rsf_core_native_fg_present(const rsf_observer_present_event* event, const rsf_nfg_platform* platform);
-void rsf_core_native_fg_window_end(const rsf_game_render_pass* pass, const rsf_nfg_platform* platform);
-int rsf_core_native_fg_inputs_ready(uint64_t source);
-int32_t rsf_core_native_fg_dump_inputs(void* context, uint64_t source, const char* directory, const char* prefix,
-    const rsf_nfg_platform* platform);
 
 #ifdef __cplusplus
 }

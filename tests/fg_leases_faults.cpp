@@ -117,10 +117,8 @@ static void check_fence_failure(bool queue_removed)
     CHECK(rsf_fg_leases_acquire(leases, 4, 1, resources, 1) == RSF_BACKEND_ERROR_NOT_READY);
     CHECK(rsf_fg_leases_cancel(leases, failed_id) == RSF_BACKEND_ERROR_NOT_READY);
 
-    // Restore the synthetic fence values to check the retained references can retire normally.
-    queue.completed = 1;
-    vendor.completed = 1;
-    CHECK(rsf_fg_leases_destroy(leases) == RSF_BACKEND_OK);
+    // The mock device is torn down with removal still reported by the fence.
+    CHECK(rsf_fg_leases_abandon_device_lost(leases) == RSF_BACKEND_OK);
     CHECK(resource.refs == 1 && queue.refs == 1 && vendor.refs == 1 && device.refs == 1);
 }
 

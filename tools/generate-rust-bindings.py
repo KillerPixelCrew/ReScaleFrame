@@ -636,6 +636,14 @@ generate("runtime/orchestrator/src/fg12_abi.rs", "runtime/orchestrator/src/fg12_
           "--raw-line", "use rsf_game_sys::{\n"
                         "    rsf_frame_record, rsf_game_cpu_event, rsf_game_cpu_event_fn, rsf_game_render_pass,\n"
                         "};"])
+generate("runtime/orchestrator/src/d3d11_fg_api_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_fg_api.h",
+         "rsf_d3d11_fg_(api|inputs)", "RSF_D3D11_FG_(API|INPUTS)_VERSION",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--raw-line", "type rsf_streamline_host = ::core::ffi::c_void;",
+          "--raw-line", "use crate::render_abi::{rsf_backend_log_fn, rsf_native_fg_options, rsf_native_fg_status};",
+          "--raw-line", "use crate::scene_abi::rsf_observer_present_event;",
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};"])
 generate("runtime/orchestrator/src/native_fg_abi.rs", "runtime/orchestrator/src/native_fg_platform.h",
          "rsf_nfg_(platform|texture_info)",
          "RSF_NFG_(FORMAT_.*|STATE_.*|PHASE_.*|DUMP_VIEW_.*|SR_.*|FG_BACKEND_.*|STAT_.*|PRESENT_.*|RESULT_.*)",
@@ -656,3 +664,11 @@ generate("runtime/orchestrator/src/native_fg_cpu_abi.rs", "runtime/orchestrator/
          ["--no-recursive-allowlist",
           "--raw-line", "use crate::render_abi::{rsf_fg_status, rsf_pacing_owner, rsf_reflex_mode};",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
+
+generate("tests/generation/src/abi.rs", "tests/generation/fixture_abi.h",
+         "rsf_(fg_choice|pipeline_camera_frame|frame_resources|dlss_frame|dlss_quality)",
+         "RSF_(FG_BACKEND_(ALL|AUTO|DLSS|FSR3|XESS)|SR_(NONE|DLSS|FSR3|FSR4|XESS)|"
+         "FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|TEST_DLSS_.*)",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist"])

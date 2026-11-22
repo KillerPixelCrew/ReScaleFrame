@@ -19,10 +19,8 @@ target_include_directories(rsf_native_cpu INTERFACE include)
 target_link_libraries(rsf_native_cpu INTERFACE ReScaleFrame::GameSDK)
 
 add_library(rsf_orchestrator_core OBJECT
-    src/native_scene_platform.cpp
     src/native_fg.cpp
     src/native_fg_platform.cpp
-    src/native_fg_dispatch.cpp
     src/fg12_platform.cpp
     src/native_sr.cpp
     src/native_composition_unload.cpp
@@ -35,7 +33,6 @@ add_library(rsf_orchestrator_core OBJECT
     src/overlay_platform.cpp
     src/overlay_native12.cpp
     src/fg_session_platform.cpp
-    src/fg_providers.cpp
     src/sr_session_backends.cpp
     src/sr_bridge_platform.cpp
     src/sr_legacy_adapter.cpp
@@ -157,11 +154,10 @@ target_link_libraries(rsf_orchestrator PUBLIC rsf_orchestrator_core)
 target_link_libraries(rsf_orchestrator PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,rsf_native_vulkan>")
 target_link_libraries(rsf_orchestrator PRIVATE rsf_build_options)
 set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runtime")
-target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.c)
+target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.c src/dll_exports.c)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_host.cpp src/d3d11_host_exports.c)
 target_sources(rsf_orchestrator PRIVATE src/auxiliary_sr.cpp)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_sr_api.cpp)
-target_sources(rsf_orchestrator PRIVATE src/d3d11_fg_api.cpp)
 add_subdirectory(../shader_patch "${CMAKE_CURRENT_BINARY_DIR}/shader_patch")
 
 # Optional AMD driver SDK; the Runtime remains available when it is absent.

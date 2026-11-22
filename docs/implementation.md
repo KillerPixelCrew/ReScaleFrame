@@ -12,6 +12,13 @@ Source comparison covers the public C signatures, exact shader bytes and fixture
 standalone exposure probe keeps its optional SDK calls in native leaves. Native and GPU
 verification remains user-owned. [G04 evidence](research/rust-graphics-passes.md)
 
+The D3D11 generation port moves FG dispatch and scene ownership into Rust,
+protects explicit FG surfaces during SR, and checks source timing before
+interpolation. Session marker failure and lease device loss have explicit
+teardown paths. The affected ABI bindings and source fixtures were checked.
+Build and runtime validation are pending.
+[C04 source evidence](research/rust-generation-ownership.md)
+
 The active migration build candidate is `9f53f1b0`. It includes the
 Rust Godot SR and final-scene records and the merged Streamline,
 FidelityFX, Vulkan and Unity batches. Pinned formatting, locked offline

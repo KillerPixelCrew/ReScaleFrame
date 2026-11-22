@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::fg_leases::{FenceState, Retirement};
 use crate::frame_sequencer::Ledger;
 use crate::render_abi::*;
 use crate::sr_session::has_capacity;
@@ -21,7 +22,7 @@ type FenceCompleted = unsafe extern "C" fn(*mut c_void) -> u64;
 type FramePredicate = unsafe extern "C" fn(*const rsf_frame_record) -> i32;
 
 struct Session {
-    host: rsf_fg_host,
+    host: Host,
     completed: FenceCompleted,
     allows_fg: FramePredicate,
     rendered_source: FramePredicate,
@@ -39,13 +40,13 @@ struct State {
 }
 
 struct Context {
-    provider: rsf_generation_provider,
+    provider: Provider,
     handle: *mut c_void,
 }
 
 impl Context {
     fn create(
-        provider: rsf_generation_provider,
+        provider: Provider,
         setup: *const rsf_generation_setup,
     ) -> Result<(Self, *mut c_void), i32> {
         let mut context = Self {
@@ -53,7 +54,7 @@ impl Context {
             handle: ptr::null_mut(),
         };
         let mut chain = ptr::null_mut();
-        let result = unsafe { provider.create.unwrap()(setup, &mut context.handle, &mut chain) };
+        let result = unsafe { (provider.create)(setup, &mut context.handle, &mut chain) };
         if result != 0 {
             return Err(result);
         }
@@ -68,7 +69,7 @@ impl Context {
             struct_size: size_of::<rsf_fg_status>() as u32,
             ..unsafe { std::mem::zeroed() }
         };
-        let result = unsafe { self.provider.status.unwrap()(self.handle, &mut status) };
+        let result = unsafe { (self.provider.status)(self.handle, &mut status) };
         if result != 0 { Err(result) } else { Ok(status) }
     }
 
@@ -78,20 +79,20 @@ impl Context {
             fence: ptr::null_mut(),
             value: 0,
         };
-        let result = unsafe { self.provider.retirement.unwrap()(self.handle, &mut retirement) };
+        let result = unsafe { (self.provider.retirement)(self.handle, &mut retirement) };
         if result != 0 {
             return result;
         }
-        if retirement.fence.is_null() {
-            return if retirement.value == 0 { 0 } else { INVALID };
-        }
-        let value = unsafe { completed(retirement.fence) };
-        if value == u64::MAX {
-            FEATURE_FAILED
-        } else if value < retirement.value {
-            NOT_READY
-        } else {
-            0
+        match unsafe { Retirement::read(&retirement) } {
+            None => INVALID,
+            Some(Retirement::Immediate) => 0,
+            Some(Retirement::Fenced { fence, value }) => {
+                match FenceState::check(unsafe { completed(fence.as_ptr()) }, value) {
+                    FenceState::Pending => NOT_READY,
+                    FenceState::Complete => 0,
+                    FenceState::DeviceRemoved => FEATURE_FAILED,
+                }
+            }
         }
     }
 }
@@ -99,26 +100,98 @@ impl Context {
 impl Drop for Context {
     fn drop(&mut self) {
         if !self.handle.is_null() {
-            unsafe { self.provider.destroy.unwrap()(self.handle) };
+            unsafe { (self.provider.destroy)(self.handle) };
         }
     }
 }
 
-fn valid_provider(p: &rsf_generation_provider) -> bool {
-    p.create.is_some()
-        && p.configure.is_some()
-        && p.begin_frame.is_some()
-        && p.marker.is_some()
-        && p.prepare.is_some()
-        && p.after_present.is_some()
-        && p.status.is_some()
-        && p.retirement.is_some()
-        && p.destroy.is_some()
-        && p.abort_frame.is_some()
+#[derive(Clone, Copy)]
+struct Provider {
+    create: unsafe extern "C" fn(
+        arg1: *const rsf_generation_setup,
+        session: *mut *mut ::core::ffi::c_void,
+        present_chain: *mut *mut ::core::ffi::c_void,
+    ) -> rsf_backend_result,
+    configure: unsafe extern "C" fn(
+        session: *mut ::core::ffi::c_void,
+        options: *const rsf_fg_options,
+    ) -> rsf_backend_result,
+    begin_frame: unsafe extern "C" fn(
+        session: *mut ::core::ffi::c_void,
+        frame_id: u64,
+    ) -> rsf_backend_result,
+    marker: unsafe extern "C" fn(
+        session: *mut ::core::ffi::c_void,
+        marker: rsf_latency_marker,
+        frame_id: u64,
+        controller_input: u32,
+    ) -> rsf_backend_result,
+    prepare: unsafe extern "C" fn(
+        session: *mut ::core::ffi::c_void,
+        command_list: *mut ::core::ffi::c_void,
+        frame: *const rsf_fg_frame,
+    ) -> rsf_backend_result,
+    after_present: unsafe extern "C" fn(session: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    status: unsafe extern "C" fn(
+        session: *mut ::core::ffi::c_void,
+        status: *mut rsf_fg_status,
+    ) -> rsf_backend_result,
+    retirement: unsafe extern "C" fn(
+        session: *mut ::core::ffi::c_void,
+        retirement: *mut rsf_fg_retirement,
+    ) -> rsf_backend_result,
+    destroy: unsafe extern "C" fn(session: *mut ::core::ffi::c_void),
+    abort_frame: unsafe extern "C" fn(
+        session: *mut ::core::ffi::c_void,
+        frame_id: u64,
+    ) -> rsf_backend_result,
+}
+
+impl Provider {
+    fn checked(raw: &rsf_generation_provider) -> Option<Self> {
+        Some(Self {
+            create: raw.create?,
+            configure: raw.configure?,
+            begin_frame: raw.begin_frame?,
+            marker: raw.marker?,
+            prepare: raw.prepare?,
+            after_present: raw.after_present?,
+            status: raw.status?,
+            retirement: raw.retirement?,
+            destroy: raw.destroy?,
+            abort_frame: raw.abort_frame?,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Host {
+    user: *mut c_void,
+    quiesce: unsafe extern "C" fn(user: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    resume: unsafe extern "C" fn(user: *mut ::core::ffi::c_void),
+    release: unsafe extern "C" fn(user: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    adopt: unsafe extern "C" fn(
+        user: *mut ::core::ffi::c_void,
+        chain: *mut ::core::ffi::c_void,
+    ) -> rsf_backend_result,
+    restore_plain: unsafe extern "C" fn(user: *mut ::core::ffi::c_void) -> rsf_backend_result,
+}
+
+impl Host {
+    fn checked(raw: &rsf_fg_host) -> Option<Self> {
+        Some(Self {
+            user: raw.user,
+            quiesce: raw.quiesce?,
+            resume: raw.resume?,
+            release: raw.release?,
+            adopt: raw.adopt?,
+            restore_plain: raw.restore_plain?,
+        })
+    }
 }
 
 struct Selection {
-    provider: rsf_generation_provider,
+    provider: Provider,
     setup: *const rsf_generation_setup,
     options: *const rsf_fg_options,
 }
@@ -159,17 +232,17 @@ impl Selection {
         0
     }
 
-    fn adopt(&self, host: &rsf_fg_host) -> Result<Context, i32> {
+    fn adopt(&self, host: &Host) -> Result<Context, i32> {
         let (context, chain) = Context::create(self.provider, self.setup)?;
         if chain.is_null() {
             return Err(NOT_READY);
         }
-        let result = unsafe { self.provider.configure.unwrap()(context.handle, self.options) };
+        let result = unsafe { (self.provider.configure)(context.handle, self.options) };
         if result != 0 {
             return Err(result);
         }
         // The host only borrows the chain on success.
-        let result = unsafe { host.adopt.unwrap()(host.user, chain) };
+        let result = unsafe { (host.adopt)(host.user, chain) };
         if result != 0 {
             Err(result)
         } else {
@@ -192,7 +265,7 @@ impl Session {
                 return result;
             }
         }
-        let result = unsafe { self.host.release.unwrap()(self.host.user) };
+        let result = unsafe { (self.host.release)(self.host.user) };
         if result != 0 {
             return result;
         }
@@ -215,7 +288,7 @@ impl Session {
                 Err(code) => result = code,
             }
         }
-        let fallback = unsafe { self.host.restore_plain.unwrap()(self.host.user) };
+        let fallback = unsafe { (self.host.restore_plain)(self.host.user) };
         state.status.plain_available = u32::from(fallback == 0);
         if fallback != 0 { fallback } else { result }
     }
@@ -244,14 +317,9 @@ unsafe extern "C" fn rsf_core_fg_session_create(
     if host.abi_version != RSF_FG_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    if host.quiesce.is_none()
-        || host.resume.is_none()
-        || host.release.is_none()
-        || host.adopt.is_none()
-        || host.restore_plain.is_none()
-    {
+    let Some(host) = Host::checked(&host) else {
         return INVALID;
-    }
+    };
     let status = rsf_fg_session_status {
         struct_size: size_of::<rsf_fg_session_status>() as u32,
         ..unsafe { std::mem::zeroed() }
@@ -292,10 +360,9 @@ unsafe extern "C" fn rsf_fg_session_select(
         if !unsafe { has_capacity(provider) && has_capacity(setup) && has_capacity(options) } {
             return INVALID;
         }
-        let provider = unsafe { *provider };
-        if !valid_provider(&provider) {
+        let Some(provider) = Provider::checked(unsafe { &*provider }) else {
             return INVALID;
-        }
+        };
         if unsafe {
             (*setup).abi_version != RSF_FG_ABI_VERSION
                 || (*options).abi_version != RSF_FG_ABI_VERSION
@@ -318,10 +385,10 @@ unsafe extern "C" fn rsf_fg_session_select(
         }
         slot.take().unwrap()
     };
-    let mut result = unsafe { session.host.quiesce.unwrap()(session.host.user) };
+    let mut result = unsafe { (session.host.quiesce)(session.host.user) };
     if result == 0 {
         result = session.switch(&mut state, selection);
-        unsafe { session.host.resume.unwrap()(session.host.user) };
+        unsafe { (session.host.resume)(session.host.user) };
     }
     state.status.last_switch = result;
     *session.state.lock().unwrap() = Some(state);
@@ -339,7 +406,7 @@ unsafe extern "C" fn rsf_fg_session_begin(raw: *const Session, id: u64) -> i32 {
             return result;
         }
         if let Some(active) = &state.active {
-            let result = unsafe { active.provider.begin_frame.unwrap()(active.handle, id) };
+            let result = unsafe { (active.provider.begin_frame)(active.handle, id) };
             if result != 0 {
                 state.ledger.finish(id);
                 return result;
@@ -398,9 +465,11 @@ unsafe extern "C" fn rsf_fg_session_marker(
         if let Some(active) = &state.active
             && state.ledger.source(id) == Some(RSF_FRAME_SOURCE_INPUT)
         {
-            return unsafe {
-                active.provider.marker.unwrap()(active.handle, marker, id, controller)
-            };
+            let result = unsafe { (active.provider.marker)(active.handle, marker, id, controller) };
+            if result != 0 {
+                state.ledger.invalidate(id);
+            }
+            return result;
         }
         0
     })
@@ -454,7 +523,7 @@ unsafe extern "C" fn rsf_fg_session_prepare(
                 copy.copy_from_nonoverlapping(frame, 1);
                 (*copy).struct_size = size_of::<rsf_fg_frame>() as u32;
                 (*copy).interpolate = interpolate;
-                active.provider.prepare.unwrap()(active.handle, command, copy)
+                (active.provider.prepare)(active.handle, command, copy)
             };
         }
         if result == 0 {
@@ -474,13 +543,13 @@ unsafe extern "C" fn rsf_fg_session_after_present(raw: *const Session, id: u64) 
         return INVALID;
     }
     session.with_state(|state| {
-        if state.prepared != id {
+        if state.prepared != id || state.ledger.failed(id) {
             return NOT_READY;
         }
         let mut result = state.ledger.finish(id);
         state.prepared = 0;
         if let Some(active) = &state.active {
-            let vendor = unsafe { active.provider.after_present.unwrap()(active.handle) };
+            let vendor = unsafe { (active.provider.after_present)(active.handle) };
             if result == 0 {
                 result = vendor;
             }
@@ -503,7 +572,7 @@ unsafe extern "C" fn rsf_fg_session_abort(raw: *const Session, id: u64) -> i32 {
             return NOT_READY;
         }
         if let Some(active) = &state.active {
-            let result = unsafe { active.provider.abort_frame.unwrap()(active.handle, id) };
+            let result = unsafe { (active.provider.abort_frame)(active.handle, id) };
             if result != 0 {
                 return result;
             }
@@ -533,7 +602,7 @@ unsafe extern "C" fn rsf_fg_session_retirement(
             (*out).value = 0;
         }
         match &state.active {
-            Some(active) => unsafe { active.provider.retirement.unwrap()(active.handle, out) },
+            Some(active) => unsafe { (active.provider.retirement)(active.handle, out) },
             None => 0,
         }
     })
@@ -570,4 +639,12 @@ unsafe extern "C" fn rsf_fg_session_destroy(raw: *mut Session) -> i32 {
         drop(unsafe { Box::from_raw(raw) });
     }
     result
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_get_provider(backend: u32) -> *const rsf_generation_provider {
+    unsafe extern "C" {
+        fn rsf_d3d11p_provider_for(backend: u32) -> *const rsf_generation_provider;
+    }
+    unsafe { rsf_d3d11p_provider_for(backend) }
 }
