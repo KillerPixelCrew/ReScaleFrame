@@ -18,12 +18,12 @@
 #include <intrin.h>
 #endif
 
-extern "C" bool rsf_skyrim_presentation_guard(const rsf_skyrim_creation_platform*) noexcept;
+extern "C" bool rsf_skyrim_presentation_guard() noexcept;
 extern "C" bool rsf_skyrim_presentation_start(const rsf_game_host_services*) noexcept;
 extern "C" void rsf_skyrim_presentation_quiesce() noexcept;
 extern "C" bool rsf_skyrim_presentation_busy() noexcept;
 extern "C" bool rsf_skyrim_presentation_stop() noexcept;
-extern "C" bool rsf_skyrim_sampling_guard(const rsf_skyrim_creation_platform*) noexcept;
+extern "C" bool rsf_skyrim_sampling_guard() noexcept;
 extern "C" bool rsf_skyrim_sampling_start(const rsf_game_host_services*) noexcept;
 extern "C" void rsf_skyrim_sampling_quiesce() noexcept;
 extern "C" bool rsf_skyrim_sampling_busy() noexcept;
@@ -161,8 +161,8 @@ int32_t admit_observers()
     const auto length = GetModuleFileNameW(nullptr, path, 32768);
     rsf_skyrim_observer_targets sites{};
     const auto result = rsf_skyrim_observer_admit(path, length,
-        []() noexcept -> int32_t { return rsf_skyrim_sampling_guard(rsf::skyrim::creation_platform()); },
-        []() noexcept -> int32_t { return rsf_skyrim_presentation_guard(rsf::skyrim::creation_platform()); }, &sites);
+        []() noexcept -> int32_t { return rsf_skyrim_sampling_guard(); },
+        []() noexcept -> int32_t { return rsf_skyrim_presentation_guard(); }, &sites);
     if (result == 1) {
         target = sites.jitter;
         process_target = sites.process;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Native auxiliary surface selection and the scoped handoff to the Runtime.
 
+use crate::layout::target_slot;
 use crate::platform::Platform;
 use crate::render_native::{ComRef, thread, viewport};
 use crate::resolution;
@@ -20,8 +21,6 @@ use winapi::um::d3d11::{
     ID3D11ShaderResourceView, ID3D11Texture2D,
 };
 
-const TARGETS: usize = 0x333_1f40 + 0xa58;
-const TARGET_STRIDE: usize = 0x30;
 const DOF_SELECTOR: usize = 0x343_6358;
 type Upscale = unsafe extern "C" fn(*mut c_void, *mut c_void, &Pass) -> i32;
 type Restore = unsafe extern "C" fn(*mut c_void, &Scope) -> i32;
@@ -72,10 +71,6 @@ fn state() -> MutexGuard<'static, State> {
 
 pub(crate) fn pending() -> bool {
     !matches!(*state(), State::Idle)
-}
-
-fn target(base: usize, index: u32) -> usize {
-    base + TARGETS + index as usize * TARGET_STRIDE
 }
 
 fn surface(
@@ -164,8 +159,8 @@ fn apply(
     if base == 0 {
         return None;
     }
-    let normals = platform.read_usize(target(base, 13))?;
-    let mask = platform.read_usize(target(base, 12))?;
+    let normals = platform.read_usize(target_slot(base, 13))?;
+    let mask = platform.read_usize(target_slot(base, 12))?;
     let textures = unsafe {
         [
             ComRef::retain(pass.depth.cast())?,
@@ -324,7 +319,7 @@ pub(crate) fn observe(
         if i == 3 && selector > 12 {
             continue;
         }
-        let address = target(base, index);
+        let address = target_slot(base, index as usize);
         let (Some(texture), Some(rtv), Some(srv)) = (
             platform.read_usize(address),
             platform.read_usize(address + 0x10),

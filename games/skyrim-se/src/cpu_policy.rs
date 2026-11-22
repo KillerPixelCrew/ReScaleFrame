@@ -3,6 +3,7 @@
 //! callback leases and original calls. The host receives these facts at the native boundaries.
 
 use crate::cpu_sources::{self, Consumer, Stamp};
+use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE, RSF_GAME_CPU_FRAME_END,
@@ -28,7 +29,6 @@ const UI_NAMES: usize = 0x21a_05c8;
 const PLAYER: usize = 0x323_0778;
 const MANAGER: usize = 0x322_0a90;
 const CAMERA_ROOT: usize = 0x323_0740;
-use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 const MENU_OPEN: usize = 0x116_9530;
 const FROZEN_BACKGROUND: usize = 0x116_9590;
 const LOADING_NAME_OFFSET: usize = 0xe8;

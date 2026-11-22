@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Pre-HDR identity, HUD-less handoff and matching window pass for Skyrim.
 
+use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
 use crate::render_hook::RenderHook;
 use crate::render_native::{
@@ -23,8 +24,6 @@ const INTERFACE_BYTES: [u8; 15] = [
     0x4c, 0x8b, 0xdc, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83, 0xec, 0x50,
 ];
 const PRIMARY_UI: usize = 0x219_e5c0;
-const NATIVE_FRAME: usize = 0x333_63f4;
-const ACTIVE_WINDOW: usize = 0x333_0198;
 const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
 
 #[derive(Clone, Copy)]
@@ -395,8 +394,8 @@ pub(crate) fn finish() {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_presentation_guard(platform: *const Platform) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+extern "C" fn rsf_skyrim_presentation_guard() -> bool {
+    let Some(platform) = platform::get() else {
         return false;
     };
     let base = platform.main_module();

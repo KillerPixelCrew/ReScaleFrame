@@ -172,8 +172,8 @@ fn apply(restore: bool) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_sampling_guard(platform: *const Platform) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
+extern "C" fn rsf_skyrim_sampling_guard() -> bool {
+    let Some(platform) = platform::get() else {
         return false;
     };
     let base = platform.main_module();

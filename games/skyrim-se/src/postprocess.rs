@@ -2,6 +2,7 @@
 //! Skyrim's guarded pre-HDR reconstruction and temporary native TAA bypass.
 
 use crate::compatibility::HdrCall;
+use crate::layout::target_slot;
 use crate::platform::{self, Platform};
 use crate::render_inputs;
 use crate::render_native::{rsf_skyrim_render_allowed, thread};
@@ -168,10 +169,9 @@ extern "C" fn rsf_skyrim_postprocess_restore(receipt: &TaaReceipt) {
 }
 
 fn describe_target(platform: &Platform, base: usize, index: u32) -> String {
-    const TARGETS: usize = 0x333_1f40 + 0xa58;
     if base != 0
         && matches!(index, 1 | 7)
-        && let Some(texture) = platform.read_usize(base + TARGETS + index as usize * 0x30)
+        && let Some(texture) = platform.read_usize(target_slot(base, index as usize))
         && texture != 0
     {
         // The synchronous postprocess callback owns these researched slots.

@@ -2,6 +2,7 @@
 //! One native camera-cache reader for Skyrim's pre-HDR SR and FG producers.
 
 use super::{Matrix, NativeCamera, decode};
+use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::taa;
 use crate::{platform::Platform, resolution};
 use rsf_game_sys::camera_math::finite_matrix_close;
@@ -12,8 +13,6 @@ use winapi::um::winnt::LARGE_INTEGER;
 
 const RENDER_STATE: usize = 0x333_63a0;
 const ACTIVE_CAMERA: usize = 0x33d_3d28;
-const NATIVE_FRAME: usize = 0x333_63f4;
-const ACTIVE_WINDOW: usize = 0x333_0198;
 const CACHE_STRIDE: usize = 0x290;
 
 pub(crate) struct RenderCamera {

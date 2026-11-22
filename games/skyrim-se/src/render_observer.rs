@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Native renderer jitter, frame-upload and end-of-render observations for Skyrim.
 
+use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
 use crate::render_native::rsf_skyrim_render_allowed;
 use crate::session::{rsf_skyrim_session_accepting, rsf_skyrim_session_lease};
@@ -11,10 +12,8 @@ use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use winapi::um::winuser::GetClassNameW;
 
-const ACTIVE_WINDOW: usize = 0x333_0198;
 const SWAPCHAIN: usize = 0x18;
 const RENDERER: usize = 0x333_1f40;
-const NATIVE_FRAME: usize = 0x333_63f4;
 const UPLOAD_DIRTY: usize = 0x333_6400;
 const JITTER_OBSERVATIONS: u64 = 16;
 const WINDOW_CLASS: &[u8] = b"Skyrim Special Edition";

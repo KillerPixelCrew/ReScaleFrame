@@ -147,7 +147,6 @@ int main() {
     check(bind_refusal(true, false, true, false) == BindRefusal::consumed_before_bind, "earlier hooked consumer refuses binding");
     check(bind_refusal(true, false, false, true) == BindRefusal::free_camera, "free camera bypasses the player envelope");
     rsf::skyrim::NativeScreenFacts screen{};
-    using rsf::skyrim::classify_screen;
     check(rsf_skyrim_classify_screen(&screen) == RSF_SCREEN_UNKNOWN, "unreadable native screen refuses classification");
     screen.readable = screen.owned_main = screen.parent_cell = true;
     check(rsf_skyrim_classify_screen(&screen) == RSF_SCREEN_UNKNOWN, "no observed primary world is not gameplay");
@@ -172,7 +171,6 @@ int main() {
     check(rsf_skyrim_classify_screen(&screen) == RSF_SCREEN_UNKNOWN, "mode shutdown before join refuses gameplay");
     screen.running_mode = 0; screen.owned_main = false; screen.loading_menu = true;
     check(rsf_skyrim_classify_screen(&screen) == RSF_SCREEN_UNKNOWN, "foreign main scope refuses classification");
-    using rsf::skyrim::rendered_source_eligible;
     check(rsf_skyrim_rendered_source_eligible(true, 1, RSF_SCREEN_GAMEPLAY), "one proven gameplay World admits rendered source");
     check(!rsf_skyrim_rendered_source_eligible(true, 0, RSF_SCREEN_GAMEPLAY), "before World remains refused");
     check(!rsf_skyrim_rendered_source_eligible(true, 2, RSF_SCREEN_GAMEPLAY), "multiple primary Worlds remain refused");

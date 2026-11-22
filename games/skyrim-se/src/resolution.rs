@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Owns Skyrim's engine render ratios, jitter and temporary output viewport.
 
+use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::Platform;
 use crate::render_inputs::renderer_thread;
 use crate::render_native::{
@@ -24,12 +25,10 @@ const RENDERER: usize = 0x333_1f40;
 const RATIO: usize = 0x114;
 const RATIO_LOCK: usize = 0x128;
 const JITTER: usize = 0x44;
-const NATIVE_FRAME: usize = 0x333_63f4;
 const UPLOAD_DIRTY: usize = 0x333_6400;
 const UPLOAD: usize = 0x100_ae80;
 const VIEWPORT: usize = 0x100_9960;
 const TAA_MANAGER: usize = 0x33d_40a0;
-const ACTIVE_WINDOW: usize = 0x333_0198;
 const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
 
 #[derive(Clone, Copy)]

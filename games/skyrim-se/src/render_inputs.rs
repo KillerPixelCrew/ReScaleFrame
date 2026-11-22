@@ -3,6 +3,7 @@
 
 use crate::auxiliary;
 use crate::camera::render::{RenderCamera, accept_sr, read_frame};
+use crate::layout::{NATIVE_FRAME, target_slot};
 use crate::platform::Platform;
 use crate::presentation::{begin_inputs, empty_pass, identify, same_source};
 use crate::render_native::{
@@ -22,10 +23,8 @@ use winapi::um::d3d11::{
 };
 
 const PRE_HDR_CALL: u64 = 0x153_ade7;
-const NATIVE_FRAME: usize = 0x333_63f4;
 const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
-const TARGETS: usize = 0x333_1f40 + 0xa58;
-const TARGET_STRIDE: usize = 0x30;
+
 const MAIN_DEPTH: usize = 0x333_3f58;
 const RATIO_LOCK: usize = 0x333_64c8;
 const GAMEPLAY: u32 = 8;
@@ -127,8 +126,8 @@ fn read_inputs(
     fg: bool,
 ) -> Option<Inputs> {
     let context = platform.read_usize(base + IMMEDIATE_CONTEXT)?;
-    let colour = platform.read_usize(base + TARGETS + TARGET_STRIDE)?;
-    let motion = platform.read_usize(base + TARGETS + 7 * TARGET_STRIDE)?;
+    let colour = platform.read_usize(target_slot(base, 1))?;
+    let motion = platform.read_usize(target_slot(base, 7))?;
     let depth = platform.read_usize(base + MAIN_DEPTH)?;
     let chain = platform.read_usize(view.window.checked_add(0x18)?)?;
     let (context, colour, depth, motion, chain) = unsafe {
@@ -144,7 +143,7 @@ fn read_inputs(
         None
     } else {
         platform
-            .read_usize(base + TARGETS + 85 * TARGET_STRIDE)
+            .read_usize(target_slot(base, 85))
             .and_then(|address| unsafe {
                 ComRef::retain(ptr::with_exposed_provenance_mut(address))
             })
