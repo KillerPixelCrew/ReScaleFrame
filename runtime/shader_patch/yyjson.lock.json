@@ -3,8 +3,8 @@
   "revision": "ebb8d7e5aaa51bea4edefb39ee73a235066b0023",
   "license": "MIT",
   "files": {
-    "src/yyjson.c": "40a9d8b31500c45d3ec60bb67d8083983dc5353af33f5e9487da514c368187b8",
-    "src/yyjson.h": "ef63bfc621e9edc2ac980801902f1e53797e36919f75317b002df2c96846ccbf",
-    "LICENSE": "7b14b8632bf3d5cb64c7a5f1ddfa9062e9c6eba38ac495a0897541d6658d3ad2"
+    "src/yyjson.c": "6a33e74e136bb69816bfea785148673b8ddf3e532626430f7fcfbfab0015ea20",
+    "src/yyjson.h": "5970801d177ab775ba02b768a7bea66df92313965ab2ce77aa034960d0cea22d",
+    "LICENSE": "45e384d3d52c73cba3a64d6e6c25d47cd738cd8a55c30629e3201046eda62947"
   }
 }
