@@ -389,6 +389,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
         &plugin,
         fingerprint,
         || {
+            #[cfg(feature = "research")]
             if unsafe {
                 GetPrivateProfileIntW(w!("RDR2"), w!("NativeSettingsProbe"), 0, config.as_ptr())
             } != 0

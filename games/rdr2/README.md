@@ -83,7 +83,10 @@ The `.asi` lands in `build/windows-x64/rdr2/bin/<Config>/`; the runtime and plug
 `build/windows-x64/bin/<Config>/`. The measured loader entry is after decryption, during CRT
 startup and before renderer creation. `[RDR2] Census=1` enables the vendor probe;
 `TraceD3D12=1` logs failing game HRESULTs to `ReScaleFrame/rdr2-d3d12-errors.log` without changing
-the results. Both diagnostics default off.
+the results. Both diagnostics default off and, with the F10 frame capture (`NativeCapture`), the
+camera and native-settings probes, module dumps and the RenderDoc frame probe, exist only in
+developer builds configured with `-DRSF_RDR2_RESEARCH=ON` (the crate's `research` feature).
+Release builds ignore those keys.
 
 ## Target
 

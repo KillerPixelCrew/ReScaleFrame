@@ -10,8 +10,11 @@ license.workspace = true
 crate-type = ["staticlib"]
 
 [features]
+# The F10 frame capture, camera and native-settings probes, D3D12 trace, vendor census, module
+# dumps and RenderDoc frame probe: research tooling for developer builds, never in release.
+research = []
 camera-fixture = []
-capture-fixture = ["windows/Win32_Graphics_Direct3D_Fxc"]
+capture-fixture = ["research", "windows/Win32_Graphics_Direct3D_Fxc"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }

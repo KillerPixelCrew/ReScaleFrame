@@ -131,7 +131,7 @@ pub(crate) mod social_club {
 }
 
 /// Camera probe entry bytes and the native worker fields copied by its Version 2 record.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "research"))]
 pub(crate) mod camera_probe {
     use super::Site;
 
@@ -154,7 +154,7 @@ pub(crate) mod camera_probe {
 }
 
 /// Read-only settings row and value diagnostics for the same executable.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "research"))]
 pub(crate) mod settings_probe {
     use super::Site;
 
@@ -307,6 +307,7 @@ pub(crate) mod asi {
         (0x2c6_62f6, [0x48, 0x8b, 0x05]),
     ];
     /// The D3D12 HRESULT check helper observed by the opt-in trace.
+    #[cfg(feature = "research")]
     pub(crate) const RESULT_CHECK: Site = Site {
         rva: 0x268_b5c0,
         expected: [

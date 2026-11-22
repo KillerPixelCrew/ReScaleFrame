@@ -12,11 +12,15 @@ mod windows;
 pub(crate) use windows::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
 #[cfg(windows)]
 pub(crate) use windows::{
-    adapter_vendor, camera_probe, camera_reference, census, current_thread, d3d12_trace,
-    desktop_refresh, engine_find, engine_manager, engine_owner, executable_path, frame_probe,
-    hook_apply_queued, hook_create, hook_disable, hook_initialize, hook_queue_enable, hook_remove,
-    main_module, module_path, native_capture, profile_int, profile_string, social_club,
+    adapter_vendor, current_thread, desktop_refresh, engine_find, engine_manager, engine_owner,
+    executable_path, hook_apply_queued, hook_create, hook_disable, hook_initialize,
+    hook_queue_enable, hook_remove, main_module, module_path, profile_int, social_club,
     start_worker,
+};
+#[cfg(all(windows, feature = "research"))]
+pub(crate) use windows::{
+    camera_probe, camera_reference, census, d3d12_trace, frame_probe, native_capture,
+    profile_string,
 };
 
 use crate::engine_settings;
@@ -27,26 +31,30 @@ use std::ptr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
+#[cfg(feature = "research")]
 const MAX_PATH: u32 = 260;
 const LONG_PATH: u32 = 32768;
 pub(crate) const MH_OK: i32 = 0;
 pub(crate) const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
 
+#[cfg(feature = "research")]
 #[repr(C)]
 pub(crate) struct DiagnosticHook {
     detour: *const c_void,
     original: *mut *mut c_void,
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "research"))]
 impl DiagnosticHook {
     pub(crate) const fn new(detour: *const c_void, original: *mut *mut c_void) -> Self {
         Self { detour, original }
     }
 }
 
+#[cfg(feature = "research")]
 const _: () = assert!(size_of::<DiagnosticHook>() == 2 * size_of::<usize>());
 
+#[cfg(feature = "research")]
 pub(crate) enum DiagnosticInstall {
     Installed,
     Refused,
@@ -54,6 +62,7 @@ pub(crate) enum DiagnosticInstall {
 }
 
 /// Shared startup transaction for the ASI's two-site diagnostic probes.
+#[cfg(feature = "research")]
 pub(crate) fn install_diagnostic_hooks(
     platform: &AsiPlatform,
     image: usize,
@@ -176,6 +185,7 @@ fn record(update: impl FnOnce(&mut Results)) {
 
 /// NUL-terminated UTF-16 for the leaves.
 pub(crate) use rsf_game_sys::ffi_util::wide;
+#[cfg(feature = "research")]
 fn terminated(text: &[u16]) -> Vec<u16> {
     rsf_game_sys::ffi_util::wide_path(text, "")
 }
@@ -225,11 +235,13 @@ impl Configuration {
         }
     }
 
+    #[cfg(feature = "research")]
     fn enabled(&self, key: &str) -> bool {
         self.int(key, 0) != 0
     }
 
     /// The value without its terminator, read into a buffer of `capacity` units.
+    #[cfg(feature = "research")]
     fn string(&self, key: &str, capacity: u32) -> Vec<u16> {
         let key = wide(key);
         let read_capacity = rsf_game_sys::profile_text::read_capacity(capacity as usize);
@@ -336,6 +348,7 @@ fn force_d3d12(platform: &AsiPlatform) -> Force {
     }
 }
 
+#[cfg(feature = "research")]
 fn trace_d3d12(platform: &AsiPlatform, applied: bool, path: &[u16]) -> Cow<'static, str> {
     // ForceD3D12 already validated this exact image and the decrypted read sites.
     if !applied {
@@ -374,26 +387,15 @@ fn attach(platform: &AsiPlatform) {
     unsafe { start_worker() };
 }
 
-/// Arms the enabled startup owners in their required order.
-fn arm(platform: &AsiPlatform, config: &Configuration, root: &[u16]) {
-    let mut applied = false;
-    if config.int("ForceD3D12", 1) != 0 {
-        let force = force_d3d12(platform);
-        applied = force == Force::Applied;
-        record(|results| {
-            results.force = match force {
-                Force::Applied => format!(
-                    "ForceD3D12 applied: API parameter at RVA 0x{:x} set to \"d3d12\".",
-                    asi::API_OVERRIDE
-                )
-                .into(),
-                Force::Refused(reason) => reason.into(),
-            }
-        });
-        if applied {
-            engine_settings::install(platform, config.int("SRQuality", 2));
-        }
-    }
+/// The research owners (developer builds only), in their startup order. Returns whether the D3D12
+/// trace is enabled, which the Social Club dispatcher also reports.
+#[cfg(feature = "research")]
+fn arm_research(
+    platform: &AsiPlatform,
+    config: &Configuration,
+    root: &[u16],
+    applied: bool,
+) -> bool {
     if applied && config.enabled("NativeCapture") {
         let directory = config.string("CameraProbeDirectory", MAX_PATH);
         if !directory.is_empty() {
@@ -460,6 +462,39 @@ fn arm(platform: &AsiPlatform, config: &Configuration, root: &[u16]) {
             }
             record(|results| results.camera = message.into());
         }
+    }
+    trace
+}
+
+/// Arms the enabled startup owners in their required order.
+fn arm(
+    platform: &AsiPlatform,
+    config: &Configuration,
+    #[cfg_attr(not(feature = "research"), expect(unused_variables))] root: &[u16],
+) {
+    let mut applied = false;
+    if config.int("ForceD3D12", 1) != 0 {
+        let force = force_d3d12(platform);
+        applied = force == Force::Applied;
+        record(|results| {
+            results.force = match force {
+                Force::Applied => format!(
+                    "ForceD3D12 applied: API parameter at RVA 0x{:x} set to \"d3d12\".",
+                    asi::API_OVERRIDE
+                )
+                .into(),
+                Force::Refused(reason) => reason.into(),
+            }
+        });
+        if applied {
+            engine_settings::install(platform, config.int("SRQuality", 2));
+        }
+    }
+    #[cfg(feature = "research")]
+    let trace = arm_research(platform, config, root, applied);
+    #[cfg(not(feature = "research"))]
+    let trace = false;
+    if applied {
         let installed = unsafe { social_club(trace) };
         record(|results| {
             results.social_club = format!(

@@ -21,17 +21,18 @@ mod sys {
 }
 mod asi;
 mod camera;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "research"))]
 mod camera_probe;
+#[cfg(feature = "research")]
 mod capture_state;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "research"))]
 mod d3d12_trace;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "research"))]
 mod diagnostics;
 mod engine_settings;
 mod host;
 mod layout;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "research"))]
 mod native_settings;
 mod platform;
 mod renderer;

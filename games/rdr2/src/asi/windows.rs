@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: MIT
 //! Win32 ASI admission and the engine settings call adapters.
+#[cfg(feature = "research")]
 #[path = "diagnostic_services.rs"]
 mod diagnostic_services;
 
+#[cfg(feature = "research")]
 pub(crate) use crate::camera_probe::rsf_rdr2_install_camera_probe as camera_probe;
+#[cfg(feature = "research")]
 pub(crate) use crate::d3d12_trace::install as d3d12_trace;
 use crate::runtime_worker::rsf_rdr2_asi_start_runtime;
 use crate::sys::rsf_rdr2_asi_services;
 use crate::sys::rsf_rdr2_runtime_leaves;
-#[cfg(feature = "capture-fixture")]
+#[cfg(all(feature = "capture-fixture", not(test)))]
 pub(crate) use crate::sys::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
+#[cfg(feature = "research")]
 pub(crate) use diagnostic_services::install_census as census;
+#[cfg(feature = "research")]
 use diagnostic_services::{install_frame_probe, start_diagnostics};
 use rsf_minhook_sys::*;
 use std::ffi::c_void;
@@ -23,9 +28,9 @@ use windows_sys::Win32::System::LibraryLoader::{
     DisableThreadLibraryCalls, GetModuleFileNameW, GetModuleHandleW,
 };
 use windows_sys::Win32::System::Threading::{CreateThread, GetCurrentThreadId};
-use windows_sys::Win32::System::WindowsProgramming::{
-    GetPrivateProfileIntW, GetPrivateProfileStringW,
-};
+use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileIntW;
+#[cfg(feature = "research")]
+use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileStringW;
 
 struct Startup {
     module: usize,
@@ -45,7 +50,10 @@ unsafe extern "C" fn rsf_rdr2_asi_process_attach(
         services: *services,
         runtime: rsf_rdr2_runtime_leaves {
             fingerprint: services.fingerprint,
+            #[cfg(feature = "research")]
             diagnostics: Some(start_diagnostics),
+            #[cfg(not(feature = "research"))]
+            diagnostics: None,
         },
     };
     if STARTUP.set(startup).is_ok() {
@@ -63,6 +71,7 @@ fn services() -> &'static rsf_rdr2_asi_services {
         .services
 }
 
+#[cfg(feature = "research")]
 pub(crate) unsafe fn native_capture(directory: *const u16) -> bool {
     services()
         .native_capture
@@ -70,6 +79,7 @@ pub(crate) unsafe fn native_capture(directory: *const u16) -> bool {
 }
 
 /// The frame probe, when the ASI linked RenderDoc support.
+#[cfg(feature = "research")]
 pub(crate) fn frame_probe() -> Option<unsafe extern "C" fn(*const u16, *const u16) -> i32> {
     let services = services();
     services
@@ -78,6 +88,7 @@ pub(crate) fn frame_probe() -> Option<unsafe extern "C" fn(*const u16, *const u1
         .map(|_| install_frame_probe as _)
 }
 
+#[cfg(feature = "research")]
 pub(crate) unsafe extern "C" fn camera_reference(path: *const u16) -> bool {
     let Some(startup) = STARTUP.get() else {
         return false;
@@ -144,6 +155,7 @@ pub(crate) unsafe extern "C" fn profile_int(
     unsafe { GetPrivateProfileIntW(section, key, fallback, path) as u32 }
 }
 
+#[cfg(feature = "research")]
 pub(crate) unsafe extern "C" fn profile_string(
     path: *const u16,
     section: *const u16,
