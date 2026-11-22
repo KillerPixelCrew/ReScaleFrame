@@ -59,6 +59,11 @@ generate("tests/presentation/src/shared_surface_abi.rs",
 generate("tests/loader/src/windows/vendor_census_asi_abi.rs",
          "loader/census/include/rescaleframe/vendor_census.h",
          "rsf_census_options", "RSF_CENSUS_ABI_VERSION", [], ["--with-derive-default"])
+generate("loader/src/census/wrapper_abi.rs", "loader/census/src/wrapper_platform.h",
+         "rsf_census_(vk_entry|call_storage|wrapper_services)", "NOTHING", [],
+         ["--no-prepend-enum-name", "--blocklist-type", "rsf_census_json",
+          "--raw-line", "#![allow(non_upper_case_globals)]",
+          "--raw-line", "use super::json_abi::rsf_census_json;"])
 generate("runtime/backends/fsr/compat/src/abi.rs", "runtime/backends/fsr/src/fsr4_compat_platform.h",
          "rsf_fsr4_compat_.*", "RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION", [])
 frame_types = "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame)"

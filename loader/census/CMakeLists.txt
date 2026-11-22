@@ -13,8 +13,7 @@ add_library(rsf_vendor_census STATIC
     src/wrap_d3d.cpp
     src/wrap_fsr.cpp
     src/wrap_misc.cpp
-    src/wrap_ngx.cpp
-    src/wrap_vk.cpp)
+    src/wrap_ngx.cpp)
 target_include_directories(rsf_vendor_census PUBLIC include PRIVATE src)
 target_compile_features(rsf_vendor_census PUBLIC cxx_std_20)
 target_link_libraries(rsf_vendor_census PRIVATE rsf_loader_rust minhook rsf_build_options)

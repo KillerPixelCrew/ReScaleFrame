@@ -77,3 +77,19 @@ Eighteen checklist paths remain open.
 - `tests/vendor_census_ngx_params.h`
 
 L02 has no numbered Rust findings.
+
+## Typed Vulkan entry points
+
+The follow-up branch at `726c5e18` replaces `loader/census/src/wrap_vk.cpp`. The eleven
+wrappers use the Windows x64 Vulkan entry signatures. The Rust bodies forward each argument,
+read the same bounded input layouts through the census guarded reader, and publish the same
+fields in the same order. The two void queue lookups report a zero result. The native core
+still owns record admission, first-binding wins, and the shared present nesting counter.
+The native callback table checks the size and alignment of the stack record before constructing
+it in the caller's storage. Its storage stays at one address through record completion.
+
+The entry wrappers ask Windows for their caller PC before invoking helpers. Caller attribution
+now depends on Windows unwinding reaching the caller. Source checks cover table slot order,
+field names, layout spans, bounds and the existing functional fixture's paths. Binary checks
+still need to exercise caller attribution, thunk conflicts, Vulkan result forwarding and
+cross-API nested presents.

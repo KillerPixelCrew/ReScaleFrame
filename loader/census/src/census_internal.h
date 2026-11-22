@@ -250,6 +250,7 @@ public:
     Json(char* buf, size_t cap) noexcept : state_{buf, cap, 0, 0, 0, false} {}
     bool ok() const noexcept { return !state_.overflow; }
     size_t size() const noexcept { return state_.length; }
+    rsf_census_json* state() noexcept { return &state_; }
 
     void obj(const char* key = nullptr) noexcept { rsf_census_json_open(&state_, key, '{'); }
     void end_obj() noexcept { rsf_census_json_close(&state_, '}'); }

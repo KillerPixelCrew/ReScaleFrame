@@ -8,6 +8,7 @@
 #include <new>
 
 #include "census_internal.h"
+#include "wrapper_platform.h"
 
 extern "C" void rsf_census_static_scan(void (*add)(const char*, const char*, uint64_t, uint64_t));
 
@@ -22,6 +23,45 @@ const FnDesc kFns[kFnCount] = {
 std::atomic<void*> g_orig[kFnCount];
 void* g_wrapper[kFnCount];
 std::atomic<void*> g_target[kFnCount];
+
+void register_wrappers_vk(void** table) noexcept {
+    static constexpr Fn entries[] = {
+#define RSF_CENSUS_VK_MAP(name) Fn::name,
+        RSF_CENSUS_VK_ENTRIES(RSF_CENSUS_VK_MAP)
+#undef RSF_CENSUS_VK_MAP
+    };
+    static_assert(std::size(entries) == RSF_CENSUS_VK_COUNT);
+    static_assert(sizeof(Call) <= sizeof(rsf_census_call_storage));
+    static_assert(alignof(Call) <= alignof(rsf_census_call_storage));
+    static const rsf_census_wrapper_services services = {
+        [](uint16_t entry) { return orig_by(entries[entry]); },
+        [](rsf_census_call_storage* storage, uint16_t entry, void* caller) -> rsf_census_json* {
+            auto* call = ::new (static_cast<void*>(storage)) Call(entries[entry], caller);
+            return call->full() ? call->json().state() : nullptr;
+        },
+        [](rsf_census_call_storage* storage, uint64_t result) {
+            auto* call = std::launder(reinterpret_cast<Call*>(storage));
+            call->finish(result);
+            call->~Call();
+        },
+        safe_read,
+        read_arg_string,
+        [](const char* name, void* target) {
+            const Fn fn = lookup_name(name);
+            return fn != Fn::Count && !std::strcmp(kFns[idx(fn)].api, "vulkan") ?
+                bind_thunk(fn, target) : target;
+        },
+        [](void* queue, uint32_t family, uint32_t index) {
+            queue_describe(QueueKind::Vulkan, queue, family, index, 0);
+        },
+        [](void* queue, uint32_t count) { queue_submit(QueueKind::Vulkan, queue, count); },
+        []() { if (tl_present_depth++ == 0) note_present_begin(); },
+        []() { --tl_present_depth; },
+    };
+    void* wrappers[RSF_CENSUS_VK_COUNT]{};
+    rsf_census_vk_bind(&services, wrappers);
+    for (size_t i = 0; i < std::size(entries); ++i) table[idx(entries[i])] = wrappers[i];
+}
 
 namespace {
 
