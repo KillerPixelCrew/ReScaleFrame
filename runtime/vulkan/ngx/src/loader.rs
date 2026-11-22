@@ -17,15 +17,22 @@ mod platform {
     pub(super) const NAME: &CStr = c"nvngx.dll";
     const REPOSITORY: &str = "\\DriverStore\\FileRepository\\";
 
-    fn search_path(system: &[u16], suffix: impl IntoIterator<Item = u16>) -> Option<Vec<u16>> {
-        let path: Vec<_> = system
+    fn search_path(
+        system: &[u16],
+        suffix: impl IntoIterator<Item = u16>,
+    ) -> Option<[u16; MAX_PATH as usize]> {
+        let mut path = [0; MAX_PATH as usize];
+        for (index, unit) in system
             .iter()
             .copied()
             .chain(REPOSITORY.encode_utf16())
             .chain(suffix)
             .chain([0])
-            .collect();
-        (path.len() <= MAX_PATH as usize).then_some(path)
+            .enumerate()
+        {
+            *path.get_mut(index)? = unit;
+        }
+        Some(path)
     }
 
     fn load_from_driver_store() -> Option<NonNull<c_void>> {
