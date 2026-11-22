@@ -3,11 +3,11 @@
 //! The guarded renderer bytes and continuation addresses are from rdr2-renderer.md.
 use crate::asi::{self, AsiPlatform, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
 use crate::layout::{asi::SOCIAL_CLUB_DISPATCHER, social_club as profile};
-use crate::platform::lock;
+use crate::platform::{lock, minhook::MH_EnableHook, trampoline};
 use crate::runtime_worker::log;
 use std::ffi::c_void;
 use std::ptr::{self, null, null_mut};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use windows_sys::Win32::System::LibraryLoader::{
@@ -24,20 +24,50 @@ use windows_sys::core::w;
 const MH_ERROR_ENABLED: i32 = 5;
 const MH_ERROR_MEMORY_PROTECT: i32 = 10;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Platform {
-    create_dispatch: unsafe extern "C" fn(usize) -> i32,
-    create_trace: unsafe extern "C" fn(usize) -> i32,
-    enable: unsafe extern "C" fn(usize) -> i32,
-    current_index: unsafe extern "C" fn(*mut c_void, *mut u32) -> bool,
-}
-
-const _: () = assert!(size_of::<Platform>() == 4 * size_of::<usize>());
+type CurrentIndex = unsafe extern "C" fn(*mut c_void, *mut u32) -> bool;
+type Dispatch = unsafe extern "C" fn(*mut c_void) -> usize;
+type Render =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void, u32) -> usize;
 
 struct Options {
-    platform: Platform,
+    current_index: CurrentIndex,
     trace: bool,
+}
+
+static ORIGINAL_DISPATCH: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static ORIGINAL_RENDER: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+
+unsafe extern "C" fn dispatch(context: *mut c_void) -> usize {
+    observe_dispatch();
+    unsafe { trampoline::<Dispatch>(&ORIGINAL_DISPATCH).map_or(0, |native| native(context)) }
+}
+
+unsafe extern "C" fn trace_render(
+    renderer: *mut c_void,
+    draws: *mut c_void,
+    unused: *mut c_void,
+    list: *mut c_void,
+    index: u32,
+) -> usize {
+    observe_trace(renderer, list, index);
+    unsafe {
+        trampoline::<Render>(&ORIGINAL_RENDER)
+            .map_or(0, |native| native(renderer, draws, unused, list, index))
+    }
+}
+
+fn create(
+    asi: &AsiPlatform,
+    target: usize,
+    detour: *const c_void,
+    original: &AtomicPtr<c_void>,
+) -> i32 {
+    // Publish the trampoline inside MH_CreateHook before a separate census caller can enable it.
+    unsafe { (asi.hook_create)(target, detour, original.as_ptr()) }
+}
+
+fn enable(target: usize) -> i32 {
+    unsafe { MH_EnableHook(target as *mut c_void) }
 }
 
 static OPTIONS: OnceLock<Options> = OnceLock::new();
@@ -47,8 +77,8 @@ static OBSERVED: AtomicU32 = AtomicU32::new(0);
 static MISMATCHED: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_social_club_install(platform: *const Platform, trace: bool) -> bool {
-    let (Some(asi), Some(platform)) = (asi::platform(), unsafe { platform.as_ref() }) else {
+extern "C" fn rsf_rdr2_social_club_install(current_index: CurrentIndex, trace: bool) -> bool {
+    let Some(asi) = asi::platform() else {
         return false;
     };
     let image = unsafe { (asi.main_module)() };
@@ -65,17 +95,17 @@ unsafe extern "C" fn rsf_rdr2_social_club_install(platform: *const Platform, tra
     if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
         return false;
     }
-    // Publish the leaves before the dispatch detour can run.
     if OPTIONS
         .set(Options {
-            platform: *platform,
+            current_index,
             trace,
         })
         .is_err()
     {
         return false;
     }
-    unsafe { (platform.create_dispatch)(site) == MH_OK && (platform.enable)(site) == MH_OK }
+    create(asi, site, dispatch as *const c_void, &ORIGINAL_DISPATCH) == MH_OK
+        && enable(site) == MH_OK
 }
 
 fn renderer_matches(asi: &AsiPlatform, base: usize) -> bool {
@@ -95,8 +125,7 @@ fn relay(base: usize) -> [u8; 43] {
     code
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_social_club_dispatch() {
+fn observe_dispatch() {
     let (Some(asi), Some(options)) = (asi::platform(), OPTIONS.get()) else {
         return;
     };
@@ -144,7 +173,7 @@ extern "C" fn rsf_rdr2_social_club_dispatch() {
         status = unsafe { (asi.hook_create)(target, page, null_mut()) };
         if status == MH_OK {
             registered = true;
-            status = unsafe { (options.platform.enable)(target) };
+            status = enable(target);
         }
     }
     let repaired = registered && matches!(status, MH_OK | MH_ERROR_ENABLED);
@@ -166,9 +195,9 @@ extern "C" fn rsf_rdr2_social_club_dispatch() {
     }
     if options.trace {
         let target = base + profile::ENTRY;
-        let mut status = unsafe { (options.platform.create_trace)(target) };
+        let mut status = create(asi, target, trace_render as *const c_void, &ORIGINAL_RENDER);
         if status == MH_OK {
-            status = unsafe { (options.platform.enable)(target) };
+            status = enable(target);
         }
         log(format!(
             "Social Club frame trace: {}",
@@ -177,8 +206,7 @@ extern "C" fn rsf_rdr2_social_club_dispatch() {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_social_club_trace(renderer: *const c_void, list: *const c_void, index: u32) {
+fn observe_trace(renderer: *const c_void, list: *const c_void, index: u32) {
     let (Some(asi), Some(options)) = (asi::platform(), OPTIONS.get()) else {
         return;
     };
@@ -192,7 +220,7 @@ extern "C" fn rsf_rdr2_social_club_trace(renderer: *const c_void, list: *const c
             .read_value::<u8>(renderer.wrapping_add(profile::QUERY_CURRENT_INDEX))
             .unwrap_or(0)
             != 0
-        && unsafe { (options.platform.current_index)(swapchain as *mut c_void, &mut current) };
+        && unsafe { (options.current_index)(swapchain as *mut c_void, &mut current) };
     let call = OBSERVED.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     let mismatch = !list.is_null() && queries_current && current != index;
     let differences = if mismatch {
