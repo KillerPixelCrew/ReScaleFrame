@@ -14,7 +14,8 @@ use crate::fg12_abi::rsf_fg12_setup as FgSetup;
 use crate::gl_pipeline_abi::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use crate::overlay_abi::{
     RSF_NATIVE_FG_REASON_HUDLESS_MISSING, RSF_NATIVE_FG_REASON_RESET,
-    RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED, RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_REFLEX_ON,
+    RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED, RSF_OVERLAY_FG_RUNTIME_SWITCH,
+    RSF_OVERLAY_HOST_OPTION_TOGGLE, RSF_REFLEX_ON, rsf_overlay_host_option as HostOption,
     rsf_overlay_intent as Intent, rsf_overlay_stats as Stats, rsf_render_status as Status,
 };
 use crate::overlay_settings::{
@@ -42,6 +43,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ffi::{CString, c_char, c_int, c_void};
+use std::path::Path;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
@@ -78,6 +80,9 @@ const PRESENT_TEST: u32 = 1;
 const SLOTS: usize = 3;
 const SCENES: usize = 64;
 const CAPTURE_PATH: usize = 32768;
+const OVERLAY_PROBE: usize = 0;
+const FRAME_CAPTURE: usize = 1;
+const GRAPHICS_DIAGNOSTICS: usize = 2;
 const FENCE_TIMEOUT_MS: u32 = 15000;
 // Present-ratio quality index: native, quality, balanced, performance, ultra performance.
 const QUALITY_RATIOS: [f32; 5] = [1.0, 1.5, 1.72, 2.0, 3.0];
@@ -231,6 +236,7 @@ const EMPTY_SLOT: Slot = Slot {
 
 #[derive(Clone, Copy, Default)]
 struct Scene {
+    session: u64,
     frame: u64,
     source: u64,
     recording: u64,
@@ -270,6 +276,9 @@ struct State {
     reset: bool,
     key: ContextKey,
     settings: Settings,
+    capture_enabled: bool,
+    capture_update: bool,
+    graphics_diagnostics: bool,
     fg_backend_requested: u32,
     fg_switch_result: i32,
     slots: [Slot; SLOTS],
@@ -422,6 +431,9 @@ impl State {
             reset: true,
             key: ContextKey::default(),
             settings: DEFAULTS,
+            capture_enabled: false,
+            capture_update: false,
+            graphics_diagnostics: false,
             fg_backend_requested: u32::MAX,
             fg_switch_result: i32::MAX,
             slots: [EMPTY_SLOT; SLOTS],
@@ -614,7 +626,7 @@ impl Host {
     }
 
     fn flush_captures(&self, s: &mut State) {
-        if s.context.is_null() || self.capture_directory.is_empty() {
+        if s.context.is_null() {
             return;
         }
         let Some(fence) = s.fence.as_ref() else {
@@ -716,18 +728,7 @@ impl Host {
         }
         s.context = replacement;
         let _ = unsafe { (p.sr12_set_sharpening)(s.context, &s.sharpening) };
-        if !self.capture_directory.is_empty()
-            && unsafe {
-                (p.sr12_capture)(
-                    s.context,
-                    self.capture_directory.as_ptr(),
-                    pass.native_frame,
-                    4,
-                )
-            } != BACKEND_OK
-        {
-            self.log("Native renderer bounded SR capture configuration refused.");
-        }
+        s.capture_update = s.capture_enabled;
         s.key = key;
         s.reset = true;
         self.log(&format!(
@@ -802,6 +803,7 @@ impl Host {
                 return result;
             }
         }
+        self.update_capture(s, pass.native_frame);
         let Some(completed) = s.fence.as_ref().and_then(|fence| self.completed(fence)) else {
             s.reset = true;
             return NOT_READY;
@@ -830,7 +832,7 @@ impl Host {
             serial: s.serial,
             fence_value: 0,
             pending: true,
-            capture_retired: false,
+            capture_retired: !s.capture_enabled,
             native_frame: pass.native_frame,
         };
         self.observed_commands[index].store(commands, Ordering::Release);
@@ -916,7 +918,7 @@ impl Host {
             let scene = &mut s.scenes[(frame % SCENES as u64) as usize];
             if scene.frame == frame && scene.recording == recording {
                 scene.submitted = true;
-                unsafe { (p.fg_submitted)(self.session, scene.source) };
+                unsafe { (p.fg_submitted)(scene.session, scene.source) };
             }
         }
     }
@@ -925,6 +927,7 @@ impl Host {
         let mut guard = self.lock();
         let s = &mut *guard;
         if s.context.is_null()
+            || pass.session_id != self.session
             || pass.color_input.is_null()
             || pass.scene_surface.is_null()
             || pass.native_frame == 0
@@ -939,6 +942,7 @@ impl Host {
         let result =
             unsafe { (self.p.sr12_capture_scene)(s.context, commands, pass, index as u32) };
         s.scenes[(pass.native_frame % SCENES as u64) as usize] = Scene {
+            session: pass.session_id,
             frame: pass.native_frame,
             source: pass.source_frame_id,
             recording: s.slots[index].serial,
@@ -958,7 +962,8 @@ impl Host {
             return;
         }
         let scene = s.scenes[(pass.native_frame % SCENES as u64) as usize];
-        let matched = scene.frame == pass.native_frame
+        let matched = scene.session == pass.session_id
+            && scene.frame == pass.native_frame
             && scene.surface == pass.scene_surface as usize
             && scene.submitted;
         if matched && pass.source_frame_id != 0 && scene.source == pass.source_frame_id {
@@ -1163,6 +1168,105 @@ impl Host {
         OK
     }
 
+    fn update_capture(&self, state: &mut State, first_frame: u64) {
+        if !state.capture_update {
+            return;
+        }
+        let (directory, frames) = if state.capture_enabled {
+            (self.capture_directory.as_ptr(), 4)
+        } else {
+            (c"".as_ptr(), 0)
+        };
+        let result =
+            unsafe { (self.p.sr12_capture)(state.context, directory, first_frame, frames) };
+        if result == BACKEND_OK {
+            state.capture_update = false;
+        }
+    }
+
+    fn diagnostic_options(&self, capture: bool, graphics: bool) -> [HostOption; 3] {
+        let probe = self
+            .probe
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .enabled;
+        let toggle = |label: &'static std::ffi::CStr, value: bool, restart: bool| HostOption {
+            label: label.as_ptr(),
+            kind: RSF_OVERLAY_HOST_OPTION_TOGGLE,
+            value: i32::from(value),
+            minimum: 0,
+            maximum: 1,
+            step: 1,
+            divisor: 1,
+            restart: u32::from(restart),
+            reserved: 0,
+        };
+        [
+            toggle(c"One-shot overlay probe", probe, false),
+            toggle(c"Bounded SR and FG capture", capture, false),
+            toggle(c"D3D12 validation and DRED", graphics, true),
+        ]
+    }
+
+    fn diagnostic_intent(&self, intent: &Intent) {
+        if intent.host_option_changed == 0 || !(0..=1).contains(&intent.host_option_value) {
+            return;
+        }
+        let Some(mut state) = self.try_lock() else {
+            self.log("Diagnostic setting request refused while the render host is busy.");
+            return;
+        };
+        let enabled = intent.host_option_value != 0;
+        let toggle = if enabled { w!("1") } else { w!("0") };
+        let capture_path;
+        let (key, value) = match intent.host_option_index as usize {
+            OVERLAY_PROBE => (w!("OverlayProbe"), toggle),
+            FRAME_CAPTURE => {
+                capture_path = crate::settings_store::wide(if enabled {
+                    self.capture_directory.to_str().unwrap_or("")
+                } else {
+                    ""
+                });
+                (w!("SRCaptureDirectory"), capture_path.as_ptr())
+            }
+            GRAPHICS_DIAGNOSTICS => (w!("GraphicsDiagnostics"), toggle),
+            _ => return,
+        };
+        if unsafe {
+            WritePrivateProfileStringW(self.section.as_ptr(), key, value, self.ini.as_ptr())
+        } == 0
+        {
+            self.log("Could not save the diagnostic setting.");
+            return;
+        }
+        match intent.host_option_index as usize {
+            OVERLAY_PROBE => {
+                let mut probe = self.probe.lock().unwrap_or_else(PoisonError::into_inner);
+                if !enabled && probe.phase == 1 && unsafe { (self.p.overlay_visible)() } != 0 {
+                    unsafe { (self.p.overlay_toggle)() };
+                }
+                *probe = Probe {
+                    enabled,
+                    ..Probe::default()
+                };
+            }
+            FRAME_CAPTURE => {
+                state.capture_enabled = enabled;
+                state.capture_update = true;
+                if self.fg_installed() {
+                    let path = if enabled {
+                        self.capture_directory.as_ptr()
+                    } else {
+                        c"".as_ptr()
+                    };
+                    let _ = unsafe { (self.p.fg_capture_outputs)(path) };
+                }
+            }
+            GRAPHICS_DIAGNOSTICS => state.graphics_diagnostics = enabled,
+            _ => unreachable!(),
+        }
+    }
+
     fn overlay_probe(&self, application_presents: u64) {
         let p = self.p;
         let mut probe = self.probe.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1170,9 +1274,22 @@ impl Host {
             return;
         }
         if probe.phase == 0 && application_presents >= 60 {
-            unsafe { (p.overlay_toggle)() };
+            if unsafe { (p.overlay_visible)() } == 0 {
+                unsafe { (p.overlay_toggle)() };
+            }
             if unsafe { (p.overlay_visible)() } != 0 {
                 probe.phase = 1;
+                if unsafe {
+                    WritePrivateProfileStringW(
+                        self.section.as_ptr(),
+                        w!("OverlayProbe"),
+                        w!("0"),
+                        self.ini.as_ptr(),
+                    )
+                } == 0
+                {
+                    self.log("Could not clear the one-shot overlay probe setting.");
+                }
                 probe.start = application_presents;
                 self.log("Native renderer overlay probe: opening shared panel.");
                 let mut attempts = 0u32;
@@ -1185,6 +1302,7 @@ impl Host {
                 };
                 if count >= 0 {
                     probe.phase = 3;
+                    probe.enabled = false;
                     self.log(
                         "Native renderer overlay probe FAILED: cursor hide loop did not terminate.",
                     );
@@ -1194,6 +1312,7 @@ impl Host {
             }
         } else if probe.phase == 1 && application_presents.wrapping_sub(probe.start) >= 120 {
             probe.phase = 2;
+            probe.enabled = false;
             if unsafe { (p.overlay_visible)() } != 0 {
                 unsafe { (p.overlay_toggle)() };
             }
@@ -1219,11 +1338,13 @@ impl Host {
             static PREFS: Cell<Option<Settings>> = const { Cell::new(None) };
         }
         let p = self.p;
-        let (queue, quality) = {
+        let (queue, quality, capture, graphics) = {
             let s = self.lock();
             (
                 s.overlay_queue.clone().or_else(|| s.queue.clone()),
                 s.key.quality,
+                s.capture_enabled,
+                s.graphics_diagnostics,
             )
         };
         let Some(queue) = queue else {
@@ -1322,6 +1443,9 @@ impl Host {
         stats.fg_requested_generated = prefs.generated_frames;
         stats.reflex_requested_mode = prefs.latency;
         stats.frame_limit_us = prefs.frame_limit_us;
+        let options = self.diagnostic_options(capture, graphics);
+        stats.host_options = options.as_ptr();
+        stats.host_option_count = options.len() as u32;
         let mut intent = Intent {
             struct_size: size_of::<Intent>() as u32,
             ..Intent::default()
@@ -1340,6 +1464,7 @@ impl Host {
         if shown == 0 {
             return;
         }
+        self.diagnostic_intent(&intent);
         if intent.ui_preferences_changed != 0 && intent.ui_preferences != stats.ui_preferences {
             self.ui_preferences
                 .store(intent.ui_preferences, Ordering::Relaxed);
@@ -1527,6 +1652,10 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
         )
     } as usize;
     capture.truncate(length);
+    let capture_enabled = !capture.is_empty();
+    let graphics_diagnostics = unsafe {
+        GetPrivateProfileIntW(section.as_ptr(), w!("GraphicsDiagnostics"), 0, ini.as_ptr())
+    } != 0;
     let root = utf8(&unsafe { wide_copy(setup.runtime_directory) });
     let streamline = format!("{root}/streamline");
     let interposer = format!("{streamline}/sl.interposer.dll");
@@ -1558,7 +1687,14 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
         interposer: c_string(interposer),
         fsr: c_string(format!("{root}/fidelityfx")),
         xess: c_string(format!("{root}/xess")),
-        capture_directory: c_string(utf8(&capture)),
+        capture_directory: c_string(if capture_enabled {
+            utf8(&capture)
+        } else {
+            Path::new(&root)
+                .join("captures")
+                .to_string_lossy()
+                .into_owned()
+        }),
         logger: services.log,
         logger_user: services.user,
         engine_streamline: setup.presentation_owner == ENGINE_PRESENTATION,
@@ -1571,7 +1707,12 @@ unsafe fn describe(setup: &Setup, services: &Services, p: &'static Platform) -> 
         graphics_ready: AtomicBool::new(false),
         ui_preferences: AtomicU32::new(0),
     };
-    host.lock().settings = host.read_settings_and_fg_mode().0;
+    {
+        let mut state = host.lock();
+        state.settings = host.read_settings_and_fg_mode().0;
+        state.capture_enabled = capture_enabled;
+        state.graphics_diagnostics = graphics_diagnostics;
+    }
     host
 }
 
@@ -1581,7 +1722,7 @@ fn install(host: &Host, setup: &Setup) -> i32 {
     let p = host.p;
     let ini = host.ini.as_ptr();
     let section = host.section.as_ptr();
-    if unsafe { GetPrivateProfileIntW(section, w!("GraphicsDiagnostics"), 0, ini) } != 0 {
+    if host.lock().graphics_diagnostics {
         let _ = unsafe { (p.diagnostics_enable)(Some(backend_log), host.user()) };
     }
     // A diagnostic request belongs to this one process, never the next game launch.
@@ -1641,7 +1782,7 @@ fn install(host: &Host, setup: &Setup) -> i32 {
         }
         host.observer.store(observer, Ordering::Release);
     }
-    if host.fg_installed() && !host.capture_directory.is_empty() {
+    if host.fg_installed() && host.lock().capture_enabled {
         let _ = unsafe { (p.fg_capture_outputs)(host.capture_directory.as_ptr()) };
     }
     host.log(if host.engine_streamline {

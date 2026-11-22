@@ -574,6 +574,41 @@ fn creation_refuses_busy_before_installing_and_releases_admission_after_refusal(
 }
 
 #[test]
+fn diagnostics_save_live_capture_and_mark_graphics_for_restart() {
+    let ini = Temporary::new("diagnostic-options");
+    let host = host(&ini, 0);
+    events();
+    let set = |index: usize, value| {
+        host.diagnostic_intent(&Intent {
+            host_option_changed: 1,
+            host_option_index: index as u32,
+            host_option_value: value,
+            ..Intent::default()
+        });
+    };
+    set(OVERLAY_PROBE, 1);
+    set(FRAME_CAPTURE, 1);
+    set(GRAPHICS_DIAGNOSTICS, 1);
+    let state = host.lock();
+    let [probe, capture, graphics] =
+        host.diagnostic_options(state.capture_enabled, state.graphics_diagnostics);
+    assert_eq!((probe.value, capture.value, graphics.value), (1, 1, 1));
+    assert_eq!(
+        (probe.restart, capture.restart, graphics.restart),
+        (0, 0, 1)
+    );
+    assert!(state.capture_update);
+    drop(state);
+    assert_eq!(ini.integer("OverlayProbe"), 1);
+    assert_eq!(ini.integer("GraphicsDiagnostics"), 1);
+    assert!(ini.contents().contains("SRCaptureDirectory="));
+    assert!(!events().iter().any(|event| event == "diagnostics"));
+    set(FRAME_CAPTURE, 0);
+    assert!(!host.lock().capture_enabled);
+    assert!(host.lock().capture_update);
+}
+
+#[test]
 fn quality_follows_the_actual_input_ratio() {
     assert_eq!(infer_quality(1920, 1920), 0);
     assert_eq!(infer_quality(1280, 1920), 1);

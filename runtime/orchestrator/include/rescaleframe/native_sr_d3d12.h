@@ -69,6 +69,7 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr12_present(rsf_sr12*, void* swapchain,
     uint32_t sync_interval, uint32_t flags, uint32_t begin);
 /* Optional bounded original-pixel evidence. Configure before evaluation; the ordinary slot
    completion protocol also retires these readbacks. No work is recorded when unconfigured. */
+/* Empty directory and zero frames stop new captures while submitted readbacks retire. */
 RSF_RUNTIME_API rsf_backend_result rsf_sr12_capture(rsf_sr12*, const char* directory_utf8,
     uint64_t first_frame, uint32_t frames);
 /* Caller has observed this slot's submitted fence completion, including failed evaluations. */
