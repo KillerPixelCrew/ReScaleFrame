@@ -702,10 +702,6 @@ impl Owner {
     }
 }
 
-fn slot_index(frame: u64) -> usize {
-    (frame % SLOTS as u64) as usize
-}
-
 unsafe fn valid_swapchain(info: *const c_void, width: u32, height: u32) -> bool {
     // A short record with the wrong structure tag can be rejected without
     // reading the rest of VkSwapchainCreateInfoKHR.

@@ -547,9 +547,6 @@ impl Default for Slot {
 
 const GUIDES: u32 = 1;
 const HUDLESS: u32 = 2;
-fn slot_index(frame: u64) -> usize {
-    (frame % SLOT_COUNT as u64) as usize
-}
 
 // Calls are serialized by the Vulkan WSI contract. The shared primary owner
 // in vulkan_fg.rs and the presentation borrow gate remain the entry point.

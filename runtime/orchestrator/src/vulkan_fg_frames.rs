@@ -12,6 +12,11 @@ use std::mem::offset_of;
 use std::{ptr, slice};
 
 const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
+
+/// The recording slot of a frame ID, shared by every Vulkan FG provider.
+pub(crate) fn slot_index(frame: u64) -> usize {
+    (frame % SLOTS as u64) as usize
+}
 const FG_VETO: u32 = RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID;
 
 impl Slot {

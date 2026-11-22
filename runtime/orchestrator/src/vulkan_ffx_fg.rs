@@ -217,10 +217,6 @@ fn presented(result: i32) -> bool {
     matches!(result, VK_SUCCESS | VK_SUBOPTIMAL)
 }
 
-fn slot_index(frame: u64) -> usize {
-    (frame % SLOT_COUNT as u64) as usize
-}
-
 /// Nested diagnostics scope. The native leaf writes nothing unless the
 /// opt-in Vulkan timing file is configured.
 struct Timing {
