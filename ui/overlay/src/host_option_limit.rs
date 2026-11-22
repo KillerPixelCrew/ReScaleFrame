@@ -2,4 +2,4 @@
 
 #![allow(non_camel_case_types)]
 
-pub const RSF_OVERLAY_SERVICE_OPTION_LIMIT: u32 = 32;
+pub const RSF_OVERLAY_SERVICE_OPTION_LIMIT: u32 = 40;

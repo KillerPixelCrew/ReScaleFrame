@@ -36,8 +36,8 @@ namespace rsf { uint32_t texture_pixel_bytes(DXGI_FORMAT format); }
 extern "C" {
 int32_t rsf_anomaly_sr_ini_int(const void*, const char*, int32_t) noexcept;
 uint32_t rsf_anomaly_sr_ini_text(const void*, const char*, const char*, uint16_t*, uint32_t) noexcept;
-void rsf_anomaly_sr_persist_int(const char*, int32_t) noexcept;
-void rsf_anomaly_sr_persist_text(const char*, const char*) noexcept;
+bool rsf_anomaly_sr_persist_int(const char*, int32_t) noexcept;
+bool rsf_anomaly_sr_persist_text(const char*, const char*) noexcept;
 void rsf_anomaly_sr_stage_register(const rsf_anomaly_sr_stage_platform*) noexcept;
 void rsf_anomaly_sr_stage_read_options(const void*, rsf_anomaly_sr_stage_config*) noexcept;
 float rsf_anomaly_sr_stage_read_scale(const void*, bool*) noexcept;

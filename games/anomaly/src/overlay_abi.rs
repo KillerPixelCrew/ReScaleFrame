@@ -22,7 +22,7 @@ pub const RSF_OVERLAY_NOTIFY_RESIZE: u32 = 1;
 pub const RSF_OVERLAY_NOTIFY_DEVICE_RESET: u32 = 2;
 pub const RSF_OVERLAY_SERVICE_OPTION_TOGGLE: u32 = 0;
 pub const RSF_OVERLAY_SERVICE_OPTION_NUMBER: u32 = 1;
-pub const RSF_OVERLAY_SERVICE_OPTION_LIMIT: u32 = 32;
+pub const RSF_OVERLAY_SERVICE_OPTION_LIMIT: u32 = 40;
 pub const RSF_OVERLAY_DIAGNOSTICS_ENTRY_POINT: &[u8; 28] = b"rsf_get_overlay_diagnostics\0";
 pub type wchar_t = ::core::ffi::c_ushort;
 pub type rsf_named_frame_dump_log_fn = ::core::option::Option<
@@ -636,7 +636,7 @@ pub struct rsf_anomaly_overlay_option {
     pub step: i32,
     pub divisor: u32,
     pub get: ::core::option::Option<unsafe extern "C" fn() -> i32>,
-    pub set: ::core::option::Option<unsafe extern "C" fn(arg1: i32)>,
+    pub set: ::core::option::Option<unsafe extern "C" fn(arg1: i32) -> bool>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {

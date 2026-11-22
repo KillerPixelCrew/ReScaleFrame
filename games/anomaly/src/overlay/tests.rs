@@ -267,7 +267,9 @@ fn options(api: &rsf_overlay_api, install_hooks: bool) -> rsf_anomaly_overlay_op
 unsafe extern "C" fn option_value() -> i32 {
     1
 }
-unsafe extern "C" fn option_set(_: i32) {}
+unsafe extern "C" fn option_set(value: i32) -> bool {
+    value == 1
+}
 
 #[test]
 fn setup_translates_what_the_adapter_can_apply() {
@@ -288,6 +290,9 @@ fn setup_translates_what_the_adapter_can_apply() {
     let mut incomplete = registered[0];
     incomplete.set = None;
     assert!(AdapterOption::new(&incomplete).is_none());
+    assert!(!adapter[0].apply(0));
+    assert!(adapter[0].apply(1));
+    assert!(!adapter[0].apply(2));
 
     let mut table = Vec::new();
     // Neither SR Stage 5 nor the FG bridge: SR unavailable, FG Off only.
@@ -298,6 +303,14 @@ fn setup_translates_what_the_adapter_can_apply() {
         size_of::<rsf_overlay_service_setup>()
     );
     assert_eq!(unsafe { CStr::from_ptr(setup.identity_utf8) }, c"Anomaly");
+    assert_eq!(
+        unsafe { crate::ini::path(setup.configuration_path) },
+        Some(INI)
+    );
+    assert_eq!(
+        unsafe { crate::ini::path(setup.configuration_section) },
+        Some("Anomaly\0".encode_utf16().collect::<Vec<_>>().as_slice())
+    );
     assert_eq!((setup.sr_backend_choices, setup.sr_quality_choices), (0, 0));
     assert!(setup.sr_report.is_none());
     assert_eq!(setup.defaults.sr_backend, RSF_SR_NONE);
@@ -363,6 +376,83 @@ fn setup_translates_what_the_adapter_can_apply() {
 }
 
 static CONFIGURES: AtomicU32 = AtomicU32::new(0);
+
+unsafe extern "C" fn refused_configure(_: *const rsf_overlay_service_setup) -> i32 {
+    -1
+}
+
+unsafe extern "C" fn captured(out: *mut rsf_overlay_capture) -> i32 {
+    unsafe { (*out).captured = RSF_OVERLAY_CAPTURE_MOUSE | RSF_OVERLAY_CAPTURE_KEYBOARD };
+    OK
+}
+
+unsafe extern "C" fn refused_capture(out: *mut rsf_overlay_capture) -> i32 {
+    unsafe { captured(out) };
+    -1
+}
+
+#[test]
+fn runtime_start_and_capture_report_refusals() {
+    let log = Mutex::new(Vec::new());
+    let placeholder = table();
+    let mut start = options(&placeholder, false);
+    start.api_override = ptr::null();
+    start.log = Some(collect);
+    start.log_user = ptr::from_ref(&log).cast_mut().cast();
+    let overlay = Overlay::new(TEST_DESKTOP, TEST_STAGES);
+    assert_eq!(
+        overlay
+            .start(&start, &platform(), Vec::new())
+            .unwrap_err()
+            .status,
+        API_MISSING
+    );
+    assert!(
+        lines(&log)
+            .iter()
+            .any(|line| line.contains("does not export"))
+    );
+
+    let api = rsf_overlay_api {
+        configure: Some(refused_configure),
+        ..table()
+    };
+    start.api_override = &api;
+    assert_eq!(
+        overlay
+            .start(&start, &platform(), Vec::new())
+            .unwrap_err()
+            .status,
+        CONFIGURE_REFUSED
+    );
+    assert!(lines(&log).iter().any(|line| line.contains("rejected")));
+
+    for (capture, expected) in [
+        (
+            captured as unsafe extern "C" fn(*mut rsf_overlay_capture) -> i32,
+            3,
+        ),
+        (refused_capture, 0),
+    ] {
+        let api = rsf_overlay_api {
+            capture: Some(capture),
+            ..table()
+        };
+        assert_eq!(
+            service(
+                &api,
+                Log {
+                    log: None,
+                    user: ptr::null_mut()
+                },
+                None
+            )
+            .capture_bits(),
+            expected
+        );
+    }
+}
+
 unsafe extern "C" fn counted_configure(_: *const rsf_overlay_service_setup) -> i32 {
     CONFIGURES.fetch_add(1, Ordering::SeqCst);
     OK
@@ -402,7 +492,7 @@ fn a_hook_refusal_stays_refused_on_retry() {
     // Without hooks the same table starts once; the next start reports it.
     let overlay = Overlay::new(TEST_DESKTOP, TEST_STAGES);
     let mut empty = options(&api, false);
-    empty.configuration = [0u16].as_ptr();
+    empty.configuration = w!("");
     assert_eq!(
         overlay
             .start(&empty, &platform(), Vec::new())

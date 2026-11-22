@@ -98,7 +98,7 @@ typedef struct rsf_overlay_sr_report {
    service only transports it: the adapter applies and persists a change in option_changed. */
 #define RSF_OVERLAY_SERVICE_OPTION_TOGGLE 0u /* value is 0 or 1 */
 #define RSF_OVERLAY_SERVICE_OPTION_NUMBER 1u /* minimum..maximum in steps, shown as value / divisor */
-#define RSF_OVERLAY_SERVICE_OPTION_LIMIT 32u
+#define RSF_OVERLAY_SERVICE_OPTION_LIMIT 40u
 typedef struct rsf_overlay_service_option {
     const char* label_utf8; /* copied by configure */
     uint32_t kind;

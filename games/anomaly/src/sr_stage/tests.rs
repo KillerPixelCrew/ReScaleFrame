@@ -37,6 +37,7 @@ struct Fake {
     hooks_created: bool,
     refuse_remove_hooks: bool,
     refuse_shutdown: bool,
+    refuse_persist: bool,
     passes: Vec<rsf_anomaly_sr_pass>,
     logs: Vec<String>,
     files: Vec<String>,
@@ -390,19 +391,21 @@ unsafe extern "C" fn ini_text(
     }
     wide.len() as u32
 }
-unsafe extern "C" fn persist_int(key: *const c_char, value: i32) {
+unsafe extern "C" fn persist_int(key: *const c_char, value: i32) -> bool {
     record(format!(
         "save {}={value}",
         unsafe { CStr::from_ptr(key) }.to_string_lossy()
     ));
+    fake(|f| !f.refuse_persist)
 }
-unsafe extern "C" fn persist_text(key: *const c_char, value: *const c_char) {
+unsafe extern "C" fn persist_text(key: *const c_char, value: *const c_char) -> bool {
     let (key, value) = unsafe { (CStr::from_ptr(key), CStr::from_ptr(value)) };
     record(format!(
         "save {}={}",
         key.to_string_lossy(),
         value.to_string_lossy()
     ));
+    fake(|f| !f.refuse_persist)
 }
 extern "C" fn apply_colour_transport(transport: bool) {
     record(format!("transport {transport}"));
@@ -948,19 +951,158 @@ fn live_options_apply_and_persist_through_the_adapter_path() {
     let table = platform();
     let driver = installed(5, &table);
     driver.set_option(RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT, 0);
-    assert_eq!(calls(), ["transport true", "save SRColourTransport=1"]);
+    assert_eq!(calls(), ["save SRColourTransport=1", "transport true"]);
     assert_eq!(driver.option(RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT), 0);
     driver.set_option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET, -5);
     assert_eq!(calls(), ["save SRMipBias=-0.5"]);
     assert_eq!(driver.option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET), -5);
     driver.set_option(RSF_ANOMALY_SR_OPTION_MIP_BIAS, 0);
-    driver.set_option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET, -10);
-    assert_eq!(calls(), ["save SRMipBias=off"]);
+    assert!(driver.set_option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET, -10));
+    assert_eq!(
+        calls(),
+        ["save SRMipBias=off -0.5", "save SRMipBias=off -1.0"]
+    );
     driver.set_option(RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO, 1);
     assert_eq!(calls(), ["save SRExposure=auto"]);
     // Configuration is refused while the hooks are installed.
     assert!(!driver.configure(&default_config(), Paths::default(), None, null_mut()));
     assert!(calls().is_empty());
+
+    fake(|f| f.refuse_persist = true);
+    assert!(!driver.set_option(RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT, 1));
+    assert_eq!(calls(), ["save SRColourTransport=0"]);
+    assert_eq!(driver.option(RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT), 0);
+
+    assert!(!driver.set_option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET, -15));
+    assert_eq!(calls(), ["save SRMipBias=off -1.5"]);
+    assert_eq!(driver.option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET), -10);
+}
+
+#[test]
+fn stage_options_save_before_changing_configuration_or_capture_schedule() {
+    let table = platform();
+    let driver = installed(5, &table);
+    let options = [
+        (
+            OPTION_SCALE,
+            75,
+            90,
+            "save SRScale=0.75",
+            "save SRScale=0.90",
+        ),
+        (
+            OPTION_CUT_DISTANCE,
+            51,
+            62,
+            "save SRCutDistance=5.1",
+            "save SRCutDistance=6.2",
+        ),
+        (
+            OPTION_CUT_ANGLE,
+            300,
+            600,
+            "save SRCutAngle=30.0",
+            "save SRCutAngle=60.0",
+        ),
+        (
+            OPTION_CAPTURE_START,
+            450,
+            700,
+            "save SRStageCaptureStart=450",
+            "save SRStageCaptureStart=700",
+        ),
+        (
+            OPTION_CAPTURE_COUNT,
+            8,
+            10,
+            "save SRStageCaptureCount=8",
+            "save SRStageCaptureCount=10",
+        ),
+        (
+            OPTION_CAPTURE_INTERVAL,
+            40,
+            30,
+            "save SRStageCaptureInterval=40",
+            "save SRStageCaptureInterval=30",
+        ),
+        (
+            OPTION_REQUIRE_SIGNATURE,
+            1,
+            0,
+            "save SRRequireSignature=1",
+            "save SRRequireSignature=0",
+        ),
+    ];
+    for (id, accepted, _, write, _) in options {
+        assert!(driver.set_option(id, accepted));
+        assert_eq!(driver.option(id), accepted);
+        assert_eq!(calls(), [write]);
+    }
+    assert_eq!(
+        driver.with(|s| (
+            s.config.scale,
+            s.config.scale_defaulted,
+            s.capture.next,
+            s.capture.remaining
+        )),
+        (0.75, false, 450, 8)
+    );
+
+    // Give the in-flight schedule progress that an erroneous reset would erase.
+    driver.with(|s| {
+        s.capture.next = 490;
+        s.capture.remaining = 7;
+    });
+    fake(|f| f.refuse_persist = true);
+    for (id, accepted, refused, _, write) in options {
+        assert!(!driver.set_option(id, refused));
+        assert_eq!(driver.option(id), accepted);
+        assert_eq!(calls(), [write]);
+    }
+    assert_eq!(
+        driver.with(|s| (
+            s.config.scale,
+            s.config.scale_defaulted,
+            s.capture.next,
+            s.capture.remaining
+        )),
+        (0.75, false, 490, 7)
+    );
+}
+
+#[test]
+fn refused_stage_three_capture_edits_keep_the_current_burst() {
+    let table = platform();
+    let driver = Stage::new();
+    driver.register(table.as_ref());
+    driver.active.store(true, Ordering::Release);
+    driver.with(|s| {
+        s.config.stage = 3;
+        s.config.capture = true;
+        s.config.capture_start = 600;
+        s.config.capture_count = 8;
+        s.burst_revision = 7;
+        s.burst.armed = true;
+    });
+    fake(|f| f.refuse_persist = true);
+    assert!(!driver.set_option(OPTION_CAPTURE_START, 700));
+    assert!(!driver.set_option(OPTION_CAPTURE_COUNT, 32));
+    assert_eq!(
+        calls(),
+        [
+            "save SRStageCaptureStart=700",
+            "save SRStageCaptureCount=32"
+        ]
+    );
+    assert_eq!(
+        driver.with(|s| (
+            s.config.capture_start,
+            s.config.capture_count,
+            s.burst_revision,
+            s.burst.armed
+        )),
+        (600, 8, 7, true)
+    );
 }
 
 #[test]

@@ -285,8 +285,8 @@ typedef struct rsf_anomaly_sr_stage_platform {
     // path, the Runtime's colour transport and a file probe for the vendor runtimes (a UTF-16 path).
     int32_t (*ini_int)(const void* ini, const char* key, int32_t fallback);
     uint32_t (*ini_text)(const void* ini, const char* key, const char* fallback, uint16_t* out, uint32_t capacity);
-    void (*persist_int)(const char* key, int32_t value);
-    void (*persist_text)(const char* key, const char* value);
+    bool (*persist_int)(const char* key, int32_t value);
+    bool (*persist_text)(const char* key, const char* value);
     void (*apply_colour_transport)(bool);
     bool (*file_exists)(const uint16_t* path);
     // An accepted configuration: the log the D3D11 host reports through and, for Stages 4 and 5, the TemporalDriver

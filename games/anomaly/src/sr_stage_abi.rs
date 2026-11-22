@@ -915,10 +915,14 @@ pub struct rsf_anomaly_sr_stage_platform {
             capacity: u32,
         ) -> u32,
     >,
-    pub persist_int:
-        ::core::option::Option<unsafe extern "C" fn(key: *const ::core::ffi::c_char, value: i32)>,
+    pub persist_int: ::core::option::Option<
+        unsafe extern "C" fn(key: *const ::core::ffi::c_char, value: i32) -> bool,
+    >,
     pub persist_text: ::core::option::Option<
-        unsafe extern "C" fn(key: *const ::core::ffi::c_char, value: *const ::core::ffi::c_char),
+        unsafe extern "C" fn(
+            key: *const ::core::ffi::c_char,
+            value: *const ::core::ffi::c_char,
+        ) -> bool,
     >,
     pub apply_colour_transport: ::core::option::Option<unsafe extern "C" fn(arg1: bool)>,
     pub file_exists: ::core::option::Option<unsafe extern "C" fn(path: *const u16) -> bool>,

@@ -5,10 +5,9 @@ use crate::ini;
 use std::ffi::{CString, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
+use std::slice;
 use std::sync::Mutex;
-use std::{ptr, slice};
-use windows_sys::Win32::Foundation::{MAX_PATH, SYSTEMTIME};
-use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+use windows_sys::Win32::Foundation::MAX_PATH;
 use windows_sys::core::{PCWSTR, w};
 
 #[derive(Clone, Copy)]
@@ -146,7 +145,7 @@ impl Options {
         let capture = text(w!("FGCaptureDir"));
         let capture_dir = if capture.is_empty() {
             base.join("RSF-FGCapture")
-                .join(local_timestamp())
+                .join(crate::capture_clock::local_timestamp())
                 .to_string_lossy()
                 .into_owned()
         } else {
@@ -230,15 +229,6 @@ unsafe fn wide<'a>(value: PCWSTR) -> &'a [u16] {
 
 fn c_string(text: String) -> CString {
     CString::new(text).unwrap_or_default()
-}
-
-fn local_timestamp() -> String {
-    let mut time = SYSTEMTIME::default();
-    unsafe { GetLocalTime(ptr::from_mut(&mut time)) };
-    format!(
-        "{:04}{:02}{:02}-{:02}{:02}{:02}",
-        time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
-    )
 }
 
 pub(super) fn backend_name(backend: u32) -> &'static str {

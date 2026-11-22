@@ -5,6 +5,8 @@ mod adapter_options;
 mod bootstrap;
 mod camera;
 #[cfg(windows)]
+mod capture_clock;
+#[cfg(windows)]
 mod digest;
 mod engine_guards;
 #[cfg(windows)]
@@ -48,6 +50,8 @@ mod overlay;
 mod overlay_abi;
 #[cfg(windows)]
 mod overlay_hooks;
+#[cfg(windows)]
+mod overlay_native;
 #[cfg(windows)]
 mod runtime_module;
 mod shader_family;

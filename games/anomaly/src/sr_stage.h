@@ -39,7 +39,7 @@ JitterUv current_jitter_uv() noexcept;
 rsf_anomaly_sr_stage_config read_options(const wchar_t* ini) noexcept;
 // SRScale from the INI, clamped. `defaulted` is set when the key is missing or not a number.
 float read_scale(const wchar_t* ini, bool* defaulted = nullptr) noexcept;
-// SRMipBias from the INI: a decimal offset clamped to [-2, 1] (missing or unparsable: 0), or "off" (enabled false).
+// SRMipBias from the INI: a decimal offset clamped to [-2, 1] (missing or unparsable: 0), or "off" with an optional offset (enabled false).
 float read_mip_bias(const wchar_t* ini, bool* enabled = nullptr) noexcept;
 // Called by bootstrap before Observe starts. Reads the keys from `ini`; when `apply` and a stage or the capture is
 // selected, the Rust stage keeps them with the INI path and the vendor directories (refused while installed). Returns

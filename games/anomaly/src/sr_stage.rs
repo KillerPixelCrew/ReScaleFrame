@@ -391,30 +391,29 @@ impl Ini<'_> {
         let scale = clamp_scale(value as f32);
         (scale, value.is_nan() || value <= 0.0 || !value.is_finite())
     }
-    // SRMipBias: a decimal offset clamped to [-2, 1], or "off".
+    // SRMipBias: a decimal offset clamped to [-2, 1], "off", or "off" followed by the saved offset.
     fn mip_bias(&self) -> (f32, bool) {
         let text = self.text(c"SRMipBias", c"");
         let blank = |c: &u16| *c == 0x20 || *c == 0x09;
         let begin = text.iter().position(|c| !blank(c)).unwrap_or(text.len());
-        let rest = &text[begin..];
-        if rest.len() >= 3
+        let mut rest = &text[begin..];
+        let disabled = rest.len() >= 3
             && rest[..3]
                 .iter()
                 .map(|&c| c | 0x20)
                 .eq("off".bytes().map(u16::from))
-            && rest[3..].iter().all(blank)
-        {
-            return (DEFAULT_MIP_OFFSET, false);
+            && rest.get(3).is_none_or(blank);
+        if disabled {
+            rest = &rest[3..];
         }
         let (value, end) = wcstod(rest);
-        if rest.is_empty()
-            || end == 0
-            || rest[end..].iter().any(|c| !blank(c))
-            || !value.is_finite()
-        {
-            return (DEFAULT_MIP_OFFSET, true);
-        }
-        (clamp_mip_offset(value as f32), true)
+        let valid = end != 0 && rest[end..].iter().all(blank) && value.is_finite();
+        let offset = if valid {
+            clamp_mip_offset(value as f32)
+        } else {
+            DEFAULT_MIP_OFFSET
+        };
+        (offset, !disabled)
     }
     fn float(&self, key: &CStr, fallback: f32, low: f32, high: f32) -> f32 {
         let text = self.text(key, c"");
@@ -1046,64 +1045,77 @@ impl Stage {
     }
 
     // Applies a panel value and saves it through the adapter option path.
-    pub(crate) fn set_option(&self, id: u32, value: i32) {
+    pub(crate) fn set_option(&self, id: u32, value: i32) -> bool {
         let p = self.platform();
         let live = &self.live;
         let persist_int = |key: &CStr, v: i32| leaf!(p, persist_int(key.as_ptr(), v));
         let persist_text = |key: &CStr, v: &str| {
-            if let Ok(text) = CString::new(v) {
-                leaf!(p, persist_text(key.as_ptr(), text.as_ptr()));
-            }
+            CString::new(v).is_ok_and(|text| leaf!(p, persist_text(key.as_ptr(), text.as_ptr())))
         };
-        let offset_text = || format!("{:.1}", f64::from(self.live_mip_offset()));
+        let enabled = value != 0;
+        let set_flag = |target: &AtomicBool, flag: bool, saved: bool| {
+            if saved {
+                target.store(flag, Ordering::Relaxed);
+            }
+            saved
+        };
         match id {
             RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT => {
-                let transport = value == 0;
+                let transport = !enabled;
+                if !persist_int(c"SRColourTransport", i32::from(transport)) {
+                    return false;
+                }
                 live.colour_transport.store(transport, Ordering::Relaxed);
                 leaf!(p, apply_colour_transport(transport));
-                persist_int(c"SRColourTransport", i32::from(transport));
+                true
             }
-            RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO => {
-                live.exposure_auto.store(value != 0, Ordering::Relaxed);
-                persist_text(c"SRExposure", if value != 0 { "auto" } else { "constant" });
-            }
-            RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO => {
-                live.first_person_zero.store(value != 0, Ordering::Relaxed);
-                persist_int(c"SRFirstPersonZero", i32::from(value != 0));
-            }
-            RSF_ANOMALY_SR_OPTION_JITTER => {
-                live.jitter.store(value != 0, Ordering::Relaxed);
-                persist_int(c"SRJitter", i32::from(value != 0));
-            }
+            RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO => set_flag(
+                &live.exposure_auto,
+                enabled,
+                persist_text(c"SRExposure", if enabled { "auto" } else { "constant" }),
+            ),
+            RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO => set_flag(
+                &live.first_person_zero,
+                enabled,
+                persist_int(c"SRFirstPersonZero", i32::from(enabled)),
+            ),
+            RSF_ANOMALY_SR_OPTION_JITTER => set_flag(
+                &live.jitter,
+                enabled,
+                persist_int(c"SRJitter", i32::from(enabled)),
+            ),
             RSF_ANOMALY_SR_OPTION_MIP_BIAS => {
-                live.mip_bias.store(value != 0, Ordering::Relaxed);
-                persist_text(
-                    c"SRMipBias",
-                    &if value != 0 {
-                        offset_text()
-                    } else {
-                        "off".into()
-                    },
-                );
+                let offset = self.live_mip_offset();
+                let text = if enabled {
+                    format!("{offset:.1}")
+                } else {
+                    format!("off {offset:.1}")
+                };
+                set_flag(&live.mip_bias, enabled, persist_text(c"SRMipBias", &text))
             }
             RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET => {
-                live.mip_offset.store(
-                    (value as f32 / MIP_OFFSET_DIVISOR as f32).to_bits(),
-                    Ordering::Relaxed,
-                );
-                if live.mip_bias.load(Ordering::Relaxed) {
-                    persist_text(c"SRMipBias", &offset_text());
+                let offset = value as f32 / MIP_OFFSET_DIVISOR as f32;
+                let text = if live.mip_bias.load(Ordering::Relaxed) {
+                    format!("{offset:.1}")
+                } else {
+                    format!("off {offset:.1}")
+                };
+                if !persist_text(c"SRMipBias", &text) {
+                    return false;
                 }
+                live.mip_offset.store(offset.to_bits(), Ordering::Relaxed);
+                true
             }
-            OPTION_SCALE => {
+            OPTION_SCALE => self.with(|state| {
                 let scale = clamp_scale(value as f32 / 100.0);
-                self.with(|state| {
-                    state.current_scale = scale;
-                    state.config.scale = scale;
-                    state.config.scale_defaulted = false;
-                    persist_text(c"SRScale", &format!("{scale:.2}"));
-                });
-            }
+                if !persist_text(c"SRScale", &format!("{scale:.2}")) {
+                    return false;
+                }
+                state.current_scale = scale;
+                state.config.scale = scale;
+                state.config.scale_defaulted = false;
+                true
+            }),
             OPTION_CUT_DISTANCE | OPTION_CUT_ANGLE => self.with(|state| {
                 let (target, key, min, max) = if id == OPTION_CUT_DISTANCE {
                     (
@@ -1115,29 +1127,39 @@ impl Stage {
                 } else {
                     (&mut state.config.cut_degrees, c"SRCutAngle", 1.0, 180.0)
                 };
-                *target = (value as f32 / 10.0).clamp(min, max);
-                persist_text(key, &format!("{target:.1}"));
+                let cut = (value as f32 / 10.0).clamp(min, max);
+                if !persist_text(key, &format!("{cut:.1}")) {
+                    return false;
+                }
+                *target = cut;
+                true
             }),
             OPTION_CAPTURE_START | OPTION_CAPTURE_COUNT | OPTION_CAPTURE_INTERVAL => {
                 self.with(|state| {
-                    match id {
-                        OPTION_CAPTURE_START => {
-                            state.config.capture_start = value.max(0) as u32;
-                            persist_int(c"SRStageCaptureStart", state.config.capture_start as i32);
-                        }
+                    let (target, key, value) = match id {
+                        OPTION_CAPTURE_START => (
+                            &mut state.config.capture_start,
+                            c"SRStageCaptureStart",
+                            value.max(0),
+                        ),
                         OPTION_CAPTURE_COUNT => {
                             let max = if state.config.stage == 3 { 32 } else { 16 };
-                            state.config.capture_count = value.clamp(0, max) as u32;
-                            persist_int(c"SRStageCaptureCount", state.config.capture_count as i32);
+                            (
+                                &mut state.config.capture_count,
+                                c"SRStageCaptureCount",
+                                value.clamp(0, max),
+                            )
                         }
-                        _ => {
-                            state.config.capture_interval = value.max(1) as u32;
-                            persist_int(
-                                c"SRStageCaptureInterval",
-                                state.config.capture_interval as i32,
-                            );
-                        }
+                        _ => (
+                            &mut state.config.capture_interval,
+                            c"SRStageCaptureInterval",
+                            value.max(1),
+                        ),
+                    };
+                    if !persist_int(key, value) {
+                        return false;
                     }
+                    *target = value as u32;
                     if state.config.stage == 3 {
                         if id != OPTION_CAPTURE_INTERVAL && state.config.capture && self.active() {
                             state.burst_revision = state.burst_revision.wrapping_add(1);
@@ -1147,16 +1169,17 @@ impl Stage {
                         state.capture.next = u64::from(state.config.capture_start);
                         state.capture.remaining = state.config.capture_count;
                     }
+                    true
                 })
             }
             OPTION_REQUIRE_SIGNATURE => self.with(|state| {
-                state.config.require_signature = value != 0;
-                persist_int(
-                    c"SRRequireSignature",
-                    i32::from(state.config.require_signature),
-                );
+                if !persist_int(c"SRRequireSignature", i32::from(enabled)) {
+                    return false;
+                }
+                state.config.require_signature = enabled;
+                true
             }),
-            _ => {}
+            _ => false,
         }
     }
 
@@ -2838,11 +2861,11 @@ fn live_options() -> [crate::overlay_abi::rsf_anomaly_overlay_option; 13] {
     extern "C" fn get<const ID: u32>() -> i32 {
         STAGE.option(ID)
     }
-    extern "C" fn set<const ID: u32>(value: i32) {
-        STAGE.set_option(ID, value);
+    extern "C" fn set<const ID: u32>(value: i32) -> bool {
+        STAGE.set_option(ID, value)
     }
     type Get = unsafe extern "C" fn() -> i32;
-    type Set = unsafe extern "C" fn(i32);
+    type Set = unsafe extern "C" fn(i32) -> bool;
     let toggle = |label: &'static CStr, get: Get, set: Set| rsf_anomaly_overlay_option {
         label: label.as_ptr(),
         toggle: 1,

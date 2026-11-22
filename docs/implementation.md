@@ -1115,6 +1115,13 @@ order. Device and game checks remain open.
 [Anomaly probes](research/rust-anomaly-overlay-probes.md) ·
 [Vulkan FG staging](research/rust-vulkan-dlss-fg-cutover.md#guide-and-hud-less-staging-commands)
 
+The Anomaly adapter now implements the overlay's DirectInput and DXGI callbacks
+and COM access in Rust. The input gate reports from the buffered read that
+consumed the records. Diagnostic controls appear in the panel, and option
+callbacks report persistence failures. Source and binding checks are complete.
+Build, fixture and game verification remain open.
+[Anomaly input and overlay port](research/rust-anomaly-n02.md)
+
 The native D3D12 overlay now owns its three command and descriptor
 slots in Rust. The fixed slot array keeps partial references until
 initialization releases the fence and tears down the renderer.

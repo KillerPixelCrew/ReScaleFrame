@@ -26,10 +26,8 @@ impl Settings {
         unsafe { ini::read_int(self.ini.as_ptr(), key, fallback) as u32 }
     }
 
-    fn save(&self, key: *const u16, value: i32) {
-        if !self.ini.is_empty() {
-            unsafe { ini::write_int(self.ini.as_ptr(), key, value) };
-        }
+    fn save(&self, key: *const u16, value: i32) -> bool {
+        !self.ini.is_empty() && unsafe { ini::write_int(self.ini.as_ptr(), key, value) }
     }
 }
 
@@ -90,7 +88,7 @@ static PACK_LABEL: Label = Label(UnsafeCell::new({
 }));
 
 type Get = unsafe extern "C" fn() -> i32;
-type Set = unsafe extern "C" fn(i32);
+type Set = unsafe extern "C" fn(i32) -> bool;
 
 fn entry(label: *const c_char, bound: i32, restart: bool, get: Get, set: Set) {
     let option = OptionEntry {
@@ -186,43 +184,56 @@ unsafe extern "C" fn pack_get() -> i32 {
     stage.enabled.load(Relaxed).into()
 }
 
-unsafe extern "C" fn pack_set(value: i32) {
+unsafe extern "C" fn pack_set(value: i32) -> bool {
     let stage = STAGE.get().unwrap();
-    stage.enabled.store(value != 0, Relaxed);
-    lock(&stage.settings).save(w!("Motion"), (value != 0).into());
+    let enabled = value != 0;
+    if !lock(&stage.settings).save(w!("Motion"), enabled.into()) {
+        return false;
+    }
+    stage.enabled.store(enabled, Relaxed);
+    true
 }
 unsafe extern "C" fn zero() -> i32 {
     0
 }
-unsafe extern "C" fn reload(value: i32) {
+unsafe extern "C" fn reload(value: i32) -> bool {
     if value != 0 {
         STAGE.get().unwrap().reload.store(true, Relaxed);
     }
+    true
 }
-unsafe extern "C" fn dump(value: i32) {
+unsafe extern "C" fn dump(value: i32) -> bool {
     if value != 0 {
         STAGE.get().unwrap().dump_shaders.store(true, Relaxed);
     }
+    true
 }
 unsafe extern "C" fn foliage_get() -> i32 {
     STAGE.get().unwrap().foliage.load(Relaxed).into()
 }
-unsafe extern "C" fn foliage_set(value: i32) {
+unsafe extern "C" fn foliage_set(value: i32) -> bool {
     let stage = STAGE.get().unwrap();
     let enabled = value != 0;
+    if !lock(&stage.settings).save(w!("MotionFoliage"), enabled.into()) {
+        return false;
+    }
     stage.foliage.store(enabled, Relaxed);
     if stage.active.load(Acquire) {
         unsafe { (stage.platform.foliage_identity)(enabled) };
     }
-    lock(&stage.settings).save(w!("MotionFoliage"), enabled.into());
+    true
 }
 unsafe extern "C" fn invalidate_get() -> i32 {
     STAGE.get().unwrap().invalidate.load(Relaxed).into()
 }
-unsafe extern "C" fn invalidate_set(value: i32) {
+unsafe extern "C" fn invalidate_set(value: i32) -> bool {
     let stage = STAGE.get().unwrap();
-    stage.invalidate.store(value != 0, Relaxed);
-    lock(&stage.settings).save(w!("MotionInvalidate"), (value != 0).into());
+    let enabled = value != 0;
+    if !lock(&stage.settings).save(w!("MotionInvalidate"), enabled.into()) {
+        return false;
+    }
+    stage.invalidate.store(enabled, Relaxed);
+    true
 }
 
 // These controls persist a new schedule for the next startup. The current
@@ -232,30 +243,30 @@ fn read(key: *const u16, fallback: i32) -> i32 {
         .read(key, fallback)
         .min(i32::MAX as u32) as i32
 }
-fn save(key: *const u16, value: i32) {
-    lock(&STAGE.get().unwrap().settings).save(key, value);
+fn save(key: *const u16, value: i32) -> bool {
+    lock(&STAGE.get().unwrap().settings).save(key, value)
 }
 unsafe extern "C" fn capture_get() -> i32 {
     (read(w!("MotionCapture"), 0) != 0).into()
 }
-unsafe extern "C" fn capture_set(value: i32) {
-    save(w!("MotionCapture"), (value != 0).into());
+unsafe extern "C" fn capture_set(value: i32) -> bool {
+    save(w!("MotionCapture"), (value != 0).into())
 }
 unsafe extern "C" fn start_get() -> i32 {
     read(w!("MotionCaptureStart"), 600)
 }
-unsafe extern "C" fn start_set(value: i32) {
-    save(w!("MotionCaptureStart"), value.max(0));
+unsafe extern "C" fn start_set(value: i32) -> bool {
+    save(w!("MotionCaptureStart"), value.max(0))
 }
 unsafe extern "C" fn count_get() -> i32 {
     read(w!("MotionCaptureCount"), 3).min(16)
 }
-unsafe extern "C" fn count_set(value: i32) {
-    save(w!("MotionCaptureCount"), value.clamp(0, 16));
+unsafe extern "C" fn count_set(value: i32) -> bool {
+    save(w!("MotionCaptureCount"), value.clamp(0, 16))
 }
 unsafe extern "C" fn interval_get() -> i32 {
     read(w!("MotionCaptureInterval"), 300).max(1)
 }
-unsafe extern "C" fn interval_set(value: i32) {
-    save(w!("MotionCaptureInterval"), value.max(1));
+unsafe extern "C" fn interval_set(value: i32) -> bool {
+    save(w!("MotionCaptureInterval"), value.max(1))
 }

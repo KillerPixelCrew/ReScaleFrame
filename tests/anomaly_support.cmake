@@ -32,26 +32,17 @@ target_link_libraries(rsf_anomaly_geometry_hooks_test PRIVATE rsf_anomaly_rust m
 add_test(NAME anomaly_geometry_hooks_contract COMMAND rsf_anomaly_geometry_hooks_test)
 set_tests_properties(anomaly_geometry_contract anomaly_geometry_hooks_contract PROPERTIES TIMEOUT 60)
 
-# Shared-overlay wiring for Anomaly. The gate test uses a synthetic IDirectInputDevice8A; the API test uses fake
-# Runtime tables; the hooks test drives the production start() against a WARP swap chain and the system
-# DirectInput mouse/keyboard (skips with 77 where those do not exist). None of them loads the real Runtime,
-# the panel or the game, so they establish contracts, not an in-game acceptance. All three link the production
-# Rust gate (games/anomaly/src/input.rs).
-set(RSF_ANOMALY_OVERLAY_SOURCES
+# Rust unit fixtures cover the input gate and overlay API contracts. This fixture uses the
+# Windows SDK to exercise the installed hooks through WARP and system DirectInput.
+add_executable(rsf_anomaly_overlay_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_hooks.cpp"
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_hooks.cpp"
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_service.cpp")
-foreach(overlay_test IN ITEMS input_gate api hooks)
-    add_executable(rsf_anomaly_overlay_${overlay_test}_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_${overlay_test}.cpp"
-        ${RSF_ANOMALY_OVERLAY_SOURCES})
-    target_include_directories(rsf_anomaly_overlay_${overlay_test}_test PRIVATE
-        "${PROJECT_SOURCE_DIR}/games/anomaly/src" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
-    target_link_libraries(rsf_anomaly_overlay_${overlay_test}_test PRIVATE
-        rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options)
-    add_test(NAME anomaly_overlay_${overlay_test}_contract COMMAND rsf_anomaly_overlay_${overlay_test}_test)
-    set_tests_properties(anomaly_overlay_${overlay_test}_contract PROPERTIES TIMEOUT 60)
-endforeach()
-target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE d3d11 dxgi dinput8 dxguid)
-set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES SKIP_RETURN_CODE 77)
+target_include_directories(rsf_anomaly_overlay_hooks_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/games/anomaly/src" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
+target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE
+    rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options d3d11 dxgi dinput8 dxguid)
+add_test(NAME anomaly_overlay_hooks_contract COMMAND rsf_anomaly_overlay_hooks_test)
+set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
 # SR Stage 0 site profile: compile-time consistency and runtime build selection. The guards are checked against the installed executable by
 # tests/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.
