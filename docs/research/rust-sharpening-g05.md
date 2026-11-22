@@ -156,6 +156,11 @@ Remaining G05 paths with implementation code are
   checks shader mode and entry point, view formats, descriptor and
   barrier order, constants, failure latching and resource retirement.
   The fake now keeps separate host memory per allocation.
+- `tests/sharpening_vulkan.cpp` was replaced by an offscreen Rust
+  Vulkan fixture. It loads the same System32 loader, selects a
+  graphics/compute queue, preserves the upload, dispatch and readback
+  sequence, and tests the same shader responses and three pre-submit
+  slots. It retains the skip behavior for missing loader or devices.
 
 The GPL HLSL, SPIR-V and `options.h` inputs match `82b39a63` byte for byte.
 The calculator and adaptive ramp in `options.h` are upstream-derived
