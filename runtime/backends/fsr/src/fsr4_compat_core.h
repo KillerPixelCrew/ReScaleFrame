@@ -12,11 +12,10 @@
 struct Fsr4Compatibility;
 using Fsr4Log = rsf_fsr4_compat_log_fn;
 
-const rsf_fsr4_compat_lease* rsf_fsr4_acquire_int8(HMODULE module, ID3D12Device* device,
-    Fsr4Log log, void* user);
+extern "C" const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire_native_device(
+    void* module, void* device, Fsr4Log log, void* user);
+
 // The caller has already matched this adapter to the graphics device. The lease outlives
 // the FFX context; the resident hook only changes capability answers for the leased device.
-const rsf_fsr4_compat_lease* rsf_fsr4_acquire_int8_adapter(HMODULE module,
-    IDXGIAdapter1* adapter, ID3D12Device* device, Fsr4Log log, void* user);
 std::shared_ptr<Fsr4Compatibility> rsf_fsr4_enable_int8_adapter(HMODULE module,
     IDXGIAdapter1* adapter, ID3D12Device* device, Fsr4Log log, void* user);

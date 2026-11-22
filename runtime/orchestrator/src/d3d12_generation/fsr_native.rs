@@ -455,19 +455,39 @@ unsafe extern "C" fn present_facts(raw: Raw, out: *mut PresentFacts) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fsr12_probe_native(checks: &Checks, setup: &Setup) -> u32 {
-    rsf_core_fsr12_probe(checks, setup, probe_versions)
+unsafe extern "C" fn rsf_core_fsr12_native_supported(
+    checks: *const Checks,
+    device: Raw,
+    directory: *const c_char,
+) -> u32 {
+    let Some(checks) = (unsafe { checks.as_ref() }) else {
+        return 0;
+    };
+    if device.is_null() || directory.is_null() || unsafe { directory.read() } == 0 {
+        return 0;
+    }
+    // The capability query uses only the runtime directory, device and separate FG major.
+    let mut setup: Setup = unsafe { std::mem::zeroed() };
+    setup.runtime_directory_utf8 = directory;
+    setup.chain.d3d12_device = device;
+    setup.feature_major = 4;
+    rsf_core_fsr12_probe(checks, &setup, probe_versions)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr12_create_native(
-    checks: &'static Checks,
-    capture: &'static CapturePlatform,
-    setup: *const Setup,
-    out: *mut Raw,
-    chain: *mut Raw,
-) -> i32 {
-    let ops = OPS.get_or_init(|| Ops {
+unsafe extern "C" fn rsf_core_fsr12_native_provider(
+    checks: *const Checks,
+    capture: *const CapturePlatform,
+) -> *const Provider {
+    static NATIVE_PROVIDER: Provider = Provider {
+        create: Some(create),
+        ..PROVIDER
+    };
+    let (Some(checks), Some(capture)) = (unsafe { checks.as_ref() }, unsafe { capture.as_ref() })
+    else {
+        return &DISABLED_PROVIDER;
+    };
+    OPS.get_or_init(|| Ops {
         check: checks,
         capture,
         sdk: &SDK,
@@ -490,5 +510,10 @@ unsafe extern "C" fn rsf_core_fsr12_create_native(
         copy,
         present_count,
     });
-    unsafe { rsf_core_fsr12_create(ops, setup, out, chain) }
+    &NATIVE_PROVIDER
+}
+
+unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
+    // The native table is published only after its operation table is set.
+    unsafe { rsf_core_fsr12_create(OPS.get().unwrap(), setup, out, chain) }
 }

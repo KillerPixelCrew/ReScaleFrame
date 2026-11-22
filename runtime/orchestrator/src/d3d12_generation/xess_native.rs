@@ -348,13 +348,15 @@ unsafe extern "C" fn present_status(bindings: Raw, context: Raw, out: *mut Prese
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xeg12_create_native(
-    checks: &'static Checks,
-    setup: *const Setup,
-    out: *mut Raw,
-    chain: *mut Raw,
-) -> i32 {
-    let ops = OPS.get_or_init(|| Ops {
+unsafe extern "C" fn rsf_core_xeg12_native_provider(checks: *const Checks) -> *const Provider {
+    static NATIVE_PROVIDER: Provider = Provider {
+        create: Some(create),
+        ..PROVIDER
+    };
+    let Some(checks) = (unsafe { checks.as_ref() }) else {
+        return &DISABLED_PROVIDER;
+    };
+    OPS.get_or_init(|| Ops {
         check: checks,
         resolve,
         close,
@@ -380,5 +382,10 @@ unsafe extern "C" fn rsf_core_xeg12_create_native(
         create_event,
         drain,
     });
-    unsafe { rsf_core_xeg12_create(ops, setup, out, chain) }
+    &NATIVE_PROVIDER
+}
+
+unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
+    // The native table is published only after its operation table is set.
+    unsafe { rsf_core_xeg12_create(OPS.get().unwrap(), setup, out, chain) }
 }

@@ -973,3 +973,6 @@ generate("tests/game-sdk/src/render_host_fixture_abi.rs", "tests/game-sdk/render
           "    callback_host_abi::rsf_callback_host_setup, render_host_abi::rsf_render_host_setup,\n"
           "    rsf_game_host_services, rsf_game_render_pass,\n};",
           "--raw-line", "type rsf_backend_result = i32;"])
+
+generate("runtime/orchestrator/src/ffx_version_abi.rs", "runtime/backends/fsr/src/ffx_version.h",
+         "rsf_ffx_version", "RSF_FFX_MAX_VERSIONS", [], ["--with-derive-default"])

@@ -13,6 +13,9 @@ use std::ptr::null_mut;
 use std::sync::Mutex;
 
 mod admission;
+mod disabled;
+
+use disabled::DISABLED_PROVIDER;
 mod fsr;
 mod xess;
 
@@ -507,7 +510,7 @@ unsafe extern "C" fn abort<S: Session>(session: Raw, id: u64) -> i32 {
 const fn provider<S: Session>() -> Provider {
     Provider {
         struct_size: size_of::<Provider>() as u32,
-        create: None, // The native entry binds the compiled SDK leaf table.
+        create: None, // The provider accessor supplies the native create entry.
         configure: Some(configure::<S>),
         begin_frame: Some(begin::<S>),
         marker: Some(marker::<S>),

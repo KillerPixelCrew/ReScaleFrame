@@ -5,16 +5,14 @@ use windows::{
     core::Interface,
 };
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4_compat_adapter_vendor(adapter: *mut c_void) -> u32 {
+pub(super) unsafe extern "C" fn rsf_fsr4_compat_adapter_vendor(adapter: *mut c_void) -> u32 {
     let Some(adapter) = (unsafe { IDXGIAdapter1::from_raw_borrowed(&adapter) }) else {
         return 0;
     };
     unsafe { adapter.GetDesc1() }.map_or(0, |desc| desc.VendorId)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4_compat_device_supports_int8(device: *mut c_void) -> bool {
+pub(super) unsafe extern "C" fn rsf_fsr4_compat_device_supports_int8(device: *mut c_void) -> bool {
     let Some(device) = (unsafe { ID3D12Device::from_raw_borrowed(&device) }) else {
         return false;
     };
@@ -42,19 +40,16 @@ unsafe extern "C" fn rsf_fsr4_compat_device_supports_int8(device: *mut c_void) -
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4_compat_retain_device(device: *mut c_void) {
+pub(super) unsafe extern "C" fn rsf_fsr4_compat_retain_device(device: *mut c_void) {
     let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.unwrap();
     let _ = device.clone().into_raw();
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4_compat_release_device(device: *mut c_void) {
+pub(super) unsafe extern "C" fn rsf_fsr4_compat_release_device(device: *mut c_void) {
     drop(unsafe { ID3D12Device::from_raw(device) });
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4_compat_acquire_device(
+pub(super) unsafe extern "C" fn rsf_fsr4_compat_acquire_device(
     platform: *const rsf_fsr4_compat_platform,
     module: *mut c_void,
     device: *mut c_void,

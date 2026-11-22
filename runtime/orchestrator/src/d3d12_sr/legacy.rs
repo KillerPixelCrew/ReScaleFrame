@@ -17,7 +17,6 @@ const NOT_READY: i32 = -8;
 const AMD: u32 = 3;
 const INTEL: u32 = 2;
 type OpenFn = unsafe extern "C" fn(*const Open, *mut Raw) -> i32;
-type EvalFn = unsafe extern "C" fn(Raw, Raw, *const Frame) -> i32;
 
 unsafe extern "C" fn probe<const FSR: bool, const COMPILED: bool>(
     desc: *const Probe,
@@ -122,13 +121,13 @@ const fn absent_sr<const FSR: bool>() -> Sr {
     }
 }
 
-fn compiled_sr<const FSR: bool>(open: OpenFn, evaluate: EvalFn) -> Sr {
+const fn compiled_sr<const FSR: bool>(open: OpenFn) -> Sr {
     Sr {
         struct_size: size_of::<Sr>() as u32,
         probe: Some(probe::<FSR, true>),
         open: Some(open),
         plan: Some(rsf_core_d3d12_sr_provider_plan),
-        evaluate: Some(evaluate),
+        evaluate: Some(rsf_core_d3d12_sr_provider_evaluate),
         release_resources: Some(rsf_core_d3d12_sr_provider_release),
         close: Some(rsf_core_d3d12_sr_provider_close),
         get_version: Some(rsf_core_d3d12_sr_provider_version),
@@ -151,24 +150,81 @@ const fn legacy_fg<const FSR: bool, const COMPILED: bool, const ERROR: i32>() ->
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_d3d12_sr_provider(
-    fsr: u32,
-    open: Option<OpenFn>,
-    evaluate: Option<EvalFn>,
-) -> *const Sr {
-    static FSR_DISABLED: Sr = absent_sr::<true>();
-    static XESS_DISABLED: Sr = absent_sr::<false>();
-    static FSR_ENABLED: OnceLock<Sr> = OnceLock::new();
-    static XESS_ENABLED: OnceLock<Sr> = OnceLock::new();
-    match (fsr != 0, open.zip(evaluate)) {
-        (true, Some((open, eval))) => FSR_ENABLED.get_or_init(|| compiled_sr::<true>(open, eval)),
-        (false, Some((open, eval))) => {
-            XESS_ENABLED.get_or_init(|| compiled_sr::<false>(open, eval))
-        }
-        (true, None) => &FSR_DISABLED,
-        (false, None) => &XESS_DISABLED,
+unsafe fn validate_open<'a>(desc: *const Open, out: *mut Raw) -> Result<&'a Open, i32> {
+    const ULTRA_QUALITY: u32 = 5;
+    const WRONG_API: i32 = -12;
+    let desc = unsafe { crate::sr_session::checked(desc) }.ok_or(INVALID)?;
+    if out.is_null()
+        || desc.device.is_null()
+        || desc.output_width == 0
+        || desc.output_height == 0
+        || desc.quality > ULTRA_QUALITY
+    {
+        return Err(INVALID);
     }
+    unsafe { out.write(null_mut()) };
+    if desc.abi_version != RSF_BACKEND_ABI_VERSION {
+        return Err(ABI_MISMATCH);
+    }
+    if desc.api != RSF_API_D3D12 {
+        return Err(WRONG_API);
+    }
+    Ok(desc)
+}
+
+unsafe extern "C" fn fsr_open_managed(desc: *const Open, out: *mut Raw) -> i32 {
+    let desc = match unsafe { validate_open(desc, out) } {
+        Ok(desc) => desc,
+        Err(result) => return result,
+    };
+    let Some(compatibility) = FSR_COMPATIBILITY.get() else {
+        return NOT_COMPILED;
+    };
+    fsr::open(desc, out, compatibility)
+}
+
+unsafe extern "C" fn fsr_open(desc: *const Open, out: *mut Raw) -> i32 {
+    let result = unsafe { fsr_open_managed(desc, out) };
+    if result == OK {
+        let desc = unsafe { &*desc };
+        if let Some(log) = desc.log {
+            let session = unsafe { &*(*out).cast::<Session>() };
+            unsafe { log(desc.log_user, session.version.name.as_ptr()) };
+        }
+    }
+    result
+}
+
+unsafe extern "C" fn xess_open(desc: *const Open, out: *mut Raw) -> i32 {
+    match unsafe { validate_open(desc, out) } {
+        Ok(desc) => xess::open(desc, out),
+        Err(result) => result,
+    }
+}
+
+static FSR_COMPATIBILITY: OnceLock<fsr::CompatibilityOps> = OnceLock::new();
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_d3d12_fsr_sr_provider(
+    managed: u32,
+    acquire: Option<fsr::Acquire>,
+    release: Option<fsr::Release>,
+) -> *const Sr {
+    static DISABLED: Sr = absent_sr::<true>();
+    static DIRECT: Sr = compiled_sr::<true>(fsr_open);
+    static MANAGED: Sr = compiled_sr::<true>(fsr_open_managed);
+    let Some((acquire, release)) = acquire.zip(release) else {
+        return &DISABLED;
+    };
+    let _ = FSR_COMPATIBILITY.set(fsr::CompatibilityOps { acquire, release });
+    if managed != 0 { &MANAGED } else { &DIRECT }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_d3d12_xess_sr_provider(compiled: u32) -> *const Sr {
+    static DISABLED: Sr = absent_sr::<false>();
+    static ENABLED: Sr = compiled_sr::<false>(xess_open);
+    if compiled != 0 { &ENABLED } else { &DISABLED }
 }
 
 #[unsafe(no_mangle)]

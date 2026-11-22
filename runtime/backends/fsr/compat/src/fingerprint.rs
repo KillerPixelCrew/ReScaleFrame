@@ -14,8 +14,7 @@ use windows::{
 
 type HashFile = unsafe extern "C" fn(*const u16, u32, *mut u8) -> u32;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4_compat_module_digest(
+pub(super) unsafe extern "C" fn rsf_fsr4_compat_module_digest(
     module: *mut c_void,
     sizes: *const u32,
     size_count: usize,
@@ -57,8 +56,7 @@ unsafe extern "C" fn rsf_fsr4_compat_module_digest(
     true
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4_compat_match_entry(
+pub(super) unsafe extern "C" fn rsf_fsr4_compat_match_entry(
     module: *mut c_void,
     rva: usize,
     expected: *const u8,

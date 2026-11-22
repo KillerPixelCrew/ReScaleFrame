@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Shared D3D12 SR provider owners. Native leaves keep the vendor types and COM calls.
+//! D3D12 SR provider owners, loader policy and resource admission.
 use crate::allocate_handle;
 use crate::ffx_version::{MAX_VERSIONS, Version as ProviderVersion};
 use crate::render_abi::{rsf_sr_frame as Frame, rsf_sr_open_desc as Open};
@@ -17,20 +17,6 @@ mod xess;
 
 type Raw = *mut c_void;
 type Extent = [u32; 2];
-type Load = unsafe extern "C" fn(*const Open) -> Raw;
-type ValidateFrame = unsafe extern "C" fn(*const Frame) -> i32;
-type ValidateResources = unsafe extern "C" fn(*const Frame, Raw) -> i32;
-static VALIDATION: std::sync::OnceLock<(ValidateFrame, ValidateResources)> =
-    std::sync::OnceLock::new();
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_d3d12_sr_bind_validation(
-    frame: ValidateFrame,
-    resources: ValidateResources,
-) {
-    let _ = VALIDATION.set((frame, resources));
-}
-
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const LOAD_FAILED: i32 = -4;
@@ -125,10 +111,7 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_evaluate(
     commands: Raw,
     frame: *const Frame,
 ) -> i32 {
-    let Some(&(validate_frame, validate_resources)) = VALIDATION.get() else {
-        return INVALID;
-    };
-    let result = unsafe { validate_frame(frame) };
+    let result = unsafe { crate::sr_session::rsf_core_validate_sr_frame(frame) };
     if result != OK {
         return result;
     }
@@ -136,11 +119,11 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_evaluate(
         return INVALID;
     }
     let session = session.cast::<Session>();
-    let result = unsafe { validate_resources(frame, (*session).device) };
+    let frame = unsafe { &*frame };
+    let result = validate_resources(unsafe { (*session).device }, frame);
     if result != OK {
         return result;
     }
-    let frame = unsafe { &*frame };
     match unsafe { &mut (*session).backend } {
         Backend::Fsr(owner) => owner.evaluate(commands, frame),
         Backend::Xess(owner) => owner.evaluate(commands, frame),
@@ -209,4 +192,108 @@ pub(super) unsafe fn query_d3d12(
         *version = unsafe { from_sdk(id, name) };
     }
     Some(versions)
+}
+
+pub(super) fn validate_resources(device: Raw, frame: &Frame) -> i32 {
+    use windows::Win32::Graphics::Direct3D12::*;
+    use windows::core::Interface;
+    let record = unsafe { &*frame.record };
+    let render = [record.render_width, record.render_height];
+    let output = [record.output_width, record.output_height];
+    for (binding, size, state) in [
+        (
+            &frame.color,
+            render,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        ),
+        (
+            &frame.depth,
+            render,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        ),
+        (
+            &frame.motion,
+            render,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        ),
+        (&frame.output, output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        (
+            &frame.exposure,
+            [1, 1],
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        ),
+        (
+            &frame.reactive,
+            render,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        ),
+        (
+            &frame.transparency,
+            render,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        ),
+    ] {
+        let Some(resource) = (unsafe { ID3D12Resource::from_raw_borrowed(&binding.resource) })
+        else {
+            continue;
+        };
+        let desc = unsafe { resource.GetDesc() };
+        if !crate::d3d12_host::owned_by(resource, device)
+            || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+            || desc.Width < u64::from(size[0])
+            || desc.Height < size[1]
+            || desc.DepthOrArraySize != 1
+            || desc.SampleDesc.Count != 1
+            || binding.state != state.0 as u32
+        {
+            return INVALID;
+        }
+    }
+    if frame.color.resource == frame.output.resource {
+        INVALID
+    } else {
+        OK
+    }
+}
+
+fn load_runtime(desc: &Open, name: &str) -> Option<SdkModule> {
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::System::LibraryLoader::{
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+    };
+
+    if desc.runtime_directory_utf8.is_null() {
+        return None;
+    }
+    let directory = unsafe { std::ffi::CStr::from_ptr(desc.runtime_directory_utf8) }
+        .to_str()
+        .ok()?;
+    const COLON: u16 = b':' as u16;
+    const SLASH: u16 = b'/' as u16;
+    const BACKSLASH: u16 = b'\\' as u16;
+    let mut wide: Vec<u16> = directory.encode_utf16().take(1024).collect();
+    if wide.len() == 1024
+        || !matches!(
+            wide.as_slice(),
+            [_, COLON, BACKSLASH | SLASH, ..] | [BACKSLASH, BACKSLASH, ..]
+        )
+    {
+        return None;
+    }
+    wide.push(BACKSLASH);
+    wide.extend(name.encode_utf16().chain([0]));
+    let module = unsafe {
+        LoadLibraryExW(
+            wide.as_ptr(),
+            null_mut(),
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    };
+    if module.is_null() {
+        let error = unsafe { GetLastError() };
+        crate::input_dump::Log::new(desc.log, desc.log_user).say(&format!(
+            "could not load {directory}\\{name} (Windows error {error})"
+        ));
+    }
+    SdkModule::adopt_system(module)
 }

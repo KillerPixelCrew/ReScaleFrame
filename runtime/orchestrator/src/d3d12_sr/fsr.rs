@@ -8,15 +8,14 @@ use super::ffx_abi::*;
 
 const FFX_OK: u32 = FFX_API_RETURN_OK as u32;
 
-// Windows-specific operations and the guarded INT8 compatibility lease.
-#[repr(C)]
-struct Ops {
-    load: Load,
-    acquire_compatibility: unsafe extern "C" fn(Raw, *const Open) -> *const c_void,
-    release_compatibility: unsafe extern "C" fn(*const c_void),
-}
+pub(super) type Acquire =
+    unsafe extern "C" fn(Raw, Raw, crate::render_abi::rsf_backend_log_fn, Raw) -> *const c_void;
+pub(super) type Release = unsafe extern "C" fn(*const c_void);
 
-const _: () = assert!(size_of::<Ops>() == 3 * size_of::<Raw>());
+pub(super) struct CompatibilityOps {
+    pub acquire: Acquire,
+    pub release: Release,
+}
 
 struct Sdk {
     create: PfnFfxCreateContext,
@@ -28,8 +27,8 @@ struct Sdk {
 }
 
 impl Sdk {
-    fn open(desc: &Open, ops: &Ops) -> Result<Self, i32> {
-        let module = SdkModule::adopt_system(unsafe { (ops.load)(desc) }).ok_or(LOAD_FAILED)?;
+    fn open(desc: &Open, ops: &CompatibilityOps) -> Result<Self, i32> {
+        let module = load_runtime(desc, "amd_fidelityfx_upscaler_dx12.dll").ok_or(LOAD_FAILED)?;
         let [create, destroy, query, dispatch] =
             crate::sdk_module::FFX_CONTEXT_EXPORTS.map(|name| module.symbol(name));
         if [create, destroy, query, dispatch]
@@ -39,10 +38,11 @@ impl Sdk {
             return Err(MISSING_ENTRY);
         }
         let compatibility = if desc.fsr_major == 4 {
-            let handle = unsafe { (ops.acquire_compatibility)(module.as_ptr(), desc) };
+            let handle =
+                unsafe { (ops.acquire)(module.as_ptr(), desc.device, desc.log, desc.log_user) };
             NonNull::new(handle.cast_mut()).map(|handle| Compatibility {
                 handle,
-                release: ops.release_compatibility,
+                release: ops.release,
             })
         } else {
             None
@@ -96,7 +96,7 @@ pub(super) struct Owner {
 }
 
 impl Owner {
-    fn open(desc: &Open, ops: &'static Ops) -> Result<(Backend, Version), i32> {
+    fn open(desc: &Open, ops: &CompatibilityOps) -> Result<(Backend, Version), i32> {
         // The SDK may retain the chained descriptions until context destruction.
         let description = crate::allocate_handle(CreateDescription::default());
         if description.is_null() {
@@ -317,12 +317,7 @@ impl Drop for Owner {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d12_sr_provider_fsr_open(
-    desc: &Open,
-    out: *mut Raw,
-    ops: &'static Ops,
-) -> i32 {
+pub(super) fn open(desc: &Open, out: *mut Raw, ops: &CompatibilityOps) -> i32 {
     if !(2..=4).contains(&desc.fsr_major) {
         return INVALID;
     }

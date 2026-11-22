@@ -1,22 +1,10 @@
 // SPDX-License-Identifier: MIT
 use std::ffi::c_char;
 
-pub(super) const MAX_VERSIONS: usize = 32;
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub(super) struct Version {
-    pub id: u64,
-    pub name: *const c_char,
-    pub major: u32,
-    pub minor: u32,
-    pub patch: u32,
-}
-
-const _: () = {
-    assert!(size_of::<Version>() == 32);
-    assert!(std::mem::offset_of!(Version, major) == 16);
-};
+#[path = "ffx_version_abi.rs"]
+mod abi;
+pub(super) use abi::rsf_ffx_version as Version;
+pub(super) const MAX_VERSIONS: usize = abi::RSF_FFX_MAX_VERSIONS as usize;
 
 pub(super) fn select(versions: &[Version], major: u32, wanted: u64) -> Option<&Version> {
     let mut best: Option<&Version> = None;
@@ -44,6 +32,11 @@ pub(super) fn admitted(versions: &[Version], major: u32, wanted: u64) -> Option<
 #[cfg(windows)]
 #[allow(dead_code)] // The standalone Vulkan SR archive also includes this module.
 pub(super) unsafe fn from_sdk(id: u64, name: *const c_char) -> Version {
+    unsafe { parse_sdk(id, name) }.0
+}
+
+#[cfg(windows)]
+pub(super) unsafe fn parse_sdk(id: u64, name: *const c_char) -> (Version, bool) {
     let mut version = Version {
         id,
         name,
@@ -53,9 +46,10 @@ pub(super) unsafe fn from_sdk(id: u64, name: *const c_char) -> Version {
         let text = unsafe { std::ffi::CStr::from_ptr(name) }.to_bytes();
         if let Some([major, minor, patch]) = version_components(text) {
             (version.major, version.minor, version.patch) = (major, minor, patch);
+            return (version, true);
         }
     }
-    version
+    (version, false)
 }
 
 #[cfg(windows)]

@@ -29,8 +29,8 @@ struct Sdk {
 }
 
 impl Sdk {
-    fn open(desc: &Open, load: Load) -> Result<Self, i32> {
-        let module = SdkModule::adopt_system(unsafe { load(desc) }).ok_or(LOAD_FAILED)?;
+    fn open(desc: &Open) -> Result<Self, i32> {
+        let module = load_runtime(desc, "libxess.dll").ok_or(LOAD_FAILED)?;
         macro_rules! entry {
             ($name:literal, $signature:ty) => {{
                 let symbol = module.symbol($name).ok_or(MISSING_ENTRY)?;
@@ -106,8 +106,8 @@ pub(super) struct Owner {
 }
 
 impl Owner {
-    fn open(desc: &Open, output: Extent, load: Load) -> Result<(Backend, Version), i32> {
-        let sdk = Sdk::open(desc, load)?;
+    fn open(desc: &Open, output: Extent) -> Result<(Backend, Version), i32> {
+        let sdk = Sdk::open(desc)?;
         let mut owner = Self {
             sdk,
             context: null_mut(),
@@ -245,11 +245,6 @@ impl Drop for Owner {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d12_sr_provider_xess_open(
-    desc: &Open,
-    out: *mut Raw,
-    load: Load,
-) -> i32 {
-    open_session(desc, out, |output| Owner::open(desc, output, load))
+pub(super) fn open(desc: &Open, out: *mut Raw) -> i32 {
+    open_session(desc, out, |output| Owner::open(desc, output))
 }
