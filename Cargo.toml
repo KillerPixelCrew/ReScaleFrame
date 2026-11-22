@@ -8,6 +8,7 @@ members = [
   "runtime/common",
   "runtime/contract",
   "runtime/orchestrator",
+  "runtime/shader_patch/compiler",
   "sdk/game",
   "games/ac7",
   "games/anomaly",

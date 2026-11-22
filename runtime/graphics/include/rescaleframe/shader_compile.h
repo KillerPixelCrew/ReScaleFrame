@@ -1,28 +1,19 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
-/* One HLSL compile, header-only so a module that does not link rsf_graphics (the AC7 render scope)
-   can use it too.
-
-   d3dcompiler_47 is loaded from System32 on each call rather than linked, because the callers sit in
-   injected modules where the game's own search path must not decide which compiler runs. The
-   bytecode comes back as a copy: the blobs live in the compiler's heap and vtables, so both are
-   released before the module is freed, and nothing handed to the caller depends on it staying
-   loaded.
-
-   Flags are the caller's choice and have always differed: D3DCOMPILE_ENABLE_STRICTNESS for most
-   passes (the default here), 0 where a shader leans on legacy behaviour the strict mode rejects.
-   The default is the right start for new shaders. */
+/* C++ compatibility wrappers. Rust owns System32 compiler loading and blob lifetimes. */
 #include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <string>
-#include <type_traits>
 #include <vector>
 #include <rescaleframe/log.h>
+
+extern "C" int32_t rsf_compile_system_shader(const uint8_t*, size_t, const char*, const char*,
+    const char*, uint32_t, void*, int32_t (*)(void*, const uint8_t*, size_t),
+    int32_t (*)(void*, const uint8_t*, size_t));
 
 namespace rsf {
 inline bool compile_shader(const char* source, size_t length, const char* name, const char* entry,
@@ -31,31 +22,30 @@ inline bool compile_shader(const char* source, size_t length, const char* name, 
                            UINT flags = D3DCOMPILE_ENABLE_STRICTNESS)
 {
     bytecode.clear();
-    auto unload = [](HMODULE handle) { FreeLibrary(handle); };
-    using Module = std::unique_ptr<std::remove_pointer_t<HMODULE>, decltype(unload)>;
-    const Module module(LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32),
-                        unload);
-    if (!module) {
+    struct Reply {
+        std::vector<uint8_t>& code;
+        std::string errors;
+    } reply{bytecode, {}};
+    const auto result = rsf_compile_system_shader(reinterpret_cast<const uint8_t*>(source), length,
+        name, entry, profile, flags, &reply,
+        [](void* user, const uint8_t* data, size_t size) noexcept -> int32_t {
+            try { static_cast<Reply*>(user)->code.assign(data, data + size); }
+            catch (...) { return -1; }
+            return 0;
+        },
+        [](void* user, const uint8_t* data, size_t size) noexcept -> int32_t {
+            try { static_cast<Reply*>(user)->errors.assign(reinterpret_cast<const char*>(data), size); }
+            catch (...) { return -1; }
+            return 0;
+        });
+    if (result == 0) return true;
+    if (result == 1) {
         say(log, user, "shader %s: d3dcompiler_47 is not available", name);
-        return false;
-    }
-    using Compile = decltype(&D3DCompile);
-    const auto compile = reinterpret_cast<Compile>(reinterpret_cast<void*>(GetProcAddress(module.get(), "D3DCompile")));
-    if (!compile) return false;
-
-    // Both blobs must release before the compiler DLL, including if the copy throws.
-    Microsoft::WRL::ComPtr<ID3DBlob> code, errors;
-    const HRESULT result = compile(source, length, name, nullptr, nullptr, entry, profile, flags, 0,
-                                   code.GetAddressOf(), errors.GetAddressOf());
-    if (FAILED(result) || !code) {
+    } else if (result < 0) {
         say(log, user, "shader %s (%s): compile failed 0x%08lx %s", name, entry,
-            static_cast<unsigned long>(result),
-            errors ? static_cast<const char*>(errors->GetBufferPointer()) : "");
-        return false;
+            static_cast<unsigned long>(static_cast<uint32_t>(result)), reply.errors.c_str());
     }
-    const auto* data = static_cast<const uint8_t*>(code->GetBufferPointer());
-    bytecode.assign(data, data + code->GetBufferSize());
-    return true;
+    return false;
 }
 inline bool compile_shader(const char* source, const char* name, const char* entry, const char* profile,
                            std::vector<uint8_t>& bytecode, void (*log)(void*, const char*) = nullptr,

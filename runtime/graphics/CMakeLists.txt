@@ -1,3 +1,4 @@
+rsf_add_rust_static(rsf_shader_compiler rsf_shader_compiler_build rsf-shader-compiler rsf_shader_compiler)
 add_library(rsf_graphics STATIC
     src/texture_dump.cpp
     src/motion_decode.cpp
@@ -23,7 +24,7 @@ target_sources(rsf_graphics PRIVATE src/d3d12_observer.cpp)
 target_include_directories(rsf_graphics PUBLIC "${CMAKE_SOURCE_DIR}/ui/overlay/include")
 target_include_directories(rsf_graphics PUBLIC include)
 target_link_libraries(rsf_graphics PRIVATE rsf_build_options)
-target_link_libraries(rsf_graphics PUBLIC d3d11 d3d12 dxgi)
+target_link_libraries(rsf_graphics PUBLIC d3d11 d3d12 dxgi rsf_shader_compiler)
 target_link_libraries(rsf_graphics PRIVATE windowscodecs ole32 psapi)
 target_link_libraries(rsf_graphics PRIVATE minhook)
 # The D3D12 observer supplies native leaves to the Rust owner.
