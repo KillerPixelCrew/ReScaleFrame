@@ -60,12 +60,12 @@ pub(super) fn camera_constants(
 pub(super) fn with_previous_to_clip(
     constants: &rsf_slvk_sdk_constants,
 ) -> Option<rsf_slvk_sdk_constants> {
-    let (inverse, determinant) = xm::inverse(&constants.clip_to_previous);
+    let (inverse, determinant) = xm::inverse(&xm::load(&constants.clip_to_previous));
     if !determinant.is_finite() || determinant.abs() < 1e-12 {
         return None;
     }
     Some(rsf_slvk_sdk_constants {
-        previous_to_clip: inverse,
+        previous_to_clip: xm::flatten(&inverse),
         ..*constants
     })
 }

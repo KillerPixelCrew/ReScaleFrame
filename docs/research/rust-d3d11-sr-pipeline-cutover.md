@@ -140,7 +140,7 @@ and `dlss_native12/sdk.rs` the D3D12 table, replacing the two C++ platform table
 signatures the Rust owners already used, so the session, registration and fixture code did not
 change. The private payload records (`rsf_sl_sr_*`) never crossed a language boundary after this,
 so `streamline_sr_payload.h`, its bindgen output and Codex's unfinished additions to both were
-removed in favour of plain Rust types in `streamline_sr.rs`. `dlss_native12/xm.rs` is the
+removed in favour of plain Rust types in `streamline_sr.rs`. `sdk/game/src/xm.rs` is the
 scalar transcription of the SSE `XMMatrixInverse` the Fallout 4 adapter already pins, kept as a
 copy so the D3D12 singularity gate keeps bit-identical inverse and determinant values.
 

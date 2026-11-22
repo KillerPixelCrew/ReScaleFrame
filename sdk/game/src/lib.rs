@@ -35,3 +35,4 @@ pub mod vendor_paths;
 #[cfg(windows)]
 pub mod win32;
 pub mod windows_path;
+pub mod xm;

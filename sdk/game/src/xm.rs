@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: MIT
 // DirectXMath-derived operations Copyright (c) Microsoft Corporation.
 // See the repository LICENSE for the MIT terms.
-//! Scalar transcription of the DirectXMath matrix operations the Fallout 4 camera uses.
+//! Scalar transcription of the DirectXMath matrix operations the Fallout 4 camera and the SR
+//! singularity gate use.
 //!
-//! The former camera.cpp included the Windows SDK 10.0.26100 DirectXMath 3.20 headers. The
-//! adapter builds for x64 without `/arch`, so `_XM_SSE_INTRINSICS_` is the only path: no FMA3,
+//! The former native code included the Windows SDK 10.0.26100 DirectXMath 3.20 headers. Both
+//! builds for x64 without `/arch`, so `_XM_SSE_INTRINSICS_` is the only path: no FMA3,
 //! no SSE3 `hadd` and no SSE4 `dp`. Each SSE lane is one IEEE single operation, so performing
 //! the same operations on the same lanes in the same order reproduces every result bit for bit.
 //! The bodies below follow `XMMatrixMultiply`, `XMMatrixInverse` and `XMVector4Dot` line by line;
 //! `shuffle` takes its indices in `_MM_SHUFFLE(fp3, fp2, fp1, fp0)` order.
 
-pub(crate) type Vector = [f32; 4];
+pub type Vector = [f32; 4];
 /// Four rows, the `XMMATRIX` layout. Points are row vectors.
-pub(crate) type Matrix = [Vector; 4];
+pub type Matrix = [Vector; 4];
 
 /// `_mm_shuffle_ps(a, b, _MM_SHUFFLE(fp3, fp2, fp1, fp0))`.
 fn shuffle(a: Vector, b: Vector, [fp3, fp2, fp1, fp0]: [usize; 4]) -> Vector {
@@ -46,16 +47,16 @@ fn fnmadd(a: Vector, b: Vector, c: Vector) -> Vector {
 }
 
 /// `XMLoadFloat4x4`.
-pub(crate) fn load(values: &[f32; 16]) -> Matrix {
+pub fn load(values: &[f32; 16]) -> Matrix {
     std::array::from_fn(|row| std::array::from_fn(|column| values[row * 4 + column]))
 }
 
 /// `XMStoreFloat4x4`.
-pub(super) fn flatten(matrix: &Matrix) -> [f32; 16] {
+pub fn flatten(matrix: &Matrix) -> [f32; 16] {
     std::array::from_fn(|index| matrix[index / 4][index % 4])
 }
 
-pub(super) const IDENTITY: Matrix = [
+pub const IDENTITY: Matrix = [
     [1.0, 0.0, 0.0, 0.0],
     [0.0, 1.0, 0.0, 0.0],
     [0.0, 0.0, 1.0, 0.0],
@@ -63,12 +64,12 @@ pub(super) const IDENTITY: Matrix = [
 ];
 
 /// `XMMatrixTranslation`.
-pub(crate) fn translation(x: f32, y: f32, z: f32) -> Matrix {
+pub fn translation(x: f32, y: f32, z: f32) -> Matrix {
     [IDENTITY[0], IDENTITY[1], IDENTITY[2], [x, y, z, 1.0]]
 }
 
 /// `XMMatrixMultiply(a, b)`, the SSE path: `(x*b0 + z*b2) + (y*b1 + w*b3)` per row.
-pub(crate) fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
+pub fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
     a.map(|row| {
         let x = mul(permute(row, [0, 0, 0, 0]), b[0]);
         let y = mul(permute(row, [1, 1, 1, 1]), b[1]);
@@ -91,7 +92,7 @@ fn dot4(v1: Vector, v2: Vector) -> Vector {
 
 /// `XMMatrixInverse(&determinant, m)`, the SSE path. Returns the result and the X lane of the
 /// determinant. Like DirectXMath it never refuses: a zero determinant yields infinities or NaN.
-pub(super) fn inverse(m: &Matrix) -> (Matrix, f32) {
+pub fn inverse(m: &Matrix) -> (Matrix, f32) {
     let temp1 = shuffle(m[0], m[1], [1, 0, 1, 0]);
     let temp3 = shuffle(m[0], m[1], [3, 2, 3, 2]);
     let temp2 = shuffle(m[2], m[3], [1, 0, 1, 0]);

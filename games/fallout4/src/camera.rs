@@ -8,7 +8,7 @@
 //! with a 1e-12 pivot floor, which moves both the refusal boundary and the results.
 //! All scalar work keeps the C++ types: f32 for the camera and raster, f64 for the depth bound.
 
-pub(crate) mod xm;
+pub(crate) use rsf_game_sys::xm;
 
 pub(crate) use crate::sys::{CameraRaster, NativeCamera};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};

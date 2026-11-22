@@ -1,7 +1,7 @@
 # Fallout 4 camera math in Rust
 
 This note covers moving `games/fallout4/src/camera.cpp` into the `rsf-fallout4` crate
-(`src/camera.rs`, `src/camera/xm.rs`). It is a source port from base `9260a14`. Nothing was built,
+(`src/camera.rs`, `sdk/game/src/xm.rs`). It is a source port from base `9260a14`. Nothing was built,
 compiled, linked or tested for it, and no game, device or window run was made. The camera
 semantics it preserves are recorded in [fallout4-depth-domains-20261116.md](fallout4-depth-domains-20261116.md)
 and [fallout4-native-inputs-20261116.md](fallout4-native-inputs-20261116.md).
@@ -15,7 +15,7 @@ and [fallout4-native-inputs-20261116.md](fallout4-native-inputs-20261116.md).
 | `camera_depth_domain_forward` | `depth_domain_forward` | f64 clip-box forward-W bound with one D24 step, `> 1e-6` admission, bound kept on refusal |
 | `camera_composed_view_depth` | `composed_view_depth` | output cleared before inputs are read, exact forward-perspective form, both inverses required |
 | `camera_frame` | `frame` | projection recovery from rotation-only V and unjittered VP, 0.0005 relative cache tolerance, jitter from the actual projection in actual raster units, 2 px jitter limit, crop composition, origin-relative world/view, reprojection and history |
-| DirectXMath | `camera/xm.rs` | `XMMatrixMultiply`, `XMMatrixInverse`, `XMVector4Dot`, `XMMatrixTranslation`, load/store |
+| DirectXMath | `sdk/game/src/xm.rs` | `XMMatrixMultiply`, `XMMatrixInverse`, `XMVector4Dot`, `XMMatrixTranslation`, load/store |
 
 `camera.h` keeps its structures, comments and C++ signatures, including the default raster
 arguments. The functions are now inline wrappers over five `rsf_fallout4_camera_*` exports, and

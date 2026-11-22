@@ -261,8 +261,8 @@ unsafe extern "C" fn token(handle: Handle, index: u32, out: &mut Handle) -> i32 
 
 // The determinant and inverse follow DirectXMath so the SR singularity gate keeps its numerics.
 unsafe extern "C" fn inverse(matrix: &[f32; 16], out: &mut [f32; 16]) -> f32 {
-    let (inverted, determinant) = super::xm::inverse(matrix);
-    *out = inverted;
+    let (inverted, determinant) = super::xm::inverse(&super::xm::load(matrix));
+    *out = super::xm::flatten(&inverted);
     determinant
 }
 

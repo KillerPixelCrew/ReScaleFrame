@@ -28,7 +28,7 @@ merging the two is a follow-up.
 The C++ leaves copied each wire record into a constructed SDK object with `memcpy`, so passing the
 wire record directly is byte-identical. The determinant gate on `clip_to_previous` keeps the
 DirectXMath rule (`XMMatrixInverse`, nonfinite or below 1e-12 refused) through the bit-exact
-transcription in `dlss_native12/xm.rs`, now shared with the Vulkan leaves instead of a third copy.
+transcription in `sdk/game/src/xm.rs`, now shared with the Vulkan leaves instead of a third copy.
 
 The production tables stay in C (`native_dlss_vulkan.c`, `native_fg_dlss_vulkan.c`) so that the
 Rust leaves reference no symbol outside the orchestrator crate. The tables add the session invoke
