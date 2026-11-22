@@ -32,6 +32,7 @@ pub mod checksum;
 pub mod dpi;
 pub mod dxbc_chunks;
 pub mod ffi_util;
+pub mod fg_reasons;
 pub mod pe32_plus;
 mod frame_policy;
 pub use frame_policy::*;

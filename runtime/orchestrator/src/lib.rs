@@ -157,8 +157,7 @@ mod fg_dispatch;
 #[cfg(windows)]
 mod fg_leases;
 #[cfg(windows)]
-#[path = "../../../ui/overlay/src/fg_reasons.rs"]
-mod fg_reasons;
+use rsf_game_sys::fg_reasons;
 #[cfg(windows)]
 mod fg_scene;
 #[cfg(windows)]

@@ -24,7 +24,7 @@
 
 pub mod abi;
 pub mod ffi;
-mod fg_reasons;
+use rsf_game_sys::fg_reasons;
 pub mod model;
 mod overlay;
 mod panel;

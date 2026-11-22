@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-use std::ffi::CStr;
+//! Panel text for the native FG deferral reasons, shared by the Runtime and the overlay.
+use core::ffi::CStr;
 
-use rsf_game_sys::*;
+use crate::*;
 
-pub(crate) fn description(reason: u32) -> Option<&'static CStr> {
+pub fn description(reason: u32) -> Option<&'static CStr> {
     Some(match reason {
         RSF_NATIVE_FG_REASON_NONE => return None,
         RSF_NATIVE_FG_REASON_NO_MATCH => c"Waiting for a matching scene and window",
@@ -18,7 +19,7 @@ pub(crate) fn description(reason: u32) -> Option<&'static CStr> {
     })
 }
 
-pub(crate) fn text(reason: u32) -> Option<&'static str> {
+pub fn text(reason: u32) -> Option<&'static str> {
     description(reason).map(|text| text.to_str().expect("static FG reason text"))
 }
 
