@@ -31,8 +31,4 @@ if(EXISTS "${RSF_XESS_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" AND
     target_compile_definitions(rsf_xess PRIVATE RSF_HAVE_XESS_FG=1)
 endif()
 
-if(EXISTS "${RSF_XESS_INCLUDE}/xess/xess.h" OR
-   (EXISTS "${RSF_XESS_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" AND
-    EXISTS "${RSF_XESS_INCLUDE}/xell/xell_d3d12.h"))
-    target_link_libraries(rsf_xess PRIVATE rsf_orchestrator_rust)
-endif()
+target_link_libraries(rsf_xess PRIVATE rsf_orchestrator_rust)

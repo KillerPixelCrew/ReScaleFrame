@@ -12,6 +12,7 @@ use std::ptr::null_mut;
 pub(crate) mod ffx_abi;
 pub(super) mod ffx_resource;
 mod fsr;
+mod legacy;
 mod xess;
 
 type Raw = *mut c_void;
