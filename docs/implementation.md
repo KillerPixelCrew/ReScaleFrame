@@ -3035,6 +3035,14 @@ review covered the typed vtable, guarded private dispatch and D08's
 existing resize path. Native builds, detour entry inspection and device
 verification are pending. [Native facade evidence](research/rust-d3d11-present-cutover.md#native-facade-continuation)
 
+The D02 factory and fixture continuation moved swapchain descriptor
+translation, plain physical-chain creation and D3D12 synchronization
+leaves into typed Rust code. The linked device fixtures use Rust for
+marker and command-list sequencing, FG resource recording and the
+switch schedule. Native device runners and the remaining vendor and
+factory thunks remain. Source checks are recorded separately from
+build and device verification. [Factory and fixture evidence](research/rust-d3d11-present-cutover.md#factory-and-device-fixture-continuation)
+
 The scoped owner check now queries the caller's live COM receiver for
 its canonical identity and compares that address with the published
 facade. It rechecks publication after the query. The synthetic scoped

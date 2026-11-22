@@ -1,0 +1,387 @@
+// SPDX-License-Identifier: MIT
+//! Typed command recording for the linked FG fixture. The native harness owns
+//! its vendor callbacks and the present and retirement order of those commands.
+use rsf_game_sys::{
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_SCREEN_FLIGHT, rsf_camera_frame,
+    rsf_frame_record,
+};
+use std::ffi::c_void;
+use std::mem::ManuallyDrop;
+use windows::Win32::Foundation::RECT;
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::core::Interface;
+
+type Raw = *mut c_void;
+
+unsafe fn borrow<T: Interface>(value: &Raw) -> &T {
+    unsafe { T::from_raw_borrowed(value) }.unwrap()
+}
+
+unsafe fn resource_ref(raw: Raw) -> ManuallyDrop<Option<ID3D12Resource>> {
+    ManuallyDrop::new(Some(unsafe { ID3D12Resource::from_raw(raw) }))
+}
+
+unsafe fn barrier(
+    list: &ID3D12GraphicsCommandList,
+    resource: Raw,
+    from: D3D12_RESOURCE_STATES,
+    to: D3D12_RESOURCE_STATES,
+) {
+    let transition = D3D12_RESOURCE_BARRIER {
+        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                pResource: unsafe { resource_ref(resource) },
+                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                StateBefore: from,
+                StateAfter: to,
+            }),
+        },
+    };
+    unsafe { list.ResourceBarrier(&[transition]) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_barrier(list: Raw, resource: Raw, from: u32, to: u32) {
+    let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&list) };
+    unsafe {
+        barrier(
+            list,
+            resource,
+            D3D12_RESOURCE_STATES(from as i32),
+            D3D12_RESOURCE_STATES(to as i32),
+        )
+    };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_inputs(
+    list: Raw,
+    depth: Raw,
+    motion: Raw,
+    cpu_heap: Raw,
+    gpu_heap: Raw,
+    stride: u32,
+) {
+    let commands = unsafe { borrow::<ID3D12GraphicsCommandList>(&list) };
+    unsafe { (commands.vtable().SetDescriptorHeaps)(list, 1, &gpu_heap) };
+    let mut cpu =
+        unsafe { borrow::<ID3D12DescriptorHeap>(&cpu_heap).GetCPUDescriptorHandleForHeapStart() };
+    let mut gpu =
+        unsafe { borrow::<ID3D12DescriptorHeap>(&gpu_heap).GetGPUDescriptorHandleForHeapStart() };
+    for texture in [depth, motion] {
+        unsafe {
+            barrier(
+                commands,
+                texture,
+                D3D12_RESOURCE_STATE_COMMON,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            );
+            commands.ClearUnorderedAccessViewFloat(
+                gpu,
+                cpu,
+                borrow::<ID3D12Resource>(&texture),
+                &[0.5, 0.0, 0.0, 0.0],
+                &[],
+            );
+            barrier(
+                commands,
+                texture,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            );
+        }
+        cpu.ptr += stride as usize;
+        gpu.ptr += u64::from(stride);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_frame(
+    backbuffer: Raw,
+    depth: Raw,
+    source: u64,
+    input_qpc: u64,
+    phase: u32,
+    out: *mut rsf_frame_record,
+) {
+    let output = unsafe { borrow::<ID3D12Resource>(&backbuffer).GetDesc() };
+    let render = unsafe { borrow::<ID3D12Resource>(&depth).GetDesc() };
+    let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
+    record.struct_size = size_of::<rsf_frame_record>() as u32;
+    record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.session_id = 1;
+    record.frame_id = source;
+    record.resource_generation = 1;
+    record.view_id = 1;
+    record.input_qpc = input_qpc;
+    record.phase = phase;
+    record.screen = RSF_SCREEN_FLIGHT;
+    record.output_width = output.Width as u32;
+    record.output_height = output.Height;
+    record.render_width = render.Width as u32;
+    record.render_height = render.Height;
+    record.frame_time_ms = 16.67;
+    let camera = &mut record.camera;
+    camera.struct_size = size_of::<rsf_camera_frame>() as u32;
+    camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+    camera.near_plane = 0.1;
+    camera.far_plane = 1000.0;
+    camera.vertical_fov_radians = 1.0;
+    camera.depth_inverted = 1;
+    for diagonal in [0, 5, 10, 15] {
+        camera.view_to_clip[diagonal] = 1.0;
+        camera.clip_to_view[diagonal] = 1.0;
+        camera.view_to_world[diagonal] = 1.0;
+        camera.world_to_view[diagonal] = 1.0;
+        camera.clip_to_previous_clip[diagonal] = 1.0;
+    }
+    unsafe { out.write(record) };
+}
+
+unsafe fn resource_device(raw: Raw) -> Option<ID3D12Device> {
+    let mut device = None;
+    unsafe { borrow::<ID3D12Resource>(&raw).GetDevice(&mut device) }.ok()?;
+    device
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_hudless(
+    list: Raw,
+    color: Raw,
+    heap: Raw,
+    frame: u64,
+    mfg: u32,
+    width: u32,
+    height: u32,
+) -> i32 {
+    let Some(device) = (unsafe { resource_device(color) }) else {
+        return 0;
+    };
+    let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&list) };
+    let target =
+        unsafe { borrow::<ID3D12DescriptorHeap>(&heap).GetCPUDescriptorHandleForHeapStart() };
+    unsafe {
+        device.CreateRenderTargetView(borrow::<ID3D12Resource>(&color), None, target);
+        barrier(
+            list,
+            color,
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+        );
+        list.ClearRenderTargetView(target, &[0.2, 0.4, 0.6, 1.0], None);
+    }
+    if mfg == 0 {
+        return 1;
+    }
+    // Dynamic tiles keep the MFG fixture from classifying identical frames as a menu.
+    let (width, height) = (width as i32, height as i32);
+    let shift = ((frame * 3) % 64) as i32;
+    for y in (0..height).step_by(64) {
+        for x in (shift - 64..width).step_by(64) {
+            let tile = RECT {
+                left: x.max(0),
+                top: y,
+                right: width.min(x + 32),
+                bottom: height.min(y + 32),
+            };
+            if tile.right > tile.left {
+                let detail = [0.7, 0.25 + ((y / 64) % 3) as f32 * 0.15, 0.15, 1.0];
+                unsafe { list.ClearRenderTargetView(target, &detail, Some(&[tile])) };
+            }
+        }
+    }
+    1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_capture_flip(
+    list: Raw,
+    back: Raw,
+    readback_slot: *mut Raw,
+) -> i32 {
+    let mut readback = unsafe { readback_slot.read() };
+    if readback.is_null() {
+        let Some(device) = (unsafe { resource_device(back) }) else {
+            return 0;
+        };
+        let heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_READBACK,
+            ..Default::default()
+        };
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Width: 256,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            ..Default::default()
+        };
+        let mut resource: Option<ID3D12Resource> = None;
+        if unsafe {
+            device.CreateCommittedResource(
+                &heap,
+                D3D12_HEAP_FLAG_NONE,
+                &desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                None,
+                &mut resource,
+            )
+        }
+        .is_err()
+        {
+            return 0;
+        }
+        let Some(resource) = resource else {
+            return 0;
+        };
+        readback = resource.into_raw();
+        unsafe { readback_slot.write(readback) };
+    }
+    let source = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: unsafe { resource_ref(back) },
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    let target = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: unsafe { resource_ref(readback) },
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+                Offset: 0,
+                Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    Width: 1,
+                    Height: 1,
+                    Depth: 1,
+                    RowPitch: 256,
+                },
+            },
+        },
+    };
+    let pixel = D3D12_BOX {
+        left: 0,
+        top: 0,
+        front: 0,
+        right: 1,
+        bottom: 1,
+        back: 1,
+    };
+    let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&list) };
+    unsafe {
+        barrier(
+            list,
+            back,
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        );
+        list.CopyTextureRegion(&target, 0, 0, 0, &source, Some(&pixel));
+        barrier(
+            list,
+            back,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_PRESENT,
+        );
+    }
+    1
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fg_bridge_fixture_source(frame: u64, switching: u32) -> u64 {
+    if switching == 0 {
+        frame
+    } else {
+        ((if frame < 21 { 1 } else { 2 }) << 32) | frame
+    }
+}
+
+#[repr(C)]
+struct FramePlan {
+    produce_input: u32,
+    submit: u32,
+    view: u32,
+    overlay_visible: i32,
+    expected_tag: u32,
+    expect_refusal: u32,
+    legacy_request: i32,
+    legacy_expected: i32,
+    hot_request: i32,
+}
+
+const _: () = assert!(size_of::<FramePlan>() == 36);
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fg_bridge_fixture_plan(
+    frame: u64,
+    hot: u32,
+    mfg: u32,
+    vendor: u32,
+    current_backend: u32,
+    has_streamline_directory: u32,
+    out: *mut FramePlan,
+) {
+    let hot = hot != 0;
+    let mfg = mfg != 0;
+    let plan = FramePlan {
+        produce_input: u32::from(!hot || frame != 7),
+        submit: u32::from(hot || frame != 11),
+        view: if !hot && frame == 10 { 2 } else { 1 },
+        overlay_visible: match frame {
+            2 | 16 => 1,
+            8 | 25 => 0,
+            _ => -1,
+        },
+        expected_tag: u32::from(if hot {
+            current_backend != 0 && frame != 7
+        } else {
+            frame != 10 && frame != 11
+        }),
+        expect_refusal: u32::from(!hot && matches!(frame, 10 | 11)),
+        legacy_request: match frame {
+            8 => 3,
+            15 => 5,
+            25 => 0,
+            32 => 1,
+            _ => -1,
+        },
+        legacy_expected: match frame {
+            9 => 3,
+            16 => 5,
+            26 => 0,
+            33 => 1,
+            _ => -1,
+        },
+        hot_request: match frame {
+            2 if current_backend == 0 => 3,
+            8 => 0,
+            15 => 5,
+            25 => 3,
+            34 if vendor == 0x10de => 4,
+            35 if has_streamline_directory != 0 => 1,
+            110 if mfg => 0,
+            114 if mfg => 1,
+            _ => -1,
+        },
+    };
+    unsafe { out.write(plan) };
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fg_bridge_fixture_mfg_count(frame: u64) -> u32 {
+    match frame {
+        45 => 2,
+        60 | 100 => 3,
+        75 => 5,
+        90 => 1,
+        _ => 0,
+    }
+}

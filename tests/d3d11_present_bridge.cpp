@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/d3d11_present_bridge.h>
+#include "presentation/d3d11_marker_bridge.h"
 #include <rescaleframe/native_fg.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_scene.h>
@@ -29,18 +30,21 @@ struct NativeList {
     unsigned char padding[3]{};
     uint32_t count = 0, uid = 1;
 };
-static_assert(offsetof(NativeList, count) == 0x14 && offsetof(NativeList, uid) == 0x18);
+static_assert(sizeof(NativeCommand) == 16 && sizeof(NativeList) == 32 &&
+    offsetof(NativeList, count) == 0x14 && offsetof(NativeList, uid) == 0x18);
+extern "C" void rsf_d3d11_fixture_append(NativeList*, NativeCommand*);
+extern "C" void rsf_d3d11_fixture_run(NativeList*, void (*)(NativeList*, NativeCommand*));
+
+bool queued_passes_ok = true;
 void append(NativeList& list, NativeCommand& command) {
-    *list.tail = &command; list.tail = &command.next; ++list.count;
+    rsf_d3d11_fixture_append(&list, &command);
 }
 void run(NativeList& list) {
-    list.executing = true;
-    for (auto* command = list.root; command;) {
-        auto* next = command->next; command->execute(&list, command); command = next;
-    }
-    list.executing = false; list.root = nullptr; list.tail = &list.root; list.count = 0; ++list.uid;
+    rsf_d3d11_fixture_run(&list, [](NativeList* owner, NativeCommand* command) noexcept {
+        try { command->execute(owner, command); }
+        catch (...) { queued_passes_ok = false; }
+    });
 }
-bool queued_passes_ok = true;
 // Optional: hold one frame's scene submission open, to exercise the render hitch sampler.
 DWORD submission_stall_ms = 0;
 uint32_t expected_presentation_path = RSF_NATIVE_SCENE_PRESENT_NONE;
@@ -136,117 +140,39 @@ void cpu_event(uint64_t id, uint32_t stage) {
     rsf_game_cpu_event event{sizeof(event), stage, 42, id, uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), 1};
     if (rsf_native_cpu_event(&event)) rsf_native_fg_cpu(&event);
 }
-// Uses the real generic CPU ledger, native FG owner and provider, without fake SIM facts
-// for fallback sources. Plain mode only; the optional enabled fixture remains unchanged.
-bool marker_admission_regression(IDXGISwapChain* chain) {
-    bool ok = true;
-    const auto check = [&](bool condition, const char* message) {
-        if (!condition) { std::printf("FAIL marker admission: %s\n",message); ok = false; }
-    };
-    const auto stamp = [] { LARGE_INTEGER value{}; QueryPerformanceCounter(&value); return uint64_t(value.QuadPart); };
-    LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
-    const auto send = [&](uint64_t id,uint32_t stage,uint32_t flags,uint32_t version = RSF_GAME_CPU_EVENT_VERSION) {
-        const rsf_game_cpu_event event{sizeof(event),stage,42,id,stamp(),uint64_t(frequency.QuadPart),1,0,0,version,flags};
-        return rsf_native_cpu_dispatch(&event,[](void*,const rsf_game_cpu_event* fact) {rsf_native_fg_cpu(fact);},nullptr) != 0;
-    };
-    const auto read = [&](uint64_t id) {
-        rsf_native_cpu_frame facts{}; facts.struct_size = sizeof(facts);
-        check(rsf_native_cpu_read(42,id,&facts) != 0,"source CPU facts retained"); return facts;
-    };
-    const auto close = [&](uint64_t id,uint32_t flags) {
-        check(send(id,RSF_GAME_CPU_FRAME_END,flags),"CPU close");
-        rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_FRAME;
-        pass.session_id = 42; pass.source_frame_id = id;
-        rsf_native_fg_frame(&pass,0);
-    };
-    rsf_native_fg_options options{sizeof(options),RSF_FG_OFF,1,RSF_REFLEX_OFF,0,1};
-    rsf_native_fg_options_set(&options); rsf_native_fg_set_log(log_message,nullptr);
-    rsf_native_fg_reflex_ordering_set(0);
-    rsf_native_cpu_counters before{}; before.struct_size = sizeof(before);
-    check(rsf_native_cpu_counters_get(&before) != 0,"initial counters");
-    constexpr uint64_t fallback = 10000, legacy = 10001, keyed = 10002, failed = 10003, prospective = 10004;
-    check(send(fallback,RSF_GAME_CPU_FRAME_BEGIN,0),"unkeyed fallback begin");
-    for (unsigned i=0;i<2;++i) {
-        rsf_native_latency_render(fallback,1); rsf_native_latency_render(fallback,0);
-        rsf_native_latency_present(fallback,chain,0); // no accepted start, including unmatched end
-        rsf_native_latency_present(fallback,chain,1); rsf_native_latency_present(fallback,chain,0);
-    }
-    const auto fallback_facts = read(fallback);
-    check(fallback_facts.stage_mask == 1 && !fallback_facts.flags && !fallback_facts.marker_mask &&
-        !fallback_facts.timestamps_qpc[1] && !fallback_facts.pacing_qpc,"fallback cannot promote CPU input or markers");
-    close(fallback,0);
-
-    // Legacy threaded order permits Present before late SimulationEnd/RenderSubmitEnd.
-    rsf_native_fg_reflex_ordering_set(1);
-    check(send(legacy,RSF_GAME_CPU_FRAME_BEGIN,0,0) && send(legacy,RSF_GAME_CPU_INPUT_SAMPLE,0,0),"legacy input");
-    rsf_native_latency_render(legacy,1);
-    rsf_native_latency_present(legacy,chain,1); rsf_native_latency_present(legacy,chain,0);
-    check(send(legacy,RSF_GAME_CPU_SIMULATION_BEGIN,0,0) && send(legacy,RSF_GAME_CPU_SIMULATION_END,0,0),"legacy late simulation");
-    rsf_native_latency_render(legacy,0); rsf_native_latency_render(legacy,0);
-    check(read(legacy).marker_mask == 63,"legacy threaded marker order retained"); close(legacy,0);
-
-    rsf_native_fg_reflex_ordering_set(0);
-    constexpr uint32_t keyed_flags = RSF_GAME_CPU_INPUT_KEYED;
-    check(send(keyed,RSF_GAME_CPU_FRAME_BEGIN,keyed_flags) && send(keyed,RSF_GAME_CPU_INPUT_SAMPLE,keyed_flags) &&
-        send(keyed,RSF_GAME_CPU_SIMULATION_BEGIN,keyed_flags),"keyed input and simulation");
-    marker_reentry_source = keyed;
-    rsf_native_latency_render(keyed,1); rsf_native_latency_render(keyed,1);
-    check(marker_reentries == 1,"accepted start tolerates synchronous reentry");
-    const auto keyed_facts = read(keyed);
-    check(keyed_facts.stage_mask == 15 && (keyed_facts.flags & RSF_GAME_CPU_DERIVED_BOUNDARY) &&
-        !(keyed_facts.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE),"existing keyed submit derives only simulation end");
-    rsf_native_latency_render(keyed,0); rsf_native_latency_render(keyed,0);
-    rsf_native_latency_present(keyed,chain,1); rsf_native_latency_present(keyed,chain,1);
-    rsf_native_latency_present(keyed,chain,0); rsf_native_latency_present(keyed,chain,0);
-    check(read(keyed).marker_mask == 63,"keyed begin/end deduplicated"); close(keyed,keyed_flags);
-
-    check(send(failed,RSF_GAME_CPU_FRAME_BEGIN,keyed_flags) && send(failed,RSF_GAME_CPU_INPUT_SAMPLE,keyed_flags) &&
-        send(failed,RSF_GAME_CPU_SIMULATION_BEGIN,keyed_flags) && send(failed,RSF_GAME_CPU_SIMULATION_END,keyed_flags),"failed-start input facts");
-    check(rsf_d3d11_present_abort(failed) == RSF_BACKEND_OK,"withdraw provider token before submission start");
-    rsf_native_latency_render(failed,1); rsf_native_latency_render(failed,1);
-    rsf_native_latency_render(failed,0); rsf_native_latency_render(failed,0);
-    rsf_native_latency_present(failed,chain,1); rsf_native_latency_present(failed,chain,0);
-    check(read(failed).marker_mask == 7,"provider-refused start cannot emit a matching end or Present");
-    rsf_native_latency_frame state{sizeof(state),1,failed};
-    check(rsf_native_latency_frame_get(&state) && state.failed,"provider failure retained rather than hidden"); close(failed,keyed_flags);
-
-    // A real pre-poll reservation with actual poll entry and accepted BIND keeps the
-    // existing canonical derivation. No second pacing token is acquired at submission.
-    const auto source_event = [&](uint32_t stage,uint64_t poll_begin = 0) {
-        rsf_game_cpu_source_event event{};
-        event.header = {sizeof(event),stage,42,prospective,stamp(),uint64_t(frequency.QuadPart),0,0,0,RSF_GAME_CPU_EVENT_VERSION_SOURCE,0};
-        event.native_generation = rsf_d3d11_present_generation();
-        if (stage == RSF_GAME_CPU_SOURCE_SAMPLED) { event.header.flags = RSF_GAME_CPU_SOURCE_PRODUCED; event.poll_begin_qpc = poll_begin; }
-        return rsf_native_cpu_dispatch(&event.header,[](void*,const rsf_game_cpu_event* fact) {rsf_native_fg_cpu(fact);},nullptr) != 0;
-    };
-    check(source_event(RSF_GAME_CPU_SOURCE_RESERVE),"pre-poll reservation");
-    auto* const reserved_token = rsf_streamline_host_token(rsf_d3d11_present_host(),prospective);
-    rsf_streamline_latency_status reserved_latency{}; reserved_latency.struct_size = sizeof(reserved_latency);
-    check(rsf_streamline_host_latency_status(rsf_d3d11_present_host(),&reserved_latency) == RSF_BACKEND_OK,"reserved latency counters");
-    const auto poll_begin = stamp();
-    check(source_event(RSF_GAME_CPU_SOURCE_SAMPLED,poll_begin) && send(prospective,RSF_GAME_CPU_FRAME_BEGIN,0) &&
-        source_event(RSF_GAME_CPU_SOURCE_BIND),"real poll adopted and bound");
-    rsf_game_render_pass submission{}; submission.struct_size = sizeof(submission);
-    submission.role = RSF_GAME_RENDER_SUBMISSION; submission.session_id = 42;
-    submission.source_frame_id = submission.submission_id = submission.view_key = prospective;
-    submission.flags = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION;
-    rsf_native_fg_submission(&submission,1); rsf_native_fg_submission(&submission,0);
-    rsf_streamline_latency_status submitted_latency{}; submitted_latency.struct_size = sizeof(submitted_latency);
-    check(reserved_token && rsf_streamline_host_token(rsf_d3d11_present_host(),prospective) == reserved_token &&
-        rsf_streamline_host_latency_status(rsf_d3d11_present_host(),&submitted_latency) == RSF_BACKEND_OK &&
-        submitted_latency.sleep_calls == reserved_latency.sleep_calls,"submission retains one pre-poll token without a second sleep");
-    rsf_native_latency_present(prospective,chain,1); rsf_native_latency_present(prospective,chain,0);
-    const auto bound = read(prospective);
-    check(bound.marker_mask == 63 && (bound.flags & RSF_GAME_CPU_INPUT_KEYED) &&
-        !(bound.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) && bound.timestamps_qpc[1] == poll_begin,"bound poll retains real input and canonical order");
-    close(prospective,0);
-    rsf_native_cpu_counters after{}; after.struct_size = sizeof(after);
-    check(rsf_native_cpu_counters_get(&after) && after.order_violations == before.order_violations &&
-        after.substitutes == before.substitutes && after.duplicates == before.duplicates,
-        "admission emits no invalid/duplicate marker attempts or substitute input");
-    std::puts(ok ? "PASS: generic marker admission, fallback refusal, keyed/bound derivation, failed start and repeated ends" : "FAIL: generic marker admission");
-    return ok;
-}
+namespace {
+const rsf_d3d11_marker_fixture_calls marker_calls{
+    []() {
+        rsf_native_fg_options options{sizeof(options),RSF_FG_OFF,1,RSF_REFLEX_OFF,0,1};
+        rsf_native_fg_options_set(&options);
+        rsf_native_fg_set_log(log_message, nullptr);
+    },
+    []() -> uint64_t { LARGE_INTEGER qpc{}; QueryPerformanceCounter(&qpc); return uint64_t(qpc.QuadPart); },
+    []() -> uint64_t { LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency); return uint64_t(frequency.QuadPart); },
+    [](const rsf_game_cpu_event* event) {
+        return rsf_native_cpu_dispatch(event, [](void*, const rsf_game_cpu_event* fact) { rsf_native_fg_cpu(fact); }, nullptr);
+    },
+    rsf_native_cpu_read,
+    rsf_native_cpu_counters_get,
+    rsf_native_fg_frame,
+    rsf_native_fg_submission,
+    rsf_native_fg_reflex_ordering_set,
+    rsf_native_latency_render,
+    rsf_native_latency_present,
+    rsf_d3d11_present_abort,
+    rsf_native_latency_frame_get,
+    rsf_d3d11_present_generation,
+    [](uint64_t frame) { return rsf_streamline_host_token(rsf_d3d11_present_host(), frame); },
+    [](uint64_t* count) {
+        rsf_streamline_latency_status status{}; status.struct_size = sizeof(status);
+        const auto result = rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &status);
+        *count = status.sleep_calls;
+        return result;
+    },
+    [](uint64_t frame) { marker_reentry_source = frame; },
+    [] { return marker_reentries; },
+};
+} // namespace
 
 // The copied-status cache contract (invalidation, generation, concurrent readers and retired
 // publishers) moved with its owner to d3d11_present_tests.rs. The public entry keeps its refusals.
@@ -743,7 +669,7 @@ int main(int argc, char** argv) {
         options.mode = RSF_FG_OFF; rsf_native_fg_options_set(&options);
         if (rsf_dlss_release_resources() != RSF_DLSS_OK || rsf_dlss_shutdown() != RSF_DLSS_OK) return 1;
     }
-    if (!enabled_fixture && !marker_admission_regression(chain.Get())) return 1;
+    if (!enabled_fixture && !rsf_d3d11_marker_fixture(chain.Get(), &marker_calls)) return 1;
     context->ClearState();
     if (FAILED(chain->ResizeBuffers(1, 1024, 576, DXGI_FORMAT_UNKNOWN, 0))) return 1;
     ComPtr<ID3D11Texture2D> resized;

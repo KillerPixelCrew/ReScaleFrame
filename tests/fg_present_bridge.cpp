@@ -18,6 +18,24 @@
 #include <string>
 #include <thread>
 #include <atomic>
+extern "C" {
+struct rsf_fg_bridge_frame_plan {
+    uint32_t produce_input, submit, view;
+    int32_t overlay_visible;
+    uint32_t expected_tag, expect_refusal;
+    int32_t legacy_request, legacy_expected, hot_request;
+};
+static_assert(sizeof(rsf_fg_bridge_frame_plan) == 36);
+void rsf_fg_bridge_fixture_plan(uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+    rsf_fg_bridge_frame_plan*);
+uint32_t rsf_fg_bridge_fixture_mfg_count(uint64_t);
+void rsf_fg_bridge_fixture_barrier(void*, void*, uint32_t, uint32_t);
+void rsf_fg_bridge_fixture_inputs(void*, void*, void*, void*, void*, uint32_t);
+void rsf_fg_bridge_fixture_frame(void*, void*, uint64_t, uint64_t, uint32_t, rsf_frame_record*);
+int32_t rsf_fg_bridge_fixture_hudless(void*, void*, void*, uint64_t, uint32_t, uint32_t, uint32_t);
+int32_t rsf_fg_bridge_fixture_capture_flip(void*, void*, void**);
+uint64_t rsf_fg_bridge_fixture_source(uint64_t, uint32_t);
+}
 using Microsoft::WRL::ComPtr;
 namespace {
 uint64_t frame_id = 0;
@@ -36,7 +54,7 @@ ComPtr<ID3D12Resource> flip_readback;
 uint64_t flip_capture_frame = 0;
 bool mfg_test = false;
 // Retain the provider through a Unity-style session epoch change as well as ids >32 bits.
-uint64_t source_frame() { return hot ? ((frame_id < 21 ? 1ull : 2ull) << 32) | frame_id : frame_id; }
+uint64_t source_frame() { return rsf_fg_bridge_fixture_source(frame_id, uint32_t(hot)); }
 struct FocusTest {
     HWND previous = nullptr, window = nullptr;
     ULONGLONG started = 0;
@@ -53,58 +71,25 @@ ComPtr<ID3D12DescriptorHeap> color_heap;
 void log(void*, const char* message) { std::printf("SDK: %s\n", message); }
 int accept(void*, void*) { return 1; }
 void barrier(ID3D12GraphicsCommandList* list, ID3D12Resource* texture, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
-    D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    b.Transition = {texture, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, from, to}; list->ResourceBarrier(1, &b);
+    rsf_fg_bridge_fixture_barrier(list, texture, uint32_t(from), uint32_t(to));
 }
 void prepare(void*, void*, void*, void* commands, void* back, rsf_streamline_host*, void* session, uint32_t) {
     const auto* api = rsf_d3d11_present_provider();
     auto* list = static_cast<ID3D12GraphicsCommandList*>(commands);
     if (flip11) {
         flip_capture_frame = frame_id;
-        auto* color = static_cast<ID3D12Resource*>(back);
-        if (!flip_readback) {
-            ComPtr<ID3D12Device> owner; color->GetDevice(IID_PPV_ARGS(&owner));
-            D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_READBACK;
-            D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            desc.Width = 256; desc.Height = desc.DepthOrArraySize = desc.MipLevels = 1; desc.SampleDesc.Count = 1;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            if (FAILED(owner->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&flip_readback)))) { accepted = false; return; }
+        if (!rsf_fg_bridge_fixture_capture_flip(commands, back, reinterpret_cast<void**>(flip_readback.GetAddressOf()))) {
+            accepted = false;
+            return;
         }
-        D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = color; source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        D3D12_TEXTURE_COPY_LOCATION target{}; target.pResource = flip_readback.Get(); target.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        target.PlacedFootprint.Footprint = {DXGI_FORMAT_R8G8B8A8_UNORM, 1, 1, 1, 256};
-        D3D12_BOX pixel{0, 0, 0, 1, 1, 1};
-        barrier(list, color, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        list->CopyTextureRegion(&target, 0, 0, 0, &source, &pixel);
-        barrier(list, color, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
     }
     if (!service && (!api || !session)) return;
     rsf_fg_options options{sizeof(options), RSF_FG_ABI_VERSION, RSF_FG_FIXED, 1, 0, RSF_REFLEX_OFF, 0};
     if (!service) accepted &= api->configure(session, &options) == RSF_BACKEND_OK;
-    auto* heap = gpu_heap.Get(); list->SetDescriptorHeaps(1, &heap);
-    auto gpu = gpu_heap->GetGPUDescriptorHandleForHeapStart(); auto cpu = cpu_heap->GetCPUDescriptorHandleForHeapStart();
-    const float values[]{0.5f, 0, 0, 0};
-    for (auto* texture : {depth.Get(), motion.Get()}) {
-        barrier(list, texture, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        list->ClearUnorderedAccessViewFloat(gpu, cpu, texture, values, 0, nullptr);
-        barrier(list, texture, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        gpu.ptr += stride; cpu.ptr += stride;
-    }
-    rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    record.session_id = 1; record.frame_id = source_frame(); record.resource_generation = 1;
-    record.view_id = 1;
-    LARGE_INTEGER now{}; QueryPerformanceCounter(&now); record.input_qpc = uint64_t(now.QuadPart);
-    record.phase = RSF_PHASE_UI_COMPLETE; record.screen = RSF_SCREEN_FLIGHT;
-    const auto back_desc = static_cast<ID3D12Resource*>(back)->GetDesc();
-    record.output_width = static_cast<uint32_t>(back_desc.Width); record.output_height = back_desc.Height;
-    record.render_width = static_cast<uint32_t>(depth->GetDesc().Width); record.render_height = depth->GetDesc().Height;
-    record.frame_time_ms = 16.67f;
-    auto& camera = record.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-    camera.near_plane = 0.1f; camera.far_plane = 1000; camera.vertical_fov_radians = 1;
-    camera.depth_inverted = 1;
-    for (uint32_t i = 0; i < 4; ++i) camera.view_to_clip[i * 5] = camera.clip_to_view[i * 5] =
-        camera.view_to_world[i * 5] = camera.world_to_view[i * 5] = camera.clip_to_previous_clip[i * 5] = 1;
+    rsf_fg_bridge_fixture_inputs(commands, depth.Get(), motion.Get(), cpu_heap.Get(), gpu_heap.Get(), stride);
+    LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
+    rsf_frame_record record{};
+    rsf_fg_bridge_fixture_frame(back, depth.Get(), source_frame(), uint64_t(now.QuadPart), RSF_PHASE_UI_COMPLETE, &record);
     rsf_fg_frame frame{}; frame.struct_size = sizeof(frame); frame.record = &record;
     frame.interpolate = 1; frame.motion_scale_x = frame.motion_scale_y = 1;
     rsf_backend_resource* resources[]{&frame.backbuffer, &frame.depth, &frame.motion};
@@ -116,31 +101,17 @@ void prepare(void*, void*, void*, void* commands, void* back, rsf_streamline_hos
     }
     if (service) rsf_fg12_capture(commands, &record, depth.Get(), motion.Get());
     if (hot) {
-        auto* color = static_cast<ID3D12Resource*>(back);
-        ComPtr<ID3D12Device> owner; color->GetDevice(IID_PPV_ARGS(&owner));
-        owner->CreateRenderTargetView(color, nullptr, color_heap->GetCPUDescriptorHandleForHeapStart());
-        barrier(list, color, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        const float scene[]{0.2f, 0.4f, 0.6f, 1};
-        list->ClearRenderTargetView(color_heap->GetCPUDescriptorHandleForHeapStart(), scene, 0, nullptr);
-        if (mfg_test) {
-            // Solid identical frames can be classified as menus by DLSS-G. Supply actual
-            // changing spatial detail when checking generated presentation, without a game.
-            const LONG width = static_cast<LONG>(record.output_width);
-            const LONG shift = static_cast<LONG>((frame_id * 3) % 64);
-            for (LONG y = 0; y < static_cast<LONG>(record.output_height); y += 64) {
-                for (LONG x = shift - 64; x < width; x += 64) {
-                    D3D12_RECT tile{std::max(0L, x), y, std::min(width, x + 32),
-                        std::min(static_cast<LONG>(record.output_height), y + 32)};
-                    if (tile.right <= tile.left) continue;
-                    const float detail[]{0.7f, 0.25f + float((y / 64) % 3) * 0.15f, 0.15f, 1};
-                    list->ClearRenderTargetView(color_heap->GetCPUDescriptorHandleForHeapStart(), detail, 1, &tile);
-                }
-            }
+        if (!rsf_fg_bridge_fixture_hudless(commands, back, color_heap.Get(), frame_id, uint32_t(mfg_test),
+            record.output_width, record.output_height)) {
+            for (auto* texture : {depth.Get(), motion.Get()}) barrier(list, texture,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
+            accepted = false;
+            return;
         }
         rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.session_id = 1;
         pass.source_frame_id = record.frame_id; pass.view_key = 1; pass.color_input = back;
         rsf_fg12_hudless(commands, &pass);
-        barrier(list, color, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        barrier(list, static_cast<ID3D12Resource*>(back), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     }
     const auto result = service ? RSF_BACKEND_OK : api->prepare(session, commands, &frame);
     if (result != RSF_BACKEND_OK) std::printf("prepare frame=%llu refused=%d\n", static_cast<unsigned long long>(frame_id), result);
@@ -384,8 +355,8 @@ int main(int argc, char** argv) {
             MSG message{};
             while (PeekMessageW(&message, window, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
         }
-        if (mfg_test && (frame_id == 45 || frame_id == 60 || frame_id == 75 || frame_id == 90 || frame_id == 100)) {
-            const uint32_t generated = frame_id == 45 ? 2u : frame_id == 60 || frame_id == 100 ? 3u : frame_id == 75 ? 5u : 1u;
+        const uint32_t generated = mfg_test ? rsf_fg_bridge_fixture_mfg_count(frame_id) : 0;
+        if (generated) {
             rsf_native_fg_options changed{sizeof(changed), frame_id == 90 ? RSF_FG_OFF : RSF_FG_FIXED, generated, RSF_REFLEX_ON, 0, 0};
             rsf_fg12_options(&changed);
         }
@@ -395,6 +366,9 @@ int main(int argc, char** argv) {
         }
         const auto current_backend = rsf_d3d11_present_backend();
         const auto capability_epoch = rsf_d3d11_present_generation();
+        rsf_fg_bridge_frame_plan plan{};
+        rsf_fg_bridge_fixture_plan(frame_id, uint32_t(hot), uint32_t(mfg_test), vendor, current_backend,
+            uint32_t(argc == 7), &plan);
         session = rsf_d3d11_present_session();
         if (service) {
             for (auto stage : {RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_PACING, RSF_GAME_CPU_INPUT_SAMPLE,
@@ -408,18 +382,17 @@ int main(int argc, char** argv) {
             if (FAILED(chain3->GetBuffer(chain3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back))) ||
                 FAILED(allocator->Reset()) || FAILED(source_list->Reset(allocator.Get(), nullptr))) return 1;
             // An input refusal must not leak the shared CPU token and stall later frames.
-            if (!hot || frame_id != 7) prepare(nullptr, nullptr, nullptr, source_list.Get(), back.Get(), nullptr, session, 0);
+            if (plan.produce_input) prepare(nullptr, nullptr, nullptr, source_list.Get(), back.Get(), nullptr, session, 0);
             if (overlay) barrier(source_list.Get(), back.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
             if (FAILED(source_list->Close())) return 1;
             ID3D12CommandList* commands[]{source_list.Get()}; queue->ExecuteCommandLists(1, commands);
-            if (hot || frame_id != 11) rsf_fg12_submitted(1, source_frame());
+            if (plan.submit) rsf_fg12_submitted(1, source_frame());
             rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.session_id = 1;
-            pass.native_frame = pass.source_frame_id = source_frame(); pass.view_key = !hot && frame_id == 10 ? 2u : 1u; pass.swapchain = chain.Get();
+            pass.native_frame = pass.source_frame_id = source_frame(); pass.view_key = plan.view; pass.swapchain = chain.Get();
             std::thread render_callback([&pass] { rsf_fg12_window(&pass); });
             render_callback.join();
             if (overlay) {
-                if (frame_id == 2 || frame_id == 16) rsf_overlay_input_set_visible(1);
-                if (frame_id == 8 || frame_id == 25) rsf_overlay_input_set_visible(0);
+                if (plan.overlay_visible >= 0) rsf_overlay_input_set_visible(uint32_t(plan.overlay_visible));
                 rsf_overlay_stats stats{}; stats.struct_size = sizeof(stats); stats.backend_name = "Fixture";
                 stats.show_performance_hud = 1; stats.output_width = 2560; stats.output_height = 1600;
                 rsf_overlay_intent intent{}; intent.struct_size = sizeof(intent);
@@ -451,17 +424,14 @@ int main(int argc, char** argv) {
         }
         if (legacy_hot) {
             rsf_d3d11_present_abort(frame_id);
-            if (frame_id == 8) accepted &= rsf_d3d11_present_request(3) == RSF_BACKEND_OK;
-            if (frame_id == 15) accepted &= rsf_d3d11_present_request(5) == RSF_BACKEND_OK;
-            if (frame_id == 25) accepted &= rsf_d3d11_present_request(0) == RSF_BACKEND_OK;
-            if (frame_id == 32) accepted &= rsf_d3d11_present_request(1) == RSF_BACKEND_OK;
+            if (plan.legacy_request >= 0)
+                accepted &= rsf_d3d11_present_request(uint32_t(plan.legacy_request)) == RSF_BACKEND_OK;
             const auto active = rsf_d3d11_present_backend();
-            if (frame_id == 9 || frame_id == 16 || frame_id == 26 || frame_id == 33)
-                std::printf("legacy runtime switch frame=%llu backend=%u result=%d\n", static_cast<unsigned long long>(frame_id), active, rsf_d3d11_present_switch_result());
-            if (frame_id == 9) accepted &= active == 3;
-            if (frame_id == 16) accepted &= active == 5;
-            if (frame_id == 26) accepted &= active == 0;
-            if (frame_id == 33) accepted &= active == 1;
+            if (plan.legacy_expected >= 0) {
+                std::printf("legacy runtime switch frame=%llu backend=%u result=%d\n",
+                    static_cast<unsigned long long>(frame_id), active, rsf_d3d11_present_switch_result());
+                accepted &= active == uint32_t(plan.legacy_expected);
+            }
         }
         if (service) {
             rsf_native_fg_status result{}; result.struct_size = sizeof(result); rsf_fg12_status(&result);
@@ -479,7 +449,7 @@ int main(int argc, char** argv) {
                     accepted &= same;
                 }
             }
-            if (hot ? current_backend != 0 && frame_id != 7 : frame_id != 10 && frame_id != 11) ++expected_tagged;
+            expected_tagged += plan.expected_tag;
             observed_active += result.vendor.active; accepted &= result.last_result == RSF_BACKEND_OK && result.tagged_frames == expected_tagged;
             if (mfg_test && current_backend == 1) {
                 const auto& vendor_state = result.vendor;
@@ -493,22 +463,18 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(frame_id), vendor_state.mfg_unlock_status, vendor_state.max_generated_frames,
                     vendor_state.effective_generated_frames, vendor_state.active, static_cast<unsigned long long>(delta));
             }
-            if (!hot && (frame_id == 10 || frame_id == 11)) accepted &= result.reason != 0;
+            if (plan.expect_refusal) accepted &= result.reason != 0;
             if (hot) {
                 if (current_backend == 3) active_fsr += result.vendor.active;
                 if (current_backend == 5) active_xess += result.vendor.active;
                 ComPtr<ID3D12Resource> same; accepted &= SUCCEEDED(chain->GetBuffer(0, IID_PPV_ARGS(&same))) && same.Get() == held_buffer.Get();
-                if (frame_id == 2 && current_backend == 0) accepted &= rsf_d3d11_present_request(3) == RSF_BACKEND_OK;
-                if (frame_id == 8) accepted &= rsf_d3d11_present_request(0) == RSF_BACKEND_OK;
-                if (frame_id == 15) accepted &= rsf_d3d11_present_request(5) == RSF_BACKEND_OK;
-                if (frame_id == 25) accepted &= rsf_d3d11_present_request(3) == RSF_BACKEND_OK;
-                if (frame_id == 34 && vendor == 0x10de) accepted &= rsf_d3d11_present_request(4) ==
-                    (fsr4_supported ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_SUPPORTED);
                 if (frame_id == 35 && vendor == 0x10de) accepted &= rsf_d3d11_present_backend() == 3 && rsf_d3d11_present_switch_result() == RSF_BACKEND_ERROR_NOT_SUPPORTED;
-                if (frame_id == 35 && argc == 7) accepted &= rsf_d3d11_present_request(1) == RSF_BACKEND_OK;
+                if (plan.hot_request >= 0) {
+                    const auto expected = plan.hot_request == 4 && !fsr4_supported ?
+                        RSF_BACKEND_ERROR_NOT_SUPPORTED : RSF_BACKEND_OK;
+                    accepted &= rsf_d3d11_present_request(uint32_t(plan.hot_request)) == expected;
+                }
                 if (frame_id == 36 && argc == 7) accepted &= rsf_d3d11_present_backend() == 1;
-                if (mfg_test && frame_id == 110) accepted &= rsf_d3d11_present_request(0) == RSF_BACKEND_OK;
-                if (mfg_test && frame_id == 114) accepted &= rsf_d3d11_present_request(1) == RSF_BACKEND_OK;
             }
         }
         auto* native_queue = static_cast<ID3D12CommandQueue*>(flip11 ? rsf_d3d11_present_queue() : graphics.queue);

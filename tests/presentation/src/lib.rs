@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #![cfg(all(windows, not(test)))]
 
+mod d3d11_marker;
+mod d3d11_marker_abi;
+mod fg_bridge;
 mod fsr4_fg_bridge;
 mod shared_surface_abi;
 

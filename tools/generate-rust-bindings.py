@@ -44,6 +44,11 @@ generate("loader/src/census/json_abi.rs", "loader/census/src/json_platform.h",
 generate("loader/src/census/decode_abi.rs", "loader/census/src/decode_platform.h",
          "rsf_census_(resource_desc|read_resource)", "NOTHING", [],
          ["--with-derive-default"])
+generate("tests/presentation/src/d3d11_marker_abi.rs", "tests/presentation/d3d11_marker_bridge.h",
+         "rsf_(d3d11_marker_fixture_calls|native_cpu_(frame|counters)|native_latency_frame)",
+         "NOTHING", ["-Isdk/game/include", "-Iruntime/orchestrator/include"],
+         ["--no-recursive-allowlist",
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};"])
 generate("tests/presentation/api/src/abi.rs",
          "runtime/orchestrator/include/rescaleframe/d3d11_present_api.h",
          "rsf_(d3d11_present_(api|setup)|get_d3d11_present_api_fn)",
