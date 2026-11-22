@@ -8058,3 +8058,13 @@ shared SR fixture device acquisition moved to Rust. The
 lists the preserved profile and rollback evidence and remaining native fixture
 bodies. Pinned formatting, binding regeneration and locked offline metadata
 passed. Build, fixture and device validation remain pending.
+
+### Direct overlay service and panel admission
+
+Rust now owns the remaining overlay service entry points and binds input,
+latency and FG telemetry directly. The hosts consume a typed panel table
+after checking the five exports at admission. The native observer keeps
+its exception guard. The [source record](research/overlay-direct-admission.md)
+covers the unchanged native-window, C02, D08 and saved rollback paths.
+Binding reproduction, pinned formatting and locked offline metadata passed.
+Build, fixture and device execution remain pending.
