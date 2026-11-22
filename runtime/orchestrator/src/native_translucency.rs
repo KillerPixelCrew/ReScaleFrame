@@ -13,7 +13,7 @@ use crate::native_regions::{
     MaskTarget, Region, SourceView, compile_compute, create_constants, crop, device_identity,
     update_constants,
 };
-use crate::native_sr_abi::rsf_native_translucency_masks as Masks;
+use crate::native_translucency_abi::rsf_native_translucency_masks as Masks;
 use rsf_game_sys::{
     RSF_GAME_RENDER_CLOUD_DEPTH, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
     RSF_GAME_RENDER_TRANSLUCENCY, RSF_GAME_RENDER_TRANSLUCENCY_LAYER, rsf_game_render_pass as Pass,

@@ -5,6 +5,7 @@ members = [
   "tests/overlay-service",
   "tests/presentation",
   "tests/presentation/api",
+  "tests/translucency",
   "tests/game-sdk",
   "tests/ac7-capture",
   "tests/generation",

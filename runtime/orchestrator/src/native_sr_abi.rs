@@ -60,37 +60,3 @@ const _: () = {
     ["Offset of field: rsf_dlss_pipeline_frame::motion_depth_layer"]
         [::core::mem::offset_of!(rsf_dlss_pipeline_frame, motion_depth_layer) - 96usize];
 };
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_native_translucency_masks {
-    pub struct_size: u32,
-    pub color_before_transparency: *mut ::core::ffi::c_void,
-    pub transparency_layer: *mut ::core::ffi::c_void,
-    pub reactive: *mut ::core::ffi::c_void,
-    pub coverage: *mut ::core::ffi::c_void,
-    pub bias: *mut ::core::ffi::c_void,
-    pub motion_depth: *mut ::core::ffi::c_void,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_native_translucency_masks"]
-        [::core::mem::size_of::<rsf_native_translucency_masks>() - 56usize];
-    ["Alignment of rsf_native_translucency_masks"]
-        [::core::mem::align_of::<rsf_native_translucency_masks>() - 8usize];
-    ["Offset of field: rsf_native_translucency_masks::struct_size"]
-        [::core::mem::offset_of!(rsf_native_translucency_masks, struct_size) - 0usize];
-    ["Offset of field: rsf_native_translucency_masks::color_before_transparency"][::core::mem::offset_of!(
-        rsf_native_translucency_masks,
-        color_before_transparency
-    ) - 8usize];
-    ["Offset of field: rsf_native_translucency_masks::transparency_layer"]
-        [::core::mem::offset_of!(rsf_native_translucency_masks, transparency_layer) - 16usize];
-    ["Offset of field: rsf_native_translucency_masks::reactive"]
-        [::core::mem::offset_of!(rsf_native_translucency_masks, reactive) - 24usize];
-    ["Offset of field: rsf_native_translucency_masks::coverage"]
-        [::core::mem::offset_of!(rsf_native_translucency_masks, coverage) - 32usize];
-    ["Offset of field: rsf_native_translucency_masks::bias"]
-        [::core::mem::offset_of!(rsf_native_translucency_masks, bias) - 40usize];
-    ["Offset of field: rsf_native_translucency_masks::motion_depth"]
-        [::core::mem::offset_of!(rsf_native_translucency_masks, motion_depth) - 48usize];
-};

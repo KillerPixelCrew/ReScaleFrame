@@ -563,7 +563,7 @@ generate("tools/exposure_probe/src/abi.rs", "runtime/backends/dlss/include/resca
          "rsf_dlss_frame", "RSF_DLSS_ABI_VERSION",
          ["-Iruntime/backends/dlss/include"])
 generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr.h",
-         "rsf_(dlss_pipeline_frame|native_translucency_masks)", "NOTHING",
+         "rsf_dlss_pipeline_frame", "NOTHING",
          ["-include", "rescaleframe/native_translucency.h", "-Iruntime/orchestrator/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/contract/include",
           "-Isdk/game/include"],
@@ -588,6 +588,12 @@ generate("tests/overlay-service/src/abi.rs", "runtime/orchestrator/include/resca
           "-Iruntime/graphics/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include"],
          ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 
+generate("runtime/orchestrator/src/native_translucency_abi.rs",
+         "runtime/orchestrator/include/rescaleframe/native_translucency.h",
+         "rsf_native_translucency_masks", "NOTHING",
+         ["-Iruntime/orchestrator/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/graphics/include", "-Iruntime/contract/include", "-Isdk/game/include"],
+         ["--with-derive-default"])
 # Match the overlay's existing std paths and import types that other modules already own.
 generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/overlay_platform.h",
          "wchar_t|rsf_overlay_(api|service_setup|service_option|capture|diagnostics|"

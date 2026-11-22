@@ -621,6 +621,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-translucency-fixtures"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
+ "windows",
+]
+
+[[package]]
 name = "rsf-unity-mono"
 version = "0.1.2"
 dependencies = [

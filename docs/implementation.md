@@ -42,7 +42,7 @@ are pending.
 
 Rust owns the D3D11 graphics snapshots, resource and UI device operations,
 sampler changes, and native composition passes. The replay uses the integrated
-Rust output and capture paths. Four G03 fixtures moved to Rust. The source
+Rust output and capture paths. All eight G03 fixture bodies now use Rust. The source
 checks, pinned formatting and targeted bindings are recorded below. Native
 link, fixture and device results remain pending.
 [Graphics state and composition evidence](research/rust-d3d11-composition-state.md)

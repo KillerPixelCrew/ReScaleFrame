@@ -17,12 +17,13 @@ use crate::native_reinsert::rsf_native_reinsert_release;
 use crate::native_scene::rsf_native_scene_reset;
 use crate::native_sr_abi::{
     RSF_DLSS_PIPELINE_ABI_VERSION, rsf_dlss_pipeline_frame as Frame,
-    rsf_motion_decode_params as DecodeParams, rsf_native_translucency_masks as Masks,
+    rsf_motion_decode_params as DecodeParams,
 };
 use crate::native_sr_state::{
     camera_for, clear_surface, commit_history, reset_history, rsf_native_sr_set_enabled,
 };
 use crate::native_translucency::rsf_native_translucency_release;
+use crate::native_translucency_abi::rsf_native_translucency_masks as Masks;
 use crate::native_window::rsf_native_window_reset;
 use crate::owned_handle::OwnedHandle;
 use crate::render_abi::{

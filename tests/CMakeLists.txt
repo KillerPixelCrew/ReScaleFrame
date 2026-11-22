@@ -328,7 +328,8 @@ add_test(NAME shared_surface COMMAND rsf_shared_surface)
 set_tests_properties(shared_surface PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 # The layer, and the alpha accumulation that decides whether diverting into it works at all.
-add_executable(rsf_ui_layer ui_layer.cpp)
+add_executable(rsf_ui_layer graphics_fixture_main.c)
+target_compile_definitions(rsf_ui_layer PRIVATE RSF_GRAPHICS_FIXTURE=rsf_ui_layer_fixture)
 target_link_libraries(rsf_ui_layer PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME ui_layer COMMAND rsf_ui_layer)
 set_tests_properties(ui_layer PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
@@ -410,7 +411,8 @@ target_link_libraries(rsf_frame_tap PRIVATE ReScaleFrame::AC7SceneColor ReScaleF
 add_test(NAME frame_tap COMMAND rsf_frame_tap)
 set_tests_properties(frame_tap PROPERTIES TIMEOUT 120)
 
-add_executable(rsf_d3d11_state d3d11_state.cpp)
+add_executable(rsf_d3d11_state graphics_fixture_main.c)
+target_compile_definitions(rsf_d3d11_state PRIVATE RSF_GRAPHICS_FIXTURE=rsf_d3d11_state_fixture)
 target_link_libraries(rsf_d3d11_state PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME d3d11_state COMMAND rsf_d3d11_state)
 set_tests_properties(d3d11_state PROPERTIES TIMEOUT 120)
@@ -506,15 +508,26 @@ target_compile_definitions(rsf_colour_transport_test PRIVATE RSF_GRAPHICS_FIXTUR
 target_link_libraries(rsf_colour_transport_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME colour_transport COMMAND rsf_colour_transport_test)
 set_tests_properties(colour_transport PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
-add_executable(rsf_native_translucency_test native_translucency.cpp)
-target_link_libraries(rsf_native_translucency_test PRIVATE rsf_orchestrator rsf_build_options)
+rsf_add_rust_static(rsf_translucency_fixtures_rust rsf_rust_translucency_fixtures
+    rsf-translucency-fixtures rsf_translucency_fixtures)
+add_executable(rsf_native_translucency_test graphics_fixture_main.c)
+target_compile_definitions(rsf_native_translucency_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_native_translucency_fixture)
+add_executable(rsf_native_translucency_abi_test graphics_fixture_main.c)
+target_compile_definitions(rsf_native_translucency_abi_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_native_translucency_abi_fixture)
+foreach(client rsf_native_translucency_test rsf_native_translucency_abi_test)
+    # Only import the Runtime. Its PUBLIC dependencies also include the embedded core.
+    target_link_libraries(${client} PRIVATE rsf_translucency_fixtures_rust
+        "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options d3d11)
+    add_dependencies(${client} rsf_orchestrator)
+endforeach()
 add_test(NAME native_translucency COMMAND rsf_native_translucency_test)
 set_tests_properties(native_translucency PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
-add_executable(rsf_native_translucency_abi_test native_translucency_abi.cpp)
-target_link_libraries(rsf_native_translucency_abi_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME native_translucency_abi COMMAND rsf_native_translucency_abi_test)
-add_executable(rsf_native_translucency_abi_embedded_test native_translucency_abi.cpp)
-target_link_libraries(rsf_native_translucency_abi_embedded_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
+add_executable(rsf_native_translucency_abi_embedded_test graphics_fixture_main.c)
+target_compile_definitions(rsf_native_translucency_abi_embedded_test PRIVATE
+    RSF_GRAPHICS_FIXTURE=rsf_native_translucency_abi_fixture)
+target_link_libraries(rsf_native_translucency_abi_embedded_test PRIVATE rsf_translucency_fixtures_rust
+    ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME native_translucency_abi_embedded COMMAND rsf_native_translucency_abi_embedded_test)
 add_executable(rsf_sr_pipeline_test sr_pipeline.cpp)
 target_link_libraries(rsf_sr_pipeline_test PRIVATE rsf_orchestrator rsf_build_options)

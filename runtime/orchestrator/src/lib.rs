@@ -208,6 +208,8 @@ mod native_sr_abi;
 #[cfg(windows)]
 mod native_sr_state;
 #[cfg(windows)]
+mod native_translucency_abi;
+#[cfg(windows)]
 mod native_window;
 #[cfg(windows)]
 mod overlay_abi;

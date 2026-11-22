@@ -49,9 +49,9 @@ translucency entry points, and embedded callers link the same symbols.
   `sampler_bias.cpp`, and `ui_identify.cpp`. The first three keep their CTest
   names and link through the existing graphics fixture entry. The registry
   cases run as Rust unit tests.
-- Open native fixture ports are `d3d11_state.cpp`, `native_translucency.cpp`,
+- Native fixtures still in C++ at the initial replay were `d3d11_state.cpp`, `native_translucency.cpp`,
   `native_translucency_abi.cpp`, and `ui_layer.cpp` under `tests/`. These
-  retain their device and DLL/embedded link coverage.
+  retained their device and DLL/embedded link coverage.
 
 ## Checks
 
@@ -63,3 +63,32 @@ The repository-wide binding run stops on D01's admission invocation because
 its frontend include list cannot find `rescaleframe/game_frame.h`. The targeted
 G03 invocation succeeds and unrelated generated outputs were discarded.
 Builds, lints, fixtures, device and game runs are pending.
+
+## Fixture and C11 follow-up from 67cbc699
+
+The eight G03 fixture bodies now live in Rust. This follow-up replaces the four
+remaining C++ fixture bodies and retains their CTest names and skip policies.
+
+| PORT entry under `tests/` | Disposition |
+| --- | --- |
+| `d3d11_state.cpp` | Replaced by `d3d11_state.rs` in the linked graphics fixture archive. It binds and reads real render targets, pixel and compute SRVs, samplers, pixel and vertex constant buffers, topology, rasterizer, viewport and scissor state. It exercises independent and nested saves, fresh save after unwind and the narrow fullscreen scope. |
+| `ui_layer.cpp` | Replaced by `ui_layer.rs` in the linked graphics fixture archive. It uses actual RGBA8 staging readback, ring and written-frame checks, dynamic color constants, shader draws and three blend states. It checks transparent clear, unpatched and masked alpha, and patched alpha-over at one and two draws. |
+| `native_translucency.cpp` | Replaced by the WARP fixture in `tests/translucency/src/lib.rs`. It imports the Runtime DLL and reads the physical mask, snapshot, layer and cloud textures. Session and frame refusal, layer merge, cloud admission and borrowed cloud depth across the next composite remain covered. |
+| `native_translucency_abi.cpp` | Replaced by the CPU-only body in the same external fixture crate. One target imports the Runtime DLL and the other links OrchestratorCore with no DLL import. Both use the same fixture body and the same generated mask record as the runtime, including the 56-byte layout and motion-depth offset. |
+
+The separate DLL fixture archive has no dependency on the Rust orchestrator.
+Its CMake targets use the Runtime import library without inheriting the Runtime
+target's public embedded-core dependencies. The embedded fixture links the
+object target and uses the same C entry launcher.
+
+`d3d11_state_private.h` was retired because its C++ fixture was the last
+include. The independent state entry still serves the Rust fullscreen pass
+and the linked fixture. `depth_domains_abi.cpp` became a C11 Cargo native
+object using the same SDK inline predicate. The module-unload C++ shim stays
+in OrchestratorCore for both DLL and embedded teardown.
+
+Pinned Rust 1.94.1 formatting, bindgen 0.72.1 regeneration of the split
+translucency ABI, C11 predicate parsing and locked offline Windows metadata
+passed. Source checks compare Windows API names, fixture cases and linkage,
+ABI layout, and the unchanged CRT unload shim. No builds, fixture runs,
+lints or device work were performed.
