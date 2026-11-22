@@ -35,3 +35,10 @@ mod dx12_vulkan_interop_abi;
 #[cfg(feature = "xess-device")]
 #[path = "../../../runtime/vulkan/xess-fg/bridge_abi.rs"]
 mod xess_bridge_abi;
+
+#[cfg(feature = "xess-device")]
+#[allow(dead_code)]
+#[path = "../../../runtime/orchestrator/src/vulkan_fg_abi.rs"]
+mod vulkan_fg_abi;
+#[cfg(feature = "xess-device")]
+mod xess_present;

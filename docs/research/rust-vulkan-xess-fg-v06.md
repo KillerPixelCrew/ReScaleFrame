@@ -95,3 +95,13 @@ and timeline support. It imports BGRA8, R32F and RG16F at 640 × 360. Both
 queue drains still gate interop and bridge destruction. The JSON keys and
 status meanings are preserved. When the optional presenter reports failed
 retirement, the caller also retains the Vulkan loader and device.
+
+The optional Present route now sequences the original 12-frame workload in
+Rust. It keeps the one Vulkan graphics queue, 10-second acquire timeout,
+three pre-submit XeLL markers, post-submit marker and notification, and
+shader-read handoff. The C++ leaves own the HWND, Vulkan allocations and
+draw commands for the moving rectangle and constant guides. The Rust driver
+passes the existing frame and Present records to V02 and issues the same
+receipt. An unsuccessful drain retains the views and owner. After drain,
+views retire before the presenter releases the underlying images. The
+remaining fixture allocations retire only after checked presenter release.

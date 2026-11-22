@@ -39,12 +39,6 @@ unsafe extern "C" {
         output: *mut rsf_dx12vk_shared_image,
     ) -> i32;
     fn rsf_xessvk_interop_destroy(owner: Handle, drained: u32) -> i32;
-    fn rsf_fixture_xess_present(
-        setup: *const rsf_srvk_setup,
-        family: u32,
-        runtime: *const u16,
-        retired: *mut bool,
-    ) -> i32;
 }
 
 unsafe extern "C" fn instance_proc(object: Handle, name: *const c_char) -> rsf_vk_function {
@@ -268,7 +262,7 @@ fn exercise(
     );
     let mut retired = release == 0 && bridge_release == 0;
     let present_result = if retired && present {
-        unsafe { rsf_fixture_xess_present(&setup, gpu.family, runtime, &mut retired) }
+        crate::xess_present::run(&setup, gpu.family, runtime, &mut retired)
     } else {
         0
     };
