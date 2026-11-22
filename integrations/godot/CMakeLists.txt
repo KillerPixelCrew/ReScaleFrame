@@ -1,32 +1,21 @@
-# Runtime control, settings, session, status, Vulkan creation and compositor effect state are Rust
-# (native/lib.rs, crate rsf-godot). The archive is built only for a target that links it.
+# Runtime control, settings, session, status, Vulkan creation, compositor effect state and the
+# GDExtension classes are Rust (native/lib.rs, crate rsf-godot). The archive is built only for a
+# target that links it.
 rsf_add_rust_static(rsf_godot_rust rsf_rust_godot rsf-godot rsf_godot)
 
-set(RSF_GODOT_CPP_DIR "" CACHE PATH "Pinned godot-cpp checkout for the optional Godot integration")
-if(NOT RSF_GODOT_CPP_DIR)
+# The GDExtension is written against Godot's C interface, so the build needs no godot-cpp checkout.
+# eng/build-godot.ps1 enables it.
+option(RSF_GODOT_NATIVE "Build ReScaleFrame.Godot.Native.dll, the optional Godot integration" OFF)
+if(NOT RSF_GODOT_NATIVE)
     return()
 endif()
-if(NOT EXISTS "${RSF_GODOT_CPP_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR "RSF_GODOT_CPP_DIR must name a prepared godot-cpp checkout. Run eng/prepare-godot.ps1.")
-endif()
 
-set(GODOTCPP_API_VERSION "4.7" CACHE STRING "Godot API baseline" FORCE)
-set(GODOTCPP_BUILD_PROFILE "${CMAKE_CURRENT_SOURCE_DIR}/build-profile.json" CACHE FILEPATH "Godot binding subset" FORCE)
-set(GODOTCPP_USE_STATIC_CPP OFF CACHE BOOL "Use the native project's CRT" FORCE)
-add_subdirectory("${RSF_GODOT_CPP_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/godot-cpp" SYSTEM)
-set_property(TARGET godot-cpp PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-# godot-cpp (cmake/windows.cmake) stores CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL in the CMake
-# *cache*, which is global. On every re-configure it then made all other targets use the Release CRT
-# in Debug (LNK2038 against rsf_godot's /MDd). Both Godot targets set MSVC_RUNTIME_LIBRARY
-# explicitly, so drop the leaked entry; the root CMakeLists clears stale copies before targets exist.
-unset(CMAKE_MSVC_RUNTIME_LIBRARY CACHE)
-
-# Engine exports are listed in exports.def. runtime.cpp supplies optional provider symbols and DLL unload.
-add_library(rsf_godot SHARED native/exports.def native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp)
+# exports.def lists the GDExtension entry and the engine exports, all Rust. runtime_platform.c
+# supplies the optional provider symbols, the project version, the layout checks and DLL unload.
+add_library(rsf_godot SHARED native/exports.def native/runtime_platform.c)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_include_directories(rsf_godot SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()
 target_compile_definitions(rsf_godot PRIVATE RSF_GODOT_NATIVE_BUILD RSF_STREAMLINE_HOST_BUILD)
-target_link_libraries(rsf_godot PRIVATE godot::cpp rsf_godot_rust rsf_orchestrator_core ReScaleFrame::NativeVulkan rsf_build_options)
-set_target_properties(rsf_godot PROPERTIES OUTPUT_NAME "ReScaleFrame.Godot.Native"
-    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+target_link_libraries(rsf_godot PRIVATE rsf_godot_rust rsf_orchestrator_core ReScaleFrame::NativeVulkan rsf_build_options)
+set_target_properties(rsf_godot PROPERTIES OUTPUT_NAME "ReScaleFrame.Godot.Native")

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
-//! The `ReScaleFrameEffect` compositor probe owner, one per effect instance (`effect.cpp`): the
-//! pending motion capture request, the scene buffer admission, the capture admission, the
-//! classification of the readback, the callback count, the snapshot and capture each callback
-//! publishes, and the probe's published stage, reason and inactive pipeline claims.
+//! The `ReScaleFrameEffect` compositor probe owner, one per effect instance
+//! (`gdextension/effect.rs`): the pending motion capture request, the scene buffer admission, the
+//! capture admission, the classification of the readback, the callback count, the snapshot and
+//! capture each callback publishes, and the probe's published stage, reason and inactive pipeline
+//! claims.
 //!
-//! The class keeps its godot-cpp registration and callback contract (`POST_TRANSPARENT`, resolved
-//! color and depth, motion vectors), the scene buffer, scene data and RenderingDevice reads, the
-//! readback compute calls and the typed Variant conversions. Scene
+//! The class keeps its registration and callback contract (`POST_TRANSPARENT`, resolved color and
+//! depth, motion vectors), the scene buffer, scene data and RenderingDevice reads, the readback
+//! compute calls and the Variant conversions. Scene
 //! objects, RIDs and native pointers stay in the leaves' callback record; this owner keeps copied
 //! CPU facts only, and no resource lease or GPU completion is implied. The effect reads no
 //! Runtime settings or status: `ReScaleFrameRuntime` reports active SR, FG and latency.
@@ -161,7 +162,7 @@ impl Effect {
 /// Only the SDK leaves can allocate, record and release Godot resources. Finish
 /// by releasing the resources created up to that point, even after a refusal.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_effect_record_motion(
+pub(crate) unsafe extern "C" fn rsf_godot_effect_record_motion(
     call: *mut c_void,
     plan: *const EffectReadback,
     calls: *const rsf_godot_motion_calls,
@@ -196,7 +197,7 @@ unsafe extern "C" fn rsf_godot_effect_record_motion(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_effect_properties(
+pub(crate) unsafe extern "C" fn rsf_godot_effect_properties(
     effect: *const Effect,
     version: *const c_char,
     user: *mut c_void,

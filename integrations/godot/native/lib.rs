@@ -6,16 +6,19 @@
 //! the `ReScaleFrameRuntime` option schema and renderer admission (`extension.rs`) and each
 //! `ReScaleFrameEffect`'s probe snapshot and motion capture classification (`effect.rs`).
 //!
-//! The GDExtension entry and godot-cpp classes stay C++. Native control uses the same C ABI.
+//! `gdextension.rs` implements the GDExtension entry and the `ReScaleFrameEffect` and
+//! `ReScaleFrameRuntime` classes on Godot's C interface, and lends the compositor effect leaves.
 //! `runtime.rs` handles the engine entry points, and `host.rs` implements the D3D12,
-//! DXGI and Win32 leaves and calls the shared Runtime capture owner. `runtime.cpp`
-//! supplies CMake-selected Vulkan symbols and the DLL unload callback.
-//! `effect.cpp` lends godot-cpp leaves for each compositor callback.
+//! DXGI and Win32 leaves and calls the shared Runtime capture owner. The C11 leaf
+//! `runtime_platform.c` supplies the CMake-selected Vulkan symbols, the project version, the
+//! record layout checks and the DLL unload hook.
 mod control;
 mod d3d12;
 mod effect;
 mod extension;
 mod extension_abi;
+#[cfg(all(windows, not(test)))]
+mod gdextension;
 #[cfg(all(windows, not(test)))]
 mod host;
 #[cfg(all(windows, not(test)))]
@@ -432,8 +435,8 @@ unsafe extern "C" fn rsf_godot_vk_present_marker(
         .into()
 }
 
-// The compositor effect owner (effect.rs), one per ReScaleFrameEffect, created and destroyed with
-// the godot-cpp object.
+// The compositor effect owner (effect.rs). Each ReScaleFrameEffect instance owns one directly
+// (gdextension/effect.rs); these C entries expose the same owner to the fixtures.
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_godot_effect_create() -> *mut Effect {

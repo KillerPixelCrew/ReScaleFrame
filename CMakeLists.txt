@@ -14,8 +14,9 @@ if(NOT MSVC)
     set(CMAKE_SHARED_MODULE_PREFIX "")
 endif()
 
-# A cache entry left by godot-cpp (see integrations/godot/CMakeLists.txt) would force the Release CRT
-# onto every target in Debug; clear it so the default per-configuration CRT applies.
+# A cache entry left by an earlier godot-cpp configure (the Godot extension no longer uses it) would
+# force the Release CRT onto every target in Debug; clear it so the default per-configuration CRT
+# applies.
 unset(CMAKE_MSVC_RUNTIME_LIBRARY CACHE)
 
 set(CMAKE_CXX_STANDARD 20)

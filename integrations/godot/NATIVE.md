@@ -1,5 +1,23 @@
 # Godot native integration ownership
 
+## GDExtension on the C interface
+
+`ReScaleFrame.Godot.Native.dll` has no first-party C++ and no longer links godot-cpp.
+`native/gdextension.rs` implements the `rsf_godot_initialize` entry and registers
+`ReScaleFrameEffect` (`CompositorEffect`) and `ReScaleFrameRuntime` (`RefCounted`) through
+Godot 4.7's C interface. `gdextension/effect.rs` holds the class, the `_render_callback`
+virtual, the scene and RenderingDevice leaves and the motion readback objects.
+`gdextension/runtime.rs` holds the option reads, renderer names, status Dictionary and
+render-thread Callable. `gdextension/api.rs` loads the interface, the builtin constructors and
+the method binds by their pinned 4.7 hashes. The effect and extension owners, property keys and
+callback sequences are unchanged.
+
+`native/runtime_platform.c` is the only native source. This C11 leaf asserts the private record
+layouts, supplies the CMake-selected optional Vulkan symbols and the CMake version, and
+registers `rsf_godot_host_unload` with `atexit` from a CRT initializer. `exports.def` exports the
+entry. CMake builds the DLL when `RSF_GODOT_NATIVE=ON`, which `eng/build-godot.ps1` passes.
+Rationale and checks: [Godot GDExtension on the C interface](../../docs/research/rust-godot-native-e02.md).
+
 ## Native control and D3D12 follow-up
 
 The existing engine ABI retains its function signatures and record layouts. The DLL exports
@@ -22,8 +40,8 @@ slot. Window subclass forwarding remains keyed by HWND through a refused restora
 replacement window can attach independently.
 
 Rust plans the motion diagnostic's buffer size and dispatch and supplies its shader. The
-GDExtension entry, class bindings, Variant/RID marshaling and RenderingDevice recording still
-use godot-cpp. Rust handles the D3D12 COM, DXGI and Runtime frame capture calls.
+GDExtension entry, class bindings, Variant/RID marshaling and RenderingDevice recording are Rust
+on the C interface (see above). Rust handles the D3D12 COM, DXGI and Runtime frame capture calls.
 
 The native integration binds one versioned Runtime CPU service at backend setup. CPU facts and
 window messages use its report callback, and diagnostic pings use its ping callback. Godot admits

@@ -3023,13 +3023,13 @@ Port extension control, compositor diagnostics, window input and D3D12 rendering
 **Port files (8)**
 
 - [x] [integrations/godot/native/api.h](integrations/godot/native/api.h)
-- [ ] [integrations/godot/native/effect.cpp](integrations/godot/native/effect.cpp)
-- [ ] [integrations/godot/native/effect.h](integrations/godot/native/effect.h)
-- [ ] [integrations/godot/native/extension.cpp](integrations/godot/native/extension.cpp)
+- [x] [integrations/godot/native/effect.cpp](integrations/godot/native/effect.cpp) (deleted; the `CompositorEffect` class, `_render_callback` and leaves are Rust in native/gdextension/effect.rs on Godot's C interface)
+- [x] [integrations/godot/native/effect.h](integrations/godot/native/effect.h) (deleted with the godot-cpp class)
+- [x] [integrations/godot/native/extension.cpp](integrations/godot/native/extension.cpp) (deleted; `rsf_godot_initialize` and class registration are Rust in native/gdextension.rs, exported through exports.def)
 - [x] [integrations/godot/native/godot_platform.h](integrations/godot/native/godot_platform.h)
-- [ ] [integrations/godot/native/runtime.cpp](integrations/godot/native/runtime.cpp)
-- [ ] [integrations/godot/native/runtime_control.cpp](integrations/godot/native/runtime_control.cpp)
-- [ ] [integrations/godot/native/runtime_control.h](integrations/godot/native/runtime_control.h)
+- [x] [integrations/godot/native/runtime.cpp](integrations/godot/native/runtime.cpp) (replaced by the C11 leaf native/runtime_platform.c: layout `_Static_assert`s, CMake-selected Vulkan provider symbols, project version, `atexit` unload hook)
+- [x] [integrations/godot/native/runtime_control.cpp](integrations/godot/native/runtime_control.cpp) (deleted; the `RefCounted` class is Rust in native/gdextension/runtime.rs; script_dictionary.h deleted with it)
+- [x] [integrations/godot/native/runtime_control.h](integrations/godot/native/runtime_control.h) (deleted with the godot-cpp class)
 
 **Rust review findings (14)**
 

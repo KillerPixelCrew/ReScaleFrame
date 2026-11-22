@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! `ReScaleFrameRuntime` control policy for the GDExtension class in `runtime_control.cpp`: the
+//! `ReScaleFrameRuntime` control policy for the GDExtension class in `gdextension/runtime.rs`: the
 //! option schema of `configure(options, viewport)` with its type, range and default rules, and
-//! the renderer admission both `configure` and `get_status` report. The class keeps the typed
-//! godot-cpp `Dictionary`, `RID` and `RenderingServer` calls.
+//! the renderer admission both `configure` and `get_status` report. The class keeps the
+//! `Dictionary`, `Variant`, `RID` and `RenderingServer` calls.
 use crate::control::default_settings;
 use crate::extension_abi::rsf_godot_property_emit;
 use crate::platform::{OptionField, OptionValue, Platform, Settings};
@@ -154,29 +154,11 @@ pub(crate) fn admission(
     (if driver { ADMIT_DRIVER } else { 0 }) | (if renderer { ADMIT_RENDERER } else { 0 })
 }
 
-/// The renderer names are borrowed UTF-8 from Godot. Read Vulkan availability from
-/// the same production platform used by the engine entry points.
-#[cfg(all(windows, not(test)))]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_renderer_admission(
-    driver: *const std::ffi::c_char,
-    method: *const std::ffi::c_char,
-) -> u32 {
-    let name = |p: *const std::ffi::c_char| {
-        (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_bytes())
-    };
-    admission(
-        name(driver),
-        name(method),
-        crate::host::native_platform().vulkan_supported(),
-    )
-}
-
 /// Compose the options from a borrowed Godot Dictionary, then call the registered
 /// engine service with the typed settings. Only the leaf can interpret Variants.
 #[cfg(all(windows, not(test)))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_extension_configure(
+pub(crate) unsafe extern "C" fn rsf_godot_extension_configure(
     admitted: u32,
     viewport: u64,
     dictionary: *const c_void,
@@ -201,7 +183,7 @@ unsafe extern "C" fn rsf_godot_extension_configure(
 /// The scripting status schema. Godot's callback materializes the scalar values
 /// as Variants in its own Dictionary.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_extension_status(
+pub(crate) unsafe extern "C" fn rsf_godot_extension_status(
     admitted: u32,
     dictionary: *mut c_void,
     emit: rsf_godot_property_emit,

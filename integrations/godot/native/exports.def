@@ -1,4 +1,5 @@
 EXPORTS
+    rsf_godot_initialize
     rsfg_attach_engine
     rsfg_configure_engine
     rsfg_reset_history

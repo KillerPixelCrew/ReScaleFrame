@@ -35,9 +35,12 @@ retain their commercial licenses and are not copied into Git or runtime packages
 The [Godot dependency lock](../integrations/godot/dependencies.json) pins Godot
 4.7.2, godot-cpp, official standard/.NET archives, vendor SDKs and the Godot Mesa
 NIR binary used by the Windows D3D12 engine build. Engine/reference checkouts,
-SDKs and build tools remain ignored. The GDExtension links godot-cpp; the custom
-engine builds the first-party module from this monorepo. The add-on preserves
-the Godot/godot-cpp license texts and the vendor payload's bundled notices.
+SDKs and build tools remain ignored. The GDExtension is written against Godot's C
+interface and does not link godot-cpp. The godot-cpp pin is kept as the source of the
+4.7 API description (`extension_api-4-7.json`, `gdextension_interface.json`) that the
+method hashes and record layouts follow. The custom engine builds the first-party
+module from this monorepo. The add-on preserves the Godot/godot-cpp license texts
+and the vendor payload's bundled notices.
 
 Python tooling uses the local environment and pinned SCons, NumPy and Pillow
 requirements. .NET validation uses the matching official GodotSharp assemblies

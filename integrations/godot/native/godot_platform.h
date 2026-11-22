@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 #include "extension_abi.h"
-/* Internal boundary between the typed leaves in runtime.cpp and runtime_control.cpp and the Rust
-   control owner (crate rsf-godot, native/lib.rs). Not a DLL ABI: both link into
-   ReScaleFrame.Godot.Native.dll next to the same OrchestratorCore, and the rsfg_* exports in
-   api.h stay C++ forwarders. native/platform.rs mirrors these layouts by hand (bindgen-cli 0.72.1
-   was not available); both sides assert sizes and offsets.
+/* Internal boundary between the leaves and the Rust control owner (crate rsf-godot,
+   native/lib.rs). Not a DLL ABI: everything links into ReScaleFrame.Godot.Native.dll next to the
+   same OrchestratorCore, and Rust exports the rsfg_* entries of api.h through exports.def.
+   native/platform.rs mirrors these layouts by hand (bindgen-cli 0.72.1 was not available);
+   runtime_platform.c and platform.rs both assert sizes and offsets.
 
    Rust owns the requested settings and their generation, the extension option schema, renderer
    admission, engine-service routing, the D3D12 session identity and paths, the status record,
@@ -15,10 +15,9 @@
    primary window, the SR context owner in vulkan/sr.rs and the device creation owner in
    vulkan/creation.rs), and the input window owner (window.rs: admission, window procedure, input
    session, CPU event and ping routing, and the present-marker admission). The leaves hold
-   godot-cpp, D3D12, DXGI, Win32, Vulkan and Runtime calls and decide nothing. The creation leaves
-   use a separate Rust callback table at each
-   creation call, so the creation contract test links them without runtime.cpp. The compositor
-   effect's leaves are another (rsf_godot_effect_leaves, effect.cpp), lent with each callback. */
+   Godot, D3D12, DXGI, Win32, Vulkan and Runtime calls and decide nothing. The creation leaves
+   use a separate Rust callback table at each creation call. The compositor effect's leaves are
+   another (rsf_godot_effect_leaves, gdextension/effect.rs), lent with each callback. */
 #include "api.h"
 #include <rescaleframe/native_cpu_service.h>
 #include <stdint.h>
@@ -154,13 +153,14 @@ typedef struct rsf_godot_vk_sr_context {
 /* The compositor effect boundary. The effect owner (effect.rs) keeps each ReScaleFrameEffect's
    published snapshot, its callback count, the pending capture request and the last motion capture,
    the scene buffer admission, the capture admission and the motion classification, and the probe's
-   published stage, reason and inactive pipeline claims. effect.cpp keeps the godot-cpp class, its
-   registration and callback contract, the RenderSceneBuffersRD, RenderSceneData and
-   RenderingDevice reads, the readback compute pass and the status Dictionary keys. call is the
-   render callback's private record. These leaves take no guard and call no other owner. */
+   published stage, reason and inactive pipeline claims. gdextension/effect.rs keeps the
+   CompositorEffect class, its registration and callback contract, the RenderSceneBuffersRD,
+   RenderSceneData and RenderingDevice reads, the readback compute calls and the status
+   Dictionary conversion. call is the render callback's private record. These leaves take no
+   guard and call no other owner. */
 #define RSF_GODOT_EFFECT_VERSION 2u
 /* RenderingDevice::DATA_FORMAT_R16G16_SFLOAT, the engine's velocity format and the only one the
-   readback is interpreted for. effect.cpp asserts the value. */
+   readback is interpreted for. gdextension/effect.rs asserts the value. */
 #define RSF_GODOT_EFFECT_MOTION_FORMAT 82
 
 /* The scene buffer facts of one POST_TRANSPARENT callback. Matrices are the scene data's real_t
@@ -202,8 +202,8 @@ typedef struct rsf_godot_effect_status {
     uint32_t rendering_ready, sr_active, fg_active, latency_active;
 } rsf_godot_effect_status;
 
-/* Process-lived table from effect.cpp, lent with each render callback. Every entry is present and
-   catches its own exceptions; a completion of zero means an exception ended the leaf. */
+/* Process-lived table from gdextension/effect.rs, lent with each render callback. Every entry is
+   present; a completion of zero means a Godot call was unavailable or refused. */
 typedef struct rsf_godot_effect_readback {
     const char* shader;
     uint32_t bytes, groups_x, groups_y;
@@ -230,7 +230,7 @@ typedef struct rsf_godot_effect rsf_godot_effect;
 #define RSF_GODOT_VK_LOG_FSR4_DISPATCH 2u  /* the last FSR4 evaluate's code and continuation */
 #define RSF_GODOT_VK_LOG_INPUT_REFUSAL 3u  /* the last evaluated frame, its plan and record */
 
-/* Process-lived table from runtime.cpp. Every entry is present and catches its own exceptions. */
+/* Process-lived table from host.rs. Every entry is present. */
 typedef struct rsf_godot_platform {
     uint32_t struct_size, version;
     uint64_t (*tick_count)(void);
@@ -388,9 +388,9 @@ int rsf_godot_vk_booted(void);
 int rsf_godot_boot_vulkan(const rsf_godot_platform* platform, const rsf_godot_setup* setup);
 /* The caller found the session booted. */
 int rsf_godot_shutdown_vulkan(const rsf_godot_platform* platform);
-/* Compositor effect owner (effect.rs), one per ReScaleFrameEffect instance. create and destroy run
-   in the class constructor and destructor; request_capture and status on the caller's thread;
-   render in _render_callback on the render thread, after the class's callback type check. */
+/* Compositor effect owner (effect.rs). Each ReScaleFrameEffect instance (gdextension/effect.rs)
+   owns one directly; these entries expose the same owner to the Rust fixtures. request_capture and
+   status run on the caller's thread, render on the render thread after the callback type check. */
 rsf_godot_effect* rsf_godot_effect_create(void);
 void rsf_godot_effect_destroy(rsf_godot_effect* effect);
 void rsf_godot_effect_request_capture(rsf_godot_effect* effect);
@@ -414,15 +414,14 @@ void rsf_godot_window_release(const rsf_godot_platform* platform);
 int rsf_godot_execution(const rsf_game_render_pass* pass, uint32_t begin);
 int rsf_godot_vk_present_marker(const rsf_godot_platform* platform, uint64_t window, uint32_t begin);
 
-/* Extension control (runtime_control.cpp). */
+/* Extension control, called by ReScaleFrameRuntime (native/gdextension/runtime.rs). */
 int rsf_godot_extension_configure(uint32_t admitted,
     uint64_t viewport, const void* dictionary,
     uint32_t (*read)(const void*, const rsf_godot_option_field*, rsf_godot_option_value*));
 /* Emits script status fields into a borrowed scripting Dictionary. */
 void rsf_godot_extension_status(uint32_t admitted, void* dictionary, rsf_godot_property_emit emit);
-void rsf_godot_extension_capture(void);
-/* Null names are unsupported. Returns RSF_GODOT_ADMIT_* bits. */
-uint32_t rsf_godot_renderer_admission(const char* driver, const char* method);
+/* The CMake project version, from runtime_platform.c. */
+const char* rsf_godot_version(void);
 #ifdef __cplusplus
 }
 #endif

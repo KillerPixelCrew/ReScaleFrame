@@ -174,7 +174,7 @@ extern "C" fn rsfg_shutdown() -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_extension_capture() {
+/// `ReScaleFrameRuntime.request_frame_dump`, on the render thread.
+pub(crate) fn rsf_godot_extension_capture() {
     unsafe { rsf_input_dump_request() };
 }

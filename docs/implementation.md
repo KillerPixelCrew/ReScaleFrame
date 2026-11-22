@@ -149,11 +149,16 @@ patch generation, binding regeneration and pinned formatting were checked. Build
 [Godot native control evidence](../integrations/godot/NATIVE.md#native-control-and-d3d12-follow-up)
 
 The E02 continuation ports D3D12 COM, DXGI, Win32 and capture leaves to Rust.
-The engine exports reuse the existing submission and Present receipts. The
-pinned godot-cpp classes retain registration, lifetime and typed Godot calls.
+The engine exports reuse the existing submission and Present receipts.
 Binding regeneration, pinned formatting and locked offline metadata passed.
 Build and runtime checks remain pending.
 [E02 source evidence](../integrations/godot/NATIVE.md#e02-first-party-native-leaves)
+
+E02 then removes the last Godot extension C++. The GDExtension entry and both
+classes are Rust on Godot's 4.7 C interface, without godot-cpp. A C11 leaf keeps
+the layout checks, optional Vulkan symbols, version and unload hook. Live Godot
+loading remains unverified.
+[GDExtension port](research/rust-godot-native-e02.md)
 
 The E02 extension continuation also moves platform wiring, readback admission
 and scripting status fields into Rust. The pinned Godot classes keep typed SDK
@@ -1180,9 +1185,9 @@ replay verification remain open.
 [Stream policy audit](research/rust-ac7-velocity-stream.md)
 
 The Godot compositor probe now keeps requests, snapshots and motion
-classification per effect instance in Rust. The typed godot-cpp
-callbacks retain scene reads, the GPU readback pass and the same status
-keys. The existing callback destruction and XR velocity extent limits
+classification per effect instance in Rust. The Rust class callbacks
+(formerly godot-cpp) retain scene reads, the GPU readback pass and the same
+status keys. The existing callback destruction and XR velocity extent limits
 remain open, along with build and live renderer verification.
 [Compositor owner notes](../integrations/godot/NATIVE.md#rust-compositor-effect-owner-seventh-slice)
 

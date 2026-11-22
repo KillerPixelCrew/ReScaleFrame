@@ -29,7 +29,7 @@ $taskBuild = if ($NativeBuildDirectory) {
 if (!$StageOnly) {
     Push-Location -LiteralPath $taskRoot
     try {
-        & cmake --preset "windows-x64$taskSuffix" -B $taskBuild "-DRSF_GODOT_CPP_DIR=$taskBindings" "-DPython3_EXECUTABLE=$taskRoot/.local/godot/build-env/Scripts/python.exe" "-DRSF_STREAMLINE_VK_RUNTIME=$taskRoot/.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime"
+        & cmake --preset "windows-x64$taskSuffix" -B $taskBuild "-DRSF_GODOT_NATIVE=ON""-DPython3_EXECUTABLE=$taskRoot/.local/godot/build-env/Scripts/python.exe" "-DRSF_STREAMLINE_VK_RUNTIME=$taskRoot/.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime"
         if ($LASTEXITCODE) { throw 'Godot configuration failed.' }
         & cmake --build $taskBuild --config $Configuration --target rsf_godot
         if ($LASTEXITCODE) { throw 'Godot native build failed.' }
