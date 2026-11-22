@@ -7,7 +7,6 @@ use windows::core::Interface;
 
 // The native device fixtures lend the source and context and allocate the
 // destination. No mapped storage or owned COM reference crosses this call.
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_sr_fixture_readback(
     device: *mut c_void,
     context: *mut c_void,

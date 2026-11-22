@@ -22,7 +22,6 @@ pub(crate) fn half_to_float(half: u16) -> f32 {
     f32::from_bits(bits)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_anomaly_sr_float_to_half(value: f32) -> u16 {
     let bits = value.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
@@ -155,7 +154,6 @@ fn nearest_mapping(pass: &Pass) {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_anomaly_sr_roundtrip_numerics(owner: *mut c_void, run: Run) -> i32 {
     let pass = Pass { owner, run };
     [every_half, stock_curve, nearest_mapping]
@@ -194,7 +192,6 @@ fn bilinear([cx, cy]: [f64; 2], [rw, rh]: [usize; 2], sample: impl Fn(usize) -> 
 }
 
 // The device harness validates the size of every span before lending the record.
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_sr_upscale_numerics(readback: &UpscaleReadback) -> i32 {
     let result = std::panic::catch_unwind(|| {
         let [rw, rh] = readback.input.map(|n| n as usize);

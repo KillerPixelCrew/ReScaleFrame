@@ -298,13 +298,11 @@ extern "C" fn set_overlay_cycles(value: i32) -> bool {
     write(w!("OverlayCaptureCycles"), value)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_sr_persist_int(key: *const c_char, value: i32) -> bool {
     let key = unsafe { ini::widen(key) };
     write(key.as_ptr(), value)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_sr_persist_text(
     key: *const c_char,
     value: *const c_char,

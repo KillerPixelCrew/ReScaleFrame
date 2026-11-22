@@ -158,7 +158,6 @@ impl AdapterOption {
 /// Built at cold start, before the overlay starts. The panel sees the first `RSF_OVERLAY_SERVICE_OPTION_LIMIT`.
 static REGISTRY: Mutex<Vec<AdapterOption>> = Mutex::new(Vec::new());
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_overlay_option_add(
     option: *const rsf_anomaly_overlay_option,
 ) {
@@ -1140,7 +1139,6 @@ pub(super) unsafe extern "C" fn rsf_anomaly_overlay_start(
 }
 
 /// The capture bits (RSF_OVERLAY_CAPTURE_*) the input gate acts on; 0 before start or when the query fails.
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_anomaly_overlay_capture_bits(_: *mut c_void) -> u32 {
     OVERLAY.running().map_or(0, Service::capture_bits)
 }
@@ -1159,7 +1157,6 @@ pub(super) extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut
 }
 
 /// Before ResizeBuffers or ResizeTarget is forwarded.
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_overlay_resize(_: *mut c_void, chain: *mut c_void) {
     if let Ok(panel) = PANEL.try_lock()
         && panel.chain != 0

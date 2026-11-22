@@ -152,7 +152,6 @@ extern "C" fn rsf_anomaly_input_frame_exit(ticket: u32) {
     IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_anomaly_input_activate(active: bool) {
     ACTIVE.store(active, Ordering::Release);
 }

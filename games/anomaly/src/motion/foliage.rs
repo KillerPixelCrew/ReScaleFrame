@@ -222,19 +222,16 @@ impl History {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_anomaly_foliage_active(history: Option<&History>, view: u8) -> bool {
     history.is_some_and(|h| h.views[lane(view)].current.is_some())
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_anomaly_foliage_reset(history: Option<&mut History>) {
     if let Some(history) = history {
         history.views = Default::default();
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_anomaly_foliage_tree(
     history: Option<&mut History>,
     view: u8,
@@ -246,7 +243,6 @@ pub(super) extern "C" fn rsf_anomaly_foliage_tree(
         .map_or(ptr::null(), ptr::from_ref)
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_anomaly_foliage_detail(
     history: Option<&mut History>,
     view: u8,
@@ -261,17 +257,16 @@ pub(super) extern "C" fn rsf_anomaly_foliage_detail(
     }
 }
 
-#[unsafe(no_mangle)]
+#[cfg(feature = "motion-binder-fixture")]
 pub(super) extern "C" fn rsf_anomaly_foliage_conflicts(history: Option<&History>) -> u64 {
     history.map_or(0, |h| h.conflicts)
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_anomaly_foliage_overflows(history: Option<&History>) -> u64 {
     history.map_or(0, |h| h.overflows)
 }
 
-#[unsafe(no_mangle)]
+#[cfg(feature = "motion-binder-fixture")]
 pub(super) extern "C" fn rsf_anomaly_foliage_recorded(
     history: Option<&History>,
     view: u8,
@@ -281,17 +276,15 @@ pub(super) extern "C" fn rsf_anomaly_foliage_recorded(
         .map_or(0, |frame| frame.items.len())
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_anomaly_foliage_count(rows: &Rows) -> u32 {
     live_groups(rows).len() as u32
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_anomaly_foliage_poison(rows: &mut MaybeUninit<Rows>) {
     rows.write([[POISON; 16]; FOLIAGE_MAX_GROUPS]);
 }
 
-#[unsafe(no_mangle)]
+#[cfg(feature = "motion-binder-fixture")]
 pub(super) extern "C" fn rsf_anomaly_foliage_scale(group: &[f32; 16]) -> f32 {
     group_scale(group)
 }

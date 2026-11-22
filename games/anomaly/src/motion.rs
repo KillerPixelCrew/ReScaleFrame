@@ -536,12 +536,11 @@ struct CoreHistory {
     rigid: bool,
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_pack_core_invalid(out: &mut MaybeUninit<[u8; CORE_BYTES]>) {
     initialized_invalid(out, CORE_HISTORY);
 }
 
-#[unsafe(no_mangle)]
+#[cfg(feature = "motion-device-fixture")]
 unsafe extern "C" fn rsf_anomaly_motion_pack_core(
     wvp: &Mat4,
     bones: *const Mat4,
@@ -586,12 +585,11 @@ unsafe fn pack_core(
     Ok(())
 }
 
-#[unsafe(no_mangle)]
+#[cfg(any(feature = "motion-device-fixture", feature = "motion-binder-fixture"))]
 extern "C" fn rsf_anomaly_motion_pack_tess_invalid(out: &mut MaybeUninit<[u8; TESS_BYTES]>) {
     initialized_invalid(out, TESS_HISTORY);
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_pack_tess(
     wv: &Mat4,
     projection: &Mat4,
@@ -647,12 +645,10 @@ fn foliage_common(out: &mut [u8], clip: &Mat4, constants: &FoliageConstants, gro
     true
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_pack_foliage_invalid(out: &mut MaybeUninit<[u8; FOLIAGE_BYTES]>) {
     out.write([0; FOLIAGE_BYTES]);
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_pack_tree(
     clip: &Mat4,
     xform: &[f32; 12],
@@ -667,7 +663,6 @@ extern "C" fn rsf_anomaly_motion_pack_tree(
     true
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_motion_pack_detail(
     clip: &Mat4,
     constants: &FoliageConstants,
@@ -707,7 +702,6 @@ pub(crate) struct PixelInputs {
     pub(crate) jitter: [f32; 4],
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_anomaly_motion_pack_pixel(
     input: &PixelInputs,
     out: &mut MaybeUninit<[u8; PIXEL_BYTES]>,
@@ -756,7 +750,6 @@ enum HistoryReason {
     InvalidMatrix = 16,
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_history_reason_name(reason: u8) -> *const c_char {
     const NAMES: [&std::ffi::CStr; 17] = [
         c"valid",
@@ -989,7 +982,6 @@ const DISTANCE_BANDS: [&std::ffi::CStr; 6] = [
     c"unknown",
 ];
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_distance_band(metres: f64) -> usize {
     if !metres.is_finite() || metres < 0. {
         DISTANCE_BANDS.len() - 1
@@ -1001,7 +993,7 @@ extern "C" fn rsf_anomaly_motion_distance_band(metres: f64) -> usize {
     }
 }
 
-#[unsafe(no_mangle)]
+#[cfg(feature = "motion-binder-fixture")]
 extern "C" fn rsf_anomaly_motion_distance_band_name(band: usize) -> *const c_char {
     DISTANCE_BANDS
         .get(band)
@@ -1019,7 +1011,6 @@ fn translation(matrix: &Mat4) -> [f64; 3] {
     [matrix.0[3], matrix.0[7], matrix.0[11]]
 }
 
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_camera_distance(view: &Mat4, world: &Mat4) -> f64 {
     let v = &view.0;
     if v[12..] != [0., 0., 0., 1.] {
@@ -1038,7 +1029,6 @@ enum ModelElement {
     Tessellated,
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_motion_model_element(
     root: *const u8,
     count: usize,
@@ -1055,7 +1045,6 @@ unsafe extern "C" fn rsf_anomaly_motion_model_element(
     }
 }
 
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_motion_stale_palette(
     previous: &DrawSnapshotView,
     current: &DrawSnapshotView,

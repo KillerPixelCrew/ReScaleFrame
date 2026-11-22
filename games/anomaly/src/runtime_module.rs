@@ -45,7 +45,6 @@ impl Drop for Module {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_anomaly_runtime_module() -> HMODULE {
     // The carrier keeps this module mapped until the adapter retires.
     unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) }
@@ -58,7 +57,6 @@ pub(crate) unsafe fn export<F: Copy>(module: HMODULE, name: &[u8]) -> Option<F> 
     unsafe { rsf_game_sys::win32::typed_export(module, name) }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_anomaly_runtime_set_colour_transport(transport: bool) {
     let runtime = rsf_anomaly_runtime_module();
     let set = unsafe {
