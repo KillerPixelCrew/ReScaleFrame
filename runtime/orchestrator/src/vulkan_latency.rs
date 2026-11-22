@@ -16,6 +16,9 @@ use crate::vulkan_pcl::{
     rsf_core_latencyvk_pcl_status,
 };
 use crate::vulkan_presentation::*;
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INVALID_ARGUMENT, LOAD_FAILED, NOT_READY, NOT_SUPPORTED, OK,
+};
 // The Rust definitions, not the header declarations crate::sys also provides.
 use crate::vulkan_presentation::{
     rsf_core_fgvk_presentation_attach, rsf_core_fgvk_presentation_shutdown_begin,
@@ -26,13 +29,6 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::Mutex;
 
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const LOAD_FAILED: i32 = -4;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 const AMD: u32 = 4;
 const XE_SS_FG: u32 = 5;
 const CLIENT: u32 = 2;
@@ -188,7 +184,7 @@ fn initialize(
         || project.is_null()
         || features & !(RSF_SLVK_DLSS_SR | RSF_SLVK_DLSS_FG) != 0
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let mut host = HOST.lock().unwrap();
     if host.initialized || host.closing {
@@ -198,7 +194,7 @@ fn initialize(
         return NOT_SUPPORTED;
     };
     let Ok(directory) = unsafe { CStr::from_ptr(directory) }.to_str() else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let mut wide = Vec::new();
     if wide.try_reserve_exact(directory.len() + 1).is_err() {
@@ -236,7 +232,7 @@ unsafe extern "C" fn rsf_core_latencyvk_initialize(
     setup: *const rsf_latencyvk_setup,
 ) -> i32 {
     if !unsafe { has_capacity(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     if setup.abi_version != RSF_LATENCYVK_ABI_VERSION {
@@ -251,7 +247,7 @@ unsafe extern "C" fn rsf_core_slvk_initialize(
     setup: *const rsf_slvk_setup,
 ) -> i32 {
     if !unsafe { has_capacity(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     if setup.abi_version != RSF_SLVK_ABI_VERSION {
@@ -268,17 +264,17 @@ unsafe extern "C" fn rsf_core_slvk_initialize(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slvk_invoke(platform: &Platform, call: *const rsf_slvk_call) -> i32 {
     if !unsafe { has_capacity(call) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let request = unsafe { &*call };
     if request.abi_version != RSF_SLVK_ABI_VERSION {
         return ABI_MISMATCH;
     }
     let Some(callback) = request.callback else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if (request.session_id == 0) != (request.frame_id == 0) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let host = HOST.lock().unwrap();
     let Some(sdk) = host.sdk(platform) else {
@@ -326,7 +322,7 @@ fn options(platform: &Platform, settings: Option<(u32, u32)>) -> i32 {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_latencyvk_options(platform: &Platform, requested: u32, limit: u32) -> i32 {
     if requested > 2 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     options(platform, Some((requested, limit)))
 }
@@ -587,7 +583,7 @@ unsafe extern "C" fn rsf_core_latencyvk_get_status(
     output: *mut rsf_latencyvk_status,
 ) -> i32 {
     if !unsafe { has_capacity(output) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if unsafe { (*output).abi_version } != RSF_LATENCYVK_ABI_VERSION {
         return ABI_MISMATCH;

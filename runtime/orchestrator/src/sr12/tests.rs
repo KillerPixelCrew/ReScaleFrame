@@ -659,12 +659,12 @@ fn create_refuses_before_any_platform_call() {
     let mut owner = ptr::dangling_mut::<Sr12>();
     assert_eq!(
         unsafe { rsf_core_sr12_create(ptr::null(), &mut owner, &PLATFORM) },
-        INVALID
+        INVALID_ARGUMENT
     );
     assert!(owner.is_null());
     assert_eq!(
         unsafe { rsf_core_sr12_create(ptr::null(), ptr::null_mut(), &PLATFORM) },
-        INVALID
+        INVALID_ARGUMENT
     );
     let valid = scene.setup(SR_NONE, 2, OUTPUT);
     let cases = [
@@ -673,7 +673,7 @@ fn create_refuses_before_any_platform_call() {
                 struct_size: offset_of!(Setup, engine_input_extents) as u32 - 4,
                 ..valid
             },
-            INVALID,
+            INVALID_ARGUMENT,
         ),
         (
             Setup {
@@ -687,35 +687,35 @@ fn create_refuses_before_any_platform_call() {
                 struct_size: size_of::<Setup>() as u32 - 8,
                 ..valid
             },
-            INVALID,
+            INVALID_ARGUMENT,
         ),
         (
             Setup {
                 backend: RSF_SR_XESS + 1,
                 ..valid
             },
-            INVALID,
+            INVALID_ARGUMENT,
         ),
         (
             Setup {
                 quality: MAX_QUALITY + 1,
                 ..valid
             },
-            INVALID,
+            INVALID_ARGUMENT,
         ),
         (
             Setup {
                 output_width: 0,
                 ..valid
             },
-            INVALID,
+            INVALID_ARGUMENT,
         ),
         (
             Setup {
                 device: ptr::null_mut(),
                 ..valid
             },
-            INVALID,
+            INVALID_ARGUMENT,
         ),
         (
             Setup {
@@ -724,7 +724,7 @@ fn create_refuses_before_any_platform_call() {
                 render_height: OUTPUT.1,
                 ..valid
             },
-            INVALID,
+            INVALID_ARGUMENT,
         ),
     ];
     for (setup, expected) in cases {
@@ -871,29 +871,29 @@ fn inputs_are_validated_against_extents_formats_and_generation() {
     pass.motion = scene.depth;
     assert_eq!(
         unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, 0) },
-        INVALID
+        INVALID_ARGUMENT
     );
     let mut pass = scene.pass(5, RENDER, OUTPUT);
     pass.camera.render_width = RENDER.0 - 1;
     assert_eq!(
         unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, 0) },
-        INVALID
+        INVALID_ARGUMENT
     );
     let mut pass = scene.pass(5, RENDER, OUTPUT);
     pass.motion_to_uv[1] = f32::NAN;
     assert_eq!(
         unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, 0) },
-        INVALID
+        INVALID_ARGUMENT
     );
     let foreign = fake("foreign-list", TextureDesc::default(), ptr::null_mut());
     let pass = scene.pass(5, RENDER, OUTPUT);
     assert_eq!(
         unsafe { rsf_core_sr12_evaluate(owner, foreign, &pass, 0) },
-        INVALID
+        INVALID_ARGUMENT
     );
     assert_eq!(
         unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, 3) },
-        INVALID
+        INVALID_ARGUMENT
     );
     take_events();
     assert_eq!(
@@ -1004,7 +1004,7 @@ fn external_exposure_is_validated_and_normalized() {
     pass.exposure = ptr::null_mut();
     assert_eq!(
         unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, 0) },
-        INVALID
+        INVALID_ARGUMENT
     );
     let pass = scene.pass(5, RENDER, OUTPUT);
     assert_eq!(
@@ -1111,7 +1111,7 @@ fn sharpening_refusal_is_reported_once_and_options_are_checked() {
     options.abi_version = RSF_SHARPENING_ABI_VERSION;
     assert_eq!(
         unsafe { rsf_core_sr12_set_sharpening(owner, &options) },
-        INVALID
+        INVALID_ARGUMENT
     );
     options.struct_size += 4;
     options.abi_version = 2;
@@ -1123,18 +1123,21 @@ fn sharpening_refusal_is_reported_once_and_options_are_checked() {
     options.mode = 9;
     assert_eq!(
         unsafe { rsf_core_sr12_set_sharpening(owner, &options) },
-        INVALID
+        INVALID_ARGUMENT
     );
     options.mode = 1;
     assert_eq!(unsafe { rsf_core_sr12_set_sharpening(owner, &options) }, OK);
-    assert_eq!(unsafe { rsf_core_sr12_capture_flush(owner, 3) }, INVALID);
+    assert_eq!(
+        unsafe { rsf_core_sr12_capture_flush(owner, 3) },
+        INVALID_ARGUMENT
+    );
     assert_eq!(
         unsafe { rsf_core_sr12_capture(owner, ptr::null(), 1, 1) },
-        INVALID
+        INVALID_ARGUMENT
     );
     assert_eq!(
         unsafe { rsf_core_sr12_present(owner, ptr::null_mut(), 0, 0, 0) },
-        INVALID
+        INVALID_ARGUMENT
     );
     assert_eq!(
         unsafe { rsf_core_sr12_present(owner, scene.list, 0, 0, 0) },

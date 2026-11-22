@@ -110,11 +110,17 @@ extern "C" fn rsf_fixture_dlss_backend() -> i32 {
     );
     setup.abi_version -= 1;
     setup.struct_size = 0;
-    check(unsafe { rsf_dlss_load(&setup) } == INVALID, "Short setup");
-    setup.struct_size = size;
-    check(unsafe { rsf_dlss_load(null()) } == INVALID, "Null setup");
     check(
-        unsafe { rsf_dlss_set_device(null_mut()) } == INVALID,
+        unsafe { rsf_dlss_load(&setup) } == INVALID_ARGUMENT,
+        "Short setup",
+    );
+    setup.struct_size = size;
+    check(
+        unsafe { rsf_dlss_load(null()) } == INVALID_ARGUMENT,
+        "Null setup",
+    );
+    check(
+        unsafe { rsf_dlss_set_device(null_mut()) } == INVALID_ARGUMENT,
         "Null device",
     );
     check(
@@ -127,7 +133,7 @@ extern "C" fn rsf_fixture_dlss_backend() -> i32 {
     frame.struct_size = size_of::<Frame>() as u32;
     frame.abi_version = RSF_DLSS_ABI_VERSION;
     check(
-        unsafe { rsf_dlss_evaluate(null_mut(), &frame) } == INVALID,
+        unsafe { rsf_dlss_evaluate(null_mut(), &frame) } == INVALID_ARGUMENT,
         "Null context",
     );
     frame.abi_version += 1;
@@ -138,7 +144,7 @@ extern "C" fn rsf_fixture_dlss_backend() -> i32 {
     frame.abi_version -= 1;
     if compiled {
         check(
-            unsafe { rsf_dlss_evaluate(sentinel, &frame) } == INVALID,
+            unsafe { rsf_dlss_evaluate(sentinel, &frame) } == INVALID_ARGUMENT,
             "Missing required resources",
         );
         frame.color_in = sentinel;
@@ -148,8 +154,8 @@ extern "C" fn rsf_fixture_dlss_backend() -> i32 {
         for viewport in [2, 7] {
             frame.viewport = viewport;
             check(
-                unsafe { rsf_dlss_evaluate(sentinel, &frame) } == INVALID
-                    && unsafe { rsf_dlss_release_viewport(viewport) } == INVALID,
+                unsafe { rsf_dlss_evaluate(sentinel, &frame) } == INVALID_ARGUMENT
+                    && unsafe { rsf_dlss_release_viewport(viewport) } == INVALID_ARGUMENT,
                 "Unsupported viewport",
             );
         }

@@ -4,6 +4,7 @@
 use super::{E_FAIL, S_OK};
 use crate::com_ref::ComRef;
 use crate::d3d11_present_abi::Raw;
+use rsf_game_sys::backend_result::FEATURE_FAILED;
 use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 use windows::Win32::Foundation::HANDLE;
@@ -416,7 +417,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_retire_submit(
     value: u64,
     unwrap_list: unsafe extern "C" fn(Raw, Raw, Raw) -> Raw,
 ) -> i32 {
-    const FEATURE_FAILED: i32 = -9;
     if !vendor_fence.is_null() && unsafe { queue_wait(queue, vendor_fence, vendor_value) } < 0 {
         return FEATURE_FAILED;
     }

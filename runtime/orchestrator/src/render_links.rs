@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::{RSF_RENDER_LINK_ABI_VERSION, rsf_render_link as Link};
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, STALE_RESOURCES,
+};
 use std::{ptr, sync::Mutex};
-
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
-const STALE: i32 = -10;
 
 const EMPTY: Link = Link {
     struct_size: size_of::<Link>() as u32,
@@ -28,7 +25,7 @@ type Handle = Mutex<Table>;
 
 unsafe fn validate(link: *const Link) -> Result<(), i32> {
     if link.is_null() || unsafe { link.cast::<u32>().read() } < EMPTY.struct_size {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     if unsafe { (*link).abi_version } != EMPTY.abi_version {
         return Err(ABI_MISMATCH);
@@ -51,11 +48,11 @@ unsafe extern "C" fn rsf_render_links_create(
     out: *mut *mut Handle,
 ) -> i32 {
     if out.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     if session == 0 || !(1..=64).contains(&capacity) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let mut entries = Vec::new();
     let capacity = capacity as usize;
@@ -87,10 +84,10 @@ unsafe extern "C" fn rsf_render_links_bind(
         return code;
     }
     let Some(handle) = (unsafe { handle.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if key == 0 || frame == 0 || generation == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let mut table = handle.lock().unwrap();
     if table.entries.len() == table.capacity || table.entries.iter().any(|e| e.producer_key == key)
@@ -125,17 +122,17 @@ unsafe extern "C" fn rsf_render_links_lookup(
         return code;
     }
     let Some(handle) = (unsafe { handle.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if key == 0 || generation == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let table = handle.lock().unwrap();
     let Some(entry) = table.entries.iter().find(|e| e.producer_key == key) else {
         return NOT_READY;
     };
     if entry.resource_generation != generation {
-        return STALE;
+        return STALE_RESOURCES;
     }
     unsafe { out.write(*entry) };
     0
@@ -147,11 +144,11 @@ unsafe extern "C" fn rsf_render_links_release(handle: *const Handle, link: *cons
         return code;
     }
     let Some(handle) = (unsafe { handle.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let ticket = unsafe { &*link };
     if ticket.producer_key == 0 || ticket.submission_id == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let mut table = handle.lock().unwrap();
     let Some(index) = table
@@ -167,7 +164,7 @@ unsafe extern "C" fn rsf_render_links_release(handle: *const Handle, link: *cons
         || entry.submission_id != ticket.submission_id
         || entry.resource_generation != ticket.resource_generation
     {
-        return STALE;
+        return STALE_RESOURCES;
     }
     table.entries.swap_remove(index);
     0
@@ -176,7 +173,7 @@ unsafe extern "C" fn rsf_render_links_release(handle: *const Handle, link: *cons
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_links_destroy(raw: *mut Handle) -> i32 {
     let Some(handle) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !handle.lock().unwrap().entries.is_empty() {
         return NOT_READY;
@@ -195,8 +192,11 @@ mod tests {
         // Native entry points validate their size/version and own this fixture's table.
         unsafe {
             let mut handle = ptr::null_mut();
-            assert_eq!(rsf_render_links_create(0, 2, &mut handle), INVALID);
-            assert_eq!(rsf_render_links_create(42, 65, &mut handle), INVALID);
+            assert_eq!(rsf_render_links_create(0, 2, &mut handle), INVALID_ARGUMENT);
+            assert_eq!(
+                rsf_render_links_create(42, 65, &mut handle),
+                INVALID_ARGUMENT
+            );
             assert!(handle.is_null());
             assert_eq!(rsf_render_links_create(42, 2, &mut handle), 0);
             let table = &*handle;
@@ -234,13 +234,16 @@ mod tests {
                 NOT_READY
             );
             assert_eq!(rsf_render_links_destroy(handle), NOT_READY);
-            assert_eq!(rsf_render_links_lookup(table, 100, 8, &mut refused), STALE);
+            assert_eq!(
+                rsf_render_links_lookup(table, 100, 8, &mut refused),
+                STALE_RESOURCES
+            );
             assert_eq!(refused.source_frame_id, 0);
             let wrong = Link {
                 session_id: 43,
                 ..old
             };
-            assert_eq!(rsf_render_links_release(table, &wrong), STALE);
+            assert_eq!(rsf_render_links_release(table, &wrong), STALE_RESOURCES);
             assert_eq!(rsf_render_links_release(table, &old), 0);
             let mut reused = EMPTY;
             assert_eq!(
@@ -248,7 +251,7 @@ mod tests {
                 0
             );
             assert!(reused.submission_id > next.submission_id);
-            assert_eq!(rsf_render_links_release(table, &old), STALE);
+            assert_eq!(rsf_render_links_release(table, &old), STALE_RESOURCES);
             assert_eq!(rsf_render_links_lookup(table, 100, 8, &mut refused), 0);
             assert_eq!(refused.source_frame_id, source + 3);
             assert_eq!(rsf_render_links_release(table, &reused), 0);

@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::rsf_fgvk;
+use rsf_game_sys::backend_result::{INVALID_ARGUMENT, NOT_READY, OK};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard};
-
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const NOT_READY: i32 = -8;
 
 type Context = *mut rsf_fgvk;
 
@@ -51,7 +48,7 @@ impl Binding {
 
     fn attach(&mut self, context: Context) -> i32 {
         if context.is_null() {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         if crate::vulkan_fg::is_cleanup_only(context)
             || self.admission != Admission::Open
@@ -172,7 +169,7 @@ impl Drop for ProviderOperation {
 pub(crate) extern "C" fn rsf_core_fgvk_presentation_attach(context: Context) -> i32 {
     let mut state = binding();
     if context.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if state.operation.is_some() {
         return NOT_READY;

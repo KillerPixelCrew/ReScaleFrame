@@ -2,6 +2,10 @@
 // D3D11 to D3D12 SR bridge: the game's D3D11 device, a D3D12 device on the same adapter, shared
 // surfaces and one shared fence. This owner decides lifetime, cross-API ordering, input leases,
 // GPU retirement and failure policy. The Windows platform supplies the native operations.
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
+    WRONG_API,
+};
 #[cfg(all(feature = "test-fixtures", not(test)))]
 mod fixture;
 #[cfg(not(test))]
@@ -18,14 +22,6 @@ use std::ffi::{CString, c_void};
 use std::ptr::{self, NonNull};
 use std::time::Instant;
 
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
-const WRONG_API: i32 = -12;
 const API_D3D11: u32 = 1;
 const SR_NONE: u32 = 0;
 
@@ -567,7 +563,7 @@ impl Bridge {
         if context_pointer != com(&self.immediate)
             && unsafe { (p.same_context)(context_pointer, context) } == 0
         {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         // Check all source owners, extents and formats before issuing any copy.
         let inputs = [
@@ -583,7 +579,7 @@ impl Bridge {
             }
             match self.describe(slot, input.resource) {
                 Some(desc) if input_accepted(slot, &desc, record) => {}
-                _ => return INVALID,
+                _ => return INVALID_ARGUMENT,
             }
         }
         let mut masks: [Handle; 2] = [ptr::null_mut(); 2];
@@ -888,16 +884,16 @@ unsafe fn rsf_core_sr_bridge_create(
     platform: *const Platform,
 ) -> i32 {
     let Some(platform) = (unsafe { platform.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if out.is_null()
         || !unsafe { has_capacity(setup) && has_capacity(ptr::addr_of!((*setup).open)) }
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     if setup.open.device.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     if setup.abi_version != RSF_SR_SESSION_ABI_VERSION
@@ -929,7 +925,7 @@ pub(super) unsafe extern "C" fn rsf_sr_bridge_select(
 ) -> i32 {
     match unsafe { bridge.as_mut() } {
         Some(bridge) => bridge.select(backend, quality, version_id),
-        None => INVALID,
+        None => INVALID_ARGUMENT,
     }
 }
 
@@ -940,7 +936,7 @@ pub(super) unsafe extern "C" fn rsf_sr_bridge_set_auto_exposure(
 ) -> i32 {
     match unsafe { bridge.as_mut() } {
         Some(bridge) if enabled <= 1 => bridge.set_auto_exposure(enabled),
-        _ => INVALID,
+        _ => INVALID_ARGUMENT,
     }
 }
 
@@ -952,7 +948,7 @@ pub(super) unsafe extern "C" fn rsf_sr_bridge_evaluate(
 ) -> i32 {
     match unsafe { bridge.as_mut() } {
         Some(bridge) if !context.is_null() => bridge.evaluate(context, frame),
-        _ => INVALID,
+        _ => INVALID_ARGUMENT,
     }
 }
 
@@ -966,14 +962,14 @@ pub(super) unsafe extern "C" fn rsf_sr_bridge_warm_up(
     manual_exposure: u32,
 ) -> i32 {
     let Some(bridge) = (unsafe { bridge.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if render_width == 0
         || render_height == 0
         || render_width > output_width
         || render_height > output_height
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     bridge.warm_up(
         (render_width, render_height),
@@ -991,14 +987,14 @@ pub(super) unsafe extern "C" fn rsf_sr_bridge_get_status(
         Some(bridge) => unsafe {
             (bridge.platform.session_get_status)(bridge.session.get(), status)
         },
-        None => INVALID,
+        None => INVALID_ARGUMENT,
     }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_sr_bridge_close(bridge: *mut Bridge) -> i32 {
     let Some(owner) = (unsafe { bridge.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !owner.retire() {
         return NOT_READY;

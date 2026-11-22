@@ -4,9 +4,8 @@ use crate::streamline_sr::sdk::{
     RESULT_DRIVER_OUT_OF_DATE, RESULT_NO_SUPPORTED_ADAPTER, RESULT_OS_OUT_OF_DATE,
 };
 use crate::streamline_sr::{Dimensions, Optimal, dimensions};
+use rsf_game_sys::backend_result::NOT_SUPPORTED;
 use std::ptr::{addr_of, addr_of_mut};
-
-const NOT_SUPPORTED: i32 = -7;
 
 #[repr(C)]
 #[derive(Default)]

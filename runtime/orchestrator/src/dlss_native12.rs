@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: MIT
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, LOAD_FAILED, MISSING_ENTRY_POINT,
+    NOT_READY, NOT_SUPPORTED, OK,
+};
 pub(super) mod exports;
 #[cfg(not(test))]
 mod sdk;
@@ -26,15 +30,6 @@ use windows_sys::Win32::System::LibraryLoader::{
 use windows_sys::core::w;
 
 type Handle = *mut c_void;
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const LOAD_FAILED: i32 = -4;
-const MISSING_ENTRY: i32 = -5;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 const QUALITY: u32 = 1;
 const DLSS_FEATURE: u32 = 0;
 const COMMON_FEATURE: u32 = 1;
@@ -63,7 +58,7 @@ unsafe fn core_entries(module: Handle, entries: &mut CoreEntries) -> i32 {
             .map_or(null_mut(), |function| function as *const () as Handle);
     }
     if entries.iter().any(|entry| entry.is_null()) {
-        MISSING_ENTRY
+        MISSING_ENTRY_POINT
     } else {
         OK
     }
@@ -83,7 +78,7 @@ unsafe fn feature_entries(
             }
         }
         if slots.iter().any(|entry| entry.is_null()) {
-            MISSING_ENTRY
+            MISSING_ENTRY_POINT
         } else {
             OK
         }
@@ -266,8 +261,10 @@ impl DeviceRegistration {
         {
             return Err(NOT_READY);
         }
-        let interposer = unsafe { wide_path(setup.interposer_path_utf8) }.ok_or(INVALID)?;
-        let directory = unsafe { wide_path(setup.plugin_directory_utf8) }.ok_or(INVALID)?;
+        let interposer =
+            unsafe { wide_path(setup.interposer_path_utf8) }.ok_or(INVALID_ARGUMENT)?;
+        let directory =
+            unsafe { wide_path(setup.plugin_directory_utf8) }.ok_or(INVALID_ARGUMENT)?;
         let (resolved, lease) = route.module(platform, device, setup, &interposer, module)?;
         let native =
             NonNull::new(unsafe { (platform.allocate)(directory.as_ptr()) }).ok_or(INIT_FAILED)?;
@@ -487,7 +484,7 @@ fn rsf_core_dlss_native12_create_registered(
     out: &mut *mut Context,
 ) -> i32 {
     if registration.0.device() != device {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if setup.abi_version != RSF_DLSS_ABI_VERSION {
         return ABI_MISMATCH;
@@ -565,7 +562,7 @@ unsafe fn rsf_core_dlss_native12_evaluate(
 ) -> i32 {
     let registration = &context.registration;
     if !engine_token.is_null() && !matches!(registration.route, Route::BorrowedEngine) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let platform = registration.platform;
     let validated = unsafe { (platform.validate)(registration.device(), frame) };
@@ -586,7 +583,7 @@ unsafe fn rsf_core_dlss_native12_evaluate(
     let determinant =
         unsafe { (platform.inverse)(&camera.clip_to_previous_clip, &mut previous_to_current) };
     if !determinant.is_finite() || determinant.abs() < 1e-12 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let constants = Constants {
         view_to_clip: camera.view_to_clip,

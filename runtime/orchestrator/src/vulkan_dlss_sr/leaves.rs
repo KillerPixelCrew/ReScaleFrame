@@ -35,16 +35,13 @@ use crate::vulkan_streamline_camera::{
     rsf_slvk_sdk_resource, rsf_slvk_sdk_tag, with_previous_to_clip,
 };
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::{
+    FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_SUPPORTED, OK,
+};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{c_char, c_void};
 use std::ptr;
 
-const OK: i32 = 0;
-const INVALID_ARGUMENT: i32 = -1;
-const MISSING_ENTRY_POINT: i32 = -5;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const FEATURE_FAILED: i32 = -9;
 const SR_DLSS: u32 = 1;
 const COMMAND_RETIREMENT: u32 = 1;
 /// DLSS SR viewport. DLSS-G uses viewport zero in the shared session.

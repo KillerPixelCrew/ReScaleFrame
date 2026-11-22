@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
 use crate::frame_capture_vk::sr_capture_inputs;
+use rsf_game_sys::backend_result::{INIT_FAILED, INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_READY};
 mod commands;
 mod leaves;
 use self::commands::Dispatch;
@@ -21,10 +22,6 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::AtomicBool;
 
-const INVALID: i32 = -1;
-const INIT_FAILED: i32 = -6;
-const MISSING_ENTRY_POINT: i32 = -5;
-const NOT_READY: i32 = -8;
 const R16: u32 = 76;
 const INPUT_USAGE: u32 = SAMPLED_USAGE | TRANSFER_DST_USAGE;
 const OUTPUT_USAGE: u32 = INPUT_USAGE | STORAGE_USAGE | TRANSFER_SRC_USAGE;
@@ -168,7 +165,7 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
         input,
     } = evaluation;
     if token == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let record = unsafe { &*input.record };
     let camera = &record.camera;
@@ -182,7 +179,7 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
     .flatten()
     .any(|value| !value.is_finite())
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let platform = owner.platform;
     let native = owner.native;
@@ -308,7 +305,9 @@ impl Owner {
         platform: &'static Platform,
         setup: &rsf_srvk_setup,
     ) -> Result<Box<Self>, i32> {
-        let mode = *SDK_MODES.get(setup.quality as usize).ok_or(INVALID)?;
+        let mode = *SDK_MODES
+            .get(setup.quality as usize)
+            .ok_or(INVALID_ARGUMENT)?;
         let claim = Claim::acquire(&OCCUPIED).ok_or(NOT_READY)?;
         let raw = allocate_handle(Self {
             _claim: claim,
@@ -376,7 +375,7 @@ impl Owner {
             || input.depth.format != R32_FLOAT
             || (input.bias_current_color.image != 0 && input.bias_current_color.copy_source == 0)
         {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let invoke = self.platform.invoke.unwrap();
         let mut evaluation = Evaluation {
@@ -394,10 +393,10 @@ impl Owner {
 
     pub(super) fn set_preset(&mut self, preset: u32) -> i32 {
         let Some(preset_valid) = self.platform.preset_valid else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         if unsafe { preset_valid(preset) } == 0 {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         if self.preset == preset {
             return 0;

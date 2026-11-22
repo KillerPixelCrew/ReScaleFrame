@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 #[path = "fsr_native.rs"]
 mod native;
 
@@ -18,7 +19,6 @@ use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering::Re
 const CAPTURE_SLOTS: usize = 64;
 const NON_PIXEL_READ: u32 = 0x40; // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
 const VENDOR_PARAMETER_ERROR: u32 = 6;
-const MISSING_ENTRY_POINT: i32 = -5;
 const MODULE: &str = "amd_fidelityfx_framegeneration_dx12.dll";
 // FFX_FRAMEGENERATION_ENABLE_* values; fsr_generation.cpp asserts them.
 const CREATE_DISPLAY_RESOLUTION_MOTION: u32 = 1 << 1;
@@ -500,14 +500,14 @@ impl Session for Fsr {
             || options.reflex_mode != RSF_REFLEX_OFF
             || options.frame_limit_us != 0
         {
-            return UNSUPPORTED;
+            return NOT_SUPPORTED;
         }
         let chain = self.chain();
         if chain.is_null() {
             return NOT_READY;
         }
         if options.mode != RSF_FG_OFF && options.generated_frames == 0 {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         // Configure is called at every application Present.
         if self.state.read().request.is_some_and(|before| {
@@ -560,20 +560,20 @@ impl Session for Fsr {
                 || record.render_width > current.width
                 || record.render_height > current.height
             {
-                return STALE;
+                return STALE_RESOURCES;
             }
             if (record.camera.depth_inverted != 0) != self.depth_inverted
                 || (record.camera.motion_jittered != 0) != self.motion_jittered
                 || (hudless && frame.hudless.resource.is_null())
             {
-                return INVALID;
+                return INVALID_ARGUMENT;
             }
             for resource in [&frame.depth, &frame.motion, &frame.hudless] {
                 if !resource.resource.is_null()
                     && (resource.state != NON_PIXEL_READ
                         || unsafe { (self.ops.whole_texture)(resource) } == 0)
                 {
-                    return INVALID;
+                    return INVALID_ARGUMENT;
                 }
             }
         }
@@ -780,7 +780,7 @@ unsafe extern "C" fn rsf_core_fsr12_create(
     unsafe { (ops.bind)(sdk.raw, entries.as_ptr()) };
     let mut initial = initial_status(1);
     let Some(version) = select_version(sdk.raw, setup, ops.versions) else {
-        return UNSUPPORTED;
+        return NOT_SUPPORTED;
     };
     initial.version_id = version.id;
     if !version.name.is_null() {
@@ -833,7 +833,7 @@ unsafe extern "C" fn rsf_core_fsr12_create(
             (ops.provider_version)(owner.sdk.raw, owner.generation.load(Relaxed), &mut actual)
         };
         if queried != 0 || actual != initial.version_id {
-            result = UNSUPPORTED;
+            result = NOT_SUPPORTED;
         }
     }
     if result == OK && !setup.chain.hwnd.is_null() {

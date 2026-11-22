@@ -11,6 +11,7 @@ use crate::vulkan_fg_copy::{
     Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED, record_shader_read_copy,
 };
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
+use rsf_game_sys::backend_result::{FEATURE_FAILED, LOAD_FAILED, MISSING_ENTRY_POINT};
 use std::ffi::CString;
 use std::sync::{Arc, PoisonError};
 
@@ -26,10 +27,6 @@ use sdk_abi::{
     VkImageSubresourceRange, xess_2d_t, xess_version_t, xess_vk_execute_params_t as XessExecute,
     xess_vk_image_view_info as XessTexture, xess_vk_init_params_t as XessInit,
 };
-
-const LOAD_FAILED: i32 = -4;
-const MISSING_ENTRY: i32 = -5;
-const FEATURE_FAILED: i32 = -9;
 
 // SDK C ABI values, checked against xess.h by the native leaf.
 const XESS_SUCCESS: i32 = 0;
@@ -167,7 +164,7 @@ impl Library {
                     .map_or(ptr::null_mut(), |function| function as *const () as Handle),
             };
             if entry.is_null() {
-                return Err(MISSING_ENTRY);
+                return Err(MISSING_ENTRY_POINT);
             }
         }
         unsafe { (ops.bind_entries)(handle, &entries) };
@@ -193,14 +190,14 @@ unsafe extern "C" fn rsf_core_xessvk_initialize(
     setup: *const XessSetup,
 ) -> i32 {
     if !unsafe { has_capacity(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     if setup.abi_version != REQUIREMENTS_ABI_VERSION {
         return ABI_MISMATCH;
     }
     if setup.runtime_directory_utf8.is_null() || unsafe { *setup.runtime_directory_utf8 } == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Some(ops) = ops else {
         return NOT_COMPILED;
@@ -235,7 +232,7 @@ unsafe extern "C" fn rsf_core_xessvk_instance_requirements(
     minimum_api: *mut u32,
 ) -> i32 {
     if count.is_null() || names.is_null() || minimum_api.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe {
         count.write(0);
@@ -269,7 +266,7 @@ unsafe extern "C" fn rsf_core_xessvk_device_requirements(
         || names.is_null()
         || features.is_null()
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe {
         count.write(0);
@@ -486,7 +483,7 @@ impl XessOwner {
         let record = unsafe { &*frame.record };
         self.log_range(frame, record);
         if !self.admit(frame, record) {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let ops = self.ops;
         let native = self.native;

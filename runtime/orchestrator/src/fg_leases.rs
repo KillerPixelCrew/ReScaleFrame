@@ -2,19 +2,15 @@
 use crate::com_ref::ComRef;
 pub(super) use crate::d3d12_fence::FenceState;
 use crate::sys::{rsf_backend_result, rsf_fg_retirement};
+use rsf_game_sys::backend_result::{
+    FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, OK, STALE_RESOURCES,
+};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::slice;
 
 const MAX_LEASES: usize = 16;
 const MAX_RESOURCES: usize = 5;
-
-const OK: rsf_backend_result = 0;
-const INVALID: rsf_backend_result = -1;
-const INIT_FAILED: rsf_backend_result = -6;
-const NOT_READY: rsf_backend_result = -8;
-const FEATURE_FAILED: rsf_backend_result = -9;
-const STALE_RESOURCES: rsf_backend_result = -10;
 
 use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12DeviceChild, ID3D12Fence};
 use windows::core::Interface;
@@ -140,7 +136,7 @@ unsafe extern "C" fn rsf_fg_leases_create(
     out: *mut *mut Leases,
 ) -> rsf_backend_result {
     if out.is_null() || capacity == 0 || capacity as usize > MAX_LEASES {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let handle = crate::allocate_handle(Leases {
         slots: std::array::from_fn(|_| None),
@@ -160,7 +156,7 @@ unsafe extern "C" fn rsf_fg_leases_acquire(
     count: u32,
 ) -> rsf_backend_result {
     let Some(leases) = (unsafe { leases.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if id == 0
         || generation == 0
@@ -168,7 +164,7 @@ unsafe extern "C" fn rsf_fg_leases_acquire(
         || count == 0
         || count as usize > MAX_RESOURCES
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if id <= leases.last_acquire {
         return STALE_RESOURCES;
@@ -179,14 +175,14 @@ unsafe extern "C" fn rsf_fg_leases_acquire(
     }
     let resources = unsafe { slice::from_raw_parts(resources, count as usize) };
     if resources.iter().any(|resource| resource.is_null()) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let (&first, additional) = resources.split_first().unwrap();
     if additional
         .iter()
         .any(|&resource| !unsafe { same_device(first, resource) })
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     *slot = Some(Lease {
         id,
@@ -212,16 +208,16 @@ unsafe extern "C" fn rsf_fg_leases_submit(
     value: u64,
 ) -> rsf_backend_result {
     let Some(lease) = (unsafe { leases.as_mut() }).and_then(|leases| leases.find(id)) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if fence.is_null() || value == 0 || value == u64::MAX {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if lease.queue.is_some() {
         return NOT_READY;
     }
     if !unsafe { same_device(lease.first.0.as_ptr(), fence) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     lease.queue = Some(FencePoint {
         fence: unsafe { ComRef::retain(fence) },
@@ -237,10 +233,10 @@ unsafe extern "C" fn rsf_fg_leases_seal(
     retirement: *const rsf_fg_retirement,
 ) -> rsf_backend_result {
     let Some(lease) = (unsafe { leases.as_mut() }).and_then(|leases| leases.find(id)) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let Some(retirement) = (unsafe { Retirement::read(retirement) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if lease.queue.is_none() || lease.vendor.is_some() {
         return NOT_READY;
@@ -249,7 +245,7 @@ unsafe extern "C" fn rsf_fg_leases_seal(
         Retirement::Immediate => VendorRetirement::Complete,
         Retirement::Fenced { fence, value } => {
             if !unsafe { same_device(lease.first.0.as_ptr(), fence.as_ptr()) } {
-                return INVALID;
+                return INVALID_ARGUMENT;
             }
             VendorRetirement::Fence(FencePoint {
                 fence: unsafe { ComRef::retain(fence.as_ptr()) },
@@ -266,10 +262,10 @@ unsafe extern "C" fn rsf_fg_leases_collect(
     pending: *mut u32,
 ) -> rsf_backend_result {
     let Some(leases) = (unsafe { leases.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if pending.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let (result, count) = leases.collect();
     unsafe { pending.write(count) };
@@ -279,11 +275,11 @@ unsafe extern "C" fn rsf_fg_leases_collect(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg_leases_cancel(leases: *mut Leases, id: u64) -> rsf_backend_result {
     let Some(leases) = (unsafe { leases.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let slot = leases.slot_for(id);
     let Some(lease) = slot.as_ref().filter(|lease| lease.id == id) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if lease.queue.is_some() {
         return NOT_READY;
@@ -295,7 +291,7 @@ unsafe extern "C" fn rsf_fg_leases_cancel(leases: *mut Leases, id: u64) -> rsf_b
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg_leases_destroy(leases: *mut Leases) -> rsf_backend_result {
     let Some(owner) = (unsafe { leases.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let (result, pending) = owner.collect();
     if result != OK {
@@ -313,7 +309,7 @@ unsafe extern "C" fn rsf_fg_leases_destroy(leases: *mut Leases) -> rsf_backend_r
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg_leases_abandon_device_lost(leases: *mut Leases) -> rsf_backend_result {
     if leases.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     drop(unsafe { Box::from_raw(leases) });
     OK

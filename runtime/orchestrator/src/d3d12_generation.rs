@@ -6,6 +6,10 @@ use crate::sys::{
     rsf_fg_frame as Frame, rsf_fg_options as Options, rsf_fg_retirement as Retirement,
     rsf_fg_status as Status, rsf_generation_provider as Provider, rsf_generation_setup as Setup,
 };
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, LOAD_FAILED, NEEDS_RESTART,
+    NOT_READY, NOT_SUPPORTED, OK, STALE_RESOURCES,
+};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CString, c_char, c_void};
 use std::fmt::Arguments;
@@ -45,17 +49,6 @@ fn chain_description(
 
 type Raw = *mut c_void;
 
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const LOAD_FAILED: i32 = -4;
-const INIT_FAILED: i32 = -6;
-const UNSUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
-const STALE: i32 = -10;
-const NEEDS_RESTART: i32 = -11;
-
 const UI_NONE: u32 = 1;
 const UI_LAYER: u32 = 2;
 const HUDLESS: u32 = 4;
@@ -76,7 +69,7 @@ impl Checks {
             return Err(NEEDS_RESTART);
         }
         if !supported {
-            return Err(UNSUPPORTED);
+            return Err(NOT_SUPPORTED);
         }
         Ok(())
     }
@@ -378,7 +371,7 @@ fn initial_status(max_frames: u32) -> Status {
 
 pub(crate) unsafe fn read_options(options: *const Options) -> Result<Options, i32> {
     if !unsafe { has_capacity(options) } {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     let options = unsafe { *options };
     if options.abi_version != RSF_FG_ABI_VERSION {
@@ -389,7 +382,7 @@ pub(crate) unsafe fn read_options(options: *const Options) -> Result<Options, i3
         || !options.dynamic_target_fps.is_finite()
         || options.dynamic_target_fps < 0.0
     {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     Ok(options)
 }
@@ -424,7 +417,7 @@ trait Session {
 
 unsafe extern "C" fn configure<S: Session>(session: Raw, options: *const Options) -> i32 {
     let Some(session) = (unsafe { session.cast::<S>().as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     match unsafe { read_options(options) } {
         Ok(options) => session.configure(options),
@@ -435,34 +428,34 @@ unsafe extern "C" fn configure<S: Session>(session: Raw, options: *const Options
 unsafe extern "C" fn begin<S: Session>(session: Raw, id: u64) -> i32 {
     match unsafe { session.cast::<S>().as_ref() } {
         Some(session) if id != 0 => session.begin(id),
-        _ => INVALID,
+        _ => INVALID_ARGUMENT,
     }
 }
 
 unsafe extern "C" fn marker<S: Session>(session: Raw, marker: u32, id: u64, _: u32) -> i32 {
     match unsafe { session.cast::<S>().as_ref() } {
         Some(session) if id != 0 => session.marker(marker, id),
-        _ => INVALID,
+        _ => INVALID_ARGUMENT,
     }
 }
 
 unsafe extern "C" fn prepare<S: Session>(session: Raw, command: Raw, frame: *const Frame) -> i32 {
     match unsafe { session.cast::<S>().as_ref() } {
         Some(session) => unsafe { session.prepare(command, frame) },
-        None => INVALID,
+        None => INVALID_ARGUMENT,
     }
 }
 
 unsafe extern "C" fn after<S: Session>(session: Raw) -> i32 {
-    unsafe { session.cast::<S>().as_ref() }.map_or(INVALID, Session::after)
+    unsafe { session.cast::<S>().as_ref() }.map_or(INVALID_ARGUMENT, Session::after)
 }
 
 unsafe extern "C" fn status<S: Session>(session: Raw, out: *mut Status) -> i32 {
     let Some(session) = (unsafe { session.cast::<S>().as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !unsafe { has_capacity(out) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(session.state().read().status) };
     OK
@@ -470,7 +463,7 @@ unsafe extern "C" fn status<S: Session>(session: Raw, out: *mut Status) -> i32 {
 
 unsafe extern "C" fn retirement(session: Raw, out: *mut Retirement) -> i32 {
     if session.is_null() || !unsafe { has_capacity(out) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     // These providers use the game queue for source reads. The caller keeps
     // its submission fence; the provider adds no further per-frame wait.
@@ -488,7 +481,7 @@ unsafe extern "C" fn destroy<S: Session>(session: Raw) {
 unsafe extern "C" fn destroy_checked<S: Session>(session: Raw) -> i32 {
     let session = session.cast::<S>();
     let Some(owner) = (unsafe { session.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !owner.retire() {
         return NOT_READY;
@@ -503,7 +496,7 @@ unsafe extern "C" fn abort<S: Session>(session: Raw, id: u64) -> i32 {
             session.state().abort();
             OK
         }
-        _ => INVALID,
+        _ => INVALID_ARGUMENT,
     }
 }
 

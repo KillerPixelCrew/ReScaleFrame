@@ -3,6 +3,9 @@ use crate::fg_leases::{FenceState, Retirement, rsf_d3d12_fence_completed};
 use crate::frame_sequencer::Ledger;
 use crate::sr_session::has_capacity;
 use crate::sys::*;
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED,
+};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_INPUT,
     RSF_FRAME_SOURCE_RENDERED, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_allows_fg,
@@ -11,13 +14,6 @@ use rsf_game_sys::{
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
-
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 
 type FenceCompleted = unsafe extern "C" fn(*mut c_void) -> u64;
 
@@ -81,7 +77,7 @@ impl Context {
             return result;
         }
         match unsafe { Retirement::read(&retirement) } {
-            None => INVALID,
+            None => INVALID_ARGUMENT,
             Some(Retirement::Immediate) => 0,
             Some(Retirement::Fenced { fence, value }) => {
                 match FenceState::check(unsafe { completed(fence.as_ptr()) }, value) {
@@ -215,7 +211,7 @@ impl Selection {
             || options.reflex_mode > RSF_REFLEX_BOOST
             || (options.mode == RSF_FG_FIXED && options.generated_frames == 0)
         {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         if (options.mode == RSF_FG_DYNAMIC && capability.dynamic_supported == 0)
             || (options.mode == RSF_FG_AUTO && capability.auto_supported == 0)
@@ -304,7 +300,7 @@ unsafe extern "C" fn rsf_fg_session_create(
     out: *mut *mut Session,
 ) -> i32 {
     if out.is_null() || !unsafe { has_capacity(host) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     let host = unsafe { *host };
@@ -312,7 +308,7 @@ unsafe extern "C" fn rsf_fg_session_create(
         return ABI_MISMATCH;
     }
     let Some(host) = Host::checked(&host) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let status = rsf_fg_session_status {
         struct_size: size_of::<rsf_fg_session_status>() as u32,
@@ -343,16 +339,16 @@ unsafe extern "C" fn rsf_fg_session_select(
     options: *const rsf_fg_options,
 ) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let selection = if provider.is_null() {
         None
     } else {
         if !unsafe { has_capacity(provider) && has_capacity(setup) && has_capacity(options) } {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let Some(provider) = Provider::checked(unsafe { &*provider }) else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         if unsafe {
             (*setup).abi_version != RSF_FG_ABI_VERSION
@@ -389,7 +385,7 @@ unsafe extern "C" fn rsf_fg_session_select(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg_session_begin(raw: *const Session, id: u64) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     session.with_state(|state| {
         let result = state.ledger.begin(id, None);
@@ -414,7 +410,7 @@ unsafe extern "C" fn rsf_fg_session_begin_rendered(
     source: u64,
 ) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     session.with_state(|state| {
         let Some(active) = &state.active else {
@@ -443,10 +439,10 @@ unsafe extern "C" fn rsf_fg_session_marker(
     controller: u32,
 ) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if controller > 1 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     session.with_state(|state| {
         let result = state.ledger.marker(id, marker, timestamp);
@@ -473,10 +469,10 @@ unsafe extern "C" fn rsf_fg_session_prepare(
     frame: *const rsf_fg_frame,
 ) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !unsafe { has_capacity(frame) && has_capacity((*frame).record) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let record = unsafe { &*(*frame).record };
     session.with_state(|state| {
@@ -490,7 +486,7 @@ unsafe extern "C" fn rsf_fg_session_prepare(
             return NOT_READY;
         }
         if provenance != record.source_provenance {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let interpolate = if unsafe { rsf_frame_allows_fg(record) } == 0
             || record.flags & (RSF_FRAME_FLAG_RESET | RSF_FRAME_FLAG_AMBIGUOUS_ID) != 0
@@ -503,10 +499,10 @@ unsafe extern "C" fn rsf_fg_session_prepare(
             if unsafe { rsf_frame_has_rendered_source(record) } == 0
                 || record.source_qpc != timestamp
             {
-                return INVALID;
+                return INVALID_ARGUMENT;
             }
         } else if interpolate != 0 && record.input_qpc != timestamp {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let mut result = 0;
         if let Some(active) = &state.active {
@@ -530,10 +526,10 @@ unsafe extern "C" fn rsf_fg_session_prepare(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg_session_after_present(raw: *const Session, id: u64) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if id == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     session.with_state(|state| {
         if state.prepared != id || state.ledger.failed(id) {
@@ -555,10 +551,10 @@ unsafe extern "C" fn rsf_fg_session_after_present(raw: *const Session, id: u64) 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg_session_abort(raw: *const Session, id: u64) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if id == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     session.with_state(|state| {
         if state.ledger.source(id).is_none() {
@@ -584,10 +580,10 @@ unsafe extern "C" fn rsf_fg_session_retirement(
     out: *mut rsf_fg_retirement,
 ) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !unsafe { has_capacity(out) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     session.with_state(|state| {
         unsafe {
@@ -607,10 +603,10 @@ unsafe extern "C" fn rsf_fg_session_get_status(
     out: *mut rsf_fg_session_status,
 ) -> i32 {
     let Some(session) = (unsafe { raw.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !unsafe { has_capacity(out) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     session.with_state(|state| {
         if let Some(active) = &state.active {

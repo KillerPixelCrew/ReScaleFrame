@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use rsf_game_sys::backend_result::NOT_COMPILED;
 
 #[cfg(all(feature = "test-fixtures", not(test)))]
 mod fixture;
-
-const NOT_COMPILED: i32 = -3;
 
 #[cfg(not(test))]
 fn platform() -> Option<&'static Platform> {
@@ -27,7 +26,7 @@ pub(super) unsafe extern "C" fn rsf_dlss_load(setup: *const Setup) -> i32 {
         return unsafe { rsf_core_dlss_streamline_load(setup, p) };
     }
     if !unsafe { has_capacity(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if unsafe { (*setup).abi_version } != RSF_DLSS_ABI_VERSION {
         return ABI_MISMATCH;
@@ -38,7 +37,7 @@ pub(super) unsafe extern "C" fn rsf_dlss_load(setup: *const Setup) -> i32 {
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_dlss_set_device(device: Handle) -> i32 {
     if device.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     platform().map_or(NOT_COMPILED, |p| unsafe {
         rsf_core_dlss_streamline_set_device(device, p)
@@ -53,7 +52,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native_present(
     begin: u32,
 ) -> i32 {
     if chain.is_null() || begin > 1 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     platform().map_or(NOT_COMPILED, |p| unsafe {
         rsf_core_dlss_streamline_present(chain, interval, flags, begin, p)
@@ -63,7 +62,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native_present(
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_dlss_query_support(support: *mut Support) -> i32 {
     if !unsafe { has_capacity(support) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     platform().map_or(NOT_COMPILED, |p| unsafe {
         rsf_core_dlss_streamline_support(support, p)
@@ -73,7 +72,7 @@ pub(super) unsafe extern "C" fn rsf_dlss_query_support(support: *mut Support) ->
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_dlss_plan_render_size(plan: *mut Plan) -> i32 {
     if !unsafe { has_capacity(plan) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     platform().map_or(NOT_COMPILED, |p| unsafe {
         rsf_core_dlss_streamline_plan(plan, p)
@@ -86,7 +85,7 @@ pub(super) unsafe extern "C" fn rsf_dlss_evaluate(context: Handle, frame: *const
         return unsafe { rsf_core_dlss_streamline_evaluate(context, frame, 0, p) };
     }
     if context.is_null() || !unsafe { has_capacity(frame) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if unsafe { (*frame).abi_version } != RSF_DLSS_ABI_VERSION {
         return ABI_MISMATCH;

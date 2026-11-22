@@ -633,7 +633,7 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
             let previous = state.calls.len();
             assert_eq!(
                 unsafe { rsf_core_srvk_evaluate(owner, commands, &refused) },
-                INVALID
+                INVALID_ARGUMENT
             );
             assert_eq!(state.calls.len(), previous);
         }
@@ -889,7 +889,10 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
         unsafe { rsf_core_srvk_dlss_preset(owner, FAKE_DLSS_PRESET) },
         0
     );
-    assert_eq!(unsafe { rsf_core_srvk_dlss_preset(owner, 99) }, INVALID);
+    assert_eq!(
+        unsafe { rsf_core_srvk_dlss_preset(owner, 99) },
+        INVALID_ARGUMENT
+    );
     let commands = ptr::from_mut(&mut state).cast();
     let mut record = frame_record();
     for (frame_id, result, reset) in [(1, 0, 1), (2, FAILED, 0), (3, 0, 1)] {

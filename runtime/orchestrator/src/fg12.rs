@@ -4,6 +4,9 @@ use crate::fg_leases::{FencePoint, FenceState};
 use crate::sr_session::{checked, has_capacity};
 use crate::sys::rsf_native_cpu_frame;
 use crate::sys::*;
+use rsf_game_sys::backend_result::{
+    INIT_FAILED, INVALID_ARGUMENT, NEEDS_RESTART, NOT_READY, NOT_SUPPORTED, OK,
+};
 
 use crate::native_cpu::rsf_native_cpu_read;
 use crate::sys::rsf_native_latency_status;
@@ -110,13 +113,6 @@ mod colors;
 mod retirement;
 use colors::Colors;
 use retirement::VendorUse;
-
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const NEEDS_RESTART: i32 = -11;
 
 const COMMON: u32 = 0;
 const PRESENT_STATE: u32 = 0;
@@ -394,16 +390,16 @@ fn options_valid(options: &rsf_native_fg_options) -> bool {
 
 unsafe fn install(request: *const rsf_fg12_setup, explicit: bool) -> i32 {
     let Some(request) = (unsafe { checked(request) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let Some(window_filter) = request.accept_window else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if request.runtime_directory_utf8.is_null()
         || !options_valid(&request.options)
         || request.units_to_meters <= 0.0
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if INSTALL.load(Ordering::Acquire) != 0 {
         return NEEDS_RESTART;
@@ -543,7 +539,7 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_cpu(event: *const rsf_game_cpu_eve
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_latency(event: *const rsf_game_latency_event) -> i32 {
     let Some(event) = (unsafe { checked(event) }).filter(|event| event.session_id != 0) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if INSTALL.load(Ordering::Acquire) != 2 {
         return NOT_READY;
@@ -552,7 +548,7 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_latency(event: *const rsf_game_lat
         return OK;
     }
     if event.source_frame_id == 0 || event.timestamp_qpc == 0 || event.qpc_frequency == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let mut fact = rsf_game_cpu_event {
         struct_size: size_of::<rsf_game_cpu_event>() as u32,
@@ -585,7 +581,7 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_latency(event: *const rsf_game_lat
         }
         // Render-end and Present markers come from the actual presentation path.
         marker if marker <= INPUT_SAMPLE => return OK,
-        _ => return INVALID,
+        _ => return INVALID_ARGUMENT,
     }
     unsafe { rsf_core_fg12_cpu(&fact) };
     OK
@@ -601,7 +597,7 @@ fn start_render(timing: &mut Cpu, frame: Frame) {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_fg12_render_begin(session: u64, id: u64) -> i32 {
     if session == 0 || id == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let frame = Frame { session, id };
     let mut owner = OWNER.lock().unwrap();
@@ -1345,13 +1341,13 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_fg12_capture_outputs(directory: *const c_char) -> i32 {
     if directory.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Ok(directory) = unsafe { CStr::from_ptr(directory) }.to_str() else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if directory.encode_utf16().count() >= 32_768 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     OWNER.lock().unwrap().colors.directory =
         (!directory.is_empty()).then(|| PathBuf::from(directory));

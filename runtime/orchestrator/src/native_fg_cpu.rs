@@ -23,6 +23,7 @@ use crate::sys::{
 use crate::sys::{
     RSF_REFLEX_ON, rsf_native_input_routes as Routes, rsf_native_latency_status as LatencyStatus,
 };
+use rsf_game_sys::backend_result::OK;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::zeroed;
@@ -99,7 +100,6 @@ type Handle = *mut c_void;
 
 const CAPACITY: usize = RSF_NFG_CPU_CAPACITY as usize;
 const D3D_CLAIM: u32 = 1;
-const OK: i32 = 0;
 const NOT_READY: i32 = RSF_NFG_CPU_NOT_READY;
 const INVALID: i32 = RSF_NFG_CPU_INVALID;
 macro_rules! call {

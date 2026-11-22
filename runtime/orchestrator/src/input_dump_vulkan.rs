@@ -14,16 +14,13 @@ use crate::sys::{
 };
 use crate::vulkan_capture_commands::Commands;
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::{FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{c_char, c_void};
 use std::mem;
 use std::ptr;
 use std::sync::Mutex;
 
-const INVALID: i32 = -1;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 const DEVICE_LOST: i32 = -13; // rsf_input_dump_vk result
 const WAIT_NS: u64 = 15_000_000_000;
 
@@ -179,7 +176,7 @@ impl Owner {
             return code;
         }
         if image.device != self.device || image.copy_source == 0 || image.image == 0 {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         if unsafe { rsf_core_capture_vk_pending(&self.capture) } != 0 {
             return FEATURE_FAILED;
@@ -280,16 +277,16 @@ unsafe extern "C" fn rsf_input_dump_vk_create(
     out: *mut *mut Mutex<Owner>,
 ) -> i32 {
     if out.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     if !unsafe { has_capacity(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     let graphics = &setup.graphics;
     let Some(submit) = setup.submit else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if setup.abi_version != 1
         || (graphics.struct_size as usize) < size_of::<Graphics>()
@@ -301,7 +298,7 @@ unsafe extern "C" fn rsf_input_dump_vk_create(
         || graphics.device_proc.is_none()
         || setup.queue.is_null()
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let owner = match Owner::create(setup, submit) {
         Ok(owner) => owner,
@@ -323,10 +320,10 @@ unsafe extern "C" fn rsf_input_dump_vk_snapshot(
     name: *const c_char,
 ) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if record.is_null() || image.is_null() || name.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Ok(mut owner) = owner.try_lock() else {
         return NOT_READY;

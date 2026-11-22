@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-use super::{FRAMES, Frame, INVALID, LegacyPresent, NOT_READY};
+use super::{FRAMES, Frame, INVALID_ARGUMENT, LegacyPresent, NOT_READY};
 use crate::input_receipts::streamline_input;
 use crate::sys::rsf_vk_token_calls as SdkTokens;
 use crate::vulkan_latency::rsf_core_latencyvk_sdk_result as sdk_result;
+use rsf_game_sys::backend_result::FEATURE_FAILED;
 
 const TOKEN_SLOTS: usize = 6; // The pinned SDK's retained frame-token ring.
-const FEATURE_FAILED: i32 = -9;
 
 #[derive(Clone, Copy)]
 struct Token {
@@ -56,7 +56,7 @@ fn validated(sdk: &SdkTokens, session: u64, id: u64) -> Option<Token> {
 
 fn emit(sdk: &SdkTokens, token: &mut Token, kind: u32) -> i32 {
     let Some(mask) = 1_u32.checked_shl(kind) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if token.marked & mask != 0 {
         return 0;
@@ -175,10 +175,10 @@ pub(crate) extern "C" fn rsf_core_latencyvk_token_input(
         return NOT_READY;
     };
     let Some(input) = streamline_input(kind, message, pcl_message) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if input.foreign_message || input.empty {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if let Some(marker) = input.controller {
         let result = emit(sdk, &mut token, marker);

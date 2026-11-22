@@ -2,6 +2,7 @@
 use crate::native_cpu::rsf_native_cpu_ping_message;
 use crate::sys::rsf_vk_pcl_calls as Sdk;
 use crate::vulkan_latency::rsf_core_latencyvk_sdk_result as sdk_result;
+use rsf_game_sys::backend_result::{FEATURE_FAILED, NOT_READY};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_INPUT_EVENT,
     RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_INPUT_UNFRAMED,
@@ -21,8 +22,6 @@ use windows_sys::Win32::{
     },
 };
 
-const FEATURE_FAILED: i32 = -9;
-const NOT_READY: i32 = -8;
 const MAX_DEQUEUES: usize = 16;
 const THREAD_MESSAGES: HWND = std::ptr::without_provenance_mut(usize::MAX);
 

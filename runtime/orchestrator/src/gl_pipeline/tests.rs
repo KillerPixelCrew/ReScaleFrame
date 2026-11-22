@@ -776,13 +776,13 @@ fn evaluation_and_presentation_carry_session_frame_identity() {
     domains.depth_domains.domain_count = 1;
     assert_eq!(
         unsafe { rsf_gl_pipeline_evaluate(pipeline, &domains) },
-        INVALID
+        INVALID_ARGUMENT
     );
     let mut short = pass(9);
     short.struct_size -= 8;
     assert_eq!(
         unsafe { rsf_gl_pipeline_evaluate(pipeline, &short) },
-        INVALID
+        INVALID_ARGUMENT
     );
     assert_eq!(unsafe { rsf_gl_pipeline_evaluate(pipeline, &pass(9)) }, OK);
     let evaluated = events();
@@ -796,7 +796,10 @@ fn evaluation_and_presentation_carry_session_frame_identity() {
     );
     assert_eq!(status(pipeline).evaluated, 1);
 
-    assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, 0, 0) }, INVALID);
+    assert_eq!(
+        unsafe { rsf_gl_pipeline_present(pipeline, 0, 0) },
+        INVALID_ARGUMENT
+    );
     for frame in [9, 10] {
         assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, frame, 1) }, OK);
         let window = world(|world| world.window_pass).unwrap();
@@ -867,13 +870,16 @@ fn close_releases_sr_before_surfaces_and_the_presentation_host() {
     let mut out = surfaces_template();
     assert_eq!(
         unsafe { rsf_gl_pipeline_get_surfaces(pipeline, &mut out) },
-        INVALID
+        INVALID_ARGUMENT
     );
     assert_eq!(
         unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_DLSS, 1), 640, 480) },
-        INVALID
+        INVALID_ARGUMENT
     );
-    assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, 4, 0) }, INVALID);
+    assert_eq!(
+        unsafe { rsf_gl_pipeline_present(pipeline, 4, 0) },
+        INVALID_ARGUMENT
+    );
     assert_eq!(status(pipeline).effective_sr, SR_DLSS);
     assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
     assert!(events().is_empty());
@@ -960,8 +966,14 @@ fn failed_close_keeps_graphics_retired_until_cleanup_succeeds() {
 #[test]
 fn input_attaches_only_to_open_cpu_frames() {
     let pipeline = open_pipeline();
-    assert_eq!(unsafe { rsf_gl_pipeline_input(pipeline, 0, 8, 0) }, INVALID);
-    assert_eq!(unsafe { rsf_gl_pipeline_input(pipeline, 0, 0, 0) }, INVALID);
+    assert_eq!(
+        unsafe { rsf_gl_pipeline_input(pipeline, 0, 8, 0) },
+        INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { rsf_gl_pipeline_input(pipeline, 0, 0, 0) },
+        INVALID_ARGUMENT
+    );
     assert_eq!(
         unsafe { rsf_gl_pipeline_input(pipeline, 5, 1, 0) },
         NOT_READY
@@ -1012,7 +1024,10 @@ fn input_attaches_only_to_open_cpu_frames() {
     assert!(sent.iter().all(
         |e| e.session_id == sent[0].session_id && e.event_version == RSF_GAME_CPU_EVENT_VERSION
     ));
-    assert_eq!(unsafe { rsf_gl_pipeline_abort(pipeline, 0) }, INVALID);
+    assert_eq!(
+        unsafe { rsf_gl_pipeline_abort(pipeline, 0) },
+        INVALID_ARGUMENT
+    );
     assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
 }
 
@@ -1033,12 +1048,12 @@ fn rejected_options_do_not_touch_the_graphics_owner() {
     for options in &invalid {
         assert_eq!(
             unsafe { rsf_gl_pipeline_configure(pipeline, options, 640, 480) },
-            INVALID
+            INVALID_ARGUMENT
         );
     }
     assert_eq!(
         unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_DLSS, 1), 0, 480) },
-        INVALID
+        INVALID_ARGUMENT
     );
     assert!(events().is_empty());
     assert_eq!(status(pipeline).requested_sr, 0);

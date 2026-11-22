@@ -9,6 +9,7 @@ use crate::sys::rsf_srvk_image as Image;
 use crate::sys::{
     rsf_dlss_capture_source as Source, rsf_dlssgvk_status as SdkStatus, rsf_fgvk_setup as Setup,
 };
+use rsf_game_sys::backend_result::{INIT_FAILED, NOT_READY, OK};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -16,9 +17,6 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-const OK: i32 = 0;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
 const VK_SUCCESS: i32 = 0;
 const VK_INITIALIZATION_FAILED: i32 = -3;
 const VK_FORMAT_NOT_SUPPORTED: i32 = -11;

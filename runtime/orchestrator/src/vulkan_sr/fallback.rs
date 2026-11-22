@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::{Lookup, NOT_SUPPORTED, fallback_admit, rsf_srvk_fallback, rsf_vk_get_proc};
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::FEATURE_FAILED;
 use std::ffi::{CStr, c_void};
 use std::{mem, ptr};
 
-const FEATURE_FAILED: i32 = -9;
 const LINEAR_BLIT: vk::FormatFeatureFlags = vk::FormatFeatureFlags::from_raw(
     vk::FormatFeatureFlags::BLIT_SRC.as_raw()
         | vk::FormatFeatureFlags::BLIT_DST.as_raw()
@@ -175,7 +175,7 @@ pub(super) unsafe extern "C" fn rsf_core_srvk_spatial_fallback(
 mod tests {
     use super::*;
     use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_image, rsf_vk_function};
-    use crate::vulkan_sr::INVALID;
+    use crate::vulkan_sr::INVALID_ARGUMENT;
     use std::ffi::c_char;
 
     #[derive(Debug, PartialEq)]
@@ -329,7 +329,7 @@ mod tests {
         input.output.image = input.color.image;
         assert_eq!(
             unsafe { rsf_core_srvk_spatial_fallback(Some(lookup), &input) },
-            INVALID
+            INVALID_ARGUMENT
         );
         assert!(fake.commands.is_empty());
     }

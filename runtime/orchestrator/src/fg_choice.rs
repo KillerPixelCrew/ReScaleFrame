@@ -6,6 +6,7 @@ use crate::sys::{
     RSF_FG_BACKEND_DLSS as DLSS, RSF_FG_BACKEND_FSR3 as FSR3, RSF_FG_BACKEND_FSR4 as FSR4,
     RSF_FG_BACKEND_XESS as XESS, rsf_fg_backend_info,
 };
+use rsf_game_sys::backend_result::{FEATURE_FAILED, NOT_SUPPORTED};
 use std::ffi::{CStr, c_int};
 use std::sync::Mutex;
 use windows_sys::Win32::System::WindowsProgramming::{
@@ -15,8 +16,6 @@ use windows_sys::core::{PCWSTR, w};
 
 const SECTION: PCWSTR = w!("Rendering");
 const KEY: PCWSTR = w!("FrameGeneration");
-const NOT_SUPPORTED: i32 = -7;
-const FEATURE_FAILED: i32 = -9;
 
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_fg_default_backend(vendor: u32, software: u32) -> u32 {

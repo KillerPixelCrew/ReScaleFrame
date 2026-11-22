@@ -3,6 +3,10 @@
 // SDK module entries, its contexts, hook entry points and capture. This owner
 // decides admission, including WSI registration and the process-wide route, slot reuse,
 // copy transitions, completion evidence, presentation admission and retirement order.
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_COMPILED, NOT_READY,
+    NOT_SUPPORTED, OK,
+};
 mod sdk;
 mod startup;
 
@@ -33,14 +37,6 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_COMPILED: i32 = -3;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 const VK_SUCCESS: i32 = 0;
 const VK_SUBOPTIMAL: i32 = 1_000_001_003;
 const VK_INITIALIZATION_FAILED: i32 = -3;
@@ -464,7 +460,7 @@ impl Owner {
 
     fn prepare(&mut self, commands: Handle, frame: &Frame) -> i32 {
         let Some(record) = self.valid_record(frame) else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         let ops = self.ops;
         let _timing = Timing::new(ops, c"ffx_prepare_total", record.frame_id);
@@ -472,7 +468,7 @@ impl Owner {
             return OK;
         }
         if !self.guides_valid(frame, record) {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let slot = &mut self.slots[slot_index(record.frame_id)];
         if rsf_core_fgvk_can_prepare(&slot.state) == 0 {
@@ -508,7 +504,7 @@ impl Owner {
 
     fn hudless(&mut self, commands: Handle, frame: &Frame) -> i32 {
         let Some(record) = self.valid_record(frame) else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         if !self.enabled && !self.wants(record.frame_id) {
             return OK;
@@ -526,7 +522,7 @@ impl Owner {
             || input.layout != SHADER_READ
             || rsf_core_fgvk_hudless_begin(&mut slot.state, record, commands) == 0
         {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         if rsf_core_vkfg_ensure_image(
             ops.resources,
@@ -858,14 +854,14 @@ unsafe fn create(
     chain: *mut u64,
 ) -> i32 {
     if output.is_null() || chain.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe {
         output.write(ptr::null_mut());
         chain.write(0);
     }
     if !unsafe { has_capacity(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     if setup.abi_version != RSF_FGVK_ABI_VERSION {
@@ -873,7 +869,7 @@ unsafe fn create(
     }
     let graphics = &setup.graphics;
     if !unsafe { has_capacity(graphics) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if graphics.abi_version != RSF_SRVK_ABI_VERSION {
         return ABI_MISMATCH;
@@ -892,19 +888,19 @@ unsafe fn create(
         || graphics.depth_infinite > 1
         || graphics.motion_jittered > 1
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     // Four distinct queues of one family: graphics, compute, present, acquire.
     for (index, queue) in setup.queues.iter().enumerate() {
         if queue.is_null() || setup.queues[..index].contains(queue) {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
     }
     let Some((ops, host)) = leaf else {
         return NOT_COMPILED;
     };
     let Some(swapchain) = swapchain else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !swapchain.supported() {
         return NOT_SUPPORTED;
@@ -972,7 +968,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_enable(owner: *mut Owner, enabled: u32) -> 
             owner.enabled = enabled != 0;
             OK
         }
-        _ => INVALID,
+        _ => INVALID_ARGUMENT,
     }
 }
 
@@ -983,7 +979,7 @@ unsafe fn with_frame(
     stage: fn(&mut Owner, Handle, &Frame) -> i32,
 ) -> i32 {
     if owner.is_null() || commands.is_null() || !unsafe { has_capacity(frame) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let frame = unsafe { &*frame };
     if frame.abi_version != RSF_FGVK_ABI_VERSION {
@@ -991,7 +987,7 @@ unsafe fn with_frame(
     }
     match unsafe { live(owner) } {
         Some(owner) => stage(owner, commands, frame),
-        None => INVALID,
+        None => INVALID_ARGUMENT,
     }
 }
 
@@ -1083,10 +1079,10 @@ extern "C" fn rsf_core_ffxgvk_note_generated(native: Handle) {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ffxgvk_status(owner: *const Owner, status: *mut Status) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !unsafe { has_capacity(status) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if unsafe { (*status).abi_version } != RSF_FGVK_ABI_VERSION {
         return ABI_MISMATCH;
@@ -1532,7 +1528,7 @@ mod tests {
     fn admission_refuses_before_opening_the_native_leaf() {
         let mut duplicate = setup();
         duplicate.queues[3] = duplicate.queues[0];
-        assert_eq!(create(&duplicate, &SWAPCHAIN).0, INVALID);
+        assert_eq!(create(&duplicate, &SWAPCHAIN).0, INVALID_ARGUMENT);
         let mut mismatch = setup();
         mismatch.abi_version += 1;
         assert_eq!(create(&mismatch, &SWAPCHAIN).0, ABI_MISMATCH);
@@ -1661,7 +1657,10 @@ mod tests {
                 rsf_core_ffxgvk_images(owner, &mut count, ptr::null_mut()),
                 VK_INITIALIZATION_FAILED
             );
-            assert_eq!(rsf_core_ffxgvk_prepare(owner, list, &input), INVALID);
+            assert_eq!(
+                rsf_core_ffxgvk_prepare(owner, list, &input),
+                INVALID_ARGUMENT
+            );
         }
         calls(|c| c.fail_effect_destroy = false);
         assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, OK);

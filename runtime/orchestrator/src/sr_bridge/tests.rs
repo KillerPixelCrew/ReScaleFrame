@@ -153,7 +153,11 @@ unsafe extern "C" fn session_destroy(session: Handle) {
     close(session);
 }
 unsafe extern "C" fn validate_frame(frame: *const rsf_sr_frame) -> i32 {
-    if frame.is_null() { INVALID } else { OK }
+    if frame.is_null() {
+        INVALID_ARGUMENT
+    } else {
+        OK
+    }
 }
 unsafe extern "C" fn immediate_context(_: Handle) -> Handle {
     created("immediate")
@@ -569,13 +573,13 @@ fn refused_inputs_issue_no_copy_and_unusable_masks_are_dropped() {
     let mut scene = Scene::new();
     let wide_motion = texture(scene.device, "wide motion", 128, 128, 16);
     scene.frame.motion = resource(wide_motion);
-    assert_eq!(scene.evaluate(), INVALID);
+    assert_eq!(scene.evaluate(), INVALID_ARGUMENT);
     assert!(take_events().is_empty(), "no lease before validation");
 
     let foreign = texture(object("other device"), "foreign", 128, 128, COLOR_FORMAT);
     scene.frame.motion = resource(scene.textures[2]);
     scene.frame.color = resource(foreign);
-    assert_eq!(scene.evaluate(), INVALID);
+    assert_eq!(scene.evaluate(), INVALID_ARGUMENT);
     assert!(take_events().is_empty());
 
     scene.frame.color = resource(scene.textures[0]);

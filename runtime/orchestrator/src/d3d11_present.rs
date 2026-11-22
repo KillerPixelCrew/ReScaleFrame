@@ -23,6 +23,9 @@ use crate::sys::{
     rsf_fg_retirement, rsf_fg_status, rsf_generation_provider as Provider, rsf_generation_setup,
 };
 use crate::sys::{rsf_d3d11_present_setup as Setup, rsf_streamline_host};
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
+};
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write as _;
@@ -66,13 +69,6 @@ const DXGI_SWAP_EFFECT_FLIP_DISCARD: u32 = 4;
 const DXGI_USAGE_RENDER_TARGET_OUTPUT: u32 = 0x20;
 const DXGI_USAGE_UNORDERED_ACCESS: u32 = 0x400;
 const FORMATS: [u32; 4] = [28, 87, 24, 10]; // R8G8B8A8, B8G8R8A8, R10G10B10A2 UNORM, R16G16B16A16 FLOAT
-
-pub(crate) const OK: i32 = 0;
-pub(crate) const INVALID_ARGUMENT: i32 = -1;
-pub(crate) const ABI_MISMATCH: i32 = -2;
-pub(crate) const INIT_FAILED: i32 = -6;
-pub(crate) const NOT_SUPPORTED: i32 = -7;
-pub(crate) const NOT_READY: i32 = -8;
 
 pub(crate) const DLSS: u32 = 1;
 pub(crate) const FSR3: u32 = 3;

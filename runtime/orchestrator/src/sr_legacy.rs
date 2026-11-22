@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::motion_resolve_params::dense_resolve_params;
 use crate::sys::*;
+use rsf_game_sys::backend_result::{FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
@@ -9,9 +10,6 @@ use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
-const INVALID: i32 = -1;
-const INIT_FAILED: i32 = -6;
-const FEATURE_FAILED: i32 = -9;
 const EXPOSURE_SETTLE_FRAMES: u32 = 30;
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
@@ -186,7 +184,7 @@ unsafe fn create_adapter(
     out: *mut *mut Adapter,
 ) -> i32 {
     if out.is_null() || !crate::sr_session::valid_unit_scale(units_to_meters) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     let mut frequency = 0;
@@ -397,7 +395,7 @@ pub(super) unsafe extern "C" fn rsf_sr_legacy_select(
     height: *mut u32,
 ) -> i32 {
     let Some(adapter) = (unsafe { adapter.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let result = unsafe { (adapter.services.select)(adapter.bridge, backend, quality, 0) };
     if result == 0 {
@@ -422,7 +420,7 @@ pub(super) unsafe fn rsf_sr_legacy_evaluate(
     sharpness: f32,
 ) -> i32 {
     let Some(adapter) = (unsafe { adapter.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     adapter.evaluate(context, input, submitted, sentinel, sharpness)
 }
@@ -436,7 +434,7 @@ pub(super) unsafe extern "C" fn rsf_sr_legacy_warm_up(
     output_height: u32,
 ) -> i32 {
     let Some(adapter) = (unsafe { adapter.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     unsafe {
         (adapter.services.warm_up)(

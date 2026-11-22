@@ -16,6 +16,9 @@ use crate::sys::rsf_backend_log_fn;
 use crate::sys::{
     RSF_GL_R32F, RSF_GL_RG16F, RSF_GL_RGBA8, RSF_GL_RGBA16F, rsf_gl_setup, rsf_gl_texture_info,
 };
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
+};
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, MutexGuard, TryLockError};
@@ -23,13 +26,6 @@ use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 mod native_dx;
 mod native_gl;
-
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 
 const SETUP_ABI_VERSION: u32 = 1;
 const SLOTS: usize = 3;
@@ -485,10 +481,10 @@ impl Context {
     fn submit(&self, state: &mut State, batch: &Batch) -> i32 {
         let l = self.leaves;
         let Phase::Recording(handoff) = state.phase else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         if handoff.batch != *batch {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let list = state.slots[handoff.slot].list.as_ptr();
         state.phase = Phase::Unsignalled(handoff);
@@ -510,7 +506,7 @@ impl Context {
 
     fn drain(&self, state: &mut State) -> i32 {
         if matches!(state.phase, Phase::Recording(_)) {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         // A refused GL release never installed a D3D12 wait. Drain can retire the
         // resources, but the context cannot record another ownership transfer.
@@ -572,7 +568,7 @@ fn open(setup: &rsf_gl_setup, leaves: &'static Leaves, gl_context: Handle) -> Re
         let found = unsafe { (l.queue_device)(queue.as_ptr(), &mut owner) };
         let owner = unsafe { ComRef::from_owned(owner) };
         if luid != native || failed(found) || owner.is_none_or(|owner| owner.0 != device.0) {
-            return Err(INVALID);
+            return Err(INVALID_ARGUMENT);
         }
         (device, queue)
     } else {
@@ -647,7 +643,7 @@ fn open(setup: &rsf_gl_setup, leaves: &'static Leaves, gl_context: Handle) -> Re
 fn create_texture(owner: &Context, width: u32, height: u32, format: u32) -> Result<Texture, i32> {
     let l = owner.leaves;
     owner.prior_errors();
-    let (native, internal) = native_format(format).ok_or(INVALID)?;
+    let (native, internal) = native_format(format).ok_or(INVALID_ARGUMENT)?;
     let mut resource = ptr::null_mut();
     let created =
         unsafe { (l.resource_create)(owner.device.as_ptr(), width, height, native, &mut resource) };
@@ -695,7 +691,7 @@ fn create_texture(owner: &Context, width: u32, height: u32, format: u32) -> Resu
 // Runs an owner-thread call with the synchronization state.
 fn with_state(context: *mut Context, run: impl FnOnce(&Context, &mut State) -> i32) -> i32 {
     let Some(context) = (unsafe { context.as_ref() }).filter(|context| context.owner()) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let Some(mut state) = context.lock() else {
         return NOT_READY;
@@ -719,19 +715,19 @@ unsafe fn rsf_core_gl_open(
     leaves: *const Leaves,
 ) -> i32 {
     if out.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     let Some(leaves) = (unsafe { leaves.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !unsafe { has_capacity(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { setup.read() };
     let gl_context = unsafe { (leaves.gl_current)() };
     if gl_context.is_null() || setup.device.is_null() != setup.queue.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if setup.abi_version != SETUP_ABI_VERSION {
         return ABI_MISMATCH;
@@ -752,10 +748,10 @@ pub(crate) unsafe extern "C" fn rsf_gl_graphics(
     queue: *mut Handle,
 ) -> i32 {
     let Some(context) = (unsafe { context.as_ref() }).filter(|context| context.owner()) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if device.is_null() || queue.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe {
         device.write(context.device.as_ptr());
@@ -773,14 +769,14 @@ pub(crate) unsafe extern "C" fn rsf_gl_texture_create(
     out: *mut *mut Texture,
 ) -> i32 {
     if out.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     let Some(context) = (unsafe { context.as_ref() }).filter(|context| context.owner()) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if width == 0 || height == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     crate::initialize_handle(
         unsafe { &mut *out },
@@ -798,10 +794,10 @@ pub(crate) unsafe extern "C" fn rsf_gl_texture_get(
     info: *mut rsf_gl_texture_info,
 ) -> i32 {
     let Some(texture) = (unsafe { texture.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !unsafe { has_capacity(info) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe {
         info.write(rsf_gl_texture_info {
@@ -826,16 +822,16 @@ pub(crate) unsafe extern "C" fn rsf_gl_begin(
     slot: *mut u32,
 ) -> i32 {
     if list.is_null() || slot.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     with_state(context, |context, state| {
         if matches!(state.phase, Phase::Recording(_)) {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         unsafe { list.write(ptr::null_mut()) };
         match context.batch(count, textures) {
             Some(batch) => context.begin(state, &batch, list, slot),
-            None => INVALID,
+            None => INVALID_ARGUMENT,
         }
     })
 }
@@ -848,11 +844,11 @@ pub(crate) unsafe extern "C" fn rsf_gl_submit(
 ) -> i32 {
     with_state(context, |context, state| {
         if !matches!(state.phase, Phase::Recording(_)) {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         match context.batch(count, textures) {
             Some(batch) => context.submit(state, &batch),
-            None => INVALID,
+            None => INVALID_ARGUMENT,
         }
     })
 }

@@ -12,6 +12,10 @@ use crate::vulkan_fg_resources::{
     MemoryChoice, ensure_image_with_memory, rsf_core_vkfg_release_image,
 };
 use crate::vulkan_sr_split::normalize_frame;
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_COMPILED, NOT_READY,
+    NOT_SUPPORTED, WRONG_API,
+};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
@@ -19,15 +23,6 @@ use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::{LazyLock, Mutex};
-
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_COMPILED: i32 = -3;
-const MISSING_ENTRY_POINT: i32 = -5;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const WRONG_API: i32 = -12;
 
 // Vulkan C ABI values, checked against the native headers at the graphics bridge.
 const R8_UNORM: u32 = 9;
@@ -74,7 +69,7 @@ type Device = *mut c_void;
 
 unsafe fn setup_admit(setup: *const Setup) -> i32 {
     if !unsafe { has_capacity(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let s = unsafe { &*setup };
     if s.abi_version != RSF_SRVK_ABI_VERSION {
@@ -99,7 +94,7 @@ unsafe fn setup_admit(setup: *const Setup) -> i32 {
         || s.depth_infinite > 1
         || s.motion_jittered > 1
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if matches!(
         s.backend,
@@ -127,7 +122,7 @@ pub(super) fn valid_image(
 
 unsafe fn fallback_admit(call: *const rsf_srvk_fallback) -> i32 {
     if !unsafe { has_capacity(call) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let call = unsafe { &*call };
     if call.abi_version != RSF_SRVK_ABI_VERSION {
@@ -161,7 +156,7 @@ unsafe fn fallback_admit(call: *const rsf_srvk_fallback) -> i32 {
             .into_iter()
             .any(|dim| dim == 0 || dim > i32::MAX as u32)
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     0
 }
@@ -206,7 +201,7 @@ pub(super) fn valid_frame_record(
 
 unsafe fn frame_admit(setup: &Setup, frame: &Frame, planned: [u32; 2]) -> i32 {
     if !unsafe { has_capacity(frame.record) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let record = unsafe { &*frame.record };
     // XeSS owns a queried inclusive range. All leased images still follow
@@ -218,7 +213,7 @@ unsafe fn frame_admit(setup: &Setup, frame: &Frame, planned: [u32; 2]) -> i32 {
     };
     let output = [setup.output_width, setup.output_height];
     if !valid_frame_record(setup, frame, record, render, output) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let device = setup.device;
     if !valid_image(&frame.color, device, render, SHADER_READ, &[RGBA16_FLOAT])
@@ -239,7 +234,7 @@ unsafe fn frame_admit(setup: &Setup, frame: &Frame, planned: [u32; 2]) -> i32 {
         .into_iter()
         .any(|mask| mask.image != 0 && !valid_image(mask, device, render, SHADER_READ, &[R8_UNORM]))
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     0
 }
@@ -265,7 +260,9 @@ fn dispatch_register_with_lookup(
     proc: rsf_vk_get_proc,
     lookup: Option<Lookup>,
 ) -> i32 {
-    let Some(proc) = proc else { return INVALID };
+    let Some(proc) = proc else {
+        return INVALID_ARGUMENT;
+    };
     let mut dispatch = DISPATCH.lock().unwrap();
     if let Some(entry) = dispatch.get_mut(&(device as usize)) {
         if !std::ptr::fn_addr_eq(entry.proc, proc) {
@@ -870,7 +867,7 @@ unsafe extern "C" fn rsf_core_srvk_create(
     out: *mut Handle,
 ) -> i32 {
     if out.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     let admission = unsafe { setup_admit(setup) };
@@ -901,10 +898,10 @@ unsafe extern "C" fn rsf_core_srvk_plan(
     height: *mut u32,
 ) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if width.is_null() || height.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if owner.render == [0; 2] {
         return NOT_READY;
@@ -923,14 +920,14 @@ unsafe extern "C" fn rsf_core_srvk_evaluate(
     frame: *const Frame,
 ) -> i32 {
     if owner.is_null() || commands.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let frame = match unsafe { normalize_frame(frame) } {
         Ok(frame) => frame,
         Err(error) => return error,
     };
     if frame.sharpening.struct_size != 0 && !sharpening_policy::valid(&frame.sharpening) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let owner = unsafe { &mut *owner };
     if owner.render == [0; 2] {
@@ -987,7 +984,7 @@ unsafe extern "C" fn rsf_core_srvk_destroy(owner: *mut Owner) -> i32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_srvk_dlss_preset(owner: *mut Owner, preset: u32) -> i32 {
     let Some(owner) = (unsafe { owner.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if owner.render == [0; 2] {
         return NOT_READY;
@@ -1059,10 +1056,10 @@ mod tests {
         unsafe {
             assert_eq!(frame_admit(&setup, &frame, [80, 45]), 0);
             setup.backend = RSF_SR_FSR3;
-            assert_eq!(frame_admit(&setup, &frame, [80, 45]), INVALID);
+            assert_eq!(frame_admit(&setup, &frame, [80, 45]), INVALID_ARGUMENT);
             setup.backend = RSF_SR_XESS;
             frame.depth.width = 80;
-            assert_eq!(frame_admit(&setup, &frame, [80, 45]), INVALID);
+            assert_eq!(frame_admit(&setup, &frame, [80, 45]), INVALID_ARGUMENT);
         }
     }
 

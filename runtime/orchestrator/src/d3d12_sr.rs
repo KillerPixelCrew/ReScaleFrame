@@ -4,6 +4,10 @@ use crate::allocate_handle;
 use crate::ffx_version::{MAX_VERSIONS, Version as ProviderVersion};
 use crate::sdk_module::{SdkModule, d3d12_library_path, load_system_library};
 use crate::sys::{rsf_sr_frame as Frame, rsf_sr_open_desc as Open};
+use rsf_game_sys::backend_result::{
+    FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, LOAD_FAILED, MISSING_ENTRY_POINT, NOT_SUPPORTED,
+    OK,
+};
 use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
@@ -17,14 +21,7 @@ mod xess;
 
 type Raw = *mut c_void;
 type Extent = [u32; 2];
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const LOAD_FAILED: i32 = -4;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
 const ULTRA_PERFORMANCE: u32 = 4;
-const FEATURE_FAILED: i32 = -9;
-const MISSING_ENTRY: i32 = -5;
 
 enum Backend {
     Fsr(fsr::Owner),
@@ -95,7 +92,7 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_plan(
     height: *mut u32,
 ) -> i32 {
     if session.is_null() || width.is_null() || height.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let session = session.cast::<Session>();
     let output = unsafe { &(*session).output };
@@ -116,7 +113,7 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_evaluate(
         return result;
     }
     if session.is_null() || commands.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let session = session.cast::<Session>();
     let frame = unsafe { &*frame };
@@ -133,7 +130,11 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_evaluate(
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_d3d12_sr_provider_release(session: Raw) -> i32 {
     // The caller retires GPU work before close. There is no separate SDK release.
-    if session.is_null() { INVALID } else { OK }
+    if session.is_null() {
+        INVALID_ARGUMENT
+    } else {
+        OK
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -150,7 +151,7 @@ unsafe extern "C" fn rsf_core_d3d12_sr_provider_version(
     name: *mut *const c_char,
 ) -> i32 {
     if session.is_null() || id.is_null() || name.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let version = unsafe { &(*session.cast::<Session>()).version };
     unsafe {
@@ -246,11 +247,11 @@ pub(super) fn validate_resources(device: Raw, frame: &Frame) -> i32 {
             || desc.SampleDesc.Count != 1
             || binding.state != state.0 as u32
         {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
     }
     if frame.color.resource == frame.output.resource {
-        INVALID
+        INVALID_ARGUMENT
     } else {
         OK
     }

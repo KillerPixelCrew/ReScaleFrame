@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
+use rsf_game_sys::backend_result::{INIT_FAILED, INVALID_ARGUMENT, NOT_READY};
 use rsf_game_sys::{RSF_FRAME_SOURCE_INPUT, RSF_FRAME_SOURCE_RENDERED};
 use std::sync::Mutex;
 
-const INVALID_ARGUMENT: i32 = -1;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
 const ALL_MARKERS: u32 = 0b111_1111;
 const RENDER_MARKERS: u32 = 0b111_1000;
 

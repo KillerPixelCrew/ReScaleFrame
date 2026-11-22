@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 
 // bindgen output: SDK typedef aliases and bitfield accessors.
 #[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
@@ -17,8 +18,6 @@ use windows_sys::Win32::{
     Foundation::S_OK,
     System::{LibraryLoader::GetProcAddress, Threading::CreateEventW},
 };
-
-const MISSING_ENTRY: i32 = -5;
 
 type Create = unsafe extern "C" fn(Raw, *mut Raw) -> i32;
 type Destroy = unsafe extern "C" fn(Raw) -> i32;
@@ -60,7 +59,7 @@ impl Sdk {
     #[allow(clippy::missing_transmute_annotations)] // The typed SDK table supplies the destination.
     fn resolve(fg: Raw, xell: Raw) -> Result<Self, i32> {
         fn symbol(module: Raw, name: &CStr) -> Result<unsafe extern "system" fn() -> isize, i32> {
-            unsafe { GetProcAddress(module, name.as_ptr().cast()) }.ok_or(MISSING_ENTRY)
+            unsafe { GetProcAddress(module, name.as_ptr().cast()) }.ok_or(MISSING_ENTRY_POINT)
         }
 
         macro_rules! entry {

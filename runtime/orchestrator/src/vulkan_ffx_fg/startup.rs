@@ -2,10 +2,9 @@
 use super::{Handle, Host, INIT_FAILED, OK, Setup};
 use crate::sdk_module::FFX_CONTEXT_EXPORTS;
 use crate::sys::rsf_vk_function;
+use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 use std::ffi::{CStr, c_char};
 use std::ptr;
-
-const MISSING_ENTRY_POINT: i32 = -5;
 
 // The SDK leaf's binders give these entries their function pointer types.
 const SDK_ENTRY_COUNT: usize = 1 + FFX_CONTEXT_EXPORTS.len();

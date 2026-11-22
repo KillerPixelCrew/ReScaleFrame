@@ -29,16 +29,13 @@ use crate::vulkan_streamline_camera::{
     image_resource, resource_tag, rsf_slvk_sdk_resource, rsf_slvk_sdk_tag, with_previous_to_clip,
 };
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::{
+    FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_READY, NOT_SUPPORTED,
+    OK,
+};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
 use std::ptr;
 
-const OK: i32 = 0;
-const INVALID_ARGUMENT: i32 = -1;
-const MISSING_ENTRY_POINT: i32 = -5;
-const INIT_FAILED: i32 = -6;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 const SR_DLSS: u32 = 1;
 const SHARED_SUBMISSION: u32 = 0;
 const VIEWPORT: u32 = 0;

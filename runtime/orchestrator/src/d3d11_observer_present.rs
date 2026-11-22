@@ -5,6 +5,7 @@ use crate::d3d11_observer_capture::{adopt_device, dump_presenter, needs_presente
 use crate::d3d11_observer_hooks::{forward_target, installed};
 use crate::sr_session::has_capacity;
 use crate::sys::rsf_observer_present_event as Event;
+use rsf_game_sys::backend_result::{INVALID_ARGUMENT, OK};
 use std::cell::Cell;
 use std::ffi::{CString, c_void};
 use std::ptr::null_mut;
@@ -14,8 +15,6 @@ use std::sync::{Mutex, PoisonError};
 type Handle = *mut c_void;
 
 const TEST: u32 = 1;
-const INVALID: i32 = -1;
-const OK: i32 = 0;
 
 #[repr(C)]
 pub(super) struct Platform {
@@ -192,11 +191,11 @@ unsafe extern "C" fn rsf_observer_notify_application_present(event: *const Event
 
 unsafe fn application_present(event: *const Event, update: impl FnOnce(Handle)) -> i32 {
     if !unsafe { has_capacity(event) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let event = unsafe { &*event };
     if event.swapchain.is_null() || event.completed > 1 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let key = ApplicationCall {
         chain: event.swapchain.addr(),
@@ -215,7 +214,7 @@ unsafe fn application_present(event: *const Event, update: impl FnOnce(Handle)) 
     } else {
         let mut calls = APPLICATION.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(index) = calls.iter().rposition(|call| *call == key) else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         calls.swap_remove(index);
         count_present(event.flags, event.result);
@@ -260,13 +259,13 @@ mod tests {
         };
         let notify = |event: &Event| unsafe { application_present(event, |_| {}) };
         let before = present_calls();
-        assert_eq!(notify(&event), INVALID);
+        assert_eq!(notify(&event), INVALID_ARGUMENT);
         assert_eq!(present_calls(), before);
         event.completed = 0;
         assert_eq!(notify(&event), OK);
         event.completed = 1;
         event.method = 1;
-        assert_eq!(notify(&event), INVALID);
+        assert_eq!(notify(&event), INVALID_ARGUMENT);
         assert_eq!(present_calls(), before + 1);
         event.method = 0;
         assert_eq!(notify(&event), OK);

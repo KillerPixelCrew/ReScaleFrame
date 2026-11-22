@@ -38,13 +38,13 @@ unsafe extern "C" fn rsf_core_fg12_setup(setup: *const Setup) -> i32 {
         || chain.height > i32::MAX as u32
         || !matches!(chain.ui_mode, UI_NONE | UI_LAYER | HUDLESS | HUDLESS_UI)
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let queue: &ID3D12CommandQueue = unsafe { borrow(&chain.d3d12_queue) };
     if unsafe { queue.GetDesc() }.Type != D3D12_COMMAND_LIST_TYPE_DIRECT
         || !owned_by(queue, chain.d3d12_device)
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     OK
 }
@@ -52,10 +52,10 @@ unsafe extern "C" fn rsf_core_fg12_setup(setup: *const Setup) -> i32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fg12_command(command: Raw, device: Raw) -> i32 {
     let Some(list) = (unsafe { ID3D12GraphicsCommandList::from_raw_borrowed(&command) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if unsafe { list.GetType() } != D3D12_COMMAND_LIST_TYPE_DIRECT || !owned_by(list, device) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     OK
 }
@@ -81,10 +81,10 @@ fn frame_resource(
     extent: Option<(u32, u32)>,
 ) -> Result<(), i32> {
     if (resource.struct_size as usize) < size_of_val(resource) || resource.resource.is_null() {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     if resource.generation != generation {
-        return Err(STALE);
+        return Err(STALE_RESOURCES);
     }
     let texture: &ID3D12Resource = unsafe { borrow(&resource.resource) };
     let desc = unsafe { texture.GetDesc() };
@@ -97,7 +97,7 @@ fn frame_resource(
         || u64::from(resource.y) + u64::from(resource.height) > u64::from(desc.Height)
         || extent.is_some_and(|size| size != (resource.width, resource.height))
     {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     Ok(())
 }
@@ -105,11 +105,11 @@ fn frame_resource(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fg12_frame(frame: *const Frame, device: Raw) -> i32 {
     if !unsafe { sized(frame) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let frame = unsafe { &*frame };
     if !unsafe { sized(frame.record) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let record = unsafe { &*frame.record };
     let camera = &record.camera;
@@ -127,14 +127,14 @@ unsafe extern "C" fn rsf_core_fg12_frame(frame: *const Frame, device: Raw) -> i3
         || record.output_width > i32::MAX as u32
         || record.output_height > i32::MAX as u32
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let rendered = record.source_provenance == RSF_FRAME_SOURCE_RENDERED
         && unsafe { rsf_frame_has_rendered_source(record) } != 0;
     if record.source_provenance > RSF_FRAME_SOURCE_RENDERED
         || (record.source_provenance == RSF_FRAME_SOURCE_RENDERED && !rendered)
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if frame.interpolate == 0 {
         return OK;
@@ -163,7 +163,7 @@ unsafe extern "C" fn rsf_core_fg12_frame(frame: *const Frame, device: Raw) -> i3
         || camera.far_plane < 0.0
         || !finite_camera(camera)
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let render = Some((record.render_width, record.render_height));
     let display = Some((record.output_width, record.output_height));
@@ -203,11 +203,11 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_setup_header(
         }
     }
     if out.is_null() || chain.is_null() || !unsafe { sized(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     if (setup.chain.struct_size as usize) < size_of::<rsf_fg_swapchain_desc>() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if setup.abi_version != RSF_FG_ABI_VERSION || setup.chain.abi_version != RSF_BACKEND_ABI_VERSION
     {

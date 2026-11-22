@@ -39,7 +39,7 @@ unsafe extern "C" fn open(desc: *const rsf_sr_open_desc, session: *mut *mut c_vo
     if desc.runtime_directory_utf8.is_null()
         || unsafe { CStr::from_ptr(desc.runtime_directory_utf8) } != c"copied-path"
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { session.write(Box::into_raw(Box::new(desc.fsr_major)).cast()) };
     0
@@ -231,7 +231,7 @@ extern "C" fn rsf_sr_session_fixture() -> i32 {
     );
     record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     frame.sharpness = 1.01;
-    check(run(frame!()) == INVALID, "out-of-range sharpening");
+    check(run(frame!()) == INVALID_ARGUMENT, "out-of-range sharpening");
     frame.sharpness = 0.0;
     check(run(frame!()) == 0 && reset(), "first frame reset");
     record.frame_id += 1;
@@ -249,7 +249,7 @@ extern "C" fn rsf_sr_session_fixture() -> i32 {
         warm(frame!()) == 0 && reset(),
         "warm-up resets without consuming the frame",
     );
-    check(run(frame!()) == INVALID, "duplicate refused");
+    check(run(frame!()) == INVALID_ARGUMENT, "duplicate refused");
     record.frame_id += 1;
     check(
         run(frame!()) == 0 && reset(),
@@ -273,7 +273,10 @@ extern "C" fn rsf_sr_session_fixture() -> i32 {
     );
     record.frame_id += 1;
     frame.jitter_x = f32::NAN;
-    check(run(frame!()) == INVALID, "nonfinite jitter refused");
+    check(
+        run(frame!()) == INVALID_ARGUMENT,
+        "nonfinite jitter refused",
+    );
     frame.jitter_x = 0.0;
     check(
         unsafe { rsf_sr_session_select(session, 0, 0, 0) } == 0,

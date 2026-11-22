@@ -35,7 +35,7 @@ impl Sdk {
             .iter()
             .any(Option::is_none)
         {
-            return Err(MISSING_ENTRY);
+            return Err(MISSING_ENTRY_POINT);
         }
         let compatibility = if desc.fsr_major == 4 {
             let handle =
@@ -244,7 +244,7 @@ impl Owner {
         height: *mut u32,
     ) -> i32 {
         if quality > ULTRA_PERFORMANCE {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         // FSR2 can dispatch 1:1 but its quality query does not accept Native AA.
         if quality == 0 && self.major == 2 {
@@ -339,7 +339,7 @@ impl Drop for Owner {
 
 pub(super) fn open(desc: &Open, out: *mut Raw, ops: &CompatibilityOps) -> i32 {
     if !(2..=4).contains(&desc.fsr_major) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     open_session(desc, out, |_| Owner::open(desc, ops))
 }

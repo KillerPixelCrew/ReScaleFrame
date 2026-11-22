@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use rsf_game_sys::backend_result::{INIT_FAILED, NOT_READY};
 pub(super) mod device;
 
 use crate::sys::rsf_fgvk_frame_slot as Slot;
@@ -7,8 +8,6 @@ use crate::sys::{
 };
 use std::ffi::c_void;
 
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
 const FENCE_TIMEOUT_NS: u64 = 15_000_000_000;
 pub(super) const SAMPLED_TRANSFER: u32 = 0x7;
 

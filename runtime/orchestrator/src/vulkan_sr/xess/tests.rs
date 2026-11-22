@@ -413,17 +413,29 @@ fn session_admits_one_sdk_and_maps_requirement_results() {
     with_state(|| unsafe {
         let mut setup = requirements();
         setup.struct_size -= 1;
-        assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), ptr::null()), INVALID);
-        assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), &setup), INVALID);
+        assert_eq!(
+            rsf_core_xessvk_initialize(Some(&OPS), ptr::null()),
+            INVALID_ARGUMENT
+        );
+        assert_eq!(
+            rsf_core_xessvk_initialize(Some(&OPS), &setup),
+            INVALID_ARGUMENT
+        );
         setup.struct_size += 1;
         setup.abi_version += 1;
         assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), &setup), ABI_MISMATCH);
         setup.abi_version -= 1;
         setup.runtime_directory_utf8 = c"".as_ptr();
-        assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), &setup), INVALID);
+        assert_eq!(
+            rsf_core_xessvk_initialize(Some(&OPS), &setup),
+            INVALID_ARGUMENT
+        );
         setup.runtime_directory_utf8 = c"relative".as_ptr();
         assert_eq!(rsf_core_xessvk_initialize(None, &setup), NOT_COMPILED);
-        assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), &setup), INVALID);
+        assert_eq!(
+            rsf_core_xessvk_initialize(Some(&OPS), &setup),
+            INVALID_ARGUMENT
+        );
 
         let (mut count, mut names, mut minimum) = (9, ptr::dangling::<*const c_char>(), 9);
         assert_eq!(
@@ -487,7 +499,7 @@ fn session_admits_one_sdk_and_maps_requirement_results() {
                 &mut names,
                 &mut features
             ),
-            INVALID
+            INVALID_ARGUMENT
         );
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), 0);
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), 0);
@@ -625,7 +637,7 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
             ([1128, 632], |frame| frame.pre_exposure = f32::from_bits(1)),
         ];
         for (extent, edit) in refusals {
-            assert_eq!(run(extent, 4, &edit), INVALID);
+            assert_eq!(run(extent, 4, &edit), INVALID_ARGUMENT);
             assert!(calls().is_empty());
         }
         let mut jitter = record([1128, 632], 4);
@@ -633,11 +645,11 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
         let input = frame(&jitter);
         assert_eq!(
             rsf_core_srvk_evaluate(owner.cast(), commands, &input),
-            INVALID
+            INVALID_ARGUMENT
         );
         assert_eq!(
             rsf_core_srvk_evaluate(owner.cast(), ptr::null_mut(), &input),
-            INVALID
+            INVALID_ARGUMENT
         );
 
         // Velocity refusal records nothing and keeps history.
@@ -805,7 +817,10 @@ fn shared_srvk_owner_routes_xess_and_refuses_presets() {
         edit_state(|fake| fake.calls.clear());
         let commands = ptr::dangling_mut::<u32>().cast();
         input.sharpening.struct_size = 1;
-        assert_eq!(rsf_core_srvk_evaluate(owner, commands, &input), INVALID);
+        assert_eq!(
+            rsf_core_srvk_evaluate(owner, commands, &input),
+            INVALID_ARGUMENT
+        );
         assert!(calls().is_empty());
         input.sharpening.struct_size = 0;
         assert_eq!(rsf_core_srvk_evaluate(owner, commands, &input), 0);

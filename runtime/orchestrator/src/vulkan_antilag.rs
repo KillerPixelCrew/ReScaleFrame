@@ -7,16 +7,14 @@ use crate::sys::{
     rsf_latencyvk_device_query as Query, rsf_latencyvk_device_requirements as Requirements,
 };
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED,
+};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::{Condvar, Mutex};
 
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_READY: i32 = -8;
-const NOT_SUPPORTED: i32 = -7;
-const FEATURE_FAILED: i32 = -9;
 const INPUT: u32 = 0;
 const PRESENT: u32 = 1;
 const MODE_ONLY: u32 = u32::MAX;
@@ -87,7 +85,7 @@ unsafe fn feature_chain(
 unsafe fn enable_feature(out: *mut Requirements) -> i32 {
     let features = unsafe { (*out).features };
     let Some((root, existing)) = (unsafe { feature_chain(features.cast()) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if existing.is_null() {
         FEATURE.with(|feature| unsafe {
@@ -333,7 +331,7 @@ unsafe extern "C" fn rsf_core_amd_vk_require(
     out: *mut Requirements,
 ) -> i32 {
     if !unsafe { has_capacity(query) && has_capacity(out) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let query = unsafe { &*query };
     if query.abi_version != RSF_LATENCYVK_DEVICE_ABI_VERSION
@@ -343,7 +341,7 @@ unsafe extern "C" fn rsf_core_amd_vk_require(
     }
     if query.instance.is_null() || query.physical_device.is_null() || query.instance_proc.is_none()
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe {
         out.write(Requirements {
@@ -367,11 +365,11 @@ unsafe extern "C" fn rsf_core_amd_vk_require(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_amd_vk_device_created(enabled: u32, facts: *const Created) -> i32 {
     if !unsafe { has_capacity(facts) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let facts = unsafe { &*facts };
     if facts.device.is_null() || facts.create_info.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if facts.abi_version != RSF_LATENCYVK_DEVICE_ABI_VERSION {
         return ABI_MISMATCH;

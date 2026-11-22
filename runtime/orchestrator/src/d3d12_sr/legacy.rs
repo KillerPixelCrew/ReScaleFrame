@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use rsf_game_sys::backend_result::{ABI_MISMATCH, NOT_COMPILED, NOT_READY, WRONG_API};
 
 use super::*;
 use crate::sys::{
@@ -9,9 +10,6 @@ use crate::sys::{
 use crate::sys::{rsf_fg_provider as Fg, rsf_fg_swapchain_result as FgResult};
 use std::sync::OnceLock;
 
-const ABI_MISMATCH: i32 = -2;
-const NOT_COMPILED: i32 = -3;
-const NOT_READY: i32 = -8;
 const AMD: u32 = 3;
 const INTEL: u32 = 2;
 type OpenFn = unsafe extern "C" fn(*const Open, *mut Raw) -> i32;
@@ -21,12 +19,12 @@ unsafe extern "C" fn probe<const FSR: bool, const COMPILED: bool>(
     caps: *mut Caps,
 ) -> i32 {
     if desc.is_null() || caps.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let desc_size = unsafe { (&raw const (*desc).struct_size).read() };
     let caps_size = unsafe { (&raw const (*caps).struct_size).read() };
     if (desc_size as usize) < size_of::<Probe>() || (caps_size as usize) < size_of::<Caps>() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let desc = unsafe { &*desc };
     if desc.abi_version != RSF_BACKEND_ABI_VERSION {
@@ -150,15 +148,14 @@ const fn legacy_fg<const FSR: bool, const COMPILED: bool, const ERROR: i32>() ->
 
 unsafe fn validate_open<'a>(desc: *const Open, out: *mut Raw) -> Result<&'a Open, i32> {
     const ULTRA_QUALITY: u32 = 5;
-    const WRONG_API: i32 = -12;
-    let desc = unsafe { crate::sr_session::checked(desc) }.ok_or(INVALID)?;
+    let desc = unsafe { crate::sr_session::checked(desc) }.ok_or(INVALID_ARGUMENT)?;
     if out.is_null()
         || desc.device.is_null()
         || desc.output_width == 0
         || desc.output_height == 0
         || desc.quality > ULTRA_QUALITY
     {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     unsafe { out.write(null_mut()) };
     if desc.abi_version != RSF_BACKEND_ABI_VERSION {
@@ -258,8 +255,8 @@ mod tests {
                 let fg = unsafe { &*rsf_core_d3d12_legacy_fg_provider(fsr, compiled) };
                 let probe = fg.probe.unwrap();
                 assert!(fg.create_swapchain.is_some());
-                assert_eq!(unsafe { probe(null(), &mut caps) }, INVALID);
-                assert_eq!(unsafe { probe(&desc, null_mut()) }, INVALID);
+                assert_eq!(unsafe { probe(null(), &mut caps) }, INVALID_ARGUMENT);
+                assert_eq!(unsafe { probe(&desc, null_mut()) }, INVALID_ARGUMENT);
                 assert_eq!(
                     unsafe { probe(&desc, &mut caps) },
                     if compiled != 0 { OK } else { NOT_COMPILED }
@@ -296,7 +293,7 @@ mod tests {
                 desc.abi_version += 1;
                 assert_eq!(unsafe { probe(&desc, &mut caps) }, ABI_MISMATCH);
                 caps.struct_size = size_of::<u32>() as u32;
-                assert_eq!(unsafe { probe(&desc, &mut caps) }, INVALID);
+                assert_eq!(unsafe { probe(&desc, &mut caps) }, INVALID_ARGUMENT);
             }
         }
     }

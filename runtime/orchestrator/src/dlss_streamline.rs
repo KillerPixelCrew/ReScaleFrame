@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: MIT
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, LOAD_FAILED, MISSING_ENTRY_POINT,
+    NOT_READY, OK,
+};
 pub(super) mod exports;
 mod frame;
 mod planning;
@@ -24,14 +28,6 @@ use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress
 use windows_sys::core::w;
 
 type Handle = *mut c_void;
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const LOAD_FAILED: i32 = -4;
-const MISSING_ENTRY: i32 = -5;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 const OPTIMAL: u32 = 1;
 const OPTIONS: u32 = 2;
 
@@ -69,7 +65,7 @@ unsafe fn resolve_entries(
     for (address, name) in addresses.iter_mut().zip(&ENTRY_NAMES[..count]) {
         let Some(entry) = (unsafe { GetProcAddress(module, name.as_ptr().cast()) }) else {
             unsafe { missing(name.as_ptr()) };
-            return MISSING_ENTRY;
+            return MISSING_ENTRY_POINT;
         };
         *address = entry as *const () as Handle;
     }
@@ -104,7 +100,7 @@ unsafe fn resolve_features(
     if resolved == (OPTIMAL | OPTIONS) {
         OK
     } else {
-        MISSING_ENTRY
+        MISSING_ENTRY_POINT
     }
 }
 
@@ -121,7 +117,7 @@ fn shared_features_refuse_a_vendor_error_even_with_an_address() {
     unsafe extern "C" fn lookup(_: Handle, name: *const c_char, address: &mut Handle) -> i32 {
         if unsafe { CStr::from_ptr(name) } == c"slDLSSGetOptimalSettings" {
             *address = without_provenance_mut(1);
-            MISSING_ENTRY
+            MISSING_ENTRY_POINT
         } else {
             *address = without_provenance_mut(2);
             OK
@@ -133,7 +129,10 @@ fn shared_features_refuse_a_vendor_error_even_with_an_address() {
     }
     let mut features = 0;
     let result = unsafe { resolve_features(null_mut(), true, lookup, bind, &mut features) };
-    assert_eq!((result, features, BOUND.get()), (MISSING_ENTRY, 0, false));
+    assert_eq!(
+        (result, features, BOUND.get()),
+        (MISSING_ENTRY_POINT, 0, false)
+    );
     let result = unsafe { resolve_features(null_mut(), false, lookup, bind, &mut features) };
     assert_eq!(
         (result, features, BOUND.get()),
@@ -285,7 +284,7 @@ impl Startup {
                 features,
             )
         };
-        if result == MISSING_ENTRY {
+        if result == MISSING_ENTRY_POINT {
             unsafe { (self.report)(c"DLSS feature functions are not available".as_ptr()) };
         }
         result
@@ -363,11 +362,11 @@ static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
 unsafe fn rsf_core_dlss_streamline_load(setup: *const Setup, platform: &Platform) -> i32 {
     if !unsafe { has_capacity(setup) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     if setup.interposer_path_utf8.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if setup.abi_version != RSF_DLSS_ABI_VERSION {
         return ABI_MISMATCH;
@@ -389,7 +388,7 @@ unsafe fn rsf_core_dlss_streamline_load(setup: *const Setup, platform: &Platform
         return INIT_FAILED;
     }
     let Some(path) = (unsafe { wide_path(setup.interposer_path_utf8) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let Some(module) = SdkModule::adopt_system(unsafe { (platform.load)(path.as_ptr(), setup) })
     else {
@@ -467,7 +466,7 @@ unsafe fn rsf_core_dlss_streamline_set_device(device: Handle, platform: &Platfor
         return OK;
     }
     if device.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Some(session) = state.as_mut().filter(|session| session.active()) else {
         return NOT_READY;
@@ -476,7 +475,7 @@ unsafe fn rsf_core_dlss_streamline_set_device(device: Handle, platform: &Platfor
     let result = platform
         .startup
         .set_device(session.native.as_ptr(), device, &mut capabilities);
-    if matches!(result, OK | MISSING_ENTRY) {
+    if matches!(result, OK | MISSING_ENTRY_POINT) {
         session.route = Route::Owned(Some(unsafe { ComRef::retain(device) }));
         session.features = capabilities;
         session.applied = [None; 2];
@@ -486,7 +485,7 @@ unsafe fn rsf_core_dlss_streamline_set_device(device: Handle, platform: &Platfor
 
 unsafe fn rsf_core_dlss_streamline_support(support: *mut Support, platform: &Platform) -> i32 {
     if !unsafe { has_capacity(support) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Ok(state) = SESSION.try_lock() else {
         return NOT_READY;
@@ -511,7 +510,7 @@ unsafe fn rsf_core_dlss_streamline_support(support: *mut Support, platform: &Pla
 
 unsafe fn rsf_core_dlss_streamline_plan(plan: *mut Plan, platform: &Platform) -> i32 {
     if !unsafe { has_capacity(plan) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     // The caller only needs to initialize the inputs.
     let (width, height) = unsafe {
@@ -521,7 +520,7 @@ unsafe fn rsf_core_dlss_streamline_plan(plan: *mut Plan, platform: &Platform) ->
         )
     };
     if width == 0 || height == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Ok(state) = SESSION.try_lock() else {
         return NOT_READY;
@@ -547,7 +546,7 @@ unsafe fn rsf_core_dlss_streamline_present(
     platform: &Platform,
 ) -> i32 {
     if chain.is_null() || begin > 1 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Ok(mut state) = SESSION.try_lock() else {
         return NOT_READY;
@@ -577,7 +576,7 @@ unsafe fn rsf_core_dlss_streamline_present(
                 }
             }
             if entries.iter().any(|entry| entry.is_null()) {
-                return MISSING_ENTRY;
+                return MISSING_ENTRY_POINT;
             }
             session.present_entries = Some(entries);
             entries
@@ -603,20 +602,20 @@ unsafe fn rsf_core_dlss_streamline_evaluate(
         return NOT_READY;
     }
     if context.is_null() || !unsafe { has_capacity(frame) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let frame = unsafe { &*frame };
     if frame.abi_version != RSF_DLSS_ABI_VERSION {
         return ABI_MISMATCH;
     }
     if frame.viewport >= 2 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if [frame.color_in, frame.color_out, frame.depth, frame.motion]
         .into_iter()
         .any(|input| input.is_null())
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Some(session) = state
         .as_mut()
@@ -640,7 +639,7 @@ unsafe fn rsf_core_dlss_streamline_evaluate(
     }
 
     if !crate::streamline_sr::preset_valid(frame.preset) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let options = Options {
         mode: dlss_mode(frame.quality),
@@ -655,7 +654,7 @@ unsafe fn rsf_core_dlss_streamline_evaluate(
     if *applied != Some(options) {
         let status = unsafe { (platform.options)(native, slot, &options.payload()) };
         if status != OK {
-            if status != INVALID {
+            if status != INVALID_ARGUMENT {
                 *applied = None;
             }
             return status;
@@ -672,7 +671,7 @@ unsafe fn rsf_core_dlss_streamline_evaluate(
 
 unsafe fn rsf_core_dlss_streamline_release(viewport: u32, platform: &Platform) -> i32 {
     if viewport >= 2 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Ok(mut state) = SESSION.try_lock() else {
         return NOT_READY;

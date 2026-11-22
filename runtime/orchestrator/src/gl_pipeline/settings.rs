@@ -158,14 +158,14 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
     limit_fps: u32,
 ) -> i32 {
     let Some(legacy) = (unsafe { read_sized(legacy) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if path.is_null()
         || section.is_null()
         || identity.is_null()
         || unsafe { *path == 0 || *section == 0 }
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     with_state(pipeline, |pipeline, state| {
         if state.overlay {
@@ -342,7 +342,7 @@ unsafe extern "C" fn rsf_gl_pipeline_configure_legacy(
     height: u32,
 ) -> i32 {
     let Some(mut options) = (unsafe { read_sized(options) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     options.generation.mode = mode(options.fg_backend != 0);
     options.generation.frame_limit_us = interval(limit_fps);

@@ -16,6 +16,9 @@ use crate::sys::{
     rsf_native_fg_options, rsf_native_fg_status, rsf_sharpening_options,
 };
 use crate::sys::{RSF_OVERLAY_NOTIFY_DEVICE_RESET, rsf_overlay_service_setup};
+use rsf_game_sys::backend_result::{
+    FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NEEDS_RESTART, NOT_READY, OK,
+};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
     RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_RENDER_WINDOW,
@@ -34,13 +37,6 @@ mod dxgi;
 mod linked;
 mod settings;
 mod window;
-
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
-const NEEDS_RESTART: i32 = -11;
 
 // Public SR backend IDs (sr_session.h), checked by the native contract.
 const SR_NONE: u32 = 0;
@@ -459,7 +455,7 @@ impl Pipeline {
         height: u32,
     ) -> Result<(u32, Owned), i32> {
         let mut selected = options.sr_backend;
-        let (mut result, mut sr) = (INVALID, None);
+        let (mut result, mut sr) = (INVALID_ARGUMENT, None);
         if selected == SR_AUTO {
             let (mut vendor, mut software) = (0, 0);
             unsafe { (self.platform.adapter_identity)(state.device, &mut vendor, &mut software) };
@@ -703,10 +699,10 @@ impl Pipeline {
     fn evaluate(&self, state: &mut State, input: &Pass) -> i32 {
         let p = self.platform;
         let Some(active) = state.active.as_ref() else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         if p.depth_domains_requested(input) {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let mut pass = *input;
         pass.session_id = self.session;
@@ -750,10 +746,10 @@ impl Pipeline {
     fn hudless(&self, state: &mut State, input: &Pass) -> i32 {
         let p = self.platform;
         let Some(active) = state.active.as_ref() else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         if p.depth_domains_requested(input) {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let mut pass = *input;
         pass.session_id = self.session;
@@ -777,12 +773,12 @@ impl Pipeline {
     fn present(&self, state: &mut State, frame: u64, vsync: u32) -> i32 {
         let p = self.platform;
         let view = match state.frame_view {
-            Some((captured, None)) if captured == frame => return INVALID,
+            Some((captured, None)) if captured == frame => return INVALID_ARGUMENT,
             Some((captured, Some(view))) if captured == frame => view,
             _ => 0,
         };
         let (Some(active), Some(chain)) = (state.active.as_ref(), state.chain.as_ref()) else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         let Some(buffer) = (unsafe { ComRef::from_owned((p.chain_back_buffer)(chain.as_ptr())) })
         else {
@@ -902,7 +898,7 @@ impl Pipeline {
     fn input(&self, frame: u64, kinds: u32, message: u32) -> i32 {
         let p = self.platform;
         if kinds & !7 != 0 || (kinds == 0 && message == 0) {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let mut flags = RSF_GAME_CPU_INPUT_KEYED;
         if frame != 0 {
@@ -937,7 +933,7 @@ fn open(
         || setup.engine_version_utf8.is_null()
         || setup.project_id_utf8.is_null()
     {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     let root = unsafe { CStr::from_ptr(setup.runtime_directory_utf8) };
     let version = unsafe { CStr::from_ptr(setup.engine_version_utf8) };
@@ -1126,11 +1122,11 @@ unsafe fn open_handle(
     platform: &'static Platform,
 ) -> i32 {
     if out.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     let Some(setup) = (unsafe { read_sized(setup) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     crate::initialize_handle(unsafe { &mut *out }, INIT_FAILED, || {
         let mut cleanup = None;
@@ -1143,13 +1139,13 @@ unsafe fn open_handle(
 
 fn with_state(pipeline: *mut Pipeline, run: impl FnOnce(&Pipeline, &mut State) -> i32) -> i32 {
     let Some(pipeline) = (unsafe { pipeline.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let Some(mut state) = lock(pipeline) else {
         return NOT_READY;
     };
     if state.closed {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if !pipeline.ready.load(Ordering::Acquire) || state.chain.is_none() {
         return NOT_READY;
@@ -1166,12 +1162,12 @@ unsafe extern "C" fn rsf_gl_pipeline_configure(
     height: u32,
 ) -> i32 {
     let Some(options) = (unsafe { read_sized(options) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let valid = unsafe { pipeline.as_ref() }
         .is_some_and(|pipeline| pipeline.platform.valid_options(&options, width, height));
     if !valid {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     with_state(pipeline, |pipeline, state| {
         let result = pipeline.configure(state, &options, width, height);
@@ -1191,11 +1187,11 @@ unsafe extern "C" fn rsf_gl_pipeline_get_surfaces(
     out: *mut rsf_gl_pipeline_surfaces,
 ) -> i32 {
     if !unsafe { has_capacity(out) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     with_state(pipeline, |_, state| {
         let Some(active) = state.active.as_ref() else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         let name = |slot: usize| active.info[slot].texture;
         unsafe {
@@ -1241,7 +1237,7 @@ unsafe extern "C" fn rsf_gl_pipeline_input(
             pipeline.input(frame, kinds, message)
         }
         Some(_) => NOT_READY,
-        None => INVALID,
+        None => INVALID_ARGUMENT,
     }
 }
 
@@ -1262,14 +1258,14 @@ unsafe extern "C" fn rsf_gl_pipeline_abort(pipeline: *mut Pipeline, frame: u64) 
             (pipeline.platform.present_abort)(frame)
         },
         Some(_) if frame != 0 => NOT_READY,
-        _ => INVALID,
+        _ => INVALID_ARGUMENT,
     }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_gl_pipeline_evaluate(pipeline: *mut Pipeline, input: *const Pass) -> i32 {
     let Some(input) = (unsafe { read_sized(input) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     with_state(pipeline, |pipeline, state| pipeline.evaluate(state, &input))
 }
@@ -1277,7 +1273,7 @@ unsafe extern "C" fn rsf_gl_pipeline_evaluate(pipeline: *mut Pipeline, input: *c
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_gl_pipeline_hudless(pipeline: *mut Pipeline, input: *const Pass) -> i32 {
     let Some(input) = (unsafe { read_sized(input) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     with_state(pipeline, |pipeline, state| pipeline.hudless(state, &input))
 }
@@ -1290,7 +1286,7 @@ unsafe extern "C" fn rsf_gl_pipeline_present(
     vsync: u32,
 ) -> i32 {
     if frame == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     with_state(pipeline, |pipeline, state| {
         pipeline.present(state, frame, vsync)
@@ -1303,10 +1299,10 @@ unsafe extern "C" fn rsf_gl_pipeline_status_get(
     out: *mut rsf_gl_pipeline_status,
 ) -> i32 {
     if !unsafe { has_capacity(out) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Some(pipeline) = (unsafe { pipeline.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let Some(state) = lock(pipeline) else {
         return NOT_READY;

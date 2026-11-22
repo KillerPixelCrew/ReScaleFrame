@@ -590,9 +590,9 @@ fn submit_must_match_the_batch_released_by_begin() {
     let output = texture(context, RSF_GL_RGBA8);
     assert_eq!(begin(context, &[scene, output]).0, OK);
     events();
-    assert_eq!(submit(context, &[]), INVALID);
-    assert_eq!(submit(context, &[output, scene]), INVALID);
-    assert_eq!(submit(context, &[scene, scene]), INVALID);
+    assert_eq!(submit(context, &[]), INVALID_ARGUMENT);
+    assert_eq!(submit(context, &[output, scene]), INVALID_ARGUMENT);
+    assert_eq!(submit(context, &[scene, scene]), INVALID_ARGUMENT);
     assert!(events().is_empty());
     assert_eq!(submit(context, &[scene, output]), OK);
     close_all(context, &[scene, output]);
@@ -657,7 +657,7 @@ fn signal_refused_after_execute_retains_the_transaction() {
 
     // The executed list is neither closed nor submitted again. Drain and close keep refusing,
     // and the slot is never waited on or reset with an unknown completion.
-    assert_eq!(submit(context, &[scene, output]), INVALID);
+    assert_eq!(submit(context, &[scene, output]), INVALID_ARGUMENT);
     assert_eq!(unsafe { rsf_gl_drain(context) }, FEATURE_FAILED);
     assert_eq!(unsafe { rsf_gl_close(context) }, FEATURE_FAILED);
     assert_eq!(events(), ["signal 3 refused", "signal 4 refused"]);
@@ -746,7 +746,7 @@ fn refused_queue_wait_returns_the_textures_to_gl() {
         ]
     );
     assert_eq!(refs(resource), 1, "a refused begin takes no lease");
-    assert_eq!(submit(context, &[output]), INVALID);
+    assert_eq!(submit(context, &[output]), INVALID_ARGUMENT);
     let (result, _, slot) = begin(context, &[output]);
     assert_eq!((result, slot), (OK, 0));
     assert_eq!(
@@ -824,34 +824,34 @@ fn owner_admission_and_call_order() {
     events();
 
     world(|world| world.context = 0x99);
-    assert_eq!(begin(context, &[output]).0, INVALID);
-    assert_eq!(unsafe { rsf_gl_drain(context) }, INVALID);
-    assert_eq!(unsafe { rsf_gl_close(context) }, INVALID);
+    assert_eq!(begin(context, &[output]).0, INVALID_ARGUMENT);
+    assert_eq!(unsafe { rsf_gl_drain(context) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { rsf_gl_close(context) }, INVALID_ARGUMENT);
     assert_eq!(
         unsafe { rsf_gl_graphics(context, &mut device, &mut queue) },
-        INVALID
+        INVALID_ARGUMENT
     );
     let mut created = ptr::null_mut();
     assert_eq!(
         unsafe { rsf_gl_texture_create(context, 4, 4, RSF_GL_RGBA8, &mut created) },
-        INVALID
+        INVALID_ARGUMENT
     );
     unsafe { rsf_gl_texture_destroy(output) };
     assert!(events().is_empty(), "another WGL context does nothing");
     world(|world| world.context = GL_CONTEXT as usize);
 
     let mut list = ptr::null_mut();
-    assert_eq!(begin(context, &[foreign]).0, INVALID);
-    assert_eq!(begin(context, &[output; BATCH + 1]).0, INVALID);
+    assert_eq!(begin(context, &[foreign]).0, INVALID_ARGUMENT);
+    assert_eq!(begin(context, &[output; BATCH + 1]).0, INVALID_ARGUMENT);
     assert_eq!(
         unsafe { rsf_gl_begin(context, 1, ptr::null(), &mut list, &mut 0) },
-        INVALID
+        INVALID_ARGUMENT
     );
-    assert_eq!(submit(context, &[output]), INVALID);
+    assert_eq!(submit(context, &[output]), INVALID_ARGUMENT);
     assert_eq!(begin(context, &[]).0, OK);
-    assert_eq!(begin(context, &[output]).0, INVALID);
-    assert_eq!(unsafe { rsf_gl_drain(context) }, INVALID);
-    assert_eq!(submit(context, &[foreign]), INVALID);
+    assert_eq!(begin(context, &[output]).0, INVALID_ARGUMENT);
+    assert_eq!(unsafe { rsf_gl_drain(context) }, INVALID_ARGUMENT);
+    assert_eq!(submit(context, &[foreign]), INVALID_ARGUMENT);
     assert_eq!(submit(context, &[]), OK);
     assert_eq!(
         events(),
@@ -873,11 +873,11 @@ fn owner_admission_and_call_order() {
     });
     assert_eq!(
         unsafe { rsf_gl_texture_create(context, 4, 4, 99, &mut created) },
-        INVALID
+        INVALID_ARGUMENT
     );
     assert_eq!(
         unsafe { rsf_gl_texture_create(context, 0, 4, RSF_GL_RGBA8, &mut created) },
-        INVALID
+        INVALID_ARGUMENT
     );
     assert_eq!(
         world(|world| std::mem::take(&mut world.logs)),
@@ -896,19 +896,19 @@ fn open_validates_setup_and_releases_partial_state() {
     reset();
     let mut short = setup();
     short.struct_size -= 1;
-    assert_eq!(open_with(&short), (INVALID, ptr::null_mut()));
+    assert_eq!(open_with(&short), (INVALID_ARGUMENT, ptr::null_mut()));
     let mut version = setup();
     version.abi_version = 2;
     assert_eq!(open_with(&version).0, ABI_MISMATCH);
     let mut half = setup();
     half.device = com("device");
-    assert_eq!(open_with(&half).0, INVALID);
+    assert_eq!(open_with(&half).0, INVALID_ARGUMENT);
     unsafe { release(half.device.cast()) };
     world(|world| world.context = 0);
-    assert_eq!(open_with(&setup()).0, INVALID);
+    assert_eq!(open_with(&setup()).0, INVALID_ARGUMENT);
     assert_eq!(
         unsafe { rsf_core_gl_open(&setup(), ptr::null_mut(), &LEAVES) },
-        INVALID
+        INVALID_ARGUMENT
     );
 
     reset();
@@ -961,7 +961,7 @@ fn open_validates_setup_and_releases_partial_state() {
     let mut supplied = setup();
     supplied.device = device;
     supplied.queue = queue;
-    assert_eq!(open_with(&supplied).0, INVALID);
+    assert_eq!(open_with(&supplied).0, INVALID_ARGUMENT);
     assert_eq!((refs(device), refs(queue)), (1, 1));
     world(|world| world.device_luid = LUID);
     let (result, context) = open_with(&supplied);

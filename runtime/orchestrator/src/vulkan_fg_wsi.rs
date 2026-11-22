@@ -5,6 +5,7 @@ use crate::sys::{rsf_vk_synchronized_present, rsf_vk_wsi_call, rsf_vk_wsi_scope}
 use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle};
+use rsf_game_sys::backend_result::NOT_READY;
 use std::ffi::{CStr, c_char, c_void};
 
 const INIT_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
@@ -50,7 +51,6 @@ pub(crate) unsafe fn rsf_core_vkfg_drain(
     user: *mut c_void,
     idle: vk::PFN_vkDeviceWaitIdle,
 ) -> i32 {
-    const NOT_READY: i32 = -8;
     let lock = setup.lock_queues.expect("validated queue lock");
     let unlock = setup.unlock_queues.expect("validated queue unlock");
     unsafe { lock(setup.queue_user) };

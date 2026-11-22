@@ -162,20 +162,20 @@ impl Xess {
         let result =
             unsafe { (self.ops.create_fg)(self.sdk.raw, self.device.as_ptr(), self.fg.get_mut()) };
         if result != 0 || self.fg.get().is_null() {
-            return UNSUPPORTED;
+            return NOT_SUPPORTED;
         }
         let result = unsafe {
             (self.ops.create_xell)(self.sdk.raw, self.device.as_ptr(), self.xell.get_mut())
         };
         if result != 0 || self.xell.get().is_null() {
-            return UNSUPPORTED;
+            return NOT_SUPPORTED;
         }
         let mut max = 0;
         if unsafe { (self.ops.max_count)(self.sdk.raw, self.fg.get(), &mut max) } != 0
             || max == 0
             || unsafe { (self.ops.bind_xell)(self.sdk.raw, self.fg.get(), self.xell.get()) } != 0
         {
-            return UNSUPPORTED;
+            return NOT_SUPPORTED;
         }
         let reserved = setup.chain.max_generated_frames.min(max);
         let mut initial = initial_status(reserved);
@@ -191,7 +191,7 @@ impl Xess {
             &format!("XeFG {}.{}.{}", version.major, version.minor, version.patch),
         );
         if setup.version_id != 0 && setup.version_id != initial.version_id {
-            return UNSUPPORTED;
+            return NOT_SUPPORTED;
         }
         if !setup.chain.hwnd.is_null() {
             let mut chain = null_mut();
@@ -232,12 +232,12 @@ impl Session for Xess {
             return NOT_READY;
         }
         if options.mode > RSF_FG_FIXED {
-            return UNSUPPORTED;
+            return NOT_SUPPORTED;
         }
         let on = options.mode != RSF_FG_OFF;
         let count = options.generated_frames.min(self.reserved.get());
         if on && count == 0 {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let previous = self.state.read().request;
         let reset = self.options_dirty.get()
@@ -315,7 +315,7 @@ impl Session for Xess {
         let sdk = {
             let mut latency = self.latency.lock().unwrap();
             if id <= latency.last_begin {
-                return INVALID;
+                return INVALID_ARGUMENT;
             }
             let Some(next) = latency.sdk_frame.checked_add(1) else {
                 return NEEDS_RESTART;
@@ -341,7 +341,7 @@ impl Session for Xess {
 
     fn marker(&self, kind: u32, id: u64) -> i32 {
         if kind > INPUT_SAMPLE {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let mut latency = self.latency.lock().unwrap();
         let Some(frame) = latency.ids.get(id) else {
@@ -367,7 +367,7 @@ impl Session for Xess {
                 Err(result) => return result,
             };
         if record.source_provenance == rsf_game_sys::RSF_FRAME_SOURCE_RENDERED {
-            return UNSUPPORTED;
+            return NOT_SUPPORTED;
         }
         let before = self.state.read();
         let id = record.frame_id;
@@ -404,7 +404,7 @@ impl Session for Xess {
         if (self.ui_mode != UI_NONE && frame.hudless.resource.is_null())
             || (self.ui_mode == HUDLESS_UI && frame.ui.resource.is_null())
         {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         if !self.state.stage(
             before.order.revision,

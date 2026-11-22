@@ -107,7 +107,7 @@ fn query_versions(
             versions,
         )
     }) else {
-        return UNSUPPORTED;
+        return NOT_SUPPORTED;
     };
     *count = versions.len() as u64;
     OK

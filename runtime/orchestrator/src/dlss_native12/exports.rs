@@ -2,8 +2,8 @@
 use super::*;
 use crate::sr_session::has_capacity;
 use crate::streamline_sr::preset_valid;
+use rsf_game_sys::backend_result::NOT_COMPILED;
 
-const NOT_COMPILED: i32 = -3;
 const ULTRA_PERFORMANCE: u32 = 4;
 
 #[cfg(not(test))]
@@ -18,7 +18,7 @@ fn platform() -> Option<&'static Platform> {
 
 unsafe fn validate_setup(device: Handle, setup: *const Setup) -> Result<(), i32> {
     if device.is_null() || !unsafe { has_capacity(setup) } {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     let setup = unsafe { &*setup };
     if setup.interposer_path_utf8.is_null()
@@ -27,7 +27,7 @@ unsafe fn validate_setup(device: Handle, setup: *const Setup) -> Result<(), i32>
         || (setup.application_id == 0 && setup.project_id_utf8.is_null())
         || !preset_valid(setup.preset)
     {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     if setup.abi_version != RSF_DLSS_ABI_VERSION {
         return Err(ABI_MISMATCH);
@@ -42,7 +42,7 @@ unsafe fn register(
     out: *mut *mut Registration,
 ) -> i32 {
     let Some(out) = (unsafe { out.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     *out = null_mut();
     if let Err(result) = unsafe { validate_setup(device, setup) } {
@@ -70,7 +70,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_borrow(
     out: *mut *mut Registration,
 ) -> i32 {
     if module.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { register(device, setup, module, out) }
 }
@@ -83,15 +83,15 @@ unsafe extern "C" fn rsf_dlss_native12_create_registered(
     out: *mut *mut Context,
 ) -> i32 {
     let Some(out) = (unsafe { out.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     *out = null_mut();
     if !unsafe { has_capacity(setup) } || registration.is_null() || platform().is_none() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     if !preset_valid(setup.preset) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     rsf_core_dlss_native12_create_registered(device, setup, unsafe { &*registration }, out)
 }
@@ -105,7 +105,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_present(
     begin: u32,
 ) -> i32 {
     if registration.is_null() || swapchain.is_null() || platform().is_none() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe {
         rsf_core_dlss_native12_registration_present(
@@ -142,7 +142,7 @@ unsafe extern "C" fn rsf_dlss_native12_create_shared(
     out: *mut *mut Context,
 ) -> i32 {
     let Some(out) = (unsafe { out.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     *out = null_mut();
     if let Err(result) = unsafe { validate_setup(device, setup) } {
@@ -169,7 +169,7 @@ unsafe extern "C" fn rsf_dlss_native12_plan(
         || render_height.is_null()
         || quality > ULTRA_PERFORMANCE
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     platform().map_or(NOT_COMPILED, |_| unsafe {
         rsf_core_dlss_native12_plan(
@@ -190,7 +190,7 @@ unsafe extern "C" fn rsf_dlss_native12_evaluate(
     frame: *const Frame,
 ) -> i32 {
     if context.is_null() || list.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     platform().map_or(NOT_COMPILED, |_| unsafe {
         rsf_core_dlss_native12_evaluate(&*context, list, frame, null_mut())
@@ -205,7 +205,7 @@ unsafe extern "C" fn rsf_dlss_native12_evaluate_borrowed(
     token: Handle,
 ) -> i32 {
     if context.is_null() || list.is_null() || token.is_null() || platform().is_none() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { rsf_core_dlss_native12_evaluate(&*context, list, frame, token) }
 }
@@ -233,7 +233,7 @@ unsafe extern "C" fn rsf_dlss_native12_present(
     begin: u32,
 ) -> i32 {
     if context.is_null() || swapchain.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     platform().map_or(NOT_COMPILED, |_| unsafe {
         rsf_core_dlss_native12_present(&*context, swapchain, interval, flags, begin)

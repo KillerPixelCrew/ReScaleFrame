@@ -24,6 +24,7 @@ pub const RSF_ERROR_NATIVE_REFUSED: rsf_result = -5;
 pub const RSF_GAME_UNKNOWN: rsf_detection = 0;
 pub const RSF_GAME_RECOGNIZED: rsf_detection = 1;
 
+pub mod backend_result;
 pub mod call_header;
 pub mod camera_math;
 pub mod checksum;

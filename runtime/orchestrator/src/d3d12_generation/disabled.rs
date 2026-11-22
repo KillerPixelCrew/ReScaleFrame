@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-
-const NOT_COMPILED: i32 = -3;
+use rsf_game_sys::backend_result::NOT_COMPILED;
 
 unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
     let result = unsafe { admission::rsf_core_fg12_setup_header(setup, out, chain) };

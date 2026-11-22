@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::*;
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, STALE_RESOURCES, WRONG_API,
+};
 
 #[cfg(feature = "test-fixtures")]
 mod fixture;
@@ -11,12 +14,6 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{self, NonNull};
 use std::time::Instant;
 
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
-const STALE_RESOURCES: i32 = -10;
-const WRONG_API: i32 = -12;
 const ULTRA_QUALITY: u32 = 5;
 const PATH_CAPACITY: usize = 1024;
 
@@ -66,10 +63,10 @@ pub(crate) use rsf_game_sys::ffi_util::{checked, has_capacity};
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_validate_sr_frame(frame: *const rsf_sr_frame) -> i32 {
     let Some(frame) = (unsafe { checked(frame) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let Some(record) = (unsafe { checked(frame.record) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let camera = &record.camera;
     if record.abi_version != RSF_GAME_FRAME_ABI_VERSION
@@ -105,7 +102,7 @@ pub(super) unsafe extern "C" fn rsf_core_validate_sr_frame(frame: *const rsf_sr_
         || !(camera.vertical_fov_radians > 0.0
             && camera.vertical_fov_radians < std::f32::consts::PI.next_up())
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if record.flags & RSF_FRAME_FLAG_NO_SR != 0 {
         return NOT_READY;
@@ -128,7 +125,7 @@ pub(super) unsafe extern "C" fn rsf_core_validate_sr_frame(frame: *const rsf_sr_
             || resource.width < width
             || resource.height < height
         {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         if resource.generation != record.resource_generation {
             return STALE_RESOURCES;
@@ -168,12 +165,12 @@ unsafe fn create(
     if out.is_null()
         || !unsafe { has_capacity(setup) && has_capacity(ptr::addr_of!((*setup).open)) }
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
     let mut open = setup.open;
     if open.device.is_null() || open.output_width == 0 || open.output_height == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     if setup.abi_version != RSF_SR_SESSION_ABI_VERSION
@@ -201,7 +198,7 @@ unsafe fn create(
                     break;
                 }
                 if i + 1 == PATH_CAPACITY {
-                    return INVALID;
+                    return INVALID_ARGUMENT;
                 }
             }
         }
@@ -240,7 +237,7 @@ impl Session {
         if (backend != 0 && !(RSF_SR_FSR2..=RSF_SR_XESS).contains(&backend))
             || quality > ULTRA_QUALITY
         {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         self.status.requested = backend;
         if backend == 0 {
@@ -357,7 +354,7 @@ impl Session {
 
     fn dispatch(&mut self, command: *mut c_void, frame: *const rsf_sr_frame, warm_up: bool) -> i32 {
         if command.is_null() {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let result = unsafe { rsf_core_validate_sr_frame(frame) };
         if result != 0 {
@@ -374,7 +371,7 @@ impl Session {
         }
         let same_view = record.session_id == self.last.session && record.view_id == self.last.view;
         if !warm_up && same_view && record.frame_id <= self.last.frame {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let reset = self.reset
             || !same_view
@@ -418,7 +415,7 @@ pub(super) unsafe extern "C" fn rsf_sr_session_select(
     version_id: u64,
 ) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     session.select(backend, quality, version_id, false)
 }
@@ -429,10 +426,10 @@ pub(super) unsafe extern "C" fn rsf_sr_session_set_auto_exposure(
     enabled: u32,
 ) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if enabled > 1 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if session.open.auto_exposure == enabled {
         return 0;
@@ -454,7 +451,7 @@ pub(super) unsafe extern "C" fn rsf_sr_session_evaluate(
     frame: *const rsf_sr_frame,
 ) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     let result = session.dispatch(command, frame, false);
     session.reset = result != 0;
@@ -482,7 +479,7 @@ pub(super) unsafe extern "C" fn rsf_sr_session_warm_up(
     frame: *const rsf_sr_frame,
 ) -> i32 {
     let Some(session) = (unsafe { session.as_mut() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     session.dispatch(command, frame, true)
 }
@@ -493,10 +490,10 @@ pub(super) unsafe extern "C" fn rsf_sr_session_get_status(
     status: *mut rsf_sr_session_status,
 ) -> i32 {
     let Some(session) = (unsafe { session.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if !unsafe { has_capacity(status) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { status.write(session.status) };
     0

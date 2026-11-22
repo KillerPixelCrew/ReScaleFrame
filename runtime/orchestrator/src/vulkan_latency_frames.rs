@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::native_cpu::frame_facts;
+use rsf_game_sys::backend_result::{INVALID_ARGUMENT, NOT_READY};
 use rsf_game_sys::{
     RSF_GAME_CPU_SIMULATION_END, RSF_GAME_RENDER_PRESENT, RSF_GAME_RENDER_SUBMISSION,
     rsf_game_render_pass,
@@ -11,8 +12,6 @@ use std::sync::Mutex;
 pub(crate) mod streamline;
 use streamline::StreamlineFrames;
 
-const INVALID: i32 = -1;
-const NOT_READY: i32 = -8;
 const EXECUTION_SLOTS: usize = 128;
 const PASS_PREFIX: usize = offset_of!(rsf_game_render_pass, source_frame_id) + size_of::<u64>();
 
@@ -153,21 +152,21 @@ pub(crate) unsafe extern "C" fn rsf_core_latencyvk_execution(
     begin: u32,
 ) -> i32 {
     if pass.is_null() || (unsafe { (*pass).struct_size } as usize) < PASS_PREFIX {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let frame = Frame {
         session: unsafe { (*pass).session_id },
         id: unsafe { (*pass).source_frame_id },
     };
     if frame.session == 0 || frame.id == 0 {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let marker = match (unsafe { (*pass).role }, begin) {
         (RSF_GAME_RENDER_SUBMISSION, 1) => Marker::SubmitBegin,
         (RSF_GAME_RENDER_SUBMISSION, 0) => Marker::SubmitEnd,
         (RSF_GAME_RENDER_PRESENT, 1) => Marker::PresentBegin,
         (RSF_GAME_RENDER_PRESENT, 0) => Marker::PresentEnd,
-        _ => return INVALID,
+        _ => return INVALID_ARGUMENT,
     };
     if matches!(marker, Marker::PresentEnd) && PRESENTING.get() == Some(frame) {
         PRESENTING.set(None);

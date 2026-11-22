@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use rsf_game_sys::backend_result::{INVALID_ARGUMENT, LOAD_FAILED};
 use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
@@ -12,8 +13,6 @@ use windows_sys::Win32::{
     },
 };
 
-const INVALID_ARGUMENT: i32 = -1;
-const LOAD_FAILED: i32 = -4;
 pub(super) const FIDELITYFX_DLL: &str = "amd_fidelityfx_vk.dll";
 pub(super) const FFX_CONTEXT_EXPORTS: [&CStr; 4] = [
     c"ffxCreateContext",

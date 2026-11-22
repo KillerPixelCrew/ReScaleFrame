@@ -2,6 +2,7 @@
 use super::*;
 use crate::d3d11_d3d12 as graphics;
 use crate::sdk_module::SdkModule;
+use rsf_game_sys::backend_result::INIT_FAILED;
 use std::mem::{ManuallyDrop, transmute};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
@@ -29,7 +30,6 @@ use windows_sys::Win32::{
     UI::WindowsAndMessaging::IsWindow,
 };
 
-const INIT_FAILED: i32 = -6;
 type CreateOn12 = unsafe extern "system" fn(
     Handle,
     u32,

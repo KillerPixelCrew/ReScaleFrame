@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_session::has_capacity;
 use crate::sys::*;
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT, NOT_COMPILED, NOT_SUPPORTED};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION};
 use std::ffi::c_void;
 use std::mem::offset_of;
@@ -12,10 +13,6 @@ type Setup = rsf_srvk_setup;
 type Handoff = rsf_fsr4vk_handoff;
 type Info = rsf_srvk_fsr4_provider_info;
 
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_COMPILED: i32 = -3;
-const NOT_SUPPORTED: i32 = -7;
 const FIRST_RESERVED_QUEUE_FAMILY: u32 = 0xffff_fffd;
 const FRAME_PREFIX: usize = offset_of!(Frame, bias_current_color);
 
@@ -32,7 +29,7 @@ struct Provider {
 
 fn public_result(result: i32) -> i32 {
     match result {
-        RSF_FSR4_BRIDGE_INVALID_ARGUMENT => INVALID,
+        RSF_FSR4_BRIDGE_INVALID_ARGUMENT => INVALID_ARGUMENT,
         RSF_FSR4_BRIDGE_ABI_MISMATCH => ABI_MISMATCH,
         _ => result,
     }
@@ -43,7 +40,7 @@ pub(super) unsafe fn admit_setup(
     handoff: *const Handoff,
 ) -> Result<(Setup, Handoff), i32> {
     if !unsafe { has_capacity(setup) && has_capacity(handoff) } {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     let (facts, lease) = unsafe { (&*setup, &*handoff) };
     if facts.abi_version != RSF_SRVK_ABI_VERSION
@@ -74,7 +71,7 @@ pub(super) unsafe fn admit_setup(
         || facts.depth_infinite > 1
         || facts.motion_jittered > 1
     {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     Ok((*facts, *lease))
 }
@@ -94,7 +91,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_create(
     owner: *mut Handle,
 ) -> i32 {
     if owner.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { owner.write(ptr::null_mut()) };
     let (setup, handoff) = match unsafe { admit_setup(setup, handoff) } {
@@ -123,7 +120,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_plan(
         }
     }
     if owner.is_null() || width.is_null() || height.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Some(provider) = (unsafe { provider.as_ref() }) else {
         return NOT_COMPILED;
@@ -133,11 +130,11 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_plan(
 
 pub(super) unsafe fn normalize_frame(frame: *const Frame) -> Result<Frame, i32> {
     if frame.is_null() {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     let size = unsafe { frame.cast::<u32>().read() } as usize;
     if size != FRAME_PREFIX && size < size_of::<Frame>() {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     if unsafe { (*frame).abi_version } != RSF_SRVK_ABI_VERSION {
         return Err(ABI_MISMATCH);
@@ -164,26 +161,26 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_evaluate(
     continuation: *mut Handle,
 ) -> i32 {
     if continuation.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     // Failed admission leaves the host's original command buffer recordable.
     unsafe { continuation.write(commands) };
     if owner.is_null() || commands.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let frame = match unsafe { normalize_frame(frame) } {
         Ok(frame) => frame,
         Err(error) => return error,
     };
     if !unsafe { has_capacity(frame.record) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if unsafe { (*frame.record).abi_version } != RSF_GAME_FRAME_ABI_VERSION {
         return ABI_MISMATCH;
     }
     let camera = unsafe { ptr::addr_of!((*frame.record).camera) };
     if !unsafe { has_capacity(camera) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if unsafe { (*camera).abi_version } != RSF_GAME_CAMERA_ABI_VERSION {
         return ABI_MISMATCH;
@@ -227,7 +224,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_submitted(
     commands: Handle,
 ) -> i32 {
     if owner.is_null() || commands.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Some(provider) = (unsafe { provider.as_ref() }) else {
         return NOT_COMPILED;
@@ -242,7 +239,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_info(
     out: *mut Info,
 ) -> i32 {
     if !unsafe { has_capacity(out) } {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe {
         (*out).adapter_luid = 0;
@@ -254,7 +251,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_info(
         return ABI_MISMATCH;
     }
     if owner.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Some(provider) = (unsafe { provider.as_ref() }) else {
         return NOT_COMPILED;
@@ -388,7 +385,7 @@ mod tests {
                     abi_version: 99,
                     ..setup
                 },
-                INVALID,
+                INVALID_ARGUMENT,
             ),
             (
                 Setup {
@@ -409,7 +406,7 @@ mod tests {
                     depth_inverted: 2,
                     ..setup
                 },
-                INVALID,
+                INVALID_ARGUMENT,
             ),
         ];
         for (setup, expected) in invalid_setups {
@@ -426,7 +423,7 @@ mod tests {
                     abi_version: 99,
                     ..handoff
                 },
-                INVALID,
+                INVALID_ARGUMENT,
             ),
             (
                 Handoff {
@@ -440,21 +437,21 @@ mod tests {
                     timeline_enabled: 0,
                     ..handoff
                 },
-                INVALID,
+                INVALID_ARGUMENT,
             ),
             (
                 Handoff {
                     queue_family: 0xffff_fffe,
                     ..handoff
                 },
-                INVALID,
+                INVALID_ARGUMENT,
             ),
             (
                 Handoff {
                     split_record: None,
                     ..handoff
                 },
-                INVALID,
+                INVALID_ARGUMENT,
             ),
         ] {
             assert_eq!(
@@ -465,7 +462,7 @@ mod tests {
         unsafe {
             assert_eq!(
                 rsf_core_srvk_fsr4_create(disabled, &setup, &handoff, ptr::null_mut()),
-                INVALID
+                INVALID_ARGUMENT
             );
             assert_eq!(
                 rsf_core_srvk_fsr4_create(disabled, &setup, &handoff, &mut owner),
@@ -476,7 +473,7 @@ mod tests {
             let (mut width, mut height) = (9, 9);
             assert_eq!(
                 rsf_core_srvk_fsr4_plan(disabled, ptr::null(), &mut width, &mut height),
-                INVALID
+                INVALID_ARGUMENT
             );
             assert_eq!((width, height), (0, 0));
             assert_eq!(
@@ -488,11 +485,11 @@ mod tests {
             assert_eq!(rsf_core_srvk_fsr4_destroy(disabled, commands), NOT_COMPILED);
             assert_eq!(
                 rsf_core_srvk_fsr4_submitted(disabled, commands, ptr::null_mut()),
-                INVALID
+                INVALID_ARGUMENT
             );
             assert_eq!(
                 rsf_core_srvk_fsr4_submitted(disabled, ptr::null_mut(), commands),
-                INVALID
+                INVALID_ARGUMENT
             );
             assert_eq!(
                 rsf_core_srvk_fsr4_submitted(disabled, commands, commands),
@@ -509,7 +506,7 @@ mod tests {
             };
             assert_eq!(
                 rsf_core_srvk_fsr4_info(disabled, commands, &mut info),
-                INVALID
+                INVALID_ARGUMENT
             );
             assert_eq!(info.adapter_luid, 7);
             info.struct_size += 1;
@@ -538,7 +535,7 @@ mod tests {
             input.abi_version = 99;
             assert_eq!(
                 rsf_core_srvk_fsr4_evaluate(disabled, commands, commands, &input, &mut next),
-                INVALID
+                INVALID_ARGUMENT
             );
             assert_eq!(next, commands);
             input.struct_size += 1;
@@ -560,13 +557,13 @@ mod tests {
                 result
             };
             record.struct_size -= 1;
-            assert_eq!(probe(&record), INVALID);
+            assert_eq!(probe(&record), INVALID_ARGUMENT);
             record.struct_size += 1;
             record.abi_version = 99;
             assert_eq!(probe(&record), ABI_MISMATCH);
             record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
             record.camera.struct_size -= 1;
-            assert_eq!(probe(&record), INVALID);
+            assert_eq!(probe(&record), INVALID_ARGUMENT);
             record.camera.struct_size += 1;
             record.camera.abi_version = 99;
             assert_eq!(probe(&record), ABI_MISMATCH);
@@ -580,7 +577,7 @@ mod tests {
             );
             assert_eq!(
                 rsf_core_srvk_fsr4_evaluate(disabled, commands, commands, &input, ptr::null_mut()),
-                INVALID
+                INVALID_ARGUMENT
             );
         }
     }

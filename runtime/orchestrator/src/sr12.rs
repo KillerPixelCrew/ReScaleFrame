@@ -13,6 +13,9 @@ use crate::sharpening_policy;
 use crate::sr_session::checked;
 use crate::sys::*;
 use crate::sys::{rsf_dlss_setup, rsf_sr12_setup as Setup};
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, OK, STALE_RESOURCES,
+};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_NO_FG,
@@ -25,14 +28,6 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 #[cfg(test)]
 mod tests;
-
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
-const STALE_RESOURCES: i32 = -10;
 
 // ABI values consumed by the SR planner and normalization pass.
 const SR_NONE: u32 = 0;
@@ -584,7 +579,7 @@ unsafe fn create_gpu(
 
 unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32> {
     let Some((s, size)) = (unsafe { read_setup(setup) }) else {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     };
     if (size as usize) < offset_of!(Setup, engine_input_extents)
         || s.device.is_null()
@@ -593,14 +588,14 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
         || s.backend > RSF_SR_XESS
         || s.quality > MAX_QUALITY
     {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     if s.abi_version != 1 && s.abi_version != 2 {
         return Err(ABI_MISMATCH);
     }
     let abi2 = s.abi_version == 2;
     if abi2 && (size as usize) < size_of::<Setup>() {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     let engine_extents = abi2 && s.engine_input_extents != 0;
     if engine_extents
@@ -609,7 +604,7 @@ unsafe fn create(setup: *const Setup, p: &'static Platform) -> Result<Sr12, i32>
             || s.render_width > s.output_width
             || s.render_height > s.output_height)
     {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     // Capture is optional. An allocation failure leaves SR usable and capture unavailable.
     let capture = unsafe { (p.capture_create)() };
@@ -997,13 +992,13 @@ impl Sr12 {
         let mut guard = lock(&self.state);
         let state = &mut *guard;
         if !unsafe { self.inputs_valid(state, pass) } {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let sharpen = *lock(&self.sharpening);
         unsafe { (p.capture_flush)(self.capture(), slot as u32) };
         if raw(state.validated_list.as_ref()) != list {
             if !unsafe { self.owned(list) } {
-                return INVALID;
+                return INVALID_ARGUMENT;
             }
             state.validated_list = unsafe { retain(list) };
         }
@@ -1241,7 +1236,7 @@ impl Sr12 {
     unsafe fn capture_scene(&self, list: Handle, pass: &Pass, slot: usize) -> i32 {
         let p = self.p();
         if unsafe { (p.depth_domains)(pass) } != 0 {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let state = lock(&self.state);
         let captured = &state.captured[slot];
@@ -1260,7 +1255,7 @@ impl Sr12 {
             || desc.height != record.output_height
             || desc.samples != 1
         {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         if unsafe { (p.capture_wants)(self.capture(), record.frame_id) } == 0 {
             return NOT_READY;
@@ -1322,12 +1317,12 @@ unsafe extern "C" fn rsf_core_sr12_create(
     platform: *const Platform,
 ) -> i32 {
     if out.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     // Production and fixture tables have static lifetime.
     let Some(platform): Option<&'static Platform> = (unsafe { platform.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     assert_eq!(platform.struct_size as usize, size_of::<Platform>());
     match unsafe { create(setup, platform) } {
@@ -1354,7 +1349,7 @@ extern "C" fn rsf_core_sr12_quality_supported(backend: u32, quality: u32) -> u32
 
 unsafe fn create_checked(setup: &Setup, platform: &'static Platform) -> Result<Sr12, i32> {
     if rsf_core_sr12_quality_supported(setup.backend, setup.quality) == 0 {
-        return Err(INVALID);
+        return Err(INVALID_ARGUMENT);
     }
     let owner = unsafe { create(setup, platform) }?;
     if owner.width == 0
@@ -1376,11 +1371,11 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
     adapter_identity: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> u32,
 ) -> i32 {
     if out.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
     if plan.is_null() || (unsafe { plan.cast::<u32>().read() } as usize) < size_of::<PlanResult>() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if unsafe { (*plan).abi_version } != PLAN_ABI_VERSION {
         return ABI_MISMATCH;
@@ -1392,12 +1387,12 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
             backend: SR_NONE,
             render_width: 0,
             render_height: 0,
-            requested_result: INVALID,
+            requested_result: INVALID_ARGUMENT,
         });
     }
     let plan = unsafe { &mut *plan };
     let Some((mut setup, size)) = (unsafe { read_setup(setup) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if (size as usize) < offset_of!(Setup, engine_input_extents)
         || setup.device.is_null()
@@ -1406,17 +1401,17 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
         || setup.quality > MAX_QUALITY
         || (setup.backend > RSF_SR_XESS && setup.backend != SR_AUTO)
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if setup.abi_version != 1 && setup.abi_version != 2 {
         plan.requested_result = ABI_MISMATCH;
         return ABI_MISMATCH;
     }
     if setup.abi_version == 2 && (size as usize) < size_of::<Setup>() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let Some(platform): Option<&'static Platform> = (unsafe { platform.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     assert_eq!(platform.struct_size as usize, size_of::<Platform>());
     if setup.backend == SR_AUTO {
@@ -1466,10 +1461,10 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_plan(
     height: *mut u32,
 ) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if width.is_null() || height.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe {
         width.write(owner.width);
@@ -1486,10 +1481,10 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_evaluate(
     slot: u32,
 ) -> i32 {
     let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { checked(pass) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if list.is_null() || slot as usize >= SLOTS {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { owner.evaluate(list, pass, slot as usize) }
 }
@@ -1500,19 +1495,19 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_set_sharpening(
     options: *const rsf_sharpening_options,
 ) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if options.is_null()
         || (unsafe { options.cast::<u32>().read() } as usize) < size_of::<rsf_sharpening_options>()
     {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     let options = unsafe { options.read() };
     if options.abi_version != RSF_SHARPENING_ABI_VERSION {
         return ABI_MISMATCH;
     }
     if !sharpening_policy::valid(&options) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     *lock(&owner.sharpening) = options;
     OK
@@ -1534,10 +1529,10 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_present(
     begin: u32,
 ) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if swapchain.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     match owner.native.vendor {
         Vendor::Dlss(context) => unsafe {
@@ -1562,17 +1557,17 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_capture(
         {
             OK
         }
-        _ => INVALID,
+        _ => INVALID_ARGUMENT,
     }
 }
 
 #[unsafe(export_name = "rsf_sr12_capture_flush")]
 pub(super) unsafe extern "C" fn rsf_core_sr12_capture_flush(owner: *mut Sr12, slot: u32) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if slot as usize >= SLOTS {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     if unsafe { (owner.p().capture_flush)(owner.capture(), slot) } != 0 {
         OK
@@ -1589,10 +1584,10 @@ pub(super) unsafe extern "C" fn rsf_core_sr12_capture_scene(
     slot: u32,
 ) -> i32 {
     let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { checked(pass) }) else {
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     if list.is_null() || slot as usize >= SLOTS || pass.color_input.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { owner.capture_scene(list, pass, slot as usize) }
 }

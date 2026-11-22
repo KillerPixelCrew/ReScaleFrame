@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Barrier, Handle, INIT_FAILED, ImageCopy, MISSING_ENTRY, Setup};
+use super::{Barrier, Handle, INIT_FAILED, ImageCopy, MISSING_ENTRY_POINT, Setup};
 use crate::allocate_handle;
 use crate::dx12_vulkan_platform::lookup;
 use crate::frame_capture_vk::{Owner as CaptureOwner, rsf_core_capture_vk_initialize};
@@ -59,7 +59,7 @@ pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_bind(
     output: &mut *mut Graphics,
 ) -> i32 {
     let Some((graphics, memory)) = Graphics::bind(setup) else {
-        return MISSING_ENTRY;
+        return MISSING_ENTRY_POINT;
     };
     if unsafe { rsf_core_capture_vk_initialize(capture, setup.device, setup.device_proc, &memory) }
         == 0

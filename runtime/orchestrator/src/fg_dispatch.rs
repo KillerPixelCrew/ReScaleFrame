@@ -10,6 +10,7 @@ use crate::sys::{
     RSF_DLSS_ABI_VERSION, rsf_backend_log_fn, rsf_dlss_frame as Frame, rsf_native_fg_options,
     rsf_native_fg_status,
 };
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_game_sys::rsf_game_cpu_event;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_RESET,
@@ -143,8 +144,6 @@ unsafe extern "C" fn latency_event(_: *mut c_void, event: *const Present) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_get_d3d11_fg_api(api: *mut rsf_d3d11_fg_api) -> i32 {
-    const INVALID_ARGUMENT: i32 = -1;
-    const ABI_MISMATCH: i32 = -2;
     if !unsafe { has_capacity(api) } {
         return INVALID_ARGUMENT;
     }

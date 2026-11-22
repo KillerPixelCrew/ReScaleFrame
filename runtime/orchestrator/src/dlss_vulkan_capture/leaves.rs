@@ -14,6 +14,9 @@ use crate::sys::rsf_fgvk_setup as Setup;
 use crate::sys::rsf_srvk_image as Image;
 use crate::vulkan_capture_commands::Commands;
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::{
+    INIT_FAILED, INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_READY, OK,
+};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::OpenOptions;
@@ -24,11 +27,6 @@ use std::ptr;
 use windows_sys::Win32::System::Environment::GetEnvironmentVariableW;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 
-const OK: i32 = 0;
-const INVALID_ARGUMENT: i32 = -1;
-const MISSING_ENTRY_POINT: i32 = -5;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
 const ABI_VERSION: u32 = 1;
 const SHARED_SUBMISSION: u32 = 0;
 

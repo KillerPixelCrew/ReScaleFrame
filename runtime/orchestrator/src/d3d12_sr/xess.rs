@@ -35,7 +35,7 @@ impl Sdk {
         let module = load_runtime(desc, "libxess.dll").ok_or(LOAD_FAILED)?;
         macro_rules! entry {
             ($name:literal, $signature:ty) => {{
-                let symbol = module.symbol($name).ok_or(MISSING_ENTRY)?;
+                let symbol = module.symbol($name).ok_or(MISSING_ENTRY_POINT)?;
                 // The export is borrowed from the module retained in this Sdk.
                 unsafe {
                     std::mem::transmute::<unsafe extern "system" fn() -> isize, $signature>(symbol)
@@ -66,7 +66,7 @@ const QUALITIES: [i32; 6] = [
 ];
 
 fn zero_mask(device: Raw, [width, height]: Extent) -> Result<ID3D12Resource, i32> {
-    let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.ok_or(INVALID)?;
+    let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.ok_or(INVALID_ARGUMENT)?;
     let heap = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -180,7 +180,7 @@ impl Owner {
         height: *mut u32,
     ) -> i32 {
         let Some(&quality) = QUALITIES.get(quality as usize) else {
-            return INVALID;
+            return INVALID_ARGUMENT;
         };
         let output = xess_2d_t {
             x: output[0],
@@ -201,7 +201,7 @@ impl Owner {
 
     pub(super) fn evaluate(&self, commands: Raw, frame: &Frame) -> i32 {
         if !self.auto_exposure && frame.exposure.resource.is_null() {
-            return INVALID;
+            return INVALID_ARGUMENT;
         }
         let result = unsafe {
             (self.sdk.velocity)(self.context, frame.motion_scale_x, frame.motion_scale_y)

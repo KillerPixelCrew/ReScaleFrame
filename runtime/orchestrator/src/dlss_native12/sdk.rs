@@ -168,7 +168,7 @@ unsafe extern "C" fn lookup_feature(
     if unsafe { feature(feature_id, name, out) } == RESULT_OK {
         OK
     } else {
-        MISSING_ENTRY
+        MISSING_ENTRY_POINT
     }
 }
 

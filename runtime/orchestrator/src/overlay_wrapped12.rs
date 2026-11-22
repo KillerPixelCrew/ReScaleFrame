@@ -2,9 +2,10 @@
 // The production entry points live in `native`, which unit tests do not build.
 #![cfg_attr(test, allow(dead_code))]
 use crate::com_ref::ComRef;
+use crate::overlay_native12::OverlayLog;
 use crate::sr_session::has_capacity;
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats};
-use crate::overlay_native12::OverlayLog;
+use rsf_game_sys::backend_result::NOT_SUPPORTED;
 use std::ffi::{CStr, c_void};
 use std::sync::Mutex;
 #[cfg(not(test))]
@@ -30,11 +31,7 @@ struct WrappedTarget {
 // Production binds `native::PLATFORM`; the unit tests bind fakes.
 #[derive(Clone, Copy)]
 struct Platform {
-    create: unsafe extern "C" fn(
-        device: *mut c_void,
-        queue: *mut c_void,
-        out: *mut Interop,
-    ) -> i32,
+    create: unsafe extern "C" fn(device: *mut c_void, queue: *mut c_void, out: *mut Interop) -> i32,
     window: unsafe extern "C" fn(chain: *mut c_void, window: *mut *mut c_void) -> u32,
     start: unsafe extern "C" fn(
         device: *mut c_void,
@@ -64,8 +61,6 @@ struct Platform {
     flush: unsafe extern "C" fn(context: *mut c_void),
     stop: unsafe extern "C" fn(device: *mut c_void),
 }
-
-const NOT_SUPPORTED: i32 = -7;
 
 type Handle = *mut c_void;
 
@@ -340,11 +335,7 @@ mod tests {
         CALLS.with_borrow_mut(|calls| calls.push(name));
     }
 
-    unsafe extern "C" fn create(
-        device: Handle,
-        _: Handle,
-        out: *mut Interop,
-    ) -> i32 {
+    unsafe extern "C" fn create(device: Handle, _: Handle, out: *mut Interop) -> i32 {
         call("create");
         unsafe {
             out.write(Interop {
