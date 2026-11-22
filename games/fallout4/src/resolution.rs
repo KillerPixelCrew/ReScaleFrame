@@ -6,7 +6,7 @@ use crate::build_layout::{
 };
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::{current_identity, render_source_is_current};
-use crate::depth_domains::{self, Leaves as DepthLeaves, Snapshot};
+use crate::depth_domains::{self, NativeLeaves as DepthLeaves, Snapshot};
 use crate::{Plain, image, read, screen::WORLD_LEASE_INVALID};
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,

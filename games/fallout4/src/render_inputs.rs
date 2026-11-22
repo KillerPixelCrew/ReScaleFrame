@@ -244,7 +244,7 @@ struct FramebufferFacts {
 /// render_inputs_platform.h `NativeInputLeaves`, built by render_inputs.cpp.
 #[repr(C)]
 #[allow(dead_code)] // constructed by the C++ leaf table
-pub(crate) struct Leaves {
+pub(crate) struct NativeLeaves {
     identity: Option<unsafe extern "C" fn(u64) -> u64>,
     owner: Option<unsafe extern "C" fn(Lease, u64, u64, *mut DeviceFacts)>,
     viewport: Option<unsafe extern "C" fn(u64, *mut ViewportFacts)>,
@@ -259,6 +259,21 @@ pub(crate) struct Leaves {
     framebuffer: Option<
         unsafe extern "C" fn(Report, *const c_char, *const c_char, *const FramebufferReceipt),
     >,
+}
+
+pub(crate) struct Leaves {
+    identity: unsafe extern "C" fn(u64) -> u64,
+    owner: unsafe extern "C" fn(Lease, u64, u64, *mut DeviceFacts),
+    viewport: unsafe extern "C" fn(u64, *mut ViewportFacts),
+    swap: unsafe extern "C" fn(u64, *mut SwapFacts),
+    resource: unsafe extern "C" fn(Lease, u32, u64, u32, *mut ResourceFacts),
+    release: unsafe extern "C" fn(Lease, u32),
+    reader:
+        unsafe extern "C" fn(Report, *const c_char, *const Receipt, *const rsf_game_render_pass),
+    mismatch: unsafe extern "C" fn(Report, *const State, *const State, u32),
+    history: unsafe extern "C" fn(Report, *const HistoryReceipt),
+    framebuffer:
+        unsafe extern "C" fn(Report, *const c_char, *const c_char, *const FramebufferReceipt),
 }
 
 const _: () = {
@@ -287,7 +302,7 @@ const _: () = {
     assert!(offset_of!(FramebufferReceipt, platform) == 304);
     assert!(offset_of!(FramebufferReceipt, rtv_mip) == 340);
     assert!(size_of::<FramebufferFacts>() == 16);
-    assert!(size_of::<Leaves>() == 10 * 8);
+    assert!(size_of::<NativeLeaves>() == 10 * 8);
 };
 
 const NO_CAMERA: NativeCamera = NativeCamera {
@@ -432,22 +447,24 @@ const _: () = assert!(
 );
 
 impl Leaves {
-    fn complete(&self) -> bool {
-        self.identity.is_some()
-            && self.owner.is_some()
-            && self.viewport.is_some()
-            && self.swap.is_some()
-            && self.resource.is_some()
-            && self.release.is_some()
-            && self.reader.is_some()
-            && self.mismatch.is_some()
-            && self.history.is_some()
-            && self.framebuffer.is_some()
+    fn from_native(table: &NativeLeaves) -> Option<Self> {
+        Some(Self {
+            identity: table.identity?,
+            owner: table.owner?,
+            viewport: table.viewport?,
+            swap: table.swap?,
+            resource: table.resource?,
+            release: table.release?,
+            reader: table.reader?,
+            mismatch: table.mismatch?,
+            history: table.history?,
+            framebuffer: table.framebuffer?,
+        })
     }
 
     /// Canonical identity of a live COM object, 0 when null or not an object.
     fn identity(&self, object: u64) -> u64 {
-        self.identity.map_or(0, |leaf| unsafe { leaf(object) })
+        unsafe { (self.identity)(object) }
     }
 
     /// `object` is the canonical identity of a live object, `native` a native pointer: the C++
@@ -459,25 +476,19 @@ impl Leaves {
     /// Leases the native context and chain, then reports their devices.
     fn owner(&self, lease: Lease, context: usize, chain: usize) -> DeviceFacts {
         let mut facts = DeviceFacts::default();
-        if let Some(leaf) = self.owner {
-            unsafe { leaf(lease, context as u64, chain as u64, &mut facts) };
-        }
+        unsafe { (self.owner)(lease, context as u64, chain as u64, &mut facts) };
         facts
     }
 
     fn viewport(&self, context: usize) -> ViewportFacts {
         let mut facts = ViewportFacts::default();
-        if let Some(leaf) = self.viewport {
-            unsafe { leaf(context as u64, &mut facts) };
-        }
+        unsafe { (self.viewport)(context as u64, &mut facts) };
         facts
     }
 
     fn swap(&self, chain: usize) -> SwapFacts {
         let mut facts = SwapFacts::default();
-        if let Some(leaf) = self.swap {
-            unsafe { leaf(chain as u64, &mut facts) };
-        }
+        unsafe { (self.swap)(chain as u64, &mut facts) };
         facts
     }
 
@@ -485,16 +496,12 @@ impl Leaves {
     /// `NO_SLOT`.
     fn resource(&self, lease: Lease, slot: u32, view: u64, render_target: bool) -> ResourceFacts {
         let mut facts = ResourceFacts::default();
-        if let Some(leaf) = self.resource {
-            unsafe { leaf(lease, slot, view, u32::from(render_target), &mut facts) };
-        }
+        unsafe { (self.resource)(lease, slot, view, u32::from(render_target), &mut facts) };
         facts
     }
 
     fn release(&self, lease: Lease, slot: u32) {
-        if let Some(leaf) = self.release {
-            unsafe { leaf(lease, slot) };
-        }
+        unsafe { (self.release)(lease, slot) };
     }
 }
 
@@ -920,16 +927,14 @@ fn receipt(leaves: &Leaves, report: Report, stage: Stage, reading: &mut Reading)
         return;
     }
     reading.receipt.after_frame = reading.after.frame;
-    if let Some(leaf) = leaves.reader {
-        unsafe {
-            leaf(
-                report,
-                NAMES[stage as usize].as_ptr(),
-                &reading.receipt,
-                &reading.pass,
-            )
-        };
-    }
+    unsafe {
+        (leaves.reader)(
+            report,
+            NAMES[stage as usize].as_ptr(),
+            &reading.receipt,
+            &reading.pass,
+        )
+    };
 }
 
 fn verify(admit: impl FnOnce() -> bool) -> bool {
@@ -1217,9 +1222,8 @@ fn read_inputs(
         if report.is_some()
             && !SEEN_CHANGES[mask as usize].swap(true, Ordering::Relaxed)
             && CHANGE_BUDGET.fetch_add(1, Ordering::Relaxed) < 16
-            && let Some(leaf) = leaves.mismatch
         {
-            unsafe { leaf(report, &before, &after, mask) };
+            unsafe { (leaves.mismatch)(report, &before, &after, mask) };
         }
         return Err(Stage::StateChanged);
     }
@@ -1273,7 +1277,6 @@ fn read_inputs(
         if report.is_some()
             && !SEEN_REASONS[reasons as usize].swap(true, Ordering::Relaxed)
             && REASON_BUDGET.fetch_add(1, Ordering::Relaxed) < 32
-            && let Some(leaf) = leaves.history
         {
             let text = HistoryReceipt {
                 frame: before.frame,
@@ -1287,7 +1290,7 @@ fn read_inputs(
                 raster,
                 previous_raster: previous.raster,
             };
-            unsafe { leaf(report, &text) };
+            unsafe { (leaves.history)(report, &text) };
         }
         if !next.reset {
             next.previous_jitter = previous.jitter;
@@ -1657,20 +1660,18 @@ fn framebuffer_receipt(
     if FRAMEBUFFER_REPORTED.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
         return;
     }
-    if let Some(leaf) = leaves.framebuffer {
-        unsafe {
-            leaf(
-                report,
-                FRAMEBUFFER_NAMES[stage as usize].as_ptr(),
-                NAMES[owner_failure as usize].as_ptr(),
-                r,
-            )
-        };
-    }
+    unsafe {
+        (leaves.framebuffer)(
+            report,
+            FRAMEBUFFER_NAMES[stage as usize].as_ptr(),
+            NAMES[owner_failure as usize].as_ptr(),
+            r,
+        )
+    };
 }
 
-fn complete<'a>(leaves: *const Leaves) -> Option<&'a Leaves> {
-    unsafe { leaves.as_ref() }.filter(|leaves| leaves.complete())
+unsafe fn complete(leaves: *const NativeLeaves) -> Option<Leaves> {
+    unsafe { leaves.as_ref() }.and_then(Leaves::from_native)
 }
 
 pub(crate) fn verify_for_build(_build: &creation::ExactBuild) -> bool {
@@ -1698,8 +1699,8 @@ extern "C" fn rsf_fallout4_inputs_claim_exception() -> bool {
 /// the caller's empty `NativeInputLease`, `producer` null or readable and `output` writable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_inputs_read(
-    leaves: *const Leaves,
-    depth: *const depth_domains::Leaves,
+    leaves: *const NativeLeaves,
+    depth: *const depth_domains::NativeLeaves,
     lease: Lease,
     report: Report,
     producer: *const Snapshot,
@@ -1710,30 +1711,30 @@ unsafe extern "C" fn rsf_fallout4_inputs_read(
     };
     // SAFETY: the SDK record holds only integers, floats and raw pointers.
     *output = unsafe { std::mem::zeroed() };
-    let Some(leaves) = complete(leaves) else {
+    let Some(leaves) = (unsafe { complete(leaves) }) else {
         return false;
     };
     if lease.is_null() {
         return false;
     }
-    let depth = depth_domains::complete(depth);
+    let depth = unsafe { depth_domains::complete(depth) };
     let producer = unsafe { producer.as_ref() }.copied();
     let mut reading = Reading::new();
     match read_inputs(
-        leaves,
-        depth,
+        &leaves,
+        depth.as_ref(),
         lease,
         report,
         producer.as_ref(),
         &mut reading,
     ) {
         Ok(()) => {
-            receipt(leaves, report, Stage::Accepted, &mut reading);
+            receipt(&leaves, report, Stage::Accepted, &mut reading);
             *output = reading.pass;
             true
         }
         Err(stage) => {
-            receipt(leaves, report, stage, &mut reading);
+            receipt(&leaves, report, stage, &mut reading);
             false
         }
     }
@@ -1747,8 +1748,8 @@ unsafe extern "C" fn rsf_fallout4_inputs_read(
 /// `output` writable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
-    leaves: *const Leaves,
-    depth: *const depth_domains::Leaves,
+    leaves: *const NativeLeaves,
+    depth: *const depth_domains::NativeLeaves,
     lease: Lease,
     frame: *const rsf_game_render_pass,
     producer: *const Snapshot,
@@ -1759,16 +1760,16 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
     }
     // SAFETY: the SDK record holds only integers, floats and raw pointers.
     unsafe { output.write(std::mem::zeroed()) };
-    let Some(leaves) = complete(leaves) else {
+    let Some(leaves) = (unsafe { complete(leaves) }) else {
         return false;
     };
     if lease.is_null() || frame.is_null() {
         return false;
     }
     let frame = unsafe { frame.read() };
-    let depth = depth_domains::complete(depth);
+    let depth = unsafe { depth_domains::complete(depth) };
     let producer = unsafe { producer.as_ref() }.copied();
-    match read_raster(leaves, depth, lease, &frame, producer.as_ref()) {
+    match read_raster(&leaves, depth.as_ref(), lease, &frame, producer.as_ref()) {
         Some(pass) => {
             unsafe { output.write(pass) };
             true
@@ -1784,7 +1785,7 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
 /// and `output` writable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_inputs_read_framebuffer(
-    leaves: *const Leaves,
+    leaves: *const NativeLeaves,
     lease: Lease,
     report: Report,
     output: *mut FramebufferFacts,
@@ -1796,7 +1797,7 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_framebuffer(
         native_frame: 0,
         window_key: 0,
     };
-    let Some(leaves) = complete(leaves) else {
+    let Some(leaves) = (unsafe { complete(leaves) }) else {
         return false;
     };
     if lease.is_null() {
@@ -1804,10 +1805,10 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_framebuffer(
     }
     let mut receipt = FramebufferReceipt::default();
     let mut owner_failure = Stage::Owner;
-    match read_framebuffer(leaves, lease, &mut receipt, &mut owner_failure) {
+    match read_framebuffer(&leaves, lease, &mut receipt, &mut owner_failure) {
         Ok(()) => {
             framebuffer_receipt(
-                leaves,
+                &leaves,
                 report,
                 Framebuffer::Accepted,
                 owner_failure,
@@ -1820,7 +1821,7 @@ unsafe extern "C" fn rsf_fallout4_inputs_read_framebuffer(
             true
         }
         Err(stage) => {
-            framebuffer_receipt(leaves, report, stage, owner_failure, &receipt);
+            framebuffer_receipt(&leaves, report, stage, owner_failure, &receipt);
             false
         }
     }

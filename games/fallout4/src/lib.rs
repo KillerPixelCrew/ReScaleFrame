@@ -243,19 +243,19 @@ impl Ops {
 
     pub(crate) fn creation_begin(
         &self,
-        begin: rsf_fallout4_creation_begin_fn,
+        begin: creation::Begin,
         user: *mut c_void,
         scope: &mut rsf_d3d11_creation_scope,
     ) -> Result<rsf_result, Threw> {
         let leaf = self.creation_begin;
         let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe { leaf(begin, user, scope, &mut result) })?;
+        completed(unsafe { leaf(Some(begin), user, scope, &mut result) })?;
         Ok(result)
     }
 
     pub(crate) fn creation_end(
         &self,
-        end: rsf_fallout4_creation_end_fn,
+        end: creation::End,
         user: *mut c_void,
         scope: &rsf_d3d11_creation_scope,
         outputs: Option<&rsf_d3d11_native_chain>,
@@ -263,19 +263,19 @@ impl Ops {
         let leaf = self.creation_end;
         let outputs = outputs.map_or(std::ptr::null(), std::ptr::from_ref);
         let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe { leaf(end, user, scope, outputs, &mut result) })?;
+        completed(unsafe { leaf(Some(end), user, scope, outputs, &mut result) })?;
         Ok(result)
     }
 
     pub(crate) fn bind_presentation(
         &self,
-        bind: rsf_fallout4_bind_presentation_fn,
+        bind: creation::Bind,
         user: *mut c_void,
         binding: &rsf_d3d11_presentation_binding,
     ) -> Result<rsf_result, Threw> {
         let leaf = self.bind_presentation;
         let mut result = RSF_ERROR_NOT_READY;
-        completed(unsafe { leaf(bind, user, binding, &mut result) })?;
+        completed(unsafe { leaf(Some(bind), user, binding, &mut result) })?;
         Ok(result)
     }
 }

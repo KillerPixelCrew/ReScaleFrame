@@ -58,13 +58,14 @@ const _: () = assert!(size_of::<SwapChainDesc>() == 72);
 const _: () = assert!(std::mem::offset_of!(SwapChainDesc, output_window) == 48);
 unsafe impl Plain for SwapChainDesc {}
 
-type Begin = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_creation_scope) -> i32;
-type End = unsafe extern "C" fn(
+pub(crate) type Begin = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_creation_scope) -> i32;
+pub(crate) type End = unsafe extern "C" fn(
     *mut c_void,
     *const rsf_d3d11_creation_scope,
     *const rsf_d3d11_native_chain,
 ) -> i32;
-type Bind = unsafe extern "C" fn(*mut c_void, *const rsf_d3d11_presentation_binding) -> i32;
+pub(crate) type Bind =
+    unsafe extern "C" fn(*mut c_void, *const rsf_d3d11_presentation_binding) -> i32;
 
 // The scoped services and Runtime creation exports, published by prepare before the hook is
 // enabled. The detour copies them.
@@ -315,7 +316,7 @@ fn close(
     let user = scoped.host.user;
     let mut admitted = RSF_ERROR_NOT_READY;
     let mut bound = RSF_ERROR_NOT_READY;
-    if let Ok(result) = ops.creation_end(Some(scoped.end), user, scope, outputs) {
+    if let Ok(result) = ops.creation_end(scoped.end, user, scope, outputs) {
         admitted = result;
         if admitted == RSF_OK
             && let Some(swapchain) = outputs
@@ -328,7 +329,7 @@ fn close(
                 // The caller-owned chain slot after the Runtime's scope end.
                 swapchain: swapchain as *mut c_void,
             };
-            if let Ok(result) = ops.bind_presentation(Some(scoped.bind), user, &binding) {
+            if let Ok(result) = ops.bind_presentation(scoped.bind, user, &binding) {
                 bound = result;
             }
         }
@@ -356,7 +357,7 @@ fn observe(ops: &Ops, caller: usize, call: &rsf_fallout4_create_call) -> i32 {
         && let Some(scoped) = scoped.as_ref()
     {
         scope.window = window as *mut c_void;
-        let begun = ops.creation_begin(Some(scoped.begin), scoped.host.user, &mut scope);
+        let begun = ops.creation_begin(scoped.begin, scoped.host.user, &mut scope);
         if begun.is_ok_and(|result| result == RSF_OK) {
             open = Some(scoped);
         }

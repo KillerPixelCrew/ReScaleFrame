@@ -198,7 +198,7 @@ struct MathFailure {
 /// depth_domains_platform.h `NativeDepthLeaves`, built by depth_domains.cpp.
 #[repr(C)]
 #[allow(dead_code)] // constructed by the C++ leaf table
-pub(crate) struct Leaves {
+pub(crate) struct NativeLeaves {
     tls_slots: Option<unsafe extern "C" fn() -> usize>,
     identity: Option<unsafe extern "C" fn(u64) -> u64>,
     context: Option<unsafe extern "C" fn(u64, *mut ContextFacts)>,
@@ -211,6 +211,18 @@ pub(crate) struct Leaves {
     >,
     lease:
         Option<unsafe extern "C" fn(Report, *const Snapshot, *const Snapshot, u32, u32, u32, u32)>,
+}
+
+pub(crate) struct Leaves {
+    tls_slots: unsafe extern "C" fn() -> usize,
+    identity: unsafe extern "C" fn(u64) -> u64,
+    context: unsafe extern "C" fn(u64, *mut ContextFacts),
+    targets: unsafe extern "C" fn(u64, *mut TargetFacts),
+    scissor: unsafe extern "C" fn(u64, *mut ScissorFacts),
+    texture: unsafe extern "C" fn(u64, *mut TextureFacts),
+    view: unsafe extern "C" fn(u64, *mut ViewFacts),
+    refusal: unsafe extern "C" fn(Report, *const c_char, *const Snapshot, *const MathFailure, u32),
+    lease: unsafe extern "C" fn(Report, *const Snapshot, *const Snapshot, u32, u32, u32, u32),
 }
 
 const _: () = {
@@ -241,7 +253,7 @@ const _: () = {
     assert!(size_of::<ViewFacts>() == 32 && offset_of!(ViewFacts, mip_levels) == 28);
     assert!(size_of::<MathFailure>() == 64 && offset_of!(MathFailure, w) == 16);
     assert!(offset_of!(MathFailure, range) == 56);
-    assert!(size_of::<Leaves>() == 9 * 8);
+    assert!(size_of::<NativeLeaves>() == 9 * 8);
 };
 
 const NO_IDENTITY: Identity = Identity::ZERO;
@@ -436,25 +448,27 @@ const NAMES: [&CStr; 35] = [
 const _: () = assert!(Stage::NearBasis as usize + 1 == NAMES.len() && NAMES.len() <= 64);
 
 impl Leaves {
-    fn complete(&self) -> bool {
-        self.tls_slots.is_some()
-            && self.identity.is_some()
-            && self.context.is_some()
-            && self.targets.is_some()
-            && self.scissor.is_some()
-            && self.texture.is_some()
-            && self.view.is_some()
-            && self.refusal.is_some()
-            && self.lease.is_some()
+    fn from_native(table: &NativeLeaves) -> Option<Self> {
+        Some(Self {
+            tls_slots: table.tls_slots?,
+            identity: table.identity?,
+            context: table.context?,
+            targets: table.targets?,
+            scissor: table.scissor?,
+            texture: table.texture?,
+            view: table.view?,
+            refusal: table.refusal?,
+            lease: table.lease?,
+        })
     }
 
     fn tls_slots(&self) -> usize {
-        self.tls_slots.map_or(0, |leaf| unsafe { leaf() })
+        unsafe { (self.tls_slots)() }
     }
 
     /// Canonical identity of a live COM object, 0 when null or not an object.
     fn identity(&self, object: u64) -> u64 {
-        self.identity.map_or(0, |leaf| unsafe { leaf(object) })
+        unsafe { (self.identity)(object) }
     }
 
     fn context(&self, context: u64) -> ContextFacts {
@@ -465,9 +479,7 @@ impl Leaves {
             viewport_copied: 0,
             viewport: [0.0; 6],
         };
-        if let Some(leaf) = self.context {
-            unsafe { leaf(context, &mut facts) };
-        }
+        unsafe { (self.context)(context, &mut facts) };
         facts
     }
 
@@ -484,9 +496,7 @@ impl Leaves {
             rtv_dimension: 0,
             rtv_mip: 0,
         };
-        if let Some(leaf) = self.targets {
-            unsafe { leaf(context, &mut facts) };
-        }
+        unsafe { (self.targets)(context, &mut facts) };
         facts
     }
 
@@ -497,17 +507,13 @@ impl Leaves {
             copied: 0,
             rect: [0; 4],
         };
-        if let Some(leaf) = self.scissor {
-            unsafe { leaf(context, &mut facts) };
-        }
+        unsafe { (self.scissor)(context, &mut facts) };
         facts
     }
 
     fn texture(&self, texture: u64) -> TextureFacts {
         let mut facts = NO_TEXTURE;
-        if let Some(leaf) = self.texture {
-            unsafe { leaf(texture, &mut facts) };
-        }
+        unsafe { (self.texture)(texture, &mut facts) };
         facts
     }
 
@@ -520,9 +526,7 @@ impl Leaves {
             most_detailed_mip: 0,
             mip_levels: 0,
         };
-        if let Some(leaf) = self.view {
-            unsafe { leaf(view, &mut facts) };
-        }
+        unsafe { (self.view)(view, &mut facts) };
         facts
     }
 
@@ -597,9 +601,7 @@ fn refuse(
 ) -> bool {
     if report.is_some() {
         let bit = 1u64 << stage as u32;
-        if REPORTED.fetch_or(bit, Ordering::Relaxed) & bit == 0
-            && let Some(leaf) = leaves.refusal
-        {
+        if REPORTED.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
             let math = match (detail, stage) {
                 (Some(_), Stage::ProjectionMismatch) => 1,
                 (Some(_), Stage::NearW | Stage::WorldW) => 2,
@@ -607,7 +609,7 @@ fn refuse(
             };
             let detail = detail.map_or(std::ptr::null(), std::ptr::from_ref);
             unsafe {
-                leaf(
+                (leaves.refusal)(
                     report,
                     NAMES[stage as usize].as_ptr(),
                     snapshot,
@@ -1492,16 +1494,14 @@ pub(crate) fn raster_current(leaves: &Leaves, snapshot: &Snapshot) -> bool {
 // Output can borrow either the raster-only recovery producer or the temporal producer.
 // The three keys are usable only during the current synchronous render callback.
 pub(crate) fn resolution_owner(
-    leaves: &Leaves,
+    leaves: &NativeLeaves,
     snapshot: &Snapshot,
 ) -> Option<(usize, usize, usize)> {
-    if !leaves.complete() {
-        return None;
-    }
+    let leaves = Leaves::from_native(leaves)?;
     let current = if snapshot.raster_valid {
-        raster_current(leaves, snapshot)
+        raster_current(&leaves, snapshot)
     } else {
-        snapshot_current(leaves, snapshot, None)
+        snapshot_current(&leaves, snapshot, None)
     };
     current.then_some((
         snapshot.context_key as usize,
@@ -1565,11 +1565,9 @@ pub(crate) fn snapshot_current(leaves: &Leaves, snapshot: &Snapshot, report: Rep
                 changed |= 128;
             }
         }
-        if LEASE_BUDGET.fetch_add(1, Ordering::Relaxed) < 16
-            && let Some(leaf) = leaves.lease
-        {
+        if LEASE_BUDGET.fetch_add(1, Ordering::Relaxed) < 16 {
             unsafe {
-                leaf(
+                (leaves.lease)(
                     report,
                     snapshot,
                     &current,
@@ -1783,8 +1781,10 @@ fn make(
     Some(result)
 }
 
-pub(crate) fn complete<'a>(leaves: *const Leaves) -> Option<&'a Leaves> {
-    unsafe { leaves.as_ref() }.filter(|leaves| leaves.complete())
+/// # Safety
+/// A nonnull pointer must name a readable native leaf table.
+pub(crate) unsafe fn complete(leaves: *const NativeLeaves) -> Option<Leaves> {
+    unsafe { leaves.as_ref() }.and_then(Leaves::from_native)
 }
 
 /// Checks the expected bytes of every native site the snapshot depends on.
@@ -1800,7 +1800,7 @@ pub(crate) extern "C" fn rsf_fallout4_depth_verify() -> bool {
 /// neither overlaps the other.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_depth_capture_raster(
-    leaves: *const Leaves,
+    leaves: *const NativeLeaves,
     cpu: *const Identity,
     output: *mut Snapshot,
     report: Report,
@@ -1809,11 +1809,11 @@ unsafe extern "C" fn rsf_fallout4_depth_capture_raster(
         return false;
     };
     *output = EMPTY;
-    let (Some(leaves), Some(cpu)) = (complete(leaves), unsafe { cpu.as_ref() }) else {
+    let (Some(leaves), Some(cpu)) = (unsafe { complete(leaves) }, unsafe { cpu.as_ref() }) else {
         return false;
     };
     let cpu = *cpu;
-    capture_raster(leaves, &cpu, report).is_some_and(|snapshot| {
+    capture_raster(&leaves, &cpu, report).is_some_and(|snapshot| {
         *output = snapshot;
         true
     })
@@ -1823,11 +1823,11 @@ unsafe extern "C" fn rsf_fallout4_depth_capture_raster(
 /// `leaves` is the complete process-lived table; `snapshot` is readable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_depth_raster_current(
-    leaves: *const Leaves,
+    leaves: *const NativeLeaves,
     snapshot: *const Snapshot,
 ) -> bool {
-    match (complete(leaves), unsafe { snapshot.as_ref() }) {
-        (Some(leaves), Some(snapshot)) => raster_current(leaves, snapshot),
+    match (unsafe { complete(leaves) }, unsafe { snapshot.as_ref() }) {
+        (Some(leaves), Some(snapshot)) => raster_current(&leaves, snapshot),
         _ => false,
     }
 }
@@ -1836,12 +1836,12 @@ unsafe extern "C" fn rsf_fallout4_depth_raster_current(
 /// `leaves` is the complete process-lived table; `snapshot` is readable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_depth_snapshot_current(
-    leaves: *const Leaves,
+    leaves: *const NativeLeaves,
     snapshot: *const Snapshot,
     report: Report,
 ) -> bool {
-    match (complete(leaves), unsafe { snapshot.as_ref() }) {
-        (Some(leaves), Some(snapshot)) => snapshot_current(leaves, snapshot, report),
+    match (unsafe { complete(leaves) }, unsafe { snapshot.as_ref() }) {
+        (Some(leaves), Some(snapshot)) => snapshot_current(&leaves, snapshot, report),
         _ => false,
     }
 }
@@ -1853,7 +1853,7 @@ unsafe extern "C" fn rsf_fallout4_depth_snapshot_current(
 /// neither overlaps the other.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_depth_capture(
-    leaves: *const Leaves,
+    leaves: *const NativeLeaves,
     cpu: *const Identity,
     output: *mut Snapshot,
     report: Report,
@@ -1862,11 +1862,11 @@ unsafe extern "C" fn rsf_fallout4_depth_capture(
         return false;
     };
     *output = EMPTY;
-    let (Some(leaves), Some(cpu)) = (complete(leaves), unsafe { cpu.as_ref() }) else {
+    let (Some(leaves), Some(cpu)) = (unsafe { complete(leaves) }, unsafe { cpu.as_ref() }) else {
         return false;
     };
     let cpu = *cpu;
-    capture(leaves, &cpu, report).is_some_and(|snapshot| {
+    capture(&leaves, &cpu, report).is_some_and(|snapshot| {
         *output = snapshot;
         true
     })
@@ -1881,7 +1881,7 @@ unsafe extern "C" fn rsf_fallout4_depth_capture(
 /// `output` is writable. Only `output` and `pass` may overlap.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fallout4_depth_make(
-    leaves: *const Leaves,
+    leaves: *const NativeLeaves,
     snapshot: *const Snapshot,
     cpu: *const Identity,
     pass: *const rsf_game_render_pass,
@@ -1892,18 +1892,18 @@ unsafe extern "C" fn rsf_fallout4_depth_make(
         return false;
     }
     unsafe { output.write(NO_DOMAINS) };
-    let (Some(leaves), Some(snapshot), Some(cpu)) =
-        (complete(leaves), unsafe { snapshot.as_ref() }, unsafe {
-            cpu.as_ref()
-        })
-    else {
+    let (Some(leaves), Some(snapshot), Some(cpu)) = (
+        unsafe { complete(leaves) },
+        unsafe { snapshot.as_ref() },
+        unsafe { cpu.as_ref() },
+    ) else {
         return false;
     };
     if pass.is_null() {
         return false;
     }
     let (snapshot, cpu, pass) = (*snapshot, *cpu, unsafe { pass.read() });
-    match make(leaves, &snapshot, &cpu, &pass, report) {
+    match make(&leaves, &snapshot, &cpu, &pass, report) {
         Some(result) => {
             unsafe { output.write(result) };
             true
