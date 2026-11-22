@@ -132,6 +132,19 @@ All five reviews covered the 538 tracked Rust files and 244,697 lines at `1605ae
 
 The counts refer to finding entries. Related entries across review areas may share a root cause. One withdrawn Altitude finding is annotated in the Vulkan Streamline chunk and excluded from the counts.
 
+## C++ introduced during the port
+
+A sweep of `git ls-files '*.cpp'` on 2026-11-22 found first-party C++ that the port itself added and that no chunk lists. Each belongs to the chunk named after it.
+
+- [ ] [games/project-wingman/src/native_platform.cpp](games/project-wingman/src/native_platform.cpp) (W01)
+- [ ] [games/skyrim-se/src/render_detours.cpp](games/skyrim-se/src/render_detours.cpp) (S02)
+- [ ] [integrations/steam/src/exception_guards.cpp](integrations/steam/src/exception_guards.cpp) (I01)
+- [ ] [runtime/graphics/src/observer_exception_guards.cpp](runtime/graphics/src/observer_exception_guards.cpp) (G01)
+- [ ] [runtime/orchestrator/src/d3d11_host_foreign.cpp](runtime/orchestrator/src/d3d11_host_foreign.cpp) (D01)
+- [ ] [tests/ac7_render_scope_exceptions.cpp](tests/ac7_render_scope_exceptions.cpp) (A02)
+- [ ] [tests/anomaly_motion_contract_main.cpp](tests/anomaly_motion_contract_main.cpp) (N04)
+- [ ] [tests/anomaly_sr_swap_profile.cpp](tests/anomaly_sr_swap_profile.cpp) (N07)
+
 ## Core, loader and overlay
 
 <a id="c01"></a>
