@@ -13,7 +13,8 @@ use rsf_game_sys::rsf_game_host_services;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
-use winapi::um::d3d11::ID3D11Texture2D;
+use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+use windows::core::Interface;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -170,12 +171,14 @@ fn describe_target(platform: &Platform, base: usize, index: u32) -> String {
         && texture != 0
     {
         // The synchronous postprocess callback owns these researched slots.
-        let texture = ptr::with_exposed_provenance_mut::<ID3D11Texture2D>(texture);
-        let mut desc = unsafe { std::mem::zeroed() };
-        unsafe { (*texture).GetDesc(&mut desc) };
+        let texture = ptr::with_exposed_provenance_mut::<std::ffi::c_void>(texture);
+        let mut desc = Default::default();
+        if let Some(native) = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) } {
+            unsafe { native.GetDesc(&mut desc) };
+        }
         return format!(
             "target={index} texture={texture:p} size={}x{} format={} samples={} bind=0x{:x}",
-            desc.Width, desc.Height, desc.Format, desc.SampleDesc.Count, desc.BindFlags,
+            desc.Width, desc.Height, desc.Format.0, desc.SampleDesc.Count, desc.BindFlags,
         );
     }
     format!("target={index} unavailable")

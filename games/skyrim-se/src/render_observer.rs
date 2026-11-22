@@ -10,7 +10,7 @@ use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use winapi::um::winuser::GetClassNameW;
+use windows_sys::Win32::UI::WindowsAndMessaging::GetClassNameW;
 
 const SWAPCHAIN: usize = 0x18;
 const RENDERER: usize = 0x333_1f40;

@@ -12,7 +12,7 @@ use std::cell::Cell;
 use std::ffi::{CStr, CString};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
-use winapi::um::profileapi::QueryPerformanceCounter;
+use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
 
 const SUBMIT_RETURN: usize = 0x658b14;
 const JOIN_RETURN: usize = 0x659334;
@@ -104,11 +104,9 @@ fn from_site(caller: usize, rva: usize) -> bool {
 }
 
 fn qpc() -> u64 {
-    let mut time = unsafe { std::mem::zeroed() };
-    unsafe {
-        QueryPerformanceCounter(&mut time);
-        *time.QuadPart() as u64
-    }
+    let mut time = 0;
+    unsafe { QueryPerformanceCounter(&mut time) };
+    time as u64
 }
 
 fn log(host: &rsf_game_host_services, message: String) {

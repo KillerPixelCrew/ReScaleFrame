@@ -5,7 +5,7 @@ use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::Platform;
 use crate::render_inputs::renderer_thread;
 use crate::render_native::{
-    ComRef, rsf_skyrim_call_render_config, rsf_skyrim_call_upscale, thread,
+    retain, rsf_skyrim_call_render_config, rsf_skyrim_call_upscale, thread,
 };
 use crate::taa;
 use rsf_game_sys::sampling::halton_f32 as halton;
@@ -17,8 +17,8 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use winapi::shared::dxgi::IDXGISwapChain;
-use winapi::um::d3d11::ID3D11DeviceContext;
+use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 
 const RENDER_STATE: usize = 0x333_63a0;
 const RENDERER: usize = 0x333_1f40;
@@ -121,10 +121,9 @@ fn reconfigure(
         pass.flags = RSF_GAME_RENDER_RECONFIGURE | RSF_GAME_RENDER_NO_FG;
         pass.swapchain = ptr::with_exposed_provenance_mut(chain);
         [pass.camera.output_width, pass.camera.output_height] = output;
-        let _context = unsafe {
-            ComRef::<ID3D11DeviceContext>::retain(ptr::with_exposed_provenance_mut(context))
-        }?;
-        let _chain = unsafe { ComRef::<IDXGISwapChain>::retain(pass.swapchain.cast()) }?;
+        let _context =
+            unsafe { retain::<ID3D11DeviceContext>(ptr::with_exposed_provenance_mut(context)) }?;
+        let _chain = unsafe { retain::<IDXGISwapChain>(pass.swapchain) }?;
         unsafe { rsf_skyrim_call_upscale(host, ptr::with_exposed_provenance_mut(context), &pass) };
     }
     let mut config = rsf_game_render_config::request();

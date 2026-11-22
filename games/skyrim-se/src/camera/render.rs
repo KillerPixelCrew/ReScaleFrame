@@ -8,8 +8,7 @@ use crate::{platform::Platform, resolution};
 use rsf_game_sys::camera_math::finite_matrix_close;
 use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_host_services, rsf_game_render_pass};
 use std::sync::{Mutex, PoisonError};
-use winapi::um::profileapi::{QueryPerformanceCounter, QueryPerformanceFrequency};
-use winapi::um::winnt::LARGE_INTEGER;
+use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 const RENDER_STATE: usize = 0x333_63a0;
 const ACTIVE_CAMERA: usize = 0x33d_3d28;
@@ -165,13 +164,12 @@ pub(crate) fn read_frame(
     let (mut camera, history) = decode(&native, rw, rh)?;
     camera.output_width = width;
     camera.output_height = height;
-    let (mut now, mut frequency): (LARGE_INTEGER, LARGE_INTEGER) = unsafe { std::mem::zeroed() };
+    let (mut now, mut frequency) = (0i64, 0i64);
     if unsafe {
         QueryPerformanceCounter(&mut now) == 0 || QueryPerformanceFrequency(&mut frequency) == 0
     } {
         return None;
     }
-    let (now, frequency) = unsafe { (*now.QuadPart(), *frequency.QuadPart()) };
     if frequency <= 0 {
         return None;
     }
@@ -231,7 +229,8 @@ fn history_consumed(fg: bool, accepted_sr: Option<SrFrame>, previous: SrFrame) -
 
 pub(crate) fn describe_inputs(platform: &Platform, base: usize, host: &rsf_game_host_services) {
     use std::ptr;
-    use winapi::um::d3d11::ID3D11Texture2D;
+    use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+    use windows::core::Interface;
 
     let state = base + RENDER_STATE;
     let camera = platform
@@ -259,10 +258,10 @@ pub(crate) fn describe_inputs(platform: &Platform, base: usize, host: &rsf_game_
     let (projection, current, previous, origins, planes, jitter, scale) =
         numbers.unwrap_or_default();
     let depth = platform.read_usize(base + 0x333_3f58).unwrap_or_default();
-    let mut desc = unsafe { std::mem::zeroed() };
-    if depth != 0 {
-        let depth = ptr::with_exposed_provenance_mut::<ID3D11Texture2D>(depth);
-        unsafe { (*depth).GetDesc(&mut desc) };
+    let mut desc = Default::default();
+    let native = ptr::with_exposed_provenance_mut::<std::ffi::c_void>(depth);
+    if let Some(native) = unsafe { ID3D11Texture2D::from_raw_borrowed(&native) } {
+        unsafe { native.GetDesc(&mut desc) };
     }
     platform.log_text(host, &format!(
         "Skyrim native inputs camera=0x{camera:x} cache=0x{:x} entries={count} readable={readable} near={} far={} projection={},{},{},{},{} jitter={},{} scale={},{} origin={},{},{} previous_origin={},{},{} VP={},{} previous_VP={},{} depth=0x{depth:x} size={}x{} format={} samples={}; no input-frame identity or pixel validation",
@@ -270,7 +269,7 @@ pub(crate) fn describe_inputs(platform: &Platform, base: usize, host: &rsf_game_
         projection[0], projection[5], projection[10], projection[11], projection[14],
         jitter[0], jitter[1], scale[0], scale[1], origins[0], origins[1], origins[2],
         origins[3], origins[4], origins[5], current[0], current[5], previous[0], previous[5],
-        desc.Width, desc.Height, desc.Format, desc.SampleDesc.Count,
+        desc.Width, desc.Height, desc.Format.0, desc.SampleDesc.Count,
     ));
 }
 

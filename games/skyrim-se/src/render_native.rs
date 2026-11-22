@@ -3,13 +3,12 @@
 
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_config, rsf_game_render_pass};
 use std::ffi::{c_char, c_void};
-use std::ptr::{self, NonNull};
-use winapi::Interface;
-use winapi::shared::dxgi::IDXGISwapChain;
-use winapi::um::d3d11::{
+use windows::Win32::Graphics::Direct3D11::{
     D3D11_TEXTURE2D_DESC, D3D11_VIEWPORT, ID3D11DeviceContext, ID3D11Texture2D,
 };
-use winapi::um::unknwnbase::IUnknown;
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
+use windows::core::Interface;
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 unsafe extern "C" {
     fn rsf_skyrim_log_guarded(host: &rsf_game_host_services, message: *const c_char) -> bool;
@@ -69,77 +68,32 @@ pub(crate) fn rsf_skyrim_call_render_config(
     }
 }
 
-pub(crate) struct ComRef<T: Interface>(NonNull<T>);
-
-impl<T: Interface> ComRef<T> {
-    // All callers use an interface from a verified live native graphics owner.
-    pub(crate) unsafe fn retain(object: *mut T) -> Option<Self> {
-        let object = unsafe { Self::from_owned(object) }?;
-        unsafe { (*object.as_raw().cast::<IUnknown>()).AddRef() };
-        Some(object)
-    }
-
-    // COM getters transfer a reference to the caller on success.
-    pub(crate) unsafe fn from_owned(object: *mut T) -> Option<Self> {
-        NonNull::new(object).map(Self)
-    }
-
-    pub(crate) fn as_raw(&self) -> *mut T {
-        self.0.as_ptr()
-    }
-
-    pub(crate) fn query<U: Interface>(&self) -> Option<ComRef<U>> {
-        let mut object = ptr::null_mut();
-        let result = unsafe {
-            (*self.as_raw().cast::<IUnknown>()).QueryInterface(&U::uuidof(), &mut object)
-        };
-        if result < 0 {
-            return None;
-        }
-        unsafe { ComRef::from_owned(object.cast()) }
-    }
+/// A new reference to a live native COM object, or None for null.
+///
+/// # Safety
+/// `object` is null or a live interface pointer of type `T`, such as one read from a verified
+/// native graphics owner.
+pub(crate) unsafe fn retain<T: Interface>(object: *mut c_void) -> Option<T> {
+    unsafe { T::from_raw_borrowed(&object) }.cloned()
 }
 
-impl<T: Interface> Clone for ComRef<T> {
-    fn clone(&self) -> Self {
-        unsafe { (*self.as_raw().cast::<IUnknown>()).AddRef() };
-        Self(self.0)
-    }
+pub(crate) fn desc(texture: &ID3D11Texture2D) -> D3D11_TEXTURE2D_DESC {
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { texture.GetDesc(&mut desc) };
+    desc
 }
 
-impl<T: Interface> Drop for ComRef<T> {
-    fn drop(&mut self) {
-        unsafe { (*self.as_raw().cast::<IUnknown>()).Release() };
-    }
+pub(crate) fn backbuffer(chain: &IDXGISwapChain) -> Option<ID3D11Texture2D> {
+    unsafe { chain.GetBuffer(0) }.ok()
 }
 
-impl ComRef<ID3D11Texture2D> {
-    pub(crate) fn desc(&self) -> D3D11_TEXTURE2D_DESC {
-        let mut desc = unsafe { std::mem::zeroed() };
-        unsafe { (*self.as_raw()).GetDesc(&mut desc) };
-        desc
-    }
-}
-
-impl ComRef<IDXGISwapChain> {
-    pub(crate) fn backbuffer(&self) -> Option<ComRef<ID3D11Texture2D>> {
-        let mut texture = ptr::null_mut();
-        let status =
-            unsafe { (*self.as_raw()).GetBuffer(0, &ID3D11Texture2D::uuidof(), &mut texture) };
-        if status < 0 {
-            return None;
-        }
-        unsafe { ComRef::from_owned(texture.cast()) }
-    }
-}
-
-pub(crate) unsafe fn viewport(context: *mut ID3D11DeviceContext) -> (D3D11_VIEWPORT, u32) {
-    let mut viewport = unsafe { std::mem::zeroed() };
+pub(crate) fn viewport(context: &ID3D11DeviceContext) -> (D3D11_VIEWPORT, u32) {
+    let mut viewport = D3D11_VIEWPORT::default();
     let mut count = 1;
-    unsafe { (*context).RSGetViewports(&mut count, &mut viewport) };
+    unsafe { context.RSGetViewports(&mut count, Some(&mut viewport)) };
     (viewport, count)
 }
 
 pub(crate) fn thread() -> u32 {
-    unsafe { winapi::um::processthreadsapi::GetCurrentThreadId() }
+    unsafe { GetCurrentThreadId() }
 }

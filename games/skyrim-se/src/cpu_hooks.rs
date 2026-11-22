@@ -11,8 +11,7 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
-use winapi::um::profileapi::QueryPerformanceFrequency;
-use winapi::um::winnt::LARGE_INTEGER;
+use windows_sys::Win32::System::Performance::QueryPerformanceFrequency;
 
 const NAMED_CALLBACK_SLOT: u32 = 0x20b5130;
 const NAMED_POLL: u32 = 0x6e6030;
@@ -167,11 +166,11 @@ extern "C" fn rsf_skyrim_cpu_original(index: u32) -> *mut c_void {
 }
 
 fn qpc_frequency() -> u64 {
-    let mut value: LARGE_INTEGER = unsafe { std::mem::zeroed() };
+    let mut value = 0;
     if unsafe { QueryPerformanceFrequency(&mut value) } == 0 {
         return 0;
     }
-    u64::try_from(unsafe { *value.QuadPart() }).unwrap_or(0)
+    u64::try_from(value).unwrap_or(0)
 }
 
 #[derive(Clone, Copy)]

@@ -3,7 +3,7 @@
 
 use crate::layout::target_slot;
 use crate::platform::Platform;
-use crate::render_native::{ComRef, thread, viewport};
+use crate::render_native::{desc, retain, thread, viewport};
 use crate::resolution;
 use rsf_game_sys::rsf_d3d11_host_capture as Capture;
 use rsf_game_sys::{
@@ -16,10 +16,11 @@ use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
-use winapi::um::d3d11::{
-    D3D11_RENDER_TARGET_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC, ID3D11RenderTargetView,
-    ID3D11ShaderResourceView, ID3D11Texture2D,
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_RENDER_TARGET_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC, ID3D11DeviceContext,
+    ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11Texture2D,
 };
+use windows::core::Interface;
 
 const DOF_SELECTOR: usize = 0x343_6358;
 type Upscale = unsafe extern "C" fn(*mut c_void, *mut c_void, &Pass) -> i32;
@@ -75,15 +76,15 @@ pub(crate) fn pending() -> bool {
 
 fn surface(
     camera: &rsf_game_sys::rsf_camera_frame,
-    texture: &ComRef<ID3D11Texture2D>,
+    texture: &ID3D11Texture2D,
     index: usize,
 ) -> Option<Surface> {
-    let facts = texture.desc();
+    let facts = desc(texture);
     let mask = index == 3;
     let divisor = if mask { 2 } else { 1 };
     if facts.Width != camera.output_width / divisor
         || facts.Height != camera.output_height / divisor
-        || facts.Format != FORMATS[index]
+        || facts.Format.0 as u32 != FORMATS[index]
     {
         return None;
     }
@@ -163,10 +164,10 @@ fn apply(
     let mask = platform.read_usize(target_slot(base, 12))?;
     let textures = unsafe {
         [
-            ComRef::retain(pass.depth.cast())?,
-            ComRef::retain(ptr::with_exposed_provenance_mut(normals))?,
-            ComRef::retain(pass.motion.cast())?,
-            ComRef::retain(ptr::with_exposed_provenance_mut(mask))?,
+            retain::<ID3D11Texture2D>(pass.depth)?,
+            retain::<ID3D11Texture2D>(ptr::with_exposed_provenance_mut(normals))?,
+            retain::<ID3D11Texture2D>(pass.motion)?,
+            retain::<ID3D11Texture2D>(ptr::with_exposed_provenance_mut(mask))?,
         ]
     };
     let surfaces = [
@@ -370,7 +371,12 @@ fn report_restore(platform: &Platform, host: &rsf_game_host_services, frame: u64
         return;
     }
     let [x, y, previous_x, previous_y] = ratios.map(f32::from_le_bytes);
-    let (viewport, _) = unsafe { viewport(ptr::with_exposed_provenance_mut(context)) };
+    let Some(context) =
+        (unsafe { retain::<ID3D11DeviceContext>(ptr::with_exposed_provenance_mut(context)) })
+    else {
+        return;
+    };
+    let (viewport, _) = viewport(&context);
     platform.log_text(host, &format!(
         "Skyrim auxiliary scope restored after native frame {frame}; final viewport={}x{} ratios={x},{y},{previous_x},{previous_y} before producer-state restoration",
         viewport.Width, viewport.Height,
@@ -397,52 +403,50 @@ fn describe_allocation(
 ) {
     let (texture, target, view) = unsafe {
         (
-            ComRef::<ID3D11Texture2D>::retain(ptr::with_exposed_provenance_mut(facts.texture)),
-            ComRef::<ID3D11RenderTargetView>::retain(ptr::with_exposed_provenance_mut(facts.rtv)),
-            ComRef::<ID3D11ShaderResourceView>::retain(ptr::with_exposed_provenance_mut(facts.srv)),
+            retain::<ID3D11Texture2D>(ptr::with_exposed_provenance_mut(facts.texture)),
+            retain::<ID3D11RenderTargetView>(ptr::with_exposed_provenance_mut(facts.rtv)),
+            retain::<ID3D11ShaderResourceView>(ptr::with_exposed_provenance_mut(facts.srv)),
         )
     };
     // Mip aliases can lack a texture in the native slot. GetResource names the
     // allocation and does not establish the active mip.
     let texture = texture.or_else(|| {
-        let mut resource = ptr::null_mut();
-        unsafe {
+        let resource = unsafe {
             if let Some(view) = &view {
-                (*view.as_raw()).GetResource(&mut resource);
-            } else if let Some(target) = &target {
-                (*target.as_raw()).GetResource(&mut resource);
+                view.GetResource()
+            } else {
+                target.as_ref()?.GetResource()
             }
-            ComRef::from_owned(resource)
-        }?
-        .query::<ID3D11Texture2D>()
+        };
+        resource.ok()?.cast::<ID3D11Texture2D>().ok()
     });
     let Some(texture) = texture else {
         return;
     };
     if facts.describe {
-        let d = texture.desc();
-        let (mut r, mut s): (
-            D3D11_RENDER_TARGET_VIEW_DESC,
-            D3D11_SHADER_RESOURCE_VIEW_DESC,
-        ) = unsafe { (std::mem::zeroed(), std::mem::zeroed()) };
+        let d = desc(&texture);
+        let (mut r, mut s) = (
+            D3D11_RENDER_TARGET_VIEW_DESC::default(),
+            D3D11_SHADER_RESOURCE_VIEW_DESC::default(),
+        );
         let (rtv_mip, srv_mip, srv_levels) = unsafe {
             if let Some(target) = &target {
-                (*target.as_raw()).GetDesc(&mut r);
+                target.GetDesc(&mut r);
             }
             if let Some(view) = &view {
-                (*view.as_raw()).GetDesc(&mut s);
+                view.GetDesc(&mut s);
             }
             (
-                r.u.Texture2D().MipSlice,
-                s.u.Texture2D().MostDetailedMip,
-                s.u.Texture2D().MipLevels,
+                r.Anonymous.Texture2D.MipSlice,
+                s.Anonymous.Texture2D.MostDetailedMip,
+                s.Anonymous.Texture2D.MipLevels,
             )
         };
         platform.log_text(host, &format!(
             "Skyrim auxiliary {} target={} selector={} native_texture=0x{:x} allocation={:p} size={}x{} format={} mips={} slices={} samples={} bind=0x{:x} RTV={}:{}:mip{} SRV={}:{}:mip{}+{} native_frame={}; descriptor only, active coverage unverified",
             facts.name.to_string_lossy(), facts.index, facts.selector, facts.texture, texture.as_raw(),
-            d.Width, d.Height, d.Format, d.MipLevels, d.ArraySize, d.SampleDesc.Count, d.BindFlags,
-            r.Format, r.ViewDimension, rtv_mip, s.Format, s.ViewDimension, srv_mip, srv_levels,
+            d.Width, d.Height, d.Format.0, d.MipLevels, d.ArraySize, d.SampleDesc.Count, d.BindFlags,
+            r.Format.0, r.ViewDimension.0, rtv_mip, s.Format.0, s.ViewDimension.0, srv_mip, srv_levels,
             pass.native_frame,
         ));
     }

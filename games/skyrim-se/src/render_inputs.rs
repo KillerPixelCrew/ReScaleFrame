@@ -9,7 +9,7 @@ use crate::layout::{NATIVE_FRAME, target_slot};
 use crate::platform::Platform;
 use crate::presentation::{begin_inputs, empty_pass, identify, same_source};
 use crate::render_native::{
-    ComRef, rsf_skyrim_call_render_pass, rsf_skyrim_call_upscale, thread, viewport,
+    desc, retain, rsf_skyrim_call_render_pass, rsf_skyrim_call_upscale, thread, viewport,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,
@@ -17,11 +17,11 @@ use rsf_game_sys::{
 };
 use std::ptr;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use winapi::Interface;
-use winapi::shared::dxgi::IDXGISwapChain;
-use winapi::um::d3d11::{
+use windows::Win32::Graphics::Direct3D11::{
     D3D11_DEVICE_CONTEXT_IMMEDIATE, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
 };
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
+use windows::core::Interface;
 
 const PRE_HDR_CALL: u64 = 0x153_ade7;
 const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
@@ -45,11 +45,9 @@ struct TextureFacts {
 }
 
 impl TextureFacts {
-    fn read(texture: &ComRef<ID3D11Texture2D>) -> Option<Self> {
-        let mut device = ptr::null_mut();
-        unsafe { (*texture.as_raw()).GetDevice(&mut device) };
-        let device = unsafe { ComRef::from_owned(device) }?;
-        let desc = texture.desc();
+    fn read(texture: &ID3D11Texture2D) -> Option<Self> {
+        let device = unsafe { texture.GetDevice() }.ok()?;
+        let desc = desc(texture);
         Some(Self {
             device: device.as_raw().addr(),
             width: desc.Width,
@@ -57,7 +55,7 @@ impl TextureFacts {
             samples: desc.SampleDesc.Count,
             slices: desc.ArraySize,
             mips: desc.MipLevels,
-            format: desc.Format,
+            format: desc.Format.0 as u32,
         })
     }
 
@@ -71,13 +69,13 @@ impl TextureFacts {
 }
 
 struct Inputs {
-    context: ComRef<ID3D11DeviceContext>,
-    colour: ComRef<ID3D11Texture2D>,
-    depth: ComRef<ID3D11Texture2D>,
-    motion: ComRef<ID3D11Texture2D>,
-    chain: ComRef<IDXGISwapChain>,
-    mask: Option<ComRef<ID3D11Texture2D>>,
-    _device: ComRef<ID3D11Device>,
+    context: ID3D11DeviceContext,
+    colour: ID3D11Texture2D,
+    depth: ID3D11Texture2D,
+    motion: ID3D11Texture2D,
+    chain: IDXGISwapChain,
+    mask: Option<ID3D11Texture2D>,
+    _device: ID3D11Device,
 }
 
 static SCENE_THREAD: AtomicU32 = AtomicU32::new(0);
@@ -86,7 +84,7 @@ static LOGGED_EXTENT: AtomicU64 = AtomicU64::new(0);
 fn log_viewport(
     platform: &Platform,
     base: usize,
-    context: *mut ID3D11DeviceContext,
+    context: &ID3D11DeviceContext,
     view: &RenderCamera,
     host: &rsf_game_host_services,
 ) {
@@ -101,7 +99,7 @@ fn log_viewport(
         return;
     };
     LOGGED_EXTENT.store(key, Ordering::Relaxed);
-    let (viewport, count) = unsafe { viewport(context) };
+    let (viewport, count) = viewport(context);
     let [rw, rh] = view.render;
     let [width, height] = view.output;
     let [x, y] = view.ratios;
@@ -133,11 +131,11 @@ fn read_inputs(
     let chain = platform.read_usize(view.window.checked_add(0x18)?)?;
     let (context, colour, depth, motion, chain) = unsafe {
         (
-            ComRef::<ID3D11DeviceContext>::retain(ptr::with_exposed_provenance_mut(context))?,
-            ComRef::retain(ptr::with_exposed_provenance_mut(colour))?,
-            ComRef::retain(ptr::with_exposed_provenance_mut(depth))?,
-            ComRef::retain(ptr::with_exposed_provenance_mut(motion))?,
-            ComRef::<IDXGISwapChain>::retain(ptr::with_exposed_provenance_mut(chain))?,
+            retain::<ID3D11DeviceContext>(ptr::with_exposed_provenance_mut(context))?,
+            retain::<ID3D11Texture2D>(ptr::with_exposed_provenance_mut(colour))?,
+            retain::<ID3D11Texture2D>(ptr::with_exposed_provenance_mut(depth))?,
+            retain::<ID3D11Texture2D>(ptr::with_exposed_provenance_mut(motion))?,
+            retain::<IDXGISwapChain>(ptr::with_exposed_provenance_mut(chain))?,
         )
     };
     let mut mask = if fg {
@@ -146,25 +144,17 @@ fn read_inputs(
         platform
             .read_usize(target_slot(base, 85))
             .and_then(|address| unsafe {
-                ComRef::retain(ptr::with_exposed_provenance_mut(address))
+                retain::<ID3D11Texture2D>(ptr::with_exposed_provenance_mut(address))
             })
     };
-    let context_ptr = context.as_raw();
-    if unsafe { (*context_ptr).GetType() } != D3D11_DEVICE_CONTEXT_IMMEDIATE {
+    if unsafe { context.GetType() } != D3D11_DEVICE_CONTEXT_IMMEDIATE {
         return None;
     }
-    let mut device = ptr::null_mut();
-    unsafe { (*context_ptr).GetDevice(&mut device) };
-    let device = unsafe { ComRef::from_owned(device) }?;
+    let device = unsafe { context.GetDevice() }.ok()?;
     let device_id = device.as_raw().addr();
-    let mut chain_device = ptr::null_mut();
-    let status = unsafe { (*chain.as_raw()).GetDevice(&ID3D11Device::uuidof(), &mut chain_device) };
-    if status < 0 {
-        return None;
-    }
-    let chain_device = unsafe { ComRef::<ID3D11Device>::from_owned(chain_device.cast()) }?;
+    let chain_device = unsafe { chain.GetDevice::<ID3D11Device>() }.ok()?;
     if !fg {
-        log_viewport(platform, base, context_ptr, view, host)
+        log_viewport(platform, base, &context, view, host)
     }
     let colours = TextureFacts::read(&colour)?;
     let depths = TextureFacts::read(&depth)?;

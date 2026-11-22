@@ -3,9 +3,8 @@
 The orchestrator uses the Cargo build dependency `cc` to compile the native
 plugin exception guards. Cargo.lock pins it and its build tools. The guards
 link into the orchestrator static library for both embedded and DLL consumers.
-The Windows build uses Microsoft's `windows-sys` bindings for profile storage.
-Skyrim's Rust render adapter uses `winapi` 0.3.9 (MIT or Apache-2.0) for typed
-D3D11, DXGI and Win32 calls. Cargo.lock pins the bindings.
+The Windows build uses Microsoft's `windows-sys` bindings for profile storage and Win32 calls,
+and the `windows` crate for typed COM (D3D11, DXGI). Cargo.lock pins the bindings.
 
 Fallout 4's camera port derives its matrix operations from the MIT-licensed
 DirectXMath 3.20 headers in Windows SDK 10.0.26100. The Microsoft copyright

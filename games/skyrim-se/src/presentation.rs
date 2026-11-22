@@ -5,7 +5,7 @@ use crate::cpu_events::{render_diagnostic, render_identity};
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
 use crate::render_hook::RenderHook;
-use crate::render_native::{ComRef, rsf_skyrim_call_render_pass};
+use crate::render_native::{backbuffer, desc, retain, rsf_skyrim_call_render_pass};
 use rsf_game_sys::rsf_d3d11_host_capture as Capture;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
@@ -15,8 +15,9 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
-use winapi::shared::dxgi::IDXGISwapChain;
-use winapi::um::d3d11::{ID3D11DeviceContext, ID3D11Texture2D};
+use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11Texture2D};
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
+use windows::core::Interface;
 
 const DRAW_INTERFACE: usize = 0x116_ac80;
 const INTERFACE_BYTES: [u8; 15] = [
@@ -52,8 +53,8 @@ struct Scene {
 struct Window {
     binding: Binding,
     pass: rsf_game_render_pass,
-    context: ComRef<ID3D11DeviceContext>,
-    _chain: ComRef<IDXGISwapChain>,
+    context: ID3D11DeviceContext,
+    _chain: IDXGISwapChain,
 }
 
 #[derive(Default)]
@@ -261,12 +262,10 @@ fn snapshot(binding: Binding, after: bool) -> Option<()> {
         scene,
         after,
     };
-    let chain =
-        unsafe { ComRef::<IDXGISwapChain>::retain(ptr::with_exposed_provenance_mut(chain)) }?;
-    let context = unsafe {
-        ComRef::<ID3D11DeviceContext>::retain(ptr::with_exposed_provenance_mut(context))
-    }?;
-    let texture = chain.backbuffer()?;
+    let chain = unsafe { retain::<IDXGISwapChain>(ptr::with_exposed_provenance_mut(chain)) }?;
+    let context =
+        unsafe { retain::<ID3D11DeviceContext>(ptr::with_exposed_provenance_mut(context)) }?;
+    let texture = backbuffer(&chain)?;
     use_buffer(snapshot, &chain, &context, &texture);
     Some(())
 }
@@ -277,11 +276,11 @@ fn use_buffer(
         scene,
         after,
     }: Snapshot,
-    chain: &ComRef<IDXGISwapChain>,
-    context: &ComRef<ID3D11DeviceContext>,
-    texture: &ComRef<ID3D11Texture2D>,
+    chain: &IDXGISwapChain,
+    context: &ID3D11DeviceContext,
+    texture: &ID3D11Texture2D,
 ) {
-    let desc = texture.desc();
+    let desc = desc(texture);
     if desc.Width != scene.pass.camera.output_width
         || desc.Height != scene.pass.camera.output_height
         || desc.SampleDesc.Count != 1
