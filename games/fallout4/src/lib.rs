@@ -94,11 +94,6 @@ const MH_ERROR_DISABLED: i32 = 6;
 use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
 
 unsafe extern "C" {
-    fn rsf_fallout4_native_log(
-        log: rsf_game_log_fn,
-        user: *mut ::core::ffi::c_void,
-        message: *const ::core::ffi::c_char,
-    ) -> bool;
     fn rsf_fallout4_native_host_create(
         create: session::Create,
         setup: *const rsf_d3d11_host_setup,
@@ -138,7 +133,7 @@ fn completed(returned: bool) -> Result<(), Threw> {
 
 // The linked native guards and MinHook.
 pub(crate) fn log(log: rsf_game_log_fn, user: *mut c_void, message: &CStr) -> Result<(), Threw> {
-    completed(unsafe { rsf_fallout4_native_log(log, user, message.as_ptr()) })
+    completed(unsafe { rsf_game_sys::rsf_game_log_guarded(log, user, message.as_ptr()) })
 }
 
 pub(crate) fn log_host(host: &rsf_game_host_services, message: &CStr) -> Result<(), Threw> {

@@ -35,8 +35,8 @@ typedef struct rsf_fallout4_create_call {
 } rsf_fallout4_create_call;
 
 // Linked native exception guards (host_boundary.c). False signals a foreign C++ exception.
-// Runtime function arguments must be resolved before calling these guards. The log is optional.
-bool rsf_fallout4_native_log(rsf_game_log_fn log, void* user, const char* message);
+// Runtime function arguments must be resolved before calling these guards. The host log uses the
+// shared rsf_game_log_guarded.
 bool rsf_fallout4_native_host_create(rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup,
     rsf_game_host_services* services, int32_t* result);
 bool rsf_fallout4_native_host_set_active(rsf_fallout4_host_active_fn activate, void* user, uint32_t active,

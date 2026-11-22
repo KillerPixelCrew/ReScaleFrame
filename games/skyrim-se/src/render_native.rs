@@ -11,7 +11,6 @@ use windows::core::Interface;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 unsafe extern "C" {
-    fn rsf_skyrim_log_guarded(host: &rsf_game_host_services, message: *const c_char) -> bool;
     fn rsf_skyrim_render_pass_guarded(
         host: &rsf_game_host_services,
         context: *mut c_void,
@@ -35,7 +34,7 @@ pub(crate) unsafe extern "C" fn log_host(
     message: *const c_char,
 ) -> bool {
     match unsafe { host.as_ref() } {
-        Some(host) if host.log.is_some() => unsafe { rsf_skyrim_log_guarded(host, message) },
+        Some(host) => unsafe { rsf_game_sys::rsf_game_log_guarded(host.log, host.user, message) },
         _ => true,
     }
 }

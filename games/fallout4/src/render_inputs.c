@@ -196,8 +196,8 @@ bool rsf_fallout4_read_native_inputs(NativeInputs* output, void (*report)(const 
     memset(&result, 0, sizeof(result));
     bool accepted = false;
     bool threw = false;
-    RSF_FALLOUT4_TRY { accepted = rsf_fallout4_inputs_read(&refs, report, producer, &result.pass); }
-    RSF_FALLOUT4_CATCH_CXX { threw = true; }
+    RSF_FOREIGN_TRY { accepted = rsf_fallout4_inputs_read(&refs, report, producer, &result.pass); }
+    RSF_FOREIGN_CATCH { threw = true; }
     if (!accepted) {
         release_references(&refs);
         if (threw && report && rsf_fallout4_inputs_claim_exception())
@@ -218,8 +218,8 @@ bool rsf_fallout4_read_native_raster_inputs(NativeInputs* output, const rsf_game
     NativeInputs result;
     memset(&result, 0, sizeof(result));
     bool accepted = false;
-    RSF_FALLOUT4_TRY { accepted = rsf_fallout4_inputs_read_raster(&refs, frame, producer, &result.pass); }
-    RSF_FALLOUT4_CATCH_CXX { accepted = false; }
+    RSF_FOREIGN_TRY { accepted = rsf_fallout4_inputs_read_raster(&refs, frame, producer, &result.pass); }
+    RSF_FOREIGN_CATCH { accepted = false; }
     if (!accepted) {
         release_references(&refs);
         return false;

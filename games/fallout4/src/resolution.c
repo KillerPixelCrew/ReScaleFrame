@@ -9,16 +9,16 @@ bool rsf_fallout4_resolution_reconfigure(rsf_game_process_upscale_fn upscale, vo
     const rsf_game_render_pass* planning)
 {
     bool returned = true;
-    RSF_FALLOUT4_TRY { (void)upscale(user, context, planning); }
-    RSF_FALLOUT4_CATCH_CXX { returned = false; }
+    RSF_FOREIGN_TRY { (void)upscale(user, context, planning); }
+    RSF_FOREIGN_CATCH { returned = false; }
     return returned;
 }
 
 int32_t rsf_fallout4_resolution_config(rsf_game_render_config_fn query, void* user, rsf_game_render_config* config)
 {
     int32_t answer = 0;
-    RSF_FALLOUT4_TRY { answer = query(user, config) != 0 ? 1 : 0; }
-    RSF_FALLOUT4_CATCH_CXX { answer = -1; }
+    RSF_FOREIGN_TRY { answer = query(user, config) != 0 ? 1 : 0; }
+    RSF_FOREIGN_CATCH { answer = -1; }
     return answer;
 }
 

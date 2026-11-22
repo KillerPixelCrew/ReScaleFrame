@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include <rescaleframe/game_api.h>
+#include <rescaleframe/foreign_guard.h>
 #include "cpu_call.h"
 #include <string.h>
 #include <windows.h>
@@ -7,14 +8,12 @@
 #if defined(_MSC_VER)
 #include <intrin.h>
 #define RSF_SKYRIM_CALLER ((uintptr_t)_ReturnAddress())
-/* MSVC unwinds through the detour when the engine function raises. Leave must still run. */
-#define RSF_SCOPE_TRY __try {
-#define RSF_SCOPE_FINALLY(scope) } __finally { scope_leave(scope); }
 #else
 #define RSF_SKYRIM_CALLER ((uintptr_t)__builtin_return_address(0))
-#define RSF_SCOPE_TRY {
-#define RSF_SCOPE_FINALLY(scope) } scope_leave(scope);
 #endif
+/* MSVC unwinds through the detour when the engine function raises. Leave must still run. */
+#define RSF_SCOPE_TRY RSF_FOREIGN_TRY {
+#define RSF_SCOPE_FINALLY(scope) } RSF_FOREIGN_FINALLY { scope_leave(scope); }
 
 void* rsf_skyrim_cpu_original(uint32_t);
 bool rsf_skyrim_cpu_tick_admissible(void);
@@ -253,27 +252,16 @@ static void read_menus(uintptr_t open_address, uintptr_t frozen_address, uintptr
 bool rsf_skyrim_query_menus(uintptr_t open_address, uintptr_t frozen_address, uintptr_t ui,
     uintptr_t loading, uintptr_t main, struct rsf_skyrim_menu_observation* facts)
 {
-#if defined(_MSC_VER)
-    __try {
-        read_menus(open_address, frozen_address, ui, loading, main, facts);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-#else
-    read_menus(open_address, frozen_address, ui, loading, main, facts);
-    return true;
-#endif
+    /* Engine memory: every fault reads as unavailable. */
+    bool read = true;
+    RSF_FOREIGN_TRY { read_menus(open_address, frozen_address, ui, loading, main, facts); }
+    RSF_FAULT_CATCH { read = false; }
+    return read;
 }
 
 void rsf_skyrim_cpu_event_guarded(const rsf_game_host_services* host, const rsf_game_cpu_event* event)
 {
-#if defined(_MSC_VER)
-    __try {
-        host->cpu_event(host->user, event);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-#else
-    host->cpu_event(host->user, event);
-#endif
+    /* A host callback: only a foreign C++ exception is contained, as at every other host call. */
+    RSF_FOREIGN_TRY { host->cpu_event(host->user, event); }
+    RSF_FOREIGN_CATCH { }
 }

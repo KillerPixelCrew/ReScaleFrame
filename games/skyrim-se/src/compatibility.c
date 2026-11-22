@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "postprocess_platform.h"
+#include <rescaleframe/foreign_guard.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <windows.h>
@@ -27,13 +28,8 @@ _Static_assert(sizeof(IMAGE_SECTION_HEADER) == 40 && offsetof(IMAGE_SECTION_HEAD
     "Section header");
 
 /* MSVC unwinds through these wrappers when the original raises. Their cleanup must still run. */
-#if defined(_MSC_VER)
-#define RSF_TRY __try {
-#define RSF_FINALLY(cleanup) } __finally { cleanup; }
-#else
-#define RSF_TRY {
-#define RSF_FINALLY(cleanup) } cleanup;
-#endif
+#define RSF_TRY RSF_FOREIGN_TRY {
+#define RSF_FINALLY(cleanup) } RSF_FOREIGN_FINALLY { cleanup; }
 
 FARPROC WINAPI rsf_skyrim_cs_resolve(HMODULE module, LPCSTR name)
 {
@@ -50,19 +46,14 @@ FARPROC WINAPI rsf_skyrim_cs_resolve(HMODULE module, LPCSTR name)
     return (FARPROC)resolved;
 }
 
-/* The initializer is foreign C++. SEH also contains its C++ exceptions. */
+/* The initializer is a third-party module: any fault or C++ exception reports 2. */
 uint32_t rsf_skyrim_cs_call_initializer(uintptr_t original, const void* skse)
 {
     bool (*initialize)(const void*) = (bool (*)(const void*))original;
-#if defined(_MSC_VER)
-    __try {
-        return original && initialize(skse) ? 1u : 0u;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 2u;
-    }
-#else
-    return original && initialize(skse) ? 1u : 0u;
-#endif
+    uint32_t result = 2u;
+    RSF_FOREIGN_TRY { result = original && initialize(skse) ? 1u : 0u; }
+    RSF_FAULT_CATCH { result = 2u; }
+    return result;
 }
 
 void rsf_skyrim_cs_configure(void* feature, void* json)

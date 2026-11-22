@@ -159,16 +159,16 @@ static void current_cpu_identity(rsf_fallout4_cpu_identity* identity)
 static void report(const char* message)
 {
     if (host.log) {
-        RSF_FALLOUT4_TRY { host.log(host.user, message); }
-        RSF_FALLOUT4_CATCH_CXX { }
+        RSF_FOREIGN_TRY { host.log(host.user, message); }
+        RSF_FOREIGN_CATCH { }
     }
 }
 
 static void notify(const rsf_game_render_pass* pass, void* context, uint32_t begin)
 {
     if (host.render_pass) {
-        RSF_FALLOUT4_TRY { host.render_pass(host.user, context, pass, begin); }
-        RSF_FALLOUT4_CATCH_CXX { }
+        RSF_FOREIGN_TRY { host.render_pass(host.user, context, pass, begin); }
+        RSF_FOREIGN_CATCH { }
     }
 }
 
@@ -176,8 +176,8 @@ static bool drain_auxiliaries(void)
 {
     if (!world.auxiliary_open) return true;
     int32_t result = RSF_ERROR_NOT_READY;
-    RSF_FALLOUT4_TRY { result = restore_auxiliaries(host.user, &world.auxiliary_scope); }
-    RSF_FALLOUT4_CATCH_CXX { }
+    RSF_FOREIGN_TRY { result = restore_auxiliaries(host.user, &world.auxiliary_scope); }
+    RSF_FOREIGN_CATCH { }
     if (result != RSF_OK) {
         world.refused = true;
         return false;
@@ -288,8 +288,8 @@ static bool recovery_reduce(rsf_d3d11_reduced_frame* request, int32_t* result)
     if (!reduced_frame || !world.recovery_inputs.context) return false;
     request->owner = &world.recovery_inputs.pass;
     *result = RSF_ERROR_NOT_READY;
-    RSF_FALLOUT4_TRY { *result = reduced_frame(host.user, world.recovery_inputs.context, request); }
-    RSF_FALLOUT4_CATCH_CXX { }
+    RSF_FOREIGN_TRY { *result = reduced_frame(host.user, world.recovery_inputs.context, request); }
+    RSF_FOREIGN_CATCH { }
     return true;
 }
 
@@ -334,7 +334,7 @@ static int32_t publication_reconstruct(const rsf_game_render_pass* pass,
     void* context = world.sr_inputs.context;
     int32_t result = RSF_ERROR_NOT_READY;
     bool threw = false;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         if (count == 0) {
             result = host.process_upscale(host.user, context, pass);
         } else {
@@ -352,7 +352,7 @@ static int32_t publication_reconstruct(const rsf_game_render_pass* pass,
             if (result != RSF_OK && !recovery_owned()) (void)drain_auxiliaries();
         }
     }
-    RSF_FALLOUT4_CATCH_CXX { threw = true; }
+    RSF_FOREIGN_CATCH { threw = true; }
     if (threw) {
         (void)drain_auxiliaries();
         return RSF_ERROR_NOT_READY;
@@ -460,13 +460,13 @@ static const NativePublicationLeaves publication_leaves = {read_world, rsf_fallo
 static bool scope_lease_owner(const NativeRenderOwner* before)
 {
     bool owned = false;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         com_assign((void**)&world.owner_context, (void*)before->context);
         com_assign((void**)&world.owner_chain, (void*)before->chain);
         owned = rsf_fallout4_render_check_owner(world.owner_context, world.owner_chain, before->device,
             before->window);
     }
-    RSF_FALLOUT4_CATCH_CXX { owned = false; }
+    RSF_FOREIGN_CATCH { owned = false; }
     return owned;
 }
 
@@ -593,7 +593,7 @@ static void observe_viewport(void* manager, bool enabled)
 {
     const uintptr_t caller = RSF_FALLOUT4_CALLER();
     InterlockedIncrement(&entered);
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         viewport(manager, enabled);
         const DWORD error = GetLastError();
         /* Rust follows the native intent with the owned selector and runs the HUDless seam. */
@@ -601,7 +601,7 @@ static void observe_viewport(void* manager, bool enabled)
             (uintptr_t)manager, enabled);
         SetLastError(error);
     }
-    RSF_FALLOUT4_FINALLY { InterlockedDecrement(&entered); }
+    RSF_FOREIGN_FINALLY { InterlockedDecrement(&entered); }
 }
 
 static void observe_world_begin(void)
@@ -612,7 +612,7 @@ static void observe_world_begin(void)
     rsf_fallout4_cpu_identity cpu;
     current_cpu_identity(&cpu);
     const bool previous = ordinary_world;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         const bool active = live();
         const NativeWorldAdmission candidate = {caller, active ? host.session_id : 0, active, ordinary_world,
             world.frame_open, world.auxiliary_open, recovery_owned()};
@@ -626,7 +626,7 @@ static void observe_world_begin(void)
         SetLastError(error);
         world_begin();
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         ordinary_world = previous;
         InterlockedDecrement(&entered);
     }
@@ -636,7 +636,7 @@ static void observe_dynamic_resolution(void* manager, void* a, void* b, void* c,
 {
     const uintptr_t caller = RSF_FALLOUT4_CALLER();
     InterlockedIncrement(&entered);
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         const DWORD error = GetLastError();
         rsf_fallout4_render_before_dynamic_resolution(&producer_leaves);
         SetLastError(error);
@@ -646,7 +646,7 @@ static void observe_dynamic_resolution(void* manager, void* a, void* b, void* c,
         rsf_fallout4_render_after_dynamic_resolution(&producer_leaves, &recovery_leaves, caller, (uintptr_t)manager);
         SetLastError(native_error);
     }
-    RSF_FALLOUT4_FINALLY { InterlockedDecrement(&entered); }
+    RSF_FOREIGN_FINALLY { InterlockedDecrement(&entered); }
 }
 
 static void observe_prepass(void)
@@ -655,7 +655,7 @@ static void observe_prepass(void)
     InterlockedIncrement(&entered);
     const DWORD error = GetLastError();
     ++prepass_depth;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         /* Rust records the World source, selects the call and invalidates the previous snapshots; the
            capture after the original uses that record. */
         NativePrepassCall call;
@@ -667,7 +667,7 @@ static void observe_prepass(void)
         rsf_fallout4_render_after_prepass(&producer_leaves, &recovery_leaves, &call);
         SetLastError(native_error);
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         --prepass_depth;
         InterlockedDecrement(&entered);
     }
@@ -681,11 +681,11 @@ static void observe_imagespace(void)
     /* Rust selects the call and enters imagespace; the exit runs after the original returns or
        unwinds, between its own LastError save and restore. */
     const bool selected = rsf_fallout4_render_enter_imagespace(&imagespace_leaves, &recovery_leaves, caller);
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         imagespace();
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (selected) {
             const DWORD exit_error = GetLastError();
             rsf_fallout4_render_leave_imagespace(&imagespace_leaves, &recovery_leaves);
@@ -699,7 +699,7 @@ static void observe_effects(void* manager, uint32_t first, uint32_t last, uint32
 {
     const uintptr_t caller = RSF_FALLOUT4_CALLER();
     InterlockedIncrement(&entered);
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         const DWORD error = GetLastError();
         /* Rust verifies the call and arguments against the native manager read, then sequences the
            pre-SR receipt and the SR seam before the original, and the Effects receipt, RETIRE and
@@ -715,36 +715,36 @@ static void observe_effects(void* manager, uint32_t first, uint32_t last, uint32
         if (admitted) rsf_fallout4_render_after_effects(&imagespace_leaves, &recovery_leaves, &receipt);
         SetLastError(native_error);
     }
-    RSF_FALLOUT4_FINALLY { InterlockedDecrement(&entered); }
+    RSF_FOREIGN_FINALLY { InterlockedDecrement(&entered); }
 }
 
 static bool observe_taa(void* effect)
 {
     bool active = false;
     InterlockedIncrement(&entered);
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         const bool result = taa_active(effect);
         const DWORD error = GetLastError();
         /* Rust decides the exclusion and its once-per-combination receipt. */
         active = rsf_fallout4_render_gate_taa(&imagespace_leaves, &recovery_leaves, result);
         SetLastError(error);
     }
-    RSF_FALLOUT4_FINALLY { InterlockedDecrement(&entered); }
+    RSF_FOREIGN_FINALLY { InterlockedDecrement(&entered); }
     return active;
 }
 
 static bool recovery_capture_requested(void)
 {
     bool requested = false;
-    RSF_FALLOUT4_TRY { requested = capture_texture && capture_requested && capture_requested(); }
-    RSF_FALLOUT4_CATCH_CXX { requested = false; }
+    RSF_FOREIGN_TRY { requested = capture_texture && capture_requested && capture_requested(); }
+    RSF_FOREIGN_CATCH { requested = false; }
     return requested;
 }
 
 static void recovery_capture(void* context, const rsf_d3d11_host_capture* capture)
 {
-    RSF_FALLOUT4_TRY { (void)capture_texture(host.user, context, capture); }
-    RSF_FALLOUT4_CATCH_CXX { }
+    RSF_FOREIGN_TRY { (void)capture_texture(host.user, context, capture); }
+    RSF_FOREIGN_CATCH { }
 }
 
 static bool revalidate_present_screen(void)
@@ -762,7 +762,7 @@ static void observe_native_present(void* renderer)
     rsf_fallout4_cpu_identity phase_owner;
     memset(&phase_owner, 0, sizeof(phase_owner));
     volatile bool phase_active = false;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         const NativeRenderScopeKey leased = {world.frame_pass.native_frame, world.frame_pass.view_key,
             world.frame_pass.window_key, (uintptr_t)world.context, (uintptr_t)world.chain};
         const NativePresentMatch matched = rsf_fallout4_render_match_present(caller, (uintptr_t)renderer,
@@ -795,7 +795,7 @@ static void observe_native_present(void* renderer)
         SetLastError(error);
         native_present(renderer);
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (phase_active) {
             const DWORD exit_error = GetLastError();
             rsf_fallout4_cpu_end_present_phase(&phase_owner);

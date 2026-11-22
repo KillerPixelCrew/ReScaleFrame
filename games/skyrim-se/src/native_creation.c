@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Native D3D11 call frame and foreign Runtime exception guards for creation.rs. */
 #include "native_creation_platform.h"
+#include <rescaleframe/foreign_guard.h>
 #include <windows.h>
 #include <d3d11.h>
 #include <stddef.h>
@@ -67,30 +68,22 @@ HRESULT WINAPI rsf_skyrim_create_detour(IDXGIAdapter* adapter, D3D_DRIVER_TYPE d
     return result;
 }
 
-/* The Runtime callbacks cross a C ABI, but their implementation may raise a foreign exception. */
+/* The Runtime callbacks cross a C ABI, but their implementation may raise a foreign exception.
+   Only that is contained: a fault inside the Runtime's creation scope propagates, as at every
+   other Runtime call (the all-fault filter here was the one exception, X13). */
 int32_t rsf_skyrim_creation_begin_guarded(uintptr_t address, void* user, rsf_d3d11_creation_scope* scope)
 {
-#if defined(_MSC_VER)
-    __try {
-        return ((creation_begin_fn)address)(user, scope);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return RSF_ERROR_NOT_READY;
-    }
-#else
-    return ((creation_begin_fn)address)(user, scope);
-#endif
+    int32_t result = RSF_ERROR_NOT_READY;
+    RSF_FOREIGN_TRY { result = ((creation_begin_fn)address)(user, scope); }
+    RSF_FOREIGN_CATCH { result = RSF_ERROR_NOT_READY; }
+    return result;
 }
 
 int32_t rsf_skyrim_creation_end_guarded(uintptr_t address, void* user, const rsf_d3d11_creation_scope* scope,
     const rsf_d3d11_native_chain* outputs)
 {
-#if defined(_MSC_VER)
-    __try {
-        return ((creation_end_fn)address)(user, scope, outputs);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return RSF_ERROR_NOT_READY;
-    }
-#else
-    return ((creation_end_fn)address)(user, scope, outputs);
-#endif
+    int32_t result = RSF_ERROR_NOT_READY;
+    RSF_FOREIGN_TRY { result = ((creation_end_fn)address)(user, scope, outputs); }
+    RSF_FOREIGN_CATCH { result = RSF_ERROR_NOT_READY; }
+    return result;
 }

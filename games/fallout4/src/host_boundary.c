@@ -9,20 +9,12 @@
 
 /* A native call that throws reports false; the Rust lifecycle then answers RSF_ERROR_NOT_READY. */
 
-bool rsf_fallout4_native_log(rsf_game_log_fn log, void* user, const char* message)
-{
-    bool returned = true;
-    RSF_FALLOUT4_TRY { if (log) log(user, message); }
-    RSF_FALLOUT4_CATCH_CXX { returned = false; }
-    return returned;
-}
-
 bool rsf_fallout4_native_host_create(rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup,
     rsf_game_host_services* services, int32_t* result)
 {
     bool returned = true;
-    RSF_FALLOUT4_TRY { *result = create(setup, services); }
-    RSF_FALLOUT4_CATCH_CXX { returned = false; }
+    RSF_FOREIGN_TRY { *result = create(setup, services); }
+    RSF_FOREIGN_CATCH { returned = false; }
     return returned;
 }
 
@@ -30,8 +22,8 @@ bool rsf_fallout4_native_host_set_active(rsf_fallout4_host_active_fn activate, v
     int32_t* result)
 {
     bool returned = true;
-    RSF_FALLOUT4_TRY { *result = activate(user, active); }
-    RSF_FALLOUT4_CATCH_CXX { returned = false; }
+    RSF_FOREIGN_TRY { *result = activate(user, active); }
+    RSF_FOREIGN_CATCH { returned = false; }
     return returned;
 }
 
@@ -39,8 +31,8 @@ bool rsf_fallout4_native_creation_begin(rsf_fallout4_creation_begin_fn begin, vo
     rsf_d3d11_creation_scope* scope, int32_t* result)
 {
     bool returned = true;
-    RSF_FALLOUT4_TRY { *result = begin(user, scope); }
-    RSF_FALLOUT4_CATCH_CXX { returned = false; }
+    RSF_FOREIGN_TRY { *result = begin(user, scope); }
+    RSF_FOREIGN_CATCH { returned = false; }
     return returned;
 }
 
@@ -48,8 +40,8 @@ bool rsf_fallout4_native_creation_end(rsf_fallout4_creation_end_fn end, void* us
     const rsf_d3d11_creation_scope* scope, const rsf_d3d11_native_chain* outputs, int32_t* result)
 {
     bool returned = true;
-    RSF_FALLOUT4_TRY { *result = end(user, scope, outputs); }
-    RSF_FALLOUT4_CATCH_CXX { returned = false; }
+    RSF_FOREIGN_TRY { *result = end(user, scope, outputs); }
+    RSF_FOREIGN_CATCH { returned = false; }
     return returned;
 }
 
@@ -57,8 +49,8 @@ bool rsf_fallout4_native_bind_presentation(rsf_fallout4_bind_presentation_fn bin
     const rsf_d3d11_presentation_binding* binding, int32_t* result)
 {
     bool returned = true;
-    RSF_FALLOUT4_TRY { *result = bind(user, binding); }
-    RSF_FALLOUT4_CATCH_CXX { returned = false; }
+    RSF_FOREIGN_TRY { *result = bind(user, binding); }
+    RSF_FOREIGN_CATCH { returned = false; }
     return returned;
 }
 

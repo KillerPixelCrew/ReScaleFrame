@@ -39,13 +39,13 @@ static void observe_swap(void* main)
     rsf_fallout4_cpu_swap_enter(caller, main, &scope);
     volatile bool returned = false;
     DWORD native_error = 0;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(entry_error);
         ((Swap)rsf_fallout4_cpu_original(RSF_FALLOUT4_CPU_HOOK_SWAP))(main);
         native_error = GetLastError();
         returned = true;
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (!returned) cancel_scope(RSF_FALLOUT4_CPU_HOOK_SWAP, &scope);
     }
     rsf_fallout4_cpu_swap_exit(&scope);
@@ -58,11 +58,11 @@ static void observe_raw(uint32_t hook, uintptr_t caller, void* device, const voi
 {
     const DWORD error = GetLastError();
     rsf_fallout4_cpu_raw_enter(hook, caller);
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         ((RawInput)rsf_fallout4_cpu_original(hook))(device, raw);
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         const DWORD native_error = GetLastError();
         rsf_fallout4_cpu_raw_exit();
         SetLastError(native_error);
@@ -88,13 +88,13 @@ static void observe_idle(void* main)
     rsf_fallout4_cpu_idle_enter(caller, main, &scope);
     volatile bool returned = false;
     DWORD native_error = 0;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         ((Swap)rsf_fallout4_cpu_original(RSF_FALLOUT4_CPU_HOOK_IDLE))(main);
         native_error = GetLastError();
         returned = true;
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (!returned) cancel_scope(RSF_FALLOUT4_CPU_HOOK_IDLE, &scope);
     }
     rsf_fallout4_cpu_idle_exit(&scope);
@@ -112,7 +112,7 @@ static void observe_poll(void* manager, float delta)
     DWORD native_error = 0;
     LARGE_INTEGER sample_begin;
     sample_begin.QuadPart = 0;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         /* RESERVE must have returned before taking the poll's entry timestamp. */
         QueryPerformanceCounter(&sample_begin);
@@ -120,7 +120,7 @@ static void observe_poll(void* manager, float delta)
         native_error = GetLastError();
         returned = true;
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (!returned) cancel_scope(RSF_FALLOUT4_CPU_HOOK_POLL, &scope);
     }
     rsf_fallout4_cpu_poll_exit(&scope, (uint64_t)sample_begin.QuadPart);
@@ -136,13 +136,13 @@ static void observe_consume(void* queue, void* receiver)
     rsf_fallout4_cpu_consume_enter(caller, queue, receiver, &scope);
     volatile bool returned = false;
     DWORD native_error = 0;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         ((Consume)rsf_fallout4_cpu_original(RSF_FALLOUT4_CPU_HOOK_CONSUME))(queue, receiver);
         native_error = GetLastError();
         returned = true;
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (!returned) cancel_scope(RSF_FALLOUT4_CPU_HOOK_CONSUME, &scope);
     }
     rsf_fallout4_cpu_consume_exit(&scope);
@@ -158,13 +158,13 @@ static void observe_player_controls(void* receiver, void* events)
     rsf_fallout4_cpu_player_controls_enter(caller, receiver, events, &scope);
     volatile bool returned = false;
     DWORD native_error = 0;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         ((Consume)rsf_fallout4_cpu_original(RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS))(receiver, events);
         native_error = GetLastError();
         returned = true;
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (!returned) cancel_scope(RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS, &scope);
     }
     rsf_fallout4_cpu_player_controls_exit(&scope);
@@ -180,13 +180,13 @@ static void observe_job_end(void* argument)
     rsf_fallout4_cpu_job_end_enter(caller, &scope);
     volatile bool returned = false;
     DWORD native_error = 0;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         ((Swap)rsf_fallout4_cpu_original(RSF_FALLOUT4_CPU_HOOK_JOB_END))(argument);
         native_error = GetLastError();
         returned = true;
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (!returned) cancel_scope(RSF_FALLOUT4_CPU_HOOK_JOB_END, &scope);
     }
     rsf_fallout4_cpu_job_end_exit(&scope);
@@ -202,13 +202,13 @@ static void observe_wrapper(void* main)
     rsf_fallout4_cpu_wrapper_enter(caller, main, &scope);
     volatile bool returned = false;
     DWORD native_error = 0;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         ((Swap)rsf_fallout4_cpu_original(RSF_FALLOUT4_CPU_HOOK_WRAPPER))(main);
         native_error = GetLastError();
         returned = true;
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (!returned) cancel_scope(RSF_FALLOUT4_CPU_HOOK_WRAPPER, &scope);
     }
     rsf_fallout4_cpu_wrapper_exit(&scope);
@@ -225,13 +225,13 @@ static uint32_t observe_worker_join(void)
     volatile bool returned = false;
     DWORD native_error = 0;
     uint32_t result = 0;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         result = ((WorkerJoin)rsf_fallout4_cpu_original(RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN))();
         native_error = GetLastError();
         returned = true;
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (!returned) cancel_scope(RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, &scope);
     }
     rsf_fallout4_cpu_worker_join_exit(&scope, result);
@@ -249,13 +249,13 @@ static BOOL WINAPI observe_peek(LPMSG message, HWND window, UINT minimum, UINT m
     volatile bool returned = false;
     DWORD native_error = 0;
     BOOL result = FALSE;
-    RSF_FALLOUT4_TRY {
+    RSF_FOREIGN_TRY {
         SetLastError(error);
         result = next(message, window, minimum, maximum, flags);
         native_error = GetLastError();
         returned = true;
     }
-    RSF_FALLOUT4_FINALLY {
+    RSF_FOREIGN_FINALLY {
         if (!returned) {
             const DWORD cancel_error = GetLastError();
             rsf_fallout4_cpu_peek_cancel();
@@ -293,7 +293,7 @@ void* rsf_fallout4_cpu_peek_thunk(void)
 bool rsf_fallout4_cpu_deliver(rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event)
 {
     bool returned = true;
-    RSF_FALLOUT4_TRY { callback(user, event); }
-    RSF_FALLOUT4_CATCH_CXX { returned = false; }
+    RSF_FOREIGN_TRY { callback(user, event); }
+    RSF_FOREIGN_CATCH { returned = false; }
     return returned;
 }
