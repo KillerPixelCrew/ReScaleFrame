@@ -8101,6 +8101,16 @@ lists the preserved profile and rollback evidence and remaining native fixture
 bodies. Pinned formatting, binding regeneration and locked offline metadata
 passed. Build, fixture and device validation remain pending.
 
+The follow-up from `6cb0c169` ports the remaining Anomaly SR round-trip,
+temporal device, swap and temporal planning scenario bodies to Rust.
+Native fixture entries lend the actual graphics exports and independent
+model. Source evidence records both device paths, the preserved named
+CPU cases, the verified swap rollback and the typed callback admission
+follow-up. Validation was limited to source comparison, pinned
+formatting, binding regeneration and locked offline Windows metadata.
+[Device evidence](research/rust-anomaly-sr-stage.md#n06-and-n07-device-scenarios-from-6cb0c169)
+[Swap and planning evidence](research/rust-anomaly-sr-swap.md#n07-swap-scenarios-from-6cb0c169)
+
 ### Direct overlay service and panel admission
 
 Rust now owns the remaining overlay service entry points and binds input,

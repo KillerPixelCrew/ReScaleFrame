@@ -88,38 +88,6 @@ fn compile_shader(compiler: &Compiler, entry: &CStr, target: &CStr) -> Result<Ve
     ))
 }
 
-impl Device {
-    fn debug_errors(&self) -> Result<()> {
-        let Some(info) = &self.info else {
-            return Ok(());
-        };
-        for index in 0..unsafe { info.GetNumStoredMessages() } {
-            let mut size = 0;
-            unsafe { info.GetMessage(index, None, &mut size) }.map_err(|err| err.to_string())?;
-            check(
-                size >= size_of::<D3D11_MESSAGE>(),
-                "invalid debug message size",
-            )?;
-            let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
-            let message = storage.as_mut_ptr().cast::<D3D11_MESSAGE>();
-            unsafe { info.GetMessage(index, Some(message), &mut size) }
-                .map_err(|err| err.to_string())?;
-            let message = unsafe { &*message };
-            if message.Severity.0 <= D3D11_MESSAGE_SEVERITY_ERROR.0 {
-                let description = unsafe {
-                    std::slice::from_raw_parts(message.pDescription, message.DescriptionByteLength)
-                };
-                return Err(format!(
-                    "debug layer: {}",
-                    String::from_utf8_lossy(description)
-                ));
-            }
-        }
-        unsafe { info.ClearStoredMessages() };
-        Ok(())
-    }
-}
-
 struct Fixture {
     vs: ID3D11VertexShader,
     ps: ID3D11PixelShader,
@@ -339,7 +307,7 @@ impl Fixture {
             },
             "readback",
         )?;
-        device.debug_errors()?;
+        check(device.debug_errors() == 0, "debug-layer errors")?;
         Ok(pixels
             .into_iter()
             .map(|[u, v, valid, _]| [u, v, valid].map(half))

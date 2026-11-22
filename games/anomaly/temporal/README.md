@@ -68,6 +68,17 @@ Standard DX11 executable only, every site guarded by expected bytes (`anomaly_ge
 
 ## Verification
 
-`tests/anomaly_temporal_tests.cpp` is a standalone native executable; no game, engine or GPU dependency. Its optional argument selects an exact test case; unknown selections fail. The default executes every registered test with explicit checks (not `assert`, so Release tests remain active).
+`tests/anomaly_temporal_tests.cpp` launches the Rust cases in
+`games/anomaly/src/temporal_fixture/`. It lends the independent C++ model
+through the private C table in `fixture_platform.h`. The model retains
+each capture's shared pointers until the Rust case releases them, so the
+same cases can verify frozen snapshots and identity across later source
+frames and retirement. There is no game, engine or GPU dependency. An
+optional argument selects an exact case. An unknown selection fails, and
+the default runs all 17 checks in Debug and Release.
 
 The isolated worker build and actual execution results are recorded in `.local/anomaly/temporal-worker.md`. The parent registered these contracts through `tests/anomaly_support.cmake` and rebuilt the main Windows/MSVC Debug target: all 17 internal cases passed, and unknown-case selection correctly failed. Adapter integration remains pending. Passing these tests establishes CPU behavior only; source-to-binary hooks, real resource formats/lifetimes, dense geometry motion coverage, game captures, SR/FG and image quality remain unverified.
+
+Those execution results precede the Rust fixture port. The port used
+pinned formatting, binding regeneration, locked offline metadata and
+source comparison only.

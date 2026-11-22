@@ -161,3 +161,39 @@ unwind paths and both profile tables remain those of `6cb0c169`.
 
 Pinned formatting, locked offline Windows metadata and source comparison
 completed. Builds, fixture execution and device validation remain pending.
+
+## N07 temporal planning scenarios from 6cb0c169
+
+All 17 names from `tests/anomaly_temporal_tests.cpp` at `6cb0c169`
+are retained. `games/anomaly/src/temporal_fixture.rs` owns selection and
+results. Its `math.rs` covers dimension admission, native matrix indexing,
+projection, inverse, motion math, and comparison with production Rust
+jitter. Its `history.rs` exercises per-view and first-person history,
+snapshot identity, malformed producer refusals, retirement and the
+separate geometry, reconstruction, screen UI and PDA canvases.
+
+`tests/anomaly_temporal_oracle.h` only lends the independent C++ model
+from `games/anomaly/temporal/{planning,math,history,frame_plan}.h`. Opaque
+capture owners keep their native shared pointers alive until Rust drops
+them. The fixed C callback records come from
+`games/anomaly/temporal/fixture_platform.h` and bindgen generates
+`games/anomaly/src/temporal_fixture/abi.rs`. The native oracle headers
+that implement the model remain byte-identical to `6cb0c169`.
+
+Source comparison matched all 29 swap selections, all 17 planning
+selections and all 35 CTest labels in `tests/anomaly_support.cmake`.
+The cleanup also makes jitter, round-trip and temporal device scenarios
+use the same debug queue reader. It preserves the original jitter
+assertion that no debug errors are present.
+
+### Typed callback admission follow-up
+
+The Anomaly part of F01 can follow these fixture changes independently.
+At `sr_swap.rs::rsf_anomaly_swap_create_scoped`, convert the complete
+common native callback subset into a typed internal table once. Legacy
+fixture seam callbacks are required only by the separate legacy
+constructor. At `sr_temporal.rs::query_api`, convert the validated
+Runtime table into a typed internal table once and preserve the separate
+admission and selected-provider exports. Keep the existing ABI size and
+version checks, cold-start refusal reasons, synthetic API fixtures and
+the new live-device fixture routes.

@@ -1,7 +1,10 @@
+rsf_add_rust_static(rsf_anomaly_sr_fixture_rust rsf_rust_anomaly_sr_fixture
+    rsf-anomaly rsf_anomaly --features sr-fixtures)
+
 # CPU history/planning contracts only; these tests do not prove game motion output.
 add_executable(rsf_anomaly_temporal_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_temporal_tests.cpp")
 target_include_directories(rsf_anomaly_temporal_test PRIVATE "${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_temporal_test PRIVATE rsf_anomaly_rust rsf_build_options)
+target_link_libraries(rsf_anomaly_temporal_test PRIVATE rsf_anomaly_sr_fixture_rust rsf_build_options)
 add_test(NAME anomaly_temporal_contract COMMAND rsf_anomaly_temporal_test)
 add_test(NAME anomaly_temporal_unknown_selection COMMAND rsf_anomaly_temporal_test unknown-case)
 set_tests_properties(anomaly_temporal_unknown_selection PROPERTIES WILL_FAIL TRUE)
@@ -40,9 +43,6 @@ target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE
     rsf_anomaly_overlay_fixture_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options d3d11 dxgi dinput8 dxguid)
 add_test(NAME anomaly_overlay_hooks_contract COMMAND rsf_anomaly_overlay_hooks_test)
 set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
-
-rsf_add_rust_static(rsf_anomaly_sr_fixture_rust rsf_rust_anomaly_sr_fixture
-    rsf-anomaly rsf_anomaly --features sr-fixtures)
 
 # SR Stage 0 site profile: compile-time consistency and runtime build selection. The guards are checked against the installed executable by
 # tests/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.

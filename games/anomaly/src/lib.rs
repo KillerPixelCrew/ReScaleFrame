@@ -82,6 +82,8 @@ mod sr_swap;
 mod sr_swap_abi;
 mod sr_temporal;
 mod sr_tonemap;
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod temporal_fixture;
 mod wide;
 
 #[cfg(all(windows, feature = "native-entry"))]
