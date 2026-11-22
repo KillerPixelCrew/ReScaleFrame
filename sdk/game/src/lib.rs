@@ -363,6 +363,7 @@ pub type rsf_game_cpu_event_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, event: *const rsf_game_cpu_event),
 >;
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_game_cpu_source_event {
     pub header: rsf_game_cpu_event,
     pub predecessor_source_id: u64,
@@ -391,6 +392,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_game_cpu_source_event, poll_begin_qpc) - 88usize];
 };
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_game_cpu_receipt_event {
     pub header: rsf_game_cpu_event,
     pub receipt_id: u64,
