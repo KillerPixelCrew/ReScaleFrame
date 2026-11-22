@@ -2,7 +2,7 @@
 // OpenGL and D3D12 sharing owner behind rescaleframe/gl_shared_surface.h. This owner decides WGL
 // owner admission, format validation, semaphore, handle and resource lifetime, command slot and
 // fence synchronization, the GL/D3D12 queue handoff, failure recovery and teardown.
-// gl_shared_surface.cpp supplies one native leaf per WGL, OpenGL, DXGI or D3D12 operation.
+// The native table uses typed WGL, OpenGL, DXGI and D3D12 calls.
 //
 // Every transaction leaves GL through a semaphore signal and returns through a GL wait on a value
 // the D3D12 queue signals after the transaction's commands. A queue signal that fails after
@@ -17,10 +17,12 @@ use crate::gl_pipeline_abi::{
 use crate::render_abi::rsf_backend_log_fn;
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
-use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+
+mod native_dx;
+mod native_gl;
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -40,7 +42,7 @@ const STICKY_ERRORS: usize = 32;
 // GL_LAYOUT_GENERAL_EXT. Resources enter and leave D3D12 in COMMON.
 const LAYOUT_GENERAL: u32 = 0x958d;
 
-// DXGI formats and GL internal formats, pinned by static_asserts in gl_shared_surface.cpp.
+// DXGI formats and GL internal formats.
 const DXGI_R16G16B16A16_FLOAT: u32 = 10;
 const DXGI_R16G16_FLOAT: u32 = 34;
 const DXGI_R32_FLOAT: u32 = 41;
@@ -51,7 +53,7 @@ const GL_RG16F: u32 = 0x822f;
 const GL_RGBA8: u32 = 0x8058;
 const FEATURE_LEVEL_11_0: u32 = 0xb000;
 
-// Order is the typed Gl table in gl_shared_surface.cpp.
+// native_gl converts these entries to their typed OpenGL signatures at the call site.
 const GL_ENTRY_POINTS: [&CStr; 13] = [
     c"glGetStringi",
     c"glGetUnsignedBytevEXT",
@@ -71,13 +73,12 @@ const GL_ENTRY_POINTS: [&CStr; 13] = [
 type Handle = *mut c_void;
 type Log = rsf_backend_log_fn;
 
-// Native leaves borrow the resolved entry points as Gl in gl_shared_surface.cpp.
+// Native GL leaves and the fixture borrow the resolved entry points.
 #[repr(C)]
 pub(crate) struct GlProcs([*const c_void; GL_ENTRY_POINTS.len()]);
 
-// Field order matches `Leaves` in gl_shared_surface.cpp. GL leaves return glGetError after their
-// call. D3D12 and DXGI leaves return an HRESULT; created COM interfaces carry one reference.
-#[repr(C)]
+// GL operations return glGetError after their call. D3D12 and DXGI calls
+// return an HRESULT. A returned COM interface transfers one reference.
 pub(crate) struct Leaves {
     gl_current: unsafe extern "C" fn() -> Handle,
     gl_lookup: unsafe extern "C" fn(*const c_char) -> *const c_void,
@@ -91,8 +92,8 @@ pub(crate) struct Leaves {
     memory_delete: unsafe extern "C" fn(*const GlProcs, u32),
     texture_store: unsafe extern "C" fn(*const GlProcs, u32, u32, u32, u32, *mut u32) -> u32,
     texture_delete: unsafe extern "C" fn(u32),
-    release: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32),
-    acquire: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32),
+    release: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32) -> u32,
+    acquire: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32) -> u32,
     finish: unsafe extern "C" fn(),
     factory_create: unsafe extern "C" fn(*mut Handle) -> i32,
     adapter_find: unsafe extern "C" fn(Handle, *const u8, *mut Handle) -> i32,
@@ -114,14 +115,6 @@ pub(crate) struct Leaves {
     queue_signal: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
     resource_create: unsafe extern "C" fn(Handle, u32, u32, u32, *mut Handle) -> i32,
 }
-
-const _: () = {
-    assert!(size_of::<GlProcs>() == 13 * size_of::<usize>());
-    assert!(size_of::<Leaves>() == 34 * size_of::<usize>());
-    assert!(std::mem::offset_of!(Leaves, gl_lookup) == size_of::<usize>());
-    assert!(std::mem::offset_of!(Leaves, factory_create) == 15 * size_of::<usize>());
-    assert!(std::mem::offset_of!(Leaves, resource_create) == 33 * size_of::<usize>());
-};
 
 impl GlProcs {
     fn load(leaves: &Leaves) -> Option<Self> {
@@ -237,6 +230,12 @@ enum Phase {
     Idle,
     Recording(Handoff),
     Unsignalled(Handoff),
+    AwaitingAcquire {
+        handoff: Handoff,
+        value: u64,
+        submitted: bool,
+    },
+    ReleaseFailed,
 }
 
 struct State {
@@ -362,7 +361,8 @@ impl Context {
     }
 
     // GL releases the batch to D3D12 at `value` and flushes so the queue can observe it.
-    fn release(&self, value: u64, batch: &Batch) {
+    fn release(&self, value: u64, batch: &Batch) -> u32 {
+        self.prior_errors();
         let layouts = [LAYOUT_GENERAL; BATCH];
         unsafe {
             (self.leaves.release)(
@@ -373,11 +373,12 @@ impl Context {
                 batch.names.as_ptr(),
                 layouts.as_ptr(),
             )
-        };
+        }
     }
 
     // GL reacquires the batch once the fence reaches `value`.
-    fn acquire(&self, value: u64, batch: &Batch) {
+    fn acquire(&self, value: u64, batch: &Batch) -> u32 {
+        self.prior_errors();
         let layouts = [LAYOUT_GENERAL; BATCH];
         unsafe {
             (self.leaves.acquire)(
@@ -388,25 +389,38 @@ impl Context {
                 batch.names.as_ptr(),
                 layouts.as_ptr(),
             )
-        };
+        }
     }
 
     // Completes an unsignalled handoff with a queue signal ordered after its commands. Only then
     // does GL wait to reacquire the textures and the slot gain a completion value.
     fn settle(&self, state: &mut State) -> bool {
-        let Phase::Unsignalled(handoff) = state.phase else {
-            return true;
+        if let Phase::Unsignalled(handoff) = state.phase {
+            state.serial += 1;
+            let value = state.serial;
+            let signalled = self.signal(value);
+            if failed(signalled) {
+                self.failure("D3D12 completion signal", signalled as u32);
+                return false;
+            }
+            state.phase = Phase::AwaitingAcquire {
+                handoff,
+                value,
+                submitted: true,
+            };
+        }
+        let Phase::AwaitingAcquire { handoff, value, submitted } = state.phase else {
+            return matches!(state.phase, Phase::Idle);
         };
-        state.serial += 1;
-        let complete = state.serial;
-        let signalled = self.signal(complete);
-        if failed(signalled) {
-            self.failure("D3D12 completion signal", signalled as u32);
+        let result = self.acquire(value, &handoff.batch);
+        if result != GL_NO_ERROR {
+            self.failure("GL semaphore acquire", result);
             return false;
         }
-        self.acquire(complete, &handoff.batch);
-        state.slots[handoff.slot].completion = complete;
-        state.next = (handoff.slot + 1) % SLOTS;
+        if submitted {
+            state.slots[handoff.slot].completion = value;
+            state.next = (handoff.slot + 1) % SLOTS;
+        }
         state.phase = Phase::Idle;
         true
     }
@@ -427,23 +441,32 @@ impl Context {
         }
         state.serial += 1;
         let ready = state.serial;
-        self.release(ready, batch);
+        let released = self.release(ready, batch);
         let current = &mut state.slots[index];
+        if released != GL_NO_ERROR {
+            unsafe { (l.list_close)(current.list.as_ptr()) };
+            state.phase = Phase::ReleaseFailed;
+            self.failure("GL semaphore release", released);
+            return FEATURE_FAILED;
+        }
+        let handoff = Handoff { slot: index, batch: *batch };
         let waited = unsafe { (l.queue_wait)(self.queue.as_ptr(), self.fence.as_ptr(), ready) };
         if failed(waited) {
             self.failure("D3D12 queue wait", waited as u32);
             unsafe { (l.list_close)(current.list.as_ptr()) };
             // GL's own signal satisfies `ready`, so the textures return to GL unchanged.
-            self.acquire(ready, batch);
+            state.phase = Phase::AwaitingAcquire {
+                handoff,
+                value: ready,
+                submitted: false,
+            };
+            self.settle(state);
             return FEATURE_FAILED;
         }
         for &resource in &batch.resources[..batch.count] {
             current.leases.push(unsafe { ComRef::retain(resource) });
         }
-        state.phase = Phase::Recording(Handoff {
-            slot: index,
-            batch: *batch,
-        });
+        state.phase = Phase::Recording(handoff);
         unsafe {
             list.write(current.list.as_ptr());
             slot.write(index as u32);
@@ -481,7 +504,9 @@ impl Context {
         if matches!(state.phase, Phase::Recording(_)) {
             return INVALID;
         }
-        if !self.settle(state) {
+        // A refused GL release never installed a D3D12 wait. Drain can retire the
+        // resources, but the context cannot record another ownership transfer.
+        if !matches!(state.phase, Phase::ReleaseFailed) && !self.settle(state) {
             return FEATURE_FAILED;
         }
         unsafe { (self.leaves.finish)() };
@@ -671,10 +696,13 @@ fn with_state(context: *mut Context, run: impl FnOnce(&Context, &mut State) -> i
 }
 
 /// # Safety
-/// `setup` is null or readable for its `struct_size`; `out` is null or writable. `leaves` is the
-/// static table from gl_shared_surface.cpp.
+/// `setup` is null or readable for its `struct_size` and `out` is null or writable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_gl_open(
+unsafe extern "C" fn rsf_gl_open(setup: *const rsf_gl_setup, out: *mut *mut Context) -> i32 {
+    unsafe { rsf_core_gl_open(setup, out, &native_dx::NATIVE) }
+}
+
+unsafe fn rsf_core_gl_open(
     setup: *const rsf_gl_setup,
     out: *mut *mut Context,
     leaves: *const Leaves,
@@ -697,22 +725,15 @@ unsafe extern "C" fn rsf_core_gl_open(
     if setup.abi_version != SETUP_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let storage = crate::allocate_handle(MaybeUninit::<Context>::uninit());
-    if storage.is_null() {
+    let Some(storage) = crate::reserve_handle() else {
         return FEATURE_FAILED;
-    }
+    };
     match open(&setup, leaves, gl_context) {
         Ok(context) => {
-            unsafe {
-                storage.cast::<Context>().write(context);
-                out.write(storage.cast());
-            }
+            unsafe { out.write(Box::into_raw(Box::write(storage, context))) };
             OK
         }
-        Err(result) => {
-            unsafe { drop(Box::from_raw(storage)) };
-            result
-        }
+        Err(result) => result,
     }
 }
 
@@ -754,22 +775,15 @@ unsafe extern "C" fn rsf_gl_texture_create(
     if width == 0 || height == 0 {
         return INVALID;
     }
-    let storage = crate::allocate_handle(MaybeUninit::<Texture>::uninit());
-    if storage.is_null() {
+    let Some(storage) = crate::reserve_handle() else {
         return FEATURE_FAILED;
-    }
+    };
     match create_texture(context, width, height, format) {
         Ok(texture) => {
-            unsafe {
-                storage.cast::<Texture>().write(texture);
-                out.write(storage.cast());
-            }
+            unsafe { out.write(Box::into_raw(Box::write(storage, texture))) };
             OK
         }
-        Err(result) => {
-            unsafe { drop(Box::from_raw(storage)) };
-            result
-        }
+        Err(result) => result,
     }
 }
 
@@ -861,8 +875,11 @@ unsafe extern "C" fn rsf_gl_texture_destroy(texture: *mut Texture) {
     {
         return;
     }
-    if let Phase::Unsignalled(handoff) = &mut state.phase {
-        handoff.batch.forget(value.texture);
+    match &mut state.phase {
+        Phase::Unsignalled(handoff) | Phase::AwaitingAcquire { handoff, .. } => {
+            handoff.batch.forget(value.texture);
+        }
+        _ => {}
     }
     drop(state);
     let l = owner.leaves;

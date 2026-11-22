@@ -2,7 +2,6 @@
 
 | Component | Purpose | Status |
 | --- | --- | --- |
-| `rsf-upscaler` | Rust quality, motion, and input-validation model | Unit-tested; no GPU calls |
 | `dlss` | C++ Streamline adapter behind `rescaleframe/dlss.h` | D3D11/D3D12 SR, DLSS-G and Reflex/PCL implemented; recorded live AC7/Unity paths |
 | `fsr` | FFX DX12 SR provider with explicit FSR2/FSR3/FSR4 version selection | FSR2/3/4 SR device evidence including guarded FSR4 INT8; FSR3/4 FG implemented with 2x maximum, exact hardware support queried |
 | `xess` | XeSS-SR DX12 provider | DX12 SR and XeSS FG/XeLL implemented; native D3D11 SR unavailable; queried MFG limits |
@@ -24,12 +23,6 @@ The native AC7 path decodes sparse velocity and resolves a dense motion field us
 independent object coverage are documented in [motion research](../../docs/research/ac7-motion-depth-20261004.md).
 Earlier Streamline-only camera reconstruction below belongs to the diagnostic/compatibility path.
 Camera reprojection cannot supply missing independent object motion.
-
-The Rust model defines motion-to-pixel and jitter conversions, plus an eight-sample base jitter sequence scaled by the output/input area ratio. The live C/C++ path does not use all those conversions. Reconciling their units, signs, and jitter treatment is an open [motion task](../../docs/implementation.md#ac7-motion-and-velocity-improvements).
-
-```bash
-cargo test -p rsf-upscaler --locked
-```
 
 ## Streamline DLSS
 

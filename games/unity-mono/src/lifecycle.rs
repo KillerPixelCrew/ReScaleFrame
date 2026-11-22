@@ -4,9 +4,12 @@
 //! helper are prepared, activated, drained and released.
 use crate::mono;
 use crate::plugin_abi::{rsf_unity_native_api, rsf_unity_plugin_platform};
+#[cfg(test)]
+use rsf_game_sys::RSF_GAME_ABI_VERSION;
+use rsf_game_sys::call_header::validate;
 use rsf_game_sys::{
-    RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_prepare_args, rsf_game_renderer_status,
-    rsf_game_start_args, rsf_result,
+    rsf_game_control_args, rsf_game_prepare_args, rsf_game_renderer_status, rsf_game_start_args,
+    rsf_result,
 };
 use std::ffi::CStr;
 use std::ptr;
@@ -111,18 +114,6 @@ fn lock() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// A host structure must be at least as long as this plugin's version and carry its ABI.
-unsafe fn validate<T>(value: *const T) -> Result<(), rsf_result> {
-    let header = value.cast::<u32>();
-    if value.is_null() || unsafe { header.read() } < size_of::<T>() as u32 {
-        return Err(INVALID_ARGUMENT);
-    }
-    if unsafe { header.add(1).read() } != RSF_GAME_ABI_VERSION {
-        return Err(ABI_MISMATCH);
-    }
-    Ok(())
-}
-
 /// ReScaleFrame.Unity.Managed.dll beside this plugin, as UTF-8.
 fn helper_path() -> Option<String> {
     let mut module: HMODULE = ptr::null_mut();
@@ -150,12 +141,14 @@ pub(crate) fn sibling(path: &str, leaf: &str) -> Option<String> {
 }
 
 pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {
-    if let Err(error) = unsafe { validate(args) } {
-        return error;
+    let valid = unsafe { validate(args) };
+    if valid != OK {
+        return valid;
     }
     let host = unsafe { (*args).host };
-    if let Err(error) = unsafe { validate(host) } {
-        return error;
+    let valid = unsafe { validate(host) };
+    if valid != OK {
+        return valid;
     }
     let host_services = unsafe { &*host };
     if host_services.session_id == 0 {
@@ -190,8 +183,9 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
 }
 
 pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_result {
-    if let Err(error) = unsafe { validate(args) } {
-        return error;
+    let valid = unsafe { validate(args) };
+    if valid != OK {
+        return valid;
     }
     let mut state = lock();
     let Some(bridge) = PLATFORM.get().filter(|_| state.prepared) else {
@@ -204,8 +198,9 @@ pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_r
 }
 
 pub(crate) unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> rsf_result {
-    if let Err(error) = unsafe { validate(args) } {
-        return error;
+    let valid = unsafe { validate(args) };
+    if valid != OK {
+        return valid;
     }
     let mut state = lock();
     if let Some(bridge) = PLATFORM.get() {
@@ -217,8 +212,9 @@ pub(crate) unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> r
 }
 
 pub(crate) unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_result {
-    if let Err(error) = unsafe { validate(args) } {
-        return error;
+    let valid = unsafe { validate(args) };
+    if valid != OK {
+        return valid;
     }
     let mut state = lock();
     if state.running {
@@ -237,8 +233,9 @@ pub(crate) unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_
 }
 
 pub(crate) unsafe extern "C" fn status(out: *mut rsf_game_renderer_status) -> rsf_result {
-    if let Err(error) = unsafe { validate(out) } {
-        return error;
+    let valid = unsafe { validate(out) };
+    if valid != OK {
+        return valid;
     }
     let state = lock();
     let stage = PLATFORM
@@ -280,15 +277,15 @@ mod tests {
             struct_size: size_of::<rsf_game_start_args>() as u32 - 1,
             abi_version: RSF_GAME_ABI_VERSION,
         };
-        assert_eq!(unsafe { validate(&args) }, Err(INVALID_ARGUMENT));
+        assert_eq!(unsafe { validate(&args) }, INVALID_ARGUMENT);
         args.struct_size += 1;
         args.abi_version += 1;
-        assert_eq!(unsafe { validate(&args) }, Err(ABI_MISMATCH));
+        assert_eq!(unsafe { validate(&args) }, ABI_MISMATCH);
         args.abi_version -= 1;
-        assert_eq!(unsafe { validate(&args) }, Ok(()));
+        assert_eq!(unsafe { validate(&args) }, OK);
         assert_eq!(
             unsafe { validate(ptr::null::<rsf_game_start_args>()) },
-            Err(INVALID_ARGUMENT)
+            INVALID_ARGUMENT
         );
     }
 }

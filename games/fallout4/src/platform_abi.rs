@@ -9,6 +9,8 @@ pub const RSF_D3D11_HOST_ABI_VERSION: u32 = 8;
 pub const RSF_D3D11_HOST_CAP_FG_INPUTS: u32 = 1;
 pub const RSF_D3D11_HOST_CAP_INPUT_TIMELINE: u32 = 2;
 pub const RSF_D3D11_HOST_CAP_RENDERED_SOURCE: u32 = 4;
+pub const RSF_D3D11_HOST_DEPTH_FINITE: u32 = 0;
+pub const RSF_D3D11_HOST_DEPTH_INFINITE: u32 = 1;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_motion_decode_params {
@@ -83,10 +85,11 @@ pub struct rsf_d3d11_host_setup {
     pub presentation_user: *mut ::core::ffi::c_void,
     pub capabilities: u32,
     pub colour_transport_default: u32,
+    pub depth_far_plane: u32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_d3d11_host_setup"][::core::mem::size_of::<rsf_d3d11_host_setup>() - 160usize];
+    ["Size of rsf_d3d11_host_setup"][::core::mem::size_of::<rsf_d3d11_host_setup>() - 168usize];
     ["Alignment of rsf_d3d11_host_setup"][::core::mem::align_of::<rsf_d3d11_host_setup>() - 8usize];
     ["Offset of field: rsf_d3d11_host_setup::struct_size"]
         [::core::mem::offset_of!(rsf_d3d11_host_setup, struct_size) - 0usize];
@@ -126,6 +129,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_d3d11_host_setup, capabilities) - 152usize];
     ["Offset of field: rsf_d3d11_host_setup::colour_transport_default"]
         [::core::mem::offset_of!(rsf_d3d11_host_setup, colour_transport_default) - 156usize];
+    ["Offset of field: rsf_d3d11_host_setup::depth_far_plane"]
+        [::core::mem::offset_of!(rsf_d3d11_host_setup, depth_far_plane) - 160usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]

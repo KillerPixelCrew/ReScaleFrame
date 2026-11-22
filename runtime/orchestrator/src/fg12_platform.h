@@ -3,6 +3,7 @@
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/input_dump.h>
+#include "../../backends/common/d3d12_readback_layout.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,10 +26,6 @@ void rsf_fg12_platform_transition(void* list, void* resource, uint32_t before, u
 void* rsf_fg12_platform_fence(void* queue);
 int rsf_fg12_platform_signal(void* queue, void* fence, uint64_t value);
 
-typedef struct rsf_fg12_readback_layout {
-    uint64_t bytes, offset;
-    uint32_t width, height, format, row_pitch;
-} rsf_fg12_readback_layout;
 void* rsf_fg12_platform_readback(void* source, rsf_fg12_readback_layout*);
 void rsf_fg12_platform_readback_copy(void* list, void* source, uint32_t state, void* buffer, const rsf_fg12_readback_layout*);
 const uint8_t* rsf_fg12_platform_map(void* buffer, uint64_t bytes);
@@ -83,7 +80,6 @@ typedef struct rsf_fg12_calls {
     void (*latency_graphics)(uint32_t);
     void (*latency_render)(uint64_t, uint32_t);
     void (*latency_present)(uint64_t, void*, uint32_t);
-    void (*latency_retire)(uint64_t, uint64_t);
     void (*latency_end_session)(uint64_t);
     int (*cpu_dispatch)(const rsf_game_cpu_event*, rsf_game_cpu_event_fn, void*);
     void (*dump_poll)(void);

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "auxiliary_sr.h"
 #include "auxiliary_sr_platform.h"
-#include "../../graphics/src/depth_scale_private.h"
 #include <rescaleframe/shader_compile.h>
 #include <wrl/client.h>
 #include <cstddef>
@@ -168,17 +167,11 @@ void draw(void* raw_context, const rsf_aux_colour_pipeline* pipeline, void* raw_
     context->Draw(3, 0);
 }
 
-int32_t depth_reserve(rsf_depth_scale* depth, void* texture)
-{
-    return rsf_depth_scale_reserve(depth, static_cast<ID3D11Texture2D*>(texture));
-}
-
 constexpr rsf_aux_platform platform{
     immediate_device, device_ready, describe_texture, packed_colour_support, create_pipeline, create_texture,
     rsf_d3d11_create_shader_view, create_output_view, rsf_d3d11_state_save, rsf_d3d11_state_restore,
-    clear, rsf_d3d11_copy_resource, draw, rsf_depth_scale_create, depth_reserve, rsf_depth_scale_prepare,
-    rsf_depth_scale_redraw, rsf_depth_scale_commit, rsf_depth_scale_restore, rsf_depth_scale_discard,
-    rsf_depth_scale_destroy
+    clear, rsf_d3d11_copy_resource, draw,
+
 };
 }
 

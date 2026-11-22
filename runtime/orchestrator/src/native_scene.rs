@@ -3,6 +3,7 @@ use crate::scene_abi::{
     RSF_NATIVE_SCENE_PRESENT_DIRECT, RSF_NATIVE_SCENE_PRESENT_NONE,
     RSF_NATIVE_SCENE_PRESENT_SAMPLED, rsf_native_scene_identity as Scene,
 };
+use crate::sr_session::has_capacity;
 use rsf_game_sys::{
     RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY,
     RSF_GAME_RENDER_TEXTURE_BINDING, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass as Pass,
@@ -22,10 +23,6 @@ thread_local! {
 type ResourceIdentity = unsafe extern "C" fn(*mut c_void) -> u64;
 type BackbufferIdentity = unsafe extern "C" fn(*mut c_void, *mut u32, *mut u32) -> u64;
 
-unsafe fn full_prefix<T>(value: *const T) -> bool {
-    !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
-}
-
 fn slot(source: u64) -> usize {
     (source % CAPACITY as u64) as usize
 }
@@ -40,7 +37,7 @@ unsafe extern "C" fn rsf_core_native_scene_pass(
     begin: u32,
     identity: ResourceIdentity,
 ) -> i32 {
-    if !unsafe { full_prefix(pass) } {
+    if !unsafe { has_capacity(pass) } {
         return 0;
     }
     let pass = unsafe { &*pass };
@@ -113,7 +110,7 @@ unsafe extern "C" fn rsf_core_native_scene_texture_binding(
     pass: *const Pass,
     identity: ResourceIdentity,
 ) -> i32 {
-    if !unsafe { full_prefix(pass) } {
+    if !unsafe { has_capacity(pass) } {
         return 0;
     }
     let pass = unsafe { &*pass };
@@ -172,7 +169,7 @@ pub(super) unsafe extern "C" fn rsf_native_scene_for_window(
     window: *const Pass,
     out: *mut Scene,
 ) -> i32 {
-    if !unsafe { full_prefix(window) && full_prefix(out) } {
+    if !unsafe { has_capacity(window) && has_capacity(out) } {
         return 0;
     }
     let Some(scene) = find_window(unsafe { &*window }) else {
@@ -187,7 +184,7 @@ unsafe extern "C" fn rsf_core_native_scene_present_path(
     window: *const Pass,
     backbuffer: BackbufferIdentity,
 ) -> u32 {
-    if !unsafe { full_prefix(window) } {
+    if !unsafe { has_capacity(window) } {
         return RSF_NATIVE_SCENE_PRESENT_NONE;
     }
     let window = unsafe { &*window };

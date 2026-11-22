@@ -48,8 +48,8 @@ admission, the `[RDR2]` configuration gates read under the loader lock, the Forc
 write, the D3D12 trace guard and the order in which the startup owners are armed, and
 `engine_settings.rs` owns the settings-collection carrier, refresh-rate storage and the
 ScriptHook quality request. Rust owns the Win32 startup leaves, ASI and research-attach
-workers, and settings probe. `src/asi_entry.cpp` supplies DXGI adapter discovery and native
-capture and diagnostic callbacks through `asi_platform.h`. `runtime_setup.h` declares the
+workers, settings probe, DXGI adapter discovery and diagnostic adapters. `src/asi_entry.c`
+binds the linked capture and diagnostic services through `asi_platform.h`. `runtime_setup.h` declares the
 C bridge also used by the Unity D3D12 fixture. The engine-settings vector suite lives in
 `src/engine_settings/tests.rs`.
 [The ASI note](../../docs/research/rust-rdr2-asi.md) records that slice.

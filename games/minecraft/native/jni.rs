@@ -4,12 +4,14 @@
 use crate::frame::{self, Configuration};
 use crate::observer;
 use crate::platform_abi::{
-    rsf_gl_pipeline, rsf_gl_pipeline_abort, rsf_gl_pipeline_close, rsf_gl_pipeline_configure,
-    rsf_gl_pipeline_cpu, rsf_gl_pipeline_evaluate, rsf_gl_pipeline_get_surfaces,
-    rsf_gl_pipeline_hudless, rsf_gl_pipeline_input, rsf_gl_pipeline_open, rsf_gl_pipeline_present,
-    rsf_gl_pipeline_setup, rsf_gl_pipeline_status, rsf_gl_pipeline_status_get,
-    rsf_gl_pipeline_surfaces, rsf_gl_window_create, rsf_gl_window_destroy,
-    rsf_input_dump_configure, rsf_native_latency_status, rsf_native_latency_status_get,
+    rsf_gl_pipeline, rsf_gl_pipeline_abort, rsf_gl_pipeline_close, rsf_gl_pipeline_configure_legacy,
+    rsf_gl_pipeline_configure_settings, rsf_gl_pipeline_cpu, rsf_gl_pipeline_evaluate,
+    rsf_gl_pipeline_get_surfaces, rsf_gl_pipeline_hudless, rsf_gl_pipeline_input,
+    rsf_gl_pipeline_open, rsf_gl_pipeline_present, rsf_gl_pipeline_settings_open,
+    rsf_gl_pipeline_settings_revision, rsf_gl_pipeline_setup, rsf_gl_pipeline_status,
+    rsf_gl_pipeline_status_get, rsf_gl_pipeline_surfaces, rsf_gl_window_create,
+    rsf_gl_window_destroy, rsf_input_dump_configure, rsf_native_latency_status,
+    rsf_native_latency_status_get,
 };
 use crate::runtime_directory;
 use crate::status::{STATUS_MINIMUM, status_values};
@@ -147,6 +149,9 @@ unsafe extern "system" fn open(
     let result = unsafe { rsf_gl_pipeline_open(&setup, &mut pipeline) };
     if result != OK {
         write_log(format!("Minecraft native open failed: {result}").as_bytes());
+        if !pipeline.is_null() && unsafe { rsf_gl_pipeline_close(pipeline) } == OK {
+            pipeline = null_mut();
+        }
     }
     INPUT_PIPELINE.store(pipeline, SeqCst);
     pipeline as usize as jlong
@@ -162,6 +167,62 @@ fn surfaces(pipeline: *mut rsf_gl_pipeline) -> Result<rsf_gl_pipeline_surfaces, 
         return Err(result);
     }
     Ok(data)
+}
+
+unsafe fn configuration(
+    env: *mut JNIEnv,
+    [sr, quality, preset, fg, count, reflex, limit]: [jint; 7],
+    debug: jboolean,
+    sharpening: jfloatArray,
+) -> Option<Configuration> {
+    let api = unsafe { interface(env) };
+    let mut configuration = Configuration {
+        sr,
+        quality,
+        preset,
+        fg,
+        count,
+        reflex,
+        limit,
+        debug: debug != 0,
+        sharpening: [0.0; frame::SHARPENING_FIELDS],
+    };
+    let length = configuration.sharpening.len() as jint;
+    if sharpening.is_null() || unsafe { (api.GetArrayLength.unwrap())(env, sharpening) } != length {
+        return None;
+    }
+    unsafe {
+        (api.GetFloatArrayRegion.unwrap())(
+            env,
+            sharpening,
+            0,
+            length,
+            configuration.sharpening.as_mut_ptr(),
+        );
+        if (api.ExceptionCheck.unwrap())(env) != 0 {
+            return None;
+        }
+    }
+    Some(configuration)
+}
+
+unsafe fn configured_surfaces(
+    env: *mut JNIEnv,
+    pipeline: *mut rsf_gl_pipeline,
+    width: jint,
+    height: jint,
+) -> jintArray {
+    let api = unsafe { interface(env) };
+    let Ok(current) = surfaces(pipeline) else {
+        return null_mut();
+    };
+    let values = frame::surface_values(&current, width, height);
+    let count = values.len() as jint;
+    let array = unsafe { (api.NewIntArray.unwrap())(env, count) };
+    if !array.is_null() {
+        unsafe { (api.SetIntArrayRegion.unwrap())(env, array, 0, count, values.as_ptr()) };
+    }
+    array
 }
 
 #[unsafe(export_name = "Java_org_kpc_rescaleframecraft_render_NativeBridge_configure")]
@@ -181,49 +242,96 @@ unsafe extern "system" fn configure(
     debug: jboolean,
     sharpening: jfloatArray,
 ) -> jintArray {
-    let api = unsafe { interface(env) };
-    let mut configuration = Configuration {
-        sr,
-        quality,
-        preset,
-        fg,
-        count,
-        reflex,
-        limit,
-        debug: debug != 0,
-        sharpening: [0.0; frame::SHARPENING_FIELDS],
-    };
-    let length = configuration.sharpening.len() as jint;
-    if sharpening.is_null() || unsafe { (api.GetArrayLength.unwrap())(env, sharpening) } != length {
+    let Some(configuration) =
+        (unsafe { configuration(env, [sr, quality, preset, fg, count, reflex, limit], debug, sharpening) })
+    else {
         return null_mut();
-    }
-    unsafe {
-        (api.GetFloatArrayRegion.unwrap())(
-            env,
-            sharpening,
-            0,
-            length,
-            configuration.sharpening.as_mut_ptr(),
-        );
-        if (api.ExceptionCheck.unwrap())(env) != 0 {
-            return null_mut();
-        }
-    }
+    };
     let pipeline = pipeline(handle);
     let options = frame::options(&configuration);
-    if unsafe { rsf_gl_pipeline_configure(pipeline, &options, width as u32, height as u32) } != OK {
-        return null_mut();
-    }
-    let Ok(current) = surfaces(pipeline) else {
-        return null_mut();
+    let result = unsafe {
+        rsf_gl_pipeline_configure_legacy(
+            pipeline,
+            &options,
+            configuration.limit.max(0) as u32,
+            width as u32,
+            height as u32,
+        )
     };
-    let values = frame::surface_values(&current, width, height);
-    let count = values.len() as jint;
-    let array = unsafe { (api.NewIntArray.unwrap())(env, count) };
-    if !array.is_null() {
-        unsafe { (api.SetIntArrayRegion.unwrap())(env, array, 0, count, values.as_ptr()) };
+    if result != OK {
+        return null_mut();
     }
-    array
+    unsafe { configured_surfaces(env, pipeline, width, height) }
+}
+
+#[unsafe(export_name = "Java_org_kpc_rescaleframecraft_render_NativeBridge_openSettings")]
+unsafe extern "system" fn open_settings(
+    env: *mut JNIEnv,
+    _: jclass,
+    handle: jlong,
+    path: jstring,
+    sr: jint,
+    quality: jint,
+    preset: jint,
+    fg: jint,
+    count: jint,
+    reflex: jint,
+    limit: jint,
+    debug: jboolean,
+    sharpening: jfloatArray,
+) -> jint {
+    let Some(configuration) =
+        (unsafe { configuration(env, [sr, quality, preset, fg, count, reflex, limit], debug, sharpening) })
+    else {
+        return -1;
+    };
+    if path.is_null() {
+        return -1;
+    }
+    let api = unsafe { interface(env) };
+    let length = unsafe { (api.GetStringLength.unwrap())(env, path) };
+    let chars = unsafe { (api.GetStringChars.unwrap())(env, path, null_mut()) };
+    if chars.is_null() {
+        return -1;
+    }
+    let mut settings = unsafe { std::slice::from_raw_parts(chars, length as usize) }.to_vec();
+    unsafe { (api.ReleaseStringChars.unwrap())(env, path, chars) };
+    if settings.contains(&0) {
+        return -1;
+    }
+    settings.push(0);
+    let section: Vec<u16> = "Render".encode_utf16().chain([0]).collect();
+    let options = frame::options(&configuration);
+    unsafe {
+        rsf_gl_pipeline_settings_open(
+            pipeline(handle),
+            settings.as_ptr(),
+            section.as_ptr(),
+            CAPTURE_GAME.as_ptr(),
+            &options,
+            configuration.limit.max(0) as u32,
+        )
+    }
+}
+
+#[unsafe(export_name = "Java_org_kpc_rescaleframecraft_render_NativeBridge_settingsRevision")]
+unsafe extern "system" fn settings_revision(_: *mut JNIEnv, _: jclass, handle: jlong) -> jlong {
+    unsafe { rsf_gl_pipeline_settings_revision(pipeline(handle)) as jlong }
+}
+
+#[unsafe(export_name = "Java_org_kpc_rescaleframecraft_render_NativeBridge_configureSettings")]
+unsafe extern "system" fn configure_settings(
+    env: *mut JNIEnv,
+    _: jclass,
+    handle: jlong,
+    width: jint,
+    height: jint,
+) -> jintArray {
+    let pipeline = pipeline(handle);
+    if unsafe { rsf_gl_pipeline_configure_settings(pipeline, width as u32, height as u32) } != OK {
+        return null_mut();
+    }
+    unsafe { configured_surfaces(env, pipeline, width, height) }
 }
 
 #[unsafe(export_name = "Java_org_kpc_rescaleframecraft_render_NativeBridge_cpu")]

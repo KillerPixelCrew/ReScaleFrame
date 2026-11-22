@@ -33,6 +33,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/callback_render_host_platform.cpp
     src/render_host_platform.cpp
     src/overlay_d3d12.cpp
+    src/overlay_platform.cpp
     src/overlay_native12.cpp
     src/native_regions.cpp
     src/fg_session_platform.cpp
@@ -80,7 +81,6 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND
    ((EXISTS "${RSF_XESS_VK_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xell/xell_d3d12.h") OR
     EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h" OR
     (EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../upscalers/include/ffx_upscale.h")))
-    target_sources(rsf_native_vulkan PRIVATE src/native_fg_dx12_vulkan.cpp)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
     target_link_libraries(rsf_native_vulkan PRIVATE d3d12 dxgi)
 endif()
@@ -160,8 +160,7 @@ target_link_libraries(rsf_orchestrator PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,rsf
 target_link_libraries(rsf_orchestrator PRIVATE rsf_build_options)
 set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runtime")
 target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.cpp)
-target_sources(rsf_orchestrator PRIVATE src/overlay_platform.cpp)
-target_sources(rsf_orchestrator PRIVATE src/d3d11_host.cpp)
+target_sources(rsf_orchestrator PRIVATE src/d3d11_host.cpp src/d3d11_host_exports.c)
 target_sources(rsf_orchestrator PRIVATE src/auxiliary_sr.cpp)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_sr_api.cpp)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_fg_api.cpp)

@@ -3,6 +3,13 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
+pub const RSF_AC7_DRAW_SCENE: u32 = 0;
+pub const RSF_AC7_DRAW_UI_SLATE: u32 = 1;
+pub const RSF_AC7_DRAW_UI_WIDGET_QUAD: u32 = 2;
+pub const RSF_AC7_DRAW_UI_MODULATE: u32 = 3;
+pub const RSF_AC7_DRAW_WIDGET_RASTER: u32 = 4;
+pub const RSF_AC7_DRAW_UNKNOWN: u32 = 5;
+pub const RSF_AC7_DRAW_SKIP: u32 = 6;
 pub const RSF_AC7_BLEND_ZERO: u32 = 1;
 pub const RSF_AC7_BLEND_ONE: u32 = 2;
 pub const RSF_AC7_BLEND_SRC_COLOR: u32 = 3;
@@ -16,6 +23,10 @@ pub const RSF_AC7_FORMAT_B8G8R8A8_UNORM: u32 = 87;
 pub const RSF_AC7_FORMAT_B8G8R8A8_UNORM_SRGB: u32 = 91;
 pub const RSF_AC7_UI_MAX_INPUTS: u32 = 16;
 pub const RSF_AC7_UI_MAX_LAYOUT_ELEMENTS: u32 = 16;
+pub const RSF_AC7_LAYOUT_OTHER: u32 = 0;
+pub const RSF_AC7_LAYOUT_SLATE: u32 = 1;
+pub const RSF_AC7_LAYOUT_SLATE_INSTANCED: u32 = 2;
+pub const RSF_AC7_LAYOUT_CANVAS: u32 = 3;
 pub type rsf_ac7_draw_class = u32;
 pub type rsf_ac7_layout_kind = u32;
 #[repr(C)]

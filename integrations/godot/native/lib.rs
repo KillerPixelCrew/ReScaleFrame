@@ -10,10 +10,9 @@
 //! `runtime.cpp` and `vulkan.cpp` forward to these entry points and lend their leaves through
 //! `rsf_godot_platform` (`godot_platform.h`, mirrored in `platform.rs`): the D3D12 device, fence,
 //! SR context, FG, presentation and capture calls, DXGI, Win32 window calls, the linked Runtime
-//! and the Vulkan owner's guard, device, provider, presenter and SDK calls. `vulkan_creation.cpp`
-//! lends its Vulkan-typed creation leaves with each creation call (`rsf_godot_vk_creation_leaves`),
-//! and `effect.cpp` its godot-cpp leaves with each compositor callback (`rsf_godot_effect_leaves`).
-//! No second Runtime is
+//! and the Vulkan owner's guard, device, provider, presenter and SDK calls. Rust uses generated
+//! Vulkan layouts for device negotiation. `effect.cpp` lends godot-cpp leaves with each
+//! compositor callback. No second Runtime is
 //! loaded and no vendor, pacing or presentation policy is added here.
 mod control;
 mod d3d12;
@@ -27,17 +26,14 @@ use control::Control;
 use effect::Effect;
 use platform::{
     ABI_VERSION, EFFECT_VERSION, EffectLeaves, EffectStatus, EngineServices, OptionField,
-    OptionValue, Platform, SETTINGS_ABI_VERSION, Settings, Setup, Status, VkCreationLeaves,
-    VkDeviceCall, VkFunction, VkInstanceCall, VkPresentFacts, VkProc, VkSrPass, VkView,
+    OptionValue, Platform, SETTINGS_ABI_VERSION, Settings, Setup, Status, VkFunction,
+    VkPresentFacts, VkProc, VkSrPass, VkView,
 };
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::sync::{LazyLock, OnceLock};
+use std::sync::LazyLock;
 
 static CONTROL: LazyLock<Control> = LazyLock::new(Control::new);
-
-/// `VK_ERROR_INITIALIZATION_FAILED`, for a creation call without its table or record.
-const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
 
 /// # Safety
 /// A non-null record has a readable size word. When the size covers T, its version word is
@@ -377,33 +373,20 @@ extern "C" fn rsf_godot_vk_sr_context() -> *mut c_void {
     CONTROL.vulkan.sr_context()
 }
 
-// The Vulkan creation owner (vulkan/creation.rs), reached from vulkan_creation.cpp without the
-// guard: the start and stop leaves and the resolver's entry points on the engine's thread.
+use vulkan::creation::typed::{self, Requirements};
 
-struct CreationRoutes {
-    create_instance: VkFunction,
-    create_device: VkFunction,
-    destroy_device: VkFunction,
-}
-
-static CREATION_ROUTES: OnceLock<CreationRoutes> = OnceLock::new();
-
-/// The entries are the Vulkan-typed wrappers and live for the mapped module's lifetime.
+/// On supported builds the caller lends the linked Runtime requirements table.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_creation_begin(
+unsafe extern "C" fn rsf_godot_vk_creation_resolver(
     underlying: Option<VkProc>,
     xess: u32,
     log: rsf_game_log_fn,
     log_user: *mut c_void,
-    create_instance: VkFunction,
-    create_device: VkFunction,
-    destroy_device: VkFunction,
+    requirements: *const Requirements,
 ) -> Option<VkProc> {
-    let _ = CREATION_ROUTES.set(CreationRoutes {
-        create_instance,
-        create_device,
-        destroy_device,
-    });
+    if !unsafe { typed::bind_requirements(requirements) } {
+        return None;
+    }
     CONTROL
         .vulkan
         .creation()
@@ -426,19 +409,15 @@ unsafe extern "C" fn vk_device_proc(
 }
 
 unsafe fn vk_resolve(scope: u32, object: *mut c_void, name: *const c_char) -> Option<VkFunction> {
-    let entries = CREATION_ROUTES.get()?;
     let (route, forwarded) = unsafe { CONTROL.vulkan.creation().resolve(scope, object, name) };
     match route {
         platform::VK_ROUTE_FORWARD => forwarded,
-        platform::VK_ROUTE_CREATE_INSTANCE => Some(entries.create_instance),
-        platform::VK_ROUTE_CREATE_DEVICE => Some(entries.create_device),
-        platform::VK_ROUTE_DESTROY_DEVICE => Some(entries.destroy_device),
         platform::VK_ROUTE_DEVICE_PROC => {
             let proc: VkProc = vk_device_proc;
             // Vulkan's resolver returns a generic PFN_vkVoidFunction.
             Some(unsafe { std::mem::transmute::<VkProc, VkFunction>(proc) })
         }
-        _ => None,
+        _ => typed::entry(route),
     }
 }
 
@@ -447,61 +426,10 @@ extern "C" fn rsf_godot_vk_creation_stop() {
     CONTROL.vulkan.creation().stop();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_xess_ready() -> c_int {
-    CONTROL.vulkan.creation().xess_ready().into()
-}
-
 /// Read by `rsfg_vk_create` for the presenter host options.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_godot_vk_interop_ready() -> c_int {
     CONTROL.vulkan.creation().interop_ready().into()
-}
-
-/// # Safety
-/// `leaves` is null or the creation table; `call` is null or a readable
-/// `rsf_godot_vk_instance_call` whose record, request, allocator and output are live for the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_create_instance(
-    leaves: *const VkCreationLeaves,
-    call: *const VkInstanceCall,
-) -> i32 {
-    // SAFETY: the caller's guarantee.
-    match unsafe { (platform::creation_leaves(leaves), call.as_ref()) } {
-        (Some(leaves), Some(call)) => CONTROL.vulkan.creation().create_instance(leaves, call),
-        _ => VK_ERROR_INITIALIZATION_FAILED,
-    }
-}
-
-/// # Safety
-/// As `rsf_godot_vk_create_instance`, for an `rsf_godot_vk_device_call`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_create_device(
-    leaves: *const VkCreationLeaves,
-    call: *const VkDeviceCall,
-) -> i32 {
-    // SAFETY: the caller's guarantee.
-    match unsafe { (platform::creation_leaves(leaves), call.as_ref()) } {
-        (Some(leaves), Some(call)) => CONTROL.vulkan.creation().create_device(leaves, call),
-        _ => VK_ERROR_INITIALIZATION_FAILED,
-    }
-}
-
-/// # Safety
-/// `leaves` is null or the creation table; `device` and `allocator` are the engine's arguments.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_destroy_device(
-    leaves: *const VkCreationLeaves,
-    device: *mut c_void,
-    allocator: *const c_void,
-) {
-    // SAFETY: the caller's guarantee.
-    if let Some(leaves) = unsafe { platform::creation_leaves(leaves) } {
-        CONTROL
-            .vulkan
-            .creation()
-            .destroy_device(leaves, device, allocator);
-    }
 }
 
 // The input window owner (window.rs), called by the rsfg_* forwarders and the accept_window

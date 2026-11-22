@@ -16,7 +16,7 @@ const rsf_fsr4gvk_ops& operations() {
     static const rsf_fsr4gvk_ops value{
         RsfFsr4FgProbe, RsfFsr4FgCreate, RsfFsr4FgInfo, RsfFsr4FgStart,
         RsfFsr4FgPresent, RsfFsr4FgDrain, RsfFsr4FgPrepareDestroy, RsfFsr4FgDestroy,
-        interop_create, rsf_dx12gvk_interop, rsf_dx12gvk_graphics(),
+        interop_create, rsf_dx12gvk_interop, *rsf_dx12gvk_graphics(),
     };
     return value;
 }

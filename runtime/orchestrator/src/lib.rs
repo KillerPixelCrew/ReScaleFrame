@@ -6,7 +6,11 @@ mod auxiliary_sr;
 mod auxiliary_sr_abi;
 #[cfg(windows)]
 mod callback_host;
+mod capture_metadata;
 mod capture_names;
+mod capture_pixels;
+#[cfg(test)]
+mod capture_test_sink;
 #[cfg(windows)]
 mod colour_d3d11;
 #[cfg(windows)]
@@ -45,11 +49,15 @@ mod d3d11_output;
 #[cfg(windows)]
 mod d3d11_output_abi;
 #[cfg(windows)]
+mod d3d11_output_platform;
+#[cfg(windows)]
 mod d3d11_present;
 #[cfg(windows)]
 mod d3d11_present_abi;
 #[cfg(windows)]
 mod d3d11_sharpening;
+#[cfg(windows)]
+mod d3d11_sr_admission;
 #[cfg(windows)]
 mod d3d11_state;
 #[cfg(windows)]
@@ -96,9 +104,14 @@ mod dxbc_chunks;
 #[cfg(windows)]
 mod dxgi_format;
 #[cfg(windows)]
-mod mfg_state;
+mod graphics_d3d11;
 #[cfg(windows)]
-mod motion_d3d11;
+#[path = "../../../tests/graphics_fixture.rs"]
+mod graphics_fixture;
+#[cfg(windows)]
+mod graphics_pass_abi;
+#[cfg(windows)]
+mod mfg_state;
 #[cfg(windows)]
 mod motion_decode;
 #[cfg(windows)]
@@ -125,6 +138,7 @@ mod native_regions;
 mod native_reinsert;
 #[cfg(windows)]
 mod native_translucency;
+mod owned_handle;
 
 #[cfg(windows)]
 mod ffx_version;
@@ -296,6 +310,8 @@ mod ui_layer_abi;
 #[cfg(windows)]
 mod vulkan_antilag;
 #[cfg(windows)]
+mod vulkan_capture_commands;
+#[cfg(windows)]
 mod vulkan_dispatch;
 #[cfg(windows)]
 mod vulkan_dlss_fg;
@@ -375,6 +391,12 @@ fn allocate_handle<T>(value: T) -> *mut T {
         unsafe { raw.write(value) };
     }
     raw
+}
+
+#[cfg(windows)]
+fn reserve_handle<T>() -> Option<Box<std::mem::MaybeUninit<T>>> {
+    let storage = allocate_handle(std::mem::MaybeUninit::<T>::uninit());
+    (!storage.is_null()).then(|| unsafe { Box::from_raw(storage) })
 }
 
 // Adopt a returned Win32 handle. APIs use both null and -1 to report failure.

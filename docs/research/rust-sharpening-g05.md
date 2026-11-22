@@ -67,3 +67,65 @@ Verification was limited to source checks, formatting with Rust 1.94.1 and
 bindings regenerated with bindgen 0.72.1. Comparing the GPL files to the baseline
 showed the original shader and host constant-mapping content was preserved.
 Build, test, Clippy and device validation are user-owned.
+
+## Follow-up from `726c5e18`
+
+- `tests/engine_sharpening.cpp` was replaced by `tests/engine_sharpening.rs`.
+  CTest retains the Godot and Unity target gates, DLL paths and test name.
+  Bindgen supplies the two engine settings layouts and the Vulkan SR frame
+  assertions. The fixture still round-trips all five modes through the actual
+  DLL exports and verifies that rejected requests preserve the settings.
+- `runtime/graphics/src/sharpening/d3d12.cpp` was removed. The Rust host uses
+  typed D3D12 interfaces to create the root signature, pipelines, per-slot
+  descriptors and scratch texture, and to record and copy the result. The
+  output transitions from UAV to shader-read to copy destination and back to
+  UAV, and scratch returns to UAV. The engine still owns command submission
+  and slot retirement. Shader compilation calls the Rust G06 compiler with
+  the same source, entry, profile and flags. The GPL payload bridge only
+  returns the original HLSL text and packs the original constant layout.
+- `runtime/graphics/src/sharpening/d3d12_platform.h` is now a single-call C
+  contract with generated Rust layout assertions. The C++ lifetime facade in
+  `runtime/graphics/src/sharpening/d3d12.h` still serves the D3D12 host and
+  fixture.
+- `runtime/backends/common/sharpening.h` now declares the Rust FidelityFX
+  dispatch normalizer. Both Vulkan dispatch adapters write directly into the
+  SDK descriptor fields. Native D3D12 FFX calls the same Rust logic and the
+  settings fixture still inspects the real SDK descriptor when available.
+
+These conclusions come from source comparison, regenerated bindings and
+pinned formatting. The C++ shader payloads and GPL options header were
+compared against the follow-up baseline without differences. Compilation and
+fixture execution remain pending.
+
+## D3D11 and WARP follow-up from `4a531cda`
+
+- `runtime/graphics/src/sharpening/d3d11.cpp` was removed. The Rust pass
+  reuses the G04 compiler, constant buffer, view and compute dispatch helpers.
+  It preserves immediate-context admission, full state save and restoration,
+  explicit OM and CS UAV unbinding before SRV binding, and the scratch-to-output
+  copy. The scratch texture and UAV still enter the cache together. The
+  synthetic scratch regression retains refusal cleanup and same-key retry.
+- `runtime/graphics/src/sharpening/d3d11.h` is now a private C contract. The
+  DLSS pipeline supplies the same depth, near/far and motion facts and keeps
+  the pass handle with the pipeline. Bindgen generates the frame-facts record.
+  The derived GPL activation and constants remain in the native payload bridge.
+- `tests/sharpening.cpp` was replaced by `tests/sharpening.rs` and the shared
+  G04 C test entry. The existing CTest name, timeout and WARP skip code are
+  preserved. The Rust fixture exercises the actual pass and the original GPL
+  constant calculations, including the MAS ramp, all filter modes, the
+  missing-depth fallback, disabled dispatches, HDR and SDR color, clamp
+  behavior and alpha. CPU assertion failures are reported even when WARP is
+  unavailable.
+
+The independent commits replay in this order on `4a531cda`: `84aa8607`
+(`d1580012`), `bce8a510` (`797fd9a2`), and `098bc0a3` (`e5e7b151`).
+This keeps the engine fixture, D3D12 host and FidelityFX normalization
+independently reviewable before the D3D11 slice.
+
+Remaining G05 paths with implementation code are
+`runtime/graphics/src/sharpening/d3d12.h`,
+`runtime/graphics/src/sharpening/options.h` (GPL calculator),
+`runtime/orchestrator/src/sharpening_pass_options.h`,
+`runtime/orchestrator/src/sharpening_vulkan.h`,
+`tests/sharpening_d3d12.cpp`, `tests/sharpening_settings.cpp`,
+`tests/sharpening_vulkan.cpp` and `tests/sharpening_vulkan_cpu.cpp`.

@@ -153,7 +153,9 @@ typedef struct rsf_generation_setup {
 /* A versioned FG surface separate from the older draft vtable. Call on the presenting owner
    thread, except marker(), which may run at actual CPU event boundaries. Device/queue/window
    outlive the handle. Inputs and record metadata remain borrowed during prepare; GPU resources
-   are leased by the caller through both GPU and provider retirement. */
+   are leased by the caller through both GPU and provider retirement.
+   A failed create with a non-null session transfers a teardown-only handle. The caller
+   must retire it before creating a replacement. */
 typedef struct rsf_generation_provider {
     uint32_t struct_size;
     rsf_backend_result (*create)(const rsf_generation_setup*, void** session, void** present_chain);
@@ -167,6 +169,8 @@ typedef struct rsf_generation_provider {
     rsf_backend_result (*retirement)(void* session, rsf_fg_retirement* retirement);
     void (*destroy)(void* session);
     rsf_backend_result (*abort_frame)(void* session, uint64_t frame_id);
+    /* Optional. Failure retains the handle for retry; only OK consumes it. */
+    rsf_backend_result (*destroy_checked)(void* session);
 } rsf_generation_provider;
 
 const rsf_generation_provider* rsf_generation_dlss(void);

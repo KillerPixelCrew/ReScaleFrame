@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::{Capture, Image, ImageState, Pixels, RAW};
+use crate::capture_metadata::Quoted;
 use crate::render_abi::{rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
 use rsf_game_sys::{
-    RSF_FRAME_FLAG_AMBIGUOUS_ID, rsf_camera_frame, rsf_frame_record, rsf_game_render_pass,
+    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame, rsf_frame_record,
+    rsf_game_render_pass,
 };
 use std::fmt::{self, Display, Write};
 use std::fs;
@@ -67,24 +69,6 @@ pub(super) fn fill_missing(images: &mut Vec<Image>) {
                 ImageState::Unavailable,
             ));
         }
-    }
-}
-
-struct Quoted<'a>(&'a str);
-impl Display for Quoted<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_char('"')?;
-        for character in self.0.chars() {
-            match character {
-                '"' | '\\' => {
-                    f.write_char('\\')?;
-                    f.write_char(character)?;
-                }
-                '\u{0}'..='\u{1f}' => write!(f, "\\u{:04x}", u32::from(character))?,
-                _ => f.write_char(character)?,
-            }
-        }
-        f.write_char('"')
     }
 }
 
@@ -252,9 +236,6 @@ pub(super) fn manifest(capture: &Capture, game: &str, hash: &str, status: &str) 
         |id| id.view,
     );
     let generic = capture.record.is_some();
-    let ambiguous = capture
-        .record
-        .is_some_and(|record| record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID != 0);
     let mut object = Object::new();
     object.field("schema", 1);
     object.field("game", Quoted(game));
@@ -264,19 +245,29 @@ pub(super) fn manifest(capture: &Capture, game: &str, hash: &str, status: &str) 
     object.field("frame_id", frame_id);
     object.field(
         "source_frame_id",
-        Nullable((!ambiguous).then_some(frame_id)),
+        capture
+            .record
+            .as_ref()
+            .map_or(Nullable(Some(frame_id)), source_frame),
     );
     object.field("session_id", capture.session());
     object.field(
         "native_frame",
-        Nullable(capture.identity.map(|id| id.native)),
+        Nullable(capture.identity.map(|id| id.native).or_else(|| {
+            capture
+                .record
+                .as_ref()
+                .filter(|record| source_frame(record).0.is_none())
+                .map(|record| record.frame_id)
+        })),
     );
     object.field("view_key", view);
     object.field("family_key", native.family);
     object.field("scope_id", native.scope);
     object.field("viewport_key", native.viewport);
     object.field("backend", capture.backend);
-    object.field("sr_result", capture.sr_result);
+    object.field("sr_result", Nullable(capture.sr_result));
+    object.field("fg_result", Nullable(capture.fg_result));
     object.field(
         "matched_present",
         capture.window.is_some() || capture.present_result.is_some(),
@@ -335,26 +326,36 @@ fn camera(object: &mut Object, camera: &rsf_camera_frame, include_fov: bool) {
     object.field("motion_jittered", camera.motion_jittered);
 }
 
-pub(super) fn frame(bundle: &Path, record: &rsf_frame_record, backend: u32) -> io::Result<()> {
-    let mut object = Object::new();
+pub(super) fn camera_available(camera: &rsf_camera_frame) -> bool {
+    camera.struct_size as usize >= size_of::<rsf_camera_frame>()
+        && camera.abi_version == RSF_GAME_CAMERA_ABI_VERSION
+}
+
+fn source_frame(record: &rsf_frame_record) -> Nullable<u64> {
+    Nullable((record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID == 0).then_some(record.frame_id))
+}
+
+fn record_identity(object: &mut Object, record: &rsf_frame_record) {
     object.field("session_id", record.session_id);
     object.field("frame_id", record.frame_id);
-    object.field(
-        "source_frame_id",
-        Nullable((record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID == 0).then_some(record.frame_id)),
-    );
+    object.field("source_frame_id", source_frame(record));
     object.field("view_id", record.view_id);
     object.field("resource_generation", record.resource_generation);
+}
+
+pub(super) fn frame(bundle: &Path, record: &rsf_frame_record, backend: u32) -> io::Result<()> {
+    let mut object = Object::new();
+    record_identity(&mut object, record);
     object.field("flags", record.flags);
     object.field("screen", record.screen);
     object.field("backend", backend);
-    object.field(
-        "camera_available",
-        record.camera.struct_size as usize >= size_of::<rsf_camera_frame>(),
-    );
+    let has_camera = camera_available(&record.camera);
+    object.field("camera_available", has_camera);
     dimensions(&mut object, record);
     object.field("frame_time_ms", Float(record.frame_time_ms));
-    camera(&mut object, &record.camera, false);
+    if has_camera {
+        camera(&mut object, &record.camera, false);
+    }
     object.save(bundle, "frame.json")
 }
 
@@ -421,9 +422,7 @@ pub(super) fn result(
     result: i32,
 ) -> io::Result<()> {
     let mut object = Object::new();
-    object.field("session_id", record.session_id);
-    object.field("source_frame_id", record.frame_id);
-    object.field("view_id", record.view_id);
+    record_identity(&mut object, record);
     object.field("backend", backend);
     object.field("result", result);
     object.save(bundle, &format!("{stage}_status.json"))
@@ -437,7 +436,7 @@ pub(super) fn sr_parameters(
     input_sdr: u32,
 ) -> io::Result<()> {
     let mut object = Object::new();
-    object.field("source_frame_id", record.frame_id);
+    record_identity(&mut object, record);
     object.field("backend", backend);
     object.field("input_sdr", input_sdr);
     object.field("reset", frame.reset);
@@ -511,10 +510,8 @@ pub(super) fn fg_constants(
     result: i32,
 ) -> io::Result<()> {
     let mut object = Object::new();
-    object.field("source_frame_id", record.frame_id);
-    object.field("session_id", record.session_id);
+    record_identity(&mut object, record);
     object.field("prepare_result", result);
-    object.field("resource_generation", record.resource_generation);
     object.field("flags", record.flags);
     object.field("screen", record.screen);
     object.field("input_qpc", record.input_qpc);

@@ -13,44 +13,16 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdarg>
-#include <cstring>
 #include <cstddef>
+#include <cwchar>
 #include <memory>
 #include <iterator>
 #include <mutex>
 #include <new>
-#include <optional>
 
 namespace {
 using Microsoft::WRL::ComPtr;
 using Pipeline = rsf_rdr2_capture_pipeline;
-constexpr rsf_rdr2_capture_gpu_ops gpu_ops{
-    [](void* object) noexcept { static_cast<IUnknown*>(object)->AddRef(); },
-    [](void* object) noexcept { static_cast<IUnknown*>(object)->Release(); },
-    [](void* pointer) noexcept -> void* {
-        auto* queue = static_cast<ID3D12CommandQueue*>(pointer);
-        ComPtr<ID3D12Device> device;
-        ComPtr<ID3D12Fence> fence;
-        if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))) ||
-            FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return nullptr;
-        return fence.Detach();
-    },
-    [](void* queue, void* fence, uint64_t value) noexcept {
-        return SUCCEEDED(static_cast<ID3D12CommandQueue*>(queue)->Signal(static_cast<ID3D12Fence*>(fence), value));
-    },
-    [](void* swapchain, uint32_t index) noexcept -> void* {
-        ComPtr<ID3D12Resource> buffer;
-        if (FAILED(static_cast<IDXGISwapChain*>(swapchain)->GetBuffer(index, IID_PPV_ARGS(&buffer)))) return nullptr;
-        return buffer.Detach();
-    },
-};
-Pipeline blend_facts(const D3D12_RENDER_TARGET_BLEND_DESC& b) noexcept
-{
-    return {0, 0, b.BlendEnable, static_cast<uint32_t>(b.SrcBlend), static_cast<uint32_t>(b.DestBlend),
-        static_cast<uint32_t>(b.BlendOp), static_cast<uint32_t>(b.SrcBlendAlpha),
-        static_cast<uint32_t>(b.DestBlendAlpha), static_cast<uint32_t>(b.BlendOpAlpha), b.RenderTargetWriteMask};
-}
-constexpr auto unknown_state = static_cast<D3D12_RESOURCE_STATES>(~0u);
 using DrawEvent = rsf_rdr2_capture_draw;
 thread_local bool recording_copy{};
 thread_local bool drawing{};
@@ -89,18 +61,13 @@ void log(const char* format, ...) noexcept
     va_list args; va_start(args, format); vfprintf(f, format, args); va_end(args);
     fputc('\n', f); fclose(f);
 }
-std::optional<Pipeline> hash_pipeline(const D3D12_SHADER_BYTECODE& ps, const D3D12_SHADER_BYTECODE& vs,
-    Pipeline pipeline) noexcept
+using PipelineFacts = bool (*)(const void*, Pipeline*);
+void remember_pipeline(void* result, const void* descriptor, PipelineFacts read)
 {
-    if (!rsf_rdr2_capture_hash_shader(static_cast<const uint8_t*>(ps.pShaderBytecode), ps.BytecodeLength, &pipeline.ps) ||
-        !rsf_rdr2_capture_hash_shader(static_cast<const uint8_t*>(vs.pShaderBytecode), vs.BytecodeLength, &pipeline.vs))
-        return std::nullopt;
-    return pipeline;
-}
-void remember_pipeline(void* result, const std::optional<Pipeline>& facts)
-{
+    Pipeline facts{};
+    const bool known = read(descriptor, &facts);
     std::lock_guard<std::mutex> lock(g->mutex);
-    rsf_rdr2_capture_record_pipeline(g->capture, result, facts ? &*facts : nullptr);
+    rsf_rdr2_capture_record_pipeline(g->capture, result, known ? &facts : nullptr);
 }
 static_assert(MH_OK == 0 && MH_ERROR_ENABLED == 5 && MH_UNKNOWN == -1);
 constexpr rsf_rdr2_capture_hook_ops hook_ops{
@@ -144,101 +111,32 @@ using CreateCommitted = HRESULT (STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_
 using CreatePlaced = HRESULT (STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Heap*, UINT64,
     const D3D12_RESOURCE_DESC*, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE*, REFIID, void**);
 using SetHdr = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain4*, DXGI_HDR_METADATA_TYPE, UINT, void*);
-// D3D12 streams align each tagged subobject to a pointer, with natural payload alignment.
-template<class T> struct StreamPayload { D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type; T value; };
-template<class T> union StreamItem { StreamPayload<T> payload; void* alignment; };
-template<class T> bool stream_value(const unsigned char* data, size_t remaining, T& value, size_t& size)
-{
-    size = sizeof(StreamItem<T>);
-    if (remaining < size) return false;
-    std::memcpy(&value, data + offsetof(StreamPayload<T>, value), sizeof(T));
-    return true;
-}
-std::optional<Pipeline> stream_facts(const D3D12_PIPELINE_STATE_STREAM_DESC* desc) noexcept
-{
-    if (!desc || !desc->pPipelineStateSubobjectStream) return std::nullopt;
-    D3D12_SHADER_BYTECODE ps{}, vs{};
-    Pipeline pipeline{};
-    const auto* data = static_cast<const unsigned char*>(desc->pPipelineStateSubobjectStream);
-    for (size_t offset = 0; offset < desc->SizeInBytes;) {
-        const auto remaining = desc->SizeInBytes - offset;
-        if (remaining < sizeof(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE)) return std::nullopt;
-        D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type{};
-        std::memcpy(&type, data + offset, sizeof(type));
-        size_t size{};
-        switch (type) {
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS: {
-            auto& shader = type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS ? vs : ps;
-            if (!stream_value(data + offset, remaining, shader, size)) return std::nullopt;
-            break;
-        }
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND: {
-            D3D12_BLEND_DESC blend{};
-            if (!stream_value(data + offset, remaining, blend, size)) return std::nullopt;
-            pipeline = blend_facts(blend.RenderTarget[0]);
-            break;
-        }
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_HS:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CS:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS: size = sizeof(StreamItem<D3D12_SHADER_BYTECODE>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE: size = sizeof(StreamItem<ID3D12RootSignature*>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT: size = sizeof(StreamItem<D3D12_STREAM_OUTPUT_DESC>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER: size = sizeof(StreamItem<D3D12_RASTERIZER_DESC>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL: size = sizeof(StreamItem<D3D12_DEPTH_STENCIL_DESC>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL1: size = sizeof(StreamItem<D3D12_DEPTH_STENCIL_DESC1>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT: size = sizeof(StreamItem<D3D12_INPUT_LAYOUT_DESC>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS: size = sizeof(StreamItem<D3D12_RT_FORMAT_ARRAY>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC: size = sizeof(StreamItem<DXGI_SAMPLE_DESC>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO: size = sizeof(StreamItem<D3D12_CACHED_PIPELINE_STATE>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING: size = sizeof(StreamItem<D3D12_VIEW_INSTANCING_DESC>); break;
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_IB_STRIP_CUT_VALUE:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK:
-        case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS: size = sizeof(StreamItem<UINT>); break;
-        default: return std::nullopt; // Unknown stream layouts remain explicitly unidentified.
-        }
-        if (size > remaining) return std::nullopt;
-        offset += size;
-    }
-    return hash_pipeline(ps, vs, pipeline);
-}
 HRESULT STDMETHODCALLTYPE create_stream_pso(ID3D12Device2* device,
     const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID iid, void** out)
 {
     const auto hr = original<CreateStreamPso>(RSF_RDR2_CAPTURE_CREATE_STREAM_PSO)(device, desc, iid, out);
-    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, stream_facts(desc));
+    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, desc, rsf_rdr2_capture_stream_facts);
     return hr;
 }
 HRESULT STDMETHODCALLTYPE load_stream_pso(ID3D12PipelineLibrary1* library, LPCWSTR name,
     const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID iid, void** out)
 {
     const auto hr = original<LoadStreamPso>(RSF_RDR2_CAPTURE_LOAD_STREAM_PSO)(library, name, desc, iid, out);
-    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, stream_facts(desc));
+    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, desc, rsf_rdr2_capture_stream_facts);
     return hr;
 }
 
-std::optional<Pipeline> graphics_pipeline_facts(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc) noexcept
-{
-    if (!desc) return std::nullopt;
-    return hash_pipeline(desc->PS, desc->VS, blend_facts(desc->BlendState.RenderTarget[0]));
-}
 HRESULT STDMETHODCALLTYPE create_pso(ID3D12Device* d, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID iid, void** out)
 {
     const auto hr = original<CreatePso>(RSF_RDR2_CAPTURE_CREATE_PSO)(d, desc, iid, out);
-    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, graphics_pipeline_facts(desc));
+    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, desc, rsf_rdr2_capture_graphics_facts);
     return hr;
 }
 HRESULT STDMETHODCALLTYPE load_pso(ID3D12PipelineLibrary* library, LPCWSTR name,
     const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID iid, void** out)
 {
     const auto hr = original<LoadPso>(RSF_RDR2_CAPTURE_LOAD_PSO)(library, name, desc, iid, out);
-    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, graphics_pipeline_facts(desc));
+    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, desc, rsf_rdr2_capture_graphics_facts);
     return hr;
 }
 HRESULT STDMETHODCALLTYPE create_library(ID3D12Device1* d, const void* blob, SIZE_T size, REFIID iid, void** out)
@@ -319,64 +217,16 @@ void STDMETHODCALLTYPE set_rtv(ID3D12GraphicsCommandList* list, UINT count,
     std::lock_guard<std::mutex> lock(g->mutex);
     rsf_rdr2_capture_bind_rtv(g->capture, list, count && handles ? &handles[0].ptr : nullptr);
 }
-uint64_t completed_value(void* fence) noexcept
-{
-    return static_cast<ID3D12Fence*>(fence)->GetCompletedValue();
-}
-bool device_removed(void* buffer) noexcept
-{
-    ComPtr<ID3D12Device> device;
-    return SUCCEEDED(static_cast<ID3D12Resource*>(buffer)->GetDevice(IID_PPV_ARGS(&device))) &&
-        FAILED(device->GetDeviceRemovedReason());
-}
-bool copy_resource(void* list_pointer, void* target_pointer, uint32_t state,
+bool copy_resource(void* list, void* target, uint32_t state,
     rsf_rdr2_capture_gpu_leases* leases, rsf_rdr2_capture_image* image) noexcept
 {
     CopyScope copying;
-    auto* list = static_cast<ID3D12GraphicsCommandList*>(list_pointer);
-    auto* target = static_cast<ID3D12Resource*>(target_pointer);
-    const auto before = static_cast<D3D12_RESOURCE_STATES>(state);
-    const auto desc = target->GetDesc();
-    if (desc.SampleDesc.Count != 1 || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
-        desc.DepthOrArraySize != 1 || before == unknown_state) return false;
-    ComPtr<ID3D12Device> device;
-    if (FAILED(target->GetDevice(IID_PPV_ARGS(&device)))) return false;
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-    UINT64 bytes{};
-    device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &bytes);
-    // GetCopyableFootprints need not include the final row's padding. Our raw file format does.
-    const auto padded_bytes = footprint.Offset + static_cast<UINT64>(footprint.Footprint.RowPitch) * footprint.Footprint.Height;
-    if (bytes < padded_bytes) bytes = padded_bytes;
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_READBACK;
-    D3D12_RESOURCE_DESC destination{};
-    destination.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; destination.Width = bytes;
-    destination.Height = 1; destination.DepthOrArraySize = 1; destination.MipLevels = 1;
-    destination.SampleDesc.Count = 1; destination.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    if (!leases->buffer) {
-        ComPtr<ID3D12Resource> buffer;
-        const auto hr = device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &destination,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&buffer));
-        if (FAILED(hr)) { log("readback allocation failed hr=%08lx", static_cast<unsigned long>(hr)); return false; }
-        if (!rsf_rdr2_capture_gpu_adopt(leases, buffer.Detach(), &gpu_ops)) return false;
+    int32_t allocation_hresult{};
+    if (!rsf_rdr2_capture_d3d12_copy(list, target, state, leases, image, &allocation_hresult)) {
+        if (allocation_hresult) log("readback allocation failed hr=%08x", static_cast<uint32_t>(allocation_hresult));
+        return false;
     }
-    rsf_rdr2_capture_gpu_bind_fence(leases, nullptr);
-    // Preserve the observed input state; copying does not alter the producer/consumer contract.
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition = {target, 0, before, D3D12_RESOURCE_STATE_COPY_SOURCE};
-    if (before != D3D12_RESOURCE_STATE_COPY_SOURCE) list->ResourceBarrier(1, &barrier);
-    D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = target;
-    source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    D3D12_TEXTURE_COPY_LOCATION dest{}; dest.pResource = static_cast<ID3D12Resource*>(leases->buffer);
-    dest.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; dest.PlacedFootprint = footprint;
-    list->CopyTextureRegion(&dest, 0, 0, 0, &source, nullptr);
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    barrier.Transition.StateAfter = before;
-    if (before != D3D12_RESOURCE_STATE_COPY_SOURCE) list->ResourceBarrier(1, &barrier);
-    image->width = static_cast<UINT>(desc.Width); image->height = desc.Height;
-    image->format = desc.Format; image->pitch = footprint.Footprint.RowPitch;
-    image->footprint_format = footprint.Footprint.Format; image->state_before = before;
-    image->resource = reinterpret_cast<uint64_t>(target); image->tick = GetTickCount64();
+    image->tick = GetTickCount64();
     read_local(g->base + 0x542904c, &image->frame, sizeof(image->frame));
     return true;
 }
@@ -505,7 +355,7 @@ void snapshot(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, vo
     DrawEvent event{0, 0, vertices, instances, reinterpret_cast<uint64_t>(list), 0,
         reinterpret_cast<uint64_t>(caller), binding.pso, binding.pipeline, {}, 0, binding.pipeline_known};
     const auto result = rsf_rdr2_capture_draw_shot(g->capture, list, target, D3D12_RESOURCE_STATE_RENDER_TARGET,
-        copy_resource, completed_value, &event);
+        copy_resource, rsf_rdr2_capture_d3d12_completed, &event);
     if (result == RSF_RDR2_CAPTURE_COPY_NO_SLOT) {
         lock.unlock();
         log("snapshot failed");
@@ -611,7 +461,7 @@ void after_submit(void* queue, uint32_t, void* const*) noexcept try
     uint32_t result{};
     {
         std::lock_guard<std::mutex> lock(g->mutex);
-        result = rsf_rdr2_capture_after_submit(g->capture, queue, &gpu_ops);
+        result = rsf_rdr2_capture_after_submit(g->capture, queue, rsf_rdr2_capture_d3d12_ops());
     }
     switch (result) {
     case RSF_RDR2_GPU_NO_SIGNAL_NEEDED:
@@ -632,52 +482,32 @@ void before_present(void* pointer) noexcept try
     game_swapchain = g->fixture_swapchain;
 #endif
     if (pointer != game_swapchain) return;
-    auto* swapchain = static_cast<IDXGISwapChain*>(pointer);
-    std::lock_guard<std::mutex> lock(g->mutex);
-    auto* selected = rsf_rdr2_capture_gpu_selected(g->capture, swapchain);
-    if (rsf_rdr2_capture_active(g->capture) && selected) {
-        ComPtr<IDXGISwapChain3> sc3; ComPtr<ID3D12Resource> current;
-        if (SUCCEEDED(swapchain->QueryInterface(IID_PPV_ARGS(&sc3))) &&
-            SUCCEEDED(sc3->GetBuffer(sc3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&current))) &&
-            current.Get() == selected) {
-            rsf_rdr2_capture_end_draws(g->capture);
-            const auto progress = capture_progress();
-            log("capture %u recording complete: %u draws, %zu readbacks resource=%p", progress.sequence, progress.draws,
-                rsf_rdr2_capture_pending_count(g->capture), selected);
-        }
+    void* completed_target{};
+    bool armed{};
+    rsf_rdr2_capture_progress progress{};
+    size_t pending{};
+    {
+        std::lock_guard<std::mutex> lock(g->mutex);
+        armed = rsf_rdr2_capture_d3d12_present(g->capture, pointer, &completed_target);
+        if (armed) rsf_rdr2_request_camera_capture();
+        if (completed_target || armed) progress = capture_progress();
+        if (completed_target) pending = rsf_rdr2_capture_pending_count(g->capture);
     }
-    if (rsf_rdr2_capture_can_arm(g->capture)) {
-        DXGI_SWAP_CHAIN_DESC desc{};
-        if (FAILED(swapchain->GetDesc(&desc))) return;
-        auto* key = identity(swapchain);
-        if (!rsf_rdr2_capture_gpu_arm_backbuffers(g->capture, swapchain, desc.BufferCount, &gpu_ops)) return;
-        const rsf_rdr2_capture_presentation_desc descriptor{
-            static_cast<uint32_t>(desc.BufferDesc.Format), desc.BufferDesc.Width, desc.BufferDesc.Height,
-        };
-        rsf_rdr2_capture_arm(g->capture, GetTickCount64(), key, &descriptor);
-        rsf_rdr2_request_camera_capture();
-        log("capture %u armed", capture_progress().sequence);
+    if (completed_target) {
+        log("capture %u recording complete: %u draws, %zu readbacks resource=%p", progress.sequence, progress.draws,
+            pending, completed_target);
     }
+    if (armed) log("capture %u armed", progress.sequence);
 }
 catch (...) { log("present observation failed"); }
 bool write_shot(const rsf_rdr2_capture_gpu_leases* leases, const rsf_rdr2_capture_image* image,
     const char* role) noexcept
 {
-    auto* buffer = static_cast<ID3D12Resource*>(leases->buffer);
-    void* data{};
-    const SIZE_T bytes = static_cast<SIZE_T>(image->pitch) * image->height;
-    const D3D12_RANGE range{0, bytes};
-    if (!buffer) return false;
-    const auto mapped = buffer->Map(0, &range, &data);
-    if (FAILED(mapped)) {
-        log("readback Map failed hr=%08lx role=%s", static_cast<unsigned long>(mapped), role);
-        return false;
-    }
-    const bool ok = rsf_rdr2_capture_write_image(image,
+    int32_t map_hresult{};
+    const bool ok = rsf_rdr2_capture_d3d12_write(leases, image,
         reinterpret_cast<const uint16_t*>(g->paths.directory), wcslen(g->paths.directory), GetCurrentProcessId(),
-        role, static_cast<const uint8_t*>(data), bytes);
-    const D3D12_RANGE empty{0, 0};
-    buffer->Unmap(0, &empty);
+        role, &map_hresult);
+    if (map_hresult) log("readback Map failed hr=%08x role=%s", static_cast<uint32_t>(map_hresult), role);
     return ok;
 }
 #ifdef RSF_RDR2_CAPTURE_TEST
@@ -689,8 +519,8 @@ constexpr bool fixture = false;
 constexpr rsf_rdr2_capture_poll_ops poll_ops{
     [](void* context) noexcept { static_cast<std::mutex*>(context)->lock(); },
     [](void* context) noexcept { static_cast<std::mutex*>(context)->unlock(); },
-    completed_value,
-    device_removed,
+    rsf_rdr2_capture_d3d12_completed,
+    rsf_rdr2_capture_d3d12_removed,
     write_shot,
     [](uint32_t sequence) noexcept {
         log("capture %u timed out waiting for scene or DLSS input; retaining explicit incomplete result", sequence);
@@ -735,7 +565,7 @@ constexpr rsf_rdr2_capture_install_ops install_ops{
 };
 }
 
-bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept
+extern "C" bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept
 {
     return rsf_rdr2_capture_install(directory, &install_ops, fixture);
 }

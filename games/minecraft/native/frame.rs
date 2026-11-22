@@ -3,7 +3,7 @@
 //! settings to Runtime options. No calls; the JNI bridge supplies the Runtime values.
 
 use crate::platform_abi::{
-    RSF_FG_FIXED, RSF_FG_OFF, RSF_SHARPENING_ABI_VERSION, rsf_gl_pipeline_options,
+    RSF_SHARPENING_ABI_VERSION, rsf_gl_pipeline_options,
     rsf_gl_pipeline_surfaces, rsf_native_fg_options, rsf_sharpening_options,
 };
 use rsf_game_sys::{
@@ -133,9 +133,8 @@ pub(crate) fn sharpening(values: &[f32; SHARPENING_FIELDS]) -> rsf_sharpening_op
 }
 
 /// The Runtime options for one NativeBridge.configure call. A positive frame limit is a rendered
-/// frame rate; the Runtime receives its minimum interval in microseconds.
+/// frame rate. The caller passes FPS separately for the Runtime to resolve.
 pub(crate) fn options(configuration: &Configuration) -> rsf_gl_pipeline_options {
-    let limit = configuration.limit;
     rsf_gl_pipeline_options {
         struct_size: struct_size::<rsf_gl_pipeline_options>(),
         sr_backend: configuration.sr as u32,
@@ -143,19 +142,10 @@ pub(crate) fn options(configuration: &Configuration) -> rsf_gl_pipeline_options 
         fg_backend: configuration.fg as u32,
         generation: rsf_native_fg_options {
             struct_size: struct_size::<rsf_native_fg_options>(),
-            mode: if configuration.fg != 0 {
-                RSF_FG_FIXED
-            } else {
-                RSF_FG_OFF
-            },
             generated_frames: configuration.count as u32,
             reflex_mode: configuration.reflex as u32,
-            frame_limit_us: if limit > 0 {
-                1_000_000 / limit as u32
-            } else {
-                0
-            },
             debug: u32::from(configuration.debug),
+            ..Default::default()
         },
         dlss_preset: configuration.preset as u32,
         sharpening: sharpening(&configuration.sharpening),

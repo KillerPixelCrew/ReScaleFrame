@@ -16,28 +16,19 @@
 //! `rsf_ac7_truesky_leaves`.
 use crate::guards::rsf_ac7_guards_held;
 use crate::platform_abi::rsf_ac7_native_renderer;
-use crate::sites::{Code, NativeCode};
+use crate::sites::{Code, CodeView, NativeCode};
 use crate::sites_abi::{
     RSF_AC7_RELAY_BYTES, rsf_ac7_call_relay, rsf_ac7_truesky_leaves, rsf_ac7_truesky_patches,
 };
+use rsf_game_sys::{checksum::crc32_ieee, ffi_util::ascii_wide};
 use std::ffi::c_void;
 use std::io::Read;
 use std::ptr::null_mut;
 
 const RELAY: usize = RSF_AC7_RELAY_BYTES as usize;
 
-const fn wide<const N: usize>(text: &[u8; N]) -> [u16; N] {
-    let mut out = [0; N];
-    let mut index = 0;
-    while index < N {
-        out[index] = text[index] as u16;
-        index += 1;
-    }
-    out
-}
-
 /// The plugin module as GetModuleHandleW names it, terminated.
-pub(crate) const MODULE: [u16; 27] = wide(b"TrueSkyPluginRender_MT.dll\0");
+pub(crate) const MODULE: [u16; 27] = ascii_wide(b"TrueSkyPluginRender_MT.dll\0");
 
 /// The shipped mixed-resolution effect beside the executable, by exact size and CRC-32 (IEEE).
 /// Its x2/x3/x4 depth permutations are why the full grid needs the first-party x1 kernel.
@@ -155,17 +146,8 @@ pub(crate) const EMPTY_RELAY: rsf_ac7_call_relay = rsf_ac7_call_relay {
     size: 0,
 };
 
-/// CRC-32 (IEEE, reflected 0xedb88320), as the former bytewise loop computed it.
-pub(crate) fn crc32(bytes: &[u8]) -> u32 {
-    !bytes.iter().fold(u32::MAX, |crc, byte| {
-        (0..8).fold(crc ^ u32::from(*byte), |crc, _| {
-            (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1))
-        })
-    })
-}
-
 pub(crate) fn effect_matches(bytes: &[u8]) -> bool {
-    bytes.len() == EFFECT_BYTES && crc32(bytes) == EFFECT_CRC
+    bytes.len() == EFFECT_BYTES && crc32_ieee(bytes) == EFFECT_CRC
 }
 
 /// The effect beside the process executable (GetModuleFileNameW of the process). A longer file
@@ -261,16 +243,14 @@ fn release_slot(plugin: &impl Plugin, relay: &mut rsf_ac7_call_relay) -> bool {
     true
 }
 
-/// The composite_tile draw relay that supplies cloud motion depth. A refusal is logged and tried
-/// again on the next sky render, as before.
+/// The composite_tile draw relay supplies cloud motion depth independently of the depth route.
+/// Only a fingerprint mismatch is terminal. Allocation and guarded writes can be retried.
 fn install_motion(state: &mut rsf_ac7_truesky_patches, module: *mut u8, plugin: &impl Plugin) {
-    if !state.motion_call.slot.is_null() {
-        return;
-    }
     let call = module.wrapping_add(MOTION_CALL_RVA as usize);
     if !plugin.matches(call.wrapping_sub(MOTION_BEFORE.len()), &MOTION_BEFORE)
         || !plugin.matches(call, &MOTION_CALL_EXPECTED)
     {
+        state.motion_refused = true;
         plugin.log(MOTION_REFUSED);
         return;
     }
@@ -349,14 +329,21 @@ fn install_depth(
 /// full grid is enabled only after the replacement kernel has compiled and its bindings were
 /// verified on the actual device. A refusal keeps stock cloud resolution for this renderer.
 pub(crate) fn apply(state: &mut rsf_ac7_truesky_patches, plugin: &impl Plugin) {
-    if !state.resolution_site.is_null() || state.resolution_refused {
+    let grid_pending = state.resolution_site.is_null() && !state.resolution_refused;
+    let motion_pending = state.motion_call.slot.is_null() && !state.motion_refused;
+    if !grid_pending && !motion_pending {
         return;
     }
     let module = plugin.module();
     if module.is_null() {
         return;
     }
-    install_motion(state, module, plugin);
+    if motion_pending {
+        install_motion(state, module, plugin);
+    }
+    if !grid_pending {
+        return;
+    }
     if !install_depth(state, module, plugin) {
         state.resolution_refused = true;
         plugin.log(DEPTH_REFUSED);
@@ -446,8 +433,8 @@ pub(crate) fn restore(state: &mut rsf_ac7_truesky_patches, plugin: &impl Plugin)
 }
 
 /// The validated leaf table of one call.
-struct NativePlugin<'a> {
-    code: NativeCode<'a>,
+struct NativePlugin {
+    code: NativeCode,
     renderer: *mut rsf_ac7_native_renderer,
     module: unsafe extern "C" fn(*const u16) -> *mut u8,
     relay_allocate: unsafe extern "C" fn(*mut u8, *mut c_void) -> *mut c_void,
@@ -459,7 +446,7 @@ struct NativePlugin<'a> {
     depth_release: unsafe extern "C" fn(*mut rsf_ac7_native_renderer),
 }
 
-impl NativePlugin<'_> {
+impl NativePlugin {
     /// The table when every leaf, both handlers and the renderer are present.
     ///
     /// # Safety
@@ -487,21 +474,24 @@ impl NativePlugin<'_> {
     }
 }
 
-impl Code for NativePlugin<'_> {
+impl CodeView for NativePlugin {
     fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
         self.code.matches(address, expected)
-    }
-    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
-        self.code.write(site, expected, replacement)
     }
     fn log(&self, message: &str) {
         self.code.log(message);
     }
 }
 
+impl Code for NativePlugin {
+    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
+        self.code.write(site, expected, replacement)
+    }
+}
+
 // SAFETY, for every call below: the leaves were lent for this call with the contracts of
 // ac7_sites.h, and the renderer is the live one whose record is being changed.
-impl Plugin for NativePlugin<'_> {
+impl Plugin for NativePlugin {
     fn module(&self) -> *mut u8 {
         unsafe { (self.module)(MODULE.as_ptr()) }
     }
@@ -540,7 +530,7 @@ impl Plugin for NativePlugin<'_> {
 unsafe fn native<'a>(
     patches: *mut rsf_ac7_truesky_patches,
     leaves: *const rsf_ac7_truesky_leaves,
-) -> Option<(&'a mut rsf_ac7_truesky_patches, NativePlugin<'a>)> {
+) -> Option<(&'a mut rsf_ac7_truesky_patches, NativePlugin)> {
     let patches = unsafe { patches.as_mut() }?;
     let plugin = unsafe { NativePlugin::new(leaves) }?;
     Some((patches, plugin))

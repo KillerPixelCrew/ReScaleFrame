@@ -2,11 +2,96 @@
 //! AC7 policy shared by the dedicated and combined DirectInput carriers.
 use crate::sites::DEPTH_GATES;
 use crate::{AMD64, EXECUTABLE};
+use rsf_game_sys::ffi_util::ascii_wide;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_probe};
 use std::ffi::{CStr, CString, c_char, c_int, c_ulong};
 use std::mem::offset_of;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+struct StartupOption {
+    key: &'static CStr,
+    label: &'static CStr,
+    fallback: u32,
+    maximum: u32,
+}
+
+impl StartupOption {
+    const fn new(key: &'static CStr, label: &'static CStr, fallback: u32, maximum: u32) -> Self {
+        Self {
+            key,
+            label,
+            fallback,
+            maximum,
+        }
+    }
+}
+
+const JITTER: StartupOption = StartupOption::new(
+    c"RSF_ENABLE_JITTER",
+    c"Jitter mode (0 Off, 1 Follow SR, 2 Always)",
+    1,
+    2,
+);
+const JITTER_ALL_VIEWS: StartupOption =
+    StartupOption::new(c"RSF_JITTER_ALL_VIEWS", c"Jitter all views", 0, 1);
+const TRANSLUCENT_VELOCITY: StartupOption = StartupOption::new(
+    c"RSF_TRANSLUCENT_VELOCITY",
+    c"Allow translucent velocity",
+    0,
+    1,
+);
+const FULL_TRANSLUCENCY: StartupOption = StartupOption::new(
+    c"RSF_FULL_TRANSLUCENCY",
+    c"Enable full-resolution translucency",
+    1,
+    1,
+);
+const MOTION_CAPTURE: StartupOption =
+    StartupOption::new(c"RSF_MOTION_CAPTURE", c"Install motion capture hooks", 0, 1);
+const OUTPUT_WIDTH: StartupOption = StartupOption::new(
+    c"RSF_DLSS_OUTPUT_WIDTH",
+    c"Startup output width (0 Auto)",
+    0,
+    16384,
+);
+const OUTPUT_HEIGHT: StartupOption = StartupOption::new(
+    c"RSF_DLSS_OUTPUT_HEIGHT",
+    c"Startup output height (0 Auto)",
+    0,
+    16384,
+);
+const STARTUP_OPTIONS: [StartupOption; 7] = [
+    JITTER,
+    JITTER_ALL_VIEWS,
+    TRANSLUCENT_VELOCITY,
+    FULL_TRANSLUCENCY,
+    MOTION_CAPTURE,
+    OUTPUT_WIDTH,
+    OUTPUT_HEIGHT,
+];
+
+/// The output pointers are writable for one value each.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_carrier_start_option(
+    index: u32,
+    label: *mut *const c_char,
+    fallback: *mut u32,
+    maximum: *mut u32,
+) -> *const c_char {
+    let Some(option) = STARTUP_OPTIONS.get(index as usize) else {
+        return null();
+    };
+    if label.is_null() || fallback.is_null() || maximum.is_null() {
+        return null();
+    }
+    unsafe {
+        label.write(option.label.as_ptr());
+        fallback.write(option.fallback);
+        maximum.write(option.maximum);
+    }
+    option.key.as_ptr()
+}
 
 const ABI_VERSION: u32 = 2;
 const PATCH_OK: i32 = 0;
@@ -24,22 +109,11 @@ const SEPARATE_TRANSLUCENCY_GATE: &[u8; 15] =
 const SEPARATE_TRANSLUCENCY_PATCH: &[u8; 15] =
     b"\x66\x0f\x1f\x44\x00\x00\xb8\x00\x00\x80\x3f\x66\x0f\x6e\xc8";
 
-const fn widen<const N: usize>(text: &[u8]) -> [u16; N] {
-    assert!(text.len() == N);
-    let mut wide = [0; N];
-    let mut index = 0;
-    while index < N {
-        wide[index] = text[index] as u16;
-        index += 1;
-    }
-    wide
-}
-
 static EXECUTABLE_WIDE: [u16; EXECUTABLE.to_bytes_with_nul().len()] =
-    widen(EXECUTABLE.to_bytes_with_nul());
+    ascii_wide(EXECUTABLE.to_bytes_with_nul());
 static GAME_DLL: [u16; b"ReScaleFrame.Game.AC7.dll\0".len()] =
-    widen(b"ReScaleFrame.Game.AC7.dll\0");
-static WINDOW_CLASS: [u16; b"UnrealWindow\0".len()] = widen(b"UnrealWindow\0");
+    ascii_wide(b"ReScaleFrame.Game.AC7.dll\0");
+static WINDOW_CLASS: [u16; b"UnrealWindow\0".len()] = ascii_wide(b"UnrealWindow\0");
 static STARTUP_READY: AtomicBool = AtomicBool::new(false);
 static STARTUP_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 
@@ -175,8 +249,7 @@ unsafe extern "C" fn rsf_ac7_carrier_patch_jitter(
 }
 
 fn apply_translucent_velocity(io: &PatchIo, rva: u32) {
-    // A custom RVA retains the carrier's existing unguarded diagnostic override.
-    let expected = (rva == TRANSLUCENT_VELOCITY_RVA).then_some(&TRANSLUCENT_VELOCITY_GATE[..]);
+    let expected = Some(&TRANSLUCENT_VELOCITY_GATE[..]);
     let mut previous = [0; 6];
     let result = io.write(rva, NOP6, expected, &mut previous);
     if result == PATCH_OK {
@@ -275,16 +348,17 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
     };
     let number = |name: &CStr, fallback| unsafe { read(name.as_ptr(), fallback) };
 
-    let mode = number(c"RSF_ENABLE_JITTER", 1) as i32;
+    let mode = number(JITTER.key, JITTER.fallback) as i32;
     if mode != 0 {
         let rva = number(c"RSF_JITTER_RVA", JITTER_RVA);
-        let main_only = rva == JITTER_RVA && number(c"RSF_JITTER_ALL_VIEWS", 0) == 0;
+        let main_only =
+            rva == JITTER_RVA && number(JITTER_ALL_VIEWS.key, JITTER_ALL_VIEWS.fallback) == 0;
         unsafe { jitter(mode, rva, c_int::from(main_only)) };
     } else {
         // Reset the native mode just as the carrier did before skipping the other jitter settings.
         unsafe { jitter(0, 0, 0) };
     }
-    if number(c"RSF_TRANSLUCENT_VELOCITY", 0) != 0 {
+    if number(TRANSLUCENT_VELOCITY.key, TRANSLUCENT_VELOCITY.fallback) != 0 {
         apply_translucent_velocity(
             &io,
             number(c"RSF_TRANSLUCENT_VELOCITY_RVA", TRANSLUCENT_VELOCITY_RVA),
@@ -292,10 +366,9 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
     }
     // Publish depth conformance before the scale callback uses it to choose the allowed scale.
     unsafe { set_depth(c_int::from(apply_depth_gates(&io))) };
-    if number(c"RSF_FULL_TRANSLUCENCY", 1) != 0 {
+    if number(FULL_TRANSLUCENCY.key, FULL_TRANSLUCENCY.fallback) != 0 {
         let rva = number(c"RSF_FULL_TRANSLUCENCY_RVA", SEPARATE_TRANSLUCENCY_RVA);
-        let expected =
-            (rva == SEPARATE_TRANSLUCENCY_RVA).then_some(&SEPARATE_TRANSLUCENCY_GATE[..]);
+        let expected = Some(&SEPARATE_TRANSLUCENCY_GATE[..]);
         let mut previous = [0; 15];
         let result = io.write(rva, SEPARATE_TRANSLUCENCY_PATCH, expected, &mut previous);
         if result == PATCH_OK {
@@ -311,7 +384,7 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
     } else {
         "native AC7 plugin preparation: refused"
     });
-    if number(c"RSF_MOTION_CAPTURE", 0) != 0 {
+    if number(MOTION_CAPTURE.key, MOTION_CAPTURE.fallback) != 0 {
         unsafe { install_motion_capture() };
     }
     // Compatibility SR can start after native preparation refuses.
@@ -341,7 +414,7 @@ unsafe extern "C" fn rsf_ac7_carrier_try_auto_start(
     started: c_int,
     ready: Option<unsafe extern "C" fn() -> c_ulong>,
     present_extent: Option<unsafe extern "C" fn(*mut u32, *mut u32) -> c_int>,
-    start: Option<unsafe extern "C" fn()>,
+    start: Option<unsafe extern "C" fn(u32, u32)>,
 ) {
     if enabled == 0 || started != 0 || STARTUP_ATTEMPTED.load(Ordering::Relaxed) {
         return;
@@ -354,10 +427,12 @@ unsafe extern "C" fn rsf_ac7_carrier_try_auto_start(
     };
     let (mut width, mut height) = (0, 0);
     if unsafe { present_extent(&mut width, &mut height) } != 0
+        && width != 0
+        && height != 0
         && !STARTUP_ATTEMPTED.swap(true, Ordering::Relaxed)
     {
         // A refusal inside start still spends the automatic attempt. Manual start is separate.
-        unsafe { start() };
+        unsafe { start(width, height) };
     }
 }
 
@@ -373,9 +448,57 @@ unsafe extern "C" fn rsf_ac7_carrier_override_start_extent(
         && !width.is_null()
         && !height.is_null()
     {
-        unsafe {
-            width.write(read(c"RSF_DLSS_OUTPUT_WIDTH".as_ptr(), width.read()));
-            height.write(read(c"RSF_DLSS_OUTPUT_HEIGHT".as_ptr(), height.read()));
+        for (option, dimension) in [(OUTPUT_WIDTH, width), (OUTPUT_HEIGHT, height)] {
+            let override_value = unsafe { read(option.key.as_ptr(), option.fallback) };
+            if override_value != 0 {
+                unsafe { dimension.write(override_value) };
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    thread_local! {
+        static STARTS: Cell<u32> = const { Cell::new(0) };
+    }
+
+    unsafe extern "C" fn ready() -> c_ulong {
+        1
+    }
+
+    unsafe extern "C" fn empty_extent(_: *mut u32, _: *mut u32) -> c_int {
+        1
+    }
+
+    unsafe extern "C" fn extent(width: *mut u32, height: *mut u32) -> c_int {
+        unsafe {
+            width.write(2560);
+            height.write(1440);
+        }
+        1
+    }
+
+    unsafe extern "C" fn start(width: u32, height: u32) {
+        assert_eq!((width, height), (2560, 1440));
+        STARTS.with(|starts| starts.set(starts.get() + 1));
+    }
+
+    #[test]
+    fn automatic_start_spends_the_attempt_on_one_valid_extent() {
+        rsf_ac7_carrier_set_startup_attempted(0);
+        unsafe {
+            rsf_ac7_carrier_try_auto_start(1, 0, Some(ready), Some(empty_extent), Some(start))
+        };
+        assert_eq!(rsf_ac7_carrier_startup_attempted(), 0);
+        for _ in 0..2 {
+            unsafe { rsf_ac7_carrier_try_auto_start(1, 0, Some(ready), Some(extent), Some(start)) };
+        }
+        assert_eq!(rsf_ac7_carrier_startup_attempted(), 1);
+        STARTS.with(|starts| assert_eq!(starts.get(), 1));
+        rsf_ac7_carrier_set_startup_attempted(0);
     }
 }

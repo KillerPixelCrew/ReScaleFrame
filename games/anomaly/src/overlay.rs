@@ -1158,6 +1158,8 @@ unsafe extern "C" fn option_label(_: *mut c_void, index: u32) -> *const c_char {
 
 // ---- Win32 leaves ------------------------------------------------------------------------------------------------
 
+pub(crate) use win32::engine_window;
+
 mod win32 {
     use crate::ini;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
@@ -1172,7 +1174,7 @@ mod win32 {
     const MAX_PATH: usize = 260;
 
     /// The engine's main window in this process.
-    pub(super) fn engine_window(window: *mut c_void) -> bool {
+    pub(crate) fn engine_window(window: *mut c_void) -> bool {
         if window.is_null() || unsafe { IsWindow(window) } == 0 {
             return false;
         }

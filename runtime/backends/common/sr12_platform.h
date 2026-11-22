@@ -1,20 +1,22 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
-#include "sr_helpers.h"
+#include <rescaleframe/backend.h>
 
-// Private provider ABI. The native validators are shared with other SR callers.
-using rsf_d3d12_sr_validate_resources = rsf_backend_result (*)(const rsf_sr_frame*, void*);
-extern "C" rsf_backend_result rsf_core_d3d12_sr_provider_plan(void*, rsf_quality, uint32_t*, uint32_t*);
-extern "C" rsf_backend_result rsf_core_d3d12_sr_provider_evaluate(void*, void*, const rsf_sr_frame*,
-    rsf_d3d12_sr_validate_resources);
-extern "C" rsf_backend_result rsf_core_d3d12_sr_provider_release(void*);
-extern "C" void rsf_core_d3d12_sr_provider_close(void*);
-extern "C" rsf_backend_result rsf_core_d3d12_sr_provider_version(void*, uint64_t*, const char**);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-inline rsf_backend_result rsf_d3d12_sr_provider_evaluate(void* session, void* commands, const rsf_sr_frame* frame)
-{
-    const auto result = rsf::validate_frame(frame);
-    if (result != RSF_BACKEND_OK) return result;
-    return rsf_core_d3d12_sr_provider_evaluate(session, commands, frame,
-        [](const rsf_sr_frame* input, void* device) { return rsf::validate_d3d12_resources(*input, device); });
+/* Private provider ABI. Native validators remain shared with other SR callers. */
+void rsf_core_d3d12_sr_bind_validation(
+    rsf_backend_result (*frame)(const rsf_sr_frame*),
+    rsf_backend_result (*resources)(const rsf_sr_frame*, void*));
+
+rsf_backend_result rsf_core_d3d12_sr_provider_plan(void*, rsf_quality, uint32_t*, uint32_t*);
+rsf_backend_result rsf_core_d3d12_sr_provider_evaluate(void*, void*, const rsf_sr_frame*);
+rsf_backend_result rsf_core_d3d12_sr_provider_release(void*);
+void rsf_core_d3d12_sr_provider_close(void*);
+rsf_backend_result rsf_core_d3d12_sr_provider_version(void*, uint64_t*, const char**);
+
+#ifdef __cplusplus
 }
+#endif

@@ -5,9 +5,15 @@
 #include "../../backends/common/frame_capture12.h"
 #include <rescaleframe/sha256_file.h>
 #include <d3d11.h>
-#include <dxgi.h>
 #include <wrl/client.h>
 #include <cstring>
+
+extern "C" {
+void rsf_core_dump_read_clock(rsf_dump_clock*);
+void rsf_core_dump_read_local_time(rsf_dump_clock*);
+void* rsf_core_dump_open_texture(void*, void*, rsf_dump_surface*);
+void* rsf_core_dump_backbuffer(void*);
+}
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -20,52 +26,11 @@ static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 &&
     RSF_BACKEND_ERROR_ABI_MISMATCH == -2 && RSF_BACKEND_ERROR_INIT_FAILED == -6 &&
     RSF_BACKEND_ERROR_NOT_READY == -8 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9);
 
-void read_clock(rsf_dump_clock* out)
-{
-    DWORD foreground = 0;
-    GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
-    out->process = GetCurrentProcessId();
-    out->tick = GetTickCount64();
-    out->key_down = uint32_t(foreground == out->process && (GetAsyncKeyState(VK_F10) & 0x8000) != 0);
-}
-
-void read_local_time(rsf_dump_clock* out)
-{
-    SYSTEMTIME now{};
-    GetLocalTime(&now);
-    out->year = now.wYear;
-    out->month = now.wMonth;
-    out->day = now.wDay;
-    out->hour = now.wHour;
-    out->minute = now.wMinute;
-    out->second = now.wSecond;
-    out->millisecond = now.wMilliseconds;
-}
-
 void executable_sha256(const wchar_t* executable, char* out) try
 {
     std::string hash;
     if (rsf::sha256_file(executable, hash)) std::memcpy(out, hash.c_str(), 65);
 } catch (...) { out[0] = 0; }
-
-void* open_texture(void* context, void* source, rsf_dump_surface* surface)
-{
-    auto* immediate = static_cast<ID3D11DeviceContext*>(context);
-    ComPtr<ID3D11Texture2D> texture;
-    if (!immediate || !source || immediate->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE ||
-        FAILED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&texture)))) return nullptr;
-    D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
-    *surface = {desc.Width, desc.Height, uint32_t(desc.Format)};
-    return texture.Detach();
-}
-
-void* backbuffer(void* chain)
-{
-    ComPtr<ID3D11Texture2D> buffer;
-    if (!chain || FAILED(static_cast<IDXGISwapChain*>(chain)->GetBuffer(0, IID_PPV_ARGS(&buffer)))) return nullptr;
-    return buffer.Detach();
-}
 
 void encode_texture(void* context, void* source, const rsf_texture_dump_options* options,
     uint32_t include_raw, rsf_dump_encoding* result) try
@@ -95,8 +60,8 @@ int32_t preview_pixels(const rsf_dump_pixels* pixels, const rsf_texture_dump_opt
 
 void bind_platform()
 {
-    static const rsf_dump_platform platform{sizeof(platform), read_clock, read_local_time, executable_sha256,
-        open_texture, backbuffer, encode_texture, preview_pixels, rsf_game_depth_domains_requested};
+    static const rsf_dump_platform platform{sizeof(platform), rsf_core_dump_read_clock, rsf_core_dump_read_local_time, executable_sha256,
+        rsf_core_dump_open_texture, rsf_core_dump_backbuffer, encode_texture, preview_pixels, rsf_game_depth_domains_requested};
     static const bool bound = (rsf_core_dump_bind_platform(&platform), true);
     (void)bound;
 }

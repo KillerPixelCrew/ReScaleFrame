@@ -9,6 +9,7 @@ use crate::d3d11_host_reduced::{
     MAX_RESERVED, Products, ProductsFactory, Raw, Ticket, auxiliary_products, zeroed_pass,
 };
 use crate::fg12_abi::rsf_d3d11_present_setup;
+use crate::native_cpu::{SourcePacket, decode_source_event};
 use crate::overlay_abi::{
     RSF_OVERLAY_API_VERSION, RSF_OVERLAY_SERVICE_OPTION_TOGGLE, RSF_OVERLAY_SR_INPUT_COLOR,
     RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_JITTER, RSF_OVERLAY_SR_INPUT_MOTION,
@@ -20,12 +21,12 @@ use crate::render_abi::{
 use crate::scene_abi::{rsf_native_present_record, rsf_observer_present_event};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_ABI_VERSION,
-    RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE, RSF_GAME_CPU_SOURCE_ABORT,
-    RSF_GAME_CPU_SOURCE_RESERVE, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS,
-    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_RECONFIGURE,
-    RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW,
-    rsf_frame_record, rsf_game_cpu_event, rsf_game_cpu_source_event, rsf_game_host_services,
-    rsf_game_render_config, rsf_game_render_feedback,
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE,
+    RSF_GAME_CPU_SOURCE_ABORT, RSF_GAME_CPU_SOURCE_RESERVE, RSF_GAME_FRAME_ABI_VERSION,
+    RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_FRAME,
+    RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
+    RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW, rsf_camera_frame, rsf_frame_record,
+    rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config, rsf_game_render_feedback,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::{self, null_mut};
@@ -61,7 +62,6 @@ const DUMP_DENSE_MOTION: u32 = 7;
 const AUX_DEPTH_STENCIL: u32 = 0;
 const AUX_COLOUR: u32 = 1;
 const AUX_RESTORE_CONTENTS: u32 = 1;
-const CPU_SOURCE_EVENT_SIZE_1: u32 = size_of::<rsf_game_cpu_event>() as u32 + 24;
 
 unsafe extern "C" {
     fn rsf_sampler_bias_create() -> Raw;
@@ -342,6 +342,95 @@ fn owner(user: Raw) -> Option<&'static Host> {
     (!host.is_null() && host.cast() == user).then(|| unsafe { &*host })
 }
 
+#[repr(u32)]
+enum Advanced {
+    CaptureNext,
+    Transport,
+    Correction,
+    CaptureFailures,
+    CaptureSequence,
+}
+
+#[derive(Clone, Copy)]
+struct AdvancedOption {
+    label: &'static CStr,
+    flag: fn(&Host) -> &AtomicBool,
+    key: Option<&'static str>,
+    bump_generation: bool,
+}
+
+impl AdvancedOption {
+    fn value(self, host: &Host) -> i32 {
+        (self.key.is_some() && (self.flag)(host).load(Ordering::SeqCst)) as i32
+    }
+}
+
+const ADVANCED: [AdvancedOption; 5] = {
+    let next = AdvancedOption {
+        label: c"Capture next SR inputs",
+        flag: |h| &h.capture,
+        key: None,
+        bump_generation: false,
+    };
+    let mut options = [next; 5];
+    options[Advanced::CaptureNext as usize] = next;
+    options[Advanced::Transport as usize] = AdvancedOption {
+        label: c"DLSS colour transport",
+        flag: |h| &h.transport,
+        key: Some("ColourTransport"),
+        bump_generation: true,
+    };
+    options[Advanced::Correction as usize] = AdvancedOption {
+        label: c"SR colour correction",
+        flag: |h| &h.fidelity,
+        key: Some("ColourCorrection"),
+        bump_generation: true,
+    };
+    options[Advanced::CaptureFailures as usize] = AdvancedOption {
+        label: c"Capture SR failures (max 3 per session)",
+        flag: |h| &h.capture_failures,
+        key: Some("CaptureSRFailures"),
+        bump_generation: false,
+    };
+    options[Advanced::CaptureSequence as usize] = AdvancedOption {
+        label: c"Capture 4 ready SR frames",
+        flag: |h| &h.capture_sequence,
+        key: None,
+        bump_generation: false,
+    };
+    options
+};
+
+fn sr_inputs(pass: &Pass) -> (u32, [f32; 2]) {
+    let mut bits = 0;
+    for (texture, bit) in [
+        (pass.color_input, RSF_OVERLAY_SR_INPUT_COLOR),
+        (pass.depth, RSF_OVERLAY_SR_INPUT_DEPTH),
+        (pass.motion, RSF_OVERLAY_SR_INPUT_MOTION),
+    ] {
+        if !texture.is_null() {
+            bits |= bit;
+        }
+    }
+    let camera = &pass.camera;
+    if pass.camera_valid != 0
+        && camera.struct_size >= size_of::<rsf_camera_frame>() as u32
+        && camera.abi_version == RSF_GAME_CAMERA_ABI_VERSION
+        && camera.jitter_pixels.iter().all(|value| value.is_finite())
+    {
+        return (bits | RSF_OVERLAY_SR_INPUT_JITTER, camera.jitter_pixels);
+    }
+    (bits, [0.0; 2])
+}
+
+fn depth_infinite(setup: &rsf_d3d11_host_setup) -> u32 {
+    if setup.struct_size as usize == offset_of!(rsf_d3d11_host_setup, depth_far_plane) {
+        setup.depth_inverted
+    } else {
+        (setup.depth_far_plane == RSF_D3D11_HOST_DEPTH_INFINITE) as u32
+    }
+}
+
 fn validate_setup(setup: &rsf_d3d11_host_setup, services: &rsf_game_host_services) -> bool {
     let motion = &setup.motion;
     let caps = setup.capabilities;
@@ -356,8 +445,7 @@ fn validate_setup(setup: &rsf_d3d11_host_setup, services: &rsf_game_host_service
         || setup.engine_version_utf8.is_null()
         || setup.project_id_utf8.is_null()
         || services.session_id == 0
-        || !setup.units_to_meters.is_finite()
-        || setup.units_to_meters <= 0.0
+        || !crate::sr_session::valid_unit_scale(setup.units_to_meters)
         || setup.quality_choices == 0
         || setup.quality_choices & !0x1f != 0
         || motion.struct_size < size_of_val(motion) as u32
@@ -583,7 +671,7 @@ impl Host {
             backend: 0,
             max_generated_frames: MAX_GENERATED_FRAMES,
             depth_inverted: self.setup.depth_inverted,
-            depth_infinite: self.setup.depth_inverted,
+            depth_infinite: depth_infinite(&self.setup),
             units_to_meters: self.setup.units_to_meters,
             runtime_switching: 1,
             ui_mode: UI_MODE_BACKBUFFER_HUDLESS,
@@ -715,15 +803,13 @@ impl Host {
                 "D3D11 host refuses FG controls: native FG input lease capability unavailable.",
             );
         }
-        let transport_default = (self.setup.colour_transport_default == 0) as i32;
-        self.transport.store(
-            self.ini_read("ColourTransport", transport_default),
-            Ordering::SeqCst,
-        );
-        self.fidelity
-            .store(self.ini_read("ColourCorrection", 0), Ordering::SeqCst);
-        self.capture_failures
-            .store(self.ini_read("CaptureSRFailures", 0), Ordering::SeqCst);
+        for (index, option) in ADVANCED.iter().enumerate() {
+            if let Some(key) = option.key {
+                let fallback = index == Advanced::Transport as usize
+                    && self.setup.colour_transport_default == 0;
+                (option.flag)(self).store(self.ini_read(key, fallback as i32), Ordering::SeqCst);
+            }
+        }
         let toggle = |label: &'static CStr, value: bool| rsf_overlay_service_option {
             label_utf8: label.as_ptr(),
             kind: RSF_OVERLAY_SERVICE_OPTION_TOGGLE,
@@ -734,22 +820,7 @@ impl Host {
             divisor: 1,
             restart: 0,
         };
-        let advanced = [
-            toggle(c"Capture next SR inputs", false),
-            toggle(
-                c"DLSS colour transport",
-                self.transport.load(Ordering::SeqCst),
-            ),
-            toggle(
-                c"SR colour correction",
-                self.fidelity.load(Ordering::SeqCst),
-            ),
-            toggle(
-                c"Capture SR failures (max 3 per session)",
-                self.capture_failures.load(Ordering::SeqCst),
-            ),
-            toggle(c"Capture 4 ready SR frames", false),
-        ];
+        let advanced = ADVANCED.map(|option| toggle(option.label, option.value(self) != 0));
         let panel = rsf_overlay_service_setup {
             struct_size: size_of::<rsf_overlay_service_setup>() as u32,
             abi_version: RSF_OVERLAY_API_VERSION,
@@ -955,6 +1026,9 @@ impl Host {
     }
 
     fn process(&self, context: Raw, pass: &Pass, auxiliary: Option<&[Surface]>) -> i32 {
+        if pass.session_id != self.upstream.session_id {
+            return INVALID;
+        }
         let Some(mut guard) = self.try_graphics() else {
             return BUSY;
         };
@@ -1090,6 +1164,7 @@ impl Host {
             }
         }
         let mut result = NOT_READY;
+        let mut observed = None;
         if settings.sr_enabled != 0 {
             if g.running && g.present_result == DLSS_OK && !configure_only {
                 let mut evaluated = *pass;
@@ -1107,6 +1182,7 @@ impl Host {
                     ticket.flags |= RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED;
                     let mut ordered = 0;
                     result = if prepared {
+                        observed = Some(sr_inputs(&evaluated));
                         unsafe { (p.sr_evaluate)(context, &evaluated, &mut ordered) }
                     } else {
                         NOT_READY
@@ -1132,6 +1208,7 @@ impl Host {
                         })
                     });
                     result = if prepared {
+                        observed = Some(sr_inputs(&evaluated));
                         unsafe { (p.sr_evaluate)(context, &evaluated, null_mut()) }
                     } else {
                         NOT_READY
@@ -1225,6 +1302,7 @@ impl Host {
         {
             let mut shared = self.shared();
             let report = &mut shared.report;
+            let prior_inputs = (report.inputs, report.jitter_pixels);
             *report = fresh_report();
             report.effective_backend = if result == OK { g.backend } else { 0 };
             report.effective_quality = g.quality;
@@ -1236,11 +1314,11 @@ impl Host {
             report.frames_refused = g.refused as u32;
             report.last_result = result;
             report.quality_locked = (self.setup.quality_choices == 1) as u32;
-            report.inputs = RSF_OVERLAY_SR_INPUT_COLOR
-                | RSF_OVERLAY_SR_INPUT_DEPTH
-                | RSF_OVERLAY_SR_INPUT_MOTION
-                | RSF_OVERLAY_SR_INPUT_JITTER;
-            report.jitter_pixels = pass.camera.jitter_pixels;
+            (report.inputs, report.jitter_pixels) = if configure_only {
+                prior_inputs
+            } else {
+                observed.unwrap_or_default()
+            };
             if configure_only {
                 set_reason(
                     report,
@@ -1868,11 +1946,12 @@ impl Host {
         // Keep startup receipts, plus bounded late stage samples and the first refusal
         // of each stage. Read no extension fields until its declared size/version allows it.
         // This host owns normalization; the same fact is not dispatched upstream twice.
-        let Some(fact) = (unsafe { event.as_ref() })
-            .filter(|fact| fact.struct_size >= size_of::<rsf_game_cpu_event>() as u32)
-        else {
+        if event.is_null()
+            || unsafe { prefix_size(event.cast()) } < size_of::<rsf_game_cpu_event>() as u32
+        {
             return;
-        };
+        }
+        let fact = unsafe { &*event };
         let source_event =
             (RSF_GAME_CPU_SOURCE_RESERVE..=RSF_GAME_CPU_SOURCE_ABORT).contains(&fact.stage);
         let qualified = fact.stage <= RSF_GAME_CPU_SOURCE_ABORT
@@ -1902,29 +1981,26 @@ impl Host {
         if !(initial || first_refusal || sampled) {
             return;
         }
-        let (mut native_generation, mut poll_begin, mut abort_reason) = (0u64, 0u64, 0u32);
-        if source_event && fact.struct_size >= CPU_SOURCE_EVENT_SIZE_1 {
-            let mut source: rsf_game_cpu_source_event = unsafe { std::mem::zeroed() };
-            let size = if fact.struct_size as usize >= size_of::<rsf_game_cpu_source_event>() {
-                size_of::<rsf_game_cpu_source_event>()
-            } else {
-                CPU_SOURCE_EVENT_SIZE_1 as usize
-            };
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    event.cast::<u8>(),
-                    ptr::from_mut(&mut source).cast::<u8>(),
-                    size,
+        let decoded = source_event
+            .then(|| unsafe { decode_source_event(event, fact) })
+            .flatten();
+        let packet = match &decoded {
+            Some(SourcePacket::Legacy(_)) => "legacy",
+            Some(SourcePacket::Full(_)) => "full",
+            None if source_event => "invalid",
+            None => "base",
+        };
+        let (native_generation, poll_begin, abort_reason) =
+            decoded.as_ref().map_or((0, 0, 0), |packet| {
+                let source = packet.event();
+                (
+                    source.native_generation,
+                    source.poll_begin_qpc,
+                    source.reason,
                 )
-            };
-            native_generation = source.native_generation;
-            abort_reason = source.reason;
-            if size == size_of::<rsf_game_cpu_source_event>() {
-                poll_begin = source.poll_begin_qpc;
-            }
-        }
+            });
         self.log(&format!(
-            "D3D11 CPU fact session={} source={} stage={} accepted={accepted} flags=0x{:x} version={} size={} native_generation={native_generation} poll_begin={poll_begin} abort_reason={abort_reason}",
+            "D3D11 CPU fact session={} source={} stage={} accepted={accepted} flags=0x{:x} version={} size={} native_generation={native_generation} poll_begin={poll_begin} abort_reason={abort_reason} packet={packet}",
             fact.session_id,
             fact.source_frame_id,
             fact.stage,
@@ -1935,44 +2011,25 @@ impl Host {
     }
 
     fn action(&self, index: u32, value: i32) -> bool {
-        if index > 4 || !(0..=1).contains(&value) {
+        let Some(option) = ADVANCED.get(index as usize) else {
+            return false;
+        };
+        if !(0..=1).contains(&value) {
             return false;
         }
         let enabled = value != 0;
-        match index {
-            0 | 4 => {
-                if !enabled {
-                    return false;
-                }
-                let flag = if index == 0 {
-                    &self.capture
-                } else {
-                    &self.capture_sequence
-                };
-                flag.store(true, Ordering::Release);
-                true
+        if let Some(key) = option.key {
+            if !self.ini_write(key, enabled) {
+                return false;
             }
-            3 => {
-                if !self.ini_write("CaptureSRFailures", enabled) {
-                    return false;
-                }
-                self.capture_failures.store(enabled, Ordering::Release);
-                true
-            }
-            _ => {
-                let (key, flag) = if index == 1 {
-                    ("ColourTransport", &self.transport)
-                } else {
-                    ("ColourCorrection", &self.fidelity)
-                };
-                if !self.ini_write(key, enabled) {
-                    return false;
-                }
-                flag.store(enabled, Ordering::Release);
-                self.requested_generation.fetch_add(1, Ordering::SeqCst);
-                true
-            }
+        } else if !enabled {
+            return false;
         }
+        (option.flag)(self).store(enabled, Ordering::Release);
+        if option.bump_generation {
+            self.requested_generation.fetch_add(1, Ordering::SeqCst);
+        }
+        true
     }
 
     fn bind_presentation(&self, swapchain: Raw) -> i32 {
@@ -2192,15 +2249,11 @@ unsafe extern "C" fn host_options(user: Raw, values: *mut i32, count: u32) {
     if values.is_null() {
         return;
     }
-    let current = [
-        0,
-        host.transport.load(Ordering::SeqCst) as i32,
-        host.fidelity.load(Ordering::SeqCst) as i32,
-        host.capture_failures.load(Ordering::SeqCst) as i32,
-        0,
-    ];
     let values = unsafe { std::slice::from_raw_parts_mut(values, count as usize) };
-    for (target, value) in values.iter_mut().zip(current) {
+    for (target, value) in values
+        .iter_mut()
+        .zip(ADVANCED.map(|option| option.value(host)))
+    {
         *target = value;
     }
 }
@@ -2262,20 +2315,38 @@ unsafe fn create(
     let Some(platform) = (unsafe { platform.as_ref() }) else {
         return NOT_READY;
     };
+    const LEGACY_SETUP_SIZE: usize = offset_of!(rsf_d3d11_host_setup, depth_far_plane);
     if setup.is_null()
-        || unsafe { prefix_size(setup.cast()) } < size_of::<rsf_d3d11_host_setup>() as u32
+        || unsafe { prefix_size(setup.cast()) } < LEGACY_SETUP_SIZE as u32
         || services.is_null()
         || unsafe { prefix_size(services.cast()) } < size_of::<rsf_game_host_services>() as u32
     {
         return INVALID;
     }
-    let (setup, upstream) = unsafe { (&*setup, *services) };
+    let size = unsafe { prefix_size(setup.cast()) } as usize;
+    if size != LEGACY_SETUP_SIZE && size < size_of::<rsf_d3d11_host_setup>() {
+        return INVALID;
+    }
+    let mut decoded: rsf_d3d11_host_setup = unsafe { std::mem::zeroed() };
+    let prefix = if size >= size_of::<rsf_d3d11_host_setup>() {
+        size_of::<rsf_d3d11_host_setup>()
+    } else {
+        LEGACY_SETUP_SIZE
+    };
+    unsafe {
+        ptr::copy_nonoverlapping(
+            setup.cast::<u8>(),
+            ptr::from_mut(&mut decoded).cast(),
+            prefix,
+        )
+    };
+    let (setup, upstream) = (&decoded, unsafe { *services });
     if setup.abi_version != RSF_D3D11_HOST_ABI_VERSION
         || upstream.abi_version != RSF_GAME_ABI_VERSION
     {
         return ABI_MISMATCH;
     }
-    if !validate_setup(setup, &upstream) {
+    if setup.depth_far_plane > RSF_D3D11_HOST_DEPTH_INFINITE || !validate_setup(setup, &upstream) {
         return INVALID;
     }
     // Bridge installation can call back into the adapter before publishing the owner.
@@ -2318,7 +2389,7 @@ unsafe fn create(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_d3d11_host_request_capture(_: Raw) -> u32 {
+extern "C" fn rsf_d3d11_host_request_capture(_: Raw) -> u32 {
     let host = OWNER.load(Ordering::Acquire);
     if host.is_null() {
         return NOT_READY as u32;
@@ -2328,7 +2399,7 @@ extern "C" fn rsf_core_d3d11_host_request_capture(_: Raw) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_capture_control(
+unsafe extern "C" fn rsf_d3d11_host_capture_control(
     request: *const rsf_d3d11_capture_control,
 ) -> i32 {
     let request = match unsafe { admitted(request, RSF_D3D11_CAPTURE_CONTROL_VERSION) } {
@@ -2347,9 +2418,9 @@ unsafe extern "C" fn rsf_core_d3d11_host_capture_control(
         return NOT_READY;
     }
     let index = if request.operation == RSF_D3D11_CAPTURE_SEQUENCE {
-        4
+        Advanced::CaptureSequence as u32
     } else {
-        3
+        Advanced::CaptureFailures as u32
     };
     if unsafe { &*host }.action(index, request.value as i32) {
         OK
@@ -2359,7 +2430,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_capture_control(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_d3d11_host_set_active(user: Raw, active: u32) -> i32 {
+extern "C" fn rsf_d3d11_host_set_active(user: Raw, active: u32) -> i32 {
     let Some(host) = owner(user) else {
         return INVALID;
     };
@@ -2397,7 +2468,7 @@ unsafe fn dispatch_chain(host: &Host, request: *mut rsf_d3d11_chain_dispatch) ->
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_dispatch_chain(
+unsafe extern "C" fn rsf_d3d11_host_dispatch_chain(
     user: Raw,
     request: *mut rsf_d3d11_chain_dispatch,
 ) -> i32 {
@@ -2408,7 +2479,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_dispatch_chain(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_dispatch_present(
+unsafe extern "C" fn rsf_d3d11_host_dispatch_present(
     user: Raw,
     request: *mut rsf_d3d11_present_dispatch,
 ) -> i32 {
@@ -2433,23 +2504,26 @@ unsafe extern "C" fn rsf_core_d3d11_host_dispatch_present(
         method: RSF_D3D11_DISPATCH_PRESENT,
         handled: 0,
         receiver: request.receiver,
-        args: rsf_d3d11_chain_args { raw: [0; 5] },
-        result: 0,
+        args: unsafe { std::mem::zeroed() },
+        result: rsf_d3d11_chain_dispatch__bindgen_ty_2 { hresult: 0 },
     };
-    call.args.present = [request.sync_interval, request.flags];
+    call.args.present = rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_1 {
+        sync_interval: request.sync_interval,
+        flags: request.flags,
+    };
     let status = unsafe { dispatch_chain(host, &mut call) };
     if status != OK {
         return status;
     }
     request.handled = call.handled;
     if call.handled != 0 {
-        request.native_result = call.result;
+        request.native_result = unsafe { call.result.hresult };
     }
     OK
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_creation_begin(
+unsafe extern "C" fn rsf_d3d11_host_creation_begin(
     user: Raw,
     scope: *mut rsf_d3d11_creation_scope,
 ) -> i32 {
@@ -2482,7 +2556,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_creation_begin(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_creation_end(
+unsafe extern "C" fn rsf_d3d11_host_creation_end(
     user: Raw,
     scope: *const rsf_d3d11_creation_scope,
     result: *const rsf_d3d11_native_chain,
@@ -2541,7 +2615,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_creation_end(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_wrap_native_swapchain(
+unsafe extern "C" fn rsf_d3d11_host_wrap_native_swapchain(
     user: Raw,
     request: *const rsf_d3d11_native_chain,
 ) -> i32 {
@@ -2573,7 +2647,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_wrap_native_swapchain(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_bind_presentation(
+unsafe extern "C" fn rsf_d3d11_host_bind_presentation(
     user: Raw,
     binding: *const rsf_d3d11_presentation_binding,
 ) -> i32 {
@@ -2595,7 +2669,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_bind_presentation(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_reduced_frame(
+unsafe extern "C" fn rsf_d3d11_host_reduced_frame(
     user: Raw,
     context: Raw,
     request: *mut rsf_d3d11_reduced_frame,
@@ -2614,7 +2688,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_reduced_frame(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_upscale_auxiliaries(
+unsafe extern "C" fn rsf_d3d11_host_upscale_auxiliaries(
     user: Raw,
     context: Raw,
     request: *const rsf_d3d11_auxiliary_pass,
@@ -2659,7 +2733,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_upscale_auxiliaries(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_restore_auxiliaries(
+unsafe extern "C" fn rsf_d3d11_host_restore_auxiliaries(
     user: Raw,
     scope: *const rsf_d3d11_auxiliary_scope,
 ) -> i32 {
@@ -2694,7 +2768,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_restore_auxiliaries(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_bind_sampler_bias(
+unsafe extern "C" fn rsf_d3d11_host_bind_sampler_bias(
     user: Raw,
     context: Raw,
     request: *mut rsf_d3d11_sampler_bias,
@@ -2733,7 +2807,7 @@ unsafe extern "C" fn rsf_core_d3d11_host_bind_sampler_bias(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_host_capture_texture(
+unsafe extern "C" fn rsf_d3d11_host_capture_texture(
     user: Raw,
     context: Raw,
     request: *const rsf_d3d11_host_capture,

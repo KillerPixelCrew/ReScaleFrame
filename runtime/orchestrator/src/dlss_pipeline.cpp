@@ -271,21 +271,20 @@ int32_t sharpen(void** pass, void* context, void* output, void* motion, void* de
 {
     const auto options = rsf::sharpening::options_from_request(*request);
     if (!rsf::sharpening::active(options)) return 1;
-    rsf::sharpening::Frame mapping{};
+    rsf_sharpen11_frame mapping{};
+    mapping.hdr = 1;
+    mapping.exposure = 1.0f;
     mapping.depth_inverted = frame->depth_inverted;
     mapping.motion_x = frame->motion_x;
     mapping.motion_y = frame->motion_y;
     mapping.near_plane = frame->near_plane;
     mapping.far_plane = frame->far_plane;
-    if (!*pass) *pass = new (std::nothrow) rsf::sharpening::D3D11;
-    auto* owner = static_cast<rsf::sharpening::D3D11*>(*pass);
-    return owner && owner->run(static_cast<ID3D11DeviceContext*>(context), static_cast<ID3D11Texture2D*>(output),
-        static_cast<ID3D11Texture2D*>(motion), static_cast<ID3D11Texture2D*>(depth),
-        static_cast<ID3D11Texture2D*>(exposure), options, mapping);
+    void* inputs[]{output, motion, depth, exposure};
+    return rsf_core_sharpen11_run(pass, context, inputs, request, &mapping) != 0;
 }
 catch (...) { return 0; }
 
-void sharpen_destroy(void* pass) noexcept { delete static_cast<rsf::sharpening::D3D11*>(pass); }
+void sharpen_destroy(void* pass) noexcept { rsf_core_sharpen11_destroy(pass); }
 
 /* The legacy FSR/XeSS adapter. */
 int32_t alternate_create(void* device, uint32_t width, uint32_t height, const char* const* directories,

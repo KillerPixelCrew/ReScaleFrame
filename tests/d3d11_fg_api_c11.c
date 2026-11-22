@@ -17,7 +17,12 @@ _Static_assert(sizeof(rsf_game_depth_domains) == 240, "copied depth descriptor l
 _Static_assert(offsetof(rsf_game_render_pass, depth_domains) == offsetof(rsf_game_render_pass, temporal_mask_weights) + 16,
     "append-only depth facts follow ABI22 tail");
 _Static_assert(RSF_GAME_ABI_VERSION == 24, "plugin ABI with input receipts");
-_Static_assert(RSF_D3D11_FG_API_VERSION == 3, "FG table negotiates new pass");
+_Static_assert(RSF_D3D11_FG_API_VERSION == 4, "FG table negotiates normalized resources");
+
+_Static_assert(RSF_D3D11_FG_INPUTS_VERSION == 1, "FG input version");
+_Static_assert(offsetof(rsf_d3d11_fg_inputs, struct_size) == 0, "FG input size prefix");
+_Static_assert(offsetof(rsf_d3d11_fg_inputs, abi_version) == 4, "FG input version prefix");
+_Static_assert(sizeof(rsf_d3d11_fg_inputs) == 24, "x64 FG input layout");
 
 int main(void) {
     rsf_d3d11_fg_api api = {0};

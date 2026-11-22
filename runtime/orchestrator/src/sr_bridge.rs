@@ -3,6 +3,7 @@
 // surfaces and one shared fence. This owner decides lifetime, cross-API ordering, input leases,
 // GPU retirement and failure policy. sr_bridge_platform.cpp supplies one call per platform operation.
 use crate::com_ref::ComRef;
+use crate::owned_handle::OwnedHandle as Owned;
 use crate::render_abi::*;
 use crate::sr_session::has_capacity;
 use rsf_game_sys::{
@@ -108,28 +109,6 @@ pub(crate) struct Platform {
     dump_result: unsafe extern "C" fn(Handle, *const rsf_sr_frame, u32, i32, u32),
 }
 
-// A non-COM platform object released by its own destroy call.
-struct Owned {
-    handle: NonNull<c_void>,
-    release: unsafe extern "C" fn(Handle),
-}
-
-impl Owned {
-    fn new(handle: Handle, release: unsafe extern "C" fn(Handle)) -> Option<Self> {
-        NonNull::new(handle).map(|handle| Self { handle, release })
-    }
-
-    fn get(&self) -> Handle {
-        self.handle.as_ptr()
-    }
-}
-
-impl Drop for Owned {
-    fn drop(&mut self) {
-        unsafe { (self.release)(self.handle.as_ptr()) };
-    }
-}
-
 fn owned_com(object: Handle) -> Option<ComRef> {
     NonNull::new(object).map(ComRef)
 }
@@ -156,8 +135,14 @@ struct Surfaces {
 struct Shape {
     width: u32,
     height: u32,
-    color_format: u32,
-    motion_format: u32,
+    output_width: u32,
+    output_height: u32,
+}
+
+struct Prepared {
+    shape: Shape,
+    surfaces: Surfaces,
+    output: ComRef,
 }
 
 struct Commands {
@@ -198,9 +183,7 @@ enum SignalSource {
 pub(crate) struct Bridge {
     warm_up: Option<PendingWarmUp>,
     session: Owned,
-    surfaces: Option<Surfaces>,
-    output: Option<ComRef>,
-    shape: Option<Shape>,
+    prepared: Option<Prepared>,
     fence: SharedFence,
     event: Owned,
     validated: [Validated; SLOTS],
@@ -303,9 +286,7 @@ impl Bridge {
         Ok(Self {
             warm_up: None,
             session,
-            surfaces: None,
-            output: None,
-            shape: None,
+            prepared: None,
             fence,
             event,
             validated: Default::default(),
@@ -419,21 +400,25 @@ impl Bridge {
         Some(desc)
     }
 
-    fn release_surfaces(&mut self) {
-        self.surfaces = None;
-        self.output = None;
-        self.shape = None;
-    }
-
     // Recreates the shared surfaces when the render shape changes, after the GPU has retired them.
-    fn prepare(&mut self, record: &rsf_frame_record, shape: Shape) -> i32 {
-        if self.shape == Some(shape) {
-            return OK;
+    fn prepare(&mut self, record: &rsf_frame_record) -> Result<&Prepared, i32> {
+        let shape = Shape {
+            width: record.render_width,
+            height: record.render_height,
+            output_width: record.output_width,
+            output_height: record.output_height,
+        };
+        if self
+            .prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.shape == shape)
+        {
+            return Ok(self.prepared.as_ref().unwrap());
         }
         if !self.wait() {
-            return self.gpu_failure();
+            return Err(self.gpu_failure());
         }
-        self.release_surfaces();
+        self.prepared = None;
         let p = self.platform;
         let (device11, device12) = (com(&self.device11), com(&self.device12));
         let mut surfaces = Surfaces {
@@ -445,8 +430,8 @@ impl Bridge {
             let (width, height) = extent(slot, record);
             let format = match slot {
                 DEPTH | EXPOSURE | MASKS.. => SCALAR_FORMAT,
-                MOTION => shape.motion_format,
-                _ => shape.color_format,
+                MOTION => MOTION_FORMAT,
+                _ => COLOR_FORMAT,
             };
             let surface = unsafe {
                 (p.surface_create)(
@@ -460,7 +445,7 @@ impl Bridge {
                 )
             };
             let Some(surface) = Owned::new(surface, p.surface_destroy) else {
-                return INIT_FAILED;
+                return Err(INIT_FAILED);
             };
             surfaces.d3d11[slot] = unsafe { (p.surface_d3d11)(surface.get()) };
             surfaces.d3d12[slot] = unsafe { (p.surface_d3d12)(surface.get()) };
@@ -471,16 +456,17 @@ impl Bridge {
                 device12,
                 record.output_width,
                 record.output_height,
-                shape.color_format,
+                COLOR_FORMAT,
             )
         };
         let Some(output) = owned_com(output) else {
-            return INIT_FAILED;
+            return Err(INIT_FAILED);
         };
-        self.surfaces = Some(surfaces);
-        self.output = Some(output);
-        self.shape = Some(shape);
-        OK
+        Ok(self.prepared.insert(Prepared {
+            shape,
+            surfaces,
+            output,
+        }))
     }
 
     // Releases a pending warm-up once its own fence, signalled behind its list on the bridge
@@ -586,13 +572,12 @@ impl Bridge {
             &frame.exposure,
             &frame.output,
         ];
-        let mut described = [TextureDesc::default(); OUTPUT + 1];
         for (slot, input) in inputs.iter().enumerate() {
             if slot == EXPOSURE && input.resource.is_null() {
                 continue;
             }
             match self.describe(slot, input.resource) {
-                Some(desc) if input_accepted(slot, &desc, record) => described[slot] = desc,
+                Some(desc) if input_accepted(slot, &desc, record) => {}
                 _ => return INVALID,
             }
         }
@@ -611,20 +596,15 @@ impl Bridge {
                 masks[index] = mask.resource;
             }
         }
-        let shape = Shape {
-            width: record.render_width,
-            height: record.render_height,
-            color_format: described[COLOR].format,
-            motion_format: described[MOTION].format,
+        let prepared = match self.prepare(record) {
+            Ok(prepared) => prepared,
+            Err(code) => return code,
         };
-        let result = self.prepare(record, shape);
-        if result != OK {
-            return result;
-        }
-        let (Some(surfaces), Some(output)) = (&self.surfaces, &self.output) else {
-            return INIT_FAILED;
-        };
-        let (shared11, shared12, output) = (surfaces.d3d11, surfaces.d3d12, com(output));
+        let (shared11, shared12, output) = (
+            prepared.surfaces.d3d11,
+            prepared.surfaces.d3d12,
+            com(&prepared.output),
+        );
         let (fence11, fence12) = (self.fence.d3d11, self.fence.d3d12);
         let queue = com(&self.queue);
 
@@ -1000,19 +980,23 @@ unsafe extern "C" fn rsf_sr_bridge_get_status(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_bridge_destroy(bridge: *mut Bridge) {
+unsafe extern "C" fn rsf_sr_bridge_close(bridge: *mut Bridge) -> i32 {
     let Some(owner) = (unsafe { bridge.as_mut() }) else {
-        return;
+        return INVALID;
     };
     if !owner.retire() {
-        // A timed-out queue may still reference SDK descriptors and shared surfaces. Keep the
-        // failed bridge alive until process exit rather than freeing memory under pending work.
-        owner.say(
-            "SR GPU completion failed; retaining the failed bridge resources until process exit",
-        );
-        return;
+        return NOT_READY;
     }
     drop(unsafe { Box::from_raw(bridge) });
+    OK
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_sr_bridge_destroy(bridge: *mut Bridge) {
+    if unsafe { rsf_sr_bridge_close(bridge) } == NOT_READY {
+        // Legacy callers cannot observe retention. Preserve outstanding GPU resources.
+        unsafe { &*bridge }.say("SR GPU completion failed; retaining the failed bridge resources");
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Command-list observations and copied draw facts ordered by the native capture mutex.
-use super::{Capture, MAX_DRAW_METADATA, allocate, try_entry};
+use super::{Capture, MAX_DRAW_METADATA, try_entry};
+#[cfg(windows)]
+use rsf_game_sys::checksum::crc32_ieee;
+use rsf_game_sys::ffi_util::try_box;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -183,12 +186,8 @@ impl Recordings {
 
 // The native descriptor parser lends the exact shader bytes for this call. Hashing does
 // not access the owner and runs before the native graphics mutex is taken.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_hash_shader(
-    bytes: *const u8,
-    length: usize,
-    out: &mut u32,
-) -> bool {
+#[cfg(windows)]
+pub(super) unsafe fn hash_shader(bytes: *const u8, length: usize, out: &mut u32) -> bool {
     if length == 0 {
         *out = 0;
         return true;
@@ -197,14 +196,7 @@ unsafe extern "C" fn rsf_rdr2_capture_hash_shader(
         return false;
     }
     let bytes = unsafe { std::slice::from_raw_parts(bytes, length) };
-    let mut value = u32::MAX;
-    for &byte in bytes {
-        value ^= u32::from(byte);
-        for _ in 0..8 {
-            value = (value >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(value & 1));
-        }
-    }
-    *out = !value;
+    *out = crc32_ieee(bytes);
     true
 }
 
@@ -420,7 +412,8 @@ pub(super) unsafe fn snapshot_submission(
     };
     unsafe { &mut *owner.recordings.get() }
         .snapshot(lists)
-        .map_or(null_mut(), allocate)
+        .and_then(try_box)
+        .map_or_else(null_mut, Box::into_raw)
 }
 
 pub(super) fn claim_readback(submission: &Submission, readback: &mut Readback) -> bool {

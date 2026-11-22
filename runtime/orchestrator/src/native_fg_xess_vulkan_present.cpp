@@ -16,7 +16,7 @@ static_assert(sizeof(rsf_xessgvk_ops) == 17 * sizeof(void*) && sizeof(rsf_xessgv
 namespace {
 const rsf_xessgvk_ops& operations() {
     static const rsf_xessgvk_ops value{
-        &rsf_dx12gvk_graphics(), &rsf_dx12gvk_interop, rsf_xessvk_interop_create,
+        rsf_dx12gvk_graphics(), &rsf_dx12gvk_interop, rsf_xessvk_interop_create,
         RsfXessBridgeCreate, RsfXessBridgeStart, RsfXessBridgeMaxGenerated, RsfXessBridgeSetGenerated,
         VulkanStoryXessFgSetEnabled, RsfXessBridgePresent, RsfXessBridgeCaptureSource, RsfXessBridgeCapturedCallbacks,
         VulkanStoryXessFgWaitIdle, VulkanStoryXessFgPrepareDestroy, VulkanStoryXessFgDestroyChecked,

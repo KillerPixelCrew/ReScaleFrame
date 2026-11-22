@@ -589,11 +589,14 @@ void hooked_rhi_frame_end(void* list)
 {
     OuterGuard lifetime;
     if (full_frame_ticket) {
-        if (!rsf_ac7_render_scope_close(full_frame_ticket, list)) {
+        if (rsf_ac7_render_scope_close(full_frame_ticket, list)) {
+            full_frame_ticket = nullptr;
+        } else {
+            // Only the originating recording list can retire this ticket. Keep it reachable
+            // while the renderer is deactivated and the EndFrame hook can still drain it.
             auto* self = installed.load(std::memory_order_acquire);
             if (self) { self->active.store(false); log(*self, "AC7 full RHI frame refused: EndFrame could not queue"); }
         }
-        full_frame_ticket = nullptr;
     }
     reinterpret_cast<void(*)(void*)>(sites[hook_rhi_frame_end].original)(list);
 }
@@ -809,15 +812,10 @@ void retire_renderer_uniforms(rsf_ac7_native_renderer& self, void* renderer, voi
     // Native retirement waits for CPU recording tasks and dispatches their lists. A marker
     // appended afterward retires raw uniform pointers only after earlier RHI commands execute.
     // The scope carries numeric identity only; no retired FViewInfo memory is read here.
-    rsf_ac7_render_ticket* ticket = nullptr;
     const rsf_ac7_scope_lease owned{lease, nullptr, release_pass};
-    if (!rsf_ac7_render_scope_open_leased(self.scopes, list, &scope, &owned, &ticket)) {
+    if (!rsf_ac7_render_scope_enqueue_leased(self.scopes, list, &scope, &owned)) {
         delete lease; self.active.store(false);
         log(self, "AC7 uniform retirement refused; generated buffers and module retained"); return;
-    }
-    if (!rsf_ac7_render_scope_close(ticket, list)) {
-        self.active.store(false);
-        log(self, "AC7 uniform retirement could not close; buffers and module retained"); return;
     }
     for (auto& entry : self.uniform_owners) if (entry.renderer == key && entry.uniform) {
         entry = {}; --self.pending_uniforms;
@@ -977,14 +975,9 @@ void node_process(SRNode* node, void* context)
         lease->motion = static_cast<ID3D11Resource*>(pool_texture(plan.velocity, false));
         if (lease->motion) lease->motion->AddRef();
         uint64_t list = 0; read(uint64_t(uintptr_t(context)), 0x28, list);
-        rsf_ac7_render_ticket* ticket = nullptr;
         const rsf_ac7_scope_lease owned{lease, resolve_pass, release_pass};
-        if (rsf_ac7_render_scope_open_leased(plan.owner->scopes, reinterpret_cast<void*>(uintptr_t(list)),
-            &plan.packet, &owned, &ticket)) {
-            if (!rsf_ac7_render_scope_close(ticket, reinterpret_cast<void*>(uintptr_t(list)))) {
-                plan.owner->active.store(false); log(*plan.owner, "AC7 native SR scope close refused; module retained");
-            }
-        } else release_pass(lease);
+        if (!rsf_ac7_render_scope_enqueue_leased(plan.owner->scopes, reinterpret_cast<void*>(uintptr_t(list)),
+            &plan.packet, &owned)) release_pass(lease);
     }
     resize_consumers(plan);
 }
@@ -1712,10 +1705,7 @@ void hooked_postprocess(void* owner, void* list, void* view, void* velocity_ref)
                 lease->owner = self; lease->depth_pool = depth; lease->motion_pool = postprocess_velocity;
                 pool_ref(depth, 0x28); pool_ref(postprocess_velocity, 0x28);
                 const rsf_ac7_scope_lease owned{lease, resolve_pass, release_pass};
-                rsf_ac7_render_ticket* ticket = nullptr;
-                if (rsf_ac7_render_scope_open_leased(self->scopes, list, &scope, &owned, &ticket)) {
-                    if (!rsf_ac7_render_scope_close(ticket, list)) log(*self, "AC7 velocity finalize scope could not close");
-                } else release_pass(lease);
+                if (!rsf_ac7_render_scope_enqueue_leased(self->scopes, list, &scope, &owned)) release_pass(lease);
             }
         }
     }
@@ -2107,7 +2097,7 @@ void hooked_widget_targets(void* converter)
         if (!read(address, offset, target) || !read(target, 0xd0, extent) ||
             (extent[0] == desired[0] && extent[1] == desired[1])) continue;
         auto* object = reinterpret_cast<void*>(uintptr_t(target));
-        engine<Init>(0x1ab0200)(object, desired[0], desired[1], 2, 1);
+        engine<Init>(rsf_ac7_hook_rva(hook_target_init))(object, desired[0], desired[1], 2, 1);
         engine<Update>(0x1ab7dc0)(object, 0);
     }
 }

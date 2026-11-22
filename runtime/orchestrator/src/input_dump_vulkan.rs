@@ -1,12 +1,22 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
+use crate::dx12_vulkan_platform::lookup;
+use crate::frame_capture_vk::{
+    Owner as Capture, rsf_core_capture_vk_complete_group, rsf_core_capture_vk_discard_group,
+    rsf_core_capture_vk_flush, rsf_core_capture_vk_pending, rsf_core_capture_vk_ready,
+    rsf_core_capture_vk_record,
+};
+use crate::input_dump::abi::rsf_core_dump_wants;
 use crate::sr_session::has_capacity;
+use crate::vulkan_capture_commands::Commands;
 use crate::vulkan_sr_abi::{
     RSF_SRVK_ABI_VERSION, rsf_input_dump_vk_setup as Setup, rsf_srvk_image as Image,
     rsf_srvk_setup as Graphics,
 };
+use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{c_char, c_void};
+use std::mem;
 use std::ptr;
 use std::sync::Mutex;
 
@@ -14,64 +24,29 @@ const INVALID: i32 = -1;
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
-const DEVICE_LOST: i32 = -4; // VkResult
+const DEVICE_LOST: i32 = -13; // rsf_input_dump_vk result
 const WAIT_NS: u64 = 15_000_000_000;
 
 type Handle = *mut c_void;
 type Submit = unsafe extern "C" fn(Handle, u32, *const c_void, u64) -> i32;
 
-#[repr(C)]
-struct Platform {
-    open: unsafe extern "C" fn(*const Graphics, *mut Handle) -> i32,
-    close: unsafe extern "C" fn(Handle),
-    create_pool: unsafe extern "C" fn(Handle, u32, *mut u64) -> i32,
-    destroy_pool: unsafe extern "C" fn(Handle, u64),
-    allocate: unsafe extern "C" fn(Handle, u64, *mut Handle) -> i32,
-    reset_pool: unsafe extern "C" fn(Handle, u64) -> i32,
-    begin: unsafe extern "C" fn(Handle, Handle) -> i32,
-    end: unsafe extern "C" fn(Handle, Handle) -> i32,
-    create_fence: unsafe extern "C" fn(Handle, *mut u64) -> i32,
-    destroy_fence: unsafe extern "C" fn(Handle, u64),
-    reset_fence: unsafe extern "C" fn(Handle, u64) -> i32,
-    wait_fence: unsafe extern "C" fn(Handle, u64, u64) -> i32,
-    submit: unsafe extern "C" fn(Submit, Handle, Handle, u64) -> i32,
-    wants: unsafe extern "C" fn(*const Record) -> i32,
-    has_readbacks: unsafe extern "C" fn(Handle) -> i32,
-    record: unsafe extern "C" fn(
-        Handle,
-        Handle,
-        *const Image,
-        *const Record,
-        *const c_char,
-        u64,
-    ) -> i32,
-    complete: unsafe extern "C" fn(Handle, u64),
-    discard: unsafe extern "C" fn(Handle, u64),
-    flush: unsafe extern "C" fn(Handle) -> i32,
-    watermark: unsafe extern "C" fn(*const Record) -> u64,
-    publish_watermark: unsafe extern "C" fn(Handle, u64),
-}
-
-const _: () = {
-    assert!(size_of::<Platform>() == 21 * size_of::<Handle>());
-};
-
 #[derive(Clone, Copy)]
 enum Pending {
-    Snapshot { group: u64, watermark: u64 },
-    // A drain or an uncertain submission still holds the fence without pixel evidence.
+    Snapshot { group: u64 },
+    // An empty drain or an uncertain submit holds the fence without pixel evidence.
     FenceOnly,
 }
 
 struct Owner {
-    ops: &'static Platform,
-    native: Handle,
+    ops: Commands,
+    capture: Capture,
+    lost: bool,
     device: Handle,
     submit: Submit,
     user: Handle,
-    pool: u64,
-    commands: Handle,
-    fence: u64,
+    pool: vk::CommandPool,
+    commands: vk::CommandBuffer,
+    fence: vk::Fence,
     last_group: u64,
     pending: Option<Pending>,
 }
@@ -79,81 +54,124 @@ struct Owner {
 impl Drop for Owner {
     fn drop(&mut self) {
         // The exported destroy call joins pending work before consuming the owner.
-        unsafe {
-            if self.pool != 0 {
-                (self.ops.destroy_pool)(self.native, self.pool);
-            }
-            if self.fence != 0 {
-                (self.ops.destroy_fence)(self.native, self.fence);
-            }
-            if !self.native.is_null() {
-                (self.ops.close)(self.native);
-            }
+        if self.pool != vk::CommandPool::null() {
+            self.ops.destroy_pool(self.pool);
+        }
+        if self.fence != vk::Fence::null() {
+            self.ops.destroy_fence(self.fence);
         }
     }
 }
 
 impl Owner {
-    fn create(setup: &Setup, submit: Submit, ops: &'static Platform) -> Result<Self, i32> {
+    fn create(setup: &Setup, submit: Submit) -> Result<Self, i32> {
+        let graphics = &setup.graphics;
+        let ops = Commands::load(graphics).ok_or(-7)?;
+        let properties = lookup(
+            graphics.instance_proc,
+            graphics.instance,
+            c"vkGetPhysicalDeviceMemoryProperties",
+        )
+        .ok_or(-7)?;
+        let properties = unsafe {
+            mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetPhysicalDeviceMemoryProperties>(
+                properties,
+            )
+        };
+        let mut memory = vk::PhysicalDeviceMemoryProperties::default();
+        unsafe {
+            properties(
+                vk::PhysicalDevice::from_raw(graphics.physical_device as u64),
+                &mut memory,
+            )
+        };
+        let mut capture = Capture::new_native(false);
+        if !capture.initialize(graphics.device, graphics.device_proc, &memory)
+            || unsafe { rsf_core_capture_vk_ready(&capture) } == 0
+        {
+            return Err(-7);
+        }
         let mut owner = Self {
             ops,
-            native: ptr::null_mut(),
-            device: setup.graphics.device,
+            capture,
+            lost: false,
+            device: graphics.device,
             submit,
             user: setup.user,
-            pool: 0,
-            commands: ptr::null_mut(),
-            fence: 0,
+            pool: vk::CommandPool::null(),
+            commands: vk::CommandBuffer::null(),
+            fence: vk::Fence::null(),
             last_group: 0,
             pending: None,
         };
-        let code = unsafe { (ops.open)(&setup.graphics, &mut owner.native) };
-        if code != 0 {
-            return Err(code);
-        }
-        if unsafe { (ops.create_pool)(owner.native, setup.queue_family, &mut owner.pool) } != 0
-            || unsafe { (ops.allocate)(owner.native, owner.pool, &mut owner.commands) } != 0
-            || unsafe { (ops.create_fence)(owner.native, &mut owner.fence) } != 0
-        {
-            return Err(INIT_FAILED);
-        }
+        owner.pool = owner
+            .ops
+            .create_pool(
+                setup.queue_family,
+                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            )
+            .map_err(|result| error_code(result, INIT_FAILED))?;
+        owner.commands = owner
+            .ops
+            .allocate(owner.pool)
+            .map_err(|result| error_code(result, INIT_FAILED))?;
+        owner.fence = owner
+            .ops
+            .create_fence()
+            .map_err(|result| error_code(result, INIT_FAILED))?;
         Ok(owner)
     }
 
     fn join(&mut self, timeout: u64) -> Result<bool, i32> {
         let Some(pending) = self.pending else {
-            return Ok(true);
+            return if self.lost {
+                Err(DEVICE_LOST)
+            } else {
+                Ok(true)
+            };
         };
-        let code = unsafe { (self.ops.wait_fence)(self.native, self.fence, timeout) };
-        if code != 0 {
-            if code == DEVICE_LOST {
-                if let Pending::Snapshot { group, .. } = pending {
-                    unsafe { (self.ops.discard)(self.native, group) };
-                }
-                self.pending = Some(Pending::FenceOnly);
+        let result = self.ops.wait_fence(self.fence, timeout);
+        if result == vk::Result::ERROR_DEVICE_LOST {
+            if let Pending::Snapshot { group } = pending {
+                unsafe { rsf_core_capture_vk_discard_group(&self.capture, group) };
             }
-            return Err(NOT_READY);
+            self.pending = None;
+            self.lost = true;
+            return Err(DEVICE_LOST);
         }
+        checked(result, NOT_READY)?;
         self.pending = None;
-        if let Pending::Snapshot { group, watermark } = pending {
-            unsafe {
-                (self.ops.complete)(self.native, group);
-                // Earlier engine readers still use the shared queue watermark.
-                (self.ops.publish_watermark)(self.device, watermark);
-            }
+        if self.lost {
+            return Err(DEVICE_LOST);
         }
-        Ok(unsafe { (self.ops.flush)(self.native) != 0 })
+        if let Pending::Snapshot { group } = pending {
+            unsafe { rsf_core_capture_vk_complete_group(&self.capture, group) };
+        }
+        Ok(unsafe { rsf_core_capture_vk_flush(&self.capture, 0, ptr::null_mut()) } != 0)
     }
 
-    fn abandon(&mut self, group: u64, may_be_pending: bool) -> i32 {
-        unsafe { (self.ops.discard)(self.native, group) };
-        if may_be_pending {
-            self.pending = Some(Pending::FenceOnly);
+    fn abandon(&mut self, group: u64, error: i32) -> i32 {
+        unsafe { rsf_core_capture_vk_discard_group(&self.capture, group) };
+        if error == DEVICE_LOST {
+            self.lost = true;
         } else {
             // Unsubmitted commands cannot be using the discarded allocations.
-            unsafe { (self.ops.flush)(self.native) };
+            unsafe { rsf_core_capture_vk_flush(&self.capture, 0, ptr::null_mut()) };
         }
-        FEATURE_FAILED
+        error
+    }
+
+    fn submit(&self, submits: &[vk::SubmitInfo<'_>]) -> i32 {
+        let infos = if submits.is_empty() {
+            ptr::null()
+        } else {
+            submits.as_ptr().cast()
+        };
+        unsafe { (self.submit)(self.user, submits.len() as u32, infos, self.fence.as_raw()) }
+    }
+
+    fn reset_fence(&self) -> vk::Result {
+        self.ops.reset_fence(self.fence)
     }
 
     fn snapshot(&mut self, record: *const Record, image: &Image, name: *const c_char) -> i32 {
@@ -163,35 +181,51 @@ impl Owner {
         if image.device != self.device || image.copy_source == 0 || image.image == 0 {
             return INVALID;
         }
-        if unsafe { (self.ops.has_readbacks)(self.native) } != 0 {
+        if unsafe { rsf_core_capture_vk_pending(&self.capture) } != 0 {
             return FEATURE_FAILED;
         }
         let Some(group) = self.last_group.checked_add(1) else {
             return FEATURE_FAILED;
         };
         self.last_group = group;
-        let ops = self.ops;
-        if unsafe { (ops.reset_pool)(self.native, self.pool) } != 0
-            || unsafe { (ops.reset_fence)(self.native, self.fence) } != 0
-            || unsafe { (ops.begin)(self.native, self.commands) } != 0
-        {
-            return FEATURE_FAILED;
+        let prepared = checked(self.ops.reset_pool(self.pool), FEATURE_FAILED)
+            .and_then(|()| checked(self.reset_fence(), FEATURE_FAILED))
+            .and_then(|()| checked(self.ops.begin(self.commands), FEATURE_FAILED));
+        if let Err(error) = prepared {
+            return self.abandon(group, error);
         }
-        let recorded =
-            unsafe { (ops.record)(self.native, self.commands, image, record, name, group) };
-        if recorded < 0 || unsafe { (ops.end)(self.native, self.commands) } != 0 {
-            return self.abandon(group, false);
-        }
+        let recorded = unsafe {
+            rsf_core_capture_vk_record(
+                &self.capture,
+                self.commands.as_raw() as Handle,
+                image,
+                record,
+                name,
+                (*record).flags & rsf_game_sys::RSF_FRAME_FLAG_RESET,
+                1,
+                ptr::null_mut(),
+                group,
+            )
+        };
         if recorded == 0 {
+            return self.abandon(group, FEATURE_FAILED);
+        }
+        if let Err(error) = checked(self.ops.end(self.commands), FEATURE_FAILED) {
+            return self.abandon(group, error);
+        }
+        if unsafe { rsf_core_capture_vk_pending(&self.capture) } == 0 {
             return 0;
         }
-        let watermark = unsafe { (ops.watermark)(record) };
-        let code = unsafe { (ops.submit)(self.submit, self.user, self.commands, self.fence) };
-        if code != 0 {
-            // Vulkan may leave a submission in use if it reports device loss.
-            return self.abandon(group, code == DEVICE_LOST);
+        let submit =
+            vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&self.commands));
+        if let Err(error) = checked(vk::Result::from_raw(self.submit(&[submit])), FEATURE_FAILED) {
+            if error == DEVICE_LOST {
+                // A lost submit can still put the command buffer in use.
+                self.pending = Some(Pending::FenceOnly);
+            }
+            return self.abandon(group, error);
         }
-        self.pending = Some(Pending::Snapshot { group, watermark });
+        self.pending = Some(Pending::Snapshot { group });
         join_result(self.join(WAIT_NS))
     }
 
@@ -200,19 +234,35 @@ impl Owner {
             Ok(published) => published,
             Err(code) => return code,
         };
-        let ops = self.ops;
-        if unsafe { (ops.reset_fence)(self.native, self.fence) } != 0 {
-            return FEATURE_FAILED;
+        if let Err(error) = checked(self.reset_fence(), FEATURE_FAILED) {
+            self.lost = error == DEVICE_LOST;
+            return error;
         }
-        let code = unsafe { (ops.submit)(self.submit, self.user, ptr::null_mut(), self.fence) };
-        if code != 0 {
-            if code == DEVICE_LOST {
+        if let Err(error) = checked(vk::Result::from_raw(self.submit(&[])), FEATURE_FAILED) {
+            if error == DEVICE_LOST {
+                self.lost = true;
                 self.pending = Some(Pending::FenceOnly);
             }
-            return FEATURE_FAILED;
+            return error;
         }
         self.pending = Some(Pending::FenceOnly);
         join_result(self.join(WAIT_NS).map(|drained| published && drained))
+    }
+}
+
+fn error_code(result: vk::Result, fallback: i32) -> i32 {
+    if result == vk::Result::ERROR_DEVICE_LOST {
+        DEVICE_LOST
+    } else {
+        fallback
+    }
+}
+
+fn checked(result: vk::Result, fallback: i32) -> Result<(), i32> {
+    if result == vk::Result::SUCCESS {
+        Ok(())
+    } else {
+        Err(error_code(result, fallback))
     }
 }
 
@@ -228,7 +278,6 @@ fn join_result(result: Result<bool, i32>) -> i32 {
 unsafe extern "C" fn rsf_core_input_dump_vk_create(
     setup: *const Setup,
     out: *mut *mut Mutex<Owner>,
-    ops: &'static Platform,
 ) -> i32 {
     if out.is_null() {
         return INVALID;
@@ -254,7 +303,7 @@ unsafe extern "C" fn rsf_core_input_dump_vk_create(
     {
         return INVALID;
     }
-    let owner = match Owner::create(setup, submit, ops) {
+    let owner = match Owner::create(setup, submit) {
         Ok(owner) => owner,
         Err(code) => return code,
     };
@@ -282,7 +331,7 @@ unsafe extern "C" fn rsf_core_input_dump_vk_snapshot(
     let Ok(mut owner) = owner.try_lock() else {
         return NOT_READY;
     };
-    if unsafe { (owner.ops.wants)(record) } == 0 {
+    if unsafe { rsf_core_dump_wants(record) } == 0 {
         return 0;
     }
     owner.snapshot(record, unsafe { &*image }, name)
@@ -308,7 +357,9 @@ unsafe extern "C" fn rsf_core_input_dump_vk_destroy(owner: *mut Mutex<Owner>) ->
         let Ok(mut owner) = lock.try_lock() else {
             return NOT_READY;
         };
-        if let Err(code) = owner.join(0) {
+        if let Err(code) = owner.join(0)
+            && code != DEVICE_LOST
+        {
             return code;
         }
     }

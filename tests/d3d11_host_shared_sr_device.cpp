@@ -100,6 +100,7 @@ int main(int argc, char** argv) {
     setup.identity_utf8 = "shared-sr-device"; setup.executable_sha256 = "synthetic";
     setup.engine_version_utf8 = "1"; setup.project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
     setup.units_to_meters = 1; setup.quality_choices = 0x1f; setup.depth_inverted = 1;
+    setup.depth_far_plane = RSF_D3D11_HOST_DEPTH_INFINITE;
     setup.motion.struct_size = sizeof(setup.motion); setup.motion.scale_x = setup.motion.scale_y = 1;
     setup.motion.output_scale_x = setup.motion.output_scale_y = 1; setup.motion.invalid_value = -1000;
     setup.presentation_bridge = 1; setup.accept_window = accept;

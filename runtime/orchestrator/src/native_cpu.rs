@@ -5,6 +5,7 @@
 use crate::cpu_abi::*;
 use crate::cpu_reservations::Book;
 use crate::input_receipts::Window as ReceiptWindow;
+use crate::sr_session::has_capacity;
 use rsf_game_sys::*;
 use std::ffi::c_void;
 use std::mem::{offset_of, zeroed};
@@ -19,9 +20,73 @@ const FRAMES: usize = 128;
 const PENDING: usize = 16;
 const EVENT_SIZE: u32 = size_of::<Event>() as u32;
 /// RSF_GAME_CPU_SOURCE_EVENT_SIZE_1: the first source packet ends before poll_begin_qpc.
-const SOURCE_EVENT_SIZE_1: u32 = EVENT_SIZE + 24;
-const _: () =
-    assert!(SOURCE_EVENT_SIZE_1 as usize == offset_of!(rsf_game_cpu_source_event, poll_begin_qpc));
+const SOURCE_EVENT_SIZE_1: usize = offset_of!(rsf_game_cpu_source_event, poll_begin_qpc);
+
+pub(crate) enum SourcePacket {
+    Legacy(rsf_game_cpu_source_event),
+    Full(rsf_game_cpu_source_event),
+}
+
+impl SourcePacket {
+    pub(crate) fn event(&self) -> &rsf_game_cpu_source_event {
+        match self {
+            Self::Legacy(event) | Self::Full(event) => event,
+        }
+    }
+}
+
+/// The caller guarantees the packet backs its advertised size.
+pub(crate) unsafe fn decode_source_event(
+    incoming: *const Event,
+    header: &Event,
+) -> Option<SourcePacket> {
+    let size = header.struct_size as usize;
+    let full = size_of::<rsf_game_cpu_source_event>();
+    if header.event_version != RSF_GAME_CPU_EVENT_VERSION_SOURCE
+        || (size != SOURCE_EVENT_SIZE_1 && size < full)
+    {
+        return None;
+    }
+    // A legacy packet stops before poll_begin_qpc, which stays zero.
+    let mut event = unsafe { zeroed() };
+    unsafe {
+        ptr::copy_nonoverlapping(
+            incoming.cast::<u8>(),
+            ptr::from_mut::<rsf_game_cpu_source_event>(&mut event).cast(),
+            size.min(full),
+        )
+    };
+    Some(if size == SOURCE_EVENT_SIZE_1 {
+        SourcePacket::Legacy(event)
+    } else {
+        SourcePacket::Full(event)
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn source_packet_sizes_do_not_admit_partial_extensions() {
+    let mut packet: rsf_game_cpu_source_event = unsafe { zeroed() };
+    packet.header.event_version = RSF_GAME_CPU_EVENT_VERSION_SOURCE;
+    packet.native_generation = 5;
+    packet.poll_begin_qpc = 17;
+    packet.header.struct_size = SOURCE_EVENT_SIZE_1 as u32;
+    let decode = |packet: &rsf_game_cpu_source_event| unsafe {
+        decode_source_event(ptr::from_ref(packet).cast(), &packet.header)
+    };
+    let Some(SourcePacket::Legacy(legacy)) = decode(&packet) else {
+        panic!("legacy source packet refused");
+    };
+    assert_eq!((legacy.native_generation, legacy.poll_begin_qpc), (5, 0));
+    packet.header.struct_size += 1;
+    assert!(decode(&packet).is_none());
+    packet.header.struct_size = size_of::<rsf_game_cpu_source_event>() as u32;
+    let Some(SourcePacket::Full(full)) = decode(&packet) else {
+        panic!("full source packet refused");
+    };
+    assert_eq!((full.native_generation, full.poll_begin_qpc), (5, 17));
+}
+
 const KEYED: u32 = RSF_GAME_CPU_INPUT_KEYED;
 const SUBSTITUTE: u32 = RSF_GAME_CPU_INPUT_SUBSTITUTE;
 const WINDOW_MESSAGE: u32 = RSF_GAME_CPU_WINDOW_MESSAGE;
@@ -162,10 +227,6 @@ fn qpc_now() -> u64 {
     now as u64
 }
 
-unsafe fn has_capacity<T>(value: *const T) -> bool {
-    !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
-}
-
 struct Dispatcher {
     rendered: AtomicBool,
     state: Mutex<State>,
@@ -208,12 +269,7 @@ impl Dispatcher {
         let mut guard = self.lock();
         let state = &mut *guard;
         let rendered = self.rendered();
-        let size = header.struct_size;
-        if header.event_version != RSF_GAME_CPU_EVENT_VERSION_SOURCE
-            || size < SOURCE_EVENT_SIZE_1
-            || (size > SOURCE_EVENT_SIZE_1
-                && (size as usize) < size_of::<rsf_game_cpu_source_event>())
-        {
+        let Some(packet) = (unsafe { decode_source_event(incoming, header) }) else {
             let mut unused = EMPTY_RECORD;
             return state.ledger.source_event(
                 None,
@@ -224,17 +280,8 @@ impl Dispatcher {
                 &mut unused,
                 rendered,
             );
-        }
-        // A short version 2 packet ends before poll_begin_qpc, which stays zero.
-        let mut event: rsf_game_cpu_source_event = unsafe { zeroed() };
-        let copied = (size as usize).min(size_of::<rsf_game_cpu_source_event>());
-        unsafe {
-            ptr::copy_nonoverlapping(
-                incoming.cast::<u8>(),
-                ptr::from_mut(&mut event).cast::<u8>(),
-                copied,
-            )
         };
+        let event = packet.event();
         let predecessor = event.predecessor_source_id;
         let owner = state.slot(predecessor).record;
         let known_predecessor = predecessor == 0
@@ -249,7 +296,7 @@ impl Dispatcher {
         let State { frames, ledger, .. } = state;
         let frame = &mut frames[(event.header.source_frame_id % FRAMES as u64) as usize].record;
         ledger.source_event(
-            Some(&event),
+            Some(event),
             session,
             frequency,
             last_begin,

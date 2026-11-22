@@ -80,10 +80,11 @@ event handles exercise transfer ownership. The XeSS preflight check is in the
 XeSS Rust tests. The FSR4 state fixture uses the production Present descriptor
 reader and exercises reused-slot replacement after both completion proofs.
 
-`native_fg_dx12_vulkan.cpp` retains the FrameCaptureVk adapter used to attach
-the existing C++ readback owner to the Rust platform. Porting that last adapter
-requires the shared readback leaf work so FSR4 and XeSS can keep the common
-capture allocation, encoding and publication path. The C++ device utility in
+`native_fg_dx12_vulkan.cpp` originally attached the native FrameCaptureVk
+adapter to the Rust platform. G07 removed the adapter and FSR4 and XeSS now
+use the shared Rust capture owner directly. [Shared capture port](rust-shared-capture-port.md)
+
+The C++ device utility in
 `tests/vulkan_interop_fixture.h` still serves two live-device fixtures,
 `input_dump_vulkan.cpp` and `native_sr_fsr4_vulkan.cpp`, which borrow its typed
 device, command procedures and image lifetime. Those remain a coordinated port.

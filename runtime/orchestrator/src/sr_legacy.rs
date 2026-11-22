@@ -116,7 +116,7 @@ unsafe extern "C" fn rsf_core_sr_legacy_create(
     services: &'static Services,
     out: *mut *mut Adapter,
 ) -> i32 {
-    if out.is_null() || !units_to_meters.is_finite() || units_to_meters <= 0.0 {
+    if out.is_null() || !crate::sr_session::valid_unit_scale(units_to_meters) {
         return INVALID;
     }
     unsafe { out.write(ptr::null_mut()) };
@@ -130,7 +130,6 @@ unsafe extern "C" fn rsf_core_sr_legacy_create(
     setup.open.dynamic_resolution = 1;
     setup.open.auto_exposure = u32::from(auto_exposure != 0);
     setup.open.inverted_depth = u32::from(standard_depth == 0);
-    setup.open.depth_infinite = setup.open.inverted_depth;
     let mut adapter = Adapter {
         services,
         bridge: ptr::null_mut(),

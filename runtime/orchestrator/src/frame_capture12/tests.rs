@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::capture_test_sink::Sink;
 use crate::com_ref::test::{Fake, fake, raw};
+use crate::frame_capture_vk::general_precision;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -13,11 +15,7 @@ const RGBA8: u32 = 28;
 #[derive(Default)]
 struct World {
     core: bool,
-    reserve_none: bool,
-    next_ticket: u64,
-    reserved: Vec<(u64, String, String, u32, f32)>,
-    failed: Vec<(u64, String, i32)>,
-    published: Vec<(u64, String, u32, u32, u64, Vec<u8>)>,
+    sink: Sink,
     layout: Layout,
     refuse_source: bool,
     // Boxed so each fake COM pointer stays stable while the list grows.
@@ -36,7 +34,7 @@ struct World {
 
 thread_local! {
     static WORLD: RefCell<World> = RefCell::new(World {
-        next_ticket: 7,
+        sink: Sink { next_ticket: 7, ..Sink::default() },
         drain_result: 1,
         layout: Layout { bytes: 264, offset: 0, width: 2, height: 2, format: RGBA8, row_pitch: 256 },
         ..World::default()
@@ -45,12 +43,6 @@ thread_local! {
 
 fn world<T>(f: impl FnOnce(&mut World) -> T) -> T {
     WORLD.with(|world| f(&mut world.borrow_mut()))
-}
-
-unsafe fn text(value: *const c_char) -> String {
-    unsafe { CStr::from_ptr(value) }
-        .to_string_lossy()
-        .into_owned()
 }
 
 // A COM object kept alive by the test world, its pointer and its reference count.
@@ -143,27 +135,17 @@ unsafe extern "C" fn wants(_: *const Record) -> i32 {
 }
 
 unsafe extern "C" fn reserve(
-    _: *const Record,
+    record: *const Record,
     name: *const c_char,
     description: *const c_char,
     view: u32,
     scale: f32,
 ) -> u64 {
-    let (name, description) = unsafe { (text(name), text(description)) };
-    world(|w| {
-        if w.reserve_none {
-            return 0;
-        }
-        w.next_ticket += 1;
-        w.reserved
-            .push((w.next_ticket, name, description, view, scale));
-        w.next_ticket
-    })
+    world(|w| unsafe { w.sink.reserve(record, name, description, view, scale) })
 }
 
 unsafe extern "C" fn failed(ticket: u64, name: *const c_char, result: i32) {
-    let name = unsafe { text(name) };
-    world(|w| w.failed.push((ticket, name, result)));
+    world(|w| unsafe { w.sink.failed(ticket, name, result) });
 }
 
 unsafe extern "C" fn pixels(
@@ -173,16 +155,7 @@ unsafe extern "C" fn pixels(
     api: u32,
     native: u32,
 ) -> i32 {
-    let name = unsafe { text(name) };
-    let p = unsafe { &*pixels };
-    assert_eq!((p.struct_size, api, native), (40, D3D12_API, p.format));
-    let bytes =
-        unsafe { std::slice::from_raw_parts(p.data.cast::<u8>(), p.data_size as usize) }.to_vec();
-    world(|w| {
-        w.published
-            .push((ticket, name, p.format, p.row_pitch, p.data_size, bytes))
-    });
-    1
+    world(|w| unsafe { w.sink.pixels(ticket, name, pixels, api, native) })
 }
 
 static OPS: Platform = Platform {
@@ -276,7 +249,7 @@ fn unrequested_frame_does_no_gpu_work() {
     assert!(!record(&owner, source, c"sr-depth", 0));
     assert_eq!(pending(&owner), 0);
     assert_eq!(refs(source), 1);
-    world(|w| assert!(w.copies.is_empty() && w.reserved.is_empty() && w.memory.is_empty()));
+    world(|w| assert!(w.copies.is_empty() && w.sink.reserved.is_empty() && w.memory.is_empty()));
 }
 
 #[test]
@@ -299,14 +272,14 @@ fn refused_sources_reserve_nothing() {
         DEFAULT_VIEW,
         0.0
     ));
-    world(|w| assert!(w.reserved.is_empty() && w.copies.is_empty()));
+    world(|w| assert!(w.sink.reserved.is_empty() && w.copies.is_empty()));
     assert_eq!(refs(source), 1);
 }
 
 #[test]
 fn refused_reservation_releases_the_readback() {
     core();
-    world(|w| w.reserve_none = true);
+    world(|w| w.sink.reserve_none = true);
     let owner = owner();
     let source = object();
     assert!(!record(&owner, source, c"sr-depth", 0));
@@ -316,7 +289,7 @@ fn refused_reservation_releases_the_readback() {
         assert_eq!(refs(buffer), 0);
     }
     assert_eq!(refs(source), 1);
-    world(|w| assert!(w.copies.is_empty() && w.failed.is_empty()));
+    world(|w| assert!(w.copies.is_empty() && w.sink.failed.is_empty()));
 }
 
 #[test]
@@ -328,7 +301,7 @@ fn core_ticket_waits_for_its_submitted_fence() {
     let readback = buffer(&owner, 0);
     world(|w| {
         assert_eq!(
-            w.reserved,
+            w.sink.reserved,
             vec![(8, "sr_color".into(), "sr-linear-color".into(), 3, 1.0)]
         );
         assert_eq!(w.copies, vec![(LIST, source, 0x40, readback)]);
@@ -339,13 +312,15 @@ fn core_ticket_waits_for_its_submitted_fence() {
     assert!(owner.submitted(QUEUE as Handle, 1, None));
     let fence = fence(&owner, 0).unwrap();
     assert!(poll(&owner));
-    world(|w| assert!(w.mapped.is_empty() && w.published.is_empty()));
+    world(|w| assert!(w.mapped.is_empty() && w.sink.published.is_empty()));
     execute(readback);
     complete(fence, 1);
     assert!(poll(&owner));
     world(|w| {
-        assert_eq!(w.published.len(), 1);
-        let (ticket, name, format, pitch, size, bytes) = &w.published[0];
+        assert_eq!(w.sink.published.len(), 1);
+        assert_eq!(w.sink.storage, [(D3D12_API, RGBA8, 2, 2)]);
+        assert_eq!(w.sink.identities, [(2, 9, 1, 3)]);
+        let (ticket, name, format, pitch, size, bytes) = &w.sink.published[0];
         assert_eq!(
             (*ticket, name.as_str(), *format, *pitch, *size),
             (8, "sr_color", RGBA8, 256, 264)
@@ -367,7 +342,7 @@ fn published_pixels_start_at_the_footprint_offset() {
     world(|w| w.memory.get_mut(&readback).unwrap()[8] = 1);
     assert!(flush(&owner, 0));
     world(|w| {
-        let (_, _, _, _, size, bytes) = &w.published[0];
+        let (_, _, _, _, size, bytes) = &w.sink.published[0];
         assert_eq!((*size, bytes[0]), (256, 1));
     });
 }
@@ -410,8 +385,8 @@ fn removed_device_fails_the_ticket_without_mapping() {
     complete(fence(&owner, 0).unwrap(), u64::MAX);
     assert!(!poll(&owner));
     world(|w| {
-        assert_eq!(w.failed, vec![(8, "sr_depth".into(), MAP_FAILED)]);
-        assert!(w.mapped.is_empty() && w.published.is_empty());
+        assert_eq!(w.sink.failed, vec![(8, "sr_depth".into(), MAP_FAILED)]);
+        assert!(w.mapped.is_empty() && w.sink.published.is_empty());
     });
     assert_eq!((pending(&owner), refs(source)), (0, 1));
 }
@@ -423,7 +398,12 @@ fn slot_flush_publishes_only_that_slot_on_caller_proof() {
     assert!(record(&owner, object(), c"a", 0));
     assert!(record(&owner, object(), c"b", 1));
     assert!(flush(&owner, 1));
-    world(|w| assert_eq!((w.published.len(), w.published[0].1.as_str()), (1, "b")));
+    world(|w| {
+        assert_eq!(
+            (w.sink.published.len(), w.sink.published[0].1.as_str()),
+            (1, "b")
+        )
+    });
     assert_eq!(pending(&owner), 1);
     assert!(flush(&owner, ALL_SLOTS));
     assert_eq!(pending(&owner), 0);
@@ -439,7 +419,7 @@ fn abandon_fails_only_unsubmitted_copies_of_the_slot() {
     assert!(record(&owner, object(), c"other", 3));
     let lost = buffer(&owner, 1);
     owner.abandon(2);
-    world(|w| assert_eq!(w.failed, vec![(9, "lost".into(), MAP_FAILED)]));
+    world(|w| assert_eq!(w.sink.failed, vec![(9, "lost".into(), MAP_FAILED)]));
     assert_eq!(refs(lost), 0);
     let names: Vec<String> = owner
         .lock()
@@ -459,10 +439,10 @@ fn map_failure_keeps_the_readback_for_a_later_flush() {
     world(|w| w.refuse_map = true);
     assert!(!flush(&owner, ALL_SLOTS));
     assert_eq!(pending(&owner), 1);
-    world(|w| assert!(w.failed.is_empty() && w.published.is_empty()));
+    world(|w| assert!(w.sink.failed.is_empty() && w.sink.published.is_empty()));
     world(|w| w.refuse_map = false);
     assert!(flush(&owner, ALL_SLOTS));
-    world(|w| assert_eq!(w.published.len(), 1));
+    world(|w| assert_eq!(w.sink.published.len(), 1));
 }
 
 #[test]
@@ -486,7 +466,7 @@ fn preview_overrides_and_long_names_reach_the_reservation() {
     assert!(record(&owner, source, &long, 0));
     world(|w| {
         assert_eq!(
-            w.reserved[0],
+            w.sink.reserved[0],
             (
                 8,
                 "fg_generated_before_ui_2".into(),
@@ -495,8 +475,8 @@ fn preview_overrides_and_long_names_reach_the_reservation() {
                 0.25
             )
         );
-        assert_eq!(w.reserved[1].1, "r".repeat(300));
-        assert_eq!((w.reserved[1].3, w.reserved[1].4), (3, 1.0));
+        assert_eq!(w.sink.reserved[1].1, "r".repeat(300));
+        assert_eq!((w.sink.reserved[1].3, w.sink.reserved[1].4), (3, 1.0));
     });
 }
 
@@ -577,14 +557,15 @@ fn legacy_files_keep_the_native_footprint_and_identity() {
         0.0
     ));
     // Legacy-only readbacks reserve no core ticket.
-    world(|w| assert!(w.reserved.is_empty()));
+    world(|w| assert!(w.sink.reserved.is_empty()));
     assert!(owner.submitted(QUEUE as Handle, ALL_SLOTS, None));
     execute(buffer(&owner, 0));
     complete(fence(&owner, 0).unwrap(), 1);
     assert!(poll(&owner));
-    let raw = fs::read(directory.join("2-9-fg-generated-before-ui-1.raw")).unwrap();
+    let raw = fs::read(directory.join("2-9-v1-g3-fg-generated-before-ui-1.raw")).unwrap();
     assert_eq!(raw, vec![COPIED; 264]);
-    let json = fs::read_to_string(directory.join("2-9-fg-generated-before-ui-1.json")).unwrap();
+    let json =
+        fs::read_to_string(directory.join("2-9-v1-g3-fg-generated-before-ui-1.json")).unwrap();
     assert!(json.starts_with(
         "{\n\"role\":\"fg-generated-before-ui\",\n\"frame\":9,\n\"session\":2,\n\"view\":1,\n\"generation\":3,\n\"flags\":4,\n\"frame_time_ms\":16.666666,\n\"width\":2,\n\"height\":2,\n\"row_pitch\":256,\n\"offset\":0,\n\"dxgi_format\":28,\n\"bytes\":264,\n\"render_size\":[640,0],\n\"output_size\":[0,0],\n\"jitter_pixels\":[0.25,-0.5],\n\"matrix_convention\":\"row_vectors\",\n\"view_to_clip\":[0.100000001,0,"
     ), "{json}");
@@ -601,8 +582,13 @@ fn core_and_legacy_publish_once_from_one_mapping() {
     let (owner, directory) = configured("both");
     assert!(record(&owner, object(), c"sr-depth", 0));
     assert!(flush(&owner, 0));
-    world(|w| assert_eq!((w.published.len(), w.mapped.len(), w.unmapped), (1, 1, 1)));
-    let json = fs::read_to_string(directory.join("2-9-sr-depth-0.json")).unwrap();
+    world(|w| {
+        assert_eq!(
+            (w.sink.published.len(), w.mapped.len(), w.unmapped),
+            (1, 1, 1)
+        )
+    });
+    let json = fs::read_to_string(directory.join("2-9-v1-g3-sr-depth-0.json")).unwrap();
     assert!(
         json.ends_with("0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]\n}\n"),
         "no reset key"
@@ -619,7 +605,12 @@ fn events_are_written_only_inside_the_window() {
     identity.frame_id = 9;
     identity.frame_time_ms = 16.666666;
     assert!(owner.event(&identity, c"sr-evaluate", 4, true, -3));
-    let json = fs::read_to_string(directory.join("metadata").join("2-9-sr-evaluate.json")).unwrap();
+    let json = fs::read_to_string(
+        directory
+            .join("metadata")
+            .join("2-9-v1-g3-sr-evaluate-4.json"),
+    )
+    .unwrap();
     assert!(json.starts_with(
         "{\"frame\":9,\"session\":2,\"view\":1,\"generation\":3,\"flags\":0,\"sdk_sequence\":4,\"frame_time_ms\":16.6667,\"reset\":1,\"result\":-3,\"cpu_ticks\":"
     ), "{json}");
@@ -646,10 +637,10 @@ fn queue_drain_publishes_only_copies_recorded_before_wait() {
     world(|w| assert!(w.mapped.is_empty()));
     world(|w| w.drain_result = 1);
     assert!(owner.flush_after_queue(QUEUE as Handle, || { record(&owner, object(), c"late", 2) }));
-    world(|w| assert_eq!((w.drains, w.published.len()), (3, 2)));
+    world(|w| assert_eq!((w.drains, w.sink.published.len()), (3, 2)));
     assert_eq!(pending(&owner), 1);
     assert!(owner.flush_after_queue(QUEUE as Handle, || true));
-    world(|w| assert_eq!((w.drains, w.published.len()), (4, 3)));
+    world(|w| assert_eq!((w.drains, w.sink.published.len()), (4, 3)));
     assert_eq!(pending(&owner), 0);
 }
 
@@ -663,7 +654,7 @@ fn destroy_fails_pending_tickets_and_releases_leases() {
     let (readback, fence) = (buffer(&owner, 0), fence(&owner, 0).unwrap());
     drop(owner);
     world(|w| {
-        assert_eq!(w.failed, vec![(8, "snapshot".into(), STAGING_FAILED)]);
+        assert_eq!(w.sink.failed, vec![(8, "snapshot".into(), STAGING_FAILED)]);
         assert!(w.mapped.is_empty());
     });
     assert_eq!((refs(source), refs(readback), refs(fence)), (1, 0, 0));

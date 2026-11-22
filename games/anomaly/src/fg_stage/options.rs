@@ -104,6 +104,15 @@ impl Capture {
     }
 }
 
+struct Settings {
+    bridge: bool,
+    debug: bool,
+    development: bool,
+    scope_hold: u32,
+    capture: CaptureSettings,
+    frontend: Frontend,
+}
+
 pub(super) struct Options {
     pub bridge: bool,
     pub debug: bool,
@@ -121,22 +130,20 @@ impl Options {
         let number = |key, fallback| unsafe { ini::read_int(ini, key, fallback) as u32 };
         let enabled = number(w!("FG"), 0) != 0;
         let capture = unsafe { CaptureSettings::read(ini) };
-        let native = rsf_anomaly_fg_config {
+        let settings = Settings {
             // The panel can enable generation live only with a bridge installed at startup.
             bridge: enabled || number(w!("FGBridge"), 1) != 0,
-            enabled,
-            backend: number(w!("FGBackend"), RSF_FG_BACKEND_AUTO as i32),
-            generated: number(w!("FGGeneratedFrames"), 1),
-            latency: number(w!("Latency"), RSF_REFLEX_ON as i32),
-            frame_limit_us: number(w!("FrameLimitUs"), 0),
             scope_hold: number(w!("FGScopeHold"), 4),
             debug: number(w!("FGDebug"), 0) != 0,
             development: number(w!("FGDevelopment"), 0) != 0,
-            capture: capture.enabled,
-            capture_start: capture.start,
-            capture_count: capture.count,
-            capture_interval: capture.interval,
-            ..Default::default()
+            capture,
+            frontend: Frontend {
+                enabled: u32::from(enabled),
+                backend: number(w!("FGBackend"), RSF_FG_BACKEND_AUTO as i32),
+                generated: number(w!("FGGeneratedFrames"), 1),
+                latency: number(w!("Latency"), RSF_REFLEX_ON as i32),
+                frame_limit_us: number(w!("FrameLimitUs"), 0),
+            },
         };
         let ini_units = unsafe { crate::wide::terminated(ini) }.map_or(&[][..], |(units, _)| units);
         let ini_path = PathBuf::from(OsString::from_wide(ini_units));
@@ -170,7 +177,7 @@ impl Options {
             };
             buffer[..length as usize].to_vec()
         });
-        Self::admit(&native, capture_dir, vendors)
+        Self::admit(settings, capture_dir, vendors)
     }
 
     pub(super) fn from_native(native: &rsf_anomaly_fg_config) -> Self {
@@ -184,8 +191,27 @@ impl Options {
                 unsafe { crate::wide::terminated(path) }.map_or(&[][..], |(units, _)| units),
             )
         });
+        let settings = Settings {
+            bridge: native.bridge,
+            debug: native.debug,
+            development: native.development,
+            scope_hold: native.scope_hold,
+            capture: CaptureSettings::new(
+                native.capture,
+                native.capture_start,
+                native.capture_count,
+                native.capture_interval,
+            ),
+            frontend: Frontend {
+                enabled: u32::from(native.enabled),
+                backend: native.backend,
+                generated: native.generated,
+                latency: native.latency,
+                frame_limit_us: native.frame_limit_us,
+            },
+        };
         Self::admit(
-            native,
+            settings,
             String::from_utf16_lossy(
                 unsafe { crate::wide::terminated(native.capture_dir) }
                     .map_or(&[][..], |(units, _)| units),
@@ -194,35 +220,33 @@ impl Options {
         )
     }
 
-    fn admit(native: &rsf_anomaly_fg_config, capture_dir: String, vendors: [Vec<u16>; 3]) -> Self {
+    fn admit(settings: Settings, capture_dir: String, vendors: [Vec<u16>; 3]) -> Self {
         let [streamline, fidelityfx, xess] =
             vendors.map(|dir| c_string(String::from_utf16_lossy(&dir)));
-        let backend = native.backend;
+        let Frontend {
+            enabled,
+            backend,
+            generated,
+            latency,
+            frame_limit_us,
+        } = settings.frontend;
         let known = RSF_FG_BACKEND_ALL.checked_shr(backend).unwrap_or(0) & 1 != 0;
         Self {
-            bridge: native.bridge,
-            debug: native.debug,
-            development: native.development,
-            scope_hold: native.scope_hold.clamp(1, 64),
-            capture: Mutex::new(Capture::new(
-                // Diagnostic output may use the original Win32 extended-length path.
-                c_string(capture_dir),
-                CaptureSettings::new(
-                    native.capture,
-                    native.capture_start,
-                    native.capture_count,
-                    native.capture_interval,
-                ),
-            )),
+            bridge: settings.bridge,
+            debug: settings.debug,
+            development: settings.development,
+            scope_hold: settings.scope_hold.clamp(1, 64),
+            // Diagnostic output may use the original Win32 extended-length path.
+            capture: Mutex::new(Capture::new(c_string(capture_dir), settings.capture)),
             streamline,
             fidelityfx,
             xess,
             frontend: Frontend {
-                enabled: u32::from(native.enabled),
+                enabled,
                 backend: if known { backend } else { RSF_FG_BACKEND_AUTO },
-                generated: native.generated.clamp(1, 3),
-                latency: native.latency.min(RSF_REFLEX_BOOST),
-                frame_limit_us: native.frame_limit_us.min(1_000_000),
+                generated: generated.clamp(1, 3),
+                latency: latency.min(RSF_REFLEX_BOOST),
+                frame_limit_us: frame_limit_us.min(1_000_000),
             },
         }
     }

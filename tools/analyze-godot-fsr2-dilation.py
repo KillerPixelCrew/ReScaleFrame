@@ -47,7 +47,10 @@ def main():
     groups, inputs = {}, []
     for path in sorted((args.capture / "frames").glob("*sr-*.json")):
         meta, image = capture.load_image(path)
-        groups.setdefault(meta["frame"], {})[meta["role"]] = (meta, image)
+        resources = groups.setdefault(meta["frame"], {})
+        if meta["role"] in resources:
+            raise ValueError(f"Multiple captures for frame {meta['frame']} role {meta['role']}")
+        resources[meta["role"]] = (meta, image)
         inputs.append({"file": path.name,
                        "metadata_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                        "raw_sha256": hashlib.sha256(path.with_suffix(".raw").read_bytes()).hexdigest()})

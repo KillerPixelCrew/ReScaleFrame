@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::ffx_version::{self, MAX_VERSIONS, Version as ProviderVersion};
+use crate::ffx_version;
 use std::ffi::{CStr, CString};
 use std::ptr::NonNull;
 
@@ -128,9 +128,6 @@ impl Owner {
         {
             return Err(NOT_SUPPORTED);
         }
-        if let Some(log) = desc.log {
-            unsafe { log(desc.log_user, version.name.as_ptr()) };
-        }
         Ok((Backend::Fsr(owner), version))
     }
 
@@ -184,27 +181,18 @@ impl Owner {
     }
 
     fn select_version(&self, desc: &Open) -> Result<Version, i32> {
-        let mut ids = [0; MAX_VERSIONS];
-        let mut names = [std::ptr::null(); MAX_VERSIONS];
-        let mut count = MAX_VERSIONS as u64;
-        let mut query = ffxQueryDescGetVersions {
-            header: header(FFX_API_QUERY_DESC_TYPE_GET_VERSIONS),
-            createDescType: u64::from(RSF_FFX_CREATE_UPSCALE as u32),
-            device: desc.device,
-            outputCount: &mut count,
-            versionIds: ids.as_mut_ptr(),
-            versionNames: names.as_mut_ptr(),
-        };
-        if unsafe { self.sdk.query(null_mut(), (&raw mut query).cast()) } != FFX_OK
-            || count > MAX_VERSIONS as u64
-        {
-            return Err(NOT_SUPPORTED);
+        let mut versions = [ProviderVersion::default(); MAX_VERSIONS];
+        let versions = unsafe {
+            query_d3d12(
+                self.sdk.query,
+                desc.device,
+                u64::from(RSF_FFX_CREATE_UPSCALE as u32),
+                &mut versions,
+            )
         }
-        let versions: [ProviderVersion; MAX_VERSIONS] =
-            std::array::from_fn(|index| unsafe { ffx_version::from_sdk(ids[index], names[index]) });
-        let versions = &versions[..count as usize];
-        let best = ffx_version::select(versions, self.major, desc.version_id);
-        if let Some(best) = best.filter(|best| best.id != 0) {
+        .ok_or(NOT_SUPPORTED)?;
+        let count = versions.len();
+        if let Some(best) = ffx_version::admitted(versions, self.major, desc.version_id) {
             let name = unsafe { CStr::from_ptr(best.name) };
             return Ok(Version::new(best.id, name.to_bytes()));
         }
@@ -274,11 +262,8 @@ impl Owner {
         let record = unsafe { &*frame.record };
         let far = record.camera.far_plane;
         let far = if far > 0.0 { far } else { f32::MAX };
-        let sharpness = if frame.sharpness.is_finite() {
-            frame.sharpness.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let (enable_sharpening, sharpness) =
+            crate::sharpening_policy::ffx_sharpening(frame.sharpness);
         let read = FFX_API_RESOURCE_STATE_COMPUTE_READ;
         let data = ffxDispatchDescUpscale {
             header: header(RSF_FFX_DISPATCH_UPSCALE as u32),
@@ -312,7 +297,7 @@ impl Owner {
             frameTimeDelta: record.frame_time_ms,
             preExposure: frame.pre_exposure,
             reset: frame.reset != 0,
-            enableSharpening: sharpness > 0.0,
+            enableSharpening: enable_sharpening,
             sharpness,
             cameraNear: record.camera.near_plane,
             cameraFar: far,

@@ -15,10 +15,10 @@
 //! including `execute`, the function the engine's command iterator calls.
 use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};
 use crate::scope_abi::{rsf_ac7_scope_calls, rsf_ac7_scope_lease};
+use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_TEXTURE_BINDING, RSF_GAME_RENDER_WINDOW,
 };
-use std::alloc::{Layout, alloc};
 use std::ffi::{c_int, c_void};
 use std::mem::{offset_of, zeroed};
 use std::ptr::{addr_of, addr_of_mut, null, null_mut};
@@ -74,6 +74,7 @@ impl Command {
 #[repr(C)]
 struct Ticket {
     owner: *const Scopes,
+    recording_list: *mut c_void,
     scope: rsf_ac7_render_scope,
     lease: rsf_ac7_scope_lease,
     begin: Command,
@@ -130,18 +131,6 @@ impl Scopes {
     }
 }
 
-/// `value` on the heap, or None when memory is exhausted: open and create refuse instead of
-/// ending the process, as the C++ owner did. Freed with `Box::from_raw`.
-fn try_box<T>(value: T) -> Option<*mut T> {
-    const { assert!(size_of::<T>() != 0) };
-    let raw = unsafe { alloc(Layout::new::<T>()) }.cast::<T>();
-    if raw.is_null() {
-        return None;
-    }
-    unsafe { raw.write(value) };
-    Some(raw)
-}
-
 /// Scene work needs its family and view. Slate window and texture-binding work has no scene view:
 /// its queued ownership is the source, game viewport and window instead, and its resources
 /// resolve from the lease at execution, so they need not exist while recording.
@@ -159,16 +148,14 @@ fn valid_identity(scope: &rsf_ac7_render_scope) -> bool {
     }
 }
 
-/// Links `command` at the tail of a recording native list. Refuses an executing list, a missing
-/// or occupied tail link and a full count, leaving the list unchanged.
+/// Links one command or a prelinked pair at the tail of a recording native list. Refuses an
+/// executing list, a missing or occupied tail link, and insufficient count space.
 ///
 /// # Safety
-/// A nonnull `native` is a native command list owned by the calling thread; `command` is valid
-/// until it executes.
-unsafe fn append(native: *mut c_void, command: *mut Command) -> bool {
-    if native.is_null() || command.is_null() {
-        return false;
-    }
+/// `native` is a nonnull command list owned by the calling thread. The markers remain live
+/// until execution. When distinct, `first` already links to `last`.
+unsafe fn append(native: *mut c_void, first: *mut Command, last: *mut Command) -> bool {
+    let added = if first == last { 1 } else { 2 };
     let bytes = native.cast::<u8>();
     let tail_at = unsafe { bytes.add(LIST_TAIL) }.cast::<*mut *mut Command>();
     let count_at = unsafe { bytes.add(LIST_COUNT) }.cast::<u32>();
@@ -177,14 +164,14 @@ unsafe fn append(native: *mut c_void, command: *mut Command) -> bool {
     if unsafe { bytes.add(LIST_EXECUTING).read() } != 0
         || tail.is_null()
         || unsafe { !tail.read().is_null() }
-        || count == u32::MAX
+        || count > u32::MAX - added
     {
         return false;
     }
     unsafe {
-        tail.write(command);
-        tail_at.write_unaligned(addr_of_mut!((*command).next));
-        count_at.write_unaligned(count + 1);
+        tail.write(first);
+        tail_at.write_unaligned(addr_of_mut!((*last).next));
+        count_at.write_unaligned(count + added);
     }
     true
 }
@@ -299,7 +286,7 @@ unsafe extern "C" fn rsf_ac7_scope_owner_create(
     }) else {
         return 0;
     };
-    unsafe { out.write(owner) };
+    unsafe { out.write(Box::into_raw(owner)) };
     1
 }
 
@@ -330,51 +317,87 @@ unsafe extern "C" fn rsf_ac7_render_scope_open_leased(
     lease: *const rsf_ac7_scope_lease,
     out: *mut *mut Ticket,
 ) -> c_int {
-    if scopes.is_null() || native_command_list.is_null() || scope.is_null() || out.is_null() {
+    if out.is_null() {
         return 0;
     }
-    // Read the size alone first: a shorter caller structure must not be read whole.
-    if unsafe { (*scope).struct_size } < size_of::<rsf_ac7_render_scope>() as u32 {
-        return 0;
+    c_int::from(unsafe { queue_scope(scopes, native_command_list, scope, lease, out) })
+}
+
+/// Takes the lease only when both adjacent markers can be queued together.
+///
+/// # Safety
+/// As open_leased, without a ticket output.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_render_scope_enqueue_leased(
+    scopes: *mut Scopes,
+    native_command_list: *mut c_void,
+    scope: *const rsf_ac7_render_scope,
+    lease: *const rsf_ac7_scope_lease,
+) -> c_int {
+    c_int::from(unsafe { queue_scope(scopes, native_command_list, scope, lease, null_mut()) })
+}
+
+/// A null `out` queues both markers. Otherwise the caller receives an open ticket.
+unsafe fn queue_scope(
+    scopes: *mut Scopes,
+    native_command_list: *mut c_void,
+    scope: *const rsf_ac7_render_scope,
+    lease: *const rsf_ac7_scope_lease,
+    out: *mut *mut Ticket,
+) -> bool {
+    if scopes.is_null()
+        || native_command_list.is_null()
+        || scope.is_null()
+        || unsafe { (*scope).struct_size } < size_of::<rsf_ac7_render_scope>() as u32
+    {
+        return false;
     }
     let owner = unsafe { &*scopes };
     let scope = unsafe { &*scope };
     if scope.session_id != owner.session || !valid_identity(scope) {
-        return 0;
+        return false;
     }
-    unsafe { out.write(null_mut()) };
+    let paired = out.is_null();
+    if !paired {
+        unsafe { out.write(null_mut()) };
+    }
+    let mut state = owner.lock();
+    if !state.accepting || state.outstanding >= owner.capacity {
+        return false;
+    }
     let Some(ticket) = try_box(Ticket {
         owner: scopes,
+        recording_list: native_command_list,
         scope: *scope,
         lease: unsafe { lease.as_ref() }.copied().unwrap_or(NO_LEASE),
         begin: Command::new(true),
         end: Command::new(false),
-        closed: false,
+        closed: paired,
     }) else {
-        return 0;
+        return false;
     };
+    let ticket = Box::into_raw(ticket);
+    let first = unsafe { addr_of_mut!((*ticket).begin) };
+    let end = unsafe { addr_of_mut!((*ticket).end) };
+    let last = if paired { end } else { first };
+    state.serial = state.serial.wrapping_add(1);
     unsafe {
-        (*ticket).begin.ticket = ticket;
-        (*ticket).end.ticket = ticket;
+        (*ticket).scope.scope_id = state.serial;
+        (*first).ticket = ticket;
+        (*end).ticket = ticket;
+        if paired {
+            (*first).next = end;
+        }
     }
-    let mut state = owner.lock();
-    let admitted = if state.accepting && state.outstanding != owner.capacity {
-        // A serial is spent even when the append then refuses, as before.
-        state.serial = state.serial.wrapping_add(1);
-        unsafe { (*ticket).scope.scope_id = state.serial };
-        unsafe { append(native_command_list, addr_of_mut!((*ticket).begin)) }
-    } else {
-        false
-    };
-    if !admitted {
-        drop(state);
+    if !unsafe { append(native_command_list, first, last) } {
         unsafe { drop(Box::from_raw(ticket)) };
-        return 0;
+        return false;
     }
     state.outstanding += 1;
-    drop(state);
-    unsafe { out.write(ticket) };
-    1
+    if !paired {
+        unsafe { out.write(ticket) };
+    }
+    true
 }
 
 /// Appends the end marker. A refused append leaves the ticket open for another attempt.
@@ -387,11 +410,14 @@ unsafe extern "C" fn rsf_ac7_render_scope_close(
     ticket: *mut Ticket,
     native_command_list: *mut c_void,
 ) -> c_int {
-    if ticket.is_null() || native_command_list.is_null() || unsafe { (*ticket).closed } {
+    if ticket.is_null()
+        || unsafe { (*ticket).closed || (*ticket).recording_list != native_command_list }
+    {
         return 0;
     }
     unsafe { (*ticket).closed = true };
-    if !unsafe { append(native_command_list, addr_of_mut!((*ticket).end)) } {
+    let end = unsafe { addr_of_mut!((*ticket).end) };
+    if !unsafe { append(native_command_list, end, end) } {
         unsafe { (*ticket).closed = false };
         return 0;
     }

@@ -5,12 +5,8 @@ use crate::dxgi_format::{
     R32G8X24_TYPELESS, half_to_f32,
 };
 
-const VELOCITY: u32 = 1;
-const DECODED_MOTION: u32 = 2;
+use crate::input_dump::{DECODED_MOTION, ENCODED_MOTION, MotionEncoding};
 
-// These parameters implement the existing ABI view when explicitly requested.
-const VELOCITY_SCALE: f32 = 0.499 * 0.5;
-const VELOCITY_BIAS: f32 = 32767.0 / 65535.0;
 const DECODED_SENTINEL_THRESHOLD: f32 = -100.0;
 
 #[derive(Clone, Copy)]
@@ -87,7 +83,7 @@ impl Format {
         let float = |index| f32::from_bits(dword(index));
         match self {
             Self::R8 => Sample::scalar(byte(0)),
-            Self::Rg8 => Sample::pair(byte(0), byte(1), true),
+            Self::Rg8 => Sample::pair(byte(0), byte(1)),
             Self::R16Float => Sample::scalar(half_to_f32(word(0))),
             Self::R16Unorm => Sample::scalar(unorm16(word(0))),
             Self::Depth24 => Sample::scalar((dword(0) & 0xff_ffff) as f32 / 16_777_215.0),
@@ -95,47 +91,41 @@ impl Format {
             Self::Rgb10 => {
                 let value = dword(0);
                 let channel = |shift: u32| ((value >> shift) & 1023) as f32 / 1023.0;
-                Sample::new(
-                    [
-                        channel(0),
-                        channel(10),
-                        channel(20),
-                        (value >> 30) as f32 / 3.0,
-                    ],
-                    true,
-                )
+                Sample::new([
+                    channel(0),
+                    channel(10),
+                    channel(20),
+                    (value >> 30) as f32 / 3.0,
+                ])
             }
-            Self::Rgba8 => Sample::new([byte(0), byte(1), byte(2), byte(3)], true),
-            Self::Bgra8 => Sample::new([byte(2), byte(1), byte(0), byte(3)], true),
+            Self::Rgba8 => Sample::new([byte(0), byte(1), byte(2), byte(3)]),
+            Self::Bgra8 => Sample::new([byte(2), byte(1), byte(0), byte(3)]),
             Self::Rg16Unorm => {
                 let (x, y) = (word(0), word(1));
-                Sample::pair(unorm16(x), unorm16(y), x != 0)
+                Sample::pair(unorm16(x), unorm16(y))
             }
             Self::Rg16Float => {
                 let (x, y) = (word(0), word(1));
-                Sample::pair(half_to_f32(x), half_to_f32(y), x != 0 || y != 0)
+                Sample::pair(half_to_f32(x), half_to_f32(y))
             }
             Self::Rg32Float => {
                 let (x, y) = (float(0), float(1));
-                Sample::pair(x, y, x != 0.0 || y != 0.0)
+                Sample::pair(x, y)
             }
             Self::Rgb11Float => {
                 let value = dword(0);
-                Sample::new(
-                    [
-                        packed_float(value & 0x7ff, 6),
-                        packed_float((value >> 11) & 0x7ff, 6),
-                        packed_float(value >> 22, 5),
-                        1.0,
-                    ],
-                    value != 0,
-                )
+                Sample::new([
+                    packed_float(value & 0x7ff, 6),
+                    packed_float((value >> 11) & 0x7ff, 6),
+                    packed_float(value >> 22, 5),
+                    1.0,
+                ])
             }
             Self::Rgba16Float => {
                 let [x, y, z, a] = [word(0), word(1), word(2), word(3)];
-                Sample::new([x, y, z, a].map(half_to_f32), x != 0 || y != 0 || z != 0)
+                Sample::new([x, y, z, a].map(half_to_f32))
             }
-            Self::Rgba32Float => Sample::new([float(0), float(1), float(2), float(3)], true),
+            Self::Rgba32Float => Sample::new([float(0), float(1), float(2), float(3)]),
         }
     }
 }
@@ -158,37 +148,41 @@ fn packed_float(value: u32, mantissa_bits: u32) -> f32 {
 
 pub(super) struct Sample {
     rgba: [f32; 4],
-    written: bool,
 }
 
 impl Sample {
-    fn new(rgba: [f32; 4], written: bool) -> Self {
-        Self { rgba, written }
+    fn new(rgba: [f32; 4]) -> Self {
+        Self { rgba }
     }
 
     fn scalar(value: f32) -> Self {
-        Self::new([value, value, value, 1.0], true)
+        Self::new([value, value, value, 1.0])
     }
 
-    fn pair(x: f32, y: f32, written: bool) -> Self {
-        Self::new([x, y, 0.0, 1.0], written)
+    fn pair(x: f32, y: f32) -> Self {
+        Self::new([x, y, 0.0, 1.0])
     }
 
-    pub(super) fn channels(&self, view: u32) -> Option<(f32, f32)> {
+    pub(super) fn channels(&self, view: u32, motion: Option<MotionEncoding>) -> Option<(f32, f32)> {
         let [x, y, _, _] = self.rgba;
         match view {
-            VELOCITY if !self.written => None,
-            VELOCITY => Some((
-                (x - VELOCITY_BIAS) / VELOCITY_SCALE,
-                (y - VELOCITY_BIAS) / VELOCITY_SCALE,
-            )),
+            ENCODED_MOTION => {
+                let motion = motion?;
+                if motion.zero_x_unwritten != 0 && x == 0.0 {
+                    return None;
+                }
+                Some((
+                    (x - motion.bias[0]) * motion.scale[0],
+                    (y - motion.bias[1]) * motion.scale[1],
+                ))
+            }
             DECODED_MOTION if x <= DECODED_SENTINEL_THRESHOLD => None,
             _ => Some((x, y)),
         }
     }
 
     pub(super) fn bgra(&self, view: u32, scale: f32, red: f32, green: f32) -> [u8; 4] {
-        if matches!(view, VELOCITY | DECODED_MOTION | DENSE_MOTION) {
+        if matches!(view, ENCODED_MOTION | DECODED_MOTION | DENSE_MOTION) {
             let motion = |value| clamp_byte(128.0 + value * scale * 127.0);
             return [128, motion(green), motion(red), 255];
         }

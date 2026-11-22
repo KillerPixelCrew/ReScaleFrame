@@ -329,7 +329,7 @@ unsafe extern "C" fn source(pass: *const Pass) {
         unsafe { pass.as_ref() }.map_or(0, |p| p.source_frame_id),
     ));
 }
-unsafe extern "C" fn capture(_: Raw, _: *const Pass, _: *const rsf_dlss_frame) {}
+unsafe extern "C" fn capture(_: Raw, _: *const Pass, _: *const rsf_d3d11_fg_inputs) {}
 unsafe extern "C" fn ready(_: u64) -> i32 {
     1
 }
@@ -367,6 +367,8 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
         has_owner: Some(has_owner),
         backend: Some(backend),
         backend_choices: Some(backend),
+        generation: Some(generation),
+        switch_result: Some(switch_result),
         ..Default::default()
     };
     let fg = rsf_d3d11_fg_api {
@@ -411,26 +413,52 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
     // synthetic immediate-context/backbuffer leases cross the production stage boundary.
     static INPUTS: rsf_anomaly_input_platform = rsf_anomaly_input_platform {
         release_interface: Some(release),
-        device: None,
-        describe: None,
-        same_device: None,
-        shader: None,
-        constant_buffer: None,
-        texture: None,
-        depth_view: None,
-        unordered_view: None,
-        motion_view: None,
-        dispatch: None,
-        first_person_limit: 0.02,
-        validity_threshold: 0.5,
+        ..crate::fg_inputs::tests::PLATFORM
     };
-    let platform = Box::leak(Box::new(Platform {
+    let platform = Platform {
+        struct_size: size_of::<Platform>() as u32,
         inputs: &INPUTS,
-        immediate_context: Some(immediate),
-        backbuffer: Some(backbuffer),
-        output_window: Some(output_window),
-        ..Default::default()
-    }));
+        engine_version: c"fixture".as_ptr(),
+        project_id: c"fixture".as_ptr(),
+        units_to_meters: 1.0,
+        engine_depth_view: Some(no_depth),
+        sr_owns_depth: Some(sr_owns_depth),
+        motion_target: Some(no_motion),
+    };
+    assert!(unsafe { EngineBindings::bind(&platform) }.is_some());
+    assert!(
+        unsafe {
+            EngineBindings::bind(&Platform {
+                motion_target: None,
+                ..platform
+            })
+        }
+        .is_none()
+    );
+    assert!(unsafe { EngineBindings::bind(ptr::from_ref(&4_u32).cast()) }.is_none());
+    let missing_input = rsf_anomaly_input_platform {
+        dispatch: None,
+        ..INPUTS
+    };
+    assert!(
+        unsafe {
+            EngineBindings::bind(&Platform {
+                inputs: &missing_input,
+                ..platform
+            })
+        }
+        .is_none()
+    );
+    let short_inputs = 4_u32;
+    assert!(
+        unsafe {
+            EngineBindings::bind(&Platform {
+                inputs: ptr::from_ref(&short_inputs).cast(),
+                ..platform
+            })
+        }
+        .is_none()
+    );
     rsf_anomaly_fg_configure(
         &rsf_anomaly_fg_config {
             bridge: true,
@@ -439,7 +467,15 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
         None,
         ptr::null_mut(),
     );
-    assert!(rsf_anomaly_fg_install_with(&bridge, &fg, platform));
+    let platform = EngineBindings {
+        immediate_context: immediate,
+        backbuffer,
+        output_window,
+        ..unsafe { EngineBindings::bind(&platform) }.expect("complete fixture bindings")
+    };
+    let (options, log) = Cold::attempt().expect("configured fixture");
+    let tables = Tables::bind(bridge, fg).expect("complete fixture tables");
+    assert!(Stage::install(options, log, tables, platform, 0));
     let mut event = rsf_observer_present_event {
         struct_size: size_of::<rsf_observer_present_event>() as u32,
         swapchain: CHAIN,
@@ -458,6 +494,9 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
         (status.presented, status.fed)
     };
     assert_eq!(run_frame(100, &mut event), (1, 0));
+    let status = rsf_anomaly_fg_stage_status();
+    assert_eq!(status.eligible_at_ui_boundary, 1);
+    assert_eq!(status.runtime_tagged, 0);
     assert_eq!(
         STAGE
             .get()
@@ -500,4 +539,24 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
             ]
         )
     });
+}
+
+unsafe extern "C" fn generation() -> u64 {
+    0
+}
+
+unsafe extern "C" fn switch_result() -> i32 {
+    0
+}
+
+unsafe extern "C" fn no_depth(_: u32) -> Raw {
+    ptr::null_mut()
+}
+
+unsafe extern "C" fn sr_owns_depth(_: u32) -> bool {
+    true
+}
+
+unsafe extern "C" fn no_motion() -> rsf_anomaly_fg_motion_target {
+    Default::default()
 }

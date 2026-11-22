@@ -1,16 +1,25 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::d3d11_output_abi::rsf_d3d11_state as State;
+use crate::d3d11_output::SavedBindings;
+use crate::d3d11_output_abi::rsf_d3d11_output_copy_resource;
 use crate::dxgi_format::{D32_FLOAT_S8X24_UINT, R32G8X24_TYPELESS};
+use crate::frame_tap_abi::rsf_frame_tap_geometry;
+use crate::graphics_d3d11::{rsf_d3d11_depth_state_restore, rsf_d3d11_depth_state_save};
+use crate::graphics_pass_abi::rsf_depth_replay_detail as Detail;
 use std::ffi::c_void;
-use std::mem::MaybeUninit;
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, TryLockError};
+
+use windows::Win32::Graphics::Direct3D11::{ID3D11DepthStencilView, ID3D11DeviceContext};
+use windows::core::Interface;
+
+#[path = "depth_replay/d3d11.rs"]
+mod d3d11;
 
 type Handle = *mut c_void;
 type Resources = [Handle; 3];
 
-// D3D11 values, asserted beside the native leaves.
+// D3D11 values used to validate the captured facts.
 const VIEW_TEXTURE2D: u32 = 3;
 const READ_ONLY_DEPTH: u32 = 1;
 const TRIANGLE_LIST: u32 = 4;
@@ -30,42 +39,6 @@ const TEXTURE: u32 = 6;
 const IDENTITY: u32 = 7;
 const PIPELINE: u32 = 8;
 const VIEWPORT: u32 = 9;
-
-#[repr(C)]
-struct Candidate {
-    context: Handle,
-    target: Handle,
-    depth_view: Handle,
-    width: u32,
-    height: u32,
-    samples: u32,
-    kind: u32,
-    count: u32,
-    instances: u32,
-    topology: u32,
-    vertex_shader: u32,
-    geometry: *const c_void,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct Detail {
-    draw_width: u32,
-    draw_height: u32,
-    draw_samples: u32,
-    dsv_format: u32,
-    dsv_dimension: u32,
-    dsv_flags: u32,
-    source_width: u32,
-    source_height: u32,
-    source_format: u32,
-    source_samples: u32,
-    layer: Handle,
-    source: Handle,
-    context: Handle,
-    draws: u32,
-    refused: u32,
-}
 
 #[repr(C)]
 #[derive(Default)]
@@ -105,25 +78,7 @@ struct PipelineInfo {
     viewport: [f32; 6],
 }
 
-#[repr(C)]
-struct Platform {
-    make: unsafe extern "C" fn(Handle, u32, u32, &mut Resources) -> i32,
-    view: unsafe extern "C" fn(Handle, &mut ViewInfo),
-    texture: unsafe extern "C" fn(Handle, &mut TextureInfo) -> Handle,
-    pipeline: unsafe extern "C" fn(Handle, &mut PipelineInfo),
-    save: unsafe extern "C" fn(Handle, *mut State) -> u32,
-    restore: unsafe extern "C" fn(Handle, *mut State),
-    unbind: unsafe extern "C" fn(Handle),
-    copy: unsafe extern "C" fn(Handle, Handle, Handle),
-    draw: unsafe extern "C" fn(Handle, &Resources, *const c_void),
-}
-
-const _: () = {
-    assert!(size_of::<Candidate>() == 64 && size_of::<Detail>() == 72);
-    assert!(size_of::<ViewInfo>() == 16 && size_of::<TextureInfo>() == 28);
-    assert!(size_of::<PipelineInfo>() == 68);
-    assert!(size_of::<Platform>() == 9 * size_of::<Handle>());
-};
+const _: () = assert!(size_of::<Detail>() == 72);
 
 impl PipelineInfo {
     // Programmable geometry stays live, so stages with side effects or another geometry contract
@@ -146,9 +101,9 @@ impl PipelineInfo {
     }
 }
 
-fn drawable(candidate: &Candidate) -> bool {
+fn drawable(candidate: &rsf_frame_tap_geometry) -> bool {
     candidate.kind <= 3
-        && candidate.vertex_shader != 0
+        && !candidate.vertex_shader.is_null()
         && candidate.count != 0
         && candidate.instances != 0
         && matches!(candidate.topology, TRIANGLE_LIST | TRIANGLE_STRIP)
@@ -191,7 +146,6 @@ struct DepthReplay {
     width: u32,
     height: u32,
     frame: Mutex<Frame>,
-    platform: &'static Platform,
 }
 
 impl DepthReplay {
@@ -199,11 +153,12 @@ impl DepthReplay {
         self.frame.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    fn draw(&self, frame: &mut Frame, candidate: &Candidate) -> u32 {
-        let platform = self.platform;
+    fn draw(&self, frame: &mut Frame, candidate: &rsf_frame_tap_geometry) -> u32 {
         let context = candidate.context;
-        let mut view = ViewInfo::default();
-        unsafe { (platform.view)(candidate.depth_view, &mut view) };
+        let depth_view =
+            unsafe { ID3D11DepthStencilView::from_raw_borrowed(&candidate.depth_view) }
+                .expect("validated depth view");
+        let view = d3d11::view_info(depth_view);
         let detail = &mut frame.detail;
         detail.dsv_format = view.format;
         detail.dsv_dimension = view.dimension;
@@ -219,10 +174,7 @@ impl DepthReplay {
         {
             return frame.refuse(VIEW);
         }
-        let mut info = TextureInfo::default();
-        let texture =
-            unsafe { ComRef::from_owned((platform.texture)(candidate.depth_view, &mut info)) };
-        let Some(texture) = texture else {
+        let Some((texture, info)) = d3d11::view_texture(depth_view) else {
             return frame.refuse(NOT_TEXTURE);
         };
         let detail = &mut frame.detail;
@@ -255,8 +207,9 @@ impl DepthReplay {
             Some(false) => return frame.refuse(IDENTITY),
             Some(true) => {}
         }
-        let mut pipeline = PipelineInfo::default();
-        unsafe { (platform.pipeline)(context, &mut pipeline) };
+        let native_context =
+            unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }.expect("validated context");
+        let pipeline = d3d11::pipeline(native_context);
         if !pipeline.supported() {
             return frame.refuse(PIPELINE);
         }
@@ -268,62 +221,56 @@ impl DepthReplay {
         };
         let resources: Resources = std::array::from_fn(|i| self.resources[i].as_ptr());
         // A narrow scope: output targets, depth state and pixel shader only.
-        let mut saved = MaybeUninit::<State>::uninit();
-        if unsafe { (platform.save)(context, saved.as_mut_ptr()) } == 0 {
+        let Some(saved) = (unsafe {
+            SavedBindings::new(
+                context,
+                rsf_d3d11_depth_state_save,
+                rsf_d3d11_depth_state_restore,
+            )
+        }) else {
             frame.last_reject = PIPELINE;
             return 0;
-        }
+        };
         unsafe {
-            (platform.unbind)(context);
+            native_context.OMSetRenderTargets(None, None);
             if frame.draws == 0 {
-                (platform.copy)(context, resources[0], source);
+                rsf_d3d11_output_copy_resource(context, resources[0], source);
             }
-            (platform.draw)(context, &resources, candidate.geometry);
-            (platform.restore)(context, saved.as_mut_ptr());
         }
+        d3d11::draw(native_context, &resources, candidate);
+        drop(saved);
         frame.draws = frame.draws.saturating_add(1);
         1
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_replay_create(
+unsafe extern "C" fn rsf_depth_replay_create(
     device: Handle,
     width: u32,
     height: u32,
-    platform: &'static Platform,
 ) -> *mut DepthReplay {
     if device.is_null() || width == 0 || height == 0 {
         return null_mut();
     }
-    let mut raw = [null_mut(); 3];
-    let made = unsafe { (platform.make)(device, width, height, &mut raw) } != 0;
-    let resources = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
-    let [Some(texture), Some(view), Some(write)] = resources else {
+    let Some(resources) = (unsafe { d3d11::make(device, width, height) }) else {
         return null_mut();
     };
-    if !made {
-        return null_mut();
-    }
     crate::allocate_handle(DepthReplay {
-        resources: [texture, view, write],
+        resources,
         width,
         height,
         frame: Mutex::default(),
-        platform,
     })
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_replay_last_reject(replay: *const DepthReplay) -> u32 {
+unsafe extern "C" fn rsf_depth_replay_last_reject(replay: *const DepthReplay) -> u32 {
     unsafe { replay.as_ref() }.map_or(0, |replay| replay.frame().last_reject)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_replay_get_detail(
-    replay: *const DepthReplay,
-    out: *mut Detail,
-) {
+unsafe extern "C" fn rsf_depth_replay_get_detail(replay: *const DepthReplay, out: *mut Detail) {
     if out.is_null() {
         return;
     }
@@ -342,9 +289,9 @@ unsafe extern "C" fn rsf_core_depth_replay_get_detail(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_replay_draw(
+unsafe extern "C" fn rsf_depth_replay_draw(
     replay: *const DepthReplay,
-    candidate: *const Candidate,
+    geometry: *const rsf_frame_tap_geometry,
 ) -> u32 {
     let Some(replay) = (unsafe { replay.as_ref() }) else {
         return 0;
@@ -355,15 +302,14 @@ unsafe extern "C" fn rsf_core_depth_replay_draw(
         Err(TryLockError::Poisoned(error)) => error.into_inner(),
         Err(TryLockError::WouldBlock) => return 0,
     };
-    let candidate = unsafe { candidate.as_ref() }.filter(|candidate| {
-        !candidate.context.is_null()
-            && !candidate.depth_view.is_null()
-            && !candidate.target.is_null()
+    let geometry = unsafe { geometry.as_ref() }.filter(|draw| {
+        !draw.context.is_null() && !draw.depth_view.is_null() && !draw.target.is_null()
     });
-    let Some(candidate) = candidate else {
+    let Some(geometry) = geometry else {
         frame.last_reject = NO_INPUT;
         return 0;
     };
+    let candidate = geometry;
     if candidate.width != replay.width
         || candidate.height != replay.height
         || candidate.samples != 1
@@ -383,7 +329,7 @@ unsafe extern "C" fn rsf_core_depth_replay_draw(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_replay_selected(
+unsafe extern "C" fn rsf_depth_replay_selected(
     replay: *const DepthReplay,
     context: Handle,
     depth: Handle,
@@ -398,7 +344,7 @@ unsafe extern "C" fn rsf_core_depth_replay_selected(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_replay_end_frame(replay: *const DepthReplay) {
+unsafe extern "C" fn rsf_depth_replay_end_frame(replay: *const DepthReplay) {
     if let Some(replay) = unsafe { replay.as_ref() } {
         let mut frame = replay.frame();
         frame.source = None;
@@ -410,7 +356,7 @@ unsafe extern "C" fn rsf_core_depth_replay_end_frame(replay: *const DepthReplay)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_depth_replay_destroy(replay: *mut DepthReplay) {
+unsafe extern "C" fn rsf_depth_replay_destroy(replay: *mut DepthReplay) {
     if !replay.is_null() {
         drop(unsafe { Box::from_raw(replay) });
     }

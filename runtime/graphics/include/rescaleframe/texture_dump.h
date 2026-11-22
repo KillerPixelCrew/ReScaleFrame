@@ -43,9 +43,10 @@ typedef void (*rsf_dump_log_fn)(void* user, const char* message);
 typedef uint32_t rsf_dump_view;
 /* Write channels through unchanged, scaled from their storage range to 0..255. */
 #define RSF_DUMP_VIEW_RAW ((rsf_dump_view)0)
-/* Treat the texture as Unreal velocity: decode, then centre zero motion at mid grey so that
-   direction and magnitude are both readable, and mark unwritten pixels. */
-#define RSF_DUMP_VIEW_VELOCITY ((rsf_dump_view)1)
+/* Decode motion using the caller's encoding, then centre zero motion at mid grey. */
+#define RSF_DUMP_VIEW_ENCODED_MOTION ((rsf_dump_view)1)
+/* Source compatibility name for the encoded motion view. */
+#define RSF_DUMP_VIEW_VELOCITY RSF_DUMP_VIEW_ENCODED_MOTION
 /* Motion that a pass has already decoded. Centred the same way as the velocity view so the two can
    be compared side by side, but without decoding again, and marking the sentinel rather than a
    stored zero: after a decode, zero is a real motion of zero and cannot serve as the marker. */
@@ -74,6 +75,16 @@ typedef struct rsf_texture_dump_options {
     rsf_dump_log_fn log;
     void* log_user;
 } rsf_texture_dump_options;
+
+/* For encoded motion previews pass &options.base, with the full struct size and
+   RSF_TEXTURE_DUMP_MOTION_ABI_VERSION in the base header. */
+#define RSF_TEXTURE_DUMP_MOTION_ABI_VERSION 3u
+typedef struct rsf_texture_dump_motion_options {
+    rsf_texture_dump_options base;
+    float motion_scale[2];
+    float motion_bias[2];
+    uint32_t zero_x_unwritten;
+} rsf_texture_dump_motion_options;
 
 typedef struct rsf_texture_dump_report {
     uint32_t struct_size;

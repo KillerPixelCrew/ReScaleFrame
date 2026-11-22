@@ -4,7 +4,10 @@
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/dlss_preset.h>
+#include <rescaleframe/overlay_d3d12.h>
+#include <rescaleframe/native_fg_d3d12.h>
 #include "../../../loader/proxy/src/overlay_host.h"
+#include "overlay_bound.h"
 #include "overlay_platform.h"
 #include "render_settings_store.h"
 #include <windows.h>
@@ -109,6 +112,10 @@ RSF_RUNTIME_API int32_t rsf_adapter_setting_write_bool(
 
 rsf_result rsf_core_get_overlay_api(rsf_overlay_api*, const rsf_overlay_platform*);
 rsf_result rsf_core_get_overlay_diagnostics(rsf_overlay_diagnostics*, const rsf_overlay_platform*);
+rsf_result rsf_core_overlay_configure_deferred(const rsf_overlay_service_setup*);
+rsf_result rsf_core_overlay_present_bound(void*, void*, int (*)(rsf_native_fg_status*),
+    int (*)(void*, const rsf_overlay_stats*, rsf_overlay_intent*), void*);
+rsf_result rsf_core_overlay_notify_bound(uint32_t, int (*)(void));
 
 RSF_RUNTIME_API rsf_result rsf_get_overlay_api(rsf_overlay_api* api)
 {
@@ -136,4 +143,40 @@ RSF_RUNTIME_API rsf_result rsf_start_d3d11_overlay(const rsf_overlay_service_set
     observer.on_present_event = observed_present;
     return rsf_observer_install(&observer) == RSF_OBSERVER_OK ? RSF_OK : RSF_ERROR_NOT_READY;
 } catch (...) { return RSF_ERROR_NOT_READY; }
+}
+
+rsf_result rsf_overlay_configure_bound(const rsf_overlay_service_setup* setup)
+{
+    rsf_overlay_api api{};
+    api.struct_size = sizeof(api);
+    api.abi_version = RSF_OVERLAY_API_VERSION;
+    const auto result = rsf_get_overlay_api(&api);
+    return result == RSF_OK ? rsf_core_overlay_configure_deferred(setup) : result;
+}
+
+rsf_result rsf_overlay_present_bound(void* device, void* queue, void* chain, void* backbuffer, void* input_window,
+    rsf_game_log_fn log, void* user)
+{
+    struct Frame {
+        void* device;
+        void* queue;
+        void* backbuffer;
+        void* window;
+        rsf_game_log_fn log;
+        void* user;
+    } frame{device, queue, backbuffer, input_window, log, user};
+    return rsf_core_overlay_present_bound(chain, input_window, rsf_fg12_status,
+        [](void* context, const rsf_overlay_stats* stats, rsf_overlay_intent* intent) {
+            const auto& f = *static_cast<Frame*>(context);
+            return rsf_overlay_d3d12_frame_for_window(f.device, f.queue, f.backbuffer, f.window,
+                stats, intent, f.log, f.user);
+        }, &frame);
+}
+
+rsf_result rsf_overlay_notify_bound(uint32_t reason)
+{
+    return rsf_core_overlay_notify_bound(reason, []() -> int {
+        rsf_overlay_d3d12_stop();
+        return RSF_OK;
+    });
 }

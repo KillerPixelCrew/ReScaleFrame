@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <algorithm>
-#include <cmath>
-namespace rsf {
-// Both fields are overwritten on every dispatch, including Off and custom modes.
-template<class Dispatch> void ffx_sharpening(Dispatch& dispatch, float sharpness) {
-    const float amount = std::isfinite(sharpness) ? std::clamp(sharpness,0.0f,1.0f) : 0.0f;
-    dispatch.enableSharpening = amount > 0;
-    dispatch.sharpness = amount;
+#include <stdbool.h>
+
+/* Both outputs are required and overwritten on every dispatch. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+void rsf_ffx_sharpening(float request, bool* enabled, float* amount);
+#ifdef __cplusplus
 }
-}
+#endif

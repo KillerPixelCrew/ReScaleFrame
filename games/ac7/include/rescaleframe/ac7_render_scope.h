@@ -52,6 +52,10 @@ int rsf_ac7_render_scope_open(rsf_ac7_render_scopes*, void* native_command_list,
 /* Takes lease ownership on success only. Resolution occurs on the RHI stream, release after end. */
 int rsf_ac7_render_scope_open_leased(rsf_ac7_render_scopes*, void* native_command_list,
     const rsf_ac7_render_scope*, const rsf_ac7_scope_lease*, rsf_ac7_render_ticket** out);
+/* Queues adjacent begin/end markers. On refusal the list and lease ownership are unchanged. */
+int rsf_ac7_render_scope_enqueue_leased(rsf_ac7_render_scopes*, void* native_command_list,
+    const rsf_ac7_render_scope*, const rsf_ac7_scope_lease*);
+/* Only the originating recording list may close a ticket. Refusal leaves it open. */
 int rsf_ac7_render_scope_close(rsf_ac7_render_ticket*, void* native_command_list);
 
 /* A snapshot for the current graphics stream. Zero means no identified engine scope. */

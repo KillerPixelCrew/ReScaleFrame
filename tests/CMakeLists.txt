@@ -120,8 +120,8 @@ add_test(NAME orchestrator_domain_contract COMMAND rsf_orchestrator_domains)
 add_executable(rsf_d3d12_observer_test d3d12_observer.cpp)
 target_link_libraries(rsf_d3d12_observer_test PRIVATE ReScaleFrame::Graphics rsf_build_options d3d12)
 add_test(NAME d3d12_observer_contract COMMAND rsf_d3d12_observer_test)
-add_executable(rsf_exposure_normalization_test exposure_normalization.cpp)
-target_link_libraries(rsf_exposure_normalization_test PRIVATE rsf_orchestrator rsf_build_options d3d12 dxgi)
+add_executable(rsf_exposure_normalization_test exposure_normalization_main.c)
+target_link_libraries(rsf_exposure_normalization_test PRIVATE rsf_orchestrator ReScaleFrame::Graphics rsf_build_options d3d12 dxgi)
 add_test(NAME native_exposure_normalization COMMAND rsf_exposure_normalization_test)
 add_executable(rsf_gpu_policy_test gpu_policy.cpp)
 target_link_libraries(rsf_gpu_policy_test PRIVATE rsf_orchestrator rsf_build_options)
@@ -242,7 +242,29 @@ target_link_libraries(rsf_ac7_capture_io PRIVATE ReScaleFrame::AC7MotionCapture 
 add_test(NAME ac7_capture_io COMMAND rsf_ac7_capture_io)
 set_tests_properties(ac7_capture_io PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_ac7_session ac7_session.cpp ../loader/proxy/src/preferences.c)
+if(DEFINED ENV{RUSTC} AND NOT "$ENV{RUSTC}" STREQUAL "")
+    set(ac7_fixture_rustc "$ENV{RUSTC}")
+else()
+    find_program(ac7_fixture_rustc rustc REQUIRED)
+endif()
+if(MSVC)
+    set(ac7_fixture_target x86_64-pc-windows-msvc)
+else()
+    set(ac7_fixture_target x86_64-pc-windows-gnu)
+endif()
+set(ac7_session_object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_ac7_session.obj")
+add_custom_command(OUTPUT "${ac7_session_object}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+    COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
+        --crate-name rsf_ac7_session --crate-type lib --emit obj -C codegen-units=1
+        -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3>
+        -o "${ac7_session_object}" "${CMAKE_CURRENT_SOURCE_DIR}/ac7_session.rs"
+    DEPENDS ac7_session.rs "${PROJECT_SOURCE_DIR}/games/ac7/src/scene_color_abi.rs"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+set_source_files_properties("${ac7_session_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
+add_executable(rsf_ac7_session ac7_session.c "${ac7_session_object}" ../loader/proxy/src/preferences.c)
+set_target_properties(rsf_ac7_session PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7SceneColor rsf_build_options)
 add_test(NAME ac7_session COMMAND rsf_ac7_session)
 
@@ -282,7 +304,8 @@ add_test(NAME ui_layer COMMAND rsf_ui_layer)
 set_tests_properties(ui_layer PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 # The composite's arithmetic, which nothing covered while it lived in present_blit.
-add_executable(rsf_fullscreen_pass fullscreen_pass.cpp)
+add_executable(rsf_fullscreen_pass graphics_fixture_main.c)
+target_compile_definitions(rsf_fullscreen_pass PRIVATE RSF_GRAPHICS_FIXTURE=rsf_fullscreen_pass_fixture)
 target_link_libraries(rsf_fullscreen_pass PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME fullscreen_pass COMMAND rsf_fullscreen_pass)
 set_tests_properties(fullscreen_pass PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
@@ -294,7 +317,8 @@ target_link_libraries(rsf_native_reinsert PRIVATE rsf_orchestrator_rust ReScaleF
 add_test(NAME native_reinsert_device COMMAND rsf_native_reinsert)
 set_tests_properties(native_reinsert_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_depth_scale depth_scale.cpp)
+add_executable(rsf_depth_scale graphics_fixture_main.c)
+target_compile_definitions(rsf_depth_scale PRIVATE RSF_GRAPHICS_FIXTURE=rsf_depth_scale_fixture)
 target_link_libraries(rsf_depth_scale PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME depth_scale_device COMMAND rsf_depth_scale)
 set_tests_properties(depth_scale_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
@@ -340,7 +364,8 @@ add_executable(rsf_resource_roles resource_roles.cpp)
 target_link_libraries(rsf_resource_roles PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME resource_roles COMMAND rsf_resource_roles)
 
-add_executable(rsf_motion_decode motion_decode.cpp)
+add_executable(rsf_motion_decode graphics_fixture_main.c)
+target_compile_definitions(rsf_motion_decode PRIVATE RSF_GRAPHICS_FIXTURE=rsf_motion_decode_fixture)
 target_link_libraries(rsf_motion_decode PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME motion_decode COMMAND rsf_motion_decode)
 set_tests_properties(motion_decode PROPERTIES TIMEOUT 120)
@@ -435,12 +460,14 @@ target_include_directories(rsf_sr_session_test PRIVATE ../runtime/orchestrator/i
 target_link_libraries(rsf_sr_session_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Contract ReScaleFrame::RuntimeCommon rsf_build_options)
 add_test(NAME sr_session COMMAND rsf_sr_session_test)
 
-add_executable(rsf_motion_resolve_test motion_resolve.cpp)
+add_executable(rsf_motion_resolve_test graphics_fixture_main.c)
+target_compile_definitions(rsf_motion_resolve_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_motion_resolve_fixture)
 target_link_libraries(rsf_motion_resolve_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME motion_resolve COMMAND rsf_motion_resolve_test)
 set_tests_properties(motion_resolve PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
-add_executable(rsf_colour_transport_test colour_transport.cpp)
+add_executable(rsf_colour_transport_test graphics_fixture_main.c)
+target_compile_definitions(rsf_colour_transport_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_colour_transport_fixture)
 target_link_libraries(rsf_colour_transport_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME colour_transport COMMAND rsf_colour_transport_test)
 set_tests_properties(colour_transport PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
@@ -464,16 +491,16 @@ target_link_libraries(rsf_fg_session_test PRIVATE rsf_orchestrator rsf_build_opt
 add_test(NAME fg_session COMMAND rsf_fg_session_test)
 set_tests_properties(fg_session PROPERTIES TIMEOUT 30)
 
-add_executable(rsf_fg12_abi_test fg12_abi.cpp)
+add_executable(rsf_fg12_abi_test fg12_abi.c)
 target_link_libraries(rsf_fg12_abi_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME fg12_abi COMMAND rsf_fg12_abi_test)
-add_executable(rsf_fg12_abi_embedded_test fg12_abi.cpp)
+add_executable(rsf_fg12_abi_embedded_test fg12_abi.c)
 target_link_libraries(rsf_fg12_abi_embedded_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME fg12_abi_embedded COMMAND rsf_fg12_abi_embedded_test)
-add_executable(rsf_sr12_abi_test sr12_abi.cpp)
+add_executable(rsf_sr12_abi_test sr12_abi.c)
 target_link_libraries(rsf_sr12_abi_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME sr12_abi COMMAND rsf_sr12_abi_test)
-add_executable(rsf_sr12_abi_embedded_test sr12_abi.cpp)
+add_executable(rsf_sr12_abi_embedded_test sr12_abi.c)
 target_link_libraries(rsf_sr12_abi_embedded_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME sr12_abi_embedded COMMAND rsf_sr12_abi_embedded_test)
 
@@ -627,8 +654,9 @@ add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 
 # Explicit hardware experiment, never run by routine CTest verification.
+rsf_add_rust_static(rsf_exposure_probe_rust rsf_exposure_probe_rust_build rsf-exposure-probe rsf_exposure_probe)
 add_executable(rsf_exposure_probe ../tools/exposure-probe.cpp)
-target_link_libraries(rsf_exposure_probe PRIVATE ReScaleFrame::DLSS ReScaleFrame::Graphics minhook rsf_build_options)
+target_link_libraries(rsf_exposure_probe PRIVATE rsf_exposure_probe_rust ReScaleFrame::DLSS ReScaleFrame::Graphics minhook rsf_build_options)
 if(EXISTS "${RSF_RENDERDOC_INCLUDE}/renderdoc_app.h")
     target_include_directories(rsf_exposure_probe SYSTEM PRIVATE "${RSF_RENDERDOC_INCLUDE}")
     target_compile_definitions(rsf_exposure_probe PRIVATE RSF_PROBE_RENDERDOC=1)
@@ -711,10 +739,6 @@ target_include_directories(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE ../ru
 target_link_libraries(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME native_fg_vulkan_dispatch_fsr4_contract COMMAND rsf_native_fg_vulkan_dispatch_fsr4_test)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")
-    add_executable(rsf_native_fsr4_fg_contract_test native_fsr4_fg_contract.cpp)
-    target_include_directories(rsf_native_fsr4_fg_contract_test SYSTEM PRIVATE "${RSF_FFX_INCLUDE}" "${RSF_FFX_INCLUDE}/../../framegeneration/include")
-    target_link_libraries(rsf_native_fsr4_fg_contract_test PRIVATE rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
-    add_test(NAME native_fsr4_fg_contract COMMAND rsf_native_fsr4_fg_contract_test)
     add_executable(rsf_native_fsr4_fg_bridge_test native_fsr4_fg_bridge.cpp)
     target_link_libraries(rsf_native_fsr4_fg_bridge_test PRIVATE ReScaleFrame::NativeVulkan rsf_build_options dxgi)
     add_test(NAME native_fsr4_fg_bridge_contract COMMAND rsf_native_fsr4_fg_bridge_test)
@@ -733,14 +757,6 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_include_directories(rsf_streamline_vulkan_dispatch_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
     target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_build_options)
     add_test(NAME streamline_vulkan_dispatch_contract COMMAND rsf_streamline_vulkan_dispatch_test)
-    add_executable(rsf_godot_vulkan_creation_test godot_vulkan_creation.cpp)
-    target_sources(rsf_godot_vulkan_creation_test PRIVATE ../runtime/orchestrator/src/latency_amd_vulkan.cpp)
-    target_compile_definitions(rsf_godot_vulkan_creation_test PRIVATE RSF_HAVE_ANTILAG_VK=1)
-    target_compile_definitions(rsf_godot_vulkan_creation_test PRIVATE RSF_RUNTIME_BUILD RSF_VULKAN_SR_ENABLED=1)
-    target_include_directories(rsf_godot_vulkan_creation_test PRIVATE ../runtime/orchestrator/include)
-    target_include_directories(rsf_godot_vulkan_creation_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_godot_vulkan_creation_test PRIVATE rsf_godot_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
-    add_test(NAME godot_vulkan_creation_contract COMMAND rsf_godot_vulkan_creation_test)
     add_executable(rsf_native_antilag_vulkan_test native_antilag_vulkan.cpp
         ../runtime/orchestrator/src/native_latency_vulkan.cpp ../runtime/orchestrator/src/latency_amd_vulkan.cpp)
     target_compile_definitions(rsf_native_antilag_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_ANTILAG_VK=1
@@ -868,7 +884,8 @@ if(TARGET rsf_vendor_census)
     endforeach()
 endif()
 
-add_executable(rsf_sharpening_test sharpening.cpp)
+add_executable(rsf_sharpening_test graphics_fixture_main.c)
+target_compile_definitions(rsf_sharpening_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_sharpening_fixture)
 target_link_libraries(rsf_sharpening_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME sharpening COMMAND rsf_sharpening_test)
 set_tests_properties(sharpening PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
@@ -899,11 +916,19 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
 endif()
 
 if(TARGET rsf_godot AND TARGET rsf_unity_package)
-    add_executable(rsf_engine_sharpening_test engine_sharpening.cpp)
-    target_link_libraries(rsf_engine_sharpening_test PRIVATE ReScaleFrame::NativeVulkan rsf_build_options)
-    target_include_directories(rsf_engine_sharpening_test PRIVATE ../runtime/orchestrator/include ../games/unity-mono/include)
+    set(rsf_engine_sharpening_exe "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_engine_sharpening_test.exe")
+    set(rsf_engine_sharpening_source "${CMAKE_CURRENT_SOURCE_DIR}/engine_sharpening.rs")
+    add_custom_command(OUTPUT "${rsf_engine_sharpening_exe}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+        COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
+            -D warnings "${rsf_engine_sharpening_source}" -o "${rsf_engine_sharpening_exe}"
+        DEPENDS "${rsf_engine_sharpening_source}" engine_sharpening_abi.rs ../sdk/game/src/sharpening_abi.rs
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        VERBATIM)
+    add_custom_target(rsf_engine_sharpening_test ALL DEPENDS "${rsf_engine_sharpening_exe}")
     add_dependencies(rsf_engine_sharpening_test rsf_godot rsf_unity_package)
-    add_test(NAME engine_sharpening_settings COMMAND rsf_engine_sharpening_test "$<TARGET_FILE:rsf_godot>" "$<TARGET_FILE:rsf_unity_package>")
+    add_test(NAME engine_sharpening_settings COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
+        "${rsf_engine_sharpening_exe}" "$<TARGET_FILE:rsf_godot>" "$<TARGET_FILE:rsf_unity_package>")
 endif()
 
 

@@ -3,7 +3,6 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 use crate::fg_inputs_abi::rsf_anomaly_input_platform;
-use rsf_game_sys::sr_abi::rsf_dlss_quality;
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass, rsf_result};
 type wchar_t = u16;
 type rsf_streamline_host = ::core::ffi::c_void;
@@ -26,8 +25,8 @@ pub const RSF_FG_FIXED: u32 = 1;
 pub const RSF_REFLEX_ON: u32 = 1;
 pub const RSF_REFLEX_BOOST: u32 = 2;
 pub const RSF_FG_STAT_TOTAL_PRESENTED: u32 = 1;
-pub const RSF_DLSS_ABI_VERSION: u32 = 5;
-pub const RSF_D3D11_FG_API_VERSION: u32 = 3;
+pub const RSF_D3D11_FG_API_VERSION: u32 = 4;
+pub const RSF_D3D11_FG_INPUTS_VERSION: u32 = 1;
 pub const RSF_D3D11_FG_API_ENTRY_POINT: &[u8; 21] = b"rsf_get_d3d11_fg_api\0";
 pub const RSF_D3D11_PRESENT_API_VERSION: u32 = 1;
 pub const RSF_D3D11_PRESENT_API_ENTRY_POINT: &[u8; 26] = b"rsf_get_d3d11_present_api\0";
@@ -293,152 +292,6 @@ impl Default for rsf_d3d11_present_setup {
     }
 }
 #[repr(C)]
-pub struct rsf_dlss_frame {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub color_in: *mut ::core::ffi::c_void,
-    pub color_out: *mut ::core::ffi::c_void,
-    pub depth: *mut ::core::ffi::c_void,
-    pub motion: *mut ::core::ffi::c_void,
-    pub exposure: *mut ::core::ffi::c_void,
-    pub render_width: u32,
-    pub render_height: u32,
-    pub output_width: u32,
-    pub output_height: u32,
-    pub quality: rsf_dlss_quality,
-    pub jitter_x: f32,
-    pub jitter_y: f32,
-    pub motion_scale_x: f32,
-    pub motion_scale_y: f32,
-    pub camera_view_to_clip: [f32; 16usize],
-    pub clip_to_camera_view: [f32; 16usize],
-    pub clip_to_prev_clip: [f32; 16usize],
-    pub prev_clip_to_clip: [f32; 16usize],
-    pub camera_position: [f32; 3usize],
-    pub camera_up: [f32; 3usize],
-    pub camera_right: [f32; 3usize],
-    pub camera_forward: [f32; 3usize],
-    pub near_plane: f32,
-    pub far_plane: f32,
-    pub vertical_fov: f32,
-    pub aspect_ratio: f32,
-    pub motion_invalid_value: f32,
-    pub depth_inverted: u32,
-    pub camera_motion_included: u32,
-    pub reset: u32,
-    pub viewport: u32,
-    pub alpha: u32,
-    pub frame_index: u32,
-    pub color_before_transparency: *mut ::core::ffi::c_void,
-    pub transparency_layer: *mut ::core::ffi::c_void,
-    pub reactive_mask: *mut ::core::ffi::c_void,
-    pub transparency_hint: *mut ::core::ffi::c_void,
-    pub bias_current_color: *mut ::core::ffi::c_void,
-    pub motion_depth_layer: *mut ::core::ffi::c_void,
-    pub color_encoded: u32,
-    pub preset: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_dlss_frame"][::core::mem::size_of::<rsf_dlss_frame>() - 488usize];
-    ["Alignment of rsf_dlss_frame"][::core::mem::align_of::<rsf_dlss_frame>() - 8usize];
-    ["Offset of field: rsf_dlss_frame::struct_size"]
-        [::core::mem::offset_of!(rsf_dlss_frame, struct_size) - 0usize];
-    ["Offset of field: rsf_dlss_frame::abi_version"]
-        [::core::mem::offset_of!(rsf_dlss_frame, abi_version) - 4usize];
-    ["Offset of field: rsf_dlss_frame::color_in"]
-        [::core::mem::offset_of!(rsf_dlss_frame, color_in) - 8usize];
-    ["Offset of field: rsf_dlss_frame::color_out"]
-        [::core::mem::offset_of!(rsf_dlss_frame, color_out) - 16usize];
-    ["Offset of field: rsf_dlss_frame::depth"]
-        [::core::mem::offset_of!(rsf_dlss_frame, depth) - 24usize];
-    ["Offset of field: rsf_dlss_frame::motion"]
-        [::core::mem::offset_of!(rsf_dlss_frame, motion) - 32usize];
-    ["Offset of field: rsf_dlss_frame::exposure"]
-        [::core::mem::offset_of!(rsf_dlss_frame, exposure) - 40usize];
-    ["Offset of field: rsf_dlss_frame::render_width"]
-        [::core::mem::offset_of!(rsf_dlss_frame, render_width) - 48usize];
-    ["Offset of field: rsf_dlss_frame::render_height"]
-        [::core::mem::offset_of!(rsf_dlss_frame, render_height) - 52usize];
-    ["Offset of field: rsf_dlss_frame::output_width"]
-        [::core::mem::offset_of!(rsf_dlss_frame, output_width) - 56usize];
-    ["Offset of field: rsf_dlss_frame::output_height"]
-        [::core::mem::offset_of!(rsf_dlss_frame, output_height) - 60usize];
-    ["Offset of field: rsf_dlss_frame::quality"]
-        [::core::mem::offset_of!(rsf_dlss_frame, quality) - 64usize];
-    ["Offset of field: rsf_dlss_frame::jitter_x"]
-        [::core::mem::offset_of!(rsf_dlss_frame, jitter_x) - 68usize];
-    ["Offset of field: rsf_dlss_frame::jitter_y"]
-        [::core::mem::offset_of!(rsf_dlss_frame, jitter_y) - 72usize];
-    ["Offset of field: rsf_dlss_frame::motion_scale_x"]
-        [::core::mem::offset_of!(rsf_dlss_frame, motion_scale_x) - 76usize];
-    ["Offset of field: rsf_dlss_frame::motion_scale_y"]
-        [::core::mem::offset_of!(rsf_dlss_frame, motion_scale_y) - 80usize];
-    ["Offset of field: rsf_dlss_frame::camera_view_to_clip"]
-        [::core::mem::offset_of!(rsf_dlss_frame, camera_view_to_clip) - 84usize];
-    ["Offset of field: rsf_dlss_frame::clip_to_camera_view"]
-        [::core::mem::offset_of!(rsf_dlss_frame, clip_to_camera_view) - 148usize];
-    ["Offset of field: rsf_dlss_frame::clip_to_prev_clip"]
-        [::core::mem::offset_of!(rsf_dlss_frame, clip_to_prev_clip) - 212usize];
-    ["Offset of field: rsf_dlss_frame::prev_clip_to_clip"]
-        [::core::mem::offset_of!(rsf_dlss_frame, prev_clip_to_clip) - 276usize];
-    ["Offset of field: rsf_dlss_frame::camera_position"]
-        [::core::mem::offset_of!(rsf_dlss_frame, camera_position) - 340usize];
-    ["Offset of field: rsf_dlss_frame::camera_up"]
-        [::core::mem::offset_of!(rsf_dlss_frame, camera_up) - 352usize];
-    ["Offset of field: rsf_dlss_frame::camera_right"]
-        [::core::mem::offset_of!(rsf_dlss_frame, camera_right) - 364usize];
-    ["Offset of field: rsf_dlss_frame::camera_forward"]
-        [::core::mem::offset_of!(rsf_dlss_frame, camera_forward) - 376usize];
-    ["Offset of field: rsf_dlss_frame::near_plane"]
-        [::core::mem::offset_of!(rsf_dlss_frame, near_plane) - 388usize];
-    ["Offset of field: rsf_dlss_frame::far_plane"]
-        [::core::mem::offset_of!(rsf_dlss_frame, far_plane) - 392usize];
-    ["Offset of field: rsf_dlss_frame::vertical_fov"]
-        [::core::mem::offset_of!(rsf_dlss_frame, vertical_fov) - 396usize];
-    ["Offset of field: rsf_dlss_frame::aspect_ratio"]
-        [::core::mem::offset_of!(rsf_dlss_frame, aspect_ratio) - 400usize];
-    ["Offset of field: rsf_dlss_frame::motion_invalid_value"]
-        [::core::mem::offset_of!(rsf_dlss_frame, motion_invalid_value) - 404usize];
-    ["Offset of field: rsf_dlss_frame::depth_inverted"]
-        [::core::mem::offset_of!(rsf_dlss_frame, depth_inverted) - 408usize];
-    ["Offset of field: rsf_dlss_frame::camera_motion_included"]
-        [::core::mem::offset_of!(rsf_dlss_frame, camera_motion_included) - 412usize];
-    ["Offset of field: rsf_dlss_frame::reset"]
-        [::core::mem::offset_of!(rsf_dlss_frame, reset) - 416usize];
-    ["Offset of field: rsf_dlss_frame::viewport"]
-        [::core::mem::offset_of!(rsf_dlss_frame, viewport) - 420usize];
-    ["Offset of field: rsf_dlss_frame::alpha"]
-        [::core::mem::offset_of!(rsf_dlss_frame, alpha) - 424usize];
-    ["Offset of field: rsf_dlss_frame::frame_index"]
-        [::core::mem::offset_of!(rsf_dlss_frame, frame_index) - 428usize];
-    ["Offset of field: rsf_dlss_frame::color_before_transparency"]
-        [::core::mem::offset_of!(rsf_dlss_frame, color_before_transparency) - 432usize];
-    ["Offset of field: rsf_dlss_frame::transparency_layer"]
-        [::core::mem::offset_of!(rsf_dlss_frame, transparency_layer) - 440usize];
-    ["Offset of field: rsf_dlss_frame::reactive_mask"]
-        [::core::mem::offset_of!(rsf_dlss_frame, reactive_mask) - 448usize];
-    ["Offset of field: rsf_dlss_frame::transparency_hint"]
-        [::core::mem::offset_of!(rsf_dlss_frame, transparency_hint) - 456usize];
-    ["Offset of field: rsf_dlss_frame::bias_current_color"]
-        [::core::mem::offset_of!(rsf_dlss_frame, bias_current_color) - 464usize];
-    ["Offset of field: rsf_dlss_frame::motion_depth_layer"]
-        [::core::mem::offset_of!(rsf_dlss_frame, motion_depth_layer) - 472usize];
-    ["Offset of field: rsf_dlss_frame::color_encoded"]
-        [::core::mem::offset_of!(rsf_dlss_frame, color_encoded) - 480usize];
-    ["Offset of field: rsf_dlss_frame::preset"]
-        [::core::mem::offset_of!(rsf_dlss_frame, preset) - 484usize];
-};
-impl Default for rsf_dlss_frame {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_native_fg_options {
     pub struct_size: u32,
@@ -520,6 +373,36 @@ impl Default for rsf_native_fg_status {
     }
 }
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_d3d11_fg_inputs {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub depth: *mut ::core::ffi::c_void,
+    pub motion: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_d3d11_fg_inputs"][::core::mem::size_of::<rsf_d3d11_fg_inputs>() - 24usize];
+    ["Alignment of rsf_d3d11_fg_inputs"][::core::mem::align_of::<rsf_d3d11_fg_inputs>() - 8usize];
+    ["Offset of field: rsf_d3d11_fg_inputs::struct_size"]
+        [::core::mem::offset_of!(rsf_d3d11_fg_inputs, struct_size) - 0usize];
+    ["Offset of field: rsf_d3d11_fg_inputs::abi_version"]
+        [::core::mem::offset_of!(rsf_d3d11_fg_inputs, abi_version) - 4usize];
+    ["Offset of field: rsf_d3d11_fg_inputs::depth"]
+        [::core::mem::offset_of!(rsf_d3d11_fg_inputs, depth) - 8usize];
+    ["Offset of field: rsf_d3d11_fg_inputs::motion"]
+        [::core::mem::offset_of!(rsf_d3d11_fg_inputs, motion) - 16usize];
+};
+impl Default for rsf_d3d11_fg_inputs {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_d3d11_fg_api {
     pub struct_size: u32,
@@ -549,7 +432,7 @@ pub struct rsf_d3d11_fg_api {
         unsafe extern "C" fn(
             context11: *mut ::core::ffi::c_void,
             identity: *const rsf_game_render_pass,
-            frame: *const rsf_dlss_frame,
+            inputs: *const rsf_d3d11_fg_inputs,
         ),
     >,
     pub inputs_ready:
@@ -829,7 +712,7 @@ pub struct rsf_anomaly_fg_status {
     pub reason: u32,
     pub source_frames: u64,
     pub level_frames: u64,
-    pub tagged: u64,
+    pub eligible_at_ui_boundary: u64,
     pub fed: u64,
     pub presented: u64,
     pub unpresented: u64,
@@ -862,8 +745,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_fg_status, source_frames) - 32usize];
     ["Offset of field: rsf_anomaly_fg_status::level_frames"]
         [::core::mem::offset_of!(rsf_anomaly_fg_status, level_frames) - 40usize];
-    ["Offset of field: rsf_anomaly_fg_status::tagged"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_status, tagged) - 48usize];
+    ["Offset of field: rsf_anomaly_fg_status::eligible_at_ui_boundary"]
+        [::core::mem::offset_of!(rsf_anomaly_fg_status, eligible_at_ui_boundary) - 48usize];
     ["Offset of field: rsf_anomaly_fg_status::fed"]
         [::core::mem::offset_of!(rsf_anomaly_fg_status, fed) - 56usize];
     ["Offset of field: rsf_anomaly_fg_status::presented"]
@@ -924,6 +807,7 @@ pub type rsf_anomaly_fg_depth_source =
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_anomaly_fg_platform {
+    pub struct_size: u32,
     pub inputs: *const rsf_anomaly_input_platform,
     pub engine_version: *const ::core::ffi::c_char,
     pub project_id: *const ::core::ffi::c_char,
@@ -933,47 +817,29 @@ pub struct rsf_anomaly_fg_platform {
     pub sr_owns_depth: ::core::option::Option<unsafe extern "C" fn(native_frame: u32) -> bool>,
     pub motion_target:
         ::core::option::Option<unsafe extern "C" fn() -> rsf_anomaly_fg_motion_target>,
-    pub immediate_context: ::core::option::Option<
-        unsafe extern "C" fn(chain: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub backbuffer: ::core::option::Option<
-        unsafe extern "C" fn(chain: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub depth_texture: ::core::option::Option<
-        unsafe extern "C" fn(view: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub output_window: ::core::option::Option<
-        unsafe extern "C" fn(chain: *mut ::core::ffi::c_void, window: *mut usize) -> bool,
-    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_fg_platform"]
-        [::core::mem::size_of::<rsf_anomaly_fg_platform>() - 88usize];
+        [::core::mem::size_of::<rsf_anomaly_fg_platform>() - 64usize];
     ["Alignment of rsf_anomaly_fg_platform"]
         [::core::mem::align_of::<rsf_anomaly_fg_platform>() - 8usize];
+    ["Offset of field: rsf_anomaly_fg_platform::struct_size"]
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, struct_size) - 0usize];
     ["Offset of field: rsf_anomaly_fg_platform::inputs"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, inputs) - 0usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, inputs) - 8usize];
     ["Offset of field: rsf_anomaly_fg_platform::engine_version"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, engine_version) - 8usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, engine_version) - 16usize];
     ["Offset of field: rsf_anomaly_fg_platform::project_id"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, project_id) - 16usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, project_id) - 24usize];
     ["Offset of field: rsf_anomaly_fg_platform::units_to_meters"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, units_to_meters) - 24usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, units_to_meters) - 32usize];
     ["Offset of field: rsf_anomaly_fg_platform::engine_depth_view"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, engine_depth_view) - 32usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, engine_depth_view) - 40usize];
     ["Offset of field: rsf_anomaly_fg_platform::sr_owns_depth"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, sr_owns_depth) - 40usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, sr_owns_depth) - 48usize];
     ["Offset of field: rsf_anomaly_fg_platform::motion_target"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, motion_target) - 48usize];
-    ["Offset of field: rsf_anomaly_fg_platform::immediate_context"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, immediate_context) - 56usize];
-    ["Offset of field: rsf_anomaly_fg_platform::backbuffer"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, backbuffer) - 64usize];
-    ["Offset of field: rsf_anomaly_fg_platform::depth_texture"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, depth_texture) - 72usize];
-    ["Offset of field: rsf_anomaly_fg_platform::output_window"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_platform, output_window) - 80usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_platform, motion_target) - 56usize];
 };
 impl Default for rsf_anomaly_fg_platform {
     fn default() -> Self {

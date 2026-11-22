@@ -261,8 +261,88 @@ static DWORD read_number(const char* name, DWORD fallback)
     return (DWORD)value;
 }
 
+static const wchar_t startup_section[] = L"Startup";
+static struct {
+    const char* key;
+    rsf_overlay_host_option descriptor;
+    volatile LONG value;
+    uint32_t active_value;
+} startup_options[RSF_AC7_CARRIER_START_OPTION_COUNT];
+
+static void load_startup_options(void)
+{
+    for (uint32_t index = 0; index < RSF_AC7_CARRIER_START_OPTION_COUNT; ++index) {
+        rsf_overlay_host_option* option = &startup_options[index].descriptor;
+        uint32_t fallback, maximum;
+        const char* key = rsf_ac7_carrier_start_option(index, &option->label, &fallback, &maximum);
+        if (!key) {
+            return;
+        }
+        startup_options[index].key = key;
+        option->kind = maximum == 1 ? RSF_OVERLAY_HOST_OPTION_TOGGLE : RSF_OVERLAY_HOST_OPTION_NUMBER;
+        option->maximum = (int32_t)maximum;
+        option->step = 1;
+        option->divisor = 1;
+        option->restart = 1;
+        const uint32_t configured = (uint32_t)read_number(key, fallback);
+        const uint32_t saved = preference_path[0]
+            ? rsf_settings_store_read_integer(preference_path, startup_section, key, configured)
+            : configured;
+        startup_options[index].active_value = saved <= maximum ? saved : maximum;
+        InterlockedExchange(&startup_options[index].value, (LONG)startup_options[index].active_value);
+    }
+}
+
+static void load_carrier_preferences(void)
+{
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", preference_path, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        wcscat(preference_path, L"\\ReScaleFrame");
+        if (CreateDirectoryW(preference_path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) {
+            wcscat(preference_path, L"\\AC7.ini");
+        } else {
+            preference_path[0] = L'\0';
+        }
+    } else {
+        preference_path[0] = L'\0';
+    }
+    load_startup_options();
+}
+
+static uint32_t read_startup_options(rsf_overlay_host_option* out, uint32_t capacity)
+{
+    uint32_t index = 0;
+    for (; index < capacity && index < RSF_AC7_CARRIER_START_OPTION_COUNT; ++index) {
+        if (!startup_options[index].key) {
+            break;
+        }
+        out[index] = startup_options[index].descriptor;
+        out[index].value = InterlockedCompareExchange(&startup_options[index].value, 0, 0);
+    }
+    return index;
+}
+
+static int save_startup_option(uint32_t index, int32_t value)
+{
+    if (!preference_path[0] || index >= RSF_AC7_CARRIER_START_OPTION_COUNT || !startup_options[index].key ||
+        value < 0 || value > startup_options[index].descriptor.maximum) {
+        return 0;
+    }
+    if (rsf_settings_store_write_integer(preference_path, startup_section, startup_options[index].key,
+            (uint32_t)value) != RSF_OK) {
+        return 0;
+    }
+    InterlockedExchange(&startup_options[index].value, value);
+    return 1;
+}
+
 static uint32_t carrier_read_number(const char* name, uint32_t fallback)
 {
+    for (uint32_t index = 0; index < RSF_AC7_CARRIER_START_OPTION_COUNT; ++index) {
+        if (startup_options[index].key && strcmp(startup_options[index].key, name) == 0) {
+            return startup_options[index].active_value;
+        }
+    }
     return (uint32_t)read_number(name, (DWORD)fallback);
 }
 
@@ -374,8 +454,9 @@ static void start_observer(void)
         executable_sha256(sha256);
         rsf_input_dump_configure(observe_directory, "AC7", sha256, observer_note, NULL);
     }
-    rsf_bridge_set_motion_capture(read_number("RSF_MOTION_CAPTURE", 0) != 0);
-    if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
+    const int motion_capture = carrier_read_number("RSF_MOTION_CAPTURE", 0) != 0;
+    rsf_bridge_set_motion_capture(motion_capture);
+    if (motion_capture) {
         rsf_ac7_motion_capture_configure(observe_directory, observer_note, NULL);
         options.on_buffer = rsf_ac7_motion_capture_buffer;
     }
@@ -428,7 +509,7 @@ static void start_observer(void)
         }
     }
 
-    if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
+    if (motion_capture) {
         options.on_shader = rsf_bridge_shader_hook();
     }
     const rsf_observer_result result = rsf_observer_install(&options);
@@ -741,7 +822,7 @@ static void report_and_dump(void)
     snprintf(prefix, sizeof(prefix), "%s\\capture%02u", observe_directory, index);
     /* The work happens inside the next present. Reading a resource from this thread would race
        the game's own rendering, which is what took the process down the first time. */
-    const rsf_observer_result requested = rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_VELOCITY);
+    const rsf_observer_result requested = rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_ENCODED_MOTION);
 
     char sizes[MAX_PATH * 2];
     snprintf(sizes, sizeof(sizes), "%s\\capture%02u-buffer-sizes.csv", observe_directory, index);
@@ -914,6 +995,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
 
     strncpy(observe_directory, directory, MAX_PATH - 1);
     observe_directory[MAX_PATH - 1] = '\0';
+    load_carrier_preferences();
     start_observer();
     start_generation();
 
@@ -1092,13 +1174,12 @@ static int set_screen_percentage(float value)
 }
 
 /* Start on the render thread after decryption and the first presenting device are ready. */
-static void start_dlss(void)
+static void start_dlss_at_extent(uint32_t width, uint32_t height)
 {
     char directory[MAX_PATH * 2];
     char fsr_directories[3][MAX_PATH * 2] = {{0}};
     char xess_directory[MAX_PATH * 2] = {0};
     char sdk_override[MAX_PATH * 2] = {0};
-    uint32_t width = 0, height = 0;
 
     if (rsf_bridge_running()) {
         rsf_bridge_report();
@@ -1111,13 +1192,6 @@ static void start_dlss(void)
         return;
     }
 
-    /* The presented size, from the observer, so this does not have to be told what the game is
-       rendering at. Falling back to 1920x1080 would produce a plausible wrong answer, so a missing
-       size is a refusal instead. */
-    if (!rsf_bridge_present_extent(&width, &height)) {
-        note("no presented size yet, so DLSS cannot be told what to output");
-        return;
-    }
     rsf_ac7_carrier_override_start_extent(carrier_read_number, &width, &height);
 
     note("starting DLSS for %lux%lu output at quality %lu", (unsigned long)width,
@@ -1138,6 +1212,18 @@ static void start_dlss(void)
     rsf_bridge_set_unjitter((int)read_number("RSF_UI_UNJITTER", 1));
     rsf_bridge_set_translucency_unjitter((int)read_number("RSF_TRANSLUCENCY_UNJITTER", 1));
     rsf_bridge_report();
+}
+
+static void start_dlss(void)
+{
+    uint32_t width = 0, height = 0;
+    if (rsf_bridge_running()) {
+        rsf_bridge_report();
+    } else if (rsf_bridge_present_extent(&width, &height)) {
+        start_dlss_at_extent(width, height);
+    } else {
+        note("no presented size yet, so DLSS cannot be told what to output");
+    }
 }
 
 /* Put the render scale back when the game takes it away.
@@ -1416,6 +1502,7 @@ static void register_overlay_actions(void)
     rsf_bridge_actions actions;
     memset(&actions, 0, sizeof(actions));
     actions.start_backend = start_dlss;
+    actions.start_backend_at_extent = start_dlss_at_extent;
     actions.reinsert_depth_policy = action_reinsert_depth_policy;
     actions.set_render_scale = action_set_render_scale;
     actions.trigger_dump = action_trigger_dump;
@@ -1431,7 +1518,8 @@ static void register_overlay_actions(void)
     actions.save_sharpening = action_save_sharpening;
     actions.save_enabled = action_save_enabled;
     actions.maintain_renderer = action_maintain_renderer;
-    rsf_bridge_set_actions(&actions);
+    actions.read_host_options = read_startup_options;
+    actions.save_host_option = save_startup_option;
     preferred_enabled = read_number("RSF_DLSS_ENABLE", 1) != 0;
     rsf_dlss_pipeline_set_colour_correction(read_number("RSF_DLSS_COLOUR_CORRECTION", 0) != 0);
     rsf_dlss_pipeline_set_colour_transport(read_number("RSF_DLSS_TONEMAP", 1) != 0);
@@ -1439,18 +1527,8 @@ static void register_overlay_actions(void)
     if (preferred_quality > 4) {
         preferred_quality = 3;
     }
-    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", preference_path, MAX_PATH);
-    if (length > 0 && length < MAX_PATH) {
-        wcscat(preference_path, L"\\ReScaleFrame");
-        if (CreateDirectoryW(preference_path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) {
-            wcscat(preference_path, L"\\AC7.ini");
-            rsf_preferences_read(preference_path, &preferred_enabled, &preferred_quality);
-        } else {
-            preference_path[0] = L'\0';
-        }
-    } else {
-        preference_path[0] = L'\0';
-    }
+    rsf_preferences_read(preference_path, &preferred_enabled, &preferred_quality);
+    rsf_bridge_set_actions(&actions);
     {
         uint32_t preset = rsf_settings_store_read_dlss_preset(preference_path, L"Rendering",
             (uint32_t)read_number("RSF_DLSS_PRESET", 0));

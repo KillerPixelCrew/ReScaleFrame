@@ -30,12 +30,18 @@ The existing inputs and resource domains come from the
   callback table and Runtime entry points used by `runtime.cpp`.
 - `integrations/godot/native/vulkan.cpp` retains the guarded native loader/SDK startup,
   Vulkan presentation and capture calls, and packet-to-Runtime ABI translation.
-- `integrations/godot/native/vulkan_creation.cpp` retains Vulkan-header-defined
-  structure sizes, whitelisted chain copying, writable feature storage and typed loader
-  and Runtime calls. Rust tests use abstract chain facts and addresses.
-- `tests/godot_vulkan_creation.cpp` retains the typed oracle for the real Vulkan chain
-  clone, including unchanged caller bytes, feature structures and allocator forwarding.
-  Synthetic policy and per-device receipt coverage are in `vulkan/creation/tests.rs`.
+- `integrations/godot/native/vulkan_creation.cpp` was removed in the follow-up.
+  `vulkan/creation/typed.rs` owns the typed resolver entries and borrows a size-checked
+  table of linked Runtime services from `vulkan.cpp`. `typed/chain.rs` owns the
+  aligned, bounded feature-chain copies through each synchronous loader call.
+- `tests/godot_vulkan_creation.cpp` was ported into Cargo fixtures in
+  `vulkan/creation/typed/tests.rs`. They drive the production resolver with typed
+  fake Vulkan entry points and Runtime services. They cover caller-owned feature
+  links and values, allocator forwarding, aggregate and legacy feature roots,
+  augmentation and retries, returned adapter facts and teardown order.
+  The standalone native AMD Vulkan latency fixture still exercises its owner.
+- `runtime/orchestrator/src/native_sr_vulkan_session.cpp` retains the Runtime's
+  typed provider call table. The follow-up was scoped to Godot creation and fixtures.
 
 ## Source validation
 
@@ -48,8 +54,12 @@ view and resource generation. The adapter's existing resource layouts, frame ide
 motion conventions and shader producers carry forward. Active GPU bindings, resize,
 output recovery and native/provider-owned Present need device validation.
 
-Source checks compared C/Rust callback field order and offsets and confirmed the engine
+Source checks compared C/Rust callback fields, sizes and offsets and confirmed the engine
 receipt files were unchanged. The changed Rust files passed formatting with rustfmt
-1.8.0 from Rust 1.94.1. This change uses the existing generated Vulkan SR records and
-the internal hand-maintained Godot table, so it required no generated binding updates.
+1.8.0 from Rust 1.94.1. In the follow-up,
+`tools/generate-godot-vulkan-bindings.py` regenerated the loader and Runtime records
+with bindgen 0.72.1 from Vulkan header revision 335 in the pinned Godot checkout.
+The generated offsets include the fields read and written in the feature-chain port.
+The Windows window-class comparison now uses the GameSDK `ascii_wide` helper and
+retains the six code units of `Engine`.
 Builds, fixtures, lint, device runs and visual acceptance remain user-owned.

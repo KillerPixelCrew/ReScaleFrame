@@ -483,7 +483,7 @@ fn apply_latency(status: &mut Status, latency: &VkLatencyFacts) {
     status.latency_owner = latency.owner;
 }
 
-mod creation;
+pub(crate) mod creation;
 mod sr;
 
 #[cfg(test)]

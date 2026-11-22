@@ -24,10 +24,8 @@ use crate::guards::rsf_ac7_guards_held;
 use crate::lifecycle::{PENDING_CAPACITY, Renderer};
 use crate::patches;
 use crate::platform_abi::{RSF_AC7_DIAG_PIXEL_BINDINGS, rsf_ac7_native_renderer_options};
-use crate::sites::{self, Code, HOOK_SITES, NativeCode};
-use crate::sites_abi::{
-    RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_leaves, rsf_ac7_code_patches, rsf_ac7_renderer_leaves,
-};
+use crate::sites::{self, Code, CodeView, HOOK_SITES, NativeCode};
+use crate::sites_abi::{RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches, rsf_ac7_renderer_leaves};
 use std::ffi::OsStr;
 use std::ptr::null_mut;
 
@@ -284,7 +282,7 @@ pub(crate) fn stop(native: &impl Native, renderer: Renderer) -> bool {
 
 /// The validated leaf table of one call. Every native leaf is present.
 struct NativeLeaves {
-    code: rsf_ac7_code_leaves,
+    code: NativeCode,
     base: *mut u8,
     installed: unsafe extern "C" fn() -> Renderer,
     install: unsafe extern "C" fn(Renderer),
@@ -324,13 +322,11 @@ impl NativeLeaves {
     /// `leaves` is null or valid for the call, and its leaves keep the contracts of ac7_sites.h.
     unsafe fn new(leaves: *const rsf_ac7_renderer_leaves) -> Option<Self> {
         let leaves = unsafe { leaves.as_ref() }?;
+        let mut code = unsafe { NativeCode::new(&leaves.code) }?;
+        code.view.log = None;
+        code.view.user = null_mut();
         Some(Self {
-            code: rsf_ac7_code_leaves {
-                matches: Some(leaves.code.matches?),
-                write: Some(leaves.code.write?),
-                log: None,
-                user: null_mut(),
-            },
+            code,
             base: leaves.base,
             installed: leaves.installed?,
             install: leaves.install?,
@@ -366,8 +362,8 @@ impl NativeLeaves {
 
     /// Logs to the host log of these renderer options.
     fn log_to(mut self, options: &rsf_ac7_native_renderer_options) -> Self {
-        self.code.log = options.log;
-        self.code.user = options.user;
+        self.code.view.log = options.log;
+        self.code.view.user = options.user;
         self
     }
 
@@ -383,28 +379,21 @@ impl NativeLeaves {
             None => self,
         }
     }
+}
 
-    fn code(&self) -> Option<NativeCode<'_>> {
-        // SAFETY: `code` holds both code leaves and lives as long as the borrow.
-        unsafe { NativeCode::new(&self.code) }
+impl CodeView for NativeLeaves {
+    fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
+        self.code.matches(address, expected)
+    }
+
+    fn log(&self, message: &str) {
+        self.code.log(message);
     }
 }
 
 impl Code for NativeLeaves {
-    fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
-        self.code()
-            .is_some_and(|code| code.matches(address, expected))
-    }
-
     fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
-        self.code()
-            .is_some_and(|code| code.write(site, expected, replacement))
-    }
-
-    fn log(&self, message: &str) {
-        if let Some(code) = self.code() {
-            code.log(message);
-        }
+        self.code.write(site, expected, replacement)
     }
 }
 

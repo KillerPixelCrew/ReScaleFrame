@@ -6,7 +6,20 @@ use crate::{allocate_handle, owned_win32_handle};
 use std::ffi::{CString, c_void};
 use std::fmt;
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
+use windows::Win32::Foundation::{GENERIC_ALL, HANDLE};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS,
+    D3D11_FENCE_FLAG_SHARED, D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11Device5, ID3D11Fence,
+    ID3D11Texture2D,
+};
+use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Fence, ID3D12Resource};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::{
+    DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource1,
+};
+use windows::core::{Interface, PCWSTR};
 
 type Handle = *mut c_void;
 type Log = rsf_backend_log_fn;
@@ -53,6 +66,130 @@ const _: () = {
     assert!(std::mem::offset_of!(SurfaceSetup, unordered_access) == 40);
     assert!(size_of::<Platform>() == 9 * size_of::<Handle>());
 };
+
+// Use the SDK vtables directly so acquire() can adopt a non-null output even on failure.
+unsafe extern "C" fn native_texture(device: Handle, setup: &SurfaceSetup, out: *mut Handle) -> i32 {
+    let device11 = unsafe { ID3D11Device::from_raw_borrowed(&device) }.unwrap();
+    let mut bind = D3D11_BIND_SHADER_RESOURCE.0;
+    if setup.render_target != 0 {
+        bind |= D3D11_BIND_RENDER_TARGET.0;
+    }
+    if setup.unordered_access != 0 {
+        bind |= D3D11_BIND_UNORDERED_ACCESS.0;
+    }
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: setup.width,
+        Height: setup.height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT(setup.format as i32),
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: bind as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: (D3D11_RESOURCE_MISC_SHARED.0 | D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0) as u32,
+    };
+    unsafe { (device11.vtable().CreateTexture2D)(device, &desc, null(), out) }.0
+}
+
+unsafe extern "C" fn native_target(device: Handle, texture: Handle, out: *mut Handle) -> i32 {
+    let device11 = unsafe { ID3D11Device::from_raw_borrowed(&device) }.unwrap();
+    unsafe { (device11.vtable().CreateRenderTargetView)(device, texture, null(), out) }.0
+}
+
+unsafe extern "C" fn native_query<Source: Interface, Target: Interface>(
+    object: Handle,
+    out: *mut Handle,
+) -> i32 {
+    let source = unsafe { Source::from_raw_borrowed(&object) }.unwrap();
+    unsafe { source.query(&Target::IID, out) }.0
+}
+
+unsafe extern "C" fn native_resource_handle(resource: Handle, out: *mut Handle) -> i32 {
+    let resource1 = unsafe { IDXGIResource1::from_raw_borrowed(&resource) }.unwrap();
+    unsafe {
+        (resource1.vtable().CreateSharedHandle)(
+            resource,
+            null(),
+            DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0,
+            PCWSTR::null(),
+            out.cast::<HANDLE>(),
+        )
+    }
+    .0
+}
+
+unsafe extern "C" fn native_fence(device: Handle, out: *mut Handle) -> i32 {
+    let device5 = unsafe { ID3D11Device5::from_raw_borrowed(&device) }.unwrap();
+    unsafe {
+        (device5.vtable().CreateFence)(device, 0, D3D11_FENCE_FLAG_SHARED, &ID3D11Fence::IID, out)
+    }
+    .0
+}
+
+unsafe extern "C" fn native_fence_handle(fence: Handle, out: *mut Handle) -> i32 {
+    let fence11 = unsafe { ID3D11Fence::from_raw_borrowed(&fence) }.unwrap();
+    unsafe {
+        (fence11.vtable().CreateSharedHandle)(
+            fence,
+            null(),
+            GENERIC_ALL.0,
+            PCWSTR::null(),
+            out.cast::<HANDLE>(),
+        )
+    }
+    .0
+}
+
+unsafe extern "C" fn native_open<Target: Interface>(
+    device: Handle,
+    shared: Handle,
+    out: *mut Handle,
+) -> i32 {
+    let device12 = unsafe { ID3D12Device::from_raw_borrowed(&device) }.unwrap();
+    unsafe { (device12.vtable().OpenSharedHandle)(device, HANDLE(shared), &Target::IID, out) }.0
+}
+
+static NATIVE_PLATFORM: Platform = Platform {
+    texture: native_texture,
+    target: native_target,
+    query_resource: native_query::<ID3D11Texture2D, IDXGIResource1>,
+    resource_handle: native_resource_handle,
+    open_resource: native_open::<ID3D12Resource>,
+    query_device5: native_query::<ID3D11Device, ID3D11Device5>,
+    fence: native_fence,
+    fence_handle: native_fence_handle,
+    open_fence: native_open::<ID3D12Fence>,
+};
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_shared_surface_native_platform() -> *const Platform {
+    &NATIVE_PLATFORM
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_shared_surface_create(
+    device11: Handle,
+    device12: Handle,
+    setup: *const SurfaceSetup,
+    out: *mut *mut Surface,
+) -> i32 {
+    unsafe { shared_surface_create(&NATIVE_PLATFORM, device11, device12, setup, out) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_shared_fence_create(
+    device11: Handle,
+    device12: Handle,
+    log: Log,
+    user: Handle,
+    out: *mut *mut Fence,
+) -> i32 {
+    unsafe { shared_fence_create(&NATIVE_PLATFORM, device11, device12, log, user, out) }
+}
 
 // Rust drops fields in declaration order. Close the NT handle after the COM interfaces.
 pub(super) struct Surface {
@@ -263,8 +400,7 @@ fn create_fence(
     Ok(fence)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_shared_surface_create(
+unsafe fn shared_surface_create(
     platform: &Platform,
     device11: Handle,
     device12: Handle,
@@ -292,8 +428,7 @@ unsafe extern "C" fn rsf_core_shared_surface_create(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_shared_fence_create(
+unsafe fn shared_fence_create(
     platform: &Platform,
     device11: Handle,
     device12: Handle,
@@ -429,13 +564,7 @@ mod tests {
             setup.format = format;
             assert_eq!(
                 unsafe {
-                    rsf_core_shared_surface_create(
-                        &PLATFORM,
-                        raw(&device),
-                        null_mut(),
-                        &setup,
-                        &mut out,
-                    )
+                    shared_surface_create(&PLATFORM, raw(&device), null_mut(), &setup, &mut out)
                 },
                 INVALID
             );
@@ -444,7 +573,7 @@ mod tests {
         let short_prefix = 4u32;
         assert_eq!(
             unsafe {
-                rsf_core_shared_surface_create(
+                shared_surface_create(
                     &PLATFORM,
                     raw(&device),
                     null_mut(),
@@ -464,13 +593,7 @@ mod tests {
         let mut surface = null_mut();
         assert_eq!(
             unsafe {
-                rsf_core_shared_surface_create(
-                    &PLATFORM,
-                    device11,
-                    null_mut(),
-                    &setup(),
-                    &mut surface,
-                )
+                shared_surface_create(&PLATFORM, device11, null_mut(), &setup(), &mut surface)
             },
             OK
         );
@@ -482,15 +605,7 @@ mod tests {
         assert_eq!(device.refs.get(), 1);
 
         assert_eq!(
-            unsafe {
-                rsf_core_shared_surface_create(
-                    &PLATFORM,
-                    device11,
-                    device11,
-                    &setup(),
-                    &mut surface,
-                )
-            },
+            unsafe { shared_surface_create(&PLATFORM, device11, device11, &setup(), &mut surface) },
             OPEN_FAILED
         );
         assert!(surface.is_null());
@@ -499,14 +614,7 @@ mod tests {
         let mut fence = null_mut();
         assert_eq!(
             unsafe {
-                rsf_core_shared_fence_create(
-                    &PLATFORM,
-                    device11,
-                    device11,
-                    None,
-                    null_mut(),
-                    &mut fence,
-                )
+                shared_fence_create(&PLATFORM, device11, device11, None, null_mut(), &mut fence)
             },
             OPEN_FAILED
         );

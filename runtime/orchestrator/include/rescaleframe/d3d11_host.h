@@ -13,6 +13,9 @@ extern "C" {
 #define RSF_D3D11_HOST_CAP_FG_INPUTS 1u
 #define RSF_D3D11_HOST_CAP_INPUT_TIMELINE 2u
 #define RSF_D3D11_HOST_CAP_RENDERED_SOURCE 4u
+/* ABI 8 size extension. The original setup prefix used depth_inverted for both flags. */
+#define RSF_D3D11_HOST_DEPTH_FINITE 0u
+#define RSF_D3D11_HOST_DEPTH_INFINITE 1u
 typedef struct rsf_d3d11_host_setup {
     uint32_t struct_size, abi_version;
     const wchar_t* configuration_path;
@@ -43,6 +46,8 @@ typedef struct rsf_d3d11_host_setup {
     /* 0 preserves the enabled legacy default; 1 selects native colour (transport
        Off). An existing saved ColourTransport value always takes precedence. */
     uint32_t colour_transport_default;
+    /* Optional, independent far-plane convention (RSF_D3D11_HOST_DEPTH_*). */
+    uint32_t depth_far_plane;
 } rsf_d3d11_host_setup;
 /* Graphics-free setup, outside DllMain. Input services supply session/log/CPU only.
    Strings are copied; upstream callback code/user and returned services are process-lived.

@@ -3,58 +3,29 @@
 // No D3D12 device, shader compiler or vendor SDK is involved, so these establish admission,
 // ownership, ordering, history and handoff policy only.
 use super::*;
+use crate::com_ref::test::{Fake as ComHeader, release};
 use std::cell::{Cell, RefCell};
 
 // Read only through the COM calls in com_ref.cpp.
-#[allow(dead_code)]
-#[repr(C)]
-struct Vtable {
-    query: unsafe extern "system" fn(*mut Fake, *const c_void, *mut Handle) -> i32,
-    add_ref: unsafe extern "system" fn(*mut Fake) -> u32,
-    release: unsafe extern "system" fn(*mut Fake) -> u32,
-}
-
-// IUnknown layout: the vtable pointer first.
 #[repr(C)]
 struct Fake {
-    vtable: &'static Vtable,
-    refs: Cell<u32>,
+    com: ComHeader,
     name: String,
     desc: TextureDesc,
     device: Cell<usize>,
 }
 
-unsafe extern "system" fn query(_: *mut Fake, _: *const c_void, out: *mut Handle) -> i32 {
-    unsafe { out.write(ptr::null_mut()) };
-    0x8000_4002_u32 as i32
+// The header is the first field of the enclosing fake allocation.
+unsafe fn last_release(header: *mut ComHeader) {
+    event(format!(
+        "release {}",
+        unsafe { &*header.cast::<Fake>() }.name
+    ));
 }
-
-unsafe extern "system" fn add_ref(this: *mut Fake) -> u32 {
-    let refs = unsafe { &(*this).refs };
-    refs.set(refs.get() + 1);
-    refs.get()
-}
-
-unsafe extern "system" fn release(this: *mut Fake) -> u32 {
-    let fake = unsafe { &*this };
-    assert!(fake.refs.get() > 0, "over-released {}", fake.name);
-    fake.refs.set(fake.refs.get() - 1);
-    if fake.refs.get() == 0 {
-        event(format!("release {}", fake.name));
-    }
-    fake.refs.get()
-}
-
-static VTABLE: Vtable = Vtable {
-    query,
-    add_ref,
-    release,
-};
 
 fn fake(name: &str, desc: TextureDesc, device: Handle) -> Handle {
     Box::into_raw(Box::new(Fake {
-        vtable: &VTABLE,
-        refs: Cell::new(1),
+        com: ComHeader::with_last_release(Some(last_release)),
         name: name.to_owned(),
         desc,
         device: Cell::new(device as usize),
@@ -245,16 +216,17 @@ unsafe extern "C" fn create_texture(_: Handle, w: u32, h: u32, format: u32) -> H
     event(format!("texture {w}x{h} f{format}"));
     created("texture", texture(u64::from(w), h, format, format))
 }
-unsafe extern "C" fn create_unit_exposure(
-    _: Handle,
-    texture_out: *mut Handle,
-    upload: *mut Handle,
-) -> i32 {
+unsafe extern "C" fn create_exposure_texture(_: Handle) -> Handle {
     event("unit-exposure".into());
-    unsafe {
-        texture_out.write(created("exposure", texture(1, 1, R32_FLOAT, R32_FLOAT)));
-        upload.write(created("upload", TextureDesc::default()));
-    }
+    created("exposure", texture(1, 1, R32_FLOAT, R32_FLOAT))
+}
+unsafe extern "C" fn create_exposure_upload(_: Handle, bytes: u64) -> Handle {
+    assert_eq!(bytes, EXPOSURE_UPLOAD_BYTES);
+    created("upload", TextureDesc::default())
+}
+unsafe extern "C" fn write_exposure_upload(upload: Handle, value: f32) -> i32 {
+    assert!(name(upload).starts_with("upload"));
+    assert_eq!(value, 1.0);
     1
 }
 unsafe extern "C" fn create_readback(_: Handle, bytes: u64) -> Handle {
@@ -371,6 +343,9 @@ unsafe extern "C" fn capture_record(
 ) -> i32 {
     let role = unsafe { CStr::from_ptr(role) }.to_string_lossy();
     let frame = unsafe { (*record).frame_id };
+    if unsafe { (*record).flags } & RSF_FRAME_FLAG_AMBIGUOUS_ID != 0 {
+        event(format!("ambiguous readback {frame} {role}"));
+    }
     event(format!(
         "record {role} {} {state:#x} frame={frame} slot={slot} ordinal={ordinal}",
         name(source)
@@ -416,12 +391,27 @@ unsafe extern "C" fn sharpen_run(
     event(format!("sharpen {}", name(output)));
     with(|world| world.sharpen_result)
 }
-unsafe extern "C" fn dump_begin_record(_: *const rsf_frame_record, _: u32) -> i32 {
+unsafe extern "C" fn dump_begin_record(record: *const rsf_frame_record, _: u32) -> i32 {
+    let record = unsafe { &*record };
+    if record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID != 0 {
+        event(format!("ambiguous begin {}", record.frame_id));
+        return 1;
+    }
     0
 }
 unsafe extern "C" fn dump_pass_metadata(_: *const Pass) {}
 unsafe extern "C" fn dump_sr_frame(_: *const rsf_sr_frame, _: u32, _: u32) {}
-unsafe extern "C" fn dump_result(_: *const rsf_frame_record, _: *const c_char, _: u32, _: i32) {}
+unsafe extern "C" fn dump_result(
+    record: *const rsf_frame_record,
+    _: *const c_char,
+    _: u32,
+    _: i32,
+) {
+    let record = unsafe { &*record };
+    if record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID != 0 {
+        event(format!("ambiguous result {}", record.frame_id));
+    }
+}
 unsafe extern "C" fn fg_bind() {
     event("fg-handoff".into());
 }
@@ -445,7 +435,9 @@ static PLATFORM: Platform = Platform {
     create_pipeline,
     create_heap,
     create_texture,
-    create_unit_exposure,
+    create_exposure_texture,
+    create_exposure_upload,
+    write_exposure_upload,
     create_readback,
     describe: describe_stub,
     owned_by,
@@ -969,6 +961,31 @@ fn sdr_session_initializes_unit_exposure_once() {
     );
     unsafe { rsf_core_sr12_destroy(owner) };
     assert!(take_events().contains(&"session-destroy".to_owned()));
+    scene.release();
+}
+
+#[test]
+fn inferred_frame_id_carries_the_same_dump_provenance() {
+    let scene = Scene::new(RENDER, OUTPUT);
+    let (result, owner) = create_with(&scene.setup(SR_NONE, 1, OUTPUT));
+    assert_eq!(result, OK);
+    take_events();
+    let mut pass = scene.pass(5, RENDER, OUTPUT);
+    pass.source_frame_id = 0;
+    assert_eq!(
+        unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, 0) },
+        OK
+    );
+    let events = take_events();
+    let frame = pass.native_frame;
+    for receipt in [
+        format!("ambiguous begin {frame}"),
+        format!("ambiguous readback {frame} sr-source-jittered"),
+        format!("ambiguous result {frame}"),
+    ] {
+        assert!(events.contains(&receipt), "missing {receipt}");
+    }
+    unsafe { rsf_core_sr12_destroy(owner) };
     scene.release();
 }
 

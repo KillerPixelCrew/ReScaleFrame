@@ -18,7 +18,9 @@ mod ffi;
 mod fg_inputs;
 #[cfg(any(windows, test))]
 mod fg_inputs_abi;
+#[cfg(any(windows, test))]
 mod fg_policy;
+#[cfg(any(windows, test))]
 mod fg_policy_abi;
 #[cfg(windows)]
 mod fg_stage;

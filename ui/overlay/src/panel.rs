@@ -67,13 +67,14 @@ const LATENCY_ANTILAG2: u32 = 3;
 const LATENCY_ANTILAG_VULKAN: u32 = 4;
 
 /// Super-resolution backends by ID. The ID is the bit the host's choices mask uses.
-const SR_BACKENDS: [(u32, &str); 6] = [
+const SR_BACKENDS: [(u32, &str); 7] = [
     (1, "DLSS"),
     (2, "FSR2"),
     (3, "FSR3"),
     (4, "FSR4"),
     (5, "XeSS"),
     (6, "FSR1"),
+    (7, "Auto"),
 ];
 
 /// Frame generation providers by ID. Zero is Off, and the ID is the bit in the choices mask.
@@ -277,7 +278,7 @@ pub struct Controls {
     /// The upscaling switch row.
     pub enabled: Option<Rect>,
     /// One control per SR backend, in `SR_BACKENDS` order.
-    pub backend: [Option<Rect>; 6],
+    pub backend: [Option<Rect>; 7],
     /// Off, DLSS-G, FSR3, FSR4 and XeSS generation choices.
     pub fg_backend: [Option<Rect>; FG_PROVIDERS.len()],
     /// The frame generation switch row.
@@ -859,6 +860,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
     let shown_backend = selection.requested_backend.unwrap_or(stats.backend);
     let items: Vec<Segment> = SR_BACKENDS
         .iter()
+        .filter(|(id, _)| *id != 7 || stats.backend_choices & (1 << id) != 0)
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
             enabled: stats.backend_loaded && stats.backend_choices & (1 << id) != 0,
@@ -884,7 +886,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
     }
     let missing: Vec<&str> = SR_BACKENDS
         .iter()
-        .filter(|(id, _)| stats.backend_choices & (1 << id) == 0)
+        .filter(|(id, _)| *id != 7 && stats.backend_choices & (1 << id) == 0)
         .map(|(_, name)| *name)
         .collect();
     if !stats.backend_loaded {
@@ -1028,6 +1030,7 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
         && generation.requested_backend != generation.backend;
     let items: Vec<Segment> = FG_PROVIDERS
         .iter()
+        .filter(|(id, _)| *id != FG_AUTO || generation.backend_choices & (1 << id) != 0)
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
             enabled: generation.backend_choices & (1 << id) != 0,

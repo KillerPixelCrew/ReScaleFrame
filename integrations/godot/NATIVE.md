@@ -988,11 +988,13 @@ singleton's Dictionary parser.
 
 ## Build requirements
 
-- The Rust archive is defined through `rsf_add_rust_static` in every configuration and built for a
-  target that links it: `rsf_godot` when `RSF_GODOT_CPP_DIR` configures the Godot target, and the
-  `godot_vulkan_creation_contract` test when the Vulkan headers are present.
+- The Rust archive is defined through `rsf_add_rust_static` in every configuration.
   `eng/build-godot.ps1` builds `--target rsf_godot`, which also runs
   `cargo build --locked -p rsf-godot`. Cargo is already required by the root build.
+- The typed Vulkan creation fixture moved from CTest to the `rsf-godot` Cargo tests.
+  Its Vulkan layouts are checked in and can be regenerated with
+  `python tools/generate-godot-vulkan-bindings.py <godot-engine>/thirdparty/vulkan/include`
+  using bindgen 0.72.1 and the pinned Godot checkout.
 - `rsf_godot` now carries a second Rust archive beside the orchestrator's, the same unverified
   multi-archive link as Fallout 4 and Minecraft. It has not been linked.
 - `tools-requirements.txt` (SCons, NumPy, Pillow) serves the engine build and the visual analyzer

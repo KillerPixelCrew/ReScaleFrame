@@ -3,22 +3,23 @@ use crate::com_ref::ComRef;
 use crate::cpu_abi::rsf_native_cpu_frame;
 use crate::fg_leases::{FencePoint, FenceState};
 use crate::fg12_abi::*;
+use crate::sr_session::{checked, has_capacity};
 
 use crate::native_cpu::rsf_native_cpu_read;
 use crate::overlay_abi::rsf_native_latency_status;
 use crate::render_abi::{
-    RSF_FG_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
-    RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL, RSF_REFLEX_BOOST, RSF_REFLEX_OFF,
-    rsf_backend_log_fn, rsf_backend_resource, rsf_fg_frame, rsf_fg_options, rsf_fg_status,
+    RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF, RSF_REFLEX_BOOST,
+    RSF_REFLEX_OFF, rsf_backend_log_fn, rsf_backend_resource, rsf_fg_frame, rsf_fg_status,
     rsf_native_fg_options, rsf_native_fg_status,
 };
 use crate::scene_abi::rsf_observer_present_event;
 use rsf_game_sys::{
-    RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, RSF_FRAME_FLAG_RESET, RSF_GAME_CPU_EVENT_VERSION,
-    RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END, RSF_GAME_CPU_INPUT_KEYED,
-    RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_INPUT_SUBSTITUTE, RSF_GAME_CPU_PACING,
-    RSF_GAME_CPU_SIMULATION_BEGIN, RSF_GAME_CPU_SIMULATION_END, RSF_GAME_FRAME_ABI_VERSION,
-    rsf_frame_record, rsf_game_cpu_event, rsf_game_latency_event, rsf_game_render_pass,
+    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, RSF_FRAME_FLAG_RESET,
+    RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END,
+    RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_INPUT_SUBSTITUTE,
+    RSF_GAME_CPU_PACING, RSF_GAME_CPU_SIMULATION_BEGIN, RSF_GAME_CPU_SIMULATION_END,
+    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record, rsf_game_cpu_event, rsf_game_latency_event,
+    rsf_game_render_pass,
 };
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -87,14 +88,6 @@ fn empty_record() -> rsf_frame_record {
     }
 }
 
-unsafe fn full_prefix<T>(input: *const T) -> bool {
-    !input.is_null() && (unsafe { input.cast::<u32>().read() } as usize) >= size_of::<T>()
-}
-
-unsafe fn checked<'a, T>(input: *const T) -> Option<&'a T> {
-    unsafe { full_prefix(input) }.then(|| unsafe { &*input })
-}
-
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Frame {
     session: u64,
@@ -141,7 +134,6 @@ struct Cpu {
     simulation: bool,
     failed: bool,
     render_started: bool,
-    completed: bool,
 }
 
 impl Cpu {
@@ -153,7 +145,6 @@ impl Cpu {
         simulation: false,
         failed: false,
         render_started: false,
-        completed: false,
     };
 }
 
@@ -300,11 +291,30 @@ static OWNER: Mutex<Owner> = Mutex::new(Owner {
 static INSTALL: AtomicU8 = AtomicU8::new(0); // 0 idle, 1 installing, 2 installed
 static LOGGER: Mutex<(rsf_backend_log_fn, usize)> = Mutex::new((None, 0));
 
+thread_local! {
+    static INSTALL_LOGGER: Cell<(rsf_backend_log_fn, usize)> = const { Cell::new((None, 0)) };
+}
+
 unsafe extern "C" fn log_callback(_: *mut c_void, message: *const c_char) {
-    let (callback, user) = *LOGGER.lock().unwrap();
+    let (callback, user) = if INSTALL.load(Ordering::Acquire) == 1 {
+        INSTALL_LOGGER.get()
+    } else {
+        *LOGGER.lock().unwrap()
+    };
     if let Some(callback) = callback {
         unsafe { callback(user as *mut c_void, message) };
     }
+}
+
+type WindowFilter = unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32;
+static WINDOW_FILTER: OnceLock<(WindowFilter, usize)> = OnceLock::new();
+
+unsafe extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> i32 {
+    if INSTALL.load(Ordering::Acquire) != 2 {
+        return 0;
+    }
+    let (filter, user) = *WINDOW_FILTER.get().unwrap();
+    unsafe { filter(user as *mut c_void, window) }
 }
 
 fn log(message: String) {
@@ -313,15 +323,22 @@ fn log(message: String) {
     }
 }
 
+fn options_valid(options: &rsf_native_fg_options) -> bool {
+    options.struct_size >= OPTIONS.struct_size
+        && options.mode <= RSF_FG_FIXED
+        && options.reflex_mode <= RSF_REFLEX_BOOST
+        && options.generated_frames != 0
+}
+
 unsafe fn install(request: *const rsf_fg12_setup, explicit: bool) -> i32 {
     let Some(request) = (unsafe { checked(request) }) else {
         return INVALID;
     };
+    let Some(window_filter) = request.accept_window else {
+        return INVALID;
+    };
     if request.runtime_directory_utf8.is_null()
-        || request.accept_window.is_none()
-        || request.options.struct_size < OPTIONS.struct_size
-        || request.options.mode > RSF_FG_FIXED
-        || request.options.generated_frames == 0
+        || !options_valid(&request.options)
         || request.units_to_meters <= 0.0
     {
         return INVALID;
@@ -347,12 +364,6 @@ unsafe fn install(request: *const rsf_fg12_setup, explicit: bool) -> i32 {
     } else {
         request.ui_mode
     };
-    {
-        let mut owner = OWNER.lock().unwrap();
-        owner.options = request.options;
-        owner.ui_mode = ui_mode;
-    }
-    *LOGGER.lock().unwrap() = (request.log, request.user as usize);
     let setup = rsf_d3d11_present_setup {
         struct_size: size_of::<rsf_d3d11_present_setup>() as u32,
         runtime_directory_utf8: request.runtime_directory_utf8,
@@ -371,21 +382,36 @@ unsafe fn install(request: *const rsf_fg12_setup, explicit: bool) -> i32 {
         engine_version_utf8: request.engine_version_utf8,
         project_id_utf8: request.project_id_utf8,
         log: Some(log_callback),
-        user: request.user,
-        accept_window: request.accept_window,
+        user: null_mut(),
+        accept_window: Some(accept_window),
         prepare: Some(prepare),
         retire: Some(retire),
         latency_event: Some(latency),
         ..unsafe { std::mem::zeroed() }
     };
+    // The native bridge only retains the process-lifetime callbacks above.
+    // Its synchronous install receipt can use the caller's still-borrowed logger.
+    INSTALL_LOGGER.set((request.log, request.user as usize));
+    let installed = unsafe { native!(install(&setup, i32::from(explicit))) };
+    INSTALL_LOGGER.set((None, 0));
+    if installed == 0 {
+        INSTALL.store(0, Ordering::Release);
+        return INIT_FAILED;
+    }
+    {
+        let mut owner = OWNER.lock().unwrap();
+        owner.options = request.options;
+        owner.ui_mode = ui_mode;
+    }
+    *LOGGER.lock().unwrap() = (request.log, request.user as usize);
     unsafe {
         native!(latency_graphics(12));
         native!(fg_options_set(&request.options));
         native!(fg_set_log(request.log, request.user));
     }
-    let installed = unsafe { native!(install(&setup, i32::from(explicit))) } != 0;
-    INSTALL.store(if installed { 2 } else { 0 }, Ordering::Release);
-    if installed { OK } else { INIT_FAILED }
+    let _ = WINDOW_FILTER.set((window_filter, request.user as usize));
+    INSTALL.store(2, Ordering::Release);
+    OK
 }
 
 #[unsafe(no_mangle)]
@@ -490,10 +516,7 @@ unsafe extern "C" fn rsf_core_fg12_latency(event: *const rsf_game_latency_event)
         SUBMIT_START => return rsf_core_fg12_render_begin(event.session_id, event.source_frame_id),
         PRESENT_END => {
             fact.stage = RSF_GAME_CPU_FRAME_END;
-            unsafe {
-                rsf_core_fg12_cpu(&fact);
-                native!(latency_retire(event.session_id, event.source_frame_id));
-            }
+            unsafe { rsf_core_fg12_cpu(&fact) };
             return OK;
         }
         // Render-end and Present markers come from the actual presentation path.
@@ -536,6 +559,10 @@ unsafe extern "C" fn rsf_core_fg12_capture(
     let Some(record) = (unsafe { checked(record) }) else {
         return;
     };
+    if record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID != 0 {
+        return;
+    }
+
     let frame = Frame {
         session: record.session_id,
         id: record.frame_id,
@@ -880,16 +907,9 @@ unsafe extern "C" fn prepare(
     let frame = view.frame;
     let timing = owner.cpu[frame.index(CPU_SLOTS)];
     if !host.is_null() {
-        for older in &mut owner.cpu {
-            if older.frame.session == frame.session
-                && older.frame.id != 0
-                && older.frame.id < frame.id
-                && !older.completed
-            {
-                unsafe { native!(host_abort(host, older.frame.id)) };
-                older.completed = true;
-            }
-        }
+        crate::native_fg_cpu::retire_unsubmitted(frame.session, frame.id, |id| unsafe {
+            native!(host_abort(host, id))
+        });
     }
 
     let Some(provider) =
@@ -897,26 +917,37 @@ unsafe extern "C" fn prepare(
     else {
         owner.state.vendor = unsafe { std::mem::zeroed() };
         owner.state.last_result = OK;
-        owner.state.reason = 0;
+        owner.state.source_frame_id = frame.id;
+        owner.state.reason = RSF_NATIVE_FG_REASON_NOT_PREPARED;
         return;
     };
-    let mut capability = rsf_fg_status {
-        struct_size: size_of::<rsf_fg_status>() as u32,
-        ..unsafe { std::mem::zeroed() }
-    };
-    let (Some(status), Some(configure), Some(tag)) =
-        (provider.status, provider.configure, provider.prepare)
-    else {
-        return;
-    };
-    if unsafe { status(context, &mut capability) } != OK {
-        return;
-    }
     if owner.generation != generation {
         owner.generation = generation;
         owner.samples = 0;
         owner.prepare_failures = 0;
     }
+    let mut capability = rsf_fg_status {
+        struct_size: size_of::<rsf_fg_status>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let status_result = provider.status.map_or(NOT_SUPPORTED, |status| unsafe {
+        status(context, &mut capability)
+    });
+    let (OK, Some(configure), Some(tag)) = (status_result, provider.configure, provider.prepare)
+    else {
+        owner.state.last_result = if status_result == OK {
+            NOT_SUPPORTED
+        } else {
+            status_result
+        };
+        owner.state.source_frame_id = frame.id;
+        owner.state.reason = RSF_NATIVE_FG_REASON_NOT_PREPARED;
+        owner.state.vendor = unsafe { std::mem::zeroed() };
+        if let Some(configure) = provider.configure {
+            unsafe { configure(context, &crate::d3d11_present::FG_OFF) };
+        }
+        return;
+    };
     let slot_index = frame.index(INPUT_SLOTS);
     let slot = owner.slots[slot_index].as_ref();
     let needs_hudless = owner.ui_mode != RSF_UI_MODE_NONE;
@@ -924,35 +955,7 @@ unsafe extern "C" fn prepare(
     let reason = eligibility(slot, view, valid, needs_hudless);
     let options = owner.options;
     unsafe { crate::frame_limit::observe_pacing_display(options.frame_limit_us, chain) };
-    let mut effective = capability;
-    if reason != 0 {
-        crate::fg_status::deactivate(&mut effective);
-    }
-    let mut request = rsf_fg_options {
-        struct_size: size_of::<rsf_fg_options>() as u32,
-        abi_version: RSF_FG_ABI_VERSION,
-        mode: if reason == 0 {
-            options.mode
-        } else {
-            RSF_FG_OFF
-        },
-        generated_frames: options
-            .generated_frames
-            .min(capability.max_generated_frames),
-        dynamic_target_fps: 0.0,
-        reflex_mode: if capability.pacing_owner != RSF_PACING_NONE {
-            options.reflex_mode
-        } else {
-            RSF_REFLEX_OFF
-        },
-        frame_limit_us: match capability.pacing_owner {
-            RSF_PACING_REFLEX => crate::frame_limit::reflex_interval(options.frame_limit_us, 1),
-            RSF_PACING_XELL => {
-                crate::frame_limit::application_interval(options.frame_limit_us, &effective)
-            }
-            _ => 0,
-        },
-    };
+    let mut request = crate::native_fg::provider_options(&options, &capability, reason == 0);
     let result = unsafe { configure(context, &request) };
     owner.state.last_result = result;
     owner.state.source_frame_id = frame.id;
@@ -1035,7 +1038,7 @@ unsafe extern "C" fn prepare(
     }
     owner.state.last_result = result;
     if result == OK {
-        owner.state.tagged_frames += 1;
+        owner.state.tagged_frames += u64::from(submission.interpolate != 0);
     } else {
         if owner.prepare_failures < 8 {
             owner.prepare_failures += 1;
@@ -1076,15 +1079,9 @@ unsafe extern "C" fn latency(_: *mut c_void, event: *const rsf_observer_present_
     }
     unsafe {
         native!(latency_present(frame.id, event.swapchain, 0));
-        native!(latency_retire(frame.session, frame.id));
     }
-    let mut owner = OWNER.lock().unwrap();
     if !queue.is_null() {
-        unsafe { owner.colors.submitted(present, queue) };
-    }
-    let timing = &mut owner.cpu[frame.index(CPU_SLOTS)];
-    if timing.frame == frame {
-        timing.completed = true;
+        unsafe { OWNER.lock().unwrap().colors.submitted(present, queue) };
     }
 }
 
@@ -1221,7 +1218,7 @@ extern "C" fn rsf_core_fg12_end_session(session: u64) -> i32 {
 }
 
 unsafe fn status_snapshot(output: *mut rsf_native_fg_status, wait: bool) -> i32 {
-    if !unsafe { full_prefix(output) } {
+    if !unsafe { has_capacity(output) } {
         return 0;
     }
     let owner = if wait {
@@ -1271,10 +1268,7 @@ unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native_fg_options
     let Some(request) = (unsafe { checked(request) }) else {
         return;
     };
-    if request.mode > RSF_FG_FIXED
-        || request.reflex_mode > RSF_REFLEX_BOOST
-        || request.generated_frames == 0
-    {
+    if !options_valid(request) {
         return;
     }
     unsafe { native!(fg_options_set(request)) };

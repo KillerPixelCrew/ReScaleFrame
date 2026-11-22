@@ -76,7 +76,7 @@ constexpr rsf_dx12gvk_interop_ops rsf_dx12gvk_interop{
     rsf_dx12vk_interop_image, rsf_dx12vk_interop_timeline, rsf_dx12vk_interop_destroy,
     rsf_dx12vk_interop_release_guides,
 };
-const rsf_dx12gvk_ops& rsf_dx12gvk_graphics();
+extern "C" const rsf_dx12gvk_ops* rsf_dx12gvk_graphics();
 
 using rsf_dx12gvk_present_fn = int32_t (*)(void*, const rsf_dx12gvk_present_info*, const rsf_frame_record*, uint32_t);
 extern "C" int32_t rsf_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn, void*, const void*, const rsf_frame_record*, uint32_t);

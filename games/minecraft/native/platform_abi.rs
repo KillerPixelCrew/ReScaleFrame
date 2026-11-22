@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 use rsf_game_sys::rsf_game_render_pass;
+type wchar_t = u16;
 
 pub const RSF_FG_OFF: u32 = 0;
 pub const RSF_FG_FIXED: u32 = 1;
@@ -526,6 +527,35 @@ unsafe extern "C" {
     pub fn rsf_gl_pipeline_configure(
         arg1: *mut rsf_gl_pipeline,
         arg2: *const rsf_gl_pipeline_options,
+        width: u32,
+        height: u32,
+    ) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_configure_legacy(
+        arg1: *mut rsf_gl_pipeline,
+        arg2: *const rsf_gl_pipeline_options,
+        limit_fps: u32,
+        width: u32,
+        height: u32,
+    ) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_settings_open(
+        arg1: *mut rsf_gl_pipeline,
+        path: *const wchar_t,
+        section: *const wchar_t,
+        identity: *const ::core::ffi::c_char,
+        legacy: *const rsf_gl_pipeline_options,
+        limit_fps: u32,
+    ) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_settings_revision(arg1: *mut rsf_gl_pipeline) -> u64;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_configure_settings(
+        arg1: *mut rsf_gl_pipeline,
         width: u32,
         height: u32,
     ) -> rsf_backend_result;

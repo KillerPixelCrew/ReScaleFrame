@@ -74,7 +74,6 @@ struct rsf_fsr4fg_platform {
     int32_t (*destroy_swapchain)(rsf_fsr4fg_native*);
 };
 
-uint64_t rsf_core_fsr4fg_select_version(const rsf_ffx_version*, uint64_t count);
 int32_t rsf_core_fsr4fg_probe(const rsf_fsr4fg_platform*, uint64_t, const uint16_t*, rsf_fsr4fg_info*);
 int32_t rsf_core_fsr4fg_create(const rsf_fsr4fg_platform*, const rsf_fsr4fg_create*, rsf_fsr4fg_bridge**);
 }

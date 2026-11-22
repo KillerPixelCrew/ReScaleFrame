@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! A sparse code image for the site and patch tests. Addresses are plain numbers; nothing is
 //! dereferenced.
-use crate::sites::Code;
+use crate::patches::{SCENE_PRECISION_EXPECTED, SCENE_PRECISION_RVA, VELOCITY};
+use crate::sites::{Code, CodeView, DEPTH_GATES, HELPERS, HOOK_SITES};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
@@ -15,6 +16,25 @@ pub(crate) struct Image {
 }
 
 impl Image {
+    pub(crate) fn seed_admission(&self, base: usize) {
+        for site in HOOK_SITES.iter().chain(&HELPERS) {
+            self.put(base + site.rva as usize, &site.expected);
+        }
+        for gate in &DEPTH_GATES {
+            self.put(base + gate.rva as usize, gate.expected);
+        }
+    }
+
+    pub(crate) fn seed_temporal_patches(&self, base: usize) {
+        for patch in &VELOCITY {
+            self.put(base + patch.rva as usize, patch.native);
+        }
+        self.put(
+            base + SCENE_PRECISION_RVA as usize,
+            &SCENE_PRECISION_EXPECTED,
+        );
+    }
+
     pub(crate) fn put(&self, address: usize, bytes: &[u8]) {
         let mut image = self.bytes.borrow_mut();
         for (offset, byte) in bytes.iter().enumerate() {
@@ -35,11 +55,17 @@ impl Image {
     }
 }
 
-impl Code for Image {
+impl CodeView for Image {
     fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
         self.has(address.addr(), expected)
     }
 
+    fn log(&self, message: &str) {
+        self.log.borrow_mut().push(message.to_owned());
+    }
+}
+
+impl Code for Image {
     fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
         if expected.is_empty()
             || expected.len() != replacement.len()
@@ -51,9 +77,5 @@ impl Code for Image {
         self.put(site.addr(), replacement);
         self.writes.set(self.writes.get() + 1);
         true
-    }
-
-    fn log(&self, message: &str) {
-        self.log.borrow_mut().push(message.to_owned());
     }
 }

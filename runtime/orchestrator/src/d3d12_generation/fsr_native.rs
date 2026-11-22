@@ -97,25 +97,17 @@ fn query_versions(
     versions: &mut [Version; MAX_VERSIONS],
     count: &mut u64,
 ) -> i32 {
-    let mut ids = [0; MAX_VERSIONS];
-    let mut names = [std::ptr::null(); MAX_VERSIONS];
-    *count = MAX_VERSIONS as u64;
-    let mut desc = ffxQueryDescGetVersions {
-        header: header(FFX_API_QUERY_DESC_TYPE_GET_VERSIONS),
-        createDescType: RSF_FFX_CREATE_GENERATION as u64,
-        device: setup.chain.d3d12_device,
-        outputCount: count,
-        versionIds: ids.as_mut_ptr(),
-        versionNames: names.as_mut_ptr(),
-    };
-    if unsafe { query.unwrap()(null_mut(), (&raw mut desc).cast()) } != FFX_OK
-        || *count > MAX_VERSIONS as u64
-    {
+    let Some(versions) = (unsafe {
+        crate::d3d12_sr::query_d3d12(
+            query,
+            setup.chain.d3d12_device,
+            RSF_FFX_CREATE_GENERATION as u64,
+            versions,
+        )
+    }) else {
         return UNSUPPORTED;
-    }
-    for index in 0..*count as usize {
-        versions[index] = unsafe { ffx_version::from_sdk(ids[index], names[index]) };
-    }
+    };
+    *count = versions.len() as u64;
     OK
 }
 

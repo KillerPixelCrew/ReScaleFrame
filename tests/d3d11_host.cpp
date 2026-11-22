@@ -43,10 +43,17 @@ int main() {
     setup.motion.struct_size = sizeof(setup.motion); setup.motion.scale_x = setup.motion.scale_y = 1;
     rsf_game_host_services host{sizeof(host), RSF_GAME_ABI_VERSION, 91, log, nullptr, &cookie, nullptr, cpu};
     check(rsf_d3d11_host_create(nullptr, &host) == RSF_ERROR_INVALID_ARGUMENT, "Null setup refused");
-    --setup.struct_size; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Short setup refused"); ++setup.struct_size;
+    setup.struct_size = offsetof(rsf_d3d11_host_setup, depth_far_plane) - 1;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Short setup refused");
+    setup.struct_size = sizeof(setup) - 1;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Partial extension refused");
+    setup.struct_size = sizeof(setup);
     ++setup.abi_version; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_ABI_MISMATCH, "Setup ABI checked"); --setup.abi_version;
     --host.struct_size; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Short services refused"); ++host.struct_size;
     ++host.abi_version; check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_ABI_MISMATCH, "Services ABI checked"); --host.abi_version;
+    setup.depth_far_plane = 3;
+    check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Unknown far-plane convention refused");
+    setup.depth_far_plane = RSF_D3D11_HOST_DEPTH_FINITE;
     setup.colour_transport_default = 2;
     check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Unknown colour transport default refused");
     setup.colour_transport_default = 0; // existing callers preserve the enabled default
@@ -118,6 +125,8 @@ int main() {
     check(rsf_native_sr_capture_fg(invalid_context, &inputs, &setup.motion) == RSF_ERROR_INVALID_ARGUMENT,
         "Short FG lease refused before graphics dereference");
     auto upstream = host;
+    setup.struct_size = offsetof(rsf_d3d11_host_setup, depth_far_plane);
+    setup.depth_far_plane = 3; // Outside the advertised legacy record.
     check(rsf_d3d11_host_create(&setup, &host) == RSF_OK, "Graphics-free creation succeeds without SDK directories");
     check(host.session_id == 91 && host.user != &cookie && host.process_upscale && host.render_config && host.render_feedback && host.render_pass &&
         !host.present && !host.submit && !host.process_latency, "Only admitted host services published; no pacing or generation");
@@ -154,6 +163,9 @@ int main() {
     early.flags = RSF_GAME_RENDER_RECONFIGURE; early.swapchain = reinterpret_cast<void*>(uintptr_t(1));
     early.camera.output_width = early.camera.output_height = 64;
     check(rsf_d3d11_host_set_active(host.user, 1) == RSF_OK, "Activate for early planning refusal");
+    check(host.process_upscale(host.user, reinterpret_cast<void*>(uintptr_t(1)), &early) == RSF_ERROR_INVALID_ARGUMENT,
+        "Foreign planning lease refused before graphics access");
+    early.session_id = host.session_id;
     check(host.process_upscale(host.user, reinterpret_cast<void*>(uintptr_t(1)), &early) == RSF_ERROR_NOT_READY,
         "Early loading-style planning must not consume a graphics context or bind an execution owner");
     check(host.render_config(host.user, &config) == 1 && !config.enabled && !config.output_width,

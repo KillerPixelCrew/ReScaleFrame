@@ -11,8 +11,6 @@
 extern "C" {
 #endif
 
-rsf_dlss_pipeline_result rsf_dlss_pipeline_start_backend(void*, const rsf_dlss_pipeline_setup*, uint32_t);
-
 /* Private D3D11 SR pipeline bridge. dlss_pipeline.rs owns the provider session, backend and
    quality switching, frame sequencing, reset and fallback, resource leases, output publication,
    the layer feature and teardown. Every entry below is one existing SDK, graphics or diagnostic

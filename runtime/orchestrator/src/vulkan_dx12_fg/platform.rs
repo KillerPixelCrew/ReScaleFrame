@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::dx12_vulkan_platform::{adapter_luid, device_local_mask, lookup};
+use crate::frame_capture_vk::{
+    Owner as Capture, rsf_core_capture_vk_complete_group, rsf_core_capture_vk_discard_group,
+    rsf_core_capture_vk_flush, rsf_core_capture_vk_provider, rsf_core_capture_vk_record,
+};
 use ash::vk::{self, Handle as _};
 use std::mem;
 
@@ -74,7 +78,7 @@ struct Platform {
     setup: Setup,
     dispatch: Option<Dispatch>,
     memory: vk::PhysicalDeviceMemoryProperties,
-    capture: Handle,
+    capture: Capture,
 }
 
 impl Platform {
@@ -103,25 +107,18 @@ impl Platform {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12gvk_allocate(setup: &Setup, capture: Handle) -> Handle {
+unsafe extern "C" fn platform_allocate(setup: *const Setup) -> Handle {
     allocate_handle(Platform {
-        setup: *setup,
+        setup: unsafe { *setup },
         dispatch: None,
         memory: vk::PhysicalDeviceMemoryProperties::default(),
-        capture,
+        capture: Capture::new_native(false),
     })
     .cast()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12gvk_destroy(platform: Handle) {
+unsafe extern "C" fn platform_destroy(platform: Handle) {
     drop(unsafe { Box::from_raw(platform.cast::<Platform>()) });
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12gvk_capture(platform: Handle) -> Handle {
-    unsafe { (*platform.cast::<Platform>()).capture }
 }
 
 unsafe fn raw_result<T: vk::Handle>(result: vk::Result, value: T, out: *mut u64) -> i32 {
@@ -162,21 +159,66 @@ unsafe extern "C" fn format_features(platform: Handle, format: u32) -> u32 {
     properties.optimal_tiling_features.as_raw()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12gvk_memory_properties(
-    platform: Handle,
-    graphics: *const Graphics,
-    initialize: unsafe extern "C" fn(
-        Handle,
-        *const Graphics,
-        *const vk::PhysicalDeviceMemoryProperties,
-    ) -> i32,
-) -> i32 {
-    let platform = unsafe { &mut *platform.cast::<Platform>() };
+unsafe extern "C" fn initialize_capture(platform: Handle, graphics: *const Graphics) -> i32 {
+    let (platform, graphics) = unsafe { (&mut *platform.cast::<Platform>(), &*graphics) };
     let properties = dispatch_for(platform).memory_properties;
+    unsafe { properties(platform.physical(), &mut platform.memory) };
+    if platform
+        .capture
+        .initialize(graphics.device, graphics.device_proc, &platform.memory)
+    {
+        vk::Result::SUCCESS.as_raw()
+    } else {
+        vk::Result::ERROR_INITIALIZATION_FAILED.as_raw()
+    }
+}
+
+unsafe extern "C" fn capture_provider(platform: Handle, version: u64, backend: u32) {
+    let platform = unsafe { &*platform.cast::<Platform>() };
+    unsafe { rsf_core_capture_vk_provider(&platform.capture, version, backend, 1) };
+}
+
+unsafe extern "C" fn capture_record(
+    platform: Handle,
+    commands: Handle,
+    source: *const Image,
+    record: *const Record,
+    role: *const c_char,
+    group: u64,
+) {
+    let platform = unsafe { &*platform.cast::<Platform>() };
+    let reset = unsafe { (*record).flags } & rsf_game_sys::RSF_FRAME_FLAG_RESET;
     unsafe {
-        properties(platform.physical(), &mut platform.memory);
-        initialize(platform.capture, graphics, &platform.memory)
+        rsf_core_capture_vk_record(
+            &platform.capture,
+            commands,
+            source,
+            record,
+            role,
+            reset,
+            1,
+            ptr::null_mut(),
+            group,
+        )
+    };
+}
+
+unsafe extern "C" fn capture_complete(platform: Handle, group: u64) {
+    let platform = unsafe { &*platform.cast::<Platform>() };
+    unsafe { rsf_core_capture_vk_complete_group(&platform.capture, group) };
+}
+
+unsafe extern "C" fn capture_discard(platform: Handle, group: u64) {
+    let platform = unsafe { &*platform.cast::<Platform>() };
+    unsafe { rsf_core_capture_vk_discard_group(&platform.capture, group) };
+}
+
+unsafe extern "C" fn capture_flush(platform: Handle) -> i32 {
+    let platform = unsafe { &*platform.cast::<Platform>() };
+    if unsafe { rsf_core_capture_vk_flush(&platform.capture, 0, ptr::null_mut()) } != 0 {
+        vk::Result::SUCCESS.as_raw()
+    } else {
+        vk::Result::ERROR_UNKNOWN.as_raw()
     }
 }
 
@@ -661,55 +703,45 @@ unsafe extern "C" fn rsf_dx12gvk_present_marshaled(
     status
 }
 
-#[repr(C)]
-struct CaptureWrappers {
-    platform_allocate: unsafe extern "C" fn(*const Setup) -> Handle,
-    platform_destroy: unsafe extern "C" fn(Handle),
-    initialize: unsafe extern "C" fn(Handle, *const Graphics) -> i32,
-    provider: unsafe extern "C" fn(Handle, u64, u32),
-    record: unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, *const c_char, u64),
-    complete: unsafe extern "C" fn(Handle, u64),
-    discard: unsafe extern "C" fn(Handle, u64),
-    flush: Release,
+#[unsafe(no_mangle)]
+extern "C" fn rsf_dx12gvk_graphics() -> *const GraphicsOps {
+    &GRAPHICS.0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dx12gvk_build_graphics(
-    capture: &CaptureWrappers,
-    output: *mut GraphicsOps,
-) {
-    unsafe {
-        output.write(GraphicsOps {
-            adapter_luid,
-            platform_allocate: capture.platform_allocate,
-            platform_destroy: capture.platform_destroy,
-            platform_resolve,
-            format_features,
-            initialize_capture: capture.initialize,
-            create_pool,
-            destroy_pool,
-            images: &IMAGES,
-            allocate_commands,
-            begin,
-            end,
-            barrier,
-            copy,
-            blit,
-            clear,
-            acquire_submit,
-            present_submit,
-            wait_timeline,
-            create_fence,
-            mark_submit,
-            wait_fence,
-            destroy_fence,
-            idle,
-            capture_provider: capture.provider,
-            capture_record: capture.record,
-            capture_complete: capture.complete,
-            capture_discard: capture.discard,
-            capture_flush: capture.flush,
-            describe,
-        });
-    }
-}
+struct StaticGraphics(GraphicsOps);
+
+// The only raw pointer in this immutable table points to static ImageOps.
+unsafe impl Sync for StaticGraphics {}
+
+static GRAPHICS: StaticGraphics = StaticGraphics(GraphicsOps {
+    adapter_luid,
+    platform_allocate,
+    platform_destroy,
+    platform_resolve,
+    format_features,
+    initialize_capture,
+    create_pool,
+    destroy_pool,
+    images: &IMAGES,
+    allocate_commands,
+    begin,
+    end,
+    barrier,
+    copy,
+    blit,
+    clear,
+    acquire_submit,
+    present_submit,
+    wait_timeline,
+    create_fence,
+    mark_submit,
+    wait_fence,
+    destroy_fence,
+    idle,
+    capture_provider,
+    capture_record,
+    capture_complete,
+    capture_discard,
+    capture_flush,
+    describe,
+});

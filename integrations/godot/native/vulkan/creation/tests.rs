@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The creation owner against recording leaves. No Vulkan structure is built here; requests,
 //! instances and devices are addresses. The Vulkan-typed clone, copy and create effects are covered
-//! by the native `godot_vulkan_creation_contract` test.
+//! by the typed resolver fixture in `typed/tests.rs`.
 use super::*;
 use crate::platform::vulkan_negotiation::{
     VK_ERROR_FEATURE_NOT_PRESENT, VK_XESS_ENABLED_FEATURES, VK_XESS_FEATURES2,

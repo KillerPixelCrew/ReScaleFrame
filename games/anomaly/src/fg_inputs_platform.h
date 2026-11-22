@@ -37,6 +37,7 @@ typedef struct rsf_anomaly_input_constants {
 } rsf_anomaly_input_constants;
 
 typedef struct rsf_anomaly_input_platform {
+    uint32_t struct_size;
     void* (*device)(void* context);
     void (*release_interface)(void*);
     void (*describe)(void* texture, rsf_anomaly_input_desc*);
@@ -56,7 +57,7 @@ typedef struct rsf_anomaly_input_platform {
 } rsf_anomaly_input_platform;
 
 #ifdef __cplusplus
-static_assert(sizeof(rsf_anomaly_input_targets) == 48 && sizeof(rsf_anomaly_input_platform) == 96);
+static_assert(sizeof(rsf_anomaly_input_targets) == 48 && sizeof(rsf_anomaly_input_platform) == 104);
 namespace rsf::anomaly::fg {
 const rsf_anomaly_input_platform& input_platform() noexcept;
 }

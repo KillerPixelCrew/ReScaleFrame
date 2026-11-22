@@ -61,75 +61,30 @@ void run(NativeList& list)
 }
 int main()
 {
-    Check check; NativeList list;
-    if (!expect(rsf_ac7_render_scopes_create(7, 2, notify, &check, &check.scopes) != 0, "create")) return 1;
-    rsf_ac7_render_scope frame{}; frame.struct_size = sizeof(frame); frame.session_id = 7;
-    frame.family_key = 0x100; frame.view_key = 0x200; frame.native_frame = 41;
-    rsf_ac7_render_ticket *outer = nullptr, *inner = nullptr;
-    bool ok = expect(rsf_ac7_render_scope_open(check.scopes, &list, &frame, &outer) != 0, "enqueue outer");
-    frame.native_frame = 42; frame.view_key = 0x300;
-    ok &= expect(rsf_ac7_render_scope_open(check.scopes, &list, &frame, &inner) != 0, "enqueue inner");
-    rsf_ac7_render_ticket* refused = nullptr;
-    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &frame, &refused), "bounded pending work");
-    ok &= expect(rsf_ac7_render_scope_close(inner, &list) != 0 && rsf_ac7_render_scope_close(outer, &list) != 0, "close reserved markers");
-    frame.native_frame = 900; // CPU has advanced; queued metadata must stay 41/42.
-    rsf_ac7_render_scopes_quiesce(check.scopes);
-    ok &= expect(!rsf_ac7_render_scopes_destroy(check.scopes), "unload must wait for engine execution");
-    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &frame, &refused), "quiesce stops producers");
-    run(list);
-    ok &= expect(check.observed == std::vector<uint64_t>({41, 42, 41, 0}), "queued identity and enclosing-scope restoration");
-    ok &= expect(check.callback_unload_refused, "callbacks must finish before unload");
-    rsf_ac7_render_scope current{}; current.struct_size = sizeof(current);
-    ok &= expect(!rsf_ac7_render_scope_current(check.scopes, &current), "closed stream has no stale view");
-    ok &= expect(rsf_ac7_render_scopes_destroy(check.scopes) != 0, "quiescent destruction");
-
-    // Use the shapes emitted by the native Slate hooks. Neither operation owns a scene view.
-    check = {};
-    ok &= expect(rsf_ac7_render_scopes_create(7, 2, notify, &check, &check.scopes) != 0, "create Slate scopes");
-    rsf_ac7_render_scope window{}; window.struct_size = sizeof(window); window.session_id = 7;
-    window.role = RSF_GAME_RENDER_WINDOW; window.source_frame_id = 8;
-    window.viewport_key = 0x100; window.window_key = 0x200; window.rhi_viewport_key = 0x300; window.pass_key = 0x400;
-    auto invalid = window; invalid.window_key = 0;
-    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "window needs window owner");
-    invalid = window; invalid.rhi_viewport_key = 0;
-    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "window needs native viewport");
-    invalid = window; invalid.source_frame_id = 0;
-    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "window needs source frame");
-    ok &= expect(rsf_ac7_render_scope_open(check.scopes, &list, &window, &outer) != 0, "queue viewless window");
-    auto binding = window; binding.role = RSF_GAME_RENDER_TEXTURE_BINDING; binding.rhi_viewport_key = 0;
-    invalid = binding; invalid.viewport_key = 0;
-    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "binding needs source viewport");
-    ok &= expect(rsf_ac7_render_scope_open(check.scopes, &list, &binding, &inner) != 0, "queue viewless texture binding");
-    ok &= expect(rsf_ac7_render_scope_close(inner, &list) && rsf_ac7_render_scope_close(outer, &list), "close Slate scopes");
-    run(list);
-    ok &= expect(check.observed.size() == 4, "Slate callbacks executed with no scene view");
-    invalid = window; invalid.role = RSF_GAME_RENDER_SUBMISSION;
-    ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "scene submission still needs its view");
-    rsf_ac7_render_scopes_quiesce(check.scopes);
-    ok &= expect(rsf_ac7_render_scopes_destroy(check.scopes) != 0, "Slate quiescent destruction");
-
-    // Consumer exceptions stay in render_scope.cpp's leaves (the owner is Rust): a throwing pass
-    // callback keeps the state callback, a throwing resolve skips that marker's stack change and
-    // callbacks, and a throwing release still retires the ticket.
-    check = {};
-    ok &= expect(rsf_ac7_render_scopes_create_passes(7, 2, notify, throwing_pass, &check, &check.scopes) != 0,
-        "create pass scopes");
+    // Rust fixtures cover list membership, nesting, admission and retirement. This fixture
+    // drives real C++ exceptions through the leased callbacks on the native iterator ABI.
+    Check check;
+    NativeList list;
+    if (!expect(rsf_ac7_render_scopes_create_passes(7, 2, notify, throwing_pass, &check,
+        &check.scopes) != 0, "create pass scopes")) return 1;
+    rsf_ac7_render_scope frame{};
+    frame.struct_size = sizeof(frame); frame.session_id = 7;
+    frame.family_key = 0x100; frame.view_key = 0x200;
+    bool ok = true;
     Lease lease;
     const rsf_ac7_scope_lease owned{&lease, lease_resolve, lease_release};
     frame.native_frame = 5;
-    rsf_ac7_render_ticket* leased = nullptr;
-    ok &= expect(rsf_ac7_render_scope_open_leased(check.scopes, &list, &frame, &owned, &leased) != 0 &&
-        rsf_ac7_render_scope_close(leased, &list) != 0, "queue leased scope");
+    ok &= expect(rsf_ac7_render_scope_enqueue_leased(check.scopes, &list, &frame, &owned) != 0, "queue leased scope");
     run(list);
     ok &= expect(check.observed == std::vector<uint64_t>({105, 0}), "pass exception keeps state callbacks");
     ok &= expect(lease.resolves == 2 && lease.releases == 1, "lease resolved per marker, released once");
     lease.throw_resolve = true;
-    ok &= expect(rsf_ac7_render_scope_open_leased(check.scopes, &list, &frame, &owned, &leased) != 0 &&
-        rsf_ac7_render_scope_close(leased, &list) != 0, "queue throwing lease");
+    ok &= expect(rsf_ac7_render_scope_enqueue_leased(check.scopes, &list, &frame, &owned) != 0, "queue throwing lease");
     run(list);
     ok &= expect(check.observed.size() == 2, "throwing resolve skips both markers");
     ok &= expect(lease.resolves == 4 && lease.releases == 2, "throwing release still retires");
-    current.struct_size = sizeof(current);
+    rsf_ac7_render_scope current{}; current.struct_size = sizeof(current);
+    ok &= expect(check.callback_unload_refused, "callbacks must finish before unload");
     ok &= expect(!rsf_ac7_render_scope_current(check.scopes, &current), "no scope left open");
     rsf_ac7_render_scopes_quiesce(check.scopes);
     ok &= expect(rsf_ac7_render_scopes_destroy(check.scopes) != 0, "exception paths retired every ticket");

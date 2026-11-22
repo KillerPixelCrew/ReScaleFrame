@@ -207,6 +207,15 @@ int main(int argc, char** argv)
         }
         return std::filesystem::path{};
     };
+    rsf_input_dump_result(&generic, "sr", 1, 0);
+    rsf_sr_frame ambiguous_sr{}; ambiguous_sr.struct_size = sizeof(ambiguous_sr); ambiguous_sr.record = &generic;
+    rsf_input_dump_sr_frame(&ambiguous_sr, 1, 0);
+    for (const char* name : {"sr_status.json", "sr_parameters.json"}) {
+        const auto evidence = read(metadata_bundle(0, generic.frame_id) / name);
+        check(evidence.find("\"source_frame_id\":null") != std::string::npos &&
+            evidence.find("\"frame_id\":" + std::to_string(generic.frame_id)) != std::string::npos,
+            "Stage and parameter evidence preserve unknown source and the native counter.");
+    }
     const auto legacy_pass_json = read(metadata_bundle(0,generic.frame_id) / "engine_pass.json");
     check(legacy_pass_json.find("\"depth_domains\":{\"requested\":0,\"struct_size\":0,\"version\":0,\"domain_count\":0") != std::string::npos,
         "Legacy zero depth descriptor is explicit in engine pass metadata.");
@@ -281,19 +290,15 @@ int main(int argc, char** argv)
     check(rsf_input_dump_begin_record(&generic, 2) != 0, "Start a later capture request.");
     const auto abandoned = rsf_input_dump_reserve(&generic, "pending", "unsubmitted readback", RSF_DUMP_VIEW_RAW, 1);
     check(abandoned != 0, "Reserve a pending image for cancellation.");
-    const auto submitted_images = rsf_input_dump_gpu_submission(&generic);
-    const auto late = rsf_input_dump_reserve(&generic, "later", "copy recorded after the completion point", RSF_DUMP_VIEW_RAW, 1);
     void* fixture_device = reinterpret_cast<void*>(uintptr_t(1));
-    rsf_input_dump_gpu_completed(submitted_images, 3, fixture_device);
-    check(rsf_input_dump_gpu_ready(abandoned, "pending", 3, fixture_device) != 0 &&
-        !rsf_input_dump_gpu_ready(late, "later", 3, fixture_device), "A fence may certify only the reservations in its submission token.");
-    check(!rsf_input_dump_gpu_ready(abandoned, "pending", 3, reinterpret_cast<void*>(uintptr_t(2))), "Another device's fence must not certify a readback.");
+    check(rsf_input_dump_gpu_submission(&generic) == 0, "A frame record cannot certify a submission.");
+    rsf_input_dump_gpu_completed((abandoned << 8) | 1, 3, fixture_device);
+    check(!rsf_input_dump_gpu_ready(abandoned, "pending", 3, fixture_device),
+        "A former frame-wide watermark cannot certify the reservation.");
     rsf_input_dump_cancel(generic.session_id + 1);
     check(rsf_input_dump_requested() != 0, "Another session must not cancel this capture.");
     rsf_input_dump_cancel(generic.session_id);
     check(!rsf_input_dump_requested(), "Owner cancellation must release its capture request.");
-    rsf_input_dump_gpu_completed(submitted_images, 3, fixture_device);
-    check(!rsf_input_dump_gpu_ready(abandoned, "pending", 3, fixture_device), "A cancelled submission token must not regain ownership.");
     rsf_dump_pixels stale{}; stale.struct_size = sizeof(stale);
     check(!rsf_input_dump_pixels(abandoned, "pending", &stale, 1, 0), "Cancelled GPU completions must not populate a later bundle.");
     rsf_texture_dump_options options{sizeof(options), RSF_TEXTURE_DUMP_ABI_VERSION, "unused", RSF_DUMP_VIEW_RAW, 1, nullptr, nullptr};

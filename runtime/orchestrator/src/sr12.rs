@@ -12,6 +12,7 @@ use crate::dxgi_format::{
 use crate::gl_pipeline_abi::{rsf_dlss_setup, rsf_sr12_setup as Setup};
 use crate::render_abi::*;
 use crate::sharpening_policy;
+use crate::sr_session::checked;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_NO_FG,
@@ -368,7 +369,7 @@ struct State {
     view_formats: [u32; 3],
     validated_generation: u32,
     validated_list: Option<ComRef>,
-    exposure_input: Option<ComRef>,
+    exposure_input: Option<(ComRef, u32)>,
     exposure_initialized: bool,
     history: History,
     captured: [Captured; SLOTS],
@@ -728,7 +729,8 @@ impl Sr12 {
             if !unsafe { self.owned(pass.exposure) } || !exposure_accepted(&desc) {
                 return false;
             }
-            state.exposure_input = unsafe { retain(pass.exposure) };
+            state.exposure_input =
+                unsafe { retain(pass.exposure) }.map(|texture| (texture, desc.srv_format));
         }
         let pointers = [pass.color_input, pass.depth, pass.motion, pass.color_output];
         let checked = |index: usize| index != OUTPUT || self.backend != SR_NONE;
@@ -852,6 +854,9 @@ impl Sr12 {
             } else {
                 0
             };
+        if pass.source_frame_id == 0 {
+            record.flags |= RSF_FRAME_FLAG_AMBIGUOUS_ID;
+        }
         record
     }
 
@@ -892,16 +897,12 @@ impl Sr12 {
             for (index, &input) in inputs.iter().enumerate() {
                 (p.write_srv)(device, heap, index as u32, input, state.view_formats[index]);
             }
-            let exposure_input = if self.external_exposure {
-                raw(state.exposure_input.as_ref())
-            } else {
-                ptr::null_mut()
-            };
-            let exposure_view = if exposure_input.is_null() {
-                R32_FLOAT
-            } else {
-                describe(p, exposure_input).srv_format
-            };
+            let (exposure_input, exposure_view) = state
+                .exposure_input
+                .as_ref()
+                .map_or((ptr::null_mut(), R32_FLOAT), |(texture, view)| {
+                    (texture.as_ptr(), *view)
+                });
             (p.write_srv)(device, heap, EXPOSURE_SRV, exposure_input, exposure_view);
             for (index, texture) in self.gpu.normalized.iter().enumerate() {
                 (p.write_uav)(
@@ -1017,12 +1018,8 @@ impl Sr12 {
         let record = self.record(pass, reset);
         let normalized = self.gpu.normalized.each_ref().map(ComRef::as_ptr);
         let view = preview(self.input_sdr);
-        let mut identity = record;
-        if pass.source_frame_id == 0 {
-            identity.flags |= RSF_FRAME_FLAG_AMBIGUOUS_ID;
-        }
         unsafe {
-            if (p.dump_begin_record)(&identity, self.backend) != 0 {
+            if (p.dump_begin_record)(&record, self.backend) != 0 {
                 (p.dump_pass_metadata)(pass);
                 let none = NO_PREVIEW;
                 for (source, role, shown) in [
@@ -1287,11 +1284,6 @@ impl Sr12 {
     }
 }
 
-unsafe fn full_pass<'a>(pass: *const Pass) -> Option<&'a Pass> {
-    (!pass.is_null() && unsafe { pass.cast::<u32>().read() } as usize >= size_of::<Pass>())
-        .then(|| unsafe { &*pass })
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_sr12_create(
     setup: *const Setup,
@@ -1462,7 +1454,7 @@ unsafe extern "C" fn rsf_core_sr12_evaluate(
     pass: *const Pass,
     slot: u32,
 ) -> i32 {
-    let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { full_pass(pass) }) else {
+    let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { checked(pass) }) else {
         return INVALID;
     };
     if list.is_null() || slot as usize >= SLOTS {
@@ -1565,7 +1557,7 @@ unsafe extern "C" fn rsf_core_sr12_capture_scene(
     pass: *const Pass,
     slot: u32,
 ) -> i32 {
-    let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { full_pass(pass) }) else {
+    let (Some(owner), Some(pass)) = (unsafe { owner.as_ref() }, unsafe { checked(pass) }) else {
         return INVALID;
     };
     if list.is_null() || slot as usize >= SLOTS || pass.color_input.is_null() {

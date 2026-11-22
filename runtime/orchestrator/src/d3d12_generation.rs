@@ -43,6 +43,16 @@ struct Checks {
 }
 
 impl Checks {
+    fn preflight(&self, setup: &Setup, supported: bool) -> Result<(), i32> {
+        if setup.streamline_host.is_null() && unsafe { (self.streamline_loaded)() } != 0 {
+            return Err(NEEDS_RESTART);
+        }
+        if !supported {
+            return Err(UNSUPPORTED);
+        }
+        Ok(())
+    }
+
     fn module(&self, setup: &Setup, name: &str) -> Option<SdkModule> {
         let name: Vec<u16> = name.encode_utf16().chain([0]).collect();
         SdkModule::adopt_system(unsafe { (self.load_library)(setup, name.as_ptr()) })
@@ -444,10 +454,19 @@ unsafe extern "C" fn retirement(session: Raw, out: *mut Retirement) -> i32 {
 }
 
 unsafe extern "C" fn destroy<S: Session>(session: Raw) {
+    let _ = unsafe { destroy_checked::<S>(session) };
+}
+
+unsafe extern "C" fn destroy_checked<S: Session>(session: Raw) -> i32 {
     let session = session.cast::<S>();
-    if unsafe { session.as_ref() }.is_some_and(Session::retire) {
-        drop(unsafe { Box::from_raw(session) });
+    let Some(owner) = (unsafe { session.as_ref() }) else {
+        return INVALID;
+    };
+    if !owner.retire() {
+        return NOT_READY;
     }
+    drop(unsafe { Box::from_raw(session) });
+    OK
 }
 
 unsafe extern "C" fn abort<S: Session>(session: Raw, id: u64) -> i32 {
@@ -473,6 +492,7 @@ const fn provider<S: Session>() -> Provider {
         retirement: Some(retirement),
         destroy: Some(destroy::<S>),
         abort_frame: Some(abort::<S>),
+        destroy_checked: Some(destroy_checked::<S>),
     }
 }
 

@@ -3,49 +3,9 @@
 // D3D runtime or vendor SDK is involved, so these establish ordering, lease and retirement
 // policy only.
 use super::*;
-use std::cell::{Cell, RefCell};
+use crate::com_ref::test::{Fake, fake};
+use std::cell::RefCell;
 use std::collections::HashMap;
-
-// Read only through the COM calls in com_ref.cpp.
-#[allow(dead_code)]
-#[repr(C)]
-struct Vtable {
-    query: unsafe extern "system" fn(*mut Fake, *const c_void, *mut Handle) -> i32,
-    add_ref: unsafe extern "system" fn(*mut Fake) -> u32,
-    release: unsafe extern "system" fn(*mut Fake) -> u32,
-}
-
-// IUnknown layout: the vtable pointer first.
-#[allow(dead_code)]
-#[repr(C)]
-struct Fake {
-    vtable: &'static Vtable,
-    refs: Cell<u32>,
-}
-
-unsafe extern "system" fn query(_: *mut Fake, _: *const c_void, out: *mut Handle) -> i32 {
-    unsafe { out.write(ptr::null_mut()) };
-    0x8000_4002_u32 as i32
-}
-
-unsafe extern "system" fn add_ref(this: *mut Fake) -> u32 {
-    let refs = unsafe { &(*this).refs };
-    refs.set(refs.get() + 1);
-    refs.get()
-}
-
-unsafe extern "system" fn release(this: *mut Fake) -> u32 {
-    let refs = unsafe { &(*this).refs };
-    assert!(refs.get() > 0, "over-released fake");
-    refs.set(refs.get() - 1);
-    refs.get()
-}
-
-static VTABLE: Vtable = Vtable {
-    query,
-    add_ref,
-    release,
-};
 
 struct World {
     events: Vec<String>,
@@ -97,10 +57,7 @@ fn take_events() -> Vec<String> {
 }
 
 fn object(name: &str) -> Handle {
-    let fake: &'static Fake = Box::leak(Box::new(Fake {
-        vtable: &VTABLE,
-        refs: Cell::new(1),
-    }));
+    let fake: &'static Fake = Box::leak(fake());
     let handle = ptr::from_ref(fake).cast_mut().cast::<c_void>();
     world(|world| world.names.insert(handle as usize, name.to_owned()));
     handle
@@ -714,11 +671,34 @@ fn gpu_failure_faults_the_bridge_until_backend_none() {
 }
 
 #[test]
-fn timed_out_teardown_retains_the_bridge_unless_the_device_is_removed() {
+fn output_resize_replaces_surfaces_with_same_render_extent() {
+    let mut scene = Scene::new();
+    assert_eq!(scene.evaluate(), OK);
+    take_events();
+
+    scene.record.frame_id = 2;
+    (scene.record.output_width, scene.record.output_height) = (144, 136);
+    let output = texture(scene.device, "larger output", 144, 136, COLOR_FORMAT);
+    scene.textures.push(output);
+    scene.frame.output = resource(output);
+    assert_eq!(scene.evaluate(), OK);
+
+    let translated = world(|state| state.evaluated.unwrap());
+    assert_eq!(name(translated.output.resource), "output12 144x136");
+    let events = take_events();
+    assert_eq!(
+        &events[..3],
+        ["flush", "wait fence12 3", "destroy colour surface"]
+    );
+    scene.destroy();
+}
+
+#[test]
+fn timed_out_close_keeps_leases_until_retry_succeeds() {
     let mut scene = Scene::new();
     assert_eq!(scene.evaluate(), OK);
     world(|world| world.wait_fails = true);
-    unsafe { rsf_sr_bridge_destroy(scene.bridge) };
+    assert_eq!(unsafe { rsf_sr_bridge_close(scene.bridge) }, NOT_READY);
     assert!(
         !take_events()
             .iter()
@@ -730,14 +710,10 @@ fn timed_out_teardown_retains_the_bridge_unless_the_device_is_removed() {
         2,
         "the retained bridge keeps its input lease"
     );
-    assert!(world(|world| world
-        .logs
-        .last()
-        .unwrap()
-        .contains("retaining")));
-
-    world(|world| world.device_ready = false);
-    scene.destroy();
+    world(|world| world.wait_fails = false);
+    assert_eq!(unsafe { rsf_sr_bridge_close(scene.bridge) }, OK);
+    assert_eq!(refs(find("device12")), 0);
+    assert_eq!(refs(scene.textures[0]), 1);
 }
 
 #[test]

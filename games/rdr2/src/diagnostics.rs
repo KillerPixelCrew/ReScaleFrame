@@ -2,6 +2,7 @@
 //! ASI diagnostic sampling and the optional RenderDoc request worker.
 use crate::camera_probe::rsf_rdr2_camera_request;
 use crate::runtime_worker::{append_path, log};
+use rsf_game_sys::ffi_util::try_box;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::slice;
@@ -18,35 +19,35 @@ const CAPTURE_DIRECTORY_LIMIT: usize = CAPTURE_PATH_CAPACITY - 64;
 
 #[repr(C)]
 #[derive(Default)]
-struct DumpResult {
-    result: i32,
-    sections: u32,
-    imports: u32,
-    iat_refs: u32,
-    entropy: f64,
-    base: u64,
-    bytes: u64,
+pub(crate) struct DumpResult {
+    pub(crate) result: i32,
+    pub(crate) sections: u32,
+    pub(crate) imports: u32,
+    pub(crate) iat_refs: u32,
+    pub(crate) entropy: f64,
+    pub(crate) base: u64,
+    pub(crate) bytes: u64,
 }
 
 #[repr(C)]
 #[derive(Default)]
-struct CensusResult {
-    calls: u64,
-    written: u64,
-    presents: u64,
-    dropped: u64,
-    sites: u32,
-    hooks: u32,
-    conflicts: u32,
+pub(crate) struct CensusResult {
+    pub(crate) calls: u64,
+    pub(crate) written: u64,
+    pub(crate) presents: u64,
+    pub(crate) dropped: u64,
+    pub(crate) sites: u32,
+    pub(crate) hooks: u32,
+    pub(crate) conflicts: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct DiagnosticsLeaves {
-    measure: unsafe extern "C" fn() -> f64,
-    dump: unsafe extern "C" fn(*const c_char, f64, u32, u32, u32, u32, *mut DumpResult),
-    modules: unsafe extern "C" fn(*const c_char, *const c_char),
-    census: unsafe extern "C" fn(*mut CensusResult) -> bool,
+pub(crate) struct DiagnosticsLeaves {
+    pub(crate) measure: unsafe extern "C" fn() -> f64,
+    pub(crate) dump: unsafe extern "C" fn(*const c_char, f64, u32, u32, u32, u32, *mut DumpResult),
+    pub(crate) modules: unsafe extern "C" fn(*const c_char, *const c_char),
+    pub(crate) census: unsafe extern "C" fn(*mut CensusResult) -> bool,
 }
 
 const _: () = {
@@ -67,7 +68,10 @@ type FrameTrigger = unsafe extern "C" fn(u32) -> i32;
 
 /// The entry consumes the owned pointer exactly once, after successful thread creation.
 unsafe fn start<T: Send>(work: T, entry: Worker) -> bool {
-    let work = Box::into_raw(Box::new(work));
+    let Some(work) = try_box(work) else {
+        return false;
+    };
+    let work = Box::into_raw(work);
     let thread = unsafe { CreateThread(null(), 0, Some(entry), work.cast(), 0, null_mut()) };
     if thread.is_null() {
         drop(unsafe { Box::from_raw(work) });
@@ -148,7 +152,7 @@ unsafe extern "system" fn diagnostics(work: *mut c_void) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_start_diagnostics(
+pub(crate) unsafe extern "C" fn rsf_rdr2_start_diagnostics(
     modules: *const u16,
     dumps: *const u16,
     leaves: &DiagnosticsLeaves,
@@ -200,7 +204,7 @@ unsafe extern "system" fn frame_requests(work: *mut c_void) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_start_frame_probe(
+pub(crate) unsafe extern "C" fn rsf_rdr2_start_frame_probe(
     library: *const u16,
     prefix: *const u16,
     initialise: FrameInitialise,

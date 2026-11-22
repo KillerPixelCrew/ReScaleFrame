@@ -6,9 +6,10 @@
 //! readback buffer, source and fence leases. The C++ façade supplies typed
 //! D3D12/Win32 leaves and the public symbol forwards.
 use crate::capture_names::CaptureName;
+use crate::capture_pixels::Pixels;
 use crate::com_ref::ComRef;
 use crate::d3d12_fence::FenceState;
-use crate::frame_capture_vk::{Legacy, Pixels, general, general_precision};
+use crate::frame_capture_vk::Legacy;
 use crate::sr_session::has_capacity;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -37,16 +38,19 @@ const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 
-/// Copyable footprint of subresource 0 and the readback buffer size.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct Layout {
-    pub bytes: u64,
-    pub offset: u64,
-    pub width: u32,
-    pub height: u32,
-    pub format: u32,
-    pub row_pitch: u32,
+use crate::fg12_abi::rsf_fg12_readback_layout as Layout;
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            bytes: 0,
+            offset: 0,
+            width: 0,
+            height: 0,
+            format: 0,
+            row_pitch: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -350,16 +354,18 @@ impl Owner {
             unsafe { (self.ops.unmap)(value.buffer.as_ptr()) };
             return okay;
         }
-        let stem = format!(
-            "{}-{}-{}-{}",
-            value.identity.session_id, value.identity.frame_id, value.role, value.ordinal
-        );
         let directory = legacy.directory.as_deref().unwrap_or(Path::new(""));
         let bytes = unsafe { std::slice::from_raw_parts(data, layout.bytes as usize) };
-        let raw = fs::write(directory.join(format!("{stem}.raw")), bytes).is_ok();
+        let written = crate::capture_metadata::write_legacy(
+            directory,
+            &value.identity,
+            &value.role,
+            value.ordinal,
+            bytes,
+            &legacy_json(value),
+        );
         unsafe { (self.ops.unmap)(value.buffer.as_ptr()) };
-        let json = fs::write(directory.join(format!("{stem}.json")), legacy_json(value)).is_ok();
-        okay && raw && json
+        okay && written.is_ok()
     }
 
     fn submitted(&self, queue: Handle, slot: u32, identity: Option<&Record>) -> bool {
@@ -456,13 +462,14 @@ impl Owner {
         if fs::create_dir_all(&metadata).is_err() {
             return false;
         }
-        let file = metadata.join(format!(
-            "{}-{}-{}.json",
-            identity.session_id,
-            identity.frame_id,
-            name.to_string_lossy()
-        ));
-        fs::write(file, event_json(identity, sequence, reset, result)).is_ok()
+        let stem = crate::capture_metadata::legacy_stem(identity, &name.to_string_lossy());
+        crate::capture_metadata::write_unique(
+            &metadata,
+            &format!("{stem}-{sequence}"),
+            "json",
+            event_json(identity, sequence, reset, result).as_bytes(),
+        )
+        .is_ok()
     }
 }
 
@@ -499,55 +506,21 @@ fn event_json(identity: &Record, sequence: u64, reset: bool, result: i32) -> Str
         identity.view_id,
         identity.resource_generation,
         identity.flags,
-        general_precision(f64::from(identity.frame_time_ms), 6),
+        crate::capture_metadata::legacy_float(identity.frame_time_ms, 6),
         u8::from(reset),
     )
 }
 
 fn legacy_json(value: &Readback) -> String {
-    let identity = &value.identity;
-    let camera = &identity.camera;
     let layout = &value.layout;
-    let f = |v: f32| general(f64::from(v));
-    let mut json = String::new();
-    let _ = write!(
-        json,
-        "{{\n\"role\":\"{}\",\n\"frame\":{},\n\"session\":{},\n\"view\":{},\n\"generation\":{},\n\"flags\":{},\n\"frame_time_ms\":{},\n\"width\":{},\n\"height\":{},\n\"row_pitch\":{},\n\"offset\":{},\n\"dxgi_format\":{},\n\"bytes\":{},\n\"render_size\":[{},{}],\n\"output_size\":[{},{}],\n\"jitter_pixels\":[{},{}],\n\"matrix_convention\":\"row_vectors\"",
-        value.role,
-        identity.frame_id,
-        identity.session_id,
-        identity.view_id,
-        identity.resource_generation,
-        identity.flags,
-        f(identity.frame_time_ms),
-        layout.width,
-        layout.height,
-        layout.row_pitch,
-        layout.offset,
-        layout.format,
-        layout.bytes,
-        camera.render_width,
-        camera.render_height,
-        camera.output_width,
-        camera.output_height,
-        f(camera.jitter_pixels[0]),
-        f(camera.jitter_pixels[1]),
+    let mut fields = format!(
+        ",\n\"width\":{},\n\"height\":{},\n\"row_pitch\":{},\n\"offset\":{},\n\"dxgi_format\":{},\n\"bytes\":{}",
+        layout.width, layout.height, layout.row_pitch, layout.offset, layout.format, layout.bytes,
     );
-    for (key, values) in [
-        ("view_to_clip", &camera.view_to_clip),
-        ("clip_to_view", &camera.clip_to_view),
-        ("view_to_world", &camera.view_to_world),
-        ("world_to_view", &camera.world_to_view),
-        ("clip_to_previous_clip", &camera.clip_to_previous_clip),
-    ] {
-        let joined: Vec<String> = values.iter().map(|&v| f(v)).collect();
-        let _ = write!(json, ",\n\"{key}\":[{}]", joined.join(","));
-    }
     if value.reset != NO_RESET {
-        let _ = write!(json, ",\n\"sdk_dispatch_reset\":{}", value.reset);
+        let _ = write!(fields, ",\n\"sdk_dispatch_reset\":{}", value.reset);
     }
-    json.push_str("\n}\n");
-    json
+    crate::capture_metadata::legacy_json(&value.identity, &value.role, &fields)
 }
 
 unsafe fn owner<'a>(owner: *const Owner) -> Option<&'a Owner> {

@@ -18,7 +18,7 @@ extern "C" {
 // written only when the leaf returns true. The table lives for the process.
 typedef struct rsf_ac7_platform {
     // rsf_ac7_native_renderer_prepare. *renderer receives the native output even when *prepared
-    // is false: a pinned inactive renderer is returned on a failed partial activation.
+    // is false: a failed partial activation can return a pinned handle for retirement only.
     bool (*prepare)(const rsf_ac7_native_renderer_options* options,
         rsf_ac7_native_renderer** renderer, bool* prepared);
     bool (*start)(rsf_ac7_native_renderer* renderer, bool* started);

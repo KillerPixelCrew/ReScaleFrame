@@ -2,6 +2,7 @@
 #pragma once
 #include <rescaleframe/native_sr_vulkan.h>
 typedef struct rsf_input_dump_vk rsf_input_dump_vk;
+#define RSF_INPUT_DUMP_VK_DEVICE_LOST (-13)
 typedef struct rsf_input_dump_vk_setup {
     uint32_t struct_size, abi_version;
     rsf_srvk_setup graphics;
@@ -21,10 +22,11 @@ RSF_RUNTIME_API int32_t rsf_input_dump_vk_create(const rsf_input_dump_vk_setup*,
    A timed-out submission retains use of the source until its fence retires. */
 RSF_RUNTIME_API int32_t rsf_input_dump_vk_snapshot(rsf_input_dump_vk*, const rsf_frame_record*,
     const rsf_srvk_image*, const char* name);
-/* Join previously submitted engine/capture commands before retiring their readbacks. */
+/* Join the capture submission and drain the supplied queue. Device loss is terminal. */
 RSF_RUNTIME_API int32_t rsf_input_dump_vk_drain(rsf_input_dump_vk*);
 /* After engine work has drained. Serialize destruction with calls using this handle.
-   A failed fence join preserves the owner for a retry. */
+   A pending fence preserves the owner for a retry. A fence reporting device loss
+   permits teardown without publication. */
 RSF_RUNTIME_API int32_t rsf_input_dump_vk_destroy(rsf_input_dump_vk*);
 #ifdef __cplusplus
 }

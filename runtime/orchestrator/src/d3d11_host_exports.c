@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: MIT */
+#include <rescaleframe/d3d11_host.h>
+#include "rust_export.h"
+
+RSF_EXPORT(rsf_d3d11_host_request_capture)
+RSF_EXPORT(rsf_d3d11_host_capture_control)
+RSF_EXPORT(rsf_d3d11_host_set_active)
+RSF_EXPORT(rsf_d3d11_host_dispatch_chain)
+RSF_EXPORT(rsf_d3d11_host_dispatch_present)
+RSF_EXPORT(rsf_d3d11_host_creation_begin)
+RSF_EXPORT(rsf_d3d11_host_creation_end)
+RSF_EXPORT(rsf_d3d11_host_wrap_native_swapchain)
+RSF_EXPORT(rsf_d3d11_host_bind_presentation)
+RSF_EXPORT(rsf_d3d11_host_reduced_frame)
+RSF_EXPORT(rsf_d3d11_host_upscale_auxiliaries)
+RSF_EXPORT(rsf_d3d11_host_restore_auxiliaries)
+RSF_EXPORT(rsf_d3d11_host_bind_sampler_bias)
+RSF_EXPORT(rsf_d3d11_host_capture_texture)

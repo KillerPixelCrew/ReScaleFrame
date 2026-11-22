@@ -123,9 +123,13 @@ int main(int argc, char* argv[])
     char prefix[1024];
     std::snprintf(prefix, sizeof(prefix), "%s\\velocity", argv[1]);
 
-    rsf_texture_dump_options options{};
-    options.struct_size = sizeof(options);
-    options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
+    rsf_texture_dump_motion_options extended{};
+    auto& options = extended.base;
+    options.struct_size = sizeof(extended);
+    options.abi_version = RSF_TEXTURE_DUMP_MOTION_ABI_VERSION;
+    extended.motion_scale[0] = extended.motion_scale[1] = 1.0f / (0.499f * 0.5f);
+    extended.motion_bias[0] = extended.motion_bias[1] = 32767.0f / 65535.0f;
+    extended.zero_x_unwritten = 1;
     options.output_prefix_utf8 = prefix;
     options.view = RSF_DUMP_VIEW_VELOCITY;
     options.log = collect;
@@ -134,11 +138,11 @@ int main(int argc, char* argv[])
     rsf_texture_dump_report report{};
     report.struct_size = sizeof(report);
 
-    options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION + 1u;
+    options.abi_version = RSF_TEXTURE_DUMP_MOTION_ABI_VERSION + 1u;
     check(rsf_dump_texture(device, context, texture, &options, &report) ==
               RSF_TEXTURE_ERROR_ABI_MISMATCH,
           "An incompatible ABI must be rejected.");
-    options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
+    options.abi_version = RSF_TEXTURE_DUMP_MOTION_ABI_VERSION;
 
     check(rsf_dump_texture(nullptr, context, texture, &options, &report) ==
               RSF_TEXTURE_ERROR_INVALID_ARGUMENT,

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Graphics-owner products and the reduced-frame ticket of the D3D11 host.
+use crate::auxiliary_sr::{AuxiliarySr, SurfaceKey};
 use crate::auxiliary_sr_abi::rsf_aux_platform;
 use crate::com_ref::ComRef;
 use crate::d3d11_host_abi::{
@@ -51,106 +52,10 @@ pub(crate) trait Products {
 
 pub(crate) type ProductsFactory = fn(*const rsf_aux_platform) -> Option<Box<dyn Products>>;
 
-// The existing Rust auxiliary owner, reached through its private C entry points.
-unsafe extern "C" {
-    fn rsf_auxiliary_sr_create(platform: *const rsf_aux_platform) -> Raw;
-    fn rsf_auxiliary_sr_destroy(handle: Raw);
-    fn rsf_auxiliary_sr_pending(handle: Raw) -> i32;
-    fn rsf_auxiliary_sr_matches(handle: Raw, session: u64, frame: u64, view: u64) -> i32;
-    fn rsf_auxiliary_sr_reserve(
-        handle: Raw,
-        context: Raw,
-        pass: *const Pass,
-        count: u32,
-        inputs: *const Surface,
-        log: rsf_game_log_fn,
-        user: Raw,
-        recovery: u32,
-    ) -> i32;
-    fn rsf_auxiliary_sr_refine(handle: Raw, count: u32, inputs: *const Surface) -> i32;
-    fn rsf_auxiliary_sr_seal(handle: Raw) -> i32;
-    fn rsf_auxiliary_sr_cancel(handle: Raw) -> i32;
-    fn rsf_auxiliary_sr_original_colour(handle: Raw) -> Raw;
-    fn rsf_auxiliary_sr_temporal_prepare(handle: Raw, count: u32, inputs: *const Surface) -> i32;
-    fn rsf_auxiliary_sr_spatial_prepare(handle: Raw) -> i32;
-    fn rsf_auxiliary_sr_commit(handle: Raw, temporal: u32) -> i32;
-    fn rsf_auxiliary_sr_restore(handle: Raw) -> i32;
-}
-
-struct Auxiliary(NonNull<c_void>);
-
-impl Drop for Auxiliary {
-    fn drop(&mut self) {
-        unsafe { rsf_auxiliary_sr_destroy(self.0.as_ptr()) };
-    }
-}
-
-impl Products for Auxiliary {
-    fn pending(&self) -> bool {
-        unsafe { rsf_auxiliary_sr_pending(self.0.as_ptr()) != 0 }
-    }
-    fn matches(&self, [session, frame, view]: [u64; 3]) -> bool {
-        unsafe { rsf_auxiliary_sr_matches(self.0.as_ptr(), session, frame, view) != 0 }
-    }
-    fn reserve(
-        &mut self,
-        context: Raw,
-        pass: &Pass,
-        surfaces: &[Surface],
-        log: rsf_game_log_fn,
-        user: Raw,
-        recovery: bool,
-    ) -> bool {
-        unsafe {
-            rsf_auxiliary_sr_reserve(
-                self.0.as_ptr(),
-                context,
-                pass,
-                surfaces.len() as u32,
-                surfaces.as_ptr(),
-                log,
-                user,
-                recovery as u32,
-            ) != 0
-        }
-    }
-    fn refine(&mut self, surfaces: &[Surface]) -> bool {
-        unsafe {
-            rsf_auxiliary_sr_refine(self.0.as_ptr(), surfaces.len() as u32, surfaces.as_ptr()) != 0
-        }
-    }
-    fn seal(&mut self) -> bool {
-        unsafe { rsf_auxiliary_sr_seal(self.0.as_ptr()) != 0 }
-    }
-    fn cancel(&mut self) -> bool {
-        unsafe { rsf_auxiliary_sr_cancel(self.0.as_ptr()) != 0 }
-    }
-    fn original_colour(&self) -> Raw {
-        unsafe { rsf_auxiliary_sr_original_colour(self.0.as_ptr()) }
-    }
-    fn temporal_prepare(&mut self, surfaces: &[Surface]) -> bool {
-        unsafe {
-            rsf_auxiliary_sr_temporal_prepare(
-                self.0.as_ptr(),
-                surfaces.len() as u32,
-                surfaces.as_ptr(),
-            ) != 0
-        }
-    }
-    fn spatial_prepare(&mut self) -> bool {
-        unsafe { rsf_auxiliary_sr_spatial_prepare(self.0.as_ptr()) != 0 }
-    }
-    fn commit(&mut self, temporal: bool) -> bool {
-        unsafe { rsf_auxiliary_sr_commit(self.0.as_ptr(), temporal as u32) != 0 }
-    }
-    fn restore(&mut self) -> bool {
-        unsafe { rsf_auxiliary_sr_restore(self.0.as_ptr()) != 0 }
-    }
-}
-
 pub(crate) fn auxiliary_products(platform: *const rsf_aux_platform) -> Option<Box<dyn Products>> {
-    let handle = NonNull::new(unsafe { rsf_auxiliary_sr_create(platform) })?;
-    Some(Box::new(Auxiliary(handle)))
+    let platform = unsafe { *platform.as_ref()? };
+    let owner = NonNull::new(crate::allocate_handle(AuxiliarySr::new(platform)))?;
+    Some(unsafe { Box::from_raw(owner.as_ptr()) })
 }
 
 pub(crate) fn zeroed_pass() -> Pass {
@@ -242,13 +147,10 @@ impl Ticket {
             return false;
         };
         request.len() == count
-            && request.iter().zip(&self.surfaces).all(|(p, a)| {
-                p.struct_size >= size_of::<Surface>() as u32
-                    && p.texture == a.texture
-                    && p.kind == a.kind
-                    && p.flags == a.flags
-                    && p.output_rect == a.output_rect
-            })
+            && request
+                .iter()
+                .zip(&self.surfaces)
+                .all(|(p, a)| SurfaceKey::from(a).matches(p))
     }
 
     pub(crate) fn output(&self, request: &mut rsf_d3d11_reduced_frame) {

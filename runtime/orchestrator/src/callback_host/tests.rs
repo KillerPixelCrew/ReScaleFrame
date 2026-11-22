@@ -4,57 +4,27 @@
 // plugin DLL, overlay or window is involved, so these establish admission, lifecycle order,
 // configuration, slot, scene, settings and overlay routing policy only.
 use super::*;
-use std::cell::{Cell, RefCell};
+use crate::com_ref::test::{Fake as ComHeader, add_ref};
+use std::cell::RefCell;
 use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, WritePrivateProfileStringW,
 };
 
-#[allow(dead_code)]
-#[repr(C)]
-struct Vtable {
-    query: unsafe extern "system" fn(*mut Fake, *const c_void, *mut Handle) -> i32,
-    add_ref: unsafe extern "system" fn(*mut Fake) -> u32,
-    release: unsafe extern "system" fn(*mut Fake) -> u32,
-}
-
 #[repr(C)]
 struct Fake {
-    vtable: &'static Vtable,
-    refs: Cell<u32>,
+    com: ComHeader,
     device: Handle,
 }
 
-unsafe extern "system" fn query(_: *mut Fake, _: *const c_void, out: *mut Handle) -> i32 {
-    unsafe { out.write(null_mut()) };
-    0x8000_4002_u32 as i32
-}
-unsafe extern "system" fn add_ref(this: *mut Fake) -> u32 {
-    let refs = unsafe { &(*this).refs };
-    refs.set(refs.get() + 1);
-    refs.get()
-}
-unsafe extern "system" fn release(this: *mut Fake) -> u32 {
-    let refs = unsafe { &(*this).refs };
-    assert!(refs.get() > 0, "over-released");
-    refs.set(refs.get() - 1);
-    refs.get()
-}
-static VTABLE: Vtable = Vtable {
-    query,
-    add_ref,
-    release,
-};
-
 fn fake(device: Handle) -> Handle {
     Box::into_raw(Box::new(Fake {
-        vtable: &VTABLE,
-        refs: Cell::new(1),
+        com: ComHeader::new(),
         device,
     }))
     .cast()
 }
 fn refs(handle: Handle) -> u32 {
-    unsafe { &*handle.cast::<Fake>() }.refs.get()
+    unsafe { &*handle.cast::<Fake>() }.com.refs.get()
 }
 
 struct World {

@@ -20,6 +20,9 @@
 #include <new>
 
 static_assert(sizeof(rsf_streamline_graphics) == 48);
+static_assert(RSF_D3D11_DISPATCH_RELEASE == 1 && sizeof(rsf_d3d11_chain_dispatch) == 72 &&
+    offsetof(rsf_d3d11_chain_dispatch, receiver) == 16 &&
+    offsetof(rsf_d3d11_chain_dispatch, result) == 64);
 static_assert(sizeof(rsf_d3d11p_request) == 48 && offsetof(rsf_d3d11p_request, refresh_denominator) == 44);
 static_assert(sizeof(rsf_d3d11p_facts) == 112 && offsetof(rsf_d3d11p_facts, graphics) == 40 &&
     offsetof(rsf_d3d11p_facts, direct_queue) == 88 && offsetof(rsf_d3d11p_facts, device11) == 96 &&
@@ -852,44 +855,44 @@ extern "C" int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync, u
     if (request.handled) *result = request.result.hresult;
     return int(request.handled);
 }
-extern "C" void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request) {
-    if (!request) return;
-    const auto admitted = rsf_core_d3d11p_dispatch_admit(request->receiver);
-    if (!admitted) return;
+namespace {
+uint32_t dispatch_release_owned(void* receiver) {
+    return as_bridge(receiver)->release_owned();
+}
+
+int32_t dispatch_invoke_owned(rsf_d3d11_chain_dispatch* request) try {
     auto* bridge = as_bridge(request->receiver);
-    request->handled = 1;
-    if (request->method == RSF_D3D11_DISPATCH_RELEASE) {
-        // Consumes exactly the caller's reference. The object may be gone on return.
-        request->result.references = bridge->release_owned(); return;
+    const auto& args = request->args;
+    // These entry points bypass any detours installed on the public COM vtable.
+    switch (request->method) {
+    case RSF_D3D11_DISPATCH_PRESENT:
+        return bridge->present_owned(args.present.sync_interval, args.present.flags);
+    case RSF_D3D11_DISPATCH_PRESENT1:
+        return bridge->present1_owned(args.present1.sync_interval, args.present1.flags,
+            static_cast<const DXGI_PRESENT_PARAMETERS*>(args.present1.parameters));
+    case RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE:
+        return bridge->set_fullscreen_owned(BOOL(args.fullscreen.fullscreen),
+            static_cast<IDXGIOutput*>(args.fullscreen.target));
+    case RSF_D3D11_DISPATCH_RESIZE_BUFFERS:
+        return bridge->resize_buffers_owned(args.resize_buffers.buffer_count,
+            args.resize_buffers.width, args.resize_buffers.height, DXGI_FORMAT(args.resize_buffers.format),
+            args.resize_buffers.flags);
+    case RSF_D3D11_DISPATCH_SET_COLOR_SPACE1:
+        return bridge->set_color_space_owned(DXGI_COLOR_SPACE_TYPE(args.color_space.color_space));
+    case RSF_D3D11_DISPATCH_RESIZE_BUFFERS1:
+        return bridge->resize_buffers1_owned(args.resize_buffers1.buffer_count,
+            args.resize_buffers1.width, args.resize_buffers1.height, DXGI_FORMAT(args.resize_buffers1.format),
+            args.resize_buffers1.flags, args.resize_buffers1.node_masks,
+            reinterpret_cast<IUnknown* const*>(args.resize_buffers1.present_queues));
+    default: return E_FAIL;
     }
-    // The caller's live COM lease makes this AddRef safe, including during shutdown.
-    // Keep that exact owner alive across all callbacks without holding a host lock.
-    ComPtr<IDXGISwapChain4> lease = bridge;
-    request->result.hresult = E_FAIL;
-    try {
-        if (admitted == 2) { request->result.hresult = DXGI_ERROR_INVALID_CALL; return; }
-        const auto& args = request->args;
-        switch (request->method) {
-        case RSF_D3D11_DISPATCH_PRESENT:
-            request->result.hresult = bridge->present_owned(args.present.sync_interval,args.present.flags); break;
-        case RSF_D3D11_DISPATCH_PRESENT1:
-            request->result.hresult = bridge->present1_owned(args.present1.sync_interval,args.present1.flags,
-                static_cast<const DXGI_PRESENT_PARAMETERS*>(args.present1.parameters)); break;
-        case RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE:
-            request->result.hresult = bridge->set_fullscreen_owned(BOOL(args.fullscreen.fullscreen),
-                static_cast<IDXGIOutput*>(args.fullscreen.target)); break;
-        case RSF_D3D11_DISPATCH_RESIZE_BUFFERS:
-            request->result.hresult = bridge->resize_buffers_owned(args.resize_buffers.buffer_count,
-                args.resize_buffers.width,args.resize_buffers.height,DXGI_FORMAT(args.resize_buffers.format),args.resize_buffers.flags); break;
-        case RSF_D3D11_DISPATCH_SET_COLOR_SPACE1:
-            request->result.hresult = bridge->set_color_space_owned(DXGI_COLOR_SPACE_TYPE(args.color_space.color_space)); break;
-        case RSF_D3D11_DISPATCH_RESIZE_BUFFERS1:
-            request->result.hresult = bridge->resize_buffers1_owned(args.resize_buffers1.buffer_count,
-                args.resize_buffers1.width,args.resize_buffers1.height,DXGI_FORMAT(args.resize_buffers1.format),
-                args.resize_buffers1.flags,args.resize_buffers1.node_masks,
-                reinterpret_cast<IUnknown* const*>(args.resize_buffers1.present_queues)); break;
-        }
-    } catch (...) { /* A known facade must never fall through to a native receiver. */ }
+} catch (...) {
+    return E_FAIL;
+}
+} // namespace
+
+extern "C" void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request) {
+    rsf_core_d3d11p_dispatch_owned(request, dispatch_release_owned, dispatch_invoke_owned);
 }
 extern "C" int rsf_d3d11_present_has_owner() { return rsf_core_d3d11p_has_owner(); }
 extern "C" const rsf_generation_provider* rsf_d3d11_present_provider() { return rsf_core_d3d11p_provider(&platform); }

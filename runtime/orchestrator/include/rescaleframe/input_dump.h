@@ -39,8 +39,8 @@ RSF_FRAME_DUMP_API int rsf_input_dump_pixels(uint64_t ticket, const char* name,
     const rsf_dump_pixels*, uint32_t native_api, uint32_t native_format);
 RSF_FRAME_DUMP_API void rsf_input_dump_failed(uint64_t ticket, const char* name, int32_t result);
 RSF_FRAME_DUMP_API void rsf_input_dump_complete(const rsf_frame_record*, int32_t result);
-/* Certify only source readbacks offered before this call, after the actual source
-   queue's submitted work has completed. Used by asynchronous Vulkan readers. */
+/* Compatibility entry points. A frame record cannot certify a command batch.
+   Submission and readiness return zero. Completion has no effect. */
 RSF_FRAME_DUMP_API uint64_t rsf_input_dump_gpu_submission(const rsf_frame_record*);
 RSF_FRAME_DUMP_API void rsf_input_dump_gpu_completed(uint64_t submission, uint32_t api, void* device);
 RSF_FRAME_DUMP_API int rsf_input_dump_gpu_ready(uint64_t ticket, const char* name, uint32_t api, void* device);

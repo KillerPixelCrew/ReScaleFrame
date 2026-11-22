@@ -1,24 +1,30 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 #include "runtime_setup.h"
-#include <stdint.h>
+#include <rescaleframe/frame_capture.h>
+#include <rescaleframe/module_dump.h>
+#include <rescaleframe/vendor_census.h>
 
-typedef struct rsf_rdr2_asi_leaves {
-    uint32_t (*adapter_vendor)(uint32_t);
-    int32_t (*d3d12_trace)(uintptr_t target, uint32_t image_size, const wchar_t*);
+/* C link services supplied by the ASI. The separately linked game plugin has no dependency
+   on the optional RenderDoc library, module-dump library or census. */
+typedef struct rsf_rdr2_asi_services {
+    rsf_rdr2_fingerprint_fn fingerprint;
+    rsf_dump_result (*measure)(const void*, double*);
+    rsf_dump_result (*dump)(const rsf_dump_options*, uint32_t, uint32_t, uint32_t, rsf_dump_report*);
+    rsf_dump_result (*modules)(const char*, const char*);
+    rsf_census_result (*census_install)(const rsf_census_options*);
+    rsf_census_result (*census_flush)(void);
+    rsf_census_result (*census_counters)(rsf_census_counters*);
+    rsf_capture_result (*frame_initialise)(const char*, const char*);
+    rsf_capture_result (*frame_trigger)(uint32_t);
     bool (*native_capture)(const wchar_t*);
-    int32_t (*frame_probe)(const wchar_t* library, const wchar_t* prefix);
-    int32_t (*census)(const wchar_t* directory, uint32_t flags);
-    bool (*camera_probe)(const wchar_t* directory);
-    bool (*camera_reference)(const wchar_t* library);
-    bool (*social_club)(bool trace);
-} rsf_rdr2_asi_leaves;
+    bool (*social_current_index)(void*, uint32_t*);
+} rsf_rdr2_asi_services;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-void rsf_rdr2_asi_process_attach(void* module, const rsf_rdr2_asi_leaves*,
-    const rsf_rdr2_runtime_leaves*);
+void rsf_rdr2_asi_process_attach(void* module, const rsf_rdr2_asi_services*);
 #ifdef __cplusplus
 }
 #endif

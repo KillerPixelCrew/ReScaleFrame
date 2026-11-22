@@ -432,6 +432,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-exposure-probe"
+version = "0.1.2"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "rsf-fallout4"
 version = "0.1.2"
 dependencies = [
@@ -530,6 +537,7 @@ name = "rsf-rdr2"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "windows",
  "windows-sys",
 ]
 
@@ -581,10 +589,6 @@ dependencies = [
  "rsf-runtime-submission",
  "windows-sys",
 ]
-
-[[package]]
-name = "rsf-upscaler"
-version = "0.1.2"
 
 [[package]]
 name = "rsf-vulkanstory-ngx"

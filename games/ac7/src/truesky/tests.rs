@@ -22,6 +22,7 @@ fn unpatched() -> rsf_ac7_truesky_patches {
         depth_format_site: null_mut(),
         depth_call: EMPTY_RELAY,
         motion_call: EMPTY_RELAY,
+        motion_refused: false,
         resolution_refused: false,
     }
 }
@@ -122,10 +123,16 @@ impl Fake {
     }
 }
 
-impl Code for Fake {
+impl CodeView for Fake {
     fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
         self.image.matches(address, expected)
     }
+    fn log(&self, message: &str) {
+        self.image.log(message);
+    }
+}
+
+impl Code for Fake {
     fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
         if self.outcomes.borrow_mut().pop_front() == Some(false) {
             return false;
@@ -135,9 +142,6 @@ impl Code for Fake {
             self.written.borrow_mut().push(site.addr());
         }
         written
-    }
-    fn log(&self, message: &str) {
-        self.image.log(message);
     }
 }
 
@@ -198,8 +202,8 @@ fn module_and_effect_fingerprints() {
         String::from_utf16(&MODULE).unwrap(),
         "TrueSkyPluginRender_MT.dll\0"
     );
-    assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
-    assert_eq!(crc32(&[]), 0);
+    assert_eq!(crc32_ieee(b"123456789"), 0xcbf4_3926);
+    assert_eq!(crc32_ieee(&[]), 0);
     assert!(!effect_matches(&[]));
     assert!(!effect_matches(&[0; EFFECT_BYTES - 1]));
     assert!(EFFECT_PATH.ends_with(r"\Win64\mixed_resolution.fxo"));
@@ -323,15 +327,37 @@ fn depth_admission_refuses_before_any_depth_write() {
 }
 
 #[test]
-fn a_refused_motion_relay_is_retried_each_sky_render() {
+fn a_motion_fingerprint_refusal_does_not_block_depth() {
     let fake = Fake::new();
     fake.image.put(at(MOTION_CALL_RVA) - 1, &[0]);
     let mut state = unpatched();
     apply(&mut state, &fake);
     apply(&mut state, &fake);
-    assert_eq!(fake.logged(MOTION_REFUSED), 2);
+    assert_eq!(fake.logged(MOTION_REFUSED), 1);
+    assert!(state.motion_refused);
     // The depth route does not depend on it.
     assert_eq!(owned(&state), [false, false, true, true, true]);
+}
+
+#[test]
+fn motion_write_retry_is_independent_of_both_terminal_grid_states() {
+    for depth_supported in [false, true] {
+        let fake = Fake::new();
+        fake.ready.set(true);
+        fake.effect.set(depth_supported);
+        // First guarded write is the motion call. Later writes use the default success.
+        fake.outcomes.borrow_mut().push_back(false);
+        let mut state = unpatched();
+        apply(&mut state, &fake);
+        assert!(state.motion_call.slot.is_null());
+        assert!(!state.motion_refused);
+        assert_eq!(!state.resolution_site.is_null(), depth_supported);
+        assert_eq!(state.resolution_refused, !depth_supported);
+        apply(&mut state, &fake);
+        assert!(!state.motion_call.slot.is_null());
+        assert_eq!(fake.logged(MOTION_INSTALLED), 1);
+        assert!(restore(&mut state, &fake));
+    }
 }
 
 #[test]

@@ -149,9 +149,19 @@ int input_contract(const rsf::anomaly::BuildProfile& build) {
     fg::input_begin(101); const auto second=input_facts.back().source_frame_id;
     CHECK(rsf_native_cpu_read(session,second,&frame) && frame.pings==1 && frame.input_mask==0);
     fg::render_begin(101,1280,720); fg::end_before(); fg::end_after();
-    fg::input_begin(102); fg::input_begin(103); // actual update without a render is explicitly closed
-    bool skipped{}; for(const auto& event:input_facts) skipped |= event.stage==RSF_GAME_CPU_FRAME_END && (event.flags & RSF_GAME_CPU_RENDER_SKIPPED);
-    CHECK(skipped); fg::render_begin(103,1280,720); fg::end_before(); fg::end_after();
+    fg::input_begin(102);
+    const auto skipped_source = input_facts.back().source_frame_id;
+    fg::input_begin(103); // the next input closes the previous source with no render
+    bool skipped{};
+    for (const auto& event : input_facts) {
+        if (event.source_frame_id != skipped_source) continue;
+        CHECK(event.stage != RSF_GAME_CPU_SIMULATION_END);
+        skipped |= event.stage == RSF_GAME_CPU_FRAME_END && (event.flags & RSF_GAME_CPU_RENDER_SKIPPED);
+    }
+    CHECK(skipped);
+    CHECK(rsf_native_cpu_read(session, skipped_source, &frame) && frame.ended &&
+        frame.timestamps_qpc[RSF_GAME_CPU_SIMULATION_END] == 0);
+    fg::render_begin(103,1280,720); fg::end_before(); fg::end_after();
     fg::render_begin(104,1280,720); const auto paint=input_facts.back().source_frame_id;
     CHECK(rsf_native_cpu_read(session,paint,&frame) && (frame.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE));
     fg::end_before(); fg::end_after();
@@ -400,9 +410,9 @@ int main(int argc, char** argv) {
 
     const auto st = fg::status();
     const auto rs = status();
-    std::printf("adapter counters: source=%llu level=%llu tagged=%llu fed=%llu presented=%llu unpresented=%llu captures=%llu\n",
+    std::printf("adapter counters: source=%llu level=%llu eligible_at_ui_boundary=%llu fed=%llu presented=%llu unpresented=%llu captures=%llu\n",
         static_cast<unsigned long long>(st.source_frames), static_cast<unsigned long long>(st.level_frames),
-        static_cast<unsigned long long>(st.tagged), static_cast<unsigned long long>(st.fed), static_cast<unsigned long long>(st.presented),
+        static_cast<unsigned long long>(st.eligible_at_ui_boundary), static_cast<unsigned long long>(st.fed), static_cast<unsigned long long>(st.presented),
         static_cast<unsigned long long>(st.unpresented), static_cast<unsigned long long>(st.captures));
     std::printf("runtime: tagged=%llu vendor_presented=%llu effective_mode=%u generated=%u reason=%u last_result=%d vendor_status=%d\n",
         static_cast<unsigned long long>(rs.tagged_frames), static_cast<unsigned long long>(rs.vendor.total_presented),
@@ -414,7 +424,7 @@ int main(int argc, char** argv) {
     CHECK(totals.failed_presents == 0);
     CHECK(st.source_frames == frames_rendered);
     CHECK(st.presented + st.unpresented == st.source_frames);
-    CHECK(st.fed > 0 && st.tagged >= st.fed);
+    CHECK(st.fed > 0 && st.eligible_at_ui_boundary >= st.fed);
     CHECK(st.captures == 1);
     CHECK(overlay_draws > 0);
     if (stage5) CHECK(sr_evaluated > 0);

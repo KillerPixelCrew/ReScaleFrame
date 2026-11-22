@@ -9,12 +9,7 @@ use std::ptr::{null, null_mut, without_provenance};
 /// The exact build as far as admission reads it.
 fn exact_build() -> Image {
     let image = Image::default();
-    for site in HOOK_SITES.iter().chain(&HELPERS) {
-        image.put(site.rva as usize, &site.expected);
-    }
-    for gate in &DEPTH_GATES {
-        image.put(gate.rva as usize, gate.expected);
-    }
+    image.seed_admission(0);
     image
 }
 
@@ -102,21 +97,12 @@ unsafe extern "C" fn record(
     true
 }
 
-unsafe extern "C" fn refuse_write(
-    _: *mut c_uchar,
-    _: *const c_uchar,
-    _: *const c_uchar,
-    _: usize,
-) -> bool {
-    false
-}
-
 #[test]
 fn native_admission_compares_each_site_at_the_module_base() {
     let base = 0x1_4000_0000usize;
     let leaves = rsf_ac7_code_leaves {
         matches: Some(record),
-        write: Some(refuse_write),
+        write: None,
         log: None,
         user: null_mut(),
     };
@@ -127,6 +113,8 @@ fn native_admission_compares_each_site_at_the_module_base() {
             seen.len(),
             HOOK_SITES.len() + DEPTH_GATES.len() + HELPERS.len()
         );
+        let unique: HashSet<_> = seen.iter().map(|(address, _)| address).collect();
+        assert_eq!(unique.len(), seen.len());
         assert_eq!(seen[0], (base + 0x10b0220, HOOK_SITES[0].expected.to_vec()));
         let gate = &seen[HOOK_SITES.len() + 4];
         assert_eq!(gate, &(base + 0x11583a6, DEPTH_GATES[4].expected.to_vec()));
@@ -137,7 +125,7 @@ fn native_admission_compares_each_site_at_the_module_base() {
     });
     assert!(!unsafe { rsf_ac7_build_admit(without_provenance(base), null()) });
     let incomplete = rsf_ac7_code_leaves {
-        write: None,
+        matches: None,
         ..leaves
     };
     assert!(!unsafe { rsf_ac7_build_admit(without_provenance(base), &incomplete) });

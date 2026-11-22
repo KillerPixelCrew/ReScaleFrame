@@ -4,7 +4,6 @@ members = [
   "tests/overlay",
   "tests/overlay-service",
   "tests/game-sdk",
-  "runtime/backends/rsf-upscaler",
   "runtime/backends/fsr/compat",
   "runtime/vulkan/ngx",
   "runtime/vulkan/streamline/lifecycle",
@@ -26,6 +25,7 @@ members = [
   "integrations/godot",
   "integrations/steam",
   "integrations/windows",
+  "tools/exposure_probe",
 ]
 resolver = "3"
 

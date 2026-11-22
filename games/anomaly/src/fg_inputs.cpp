@@ -151,6 +151,7 @@ uint32_t dispatch(void* raw_context, const rsf_anomaly_input_pipeline* pipeline,
 }
 
 constexpr rsf_anomaly_input_platform platform{
+    sizeof(rsf_anomaly_input_platform),
     get_device,
     [](void* object) { static_cast<IUnknown*>(object)->Release(); },
     describe,

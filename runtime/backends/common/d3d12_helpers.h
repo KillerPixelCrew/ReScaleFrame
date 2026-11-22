@@ -33,10 +33,9 @@ inline void copy_transitioned(ID3D12GraphicsCommandList* list,
     transition(list, destination, D3D12_RESOURCE_STATE_COPY_DEST, destination_after);
     transition(list, source, D3D12_RESOURCE_STATE_COPY_SOURCE, source_after);
 }
-// Wait for `value` on a fence, 10 seconds at most. A zero value is "nothing to wait for". The
-// result separates the three ways it can fail: no fence (E_FAIL), a removed device
-// (DXGI_ERROR_DEVICE_REMOVED, which the fence reports as UINT64_MAX) and a stuck queue
-// (DXGI_ERROR_DEVICE_HUNG). `event` is an auto-reset event the caller owns.
+// A zero value needs no wait. The caller owns the auto-reset event. Fence arm errors
+// and Win32 wait failures keep their HRESULTs. Timeout is HRESULT_FROM_WIN32(WAIT_TIMEOUT),
+// and the removed-device fence sentinel is DXGI_ERROR_DEVICE_REMOVED.
 inline HRESULT wait_fence(ID3D12Fence* fence, uint64_t value, HANDLE event, DWORD timeout_ms = 10000)
 {
     return rsf_core_d3d12_wait_fence(fence, value, event, timeout_ms,

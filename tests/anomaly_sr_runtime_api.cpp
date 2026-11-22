@@ -393,7 +393,7 @@ void start_refused_loudly() {
     const std::string_view reason{report.reason};
     CHECK(reason.find("SR off") != std::string_view::npos && reason.find("Streamline") != std::string_view::npos &&
         reason.find("SRStreamlineDir") != std::string_view::npos && reason.size() < sizeof(report.reason) - 1);
-    CHECK(start_refusal_reason(RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED).find("DLSS support") != std::string::npos);
+    CHECK(start_refusal_reason(RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED).find("selected SR provider") != std::string::npos);
     CHECK(start_refusal_reason(RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED).find("resource failed") != std::string::npos);
     for (const int32_t r : {int32_t(RSF_DLSS_PIPELINE_ERROR_NOT_SUPPORTED), int32_t(RSF_DLSS_PIPELINE_ERROR_STREAMLINE_FAILED),
              int32_t(RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT), int32_t(RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED)})

@@ -327,7 +327,7 @@ int32_t dispatch(FfxNative* native, void* commands, const FfxDispatch* call) noe
     data.cameraFar = call->far_plane;
     data.cameraFovAngleVertical = record.camera.vertical_fov_radians;
     data.viewSpaceToMetersFactor = 1;
-    rsf::ffx_sharpening(data, call->sharpness);
+    rsf_ffx_sharpening(call->sharpness, &data.enableSharpening, &data.sharpness);
     data.reset = call->reset != 0;
     return native->sdk.dispatch(&native->effect, &data.header) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;

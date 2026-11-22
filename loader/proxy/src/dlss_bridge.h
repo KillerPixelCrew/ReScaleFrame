@@ -151,8 +151,10 @@ rsf_observer_texture_fn rsf_bridge_texture_hook(void);
    rather than silently dropped.
 
    Registered at attach, next to the log sink and for the same reason. */
+struct rsf_overlay_host_option;
 typedef struct rsf_bridge_actions {
     void (*start_backend)(void);
+    void (*start_backend_at_extent)(uint32_t width, uint32_t height);
     int (*set_render_scale)(unsigned long percent);
     void (*trigger_dump)(void);
     void (*trigger_capture)(void);
@@ -189,6 +191,8 @@ typedef struct rsf_bridge_actions {
     void (*save_sharpening)(const rsf_sharpening_options*);
     void (*save_enabled)(unsigned long enabled);
     void (*maintain_renderer)(void);
+    uint32_t (*read_host_options)(struct rsf_overlay_host_option* options, uint32_t capacity);
+    int (*save_host_option)(uint32_t index, int32_t value);
 } rsf_bridge_actions;
 
 void rsf_bridge_set_actions(const rsf_bridge_actions* actions);

@@ -9,6 +9,61 @@ use crate::lease::Lease;
 use std::ffi::c_void;
 use std::ptr;
 
+#[derive(Clone, Copy)]
+pub(crate) struct Bindings {
+    device: unsafe extern "C" fn(context: *mut c_void) -> *mut c_void,
+    pub(crate) release_interface: unsafe extern "C" fn(arg1: *mut c_void),
+    describe: unsafe extern "C" fn(texture: *mut c_void, arg1: *mut Description),
+    same_device: unsafe extern "C" fn(texture: *mut c_void, device: *mut c_void) -> u32,
+    shader: unsafe extern "C" fn(device: *mut c_void, arg1: Log, arg2: *mut c_void) -> *mut c_void,
+    constant_buffer: unsafe extern "C" fn(device: *mut c_void) -> *mut c_void,
+    texture: unsafe extern "C" fn(
+        device: *mut c_void,
+        width: u32,
+        height: u32,
+        format: u32,
+        bind: u32,
+    ) -> *mut c_void,
+    depth_view: unsafe extern "C" fn(device: *mut c_void, depth_copy: *mut c_void) -> *mut c_void,
+    unordered_view: unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
+    motion_view: unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
+    dispatch: unsafe extern "C" fn(
+        context: *mut c_void,
+        pipeline: *const PipelineBindings,
+        targets: *const Targets,
+        depth: *mut c_void,
+        motion_view: *mut c_void,
+        arg1: *const Constants,
+        groups_x: u32,
+        groups_y: u32,
+    ) -> u32,
+    first_person_limit: f32,
+    validity_threshold: f32,
+}
+
+impl Bindings {
+    pub(crate) fn bind(platform: &Platform) -> Option<Self> {
+        if platform.struct_size < size_of::<Platform>() as u32 {
+            return None;
+        }
+        Some(Self {
+            device: platform.device?,
+            release_interface: platform.release_interface?,
+            describe: platform.describe?,
+            same_device: platform.same_device?,
+            shader: platform.shader?,
+            constant_buffer: platform.constant_buffer?,
+            texture: platform.texture?,
+            depth_view: platform.depth_view?,
+            unordered_view: platform.unordered_view?,
+            motion_view: platform.motion_view?,
+            dispatch: platform.dispatch?,
+            first_person_limit: platform.first_person_limit,
+            validity_threshold: platform.validity_threshold,
+        })
+    }
+}
+
 const R24G8_TYPELESS: u32 = 44;
 const D24_UNORM_S8_UINT: u32 = 45;
 const RGBA16_FLOAT: u32 = 10;
@@ -41,11 +96,11 @@ struct SurfaceSet {
 impl SurfaceSet {
     /// Creates the textures, then their views. A failed create drops the leases already taken in
     /// reverse order and returns None, so a caller keeps its previous complete set.
-    fn create(platform: &Platform, device: *mut c_void, extent: [u32; 2]) -> Option<Self> {
-        let release = platform.release_interface?;
-        let create_texture = platform.texture?;
-        let create_depth_view = platform.depth_view?;
-        let create_uav = platform.unordered_view?;
+    fn create(platform: &Bindings, device: *mut c_void, extent: [u32; 2]) -> Option<Self> {
+        let release = platform.release_interface;
+        let create_texture = platform.texture;
+        let create_depth_view = platform.depth_view;
+        let create_uav = platform.unordered_view;
         let make = |format: u32, bind: u32| {
             Lease::new(
                 unsafe { create_texture(device, extent[0], extent[1], format, bind) },
@@ -94,17 +149,17 @@ struct Pipeline {
 
 impl Pipeline {
     fn create(
-        platform: &Platform,
+        platform: &Bindings,
         device: *mut c_void,
         log: Log,
         user: *mut c_void,
-    ) -> Option<Self> {
-        let release = platform.release_interface?;
-        let create_shader = platform.shader?;
-        let create_buffer = platform.constant_buffer?;
-        let shader = Lease::new(unsafe { create_shader(device, log, user) }, release)?;
-        let constants = Lease::new(unsafe { create_buffer(device) }, release)?;
-        Some(Self { constants, shader })
+    ) -> std::result::Result<Self, Result> {
+        let release = platform.release_interface;
+        let shader = Lease::new(unsafe { (platform.shader)(device, log, user) }, release)
+            .ok_or(Result::Shader)?;
+        let constants = Lease::new(unsafe { (platform.constant_buffer)(device) }, release)
+            .ok_or(Result::Resources)?;
+        Ok(Self { constants, shader })
     }
 
     fn bindings(&self) -> PipelineBindings {
@@ -116,7 +171,7 @@ impl Pipeline {
 }
 
 pub(crate) struct Owner {
-    platform: &'static Platform,
+    platform: Bindings,
     surfaces: Option<SurfaceSet>,
     pipeline: Option<Pipeline>,
     device: Option<Lease>,
@@ -125,7 +180,7 @@ pub(crate) struct Owner {
 }
 
 impl Owner {
-    pub(crate) fn new(platform: &'static Platform) -> Self {
+    pub(crate) fn new(platform: Bindings) -> Self {
         Self {
             platform,
             surfaces: None,
@@ -143,14 +198,14 @@ impl Owner {
 
     fn describe(&self, texture: *mut c_void) -> Description {
         let mut desc = Description::default();
-        unsafe { (self.platform.describe.unwrap())(texture, &mut desc) };
+        unsafe { (self.platform.describe)(texture, &mut desc) };
         desc
     }
 
     fn ensure_targets(&mut self, device: *mut c_void, extent: [u32; 2]) -> Option<&SurfaceSet> {
         if self.surfaces.as_ref().is_none_or(|s| s.extent != extent) {
             // The new set is complete before the older one drops.
-            self.surfaces = Some(SurfaceSet::create(self.platform, device, extent)?);
+            self.surfaces = Some(SurfaceSet::create(&self.platform, device, extent)?);
         }
         self.surfaces.as_ref()
     }
@@ -180,15 +235,12 @@ impl Owner {
             return Result::Size;
         }
 
-        let release_interface = platform.release_interface.unwrap();
-        let Some(d3d) = Lease::new(
-            unsafe { (platform.device.unwrap())(context) },
-            release_interface,
-        ) else {
+        let release_interface = platform.release_interface;
+        let Some(d3d) = Lease::new(unsafe { (platform.device)(context) }, release_interface) else {
             return Result::Resources;
         };
         let device = d3d.as_ptr();
-        let same_device = platform.same_device.unwrap();
+        let same_device = platform.same_device;
         if unsafe { same_device(frame.depth, device) } == 0 {
             return Result::Resources;
         }
@@ -205,12 +257,19 @@ impl Owner {
         if self.shader_failed {
             return Result::Shader;
         }
-        if self.pipeline.is_none() {
-            self.pipeline = Pipeline::create(platform, device, log, user);
-        }
-        let Some(pipeline) = self.pipeline.as_ref().map(Pipeline::bindings) else {
-            self.shader_failed = true;
-            return Result::Shader;
+        let pipeline = match &self.pipeline {
+            Some(pipeline) => pipeline.bindings(),
+            None => match Pipeline::create(&platform, device, log, user) {
+                Ok(pipeline) => {
+                    let bindings = pipeline.bindings();
+                    self.pipeline = Some(pipeline);
+                    bindings
+                }
+                Err(result) => {
+                    self.shader_failed = result == Result::Shader;
+                    return result;
+                }
+            },
         };
         let Some(targets) = self
             .ensure_targets(device, extent)
@@ -230,7 +289,7 @@ impl Owner {
                 && unsafe { same_device(frame.motion, device) } != 0
             {
                 Lease::new(
-                    unsafe { (platform.motion_view.unwrap())(device, frame.motion) },
+                    unsafe { (platform.motion_view)(device, frame.motion) },
                     release_interface,
                 )
             } else {
@@ -247,7 +306,7 @@ impl Owner {
             ..Default::default()
         };
         let accepted = unsafe {
-            (platform.dispatch.unwrap())(
+            (platform.dispatch)(
                 context,
                 &pipeline,
                 &targets,
@@ -268,4 +327,4 @@ impl Owner {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

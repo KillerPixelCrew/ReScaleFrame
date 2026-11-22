@@ -128,7 +128,11 @@ void sharpen(void* graphics, const rsf_srvk_setup* setup, void* commands, const 
     // A diagnostic callback must not interrupt the shared output handoff.
 }
 
-void retire(void* graphics, void* commands) { static_cast<Graphics*>(graphics)->sharpen.retire(commands); }
+void retire(void* graphics, void* commands) {
+    auto& native = *static_cast<Graphics*>(graphics);
+    native.capture.retire_commands(static_cast<VkCommandBuffer>(commands));
+    native.sharpen.retire(commands);
+}
 void clear_sharpen(void* graphics) { static_cast<Graphics*>(graphics)->sharpen.clear(); }
 
 int32_t wait(void* graphics, uint64_t timeline, uint64_t value, uint64_t timeout) {

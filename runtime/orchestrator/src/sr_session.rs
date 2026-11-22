@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::render_abi::*;
-use rsf_game_sys::RSF_FRAME_FLAG_RESET;
+use rsf_game_sys::{
+    RSF_FRAME_FLAG_NO_SR, RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION,
+    RSF_GAME_FRAME_ABI_VERSION, rsf_camera_frame,
+};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{self, NonNull};
 use std::time::Instant;
@@ -50,9 +53,93 @@ struct Session {
     last: FrameIdentity,
 }
 
+pub(crate) fn valid_unit_scale(units_to_meters: f32) -> bool {
+    units_to_meters.is_finite() && units_to_meters > 0.0
+}
+
 // A caller may provide only the size field when reporting a short structure.
 pub(crate) unsafe fn has_capacity<T>(value: *const T) -> bool {
     !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
+}
+
+// The caller supplies a suitably aligned, readable record with its size at offset zero.
+pub(crate) unsafe fn checked<'a, T>(value: *const T) -> Option<&'a T> {
+    unsafe { has_capacity(value) }.then(|| unsafe { &*value })
+}
+
+// Shared wire validation for direct provider calls, sessions and the D3D11 bridge.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_validate_sr_frame(frame: *const rsf_sr_frame) -> i32 {
+    let Some(frame) = (unsafe { checked(frame) }) else {
+        return INVALID;
+    };
+    let Some(record) = (unsafe { checked(frame.record) }) else {
+        return INVALID;
+    };
+    let camera = &record.camera;
+    if record.abi_version != RSF_GAME_FRAME_ABI_VERSION
+        || camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION
+    {
+        return ABI_MISMATCH;
+    }
+    let render = [record.render_width, record.render_height];
+    let output = [record.output_width, record.output_height];
+    if camera.struct_size < size_of::<rsf_camera_frame>() as u32
+        || record.frame_id == 0
+        || render.contains(&0)
+        || output.contains(&0)
+        || render[0] > output[0]
+        || render[1] > output[1]
+        || !(0.0..=1.0).contains(&frame.sharpness)
+        || ![frame.jitter_x, frame.jitter_y]
+            .into_iter()
+            .all(f32::is_finite)
+        || ![frame.motion_scale_x, frame.motion_scale_y]
+            .into_iter()
+            .all(|value| value.is_finite() && value != 0.0)
+        || ![
+            frame.pre_exposure,
+            frame.view_space_to_meters,
+            record.frame_time_ms,
+            camera.near_plane,
+        ]
+        .into_iter()
+        .all(|value| value.is_finite() && value > 0.0)
+        || !camera.far_plane.is_finite()
+        || camera.far_plane < 0.0
+        || !(camera.vertical_fov_radians > 0.0
+            && camera.vertical_fov_radians < std::f32::consts::PI.next_up())
+    {
+        return INVALID;
+    }
+    if record.flags & RSF_FRAME_FLAG_NO_SR != 0 {
+        return NOT_READY;
+    }
+    for (resource, [width, height]) in [
+        (&frame.color, render),
+        (&frame.depth, render),
+        (&frame.motion, render),
+        (&frame.output, output),
+        (&frame.exposure, [0, 0]),
+    ] {
+        if width == 0 && resource.resource.is_null() {
+            continue;
+        }
+        if resource.struct_size < size_of::<rsf_backend_resource>() as u32
+            || resource.resource.is_null()
+            || resource.lifetime != 0 // RSF_LIFETIME_ONLY_NOW
+            || resource.x != 0
+            || resource.y != 0
+            || resource.width < width
+            || resource.height < height
+        {
+            return INVALID;
+        }
+        if resource.generation != record.resource_generation {
+            return STALE_RESOURCES;
+        }
+    }
+    0
 }
 
 #[unsafe(no_mangle)]

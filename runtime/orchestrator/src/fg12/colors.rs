@@ -137,7 +137,7 @@ impl Colors {
                     let _ = std::thread::Builder::new().spawn(move || pair.save());
                 }
             }
-            None if pair.present.generation != generation => {
+            None | Some(FenceState::DeviceRemoved) if pair.present.generation != generation => {
                 // The old generation drained, but execution of this exact list is unknown.
                 self.pending = None;
             }

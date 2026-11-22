@@ -121,7 +121,7 @@ void fg_destroy(void*) {}
 const rsf_sr_provider sr_provider = {
     sizeof(rsf_sr_provider), probe, sr_open,
 #if defined(RSF_HAVE_XESS)
-    rsf_core_d3d12_sr_provider_plan, rsf_d3d12_sr_provider_evaluate, rsf_core_d3d12_sr_provider_release,
+    rsf_core_d3d12_sr_provider_plan, rsf_core_d3d12_sr_provider_evaluate, rsf_core_d3d12_sr_provider_release,
     rsf_core_d3d12_sr_provider_close, rsf_core_d3d12_sr_provider_version,
 #else
     sr_plan, sr_evaluate, sr_release, sr_close, nullptr,
@@ -135,5 +135,13 @@ const rsf_fg_provider fg_provider = {
 
 } // namespace
 
-extern "C" const rsf_sr_provider* rsf_xess_sr_provider(void) { return &sr_provider; }
+extern "C" const rsf_sr_provider* rsf_xess_sr_provider(void)
+{
+#if defined(RSF_HAVE_XESS)
+    static const bool bound = (rsf_core_d3d12_sr_bind_validation(rsf::validate_frame,
+        [](const rsf_sr_frame* input, void* device) { return rsf::validate_d3d12_resources(*input, device); }), true);
+    (void)bound;
+#endif
+    return &sr_provider;
+}
 extern "C" const rsf_fg_provider* rsf_xess_fg_provider(void) { return &fg_provider; }

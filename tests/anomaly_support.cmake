@@ -205,13 +205,19 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamli
 endif()
 # Backend switching through the shared pipeline on hardware (generic runtime behaviour, driven by the same vendor root).
 add_executable(rsf_sr_backend_switch_device_test "${CMAKE_CURRENT_LIST_DIR}/sr_backend_switch_device.cpp")
-target_link_libraries(rsf_sr_backend_switch_device_test PRIVATE rsf_orchestrator rsf_build_options)
+target_link_libraries(rsf_sr_backend_switch_device_test PRIVATE rsf_orchestrator ReScaleFrame::Graphics rsf_build_options)
 if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamline/sl.interposer.dll")
     foreach(rsf_switch_mode baseline select select+exposure)
         add_test(NAME sr_backend_switch_${rsf_switch_mode}
             COMMAND rsf_sr_backend_switch_device_test "${rsf_anomaly_sr_vendor_native}" ${rsf_switch_mode})
         set_tests_properties(sr_backend_switch_${rsf_switch_mode} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
     endforeach()
+endif()
+if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/fidelityfx/amd_fidelityfx_upscaler_dx12.dll")
+    file(TO_NATIVE_PATH "${RSF_ANOMALY_SR_VENDOR_ROOT}" rsf_anomaly_sr_vendor_native)
+    add_test(NAME sr_backend_switch_fsr3_start
+        COMMAND rsf_sr_backend_switch_device_test "${rsf_anomaly_sr_vendor_native}" fsr3-start)
+    set_tests_properties(sr_backend_switch_fsr3_start PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 endif()
 set_tests_properties(anomaly_sr_pass_contract anomaly_sr_pass_unknown_selection anomaly_sr_runtime_api_contract
     anomaly_sr_temporal_device PROPERTIES TIMEOUT 120)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::render_abi::rsf_dlss_frame as Frame;
+use crate::sr_session::has_capacity;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_SUBMISSION,
     RSF_GAME_RENDER_TEXTURE_BINDING, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass as Pass,
@@ -17,10 +18,6 @@ struct PassCallbacks {
     window_scope: unsafe extern "C" fn(*const Pass, u32) -> i32,
 }
 
-unsafe fn full_prefix<T>(value: *const T) -> bool {
-    !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fg_dispatch_pass(
     context: *mut c_void,
@@ -28,7 +25,7 @@ unsafe extern "C" fn rsf_core_fg_dispatch_pass(
     begin: u32,
     callbacks: &PassCallbacks,
 ) -> i32 {
-    if !unsafe { full_prefix(pass) } {
+    if !unsafe { has_capacity(pass) } {
         return 0;
     }
     // These inputs are borrowed for the duration of the native call.
@@ -71,7 +68,7 @@ unsafe extern "C" fn rsf_core_fg_capture_scoped(
     set_scene: SetScene,
     capture: Capture,
 ) {
-    if context.is_null() || !unsafe { full_prefix(identity) && full_prefix(frame) } {
+    if context.is_null() || !unsafe { has_capacity(identity) && has_capacity(frame) } {
         return;
     }
     // The native setter normalizes identity against a bound source. Save and

@@ -432,6 +432,7 @@ int main() {
     configured_output = 4; configured_width = configured_height = 2;
     // The hook enum names table entries; the diagnostic gate covers only the evidence hooks.
     check(rsf_ac7_hook_rva(hook_engine_tick) == 0x3a3f70 && rsf_ac7_hook_rva(hook_base_pass) == 0xebf050 &&
+        rsf_ac7_hook_rva(hook_target_init) == 0x1ab0200 &&
         rsf_ac7_hook_role(hook_process_output) == RSF_AC7_ROLE_OUTPUT && rsf_ac7_hook_rva(hook_descriptor_output) == 0x10991e0 &&
         rsf_ac7_hook_rva(hook_pixel_enqueue_d) == 0xf4c620 && rsf_ac7_hook_rva(hook_create_pixel_shader) == 0xe31e90,
         "hook enum indexes the Rust site table by name");

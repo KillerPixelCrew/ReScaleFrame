@@ -1,18 +1,27 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::render_abi::rsf_backend_log_fn as LogFn;
+use crate::d3d11_output::same_device;
+use crate::d3d11_output_abi::rsf_d3d11_output_is_immediate;
+use crate::graphics_d3d11::rsf_call_native_log;
+use crate::graphics_pass_abi::{
+    RSF_FULLSCREEN_PASS_ABI_VERSION as ABI, RSF_PRESENT_BLIT_ABI_VERSION,
+    rsf_fullscreen_draw as Draw, rsf_fullscreen_setup as Setup,
+    rsf_present_blit_setup as PresentSetup,
+};
 use crate::sr_session::has_capacity;
-use std::ffi::{CStr, c_char, c_void};
-use std::ptr::{self, null_mut};
+use std::ffi::{CStr, c_void};
+use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, TryLockError};
+use windows::core::Interface;
 
 type Handle = *mut c_void;
-type Resources = [Handle; 9];
-const ABI: u32 = 1;
+#[path = "fullscreen_pass/d3d11.rs"]
+mod d3d11;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
+const SHADER_FAILED: i32 = -3;
 const RESOURCE_FAILED: i32 = -4;
 const NO_BACK_BUFFER: i32 = -5;
 const COPY: u32 = 0;
@@ -25,84 +34,16 @@ const POINT: u32 = 0;
 const LINEAR: u32 = 1;
 
 #[repr(C)]
-#[derive(Clone, Copy)]
-struct Setup {
-    struct_size: u32,
-    abi_version: u32,
-    log: LogFn,
-    log_user: Handle,
-}
-
-#[repr(C)]
-struct Draw {
-    struct_size: u32,
-    mode: u32,
-    exposure: f32,
-    width: u32,
-    height: u32,
-}
-
-#[repr(C)]
 struct Constants {
     mode: u32,
     exposure: f32,
     padding: [u32; 2],
 }
 
-#[repr(C)]
-#[derive(Default)]
-struct TargetFacts {
-    width: u32,
-    height: u32,
-    mip: u32,
-}
-
-impl TargetFacts {
-    fn extent(&self) -> Option<[u32; 2]> {
-        if self.width == 0 || self.height == 0 {
-            return None;
-        }
-        Some([
-            self.width.checked_shr(self.mip)?.max(1),
-            self.height.checked_shr(self.mip)?.max(1),
-        ])
-    }
-}
-
-#[repr(C)]
-struct Platform {
-    make: unsafe extern "C" fn(Handle, &Setup, u32, &mut Resources) -> i32,
-    immediate: unsafe extern "C" fn(Handle) -> i32,
-    same_device: unsafe extern "C" fn(Handle, Handle) -> i32,
-    target_facts: unsafe extern "C" fn(Handle, &mut TargetFacts) -> i32,
-    draw: unsafe extern "C" fn(
-        Handle,
-        Handle,
-        Handle,
-        &Resources,
-        u32,
-        u32,
-        u32,
-        u32,
-        *const c_void,
-        u32,
-    ) -> i32,
-    log: unsafe extern "C" fn(LogFn, Handle, *const c_char),
-}
-
-#[repr(C)]
-struct Present {
-    back_buffer: unsafe extern "C" fn(Handle, &mut [u32; 2]) -> Handle,
-    target: unsafe extern "C" fn(Handle, Handle) -> Handle,
-    source: unsafe extern "C" fn(Handle, Handle) -> Handle,
-}
-
 const _: () = {
     assert!(size_of::<Setup>() == 24 && size_of::<Draw>() == 20);
+    assert!(size_of::<Setup>() == size_of::<PresentSetup>() && ABI == RSF_PRESENT_BLIT_ABI_VERSION);
     assert!(size_of::<Constants>() == 16);
-    assert!(size_of::<TargetFacts>() == 12 && std::mem::offset_of!(TargetFacts, mip) == 8);
-    assert!(size_of::<Platform>() == 6 * size_of::<Handle>());
-    assert!(size_of::<Present>() == 3 * size_of::<Handle>());
 };
 
 struct Pass {
@@ -110,28 +51,23 @@ struct Pass {
     device: ComRef,
     filter: AtomicU32,
     drawing: Mutex<()>,
-    platform: &'static Platform,
 }
 
 impl Pass {
     fn draw(&self, context: Handle, target: Handle, source: Handle, parameters: &Draw) -> i32 {
         let device = self.device.as_ptr();
         if parameters.mode > COPY_RGBA
-            || unsafe { (self.platform.immediate)(context) } == 0
+            || unsafe { rsf_d3d11_output_is_immediate(context) } == 0
             || [context, target, source]
                 .into_iter()
-                .any(|child| unsafe { (self.platform.same_device)(device, child) } == 0)
+                .any(|child| !unsafe { same_device(device, child) })
         {
             return INVALID;
         }
         let size = if parameters.width != 0 && parameters.height != 0 {
             [parameters.width, parameters.height]
         } else {
-            let mut facts = TargetFacts::default();
-            if unsafe { (self.platform.target_facts)(target, &mut facts) } == 0 {
-                return INVALID;
-            }
-            let Some(size) = facts.extent() else {
+            let Some(size) = (unsafe { d3d11::target_extent(target) }) else {
                 return INVALID;
             };
             size
@@ -156,32 +92,28 @@ impl Pass {
             mode,
             PREMULTIPLIED | PREMULTIPLIED_SRGB | PREMULTIPLIED_GAMMA22
         );
-        let resources = std::array::from_fn(|i| self.resources[i].as_ptr());
-        let status = unsafe {
-            (self.platform.draw)(
+        if unsafe {
+            d3d11::draw(
                 context,
                 target,
                 source,
-                &resources,
-                size[0],
-                size[1],
-                linear.into(),
-                blend.into(),
-                ptr::from_ref(&constants).cast(),
-                size_of::<Constants>() as u32,
+                &self.resources,
+                size,
+                linear,
+                blend,
+                &constants,
             )
-        };
-        if status != 0 { OK } else { RESOURCE_FAILED }
+        }
+        .is_some()
+        {
+            OK
+        } else {
+            RESOURCE_FAILED
+        }
     }
 }
 
-unsafe fn create(
-    device: Handle,
-    setup: *const Setup,
-    out: *mut *mut Pass,
-    platform: &'static Platform,
-    filter: u32,
-) -> i32 {
+unsafe fn create(device: Handle, setup: *const Setup, out: *mut *mut Pass, filter: u32) -> i32 {
     if device.is_null() || out.is_null() || !unsafe { has_capacity(setup) } {
         return INVALID;
     }
@@ -190,48 +122,22 @@ unsafe fn create(
         return ABI_MISMATCH;
     }
     unsafe { out.write(null_mut()) };
-    let mut raw = [null_mut(); 9];
-    let status = unsafe { (platform.make)(device, setup, size_of::<Constants>() as u32, &mut raw) };
-    let resources = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
-    if status != OK {
-        return status;
-    }
-    let [
-        Some(vs),
-        Some(ps),
-        Some(point),
-        Some(linear),
-        Some(opaque),
-        Some(premultiplied),
-        Some(depth),
-        Some(raster),
-        Some(constants),
-    ] = resources
-    else {
-        return RESOURCE_FAILED;
+    let resources = match unsafe { d3d11::make(device, setup) } {
+        Ok(resources) => resources,
+        Err(status) => return status,
     };
     let pass = crate::allocate_handle(Pass {
-        resources: [
-            vs,
-            ps,
-            point,
-            linear,
-            opaque,
-            premultiplied,
-            depth,
-            raster,
-            constants,
-        ],
+        resources,
         device: unsafe { ComRef::retain(device) },
         filter: AtomicU32::new(filter),
         drawing: Mutex::new(()),
-        platform,
     });
     if pass.is_null() {
         return RESOURCE_FAILED;
     }
     if setup.log.is_some() {
-        let say = |text: &CStr| unsafe { (platform.log)(setup.log, setup.log_user, text.as_ptr()) };
+        let say =
+            |text: &CStr| unsafe { rsf_call_native_log(setup.log, setup.log_user, text.as_ptr()) };
         say(c"fullscreen pass ready");
         if filter == LINEAR {
             say(c"present blit ready");
@@ -242,27 +148,25 @@ unsafe fn create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fullscreen_create(
+unsafe extern "C" fn rsf_fullscreen_pass_create(
     device: Handle,
     setup: *const Setup,
     out: *mut *mut Pass,
-    platform: &'static Platform,
 ) -> i32 {
-    unsafe { create(device, setup, out, platform, POINT) }
+    unsafe { create(device, setup, out, POINT) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_present_blit_create(
+unsafe extern "C" fn rsf_present_blit_create(
     device: Handle,
-    setup: *const Setup,
+    setup: *const PresentSetup,
     out: *mut *mut Pass,
-    platform: &'static Platform,
 ) -> i32 {
-    unsafe { create(device, setup, out, platform, LINEAR) }
+    unsafe { create(device, setup.cast::<Setup>(), out, LINEAR) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fullscreen_draw(
+unsafe extern "C" fn rsf_fullscreen_pass_draw(
     pass: *const Pass,
     context: Handle,
     target: Handle,
@@ -283,13 +187,12 @@ unsafe extern "C" fn rsf_core_fullscreen_draw(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_present_blit_draw(
+unsafe extern "C" fn rsf_present_blit_draw(
     pass: *const Pass,
     context: Handle,
     swapchain: Handle,
     source: Handle,
     tonemap: u32,
-    platform: &Present,
 ) -> i32 {
     let Some(pass) = (unsafe { pass.as_ref() }) else {
         return INVALID;
@@ -297,23 +200,17 @@ unsafe extern "C" fn rsf_core_present_blit_draw(
     if context.is_null() || swapchain.is_null() || source.is_null() {
         return INVALID;
     }
-    let mut size = [0; 2];
-    let back_buffer = unsafe { ComRef::from_owned((platform.back_buffer)(swapchain, &mut size)) };
-    let Some(back_buffer) = back_buffer else {
+    let Some((back_buffer, size)) = (unsafe { d3d11::back_buffer(swapchain) }) else {
         return NO_BACK_BUFFER;
     };
-    let device = pass.device.as_ptr();
-    let target = unsafe { ComRef::from_owned((platform.target)(device, back_buffer.as_ptr())) };
-    let Some(target) = target else {
-        return RESOURCE_FAILED;
-    };
-    let view = unsafe { ComRef::from_owned((platform.source)(device, source)) };
-    let Some(view) = view else {
+    let Some((target, view)) =
+        (unsafe { d3d11::present_views(pass.device.as_ptr(), &back_buffer, source) })
+    else {
         return RESOURCE_FAILED;
     };
     let status = pass.draw(
         context,
-        target.as_ptr(),
+        target.as_raw(),
         view.as_ptr(),
         &Draw {
             struct_size: size_of::<Draw>() as u32,
@@ -330,15 +227,20 @@ unsafe extern "C" fn rsf_core_present_blit_draw(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fullscreen_filter(pass: *const Pass, filter: u32) {
+unsafe extern "C" fn rsf_fullscreen_pass_set_filter(pass: *const Pass, filter: u32) {
     if let Some(pass) = unsafe { pass.as_ref() } {
         pass.filter.store(filter, Ordering::Relaxed);
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fullscreen_destroy(pass: *mut Pass) {
+unsafe extern "C" fn rsf_fullscreen_pass_destroy(pass: *mut Pass) {
     if !pass.is_null() {
         drop(unsafe { Box::from_raw(pass) });
     }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_present_blit_destroy(pass: *mut Pass) {
+    unsafe { rsf_fullscreen_pass_destroy(pass) };
 }

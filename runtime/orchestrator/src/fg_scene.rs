@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::sr_session::has_capacity;
 use rsf_game_sys::{
     RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_NO_FG,
     RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RESET, rsf_game_render_pass as Pass,
@@ -86,13 +87,9 @@ pub(super) fn with_scene<R>(pass: &Pass, call: impl FnOnce() -> R) -> R {
     call()
 }
 
-unsafe fn full_pass(pass: *const Pass) -> bool {
-    !pass.is_null() && unsafe { pass.cast::<u32>().read() } >= PASS_SIZE
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_bind_source(identity: *const Pass) {
-    let source = if unsafe { full_pass(identity) } {
+    let source = if unsafe { has_capacity(identity) } {
         Source::from_pass(unsafe { &*identity })
     } else {
         None
@@ -102,7 +99,7 @@ unsafe extern "C" fn rsf_native_fg_bind_source(identity: *const Pass) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_fg_scene_swap(in_out: *mut Pass) -> i32 {
-    if !unsafe { full_pass(in_out) } {
+    if !unsafe { has_capacity(in_out) } {
         return 0;
     }
     let current = Pass {
@@ -127,7 +124,7 @@ pub(crate) unsafe fn set_scene(pass: *const Pass, refuse_held_inputs: impl FnOnc
         SCENE.set(EMPTY);
         return;
     }
-    if !unsafe { full_pass(pass) } {
+    if !unsafe { has_capacity(pass) } {
         return;
     }
     let pass = unsafe { &*pass };

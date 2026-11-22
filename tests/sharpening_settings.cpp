@@ -192,7 +192,8 @@ int main() {
         for (uint32_t backend=0;backend<=6;++backend) {
             ffxDispatchDescUpscale dispatch{};
             dispatch.enableSharpening=true; dispatch.sharpness=1;
-            rsf::ffx_sharpening(dispatch,rsf::sharpening_settings::vendor_sharpness(options,backend));
+            rsf_ffx_sharpening(rsf::sharpening_settings::vendor_sharpness(options,backend),
+                &dispatch.enableSharpening, &dispatch.sharpness);
             const bool native=mode==4 && backend>=2 && backend<=4;
             check(dispatch.enableSharpening==native && dispatch.sharpness==(native?0.73f:0),"FFX descriptor fields per mode/backend");
         }

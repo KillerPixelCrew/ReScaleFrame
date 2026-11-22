@@ -133,6 +133,6 @@ int main(int argc, char** argv)
         passed &= std::isfinite(red) && std::fabs(red - 0.25f) < 0.05f;
         context->Unmap(staging.Get(), 0);
     }
-    rsf_sr_bridge_destroy(bridge);
+    passed &= rsf_sr_bridge_close(bridge) == RSF_BACKEND_OK;
     return passed ? 0 : 1;
 }

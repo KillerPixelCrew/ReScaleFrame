@@ -719,11 +719,14 @@ pub struct rsf_generation_provider {
             frame_id: u64,
         ) -> rsf_backend_result,
     >,
+    pub destroy_checked: ::core::option::Option<
+        unsafe extern "C" fn(session: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_generation_provider"]
-        [::core::mem::size_of::<rsf_generation_provider>() - 88usize];
+        [::core::mem::size_of::<rsf_generation_provider>() - 96usize];
     ["Alignment of rsf_generation_provider"]
         [::core::mem::align_of::<rsf_generation_provider>() - 8usize];
     ["Offset of field: rsf_generation_provider::struct_size"]
@@ -748,6 +751,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_generation_provider, destroy) - 72usize];
     ["Offset of field: rsf_generation_provider::abort_frame"]
         [::core::mem::offset_of!(rsf_generation_provider, abort_frame) - 80usize];
+    ["Offset of field: rsf_generation_provider::destroy_checked"]
+        [::core::mem::offset_of!(rsf_generation_provider, destroy_checked) - 88usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]

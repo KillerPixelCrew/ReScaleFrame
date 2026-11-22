@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! Shared first-party Vulkan readback owner behind `rsf::FrameCaptureVk`.
 //!
-//! Rust owns frame selection, capture records, completion proof, pending
-//! allocation lifetime, refusal and abandon handling, and publishing. The C++
-//! façade supplies narrow leaves for Vulkan buffer, memory, event and command
-//! calls and the existing input dump C ABI.
+//! Rust owns frame selection, capture records, Vulkan dispatch, readback
+//! lifetime, completion proof and publication.
 use crate::capture_names::CaptureName;
+use crate::capture_pixels::Pixels;
+#[cfg(windows)]
+mod native;
 use crate::vulkan_sr_abi::{rsf_srvk_frame as Frame, rsf_srvk_image as Image};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -44,17 +44,6 @@ pub struct Allocation {
 }
 
 #[repr(C)]
-pub struct Pixels {
-    pub struct_size: u32,
-    pub width: u32,
-    pub height: u32,
-    pub format: u32,
-    pub row_pitch: u32,
-    pub data_size: u64,
-    pub data: *const c_void,
-}
-
-#[repr(C)]
 pub struct Platform {
     /// Creates the buffer, host-coherent memory and optional event. Partial
     /// handles stay in `out` on failure; the owner releases them later.
@@ -70,11 +59,10 @@ pub struct Platform {
     pub reserve: unsafe extern "C" fn(*const Record, *const c_char, *const c_char, u32, f32) -> u64,
     pub failed: unsafe extern "C" fn(u64, *const c_char, i32),
     pub pixels: unsafe extern "C" fn(u64, *const c_char, *const Pixels, u32, u32) -> i32,
-    pub gpu_ready: unsafe extern "C" fn(u64, *const c_char, u32, Handle) -> i32,
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 12 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 11 * size_of::<Handle>());
     assert!(size_of::<Allocation>() == 24);
     assert!(size_of::<Pixels>() == 40);
 };
@@ -235,6 +223,8 @@ struct State {
 pub struct Owner {
     command_completion: bool,
     native: usize,
+    #[cfg(windows)]
+    dispatch: Option<Box<native::Dispatch>>,
     ops: &'static Platform,
     state: Mutex<State>,
 }
@@ -254,6 +244,8 @@ impl Owner {
         Self {
             command_completion,
             native: native as usize,
+            #[cfg(windows)]
+            dispatch: None,
             ops,
             state: Mutex::new(State {
                 legacy,
@@ -271,6 +263,10 @@ impl Owner {
     }
 
     fn native(&self) -> Handle {
+        #[cfg(windows)]
+        if let Some(dispatch) = &self.dispatch {
+            return std::ptr::from_ref(dispatch.as_ref()).cast_mut().cast();
+        }
         self.native as Handle
     }
 
@@ -287,7 +283,7 @@ impl Owner {
         }
     }
 
-    // Shared-submission owners poll the shared completion proof on every query.
+    // Group-based owners can publish after their own fence is certified.
     fn wants(&self, state: &mut State, frame: u64) -> bool {
         if !self.command_completion {
             let _ = self.flush(state, true, 0);
@@ -316,6 +312,7 @@ impl Owner {
         if state.device == 0
             || commands == 0
             || image.device as usize != state.device
+            || image.image == 0
             || image.width == 0
             || image.height == 0
         {
@@ -381,7 +378,7 @@ impl Owner {
                 self.native(),
                 image,
                 value.bytes,
-                u32::from(self.command_completion),
+                u32::from(group == 0),
                 &mut value.allocation,
             )
         };
@@ -453,16 +450,20 @@ impl Owner {
         let State {
             legacy,
             provider,
-            device,
+            device: _,
             pending,
         } = state;
-        let device = *device;
         let value = &mut pending[index];
         if completed != 0 && value.commands != completed {
             return Step::Keep;
         }
-        if ready_only && self.command_completion {
+        if ready_only && (self.command_completion || !value.group_complete) && value.recorded {
             return Step::Keep;
+        }
+        if !value.recorded && !value.discarded {
+            *okay = false;
+            self.fail(value, STAGING_FAILED);
+            return Step::Retire;
         }
         if value.group != 0 && !value.group_complete {
             if ready_only {
@@ -474,43 +475,15 @@ impl Owner {
             }
             return Step::Retire;
         }
-        if ready_only && value.legacy && value.ticket == 0 {
-            return Step::Keep;
-        }
-        if !value.recorded {
-            *okay = false;
-            self.fail(value, STAGING_FAILED);
-            return Step::Retire;
-        }
-        // A drain makes freeing safe, but cannot prove an abandoned recording ran.
-        if self.command_completion
+        // An exact group fence proves both execution and retirement. An
+        // ungrouped copy carries its own execution event. A drain alone
+        // cannot establish that the command buffer was submitted.
+        if !value.group_complete
             && unsafe { (self.ops.event_set)(self.native(), value.allocation.event) } == 0
         {
             *okay = false;
             self.fail(value, MAP_FAILED);
             return Step::Retire;
-        }
-        if value.ticket != 0
-            && !self.command_completion
-            && !value.group_complete
-            && unsafe {
-                (self.ops.gpu_ready)(
-                    value.ticket,
-                    value.name.as_ptr(),
-                    VULKAN_API,
-                    device as Handle,
-                )
-            } == 0
-        {
-            if ready_only {
-                return Step::Keep;
-            }
-            *okay = false;
-            self.fail(value, MAP_FAILED);
-            value.ticket = 0;
-            if !value.legacy {
-                return Step::Retire;
-            }
         }
         let mut data: *mut c_void = std::ptr::null_mut();
         if unsafe {
@@ -549,10 +522,6 @@ impl Owner {
             } != 0;
             value.ticket = 0;
         }
-        if ready_only && value.legacy {
-            unsafe { (self.ops.unmap)(self.native(), value.allocation.memory) };
-            return Step::Keep;
-        }
         if value.legacy {
             let bytes =
                 unsafe { std::slice::from_raw_parts(data.cast::<u8>(), value.bytes as usize) };
@@ -577,7 +546,8 @@ struct Provider {
 }
 
 /// C++ iostream `std::setprecision(9)` default float formatting (`%.9g`).
-pub(crate) fn general(value: f64) -> String {
+#[cfg(test)]
+fn general(value: f64) -> String {
     general_precision(value, 9)
 }
 
@@ -621,20 +591,8 @@ pub(crate) fn general_precision(value: f64, precision: i32) -> String {
 }
 
 fn legacy_json(value: &Readback, drained_command: bool, provider: &Provider) -> String {
-    let camera = &value.identity.camera;
-    let identity = &value.identity;
-    let f = |v: f32| general(f64::from(v));
-    let mut json = String::new();
-    let _ = write!(
-        json,
-        "{{\n\"role\":\"{}\",\n\"frame\":{},\n\"session\":{},\n\"view\":{},\n\"generation\":{},\n\"flags\":{},\n\"frame_time_ms\":{},\n\"width\":{},\n\"height\":{},\n\"row_pitch\":{},\n\"offset\":0,\n\"vk_format\":{},\n\"bytes\":{},\n\"sdk_dispatch_reset\":{},\n\"completion\":\"{}\",\n\"{}\":{},\n\"provider_version_id\":{},\n\"render_size\":[{},{}],\n\"output_size\":[{},{}],\n\"jitter_pixels\":[{},{}],\n\"matrix_convention\":\"row_vectors\"",
-        value.role,
-        identity.frame_id,
-        identity.session_id,
-        identity.view_id,
-        identity.resource_generation,
-        identity.flags,
-        f(identity.frame_time_ms),
+    let fields = format!(
+        ",\n\"width\":{},\n\"height\":{},\n\"row_pitch\":{},\n\"offset\":0,\n\"vk_format\":{},\n\"bytes\":{},\n\"sdk_dispatch_reset\":{},\n\"completion\":\"{}\",\n\"{}\":{},\n\"provider_version_id\":{}",
         value.width,
         value.height,
         value.bytes / u64::from(value.height),
@@ -653,25 +611,8 @@ fn legacy_json(value: &Readback, drained_command: bool, provider: &Provider) -> 
         },
         provider.backend,
         provider.version,
-        camera.render_width,
-        camera.render_height,
-        camera.output_width,
-        camera.output_height,
-        f(camera.jitter_pixels[0]),
-        f(camera.jitter_pixels[1]),
     );
-    for (key, values) in [
-        ("view_to_clip", &camera.view_to_clip),
-        ("clip_to_view", &camera.clip_to_view),
-        ("view_to_world", &camera.view_to_world),
-        ("world_to_view", &camera.world_to_view),
-        ("clip_to_previous_clip", &camera.clip_to_previous_clip),
-    ] {
-        let joined: Vec<String> = values.iter().map(|&v| f(v)).collect();
-        let _ = write!(json, ",\n\"{key}\":[{}]", joined.join(","));
-    }
-    json.push_str("\n}\n");
-    json
+    crate::capture_metadata::legacy_json(&value.identity, &value.role, &fields)
 }
 
 fn publish_legacy(
@@ -684,17 +625,15 @@ fn publish_legacy(
     let Some(directory) = directory else {
         return false;
     };
-    let stem = format!(
-        "{}-{}-{}-0",
-        value.identity.session_id, value.identity.frame_id, value.role
-    );
-    let raw = fs::write(directory.join(format!("{stem}.raw")), bytes).is_ok();
-    let json = fs::write(
-        directory.join(format!("{stem}.json")),
-        legacy_json(value, drained_command, provider),
+    crate::capture_metadata::write_legacy(
+        directory,
+        &value.identity,
+        &value.role,
+        0,
+        bytes,
+        &legacy_json(value, drained_command, provider),
     )
-    .is_ok();
-    raw && json
+    .is_ok()
 }
 
 impl Drop for Owner {
@@ -712,46 +651,81 @@ unsafe fn owner<'a>(owner: *const Owner) -> Option<&'a Owner> {
     unsafe { owner.as_ref() }
 }
 
+#[cfg(windows)]
+impl Owner {
+    pub(super) fn new_native(command_completion: bool) -> Self {
+        Self::new(
+            command_completion,
+            std::ptr::null_mut(),
+            &native::PLATFORM,
+            Legacy::from_environment(),
+        )
+    }
+
+    pub(super) fn initialize(
+        &mut self,
+        device: Handle,
+        proc: crate::vulkan_sr_abi::rsf_vk_get_proc,
+        memory: &ash::vk::PhysicalDeviceMemoryProperties,
+    ) -> bool {
+        if !self.lock().pending.is_empty() {
+            return false;
+        }
+        self.dispatch = native::Dispatch::load(device, proc, *memory).map(Box::new);
+        let mut state = self.lock();
+        state.device = if self.dispatch.is_some() {
+            device as usize
+        } else {
+            0
+        };
+        state.device != 0 || !state.legacy.enabled()
+    }
+}
+
+#[cfg(windows)]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_create(
-    command_completion: u32,
-    native: Handle,
-    ops: &'static Platform,
-) -> *mut Owner {
-    crate::allocate_handle(Owner::new(
-        command_completion != 0,
-        native,
-        ops,
-        Legacy::from_environment(),
-    ))
+extern "C" fn rsf_core_capture_vk_create(command_completion: u32) -> *mut Owner {
+    crate::allocate_handle(Owner::new_native(command_completion != 0))
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_initialize(
+    owner: *mut Owner,
+    device: Handle,
+    proc: crate::vulkan_sr_abi::rsf_vk_get_proc,
+    memory: *const ash::vk::PhysicalDeviceMemoryProperties,
+) -> i32 {
+    i32::from(
+        unsafe { owner.as_mut().zip(memory.as_ref()) }
+            .is_some_and(|(owner, memory)| owner.initialize(device, proc, memory)),
+    )
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_destroy(owner: *mut Owner) {
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_destroy(owner: *mut Owner) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_enabled(owner: *const Owner) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_enabled(owner: *const Owner) -> i32 {
     i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.lock().legacy.enabled()))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_bind(owner: *const Owner, device: Handle) {
-    if let Some(owner) = unsafe { self::owner(owner) } {
-        owner.lock().device = device as usize;
-    }
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_ready(owner: *const Owner) -> i32 {
+    i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.lock().device != 0))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_pending(owner: *const Owner) -> u64 {
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_pending(owner: *const Owner) -> u64 {
     unsafe { self::owner(owner) }.map_or(0, |owner| owner.lock().pending.len() as u64)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_provider(
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_provider(
     owner: *const Owner,
     version: u64,
     backend: u32,
@@ -767,7 +741,7 @@ unsafe extern "C" fn rsf_core_capture_vk_provider(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_wants(owner: *const Owner, frame: u64) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_wants(owner: *const Owner, frame: u64) -> i32 {
     unsafe { self::owner(owner) }.map_or(0, |owner| {
         let mut state = owner.lock();
         i32::from(owner.wants(&mut state, frame))
@@ -776,7 +750,7 @@ unsafe extern "C" fn rsf_core_capture_vk_wants(owner: *const Owner, frame: u64) 
 
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn rsf_core_capture_vk_record(
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_record(
     owner: *const Owner,
     commands: Handle,
     image: *const Image,
@@ -812,23 +786,25 @@ unsafe extern "C" fn rsf_core_capture_vk_record(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_complete_group(owner: *const Owner, group: u64) {
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_complete_group(
+    owner: *const Owner,
+    group: u64,
+) {
     if let Some(owner) = unsafe { self::owner(owner) } {
         owner.complete_group(group);
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_discard_group(owner: *const Owner, group: u64) {
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_discard_group(owner: *const Owner, group: u64) {
     if let Some(owner) = unsafe { self::owner(owner) } {
         owner.discard_group(group);
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_retire(owner: *const Owner, commands: Handle) {
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_retire(owner: *const Owner, commands: Handle) {
     if let Some(owner) = unsafe { self::owner(owner) }
-        && owner.command_completion
         && !commands.is_null()
     {
         let mut state = owner.lock();
@@ -837,7 +813,18 @@ unsafe extern "C" fn rsf_core_capture_vk_retire(owner: *const Owner, commands: H
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture_vk_flush(
+unsafe extern "C" fn rsf_core_capture_vk_discard_all(owner: *const Owner) {
+    if let Some(owner) = unsafe { self::owner(owner) } {
+        let pending = std::mem::take(&mut owner.lock().pending);
+        for value in &pending {
+            owner.fail(value, STAGING_FAILED);
+            owner.release(value);
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_core_capture_vk_flush(
     owner: *const Owner,
     ready_only: u32,
     commands: Handle,

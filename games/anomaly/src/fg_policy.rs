@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::fg_policy_abi::*;
-use std::sync::Mutex;
 
 type Decision = rsf_anomaly_fg_decision;
 type Counters = rsf_anomaly_fg_counters;
-type History = Mutex<Policy>;
 
 const GAMEPLAY: u32 = RSF_ANOMALY_GAMEPLAY_SCREEN as u32;
 const HELD: u32 = RSF_ANOMALY_HELD_SCREEN as u32;
@@ -161,7 +159,7 @@ impl Policy {
             self.frame.level = true;
             self.counts.level_frames += 1;
             if decision.tag != 0 && decision.screen == GAMEPLAY {
-                self.counts.tagged += 1;
+                self.counts.eligible_at_ui_boundary += 1;
             }
         }
         decision
@@ -178,6 +176,7 @@ impl Policy {
         self.frame.presented = true;
     }
 
+    #[cfg(windows)]
     pub(crate) fn current(&self) -> Decision {
         self.frame.decision
     }
@@ -187,71 +186,5 @@ impl Policy {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_history_create(scope_hold: u32) -> *mut History {
-    Box::into_raw(Box::new(Mutex::new(Policy::new(scope_hold))))
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_fg_history_destroy(history: *mut History) {
-    drop(unsafe { Box::from_raw(history) });
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_history_reset(history: &History, scope_hold: u32) {
-    *history.lock().unwrap() = Policy::new(scope_hold);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_device_reset(history: &History) {
-    history.lock().unwrap().device_reset();
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_begin(
-    history: &History,
-    engine_frame: u32,
-    width: u32,
-    height: u32,
-    cut: u32,
-) -> Decision {
-    history
-        .lock()
-        .unwrap()
-        .begin(engine_frame, [width, height], cut != 0)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_scope(history: &History) {
-    history.lock().unwrap().scope();
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_ui_boundary(history: &History) -> Decision {
-    history.lock().unwrap().ui_boundary()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_inputs(history: &History, ready: u32) -> Decision {
-    history.lock().unwrap().inputs(ready != 0)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_presented(history: &History) {
-    history.lock().unwrap().presented();
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_end(history: &History) -> Decision {
-    history.lock().unwrap().end()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_current(history: &History) -> Decision {
-    history.lock().unwrap().current()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_count(history: &History, out: &mut Counters) {
-    *out = history.lock().unwrap().counters();
-}
+#[cfg(test)]
+mod tests;

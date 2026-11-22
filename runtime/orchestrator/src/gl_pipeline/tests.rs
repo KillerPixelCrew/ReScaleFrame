@@ -72,8 +72,12 @@ struct World {
     failing_backends: HashSet<u32>,
     created_backends: Vec<u32>,
     fail_texture: Option<usize>,
+    fail_sharpening: bool,
     textures_created: usize,
     resize_refused: bool,
+    chain_resize_refused: bool,
+    destroy_refused: bool,
+    chain_unowned: bool,
     close_refused: bool,
     present_backend: u32,
     cpu_frames: HashMap<u64, bool>,
@@ -233,6 +237,9 @@ unsafe extern "C" fn window_create(parent: Handle) -> Handle {
 }
 unsafe extern "C" fn window_destroy(window: Handle) -> c_int {
     event(format!("destroy {}", name(window)));
+    if world(|world| world.destroy_refused) {
+        return 0;
+    }
     retire(window);
     1
 }
@@ -265,7 +272,11 @@ unsafe extern "C" fn chain_create(
 unsafe extern "C" fn chain_associate(_: Handle, _: Handle) {}
 unsafe extern "C" fn chain_resize(_: Handle, _: u32, width: u32, height: u32, _: u32) -> i32 {
     event(format!("chain {width}x{height}"));
-    OK
+    if world(|world| world.chain_resize_refused) {
+        FEATURE_FAILED
+    } else {
+        OK
+    }
 }
 unsafe extern "C" fn chain_back_buffer(_: Handle) -> Handle {
     fake_com("back buffer").cast()
@@ -329,7 +340,11 @@ unsafe extern "C" fn sr_evaluate(sr: Handle, _: Handle, pass: *const Pass, slot:
 unsafe extern "C" fn sr_set_sharpening(sr: Handle, options: *const rsf_sharpening_options) -> i32 {
     assert!(sharpening_policy::valid(unsafe { &*options }));
     event(format!("sharpen {}", name(sr)));
-    OK
+    if world(|world| world.fail_sharpening) {
+        FEATURE_FAILED
+    } else {
+        OK
+    }
 }
 unsafe extern "C" fn sr_destroy(sr: Handle) {
     event(format!("destroy {}", name(sr)));
@@ -362,10 +377,13 @@ unsafe extern "C" fn present_host() -> Handle {
     HOST
 }
 unsafe extern "C" fn present_is_owner(chain: Handle) -> c_int {
-    c_int::from(!chain.is_null())
+    c_int::from(!chain.is_null() && !world(|world| world.chain_unowned))
 }
 unsafe extern "C" fn present_backend() -> u32 {
     world(|world| world.present_backend)
+}
+unsafe extern "C" fn present_backend_choices() -> u32 {
+    (1 << 1) | (1 << 3) | (1 << 5)
 }
 unsafe extern "C" fn present_request(backend: u32) -> i32 {
     event(format!("request fg {backend}"));
@@ -413,6 +431,17 @@ unsafe extern "C" fn depth_domains_requested(pass: *const Pass) -> u32 {
     };
     u32::from(bytes.iter().any(|byte| *byte != 0))
 }
+unsafe extern "C" fn overlay_configure(_: *const rsf_overlay_service_setup) -> i32 {
+    NOT_READY
+}
+unsafe extern "C" fn overlay_present(
+    _: Handle, _: Handle, _: Handle, _: Handle, _: Handle, _: Log, _: Handle,
+) -> i32 {
+    NOT_READY
+}
+unsafe extern "C" fn overlay_notify(_: u32) -> i32 {
+    NOT_READY
+}
 
 static PLATFORM: Platform = Platform {
     gl_open,
@@ -453,6 +482,7 @@ static PLATFORM: Platform = Platform {
     present_host,
     present_is_owner,
     present_backend,
+    present_backend_choices,
     present_request,
     present_switch_result,
     present_abort,
@@ -464,6 +494,9 @@ static PLATFORM: Platform = Platform {
     dlss_preset_valid,
     fg_default_backend,
     depth_domains_requested,
+    overlay_configure,
+    overlay_present,
+    overlay_notify,
 };
 
 unsafe extern "C" fn record_log(_: Handle, message: *const c_char) {
@@ -473,8 +506,8 @@ unsafe extern "C" fn record_log(_: Handle, message: *const c_char) {
     world(|world| world.logs.push(text));
 }
 
-fn open_pipeline() -> *mut Pipeline {
-    let setup = rsf_gl_pipeline_setup {
+fn setup() -> rsf_gl_pipeline_setup {
+    rsf_gl_pipeline_setup {
         struct_size: size_of::<rsf_gl_pipeline_setup>() as u32,
         hwnd: PARENT,
         runtime_directory_utf8: c"C:/RSF".as_ptr(),
@@ -483,7 +516,11 @@ fn open_pipeline() -> *mut Pipeline {
         engine_version_utf8: c"1.0".as_ptr(),
         project_id_utf8: c"project".as_ptr(),
         presentation_hwnd: ptr::null_mut(),
-    };
+    }
+}
+
+fn open_pipeline() -> *mut Pipeline {
+    let setup = setup();
     let mut pipeline = ptr::null_mut();
     assert_eq!(
         unsafe { rsf_core_gl_pipeline_open(&setup, &mut pipeline, &PLATFORM) },
@@ -536,7 +573,44 @@ fn pass(frame: u64) -> Pass {
     let mut pass: Pass = unsafe { std::mem::zeroed() };
     pass.struct_size = size_of::<Pass>() as u32;
     pass.source_frame_id = frame;
+    pass.view_key = 17;
     pass
+}
+
+#[test]
+fn refused_sharpening_keeps_the_previous_surfaces_and_window() {
+    let pipeline = open_pipeline();
+    let options = options(SR_DLSS, 1);
+    let configure = |w, h| unsafe { rsf_gl_pipeline_configure(pipeline, &options, w, h) };
+    assert_eq!(configure(640, 480), OK);
+    let previous = surfaces(pipeline);
+    events();
+    world(|world| world.fail_sharpening = true);
+    assert_eq!(configure(1280, 720), FEATURE_FAILED);
+    assert!(!events().iter().any(|call| call.starts_with("window ")));
+    assert_eq!(surfaces(pipeline).composed, previous.composed);
+    assert_eq!(status(pipeline).sr_result, FEATURE_FAILED);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
+}
+
+#[test]
+fn refused_chain_resize_restores_the_published_window_extent() {
+    let pipeline = open_pipeline();
+    let options = options(SR_DLSS, 1);
+    let configure = |w, h| unsafe { rsf_gl_pipeline_configure(pipeline, &options, w, h) };
+    assert_eq!(configure(640, 480), OK);
+    let previous = surfaces(pipeline);
+    events();
+    world(|world| world.chain_resize_refused = true);
+    assert_eq!(configure(1280, 720), FEATURE_FAILED);
+    let calls = events();
+    assert!(calls.windows(3).any(|calls| calls == [
+        "window 1280x720", "chain 1280x720", "window 640x480"
+    ]));
+    assert_eq!(surfaces(pipeline).composed, previous.composed);
+    assert_eq!(configure(640, 480), OK);
+    assert_eq!(status(pipeline).sr_result, OK);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
 }
 
 #[test]
@@ -552,9 +626,9 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
         [
             "request fg 1",
             "drain",
+            "sharpen sr1.2",
             "window 1920x1080",
-            "chain 1920x1080",
-            "sharpen sr1.2"
+            "chain 1920x1080"
         ]
     );
     let published = surfaces(pipeline);
@@ -614,7 +688,7 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
     let failed = status(pipeline);
     assert_eq!(
         (failed.requested_sr, failed.effective_sr, failed.sr_result),
-        (SR_FSR3, SR_DLSS, OK)
+        (SR_FSR3, SR_DLSS, FEATURE_FAILED)
     );
 
     // The same request is retried rather than treated as already applied.
@@ -623,14 +697,12 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
         OK
     );
     let switched = events();
-    assert_eq!(switched[0], "drain");
-    assert_eq!(switched[1], "destroy sr1.2");
+    assert_eq!(switched[..3], ["drain", "sharpen sr3.12", "destroy sr1.2"]);
     assert!(
-        switched[2..8]
+        switched[3..9]
             .iter()
             .all(|line| line.starts_with("destroy texture"))
     );
-    assert_eq!(switched.last().map(String::as_str), Some("sharpen sr3.12"));
     assert_eq!(status(pipeline).effective_sr, SR_FSR3);
     assert_eq!((live("sr1."), live("sr3."), live("texture")), (0, 1, 6));
 
@@ -646,13 +718,13 @@ fn rejected_switch_keeps_published_session_and_a_retry_rebuilds() {
 #[test]
 fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
     let pipeline = open_pipeline();
-    world(|world| world.failing_backends = [SR_DLSS, SR_FSR4].into());
+    world(|world| world.failing_backends = [SR_DLSS, SR_FSR3].into());
     assert_eq!(
         unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_AUTO, 1), 1280, 720) },
         OK
     );
     let created = world(|world| std::mem::take(&mut world.created_backends));
-    assert_eq!(created, [SR_DLSS, SR_FSR4, SR_XESS]);
+    assert_eq!(created, [SR_DLSS, SR_FSR3, SR_XESS]);
     let selected = status(pipeline);
     assert_eq!(
         (
@@ -663,7 +735,7 @@ fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
         (SR_AUTO, SR_XESS, OK)
     );
 
-    world(|world| world.failing_backends = AUTO_ORDER.into());
+    world(|world| world.failing_backends = [SR_DLSS, SR_FSR3, SR_XESS].into());
     assert_eq!(
         unsafe { rsf_gl_pipeline_configure(pipeline, &options(SR_AUTO, 2), 1280, 720) },
         OK
@@ -671,7 +743,7 @@ fn automatic_selection_keeps_first_created_backend_then_falls_back_to_off() {
     let created = world(|world| std::mem::take(&mut world.created_backends));
     assert_eq!(
         created,
-        [SR_DLSS, SR_FSR4, SR_XESS, SR_FSR3, SR_FSR2, SR_NONE]
+        [SR_DLSS, SR_FSR3, SR_XESS, SR_NONE]
     );
     let fallback = status(pipeline);
     assert_eq!(
@@ -725,6 +797,8 @@ fn evaluation_and_presentation_carry_session_frame_identity() {
     assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, 0, 0) }, INVALID);
     for frame in [9, 10] {
         assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, frame, 1) }, OK);
+        let window = world(|world| world.window_pass).unwrap();
+        assert_eq!(window.view_key, if frame == 9 { 17 } else { 0 });
     }
     let presented = events();
     assert_eq!(
@@ -753,7 +827,7 @@ fn evaluation_and_presentation_carry_session_frame_identity() {
     let window = world(|world| world.window_pass).unwrap();
     assert_eq!(
         (window.role, window.source_frame_id, window.view_key),
-        (RSF_GAME_RENDER_WINDOW, 10, 1)
+        (RSF_GAME_RENDER_WINDOW, 10, 0)
     );
     assert_eq!(window.swapchain as usize, world(|world| world.chain));
     assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
@@ -808,6 +882,47 @@ fn surfaces_template() -> rsf_gl_pipeline_surfaces {
         struct_size: size_of::<rsf_gl_pipeline_surfaces>() as u32,
         ..Default::default()
     }
+}
+
+#[test]
+fn failed_chain_open_returns_a_cleanup_handle_if_retirement_refuses() {
+    world(|world| {
+        world.chain_unowned = true;
+        world.close_refused = true;
+    });
+    let mut pipeline = ptr::null_mut();
+    assert_eq!(
+        unsafe { rsf_core_gl_pipeline_open(&setup(), &mut pipeline, &PLATFORM) },
+        INIT_FAILED
+    );
+    assert!(!pipeline.is_null());
+    assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, 1, 0) }, NOT_READY);
+    assert_eq!(unsafe { rsf_gl_pipeline_input(pipeline, 1, 1, 0) }, NOT_READY);
+    events();
+    world(|world| world.close_refused = false);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
+    assert_eq!(
+        events(),
+        ["gl_close", "latency end", "dump cancel", "destroy window1"]
+    );
+    world(|world| world.chain_unowned = false);
+    assert_eq!(
+        unsafe { rsf_core_gl_pipeline_open(&setup(), &mut pipeline, &PLATFORM) },
+        OK
+    );
+    assert_eq!(events(), ["gl_open"]);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
+}
+
+#[test]
+fn refused_window_destroy_retries_only_the_window() {
+    let pipeline = open_pipeline();
+    world(|world| world.destroy_refused = true);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, FEATURE_FAILED);
+    assert!(events().iter().any(|event| event == "gl_close"));
+    world(|world| world.destroy_refused = false);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
+    assert_eq!(events(), ["destroy window1"]);
 }
 
 #[test]

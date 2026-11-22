@@ -10,8 +10,16 @@
 extern "C" {
 #endif
 
-/* Version 3 carries Game ABI 23 depth domains; old tables must refuse. */
-#define RSF_D3D11_FG_API_VERSION 3u
+/* Version 4 takes normalized FG inputs with dimensions and camera in the SDK pass. */
+#define RSF_D3D11_FG_API_VERSION 4u
+#define RSF_D3D11_FG_INPUTS_VERSION 1u
+
+typedef struct rsf_d3d11_fg_inputs {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    void* depth;
+    void* motion;
+} rsf_d3d11_fg_inputs;
 #define RSF_D3D11_FG_API_ENTRY_POINT "rsf_get_d3d11_fg_api"
 
 /* DLL access to the Runtime's one D3D11 frame-generation tagging path (native_fg.h), the
@@ -42,7 +50,7 @@ extern "C" {
    - bind_source: rsf_native_fg_bind_source (native_fg.h). Lets Runtime SR passes that the
      adapter built without frame identity feed this source's depth and motion.
    - capture: copies this source's normalized depth (R32_FLOAT) and dense motion (R16G16
-     or R32G32 float, render pixels, previous minus current) with the identity's camera.
+     or R32G32 float, render pixels, previous minus current) with the identity's camera and render/output extents.
      A no-op when the source already holds inputs.
    - prepare/retire/present_event/latency_event: place these in rsf_d3d11_present_setup
      (prepare, retire, present_event, latency_event). Each may be wrapped by the adapter's
@@ -58,7 +66,7 @@ typedef struct rsf_d3d11_fg_api {
     int (*cpu)(const rsf_game_cpu_event* event);
     int (*pass)(void* context11, const rsf_game_render_pass* pass, uint32_t begin);
     void (*bind_source)(const rsf_game_render_pass* identity);
-    void (*capture)(void* context11, const rsf_game_render_pass* identity, const rsf_dlss_frame* frame);
+    void (*capture)(void* context11, const rsf_game_render_pass* identity, const rsf_d3d11_fg_inputs* inputs);
     int (*inputs_ready)(uint64_t source_frame_id);
     int32_t (*dump_inputs)(void* context11, uint64_t source_frame_id, const char* directory_utf8,
                            const char* prefix_utf8);

@@ -3,40 +3,6 @@
 #![allow(non_camel_case_types)]
 
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_sharpen12_texture {
-    pub width: u64,
-    pub height: u32,
-    pub format: u32,
-    pub dimension: u32,
-    pub samples: u32,
-    pub flags: u32,
-    pub array_size: u16,
-    pub mip_levels: u16,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_sharpen12_texture"][::core::mem::size_of::<rsf_sharpen12_texture>() - 32usize];
-    ["Alignment of rsf_sharpen12_texture"]
-        [::core::mem::align_of::<rsf_sharpen12_texture>() - 8usize];
-    ["Offset of field: rsf_sharpen12_texture::width"]
-        [::core::mem::offset_of!(rsf_sharpen12_texture, width) - 0usize];
-    ["Offset of field: rsf_sharpen12_texture::height"]
-        [::core::mem::offset_of!(rsf_sharpen12_texture, height) - 8usize];
-    ["Offset of field: rsf_sharpen12_texture::format"]
-        [::core::mem::offset_of!(rsf_sharpen12_texture, format) - 12usize];
-    ["Offset of field: rsf_sharpen12_texture::dimension"]
-        [::core::mem::offset_of!(rsf_sharpen12_texture, dimension) - 16usize];
-    ["Offset of field: rsf_sharpen12_texture::samples"]
-        [::core::mem::offset_of!(rsf_sharpen12_texture, samples) - 20usize];
-    ["Offset of field: rsf_sharpen12_texture::flags"]
-        [::core::mem::offset_of!(rsf_sharpen12_texture, flags) - 24usize];
-    ["Offset of field: rsf_sharpen12_texture::array_size"]
-        [::core::mem::offset_of!(rsf_sharpen12_texture, array_size) - 28usize];
-    ["Offset of field: rsf_sharpen12_texture::mip_levels"]
-        [::core::mem::offset_of!(rsf_sharpen12_texture, mip_levels) - 30usize];
-};
-#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_sharpen12_call {
     pub commands: *mut ::core::ffi::c_void,
@@ -44,12 +10,11 @@ pub struct rsf_sharpen12_call {
     pub options: *const ::core::ffi::c_void,
     pub frame: *const ::core::ffi::c_void,
     pub mode: u32,
-    pub active: u32,
     pub slot: u32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_sharpen12_call"][::core::mem::size_of::<rsf_sharpen12_call>() - 72usize];
+    ["Size of rsf_sharpen12_call"][::core::mem::size_of::<rsf_sharpen12_call>() - 64usize];
     ["Alignment of rsf_sharpen12_call"][::core::mem::align_of::<rsf_sharpen12_call>() - 8usize];
     ["Offset of field: rsf_sharpen12_call::commands"]
         [::core::mem::offset_of!(rsf_sharpen12_call, commands) - 0usize];
@@ -61,127 +26,6 @@ const _: () = {
         [::core::mem::offset_of!(rsf_sharpen12_call, frame) - 48usize];
     ["Offset of field: rsf_sharpen12_call::mode"]
         [::core::mem::offset_of!(rsf_sharpen12_call, mode) - 56usize];
-    ["Offset of field: rsf_sharpen12_call::active"]
-        [::core::mem::offset_of!(rsf_sharpen12_call, active) - 60usize];
     ["Offset of field: rsf_sharpen12_call::slot"]
-        [::core::mem::offset_of!(rsf_sharpen12_call, slot) - 64usize];
-};
-impl Default for rsf_sharpen12_call {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_sharpen12_dispatch {
-    pub root: *mut ::core::ffi::c_void,
-    pub pipeline: *mut ::core::ffi::c_void,
-    pub heap: *mut ::core::ffi::c_void,
-    pub scratch: *mut ::core::ffi::c_void,
-    pub descriptions: [rsf_sharpen12_texture; 4usize],
-    pub mode: u32,
-    pub groups_x: u32,
-    pub groups_y: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_sharpen12_dispatch"][::core::mem::size_of::<rsf_sharpen12_dispatch>() - 176usize];
-    ["Alignment of rsf_sharpen12_dispatch"]
-        [::core::mem::align_of::<rsf_sharpen12_dispatch>() - 8usize];
-    ["Offset of field: rsf_sharpen12_dispatch::root"]
-        [::core::mem::offset_of!(rsf_sharpen12_dispatch, root) - 0usize];
-    ["Offset of field: rsf_sharpen12_dispatch::pipeline"]
-        [::core::mem::offset_of!(rsf_sharpen12_dispatch, pipeline) - 8usize];
-    ["Offset of field: rsf_sharpen12_dispatch::heap"]
-        [::core::mem::offset_of!(rsf_sharpen12_dispatch, heap) - 16usize];
-    ["Offset of field: rsf_sharpen12_dispatch::scratch"]
-        [::core::mem::offset_of!(rsf_sharpen12_dispatch, scratch) - 24usize];
-    ["Offset of field: rsf_sharpen12_dispatch::descriptions"]
-        [::core::mem::offset_of!(rsf_sharpen12_dispatch, descriptions) - 32usize];
-    ["Offset of field: rsf_sharpen12_dispatch::mode"]
-        [::core::mem::offset_of!(rsf_sharpen12_dispatch, mode) - 160usize];
-    ["Offset of field: rsf_sharpen12_dispatch::groups_x"]
-        [::core::mem::offset_of!(rsf_sharpen12_dispatch, groups_x) - 164usize];
-    ["Offset of field: rsf_sharpen12_dispatch::groups_y"]
-        [::core::mem::offset_of!(rsf_sharpen12_dispatch, groups_y) - 168usize];
-};
-impl Default for rsf_sharpen12_dispatch {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_sharpen12_platform {
-    pub child_device: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub describe: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *mut rsf_sharpen12_texture),
-    >,
-    pub create_root: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub create_pipeline: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut ::core::ffi::c_void,
-            arg2: *mut ::core::ffi::c_void,
-            arg3: u32,
-        ) -> *mut ::core::ffi::c_void,
-    >,
-    pub create_heap: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub create_scratch: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut ::core::ffi::c_void,
-            arg2: u32,
-            arg3: u32,
-            arg4: u32,
-        ) -> *mut ::core::ffi::c_void,
-    >,
-    pub dispatch: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut ::core::ffi::c_void,
-            arg2: *const rsf_sharpen12_call,
-            arg3: *const rsf_sharpen12_dispatch,
-        ),
-    >,
-    pub copy_back: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut ::core::ffi::c_void,
-            arg2: *mut ::core::ffi::c_void,
-            arg3: *mut ::core::ffi::c_void,
-        ),
-    >,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_sharpen12_platform"][::core::mem::size_of::<rsf_sharpen12_platform>() - 64usize];
-    ["Alignment of rsf_sharpen12_platform"]
-        [::core::mem::align_of::<rsf_sharpen12_platform>() - 8usize];
-    ["Offset of field: rsf_sharpen12_platform::child_device"]
-        [::core::mem::offset_of!(rsf_sharpen12_platform, child_device) - 0usize];
-    ["Offset of field: rsf_sharpen12_platform::describe"]
-        [::core::mem::offset_of!(rsf_sharpen12_platform, describe) - 8usize];
-    ["Offset of field: rsf_sharpen12_platform::create_root"]
-        [::core::mem::offset_of!(rsf_sharpen12_platform, create_root) - 16usize];
-    ["Offset of field: rsf_sharpen12_platform::create_pipeline"]
-        [::core::mem::offset_of!(rsf_sharpen12_platform, create_pipeline) - 24usize];
-    ["Offset of field: rsf_sharpen12_platform::create_heap"]
-        [::core::mem::offset_of!(rsf_sharpen12_platform, create_heap) - 32usize];
-    ["Offset of field: rsf_sharpen12_platform::create_scratch"]
-        [::core::mem::offset_of!(rsf_sharpen12_platform, create_scratch) - 40usize];
-    ["Offset of field: rsf_sharpen12_platform::dispatch"]
-        [::core::mem::offset_of!(rsf_sharpen12_platform, dispatch) - 48usize];
-    ["Offset of field: rsf_sharpen12_platform::copy_back"]
-        [::core::mem::offset_of!(rsf_sharpen12_platform, copy_back) - 56usize];
+        [::core::mem::offset_of!(rsf_sharpen12_call, slot) - 60usize];
 };

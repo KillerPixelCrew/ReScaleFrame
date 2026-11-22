@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;
+use crate::d3d11_output::SavedBindings;
+use crate::depth_scale::{DepthScale, jitter_valid, rect_valid};
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::c_void;
@@ -102,13 +104,7 @@ impl Mapping {
     }
 
     fn output_fits(&self, key: TextureKey) -> bool {
-        let [left, top, right, bottom] = self.output;
-        left >= 0
-            && top >= 0
-            && right > left
-            && bottom > top
-            && right as u32 <= key.width
-            && bottom as u32 <= key.height
+        rect_valid(&self.output, [key.width, key.height])
     }
 
     fn integral(&self) -> bool {
@@ -116,9 +112,7 @@ impl Mapping {
     }
 
     fn jitter_valid(&self) -> bool {
-        self.jitter
-            .into_iter()
-            .all(|value| (-16384.0..=16384.0).contains(&value))
+        jitter_valid(self.jitter)
     }
 
     fn colour_constants(&self) -> rsf_aux_draw_constants {
@@ -130,6 +124,31 @@ impl Mapping {
             jitter: self.jitter,
             padding: [0.0; 2],
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct SurfaceKey {
+    texture: Texture,
+    kind: u32,
+    flags: u32,
+    output: [i32; 4],
+}
+
+impl From<&rsf_d3d11_auxiliary_surface> for SurfaceKey {
+    fn from(input: &rsf_d3d11_auxiliary_surface) -> Self {
+        Self {
+            texture: input.texture,
+            kind: input.kind,
+            flags: input.flags,
+            output: input.output_rect,
+        }
+    }
+}
+
+impl SurfaceKey {
+    pub(crate) fn matches(self, input: &rsf_d3d11_auxiliary_surface) -> bool {
+        surface_size_valid(input) && self == Self::from(input)
     }
 }
 
@@ -155,11 +174,13 @@ impl SurfacePlan {
 
     fn accepts(&self, request: &rsf_d3d11_auxiliary_surface, spatial: bool) -> bool {
         let mapping = Mapping::from(request);
-        surface_size_valid(request)
-            && request.texture == self.original
-            && request.kind == self.kind
-            && request.flags == self.flags
-            && mapping.output == self.mapping.output
+        SurfaceKey {
+            texture: self.original,
+            kind: self.kind,
+            flags: self.flags,
+            output: self.mapping.output,
+        }
+        .matches(request)
             && mapping.source_fits(self.original_desc.into())
             && mapping.source_fits(self.source_desc.into())
             && (!(spatial || self.depth()) || mapping.integral())
@@ -214,26 +235,19 @@ struct Frame {
 struct Bindings<'a> {
     platform: &'a rsf_aux_platform,
     context: *mut c_void,
-    saved: rsf_d3d11_state,
-    entered: bool,
+    _saved: SavedBindings,
 }
 
 impl<'a> Bindings<'a> {
-    fn new(platform: &'a rsf_aux_platform, context: *mut c_void) -> Self {
-        Self {
+    fn new(platform: &'a rsf_aux_platform, context: *mut c_void) -> Option<Self> {
+        let saved = unsafe { SavedBindings::new(context, platform.save?, platform.restore?) }?;
+        let bindings = Self {
             platform,
             context,
-            saved: rsf_d3d11_state::default(),
-            entered: false,
-        }
-    }
-
-    fn save_and_clear(&mut self) -> bool {
-        self.entered = unsafe { self.platform.save.unwrap()(self.context, &mut self.saved) != 0 };
-        if self.entered {
-            self.clear();
-        }
-        self.entered
+            _saved: saved,
+        };
+        bindings.clear();
+        Some(bindings)
     }
 
     fn clear(&self) {
@@ -243,43 +257,30 @@ impl<'a> Bindings<'a> {
     fn copy(&self, destination: Texture, source: Texture) {
         unsafe { self.platform.copy.unwrap()(self.context, destination, source) };
     }
-
-    fn restore(&mut self) {
-        if self.entered {
-            unsafe { self.platform.restore.unwrap()(self.context, &mut self.saved) };
-            self.entered = false;
-        }
-    }
-}
-
-impl Drop for Bindings<'_> {
-    fn drop(&mut self) {
-        self.restore();
-    }
 }
 
 fn device_ready(platform: &rsf_aux_platform, device: *mut c_void) -> bool {
     unsafe { platform.device_ready.unwrap()(device) != 0 }
 }
 
-struct AuxiliarySr {
+pub(crate) struct AuxiliarySr {
     // Drop native leases and private products while the context and device are still retained.
     frame: Option<Frame>,
     backups: [Option<Snapshot>; 2],
     colours: [Option<ColourProducts>; MAX_SURFACES],
     pipeline: Option<Pipeline>,
     owner: Option<Owner>,
-    depth: *mut rsf_depth_scale,
+    depth: Option<Box<DepthScale>>,
     platform: rsf_aux_platform,
 }
 
 impl AuxiliarySr {
-    fn new(platform: rsf_aux_platform) -> Self {
+    pub(crate) fn new(platform: rsf_aux_platform) -> Self {
         Self {
             platform,
             owner: None,
             pipeline: None,
-            depth: ptr::null_mut(),
+            depth: None,
             colours: [const { None }; MAX_SURFACES],
             backups: [None, None],
             frame: None,
@@ -552,14 +553,10 @@ impl AuxiliarySr {
                     log,
                     log_user: user,
                 };
-                if self.depth.is_null()
-                    && unsafe {
-                        self.platform.depth_create.unwrap()(context, &setup, &mut self.depth)
-                    } != RSF_DEPTH_SCALE_OK as i32
-                {
-                    return None;
+                if self.depth.is_none() {
+                    self.depth = Some(unsafe { DepthScale::new(context, &setup) }.ok()?);
                 }
-                if unsafe { self.platform.depth_reserve.unwrap()(self.depth, plan.original) } == 0 {
+                if !self.depth.as_ref()?.reserve(plan.original) {
                     return None;
                 }
             } else {
@@ -654,10 +651,9 @@ impl AuxiliarySr {
         if !capture {
             frame.phase = Phase::Sealed;
         }
-        let mut bindings = Bindings::new(&self.platform, owner.context.0.as_ptr());
-        if !bindings.save_and_clear() {
+        let Some(bindings) = Bindings::new(&self.platform, owner.context.0.as_ptr()) else {
             return false;
-        }
+        };
         if capture {
             frame.phase = Phase::Capturing;
             for (index, original) in frame.originals.iter().enumerate() {
@@ -685,14 +681,10 @@ impl AuxiliarySr {
                     output_rect: mapping.output,
                     jitter_pixels: mapping.jitter,
                 };
-                let render_depth = if capture {
-                    self.platform.depth_prepare
-                } else {
-                    self.platform.depth_redraw
+                let Some(depth) = &self.depth else {
+                    return false;
                 };
-                if unsafe { render_depth.unwrap()(self.depth, &depth_frame) }
-                    != RSF_DEPTH_SCALE_OK as i32
-                {
+                if depth.render(&depth_frame, capture) != RSF_DEPTH_SCALE_OK as i32 {
                     return false;
                 }
                 frame.depth_restore = Some(plan.restore_contents());
@@ -762,14 +754,18 @@ impl AuxiliarySr {
         } else {
             frame.count
         };
-        let mut bindings = Bindings::new(&self.platform, owner.context.0.as_ptr());
-        if count > prepared || !bindings.save_and_clear() {
+        if count > prepared {
             return false;
         }
+        let Some(bindings) = Bindings::new(&self.platform, owner.context.0.as_ptr()) else {
+            return false;
+        };
         frame.phase = Phase::Publishing;
         if frame.depth_restore.is_some()
-            && unsafe { self.platform.depth_commit.unwrap()(self.depth) }
-                != RSF_DEPTH_SCALE_OK as i32
+            && !self
+                .depth
+                .as_ref()
+                .is_some_and(|depth| depth.commit() == RSF_DEPTH_SCALE_OK as i32)
         {
             return false;
         }
@@ -801,18 +797,20 @@ impl AuxiliarySr {
         if owner.thread != current_thread() {
             return false;
         }
-        let mut bindings = Bindings::new(&self.platform, owner.context.0.as_ptr());
-        if !bindings.save_and_clear() {
+        let Some(bindings) = Bindings::new(&self.platform, owner.context.0.as_ptr()) else {
             return false;
-        }
+        };
         let accepted = frame.phase == Phase::Accepted;
         if let Some(restore) = frame.depth_restore {
-            let depth_release = if accepted && !restore {
-                self.platform.depth_discard
-            } else {
-                self.platform.depth_restore
+            let Some(depth) = &self.depth else {
+                return false;
             };
-            if unsafe { depth_release.unwrap()(self.depth) } != RSF_DEPTH_SCALE_OK as i32 {
+            let status = if accepted && !restore {
+                depth.discard()
+            } else {
+                depth.restore()
+            };
+            if status != RSF_DEPTH_SCALE_OK as i32 {
                 return false;
             }
             frame.depth_restore = None;
@@ -850,17 +848,81 @@ impl AuxiliarySr {
         }
         // Release frame references after the game's bindings are back.
         // Leaving this scope also restores them on every failure.
-        bindings.restore();
+        drop(bindings);
         self.frame = None;
         true
+    }
+}
+
+impl crate::d3d11_host_reduced::Products for AuxiliarySr {
+    fn pending(&self) -> bool {
+        self.frame.is_some()
+    }
+
+    fn matches(&self, scope: [u64; 3]) -> bool {
+        self.on_owner_thread()
+            && self
+                .frame
+                .as_ref()
+                .is_some_and(|frame| frame.scope == scope)
+    }
+
+    fn reserve(
+        &mut self,
+        context: *mut c_void,
+        pass: &rsf_game_render_pass,
+        inputs: &[rsf_d3d11_auxiliary_surface],
+        log: rsf_game_log_fn,
+        user: *mut c_void,
+        recovery: bool,
+    ) -> bool {
+        let limit = if recovery {
+            MAX_SURFACES
+        } else {
+            MAX_AUXILIARIES
+        };
+        inputs.len() <= limit
+            && Self::reserve(self, context, pass, inputs, log, user, recovery).is_some()
+    }
+
+    fn refine(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
+        inputs.len() <= MAX_SURFACES && Self::refine(self, inputs)
+    }
+
+    fn seal(&mut self) -> bool {
+        self.render(true, None)
+    }
+
+    fn cancel(&mut self) -> bool {
+        Self::cancel(self)
+    }
+
+    fn original_colour(&self) -> Texture {
+        Self::original_colour(self)
+    }
+
+    fn temporal_prepare(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
+        inputs.len() <= MAX_SURFACES && self.render(false, Some(inputs))
+    }
+
+    fn spatial_prepare(&mut self) -> bool {
+        self.render(false, None)
+    }
+
+    fn commit(&mut self, temporal: bool) -> bool {
+        Self::commit(self, temporal)
+    }
+
+    fn restore(&mut self) -> bool {
+        Self::restore(self)
     }
 }
 
 impl Drop for AuxiliarySr {
     fn drop(&mut self) {
         let _ = self.restore();
-        if !self.depth.is_null() {
-            unsafe { self.platform.depth_destroy.unwrap()(self.depth) };
+        if let Some(depth) = self.depth.take() {
+            depth.retire();
         }
     }
 }
@@ -1005,33 +1067,18 @@ unsafe extern "C" fn rsf_auxiliary_sr_restore(handle: *mut AuxiliarySr) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
-
-    #[repr(C)]
-    struct Vtable {
-        query_interface: usize,
-        add_ref: unsafe extern "system" fn(*mut FakeCom) -> u32,
-        release: unsafe extern "system" fn(*mut FakeCom) -> u32,
-    }
-
-    static VTABLE: Vtable = Vtable {
-        query_interface: 0,
-        add_ref,
-        release,
-    };
+    use crate::com_ref::test::{Fake, add_ref};
 
     #[repr(C)]
     struct FakeCom {
-        vtable: &'static Vtable,
-        refs: Cell<u32>,
+        com: Fake,
         width: u32,
     }
 
     impl FakeCom {
         fn new(width: u32) -> Self {
             Self {
-                vtable: &VTABLE,
-                refs: Cell::new(1),
+                com: Fake::new(),
                 width,
             }
         }
@@ -1039,18 +1086,6 @@ mod tests {
         fn raw(&self) -> *mut c_void {
             ptr::from_ref(self).cast_mut().cast()
         }
-    }
-
-    unsafe extern "system" fn add_ref(object: *mut FakeCom) -> u32 {
-        let refs = &unsafe { &*object }.refs;
-        refs.set(refs.get() + 1);
-        refs.get()
-    }
-
-    unsafe extern "system" fn release(object: *mut FakeCom) -> u32 {
-        let refs = &unsafe { &*object }.refs;
-        refs.set(refs.get() - 1);
-        refs.get()
     }
 
     unsafe extern "C" fn retain(object: *mut c_void) -> *mut c_void {
@@ -1145,9 +1180,9 @@ mod tests {
         );
         assert!(owner.backups[0].is_some());
         assert!(owner.frame.is_none());
-        assert_eq!(main.refs.get(), 1);
-        assert_eq!(unreadable.refs.get(), 1);
-        assert_eq!(auxiliary.refs.get(), 1);
+        assert_eq!(main.com.refs.get(), 1);
+        assert_eq!(unreadable.com.refs.get(), 1);
+        assert_eq!(auxiliary.com.refs.get(), 1);
 
         pass.color_output_readable = ptr::null_mut();
         assert!(
@@ -1155,12 +1190,12 @@ mod tests {
                 .reserve(context.raw(), &pass, &inputs, None, ptr::null_mut(), false)
                 .is_some()
         );
-        assert_eq!(main.refs.get(), 2);
-        assert_eq!(auxiliary.refs.get(), 2);
+        assert_eq!(main.com.refs.get(), 2);
+        assert_eq!(auxiliary.com.refs.get(), 2);
         assert!(owner.cancel());
-        assert_eq!(main.refs.get(), 1);
-        assert_eq!(auxiliary.refs.get(), 1);
+        assert_eq!(main.com.refs.get(), 1);
+        assert_eq!(auxiliary.com.refs.get(), 1);
         drop(owner);
-        assert_eq!(context.refs.get(), 1);
+        assert_eq!(context.com.refs.get(), 1);
     }
 }

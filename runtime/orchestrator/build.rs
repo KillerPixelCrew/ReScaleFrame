@@ -43,6 +43,34 @@ fn shader_patch_parser() {
         .compile("rsf_patch_json");
 }
 
+fn sharpening_payload() {
+    let directory = "../graphics/src/sharpening";
+    for file in [
+        "pass_payload.cpp",
+        "d3d11.h",
+        "options.h",
+        "rcas.h",
+        "da_rcas.h",
+        "da_das.h",
+        "depth_color.inc",
+    ] {
+        println!("cargo:rerun-if-changed={directory}/{file}");
+    }
+    println!("cargo:rerun-if-changed=src/sharpening_pass_options.h");
+    println!("cargo:rerun-if-changed=include/rescaleframe/sharpening_settings.h");
+    let mut build = cc::Build::new();
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flags(["/EHsc", "/Zl"]);
+    }
+    build
+        .cpp(true)
+        .std("c++17")
+        .include("include")
+        .warnings_into_errors(true)
+        .file(format!("{directory}/pass_payload.cpp"))
+        .compile("rsf_sharpening_payload");
+}
+
 fn main() {
     let sources = [
         "src/plugin_callbacks.cpp",
@@ -50,7 +78,6 @@ fn main() {
         "src/com_ref.cpp",
         "src/fg_leases_com.cpp",
         "src/sampler_bias_com.cpp",
-        "src/d3d11_output_platform.cpp",
         "src/native_regions_com.cpp",
         "src/native_translucency_com.cpp",
     ];
@@ -58,11 +85,13 @@ fn main() {
         println!("cargo:rerun-if-changed={source}");
     }
     println!("cargo:rerun-if-changed=src/d3d11_output_platform.h");
+    println!("cargo:rerun-if-changed=../graphics/src/d3d11_state_private.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/d3d11_state.h");
     println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/srv_format.h");
     println!("cargo:rerun-if-changed=../../sdk/game/include");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         shader_patch_parser();
+        sharpening_payload();
         let mut build = cc::Build::new();
         if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
             // The final CMake or Cargo binary selects its CRT, including Debug.
@@ -70,7 +99,10 @@ fn main() {
         }
         build
             .cpp(true)
+            .std("c++20")
             .warnings_into_errors(true)
+            .define("WIN32_LEAN_AND_MEAN", None)
+            .define("NOMINMAX", None)
             .include("../../sdk/game/include")
             .include("../graphics/include")
             .files(sources)

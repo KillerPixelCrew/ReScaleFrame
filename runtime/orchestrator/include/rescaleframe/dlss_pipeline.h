@@ -263,6 +263,11 @@ RSF_RUNTIME_API void* rsf_dlss_pipeline_layer_output(void);
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_start(
     void* d3d11_device, const rsf_dlss_pipeline_setup* setup);
 
+/* Start on a concrete Runtime-selected SR backend. The selected provider owns
+   hardware validation and load failures. Device ownership matches legacy start. */
+RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_start_backend(
+    void* d3d11_device, const rsf_dlss_pipeline_setup* setup, uint32_t backend);
+
 /* Run one frame: decode the motion, assemble the frame, evaluate.
    A nonzero camera.motion_scale declares decoded motion scaled into canonical
    current-minus-previous UV. The pipeline converts that to each vendor's

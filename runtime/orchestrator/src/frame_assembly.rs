@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::render_abi::*;
+use crate::sr_session::has_capacity;
 
 // Each call structure starts with its readable byte count, including the output.
-unsafe fn has_capacity<T>(p: *const T) -> bool {
-    !p.is_null() && (unsafe { p.cast::<u32>().read() } as usize) >= size_of::<T>()
-}
-
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_assemble_dlss_frame(
     camera: *const rsf_pipeline_camera_frame,

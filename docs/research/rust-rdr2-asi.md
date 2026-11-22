@@ -325,3 +325,33 @@ session and `DiagnosticHook::new` stay with their existing owners.
 Pinned Rust 1.94.1 formatting, bindgen 0.72.1 for the touched records and Git whitespace
 checks cover this checkpoint. Compilation, fixtures, lint and game or device checks are
 user-run.
+
+## R01 residual ASI boundary
+
+The C++ ASI entry `games/rdr2/src/asi_entry.cpp` is removed. `asi_entry.c` receives the CRT
+notification and passes the linked services to Rust. `games/rdr2/src/asi_platform.h` is a
+C ABI declaration with generated size and offset checks in `asi/diagnostics_abi.rs`.
+The generated table leaves RenderDoc callbacks null when the loader is built without
+RenderDoc. This preserves the startup gate in that build.
+
+- `asi/windows.rs` uses the Windows DXGI projection to acquire a factory, enumerate the requested
+  adapter, read its vendor and release both interfaces. Failures still report vendor zero to
+  the retryable settings cache.
+- `d3d12_trace.rs` installs the checked trace target. Its x64 entry transfers the native return
+  address from `[rsp]` to the second argument register before jumping to the Rust observer.
+  The observer captures the same bounded stack on failing HRESULTs and forwards the original
+  value to the trampoline. This removes `games/rdr2/src/d3d12_trace.h`.
+- `asi/diagnostic_services.rs` prepares sized module-dump and census records, routes module
+  sampling and frame probes, and collects census counters only after successful installation.
+  The census install copies the UTF-8 path into its owned directory buffer during the call.
+  These adapters remove `games/rdr2/src/diagnostics.h`.
+- The optional capture implementation and Social Club structured-exception guard retain their
+  native owners. Only the capture install symbol's language linkage changes so the C entry can
+  bind it. Camera and Social Club policy remain in their existing Rust owners.
+
+The finding **Give the RDR2 startup and diagnostic INI keys saved overlay controls** remains
+open. O02 is maintaining the existing option layout and acknowledgment path. Native D3D12
+registration, generic Unicode text controls and persistence require a coordinated extension.
+
+The checkpoint regenerates the ASI bindings using bindgen 0.72.1 and uses pinned Rust 1.94.1
+formatting. Compilation, linking, tests, lint and game or device checks are user-run.

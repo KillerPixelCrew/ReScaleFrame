@@ -49,3 +49,38 @@ capture were left for the user. The previous Arc B370 report records timeouts in
 State and pipeline observations are limited to the observed callbacks. A missing submission
 receipt on a live device can still leave a lease pending when the adapter lacks a completion
 proof.
+
+## Follow-up from `806086f7`
+
+- **RDR2 side of “Reuse one IEEE CRC-32 implementation for binary fingerprints.”**
+  `capture_state/recordings.rs` uses the SDK checksum for shader bytes, preserving zero for
+  an empty bytecode record and refusal for an invalid nonempty pointer or length. The ported
+  `capture_state/pipeline.rs` uses the same hash for graphics descriptors and stream PSOs.
+- `capture_state.rs`, `capture_state/recordings.rs`, `diagnostics.rs` and
+  `native_platform.rs` use SDK `try_box` for nonzero-sized transferred
+  owners. A failed allocation still returns null or refuses startup before publishing the
+  owner. The ASI diagnostic wiring already present at the base is preserved.
+- `capture_state/d3d12.rs` owns the D3D12/DXGI COM calls for queue fence creation and
+  signalling, completion and device loss checks, swapchain buffers and Present admission,
+  readback allocation, transition/copy/restore recording, and mapping/unmapping. The
+  pinned `windows` bindings supply the SDK layouts. The copy uses subresource zero and
+  retains the padded row pitch. A reused tail buffer must cover the new footprint.
+  The Rust poller takes the retired queue and backbuffer owners by value and releases them
+  after unlocking.
+- `capture_state/pipeline.rs` owns the stream tags, pointer-aligned payload sizes,
+  graphics descriptor facts and shader fingerprints. An unknown or truncated tag still
+  leaves pipeline facts unavailable. The observation mutex protects publication of the
+  copied facts.
+- `capture_state/fixture.rs` checks manifest publication and the BGRA, RGB10, RG16F and
+  depth bytes from the existing WARP runs. `tests/rdr2_capture.cpp` still drives real
+  device creation, stream PSO construction, NGX fixture calls, draw/Present,
+  teardown fence and debug layer validation.
+
+The C++ capture observer and private headers remain for installation, native callback
+registration and forwarding, raw NGX/camera observations, and immediate draw-caller and
+stack capture. This slice does not close those files or the WARP driver as full ports.
+Evidence is source comparison with `806086f7`, the locally pinned Windows bindings, and
+Rust 1.94.1 formatting. The source audit matched 45 native capture entry names, all 25
+existing pipeline stream tags, and the Windows SDK symbols used by the new leaves.
+Locked offline Cargo metadata and Git whitespace checks passed. Build, lint, tests and
+device captures were left for the user.

@@ -164,6 +164,7 @@ const _: () = {
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_input_platform {
+    pub struct_size: u32,
     pub device: ::core::option::Option<
         unsafe extern "C" fn(context: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
     >,
@@ -233,33 +234,35 @@ pub struct rsf_anomaly_input_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_input_platform"]
-        [::core::mem::size_of::<rsf_anomaly_input_platform>() - 96usize];
+        [::core::mem::size_of::<rsf_anomaly_input_platform>() - 104usize];
     ["Alignment of rsf_anomaly_input_platform"]
         [::core::mem::align_of::<rsf_anomaly_input_platform>() - 8usize];
+    ["Offset of field: rsf_anomaly_input_platform::struct_size"]
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, struct_size) - 0usize];
     ["Offset of field: rsf_anomaly_input_platform::device"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, device) - 0usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, device) - 8usize];
     ["Offset of field: rsf_anomaly_input_platform::release_interface"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, release_interface) - 8usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, release_interface) - 16usize];
     ["Offset of field: rsf_anomaly_input_platform::describe"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, describe) - 16usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, describe) - 24usize];
     ["Offset of field: rsf_anomaly_input_platform::same_device"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, same_device) - 24usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, same_device) - 32usize];
     ["Offset of field: rsf_anomaly_input_platform::shader"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, shader) - 32usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, shader) - 40usize];
     ["Offset of field: rsf_anomaly_input_platform::constant_buffer"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, constant_buffer) - 40usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, constant_buffer) - 48usize];
     ["Offset of field: rsf_anomaly_input_platform::texture"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, texture) - 48usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, texture) - 56usize];
     ["Offset of field: rsf_anomaly_input_platform::depth_view"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, depth_view) - 56usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, depth_view) - 64usize];
     ["Offset of field: rsf_anomaly_input_platform::unordered_view"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, unordered_view) - 64usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, unordered_view) - 72usize];
     ["Offset of field: rsf_anomaly_input_platform::motion_view"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, motion_view) - 72usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, motion_view) - 80usize];
     ["Offset of field: rsf_anomaly_input_platform::dispatch"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, dispatch) - 80usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, dispatch) - 88usize];
     ["Offset of field: rsf_anomaly_input_platform::first_person_limit"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, first_person_limit) - 88usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, first_person_limit) - 96usize];
     ["Offset of field: rsf_anomaly_input_platform::validity_threshold"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, validity_threshold) - 92usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, validity_threshold) - 100usize];
 };

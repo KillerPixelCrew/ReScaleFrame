@@ -9,6 +9,7 @@ use crate::render_abi::{
     rsf_sharpening_options as Sharpening,
 };
 use crate::sharpening_policy;
+use std::ffi::{CStr, c_char};
 use std::ptr::null;
 use std::sync::Mutex;
 use windows_sys::Win32::System::WindowsProgramming::{
@@ -469,6 +470,31 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_write_layout(
     file.write_integer(OVERLAY_LAYOUT, value)
 }
 
+/// # Safety
+/// `ini` and `section` are terminated UTF-16 strings.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_settings_store_read_fg_debug(
+    ini: PCWSTR,
+    section: PCWSTR,
+    fallback: u32,
+) -> u32 {
+    File::new(ini, section).map_or(fallback, |file| file.integer("FGDebug", fallback))
+}
+
+/// # Safety
+/// `ini` and `section` are terminated UTF-16 strings.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_settings_store_write_fg_debug(
+    ini: PCWSTR,
+    section: PCWSTR,
+    value: u32,
+) -> i32 {
+    let Some(file) = File::new(ini, section) else {
+        return INVALID_ARGUMENT;
+    };
+    file.write_integer("FGDebug", u32::from(value != 0))
+}
+
 /// Persists only the shared post-pass keys for hosts that own their base SR settings.
 ///
 /// # Safety
@@ -583,6 +609,44 @@ unsafe extern "C" fn rsf_core_adapter_setting_write_bool(
     } else {
         OK
     }
+}
+
+/// Reads a numeric adapter setting from its own INI section.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_settings_store_read_integer(
+    ini: PCWSTR,
+    section: PCWSTR,
+    key: *const c_char,
+    fallback: u32,
+) -> u32 {
+    let Some(file) = File::new(ini, section) else {
+        return fallback;
+    };
+    if key.is_null() {
+        return fallback;
+    }
+    unsafe { CStr::from_ptr(key) }
+        .to_str()
+        .map_or(fallback, |key| file.integer(key, fallback))
+}
+
+/// Saves a numeric adapter setting using the shared profile write lock.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_settings_store_write_integer(
+    ini: PCWSTR,
+    section: PCWSTR,
+    key: *const c_char,
+    value: u32,
+) -> i32 {
+    let Some(file) = File::new(ini, section) else {
+        return INVALID_ARGUMENT;
+    };
+    if key.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { CStr::from_ptr(key) }
+        .to_str()
+        .map_or(INVALID_ARGUMENT, |key| file.write_integer(key, value))
 }
 
 #[cfg(test)]

@@ -4,18 +4,8 @@ use crate::ui_abi::*;
 use std::ffi::{c_int, c_void};
 use std::slice;
 
-const SCENE: rsf_ac7_draw_class = 0;
-const UI_SLATE: rsf_ac7_draw_class = 1;
-const WIDGET_QUAD: rsf_ac7_draw_class = 2;
-const UI_MODULATE: rsf_ac7_draw_class = 3;
-const WIDGET_RASTER: rsf_ac7_draw_class = 4;
-const UNKNOWN: rsf_ac7_draw_class = 5;
-const SKIP: rsf_ac7_draw_class = 6;
-
-const OTHER: rsf_ac7_layout_kind = 0;
-const SLATE: rsf_ac7_layout_kind = 1;
-const SLATE_INSTANCED: rsf_ac7_layout_kind = 2;
-const CANVAS: rsf_ac7_layout_kind = 3;
+#[cfg(test)]
+mod tests;
 
 const HUD_BYTES: u32 = 1104;
 const HUD_CHECKSUM: [u8; 16] = [
@@ -23,15 +13,9 @@ const HUD_CHECKSUM: [u8; 16] = [
 ];
 const HUD_CRC32C: u32 = 0xb2f7_719d;
 
-type ShaderHash = unsafe extern "C" fn(*const c_void, u32) -> u32;
-
-/// The caller lends a readable bytecode span and the Runtime's shader hash function.
+/// The caller lends a readable bytecode span for one call.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_ui_is_hud_producer(
-    bytecode: *const c_void,
-    bytes: u32,
-    shader_hash: ShaderHash,
-) -> c_int {
+unsafe extern "C" fn rsf_ac7_ui_is_hud_producer(bytecode: *const c_void, bytes: u32) -> c_int {
     if bytecode.is_null() || bytes != HUD_BYTES {
         return 0;
     }
@@ -39,7 +23,7 @@ unsafe extern "C" fn rsf_core_ac7_ui_is_hud_producer(
     c_int::from(
         &data[..4] == b"DXBC"
             && data[4..20] == HUD_CHECKSUM
-            && unsafe { shader_hash(bytecode, bytes) } == HUD_CRC32C,
+            && crate::shader_hash::crc32c(data) == HUD_CRC32C,
     )
 }
 
@@ -104,7 +88,7 @@ unsafe extern "C" fn rsf_ac7_ui_classify_layout(
     count: u32,
 ) -> rsf_ac7_layout_kind {
     if elements.is_null() || count == 0 || count > RSF_AC7_UI_MAX_LAYOUT_ELEMENTS {
-        return OTHER;
+        return RSF_AC7_LAYOUT_OTHER;
     }
     let elements = unsafe { slice::from_raw_parts(elements, count as usize) };
     let has_all =
@@ -112,16 +96,18 @@ unsafe extern "C" fn rsf_ac7_ui_classify_layout(
     let count = elements.len();
     // Match exact counts and by element, irrespective of the declaration's order.
     match count {
-        count if count == SLATE_ELEMENTS.len() && has_all(&SLATE_ELEMENTS) => SLATE,
+        count if count == SLATE_ELEMENTS.len() && has_all(&SLATE_ELEMENTS) => RSF_AC7_LAYOUT_SLATE,
         count
             if count == SLATE_ELEMENTS.len() + 1
                 && has_all(&SLATE_ELEMENTS)
                 && has_element(elements, &INSTANCE_ELEMENT) =>
         {
-            SLATE_INSTANCED
+            RSF_AC7_LAYOUT_SLATE_INSTANCED
         }
-        count if count == CANVAS_ELEMENTS.len() && has_all(&CANVAS_ELEMENTS) => CANVAS,
-        _ => OTHER,
+        count if count == CANVAS_ELEMENTS.len() && has_all(&CANVAS_ELEMENTS) => {
+            RSF_AC7_LAYOUT_CANVAS
+        }
+        _ => RSF_AC7_LAYOUT_OTHER,
     }
 }
 
@@ -214,9 +200,9 @@ fn modulates(draw: &rsf_ac7_draw_facts) -> bool {
 
 fn slate_draw(draw: &rsf_ac7_draw_facts) -> rsf_ac7_draw_class {
     if modulates(draw) {
-        UI_MODULATE
+        RSF_AC7_DRAW_UI_MODULATE
     } else {
-        UI_SLATE
+        RSF_AC7_DRAW_UI_SLATE
     }
 }
 
@@ -253,10 +239,10 @@ unsafe extern "C" fn rsf_ac7_ui_classify(
     draw: *const rsf_ac7_draw_facts,
 ) -> rsf_ac7_draw_class {
     let Some((registry, draw)) = (unsafe { draw_facts(registry, draw) }) else {
-        return SCENE;
+        return RSF_AC7_DRAW_SCENE;
     };
     if unsafe { named_shader(registry.skip_shaders, registry.skip_shader_count, draw) } {
-        return SKIP;
+        return RSF_AC7_DRAW_SKIP;
     }
     let forced = unsafe { named_shader(registry.force_shaders, registry.force_shader_count, draw) };
     let widget_target = unsafe {
@@ -270,29 +256,33 @@ unsafe extern "C" fn rsf_ac7_ui_classify(
     if unsafe { named_layout(registry, draw) } {
         // The converter must populate its texture before a world-space quad can read it.
         if widget_target {
-            return WIDGET_RASTER;
+            return RSF_AC7_DRAW_WIDGET_RASTER;
         }
         return if back_buffer {
             slate_draw(draw)
         } else {
-            UNKNOWN
+            RSF_AC7_DRAW_UNKNOWN
         };
     }
 
     if unsafe { reads_widget(registry, draw) } {
         if retargetable(draw) && !widget_target && !back_buffer {
             if modulates(draw) {
-                return UI_MODULATE;
+                return RSF_AC7_DRAW_UI_MODULATE;
             }
             if draw.indexed != 0 && draw.element_count == 6 && blends_over(draw) {
-                return WIDGET_QUAD;
+                return RSF_AC7_DRAW_UI_WIDGET_QUAD;
             }
         }
-        return if forced { WIDGET_QUAD } else { UNKNOWN };
+        return if forced {
+            RSF_AC7_DRAW_UI_WIDGET_QUAD
+        } else {
+            RSF_AC7_DRAW_UNKNOWN
+        };
     }
     if forced && retargetable(draw) {
         slate_draw(draw)
     } else {
-        SCENE
+        RSF_AC7_DRAW_SCENE
     }
 }

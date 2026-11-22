@@ -25,7 +25,7 @@ use rsf_game_sys::{RSF_FRAME_SOURCE_RENDERED, rsf_game_log_fn};
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     ops::RangeInclusive,
-    ptr::null,
+    ptr::{null, null_mut},
     slice,
     sync::{
         LazyLock, Mutex, MutexGuard, OnceLock,
@@ -45,6 +45,7 @@ const STARTED: u8 = 1;
 const FAILED: u8 = 2;
 const RESET_PENDING: u8 = 3;
 const AUTO_FG: u32 = 1 << RSF_FG_BACKEND_AUTO;
+const AUTO_SR: u32 = 1 << 7; // RSF_SR_AUTO in sr_session.h
 const KNOWN_SR: u32 = (1 << RSF_SR_DLSS)
     | (1 << RSF_SR_FSR2)
     | (1 << RSF_SR_FSR3)
@@ -189,6 +190,7 @@ struct Config {
     latency_choices: u32,
     max_generated: u32,
     preset_available: u32,
+    deferred: bool,
     callbacks: Callbacks,
     options: Vec<OptionSpec>,
 }
@@ -243,7 +245,7 @@ impl Config {
             || unsafe { *setup.configuration_path } == 0
             || setup.configuration_section.is_null()
             || unsafe { *setup.configuration_section } == 0
-            || setup.sr_backend_choices & !KNOWN_SR != 0
+            || setup.sr_backend_choices & !(KNOWN_SR | AUTO_SR) != 0
             || (setup.sr_backend_choices != 0 && setup.sr_quality_choices == 0)
             || setup.sr_quality_choices & !RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK != 0
             || setup.fg_backend_choices & !(RSF_FG_BACKEND_ALL | AUTO_FG) != 0
@@ -279,6 +281,7 @@ impl Config {
             latency_choices: setup.latency_choices,
             max_generated: setup.max_generated_frames,
             preset_available: u32::from(setup.dlss_preset_available != 0),
+            deferred: false,
             callbacks: Callbacks {
                 user: setup.user,
                 log: setup.log,
@@ -524,6 +527,17 @@ fn forward_fg(value: &Settings) -> i32 {
 }
 
 unsafe extern "C" fn configure(setup: *const rsf_overlay_service_setup) -> i32 {
+    unsafe { configure_inner(setup, false) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_overlay_configure_deferred(
+    setup: *const rsf_overlay_service_setup,
+) -> i32 {
+    unsafe { configure_inner(setup, true) }
+}
+
+unsafe fn configure_inner(setup: *const rsf_overlay_service_setup, deferred: bool) -> i32 {
     if !unsafe { fits(setup) } {
         return INVALID_ARGUMENT;
     }
@@ -531,13 +545,14 @@ unsafe extern "C" fn configure(setup: *const rsf_overlay_service_setup) -> i32 {
     if setup.abi_version != RSF_OVERLAY_API_VERSION {
         return ABI_MISMATCH;
     }
-    let (config, sharpening) = match unsafe { Config::read_setup(setup) } {
+    let (mut config, sharpening) = match unsafe { Config::read_setup(setup) } {
         Ok(config) => config,
         Err(error) => return error,
     };
     if CLAIMED.swap(true, Ordering::AcqRel) {
         return BUSY;
     }
+    config.deferred = deferred;
 
     let mut stored = config.defaults;
     let ini = config.ini.as_ptr();
@@ -550,8 +565,12 @@ unsafe extern "C" fn configure(setup: *const rsf_overlay_service_setup) -> i32 {
             "RSF overlay: saved settings this adapter cannot apply were replaced by its defaults."
         ));
     }
-    let requested = forward_fg(&settings);
-    unsafe { (platform().set_sharpening.unwrap())(&settings) };
+    let requested = if deferred {
+        OK
+    } else {
+        unsafe { (platform().set_sharpening.unwrap())(&settings) };
+        forward_fg(&settings)
+    };
     {
         let mut state = state();
         state.settings = settings;
@@ -619,8 +638,12 @@ fn apply(config: &Config, request: impl FnOnce(Settings) -> Settings, origin: &s
         }
         drop(state);
         let requested = if result == OK {
-            unsafe { (platform().set_sharpening.unwrap())(&value) };
-            let requested = forward_fg(&value);
+            let requested = if config.deferred {
+                OK
+            } else {
+                unsafe { (platform().set_sharpening.unwrap())(&value) };
+                forward_fg(&value)
+            };
             self::state().request_result = requested;
             if let Some(changed) = config.callbacks.changed {
                 unsafe { changed(config.callbacks.user, &value) };
@@ -643,7 +666,7 @@ fn apply(config: &Config, request: impl FnOnce(Settings) -> Settings, origin: &s
 
 impl Sample {
     // The provider and session are borrowed on the Present owner until its drained boundary.
-    fn read(config: &Config) -> Self {
+    fn read(config: &Config, bound_status: Option<FgStatusGet>) -> Self {
         let sr = config
             .callbacks
             .report
@@ -660,7 +683,7 @@ impl Sample {
             });
         let mut fg: FgStatus = unsafe { std::mem::zeroed() };
         fg.struct_size = abi_size::<FgStatus>();
-        unsafe { (platform().fg_status_get.unwrap())(&mut fg) };
+        unsafe { bound_status.unwrap_or_else(|| platform().fg_status_get.unwrap())(&mut fg) };
         let fg_owner = unsafe { (platform().present_has_owner.unwrap())() } != 0;
         let mut fg_backend = 0;
         if fg_owner {
@@ -668,7 +691,7 @@ impl Sample {
             let session = unsafe { (platform().present_session.unwrap())() };
             if let Some(status) = provider
                 .and_then(|provider| provider.status)
-                .filter(|_| !session.is_null())
+                .filter(|_| bound_status.is_none() && !session.is_null())
             {
                 let mut fresh: ProviderStatus = unsafe { std::mem::zeroed() };
                 fresh.struct_size = abi_size::<ProviderStatus>();
@@ -1062,6 +1085,42 @@ fn apply_intent(config: &Config, intent: &rsf_overlay_intent) {
 // The adapter calls present and notify on the same graphics owner. Serialize panel
 // effects without borrowing the settings/state lock across caller callbacks.
 unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
+    unsafe {
+        present_inner(chain, null_mut(), drawn, None, |stats, intent| {
+            (platform().present.unwrap())(chain, stats, intent)
+        })
+    }
+}
+
+type DrawBound = unsafe extern "C" fn(
+    *mut c_void,
+    *const rsf_overlay_stats,
+    *mut rsf_overlay_intent,
+) -> i32;
+type FgStatusGet = unsafe extern "C" fn(*mut FgStatus) -> i32;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_overlay_present_bound(
+    chain: *mut c_void,
+    input_window: *mut c_void,
+    status_get: FgStatusGet,
+    draw: DrawBound,
+    user: *mut c_void,
+) -> i32 {
+    unsafe {
+        present_inner(chain, input_window, null_mut(), Some(status_get), |stats, intent| {
+            draw(user, stats, intent)
+        })
+    }
+}
+
+unsafe fn present_inner(
+    chain: *mut c_void,
+    input_window: *mut c_void,
+    drawn: *mut u32,
+    bound_status: Option<FgStatusGet>,
+    draw: impl FnOnce(*const rsf_overlay_stats, *mut rsf_overlay_intent) -> i32,
+) -> i32 {
     if !drawn.is_null() {
         unsafe { drawn.write(0) };
     }
@@ -1076,10 +1135,11 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
     };
     let mut width = 0;
     let mut height = 0;
-    let window = unsafe { (platform().window.unwrap())(chain, &mut width, &mut height) };
-    if window.is_null() {
+    let chain_window = unsafe { (platform().window.unwrap())(chain, &mut width, &mut height) };
+    if chain_window.is_null() || config.deferred == input_window.is_null() {
         return INVALID_ARGUMENT;
     }
+    let window = if input_window.is_null() { chain_window } else { input_window };
     if config
         .callbacks
         .accept
@@ -1091,7 +1151,7 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
     if matches!(lifecycle, FAILED | RESET_PENDING) {
         return NOT_READY;
     }
-    if lifecycle != STARTED {
+    if lifecycle != STARTED && !config.deferred {
         match unsafe {
             (platform().start.unwrap())(chain, config.callbacks.log, config.callbacks.user)
         } {
@@ -1108,13 +1168,22 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
         }
     }
 
-    let sample = Sample::read(config);
+    let sample = Sample::read(config, bound_status);
     let now = unsafe { (platform().tick.unwrap())() };
     let mut reason = [0; 160];
     let mut stats = {
         let mut state = state();
         state.record_sample(sample, [width, height], now);
-        state.panel_stats(config, &mut reason)
+        let mut stats = state.panel_stats(config, &mut reason);
+        if config.deferred {
+            stats.requested_backend = state.settings.sr_backend;
+            if state.settings.fg_enabled != 0 {
+                stats.fg_requested_backend = state.settings.fg_backend;
+            }
+        } else {
+            stats.fg_backend_choices &= !AUTO_FG;
+        }
+        stats
     };
     let options = read_options(config);
     if !config.options.is_empty() {
@@ -1147,7 +1216,11 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
         struct_size: abi_size::<rsf_overlay_intent>(),
         ..Default::default()
     };
-    match unsafe { (platform().present.unwrap())(chain, &stats, &mut intent) } {
+    let result = draw(&stats, &mut intent);
+    if config.deferred && result >= 0 {
+        LIFECYCLE.store(STARTED, Ordering::Release);
+    }
+    match result {
         0 => return OK,
         1 => {}
         _ => return NOT_READY,
@@ -1164,12 +1237,27 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
 }
 
 unsafe extern "C" fn notify(_chain: *mut c_void, reason: u32) -> i32 {
+    notify_inner(reason, false, || unsafe { (platform().stop.unwrap())() })
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_overlay_notify_bound(
+    reason: u32,
+    stop: unsafe extern "C" fn() -> i32,
+) -> i32 {
+    notify_inner(reason, true, || unsafe { stop() })
+}
+
+fn notify_inner(reason: u32, deferred: bool, stop: impl FnOnce() -> i32) -> i32 {
     if reason != RSF_OVERLAY_NOTIFY_RESIZE && reason != RSF_OVERLAY_NOTIFY_DEVICE_RESET {
         return INVALID_ARGUMENT;
     }
     let Some(config) = CONFIG.get() else {
         return NOT_READY;
     };
+    if config.deferred != deferred {
+        return INVALID_ARGUMENT;
+    }
     if reason == RSF_OVERLAY_NOTIFY_RESIZE {
         state().chain_size = [0; 2];
         return OK;
@@ -1177,7 +1265,10 @@ unsafe extern "C" fn notify(_chain: *mut c_void, reason: u32) -> i32 {
     let Ok(_panel) = PANEL.try_lock() else {
         return BUSY;
     };
-    let previous = match reset_panel(&LIFECYCLE, || unsafe { (platform().stop.unwrap())() }) {
+    if deferred && LIFECYCLE.load(Ordering::Acquire) == COLD && stop() != OK {
+        return NOT_READY;
+    }
+    let previous = match reset_panel(&LIFECYCLE, stop) {
         Ok(previous) => previous,
         Err(result) => return result,
     };
@@ -1294,7 +1385,7 @@ unsafe extern "C" fn status(out: *mut Status) -> i32 {
     OK
 }
 
-unsafe extern "C" fn settings_get(out: *mut Settings) -> i32 {
+pub(crate) unsafe extern "C" fn settings_get(out: *mut Settings) -> i32 {
     if !unsafe { fits(out) } {
         return INVALID_ARGUMENT;
     }
@@ -1309,7 +1400,7 @@ unsafe extern "C" fn settings_get(out: *mut Settings) -> i32 {
     OK
 }
 
-unsafe extern "C" fn settings_apply(request: *const Settings) -> i32 {
+pub(crate) unsafe extern "C" fn settings_apply(request: *const Settings) -> i32 {
     if request.is_null() {
         return INVALID_ARGUMENT;
     }

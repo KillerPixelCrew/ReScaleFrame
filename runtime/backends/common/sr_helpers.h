@@ -8,6 +8,8 @@
 #include <cwchar>
 #include <d3d12.h>
 
+extern "C" rsf_backend_result rsf_core_validate_sr_frame(const rsf_sr_frame* frame);
+
 namespace rsf {
 // True when `object` (a queue, list or resource) was created by `device`. GetDevice adds a
 // reference, so the owner is released again before comparing the pointers.
@@ -98,52 +100,7 @@ inline rsf_backend_result validate_open(const rsf_sr_open_desc* desc, void** out
 }
 inline rsf_backend_result validate_frame(const rsf_sr_frame* frame)
 {
-    if (!frame || frame->struct_size < sizeof(*frame) || !frame->record ||
-        frame->record->struct_size < sizeof(rsf_frame_record)) {
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    }
-    const auto& record = *frame->record;
-    if (record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION) {
-        return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    }
-    if (record.camera.struct_size < sizeof(rsf_camera_frame) || !record.frame_id ||
-        !record.render_width || !record.render_height || !record.output_width || !record.output_height ||
-        record.render_width > record.output_width || record.render_height > record.output_height ||
-        !std::isfinite(frame->sharpness) || frame->sharpness < 0 || frame->sharpness > 1 ||
-        !std::isfinite(frame->jitter_x) || !std::isfinite(frame->jitter_y) ||
-        !std::isfinite(frame->motion_scale_x) || !std::isfinite(frame->motion_scale_y) ||
-        !frame->motion_scale_x || !frame->motion_scale_y ||
-        !std::isfinite(frame->pre_exposure) || frame->pre_exposure <= 0 ||
-        !std::isfinite(frame->view_space_to_meters) || frame->view_space_to_meters <= 0 ||
-        !std::isfinite(record.frame_time_ms) || record.frame_time_ms <= 0 ||
-        !std::isfinite(record.camera.near_plane) || record.camera.near_plane <= 0 ||
-        !std::isfinite(record.camera.far_plane) || record.camera.far_plane < 0 ||
-        !std::isfinite(record.camera.vertical_fov_radians) ||
-        record.camera.vertical_fov_radians <= 0 || record.camera.vertical_fov_radians >= 3.141593f) {
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    }
-    if (record.flags & RSF_FRAME_FLAG_NO_SR) return RSF_BACKEND_ERROR_NOT_READY;
-    const rsf_backend_resource* resources[] = {&frame->color, &frame->depth, &frame->motion,
-                                               &frame->output};
-    for (auto* resource : resources) {
-        const bool output = resource == &frame->output;
-        if (resource->struct_size < sizeof(*resource) || !resource->resource ||
-            resource->lifetime != RSF_LIFETIME_ONLY_NOW || resource->x || resource->y ||
-            resource->width < (output ? record.output_width : record.render_width) ||
-            resource->height < (output ? record.output_height : record.render_height)) {
-            return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        }
-        if (resource->generation != record.resource_generation) {
-            return RSF_BACKEND_ERROR_STALE_RESOURCES;
-        }
-    }
-    if (frame->exposure.resource && (frame->exposure.struct_size < sizeof(rsf_backend_resource) ||
-        frame->exposure.lifetime != RSF_LIFETIME_ONLY_NOW || frame->exposure.x || frame->exposure.y))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (frame->exposure.resource && frame->exposure.generation != record.resource_generation)
-        return RSF_BACKEND_ERROR_STALE_RESOURCES;
-    return RSF_BACKEND_OK;
+    return rsf_core_validate_sr_frame(frame);
 }
 inline rsf_backend_result validate_d3d12_resources(const rsf_sr_frame& frame, void* device)
 {

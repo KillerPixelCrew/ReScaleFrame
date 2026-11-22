@@ -1,11 +1,31 @@
 # Implementation tracker
 
+AC7 carrier startup passes the admitted Present size directly to the backend
+and exposes its install-time settings in the shared panel. A refused native
+install stays reachable for retirement and reports unprepared. The session
+fixture and capture hook batch policy moved to Rust. Source checks passed.
+Native build, fixtures and game validation remain pending.
+[A01 scope and checks](research/rust-ac7-a01.md)
+
+G04 moves D3D11 colour, motion, depth and fullscreen passes and six fixture bodies to Rust.
+Source comparison covers the public C signatures, exact shader bytes and fixture wiring. The
+standalone exposure probe keeps its optional SDK calls in native leaves. Native and GPU
+verification remains user-owned. [G04 evidence](research/rust-graphics-passes.md)
+
 The active migration build candidate is `9f53f1b0`. It includes the
 Rust Godot SR and final-scene records and the merged Streamline,
 FidelityFX, Vulkan and Unity batches. Pinned formatting, locked offline
 metadata and the source public header and carrier definition comparison
 passed. Binary ABI, fixture, device and game results are pending.
 [Candidate checks](rust-migration.md#candidate-9f53f1b0)
+
+The shared D3D11 host now checks SR session identity before graphics work,
+preserves input receipts across configure-only requests, and accepts independent
+depth inversion and far-plane facts. Rust owns the D3D11 output leaves and the
+Runtime's Anomaly backend admission service. The adapter starts its requested
+provider through the D05 pipeline entry. Overlay admission and device checks
+are pending.
+[D3D11 host port evidence](research/rust-d3d11-host-admission.md)
 
 Steam D3D11 uses a static C entry for both Rust adapters and the existing
 C++ callers. Rust owns fingerprinting, MinHook installation and the typed
@@ -25,7 +45,8 @@ patch generation, binding regeneration and pinned formatting were checked. Build
 RDR2's ASI startup leaves, research-attach worker and native settings probe
 now run in Rust. Settings fixtures share the measured vectors with the
 Rust policy, and refused startup sessions retain their cleanup owner.
-The diagnostic C++ bridge and restart overlay controls remain open.
+DXGI and the ASI diagnostics adapters now also run in Rust. The CRT entry
+binds their existing C services. Restart overlay controls remain open.
 Build, fixture and device checks are pending.
 [RDR2 startup source evidence](research/rust-rdr2-asi.md#r01-follow-up)
 
@@ -42,6 +63,11 @@ Each FG pass reports its own outcome. The V03 presenter owns retired guide resiz
 and the engine retains its exact submission and Present receipts. Source ABI
 comparison and pinned formatting passed. Build, fixture and device checks remain
 open. [Godot Vulkan E03 evidence](research/rust-godot-vulkan-e03.md)
+
+Godot Vulkan creation now calls the loader from Rust using generated layouts for the
+pinned engine Vulkan headers. The typed creation fixture moved to Cargo, and Godot's
+Windows window-class admission uses the shared GameSDK ASCII widening helper.
+[Godot Vulkan follow-up evidence](research/rust-godot-vulkan-e03.md#native-inventory)
 
 The Unity package now routes render callbacks, admits preview and
 generation windows, and handles device events in Rust. The managed
@@ -1289,10 +1315,17 @@ and maximum-wait paths. Builds, fixtures and live checks remain open.
 The common Vulkan-to-D3D12 importer and FG graphics leaves call typed
 Vulkan procedures from Rust. FSR4 and XeSS wait for the consumer timeline
 and Vulkan source fences before replacing depth and motion on a render
-extent change. The existing capture adapter and shared C++ device fixture
-remain. Source checks compared the Vulkan names and private table layouts,
+extent change. The shared capture owner now provides the readback adapter
+directly from Rust. The shared C++ device fixture remains. Source checks
+compared the Vulkan names and private table layouts,
 and locked Windows metadata resolved. Compile, link, fixture and device
 checks remain open. [Vulkan D3D12 interop](research/rust-vulkan-dx12-interop.md)
+
+Shared texture capture now performs Vulkan and D3D11 readback in Rust.
+Vulkan publication requires proof for the exact group or retired command
+buffer. D3D12 and Vulkan share the legacy metadata and artifact names carry
+view and generation. Source and ABI checks passed. Builds, fixtures and
+device checks remain open. [Shared capture port](research/rust-shared-capture-port.md)
 
 The standalone FSR3 bridge now binds the SDK and owns the SR, FG and
 swapchain transactions in Rust. It keeps the active FG and swapchain
@@ -1572,6 +1605,14 @@ the engine tears down its targets. The existing Runtime remains
 responsible for submitted GPU leases. Source review matched the
 bridge's event identity to the adapter window. The new synthetic
 case and device reset behavior remain unverified for this revision.
+
+The Anomaly frame-generation port moves typed DXGI probes and the policy
+fixture to Rust. D3D11 FG table version 4 takes normalized resources
+with the SDK pass identity. Runtime tag metrics and adapter eligibility
+are reported separately. Skipped input updates close their source
+without assigning a simulation-end timestamp. Source, binding and
+formatting checks are recorded in the [N08 follow-up](research/rust-anomaly-fg-stage.md#n08-source-follow-up).
+Build and device verification remain open.
 
 Anomaly observer quiesce now suspends the overlay before retiring the
 render stages. It closes DirectInput capture and hides the window
@@ -2913,6 +2954,15 @@ an owner. Early Present errors now complete the notification and fault
 the facade. The merged queue and command-list queries hold the read
 lease through the native lookup and refuse during retirement.
 See [the D3D11 presentation audit](research/rust-d3d11-present-cutover.md).
+
+D02 moved native shared texture and fence calls, public table validation,
+and owned-chain dispatch admission and reference handling to Rust. Setup
+rejects nonfinite unit scales, lazy creation retries after a host-load
+refusal, provider publication uses one snapshot, and a fenced nonblocking
+Present may be retried. The C ABI clients and device fixtures remain linked.
+The source and binding review is recorded in the
+[D02 follow-up](research/rust-d3d11-present-cutover.md#d02-follow-up).
+Build, fixture and device verification are pending.
 
 The scoped owner check now queries the caller's live COM receiver for
 its canonical identity and compares that address with the published
@@ -7581,3 +7631,22 @@ production dispatcher, and a Rust fixture checks the Runtime DLL export
 inventory. [V01 port evidence](research/vulkan-sr-provider-admission-port.md)
 records the source checks, fixture changes and remaining C++ paths. Build,
 test, lint and device validation are pending.
+
+### Shared SR sessions and bridging (D03)
+
+Rust owns shared SR frame admission, auxiliary binding restoration and
+cross-API retirement. Checked close exposes a retained bridge for retry, and
+an output-only size change retires and reallocates the prepared surfaces.
+Provider switch logs distinguish a committed FidelityFX version from a
+candidate still under review. See [D03 source evidence](research/rust-sr-sessions-bridge-port.md)
+for the D01 startup dependency, pending Anomaly Auto admission and fixture
+coverage. Build, test, lint and device execution remain pending.
+
+### D04 D3D12 host source port
+
+The shared hosts preserve fence failure codes, retry provider teardown before
+replacement, and carry SR capture identity through evaluation. The C11 FG12 and
+SR12 ABI fixtures preserve their DLL and embedded registrations. The
+[D04 source record](research/d04-d3d12-host-port.md) lists the five remaining
+C++ paths and the Rust review resolutions. Verification covers source syntax,
+bindings and pinned formatting. Build, test and device execution remain pending.

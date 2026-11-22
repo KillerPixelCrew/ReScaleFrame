@@ -407,6 +407,7 @@ impl Fixture {
             presentation_user: null_mut(),
             capabilities: 0,
             colour_transport_default: 0,
+            depth_far_plane: 0,
         };
         let upstream = rsf_game_host_services {
             struct_size: size_of::<rsf_game_host_services>() as u32,
@@ -773,4 +774,55 @@ fn report_reason_truncates_to_the_c_buffer() {
             .len(),
         95
     );
+}
+
+#[test]
+fn far_plane_convention_is_independent_of_depth_direction() {
+    let fixture = Fixture::new();
+    let mut setup = fixture.host.setup;
+    for inverted in 0..=1 {
+        setup.depth_inverted = inverted;
+        for far in [RSF_D3D11_HOST_DEPTH_FINITE, RSF_D3D11_HOST_DEPTH_INFINITE] {
+            setup.depth_far_plane = far;
+            assert_eq!(depth_infinite(&setup), far);
+        }
+        setup.struct_size = offset_of!(rsf_d3d11_host_setup, depth_far_plane) as u32;
+        assert_eq!(depth_infinite(&setup), inverted);
+        setup.struct_size = size_of::<rsf_d3d11_host_setup>() as u32;
+    }
+}
+
+#[test]
+fn foreign_pass_cannot_configure_or_evaluate() {
+    let fixture = Fixture::new();
+    let mut pass = fixture.pass(5);
+    pass.session_id += 1;
+    assert_eq!(
+        fixture.host.process(fixture.context(), &pass, None),
+        INVALID
+    );
+    assert!(!fixture.host.lock_graphics().configured);
+}
+
+#[test]
+fn sr_reports_only_inputs_from_actual_evaluation() {
+    let fixture = Fixture::new();
+    let mut pass = fixture.pass(5);
+    pass.camera.struct_size = size_of::<rsf_camera_frame>() as u32;
+    pass.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+    pass.camera.jitter_pixels = [0.25, -0.25];
+    assert_eq!(fixture.host.process(fixture.context(), &pass, None), OK);
+    let expected = RSF_OVERLAY_SR_INPUT_COLOR | RSF_OVERLAY_SR_INPUT_JITTER;
+    assert_eq!(fixture.host.shared().report.inputs, expected);
+    pass.flags |= RSF_GAME_RENDER_RECONFIGURE;
+    pass.camera.output_width += 1;
+    pass.camera_valid = 0;
+    pass.color_input = null_mut();
+    assert_eq!(
+        fixture.host.process(fixture.context(), &pass, None),
+        NOT_READY
+    );
+    let report = fixture.host.shared().report;
+    assert_eq!(report.inputs, expected);
+    assert_eq!(report.jitter_pixels, [0.25, -0.25]);
 }
