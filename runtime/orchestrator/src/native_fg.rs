@@ -960,7 +960,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStat
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_scene(pass: *const Pass) {
+pub(super) unsafe extern "C" fn rsf_native_fg_scene(pass: *const Pass) {
     let p = &NATIVE_PLATFORM;
     unsafe { set_scene(pass, |pass| refuse_held_inputs(p, pass)) };
 }
@@ -2056,7 +2056,7 @@ unsafe extern "C" fn rsf_native_fg_window_end(pass: *const Pass) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_fg_inputs_ready(source: u64) -> i32 {
+pub(super) extern "C" fn rsf_native_fg_inputs_ready(source: u64) -> i32 {
     if source == 0 {
         return 0;
     }

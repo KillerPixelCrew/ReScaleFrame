@@ -71,13 +71,28 @@ pub(super) fn d3d12_library_path(
 
 // The caller supplies a NUL-terminated absolute path from d3d12_library_path.
 pub(super) unsafe fn load_system_library(path: &[u16]) -> (*mut c_void, u32) {
-    let module = unsafe { rsf_core_vk_sdk_load(path.as_ptr()) };
+    unsafe { load_absolute_library(path.as_ptr()) }
+}
+
+// The caller supplies an absolute NUL-terminated UTF-16 DLL path.
+pub(super) unsafe fn load_absolute_library(path: *const u16) -> (*mut c_void, u32) {
+    let module = unsafe { rsf_core_vk_sdk_load(path) };
     let error = if module.is_null() {
         unsafe { GetLastError() }
     } else {
         0
     };
     (module, error)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_load_absolute_library(
+    path: *const u16,
+    error: &mut u32,
+) -> *mut c_void {
+    let (module, last_error) = unsafe { load_absolute_library(path) };
+    *error = last_error;
+    module
 }
 
 pub(super) struct SdkModule {

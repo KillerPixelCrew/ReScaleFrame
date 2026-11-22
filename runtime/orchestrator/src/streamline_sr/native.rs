@@ -9,10 +9,6 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::core::{Interface, PCWSTR};
-use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::System::LibraryLoader::{
-    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-};
 
 type Handle = *mut c_void;
 const OK: i32 = 0;
@@ -47,15 +43,8 @@ unsafe extern "C" fn rsf_dlss_sr_load_sdk(path: *const u16, setup: &Setup) -> Ha
         ));
         return null_mut();
     }
-    let module = unsafe {
-        LoadLibraryExW(
-            path,
-            null_mut(),
-            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-        )
-    };
+    let (module, error) = unsafe { crate::sdk_module::load_absolute_library(path) };
     if module.is_null() {
-        let error = unsafe { GetLastError() };
         log.say(&format!(
             "could not load {} (Windows error {error})",
             path_text()

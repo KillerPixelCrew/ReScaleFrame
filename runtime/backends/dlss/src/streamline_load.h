@@ -2,13 +2,14 @@
 #pragma once
 #include <rescaleframe/backend.h>
 #include <rescaleframe/log.h>
-#include "../../common/sr_helpers.h"
+#include <windows.h>
 
 // Defined next to the Streamline headers in dlss_streamline.cpp, the one place sl_security.h may be
 // included. Answers false in a build that cannot verify signatures.
 bool rsf_dlss_verify_runtime_signature(const wchar_t* path);
 
 extern "C" uint32_t rsf_streamline_absolute_path(const wchar_t* path);
+extern "C" HMODULE rsf_core_load_absolute_library(const wchar_t* path, uint32_t* error);
 
 static_assert(sizeof(wchar_t) == sizeof(uint16_t));
 
@@ -27,6 +28,9 @@ inline HMODULE load_interposer(const wchar_t* path, bool require_signature, rsf_
         rsf_logf(log, user, "interposer at %ls could not be verified as signed", path);
         return nullptr;
     }
-    return load_module(path, log, user);
+    uint32_t error = 0;
+    const HMODULE module = rsf_core_load_absolute_library(path, &error);
+    if (!module) rsf_logf(log, user, "could not load %ls (Windows error %lu)", path, static_cast<unsigned long>(error));
+    return module;
 }
 }

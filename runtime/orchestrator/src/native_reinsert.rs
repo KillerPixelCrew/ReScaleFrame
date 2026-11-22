@@ -270,7 +270,7 @@ unsafe fn reinsert(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_reinsert(
+pub(super) unsafe extern "C" fn rsf_native_reinsert(
     context: *mut c_void,
     source: *mut c_void,
     destination: *mut c_void,

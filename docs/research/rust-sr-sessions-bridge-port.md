@@ -115,3 +115,33 @@ the original source. Rust 1.94.1 formatting, targeted bindgen 0.72.1 with
 unchanged generated bindings, locked offline Cargo metadata, and MSVC C11
 syntax-only checks for both launchers passed. The fixtures remain unverified
 by compilation or execution.
+
+## D03 native composition and shared loader from `f4871e47`
+
+- `native_sr.rs` calls Rust composition owners for region preparation,
+  depth-domain validation, state save and restore, scalar exposure,
+  translucency, mask composition, motion normalization and output reinsertion.
+  The same Rust owner schedules the FG capture stages and publishes the
+  existing `rsf_native_sr_capture_fg` C export. The COM identity checks and
+  GPU cache owners still use the same device and stream.
+- `native_sr.cpp` still runs as the exception boundary for pipeline resize,
+  frame evaluation and FG capture. It also retains the public evaluation
+  wrapper and the private ordered evaluation entry. Rust still writes
+  `ordered = (result != leaf_fault)` before translating the result, and the
+  C++ exception handler still writes zero and returns `RSF_ERROR_NOT_READY`.
+  The D01 host still consumes its original receipt and owns the device-life
+  and retirement checks.
+- `sr_helpers.h` was removed. Its only remaining executable call was
+  `load_module` under `streamline_load.h`. The shared Rust SDK loader now
+  serves that caller and native Streamline SR with the same directory and
+  System32 search flags and immediate Win32 error capture. The native
+  interposer path keeps absolute-path admission, signature verification
+  when requested, and existing log formatting. The other deleted inline
+  helpers had no callers at this base.
+
+Rust 1.94.1 formatting, bindgen 0.72.1 regeneration of the four relevant
+bindings with unchanged output, locked offline metadata, and MSVC C++20
+syntax-only checks passed. MSVC checked the native SR boundary and both
+Streamline-header consumers with the SDK disabled, then checked the
+consumers with the local SDK headers enabled. Build, link and runtime
+behavior remain unverified.

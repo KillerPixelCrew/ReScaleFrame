@@ -130,7 +130,7 @@ extern "C" fn rsf_native_fg_reflex_ordering_set(threaded: u32) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_stage(
+pub(crate) unsafe extern "C" fn rsf_native_fg_stage(
     stage: *const c_char,
     source: u64,
     frame: u64,

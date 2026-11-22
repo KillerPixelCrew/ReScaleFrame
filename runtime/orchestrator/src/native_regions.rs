@@ -954,7 +954,7 @@ unsafe fn temporal_mask(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_regions_depth_valid(
+pub(super) unsafe extern "C" fn rsf_native_regions_depth_valid(
     facts: *const rsf_game_depth_domains,
     format: u32,
     rect: *const [i32; 4],

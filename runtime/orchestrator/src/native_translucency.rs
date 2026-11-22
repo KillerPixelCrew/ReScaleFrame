@@ -783,7 +783,10 @@ unsafe extern "C" fn rsf_native_translucency_pass(context: Object, pass: *const 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_translucency_take(sr_pass: *const Pass, out: *mut Masks) -> i32 {
+pub(super) unsafe extern "C" fn rsf_native_translucency_take(
+    sr_pass: *const Pass,
+    out: *mut Masks,
+) -> i32 {
     if sr_pass.is_null()
         || out.is_null()
         || unsafe { sr_pass.cast::<u32>().read() } < size_of::<Pass>() as u32
