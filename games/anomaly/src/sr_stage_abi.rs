@@ -3,7 +3,8 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 use crate::sr_d3d11::DrawViews as rsf_sr_draw_views;
-pub use crate::sr_swap_abi::{rsf_anomaly_swap_facts as rsf_anomaly_sr_frame_facts, rsf_anomaly_swap_counters as rsf_anomaly_sr_swap_counters};
+pub use crate::sr_swap_abi::rsf_anomaly_swap_counters as rsf_anomaly_sr_swap_counters;
+pub use crate::sr_swap_abi::rsf_anomaly_swap_facts as rsf_anomaly_sr_frame_facts;
 use rsf_game_sys::rsf_camera_frame;
 
 pub const RSF_ANOMALY_SR_MIN_SCALE: f64 = 0.33;

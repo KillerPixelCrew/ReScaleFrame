@@ -211,7 +211,8 @@ generate("games/anomaly/src/sr_stage_abi.rs", "games/anomaly/src/sr_stage_platfo
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::sr_d3d11::DrawViews as rsf_sr_draw_views;",
           "--with-derive-custom-struct", "rsf_anomaly_sr_settings=PartialEq,Eq",
-          "--raw-line", "pub use crate::sr_swap_abi::{rsf_anomaly_swap_facts as rsf_anomaly_sr_frame_facts, rsf_anomaly_swap_counters as rsf_anomaly_sr_swap_counters};",
+          "--raw-line", "pub use crate::sr_swap_abi::rsf_anomaly_swap_counters as rsf_anomaly_sr_swap_counters;",
+          "--raw-line", "pub use crate::sr_swap_abi::rsf_anomaly_swap_facts as rsf_anomaly_sr_frame_facts;",
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;"])
 generate("games/unity-mono/src/plugin_abi.rs", "games/unity-mono/src/plugin_platform.h",
          "rsf_unity_(native_api|plugin_platform)", "NOTHING",
