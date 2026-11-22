@@ -10,7 +10,7 @@ use windows::Win32::Graphics::{
 };
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_adapter_identity(
+pub(crate) unsafe extern "C" fn rsf_core_sr12_adapter_identity(
     device: Raw,
     vendor: *mut u32,
     software: *mut u32,
@@ -145,7 +145,7 @@ fn normalization_shader(log: rsf_backend_log_fn, user: Raw) -> Option<Vec<u8>> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_create_pipeline(
+pub(crate) unsafe extern "C" fn rsf_core_sr12_create_pipeline(
     device: Raw,
     log: rsf_backend_log_fn,
     user: Raw,
@@ -182,7 +182,7 @@ unsafe extern "C" fn rsf_core_sr12_create_pipeline(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_create_heap(device: Raw) -> Raw {
+pub(crate) unsafe extern "C" fn rsf_core_sr12_create_heap(device: Raw) -> Raw {
     let device: &ID3D12Device = unsafe { borrow(&device) };
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
@@ -197,7 +197,7 @@ unsafe extern "C" fn rsf_core_sr12_create_heap(device: Raw) -> Raw {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_create_exposure_texture(device: Raw) -> Raw {
+pub(crate) unsafe extern "C" fn rsf_core_sr12_create_exposure_texture(device: Raw) -> Raw {
     let desc = texture_desc(1, 1, DXGI_FORMAT_R32_FLOAT);
     committed_resource(
         unsafe { borrow(&device) },
@@ -230,7 +230,10 @@ fn buffer(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_create_exposure_upload(device: Raw, bytes: u64) -> Raw {
+pub(crate) unsafe extern "C" fn rsf_core_sr12_create_exposure_upload(
+    device: Raw,
+    bytes: u64,
+) -> Raw {
     buffer(
         unsafe { borrow(&device) },
         bytes,
@@ -240,7 +243,7 @@ unsafe extern "C" fn rsf_core_sr12_create_exposure_upload(device: Raw, bytes: u6
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_create_readback(device: Raw, bytes: u64) -> Raw {
+pub(crate) unsafe extern "C" fn rsf_core_sr12_create_readback(device: Raw, bytes: u64) -> Raw {
     buffer(
         unsafe { borrow(&device) },
         bytes,
@@ -250,6 +253,6 @@ unsafe extern "C" fn rsf_core_sr12_create_readback(device: Raw, bytes: u64) -> R
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_sr12_owned_by(child: Raw, device: Raw) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_core_sr12_owned_by(child: Raw, device: Raw) -> i32 {
     i32::from(owned_by(unsafe { borrow(&child) }, device))
 }

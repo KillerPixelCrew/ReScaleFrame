@@ -6,7 +6,7 @@
 
 extern "C" void rsf_core_d3d12_transition(void*, void*, uint32_t, uint32_t);
 extern "C" void rsf_core_d3d12_copy_transitioned(void*, void*, uint32_t, uint32_t, void*, uint32_t, uint32_t);
-extern "C" HRESULT rsf_core_d3d12_wait_native_fence(void*, uint64_t, void*, uint32_t);
+extern "C" int32_t rsf_core_d3d12_wait_native_fence(void*, uint64_t, void*, uint32_t);
 extern "C" int32_t rsf_core_d3d12_create_command_list(void*, uint32_t, void**, void**);
 extern "C" void* rsf_core_d3d12_create_uav_texture(void*, uint32_t, uint32_t, uint32_t);
 
@@ -28,7 +28,7 @@ inline void copy_transitioned(ID3D12GraphicsCommandList* list,
 // The caller owns the auto-reset event. The Rust wait retains the exact completion value and HRESULT.
 inline HRESULT wait_fence(ID3D12Fence* fence, uint64_t value, HANDLE event, DWORD timeout_ms = 10000)
 {
-    return rsf_core_d3d12_wait_native_fence(fence, value, event, timeout_ms);
+    return static_cast<HRESULT>(rsf_core_d3d12_wait_native_fence(fence, value, event, timeout_ms));
 }
 inline bool create_command_list(ID3D12Device* device, D3D12_COMMAND_LIST_TYPE type,
                                 ID3D12CommandAllocator** allocator, ID3D12GraphicsCommandList** list)

@@ -9,7 +9,7 @@ extern "C" uint32_t rsf_core_fsr12_native_supported(const rsf_gen12_checks*, voi
 extern "C" const rsf_generation_provider* rsf_generation_fsr()
 {
 #if defined(RSF_HAVE_FFX_FG)
-    return rsf_core_fsr12_native_provider(&rsf::generation12_checks, rsf::FrameCapture12::native_platform());
+    return rsf_core_fsr12_native_provider(rsf::generation12_checks(), rsf::FrameCapture12::native_platform());
 #else
     return rsf_core_fsr12_native_provider(nullptr, nullptr);
 #endif
@@ -18,7 +18,7 @@ extern "C" const rsf_generation_provider* rsf_generation_fsr()
 extern "C" uint32_t rsf_generation_fsr4_supported(void* device, const char* directory)
 {
 #if defined(RSF_HAVE_FFX_FG)
-    return rsf_core_fsr12_native_supported(&rsf::generation12_checks, device, directory);
+    return rsf_core_fsr12_native_supported(rsf::generation12_checks(), device, directory);
 #else
     return rsf_core_fsr12_native_supported(nullptr, device, directory);
 #endif

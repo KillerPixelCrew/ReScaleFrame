@@ -5,7 +5,7 @@ use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::core::IUnknown;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_buffer_index(chain: Raw) -> u32 {
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_buffer_index(chain: Raw) -> u32 {
     unsafe { IUnknown::from_raw_borrowed(&chain) }
         .and_then(|chain| receive::<IDXGISwapChain3>(|iid, out| unsafe { chain.query(iid, out) }))
         .map_or(u32::MAX, |chain| unsafe {
@@ -14,7 +14,7 @@ unsafe extern "C" fn rsf_fg12_platform_buffer_index(chain: Raw) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_texture_desc(
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_texture_desc(
     resource: Raw,
     output: *mut rsf_fg12_texture_desc,
 ) {
@@ -41,7 +41,11 @@ fn same_shape(a: &D3D12_RESOURCE_DESC, b: &D3D12_RESOURCE_DESC) -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_texture(list: Raw, resource: Raw, reuse: Raw) -> Raw {
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_texture(
+    list: Raw,
+    resource: Raw,
+    reuse: Raw,
+) -> Raw {
     let mut desc = unsafe { borrow::<ID3D12Resource>(&resource).GetDesc() };
     let Some(device) = device_of(unsafe { borrow::<ID3D12GraphicsCommandList>(&list) }) else {
         return null_mut();
@@ -62,7 +66,7 @@ unsafe extern "C" fn rsf_fg12_platform_texture(list: Raw, resource: Raw, reuse: 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_copy(
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_copy(
     list: Raw,
     source: Raw,
     source_state: u32,
@@ -83,7 +87,7 @@ unsafe extern "C" fn rsf_fg12_platform_copy(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_transition(
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_transition(
     list: Raw,
     resource: Raw,
     before: u32,
@@ -93,7 +97,7 @@ unsafe extern "C" fn rsf_fg12_platform_transition(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_fence(queue: Raw) -> Raw {
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_fence(queue: Raw) -> Raw {
     let Some(device) = device_of(unsafe { borrow::<ID3D12CommandQueue>(&queue) }) else {
         return null_mut();
     };
@@ -104,7 +108,11 @@ unsafe extern "C" fn rsf_fg12_platform_fence(queue: Raw) -> Raw {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_signal(queue: Raw, fence: Raw, value: u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_signal(
+    queue: Raw,
+    fence: Raw,
+    value: u64,
+) -> i32 {
     let queue: &ID3D12CommandQueue = unsafe { borrow(&queue) };
     let fence: &ID3D12Fence = unsafe { borrow(&fence) };
     i32::from(unsafe { queue.Signal(fence, value) }.is_ok())

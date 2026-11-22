@@ -96,7 +96,10 @@ unsafe extern "C" fn allocate_capture(source: Handle, out: *mut Layout) -> Handl
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_readback(source: Handle, out: *mut Layout) -> Handle {
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback(
+    source: Handle,
+    out: *mut Layout,
+) -> Handle {
     unsafe { allocate_raw(source, out, false) }
 }
 
@@ -130,7 +133,7 @@ fn transition(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_readback_copy(
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback_copy(
     list: Handle,
     source: Handle,
     state: u32,
@@ -177,7 +180,7 @@ unsafe extern "C" fn rsf_fg12_platform_readback_copy(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_map(buffer: Handle, bytes: u64) -> *const u8 {
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_map(buffer: Handle, bytes: u64) -> *const u8 {
     let Some(buffer) = (unsafe { ID3D12Resource::from_raw_borrowed(&buffer) }) else {
         return ptr::null();
     };
@@ -194,7 +197,7 @@ unsafe extern "C" fn rsf_fg12_platform_map(buffer: Handle, bytes: u64) -> *const
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg12_platform_unmap(buffer: Handle) {
+pub(crate) unsafe extern "C" fn rsf_fg12_platform_unmap(buffer: Handle) {
     if let Some(buffer) = unsafe { ID3D12Resource::from_raw_borrowed(&buffer) } {
         let written = D3D12_RANGE { Begin: 0, End: 0 };
         unsafe { buffer.Unmap(0, Some(&written)) };

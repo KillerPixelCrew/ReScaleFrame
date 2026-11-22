@@ -3,7 +3,7 @@
 // admission, vendor selection, resource lifetime, input validation and its cache, temporal
 // history, the normalization dispatch, capture ordering, sharpening, output reinsertion and the
 // handoff of accepted normalized depth and motion to the D3D12 frame generation owner.
-// sr12_platform.cpp supplies one call per D3D12, vendor, capture or sharpening operation.
+// The native bindings compose the platform calls used by this owner.
 use crate::com_ref::ComRef;
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
@@ -104,7 +104,7 @@ pub(crate) struct TextureDesc {
     srv_format: u32,
 }
 
-// Field order matches `Platform` in sr12_platform.cpp.
+// Production and fixture callbacks share this table.
 #[repr(C)]
 pub(crate) struct Platform {
     struct_size: u32,
@@ -1285,13 +1285,35 @@ impl Sr12 {
 }
 
 #[cfg(not(test))]
-unsafe extern "C" {
-    fn rsf_sr12_platform_table() -> &'static Platform;
-}
+mod native;
 
 #[cfg(not(test))]
 pub(super) unsafe fn create_for_host(setup: *const Setup, out: *mut *mut Sr12) -> i32 {
-    unsafe { rsf_core_sr12_create(setup, out, rsf_sr12_platform_table()) }
+    unsafe { rsf_core_sr12_create(setup, out, &native::PLATFORM) }
+}
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_sr12_create_native(setup: *const Setup, out: *mut *mut Sr12) -> i32 {
+    unsafe { create_for_host(setup, out) }
+}
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_sr12_create_planned_native(
+    setup: *const Setup,
+    plan: *mut PlanResult,
+    out: *mut *mut Sr12,
+) -> i32 {
+    unsafe {
+        rsf_core_sr12_create_planned(
+            setup,
+            plan,
+            out,
+            &native::PLATFORM,
+            crate::d3d12_host::sr::rsf_core_sr12_adapter_identity,
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1304,7 +1326,7 @@ unsafe extern "C" fn rsf_core_sr12_create(
         return INVALID;
     }
     unsafe { out.write(ptr::null_mut()) };
-    // The platform table is a static in the native library that called this entry.
+    // Production and fixture tables have static lifetime.
     let Some(platform): Option<&'static Platform> = (unsafe { platform.as_ref() }) else {
         return INVALID;
     };

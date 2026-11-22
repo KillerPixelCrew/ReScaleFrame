@@ -33,19 +33,16 @@ use std::sync::OnceLock;
 static PLATFORM: OnceLock<&'static rsf_fg12_calls> = OnceLock::new();
 
 #[cfg(not(test))]
-pub(super) fn bind_native_platform() {
-    unsafe extern "C" {
-        fn rsf_fg12_platform_bind();
-    }
-    // The native binder publishes the same static platform used by the exported FG12 API.
-    unsafe { rsf_fg12_platform_bind() };
+mod native;
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+pub(super) extern "C" fn rsf_fg12_platform_bind() {
+    PLATFORM.get_or_init(|| &native::CALLS);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_fg12_bind_platform(platform: &'static rsf_fg12_calls) {
-    assert_eq!(platform.struct_size as usize, size_of::<rsf_fg12_calls>());
-    let _ = PLATFORM.set(platform);
-}
+#[cfg(not(test))]
+pub(super) use rsf_fg12_platform_bind as bind_native_platform;
 
 macro_rules! native {
     ($operation:ident($($argument:expr),* $(,)?)) => {

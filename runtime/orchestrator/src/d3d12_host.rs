@@ -222,5 +222,5 @@ pub(super) unsafe extern "C" fn rsf_core_d3d12_wait_native_fence(
     }
 }
 
-mod fg;
-mod sr;
+pub(super) mod fg;
+pub(super) mod sr;

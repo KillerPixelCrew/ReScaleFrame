@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-mod native;
+pub(super) mod native;
 
 type Handle = *mut c_void;
 

@@ -6,7 +6,7 @@ extern "C" const rsf_generation_provider* rsf_core_xeg12_native_provider(const r
 extern "C" const rsf_generation_provider* rsf_generation_xess()
 {
 #if defined(RSF_HAVE_XESS_FG)
-    return rsf_core_xeg12_native_provider(&rsf::generation12_checks);
+    return rsf_core_xeg12_native_provider(rsf::generation12_checks());
 #else
     return rsf_core_xeg12_native_provider(nullptr);
 #endif

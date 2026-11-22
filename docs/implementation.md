@@ -7845,7 +7845,10 @@ coverage. Build, test, lint and device execution remain pending.
 The shared hosts preserve fence failure codes, retry provider teardown before
 replacement, and carry SR capture identity through evaluation. The C11 FG12 and
 SR12 ABI fixtures preserve their DLL and embedded registrations. Shared D3D12
-COM ownership and FG setup and frame admission now run in Rust. The
+COM ownership and FG setup and frame admission now run in Rust. Rust also
+binds both production platform tables and records the remaining SR12
+normalization commands. Native capture lifetimes and presentation install
+exception handling stay at their existing ABI boundaries. The
 [D04 source record](research/d04-d3d12-host-port.md) lists all five paths and
 the remaining native adapters. Follow-up verification covers source review,
 binding regeneration, pinned formatting and locked offline metadata. Build,

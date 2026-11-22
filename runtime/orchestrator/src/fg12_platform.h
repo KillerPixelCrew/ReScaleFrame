@@ -9,34 +9,10 @@
 extern "C" {
 #endif
 
-/* COM outputs transfer one reference, except resource arguments borrowed for a call. */
-uint32_t rsf_fg12_platform_buffer_index(void* chain);
-int rsf_fg12_platform_install(const rsf_d3d11_present_setup*, int explicit_creation);
-uint32_t rsf_fg12_platform_allows_fg(const rsf_frame_record*);
-uint32_t rsf_fg12_platform_depth_domains(const rsf_game_render_pass*);
-
 typedef struct rsf_fg12_texture_desc {
     uint64_t width;
     uint32_t height, format;
 } rsf_fg12_texture_desc;
-void rsf_fg12_platform_texture_desc(void* resource, rsf_fg12_texture_desc*);
-void* rsf_fg12_platform_texture(void* list, void* resource, void* reuse);
-void rsf_fg12_platform_copy(void* list, void* source, uint32_t source_state, void* target, uint32_t target_state);
-void rsf_fg12_platform_transition(void* list, void* resource, uint32_t before, uint32_t after);
-void* rsf_fg12_platform_fence(void* queue);
-int rsf_fg12_platform_signal(void* queue, void* fence, uint64_t value);
-
-void* rsf_fg12_platform_readback(void* source, rsf_fg12_readback_layout*);
-void rsf_fg12_platform_readback_copy(void* list, void* source, uint32_t state, void* buffer, const rsf_fg12_readback_layout*);
-const uint8_t* rsf_fg12_platform_map(void* buffer, uint64_t bytes);
-void rsf_fg12_platform_unmap(void* buffer);
-
-/* Shared frame-capture backend. Rust supplies the actual frame and queue boundaries. */
-void rsf_fg12_platform_dump_record(void* list, void* source, uint32_t state, const rsf_frame_record*, const char* role, uint32_t slot);
-void rsf_fg12_platform_dump_flush(void);
-void rsf_fg12_platform_dump_submitted(void* queue, const rsf_frame_record*);
-void rsf_fg12_platform_dump_prepare(const rsf_fg_frame*, rsf_backend_result);
-
 /* Registers the table below once. Owners that hand inputs to FG12 inside the Rust core call it
    first, exactly as the public FG12 entries do. */
 void rsf_fg12_platform_bind(void);

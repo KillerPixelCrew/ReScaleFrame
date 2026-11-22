@@ -1,27 +1,16 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::render_abi::{RSF_BACKEND_ABI_VERSION, rsf_fg_swapchain_desc};
 
 const NOT_COMPILED: i32 = -3;
 
 unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
-    for output in [out, chain] {
-        if !output.is_null() {
-            unsafe { output.write(null_mut()) };
-        }
-    }
-    if out.is_null() || chain.is_null() || !unsafe { has_capacity(setup) } {
-        return INVALID;
-    }
-    let setup = unsafe { &*setup };
-    if (setup.chain.struct_size as usize) < size_of::<rsf_fg_swapchain_desc>() {
-        return INVALID;
-    }
-    if setup.abi_version != RSF_FG_ABI_VERSION || setup.chain.abi_version != RSF_BACKEND_ABI_VERSION
-    {
-        return ABI_MISMATCH;
-    }
-    NOT_COMPILED
+    let result = unsafe { admission::rsf_core_fg12_setup_header(setup, out, chain) };
+    if result == OK { NOT_COMPILED } else { result }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_fg12_disabled_provider() -> *const Provider {
+    &DISABLED_PROVIDER
 }
 
 extern "C" fn configure(_: Raw, _: *const Options) -> i32 {

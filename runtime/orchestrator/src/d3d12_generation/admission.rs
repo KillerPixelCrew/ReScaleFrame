@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d12_host::{borrow, owned_by};
+use crate::render_abi::{RSF_BACKEND_ABI_VERSION, rsf_fg_swapchain_desc};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_RENDERED,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_camera_frame,
@@ -189,4 +190,62 @@ extern "C" fn rsf_core_fg12_streamline_loaded() -> u32 {
     use windows::core::w;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     u32::from(!unsafe { GetModuleHandleW(w!("sl.dlss_g.dll").as_ptr()) }.is_null())
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_core_fg12_setup_header(
+    setup: *const Setup,
+    out: *mut Raw,
+    chain: *mut Raw,
+) -> i32 {
+    for output in [out, chain] {
+        if !output.is_null() {
+            unsafe { output.write(null_mut()) };
+        }
+    }
+    if out.is_null() || chain.is_null() || !unsafe { sized(setup) } {
+        return INVALID;
+    }
+    let setup = unsafe { &*setup };
+    if (setup.chain.struct_size as usize) < size_of::<rsf_fg_swapchain_desc>() {
+        return INVALID;
+    }
+    if setup.abi_version != RSF_FG_ABI_VERSION || setup.chain.abi_version != RSF_BACKEND_ABI_VERSION
+    {
+        return ABI_MISMATCH;
+    }
+    OK
+}
+
+unsafe extern "C" fn check_setup(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
+    let result = unsafe { rsf_core_fg12_setup_header(setup, out, chain) };
+    if result == OK {
+        unsafe { rsf_core_fg12_setup(setup) }
+    } else {
+        result
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_fg12_generation_checks(
+    frame: unsafe extern "C" fn(*const Frame, Raw) -> i32,
+    load_library: unsafe extern "C" fn(&Setup, *const u16) -> Raw,
+) -> *const Checks {
+    // FidelityFX and XeSS use the same header-defined native loader and SDK frame predicates.
+    static CHECKS: std::sync::OnceLock<Checks> = std::sync::OnceLock::new();
+    CHECKS.get_or_init(|| Checks {
+        setup: check_setup,
+        frame,
+        command: rsf_core_fg12_command,
+        streamline_loaded: rsf_core_fg12_streamline_loaded,
+        load_library,
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fg12_chain_description(
+    desc: &rsf_fg_swapchain_desc,
+    out: *mut windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC1,
+) {
+    unsafe { out.write(chain_description(desc)) };
 }

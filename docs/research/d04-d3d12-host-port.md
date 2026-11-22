@@ -53,6 +53,29 @@ The follow-up was checked with Rust 1.94.1 formatting, bindgen 0.72.1 for
 the affected ABI inputs, and locked offline Windows Cargo metadata. The generated
 files matched the base. Build, test, lint and device results are pending.
 
+## Residual platform bindings at 0251a81a
+
+The C02 cutover at **e993c6ad** already called the Rust hosts for render-host
+and OpenGL dispatch. D07 at **48fac36b** already owned the SDK-gated FidelityFX
+and XeSS provider tables. This pass follows those entry paths and keeps the
+export declarations for the Runtime DLL and embedded carrier.
+
+| D04 source | Evidence and retained boundary |
+| --- | --- |
+| runtime/backends/common/d3d12_helpers.h | The typed wrappers still call d3d12_host.rs for barriers, copies, command lists and UAVs. The fence declaration now matches the Rust i32 ABI. The Win32 adapter returns the same bits as HRESULT, with arm failure, timeout, wait failure and device removal still resolved by d3d12_fence.rs. |
+| runtime/backends/common/fg_helpers.h | d3d12_generation/admission.rs clears the output slots and checks both structure sizes before the two ABI versions. d3d12_generation.rs supplies the same single-sample flip-discard DXGI descriptor. disabled.rs supplies the existing NOT_COMPILED callbacks and null checked teardown. Streamline still calls the canonical SDK frame predicates through the thin native adapter. |
+| runtime/backends/common/generation12_checks.h | The Rust admission module publishes the shared check table. The C++ adapter supplies the canonical frame predicate entry and the existing bounded Windows loader, preserving the absolute path check, search flags and load-error log. fsr_generation.cpp and xess_generation.cpp still gate the enabled table on their existing compile definitions and pass null in the SDK-off paths. |
+| runtime/orchestrator/src/fg12_platform.cpp | fg12/native.rs binds the existing presentation and latency owners and the Rust DXGI, fence and readback leaves. The native bridge catches presentation install exceptions and retains the process-lifetime capture object. Its record, ready-only flush and submitted calls keep their original slot and exact frame arguments. The CPU service still routes to the same FG event and latency ping callbacks. |
+| runtime/orchestrator/src/sr12_platform.cpp | sr12/native.rs binds C02 creation and the native exports to the same Rust table. It records normalization with one descriptor heap, the same root slots, six constants and the same dispatch order. Region copy, unit exposure and motion readback preserve subresource zero, the original extents and 256-byte row pitch. The capture façade retains its existing allocation and teardown boundary. G05 sharpening, G07 frame receipts and the D05/D06 Streamline leaves retain their owners. |
+
+This change uses the existing SR shader bytes, SR/FG input producer and
+resource contracts, capture request and handoff points, and overlay routing.
+It adds no new producers or render passes. The source comparison covers the
+baseline and new callback slots, export definitions, SDK gates and command
+parameters. Rust 1.94.1 formatting, bindgen 0.72.1 regeneration of the FG12 ABI
+and locked offline Windows Cargo metadata were checked. Link, test and device
+verification are pending.
+
 ## Initial port verification
 
 - Pinned Rust 1.94.1 rustfmt checked the changed Rust sources. Bindgen CLI
