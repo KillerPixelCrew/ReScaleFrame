@@ -134,7 +134,7 @@ impl Frame {
     }
 }
 
-// NaN and non-positive deltas take the default, as `x > 0 ? x : d` did.
+// NaN and non-positive deltas take the default.
 fn frame_time_ms(delta_ms: f32) -> f32 {
     if delta_ms > 0.0 {
         delta_ms
@@ -919,7 +919,7 @@ unsafe fn rsf_core_fsr3_fg_create(
 /// clears its UI registration, then unlinks both owners.
 ///
 /// The stored association is authoritative, so the swapchain argument is not
-/// read, as before. Returns 0 for null or an unlinked context, -1 for missing
+/// read. Returns 0 for null or an unlinked context, -1 for missing
 /// prerequisites or a stale pairing, or the first SDK failure; every failure
 /// keeps the links so tagged inputs and the effect stay live.
 ///

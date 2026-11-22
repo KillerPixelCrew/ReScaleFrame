@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Streamline DLSS-G call leaves, Vulkan device preparation and capture
-//! routing of the owner in vulkan_dlss_fg.rs, formerly
-//! native_fg_dlss_vulkan.cpp. native_fg_dlss_vulkan.c lists them in the
-//! production platform table with the session invoke and worker epoch.
+//! routing of the owner in vulkan_dlss_fg.rs. native_fg_dlss_vulkan.c lists
+//! them in the production platform table with the session invoke and worker epoch.
 use super::rsf_core_dlgvk_report_api_error;
 use super::sdk_fg_options::{self, Packed, State};
 use crate::dlss_vulkan_capture::leaves::rsf_core_dlss_capture_leaves;
@@ -60,7 +59,6 @@ struct Native {
 
 impl Drop for Native {
     fn drop(&mut self) {
-        // The former C++ members were destroyed in this order.
         unsafe {
             rsf_core_dlss_capture_close(self.present);
             rsf_core_capture_vk_destroy(self.capture);

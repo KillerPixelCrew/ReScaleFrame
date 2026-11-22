@@ -337,8 +337,7 @@ impl Owner {
 
     fn initialize(&mut self, setup: &Setup) -> i32 {
         let ops = self.ops;
-        // One owner holds the WSI route before the module is loaded, as the
-        // former native compare-exchange did at the start of open.
+        // One owner holds the WSI route before the module is loaded.
         if !route().admit(self.id(), self.device.addr()) {
             return NOT_SUPPORTED;
         }

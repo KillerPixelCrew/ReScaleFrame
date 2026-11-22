@@ -31,7 +31,7 @@ type Handle = *mut c_void;
 const UNEXPECTED: i32 = windows::Win32::Foundation::E_UNEXPECTED.0;
 const DEVICE_REMOVED: i32 = windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED.0;
 
-// Local result codes kept from the previous C++ owner.
+// Local result codes of the bridge ABI.
 const FAILED: i32 = -1;
 const OUT_OF_MEMORY: i32 = -2;
 const WAIT_INCOMPLETE: i32 = -2;
@@ -69,7 +69,7 @@ const FSR4_MAJOR: u32 = 4;
 const PROVIDER_DLL: &str = "amd_fidelityfx_upscaler_dx12.dll";
 const MAX_PATH: usize = 260;
 const DEFAULT_FRAME_TIME_MS: f32 = 16.667;
-// The previous C++ bound, 3.141593f, one f32 step above pi.
+// 3.141593f, one f32 step above pi, so a pi FOV is admitted.
 #[allow(clippy::approx_constant)]
 const MAX_VERTICAL_FOV: f32 = 3.141_593;
 

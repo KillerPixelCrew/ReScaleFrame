@@ -52,8 +52,7 @@ pub(super) struct Capsule {
     query: PfnFfxQuery,
 }
 
-/// Frees the lease, COM owners, the event and the module in the previous
-/// checked-destruction order. The owner drops the capsule only after the SDK
+/// Frees the lease, COM owners, the event and the module in that order. The owner drops the capsule only after the SDK
 /// context is destroyed.
 impl Drop for Capsule {
     fn drop(&mut self) {

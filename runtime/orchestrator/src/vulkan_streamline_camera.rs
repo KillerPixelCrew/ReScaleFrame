@@ -53,7 +53,7 @@ pub(super) fn camera_constants(
 
 /// The constants with `previous_to_clip` set to the `XMMatrixInverse` of
 /// `clip_to_previous`. None for a nonfinite determinant or one below 1e-12
-/// in magnitude, the rule of the former C++ leaves.
+/// in magnitude.
 pub(super) fn with_previous_to_clip(
     constants: &rsf_slvk_sdk_constants,
 ) -> Option<rsf_slvk_sdk_constants> {

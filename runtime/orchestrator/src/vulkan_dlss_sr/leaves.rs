@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Streamline DLSS SR call leaves, device preparation, private images,
-//! sharpening and capture of the Vulkan DLSS SR owner, formerly
-//! native_dlss_vulkan.cpp. native_dlss_vulkan.c lists them in the production
-//! platform table with the session invoke, the FrameDump parameter call and
+//! sharpening and capture of the Vulkan DLSS SR owner. native_dlss_vulkan.c
+//! lists them in the production platform table with the session invoke, the FrameDump parameter call and
 //! the SDK preset policy.
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,
@@ -67,7 +66,7 @@ struct Native {
 
 impl Drop for Native {
     fn drop(&mut self) {
-        // The former C++ destructor body, then its members in reverse order.
+        // Sharpening first, then the members in reverse order.
         unsafe {
             rsf_sharpenvk_host_destroy(&mut self.sharpen);
             rsf_core_capture_vk_destroy(self.capture);

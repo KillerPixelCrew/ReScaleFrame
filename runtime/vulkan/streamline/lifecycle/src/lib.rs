@@ -6,7 +6,7 @@
 //! digest the build selects, and `sdk_guard.c` keeps the exception containment and
 //! the `sl::FrameToken` virtual call. The crate decides when the interposer is
 //! admitted, loaded, initialized, shut down and unloaded, which features slInit
-//! loads, and which Vulkan dispatch entry points stay usable after SDK shutdown. It also owns the legacy bridge's
+//! loads, and which Vulkan dispatch entry points stay usable after SDK shutdown. It also owns the bridge's
 //! DLSS-G options cache, resource state and current borrowed frame token.
 //!
 //! Only Windows links the loader bindings and C entry points. Other hosts build

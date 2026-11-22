@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The `rsf_vk_sl_*` exports of the Streamline Vulkan bridge and its typed SDK
-//! calls, formerly bridge.cpp. The lifecycle owner admits, loads, initializes,
+//! calls. The lifecycle owner admits, loads, initializes,
 //! shuts down and unloads the interposer; these calls run under its session or
 //! frame-token lease. admission.rs admits the interposer by the digest the build
 //! selects.

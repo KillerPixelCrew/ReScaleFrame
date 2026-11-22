@@ -13,7 +13,7 @@ fn main() {
         &[],
         &[],
     )
-    // The bridge stays an untyped handle on the Rust side, as before.
+    // The bridge is an untyped handle on the Rust side.
     .blocklist_type("rsf_vk_fsr4")
     .raw_line("pub type rsf_vk_fsr4 = ::core::ffi::c_void;");
     rsf_bindgen::write(builder, "sys.rs");
