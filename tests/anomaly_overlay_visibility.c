@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/overlay_api.h>
 
-extern "C" int rsf_anomaly_overlay_visibility_fixture(rsf_get_overlay_api_fn) noexcept;
+int rsf_anomaly_overlay_visibility_fixture(rsf_get_overlay_api_fn);
 
-int main() {
+int main(void) {
     return rsf_anomaly_overlay_visibility_fixture(&rsf_get_overlay_api);
 }

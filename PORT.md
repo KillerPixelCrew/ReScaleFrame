@@ -1960,7 +1960,7 @@ Port the input hooks and overlay integration, including the handoff between game
 - [x] [tests/anomaly_overlay_api.cpp](tests/anomaly_overlay_api.cpp)
 - [ ] [tests/anomaly_overlay_hooks.cpp](tests/anomaly_overlay_hooks.cpp)
 - [x] [tests/anomaly_overlay_input_gate.cpp](tests/anomaly_overlay_input_gate.cpp)
-- [ ] [tests/anomaly_overlay_visibility.cpp](tests/anomaly_overlay_visibility.cpp)
+- [x] [tests/anomaly_overlay_visibility.cpp](tests/anomaly_overlay_visibility.cpp)
 
 **Rust review findings (4)**
 

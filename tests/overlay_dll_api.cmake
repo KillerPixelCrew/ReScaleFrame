@@ -44,7 +44,8 @@ rsf_add_rust_static(rsf_anomaly_overlay_fixture_rust rsf_rust_anomaly_overlay_fi
 # contain panel pixels while open, and the adapter log reports drawn state, pointer events and settings
 # requests. The adapter service is compiled in (hooks off) and imports the Runtime like a carrier would.
 if(EXISTS "${RSF_OVERLAY_PANEL_DLL}")
-    add_executable(rsf_anomaly_overlay_visibility_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_visibility.cpp")
+    add_executable(rsf_anomaly_overlay_visibility_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_visibility.c")
+    set_target_properties(rsf_anomaly_overlay_visibility_test PROPERTIES LINKER_LANGUAGE CXX)
     target_include_directories(rsf_anomaly_overlay_visibility_test PRIVATE
         "${PROJECT_SOURCE_DIR}/games/anomaly/src"
         "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
