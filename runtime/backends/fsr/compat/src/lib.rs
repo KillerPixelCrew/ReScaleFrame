@@ -31,7 +31,6 @@ mod native;
 // The FSR 4 DX12 bridge owner for Vulkan SR. Both the Runtime and the
 // standalone VulkanStoryFsr4.dll already link this archive.
 #[cfg(windows)]
-#[path = "../../../../vulkan/fsr4/owner.rs"]
 mod vulkan_bridge;
 
 use core::ffi::{CStr, c_char, c_void};

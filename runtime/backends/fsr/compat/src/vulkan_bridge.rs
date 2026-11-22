@@ -18,14 +18,10 @@ use crate::sys::{
     rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as BridgeInfo,
 };
 use crate::dx12_bridge::{self as dx12, can_signal_done, next_local_completion};
-#[path = "sdk_commands.rs"]
 mod commands;
-#[path = "native.rs"]
 mod native;
 use native::Capsule;
-#[path = "sdk.rs"]
 mod sdk;
-#[path = "standalone.rs"]
 mod standalone;
 
 type Handle = *mut c_void;

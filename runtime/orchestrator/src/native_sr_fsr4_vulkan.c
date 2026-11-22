@@ -24,7 +24,7 @@
 #error "Foreign C++ exception containment needs MSVC structured exception handling"
 #endif
 
-/* Bridge entry points defined by the Rust FSR 4 bridge (runtime/vulkan/fsr4/native.rs). */
+/* Bridge entry points defined by the Rust FSR 4 bridge (runtime/backends/fsr/compat/src/vulkan_bridge/native.rs). */
 int rsf_vk_fsr4_create_shared_image(rsf_fsr4_bridge*, uint32_t, uint32_t, uint32_t, uint32_t, void**, void**);
 int rsf_vk_fsr4_create_shared_fence(rsf_fsr4_bridge*, void**);
 int rsf_vk_fsr4_prepare_destroy(rsf_fsr4_bridge*);

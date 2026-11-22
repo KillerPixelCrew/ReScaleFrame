@@ -14,11 +14,11 @@ This repository has no submodules: the VulkanStory host keeps them as its own `s
 
 At runtime it loads `amd_fidelityfx_upscaler_dx12.dll` from the same directory.
 
-The bridge state lives in the Rust [owner](owner.rs), compiled into the same
+The bridge state lives in the Rust [owner](../../backends/fsr/compat/src/vulkan_bridge.rs), compiled into the same
 `rsf-fsr4-compat` archive that the Runtime and this DLL already link. It owns
 argument and frame validation, provider selection and the FSR 4 pin, the
 compatibility decision, allocator and fence sequencing, the ready/done handoff
-and checked retirement. The Rust [capsule](native.rs) holds the DXGI, D3D12
+and checked retirement. The Rust [capsule](../../backends/fsr/compat/src/vulkan_bridge/native.rs) holds the DXGI, D3D12
 and FidelityFX objects that the owner calls directly, and defines every
 export. The DLL has no C++ translation unit; `g++` only drives the link.
 
