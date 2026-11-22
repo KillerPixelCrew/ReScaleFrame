@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref::{ComRef, vtable};
 use crate::d3d11_output::{GraphicsCache, texture_desc};
 use crate::d3d11_output_abi::*;
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS, R32_TYPELESS,
 };
+use crate::graphics_d3d11::{compute_shader, shader_code};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
     rsf_game_depth_domain, rsf_game_depth_domains,
 };
-use std::{ffi::c_void, ptr};
+use std::{
+    ffi::{CStr, c_void},
+    ptr,
+};
+use windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_STRICTNESS;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::core::{IUnknown, Interface};
 
 type Object = *mut c_void;
 const NONE: Object = ptr::null_mut();
@@ -119,16 +126,6 @@ fn empty_domain(d: &rsf_game_depth_domain) -> bool {
         ])
         && all_zero(&d.viewport_xywh)
         && all_zero(&d.source_clip_to_target_clip)
-}
-
-fn empty_layout(facts: &rsf_game_depth_domains) -> bool {
-    facts.struct_size == 0
-        && facts.version == 0
-        && facts.domain_count == 0
-        && facts.clear_enabled == 0
-        && facts.clear_value.to_bits() == 0
-        && facts.reserved == [0; 3]
-        && facts.domains.iter().all(empty_domain)
 }
 
 fn nonsingular(transform: &[f32; 16]) -> bool {
@@ -279,7 +276,9 @@ fn depth_constants(
         size: region.extent,
         ..Default::default()
     };
-    let Some(facts) = facts.filter(|facts| !empty_layout(facts)) else {
+    let Some(facts) =
+        facts.filter(|facts| unsafe { rsf_regions_depth_domains_requested(facts) } != 0)
+    else {
         return Some(constants);
     };
     if facts.struct_size as usize != size_of::<rsf_game_depth_domains>()
@@ -365,16 +364,44 @@ fn mask_view_format(format: u32) -> Option<u32> {
     .then_some(view)
 }
 
-#[repr(u32)]
 enum Kernel {
     Depth,
     Color,
     Mask,
 }
 
-type CompileShader = unsafe extern "C" fn(Object, Kernel) -> Object;
+pub(super) unsafe fn compile_compute(
+    device: Object,
+    source: &[u8],
+    name: &CStr,
+    flags: u32,
+) -> Option<ComRef> {
+    let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }?;
+    let code = shader_code(source, name, c"main", c"cs_5_0", flags).ok()?;
+    let shader = compute_shader(device, &code)?;
+    unsafe { ComRef::from_owned(shader.into_raw()) }
+}
 
-#[repr(C)]
+impl Kernel {
+    unsafe fn compile(self, device: Object) -> Option<ComRef> {
+        let (source, name): (&[u8], &CStr) = match self {
+            Self::Depth => (
+                include_bytes!("composition_shaders/depth_region.hlsl"),
+                c"NativeDepthRegion",
+            ),
+            Self::Color => (
+                include_bytes!("composition_shaders/color_region.hlsl"),
+                c"NativeColorRegion",
+            ),
+            Self::Mask => (
+                include_bytes!("composition_shaders/temporal_mask_region.hlsl"),
+                c"NativeTemporalMaskRegion",
+            ),
+        };
+        unsafe { compile_compute(device, source, name, D3DCOMPILE_ENABLE_STRICTNESS) }
+    }
+}
+
 struct Dispatch {
     shader: Object,
     constants: Object,
@@ -385,41 +412,144 @@ struct Dispatch {
     groups: [u32; 2],
 }
 
-const _: () = assert!(size_of::<Dispatch>() == 72);
-
 unsafe extern "C" {
-    fn rsf_regions_device_identity(device: Object) -> Object;
-    fn rsf_regions_create_constants(device: Object, size: u32) -> Object;
-    fn rsf_regions_create_uav(device: Object, texture: Object) -> Object;
-    fn rsf_regions_crop(context: Object, target: Object, source: Object, bounds: &[u32; 4]);
-    fn rsf_regions_update_constants(context: Object, buffer: Object, data: *const c_void);
-    fn rsf_regions_dispatch(context: Object, pass: &Dispatch);
+    fn rsf_regions_depth_domains_requested(facts: &rsf_game_depth_domains) -> u32;
+}
+
+pub(super) unsafe fn device_identity(device: Object) -> Option<ComRef> {
+    let mut identity = NONE;
+    let status = unsafe {
+        (vtable::<IUnknown>(&device).QueryInterface)(device, &IUnknown::IID, &mut identity)
+    };
+    unsafe { ComRef::from_result(status, identity) }
+}
+
+pub(super) unsafe fn create_constants(device: Object, size: usize) -> Option<ComRef> {
+    let desc = D3D11_BUFFER_DESC {
+        ByteWidth: size as u32,
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+        ..Default::default()
+    };
+    let mut buffer = NONE;
+    let status = unsafe {
+        (vtable::<ID3D11Device>(&device).CreateBuffer)(device, &desc, ptr::null(), &mut buffer)
+    };
+    unsafe { ComRef::from_result(status, buffer) }
+}
+
+unsafe fn create_uav(device: Object, texture: Object) -> Option<ComRef> {
+    let mut view = NONE;
+    let status = unsafe {
+        (vtable::<ID3D11Device>(&device).CreateUnorderedAccessView)(
+            device,
+            texture,
+            ptr::null(),
+            &mut view,
+        )
+    };
+    unsafe { ComRef::from_result(status, view) }
+}
+
+pub(super) unsafe fn crop(
+    context: Object,
+    target: Object,
+    source: Object,
+    &[left, top, right, bottom]: &[u32; 4],
+) {
+    let bounds = D3D11_BOX {
+        left,
+        top,
+        right,
+        bottom,
+        front: 0,
+        back: 1,
+    };
+    unsafe {
+        (vtable::<ID3D11DeviceContext>(&context).CopySubresourceRegion)(
+            context, target, 0, 0, 0, 0, source, 0, &bounds,
+        )
+    };
+}
+
+pub(super) unsafe fn update_constants<T>(context: Object, buffer: Object, data: &T) {
+    unsafe {
+        (vtable::<ID3D11DeviceContext>(&context).UpdateSubresource)(
+            context,
+            buffer,
+            0,
+            ptr::null(),
+            ptr::from_ref(data).cast(),
+            0,
+            0,
+        )
+    };
+}
+
+unsafe fn dispatch(context: Object, pass: &Dispatch) {
+    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
+    unsafe {
+        (api.CSSetShader)(context, pass.shader, ptr::null(), 0);
+        (api.CSSetShaderResources)(context, 0, pass.view_count, pass.views.as_ptr());
+        (api.CSSetUnorderedAccessViews)(
+            context,
+            0,
+            pass.target_count,
+            pass.targets.as_ptr(),
+            ptr::null(),
+        );
+        if !pass.constants.is_null() {
+            (api.CSSetConstantBuffers)(context, 0, 1, &pass.constants);
+        }
+        (api.Dispatch)(context, pass.groups[0], pass.groups[1], 1);
+        (api.CSSetShaderResources)(context, 0, pass.view_count, [NONE; 3].as_ptr());
+        (api.CSSetUnorderedAccessViews)(
+            context,
+            0,
+            pass.target_count,
+            [NONE; 2].as_ptr(),
+            ptr::null(),
+        );
+    }
 }
 
 pub(super) struct SourceView {
     view: ComRef,
     texture: ComRef,
+    format: u32,
 }
 
 impl SourceView {
+    pub(super) fn matching(&self, texture: Object, format: u32) -> Option<Object> {
+        (self.texture.as_ptr() == texture && self.format == format).then(|| self.view.as_ptr())
+    }
+
     pub(super) unsafe fn get(
         cache: &mut Option<Self>,
         device: Object,
         texture: Object,
         format: u32,
     ) -> Option<Object> {
-        if let Some(entry) = cache
+        if let Some(view) = cache
             .as_ref()
-            .filter(|entry| entry.texture.as_ptr() == texture)
+            .and_then(|entry| entry.matching(texture, format))
         {
-            return Some(entry.view.as_ptr());
+            return Some(view);
         }
-        *cache = None;
         let view =
             unsafe { ComRef::from_owned(rsf_d3d11_output_create_srv(device, texture, format)) }?;
         // Keep the allocation alive so its identity cannot be reused while cached.
         let texture = unsafe { ComRef::retain(texture) };
-        Some(cache.insert(Self { view, texture }).view.as_ptr())
+        Some(
+            cache
+                .insert(Self {
+                    view,
+                    texture,
+                    format,
+                })
+                .view
+                .as_ptr(),
+        )
     }
 }
 
@@ -484,16 +614,11 @@ struct RegionShaders {
 }
 
 impl RegionShaders {
-    unsafe fn new(device: Object, compile: CompileShader) -> Option<Self> {
+    unsafe fn new(device: Object) -> Option<Self> {
         Some(Self {
-            depth: unsafe { ComRef::from_owned(compile(device, Kernel::Depth)) }?,
-            color: unsafe { ComRef::from_owned(compile(device, Kernel::Color)) }?,
-            constants: unsafe {
-                ComRef::from_owned(rsf_regions_create_constants(
-                    device,
-                    size_of::<RegionConstants>() as u32,
-                ))
-            }?,
+            depth: unsafe { Kernel::Depth.compile(device) }?,
+            color: unsafe { Kernel::Color.compile(device) }?,
+            constants: unsafe { create_constants(device, size_of::<RegionConstants>()) }?,
         })
     }
 }
@@ -521,10 +646,8 @@ impl RegionOutput {
         let depth =
             unsafe { output_texture(device, key.extent, RSF_D3D11_FORMAT_R32_FLOAT, true) }?;
         let motion = unsafe { output_texture(device, key.extent, key.motion_format, false) }?;
-        let depth_target =
-            unsafe { ComRef::from_owned(rsf_regions_create_uav(device, depth.as_ptr())) }?;
-        let color_target =
-            unsafe { ComRef::from_owned(rsf_regions_create_uav(device, color.as_ptr())) }?;
+        let depth_target = unsafe { create_uav(device, depth.as_ptr()) }?;
+        let color_target = unsafe { create_uav(device, color.as_ptr()) }?;
         Some(Self {
             color,
             depth,
@@ -542,28 +665,23 @@ struct MaskShader {
 }
 
 impl MaskShader {
-    unsafe fn new(device: Object, compile: CompileShader) -> Option<Self> {
+    unsafe fn new(device: Object) -> Option<Self> {
         Some(Self {
-            shader: unsafe { ComRef::from_owned(compile(device, Kernel::Mask)) }?,
-            constants: unsafe {
-                ComRef::from_owned(rsf_regions_create_constants(
-                    device,
-                    size_of::<MaskConstants>() as u32,
-                ))
-            }?,
+            shader: unsafe { Kernel::Mask.compile(device) }?,
+            constants: unsafe { create_constants(device, size_of::<MaskConstants>()) }?,
         })
     }
 }
 
-struct MaskTarget {
-    texture: ComRef,
-    view: ComRef,
+pub(super) struct MaskTarget {
+    pub(super) texture: ComRef,
+    pub(super) view: ComRef,
 }
 
 impl MaskTarget {
-    unsafe fn new(device: Object, extent: [u32; 2]) -> Option<Self> {
+    pub(super) unsafe fn new(device: Object, extent: [u32; 2]) -> Option<Self> {
         let texture = unsafe { output_texture(device, extent, RSF_D3D11_FORMAT_R32_FLOAT, true) }?;
-        let view = unsafe { ComRef::from_owned(rsf_regions_create_uav(device, texture.as_ptr())) }?;
+        let view = unsafe { create_uav(device, texture.as_ptr()) }?;
         Some(Self { texture, view })
     }
 }
@@ -617,7 +735,7 @@ fn for_device(cache: &mut Option<Resources>, device: ComRef) -> &mut Resources {
 }
 
 unsafe fn identity(device: Object) -> Option<ComRef> {
-    unsafe { ComRef::from_owned(rsf_regions_device_identity(device)) }
+    unsafe { device_identity(device) }
 }
 
 unsafe fn child_device(child: Object) -> Option<ComRef> {
@@ -630,7 +748,6 @@ unsafe fn prepare(
     region: Region,
     facts: Option<rsf_game_depth_domains>,
     inverted: bool,
-    compile: CompileShader,
 ) -> Option<[Object; 3]> {
     let [color, depth, motion] = inputs;
     let device = unsafe { child_device(context) }?;
@@ -658,9 +775,7 @@ unsafe fn prepare(
         let device = r.device.as_ptr();
         let shaders = match &r.shaders {
             Some(shaders) => shaders,
-            None => r
-                .shaders
-                .insert(unsafe { RegionShaders::new(device, compile) }?),
+            None => r.shaders.insert(unsafe { RegionShaders::new(device) }?),
         };
         let key = RegionKey {
             extent: region.extent,
@@ -724,14 +839,10 @@ unsafe fn prepare(
             if copy_depth {
                 rsf_d3d11_output_copy_resource(context, readable, depth);
             }
-            rsf_regions_crop(context, output.motion.as_ptr(), motion, &region.bounds);
-            rsf_regions_update_constants(
-                context,
-                shaders.constants.as_ptr(),
-                ptr::from_ref(&constants).cast(),
-            );
-            rsf_regions_dispatch(context, &depth_pass);
-            rsf_regions_dispatch(context, &color_pass);
+            crop(context, output.motion.as_ptr(), motion, &region.bounds);
+            update_constants(context, shaders.constants.as_ptr(), &constants);
+            dispatch(context, &depth_pass);
+            dispatch(context, &color_pass);
         }
         Some([
             output.color.as_ptr(),
@@ -746,7 +857,6 @@ unsafe fn temporal_mask(
     [mask, reactive, bias]: [Object; 3],
     region: Region,
     weights: [f32; 4],
-    compile: CompileShader,
 ) -> Option<[Object; 2]> {
     if !weights.iter().all(|weight| weight.is_finite()) {
         return None;
@@ -786,9 +896,7 @@ unsafe fn temporal_mask(
         let temporal = &mut r.temporal;
         let shader = match &temporal.shader {
             Some(shader) => shader,
-            None => temporal
-                .shader
-                .insert(unsafe { MaskShader::new(device, compile) }?),
+            None => temporal.shader.insert(unsafe { MaskShader::new(device) }?),
         };
         let output = match &temporal.output {
             Some(output) if output.extent == region.extent => output,
@@ -839,13 +947,8 @@ unsafe fn temporal_mask(
             groups: region.groups(),
         };
         unsafe {
-            rsf_d3d11_output_unbind_targets(context);
-            rsf_regions_update_constants(
-                context,
-                shader.constants.as_ptr(),
-                ptr::from_ref(&constants).cast(),
-            );
-            rsf_regions_dispatch(context, &pass);
+            update_constants(context, shader.constants.as_ptr(), &constants);
+            dispatch(context, &pass);
         }
         Some(
             output
@@ -857,77 +960,89 @@ unsafe fn temporal_mask(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_regions_depth_valid(
+unsafe extern "C" fn rsf_native_regions_depth_valid(
     facts: *const rsf_game_depth_domains,
     format: u32,
     rect: *const [i32; 4],
-) -> u32 {
+) -> bool {
     let Some(region) = unsafe { rect.as_ref() }.copied().and_then(Region::new) else {
-        return 0;
+        return false;
     };
-    u32::from(depth_constants(unsafe { facts.as_ref() }.copied(), format, region, false).is_some())
+    depth_constants(unsafe { facts.as_ref() }.copied(), format, region, false).is_some()
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_regions_prepare(
+unsafe extern "C" fn rsf_native_regions_prepare(
     context: Object,
-    inputs: &[Object; 3],
+    color: Object,
+    depth: Object,
+    motion: Object,
     rect: *const [i32; 4],
+    out_color: *mut Object,
+    out_depth: *mut Object,
+    out_motion: *mut Object,
     facts: *const rsf_game_depth_domains,
-    inverted: u32,
-    compile: CompileShader,
-    outputs: *mut [Object; 3],
-) -> u32 {
-    if context.is_null() || inputs.iter().any(|input| input.is_null()) {
-        return 0;
+    inverted: bool,
+) -> bool {
+    let inputs = [color, depth, motion];
+    if context.is_null()
+        || inputs.iter().any(|input| input.is_null())
+        || out_color.is_null()
+        || out_depth.is_null()
+        || out_motion.is_null()
+    {
+        return false;
     }
     let Some(region) = unsafe { rect.as_ref() }.copied().and_then(Region::new) else {
-        return 0;
+        return false;
     };
-    let Some(result) = (unsafe {
-        prepare(
-            context,
-            *inputs,
-            region,
-            facts.as_ref().copied(),
-            inverted != 0,
-            compile,
-        )
-    }) else {
-        return 0;
+    let Some([color, depth, motion]) =
+        (unsafe { prepare(context, inputs, region, facts.as_ref().copied(), inverted) })
+    else {
+        return false;
     };
-    unsafe { outputs.write(result) };
-    1
+    unsafe {
+        out_color.write(color);
+        out_depth.write(depth);
+        out_motion.write(motion);
+    }
+    true
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_regions_temporal_mask(
+unsafe extern "C" fn rsf_native_regions_temporal_mask(
     context: Object,
-    inputs: &[Object; 3],
+    mask: Object,
     rect: *const [i32; 4],
     weights: *const [f32; 4],
-    compile: CompileShader,
-    outputs: *mut [Object; 2],
-) -> u32 {
-    if context.is_null() || inputs[0].is_null() {
-        return 0;
+    reactive: Object,
+    bias: Object,
+    out_reactive: *mut Object,
+    out_bias: *mut Object,
+) -> bool {
+    if context.is_null() || mask.is_null() || out_reactive.is_null() || out_bias.is_null() {
+        return false;
     }
     let Some(region) = unsafe { rect.as_ref() }.copied().and_then(Region::new) else {
-        return 0;
+        return false;
     };
     let Some(weights) = unsafe { weights.as_ref() }.copied() else {
-        return 0;
+        return false;
     };
-    let Some(result) = (unsafe { temporal_mask(context, *inputs, region, weights, compile) })
+    let Some([reactive, bias]) =
+        (unsafe { temporal_mask(context, [mask, reactive, bias], region, weights) })
     else {
-        return 0;
+        return false;
     };
-    unsafe { outputs.write(result) };
-    1
+    unsafe {
+        out_reactive.write(reactive);
+        out_bias.write(bias);
+    }
+    true
 }
 
 #[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_core_native_regions_release() {
+pub(super) extern "C" fn rsf_native_regions_release() {
     RESOURCES.with(|cache| *cache = None);
 }
 
@@ -941,9 +1056,7 @@ mod tests {
         let region = Region::new(rect).unwrap();
         // Every field in the generated C layout is numeric and permits zero bits.
         let mut facts: rsf_game_depth_domains = unsafe { std::mem::zeroed() };
-        let valid = |facts, format| unsafe {
-            rsf_core_native_regions_depth_valid(facts, format, &rect) != 0
-        };
+        let valid = |facts, format| unsafe { rsf_native_regions_depth_valid(facts, format, &rect) };
         assert!(valid(&facts, RSF_D3D11_FORMAT_R32_FLOAT));
         facts.clear_value = -0.0;
         assert!(!valid(&facts, D16_UNORM));

@@ -1,28 +1,47 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
+use crate::com_ref::{ComRef, vtable};
 use crate::d3d11_output_abi::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_device_ok, rsf_d3d11_output_is_immediate,
 };
 use std::borrow::Borrow;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, D3D11_MIP_LOD_BIAS_MAX, D3D11_MIP_LOD_BIAS_MIN,
+    D3D11_SAMPLER_DESC, ID3D11Device, ID3D11DeviceContext, ID3D11SamplerState,
+};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
-const SLOT_COUNT: usize = 16;
+const SLOT_COUNT: usize = D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT as usize;
 const CACHE_CAPACITY: usize = 32;
 
 type Slots<T> = [Option<T>; SLOT_COUNT];
 type Entries<T> = [Option<Entry<T>>; CACHE_CAPACITY];
 
-unsafe extern "C" {
-    fn rsf_sampler_bias_com_read_slots(context: *mut c_void, out: *mut *mut c_void);
-    fn rsf_sampler_bias_com_write_slot(context: *mut c_void, slot: u32, sampler: *mut c_void);
-    fn rsf_sampler_bias_com_read_bias(sampler: *mut c_void) -> f32;
-    fn rsf_sampler_bias_com_clone(
-        device: *mut c_void,
-        original: *mut c_void,
-        bias: f32,
-    ) -> *mut c_void;
+unsafe fn read_slots(context: *mut c_void, out: *mut *mut c_void) {
+    unsafe {
+        (vtable::<ID3D11DeviceContext>(&context).PSGetSamplers)(context, 0, SLOT_COUNT as u32, out)
+    };
+}
+
+unsafe fn write_slot(context: *mut c_void, slot: u32, sampler: *mut c_void) {
+    unsafe { (vtable::<ID3D11DeviceContext>(&context).PSSetSamplers)(context, slot, 1, &sampler) };
+}
+
+unsafe fn sampler_desc(sampler: *mut c_void) -> D3D11_SAMPLER_DESC {
+    let mut desc = D3D11_SAMPLER_DESC::default();
+    unsafe { (vtable::<ID3D11SamplerState>(&sampler).GetDesc)(sampler, &mut desc) };
+    desc
+}
+
+unsafe fn clone_sampler(device: *mut c_void, original: *mut c_void, bias: f32) -> Option<ComRef> {
+    let mut desc = unsafe { sampler_desc(original) };
+    desc.MipLODBias = bias;
+    let mut replacement = ptr::null_mut();
+    let status = unsafe {
+        (vtable::<ID3D11Device>(&device).CreateSamplerState)(device, &desc, &mut replacement)
+    };
+    unsafe { ComRef::from_result(status, replacement) }
 }
 
 struct Entry<T> {
@@ -210,21 +229,19 @@ unsafe extern "C" fn rsf_sampler_bias_apply(
     }
 
     let mut current = [ptr::null_mut(); SLOT_COUNT];
-    unsafe { rsf_sampler_bias_com_read_slots(context, current.as_mut_ptr()) };
+    unsafe { read_slots(context, current.as_mut_ptr()) };
     let current = current.map(|sampler| NonNull::new(sampler).map(ComRef));
     let device_ptr = device.0.as_ptr();
     let Some(update) = state
         .cache
         .prepare(&current, &baselines, slot_mask, bias, |original| {
             let original_ptr = original.as_ptr();
-            let adjusted = unsafe { rsf_sampler_bias_com_read_bias(original_ptr) } + bias;
-            if !(-16.0..=15.99).contains(&adjusted) {
+            let adjusted = unsafe { sampler_desc(original_ptr) }.MipLODBias + bias;
+            if !(D3D11_MIP_LOD_BIAS_MIN..=D3D11_MIP_LOD_BIAS_MAX).contains(&adjusted) {
                 return None;
             }
-            let replacement = NonNull::new(unsafe {
-                rsf_sampler_bias_com_clone(device_ptr, original_ptr, adjusted)
-            })?;
-            Some((unsafe { ComRef::retain(original_ptr) }, ComRef(replacement)))
+            let replacement = unsafe { clone_sampler(device_ptr, original_ptr, adjusted) }?;
+            Some((unsafe { ComRef::retain(original_ptr) }, replacement))
         })
     else {
         return 0;
@@ -241,7 +258,7 @@ unsafe extern "C" fn rsf_sampler_bias_apply(
         };
         if selected != current.as_ref().map(|sampler| sampler.0) {
             let selected = selected.map_or(ptr::null_mut(), NonNull::as_ptr);
-            unsafe { rsf_sampler_bias_com_write_slot(context, slot as u32, selected) };
+            unsafe { write_slot(context, slot as u32, selected) };
         }
     }
     *applied_mask = update.applied_mask;

@@ -4,14 +4,15 @@ use crate::dxgi_format::{
     R32_TYPELESS, R32G8X24_TYPELESS,
 };
 use crate::resource_roles_abi::{
-    RSF_ROLE_RULE_ANY_DEPTH_FORMAT, RSF_ROLE_RULE_FIXED_SIZE, RSF_ROLE_RULE_RENDER_SIZED,
-    rsf_frame_shape as Shape, rsf_role_rule as Rule, rsf_role_table as Table,
-    rsf_role_verdict as Verdict, rsf_texture_facts as Facts,
+    RSF_ROLE_RULE_ANY_DEPTH_FORMAT, RSF_ROLE_RULE_FIXED_SIZE, RSF_ROLE_RULE_RENDER_RANGE,
+    RSF_ROLE_RULE_RENDER_SIZED, rsf_frame_shape as Shape, rsf_role_rule as Rule,
+    rsf_role_table as Table, rsf_role_verdict as Verdict, rsf_texture_facts as Facts,
 };
 use crate::sr_session::has_capacity;
 
 const UNKNOWN: u32 = 0;
 const CONFIDENT: u32 = 0;
+const CANDIDATE: u32 = 1;
 
 fn is_depth_format(format: u32) -> bool {
     matches!(
@@ -26,14 +27,22 @@ fn is_depth_format(format: u32) -> bool {
     )
 }
 
-fn at_render_resolution(facts: &Facts, shape: &Shape) -> bool {
+fn at_render_resolution(rule: &Rule, facts: &Facts, shape: &Shape) -> bool {
     if shape.render_width != 0 && shape.render_height != 0 {
         return facts.width == shape.render_width && facts.height == shape.render_height;
     }
-    if shape.output_width == 0
-        || shape.output_height == 0
-        || !(shape.output_width / 2..=shape.output_width).contains(&facts.width)
-        || !(shape.output_height / 2..=shape.output_height).contains(&facts.height)
+    let [width_divisor, height_divisor] = if rule.flags & RSF_ROLE_RULE_RENDER_RANGE != 0 {
+        [rule.width, rule.height]
+    } else {
+        [2, 2]
+    };
+    if shape.output_width == 0 || shape.output_height == 0 {
+        return false;
+    }
+    let min_width = (shape.output_width / width_divisor).max(1);
+    let min_height = (shape.output_height / height_divisor).max(1);
+    if !(min_width..=shape.output_width).contains(&facts.width)
+        || !(min_height..=shape.output_height).contains(&facts.height)
     {
         return false;
     }
@@ -44,6 +53,14 @@ fn at_render_resolution(facts: &Facts, shape: &Shape) -> bool {
 }
 
 fn matches_rule(rule: &Rule, facts: &Facts, shape: &Shape) -> bool {
+    if rule.flags & RSF_ROLE_RULE_RENDER_RANGE != 0
+        && (rule.flags & RSF_ROLE_RULE_RENDER_SIZED == 0
+            || rule.flags & RSF_ROLE_RULE_FIXED_SIZE != 0
+            || rule.width == 0
+            || rule.height == 0)
+    {
+        return false;
+    }
     if facts.bind_flags & rule.bind_flags != rule.bind_flags {
         return false;
     }
@@ -60,7 +77,7 @@ fn matches_rule(rule: &Rule, facts: &Facts, shape: &Shape) -> bool {
     {
         return false;
     }
-    rule.flags & RSF_ROLE_RULE_RENDER_SIZED == 0 || at_render_resolution(facts, shape)
+    rule.flags & RSF_ROLE_RULE_RENDER_SIZED == 0 || at_render_resolution(rule, facts, shape)
 }
 
 #[unsafe(no_mangle)]
@@ -89,7 +106,7 @@ unsafe extern "C" fn rsf_classify_texture(
         let rules = unsafe { std::slice::from_raw_parts(table.rules, count) };
         if let Some(rule) = matching_rule(rules, &facts, &shape) {
             result.role = rule.role;
-            result.confidence = rule.confidence;
+            result.confidence = rule_confidence(rule, &facts, &shape);
         }
     }
     unsafe { verdict.write(result) };
@@ -107,4 +124,16 @@ pub(crate) fn matching_rule<'a>(
         return None;
     }
     rules.iter().find(|rule| matches_rule(rule, facts, shape))
+}
+
+/// A match possible only because of the wider range needs corroboration in the bound set.
+pub(crate) fn rule_confidence(rule: &Rule, facts: &Facts, shape: &Shape) -> u32 {
+    if rule.flags & RSF_ROLE_RULE_RENDER_RANGE != 0
+        && (shape.render_width == 0 || shape.render_height == 0)
+        && (facts.width < shape.output_width / 2 || facts.height < shape.output_height / 2)
+    {
+        CANDIDATE
+    } else {
+        rule.confidence
+    }
 }

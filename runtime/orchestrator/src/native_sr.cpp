@@ -11,7 +11,6 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-void* rsf_native_scalar_exposure(void* context, void* input);
 
 namespace {
 bool same_device_inputs(void* raw_context, const rsf_game_render_pass& pass) {

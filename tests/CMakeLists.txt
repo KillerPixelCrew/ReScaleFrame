@@ -296,11 +296,6 @@ add_executable(rsf_ac7_ui_rules_test ac7_ui_rules.cpp)
 target_link_libraries(rsf_ac7_ui_rules_test PRIVATE ReScaleFrame::AC7UIRules rsf_build_options)
 add_test(NAME ac7_ui_rules COMMAND rsf_ac7_ui_rules_test)
 
-# No device: this holds answers decided elsewhere, so stand-in pointers exercise all of it.
-add_executable(rsf_ui_identify ui_identify.cpp)
-target_link_libraries(rsf_ui_identify PRIVATE ReScaleFrame::Graphics rsf_build_options)
-add_test(NAME ui_identify COMMAND rsf_ui_identify)
-
 # A vendor that is not compiled in still has to answer, and has to answer differently from one
 # whose runtime is missing. Runs in both configurations and CI builds it both ways.
 add_executable(rsf_fsr_backend fsr_backend.c)
@@ -333,7 +328,8 @@ target_link_libraries(rsf_fullscreen_pass PRIVATE ReScaleFrame::Graphics rsf_bui
 add_test(NAME fullscreen_pass COMMAND rsf_fullscreen_pass)
 set_tests_properties(fullscreen_pass PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_native_reinsert native_reinsert.cpp ../runtime/orchestrator/src/native_reinsert_platform.cpp)
+add_executable(rsf_native_reinsert graphics_fixture_main.c)
+target_compile_definitions(rsf_native_reinsert PRIVATE RSF_GRAPHICS_FIXTURE=rsf_native_reinsert_fixture)
 target_include_directories(rsf_native_reinsert PRIVATE ../runtime/orchestrator/include)
 target_compile_definitions(rsf_native_reinsert PRIVATE RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_native_reinsert PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
@@ -346,7 +342,7 @@ target_link_libraries(rsf_depth_scale PRIVATE ReScaleFrame::Graphics rsf_build_o
 add_test(NAME depth_scale_device COMMAND rsf_depth_scale)
 set_tests_properties(depth_scale_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_auxiliary_sr auxiliary_sr.cpp ../runtime/orchestrator/src/auxiliary_sr.cpp ../runtime/orchestrator/src/native_regions.cpp)
+add_executable(rsf_auxiliary_sr auxiliary_sr.cpp ../runtime/orchestrator/src/auxiliary_sr.cpp)
 target_include_directories(rsf_auxiliary_sr PRIVATE ../runtime/orchestrator/include ../runtime/presentation/include)
 target_link_libraries(rsf_auxiliary_sr PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME auxiliary_sr_device COMMAND rsf_auxiliary_sr)
@@ -371,7 +367,8 @@ target_link_libraries(rsf_native_fg_cpu_test PRIVATE ReScaleFrame::OrchestratorC
 add_test(NAME native_fg_cpu_contract COMMAND rsf_native_fg_cpu_test)
 set_tests_properties(native_fg_cpu_contract PROPERTIES TIMEOUT 15)
 
-add_executable(rsf_sampler_bias sampler_bias.cpp)
+add_executable(rsf_sampler_bias graphics_fixture_main.c)
+target_compile_definitions(rsf_sampler_bias PRIVATE RSF_GRAPHICS_FIXTURE=rsf_sampler_bias_fixture)
 target_include_directories(rsf_sampler_bias PRIVATE ../runtime/orchestrator/include ../runtime/presentation/include)
 target_link_libraries(rsf_sampler_bias PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME sampler_bias_device COMMAND rsf_sampler_bias)
@@ -383,8 +380,9 @@ target_link_libraries(rsf_d3d11_host_test PRIVATE "$<TARGET_LINKER_FILE:rsf_orch
 add_dependencies(rsf_d3d11_host_test rsf_orchestrator)
 add_test(NAME d3d11_host_contract COMMAND rsf_d3d11_host_test)
 
-add_executable(rsf_resource_roles resource_roles.cpp)
-target_link_libraries(rsf_resource_roles PRIVATE ReScaleFrame::Graphics rsf_build_options)
+add_executable(rsf_resource_roles graphics_fixture_main.c)
+target_compile_definitions(rsf_resource_roles PRIVATE RSF_GRAPHICS_FIXTURE=rsf_resource_roles_fixture)
+target_link_libraries(rsf_resource_roles PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options
 add_test(NAME resource_roles COMMAND rsf_resource_roles)
 
 add_executable(rsf_motion_decode graphics_fixture_main.c)

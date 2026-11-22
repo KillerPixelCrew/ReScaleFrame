@@ -24,12 +24,12 @@ const ABI_MISMATCH: i32 = -2;
 const SHADER_FAILED: i32 = -3;
 const RESOURCE_FAILED: i32 = -4;
 const NO_BACK_BUFFER: i32 = -5;
-const COPY: u32 = 0;
+pub(super) const COPY: u32 = 0;
 const TONEMAP: u32 = 1;
 const PREMULTIPLIED: u32 = 2;
 const PREMULTIPLIED_SRGB: u32 = 4;
 const PREMULTIPLIED_GAMMA22: u32 = 5;
-const COPY_RGBA: u32 = 6;
+pub(super) const COPY_RGBA: u32 = 6;
 const POINT: u32 = 0;
 const LINEAR: u32 = 1;
 
@@ -46,7 +46,7 @@ const _: () = {
     assert!(size_of::<Constants>() == 16);
 };
 
-struct Pass {
+pub(super) struct Pass {
     resources: [ComRef; 9],
     device: ComRef,
     filter: AtomicU32,
@@ -148,7 +148,7 @@ unsafe fn create(device: Handle, setup: *const Setup, out: *mut *mut Pass, filte
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fullscreen_pass_create(
+pub(super) unsafe extern "C" fn rsf_fullscreen_pass_create(
     device: Handle,
     setup: *const Setup,
     out: *mut *mut Pass,
@@ -166,7 +166,7 @@ unsafe extern "C" fn rsf_present_blit_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fullscreen_pass_draw(
+pub(super) unsafe extern "C" fn rsf_fullscreen_pass_draw(
     pass: *const Pass,
     context: Handle,
     target: Handle,
@@ -234,7 +234,7 @@ unsafe extern "C" fn rsf_fullscreen_pass_set_filter(pass: *const Pass, filter: u
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fullscreen_pass_destroy(pass: *mut Pass) {
+pub(super) unsafe extern "C" fn rsf_fullscreen_pass_destroy(pass: *mut Pass) {
     if !pass.is_null() {
         drop(unsafe { Box::from_raw(pass) });
     }

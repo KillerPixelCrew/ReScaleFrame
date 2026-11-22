@@ -25,8 +25,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_fg_dispatch.cpp
     src/fg12_platform.cpp
     src/native_sr.cpp
-    src/native_reinsert_platform.cpp
-    src/native_translucency.cpp
+    src/native_composition_unload.cpp
     src/sr12_platform.cpp
     src/gl_pipeline_platform.cpp
     src/rust_exports.c
@@ -35,7 +34,6 @@ add_library(rsf_orchestrator_core OBJECT
     src/overlay_d3d12.cpp
     src/overlay_platform.cpp
     src/overlay_native12.cpp
-    src/native_regions.cpp
     src/fg_session_platform.cpp
     src/fg_providers.cpp
     src/sr_session_backends.cpp

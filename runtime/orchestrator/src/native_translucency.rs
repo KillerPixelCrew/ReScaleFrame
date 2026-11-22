@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
-// Shared D3D11 translucency hints and cloud-depth handover behind
-// rescaleframe/native_translucency.h. Rust owns the frame ledger, resource
-// leases, producer identity and pass order. native_translucency.cpp keeps the
-// HLSL, its compile and the frame tap sampler bias; native_translucency_com.cpp
-// keeps one call per sampler, predication and dispatch operation.
-use crate::com_ref::ComRef;
-use crate::d3d11_output::{RestoreBindings, SaveBindings, SavedBindings, texture_desc};
+// Shared D3D11 translucency hints and cloud-depth handover.
+use crate::com_ref::{ComRef, vtable};
+use crate::d3d11_output::{SavedBindings, texture_desc};
 use crate::d3d11_output_abi::{
-    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_USAGE_DEFAULT,
-    rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv,
-    rsf_d3d11_output_create_texture, rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
-    rsf_d3d11_output_unbind_targets, rsf_d3d11_texture_desc,
+    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_USAGE_DEFAULT, rsf_d3d11_output_child_device,
+    rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv, rsf_d3d11_output_create_texture,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_output_unbind_targets,
+    rsf_d3d11_texture_desc,
 };
-use crate::native_regions::{Region, SourceView};
+use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
+use crate::native_regions::{
+    MaskTarget, Region, SourceView, compile_compute, create_constants, crop, device_identity,
+    update_constants,
+};
 use crate::native_sr_abi::rsf_native_translucency_masks as Masks;
 use rsf_game_sys::{
     RSF_GAME_RENDER_CLOUD_DEPTH, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
@@ -21,27 +21,20 @@ use rsf_game_sys::{
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, PoisonError};
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::core::BOOL;
 
 type Object = *mut c_void;
 const NONE: Object = ptr::null_mut();
-const BIND_UNORDERED_ACCESS: u32 = 128;
 // A tonemapped change of a tenth already reads as fully covered.
 const COVERAGE_SCALE: f32 = 10.0;
 const MODE_SCENE: u32 = 0;
 const MODE_LAYER: u32 = 1;
 
-// Calls that must stay with the CMake-built caller: the HLSL compile (its C++
-// CRT matches the build configuration), the shared D3D11 state scope and the
-// frame tap sampler bias, which live in the graphics library.
-#[repr(C)]
-struct Leaves {
-    compile: unsafe extern "C" fn(Object) -> Object,
-    save: SaveBindings,
-    restore: RestoreBindings,
-    sampler_bias: unsafe extern "C" fn(f32),
+unsafe extern "C" {
+    fn rsf_frame_tap_set_sampler_bias(bias: f32) -> i32;
 }
 
-#[repr(C)]
 struct Dispatch {
     shader: Object,
     constants: Object,
@@ -50,8 +43,6 @@ struct Dispatch {
     targets: [Object; 3],
     groups: [u32; 2],
 }
-
-const _: () = assert!(size_of::<Dispatch>() == 80);
 
 // Matches cbuffer Params in the HLSL.
 #[repr(C)]
@@ -68,21 +59,39 @@ const _: () = {
     assert!(std::mem::offset_of!(Constants, mode) == 24);
 };
 
-unsafe extern "C" {
-    fn rsf_translucency_create_sampler(device: Object) -> Object;
-    fn rsf_translucency_clear_predication(context: Object);
-    fn rsf_translucency_dispatch(context: Object, pass: &Dispatch);
-    // Shared with native_regions.
-    fn rsf_regions_device_identity(device: Object) -> Object;
-    fn rsf_regions_create_constants(device: Object, size: u32) -> Object;
-    fn rsf_regions_create_uav(device: Object, texture: Object) -> Object;
-    fn rsf_regions_crop(context: Object, target: Object, source: Object, bounds: &[u32; 4]);
-    fn rsf_regions_update_constants(context: Object, buffer: Object, data: *const c_void);
+unsafe fn create_sampler(device: Object) -> Option<ComRef> {
+    let desc = D3D11_SAMPLER_DESC {
+        Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+        AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+        AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+        AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+        MaxLOD: D3D11_FLOAT32_MAX,
+        ..Default::default()
+    };
+    let mut sampler = NONE;
+    let status = unsafe {
+        (vtable::<ID3D11Device>(&device).CreateSamplerState)(device, &desc, &mut sampler)
+    };
+    unsafe { ComRef::from_result(status, sampler) }
+}
+
+unsafe fn dispatch(context: Object, pass: &Dispatch) {
+    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
+    unsafe {
+        (api.CSSetShader)(context, pass.shader, ptr::null(), 0);
+        (api.CSSetShaderResources)(context, 0, 3, pass.views.as_ptr());
+        (api.CSSetUnorderedAccessViews)(context, 0, 3, pass.targets.as_ptr(), ptr::null());
+        (api.CSSetConstantBuffers)(context, 0, 1, &pass.constants);
+        (api.CSSetSamplers)(context, 0, 1, &pass.sampler);
+        (api.Dispatch)(context, pass.groups[0], pass.groups[1], 1);
+        (api.CSSetUnorderedAccessViews)(context, 0, 3, [NONE; 3].as_ptr(), ptr::null());
+    }
 }
 
 // Identity shared by a translucency scope and the view's later SR pass.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Key {
+    session: u64,
     family: u64,
     view: u64,
     frame: u64,
@@ -92,6 +101,7 @@ struct Key {
 impl Key {
     fn of(pass: &Pass) -> Self {
         Self {
+            session: pass.session_id,
             family: pass.family_key,
             view: pass.view_key,
             frame: pass.native_frame,
@@ -100,7 +110,7 @@ impl Key {
     }
 
     fn same_view(&self, other: &Self) -> bool {
-        self.family == other.family && self.view == other.view
+        self.session == other.session && self.family == other.family && self.view == other.view
     }
 }
 
@@ -141,8 +151,9 @@ impl Ledger {
     // Clouds composite in the post-opaque extension, before the first
     // translucency pass of their frame. One arriving after that pass began and
     // before the view's SR pass belongs to the open frame and is late for it.
-    fn cloud_admissible(&self) -> bool {
-        self.frame.is_none_or(|frame| frame.closed)
+    fn cloud_admissible(&self, session: u64) -> bool {
+        self.frame
+            .is_none_or(|frame| frame.closed || frame.key.session != session)
     }
 
     fn cloud_refused(&mut self) {
@@ -156,7 +167,7 @@ impl Ledger {
     // The first scene-colour pass of a frame: everything drawn so far is
     // opaque, sky or cloud. A repeated begin of the open frame would snapshot
     // translucency already drawn, so it keeps the first snapshot.
-    fn open(&mut self, key: Key, session: u64) -> Opening {
+    fn open(&mut self, key: Key) -> Opening {
         if self
             .frame
             .is_some_and(|frame| frame.key == key && !frame.closed)
@@ -167,7 +178,7 @@ impl Ledger {
         let adopt_clouds = self
             .pending
             .take()
-            .is_some_and(|tag| tag.session == session && tag.rect == key.rect);
+            .is_some_and(|tag| tag.session == key.session && tag.rect == key.rect);
         self.frame = Some(Frame {
             key,
             snapshot: false,
@@ -303,11 +314,6 @@ struct Kernel {
     sampler: ComRef,
 }
 
-struct MaskTarget {
-    texture: ComRef,
-    view: ComRef,
-}
-
 struct Targets {
     extent: [u32; 2],
     format: u32,
@@ -362,7 +368,7 @@ impl Device {
             return None;
         }
         let device = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) }?;
-        let identity = unsafe { ComRef::from_owned(rsf_regions_device_identity(device.as_ptr())) }?;
+        let identity = unsafe { device_identity(device.as_ptr()) }?;
         Some(Self { device, identity })
     }
 
@@ -376,7 +382,7 @@ unsafe fn owned_by(identity: &ComRef, child: Object) -> bool {
     let Some(owner) = (unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(child)) }) else {
         return false;
     };
-    unsafe { ComRef::from_owned(rsf_regions_device_identity(owner.as_ptr())) }
+    unsafe { device_identity(owner.as_ptr()) }
         .is_some_and(|owner| owner.as_ptr() == identity.as_ptr())
 }
 
@@ -423,32 +429,19 @@ unsafe fn texture(
 }
 
 impl Kernel {
-    unsafe fn new(device: Object, leaves: &Leaves) -> Option<Self> {
+    unsafe fn new(device: Object) -> Option<Self> {
         Some(Self {
-            shader: unsafe { ComRef::from_owned((leaves.compile)(device)) }?,
-            constants: unsafe {
-                ComRef::from_owned(rsf_regions_create_constants(
+            shader: unsafe {
+                compile_compute(
                     device,
-                    size_of::<Constants>() as u32,
-                ))
+                    include_bytes!("composition_shaders/translucency_masks.hlsl"),
+                    c"translucency_masks",
+                    0,
+                )
             }?,
-            sampler: unsafe { ComRef::from_owned(rsf_translucency_create_sampler(device)) }?,
+            constants: unsafe { create_constants(device, size_of::<Constants>()) }?,
+            sampler: unsafe { create_sampler(device) }?,
         })
-    }
-}
-
-impl MaskTarget {
-    unsafe fn new(device: Object, extent: [u32; 2]) -> Option<Self> {
-        let texture = unsafe {
-            texture(
-                device,
-                extent,
-                RSF_D3D11_FORMAT_R32_FLOAT,
-                RSF_D3D11_BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS,
-            )
-        }?;
-        let view = unsafe { ComRef::from_owned(rsf_regions_create_uav(device, texture.as_ptr())) }?;
-        Some(Self { texture, view })
     }
 }
 
@@ -474,14 +467,14 @@ impl Targets {
 
 impl Owner {
     // A failed compile or allocation is not retried on this device.
-    unsafe fn prepare_kernel(&mut self, leaves: &Leaves) -> bool {
+    unsafe fn prepare_kernel(&mut self) -> bool {
         if self.kernel.is_some() {
             return true;
         }
         if self.kernel_failed {
             return false;
         }
-        self.kernel = unsafe { Kernel::new(self.device.as_ptr(), leaves) };
+        self.kernel = unsafe { Kernel::new(self.device.as_ptr()) };
         self.kernel_failed = self.kernel.is_none();
         !self.kernel_failed
     }
@@ -507,9 +500,8 @@ impl Owner {
         scene_desc: &rsf_d3d11_texture_desc,
         region: Region,
         key: Key,
-        session: u64,
     ) {
-        let Opening::Opened { adopt_clouds } = self.ledger.open(key, session) else {
+        let Opening::Opened { adopt_clouds } = self.ledger.open(key) else {
             return;
         };
         if adopt_clouds {
@@ -522,14 +514,13 @@ impl Owner {
         let Some(targets) = &self.targets else {
             return;
         };
-        unsafe { rsf_regions_crop(context, targets.opaque.as_ptr(), scene, &region.bounds) };
+        unsafe { crop(context, targets.opaque.as_ptr(), scene, &region.bounds) };
         self.ledger.snapshot_taken(key);
     }
 
     unsafe fn dispatch(
         &mut self,
         context: Object,
-        leaves: &Leaves,
         scene: (Object, &rsf_d3d11_texture_desc),
         layer: Option<(Object, &rsf_d3d11_texture_desc)>,
         region: Region,
@@ -578,19 +569,16 @@ impl Owner {
             targets: targets.masks.each_ref().map(|mask| mask.view.as_ptr()),
             groups: region.groups(),
         };
-        let Some(_bindings) = (unsafe { SavedBindings::new(context, leaves.save, leaves.restore) })
+        let Some(_bindings) =
+            (unsafe { SavedBindings::new(context, rsf_d3d11_state_save, rsf_d3d11_state_restore) })
         else {
             return false;
         };
         unsafe {
-            rsf_translucency_clear_predication(context);
+            (vtable::<ID3D11DeviceContext>(&context).SetPredication)(context, NONE, BOOL(0));
             rsf_d3d11_output_unbind_targets(context);
-            rsf_regions_update_constants(
-                context,
-                kernel.constants.as_ptr(),
-                ptr::from_ref(&constants).cast(),
-            );
-            rsf_translucency_dispatch(context, &pass);
+            update_constants(context, kernel.constants.as_ptr(), &constants);
+            dispatch(context, &pass);
         }
         true
     }
@@ -598,7 +586,6 @@ impl Owner {
     unsafe fn merge_layer(
         &mut self,
         context: Object,
-        leaves: &Leaves,
         layer: Object,
         scene: (Object, &rsf_d3d11_texture_desc),
         region: Region,
@@ -609,7 +596,7 @@ impl Owner {
         }
         let layer_desc = unsafe { texture_desc(layer) };
         if !unsafe { owned_by(&self.identity, layer) }
-            || !unsafe { self.dispatch(context, leaves, scene, Some((layer, &layer_desc)), region) }
+            || !unsafe { self.dispatch(context, scene, Some((layer, &layer_desc)), region) }
         {
             self.ledger.layer_merge_failed(key);
             return;
@@ -648,7 +635,7 @@ impl Owner {
         let Some(copy) = &self.layer else {
             return;
         };
-        unsafe { rsf_regions_crop(context, copy.texture.as_ptr(), layer, &region.bounds) };
+        unsafe { crop(context, copy.texture.as_ptr(), layer, &region.bounds) };
         self.ledger.layer_copied(key);
     }
 
@@ -711,13 +698,13 @@ unsafe fn cloud_depth(context: Object, pass: &Pass) {
             return;
         };
         let owner = for_device(owner, device);
-        if owner.ledger.cloud_admissible() {
+        if owner.ledger.cloud_admissible(tag.session) {
             unsafe { owner.store_cloud(context, cloud, extent, tag) };
         }
     });
 }
 
-unsafe fn translucency(context: Object, pass: &Pass, begin: bool, leaves: &Leaves) {
+unsafe fn translucency(context: Object, pass: &Pass, begin: bool) {
     let Some(device) = (unsafe { Device::of_context(context) }) else {
         return;
     };
@@ -729,7 +716,7 @@ unsafe fn translucency(context: Object, pass: &Pass, begin: bool, leaves: &Leave
     let layer_pass = pass.flags & RSF_GAME_RENDER_TRANSLUCENCY_LAYER != 0;
     OWNER.with(|owner| {
         let owner = for_device(owner, device);
-        if !unsafe { owner.prepare_kernel(leaves) } {
+        if !unsafe { owner.prepare_kernel() } {
             return;
         }
         let scene_desc = unsafe { texture_desc(scene) };
@@ -738,19 +725,18 @@ unsafe fn translucency(context: Object, pass: &Pass, begin: bool, leaves: &Leave
         };
         if begin {
             if !layer_pass {
-                unsafe { owner.open(context, scene, &scene_desc, region, key, pass.session_id) };
+                unsafe { owner.open(context, scene, &scene_desc, region, key) };
             }
         } else if !layer_pass {
             if owner.ledger.admit_masks(key) {
                 let written =
-                    unsafe { owner.dispatch(context, leaves, (scene, &scene_desc), None, region) };
+                    unsafe { owner.dispatch(context, (scene, &scene_desc), None, region) };
                 owner.ledger.masks_written(key, written);
             }
         } else {
             unsafe {
                 owner.merge_layer(
                     context,
-                    leaves,
                     pass.color_output,
                     (scene, &scene_desc),
                     region,
@@ -762,12 +748,7 @@ unsafe fn translucency(context: Object, pass: &Pass, begin: bool, leaves: &Leave
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_translucency_pass(
-    context: Object,
-    pass: *const Pass,
-    begin: u32,
-    leaves: &Leaves,
-) {
+unsafe extern "C" fn rsf_native_translucency_pass(context: Object, pass: *const Pass, begin: u32) {
     if context.is_null()
         || pass.is_null()
         || unsafe { pass.cast::<u32>().read() } < size_of::<Pass>() as u32
@@ -780,7 +761,9 @@ unsafe extern "C" fn rsf_core_native_translucency_pass(
         RSF_GAME_RENDER_CLOUD_DEPTH if begin && !pass.depth.is_null() => unsafe {
             cloud_depth(context, pass)
         },
-        RSF_GAME_RENDER_MATERIALS => unsafe { (leaves.sampler_bias)(material_bias(pass, begin)) },
+        RSF_GAME_RENDER_MATERIALS => {
+            unsafe { rsf_frame_tap_set_sampler_bias(material_bias(pass, begin)) };
+        }
         RSF_GAME_RENDER_TRANSLUCENCY
             if pass.flags & RSF_GAME_RENDER_PRIMARY != 0 && !pass.color_input.is_null() =>
         {
@@ -788,11 +771,11 @@ unsafe extern "C" fn rsf_core_native_translucency_pass(
             // end-of-pass masks, on after the opening snapshot. Both are compute
             // work the bias does not touch.
             if !begin {
-                unsafe { (leaves.sampler_bias)(0.0) };
+                unsafe { rsf_frame_tap_set_sampler_bias(0.0) };
             }
-            unsafe { translucency(context, pass, begin, leaves) };
+            unsafe { translucency(context, pass, begin) };
             if begin {
-                unsafe { (leaves.sampler_bias)(material_bias(pass, true)) };
+                unsafe { rsf_frame_tap_set_sampler_bias(material_bias(pass, true)) };
             }
         }
         _ => {}
@@ -800,10 +783,7 @@ unsafe extern "C" fn rsf_core_native_translucency_pass(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_translucency_take(
-    sr_pass: *const Pass,
-    out: *mut Masks,
-) -> i32 {
+unsafe extern "C" fn rsf_native_translucency_take(sr_pass: *const Pass, out: *mut Masks) -> i32 {
     if sr_pass.is_null()
         || out.is_null()
         || unsafe { sr_pass.cast::<u32>().read() } < size_of::<Pass>() as u32
@@ -846,7 +826,7 @@ unsafe extern "C" fn rsf_core_native_translucency_take(
 }
 
 #[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_core_native_translucency_release() {
+pub(super) extern "C" fn rsf_native_translucency_release() {
     OWNER.release();
 }
 
@@ -858,6 +838,7 @@ mod tests {
 
     fn key(frame: u64) -> Key {
         Key {
+            session: 0,
             family: 1,
             view: 2,
             frame,
@@ -869,8 +850,8 @@ mod tests {
         CloudTag { session, rect }
     }
 
-    fn masks_ready(ledger: &mut Ledger, key: Key, session: u64) -> Opening {
-        let opening = ledger.open(key, session);
+    fn masks_ready(ledger: &mut Ledger, key: Key) -> Opening {
+        let opening = ledger.open(key);
         ledger.snapshot_taken(key);
         assert!(ledger.admit_masks(key));
         ledger.masks_written(key, true);
@@ -881,7 +862,7 @@ mod tests {
     fn masks_follow_snapshot_and_reach_only_the_same_identity() {
         let mut ledger = Ledger::default();
         assert_eq!(
-            ledger.open(key(3), 7),
+            ledger.open(key(3)),
             Opening::Opened {
                 adopt_clouds: false
             }
@@ -914,14 +895,14 @@ mod tests {
     #[test]
     fn repeated_open_keeps_the_first_snapshot_until_sr_closes_the_frame() {
         let mut ledger = Ledger::default();
-        masks_ready(&mut ledger, key(3), 0);
+        masks_ready(&mut ledger, key(3));
         let generation = ledger.generation;
-        assert_eq!(ledger.open(key(3), 0), Opening::Repeated);
+        assert_eq!(ledger.open(key(3)), Opening::Repeated);
         assert_eq!(ledger.generation, generation);
         assert!(ledger.take(key(3)).is_some());
         // After SR, the same identity is a new frame of an adapter that does
         // not advance its frame number. It starts a new generation.
-        assert!(matches!(ledger.open(key(3), 0), Opening::Opened { .. }));
+        assert!(matches!(ledger.open(key(3)), Opening::Opened { .. }));
         assert_eq!(ledger.generation, generation + 1);
         assert_eq!(ledger.take(key(3)), None);
     }
@@ -929,7 +910,7 @@ mod tests {
     #[test]
     fn passes_after_sr_and_failed_layers_are_refused() {
         let mut ledger = Ledger::default();
-        ledger.open(key(3), 0);
+        ledger.open(key(3));
         ledger.snapshot_taken(key(3));
         // A layer before the scene masks has nothing to merge into.
         assert!(!ledger.admit_layer(key(3)));
@@ -938,7 +919,7 @@ mod tests {
         ledger.layer_merge_failed(key(3));
         assert_eq!(ledger.take(key(3)), None);
 
-        masks_ready(&mut ledger, key(4), 0);
+        masks_ready(&mut ledger, key(4));
         assert!(ledger.take(key(4)).is_some());
         assert!(!ledger.admit_layer(key(4)));
         ledger.layer_copied(key(4));
@@ -946,60 +927,87 @@ mod tests {
     }
 
     #[test]
+    fn a_second_session_cannot_read_or_close_the_first_sessions_masks() {
+        let mut ledger = Ledger::default();
+        let first = key(3);
+        let second = Key {
+            session: 1,
+            ..first
+        };
+        masks_ready(&mut ledger, first);
+
+        assert_eq!(ledger.take(second), None);
+        assert!(!ledger.frame.unwrap().closed);
+        assert!(!ledger.admit_masks(second));
+        assert!(!ledger.admit_layer(second));
+
+        // The second session can open its own scope even if the first never reached SR.
+        assert!(ledger.cloud_admissible(second.session));
+        ledger.cloud_stored(cloud(second.session, RECT));
+        assert_eq!(ledger.open(second), Opening::Opened { adopt_clouds: true });
+        assert_eq!(ledger.take(first), None);
+        assert_eq!(ledger.take(second), None);
+    }
+
+    #[test]
     fn clouds_need_the_scope_session_and_rectangle() {
         let mut ledger = Ledger::default();
-        assert!(ledger.cloud_admissible());
+        let scope = |frame| Key {
+            session: 5,
+            ..key(frame)
+        };
+        assert!(ledger.cloud_admissible(5));
         ledger.cloud_stored(cloud(5, RECT));
         assert_eq!(
-            masks_ready(&mut ledger, key(3), 5),
+            masks_ready(&mut ledger, scope(3)),
             Opening::Opened { adopt_clouds: true }
         );
-        assert!(ledger.take(key(3)).unwrap().clouds);
+        assert!(ledger.take(scope(3)).unwrap().clouds);
 
         ledger.cloud_stored(cloud(6, RECT));
         assert_eq!(
-            masks_ready(&mut ledger, key(4), 5),
+            masks_ready(&mut ledger, scope(4)),
             Opening::Opened {
                 adopt_clouds: false
             }
         );
-        ledger.take(key(4));
+        ledger.take(scope(4));
 
         ledger.cloud_stored(cloud(5, [0, 0, 8, 4]));
-        masks_ready(&mut ledger, key(5), 5);
-        assert!(!ledger.take(key(5)).unwrap().clouds);
+        masks_ready(&mut ledger, scope(5));
+        assert!(!ledger.take(scope(5)).unwrap().clouds);
 
         // A pending composite expires at the next opening whether or not it matched.
-        masks_ready(&mut ledger, key(6), 5);
-        assert!(!ledger.take(key(6)).unwrap().clouds);
+        masks_ready(&mut ledger, scope(6));
+        assert!(!ledger.take(scope(6)).unwrap().clouds);
 
         // A refused composite withdraws the previous one.
         ledger.cloud_stored(cloud(5, RECT));
         ledger.cloud_refused();
-        masks_ready(&mut ledger, key(7), 5);
-        assert!(!ledger.take(key(7)).unwrap().clouds);
+        masks_ready(&mut ledger, scope(7));
+        assert!(!ledger.take(scope(7)).unwrap().clouds);
     }
 
     #[test]
     fn a_cloud_after_the_frame_opened_is_late_until_its_sr_pass() {
         let mut ledger = Ledger::default();
-        masks_ready(&mut ledger, key(3), 0);
-        assert!(!ledger.cloud_admissible());
+        masks_ready(&mut ledger, key(3));
+        assert!(!ledger.cloud_admissible(0));
         // SR for the view closes the frame even when its masks are refused.
         let mut refused = key(3);
         refused.frame = 2;
         assert_eq!(ledger.take(refused), None);
-        assert!(ledger.cloud_admissible());
+        assert!(ledger.cloud_admissible(0));
 
-        ledger.open(key(4), 0);
-        assert!(!ledger.cloud_admissible());
+        ledger.open(key(4));
+        assert!(!ledger.cloud_admissible(0));
         // Another view's SR pass does not close this frame.
         let mut other = key(4);
         other.family = 3;
         ledger.take(other);
-        assert!(!ledger.cloud_admissible());
+        assert!(!ledger.cloud_admissible(0));
         ledger.take(key(4));
-        assert!(ledger.cloud_admissible());
+        assert!(ledger.cloud_admissible(0));
     }
 
     #[test]

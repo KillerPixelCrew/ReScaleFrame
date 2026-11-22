@@ -3,9 +3,13 @@ use std::borrow::Borrow;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-unsafe extern "C" {
-    fn rsf_com_add_ref(object: *mut c_void);
-    fn rsf_com_release(object: *mut c_void);
+use windows::core::{HRESULT, IUnknown_Vtbl, Interface};
+
+/// Borrow the generated vtable for a live interface of type `I`.
+pub(super) unsafe fn vtable<I: Interface>(object: &*mut c_void) -> &I::Vtable {
+    unsafe { I::from_raw_borrowed(object) }
+        .expect("live COM interface")
+        .vtable()
 }
 
 // Owns one reference to a live COM interface. Returned COM getters transfer
@@ -28,6 +32,11 @@ impl ComRef {
         Some(resources.map(Option::unwrap))
     }
 
+    pub(super) unsafe fn from_result(status: HRESULT, object: *mut c_void) -> Option<Self> {
+        let owned = unsafe { Self::from_owned(object) };
+        if status.is_ok() { owned } else { None }
+    }
+
     pub(super) fn as_ptr(&self) -> *mut c_void {
         self.0.as_ptr()
     }
@@ -38,9 +47,15 @@ impl ComRef {
         raw
     }
 
+    unsafe fn unknown_vtable(raw: *mut c_void) -> *const IUnknown_Vtbl {
+        unsafe { *raw.cast::<*const IUnknown_Vtbl>() }
+    }
+
     pub(super) unsafe fn retain(object: *mut c_void) -> Self {
         let object = NonNull::new(object).expect("live COM interface");
-        unsafe { rsf_com_add_ref(object.as_ptr()) };
+        let raw = object.as_ptr();
+        // Read only the invoked slot. Test doubles need not implement QueryInterface.
+        unsafe { ((*Self::unknown_vtable(raw)).AddRef)(raw) };
         Self(object)
     }
 }
@@ -53,7 +68,8 @@ impl Clone for ComRef {
 
 impl Drop for ComRef {
     fn drop(&mut self) {
-        unsafe { rsf_com_release(self.0.as_ptr()) };
+        let raw = self.as_ptr();
+        unsafe { ((*Self::unknown_vtable(raw)).Release)(raw) };
     }
 }
 
@@ -159,4 +175,48 @@ pub(crate) mod test {
         assert_eq!(first.refs.get(), 1);
         assert_eq!(last.refs.get(), 1);
     }
+}
+
+// C callers own these leases explicitly. Forget the Rust owner on retain and adopt
+// that same reference on release. Both entry points accept an absent resource.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_resource_retain(resource: *mut c_void) {
+    if !resource.is_null() {
+        unsafe { ComRef::retain(resource) }.into_raw();
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_resource_release(resource: *mut c_void) {
+    drop(unsafe { ComRef::from_owned(resource) });
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_create_render_target_view(
+    device: *mut c_void,
+    texture: *mut c_void,
+) -> *mut c_void {
+    if device.is_null() || texture.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { crate::d3d11_output_abi::rsf_d3d11_output_create_rtv(device, texture) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_swapchain_back_buffer(swapchain: *mut c_void) -> *mut c_void {
+    use windows::Win32::Graphics::{Direct3D11::ID3D11Texture2D, Dxgi::IDXGISwapChain};
+
+    if swapchain.is_null() {
+        return std::ptr::null_mut();
+    }
+    let mut buffer = std::ptr::null_mut();
+    let status = unsafe {
+        (vtable::<IDXGISwapChain>(&swapchain).GetBuffer)(
+            swapchain,
+            0,
+            &ID3D11Texture2D::IID,
+            &mut buffer,
+        )
+    };
+    unsafe { ComRef::from_result(status, buffer) }.map_or(std::ptr::null_mut(), ComRef::into_raw)
 }

@@ -27,6 +27,13 @@ provider through the D05 pipeline entry. Overlay admission and device checks
 are pending.
 [D3D11 host port evidence](research/rust-d3d11-host-admission.md)
 
+Rust owns the D3D11 graphics snapshots, resource and UI device operations,
+sampler changes, and native composition passes. The replay uses the integrated
+Rust output and capture paths. Four G03 fixtures moved to Rust. The source
+checks, pinned formatting and targeted bindings are recorded below. Native
+link, fixture and device results remain pending.
+[Graphics state and composition evidence](research/rust-d3d11-composition-state.md)
+
 Steam D3D11 uses a static C entry for both Rust adapters and the existing
 C++ callers. Rust owns fingerprinting, MinHook installation and the typed
 relay, while C++ guards exceptions at the foreign calls. AC7 uses the shared Rust XInput owner.

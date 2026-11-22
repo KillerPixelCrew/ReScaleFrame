@@ -5,6 +5,7 @@
 pub const RSF_ROLE_RULE_RENDER_SIZED: u32 = 1;
 pub const RSF_ROLE_RULE_FIXED_SIZE: u32 = 2;
 pub const RSF_ROLE_RULE_ANY_DEPTH_FORMAT: u32 = 4;
+pub const RSF_ROLE_RULE_RENDER_RANGE: u32 = 8;
 pub type rsf_resource_role = u32;
 pub type rsf_role_confidence = u32;
 #[repr(C)]

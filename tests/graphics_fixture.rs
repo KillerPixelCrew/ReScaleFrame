@@ -20,6 +20,12 @@ mod fullscreen_pass;
 mod motion_decode;
 #[path = "motion_resolve.rs"]
 mod motion_resolve;
+#[path = "native_reinsert.rs"]
+mod native_reinsert;
+#[path = "resource_roles.rs"]
+mod resource_roles;
+#[path = "sampler_bias.rs"]
+mod sampler_bias;
 #[path = "sharpening.rs"]
 mod sharpening;
 

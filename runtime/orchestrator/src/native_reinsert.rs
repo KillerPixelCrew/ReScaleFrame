@@ -2,6 +2,8 @@
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{FullscreenBlit, GraphicsCache, SavedBindings, texture_desc};
 use crate::d3d11_output_abi::*;
+use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
+use crate::native_regions::SourceView;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
@@ -94,11 +96,6 @@ struct Conversion {
     height: u32,
 }
 
-struct SourceView {
-    view: ComRef,
-    source: ComRef,
-}
-
 struct Conversions {
     blit: FullscreenBlit,
     slots: [Option<Conversion>; 2],
@@ -111,30 +108,6 @@ struct Conversions {
 unsafe impl Send for Conversions {}
 
 impl Conversions {
-    unsafe fn source_view(&mut self, texture: NonNull<c_void>, format: u32) -> Option<*mut c_void> {
-        if let Some(source) = self
-            .source
-            .as_ref()
-            .filter(|source| source.source.as_ptr() == texture.as_ptr())
-        {
-            return Some(source.view.as_ptr());
-        }
-        let view = unsafe {
-            ComRef::from_owned(rsf_d3d11_output_create_srv(
-                self.device.as_ptr(),
-                texture.as_ptr(),
-                format,
-            ))
-        }?;
-        let source = unsafe { ComRef::retain(texture.as_ptr()) };
-        Some(
-            self.source
-                .insert(SourceView { view, source })
-                .view
-                .as_ptr(),
-        )
-    }
-
     unsafe fn prepare(&mut self, formats: [Option<u32>; 2], rect: &Rect) -> Option<()> {
         let width = rect.width();
         let height = rect.height();
@@ -181,7 +154,14 @@ impl Conversions {
         formats: [Option<u32>; 2],
         rect: &Rect,
     ) -> Option<[*mut c_void; 2]> {
-        let view = unsafe { self.source_view(source, source_format) }?;
+        let view = unsafe {
+            SourceView::get(
+                &mut self.source,
+                self.device.as_ptr(),
+                source.as_ptr(),
+                source_format,
+            )
+        }?;
         unsafe { self.prepare(formats, rect) }?;
         let mut copies = [source.as_ptr(); 2];
         for ((format, slot), copy) in formats.into_iter().zip(&self.slots).zip(&mut copies) {
@@ -215,7 +195,6 @@ unsafe fn reinsert(
     destination: NonNull<c_void>,
     readable: Option<NonNull<c_void>>,
     rect: Rect,
-    kernels: &rsf_d3d11_reinsert_kernels,
 ) -> Option<()> {
     if unsafe { rsf_d3d11_output_is_immediate(context) } == 0 {
         return None;
@@ -243,7 +222,8 @@ unsafe fn reinsert(
         target.convert_to,
         mirror.and_then(|output| output.convert_to),
     ];
-    let _bindings = unsafe { SavedBindings::new(context, kernels.save?, kernels.restore?) }?;
+    let _bindings =
+        unsafe { SavedBindings::new(context, rsf_d3d11_state_save, rsf_d3d11_state_restore) }?;
     // Remove conflicting UAVs, native shader stages and predication. The
     // shared state scope restores the bindings and preserves UAV counters.
     unsafe { rsf_d3d11_output_clear_state(context) };
@@ -255,14 +235,7 @@ unsafe fn reinsert(
             conversions
         } else {
             *cache = None;
-            let blit = unsafe {
-                FullscreenBlit::new(
-                    &device,
-                    kernels.create_blit?,
-                    kernels.draw_rgba?,
-                    kernels.destroy_blit?,
-                )
-            }?;
+            let blit = unsafe { FullscreenBlit::new_copy(&device, true) }?;
             cache.insert(Conversions {
                 blit,
                 slots: [None, None],
@@ -297,23 +270,22 @@ unsafe fn reinsert(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_reinsert(
+unsafe extern "C" fn rsf_native_reinsert(
     context: *mut c_void,
     source: *mut c_void,
     destination: *mut c_void,
     readable: *mut c_void,
     rect: *const [i32; 4],
-    kernels: *const rsf_d3d11_reinsert_kernels,
-) -> u32 {
-    if context.is_null() || rect.is_null() || kernels.is_null() {
-        return 0;
+) -> bool {
+    if context.is_null() || rect.is_null() {
+        return false;
     }
     let (Some(source), Some(destination), Some(rect)) = (
         NonNull::new(source),
         NonNull::new(destination),
         Rect::new(unsafe { rect.read() }),
     ) else {
-        return 0;
+        return false;
     };
     REINSERT
         .with(|cache| unsafe {
@@ -324,15 +296,13 @@ unsafe extern "C" fn rsf_core_native_reinsert(
                 destination,
                 NonNull::new(readable),
                 rect,
-                &*kernels,
             )
         })
         .flatten()
         .is_some()
-        .into()
 }
 
 #[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_core_native_reinsert_release() {
+pub(super) extern "C" fn rsf_native_reinsert_release() {
     REINSERT.with(|cache| *cache = None);
 }

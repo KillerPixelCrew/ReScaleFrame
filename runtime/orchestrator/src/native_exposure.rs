@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::d3d11_output::{
-    CreateBlit, DestroyBlit, DrawBlit, FullscreenBlit, GraphicsCache, texture_desc,
-};
+use crate::d3d11_output::{FullscreenBlit, GraphicsCache, texture_desc};
 use crate::d3d11_output_abi::*;
+use crate::native_regions::SourceView;
 use std::ffi::c_void;
 use std::ptr;
 
@@ -31,11 +30,6 @@ fn exposure_input(desc: &rsf_d3d11_texture_desc) -> Option<ExposureInput> {
     .then_some(ExposureInput::Convert(format))
 }
 
-struct SourceView {
-    view: ComRef,
-    source: ComRef,
-}
-
 struct Exposure {
     blit: FullscreenBlit,
     target: ComRef,
@@ -50,12 +44,7 @@ struct Exposure {
 unsafe impl Send for Exposure {}
 
 impl Exposure {
-    unsafe fn new(
-        device: ComRef,
-        create: CreateBlit,
-        draw: DrawBlit,
-        destroy: DestroyBlit,
-    ) -> Option<Self> {
+    unsafe fn new(device: ComRef) -> Option<Self> {
         let desc = rsf_d3d11_texture_desc {
             width: 1,
             height: 1,
@@ -75,7 +64,7 @@ impl Exposure {
                 scalar.as_ptr(),
             ))
         }?;
-        let blit = unsafe { FullscreenBlit::new(&device, create, draw, destroy) }?;
+        let blit = unsafe { FullscreenBlit::new_copy(&device, false) }?;
         Some(Self {
             blit,
             target,
@@ -87,27 +76,22 @@ impl Exposure {
     }
 
     unsafe fn source_view(&mut self, input: *mut c_void, format: u32) -> Option<*mut c_void> {
-        if let Some(entry) = self
+        if let Some(view) = self
             .sources
             .iter()
             .flatten()
-            .find(|entry| entry.source.as_ptr() == input)
+            .find_map(|entry| entry.matching(input, format))
         {
-            return Some(entry.view.as_ptr());
+            return Some(view);
         }
-        // Commit the replacement only after the new SRV is valid.
-        let view = unsafe {
-            ComRef::from_owned(rsf_d3d11_output_create_srv(
+        let output = unsafe {
+            SourceView::get(
+                &mut self.sources[self.next],
                 self.device.as_ptr(),
                 input,
                 format,
-            ))
+            )
         }?;
-        let source = unsafe { ComRef::retain(input) };
-        let output = self.sources[self.next]
-            .insert(SourceView { view, source })
-            .view
-            .as_ptr();
         self.next = (self.next + 1) % self.sources.len();
         Some(output)
     }
@@ -116,12 +100,9 @@ impl Exposure {
 static EXPOSURE: GraphicsCache<Option<Exposure>> = GraphicsCache::new(None);
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_scalar_exposure(
+unsafe extern "C" fn rsf_native_scalar_exposure(
     context: *mut c_void,
     input: *mut c_void,
-    create: CreateBlit,
-    draw: DrawBlit,
-    destroy: DestroyBlit,
 ) -> *mut c_void {
     if context.is_null() || input.is_null() {
         return ptr::null_mut();
@@ -143,7 +124,7 @@ unsafe extern "C" fn rsf_core_native_scalar_exposure(
                 exposure
             } else {
                 *cache = None;
-                cache.insert(unsafe { Exposure::new(device, create, draw, destroy) }?)
+                cache.insert(unsafe { Exposure::new(device) }?)
             };
             let view = unsafe { exposure.source_view(input, format) }?;
             unsafe {

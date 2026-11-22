@@ -12,8 +12,8 @@ use crate::motion_resolve_params::{dense_resolve_params, has_motion_sentinel};
 use crate::native_composition::rsf_native_composition_release;
 use crate::native_cpu::rsf_native_cpu_release;
 use crate::native_exposure::rsf_core_native_exposure_release;
-use crate::native_regions::rsf_core_native_regions_release;
-use crate::native_reinsert::rsf_core_native_reinsert_release;
+use crate::native_regions::rsf_native_regions_release;
+use crate::native_reinsert::rsf_native_reinsert_release;
 use crate::native_scene::rsf_native_scene_reset;
 use crate::native_sr_abi::{
     RSF_DLSS_PIPELINE_ABI_VERSION, rsf_dlss_pipeline_frame as Frame,
@@ -22,7 +22,7 @@ use crate::native_sr_abi::{
 use crate::native_sr_state::{
     camera_for, clear_surface, commit_history, reset_history, rsf_native_sr_set_enabled,
 };
-use crate::native_translucency::rsf_core_native_translucency_release;
+use crate::native_translucency::rsf_native_translucency_release;
 use crate::native_window::rsf_native_window_reset;
 use crate::owned_handle::OwnedHandle;
 use crate::render_abi::{
@@ -489,12 +489,12 @@ extern "C" fn rsf_native_sr_release_resources() {
     rsf_native_composition_release();
     rsf_native_sr_set_enabled(0);
     rsf_core_native_exposure_release();
-    rsf_core_native_regions_release();
+    rsf_native_regions_release();
     FG_INPUTS.with(|cache| *cache = None);
     reset_history(FG);
-    rsf_core_native_reinsert_release();
+    rsf_native_reinsert_release();
     reset_history(SR);
-    rsf_core_native_translucency_release();
+    rsf_native_translucency_release();
     clear_surface();
 }
 

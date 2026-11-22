@@ -4,7 +4,15 @@ use crate::d3d11_output_abi::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_texture_desc, rsf_d3d11_state,
     rsf_d3d11_texture_desc, rsf_fullscreen_pass,
 };
+use crate::fullscreen_pass::{
+    COPY, COPY_RGBA, rsf_fullscreen_pass_create, rsf_fullscreen_pass_destroy,
+    rsf_fullscreen_pass_draw,
+};
+use crate::graphics_pass_abi::{
+    RSF_FULLSCREEN_PASS_ABI_VERSION, rsf_fullscreen_draw, rsf_fullscreen_setup,
+};
 use std::ffi::c_void;
+use std::ptr;
 use std::ptr::NonNull;
 use std::sync::Mutex;
 
@@ -25,7 +33,53 @@ pub(super) struct FullscreenBlit {
     destroy: DestroyBlit,
 }
 
+unsafe extern "C" fn create_copy(device: *mut c_void) -> *mut rsf_fullscreen_pass {
+    let setup = rsf_fullscreen_setup {
+        struct_size: size_of::<rsf_fullscreen_setup>() as u32,
+        abi_version: RSF_FULLSCREEN_PASS_ABI_VERSION,
+        log: None,
+        log_user: ptr::null_mut(),
+    };
+    let mut pass = ptr::null_mut();
+    if unsafe { rsf_fullscreen_pass_create(device, &setup, &mut pass) } == 0 {
+        pass.cast()
+    } else {
+        ptr::null_mut()
+    }
+}
+
+unsafe extern "C" fn draw_copy<const MODE: u32>(
+    pass: *mut rsf_fullscreen_pass,
+    context: *mut c_void,
+    target: *mut c_void,
+    source: *mut c_void,
+    width: u32,
+    height: u32,
+) -> u32 {
+    let draw = rsf_fullscreen_draw {
+        struct_size: size_of::<rsf_fullscreen_draw>() as u32,
+        mode: MODE,
+        exposure: 1.0,
+        width,
+        height,
+    };
+    u32::from(unsafe { rsf_fullscreen_pass_draw(pass.cast(), context, target, source, &draw) } == 0)
+}
+
+unsafe extern "C" fn destroy_copy(pass: *mut rsf_fullscreen_pass) {
+    unsafe { rsf_fullscreen_pass_destroy(pass.cast()) };
+}
+
 impl FullscreenBlit {
+    pub(super) unsafe fn new_copy(device: &ComRef, rgba: bool) -> Option<Self> {
+        let draw = if rgba {
+            draw_copy::<COPY_RGBA>
+        } else {
+            draw_copy::<COPY>
+        };
+        unsafe { Self::new(device, create_copy, draw, destroy_copy) }
+    }
+
     pub(super) unsafe fn new(
         device: &ComRef,
         create: CreateBlit,

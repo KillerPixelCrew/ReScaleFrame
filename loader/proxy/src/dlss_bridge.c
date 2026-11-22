@@ -2320,14 +2320,15 @@ static void refresh_constant_watch(void)
 
 /* How the compatibility renderer recognises AC7's input set. First match wins, so the order is
    the priority: the 1x1 exposure texture, the render-target velocity buffer, any depth format,
-   then the half-float history and the R11G11B10 scene colour as candidates. */
+   then the half-float history and the R11G11B10 scene colour as candidates. The scale band
+   includes one-third resolution. The tap verifies smaller candidates against their bound set. */
 static const rsf_role_rule ac7_role_rules[] = {
     {RSF_ROLE_EXPOSURE, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_FIXED_SIZE, DXGI_FORMAT_R32G32_FLOAT, 0, 1, 1},
-    {RSF_ROLE_MOTION, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_RENDER_SIZED, DXGI_FORMAT_R16G16_UNORM, D3D11_BIND_RENDER_TARGET, 0, 0},
-    {RSF_ROLE_DEPTH, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_RENDER_SIZED | RSF_ROLE_RULE_ANY_DEPTH_FORMAT, 0, D3D11_BIND_DEPTH_STENCIL, 0, 0},
-    {RSF_ROLE_HISTORY, RSF_ROLE_CANDIDATE, RSF_ROLE_RULE_RENDER_SIZED, DXGI_FORMAT_R16G16B16A16_FLOAT,
-     D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0},
-    {RSF_ROLE_SCENE_COLOR, RSF_ROLE_CANDIDATE, RSF_ROLE_RULE_RENDER_SIZED, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET, 0, 0},
+    {RSF_ROLE_MOTION, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_RENDER_SIZED | RSF_ROLE_RULE_RENDER_RANGE, DXGI_FORMAT_R16G16_UNORM, D3D11_BIND_RENDER_TARGET, 3, 3},
+    {RSF_ROLE_DEPTH, RSF_ROLE_CONFIDENT, RSF_ROLE_RULE_RENDER_SIZED | RSF_ROLE_RULE_RENDER_RANGE | RSF_ROLE_RULE_ANY_DEPTH_FORMAT, 0, D3D11_BIND_DEPTH_STENCIL, 3, 3},
+    {RSF_ROLE_HISTORY, RSF_ROLE_CANDIDATE, RSF_ROLE_RULE_RENDER_SIZED | RSF_ROLE_RULE_RENDER_RANGE, DXGI_FORMAT_R16G16B16A16_FLOAT,
+     D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 3, 3},
+    {RSF_ROLE_SCENE_COLOR, RSF_ROLE_CANDIDATE, RSF_ROLE_RULE_RENDER_SIZED | RSF_ROLE_RULE_RENDER_RANGE, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET, 3, 3},
 };
 static const rsf_role_table ac7_roles = {
     sizeof(rsf_role_table), ac7_role_rules, sizeof(ac7_role_rules) / sizeof(ac7_role_rules[0])};

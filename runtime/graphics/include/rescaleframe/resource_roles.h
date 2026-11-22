@@ -98,6 +98,10 @@ typedef struct rsf_role_verdict {
 #define RSF_ROLE_RULE_FIXED_SIZE 0x2u
 /* Any depth format, typeless or typed, in place of `format`. */
 #define RSF_ROLE_RULE_ANY_DEPTH_FORMAT 0x4u
+/* With RENDER_SIZED and no known render extent, width and height are positive divisors of the
+   output dimensions for the inclusive minimum. Keep the aspect test and report matches outside the default band as candidates.
+   Mutually exclusive with FIXED_SIZE. */
+#define RSF_ROLE_RULE_RENDER_RANGE 0x8u
 
 /* One row of a game's role table. A texture matches when it is a single plain surface (no
    multisampling, mip chain or array), has `format` (or any depth format with

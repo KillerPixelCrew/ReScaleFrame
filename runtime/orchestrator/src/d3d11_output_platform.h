@@ -40,16 +40,7 @@ void rsf_d3d11_output_copy_resource(void* context, void* destination, void* sour
 void rsf_d3d11_output_copy_region(void* context, void* destination, void* source,
     uint32_t left, uint32_t top, uint32_t width, uint32_t height);
 
-/* The CMake graphics library supplies these shared kernels to the Rust core. */
 struct rsf_fullscreen_pass;
-typedef struct rsf_d3d11_reinsert_kernels {
-    uint32_t (*save)(void* context, rsf_d3d11_state* state);
-    void (*restore)(void* context, rsf_d3d11_state* state);
-    struct rsf_fullscreen_pass* (*create_blit)(void* device);
-    uint32_t (*draw_rgba)(struct rsf_fullscreen_pass* blit, void* context,
-        void* target, void* source, uint32_t width, uint32_t height);
-    void (*destroy_blit)(struct rsf_fullscreen_pass* blit);
-} rsf_d3d11_reinsert_kernels;
 
 #ifdef __cplusplus
 }

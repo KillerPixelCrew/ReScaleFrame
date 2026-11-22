@@ -3,7 +3,7 @@
 #include <d3d11.h>
 #include <cstdint>
 #include <rescaleframe/game_renderer.h>
-struct rsf_native_regions;
+extern "C" {
 // Region-local inputs: RGB becomes RGBA16_FLOAT without a transfer function,
 // depth R32_FLOAT; packed motion stays raw. Colour space remains an adapter fact.
 bool rsf_native_regions_prepare(ID3D11DeviceContext*, ID3D11Texture2D* color, ID3D11Texture2D* depth,
@@ -18,3 +18,4 @@ bool rsf_native_regions_temporal_mask(ID3D11DeviceContext*, ID3D11Texture2D* mas
 // CPU-only preflight before callers allocate/resize or change context bindings.
 bool rsf_native_regions_depth_valid(const rsf_game_depth_domains*, DXGI_FORMAT, const int32_t rect[4]);
 void rsf_native_regions_release();
+}

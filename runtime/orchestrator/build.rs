@@ -75,11 +75,8 @@ fn main() {
     let sources = [
         "src/plugin_callbacks.cpp",
         "src/frame_tap_callbacks.cpp",
-        "src/com_ref.cpp",
         "src/fg_leases_com.cpp",
-        "src/sampler_bias_com.cpp",
-        "src/native_regions_com.cpp",
-        "src/native_translucency_com.cpp",
+        "src/depth_domains_abi.cpp",
     ];
     for source in sources {
         println!("cargo:rerun-if-changed={source}");

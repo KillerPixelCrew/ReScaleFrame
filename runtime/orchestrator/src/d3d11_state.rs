@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Binding scopes behind rescaleframe/d3d11_state.h. This owns the snapshots and every reference
-// they hold, the per-thread nesting, snapshot reuse and the restore order; the leaves in
-// runtime/graphics/src/d3d11_state.cpp only issue typed context calls.
+// D3D11 binding snapshots and ownership behind rescaleframe/d3d11_state.h.
+mod native;
+
 use crate::com_ref::ComRef;
 use crate::d3d11_output_abi::rsf_d3d11_state as State;
 use std::alloc::{Layout, alloc_zeroed};
@@ -27,9 +27,8 @@ const TARGETS: usize = 8;
 type Viewport = [f32; 6];
 type Rect = [i32; 4];
 
-// The snapshots below are filled and bound by the native leaves. Each interface is one reference
-// the save took, so dropping a snapshot releases exactly what its save retained.
-#[allow(dead_code)]
+// Each interface is one reference from a D3D11 getter. Option<ComRef> stores a nullable pointer,
+// so the native operations can fill each slot directly and Drop releases the retained references.
 #[repr(C)]
 struct Stage {
     resources: [Option<ComRef>; RESOURCES],
@@ -41,7 +40,6 @@ struct Stage {
     class_count: u32,
 }
 
-#[allow(dead_code)]
 #[repr(C)]
 struct Snapshot {
     context1: Option<ComRef>,
@@ -77,7 +75,6 @@ struct Snapshot {
     stencil_reference: u32,
 }
 
-#[allow(dead_code)]
 #[repr(C)]
 struct DepthSnapshot {
     targets: [Option<ComRef>; TARGETS],
@@ -89,7 +86,6 @@ struct DepthSnapshot {
     class_count: u32,
 }
 
-#[allow(dead_code)]
 #[repr(C)]
 struct DrawSnapshot {
     targets: [Option<ComRef>; TARGETS],
@@ -232,8 +228,7 @@ unsafe fn traits(platform: &Platform, context: Handle) -> Traits {
     traits
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_state_save(
+unsafe fn rsf_core_d3d11_state_save(
     context: Handle,
     storage: *mut State,
     independent: u32,
@@ -274,12 +269,7 @@ unsafe extern "C" fn rsf_core_d3d11_state_save(
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_state_restore(
-    context: Handle,
-    storage: *mut State,
-    platform: &Platform,
-) {
+unsafe fn rsf_core_d3d11_state_restore(context: Handle, storage: *mut State, platform: &Platform) {
     if context.is_null() || storage.is_null() {
         return;
     }
@@ -339,8 +329,7 @@ unsafe fn restore_inline<T>(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_depth_state_save(
+unsafe fn rsf_core_d3d11_depth_state_save(
     context: Handle,
     storage: *mut State,
     platform: &Platform,
@@ -348,8 +337,7 @@ unsafe extern "C" fn rsf_core_d3d11_depth_state_save(
     unsafe { save_inline(context, storage, platform.read_depth) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_depth_state_restore(
+unsafe fn rsf_core_d3d11_depth_state_restore(
     context: Handle,
     storage: *mut State,
     platform: &Platform,
@@ -357,8 +345,7 @@ unsafe extern "C" fn rsf_core_d3d11_depth_state_restore(
     unsafe { restore_inline(context, storage, platform.write_depth) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_draw_state_save(
+unsafe fn rsf_core_d3d11_draw_state_save(
     context: Handle,
     storage: *mut State,
     platform: &Platform,
@@ -366,8 +353,7 @@ unsafe extern "C" fn rsf_core_d3d11_draw_state_save(
     unsafe { save_inline(context, storage, platform.read_draw) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d11_draw_state_restore(
+unsafe fn rsf_core_d3d11_draw_state_restore(
     context: Handle,
     storage: *mut State,
     platform: &Platform,

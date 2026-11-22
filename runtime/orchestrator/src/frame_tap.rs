@@ -6,7 +6,7 @@ mod platform;
 use crate::com_ref::ComRef;
 use crate::constant_buffer_read::{MAP_WRITE_DISCARD, Map, MappedResource, Unmap, slot};
 use crate::frame_tap_abi::*;
-use crate::resource_roles::matching_rule;
+use crate::resource_roles::{matching_rule, rule_confidence};
 use crate::resource_roles_abi::{
     rsf_frame_shape, rsf_role_rule, rsf_role_table, rsf_texture_facts,
 };
@@ -1602,8 +1602,7 @@ fn consider_target_draw(
 
 // Judged against the presented size with the render size unknown. resource_roles.rs owns the
 // rules' meaning; the tap only holds the caller's copied table.
-fn role_of(facts: &rsf_texture_facts) -> u32 {
-    let setup = setup();
+fn role_of(facts: &rsf_texture_facts, setup: &Setup) -> (u32, bool) {
     let shape = rsf_frame_shape {
         struct_size: size_of::<rsf_frame_shape>() as u32,
         output_width: setup.options.output_width,
@@ -1612,7 +1611,9 @@ fn role_of(facts: &rsf_texture_facts) -> u32 {
         render_height: 0,
     };
     let rules = &setup.rules[..(setup.rule_count as usize).min(ROLE_RULES)];
-    matching_rule(rules, facts, &shape).map_or(0, |rule| rule.role)
+    matching_rule(rules, facts, &shape).map_or((0, false), |rule| {
+        (rule.role, rule_confidence(rule, facts, &shape) != 0)
+    })
 }
 
 // Whether anything reads the shader resource shadow. Without a reader, keeping it is a resource
@@ -1697,27 +1698,28 @@ fn consider_bound_set(platform: &Platform, render: &mut Render, context: Handle)
         return;
     }
 
-    // Judged against the presented size with the render size unknown, so the classifier accepts
-    // anything from half of it upwards that keeps the frame's aspect.
+    // The adapter supplies the size rules. Corroborate candidate depth and motion with the
+    // other reconstruction inputs before publishing the binding set.
     let (mut motion, mut depth, mut exposure, mut history): (Handle, Handle, Handle, Handle) =
         (null_mut(), null_mut(), null_mut(), null_mut());
     let (mut motion_width, mut motion_height) = (0, 0);
+    let mut motion_candidate = false;
     for index in occupied(render) {
         let entry = &mut render.slots[index];
         let Some(texture) = entry.texture.as_ref().map(ComRef::as_ptr) else {
             continue;
         };
-        entry.role = role_of(&entry.facts);
+        let (role, candidate) = role_of(&entry.facts, setup);
+        entry.role = role;
         match entry.role {
-            ROLE_MOTION if motion.is_null() => {
+            ROLE_MOTION if motion.is_null() || (motion_candidate && !candidate) => {
                 motion = texture;
+                motion_candidate = candidate;
                 motion_width = entry.facts.width;
                 motion_height = entry.facts.height;
-                bump(MOTION_SEEN);
             }
-            ROLE_DEPTH if depth.is_null() => {
+            ROLE_DEPTH if depth.is_null() && !candidate => {
                 depth = texture;
-                bump(DEPTH_SEEN);
             }
             ROLE_EXPOSURE if exposure.is_null() => {
                 exposure = texture;
@@ -1746,6 +1748,25 @@ fn consider_bound_set(platform: &Platform, render: &mut Render, context: Handle)
                 break;
             }
         }
+    }
+
+    if !motion.is_null() && (depth.is_null() || motion_candidate) {
+        depth = occupied(render)
+            .map(|index| &render.slots[index])
+            .find(|entry| {
+                entry.role == ROLE_DEPTH
+                    && entry.facts.width == motion_width
+                    && entry.facts.height == motion_height
+            })
+            .and_then(|entry| entry.texture.as_ref())
+            .map_or(null_mut(), ComRef::as_ptr);
+    }
+
+    if !motion.is_null() {
+        bump(MOTION_SEEN);
+    }
+    if !depth.is_null() {
+        bump(DEPTH_SEEN);
     }
 
     // A near miss, two of motion, depth and colour, says which combinations occur. Bounded.

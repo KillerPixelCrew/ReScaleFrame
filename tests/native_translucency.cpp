@@ -71,6 +71,11 @@ int main()
     set(scene.Get(), 5, 3, 4.0f, 1);   // a bright translucent draw inside the rectangle
     set(scene.Get(), 0, 0, 4.0f, 1);   // outside the view rectangle
     rsf_native_translucency_pass(context.Get(), &standard, 0);
+    auto foreign_sr = pass(RSF_GAME_RENDER_SR, 3, 0);
+    foreign_sr.session_id = 9;
+    rsf_native_translucency_masks refused{}; refused.struct_size = sizeof(refused);
+    passed &= rsf_native_translucency_take(&foreign_sr, &refused) == 0 && !refused.reactive;
+    // The original scope must still accept its layer after the foreign request.
     auto separate = pass(RSF_GAME_RENDER_TRANSLUCENCY, 3, RSF_GAME_RENDER_TRANSLUCENCY_LAYER);
     separate.color_input = scene.Get();
     rsf_native_translucency_pass(context.Get(), &separate, 1);
