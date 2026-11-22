@@ -478,8 +478,8 @@ generate("games/ac7/src/motion_capture_graphics_abi.rs", "runtime/graphics/inclu
           "--allowlist-function", "rsf_(ac7_motion_capture_.*|frame_tap_(install|uninstall|set_constant_watch|set_research(_phase)?_callbacks)|"
           "observer_(install|uninstall)|dump_texture(_bytes)?|read_constant_buffer)",
           "--blocklist-type", "rsf_(observer_layout_element|game_render_pass)",
-          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;",
-          "--raw-line", "use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;"])
+          "--raw-line", "use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;",
+          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
 generate("runtime/orchestrator/src/frame_tap_abi.rs", "runtime/graphics/src/frame_tap_platform.h",
          "rsf_frame_tap_.*", "RSF_FRAME_TAP_.*", ["-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
