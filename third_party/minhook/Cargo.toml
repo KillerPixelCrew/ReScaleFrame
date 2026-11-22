@@ -9,7 +9,7 @@ license.workspace = true
 links = "minhook"
 
 [build-dependencies]
-cc = "1"
+cc.workspace = true
 
 [lints]
 workspace = true

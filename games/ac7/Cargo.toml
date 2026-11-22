@@ -20,7 +20,7 @@ rsf-game-sys = { path = "../../sdk/game" }
 rsf-minhook-sys = { path = "../../third_party/minhook" }
 
 [build-dependencies]
-cc = "1"
+cc.workspace = true
 rsf-bindgen = { path = "../../tools/bindgen" }
 
 [target."cfg(windows)".dependencies]

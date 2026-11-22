@@ -41,7 +41,7 @@ rsf-runtime-common = { path = "../../runtime/common" }
 rsf-steam = { path = "../../integrations/steam" }
 
 [build-dependencies]
-cc = "1"
+cc.workspace = true
 rsf-bindgen = { path = "../../tools/bindgen" }
 
 [lints]
