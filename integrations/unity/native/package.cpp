@@ -12,6 +12,7 @@
 // Win32, SDK and Runtime calls through rsf_unity_package_platform. Its mutex serializes the
 // session exports, Unity device events and the SR pass.
 #include "package.h"
+#include "../../../integrations/windows/window_input.h"
 #include "bridge.h"
 #include "vulkan_bridge.h"
 #include "preview.h"
@@ -31,7 +32,6 @@ extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_unload();
 extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
 extern "C" uint64_t rsf_unity_package_session_seed() noexcept;
-extern "C" uint32_t rsf_unity_package_raw_input_type(intptr_t, uint32_t*) noexcept;
 extern "C" void rsf_unity_package_timestamp(uint64_t*, uint64_t*) noexcept;
 extern "C" uint32_t rsf_unity_package_local_app_data(wchar_t*, uint32_t) noexcept;
 extern "C" void rsf_unity_package_create_directory(const wchar_t*) noexcept;
@@ -55,8 +55,6 @@ static_assert(sizeof(rsf_fg12_setup) == 152 && RSF_DLSS_ENGINE_UNITY == 2);
 // services.rs mirrors rsfu_input's results, the host services and the input classification.
 static_assert(RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9);
 static_assert(sizeof(rsf_game_host_services) == 104 && sizeof(rsf_unity_native_api) == 72 && sizeof(wchar_t) == 2);
-static_assert(WM_INPUT == 0x00FF && WM_KEYFIRST == 0x0100 && WM_KEYLAST == 0x0109);
-static_assert(WM_MOUSEFIRST == 0x0200 && WM_MOUSELAST == 0x020E && RIM_TYPEMOUSE == 0 && RIM_TYPEKEYBOARD == 1);
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -187,7 +185,7 @@ constexpr rsf_unity_package_platform platform{
     []() noexcept { return rsf_unity_preview_parent(); },
     rsf_unity_package_subclass,
     rsf_unity_package_restore,
-    rsf_unity_package_raw_input_type,
+    rsf_win32_input_kind,
     rsf_unity_package_timestamp,
     [](const rsf_game_cpu_event* event) noexcept { rsf_fg12_cpu(event); },
     [](uint64_t session, uint64_t frame) noexcept { rsf_fg12_submitted(session, frame); },

@@ -586,6 +586,7 @@ name = "rsf-rdr2"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "rsf-windows",
  "windows",
  "windows-sys",
 ]
@@ -674,6 +675,7 @@ dependencies = [
 name = "rsf-windows"
 version = "0.1.2"
 dependencies = [
+ "rsf-game-sys",
  "windows-sys",
 ]
 

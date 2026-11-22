@@ -630,8 +630,8 @@ pub struct rsf_unity_package_platform {
     pub subclass:
         ::core::option::Option<unsafe extern "C" fn(window: *mut ::core::ffi::c_void) -> u32>,
     pub restore: ::core::option::Option<unsafe extern "C" fn(window: *mut ::core::ffi::c_void)>,
-    pub raw_input_type:
-        ::core::option::Option<unsafe extern "C" fn(lparam: isize, type_: *mut u32) -> u32>,
+    pub input_kind:
+        ::core::option::Option<unsafe extern "C" fn(message: u32, lparam: isize) -> u32>,
     pub timestamp:
         ::core::option::Option<unsafe extern "C" fn(counter: *mut u64, frequency: *mut u64)>,
     pub cpu: ::core::option::Option<unsafe extern "C" fn(event: *const rsf_game_cpu_event)>,
@@ -751,8 +751,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_package_platform, subclass) - 296usize];
     ["Offset of field: rsf_unity_package_platform::restore"]
         [::core::mem::offset_of!(rsf_unity_package_platform, restore) - 304usize];
-    ["Offset of field: rsf_unity_package_platform::raw_input_type"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, raw_input_type) - 312usize];
+    ["Offset of field: rsf_unity_package_platform::input_kind"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, input_kind) - 312usize];
     ["Offset of field: rsf_unity_package_platform::timestamp"]
         [::core::mem::offset_of!(rsf_unity_package_platform, timestamp) - 320usize];
     ["Offset of field: rsf_unity_package_platform::cpu"]

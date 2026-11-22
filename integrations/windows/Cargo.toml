@@ -9,6 +9,9 @@ license.workspace = true
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+
 [target."cfg(windows)".dependencies.windows-sys]
 version = "0.61"
 features = [
@@ -16,6 +19,7 @@ features = [
   "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
   "Win32_System_LibraryLoader",
+  "Win32_UI_Input",
   "Win32_UI_Input_XboxController",
 ]
 

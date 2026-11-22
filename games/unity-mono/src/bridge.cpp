@@ -2,6 +2,7 @@
 // Unity SDK registration and Win32 input observations for the shared D3D12 bridge.
 #include "bridge.h"
 #include "bridge_d3d12.h"
+#include "../../../integrations/windows/window_input.h"
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -137,15 +138,8 @@ void received_input(uint32_t kind,uint32_t message) {
 LRESULT CALLBACK received_message(int code,WPARAM removed,LPARAM argument) {
     rsf_unity_frame_callback call;
     if (call.entered && code>=0 && removed==PM_REMOVE) {
-        const auto& message=*reinterpret_cast<const MSG*>(argument); uint32_t kind=0;
-        if (message.message>=WM_KEYFIRST && message.message<=WM_KEYLAST) kind=RSF_GAME_INPUT_KEYBOARD;
-        if (message.message>=WM_MOUSEFIRST && message.message<=WM_MOUSELAST) kind=RSF_GAME_INPUT_MOUSE;
-        if (message.message==WM_INPUT) {
-            RAWINPUTHEADER header{}; UINT bytes=sizeof(header);
-            if (GetRawInputData(reinterpret_cast<HRAWINPUT>(message.lParam),RID_HEADER,&header,&bytes,sizeof(header))==sizeof(header))
-                kind=header.dwType==RIM_TYPEKEYBOARD ? RSF_GAME_INPUT_KEYBOARD : header.dwType==RIM_TYPEMOUSE ? RSF_GAME_INPUT_MOUSE : 0;
-        }
-        received_input(kind,message.message);
+        const auto& message=*reinterpret_cast<const MSG*>(argument);
+        received_input(rsf_win32_input_kind(message.message,message.lParam),message.message);
     }
     return CallNextHookEx(nullptr,code,removed,argument);
 }

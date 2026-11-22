@@ -14,6 +14,7 @@
 #include <vector>
 #include <windows.h>
 #include <MinHook.h>
+#include "../../../integrations/windows/window_input.h"
 #include "../../../integrations/windows/xinput_facts.h"
 #include <atomic>
 #include <cstring>
@@ -294,15 +295,7 @@ LRESULT CALLBACK input_message(int code, WPARAM removed, LPARAM argument)
     auto* self=installed.load(std::memory_order_acquire);
     if (code >= 0 && removed == PM_REMOVE && self && self->active.load()) {
         const auto* message = reinterpret_cast<const MSG*>(argument);
-        uint32_t kind = 0;
-        if (message->message >= WM_KEYFIRST && message->message <= WM_KEYLAST) kind = RSF_GAME_INPUT_KEYBOARD;
-        else if (message->message >= WM_MOUSEFIRST && message->message <= WM_MOUSELAST) kind = RSF_GAME_INPUT_MOUSE;
-        else if (message->message == WM_INPUT) {
-            RAWINPUTHEADER header{}; UINT bytes = sizeof(header);
-            if (GetRawInputData(reinterpret_cast<HRAWINPUT>(message->lParam), RID_HEADER, &header, &bytes, sizeof(header)) == sizeof(header))
-                kind = header.dwType == RIM_TYPEKEYBOARD ? RSF_GAME_INPUT_KEYBOARD :
-                    header.dwType == RIM_TYPEMOUSE ? RSF_GAME_INPUT_MOUSE : 0;
-        }
+        const auto kind = rsf_win32_input_kind(message->message, message->lParam);
         cpu_event(self, inside_engine_tick ? input_source_frame : 0, RSF_GAME_CPU_INPUT_EVENT, kind, message->message);
     }
     return CallNextHookEx(nullptr, code, removed, argument);

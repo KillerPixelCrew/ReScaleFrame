@@ -37,14 +37,6 @@ const BACKEND_INVALID_ARGUMENT: i32 = -1;
 pub(super) const BACKEND_FEATURE_FAILED: i32 = -9;
 /// The kinds rsfu_input accepts.
 const INPUT_KINDS: u32 = RSF_GAME_INPUT_KEYBOARD | RSF_GAME_INPUT_MOUSE | RSF_GAME_INPUT_CONTROLLER;
-/// winuser.h's message ranges and raw-input device types; package.cpp asserts them.
-const WM_INPUT: u32 = 0x00ff;
-const WM_KEYFIRST: u32 = 0x0100;
-const WM_KEYLAST: u32 = 0x0109;
-const WM_MOUSEFIRST: u32 = 0x0200;
-const WM_MOUSELAST: u32 = 0x020e;
-const RIM_TYPEMOUSE: u32 = 0;
-const RIM_TYPEKEYBOARD: u32 = 1;
 
 const BRIDGE_REFUSED: &str = "Unity graphics bridge or player presentation surface could not open.";
 
@@ -214,10 +206,6 @@ impl Leaves {
     fn restore(&self, window: Handle) {
         unsafe { (self.restore)(window.0) }
     }
-    fn raw_input_type(&self, lparam: isize) -> Option<u32> {
-        let mut device = 0u32;
-        (unsafe { (self.raw_input_type)(lparam, &mut device) } != 0).then_some(device)
-    }
     fn timestamp(&self) -> (u64, u64) {
         let (mut now, mut frequency) = (0u64, 0u64);
         unsafe { (self.timestamp)(&mut now, &mut frequency) };
@@ -371,22 +359,7 @@ impl Package {
     /// Every message the input window dequeues, classified by its range and WM_INPUT by its raw
     /// device. A keyed one outside a CPU frame is unframed.
     pub(super) fn window_message(&self, leaves: &Leaves, message: u32, lparam: isize) {
-        let mut kind = 0;
-        if (WM_KEYFIRST..=WM_KEYLAST).contains(&message) {
-            kind = RSF_GAME_INPUT_KEYBOARD;
-        }
-        if (WM_MOUSEFIRST..=WM_MOUSELAST).contains(&message) {
-            kind = RSF_GAME_INPUT_MOUSE;
-        }
-        if message == WM_INPUT
-            && let Some(device) = leaves.raw_input_type(lparam)
-        {
-            kind = match device {
-                RIM_TYPEKEYBOARD => RSF_GAME_INPUT_KEYBOARD,
-                RIM_TYPEMOUSE => RSF_GAME_INPUT_MOUSE,
-                _ => 0,
-            };
-        }
+        let kind = unsafe { (leaves.input_kind)(message, lparam) };
         let now = leaves.timestamp();
         let source = self.services.input_frame.load(SeqCst);
         let mut flags = RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_WINDOW_MESSAGE;

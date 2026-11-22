@@ -156,12 +156,12 @@ typedef struct rsf_unity_package_platform {
        null when there is none; preview_parent is the Editor preview's parent window, null before
        it exists. subclass returns nonzero on attachment. restore disables reporting and attempts
        owner-thread detachment, retaining forwarding state and a module reference on refusal.
-       raw_input_type reads a WM_INPUT header's dwType; zero when the header cannot be read. */
+       input_kind classifies a live Win32 message, returning zero for an unknown kind. */
     void* (*player_window)(void);
     void* (*preview_parent)(void);
     uint32_t (*subclass)(void* window);
     void (*restore)(void* window);
-    uint32_t (*raw_input_type)(intptr_t lparam, uint32_t* type);
+    uint32_t (*input_kind)(uint32_t message, intptr_t lparam);
     /* QueryPerformanceCounter, then QueryPerformanceFrequency. */
     void (*timestamp)(uint64_t* counter, uint64_t* frequency);
     /* rsf_fg12_cpu. */

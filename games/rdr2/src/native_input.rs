@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Observes dequeued window messages and successful public XInput reads.
 use super::{Scope, lock, minhook::*, trampoline};
-use rsf_game_sys::{RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE};
+use rsf_windows::rsf_win32_input_kind;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::{ffi::c_void, ptr};
@@ -10,9 +10,6 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-use windows_sys::Win32::UI::Input::{
-    GetRawInputData, RAWINPUTHEADER, RID_HEADER, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
-};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::w;
 
@@ -29,35 +26,6 @@ static MESSAGE_HOOK: Mutex<usize> = Mutex::new(0);
 static TARGETS: Mutex<[usize; 6]> = Mutex::new([0; 6]);
 static ORIGINALS: [AtomicPtr<c_void>; 6] = [const { AtomicPtr::new(ptr::null_mut()) }; 6];
 
-fn message_kind(message: &MSG) -> u32 {
-    match message.message {
-        WM_KEYFIRST..=WM_KEYLAST => RSF_GAME_INPUT_KEYBOARD,
-        WM_MOUSEFIRST..=WM_MOUSELAST => RSF_GAME_INPUT_MOUSE,
-        WM_INPUT => {
-            let mut header = RAWINPUTHEADER::default();
-            let mut size = size_of::<RAWINPUTHEADER>() as u32;
-            let read = unsafe {
-                GetRawInputData(
-                    message.lParam as _,
-                    RID_HEADER,
-                    (&raw mut header).cast(),
-                    &mut size,
-                    size_of::<RAWINPUTHEADER>() as u32,
-                )
-            };
-            if read != size_of::<RAWINPUTHEADER>() as u32 {
-                return 0;
-            }
-            match header.dwType {
-                RIM_TYPEKEYBOARD => RSF_GAME_INPUT_KEYBOARD,
-                RIM_TYPEMOUSE => RSF_GAME_INPUT_MOUSE,
-                _ => 0,
-            }
-        }
-        _ => 0,
-    }
-}
-
 unsafe extern "system" fn received_message(code: i32, removed: WPARAM, arg: LPARAM) -> LRESULT {
     let _reader = Scope::enter(&MESSAGE_READERS);
     if code >= 0
@@ -65,7 +33,12 @@ unsafe extern "system" fn received_message(code: i32, removed: WPARAM, arg: LPAR
         && let Some(message) = unsafe { (arg as *const MSG).as_ref() }
         && let Some(callback) = unsafe { trampoline::<Message>(&MESSAGE) }
     {
-        unsafe { callback(message_kind(message), message.message) };
+        unsafe {
+            callback(
+                rsf_win32_input_kind(message.message, message.lParam),
+                message.message,
+            )
+        };
     }
     unsafe { CallNextHookEx(ptr::null_mut(), code, removed, arg) }
 }

@@ -22,7 +22,6 @@ use windows_sys::Win32::System::LibraryLoader::{
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
-use windows_sys::Win32::UI::Input::{GetRawInputData, RAWINPUTHEADER, RID_HEADER};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, EnumWindows, GWLP_WNDPROC, GetClassNameW, GetWindowLongPtrW,
     GetWindowThreadProcessId, SetWindowLongPtrW, WM_NCDESTROY,
@@ -63,27 +62,6 @@ pub(super) fn startup_paths() -> (bool, Vec<u16>) {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_package_session_seed() -> u64 {
     unsafe { GetTickCount64() }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_raw_input_type(lparam: isize, kind: *mut u32) -> u32 {
-    let mut header = RAWINPUTHEADER::default();
-    let size = size_of::<RAWINPUTHEADER>() as u32;
-    let mut length = size;
-    let read = unsafe {
-        GetRawInputData(
-            lparam as *mut c_void,
-            RID_HEADER,
-            (&raw mut header).cast(),
-            &mut length,
-            size,
-        )
-    };
-    if read != size {
-        return 0;
-    }
-    unsafe { kind.write(header.dwType) };
-    1
 }
 
 #[unsafe(no_mangle)]

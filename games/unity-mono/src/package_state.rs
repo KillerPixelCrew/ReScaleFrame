@@ -177,7 +177,7 @@ struct Leaves {
     preview_parent: unsafe extern "C" fn() -> *mut c_void,
     subclass: unsafe extern "C" fn(*mut c_void) -> u32,
     restore: unsafe extern "C" fn(*mut c_void),
-    raw_input_type: unsafe extern "C" fn(isize, *mut u32) -> u32,
+    input_kind: unsafe extern "C" fn(u32, isize) -> u32,
     timestamp: unsafe extern "C" fn(*mut u64, *mut u64),
     cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
     fg_submitted: unsafe extern "C" fn(u64, u64),
@@ -247,7 +247,7 @@ impl Leaves {
             preview_parent: p.preview_parent?,
             subclass: p.subclass?,
             restore: p.restore?,
-            raw_input_type: p.raw_input_type?,
+            input_kind: p.input_kind?,
             timestamp: p.timestamp?,
             cpu: p.cpu?,
             fg_submitted: p.fg_submitted?,
@@ -1477,13 +1477,11 @@ mod tests {
     unsafe extern "C" fn restore(window: *mut c_void) {
         call(format!("restore {:#x}", window as usize));
     }
-    unsafe extern "C" fn raw_input_type(lparam: isize, device: *mut u32) -> u32 {
-        call(format!("raw {lparam}"));
-        let Some(raw) = fake().raw else {
-            return 0;
-        };
-        unsafe { device.write(raw) };
-        1
+    unsafe extern "C" fn input_kind(message: u32, lparam: isize) -> u32 {
+        rsf_windows::classify_window_message(message, || {
+            call(format!("raw {lparam}"));
+            fake().raw
+        })
     }
     unsafe extern "C" fn timestamp(counter: *mut u64, frequency: *mut u64) {
         unsafe {
@@ -1612,7 +1610,7 @@ mod tests {
         preview_parent: Some(preview_parent),
         subclass: Some(subclass),
         restore: Some(restore),
-        raw_input_type: Some(raw_input_type),
+        input_kind: Some(input_kind),
         timestamp: Some(timestamp),
         cpu: Some(cpu),
         fg_submitted: Some(fg_submitted),
