@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <optional>
 
+extern "C" void rsf_fixture_vk_labels(void *state, uint64_t command, uint32_t reopen);
+extern "C" int rsf_fixture_graph_cases(void *context, void *state, uint32_t reuse, uint32_t refusals);
+
 namespace {
 using Driver = RenderingDeviceDriverVulkan;
 using Pool = RenderingDeviceGraph::CommandBufferPool;
@@ -14,21 +17,15 @@ struct Fixture {
     Pool pool;
     struct Labels {
         Fixture *fixture;
+        void *state;
         void operator()(bool reopen) {
-            auto &f = *fixture;
-            if (reopen) {
-                ++f.opens;
-                f.labels_valid &= f.commands.id == 2 && f.driver.state[1].ended;
-            } else {
-                ++f.closes;
-                f.labels_valid &= f.commands.id == 1 && !f.driver.state[1].ended && f.driver.state[2].begun;
-            }
+            rsf_fixture_vk_labels(state, fixture->commands.id, reopen);
         }
-    } labels{this};
-    uint32_t closes = 0, opens = 0;
-    bool labels_valid = true;
+    } labels;
     std::optional<RSFGodot::GraphScope> scope;
     rsf_godot_vk_handoff handoff{};
+
+    Fixture(void *state, void *foreign_state) : driver(state), foreign(foreign_state), labels{this, state} {}
 };
 }
 
@@ -64,44 +61,30 @@ extern "C" int32_t rsf_fixture_graph_split(void *context, uint32_t foreign, size
     return result;
 }
 
-extern "C" void rsf_fixture_graph_fault(void *context, uint32_t fault) {
-    auto &vk = static_cast<Fixture *>(context)->driver;
-    vk.timeline_enabled = fault != 1;
-    vk.fail_allocate = fault == 2;
-    vk.fail_semaphore = fault == 3;
-    vk.fail_begin = fault == 4;
-}
-
-extern "C" void rsf_fixture_graph_snapshot(void *context, uint64_t *out) {
+extern "C" void rsf_fixture_graph_pool(void *context, uint64_t (*out)[4]) {
     const auto &f = *static_cast<Fixture *>(context);
-    const auto &vk = f.driver;
-    const uint64_t values[]{
-        f.commands.id, f.pool.buffers_used, f.pool.buffers.size(), f.pool.semaphores.size(),
-        vk.allocated, vk.begins, vk.splits, vk.freed_semaphores,
-        vk.state[1].timeline, vk.state[1].wait, vk.state[1].signal,
-        vk.state[2].timeline, vk.state[2].wait, vk.state[2].signal,
-        f.closes, f.opens, f.labels_valid,
-    };
-    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) out[i] = values[i];
+    (*out)[0] = f.commands.id;
+    (*out)[1] = f.pool.buffers_used;
+    (*out)[2] = f.pool.buffers.size();
+    (*out)[3] = f.pool.semaphores.size();
 }
-
-extern "C" int rsf_fixture_graph_cases(void *context, uint32_t reuse, uint32_t refusals);
 
 extern "C" void rsf_fixture_graph_failure(uint32_t line) {
     std::printf("godot_graph_handoff.rs:%u: check failed\n", static_cast<unsigned>(line));
 }
 
-int main() {
-    int failures = 0;
-    for (uint32_t scenario = 0; scenario < 3; ++scenario) {
-        Fixture f;
-        f.pool.pool.id = 9;
-        if (scenario == 1) {
-            f.pool.buffers.push_back({2});
-            f.pool.semaphores.push_back({1});
-            f.driver.allocated = 2;
-        }
-        failures += rsf_fixture_graph_cases(&f, scenario == 1, scenario == 2);
+extern "C" int rsf_fixture_graph_run(void *state, void *foreign_state, uint32_t reuse, uint32_t refusals) {
+    Fixture f(state, foreign_state);
+    f.pool.pool.id = 9;
+    if (reuse) {
+        f.pool.buffers.push_back({2});
+        f.pool.semaphores.push_back({1});
     }
-    return failures ? 1 : 0;
+    return rsf_fixture_graph_cases(&f, state, reuse, refusals);
+}
+
+extern "C" int rsf_fixture_graph_main();
+
+int main() {
+    return rsf_fixture_graph_main();
 }

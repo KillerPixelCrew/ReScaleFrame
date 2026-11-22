@@ -80,3 +80,16 @@ motion shader variants with the base revision. Rust 1.94.1 formatting, bindgen
 read from Git objects because the reference worktree already contained older patches.
 Engine compilation, linking, fixture execution and motion or presentation on a device
 remain unverified for this follow-up.
+
+## Driver and graph fixture continuation
+
+At RSF `b5a7434c`, the graph fixture scenarios were in Rust, but the
+synthetic Vulkan driver's state transitions and label assertions still ran in C++.
+`tests/godot_graph_handoff.rs` now owns those transitions, faults and assertions.
+`tests/godot_graph_stubs/drivers/vulkan/rendering_device_driver_vulkan.h` adapts
+typed command and semaphore IDs to opaque Rust fixture state. The C++ fixture still
+instantiates the production `GraphScope` over a live command reference and typed
+pool, so the scenario can observe which command would record a provider fallback.
+The Godot graph type double remains under `tests/godot_graph_stubs/servers/rendering/`.
+The seam mirrors the pinned graph pool and Vulkan begin/retirement sites listed
+above. Its transitions are synthetic and exercise no GPU work.
