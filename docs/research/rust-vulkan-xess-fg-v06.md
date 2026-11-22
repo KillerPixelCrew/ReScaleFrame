@@ -33,12 +33,12 @@ DX12 queue. Receipt field names, identity values and units remain compatible.
 The private platform ABI is 6. The exported bridge ABI and its records remain
 at version 1.
 
-The existing integrated FG files under `runtime/orchestrator/src/native_fg_xess_vulkan*`
-marshal Vulkan WSI, typed bridge callbacks and D3D12 importer handles into the
-existing Rust owner. They retain the shared V03 importer. The XeSS SR
-requirements and SR fixture are covered by the V01 owner and the
-[XeSS SR cutover](rust-xess-vulkan-sr-cutover.md). The presentation device
-fixture keeps its native Vulkan and HWND setup.
+| V06 inventory | Disposition |
+| --- | --- |
+| `runtime/orchestrator/src/native_fg_xess_vulkan.cpp`, `native_fg_xess_vulkan.h`, `native_fg_xess_vulkan_platform.h`, `native_fg_xess_vulkan_present.cpp` in that directory | Existing native seams marshal Vulkan WSI, typed bridge callbacks and D3D12 handles into the Rust FG owner. They use the shared V03 importer. |
+| `runtime/orchestrator/include/rescaleframe/native_xess_vulkan_requirements.h`, `runtime/orchestrator/src/native_xess_vulkan.cpp`, `runtime/orchestrator/src/native_xess_vulkan.h`, `tests/native_xess_vulkan.cpp` | Existing public ABI and typed SDK leaves delegate to the Rust requirements owner. Final integration depends on V01. See [the XeSS SR cutover](rust-xess-vulkan-sr-cutover.md). |
+| `runtime/vulkan/xess-fg/bridge.cpp`, `bridge_api.h`, `capture_api.h`, `diagnostic-capture.h`, `session_abi.h` in that directory | Moved bridge admission, generated-count decisions and publication out of C++. Public ABI headers, the typed SDK table and native GPU calls remain at the boundary. |
+| `tests/native_fg_xess_vulkan_interop.cpp`, `tests/native_fg_xess_vulkan_present.cpp` | Added a size-only prefix check to the interop fixture. Both keep native device setup. The presentation fixture keeps its Win32 window and Vulkan queue and resource setup. |
 
 The environment-only diagnostic options finding remains open. The shared overlay
 only carries numeric and toggle options. Directory and timing-file controls
@@ -49,5 +49,6 @@ G07's shared capture owners. The D3D12 capture and AC7 diagnostic owners are par
 of the same finding.
 
 Verification was source-only. Bindgen CLI 0.72.1 regenerated the touched
-Windows x64 bindings, Rust 1.94.1 rustfmt checked the changed Rust sources and
-`git diff --check` passed. Builds, tests, lint and device execution are user-owned.
+Windows x64 bindings byte for byte. Rust 1.94.1 rustfmt checked the changed Rust
+sources, `git diff --check` passed, and the source list of bridge DLL exports
+was identical. Builds, tests, lint and device execution are user-owned.
