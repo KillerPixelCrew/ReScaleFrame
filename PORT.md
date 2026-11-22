@@ -2334,17 +2334,17 @@ Port camera, depth domains, render-input selection and resolution recovery with 
 
 - [x] [games/fallout4/src/camera.h](games/fallout4/src/camera.h)
 - [ ] [games/fallout4/src/depth_domains.cpp](games/fallout4/src/depth_domains.cpp)
-- [ ] [games/fallout4/src/depth_domains.h](games/fallout4/src/depth_domains.h)
+- [x] [games/fallout4/src/depth_domains.h](games/fallout4/src/depth_domains.h)
 - [x] [games/fallout4/src/depth_domains_platform.h](games/fallout4/src/depth_domains_platform.h)
 - [x] [games/fallout4/src/native_input_state.h](games/fallout4/src/native_input_state.h)
 - [ ] [games/fallout4/src/render_inputs.cpp](games/fallout4/src/render_inputs.cpp)
 - [ ] [games/fallout4/src/render_inputs.h](games/fallout4/src/render_inputs.h)
-- [ ] [games/fallout4/src/render_inputs_platform.h](games/fallout4/src/render_inputs_platform.h)
+- [x] [games/fallout4/src/render_inputs_platform.h](games/fallout4/src/render_inputs_platform.h)
 - [ ] [games/fallout4/src/resolution.cpp](games/fallout4/src/resolution.cpp)
 - [x] [games/fallout4/src/resolution.h](games/fallout4/src/resolution.h)
-- [ ] [games/fallout4/src/resolution_platform.h](games/fallout4/src/resolution_platform.h)
+- [x] [games/fallout4/src/resolution_platform.h](games/fallout4/src/resolution_platform.h)
 - [ ] [games/fallout4/src/screen.cpp](games/fallout4/src/screen.cpp)
-- [ ] [games/fallout4/src/screen.h](games/fallout4/src/screen.h)
+- [x] [games/fallout4/src/screen.h](games/fallout4/src/screen.h)
 
 **Fixtures (2)**
 
@@ -2387,7 +2387,7 @@ Port hook lifetime, render scopes, imagespace, publication and rollback in their
 
 - [ ] [games/fallout4/src/render_hooks.cpp](games/fallout4/src/render_hooks.cpp)
 - [x] [games/fallout4/src/render_hooks.h](games/fallout4/src/render_hooks.h)
-- [ ] [games/fallout4/src/render_hooks_platform.h](games/fallout4/src/render_hooks_platform.h)
+- [x] [games/fallout4/src/render_hooks_platform.h](games/fallout4/src/render_hooks_platform.h)
 
 **Rust review findings (12)**
 
