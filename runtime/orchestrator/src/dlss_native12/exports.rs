@@ -37,7 +37,13 @@ unsafe fn register(
     if let Err(result) = unsafe { validate_setup(device, setup) } {
         return result;
     }
-    unsafe { rsf_core_dlss_native12_register(device, &*setup, module, out) }
+    match unsafe { DeviceRegistration::open(device, &*setup, null_mut(), module) } {
+        Ok(registration) => {
+            *out = crate::allocate_handle(Registration(registration));
+            if (*out).is_null() { INIT_FAILED } else { OK }
+        }
+        Err(result) => result,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -127,7 +133,11 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_create_shared(
     if let Err(result) = unsafe { validate_setup(device, setup) } {
         return result;
     }
-    unsafe { rsf_core_dlss_native12_create(device, &*setup, host, out) }
+    let setup = unsafe { &*setup };
+    match unsafe { DeviceRegistration::open(device, setup, host, null_mut()) } {
+        Ok(registration) => publish_context(registration, setup.preset, out),
+        Err(result) => result,
+    }
 }
 
 #[unsafe(no_mangle)]

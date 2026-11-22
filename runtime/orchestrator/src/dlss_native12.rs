@@ -8,8 +8,7 @@ use rsf_game_sys::backend_result::{
     NOT_READY, NOT_SUPPORTED, OK, WRONG_API,
 };
 pub(super) mod exports;
-// Also the Vulkan DLSS SR and DLSS-G singularity gate (vulkan_streamline_camera).
-pub(crate) use rsf_game_sys::xm;
+use rsf_game_sys::xm;
 
 use crate::com_ref;
 use crate::sdk_module::{SdkModule, wide_path};
@@ -395,34 +394,6 @@ fn publish_context(
     };
     *out = crate::allocate_handle(Context::new(registration, preset, viewport));
     if (*out).is_null() { INIT_FAILED } else { OK }
-}
-
-// Creation wrappers clear the output and validate the public setup before passing it here.
-unsafe fn rsf_core_dlss_native12_create(
-    device: Handle,
-    setup: &Setup,
-    host: Handle,
-    out: &mut *mut Context,
-) -> i32 {
-    match unsafe { DeviceRegistration::open(device, setup, host, null_mut()) } {
-        Ok(registration) => publish_context(registration, setup.preset, out),
-        Err(result) => result,
-    }
-}
-
-unsafe fn rsf_core_dlss_native12_register(
-    device: Handle,
-    setup: &Setup,
-    module: Handle,
-    out: &mut *mut Registration,
-) -> i32 {
-    match unsafe { DeviceRegistration::open(device, setup, null_mut(), module) } {
-        Ok(registration) => {
-            *out = crate::allocate_handle(Registration(registration));
-            if (*out).is_null() { INIT_FAILED } else { OK }
-        }
-        Err(result) => result,
-    }
 }
 
 fn rsf_core_dlss_native12_create_registered(

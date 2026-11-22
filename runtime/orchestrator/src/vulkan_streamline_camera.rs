@@ -8,9 +8,9 @@ use crate::streamline_sdk::{RESOURCE, TAG, default_constants};
 // The Streamline Vulkan call leaves' entry types, owned by rsf-streamline-vk.
 pub(super) use rsf_streamline_vk::sdk_api;
 
-use crate::dlss_native12::xm;
 use crate::sys::rsf_vkfg_image;
 use rsf_game_sys::rsf_frame_record;
+use rsf_game_sys::xm;
 use std::ffi::c_void;
 use std::ptr;
 
