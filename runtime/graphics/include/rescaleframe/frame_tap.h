@@ -118,13 +118,8 @@ typedef struct rsf_frame_tap_target_draw {
 /* Called on the render thread, around the game's own draw. */
 typedef void (*rsf_frame_tap_target_fn)(void* user, const rsf_frame_tap_target_draw* draw);
 
-/* Capture observers. Set/clear on the observed context's render thread between frames. Draw facts
-   describe the game's requested state; compute work is reported after dispatch. */
 typedef void (*rsf_frame_tap_compute_fn)(void* user, void* context, uint32_t x, uint32_t y,
                                        uint32_t z, void* indirect_arguments, uint32_t offset);
-rsf_frame_tap_result rsf_frame_tap_set_research_callbacks(rsf_frame_tap_target_fn draw,
-                                                        rsf_frame_tap_compute_fn compute,
-                                                        void* user);
 /* Texture LOD bias for pixel-shader samplers that blend between mips, applied to the observed
    context from now until it is set back to zero. Biased clones replace the game's samplers in
    every slot already bound and in every later PSSetSamplers; zero restores the game's own. Call on
@@ -132,8 +127,10 @@ rsf_frame_tap_result rsf_frame_tap_set_research_callbacks(rsf_frame_tap_target_f
    the mechanism only: which passes and how much belong to the caller. */
 rsf_frame_tap_result rsf_frame_tap_set_sampler_bias(float bias);
 
-/* Optional paired observations around Draw/DrawIndexed. Before and after use the same target
-   draw ordinal. These callbacks observe the immediate context and must preserve its bindings. */
+/* Capture observers: paired observations around Draw/DrawIndexed, and compute work reported after
+   dispatch. Before and after use the same target draw ordinal. Draw facts describe the game's
+   requested state. Set or clear on the observed context's render thread between frames; passing
+   null clears. The callbacks observe the immediate context and must preserve its bindings. */
 rsf_frame_tap_result rsf_frame_tap_set_research_phase_callbacks(rsf_frame_tap_target_fn before,
                                                               rsf_frame_tap_target_fn after,
                                                               rsf_frame_tap_compute_fn compute,

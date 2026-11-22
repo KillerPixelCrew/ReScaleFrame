@@ -245,7 +245,7 @@ pub(crate) extern "C" fn rsf_ac7_capture_set_sample(enabled: bool) {
                 null_mut(),
             );
         } else {
-            rsf_frame_tap_set_research_callbacks(None, None, null_mut());
+            rsf_frame_tap_set_research_phase_callbacks(None, None, None, null_mut());
         }
     }
 }

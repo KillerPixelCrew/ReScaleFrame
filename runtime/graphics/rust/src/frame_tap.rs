@@ -1143,15 +1143,6 @@ extern "C" fn rsf_frame_tap_set_constant_observer(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_frame_tap_set_research_callbacks(
-    draw: rsf_frame_tap_target_fn,
-    compute: rsf_frame_tap_compute_fn,
-    user: Handle,
-) -> i32 {
-    rsf_frame_tap_set_research_phase_callbacks(None, draw, compute, user)
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_frame_tap_set_research_phase_callbacks(
     before: rsf_frame_tap_target_fn,
     after: rsf_frame_tap_target_fn,
