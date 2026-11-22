@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Guarded temporal graph observation and its GameSDK lifecycle.
 use crate::INVALID_ARGUMENT;
-use crate::camera::{CopyMemory, JITTER, read};
+use crate::camera::{JITTER, read};
 use crate::execution;
 use crate::windows::{
-    copy, create_hook, disable_hook, enable_hook, image_base, tick_count, verify_executable,
+    create_hook, disable_hook, enable_hook, image_base, tick_count, verify_executable,
 };
 use rsf_game_sys::{
     rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args, rsf_game_renderer_status,
@@ -121,7 +121,7 @@ fn target() -> Option<usize> {
         return None;
     }
     let image = image_base();
-    let entry: [u8; ADD_PASSES_BYTES.len()] = unsafe { read(copy, image, ADD_PASSES) }?;
+    let entry: [u8; ADD_PASSES_BYTES.len()] = unsafe { read(image, ADD_PASSES) }?;
     (entry == ADD_PASSES_BYTES).then_some(image + ADD_PASSES)
 }
 
@@ -258,21 +258,20 @@ impl Observation {
     // Graph-construction pointers are opaque facts. The execution adapter owns GPU leases.
     fn capture(
         &mut self,
-        copy: CopyMemory,
         view: usize,
         input: usize,
         output: usize,
         output_rect: usize,
         half: usize,
     ) -> Option<()> {
-        self.inputs = unsafe { read(copy, input, 0) }?;
-        self.render = unsafe { read(copy, view, INPUT_RECT) }?;
-        self.history = unsafe { read(copy, view, HISTORY) }?;
-        self.jitter = unsafe { read(copy, view, JITTER) }?;
-        self.camera_cut = unsafe { read(copy, view, CAMERA_CUT) }?;
-        self.output = unsafe { read(copy, output, 0) }?;
-        self.result = unsafe { read(copy, output_rect, 0) }?;
-        self.half_output = unsafe { read(copy, half, 0) }?;
+        self.inputs = unsafe { read(input, 0) }?;
+        self.render = unsafe { read(view, INPUT_RECT) }?;
+        self.history = unsafe { read(view, HISTORY) }?;
+        self.jitter = unsafe { read(view, JITTER) }?;
+        self.camera_cut = unsafe { read(view, CAMERA_CUT) }?;
+        self.output = unsafe { read(output, 0) }?;
+        self.result = unsafe { read(output_rect, 0) }?;
+        self.half_output = unsafe { read(half, 0) }?;
         Some(())
     }
 }
@@ -371,7 +370,6 @@ fn observe(
     let mut data = Observation::default();
     let readable = data
         .capture(
-            copy,
             view as usize,
             input as usize,
             output as usize,
@@ -380,7 +378,7 @@ fn observe(
         )
         .is_some();
     let half_rect: Rect = if data.half_output != 0 {
-        unsafe { read(copy, half_rect as usize, 0) }.unwrap_or_default()
+        unsafe { read(half_rect as usize, 0) }.unwrap_or_default()
     } else {
         [0; 4]
     };

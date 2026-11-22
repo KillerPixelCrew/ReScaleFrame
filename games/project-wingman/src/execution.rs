@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Admission and retirement of native temporal graph packets and RHI callbacks.
-use crate::camera::{read, read_camera, read_jitter};
+use crate::camera::{read, read_camera};
 use crate::observer::{self, CAMERA_CUT, Entry, HISTORY, install_trampoline};
 use crate::windows::{
-    copy, disable_hook, enable_hook, image_base, rsf_wingman_acquire_texture,
+    disable_hook, enable_hook, image_base, rsf_wingman_acquire_texture,
     rsf_wingman_release_texture, rsf_wingman_report_execution, tick_count,
 };
 use rsf_game_sys::{
@@ -144,14 +144,13 @@ fn state() -> MutexGuard<'static, State> {
 pub(crate) fn prepare() -> bool {
     let mut state = state();
     let image = image_base();
-    if unsafe { read(copy, image, TRACKED_VTABLE) } != Some(image + TRACKED_DESTRUCTOR)
-        || unsafe { read(copy, image, COMPUTE_VTABLE + size_of::<usize>()) }
-            != Some(image + RVAS[4])
+    if unsafe { read(image, TRACKED_VTABLE) } != Some(image + TRACKED_DESTRUCTOR)
+        || unsafe { read(image, COMPUTE_VTABLE + size_of::<usize>()) } != Some(image + RVAS[4])
     {
         return false;
     }
     for (&rva, expected) in RVAS.iter().zip(&EXPECTED) {
-        let bytes: Option<[u8; 16]> = unsafe { read(copy, image, rva) };
+        let bytes: Option<[u8; 16]> = unsafe { read(image, rva) };
         if bytes.as_ref() != Some(expected) {
             return false;
         }
@@ -191,7 +190,7 @@ fn capture(graph: usize, view: usize, parameters: usize, history: usize) -> Opti
     if !observer::accepting() {
         return None;
     }
-    let input: TaaParameters = unsafe { read(copy, parameters, 0) }?;
+    let input: TaaParameters = unsafe { read(parameters, 0) }?;
     if input.kind >= 3 || input.divisor != 1 {
         return None;
     }
@@ -202,14 +201,13 @@ fn capture(graph: usize, view: usize, parameters: usize, history: usize) -> Opti
     pass.view_key = view as u64;
     pass.render_rect = input.input;
     pass.output_rect = input.output;
-    pass.history_key = unsafe { read(copy, view, HISTORY) }.unwrap_or(0);
-    let jitter = read_jitter(view, copy);
-    let cut: u8 = unsafe { read(copy, view, CAMERA_CUT) }.unwrap_or(0);
-    let old_history: usize = unsafe { read(copy, history, 0) }.unwrap_or(0);
+    pass.history_key = unsafe { read(view, HISTORY) }.unwrap_or(0);
+    let cut: u8 = unsafe { read(view, CAMERA_CUT) }.unwrap_or(0);
+    let old_history: usize = unsafe { read(history, 0) }.unwrap_or(0);
     if cut != 0 || old_history == 0 {
         pass.flags = RSF_GAME_RENDER_RESET;
     }
-    read_camera(view, &mut pass, copy, jitter);
+    read_camera(view, &mut pass);
     Some(Packet {
         pass,
         rdg: [input.colour, input.depth, input.motion, 0],
@@ -225,8 +223,8 @@ fn compute(graph: usize, parameters: usize) -> Option<Construction> {
     if packet.graph != graph {
         return None;
     }
-    let uav = unsafe { read(copy, parameters, COMPUTE_OUTPUT_UAV) }?;
-    packet.rdg[3] = unsafe { read(copy, uav, UAV_RESOURCE) }?;
+    let uav = unsafe { read(parameters, COMPUTE_OUTPUT_UAV) }?;
+    packet.rdg[3] = unsafe { read(uav, UAV_RESOURCE) }?;
     Some(Construction { parameters, packet })
 }
 
@@ -239,9 +237,9 @@ fn bind_pass(graph: usize, pass: usize) {
     };
     let image = image_base();
     if candidate.packet.graph != graph
-        || unsafe { read(copy, pass, PASS_PARAMETERS) } != Some(candidate.parameters)
-        || unsafe { read(copy, pass, 0) } != Some(image + COMPUTE_VTABLE)
-        || unsafe { read(copy, owner, 0) } != Some(image + TRACKED_VTABLE)
+        || unsafe { read(pass, PASS_PARAMETERS) } != Some(candidate.parameters)
+        || unsafe { read(pass, 0) } != Some(image + COMPUTE_VTABLE)
+        || unsafe { read(owner, 0) } != Some(image + TRACKED_VTABLE)
     {
         return;
     }
@@ -469,15 +467,13 @@ unsafe extern "C" fn run_command(command: *mut Command, list: usize, _: usize) {
 }
 
 unsafe fn append(list: usize, command: *mut Command) -> bool {
-    let Some(tail): Option<usize> = (unsafe { read(copy, list, 8) }) else {
+    let Some(tail): Option<usize> = (unsafe { read(list, 8) }) else {
         return false;
     };
-    let Some(count) = (unsafe { read::<u32>(copy, list, 0x14) }).and_then(|n| n.checked_add(1))
-    else {
+    let Some(count) = (unsafe { read::<u32>(list, 0x14) }).and_then(|n| n.checked_add(1)) else {
         return false;
     };
-    if unsafe { read::<u8>(copy, list, 0x10) } != Some(0)
-        || unsafe { read::<usize>(copy, tail, 0) } != Some(0)
+    if unsafe { read::<u8>(list, 0x10) } != Some(0) || unsafe { read::<usize>(tail, 0) } != Some(0)
     {
         return false;
     }

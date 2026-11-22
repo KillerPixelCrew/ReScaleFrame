@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
-//! Decode the verified UE4.27 view and family fields under the native guarded copy.
+//! Decode the verified UE4.27 view and family fields under the guarded process-memory copy.
 use rsf_game_sys::camera_math::{inverse_4x4, multiply_4x4 as multiply};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_game_render_pass};
-use std::ffi::c_void;
 use std::mem::MaybeUninit;
 
-pub(crate) type CopyMemory = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
 type Matrix = [f32; 16];
 
 const FAMILY: usize = 0;
@@ -22,20 +20,11 @@ const PREVIOUS_TRANSLATED: usize = 0x51d0;
 const PREVIOUS_TRANSLATION: usize = 0x5350;
 
 // SAFETY: every bit pattern of T must be valid. The caller uses native numeric fields and arrays.
-pub(crate) unsafe fn read<T: Copy>(copy: CopyMemory, base: usize, offset: usize) -> Option<T> {
+pub(crate) unsafe fn read<T: Copy>(base: usize, offset: usize) -> Option<T> {
     let address = base.checked_add(offset).filter(|_| base != 0)?;
     let mut value = MaybeUninit::<T>::uninit();
-    if unsafe {
-        copy(
-            value.as_mut_ptr().cast(),
-            address as *const c_void,
-            size_of::<T>(),
-        )
-    } {
-        Some(unsafe { value.assume_init() })
-    } else {
-        None
-    }
+    unsafe { rsf_game_sys::win32::read_process(address, value.as_mut_ptr().cast(), size_of::<T>()) }
+        .then(|| unsafe { value.assume_init() })
 }
 
 fn inverse(input: Matrix) -> Option<Matrix> {
@@ -51,26 +40,21 @@ fn extent(rect: [i32; 4]) -> Option<[u32; 2]> {
     Some([width as u32, height as u32])
 }
 
-fn decode(
-    view: usize,
-    pass: &mut rsf_game_render_pass,
-    copy: CopyMemory,
-    jitter: Option<[f32; 2]>,
-) -> Option<()> {
+fn decode(view: usize, pass: &mut rsf_game_render_pass, jitter: Option<[f32; 2]>) -> Option<()> {
     let camera = &mut pass.camera;
-    // These exact view and family offsets are verified for the matched Wingman build. The native
-    // leaf copies each field so an unreadable view is a refusal rather than a Rust reference.
-    let family: usize = unsafe { read(copy, view, FAMILY) }?;
-    let frame: u32 = unsafe { read(copy, family, FAMILY_FRAME) }?;
-    camera.frame_time_seconds = unsafe { read(copy, family, FAMILY_FRAME_TIME) }?;
-    camera.view_to_clip = unsafe { read(copy, view, PROJECTION) }?;
-    camera.world_to_view = unsafe { read(copy, view, WORLD_TO_VIEW) }?;
-    camera.view_to_world = unsafe { read(copy, view, VIEW_TO_WORLD) }?;
-    let current_translated: Matrix = unsafe { read(copy, view, CURRENT_TRANSLATED) }?;
-    let current_translation: [f32; 3] = unsafe { read(copy, view, CURRENT_TRANSLATION) }?;
-    let previous_projection: Matrix = unsafe { read(copy, view, PREVIOUS_PROJECTION) }?;
-    let previous_translated: Matrix = unsafe { read(copy, view, PREVIOUS_TRANSLATED) }?;
-    let previous_translation: [f32; 3] = unsafe { read(copy, view, PREVIOUS_TRANSLATION) }?;
+    // These exact view and family offsets are verified for the matched Wingman build. Each field
+    // is copied so an unreadable view is a refusal rather than a Rust reference.
+    let family: usize = unsafe { read(view, FAMILY) }?;
+    let frame: u32 = unsafe { read(family, FAMILY_FRAME) }?;
+    camera.frame_time_seconds = unsafe { read(family, FAMILY_FRAME_TIME) }?;
+    camera.view_to_clip = unsafe { read(view, PROJECTION) }?;
+    camera.world_to_view = unsafe { read(view, WORLD_TO_VIEW) }?;
+    camera.view_to_world = unsafe { read(view, VIEW_TO_WORLD) }?;
+    let current_translated: Matrix = unsafe { read(view, CURRENT_TRANSLATED) }?;
+    let current_translation: [f32; 3] = unsafe { read(view, CURRENT_TRANSLATION) }?;
+    let previous_projection: Matrix = unsafe { read(view, PREVIOUS_PROJECTION) }?;
+    let previous_translated: Matrix = unsafe { read(view, PREVIOUS_TRANSLATED) }?;
+    let previous_translation: [f32; 3] = unsafe { read(view, PREVIOUS_TRANSLATION) }?;
     let jitter = jitter?;
 
     let frame_time = camera.frame_time_seconds;
@@ -138,21 +122,11 @@ fn decode(
         .then_some(())
 }
 
-pub(crate) fn read_jitter(view: usize, copy: CopyMemory) -> Option<[f32; 2]> {
-    unsafe { read(copy, view, JITTER) }
-}
-
-pub(crate) fn read_camera(
-    view: usize,
-    pass: &mut rsf_game_render_pass,
-    copy: CopyMemory,
-    jitter: Option<[f32; 2]>,
-) -> bool {
-    pass.camera_valid = 0;
+pub(crate) fn read_camera(view: usize, pass: &mut rsf_game_render_pass) -> bool {
+    let jitter = unsafe { read(view, JITTER) };
     pass.camera.jitter_pixels = jitter.unwrap_or_default();
-    let valid = decode(view, pass, copy, jitter).is_some();
-    pass.camera_valid = u32::from(valid);
-    valid
+    pass.camera_valid = u32::from(decode(view, pass, jitter).is_some());
+    pass.camera_valid != 0
 }
 
 #[cfg(all(windows, test))]

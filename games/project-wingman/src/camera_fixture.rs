@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{read_camera, read_jitter};
-use crate::windows::copy;
+use super::read_camera;
 use rsf_game_sys::rsf_game_render_pass;
 
 fn store<T: Copy>(bytes: &mut [u8], offset: usize, value: T) {
@@ -9,8 +8,7 @@ fn store<T: Copy>(bytes: &mut [u8], offset: usize, value: T) {
 }
 
 fn sample(view: &[u8], pass: &mut rsf_game_render_pass) -> bool {
-    let view = view.as_ptr() as usize;
-    read_camera(view, pass, copy, read_jitter(view, copy))
+    read_camera(view.as_ptr() as usize, pass)
 }
 
 fn camera_fixture() -> bool {
