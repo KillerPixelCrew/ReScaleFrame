@@ -442,6 +442,9 @@ version = "0.1.2"
 [[package]]
 name = "rsf-game-sys"
 version = "0.1.2"
+dependencies = [
+ "windows-sys",
+]
 
 [[package]]
 name = "rsf-godot"
