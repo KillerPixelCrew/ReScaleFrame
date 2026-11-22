@@ -29,6 +29,8 @@ mod carrier;
 mod cloud_depth;
 mod cloud_depth_abi;
 mod contact_shadow;
+#[path = "../../../runtime/graphics/src/d3d11_observer_layout_abi.rs"]
+mod d3d11_observer_layout_abi;
 #[path = "../../../runtime/graphics/src/dxbc_chunks.rs"]
 mod dxbc_chunks;
 mod guards;

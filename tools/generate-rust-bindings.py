@@ -339,10 +339,14 @@ generate("runtime/orchestrator/src/scene_abi.rs", "runtime/orchestrator/include/
          ["-include", "rescaleframe/native_scene.h", "-Iruntime/orchestrator/include",
           "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--with-derive-default"])
+generate("runtime/graphics/src/d3d11_observer_layout_abi.rs", "runtime/graphics/include/rescaleframe/d3d11_observer.h",
+         "rsf_observer_layout_element", "NOTHING", ["-Iruntime/graphics/include"],
+         ["--no-recursive-allowlist", "--with-derive-default"])
 generate("runtime/orchestrator/src/d3d11_observer_abi.rs", "runtime/graphics/include/rescaleframe/d3d11_observer.h",
-         "rsf_(observer_(options|status|layout_element|(layout|shader|texture|buffer|present|present_event)_fn)|dump_log_fn)",
+         "rsf_(observer_(options|status|(layout|shader|texture|buffer|present|present_event)_fn)|dump_log_fn)",
          "RSF_OBSERVER_ABI_VERSION", ["-Iruntime/graphics/include"],
-         ["--no-recursive-allowlist", "--raw-line", "use crate::scene_abi::rsf_observer_present_event;"])
+         ["--no-recursive-allowlist", "--raw-line", "pub use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;",
+          "--raw-line", "use crate::scene_abi::rsf_observer_present_event;"])
 generate("runtime/orchestrator/src/frame_tap_abi.rs", "runtime/graphics/src/frame_tap_platform.h",
          "rsf_frame_tap_.*", "RSF_FRAME_TAP_.*", ["-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",

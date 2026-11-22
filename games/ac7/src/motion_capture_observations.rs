@@ -5,6 +5,7 @@ mod buffers;
 pub(super) mod colour;
 pub(super) mod geometry;
 
+use crate::d3d11_observer_layout_abi::rsf_observer_layout_element as LayoutElement;
 use crate::motion_capture_session::rsf_ac7_capture_enabled;
 use crate::shader_hash::crc32c;
 use crate::velocity_container::borrowed;
@@ -45,18 +46,6 @@ impl Shader {
     }
 }
 
-// The observer already translates the native D3D11 descriptors to this public C structure.
-// The velocity pass cache keeps its own copies of the same observations.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub(crate) struct LayoutElement {
-    pub(crate) semantic_index: u32,
-    pub(crate) format: u32,
-    pub(crate) input_slot: u32,
-    pub(crate) byte_offset: u32,
-    pub(crate) per_instance: u32,
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct LayoutSnapshot {
@@ -67,7 +56,6 @@ pub(super) struct LayoutSnapshot {
 
 const _: () = {
     assert!(size_of::<ShaderFacts>() == 8 && offset_of!(ShaderFacts, constant_mask) == 4);
-    assert!(size_of::<LayoutElement>() == 20 && offset_of!(LayoutElement, per_instance) == 16);
     assert!(size_of::<LayoutSnapshot>() == 328 && offset_of!(LayoutSnapshot, elements) == 8);
 };
 

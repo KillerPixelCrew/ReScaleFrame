@@ -6,7 +6,7 @@
 //! builder it lends, and stores each built variant at the slot recorded here.
 
 use crate::contact_shadow::container_crc;
-use crate::motion_capture_observations::LayoutElement;
+use crate::d3d11_observer_layout_abi::rsf_observer_layout_element as LayoutElement;
 use crate::velocity_container::borrowed;
 use std::collections::HashMap;
 use std::ffi::c_void;

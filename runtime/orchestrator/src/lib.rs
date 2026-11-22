@@ -34,6 +34,9 @@ mod d3d11_observer_capture;
 #[cfg(windows)]
 mod d3d11_observer_hooks;
 #[cfg(windows)]
+#[path = "../../graphics/src/d3d11_observer_layout_abi.rs"]
+mod d3d11_observer_layout_abi;
+#[cfg(windows)]
 mod d3d11_observer_module;
 #[cfg(windows)]
 mod d3d11_observer_present;
