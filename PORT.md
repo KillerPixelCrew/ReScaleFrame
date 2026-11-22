@@ -1066,8 +1066,8 @@ Port generic SR setup, legacy bridging and auxiliary reconstruction. Trace the p
 
 **Fixtures (4)**
 
-- [ ] [tests/auxiliary_sr.cpp](tests/auxiliary_sr.cpp)
-- [ ] [tests/sr_backend_switch_device.cpp](tests/sr_backend_switch_device.cpp)
+- [x] [tests/auxiliary_sr.cpp](tests/auxiliary_sr.cpp)
+- [x] [tests/sr_backend_switch_device.cpp](tests/sr_backend_switch_device.cpp)
 - [x] [tests/sr_bridge.cpp](tests/sr_bridge.cpp)
 - [x] [tests/sr_session.cpp](tests/sr_session.cpp)
 
