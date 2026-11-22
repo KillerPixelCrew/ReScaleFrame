@@ -194,7 +194,7 @@ pub(crate) extern "C" fn rsf_anomaly_motion_bind_close(
     motion_rtv: Target,
 ) -> i32 {
     state.bound = 0;
-    if !cache_available(state, backend, host) {
+    if state.cache_may_hold_motion != 0 && state.backend != backend.cast() {
         return FAULT;
     }
     if backend.is_null() || motion_rtv.is_null() {
@@ -208,10 +208,18 @@ pub(crate) extern "C" fn rsf_anomaly_motion_bind_close(
     let Some(slot) = cache.read::<Target>(cache.slot_two) else {
         return FAULT;
     };
-    state.cache_may_hold_motion = u32::from(slot == motion_rtv);
     if slot != motion_rtv {
+        state.cache_may_hold_motion = 0;
         return NONE;
     }
+    // A new immediate context can prove the original slot is empty, but cannot
+    // clear an OM binding on the original context if its RTV is still cached.
+    if state.cache_may_hold_motion != 0 && state.host != host {
+        return FAULT;
+    }
+    state.backend = backend.cast();
+    state.host = host;
+    state.cache_may_hold_motion = 1;
     let Some(changed) = cache.read::<u8>(cache.changed) else {
         return FAULT;
     };

@@ -113,20 +113,14 @@ void STDMETHODCALLTYPE draw_instanced_hook(ID3D11DeviceContext* c, UINT count, U
         reinterpret_cast<DrawInstancedFn>(draw_originals[3])(x, count, instances, start, first);
     });
 }
-// ID3D11DeviceContext vtable slots (d3d11.h declaration order): DrawIndexed 12, Draw 13, DrawIndexedInstanced 20,
-// DrawInstanced 21.
 bool install_draw_hooks(void* context) noexcept {
-    if (!context) return false;
-    void** vtable{};
-    if (!guarded_copy(&vtable, context, sizeof(vtable)) || !vtable) return false;
-    const std::array<std::size_t, 4> slots{12, 13, 20, 21};
+    void* targets[4]{};
+    if (!rsf_anomaly_motion_resolve_draws(guarded_copy, context, &targets)) return false;
     const std::array<void*, 4> replacements{reinterpret_cast<void*>(&draw_indexed_hook), reinterpret_cast<void*>(&draw_hook),
         reinterpret_cast<void*>(&draw_indexed_instanced_hook), reinterpret_cast<void*>(&draw_instanced_hook)};
     std::array<ResolvedHookSite, 4> sites{};
-    for (std::size_t i = 0; i < slots.size(); ++i) {
-        void* target{};
-        if (!guarded_copy(&target, vtable + slots[i], sizeof(target))) return false;
-        sites[i] = {target, replacements[i], &draw_originals[i]};
+    for (std::size_t i = 0; i < sites.size(); ++i) {
+        sites[i] = {targets[i], replacements[i], &draw_originals[i]};
     }
     return draw_hooks.install_resolved(sites);
 }
@@ -218,10 +212,8 @@ void* render_target() noexcept {
 bool position_views(void* target, PositionViews* views) noexcept {
     constexpr auto position_offset = sr::target_slots[0].offset;
     static_assert(position_offset == 0x378);
-    std::byte* crt{};
-    return guarded_copy(&crt, static_cast<std::byte*>(target) + position_offset, sizeof(crt)) && crt &&
-        guarded_copy(&views->rtv, crt + sr::crt_rtv_offset, sizeof(views->rtv)) &&
-        guarded_copy(&views->surface, crt + sr::crt_surface_offset, sizeof(views->surface));
+    return rsf_anomaly_motion_position_views(guarded_copy, target, position_offset,
+        sr::crt_rtv_offset, sr::crt_surface_offset, views);
 }
 bool native_frame(uint32_t* frame) noexcept { return read_global(np().device_frame_rva, *frame); }
 bool render_view(uint8_t* out) noexcept {
@@ -296,12 +288,12 @@ const MotionPlatform platform{
     camera, [](float (*world)[16]) { return geometry::read_world_matrix(*world); },
     geometry::read_vertex_constants, geometry::write_vertex_constants,
     [](void* raw, MotionDrawState* out) {
-        D3D11_VIEWPORT viewport{};
-        UINT count = 1;
-        static_cast<ID3D11DeviceContext*>(raw)->RSGetViewports(&count, &viewport);
+        rsf_anomaly_motion_viewport(raw, &out->viewport);
         const auto jitter = sr::current_jitter_uv();
-        *out = {{viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height},
-            {jitter.current_u, jitter.current_v, jitter.previous_u, jitter.previous_v}};
+        out->jitter[0] = jitter.current_u;
+        out->jitter[1] = jitter.current_v;
+        out->jitter[2] = jitter.previous_u;
+        out->jitter[3] = jitter.previous_v;
     },
     open_pack, rsf_anomaly_runtime_pack_close,
     [](void* pack, void* device) { runtime_pack_api(pack).attach_d3d11(device); },

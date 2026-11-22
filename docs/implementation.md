@@ -1274,6 +1274,13 @@ and preserve a cached RTV until the matching backend can confirm cleanup.
 Source checks passed. Build, device and game checks remain open.
 [N04 D3D11 leaves and target cleanup](research/rust-anomaly-motion-stage.md#n04-d3d11-leaves-and-target-cleanup)
 
+The N04 reconciliation shares motion and SR capture-directory lookup and uses
+the integrated overlay option callbacks. It also ports the motion hook
+assertions and standalone tessellation linkage fixture to Rust. The native
+hook launcher still exercises the production detour. Fixture execution and
+live verification remain open.
+[N04 reconciliation](research/rust-anomaly-motion-stage.md#reconciliation-from-89f6df5d)
+
 Anomaly now admits successful stock shader creation and reads its
 guarded interface and filename in Rust. The native detour still
 supplies its own return address and stack to the compiler-frame

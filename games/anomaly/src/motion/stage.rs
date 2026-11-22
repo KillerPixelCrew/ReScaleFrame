@@ -6,6 +6,7 @@ pub(super) mod abi;
 mod capture;
 mod d3d11;
 mod draw;
+mod native;
 mod options;
 mod report;
 pub(super) mod shaders;

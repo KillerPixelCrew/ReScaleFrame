@@ -293,22 +293,58 @@ Closed Rust findings:
 - Keep matrix validation failures distinct from bone-count refusals.
 - Anomaly motion device and binder tables unwrap bindgen Option leaves on every use.
 
-Open port paths are `games/anomaly/src/motion_stage.cpp` (native draw trampolines,
-guarded engine reads and shader callback interop) and
-`games/anomaly/src/motion_profile.h` (fingerprinted build data shared by the
-native stage and shader loader). All seven N04 fixture checkboxes remain open.
-`tests/anomaly_motion_contract.cpp` has additional cleanup coverage. The three
-existing device fixtures that use MotionDevice now reach the Rust D3D11 and
-replay calls through the same compatibility surface.
+The reconciled branch also closes these Rust findings:
 
-Two Rust findings need coordinated caller edits:
+- Use the range-aware option builder for Anomaly motion controls.
+- Use one Anomaly frame-dump directory resolver for SR and motion.
 
-- Use the range-aware option builder for Anomaly motion controls. Motion now
-  uses an explicit inclusive range and advertises a minimum of one for the
-  interval. Share the descriptor builder with adapter_options after integrating
-  N02's boolean setter ABI; take `*const c_char` so the mutable pack label and
-  static labels can use the same builder.
-- Use one Anomaly frame-dump directory resolver for SR and motion. Motion uses
-  `frame_dump::anomaly_directory` with the SR size rule. N06 can import it in
-  place of `sr_stage::dump_directory`; existing SR schedule and diagnostics
-  stay in the SR owner.
+The adapter option builder keeps N02's boolean apply/save callback, including
+false on a refused INI write. Motion's capture interval remains restart-marked,
+with 1 as its minimum. SR and motion use the existing SR environment path
+length rule and retain their separate admission and capture scheduling.
+
+The reconciled branch ports these fixture paths:
+
+- `tests/anomaly_motion_hooks.cpp`. Rust checks the event sequence and scope
+  facts. The native launcher still drives the real detour and constructs the
+  production C++ scopes.
+- `tests/anomaly_motion_tess_device.cpp`. The Rust example preserves the HLSL
+  probe, NVIDIA-first hardware selection, debug/no-debug assertions and CTest
+  skip code 77. The shader body is unchanged.
+
+Open port paths are `games/anomaly/src/motion_stage.cpp` and
+`games/anomaly/src/motion_profile.h`. Rust derives the four immediate-context
+draw slots from the pinned SDK vtable. It reads the position CRT views through
+the shared guarded geometry reader and samples the viewport with the SDK
+binding. The C++ trampoline retains the engine stack address and the
+draw-unwind scopes, as well as the remaining engine and shader glue. The
+profile header supplies fingerprinted data consumed by the C++ fixture and
+Python evidence readers.
+
+The remaining fixture ports are `tests/anomaly_foliage_shader_device.cpp`,
+`tests/anomaly_motion_contract.cpp`, `tests/anomaly_motion_device.cpp`,
+`tests/anomaly_motion_far_device.cpp` and
+`tests/anomaly_motion_tess_chain_device.cpp`. They still exercise native D3D11
+or C++ fixture adapters. The binder contract adds cleanup refusal coverage
+and the MotionDevice-backed tests use the Rust replay and resource calls.
+
+### Reconciliation from 89f6df5d
+
+The FG table keeps the integrated size-checked shape and Rust COM bindings.
+The new motion target replaces only its return payload. The integrated Runtime
+Auto selector, FG capture decoder, history retirement policy and source
+readiness rules remain in their original owners. Cache cleanup can accept
+proof that the original slot is empty after an immediate-context change. It
+still refuses to issue an OM clear on a different context when that slot
+contains the borrowed RTV.
+
+The prior source commit remains on its original branch. The reconciled replay
+starts after `89f6df5d` with `e77c8f3e`. N05 follow-up commits are prospective
+and were compared by a read-only three-way merge. Keep N05's standalone
+temporal fixture alongside the N04 fixtures and combine the Windows dev
+features in one Cargo table. For `768c7ced`, keep N05's typed RuntimePack
+ownership and borrowed reflection logic. Fill ConstantOps during typed pack
+admission, preserve N04's generated frame-target return and guarded draw
+helpers, and converge the C++ and Rust stage ABI to the resulting layout
+together. Keep the N04 removal of production motion fixture sources as well
+as the N05 engine-include source rename.

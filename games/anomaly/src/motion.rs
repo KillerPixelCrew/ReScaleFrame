@@ -5,6 +5,8 @@
 //! through upload. The private C ABI also serves the native contract fixtures.
 
 mod foliage;
+#[cfg(all(windows, feature = "motion-hooks-fixture"))]
+mod hook_fixture;
 #[cfg(windows)]
 mod stage;
 #[cfg(any(windows, test))]

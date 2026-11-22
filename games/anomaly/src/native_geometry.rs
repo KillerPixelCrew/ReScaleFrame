@@ -9,6 +9,7 @@ mod scopes;
 mod tests;
 mod vertex_constants;
 
+use crate::engine_guards::read_bytes;
 use crate::engine_guards::{Image, Read};
 use crate::geometry_registry::{
     IdentityRegistry, Registry, classify, rsf_anomaly_geometry_find as find,
@@ -239,23 +240,6 @@ extern "C" fn rsf_anomaly_geometry_reset() {
 
 fn read_pointer(platform: &Platform, address: usize) -> Option<usize> {
     read_bytes(platform.read, address).map(usize::from_ne_bytes)
-}
-
-fn read_bytes<const N: usize>(read: Read, address: usize) -> Option<[u8; N]> {
-    if address == 0 {
-        return None;
-    }
-    address.checked_add(N)?;
-    let mut bytes = [0; N];
-    // The native leaf guards the read and reports whether the complete span was copied.
-    unsafe {
-        read(
-            bytes.as_mut_ptr().cast(),
-            with_exposed_provenance(address),
-            N,
-        )
-    }
-    .then_some(bytes)
 }
 
 fn read_children(

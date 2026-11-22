@@ -3,8 +3,26 @@ mod motion;
 mod sr;
 
 use std::ffi::{CStr, c_char, c_void};
+use std::ptr::with_exposed_provenance;
 
 pub(super) type Read = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
+
+pub(super) fn read_bytes<const N: usize>(read: Read, address: usize) -> Option<[u8; N]> {
+    if address == 0 {
+        return None;
+    }
+    address.checked_add(N)?;
+    let mut bytes = [0; N];
+    // The native leaf guards the read and reports whether the complete span was copied.
+    unsafe {
+        read(
+            bytes.as_mut_ptr().cast(),
+            with_exposed_provenance(address),
+            N,
+        )
+    }
+    .then_some(bytes)
+}
 
 #[repr(C)]
 pub(super) struct Image {

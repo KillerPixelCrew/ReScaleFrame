@@ -103,15 +103,34 @@ add_test(NAME anomaly_motion_device COMMAND rsf_anomaly_motion_device_test)
 set_tests_properties(anomaly_motion_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_motion_contract anomaly_motion_unknown_selection anomaly_motion_device PROPERTIES TIMEOUT 300)
 # The geometry flush detour (redirected onto a fixture) calls the motion stage's flush slot after the original.
-add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
+rsf_add_rust_static(rsf_anomaly_motion_hook_fixture_rust rsf_rust_anomaly_motion_hook_fixture
+    rsf-anomaly rsf_anomaly --features motion-hooks-fixture)
+add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks_native.cpp"
+    ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_motion_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE rsf_anomaly_rust minhook rsf_build_options)
+target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE rsf_anomaly_motion_hook_fixture_rust
+    minhook rsf_build_options)
 add_test(NAME anomaly_motion_hooks_contract COMMAND rsf_anomaly_motion_hooks_test)
 set_tests_properties(anomaly_motion_hooks_contract PROPERTIES TIMEOUT 60)
 # Why the motion variant pair is refused under a bound hull/domain shader (first-party HLSL probe; 77 without hardware).
-add_executable(rsf_anomaly_motion_tess_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_tess_device.cpp")
-target_link_libraries(rsf_anomaly_motion_tess_device_test PRIVATE d3d11 d3dcompiler dxgi dxguid rsf_build_options)
-add_test(NAME anomaly_motion_tess_device COMMAND rsf_anomaly_motion_tess_device_test)
+find_program(RSF_CARGO cargo REQUIRED)
+if(MSVC)
+    set(RSF_ANOMALY_MOTION_TESS_TRIPLE x86_64-pc-windows-msvc)
+else()
+    set(RSF_ANOMALY_MOTION_TESS_TRIPLE x86_64-pc-windows-gnu)
+endif()
+set(RSF_ANOMALY_MOTION_TESS_CARGO_DIR "${CMAKE_BINARY_DIR}/cargo/anomaly-motion-tess-device")
+set(RSF_ANOMALY_MOTION_TESS_PROFILE "$<IF:$<CONFIG:Debug>,debug,release>")
+set(RSF_ANOMALY_MOTION_TESS_EXE
+    "${RSF_ANOMALY_MOTION_TESS_CARGO_DIR}/${RSF_ANOMALY_MOTION_TESS_TRIPLE}/${RSF_ANOMALY_MOTION_TESS_PROFILE}/examples/anomaly_motion_tess_device.exe")
+add_custom_target(rsf_anomaly_motion_tess_device_test ALL
+    COMMAND "${RSF_CARGO}" build --locked -p rsf-anomaly --example anomaly_motion_tess_device
+        --target ${RSF_ANOMALY_MOTION_TESS_TRIPLE} --target-dir "${RSF_ANOMALY_MOTION_TESS_CARGO_DIR}"
+        $<$<NOT:$<CONFIG:Debug>>:--release>
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    BYPRODUCTS "${RSF_ANOMALY_MOTION_TESS_EXE}"
+    COMMAND_EXPAND_LISTS VERBATIM)
+add_test(NAME anomaly_motion_tess_device COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} "${RSF_ANOMALY_MOTION_TESS_EXE}")
 set_tests_properties(anomaly_motion_tess_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 # The real VS+HS+DS+PS motion chain of the tessellation pass (local deployment with the dx11/tess roots, NVIDIA adapter
 # preferred; 77 without deployment, d3dcompiler_43 or hardware): a skinned PN/HM mover against the CPU model.

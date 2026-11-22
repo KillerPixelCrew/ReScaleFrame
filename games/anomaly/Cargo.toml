@@ -9,6 +9,9 @@ license.workspace = true
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+motion-hooks-fixture = []
+
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
 
@@ -40,3 +43,9 @@ features = [
 
 [lints]
 workspace = true
+
+
+[target."cfg(windows)".dev-dependencies]
+windows = { version = "0.62.2", default-features = false, features = [
+  "Win32_Graphics_Dxgi",
+] }
