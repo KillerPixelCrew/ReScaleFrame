@@ -8,7 +8,7 @@
 //! The TrueSky plugin patches and call relays (TrueSkyPluginRender_MT.dll) are truesky.rs; their
 //! device-dependent readiness stays in native_renderer/sky.rs.
 use crate::sites::{Code, NativeCode};
-use crate::sites_abi::{
+use crate::sys::{
     RSF_AC7_VELOCITY_PATCHES, rsf_ac7_code_leaves, rsf_ac7_code_patch, rsf_ac7_code_patches,
 };
 use std::ptr::null_mut;

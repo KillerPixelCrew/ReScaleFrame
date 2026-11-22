@@ -7,7 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+# rlib so tests/game-sdk can use the observer records this crate binds.
+crate-type = ["staticlib", "rlib"]
 
 [features]
 fg-fixture = ["windows/Win32_Graphics_Dxgi"]
@@ -60,6 +61,9 @@ features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ]
+
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
 
 [lints]
 workspace = true

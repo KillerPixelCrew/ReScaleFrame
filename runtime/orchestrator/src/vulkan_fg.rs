@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
 use crate::sr_session::has_capacity;
-use crate::vulkan_fg_abi::*;
+use crate::sys::RSF_SRVK_ABI_VERSION;
+use crate::sys::*;
 use crate::vulkan_fg_copy::SHADER_READ;
 use crate::vulkan_fg_frames::PresentSource;
 use crate::vulkan_ownership::Claim;
 use crate::vulkan_presentation::ProviderOperation;
-use crate::vulkan_sr_abi::RSF_SRVK_ABI_VERSION;
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
 use std::ptr::{self, addr_of, addr_of_mut};

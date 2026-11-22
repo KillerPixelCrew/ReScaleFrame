@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Verified Fallout 4 AE menu, freeze, camera and world-lease observations.
 
-use crate::cpu_abi::rsf_fallout4_cpu_identity;
 use crate::cpu_events::render_source_is_current;
-pub(crate) use crate::render_records::NativeScreen;
+pub(crate) use crate::sys::NativeScreen;
+use crate::sys::rsf_fallout4_cpu_identity;
 use crate::{image, matches_bytes, read};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_PRIMARY,

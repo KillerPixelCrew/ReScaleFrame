@@ -3,7 +3,7 @@
 
 use super::{DeviceFacts, ResourceFacts, SwapFacts, ViewportFacts};
 use crate::d3d11::{identity, viewport as read_viewport};
-pub(super) use crate::render_records::NativeInputReferences as TransferredLease;
+pub(super) use crate::sys::NativeInputReferences as TransferredLease;
 use std::ffi::c_void;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_DEVICE_CONTEXT_IMMEDIATE, D3D11_RENDER_TARGET_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC,
@@ -13,7 +13,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::core::Interface;
 
-const TEXTURE_SLOTS: usize = crate::render_records::native_input_slot_count as usize;
+const TEXTURE_SLOTS: usize = crate::sys::native_input_slot_count as usize;
 
 /// Candidate references stay in Rust until a reader admits its pass.
 #[derive(Default)]

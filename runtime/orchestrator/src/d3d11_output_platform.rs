@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Typed Windows leaves shared by the Rust render paths and native callers.
-use crate::d3d11_output_abi::rsf_d3d11_texture_desc as Desc;
+use crate::sys::rsf_d3d11_texture_desc as Desc;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;

@@ -29,10 +29,10 @@
 //! The C++ kept this as unguarded globals. Its release counted only queued render events, so it
 //! could destroy the slots, images and swap chain a present interception was recording into on the
 //! render thread, and it cleared the window frame identity while that thread copied it.
-use crate::bridge_abi::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
 use crate::bridge_interop::VULKAN;
 use crate::device_creation::{Claim, Creation};
-pub(super) use crate::vulkan_handles::{
+use crate::sys::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
+pub(super) use crate::sys::{
     rsf_unity_vulkan_command_handles as CommandSlot,
     rsf_unity_vulkan_device_handles as DeviceHandles,
     rsf_unity_vulkan_image_handles as ImageHandles,

@@ -108,7 +108,7 @@ unsafe extern "C" fn rsf_create_render_target_view(
     if device.is_null() || texture.is_null() {
         return std::ptr::null_mut();
     }
-    unsafe { crate::d3d11_output_abi::rsf_d3d11_output_create_rtv(device, texture) }
+    unsafe { crate::sys::rsf_d3d11_output_create_rtv(device, texture) }
 }
 
 #[unsafe(no_mangle)]

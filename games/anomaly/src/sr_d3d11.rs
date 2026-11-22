@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::lease::Lease;
-use crate::sr_swap_abi::{
+use crate::sys::{
     RSF_ANOMALY_SWAP_MAKE_CREATED, RSF_ANOMALY_SWAP_MAKE_REFUSED,
     rsf_anomaly_swap_request as Request, rsf_anomaly_swap_twins as Twins,
 };

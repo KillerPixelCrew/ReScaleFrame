@@ -4,8 +4,8 @@ use crate::d3d11_sharpening::{
     Frame, rsf_core_sharpen11_count, rsf_core_sharpen11_destroy, rsf_core_sharpen11_run,
     rsf_sharpen11_pack,
 };
-use crate::render_abi::rsf_sharpening_options as Options;
 use crate::sharpening_policy::defaults;
+use crate::sys::rsf_sharpening_options as Options;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS, ID3D11Texture2D,

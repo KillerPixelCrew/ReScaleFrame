@@ -7,14 +7,18 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+# rlib so the test crates and the standalone fixtures can use the bindings this crate owns.
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+rsf-fsr4-compat = { path = "../backends/fsr/compat" }
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-streamline-vk = { path = "../vulkan/streamline/lifecycle" }
 rsf-runtime-submission = { path = "../graphics/submission" }
 
 [build-dependencies]
 cc = "1"
+rsf-bindgen = { path = "../../tools/bindgen" }
 
 [lints]
 workspace = true

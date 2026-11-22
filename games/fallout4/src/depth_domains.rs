@@ -20,13 +20,11 @@ use crate::build_layout::{
 };
 use crate::camera::xm::{self, Matrix};
 use crate::camera::{self, CameraDepthBound, CameraRaster};
-use crate::cpu_abi::rsf_fallout4_cpu_identity;
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::d3d11::same_native;
-pub(crate) use crate::render_records::{
-    NativeDepthCamera as DepthCamera, NativeDepthSnapshot as Snapshot,
-};
-use crate::render_records::{NativeDepthMaps as Maps, NativeDepthMathFailure as MathFailure};
+use crate::sys::rsf_fallout4_cpu_identity;
+pub(crate) use crate::sys::{NativeDepthCamera as DepthCamera, NativeDepthSnapshot as Snapshot};
+use crate::sys::{NativeDepthMaps as Maps, NativeDepthMathFailure as MathFailure};
 use crate::{Plain, image, read};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,

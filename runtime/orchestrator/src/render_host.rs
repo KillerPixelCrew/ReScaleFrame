@@ -8,41 +8,41 @@
 use crate::com_ref::ComRef;
 use crate::d3d12_observer::ObserverSetup;
 use crate::fg_choice;
-use crate::fg12_abi::rsf_fg12_setup as FgSetup;
-use crate::gl_pipeline_abi::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
-use crate::overlay_abi::{
-    RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_OVERLAY_HOST_OPTION_TOGGLE, RSF_OVERLAY_SR_CHANGE_APPLIED,
-    RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK, RSF_REFLEX_ON,
-    rsf_overlay_host_option as HostOption, rsf_overlay_intent as Intent,
-    rsf_overlay_stats as Stats, rsf_render_status as Status,
-};
 use crate::overlay_settings::{
     apply_settings_intent, fill_sharpening_stats, settings_changed, sr_name,
 };
 use crate::present_rates::Rates;
-use crate::render_abi::{
-    RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
-    RSF_FG_STAT_TOTAL_PRESENTED, RSF_RENDER_FRONTEND_ABI_VERSION,
-    rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
-    rsf_render_settings as Settings, rsf_sharpening_options as Sharpening,
-};
 use crate::render_host_methods::Adapter;
 use crate::settings_store::{
     read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
     rsf_settings_store_write_layout, set_sharpening, sharpening_of,
 };
 use crate::sharpening_policy;
+use crate::sys::rsf_fg12_setup as FgSetup;
+use crate::sys::{
+    RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
+    RSF_FG_STAT_TOTAL_PRESENTED, RSF_RENDER_FRONTEND_ABI_VERSION,
+    rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
+    rsf_render_settings as Settings, rsf_sharpening_options as Sharpening,
+};
+use crate::sys::{
+    RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_OVERLAY_HOST_OPTION_TOGGLE, RSF_OVERLAY_SR_CHANGE_APPLIED,
+    RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK, RSF_REFLEX_ON,
+    rsf_overlay_host_option as HostOption, rsf_overlay_intent as Intent,
+    rsf_overlay_stats as Stats, rsf_render_status as Status,
+};
+use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 #[cfg(not(test))]
 use crate::{d3d12_observer::Observer, dlss_native12::Registration};
-use rsf_game_sys::render_host_abi::{
-    RSF_RENDER_HOST_ABI_VERSION as HOST_ABI_VERSION,
-    RSF_RENDER_HOST_ENGINE_PRESENTATION as ENGINE_PRESENTATION, rsf_render_host_setup as Setup,
-};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RESET,
     RSF_GAME_RENDER_WINDOW, rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
     rsf_game_latency_event as LatencyEvent, rsf_game_log_fn, rsf_game_render_feedback as Feedback,
     rsf_game_render_pass as Pass,
+};
+use rsf_game_sys::{
+    RSF_RENDER_HOST_ABI_VERSION as HOST_ABI_VERSION,
+    RSF_RENDER_HOST_ENGINE_PRESENTATION as ENGINE_PRESENTATION, rsf_render_host_setup as Setup,
 };
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -1933,16 +1933,16 @@ unsafe fn create(setup: *const Setup, services: *mut Services, p: &'static Platf
     services.log = Some(backend_log);
     FRONTEND.store(host, Ordering::Release);
     let owner = unsafe { &*host };
-    let option = crate::overlay_saved_abi::rsf_overlay_saved_option {
+    let option = crate::sys::rsf_overlay_saved_option {
         label_utf8: c"SR and FG capture directory".as_ptr(),
         key_utf8: c"SRCaptureDirectory".as_ptr(),
-        kind: crate::overlay_abi::overlay_wire::RSF_OVERLAY_SAVED_TEXT,
-        max_text_length: crate::overlay_saved_abi::RSF_OVERLAY_SAVED_TEXT_LIMIT,
+        kind: crate::sys::RSF_OVERLAY_SAVED_TEXT,
+        max_text_length: crate::sys::RSF_OVERLAY_SAVED_TEXT_LIMIT,
         ..Default::default()
     };
-    let saved = crate::overlay_saved_abi::rsf_overlay_saved_setup {
-        struct_size: size_of::<crate::overlay_saved_abi::rsf_overlay_saved_setup>() as u32,
-        abi_version: crate::overlay_saved_abi::RSF_OVERLAY_SAVED_OPTIONS_ABI_VERSION,
+    let saved = crate::sys::rsf_overlay_saved_setup {
+        struct_size: size_of::<crate::sys::rsf_overlay_saved_setup>() as u32,
+        abi_version: crate::sys::RSF_OVERLAY_SAVED_OPTIONS_ABI_VERSION,
         configuration_path: owner.ini.as_ptr(),
         configuration_section: owner.section.as_ptr(),
         options: &option,

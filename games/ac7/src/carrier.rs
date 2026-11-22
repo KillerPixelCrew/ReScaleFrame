@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! AC7 policy shared by the dedicated and combined DirectInput carriers.
-use crate::carrier_abi::{
+use crate::scene_color::rsf_ac7_translucency_scale;
+use crate::sites::DEPTH_GATES;
+use crate::sys::{
     RSF_AC7_CARRIER_ABI_VERSION, RSF_AC7_CARRIER_START_OPTION_COUNT, RSF_AC7_JITTER_RELAY_ALLOWED,
     RSF_AC7_JITTER_RELAY_DENIED, RSF_AC7_JITTER_RELAY_HEIGHT, RSF_AC7_JITTER_RELAY_LAST_DENIED,
     RSF_AC7_JITTER_RELAY_VIEW, RSF_AC7_JITTER_RELAY_WIDTH, rsf_ac7_carrier_leaves as CarrierLeaves,
 };
-use crate::scene_color::rsf_ac7_translucency_scale;
-use crate::sites::DEPTH_GATES;
 use crate::{AMD64, EXECUTABLE};
 use rsf_game_sys::ffi_util::ascii_wide;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_probe};

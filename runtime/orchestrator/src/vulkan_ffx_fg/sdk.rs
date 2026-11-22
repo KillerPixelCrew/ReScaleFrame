@@ -22,18 +22,18 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_record, rsf_core_capture_vk_wants,
 };
 use crate::sdk_module::Loader;
+use crate::sys::rsf_vkfg_image_copy as ImageCopy;
+use crate::sys::{rsf_vk_function, rsf_vk_get_proc};
 use crate::vulkan_fg_copy::{Barrier, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
 use crate::vulkan_fg_resources::device::{
     Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory,
     rsf_core_vkfg_device_wait_timing, rsf_core_vkfg_load_device, rsf_core_vkfg_platform,
 };
-use crate::vulkan_fg_resources_abi::rsf_vkfg_image_copy as ImageCopy;
 use crate::vulkan_fg_wsi::{
     QueuePresent, Scope, rsf_core_vkfg_device_proc, rsf_core_vkfg_drain,
     rsf_core_vkfg_graphics_submit, rsf_core_vkfg_wsi_acquire, rsf_core_vkfg_wsi_create,
     rsf_core_vkfg_wsi_destroy, rsf_core_vkfg_wsi_images, rsf_core_vkfg_wsi_present,
 };
-use crate::vulkan_sr_abi::{rsf_vk_function, rsf_vk_get_proc};
 use crate::vulkan_timing::{
     rsf_core_vk_timing_begin, rsf_core_vk_timing_end, timing_begin, timing_end,
 };

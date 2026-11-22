@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Result, check, enabled, gpu::*};
-use crate::{BUSY, unity_sr_d3d12_abi::*};
+use crate::{BUSY, sys::*};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
     RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_LATENCY_SLEEP, RSF_GAME_RENDER_FINAL_SCENE,

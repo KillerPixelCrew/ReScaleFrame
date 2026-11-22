@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The public AC7 capture ABI, observed through WARP and a hidden swap chain.
 
-use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;
-use crate::motion_capture_graphics_abi::*;
-use rsf_game_sys::{RSF_GAME_RENDER_TRANSLUCENCY, rsf_game_render_pass};
+use rsf_ac7::sys::*;
 use std::ffi::{CStr, CString, OsString, c_char, c_void};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};

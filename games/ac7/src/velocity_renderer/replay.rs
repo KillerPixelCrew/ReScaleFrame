@@ -2,7 +2,7 @@
 //! Scope facts and synchronous leases for AC7 D3D11 replay.
 use super::d3d11::{Pipeline, Renderer, clock_ms};
 use super::{LIFETIME, admit, lock, published, release_renderer, reset_for_renderer};
-use crate::scene_color_abi::rsf_frame_tap_geometry;
+use crate::sys::rsf_frame_tap_geometry;
 use crate::velocity_commit::{Log, refused, rsf_ac7_velocity_log_frame_end, set_log};
 use crate::velocity_history;
 use crate::velocity_stream::draw_admitted;

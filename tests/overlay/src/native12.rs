@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Block the real WARP queue, fill all three overlay slots, then allow their fences to complete.
 use super::{Handle, Window, check, require};
-use crate::abi::{rsf_overlay_intent, rsf_overlay_stats};
+use crate::sys::{rsf_overlay_intent, rsf_overlay_stats};
 use std::{ffi::CStr, thread, time::Duration};
 use windows::{
     Win32::{

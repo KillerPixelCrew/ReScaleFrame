@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-#[path = "../../../runtime/vulkan/fsr4-fg/bridge_abi.rs"]
-mod abi;
-
-use abi::*;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::ptr;
 use windows::Win32::Graphics::Dxgi::{

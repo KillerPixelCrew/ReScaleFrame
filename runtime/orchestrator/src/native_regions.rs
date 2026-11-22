@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::{ComRef, vtable};
 use crate::d3d11_output::{GraphicsCache, texture_desc};
-use crate::d3d11_output_abi::*;
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS, R32_TYPELESS,
 };
 use crate::graphics_d3d11::{compute_shader, shader_code};
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
     depth_domains_requested, rsf_game_depth_domain, rsf_game_depth_domains,

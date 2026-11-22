@@ -32,10 +32,8 @@ mod timeline_pair;
 
 type Handle = *mut c_void;
 
-#[path = "../../vulkan/fsr4-fg/bridge_abi.rs"]
-mod bridge_abi;
-use bridge_abi::{RSF_FSR4FG_ABI_MISMATCH as ABI_MISMATCH, RSF_FSR4FG_INVALID_ARGUMENT as INVALID};
-pub(super) use bridge_abi::{
+use crate::sys::{RSF_FSR4FG_ABI_MISMATCH as ABI_MISMATCH, RSF_FSR4FG_INVALID_ARGUMENT as INVALID};
+pub(super) use crate::sys::{
     RSF_FSR4FG_BRIDGE_ABI_VERSION as BRIDGE_ABI, RSF_FSR4FG_NOT_SUPPORTED as UNSUPPORTED,
     rsf_fsr4fg_create as BridgeCreate, rsf_fsr4fg_frame as BridgeFrame,
     rsf_fsr4fg_info as BridgeInfo, rsf_fsr4fg_present_status as BridgeStatus,

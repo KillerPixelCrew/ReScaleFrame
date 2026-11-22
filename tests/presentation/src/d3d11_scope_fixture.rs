@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The AC7 fixture queues real render markers on its synthetic native command list.
 use crate::d3d11_marker::append_native;
-use crate::d3d11_scope_fixture_abi::*;
-use crate::present_fixture_loops_abi::*;
-use rsf_game_sys::*;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::ptr::{self, null_mut};
 

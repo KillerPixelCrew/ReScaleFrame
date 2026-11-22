@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_sr_abi::rsf_srvk_image;
+use crate::sys::rsf_srvk_image;
 use ash::{
     Device,
     vk::{self, Handle as _},

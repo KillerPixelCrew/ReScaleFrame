@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::{ComRef, vtable};
 use crate::sr_session::has_capacity;
-use crate::ui_layer_abi::*;
+use crate::sys::*;
 use std::ffi::{CString, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::{null, null_mut};

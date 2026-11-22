@@ -11,7 +11,7 @@ use crate::build_layout::{
     RENDERER_CHAIN as CHAIN, RENDERER_CONTEXT as CONTEXT, RENDERER_DEVICE as DEVICE,
     RENDERER_POINTER as OWNER_RVA, RENDERER_WINDOW as WINDOW,
 };
-use crate::platform_abi::{
+use crate::sys::{
     RSF_D3D11_HOST_ABI_VERSION, rsf_d3d11_creation_scope, rsf_d3d11_native_chain,
     rsf_d3d11_presentation_binding, rsf_fallout4_create_call,
 };

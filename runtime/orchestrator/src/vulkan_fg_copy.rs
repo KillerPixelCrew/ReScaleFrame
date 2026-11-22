@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pub(super) use crate::vulkan_fg_resources_abi::rsf_vkfg_barrier as Barrier;
-use crate::vulkan_fg_resources_abi::rsf_vkfg_image as Image;
-pub(super) use crate::vulkan_fg_resources_abi::rsf_vkfg_image_copy as ImageCopy;
+pub(super) use crate::sys::rsf_vkfg_barrier as Barrier;
+use crate::sys::rsf_vkfg_image as Image;
+pub(super) use crate::sys::rsf_vkfg_image_copy as ImageCopy;
 use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
 

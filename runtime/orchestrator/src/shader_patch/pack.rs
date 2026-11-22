@@ -3,7 +3,7 @@
 
 use super::leaf::Platform;
 use super::{ANCHOR, FORMAT, Files, HASH, Outcome, SOURCE, check, refuse, sha256};
-use crate::shader_patch_abi::{
+use crate::sys::{
     RSF_PATCH_JSON_ARRAY, RSF_PATCH_JSON_OBJECT, RSF_PATCH_JSON_OTHER, RSF_PATCH_JSON_SINT,
     RSF_PATCH_JSON_STRING, RSF_PATCH_JSON_UINT, rsf_patch_bytes,
 };

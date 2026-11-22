@@ -2,6 +2,20 @@
 //! Compiles the C leaf of the Streamline call leaves: SEH containment and the
 //! sl::FrameToken virtual call.
 fn main() {
+    let bindings = rsf_bindgen::owner(
+        &[
+            "runtime/vulkan/streamline/sdk_records.h",
+            "runtime/vulkan/streamline/sdk_fg_options.h",
+            "runtime/vulkan/streamline/sdk_sr_options.h",
+            "runtime/vulkan/streamline/present-capture.h",
+        ],
+        &[],
+        &["runtime/vulkan/streamline"],
+        &[],
+        &[],
+    );
+    rsf_bindgen::write(bindings, "sys.rs");
+
     println!("cargo::rustc-check-cfg=cfg(rsf_streamline_core)");
     println!("cargo:rerun-if-changed=../sdk_guard.c");
     let mut build = cc::Build::new();

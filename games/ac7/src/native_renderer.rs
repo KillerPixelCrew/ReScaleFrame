@@ -10,17 +10,17 @@
 //! former code contained, from the engine's pixel shader factory, is contained by the C leaf
 //! native_renderer_platform.c. Every other engine call ran uncontained before and still does.
 //! Research and the per-hook comparison are in docs/research/rust-ac7-native-renderer.md.
-use crate::capture_platform_abi::{rsf_ac7_copy_memory, rsf_ac7_read_memory};
-use crate::cloud_depth_abi::rsf_ac7_cloud_depth;
-use crate::platform_abi::{
-    rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_render_scope,
-    rsf_ac7_render_scope_fn,
-};
-use crate::scope_abi::{rsf_ac7_scope_lease, rsf_ac7_scope_read};
-use crate::sites_abi::{
+use crate::sys::rsf_ac7_cloud_depth;
+use crate::sys::{
     RSF_AC7_GUARD_ENTRY, RSF_AC7_GUARD_OUTER, RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches,
     rsf_ac7_native_calls, rsf_ac7_truesky_patches,
 };
+use crate::sys::{rsf_ac7_copy_memory, rsf_ac7_read_memory};
+use crate::sys::{
+    rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_render_scope,
+    rsf_ac7_render_scope_fn,
+};
+use crate::sys::{rsf_ac7_scope_lease, rsf_ac7_scope_read};
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::rsf_game_render_config;
 use std::alloc::{Layout, alloc_zeroed};
@@ -123,11 +123,11 @@ pub(crate) mod hook {
 const HOOKS: usize = hook::COUNT as usize;
 const _: () = assert!(hook::COUNT == RSF_AC7_HOOK_SITE_COUNT);
 const _: () = assert!(
-    hook::RHI_PIXEL_UNIFORM == crate::sites_abi::RSF_AC7_EVIDENCE_FIRST
-        && hook::PIXEL_ENQUEUE_D == crate::sites_abi::RSF_AC7_EVIDENCE_LAST
+    hook::RHI_PIXEL_UNIFORM == crate::sys::RSF_AC7_EVIDENCE_FIRST
+        && hook::PIXEL_ENQUEUE_D == crate::sys::RSF_AC7_EVIDENCE_LAST
 );
 /// The pass hooks come first: one process and one descriptor hook per reviewed graph pass.
-const PROCESS_HOOKS: u32 = crate::sites_abi::RSF_AC7_PROCESS_HOOKS;
+const PROCESS_HOOKS: u32 = crate::sys::RSF_AC7_PROCESS_HOOKS;
 const _: () = assert!(hook::PROCESS_OUTPUT + 1 == PROCESS_HOOKS);
 
 /// MinHook state of one hooked entry site. The site's RVA, expected bytes and pass role are

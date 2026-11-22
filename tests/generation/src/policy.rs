@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::abi::{
+use crate::sys::{
     RSF_SR_DLSS as DLSS, RSF_SR_FSR3 as FSR3, RSF_SR_FSR4 as FSR4, RSF_SR_NONE as NONE,
     RSF_SR_XESS as XESS,
 };

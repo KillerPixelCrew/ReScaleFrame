@@ -9,10 +9,10 @@ use super::{
     rsf_ac7_render_scopes_destroy, rsf_ac7_render_scopes_idle, rsf_ac7_render_scopes_quiesce,
 };
 use super::{evidence, frame, graph, particles, shaders, sky, slate, translucency, views, widgets};
-use crate::platform_abi::{
+use crate::sys::{rsf_ac7_code_leaves, rsf_ac7_code_patches, rsf_ac7_renderer_leaves};
+use crate::sys::{
     rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_renderer_log_fn,
 };
-use crate::sites_abi::{rsf_ac7_code_leaves, rsf_ac7_code_patches, rsf_ac7_renderer_leaves};
 use std::ffi::c_void;
 use std::ptr::{copy_nonoverlapping, null_mut};
 use std::sync::atomic::Ordering;

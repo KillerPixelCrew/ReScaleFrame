@@ -2,7 +2,7 @@
 use super::*;
 use crate::fake_code::Image;
 use crate::patches::{SCENE_PRECISION_EXPECTED, SCENE_PRECISION_RVA, VELOCITY};
-use crate::sites_abi::{RSF_AC7_EVIDENCE_FIRST, RSF_AC7_EVIDENCE_LAST};
+use crate::sys::{RSF_AC7_EVIDENCE_FIRST, RSF_AC7_EVIDENCE_LAST};
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ffi::OsString;
 use std::ptr::dangling_mut;

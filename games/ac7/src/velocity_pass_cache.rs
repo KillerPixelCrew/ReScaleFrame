@@ -5,7 +5,7 @@
 //! and retains D3D11 variants at the slots recorded here.
 
 use crate::contact_shadow::container_crc;
-use crate::d3d11_observer_layout_abi::rsf_observer_layout_element as LayoutElement;
+use crate::sys::rsf_observer_layout_element as LayoutElement;
 use crate::velocity_container::borrowed;
 use std::collections::HashMap;
 use std::ffi::c_void;

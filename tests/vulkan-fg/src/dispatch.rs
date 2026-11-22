@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::dispatch_abi::*;
 use crate::dispatch_drivers::{block_sleep, fixture_state, initialize, release_sleep, wait_sleep};
+use crate::sys::*;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ptr;
 

@@ -4,7 +4,7 @@ mod native;
 
 use super::*;
 use crate::com_ref::ComRef;
-use crate::render_abi::{
+use crate::sys::{
     RSF_FG_FIXED, RSF_FG_STAT_ACTIVITY, RSF_FG_STAT_TOTAL_PRESENTED, RSF_PACING_XELL,
     RSF_REFLEX_OFF, rsf_backend_resource as Resource,
 };

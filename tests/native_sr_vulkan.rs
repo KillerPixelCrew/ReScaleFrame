@@ -2,16 +2,16 @@
 use super::{TestResult, check};
 use crate::dxgi_format::half_to_f32;
 use crate::sharpening_policy::defaults;
-use crate::vulkan_fg_abi::{
+use crate::sys::{
     RSF_FGVK_ABI_VERSION, rsf_fgvk as Fg, rsf_fgvk_frame as FgFrame, rsf_fgvk_setup as FgSetup,
 };
-use crate::vulkan_fg_copy::COLOR_RANGE as RANGE;
-use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, RSF_SLVK_DLSS_SR, rsf_slvk_setup};
-use crate::vulkan_sr_abi::{
+use crate::sys::{RSF_SLVK_ABI_VERSION, RSF_SLVK_DLSS_SR, rsf_slvk_setup};
+use crate::sys::{
     RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SRVK_ABI_VERSION, rsf_srvk_fallback as Fallback,
     rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup, rsf_vk_function,
     rsf_vk_get_proc,
 };
+use crate::vulkan_fg_copy::COLOR_RANGE as RANGE;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_FRAME_BEGIN,

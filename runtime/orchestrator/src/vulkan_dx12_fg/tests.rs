@@ -2,7 +2,7 @@
 // Expected values are the Vulkan header constants written out, not the
 // module's names for them, so a wrong constant cannot agree with itself.
 use super::*;
-use crate::vulkan_sr_abi::rsf_vk_function;
+use crate::sys::rsf_vk_function;
 use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 

@@ -8,7 +8,7 @@ use crate::shader_loader::{
     outcome_name,
 };
 use crate::shader_loader::{rsf_anomaly_shader_linkable, rsf_anomaly_shader_tess_linkable};
-use rsf_game_sys::shader_patch_abi::{RSF_PATCH_OK, rsf_patch_counters};
+use rsf_game_sys::{RSF_PATCH_OK, rsf_patch_counters};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;

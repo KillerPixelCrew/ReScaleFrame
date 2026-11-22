@@ -10,8 +10,6 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::core::Interface;
 
-#[path = "d3d11_host_device_abi.rs"]
-mod abi;
 #[path = "d3d11_host_device_dispatch.rs"]
 mod dispatch;
 #[path = "d3d11_host_device_fg.rs"]
@@ -20,7 +18,7 @@ mod fg;
 mod recovery;
 #[path = "d3d11_host_device_sr.rs"]
 mod sr;
-use abi::*;
+use crate::sys::*;
 
 type Raw = *mut c_void;
 const SCENE_COLOUR: [f32; 4] = [0.25, 0.5, 0.75, 1.0];

@@ -2,20 +2,18 @@
 //! Loader entry points, UnitySR settings and the bounded wait for Mono. This module passes the
 //! owned executable identity and adapter callbacks to the Runtime already loaded by the carrier.
 use crate::generation::{self, RSF_DLSS_ENGINE_UNITY, Sources};
-use crate::runtime_abi::{
-    RSF_DLSS_PRESET_MASK, RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO,
-    RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL, RSF_SR_XESS,
-    rsf_backend_result, rsf_fg_choice, rsf_fg12_setup, rsf_native_fg_options,
-};
 use crate::runtime_config::{
     Ini, PATH_CAPACITY, file_name, path_setting, preferences_path, profile_int, setting,
     terminated, utf8,
 };
 use crate::startup_policy::{self, MONO_DEADLINE, wait_for_sr};
+use crate::sys::{
+    RSF_DLSS_PRESET_MASK, RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO,
+    RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL, RSF_SR_XESS,
+    rsf_backend_result, rsf_fg_choice, rsf_fg12_setup, rsf_native_fg_options,
+};
 use rsf_game_sys::{
-    callback_host_abi::{
-        RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup, rsf_callback_host_setup_v2,
-    },
+    RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup, rsf_callback_host_setup_v2,
     rsf_game_probe,
 };
 use std::ffi::{CStr, OsString, c_char, c_int, c_void};
@@ -68,9 +66,6 @@ static FG_STARTED: Mutex<bool> = Mutex::new(false);
 static LOG_PATH: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 static DIAGNOSTICS_INI: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 
-#[path = "../../../runtime/orchestrator/src/overlay_saved_abi.rs"]
-mod saved_abi;
-
 const ENGINE_VERSION: &CStr = c"6000.3";
 const PROJECT_ID: &CStr = c"57a42c7e-faf0-4bda-a9f9-892870948ac1";
 
@@ -84,10 +79,6 @@ unsafe extern "C" {
     fn rsf_callback_host_stop() -> u32;
     fn rsf_unity_set_engine_spatial(spatial: u32, quality: u32) -> c_int;
     fn rsf_unity_mono_drained_generation(generation: *mut u32) -> c_int;
-    fn rsf_overlay_saved_options_register(
-        scope: *mut c_void,
-        setup: *const saved_abi::rsf_overlay_saved_setup,
-    ) -> i32;
     fn rsf_overlay_saved_options_unregister(scope: *mut c_void) -> i32;
 }
 
@@ -120,7 +111,7 @@ unsafe extern "C" fn capture_directory_changed(
 }
 
 fn register_diagnostics(ini: &Ini) {
-    use saved_abi::*;
+    use crate::sys::*;
     let mut path = DIAGNOSTICS_INI
         .lock()
         .unwrap_or_else(PoisonError::into_inner);

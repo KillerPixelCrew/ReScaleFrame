@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The Unity routes each borrow their own Runtime submission handle through callback retirement.
 
-use crate::bridge_abi::RSF_UNITY_FRAMES_SLOTS;
+use crate::sys::RSF_UNITY_FRAMES_SLOTS;
 use rsf_runtime_submission::SubmissionHandle;
 use std::ffi::c_void;
 

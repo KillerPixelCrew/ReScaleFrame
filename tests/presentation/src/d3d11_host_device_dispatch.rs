@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! D01's checks on the actual scoped fixture's inner and outer receivers.
 use super::Raw;
-use super::abi::{rsf_d3d11_host_dispatch_chain, rsf_d3d11_host_dispatch_present};
-use rsf_game_sys::d3d11_chain_abi::*;
-use rsf_game_sys::d3d11_host_abi::rsf_d3d11_present_dispatch;
+use crate::sys::{rsf_d3d11_host_dispatch_chain, rsf_d3d11_host_dispatch_present};
+use rsf_game_sys::rsf_d3d11_present_dispatch;
+use rsf_game_sys::*;
 use std::ffi::c_ulong;
 use std::ptr::{dangling_mut, from_ref};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;

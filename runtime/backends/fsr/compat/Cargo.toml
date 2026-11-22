@@ -7,10 +7,13 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 rsf-game-sys = { path = "../../../../sdk/game" }
+
+[build-dependencies]
+rsf-bindgen = { path = "../../../../tools/bindgen" }
 
 [lints]
 workspace = true

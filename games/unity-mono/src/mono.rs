@@ -3,7 +3,7 @@
 //! calls its Bootstrap entry points. Every call runs on a fresh native thread, so the Mono thread
 //! attachment is ours to detach; a caller's Unity/Mono thread and its current domain are never
 //! touched.
-use crate::plugin_abi::rsf_unity_native_api;
+use crate::sys::rsf_unity_native_api;
 use rsf_game_sys::win32::typed_export;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::{self, null_mut};

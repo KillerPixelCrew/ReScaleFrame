@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Drive resource-only recovery on the real shared-SR device fixture.
-use super::abi::*;
 use super::rsf_d3d11_host_fixture_cpu;
-use rsf_game_sys::d3d11_chain_abi::RSF_D3D11_HOST_ABI_VERSION;
-use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_pass;
-use rsf_game_sys::d3d11_reduced_abi::*;
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END, RSF_GAME_RENDER_RECONFIGURE,
     rsf_game_host_services, rsf_game_render_config, rsf_game_render_pass,

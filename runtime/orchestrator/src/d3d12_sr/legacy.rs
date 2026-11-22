@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: MIT
-#[path = "legacy_abi.rs"]
-mod abi;
 
-use self::abi::{rsf_fg_provider as Fg, rsf_fg_swapchain_result as FgResult};
 use super::*;
-use crate::render_abi::{
+use crate::sys::{
     RSF_API_D3D12, RSF_BACKEND_ABI_VERSION, rsf_backend_caps as Caps,
     rsf_backend_probe_desc as Probe, rsf_fg_frame as FgFrame, rsf_fg_swapchain_desc as Chain,
     rsf_sr_provider as Sr,
 };
+use crate::sys::{rsf_fg_provider as Fg, rsf_fg_swapchain_result as FgResult};
 use std::sync::OnceLock;
 
 const ABI_MISMATCH: i32 = -2;

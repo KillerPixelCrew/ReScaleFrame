@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_abi::RSF_OVERLAY_FRAME_LIMIT_VRR;
-use crate::render_abi::{RSF_FG_OFF, rsf_fg_status};
+use crate::sys::RSF_OVERLAY_FRAME_LIMIT_VRR;
+use crate::sys::{RSF_FG_OFF, rsf_fg_status};
 use std::ffi::c_void;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn vrr_uses_confirmed_outputs_and_recalculates_for_a_new_display() {
-        use crate::render_abi::RSF_FG_FIXED;
+        use crate::sys::RSF_FG_FIXED;
 
         const VRR: u32 = RSF_OVERLAY_FRAME_LIMIT_VRR;
         let mut fg = rsf_fg_status {

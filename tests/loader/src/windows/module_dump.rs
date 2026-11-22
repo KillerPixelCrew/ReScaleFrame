@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::module_dump_abi::{
-    RSF_MODULE_DUMP_ABI_VERSION, rsf_dump_options, rsf_dump_report, rsf_dump_result,
-};
+use crate::sys::{RSF_MODULE_DUMP_ABI_VERSION, rsf_dump_options, rsf_dump_report, rsf_dump_result};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs;
 use std::mem::{offset_of, transmute};

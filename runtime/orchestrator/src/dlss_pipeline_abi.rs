@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: MIT
 // Public layer binding and private Rust dispatch table.
 #![allow(non_camel_case_types)]
-use crate::d3d11_output_abi::rsf_d3d11_texture_desc;
-pub use crate::dlss_streamline_abi::{rsf_dlss_plan, rsf_dlss_support};
-use crate::gl_pipeline_abi::rsf_dlss_setup;
-use crate::native_sr_abi::rsf_motion_decode_params;
-use crate::render_abi::{rsf_dlss_frame, rsf_motion_resolve_params, rsf_sharpening_options};
+use crate::sys::rsf_d3d11_texture_desc;
+use crate::sys::rsf_dlss_setup;
+use crate::sys::rsf_motion_decode_params;
+use crate::sys::{rsf_dlss_frame, rsf_motion_resolve_params, rsf_sharpening_options};
+pub use crate::sys::{rsf_dlss_plan, rsf_dlss_support};
 pub use rsf_game_sys::rsf_game_log_fn as rsf_dlss_pipeline_log_fn;
-pub use rsf_game_sys::sr_abi::{rsf_dlss_pipeline_setup, rsf_dlss_pipeline_status};
+pub use rsf_game_sys::{rsf_dlss_pipeline_setup, rsf_dlss_pipeline_status};
 use std::ffi::{c_char, c_void};
 
 pub type Raw = *mut c_void;
 pub type rsf_dlssp_log_fn = Option<unsafe extern "C" fn(Raw, *const c_char)>;
 
-#[path = "dlss_pipeline_layer_abi.rs"]
-mod layer;
-pub use layer::{RSF_DLSS_PRESET_MASK, rsf_dlss_pipeline_layer};
+pub use crate::sys::{RSF_DLSS_PRESET_MASK, rsf_dlss_pipeline_layer};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]

@@ -3,7 +3,14 @@
 
 use crate::frame::{self, Configuration};
 use crate::observer;
-use crate::platform_abi::{
+use crate::runtime_directory;
+use crate::status::{STATUS_MINIMUM, status_values};
+use jni_sys::{
+    JNIEnv, JNINativeInterface_, jboolean, jclass, jfloatArray, jint, jintArray, jlong, jlongArray,
+    jobject, jstring,
+};
+use rsf_game_sys::rsf_game_render_pass;
+use rsf_game_sys::{
     rsf_gl_pipeline, rsf_gl_pipeline_abort, rsf_gl_pipeline_close,
     rsf_gl_pipeline_configure_legacy, rsf_gl_pipeline_configure_settings, rsf_gl_pipeline_cpu,
     rsf_gl_pipeline_evaluate, rsf_gl_pipeline_get_surfaces, rsf_gl_pipeline_hudless,
@@ -13,13 +20,6 @@ use crate::platform_abi::{
     rsf_gl_window_create, rsf_gl_window_destroy, rsf_input_dump_configure,
     rsf_native_latency_status, rsf_native_latency_status_get,
 };
-use crate::runtime_directory;
-use crate::status::{STATUS_MINIMUM, status_values};
-use jni_sys::{
-    JNIEnv, JNINativeInterface_, jboolean, jclass, jfloatArray, jint, jintArray, jlong, jlongArray,
-    jobject, jstring,
-};
-use rsf_game_sys::rsf_game_render_pass;
 use std::ffi::{CStr, c_char, c_void};
 use std::fs::{File, OpenOptions};
 use std::io::Write;

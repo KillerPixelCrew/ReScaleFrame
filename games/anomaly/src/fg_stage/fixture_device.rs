@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::fg_inputs::d3d::create_texture;
-use crate::sr_stage_abi::{
-    rsf_anomaly_sr_camera as ViewCamera, rsf_anomaly_sr_pass_inputs as PassInputs,
-};
 use crate::sr_temporal::fg_fixture::Temporal;
+use crate::sys::{rsf_anomaly_sr_camera as ViewCamera, rsf_anomaly_sr_pass_inputs as PassInputs};
 use std::cell::Cell;
 use windows::Win32::Foundation::{HMODULE as Module, HWND as Window, RECT as Rect};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0};

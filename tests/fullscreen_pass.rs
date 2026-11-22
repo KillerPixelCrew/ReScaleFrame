@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Verify compositing and state restoration against numeric readback.
 use super::*;
-use crate::graphics_pass_abi::{
+use crate::sys::{
     RSF_FULLSCREEN_PASS_ABI_VERSION as ABI, rsf_fullscreen_draw as Draw,
     rsf_fullscreen_setup as Setup,
 };

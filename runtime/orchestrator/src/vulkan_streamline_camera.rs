@@ -10,12 +10,9 @@ use crate::streamline_sdk::{RESOURCE, TAG, default_constants};
 // viewport and adapter records come from this private copy of the bindings.
 #[path = "../../vulkan/streamline/lifecycle/src/sdk_api.rs"]
 pub(super) mod sdk_api;
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_records_abi.rs"]
-#[allow(dead_code)]
-mod sdk_records_abi;
 
 use crate::dlss_native12::xm;
-use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
+use crate::sys::rsf_vkfg_image;
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
 use std::ptr;

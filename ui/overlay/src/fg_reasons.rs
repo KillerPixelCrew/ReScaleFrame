@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 use std::ffi::CStr;
 
-#[path = "fg_reason_codes.rs"]
-pub(crate) mod codes;
-use codes::*;
+use rsf_game_sys::*;
 
 pub(crate) fn description(reason: u32) -> Option<&'static CStr> {
     Some(match reason {

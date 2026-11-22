@@ -17,7 +17,6 @@ use crate::dlss_pipeline::exports::{
 };
 use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening;
 use crate::dlss_streamline::exports::rsf_dlss_native_present;
-use crate::fg12_abi::rsf_streamline_host;
 use crate::native_cpu::{rsf_native_cpu_dispatch, rsf_native_cpu_event};
 use crate::native_fg::{
     rsf_native_fg_final, rsf_native_fg_options_set, rsf_native_fg_prepare, rsf_native_fg_present,
@@ -27,7 +26,6 @@ use crate::native_fg_cpu::platform::{
     rsf_native_fg_cpu, rsf_native_fg_frame, rsf_native_fg_rendered_source_set,
     rsf_native_fg_submission, rsf_native_latency_window_bind,
 };
-use crate::native_fg_cpu_abi::rsf_native_latency_window;
 use crate::native_scene::{rsf_native_scene_pass, rsf_native_scene_present_path};
 use crate::native_sr::rsf_native_sr_evaluate_ordered;
 use crate::native_window::{
@@ -35,9 +33,11 @@ use crate::native_window::{
     rsf_native_window_scope,
 };
 use crate::overlay_input::rsf_overlay_input_poll_toggle;
-use crate::render_abi::rsf_render_settings;
-use crate::scene_abi::rsf_observer_present_event;
-use rsf_game_sys::sr_abi::{
+use crate::sys::rsf_native_latency_window;
+use crate::sys::rsf_observer_present_event;
+use crate::sys::rsf_render_settings;
+use crate::sys::rsf_streamline_host;
+use rsf_game_sys::{
     RSF_DLSS_PIPELINE_ABI_VERSION, rsf_dlss_pipeline_setup, rsf_dlss_pipeline_status,
 };
 use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_log_fn};
@@ -52,9 +52,7 @@ use windows::core::{IUnknown, Interface, PCWSTR};
 
 type Raw = *mut c_void;
 
-#[path = "d3d11_host_foreign_abi.rs"]
-mod foreign;
-use foreign::*;
+use crate::sys::*;
 
 pub(super) fn linked_platform() -> rsf_d3d11h_platform {
     rsf_d3d11h_platform {

@@ -2,7 +2,7 @@
 //! Bind the production Stage directly to the Rust temporal owner.
 use super::*;
 use crate::host_log::Log;
-use crate::sr_stage_abi::rsf_anomaly_sr_stage_platform as Platform;
+use crate::sys::rsf_anomaly_sr_stage_platform as Platform;
 use std::sync::{LazyLock, OnceLock};
 
 struct StageDriver(Driver);

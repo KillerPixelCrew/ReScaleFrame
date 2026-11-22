@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Synthetic SR evaluation on the presentation fixture's existing Streamline host.
-use crate::d3d11_bridge_sr_abi::*;
 use crate::d3d11_device_checks::rsf_d3d11_fixture_red_half;
-use crate::present_fixture_loops_abi::{rsf_streamline_host_abort, rsf_streamline_host_begin};
+use crate::sys::*;
+use crate::sys::{rsf_streamline_host_abort, rsf_streamline_host_begin};
 use rsf_game_sys::rsf_game_render_pass;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};

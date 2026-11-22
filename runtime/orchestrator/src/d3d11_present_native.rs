@@ -21,7 +21,10 @@ use windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC;
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow};
 use windows::core::{GUID, IUnknown, Interface};
 
-use super::streamline_abi::*;
+use crate::sys::{
+    RSF_SL_PROFILE_DLSS_FG, RSF_STREAMLINE_HOST_ABI_VERSION, rsf_streamline_host_adopt,
+    rsf_streamline_host_create, rsf_streamline_host_destroy, rsf_streamline_host_setup,
+};
 
 unsafe extern "C" {
     fn rsf_d3d11p_default_backend(vendor: u32, software: u32) -> u32;

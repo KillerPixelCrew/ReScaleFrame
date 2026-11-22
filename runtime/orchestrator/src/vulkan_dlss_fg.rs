@@ -6,24 +6,23 @@ mod wsi;
 
 use self::wsi::Wsi;
 use crate::sr_session::has_capacity;
-use crate::vulkan_dlss_fg_abi::{Handle, Platform, Sample, SdkCall, Tag};
-use crate::vulkan_fg_abi::{
+use crate::sys::rsf_slvk_callback;
+use crate::sys::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_dlssgvk_status as Status,
     rsf_fgvk_frame as Frame, rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup,
     rsf_fgvk_status as Presentation, rsf_fgvk_timeline as Timeline,
 };
+use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as SourceImage};
+use crate::sys::{rsf_vkfg_fences as Fences, rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu};
+use crate::vulkan_dlss_fg_abi::{Handle, Platform, Sample, SdkCall, Tag};
+use crate::vulkan_dlss_sr::slvk_call;
 use crate::vulkan_fg_copy::{SHADER_READ, TRANSFER_SRC, record_shader_read_copy};
 use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources::{
     rsf_core_vkfg_ensure_image, rsf_core_vkfg_fence_submission, rsf_core_vkfg_prepare_fences,
     rsf_core_vkfg_release_fences, rsf_core_vkfg_release_image,
 };
-use crate::vulkan_fg_resources_abi::{
-    rsf_vkfg_fences as Fences, rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu,
-};
-use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_ownership::Claim;
-use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as SourceImage};
 use crate::vulkan_streamline_camera::camera_constants;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
@@ -164,7 +163,7 @@ fn invoke(
     user: Handle,
     source: Option<&Record>,
 ) -> i32 {
-    let call = rsf_slvk_call::for_record(source, callback, user);
+    let call = slvk_call(source, callback, user);
     // The Streamline worker invokes the callback synchronously with the exact token.
     unsafe { (platform.invoke)(&call) }
 }

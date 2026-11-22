@@ -10,9 +10,6 @@ use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, c_void};
 use std::ptr;
 
-#[path = "../../../../sdk/game/src/sharpening_defaults.rs"]
-mod sharpening_defaults;
-
 pub(crate) fn setup(runtime: &CStr) -> Setup {
     Setup {
         struct_size: size_of::<Setup>() as u32,
@@ -133,18 +130,18 @@ pub(crate) fn sharpening_defaults() -> Sharpening {
     Sharpening {
         struct_size: size_of::<Sharpening>() as u32,
         abi_version: 1,
-        mode: sharpening_defaults::RSF_SHARPENING_DEFAULT_MODE,
-        sharpness: sharpening_defaults::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
-        mas: sharpening_defaults::RSF_SHARPENING_DEFAULT_MAS,
-        motion_sharpness: sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS as f32,
-        motion_threshold: sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD as f32,
-        motion_scale_limit: sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT as f32,
-        contrast_enabled: sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
-        contrast: sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
-        depth_scale: sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
-        depth_bias: sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
-        clamp_output: sharpening_defaults::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
-        debug: sharpening_defaults::RSF_SHARPENING_DEFAULT_DEBUG,
+        mode: rsf_game_sys::RSF_SHARPENING_DEFAULT_MODE,
+        sharpness: rsf_game_sys::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
+        mas: rsf_game_sys::RSF_SHARPENING_DEFAULT_MAS,
+        motion_sharpness: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS as f32,
+        motion_threshold: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD as f32,
+        motion_scale_limit: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT as f32,
+        contrast_enabled: rsf_game_sys::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
+        contrast: rsf_game_sys::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
+        depth_scale: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
+        depth_bias: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
+        clamp_output: rsf_game_sys::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
+        debug: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEBUG,
     }
 }
 

@@ -15,12 +15,12 @@ use crate::creation;
 use crate::observers::{self, Control};
 use crate::platform::{self, Platform};
 use crate::plugin::{ABI_MISMATCH, INVALID_ARGUMENT, SHA256};
-use rsf_game_sys::d3d11_host_abi::{rsf_d3d11_host_setup as HostSetup, same_upstream_identity};
-use rsf_game_sys::sr_abi::rsf_motion_decode_params as MotionDecode;
+use rsf_game_sys::rsf_motion_decode_params as MotionDecode;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
     rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
+use rsf_game_sys::{rsf_d3d11_host_setup as HostSetup, same_upstream_identity};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};

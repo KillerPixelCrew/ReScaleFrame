@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::d3d11_observer_layout_abi::rsf_observer_layout_element;
-use crate::scene_color_abi::rsf_frame_tap_geometry as Geometry;
+use crate::sys::rsf_frame_tap_geometry as Geometry;
+use crate::sys::rsf_observer_layout_element;
 use crate::velocity_pass_cache::rsf_ac7_velocity_layout_seen;
 use crate::velocity_renderer::replay::*;
 use rsf_game_sys::{

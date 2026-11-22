@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::{
-    ALL, BOTH, DST, Frame, Gpu, Handle, Image, RANGE, READ, RGBA, Setup, UNDEFINED, defaults,
-    extent, laid_out, raw,
+    ALL, BOTH, DST, Frame, Gpu, Handle, Image, RANGE, READ, RGBA, UNDEFINED, defaults, extent,
+    laid_out, raw,
 };
-use crate::vulkan_sr_abi::{
+use crate::sys::{
     RSF_SR_FSR4, RSF_SRVK_ABI_VERSION, RSF_SRVK_SPLIT_TRACKED_ABI_VERSION, rsf_fsr4vk_handoff,
 };
 use ash::vk::{self, Handle as _};
@@ -15,14 +15,8 @@ use std::{
     ptr,
 };
 
-#[path = "native_sr_fsr4_vulkan_abi.rs"]
-mod abi;
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
-#[allow(dead_code)]
-#[path = "../runtime/vulkan/fsr4/bridge_abi.rs"]
-mod bridge_abi;
-use abi::rsf_fsr4sr_fixture_calls as Calls;
-use bridge_abi::{RSF_FSR4_BRIDGE_ABI_VERSION, rsf_fsr4_bridge_info};
+use crate::sys::rsf_fsr4sr_fixture_calls as Calls;
+use crate::sys::{RSF_FSR4_BRIDGE_ABI_VERSION, rsf_fsr4_bridge_info};
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;

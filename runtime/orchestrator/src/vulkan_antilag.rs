@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::latency_antilag::{AMD_VENDOR_ID, fps_from_interval};
 use crate::sr_session::has_capacity;
-use crate::vulkan_latency_abi::{
+use crate::sys::rsf_vk_function;
+use crate::sys::{
     RSF_LATENCYVK_DEVICE_ABI_VERSION, rsf_latencyvk_created_device as Created,
     rsf_latencyvk_device_query as Query, rsf_latencyvk_device_requirements as Requirements,
 };
-use crate::vulkan_sr_abi::rsf_vk_function;
 use ash::vk::{self, Handle as _};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};

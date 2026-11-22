@@ -18,8 +18,8 @@ use super::{BACKEND_OK, LEAVES, Leaves, PACKAGE, Package};
 use crate::bridge_state::{
     rsf_unity_frames_active, rsf_unity_frames_callback_enter, rsf_unity_frames_callback_leave,
 };
-use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_config::{PATH_CAPACITY, terminated};
+use crate::sys::rsf_unity_native_api;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN,
     RSF_GAME_CPU_FRAME_END, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,

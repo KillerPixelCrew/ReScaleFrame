@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Platform, Refused};
 use crate::lease::Lease;
-use crate::sr_stage_abi::rsf_anomaly_sr_timer as Stats;
+use crate::sys::rsf_anomaly_sr_timer as Stats;
 use std::ffi::c_void;
 
 type Handle = *mut c_void;

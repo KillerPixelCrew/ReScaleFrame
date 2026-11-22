@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 mod engine_sharpening_abi;
-#[path = "../sdk/game/src/sharpening_abi.rs"]
-mod sharpening_abi;
 
 use engine_sharpening_abi::*;
-use sharpening_abi::rsf_sharpening_options;
+use rsf_game_sys::{RSF_SRVK_ABI_VERSION, rsf_sharpening_options, rsf_srvk_frame};
 use std::ffi::{CStr, OsStr, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::process::ExitCode;

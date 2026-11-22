@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: MIT
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
-use crate::overlay_abi::{
-    RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
-};
 use crate::sdk_module::{FFX_CONTEXT_EXPORTS, FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
+use crate::sys::*;
+use crate::sys::{RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK};
+use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_fg_copy::{Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED};
 use crate::vulkan_fg_resources::{
     MemoryChoice, ensure_image_with_memory, rsf_core_vkfg_release_image,
 };
-use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
-use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::normalize_frame;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
@@ -371,7 +369,7 @@ type Capture = unsafe extern "C" fn(Handle, Handle, &Image, &rsf_frame_record, *
 // Private platform ABI. Rust owns the public handle and sequences these leaves.
 #[repr(C)]
 struct Platform {
-    dlss: Option<&'static crate::vulkan_dlss_sr_abi::rsf_vkdlss_platform>,
+    dlss: Option<&'static crate::sys::rsf_vkdlss_platform>,
     xess: Option<&'static xess::XessOps>,
     ffx: FfxOps,
     dump_begin: unsafe extern "C" fn(&rsf_frame_record, u32) -> i32,

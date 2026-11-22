@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, PipelineInfo, Resources, TextureInfo, ViewInfo};
 use crate::com_ref::ComRef;
-use crate::frame_tap_abi::rsf_frame_tap_geometry;
 use crate::graphics_d3d11::depth_state;
+use crate::sys::rsf_frame_tap_geometry;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_D32_FLOAT_S8X24_UINT, DXGI_FORMAT_R32G8X24_TYPELESS, DXGI_SAMPLE_DESC,

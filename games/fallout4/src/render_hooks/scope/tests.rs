@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! FRAME, SUBMISSION and WINDOW order with fake leaves standing in for render_hooks.c.
 use super::*;
-use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::render_hooks::recovery::fixtures::IDLE;
+use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
 use rsf_game_sys::{RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_WINDOW};
 use std::cell::RefCell;
 

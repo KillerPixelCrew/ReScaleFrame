@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Synthetic split-frame, external image and checked-retirement contract.
 use super::*;
-use crate::dx12_vulkan_interop_abi::rsf_dx12vk_platform;
-use crate::render_abi::rsf_sharpening_options;
+use crate::sys::rsf_dx12vk_platform;
+use crate::sys::rsf_sharpening_options;
 use ash::vk;
 use std::cell::RefCell;
 use windows_sys::Win32::System::Threading::CreateEventW;

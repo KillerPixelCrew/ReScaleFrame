@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::antilag_abi::*;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;

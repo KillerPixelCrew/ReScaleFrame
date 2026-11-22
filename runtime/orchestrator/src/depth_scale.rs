@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-use crate::auxiliary_sr_abi::{rsf_depth_scale_frame as Frame, rsf_depth_scale_setup as Setup};
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
-use crate::d3d11_output_abi::{rsf_d3d11_output_clear_state, rsf_d3d11_output_copy_resource};
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::sr_session::has_capacity;
+use crate::sys::{rsf_d3d11_output_clear_state, rsf_d3d11_output_copy_resource};
+use crate::sys::{rsf_depth_scale_frame as Frame, rsf_depth_scale_setup as Setup};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr::null_mut;

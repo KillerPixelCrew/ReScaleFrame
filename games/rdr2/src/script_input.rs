@@ -3,7 +3,7 @@
 use crate::OK;
 use crate::engine_settings::rsf_rdr2_engine_quality_tick;
 use crate::runtime_worker::{append_path, log};
-use crate::script_input_abi::{RSF_RENDER_FRONTEND_ABI_VERSION, rsf_render_settings};
+use crate::sys::{RSF_RENDER_FRONTEND_ABI_VERSION, rsf_render_settings};
 use rsf_game_sys::win32::typed_export;
 use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::HMODULE;

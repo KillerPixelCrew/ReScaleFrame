@@ -2,7 +2,6 @@
 mod d3d;
 #[cfg(feature = "motion-device-fixture")]
 pub(crate) mod deployed;
-mod engine_include_abi;
 #[cfg(feature = "motion-binder-fixture")]
 mod fixture;
 mod frame;
@@ -11,7 +10,7 @@ mod reflection;
 mod runtime_pack;
 
 use crate::digest::sha256;
-pub(crate) use engine_include_abi::{
+pub(crate) use crate::sys::{
     rsf_anomaly_engine_include_ops as EngineIncludeOps,
     rsf_anomaly_engine_shader_profile as EngineShaderProfile,
 };
@@ -316,7 +315,7 @@ fn prepare_tree<R>(
 }
 
 fn runtime_refusal(status: i32) -> Option<Outcome> {
-    use rsf_game_sys::shader_patch_abi::{RSF_PATCH_OK, RSF_PATCH_ORIGINAL, RSF_PATCH_REFLECTION};
+    use rsf_game_sys::{RSF_PATCH_OK, RSF_PATCH_ORIGINAL, RSF_PATCH_REFLECTION};
     match status {
         RSF_PATCH_OK => None,
         RSF_PATCH_ORIGINAL => Some(Outcome::OriginalMismatch),

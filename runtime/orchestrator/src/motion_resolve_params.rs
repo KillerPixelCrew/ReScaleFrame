@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::native_sr_abi::rsf_motion_decode_params;
-use crate::render_abi::rsf_motion_resolve_params;
+use crate::sys::rsf_motion_decode_params;
+use crate::sys::rsf_motion_resolve_params;
 use std::ffi::c_void;
 
 pub(crate) fn has_motion_sentinel(decode: &rsf_motion_decode_params) -> u32 {

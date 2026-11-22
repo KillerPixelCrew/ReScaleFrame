@@ -2,17 +2,15 @@
 //! Win32 ASI admission and the engine settings call adapters.
 #[path = "diagnostic_services.rs"]
 mod diagnostic_services;
-#[path = "diagnostics_abi.rs"]
-mod diagnostics_abi;
 
 use super::{ASI_PLATFORM_VERSION, AsiPlatform, rsf_rdr2_asi_attach};
 use crate::platform::{minhook::*, read_process_memory};
 use crate::runtime_worker::rsf_rdr2_asi_start_runtime;
-use crate::runtime_worker_abi::rsf_rdr2_runtime_leaves;
-use diagnostic_services::{install_census, install_frame_probe, start_diagnostics};
-use diagnostics_abi::rsf_rdr2_asi_services;
+use crate::sys::rsf_rdr2_asi_services;
+use crate::sys::rsf_rdr2_runtime_leaves;
 #[cfg(feature = "capture-fixture")]
-pub(crate) use diagnostics_abi::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
+pub(crate) use crate::sys::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
+use diagnostic_services::{install_census, install_frame_probe, start_diagnostics};
 use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;

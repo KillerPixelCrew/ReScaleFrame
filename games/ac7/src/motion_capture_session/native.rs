@@ -5,8 +5,8 @@ use super::{
     CaptureEffects, CaptureInterval, CaptureStamp, Stats, rsf_ac7_capture_failures,
     rsf_ac7_capture_present, rsf_ac7_capture_shutdown,
 };
-use crate::capture_platform_abi::rsf_ac7_capture_write_file;
 use crate::motion_capture_records::artifacts::rsf_ac7_capture_publish_checkpoint;
+use crate::sys::rsf_ac7_capture_write_file;
 use std::ffi::{c_char, c_void};
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::Win32::Storage::FileSystem::CreateDirectoryA;

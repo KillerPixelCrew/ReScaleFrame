@@ -8,7 +8,8 @@ mod tests;
 use crate::engine_guards::{Image, Read};
 use crate::executable::observer_build;
 use crate::native_hooks::{ImageHeaders, Site};
-use crate::native_observer_abi::{
+use crate::native_profile::{HOOK_COUNT, PROFILES};
+use crate::sys::{
     RSF_ANOMALY_OBSERVATION_ABI, RSF_ANOMALY_OBSERVER_BEGIN, RSF_ANOMALY_OBSERVER_CAMERA,
     RSF_ANOMALY_OBSERVER_END, RSF_ANOMALY_OBSERVER_RESET_BEGIN, RSF_ANOMALY_OBSERVER_RESET_END,
     RSF_ANOMALY_OBSERVER_SCENE, RSF_ANOMALY_OBSERVER_TARGET_COPY, RSF_ANOMALY_OBSERVER_UI,
@@ -16,7 +17,6 @@ use crate::native_observer_abi::{
     rsf_anomaly_observer_camera as Camera, rsf_anomaly_observer_engine as Engine,
     rsf_anomaly_observer_frame as Frame, rsf_anomaly_observer_platform as Platform,
 };
-use crate::native_profile::{HOOK_COUNT, PROFILES};
 use crate::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_log_fn,

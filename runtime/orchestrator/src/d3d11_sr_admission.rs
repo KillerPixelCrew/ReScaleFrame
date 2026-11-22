@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Package and adapter facts used to select a D3D11 SR provider before startup.
 use crate::d3d11_device_identity::device_vendor;
-use rsf_game_sys::d3d11_sr_admission_abi::{
+use rsf_game_sys::{
     RSF_D3D11_SR_ADMISSION_ABI_VERSION, RSF_SR_AUTO as AUTO, rsf_d3d11_sr_admission as Admission,
 };
 use std::ffi::CStr;

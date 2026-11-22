@@ -23,9 +23,9 @@
 use crate::guards::rsf_ac7_guards_held;
 use crate::lifecycle::{PENDING_CAPACITY, Renderer};
 use crate::patches;
-use crate::platform_abi::{RSF_AC7_DIAG_PIXEL_BINDINGS, rsf_ac7_native_renderer_options};
 use crate::sites::{self, Code, CodeView, HOOK_SITES, NativeCode};
-use crate::sites_abi::{RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches, rsf_ac7_renderer_leaves};
+use crate::sys::{RSF_AC7_DIAG_PIXEL_BINDINGS, rsf_ac7_native_renderer_options};
+use crate::sys::{RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches, rsf_ac7_renderer_leaves};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;

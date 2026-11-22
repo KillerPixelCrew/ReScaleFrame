@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::com_ref::vtable;
-use crate::d3d11_output_abi::rsf_d3d11_output_child_device;
+use crate::sys::rsf_d3d11_output_child_device;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::{
     Direct3D::{D3D_FEATURE_LEVEL_11_1, D3D_PRIMITIVE_TOPOLOGY},

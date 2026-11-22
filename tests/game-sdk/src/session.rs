@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{ABI_MISMATCH, BUSY, INVALID_ARGUMENT, NATIVE_REFUSED, NOT_READY, OK, run, wide};
-use rsf_game_sys::plugin_session_abi::{
-    RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options,
-};
 use rsf_game_sys::*;
+use rsf_game_sys::{RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options};
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::path::Path;

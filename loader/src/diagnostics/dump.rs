@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-use super::dump_abi::*;
 use super::image::dump_image;
 use super::measure::{record, rsf_dump_poll_code, rsf_measure_module_code};
 use super::sections::{Stream, collect_modules, rsf_dump_now_ms};
-use super::sections_abi::*;
 use super::sidecar::write_sidecar;
+use crate::sys::*;
 use std::ffi::{OsString, c_char, c_void};
 use std::mem::offset_of;
 use std::os::windows::ffi::OsStringExt;

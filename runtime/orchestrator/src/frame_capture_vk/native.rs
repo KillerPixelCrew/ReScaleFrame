@@ -2,7 +2,7 @@
 use super::{Allocation, Handle, Image, Platform};
 use crate::dx12_vulkan_platform::lookup;
 use crate::input_dump::abi::*;
-use crate::vulkan_sr_abi::rsf_vk_get_proc;
+use crate::sys::rsf_vk_get_proc;
 use ash::vk::{self, Handle as _};
 use std::{mem, ptr};
 

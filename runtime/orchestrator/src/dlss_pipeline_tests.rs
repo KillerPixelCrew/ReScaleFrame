@@ -2,8 +2,8 @@
 // Synthetic D3D11 SR pipeline contracts: fake COM objects, a fake leaf table and the legacy
 // adapter over a fake bridge. No device, window, SDK or shader is touched.
 use super::*;
-use crate::render_abi::rsf_motion_resolve_params;
 use crate::sr_legacy::fake as legacy;
+use crate::sys::rsf_motion_resolve_params;
 use std::cell::{Cell, RefCell};
 use std::ptr;
 

@@ -19,12 +19,12 @@ pub(crate) use stage::abi::FoliageLayout;
 mod window;
 
 use crate::ffi::borrow_span;
-use crate::geometry_registry_abi::{
+use crate::native_geometry_abi::{HARDWARE_SKINNED, RIGID, SINGLE_BONE, TREE};
+use crate::shader_family::{CORE_MODEL, CORE_STATIC, FOLIAGE_DETAIL, FOLIAGE_TREE};
+use crate::sys::{
     RSF_ANOMALY_DRAW_IDENTIFIED, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE,
     RSF_ANOMALY_DRAW_IGNORED_STATIC_WORLD, rsf_anomaly_geometry_key as InstanceKey,
 };
-use crate::native_geometry_abi::{HARDWARE_SKINNED, RIGID, SINGLE_BONE, TREE};
-use crate::shader_family::{CORE_MODEL, CORE_STATIC, FOLIAGE_DETAIL, FOLIAGE_TREE};
 #[cfg(windows)]
 pub(crate) use stage::{frame_target, record_retirement};
 use std::borrow::Cow;

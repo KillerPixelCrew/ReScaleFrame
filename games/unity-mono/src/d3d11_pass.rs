@@ -13,7 +13,7 @@
 //!
 //! D3D11, direct D3D12 and Vulkan share scalar pass fields. Direct D3D12 binds packet
 //! resources and supplies camera-valid FG inputs on inputs-only probes.
-use crate::bridge_abi::{
+use crate::sys::{
     RSF_UNITY_PACKET_INPUTS_ONLY, RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_RESET, rsf_unity_packet,
 };
 use rsf_game_sys::{RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_SR, rsf_game_render_pass};
@@ -77,7 +77,6 @@ pub(crate) fn build_d3d12_pass(packet: &rsf_unity_packet) -> rsf_game_render_pas
 #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
 mod d3d11 {
     use super::{base_pass, rsf_game_render_pass, rsf_unity_packet};
-    use crate::bridge_abi::RSF_UNITY_PREVIEW_SOURCE_COMMON;
     #[cfg(all(windows, not(feature = "mono-plugin")))]
     use crate::bridge_interop::D3D11;
     #[cfg(all(windows, not(feature = "mono-plugin")))]
@@ -86,6 +85,7 @@ mod d3d11 {
     };
     #[cfg(all(windows, not(feature = "mono-plugin")))]
     use crate::d3d11_state::wait_completion;
+    use crate::sys::RSF_UNITY_PREVIEW_SOURCE_COMMON;
     use rsf_game_sys::{
         RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_WINDOW,
     };
@@ -324,7 +324,7 @@ pub(crate) use d3d11::{plan, shared_format};
 mod tests {
     use super::d3d11::*;
     use super::*;
-    use crate::bridge_abi::RSF_UNITY_PREVIEW_SOURCE_COMMON;
+    use crate::sys::RSF_UNITY_PREVIEW_SOURCE_COMMON;
     use rsf_game_sys::{
         RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_WINDOW,
         rsf_camera_frame,

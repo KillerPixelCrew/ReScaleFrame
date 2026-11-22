@@ -6,7 +6,7 @@
 //! (`next`, GUID, `size_t` version) and member order. The layout assertions use the sizes and
 //! offsets that MSVC reports for `sl::Constants` and `sl::ViewportHandle` in the SDK headers.
 use super::{Result, check};
-use crate::unity_sr_d3d12_abi::{rsf_streamline_host, rsf_streamline_host_module};
+use crate::sys::{rsf_streamline_host, rsf_streamline_host_module};
 use rsf_game_sys::rsf_game_render_pass;
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of, transmute};

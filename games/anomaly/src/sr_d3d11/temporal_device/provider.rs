@@ -4,7 +4,7 @@ use crate::runtime_module::{Module, rsf_anomaly_runtime_module};
 use crate::sr_pass::build_pass;
 use crate::sr_stage::math::{JitterSequence, next_jitter};
 use crate::sr_temporal::{DLSS, FSR3, FSR4, XESS, fg_fixture::Temporal};
-use rsf_game_sys::sr_abi::{RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_JITTER};
+use rsf_game_sys::{RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_JITTER};
 use std::ffi::{CString, OsStr};
 use std::path::{Path, PathBuf};
 use std::time::Instant;

@@ -7,7 +7,7 @@
 //! rsf_d3d11_host_dispatch_chain export. Native exception guards protect the two foreign calls.
 #![cfg(windows)]
 
-use rsf_game_sys::d3d11_chain_abi::{
+use rsf_game_sys::{
     RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_DISPATCH_PRESENT1, RSF_D3D11_DISPATCH_RELEASE,
     RSF_D3D11_DISPATCH_RESIZE_BUFFERS, RSF_D3D11_DISPATCH_RESIZE_BUFFERS1,
     RSF_D3D11_DISPATCH_SET_COLOR_SPACE1, RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE,

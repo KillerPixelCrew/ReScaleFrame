@@ -17,7 +17,7 @@
 //!
 //! A fence completion of 0 stands for "no fence": every recorded submission is then in flight,
 //! as the C++ check `complete && (!fence || completed < complete)` had it.
-use crate::bridge_abi::{
+use crate::sys::{
     RSF_UNITY_BRIDGE_ABI_VERSION, RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS,
     RSF_UNITY_FRAMES_SOURCES, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_INPUTS_ONLY,
     RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_WINDOW, rsf_unity_config, rsf_unity_frame_admission,
@@ -981,7 +981,7 @@ pub(crate) unsafe extern "C" fn rsf_unity_release_texture(texture: *mut c_void) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bridge_abi::{RSF_UNITY_PACKET_NO_INPUTS, RSF_UNITY_PACKET_RESET};
+    use crate::sys::{RSF_UNITY_PACKET_NO_INPUTS, RSF_UNITY_PACKET_RESET};
 
     const SESSION: u64 = 7;
 

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::overlay_cursor_capture::{self as capture, Effects};
 use crate::overlay_cursor_hooks::{self as hooks, Platform as HookPlatform};
-use crate::overlay_host_abi::{rsf_overlay_input as Input, rsf_overlay_input_options as Options};
 use crate::overlay_input_route::{
     Contact, Disposition, MessageOps, rsf_core_overlay_route_message,
 };
@@ -11,6 +10,7 @@ use crate::overlay_visibility::{
     rsf_core_overlay_visible,
 };
 use crate::overlay_window::{self as window, Platform as WindowPlatform};
+use crate::sys::{rsf_overlay_input as Input, rsf_overlay_input_options as Options};
 use std::ffi::{c_char, c_void};
 use std::mem::{offset_of, transmute};
 use std::ptr::{self, null, null_mut};

@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::{load_library, module_path, null_mut, spawn_startup, wide};
-use rsf_game_sys::plugin_session_abi::{
-    RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options,
-};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_cpu_event, rsf_game_host_services, rsf_game_probe,
 };
+use rsf_game_sys::{RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs::{OpenOptions, create_dir};
 use std::io::{Read, Write};

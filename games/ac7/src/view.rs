@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! AC7's verified UE4.18 view buffer layout, camera decode and UI projection jitter removal.
 //! See docs/research/ac7-frame-capture.md.
-use crate::view_abi::{
+use crate::sys::{
     RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view, rsf_ac7_view_result,
 };
 use rsf_game_sys::camera_math::inverse_4x4;

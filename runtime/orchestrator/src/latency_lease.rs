@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::{RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL};
+use crate::sys::{RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL};
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::sync::Mutex;
 use windows_sys::Win32::{
@@ -82,8 +82,8 @@ pub(crate) extern "C" fn rsf_native_latency_release_claim(client: u32) {
 #[cfg(test)]
 mod tests {
     use super::pacing_owner;
-    use crate::native_fg_cpu_abi::RSF_PACING_ANTILAG2;
-    use crate::render_abi::{RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL};
+    use crate::sys::RSF_PACING_ANTILAG2;
+    use crate::sys::{RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL};
 
     #[test]
     fn required_provider_wins_before_optional_pacing() {

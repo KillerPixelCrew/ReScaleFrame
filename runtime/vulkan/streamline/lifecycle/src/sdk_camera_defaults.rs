@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::sdk_records_abi::{rsf_slvk_sdk_constants, rsf_slvk_sdk_header};
+use crate::sys::{rsf_slvk_sdk_constants, rsf_slvk_sdk_header};
 
 pub(crate) fn constants() -> rsf_slvk_sdk_constants {
     rsf_slvk_sdk_constants {

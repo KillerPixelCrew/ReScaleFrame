@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::{Draw, DrawInput, rsf_ac7_capture_record_draw};
-use crate::motion_capture_graphics_abi::rsf_frame_tap_target_draw;
 use crate::motion_capture_observations::{
     colour::{
         LightingDraw, rsf_ac7_capture_is_cloud_composite, rsf_ac7_capture_take_lighting_after,
@@ -14,6 +13,7 @@ use crate::motion_capture_records::{
 use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_fail, rsf_ac7_capture_sample,
 };
+use crate::sys::rsf_frame_tap_target_draw;
 use std::ffi::{c_char, c_void};
 use std::fmt;
 use std::ptr::null;

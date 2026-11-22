@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::frame_capture_abi::{rsf_capture_calls, rsf_capture_connect, rsf_capture_result};
+use crate::sys::{rsf_capture_calls, rsf_capture_connect, rsf_capture_result};
 use std::ffi::c_char;
 use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::{

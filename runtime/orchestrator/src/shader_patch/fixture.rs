@@ -4,7 +4,7 @@
 mod device;
 
 use super::*;
-use crate::shader_patch_abi::rsf_patch_define;
+use crate::sys::rsf_patch_define;
 use rsf_shader_compiler::Compiler;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;

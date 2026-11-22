@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image;
-use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup, rsf_vk_function};
+use crate::sys::rsf_dx12vk_shared_image;
+use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup, rsf_vk_function};
 use crate::xess_bridge_abi::{
     RSF_XESS_BRIDGE_ABI_MISMATCH, RSF_XESS_BRIDGE_ABI_VERSION, RSF_XESS_BRIDGE_INVALID_ARGUMENT,
     rsf_xess_bridge_create,

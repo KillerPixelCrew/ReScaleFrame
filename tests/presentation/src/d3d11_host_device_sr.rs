@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! The real shared-SR fixture's cold source and first nine planned sources.
 use super::*;
-use rsf_game_sys::d3d11_chain_abi::RSF_D3D11_HOST_ABI_VERSION;
-use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_pass;
-use rsf_game_sys::d3d11_reduced_abi::*;
-use rsf_game_sys::sr_abi::rsf_dlss_pipeline_status;
+use rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION;
+use rsf_game_sys::rsf_d3d11_auxiliary_pass;
+use rsf_game_sys::rsf_dlss_pipeline_status;
+use rsf_game_sys::*;
 use rsf_game_sys::{
     RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END, RSF_GAME_RENDER_AFTER_SIMULATION,
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RECONFIGURE,

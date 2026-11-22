@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::{BeforeDraw, Sampler, rsf_ac7_capture_record_before_draw};
-use crate::motion_capture_graphics_abi::rsf_frame_tap_target_draw;
 use crate::motion_capture_observations::colour::{
     BeforeDrawPlan, rsf_ac7_capture_plan_before_draw,
 };
@@ -10,6 +9,7 @@ use crate::motion_capture_records::draws::{
 use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_fail, rsf_ac7_capture_sample,
 };
+use crate::sys::rsf_frame_tap_target_draw;
 use std::ffi::{c_char, c_void};
 use std::fmt;
 use windows::Win32::Graphics::Direct3D11::*;

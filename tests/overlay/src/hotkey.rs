@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, Window, check, require, send};
-use crate::abi::*;
+use crate::sys::*;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::thread::sleep;

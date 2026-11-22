@@ -9,39 +9,36 @@
 //! The adapter's only policy input is `set_engine_spatial`, which learns whether the engine
 //! upscales spatially itself, never the vendor.
 use crate::com_ref::ComRef;
-use crate::gl_pipeline_abi::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
-use crate::overlay_abi::{
-    RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,
-    RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
-    rsf_overlay_intent as Intent, rsf_overlay_stats as Stats,
-};
 use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
 #[cfg(not(test))]
 use crate::plugin_session::Session;
-use crate::render_abi::{
-    RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
-    rsf_sharpening_options as Sharpening,
-};
 use crate::render_host_methods::{Adapter, ResourceDesc};
 use crate::settings_store::{
     rsf_settings_store_read_layout, rsf_settings_store_write_layout,
     rsf_settings_store_write_sharpening, write_dlss_preset,
 };
-use rsf_game_sys::plugin_session_abi::{
-    RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION,
-    rsf_plugin_session_options as SessionOptions,
+use crate::sys::{
+    RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
+    rsf_sharpening_options as Sharpening,
 };
+use crate::sys::{
+    RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,
+    RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+    rsf_overlay_intent as Intent, rsf_overlay_stats as Stats,
+};
+use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use rsf_game_sys::{
+    RSF_CALLBACK_HOST_ABI_VERSION as HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2,
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
     RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
-    RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW,
-    callback_host_abi::{
-        RSF_CALLBACK_HOST_ABI_VERSION as HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2,
-        rsf_callback_host_setup as Setup, rsf_callback_host_setup_v2 as SetupV2,
-    },
-    recording_slots::RecordingSlots,
+    RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW, recording_slots::RecordingSlots,
+    rsf_callback_host_setup as Setup, rsf_callback_host_setup_v2 as SetupV2,
     rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
     rsf_game_render_config as Config, rsf_game_render_pass as Pass,
+};
+use rsf_game_sys::{
+    RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION,
+    rsf_plugin_session_options as SessionOptions,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::fs::File;
@@ -192,7 +189,7 @@ crate::render_host_methods::impl_host_methods! {
     }
     fn overlay_stop() { crate::overlay_wrapped12::native::rsf_overlay_d3d12_stop() }
     fn input_dump_cancel(session: u64) {
-        unsafe { crate::render_host_foreign_abi::rsf_input_dump_cancel(session) }
+        unsafe { crate::sys::rsf_input_dump_cancel(session) }
     }
     fn session_prepare(options: *const SessionOptions, out: *mut *mut Session) -> i32 {
         unsafe { crate::plugin_session::rsf_plugin_session_prepare(options, out) }

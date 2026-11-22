@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_abi::rsf_overlay_input_counters as Counters;
 use crate::overlay_cursor_hooks::rsf_core_overlay_cursor_ready;
 use crate::overlay_pointer;
 use crate::overlay_visibility::{
@@ -8,6 +7,7 @@ use crate::overlay_visibility::{
 };
 use crate::overlay_window::{clear_holds, hold, release, rsf_core_overlay_input_window};
 use crate::sr_session::has_capacity;
+use crate::sys::rsf_overlay_input_counters as Counters;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;

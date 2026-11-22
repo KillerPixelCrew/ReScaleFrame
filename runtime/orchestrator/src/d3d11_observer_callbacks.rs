@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-use crate::d3d11_observer_abi::*;
 use crate::d3d11_observer_capture;
 use crate::d3d11_observer_hooks::installed;
-use crate::scene_abi::rsf_observer_present_event as Event;
 use crate::sr_session::has_capacity;
+use crate::sys::rsf_observer_present_event as Event;
+use crate::sys::*;
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};

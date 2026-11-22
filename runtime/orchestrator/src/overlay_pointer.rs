@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use crate::overlay_cursor_hooks::rsf_core_overlay_cursor_ready;
-use crate::overlay_host_abi::rsf_overlay_input as Input;
 use crate::overlay_input_route;
 use crate::overlay_visibility::rsf_core_overlay_visible;
 use crate::overlay_window::{INVALID, NOT_INSTALLED, OK, rsf_core_overlay_input_window};
 use crate::sr_session::has_capacity;
+use crate::sys::rsf_overlay_input as Input;
 use std::ffi::c_void;
 use std::mem;
 use std::sync::{Mutex, MutexGuard, PoisonError};

@@ -4,7 +4,7 @@
 use super::*;
 use crate::com_ref::ComRef;
 use crate::d3d12_generation::{PrepareOrder, read_options};
-use crate::render_abi::{
+use crate::sys::{
     RSF_FG_AUTO, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_FG_STAT_ACTIVITY,
     RSF_FG_STAT_TOTAL_PRESENTED, rsf_fg_options as Options, rsf_fg_retirement as Retirement,
     rsf_generation_setup as GenerationSetup,

@@ -32,14 +32,14 @@ use crate::motion_device::{
     REPLAY_READY, ReplayScope, rsf_anomaly_motion_replay_begin, rsf_anomaly_motion_replay_end,
     rsf_anomaly_motion_replay_platform_get,
 };
-use crate::motion_device_abi::{
-    RSF_MOTION_CORE, RSF_MOTION_FOLIAGE, RSF_MOTION_MULTISAMPLED, RSF_MOTION_PIXEL,
-    RSF_MOTION_READY,
-};
 use crate::shader_loader::deployed::{
     ORIGINAL_MISMATCH, REPLACED, ShaderRequest, keeps_buffer_sizes, outcome_name,
 };
 use crate::shader_loader::rsf_anomaly_shader_linkable;
+use crate::sys::{
+    RSF_MOTION_CORE, RSF_MOTION_FOLIAGE, RSF_MOTION_MULTISAMPLED, RSF_MOTION_PIXEL,
+    RSF_MOTION_READY,
+};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use windows::Win32::Graphics::Direct3D::{D3D_FEATURE_LEVEL_11_0, D3D_REGISTER_COMPONENT_FLOAT32};
 use windows::Win32::Graphics::Direct3D11::*;

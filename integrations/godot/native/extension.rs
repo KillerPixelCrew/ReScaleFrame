@@ -4,9 +4,9 @@
 //! the renderer admission both `configure` and `get_status` report. The class keeps the
 //! `Dictionary`, `Variant`, `RID` and `RenderingServer` calls.
 use crate::control::default_settings;
-use crate::extension_abi::rsf_godot_property_emit;
 use crate::platform::{OptionField, OptionValue, Platform, Settings};
 use crate::properties::Properties;
+use crate::sys::rsf_godot_property_emit;
 use std::ffi::{CStr, c_void};
 
 pub(crate) const INTEGER: u32 = 0;

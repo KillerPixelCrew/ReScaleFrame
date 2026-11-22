@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Hardware fixture for the bidirectional GL/D3D12 handoff on the current WGL context.
 use super::{FixtureError, log, require};
-use crate::gl_fixture_abi::*;
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{ManuallyDrop, transmute};
 use std::ptr::null_mut;

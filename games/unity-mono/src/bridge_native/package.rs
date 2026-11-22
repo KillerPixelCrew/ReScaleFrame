@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Package renderer routing and bridge retirement.
 use super::*;
-use crate::bridge_route_abi::*;
 use crate::d3d11_state::{self, graphics as d3d11};
 use crate::package_state::rsf_unity_package_sr_slots_released;
+use crate::sys::*;
 use std::sync::atomic::AtomicU32;
 use windows::Win32::Graphics::Direct3D12::{ID3D12CommandQueue, ID3D12Device};
 use windows::core::Interface;

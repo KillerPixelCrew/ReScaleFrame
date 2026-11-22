@@ -2,9 +2,7 @@
 #![cfg(all(windows, not(test)))]
 #![allow(non_camel_case_types)]
 
-mod abi;
-
-use abi::*;
+use rsf_game_sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{self, null, null_mut};
 use windows_sys::Win32::Foundation::HMODULE;
@@ -18,14 +16,6 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 
-type rsf_backend_log_fn = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
-type rsf_observer_present_fn = Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>;
-type rsf_observer_present_event_fn = Option<unsafe extern "C" fn(*mut c_void, *const c_void)>;
-type rsf_generation_provider = c_void;
-type rsf_latency_marker = u32;
-type rsf_result = i32;
-type rsf_streamline_graphics = c_void;
-type rsf_streamline_host = c_void;
 type Query = unsafe extern "C" fn(*mut rsf_d3d11_present_api) -> i32;
 
 const SIZE: usize = size_of::<rsf_d3d11_present_api>();

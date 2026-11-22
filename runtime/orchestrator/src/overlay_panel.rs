@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
-use crate::overlay_host_abi::{
-    rsf_overlay, rsf_overlay_draw_data, rsf_overlay_host_panel, rsf_overlay_input,
-};
+use crate::sys::{rsf_overlay, rsf_overlay_draw_data, rsf_overlay_host_panel, rsf_overlay_input};
+use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use std::ffi::{CStr, c_void};
 use std::ptr::null_mut;
 use std::sync::Mutex;
@@ -126,25 +124,21 @@ fn exports(module: HMODULE) -> rsf_overlay_host_panel {
         rsf_overlay_host_panel {
             create: std::mem::transmute::<
                 std::option::Option<unsafe extern "system" fn() -> isize>,
-                std::option::Option<
-                    unsafe extern "C" fn(u32) -> *mut crate::overlay_host_abi::rsf_overlay,
-                >,
+                std::option::Option<unsafe extern "C" fn(u32) -> *mut crate::sys::rsf_overlay>,
             >(get(c"rsf_overlay_create")),
             destroy: std::mem::transmute::<
                 std::option::Option<unsafe extern "system" fn() -> isize>,
-                std::option::Option<
-                    unsafe extern "C" fn(*mut crate::overlay_host_abi::rsf_overlay),
-                >,
+                std::option::Option<unsafe extern "C" fn(*mut crate::sys::rsf_overlay)>,
             >(get(c"rsf_overlay_destroy")),
             frame: std::mem::transmute::<
                 std::option::Option<unsafe extern "system" fn() -> isize>,
                 std::option::Option<
                     unsafe extern "C" fn(
-                        *mut crate::overlay_host_abi::rsf_overlay,
-                        *const crate::overlay_host_abi::rsf_overlay_input,
-                        *const crate::overlay_abi::overlay_wire::rsf_overlay_stats,
-                        *mut crate::overlay_host_abi::rsf_overlay_draw_data,
-                        *mut crate::overlay_abi::overlay_wire::rsf_overlay_intent,
+                        *mut crate::sys::rsf_overlay,
+                        *const crate::sys::rsf_overlay_input,
+                        *const crate::sys::rsf_overlay_stats,
+                        *mut crate::sys::rsf_overlay_draw_data,
+                        *mut crate::sys::rsf_overlay_intent,
                     ) -> i32,
                 >,
             >(get(c"rsf_overlay_frame")),
@@ -152,8 +146,8 @@ fn exports(module: HMODULE) -> rsf_overlay_host_panel {
                 std::option::Option<unsafe extern "system" fn() -> isize>,
                 std::option::Option<
                     unsafe extern "C" fn(
-                        *mut crate::overlay_host_abi::rsf_overlay,
-                        *mut crate::overlay_abi::rsf_overlay_texture_update,
+                        *mut crate::sys::rsf_overlay,
+                        *mut crate::sys::rsf_overlay_texture_update,
                         u32,
                     ) -> u32,
                 >,
@@ -161,11 +155,7 @@ fn exports(module: HMODULE) -> rsf_overlay_host_panel {
             textures_to_free: std::mem::transmute::<
                 std::option::Option<unsafe extern "system" fn() -> isize>,
                 std::option::Option<
-                    unsafe extern "C" fn(
-                        *mut crate::overlay_host_abi::rsf_overlay,
-                        *mut u64,
-                        u32,
-                    ) -> u32,
+                    unsafe extern "C" fn(*mut crate::sys::rsf_overlay, *mut u64, u32) -> u32,
                 >,
             >(get(c"rsf_overlay_textures_to_free")),
         }

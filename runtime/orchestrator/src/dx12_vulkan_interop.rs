@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
-use crate::dx12_vulkan_interop_abi::*;
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
-use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup};
+use crate::sys::*;
+use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup};
 use std::ffi::c_void;
 use std::os::windows::io::AsRawHandle;
 use std::ptr;

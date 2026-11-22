@@ -9,8 +9,8 @@
 //! World flags (NativeRecoveryLeaves in render_hooks_platform.h). The state is per thread, as the
 //! native World is. See docs/research/rust-fallout4-render-hooks.md.
 
-pub(super) use crate::render_records::NativeRecoveryLease as Lease;
 use crate::resolution::owns_full_output;
+pub(super) use crate::sys::NativeRecoveryLease as Lease;
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, message};
 use rsf_game_sys::{rsf_game_render_pass, rsf_result};
 use std::cell::Cell;
@@ -20,8 +20,8 @@ use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 // rsf_d3d11_reduced_frame (d3d11_host.h).
-pub(super) use rsf_game_sys::d3d11_reduced_abi::rsf_d3d11_reduced_frame as Request;
-use rsf_game_sys::d3d11_reduced_abi::{
+pub(super) use rsf_game_sys::rsf_d3d11_reduced_frame as Request;
+use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_COLOUR as COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL as DEPTH_STENCIL,
     RSF_D3D11_AUXILIARY_RESTORE_CONTENTS as RESTORE_CONTENTS, RSF_D3D11_REDUCED_CANCEL as CANCEL,
     RSF_D3D11_REDUCED_FINISH as FINISH, RSF_D3D11_REDUCED_FRAME_ABI_VERSION as ABI_VERSION,

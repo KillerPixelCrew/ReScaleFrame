@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Wingman's restart-only native observer option in the shared runtime panel.
-use crate::overlay_abi::*;
+use rsf_game_sys::*;
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::HMODULE;

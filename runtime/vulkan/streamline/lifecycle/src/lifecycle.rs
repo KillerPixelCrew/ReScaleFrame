@@ -8,7 +8,7 @@ use crate::frame_generation::{FrameGeneration, Swapchain};
 #[cfg(windows)]
 use crate::frame_token::FrameToken;
 use crate::sdk_records;
-use crate::sdk_records_abi::{rsf_slvk_sdk_log, rsf_slvk_sdk_preferences};
+use crate::sys::{rsf_slvk_sdk_log, rsf_slvk_sdk_preferences};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null, null_mut, without_provenance_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};

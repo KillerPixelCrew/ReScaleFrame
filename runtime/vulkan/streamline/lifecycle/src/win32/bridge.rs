@@ -10,7 +10,7 @@ use crate::lifecycle::{Platform, feature_mask};
 use crate::sdk_api::{self, FEATURE_DLSS_G, FEATURE_PCL, FEATURE_REFLEX, OK, guarded};
 use crate::sdk_fg_options::{self, Packed, Sample, State};
 use crate::sdk_records::{self, rsf_slvk_pack_legacy_camera, rsf_slvk_pack_legacy_tags};
-use crate::sdk_records_abi::{
+use crate::sys::{
     rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_header,
     rsf_slvk_sdk_pcl_options, rsf_slvk_sdk_pcl_state, rsf_slvk_sdk_preferences,
     rsf_slvk_sdk_reflex_options, rsf_slvk_sdk_reflex_state, rsf_slvk_sdk_tag,

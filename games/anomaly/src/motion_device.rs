@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 use crate::lease::Lease;
 use crate::motion::{CORE_BYTES, FOLIAGE_BYTES, PIXEL_BYTES, TESS_BYTES};
-use crate::motion_device_abi::{
+use crate::sys::{
     RSF_MOTION_CORE, RSF_MOTION_CREATED, RSF_MOTION_FAILED, RSF_MOTION_FOLIAGE,
     RSF_MOTION_MULTISAMPLED, RSF_MOTION_PIXEL, RSF_MOTION_READY, RSF_MOTION_TESS,
     rsf_anomaly_motion_device_platform as NativePlatform, rsf_anomaly_motion_device_view as View,
     rsf_anomaly_motion_log as Log,
 };
 #[cfg(windows)]
-use rsf_game_sys::shader_patch_abi::rsf_shader_patch_api;
-use rsf_game_sys::shader_patch_abi::{RSF_PATCH_OK, rsf_patch_bytes};
+use rsf_game_sys::rsf_shader_patch_api;
+use rsf_game_sys::{RSF_PATCH_OK, rsf_patch_bytes};
 use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::slice;

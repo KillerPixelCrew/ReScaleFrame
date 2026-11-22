@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::*;
 use crate::sr_session::has_capacity;
+use crate::sys::*;
 
 // Each call structure starts with its readable byte count, including the output.
 #[unsafe(no_mangle)]

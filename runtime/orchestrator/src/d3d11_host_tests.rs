@@ -2,11 +2,11 @@
 // Synthetic D3D11 host contracts: fake COM identities, a fake native leaf table
 // and fake auxiliary products. No device, window or SDK is touched.
 use super::*;
-use crate::auxiliary_sr_abi::rsf_aux_platform;
 use crate::com_ref::test::{Fake, add_ref, fake, raw};
-use crate::fg12_abi::rsf_streamline_host;
-use crate::native_sr_abi::rsf_motion_decode_params;
-use crate::render_abi::rsf_backend_log_fn;
+use crate::sys::rsf_aux_platform;
+use crate::sys::rsf_backend_log_fn;
+use crate::sys::rsf_motion_decode_params;
+use crate::sys::rsf_streamline_host;
 use rsf_game_sys::rsf_game_log_fn;
 use std::cell::Cell;
 

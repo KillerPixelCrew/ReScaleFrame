@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::abi::rsf_fg_retirement;
+use crate::sys::rsf_fg_retirement;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Adapt the ASI's linked diagnostic libraries to the RDR2 startup and sampling workers.
-use super::diagnostics_abi::*;
 use super::services;
 use crate::diagnostics::{
     CensusResult, DiagnosticsLeaves, DumpResult, path_units, rsf_rdr2_start_diagnostics,
     rsf_rdr2_start_frame_probe,
 };
+use crate::sys::*;
 use std::ffi::{CString, c_char};
 use std::ptr::null;
 use std::sync::atomic::{AtomicBool, Ordering};

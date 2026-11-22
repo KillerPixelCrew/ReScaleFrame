@@ -9,10 +9,14 @@ mod startup;
 use crate::allocate_handle;
 use crate::sdk_module::{FIDELITYFX_DLL, SdkModule};
 use crate::sr_session::has_capacity;
-use crate::vulkan_fg_abi::{
+use crate::sys::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame as Frame,
     rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup, rsf_fgvk_status as Status,
     rsf_fgvk_timeline as RecordingTimeline,
+};
+use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as Image};
+use crate::sys::{
+    rsf_vkfg_fences as Fences, rsf_vkfg_image as PrivateImage, rsf_vkfg_platform as Resources,
 };
 use crate::vulkan_fg_copy::{BarrierFn, CopyFn, SHADER_READ, record_shader_read_copy};
 use crate::vulkan_fg_frames::*;
@@ -20,10 +24,6 @@ use crate::vulkan_fg_resources::{
     rsf_core_vkfg_ensure_image, rsf_core_vkfg_fence_submission, rsf_core_vkfg_prepare_fences,
     rsf_core_vkfg_release_fences, rsf_core_vkfg_release_image,
 };
-use crate::vulkan_fg_resources_abi::{
-    rsf_vkfg_fences as Fences, rsf_vkfg_image as PrivateImage, rsf_vkfg_platform as Resources,
-};
-use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as Image};
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record as Record;
 #[cfg(test)]
@@ -1125,8 +1125,8 @@ unsafe extern "C" fn rsf_core_ffxgvk_destroy(owner: *mut Owner) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sys::rsf_vk_function;
     use crate::vulkan_fg_copy::{Barrier, ImageCopy};
-    use crate::vulkan_sr_abi::rsf_vk_function;
     use std::cell::RefCell;
 
     const OUT_OF_DATE: i32 = -1_000_001_004;
@@ -1365,7 +1365,7 @@ mod tests {
         None
     }
     unsafe extern "C" fn resolve(
-        _: crate::vulkan_sr_abi::rsf_vk_get_proc,
+        _: crate::sys::rsf_vk_get_proc,
         _: Handle,
         _: *const c_char,
         _: *mut rsf_vk_function,

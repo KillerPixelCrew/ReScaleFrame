@@ -17,10 +17,6 @@ use crate::d3d11_output::GraphicsCache;
 #[cfg(not(test))]
 use crate::d3d11_output::{SavedBindings, texture_desc};
 #[cfg(not(test))]
-use crate::d3d11_output_abi::{
-    RSF_D3D11_FORMAT_RGBA16_FLOAT, rsf_d3d11_output_child_device, rsf_d3d11_output_is_immediate,
-};
-#[cfg(not(test))]
 use crate::fg_scene::with_scene;
 #[cfg(not(test))]
 use crate::frame_assembly::rsf_assemble_dlss_frame;
@@ -32,20 +28,24 @@ use crate::native_exposure::rsf_core_native_exposure_release;
 use crate::native_regions::rsf_native_regions_release;
 use crate::native_reinsert::rsf_native_reinsert_release;
 use crate::native_scene::rsf_native_scene_reset;
-#[cfg(not(test))]
-use crate::native_sr_abi::{
-    RSF_DLSS_PIPELINE_ABI_VERSION, rsf_dlss_pipeline_frame as Frame,
-    rsf_motion_decode_params as DecodeParams,
-};
 use crate::native_sr_state::{camera_for, commit_history};
 use crate::native_sr_state::{clear_surface, reset_history, rsf_native_sr_set_enabled};
 use crate::native_translucency::rsf_native_translucency_release;
-#[cfg(not(test))]
-use crate::native_translucency_abi::rsf_native_translucency_masks as Masks;
 use crate::native_window::rsf_native_window_reset;
 use crate::owned_handle::OwnedHandle;
 #[cfg(not(test))]
-use crate::render_abi::{rsf_dlss_frame as DlssFrame, rsf_frame_resources};
+use crate::sys::rsf_native_translucency_masks as Masks;
+#[cfg(not(test))]
+use crate::sys::{
+    RSF_D3D11_FORMAT_RGBA16_FLOAT, rsf_d3d11_output_child_device, rsf_d3d11_output_is_immediate,
+};
+#[cfg(not(test))]
+use crate::sys::{
+    RSF_DLSS_PIPELINE_ABI_VERSION, rsf_dlss_pipeline_frame as Frame,
+    rsf_motion_decode_params as DecodeParams,
+};
+#[cfg(not(test))]
+use crate::sys::{rsf_dlss_frame as DlssFrame, rsf_frame_resources};
 #[cfg(test)]
 use rsf_game_sys::rsf_game_render_pass as Pass;
 #[cfg(not(test))]

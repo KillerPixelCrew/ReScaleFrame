@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::sys::rsf_slvk_call;
 
 #[derive(Default)]
 struct Harness {

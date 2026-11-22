@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::camera::EngineMatrix;
-use crate::sr_stage_abi::{RSF_ANOMALY_SR_PROJECT_ID, RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS};
-use rsf_game_sys::{
-    RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame, sr_abi::rsf_motion_decode_params,
-};
+use crate::sys::{RSF_ANOMALY_SR_PROJECT_ID, RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS};
+use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame, rsf_motion_decode_params};
 use std::{ffi::c_void, ptr};
 
 fn near(a: f64, b: f64, tolerance: f64) {
@@ -76,24 +74,24 @@ fn inputs() -> PassInputs {
         color_output: source(1),
         depth: source(2),
         motion: source(3),
-        frame: crate::sr_stage_abi::rsf_anomaly_sr_pass {
+        frame: crate::sys::rsf_anomaly_sr_pass {
             native_frame: 7,
             generation: 3,
             render_width: 1280,
             render_height: 720,
             output_width: 1920,
             output_height: 1080,
-            current: crate::sr_stage_abi::rsf_anomaly_sr_camera {
+            current: crate::sys::rsf_anomaly_sr_camera {
                 view: view_at([10.0, 2.0, -5.0], 0.3),
                 projection,
                 valid: true,
             },
-            previous: crate::sr_stage_abi::rsf_anomaly_sr_camera {
+            previous: crate::sys::rsf_anomaly_sr_camera {
                 view: view_at([10.1, 2.0, -5.0], 0.31),
                 projection,
                 valid: true,
             },
-            jitter: crate::sr_stage_abi::rsf_anomaly_sr_jitter_state {
+            jitter: crate::sys::rsf_anomaly_sr_jitter_state {
                 frame: 7,
                 applied: true,
                 current_x: 0.25,

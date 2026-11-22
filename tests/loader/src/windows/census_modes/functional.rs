@@ -3,7 +3,7 @@ use super::{
     CensusOp, Checks, Counters, Install, NativeProbe, RSF_CENSUS_ABI_VERSION, by_fn, directory,
     entries, exe_name, hex, includes, rsf_census_counters, rsf_census_options,
 };
-use crate::windows::census_facts_abi::rsf_test_census_functional_facts;
+use crate::sys::rsf_test_census_functional_facts;
 use crate::windows::census_process::executable_anchor;
 use serde_json::Value;
 use std::ffi::c_char;

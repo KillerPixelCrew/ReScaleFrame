@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{SavedBindings, same_device, texture_desc};
-use crate::d3d11_output_abi::{
-    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT,
-    RSF_D3D11_FORMAT_RGBA32_FLOAT, RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_clear_state,
-    rsf_d3d11_output_copy_region, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_texture,
-    rsf_d3d11_output_is_immediate, rsf_d3d11_texture_desc as TextureDesc,
-};
 use crate::d3d11_output_platform::srv_format;
 use crate::graphics_d3d11::{
     GROUP_EDGE, Handle, SourceViews, bind_compute_parameters, compute_shader, constant_buffer,
     dispatch_compute, prepare_compute, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code,
     source_view, target_view,
+};
+use crate::sys::{
+    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT,
+    RSF_D3D11_FORMAT_RGBA32_FLOAT, RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_clear_state,
+    rsf_d3d11_output_copy_region, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_texture,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_texture_desc as TextureDesc,
 };
 use std::ffi::CStr;
 use std::ptr::{self, null_mut};

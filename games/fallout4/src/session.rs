@@ -6,7 +6,7 @@
 //! and CPU hooks. A later prepare must present the original session. The host setup carries this
 //! adapter's facts and declared producers; the Runtime owns every vendor and pacing decision.
 use crate::creation::{self, rsf_fallout4_accept_window};
-use crate::platform_abi::{
+use crate::sys::{
     RSF_D3D11_HOST_ABI_VERSION, RSF_D3D11_HOST_CAP_FG_INPUTS, RSF_D3D11_HOST_CAP_INPUT_TIMELINE,
     rsf_d3d11_host_setup, rsf_motion_decode_params,
 };
@@ -16,7 +16,7 @@ use crate::{
     render_hooks,
 };
 use rsf_game_sys::call_header::validate;
-use rsf_game_sys::d3d11_host_abi::same_upstream_identity;
+use rsf_game_sys::same_upstream_identity;
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
     rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args, rsf_game_renderer_status,

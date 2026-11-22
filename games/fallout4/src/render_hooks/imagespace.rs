@@ -15,10 +15,10 @@
 use super::World;
 use super::publication::{self, Leaves as PublicationLeaves, SrOutcome};
 use super::recovery::{self, Leaves as RecoveryLeaves};
-use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
-use crate::render_records::NativeEffectsCall as EffectsCall;
 use crate::resolution::owns_full_output;
-use crate::resolution_stages::{
+use crate::sys::NativeEffectsCall as EffectsCall;
+use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
+use crate::sys::{
     RSF_FALLOUT4_STAGE_EFFECTS_RETURNED as EFFECTS_RETURNED, RSF_FALLOUT4_STAGE_PRE_SR as PRE_SR,
     RSF_FALLOUT4_STAGE_UI_RESTORED as UI_RESTORED, RSF_FALLOUT4_STAGE_UI_RETURN as UI_RETURN,
 };

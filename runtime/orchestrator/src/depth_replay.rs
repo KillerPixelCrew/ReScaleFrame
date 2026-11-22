@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
-use crate::d3d11_output_abi::rsf_d3d11_output_copy_resource;
 use crate::dxgi_format::{D32_FLOAT_S8X24_UINT, R32G8X24_TYPELESS};
-use crate::frame_tap_abi::rsf_frame_tap_geometry;
 use crate::graphics_d3d11::{rsf_d3d11_depth_state_restore, rsf_d3d11_depth_state_save};
-use crate::graphics_pass_abi::rsf_depth_replay_detail as Detail;
+use crate::sys::rsf_d3d11_output_copy_resource;
+use crate::sys::rsf_depth_replay_detail as Detail;
+use crate::sys::rsf_frame_tap_geometry;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, TryLockError};

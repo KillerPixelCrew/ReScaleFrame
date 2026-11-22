@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::scene_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::{
     RSF_NATIVE_SCENE_PRESENT_DIRECT, RSF_NATIVE_SCENE_PRESENT_NONE,
     RSF_NATIVE_SCENE_PRESENT_SAMPLED, rsf_native_scene_identity as Scene,
 };
-use crate::sr_session::has_capacity;
 use rsf_game_sys::{
     RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY,
     RSF_GAME_RENDER_TEXTURE_BINDING, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass as Pass,

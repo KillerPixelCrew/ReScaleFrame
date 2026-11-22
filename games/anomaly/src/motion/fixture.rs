@@ -3,10 +3,10 @@ mod foliage;
 mod mover;
 
 use super::*;
-use crate::geometry_registry_abi::RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC;
 use crate::motion_profile::{MotionProfile, PROFILES};
 use crate::native_geometry_abi::SOFTWARE_SKINNED;
 use crate::shader_loader::{SHADER_CONTRACT_CASES, run_frame_fixture};
+use crate::sys::RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC;
 use std::ffi::CStr;
 
 const CORE: &str = include_str!("../../shaders/core/README.md");

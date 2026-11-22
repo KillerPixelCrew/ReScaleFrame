@@ -10,7 +10,7 @@
 
 pub(crate) mod xm;
 
-pub(crate) use crate::render_records::{CameraRaster, NativeCamera};
+pub(crate) use crate::sys::{CameraRaster, NativeCamera};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};
 use std::f32::consts::PI;
 use xm::Matrix;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Internal compiler, reflection and device dispatch shared with owner fixtures.
 
-use crate::shader_patch_abi::{rsf_patch_bytes, rsf_patch_define, rsf_patch_json_visit};
+use crate::sys::{rsf_patch_bytes, rsf_patch_define, rsf_patch_json_visit};
 use std::ffi::{c_char, c_void};
 
 pub(super) type Sink = Option<unsafe fn(*mut c_void, *const c_void, usize)>;

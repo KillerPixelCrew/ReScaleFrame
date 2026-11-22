@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::{
+use crate::sdk_module::SdkModule;
+use crate::sr_session::has_capacity;
+use crate::sys::{
     RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_OFF, RSF_REFLEX_BOOST, rsf_backend_log_fn,
     rsf_fg_frame as Frame, rsf_fg_options as Options, rsf_fg_retirement as Retirement,
     rsf_fg_status as Status, rsf_generation_provider as Provider, rsf_generation_setup as Setup,
 };
-use crate::sdk_module::SdkModule;
-use crate::sr_session::has_capacity;
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CString, c_char, c_void};
 use std::fmt::Arguments;
@@ -20,7 +20,7 @@ mod fsr;
 mod xess;
 
 fn chain_description(
-    desc: &crate::render_abi::rsf_fg_swapchain_desc,
+    desc: &crate::sys::rsf_fg_swapchain_desc,
 ) -> windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC1 {
     use windows::Win32::Graphics::Dxgi::{Common::*, *};
     DXGI_SWAP_CHAIN_DESC1 {

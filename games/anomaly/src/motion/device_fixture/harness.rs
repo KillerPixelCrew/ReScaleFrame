@@ -11,11 +11,11 @@ use crate::motion_device::{
     Owner, rsf_anomaly_motion_device_get, rsf_anomaly_motion_device_platform_get,
     rsf_anomaly_motion_device_target, rsf_anomaly_motion_device_upload,
 };
-use crate::motion_device_abi::{RSF_MOTION_CREATED, rsf_anomaly_motion_device_view as View};
 use crate::shader_loader::deployed::{
     Deployed, Prepared, REPLACED, REPLACED_FROM_CACHE, ShaderRequest, outcome_name, parse_manifest,
 };
 use crate::shader_loader::{Manifest, Snapshot};
+use crate::sys::{RSF_MOTION_CREATED, rsf_anomaly_motion_device_view as View};
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::MaybeUninit;

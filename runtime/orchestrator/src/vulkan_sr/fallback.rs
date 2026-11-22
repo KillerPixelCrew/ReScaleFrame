@@ -174,8 +174,8 @@ pub(super) unsafe extern "C" fn rsf_core_srvk_spatial_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_image, rsf_vk_function};
     use crate::vulkan_sr::INVALID;
-    use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image, rsf_vk_function};
     use std::ffi::c_char;
 
     #[derive(Debug, PartialEq)]

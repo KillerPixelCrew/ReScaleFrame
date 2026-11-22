@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
-use super::d3d_abi::*;
 use super::decode::rsf_census_dxgi_format_name;
-use super::hook_abi::RSF_CENSUS_FLAG_D3D12_DEBUG_ONLY;
 use super::hooks::{rsf_census_hook_bind_inline, rsf_census_hook_original, rsf_census_hooks_apply};
 use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_i64, rsf_census_json_open,
     rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
 };
-use super::json_abi::rsf_census_json;
 use super::session::{
     rsf_census_active, rsf_census_call_begin, rsf_census_call_finish, rsf_census_flags,
 };
-use super::session_abi::rsf_census_call_state;
 use super::stats::{rsf_census_stats_queue_describe, rsf_census_stats_queue_submit};
+use crate::sys::RSF_CENSUS_FLAG_D3D12_DEBUG_ONLY;
+use crate::sys::rsf_census_call_state;
+use crate::sys::rsf_census_json;
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::io::Write;
 use std::marker::PhantomData;

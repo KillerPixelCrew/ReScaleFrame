@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::diagnostic_output::Output;
-use crate::render_abi::rsf_backend_log_fn as Log;
+use crate::sys::rsf_backend_log_fn as Log;
 use std::ffi::{c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 

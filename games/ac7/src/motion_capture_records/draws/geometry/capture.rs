@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::{Geometry, GeometryStream, GeometryVsBuffer, rsf_ac7_capture_record_geometry};
-use crate::motion_capture_graphics_abi::rsf_frame_tap_geometry;
 use crate::motion_capture_observations::geometry::{
     GeometryAdmission, GeometryPlan, rsf_ac7_capture_geometry_read, rsf_ac7_capture_plan_geometry,
 };
@@ -11,6 +10,7 @@ use crate::motion_capture_records::{
 use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_fail, rsf_ac7_capture_sample,
 };
+use crate::sys::rsf_frame_tap_geometry;
 use std::fmt;
 use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_BUFFEREX;
 use windows::Win32::Graphics::Direct3D11::*;

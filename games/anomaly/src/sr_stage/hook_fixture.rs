@@ -8,7 +8,7 @@ use super::{
 };
 use crate::engine_guards::{NativeSite, UniqueGuard};
 use crate::sr_profile::{FirstPersonSite, PROFILES as SR};
-use crate::sr_stage_abi::rsf_anomaly_sr_jitter_uv as JitterUv;
+use crate::sys::rsf_anomaly_sr_jitter_uv as JitterUv;
 use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;

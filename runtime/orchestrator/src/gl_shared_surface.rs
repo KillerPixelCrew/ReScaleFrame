@@ -11,11 +11,11 @@
 // submitted again, and GL never waits on a value that the queue has not been asked to signal.
 use crate::com_ref::ComRef;
 use crate::d3d12_fence::FenceState;
-use crate::gl_pipeline_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::rsf_backend_log_fn;
+use crate::sys::{
     RSF_GL_R32F, RSF_GL_RG16F, RSF_GL_RGBA8, RSF_GL_RGBA16F, rsf_gl_setup, rsf_gl_texture_info,
 };
-use crate::render_abi::rsf_backend_log_fn;
-use crate::sr_session::has_capacity;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, MutexGuard, TryLockError};

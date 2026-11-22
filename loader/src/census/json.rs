@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::json_abi::rsf_census_json;
+use crate::sys::rsf_census_json;
 use std::ffi::{CStr, c_char, c_void};
 use std::fmt::Write;
 use std::{ptr, slice};

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Unity Editor window selection, visibility and ownership of the Runtime output handle.
-use crate::preview_abi::{
+use crate::sys::{
     RSF_D3D12_WINDOW_TARGET_ABI_VERSION, rsf_d3d12_window_create, rsf_d3d12_window_destroy,
     rsf_d3d12_window_drained, rsf_d3d12_window_observer, rsf_d3d12_window_prepare,
     rsf_d3d12_window_present, rsf_d3d12_window_presenter, rsf_d3d12_window_target,

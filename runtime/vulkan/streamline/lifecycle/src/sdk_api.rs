@@ -12,7 +12,7 @@
 //! `sdk_records_abi` in both crates.
 #![allow(dead_code)] // Each crate calls the entries it owns.
 
-use super::sdk_records_abi::{rsf_slvk_sdk_adapter, rsf_slvk_sdk_header, rsf_slvk_sdk_viewport};
+use crate::sys::{rsf_slvk_sdk_adapter, rsf_slvk_sdk_header, rsf_slvk_sdk_viewport};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{size_of, transmute_copy};
 use std::ptr;

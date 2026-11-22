@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Checks, INVALID, Ini, OK, Query};
-use crate::abi::*;
+use rsf_game_sys::*;
 use std::ffi::{CStr, c_void};
 use std::os::windows::fs::OpenOptionsExt;
 use std::ptr::{null, null_mut};

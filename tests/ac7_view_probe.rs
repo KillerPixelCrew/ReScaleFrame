@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Optional probe for the flat capture directory. Synthetic cases live in the AC7 crate.
-#[path = "../games/ac7/src/view_abi.rs"]
-mod view_abi;
+use rsf_ac7::sys as view_abi;
 
 use std::ffi::{c_char, c_int, c_void};
 use view_abi::{

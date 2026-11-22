@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::*;
+use crate::sys::*;
 
 mod fixture;
 use rsf_game_sys::{

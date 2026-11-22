@@ -14,22 +14,16 @@ use std::ptr::null_mut;
 
 #[path = "../../vulkan/streamline/lifecycle/src/sdk_camera_defaults.rs"]
 mod sdk_camera_defaults;
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_fg_options_abi.rs"]
-mod sdk_fg_options_abi;
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_records_abi.rs"]
-mod sdk_records_abi;
 
-pub(crate) use sdk_camera_defaults::constants as default_constants;
-pub(crate) use sdk_fg_options_abi::rsf_slvk_sdk_fg_options as FgOptions;
-pub(crate) use sdk_fg_options_abi::rsf_slvk_sdk_header as FgHeader;
-pub(crate) use sdk_records_abi::{
+pub(crate) use crate::sys::rsf_slvk_sdk_fg_options as FgOptions;
+pub(crate) use crate::sys::rsf_slvk_sdk_header as FgHeader;
+pub(crate) use crate::sys::{
     rsf_slvk_sdk_constants as Constants, rsf_slvk_sdk_header as Header,
     rsf_slvk_sdk_pcl_options as PclOptions, rsf_slvk_sdk_preferences as Preferences,
     rsf_slvk_sdk_reflex_options as ReflexOptions, rsf_slvk_sdk_resource as Resource,
     rsf_slvk_sdk_tag as ResourceTag,
 };
+pub(crate) use sdk_camera_defaults::constants as default_constants;
 
 /// `sl::kSDKVersion` of the pinned headers.
 pub(crate) const SDK_VERSION: u64 = 0x0002_000e_0001_fedc;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::abi::{
+use crate::sys::{
     RSF_FG_BACKEND_ALL as ALL, RSF_FG_BACKEND_AUTO as AUTO, RSF_FG_BACKEND_DLSS as DLSS,
     RSF_FG_BACKEND_FSR3 as FSR3, RSF_FG_BACKEND_XESS as XESS, rsf_fg_choice,
 };

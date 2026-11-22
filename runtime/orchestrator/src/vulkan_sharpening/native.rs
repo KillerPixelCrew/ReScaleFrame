@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Facts, Layouts, Options, Pass, Platform, Setup, Uniform};
 use crate::d3d11_sharpening::{Frame, rsf_sharpen11_active, rsf_sharpen11_pack};
-use crate::vulkan_fg_resources_abi::rsf_vkfg_platform as ImageOps;
+use crate::sys::rsf_vkfg_platform as ImageOps;
 use ash::vk::{self, Handle};
 use std::ffi::{CStr, c_void};
 use std::{ptr, slice};

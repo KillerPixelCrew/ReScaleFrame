@@ -3,7 +3,7 @@
 
 use crate::engine_guards::Read;
 use crate::geometry_registry::IdentityRegistry;
-use crate::geometry_registry_abi::{
+use crate::sys::{
     RSF_ANOMALY_DRAW_COUNT, RSF_ANOMALY_PASS_COUNT, RSF_ANOMALY_TYPE_COUNT,
     rsf_anomaly_geometry_key as Key,
 };

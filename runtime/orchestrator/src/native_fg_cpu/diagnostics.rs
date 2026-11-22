@@ -3,10 +3,10 @@
 use super::{
     AntiLag, Facts, Frame, LEDGER, OK, Pass, Platform, Reservation, Source, antilag, lock, win32,
 };
-use crate::cpu_abi::rsf_native_cpu_counters;
 use crate::native_cpu::counters;
 use crate::native_fg::{now_qpc, requested, sink};
-use crate::render_abi::RSF_FG_OFF;
+use crate::sys::RSF_FG_OFF;
+use crate::sys::rsf_native_cpu_counters;
 use rsf_game_sys::{
     RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_SIMULATION_BEGIN, RSF_GAME_CPU_SIMULATION_END,
 };

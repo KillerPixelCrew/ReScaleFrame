@@ -44,9 +44,7 @@ const _: () = assert!(PROVIDER_SHA256.len() == 64);
 // RsfXessBridgeCaptureSource result when the source cannot be bound.
 const SOURCE_FAILED: i32 = -7012;
 
-#[path = "../../../sdk/game/src/frame_abi.rs"]
-mod frame_abi;
-use frame_abi::{
+use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
 };
 

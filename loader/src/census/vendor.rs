@@ -2,8 +2,8 @@
 use super::fsr::rsf_census_fsr_bind;
 use super::misc::rsf_census_misc_bind;
 use super::ngx::rsf_census_ngx_bind;
-use super::vendor_abi::rsf_census_vendor_platform;
 use super::vulkan::rsf_census_vk_bind;
+use crate::sys::rsf_census_vendor_platform;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 

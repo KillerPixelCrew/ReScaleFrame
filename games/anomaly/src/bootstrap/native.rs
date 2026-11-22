@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 use crate::engine_guards::{Image, Read};
 use crate::engine_slots::Exchange;
-use crate::fg_stage_abi::{rsf_anomaly_fg_overlay_present, rsf_anomaly_fg_swap_chain};
 use crate::native_hooks::HookOps;
 use crate::native_profile::PROFILES;
 use crate::overlay::{rsf_anomaly_overlay_present, rsf_anomaly_overlay_start};
-use crate::overlay_abi::{
+use crate::overlay_hooks::rsf_anomaly_overlay_set_input_observer;
+use crate::sys::{
     RSF_ANOMALY_OVERLAY_ALREADY_STARTED, RSF_ANOMALY_OVERLAY_STARTED, rsf_anomaly_overlay_options,
 };
-use crate::overlay_hooks::rsf_anomaly_overlay_set_input_observer;
+use crate::sys::{rsf_anomaly_fg_overlay_present, rsf_anomaly_fg_swap_chain};
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};

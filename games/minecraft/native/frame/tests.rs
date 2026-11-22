@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::platform_abi::{rsf_gl_pipeline_status, rsf_native_latency_status};
 use crate::status::{STATUS_MINIMUM, status_values};
+use rsf_game_sys::{rsf_gl_pipeline_status, rsf_native_latency_status};
 
 fn surfaces() -> rsf_gl_pipeline_surfaces {
     rsf_gl_pipeline_surfaces {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::geometry_registry_abi::{
+use crate::sys::{
     rsf_anomaly_geometry_draw as Draw, rsf_anomaly_geometry_key as Key,
     rsf_anomaly_geometry_probe as Probe, rsf_anomaly_geometry_retired as Retired, *,
 };

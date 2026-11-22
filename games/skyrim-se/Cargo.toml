@@ -23,5 +23,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 winapi = { version = "=0.3.9", features = ["d3d11", "dxgi", "processthreadsapi", "profileapi", "winuser"] }
 
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
+
 [lints]
 workspace = true

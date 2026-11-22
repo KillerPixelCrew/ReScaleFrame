@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types, non_snake_case, dead_code)]
 #![allow(non_upper_case_globals)]
-use rsf_game_sys::sharpening_abi::rsf_sharpening_options;
+use rsf_game_sys::rsf_sharpening_options;
 use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};
 pub type VkStructureType = ::core::ffi::c_int;
 

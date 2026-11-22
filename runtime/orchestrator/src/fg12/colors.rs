@@ -3,7 +3,7 @@ use super::{
     ComRef, FencePoint, FenceState, PLATFORM, PRESENT_STATE, Present, SHADER_READ, log,
     texture_desc,
 };
-use crate::fg12_abi::*;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};

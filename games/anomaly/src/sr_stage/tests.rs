@@ -410,9 +410,7 @@ unsafe extern "C" fn persist_text(key: *const c_char, value: *const c_char) -> b
 extern "C" fn apply_colour_transport(transport: bool) {
     record(format!("transport {transport}"));
 }
-unsafe extern "C" fn admit_backend(
-    input: *mut rsf_game_sys::d3d11_sr_admission_abi::rsf_d3d11_sr_admission,
-) -> i32 {
+unsafe extern "C" fn admit_backend(input: *mut rsf_game_sys::rsf_d3d11_sr_admission) -> i32 {
     let input = unsafe { &mut *input };
     assert_eq!(input.backend_choices, RSF_ANOMALY_SR_ADAPTER_BACKENDS);
     assert!(input.device.is_null());

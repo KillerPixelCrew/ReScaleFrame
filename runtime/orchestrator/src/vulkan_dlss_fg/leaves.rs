@@ -16,12 +16,12 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record,
 };
+use crate::sys::rsf_srvk_image as SourceImage;
+use crate::sys::{rsf_dlssgvk_status as Status, rsf_fgvk_setup as Setup};
 use crate::vulkan_dlss_fg_abi::{Handle, Sample, Sdk, SdkCall};
-use crate::vulkan_fg_abi::{rsf_dlssgvk_status as Status, rsf_fgvk_setup as Setup};
 use crate::vulkan_fg_resources::device::{
     Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory, rsf_core_vkfg_load_device,
 };
-use crate::vulkan_sr_abi::rsf_srvk_image as SourceImage;
 use crate::vulkan_streamline_camera::sdk_api::{
     self, FEATURE_DLSS_G, GetFeatureFunction, IsFeatureSupported, OK as SDK_OK, guarded,
 };

@@ -13,8 +13,8 @@
 //! The two C create calls pass `rsf_ac7_scope_calls` from render_scope_entry.c, whose SEH leaves call
 //! consumer callbacks and lease functions with any C++ exception contained. Everything else is here,
 //! including `execute`, the function the engine's command iterator calls.
-use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};
-use crate::scope_abi::{rsf_ac7_scope_calls, rsf_ac7_scope_lease};
+use crate::sys::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};
+use crate::sys::{rsf_ac7_scope_calls, rsf_ac7_scope_lease};
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_TEXTURE_BINDING, RSF_GAME_RENDER_WINDOW,

@@ -6,7 +6,7 @@ use crate::graphics_d3d11::{
     context_matches, copy_params, describe_source, dispatch_compute, prepare_compute,
     rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view, target_view,
 };
-use crate::render_abi::rsf_motion_resolve_params as Params;
+use crate::sys::rsf_motion_resolve_params as Params;
 use std::ffi::c_void;
 use std::ptr::{self, null_mut};
 use std::sync::{Mutex, TryLockError};

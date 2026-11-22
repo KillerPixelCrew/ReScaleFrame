@@ -2,9 +2,9 @@
 use super::{d3d12_luid, luid_bits};
 use crate::d3d11_d3d12::borrow;
 use crate::d3d11_present_abi::rsf_streamline_graphics as Graphics;
-use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
-use crate::render_abi::rsf_sr_frame as Frame;
 use crate::sr_session::rsf_core_validate_sr_frame;
+use crate::sys::rsf_dlss_setup as Setup;
+use crate::sys::rsf_sr_frame as Frame;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
@@ -42,7 +42,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_sr_load_sdk(path: *const u16, setup: &S
 unsafe extern "C" fn rsf_streamline_load_interposer(
     path: *const u16,
     require_signature: u32,
-    log: crate::render_abi::rsf_backend_log_fn,
+    log: crate::sys::rsf_backend_log_fn,
     user: Handle,
 ) -> Handle {
     unsafe {

@@ -2,11 +2,11 @@
 //! Production Vulkan dispatch contract exercised with typed fake entry points.
 use super::{TestResult, check};
 use crate::sharpening_policy::defaults;
-use crate::vulkan_sharpening::*;
-use crate::vulkan_sharpening_abi::rsf_sharpenvk_host as Host;
-use crate::vulkan_sr_abi::{
+use crate::sys::rsf_sharpenvk_host as Host;
+use crate::sys::{
     rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup, rsf_vk_function,
 };
+use crate::vulkan_sharpening::*;
 use ash::vk::{self, Handle};
 use rsf_game_sys::rsf_frame_record;
 use std::cell::RefCell;

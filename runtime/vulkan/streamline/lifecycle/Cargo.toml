@@ -9,10 +9,11 @@ license.workspace = true
 # Linked into both the Runtime's native Vulkan services and the standalone
 # Streamline bridge DLL.
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "rlib"]
 
 [build-dependencies]
 cc = "1"
+rsf-bindgen = { path = "../../../../tools/bindgen" }
 
 [target.'cfg(windows)'.dependencies]
 ash = { version = "=0.38.0", default-features = false, features = ["std"] }

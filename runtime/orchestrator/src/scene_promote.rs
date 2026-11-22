@@ -2,20 +2,20 @@
 use crate::com_ref::ComRef;
 use crate::constant_buffer_read::slot;
 use crate::d3d11_output::{FullscreenBlit, same_device, texture_desc};
-use crate::d3d11_output_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::{
     RSF_D3D11_BIND_RENDER_TARGET, RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_USAGE_DEFAULT,
     rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv, rsf_d3d11_output_create_texture,
     rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_texture_desc,
     rsf_fullscreen_pass,
 };
-use crate::frame_tap_abi::{
+use crate::sys::{
     RSF_FRAME_TAP_MAX_SUBSTITUTIONS, rsf_frame_tap_plan as Plan, rsf_frame_tap_substitution as Item,
 };
-use crate::scene_promote_abi::{
+use crate::sys::{
     RSF_PROMOTE_ABI_VERSION, RSF_PROMOTE_MAX_CHAIN_TARGETS, RSF_PROMOTE_MAX_UI_TARGETS,
     rsf_promote_frame_tail as Tail, rsf_promote_setup as Setup, rsf_promote_status as Status,
 };
-use crate::sr_session::has_capacity;
 use std::ffi::{CStr, CString, c_void};
 use std::fmt::Display;
 use std::ptr::{null, null_mut};

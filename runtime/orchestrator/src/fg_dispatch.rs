@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
-use crate::d3d11_fg_api_abi::{
+use crate::native_cpu::rsf_native_cpu_dispatch;
+use crate::sr_session::has_capacity;
+use crate::sys::rsf_native_fg_prepare;
+use crate::sys::rsf_observer_present_event as Present;
+use crate::sys::{
     RSF_D3D11_FG_API_VERSION, RSF_D3D11_FG_INPUTS_VERSION, rsf_d3d11_fg_api, rsf_d3d11_fg_inputs,
 };
-use crate::native_cpu::rsf_native_cpu_dispatch;
-use crate::render_abi::{
+use crate::sys::{
     RSF_DLSS_ABI_VERSION, rsf_backend_log_fn, rsf_dlss_frame as Frame, rsf_native_fg_options,
     rsf_native_fg_status,
 };
-use crate::scene_abi::rsf_observer_present_event as Present;
-use crate::sr_session::has_capacity;
 use rsf_game_sys::rsf_game_cpu_event;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_RESET,
@@ -39,16 +40,6 @@ unsafe extern "C" {
         directory: *const std::ffi::c_char,
         prefix: *const std::ffi::c_char,
     ) -> i32;
-    fn rsf_native_fg_prepare(
-        user: *mut c_void,
-        chain: *mut c_void,
-        context: *mut c_void,
-        list: *mut c_void,
-        buffer: *mut c_void,
-        host: *mut c_void,
-        provider: *mut c_void,
-        sync: u32,
-    );
     fn rsf_native_fg_retire(user: *mut c_void, provider: *mut c_void);
     fn rsf_native_window_present(event: *const Present) -> i32;
     fn rsf_native_fg_present(event: *const Present);

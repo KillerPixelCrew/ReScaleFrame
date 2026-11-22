@@ -10,7 +10,7 @@
 //! guarded engine copy, the D3D11 work and the engine calls through `rsf_anomaly_swap_platform`. All calls arrive on
 //! the engine render thread under the SR stage guard.
 
-use crate::sr_swap_abi::*;
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
 

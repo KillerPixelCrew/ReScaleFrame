@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::render_abi::rsf_backend_log_fn;
 use crate::sr_session::has_capacity;
+use crate::sys::rsf_backend_log_fn;
 use crate::{allocate_handle, owned_win32_handle};
 use std::ffi::{CString, c_void};
 use std::fmt;

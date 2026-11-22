@@ -3,7 +3,7 @@ use super::image::{Section, sidecar_section, write_imports};
 use super::names::{escape_unit, write_names};
 use super::rtti::write_rtti;
 use super::sections::{Stream, rsf_dump_now_ms, write_functions, write_threads};
-use super::sections_abi::{rsf_dump_sidecar_info, rsf_dump_sidecar_stats};
+use crate::sys::{rsf_dump_sidecar_info, rsf_dump_sidecar_stats};
 use std::ffi::CStr;
 use std::fmt::Write as _;
 use std::slice;

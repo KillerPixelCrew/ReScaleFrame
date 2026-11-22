@@ -9,7 +9,10 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_retire,
 };
-use crate::vulkan_dlss_sr_abi::{
+use crate::sys::rsf_sharpenvk_host as Sharpen;
+use crate::sys::rsf_vkfg_image as Image;
+use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as SourceImage, rsf_srvk_setup as Setup};
+use crate::sys::{
     rsf_vkdlss_init as Init, rsf_vkdlss_optimal as Optimal, rsf_vkdlss_options as Options,
     rsf_vkdlss_tag as Tag,
 };
@@ -18,14 +21,9 @@ use crate::vulkan_fg_resources::device::{
     rsf_core_vkfg_platform,
 };
 use crate::vulkan_fg_resources::{rsf_core_vkfg_ensure_image_usage, rsf_core_vkfg_release_image};
-use crate::vulkan_fg_resources_abi::rsf_vkfg_image as Image;
 use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_clear, rsf_sharpenvk_host_destroy, rsf_sharpenvk_host_retire,
     rsf_sharpenvk_host_run,
-};
-use crate::vulkan_sharpening_abi::rsf_sharpenvk_host as Sharpen;
-use crate::vulkan_sr_abi::{
-    rsf_srvk_frame as Frame, rsf_srvk_image as SourceImage, rsf_srvk_setup as Setup,
 };
 use crate::vulkan_streamline_camera::sdk_api::{
     self, EvaluateFeature, FEATURE_DLSS, FreeResources, GetFeatureFunction, GetOptimalSettings,

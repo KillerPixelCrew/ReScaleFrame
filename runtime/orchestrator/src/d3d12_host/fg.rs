@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::fg12_abi::rsf_fg12_texture_desc;
+use crate::sys::rsf_fg12_texture_desc;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::core::IUnknown;
 

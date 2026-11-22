@@ -15,9 +15,9 @@
 //! the relay memory and the protected code writes, and lends them through
 //! `rsf_ac7_truesky_leaves`.
 use crate::guards::rsf_ac7_guards_held;
-use crate::platform_abi::rsf_ac7_native_renderer;
 use crate::sites::{Code, CodeView, NativeCode};
-use crate::sites_abi::{
+use crate::sys::rsf_ac7_native_renderer;
+use crate::sys::{
     RSF_AC7_RELAY_BYTES, rsf_ac7_call_relay, rsf_ac7_truesky_leaves, rsf_ac7_truesky_patches,
 };
 use rsf_game_sys::{checksum::crc32_ieee, ffi_util::ascii_wide};

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::{RSF_RENDER_LINK_ABI_VERSION, rsf_render_link as Link};
+use crate::sys::{RSF_RENDER_LINK_ABI_VERSION, rsf_render_link as Link};
 use std::{ptr, sync::Mutex};
 
 const INVALID: i32 = -1;

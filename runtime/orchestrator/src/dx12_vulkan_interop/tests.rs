@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Fake Vulkan loader and real Win32 handles. No Vulkan device is required.
 use super::*;
-use crate::vulkan_sr_abi::rsf_vk_function;
+use crate::sys::rsf_vk_function;
 use ash::vk::{self, Handle as _};
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char};

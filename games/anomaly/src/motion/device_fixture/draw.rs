@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
-#[path = "draw_abi.rs"]
-mod abi;
 
 mod bindings;
 mod resources;
 
 use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
-pub(super) use abi::{
+pub(super) use crate::sys::{
     rsf_anomaly_motion_fixture_input as Input, rsf_anomaly_motion_fixture_output as Output,
     rsf_anomaly_motion_fixture_override as Override, rsf_anomaly_motion_fixture_targets as Targets,
 };

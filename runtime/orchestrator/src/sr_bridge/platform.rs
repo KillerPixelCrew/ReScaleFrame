@@ -13,6 +13,12 @@ use crate::shared_surface::{
     rsf_shared_surface_create,
 };
 use crate::sr_session::*;
+// The Rust definitions, not the declarations sr_session.h also provides through crate::sys.
+use crate::sr_session::{
+    rsf_sr_session_create, rsf_sr_session_destroy, rsf_sr_session_evaluate,
+    rsf_sr_session_get_status, rsf_sr_session_select, rsf_sr_session_set_auto_exposure,
+    rsf_sr_session_warm_up,
+};
 use std::ffi::c_char;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{

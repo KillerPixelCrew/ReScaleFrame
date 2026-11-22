@@ -4,7 +4,7 @@
 use super::leaf::*;
 use super::reflection::{Binding, Buffer, Parameter, Shader, compare};
 use super::*;
-use crate::shader_patch_abi::{rsf_patch_define, rsf_patch_json_visit};
+use crate::sys::{rsf_patch_define, rsf_patch_json_visit};
 use std::ffi::CStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::AtomicUsize;

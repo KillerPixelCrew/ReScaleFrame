@@ -1,4 +1,5 @@
 add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
+rsf_rust_fixture_externs(RSF_FIXTURE_EXTERNS)
 rsf_add_rust_static(rsf_d3d11_host_device_fixtures_rust rsf_rust_d3d11_host_device_fixtures
     rsf-presentation-fixtures rsf_presentation_fixtures --features d3d11-host-device-fixtures)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_host_rendered_fg_device.cmake")
@@ -314,17 +315,16 @@ function(rsf_ac7_fixture_object output stem)
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
         COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
             --crate-name "rsf_${stem}" --crate-type lib --emit obj -C codegen-units=1
-            -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3>
+            -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3> ${RSF_FIXTURE_EXTERNS}
             -o "${object}" "${CMAKE_CURRENT_SOURCE_DIR}/${stem}.rs"
-        DEPENDS "${stem}.rs" ${ARGN}
+        DEPENDS "${stem}.rs" rsf_rust_fixture_rlibs ${ARGN}
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         VERBATIM)
     set_source_files_properties("${object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
     set(${output} "${object}" PARENT_SCOPE)
 endfunction()
 
-rsf_ac7_fixture_object(ac7_view_probe_object ac7_view_probe
-    "${PROJECT_SOURCE_DIR}/games/ac7/src/view_abi.rs")
+rsf_ac7_fixture_object(ac7_view_probe_object ac7_view_probe)
 add_executable(rsf_ac7_view_test ac7_view.c "${ac7_view_probe_object}")
 set_target_properties(rsf_ac7_view_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View rsf_build_options)
@@ -335,9 +335,9 @@ add_custom_command(OUTPUT "${ac7_session_object}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
     COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
         --crate-name rsf_ac7_session --crate-type lib --emit obj -C codegen-units=1
-        -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3>
+        -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3> ${RSF_FIXTURE_EXTERNS}
         -o "${ac7_session_object}" "${CMAKE_CURRENT_SOURCE_DIR}/ac7_session.rs"
-    DEPENDS ac7_session.rs "${PROJECT_SOURCE_DIR}/games/ac7/src/scene_color_abi.rs"
+    DEPENDS ac7_session.rs rsf_rust_fixture_rlibs
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
 set_source_files_properties("${ac7_session_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
@@ -494,11 +494,10 @@ set(overlay_fixture_source "${CMAKE_CURRENT_SOURCE_DIR}/overlay_panel_fixture.rs
 add_custom_command(OUTPUT "${overlay_fixture_dll}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${overlay_fixture_dir}"
     COMMAND "${RSF_RUSTC}" --edition=2024 --crate-type=cdylib --target ${overlay_fixture_rust_target}
-        -Cpanic=abort -Dwarnings "${overlay_fixture_source}" -o "${overlay_fixture_dll}"
+        -Cpanic=abort -Dwarnings ${RSF_FIXTURE_EXTERNS} "${overlay_fixture_source}"
+        -o "${overlay_fixture_dll}"
     DEPENDS "${overlay_fixture_source}" "${PROJECT_SOURCE_DIR}/ui/overlay/src/abi.rs"
-        "${PROJECT_SOURCE_DIR}/ui/overlay/src/wire.rs"
-        "${PROJECT_SOURCE_DIR}/sdk/game/src/sharpening_defaults.rs"
-        "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
+        "${PROJECT_SOURCE_DIR}/rust-toolchain.toml" rsf_rust_fixture_rlibs
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
 add_custom_target(rsf_overlay_panel_fixture DEPENDS "${overlay_fixture_dll}")
@@ -712,8 +711,8 @@ add_custom_command(OUTPUT "${godot_graph_object}"
         "${godot_module}/graph.rs" "${godot_module}/host.rs" "${godot_module}/pass.rs"
         "${godot_module}/motion.rs" "${godot_module}/native.rs" "${godot_module}/packet.rs" "${godot_module}/packet_abi.rs"
         "${godot_module}/present.rs" "${godot_module}/primary.rs"
-        "${PROJECT_SOURCE_DIR}/sdk/game/src/frame_event_abi.rs" "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
-        "${PROJECT_SOURCE_DIR}/sdk/game/src/frame_abi.rs"
+        "${godot_module}/frame_event_abi.rs" "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
+        "${godot_module}/frame_abi.rs"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
 set_source_files_properties("${godot_graph_object}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
@@ -815,9 +814,9 @@ add_custom_command(OUTPUT "${ac7_view_fixture_object}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
     COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
         --crate-name rsf_ac7_view_fixture --crate-type lib --emit obj -C codegen-units=1
-        -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3>
+        -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3> ${RSF_FIXTURE_EXTERNS}
         -o "${ac7_view_fixture_object}" "${CMAKE_CURRENT_SOURCE_DIR}/ac7_view_fixture.rs"
-    DEPENDS ac7_view_fixture.rs ac7_graph_patch_abi.rs ac7_graph_replay.rs ac7_graph_replay_abi.rs
+    DEPENDS ac7_view_fixture.rs ac7_graph_replay.rs ac7_graph_replay_abi.rs rsf_rust_fixture_rlibs
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
 set_source_files_properties("${ac7_view_fixture_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
@@ -1099,8 +1098,9 @@ if(TARGET rsf_godot AND TARGET rsf_unity_package)
     add_custom_command(OUTPUT "${rsf_engine_sharpening_exe}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
         COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
-            -D warnings "${rsf_engine_sharpening_source}" -o "${rsf_engine_sharpening_exe}"
-        DEPENDS "${rsf_engine_sharpening_source}" engine_sharpening_abi.rs ../sdk/game/src/sharpening_abi.rs
+            -D warnings ${RSF_FIXTURE_EXTERNS} "${rsf_engine_sharpening_source}"
+            -o "${rsf_engine_sharpening_exe}"
+        DEPENDS "${rsf_engine_sharpening_source}" engine_sharpening_abi.rs rsf_rust_fixture_rlibs
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         VERBATIM)
     add_custom_target(rsf_engine_sharpening_test ALL DEPENDS "${rsf_engine_sharpening_exe}")

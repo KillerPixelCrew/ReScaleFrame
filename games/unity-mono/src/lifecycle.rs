@@ -3,7 +3,7 @@
 //! managed API table handed to the helper, and the order in which the native bridge and the Mono
 //! helper are prepared, activated, drained and released.
 use crate::mono;
-use crate::plugin_abi::rsf_unity_native_api;
+use crate::sys::rsf_unity_native_api;
 #[cfg(test)]
 use rsf_game_sys::RSF_GAME_ABI_VERSION;
 use rsf_game_sys::call_header::validate;

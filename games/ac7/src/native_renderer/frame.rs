@@ -6,7 +6,7 @@ use super::{
     Guard, Renderer, RendererIdentity, SCOPE_READ, close, copy, drain_retired, game_engine_object,
     game_module, hook, installed, key, native, open, original, read, scope,
 };
-use crate::platform_abi::rsf_ac7_render_scope;
+use crate::sys::rsf_ac7_render_scope;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END,
     RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_SAMPLE,

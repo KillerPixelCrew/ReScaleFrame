@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Real provider preparation, latency and retirement receipts for the shared FG fixture.
 use crate::fg_bridge::*;
-use crate::fixture_device_abi::rsf_fg_fixture_inputs;
-use crate::present_fixture_loops_abi::*;
 use crate::present_fixture_time::stamp;
+use crate::sys::rsf_fg_fixture_inputs;
+use crate::sys::*;
 use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;

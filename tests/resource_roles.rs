@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Resource facts from the 2048x1152 AC7 capture in docs/research/ac7-frame-capture.md.
 use super::{TestResult, check};
-use crate::resource_roles_abi::{
+use crate::sys::{
     RSF_ROLE_RULE_ANY_DEPTH_FORMAT as ANY_DEPTH, RSF_ROLE_RULE_FIXED_SIZE as FIXED,
     RSF_ROLE_RULE_RENDER_RANGE as RANGE, RSF_ROLE_RULE_RENDER_SIZED as RENDER,
     rsf_frame_shape as Shape, rsf_role_rule as Rule, rsf_role_table as Table,

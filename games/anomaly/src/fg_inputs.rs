@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-#[cfg(windows)]
-use crate::fg_stage_abi::{rsf_anomaly_fg_state_scope, rsf_d3d11_state};
 use crate::lease::Lease;
+#[cfg(windows)]
+use crate::sys::{rsf_anomaly_fg_state_scope, rsf_d3d11_state};
 use std::ffi::c_void;
 use std::ptr;
 

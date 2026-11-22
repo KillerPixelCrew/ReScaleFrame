@@ -2,13 +2,13 @@
 //! Guarded access to the engine profile and the SDK draw slots.
 use super::abi::{PositionViews, Raw};
 use crate::engine_guards::{Read, read_bytes};
-use crate::motion_target_abi::rsf_anomaly_motion_bind_layout as BindLayout;
 use crate::native_profile::PROFILES as NATIVE;
 use crate::sr_profile::{
     BACKEND_RT_CHANGED_OFFSET, BACKEND_RT_OFFSET, BACKEND_XFORMS_OFFSET, BACKEND_ZB_OFFSET,
     CRT_RTV_OFFSET, CRT_SURFACE_OFFSET, PROFILES as SR, RENDER_TARGET_OFFSET, TARGET_SLOTS,
     XFORMS_PROJECT_OFFSET, XFORMS_VIEW_OFFSET,
 };
+use crate::sys::rsf_anomaly_motion_bind_layout as BindLayout;
 use std::ptr::{null_mut, with_exposed_provenance_mut};
 use windows::Win32::Graphics::Direct3D11::{D3D11_VIEWPORT, ID3D11DeviceContext_Vtbl};
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::native_observer::*;
-use crate::native_observer_abi::rsf_anomaly_observer_platform as Platform;
+use crate::sys::rsf_anomaly_observer_platform as Platform;
 use rsf_game_sys::*;
 
 unsafe extern "C" {

@@ -2,8 +2,6 @@
 #[cfg(target_env = "msvc")]
 mod census_creation;
 #[cfg(target_env = "msvc")]
-mod census_facts_abi;
-#[cfg(target_env = "msvc")]
 mod census_modes;
 #[cfg(target_env = "msvc")]
 mod census_present;
@@ -14,12 +12,9 @@ mod census_warp;
 mod fixture;
 mod forwarding;
 mod module_dump;
-mod module_dump_abi;
 mod thin;
 #[cfg(target_env = "msvc")]
 mod vendor_census_asi;
-#[cfg(target_env = "msvc")]
-mod vendor_census_asi_abi;
 #[cfg(target_env = "msvc")]
 mod vendor_census_fixture;
 #[cfg(target_env = "msvc")]

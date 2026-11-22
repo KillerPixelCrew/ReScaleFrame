@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Checks, Ini, OK, Query};
-use crate::abi::*;
+use rsf_game_sys::*;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::{thread, time::Duration};
 

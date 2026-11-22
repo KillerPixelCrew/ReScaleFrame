@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! CPU-only XeSS Vulkan SR contract. The production Rust table and owner run
 //! with inert SDK and Vulkan entry points substituted through the table copy.
-use crate::vulkan_sr_abi::{
+use crate::sys::{
     RSF_SR_XESS, RSF_SRVK_ABI_VERSION, rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup,
     rsf_vk_function,
 };
-use crate::xess_requirements_abi::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
+use crate::sys::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
 use crate::xess_sdk_abi::{
     XESS_QUALITY_SETTING_QUALITY, xess_2d_t, xess_quality_settings_t, xess_version_t,
     xess_vk_execute_params_t, xess_vk_init_params_t,

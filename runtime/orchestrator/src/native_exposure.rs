@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{FullscreenBlit, GraphicsCache, texture_desc};
-use crate::d3d11_output_abi::*;
 use crate::native_regions::SourceView;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::ptr;
 

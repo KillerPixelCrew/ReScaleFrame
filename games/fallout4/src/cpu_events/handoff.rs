@@ -6,7 +6,7 @@
 //! these scalar transitions under one lock and never holds that lock while delivering events.
 
 /// The CPU source identity borrowed during the guarded Swap.
-pub(crate) use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
+pub(crate) use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
 
 impl CpuIdentity {
     pub const ZERO: Self = Self {

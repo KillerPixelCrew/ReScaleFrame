@@ -7,11 +7,11 @@ pub(super) mod geometry;
 #[cfg(windows)]
 mod shader;
 
-use crate::d3d11_observer_layout_abi::rsf_observer_layout_element as LayoutElement;
 use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_enabled, rsf_ac7_capture_fail,
 };
 use crate::shader_hash::crc32c;
+use crate::sys::rsf_observer_layout_element as LayoutElement;
 use crate::velocity_container::borrowed;
 use crate::velocity_pass_cache;
 use buffers::ConstantBuffers;

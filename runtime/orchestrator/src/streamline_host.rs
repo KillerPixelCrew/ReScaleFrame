@@ -4,14 +4,14 @@ use crate::input_receipts::{CONTROLLER_SAMPLE, streamline_input};
 // lifetime, interposer admission, feature routing, frame tokens, marker ordering and Reflex/PCL
 // pacing state. The native table holds every typed SDK, COM and Win32 call.
 use crate::diagnostic_output::Output;
-use crate::native_fg_cpu_abi::rsf_streamline_latency_status as LatencyStatus;
-use crate::render_abi::{
+use crate::sdk_module::{SdkModule, wide_path};
+use crate::sr_session::has_capacity;
+use crate::sys::rsf_streamline_latency_status as LatencyStatus;
+use crate::sys::{
     RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_REFLEX_BOOST, RSF_REFLEX_OFF,
     rsf_backend_log_fn as Log, rsf_fg_frame as Frame, rsf_fg_status as Status,
     rsf_fg_swapchain_desc as ChainDesc,
 };
-use crate::sdk_module::{SdkModule, wide_path};
-use crate::sr_session::has_capacity;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::{offset_of, zeroed};
 use std::ptr::{NonNull, null_mut};

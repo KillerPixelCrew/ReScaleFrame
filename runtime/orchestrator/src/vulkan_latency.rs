@@ -4,22 +4,24 @@ use crate::latency_lease::{
     rsf_native_latency_release_claim,
 };
 use crate::native_cpu::{rsf_native_cpu_dispatch, rsf_native_cpu_release_session};
-use crate::render_abi::{RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL};
 use crate::sr_session::has_capacity;
+use crate::sys::*;
+use crate::sys::{RSF_FGVK_LATENCY_ABI_VERSION, rsf_fgvk, rsf_fgvk_latency_status};
+use crate::sys::{RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL};
+use crate::sys::{rsf_vk_latency_platform as Platform, rsf_vk_streamline_calls as Streamline};
 use crate::vulkan_antilag::*;
-use crate::vulkan_fg_abi::{RSF_FGVK_LATENCY_ABI_VERSION, rsf_fgvk, rsf_fgvk_latency_status};
-use crate::vulkan_latency_abi::*;
 use crate::vulkan_latency_frames::{streamline::*, *};
-use crate::vulkan_latency_platform_abi::{
-    rsf_vk_latency_platform as Platform, rsf_vk_streamline_calls as Streamline,
-};
 use crate::vulkan_pcl::{
     self as pcl, rsf_core_latencyvk_pcl_bind as bind_pcl, rsf_core_latencyvk_pcl_reset,
     rsf_core_latencyvk_pcl_status,
 };
 use crate::vulkan_presentation::*;
+// The Rust definitions, not the header declarations crate::sys also provides.
+use crate::vulkan_presentation::{
+    rsf_core_fgvk_presentation_attach, rsf_core_fgvk_presentation_shutdown_begin,
+    rsf_core_fgvk_presentation_shutdown_end, rsf_core_fgvk_presentation_unbind,
+};
 use crate::vulkan_timing::{timing_begin, timing_end};
-use rsf_game_sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::Mutex;

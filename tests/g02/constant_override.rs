@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: MIT
 mod d3d11;
-#[path = "../../runtime/orchestrator/src/frame_tap_abi.rs"]
-mod frame_tap_abi;
-#[path = "../../runtime/orchestrator/src/resource_roles_abi.rs"]
-#[allow(dead_code)]
-mod resource_roles_abi;
+use rsf_orchestrator::sys;
 
 use d3d11::{Checks, Com, Handle, TextureDesc, create_device, create_texture, slot, stage};
-use frame_tap_abi::*;
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
 

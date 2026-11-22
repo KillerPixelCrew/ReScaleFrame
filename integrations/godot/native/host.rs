@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! D3D12 and Win32 operations behind the Godot session's platform table.
 
-use crate::host_abi::*;
 use crate::platform::*;
 use crate::rsf_godot_log;
+use crate::sys::*;
 use crate::vulkan::native::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_RESET, rsf_frame_record,
@@ -656,6 +656,14 @@ unsafe extern "C" fn leaf_sharpening_defaults(options: *mut Sharpening) {
 
 unsafe extern "C" fn leaf_fg_backend_known(backend: u32) -> u32 {
     u32::from(unsafe { rsf_fg_backend_known(backend) } != 0)
+}
+
+unsafe extern "C" {
+    // The Runtime's private choice (runtime/orchestrator/src/fg_auto_choice.h).
+    fn rsf_fg_select_auto_backend(preferred: u32, choices: u32) -> u32;
+    // native_cpu_service.h, returning the Rust view of rsf_cpu_session_service.
+    fn rsf_fg12_cpu_service() -> *const CpuService;
+    fn rsf_latencyvk_cpu_service() -> *const CpuService;
 }
 
 unsafe extern "C" fn leaf_fg_select_backend(vendor: u32, software: u32, choices: u32) -> u32 {

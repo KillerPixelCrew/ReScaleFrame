@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Bind the production OpenGL pipeline to its sibling runtime owners.
 use super::*;
-use crate::fg12_abi::rsf_native_latency_frame;
-use crate::native_fg_cpu_abi::rsf_streamline_latency_status;
 use crate::overlay_service::{
     rsf_overlay_configure_bound, rsf_overlay_notify_bound, rsf_overlay_present_bound,
 };
+use crate::sys::rsf_native_latency_frame;
+use crate::sys::rsf_streamline_latency_status;
 use crate::{d3d11_present as present, fg12, gl_shared_surface as gl, sr12};
 
 unsafe extern "C" {

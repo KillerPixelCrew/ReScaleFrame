@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::constant_buffer_read::USAGE_DYNAMIC;
-use crate::d3d11_output_abi::RSF_D3D11_USAGE_DEFAULT;
+use crate::sys::RSF_D3D11_USAGE_DEFAULT;
 use std::thread::{self, ThreadId};
 
 struct Tracked {
@@ -278,7 +278,7 @@ unsafe extern "C" fn rsf_frame_tap_track_pixel_constant(
     if index >= STAGE_CONSTANTS as u32
         || buffer.is_null()
         || callback.is_none()
-        || unsafe { crate::d3d11_output_abi::rsf_d3d11_output_is_immediate(context) } == 0
+        || unsafe { crate::sys::rsf_d3d11_output_is_immediate(context) } == 0
     {
         return INVALID;
     }
@@ -295,11 +295,7 @@ unsafe extern "C" fn rsf_frame_tap_track_pixel_constant(
     {
         return INVALID;
     }
-    let device = unsafe {
-        ComRef::from_owned(crate::d3d11_output_abi::rsf_d3d11_output_child_device(
-            context,
-        ))
-    };
+    let device = unsafe { ComRef::from_owned(crate::sys::rsf_d3d11_output_child_device(context)) };
     if !device
         .is_some_and(|device| unsafe { crate::d3d11_output::same_device(device.as_ptr(), buffer) })
     {

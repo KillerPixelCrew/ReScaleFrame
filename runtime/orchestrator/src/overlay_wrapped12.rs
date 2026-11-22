@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats};
-use crate::overlay_native12_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::{rsf_overlay_intent, rsf_overlay_stats};
+use crate::sys::{
     rsf_overlay11on12_device, rsf_overlay11on12_platform as RawPlatform, rsf_overlay11on12_target,
     rsf_overlay12_log,
 };
-use crate::sr_session::has_capacity;
 use std::ffi::{CStr, c_void};
 use std::sync::Mutex;
 #[cfg(not(test))]

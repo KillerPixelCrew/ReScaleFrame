@@ -11,9 +11,7 @@ use core::ptr;
 use rsf_game_sys::windows_path::absolute_wide_path;
 use std::alloc::{Layout, alloc};
 
-#[path = "bridge_abi.rs"]
-mod bridge_abi;
-use bridge_abi::{
+use crate::sys::{
     RSF_FSR4_BRIDGE_ABI_MISMATCH as ABI_MISMATCH,
     RSF_FSR4_BRIDGE_ABI_VERSION as BRIDGE_ABI_VERSION,
     RSF_FSR4_BRIDGE_INVALID_ARGUMENT as INVALID_ARGUMENT, rsf_fsr4_bridge_create as BridgeCreate,

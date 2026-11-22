@@ -5,27 +5,27 @@
 // window-end sequencing, and the requested/observed FG status. The platform module owns native
 // calls. native_fg_cpu.rs owns CPU pacing and latency markers.
 use crate::com_ref::ComRef;
-use crate::cpu_abi::{
-    RSF_NATIVE_CPU_PRESENT_RETURNED, RSF_NATIVE_CPU_RESERVATION_BOUND,
-    RSF_NATIVE_CPU_RESERVATION_CLOSED, rsf_native_cpu_frame as CpuFrame,
-    rsf_native_cpu_reservation as Reservation,
-};
 use crate::fg_scene::{read_scene, set_scene, with_capture_scene};
 use crate::fg_status;
 use crate::native_cpu::{
     rendered_source, rsf_native_cpu_present_result, rsf_native_cpu_read,
     rsf_native_cpu_reservation_read,
 };
-use crate::native_fg_abi::*;
 use crate::native_fg_cpu::{self as cpu_owner, Failure, Frame as CpuOwner};
-use crate::render_abi::{
+use crate::sys::*;
+use crate::sys::{
     RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_PACING_NONE,
     RSF_PACING_REFLEX, RSF_REFLEX_BOOST, RSF_REFLEX_OFF, rsf_backend_log_fn as Log,
     rsf_backend_resource, rsf_dlss_frame as DlssFrame, rsf_fg_frame, rsf_fg_options,
     rsf_fg_status as ProviderStatus, rsf_generation_provider as Provider,
     rsf_native_fg_options as Options, rsf_native_fg_status as NativeStatus,
 };
-use crate::scene_abi::{
+use crate::sys::{
+    RSF_NATIVE_CPU_PRESENT_RETURNED, RSF_NATIVE_CPU_RESERVATION_BOUND,
+    RSF_NATIVE_CPU_RESERVATION_CLOSED, rsf_native_cpu_frame as CpuFrame,
+    rsf_native_cpu_reservation as Reservation,
+};
+use crate::sys::{
     RSF_NATIVE_SCENE_PRESENT_DIRECT, RSF_NATIVE_SCENE_PRESENT_NONE,
     RSF_NATIVE_SCENE_PRESENT_SAMPLED, rsf_native_scene_identity as SceneIdentity,
     rsf_observer_present_event as PresentEvent,
@@ -1406,7 +1406,7 @@ impl Admission {
     }
 
     fn reason(&self) -> u32 {
-        use crate::fg_reasons::codes::*;
+        use crate::sys::*;
         if !self.matched {
             RSF_NATIVE_FG_REASON_NO_MATCH
         } else if !self.inputs {

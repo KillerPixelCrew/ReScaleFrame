@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::motion_resolve_params::dense_resolve_params;
-use crate::render_abi::*;
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };

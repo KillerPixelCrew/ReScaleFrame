@@ -338,7 +338,17 @@ unsafe extern "C" fn ready(_: u64) -> i32 {
 unsafe extern "C" fn dump(_: Raw, _: u64, _: *const c_char, _: *const c_char) -> i32 {
     0
 }
-unsafe extern "C" fn prepare(_: Raw, _: Raw, _: Raw, _: Raw, _: Raw, _: Raw, _: Raw, _: u32) {}
+unsafe extern "C" fn prepare(
+    _: Raw,
+    _: Raw,
+    _: Raw,
+    _: Raw,
+    _: Raw,
+    _: *mut rsf_streamline_host,
+    _: Raw,
+    _: u32,
+) {
+}
 unsafe extern "C" fn retire(_: Raw, _: Raw) {}
 unsafe extern "C" fn present(_: Raw, _: *const rsf_observer_present_event) {}
 unsafe extern "C" fn immediate(_: Raw) -> Raw {

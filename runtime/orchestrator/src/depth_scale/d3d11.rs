@@ -2,11 +2,11 @@
 use super::{Constants, Handle, Pipeline, Setup, Surfaces};
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{same_device, texture_desc};
-use crate::d3d11_output_abi::rsf_d3d11_output_is_immediate;
 use crate::graphics_d3d11::{
     constant_buffer, depth_state, pixel_shader, rasterizer, shader_with_log, source_view,
     vertex_shader,
 };
+use crate::sys::rsf_d3d11_output_is_immediate;
 use rsf_shader_compiler::Request;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_STRICTNESS;

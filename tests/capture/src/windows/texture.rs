@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Dump known motion and mask textures through the native ABI and inspect the files.
-use super::{abi::*, entry, utf8};
+use super::{entry, utf8};
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::{fs, path::Path, ptr};
 use windows::Win32::Foundation::HMODULE;

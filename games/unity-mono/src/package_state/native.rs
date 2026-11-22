@@ -3,13 +3,13 @@
 use super::services::backend_log;
 use super::{BACKEND_OK, PACKAGE, routing, services};
 use crate::bridge_native::package::graphics;
-use crate::bridge_present_abi::rsf_d3d11_present_host;
 use crate::generation::RSF_DLSS_ENGINE_UNITY;
-use crate::package_abi::{
+use crate::sys::rsf_d3d11_present_host;
+use crate::sys::rsf_d3d12_window_observer;
+use crate::sys::{
     RSF_DLSS_ABI_VERSION, RSF_SR12_PLAN_ABI_VERSION, rsf_dlss_setup, rsf_sr12,
     rsf_sr12_plan_result, rsf_sr12_setup, rsf_unity_package_view_setup,
 };
-use crate::preview_abi::rsf_d3d12_window_observer;
 use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering::SeqCst;
 use windows::Win32::Graphics::{

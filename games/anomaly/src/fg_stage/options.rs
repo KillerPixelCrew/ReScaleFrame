@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::Frontend;
-use crate::fg_stage_abi::{
+use crate::ini;
+use crate::sys::{
     RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3,
     RSF_FG_BACKEND_FSR4, RSF_FG_BACKEND_XESS, RSF_REFLEX_BOOST, RSF_REFLEX_ON,
 };
-use crate::ini;
 use std::ffi::{CString, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;

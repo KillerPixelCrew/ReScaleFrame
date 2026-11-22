@@ -160,10 +160,10 @@ unsafe extern "C" {
     fn rsf_skyrim_observe_upload(renderer: *mut c_void, flags: u8);
 }
 
-const _: () = assert!(HOOKS.len() == crate::cpu_call_abi::RSF_SKYRIM_OBSERVER_HOOK_COUNT as usize);
+const _: () = assert!(HOOKS.len() == crate::sys::RSF_SKYRIM_OBSERVER_HOOK_COUNT as usize);
 
 const DETOURS: [*const c_void; HOOKS.len()] = {
-    use crate::cpu_call_abi::{
+    use crate::sys::{
         RSF_SKYRIM_OBSERVER_END, RSF_SKYRIM_OBSERVER_JITTER, RSF_SKYRIM_OBSERVER_PROCESS,
         RSF_SKYRIM_OBSERVER_RESOLUTION, RSF_SKYRIM_OBSERVER_UPLOAD,
     };

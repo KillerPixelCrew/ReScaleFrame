@@ -3,7 +3,7 @@
 mod native;
 
 use crate::com_ref::ComRef;
-use crate::d3d11_output_abi::rsf_d3d11_state as State;
+use crate::sys::rsf_d3d11_state as State;
 use std::alloc::{Layout, alloc_zeroed};
 use std::cell::Cell;
 use std::ffi::c_void;

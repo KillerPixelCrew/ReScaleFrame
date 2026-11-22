@@ -24,19 +24,19 @@ use crate::geometry_registry::RetirementQueue;
 use crate::host_log::Log;
 use crate::lease::Lease;
 use crate::motion_device::*;
-use crate::motion_device_abi::{
-    RSF_MOTION_CREATED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_READY,
-    rsf_anomaly_motion_device_view as DeviceView,
-};
 use crate::motion_profile::MotionProfile;
 use crate::motion_target::{rsf_anomaly_motion_bind_close, rsf_anomaly_motion_bind_draw};
-use crate::motion_target_abi::{
+use crate::native_hooks::Site as HookSite;
+use crate::sr_stage::DX10_MSAA;
+use crate::sys::{
     RSF_ANOMALY_MOTION_BIND_ALREADY_BOUND as ALREADY_BOUND, RSF_ANOMALY_MOTION_BIND_BOUND as BOUND,
     RSF_ANOMALY_MOTION_BIND_CONFLICT as CONFLICT, RSF_ANOMALY_MOTION_BIND_FAULT as FAULT,
     RSF_ANOMALY_MOTION_BIND_UNBOUND as UNBOUND, rsf_anomaly_motion_bind_state as BindState,
 };
-use crate::native_hooks::Site as HookSite;
-use crate::sr_stage::DX10_MSAA;
+use crate::sys::{
+    RSF_MOTION_CREATED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_READY,
+    rsf_anomaly_motion_device_view as DeviceView,
+};
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::{CStr, CString};
 use std::os::windows::ffi::OsStrExt;

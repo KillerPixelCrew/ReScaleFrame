@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: MIT
-use crate::dx12_vulkan_interop_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::{
     RSF_DX12VK_INTEROP_ABI_MISMATCH, RSF_DX12VK_INTEROP_ABI_VERSION,
     RSF_DX12VK_INTEROP_INVALID_ARGUMENT, rsf_dx12vk_interop_callbacks as InteropCallbacks,
     rsf_dx12vk_shared_image as InteropImage,
 };
-use crate::sr_session::has_capacity;
-use crate::vulkan_dx12_fg::{self as shared, *};
-use crate::vulkan_fg_abi::{
+use crate::sys::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_LATENCY_ABI_VERSION, rsf_fgvk_frame as Frame,
     rsf_fgvk_latency_status as LatencyStatus, rsf_fgvk_setup as Setup, rsf_fgvk_status as Status,
 };
+use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
+use crate::vulkan_dx12_fg::{self as shared, *};
 use crate::vulkan_latency_frames::{Marker, legacy_present_source};
-use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
-#[path = "vulkan_xess_fg_abi.rs"]
-mod abi;
 #[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
 #[path = "../../vulkan/xess-fg/bridge_abi.rs"]
 mod bridge_abi;
-use abi::rsf_xessgvk_options as Options;
+use crate::sys::rsf_xessgvk_options as Options;
 use bridge_abi::{
     RSF_XESS_BRIDGE_ABI_MISMATCH as XESS_ABI_MISMATCH, RSF_XESS_BRIDGE_ABI_VERSION as BRIDGE_ABI,
     RSF_XESS_BRIDGE_INVALID_ARGUMENT as XESS_INVALID, rsf_xess_bridge_create as BridgeCreate,
@@ -717,7 +715,7 @@ mod tests {
         unsafe extern "C" fn resolver(
             _: Handle,
             _: *const std::ffi::c_char,
-        ) -> crate::vulkan_sr_abi::rsf_vk_function {
+        ) -> crate::sys::rsf_vk_function {
             None
         }
         unsafe extern "C" fn image(

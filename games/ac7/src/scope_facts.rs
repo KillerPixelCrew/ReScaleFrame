@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Exact-build view facts read from the matched AC7 renderer and view layouts.
-use crate::platform_abi::rsf_ac7_render_scope;
-use crate::scope_abi::rsf_ac7_scope_read;
+use crate::sys::rsf_ac7_render_scope;
+use crate::sys::rsf_ac7_scope_read;
 use std::ffi::c_void;
 
 const RENDERER_VIEWS: u64 = 0xb8;

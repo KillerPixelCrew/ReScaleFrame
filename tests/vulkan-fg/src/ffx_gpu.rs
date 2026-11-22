@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::ffx_abi::{rsf_ffx_fixture_state, rsf_vk_function, rsf_wsi_route_fixture_state};
+use crate::sys::{rsf_ffx_fixture_state, rsf_vk_function, rsf_wsi_route_fixture_state};
 use ash::vk::{self, Handle};
 use std::{
     cell::UnsafeCell,
@@ -30,7 +30,7 @@ pub(crate) unsafe extern "system" fn rsf_fixture_ffx_images(
     images: *mut vk::Image,
 ) -> vk::Result {
     assert_eq!(chain.as_raw(), unsafe {
-        crate::ffx_abi::rsf_fixture_ffx_chain()
+        crate::sys::rsf_fixture_ffx_chain()
     });
     const IMAGE_COUNT: u32 = 3;
     // The pinned SDK leaves oversized counts unchanged on a fill.
@@ -89,7 +89,7 @@ unsafe extern "system" fn wsi_present(
     queue: vk::Queue,
     _: *const vk::PresentInfoKHR<'_>,
 ) -> vk::Result {
-    use crate::ffx_abi::*;
+    use crate::sys::*;
     assert_eq!(
         queue.as_raw(),
         22,

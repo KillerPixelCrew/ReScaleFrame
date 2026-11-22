@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Drive actual FRAME, SUBMISSION, FG_INPUTS, SR, FINAL_SCENE and WINDOW leases.
 use super::*;
-use rsf_game_sys::d3d11_chain_abi::RSF_D3D11_HOST_ABI_VERSION;
-use rsf_game_sys::d3d11_host_abi::{
+use rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION;
+use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, rsf_d3d11_auxiliary_pass,
     rsf_d3d11_auxiliary_scope, rsf_d3d11_auxiliary_surface,
 };

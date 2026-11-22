@@ -22,7 +22,7 @@ fn visual_lookup_distinguishes_absent_unique_and_ambiguous() {
 
 #[test]
 fn classification_preserves_shadow_identity_and_deformation_precedence() {
-    use crate::geometry_registry_abi::{
+    use crate::sys::{
         RSF_ANOMALY_DRAW_IDENTIFIED as Identified,
         RSF_ANOMALY_DRAW_IGNORED_SHADOW as IgnoredShadow,
         RSF_ANOMALY_DRAW_IGNORED_STATIC_WORLD as IgnoredStaticWorld,

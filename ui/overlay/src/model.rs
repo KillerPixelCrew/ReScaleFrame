@@ -280,8 +280,7 @@ impl UiPreferences {
 }
 
 /// How many host options the panel draws.
-pub const MAX_HOST_OPTIONS: usize =
-    crate::host_option_limit::RSF_OVERLAY_SERVICE_OPTION_LIMIT as usize;
+pub const MAX_HOST_OPTIONS: usize = rsf_game_sys::RSF_OVERLAY_SERVICE_OPTION_LIMIT as usize;
 
 /// One host-defined option.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -390,21 +389,18 @@ pub struct Sharpening {
 impl Default for Sharpening {
     fn default() -> Self {
         Self {
-            mode: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MODE,
-            sharpness: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
-            mas: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MAS,
-            motion_sharpness: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS
-                as f32,
-            motion_threshold: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD
-                as f32,
-            motion_scale_limit: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT
-                as f32,
-            contrast_enabled: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
-            contrast: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
-            depth_scale: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
-            depth_bias: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
-            clamp_output: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
-            debug: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEBUG,
+            mode: rsf_game_sys::RSF_SHARPENING_DEFAULT_MODE,
+            sharpness: rsf_game_sys::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
+            mas: rsf_game_sys::RSF_SHARPENING_DEFAULT_MAS,
+            motion_sharpness: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS as f32,
+            motion_threshold: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD as f32,
+            motion_scale_limit: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT as f32,
+            contrast_enabled: rsf_game_sys::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
+            contrast: rsf_game_sys::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
+            depth_scale: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
+            depth_bias: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
+            clamp_output: rsf_game_sys::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
+            debug: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEBUG,
         }
     }
 }

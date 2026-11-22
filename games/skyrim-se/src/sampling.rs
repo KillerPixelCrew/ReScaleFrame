@@ -6,7 +6,7 @@ use crate::render_hook::RenderHook;
 use crate::render_inputs::renderer_thread;
 use crate::render_native::thread;
 use crate::resolution;
-use rsf_game_sys::d3d11_host_abi::rsf_d3d11_sampler_bias as Bias;
+use rsf_game_sys::rsf_d3d11_sampler_bias as Bias;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;

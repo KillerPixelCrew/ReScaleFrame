@@ -6,7 +6,7 @@ use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
 use crate::render_hook::RenderHook;
 use crate::render_native::{ComRef, rsf_skyrim_call_render_pass};
-use rsf_game_sys::d3d11_host_abi::rsf_d3d11_host_capture as Capture;
+use rsf_game_sys::rsf_d3d11_host_capture as Capture;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
     RSF_GAME_RENDER_WINDOW, rsf_game_host_services, rsf_game_render_pass,

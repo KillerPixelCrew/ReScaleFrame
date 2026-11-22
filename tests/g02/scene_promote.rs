@@ -2,18 +2,11 @@
 // Exercises plan construction and the D3D11 seed/finish path with stand-in
 // textures. The game's rendering and the resulting frame require separate evidence.
 mod d3d11;
-#[path = "../../runtime/orchestrator/src/frame_tap_abi.rs"]
-mod frame_tap_abi;
-#[path = "../../runtime/orchestrator/src/resource_roles_abi.rs"]
-#[allow(dead_code)]
-mod resource_roles_abi;
-#[path = "../../runtime/orchestrator/src/scene_promote_abi.rs"]
-#[allow(dead_code)]
-mod scene_promote_abi;
+use rsf_orchestrator::sys;
 
 use d3d11::{Checks, Com, Handle, TextureDesc, create_device, create_texture, stage};
-use frame_tap_abi::{rsf_frame_tap_plan as Plan, rsf_frame_tap_substitution as Item};
-use scene_promote_abi::{
+use crate::sys::{rsf_frame_tap_plan as Plan, rsf_frame_tap_substitution as Item};
+use crate::sys::{
     RSF_PROMOTE_ABI_VERSION, rsf_promote_frame_tail as Tail, rsf_promote_setup as Setup,
     rsf_promote_status as Status,
 };

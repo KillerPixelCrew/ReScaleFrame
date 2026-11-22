@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::graphics_d3d11::rsf_call_native_log;
-use crate::overlay_abi::rsf_overlay_texture_update as Update;
 use crate::overlay_geometry::{
     TEXTURE_EDGE, borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
 };
-use crate::overlay_host_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::rsf_backend_log_fn as LogFn;
+use crate::sys::rsf_overlay_texture_update as Update;
+use crate::sys::{
     rsf_overlay_draw_call as DrawCall, rsf_overlay_draw_data as DrawData,
     rsf_overlay_vertex as Vertex,
 };
-use crate::render_abi::rsf_backend_log_fn as LogFn;
-use crate::sr_session::has_capacity;
 use std::ffi::{CString, c_void};
 use std::mem;
 use std::ptr::null_mut;

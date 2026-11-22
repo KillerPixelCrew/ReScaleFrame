@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: MIT
-#[path = "sdk_fg_options_abi.rs"]
-mod abi;
 
-pub(crate) use abi::rsf_slvk_sdk_fg_options as Packed;
+pub(crate) use crate::sys::rsf_slvk_sdk_fg_options as Packed;
 #[cfg(windows)]
 #[allow(unused_imports)] // The Vulkan Runtime consumes its own present timing sample.
-pub(crate) use abi::rsf_slvk_sdk_fg_sample as Sample;
+pub(crate) use crate::sys::rsf_slvk_sdk_fg_sample as Sample;
 #[cfg(windows)]
-pub(crate) use abi::rsf_slvk_sdk_fg_state as State;
-use abi::rsf_slvk_sdk_header;
+pub(crate) use crate::sys::rsf_slvk_sdk_fg_state as State;
+use crate::sys::rsf_slvk_sdk_header;
 
 /// An empty `sl::DLSSGState` v4 for slDLSSGGetState to fill.
 #[cfg(windows)]

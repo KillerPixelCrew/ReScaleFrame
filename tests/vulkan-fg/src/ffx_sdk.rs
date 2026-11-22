@@ -5,11 +5,11 @@
 // submit and the generation callback, comes from the production leaf. The
 // WSI registration keeps the last registered hooks, as the corrected SDK's
 // copied table entry does, so a late hook can still be driven after teardown.
-use crate::ffx_abi::*;
 use crate::ffx_gpu::{
     rsf_fixture_ffx_acquire, rsf_fixture_ffx_images, rsf_fixture_ffx_present_count, state,
 };
 use crate::ffx_sdk_abi as sdk;
+use crate::sys::*;
 use ash::vk::{self, Handle};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};

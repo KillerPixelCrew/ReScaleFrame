@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::abi::rsf_fg_retirement;
-use crate::session_abi::*;
+use crate::sys::rsf_fg_retirement;
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_SOURCE_RENDERED, RSF_GAME_FRAME_ABI_VERSION, RSF_SCREEN_FLIGHT, rsf_frame_record,
 };

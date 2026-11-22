@@ -2,6 +2,15 @@
 
 The **62 agent assignments** below cover the 804 port inventory entries from `de8b7510` and all 508 open Rust review findings from `1605ae07` on `rust/orchestrator-anomaly`. Each item belongs to one chunk. Paths are relative to the repository root.
 
+## C bindings
+
+Bindings are generated at build time by the crate that owns each header (`build.rs` through
+`tools/bindgen`): `rsf-game-sys` for the public `rescaleframe/*.h` headers, and each Runtime,
+loader, game, integration and test crate for its own private headers, re-exporting the owners it
+builds on as `crate::sys`. File paths below that name `*_abi.rs` modules describe the code before
+that move. Only vendor-SDK bindings and those compiled by bare rustc stay committed; their
+generators say why and take `--check`.
+
 ## Picking up a chunk
 
 1. Choose a chunk from the [assignment index](#assignment-index) and use its ID when dispatching the work. Its file checkboxes, fixtures and Rust findings form the brief for one agent. Within a chunk, address the high-severity findings first.

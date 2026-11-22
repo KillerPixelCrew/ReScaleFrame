@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::vendor_census_asi_abi::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
+use crate::sys::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
 use std::ptr;
 use std::sync::atomic::{AtomicI32, Ordering};
 use windows_sys::Win32::Foundation::MAX_PATH;

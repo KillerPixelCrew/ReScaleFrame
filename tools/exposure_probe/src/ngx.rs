@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Standalone NGX tracing. The optional SDK leaf owns typed parameter access.
-use crate::{Handle, sdk_abi::*, strtof};
+use crate::{Handle, strtof, sys::*};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::{
     ffi::c_void,

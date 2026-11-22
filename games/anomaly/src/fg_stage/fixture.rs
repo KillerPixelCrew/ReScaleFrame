@@ -7,9 +7,7 @@ use std::slice;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::core::w;
 
-#[path = "fixture_cpu_abi.rs"]
-mod cpu_abi;
-use cpu_abi::*;
+use crate::sys::*;
 #[path = "fixture_device.rs"]
 mod device;
 

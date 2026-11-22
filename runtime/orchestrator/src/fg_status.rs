@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::{
+use crate::sys::{
     RSF_FG_OFF, RSF_FG_STAT_ACTIVITY, RSF_FG_STAT_GENERATED_PRESENTED,
     RSF_FG_STAT_PRESENT_CALLBACKS, RSF_FG_STAT_TOTAL_PRESENTED, RSF_NATIVE_FG_REASON_NONE,
     rsf_fg_status as ProviderStatus, rsf_native_fg_status as NativeStatus,
@@ -105,8 +105,8 @@ pub(crate) fn coherent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native_fg_abi::{RSF_NFG_RESULT_FEATURE_FAILED, RSF_NFG_STAT_LATENCY_AVAILABLE};
-    use crate::render_abi::RSF_FG_FIXED;
+    use crate::sys::RSF_FG_FIXED;
+    use crate::sys::{RSF_NFG_RESULT_FEATURE_FAILED, RSF_NFG_STAT_LATENCY_AVAILABLE};
 
     // Ported from tests/fg_status_snapshot.cpp with the C bridges it called.
     #[test]

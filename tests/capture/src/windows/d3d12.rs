@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::{abi::*, bundles, contents, entry, root, utf8};
+use super::{bundles, contents, entry, root, utf8};
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };

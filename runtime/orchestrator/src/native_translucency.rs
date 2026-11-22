@@ -2,18 +2,18 @@
 // Shared D3D11 translucency hints and cloud-depth handover.
 use crate::com_ref::{ComRef, vtable};
 use crate::d3d11_output::{SavedBindings, texture_desc};
-use crate::d3d11_output_abi::{
-    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_USAGE_DEFAULT,
-    rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv,
-    rsf_d3d11_output_create_texture, rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
-    rsf_d3d11_output_unbind_targets, rsf_d3d11_texture_desc,
-};
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::native_regions::{
     MaskTarget, Region, SourceView, compile_compute, create_constants, crop, device_identity,
     update_constants,
 };
-use crate::native_translucency_abi::rsf_native_translucency_masks as Masks;
+use crate::sys::rsf_native_translucency_masks as Masks;
+use crate::sys::{
+    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_USAGE_DEFAULT,
+    rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv,
+    rsf_d3d11_output_create_texture, rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
+    rsf_d3d11_output_unbind_targets, rsf_d3d11_texture_desc,
+};
 use rsf_game_sys::{
     RSF_GAME_RENDER_CLOUD_DEPTH, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
     RSF_GAME_RENDER_TRANSLUCENCY, RSF_GAME_RENDER_TRANSLUCENCY_LAYER, rsf_game_render_pass as Pass,

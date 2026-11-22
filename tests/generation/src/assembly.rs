@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::abi::*;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::ptr::{null_mut, without_provenance_mut};
 

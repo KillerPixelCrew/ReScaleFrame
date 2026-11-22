@@ -6,11 +6,9 @@ mod provenance;
 
 use crate::com_ref::ComRef;
 use crate::constant_buffer_read::{MAP_WRITE_DISCARD, Map, MappedResource, Unmap, slot};
-use crate::frame_tap_abi::*;
 use crate::resource_roles::{matching_rule, rule_confidence};
-use crate::resource_roles_abi::{
-    rsf_frame_shape, rsf_role_rule, rsf_role_table, rsf_texture_facts,
-};
+use crate::sys::*;
+use crate::sys::{rsf_frame_shape, rsf_role_rule, rsf_role_table, rsf_texture_facts};
 use std::cell::{Cell, UnsafeCell};
 use std::collections::BTreeMap;
 use std::ffi::{CString, c_char, c_void};
@@ -253,11 +251,6 @@ const ZERO_FACTS: rsf_texture_facts = unsafe { zeroed() };
 const ZERO_GEOMETRY: rsf_frame_tap_geometry = unsafe { zeroed() };
 const ZERO_INPUT: rsf_frame_tap_input = unsafe { zeroed() };
 const ZERO_PLAN: rsf_frame_tap_plan = unsafe { zeroed() };
-impl Default for rsf_frame_tap_plan {
-    fn default() -> Self {
-        ZERO_PLAN
-    }
-}
 
 const ZERO_RULE: rsf_role_rule = unsafe { zeroed() };
 const ZERO_OPTIONS: rsf_frame_tap_options = unsafe { zeroed() };

@@ -7,9 +7,6 @@ mod sdk;
 
 use crate::com_ref::ComRef;
 use crate::diagnostic_output::Output;
-use crate::dlss_streamline_abi::{rsf_dlss_plan as Plan, rsf_dlss_support as Support};
-use crate::gl_pipeline_abi::{rsf_dlss_log_fn as Log, rsf_dlss_setup as Setup};
-use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
 use crate::streamline_sr::sdk::{
@@ -17,6 +14,9 @@ use crate::streamline_sr::sdk::{
     RENDER_API_D3D11,
 };
 use crate::streamline_sr::{OptionPayload, Options, TagBatch, dlss_mode};
+use crate::sys::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
+use crate::sys::{rsf_dlss_log_fn as Log, rsf_dlss_setup as Setup};
+use crate::sys::{rsf_dlss_plan as Plan, rsf_dlss_support as Support};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{NonNull, addr_of, null, null_mut};
 use std::sync::Mutex;

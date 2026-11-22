@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::Raw;
-use super::abi::rsf_anomaly_motion_fixture_override as Override;
 use crate::ffi::borrow_span;
+use crate::sys::rsf_anomaly_motion_fixture_override as Override;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
 use windows::Win32::Graphics::Direct3D::Fxc::D3DReflect;

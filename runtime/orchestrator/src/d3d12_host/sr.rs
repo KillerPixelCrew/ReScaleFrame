@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::render_abi::rsf_backend_log_fn;
+use crate::sys::rsf_backend_log_fn;
 use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};
 use std::ffi::CString;
 use std::mem::ManuallyDrop;

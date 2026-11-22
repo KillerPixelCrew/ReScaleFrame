@@ -8,15 +8,15 @@
 mod native;
 
 use crate::AMD64;
-use crate::bootstrap_abi::rsf_anomaly_bootstrap_platform as Leaves;
 use crate::executable::{running_build, with_verified_build};
 use crate::native_profile::PROFILES;
+use crate::sys::rsf_anomaly_bootstrap_platform as Leaves;
 #[cfg(test)]
 use rsf_game_sys::RSF_GAME_ABI_VERSION;
 #[cfg(test)]
-use rsf_game_sys::plugin_session_abi::RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION;
-use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options as SessionOptions;
+use rsf_game_sys::RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION;
 use rsf_game_sys::rsf_game_log_fn;
+use rsf_game_sys::rsf_plugin_session_options as SessionOptions;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
 use rsf_game_sys::win32::module_path;
 use std::ffi::{CStr, OsString, c_char, c_void};

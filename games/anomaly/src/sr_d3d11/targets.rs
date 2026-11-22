@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{DEPTH_SRV, DSV, Extent, Platform, Ptr, RTV, SRV, Texture, UAV, View, pointer};
 use crate::lease::Lease;
-use crate::sr_swap_abi::{
+use crate::sys::{
     RSF_ANOMALY_SWAP_MAKE_DEPTH, RSF_ANOMALY_SWAP_MAKE_FAILED, RSF_ANOMALY_SWAP_MAKE_REFUSED,
     RSF_ANOMALY_SWAP_SLOT_COUNT, rsf_anomaly_swap_fields as Fields,
     rsf_anomaly_swap_request as Request, rsf_anomaly_swap_twins as Twins,

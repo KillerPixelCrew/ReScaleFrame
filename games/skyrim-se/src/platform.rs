@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Checked process platform and native exception boundary for the Skyrim adapter.
-pub(crate) use rsf_game_sys::d3d11_host_abi::{
+use rsf_game_sys::rsf_game_host_services;
+pub(crate) use rsf_game_sys::{
     rsf_d3d11_creation_scope as CreationScope, rsf_d3d11_native_chain as NativeChain,
 };
-use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
@@ -124,7 +124,7 @@ mod native {
     pub(crate) static NATIVE_PLATFORM: Platform = Platform {
         _struct_size: size_of::<Platform>() as u32,
         _version: PLATFORM_VERSION,
-        d3d11_host_abi: rsf_game_sys::d3d11_chain_abi::RSF_D3D11_HOST_ABI_VERSION,
+        d3d11_host_abi: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
         _reserved: 0,
         read: rsf_skyrim_guarded_read,
         create_detour: rsf_skyrim_create_detour as *const c_void,

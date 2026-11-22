@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::diagnostic_output::Output;
-use crate::render_abi::rsf_backend_log_fn as Log;
+use crate::sys::rsf_backend_log_fn as Log;
 use crate::win32_diagnostics::module_location;
 use std::arch::naked_asm;
 use std::ffi::{CStr, CString, c_void};

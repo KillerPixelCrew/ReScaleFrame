@@ -2,11 +2,11 @@
 use super::{Constants, Handle, RESOURCE_FAILED, SHADER_FAILED, Setup};
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{SavedBindings, same_device};
-use crate::d3d11_output_abi::rsf_d3d11_state;
 use crate::graphics_d3d11::{
     constant_buffer, depth_state, pixel_shader, rasterizer, rsf_call_native_log,
     rsf_d3d11_state_restore, shader_with_log, source_view, vertex_shader,
 };
+use crate::sys::rsf_d3d11_state;
 use rsf_shader_compiler::Request;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;

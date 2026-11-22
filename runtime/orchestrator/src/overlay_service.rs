@@ -25,9 +25,9 @@ use crate::sharpening_policy;
 use crate::streamline_sr::preset_valid;
 #[cfg(not(test))]
 use crate::{
-    d3d11_observer_abi::{RSF_OBSERVER_ABI_VERSION, rsf_observer_options},
     overlay_input::rsf_overlay_input_poll_toggle,
-    scene_abi::rsf_observer_present_event,
+    sys::rsf_observer_present_event,
+    sys::{RSF_OBSERVER_ABI_VERSION, rsf_observer_options},
 };
 #[cfg(not(test))]
 use windows::Win32::Graphics::Dxgi::DXGI_PRESENT_TEST;
@@ -39,33 +39,31 @@ use windows_sys::Win32::{
 
 unsafe extern "C" {
     // The native presentation bridge supplies its SDK-backed provider table.
-    fn rsf_d3d11_present_provider() -> *const crate::render_abi::rsf_generation_provider;
+    fn rsf_d3d11_present_provider() -> *const crate::sys::rsf_generation_provider;
     #[cfg(not(test))]
     fn rsf_observer_install_guarded(options: *const rsf_observer_options) -> i32;
 }
 
 use crate::{
     fg_status,
-    overlay_abi::*,
     overlay_settings::{
         apply_settings_intent, fill_latency_stats, fill_sharpening_stats, settings_changed, sr_name,
     },
     present_rates::Rates,
-    render_abi::{
+    settings_store::{
+        rsf_settings_store_read, rsf_settings_store_read_layout, rsf_settings_store_write,
+        rsf_settings_store_write_layout, set_sharpening, sharpening_of,
+    },
+    sys::*,
+    sys::{
         RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
         RSF_FG_STAT_TOTAL_PRESENTED, RSF_NATIVE_FG_REASON_NONE, RSF_REFLEX_BOOST, RSF_REFLEX_OFF,
         RSF_RENDER_FRONTEND_ABI_VERSION, RSF_SR_FSR2, RSF_SR_XESS, rsf_fg_status as ProviderStatus,
         rsf_native_fg_options, rsf_native_fg_status as FgStatus, rsf_render_settings as Settings,
         rsf_sharpening_options as Sharpening,
     },
-    settings_store::{
-        rsf_settings_store_read, rsf_settings_store_read_layout, rsf_settings_store_write,
-        rsf_settings_store_write_layout, set_sharpening, sharpening_of,
-    },
 };
-use rsf_game_sys::{
-    RSF_FRAME_SOURCE_RENDERED, d3d11_sr_admission_abi::RSF_SR_AUTO, rsf_game_log_fn,
-};
+use rsf_game_sys::{RSF_FRAME_SOURCE_RENDERED, RSF_SR_AUTO, rsf_game_log_fn};
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     ops::RangeInclusive,

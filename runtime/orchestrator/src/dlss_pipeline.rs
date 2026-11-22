@@ -13,32 +13,32 @@
 // is never held across a leaf call or a log line. The sink has its own lock, so vendor lines
 // forwarded from inside a leaf never wait on either.
 use crate::com_ref::ComRef;
-use crate::d3d11_output_abi::{
-    RSF_D3D11_BIND_RENDER_TARGET, RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_RG16_FLOAT,
-    RSF_D3D11_FORMAT_RG32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT, RSF_D3D11_USAGE_DEFAULT,
-    rsf_d3d11_texture_desc as TextureDesc,
-};
 use crate::dlss_pipeline_abi::*;
 use crate::frame_assembly::rsf_assemble_dlss_frame;
 use crate::frame_capture_vk::general;
-use crate::gl_pipeline_abi::rsf_dlss_setup;
 use crate::motion_resolve_params::{dense_resolve_params, has_motion_sentinel};
-use crate::native_sr_abi::{
-    RSF_DLSS_PIPELINE_ABI_VERSION as ABI, rsf_dlss_pipeline_frame as Frame,
-    rsf_motion_decode_params as DecodeParams,
-};
 use crate::native_sr_state::publish_surface;
-use crate::render_abi::RSF_DLSS_ABI_VERSION;
-use crate::render_abi::{
-    RSF_FRAME_ASSEMBLY_ABI_VERSION, RSF_SHARPENING_ABI_VERSION, rsf_dlss_frame as DlssFrame,
-    rsf_frame_resources, rsf_pipeline_camera_frame as Camera, rsf_sharpening_options as Sharpening,
-};
 use crate::sharpening_policy;
 use crate::sr_legacy::{
     Adapter, rsf_sr_legacy_destroy, rsf_sr_legacy_evaluate, rsf_sr_legacy_fg_inputs,
     rsf_sr_legacy_select, rsf_sr_legacy_warm_up,
 };
 use crate::sr_session::has_capacity;
+use crate::sys::RSF_DLSS_ABI_VERSION;
+use crate::sys::rsf_dlss_setup;
+use crate::sys::{
+    RSF_D3D11_BIND_RENDER_TARGET, RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_RG16_FLOAT,
+    RSF_D3D11_FORMAT_RG32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT, RSF_D3D11_USAGE_DEFAULT,
+    rsf_d3d11_texture_desc as TextureDesc,
+};
+use crate::sys::{
+    RSF_DLSS_PIPELINE_ABI_VERSION as ABI, rsf_dlss_pipeline_frame as Frame,
+    rsf_motion_decode_params as DecodeParams,
+};
+use crate::sys::{
+    RSF_FRAME_ASSEMBLY_ABI_VERSION, RSF_SHARPENING_ABI_VERSION, rsf_dlss_frame as DlssFrame,
+    rsf_frame_resources, rsf_pipeline_camera_frame as Camera, rsf_sharpening_options as Sharpening,
+};
 use std::ffi::{CStr, CString, c_char};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -456,7 +456,7 @@ static PROCESS: Pipeline = Pipeline::new();
 // Applies saved settings to the process pipeline; used by the overlay in every build.
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_dlss_pipeline_apply_sharpening(
-    settings: &crate::render_abi::rsf_render_settings,
+    settings: &crate::sys::rsf_render_settings,
 ) {
     let options = crate::settings_store::sharpening_of(settings, &sharpening_policy::defaults());
     let _ = unsafe { PROCESS.set_sharpening(&raw const options) };

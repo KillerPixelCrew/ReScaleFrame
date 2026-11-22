@@ -10,9 +10,9 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_initialize, rsf_core_capture_vk_pending, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_wants,
 };
+use crate::sys::rsf_fgvk_setup as Setup;
+use crate::sys::rsf_srvk_image as Image;
 use crate::vulkan_capture_commands::Commands;
-use crate::vulkan_fg_abi::rsf_fgvk_setup as Setup;
-use crate::vulkan_sr_abi::rsf_srvk_image as Image;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
 use std::ffi::{CStr, OsString, c_char, c_void};

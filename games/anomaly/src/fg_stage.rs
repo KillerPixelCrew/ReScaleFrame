@@ -16,13 +16,12 @@ use self::options::{Options, backend_name};
 use crate::fg_inputs::Frame as InputFrame;
 use crate::fg_inputs::{Owner as InputPass, Result as InputResult, StateScope};
 use crate::fg_policy::{Counters, Decision, Policy, RSF_ANOMALY_RESET_NONE, RSF_ANOMALY_SKIP_NONE};
-use crate::fg_stage_abi::*;
 use crate::host_log::Log;
-use crate::motion_frame_target_abi::rsf_anomaly_motion_frame_target;
-use crate::sr_stage_abi::{
+use crate::sys::rsf_anomaly_motion_frame_target;
+use crate::sys::*;
+use crate::sys::{
     RSF_ANOMALY_SR_ENGINE_VERSION, RSF_ANOMALY_SR_PROJECT_ID, RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS,
 };
-use rsf_game_sys::*;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -89,7 +88,7 @@ struct FgBindings {
         context11: *mut c_void,
         list12: *mut c_void,
         backbuffer12: *mut c_void,
-        host: *mut c_void,
+        host: *mut rsf_streamline_host,
         provider: *mut c_void,
         sync: u32,
     ),

@@ -6,22 +6,20 @@
 use super::*;
 use crate::frame_capture_vk::sr_capture_inputs;
 use crate::sdk_module::{Loader, SdkModule};
+use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_fg_copy::{
     Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED, record_shader_read_copy,
 };
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
-use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use std::ffi::CString;
 use std::sync::{Arc, PoisonError};
 
 mod graphics;
 mod native;
 
-#[path = "xess_requirements_abi.rs"]
-mod requirements_abi;
 #[path = "xess_sdk_abi.rs"]
 mod sdk_abi;
-use requirements_abi::{
+use crate::sys::{
     RSF_XESSVK_REQUIREMENTS_ABI_VERSION as REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup as XessSetup,
 };
 use sdk_abi::{

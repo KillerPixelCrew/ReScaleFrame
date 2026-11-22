@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{TestResult, check};
-use crate::overlay_abi::{rsf_overlay_intent as Intent, rsf_overlay_stats as Stats};
 use crate::overlay_settings::{
     rsf_overlay_fill_sharpening_stats, rsf_overlay_requested_sharpening,
-};
-use crate::render_abi::{
-    RSF_RENDER_FRONTEND_ABI_VERSION, rsf_render_settings as Settings,
-    rsf_sharpening_options as Options,
 };
 use crate::settings_store::{
     read_sharpening, rsf_settings_store_read, rsf_settings_store_read_layout,
@@ -14,6 +9,11 @@ use crate::settings_store::{
     wide,
 };
 use crate::sharpening_policy::{defaults, sanitize, valid, vendor_sharpness};
+use crate::sys::{
+    RSF_RENDER_FRONTEND_ABI_VERSION, rsf_render_settings as Settings,
+    rsf_sharpening_options as Options,
+};
+use crate::sys::{rsf_overlay_intent as Intent, rsf_overlay_stats as Stats};
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;

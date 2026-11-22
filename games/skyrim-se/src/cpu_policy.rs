@@ -4,11 +4,11 @@
 
 mod fixture;
 
-use crate::cpu_call_abi::rsf_skyrim_menu_observation;
 use crate::cpu_native::{JOB_MANAGER, MAIN, PLAYER, REQUESTED_MODE, RUNNING_MODE};
 use crate::cpu_sources::{self, Consumer, Stamp};
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
+use crate::sys::rsf_skyrim_menu_observation;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE, RSF_GAME_CPU_FRAME_END,
     RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_UNFRAMED,

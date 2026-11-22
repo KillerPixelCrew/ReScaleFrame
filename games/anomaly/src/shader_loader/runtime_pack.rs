@@ -8,7 +8,7 @@ use super::{
 };
 use crate::motion_device::ConstantOps;
 use crate::runtime_module::{export, rsf_anomaly_runtime_module};
-use rsf_game_sys::shader_patch_abi::{
+use rsf_game_sys::{
     RSF_PATCH_ARGUMENT, RSF_PATCH_OK, RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION,
     rsf_get_shader_patch_api_fn, rsf_patch_bytes, rsf_patch_counters, rsf_patch_define,
     rsf_patch_output, rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_shader_patch_api,

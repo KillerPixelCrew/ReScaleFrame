@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::graphics_pass_abi::{RSF_MOTION_DECODE_ABI_VERSION, rsf_motion_decode_setup};
 use crate::motion_decode::{rsf_motion_decode_create, rsf_motion_decode_destroy};
 use crate::motion_resolve::{rsf_motion_resolve_create, rsf_motion_resolve_destroy};
 use crate::native_regions::{
     rsf_native_regions_depth_valid, rsf_native_regions_prepare, rsf_native_regions_temporal_mask,
 };
 use crate::native_reinsert::rsf_native_reinsert;
+use crate::sys::{RSF_MOTION_DECODE_ABI_VERSION, rsf_motion_decode_setup};
 use rsf_game_sys::depth_domains_requested;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32_FLOAT;
 

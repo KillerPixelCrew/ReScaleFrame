@@ -3,10 +3,8 @@ use super::render_host_methods::{Adapter, ResourceDesc};
 use crate::com_ref::ComRef;
 use crate::d3d12_host::{borrow, device_of, rsf_core_d3d12_wait_native_fence};
 use crate::dlss_native12::{Registration, exports::rsf_dlss_native12_registration_borrow};
-use crate::gl_pipeline_abi::rsf_dlss_setup;
-use crate::render_host_foreign_abi::{
-    rsf_render_host_call_native_interface, rsf_render_host_native_interface_fn,
-};
+use crate::sys::rsf_dlss_setup;
+use crate::sys::{rsf_render_host_call_native_interface, rsf_render_host_native_interface_fn};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use windows::Win32::Graphics::{

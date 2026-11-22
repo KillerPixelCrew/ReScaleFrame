@@ -3,12 +3,12 @@
 #[cfg(not(test))]
 use crate::auxiliary_sr::AuxiliarySr;
 use crate::auxiliary_sr::SurfaceKey;
-use crate::auxiliary_sr_abi::rsf_aux_platform;
 use crate::com_ref::ComRef;
 use crate::d3d11_host_abi::{
     Pass, RSF_D3D11_REDUCED_CANCELLED, RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED, Surface,
     rsf_d3d11_reduced_frame,
 };
+use crate::sys::rsf_aux_platform;
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::c_void;
 #[cfg(not(test))]

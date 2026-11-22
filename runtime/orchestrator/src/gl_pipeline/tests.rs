@@ -3,7 +3,7 @@
 // No GL context, D3D12 device, DXGI window or vendor SDK is involved, so these establish ownership,
 // ordering, admission and fallback policy only.
 use super::*;
-use crate::render_abi::RSF_FG_FIXED;
+use crate::sys::RSF_FG_FIXED;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 

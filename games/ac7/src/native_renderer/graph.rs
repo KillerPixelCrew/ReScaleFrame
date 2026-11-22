@@ -8,10 +8,10 @@ use super::{
     method, move_uniform, native_texture, open_leased, original, pass_lease, pool_ref,
     pool_texture, primary_view, read, release_pass, release_uniform, scope, site_target,
 };
-use crate::platform_abi::rsf_ac7_render_scope;
-use crate::scope_abi::rsf_ac7_scope_lease;
-use crate::sites_abi::{RSF_AC7_ROLE_SR, RSF_AC7_ROLE_TONEMAP};
-use crate::view_abi::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
+use crate::sys::rsf_ac7_render_scope;
+use crate::sys::rsf_ac7_scope_lease;
+use crate::sys::{RSF_AC7_ROLE_SR, RSF_AC7_ROLE_TONEMAP};
+use crate::sys::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
 use rsf_game_sys::ffi_util::{ascii_wide, try_box};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::rsf_sharpening_options;
-use crate::vulkan_sr_abi::{RSF_SR_XESS, RSF_SRVK_ABI_VERSION, rsf_srvk_frame, rsf_srvk_setup};
-use crate::xess_requirements_abi::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
+use crate::sys::rsf_sharpening_options;
+use crate::sys::{RSF_SR_XESS, RSF_SRVK_ABI_VERSION, rsf_srvk_frame, rsf_srvk_setup};
+use crate::sys::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };

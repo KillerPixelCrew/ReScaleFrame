@@ -6,8 +6,8 @@ use super::{
     Guard, Renderer, WindowSource, at, close, game_engine_object, hook, installed, key, method,
     native_texture, open_leased, original, read, scope,
 };
-use crate::platform_abi::rsf_ac7_render_scope;
-use crate::scope_abi::rsf_ac7_scope_lease;
+use crate::sys::rsf_ac7_render_scope;
+use crate::sys::rsf_ac7_scope_lease;
 use rsf_game_sys::{
     RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_TEXTURE_BINDING,
     RSF_GAME_RENDER_WINDOW,

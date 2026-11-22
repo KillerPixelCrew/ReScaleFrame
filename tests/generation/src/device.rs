@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::session::{NOT_SUPPORTED, Raw};
-use crate::session_abi::*;
+use crate::sys::*;
 use std::ffi::{c_char, c_int, c_ulong};
 use std::ptr::null_mut;
 use windows::Win32::{

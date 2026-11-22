@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{SavedBindings, same_device, texture_desc};
-use crate::d3d11_output_abi::{
-    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_RGBA16_FLOAT, RSF_D3D11_FORMAT_RGBA32_FLOAT,
-    RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_child_device, rsf_d3d11_output_create_srv,
-    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_texture_desc as Texture,
-};
 use crate::graphics_d3d11::{
     compute_shader, constant_buffer, dispatch_compute, rsf_d3d11_state_restore,
     rsf_d3d11_state_save, shader_code, target_view,
 };
-use crate::render_abi::rsf_sharpening_options as Options;
 use crate::sharpening_policy::{FILTERS, effective_mode};
+use crate::sys::rsf_sharpening_options as Options;
+use crate::sys::{
+    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_RGBA16_FLOAT, RSF_D3D11_FORMAT_RGBA32_FLOAT,
+    RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_child_device, rsf_d3d11_output_create_srv,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_texture_desc as Texture,
+};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::Mutex;
@@ -23,9 +23,7 @@ use windows::core::Interface;
 
 type Handle = *mut c_void;
 
-#[path = "d3d11_sharpening_abi.rs"]
-mod abi;
-pub(super) use abi::rsf_sharpen11_frame as Frame;
+pub(super) use crate::sys::rsf_sharpen11_frame as Frame;
 const CONSTANT_WORDS: usize = 32;
 const UAV_SLOTS: usize = 8;
 

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::fg_leases::{FenceState, Retirement, rsf_d3d12_fence_completed};
 use crate::frame_sequencer::Ledger;
-use crate::render_abi::*;
 use crate::sr_session::has_capacity;
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_INPUT,
     RSF_FRAME_SOURCE_RENDERED, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_allows_fg,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::Raw;
-use super::abi::rsf_anomaly_motion_fixture_targets as Targets;
 use crate::ffi::borrow_span;
+use crate::sys::rsf_anomaly_motion_fixture_targets as Targets;
 use std::ffi::{CStr, c_char};
 use std::mem::MaybeUninit;
 use std::ptr::null;

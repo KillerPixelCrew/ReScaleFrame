@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{same_device, texture_desc};
-use crate::d3d11_output_abi::{rsf_d3d11_output_is_immediate, rsf_d3d11_state};
 use crate::d3d11_output_platform::srv_format;
-use crate::render_abi::rsf_backend_log_fn as LogFn;
+use crate::sys::rsf_backend_log_fn as LogFn;
+use crate::sys::{rsf_d3d11_output_is_immediate, rsf_d3d11_state};
 use rsf_shader_compiler::{Compiler, Request, compile};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::MaybeUninit;

@@ -255,14 +255,14 @@ unsafe fn fits<T>(pointer: *const T) -> bool {
     declared as usize >= size_of::<T>()
 }
 
-impl Default for RsfOverlayIntent {
-    fn default() -> Self {
-        encode_intent(crate::model::Intent {
-            backend: 1,
-            fg_generated: 1,
-            ..Default::default()
-        })
-    }
+/// The intent a frame starts from before the panel changes anything.
+#[cfg(test)]
+fn default_intent() -> RsfOverlayIntent {
+    encode_intent(crate::model::Intent {
+        backend: 1,
+        fg_generated: 1,
+        ..Default::default()
+    })
 }
 
 fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
@@ -599,27 +599,21 @@ mod tests {
             host_option_count: 0,
             host_options: null(),
             sharpening_available: 0,
-            sharpening_mode: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MODE,
-            sharpening_sharpness: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_SHARPNESS
+            sharpening_mode: rsf_game_sys::RSF_SHARPENING_DEFAULT_MODE,
+            sharpening_sharpness: rsf_game_sys::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
+            sharpening_mas: rsf_game_sys::RSF_SHARPENING_DEFAULT_MAS,
+            sharpening_motion_sharpness: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS
                 as f32,
-            sharpening_mas: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MAS,
-            sharpening_motion_sharpness:
-                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS as f32,
-            sharpening_motion_threshold:
-                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD as f32,
-            sharpening_motion_scale_limit:
-                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT as f32,
-            sharpening_contrast_enabled:
-                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
-            sharpening_contrast: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST
+            sharpening_motion_threshold: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD
                 as f32,
-            sharpening_depth_scale:
-                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
-            sharpening_depth_bias:
-                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
-            sharpening_clamp_output:
-                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
-            sharpening_debug: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEBUG,
+            sharpening_motion_scale_limit: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT
+                as f32,
+            sharpening_contrast_enabled: rsf_game_sys::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
+            sharpening_contrast: rsf_game_sys::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
+            sharpening_depth_scale: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
+            sharpening_depth_bias: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
+            sharpening_clamp_output: rsf_game_sys::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
+            sharpening_debug: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEBUG,
             ui_preferences: 0,
             latency_pacing_owner: 0,
             latency_reserved: 0,
@@ -680,7 +674,7 @@ mod tests {
         let input = input();
         let stats = stats();
         let mut draw = RsfOverlayDrawData::default();
-        let mut intent = RsfOverlayIntent::default();
+        let mut intent = default_intent();
         // More than one, because egui lays a new window out invisibly to size it first.
         for _ in 0..3 {
             let code =
@@ -823,7 +817,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
         assert_eq!(RSF_OVERLAY_ABI_VERSION, 20);
-        let intent = RsfOverlayIntent::default();
+        let intent = default_intent();
         assert_eq!(intent.struct_size, size_of::<RsfOverlayIntent>() as u32);
         assert_eq!((intent.backend, intent.fg_generated), (1, 1));
         assert_eq!(intent.sr_change_id, 0);

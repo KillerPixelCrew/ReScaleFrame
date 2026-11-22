@@ -3,9 +3,9 @@
 use super::{Frame, Setup, Status};
 use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
-use crate::render_abi::{RSF_FRAME_ASSEMBLY_ABI_VERSION, rsf_pipeline_camera_frame as Camera};
 use crate::sdk_module::SdkModule;
-use rsf_game_sys::sr_abi::RSF_DLSS_PIPELINE_ABI_VERSION;
+use crate::sys::{RSF_FRAME_ASSEMBLY_ABI_VERSION, rsf_pipeline_camera_frame as Camera};
+use rsf_game_sys::RSF_DLSS_PIPELINE_ABI_VERSION;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::{null, null_mut};

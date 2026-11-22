@@ -391,7 +391,7 @@ pub(crate) static PROFILES: [Profile; 2] = [
 ];
 
 // ---- the swap owner's layout, shared by both builds --------------------------------------------------------------
-use crate::sr_swap_abi::{
+use crate::sys::{
     RSF_ANOMALY_SWAP_DESC_SIZE, rsf_anomaly_swap_layout as SwapLayout,
     rsf_anomaly_swap_range as Range, rsf_anomaly_swap_world_target as SwapWorld,
 };

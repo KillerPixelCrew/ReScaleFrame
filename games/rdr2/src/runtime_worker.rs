@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! The ASI and explicit attach worker share renderer setup and plugin session admission.
-use crate::runtime_worker_abi::{
+use crate::sys::{
     RSF_RENDER_HOST_ABI_VERSION, RSF_RENDER_HOST_OWNS_PRESENTATION, RSF_UI_MODE_BACKBUFFER_HUDLESS,
     rsf_rdr2_fingerprint_fn, rsf_rdr2_runtime_leaves, rsf_render_host_setup,
 };
 use crate::{OK, asi, engine_settings, layout, script_input};
-use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
 use rsf_game_sys::rsf_game_host_services;
+use rsf_game_sys::rsf_plugin_session_options;
 use rsf_game_sys::session::carrier_log::CarrierLog;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
 use rsf_game_sys::win32::{module_path, typed_export};
@@ -35,11 +35,8 @@ type Create =
     unsafe extern "C" fn(*const rsf_render_host_setup, *mut rsf_game_host_services) -> i32;
 type Fingerprint = unsafe extern "C" fn(*const u16, u32, *mut u8) -> u32;
 
-#[path = "../../../runtime/orchestrator/src/overlay_saved_abi.rs"]
-mod saved_abi;
-
 fn register_startup_options(runtime: HMODULE, scope: *mut c_void, path: *const u16) {
-    use saved_abi::*;
+    use crate::sys::*;
     type Register = unsafe extern "C" fn(*mut c_void, *const rsf_overlay_saved_setup) -> i32;
     let Some(register) =
         (unsafe { typed_export::<Register>(runtime, c"rsf_overlay_saved_options_register") })

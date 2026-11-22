@@ -9,12 +9,15 @@
 
 use crate::fg_stage::{self, Frontend};
 use crate::native_hooks::HookOps;
-use crate::overlay_abi::*;
+use crate::sys::*;
+/// Rust-only records of the adapter options and chain identity.
+pub(crate) mod records;
 use crate::sr_stage::{OverlayChoices, STAGE};
-use crate::sr_stage_abi::rsf_anomaly_sr_settings;
+use crate::sys::rsf_anomaly_sr_settings;
 use crate::{overlay_hooks, overlay_native};
+pub(crate) use records::*;
 use rsf_game_sys::rsf_game_log_fn;
-use rsf_game_sys::sr_abi::rsf_overlay_sr_report;
+use rsf_game_sys::rsf_overlay_sr_report;
 use std::ffi::{CStr, CString, OsString, c_char, c_int, c_void};
 use std::fmt;
 use std::os::windows::ffi::OsStringExt;
@@ -24,9 +27,6 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
 use windows_sys::core::w;
-
-#[path = "../../../runtime/orchestrator/src/overlay_saved_abi.rs"]
-mod saved_abi;
 
 const OK: i32 = 0;
 const ABI_MISMATCH: i32 = -2;
@@ -463,7 +463,7 @@ struct Capture {
 }
 
 fn register_saved_options(runtime: *mut c_void, ini: &[u16], log: &Log) {
-    use saved_abi::*;
+    use crate::sys::*;
     if runtime.is_null() {
         return;
     }

@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::overlay_abi::{
-    RSF_OVERLAY_API_VERSION, RSF_OVERLAY_SERVICE_OPTION_TOGGLE, RSF_OVERLAY_SR_INPUT_COLOR,
-    RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_MOTION, rsf_overlay_service_option,
-    rsf_overlay_service_setup, rsf_overlay_sr_report,
-};
 use crate::overlay_service::{settings_apply, settings_get};
-use crate::render_abi::{
-    RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_BOOST, RSF_RENDER_FRONTEND_ABI_VERSION,
-    rsf_render_settings,
-};
 use crate::settings_store::{
     rsf_settings_store_read_fg_debug, rsf_settings_store_write_fg_debug, set_sharpening,
     sharpening_of,
+};
+use crate::sys::{
+    RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_BOOST, RSF_RENDER_FRONTEND_ABI_VERSION,
+    rsf_render_settings,
+};
+use crate::sys::{
+    RSF_OVERLAY_API_VERSION, RSF_OVERLAY_SERVICE_OPTION_TOGGLE, RSF_OVERLAY_SR_INPUT_COLOR,
+    RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_MOTION, rsf_overlay_service_option,
+    rsf_overlay_service_setup, rsf_overlay_sr_report,
 };
 use std::os::windows::ffi::OsStringExt;
 use std::sync::OnceLock;

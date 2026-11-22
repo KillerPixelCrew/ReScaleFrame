@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::dispatch_abi::*;
+use crate::sys::*;
 use rsf_game_sys::rsf_frame_record;
 use std::{
     cell::UnsafeCell,

@@ -5,12 +5,12 @@
 #[cfg(not(test))]
 mod layout_fixture;
 
-use super::records_abi::{
+use super::{Constants, Dimensions, MAX_TAGS, OptionPayload, TagBatch};
+use crate::sys::{
     rsf_sl_sdk_adapter as Adapter, rsf_sl_sdk_dlss_optimal as DlssOptimal,
     rsf_sl_sdk_dlss_options as DlssOptions, rsf_sl_sdk_requirements as Requirements,
     rsf_sl_sdk_viewport as Viewport,
 };
-use super::{Constants, Dimensions, MAX_TAGS, OptionPayload, TagBatch};
 use crate::vulkan_streamline_camera::{
     rsf_slvk_sdk_constants as SdkConstants, rsf_slvk_sdk_header as Header,
     rsf_slvk_sdk_preferences as Preferences, rsf_slvk_sdk_resource as Resource,

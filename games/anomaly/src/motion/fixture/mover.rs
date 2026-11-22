@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::sr_stage_abi::RSF_ANOMALY_SR_MOTION_TO_UV;
-use rsf_game_sys::sr_abi::rsf_motion_decode_params;
+use crate::sys::RSF_ANOMALY_SR_MOTION_TO_UV;
+use rsf_game_sys::rsf_motion_decode_params;
 
 unsafe extern "C" {
     // The same private decoder parameter provider used by the SR pass (sr_pass.rs).

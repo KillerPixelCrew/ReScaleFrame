@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! The hash-pinned AC7 contact-shadow rewrite. The factory borrows the output for the call.
 //! The shader facts and operands come from the existing capture evidence.
-use crate::contact_shadow_abi::{
+use crate::shader_hash::{crc32c, dxbc_checksum, dxbc_digest_bytes};
+use crate::sys::{
     RSF_AC7_CONTACT_PATCHED, RSF_AC7_CONTACT_REFUSED, RSF_AC7_CONTACT_UNMATCHED,
     rsf_ac7_contact_shader_fn,
 };
-use crate::shader_hash::{crc32c, dxbc_checksum, dxbc_digest_bytes};
 use std::ffi::c_void;
 use std::slice;
 

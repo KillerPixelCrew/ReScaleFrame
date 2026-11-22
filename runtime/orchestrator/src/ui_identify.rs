@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_session::has_capacity;
-use crate::ui_identify_abi::*;
+use crate::sys::*;
 use std::ffi::{c_int, c_void};
 use std::ptr::{null, null_mut};
 

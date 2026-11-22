@@ -8,16 +8,16 @@ use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_raw,
     rsf_census_json_string, rsf_census_json_u64,
 };
-use super::json_abi::rsf_census_json;
 use super::output::*;
 use super::record::*;
-use super::record_abi::{
-    RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_record_writer,
-};
-use super::session_abi::*;
 use super::static_scan::rsf_census_static_scan;
 use super::stats::*;
-use super::stats_abi::{rsf_census_sample, rsf_census_stats_names};
+use crate::sys::rsf_census_json;
+use crate::sys::*;
+use crate::sys::{
+    RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_record_writer,
+};
+use crate::sys::{rsf_census_sample, rsf_census_stats_names};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::{self, null, null_mut};

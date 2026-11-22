@@ -3,12 +3,12 @@ use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
     R32_TYPELESS, R32G8X24_TYPELESS,
 };
-use crate::resource_roles_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::{
     RSF_ROLE_RULE_ANY_DEPTH_FORMAT, RSF_ROLE_RULE_FIXED_SIZE, RSF_ROLE_RULE_RENDER_RANGE,
     RSF_ROLE_RULE_RENDER_SIZED, rsf_frame_shape as Shape, rsf_role_rule as Rule,
     rsf_role_table as Table, rsf_role_verdict as Verdict, rsf_texture_facts as Facts,
 };
-use crate::sr_session::has_capacity;
 
 const UNKNOWN: u32 = 0;
 const CONFIDENT: u32 = 0;

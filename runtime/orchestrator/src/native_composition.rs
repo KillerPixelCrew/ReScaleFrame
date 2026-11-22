@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{GraphicsCache, texture_desc};
-use crate::d3d11_output_abi::{
+use crate::sys::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_USAGE_DEFAULT, rsf_d3d11_output_child_device,
     rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_texture,
     rsf_d3d11_output_query_texture, rsf_native_composition_frame as Frame,

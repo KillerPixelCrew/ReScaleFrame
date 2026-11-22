@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Typed command recording for the linked FG fixture. The native harness owns
 //! its vendor callbacks and the present and retirement order of those commands.
-use crate::fg_device_runner_abi::*;
-use crate::fixture_device_abi::{rsf_fg_fixture_inputs as FgInputs, rsf_fg_fixture_submission};
+use crate::sys::*;
+use crate::sys::{rsf_fg_fixture_inputs as FgInputs, rsf_fg_fixture_submission};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_SCREEN_FLIGHT, rsf_camera_frame,
     rsf_frame_record, rsf_game_render_pass,

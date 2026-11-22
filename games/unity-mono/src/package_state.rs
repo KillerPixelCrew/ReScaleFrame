@@ -21,17 +21,17 @@ mod windows;
 
 use self::presentation::{Identity, Presentation};
 use self::services::Services;
-use crate::package_abi::{
+use crate::package_views::{Recording, SLOTS, View, Views};
+use crate::sys::rsf_unity_native_api;
+use crate::sys::{
+    RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
+    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_SPATIAL, rsf_fg12_setup,
+};
+use crate::sys::{
     RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_NONE, RSF_UNITY_SETTINGS_ABI_VERSION,
     rsf_native_fg_options, rsf_native_fg_status, rsf_native_latency_status, rsf_sharpening_options,
     rsf_sr12, rsf_unity_frame_counters, rsf_unity_package_platform, rsf_unity_package_settings,
     rsf_unity_package_status, rsf_unity_package_view_setup,
-};
-use crate::package_views::{Recording, SLOTS, View, Views};
-use crate::plugin_abi::rsf_unity_native_api;
-use crate::runtime_abi::{
-    RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
-    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_SPATIAL, rsf_fg12_setup,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_cpu_event, rsf_game_host_services,
@@ -995,8 +995,8 @@ pub(crate) extern "C" fn rsf_unity_package_bridge_failed(result: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package_abi::rsf_fg_status;
-    use crate::runtime_abi::RSF_SR_DLSS;
+    use crate::sys::RSF_SR_DLSS;
+    use crate::sys::rsf_fg_status;
     use std::cell::{Cell, RefCell};
     use std::ffi::CStr;
     use std::ptr::without_provenance_mut;
@@ -2522,7 +2522,7 @@ mod tests {
         assert!(!package.route(&leaves, list(1), &pass, true));
         assert_eq!(calls(), ["owner", "present 0x0 0"]);
         // Route the D3D11 producer's real Editor plan after its native resource handoff.
-        use crate::{bridge_abi::rsf_unity_packet, d3d11_pass};
+        use crate::{d3d11_pass, sys::rsf_unity_packet};
         let mut packet = unsafe { std::mem::zeroed::<rsf_unity_packet>() };
         packet.camera = pass.camera;
         packet.color = without_provenance_mut(0x50);

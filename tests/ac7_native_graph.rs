@@ -16,14 +16,12 @@ use super::{
     Guard, INSTALLED, Renderer, SITES, TEST_ENGINE, TEST_MODULE, TEST_TRUESKY_MODULE, copy,
     drain_retired, function, hook, key, method, pool_ref, read,
 };
-use crate::platform_abi::{
-    rsf_ac7_native_renderer_options, rsf_ac7_render_scope, rsf_ac7_render_scope_fn,
-};
-use crate::sites_abi::{
+use crate::sys::RSF_AC7_VIEW_BUFFER_BYTES;
+use crate::sys::{
     RSF_AC7_ROLE_OUTPUT, RSF_AC7_ROLE_SR, rsf_ac7_code_leaves, rsf_ac7_native_calls,
     rsf_ac7_truesky_patches,
 };
-use crate::view_abi::RSF_AC7_VIEW_BUFFER_BYTES;
+use crate::sys::{rsf_ac7_native_renderer_options, rsf_ac7_render_scope, rsf_ac7_render_scope_fn};
 use rsf_game_sys::rsf_game_render_config;
 use std::cell::{Cell, OnceCell, UnsafeCell};
 use std::ffi::{CStr, c_char, c_int, c_void};

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::extension_abi::*;
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 
 pub(crate) struct Properties {

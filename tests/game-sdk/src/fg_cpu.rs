@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::{cpu_abi::*, cpu_calls::*, fg_cpu_calls::*, native_fg_cpu_abi::*};
-use rsf_game_sys::*;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
@@ -20,7 +19,7 @@ mod cases;
 const SESSION: u64 = 41;
 const PRIMARY_WINDOW: u64 = 51;
 const REPLACEMENT_WINDOW: u64 = 52;
-const XELL: u32 = crate::render_abi::RSF_PACING_XELL;
+const XELL: u32 = crate::sys::RSF_PACING_XELL;
 type Event = rsf_game_cpu_event;
 type Platform = rsf_nfg_cpu_platform;
 

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::Setup;
 use crate::dx12_vulkan_platform::lookup;
+use crate::sys::rsf_vkfg_image_copy as ImageCopy;
 use crate::vulkan_fg_copy::{Barrier, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
-use crate::vulkan_fg_resources_abi::rsf_vkfg_image_copy as ImageCopy;
 use ash::vk::{self, Handle as _};
 use std::{ffi::c_void, mem};
 

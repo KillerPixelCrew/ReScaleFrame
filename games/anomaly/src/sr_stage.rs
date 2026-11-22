@@ -26,8 +26,10 @@ use crate::sr_d3d11::{
     DrawViews, Extent, PREPARE, Platform as D3d11Platform, REINSERT, ROUND_TRIP, TemporalTargets,
     UPSCALE,
 };
-use crate::sr_stage_abi::*;
-use crate::sr_swap_abi::{
+#[cfg(any(windows, test))]
+use crate::sr_temporal::Admit;
+use crate::sys::*;
+use crate::sys::{
     RSF_ANOMALY_SWAP_RESTORE_COMBINE_END, RSF_ANOMALY_SWAP_RESTORE_FRAME_END,
     RSF_ANOMALY_SWAP_RESTORE_ROLLBACK, RSF_ANOMALY_SWAP_RESTORE_SEAM,
     RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN, RSF_ANOMALY_SWAP_RESTORE_STALE_PREPARE,
@@ -35,9 +37,7 @@ use crate::sr_swap_abi::{
     RSF_ANOMALY_SWAP_SKIP_OFF, RSF_ANOMALY_SWAP_SKIP_SCOPE, RSF_ANOMALY_SWAP_SKIP_TWINS,
     rsf_anomaly_swap_fields as TargetFields, rsf_anomaly_swap_upscale as UpscaleInputs,
 };
-#[cfg(any(windows, test))]
-use crate::sr_temporal::Admit;
-use rsf_game_sys::d3d11_sr_admission_abi::RSF_SR_AUTO as BACKEND_AUTO;
+use rsf_game_sys::RSF_SR_AUTO as BACKEND_AUTO;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::io::Write;
@@ -2801,8 +2801,8 @@ fn register_live_options() {
 }
 
 #[cfg(windows)]
-fn live_options() -> [crate::overlay_abi::rsf_anomaly_overlay_option; 13] {
-    use crate::overlay_abi::rsf_anomaly_overlay_option;
+fn live_options() -> [crate::overlay::rsf_anomaly_overlay_option; 13] {
+    use crate::overlay::rsf_anomaly_overlay_option;
     extern "C" fn get<const ID: u32>() -> i32 {
         STAGE.option(ID)
     }

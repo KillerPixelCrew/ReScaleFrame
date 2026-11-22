@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Ash doubles for the native DLSS-G and capture fixture.
 use super::{COLOR, DST, Handle, handle};
-use crate::dlss_abi::*;
+use crate::sys::*;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record;
 use std::{

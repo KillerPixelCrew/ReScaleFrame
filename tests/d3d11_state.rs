@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Device, Handle, TestResult, check};
-use crate::d3d11_output_abi::rsf_d3d11_state as State;
+use crate::sys::rsf_d3d11_state as State;
 use std::ptr::null_mut;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::{

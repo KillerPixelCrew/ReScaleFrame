@@ -6,8 +6,6 @@ mod sdk;
 pub(crate) mod xm;
 
 use crate::com_ref::ComRef;
-use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
-use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::streamline_sr::sdk::{
     FEATURE_DLSS, PREFERENCE_FRAME_TAGGING, PREFERENCE_MANUAL_HOOKING, RENDER_API_D3D12,
@@ -15,6 +13,8 @@ use crate::streamline_sr::sdk::{
 use crate::streamline_sr::{
     Constants, Dimensions, Optimal, OptionPayload, Options, TagBatch, dimensions, dlss_mode,
 };
+use crate::sys::rsf_dlss_setup as Setup;
+use crate::sys::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;

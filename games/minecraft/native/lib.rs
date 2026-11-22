@@ -7,7 +7,6 @@ mod frame;
 #[cfg(not(test))]
 mod jni;
 mod observer;
-mod platform_abi;
 mod status;
 
 use std::ffi::{CString, OsString, c_void};

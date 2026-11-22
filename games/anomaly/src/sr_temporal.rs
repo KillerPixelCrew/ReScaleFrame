@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_pass::{PassInputs, ResetFacts, ResetReason, build_pass, reset_reason};
 use crate::sr_stage::plan_for_render;
-use crate::sr_stage_abi::{
+use crate::sys::{
     RSF_ANOMALY_SR_ADAPTER_BACKENDS, RSF_ANOMALY_SR_ADAPTER_QUALITIES,
     RSF_ANOMALY_SR_ENGINE_VERSION, RSF_ANOMALY_SR_MOTION_SENTINEL,
     RSF_ANOMALY_SR_MOTION_VALIDITY_CHANNEL, RSF_ANOMALY_SR_MOTION_VALIDITY_THRESHOLD,
     RSF_ANOMALY_SR_PROJECT_ID, RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS, rsf_anomaly_sr_driver_config,
     rsf_anomaly_sr_settings,
 };
-use rsf_game_sys::d3d11_sr_admission_abi::{
+use rsf_game_sys::*;
+use rsf_game_sys::{
     RSF_D3D11_SR_ADMISSION_ABI_VERSION, RSF_SR_AUTO as AUTO, rsf_d3d11_sr_admission as Admission,
 };
-use rsf_game_sys::sr_abi::*;
 use rsf_game_sys::{rsf_camera_frame, rsf_game_log_fn, rsf_game_render_pass};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, CString, c_char, c_void};

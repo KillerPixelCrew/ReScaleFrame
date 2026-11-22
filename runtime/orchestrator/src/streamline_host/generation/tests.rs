@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Ported from tests/dlss_generation_state.cpp, which exercised the former C++ copy.
 use super::*;
-use crate::render_abi::RSF_FG_ABI_VERSION;
+use crate::sys::RSF_FG_ABI_VERSION;
 use std::ptr;
 use std::sync::atomic::{AtomicBool as Flag, Ordering};
 use std::sync::{Barrier, mpsc};

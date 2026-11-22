@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The native geometry fixture feeds its guarded copies into the Rust oracle.
 use super::*;
-use abi::{rsf_anomaly_plan_capture as Result, rsf_anomaly_plan_pose as Input};
+use crate::sys::{rsf_anomaly_plan_capture as Result, rsf_anomaly_plan_pose as Input};
 use std::ffi::c_void;
 
 #[unsafe(no_mangle)]

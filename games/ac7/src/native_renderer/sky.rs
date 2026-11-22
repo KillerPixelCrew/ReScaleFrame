@@ -4,9 +4,9 @@
 //! (truesky.rs) and the sky render and projection hooks.
 use super::leaves::code_leaves;
 use super::{Guard, Renderer, hook, installed, key, original, primary_view, read, scope};
-use crate::cloud_depth_abi::rsf_ac7_cloud_depth;
-use crate::platform_abi::rsf_ac7_native_renderer;
-use crate::sites_abi::{rsf_ac7_truesky_leaves, rsf_ac7_truesky_patches};
+use crate::sys::rsf_ac7_cloud_depth;
+use crate::sys::rsf_ac7_native_renderer;
+use crate::sys::{rsf_ac7_truesky_leaves, rsf_ac7_truesky_patches};
 use rsf_game_sys::RSF_GAME_RENDER_CLOUD_DEPTH;
 use std::cell::Cell;
 use std::ffi::c_void;

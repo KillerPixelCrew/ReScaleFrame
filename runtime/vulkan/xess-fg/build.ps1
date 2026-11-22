@@ -37,8 +37,17 @@ $rustArchive = "$temporaryBase.a"
 try {
     Push-Location -LiteralPath (Join-Path $PSScriptRoot '../../..')
     try {
+        # The session reads the frame record from rsf-game-sys, whose build script generates the
+        # public SDK bindings (it needs libclang, see docs/tooling.md).
+        $cargoTarget = Join-Path $targetDirectory 'VulkanStoryXessFg-cargo'
+        & (Get-Command cargo.exe -ErrorAction Stop).Source build --locked --release -p rsf-game-sys `
+            --target x86_64-pc-windows-gnu --target-dir $cargoTarget
+        if ($LASTEXITCODE -ne 0) { throw "rsf-game-sys build failed: $LASTEXITCODE" }
+        $rlibs = Join-Path $cargoTarget 'x86_64-pc-windows-gnu/release'
         & $rustCompiler --edition=2024 --crate-name rsf_xess_fg_session --crate-type staticlib `
             --target x86_64-pc-windows-gnu -C opt-level=2 -C panic=abort -D unsafe_op_in_unsafe_fn `
+            --extern "rsf_game_sys=$(Join-Path $rlibs 'librsf_game_sys.rlib')" `
+            -L "dependency=$(Join-Path $rlibs 'deps')" `
             (Join-Path $PSScriptRoot 'session.rs') -o $rustArchive
         if ($LASTEXITCODE -ne 0) { throw "XeSS-FG Rust session compilation failed: $LASTEXITCODE" }
     }

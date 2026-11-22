@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::d3d11_output_abi::rsf_d3d11_output_srv_format;
 use crate::d3d12_host::sr::*;
 use crate::d3d12_host::{borrow, rsf_core_d3d12_create_uav_texture, rsf_core_d3d12_transition};
 use crate::d3d12_sharpening as sharpening;
 use crate::frame_capture12::native::{rsf_fg12_platform_map, rsf_fg12_platform_unmap};
 use crate::frame_capture12::{self as capture, Owner as Capture};
+use crate::sys::rsf_d3d11_output_srv_format;
 use std::mem::ManuallyDrop;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
 use windows::core::Interface;

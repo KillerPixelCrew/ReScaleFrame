@@ -2,8 +2,6 @@
 //! Typed COM access for synchronous AC7 capture observations.
 
 use super::{BoundConstant, BoundView, Dispatch, QueuedDraw, Resource};
-use crate::capture_platform_abi::rsf_ac7_copy_memory;
-use crate::motion_capture_graphics_abi::*;
 use crate::motion_capture_observations::buffers::*;
 use crate::motion_capture_observations::colour::{
     ColourSnapshot, rsf_ac7_capture_colour_snapshot, rsf_ac7_capture_colour_snapshot_available,
@@ -15,6 +13,8 @@ use crate::motion_capture_records::{
 use crate::motion_capture_session::{
     CaptureInterval, rsf_ac7_capture_fail, rsf_ac7_capture_sample,
 };
+use crate::sys::rsf_ac7_copy_memory;
+use crate::sys::*;
 use std::ffi::{c_char, c_void};
 use std::fmt;
 use std::ops::Deref;

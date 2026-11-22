@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Facts, Params, plan};
-use crate::cloud_depth_abi::rsf_ac7_cloud_depth as State;
 use crate::com_resource::{release, retain};
+use crate::sys::rsf_ac7_cloud_depth as State;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{from_ref, null_mut};
 use std::slice;

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! Shared host callbacks and packet dispatch for the Mono and package DLLs.
 
-use crate::bridge_abi::{rsf_unity_packet, rsf_unity_texture_ops};
 use crate::bridge_d3d12;
-use crate::bridge_d3d12_abi::{
+use crate::bridge_state::*;
+use crate::sys::{
     RSF_UNITY_D3D12_EVENT_FLUSH, RSF_UNITY_D3D12_EVENT_MODIFIES, RSF_UNITY_D3D12_EVENT_SYNC,
     rsf_unity_d3d12_engine,
 };
-use crate::bridge_state::*;
-use crate::plugin_abi::{RSF_UNITY_NATIVE_ABI_VERSION, rsf_unity_native_api};
+use crate::sys::{RSF_UNITY_NATIVE_ABI_VERSION, rsf_unity_native_api};
+use crate::sys::{rsf_unity_packet, rsf_unity_texture_ops};
 use rsf_game_sys::*;
 use std::ffi::{c_char, c_int, c_void};
 use std::mem::MaybeUninit;
@@ -139,7 +139,11 @@ unsafe extern "C" fn log(message: *const c_char) {
     }
 }
 
-unsafe extern "C" fn config(width: u32, height: u32, output: *mut c_void) -> c_int {
+unsafe extern "C" fn config(
+    width: u32,
+    height: u32,
+    output: *mut crate::sys::rsf_unity_config,
+) -> c_int {
     let Some(_callback) = Callback::enter() else {
         return 0;
     };
@@ -147,7 +151,7 @@ unsafe extern "C" fn config(width: u32, height: u32, output: *mut c_void) -> c_i
     unsafe { rsf_unity_frames_config(&host, width, height, output.cast()) }
 }
 
-unsafe extern "C" fn enqueue(packet: *const c_void) -> *mut c_void {
+unsafe extern "C" fn enqueue(packet: *const crate::sys::rsf_unity_packet) -> *mut c_void {
     let locked = host_lock();
     let session = locked.as_ref().map_or(0, |host| host.0.session_id);
     #[cfg(not(feature = "mono-plugin"))]

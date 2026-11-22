@@ -3,10 +3,8 @@ use super::entropy::{entropy, sampled};
 use super::memory::{MemoryCache, read, read_guarded, readable_extent};
 use super::names::escape_unit;
 use super::sections::{Stream, rsf_dump_now_ms};
-use super::sections_abi::{
-    rsf_dump_image_info, rsf_dump_image_stats, rsf_module_entry, rsf_section_digest,
-};
 use super::sha256;
+use crate::sys::{rsf_dump_image_info, rsf_dump_image_stats, rsf_module_entry, rsf_section_digest};
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs::File;

@@ -6,7 +6,7 @@ use super::reflection::fixture::{
 use super::runtime_pack::admit_runtime_variant;
 use super::*;
 use crate::shader_family::{CORE_STATIC, TESS_DOMAIN, TESS_HULL};
-use rsf_game_sys::shader_patch_abi::{RSF_PATCH_OK, RSF_PATCH_ORIGINAL};
+use rsf_game_sys::{RSF_PATCH_OK, RSF_PATCH_ORIGINAL};
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::path::PathBuf;

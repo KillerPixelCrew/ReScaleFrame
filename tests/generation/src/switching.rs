@@ -4,7 +4,7 @@ use crate::session::{
     FEATURE_FAILED, INIT_FAILED, NOT_READY, OK, Raw, rsf_fg_session_create, rsf_fg_session_destroy,
     rsf_fg_session_select,
 };
-use crate::session_abi::*;
+use crate::sys::*;
 use std::ffi::{c_char, c_int};
 use std::ptr::{from_mut, null, null_mut};
 use windows::Win32::{

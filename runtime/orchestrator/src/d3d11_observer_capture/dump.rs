@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::{Constant, DumpResult, Handle, OK, Request};
 use crate::com_ref::ComRef;
-use crate::d3d11_observer_abi::rsf_observer_options;
-use crate::graphics_pass_abi::{
-    RSF_MOTION_DECODE_ABI_VERSION, rsf_motion_decode_setup as DecodeSetup,
-};
 use crate::input_dump::{
     DECODED_MOTION, ENCODED_MOTION, Log, MotionEncoding, MotionTextureOptions, TextureOptions,
 };
-use crate::render_abi::rsf_backend_log_fn;
-use rsf_game_sys::sr_abi::rsf_motion_decode_params as DecodeParams;
+use crate::sys::rsf_backend_log_fn;
+use crate::sys::rsf_observer_options;
+use crate::sys::{RSF_MOTION_DECODE_ABI_VERSION, rsf_motion_decode_setup as DecodeSetup};
+use rsf_game_sys::rsf_motion_decode_params as DecodeParams;
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::ptr::{NonNull, null_mut};

@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::{ABI_MISMATCH, INVALID_ARGUMENT, Module, NATIVE_REFUSED, NOT_READY, OK, run};
-use observation::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation as Observation};
+use crate::sys::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation as Observation};
 use rsf_game_sys::*;
 use std::ffi::CStr;
 use std::path::Path;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
-
-#[allow(dead_code)]
-#[path = "../../../games/anomaly/src/native_observer_abi.rs"]
-mod observation;
 
 type Entry = unsafe extern "C" fn(u32, *mut rsf_game_plugin_api) -> i32;
 

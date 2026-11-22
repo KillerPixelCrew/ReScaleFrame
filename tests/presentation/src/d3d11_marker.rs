@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Drive the linked CPU ledger and presentation owner with the original marker
 //! admission sequences. The native device fixture supplies the production calls.
-use crate::d3d11_marker_abi::*;
-use crate::present_fixture_loops_abi::{
+use crate::present_fixture_time::{frequency, stamp};
+use crate::sys::*;
+use crate::sys::{
     RSF_FG_OFF, RSF_REFLEX_OFF, rsf_d3d11_present_host, rsf_native_fg_options,
     rsf_native_fg_options_set, rsf_native_fg_set_log, rsf_native_latency_render,
     rsf_streamline_host_latency_status, rsf_streamline_host_token, rsf_streamline_latency_status,
 };
-use crate::present_fixture_time::{frequency, stamp};
-use rsf_game_sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};

@@ -3,10 +3,10 @@
 #[cfg(windows)]
 use crate::com_resource::{release, retain};
 #[cfg(windows)]
-use crate::scene_color_abi::{RSF_FRAME_TAP_MAX_INPUTS, rsf_frame_tap_target_draw};
-use crate::scene_color_abi::{rsf_ac7_scene_color, rsf_frame_tap_geometry};
+use crate::sys::{RSF_AC7_FORMAT_B8G8R8A8_UNORM, RSF_AC7_FORMAT_B8G8R8A8_UNORM_SRGB};
 #[cfg(windows)]
-use crate::ui_abi::{RSF_AC7_FORMAT_B8G8R8A8_UNORM, RSF_AC7_FORMAT_B8G8R8A8_UNORM_SRGB};
+use crate::sys::{RSF_FRAME_TAP_MAX_INPUTS, rsf_frame_tap_target_draw};
+use crate::sys::{rsf_ac7_scene_color, rsf_frame_tap_geometry};
 use std::ffi::{c_int, c_void};
 #[cfg(windows)]
 use std::{ptr, slice};

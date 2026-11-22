@@ -3,10 +3,10 @@
 //! reads go through the guarded platform copy.
 
 use super::*;
-use crate::capture_platform_abi::rsf_ac7_read_memory;
 use crate::motion_capture_session::{
     rsf_ac7_capture_fail, rsf_ac7_capture_sample, rsf_ac7_capture_sampled,
 };
+use crate::sys::rsf_ac7_read_memory;
 use std::ptr::from_mut;
 use windows::Win32::System::Performance::QueryPerformanceCounter;
 use windows::Win32::System::Threading::GetCurrentThreadId;

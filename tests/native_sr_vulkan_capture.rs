@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, Image, READ, TestResult, check, raw};
 use crate::frame_capture_vk::*;
-use crate::vulkan_sr_abi::rsf_vk_function;
+use crate::sys::rsf_vk_function;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record;
 use std::{

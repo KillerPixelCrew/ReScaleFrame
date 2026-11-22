@@ -4,11 +4,9 @@
 #[allow(dead_code)]
 #[path = "../../graphics_fixture_device.rs"]
 mod device;
-#[path = "../../../runtime/orchestrator/src/native_translucency_abi.rs"]
-mod native_translucency_abi;
 
 use device::{Device, TestResult, half_to_f32};
-use native_translucency_abi::rsf_native_translucency_masks as Masks;
+use rsf_game_sys::rsf_native_translucency_masks as Masks;
 use rsf_game_sys::{
     RSF_GAME_RENDER_CLOUD_DEPTH, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
     RSF_GAME_RENDER_SR, RSF_GAME_RENDER_TRANSLUCENCY, RSF_GAME_RENDER_TRANSLUCENCY_LAYER,

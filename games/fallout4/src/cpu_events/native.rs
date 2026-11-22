@@ -319,7 +319,7 @@ pub(super) fn guards() -> bool {
         (0xc342ae, &[0x48, 0x8b, 0x0d, 0x03, 0x1a, 0x24, 0x03]), // main poll argument
         (0xc34ec3, &[0xe8, 0x78, 0xd6, 0xa3, 0x00]), // wrapper poll
         (0xbd764e, &[0xe8, 0xed, 0xae, 0xa9, 0x00]), // worker poll
-        HOOK_ENTRIES[crate::cpu_abi::RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS as usize],
+        HOOK_ENTRIES[crate::sys::RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS as usize],
     ];
     // The worker job descriptor and name, then the worker class locator, destructor and entry.
     let base = image();

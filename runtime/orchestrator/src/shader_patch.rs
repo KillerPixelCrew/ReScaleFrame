@@ -16,13 +16,13 @@ mod reflection;
 #[cfg(test)]
 mod tests;
 
-use crate::shader_patch_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::{
     RSF_PATCH_ABI, RSF_PATCH_ANCHOR, RSF_PATCH_ARGUMENT, RSF_PATCH_COMPILE, RSF_PATCH_FORMAT,
     RSF_PATCH_HASH, RSF_PATCH_INTERNAL, RSF_PATCH_OK, RSF_PATCH_ORIGINAL, RSF_PATCH_REFLECTION,
     RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION, rsf_patch_bytes, rsf_patch_counters,
     rsf_patch_output, rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_shader_patch_api,
 };
-use crate::sr_session::has_capacity;
 use leaf::{CompileCall, Platform};
 use pack::{Json, Pack, bytes, string, text};
 use std::borrow::Cow;

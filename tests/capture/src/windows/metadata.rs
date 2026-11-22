@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use super::{abi::*, bundles, contents, entry, root, utf8};
+use super::{bundles, contents, entry, root, utf8};
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_CAMERA_ABI_VERSION,
     RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,

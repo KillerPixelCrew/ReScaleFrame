@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 #![cfg(all(windows, not(test)))]
 
-mod abi;
 mod contract;
 mod device;
 
-use abi::*;
+use rsf_game_sys::*;
 use std::ffi::{CStr, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;

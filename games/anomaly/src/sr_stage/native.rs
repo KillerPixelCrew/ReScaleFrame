@@ -7,7 +7,6 @@
 use super::{Platform, STAGE, rsf_anomaly_sr_stage_configure_ini};
 use crate::engine_guards::{Image, sr_guard_failure};
 use crate::native_geometry::{CONSTANT_BUFFER_DATA, CONSTANT_BUFFER_SIZE, CONSTANT_BUFFER_SLOTS};
-use crate::native_observer_abi::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation};
 use crate::native_profile::{PROFILES as NATIVE, Profile as NativeProfile};
 use crate::sr_profile::{
     BACKEND_XFORMS_OFFSET, CRT_SURFACE_OFFSET, PROFILES as SR, Profile as SrProfile,
@@ -15,15 +14,16 @@ use crate::sr_profile::{
     SITE_PHASE_SCENE_PREPARE, SITE_PHASE_SUNSHAFTS, SITE_POSITION_SETUP, SITE_SET_MIP_LOD_BIAS,
     SITE_SET_P, SITE_SUN_CASCADES, WORLD_TARGETS, rsf_anomaly_sr_engine_layout,
 };
-use crate::sr_stage_abi::{
-    rsf_anomaly_sr_camera, rsf_anomaly_sr_controller, rsf_anomaly_sr_frame_facts,
-    rsf_anomaly_sr_frame_reads, rsf_anomaly_sr_log, rsf_anomaly_sr_motion_target,
-    rsf_anomaly_sr_swap_counters,
-};
-use crate::sr_swap_abi::{
+use crate::sys::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation};
+use crate::sys::{
     RSF_ANOMALY_SWAP_MAKE_CREATED, RSF_ANOMALY_SWAP_MAKE_FAILED, RSF_ANOMALY_SWAP_SLOT_COUNT,
     rsf_anomaly_swap_counters, rsf_anomaly_swap_layout, rsf_anomaly_swap_platform,
     rsf_anomaly_swap_request, rsf_anomaly_swap_twins, rsf_anomaly_swap_view,
+};
+use crate::sys::{
+    rsf_anomaly_sr_camera, rsf_anomaly_sr_controller, rsf_anomaly_sr_frame_facts,
+    rsf_anomaly_sr_frame_reads, rsf_anomaly_sr_log, rsf_anomaly_sr_motion_target,
+    rsf_anomaly_sr_swap_counters,
 };
 use rsf_game_sys::rsf_result;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -903,7 +903,7 @@ unsafe extern "C" fn set_engine(module: Ptr, build: *const c_void, temporal: boo
 }
 
 // The stage detours in the leaf's trampoline order (sr_stage_platform.h).
-const DETOURS: [usize; crate::sr_stage_abi::RSF_ANOMALY_SR_DETOUR_COUNT as usize] = [
+const DETOURS: [usize; crate::sys::RSF_ANOMALY_SR_DETOUR_COUNT as usize] = [
     SITE_PHASE_SCENE_PREPARE,
     SITE_PHASE_COMBINE,
     SITE_PHASE_SUNSHAFTS,

@@ -6,10 +6,11 @@ defined in [game_api.h](include/rescaleframe/game_api.h). It includes executable
 defines host services, CPU events and rendering callbacks; [game_frame.h](include/rescaleframe/game_frame.h)
 defines frame ABI 2 and camera ABI 1.
 
-Rust callers use the workspace crate `rsf-game-sys`. Its generated types include
-compile-time Windows x64 size, alignment and field-offset checks. After changing
-the headers, run `python tools/generate-rust-bindings.py` with bindgen-cli 0.72.1
-and libclang available. Ordinary builds use the checked-in bindings.
+Rust callers use the workspace crate `rsf-game-sys`. Its `build.rs` binds every public
+`rescaleframe/*.h` header outside the games and integrations (the list is
+`PUBLIC_INCLUDE_DIRS` in `tools/bindgen`) at build time, with compile-time Windows x64 size,
+alignment and field-offset checks. Other crates use these items instead of binding the headers
+again. The build needs libclang; see [docs/tooling.md](../../docs/tooling.md).
 
 Use fixed-width fields, `struct_size`, and ABI versions. Keep STL/Rust types and allocator ownership inside their DLLs. The header must compile as C and C++.
 

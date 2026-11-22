@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_abi::rsf_overlay_texture_update as Update;
-use crate::overlay_host_abi::rsf_overlay_draw_call as DrawCall;
+use crate::sys::rsf_overlay_draw_call as DrawCall;
+use crate::sys::rsf_overlay_texture_update as Update;
 
 pub(super) const TEXTURE_EDGE: u32 = 16384;
 

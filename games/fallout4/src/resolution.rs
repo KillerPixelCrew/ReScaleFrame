@@ -6,9 +6,9 @@ use crate::build_layout::{
 };
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::depth_domains::{self, Snapshot};
-pub(crate) use crate::render_records::NativeOutputOwner as OutputOwner;
-use crate::render_records::NativeResolutionReceipt as Receipt;
 use crate::screen::{WORLD_LEASE_INVALID, rsf_fallout4_ordinary_screen_refusals};
+pub(crate) use crate::sys::NativeOutputOwner as OutputOwner;
+use crate::sys::NativeResolutionReceipt as Receipt;
 use crate::{Plain, image, read};
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,
@@ -1089,7 +1089,7 @@ unsafe fn report_state(
     result: i32,
     report: Report,
 ) {
-    use crate::resolution_stages::*;
+    use crate::sys::*;
     let name = match stage {
         RSF_FALLOUT4_STAGE_PRE_SR => c"pre-sr",
         RSF_FALLOUT4_STAGE_OUTPUT_READY => c"output-ready",

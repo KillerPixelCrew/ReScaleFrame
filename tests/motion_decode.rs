@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Verify stored Unreal-biased examples, pre-decode sentinel checks and optional validity.
 use super::*;
-use crate::graphics_pass_abi::{
-    RSF_MOTION_DECODE_ABI_VERSION as ABI, rsf_motion_decode_setup as Setup,
-};
-use rsf_game_sys::sr_abi::rsf_motion_decode_params as Params;
+use crate::sys::{RSF_MOTION_DECODE_ABI_VERSION as ABI, rsf_motion_decode_setup as Setup};
+use rsf_game_sys::rsf_motion_decode_params as Params;
 use std::ffi::{CStr, c_char};
 use windows::core::Interface;
 

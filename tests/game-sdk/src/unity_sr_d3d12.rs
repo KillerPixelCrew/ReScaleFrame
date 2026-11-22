@@ -7,12 +7,12 @@ mod math;
 mod rdr2;
 mod streamline;
 
-use crate::unity_sr_d3d12_abi::*;
+use crate::sys::*;
 use gpu::{COPY_SOURCE, Gpu, SHADER_READ};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS,
-    RSF_GAME_RENDER_SR, render_host_abi::rsf_render_host_setup, rsf_camera_frame,
-    rsf_game_host_services, rsf_game_render_pass,
+    RSF_GAME_RENDER_SR, rsf_camera_frame, rsf_game_host_services, rsf_game_render_pass,
+    rsf_render_host_setup,
 };
 use std::{
     ffi::{CStr, CString, c_char, c_void},
@@ -40,6 +40,15 @@ fn check(condition: bool, message: &'static str) -> Result<()> {
 
 fn enabled(key: &str) -> bool {
     std::env::var_os(key).is_some()
+}
+
+unsafe extern "C" {
+    // games/rdr2/src/runtime_setup.h, implemented by the linked RDR2 adapter.
+    fn rsf_rdr2_fill_runtime_setup(
+        ini: *const u16,
+        root: *const u16,
+        setup: *mut rsf_render_host_setup,
+    );
 }
 
 unsafe extern "C" fn log(_: *mut c_void, message: *const c_char) {

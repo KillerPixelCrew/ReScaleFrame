@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-use super::hook_abi::rsf_census_hook_desc;
 use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_i64, rsf_census_json_open,
     rsf_census_json_string, rsf_census_json_u64,
 };
-use super::json_abi::rsf_census_json;
-use super::stats_abi::{rsf_census_sample, rsf_census_stats_names};
+use crate::sys::rsf_census_hook_desc;
+use crate::sys::rsf_census_json;
+use crate::sys::{rsf_census_sample, rsf_census_stats_names};
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::io::Write;

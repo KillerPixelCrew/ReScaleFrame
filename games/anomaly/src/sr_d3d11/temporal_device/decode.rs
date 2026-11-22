@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-use super::abi::*;
 use super::*;
 use crate::sr_pass::build_pass;
-use crate::sr_stage_abi::rsf_anomaly_sr_jitter_state as Jitter;
 use crate::sr_temporal::motion_decode_params;
+use crate::sys::rsf_anomaly_sr_jitter_state as Jitter;
+use crate::sys::*;
 use rsf_game_sys::rsf_game_render_pass;
-use rsf_game_sys::sr_abi::rsf_motion_decode_params;
+use rsf_game_sys::rsf_motion_decode_params;
 use std::ptr::{NonNull, null_mut};
 
 struct Decode<'a> {

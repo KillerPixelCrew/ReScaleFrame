@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::dx12_vulkan_platform::lookup;
-use crate::vulkan_sr_abi::rsf_srvk_setup as Graphics;
+use crate::sys::rsf_srvk_setup as Graphics;
 use ash::vk::{self, Handle as _};
 use std::{ffi::c_void, mem, ptr};
 

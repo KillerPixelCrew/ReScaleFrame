@@ -4,7 +4,7 @@ use super::*;
 use crate::com_ref::test::{
     Fake as FakeCom, add_ref as com_add_ref, fake as fake_com, raw as com_raw,
 };
-use crate::render_abi::{RSF_FG_FIXED, rsf_fg_frame};
+use crate::sys::{RSF_FG_FIXED, rsf_fg_frame};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::null;

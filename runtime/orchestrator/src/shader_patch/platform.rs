@@ -2,7 +2,7 @@
 //! Windows implementations of the shader patch service's injectable leaves.
 
 use super::leaf::*;
-use crate::shader_patch_abi::{rsf_patch_bytes, rsf_patch_json_visit};
+use crate::sys::{rsf_patch_bytes, rsf_patch_json_visit};
 use rsf_shader_compiler::{Request, blob_bytes, compile as compile_shader};
 use std::ffi::{CStr, c_void};
 use std::ptr;

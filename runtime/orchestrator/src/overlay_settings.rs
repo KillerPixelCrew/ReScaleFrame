@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_abi::{
-    RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL,
-    rsf_native_input_routes, rsf_native_latency_status, rsf_overlay_intent as Intent,
-    rsf_overlay_stats as Stats,
-};
-use crate::render_abi::{
+use crate::sys::{
     RSF_FG_OFF, RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_FSR2, RSF_SR_XESS,
     rsf_native_fg_status as FgStatus, rsf_render_settings as Settings,
     rsf_sharpening_options as Sharpening,
 };
+use crate::sys::{
+    RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL,
+    rsf_native_input_routes, rsf_native_latency_status, rsf_overlay_intent as Intent,
+    rsf_overlay_stats as Stats,
+};
 use crate::{
-    cpu_abi::rsf_native_input_receipts,
     d3d11_present::{
         rsf_core_d3d11p_backend, rsf_core_d3d11p_backend_choices, rsf_core_d3d11p_has_owner,
         rsf_core_d3d11p_switch_result,
@@ -18,9 +17,10 @@ use crate::{
     fg_choice::rsf_fg_choice_get,
     native_cpu::rsf_native_input_receipts_get,
     native_fg_cpu::{platform::rsf_native_latency_status_get, rsf_core_native_input_routes_get},
+    sys::rsf_native_input_receipts,
 };
 use crate::{settings_store::set_sharpening, sharpening_policy};
-use rsf_game_sys::d3d11_sr_admission_abi::RSF_SR_AUTO;
+use rsf_game_sys::RSF_SR_AUTO;
 use std::ffi::CStr;
 
 pub(super) fn fill_latency_stats(

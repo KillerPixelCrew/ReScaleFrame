@@ -458,7 +458,7 @@ struct Sink<'a> {
 }
 
 impl Sink<'_> {
-    fn emitter(&mut self) -> (*mut c_void, crate::extension_abi::rsf_godot_property_emit) {
+    fn emitter(&mut self) -> (*mut c_void, crate::sys::rsf_godot_property_emit) {
         ((self as *mut Self).cast(), Some(emit))
     }
 }
@@ -467,9 +467,9 @@ unsafe extern "C" fn emit(
     user: *mut c_void,
     key: *const std::ffi::c_char,
     kind: u32,
-    value: *const crate::extension_abi::rsf_godot_property,
+    value: *const crate::sys::rsf_godot_property,
 ) {
-    use crate::extension_abi::*;
+    use crate::sys::*;
     let (Some(sink), false, Some(value)) = (
         unsafe { user.cast::<Sink>().as_mut() },
         key.is_null(),

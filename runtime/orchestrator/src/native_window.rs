@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::scene_abi::{
+use crate::sys::{
     RSF_NATIVE_SCENE_PRESENT_DIRECT, rsf_native_present_record, rsf_native_scene_identity,
     rsf_observer_present_event,
 };

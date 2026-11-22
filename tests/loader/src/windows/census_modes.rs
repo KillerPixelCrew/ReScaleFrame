@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::census_creation::rsf_test_census_creation;
-use super::census_facts_abi::rsf_test_census_native;
-use super::vendor_census_asi_abi::*;
 use super::{named, wide};
+use crate::sys::rsf_test_census_native;
+use crate::sys::*;
 use serde_json::Value;
 use std::{
     ffi::{CStr, c_char},

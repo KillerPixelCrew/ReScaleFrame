@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Drives the native geometry scenarios and the real MinHook guard lifecycle.
 
-use super::fixture_abi::{
+use super::*;
+use crate::engine_guards::decode_hex;
+use crate::sys::{
     rsf_test_anomaly_geometry_contract as Contract, rsf_test_anomaly_geometry_hooks as Hooks,
     rsf_test_anomaly_geometry_profile as TestProfile,
     rsf_test_anomaly_geometry_scenario as Scenario,
 };
-use super::*;
-use crate::engine_guards::decode_hex;
 use std::ffi::CStr;
 
 fn write_at(image: &mut [u8], rva: u32, bytes: &[u8]) -> Option<()> {

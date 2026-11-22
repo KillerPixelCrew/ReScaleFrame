@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_fg_abi::{
+use crate::sys::{
     RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame_slot as Slot, rsf_fgvk_submit_plan as SubmitPlan,
     rsf_fgvk_timeline as Timeline,
 };

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-use crate::fg_registry_abi::{
+use crate::sys::{
+    RSF_FG_BACKEND_ALL as PROVIDERS, RSF_FG_BACKEND_AUTO as AUTO, rsf_fg_choice as Choice,
+};
+use crate::sys::{
     RSF_FG_BACKEND_DLSS as DLSS, RSF_FG_BACKEND_FSR3 as FSR3, RSF_FG_BACKEND_FSR4 as FSR4,
     RSF_FG_BACKEND_XESS as XESS, rsf_fg_backend_info,
-};
-use crate::render_abi::{
-    RSF_FG_BACKEND_ALL as PROVIDERS, RSF_FG_BACKEND_AUTO as AUTO, rsf_fg_choice as Choice,
 };
 use std::ffi::{CStr, c_int};
 use std::sync::Mutex;

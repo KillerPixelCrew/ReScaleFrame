@@ -4,11 +4,11 @@
 //! The key names and text formats belong to the render frontend; the file and section always
 //! come from the adapter. The frontend ABI exposes FG as an enable flag, so the store
 //! also tracks the original mode when reading or rewriting saved preferences.
-use crate::render_abi::{
+use crate::sharpening_policy;
+use crate::sys::{
     RSF_RENDER_FRONTEND_ABI_VERSION, RSF_SHARPENING_ABI_VERSION, rsf_render_settings as Settings,
     rsf_sharpening_options as Sharpening,
 };
-use crate::sharpening_policy;
 use std::ffi::{CStr, c_char};
 use std::ptr::null;
 use std::sync::Mutex;

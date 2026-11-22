@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Opt-in desktop fixture for an injected overlay alongside the vendor census.
-use super::vendor_census_asi_abi::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
+use crate::sys::{RSF_CENSUS_ABI_VERSION, rsf_census_options};
 use ::windows::Win32::{
     Foundation::{E_FAIL, HANDLE, HWND},
     Graphics::{

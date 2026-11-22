@@ -9,10 +9,10 @@ use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
     R32_TYPELESS, R32G8X24_TYPELESS, RGBA16_FLOAT, RGBA32_FLOAT, half_to_f32,
 };
-use crate::gl_pipeline_abi::{rsf_dlss_setup, rsf_sr12_setup as Setup};
-use crate::render_abi::*;
 use crate::sharpening_policy;
 use crate::sr_session::checked;
+use crate::sys::*;
+use crate::sys::{rsf_dlss_setup, rsf_sr12_setup as Setup};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_NO_FG,

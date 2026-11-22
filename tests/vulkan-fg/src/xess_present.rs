@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_fg_abi::{RSF_FGVK_ABI_VERSION, rsf_fgvk_frame, rsf_fgvk_setup, rsf_fgvk_status};
-use crate::vulkan_sr_abi::rsf_srvk_setup;
+use crate::sys::rsf_srvk_setup;
+use crate::sys::rsf_xessgvk_options;
+use crate::sys::{RSF_FGVK_ABI_VERSION, rsf_fgvk_frame, rsf_fgvk_setup, rsf_fgvk_status};
 use crate::xess_present_gpu::{self as gpu, Queue, Resources};
-use crate::xess_present_options::rsf_xessgvk_options;
 use ash::{
     Device,
     vk::{self, Handle as _},

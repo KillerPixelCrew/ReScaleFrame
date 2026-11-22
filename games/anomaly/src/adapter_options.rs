@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::{fg_stage, ini, overlay, overlay_abi::rsf_anomaly_overlay_option};
+use crate::{fg_stage, ini, overlay, overlay::rsf_anomaly_overlay_option};
 use std::ffi::{CStr, c_char};
 use std::ops::RangeInclusive;
 use std::sync::OnceLock;

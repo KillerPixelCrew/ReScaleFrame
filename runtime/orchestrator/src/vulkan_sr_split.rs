@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_session::has_capacity;
-use crate::vulkan_sr_abi::*;
+use crate::sys::*;
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION};
 use std::ffi::c_void;
 use std::mem::offset_of;

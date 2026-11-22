@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::{RSF_FRAME_ASSEMBLY_ABI_VERSION, rsf_pipeline_camera_frame as Camera};
+use crate::sys::{RSF_FRAME_ASSEMBLY_ABI_VERSION, rsf_pipeline_camera_frame as Camera};
 use rsf_game_sys::{
     RSF_GAME_RENDER_RESET, rsf_game_depth_domain, rsf_game_depth_domains,
     rsf_game_render_config as Config, rsf_game_render_pass as Pass,

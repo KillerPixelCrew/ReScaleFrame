@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_device_identity::identity as device_identity;
-use crate::d3d11_observer_abi::{rsf_dump_log_fn, rsf_observer_options, rsf_observer_status};
 use crate::d3d11_observer_hooks::installed;
 use crate::d3d11_observer_present::{frames, present_size};
 use crate::sr_session::has_capacity;
+use crate::sys::{rsf_dump_log_fn, rsf_observer_options, rsf_observer_status};
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write;

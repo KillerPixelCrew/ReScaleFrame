@@ -12,15 +12,15 @@ use super::generation::{
 use super::*;
 use crate::mfg_state::{self, Owner as Mfg};
 use crate::reflex_audit::{rsf_reflex_audit_start, rsf_reflex_audit_stop, rsf_reflex_driver_sleep};
-use crate::render_abi::{
-    rsf_fg_options as Options, rsf_generation_provider as Provider,
-    rsf_generation_setup as GenerationSetup,
-};
 use crate::streamline_generation_records::{
     self as records, REFLEX_SAMPLES, rsf_slhost_reflex_sample as Sample, rsf_slhost_tag as Tag,
     rsf_slhost_version as Version,
 };
 use crate::streamline_sdk::{self as sdk, api};
+use crate::sys::{
+    rsf_fg_options as Options, rsf_generation_provider as Provider,
+    rsf_generation_setup as GenerationSetup,
+};
 use std::mem::transmute;
 use std::ptr::null;
 use windows::Win32::Foundation::HWND;

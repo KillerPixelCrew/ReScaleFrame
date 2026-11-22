@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-use crate::abi::rsf_fg_retirement;
 use crate::device::{self, SKIP, Window};
 use crate::session::{OK, Raw};
-use crate::session_abi::*;
+use crate::sys::rsf_fg_retirement;
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_int};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;

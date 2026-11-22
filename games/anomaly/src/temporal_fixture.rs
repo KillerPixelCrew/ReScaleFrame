@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! CPU scenarios for the independent temporal model.
-mod abi;
 mod geometry_bridge;
 mod history;
 mod math;
 mod oracle;
 
-use abi::{
+use crate::sys::{
     rsf_anomaly_plan_camera as Camera, rsf_anomaly_plan_extent as Extent,
     rsf_anomaly_plan_frame as Frame, rsf_anomaly_plan_key as Key,
     rsf_anomaly_plan_matrix as Matrix, rsf_anomaly_plan_resolutions as Sizes,

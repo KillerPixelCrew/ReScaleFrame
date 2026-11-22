@@ -21,10 +21,16 @@ render-host-fixtures = ["windows-sys/Win32_System_Performance", "windows-sys/Win
 
 [lib]
 crate-type = ["staticlib"]
+# A CMake fixture archive. Its unit-test harness would link the Runtime and adapter crates it
+# takes bindings from, with all their native imports.
+test = false
 
 [target.'cfg(windows)'.dependencies]
 ash = { version = "=0.38.0", optional = true, default-features = false, features = ["std"] }
+rsf-anomaly = { path = "../../games/anomaly" }
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
+rsf-unity-mono = { path = "../../games/unity-mono" }
 windows = { version = "=0.62.2", optional = true, default-features = false, features = [
   "std",
   "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi",
@@ -37,6 +43,9 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_LibraryLoader",
   "Win32_System_SystemServices",
 ] }
+
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
 
 [lints]
 workspace = true

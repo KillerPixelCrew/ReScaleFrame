@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::auxiliary_sr_abi::{
+use crate::sys::{
     RSF_DEPTH_SCALE_ABI_VERSION as ABI, rsf_depth_scale_frame as Frame,
     rsf_depth_scale_setup as Setup,
 };

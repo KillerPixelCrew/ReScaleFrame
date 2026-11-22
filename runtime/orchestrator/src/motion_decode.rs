@@ -7,11 +7,9 @@ use crate::graphics_d3d11::{
     rsf_call_native_log, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view,
     target_view,
 };
-use crate::graphics_pass_abi::{
-    RSF_MOTION_DECODE_ABI_VERSION as ABI, rsf_motion_decode_setup as Setup,
-};
 use crate::sr_session::has_capacity;
-use rsf_game_sys::sr_abi::rsf_motion_decode_params as Params;
+use crate::sys::{RSF_MOTION_DECODE_ABI_VERSION as ABI, rsf_motion_decode_setup as Setup};
+use rsf_game_sys::rsf_motion_decode_params as Params;
 use std::ffi::{CString, c_void};
 use std::ptr::{self, null_mut};
 use std::sync::{Mutex, TryLockError};
@@ -49,13 +47,11 @@ struct Constants {
 
 const SHADER: &[u8] = include_bytes!("../../graphics/shaders/motion_decode.hlsl");
 
-impl Setup {
-    fn say(&self, message: &str) {
-        if self.log.is_some()
-            && let Ok(message) = CString::new(message)
-        {
-            unsafe { rsf_call_native_log(self.log, self.log_user, message.as_ptr()) };
-        }
+fn say(setup: &Setup, message: &str) {
+    if setup.log.is_some()
+        && let Ok(message) = CString::new(message)
+    {
+        unsafe { rsf_call_native_log(setup.log, setup.log_user, message.as_ptr()) };
     }
 }
 
@@ -65,13 +61,13 @@ unsafe fn make_resources(device: Handle, setup: &Setup, bytes: u32, out: &mut Re
         Ok(code) => compute_shader(device, &code),
         Err(message) => {
             if !message.is_empty() {
-                setup.say(&message);
+                say(setup, &message);
             }
             None
         }
     };
     let Some(shader) = shader else {
-        setup.say("motion decode shader could not be created");
+        say(setup, "motion decode shader could not be created");
         return SHADER_FAILED;
     };
     let format = if setup.output_format == 0 {
@@ -80,15 +76,15 @@ unsafe fn make_resources(device: Handle, setup: &Setup, bytes: u32, out: &mut Re
         DXGI_FORMAT(setup.output_format as i32)
     };
     let Some(texture) = compute_texture(device, setup.width, setup.height, format) else {
-        setup.say("decoded motion target could not be created");
+        say(setup, "decoded motion target could not be created");
         return RESOURCE_FAILED;
     };
     let Some(view) = target_view(device, &texture, 0) else {
-        setup.say("unordered access view could not be created");
+        say(setup, "unordered access view could not be created");
         return RESOURCE_FAILED;
     };
     let Some(buffer) = constant_buffer(device, bytes, true) else {
-        setup.say("constant buffer could not be created");
+        say(setup, "constant buffer could not be created");
         return RESOURCE_FAILED;
     };
     *out = [
@@ -221,10 +217,10 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_create(
     let Some(pass) = (unsafe { owner.as_ref() }) else {
         return RESOURCE_FAILED;
     };
-    pass.setup.say(&format!(
-        "motion decode ready for {}x{}",
-        setup.width, setup.height
-    ));
+    say(
+        &pass.setup,
+        &format!("motion decode ready for {}x{}", setup.width, setup.height),
+    );
     unsafe { out.write(owner) };
     OK
 }
@@ -255,14 +251,17 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_run(
     };
     let mut extent = SourceInfo::default();
     if unsafe { describe_source(device, texture, &mut extent) } == 0 {
-        pass.setup.say("source belongs to another device");
+        say(&pass.setup, "source belongs to another device");
         return SOURCE_MISMATCH;
     }
     if extent.width != width || extent.height != height || !extent.single_surface() {
-        pass.setup.say(&format!(
-            "source is {}x{} but this pass was built for {width}x{height}",
-            extent.width, extent.height
-        ));
+        say(
+            &pass.setup,
+            &format!(
+                "source is {}x{} but this pass was built for {width}x{height}",
+                extent.width, extent.height
+            ),
+        );
         return SOURCE_MISMATCH;
     }
     let mut sources = match pass.sources.try_lock() {
@@ -273,7 +272,7 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_run(
     let now = unsafe { GetTickCount64() };
     let Some(view) = (unsafe { sources.get(device, texture, 0, now, source_view) }) else {
         drop(sources);
-        pass.setup.say("source view could not be created");
+        say(&pass.setup, "source view could not be created");
         return RESOURCE_FAILED;
     };
     let resources = std::array::from_fn(|i| pass.resources[i].as_ptr());

@@ -8,7 +8,7 @@ use super::tests::{CONSTANT_SLOTS, CPU_WRITE, DYNAMIC_USAGE};
 use super::{
     ARGUMENT, COMPILE, COUNTERS, INTERNAL, OK, guarded, lock, platform, raw, sha256, wide_path,
 };
-use crate::shader_patch_abi::rsf_patch_bytes;
+use crate::sys::rsf_patch_bytes;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_void};

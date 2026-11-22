@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Live AC7 device fixture cadence and assertions over the production presentation owners.
-use crate::d3d11_marker_abi::rsf_native_cpu_frame;
 use crate::fixture_device::rsf_present_fixture_debug_errors;
-use crate::present_fixture_loops_abi::*;
 use crate::present_fixture_time::{frequency, milliseconds, stamp};
-use rsf_game_sys::*;
+use crate::sys::rsf_native_cpu_frame;
+use crate::sys::*;
 use std::time::Instant;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D12::ID3D12Device;

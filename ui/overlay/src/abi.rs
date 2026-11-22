@@ -2,9 +2,6 @@
 //! The frame status, option and intent use generated records shared with the Runtime.
 //! The layout assertions pin the contract against the C header on 64-bit targets.
 
-#[path = "../../../sdk/game/src/sharpening_defaults.rs"]
-pub(crate) mod sharpening_defaults;
-
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
 
@@ -38,26 +35,24 @@ pub const RSF_OVERLAY_MOUSE_RIGHT: u32 = 0x2;
 /// Middle mouse button.
 pub const RSF_OVERLAY_MOUSE_MIDDLE: u32 = 0x4;
 
-#[path = "wire.rs"]
-mod wire;
-pub(crate) use wire::{
+pub(crate) use rsf_game_sys::{
     RSF_OVERLAY_SAVED_CLEAR, RSF_OVERLAY_SAVED_PASTE, RSF_OVERLAY_SAVED_ROW_LIMIT,
     RSF_OVERLAY_SAVED_SET, RSF_OVERLAY_SAVED_TEXT, RSF_OVERLAY_SAVED_TOGGLE,
 };
 
 /// Version of the panel ABI implemented by this build.
-pub use wire::RSF_OVERLAY_ABI_VERSION;
+pub use rsf_game_sys::RSF_OVERLAY_ABI_VERSION;
 /// A host option whose value is 0 or 1.
-pub use wire::RSF_OVERLAY_HOST_OPTION_TOGGLE;
+pub use rsf_game_sys::RSF_OVERLAY_HOST_OPTION_TOGGLE;
 /// XeSS Ultra Quality preset.
-pub use wire::RSF_OVERLAY_QUALITY_ULTRA_QUALITY;
+pub use rsf_game_sys::RSF_OVERLAY_QUALITY_ULTRA_QUALITY;
 /// An adapter option borrowed for the frame call.
-pub use wire::rsf_overlay_host_option as RsfOverlayHostOption;
+pub use rsf_game_sys::rsf_overlay_host_option as RsfOverlayHostOption;
 /// Settings and actions requested by the panel this frame.
-pub use wire::rsf_overlay_intent as RsfOverlayIntent;
+pub use rsf_game_sys::rsf_overlay_intent as RsfOverlayIntent;
 /// The frame status record defined in overlay.h.
-pub use wire::rsf_overlay_stats as RsfOverlayStats;
-pub(crate) use wire::{
+pub use rsf_game_sys::rsf_overlay_stats as RsfOverlayStats;
+pub(crate) use rsf_game_sys::{
     RSF_OVERLAY_FRAME_LIMIT_VRR, RSF_OVERLAY_SR_CHANGE_REFUSED,
     RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
 };

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::super::*;
 use crate::motion_device::{Owner, rsf_anomaly_motion_device_upload};
-use crate::motion_device_abi::{RSF_MOTION_CORE, RSF_MOTION_PIXEL, RSF_MOTION_TESS};
+use crate::sys::{RSF_MOTION_CORE, RSF_MOTION_PIXEL, RSF_MOTION_TESS};
 use std::ffi::{CStr, c_void};
 
 /// Uploads VS (and DS) b13 for a skinned mover through the production policy and packers.

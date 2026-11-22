@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d12_fence::FenceState;
-use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use crate::overlay_geometry::{
     borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
-};
-use crate::overlay_host_abi::{
-    RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data as DrawData, rsf_overlay_input,
-    rsf_overlay_vertex,
-};
-use crate::overlay_native12_abi::{
-    RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_draw as Draw, rsf_overlay12_draw_call as DrawCall,
-    rsf_overlay12_frame as FrameTable, rsf_overlay12_log, rsf_overlay12_platform as RawPlatform,
-    rsf_overlay12_target as Target,
 };
 use crate::overlay_panel::{OpenPanel, PanelEntries, elapsed_seconds, open_panel};
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
+use crate::sys::{
+    RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data as DrawData, rsf_overlay_input,
+    rsf_overlay_vertex,
+};
+use crate::sys::{
+    RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_draw as Draw, rsf_overlay12_draw_call as DrawCall,
+    rsf_overlay12_frame as FrameTable, rsf_overlay12_log, rsf_overlay12_platform as RawPlatform,
+    rsf_overlay12_target as Target,
+};
+use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use std::ffi::{CStr, c_void};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::ptr::{NonNull, null_mut};
@@ -1256,7 +1256,7 @@ mod tests {
         let target = unsafe { ComRef::from_owned(raw(&target_resource)).unwrap() };
         let vertices = [rsf_overlay_vertex::default()];
         let indices = [0u32; 3];
-        let valid = crate::overlay_host_abi::rsf_overlay_draw_call {
+        let valid = crate::sys::rsf_overlay_draw_call {
             index_count: 3,
             clip_width: 4,
             clip_height: 4,
@@ -1264,12 +1264,12 @@ mod tests {
             ..Default::default()
         };
         let calls = [
-            crate::overlay_host_abi::rsf_overlay_draw_call {
+            crate::sys::rsf_overlay_draw_call {
                 index_count: 0,
                 texture_id: u64::MAX,
                 ..valid
             },
-            crate::overlay_host_abi::rsf_overlay_draw_call {
+            crate::sys::rsf_overlay_draw_call {
                 clip_x: 4,
                 texture_id: u64::MAX,
                 ..valid

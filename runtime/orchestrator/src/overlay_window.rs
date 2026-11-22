@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_host_abi::{
+use crate::overlay_visibility::{self, rsf_core_overlay_toggle_key};
+use crate::sr_session::has_capacity;
+use crate::sys::{
     RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay_input_log_fn as LogFn,
     rsf_overlay_input_options as Options,
 };
-use crate::overlay_visibility::{self, rsf_core_overlay_toggle_key};
-use crate::sr_session::has_capacity;
 use crate::{overlay_cursor_hooks, overlay_pointer};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::null_mut;

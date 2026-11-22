@@ -7,13 +7,17 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+# rlib so tests/ac7-capture and the standalone AC7 fixtures can use the bindings it owns.
+crate-type = ["staticlib", "rlib"]
 
 [features]
 warp-fixture = []
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
 
 [target."cfg(windows)".dependencies]
 windows = { version = "=0.62.2", default-features = false, features = [

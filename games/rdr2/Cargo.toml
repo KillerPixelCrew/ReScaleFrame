@@ -47,5 +47,8 @@ features = [
   "Win32_UI_WindowsAndMessaging",
 ]
 
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
+
 [lints]
 workspace = true

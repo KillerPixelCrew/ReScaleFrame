@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! CPU event sequencing around the typed native continuations.
 
-use crate::cpu_call_abi::*;
 use crate::cpu_hooks::{self, Services, active};
 use crate::cpu_native::*;
 use crate::cpu_policy::*;
 use crate::cpu_sources::*;
 use crate::platform;
 use crate::render_native::{log_host, rsf_skyrim_call_render_pass, thread};
-use rsf_game_sys::*;
+use crate::sys::*;
 use std::cell::Cell;
 use std::ffi::{CStr, CString};
 use std::ptr::{self, NonNull};

@@ -5,7 +5,7 @@ use super::{
     gl_fixture::{Framebuffer, Window},
     log, require,
 };
-use crate::gl_pipeline_fixture_abi::*;
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_RESET, RSF_SCREEN_FLIGHT, rsf_camera_frame,
     rsf_game_render_pass,

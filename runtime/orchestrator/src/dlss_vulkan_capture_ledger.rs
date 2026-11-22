@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_fg_abi::rsf_dlss_capture_source as Source;
+use crate::sys::rsf_dlss_capture_source as Source;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const AMBIGUOUS: u32 = 1;

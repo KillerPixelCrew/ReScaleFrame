@@ -7,7 +7,7 @@
 //! rsf_sr12_evaluate's slot contract (0..2) needs. package_state.rs sequences creation,
 //! evaluation and release against the stored settings through package.c's typed leaves; this
 //! module holds the table and its rules, and never touches a context itself.
-use crate::package_abi::rsf_sr12;
+use crate::sys::rsf_sr12;
 use rsf_game_sys::recording_slots::RecordingSlots;
 use std::ffi::c_void;
 use std::ptr::null_mut;

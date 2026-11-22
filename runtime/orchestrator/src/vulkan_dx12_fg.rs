@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
-use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image as SharedImage;
 use crate::sr_session::has_capacity;
-use crate::vulkan_external_copy::{
-    self, ALL_COMMANDS, Barrier, FAMILY_EXTERNAL, GENERAL, TRANSFER_DST, Transfer, UNDEFINED,
-};
-use crate::vulkan_fg_abi::{
+use crate::sys::rsf_dx12vk_shared_image as SharedImage;
+use crate::sys::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame as Frame,
     rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup, rsf_fgvk_status as Status,
     rsf_fgvk_timeline as RecordingTimeline,
 };
+use crate::sys::{rsf_srvk_image as Image, rsf_srvk_setup as Graphics};
+use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
+use crate::vulkan_external_copy::{
+    self, ALL_COMMANDS, Barrier, FAMILY_EXTERNAL, GENERAL, TRANSFER_DST, Transfer, UNDEFINED,
+};
 use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
-use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_sr::{SAMPLED_USAGE, TRANSFER_SRC_USAGE, valid_image};
-use crate::vulkan_sr_abi::{rsf_srvk_image as Image, rsf_srvk_setup as Graphics};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION,
     rsf_frame_record as Record,
@@ -56,18 +56,6 @@ mod platform;
 
 pub(super) type Handle = *mut c_void;
 pub(super) type Release = unsafe extern "C" fn(Handle) -> i32;
-
-impl Default for SharedImage {
-    fn default() -> Self {
-        Self {
-            image: 0,
-            dx12_resource: ptr::null_mut(),
-            format: 0,
-            width: 0,
-            height: 0,
-        }
-    }
-}
 
 /// Raw facts the native reader copies from the borrowed VkSwapchainCreateInfoKHR.
 /// `extension_count` saturates at 2; `extension_type` is the first chained sType or 0.

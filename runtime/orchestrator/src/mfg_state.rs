@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::rsf_backend_log_fn as Log;
 use crate::sdk_module::SdkModule;
+use crate::sys::rsf_backend_log_fn as Log;
 use std::ffi::{CStr, CString, c_void};
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};

@@ -15,7 +15,7 @@ use super::super::{
 use super::abi::{FfxApiResource, PfnFfxCreateContext, PfnFfxDestroyContext, PfnFfxDispatch};
 use super::abi::{PfnFfxQuery, ffxApiHeader, ffxContext};
 use super::commands;
-use crate::abi::{rsf_fsr4_compat_lease as Lease, rsf_fsr4_compat_log_fn as LogFn};
+use crate::sys::{rsf_fsr4_compat_lease as Lease, rsf_fsr4_compat_log_fn as LogFn};
 use core::ptr;
 use std::alloc::{Layout, alloc, dealloc};
 

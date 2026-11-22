@@ -15,12 +15,20 @@ gl-device-fixture = [
 
 [lib]
 crate-type = ["staticlib"]
+# A CMake fixture archive. Its unit-test harness would link the Runtime and adapter crates it
+# takes bindings from, with all their native imports.
+test = false
+
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
 
 [lints]
 workspace = true
 
 [target."cfg(windows)".dependencies]
+rsf-ac7 = { path = "../../games/ac7" }
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
 windows = { version = "=0.62.2", default-features = false, features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D11",

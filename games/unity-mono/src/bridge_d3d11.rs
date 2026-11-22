@@ -2,18 +2,18 @@
 //! The Unity package's D3D11-to-D3D12 recording and hand-back.
 
 use super::*;
-use crate::bridge_abi::rsf_unity_packet;
-use crate::bridge_present_abi::{
-    rsf_d3d11_present_graphics, rsf_d3d11_present_host, rsf_streamline_graphics,
-    rsf_streamline_host_native,
-};
 use crate::bridge_state::{rsf_unity_frames_activate, rsf_unity_frames_active};
 use crate::d3d11_pass::{
     self, HANDBACK_FAILED, PassPlan, RETIRED, ROUTE_NONE, ROUTE_PREVIEW, ROUTE_WINDOW,
 };
 use crate::package_state::services::rsf_unity_package_log;
 use crate::package_state::{rsf_unity_package_bridge_failed, rsf_unity_package_sr_slot_reset};
-use crate::shared_surface_abi::*;
+use crate::sys::rsf_unity_packet;
+use crate::sys::*;
+use crate::sys::{
+    rsf_d3d11_present_graphics, rsf_d3d11_present_host, rsf_streamline_graphics,
+    rsf_streamline_host_native,
+};
 use rsf_game_sys::rsf_game_render_pass;
 use rsf_runtime_submission::{FenceStatus, fence_status};
 use std::ffi::CStr;

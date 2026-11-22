@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-#[path = "../games/ac7/src/scene_color_abi.rs"]
-mod scene_color_abi;
+use rsf_ac7::sys as scene_color_abi;
 
 use scene_color_abi::rsf_frame_tap_target_draw;
 use std::ffi::{c_int, c_void};

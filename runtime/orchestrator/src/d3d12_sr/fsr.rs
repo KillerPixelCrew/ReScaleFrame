@@ -9,7 +9,7 @@ use super::ffx_abi::*;
 const FFX_OK: u32 = FFX_API_RETURN_OK as u32;
 
 pub(super) type Acquire =
-    unsafe extern "C" fn(Raw, Raw, crate::render_abi::rsf_backend_log_fn, Raw) -> *const c_void;
+    unsafe extern "C" fn(Raw, Raw, crate::sys::rsf_backend_log_fn, Raw) -> *const c_void;
 pub(super) type Release = unsafe extern "C" fn(*const c_void);
 
 pub(super) struct CompatibilityOps {

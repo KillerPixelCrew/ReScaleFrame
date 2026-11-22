@@ -5,10 +5,10 @@ use super::json::{
     rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
     rsf_census_json_wide,
 };
-use super::json_abi::rsf_census_json;
-use super::ngx_abi::{RSF_CENSUS_NGX_ENTRIES, rsf_census_ngx_platform};
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
-use super::session_abi::rsf_census_call_state;
+use crate::sys::rsf_census_call_state;
+use crate::sys::rsf_census_json;
+use crate::sys::{RSF_CENSUS_NGX_ENTRIES, rsf_census_ngx_platform};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{MaybeUninit, transmute};
 use std::ptr::{null, null_mut};

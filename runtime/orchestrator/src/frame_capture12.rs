@@ -39,22 +39,7 @@ const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 
-use crate::fg12_abi::rsf_fg12_readback_layout as Layout;
-
-// The record is generated; the derive cannot be added to its definition.
-#[allow(clippy::derivable_impls)]
-impl Default for Layout {
-    fn default() -> Self {
-        Self {
-            bytes: 0,
-            offset: 0,
-            width: 0,
-            height: 0,
-            format: 0,
-            row_pitch: 0,
-        }
-    }
-}
+use crate::sys::rsf_fg12_readback_layout as Layout;
 
 #[repr(C)]
 pub struct Platform {

@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: MIT
 //! D3D12 FG payloads using the same checked SDK value layouts as Vulkan.
-use crate::render_abi::{RSF_REFLEX_BOOST, rsf_backend_log_fn as Log, rsf_fg_frame, rsf_fg_status};
 use crate::streamline_policy::camera_forward;
+use crate::sys::{RSF_REFLEX_BOOST, rsf_backend_log_fn as Log, rsf_fg_frame, rsf_fg_status};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::null_mut;
-
-#[path = "streamline_generation_records_abi.rs"]
-mod abi;
 
 use crate::streamline_sdk::{
     Constants as rsf_slvk_sdk_constants, FgHeader, FgOptions as rsf_slvk_sdk_fg_options,
     Header as rsf_slvk_sdk_header, PclOptions as rsf_slvk_sdk_pcl_options,
     ReflexOptions as rsf_slvk_sdk_reflex_options, default_constants,
 };
-pub(crate) use abi::{rsf_slhost_reflex_sample, rsf_slhost_tag, rsf_slhost_version};
+pub(crate) use crate::sys::{rsf_slhost_reflex_sample, rsf_slhost_tag, rsf_slhost_version};
 
 const REFLEX_ON: u32 = 1;
 pub(crate) const REFLEX_SAMPLES: usize = 64;

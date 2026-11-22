@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_history::{rsf_core_sr_clear_reset, rsf_core_sr_evaluate, rsf_core_sr_request_reset};
 use crate::sr_session::has_capacity;
+use crate::sys::rsf_dlss_pipeline_set_sharpening;
 use rsf_game_sys::rsf_game_render_pass as Pass;
-use rsf_game_sys::sr_abi::{
+use rsf_game_sys::{
     RSF_D3D11_SR_API_VERSION, RSF_DLSS_PIPELINE_ABI_VERSION, rsf_d3d11_sr_api as Api,
     rsf_dlss_pipeline_setup as Setup, rsf_dlss_pipeline_status as Status,
 };
@@ -24,7 +25,6 @@ unsafe extern "C" {
     ) -> i32;
     fn rsf_dlss_pipeline_output_texture() -> *mut c_void;
     fn rsf_dlss_pipeline_request_dump(prefix: *const c_char) -> i32;
-    fn rsf_dlss_pipeline_set_sharpening(options: *const c_void) -> i32;
 }
 
 unsafe extern "C" fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {

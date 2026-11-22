@@ -9,8 +9,8 @@ mod platform;
 
 use crate::com_ref::ComRef;
 use crate::owned_handle::OwnedHandle as Owned;
-use crate::render_abi::*;
 use crate::sr_session::has_capacity;
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };

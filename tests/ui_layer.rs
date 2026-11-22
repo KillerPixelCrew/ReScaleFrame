@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Device, Handle, Pass, TestResult, check, near};
 use crate::graphics_d3d11::{constant_buffer, pixel_shader, shader_code, vertex_shader};
-use crate::ui_layer_abi::{
+use crate::sys::{
     RSF_UI_LAYER_ABI_VERSION, rsf_ui_layer_setup as Setup, rsf_ui_layer_status as Status,
 };
 use rsf_shader_compiler::Compiler;

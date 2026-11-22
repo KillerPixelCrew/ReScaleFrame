@@ -6,11 +6,11 @@ use super::*;
 use crate::com_ref::ComRef;
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::frame_capture12::{Owner as Capture, Platform as CapturePlatform};
-use crate::render_abi::{
+use crate::sdk_module::FFX_CONTEXT_EXPORTS;
+use crate::sys::{
     RSF_FG_FIXED, RSF_FG_STAT_ACTIVITY, RSF_FG_STAT_PRESENT_CALLBACKS, RSF_FG_STAT_TOTAL_PRESENTED,
     RSF_REFLEX_OFF, rsf_backend_resource as Resource,
 };
-use crate::sdk_module::FFX_CONTEXT_EXPORTS;
 use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering::Relaxed};

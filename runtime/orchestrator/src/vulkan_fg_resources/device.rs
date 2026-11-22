@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
 use crate::dx12_vulkan_platform::{device_local_mask, lookup};
-use crate::vulkan_fg_abi::rsf_fgvk_setup;
-use crate::vulkan_fg_resources_abi::rsf_vkfg_platform;
-use crate::vulkan_sr_abi::{rsf_srvk_setup, rsf_vk_function};
+use crate::sys::rsf_fgvk_setup;
+use crate::sys::rsf_vkfg_platform;
+use crate::sys::{rsf_srvk_setup, rsf_vk_function};
 use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle};
 use std::{

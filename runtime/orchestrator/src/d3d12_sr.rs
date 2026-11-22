@@ -2,8 +2,8 @@
 //! D3D12 SR provider owners, loader policy and resource admission.
 use crate::allocate_handle;
 use crate::ffx_version::{MAX_VERSIONS, Version as ProviderVersion};
-use crate::render_abi::{rsf_sr_frame as Frame, rsf_sr_open_desc as Open};
 use crate::sdk_module::{SdkModule, d3d12_library_path, load_system_library};
+use crate::sys::{rsf_sr_frame as Frame, rsf_sr_open_desc as Open};
 use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;

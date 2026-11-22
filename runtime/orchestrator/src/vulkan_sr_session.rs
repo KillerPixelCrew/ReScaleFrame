@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
 use crate::sr_session::has_capacity;
-use crate::vulkan_sr_abi::{
+use crate::sys::{
     RSF_SR_DLSS, RSF_SR_FSR4, RSF_SRVK_ABI_VERSION, rsf_fsr4vk_handoff as Handoff,
     rsf_srvk_fallback as Fallback, rsf_srvk_frame as Frame, rsf_srvk_setup as Setup,
 };

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::geometry_registry_abi::RSF_ANOMALY_DRAW_UNIDENTIFIED_DEFORMED;
 use crate::motion::foliage::*;
+use crate::sys::RSF_ANOMALY_DRAW_UNIDENTIFIED_DEFORMED;
 
 fn group([x, y, z]: [f32; 3], scale: f32, sun: f32, hemi: f32) -> [f32; 16] {
     [

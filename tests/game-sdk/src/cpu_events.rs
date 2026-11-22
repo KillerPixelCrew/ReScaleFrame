@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::{cpu_abi::*, cpu_calls::*};
-use rsf_game_sys::*;
+use crate::sys::*;
 use std::ffi::c_void;
 
 type Event = rsf_game_cpu_event;

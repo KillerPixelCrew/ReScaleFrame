@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::cpu_abi::*;
-use rsf_game_sys::*;
+use crate::sys::*;
 
 type Reservation = rsf_native_cpu_reservation;
 type Counters = rsf_native_cpu_reservation_counters;

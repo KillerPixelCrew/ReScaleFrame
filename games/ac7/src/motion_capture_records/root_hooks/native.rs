@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::capture_platform_abi::{
+use crate::motion_capture_session::{rsf_ac7_capture_enabled, say};
+use crate::sys::{
     rsf_ac7_capture_initialize_minhook, rsf_ac7_capture_install_engine_batch,
     rsf_ac7_capture_install_root_batch, rsf_ac7_capture_remove_hook_batch, rsf_ac7_copy_memory,
 };
-use crate::motion_capture_session::{rsf_ac7_capture_enabled, say};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::core::PCWSTR;
 

@@ -33,6 +33,7 @@ members = [
   "integrations/steam",
   "integrations/windows",
   "tools/exposure_probe",
+  "tools/bindgen",
 ]
 resolver = "3"
 

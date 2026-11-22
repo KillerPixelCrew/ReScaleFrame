@@ -118,7 +118,77 @@ fn streamline_guard() {
         .compile("rsf_core_slvk_guard");
 }
 
+/// Binds the private Runtime headers that only this crate and its test crates read. The public
+/// headers come from rsf-game-sys, the FSR 4 ones from rsf-fsr4-compat and the Streamline records
+/// from rsf-streamline-vk.
+fn bindings() {
+    const HEADERS: &[&str] = &[
+        "runtime/orchestrator/src/auxiliary_sr_platform.h",
+        "runtime/orchestrator/src/d3d11_host_foreign.h",
+        "runtime/orchestrator/src/d3d11_output_platform.h",
+        "runtime/orchestrator/src/fg12_platform.h",
+        "runtime/orchestrator/src/latency_antilag.h",
+        "runtime/orchestrator/src/native_dlss_vulkan_platform.h",
+        "runtime/orchestrator/src/native_fg_dlss_vulkan_capture_ledger.h",
+        "runtime/orchestrator/src/native_fg_ffx_vulkan.h",
+        "runtime/orchestrator/src/native_dx12_vulkan_platform.h",
+        "runtime/orchestrator/src/native_fg_cpu_platform.h",
+        "runtime/orchestrator/src/native_fg_platform.h",
+        "runtime/orchestrator/src/native_fg_vulkan_platform.h",
+        "runtime/orchestrator/src/native_fg_xess_vulkan.h",
+        "runtime/orchestrator/src/native_latency_vulkan_platform.h",
+        "runtime/orchestrator/src/native_latency_vulkan_presentation.h",
+        "runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h",
+        "runtime/orchestrator/src/overlay_panel.h",
+        "runtime/orchestrator/src/overlay_wrapped12_platform.h",
+        "runtime/orchestrator/src/render_host_foreign.h",
+        "runtime/orchestrator/src/sharpening_vulkan.h",
+        "runtime/orchestrator/src/vulkan_fg_resources.h",
+        "runtime/orchestrator/src/vulkan_fg_copy_abi.h",
+        "runtime/orchestrator/src/vulkan_fg_frames.h",
+        "runtime/graphics/src/frame_tap_platform.h",
+        "runtime/graphics/src/sharpening/d3d11.h",
+        "runtime/backends/dlss/src/streamline_generation_records.h",
+        "runtime/backends/dlss/src/streamline_sr_records.h",
+        "runtime/backends/common/generation12_platform.h",
+        "runtime/shader_patch/src/json.h",
+        "runtime/vulkan/fsr4-fg/bridge_api.h",
+        // Compiled into this crate through tests/graphics_fixture.rs.
+        "tests/native_sr_fsr4_vulkan_fixture.h",
+    ];
+    fn derives(name: &str) -> &'static [&'static str] {
+        match name {
+            "rsf_vkfg_barrier" | "rsf_vkfg_image_copy" => &["Debug", "PartialEq", "Eq"],
+            _ => &[],
+        }
+    }
+    let builder = rsf_bindgen::owner(
+        HEADERS,
+        &[],
+        &[
+            "runtime/orchestrator/src",
+            "runtime/graphics/src",
+            "runtime/backends/dlss/src",
+            "runtime/backends/common",
+            "runtime/shader_patch/src",
+            "runtime/vulkan/fsr4-fg",
+            "tests/native_sr_fsr4_vulkan_fixture.h",
+        ],
+        &["runtime/backends/fsr/src", "runtime/vulkan/fsr4", "runtime/vulkan/streamline"], &[],
+    )
+    .parse_callbacks(Box::new(rsf_bindgen::Derives(derives)))
+    // The Vulkan FSR 4 owner stays an untyped handle on the Rust side, as before.
+    // Declared by hand where they are called, with Rust reference or handle types.
+    .blocklist_function(
+        "RsfFsr4Fg.*|rsf_dx12vk_interop_(image|timeline|destroy|release_guides)|rsf_sharpening_requested",
+    )
+    .blocklist_type("rsf_fsr4vk")
+    .raw_line("pub type rsf_fsr4vk = ::core::ffi::c_void;");
+    rsf_bindgen::write(builder, "sys.rs");
+}
+
 fn main() {
+    bindings();
     println!("cargo::rustc-check-cfg=cfg(rsf_streamline_core)");
     println!("cargo:rustc-cfg=rsf_streamline_core");
     println!("cargo:rerun-if-changed=src/plugin_callbacks.c");

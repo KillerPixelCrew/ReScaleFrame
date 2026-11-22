@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::vendor_census_asi_abi::{
-    RSF_CENSUS_ABI_VERSION, RSF_CENSUS_FLAG_NO_STATIC_SCAN, rsf_census_options,
-};
 use super::{named, wide};
+use crate::sys::{RSF_CENSUS_ABI_VERSION, RSF_CENSUS_FLAG_NO_STATIC_SCAN, rsf_census_options};
 use std::ffi::{c_char, c_void};
 use std::mem::transmute;
 use windows_sys::Win32::{Foundation::FARPROC, System::LibraryLoader::LoadLibraryW};

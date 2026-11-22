@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::{BUFFER, Handle, LAYOUT, STAGE_BASE, TEXTURE, original};
-use crate::d3d11_observer_abi::{
+use crate::d3d11_observer_callbacks::{self as callbacks, TextureFacts};
+use crate::d3d11_observer_present::{present, rsf_observer11_present_platform};
+use crate::sys::rsf_observer_present_event as Event;
+use crate::sys::{
     RSF_OBSERVER_MAX_LAYOUT_ELEMENTS, RSF_OBSERVER_STAGE_COMPUTE, RSF_OBSERVER_STAGE_DOMAIN,
     RSF_OBSERVER_STAGE_GEOMETRY, RSF_OBSERVER_STAGE_HULL, RSF_OBSERVER_STAGE_PIXEL,
     RSF_OBSERVER_STAGE_VERTEX, rsf_observer_layout_element as Layout,
 };
-use crate::d3d11_observer_callbacks::{self as callbacks, TextureFacts};
-use crate::d3d11_observer_present::{present, rsf_observer11_present_platform};
-use crate::scene_abi::rsf_observer_present_event as Event;
 use std::ffi::c_void;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D11::{

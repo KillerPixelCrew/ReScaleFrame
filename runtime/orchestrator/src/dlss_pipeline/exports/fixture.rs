@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::d3d11_output_abi::rsf_d3d11_state;
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::sdk_module::SdkModule;
+use crate::sys::rsf_d3d11_state;
 use std::os::windows::ffi::OsStrExt;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::*;

@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: MIT
-#[path = "abi.rs"]
-#[allow(dead_code)]
-mod abi;
 #[cfg(feature = "d3d11")]
 mod d3d11;
 #[cfg(feature = "d3d12")]

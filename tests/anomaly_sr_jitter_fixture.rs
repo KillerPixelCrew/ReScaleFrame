@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::sr_stage_abi::*;
 use crate::sr_swap::{engine_mul, jitter_projection};
+use crate::sys::*;
 use rsf_game_sys::sampling::halton_f64 as halton;
 use std::ffi::{CStr, c_char};
 use std::mem::MaybeUninit;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::sr_stage_abi::*;
+use crate::sys::*;
 use rsf_game_sys::sampling::halton_f64 as halton;
 use std::mem::MaybeUninit;
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::memory::{MemoryCache, read, read_exact, readable_extent};
 use super::names::escape_unit;
-use super::sections_abi::rsf_module_entry;
+use crate::sys::rsf_module_entry;
 use std::ffi::{OsStr, c_void};
 use std::fmt::{self, Write as _};
 use std::fs::File;
@@ -103,7 +103,7 @@ pub(super) fn collect_modules(entries: &mut [rsf_module_entry]) -> usize {
     };
     let mut has_entry = unsafe { Module32FirstW(snapshot.0, &mut entry) } != 0;
     while has_entry && count < entries.len() {
-        let mut path = [0; super::sections_abi::RSF_DUMP_MODULE_PATH_UNITS as usize];
+        let mut path = [0; crate::sys::RSF_DUMP_MODULE_PATH_UNITS as usize];
         let limit = path.len() - 1;
         let length = entry
             .szExePath

@@ -41,5 +41,8 @@ vulkan = ["dep:ash"]
 vulkan-cpu = ["dep:ash"]
 texture = []
 
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
+
 [lints]
 workspace = true

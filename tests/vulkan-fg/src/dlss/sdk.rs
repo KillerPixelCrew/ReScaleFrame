@@ -5,7 +5,7 @@
 //! these entries, and runs the present capture owner with its real Vulkan,
 //! WSI and registration leaves. Only open, frame selection, readback recording
 //! and file output are synthetic.
-use crate::dlss_abi::*;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::process;
 use std::ptr;

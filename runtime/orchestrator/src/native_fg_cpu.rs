@@ -2,8 +2,6 @@
 //! Direct3D pacing and submission ownership. The dispatcher in native_cpu
 //! owns producer facts and reservations. This owner tracks attempts and the
 //! provider generation that consumed those facts.
-use crate::cpu_abi::*;
-use crate::fg12_abi::rsf_native_latency_frame as LatencyFrame;
 use crate::input_receipts::{self, Owner};
 use crate::latency_antilag::Context as AntiLag;
 use crate::latency_lease::{
@@ -15,16 +13,16 @@ use crate::native_cpu::{
     rsf_native_cpu_is_ping_message, rsf_native_cpu_ping_message, rsf_native_cpu_release_session,
 };
 use crate::native_fg::{now_qpc, requested};
-use crate::native_fg_cpu_abi::*;
-use crate::overlay_abi::{
-    RSF_REFLEX_ON, rsf_native_input_routes as Routes, rsf_native_latency_status as LatencyStatus,
-};
-use crate::render_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::rsf_native_latency_frame as LatencyFrame;
+use crate::sys::*;
+use crate::sys::{
     RSF_FG_FIXED, RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL, RSF_REFLEX_OFF,
     rsf_fg_status as Status,
 };
-use crate::sr_session::has_capacity;
-use rsf_game_sys::*;
+use crate::sys::{
+    RSF_REFLEX_ON, rsf_native_input_routes as Routes, rsf_native_latency_status as LatencyStatus,
+};
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::zeroed;

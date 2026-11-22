@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::shaders::{Refusal, Variant, link_variants};
 use super::*;
-use crate::geometry_registry_abi::RSF_ANOMALY_PASS_MAIN;
-use crate::motion_device_abi::{
-    RSF_MOTION_CORE, RSF_MOTION_FOLIAGE, RSF_MOTION_PIXEL, RSF_MOTION_TESS,
-};
+use crate::sys::RSF_ANOMALY_PASS_MAIN;
+use crate::sys::{RSF_MOTION_CORE, RSF_MOTION_FOLIAGE, RSF_MOTION_PIXEL, RSF_MOTION_TESS};
 
 const SOFTWARE_SKINNED: u8 = 3;
 

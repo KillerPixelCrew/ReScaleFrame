@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
-use super::render_host_fixture_abi::*;
 use super::{ABI_MISMATCH, INVALID_ARGUMENT, NOT_READY, OK, wide};
-use rsf_game_sys::callback_host_abi::{
+use crate::sys::*;
+use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup,
     rsf_callback_host_setup_v2,
 };
-use rsf_game_sys::render_host_abi::{RSF_RENDER_HOST_ABI_VERSION, rsf_render_host_setup};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_LATENCY_MODE, RSF_GAME_RENDER_FEEDBACK_CAMERA_JITTER_INVALID,
     rsf_game_host_services, rsf_game_latency_event, rsf_game_probe, rsf_game_render_feedback,
 };
+use rsf_game_sys::{RSF_RENDER_HOST_ABI_VERSION, rsf_render_host_setup};
 use std::cell::Cell;
 use std::ffi::CStr;
 use std::fs;

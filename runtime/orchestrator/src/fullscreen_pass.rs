@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::same_device;
-use crate::d3d11_output_abi::rsf_d3d11_output_is_immediate;
 use crate::graphics_d3d11::rsf_call_native_log;
-use crate::graphics_pass_abi::{
+use crate::sr_session::has_capacity;
+use crate::sys::rsf_d3d11_output_is_immediate;
+use crate::sys::{
     RSF_FULLSCREEN_PASS_ABI_VERSION as ABI, RSF_PRESENT_BLIT_ABI_VERSION,
     rsf_fullscreen_draw as Draw, rsf_fullscreen_setup as Setup,
     rsf_present_blit_setup as PresentSetup,
 };
-use crate::sr_session::has_capacity;
 use std::ffi::{CStr, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};

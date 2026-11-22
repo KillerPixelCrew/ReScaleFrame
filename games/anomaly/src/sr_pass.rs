@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::camera;
-use crate::sr_stage_abi::{
+use crate::sys::{
     RSF_ANOMALY_SR_MAIN_VIEW_KEY, RSF_ANOMALY_SR_MOTION_CAMERA_INCLUDED,
     RSF_ANOMALY_SR_MOTION_TO_UV, rsf_anomaly_sr_pass_inputs,
 };
@@ -10,7 +10,7 @@ use rsf_game_sys::{
 };
 use std::mem::MaybeUninit;
 
-pub(crate) use crate::sr_stage_abi::rsf_anomaly_sr_reset_facts as ResetFacts;
+pub(crate) use crate::sys::rsf_anomaly_sr_reset_facts as ResetFacts;
 pub(crate) type PassInputs = rsf_anomaly_sr_pass_inputs;
 
 #[repr(u8)]

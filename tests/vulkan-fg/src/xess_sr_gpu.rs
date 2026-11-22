@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_sr_abi::{rsf_srvk_image, rsf_srvk_setup, rsf_vk_function};
+use crate::sys::{rsf_srvk_image, rsf_srvk_setup, rsf_vk_function};
 use crate::xess_sr::{
     Failure, require, rsf_xessvk_device_requirements, rsf_xessvk_instance_requirements,
 };

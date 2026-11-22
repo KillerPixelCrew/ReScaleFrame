@@ -5,7 +5,7 @@
 //! and the packed b13 draw parameters. The D3D11 replay applies these decisions to
 //! the borrowed context, including the argument copy, GPU validation, draws and hash build.
 
-use crate::scene_color_abi::rsf_frame_tap_geometry;
+use crate::sys::rsf_frame_tap_geometry;
 use crate::velocity_history::{MIN_CAPACITY, RECORD_LIMIT};
 use rsf_game_sys::{
     RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_TRANSLUCENT_MESH, rsf_game_render_pass,

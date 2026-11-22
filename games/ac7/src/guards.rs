@@ -5,7 +5,7 @@
 //! is inside the module: entry guards before hooks are disabled, entry and outer guards after.
 //! Each thread keeps to one cache-line slot, so counting does not bounce a shared line between
 //! the game, render and RHI threads; the slots are summed only on the stop and failure paths.
-use crate::sites_abi::{RSF_AC7_GUARD_ENTRY, RSF_AC7_GUARD_OUTER};
+use crate::sys::{RSF_AC7_GUARD_ENTRY, RSF_AC7_GUARD_OUTER};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering, fence};
 

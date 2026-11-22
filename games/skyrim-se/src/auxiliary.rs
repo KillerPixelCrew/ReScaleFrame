@@ -5,8 +5,8 @@ use crate::layout::target_slot;
 use crate::platform::Platform;
 use crate::render_native::{ComRef, thread, viewport};
 use crate::resolution;
-use rsf_game_sys::d3d11_host_abi::rsf_d3d11_host_capture as Capture;
-use rsf_game_sys::d3d11_host_abi::{
+use rsf_game_sys::rsf_d3d11_host_capture as Capture;
+use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL,
     RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, rsf_d3d11_auxiliary_pass as Pass,
     rsf_d3d11_auxiliary_scope as Scope, rsf_d3d11_auxiliary_surface as Surface,

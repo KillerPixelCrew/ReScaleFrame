@@ -81,7 +81,7 @@ remain pending.
 | HUD-less slot admission | `d3d12.rs` matches the SR slot's session and source, waits on already-submitted work, and refuses the fixture's failed wait. |
 | Typed settings handoff | The extension's typed settings enter `bridge.cpp` through the same host admission and viewport scaling callbacks as the Dictionary method. |
 | Size-first ABI validation | Raw header reads in `lib.rs` reject the four-byte attach, boot and configure fixture before reading a version. |
-| Generated sharpening layout | `sdk/game/src/sharpening_abi.rs` is the type used by Godot, Unity and Runtime. |
+| Generated sharpening layout | `rsf_game_sys::rsf_sharpening_options`, generated from `sharpening_settings.h`, is the type used by Godot, Unity and Runtime. |
 | Runtime CPU service and explicit Present | `native_cpu_service.h`, the Runtime graphics hosts and the paired Godot driver receipt carry CPU facts, ping requests and the admitted window's actual submission and Present scope. |
 | Auto policy delegation | The fake selectors return configured answers and record the arguments. The Runtime's own choice fixtures cover provider policy. |
 | Refused window restore | `window.rs` retains ownership per HWND and its fixture admits a replacement while the old window continues forwarding independently. |

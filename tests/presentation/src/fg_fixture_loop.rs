@@ -4,10 +4,9 @@ use crate::d3d11_device_checks::rsf_d3d11_fixture_flip_source;
 use crate::fg_bridge::*;
 use crate::fg_fixture_callbacks::{State, prepare_input, provider, provider_status};
 use crate::fg_fixture_focus::*;
-use crate::fixture_device_abi::rsf_fg_fixture_submission;
-use crate::present_fixture_loops_abi::*;
 use crate::present_fixture_time;
-use rsf_game_sys::*;
+use crate::sys::rsf_fg_fixture_submission;
+use crate::sys::*;
 use std::ffi::CStr;
 use std::ptr::null_mut;
 use std::sync::{

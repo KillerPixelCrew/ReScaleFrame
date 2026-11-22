@@ -2,7 +2,7 @@
 //! The Wingman XInput carrier's optional, process-lived plugin session.
 use crate::windows::{fingerprint, matches_executable};
 use crate::{AMD64, EXECUTABLE, SHA256, overlay};
-use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
+use rsf_game_sys::rsf_plugin_session_options;
 use rsf_game_sys::session::carrier_log::CarrierLog;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
 use rsf_game_sys::win32::{module_path, module_path_in};

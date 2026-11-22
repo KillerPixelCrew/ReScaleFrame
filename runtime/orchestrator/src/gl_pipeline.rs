@@ -5,17 +5,17 @@
 // fallback, the FG provider request and teardown order. The linked platform connects the runtime
 // owners. Graphics work stays on the caller's GL context and graphics thread.
 use crate::com_ref::ComRef;
-use crate::cpu_abi::rsf_native_cpu_frame;
-use crate::fg12_abi::rsf_fg12_setup;
-use crate::gl_pipeline_abi::*;
-use crate::overlay_abi::{RSF_OVERLAY_NOTIFY_DEVICE_RESET, rsf_overlay_service_setup};
 use crate::owned_handle::OwnedHandle as Owned;
-use crate::render_abi::{
+use crate::sharpening_policy;
+use crate::sr_session::has_capacity;
+use crate::sys::rsf_fg12_setup;
+use crate::sys::rsf_native_cpu_frame;
+use crate::sys::*;
+use crate::sys::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_REFLEX_OFF, rsf_backend_log_fn,
     rsf_native_fg_options, rsf_native_fg_status, rsf_sharpening_options,
 };
-use crate::sharpening_policy;
-use crate::sr_session::has_capacity;
+use crate::sys::{RSF_OVERLAY_NOTIFY_DEVICE_RESET, rsf_overlay_service_setup};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
     RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_RENDER_WINDOW,

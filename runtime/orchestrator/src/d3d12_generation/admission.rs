@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d12_host::{borrow, owned_by};
-use crate::render_abi::{RSF_BACKEND_ABI_VERSION, rsf_fg_swapchain_desc};
 use crate::sdk_module::{d3d12_library_path, load_system_library};
+use crate::sys::{RSF_BACKEND_ABI_VERSION, rsf_fg_swapchain_desc};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_RESET, RSF_FRAME_SOURCE_RENDERED,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_camera_frame,
@@ -75,7 +75,7 @@ fn finite_camera(camera: &rsf_camera_frame) -> bool {
 }
 
 fn frame_resource(
-    resource: &crate::render_abi::rsf_backend_resource,
+    resource: &crate::sys::rsf_backend_resource,
     device: Raw,
     generation: u32,
     extent: Option<(u32, u32)>,

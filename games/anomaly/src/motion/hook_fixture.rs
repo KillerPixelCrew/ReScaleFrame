@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The native fixture lends the real flush detour and the two scoped calls.
 use crate::geometry_profile;
-use crate::geometry_registry_abi::{
-    RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC, RSF_ANOMALY_TYPE_SKELETON_ST,
-};
 use crate::native_geometry_abi::{FIRST_PERSON, HARDWARE_SKINNED, SCOPE, UNSET, WORLD};
+use crate::sys::{RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC, RSF_ANOMALY_TYPE_SKELETON_ST};
 use std::cell::RefCell;
 use std::ffi::CStr;
 

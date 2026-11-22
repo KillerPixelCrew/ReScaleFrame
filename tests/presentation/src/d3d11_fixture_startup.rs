@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! Startup, cold COM contracts and cleanup for the linked AC7 presentation fixture.
 use crate::d3d11_bridge_sr::rsf_d3d11_fixture_shared_sr;
-use crate::d3d11_bridge_sr_abi::{
-    rsf_dlss_frame, rsf_dlss_release_resources, rsf_dlss_share_host, rsf_dlss_shutdown,
-};
 use crate::d3d11_device_checks::*;
 use crate::d3d11_marker::{rsf_ac7_fixture_log, rsf_d3d11_marker_fixture};
 use crate::fixture_device::{rsf_d3d11_fixture_proxy_smoke, rsf_present_fixture_debug12};
-use crate::present_fixture_loops_abi::*;
 use crate::present_fixture_startup::*;
-use rsf_game_sys::d3d11_chain_abi::{RSF_D3D11_DISPATCH_RELEASE, rsf_d3d11_chain_dispatch};
-use rsf_game_sys::*;
+use crate::sys::*;
+use crate::sys::{
+    rsf_dlss_frame, rsf_dlss_release_resources, rsf_dlss_share_host, rsf_dlss_shutdown,
+};
+use rsf_game_sys::{RSF_D3D11_DISPATCH_RELEASE, rsf_d3d11_chain_dispatch};
 use std::ffi::{CStr, c_char};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};

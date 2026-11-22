@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::device::{self, NOT_COMPILED, SKIP, Window};
-use crate::latency_abi::*;
 use crate::session::{NOT_READY, NOT_SUPPORTED, OK, Raw};
-use crate::session_abi::{
+use crate::sys::*;
+use crate::sys::{
     RSF_STREAMLINE_HOST_ABI_VERSION, rsf_streamline_graphics, rsf_streamline_host_setup,
 };
 use std::ffi::{CStr, c_char, c_int};

@@ -6,12 +6,12 @@ mod platform;
 #[cfg(not(test))]
 pub(super) use platform::rsf_auxiliary_sr_platform;
 
-use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
-use crate::d3d11_output_abi::rsf_d3d11_state;
 use crate::depth_scale::{DepthScale, jitter_valid, rect_valid};
-use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
+use crate::sys::rsf_d3d11_state;
+use crate::sys::*;
+use rsf_game_sys::rsf_d3d11_auxiliary_surface;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::c_void;
 use std::ptr;

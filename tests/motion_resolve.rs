@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::render_abi::rsf_motion_resolve_params as Params;
+use crate::sys::rsf_motion_resolve_params as Params;
 use windows::core::Interface;
 
 unsafe extern "C" {

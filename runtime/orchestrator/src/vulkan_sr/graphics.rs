@@ -12,18 +12,18 @@ use crate::frame_capture_vk::{
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_retire, rsf_core_capture_vk_wants,
 };
+use crate::sys::rsf_sharpenvk_host as Sharpen;
+use crate::sys::rsf_vkfg_image_copy as ImageCopy;
 use crate::vulkan_fg_copy::{
     Barrier, COLOR_RANGE, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy,
 };
 use crate::vulkan_fg_resources::device::{
     Device, rsf_core_vkfg_bind_images, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory,
 };
-use crate::vulkan_fg_resources_abi::rsf_vkfg_image_copy as ImageCopy;
 use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_clear, rsf_sharpenvk_host_destroy, rsf_sharpenvk_host_retire,
     rsf_sharpenvk_host_run,
 };
-use crate::vulkan_sharpening_abi::rsf_sharpenvk_host as Sharpen;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record;
 use std::{ffi::c_char, ptr};

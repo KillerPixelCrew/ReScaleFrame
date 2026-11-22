@@ -23,17 +23,17 @@ use crate::build_layout::{
     RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
     RENDERER_WINDOW,
 };
-use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::{rsf_fallout4_cpu_begin_render, rsf_fallout4_cpu_render_source_is_current};
 use crate::creation::{ExactBuild, accept_window};
 use crate::depth_domains::rsf_fallout4_depth_verify;
 use crate::render_inputs::verify_for_build;
-use crate::render_records::{
+use crate::resolution::{is_busy as resolution_busy, rsf_fallout4_resolution_verify};
+use crate::screen::rsf_fallout4_verify_screen_queries;
+use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
+use crate::sys::{
     NativeRenderExports as RenderExports, NativeRenderScopeKey as ScopeKey, NativeWorld as World,
     NativeWorldAdmission as WorldAdmission,
 };
-use crate::resolution::{is_busy as resolution_busy, rsf_fallout4_resolution_verify};
-use crate::screen::rsf_fallout4_verify_screen_queries;
 use crate::{MH_OK, Ops, image, read};
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{CStr, c_void};
@@ -534,13 +534,10 @@ extern "C" fn rsf_fallout4_render_capture_recovery(
     facts: unsafe extern "C" fn(&mut World),
     report: crate::render_inputs::Report,
     requested: unsafe extern "C" fn() -> bool,
-    capture: unsafe extern "C" fn(
-        *mut c_void,
-        &rsf_game_sys::d3d11_host_abi::rsf_d3d11_host_capture,
-    ),
+    capture: unsafe extern "C" fn(*mut c_void, &rsf_game_sys::rsf_d3d11_host_capture),
 ) {
-    use rsf_game_sys::d3d11_chain_abi::RSF_D3D11_HOST_ABI_VERSION;
-    use rsf_game_sys::d3d11_host_abi::rsf_d3d11_host_capture;
+    use rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION;
+    use rsf_game_sys::rsf_d3d11_host_capture;
     use windows::core::Interface;
 
     if !recovery::committed()

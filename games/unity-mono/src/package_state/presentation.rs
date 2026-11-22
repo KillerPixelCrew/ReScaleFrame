@@ -7,10 +7,8 @@
 //! rsf_fg_default_backend with the current D3D12 adapter.
 use super::{BACKEND_OK, Leaves, PACKAGE, Package};
 use crate::generation::{self, Sources};
-use crate::package_abi::{RSF_FG_OFF, rsf_unity_package_platform, rsf_unity_package_view_setup};
-use crate::runtime_abi::{
-    RSF_FG_BACKEND_AUTO, RSF_REFLEX_OFF, rsf_fg12_setup, rsf_native_fg_options,
-};
+use crate::sys::{RSF_FG_BACKEND_AUTO, RSF_REFLEX_OFF, rsf_fg12_setup, rsf_native_fg_options};
+use crate::sys::{RSF_FG_OFF, rsf_unity_package_platform, rsf_unity_package_view_setup};
 use rsf_game_sys::vendor_paths::VendorPaths;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU32, Ordering::SeqCst};

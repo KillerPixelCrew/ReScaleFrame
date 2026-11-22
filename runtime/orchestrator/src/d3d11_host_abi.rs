@@ -3,15 +3,15 @@
 // The host platform table is Rust-only and can be replaced by fixture calls.
 #![allow(non_camel_case_types)]
 
-use crate::auxiliary_sr_abi::rsf_aux_platform;
-use crate::fg12_abi::{rsf_d3d11_present_setup, rsf_streamline_host};
-use crate::native_sr_abi::rsf_motion_decode_params;
-use crate::overlay_abi::rsf_overlay_service_setup;
-use crate::render_abi::{rsf_backend_log_fn, rsf_native_fg_options, rsf_render_settings};
-use crate::scene_abi::{rsf_native_present_record, rsf_observer_present_event};
-pub(crate) use rsf_game_sys::d3d11_chain_abi::*;
-use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
-pub(crate) use rsf_game_sys::d3d11_host_abi::{
+use crate::sys::rsf_aux_platform;
+use crate::sys::rsf_motion_decode_params;
+use crate::sys::rsf_overlay_service_setup;
+use crate::sys::{rsf_backend_log_fn, rsf_native_fg_options, rsf_render_settings};
+use crate::sys::{rsf_d3d11_present_setup, rsf_streamline_host};
+use crate::sys::{rsf_native_present_record, rsf_observer_present_event};
+use rsf_game_sys::rsf_d3d11_auxiliary_surface;
+pub(crate) use rsf_game_sys::*;
+pub(crate) use rsf_game_sys::{
     RSF_D3D11_CAPTURE_CONTROL_VERSION, RSF_D3D11_CAPTURE_FAILURES, RSF_D3D11_CAPTURE_SEQUENCE,
     RSF_D3D11_HOST_CAP_FG_INPUTS, RSF_D3D11_HOST_CAP_INPUT_TIMELINE,
     RSF_D3D11_HOST_CAP_RENDERED_SOURCE, rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope,
@@ -23,7 +23,7 @@ use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_log_fn, rsf_ga
 use std::ffi::{c_char, c_int, c_void};
 use std::mem::{offset_of, size_of};
 
-pub(crate) use rsf_game_sys::d3d11_reduced_abi::{
+pub(crate) use rsf_game_sys::{
     RSF_D3D11_REDUCED_CANCEL, RSF_D3D11_REDUCED_CANCELLED, RSF_D3D11_REDUCED_CLEANUP_PENDING,
     RSF_D3D11_REDUCED_CLEANUP_REQUIRED, RSF_D3D11_REDUCED_FINISH,
     RSF_D3D11_REDUCED_FRAME_ABI_VERSION, RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED,

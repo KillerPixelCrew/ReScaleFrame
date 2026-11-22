@@ -5,10 +5,10 @@
 // registration and file output are in leaves.rs.
 use crate::allocate_handle;
 use crate::dlss_vulkan_capture_ledger::{AMBIGUOUS, Ledger};
-use crate::vulkan_fg_abi::{
+use crate::sys::rsf_srvk_image as Image;
+use crate::sys::{
     rsf_dlss_capture_source as Source, rsf_dlssgvk_status as SdkStatus, rsf_fgvk_setup as Setup,
 };
-use crate::vulkan_sr_abi::rsf_srvk_image as Image;
 use rsf_game_sys::rsf_frame_record as Record;
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_char, c_void};

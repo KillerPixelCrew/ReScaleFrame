@@ -112,7 +112,7 @@ const HOOKS: [(u32, [u8; 19]); 13] = [
     ), // player_camera_update
 ];
 
-const _: () = assert!(HOOKS.len() == crate::cpu_call_abi::RSF_SKYRIM_CPU_HOOK_COUNT as usize);
+const _: () = assert!(HOOKS.len() == crate::sys::RSF_SKYRIM_CPU_HOOK_COUNT as usize);
 
 const INDICES: std::ops::Range<usize> = 0..HOOKS.len();
 

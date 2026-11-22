@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::{abi::*, bundles, contents, entry, root, utf8};
-use rsf_game_sys::*;
+use super::{bundles, contents, entry, root, utf8};
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::{fs, path::Path, ptr};

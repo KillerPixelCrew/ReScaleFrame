@@ -11,12 +11,12 @@
 //! objects, RIDs and native pointers stay in the leaves' callback record; this owner keeps copied
 //! CPU facts only, and no resource lease or GPU completion is implied. The effect reads no
 //! Runtime settings or status: `ReScaleFrameRuntime` reports active SR, FG and latency.
-use crate::extension_abi::*;
 use crate::platform::{
     EFFECT_MOTION_FORMAT, EFFECT_VERSION, EffectFrame, EffectLeaves, EffectReadback,
     EffectResources, EffectStatus,
 };
 use crate::properties::Properties;
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};

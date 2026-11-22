@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-use super::decode_abi::rsf_census_resource_reads;
 use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_raw,
     rsf_census_json_string, rsf_census_json_u64,
 };
-use super::json_abi::rsf_census_json;
+use crate::sys::rsf_census_json;
+use crate::sys::rsf_census_resource_reads;
 use std::ffi::{c_char, c_void};
 use windows::Win32::Graphics::{
     Direct3D11::{D3D11_RESOURCE_DIMENSION_TEXTURE2D, D3D11_TEXTURE2D_DESC},

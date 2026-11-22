@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::vtable;
-use crate::render_abi::{RSF_PACING_NONE, RSF_REFLEX_OFF};
+use crate::sys::{RSF_PACING_NONE, RSF_REFLEX_OFF};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::{Mutex, RwLock};

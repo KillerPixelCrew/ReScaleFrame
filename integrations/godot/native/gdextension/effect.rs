@@ -8,11 +8,11 @@ use super::api::{self, Bind, GString, Godot, PackedBytes, Ref, StringName, Typed
 use super::sys::*;
 use super::{Dictionary, EFFECT_CLASS, Sink};
 use crate::effect::Effect;
-use crate::extension_abi::*;
 use crate::platform::{
     EFFECT_MOTION_FORMAT, EFFECT_VERSION, EffectFrame, EffectLeaves, EffectReadback,
     EffectResources,
 };
+use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 
 /// `CompositorEffect::EFFECT_CALLBACK_TYPE_POST_TRANSPARENT`.

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-use crate::d3d11_output_abi::rsf_d3d11_output_srv_format;
 use crate::d3d11_sharpening::{Frame, rsf_sharpen11_active, rsf_sharpen11_pack};
-use crate::render_abi::rsf_sharpening_options as Options;
 use crate::sharpening_policy::{FILTERS, effective_mode};
+use crate::sys::rsf_d3d11_output_srv_format;
+use crate::sys::rsf_sharpening_options as Options;
 use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::ManuallyDrop;

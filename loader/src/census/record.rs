@@ -3,8 +3,8 @@ use super::json::{
     rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_string,
     rsf_census_json_u64,
 };
-use super::json_abi::rsf_census_json;
-use super::record_abi::{
+use crate::sys::rsf_census_json;
+use crate::sys::{
     RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_queued_record,
     rsf_census_record_writer,
 };

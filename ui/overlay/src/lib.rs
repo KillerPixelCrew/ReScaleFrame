@@ -25,7 +25,6 @@
 pub mod abi;
 pub mod ffi;
 mod fg_reasons;
-mod host_option_limit;
 pub mod model;
 mod overlay;
 mod panel;

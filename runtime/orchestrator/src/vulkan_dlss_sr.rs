@@ -4,17 +4,17 @@ use crate::frame_capture_vk::sr_capture_inputs;
 mod commands;
 mod leaves;
 use self::commands::Dispatch;
-use crate::vulkan_dlss_sr_abi::{
+use crate::sys::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
+use crate::sys::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
+use crate::sys::{
     rsf_vkdlss_images, rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform as Platform,
     rsf_vkdlss_tag,
 };
-use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_ownership::Claim;
 use crate::vulkan_sr::{
     GENERAL, History, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, SHADER_READ,
     STORAGE_USAGE, TRANSFER_DST_USAGE, TRANSFER_SRC_USAGE,
 };
-use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
 use crate::vulkan_streamline_camera::{camera_constants, rsf_slvk_sdk_header};
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
@@ -51,22 +51,20 @@ fn options(mode: u32, width: u32, height: u32) -> rsf_vkdlss_options {
     }
 }
 
-impl rsf_slvk_call {
-    pub(super) fn for_record(
-        record: Option<&rsf_frame_record>,
-        callback: rsf_slvk_callback,
-        user: *mut c_void,
-    ) -> Self {
-        let (session_id, frame_id) =
-            record.map_or((0, 0), |record| (record.session_id, record.frame_id));
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version: RSF_SLVK_ABI_VERSION,
-            session_id,
-            frame_id,
-            callback,
-            user,
-        }
+pub(super) fn slvk_call(
+    record: Option<&rsf_frame_record>,
+    callback: rsf_slvk_callback,
+    user: *mut c_void,
+) -> rsf_slvk_call {
+    let (session_id, frame_id) =
+        record.map_or((0, 0), |record| (record.session_id, record.frame_id));
+    rsf_slvk_call {
+        struct_size: size_of::<rsf_slvk_call>() as u32,
+        abi_version: RSF_SLVK_ABI_VERSION,
+        session_id,
+        frame_id,
+        callback,
+        user,
     }
 }
 
@@ -144,7 +142,7 @@ impl Owner {
         if !self.resources {
             return 0;
         }
-        let call = rsf_slvk_call::for_record(None, self.platform.release, self.native);
+        let call = slvk_call(None, self.platform.release, self.native);
         let result = unsafe { (self.platform.invoke.unwrap())(&call) };
         if result == 0 {
             self.resources = false;
@@ -340,8 +338,7 @@ impl Owner {
             height: 0,
             options: &request,
         };
-        let call =
-            rsf_slvk_call::for_record(None, platform.initialize, ptr::from_mut(&mut init).cast());
+        let call = slvk_call(None, platform.initialize, ptr::from_mut(&mut init).cast());
         let result = unsafe { (platform.invoke.unwrap())(&call) };
         if result != 0 {
             return Err(result);
@@ -384,7 +381,7 @@ impl Owner {
             commands,
             input,
         };
-        let call = rsf_slvk_call::for_record(
+        let call = slvk_call(
             Some(record),
             Some(evaluate),
             ptr::from_mut(&mut evaluation).cast(),

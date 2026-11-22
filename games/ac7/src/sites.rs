@@ -6,7 +6,7 @@
 //! reads and protected code writes through `rsf_ac7_code_leaves`.
 //! The renderer verifies post-patch depth gates installed by the carrier. The research for these
 //! sites is in docs/research/ue418-hook-map.md and games/ac7/engine.json.
-use crate::sites_abi::{
+use crate::sys::{
     RSF_AC7_EVIDENCE_FIRST, RSF_AC7_EVIDENCE_LAST, RSF_AC7_HOOK_SITE_COUNT, RSF_AC7_PROCESS_HOOKS,
     RSF_AC7_ROLE_AA, RSF_AC7_ROLE_COMPOSITE, RSF_AC7_ROLE_HUD, RSF_AC7_ROLE_MATERIAL,
     RSF_AC7_ROLE_OUTPUT, RSF_AC7_ROLE_TONEMAP, RSF_AC7_SITE_BYTES, rsf_ac7_code_leaves,

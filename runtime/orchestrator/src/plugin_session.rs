@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::sdk_module::SdkModule;
-use rsf_game_sys::plugin_session_abi::{
-    RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options,
-};
 use rsf_game_sys::windows_path::absolute_wide_path;
 use rsf_game_sys::*;
+use rsf_game_sys::{RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options};
 use std::ffi::CStr;
 use std::ptr;
 use std::sync::{Mutex, PoisonError, RwLock};

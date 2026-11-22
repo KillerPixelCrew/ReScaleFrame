@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! AC7 stream-output capture, history accumulation and motion/depth submission.
-use crate::scene_color_abi::rsf_frame_tap_geometry as Geometry;
+use crate::sys::rsf_frame_tap_geometry as Geometry;
+use crate::sys::{rsf_d3d11_state, rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::velocity_commit::*;
 use crate::velocity_device::{Device, Kernels};
 use crate::velocity_history::*;
 use crate::velocity_pass_cache::VariantRequest;
-use crate::velocity_state_abi::{rsf_d3d11_state, rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::velocity_stream::*;
 use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_render_pass as Pass};
 use std::ffi::c_void;

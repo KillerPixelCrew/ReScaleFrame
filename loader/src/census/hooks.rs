@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
-use super::hook_abi::*;
 use super::json::{
     rsf_census_json_close, rsf_census_json_i64, rsf_census_json_open, rsf_census_json_raw,
     rsf_census_json_string, rsf_census_json_u64,
 };
-use super::json_abi::rsf_census_json;
 use super::session::rsf_census_active;
 use super::vendor::register_vendors;
-use super::vendor_abi::rsf_census_vendor_platform;
+use crate::sys::rsf_census_json;
+use crate::sys::rsf_census_vendor_platform;
+use crate::sys::*;
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::transmute;

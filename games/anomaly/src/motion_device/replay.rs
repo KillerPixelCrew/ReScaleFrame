@@ -3,7 +3,7 @@ use super::{Raw, View};
 use std::mem::{MaybeUninit, align_of};
 use std::ptr::{drop_in_place, null, null_mut};
 
-use crate::motion_device_abi::{
+use crate::sys::{
     RSF_MOTION_REPLAY_FAILED, RSF_MOTION_REPLAY_NO_DEPTH_WRITE, RSF_MOTION_REPLAY_READY,
 };
 

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use crate::{cpu_abi::*, cpu_calls::*};
-use rsf_game_sys::*;
+use crate::sys::*;
 use std::ffi::c_void;
 
 #[repr(C)]

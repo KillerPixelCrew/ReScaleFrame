@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Windows SDK calls used by the Anomaly overlay's D3D11 and DirectInput boundaries.
 use crate::lease::Lease;
-use crate::overlay_abi::{
-    rsf_anomaly_overlay_chain, rsf_input_dump_named_texture_fn, rsf_named_frame_dump,
-    rsf_named_frame_dump_report,
+use crate::overlay::rsf_anomaly_overlay_chain;
+use crate::sys::{
+    rsf_input_dump_named_texture_fn, rsf_named_frame_dump, rsf_named_frame_dump_report,
 };
 use std::ffi::c_void;
 use std::mem::transmute;

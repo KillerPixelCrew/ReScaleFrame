@@ -26,10 +26,10 @@
 //! graphics lookup copy the D3D12 device and queue without any admission, replaced surfaces
 //! without any hold on the views a frame had already taken, and kept the queued packets' texture
 //! references in a native array beside the Rust store.
-use crate::bridge_abi::RSF_UNITY_FRAMES_SLOTS;
 use crate::bridge_interop::D3D11;
 use crate::d3d11_pass::shared_format;
 use crate::device_creation::{Claim, Creation};
+use crate::sys::RSF_UNITY_FRAMES_SLOTS;
 use rsf_game_sys::rsf_game_host_services;
 use rsf_runtime_submission::SubmissionHandle;
 use std::ffi::c_void;

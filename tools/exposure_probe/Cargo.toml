@@ -9,8 +9,14 @@ license.workspace = true
 [lib]
 crate-type = ["staticlib"]
 
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
+
 [lints]
 workspace = true
+
+[dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]
 windows = { version = "0.62.2", default-features = false, features = [

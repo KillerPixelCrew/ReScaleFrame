@@ -5,13 +5,13 @@ use crate::d3d11_present::{rsf_core_d3d11p_graphics, rsf_core_d3d11p_host};
 use crate::d3d11_present_abi::rsf_streamline_graphics;
 use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
 use crate::fg_leases::rsf_d3d12_fence_completed;
-use crate::native_fg_abi::*;
 use crate::native_fg_cpu::NATIVE_PLATFORM as CPU_PLATFORM;
 use crate::native_scene::{rsf_native_scene_classify_present, rsf_native_scene_for_window};
 use crate::native_window::rsf_native_window_match;
 use crate::shared_surface::{
     ABI_VERSION as SURFACE_ABI, SurfaceSetup, rsf_shared_fence_create, rsf_shared_surface_create,
 };
+use crate::sys::*;
 use rsf_game_sys::rsf_frame_allows_fg;
 use std::ffi::c_char;
 use std::ptr::null_mut;

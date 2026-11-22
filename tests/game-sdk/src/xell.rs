@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use crate::render_abi::{
+use crate::sys::*;
+use crate::sys::{
     RSF_FG_ABI_VERSION, RSF_FG_FIXED, rsf_fg_options, rsf_generation_provider, rsf_generation_setup,
 };
-use crate::xell_abi::*;
 use std::ffi::c_void;
 use std::ptr::{from_ref, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
@@ -93,7 +93,7 @@ unsafe extern "C" fn setup_outputs(
     OK
 }
 
-unsafe extern "C" fn refuse_frame(_: *const crate::render_abi::rsf_fg_frame, _: Raw) -> i32 {
+unsafe extern "C" fn refuse_frame(_: *const crate::sys::rsf_fg_frame, _: Raw) -> i32 {
     INVALID
 }
 
@@ -191,7 +191,7 @@ unsafe extern "C" fn tag(
     _: Raw,
     _: u32,
     _: u32,
-    _: *const crate::render_abi::rsf_backend_resource,
+    _: *const crate::sys::rsf_backend_resource,
 ) -> i32 {
     INVALID
 }
@@ -200,7 +200,7 @@ unsafe extern "C" fn constants(
     _: Raw,
     _: Raw,
     _: u32,
-    _: *const crate::render_abi::rsf_fg_frame,
+    _: *const crate::sys::rsf_fg_frame,
     _: u32,
 ) -> i32 {
     INVALID

@@ -6,19 +6,17 @@
 //! pipeline lifetime and retirement. Typed Rust Vulkan calls use the original
 //! SPIR-V and GPU constants supplied by the licensed payload.
 mod native;
-use crate::render_abi::rsf_sharpening_options as Options;
 use crate::sharpening_policy::{FILTERS, effective_mode};
-use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
-use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
-use crate::vulkan_sharpening_abi::{
+use crate::sys::rsf_sharpening_options as Options;
+use crate::sys::{
     rsf_sharpenvk_facts as Facts, rsf_sharpenvk_host as Host, rsf_sharpenvk_layouts as Layouts,
     rsf_sharpenvk_pass as Pass, rsf_sharpenvk_platform as Platform,
     rsf_sharpenvk_uniform as Uniform,
 };
+use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup};
+use crate::sys::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
+use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_sr::{R32_FLOAT, RGBA16_FLOAT, SHADER_READ, STORAGE_USAGE, TRANSFER_SRC_USAGE};
-use crate::vulkan_sr_abi::{
-    rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup,
-};
 use std::ffi::{c_char, c_void};
 use std::ptr;
 
@@ -393,7 +391,7 @@ mod tests;
 
 unsafe extern "C" {
     fn rsf_call_native_log(
-        log: crate::render_abi::rsf_backend_log_fn,
+        log: crate::sys::rsf_backend_log_fn,
         user: *mut c_void,
         text: *const c_char,
     );

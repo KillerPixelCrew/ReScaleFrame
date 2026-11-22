@@ -15,7 +15,7 @@ type Handle = *mut c_void;
 const KINDS: usize = 4;
 const CAPACITY: usize = 8;
 
-pub(crate) use crate::d3d12_observer_abi::rsf_d3d12_observer_setup as ObserverSetup;
+pub(crate) use crate::sys::rsf_d3d12_observer_setup as ObserverSetup;
 
 // MinHook.h v1.3.4. The graphics target links the same MinHook instance as D3D11.
 unsafe extern "system" {

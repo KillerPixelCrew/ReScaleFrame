@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, Window, check, require, send};
-use crate::abi::*;
+use crate::sys::*;
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char};
 use std::os::windows::ffi::OsStrExt;

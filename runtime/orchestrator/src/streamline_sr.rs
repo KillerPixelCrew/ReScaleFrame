@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
-use crate::render_abi::{rsf_dlss_frame as Frame11, rsf_sr_frame as Frame12};
+use crate::sys::{rsf_dlss_frame as Frame11, rsf_sr_frame as Frame12};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
 #[cfg(not(test))]
 pub(crate) mod native;
-#[path = "streamline_sr/records_abi.rs"]
-mod records_abi;
 pub(crate) mod signature;
 // The typed SDK call tables are compiled out of unit tests, which leaves their constants unused.
 #[cfg_attr(test, allow(dead_code))]

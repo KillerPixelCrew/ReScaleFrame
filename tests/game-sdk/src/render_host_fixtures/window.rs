@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::super::render_host_fixture_abi::*;
+use crate::sys::*;
 use rsf_game_sys::{
     RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY,
     RSF_GAME_RENDER_TEXTURE_BINDING, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass as Pass,

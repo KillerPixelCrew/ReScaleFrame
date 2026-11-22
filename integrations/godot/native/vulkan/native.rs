@@ -7,7 +7,7 @@ use super::creation::abi::{self, *};
 use super::{BACKEND_ERROR_NOT_READY, BACKEND_ERROR_NOT_SUPPORTED, BACKEND_OK};
 use crate::host::native_platform as platform;
 use crate::platform::*;
-use crate::vulkan_features::{rsf_godot_vk_features, rsf_godot_vk_native_features};
+use crate::sys::{rsf_godot_vk_features, rsf_godot_vk_native_features};
 use crate::{CONTROL, rsf_godot_vk_creation_resolver};
 use rsf_game_sys::ffi_util::ascii_wide;
 use rsf_game_sys::win32::typed_export;

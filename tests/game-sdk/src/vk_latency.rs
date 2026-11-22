@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::{cpu_abi::*, cpu_calls::*, vk_latency_calls::*};
-use rsf_game_sys::*;
+use crate::sys::*;
 use std::ffi::{c_char, c_void};
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};

@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_abi::{
-    overlay_wire::*, rsf_overlay_intent as Intent, rsf_overlay_stats as Stats,
-};
-use crate::overlay_saved_abi::{
+use crate::settings_store::{read_saved_number, read_saved_text, wide, write_saved_text};
+use crate::sys::{
     RSF_OVERLAY_SAVED_OPTIONS_ABI_VERSION, RSF_OVERLAY_SAVED_TEXT_LIMIT, rsf_overlay_saved_apply,
     rsf_overlay_saved_setup,
 };
-use crate::settings_store::{read_saved_number, read_saved_text, wide, write_saved_text};
+use crate::sys::{rsf_overlay_intent as Intent, rsf_overlay_stats as Stats, *};
 use rsf_game_sys::profile_text;
 use std::ffi::{CStr, CString, c_void};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -418,7 +416,7 @@ impl Frame {
 }
 
 fn register_runtime_diagnostics() {
-    use crate::overlay_saved_abi::rsf_overlay_saved_option as Descriptor;
+    use crate::sys::rsf_overlay_saved_option as Descriptor;
     let Some(path) = crate::diagnostic_preferences::profile() else {
         return;
     };
@@ -496,7 +494,7 @@ fn register_runtime_diagnostics() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::overlay_saved_abi::rsf_overlay_saved_option;
+    use crate::sys::rsf_overlay_saved_option;
     use crate::temporary_ini::TemporaryIni;
 
     unsafe extern "C" fn reject(_: *mut c_void, _: u32, _: *const u16, _: u32) -> i32 {

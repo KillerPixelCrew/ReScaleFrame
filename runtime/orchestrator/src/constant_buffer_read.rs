@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output::same_device;
-use crate::d3d11_output_abi::rsf_d3d11_output_is_immediate;
+use crate::sys::rsf_d3d11_output_is_immediate;
 use std::ffi::c_void;
 use std::ptr;
 

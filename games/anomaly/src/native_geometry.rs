@@ -6,8 +6,6 @@
 mod coverage;
 #[cfg(windows)]
 mod fixture;
-#[cfg(windows)]
-mod fixture_abi;
 mod hook_sites;
 mod profile;
 mod scopes;
@@ -26,11 +24,9 @@ use crate::engine_guards::{Image, Read};
 use crate::geometry_registry::{
     IdentityRegistry, Registry, classify, find, probe_visual, register, retire, take_live,
 };
-use crate::geometry_registry_abi::{
-    rsf_anomaly_geometry_draw as Draw, rsf_anomaly_geometry_key as Key, *,
-};
 use crate::motion::from_engine_matrix;
 use crate::native_geometry_abi::*;
+use crate::sys::{rsf_anomaly_geometry_draw as Draw, rsf_anomaly_geometry_key as Key, *};
 use coverage::COUNTERS;
 use std::ffi::c_void;
 use std::mem::MaybeUninit;

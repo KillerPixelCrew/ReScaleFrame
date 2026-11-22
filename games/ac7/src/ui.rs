@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! AC7 UI classification over the frame tap's captured facts. The Runtime owns diversion.
-use crate::ui_abi::*;
+use crate::sys::*;
 use std::ffi::{c_int, c_void};
 use std::slice;
 

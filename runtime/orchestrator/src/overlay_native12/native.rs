@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d11_d3d12 as graphics;
-use crate::overlay_host_abi::{RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay_input_options};
 use crate::overlay_input::{
     rsf_overlay_input_collect, rsf_overlay_input_install, rsf_overlay_input_set_visible,
     rsf_overlay_input_uninstall, rsf_overlay_input_visible,
 };
 use crate::overlay_window::{NOT_INSTALLED, OK};
+use crate::sys::{RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay_input_options};
 use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};
 use std::mem::ManuallyDrop;
 use std::ptr::copy_nonoverlapping;

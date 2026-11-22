@@ -2,8 +2,8 @@
 //! Unity Vulkan frame routing. Foreign dispatch borrows first-party values through vulkan_foreign.h.
 
 use super::*;
-use crate::bridge_abi::{RSF_UNITY_PACKET_PROBE, RSF_UNITY_PREVIEW_SOURCE_COMMON};
-use crate::vulkan_foreign_abi::*;
+use crate::sys::*;
+use crate::sys::{RSF_UNITY_PACKET_PROBE, RSF_UNITY_PREVIEW_SOURCE_COMMON};
 use crate::vulkan_platform::{commands::*, surface::*, *};
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{

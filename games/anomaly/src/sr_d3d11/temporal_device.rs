@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: MIT
 //! D3D11 temporal SR fixture, using the live prepare, evaluate and reinsert inputs.
-#[path = "temporal_device_abi.rs"]
-mod abi;
 mod decode;
 mod provider;
 
-use self::abi::rsf_anomaly_temporal_fixture_graphics as Graphics;
 use super::{DrawViews, Extent, PREPARE, Pass, Platform, REINSERT, TemporalTargets, UPSCALE};
 use crate::sr_fixture_device::Device;
 use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
 use crate::sr_pass::PassInputs;
 use crate::sr_stage::FIRST_PERSON_DEPTH_BITS;
-use crate::sr_stage_abi::{rsf_anomaly_sr_camera as Camera, rsf_anomaly_sr_jitter_state as Jitter};
 use crate::sr_tonemap::roundtrip_fixture::{half_to_float, rsf_anomaly_sr_float_to_half as half};
 use crate::sr_tonemap::{
     rsf_anomaly_tonemap_forward as tonemap, rsf_anomaly_tonemap_inverse as inverse,
     rsf_anomaly_tonemap_unorm8 as unorm8,
 };
+use crate::sys::rsf_anomaly_temporal_fixture_graphics as Graphics;
+use crate::sys::{rsf_anomaly_sr_camera as Camera, rsf_anomaly_sr_jitter_state as Jitter};
 use std::ffi::{CStr, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;

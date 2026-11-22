@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
 use crate::dx12_vulkan_interop::{Owner as Interop, Platform as InteropPlatform, checked};
-use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image;
 use crate::frame_capture_vk::sr_capture_inputs;
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
+use crate::sys::rsf_dx12vk_shared_image;
+use crate::sys::*;
 use crate::vulkan_external_copy::{self, Barrier, FAMILY_EXTERNAL, FAMILY_IGNORED, Transfer};
 use crate::vulkan_sr::{
     GENERAL, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, SHADER_READ, SHARPENING_VENDOR,
     STORAGE_USAGE, TRANSFER_DST, valid_frame_record, valid_image,
 };
-use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::{SplitLease, admit_setup, private_setup_result};
 use rsf_game_sys::{RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_SR, RSF_FRAME_FLAG_RESET};
 use std::ffi::{CStr, c_void};
 use std::ptr;
 
-#[path = "../../vulkan/fsr4/bridge_abi.rs"]
-mod bridge_abi;
-use bridge_abi::{
+use crate::sys::{
     RSF_FSR4_BRIDGE_ABI_MISMATCH as ABI_MISMATCH, RSF_FSR4_BRIDGE_ABI_VERSION,
     RSF_FSR4_BRIDGE_INVALID_ARGUMENT as INVALID, rsf_fsr4_bridge_create as BridgeCreate,
     rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as Info,
@@ -26,11 +24,9 @@ use bridge_abi::{
 
 #[path = "vulkan_fsr4_sr/graphics.rs"]
 mod graphics;
-#[path = "vulkan_fsr4_sr_abi.rs"]
-mod platform_abi;
 #[path = "vulkan_fsr4_sr/state_fixture.rs"]
 mod state_fixture;
-use platform_abi::rsf_fsr4vk_platform as Platform;
+use crate::sys::rsf_fsr4vk_platform as Platform;
 
 type Handle = *mut c_void;
 type Setup = rsf_srvk_setup;

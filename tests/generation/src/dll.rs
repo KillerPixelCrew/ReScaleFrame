@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::dll_abi::*;
-use crate::session_abi::{RSF_FG_FIXED, RSF_FG_OFF, RSF_REFLEX_ON};
-use rsf_game_sys::*;
+use crate::sys::*;
+use crate::sys::{RSF_FG_FIXED, RSF_FG_OFF, RSF_REFLEX_ON};
 use std::ffi::c_void;
 use std::mem::{align_of, size_of};
 use std::ptr::{null, null_mut};

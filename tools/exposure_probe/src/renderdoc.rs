@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::{Handle, NVIDIA, ProbeResult, sdk_abi::*};
+use crate::{Handle, NVIDIA, ProbeResult, sys::*};
 use std::ffi::c_char;
 use std::ptr::NonNull;
 use windows::Win32::System::Environment::GetEnvironmentVariableW;

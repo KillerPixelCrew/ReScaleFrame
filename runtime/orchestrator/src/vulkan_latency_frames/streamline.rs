@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::{FRAMES, Frame, INVALID, LegacyPresent, NOT_READY};
 use crate::input_receipts::streamline_input;
+use crate::sys::rsf_vk_token_calls as SdkTokens;
 use crate::vulkan_latency::rsf_core_latencyvk_sdk_result as sdk_result;
-use crate::vulkan_latency_platform_abi::rsf_vk_token_calls as SdkTokens;
 
 const TOKEN_SLOTS: usize = 6; // The pinned SDK's retained frame-token ring.
 const FEATURE_FAILED: i32 = -9;

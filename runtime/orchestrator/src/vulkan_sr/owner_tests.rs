@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::vulkan_dlss_sr_abi::{
-    rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform, rsf_vkdlss_tag,
-};
-use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
-use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
+use crate::sys::rsf_vkfg_image;
+use crate::sys::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
+use crate::sys::{rsf_vkdlss_init, rsf_vkdlss_options, rsf_vkdlss_platform, rsf_vkdlss_tag};
 use crate::vulkan_streamline_camera::rsf_slvk_sdk_constants;
 use ash::vk::{self, Handle as _};
 

@@ -9,7 +9,7 @@ use super::{
 };
 use crate::com_ref::ComRef;
 use crate::d3d11_present_abi::{Raw, rsf_d3d11p_plain_plan, rsf_d3d11p_request};
-use crate::fg12_abi::rsf_d3d11_present_setup;
+use crate::sys::rsf_d3d11_present_setup;
 use std::ffi::c_void;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};

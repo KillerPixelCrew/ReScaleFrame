@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::overlay_host_abi::{
-    RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay_input_options as Options,
-};
 use crate::overlay_input::{
     rsf_overlay_input_collect, rsf_overlay_input_install, rsf_overlay_input_set_visible,
     rsf_overlay_input_uninstall, rsf_overlay_input_visible,
 };
+use crate::sys::{RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay_input_options as Options};
 use std::mem::{offset_of, transmute};
 use std::ptr::null;
 use windows_sys::Win32::System::{

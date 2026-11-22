@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d11_output::texture_desc;
-use crate::d3d11_output_abi::{rsf_d3d11_output_child_device, rsf_d3d11_output_query_texture};
+use crate::sys::{rsf_d3d11_output_child_device, rsf_d3d11_output_query_texture};
 use std::sync::OnceLock;
 use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
 use windows_sys::core::GUID;
@@ -243,7 +243,7 @@ unsafe extern "C" fn set_viewports(
                 unsafe extern "system" fn(
                     *mut std::ffi::c_void,
                     u32,
-                    *const crate::frame_tap_abi::rsf_frame_tap_viewport,
+                    *const crate::sys::rsf_frame_tap_viewport,
                 ),
             >(original)
         }
@@ -267,7 +267,7 @@ unsafe extern "C" fn set_scissors(
                 unsafe extern "system" fn(
                     *mut std::ffi::c_void,
                     u32,
-                    *const crate::frame_tap_abi::rsf_frame_tap_rect,
+                    *const crate::sys::rsf_frame_tap_rect,
                 ),
             >(original)
         }

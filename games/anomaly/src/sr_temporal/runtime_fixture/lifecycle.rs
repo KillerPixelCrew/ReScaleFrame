@@ -2,9 +2,7 @@
 //! Synthetic Runtime receipts for the same temporal driver used by the plugin.
 use super::*;
 use crate::sr_pass::PassError;
-use crate::sr_stage_abi::{
-    rsf_anomaly_sr_camera, rsf_anomaly_sr_jitter_state, rsf_anomaly_sr_pass,
-};
+use crate::sys::{rsf_anomaly_sr_camera, rsf_anomaly_sr_jitter_state, rsf_anomaly_sr_pass};
 use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_render_pass};
 
 const OUTPUT: [u32; 2] = [1920, 1080];
@@ -151,7 +149,7 @@ fn table() -> rsf_d3d11_sr_api {
     unsafe extern "C" fn dump(_: *const c_char) -> i32 {
         OK
     }
-    unsafe extern "C" fn sharpening(_: *const c_void) -> i32 {
+    unsafe extern "C" fn sharpening(_: *const crate::sys::rsf_sharpening_options) -> i32 {
         OK
     }
 

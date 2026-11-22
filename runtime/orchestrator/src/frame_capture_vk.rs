@@ -7,7 +7,7 @@ use crate::capture_names::CaptureName;
 use crate::capture_pixels::Pixels;
 #[cfg(windows)]
 mod native;
-use crate::vulkan_sr_abi::{rsf_srvk_frame as Frame, rsf_srvk_image as Image};
+use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as Image};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs::{self, OpenOptions};
@@ -668,7 +668,7 @@ impl Owner {
     pub(super) fn initialize(
         &mut self,
         device: Handle,
-        proc: crate::vulkan_sr_abi::rsf_vk_get_proc,
+        proc: crate::sys::rsf_vk_get_proc,
         memory: &ash::vk::PhysicalDeviceMemoryProperties,
     ) -> bool {
         if !self.lock().pending.is_empty() {
@@ -699,7 +699,7 @@ const _: () = assert!(size_of::<ash::vk::PhysicalDeviceMemoryProperties>() == 52
 pub(super) unsafe extern "C" fn rsf_core_capture_vk_initialize(
     owner: *mut Owner,
     device: Handle,
-    proc: crate::vulkan_sr_abi::rsf_vk_get_proc,
+    proc: crate::sys::rsf_vk_get_proc,
     memory: *const ash::vk::PhysicalDeviceMemoryProperties,
 ) -> i32 {
     i32::from(

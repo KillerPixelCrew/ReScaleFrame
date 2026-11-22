@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::dx12_vulkan_interop_abi::rsf_dx12vk_platform;
-use crate::vulkan_sr_abi::{rsf_srvk_setup as Setup, rsf_vk_function, rsf_vk_get_proc};
+use crate::sys::rsf_dx12vk_platform;
+use crate::sys::{rsf_srvk_setup as Setup, rsf_vk_function, rsf_vk_get_proc};
 use ash::vk::{self, Handle as _};
 use std::ffi::{CStr, c_void};
 use std::{mem, ptr};

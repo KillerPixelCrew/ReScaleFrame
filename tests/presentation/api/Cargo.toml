@@ -12,6 +12,9 @@ crate-type = ["staticlib"]
 [lints]
 workspace = true
 
+[dependencies]
+rsf-game-sys = { path = "../../../sdk/game" }
+
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",

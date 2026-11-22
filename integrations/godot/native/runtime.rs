@@ -2,8 +2,8 @@
 //! Engine ABI entry points backed by the existing Rust session and execution receipts.
 
 use crate::host::native_platform;
-use crate::host_abi::*;
 use crate::platform::{Settings, Setup};
+use crate::sys::*;
 use crate::vulkan::native::{rsf_godot_vk_capture_present, rsf_godot_vk_render_begin};
 use rsf_game_sys::{RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_PRESENT, rsf_game_render_pass};
 use std::cell::Cell;

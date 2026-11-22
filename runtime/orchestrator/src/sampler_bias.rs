@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::{ComRef, vtable};
-use crate::d3d11_output_abi::{
+use crate::sys::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_device_ok, rsf_d3d11_output_is_immediate,
 };
 use std::borrow::Borrow;

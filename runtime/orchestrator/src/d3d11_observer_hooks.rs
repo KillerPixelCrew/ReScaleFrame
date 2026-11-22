@@ -4,9 +4,9 @@ mod hde_abi;
 mod probe;
 mod route;
 
-use crate::d3d11_observer_abi::rsf_observer_options as Options;
 use crate::d3d11_observer_callbacks::Callbacks;
 use crate::d3d11_observer_present::{present_calls, replace_present_size};
+use crate::sys::rsf_observer_options as Options;
 use crate::{d3d11_observer_callbacks, d3d11_observer_capture};
 use std::ffi::c_void;
 use std::ptr::null_mut;

@@ -5,7 +5,7 @@ use super::measure::record;
 use super::memory::{MemoryCache, Region, read, read_exact, readable_extent};
 use super::names::escape_unit;
 use super::sections::{Stream, rsf_dump_now_ms};
-use super::sections_abi::rsf_dump_image_info;
+use crate::sys::rsf_dump_image_info;
 use std::ffi::c_char;
 use std::fmt::Write as _;
 use std::mem::transmute;

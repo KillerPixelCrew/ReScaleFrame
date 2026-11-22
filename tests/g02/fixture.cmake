@@ -13,18 +13,15 @@ function(rsf_add_g02_fixture target source)
         set(rust_target x86_64-pc-windows-gnu)
     endif()
     set(dir "${CMAKE_CURRENT_FUNCTION_LIST_DIR}")
-    set(rust_abi "${PROJECT_SOURCE_DIR}/runtime/orchestrator/src")
     set(object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/${target}.obj")
     add_custom_command(OUTPUT "${object}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
         COMMAND "${fixture_rustc}" --edition 2024 --target "${rust_target}"
             --crate-name "${target}" --crate-type lib --emit obj -C codegen-units=1
             -C panic=abort
-            -C opt-level=$<IF:$<CONFIG:Debug>,0,3>
+            -C opt-level=$<IF:$<CONFIG:Debug>,0,3> ${RSF_FIXTURE_EXTERNS}
             -o "${object}" "${dir}/${source}"
-        DEPENDS "${dir}/${source}" "${dir}/d3d11.rs"
-            "${rust_abi}/frame_tap_abi.rs" "${rust_abi}/resource_roles_abi.rs"
-            "${rust_abi}/scene_promote_abi.rs"
+        DEPENDS "${dir}/${source}" "${dir}/d3d11.rs" rsf_rust_fixture_rlibs
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         VERBATIM)
     set_source_files_properties("${object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)

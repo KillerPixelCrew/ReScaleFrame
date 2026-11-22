@@ -8,13 +8,11 @@
 // loader, COM, input, renderer and Win32 calls.
 use crate::com_ref::ComRef;
 use crate::graphics_d3d11::rsf_call_native_log;
-use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
-#[cfg(test)]
-use crate::overlay_host_abi::rsf_overlay_host_panel;
-use crate::overlay_host_abi::{
-    RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data, rsf_overlay_input,
-};
 use crate::overlay_panel::{LoadError, PanelEntries, elapsed_seconds};
+#[cfg(test)]
+use crate::sys::rsf_overlay_host_panel;
+use crate::sys::{RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data, rsf_overlay_input};
+use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use std::ffi::{CString, c_char, c_void};
 use std::fmt::Display;
 use std::ptr::{self, null_mut};

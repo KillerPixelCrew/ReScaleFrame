@@ -5,9 +5,7 @@
 mod camera;
 mod cpu_facts;
 mod frame;
-#[path = "../../../../sdk/game/src/frame_abi.rs"]
 mod frame_abi;
-#[path = "../../../../sdk/game/src/frame_event_abi.rs"]
 mod frame_event_abi;
 mod graph;
 mod host;

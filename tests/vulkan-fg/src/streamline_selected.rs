@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::streamline_abi::*;
+use crate::sys::*;
 use std::{cell::Cell, ptr};
 
 const AMD: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];

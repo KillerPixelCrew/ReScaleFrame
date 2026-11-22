@@ -2,11 +2,10 @@
 //! Native CPU facts: frame records, pending window and unframed input, input
 //! receipts, vendor marker bookkeeping and the source reservation ledger share
 //! one lock. Sinks and recursive dispatch run only after it is released.
-use crate::cpu_abi::*;
 use crate::cpu_reservations::Book;
 use crate::input_receipts::Window as ReceiptWindow;
 use crate::sr_session::has_capacity;
-use rsf_game_sys::*;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::mem::{offset_of, zeroed};
 use std::ptr;

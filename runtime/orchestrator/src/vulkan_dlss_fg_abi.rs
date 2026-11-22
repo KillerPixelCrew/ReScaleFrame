@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
+use crate::sys::rsf_srvk_image as SourceImage;
+use crate::sys::{rsf_dlssgvk_status as Status, rsf_fgvk_setup as Setup};
+use crate::sys::{rsf_slvk_call, rsf_slvk_callback};
+use crate::sys::{rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu};
 use crate::vulkan_dlss_fg::sdk_fg_options::Packed;
 use crate::vulkan_dlss_fg::sdk_fg_options::State;
-use crate::vulkan_fg_abi::{rsf_dlssgvk_status as Status, rsf_fgvk_setup as Setup};
-use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu};
-use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
-use crate::vulkan_sr_abi::rsf_srvk_image as SourceImage;
 use crate::vulkan_streamline_camera::sdk_api::{
     FreeResources, GetFgState, SetConstants, SetOptions, SetTagForFrame,
 };

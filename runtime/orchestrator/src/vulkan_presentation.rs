@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_fg_abi::rsf_fgvk;
+use crate::sys::rsf_fgvk;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard};
 

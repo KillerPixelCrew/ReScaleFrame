@@ -13,16 +13,16 @@ use crate::d3d11_host_abi::{
 use crate::d3d11_present_abi::*;
 use crate::fg_choice::known;
 use crate::fg_choice::rsf_fg_select_auto_backend;
-use crate::fg12_abi::{rsf_d3d11_present_setup as Setup, rsf_streamline_host};
-use crate::native_fg_cpu_abi::rsf_d3d11_present_status as PresentStatus;
-use crate::render_abi::{
+use crate::shared_surface::{self, Surface, SurfaceSetup};
+use crate::sr_session::{has_capacity, valid_unit_scale};
+use crate::sys::rsf_d3d11_present_status as PresentStatus;
+use crate::sys::rsf_observer_present_event as Event;
+use crate::sys::{
     RSF_BACKEND_ABI_VERSION, RSF_FG_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO,
     RSF_FG_OFF, RSF_PACING_REFLEX, RSF_PACING_XELL, RSF_REFLEX_OFF, rsf_fg_options,
     rsf_fg_retirement, rsf_fg_status, rsf_generation_provider as Provider, rsf_generation_setup,
 };
-use crate::scene_abi::rsf_observer_present_event as Event;
-use crate::shared_surface::{self, Surface, SurfaceSetup};
-use crate::sr_session::{has_capacity, valid_unit_scale};
+use crate::sys::{rsf_d3d11_present_setup as Setup, rsf_streamline_host};
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write as _;
@@ -44,8 +44,6 @@ mod factory;
 mod gpu;
 #[path = "d3d11_present_native.rs"]
 mod native;
-#[path = "d3d11_present_streamline_abi.rs"]
-mod streamline_abi;
 
 type Platform = rsf_d3d11p_platform;
 type Graphics = rsf_streamline_graphics;

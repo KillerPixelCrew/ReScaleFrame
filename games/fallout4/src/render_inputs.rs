@@ -16,12 +16,12 @@ use crate::camera::{self, CameraRaster, NativeCamera};
 use crate::creation;
 use crate::d3d11::same_native;
 use crate::depth_domains::{self, Snapshot};
-use crate::render_records::{
+use crate::sys::{
     NativeFramebufferReceipt as FramebufferReceipt, NativeInputHistoryReceipt as HistoryReceipt,
     NativeInputReceipt as Receipt, NativeInputResourceFacts as ResourceFacts,
     NativeInputState as State, NativeInputSwapFacts as SwapFacts,
 };
-use crate::render_records::{
+use crate::sys::{
     native_input_colour as SLOT_COLOUR, native_input_depth as SLOT_DEPTH,
     native_input_motion as SLOT_MOTION, native_input_no_slot as NO_SLOT,
     native_input_pipboy as SLOT_PIPBOY, native_input_refraction_normals as SLOT_REFRACTION_NORMALS,
@@ -1533,7 +1533,7 @@ unsafe extern "C" fn rsf_fallout4_inputs_same_resources(
     held: *const c_void,
     owners: bool,
 ) -> bool {
-    use crate::render_records::{native_input_chain, native_input_context};
+    use crate::sys::{native_input_chain, native_input_context};
 
     // SAFETY: Both pointers name the calling thread's native World leases.
     // Read each pair just before its COM comparison, preserving short-circuit

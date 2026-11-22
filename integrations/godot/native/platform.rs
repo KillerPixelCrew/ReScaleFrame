@@ -21,7 +21,7 @@ pub(crate) const ABI_VERSION: u32 = 3;
 /// `RSF_GODOT_SETTINGS_ABI_VERSION`.
 pub(crate) const SETTINGS_ABI_VERSION: u32 = 2;
 
-pub(crate) use rsf_game_sys::sharpening_abi::rsf_sharpening_options as Sharpening;
+pub(crate) use rsf_game_sys::rsf_sharpening_options as Sharpening;
 
 /// `rsf_godot_settings`.
 #[repr(C)]

@@ -6,7 +6,7 @@
 //! and publishes the outcome under the lock again, exactly as the former plugin.cpp did. The
 //! native renderer (native_renderer.rs) verifies its bytes, owns every hook and reports native
 //! facts; vendor, SR, FG and pacing decisions stay in the Runtime.
-use crate::platform_abi::{rsf_ac7_native_renderer, rsf_ac7_native_renderer_options};
+use crate::sys::{rsf_ac7_native_renderer, rsf_ac7_native_renderer_options};
 use crate::{RSF_ERROR_BUSY, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw};
 use rsf_game_sys::{rsf_game_host_services, rsf_game_renderer_status, rsf_result};
 use std::ffi::CStr;

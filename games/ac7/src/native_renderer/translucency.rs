@@ -12,8 +12,8 @@ use super::{
     installed, key, method, move_uniform, open, open_leased, original, pass_lease, pool_ref,
     primary_view, read, release_pass, scope,
 };
-use crate::platform_abi::rsf_ac7_render_scope;
-use crate::view_abi::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
+use crate::sys::rsf_ac7_render_scope;
+use crate::sys::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,

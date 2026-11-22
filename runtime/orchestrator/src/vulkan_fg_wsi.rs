@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
+use crate::sys::rsf_fgvk_setup;
+use crate::sys::{rsf_vk_function, rsf_vk_get_proc};
+use crate::sys::{rsf_vk_synchronized_present, rsf_vk_wsi_call, rsf_vk_wsi_scope};
 use crate::vulkan_dispatch::promoted_device_proc_alias;
-use crate::vulkan_fg_abi::rsf_fgvk_setup;
-use crate::vulkan_latency_platform_abi::{
-    rsf_vk_synchronized_present, rsf_vk_wsi_call, rsf_vk_wsi_scope,
-};
-use crate::vulkan_sr_abi::{rsf_vk_function, rsf_vk_get_proc};
 use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle};
 use std::ffi::{CStr, c_char, c_void};

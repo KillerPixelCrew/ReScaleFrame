@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MIT
 use crate::dx12_vulkan_interop::{self, Owner as Importer};
-use crate::dx12_vulkan_interop_abi::{
-    RSF_DX12VK_INTEROP_ABI_VERSION, rsf_dx12vk_interop_callbacks as ImportCallbacks,
-    rsf_dx12vk_shared_image as SharedImage,
-};
 use crate::fsr4_fg_bridge::{
     BRIDGE_ABI, BridgeCreate, BridgeFrame, BridgeInfo, BridgeStatus, RsfFsr4FgCreateFence,
     RsfFsr4FgCreateImage, RsfFsr4FgReleaseImage, UNSUPPORTED,
 };
 use crate::sr_session::has_capacity;
-use crate::vulkan_dx12_fg::{self as shared, *};
-use crate::vulkan_fg_abi::{
+use crate::sys::{
+    RSF_DX12VK_INTEROP_ABI_VERSION, rsf_dx12vk_interop_callbacks as ImportCallbacks,
+    rsf_dx12vk_shared_image as SharedImage,
+};
+use crate::sys::{
     RSF_FGVK_ABI_VERSION, rsf_fgvk_frame as Frame, rsf_fgvk_setup as Setup,
     rsf_fgvk_status as Status,
 };
+use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
+use crate::vulkan_dx12_fg::{self as shared, *};
 use crate::vulkan_fsr4_sr::directory;
-use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CStr, c_void};
 use std::ptr;

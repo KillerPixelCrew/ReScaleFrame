@@ -8,11 +8,11 @@ use crate::frame_capture_vk::{
 };
 use crate::input_dump::abi::rsf_core_dump_wants;
 use crate::sr_session::has_capacity;
-use crate::vulkan_capture_commands::Commands;
-use crate::vulkan_sr_abi::{
+use crate::sys::{
     RSF_SRVK_ABI_VERSION, rsf_input_dump_vk_setup as Setup, rsf_srvk_image as Image,
     rsf_srvk_setup as Graphics,
 };
+use crate::vulkan_capture_commands::Commands;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{c_char, c_void};

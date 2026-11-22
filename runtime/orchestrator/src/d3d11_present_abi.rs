@@ -3,9 +3,9 @@
 // facade asserts the same sizes and offsets with static_assert.
 #![allow(non_camel_case_types)]
 
-use crate::render_abi::rsf_generation_provider;
-use crate::scene_abi::rsf_observer_present_event;
 use crate::shared_surface;
+use crate::sys::rsf_generation_provider;
+use crate::sys::rsf_observer_present_event;
 use std::ffi::{c_char, c_void};
 use std::mem::offset_of;
 

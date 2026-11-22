@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, Host, INIT_FAILED, OK, Setup};
 use crate::sdk_module::FFX_CONTEXT_EXPORTS;
-use crate::vulkan_sr_abi::rsf_vk_function;
+use crate::sys::rsf_vk_function;
 use std::ffi::{CStr, c_char};
 use std::ptr;
 

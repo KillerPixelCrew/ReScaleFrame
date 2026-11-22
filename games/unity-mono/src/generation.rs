@@ -4,7 +4,7 @@
 //! pass their own provider, options, directories, window guard and log; the depth convention,
 //! the provider limit, runtime switching, the HUD-less backbuffer UI mode and Unity's Streamline
 //! engine type are the same for both.
-use crate::runtime_abi::{RSF_UI_MODE_BACKBUFFER_HUDLESS, rsf_fg12_setup, rsf_native_fg_options};
+use crate::sys::{RSF_UI_MODE_BACKBUFFER_HUDLESS, rsf_fg12_setup, rsf_native_fg_options};
 use std::ffi::{c_char, c_int, c_void};
 use std::ptr::null_mut;
 

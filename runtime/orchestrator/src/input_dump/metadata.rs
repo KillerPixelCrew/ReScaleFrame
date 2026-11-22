@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Capture, Image, ImageState, Pixels, RAW};
 use crate::capture_metadata::Quoted;
-use crate::render_abi::{rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
+use crate::sys::{rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame, rsf_frame_record,
     rsf_game_render_pass,

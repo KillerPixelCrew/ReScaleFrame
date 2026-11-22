@@ -131,7 +131,7 @@ pub(crate) struct FoliageLayout {
     pub usable: bool,
 }
 
-pub(super) use crate::motion_frame_target_abi::rsf_anomaly_motion_frame_target as FrameTarget;
+pub(super) use crate::sys::rsf_anomaly_motion_frame_target as FrameTarget;
 
 const _: () = {
     assert!(size_of::<PositionViews>() == 16);
