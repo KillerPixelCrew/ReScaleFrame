@@ -87,7 +87,6 @@ pub(crate) struct Ops {
         digest: *mut ::core::ffi::c_char,
         hashed: *mut bool,
     ) -> bool,
-    call_create: unsafe extern "C" fn(call: *const platform_abi::rsf_fallout4_create_call) -> i32,
     host_create: unsafe extern "C" fn(
         create: rsf_fallout4_host_create_fn,
         setup: *const rsf_d3d11_host_setup,
@@ -155,7 +154,6 @@ impl Ops {
         Some(Self {
             log: table.log?,
             file_sha256: table.file_sha256?,
-            call_create: table.call_create?,
             host_create: table.host_create?,
             host_set_active: table.host_set_active?,
             creation_begin: table.creation_begin?,
@@ -207,10 +205,6 @@ impl Ops {
             unsafe { MH_DisableHook(target as *mut c_void) },
             MH_OK | MH_ERROR_DISABLED
         )
-    }
-
-    pub(crate) fn call_create(&self, call: &platform_abi::rsf_fallout4_create_call) -> i32 {
-        unsafe { (self.call_create)(call) }
     }
 
     pub(crate) fn host_create(

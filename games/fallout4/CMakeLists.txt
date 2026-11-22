@@ -1,4 +1,4 @@
-add_library(rsf_game_fallout4 SHARED src/fallout4_exports.def src/host_boundary.cpp src/native_creation.cpp
+add_library(rsf_game_fallout4 SHARED src/fallout4_exports.def src/host_boundary.cpp
     src/cpu_events.cpp src/render_inputs.cpp src/render_hooks.cpp src/resolution.cpp src/screen.cpp
     src/depth_domains.cpp)
 # Identity, lifecycle, Runtime session, DPI startup, creation sequencing and the CPU event owner are

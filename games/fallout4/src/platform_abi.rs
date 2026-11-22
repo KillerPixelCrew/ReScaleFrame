@@ -292,8 +292,6 @@ pub struct rsf_fallout4_platform {
             hashed: *mut bool,
         ) -> bool,
     >,
-    pub call_create:
-        ::core::option::Option<unsafe extern "C" fn(call: *const rsf_fallout4_create_call) -> i32>,
     pub host_create: ::core::option::Option<
         unsafe extern "C" fn(
             create: rsf_fallout4_host_create_fn,
@@ -338,23 +336,21 @@ pub struct rsf_fallout4_platform {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_fallout4_platform"][::core::mem::size_of::<rsf_fallout4_platform>() - 64usize];
+    ["Size of rsf_fallout4_platform"][::core::mem::size_of::<rsf_fallout4_platform>() - 56usize];
     ["Alignment of rsf_fallout4_platform"]
         [::core::mem::align_of::<rsf_fallout4_platform>() - 8usize];
     ["Offset of field: rsf_fallout4_platform::log"]
         [::core::mem::offset_of!(rsf_fallout4_platform, log) - 0usize];
     ["Offset of field: rsf_fallout4_platform::file_sha256"]
         [::core::mem::offset_of!(rsf_fallout4_platform, file_sha256) - 8usize];
-    ["Offset of field: rsf_fallout4_platform::call_create"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, call_create) - 16usize];
     ["Offset of field: rsf_fallout4_platform::host_create"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, host_create) - 24usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, host_create) - 16usize];
     ["Offset of field: rsf_fallout4_platform::host_set_active"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, host_set_active) - 32usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, host_set_active) - 24usize];
     ["Offset of field: rsf_fallout4_platform::creation_begin"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, creation_begin) - 40usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, creation_begin) - 32usize];
     ["Offset of field: rsf_fallout4_platform::creation_end"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, creation_end) - 48usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, creation_end) - 40usize];
     ["Offset of field: rsf_fallout4_platform::bind_presentation"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, bind_presentation) - 56usize];
+        [::core::mem::offset_of!(rsf_fallout4_platform, bind_presentation) - 48usize];
 };

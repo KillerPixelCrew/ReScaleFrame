@@ -3,12 +3,14 @@
 #include "fallout4_platform.h"
 #include "render_hooks_platform.h"
 #include <rescaleframe/sha256_file.h>
+#include <d3d11.h>
+#include <cstddef>
 #include <cstring>
 #include <string>
 
 namespace {
 using namespace rsf::fallout4;
-static_assert(sizeof(rsf_fallout4_platform) == 8 * sizeof(void*));
+static_assert(sizeof(rsf_fallout4_platform) == 7 * sizeof(void*));
 
 // A native call that throws reports false; the Rust lifecycle then answers RSF_ERROR_NOT_READY
 // as the previous native catch did.
@@ -27,7 +29,6 @@ constexpr rsf_fallout4_platform platform{
             if (*hashed) std::memcpy(digest, hash.data(), hash.size());
         });
     },
-    rsf_fallout4_call_creation,
     [](rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup, rsf_game_host_services* services,
         int32_t* result) noexcept {
         return guarded([&] { *result = create ? create(setup, services) : RSF_ERROR_NOT_READY; });
@@ -54,4 +55,19 @@ extern "C" const rsf_fallout4_platform* rsf_fallout4_host_boundary() noexcept {
 
 extern "C" void rsf_fallout4_publish_render_boundary() noexcept {
     (void)rsf::fallout4::rsf_fallout4_render_publish(rsf::fallout4::render_hook_leaves());
+}
+
+
+// Enforce the original native exception boundary before an exception can reach Rust.
+static_assert(sizeof(rsf_fallout4_create_call) == 88 && offsetof(rsf_fallout4_create_call, immediate_context) == 80);
+static_assert(sizeof(D3D_DRIVER_TYPE) == sizeof(int32_t) && sizeof(D3D_FEATURE_LEVEL) == sizeof(int32_t));
+extern "C" int32_t rsf_fallout4_call_creation(void* original, const rsf_fallout4_create_call* call) noexcept {
+    const auto native_create = reinterpret_cast<decltype(&D3D11CreateDeviceAndSwapChain)>(original);
+    return native_create(static_cast<IDXGIAdapter*>(call->adapter), D3D_DRIVER_TYPE(call->driver_type),
+        static_cast<HMODULE>(call->software), call->flags,
+        reinterpret_cast<const D3D_FEATURE_LEVEL*>(call->feature_levels), call->feature_level_count,
+        call->sdk_version, static_cast<const DXGI_SWAP_CHAIN_DESC*>(call->swapchain_desc),
+        reinterpret_cast<IDXGISwapChain**>(call->swapchain), reinterpret_cast<ID3D11Device**>(call->device),
+        reinterpret_cast<D3D_FEATURE_LEVEL*>(call->feature_level),
+        reinterpret_cast<ID3D11DeviceContext**>(call->immediate_context));
 }

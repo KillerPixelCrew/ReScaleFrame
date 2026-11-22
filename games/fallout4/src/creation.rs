@@ -5,7 +5,7 @@
 //! through the hooked import thunk. When the exact caller creates the renderer owner's outputs
 //! for its window, the call is bracketed by the Runtime's creation scope, and the final outer
 //! swapchain is bound for presentation. Scene and input producers are admitted separately.
-//! native_creation.cpp keeps the typed detour and the trampoline call as leaves.
+//! The original runs through the C++ noexcept boundary used for native creation.
 use crate::build_layout::{
     RENDERER_CHAIN as CHAIN, RENDERER_CONTEXT as CONTEXT, RENDERER_DEVICE as DEVICE,
     RENDERER_POINTER as OWNER_RVA, RENDERER_WINDOW as WINDOW,
@@ -90,21 +90,19 @@ unsafe extern "C" {
         host: *const rsf_game_host_services,
         cold_owner: Option<unsafe extern "C" fn() -> bool>,
     ) -> bool;
-    fn rsf_fallout4_creation_detour() -> *mut c_void;
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_creation_original() -> *mut c_void {
-    ORIGINAL.load(Ordering::Acquire)
+    fn rsf_fallout4_call_creation(
+        original: *mut c_void,
+        call: *const rsf_fallout4_create_call,
+    ) -> i32;
 }
 
 fn hook_created() -> bool {
-    !rsf_fallout4_creation_original().is_null()
+    !ORIGINAL.load(Ordering::Acquire).is_null()
 }
 
 fn create_hook() -> bool {
     let target = hook_address() as *mut c_void;
-    let detour = unsafe { rsf_fallout4_creation_detour() };
+    let detour = creation_detour as *const () as *mut c_void;
     let mut original = std::ptr::null_mut();
     // MinHook creates this disabled, so the trampoline can be published before start.
     if unsafe { MH_CreateHook(target, detour, &mut original) } != MH_OK {
@@ -366,7 +364,13 @@ fn observe(ops: &Ops, caller: usize, call: &rsf_fallout4_create_call) -> i32 {
         }
     }
     unsafe { SetLastError(entry_error) };
-    let result = ops.call_create(call);
+    let original = ORIGINAL.load(Ordering::Acquire);
+    let result = if original.is_null() {
+        E_FAIL
+    } else {
+        // The native function runs under the original C++ noexcept boundary.
+        unsafe { rsf_fallout4_call_creation(original, call) }
+    };
     let native_error = unsafe { GetLastError() };
     if let Some(scoped) = open {
         let mut outputs = None;
@@ -395,20 +399,75 @@ fn observe(ops: &Ops, caller: usize, call: &rsf_fallout4_create_call) -> i32 {
     result
 }
 
-/// The creation thunk detour body, entered from native_creation.cpp with its return address.
-///
-/// # Safety
-/// `call` holds the detour's arguments for this call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_creation_observe(
-    caller: usize,
-    call: *const rsf_fallout4_create_call,
+// Win64 passes driver_type and flags in the low halves of RDX and R9. Carry the
+// actual return address in their unused high halves to the private Rust entry.
+// This leaf touches no stack slot or nonvolatile register. The eight stack
+// arguments, caller's return address and home space reach the Rust entry unchanged.
+#[unsafe(naked)]
+unsafe extern "system" fn creation_detour(
+    _adapter: *mut c_void,
+    _driver_type: i32,
+    _software: *mut c_void,
+    _flags: u32,
+    _feature_levels: *const i32,
+    _feature_level_count: u32,
+    _sdk_version: u32,
+    _swapchain_desc: *const c_void,
+    _swapchain: *mut *mut c_void,
+    _device: *mut *mut c_void,
+    _feature_level: *mut i32,
+    _immediate_context: *mut *mut c_void,
 ) -> i32 {
-    // The hook exists only after a prepare that bound the leaves.
-    match (ops(), unsafe { call.as_ref() }) {
-        (Some(ops), Some(call)) => observe(ops, caller, call),
-        _ => E_FAIL,
-    }
+    std::arch::naked_asm!(
+        "mov r10, [rsp]",
+        "mov r11, r10",
+        "shl r10, 32",
+        "shr r11, 32",
+        "shl r11, 32",
+        "mov edx, edx",
+        "mov r9d, r9d",
+        "or rdx, r10",
+        "or r9, r11",
+        "jmp {observe}",
+        observe = sym observe_create,
+    );
+}
+
+/// Called only by the Win64 entry relay with the captured return address.
+unsafe extern "system" fn observe_create(
+    adapter: *mut c_void,
+    driver_type_and_caller_low: u64,
+    software: *mut c_void,
+    flags_and_caller_high: u64,
+    feature_levels: *const i32,
+    feature_level_count: u32,
+    sdk_version: u32,
+    swapchain_desc: *const c_void,
+    swapchain: *mut *mut c_void,
+    device: *mut *mut c_void,
+    feature_level: *mut i32,
+    immediate_context: *mut *mut c_void,
+) -> i32 {
+    let Some(ops) = ops() else {
+        return E_FAIL;
+    };
+    let caller =
+        (flags_and_caller_high & 0xffff_ffff_0000_0000) | (driver_type_and_caller_low >> 32);
+    let call = rsf_fallout4_create_call {
+        adapter,
+        driver_type: driver_type_and_caller_low as i32,
+        software,
+        flags: flags_and_caller_high as u32,
+        feature_levels,
+        feature_level_count,
+        sdk_version,
+        swapchain_desc,
+        swapchain,
+        device,
+        feature_level,
+        immediate_context,
+    };
+    observe(ops, caller as usize, &call)
 }
 
 pub(crate) unsafe extern "C" fn rsf_fallout4_accept_window(

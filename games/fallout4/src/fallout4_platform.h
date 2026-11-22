@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Internal boundary between the Fallout 4 native leaves (host_boundary.cpp, native_creation.cpp) and
+// Internal boundary between the Fallout 4 native leaves (host_boundary.cpp) and
 // their Rust owner (lib.rs). Not a DLL ABI: both sides link into ReScaleFrame.Game.Fallout4.dll.
 // tools/generate-rust-bindings.py generates src/platform_abi.rs from this header.
 #include <stdbool.h>
@@ -48,8 +48,6 @@ typedef struct rsf_fallout4_platform {
     bool (*log)(rsf_game_log_fn log, void* user, const char* message);
     // Guarded lower-case hex SHA-256 of a file into 64 characters, without a terminator.
     bool (*file_sha256)(const wchar_t* path, char* digest, bool* hashed);
-    // The original creation through its trampoline, with the thread's last error unchanged.
-    int32_t (*call_create)(const rsf_fallout4_create_call* call);
     // Guarded Runtime calls.
     bool (*host_create)(rsf_fallout4_host_create_fn create, const rsf_d3d11_host_setup* setup,
         rsf_game_host_services* services, int32_t* result);
@@ -64,12 +62,9 @@ typedef struct rsf_fallout4_platform {
 } rsf_fallout4_platform;
 
 // Rust owner entry points.
-void* rsf_fallout4_creation_original(void);
 #ifdef __cplusplus
-int32_t rsf_fallout4_call_creation(const rsf_fallout4_create_call* call) noexcept;
+int32_t rsf_fallout4_call_creation(void* original, const rsf_fallout4_create_call* call) noexcept;
 #endif
-// The creation thunk detour body. caller is the detour's return address.
-int32_t rsf_fallout4_creation_observe(uintptr_t caller, const rsf_fallout4_create_call* call);
 
 #ifdef __cplusplus
 }
