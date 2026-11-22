@@ -13,6 +13,8 @@
 #include <windows.h>
 #include <dxgi.h>
 
+extern "C" uint32_t rsf_core_overlay_refresh_mhz(void* window);
+
 namespace {
 void* window(void* swapchain, uint32_t* width, uint32_t* height) noexcept
 {
@@ -21,16 +23,6 @@ void* window(void* swapchain, uint32_t* width, uint32_t* height) noexcept
     *width = desc.BufferDesc.Width;
     *height = desc.BufferDesc.Height;
     return desc.OutputWindow;
-}
-
-uint32_t refresh(void* window) noexcept
-{
-    MONITORINFOEXW info{}; info.cbSize = sizeof(info);
-    DEVMODEW mode{}; mode.dmSize = sizeof(mode);
-    if (GetMonitorInfoW(MonitorFromWindow(static_cast<HWND>(window), MONITOR_DEFAULTTOPRIMARY), &info) &&
-        EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1)
-        return mode.dmDisplayFrequency * 1000u;
-    return 0;
 }
 
 uint32_t foreground() noexcept
@@ -68,7 +60,7 @@ void set_sharpening(const rsf_render_settings* settings) noexcept
 }
 
 constexpr rsf_overlay_platform platform{
-    .window = window, .refresh = refresh, .foreground = foreground, .tick = tick,
+    .window = window, .refresh = rsf_core_overlay_refresh_mhz, .foreground = foreground, .tick = tick,
     .start = start, .present = present, .stop = stop,
     .initialize_sharpening = nullptr, .valid_settings = nullptr,
     .valid_preset = valid_preset, .sanitize_sharpening = nullptr,

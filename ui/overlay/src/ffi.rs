@@ -24,7 +24,7 @@ use crate::abi::{
     RSF_OVERLAY_OK, RsfOverlayDrawData, RsfOverlayInput, RsfOverlayIntent, RsfOverlayResult,
     RsfOverlayStats, RsfOverlayTextureUpdate,
 };
-use crate::model::{FrameInput, Quality, Stats};
+use crate::model::{FrameInput, Stats};
 use crate::overlay::Overlay;
 
 /// Longest borrowed string the overlay will read.
@@ -255,6 +255,16 @@ unsafe fn fits<T>(pointer: *const T) -> bool {
     declared as usize >= size_of::<T>()
 }
 
+impl Default for RsfOverlayIntent {
+    fn default() -> Self {
+        encode_intent(crate::model::Intent {
+            backend: 1,
+            fg_generated: 1,
+            ..Default::default()
+        })
+    }
+}
+
 fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
     RsfOverlayIntent {
         struct_size: size_of::<RsfOverlayIntent>() as u32,
@@ -264,6 +274,7 @@ fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
         quality: produced.quality.to_abi(),
         enabled_changed: u32::from(produced.enabled_changed),
         enabled: u32::from(produced.enabled),
+        sr_change_id: produced.sr_change_id,
         fg_changed: u32::from(produced.fg_changed),
         fg_mode: produced.fg_mode,
         fg_generated: produced.fg_generated,
@@ -326,8 +337,10 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
     Stats {
         backend_loaded: stats.backend_loaded != 0,
         refusal_reason: unsafe { borrow_str(stats.refusal_reason) },
-        quality: Quality::from_abi(stats.quality),
         quality_raw: stats.quality,
+        sr_quality_choices: stats.sr_quality_choices,
+        sr_change_id: stats.sr_change_id,
+        sr_change_status: stats.sr_change_status,
         enabled: stats.enabled != 0,
         backend: stats.backend,
         dlss_preset: stats.dlss_preset,
@@ -542,18 +555,27 @@ mod tests {
             host_option_count: 0,
             host_options: null(),
             sharpening_available: 0,
-            sharpening_mode: 0,
-            sharpening_sharpness: 0.4,
-            sharpening_mas: 0,
-            sharpening_motion_sharpness: 0.2,
-            sharpening_motion_threshold: 0.0,
-            sharpening_motion_scale_limit: 10.0,
-            sharpening_contrast_enabled: 0,
-            sharpening_contrast: 0.0,
-            sharpening_depth_scale: 35.0,
-            sharpening_depth_bias: 0.001,
-            sharpening_clamp_output: 0,
-            sharpening_debug: 0,
+            sharpening_mode: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MODE,
+            sharpening_sharpness: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_SHARPNESS
+                as f32,
+            sharpening_mas: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MAS,
+            sharpening_motion_sharpness:
+                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS as f32,
+            sharpening_motion_threshold:
+                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD as f32,
+            sharpening_motion_scale_limit:
+                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT as f32,
+            sharpening_contrast_enabled:
+                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
+            sharpening_contrast: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST
+                as f32,
+            sharpening_depth_scale:
+                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
+            sharpening_depth_bias:
+                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
+            sharpening_clamp_output:
+                crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
+            sharpening_debug: crate::abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEBUG,
             ui_preferences: 0,
             latency_pacing_owner: 0,
             latency_reserved: 0,
@@ -564,6 +586,9 @@ mod tests {
             pcl_routed: 0,
             pcl_failed: 0,
             pcl_unmatched: 0,
+            sr_quality_choices: crate::abi::RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+            sr_change_id: 0,
+            sr_change_status: 0,
         }
     }
 
@@ -751,7 +776,11 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 18);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 19);
+        let intent = RsfOverlayIntent::default();
+        assert_eq!(intent.struct_size, size_of::<RsfOverlayIntent>() as u32);
+        assert_eq!((intent.backend, intent.fg_generated), (1, 1));
+        assert_eq!(intent.sr_change_id, 0);
     }
 
     #[test]

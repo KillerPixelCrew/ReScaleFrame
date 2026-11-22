@@ -12,10 +12,9 @@ use std::ptr;
 use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::System::{
     LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
-    SystemInformation::{GetSystemDirectoryW, GetTickCount64},
+    SystemInformation::GetSystemDirectoryW,
 };
 
-const STARTUP_HINT_MS: u64 = 8000;
 const NOT_SUPPORTED: i32 = -7;
 
 type Handle = *mut c_void;
@@ -64,7 +63,7 @@ struct Binding {
     device: ComRef,
     owner: ComRef,
     queue: ComRef,
-    started: Option<u64>,
+    started: bool,
 }
 
 // These COM handles move between calls. The owner serializes immediate-context
@@ -169,16 +168,14 @@ impl State {
                 device,
                 owner: unsafe { ComRef::retain(frame.device) },
                 queue: unsafe { ComRef::retain(frame.queue) },
-                started: None,
+                started: false,
             });
         }
         let binding = self.binding.as_mut().unwrap();
         if !binding.matches(frame.device, frame.queue) {
             return 0;
         }
-        let started = if let Some(started) = binding.started {
-            started
-        } else {
+        if !binding.started {
             let mut window = frame.input_window;
             if window.is_null()
                 && unsafe { (platform.window.unwrap())(frame.chain, &mut window) } == 0
@@ -194,16 +191,13 @@ impl State {
                     c"Shared overlay did not start; it will not be retried.",
                 );
             }
-            let started = unsafe { GetTickCount64() };
-            binding.started = Some(started);
+            binding.started = true;
             frame.log(c"Shared overlay attached to D3D12 queue and window; Insert opens presets.");
-            started
-        };
-
-        let now = unsafe { GetTickCount64() };
-        if frame.stats.show_performance_hud == 0
-            && now.saturating_sub(started) >= STARTUP_HINT_MS
-            && unsafe { (platform.visible.unwrap())() } == 0
+        }
+        let (mut visible, mut hint) = (0, 0.0);
+        if unsafe {
+            (platform.admit.unwrap())(frame.stats.show_performance_hud, &mut visible, &mut hint)
+        } == 0
         {
             return 0;
         }
@@ -242,13 +236,15 @@ impl State {
                 native.height,
                 frame.stats,
                 frame.intent,
+                visible,
+                hint,
             )
         }
     }
 
     fn stop(&mut self, platform: &Platform) {
         if let Some(binding) = &self.binding
-            && binding.started.is_some()
+            && binding.started
         {
             unsafe { (platform.stop.unwrap())(binding.device.as_ptr()) };
         }
@@ -359,8 +355,17 @@ mod tests {
         call("start");
         1
     }
-    unsafe extern "C" fn visible() -> u32 {
+    unsafe extern "C" fn admit(_: u32, visible: *mut u32, hint: *mut f32) -> i32 {
+        call("admit");
+        unsafe {
+            visible.write(1);
+            hint.write(0.25);
+        }
         1
+    }
+    unsafe extern "C" fn deny(_: u32, _: *mut u32, _: *mut f32) -> i32 {
+        call("deny");
+        0
     }
     unsafe extern "C" fn target(
         device: Handle,
@@ -390,7 +395,10 @@ mod tests {
         _: u32,
         _: *const rsf_overlay_stats,
         _: *mut rsf_overlay_intent,
+        visible: u32,
+        hint: f32,
     ) -> i32 {
+        assert_eq!((visible, hint), (1, 0.25));
         call("draw");
         0
     }
@@ -410,7 +418,7 @@ mod tests {
             create: Some(create),
             window: Some(window),
             start: Some(start),
-            visible: Some(visible),
+            admit: Some(admit),
             target: Some(target),
             acquire: Some(acquire),
             draw: Some(draw),
@@ -436,6 +444,11 @@ mod tests {
         let mut owner = State::default();
         owner.stop(&platform);
         assert_eq!(owner.render(&platform, &frame), 0);
+        let hidden = Platform {
+            admit: Some(deny),
+            ..platform
+        };
+        assert_eq!(owner.render(&hidden, &frame), 0);
         frame.queue = device;
         assert_eq!(owner.render(&platform, &frame), 0);
         owner.stop(&platform);
@@ -444,7 +457,8 @@ mod tests {
             assert_eq!(
                 calls,
                 &[
-                    "create", "start", "target", "acquire", "draw", "release", "flush", "stop"
+                    "create", "start", "admit", "target", "acquire", "draw", "release", "flush",
+                    "deny", "stop"
                 ]
             )
         });

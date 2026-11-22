@@ -1420,34 +1420,25 @@ impl Admission {
     }
 
     fn reason(&self) -> u32 {
-        use crate::render_abi::RSF_NATIVE_FG_REASON_NONE as NONE;
-        // Values from rescaleframe/native_fg.h; the overlay maps them to text.
-        const NO_MATCH: u32 = 1;
-        const NOT_PREPARED: u32 = 2;
-        const NO_SUBMISSION: u32 = 3;
-        const SCENE_UNSUPPORTED: u32 = 4;
-        const RESET: u32 = 5;
-        const VSYNC: u32 = 6;
-        const INVALID_INPUT: u32 = 7;
-        const HUDLESS_MISSING: u32 = 8;
+        use crate::fg_reasons::codes::*;
         if !self.matched {
-            NO_MATCH
+            RSF_NATIVE_FG_REASON_NO_MATCH
         } else if !self.inputs {
-            NOT_PREPARED
+            RSF_NATIVE_FG_REASON_NOT_PREPARED
         } else if !self.submitted {
-            NO_SUBMISSION
+            RSF_NATIVE_FG_REASON_NO_SUBMISSION
         } else if !self.scene_supported {
-            SCENE_UNSUPPORTED
+            RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED
         } else if !self.continuous {
-            RESET
+            RSF_NATIVE_FG_REASON_RESET
         } else if !self.vsync {
-            VSYNC
+            RSF_NATIVE_FG_REASON_VSYNC
         } else if !self.hudless {
-            HUDLESS_MISSING
+            RSF_NATIVE_FG_REASON_HUDLESS_MISSING
         } else if !self.valid() {
-            INVALID_INPUT
+            RSF_NATIVE_FG_REASON_INVALID_INPUT
         } else {
-            NONE
+            RSF_NATIVE_FG_REASON_NONE
         }
     }
 
@@ -1500,6 +1491,7 @@ unsafe extern "C" fn rsf_native_fg_prepare(
     let mut final_scene: SceneIdentity = empty();
     final_scene.struct_size = size_of::<SceneIdentity>() as u32;
     let options = requested();
+    unsafe { crate::frame_limit::observe_pacing_display(options.frame_limit_us, chain) };
     let provider = unsafe { call!(p, present_provider).as_ref() };
     let Some(provider) = provider.filter(|_| !session.is_null()) else {
         INPUT_TIMING.set(InputTiming::default());
@@ -2171,6 +2163,10 @@ pub(super) fn provider_options(
             1
         };
     let paced = status.pacing_owner != RSF_PACING_NONE;
+    let mut effective = *status;
+    if !valid {
+        crate::fg_status::deactivate(&mut effective);
+    }
     rsf_fg_options {
         struct_size: size_of::<rsf_fg_options>() as u32,
         abi_version: RSF_FG_ABI_VERSION,
@@ -2182,10 +2178,12 @@ pub(super) fn provider_options(
         } else {
             RSF_REFLEX_OFF
         },
-        frame_limit_us: if paced {
-            options.frame_limit_us / presents_per_frame
-        } else {
-            0
+        frame_limit_us: match status.pacing_owner {
+            RSF_PACING_REFLEX => {
+                crate::frame_limit::reflex_interval(options.frame_limit_us, presents_per_frame)
+            }
+            RSF_PACING_NONE => 0,
+            _ => crate::frame_limit::application_interval(options.frame_limit_us, &effective),
         },
     }
 }

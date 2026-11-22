@@ -2,7 +2,7 @@
 use crate::com_ref::ComRef;
 use crate::overlay_abi::rsf_overlay_texture_update as Update;
 use crate::overlay_geometry::{
-    TEXTURE_EDGE, borrowed_draw_slice, patch_fits, valid_indices, valid_texture,
+    TEXTURE_EDGE, borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
 };
 use crate::overlay_host_abi::{
     rsf_overlay_draw_call as DrawCall, rsf_overlay_draw_data as DrawData,
@@ -11,15 +11,19 @@ use crate::overlay_host_abi::{
 use crate::render_abi::rsf_backend_log_fn as LogFn;
 use crate::sr_session::has_capacity;
 use std::ffi::{CString, c_char, c_void};
-use std::mem::{self, offset_of};
+use std::mem;
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+
+mod pipeline;
+mod platform;
 
 type Handle = *mut c_void;
 const ABI: u32 = 1;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
+const SHADER_FAILED: i32 = -3;
 const RESOURCE_FAILED: i32 = -4;
 const MAX_VERTICES: u32 = 1 << 22;
 const MAX_INDICES: u32 = 1 << 23;
@@ -27,8 +31,6 @@ const GROWTH: u32 = 4096;
 const VERTEX_BUFFER: u32 = 1;
 const INDEX_BUFFER: u32 = 2;
 const CONSTANTS: usize = 3;
-const CLASS_INSTANCES: usize = 253; // D3D11_SHADER_MAX_INTERFACES
-const VIEWPORTS: usize = 16; // D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -39,11 +41,8 @@ struct Setup {
     log_user: Handle,
 }
 
-// Same order as rsf_overlay11_pipeline. The leaf transfers any references
-// it acquired, including on a partial creation failure.
 type RawPipeline = [Handle; 8];
 
-#[repr(C)]
 struct Draw {
     view: Handle,
     index_count: u32,
@@ -52,93 +51,21 @@ struct Draw {
     clip: [i32; 4],
 }
 
-// Mirrors rsf_overlay11_snapshot. The native leaf fills nullable COM pointers with owned
-// references. Field order keeps their release order after the bindings are restored.
-#[repr(C)]
-struct Snapshot {
-    predicate: Option<ComRef>,
-    predicate_value: i32,
-    input_layout: Option<ComRef>,
-    topology: u32,
-    vertex_buffer: Option<ComRef>,
-    vertex_stride: u32,
-    vertex_offset: u32,
-    index_buffer: Option<ComRef>,
-    index_format: u32,
-    index_offset: u32,
-
-    vertex_shader: Option<ComRef>,
-    vertex_instances: [Option<ComRef>; CLASS_INSTANCES],
-    vertex_instance_count: u32,
-    vertex_constants: Option<ComRef>,
-
-    pixel_shader: Option<ComRef>,
-    pixel_instances: [Option<ComRef>; CLASS_INSTANCES],
-    pixel_instance_count: u32,
-    pixel_resource: Option<ComRef>,
-    pixel_sampler: Option<ComRef>,
-
-    geometry_shader: Option<ComRef>,
-    geometry_instances: [Option<ComRef>; CLASS_INSTANCES],
-    geometry_instance_count: u32,
-    hull_shader: Option<ComRef>,
-    hull_instances: [Option<ComRef>; CLASS_INSTANCES],
-    hull_instance_count: u32,
-    domain_shader: Option<ComRef>,
-    domain_instances: [Option<ComRef>; CLASS_INSTANCES],
-    domain_instance_count: u32,
-
-    rasterizer: Option<ComRef>,
-    viewports: [[f32; 6]; VIEWPORTS],
-    viewport_count: u32,
-    scissors: [[i32; 4]; VIEWPORTS],
-    scissor_count: u32,
-
-    blend: Option<ComRef>,
-    blend_factor: [f32; 4],
-    sample_mask: u32,
-    depth_stencil: Option<ComRef>,
-    stencil_reference: u32,
+unsafe extern "C" {
+    fn rsf_overlay_renderer_log(log: LogFn, user: Handle, message: *const c_char);
 }
 
-#[repr(C)]
-struct Platform {
-    pipeline: unsafe extern "C" fn(Handle, &Setup, &mut RawPipeline) -> i32,
-    context: unsafe extern "C" fn(Handle, Handle) -> i32,
-    texture: unsafe extern "C" fn(Handle, &Update, u32) -> Handle,
-    view: unsafe extern "C" fn(Handle, Handle) -> Handle,
-    patch: unsafe extern "C" fn(Handle, Handle, &Update, u32),
-    buffer: unsafe extern "C" fn(Handle, u32, u32) -> Handle,
-    write: unsafe extern "C" fn(Handle, Handle, *const c_void, usize) -> i32,
-    target: unsafe extern "C" fn(Handle) -> u32,
-    read_state: unsafe extern "C" fn(Handle, &mut Snapshot) -> i32,
-    draw: unsafe extern "C" fn(
-        Handle,
-        &RawPipeline,
-        Handle,
-        Handle,
-        u32,
-        u32,
-        *const Draw,
-        usize,
-    ) -> i32,
-    restore_state: unsafe extern "C" fn(Handle, &Snapshot),
-    log: unsafe extern "C" fn(LogFn, Handle, *const c_char),
+impl Setup {
+    fn say(&self, text: &str) {
+        if self.log.is_some()
+            && let Ok(text) = CString::new(text)
+        {
+            unsafe { rsf_overlay_renderer_log(self.log, self.log_user, text.as_ptr()) };
+        }
+    }
 }
 
-const _: () = {
-    assert!(size_of::<Setup>() == 24 && size_of::<Draw>() == 40);
-    assert!(size_of::<Platform>() == 12 * size_of::<Handle>());
-    assert!(size_of::<Snapshot>() == 10992 && align_of::<Snapshot>() == 8);
-    assert!(offset_of!(Snapshot, vertex_instances) == 72);
-    assert!(offset_of!(Snapshot, pixel_instances) == 2120);
-    assert!(offset_of!(Snapshot, geometry_instances) == 4176);
-    assert!(offset_of!(Snapshot, hull_instances) == 6216);
-    assert!(offset_of!(Snapshot, domain_instances) == 8256);
-    assert!(offset_of!(Snapshot, viewports) == 10296);
-    assert!(offset_of!(Snapshot, scissors) == 10684);
-    assert!(offset_of!(Snapshot, blend) == 10944);
-};
+const _: () = assert!(size_of::<Setup>() == 24);
 
 struct Texture {
     id: u64,
@@ -169,16 +96,11 @@ struct Renderer {
     pipeline: [ComRef; 8],
     device: ComRef,
     setup: Setup,
-    platform: &'static Platform,
 }
 
 impl Renderer {
     fn say(&self, text: &str) {
-        if self.setup.log.is_some()
-            && let Ok(text) = CString::new(text)
-        {
-            unsafe { (self.platform.log)(self.setup.log, self.setup.log_user, text.as_ptr()) };
-        }
+        self.setup.say(text);
     }
 
     fn state(&self) -> Option<MutexGuard<'_, State>> {
@@ -200,7 +122,7 @@ impl Renderer {
     }
 
     fn context_valid(&self, context: Handle) -> bool {
-        !context.is_null() && unsafe { (self.platform.context)(self.device.as_ptr(), context) } != 0
+        unsafe { platform::valid_context(self.device.as_ptr(), context) }
     }
 
     fn upload(&self, context: Handle, update: &Update) -> (i32, Option<String>) {
@@ -214,8 +136,7 @@ impl Renderer {
         let pitch = update.width * 4;
         if update.is_whole_texture != 0 {
             let device = self.device.as_ptr();
-            let texture =
-                unsafe { ComRef::from_owned((self.platform.texture)(device, update, pitch)) };
+            let texture = unsafe { platform::texture(device, update, pitch) };
             let Some(resource) = texture else {
                 return (
                     RESOURCE_FAILED,
@@ -225,8 +146,7 @@ impl Renderer {
                     )),
                 );
             };
-            let view =
-                unsafe { ComRef::from_owned((self.platform.view)(device, resource.as_ptr())) };
+            let view = unsafe { platform::view(device, resource.as_ptr()) };
             let Some(view) = view else {
                 return (
                     RESOURCE_FAILED,
@@ -276,7 +196,7 @@ impl Renderer {
                     )),
                 );
             }
-            unsafe { (self.platform.patch)(context, texture.resource.as_ptr(), update, pitch) };
+            unsafe { platform::patch(context, texture.resource.as_ptr(), update, pitch) };
         }
         (OK, None)
     }
@@ -295,14 +215,8 @@ impl Renderer {
             return Ok(None);
         }
         let capacity = count.div_ceil(GROWTH) * GROWTH;
-        let resource = unsafe {
-            ComRef::from_owned((self.platform.buffer)(
-                self.device.as_ptr(),
-                capacity * stride,
-                bind,
-            ))
-        }
-        .ok_or(())?;
+        let resource =
+            unsafe { platform::buffer(self.device.as_ptr(), capacity * stride, bind) }.ok_or(())?;
         Ok(Some(Buffer { resource, capacity }))
     }
 
@@ -361,16 +275,13 @@ impl Renderer {
             return RESOURCE_FAILED;
         }
         for (index, call) in calls.iter().enumerate() {
-            if call.index_count == 0 {
+            let Ok(Some(clip)) = draw_clip(call, width, height) else {
                 continue;
-            }
+            };
             if !valid_indices(call, indices, data.vertex_count) {
                 notes.invalid_call.get_or_insert(index);
                 continue;
             }
-            let Some(clip) = clip_rect(call, width, height) else {
-                continue;
-            };
             let Some(texture) = state
                 .textures
                 .iter()
@@ -434,12 +345,12 @@ impl Renderer {
             ),
         ];
         if writes.iter().any(|&(buffer, bytes, length)| unsafe {
-            (self.platform.write)(context, buffer, bytes, length) == 0
+            !platform::write(context, buffer, bytes, length)
         }) {
             return RESOURCE_FAILED;
         }
         if !state.checked_target {
-            match unsafe { (self.platform.target)(context) } {
+            match unsafe { platform::target_kind(context) } {
                 0 if !state.reported_no_target => {
                     state.reported_no_target = true;
                     notes.target = Some(
@@ -457,27 +368,17 @@ impl Renderer {
             }
         }
         let pipeline = std::array::from_fn(|i| self.pipeline[i].as_ptr());
-        // Zero is valid for each numeric field and is None for each nullable COM pointer.
-        let mut snapshot: Snapshot = unsafe { mem::zeroed() };
-        if unsafe { (self.platform.read_state)(context, &mut snapshot) } == 0 {
-            return RESOURCE_FAILED;
-        }
-        let drawn = unsafe {
-            let drawn = (self.platform.draw)(
+        unsafe {
+            platform::draw(
                 context,
                 &pipeline,
                 vertices,
                 indices,
-                width,
-                height,
-                plan.as_ptr(),
-                plan.len(),
+                [width, height],
+                &plan,
             );
-            (self.platform.restore_state)(context, &snapshot);
-            drawn
-        };
-        drop(snapshot);
-        if drawn != 0 { OK } else { RESOURCE_FAILED }
+        }
+        OK
     }
 }
 
@@ -497,26 +398,11 @@ struct DrawNotes {
     target: Option<&'static str>,
 }
 
-fn clip_rect(call: &DrawCall, width: u32, height: u32) -> Option<[i32; 4]> {
-    let right = call.clip_x.saturating_add(call.clip_width).min(width);
-    let bottom = call.clip_y.saturating_add(call.clip_height).min(height);
-    if call.clip_x >= right || call.clip_y >= bottom {
-        return None;
-    }
-    Some([
-        i32::try_from(call.clip_x).ok()?,
-        i32::try_from(call.clip_y).ok()?,
-        i32::try_from(right).ok()?,
-        i32::try_from(bottom).ok()?,
-    ])
-}
-
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay11_create(
+unsafe extern "C" fn rsf_overlay_renderer_create(
     device: Handle,
     setup: *const Setup,
-    out: *mut *mut Renderer,
-    platform: &'static Platform,
+    out: *mut Handle,
 ) -> i32 {
     if device.is_null() || out.is_null() || !unsafe { has_capacity(setup) } {
         return INVALID;
@@ -526,48 +412,35 @@ unsafe extern "C" fn rsf_core_overlay11_create(
         return ABI_MISMATCH;
     }
     unsafe { out.write(null_mut()) };
-    let mut raw = [null_mut(); 8];
-    let status = unsafe { (platform.pipeline)(device, setup, &mut raw) };
-    let pipeline = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
-    if status != OK {
-        return status;
-    }
-    let [
-        Some(vs),
-        Some(ps),
-        Some(layout),
-        Some(constants),
-        Some(blend),
-        Some(depth),
-        Some(raster),
-        Some(sampler),
-    ] = pipeline
-    else {
-        return RESOURCE_FAILED;
+    let pipeline = match unsafe { pipeline::create(device, setup) } {
+        Ok(pipeline) => pipeline,
+        Err(status) => return status,
     };
     let renderer = crate::allocate_handle(Renderer {
         state: Mutex::new(State::default()),
         pending_free: Mutex::new(Vec::new()),
-        pipeline: [vs, ps, layout, constants, blend, depth, raster, sampler],
+        pipeline,
         device: unsafe { ComRef::retain(device) },
         setup: *setup,
-        platform,
     });
     let Some(owner) = (unsafe { renderer.as_ref() }) else {
         return RESOURCE_FAILED;
     };
     owner.say("overlay renderer ready");
-    unsafe { out.write(renderer) };
+    unsafe { out.write(renderer.cast()) };
     OK
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay11_upload(
-    renderer: *const Renderer,
+unsafe extern "C" fn rsf_overlay_renderer_upload_texture(
+    renderer: Handle,
     context: Handle,
     update: *const Update,
 ) -> i32 {
-    let (Some(renderer), Some(update)) = (unsafe { renderer.as_ref() }, unsafe { update.as_ref() })
+    let (Some(renderer), Some(update)) =
+        (unsafe { renderer.cast::<Renderer>().as_ref() }, unsafe {
+            update.as_ref()
+        })
     else {
         return INVALID;
     };
@@ -591,8 +464,8 @@ unsafe extern "C" fn rsf_core_overlay11_upload(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay11_free(renderer: *const Renderer, id: u64) {
-    if let Some(renderer) = unsafe { renderer.as_ref() } {
+unsafe extern "C" fn rsf_overlay_renderer_free_texture(renderer: Handle, id: u64) {
+    if let Some(renderer) = unsafe { renderer.cast::<Renderer>().as_ref() } {
         if let Some(mut state) = renderer.state() {
             state.free(id);
         } else {
@@ -606,14 +479,14 @@ unsafe extern "C" fn rsf_core_overlay11_free(renderer: *const Renderer, id: u64)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay11_draw(
-    renderer: *const Renderer,
+unsafe extern "C" fn rsf_overlay_renderer_draw(
+    renderer: Handle,
     context: Handle,
     data: *const DrawData,
     width: u32,
     height: u32,
 ) -> i32 {
-    let Some(renderer) = (unsafe { renderer.as_ref() }) else {
+    let Some(renderer) = (unsafe { renderer.cast::<Renderer>().as_ref() }) else {
         return INVALID;
     };
     if context.is_null() || width == 0 || height == 0 || !unsafe { has_capacity(data) } {
@@ -643,9 +516,9 @@ unsafe extern "C" fn rsf_core_overlay11_draw(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay11_destroy(renderer: *mut Renderer) {
+unsafe extern "C" fn rsf_overlay_renderer_destroy(renderer: Handle) {
     if !renderer.is_null() {
         // C clients retain ownership of the handle through each operation.
-        drop(unsafe { Box::from_raw(renderer) });
+        drop(unsafe { Box::from_raw(renderer.cast::<Renderer>()) });
     }
 }

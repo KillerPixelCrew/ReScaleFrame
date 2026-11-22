@@ -9,11 +9,11 @@ bindgen = os.environ.get("BINDGEN", "bindgen")
 if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
     raise SystemExit("Install bindgen-cli 0.72.1 to regenerate the SDK bindings")
 
-def generate(output, header, types, constants, clang_args, extra=(), *, use_core=True):
+def generate(output, header, types, constants, clang_args, extra=(), *, use_core=True, derive_debug=False):
     bindings = subprocess.check_output([
         bindgen, header, "--allowlist-type", types, "--allowlist-var", constants,
         "--raw-line", "#![allow(non_camel_case_types)]",
-        "--no-derive-debug", *(["--use-core"] if use_core else []),
+        *([] if derive_debug else ["--no-derive-debug"]), *(["--use-core"] if use_core else []),
         "--no-doc-comments", "--rust-edition", "2024",
         "--rust-target", "1.85", *extra, "--", "--target=x86_64-pc-windows-msvc", *clang_args,
     ], cwd=root).replace(b"\r\n", b"\n")
@@ -157,6 +157,8 @@ generate("ui/overlay/src/host_option_limit.rs", "runtime/orchestrator/include/re
          "NOTHING", "RSF_OVERLAY_SERVICE_OPTION_LIMIT",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/presentation/include", "-Iruntime/graphics/include", "-Iruntime/backends/dlss/include"])
+generate("sdk/game/src/sharpening_defaults.rs", "runtime/orchestrator/include/rescaleframe/sharpening_settings.h",
+         "NOTHING", "RSF_SHARPENING_DEFAULT_.*", [])
 generate("sdk/game/src/sr_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_sr_api.h",
          "rsf_(d3d11_sr_api|get_d3d11_sr_api_fn|dlss_(pipeline_(setup|status|result|log_fn)|quality|engine)|"
          "motion_decode_params|overlay_sr_report)",
@@ -568,13 +570,30 @@ generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/incl
          ["--blocklist-type", "rsf_pipeline_camera_frame",
           "--raw-line", "use crate::render_abi::rsf_pipeline_camera_frame;",
           "--raw-line", "pub use rsf_game_sys::sr_abi::{RSF_DLSS_PIPELINE_ABI_VERSION, rsf_motion_decode_params};"])
+overlay_wire = "rsf_overlay_(host_option|intent|quality|stats)"
+generate("ui/overlay/src/wire.rs", "ui/overlay/include/rescaleframe/overlay.h",
+         overlay_wire, "RSF_OVERLAY_(ABI_VERSION|QUALITY_ULTRA_QUALITY|SR_QUALITY_.*|SR_CHANGE_.*|FRAME_LIMIT_VRR)",
+         [], ["--with-derive-default", "--with-derive-partialeq", "--no-default", "rsf_overlay_intent",
+              "--raw-line", "#![allow(missing_docs, dead_code)]"], derive_debug=True)
+generate("ui/overlay/src/fg_reason_codes.rs", "runtime/orchestrator/include/rescaleframe/native_fg.h",
+         "NOTHING", "RSF_NATIVE_FG_REASON_.*",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/presentation/include",
+          "-Iruntime/graphics/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include"])
+generate("tests/overlay-service/src/abi.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
+         "rsf_(overlay_api|overlay_service_setup|overlay_diagnostics|render_status|native_fg_status)",
+         "RSF_(OVERLAY_(API_VERSION|CAPTURE_.*|NOTIFY_.*|SERVICE_OPTION_.*|SR_INPUT_.*)|RENDER_FRONTEND_ABI_VERSION|"
+         "FG_(BACKEND_(AUTO|FSR3|DLSS)|FIXED)|REFLEX_(OFF|ON|BOOST))",
+         ["-include", "rescaleframe/native_fg.h",
+          "-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/presentation/include",
+          "-Iruntime/graphics/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include"],
+         ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
+
 # Match the overlay's existing std paths and import types that other modules already own.
 generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/overlay_platform.h",
-         "wchar_t|rsf_overlay_(api|service_setup|service_option|capture|diagnostics|stats|intent|"
-         "host_option|input_counters|platform|quality|texture_update)|rsf_native_(latency_status|input_routes)|rsf_render_status",
+         "wchar_t|rsf_overlay_(api|service_setup|service_option|capture|diagnostics|"
+         "input_counters|platform|texture_update)|rsf_native_(latency_status|input_routes)|rsf_render_status",
          "RSF_OVERLAY_(API_VERSION|CAPTURE_.*|NOTIFY_.*|SERVICE_OPTION_(TOGGLE|NUMBER|LIMIT)|"
-         "HOST_OPTION_(TOGGLE|NUMBER)|FG_RUNTIME_SWITCH)|RSF_NATIVE_FG_REASON_(RESET|SCENE_UNSUPPORTED|"
-         "HUDLESS_MISSING)|RSF_(REFLEX_ON|SR_NONE|SR_DLSS|SR_FSR3|SR_FSR4|SR_SPATIAL)",
+         "HOST_OPTION_(TOGGLE|NUMBER)|FG_RUNTIME_SWITCH)|RSF_(REFLEX_ON|SR_NONE|SR_DLSS|SR_FSR3|SR_FSR4|SR_SPATIAL)",
          ["-include", "rescaleframe/overlay_api.h", "-include", "rescaleframe/overlay.h",
           "-include", "rescaleframe/overlay_input.h", "-include", "rescaleframe/native_fg.h",
           "-include", "rescaleframe/native_cpu.h", "-include", "rescaleframe/sr_session.h",
@@ -582,6 +601,14 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
           "-Iruntime/presentation/include", "-Iruntime/graphics/include",
           "-Iruntime/backends/dlss/include", "-Iui/overlay/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
+          "--raw-line", "#[path = \"../../../ui/overlay/src/wire.rs\"]",
+          "--raw-line", "mod overlay_wire;",
+          "--raw-line", "pub use overlay_wire::{RSF_OVERLAY_FRAME_LIMIT_VRR, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK, RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,\n"
+                        "    RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,\n"
+                        "    rsf_overlay_host_option, rsf_overlay_intent, rsf_overlay_stats};",
+          "--raw-line", "impl Default for rsf_overlay_intent {\n"
+                        "    fn default() -> Self { unsafe { std::mem::zeroed() } }\n"
+                        "}",
           "--raw-line", "use crate::cpu_abi::rsf_native_cpu_counters;",
           "--raw-line", "use crate::render_abi::{\n"
                         "    rsf_generation_provider, rsf_native_fg_options, rsf_native_fg_status, rsf_render_settings,\n"

@@ -19,7 +19,7 @@ extern "C" {
    D3D11, normally the facade chain of the D3D11 presentation bridge
    (d3d11_present_api.h). It is the same overlay_host/overlay_input/overlay_renderer
    path the D3D11 carrier uses, not a second panel, renderer or runtime. The Rust panel
-   (rescaleframe_overlay.dll, overlay ABI 17) is loaded from RSF_OVERLAY_DLL when that
+   (rescaleframe_overlay.dll) is loaded from RSF_OVERLAY_DLL when that
    names a file, otherwise from beside ReScaleFrame.Runtime.dll.
 
    Composition. present() draws into the chain's current D3D11 backbuffer at the
@@ -149,7 +149,8 @@ typedef struct rsf_overlay_service_setup {
        applies SR choices at its own drained boundary. Borrowed for the call. */
     void (*settings_changed)(void* user, const rsf_render_settings* applied);
     void* user;
-    /* API 2. Up to RSF_OVERLAY_SERVICE_OPTION_LIMIT options, copied. */
+    /* API 2. Up to RSF_OVERLAY_SERVICE_OPTION_LIMIT options, copied. A nonempty
+       list requires option_changed to apply and persist edits. */
     uint32_t option_count;
     const rsf_overlay_service_option* options;
     /* Present-owner thread, each presented frame: write the current value of every option.

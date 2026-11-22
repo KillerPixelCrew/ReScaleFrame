@@ -11,7 +11,6 @@
 #include <cstdio>
 #include <cmath>
 #include <limits>
-#include "../runtime/orchestrator/src/sharpening_overlay.h"
 #include <cstring>
 #ifdef RSF_SHARPENING_FFX_HEADER
 #include <ffx_upscale.h>
@@ -22,11 +21,14 @@ static_assert(RSF_RENDER_FRONTEND_ABI_VERSION == 3);
 static_assert(sizeof(rsf_render_settings) == 96);
 static_assert(offsetof(rsf_render_settings, sharpening_mode) == 48);
 static_assert(sizeof(rsf_sharpening_options) == 56);
-static_assert(RSF_OVERLAY_ABI_VERSION == 18);
-static_assert(sizeof(rsf_overlay_stats) == 416);
+static_assert(RSF_OVERLAY_ABI_VERSION == 19);
+static_assert(sizeof(rsf_overlay_stats) == 432);
 static_assert(offsetof(rsf_overlay_stats, ui_preferences) == 340);
 static_assert(offsetof(rsf_overlay_stats, latency_paced_frames) == 352);
-static_assert(sizeof(rsf_overlay_intent) == 200);
+static_assert(sizeof(rsf_overlay_intent) == 204);
+static_assert(offsetof(rsf_overlay_stats, sr_quality_choices) == 416);
+static_assert(offsetof(rsf_overlay_stats, sr_change_status) == 424);
+static_assert(offsetof(rsf_overlay_intent, sr_change_id) == 200);
 static_assert(offsetof(rsf_overlay_intent, close_requested) == 188);
 static_assert(offsetof(rsf_overlay_intent, ui_preferences) == 196);
 static_assert(offsetof(rsf_overlay_stats, host_options) == 280);
@@ -219,22 +221,7 @@ int main() {
         check(rsf::render_settings::write_sharpening(ini,L"Rendering",o)==RSF_OK,"callback host writes shared keys");
         auto read=rsf::render_settings::read_sharpening(ini,L"Rendering");
         check(!std::memcmp(&o,&read,sizeof(o)),"callback host round trip with float precision");
-        rsf_overlay_stats stats{}; rsf::sharpening_overlay::fill(stats,o);
-        rsf_overlay_intent intent{};
-        intent.sharpening_mode=stats.sharpening_mode;
-        intent.sharpening_sharpness=stats.sharpening_sharpness;
-        intent.sharpening_mas=stats.sharpening_mas;
-        intent.sharpening_motion_sharpness=stats.sharpening_motion_sharpness;
-        intent.sharpening_motion_threshold=stats.sharpening_motion_threshold;
-        intent.sharpening_motion_scale_limit=stats.sharpening_motion_scale_limit;
-        intent.sharpening_contrast_enabled=stats.sharpening_contrast_enabled;
-        intent.sharpening_contrast=stats.sharpening_contrast;
-        intent.sharpening_depth_scale=stats.sharpening_depth_scale;
-        intent.sharpening_depth_bias=stats.sharpening_depth_bias;
-        intent.sharpening_clamp_output=stats.sharpening_clamp_output;
-        intent.sharpening_debug=stats.sharpening_debug;
-        const auto mapped=rsf::sharpening_overlay::requested(intent);
-        check(stats.sharpening_available && !std::memcmp(&o,&mapped,sizeof(o)),"D3D12 host stats/intent mapping");
+
     }
     wchar_t engine[32]{}; GetPrivateProfileStringW(L"Rendering",L"EngineQuality",L"",engine,32,path);
     check(std::wstring(engine)==L"untouched","callback persistence preserves engine settings");

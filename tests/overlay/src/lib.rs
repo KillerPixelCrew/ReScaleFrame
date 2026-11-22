@@ -4,6 +4,7 @@
 mod abi;
 mod host;
 mod hotkey;
+mod native12;
 
 use std::ffi::c_void;
 use windows::{

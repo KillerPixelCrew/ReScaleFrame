@@ -21,16 +21,19 @@ pub enum Quality {
     Performance,
     /// Ultra performance preset.
     UltraPerformance,
+    /// Ultra Quality for providers that offer an additional preset.
+    UltraQuality,
 }
 
 impl Quality {
     /// Every level, in the order the panel offers them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Native,
         Self::Quality,
         Self::Balanced,
         Self::Performance,
         Self::UltraPerformance,
+        Self::UltraQuality,
     ];
 
     /// The value the C header gives this level.
@@ -42,6 +45,7 @@ impl Quality {
             Self::Balanced => abi::RSF_OVERLAY_QUALITY_BALANCED,
             Self::Performance => abi::RSF_OVERLAY_QUALITY_PERFORMANCE,
             Self::UltraPerformance => abi::RSF_OVERLAY_QUALITY_ULTRA_PERFORMANCE,
+            Self::UltraQuality => abi::RSF_OVERLAY_QUALITY_ULTRA_QUALITY,
         }
     }
 
@@ -58,6 +62,7 @@ impl Quality {
             abi::RSF_OVERLAY_QUALITY_BALANCED => Some(Self::Balanced),
             abi::RSF_OVERLAY_QUALITY_PERFORMANCE => Some(Self::Performance),
             abi::RSF_OVERLAY_QUALITY_ULTRA_PERFORMANCE => Some(Self::UltraPerformance),
+            abi::RSF_OVERLAY_QUALITY_ULTRA_QUALITY => Some(Self::UltraQuality),
             _ => None,
         }
     }
@@ -71,6 +76,7 @@ impl Quality {
             Self::Balanced => "Balanced",
             Self::Performance => "Performance",
             Self::UltraPerformance => "Ultra perf",
+            Self::UltraQuality => "Ultra Quality",
         }
     }
 }
@@ -144,10 +150,14 @@ pub struct Stats<'a> {
     pub backend_loaded: bool,
     /// Why the backend is unusable, when it is.
     pub refusal_reason: Option<&'a str>,
-    /// The quality in effect, or `None` when the runtime named one this build does not know.
-    pub quality: Option<Quality>,
-    /// The raw quality value, kept so an unknown one can be shown as the number it was.
+    /// The quality in effect, including numeric values this panel build does not recognize.
     pub quality_raw: abi::RsfOverlayQuality,
+    /// Available presets, keyed by their ABI values.
+    pub sr_quality_choices: u32,
+    /// Request ID of the host's latest SR quality or enable result.
+    pub sr_change_id: u32,
+    /// Host acknowledgment status in the panel ABI.
+    pub sr_change_status: u32,
     /// Requested DLSS model.
     pub dlss_preset: u32,
     /// The runtime implements DLSS model selection.
@@ -295,8 +305,10 @@ impl Default for Stats<'_> {
         Self {
             backend_loaded: false,
             refusal_reason: None,
-            quality: Some(Quality::Native),
             quality_raw: abi::RSF_OVERLAY_QUALITY_NATIVE,
+            sr_quality_choices: abi::RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+            sr_change_id: 0,
+            sr_change_status: 0,
             dlss_preset: 0,
             dlss_preset_available: false,
             sr_quality_locked: false,
@@ -324,7 +336,12 @@ impl Stats<'_> {
     /// Set the quality in effect from a raw ABI value, keeping the raw number.
     pub fn set_quality(&mut self, raw: abi::RsfOverlayQuality) {
         self.quality_raw = raw;
-        self.quality = Quality::from_abi(raw);
+    }
+
+    /// Decode the reported quality when this panel recognizes it.
+    #[must_use]
+    pub fn quality(&self) -> Option<Quality> {
+        Quality::from_abi(self.quality_raw)
     }
 }
 
@@ -359,18 +376,21 @@ pub struct Sharpening {
 impl Default for Sharpening {
     fn default() -> Self {
         Self {
-            mode: 0,
-            sharpness: 0.4,
-            mas: 0,
-            motion_sharpness: 0.2,
-            motion_threshold: 0.0,
-            motion_scale_limit: 10.0,
-            contrast_enabled: 0,
-            contrast: 0.0,
-            depth_scale: 35.0,
-            depth_bias: 0.001,
-            clamp_output: 0,
-            debug: 0,
+            mode: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MODE,
+            sharpness: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
+            mas: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MAS,
+            motion_sharpness: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS
+                as f32,
+            motion_threshold: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD
+                as f32,
+            motion_scale_limit: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT
+                as f32,
+            contrast_enabled: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
+            contrast: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
+            depth_scale: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
+            depth_bias: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
+            clamp_output: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
+            debug: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEBUG,
         }
     }
 }
@@ -393,6 +413,8 @@ pub struct Intent {
     pub enabled: bool,
     /// Whether the enable state changed in this frame.
     pub enabled_changed: bool,
+    /// Request ID the host returns with a quality or enable result.
+    pub sr_change_id: u32,
     /// Whether the user chose an SR backend.
     pub backend_changed: bool,
     /// Backend requested by the user.
@@ -522,6 +544,7 @@ mod tests {
         assert_eq!(Quality::Balanced.to_abi(), 2);
         assert_eq!(Quality::Performance.to_abi(), 3);
         assert_eq!(Quality::UltraPerformance.to_abi(), 4);
+        assert_eq!(Quality::UltraQuality.to_abi(), 5);
 
         for (index, level) in Quality::ALL.iter().enumerate() {
             assert_eq!(level.to_abi(), index as u32);
@@ -531,12 +554,12 @@ mod tests {
 
     #[test]
     fn an_unknown_quality_stays_unknown() {
-        assert_eq!(Quality::from_abi(5), None);
+        assert_eq!(Quality::from_abi(6), None);
         assert_eq!(Quality::from_abi(u32::MAX), None);
 
         let mut stats = Stats::default();
         stats.set_quality(7);
-        assert_eq!(stats.quality, None);
+        assert_eq!(stats.quality(), None);
         assert_eq!(stats.quality_raw, 7);
     }
     #[test]

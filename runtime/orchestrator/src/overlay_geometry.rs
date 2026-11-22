@@ -47,6 +47,20 @@ pub(super) fn valid_indices(call: &DrawCall, indices: &[u32], vertex_count: u32)
         .is_some_and(|slice| slice.iter().all(|&index| index < available))
 }
 
+pub(super) fn draw_clip(call: &DrawCall, width: u32, height: u32) -> Result<Option<[i32; 4]>, ()> {
+    let right = call.clip_x.saturating_add(call.clip_width).min(width);
+    let bottom = call.clip_y.saturating_add(call.clip_height).min(height);
+    if call.index_count == 0 || call.clip_x >= right || call.clip_y >= bottom {
+        return Ok(None);
+    }
+    let [Ok(left), Ok(top), Ok(right), Ok(bottom)] =
+        [call.clip_x, call.clip_y, right, bottom].map(i32::try_from)
+    else {
+        return Err(());
+    };
+    Ok(Some([left, top, right, bottom]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

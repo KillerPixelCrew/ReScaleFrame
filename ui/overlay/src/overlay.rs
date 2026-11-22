@@ -5,6 +5,7 @@
 //! header describes. The FFI layer above it does nothing but check pointers and copy.
 
 use egui::{Event, PointerButton, Pos2, RawInput, ViewportId, epaint};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::abi::{
     RSF_OVERLAY_MOUSE_LEFT, RSF_OVERLAY_MOUSE_MIDDLE, RSF_OVERLAY_MOUSE_RIGHT, RsfOverlayDrawCall,
@@ -22,6 +23,8 @@ use crate::panel::{self, Controls, HudDetail, Selection, View};
 /// atlas space and rebuilds the atlas, which costs a whole-texture update and, briefly, wrong
 /// glyphs. Read out of epaint's `TextureAtlas`, not observed here.
 const MAX_TEXTURE_SIDE: usize = 2048;
+
+static NEXT_SR_CHANGE: AtomicU32 = AtomicU32::new(1);
 
 /// Reference display height for the scale heuristic below.
 const REFERENCE_HEIGHT: f32 = 1080.0;
@@ -212,8 +215,7 @@ impl Overlay {
             return intent;
         }
 
-        let points_per_pixel = 1.0 / scale;
-        let raw = self.raw_input(input, display, scale);
+        let (raw, pointer) = self.raw_input(input, display, scale);
 
         let frame = panel::Frame {
             selection: &self.selection,
@@ -225,10 +227,6 @@ impl Overlay {
         let hud = &self.hud;
         let controls = &mut self.controls;
         *controls = Controls::default();
-        let pointer = Pos2::new(
-            sanitise(input.mouse[0], 0.0) * points_per_pixel,
-            sanitise(input.mouse[1], 0.0) * points_per_pixel,
-        );
         let output = self.context.run_ui(raw, |ui| {
             panel::show(ui.ctx(), &frame, view, &mut intent, controls);
             if stats.show_performance_hud {
@@ -240,6 +238,14 @@ impl Overlay {
         // Applied after the layout rather than during it, so every widget in the frame reads the
         // same selection: the one the frame started with. A switch that wrote back into that
         // state mid-layout would toggle twice if the layout ever ran twice over one set of events.
+        if intent.quality_changed || intent.enabled_changed {
+            let sequence = NEXT_SR_CHANGE.fetch_add(1, Ordering::Relaxed);
+            intent.sr_change_id = if sequence == 0 {
+                NEXT_SR_CHANGE.fetch_add(1, Ordering::Relaxed)
+            } else {
+                sequence
+            };
+        }
         self.selection.apply(&intent);
         self.view.apply(&intent);
         intent.quality = self.selection.quality();
@@ -296,7 +302,7 @@ impl Overlay {
     ///
     /// The header hands over a position and a button mask, not events, so the transitions have to
     /// be recovered by comparing against the previous frame.
-    fn raw_input(&mut self, input: &FrameInput, display: [f32; 2], scale: f32) -> RawInput {
+    fn raw_input(&mut self, input: &FrameInput, display: [f32; 2], scale: f32) -> (RawInput, Pos2) {
         let points_per_pixel = 1.0 / scale;
         let mouse = [sanitise(input.mouse[0], 0.0), sanitise(input.mouse[1], 0.0)];
         let position = Pos2::new(mouse[0] * points_per_pixel, mouse[1] * points_per_pixel);
@@ -369,13 +375,16 @@ impl Overlay {
         let advance = if delta > 0.0 { delta } else { 1.0 / 60.0 };
         self.time += f64::from(advance);
 
-        RawInput {
-            time: Some(self.time),
-            predicted_dt: advance,
-            events,
-            focused: true,
-            ..base_raw_input(display, scale)
-        }
+        (
+            RawInput {
+                time: Some(self.time),
+                predicted_dt: advance,
+                events,
+                focused: true,
+                ..base_raw_input(display, scale)
+            },
+            position,
+        )
     }
 
     fn collect_textures(&mut self, delta: epaint::textures::TexturesDelta) {
@@ -510,7 +519,7 @@ fn paint_startup_hint(ctx: &egui::Context, alpha: f32) {
     );
 }
 
-/// Draw a pointer because AC7 hides the system cursor.
+/// Draw the panel pointer while the overlay owns cursor input.
 fn paint_cursor(ctx: &egui::Context, position: Pos2) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -746,6 +755,128 @@ mod tests {
         let [_, release] = click(&mut overlay, &stats, off);
         assert!(release.fg_backend_changed);
         assert_eq!(release.fg_backend, 0);
+    }
+
+    #[test]
+    fn vrr_preset_sends_a_policy_instead_of_a_requested_multiplier() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.available = true;
+        stats.generation.reflex_available = true;
+        stats.generation.requested_mode = 1;
+        stats.generation.requested_generated = 3;
+        stats.generation.display_refresh_mhz = 120_000;
+        on_tab(&mut overlay, Tab::Frames);
+        settle(&mut overlay, &stats);
+        let point = overlay
+            .controls()
+            .fg_enabled
+            .expect("frame controls")
+            .center();
+        overlay.frame(
+            &FrameInput {
+                mouse: [point.x, point.y],
+                scroll_delta: -600.0,
+                ..visible_input()
+            },
+            &stats,
+        );
+        for _ in 0..30 {
+            idle_frame(&mut overlay, &stats);
+        }
+
+        let target = overlay.controls().frame_limit_preset[3].expect("VRR preset");
+        let [_, release] = click(&mut overlay, &stats, target);
+        assert!(release.frame_limit_changed);
+        assert_eq!(
+            release.frame_limit_us,
+            crate::abi::RSF_OVERLAY_FRAME_LIMIT_VRR
+        );
+    }
+
+    #[test]
+    fn automatic_fg_provider_keeps_the_resolved_provider_usable() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.backend = 1;
+        stats.generation.requested_backend = 7;
+        stats.generation.backend_choices = 0x3b | (1 << 7);
+        stats.generation.available = true;
+        on_tab(&mut overlay, Tab::Frames);
+        settle(&mut overlay, &stats);
+
+        let enabled = overlay.controls().fg_enabled.expect("FG enable control");
+        let [_, release] = click(&mut overlay, &stats, enabled);
+        assert!(release.fg_changed);
+        assert!(!release.fg_backend_changed);
+
+        stats.generation.requested_backend = 1;
+        settle(&mut overlay, &stats);
+        let automatic = overlay.controls().fg_backend[5].expect("Auto provider");
+        let [_, release] = click(&mut overlay, &stats, automatic);
+        assert!(release.fg_backend_changed);
+        assert_eq!(release.fg_backend, 7);
+    }
+
+    #[test]
+    fn refused_quality_can_be_retried_and_other_receipts_are_ignored() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.enabled = true;
+        settle(&mut overlay, &stats);
+
+        let target = quality_rect(&overlay, Quality::Balanced);
+        let [_, initial] = click(&mut overlay, &stats, target);
+        assert_ne!(initial.sr_change_id, 0);
+        stats.sr_change_id = initial.sr_change_id.wrapping_add(1);
+        stats.sr_change_status = crate::abi::RSF_OVERLAY_SR_CHANGE_REFUSED;
+        let [_, stale] = click(&mut overlay, &stats, target);
+        assert!(!stale.quality_changed);
+
+        stats.sr_change_id = initial.sr_change_id;
+        settle(&mut overlay, &stats);
+        let target = quality_rect(&overlay, Quality::Balanced);
+        let [_, retry] = click(&mut overlay, &stats, target);
+        assert!(retry.quality_changed);
+        assert_eq!(retry.quality, Quality::Balanced);
+        assert_ne!(retry.sr_change_id, initial.sr_change_id);
+    }
+
+    #[test]
+    fn ultra_quality_is_offered_only_when_the_host_advertises_it() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.backend = 5;
+        settle(&mut overlay, &stats);
+        assert!(overlay.controls().quality[5].is_none());
+
+        stats.sr_quality_choices |= 1 << Quality::UltraQuality.to_abi();
+        settle(&mut overlay, &stats);
+        let target = quality_rect(&overlay, Quality::UltraQuality);
+        let [_, release] = click(&mut overlay, &stats, target);
+        assert!(release.quality_changed);
+        assert_eq!(release.quality.to_abi(), 5);
+    }
+
+    #[test]
+    fn refused_enable_edit_can_be_retried() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.enabled = true;
+        settle(&mut overlay, &stats);
+        let enabled = overlay.controls().enabled.expect("SR enable control");
+        let [_, change] = click(&mut overlay, &stats, enabled);
+        assert!(change.enabled_changed);
+        assert!(!change.enabled);
+
+        stats.sr_change_id = change.sr_change_id;
+        stats.sr_change_status = crate::abi::RSF_OVERLAY_SR_CHANGE_REFUSED;
+        settle(&mut overlay, &stats);
+        let enabled = overlay.controls().enabled.expect("SR enable control");
+        let [_, retry] = click(&mut overlay, &stats, enabled);
+        assert!(retry.enabled_changed);
+        assert!(!retry.enabled);
+        assert_ne!(retry.sr_change_id, change.sr_change_id);
     }
 
     #[test]
@@ -1136,7 +1267,8 @@ mod tests {
         let stats = stats_with_backend();
         settle(&mut overlay, &stats);
         assert!(overlay.controls().enabled.is_some());
-        assert!(overlay.controls().quality.iter().all(Option::is_some));
+        assert!(overlay.controls().quality[..5].iter().all(Option::is_some));
+        assert!(overlay.controls().quality[5].is_none());
         let intent = idle_frame(&mut overlay, &stats);
         assert!(intent.is_idle());
     }
@@ -1418,6 +1550,62 @@ mod tests {
         settle(&mut overlay, &stats);
         assert!(overlay.controls().fg_backend[0].is_some());
         assert!(overlay.controls().quality[0].is_none());
+    }
+
+    #[test]
+    fn rail_scroll_reaches_adapter_and_display_tabs_at_largest_scale() {
+        use crate::model::{HostOption, PanelSize};
+
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.sharpening_available = true;
+        stats.host_options[0] = Some(HostOption {
+            label: "Adapter toggle",
+            toggle: true,
+            value: 0,
+            range: [0, 1, 1],
+            divisor: 1,
+            restart: false,
+        });
+        stats.ui_preferences = UiPreferences {
+            size: PanelSize::Larger,
+            ..UiPreferences::default()
+        }
+        .to_bits();
+        settle(&mut overlay, &stats);
+        assert!(overlay.controls().tabs[Tab::Display as usize].is_none());
+        let rail = overlay.controls().tabs[Tab::Frames as usize]
+            .expect("Frames tab")
+            .center()
+            * 1.5;
+        overlay.frame(
+            &FrameInput {
+                mouse: [rail.x, rail.y],
+                scroll_delta: -600.0,
+                ..visible_input()
+            },
+            &stats,
+        );
+        for _ in 0..30 {
+            idle_frame(&mut overlay, &stats);
+        }
+        for tab in [Tab::Game, Tab::Display] {
+            let target = overlay.controls().tabs[tab as usize]
+                .expect("tab reached by scrolling")
+                .center()
+                * 1.5;
+            for mouse_buttons in [RSF_OVERLAY_MOUSE_LEFT, 0] {
+                overlay.frame(
+                    &FrameInput {
+                        mouse: [target.x, target.y],
+                        mouse_buttons,
+                        ..visible_input()
+                    },
+                    &stats,
+                );
+            }
+            assert_eq!(overlay.view.tab, tab);
+        }
     }
 
     #[test]

@@ -34,6 +34,17 @@ typedef struct rsf_overlay12_frame {
     void* rtv;
 } rsf_overlay12_frame;
 
+/* The Rust owner retains these references. The field order matches the release
+   order of the former native renderer object. SDK leaves borrow these pointers. */
+typedef struct rsf_overlay12_objects {
+    void* pixel_shader;
+    void* vertex_shader;
+    void* root;
+    void* queue;
+    void* device;
+    uint32_t srv_stride;
+} rsf_overlay12_objects;
+
 typedef struct rsf_overlay12_platform {
     void* (*window)(void* chain);
     /* On success, transfers the native renderer and one fence reference to the Rust owner. */
@@ -73,6 +84,9 @@ uint32_t rsf_core_overlay12_visible(const rsf_overlay12_platform*);
 void rsf_core_overlay12_toggle(const rsf_overlay12_platform*);
 int rsf_core_overlay12_present(const rsf_overlay12_platform*, void*, void*, void*, const rsf_overlay_stats*,
     rsf_overlay_intent*, rsf_overlay12_log, void*);
+/* Consumes all five references even when allocating the owner fails. */
+void* rsf_core_overlay12_adopt(rsf_overlay12_objects*);
+void rsf_core_overlay12_destroy(void*);
 #ifdef __cplusplus
 }
 #endif

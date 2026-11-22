@@ -159,6 +159,9 @@ mod fg_dispatch;
 #[cfg(windows)]
 mod fg_leases;
 #[cfg(windows)]
+#[path = "../../../ui/overlay/src/fg_reasons.rs"]
+mod fg_reasons;
+#[cfg(windows)]
 mod fg_scene;
 #[cfg(windows)]
 mod fg_session;
@@ -169,6 +172,8 @@ mod frame_assembly;
 #[cfg(windows)]
 mod frame_capture12;
 mod frame_capture_vk;
+#[cfg(windows)]
+mod frame_limit;
 mod frame_sequencer;
 #[cfg(windows)]
 mod frame_tap;

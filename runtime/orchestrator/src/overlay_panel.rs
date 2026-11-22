@@ -21,6 +21,29 @@ use windows_sys::core::w;
 const PATH_CAPACITY: usize = 32768;
 const PANEL_DLL: &str = "rescaleframe_overlay.dll";
 
+// A first frame, a clock jump or a frame delayed by loading should advance the
+// panel by one nominal frame.
+pub(super) fn elapsed_seconds(seconds: f64) -> f32 {
+    if 0.0 < seconds && seconds <= 0.25 {
+        seconds as f32
+    } else {
+        1.0 / 60.0
+    }
+}
+
+#[cfg(test)]
+mod elapsed_tests {
+    use super::elapsed_seconds;
+
+    #[test]
+    fn elapsed_uses_the_nominal_frame_for_first_clock_jumps_and_loading_gaps() {
+        assert_eq!(elapsed_seconds(0.0), 1.0 / 60.0);
+        assert_eq!(elapsed_seconds(-1.0), 1.0 / 60.0);
+        assert_eq!(elapsed_seconds(0.25), 0.25);
+        assert_eq!(elapsed_seconds(1.0), 1.0 / 60.0);
+    }
+}
+
 // Keep one reference per published DLL. A window message can still reach
 // panel code after a renderer has stopped.
 static PUBLISHED: Mutex<Vec<usize>> = Mutex::new(Vec::new());

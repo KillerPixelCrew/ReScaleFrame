@@ -540,6 +540,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-overlay-service-fixtures"
+version = "0.1.2"
+
+[[package]]
 name = "rsf-presentation-api-fixtures"
 version = "0.1.2"
 dependencies = [

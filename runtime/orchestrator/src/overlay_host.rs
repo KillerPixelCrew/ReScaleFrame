@@ -13,6 +13,7 @@ use crate::overlay_host_abi::{
     RSF_OVERLAY_HOST_PANEL_NO_PATH, RSF_OVERLAY_HOST_PANEL_NOT_LOADED, rsf_overlay,
     rsf_overlay_draw_data, rsf_overlay_host_panel, rsf_overlay_input,
 };
+use crate::overlay_panel::elapsed_seconds;
 use std::ffi::{CString, c_char, c_void};
 use std::fmt::Display;
 use std::ptr::{self, null_mut};
@@ -132,10 +133,11 @@ const TRACE_FRAMES: u32 = 4;
 
 const STARTUP_HINT_MS: u64 = 8000;
 const STARTUP_FADE_MS: u64 = 1000;
-const DEFAULT_DELTA: f32 = 1.0 / 60.0;
-/* A frame that took longer is a mission load or a breakpoint, and handing egui that as a delta
-makes every animation jump. */
-const LONGEST_DELTA: f64 = 0.25;
+#[derive(Clone, Copy)]
+struct DrawAdmission {
+    visible: bool,
+    hint: f32,
+}
 
 fn leaf<T>(entry: Option<T>) -> T {
     entry.expect("overlay host platform entry")
@@ -428,19 +430,15 @@ impl Host {
     fn seconds_since_last_frame(&mut self, p: &Platform) -> f32 {
         let mut now = 0;
         if self.frequency == 0 || unsafe { leaf(p.counter)(&mut now) } == 0 {
-            return DEFAULT_DELTA;
+            return elapsed_seconds(0.0);
         }
         if self.last_frame == 0 {
             self.last_frame = now;
-            return DEFAULT_DELTA;
+            return elapsed_seconds(0.0);
         }
         let elapsed = (now - self.last_frame) as f64 / self.frequency as f64;
         self.last_frame = now;
-        if elapsed <= 0.0 || elapsed > LONGEST_DELTA {
-            DEFAULT_DELTA
-        } else {
-            elapsed as f32
-        }
+        elapsed_seconds(elapsed)
     }
 
     /* Drain each queue until a batch comes back short. */
@@ -534,6 +532,18 @@ impl Host {
         result
     }
 
+    fn admit_target(&self, p: &Platform, hud: bool) -> Option<DrawAdmission> {
+        if !self.started || self.failed || self.api.is_none() {
+            return None;
+        }
+        let visible = unsafe { leaf(p.input_visible)() } != 0;
+        let elapsed = unsafe { leaf(p.tick)() }.wrapping_sub(self.hint_begin);
+        (visible || hud || elapsed < STARTUP_HINT_MS).then(|| DrawAdmission {
+            visible,
+            hint: if visible { 0.0 } else { hint_alpha(elapsed) },
+        })
+    }
+
     /* For renderers that already own a device, window and target. */
     #[allow(clippy::too_many_arguments)]
     fn draw_target(
@@ -545,6 +555,7 @@ impl Host {
         height: u32,
         stats: &rsf_overlay_stats,
         intent: *mut rsf_overlay_intent,
+        admission: DrawAdmission,
     ) -> i32 {
         let Some(api) = self.api.filter(|_| self.started && !self.failed) else {
             return 0;
@@ -552,17 +563,12 @@ impl Host {
         if context.is_null() || target.is_null() || width == 0 || height == 0 {
             return 0;
         }
-        let visible = unsafe { leaf(p.input_visible)() } != 0;
+        let DrawAdmission { visible, hint } = admission;
         if visible && !self.shared_visible {
             self.trace_frames = TRACE_FRAMES;
         }
         self.shared_visible = visible;
         let trace = visible && self.trace_frames > 0;
-        let elapsed = unsafe { leaf(p.tick)() }.wrapping_sub(self.hint_begin);
-        if !visible && elapsed >= STARTUP_HINT_MS && stats.show_performance_hud == 0 {
-            return 0;
-        }
-        let hint = if visible { 0.0 } else { hint_alpha(elapsed) };
         if trace {
             say(format_args!(
                 "D3D11-on-12 overlay: laying out panel on thread {}",
@@ -896,6 +902,7 @@ unsafe fn rsf_core_overlay_host_start_device(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn rsf_core_overlay_host_draw_target(
     platform: &Platform,
     context: Handle,
@@ -904,6 +911,7 @@ unsafe fn rsf_core_overlay_host_draw_target(
     height: u32,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
+    admission: Option<DrawAdmission>,
 ) -> i32 {
     if stats.is_null() || !STARTED.load(Ordering::Acquire) {
         return 0;
@@ -911,14 +919,14 @@ unsafe fn rsf_core_overlay_host_draw_target(
     let Some(mut host) = try_hold() else {
         return 0;
     };
+    let stats = unsafe { &*stats };
+    let Some(admission) =
+        admission.or_else(|| host.admit_target(platform, stats.show_performance_hud != 0))
+    else {
+        return 0;
+    };
     let result = host.draw_target(
-        platform,
-        context,
-        target,
-        width,
-        height,
-        unsafe { &*stats },
-        intent,
+        platform, context, target, width, height, stats, intent, admission,
     );
     publish(&host);
     result

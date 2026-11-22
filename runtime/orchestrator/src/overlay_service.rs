@@ -3,11 +3,11 @@
 //! Present thread. Published settings and the last sampled frame can be read by any thread.
 use crate::sharpening_policy;
 use crate::{
-    cpu_abi::rsf_native_input_receipts,
     fg_status,
-    native_cpu::rsf_native_input_receipts_get,
     overlay_abi::*,
-    overlay_settings::{apply_settings_intent, fill_sharpening_stats, settings_changed, sr_name},
+    overlay_settings::{
+        apply_settings_intent, fill_latency_stats, fill_sharpening_stats, settings_changed, sr_name,
+    },
     present_rates::Rates,
     render_abi::{
         RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
@@ -210,7 +210,8 @@ unsafe fn copy_wide(text: *const u16) -> Vec<u16> {
 impl Config {
     unsafe fn read_setup(setup: &rsf_overlay_service_setup) -> Result<(Self, Sharpening), i32> {
         if setup.option_count > RSF_OVERLAY_SERVICE_OPTION_LIMIT
-            || (setup.option_count != 0 && setup.options.is_null())
+            || (setup.option_count != 0
+                && (setup.options.is_null() || setup.option_changed.is_none()))
         {
             return Err(INVALID_ARGUMENT);
         }
@@ -249,7 +250,7 @@ impl Config {
             || unsafe { *setup.configuration_section } == 0
             || setup.sr_backend_choices & !(KNOWN_SR | AUTO_SR) != 0
             || (setup.sr_backend_choices != 0 && setup.sr_quality_choices == 0)
-            || setup.sr_quality_choices & !0x1f != 0
+            || setup.sr_quality_choices & !RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK != 0
             || setup.fg_backend_choices & !(RSF_FG_BACKEND_ALL | AUTO_FG) != 0
             || !has(setup.latency_choices, RSF_REFLEX_OFF)
             || setup.latency_choices & !KNOWN_LATENCY != 0
@@ -302,6 +303,14 @@ impl Config {
         Ok((config, sharpening))
     }
 
+    fn accepts_fg_backend(&self, backend: u32) -> bool {
+        if self.fg_choices == 0 {
+            backend == RSF_FG_BACKEND_AUTO
+        } else {
+            has(self.fg_choices, backend)
+        }
+    }
+
     fn valid(&self, value: &Settings) -> bool {
         let sr_valid = if self.sr_choices == 0 {
             value.sr_enabled == 0
@@ -310,14 +319,12 @@ impl Config {
         } else {
             has(self.sr_choices, value.sr_backend) && has(self.quality_choices, value.sr_quality)
         };
-        let fg_valid = (self.fg_choices == 0 && value.fg_backend == RSF_FG_BACKEND_AUTO)
-            || has(self.fg_choices, value.fg_backend);
         value.sr_enabled <= 1
             && value.fg_enabled <= 1
             && value.status_overlay <= 1
             && sr_valid
             && (value.fg_enabled == 0 || self.fg_choices != 0)
-            && fg_valid
+            && self.accepts_fg_backend(value.fg_backend)
             && has(self.latency_choices, value.latency)
             && (1..=self.max_generated).contains(&value.generated_frames)
             && unsafe { (platform().valid_preset.unwrap())(value.dlss_preset) } != 0
@@ -338,7 +345,7 @@ impl Config {
         if value.fg_enabled > 1 || (value.fg_enabled != 0 && self.fg_choices == 0) {
             value.fg_enabled = defaults.fg_enabled;
         }
-        if self.fg_choices != 0 && !has(self.fg_choices, value.fg_backend) {
+        if !self.accepts_fg_backend(value.fg_backend) {
             value.fg_backend = defaults.fg_backend;
         }
         if value.status_overlay > 1 {
@@ -392,6 +399,8 @@ struct State {
     presents_drawn: u64,
     request_result: i32,
     panel_apply_result: i32,
+    sr_change_id: u32,
+    sr_change_status: u32,
     options: [i32; OPTION_LIMIT],
     ui_preferences: u32,
     rates: Rates,
@@ -411,6 +420,8 @@ impl Default for State {
             presents_drawn: 0,
             request_result: OK,
             panel_apply_result: OK,
+            sr_change_id: 0,
+            sr_change_status: 0,
             options: [0; OPTION_LIMIT],
             ui_preferences: 0,
             rates: Rates::default(),
@@ -458,12 +469,8 @@ impl State {
             if fg.last_result != OK {
                 return Some(c"FG backend error");
             }
-            match fg.reason {
-                RSF_NATIVE_FG_REASON_NONE => {}
-                RSF_NATIVE_FG_REASON_RESET => return Some(c"Resetting temporal history"),
-                RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED => return Some(c"Scene is not eligible"),
-                RSF_NATIVE_FG_REASON_HUDLESS_MISSING => return Some(c"HUD-less scene missing"),
-                _ => return Some(c"Frame inputs or submission not matched"),
+            if let Some(description) = crate::fg_reasons::description(fg.reason) {
+                return Some(description);
             }
             if fg.vendor.active == 0 {
                 return Some(c"FG requested; the provider reports inactive");
@@ -785,6 +792,13 @@ impl State {
             requested_backend: backend,
             last_switch_result: self.panel_apply_result,
             sr_backend_choices: config.sr_choices,
+            sr_quality_choices: if config.sr_choices != 0 {
+                config.quality_choices
+            } else {
+                0
+            },
+            sr_change_id: self.sr_change_id,
+            sr_change_status: self.sr_change_status,
             dlss_preset: settings.dlss_preset,
             dlss_preset_available: config.preset_available,
             sr_quality_locked: u32::from(sr.quality_locked != 0),
@@ -796,13 +810,7 @@ impl State {
             } else {
                 sample.fg_backend
             },
-            fg_requested_backend: if !fg_enabled {
-                0
-            } else if settings.fg_backend == RSF_FG_BACKEND_AUTO {
-                sample.fg_backend
-            } else {
-                settings.fg_backend
-            },
+            fg_requested_backend: if fg_enabled { settings.fg_backend } else { 0 },
             fg_backend_choices: self.fg_choices(config)
                 | 1
                 | if sample.fg_owner {
@@ -917,30 +925,11 @@ impl State {
 }
 
 fn sample_latency(stats: &mut rsf_overlay_stats) {
-    let mut latency = rsf_native_latency_status {
-        struct_size: abi_size::<rsf_native_latency_status>(),
-        version: 1,
-        ..Default::default()
-    };
-    if unsafe { (platform().latency_status_get.unwrap())(&mut latency) } != 0 {
-        stats.pcl_available = latency.pcl_available;
-    }
-    let mut receipts: rsf_native_input_receipts = unsafe { std::mem::zeroed() };
-    receipts.struct_size = abi_size::<rsf_native_input_receipts>();
-    receipts.version = 1;
-    if unsafe { rsf_native_input_receipts_get(&mut receipts) } != 0 {
-        stats.input_receipts = receipts.input_kinds;
-    }
-    let mut routes = rsf_native_input_routes {
-        struct_size: abi_size::<rsf_native_input_routes>(),
-        version: 1,
-        ..Default::default()
-    };
-    if unsafe { (platform().input_routes_get.unwrap())(&mut routes) } != 0 {
-        stats.pcl_routed = routes.routed;
-        stats.pcl_failed = routes.failed;
-        stats.pcl_unmatched = routes.unmatched;
-    }
+    fill_latency_stats(
+        stats,
+        platform().latency_status_get.unwrap(),
+        platform().input_routes_get.unwrap(),
+    );
     let mut ticks = 0;
     let mut frequency = 0;
     unsafe {
@@ -1003,7 +992,7 @@ fn apply_intent(config: &Config, intent: &rsf_overlay_intent) {
         let accepted = config
             .callbacks
             .option_changed
-            .is_none_or(|changed| unsafe {
+            .is_some_and(|changed| unsafe {
                 changed(config.callbacks.user, intent.host_option_index, wanted) != 0
             });
         if accepted {
@@ -1055,7 +1044,20 @@ fn apply_intent(config: &Config, intent: &rsf_overlay_intent) {
             },
             "panel",
         );
-        state().panel_apply_result = result;
+        {
+            let mut state = state();
+            state.panel_apply_result = result;
+            if intent.sr_change_id != 0
+                && (intent.quality_changed != 0 || intent.enabled_changed != 0)
+            {
+                state.sr_change_id = intent.sr_change_id;
+                state.sr_change_status = if result == OK {
+                    RSF_OVERLAY_SR_CHANGE_APPLIED
+                } else {
+                    RSF_OVERLAY_SR_CHANGE_REFUSED
+                };
+            }
+        }
         if result != OK {
             config.callbacks.say(format_args!(
                 "RSF overlay: panel request refused ({result}); saved settings retained."

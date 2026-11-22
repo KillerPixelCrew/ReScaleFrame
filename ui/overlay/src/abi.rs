@@ -1,14 +1,9 @@
-//! The structures and constants of `include/rescaleframe/overlay.h`, mirrored field for field.
-//!
-//! Nothing here has behaviour. It exists so the C header has exactly one Rust counterpart, and so
-//! a change to the header shows up as a diff in one file rather than as a silently wrong offset in
-//! the middle of a game's frame. The layout test in this module pins the offsets the header
-//! implies on a 64-bit target.
+//! The Rust side of `include/rescaleframe/overlay.h`.
+//! The frame status, option and intent use generated records shared with the Runtime.
+//! The layout assertions pin the contract against the C header on 64-bit targets.
 
-use core::ffi::c_char;
-
-/// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 18;
+#[path = "../../../sdk/game/src/sharpening_defaults.rs"]
+pub(crate) mod sharpening_defaults;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -43,378 +38,23 @@ pub const RSF_OVERLAY_MOUSE_RIGHT: u32 = 0x2;
 /// Middle mouse button.
 pub const RSF_OVERLAY_MOUSE_MIDDLE: u32 = 0x4;
 
-/// What the overlay is told about the session, once per frame. Mirrors `rsf_overlay_stats`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct RsfOverlayStats {
-    /// `sizeof(rsf_overlay_stats)` as the caller knows it.
-    pub struct_size: u32,
-    /// Non-zero when a backend has been loaded at all.
-    pub backend_loaded: u32,
-    /// Non-zero when the driver accepted that backend.
-    pub backend_supported: u32,
-    /// Vendor name, borrowed for the duration of the call. May be null.
-    pub backend_name: *const c_char,
-    /// Why the backend is unusable, borrowed for the duration of the call. May be null.
-    pub refusal_reason: *const c_char,
-    /// Width the scene is rendered at.
-    pub render_width: u32,
-    /// Height the scene is rendered at.
-    pub render_height: u32,
-    /// Width the result is presented at.
-    pub output_width: u32,
-    /// Height the result is presented at.
-    pub output_height: u32,
-    /// Frames presented since the overlay was created.
-    pub frames_presented: u32,
-    /// Frames the backend actually evaluated.
-    pub frames_evaluated: u32,
-    /// Frames the backend refused.
-    pub frames_refused: u32,
-    /// The backend's own last result code.
-    pub last_result: i32,
-    /// Non-zero when scene colour was found this frame.
-    pub have_scene_color: u32,
-    /// Non-zero when depth was found this frame.
-    pub have_depth: u32,
-    /// Non-zero when motion was found this frame.
-    pub have_motion: u32,
-    /// Non-zero when an exposure value was found this frame.
-    pub have_exposure: u32,
-    /// Non-zero when the motion has been decoded into something a backend can consume.
-    pub motion_decoded: u32,
-    /// Non-zero when the projection carries a jitter.
-    pub jitter_active: u32,
-    /// The jitter offset in pixels, x then y.
-    pub jitter_pixels: [f32; 2],
-    /// The quality currently in effect, which is not always the one last clicked.
-    pub quality: RsfOverlayQuality,
-    /// Non-zero when reconstruction is currently enabled.
-    pub enabled: u32,
-    /// Non-zero while the debug view is drawing over the frame.
-    pub debug_view_on: u32,
-    /// Non-zero while the reconstruction is being put into the game's own frame.
-    pub reinsert_on: u32,
-    /// Non-zero once reinsertion has everything it needs, so the panel can refuse before asking.
-    pub reinsert_available: u32,
-    /// The render scale in effect, as a percentage, or zero when nothing has set one.
-    pub render_scale_percent: u32,
-    /// How many frame captures have been written this session.
-    pub captures_written: u32,
-    /// Appended in ABI 3. Non-zero while the engine's temporal jitter gate is open.
-    pub jitter_on: u32,
-    /// Non-zero when the jitter patch verified its site, so there is a gate to open. Zero after a
-    /// game update moved the code, and the panel shows that rather than offering a dead switch.
-    pub jitter_available: u32,
-    /// Effective SR backend, in the C header order.
-    pub backend: u32,
-    /// Most recently requested SR backend.
-    pub requested_backend: u32,
-    /// Result of the last switch.
-    pub last_switch_result: i32,
-    /// A cold FG presentation host exists.
-    pub fg_available: u32,
-    /// Requested interpolation mode.
-    pub fg_requested_mode: u32,
-    /// Requested generated frames per source frame.
-    pub fg_requested_generated: u32,
-    /// Configured interpolation mode after deferral.
-    pub fg_effective_mode: u32,
-    /// Configured generated count.
-    pub fg_effective_generated: u32,
-    /// SDK-observed generation activity.
-    pub fg_active: u32,
-    /// SDK-supported maximum generated count.
-    pub fg_max_generated: u32,
-    /// Reflex availability from SDK state.
-    pub reflex_available: u32,
-    /// User-requested Reflex mode.
-    pub reflex_requested_mode: u32,
-    /// Effective Reflex mode, including FG requirements.
-    pub reflex_effective_mode: u32,
-    /// Deferral reason code.
-    pub fg_reason: u32,
-    /// Most recent FG operation result.
-    pub fg_last_result: i32,
-    /// SDK aggregate presents, including source frames.
-    pub fg_total_presented: u64,
-    /// Successful real, non-test application Present calls.
-    pub application_presented_frames: u64,
-    /// QPC at this snapshot.
-    pub sample_qpc: u64,
-    /// QPC ticks per second.
-    pub qpc_frequency: u64,
-    /// Show the compact performance HUD while the settings panel is closed.
-    pub show_performance_hud: u32,
-    /// The SDK aggregate present counter is available.
-    pub fg_present_count_valid: u32,
-    /// ABI 8. Requested minimum interval between rendered frames, before generation, in
-    /// microseconds. Zero is unlimited.
-    pub frame_limit_us: u32,
-    /// Refresh rate of the display showing the game, in millihertz. Zero when unknown.
-    pub display_refresh_mhz: u32,
-    /// ABI 9. Active generation provider (zero is Off).
-    pub fg_backend: u32,
-    /// Saved provider for next startup.
-    pub fg_requested_backend: u32,
-    /// Implemented provider IDs as bits; hardware compatibility is checked at startup.
-    pub fg_backend_choices: u32,
-    /// Last provider-selection persistence result.
-    pub fg_selection_result: i32,
-    /// ABI 10. Super-resolution backend IDs the host can switch to, as bits (bit n is backend ID
-    /// n). Zero means no mask was supplied and the default list applies.
-    pub sr_backend_choices: u32,
-    /// Requested DLSS model; driver overrides can replace it.
-    pub dlss_preset: u32,
-    /// This host implements model selection.
-    pub dlss_preset_available: u32,
-    /// RTX 40 MFG unlock: 0 not applicable, 1 ready, 2 refused.
-    pub fg_mfg_unlock_status: u32,
-    /// Engine-owned input resolution; do not offer ineffective quality changes.
-    pub sr_quality_locked: u32,
-    /// ABI 14. Number of entries at `host_options`; zero draws no host section.
-    pub host_option_count: u32,
-    /// Host-defined options, borrowed for the call.
-    pub host_options: *const RsfOverlayHostOption,
-    /// ABI 15. Host implements shared sharpening.
-    pub sharpening_available: u32,
-    /// Shared sharpening mode.
-    pub sharpening_mode: u32,
-    /// Shared sharpening sharpness.
-    pub sharpening_sharpness: f32,
-    /// Shared sharpening mas.
-    pub sharpening_mas: u32,
-    /// Shared sharpening motion_sharpness.
-    pub sharpening_motion_sharpness: f32,
-    /// Shared sharpening motion_threshold.
-    pub sharpening_motion_threshold: f32,
-    /// Shared sharpening motion_scale_limit.
-    pub sharpening_motion_scale_limit: f32,
-    /// Shared sharpening contrast_enabled.
-    pub sharpening_contrast_enabled: u32,
-    /// Shared sharpening contrast.
-    pub sharpening_contrast: f32,
-    /// Shared sharpening depth_scale.
-    pub sharpening_depth_scale: f32,
-    /// Shared sharpening depth_bias.
-    pub sharpening_depth_bias: f32,
-    /// Shared sharpening clamp_output.
-    pub sharpening_clamp_output: u32,
-    /// Shared sharpening debug.
-    pub sharpening_debug: u32,
-    /// ABI 16. Panel layout word the host stored, opaque to it.
-    pub ui_preferences: u32,
-    /// ABI 17. Pacing owner: 0 none, 1 NVIDIA Reflex, 2 Intel XeLL, 3 AMD Anti-Lag 2, 4 AMD Vulkan Anti-Lag.
-    pub latency_pacing_owner: u32,
-    /// Keeps the following counter eight-byte aligned, as in the header.
-    pub latency_reserved: u32,
-    /// Frames the pacing owner has paced; a rising count shows the latency SDK is running.
-    pub latency_paced_frames: u64,
-    /// Whether the registered SDK PCL message is available.
-    pub pcl_available: u32,
-    /// Reserved ABI padding, zero.
-    pub pcl_reserved: u32,
-    /// Observed keyboard, mouse and controller receipt counts.
-    pub input_receipts: [u64; 3],
-    /// Successful notification routes, including SDK coalescing.
-    pub pcl_routed: u64,
-    /// Failed provider notification calls.
-    pub pcl_failed: u64,
-    /// Receipts without a unique eligible frame owner.
-    pub pcl_unmatched: u64,
-}
+#[path = "wire.rs"]
+mod wire;
 
-/// A toggle: `value` is 0 or 1.
-pub const RSF_OVERLAY_HOST_OPTION_TOGGLE: u32 = 0;
-/// A stepped number between `minimum` and `maximum`, shown divided by `divisor`.
-pub const RSF_OVERLAY_HOST_OPTION_NUMBER: u32 = 1;
-
-/// ABI 14. One option the host defines and the panel draws. Mirrors `rsf_overlay_host_option`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct RsfOverlayHostOption {
-    /// NUL-terminated label, borrowed for the call.
-    pub label: *const c_char,
-    /// One of the `RSF_OVERLAY_HOST_OPTION_*` kinds.
-    pub kind: u32,
-    /// Current value.
-    pub value: i32,
-    /// Smallest value of a number.
-    pub minimum: i32,
-    /// Largest value of a number.
-    pub maximum: i32,
-    /// Step of a number; zero means one.
-    pub step: i32,
-    /// A number is shown as `value / divisor`; zero means one.
-    pub divisor: u32,
-    /// Non-zero when a change only applies at the next start.
-    pub restart: u32,
-    /// Zero.
-    pub reserved: u32,
-}
-
-/// What the user asked for, this frame. Mirrors `rsf_overlay_intent`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RsfOverlayIntent {
-    /// `sizeof(rsf_overlay_intent)`, written by the overlay.
-    pub struct_size: u32,
-    /// Non-zero when the quality was changed in this frame.
-    pub quality_changed: u32,
-    /// The quality the panel now shows as chosen, whether or not it changed.
-    pub quality: RsfOverlayQuality,
-    /// Non-zero when the enable toggle was changed in this frame.
-    pub enabled_changed: u32,
-    /// The enable state the panel now shows, whether or not it changed.
-    pub enabled: u32,
-    /// Non-zero when the user asked for this frame's inputs to be written out.
-    pub dump_requested: u32,
-    /// Bring the backend up. Separate from `enabled`: starting can fail where choosing cannot.
-    pub start_requested: u32,
-    /// Non-zero when the debug view was toggled in this frame.
-    pub debug_view_changed: u32,
-    /// The debug view state the panel now shows.
-    pub debug_view: u32,
-    /// Non-zero when reinsertion was toggled in this frame.
-    pub reinsert_changed: u32,
-    /// The reinsertion state the panel now shows.
-    pub reinsert: u32,
-    /// Apply `scale_percent`. Zero percent is not a request.
-    pub scale_requested: u32,
-    /// The render scale to apply, as a percentage.
-    pub scale_percent: u32,
-    /// Non-zero when the user asked for a frame capture.
-    pub capture_requested: u32,
-    /// Appended in ABI 3. The user moved the jitter switch.
-    pub jitter_changed: u32,
-    /// The jitter state the panel now shows.
-    pub jitter: u32,
-    /// A backend selection made in this frame.
-    pub backend_changed: u32,
-    /// Requested SR backend.
-    pub backend: u32,
-    /// The FG selection changed.
-    pub fg_changed: u32,
-    /// Requested interpolation mode.
-    pub fg_mode: u32,
-    /// Requested generated count.
-    pub fg_generated: u32,
-    /// The Reflex selection changed.
-    pub reflex_changed: u32,
-    /// Requested Reflex mode.
-    pub reflex_mode: u32,
-    /// The performance HUD toggle changed.
-    pub performance_hud_changed: u32,
-    /// Requested performance HUD visibility.
-    pub performance_hud: u32,
-    /// ABI 8. The frame limit changed.
-    pub frame_limit_changed: u32,
-    /// Requested minimum interval between rendered frames in microseconds. Zero is unlimited.
-    pub frame_limit_us: u32,
-    /// Save a new provider for next startup.
-    pub fg_backend_changed: u32,
-    /// Provider ID; zero selects Off.
-    pub fg_backend: u32,
-    /// The requested DLSS model changed.
-    pub dlss_preset_changed: u32,
-    /// Requested model ID.
-    pub dlss_preset: u32,
-    /// ABI 14. The user changed a host option in this frame.
-    pub host_option_changed: u32,
-    /// Index into the host's option array.
-    pub host_option_index: u32,
-    /// The value the user chose.
-    pub host_option_value: i32,
-    /// Shared sharpening snapshot changed.
-    pub sharpening_changed: u32,
-    /// Shared sharpening mode.
-    pub sharpening_mode: u32,
-    /// Shared sharpening sharpness.
-    pub sharpening_sharpness: f32,
-    /// Shared sharpening mas.
-    pub sharpening_mas: u32,
-    /// Shared sharpening motion_sharpness.
-    pub sharpening_motion_sharpness: f32,
-    /// Shared sharpening motion_threshold.
-    pub sharpening_motion_threshold: f32,
-    /// Shared sharpening motion_scale_limit.
-    pub sharpening_motion_scale_limit: f32,
-    /// Shared sharpening contrast_enabled.
-    pub sharpening_contrast_enabled: u32,
-    /// Shared sharpening contrast.
-    pub sharpening_contrast: f32,
-    /// Shared sharpening depth_scale.
-    pub sharpening_depth_scale: f32,
-    /// Shared sharpening depth_bias.
-    pub sharpening_depth_bias: f32,
-    /// Shared sharpening clamp_output.
-    pub sharpening_clamp_output: u32,
-    /// Shared sharpening debug.
-    pub sharpening_debug: u32,
-    /// ABI 16. Hide the panel.
-    pub close_requested: u32,
-    /// Store `ui_preferences`.
-    pub ui_preferences_changed: u32,
-    /// Panel layout word for the host to store and send back.
-    pub ui_preferences: u32,
-}
-
-impl Default for RsfOverlayIntent {
-    fn default() -> Self {
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            dlss_preset_changed: 0,
-            dlss_preset: 0,
-            quality_changed: 0,
-            quality: RSF_OVERLAY_QUALITY_NATIVE,
-            enabled_changed: 0,
-            enabled: 0,
-            dump_requested: 0,
-            start_requested: 0,
-            debug_view_changed: 0,
-            debug_view: 0,
-            reinsert_changed: 0,
-            reinsert: 0,
-            scale_requested: 0,
-            scale_percent: 0,
-            capture_requested: 0,
-            jitter_changed: 0,
-            jitter: 0,
-            backend_changed: 0,
-            backend: 1,
-            fg_changed: 0,
-            fg_mode: 0,
-            fg_generated: 1,
-            reflex_changed: 0,
-            reflex_mode: 0,
-            performance_hud_changed: 0,
-            performance_hud: 0,
-            frame_limit_changed: 0,
-            frame_limit_us: 0,
-            fg_backend_changed: 0,
-            fg_backend: 0,
-            host_option_changed: 0,
-            host_option_index: 0,
-            host_option_value: 0,
-            sharpening_changed: 0,
-            sharpening_mode: 0,
-            sharpening_sharpness: 0.4,
-            sharpening_mas: 0,
-            sharpening_motion_sharpness: 0.2,
-            sharpening_motion_threshold: 0.0,
-            sharpening_motion_scale_limit: 10.0,
-            sharpening_contrast_enabled: 0,
-            sharpening_contrast: 0.0,
-            sharpening_depth_scale: 35.0,
-            sharpening_depth_bias: 0.001,
-            sharpening_clamp_output: 0,
-            sharpening_debug: 0,
-            close_requested: 0,
-            ui_preferences_changed: 0,
-            ui_preferences: 0,
-        }
-    }
-}
+/// Version of the panel ABI implemented by this build.
+pub use wire::RSF_OVERLAY_ABI_VERSION;
+/// XeSS Ultra Quality preset.
+pub use wire::RSF_OVERLAY_QUALITY_ULTRA_QUALITY;
+/// An adapter option borrowed for the frame call.
+pub use wire::rsf_overlay_host_option as RsfOverlayHostOption;
+/// Settings and actions requested by the panel this frame.
+pub use wire::rsf_overlay_intent as RsfOverlayIntent;
+/// The frame status record defined in overlay.h.
+pub use wire::rsf_overlay_stats as RsfOverlayStats;
+pub(crate) use wire::{
+    RSF_OVERLAY_FRAME_LIMIT_VRR, RSF_OVERLAY_SR_CHANGE_REFUSED,
+    RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+};
 
 /// One frame of input, in physical pixels. Mirrors `rsf_overlay_input`.
 #[repr(C)]
@@ -548,7 +188,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 416);
+        assert_eq!(size_of::<RsfOverlayStats>(), 432);
         assert_eq!(size_of::<RsfOverlayHostOption>(), 40);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
@@ -624,11 +264,15 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, pcl_routed), 392);
         assert_eq!(offset_of!(RsfOverlayStats, pcl_failed), 400);
         assert_eq!(offset_of!(RsfOverlayStats, pcl_unmatched), 408);
+        assert_eq!(offset_of!(RsfOverlayStats, sr_quality_choices), 416);
+        assert_eq!(offset_of!(RsfOverlayStats, sr_change_id), 420);
+        assert_eq!(offset_of!(RsfOverlayStats, sr_change_status), 424);
     }
 
     #[test]
     fn the_other_structs_match_the_header_layout() {
-        assert_eq!(size_of::<RsfOverlayIntent>(), 200);
+        assert_eq!(size_of::<RsfOverlayIntent>(), 204);
+        assert_eq!(offset_of!(RsfOverlayIntent, sr_change_id), 200);
         assert_eq!(offset_of!(RsfOverlayIntent, close_requested), 188);
         assert_eq!(offset_of!(RsfOverlayIntent, ui_preferences_changed), 192);
         assert_eq!(offset_of!(RsfOverlayIntent, ui_preferences), 196);

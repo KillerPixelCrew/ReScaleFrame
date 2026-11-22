@@ -954,6 +954,7 @@ unsafe extern "C" fn prepare(
     let valid = !list.is_null() && !buffer.is_null() && cpu_allows_fg(frame, timing, generation);
     let reason = eligibility(slot, view, valid, needs_hudless);
     let options = owner.options;
+    unsafe { crate::frame_limit::observe_pacing_display(options.frame_limit_us, chain) };
     let mut request = crate::native_fg::provider_options(&options, &capability, reason == 0);
     let result = unsafe { configure(context, &request) };
     owner.state.last_result = result;
