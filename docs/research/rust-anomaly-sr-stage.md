@@ -504,3 +504,34 @@ and regenerates the Runtime resolve record from its public C header.
 Source comparison, Rust 1.94.1 formatting, bindgen 0.72.1 regeneration,
 locked offline Windows metadata and whitespace checks make up this
 checkpoint. Build, link, fixture and device results remain pending.
+
+## Rust SR profile owner (N06/N07 native pass)
+
+`sr_profile.rs` owns every SR profile value: the shared CRT, CTexture,
+RCache, R_xforms and SSAO layout, `TARGET_SLOTS`, `WORLD_TARGETS`, the absent
+offsets and both executable records in `native_profile.rs` order.
+`tools/generate-anomaly-sr-profile.py` writes the per-build records between
+the `BEGIN/END GENERATED SR PROFILES` markers of `sr_profile.h` and rewrites
+the shared values and table entries in their documented places. Its first
+run reproduced the former header byte for byte, which proves the Rust copy;
+`--check` (CTest `anomaly_sr_profile_projection`) refuses drift in either a
+per-build or a shared value. The text the evidence tools parse is unchanged.
+
+The swap owner's layout is built in Rust (`rsf_anomaly_sr_engine_layout`).
+The former `sr_swap_layout.h` `static_assert`s and the SR-only layout
+relations of `tests/anomaly_sr_profile.cpp` are compile-time checks in
+`sr_profile.rs`. `sr_stage.cpp` and the swap launcher take that layout, so
+`sr_swap_layout.h` and `tests/anomaly_sr_swap_profile.cpp` are removed. The
+swap fixture still compares it field by field with its independent copy.
+
+Still C++: `sr_stage.cpp` reads the selected `BuildProfile` through
+`srp()`/`np()`, calls `geometry::current_render_view(module, BuildProfile&)`
+and uses the `geometry::constant_buffer_*` layout of `native_geometry.h`
+(N03 C++ data). The next step is a Rust production table over
+`sr_profile.rs` with a C11 leaf for the five trampolines (`__finally` around
+the sun-cascade original to keep the camera restore on a C++ unwind), the
+SEH calls to `R_xforms::set_P`, `SetMipLODBias` and `GetCBuffer`, and the log
+boundary. It needs a C entry for the geometry render-view read.
+`tests/anomaly_sr_hook_bridge.cpp` follows it. `build_profile.h` still has
+C++ users: `sr_stage.cpp`, `motion_stage.cpp`, `native_geometry.cpp` and the
+profile, hook and geometry fixtures.

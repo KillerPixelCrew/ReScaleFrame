@@ -118,3 +118,33 @@ has no static import of that DLL.
 This verification covers the source, PE boundary, CPU contracts and
 fixture builds. Device execution, vendor output, moving-image quality
 and live-game acceptance remain outside the evidence for this change.
+
+## C11 D3D11 leaf and C-only SR headers (N06/N07 native pass)
+
+`sr_d3d11.cpp` and the typed C++ facades in `sr_d3d11.h` are gone. Rust
+registers the `rsf_sr_d3d11` table (`sr_d3d11/native.rs`,
+`rsf_anomaly_sr_d3d11_register`); the first registration's foreign leaves are
+kept, so the table address stays process-lifetime as before.
+`sr_d3d11_platform.c` supplies the four leaves Rust cannot express:
+
+| Leaf | Behaviour kept |
+| --- | --- |
+| `default_view` | `rsf_d3d11_create_shader_view` for an SRV with no template view. |
+| `save_state` / `restore_state` | A zeroed `rsf_d3d11_state` (`calloc` for the former `new (std::nothrow)`), freed after restore; restore still runs on a null snapshot. |
+| `guarded_log` | The foreign log sink runs under `__try` filtered on the MSVC C++ exception code `0xE06D7363`, the former `catch (...)` under `/EHsc`. Hardware faults still propagate. The exception object is not destroyed, as with any SEH catch of a C++ exception. |
+
+The same file keeps the `D3D11_TEXTURE2D_DESC` field checks and the DXGI,
+usage, bind and format-support values as `_Static_assert`s against the SDK.
+`rsf_anomaly_sr_twin_error_name` (Rust) replaces `twin_error_name` with the
+same names. `sr_d3d11_platform.h`, `sr_stage_platform.h`, `sr_stage.h` and
+`sr_swap.h` now hold C declarations only; `sr_jitter.h` and `sr_pass.h` had no
+users outside `sr_stage.cpp` and were removed. Callers use
+`rsf_anomaly_sr_configure`, `rsf_anomaly_sr_install` and the Rust
+`rsf_anomaly_sr_stage_*` exports; the N01 `stage_entries.h` entries forward to
+them.
+
+Checks: MSVC `ClCompile` with the project flags for every touched source,
+MSVC and strict MinGW C11 syntax checks of the C headers and the leaf, and an
+unchanged regeneration of `sr_stage_abi.rs` and `sr_swap_abi.rs`. The tip did
+not link (Rust orchestrator errors), so no fixture or device run is part of
+this evidence.

@@ -143,7 +143,7 @@ A sweep of `git ls-files '*.cpp'` on 2026-11-22 found first-party C++ that the p
 - [x] [runtime/orchestrator/src/d3d11_host_foreign.c](runtime/orchestrator/src/d3d11_host_foreign.c) (D01; C++ removed; C11 SEH leaf that contains only the MSVC C++ exception code 0xE06D7363, entries that were noexcept without a handler abort on that code)
 - [x] [tests/ac7_render_scope_exceptions.cpp](tests/ac7_render_scope_exceptions.cpp) (A02; the throwing callbacks are C in `tests/ac7_render_scope.c` and raise the MSVC C++ exception code)
 - [ ] [tests/anomaly_motion_contract_main.cpp](tests/anomaly_motion_contract_main.cpp) (N04)
-- [ ] [tests/anomaly_sr_swap_profile.cpp](tests/anomaly_sr_swap_profile.cpp) (N07)
+- [x] [tests/anomaly_sr_swap_profile.cpp](tests/anomaly_sr_swap_profile.cpp) (N07; removed: the swap launcher takes the Rust engine layout built from sr_profile.rs, `rsf_anomaly_sr_engine_layout`)
 - [ ] [tests/dlss_sr_layout_facts.cpp](tests/dlss_sr_layout_facts.cpp) (D05; C++-only vendor header layout check; blocked: `sl.h` declares `sl::` types with constructors and a virtual member, so the layout, GUID and default checks need a C++ compiler. It holds `static_assert`s against the pinned headers and two reporting functions that `dlss_sr_layout_main.c` hands to the Rust comparison in `streamline_sr/sdk/layout_fixture.rs`; test only, no runtime caller)
 
 ## Core, loader and overlay
@@ -2132,26 +2132,26 @@ Port the live SR stage, D3D11 pass and reconstruction, including refusing a fram
 
 **Port files (11)**
 
-- [ ] [games/anomaly/src/sr_d3d11.cpp](games/anomaly/src/sr_d3d11.cpp)
-- [ ] [games/anomaly/src/sr_d3d11.h](games/anomaly/src/sr_d3d11.h)
-- [ ] [games/anomaly/src/sr_d3d11_platform.h](games/anomaly/src/sr_d3d11_platform.h)
-- [ ] [games/anomaly/src/sr_pass.h](games/anomaly/src/sr_pass.h)
+- [x] [games/anomaly/src/sr_d3d11.cpp](games/anomaly/src/sr_d3d11.cpp) (removed; Rust registers the table and the C11 leaf `sr_d3d11_platform.c` keeps the default view, state snapshot, the C++ exception boundary on foreign logs and the SDK layout checks)
+- [x] [games/anomaly/src/sr_d3d11.h](games/anomaly/src/sr_d3d11.h) (removed with its C++ facades)
+- [x] [games/anomaly/src/sr_d3d11_platform.h](games/anomaly/src/sr_d3d11_platform.h) (C declarations only)
+- [x] [games/anomaly/src/sr_pass.h](games/anomaly/src/sr_pass.h) (removed; no users outside sr_stage.cpp)
 - [x] [games/anomaly/src/sr_plan.h](games/anomaly/src/sr_plan.h)
-- [ ] [games/anomaly/src/sr_profile.h](games/anomaly/src/sr_profile.h)
+- [x] [games/anomaly/src/sr_profile.h](games/anomaly/src/sr_profile.h) (generated projection from the Rust profile owner `sr_profile.rs`; `tools/generate-anomaly-sr-profile.py --check` runs as CTest `anomaly_sr_profile_projection`)
 - [x] [games/anomaly/src/sr_reconstruction.h](games/anomaly/src/sr_reconstruction.h)
 - [x] [games/anomaly/src/sr_settings.h](games/anomaly/src/sr_settings.h)
-- [ ] [games/anomaly/src/sr_stage.cpp](games/anomaly/src/sr_stage.cpp)
-- [ ] [games/anomaly/src/sr_stage.h](games/anomaly/src/sr_stage.h)
-- [ ] [games/anomaly/src/sr_stage_platform.h](games/anomaly/src/sr_stage_platform.h)
+- [ ] [games/anomaly/src/sr_stage.cpp](games/anomaly/src/sr_stage.cpp) (open: the leaf table still reads the selected C++ `BuildProfile` (`build_profile.h`) through `srp()`/`np()` and calls `geometry::current_render_view(module, BuildProfile&)` and the `geometry::constant_buffer_*` layout from `native_geometry.h`, whose geometry records are C++ `constexpr` data (N03). The SR records are now Rust-owned (`sr_profile.rs`), so the next step is a Rust production table plus a C11 leaf for the five trampolines (`__try/__finally` around the sun-cascade original), the SEH calls to `R_xforms::set_P`, `SetMipLODBias` and `GetCBuffer` and the C++-exception log boundary; it needs a C entry for the geometry render-view read and could not be linked or run on the current tip)
+- [x] [games/anomaly/src/sr_stage.h](games/anomaly/src/sr_stage.h) (C declarations only)
+- [x] [games/anomaly/src/sr_stage_platform.h](games/anomaly/src/sr_stage_platform.h) (C declarations only)
 
 **Fixtures (9)**
 
-- [ ] [tests/anomaly_sr_hook_bridge.cpp](tests/anomaly_sr_hook_bridge.cpp) (native detour and PE fixture seam)
+- [ ] [tests/anomaly_sr_hook_bridge.cpp](tests/anomaly_sr_hook_bridge.cpp) (native detour and PE fixture seam; open: it projects the C++ `BuildProfile` and installs a modified copy through `rsf_anomaly_sr_install`, and takes the rmNear redirect from `geometry::native_geometry_hook_sites` (N03 C++). It follows sr_stage.cpp: once the stage takes the Rust profile record, the fixture can move to C11 with the C hook-set API and `rsf_anomaly_geometry_set_near`)
 - [x] [tests/anomaly_sr_runtime_api_bridge.cpp](tests/anomaly_sr_runtime_api_bridge.cpp) (actual Runtime import and fixture entry)
 - [x] [tests/anomaly_sr_hooks.cpp](tests/anomaly_sr_hooks.cpp)
 - [x] [tests/anomaly_sr_pass.cpp](tests/anomaly_sr_pass.cpp)
 - [x] [tests/anomaly_sr_plan.cpp](tests/anomaly_sr_plan.cpp)
-- [ ] [tests/anomaly_sr_profile.cpp](tests/anomaly_sr_profile.cpp)
+- [ ] [tests/anomaly_sr_profile.cpp](tests/anomaly_sr_profile.cpp) (open: the contract relates the native, geometry, SR and motion records, and `geometry_profile.h` (N03) and `motion_profile.h` (N04) are still C++ `constexpr` data. Its SR-only layout `static_assert`s moved to compile-time checks in `sr_profile.rs`)
 - [x] [tests/anomaly_sr_reconstruction.cpp](tests/anomaly_sr_reconstruction.cpp)
 - [x] [tests/anomaly_sr_roundtrip.cpp](tests/anomaly_sr_roundtrip.cpp)
 - [x] [tests/anomaly_sr_runtime_api.cpp](tests/anomaly_sr_runtime_api.cpp)
@@ -2207,9 +2207,9 @@ Port swap ownership, projection jitter, temporal history and tonemap routing. Ad
 
 **Port files (7)**
 
-- [ ] [games/anomaly/src/sr_jitter.h](games/anomaly/src/sr_jitter.h)
+- [x] [games/anomaly/src/sr_jitter.h](games/anomaly/src/sr_jitter.h) (removed; the published jitter types are C declarations in `sr_stage_platform.h` and the units are documented in `sr_stage.h`)
 - [x] [games/anomaly/src/sr_swap.cpp](games/anomaly/src/sr_swap.cpp)
-- [ ] [games/anomaly/src/sr_swap.h](games/anomaly/src/sr_swap.h)
+- [x] [games/anomaly/src/sr_swap.h](games/anomaly/src/sr_swap.h) (C declarations only: world slot order and the Rust engine layout entry)
 - [x] [games/anomaly/src/sr_swap_platform.h](games/anomaly/src/sr_swap_platform.h)
 - [x] [games/anomaly/src/sr_temporal.cpp](games/anomaly/src/sr_temporal.cpp)
 - [x] [games/anomaly/src/sr_temporal.h](games/anomaly/src/sr_temporal.h)
