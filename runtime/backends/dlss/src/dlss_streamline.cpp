@@ -103,6 +103,14 @@ struct rsf_streamline_sr_platform {
     void (*destroy)(void*);
 };
 
+// sl_security.h defines globals, so it belongs in exactly one translation unit.
+bool rsf_dlss_verify_runtime_signature(const wchar_t* path)
+{
+#if RSF_HAVE_SIGNATURE_CHECK
+    return sl::security::verifyEmbeddedSignature(path);
+#else
+    (void)path;
+    return false;
 #endif
 }
 
