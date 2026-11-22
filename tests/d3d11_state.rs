@@ -4,8 +4,7 @@ use crate::sys::rsf_d3d11_state as State;
 use std::ptr::null_mut;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE_HARDWARE, D3D_PRIMITIVE_TOPOLOGY_POINTLIST,
-    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+    D3D_DRIVER_TYPE_HARDWARE, D3D_PRIMITIVE_TOPOLOGY_POINTLIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
 };
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -18,8 +17,6 @@ unsafe extern "C" {
     fn rsf_d3d11_state_save(context: Handle, state: *mut State) -> u32;
     fn rsf_d3d11_state_save_independent(context: Handle, state: *mut State) -> u32;
     fn rsf_d3d11_state_restore(context: Handle, state: *mut State);
-    fn rsf_d3d11_draw_state_save(context: Handle, state: *mut State) -> u32;
-    fn rsf_d3d11_draw_state_restore(context: Handle, state: *mut State);
 }
 
 struct Scope {
@@ -265,46 +262,6 @@ fn run(gpu: &Device) -> TestResult {
     check(
         get_pixel(3).as_ref() == Some(&first_view),
         "a fresh scope saves after the outer one closes",
-    )?;
-
-    unsafe {
-        context.PSSetShaderResources(0, Some(&[Some(second_view.clone())]));
-        context.PSSetSamplers(0, Some(&[Some(sampler.clone())]));
-        context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    }
-    let draw = Scope::new(
-        context,
-        rsf_d3d11_draw_state_save,
-        rsf_d3d11_draw_state_restore,
-    )?;
-    unsafe {
-        context.OMSetRenderTargets(None, None::<&ID3D11DepthStencilView>);
-        context.PSSetSamplers(0, Some(&[None]));
-        context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
-    }
-    clear_pixel(0);
-    clear_raster();
-    drop(draw);
-    check(
-        get_target().as_ref() == Some(&rtv),
-        "draw scope restored target",
-    )?;
-    check(
-        get_pixel(0).as_ref() == Some(&second_view),
-        "draw scope restored pixel SRV 0",
-    )?;
-    check(
-        get_sampler().as_ref() == Some(&sampler),
-        "draw scope restored sampler 0",
-    )?;
-    check(
-        unsafe { context.IAGetPrimitiveTopology() } == D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-        "draw scope restored list topology",
-    )?;
-    verify_raster()?;
-    check(
-        unsafe { rsf_d3d11_draw_state_save(null_mut(), &mut state) } == 0,
-        "draw scope refuses a null context",
     )?;
     unsafe { context.ClearState() };
     Ok(())

@@ -464,94 +464,6 @@ unsafe extern "C" fn write(context: Handle, state: &Snapshot, targets: u32) {
     }
 }
 
-unsafe extern "C" fn read_draw(context: Handle, snapshot: *mut DrawSnapshot) {
-    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
-    let state = unsafe { &mut *snapshot };
-    unsafe {
-        (api.OMGetRenderTargets)(
-            context,
-            TARGETS as u32,
-            state.targets.as_mut_ptr().cast(),
-            out(&mut state.depth_view),
-        );
-        (api.VSGetShader)(
-            context,
-            out(&mut state.vertex_shader),
-            null_mut(),
-            null_mut(),
-        );
-        (api.PSGetShader)(
-            context,
-            out(&mut state.pixel_shader),
-            null_mut(),
-            null_mut(),
-        );
-        (api.IAGetInputLayout)(context, out(&mut state.layout));
-        (api.IAGetPrimitiveTopology)(context, ptr::from_mut(&mut state.topology).cast());
-        (api.PSGetShaderResources)(context, 0, 1, out(&mut state.resource));
-        (api.PSGetSamplers)(context, 0, 1, out(&mut state.sampler));
-        (api.PSGetConstantBuffers)(context, 0, 1, out(&mut state.constants));
-        (api.OMGetBlendState)(
-            context,
-            out(&mut state.blend),
-            state.blend_factor.as_mut_ptr(),
-            &mut state.blend_mask,
-        );
-        (api.OMGetDepthStencilState)(
-            context,
-            out(&mut state.depth_state),
-            &mut state.stencil_reference,
-        );
-        (api.RSGetState)(context, out(&mut state.raster));
-        state.viewport_count = VIEWPORTS as u32;
-        (api.RSGetViewports)(
-            context,
-            &mut state.viewport_count,
-            state.viewports.as_mut_ptr().cast(),
-        );
-        state.scissor_count = VIEWPORTS as u32;
-        (api.RSGetScissorRects)(
-            context,
-            &mut state.scissor_count,
-            state.scissors.as_mut_ptr().cast(),
-        );
-    }
-}
-
-unsafe extern "C" fn write_draw(context: Handle, snapshot: *const DrawSnapshot) {
-    let api = unsafe { vtable::<ID3D11DeviceContext>(&context) };
-    let state = unsafe { &*snapshot };
-    unsafe {
-        (api.OMSetRenderTargets)(
-            context,
-            TARGETS as u32,
-            state.targets.as_ptr().cast(),
-            raw(&state.depth_view),
-        );
-        (api.VSSetShader)(context, raw(&state.vertex_shader), ptr::null(), 0);
-        (api.PSSetShader)(context, raw(&state.pixel_shader), ptr::null(), 0);
-        (api.IASetInputLayout)(context, raw(&state.layout));
-        (api.IASetPrimitiveTopology)(context, D3D_PRIMITIVE_TOPOLOGY(state.topology as i32));
-        (api.PSSetShaderResources)(context, 0, 1, &raw(&state.resource));
-        (api.PSSetSamplers)(context, 0, 1, &raw(&state.sampler));
-        (api.PSSetConstantBuffers)(context, 0, 1, &raw(&state.constants));
-        (api.OMSetBlendState)(
-            context,
-            raw(&state.blend),
-            state.blend_factor.as_ptr(),
-            state.blend_mask,
-        );
-        (api.OMSetDepthStencilState)(context, raw(&state.depth_state), state.stencil_reference);
-        (api.RSSetState)(context, raw(&state.raster));
-        (api.RSSetViewports)(
-            context,
-            state.viewport_count,
-            state.viewports.as_ptr().cast(),
-        );
-        (api.RSSetScissorRects)(context, state.scissor_count, state.scissors.as_ptr().cast());
-    }
-}
-
 const PLATFORM: Platform = Platform {
     immediate,
     device,
@@ -560,8 +472,6 @@ const PLATFORM: Platform = Platform {
     read,
     clear,
     write,
-    read_draw,
-    write_draw,
 };
 
 #[unsafe(no_mangle)]
@@ -577,16 +487,6 @@ unsafe extern "C" fn rsf_d3d11_state_save_independent(context: Handle, storage: 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11_state_restore(context: Handle, storage: *mut State) {
     unsafe { rsf_core_d3d11_state_restore(context, storage, &PLATFORM) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_draw_state_save(context: Handle, storage: *mut State) -> u32 {
-    unsafe { rsf_core_d3d11_draw_state_save(context, storage, &PLATFORM) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_draw_state_restore(context: Handle, storage: *mut State) {
-    unsafe { rsf_core_d3d11_draw_state_restore(context, storage, &PLATFORM) }
 }
 
 #[unsafe(no_mangle)]

@@ -78,29 +78,6 @@ struct Snapshot {
 }
 
 #[repr(C)]
-struct DrawSnapshot {
-    targets: [Option<IUnknown>; TARGETS],
-    depth_view: Option<IUnknown>,
-    vertex_shader: Option<IUnknown>,
-    pixel_shader: Option<IUnknown>,
-    layout: Option<IUnknown>,
-    topology: u32,
-    resource: Option<IUnknown>,
-    sampler: Option<IUnknown>,
-    constants: Option<IUnknown>,
-    blend: Option<IUnknown>,
-    blend_factor: [f32; 4],
-    blend_mask: u32,
-    depth_state: Option<IUnknown>,
-    stencil_reference: u32,
-    raster: Option<IUnknown>,
-    viewport_count: u32,
-    viewports: [Viewport; VIEWPORTS],
-    scissor_count: u32,
-    scissors: [Rect; VIEWPORTS],
-}
-
-#[repr(C)]
 #[derive(Default)]
 struct Features {
     uav_count: u32,
@@ -116,9 +93,6 @@ struct Platform {
     read: unsafe extern "C" fn(Handle, &mut Snapshot),
     clear: unsafe extern "C" fn(Handle, u32),
     write: unsafe extern "C" fn(Handle, &Snapshot, u32),
-
-    read_draw: unsafe extern "C" fn(Handle, *mut DrawSnapshot),
-    write_draw: unsafe extern "C" fn(Handle, *const DrawSnapshot),
 }
 
 // What the full scope keeps in the caller's storage. The storage may move; it must not be copied.
@@ -135,11 +109,9 @@ const _: () = {
     assert!(size_of::<Snapshot>() == 22904);
     assert!(std::mem::offset_of!(Snapshot, stages) == 608);
     assert!(std::mem::offset_of!(Snapshot, targets) == 22784);
-    assert!(size_of::<DrawSnapshot>() == 832);
     assert!(size_of::<Features>() == 8);
-    assert!(size_of::<Platform>() == 9 * size_of::<Handle>());
-    // The narrow snapshots and the full scope live in the caller's storage.
-    assert!(size_of::<DrawSnapshot>() <= size_of::<State>());
+    assert!(size_of::<Platform>() == 7 * size_of::<Handle>());
+    // The scope lives in the caller's storage.
     assert!(size_of::<Scope>() <= size_of::<State>());
     assert!(align_of::<Snapshot>() <= align_of::<State>());
 };
@@ -284,56 +256,6 @@ unsafe fn rsf_core_d3d11_state_restore(context: Handle, storage: *mut State, pla
     unsafe { storage.write_bytes(0, 1) };
 }
 
-// The narrow scopes live in the caller's storage, work on any context and do not nest.
-unsafe fn save_inline<T>(
-    context: Handle,
-    storage: *mut State,
-    read: unsafe extern "C" fn(Handle, *mut T),
-) -> u32 {
-    if context.is_null() || storage.is_null() {
-        return 0;
-    }
-    let snapshot = storage.cast::<T>();
-    unsafe {
-        snapshot.write_bytes(0, 1);
-        read(context, snapshot);
-    }
-    1
-}
-
-unsafe fn restore_inline<T>(
-    context: Handle,
-    storage: *mut State,
-    write: unsafe extern "C" fn(Handle, *const T),
-) {
-    if context.is_null() || storage.is_null() {
-        return;
-    }
-    let snapshot = storage.cast::<T>();
-    unsafe {
-        write(context, snapshot);
-        // Releases what the save retained.
-        ptr::drop_in_place(snapshot);
-        storage.write_bytes(0, 1);
-    }
-}
-
-unsafe fn rsf_core_d3d11_draw_state_save(
-    context: Handle,
-    storage: *mut State,
-    platform: &Platform,
-) -> u32 {
-    unsafe { save_inline(context, storage, platform.read_draw) }
-}
-
-unsafe fn rsf_core_d3d11_draw_state_restore(
-    context: Handle,
-    storage: *mut State,
-    platform: &Platform,
-) {
-    unsafe { restore_inline(context, storage, platform.write_draw) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,14 +312,6 @@ mod tests {
         WRITTEN.set([target_count, snapshot.uav_count]);
     }
 
-    unsafe extern "C" fn read_draw(_: Handle, snapshot: *mut DrawSnapshot) {
-        unsafe { (*snapshot).raster = retained() };
-    }
-
-    unsafe extern "C" fn write_draw(_: Handle, _: *const DrawSnapshot) {
-        WRITES.set(WRITES.get() + 1);
-    }
-
     static PLATFORM: Platform = Platform {
         immediate,
         device,
@@ -406,9 +320,6 @@ mod tests {
         read,
         clear,
         write,
-
-        read_draw,
-        write_draw,
     };
 
     fn empty(state: &State) -> bool {
@@ -465,28 +376,5 @@ mod tests {
         restore(CONTEXT, &mut state);
         assert!(empty(&state));
         assert_eq!((READS.get(), WRITES.get(), object.refs.get()), (0, 0, 1));
-    }
-
-    #[test]
-    fn narrow_scopes_release_what_they_saved() {
-        let object = fake();
-        start(&object);
-        let deferred = DEFERRED as Handle;
-        let mut state = State::default();
-        unsafe {
-            // A deferred context is allowed here.
-            assert_eq!(
-                rsf_core_d3d11_draw_state_save(deferred, &mut state, &PLATFORM),
-                1
-            );
-            assert_eq!(object.refs.get(), 2);
-            rsf_core_d3d11_draw_state_restore(deferred, &mut state, &PLATFORM);
-            assert!(empty(&state) && object.refs.get() == 1);
-            assert_eq!(
-                rsf_core_d3d11_draw_state_save(null_mut(), &mut state, &PLATFORM),
-                0
-            );
-        }
-        assert_eq!(WRITES.get(), 2);
     }
 }
