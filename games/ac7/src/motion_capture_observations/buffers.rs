@@ -161,9 +161,10 @@ unsafe fn store_upload(
 }
 
 #[repr(C)]
-struct ConstantRecord {
-    buffer: u64,
-    upload_serial: u64,
+#[derive(Default)]
+pub(crate) struct ConstantRecord {
+    pub(crate) buffer: u64,
+    pub(crate) upload_serial: u64,
 }
 
 const _: () = {
@@ -171,7 +172,7 @@ const _: () = {
 };
 
 #[repr(u32)]
-enum ConstantSource {
+pub(crate) enum ConstantSource {
     Stopped,
     Uploaded,
     TryRead,
@@ -182,7 +183,7 @@ enum ConstantSource {
 type CopyUpload = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> bool;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_constant_source(
+pub(crate) unsafe extern "C" fn rsf_ac7_capture_constant_source(
     capture: CaptureInterval,
     buffer: *mut c_void,
     lighting: bool,
@@ -221,14 +222,14 @@ unsafe extern "C" fn rsf_ac7_capture_constant_source(
 }
 
 #[repr(u32)]
-enum ConstantRead {
+pub(crate) enum ConstantRead {
     Stopped,
     Skipped,
     Reserved,
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_reserve_constant_read(
+pub(crate) extern "C" fn rsf_ac7_capture_reserve_constant_read(
     capture: CaptureInterval,
     width: u32,
     lighting: bool,
@@ -251,7 +252,7 @@ extern "C" fn rsf_ac7_capture_reserve_constant_read(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_constant_read_failed(capture: CaptureInterval) {
+pub(crate) extern "C" fn rsf_ac7_capture_constant_read_failed(capture: CaptureInterval) {
     let mut observations = observations();
     let current = CaptureInterval::load();
     if current.active() && current.session == capture.session {

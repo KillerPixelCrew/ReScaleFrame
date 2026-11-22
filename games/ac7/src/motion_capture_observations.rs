@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! F9 shader and layout creation, constant-buffer contents and colour snapshots.
 
-mod buffers;
+pub(crate) mod buffers;
 pub(super) mod colour;
 pub(super) mod geometry;
+#[cfg(windows)]
+mod shader;
 
 use crate::d3d11_observer_layout_abi::rsf_observer_layout_element as LayoutElement;
 use crate::motion_capture_session::{
@@ -30,9 +32,9 @@ const ALL_CONSTANTS: u32 = (1 << CONSTANT_SLOTS) - 1;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ShaderFacts {
-    hash: u32,
-    constant_mask: u32,
+pub(crate) struct ShaderFacts {
+    pub(crate) hash: u32,
+    pub(crate) constant_mask: u32,
 }
 
 #[derive(Clone)]
@@ -227,7 +229,10 @@ unsafe extern "C" fn rsf_ac7_velocity_shader_seen(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_shader_facts(shader: *mut c_void, stage: u32) -> ShaderFacts {
+pub(crate) extern "C" fn rsf_ac7_capture_shader_facts(
+    shader: *mut c_void,
+    stage: u32,
+) -> ShaderFacts {
     observations().shader_facts(shader.addr(), stage)
 }
 

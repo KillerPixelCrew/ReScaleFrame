@@ -13,7 +13,13 @@ use crate::motion_capture_session::CaptureInterval;
 use std::fmt::{self, Write as _};
 use std::mem::{offset_of, size_of};
 
+#[cfg(windows)]
+mod capture;
+#[cfg(windows)]
+pub(super) use capture::observe;
+
 #[repr(C)]
+#[derive(Default)]
 struct Sampler {
     slot: u32,
     filter: u32,

@@ -13,7 +13,13 @@ use crate::motion_capture_session::CaptureInterval;
 use std::fmt::{self, Write as _};
 use std::mem::{offset_of, size_of};
 
+#[cfg(windows)]
+mod capture;
+#[cfg(windows)]
+pub(super) use capture::observe;
+
 #[repr(C)]
+#[derive(Default)]
 struct DrawInput {
     resource: u64,
     slot: u32,
@@ -23,6 +29,7 @@ struct DrawInput {
 }
 
 #[repr(C)]
+#[derive(Default)]
 struct DrawConstants {
     entries: [BoundConstant; 14],
     count: u32,

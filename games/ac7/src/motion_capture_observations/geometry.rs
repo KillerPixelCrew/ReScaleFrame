@@ -23,7 +23,7 @@ pub(super) struct GeometryReads {
 }
 
 #[repr(u32)]
-enum GeometryAdmission {
+pub(crate) enum GeometryAdmission {
     Skipped,
     Admitted,
     Failed,
@@ -31,13 +31,14 @@ enum GeometryAdmission {
 
 // Private ABI mirrored in motion_capture_observations.h.
 #[repr(C)]
+#[derive(Default)]
 pub(crate) struct GeometryPlan {
     pub(crate) layout: LayoutSnapshot,
     pub(crate) vs_hash: u32,
     pub(crate) bucket: u32,
-    ia_slots: u32,
-    vs_slot_count: u32,
-    vs_slots: [u32; 3],
+    pub(crate) ia_slots: u32,
+    pub(crate) vs_slot_count: u32,
+    pub(crate) vs_slots: [u32; 3],
 }
 
 const _: () = {
@@ -74,7 +75,7 @@ fn classify(layout: &LayoutSnapshot, native_velocity: bool) -> (usize, u32) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_plan_geometry(
+pub(crate) extern "C" fn rsf_ac7_capture_plan_geometry(
     capture: CaptureInterval,
     format: u32,
     depth_bound: bool,
@@ -142,7 +143,7 @@ extern "C" fn rsf_ac7_capture_plan_geometry(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_geometry_read(
+pub(crate) extern "C" fn rsf_ac7_capture_geometry_read(
     capture: CaptureInterval,
     bucket: u32,
     reserve: bool,

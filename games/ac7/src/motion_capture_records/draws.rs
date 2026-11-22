@@ -3,6 +3,8 @@
 
 mod before;
 mod geometry;
+#[cfg(windows)]
+mod gpu;
 mod ordinary;
 
 use super::{NativeRootScope, QueuedScope, Records, artifacts::Bytes, records};
@@ -17,6 +19,7 @@ const TEXTURE_3D: u32 = 4;
 
 // Private ABI mirrored in motion_capture_records.h. IDs are numeric and never dereferenced.
 #[repr(C)]
+#[derive(Default)]
 struct QueuedDraw {
     command: u64,
     execute: u64,
@@ -24,6 +27,7 @@ struct QueuedDraw {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct Resource {
     resource: u64,
     dimension: u32,
@@ -34,12 +38,14 @@ struct Resource {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct BoundView {
     resource: Resource,
     slot: u32,
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct BoundConstant {
     buffer: u64,
     upload_serial: u64,
@@ -49,6 +55,7 @@ struct BoundConstant {
 }
 
 #[repr(C)]
+#[derive(Default)]
 struct DrawTarget {
     view: BoundView,
     snapshot: ColourSnapshot,

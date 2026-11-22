@@ -241,7 +241,7 @@ pub(super) extern "C" fn rsf_ac7_capture_sampled(interval: u32) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_sample() -> CaptureInterval {
+pub(super) extern "C" fn rsf_ac7_capture_sample() -> CaptureInterval {
     let observed = CaptureInterval::load();
     if rsf_ac7_capture_sampled(observed.interval) {
         observed

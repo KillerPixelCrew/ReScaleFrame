@@ -19,13 +19,14 @@ fn is_contact_light(hash: u32) -> bool {
 }
 
 #[repr(C)]
+#[derive(Default)]
 pub(crate) struct BeforeDrawPlan {
-    colour_role: *const c_char,
-    loss_role: *const c_char,
-    input_roles: [*const c_char; 6],
-    input_slots: u32,
-    sampler_slots: u32,
-    constant_slots: u32,
+    pub(crate) colour_role: *const c_char,
+    pub(crate) loss_role: *const c_char,
+    pub(crate) input_roles: [*const c_char; 6],
+    pub(crate) input_slots: u32,
+    pub(crate) sampler_slots: u32,
+    pub(crate) constant_slots: u32,
     pub(crate) ps_hash: u32,
     pub(crate) lighting: u32,
 }
@@ -36,12 +37,12 @@ const _: () = {
 };
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_is_cloud_composite(hash: u32) -> bool {
+pub(crate) extern "C" fn rsf_ac7_capture_is_cloud_composite(hash: u32) -> bool {
     hash == CLOUD_COMPOSITE
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_plan_before_draw(
+pub(crate) extern "C" fn rsf_ac7_capture_plan_before_draw(
     capture: CaptureInterval,
     width: u32,
     height: u32,
@@ -152,7 +153,7 @@ fn begin_lighting_pair(capture: CaptureInterval) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_take_lighting_after(
+pub(crate) extern "C" fn rsf_ac7_capture_take_lighting_after(
     capture: CaptureInterval,
     draw: &LightingDraw,
 ) -> bool {
@@ -161,7 +162,7 @@ extern "C" fn rsf_ac7_capture_take_lighting_after(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_colour_snapshot_available(
+pub(crate) extern "C" fn rsf_ac7_capture_colour_snapshot_available(
     capture: CaptureInterval,
     lighting: bool,
 ) -> bool {
@@ -185,10 +186,19 @@ pub(crate) struct ColourSnapshot {
     pub(crate) result: i32,
 }
 
+impl Default for ColourSnapshot {
+    fn default() -> Self {
+        Self {
+            name: [0; 96],
+            result: 0,
+        }
+    }
+}
+
 type ReadColour = unsafe extern "C" fn(*mut c_void, *const c_char) -> i32;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_colour_snapshot(
+pub(crate) unsafe extern "C" fn rsf_ac7_capture_colour_snapshot(
     capture: CaptureInterval,
     role: *const c_char,
     lighting: bool,

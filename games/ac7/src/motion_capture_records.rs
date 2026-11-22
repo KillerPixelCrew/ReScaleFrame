@@ -631,27 +631,34 @@ unsafe extern "C" fn rsf_ac7_capture_store_blob(
     let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
         return size == 0;
     };
+    match store_blob(capture, bytes) {
+        Some(blob) => {
+            *id = blob;
+            true
+        }
+        None => false,
+    }
+}
+
+fn store_blob(capture: CaptureInterval, bytes: &[u8]) -> Option<u32> {
     let mut records = records();
-    if !rsf_ac7_capture_current(capture.session) {
-        return true;
+    if bytes.is_empty() || !rsf_ac7_capture_current(capture.session) {
+        return Some(0);
     }
     if let Some(index) = records.blobs.iter().position(|blob| blob == bytes) {
-        *id = (index + 1) as u32;
-        return true;
+        return Some((index + 1) as u32);
     }
     if records.blobs.len() >= MAX_BLOBS || bytes.len() > BLOB_BUDGET - records.blob_bytes {
         records.blob_dropped = records.blob_dropped.wrapping_add(1);
-        return true;
+        return Some(0);
     }
     let mut blob = Vec::new();
-    if blob.try_reserve_exact(size).is_err() || records.blobs.try_reserve(1).is_err() {
-        return false;
-    }
+    blob.try_reserve_exact(bytes.len()).ok()?;
+    records.blobs.try_reserve(1).ok()?;
     blob.extend_from_slice(bytes);
-    records.blob_bytes += size;
+    records.blob_bytes += bytes.len();
     records.blobs.push(blob);
-    *id = records.blobs.len() as u32;
-    true
+    Some(records.blobs.len() as u32)
 }
 
 pub(super) fn reset_records() {

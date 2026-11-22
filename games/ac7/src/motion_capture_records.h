@@ -38,104 +38,6 @@ struct RootRecord {
 };
 
 struct NativeRootScope { uint64_t id, view; };
-struct QueuedScope {
-    uint64_t scope, view, family, command_list;
-    uint32_t native_frame, queue_uid;
-};
-struct GeometryScope {
-    uint64_t native_frame, primitive, material;
-    uint32_t geometry_capacity, role;
-};
-struct MotionQueuedDraw {
-    uint64_t command, execute;
-    QueuedScope scope;
-};
-struct MotionResource {
-    uint64_t resource;
-    uint32_t dimension, width, height, depth, format;
-};
-struct MotionBoundView {
-    MotionResource resource;
-    uint32_t slot;
-};
-struct MotionBoundConstant {
-    uint64_t buffer, upload_serial;
-    uint32_t slot, blob, readback;
-};
-struct MotionDispatch {
-    NativeRootScope root;
-    MotionQueuedDraw queued;
-    uint64_t qpc, indirect;
-    uint32_t thread, groups[3], offset, cs_hash;
-    uint32_t input_count, output_count, constant_count;
-    MotionBoundView inputs[128], outputs[8];
-    MotionBoundConstant constants[14];
-};
-struct MotionDrawInput {
-    uint64_t resource;
-    uint32_t slot, width, height, format;
-};
-struct MotionColourSnapshot {
-    char name[96];
-    int32_t result;
-};
-struct MotionDrawTarget {
-    MotionBoundView view;
-    MotionColourSnapshot snapshot;
-};
-struct MotionDrawConstants {
-    MotionBoundConstant entries[14];
-    uint32_t count;
-};
-struct MotionDraw {
-    NativeRootScope root;
-    MotionQueuedDraw queued;
-    uint64_t qpc, target, layout;
-    uint32_t thread, draw_index, format, width, height, target_count, depth_bound, indexed, elements;
-    uint32_t shader_hashes[5], topology, stride;
-    float viewport_x, viewport_y;
-    uint32_t viewport_width, viewport_height;
-    uint32_t input_count, ps_resource_count, vs_resource_count, render_target_count;
-    MotionDrawInput inputs[16];
-    MotionBoundView ps_resources[128], vs_resources[128];
-    MotionDrawTarget render_targets[8];
-    MotionResource depth;
-    MotionDrawConstants constants[5];
-    uint64_t context;
-};
-struct MotionBeforeDrawPlan;
-struct MotionSampler {
-    uint32_t slot, filter, address[3], comparison;
-    float min_lod, max_lod;
-};
-struct MotionBeforeDraw {
-    MotionQueuedDraw queued;
-    uint64_t qpc;
-    uint32_t thread, draw_index, input_count, sampler_count, constant_count;
-    MotionDrawTarget colour, loss, inputs[6];
-    MotionSampler samplers[6];
-    MotionBoundConstant constants[2];
-    uint64_t context;
-};
-struct MotionGeometryPlan;
-struct MotionGeometryStream {
-    uint64_t buffer;
-    uint32_t slot, stride, offset, source_bytes, sample_bytes, blob;
-};
-struct MotionGeometryVsBuffer {
-    uint64_t resource;
-    uint32_t slot, format, offset, source_bytes, sample_bytes, blob;
-};
-struct MotionGeometry {
-    MotionQueuedDraw queued;
-    GeometryScope scope;
-    uint64_t qpc, layout;
-    uint32_t kind, count, start;
-    int32_t base_vertex;
-    uint32_t instances, start_instance, stream_count, vs_buffer_count;
-    MotionGeometryStream streams[32];
-    MotionGeometryVsBuffer vs_buffers[3];
-};
 enum CommandAdvance : uint32_t { command_stop, command_next, command_failed };
 enum class MotionRootInstall : uint32_t {
     already_installed, rhi_refused, entry_refused, rolled_back, installed, partial_teardown,
@@ -172,21 +74,8 @@ bool rsf_ac7_capture_record_root(const RootRecord* root);
 
 bool rsf_ac7_capture_commands_changed(const RootRecord* root, uint64_t link, uint32_t uid);
 CommandAdvance rsf_ac7_capture_associate_command(RootRecord* root, uint64_t command, uint64_t execute);
-QueuedScope rsf_ac7_capture_queued_scope(uint64_t command, uint64_t execute, bool observed);
 bool rsf_ac7_capture_execution_pass(const rsf_game_render_pass* pass);
 void rsf_ac7_capture_execution_root(RootRecord* root);
-GeometryScope rsf_ac7_capture_geometry_scope();
-
-// Ordinary draws, dispatches and geometry preflight before querying D3D. Before-draw
-// diagnostics take their snapshots before the shared final admission check. A false
-// commit result reports a serialization or allocation failure.
-bool rsf_ac7_capture_can_record_draw(MotionCaptureInterval capture);
-bool rsf_ac7_capture_record_draw(MotionCaptureInterval capture, const MotionDraw* draw);
-bool rsf_ac7_capture_record_dispatch(MotionCaptureInterval capture, const MotionDispatch* dispatch);
-bool rsf_ac7_capture_record_geometry(MotionCaptureInterval capture, const MotionGeometryPlan* plan,
-    const MotionGeometry* draw);
-bool rsf_ac7_capture_record_before_draw(MotionCaptureInterval capture, const MotionBeforeDrawPlan* plan,
-    const MotionBeforeDraw* draw);
 
 bool rsf_ac7_capture_store_blob(MotionCaptureInterval capture, const unsigned char* bytes,
     std::size_t size, uint32_t* id);
@@ -198,30 +87,4 @@ static_assert(sizeof(MotionRootHookEffects) == 24 && offsetof(MotionRootHookEffe
 static_assert(sizeof(rsf_ac7_velocity_facts) == 60);
 static_assert(sizeof(EngineRecord) == 264 && offsetof(EngineRecord, previous) == 200);
 static_assert(sizeof(RootRecord) == 376 && offsetof(RootRecord, output_name) == 304);
-static_assert(sizeof(NativeRootScope) == 16 && sizeof(QueuedScope) == 40 && sizeof(GeometryScope) == 32);
-static_assert(sizeof(MotionQueuedDraw) == 56 && sizeof(MotionResource) == 32);
-static_assert(sizeof(MotionBoundView) == 40 && offsetof(MotionBoundView, slot) == 32);
-static_assert(sizeof(MotionBoundConstant) == 32 && offsetof(MotionBoundConstant, readback) == 24);
-static_assert(sizeof(MotionDispatch) == 6016 && offsetof(MotionDispatch, qpc) == 72);
-static_assert(offsetof(MotionDispatch, inputs) == 128 && offsetof(MotionDispatch, outputs) == 5248 &&
-    offsetof(MotionDispatch, constants) == 5568);
-static_assert(sizeof(MotionDrawInput) == 24 && offsetof(MotionDrawInput, slot) == 8);
-static_assert(sizeof(MotionColourSnapshot) == 100 && offsetof(MotionColourSnapshot, result) == 96);
-static_assert(sizeof(MotionDrawTarget) == 144 && offsetof(MotionDrawTarget, snapshot) == 40);
-static_assert(sizeof(MotionDrawConstants) == 456 && offsetof(MotionDrawConstants, count) == 448);
-static_assert(sizeof(MotionDraw) == 14288 && offsetof(MotionDraw, qpc) == 72);
-static_assert(offsetof(MotionDraw, context) == 14280);
-static_assert(offsetof(MotionDraw, shader_hashes) == 132 && offsetof(MotionDraw, viewport_x) == 160);
-static_assert(offsetof(MotionDraw, inputs) == 192 && offsetof(MotionDraw, ps_resources) == 576);
-static_assert(offsetof(MotionDraw, vs_resources) == 5696 && offsetof(MotionDraw, render_targets) == 10816);
-static_assert(offsetof(MotionDraw, depth) == 11968 && offsetof(MotionDraw, constants) == 12000);
-static_assert(sizeof(MotionSampler) == 32 && offsetof(MotionSampler, min_lod) == 24);
-static_assert(sizeof(MotionBeforeDraw) == 1504 && offsetof(MotionBeforeDraw, colour) == 88);
-static_assert(offsetof(MotionBeforeDraw, context) == 1496);
-static_assert(offsetof(MotionBeforeDraw, inputs) == 376 && offsetof(MotionBeforeDraw, samplers) == 1240 &&
-    offsetof(MotionBeforeDraw, constants) == 1432);
-static_assert(sizeof(MotionGeometryStream) == 32 && offsetof(MotionGeometryStream, blob) == 28);
-static_assert(sizeof(MotionGeometryVsBuffer) == 32 && offsetof(MotionGeometryVsBuffer, blob) == 28);
-static_assert(sizeof(MotionGeometry) == 1256 && offsetof(MotionGeometry, qpc) == 88);
-static_assert(offsetof(MotionGeometry, base_vertex) == 116 && offsetof(MotionGeometry, streams) == 136 &&
-    offsetof(MotionGeometry, vs_buffers) == 1160);
+static_assert(sizeof(NativeRootScope) == 16);

@@ -2,19 +2,12 @@
 #include <rescaleframe/ac7_hooks.h>
 #include <rescaleframe/ac7_memory.h>
 #include <rescaleframe/ac7_motion_capture.h>
-#include <rescaleframe/constant_buffer_read.h>
-#include <rescaleframe/frame_tap.h>
-#include <rescaleframe/texture_dump.h>
-#include "motion_capture_observations.h"
 #include "motion_capture_records.h"
 #include "motion_capture_session.h"
 
 #include <windows.h>
-#include <d3d11.h>
-#include <d3dcompiler.h>
 #include <dxgi.h>
 #include <MinHook.h>
-#include <wrl/client.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -24,7 +17,13 @@
 #include <utility>
 #include <vector>
 
-using Microsoft::WRL::ComPtr;
+
+extern "C" bool rsf_ac7_capture_read_memory(void* destination, const void* source, size_t size)
+{
+    return rsf::ac7::copy_memory(destination, source, size);
+}
+
+extern "C" void rsf_ac7_capture_set_sample(bool enabled);
 
 namespace {
 using ShouldFn = bool(*)(void*, void*, bool);
@@ -54,7 +53,6 @@ void capture_failed(MotionCaptureInterval observed) noexcept
 {
     rsf_ac7_capture_fail(observed);
 }
-void capture_failed() noexcept { capture_failed(rsf_ac7_capture_interval()); }
 
 using rsf::ac7::copy_memory;
 using rsf::ac7::read;
@@ -314,16 +312,6 @@ void hooked_graph_process(void* graph, void* output_reference, void* context)
     if (r.fields_valid && r.output_node) { graph_output(r); associate_commands(r); }
     record_root(r);
 }
-MotionQueuedDraw queued_draw()
-{
-    MotionQueuedDraw draw{};
-    const auto* current_command = rsf_ac7_capture_current_command_address();
-    if (current_command && copy_memory(&draw.command, current_command, sizeof(draw.command)) &&
-        draw.command && read(draw.command, 8, draw.execute)) {
-        draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, true);
-    } else draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, false);
-    return draw;
-}
 bool install_root_hooks(void** targets, uint32_t count)
 {
     // Slot order matches ROOT_SITES in motion_capture_records/root_hooks.rs.
@@ -368,294 +356,6 @@ void install_roots(unsigned char* base)
         say("renderer root capture installed: graph/RHI associations, main temporal graph and widget producers; engine arguments unchanged"); return;
     }
 }
-bool copy_upload(void* user, const unsigned char* bytes, size_t size) noexcept try
-{
-    static_cast<std::vector<unsigned char>*>(user)->assign(bytes, bytes + size);
-    return true;
-}
-catch (...) { return false; }
-
-template<class Visit>
-void visit_constants(MotionCaptureInterval capture, ID3D11DeviceContext* context, void* const* buffers,
-                     uint32_t mask, bool lighting, Visit visit)
-{
-    for (uint32_t slot = 0; slot < 14; ++slot) {
-        if (!buffers[slot] || !(mask & (1u << slot))) continue;
-        std::vector<unsigned char> bytes;
-        MotionConstantRecord record{};
-        const auto source = rsf_ac7_capture_constant_source(capture, buffers[slot], lighting, &record, &bytes, copy_upload);
-        if (source == constant_stopped) break;
-        if (source == constant_failed) throw std::bad_alloc{};
-        bool fallback = false;
-        if (source == constant_try_read) {
-            auto* buffer = static_cast<ID3D11Buffer*>(buffers[slot]);
-            D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
-            const auto read = rsf_ac7_capture_reserve_constant_read(capture, desc.ByteWidth, lighting);
-            if (read == constant_read_stopped) break;
-            fallback = read == constant_read_reserved;
-            if (fallback) {
-                bytes.resize(desc.ByteWidth);
-                ComPtr<ID3D11Device> device; context->GetDevice(&device);
-                if (rsf_read_constant_buffer(device.Get(), context, buffer, bytes.data(), desc.ByteWidth) != RSF_CONSTANT_BUFFER_OK) {
-                    bytes.clear();
-                    rsf_ac7_capture_constant_read_failed(capture);
-                }
-            }
-        }
-        const uint32_t id = bytes.empty() ? 0 : save_blob(capture, bytes);
-        visit(MotionBoundConstant{record.buffer, record.upload_serial, slot, id, uint32_t(fallback)});
-    }
-}
-uint32_t shader_hash(void* pointer, uint32_t stage) { return rsf_ac7_capture_shader_facts(pointer, stage).hash; }
-uint32_t shader_constants(void* pointer, uint32_t stage) { return rsf_ac7_capture_shader_facts(pointer, stage).constant_mask; }
-uint32_t disassemble_constants(const void* bytes, size_t size) noexcept
-{
-    // UE strips reflection data. DXBC declarations still name the actual CB slots consumed.
-    // Loaded once and kept: this runs on every shader creation, possibly under the loader lock.
-    static const auto disassemble = [] {
-        HMODULE module = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        return module ? reinterpret_cast<decltype(&D3DDisassemble)>(
-            reinterpret_cast<void*>(GetProcAddress(module, "D3DDisassemble"))) : nullptr;
-    }();
-    ComPtr<ID3DBlob> code;
-    if (disassemble && SUCCEEDED(disassemble(bytes, size, 0, nullptr, &code)) && code) {
-        return rsf_ac7_capture_declared_constants(
-            static_cast<const unsigned char*>(code->GetBufferPointer()), code->GetBufferSize());
-    }
-    return rsf_ac7_capture_declared_constants(nullptr, 0);
-}
-// These dimension values select the optional fields in the Rust row writers.
-static_assert(D3D11_RESOURCE_DIMENSION_TEXTURE2D == 3 && D3D11_RESOURCE_DIMENSION_TEXTURE3D == 4);
-MotionResource resource_facts(ID3D11Resource* r)
-{
-    D3D11_RESOURCE_DIMENSION dimension{}; r->GetType(&dimension);
-    MotionResource facts{uint64_t(uintptr_t(r)), uint32_t(dimension), 0, 0, 0, 0};
-    if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
-        D3D11_TEXTURE2D_DESC d{}; static_cast<ID3D11Texture2D*>(r)->GetDesc(&d);
-        facts.width = d.Width; facts.height = d.Height; facts.format = uint32_t(d.Format);
-    } else if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D) {
-        D3D11_TEXTURE3D_DESC d{}; static_cast<ID3D11Texture3D*>(r)->GetDesc(&d);
-        facts.width = d.Width; facts.height = d.Height; facts.depth = d.Depth; facts.format = uint32_t(d.Format);
-    }
-    return facts;
-}
-
-template<class View, size_t N, class Visit> void visit_bound_views(View* (&views)[N], Visit visit)
-{
-    for (size_t i = 0; i < N; ++i) {
-        if (!views[i]) continue;
-        ComPtr<ID3D11Resource> r; views[i]->GetResource(&r);
-        visit(MotionBoundView{resource_facts(r.Get()), uint32_t(i)});
-        views[i]->Release();
-    }
-}
-const char* colour_stage(uint32_t hash)
-{
-    // Captured AC7 producers, mapped through original DXBC and the RenoDX AC7 reference.
-    // These names select diagnostics only and never change rendering decisions.
-    switch (hash) {
-    case 0x6bcbd787u: case 0x5fb31417u: return "tonemap";
-    case 0xa5c9147bu: return "scene_effect";
-    case 0xb2f7719du: return "hud";
-    case 0x2136e125u: case 0xa7441be5u: return "composite";
-    default: return rsf_ac7_capture_is_cloud_composite(hash) ? "cloud_composite_after" : nullptr;
-    }
-}
-MotionColourSnapshot colour_snapshot(MotionCaptureInterval capture, ID3D11DeviceContext* context,
-                                     ID3D11Resource* resource, const char* role, bool lighting = false)
-{
-    if (!role || !resource || !rsf_ac7_capture_colour_snapshot_available(capture, lighting)) return {};
-    ComPtr<ID3D11Texture2D> texture;
-    if (FAILED(resource->QueryInterface(IID_PPV_ARGS(&texture)))) return {};
-    MotionColourSnapshot snapshot{};
-    struct Readback { ID3D11DeviceContext* context; ID3D11Texture2D* texture; } readback{context, texture.Get()};
-    const auto dump = [](void* user, const char* path) noexcept -> int32_t {
-        const auto& input = *static_cast<const Readback*>(user);
-        ComPtr<ID3D11Device> device; input.context->GetDevice(&device);
-        rsf_texture_dump_options options{}; options.struct_size = sizeof(options);
-        options.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION; options.output_prefix_utf8 = path;
-        return rsf_dump_texture_bytes(device.Get(), input.context, input.texture, &options);
-    };
-    static_assert(RSF_TEXTURE_OK == 0);
-    if (!rsf_ac7_capture_colour_snapshot(capture, role, lighting, &readback, dump, &snapshot))
-        throw std::bad_alloc{};
-    return snapshot;
-}
-MotionDrawTarget sampled_target(MotionCaptureInterval capture, ID3D11DeviceContext* context,
-    ID3D11Resource* resource, const char* role, bool lighting, uint32_t slot)
-{
-    const auto facts = resource_facts(resource);
-    const auto snapshot = colour_snapshot(capture, context, resource, role, lighting);
-    return {{facts, slot}, snapshot};
-}
-void before_draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw* d) try
-{
-    if (!capture) return;
-    MotionBeforeDrawPlan plan{};
-    if (!rsf_ac7_capture_plan_before_draw(capture, d->target_width, d->target_height, d->pixel_shader, &plan)) return;
-    auto* context = static_cast<ID3D11DeviceContext*>(d->context);
-    const bool lighting = plan.lighting != 0;
-    MotionBeforeDraw row{};
-    row.qpc = tick(); row.thread = GetCurrentThreadId();
-    row.draw_index = d->draw_index;
-    row.context = uint64_t(uintptr_t(d->context));
-    row.colour = sampled_target(capture, context, static_cast<ID3D11Resource*>(d->render_target),
-        plan.colour_role, lighting, 0);
-
-    ComPtr<ID3D11RenderTargetView> colour_target, loss_target;
-    if (plan.loss_role) {
-        ID3D11RenderTargetView* targets[2]{}; context->OMGetRenderTargets(2, targets, nullptr);
-        colour_target.Attach(targets[0]); loss_target.Attach(targets[1]);
-        if (loss_target) {
-            ComPtr<ID3D11Resource> texture; loss_target->GetResource(&texture);
-            row.loss = sampled_target(capture, context, texture.Get(), plan.loss_role, lighting, 1);
-        }
-    }
-
-    ID3D11ShaderResourceView* views[6]{}; context->PSGetShaderResources(0, plan.input_slots, views);
-    ComPtr<ID3D11ShaderResourceView> retained[6];
-    for (uint32_t slot = 0; slot < plan.input_slots; ++slot) retained[slot].Attach(views[slot]);
-    for (uint32_t slot = 0; slot < plan.input_slots; ++slot) {
-        if (!retained[slot]) continue;
-        ComPtr<ID3D11Resource> texture; retained[slot]->GetResource(&texture);
-        row.inputs[row.input_count++] = sampled_target(capture, context, texture.Get(),
-            plan.input_roles[slot], lighting, slot);
-    }
-
-    ComPtr<ID3D11Buffer> retained_buffers[2];
-    if (lighting) {
-        ID3D11SamplerState* samplers[6]{}; context->PSGetSamplers(0, plan.sampler_slots, samplers);
-        for (uint32_t slot = 0; slot < plan.sampler_slots; ++slot) if (samplers[slot]) {
-            D3D11_SAMPLER_DESC sampler{}; samplers[slot]->GetDesc(&sampler); samplers[slot]->Release();
-            row.samplers[row.sampler_count++] = {slot, uint32_t(sampler.Filter),
-                {uint32_t(sampler.AddressU), uint32_t(sampler.AddressV), uint32_t(sampler.AddressW)},
-                uint32_t(sampler.ComparisonFunc), sampler.MinLOD, sampler.MaxLOD};
-        }
-        // Read the two live shader inputs before the light executes, using the reserved quota.
-        ID3D11Buffer* raw[2]{}; context->PSGetConstantBuffers(0, plan.constant_slots, raw);
-        void* buffers[14]{};
-        for (uint32_t i = 0; i < plan.constant_slots; ++i) { retained_buffers[i].Attach(raw[i]); buffers[i] = raw[i]; }
-        const uint32_t mask = (1u << plan.constant_slots) - 1;
-        visit_constants(capture, context, buffers, mask, lighting,
-            [&](const MotionBoundConstant& record) { row.constants[row.constant_count++] = record; });
-        row.queued = queued_draw();
-    }
-    if (!rsf_ac7_capture_record_before_draw(capture, &plan, &row)) capture_failed(capture);
-}
-catch (...) { capture_failed(capture); }
-void draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw* d) try
-{
-    if (!capture) return;
-    auto* c = static_cast<ID3D11DeviceContext*>(d->context);
-    const uint32_t ps = shader_hash(d->pixel_shader, 1);
-    const MotionLightingDraw identity{uint64_t(uintptr_t(d->context)), uint64_t(uintptr_t(d->render_target)),
-        d->draw_index, ps};
-    const bool matched_light = rsf_ac7_capture_take_lighting_after(capture, &identity);
-    if (!rsf_ac7_capture_can_record_draw(capture)) return;
-    ComPtr<ID3D11GeometryShader> gs; ComPtr<ID3D11HullShader> hs; ComPtr<ID3D11DomainShader> ds;
-    c->GSGetShader(&gs, nullptr, nullptr); c->HSGetShader(&hs, nullptr, nullptr); c->DSGetShader(&ds, nullptr, nullptr);
-    MotionDraw draw{};
-    draw.root = rsf_ac7_capture_root_scope();
-    draw.qpc = tick();
-    draw.thread = GetCurrentThreadId();
-    draw.draw_index = d->draw_index;
-    draw.context = identity.context;
-    draw.target = uint64_t(uintptr_t(d->render_target));
-    draw.format = d->target_format;
-    draw.width = d->target_width;
-    draw.height = d->target_height;
-    draw.target_count = d->target_count;
-    draw.depth_bound = d->depth_bound;
-    draw.indexed = d->indexed;
-    draw.elements = d->element_count;
-    draw.shader_hashes[0] = shader_hash(d->vertex_shader, 0);
-    draw.shader_hashes[1] = ps;
-    draw.shader_hashes[2] = shader_hash(gs.Get(), 2);
-    draw.shader_hashes[3] = shader_hash(hs.Get(), 3);
-    draw.shader_hashes[4] = shader_hash(ds.Get(), 4);
-    draw.layout = uint64_t(uintptr_t(d->input_layout));
-    draw.topology = d->topology;
-    draw.stride = d->vertex_stride;
-    draw.viewport_x = d->viewport_x;
-    draw.viewport_y = d->viewport_y;
-    draw.viewport_width = d->viewport_width;
-    draw.viewport_height = d->viewport_height;
-    static_assert(std::size(draw.inputs) == RSF_FRAME_TAP_MAX_INPUTS);
-    if (d->input_count > std::size(draw.inputs)) { capture_failed(capture); return; }
-    draw.input_count = d->input_count;
-    for (uint32_t i = 0; i < draw.input_count; ++i) {
-        const auto& input = d->inputs[i];
-        draw.inputs[i] = {uint64_t(uintptr_t(input.texture)), input.slot, input.width, input.height, input.format};
-    }
-    ID3D11ShaderResourceView* views[128]{}; c->PSGetShaderResources(0, 128, views);
-    visit_bound_views(views, [&](const MotionBoundView& view) { draw.ps_resources[draw.ps_resource_count++] = view; });
-    c->VSGetShaderResources(0, 128, views);
-    visit_bound_views(views, [&](const MotionBoundView& view) { draw.vs_resources[draw.vs_resource_count++] = view; });
-    ID3D11RenderTargetView* targets[8]{}; ComPtr<ID3D11DepthStencilView> depth;
-    c->OMGetRenderTargets(8, targets, &depth);
-    ComPtr<ID3D11RenderTargetView> retained[8];
-    for (uint32_t i = 0; i < 8; ++i) retained[i].Attach(targets[i]);
-    const bool large = d->target_width >= 400 && d->target_height >= 200;
-    for (uint32_t i = 0; i < 8; ++i) {
-        auto target = std::move(retained[i]);
-        if (!target) continue;
-        ComPtr<ID3D11Resource> resource; target->GetResource(&resource);
-        auto& record = draw.render_targets[draw.render_target_count++];
-        record.view = {resource_facts(resource.Get()), i};
-        if (i == 0) {
-            const bool light_after = matched_light && record.view.resource.resource == identity.target;
-            // The contact-light shaders are separate from the colour_stage producers.
-            const auto* role = large ? colour_stage(ps) : nullptr;
-            if (light_after) role = "contact_light_after";
-            record.snapshot = colour_snapshot(capture, c, resource.Get(), role, light_after);
-        } else if (i == 1 && large && rsf_ac7_capture_is_cloud_composite(ps)) {
-            record.snapshot = colour_snapshot(capture, c, resource.Get(), "cloud_loss_after");
-        }
-    }
-    if (depth) {
-        ComPtr<ID3D11Resource> resource; depth->GetResource(&resource);
-        draw.depth = resource_facts(resource.Get());
-    }
-    void* const shaders[]{d->vertex_shader, d->pixel_shader, gs.Get(), hs.Get(), ds.Get()};
-    void* const* const buffers[]{d->vertex_constants, d->pixel_constants, d->geometry_constants,
-        d->hull_constants, d->domain_constants};
-    for (uint32_t i = 0; i < 5; ++i) {
-        if (!shaders[i]) continue;
-        auto& constants = draw.constants[i];
-        visit_constants(capture, c, buffers[i], shader_constants(shaders[i], i), false,
-            [&](const MotionBoundConstant& record) { constants.entries[constants.count++] = record; });
-    }
-    draw.queued = queued_draw();
-    if (!rsf_ac7_capture_record_draw(capture, &draw)) capture_failed(capture);
-}
-catch (...) { capture_failed(capture); }
-void compute_capture(MotionCaptureInterval capture, void* context, uint32_t x, uint32_t y, uint32_t z, void* indirect, uint32_t offset) try
-{
-    if (!capture || !rsf_ac7_capture_can_record_draw(capture)) return;
-    auto* c = static_cast<ID3D11DeviceContext*>(context);
-    ComPtr<ID3D11ComputeShader> shader; c->CSGetShader(&shader, nullptr, nullptr);
-    MotionDispatch dispatch{};
-    dispatch.root = rsf_ac7_capture_root_scope();
-    dispatch.qpc = tick();
-    dispatch.thread = GetCurrentThreadId();
-    dispatch.groups[0] = x; dispatch.groups[1] = y; dispatch.groups[2] = z;
-    dispatch.indirect = uint64_t(uintptr_t(indirect));
-    dispatch.offset = offset;
-    dispatch.cs_hash = shader_hash(shader.Get(), 5);
-    ID3D11ShaderResourceView* views[128]{}; c->CSGetShaderResources(0, 128, views);
-    visit_bound_views(views, [&](const MotionBoundView& view) { dispatch.inputs[dispatch.input_count++] = view; });
-    ID3D11UnorderedAccessView* outputs[8]{}; c->CSGetUnorderedAccessViews(0, 8, outputs);
-    visit_bound_views(outputs, [&](const MotionBoundView& view) { dispatch.outputs[dispatch.output_count++] = view; });
-    ID3D11Buffer* cb[14]{}; void* borrowed[14]{}; c->CSGetConstantBuffers(0, 14, cb);
-    for (uint32_t i = 0; i < 14; ++i) borrowed[i] = cb[i];
-    visit_constants(capture, c, borrowed, shader_constants(shader.Get(), 5), false,
-        [&](const MotionBoundConstant& record) { dispatch.constants[dispatch.constant_count++] = record; });
-    for (auto* b : cb) if (b) b->Release();
-    dispatch.queued = queued_draw();
-    if (!rsf_ac7_capture_record_dispatch(capture, &dispatch)) capture_failed(capture);
-}
-catch (...) { capture_failed(capture); }
-
 bool write_file(const char* path, const unsigned char* data, size_t bytes) noexcept
 {
     FILE* f = std::fopen(path, "wb");
@@ -696,22 +396,8 @@ bool create_capture_directory(const char* path) noexcept
     return CreateDirectoryA(path, nullptr) != FALSE;
 }
 
-void set_sample(bool enabled) noexcept
-{
-    if (!enabled) {
-        rsf_frame_tap_set_research_callbacks(nullptr, nullptr, nullptr);
-        return;
-    }
-    rsf_frame_tap_set_research_phase_callbacks(
-        [](void*, const rsf_frame_tap_target_draw* d) { before_draw_capture(rsf_ac7_capture_sample(), d); },
-        [](void*, const rsf_frame_tap_target_draw* d) { draw_capture(rsf_ac7_capture_sample(), d); },
-        [](void*, void* context, uint32_t x, uint32_t y, uint32_t z, void* indirect, uint32_t offset) {
-            compute_capture(rsf_ac7_capture_sample(), context, x, y, z, indirect, offset);
-        }, nullptr);
-}
-
 const MotionCaptureEffects capture_effects{
-    poll_capture, capture_stamp, create_capture_directory, set_sample, write_file, finish_stats,
+    poll_capture, capture_stamp, create_capture_directory, rsf_ac7_capture_set_sample, write_file, finish_stats,
 };
 } // namespace
 
@@ -745,129 +431,6 @@ extern "C" void rsf_ac7_motion_capture_shutdown(void)
     if (!rsf_ac7_capture_remove_roots(&root_hook_effects))
         say("renderer root capture shutdown left hooks pending removal");
 }
-extern "C" void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, const void* bytes, uint32_t size)
-{
-    if (!rsf_ac7_capture_observe_shader(shader, stage, bytes, size, disassemble_constants)) capture_failed();
-}
-namespace {
-static_assert(D3D11_BIND_CONSTANT_BUFFER == 4);
-// The Rust capture classifies the target and the copied input layout with these DXGI values.
-static_assert(DXGI_FORMAT_R32G32B32A32_FLOAT == 2 && DXGI_FORMAT_R32G32B32_FLOAT == 6 &&
-    DXGI_FORMAT_R16G16_UNORM == 35);
-
-void capture_geometry(MotionCaptureInterval capture, const rsf_frame_tap_geometry* draw) try
-{
-    if (!draw || !capture) return;
-    MotionGeometryPlan plan{};
-    const auto admission = rsf_ac7_capture_plan_geometry(capture, draw->format, draw->depth_view != nullptr,
-        draw->input_layout, draw->vertex_shader, &plan);
-    if (admission == geometry_failed) { capture_failed(capture); return; }
-    if (admission != geometry_admitted) return;
-
-    auto* context = static_cast<ID3D11DeviceContext*>(draw->context);
-    if (!context || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
-    ComPtr<ID3D11Device> device; context->GetDevice(&device);
-    MotionGeometry row{};
-    row.scope = rsf_ac7_capture_geometry_scope();
-    row.qpc = tick();
-    row.layout = uint64_t(uintptr_t(draw->input_layout));
-    row.kind = draw->kind;
-    row.count = draw->count;
-    row.start = draw->start;
-    row.base_vertex = draw->base_vertex;
-    row.instances = draw->instances;
-    row.start_instance = draw->start_instance;
-
-    const auto can_read = [&] { return rsf_ac7_capture_geometry_read(capture, plan.bucket, false); };
-    constexpr uint32_t max_sample_bytes = 16384u;
-    // Copy while the callback still owns the binding and its contents. Later uploads can reuse it.
-    const auto read_buffer = [&](ID3D11Buffer* buffer, uint32_t offset, uint32_t maximum) {
-        std::vector<unsigned char> data;
-        D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
-        if (offset >= desc.ByteWidth) return data;
-        const uint32_t bytes = std::min(desc.ByteWidth - offset, std::min(maximum, max_sample_bytes));
-        if (!bytes) return data;
-        D3D11_BUFFER_DESC staging{};
-        staging.ByteWidth = bytes;
-        staging.Usage = D3D11_USAGE_STAGING;
-        staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        if (!rsf_ac7_capture_geometry_read(capture, plan.bucket, true)) return data;
-        ComPtr<ID3D11Buffer> readable;
-        if (FAILED(device->CreateBuffer(&staging, nullptr, &readable))) return data;
-        const D3D11_BOX box{offset, 0, 0, offset + bytes, 1, 1};
-        context->CopySubresourceRegion(readable.Get(), 0, 0, 0, 0, buffer, 0, &box);
-        D3D11_MAPPED_SUBRESOURCE mapped{};
-        if (SUCCEEDED(context->Map(readable.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-            data.resize(bytes);
-            std::memcpy(data.data(), mapped.pData, bytes);
-            context->Unmap(readable.Get(), 0);
-        }
-        return data;
-    };
-    struct Predication {
-        ID3D11DeviceContext* context;
-        ComPtr<ID3D11Predicate> predicate;
-        BOOL value = FALSE;
-        explicit Predication(ID3D11DeviceContext* c) : context(c) {
-            context->GetPredication(&predicate, &value);
-            context->SetPredication(nullptr, FALSE);
-        }
-        ~Predication() { context->SetPredication(predicate.Get(), value); }
-    } predication(context);
-
-    static_assert(std::size(row.streams) == sizeof(draw->vertex_buffers) / sizeof(draw->vertex_buffers[0]));
-    for (uint32_t slot = 0; slot < std::size(row.streams); ++slot) {
-        if (!(plan.ia_slots & (uint32_t(1) << slot))) continue;
-        if (!can_read()) break;
-        auto* buffer = static_cast<ID3D11Buffer*>(draw->vertex_buffers[slot]);
-        if (!buffer) continue;
-        D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
-        const uint32_t offset = draw->offsets[slot];
-        if (offset >= desc.ByteWidth) continue;
-        const uint32_t bytes = std::min(desc.ByteWidth - offset, max_sample_bytes);
-        auto data = read_buffer(buffer, offset, max_sample_bytes);
-        const auto blob = data.empty() ? 0u : save_blob(capture, data);
-        row.streams[row.stream_count++] = {
-            uint64_t(uintptr_t(buffer)), slot, draw->strides[slot], offset, desc.ByteWidth, bytes, blob,
-        };
-    }
-    static_assert(std::size(row.vs_buffers) == std::size(plan.vs_slots));
-    for (uint32_t index = 0; index < plan.vs_slot_count; ++index) {
-        if (!can_read()) continue;
-        const auto slot = plan.vs_slots[index];
-        ComPtr<ID3D11ShaderResourceView> view; context->VSGetShaderResources(slot, 1, &view);
-        if (!view) continue;
-        ComPtr<ID3D11Resource> resource; view->GetResource(&resource);
-        ComPtr<ID3D11Buffer> buffer;
-        if (FAILED(resource.As(&buffer))) continue;
-        D3D11_SHADER_RESOURCE_VIEW_DESC desc{}; view->GetDesc(&desc);
-        D3D11_BUFFER_DESC b{}; buffer->GetDesc(&b);
-        uint32_t stride = b.StructureByteStride;
-        if (desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT) stride = 16;
-        else if (desc.Format == DXGI_FORMAT_R32G32B32_FLOAT) stride = 12;
-        else if (desc.Format == DXGI_FORMAT_R32G32_FLOAT) stride = 8;
-        else if (desc.Format == DXGI_FORMAT_R32_FLOAT || desc.Format == DXGI_FORMAT_R32_TYPELESS) stride = 4;
-        const auto element = desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX
-            ? desc.BufferEx.FirstElement : desc.Buffer.FirstElement;
-        const auto elements = desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX
-            ? desc.BufferEx.NumElements : desc.Buffer.NumElements;
-        if (!stride || element > b.ByteWidth / stride || elements > UINT32_MAX / stride) continue;
-        const uint32_t offset = element * stride;
-        auto data = read_buffer(buffer.Get(), offset, elements * stride);
-        const auto bytes = static_cast<uint32_t>(data.size());
-        const auto blob = data.empty() ? 0u : save_blob(capture, data);
-        row.vs_buffers[row.vs_buffer_count++] = {
-            uint64_t(uintptr_t(buffer.Get())), slot, uint32_t(desc.Format), offset, b.ByteWidth, bytes, blob,
-        };
-    }
-    row.queued = queued_draw();
-    if (!rsf_ac7_capture_record_geometry(capture, &plan, &row)) capture_failed(capture);
-}
-catch (...) { capture_failed(capture); }
-} // namespace
-
-extern "C" void rsf_ac7_motion_capture_geometry(const rsf_frame_tap_geometry* draw)
-{ capture_geometry(rsf_ac7_capture_sample(), draw); }
 extern "C" void rsf_ac7_motion_capture_native_pass(const rsf_game_render_pass* pass, uint32_t begin)
 {
     if (!rsf_ac7_capture_execution_pass(pass)) return;

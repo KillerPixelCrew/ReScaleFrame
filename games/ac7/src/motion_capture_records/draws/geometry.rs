@@ -8,8 +8,12 @@ use crate::motion_capture_session::CaptureInterval;
 use std::fmt::{self, Write as _};
 use std::mem::{offset_of, size_of};
 
+#[cfg(windows)]
+mod capture;
+
 // Private ABI mirrored in motion_capture_records.h. Buffer identities are opaque numbers.
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct GeometryStream {
     buffer: u64,
     slot: u32,
@@ -21,6 +25,7 @@ struct GeometryStream {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct GeometryVsBuffer {
     resource: u64,
     slot: u32,
@@ -32,6 +37,7 @@ struct GeometryVsBuffer {
 }
 
 #[repr(C)]
+#[derive(Default)]
 struct Geometry {
     queued: QueuedDraw,
     scope: GeometryScope,
