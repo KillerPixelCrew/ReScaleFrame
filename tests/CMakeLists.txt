@@ -355,7 +355,7 @@ add_test(NAME d3d11_state COMMAND rsf_d3d11_state)
 set_tests_properties(d3d11_state PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_scene_promote scene_promote.cpp)
-target_link_libraries(rsf_scene_promote PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_scene_promote PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME scene_promote COMMAND rsf_scene_promote)
 set_tests_properties(scene_promote PROPERTIES TIMEOUT 120)
 

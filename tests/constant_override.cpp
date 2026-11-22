@@ -27,6 +27,14 @@ static void watch_constants(void* user, void*, void* contents, uint32_t bytes)
     }
 }
 
+static void observe_constants(void* user, void*, const void* contents, uint32_t bytes)
+{
+    auto& seen = *static_cast<Watched*>(user);
+    seen.contents = contents;
+    seen.bytes = bytes;
+    ++seen.calls;
+}
+
 struct Bindings {
     ID3D11Buffer *vs, *ps, *replacement_vs, *replacement_ps;
     unsigned calls = 0;
@@ -256,6 +264,10 @@ int main()
             context->UpdateSubresource(uploaded, 0, nullptr, upload, 16, 0);
             check(seen.calls == 3 && seen.contents != upload && upload[0] == 1.0f,
                   "A newly armed watch must be handed a copy until it says it only reads.");
+            rsf_frame_tap_set_constant_observer(16, observe_constants, &seen);
+            context->UpdateSubresource(uploaded, 0, nullptr, upload, 16, 0);
+            check(seen.calls == 4 && seen.contents == upload,
+                  "An observer must see the original upload on its first call.");
             rsf_frame_tap_set_constant_watch(0, nullptr, nullptr);
         }
         if (readback) { readback->Release(); }
@@ -268,6 +280,41 @@ int main()
     pixels(0, 0);
     check(bindings.calls == 4, "The first, instanced, tessellated and post-ClearState draws must each be offered.");
     rsf_frame_tap_set_constant_override(nullptr, nullptr);
+    // Remap the same resource across tap sessions. The second Map happens before the
+    // reinstall, so its Unmap must not deliver any pointer from the first session.
+    D3D11_BUFFER_DESC dynamic_desc{};
+    dynamic_desc.ByteWidth = 16;
+    dynamic_desc.Usage = D3D11_USAGE_DYNAMIC;
+    dynamic_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    dynamic_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    ID3D11Buffer* dynamic = nullptr;
+    check(SUCCEEDED(device->CreateBuffer(&dynamic_desc, nullptr, &dynamic)) && dynamic,
+          "The Map lifetime fixture must have a dynamic constant buffer.");
+    if (dynamic) {
+        Watched seen;
+        rsf_frame_tap_set_constant_observer(16, observe_constants, &seen);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        const bool first_map = SUCCEEDED(context->Map(dynamic, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+        check(first_map, "The tap must see the first Map.");
+        check(rsf_frame_tap_uninstall() == RSF_FRAME_TAP_OK,
+              "The first installation must retire with the Map still pending.");
+        if (first_map) context->Unmap(dynamic, 0);
+        const bool second_map = SUCCEEDED(context->Map(dynamic, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+        check(second_map, "The second Map must succeed with no installed tap.");
+        check(rsf_frame_tap_install(context, &options) == RSF_FRAME_TAP_OK,
+              "The tap must accept a new installation.");
+        rsf_frame_tap_set_constant_observer(16, observe_constants, &seen);
+        if (second_map) context->Unmap(dynamic, 0);
+        check(seen.calls == 0, "An Unmap cannot deliver a Map from a previous installation.");
+
+        const bool current_map = SUCCEEDED(context->Map(dynamic, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+        check(current_map, "The new installation must have a Map to observe.");
+        if (current_map) context->Unmap(dynamic, 0);
+        check(seen.calls == 1 && seen.bytes == 16,
+              "A Map observed by the current installation must be delivered once.");
+        rsf_frame_tap_set_constant_observer(0, nullptr, nullptr);
+        dynamic->Release();
+    }
     rsf_frame_tap_uninstall();
     context->ClearState();
     for (auto* item : {bindings.vs, bindings.ps, bindings.replacement_vs, bindings.replacement_ps}) { item->Release(); }

@@ -3187,7 +3187,12 @@ static int drain_shutdown(void)
         game_session = NULL; game_prepared = 0;
     }
     // Queued native callbacks are finished before their backend, input refs or context disappear.
-    stop_reinsert(); release_held(); rsf_frame_tap_uninstall();
+    stop_reinsert();
+    const rsf_frame_tap_result untapped = rsf_frame_tap_uninstall();
+    if (untapped != RSF_FRAME_TAP_OK && untapped != RSF_FRAME_TAP_ERROR_NOT_INSTALLED) {
+        return 1;
+    }
+    release_held();
     rsf_ac7_velocity_release();
     rsf_dlss_pipeline_stop(); bridge.started = 0;
     rsf_input_dump_cancel(0);
@@ -3624,13 +3629,13 @@ void rsf_bridge_toggle_reinsert(void)
    Separate from the toggle because it is also what a stalled plan needs. Nothing here decides
    whether reinsertion should be on; it only makes the plan describe the frame that is actually
    being drawn now. */
-/* Prepare a replacement only after the tap has detached the previous plan. */
 typedef enum reinsert_plan_result {
     REINSERT_PLAN_FAILED,
     REINSERT_PLAN_APPLIED,
     REINSERT_PLAN_ATTACHED
 } reinsert_plan_result;
 
+/* Prepare a replacement only after the tap has detached the previous plan. */
 static reinsert_plan_result apply_tail(const rsf_promote_frame_tail* tail)
 {
     rsf_frame_tap_plan plan;
