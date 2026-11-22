@@ -2,9 +2,9 @@
 use super::{Facts, Params, plan};
 use crate::com_resource::{release, retain};
 use crate::sys::rsf_ac7_cloud_depth as State;
-use std::ffi::{CStr, c_char, c_void};
+use rsf_shader_compiler::{Request, compile_system};
+use std::ffi::{CStr, c_void};
 use std::ptr::{from_ref, null_mut};
-use std::slice;
 use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_ENABLE_STRICTNESS;
 use windows::Win32::Graphics::Direct3D11::{
@@ -18,62 +18,18 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::core::Interface;
 
-type ShaderSink = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32;
-
-unsafe extern "C" {
-    fn rsf_compile_system_shader(
-        source: *const u8,
-        length: usize,
-        name: *const c_char,
-        entry: *const c_char,
-        profile: *const c_char,
-        flags: u32,
-        user: *mut c_void,
-        code: ShaderSink,
-        errors: ShaderSink,
-    ) -> i32;
-}
-
 fn compile(device: &ID3D11Device, source: &[u8], name: &CStr) -> Option<ID3D11ComputeShader> {
-    struct Reply<'a> {
-        device: &'a ID3D11Device,
-        shader: Option<ID3D11ComputeShader>,
-    }
-    unsafe extern "C" fn create(user: *mut c_void, bytes: *const u8, size: usize) -> i32 {
-        let reply = unsafe { &mut *user.cast::<Reply<'_>>() };
-        let bytes = unsafe { slice::from_raw_parts(bytes, size) };
-        match unsafe {
-            reply
-                .device
-                .CreateComputeShader(bytes, None, Some(&mut reply.shader))
-        } {
-            Ok(()) => 0,
-            Err(_) => -1,
-        }
-    }
-    unsafe extern "C" fn ignore_errors(_: *mut c_void, _: *const u8, _: usize) -> i32 {
-        0
-    }
-    let mut reply = Reply {
-        device,
-        shader: None,
-    };
-    let status = unsafe {
-        rsf_compile_system_shader(
-            source.as_ptr(),
-            source.len(),
-            name.as_ptr(),
-            c"main".as_ptr(),
-            c"cs_5_0".as_ptr(),
-            D3DCOMPILE_ENABLE_STRICTNESS,
-            (&raw mut reply).cast(),
-            create,
-            ignore_errors,
-        )
-    };
-    if status == 0 { reply.shader } else { None }
+    let code = compile_system(Request {
+        source,
+        name,
+        entry: c"main",
+        target: c"cs_5_0",
+        flags: D3DCOMPILE_ENABLE_STRICTNESS,
+    })?;
+    let mut shader = None;
+    unsafe { device.CreateComputeShader(&code, None, Some(&mut shader)) }.ok()?;
+    shader
 }
-
 /// The native effect owns dispatch and bindings. This returns one shader reference.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_ac7_create_truesky_depth_shader(device: *mut c_void) -> *mut c_void {

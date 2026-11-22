@@ -50,7 +50,7 @@ workspace = true
 [target."cfg(windows)".dependencies]
 rsf-vk-xess-fg = { path = "../vulkan/xess-fg" }
 ash = { workspace = true }
-rsf-shader-compiler = { path = "../shader_patch/compiler", default-features = false }
+rsf-shader-compiler = { path = "../shader_patch/compiler" }
 windows = { workspace = true, features = [
   "std",
   "Win32_Graphics_Direct3D",

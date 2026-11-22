@@ -19,7 +19,7 @@ rsf_add_rust_static(rsf_capture_fixtures_rust rsf_rust_capture_fixtures
 # rsf-ac7 with the engine-address overrides the WARP fixtures need. It replaces the shipping
 # rsf_ac7_rust archive in those executables, after rsf_ac7_render_scope, which does not link either.
 rsf_add_rust_static(rsf_ac7_fixture_rust rsf_rust_ac7_fixture rsf-ac7 rsf_ac7 --features warp-fixture)
-target_link_libraries(rsf_ac7_fixture_rust INTERFACE rsf_shader_compiler rsf_ac7_memory)
+target_link_libraries(rsf_ac7_fixture_rust INTERFACE rsf_ac7_memory)
 rsf_add_rust_static(rsf_anomaly_fixtures_rust rsf_rust_anomaly_fixtures
     rsf-anomaly rsf_anomaly
     --features fg-fixture,input-hook-fixture,overlay-device-fixture,motion-hooks-fixture,motion-binder-fixture,motion-device-fixture,native-hook-fixture,sr-fixtures)

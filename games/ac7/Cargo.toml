@@ -42,11 +42,11 @@ windows = { workspace = true, features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
 
 [target."cfg(windows)".dev-dependencies]
-# Unit tests link the shader compiler and the D3D11 leaves the adapter DLL gets from CMake.
+# Unit tests link the D3D11 leaves the adapter DLL gets from CMake.
 rsf-graphics = { path = "../../runtime/graphics/rust" }
-rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
 
 [lints]
 workspace = true

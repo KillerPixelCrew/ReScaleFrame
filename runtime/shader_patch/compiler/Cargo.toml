@@ -7,11 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib"]
 
-[features]
-default = ["cpp-entry"]
-cpp-entry = []
 
 [lints]
 workspace = true

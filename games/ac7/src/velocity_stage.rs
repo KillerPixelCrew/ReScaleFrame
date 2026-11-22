@@ -6,33 +6,18 @@ use crate::velocity_container::{
     Semantic, chunk_index, read_signature, shader_index, write_container, write_signature,
 };
 #[cfg(windows)]
-use crate::velocity_container::{borrowed, resize_bytes, valid_container_size};
+use crate::velocity_container::valid_container_size;
 use crate::velocity_tokens::{
     DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, instructions, rewrite_operands,
     write_instructions,
 };
 #[cfg(windows)]
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::CStr;
 #[cfg(windows)]
 use std::sync::OnceLock;
 
 pub(crate) const REGISTER_COUNT: usize = 32;
-#[cfg(windows)]
-type CompileSink = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32;
-#[cfg(windows)]
-unsafe extern "C" {
-    fn rsf_compile_system_shader(
-        source: *const u8,
-        length: usize,
-        name: *const c_char,
-        entry: *const c_char,
-        profile: *const c_char,
-        flags: u32,
-        user: *mut c_void,
-        code: CompileSink,
-        errors: CompileSink,
-    ) -> i32;
-}
+
 #[cfg(windows)]
 pub(crate) type HelperCache = OnceLock<Option<Vec<u8>>>;
 
@@ -223,42 +208,14 @@ pub(crate) fn compile_bytecode<'a>(
 
 #[cfg(windows)]
 pub(crate) fn compile_source(source: &str, name: &CStr, target: &CStr) -> Option<Vec<u8>> {
-    let mut bytecode = Vec::new();
-    let status = unsafe {
-        rsf_compile_system_shader(
-            source.as_ptr(),
-            source.len(),
-            name.as_ptr(),
-            c"main".as_ptr(),
-            target.as_ptr(),
-            1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
-            (&mut bytecode as *mut Vec<u8>).cast(),
-            copy_code,
-            ignore_errors,
-        )
-    };
-    (status == 0 && valid_container_size(bytecode.len())).then_some(bytecode)
-}
-
-#[cfg(windows)]
-unsafe extern "C" fn copy_code(user: *mut c_void, bytes: *const u8, size: usize) -> i32 {
-    if !valid_container_size(size) {
-        return -1;
-    }
-    let output = unsafe { &mut *user.cast::<Vec<u8>>() };
-    let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
-        return -1;
-    };
-    let Some(output) = resize_bytes(output, size) else {
-        return -1;
-    };
-    output.copy_from_slice(bytes);
-    0
-}
-
-#[cfg(windows)]
-unsafe extern "C" fn ignore_errors(_: *mut c_void, _: *const u8, _: usize) -> i32 {
-    0
+    let bytecode = rsf_shader_compiler::compile_system(rsf_shader_compiler::Request {
+        source: source.as_bytes(),
+        name,
+        entry: c"main",
+        target,
+        flags: 1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
+    })?;
+    valid_container_size(bytecode.len()).then_some(bytecode)
 }
 
 #[cfg(windows)]

@@ -577,7 +577,6 @@ dependencies = [
  "rsf-ac7",
  "rsf-orchestrator",
  "rsf-runtime-common",
- "rsf-shader-compiler",
  "rsf-test-support",
  "windows",
 ]

@@ -1,10 +1,10 @@
 # The plugin and linked carriers call the same Rust reader through the existing view C ABI.
 rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
-# TrueSky's Rust D3D11 owner uses the shared System32 shader compiler entry. The crate's guarded
-# engine reads are the SEH leaf rsf_ac7_memory, so every consumer of the archive links it. The D3D11
+# The crate's guarded engine reads are the SEH leaf rsf_ac7_memory, so every consumer of the
+# archive links it. The D3D11
 # leaves it calls come from ReScaleFrame::GraphicsLeaves or, in carriers and fixtures that link the
 # Runtime archive, from that archive; each binary links exactly one of the two.
-target_link_libraries(rsf_ac7_rust INTERFACE rsf_shader_compiler rsf_ac7_memory)
+target_link_libraries(rsf_ac7_rust INTERFACE rsf_ac7_memory)
 target_include_directories(rsf_ac7_rust INTERFACE include)
 add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_rust)
 
@@ -55,7 +55,6 @@ add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 add_library(rsf_ac7_render_scope STATIC src/render_scope_entry.c src/native_renderer_platform.c)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
 target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_memory rsf_windows_input_facts minhook rsf_build_options ReScaleFrame::RuntimeCommon)
-# The shader compiler is available without linking the Graphics library.
-target_link_libraries(rsf_ac7_render_scope PUBLIC rsf_shader_compiler)
+
 target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/runtime/graphics/include")
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)

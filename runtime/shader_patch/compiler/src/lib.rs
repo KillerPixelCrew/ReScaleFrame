@@ -2,8 +2,6 @@
 //! D3DCompiler ownership for standalone helpers and engine-supplied compiler calls.
 #![cfg(windows)]
 
-#[cfg(feature = "cpp-entry")]
-use std::ffi::c_char;
 use std::ffi::{CStr, c_void};
 use std::ptr;
 use windows::Win32::Graphics::Direct3D::{D3D_SHADER_MACRO, ID3DBlob};
@@ -12,9 +10,6 @@ use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
-
-#[cfg(feature = "cpp-entry")]
-const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 
 type D3DCompile = unsafe extern "system" fn(
     *const c_void,
@@ -116,57 +111,11 @@ pub unsafe fn compile(
     }
 }
 
-#[cfg(feature = "cpp-entry")]
-type Sink = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32;
-
-// The caller copies bytes during the callbacks. Memory never crosses allocator boundaries.
-#[cfg(feature = "cpp-entry")]
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_compile_system_shader(
-    source: *const u8,
-    size: usize,
-    name: *const c_char,
-    entry: *const c_char,
-    target: *const c_char,
-    flags: u32,
-    user: *mut c_void,
-    code: Sink,
-    errors: Sink,
-) -> i32 {
-    let Some(module) = Compiler::system("d3dcompiler_47.dll") else {
-        return 1;
-    };
-    let Some(compiler) = module.entry() else {
-        return 2;
-    };
-    let output = unsafe {
-        compile(
-            compiler,
-            Request {
-                source: std::slice::from_raw_parts(source, size),
-                name: CStr::from_ptr(name),
-                entry: CStr::from_ptr(entry),
-                target: CStr::from_ptr(target),
-                flags,
-            },
-            &[],
-            ptr::null_mut(),
-        )
-    };
-    if output.status < 0 || output.code.is_none() {
-        if let Some(bytes) = &output.errors {
-            unsafe { errors(user, bytes.as_ptr(), bytes.len()) };
-        }
-        return if output.status < 0 {
-            output.status
-        } else {
-            E_FAIL
-        };
-    }
-    let bytes = output.code.as_deref().expect("code checked");
-    if unsafe { code(user, bytes.as_ptr(), bytes.len()) } == 0 {
-        0
-    } else {
-        E_FAIL
-    }
+/// Compiles through System32 `d3dcompiler_47.dll` and returns the bytecode; `None` when the
+/// compiler is missing or refuses the source.
+pub fn compile_system(request: Request<'_>) -> Option<Vec<u8>> {
+    let module = Compiler::system("d3dcompiler_47.dll")?;
+    let entry = module.entry()?;
+    let output = unsafe { compile(entry, request, &[], ptr::null_mut()) };
+    if output.status < 0 { None } else { output.code }
 }

@@ -29,7 +29,6 @@ windows = { workspace = true, features = [
 [target."cfg(windows)".dev-dependencies]
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
 rsf-runtime-common = { path = "../../runtime/common" }
-rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
 
 [lints]
 workspace = true
