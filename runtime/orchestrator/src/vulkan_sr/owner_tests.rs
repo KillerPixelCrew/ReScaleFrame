@@ -9,6 +9,8 @@ use crate::vulkan_streamline_camera::rsf_slvk_sdk_constants;
 use ash::vk::{self, Handle as _};
 
 const FAILED: i32 = -9;
+// The synthetic policy accepts an ID outside the production model list.
+const FAKE_DLSS_PRESET: u32 = 14;
 
 #[derive(Debug, PartialEq)]
 enum Call {
@@ -256,7 +258,7 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
         let options = unsafe { &*options };
         assert_eq!(options.mode, 3);
         assert_eq!((options.hdr, options.auto_exposure), (1, 1));
-        assert_eq!(options.presets, [11; 6]);
+        assert_eq!(options.presets, [FAKE_DLSS_PRESET; 6]);
         unsafe {
             fake(native)
                 .calls
@@ -317,7 +319,9 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
     retire: Some(leaf!(|native: Handle, commands: Handle| -> () {
         unsafe { fake(native).calls.push(Call::Retire(commands as usize)) }
     })),
-    preset_valid: Some(leaf!(|preset: u32| -> i32 { i32::from(preset == 11) })),
+    preset_valid: Some(leaf!(|preset: u32| -> i32 {
+        i32::from(preset == FAKE_DLSS_PRESET)
+    })),
 };
 
 // Types 1 and 2 are compatible inside the three reported types; 2 and 3 are device-local.
@@ -888,7 +892,10 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
         0
     );
     assert_eq!([width, height], [64, 36]);
-    assert_eq!(unsafe { rsf_core_srvk_dlss_preset(owner, 11) }, 0);
+    assert_eq!(
+        unsafe { rsf_core_srvk_dlss_preset(owner, FAKE_DLSS_PRESET) },
+        0
+    );
     assert_eq!(unsafe { rsf_core_srvk_dlss_preset(owner, 99) }, INVALID);
     let commands = ptr::from_mut(&mut state).cast();
     let mut record = frame_record();
@@ -907,7 +914,7 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
         );
         let mut expected = vec![
             Call::DlssConstants(reset),
-            Call::DlssOptions(11),
+            Call::DlssOptions(FAKE_DLSS_PRESET),
             Call::DlssStage,
             Call::DlssStage,
             Call::DlssStage,
