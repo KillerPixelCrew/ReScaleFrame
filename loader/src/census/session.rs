@@ -461,23 +461,14 @@ unsafe fn finish_record(state: *mut rsf_census_call_state, result: u64) {
     }
 }
 
-fn truncated<const N: usize>(text: *const c_char) -> [u8; N] {
+fn truncated<const N: usize>(text: &str) -> [u8; N] {
     let mut output = [0; N];
-    if !text.is_null() {
-        let text = unsafe { CStr::from_ptr(text) }.to_bytes();
-        let count = text.len().min(N - 1);
-        output[..count].copy_from_slice(&text[..count]);
-    }
+    let count = text.len().min(N - 1);
+    output[..count].copy_from_slice(&text.as_bytes()[..count]);
     output
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_census_add_finding(
-    vendor: *const c_char,
-    what: *const c_char,
-    rva: u64,
-    function: u64,
-) {
+pub(super) fn add_finding(vendor: &str, what: &str, rva: u64, function: u64) {
     let mut findings = lock(&FINDINGS);
     let index = FINDING_COUNT.fetch_add(1, Relaxed) as usize;
     if let Some(result) = findings.get_mut(index) {
@@ -523,7 +514,7 @@ fn record_event(
 unsafe extern "system" fn static_scan(_: *mut c_void) -> u32 {
     let Some(core) = CORE.get() else { return 0 };
     let started = core.now();
-    rsf_census_static_scan(Some(rsf_census_add_finding));
+    rsf_census_static_scan();
     event(
         core,
         static_scan as *mut c_void,

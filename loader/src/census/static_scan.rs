@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Static findings identify possible vendor call sites in the loaded executable.
+use super::session::add_finding;
 use rsf_game_sys::pe32_plus::Mapped;
-use std::ffi::{CString, c_char};
 use std::mem::size_of;
 use windows_sys::Win32::System::{
     Diagnostics::Debug::{
@@ -15,7 +15,6 @@ use windows_sys::Win32::System::{
     },
 };
 
-type Report = unsafe extern "C" fn(*const c_char, *const c_char, u64, u64);
 const MAX_STRINGS: usize = 400;
 const MAX_REFERENCES: usize = 4000;
 
@@ -331,18 +330,9 @@ fn find_refs(scan: &Scan, hits: &mut [Hit]) -> Option<Vec<(u32, u32)>> {
     Some(fsr_functions)
 }
 
-fn report(scan: &Scan, add: Report) {
-    let emit = |vendor, what, rva, function| {
-        if let (Ok(vendor), Ok(what)) = (CString::new(vendor), CString::new(what)) {
-            unsafe {
-                add(
-                    vendor.as_ptr(),
-                    what.as_ptr(),
-                    u64::from(rva),
-                    u64::from(function),
-                )
-            };
-        }
+fn report(scan: &Scan) {
+    let emit = |vendor: &str, what: String, rva: u32, function: u32| {
+        add_finding(vendor, &what, u64::from(rva), u64::from(function));
     };
     let Some(mut hits) = find_strings(scan) else {
         return;
@@ -391,15 +381,12 @@ fn report(scan: &Scan, add: Report) {
     }
 }
 
-pub(super) extern "C" fn rsf_census_static_scan(add_finding: Option<Report>) {
-    let Some(add_finding) = add_finding else {
-        return;
-    };
+pub(super) fn rsf_census_static_scan() {
     unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
     let module = unsafe { GetModuleHandleW(std::ptr::null()) };
     if !module.is_null()
         && let Some(scan) = Scan::read(Image(module as usize))
     {
-        report(&scan, add_finding);
+        report(&scan);
     }
 }
