@@ -3,17 +3,12 @@
 #include "motion_stage.h"
 #include "native_memory.h"
 #include "sr_pass.h"
-#include "sr_stage.h"
-#include <d3d11.h>
-#include <wrl/client.h>
 #include <cstddef>
 
 extern "C" bool rsf_anomaly_sr_stage_owns_depth(uint32_t native_frame) noexcept;
 
 namespace rsf::anomaly::fg {
 namespace {
-using Microsoft::WRL::ComPtr;
-
 // The caller passes HW.pBaseZB from the exact executable profile the carrier selected.
 void* engine_depth_view(uint32_t rva) noexcept {
     const auto* image = reinterpret_cast<const std::byte*>(GetModuleHandleW(nullptr));
@@ -22,37 +17,9 @@ void* engine_depth_view(uint32_t rva) noexcept {
     return view;
 }
 
-void* immediate_context(void* chain) noexcept {
-    ComPtr<ID3D11Device> device;
-    ID3D11DeviceContext* context{};
-    if (SUCCEEDED(static_cast<IDXGISwapChain*>(chain)->GetDevice(IID_PPV_ARGS(&device))))
-        device->GetImmediateContext(&context);
-    return context;
-}
-
-void* backbuffer(void* chain) noexcept {
-    ComPtr<ID3D11Texture2D> buffer;
-    if (FAILED(static_cast<IDXGISwapChain*>(chain)->GetBuffer(0, IID_PPV_ARGS(&buffer)))) return nullptr;
-    return buffer.Detach();
-}
-
-void* depth_texture(void* view) noexcept {
-    ComPtr<ID3D11Resource> resource;
-    ComPtr<ID3D11Texture2D> depth;
-    static_cast<ID3D11DepthStencilView*>(view)->GetResource(&resource);
-    if (!resource || FAILED(resource.As(&depth))) return nullptr;
-    return depth.Detach();
-}
-
-bool output_window(void* chain, uintptr_t* window) noexcept {
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (FAILED(static_cast<IDXGISwapChain*>(chain)->GetDesc(&desc))) return false;
-    *window = reinterpret_cast<uintptr_t>(desc.OutputWindow);
-    return true;
-}
-
 const rsf_anomaly_fg_platform& platform() noexcept {
     static const rsf_anomaly_fg_platform value{
+        sizeof(rsf_anomaly_fg_platform),
         &input_platform(), sr::engine_version, sr::project_id, sr::view_space_to_meters,
         &engine_depth_view,
         rsf_anomaly_sr_stage_owns_depth,
@@ -60,7 +27,6 @@ const rsf_anomaly_fg_platform& platform() noexcept {
             const auto target = motion::frame_target();
             return rsf_anomaly_fg_motion_target{target.texture, target.width, target.height, target.frame, target.written, target.main};
         },
-        &immediate_context, &backbuffer, &depth_texture, &output_window,
     };
     return value;
 }

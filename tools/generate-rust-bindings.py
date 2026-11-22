@@ -222,14 +222,13 @@ generate("games/anomaly/src/fg_policy_abi.rs", "games/anomaly/src/fg_policy_plat
          ["-Isdk/game/include"], ["--no-recursive-allowlist", "--with-derive-default"])
 generate("games/anomaly/src/fg_stage_abi.rs", "games/anomaly/src/fg_stage_platform.h",
          "rsf_(anomaly_fg_.*|d3d11_(present_(api|setup)|fg_api)|get_d3d11_(present|fg)_api_fn|"
-         "native_fg_(options|status)|fg_status|dlss_frame|observer_present(_event)?(_fn)?|backend_log_fn)",
-         "RSF_(D3D11_(PRESENT|FG)_API_(VERSION|ENTRY_POINT)|DLSS_ABI_VERSION|"
+         "native_fg_(options|status)|fg_status|d3d11_fg_inputs|observer_present(_event)?(_fn)?|backend_log_fn)",
+         "RSF_(D3D11_(PRESENT|FG)_API_(VERSION|ENTRY_POINT)|D3D11_FG_INPUTS_VERSION|"
          "FG_(BACKEND_.*|OFF|FIXED|STAT_TOTAL_PRESENTED)|REFLEX_(ON|BOOST)|UI_MODE_BACKBUFFER_HUDLESS)",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::fg_inputs_abi::rsf_anomaly_input_platform;",
-          "--raw-line", "use rsf_game_sys::sr_abi::rsf_dlss_quality;",
           "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass, rsf_result};",
           "--raw-line", "type wchar_t = u16;",
           "--raw-line", "type rsf_streamline_host = ::core::ffi::c_void;",

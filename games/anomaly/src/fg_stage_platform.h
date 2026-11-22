@@ -16,7 +16,7 @@ typedef struct rsf_anomaly_fg_config {
 typedef struct rsf_anomaly_fg_status {
     bool installed, owner;
     uint32_t backend, choices, requested_mode, effective_mode, generated, reason;
-    uint64_t source_frames, level_frames, tagged, fed, presented, unpresented, runtime_tagged,
+    uint64_t source_frames, level_frames, eligible_at_ui_boundary, fed, presented, unpresented, runtime_tagged,
         vendor_presented, captures;
 } rsf_anomaly_fg_status;
 
@@ -35,6 +35,7 @@ typedef void (*rsf_anomaly_fg_overlay_present)(void* user, rsf_anomaly_fg_swap_c
 typedef void* (*rsf_anomaly_fg_depth_source)(void);
 
 typedef struct rsf_anomaly_fg_platform {
+    uint32_t struct_size;
     // Immutable input pass and engine metadata shared with the SR owner.
     const rsf_anomaly_input_platform* inputs;
     const char* engine_version;
@@ -44,11 +45,6 @@ typedef struct rsf_anomaly_fg_platform {
     void* (*engine_depth_view)(uint32_t rva);
     bool (*sr_owns_depth)(uint32_t native_frame);
     rsf_anomaly_fg_motion_target (*motion_target)(void);
-    // Owned COM references; released with inputs->release_interface.
-    void* (*immediate_context)(void* chain);
-    void* (*backbuffer)(void* chain);
-    void* (*depth_texture)(void* view);
-    bool (*output_window)(void* chain, uintptr_t* window);
 } rsf_anomaly_fg_platform;
 
 #ifdef __cplusplus

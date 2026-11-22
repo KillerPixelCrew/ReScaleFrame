@@ -1588,6 +1588,14 @@ responsible for submitted GPU leases. Source review matched the
 bridge's event identity to the adapter window. The new synthetic
 case and device reset behavior remain unverified for this revision.
 
+The Anomaly frame-generation port moves typed DXGI probes and the policy
+fixture to Rust. D3D11 FG table version 4 takes normalized resources
+with the SDK pass identity. Runtime tag metrics and adapter eligibility
+are reported separately. Skipped input updates close their source
+without assigning a simulation-end timestamp. Source, binding and
+formatting checks are recorded in the [N08 follow-up](research/rust-anomaly-fg-stage.md#n08-source-follow-up).
+Build and device verification remain open.
+
 Anomaly observer quiesce now suspends the overlay before retiring the
 render stages. It closes DirectInput capture and hides the window
 panel. The next accepted Present performs the Runtime reset on its

@@ -183,7 +183,8 @@ const SET: [&str; 6] = [
 const PIPELINE_CREATED: [Entry; 2] = [("shader", 0), ("constants", 0)];
 const PIPELINE_RELEASED: [Entry; 2] = [("constants", 0), ("shader", 0)];
 
-const PLATFORM: Platform = Platform {
+pub(crate) const PLATFORM: Platform = Platform {
+    struct_size: size_of::<Platform>() as u32,
     device: Some(device),
     release_interface: Some(release),
     describe: Some(describe),
@@ -240,7 +241,7 @@ fn foreign_depth_refuses_the_copy_and_foreign_motion_falls_back_to_camera_motion
         width: 9,
         height: 17,
     };
-    let mut owner = Owner::new(&PLATFORM);
+    let mut owner = Owner::new(Bindings::bind(&PLATFORM).expect("complete fixture bindings"));
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Resources
@@ -278,7 +279,7 @@ fn failed_resize_releases_the_partial_set_and_keeps_the_previous_one_for_retry()
         width: 9,
         height: 17,
     };
-    let mut owner = Owner::new(&PLATFORM);
+    let mut owner = Owner::new(Bindings::bind(&PLATFORM).expect("complete fixture bindings"));
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Ok
@@ -320,7 +321,7 @@ fn failed_resize_releases_the_partial_set_and_keeps_the_previous_one_for_retry()
 }
 
 #[test]
-fn refused_constant_buffer_releases_shader_and_latches_on_same_device() {
+fn refused_constant_buffer_releases_shader_and_retries_on_same_device() {
     let state = Context::default();
     let context = ptr::from_ref(&state).cast_mut().cast();
     let mut depth = make_depth(context);
@@ -331,11 +332,11 @@ fn refused_constant_buffer_releases_shader_and_latches_on_same_device() {
         width: 9,
         height: 17,
     };
-    let mut owner = Owner::new(&PLATFORM);
+    let mut owner = Owner::new(Bindings::bind(&PLATFORM).expect("complete fixture bindings"));
     state.fail_at.set(Some("constants"));
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
-        Result::Shader
+        Result::Resources
     );
     assert_eq!(*state.created.borrow(), [("shader", 0)]);
     assert_eq!(*state.released.borrow(), [("shader", 0)]);
@@ -343,8 +344,8 @@ fn refused_constant_buffer_releases_shader_and_latches_on_same_device() {
     state.fail_at.set(None);
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
-        Result::Shader
+        Result::Ok
     );
-    assert_eq!(state.builds.get(), 1);
-    assert_eq!(state.submissions.get(), 0);
+    assert_eq!(state.builds.get(), 2);
+    assert_eq!(state.submissions.get(), 1);
 }

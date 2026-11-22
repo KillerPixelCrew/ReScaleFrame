@@ -69,7 +69,8 @@ void set_depth_view_source(void* (*source)()) noexcept;
 // The overlay's Present sink, called from the bridge's before_present with the engine-facing swap chain, after every
 // tag of the frame and before the upload. Set once by the bootstrap after the overlay started.
 void set_overlay_sink(const overlay::PresentSink& sink) noexcept;
-// Native engine facts. The Runtime owns pacing, marker mapping and input deduplication.
+// Native engine facts. A new input update can close a skipped source without observing its
+// simulation end. The Runtime owns pacing, marker mapping and input deduplication.
 void input_begin(uint32_t engine_frame) noexcept;
 void input_received(uint32_t kinds, uint32_t message_id = 0) noexcept;
 // Native boundaries (native_observer.cpp), engine thread.

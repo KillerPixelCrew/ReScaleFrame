@@ -2,14 +2,6 @@
 # root this extends.
 set(RSF_ANOMALY_FG_SRC "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 
-add_executable(rsf_anomaly_fg_policy_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_fg_policy.cpp")
-target_include_directories(rsf_anomaly_fg_policy_test PRIVATE "${RSF_ANOMALY_FG_SRC}")
-target_link_libraries(rsf_anomaly_fg_policy_test PRIVATE rsf_anomaly_rust ReScaleFrame::GameSDK rsf_build_options)
-add_test(NAME anomaly_fg_policy_contract COMMAND rsf_anomaly_fg_policy_test)
-add_test(NAME anomaly_fg_policy_unknown_selection COMMAND rsf_anomaly_fg_policy_test unknown-case)
-set_tests_properties(anomaly_fg_policy_unknown_selection PROPERTIES WILL_FAIL TRUE)
-set_tests_properties(anomaly_fg_policy_contract anomaly_fg_policy_unknown_selection PROPERTIES TIMEOUT 30)
-
 # The device fixture: the adapter's production FG stage and SR TemporalDriver against the real Runtime DLL, on the
 # NVIDIA adapter, with the vendor package from RSF_ANOMALY_SR_VENDOR_ROOT (anomaly_support.cmake).
 add_executable(rsf_anomaly_fg_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_fg_device.cpp"

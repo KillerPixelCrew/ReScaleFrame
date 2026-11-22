@@ -49,7 +49,7 @@ const _: () = {
 pub struct rsf_anomaly_fg_counters {
     pub source_frames: u64,
     pub level_frames: u64,
-    pub tagged: u64,
+    pub eligible_at_ui_boundary: u64,
     pub fed: u64,
     pub presented: u64,
     pub unpresented: u64,
@@ -67,8 +67,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_fg_counters, source_frames) - 0usize];
     ["Offset of field: rsf_anomaly_fg_counters::level_frames"]
         [::core::mem::offset_of!(rsf_anomaly_fg_counters, level_frames) - 8usize];
-    ["Offset of field: rsf_anomaly_fg_counters::tagged"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_counters, tagged) - 16usize];
+    ["Offset of field: rsf_anomaly_fg_counters::eligible_at_ui_boundary"]
+        [::core::mem::offset_of!(rsf_anomaly_fg_counters, eligible_at_ui_boundary) - 16usize];
     ["Offset of field: rsf_anomaly_fg_counters::fed"]
         [::core::mem::offset_of!(rsf_anomaly_fg_counters, fed) - 24usize];
     ["Offset of field: rsf_anomaly_fg_counters::presented"]

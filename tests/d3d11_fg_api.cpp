@@ -39,7 +39,7 @@ int main() {
         refuses_without_writes(size, RSF_D3D11_FG_API_VERSION, RSF_ERROR_INVALID_ARGUMENT);
         refuses_without_writes(size, UINT32_MAX, RSF_ERROR_INVALID_ARGUMENT);   // size wins over version
     }
-    for (const uint32_t version : {0u, 2u, RSF_D3D11_FG_API_VERSION + 1u, UINT32_MAX})
+    for (const uint32_t version : {0u, 2u, 3u, RSF_D3D11_FG_API_VERSION + 1u, UINT32_MAX})
         refuses_without_writes(sizeof(rsf_d3d11_fg_api), version, RSF_ERROR_ABI_MISMATCH);
 
     // A larger caller capacity: the known prefix is filled, the tail is untouched.
@@ -137,7 +137,15 @@ int main() {
     api.bind_source(&short_identity); api.bind_source(nullptr);
     check(api.inputs_ready(0) == 0 && api.inputs_ready(5) == 0, "no inputs held without a capture");
     check(api.dump_inputs(nullptr, 5, "x", "y") == 0, "dump without inputs writes nothing");
-    api.capture(nullptr, &identity, nullptr);   // refused without a context: no crash, no state
+    api.capture(nullptr, &identity, nullptr);
+    rsf_d3d11_fg_inputs malformed{sizeof(malformed), RSF_D3D11_FG_INPUTS_VERSION};
+    // A non-null sentinel context must never be used for invalid inputs.
+    api.capture(&malformed, &identity, &malformed); // missing depth and motion
+    malformed.abi_version = 0;
+    api.capture(&malformed, &identity, &malformed);
+    malformed.struct_size = sizeof(malformed.struct_size);
+    api.capture(&malformed, &identity, &malformed);
+    check(api.inputs_ready(5) == 0, "refused capture does not hold inputs");
 
     // The presentation table is a separate, unchanged owner.
     rsf_d3d11_present_api present{}; present.struct_size = sizeof(present); present.abi_version = RSF_D3D11_PRESENT_API_VERSION;

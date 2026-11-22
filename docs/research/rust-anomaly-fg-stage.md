@@ -144,3 +144,52 @@ own disposable process. Its exit code was `-1`. Overlay open/close, input
 resumption and normal teardown remain open on the migrated adapter.
 Artifact hashes, configuration and logs are in
 `.local/anomaly/staging/live-rust-fg-overlay/evidence/`.
+
+## N08 source follow-up
+
+This follow-up starts from the integrated N06 seam at `d104f2dd`.
+The engine producers and shader audit are the ones recorded above and in
+[Anomaly FG evidence](anomaly-fg.md). The port keeps the HLSL bindings and
+math, the Standard and AVX depth locations, and the matching main-view
+motion admission. The SR-off shader still uses depth reprojection where
+object motion is unavailable, with the existing first-person rule.
+World-space UI and post effects remain part of the HUD-less colour at
+the observed UI boundary. Their motion coverage needs active captures.
+The adapter keeps the normalized input textures live through the
+synchronous Runtime handoff. The Runtime still owns the shared copies,
+GPU fence, slot retirement, provider selection and presentation.
+
+| Rust review finding | Source resolution |
+| --- | --- |
+| Distinguish a constant-buffer allocation failure from a permanent shader refusal. | A failed constant buffer reports Resources, releases the partial shader lease and retries on the same device. A shader refusal still latches until device replacement. The input fixture now expects a successful retry. |
+| Count tag eligibility separately from completed tagging. | Adapter counters report `eligible_at_ui_boundary`. `runtime_tagged` comes from completed Runtime tags. The missing-backbuffer fixture observes an eligible frame with zero Runtime tags and no history advance. |
+| Anomaly FG keeps validated Option tables and unwraps them at every call. | Startup checks the readable size prefixes, Runtime table versions and required leaves once. The stage and input owner call typed function pointers. A fake table covers short stage and input tables, a missing input callback and a missing Runtime capture callback. |
+| Accept FG input resources without requiring a DLSS SR frame. | D3D11 FG table version 4 accepts a size- and version-checked texture pair. The SDK pass supplies dimensions and camera. The Runtime translates into the existing transfer owner's capture call, also used by the established SR path. C and C++ ABI clients cover version and size refusal. |
+| Keep inferred frame closure out of simulation timing events. | A new input update sends only skipped frame closure for the preceding source. The Standard and AVX Runtime CPU fixture paths check that the source ended with no simulation-end event or timestamp. |
+| Share X-Ray window identification across the overlay and FG bridge. | Both use the overlay's game-local process/class predicate. The FG callback owns subclassing and placement correction. |
+| Tie the cached subclass registration to the window lifetime. | The callback queries the live subclass association and the subclass removes itself on WM_NCDESTROY. |
+| Anomaly FG options round-trip INI values through the native config and several string encodings. | INI and direct fixture admission use the same Rust settings. Vendor paths follow the N06 UTF-16 normalizer and one final conversion to the Runtime encoding. |
+
+The portable policy fixture now runs through the Rust owner. Its old
+C++ facade and CTest executable were removed. The native policy header
+used for binding generation retains just its enums and records.
+The typed DXGI immediate-context, backbuffer, output-window and depth
+texture probes moved to Rust. Native stage code supplies the guarded
+engine depth read, the current motion producer and the existing C++
+carrier entry points. The D3D11 input shader, resource creation and state
+scope leaves in `fg_inputs.cpp` remain native. The real device fixture
+retains the C++ D3D11 scene/Present and SR TemporalDriver scaffolding and
+now checks the revised CPU event contract.
+
+The separate N02 checkpoint `9f8df413` also updates the FG capture
+timestamp. When integrating, retain this Rust settings admission and use
+N02's shared `capture_clock::local_timestamp` for the default capture
+directory if resolving the options hunk. The overlay predicate visibility
+change applies to the same predicate in N02.
+
+Checks were source comparison against the Windows SDK bindings, pinned
+Rust 1.94.1 formatting, repeat bindgen-cli 0.72.1 regeneration with
+libclang 18.1.1, locked offline Windows Cargo metadata and Git whitespace
+checks. Builds, lint, Rust and native fixtures, and device/game runs
+remain user-owned. Window recreation, provider output and motion
+coverage after the port require execution evidence.

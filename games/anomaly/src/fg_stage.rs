@@ -2,6 +2,7 @@
 //! Joins the native engine boundaries to the Runtime's D3D11 FG and presentation tables.
 
 mod camera;
+mod d3d;
 mod options;
 #[cfg(test)]
 mod tests;
@@ -69,9 +70,102 @@ impl Log {
 }
 
 #[derive(Clone, Copy)]
+struct PresentBindings {
+    install: unsafe extern "C" fn(setup: *const rsf_d3d11_present_setup) -> i32,
+    is_owner: unsafe extern "C" fn(swapchain: *mut c_void) -> i32,
+    has_owner: unsafe extern "C" fn() -> i32,
+    backend: unsafe extern "C" fn() -> u32,
+    backend_choices: unsafe extern "C" fn() -> u32,
+    generation: unsafe extern "C" fn() -> u64,
+    switch_result: unsafe extern "C" fn() -> i32,
+}
+
+#[derive(Clone, Copy)]
+struct FgBindings {
+    set_log: unsafe extern "C" fn(log: rsf_backend_log_fn, user: *mut c_void),
+    options: unsafe extern "C" fn(options: *const rsf_native_fg_options),
+    status: unsafe extern "C" fn(status: *mut rsf_native_fg_status) -> i32,
+    cpu: unsafe extern "C" fn(event: *const rsf_game_cpu_event) -> i32,
+    pass: unsafe extern "C" fn(
+        context11: *mut c_void,
+        pass: *const rsf_game_render_pass,
+        begin: u32,
+    ) -> i32,
+    bind_source: unsafe extern "C" fn(identity: *const rsf_game_render_pass),
+    capture: unsafe extern "C" fn(
+        context11: *mut c_void,
+        identity: *const rsf_game_render_pass,
+        inputs: *const rsf_d3d11_fg_inputs,
+    ),
+    inputs_ready: unsafe extern "C" fn(source_frame_id: u64) -> i32,
+    dump_inputs: unsafe extern "C" fn(
+        context11: *mut c_void,
+        source_frame_id: u64,
+        directory_utf8: *const c_char,
+        prefix_utf8: *const c_char,
+    ) -> i32,
+    prepare: unsafe extern "C" fn(
+        user: *mut c_void,
+        chain11: *mut c_void,
+        context11: *mut c_void,
+        list12: *mut c_void,
+        backbuffer12: *mut c_void,
+        host: *mut rsf_streamline_host,
+        provider: *mut c_void,
+        sync: u32,
+    ),
+    retire: unsafe extern "C" fn(user: *mut c_void, provider: *mut c_void),
+    present_event:
+        unsafe extern "C" fn(user: *mut c_void, event: *const rsf_observer_present_event),
+    latency_event:
+        unsafe extern "C" fn(user: *mut c_void, event: *const rsf_observer_present_event),
+}
+
+struct EngineBindings {
+    inputs: crate::fg_inputs::Bindings,
+    engine_version: *const c_char,
+    project_id: *const c_char,
+    units_to_meters: f32,
+    engine_depth_view: unsafe extern "C" fn(rva: u32) -> *mut c_void,
+    sr_owns_depth: unsafe extern "C" fn(native_frame: u32) -> bool,
+    motion_target: unsafe extern "C" fn() -> rsf_anomaly_fg_motion_target,
+    immediate_context: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
+    backbuffer: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
+    depth_texture: unsafe extern "C" fn(view: *mut c_void) -> *mut c_void,
+    output_window: unsafe extern "C" fn(chain: *mut c_void, window: *mut usize) -> bool,
+}
+
+impl EngineBindings {
+    unsafe fn bind(platform: *const Platform) -> Option<Self> {
+        let platform = unsafe { full_table(platform) }?;
+        let inputs = unsafe { full_table(platform.inputs) }?;
+        Some(Self {
+            inputs: crate::fg_inputs::Bindings::bind(inputs)?,
+            engine_version: platform.engine_version,
+            project_id: platform.project_id,
+            units_to_meters: platform.units_to_meters,
+            engine_depth_view: platform.engine_depth_view?,
+            sr_owns_depth: platform.sr_owns_depth?,
+            motion_target: platform.motion_target?,
+            immediate_context: d3d::immediate_context,
+            backbuffer: d3d::backbuffer,
+            depth_texture: d3d::depth_texture,
+            output_window: d3d::output_window,
+        })
+    }
+}
+
+// All callers supply a readable size prefix. No full reference is formed for a short table.
+unsafe fn full_table<'a, T>(table: *const T) -> Option<&'a T> {
+    if table.is_null() || unsafe { table.cast::<u32>().read() } < size_of::<T>() as u32 {
+        return None;
+    }
+    Some(unsafe { &*table })
+}
+
 struct Tables {
-    present: rsf_d3d11_present_api,
-    fg: rsf_d3d11_fg_api,
+    present: PresentBindings,
+    fg: FgBindings,
 }
 
 impl Tables {
@@ -80,29 +174,36 @@ impl Tables {
             || present.abi_version != RSF_D3D11_PRESENT_API_VERSION
             || fg.struct_size < size_of::<rsf_d3d11_fg_api>() as u32
             || fg.abi_version != RSF_D3D11_FG_API_VERSION
-            || present.install.is_none()
-            || present.is_owner.is_none()
-            || present.has_owner.is_none()
-            || present.backend.is_none()
-            || present.backend_choices.is_none()
-            || fg.set_log.is_none()
-            || fg.options.is_none()
-            || fg.status.is_none()
-            || fg.reflex_ordering.is_none()
-            || fg.cpu.is_none()
-            || fg.pass.is_none()
-            || fg.bind_source.is_none()
-            || fg.capture.is_none()
-            || fg.inputs_ready.is_none()
-            || fg.dump_inputs.is_none()
-            || fg.prepare.is_none()
-            || fg.retire.is_none()
-            || fg.present_event.is_none()
-            || fg.latency_event.is_none()
         {
             return None;
         }
-        Some(Self { present, fg })
+        fg.reflex_ordering?;
+        Some(Self {
+            present: PresentBindings {
+                install: present.install?,
+                is_owner: present.is_owner?,
+                has_owner: present.has_owner?,
+                backend: present.backend?,
+                backend_choices: present.backend_choices?,
+                generation: present.generation?,
+                switch_result: present.switch_result?,
+            },
+            fg: FgBindings {
+                set_log: fg.set_log?,
+                options: fg.options?,
+                status: fg.status?,
+                cpu: fg.cpu?,
+                pass: fg.pass?,
+                bind_source: fg.bind_source?,
+                capture: fg.capture?,
+                inputs_ready: fg.inputs_ready?,
+                dump_inputs: fg.dump_inputs?,
+                prepare: fg.prepare?,
+                retire: fg.retire?,
+                present_event: fg.present_event?,
+                latency_event: fg.latency_event?,
+            },
+        })
     }
 
     fn query(runtime: HMODULE, log: Log) -> Option<Self> {
@@ -295,7 +396,7 @@ struct Stage {
     options: Options,
     log: Log,
     tables: Tables,
-    platform: &'static Platform,
+    platform: EngineBindings,
     depth_rva: u32,
     session: u64,
     frequency: u64,
@@ -304,7 +405,7 @@ struct Stage {
     status: Mutex<Status>,
 }
 
-// SAFETY: the native platform table and its strings are immutable process-lifetime data.
+// SAFETY: the native metadata strings are immutable process-lifetime data.
 // COM leaves are called only on the serialized render thread. Shared state uses locks or atomics.
 unsafe impl Send for Stage {}
 unsafe impl Sync for Stage {}
@@ -314,7 +415,7 @@ impl Stage {
         options: Options,
         log: Log,
         tables: Tables,
-        platform: &'static Platform,
+        platform: EngineBindings,
         depth_rva: u32,
     ) -> bool {
         let mut frequency = 0;
@@ -365,9 +466,9 @@ impl Stage {
             accept_window: Some(window::accept_window),
             before_present: Some(before_present),
             present_event: Some(present_event),
-            latency_event: fg.latency_event,
-            retire: fg.retire,
-            prepare: fg.prepare,
+            latency_event: Some(fg.latency_event),
+            retire: Some(fg.retire),
+            prepare: Some(fg.prepare),
             debug_timing: u32::from(options.debug),
             backend: frontend.backend,
             max_generated_frames: u32::MAX,
@@ -384,9 +485,9 @@ impl Stage {
             ..Default::default()
         };
         let installed = unsafe {
-            fg.set_log.unwrap()(Some(bridge_log), ptr::null_mut());
-            fg.options.unwrap()(&requested);
-            self.tables.present.install.unwrap()(&setup) != 0
+            (fg.set_log)(Some(bridge_log), ptr::null_mut());
+            (fg.options)(&requested);
+            (self.tables.present.install)(&setup) != 0
         };
         let backend = backend_name(frontend.backend);
         if !installed {
@@ -405,7 +506,7 @@ impl Stage {
     }
 
     fn owns(&self, chain: Raw) -> bool {
-        !chain.is_null() && unsafe { self.tables.present.is_owner.unwrap()(chain) != 0 }
+        !chain.is_null() && unsafe { (self.tables.present.is_owner)(chain) != 0 }
     }
 
     fn live_chain(&self) -> Option<Raw> {
@@ -427,7 +528,7 @@ impl Stage {
             event_version: RSF_GAME_CPU_EVENT_VERSION,
             flags: RSF_GAME_CPU_INPUT_KEYED | flags,
         };
-        unsafe { self.tables.fg.cpu.unwrap()(&event) };
+        unsafe { (self.tables.fg.cpu)(&event) };
     }
 
     fn boundary(&self, source: u64, stage: u32) {
@@ -448,20 +549,20 @@ impl Stage {
     }
 
     fn pass(&self, context: Raw, pass: &Pass, begin: bool) -> bool {
-        unsafe { self.tables.fg.pass.unwrap()(context, pass, u32::from(begin)) != 0 }
+        unsafe { (self.tables.fg.pass)(context, pass, u32::from(begin)) != 0 }
     }
 
     fn bind_source(&self, identity: Option<&Pass>) {
-        unsafe { self.tables.fg.bind_source.unwrap()(identity.map_or(ptr::null(), ptr::from_ref)) };
+        unsafe { (self.tables.fg.bind_source)(identity.map_or(ptr::null(), ptr::from_ref)) };
     }
 
     fn lease(&self, object: Raw) -> Option<Lease> {
-        let release = unsafe { (*self.platform.inputs).release_interface.unwrap() };
+        let release = self.platform.inputs.release_interface;
         Lease::new(object, release)
     }
 
     fn inputs_ready(&self, source: u64) -> bool {
-        unsafe { self.tables.fg.inputs_ready.unwrap()(source) != 0 }
+        unsafe { (self.tables.fg.inputs_ready)(source) != 0 }
     }
 
     fn capture_adapter_inputs(
@@ -472,7 +573,7 @@ impl Stage {
         previous: Option<Camera>,
     ) {
         // A reduced world frame needs the depth supplied by the SR stage.
-        if unsafe { self.platform.sr_owns_depth.unwrap()(render.native_frame) } {
+        if unsafe { (self.platform.sr_owns_depth)(render.native_frame) } {
             return;
         }
         let Some(camera) = render.camera else { return };
@@ -495,16 +596,16 @@ impl Stage {
         let view = unsafe {
             match depth_source {
                 Some(source) => source(),
-                None => self.platform.engine_depth_view.unwrap()(self.depth_rva),
+                None => (self.platform.engine_depth_view)(self.depth_rva),
             }
         };
         if view.is_null() {
             return;
         }
-        let Some(depth) = self.lease(unsafe { self.platform.depth_texture.unwrap()(view) }) else {
+        let Some(depth) = self.lease(unsafe { (self.platform.depth_texture)(view) }) else {
             return;
         };
-        let target = unsafe { self.platform.motion_target.unwrap()() };
+        let target = unsafe { (self.platform.motion_target)() };
         let motion = render.motion_input(target);
         let [width, height] = render.extent;
         let frame = rsf_anomaly_input_frame {
@@ -515,25 +616,17 @@ impl Stage {
             height,
         };
         let previous_inputs = self.engine.lock().unwrap().inputs.take();
-        let mut pass =
-            previous_inputs.unwrap_or_else(|| InputPass::new(unsafe { &*self.platform.inputs }));
+        let mut pass = previous_inputs.unwrap_or_else(|| InputPass::new(self.platform.inputs));
         let result = pass.run(context, &frame, self.log.callback, self.log.user as Raw);
         if let Some([depth, motion]) = pass.outputs() {
-            let inputs = rsf_dlss_frame {
-                struct_size: size_of::<rsf_dlss_frame>() as u32,
-                abi_version: RSF_DLSS_ABI_VERSION,
+            let inputs = rsf_d3d11_fg_inputs {
+                struct_size: size_of::<rsf_d3d11_fg_inputs>() as u32,
+                abi_version: RSF_D3D11_FG_INPUTS_VERSION,
                 depth,
                 motion,
-                render_width: width,
-                output_width: width,
-                render_height: height,
-                output_height: height,
-                camera_motion_included: 1,
-                reset: u32::from(reset),
-                ..Default::default()
             };
             // Keep the pass's output leases alive until the Runtime has copied both inputs.
-            unsafe { self.tables.fg.capture.unwrap()(context, &identity, &inputs) };
+            unsafe { (self.tables.fg.capture)(context, &identity, &inputs) };
         }
         let mut engine = self.engine.lock().unwrap();
         engine.inputs = Some(pass);
@@ -557,12 +650,7 @@ impl Stage {
         };
         let prefix = CString::new(format!("fg_f{native_frame}_s{source}")).unwrap();
         let written = unsafe {
-            self.tables.fg.dump_inputs.unwrap()(
-                context,
-                source,
-                directory.as_ptr(),
-                prefix.as_ptr(),
-            )
+            (self.tables.fg.dump_inputs)(context, source, directory.as_ptr(), prefix.as_ptr())
         };
         self.options
             .capture
@@ -583,7 +671,7 @@ impl Stage {
             struct_size: size_of::<rsf_native_fg_status>() as u32,
             ..Default::default()
         };
-        (unsafe { self.tables.fg.status.unwrap()(&mut runtime) } != 0).then_some(runtime)
+        (unsafe { (self.tables.fg.status)(&mut runtime) } != 0).then_some(runtime)
     }
 
     fn publish(&self) {
@@ -593,9 +681,9 @@ impl Stage {
         let present = self.tables.present;
         let (owner, backend, choices) = unsafe {
             (
-                present.has_owner.unwrap()() != 0,
-                present.backend.unwrap()(),
-                present.backend_choices.unwrap()(),
+                (present.has_owner)() != 0,
+                (present.backend)(),
+                (present.backend_choices)(),
             )
         };
         let mut status = self.status.lock().unwrap();
@@ -613,7 +701,7 @@ impl Stage {
         }
         status.source_frames = counts.source_frames;
         status.level_frames = counts.level_frames;
-        status.tagged = counts.tagged;
+        status.eligible_at_ui_boundary = counts.eligible_at_ui_boundary;
         status.fed = counts.fed;
         status.presented = counts.presented;
         status.unpresented = counts.unpresented;
@@ -714,7 +802,7 @@ unsafe extern "C" fn present_event(user: Raw, event: *const rsf_observer_present
     }
     let Some(stage) = STAGE.get() else { return };
     // Forward the checked event even when it doesn't belong to the adapter's window.
-    unsafe { stage.tables.fg.present_event.unwrap()(user, event) };
+    unsafe { (stage.tables.fg.present_event)(user, event) };
     let event = unsafe { &*event };
     if event.flags & DXGI_PRESENT_TEST != 0 || !stage.owns(event.swapchain) {
         return;
@@ -738,7 +826,7 @@ unsafe extern "C" fn rsf_anomaly_fg_configure_ini(
     runtime: HMODULE,
     depth_rva: u32,
     log: rsf_game_log_fn,
-    platform: &'static Platform,
+    platform: *const Platform,
 ) -> bool {
     if ini.is_null() {
         return false;
@@ -777,9 +865,13 @@ extern "C" fn rsf_anomaly_fg_configure(
 extern "C" fn rsf_anomaly_fg_install(
     runtime: HMODULE,
     depth_rva: u32,
-    platform: &'static Platform,
+    platform: *const Platform,
 ) -> bool {
     let Some((options, log)) = Cold::attempt() else {
+        return false;
+    };
+    let Some(platform) = (unsafe { EngineBindings::bind(platform) }) else {
+        log.text(c"Anomaly FG refused: incomplete engine or input bindings.");
         return false;
     };
     Tables::query(runtime, log)
@@ -788,11 +880,20 @@ extern "C" fn rsf_anomaly_fg_install(
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_install_with(
-    present: &rsf_d3d11_present_api,
-    fg: &rsf_d3d11_fg_api,
-    platform: &'static Platform,
+    present: *const rsf_d3d11_present_api,
+    fg: *const rsf_d3d11_fg_api,
+    platform: *const Platform,
 ) -> bool {
     let Some((options, log)) = Cold::attempt() else {
+        return false;
+    };
+    let (Some(present), Some(fg), Some(platform)) = (unsafe {
+        (
+            full_table(present),
+            full_table(fg),
+            EngineBindings::bind(platform),
+        )
+    }) else {
         return false;
     };
     Tables::bind(*present, *fg)
@@ -846,7 +947,7 @@ pub(crate) fn overlay_options() -> Option<Frontend> {
 
 pub(crate) fn foreign_chain(chain: Raw) -> bool {
     installed().is_some_and(|stage| {
-        (unsafe { stage.tables.present.has_owner.unwrap()() != 0 }) && !stage.owns(chain)
+        (unsafe { (stage.tables.present.has_owner)() != 0 }) && !stage.owns(chain)
     })
 }
 
@@ -874,8 +975,7 @@ extern "C" fn rsf_anomaly_fg_stage_input_begin(native_frame: u32) {
         return;
     }
     if phase == Phase::Open && started.is_some_and(|frame| frame != native_frame) {
-        // An inactive/loading simulation can finish without rendering. Close its own source.
-        stage.cpu(source, RSF_GAME_CPU_SIMULATION_END, false, 0, 0, 0);
+        // A new input update closes the skipped source without observing its simulation end.
         stage.cpu(
             source,
             RSF_GAME_CPU_FRAME_END,
@@ -1001,8 +1101,7 @@ extern "C" fn rsf_anomaly_fg_stage_ui_boundary() {
         stage.engine.lock().unwrap().policy.inputs(false);
         return;
     };
-    let Some(context_lease) =
-        stage.lease(unsafe { stage.platform.immediate_context.unwrap()(chain) })
+    let Some(context_lease) = stage.lease(unsafe { (stage.platform.immediate_context)(chain) })
     else {
         stage.engine.lock().unwrap().policy.inputs(false);
         return;
@@ -1013,7 +1112,7 @@ extern "C" fn rsf_anomaly_fg_stage_ui_boundary() {
         stage.capture_adapter_inputs(context, sr, render, previous);
     }
     let inputs_ready = stage.inputs_ready(source);
-    let Some(buffer) = stage.lease(unsafe { stage.platform.backbuffer.unwrap()(chain) }) else {
+    let Some(buffer) = stage.lease(unsafe { (stage.platform.backbuffer)(chain) }) else {
         stage.engine.lock().unwrap().policy.inputs(false);
         return;
     };
@@ -1052,7 +1151,7 @@ extern "C" fn rsf_anomaly_fg_stage_end_before() {
         return;
     };
     let mut output = 0;
-    if !unsafe { stage.platform.output_window.unwrap()(chain, &mut output) } {
+    if !unsafe { (stage.platform.output_window)(chain, &mut output) } {
         return;
     }
     window.window_key = output as u64;
@@ -1111,17 +1210,12 @@ extern "C" fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: Raw) {
         return;
     };
     let bridge = stage.tables.present;
-    let generation = bridge.generation.map(|get| unsafe { get() });
+    let generation = unsafe { (bridge.generation)() };
     let runtime = stage.runtime_status().unwrap_or_default();
-    let vendor_presented = generation
-        .filter(|&before| {
-            runtime.available != 0
-                && runtime.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED != 0
-                && bridge
-                    .generation
-                    .is_some_and(|get| unsafe { get() } == before)
-        })
-        .map(|generation| PresentTotal {
+    let vendor_presented = (runtime.available != 0
+        && runtime.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED != 0
+        && unsafe { (bridge.generation)() } == generation)
+        .then_some(PresentTotal {
             generation,
             count: runtime.vendor.total_presented,
         });
@@ -1151,11 +1245,11 @@ extern "C" fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: Raw) {
         user: user as usize,
     };
     log.say(format!(
-        "Anomaly FG window: source={} level={} tagged={} fed={} presented={} unpresented={} scope_frames={} \
+        "Anomaly FG window: source={} level={} eligible_at_ui_boundary={} fed={} presented={} unpresented={} scope_frames={} \
         skipped no_level={} scope={} no_present={} no_inputs={} resets first={} device={} discontinuity={} \
         scope_end={} size={} cut={} | runtime tagged={} vendor_presented={} captures={}",
         delta(a.source_frames, b.source_frames), delta(a.level_frames, b.level_frames),
-        delta(a.tagged, b.tagged), delta(a.fed, b.fed), delta(a.presented, b.presented),
+        delta(a.eligible_at_ui_boundary, b.eligible_at_ui_boundary), delta(a.fed, b.fed), delta(a.presented, b.presented),
         delta(a.unpresented, b.unpresented), delta(a.scope_frames, b.scope_frames),
         skipped[1], skipped[2], skipped[3], skipped[4], resets[1], resets[2], resets[3], resets[4],
         resets[5], resets[6], delta(now.runtime_tagged, previous.runtime_tagged),
@@ -1163,10 +1257,10 @@ extern "C" fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: Raw) {
     ));
     let (owner, backend, choices, switch) = unsafe {
         (
-            bridge.has_owner.unwrap()(),
-            bridge.backend.unwrap()(),
-            bridge.backend_choices.unwrap()(),
-            bridge.switch_result.map_or(0, |f| f()),
+            (bridge.has_owner)(),
+            (bridge.backend)(),
+            (bridge.backend_choices)(),
+            (bridge.switch_result)(),
         )
     };
     log.say(format!(
