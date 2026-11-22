@@ -1022,7 +1022,7 @@ Port swapchain dispatch, presentation synchronization and shared surface ownersh
 
 - [x] [tests/d3d11_present_api.cpp](tests/d3d11_present_api.cpp)
 - [ ] [tests/d3d11_present_bridge.cpp](tests/d3d11_present_bridge.cpp)
-- [ ] [tests/fg_present_bridge.cpp](tests/fg_present_bridge.cpp)
+- [x] [tests/fg_present_bridge.cpp](tests/fg_present_bridge.cpp)
 - [x] [tests/shared_surface.cpp](tests/shared_surface.cpp)
 
 **Rust review findings (4)**
@@ -1639,7 +1639,7 @@ Port XeSS Vulkan requirements, frame generation and present/capture handling for
 **Fixtures (3)**
 
 - [x] [tests/native_fg_xess_vulkan_interop.cpp](tests/native_fg_xess_vulkan_interop.cpp)
-- [ ] [tests/native_fg_xess_vulkan_present.cpp](tests/native_fg_xess_vulkan_present.cpp)
+- [x] [tests/native_fg_xess_vulkan_present.cpp](tests/native_fg_xess_vulkan_present.cpp)
 - [ ] [tests/native_xess_vulkan.cpp](tests/native_xess_vulkan.cpp)
 
 **Rust review findings (7)**
@@ -1673,8 +1673,8 @@ Port startup, renderer admission and retirement, including how a refused install
 **Port files (8)**
 
 - [x] [games/ac7/include/rescaleframe/ac7_carrier.h](games/ac7/include/rescaleframe/ac7_carrier.h)
-- [ ] [games/ac7/include/rescaleframe/ac7_hooks.h](games/ac7/include/rescaleframe/ac7_hooks.h)
-- [ ] [games/ac7/include/rescaleframe/ac7_memory.h](games/ac7/include/rescaleframe/ac7_memory.h)
+- [x] [games/ac7/include/rescaleframe/ac7_hooks.h](games/ac7/include/rescaleframe/ac7_hooks.h)
+- [x] [games/ac7/include/rescaleframe/ac7_memory.h](games/ac7/include/rescaleframe/ac7_memory.h)
 - [x] [games/ac7/include/rescaleframe/ac7_native_renderer.h](games/ac7/include/rescaleframe/ac7_native_renderer.h)
 - [x] [games/ac7/src/ac7_platform.h](games/ac7/src/ac7_platform.h)
 - [x] [games/ac7/src/ac7_sites.h](games/ac7/src/ac7_sites.h)

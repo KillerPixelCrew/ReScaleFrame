@@ -612,7 +612,8 @@ target_link_libraries(rsf_fg_c_header PRIVATE ReScaleFrame::DLSS rsf_build_optio
 add_executable(rsf_fg_switching_test generation/device_main.c)
 target_compile_definitions(rsf_fg_switching_test PRIVATE RSF_FG_DEVICE_FIXTURE=rsf_test_fg_switching)
 add_executable(rsf_d3d11_present_bridge_test d3d11_present_bridge.cpp)
-add_executable(rsf_fg_present_bridge_test fg_present_bridge.cpp)
+add_executable(rsf_fg_present_bridge_test fg_present_bridge.c)
+set_target_properties(rsf_fg_present_bridge_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_fg_present_bridge_test PRIVATE rsf_presentation_fixtures_rust rsf_orchestrator_core rsf_build_options)
 set_target_properties(rsf_fg_present_bridge_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
