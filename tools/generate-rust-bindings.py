@@ -131,14 +131,18 @@ generate("games/ac7/src/scene_color_abi.rs", "games/ac7/include/rescaleframe/ac7
 generate("games/ac7/src/cloud_depth_abi.rs", "games/ac7/src/cloud_depth_platform.h",
          "rsf_ac7_cloud_depth(_(facts|params|leaves))?", "NOTHING", [],
          ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
-generate("games/minecraft/native/platform_abi.rs", "games/minecraft/native/minecraft_platform.h",
-         "rsf_(minecraft_(platform|configuration|message_fn)|gl_pipeline(_(setup|options|surfaces|status))?|"
+generate("games/minecraft/native/platform_abi.rs", "runtime/orchestrator/include/rescaleframe/gl_pipeline.h",
+         "rsf_(gl_pipeline(_(setup|options|surfaces|status))?|"
          "native_fg_(options|status)|fg_status|sharpening_options|native_(latency_status|cpu_counters)|"
          "backend_(log_fn|result)|dump_log_fn|fg_mode|pacing_owner|reflex_mode)",
-         "RSF_(MINECRAFT_.*|FG_(OFF|FIXED))",
-         ["-Iruntime/orchestrator/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
+         "RSF_(SHARPENING_ABI_VERSION|FG_(OFF|FIXED))",
+         ["-include", "rescaleframe/input_dump.h", "-include", "rescaleframe/native_cpu.h",
+          "-Iruntime/orchestrator/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
           "-Iruntime/contract/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--allowlist-function",
+          "rsf_(gl_window_(create|destroy)|gl_pipeline_(open|configure|get_surfaces|cpu|input|abort|"
+          "evaluate|hudless|present|status_get|close)|input_dump_configure|native_latency_status_get)",
           "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
 generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_platform.h",
          "rsf_anomaly_input_(log|frame|desc|targets|constants|pipeline|platform)", "NOTHING", [],

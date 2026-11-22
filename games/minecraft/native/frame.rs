@@ -1,22 +1,33 @@
 // SPDX-License-Identifier: MIT
 //! NativeBridge value translation: the Java camera packet to an SR render pass, the Sodium
-//! settings to Runtime options, and the Runtime state to the status array the Java renderer reads.
-//! No calls; lib.rs supplies the Runtime values.
+//! settings to Runtime options. No calls; the JNI bridge supplies the Runtime values.
 
 use crate::platform_abi::{
-    RSF_FG_FIXED, RSF_FG_OFF, RSF_MINECRAFT_CAMERA_FLOATS, RSF_MINECRAFT_STATUS_FIELDS,
-    RSF_MINECRAFT_SURFACE_FIELDS, rsf_gl_pipeline_options, rsf_gl_pipeline_status,
-    rsf_gl_pipeline_surfaces, rsf_minecraft_configuration, rsf_native_fg_options,
-    rsf_native_latency_status, rsf_sharpening_options,
+    RSF_FG_FIXED, RSF_FG_OFF, RSF_SHARPENING_ABI_VERSION, rsf_gl_pipeline_options,
+    rsf_gl_pipeline_surfaces, rsf_native_fg_options, rsf_sharpening_options,
 };
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RESET,
     RSF_GAME_RENDER_SR, rsf_camera_frame, rsf_game_render_pass,
 };
 
-pub(crate) const CAMERA_FLOATS: usize = RSF_MINECRAFT_CAMERA_FLOATS as usize;
-pub(crate) const SURFACE_FIELDS: usize = RSF_MINECRAFT_SURFACE_FIELDS as usize;
-pub(crate) const STATUS_FIELDS: usize = RSF_MINECRAFT_STATUS_FIELDS as usize;
+pub(crate) const CAMERA_FLOATS: usize = 88;
+pub(crate) const SHARPENING_FIELDS: usize = 12;
+// RSF_SCREEN_FLIGHT in game_frame.h.
+pub(crate) const FLIGHT_SCREEN: u32 = 4;
+const SURFACE_FIELDS: usize = 10;
+
+pub(crate) struct Configuration {
+    pub sr: i32,
+    pub quality: i32,
+    pub preset: i32,
+    pub fg: i32,
+    pub count: i32,
+    pub reflex: i32,
+    pub limit: i32,
+    pub debug: bool,
+    pub sharpening: [f32; SHARPENING_FIELDS],
+}
 
 /// TemporalRenderer's camera packet: five 4x4 matrices (view-to-clip, clip-to-view,
 /// view-to-world, world-to-view, clip-to-previous-clip), current and previous jitter in pixels,
@@ -101,12 +112,11 @@ fn choice(value: f32) -> u32 {
     }
 }
 
-/// TaaSettings.sharpening() in its Java order. Size and ABI version come from the Runtime defaults.
-pub(crate) fn sharpening(
-    values: &[f32; 12],
-    defaults: rsf_sharpening_options,
-) -> rsf_sharpening_options {
+/// Every field comes from TaaSettings.sharpening(); the shared Runtime validates the values.
+pub(crate) fn sharpening(values: &[f32; SHARPENING_FIELDS]) -> rsf_sharpening_options {
     rsf_sharpening_options {
+        struct_size: struct_size::<rsf_sharpening_options>(),
+        abi_version: RSF_SHARPENING_ABI_VERSION,
         mode: choice(values[0]),
         sharpness: values[1],
         mas: choice(values[2]),
@@ -119,16 +129,12 @@ pub(crate) fn sharpening(
         depth_bias: values[9],
         clamp_output: choice(values[10]),
         debug: choice(values[11]),
-        ..defaults
     }
 }
 
 /// The Runtime options for one NativeBridge.configure call. A positive frame limit is a rendered
 /// frame rate; the Runtime receives its minimum interval in microseconds.
-pub(crate) fn options(
-    configuration: &rsf_minecraft_configuration,
-    sharpening_defaults: rsf_sharpening_options,
-) -> rsf_gl_pipeline_options {
+pub(crate) fn options(configuration: &Configuration) -> rsf_gl_pipeline_options {
     let limit = configuration.limit;
     rsf_gl_pipeline_options {
         struct_size: struct_size::<rsf_gl_pipeline_options>(),
@@ -149,10 +155,10 @@ pub(crate) fn options(
             } else {
                 0
             },
-            debug: u32::from(configuration.debug != 0),
+            debug: u32::from(configuration.debug),
         },
         dlss_preset: configuration.preset as u32,
-        sharpening: sharpening(&configuration.sharpening, sharpening_defaults),
+        sharpening: sharpening(&configuration.sharpening),
     }
 }
 
@@ -173,44 +179,6 @@ pub(crate) fn surface_values(
         surfaces.output as i32,
         surfaces.hudless as i32,
         surfaces.composed as i32,
-    ]
-}
-
-/// NativeRenderer's nativeStatus array. The first 14 values keep their original positions;
-/// FG capacity (14, 15) and latency facts (16..25) were appended.
-pub(crate) fn status_values(
-    status: &rsf_gl_pipeline_status,
-    latency: &rsf_native_latency_status,
-) -> [i64; STATUS_FIELDS] {
-    let fg = &status.generation;
-    let vendor = &fg.vendor;
-    let events = &latency.events;
-    [
-        i64::from(status.requested_sr),
-        i64::from(status.effective_sr),
-        i64::from(status.requested_fg),
-        i64::from(status.effective_fg),
-        i64::from(status.sr_result),
-        i64::from(status.fg_switch_result),
-        status.evaluated as i64,
-        i64::from(fg.reason),
-        i64::from(fg.last_result),
-        i64::from(vendor.effective_generated_frames),
-        fg.tagged_frames as i64,
-        vendor.generated_presented as i64,
-        i64::from(vendor.active),
-        i64::from(vendor.valid_statistics),
-        i64::from(vendor.max_generated_frames),
-        i64::from(vendor.supported),
-        i64::from(latency.owner),
-        latency.paced_frames as i64,
-        events.input_events[0] as i64,
-        events.input_events[1] as i64,
-        events.input_events[2] as i64,
-        events.pings as i64,
-        events.substitutes as i64,
-        events.order_violations as i64,
-        latency.derived_boundaries as i64,
     ]
 }
 

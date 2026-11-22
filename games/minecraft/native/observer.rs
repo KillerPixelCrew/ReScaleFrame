@@ -3,7 +3,6 @@
 //! every PM_REMOVE message for the parent, the presentation child or the thread itself. It never
 //! replaces GLFW callbacks or injects input; the Runtime recognises pings and assigns frame identity.
 
-use crate::platform_abi::rsf_minecraft_message_fn;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering::SeqCst};
@@ -14,7 +13,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     UnhookWindowsHookEx, WH_GETMESSAGE,
 };
 
-type Sink = unsafe extern "C" fn(message: u32);
+pub(crate) type Sink = unsafe extern "C" fn(message: u32);
 
 static PARENT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static CHILD: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
@@ -45,7 +44,7 @@ unsafe extern "system" fn observe(code: i32, removed: WPARAM, data: LPARAM) -> L
 }
 
 /// Installs the hook on the calling thread, which must own parent. Refuses while installed.
-pub(crate) fn install(parent: HWND, child: HWND, report: rsf_minecraft_message_fn) -> bool {
+pub(crate) fn install(parent: HWND, child: HWND, report: Option<Sink>) -> bool {
     // SAFETY: plain thread and window queries; a stale or null window returns zero.
     let (owner, current) = unsafe {
         (

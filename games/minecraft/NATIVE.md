@@ -1,34 +1,48 @@
 # ReScaleFrameCraft native integration
 
-### Rust native owner
+### Rust JNI bridge
 
-`ReScaleFrame.Minecraft.dll` now links the `rsf-minecraft` staticlib (`native/lib.rs`) next to the
-same OrchestratorCore. Rust owns the adapter state that `jni.cpp` held: the process log
-(`minecraft-native.log`), the session identity (`Minecraft 1.21.1`, project
-`11e3ed7f-06c6-4863-a54d-2b790f2176f2`, capture name `Minecraft`), the open pipeline the message
-observer reports to, the presentation child with its WH_GETMESSAGE observer (formerly
-`input_observer.h`), the 88-float camera packet to SR pass translation, the Sodium settings to
-`rsf_gl_pipeline_options` translation including the 12 sharpening fields, the ten configure
-values and the 25 status values (14 still accepted). `jni.cpp` keeps all twelve
-`NativeBridge` exports with unchanged names and signatures, does the typed JNI marshaling and lends
-the Runtime's `rsf_gl_*`, capture, latency-status and header-inline sharpening helpers through
-`minecraft_platform.h`; `native/platform_abi.rs` is generated from it. Java, Gradle and the GL,
-D3D12 and presentation contracts are unchanged, and no backend or frame policy was added.
+`ReScaleFrame.Minecraft.dll` links the `rsf-minecraft` Rust archive and the same
+OrchestratorCore. `native/jni.rs` uses typed JNI definitions from `jni-sys`, and
+`native/jni.def` exports the original Java signatures plus `statusCount`. The bridge calls
+the linked Runtime directly through `native/platform_abi.rs`, generated from the Runtime
+headers. The GL interop fixture still links the Rust message observer. The native target
+can be built without setting a JDK header path.
 
-Intentional differences: the log path is decoded as UTF-8 and opened through the wide API, where
-`fopen` used the ANSI code page; the Runtime still receives the unchanged JNI bytes. Log lines keep
-their CRLF ends, are serialised under a lock and a null message is ignored. The GL interop test
-links the Rust observer instead of the header class.
+The bridge reads the Java runtime directory as UTF-16. The log uses the original Windows
+code units and the linked Runtime receives standard UTF-8. The existing 88-float camera
+layout and ten-value configuration result are unchanged. Evaluate and HUD-less return
+a failed surface query directly before constructing a camera pass.
 
-This is a behaviour-preserving port from source review. Checks were rustfmt (1.11.0, edition
-2024; the pinned 1.94.1 toolchain is not installed), locked offline Cargo metadata, bindgen 0.72.1
-regeneration of the Minecraft entry only and Git whitespace checks. Not run: native build and
-link (this DLL and `rsf_gl_shared_surface_test` now carry a second Rust archive next to the
-orchestrator's, the same unverified multi-archive pattern as Fallout 4), Cargo tests including
-`native/frame/tests.rs`, Clippy, CTest, the RTX GL interop fixture, Gradle `NativeBridgeTest`
-and a game run. Remaining native C++ is the JNI marshaling itself, kept typed against the JDK's
-`jni.h` rather than generating bindings from that out-of-tree header, and the two sharpening
-helpers, which can move once the shared Runtime exposes them as linked C functions.
+`eng/generate-native-status.py` defines the status fields in wire order and emits the Rust
+writer and Java getters. It accepts `--check` to verify both outputs. The first 25 positions
+and the minimum length of 14 are preserved. A failed graphics status query writes nothing.
+The appended latency availability flag lets callers read valid graphics status when the
+latency query fails.
+
+### Shared settings handoff
+
+The OpenGL pipeline owns D3D12 presentation on the borrowed child window. The existing
+shared overlay host draws into D3D11 buffers. The shared Runtime must supply a compatible
+composition path and route overlay input through the GLFW parent, which remains the input
+and focus owner. Put composition after the HUD-less capture and before Present so SR and
+the HUD-less input retain their current contents.
+
+Use the shared settings store with a stable, adapter-supplied instance path and section.
+The native extraction path changes with each packaged manifest. Carry forward SR backend,
+quality, DLSS preset, FG backend and count, latency mode, frame limit, FG debug and all
+twelve sharpening fields. The existing frontend settings have no FG debug member, so the
+shared owner needs a persisted and live control for it. Resolve FG mode and frame interval
+in the Runtime. Apply changes at the drained boundary before Java starts simulation and
+receives the frame's textures and dimensions. The Java caller must check that boundary for
+Runtime changes even when the display size stays constant.
+
+Use the existing JSON as migration input when a shared configuration does not yet exist.
+Keep Java's temporal antialiasing toggle and game-specific render-path checks. Once the
+Runtime can serve settings and controls, move the native-options controls from Sodium and
+`TaaScreen` to the shared overlay, and use the Runtime's requested/effective status for
+native activation, Iris admission and FG capability. The current adapter-side translation
+continues to drive the existing renderer until that shared path is available.
 
 ### Frame-generation multiplier limits, 1.1.14-dev
 
@@ -96,8 +110,7 @@ The original standalone checkout remains available as a reference. Native vendor
 interoperability and presentation use the shared C++ runtime; the Java adapter owns Minecraft's
 render targets, camera conventions, input frame and HUD boundary. No overlay is created.
 
-Build the native tree with `RSF_JAVA_HOME` pointing to a JDK with JNI headers. Build target
-`rsf_minecraft`, then run `eng/stage-native.ps1 -SdkWorkspace <SDK-equipped ReScaleFrame checkout>`
+Build the native target `rsf_minecraft`, then run `eng/stage-native.ps1 -SdkWorkspace <SDK-equipped ReScaleFrame checkout>`
 and the Gradle `test jar` tasks. The package contains the native DLL, an explicit retail vendor
 runtime allowlist, licenses and SHA256 manifest. Extraction is content-addressed within the
 instance, so updating the mod cannot overwrite a loaded native module.

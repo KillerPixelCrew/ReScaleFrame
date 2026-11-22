@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::platform_abi::RSF_MINECRAFT_HUDLESS_SCREEN;
+use crate::platform_abi::{rsf_gl_pipeline_status, rsf_native_latency_status};
+use crate::status::{STATUS_MINIMUM, status_values};
 
 fn surfaces() -> rsf_gl_pipeline_surfaces {
     rsf_gl_pipeline_surfaces {
@@ -20,15 +21,6 @@ fn surfaces() -> rsf_gl_pipeline_surfaces {
 
 fn packet() -> CameraPacket {
     std::array::from_fn(|index| index as f32 + 0.5)
-}
-
-fn defaults() -> rsf_sharpening_options {
-    rsf_sharpening_options {
-        struct_size: struct_size::<rsf_sharpening_options>(),
-        abi_version: 1,
-        sharpness: 0.4,
-        ..Default::default()
-    }
 }
 
 #[test]
@@ -82,13 +74,7 @@ fn camera_packet_fills_the_primary_sr_pass() {
 
 #[test]
 fn hudless_pass_without_reset_keeps_only_primary() {
-    let pass = pass(
-        &packet(),
-        &surfaces(),
-        7,
-        false,
-        RSF_MINECRAFT_HUDLESS_SCREEN,
-    );
+    let pass = pass(&packet(), &surfaces(), 7, false, FLIGHT_SCREEN);
     assert_eq!(pass.flags, RSF_GAME_RENDER_PRIMARY);
     assert_eq!(pass.screen, 4);
 }
@@ -111,7 +97,7 @@ fn sharpening_choices_refuse_out_of_range_and_non_finite_values() {
     values[6] = -0.5;
     values[10] = f32::NAN;
     values[11] = 4.5;
-    let decoded = sharpening(&values, defaults());
+    let decoded = sharpening(&values);
     assert_eq!(decoded.struct_size, struct_size::<rsf_sharpening_options>());
     assert_eq!(decoded.abi_version, 1);
     assert_eq!(
@@ -130,9 +116,7 @@ fn sharpening_choices_refuse_out_of_range_and_non_finite_values() {
 
 #[test]
 fn options_map_generation_limit_and_debug() {
-    let mut configuration = rsf_minecraft_configuration {
-        width: 1920,
-        height: 1080,
+    let mut configuration = Configuration {
         sr: 1,
         quality: 2,
         preset: 13,
@@ -140,10 +124,10 @@ fn options_map_generation_limit_and_debug() {
         count: 3,
         reflex: 2,
         limit: 60,
-        debug: 1,
+        debug: true,
         sharpening: [0.0; 12],
     };
-    let options = options(&configuration, defaults());
+    let options = options(&configuration);
     assert_eq!(
         options.struct_size,
         struct_size::<rsf_gl_pipeline_options>()
@@ -168,17 +152,12 @@ fn options_map_generation_limit_and_debug() {
 
     configuration.fg = 0;
     configuration.limit = 0;
-    configuration.debug = 0;
-    let generation = super::options(&configuration, defaults()).generation;
+    configuration.debug = false;
+    let generation = super::options(&configuration).generation;
     assert_eq!(generation.mode, RSF_FG_OFF);
     assert_eq!((generation.frame_limit_us, generation.debug), (0, 0));
     configuration.limit = -5;
-    assert_eq!(
-        super::options(&configuration, defaults())
-            .generation
-            .frame_limit_us,
-        0
-    );
+    assert_eq!(super::options(&configuration).generation.frame_limit_us, 0);
 }
 
 #[test]
@@ -220,12 +199,16 @@ fn status_values_keep_the_legacy_prefix_and_append_capacity_and_latency() {
     latency.events.pings = 13;
     latency.events.substitutes = 14;
     latency.events.order_violations = 15;
-    let values = status_values(&status, &latency);
+    let values = status_values(&status, Some(&latency));
     assert_eq!(
         values,
         [
             7, 1, 7, 3, -8, -1, 900, 5, -2, 2, 800, 700, 1, 1, 3, 1, 1, 600, 10, 11, 12, 13, 14,
-            15, 9
+            15, 9, 1
         ]
     );
+    let unavailable = status_values(&status, None);
+    assert_eq!(STATUS_MINIMUM, 14);
+    assert_eq!(&unavailable[..16], &values[..16]);
+    assert_eq!(&unavailable[16..], &[0; 10]);
 }

@@ -22,7 +22,8 @@ public final class NativeRenderer {
     private static Configuration applied,failed;
     private static String status="native processing off";
     private static int[] surfaces;
-    private static final long[] nativeStatus=new long[25];
+    private static final long[] nativeStatus=new long[NativeStatus.COUNT];
+    private static boolean nativeStatusAvailable;
     private static RenderTarget display;
     private static WorldRenderTarget world;
     private static boolean worldRendering;
@@ -58,7 +59,7 @@ public final class NativeRenderer {
         long now=System.nanoTime();
         frameTime=lastFrameTime==0?.016f:Math.clamp((now-lastFrameTime)*1e-9f,.001f,1f);lastFrameTime=now;
         if(handle!=0&&frame>closedFrame)abortFrame();
-        ++frame;worldRendering=false;
+        ++frame;worldRendering=false;nativeStatusAvailable=false;
         if(!GL.getCapabilities().OpenGL33)return;
         display=game.getMainRenderTarget();
         frameDisplayWidth=display.viewWidth;frameDisplayHeight=display.viewHeight;
@@ -67,9 +68,13 @@ public final class NativeRenderer {
         if(handle!=0&&surfaces!=null) {
             cpuFrames.simulation(frame);
             inputs.begin(frame);
-            NativeBridge.status(handle,nativeStatus);
+            nativeStatusAvailable=NativeBridge.statusCount(handle,nativeStatus)!=0;
+            if(!nativeStatusAvailable) {
+                status="native status unavailable";
+                return;
+            }
             var limits=FrameGenerationLimits.INSTANCE;
-            if(limits.record((int)nativeStatus[2],(int)nativeStatus[3],(int)nativeStatus[14],nativeStatus[15]!=0)) {
+            if(limits.record((int)NativeStatus.requestedFg(nativeStatus),(int)NativeStatus.effectiveFg(nativeStatus),(int)NativeStatus.maxGeneratedFrames(nativeStatus),NativeStatus.fgSupported(nativeStatus)!=0)) {
                 SodiumConfig.capabilitiesChanged();
                 int count=limits.clamp(s.frameGeneration,s.generatedFrames);
                 if(s.frameGeneration!=TaaSettings.FrameGeneration.OFF&&count!=s.generatedFrames) {s.generatedFrames=count;TaaSettings.save();}
@@ -127,7 +132,7 @@ public final class NativeRenderer {
     }
     public static RenderTarget worldTarget() {return worldRendering?world:null;}
     public static boolean processing() {return worldRendering&&surfaces!=null;}
-    public static boolean upscaling() {return processing()&&nativeStatus[1]!=0;}
+    public static boolean upscaling() {return processing()&&nativeStatusAvailable&&NativeStatus.effectiveSr(nativeStatus)!=0;}
     public static int phaseCount() {return upscaling()?Math.max(8,Math.round(8f*surfaces[2]*surfaces[3]/surfaces[0]/surfaces[1])):8;}
     static void finishWorld(RenderTarget source,TemporalCamera camera,int depth,int motion) {
         if(!processing())return;
@@ -150,14 +155,14 @@ public final class NativeRenderer {
         int screen=game.screen!=null||game.getOverlay()!=null||game.isPaused()?1:4;
         int result=NativeBridge.evaluate(handle,frame,cameraData,camera.reset,screen);
         worldRendering=false;
-        if(result==0&&nativeStatus[1]!=0)copyTexture(surfaces[7],display,true);
+        if(result==0&&nativeStatusAvailable&&NativeStatus.effectiveSr(nativeStatus)!=0)copyTexture(surfaces[7],display,true);
         else blit(source,display,GL11.GL_COLOR_BUFFER_BIT,GL11.GL_LINEAR);
         copyDepth(source,display,copyDepth,vao);
         if(result!=0) {
             status="Native evaluate failed: "+result;
             if(result!=lastResult||refusedFrames++<4||refusedFrames%600==0)ReScaleFrameCraft.LOGGER.error("Native evaluate refused frame {}: {}, near={}, far={}, fov={}, dt={}",frame,result,cameraData.get(84),cameraData.get(85),cameraData.get(86),cameraData.get(87));
-        } else if(acceptedWidth!=source.viewWidth) {
-            acceptedWidth=source.viewWidth;ReScaleFrameCraft.LOGGER.info("Native scene processed frame {}: {}x{} -> {}x{}, SR backend={}",frame,source.viewWidth,source.viewHeight,surfaces[2],surfaces[3],nativeStatus[1]);
+        } else if(nativeStatusAvailable&&acceptedWidth!=source.viewWidth) {
+            acceptedWidth=source.viewWidth;ReScaleFrameCraft.LOGGER.info("Native scene processed frame {}: {}x{} -> {}x{}, SR backend={}",frame,source.viewWidth,source.viewHeight,surfaces[2],surfaces[3],NativeStatus.effectiveSr(nativeStatus));
         }
         lastResult=result;
         // Preserve a display-sized completed scene before hand/HUD writes. Native owns its copy.
@@ -236,12 +241,15 @@ public final class NativeRenderer {
     public static void endDisplay() {--displayDepth;}
     public static String status() {
         if(status!=null)return status;
-        return "SR "+name(nativeStatus[0])+" -> "+name(nativeStatus[1])+" ("+nativeStatus[4]+", frames="+nativeStatus[6]+"), FG "+name(nativeStatus[2])+" -> "+name(nativeStatus[3])+
-            ", active="+(nativeStatus[12]!=0)+", generated/real="+nativeStatus[9]+", tags="+nativeStatus[10]+", generated presented="+
-            ((nativeStatus[13]&2)!=0?Long.toString(nativeStatus[11]):"n/a")+", reason="+nativeStatus[7]+", result="+nativeStatus[8]+", latency="+
-            switch((int)nativeStatus[16]) {case 1->"Reflex";case 2->"XeLL";case 3->"AMD Anti-Lag 2";default->"none";}+
-            ", paced="+nativeStatus[17]+", input="+nativeStatus[18]+"/"+nativeStatus[19]+"/"+nativeStatus[20]+
-            ", ping="+nativeStatus[21]+", substitutes="+nativeStatus[22]+", order violations="+nativeStatus[23]+", derived="+nativeStatus[24];
+        return "SR "+name(NativeStatus.requestedSr(nativeStatus))+" -> "+name(NativeStatus.effectiveSr(nativeStatus))+" ("+NativeStatus.srResult(nativeStatus)+", frames="+NativeStatus.evaluated(nativeStatus)+"), FG "+name(NativeStatus.requestedFg(nativeStatus))+" -> "+name(NativeStatus.effectiveFg(nativeStatus))+
+            ", active="+(NativeStatus.fgActive(nativeStatus)!=0)+", generated/real="+NativeStatus.effectiveGeneratedFrames(nativeStatus)+", tags="+NativeStatus.taggedFrames(nativeStatus)+", generated presented="+
+            ((NativeStatus.fgValidStatistics(nativeStatus)&2)!=0?Long.toString(NativeStatus.generatedPresented(nativeStatus)):"n/a")+", reason="+NativeStatus.fgReason(nativeStatus)+", result="+NativeStatus.fgResult(nativeStatus)+", latency="+latencyStatus();
+    }
+    private static String latencyStatus() {
+        if(NativeStatus.latencyAvailable(nativeStatus)==0)return "unavailable";
+        return switch((int)NativeStatus.latencyOwner(nativeStatus)) {case 1->"Reflex";case 2->"XeLL";case 3->"AMD Anti-Lag 2";default->"none";}+
+            ", paced="+NativeStatus.pacedFrames(nativeStatus)+", input="+NativeStatus.keyboardEvents(nativeStatus)+"/"+NativeStatus.mouseEvents(nativeStatus)+"/"+NativeStatus.controllerEvents(nativeStatus)+
+            ", ping="+NativeStatus.pings(nativeStatus)+", substitutes="+NativeStatus.substitutes(nativeStatus)+", order violations="+NativeStatus.orderViolations(nativeStatus)+", derived="+NativeStatus.derivedBoundaries(nativeStatus);
     }
     private static void abortFrame() {NativeBridge.abort(handle,frame);closedFrame=frame;cpuFrames.ended(frame);}
     static TemporalRenderer.SceneFrame sceneFrame(long id) {return new TemporalRenderer.SceneFrame(id,surfaces[2],surfaces[3],surfaces[8],true);}

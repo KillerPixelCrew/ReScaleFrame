@@ -51,5 +51,6 @@ final class NativeBridge {
     static native int hudless(long handle,long frame,FloatBuffer camera);
     static native int present(long handle,long frame,boolean vsync);
     static native void status(long handle,long[] destination);
+    static native int statusCount(long handle,long[] destination);
     static native int close(long handle);
 }

@@ -6,16 +6,113 @@ use rsf_game_sys::rsf_game_render_pass;
 
 pub const RSF_FG_OFF: u32 = 0;
 pub const RSF_FG_FIXED: u32 = 1;
-pub const RSF_MINECRAFT_CAMERA_FLOATS: u32 = 88;
-pub const RSF_MINECRAFT_SHARPENING_FIELDS: u32 = 12;
-pub const RSF_MINECRAFT_SURFACE_FIELDS: u32 = 10;
-pub const RSF_MINECRAFT_STATUS_MINIMUM: u32 = 14;
-pub const RSF_MINECRAFT_STATUS_FIELDS: u32 = 25;
-pub const RSF_MINECRAFT_HUDLESS_SCREEN: u32 = 4;
+pub const RSF_SHARPENING_ABI_VERSION: u32 = 1;
+pub type rsf_dump_log_fn = ::core::option::Option<
+    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
+>;
 pub type rsf_backend_result = i32;
 pub type rsf_backend_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
 >;
+unsafe extern "C" {
+    pub fn rsf_input_dump_configure(
+        directory: *const ::core::ffi::c_char,
+        game: *const ::core::ffi::c_char,
+        executable_sha256: *const ::core::ffi::c_char,
+        log: rsf_dump_log_fn,
+        user: *mut ::core::ffi::c_void,
+    );
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_native_cpu_counters {
+    pub struct_size: u32,
+    pub frames: u64,
+    pub input_events: [u64; 3usize],
+    pub pings: u64,
+    pub substitutes: u64,
+    pub duplicates: u64,
+    pub order_violations: u64,
+    pub expired_messages: u64,
+    pub unframed_inputs: u64,
+    pub derived_frame_ends: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_cpu_counters"]
+        [::core::mem::size_of::<rsf_native_cpu_counters>() - 96usize];
+    ["Alignment of rsf_native_cpu_counters"]
+        [::core::mem::align_of::<rsf_native_cpu_counters>() - 8usize];
+    ["Offset of field: rsf_native_cpu_counters::struct_size"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, struct_size) - 0usize];
+    ["Offset of field: rsf_native_cpu_counters::frames"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, frames) - 8usize];
+    ["Offset of field: rsf_native_cpu_counters::input_events"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, input_events) - 16usize];
+    ["Offset of field: rsf_native_cpu_counters::pings"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, pings) - 40usize];
+    ["Offset of field: rsf_native_cpu_counters::substitutes"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, substitutes) - 48usize];
+    ["Offset of field: rsf_native_cpu_counters::duplicates"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, duplicates) - 56usize];
+    ["Offset of field: rsf_native_cpu_counters::order_violations"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, order_violations) - 64usize];
+    ["Offset of field: rsf_native_cpu_counters::expired_messages"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, expired_messages) - 72usize];
+    ["Offset of field: rsf_native_cpu_counters::unframed_inputs"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, unframed_inputs) - 80usize];
+    ["Offset of field: rsf_native_cpu_counters::derived_frame_ends"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, derived_frame_ends) - 88usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_native_latency_status {
+    pub struct_size: u32,
+    pub version: u32,
+    pub owner: u32,
+    pub available: u32,
+    pub effective_mode: u32,
+    pub pcl_available: u32,
+    pub report_available: u32,
+    pub paced_frames: u64,
+    pub marker_calls: u64,
+    pub derived_boundaries: u64,
+    pub events: rsf_native_cpu_counters,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_latency_status"]
+        [::core::mem::size_of::<rsf_native_latency_status>() - 152usize];
+    ["Alignment of rsf_native_latency_status"]
+        [::core::mem::align_of::<rsf_native_latency_status>() - 8usize];
+    ["Offset of field: rsf_native_latency_status::struct_size"]
+        [::core::mem::offset_of!(rsf_native_latency_status, struct_size) - 0usize];
+    ["Offset of field: rsf_native_latency_status::version"]
+        [::core::mem::offset_of!(rsf_native_latency_status, version) - 4usize];
+    ["Offset of field: rsf_native_latency_status::owner"]
+        [::core::mem::offset_of!(rsf_native_latency_status, owner) - 8usize];
+    ["Offset of field: rsf_native_latency_status::available"]
+        [::core::mem::offset_of!(rsf_native_latency_status, available) - 12usize];
+    ["Offset of field: rsf_native_latency_status::effective_mode"]
+        [::core::mem::offset_of!(rsf_native_latency_status, effective_mode) - 16usize];
+    ["Offset of field: rsf_native_latency_status::pcl_available"]
+        [::core::mem::offset_of!(rsf_native_latency_status, pcl_available) - 20usize];
+    ["Offset of field: rsf_native_latency_status::report_available"]
+        [::core::mem::offset_of!(rsf_native_latency_status, report_available) - 24usize];
+    ["Offset of field: rsf_native_latency_status::paced_frames"]
+        [::core::mem::offset_of!(rsf_native_latency_status, paced_frames) - 32usize];
+    ["Offset of field: rsf_native_latency_status::marker_calls"]
+        [::core::mem::offset_of!(rsf_native_latency_status, marker_calls) - 40usize];
+    ["Offset of field: rsf_native_latency_status::derived_boundaries"]
+        [::core::mem::offset_of!(rsf_native_latency_status, derived_boundaries) - 48usize];
+    ["Offset of field: rsf_native_latency_status::events"]
+        [::core::mem::offset_of!(rsf_native_latency_status, events) - 56usize];
+};
+unsafe extern "C" {
+    pub fn rsf_native_latency_status_get(
+        arg1: *mut rsf_native_latency_status,
+    ) -> ::core::ffi::c_int;
+}
 pub type rsf_fg_mode = u32;
 pub type rsf_pacing_owner = u32;
 pub type rsf_reflex_mode = u32;
@@ -109,9 +206,6 @@ impl Default for rsf_fg_status {
         }
     }
 }
-pub type rsf_dump_log_fn = ::core::option::Option<
-    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
->;
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_native_fg_options {
@@ -416,262 +510,71 @@ impl Default for rsf_gl_pipeline_status {
         }
     }
 }
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_native_cpu_counters {
-    pub struct_size: u32,
-    pub frames: u64,
-    pub input_events: [u64; 3usize],
-    pub pings: u64,
-    pub substitutes: u64,
-    pub duplicates: u64,
-    pub order_violations: u64,
-    pub expired_messages: u64,
-    pub unframed_inputs: u64,
-    pub derived_frame_ends: u64,
+unsafe extern "C" {
+    pub fn rsf_gl_window_create(parent: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void;
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_native_cpu_counters"]
-        [::core::mem::size_of::<rsf_native_cpu_counters>() - 96usize];
-    ["Alignment of rsf_native_cpu_counters"]
-        [::core::mem::align_of::<rsf_native_cpu_counters>() - 8usize];
-    ["Offset of field: rsf_native_cpu_counters::struct_size"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, struct_size) - 0usize];
-    ["Offset of field: rsf_native_cpu_counters::frames"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, frames) - 8usize];
-    ["Offset of field: rsf_native_cpu_counters::input_events"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, input_events) - 16usize];
-    ["Offset of field: rsf_native_cpu_counters::pings"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, pings) - 40usize];
-    ["Offset of field: rsf_native_cpu_counters::substitutes"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, substitutes) - 48usize];
-    ["Offset of field: rsf_native_cpu_counters::duplicates"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, duplicates) - 56usize];
-    ["Offset of field: rsf_native_cpu_counters::order_violations"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, order_violations) - 64usize];
-    ["Offset of field: rsf_native_cpu_counters::expired_messages"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, expired_messages) - 72usize];
-    ["Offset of field: rsf_native_cpu_counters::unframed_inputs"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, unframed_inputs) - 80usize];
-    ["Offset of field: rsf_native_cpu_counters::derived_frame_ends"]
-        [::core::mem::offset_of!(rsf_native_cpu_counters, derived_frame_ends) - 88usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_native_latency_status {
-    pub struct_size: u32,
-    pub version: u32,
-    pub owner: u32,
-    pub available: u32,
-    pub effective_mode: u32,
-    pub pcl_available: u32,
-    pub report_available: u32,
-    pub paced_frames: u64,
-    pub marker_calls: u64,
-    pub derived_boundaries: u64,
-    pub events: rsf_native_cpu_counters,
+unsafe extern "C" {
+    pub fn rsf_gl_window_destroy(window: *mut ::core::ffi::c_void) -> ::core::ffi::c_int;
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_native_latency_status"]
-        [::core::mem::size_of::<rsf_native_latency_status>() - 152usize];
-    ["Alignment of rsf_native_latency_status"]
-        [::core::mem::align_of::<rsf_native_latency_status>() - 8usize];
-    ["Offset of field: rsf_native_latency_status::struct_size"]
-        [::core::mem::offset_of!(rsf_native_latency_status, struct_size) - 0usize];
-    ["Offset of field: rsf_native_latency_status::version"]
-        [::core::mem::offset_of!(rsf_native_latency_status, version) - 4usize];
-    ["Offset of field: rsf_native_latency_status::owner"]
-        [::core::mem::offset_of!(rsf_native_latency_status, owner) - 8usize];
-    ["Offset of field: rsf_native_latency_status::available"]
-        [::core::mem::offset_of!(rsf_native_latency_status, available) - 12usize];
-    ["Offset of field: rsf_native_latency_status::effective_mode"]
-        [::core::mem::offset_of!(rsf_native_latency_status, effective_mode) - 16usize];
-    ["Offset of field: rsf_native_latency_status::pcl_available"]
-        [::core::mem::offset_of!(rsf_native_latency_status, pcl_available) - 20usize];
-    ["Offset of field: rsf_native_latency_status::report_available"]
-        [::core::mem::offset_of!(rsf_native_latency_status, report_available) - 24usize];
-    ["Offset of field: rsf_native_latency_status::paced_frames"]
-        [::core::mem::offset_of!(rsf_native_latency_status, paced_frames) - 32usize];
-    ["Offset of field: rsf_native_latency_status::marker_calls"]
-        [::core::mem::offset_of!(rsf_native_latency_status, marker_calls) - 40usize];
-    ["Offset of field: rsf_native_latency_status::derived_boundaries"]
-        [::core::mem::offset_of!(rsf_native_latency_status, derived_boundaries) - 48usize];
-    ["Offset of field: rsf_native_latency_status::events"]
-        [::core::mem::offset_of!(rsf_native_latency_status, events) - 56usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_minecraft_platform {
-    pub window_create: ::core::option::Option<
-        unsafe extern "C" fn(parent: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub window_destroy: ::core::option::Option<
-        unsafe extern "C" fn(window: *mut ::core::ffi::c_void) -> ::core::ffi::c_int,
-    >,
-    pub open: ::core::option::Option<
-        unsafe extern "C" fn(
-            setup: *const rsf_gl_pipeline_setup,
-            pipeline: *mut *mut rsf_gl_pipeline,
-        ) -> rsf_backend_result,
-    >,
-    pub configure: ::core::option::Option<
-        unsafe extern "C" fn(
-            pipeline: *mut rsf_gl_pipeline,
-            options: *const rsf_gl_pipeline_options,
-            width: u32,
-            height: u32,
-        ) -> rsf_backend_result,
-    >,
-    pub get_surfaces: ::core::option::Option<
-        unsafe extern "C" fn(
-            pipeline: *mut rsf_gl_pipeline,
-            surfaces: *mut rsf_gl_pipeline_surfaces,
-        ) -> rsf_backend_result,
-    >,
-    pub cpu: ::core::option::Option<
-        unsafe extern "C" fn(pipeline: *mut rsf_gl_pipeline, frame: u64, stage: u32),
-    >,
-    pub input: ::core::option::Option<
-        unsafe extern "C" fn(
-            pipeline: *mut rsf_gl_pipeline,
-            frame: u64,
-            kinds: u32,
-            message: u32,
-        ) -> i32,
-    >,
-    pub abort: ::core::option::Option<
-        unsafe extern "C" fn(pipeline: *mut rsf_gl_pipeline, frame: u64) -> rsf_backend_result,
-    >,
-    pub evaluate: ::core::option::Option<
-        unsafe extern "C" fn(
-            pipeline: *mut rsf_gl_pipeline,
-            pass: *const rsf_game_render_pass,
-        ) -> rsf_backend_result,
-    >,
-    pub hudless: ::core::option::Option<
-        unsafe extern "C" fn(
-            pipeline: *mut rsf_gl_pipeline,
-            pass: *const rsf_game_render_pass,
-        ) -> rsf_backend_result,
-    >,
-    pub present: ::core::option::Option<
-        unsafe extern "C" fn(
-            pipeline: *mut rsf_gl_pipeline,
-            frame: u64,
-            vsync: u32,
-        ) -> rsf_backend_result,
-    >,
-    pub status_get: ::core::option::Option<
-        unsafe extern "C" fn(
-            pipeline: *mut rsf_gl_pipeline,
-            status: *mut rsf_gl_pipeline_status,
-        ) -> rsf_backend_result,
-    >,
-    pub close: ::core::option::Option<
-        unsafe extern "C" fn(pipeline: *mut rsf_gl_pipeline) -> rsf_backend_result,
-    >,
-    pub input_dump_configure: ::core::option::Option<
-        unsafe extern "C" fn(
-            directory: *const ::core::ffi::c_char,
-            game: *const ::core::ffi::c_char,
-            executable_sha256: *const ::core::ffi::c_char,
-            log: rsf_dump_log_fn,
-            user: *mut ::core::ffi::c_void,
-        ),
-    >,
-    pub latency_status_get: ::core::option::Option<
-        unsafe extern "C" fn(status: *mut rsf_native_latency_status) -> ::core::ffi::c_int,
-    >,
-    pub sharpening_defaults:
-        ::core::option::Option<unsafe extern "C" fn(options: *mut rsf_sharpening_options)>,
-    pub sharpening_valid: ::core::option::Option<
-        unsafe extern "C" fn(options: *const rsf_sharpening_options) -> bool,
-    >,
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_open(
+        arg1: *const rsf_gl_pipeline_setup,
+        arg2: *mut *mut rsf_gl_pipeline,
+    ) -> rsf_backend_result;
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_minecraft_platform"][::core::mem::size_of::<rsf_minecraft_platform>() - 136usize];
-    ["Alignment of rsf_minecraft_platform"]
-        [::core::mem::align_of::<rsf_minecraft_platform>() - 8usize];
-    ["Offset of field: rsf_minecraft_platform::window_create"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, window_create) - 0usize];
-    ["Offset of field: rsf_minecraft_platform::window_destroy"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, window_destroy) - 8usize];
-    ["Offset of field: rsf_minecraft_platform::open"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, open) - 16usize];
-    ["Offset of field: rsf_minecraft_platform::configure"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, configure) - 24usize];
-    ["Offset of field: rsf_minecraft_platform::get_surfaces"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, get_surfaces) - 32usize];
-    ["Offset of field: rsf_minecraft_platform::cpu"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, cpu) - 40usize];
-    ["Offset of field: rsf_minecraft_platform::input"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, input) - 48usize];
-    ["Offset of field: rsf_minecraft_platform::abort"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, abort) - 56usize];
-    ["Offset of field: rsf_minecraft_platform::evaluate"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, evaluate) - 64usize];
-    ["Offset of field: rsf_minecraft_platform::hudless"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, hudless) - 72usize];
-    ["Offset of field: rsf_minecraft_platform::present"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, present) - 80usize];
-    ["Offset of field: rsf_minecraft_platform::status_get"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, status_get) - 88usize];
-    ["Offset of field: rsf_minecraft_platform::close"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, close) - 96usize];
-    ["Offset of field: rsf_minecraft_platform::input_dump_configure"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, input_dump_configure) - 104usize];
-    ["Offset of field: rsf_minecraft_platform::latency_status_get"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, latency_status_get) - 112usize];
-    ["Offset of field: rsf_minecraft_platform::sharpening_defaults"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, sharpening_defaults) - 120usize];
-    ["Offset of field: rsf_minecraft_platform::sharpening_valid"]
-        [::core::mem::offset_of!(rsf_minecraft_platform, sharpening_valid) - 128usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_minecraft_configuration {
-    pub width: i32,
-    pub height: i32,
-    pub sr: i32,
-    pub quality: i32,
-    pub preset: i32,
-    pub fg: i32,
-    pub count: i32,
-    pub reflex: i32,
-    pub limit: i32,
-    pub debug: u32,
-    pub sharpening: [f32; 12usize],
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_configure(
+        arg1: *mut rsf_gl_pipeline,
+        arg2: *const rsf_gl_pipeline_options,
+        width: u32,
+        height: u32,
+    ) -> rsf_backend_result;
 }
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_minecraft_configuration"]
-        [::core::mem::size_of::<rsf_minecraft_configuration>() - 88usize];
-    ["Alignment of rsf_minecraft_configuration"]
-        [::core::mem::align_of::<rsf_minecraft_configuration>() - 4usize];
-    ["Offset of field: rsf_minecraft_configuration::width"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, width) - 0usize];
-    ["Offset of field: rsf_minecraft_configuration::height"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, height) - 4usize];
-    ["Offset of field: rsf_minecraft_configuration::sr"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, sr) - 8usize];
-    ["Offset of field: rsf_minecraft_configuration::quality"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, quality) - 12usize];
-    ["Offset of field: rsf_minecraft_configuration::preset"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, preset) - 16usize];
-    ["Offset of field: rsf_minecraft_configuration::fg"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, fg) - 20usize];
-    ["Offset of field: rsf_minecraft_configuration::count"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, count) - 24usize];
-    ["Offset of field: rsf_minecraft_configuration::reflex"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, reflex) - 28usize];
-    ["Offset of field: rsf_minecraft_configuration::limit"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, limit) - 32usize];
-    ["Offset of field: rsf_minecraft_configuration::debug"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, debug) - 36usize];
-    ["Offset of field: rsf_minecraft_configuration::sharpening"]
-        [::core::mem::offset_of!(rsf_minecraft_configuration, sharpening) - 40usize];
-};
-pub type rsf_minecraft_message_fn = ::core::option::Option<unsafe extern "C" fn(message: u32)>;
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_get_surfaces(
+        arg1: *mut rsf_gl_pipeline,
+        arg2: *mut rsf_gl_pipeline_surfaces,
+    ) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_cpu(arg1: *mut rsf_gl_pipeline, frame: u64, stage: u32);
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_input(
+        arg1: *mut rsf_gl_pipeline,
+        frame: u64,
+        kinds: u32,
+        message: u32,
+    ) -> i32;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_abort(arg1: *mut rsf_gl_pipeline, frame: u64) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_evaluate(
+        arg1: *mut rsf_gl_pipeline,
+        arg2: *const rsf_game_render_pass,
+    ) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_hudless(
+        arg1: *mut rsf_gl_pipeline,
+        arg2: *const rsf_game_render_pass,
+    ) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_present(
+        arg1: *mut rsf_gl_pipeline,
+        frame: u64,
+        vsync: u32,
+    ) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_status_get(
+        arg1: *mut rsf_gl_pipeline,
+        arg2: *mut rsf_gl_pipeline_status,
+    ) -> rsf_backend_result;
+}
+unsafe extern "C" {
+    pub fn rsf_gl_pipeline_close(arg1: *mut rsf_gl_pipeline) -> rsf_backend_result;
+}
