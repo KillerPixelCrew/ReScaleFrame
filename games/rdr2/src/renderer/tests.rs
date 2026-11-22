@@ -32,11 +32,58 @@ fn request() -> Request {
 }
 
 #[test]
-fn history_starts_without_a_native_result() {
-    let history = History::default();
+fn native_history_recovers_only_after_successful_fallback() {
+    let mut history = History::default();
     assert_eq!(
         (history.frame, history.native_gap, history.native_result),
         (0, false, u32::MAX)
+    );
+    history.frame = 40;
+    history.replaced();
+    assert!(history.native_gap);
+    assert!(history.fell_back(NGX_FAIL, false));
+    assert_eq!(history.frame, 0);
+    assert!(history.native_gap);
+    assert!(history.fell_back(NGX_SUCCESS, true));
+    assert!(!history.native_gap);
+    assert!(!history.fell_back(NGX_SUCCESS, true));
+}
+
+#[test]
+fn fsr_fallback_passes_the_full_copy_and_leaves_the_caller_untouched() {
+    let mut original = [0x5a; fsr::FULL_DESCRIPTION_BYTES];
+    original[fsr::RESET] = 0;
+    let mut copy = FsrDescription(original);
+    let result = copy.fallback(original.as_ptr().cast(), true, |pointer| {
+        let bytes = unsafe { &*pointer.cast::<[u8; fsr::FULL_DESCRIPTION_BYTES]>() };
+        assert_ne!(bytes.as_ptr(), original.as_ptr());
+        assert_eq!(bytes[fsr::RESET], 1);
+        assert_eq!(&bytes[..fsr::RESET], &original[..fsr::RESET]);
+        assert_eq!(&bytes[fsr::RESET + 1..], &original[fsr::RESET + 1..]);
+        fsr::FFX_OK
+    });
+    assert_eq!(result, fsr::FFX_OK);
+    assert_eq!(original[fsr::RESET], 0);
+}
+
+#[test]
+fn fsr_flags_require_supported_depth_and_motion_domains() {
+    assert_eq!(fsr_camera_flags(0), None);
+    assert_eq!(
+        fsr_camera_flags(fsr::INVERTED_DEPTH | fsr::DISPLAY_MOTION),
+        None
+    );
+    assert_eq!(
+        fsr_camera_flags(fsr::INVERTED_DEPTH | fsr::INFINITE_DEPTH),
+        None
+    );
+    assert_eq!(
+        fsr_camera_flags(fsr::INVERTED_DEPTH),
+        Some(NGX_DEPTH_INVERTED)
+    );
+    assert_eq!(
+        fsr_camera_flags(fsr::INVERTED_DEPTH | fsr::JITTERED_MOTION),
+        Some(NGX_DEPTH_INVERTED | NGX_MV_JITTERED)
     );
 }
 

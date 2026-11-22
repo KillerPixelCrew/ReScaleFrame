@@ -242,6 +242,14 @@ pub(crate) mod fsr {
     /// FSR 2.1.2 prefix of the game's FSR 2.2 dispatch description, checked against the pinned
     /// 2.1.2 headers by vendor_census_layouts. The 2.2 description extends past it.
     pub(crate) const DESCRIPTION_BYTES: usize = 1352;
+    // GPUOpen FSR 2.2.0/2.2.1, Windows x64: factor at 1352, auto-reactive flag at
+    // 1356, 184-byte FfxResource at 1360, then four floats at 1544..1560.
+    pub(crate) const FULL_DESCRIPTION_BYTES: usize = 1560;
+    pub(crate) const DISPLAY_MOTION: u32 = 1 << 1;
+    pub(crate) const JITTERED_MOTION: u32 = 1 << 2;
+    pub(crate) const INVERTED_DEPTH: u32 = 1 << 3;
+    pub(crate) const INFINITE_DEPTH: u32 = 1 << 4;
+    pub(crate) const KNOWN_FLAGS: u32 = (1 << 9) - 1;
     pub(crate) const COMMAND_LIST: usize = 0;
     pub(crate) const COLOR: usize = 8;
     pub(crate) const DEPTH: usize = 192;

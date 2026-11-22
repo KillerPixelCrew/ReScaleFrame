@@ -100,6 +100,60 @@ impl Default for History {
 /// Upscale workers change each frame. This serializes a feature's history and the shared host
 /// callback; it never surrounds queue submission or a GPU wait on unsubmitted work.
 static EVALUATIONS: Mutex<BTreeMap<usize, History>> = Mutex::new(BTreeMap::new());
+static FSR_CONTEXTS: Mutex<BTreeMap<usize, FsrContext>> = Mutex::new(BTreeMap::new());
+
+#[derive(Default)]
+struct FsrContext {
+    flags: Option<u32>,
+    history: History,
+}
+
+impl History {
+    fn replaced(&mut self) {
+        self.native_gap = true;
+    }
+
+    fn fell_back(&mut self, result: u32, recovered: bool) -> bool {
+        let report = self.native_gap || self.native_result != result;
+        self.native_result = result;
+        self.native_gap &= !recovered;
+        self.frame = 0;
+        report
+    }
+}
+
+fn fsr_camera_flags(flags: u32) -> Option<u32> {
+    if flags & fsr::INVERTED_DEPTH == 0
+        || flags & (fsr::DISPLAY_MOTION | fsr::INFINITE_DEPTH | !fsr::KNOWN_FLAGS) != 0
+    {
+        return None;
+    }
+    let motion = if flags & fsr::JITTERED_MOTION != 0 {
+        NGX_MV_JITTERED
+    } else {
+        0
+    };
+    Some(NGX_DEPTH_INVERTED | motion)
+}
+
+#[repr(align(8))]
+struct FsrDescription([u8; fsr::FULL_DESCRIPTION_BYTES]);
+
+impl FsrDescription {
+    fn fallback(
+        &mut self,
+        original: *const c_void,
+        force_reset: bool,
+        dispatch: impl FnOnce(*const c_void) -> i32,
+    ) -> i32 {
+        if force_reset {
+            self.0[fsr::RESET] = 1;
+            dispatch(self.0.as_ptr().cast())
+        } else {
+            dispatch(original)
+        }
+    }
+}
 
 struct Context<'a> {
     platform: &'a Platform,
@@ -409,7 +463,7 @@ unsafe extern "C" fn evaluate(
     if let Some(request) = request
         && process(&ctx, &request, &descriptor, history)
     {
-        history.native_gap = true;
+        history.replaced();
         // NVSDK_NGX_Result_Success; the outer wrapper still restores RAGE's heap cache.
         return NGX_SUCCESS;
     }
@@ -417,18 +471,12 @@ unsafe extern "C" fn evaluate(
         descriptor.reset = 1;
     }
     let result = unsafe { native(list, feature, parameters, &descriptor) };
-    if history.native_gap || history.native_result != result {
+    if history.fell_back(result, result & NGX_FAIL_MASK != NGX_FAIL) {
         ctx.host.log(&format!(
             "RDR2 native DLSS fallback result=0x{result:08x} feature={:016X} reset={}.",
             feature as usize, descriptor.reset
         ));
-        history.native_result = result;
     }
-    if result & NGX_FAIL_MASK != NGX_FAIL {
-        history.native_gap = false;
-    }
-    // Reset RSF history after every native fallback, too.
-    history.frame = 0;
     result
 }
 
@@ -477,64 +525,77 @@ unsafe extern "C" fn rsf_rdr2_fsr_dispatch_detour(
         return unsafe { native(context_pointer, pointer) };
     };
     report_fsr_caller(&ctx, caller);
-    // The 2.1.2 prefix is normalized to the very same direct-resource DLSS descriptor.
-    let mut bytes = [0u8; fsr::DESCRIPTION_BYTES];
-    if pointer.is_null() || !ctx.platform.read_bytes(pointer as usize, &mut bytes) {
+    let mut contexts = lock(&FSR_CONTEXTS);
+    let Some(feature) = contexts.get_mut(&(context_pointer as usize)) else {
         return unsafe { native(context_pointer, pointer) };
-    }
-    let dispatch = fsr_dispatch(&bytes);
-    let mut histories = lock(&EVALUATIONS);
-    let history = histories.entry(context_pointer as usize).or_default();
-    let request = Request {
-        list: dispatch.command_list,
-        feature: context_pointer as usize,
-        flags: NGX_DEPTH_INVERTED,
-        engine_states: Some(dispatch.states),
     };
-    if dispatch.states_valid && process(&ctx, &request, &dispatch.descriptor, history) {
-        history.native_gap = true;
-        // FFX_OK; the outer game wrapper performs its normal cache restoration.
-        return fsr::FFX_OK;
+    let mut copy = FsrDescription([0; fsr::FULL_DESCRIPTION_BYTES]);
+    let copied = ctx.platform.read_bytes(pointer as usize, &mut copy.0);
+    if copied && let Some(flags) = feature.flags {
+        let prefix = copy.0[..fsr::DESCRIPTION_BYTES]
+            .try_into()
+            .expect("FSR prefix size");
+        let dispatch = fsr_dispatch(prefix);
+        let request = Request {
+            list: dispatch.command_list,
+            feature: context_pointer as usize,
+            flags,
+            engine_states: Some(dispatch.states),
+        };
+        if dispatch.states_valid
+            && process(&ctx, &request, &dispatch.descriptor, &mut feature.history)
+        {
+            feature.history.replaced();
+            return fsr::FFX_OK;
+        }
     }
-    // The game's DLL is FSR 2.2: its description extends past the 1,352-byte 2.1.2 prefix with
-    // enableAutoReactive and a colorOpaqueOnly resource. Native FSR2 must receive the game's own
-    // description; a truncated copy let it register stack garbage and crash in GetDesc after a
-    // preset change. Only the shared-prefix reset flag changes, and only after RSF skipped frames.
-    let original = pointer.cast_mut().cast::<u8>();
-    if history.native_gap {
-        unsafe { original.add(fsr::RESET).write(1) };
-    }
-    let result = unsafe { native(context_pointer, pointer) };
-    if history.native_gap || history.native_result != result as u32 {
-        let reset = u32::from(unsafe { original.add(fsr::RESET).read() } != 0);
+    let forced_reset = copied && feature.history.native_gap;
+    let result = copy.fallback(pointer, forced_reset, |description| unsafe {
+        native(context_pointer, description)
+    });
+    let reset = copied && copy.0[fsr::RESET] != 0;
+    if feature
+        .history
+        .fell_back(result as u32, result == fsr::FFX_OK && reset)
+    {
         ctx.host.log(&format!(
-            "RDR2 native FSR fallback result={result} context={:016X} reset={reset}.",
-            context_pointer as usize
+            "RDR2 native FSR fallback result={result} context={:016X} reset={}.",
+            context_pointer as usize,
+            u32::from(reset)
         ));
-        history.native_result = result as u32;
     }
-    if result == fsr::FFX_OK {
-        history.native_gap = false;
-    }
-    history.frame = 0;
     result
 }
 
-/// FfxFsr2ContextDescription 2.1.2 flags, maxRenderSize and displaySize. Evidence only.
+/// FfxFsr2ContextDescription flags, maxRenderSize and displaySize.
 unsafe extern "C" fn fsr_create(context_pointer: *mut c_void, description: *const c_void) -> i32 {
     let _callback = Scope::enter(&CALLBACKS);
+    let key = context_pointer as usize;
+    lock(&FSR_CONTEXTS).remove(&key);
+    let fields =
+        platform::get().and_then(|platform| platform.read_value::<[u32; 5]>(description as usize));
     let result = match unsafe { trampoline::<FsrCreateFn>(&ORIGINAL_FSR_CREATE) } {
         Some(native) => unsafe { native(context_pointer, description) },
         None => NO_TRAMPOLINE,
     };
-    if FSR_CREATES.fetch_add(1, Ordering::SeqCst) < FSR_CREATE_REPORTS
-        && let Some(ctx) = platform::get().and_then(context)
-        && let Some(fields) = ctx.platform.read_value::<[u32; 5]>(description as usize)
-    {
-        ctx.host.log(&format!(
-            "RDR2 native FSR2 context create result={result} flags=0x{:x} max_render={}x{} display={}x{}.",
-            fields[0], fields[1], fields[2], fields[3], fields[4]
-        ));
+    if let Some(fields) = fields {
+        if key != 0 && result == fsr::FFX_OK {
+            lock(&FSR_CONTEXTS).insert(
+                key,
+                FsrContext {
+                    flags: fsr_camera_flags(fields[0]),
+                    history: History::default(),
+                },
+            );
+        }
+        if FSR_CREATES.fetch_add(1, Ordering::SeqCst) < FSR_CREATE_REPORTS
+            && let Some(host) = HOST.get()
+        {
+            host.log(&format!(
+                "RDR2 native FSR2 context create result={result} flags=0x{:x} max_render={}x{} display={}x{}.",
+                fields[0], fields[1], fields[2], fields[3], fields[4]
+            ));
+        }
     }
     result
 }
@@ -774,11 +835,11 @@ pub(crate) fn start() -> i32 {
         }
     };
     let fsr_export = FSR_EXPORT.load(Ordering::SeqCst);
-    let fsr = fsr_export != 0 && platform.enable(fsr_export);
     let fsr_create_export = FSR_CREATE_EXPORT.load(Ordering::SeqCst);
-    if fsr_create_export != 0 {
-        platform.enable(fsr_create_export);
-    }
+    let fsr = fsr_export != 0
+        && fsr_create_export != 0
+        && platform.enable(fsr_create_export)
+        && platform.enable(fsr_export);
     if fsr_export != 0 && !fsr {
         log(
             "RDR2 FSR2 input route refused: export detour could not be enabled. Native FSR2 is retained.",
@@ -844,6 +905,8 @@ pub(crate) fn stop() -> i32 {
     }
     FSR_EXPORT.store(0, Ordering::SeqCst);
     FSR_CREATE_EXPORT.store(0, Ordering::SeqCst);
+    lock(&FSR_CONTEXTS).clear();
+    lock(&EVALUATIONS).clear();
     PREPARED.store(false, Ordering::SeqCst);
     HOST.set(None);
     OK
