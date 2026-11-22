@@ -94,7 +94,13 @@ fn same_fields(a: &Fields, b: &Fields) -> bool {
 /// 2..=16384. The sample is in render pixels, +X right, +Y down. For row vectors the NDC offset is
 /// M[i][0] += 2x/W * M[i][3] and M[i][1] -= 2y/H * M[i][3]. The arithmetic runs in double precision like
 /// sr_jitter.h, so untouched elements are returned bit-exact and both implementations agree bit for bit.
-fn jitter_projection(m: &Matrix, x: f32, y: f32, width: u32, height: u32) -> Option<Matrix> {
+pub(crate) fn jitter_projection(
+    m: &Matrix,
+    x: f32,
+    y: f32,
+    width: u32,
+    height: u32,
+) -> Option<Matrix> {
     let valid = |extent: u32| (2..=16384).contains(&extent);
     if !valid(width)
         || !valid(height)

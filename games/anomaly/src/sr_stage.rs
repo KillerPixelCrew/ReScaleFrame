@@ -10,6 +10,8 @@
 // (docs/research/rust-anomaly-sr-configuration.md).
 mod math;
 
+#[cfg(test)]
+pub(crate) use self::math::jitter_sample;
 pub(crate) use self::math::plan_for_render;
 use self::math::{
     BurstGate, DEFAULT_MIP_OFFSET, DEFAULT_SCALE, JitterSequence, clamp_mip_offset, clamp_scale,
@@ -894,21 +896,24 @@ impl Stage {
     }
 
     // ---- options and configuration ------------------------------------------------------------------------
-    pub(crate) fn read_options(&self, ini: *const c_void) -> Config {
+    #[cfg(test)]
+    fn read_options(&self, ini: *const c_void) -> Config {
         Ini {
             platform: self.platform(),
             ini,
         }
         .options()
     }
-    pub(crate) fn read_scale(&self, ini: *const c_void) -> (f32, bool) {
+    #[cfg(test)]
+    fn read_scale(&self, ini: *const c_void) -> (f32, bool) {
         Ini {
             platform: self.platform(),
             ini,
         }
         .scale()
     }
-    pub(crate) fn read_mip_bias(&self, ini: *const c_void) -> (f32, bool) {
+    #[cfg(test)]
+    fn read_mip_bias(&self, ini: *const c_void) -> (f32, bool) {
         Ini {
             platform: self.platform(),
             ini,
@@ -1179,11 +1184,6 @@ impl Stage {
             }),
             _ => false,
         }
-    }
-
-    pub(crate) fn set_scale(&self, value: f32) {
-        let scale = clamp_scale(value);
-        self.with(|state| state.current_scale = scale);
     }
 
     pub(crate) fn active(&self) -> bool {
@@ -2777,47 +2777,6 @@ pub(crate) static STAGE: Stage = Stage::new();
 extern "C" fn rsf_anomaly_sr_stage_register(table: *const Platform) {
     STAGE.register(table);
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_read_options(ini: *const c_void, out: *mut Config) {
-    if !out.is_null() {
-        let value = if ini.is_null() {
-            default_config()
-        } else {
-            STAGE.read_options(ini)
-        };
-        unsafe { out.write(value) };
-    }
-}
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_read_scale(
-    ini: *const c_void,
-    defaulted: *mut bool,
-) -> f32 {
-    let (value, was_defaulted) = if ini.is_null() {
-        (DEFAULT_SCALE, true)
-    } else {
-        STAGE.read_scale(ini)
-    };
-    if !defaulted.is_null() {
-        unsafe { defaulted.write(was_defaulted) };
-    }
-    value
-}
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_read_mip_bias(
-    ini: *const c_void,
-    enabled: *mut bool,
-) -> f32 {
-    let (value, on) = if ini.is_null() {
-        (DEFAULT_MIP_OFFSET, true)
-    } else {
-        STAGE.read_mip_bias(ini)
-    };
-    if !enabled.is_null() {
-        unsafe { enabled.write(on) };
-    }
-    value
-}
 // `ini` is null (nothing selected) or a NUL-terminated UTF-16 path that stays readable for the call: the carrier's
 // configuration path at cold start, or a fixture's INI.
 #[unsafe(no_mangle)]
@@ -2966,10 +2925,6 @@ fn live_options() -> [crate::overlay_abi::rsf_anomaly_overlay_option; 13] {
             )
         },
     ]
-}
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_set_scale(value: f32) {
-    STAGE.set_scale(value);
 }
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_stage_install(

@@ -92,7 +92,7 @@ fn phase_count(render: u32, output: u32) -> u32 {
     (8.0 * ratio * ratio - 1e-9).ceil().clamp(8.0, 64.0) as u32
 }
 
-fn jitter_sample(index: u32, phases: u32) -> Sample {
+pub(crate) fn jitter_sample(index: u32, phases: u32) -> Sample {
     let phases = if phases == 0 { 8 } else { phases };
     let index = index % phases;
     Sample {

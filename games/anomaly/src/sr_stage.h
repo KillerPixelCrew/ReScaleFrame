@@ -2,7 +2,7 @@
 #pragma once
 // SR stages behind [Anomaly] SRStage (docs/research/anomaly-sr-seam.md sections 9 to 11). Opt-in, Observe mode only.
 //   SRStage=1  generic0/generic_temp FP16 twins at output size, f^-1/f round trip at the seam.
-//   SRStage=2  every world target at render size (SRScale, default 0.67, clamped to [0.5, 1.0]), Device size and
+//   SRStage=2  every world target at render size (SRScale, default 0.67, clamped to [0.33, 1.0]), Device size and
 //              HW.pBaseZB swapped for the world window, bilinear upscale in linear space at the seam.
 //   SRStage=3  Stage 2 plus a Halton(2,3) subpixel jitter of the world and first-person projections and a lowered
 //              texture mip bias inside the world window (section 11). The spatial upscale is unchanged.
@@ -19,11 +19,9 @@
 // 3, 300; Stage 3 captures 8, at most 32, consecutive world frames). Stages 4 and 5: SRExposure (constant or auto),
 // SRColourTransport (default 0: linear, HDR on), SRFirstPersonZero (default 1), SRCutDistance (metres, default 4),
 // SRCutAngle (degrees, default 45), SRRequireSignature (default 0), SR/SRBackend/SRQuality/DLSSPreset (the shared
-// frontend keys). SRStreamlineDir, SRFidelityFXDir and SRXeSSDir override the vendor package beside the INI
+// frontend keys, with Auto as the default SRBackend). SRStreamlineDir, SRFidelityFXDir and SRXeSSDir override the vendor package beside the INI
 // (ReScaleFrame\streamline, fidelityfx, xess). The panel changes the live options and saves them.
 #include "sr_jitter.h"
-#include "sr_settings.h"
-#include "sr_pass.h"
 #include "sr_stage_platform.h"
 #include "build_profile.h"
 #include <rescaleframe/game_api.h>
@@ -35,18 +33,10 @@ namespace rsf::anomaly::sr {
 // pass reads current_jitter(); the motion stage reads current_jitter_uv() for its PS b13 rsf_jitter on every draw.
 JitterState current_jitter() noexcept;
 JitterUv current_jitter_uv() noexcept;
-// The scalar keys as the stage parses them (the defaults for a null INI), for the contract fixtures.
-rsf_anomaly_sr_stage_config read_options(const wchar_t* ini) noexcept;
-// SRScale from the INI, clamped. `defaulted` is set when the key is missing or not a number.
-float read_scale(const wchar_t* ini, bool* defaulted = nullptr) noexcept;
-// SRMipBias from the INI: a decimal offset clamped to [-2, 1] (missing or unparsable: 0), or "off" with an optional offset (enabled false).
-float read_mip_bias(const wchar_t* ini, bool* enabled = nullptr) noexcept;
 // Called by bootstrap before Observe starts. Reads the keys from `ini`; when `apply` and a stage or the capture is
 // selected, the Rust stage keeps them with the INI path and the vendor directories (refused while installed). Returns
 // whether one is selected.
 bool configure(const wchar_t* ini, bool apply, rsf_game_log_fn log, void* user) noexcept;
-// Stage 2: a new scale for the next world window (clamped). The twins are rebuilt at the next eligible frame.
-void set_scale(float) noexcept;
 // Called by the native observer after its own and the geometry hooks are installed on the verified image. Verifies
 // every guard of the selected stage and installs the hooks, or refuses and leaves the game stock. Returns true when
 // not selected.

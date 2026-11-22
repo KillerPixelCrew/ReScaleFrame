@@ -348,3 +348,24 @@ choose and default the Anomaly SR backend.**
   directory supplied at startup, and the difference between requested Auto and
   the concrete provider sent to startup. Build, lint, fixture and device
   execution remain pending.
+
+
+### Reconstruction and scalar fixture port
+
+- Removed `games/anomaly/src/sr_reconstruction.h`. The shared private C
+  stage header now declares the 72-byte layout and 32-byte callback table.
+  `sr_stage.cpp` passes the same profiled destination, buffer and stage
+  offsets with the three synchronous guarded native leaves. The Rust owner
+  continues to admit, write and verify restoration.
+- Replaced `tests/anomaly_sr_reconstruction.cpp` with
+  `games/anomaly/src/sr_reconstruction/tests.rs`. It exercises the real
+  projection and correction operations, all six staging destinations, aliases,
+  refused layouts and every single write failure, including incomplete
+  restoration. The native swap reconstruction-window fixture remains registered
+  for the engine field handoff.
+- Moved scalar INI cases from `tests/anomaly_sr_hooks.cpp` to the Windows Rust
+  fixture in `games/anomaly/src/sr_stage/tests.rs`. It calls the actual Win32
+  reader, checks selection without configuring hooks, and retains extent,
+  jitter, capture, threshold and backend-admission cases. This removes three
+  native INI reader wrappers and the unused native scale setter. The native
+  hook fixture still checks guard refusal and native lifecycle wiring.

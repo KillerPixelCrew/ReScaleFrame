@@ -52,15 +52,6 @@ fn corrected(mut value: Vector, x: f32, y: f32) -> Option<Vector> {
     (value[0].is_finite() && value[1].is_finite()).then_some(value)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_correct_position_vector(value: &mut Vector, x: f32, y: f32) -> bool {
-    let Some(next) = corrected(*value, x, y) else {
-        return false;
-    };
-    *value = next;
-    true
-}
-
 #[derive(Clone, Copy, Default)]
 struct Slot {
     data: usize,
@@ -202,3 +193,6 @@ extern "C" fn rsf_anomaly_sr_correct_position_constant(
     }
     u32::from(count != 0)
 }
+
+#[cfg(test)]
+mod tests;

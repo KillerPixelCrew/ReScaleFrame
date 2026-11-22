@@ -1463,6 +1463,171 @@ mod win32 {
     use super::*;
     use crate::ini::{rsf_anomaly_sr_ini_int as ini_int, rsf_anomaly_sr_ini_text as ini_text};
     #[test]
+    fn scalar_options_through_the_production_win32_reader() {
+        use windows_sys::core::w;
+
+        let root = std::env::temp_dir().join(format!("rsf-sr-scalars-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rsf.ini");
+        std::fs::write(&path, "[Anomaly]\r\n").unwrap();
+        let units = units(&path);
+        let terminated: Vec<u16> = units.iter().copied().chain([0]).collect();
+        let table = Platform {
+            ini_int: Some(ini_int),
+            ini_text: Some(ini_text),
+            ..Default::default()
+        };
+        let stage = Stage::new();
+        stage.register(&table);
+        let set = |key, value| {
+            assert!(unsafe { crate::ini::write_text(terminated.as_ptr(), key, value) });
+        };
+        let ini = terminated.as_ptr().cast();
+        let read = || stage.read_options(ini);
+        let selected = || stage.configure_ini(&units, false, None, null_mut());
+        assert!(!selected() && read().stage == 0 && default_config().stage == 0);
+        set(w!("SRStage"), w!("1"));
+        set(w!("SRStageCapture"), w!("1"));
+        set(w!("SRStageCaptureCount"), w!("99"));
+        set(w!("SRStageCaptureInterval"), w!("0"));
+        let options = read();
+        assert!(selected() && options.capture && options.scale_defaulted);
+        assert_eq!(
+            (
+                options.stage,
+                options.capture_start,
+                options.capture_count,
+                options.capture_interval
+            ),
+            (1, 600, 16, 1)
+        );
+        assert_eq!(options.scale, 0.67);
+        set(w!("SRStage"), w!("0"));
+        assert!(selected());
+        set(w!("SRStageCapture"), w!("0"));
+        set(w!("SRStage"), w!("2"));
+        assert!(selected() && read().stage == 2 && read().scale_defaulted);
+        for (text, value, defaulted) in [
+            (w!("0.5"), 0.5, false),
+            (w!("0.77"), 0.77, false),
+            (w!("1.0"), 1.0, false),
+            (w!(" 0.6 "), 0.6, false),
+            (w!("0.25"), 0.33, false),
+            (w!("2"), 1.0, false),
+            (w!("0"), 0.67, true),
+            (w!("-1"), 0.67, true),
+            (w!("abc"), 0.67, true),
+            (w!("0.7x"), 0.67, true),
+            (w!("nan"), 0.67, true),
+        ] {
+            set(w!("SRScale"), text);
+            assert_eq!(stage.read_scale(ini), (value, defaulted));
+            assert_eq!(read().scale, value);
+        }
+        assert_eq!(
+            (default_config().scale, default_config().scale_defaulted),
+            (0.67, true)
+        );
+        for invalid in [w!("6"), w!("-1"), w!("x")] {
+            set(w!("SRStage"), invalid);
+            assert!(!selected() && read().stage == 0);
+        }
+        set(w!("SRStage"), w!("5"));
+        let options = read();
+        assert!(options.stage == 5 && selected());
+        assert!(
+            options.first_person_zero
+                && !options.exposure_auto
+                && !options.require_signature
+                && !options.colour_transport
+        );
+        assert_eq!(
+            (
+                options.cut_distance,
+                options.cut_degrees,
+                options.capture_count
+            ),
+            (4.0, 45.0, 16)
+        );
+        assert!(options.settings == default_config().settings);
+        for (key, value) in [
+            (w!("SRExposure"), w!("auto")),
+            (w!("SRFirstPersonZero"), w!("0")),
+            (w!("SRCutDistance"), w!("0.001")),
+            (w!("SRCutAngle"), w!("x")),
+            (w!("SRStreamlineDir"), w!("C:\\sl")),
+            (w!("SR"), w!("0")),
+            (w!("SRBackend"), w!("5")),
+            (w!("SRQuality"), w!("5")),
+            (w!("DLSSPreset"), w!("6")),
+            (w!("SRColourTransport"), w!("1")),
+            (w!("SRRequireSignature"), w!("1")),
+        ] {
+            set(key, value);
+        }
+        let options = read();
+        assert!(
+            options.exposure_auto
+                && !options.first_person_zero
+                && options.require_signature
+                && options.colour_transport
+        );
+        assert_eq!((options.cut_distance, options.cut_degrees), (0.1, 45.0));
+        assert_eq!(
+            (
+                options.settings.enabled,
+                options.settings.backend,
+                options.settings.quality,
+                options.settings.preset
+            ),
+            (false, 5, 1, 6)
+        );
+        set(w!("SRBackend"), w!("2"));
+        assert_eq!(read().settings.backend, BACKEND_AUTO);
+        set(w!("SRStage"), w!("4"));
+        assert_eq!(read().stage, 4);
+        assert!(selected());
+        set(w!("SRScale"), w!("0.67"));
+        set(w!("SRStage"), w!("3"));
+        set(w!("SRStageCaptureCount"), std::ptr::null());
+        let options = read();
+        assert!(options.stage == 3 && selected() && options.jitter && options.mip_bias);
+        assert_eq!((options.mip_bias_offset, options.capture_count), (0.0, 8));
+        set(w!("SRStageCaptureCount"), w!("99"));
+        set(w!("SRJitter"), w!("0"));
+        assert!(read().capture_count == 32 && !read().jitter);
+        for (text, value, enabled) in [
+            (w!("-0.3"), -0.3, true),
+            (w!("0"), 0.0, true),
+            (w!(" -1 "), -1.0, true),
+            (w!("-5"), -2.0, true),
+            (w!("3"), 1.0, true),
+            (w!("off"), 0.0, false),
+            (w!(" OFF "), 0.0, false),
+            (w!("offset"), 0.0, true),
+            (w!("abc"), 0.0, true),
+            (w!("-0.5x"), 0.0, true),
+            (w!("nan"), 0.0, true),
+            (w!(""), 0.0, true),
+        ] {
+            set(w!("SRMipBias"), text);
+            assert_eq!(stage.read_mip_bias(ini), (value, enabled));
+            let options = read();
+            assert_eq!(
+                (options.mip_bias_offset, options.mip_bias),
+                (value, enabled)
+            );
+        }
+        assert_eq!(
+            (default_config().mip_bias_offset, default_config().mip_bias),
+            (0.0, true)
+        );
+        set(w!("SRStage"), w!("2"));
+        assert_eq!(read().capture_count, 16);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn the_package_beside_a_real_ini_and_an_explicit_directory() {
         let root = std::env::temp_dir().join(format!("rsf-sr-config-{}", std::process::id()));
         let package = root.join("ReScaleFrame");

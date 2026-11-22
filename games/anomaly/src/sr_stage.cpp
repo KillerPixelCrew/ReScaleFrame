@@ -15,7 +15,6 @@
 #include "build_profile.h"
 #include "sr_jitter.h"
 #include "sr_swap.h"
-#include "sr_reconstruction.h"
 #include "sr_temporal.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/game_frame.h>
@@ -39,11 +38,7 @@ uint32_t rsf_anomaly_sr_ini_text(const void*, const char*, const char*, uint16_t
 bool rsf_anomaly_sr_persist_int(const char*, int32_t) noexcept;
 bool rsf_anomaly_sr_persist_text(const char*, const char*) noexcept;
 void rsf_anomaly_sr_stage_register(const rsf_anomaly_sr_stage_platform*) noexcept;
-void rsf_anomaly_sr_stage_read_options(const void*, rsf_anomaly_sr_stage_config*) noexcept;
-float rsf_anomaly_sr_stage_read_scale(const void*, bool*) noexcept;
-float rsf_anomaly_sr_stage_read_mip_bias(const void*, bool*) noexcept;
 bool rsf_anomaly_sr_stage_configure_ini(const wchar_t*, bool, rsf_anomaly_sr_log, void*) noexcept;
-void rsf_anomaly_sr_stage_set_scale(float) noexcept;
 bool rsf_anomaly_sr_stage_install(void*, uint32_t, uint32_t, const void*) noexcept;
 bool rsf_anomaly_sr_stage_quiesce() noexcept;
 bool rsf_anomaly_sr_stage_active() noexcept;
@@ -123,16 +118,29 @@ bool call_set_mip_bias(float value) noexcept {
 
 using GetConstantBuffer = std::byte*(__fastcall*)(void*, void*, uint32_t);
 GetConstantBuffer get_constant_buffer_fn{};
-struct EnginePositionConstants final : PositionConstantHost {
-    bool read(const void* p, void* out, std::size_t size) noexcept override { return guarded_copy(out, p, size); }
-    bool write(void* p, const void* data, std::size_t size) noexcept override { return guarded_copy(p, data, size); }
-    std::byte* buffer(void* constant, uint32_t stage) noexcept override {
-        if (!get_constant_buffer_fn || !image) return nullptr;
-        __try { return get_constant_buffer_fn(image + srp().backend_rva + backend_constants_offset, constant, stage); }
-        __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
-    }
+// Constant-buffer fields used after the native binder has written the stock vector.
+constexpr uint32_t backend_constants_offset = 0x5c0;
+constexpr rsf_anomaly_position_layout position_layout{
+    0x10, 0x14, geometry::constant_buffer_size_offset, geometry::constant_buffer_data_offset,
+    0x68, geometry::constant_buffer_slots, {1, 2, 8, 16, 32, 64}, {16, 12, 8, 20, 24, 28},
 };
-EnginePositionConstants position_constants;
+const rsf_anomaly_position_platform position_constants{
+    nullptr,
+    [](void*, uintptr_t address, void* out, size_t size) {
+        return guarded_copy(out, reinterpret_cast<const void*>(address), size);
+    },
+    [](void*, uintptr_t address, const void* in, size_t size) {
+        return guarded_copy(reinterpret_cast<void*>(address), in, size);
+    },
+    [](void*, uintptr_t address, uint32_t stage) -> uintptr_t {
+        if (!get_constant_buffer_fn || !image) return 0;
+        __try {
+            return reinterpret_cast<uintptr_t>(get_constant_buffer_fn(
+                image + srp().backend_rva + backend_constants_offset, reinterpret_cast<void*>(address), stage));
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+    },
+};
 
 // Stage 3 burst readback leaves. sr_stage/staging.rs admits the context, source and device and describes the
 // staging texture (USAGE_STAGING, CPU_ACCESS_READ, one mip and layer); these keep the typed context calls.
@@ -243,7 +251,8 @@ struct Host final : SwapHost {
     bool upload_projection(const void* matrix) noexcept override { return call_set_projection(matrix); }
     bool set_mip_bias(float value) noexcept override { return call_set_mip_bias(value); }
     uint32_t correct_position_constant(void* constant, float x, float y) noexcept override {
-        return sr::correct_position_constant(position_constants, constant, x, y);
+        return rsf_anomaly_sr_correct_position_constant(&position_layout, &position_constants,
+            reinterpret_cast<uintptr_t>(constant), x, y);
     }
 };
 
@@ -553,23 +562,6 @@ JitterUv current_jitter_uv() noexcept {
     rsf_anomaly_sr_stage_jitter_uv(&uv);
     return {uv.current_u, uv.current_v, uv.previous_u, uv.previous_v};
 }
-
-float read_scale(const wchar_t* ini, bool* defaulted) noexcept {
-    bind_platform();
-    return rsf_anomaly_sr_stage_read_scale(ini, defaulted);
-}
-float read_mip_bias(const wchar_t* ini, bool* enabled) noexcept {
-    bind_platform();
-    return rsf_anomaly_sr_stage_read_mip_bias(ini, enabled);
-}
-
-rsf_anomaly_sr_stage_config read_options(const wchar_t* ini) noexcept {
-    bind_platform();
-    rsf_anomaly_sr_stage_config config{};
-    rsf_anomaly_sr_stage_read_options(ini, &config);
-    return config;
-}
-void set_scale(float value) noexcept { rsf_anomaly_sr_stage_set_scale(value); }
 
 bool configure(const wchar_t* ini, bool apply, rsf_game_log_fn log, void* user) noexcept {
     bind_platform();

@@ -164,102 +164,6 @@ void install_refusals() {
     CHECK(lines.empty() && sr::quiesce());
 }
 
-// The scalar keys through the real Win32 INI reads. Whether a configuration is selected comes from configure() without
-// applying it; the INI path and vendor directory policy are covered by the Rust stage tests.
-void options_from_ini() {
-    const TempIni ini;
-    const wchar_t* path = ini.path;
-    const auto selected = [&] { return sr::configure(path, false, nullptr, nullptr); };
-    CHECK(!selected() && sr::read_options(path).stage == 0 && sr::read_options(nullptr).stage == 0);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"1", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStageCapture", L"1", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStageCaptureCount", L"99", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStageCaptureInterval", L"0", path);
-    auto options = sr::read_options(path);
-    CHECK(options.stage == 1 && options.capture && options.capture_start == 600 && options.capture_count == 16 &&
-        options.capture_interval == 1 && selected());
-    CHECK(options.scale == 0.67f && options.scale_defaulted);   // SRScale missing: the default
-    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"0", path);
-    CHECK(selected());   // SRStageCapture alone selects the hooks
-    WritePrivateProfileStringW(L"Anomaly", L"SRStageCapture", L"0", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"2", path);
-    options = sr::read_options(path);
-    CHECK(selected() && options.stage == 2 && options.scale == 0.67f && options.scale_defaulted);
-    const struct { const wchar_t* text; float scale; bool defaulted; } scales[] = {
-        {L"0.5", 0.5f, false}, {L"0.77", 0.77f, false}, {L"1.0", 1.0f, false}, {L" 0.6 ", 0.6f, false},
-        {L"0.25", 0.33f, false}, {L"2", 1.0f, false}, {L"0", 0.67f, true}, {L"-1", 0.67f, true},
-        {L"abc", 0.67f, true}, {L"0.7x", 0.67f, true}, {L"nan", 0.67f, true}};
-    for (const auto& item : scales) {
-        WritePrivateProfileStringW(L"Anomaly", L"SRScale", item.text, path);
-        bool defaulted = false;
-        const float scale = sr::read_scale(path, &defaulted);
-        if (scale != item.scale || defaulted != item.defaulted) std::printf("SRScale=%ls -> %f (defaulted %d)\n", item.text, scale, defaulted);
-        CHECK(scale == item.scale && defaulted == item.defaulted);
-        CHECK(sr::read_options(path).scale == item.scale);
-    }
-    CHECK(sr::read_scale(nullptr) == 0.67f);
-    for (const auto* stage : {L"6", L"-1", L"x"}) {
-        WritePrivateProfileStringW(L"Anomaly", L"SRStage", stage, path);   // only Stages 1 to 5 exist
-        CHECK(!selected() && sr::read_options(path).stage == 0);
-    }
-    // Stages 4 and 5: SR inputs and temporal SR keys, the shared frontend SR keys.
-    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"5", path);
-    options = sr::read_options(path);
-    CHECK(options.stage == 5 && selected());
-    CHECK(!options.exposure_auto && options.first_person_zero && options.cut_distance == 4.0f && options.cut_degrees == 45.0f &&
-        !options.require_signature && options.capture_count == 16 && !options.colour_transport);
-    CHECK(options.settings.enabled && options.settings.backend == sr::backend_auto && options.settings.quality == 1 && options.settings.preset == 0);
-    WritePrivateProfileStringW(L"Anomaly", L"SRExposure", L"auto", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRFirstPersonZero", L"0", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRCutDistance", L"0.001", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRCutAngle", L"x", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStreamlineDir", L"C:\\sl", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SR", L"0", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRBackend", L"5", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRQuality", L"5", path);    // past ultra performance: not offered, kept at Quality
-    WritePrivateProfileStringW(L"Anomaly", L"DLSSPreset", L"6", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRColourTransport", L"1", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRRequireSignature", L"1", path);
-    options = sr::read_options(path);
-    CHECK(options.exposure_auto && !options.first_person_zero && options.cut_distance == 0.1f && options.cut_degrees == 45.0f &&
-        options.colour_transport && options.require_signature);
-    CHECK(!options.settings.enabled && options.settings.backend == sr::backend_xess && options.settings.quality == 1 &&
-        options.settings.preset == 6);
-    WritePrivateProfileStringW(L"Anomaly", L"SRBackend", L"2", path);    // FSR2: not offered by this adapter
-    CHECK(sr::read_options(path).settings.backend == sr::backend_auto);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"4", path);
-    CHECK(sr::read_options(path).stage == 4 && selected());
-    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"3", path);
-    CHECK(sr::read_options(path).stage == 3);
-    // Stage 3: SRJitter (default 1), SRMipBias (offset, default 0, clamped [-2, 1], "off"), consecutive capture count.
-    WritePrivateProfileStringW(L"Anomaly", L"SRScale", L"0.67", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"3", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStageCaptureCount", nullptr, path);
-    options = sr::read_options(path);
-    CHECK(options.stage == 3 && selected() && options.jitter && options.mip_bias && options.mip_bias_offset == 0.0f &&
-        options.capture_count == 8);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStageCaptureCount", L"99", path);
-    WritePrivateProfileStringW(L"Anomaly", L"SRJitter", L"0", path);
-    options = sr::read_options(path);
-    CHECK(options.capture_count == 32 && !options.jitter);
-    const struct { const wchar_t* text; float offset; bool enabled; } biases[] = {
-        {L"-0.3", -0.3f, true}, {L"0", 0.0f, true}, {L" -1 ", -1.0f, true}, {L"-5", -2.0f, true}, {L"3", 1.0f, true},
-        {L"off", 0.0f, false}, {L" OFF ", 0.0f, false}, {L"offset", 0.0f, true}, {L"abc", 0.0f, true}, {L"-0.5x", 0.0f, true},
-        {L"nan", 0.0f, true}, {L"", 0.0f, true}};
-    for (const auto& item : biases) {
-        WritePrivateProfileStringW(L"Anomaly", L"SRMipBias", item.text, path);
-        bool enabled = !item.enabled;
-        const float offset = sr::read_mip_bias(path, &enabled);
-        if (offset != item.offset || enabled != item.enabled) std::printf("SRMipBias=%ls -> %f (enabled %d)\n", item.text, offset, enabled);
-        CHECK(offset == item.offset && enabled == item.enabled);
-        options = sr::read_options(path);
-        CHECK(options.mip_bias_offset == item.offset && options.mip_bias == item.enabled);
-    }
-    CHECK(sr::read_mip_bias(nullptr) == 0.0f);
-    WritePrivateProfileStringW(L"Anomaly", L"SRStage", L"2", path);   // Stage 2 keeps its single-frame capture limit
-    CHECK(sr::read_options(path).capture_count == 16);
-}
-
 void stage3_install_refusals() {
     const TempIni ini;
     ini.set(L"SRStage", L"3");
@@ -323,7 +227,6 @@ int main(int argc, char** argv) {
     rm_near_slot();
     install_refusals();
     stage3_install_refusals();
-    options_from_ini();
     std::printf("%d failure(s)\n", failures);
     return failures ? 1 : 0;
 }
