@@ -53,6 +53,7 @@ const _: () = {
 
 struct Cpu {
     open: AtomicBool,
+    sampled: AtomicBool,
     simulation_ended: AtomicBool,
     queued: AtomicBool,
     frame: AtomicU64,
@@ -69,6 +70,7 @@ struct Render {
 
 static CPU: Cpu = Cpu {
     open: AtomicBool::new(false),
+    sampled: AtomicBool::new(false),
     simulation_ended: AtomicBool::new(false),
     queued: AtomicBool::new(false),
     frame: AtomicU64::new(0),
@@ -116,10 +118,19 @@ pub unsafe extern "C" fn rsf_godot_cpu_begin(callbacks: *const FrameCallbacks) {
     CPU.previous_usec.store(now, R);
     CPU.frame.store(CPU.frame.load(R).wrapping_add(1), R);
     CPU.open.store(true, R);
+    CPU.sampled.store(false, R);
     CPU.simulation_ended.store(false, R);
     CPU.queued.store(false, R);
     emit(callbacks, FRAME_BEGIN, 0);
-    emit(callbacks, INPUT_SAMPLE, 0);
+}
+
+/// # Safety
+/// `callbacks` must point to valid callbacks. Call at the main thread's input pump.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_godot_cpu_sample(callbacks: *const FrameCallbacks) {
+    if CPU.open.load(R) && !CPU.sampled.swap(true, R) {
+        emit(unsafe { &*callbacks }, INPUT_SAMPLE, 0);
+    }
 }
 
 /// # Safety
@@ -154,6 +165,9 @@ pub unsafe extern "C" fn rsf_godot_cpu_queue(callbacks: *const FrameCallbacks, p
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_godot_cpu_end(callbacks: *const FrameCallbacks) {
     let callbacks = unsafe { &*callbacks };
+    if !CPU.open.load(R) {
+        return;
+    }
     if !CPU.simulation_ended.load(R) {
         emit(callbacks, SIMULATION_END, 0);
     }

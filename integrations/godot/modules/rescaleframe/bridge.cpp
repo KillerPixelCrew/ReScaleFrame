@@ -349,7 +349,8 @@ uint32_t boot_attach() {
     return attach && attach(&services);
 }
 uint64_t boot_session() {
-    rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION}; native_status(&status); return status.session_id;
+    rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
+    return native_status(&status) ? status.session_id : 0;
 }
 // Godot and driver leaves for host.rs's shutdown.
 void shutdown_release_render() {
@@ -358,7 +359,11 @@ void shutdown_release_render() {
         rs->sync();
     }
 }
-void shutdown_native() { native_shutdown(); }
+uint32_t shutdown_native() {
+    if (native_shutdown()) return 1;
+    ERR_PRINT("ReScaleFrame native host rejected shutdown.");
+    return 0;
+}
 const rsf_godot_shutdown_callbacks shutdown_callbacks{shutdown_release_render, shutdown_native};
 }
 
@@ -367,7 +372,7 @@ void boot(bool headless) {
     const bool enabled_setting = GLOBAL_DEF("rescaleframe/enabled", false);
     const rsf_godot_boot_facts facts{uint32_t(enabled_setting), uint32_t(headless), uint32_t(Engine::get_singleton()->is_editor_hint()),
         uint32_t(OS::get_singleton()->get_current_rendering_driver_name() == "vulkan")};
-    const rsf_godot_boot_callbacks callbacks{boot_load, boot_capabilities, boot_start, boot_rejected, boot_attach, boot_session};
+    const rsf_godot_boot_callbacks callbacks{boot_load, boot_capabilities, boot_start, boot_rejected, boot_attach, boot_session, shutdown_native};
     rsf_godot_host_boot(&facts, &callbacks);
 }
 bool create_swapchain(void *factory, void *queue, void *window, const void *description, void **out) {
@@ -403,6 +408,9 @@ bool vk_drain(void *owner) { return native_vk_drain(owner) == 0; }
 void shutdown() { rsf_godot_host_shutdown(&shutdown_callbacks); }
 void cpu_begin() {
     if (rsf_godot_host_active()) rsf_godot_cpu_begin(&frame_callbacks);
+}
+void cpu_sample() {
+    if (rsf_godot_host_active()) rsf_godot_cpu_sample(&frame_callbacks);
 }
 void cpu_simulation_begin() { rsf_godot_cpu_simulation_begin(&frame_callbacks); }
 void queue_frame(bool present) {

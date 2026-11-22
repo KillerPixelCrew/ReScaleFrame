@@ -24,7 +24,8 @@ struct rsf_godot_pass_record {
     uint32_t motion_camera_included;
     uint32_t camera_valid;
     float previous_clip_to_clip[16];
-    rsf_camera_frame camera; // pass.rs mirrors camera ABI 1
+    rsf_camera_frame camera;
+    uint64_t reset_generation;
 };
 
 struct rsf_godot_sr_facts {
@@ -62,11 +63,12 @@ static_assert(sizeof(rsf_camera_frame) == 384 && alignof(rsf_camera_frame) == 4 
     offsetof(rsf_camera_frame, depth_inverted) == 372 && offsetof(rsf_camera_frame, motion_jittered) == 376 &&
     offsetof(rsf_camera_frame, frame_time_seconds) == 380,
     "pass.rs mirrors the camera frame layout");
-static_assert(sizeof(rsf_godot_pass_record) == 512 && alignof(rsf_godot_pass_record) == 8 &&
+static_assert(sizeof(rsf_godot_pass_record) == 520 && alignof(rsf_godot_pass_record) == 8 &&
     offsetof(rsf_godot_pass_record, key) == 16 && offsetof(rsf_godot_pass_record, role) == 24 &&
     offsetof(rsf_godot_pass_record, screen) == 36 && offsetof(rsf_godot_pass_record, driver) == 40 &&
     offsetof(rsf_godot_pass_record, motion_to_uv) == 48 && offsetof(rsf_godot_pass_record, camera_valid) == 60 &&
-    offsetof(rsf_godot_pass_record, previous_clip_to_clip) == 64 && offsetof(rsf_godot_pass_record, camera) == 128,
+    offsetof(rsf_godot_pass_record, previous_clip_to_clip) == 64 && offsetof(rsf_godot_pass_record, camera) == 128 &&
+    offsetof(rsf_godot_pass_record, reset_generation) == 512,
     "pass.rs mirrors the pass record layout");
 static_assert(sizeof(rsf_godot_sr_facts) == 104 && alignof(rsf_godot_sr_facts) == 8 &&
     offsetof(rsf_godot_sr_facts, source_frame_id) == 40 && offsetof(rsf_godot_sr_facts, render_target) == 48 &&

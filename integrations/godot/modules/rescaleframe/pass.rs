@@ -68,6 +68,7 @@ pub struct Record {
     camera_valid: u32,
     previous_clip_to_clip: [f32; 16],
     camera: CameraFrame,
+    reset_generation: u64,
 }
 
 /// Engine facts read by the SR hook after admission and valid textures.
@@ -98,12 +99,13 @@ const _: () = {
     assert!(offset_of!(CameraFrame, near_plane) == 360);
     assert!(offset_of!(CameraFrame, depth_inverted) == 372);
     assert!(offset_of!(CameraFrame, frame_time_seconds) == 380);
-    assert!(size_of::<Record>() == 512 && align_of::<Record>() == 8);
+    assert!(size_of::<Record>() == 520 && align_of::<Record>() == 8);
     assert!(offset_of!(Record, role) == 24);
     assert!(offset_of!(Record, driver) == 40);
     assert!(offset_of!(Record, motion_to_uv) == 48);
     assert!(offset_of!(Record, previous_clip_to_clip) == 64);
     assert!(offset_of!(Record, camera) == 128);
+    assert!(offset_of!(Record, reset_generation) == 512);
     assert!(size_of::<SrFacts>() == 104 && align_of::<SrFacts>() == 8);
     assert!(offset_of!(SrFacts, source_frame_id) == 40);
     assert!(offset_of!(SrFacts, output_width) == 56);
@@ -151,6 +153,7 @@ const ZERO: Record = Record {
     camera_valid: 0,
     previous_clip_to_clip: [0.0; 16],
     camera: ZERO_CAMERA,
+    reset_generation: 0,
 };
 
 /// The last recorded SR pass, as `last_pass` was.
@@ -160,6 +163,12 @@ struct Last(UnsafeCell<Record>);
 unsafe impl Sync for Last {}
 
 static LAST: Last = Last(UnsafeCell::new(ZERO));
+
+/// Rendering server thread: retargeting retires the previous target's receipt.
+pub(crate) fn invalidate() {
+    // SAFETY: rendering server thread only, see `Last`.
+    unsafe { *LAST.0.get() = ZERO };
+}
 
 /// Rendering server thread: decides the SR pass identity, reset, screen class, driver route and
 /// camera scalars. The C++ then fills the five camera matrices and `previous_clip_to_clip`, with
@@ -200,6 +209,7 @@ pub unsafe extern "C" fn rsf_godot_sr_plan(facts: *const SrFacts, out: *mut Reco
         motion_camera_included: 1,
         camera_valid: 1,
         previous_clip_to_clip: [0.0; 16],
+        reset_generation: identity.reset_generation,
         camera: CameraFrame {
             struct_size: size_of::<CameraFrame>() as u32,
             abi_version: CAMERA_ABI_VERSION,
@@ -229,10 +239,9 @@ pub unsafe extern "C" fn rsf_godot_sr_plan(facts: *const SrFacts, out: *mut Reco
 pub unsafe extern "C" fn rsf_godot_sr_record(facts: *const SrFacts, record: *const Record) {
     let (facts, record) = unsafe { (&*facts, &*record) };
     primary::recorded(
-        record.source_frame_id,
-        facts.history.color,
-        facts.history.internal_width,
-        facts.history.internal_height,
+        &facts.history,
+        record.resource_generation,
+        record.reset_generation,
     );
     // SAFETY: rendering server thread only, see `Last`.
     unsafe { *LAST.0.get() = *record };
@@ -250,11 +259,16 @@ pub unsafe extern "C" fn rsf_godot_final_scene_plan(
     out: *mut Record,
 ) -> u32 {
     let facts = unsafe { &*facts };
-    if !primary::final_scene_admitted(facts) {
-        return 0;
-    }
     // SAFETY: rendering server thread only, see `Last`.
     let mut record = unsafe { *LAST.0.get() };
+    if !primary::final_scene_admitted(
+        facts,
+        record.source_frame_id,
+        record.key,
+        record.resource_generation,
+    ) {
+        return 0;
+    }
     record.role = RENDER_FINAL_SCENE;
     record.driver = facts.driver;
     unsafe { out.write(record) };

@@ -23,6 +23,7 @@ void boot(bool headless);
 bool create_swapchain(void *factory, void *queue, void *window, const void *description, void **out);
 void shutdown();
 void cpu_begin();
+void cpu_sample();
 void cpu_simulation_begin();
 void queue_frame(bool present);
 void cpu_end();

@@ -22,7 +22,8 @@ struct rsf_godot_boot_callbacks {
     uint32_t (*start)(uint32_t vulkan);   // rsfg_boot_vulkan or rsfg_boot
     void (*rejected)();
     uint32_t (*attach)();                 // rsfg_attach_engine with the engine services
-    uint64_t (*session)();                // rsfg_status session identity
+    uint64_t (*session)();
+    uint32_t (*native_shutdown)();                // rsfg_status session identity
 };
 
 struct rsf_godot_configure_facts {
@@ -42,7 +43,7 @@ struct rsf_godot_configure_callbacks {
 
 struct rsf_godot_shutdown_callbacks {
     void (*release_render)(); // release_motion on the server thread, then sync
-    void (*native_shutdown)();
+    uint32_t (*native_shutdown)();
 };
 
 struct rsf_godot_extent {
@@ -72,7 +73,7 @@ static_assert(offsetof(rsf_godot_settings, sr_backend) == 8 && offsetof(rsf_godo
     "host.rs reads the settings prefix");
 static_assert(sizeof(rsf_godot_boot_facts) == 16 && alignof(rsf_godot_boot_facts) == 4,
     "host.rs mirrors the boot facts");
-static_assert(sizeof(rsf_godot_boot_callbacks) == 6 * sizeof(void *), "host.rs mirrors the boot callbacks");
+static_assert(sizeof(rsf_godot_boot_callbacks) == 7 * sizeof(void *), "host.rs mirrors the boot callbacks");
 static_assert(sizeof(rsf_godot_configure_facts) == 8 && alignof(rsf_godot_configure_facts) == 4,
     "host.rs mirrors the configure facts");
 static_assert(sizeof(rsf_godot_configure_callbacks) == 7 * sizeof(void *), "host.rs mirrors the configure callbacks");

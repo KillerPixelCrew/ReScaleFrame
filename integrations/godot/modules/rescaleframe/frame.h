@@ -22,6 +22,7 @@ struct rsf_godot_render_frame {
 
 // Main loop thread.
 extern "C" void rsf_godot_cpu_begin(const rsf_godot_frame_callbacks *callbacks);
+extern "C" void rsf_godot_cpu_sample(const rsf_godot_frame_callbacks *callbacks);
 extern "C" void rsf_godot_cpu_simulation_begin(const rsf_godot_frame_callbacks *callbacks);
 extern "C" void rsf_godot_cpu_queue(const rsf_godot_frame_callbacks *callbacks, uint32_t present);
 extern "C" void rsf_godot_cpu_end(const rsf_godot_frame_callbacks *callbacks);

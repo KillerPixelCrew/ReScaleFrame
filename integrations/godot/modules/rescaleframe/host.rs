@@ -45,6 +45,8 @@ pub struct BootCallbacks {
     attach: unsafe extern "C" fn() -> u32,
     /// `rsfg_status` session identity, zero when status was refused.
     session: unsafe extern "C" fn() -> u64,
+    /// Rolls back a successful native start when attachment or session discovery fails.
+    native_shutdown: unsafe extern "C" fn() -> u32,
 }
 
 /// The parsed settings prefix Rust reads. host.h checks the offsets in `rsf_godot_settings`.
@@ -88,7 +90,7 @@ pub struct ShutdownCallbacks {
     /// the rendering server exists.
     release_render: unsafe extern "C" fn(),
     /// `rsfg_shutdown`.
-    native_shutdown: unsafe extern "C" fn(),
+    native_shutdown: unsafe extern "C" fn() -> u32,
 }
 
 /// The status fields that drive the viewport extent.
@@ -114,7 +116,7 @@ pub struct RenderCallbacks {
 
 const _: () = {
     assert!(size_of::<BootFacts>() == 16 && align_of::<BootFacts>() == 4);
-    assert!(size_of::<BootCallbacks>() == 6 * size_of::<usize>());
+    assert!(size_of::<BootCallbacks>() == 7 * size_of::<usize>());
     assert!(offset_of!(SettingsHead, sr_backend) == 8);
     assert!(offset_of!(SettingsHead, quality) == 12);
     assert!(size_of::<ConfigureFacts>() == 8 && align_of::<ConfigureFacts>() == 4);
@@ -126,6 +128,7 @@ const _: () = {
     assert!(size_of::<RenderCallbacks>() == 3 * size_of::<usize>());
 };
 
+static STARTED: AtomicBool = AtomicBool::new(false);
 static READY: AtomicBool = AtomicBool::new(false);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static REQUESTED_SR: AtomicU32 = AtomicU32::new(INITIAL_SR);
@@ -135,7 +138,7 @@ const R: Ordering = Ordering::Relaxed;
 const S: Ordering = Ordering::SeqCst;
 
 fn ready() -> bool {
-    READY.load(R)
+    READY.load(Ordering::Acquire)
 }
 
 fn active() -> bool {
@@ -180,17 +183,23 @@ pub unsafe extern "C" fn rsf_godot_host_boot(
             return;
         }
         (callbacks.capabilities)(VK_GRAPH_HANDOFF);
-        let started = (callbacks.start)(facts.vulkan) != 0;
-        READY.store(started, R);
-        if !started {
+        if (callbacks.start)(facts.vulkan) == 0 {
             (callbacks.rejected)();
             return;
         }
-        if (callbacks.attach)() == 0 {
-            READY.store(false, R);
+        STARTED.store(true, R);
+        let session = if (callbacks.attach)() != 0 {
+            (callbacks.session)()
+        } else {
+            0
+        };
+        if session == 0 {
+            (callbacks.rejected)();
+            stop_native(callbacks.native_shutdown);
             return;
         }
-        SESSION.store((callbacks.session)(), R);
+        SESSION.store(session, R);
+        READY.store(true, Ordering::Release);
     }
 }
 
@@ -233,8 +242,15 @@ pub unsafe extern "C" fn rsf_godot_host_configure(
     1
 }
 
+// A refused stop keeps native ownership for the next shutdown attempt.
+unsafe fn stop_native(shutdown: unsafe extern "C" fn() -> u32) {
+    if STARTED.load(R) && unsafe { shutdown() } != 0 {
+        STARTED.store(false, R);
+    }
+}
+
 /// Main thread, at scene-level module uninitialization: disables the hooks, releases the render
-/// resources, then stops a booted native host. `ready` stays set, as before.
+/// resources, then stops the native host if this module still owns it.
 ///
 /// # Safety
 /// `callbacks` must point to valid callbacks.
@@ -245,9 +261,9 @@ pub unsafe extern "C" fn rsf_godot_host_shutdown(callbacks: *const ShutdownCallb
     // SAFETY: valid callbacks, see above.
     unsafe {
         (callbacks.release_render)();
-        if ready() {
-            (callbacks.native_shutdown)();
-        }
+        READY.store(false, Ordering::Release);
+        SESSION.store(0, R);
+        stop_native(callbacks.native_shutdown);
     }
 }
 
