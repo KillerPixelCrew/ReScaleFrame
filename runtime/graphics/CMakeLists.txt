@@ -4,7 +4,8 @@ add_library(rsf_graphics INTERFACE)
 # The overlay's C ABI lives with the Rust crate that implements it, because that crate is the side
 # the contract exists to constrain. The renderer and the input capture only consume it.
 target_include_directories(rsf_graphics INTERFACE "${CMAKE_SOURCE_DIR}/ui/overlay/include")
-target_include_directories(rsf_graphics INTERFACE include)
+target_include_directories(rsf_graphics INTERFACE include
+    "${CMAKE_SOURCE_DIR}/runtime/shader_patch/include")
 target_link_libraries(rsf_graphics INTERFACE d3d11 d3d12 dxgi windowscodecs ole32 psapi minhook
     ReScaleFrame::RuntimeCommon)
 add_library(ReScaleFrame::Graphics ALIAS rsf_graphics)

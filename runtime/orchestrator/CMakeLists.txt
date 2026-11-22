@@ -167,5 +167,13 @@ set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runt
 target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.c src/dll_exports.c)
 target_sources(rsf_orchestrator PRIVATE src/d3d11_host_exports.c)
 add_subdirectory(../shader_patch "${CMAKE_CURRENT_BINARY_DIR}/shader_patch")
+target_include_directories(rsf_orchestrator PUBLIC "${CMAKE_SOURCE_DIR}/runtime/shader_patch/include")
+target_link_libraries(rsf_orchestrator PRIVATE rsf_shader_patch)
+if(MSVC)
+    target_link_options(rsf_orchestrator PRIVATE "LINKER:/EXPORT:rsf_get_shader_patch_api")
+else()
+    target_sources(rsf_orchestrator PRIVATE "${CMAKE_SOURCE_DIR}/runtime/shader_patch/shader_patch.def")
+    target_link_options(rsf_orchestrator PRIVATE "LINKER:--undefined,rsf_get_shader_patch_api")
+endif()
 
 # Anti-Lag 2 driver calls are Rust (src/latency_antilag_sdk.rs); no SDK headers are needed.
