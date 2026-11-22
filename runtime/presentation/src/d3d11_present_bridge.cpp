@@ -27,7 +27,7 @@ static_assert(sizeof(rsf_d3d11p_facts) == 112 && offsetof(rsf_d3d11p_facts, grap
     offsetof(rsf_d3d11p_facts, buffer_usage) == 104);
 static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9);
 static_assert(sizeof(rsf_d3d11p_plain_plan) == 24 && offsetof(rsf_d3d11p_plain_plan, swap_effect) == 8);
-static_assert(sizeof(rsf_d3d11p_adapter) == 16);
+static_assert(sizeof(rsf_d3d11p_adapter) == 16 && sizeof(rsf_d3d11p_device_adapter_info) == 12);
 static_assert(sizeof(rsf_d3d11p_platform) == 72 * sizeof(void*));
 static_assert(offsetof(rsf_d3d11p_platform, bridge_new) == 15 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, init_source) == 19 * sizeof(void*) &&
@@ -90,13 +90,6 @@ CreateHwnd original_hwnd = nullptr;
 
 const rsf_d3d11_present_setup& settings() { return *rsf_core_d3d11p_settings(); }
 void log(const char* message) { if (settings().log) settings().log(settings().user, message); }
-bool same_identity(IUnknown* left, IUnknown* right) {
-    if (!left || !right) return false;
-    ComPtr<IUnknown> a,b;
-    return SUCCEEDED(left->QueryInterface(IID_PPV_ARGS(&a))) &&
-        SUCCEEDED(right->QueryInterface(IID_PPV_ARGS(&b))) && a.Get() == b.Get();
-}
-
 struct BridgeState {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext4> context;
@@ -207,33 +200,24 @@ uint32_t init_source(void* b, void* factory, void* source, const void* desc) {
     self.native12 = SUCCEEDED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&self.direct_queue)));
     return self.native12 ? 1u : 0u;
 }
-int32_t owning_adapter(void* b, void* source, rsf_d3d11p_adapter* out) {
-    auto& self = *as_bridge(b);
-    ComPtr<IDXGIFactory4> owning_factory;
-    ComPtr<IDXGIAdapter1> owning_adapter;
-    if (self.native12) {
-        if (FAILED(self.direct_queue->GetDevice(IID_PPV_ARGS(&self.direct_device))) ||
-            FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&owning_factory))) ||
-            FAILED(owning_factory->EnumAdapterByLuid(self.direct_device->GetAdapterLuid(), IID_PPV_ARGS(&owning_adapter)))) return E_FAIL;
-    } else {
-        ComPtr<IDXGIDevice> dxgi; ComPtr<IDXGIAdapter> adapter;
-        if (FAILED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&dxgi))) || FAILED(dxgi->GetAdapter(&adapter)) ||
-            FAILED(adapter.As(&owning_adapter))) return E_FAIL;
-    }
-    DXGI_ADAPTER_DESC1 info{};
-    if (FAILED(owning_adapter->GetDesc1(&info))) return E_FAIL;
-    *out = {info.VendorId, info.DeviceId, rsf_fg_default_backend(info.VendorId, (info.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0), 0};
-    return S_OK;
-}
 int32_t native_device(void* b) {
     auto& self = *as_bridge(b);
-    return FAILED(self.direct_queue->GetDevice(IID_PPV_ARGS(&self.direct_device))) ? E_NOINTERFACE : S_OK;
+    return rsf_d3d11p_device_queue_device(self.direct_queue.Get(),
+        reinterpret_cast<void**>(self.direct_device.ReleaseAndGetAddressOf()));
+}
+int32_t owning_adapter(void* b, void* source, rsf_d3d11p_adapter* out) {
+    auto& self = *as_bridge(b);
+    if (self.native12 && FAILED(native_device(b))) return E_FAIL;
+    rsf_d3d11p_device_adapter_info info{};
+    if (FAILED(rsf_d3d11p_device_read_adapter(source, self.direct_device.Get(), &info))) return E_FAIL;
+    *out = {info.vendor, info.device, rsf_fg_default_backend(info.vendor, info.software), 0};
+    return S_OK;
 }
 uint32_t adopt_host(void* b, uint32_t identity, int32_t* result) {
     auto& self = *as_bridge(b);
-    ComPtr<IDXGIFactory4> native_factory; ComPtr<IDXGIAdapter1> native_adapter;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&native_factory))) ||
-        FAILED(native_factory->EnumAdapterByLuid(self.direct_device->GetAdapterLuid(), IID_PPV_ARGS(&native_adapter)))) return 0;
+    ComPtr<IDXGIAdapter1> native_adapter;
+    if (FAILED(rsf_d3d11p_device_native_adapter(self.direct_device.Get(),
+        reinterpret_cast<void**>(native_adapter.GetAddressOf())))) return 0;
     const auto setup = self.host_setup(native_adapter.Get());
     *result = identity ? rsf_streamline_host_adopt(&setup, self.direct_device.Get(), self.direct_queue.Get(), &self.host) :
         RSF_BACKEND_ERROR_NOT_SUPPORTED;
@@ -241,11 +225,10 @@ uint32_t adopt_host(void* b, uint32_t identity, int32_t* result) {
 }
 int32_t d3d11_device(void* b, void* source) {
     auto& self = *as_bridge(b);
-    if (FAILED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&self.device)))) return E_NOINTERFACE;
-    ComPtr<ID3D11DeviceContext> immediate; self.device->GetImmediateContext(&immediate);
-    ComPtr<IDXGIDevice> dxgi;
-    if (FAILED(immediate.As(&self.context)) || FAILED(self.device.As(&dxgi)) || FAILED(dxgi->GetAdapter(&self.adapter))) return E_NOINTERFACE;
-    return S_OK;
+    return rsf_d3d11p_device_immediate(source,
+        reinterpret_cast<void**>(self.device.ReleaseAndGetAddressOf()),
+        reinterpret_cast<void**>(self.context.ReleaseAndGetAddressOf()),
+        reinterpret_cast<void**>(self.adapter.ReleaseAndGetAddressOf()));
 }
 int32_t create_host(void* b) {
     auto& self = *as_bridge(b);
@@ -258,23 +241,17 @@ int32_t resolve_graphics(void* b) {
     auto& self = *as_bridge(b);
     const auto adapter = std::move(self.adapter);
     if (self.host) return rsf_streamline_host_graphics(self.host, &self.graphics) != RSF_BACKEND_OK ? E_FAIL : S_OK;
-    if (!self.native12 && FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
-            IID_PPV_ARGS(&self.direct_device)))) return DXGI_ERROR_UNSUPPORTED;
-    if (!self.direct_queue) {
-        D3D12_COMMAND_QUEUE_DESC queue{}; queue.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        if (FAILED(self.direct_device->CreateCommandQueue(&queue, IID_PPV_ARGS(&self.direct_queue)))) return E_FAIL;
-    }
+    if (!self.native12 && FAILED(rsf_d3d11p_device_create12(adapter.Get(),
+        reinterpret_cast<void**>(self.direct_device.ReleaseAndGetAddressOf())))) return DXGI_ERROR_UNSUPPORTED;
+    if (!self.direct_queue && FAILED(rsf_d3d11p_gpu_queue(self.direct_device.Get(),
+        reinterpret_cast<void**>(self.direct_queue.GetAddressOf())))) return E_FAIL;
     self.graphics.device = self.graphics.native_device = self.direct_device.Get();
     self.graphics.queue = self.graphics.native_queue = self.direct_queue.Get();
     return S_OK;
 }
 uint32_t tearing_supported(void* b) {
     auto& self = *as_bridge(b);
-    ComPtr<IDXGIFactory5> capability_factory;
-    BOOL allow_tearing = FALSE;
-    self.tearing_supported = SUCCEEDED(self.parent->QueryInterface(IID_PPV_ARGS(&capability_factory))) &&
-        SUCCEEDED(capability_factory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING,
-            &allow_tearing, sizeof(allow_tearing))) && allow_tearing;
+    self.tearing_supported = rsf_d3d11p_device_tearing(self.parent.Get()) != 0;
     return self.tearing_supported ? 1u : 0u;
 }
 uint32_t fsr4_supported(void* b, const char* directory) {
@@ -407,20 +384,6 @@ void* source_queue(void* b, void* interop_queue) {
 void* command_list(void* b, void* queue, void* list) {
     return as_bridge(b)->provider_list(queue, static_cast<ID3D12GraphicsCommandList*>(list));
 }
-int32_t verify_outer(void* inner, void* window, void* device, void* context, void* outer) {
-    auto* captured = static_cast<IDXGISwapChain*>(inner);
-    auto* chain = static_cast<IDXGISwapChain*>(outer);
-    ComPtr<ID3D11Device> captured_device, context_device, outer_device;
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (!same_identity(chain, captured) || FAILED(chain->GetDesc(&desc)) || desc.OutputWindow != window ||
-        FAILED(captured->GetDevice(IID_PPV_ARGS(&captured_device))) || FAILED(chain->GetDevice(IID_PPV_ARGS(&outer_device)))) return E_INVALIDARG;
-    auto* immediate = static_cast<ID3D11DeviceContext*>(context);
-    if (immediate->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return E_INVALIDARG;
-    immediate->GetDevice(&context_device);
-    if (!same_identity(captured_device.Get(), static_cast<IUnknown*>(device)) ||
-        !same_identity(captured_device.Get(), outer_device.Get()) || !same_identity(captured_device.Get(), context_device.Get())) return E_INVALIDARG;
-    return S_OK;
-}
 } // namespace leaf
 
 const rsf_d3d11p_platform platform{
@@ -458,7 +421,7 @@ const rsf_d3d11p_platform platform{
     .release_direct_graphics = leaf::release_direct_graphics,
     .release_host = leaf::release_host,
     .source_queue = leaf::source_queue,
-    .command_list = leaf::command_list, .verify_outer = leaf::verify_outer,
+    .command_list = leaf::command_list, .verify_outer = rsf_d3d11p_device_verify_outer,
 };
 
 HRESULT create_bridge(IDXGIFactory* factory, IUnknown* unknown, const DXGI_SWAP_CHAIN_DESC& desc, IDXGISwapChain** out) {
@@ -495,14 +458,10 @@ extern "C" int32_t rsf_d3d11_present_wrap_native_chain(void* raw_device, void* r
     *out = nullptr;
     if (!raw_device || !raw_chain || !settings().accept_window || original_create || rsf_core_d3d11p_active_bridge()) return E_INVALIDARG;
     auto* device = static_cast<ID3D11Device*>(raw_device);
-    auto* native_chain = static_cast<IDXGISwapChain*>(raw_chain);
     DXGI_SWAP_CHAIN_DESC description{};
-    ComPtr<ID3D11Device> chain_device;
-    ComPtr<IUnknown> expected, observed;
     ComPtr<IDXGIFactory> factory;
-    if (FAILED(native_chain->GetDesc(&description)) || FAILED(native_chain->GetDevice(IID_PPV_ARGS(&chain_device))) ||
-        FAILED(device->QueryInterface(IID_PPV_ARGS(&expected))) || FAILED(chain_device.As(&observed)) ||
-        expected.Get() != observed.Get() || FAILED(native_chain->GetParent(IID_PPV_ARGS(&factory)))) return E_INVALIDARG;
+    if (FAILED(rsf_d3d11p_device_native_chain(device, raw_chain, &description,
+        reinterpret_cast<void**>(factory.GetAddressOf())))) return E_INVALIDARG;
     ComPtr<IDXGISwapChain> facade;
     const auto result = create_bridge(factory.Get(), device, description, &facade);
     if (FAILED(result)) return result;

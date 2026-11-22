@@ -225,6 +225,18 @@ int32_t rsf_d3d11p_gpu_upload_return(void*, void*, void*, void*, uint64_t);
 int32_t rsf_d3d11p_gpu_retire_submit(void*, void*, void*, void*, uint64_t, void*, uint64_t,
     void* (*)(void*, void*, void*));
 
+typedef struct rsf_d3d11p_device_adapter_info {
+    uint32_t vendor, device, software;
+} rsf_d3d11p_device_adapter_info;
+int32_t rsf_d3d11p_device_queue_device(void* queue, void** device);
+int32_t rsf_d3d11p_device_native_adapter(void* device, void** adapter);
+int32_t rsf_d3d11p_device_read_adapter(void* source, void* native_device, rsf_d3d11p_device_adapter_info*);
+int32_t rsf_d3d11p_device_immediate(void* source, void** device, void** context, void** adapter);
+int32_t rsf_d3d11p_device_create12(void* adapter, void** out);
+uint32_t rsf_d3d11p_device_tearing(void* factory);
+int32_t rsf_d3d11p_device_verify_outer(void* inner, void* window, void* device, void* context, void* outer);
+int32_t rsf_d3d11p_device_native_chain(void* device, void* chain, struct DXGI_SWAP_CHAIN_DESC* desc, void** factory);
+
 /* Facade methods. */
 void rsf_core_d3d11p_chain_destroy(rsf_d3d11p_chain* chain);
 /* The physical chain is borrowed until its lease is released. When initialize is

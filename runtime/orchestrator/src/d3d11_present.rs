@@ -28,6 +28,8 @@ use std::sync::atomic::{
 };
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
 
+#[path = "d3d11_present_device.rs"]
+mod device;
 #[path = "d3d11_present_dxgi.rs"]
 mod dxgi;
 #[path = "d3d11_present_facade.rs"]
