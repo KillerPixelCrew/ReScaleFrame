@@ -114,3 +114,16 @@ passed. The fixture reuses the checked-in census options binding, so no generate
 or generator input changed. Compilation, lint, CTest, WARP and game validation remain
 user-owned. Both capture variants previously exceeded the five-second capture budget on
 the Arc B370, and the timeout budget is unchanged.
+
+## Native NGX leaves moved to C11 (R03)
+
+`games/rdr2/src/capture_ngx.c` and `tests/rdr2_capture_ngx.c` replace the two C++ files. The
+ASI leaf dispatches the NGX `Get` virtual slot (8, 9, 11, 12 and 14, as before) through a
+single function pointer type, because every overload takes a pointer to its value. It contains
+the call with `__try/__except` instead of `catch (...)`, which also covers foreign C++
+exceptions. The fixture object is still the C++ `NgxParam` table from
+`tests/loader/src/windows/vendor_census_fixture/ngx_params.rs`. The C leaf reaches its `Set`
+overloads through slots 0, 1, 3, 4 and 6, which are the MSVC reversed-overload positions of
+`tests/vendor_census_ngx_params.h`. `vendor_census_native.cpp` still compiles that
+declaration and so remains the compiler-derived check of the slot order. The fixture's
+`DLSS.Feature.Create.Flags` value is an `int`, so it keeps the int slot.

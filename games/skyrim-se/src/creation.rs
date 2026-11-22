@@ -17,7 +17,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const OK: i32 = 0;
 
-/// `DXGI_SWAP_CHAIN_DESC` size and `OutputWindow` offset; `native_creation.cpp` asserts both.
+/// `DXGI_SWAP_CHAIN_DESC` size and `OutputWindow` offset; `native_creation.c` asserts both.
 const DESCRIPTION_SIZE: usize = 72;
 const DESCRIPTION_WINDOW: usize = 48;
 

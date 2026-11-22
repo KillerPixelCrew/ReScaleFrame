@@ -2525,7 +2525,7 @@ Port capture observation, registration, GPU ownership and publication alongside 
 
 **Port files (6)**
 
-- [ ] [games/rdr2/src/capture_ngx.cpp](games/rdr2/src/capture_ngx.cpp) (CRT and NGX exception leaves)
+- [x] [games/rdr2/src/capture_ngx.cpp](games/rdr2/src/capture_ngx.cpp) (CRT and NGX exception leaves; now the C11 leaf `capture_ngx.c`, SEH replaces `catch (...)`)
 - [x] [games/rdr2/src/capture_state.h](games/rdr2/src/capture_state.h)
 - [x] [games/rdr2/src/d3d12_trace.h](games/rdr2/src/d3d12_trace.h)
 - [x] [games/rdr2/src/diagnostics.h](games/rdr2/src/diagnostics.h)
@@ -2534,7 +2534,7 @@ Port capture observation, registration, GPU ownership and publication alongside 
 
 **Fixtures (2)**
 
-- [ ] [tests/rdr2_capture_ngx.cpp](tests/rdr2_capture_ngx.cpp) (native NGX fixture object)
+- [x] [tests/rdr2_capture_ngx.cpp](tests/rdr2_capture_ngx.cpp) (native NGX fixture object; now the C11 leaf `rdr2_capture_ngx.c` calling the NgxParam `Set` vtable slots)
 - [x] [tests/rdr2_capture.cpp](tests/rdr2_capture.cpp)
 
 **Rust review findings (11)**
@@ -2574,16 +2574,16 @@ Port the cold creation routes, session, event proofs and compatibility handoff.
 
 **Port files (12)**
 
-- [ ] [games/skyrim-se/src/compatibility.cpp](games/skyrim-se/src/compatibility.cpp)
+- [x] [games/skyrim-se/src/compatibility.cpp](games/skyrim-se/src/compatibility.cpp) (now the C11 leaf `compatibility.c`)
 - [x] [games/skyrim-se/src/compatibility.h](games/skyrim-se/src/compatibility.h)
-- [ ] [games/skyrim-se/src/cpu_events.cpp](games/skyrim-se/src/cpu_events.cpp)
+- [x] [games/skyrim-se/src/cpu_events.cpp](games/skyrim-se/src/cpu_events.cpp) (now the C11 leaf `cpu_events.c`)
 - [x] [games/skyrim-se/src/cpu_events.h](games/skyrim-se/src/cpu_events.h)
 - [x] [games/skyrim-se/src/cpu_policy.h](games/skyrim-se/src/cpu_policy.h)
 - [x] [games/skyrim-se/src/input_ownership.h](games/skyrim-se/src/input_ownership.h)
-- [ ] [games/skyrim-se/src/native_creation.cpp](games/skyrim-se/src/native_creation.cpp)
+- [x] [games/skyrim-se/src/native_creation.cpp](games/skyrim-se/src/native_creation.cpp) (now the C11 leaf `native_creation.c`)
 - [x] [games/skyrim-se/src/native_creation_platform.h](games/skyrim-se/src/native_creation_platform.h)
 - [x] [games/skyrim-se/src/observer_platform.h](games/skyrim-se/src/observer_platform.h)
-- [ ] [games/skyrim-se/src/plugin.cpp](games/skyrim-se/src/plugin.cpp)
+- [x] [games/skyrim-se/src/plugin.cpp](games/skyrim-se/src/plugin.cpp) (already the C11 `plugin.c` since 7f28d061)
 - [x] [games/skyrim-se/src/session_platform.h](games/skyrim-se/src/session_platform.h)
 - [x] [games/skyrim-se/src/guarded_read.cpp](games/skyrim-se/src/guarded_read.cpp) (native SEH read and write guards)
 

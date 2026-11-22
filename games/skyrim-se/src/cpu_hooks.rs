@@ -17,7 +17,7 @@ use winapi::um::winnt::LARGE_INTEGER;
 const NAMED_CALLBACK_SLOT: u32 = 0x20b5130;
 const NAMED_POLL: u32 = 0x6e6030;
 
-// Indexed by the native detour table in cpu_events.cpp.
+// Indexed by the native detour table in cpu_events.c.
 const HOOKS: [(u32, [u8; 19]); 13] = [
     (
         0x658870,

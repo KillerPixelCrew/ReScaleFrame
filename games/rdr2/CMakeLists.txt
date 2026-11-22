@@ -14,7 +14,7 @@ set_target_properties(rsf_game_rdr2 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.RD
 # Loaded by the game's ASI loader, so the file name is not a system DLL and nothing is forwarded.
 # Startup admission, configuration gates, ForceD3D12 and engine-settings ownership are the same Rust
 # archive. asi_entry.c provides the CRT entry and binds the ASI-only C services.
-add_library(rsf_asi_rdr2 SHARED src/asi_entry.c src/social_club_guard.c src/capture_ngx.cpp)
+add_library(rsf_asi_rdr2 SHARED src/asi_entry.c src/social_club_guard.c src/capture_ngx.c)
 target_include_directories(rsf_asi_rdr2 PRIVATE ../../runtime/orchestrator/include)
 target_link_libraries(rsf_asi_rdr2 PRIVATE rsf_rdr2_rust
     ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon ReScaleFrame::Contract ReScaleFrame::LoaderDiagnostics

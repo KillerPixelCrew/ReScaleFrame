@@ -469,3 +469,17 @@ Community Shaders sources and S02 retirement bodies matched the base. Rust 1.94.
 bindgen 0.72.1 regeneration for Windows x64, locked offline metadata and diff checks passed.
 MSVC `/Zs /W4 /WX` and MinGW `-fsyntax-only -Wall -Wextra -Werror` parsed both C11 sources
 and all four C++ sources. No builds, links, fixtures, lint or devices were run.
+
+## Native leaves moved to C11 (S01)
+
+`native_creation.cpp`, `compatibility.cpp` and `cpu_events.cpp` are now `native_creation.c`,
+`compatibility.c` and `cpu_events.c`. `plugin.cpp` had already become `plugin.c`, so the S01
+checklist entry only needed closing. The bodies are unchanged: the same typed continuations,
+caller captures, last-error handling and layout asserts (now `_Static_assert`). C has no
+destructors, so each scope that relied on one now uses MSVC `__try/__finally`. This keeps
+Leave, the Rust CPU receipt, the configuration exclusion byte and the HDR restore running when
+an engine continuation raises. The foreign-exception guards (`catch (...)`) became
+`__try/__except (EXCEPTION_EXECUTE_HANDLER)`, which also contains the foreign C++ exceptions
+and a fault in the called function. Non-MSVC builds fall back to straight-line calls with no
+unwinding. `cpu_call.h` gained C typedefs for its tagged types and stays usable from
+`render_detours.cpp`.
