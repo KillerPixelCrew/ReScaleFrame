@@ -32,6 +32,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
 mod dxgi;
 #[path = "d3d11_present_facade.rs"]
 mod facade;
+#[path = "d3d11_present_factory.rs"]
+mod factory;
+#[path = "d3d11_present_gpu.rs"]
+mod gpu;
 
 type Platform = rsf_d3d11p_platform;
 type Graphics = rsf_streamline_graphics;

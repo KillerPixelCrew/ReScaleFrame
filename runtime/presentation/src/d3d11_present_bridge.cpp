@@ -3,7 +3,6 @@
 // Rust owns the IDXGISwapChain4 facade, presentation and its physical-chain leases.
 #include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/shared_surface.h>
-#include "../../backends/common/d3d12_helpers.h"
 #include "d3d11_present_platform.h"
 #include <d3d11_4.h>
 #include <d3d12.h>
@@ -17,6 +16,8 @@
 #include <new>
 
 static_assert(sizeof(rsf_streamline_graphics) == 48);
+static_assert(sizeof(DXGI_SWAP_CHAIN_DESC) == 72 && sizeof(DXGI_SWAP_CHAIN_DESC1) == 48 &&
+    sizeof(DXGI_SWAP_CHAIN_FULLSCREEN_DESC) == 20);
 static_assert(RSF_D3D11_DISPATCH_RELEASE == 1 && sizeof(rsf_d3d11_chain_dispatch) == 72 &&
     offsetof(rsf_d3d11_chain_dispatch, receiver) == 16 &&
     offsetof(rsf_d3d11_chain_dispatch, result) == 64);
@@ -278,28 +279,6 @@ uint32_t tearing_supported(void* b) {
 uint32_t fsr4_supported(void* b, const char* directory) {
     return rsf_generation_fsr4_supported(as_bridge(b)->graphics.native_device, directory);
 }
-int32_t create_interop_queue(void* device, void** out) {
-    D3D12_COMMAND_QUEUE_DESC interop_desc{}; interop_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    ID3D12CommandQueue* queue = nullptr;
-    const auto result = static_cast<ID3D12Device*>(device)->CreateCommandQueue(&interop_desc, IID_PPV_ARGS(&queue));
-    *out = queue;
-    return result;
-}
-int32_t create_completion_fence(void* device, void** out) {
-    ID3D12Fence* fence = nullptr;
-    const auto result = static_cast<ID3D12Device*>(device)->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-    *out = fence;
-    return result;
-}
-void* create_event(uint32_t initially_signaled) {
-    return CreateEventW(nullptr, FALSE, initially_signaled != 0, nullptr);
-}
-void* duplicate_event(void* event) {
-    HANDLE duplicate = nullptr;
-    DuplicateHandle(GetCurrentProcess(), event, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS);
-    return duplicate;
-}
-void close_event(void* event) { CloseHandle(event); }
 int32_t create_upload_fence(void* b) {
     auto& self = *as_bridge(b);
     return rsf_shared_fence_create(self.device.Get(), self.graphics.native_device, settings().log,
@@ -307,55 +286,22 @@ int32_t create_upload_fence(void* b) {
 }
 // Slot lists record on the graphics device: Streamline's proxy device when a host exists.
 int32_t create_slot(void* b, void** allocator, void** list) {
-    auto* gpu = static_cast<ID3D12Device*>(as_bridge(b)->graphics.device);
-    ID3D12CommandAllocator* created_allocator = nullptr;
-    ID3D12GraphicsCommandList* created_list = nullptr;
-    *allocator = *list = nullptr;
-    if (!rsf::create_command_list(gpu, D3D12_COMMAND_LIST_TYPE_DIRECT, &created_allocator, &created_list))
-        return E_FAIL;
-    *allocator = created_allocator; *list = created_list;
-    return S_OK;
+    return rsf_d3d11p_gpu_create_slot(as_bridge(b)->graphics.device, allocator, list);
 }
 int32_t create_render_buffer(void* b, uint32_t width, uint32_t height, uint32_t format, void** out) {
-    D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = width; desc.Height = height; desc.Format = DXGI_FORMAT(format);
-    desc.DepthOrArraySize = desc.MipLevels = 1;
-    desc.SampleDesc.Count = 1; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    ID3D12Resource* value = nullptr;
-    const auto hr = as_bridge(b)->direct_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE,
-        &desc, D3D12_RESOURCE_STATE_PRESENT, nullptr, IID_PPV_ARGS(&value));
-    *out = value;
-    return hr;
+    return rsf_d3d11p_gpu_render_buffer(as_bridge(b)->direct_device.Get(), width, height, format, out);
 }
 
+int32_t create_original(void* factory, void* queue, DXGI_SWAP_CHAIN_DESC* desc, void** out) noexcept try {
+    return original_create(static_cast<IDXGIFactory*>(factory), static_cast<ID3D12CommandQueue*>(queue),
+        desc, reinterpret_cast<IDXGISwapChain**>(out));
+} catch (...) {
+    return E_FAIL;
+}
 int32_t create_plain(void* b, const rsf_d3d11p_plain_plan* plan, void** physical, void** queue) {
     auto& self = *as_bridge(b);
-    auto desc = self.description;
-    desc.SwapEffect = static_cast<DXGI_SWAP_EFFECT>(plan->swap_effect);
-    desc.Flags = plan->flags;
-    if (plan->buffer_count) desc.BufferCount = plan->buffer_count;
-    if (plan->buffer_usage) desc.BufferUsage = plan->buffer_usage;
-    ComPtr<IDXGISwapChain> plain;
-    auto* owner_queue = static_cast<ID3D12CommandQueue*>(plan->queue);
-    const HRESULT created = original_create ? original_create(self.parent.Get(), owner_queue, &desc, &plain) :
-        self.parent->CreateSwapChain(owner_queue, &desc, &plain);
-    if (FAILED(created)) {
-        char text[512]{}; std::snprintf(text, sizeof(text),
-            "Physical chain creation refused HRESULT=0x%08lx facade=%p factory=%p queue=%p window=%p size=%ux%u format=%u buffers=%u effect=%u flags=0x%x native12=%u usage=0x%x sample=%u/%u refresh=%u/%u scanline=%u scaling=%u windowed=%u",
-            static_cast<unsigned long>(created), b, static_cast<void*>(self.parent.Get()),
-            static_cast<void*>(owner_queue), static_cast<void*>(desc.OutputWindow), desc.BufferDesc.Width, desc.BufferDesc.Height,
-            uint32_t(desc.BufferDesc.Format), desc.BufferCount, uint32_t(desc.SwapEffect), desc.Flags, uint32_t(self.native12),
-            desc.BufferUsage,desc.SampleDesc.Count,desc.SampleDesc.Quality,
-            desc.BufferDesc.RefreshRate.Numerator,desc.BufferDesc.RefreshRate.Denominator,
-            uint32_t(desc.BufferDesc.ScanlineOrdering),uint32_t(desc.BufferDesc.Scaling),uint32_t(desc.Windowed!=FALSE));
-        log(text); return E_FAIL;
-    }
-    ComPtr<IDXGISwapChain4> replacement;
-    if (FAILED(plain.As(&replacement))) return E_FAIL;
-    *physical = replacement.Detach();
-    *queue = owner_queue;
-    return S_OK;
+    return rsf_d3d11p_factory_create_plain(b, self.parent.Get(), &self.description, plan,
+        uint32_t(self.native12), original_create ? create_original : nullptr, physical, queue);
 }
 int32_t resize_physical(void* b, void* physical, uint32_t count, uint32_t width, uint32_t height, uint32_t format) {
     auto& self = *as_bridge(b);
@@ -363,21 +309,6 @@ int32_t resize_physical(void* b, void* physical, uint32_t count, uint32_t width,
         self.tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
 }
 
-int32_t join(void* signaller, void* waiter, void* fence, uint64_t value) {
-    auto* complete = static_cast<ID3D12Fence*>(fence);
-    const auto signaled = static_cast<ID3D12CommandQueue*>(signaller)->Signal(complete, value);
-    return FAILED(signaled) ? signaled : static_cast<ID3D12CommandQueue*>(waiter)->Wait(complete, value);
-}
-int32_t wait_fence(void* fence, void* event, uint64_t value) {
-    return rsf::wait_fence(static_cast<ID3D12Fence*>(fence), value, event);
-}
-int32_t slot_reset(void* fence, void* event, void* raw_allocator, void* raw_list, uint64_t value, uint32_t* step) {
-    auto* allocator = static_cast<ID3D12CommandAllocator*>(raw_allocator);
-    auto* list = static_cast<ID3D12GraphicsCommandList*>(raw_list);
-    *step = 0; HRESULT result = wait_fence(fence, event, value); if (FAILED(result)) return result;
-    *step = 1; result = allocator->Reset(); if (FAILED(result)) return result;
-    *step = 2; return list->Reset(allocator, nullptr);
-}
 // Signal with the preceding D3D11 work submitted before D3D12 waits on it.
 // Flushing before Signal leaves the dependency buffered until a later frame.
 int32_t upload_wait(void* b, void* queue, uint64_t value) {
@@ -390,21 +321,9 @@ int32_t upload_wait(void* b, void* queue, uint64_t value) {
     return static_cast<ID3D12CommandQueue*>(queue)->Wait(fence12, value);
 }
 void record_copy(void* b, void* raw_list, void* backbuffer, void* source) {
-    auto& self = *as_bridge(b); auto* list = static_cast<ID3D12GraphicsCommandList*>(raw_list);
-    const auto source_state = self.native12 ? D3D12_RESOURCE_STATE_PRESENT : D3D12_RESOURCE_STATE_COMMON;
-    rsf::copy_transitioned(list, static_cast<ID3D12Resource*>(backbuffer),
-        D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
-        static_cast<ID3D12Resource*>(source), source_state, source_state);
+    rsf_d3d11p_gpu_record_copy(raw_list, backbuffer, source, uint32_t(as_bridge(b)->native12));
 }
 void* context11(void* b) { return as_bridge(b)->context.Get(); }
-int32_t close_execute(void* queue, void* list, void* command) {
-    const auto closed = static_cast<ID3D12GraphicsCommandList*>(list)->Close();
-    if (SUCCEEDED(closed)) {
-        ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)};
-        static_cast<ID3D12CommandQueue*>(queue)->ExecuteCommandLists(1, lists);
-    }
-    return closed;
-}
 int32_t upload_return(void* b, void* raw_queue, uint64_t value) {
     auto& self = *as_bridge(b); auto* queue = static_cast<ID3D12CommandQueue*>(raw_queue);
     auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(self.shared_fence));
@@ -413,13 +332,6 @@ int32_t upload_return(void* b, void* raw_queue, uint64_t value) {
     if (SUCCEEDED(result)) result = queue->Wait(fence12, value);
     if (SUCCEEDED(result)) result = self.context->Wait(fence11, value);
     return result;
-}
-int32_t signal_slot(void* queue, void* fence, uint64_t value) {
-    return static_cast<ID3D12CommandQueue*>(queue)->Signal(static_cast<ID3D12Fence*>(fence), value);
-}
-int32_t application_ready(void* event, void* fence, uint64_t value) {
-    if (fence) return static_cast<ID3D12Fence*>(fence)->SetEventOnCompletion(value, event);
-    return SetEvent(event) ? S_OK : E_FAIL;
 }
 void report_device_failure(void* b, int32_t result, uint32_t backend) {
     auto& self = *as_bridge(b);
@@ -458,22 +370,13 @@ void log_buffer_refusal(void* b, uint32_t index, const void* requested, int32_t 
     log(text);
 }
 
-int32_t signal_wait(void* queue, void* fence, void* event, uint64_t value) {
-    if (FAILED(signal_slot(queue, fence, value))) return E_FAIL;
-    return wait_fence(fence, event, value);
-}
-uint32_t buffer_referenced(void* resource) {
-    auto* buffer = static_cast<IUnknown*>(resource);
-    buffer->AddRef();
-    return buffer->Release() > 1 ? 1u : 0u;
-}
 void set_description(void* b, uint32_t count, uint32_t width, uint32_t height, uint32_t format, uint32_t flags) {
     auto& d = as_bridge(b)->description;
     d.BufferCount = count;
     d.BufferDesc.Width = width; d.BufferDesc.Height = height; d.BufferDesc.Format = DXGI_FORMAT(format); d.Flags = flags;
 }
 int32_t create_retirement_fence(void* b, void** out) {
-    return create_completion_fence(as_bridge(b)->graphics.native_device, out);
+    return rsf_d3d11p_gpu_fence(as_bridge(b)->graphics.native_device, out);
 }
 int32_t retire_submit(void* b, void* raw_queue, void* retirement_fence, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value) {
     auto& self = *as_bridge(b); auto* queue = static_cast<ID3D12CommandQueue*>(raw_queue);
@@ -484,7 +387,7 @@ int32_t retire_submit(void* b, void* raw_queue, void* retirement_fence, void* ve
         if (!command) return RSF_BACKEND_ERROR_FEATURE_FAILED;
         ID3D12CommandList* lists[]{command}; queue->ExecuteCommandLists(1, lists);
     }
-    return FAILED(signal_slot(queue, retirement_fence, value)) ? RSF_BACKEND_ERROR_FEATURE_FAILED : RSF_BACKEND_OK;
+    return FAILED(rsf_d3d11p_gpu_signal(queue, retirement_fence, value)) ? RSF_BACKEND_ERROR_FEATURE_FAILED : RSF_BACKEND_OK;
 }
 // On device failure retain GPU-reachable storage for the process rather than free it.
 // The Rust owner has already retained its synchronization resources and slots.
@@ -546,24 +449,24 @@ const rsf_d3d11p_platform platform{
     .init_source = leaf::init_source, .owning_adapter = leaf::owning_adapter, .native_device = leaf::native_device,
     .adopt_host = leaf::adopt_host, .d3d11_device = leaf::d3d11_device, .create_host = leaf::create_host,
     .host = leaf::host, .resolve_graphics = leaf::resolve_graphics, .tearing_supported = leaf::tearing_supported,
-    .fsr4_supported = leaf::fsr4_supported, .create_interop_queue = leaf::create_interop_queue,
-    .create_completion_fence = leaf::create_completion_fence, .create_event = leaf::create_event,
-    .duplicate_event = leaf::duplicate_event, .close_event = leaf::close_event,
+    .fsr4_supported = leaf::fsr4_supported, .create_interop_queue = rsf_d3d11p_gpu_queue,
+    .create_completion_fence = rsf_d3d11p_gpu_fence, .create_event = rsf_d3d11p_gpu_create_event,
+    .duplicate_event = rsf_d3d11p_gpu_duplicate_event, .close_event = rsf_d3d11p_gpu_close_event,
     .create_upload_fence = leaf::create_upload_fence, .create_slot = leaf::create_slot,
     .shared_surface_platform = rsf_shared_surface_native_platform, .create_render_buffer = leaf::create_render_buffer,
     .create_plain = leaf::create_plain, .query_chain4 = rsf_d3d11p_native_query_chain4, .get_fullscreen = rsf_d3d11p_native_get_fullscreen,
     .set_fullscreen = rsf_d3d11p_native_set_fullscreen,
     .physical_present = rsf_d3d11p_native_present, .resize_physical = leaf::resize_physical,
-    .join = leaf::join,
-    .slot_reset = leaf::slot_reset, .upload_wait = leaf::upload_wait, .acquire_backbuffer = rsf_d3d11p_native_acquire_backbuffer,
+    .join = rsf_d3d11p_gpu_join,
+    .slot_reset = rsf_d3d11p_gpu_reset_slot, .upload_wait = leaf::upload_wait, .acquire_backbuffer = rsf_d3d11p_native_acquire_backbuffer,
     .record_copy = leaf::record_copy, .context11 = leaf::context11,
-    .close_execute = leaf::close_execute, .upload_return = leaf::upload_return, .signal_slot = leaf::signal_slot,
-    .application_ready = leaf::application_ready, .report_device_failure = leaf::report_device_failure,
+    .close_execute = rsf_d3d11p_gpu_close_execute, .upload_return = leaf::upload_return, .signal_slot = rsf_d3d11p_gpu_signal,
+    .application_ready = rsf_d3d11p_gpu_application_ready, .report_device_failure = leaf::report_device_failure,
     .log_present_failure = leaf::log_present_failure,
     .query_buffer_interface = rsf_d3d11p_native_query_interface, .get_physical_buffer = rsf_d3d11p_native_get_buffer,
     .log_buffer_refusal = leaf::log_buffer_refusal,
-    .signal_wait = leaf::signal_wait, .wait_fence = leaf::wait_fence,
-    .buffer_referenced = leaf::buffer_referenced, .set_description = leaf::set_description,
+    .signal_wait = rsf_d3d11p_gpu_signal_wait, .wait_fence = rsf_d3d11p_gpu_wait,
+    .buffer_referenced = rsf_d3d11p_gpu_buffer_referenced, .set_description = leaf::set_description,
     .create_retirement_fence = leaf::create_retirement_fence, .retire_submit = leaf::retire_submit, .retain_all = leaf::retain_all,
     .release_presentation = leaf::release_presentation,
     .release_direct_graphics = leaf::release_direct_graphics,
@@ -572,40 +475,18 @@ const rsf_d3d11p_platform platform{
     .command_list = leaf::command_list, .verify_outer = leaf::verify_outer,
 };
 
-rsf_d3d11p_request normalize(const DXGI_SWAP_CHAIN_DESC& desc) {
-    return {desc.OutputWindow, desc.BufferDesc.Width, desc.BufferDesc.Height, uint32_t(desc.BufferDesc.Format),
-        desc.SampleDesc.Count, desc.BufferCount, desc.Windowed ? 1u : 0u, desc.Flags, uint32_t(desc.SwapEffect),
-        desc.BufferDesc.RefreshRate.Numerator, desc.BufferDesc.RefreshRate.Denominator};
-}
 HRESULT create_bridge(IDXGIFactory* factory, IUnknown* unknown, const DXGI_SWAP_CHAIN_DESC& desc, IDXGISwapChain** out) {
-    const auto request = normalize(desc);
-    return rsf_core_d3d11p_create(&platform, factory, unknown, &request, &desc, reinterpret_cast<void**>(out));
+    return rsf_d3d11p_factory_create(&platform, factory, unknown, &desc, reinterpret_cast<void**>(out));
 }
 HRESULT STDMETHODCALLTYPE create_hook(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
-    if (desc && rsf_core_d3d11p_capture(desc->OutputWindow) && SUCCEEDED(create_bridge(factory, device, *desc, out))) {
-        rsf_core_d3d11p_captured(&platform, *out);
-        return S_OK;
-    }
+    if (rsf_d3d11p_factory_intercept(&platform, factory, device, desc, reinterpret_cast<void**>(out))) return S_OK;
     return original_create(factory, device, desc, out);
 }
 HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HWND hwnd,
     const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen, IDXGIOutput* output, IDXGISwapChain1** out) {
-    if (desc && !output && !desc->Stereo && rsf_core_d3d11p_capture(hwnd)) {
-        // Keep the application's fullscreen mode. Dropping its refresh rate made GetDesc report
-        // 0/0, which RDR2 matched to its lowest listed mode (30 Hz on a 30-120 Hz panel).
-        DXGI_SWAP_CHAIN_DESC translated{}; translated.BufferDesc = {desc->Width, desc->Height,
-            fullscreen ? fullscreen->RefreshRate : DXGI_RATIONAL{}, desc->Format,
-            fullscreen ? fullscreen->ScanlineOrdering : DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
-            fullscreen ? fullscreen->Scaling : DXGI_MODE_SCALING_UNSPECIFIED};
-        translated.SampleDesc = desc->SampleDesc; translated.BufferUsage = desc->BufferUsage; translated.BufferCount = desc->BufferCount;
-        translated.OutputWindow = hwnd; translated.Windowed = fullscreen ? fullscreen->Windowed : TRUE; translated.SwapEffect = desc->SwapEffect; translated.Flags = desc->Flags;
-        ComPtr<IDXGISwapChain> bridge;
-        if (SUCCEEDED(create_bridge(factory, device, translated, &bridge))) {
-            const auto result = bridge->QueryInterface(IID_PPV_ARGS(out));
-            if (SUCCEEDED(result)) rsf_core_d3d11p_captured(&platform, bridge.Get());
-            return result;
-        }
-    }
+    int32_t result = E_FAIL;
+    if (rsf_d3d11p_factory_intercept_hwnd(&platform, factory, device, hwnd, desc, fullscreen, output,
+        reinterpret_cast<void**>(out), &result)) return result;
     return original_hwnd(factory, device, hwnd, desc, fullscreen, output, out);
 }
 }
@@ -617,18 +498,8 @@ extern "C" int rsf_d3d11_present_prepare(const rsf_d3d11_present_setup* setup) {
 }
 extern "C" int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue, void* hwnd,
     const void* description, void** out) try {
-    if (!factory || !queue || !description || !out) return E_INVALIDARG;
-    *out = nullptr;
-    const auto& desc = *static_cast<const DXGI_SWAP_CHAIN_DESC1*>(description);
-    if (desc.Stereo) return DXGI_ERROR_UNSUPPORTED;
-    DXGI_SWAP_CHAIN_DESC translated{};
-    translated.BufferDesc = {desc.Width, desc.Height, {}, desc.Format, DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_MODE_SCALING_UNSPECIFIED};
-    translated.SampleDesc = desc.SampleDesc; translated.BufferUsage = desc.BufferUsage; translated.BufferCount = desc.BufferCount;
-    translated.OutputWindow = static_cast<HWND>(hwnd); translated.Windowed = TRUE;
-    translated.SwapEffect = desc.SwapEffect; translated.Flags = desc.Flags;
-    ComPtr<IDXGISwapChain> bridge;
-    const HRESULT result = create_bridge(static_cast<IDXGIFactory*>(factory), static_cast<IUnknown*>(queue), translated, &bridge);
-    return SUCCEEDED(result) ? bridge->QueryInterface(__uuidof(IDXGISwapChain1), out) : result;
+    return rsf_d3d11p_factory_create_hwnd(&platform, factory, queue, hwnd,
+        static_cast<const DXGI_SWAP_CHAIN_DESC1*>(description), out);
 } catch (...) {
     if (out) *out = nullptr;
     return E_FAIL;
@@ -658,10 +529,11 @@ extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return 0;
     const auto initialized = MH_Initialize();
     if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return 0;
-    auto** table = *reinterpret_cast<void***>(factory.Get());
-    if (MH_CreateHook(table[10], reinterpret_cast<void*>(&create_hook), reinterpret_cast<void**>(&original_create)) != MH_OK) return 0;
-    if (MH_CreateHook(table[15], reinterpret_cast<void*>(&hwnd_hook), reinterpret_cast<void**>(&original_hwnd)) != MH_OK) { MH_RemoveHook(table[10]); original_create = nullptr; return 0; }
-    if (MH_EnableHook(table[10]) != MH_OK || MH_EnableHook(table[15]) != MH_OK) { MH_DisableHook(table[10]); MH_RemoveHook(table[10]); MH_RemoveHook(table[15]); original_create = nullptr; return 0; }
+    void* create = nullptr; void* create_hwnd = nullptr;
+    rsf_d3d11p_factory_hook_targets(factory.Get(), &create, &create_hwnd);
+    if (MH_CreateHook(create, reinterpret_cast<void*>(&create_hook), reinterpret_cast<void**>(&original_create)) != MH_OK) return 0;
+    if (MH_CreateHook(create_hwnd, reinterpret_cast<void*>(&hwnd_hook), reinterpret_cast<void**>(&original_hwnd)) != MH_OK) { MH_RemoveHook(create); original_create = nullptr; return 0; }
+    if (MH_EnableHook(create) != MH_OK || MH_EnableHook(create_hwnd) != MH_OK) { MH_DisableHook(create); MH_RemoveHook(create); MH_RemoveHook(create_hwnd); original_create = nullptr; return 0; }
     log("presentation bridge: cold-start D3D11 swapchain interception installed"); return 1;
 }
 extern "C" int rsf_d3d11_present_install_scoped(const rsf_d3d11_present_setup* setup) {

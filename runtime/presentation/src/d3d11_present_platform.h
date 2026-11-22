@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 #include <rescaleframe/d3d11_present_bridge.h>
 
@@ -183,6 +184,41 @@ int32_t rsf_core_d3d11p_creation_begin(const rsf_d3d11p_platform* platform, void
 void* rsf_core_d3d11p_active_bridge(void);
 int32_t rsf_core_d3d11p_creation_end(const rsf_d3d11p_platform* platform, void* window, uint64_t token,
     void* device, void* context, void* outer);
+
+/* Typed DXGI declarations are consumed by the native factory thunk only. */
+struct DXGI_SWAP_CHAIN_DESC;
+struct DXGI_SWAP_CHAIN_DESC1;
+struct DXGI_SWAP_CHAIN_FULLSCREEN_DESC;
+int32_t rsf_d3d11p_factory_create(const rsf_d3d11p_platform*, void*, void*,
+    const struct DXGI_SWAP_CHAIN_DESC*, void**);
+bool rsf_d3d11p_factory_intercept(const rsf_d3d11p_platform*, void*, void*,
+    const struct DXGI_SWAP_CHAIN_DESC*, void**);
+bool rsf_d3d11p_factory_intercept_hwnd(const rsf_d3d11p_platform*, void*, void*, void*,
+    const struct DXGI_SWAP_CHAIN_DESC1*, const struct DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, void*, void**, int32_t*);
+int32_t rsf_d3d11p_factory_create_hwnd(const rsf_d3d11p_platform*, void*, void*, void*,
+    const struct DXGI_SWAP_CHAIN_DESC1*, void**);
+void rsf_d3d11p_factory_hook_targets(void*, void**, void**);
+int32_t rsf_d3d11p_factory_create_plain(void*, void*, const struct DXGI_SWAP_CHAIN_DESC*,
+    const rsf_d3d11p_plain_plan*, uint32_t,
+    int32_t (*)(void*, void*, struct DXGI_SWAP_CHAIN_DESC*, void**), void**, void**);
+
+/* Typed Windows graphics leaves, with the same contracts as the platform slots. */
+int32_t rsf_d3d11p_gpu_queue(void*, void**);
+int32_t rsf_d3d11p_gpu_fence(void*, void**);
+void* rsf_d3d11p_gpu_create_event(uint32_t);
+void* rsf_d3d11p_gpu_duplicate_event(void*);
+void rsf_d3d11p_gpu_close_event(void*);
+int32_t rsf_d3d11p_gpu_create_slot(void*, void**, void**);
+int32_t rsf_d3d11p_gpu_render_buffer(void*, uint32_t, uint32_t, uint32_t, void**);
+int32_t rsf_d3d11p_gpu_signal(void*, void*, uint64_t);
+int32_t rsf_d3d11p_gpu_join(void*, void*, void*, uint64_t);
+int32_t rsf_d3d11p_gpu_wait(void*, void*, uint64_t);
+int32_t rsf_d3d11p_gpu_signal_wait(void*, void*, void*, uint64_t);
+int32_t rsf_d3d11p_gpu_reset_slot(void*, void*, void*, void*, uint64_t, uint32_t*);
+int32_t rsf_d3d11p_gpu_close_execute(void*, void*, void*);
+int32_t rsf_d3d11p_gpu_application_ready(void*, void*, uint64_t);
+uint32_t rsf_d3d11p_gpu_buffer_referenced(void*);
+void rsf_d3d11p_gpu_record_copy(void*, void*, void*, uint32_t);
 
 /* Facade methods. */
 void rsf_core_d3d11p_chain_destroy(rsf_d3d11p_chain* chain);
