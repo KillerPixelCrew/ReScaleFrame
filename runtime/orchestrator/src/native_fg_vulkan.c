@@ -18,18 +18,7 @@
 #endif
 #include <windows.h>
 
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
-
-#if defined(_MSC_VER)
-#define RSF_FOREIGN_TRY __try
-#define RSF_FOREIGN_CATCH(on_exception) \
-    __except (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER \
-                                                           : EXCEPTION_CONTINUE_SEARCH) { on_exception; }
-#else
-/* Without structured exception handling a foreign exception terminates. */
-#define RSF_FOREIGN_TRY
-#define RSF_FOREIGN_CATCH(on_exception)
-#endif
+#include <rescaleframe/foreign_guard.h>
 
 /* vulkan_ffx_fg/sdk.rs asserts the same eight-pointer Host layout. */
 _Static_assert(sizeof(rsf_ffxgvk_host) == 8 * sizeof(void*), "rsf_ffxgvk_host layout");
@@ -41,7 +30,7 @@ int32_t rsf_ffxgvk_guard_resolve(rsf_vk_get_proc resolve, void* object, const ch
     RSF_FOREIGN_TRY {
         *out = resolve(object, name);
         return RSF_BACKEND_OK;
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_INIT_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_INIT_FAILED; }
 }
 
 int32_t rsf_ffxgvk_guard_memory(rsf_vk_function query, void* physical_device, void* properties)
@@ -50,7 +39,7 @@ int32_t rsf_ffxgvk_guard_memory(rsf_vk_function query, void* physical_device, vo
         /* Admission resolved this entry by the name vkGetPhysicalDeviceMemoryProperties. */
         ((rsf_vk_memory_query)query)(physical_device, properties);
         return RSF_BACKEND_OK;
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_INIT_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_INIT_FAILED; }
 }
 
 #if defined(RSF_HAVE_FFX_VK)

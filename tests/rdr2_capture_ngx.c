@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <windows.h>
+#include <rescaleframe/foreign_guard.h>
 
 /* MSVC reverses the overloads within each named group of tests/vendor_census_ngx_params.h, which
    keeps the SDK declaration order. tests/loader/src/windows/vendor_census_fixture/ngx_params.rs
@@ -50,30 +51,16 @@ static void set_inputs(void* parameters, void* color, void* depth, void* motion,
 
 bool rsf_rdr2_fixture_ngx_flags(void* parameters)
 {
-#if defined(_MSC_VER)
-    __try {
-        set_flags(parameters);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-#else
-    set_flags(parameters);
-    return true;
-#endif
+    bool called = true;
+    RSF_FOREIGN_TRY { set_flags(parameters); }
+    RSF_FAULT_CATCH { called = false; }
+    return called;
 }
 
 bool rsf_rdr2_fixture_ngx_inputs(void* parameters, void* color, void* depth, void* motion, void* output)
 {
-#if defined(_MSC_VER)
-    __try {
-        set_inputs(parameters, color, depth, motion, output);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-#else
-    set_inputs(parameters, color, depth, motion, output);
-    return true;
-#endif
+    bool called = true;
+    RSF_FOREIGN_TRY { set_inputs(parameters, color, depth, motion, output); }
+    RSF_FAULT_CATCH { called = false; }
+    return called;
 }

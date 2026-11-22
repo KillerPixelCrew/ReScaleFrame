@@ -25,14 +25,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
+#include <rescaleframe/foreign_guard.h>
 
-#if defined(_MSC_VER)
-#define RSF_FOREIGN_TRY __try
-#define RSF_FOREIGN_CATCH(on_exception) \
-    __except (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER \
-                                                           : EXCEPTION_CONTINUE_SEARCH) { on_exception; }
-#else
+#if !defined(_MSC_VER)
 #error "Foreign C++ exception containment needs MSVC structured exception handling"
 #endif
 
@@ -74,7 +69,7 @@ static void run_command(NativeList* owner, NativeCommand* command)
 {
     RSF_FOREIGN_TRY {
         command->execute(owner, command);
-    } RSF_FOREIGN_CATCH(queued_passes_ok = false)
+    } RSF_FOREIGN_CATCH { queued_passes_ok = false; }
 }
 
 static void run(void* commands)
@@ -169,7 +164,7 @@ static int begin_commands(void* user, const rsf_game_render_pass* source, uint32
             &frame->frame_ticket, direct, &expected_presentation_path)) return 0;
         run(&frame->commands);
         return 1;
-    } RSF_FOREIGN_CATCH(return 0)
+    } RSF_FOREIGN_CATCH { return 0; }
 }
 
 typedef struct DrawBuffers {
@@ -197,7 +192,7 @@ static int draw_buffers(void* user, void** backbuffer)
         ID3D11DeviceContext_ClearRenderTargetView(frame->context, frame->hudless_target, color);
         *backbuffer = draw->backbuffer;
         return 1;
-    } RSF_FOREIGN_CATCH(return 0)
+    } RSF_FOREIGN_CATCH { return 0; }
 }
 
 static int draw_present(void* user, const rsf_game_render_pass* source, uint32_t direct, uint32_t late_simulation,
@@ -221,7 +216,7 @@ static int draw_present(void* user, const rsf_game_render_pass* source, uint32_t
         *evaluated = evaluate.result;
         *presented = present.result;
         return (int)queued_passes_ok;
-    } RSF_FOREIGN_CATCH(return -1)
+    } RSF_FOREIGN_CATCH { return -1; }
 }
 
 static int finish_commands(void* user)

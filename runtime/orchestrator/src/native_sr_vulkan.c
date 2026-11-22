@@ -40,9 +40,7 @@ typedef struct VkQueueInfoFFXAPI VkQueueInfoFFXAPI;
 #error "Foreign C++ exception containment needs MSVC structured exception handling"
 #endif
 
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
-#define RSF_CXX_FILTER (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER \
-                                                                     : EXCEPTION_CONTINUE_SEARCH)
+#include <rescaleframe/foreign_guard.h>
 
 typedef struct rsf_srvk_ffx_dispatch rsf_srvk_ffx_dispatch;
 typedef struct rsf_srvk_ffx_native rsf_srvk_ffx_native;
@@ -193,10 +191,10 @@ void rsf_core_srvk_ffx_dispatch_desc(void*, const rsf_srvk_ffx_dispatch*, rsf_sr
 
 static int32_t call_device_proc(rsf_vk_get_proc proc, void* device, const char* name, rsf_vk_function* result)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         *result = proc(device, name);
         return 1;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return 0;
     }
 }
@@ -235,7 +233,7 @@ void rsf_core_srvk_graphics_flush(rsf_srvk_ffx_native*);
 
 static int32_t versions(rsf_srvk_ffx_native* native, rsf_ffx_version* out, uint64_t* count)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         rsf_srvk_sdk* sdk = rsf_core_srvk_native_sdk(native);
         uint64_t ids[RSF_FFX_MAX_VERSIONS] = {0};
         const char* names[RSF_FFX_MAX_VERSIONS] = {0};
@@ -251,14 +249,14 @@ static int32_t versions(rsf_srvk_ffx_native* native, rsf_ffx_version* out, uint6
         for (uint64_t index = 0; index < *count; ++index)
             (void)rsf_fsr4_parse_version(ids[index], names[index], &out[index]);
         return RSF_BACKEND_OK;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return RSF_BACKEND_ERROR_INIT_FAILED;
     }
 }
 
 static int32_t create_effect(rsf_srvk_ffx_native* native, const rsf_srvk_setup* setup, uint64_t id, uint32_t flags)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         rsf_srvk_sdk* sdk = rsf_core_srvk_native_sdk(native);
         struct ffxOverrideVersion version = {0};
         struct ffxCreateBackendVKDesc backend = {0};
@@ -268,14 +266,14 @@ static int32_t create_effect(rsf_srvk_ffx_native* native, const rsf_srvk_setup* 
         rsf_core_srvk_ffx_create_desc(setup, flags, &version.header, &backend, &create);
         return sdk->exports.create(&sdk->effect, &create.header, NULL) == FFX_API_RETURN_OK
             ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return RSF_BACKEND_ERROR_INIT_FAILED;
     }
 }
 
 static int32_t effective_version(rsf_srvk_ffx_native* native, uint64_t* out)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         rsf_srvk_sdk* sdk = rsf_core_srvk_native_sdk(native);
         struct ffxQueryGetProviderVersion query = {0};
         query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
@@ -283,46 +281,46 @@ static int32_t effective_version(rsf_srvk_ffx_native* native, uint64_t* out)
             return RSF_BACKEND_ERROR_NOT_SUPPORTED;
         *out = query.versionId;
         return RSF_BACKEND_OK;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return RSF_BACKEND_ERROR_INIT_FAILED;
     }
 }
 
 static int32_t destroy_effect(rsf_srvk_ffx_native* native)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         rsf_srvk_sdk* sdk = rsf_core_srvk_native_sdk(native);
         if (!sdk->effect) return RSF_BACKEND_OK;
         if (sdk->exports.destroy(&sdk->effect, NULL) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
         sdk->effect = NULL;
         return RSF_BACKEND_OK;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
     }
 }
 
 static int32_t plan(rsf_srvk_ffx_native* native, const rsf_srvk_setup* setup, uint32_t* width, uint32_t* height)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         rsf_srvk_sdk* sdk = rsf_core_srvk_native_sdk(native);
         rsf_srvk_plan_desc query = {0};
         rsf_core_srvk_ffx_plan_desc(setup, width, height, &query);
         return sdk->exports.query(&sdk->effect, &query.header) == FFX_API_RETURN_OK
             ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return RSF_BACKEND_ERROR_INIT_FAILED;
     }
 }
 
 static int32_t dispatch(rsf_srvk_ffx_native* native, void* commands, const rsf_srvk_ffx_dispatch* call)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         rsf_srvk_sdk* sdk = rsf_core_srvk_native_sdk(native);
         rsf_srvk_dispatch_desc data = {0};
         rsf_core_srvk_ffx_dispatch_desc(commands, call, &data);
         return sdk->exports.dispatch(&sdk->effect, &data.header) == FFX_API_RETURN_OK
             ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
     }
 }

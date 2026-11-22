@@ -18,14 +18,9 @@
 #include <MinHook.h>
 #include <stddef.h>
 
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
+#include <rescaleframe/foreign_guard.h>
 
-#if defined(_MSC_VER)
-#define RSF_FOREIGN_TRY __try
-#define RSF_FOREIGN_CATCH(on_exception) \
-    __except (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER \
-                                                           : EXCEPTION_CONTINUE_SEARCH) { on_exception; }
-#else
+#if !defined(_MSC_VER)
 #error "Foreign C++ exception containment needs MSVC structured exception handling"
 #endif
 
@@ -167,7 +162,7 @@ static int32_t leaf_create_original(void* factory, void* queue, DXGI_SWAP_CHAIN_
     RSF_FOREIGN_TRY {
         const rsf_d3d11p_create_fn original = (rsf_d3d11p_create_fn)rsf_d3d11p_factory_legacy_original();
         return original ? original((IDXGIFactory*)factory, (IUnknown*)queue, desc, (IDXGISwapChain**)out) : E_FAIL;
-    } RSF_FOREIGN_CATCH(return E_FAIL)
+    } RSF_FOREIGN_CATCH { return E_FAIL; }
 }
 
 static const rsf_d3d11p_platform platform = {
@@ -235,7 +230,7 @@ static void* bootstrap_factory(void)
         IDXGIFactory2* factory = NULL;
         if (FAILED(CreateDXGIFactory1(&factory2_iid, (void**)&factory))) return NULL;
         return factory;
-    } RSF_FOREIGN_CATCH(return NULL)
+    } RSF_FOREIGN_CATCH { return NULL; }
 }
 static uint32_t initialize_hooks(void)
 {
@@ -273,7 +268,7 @@ void* rsf_d3d11p_unwrap_guarded(void* host, void* proxy)
 {
     RSF_FOREIGN_TRY {
         return rsf_streamline_host_native((rsf_streamline_host*)host, proxy);
-    } RSF_FOREIGN_CATCH(return NULL)
+    } RSF_FOREIGN_CATCH { return NULL; }
 }
 
 int32_t rsf_d3d11p_streamline_graphics(void* host, rsf_streamline_graphics* out)
@@ -295,13 +290,13 @@ int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue, void* hwnd
     RSF_FOREIGN_TRY {
         return rsf_d3d11p_factory_create_hwnd(&platform, factory, queue, hwnd,
             (const DXGI_SWAP_CHAIN_DESC1*)description, out);
-    } RSF_FOREIGN_CATCH(if (out) *out = NULL; return E_FAIL)
+    } RSF_FOREIGN_CATCH { if (out) *out = NULL; return E_FAIL; }
 }
 int32_t rsf_d3d11_present_wrap_native_chain(void* raw_device, void* raw_chain, void** out)
 {
     RSF_FOREIGN_TRY {
         return rsf_d3d11p_factory_wrap_native(&platform, rsf_d3d11p_factory_hooks_block_explicit(), raw_device, raw_chain, out);
-    } RSF_FOREIGN_CATCH(return E_FAIL)
+    } RSF_FOREIGN_CATCH { return E_FAIL; }
 }
 int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup)
 {

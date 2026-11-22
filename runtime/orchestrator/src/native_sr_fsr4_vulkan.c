@@ -13,14 +13,9 @@
 #include <stddef.h>
 #include "native_sr_fsr4_vulkan_platform.h"
 
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
+#include <rescaleframe/foreign_guard.h>
 
-#if defined(_MSC_VER)
-#define RSF_FOREIGN_TRY __try
-#define RSF_FOREIGN_CATCH(on_exception) \
-    __except (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER \
-                                                           : EXCEPTION_CONTINUE_SEARCH) { on_exception; }
-#else
+#if !defined(_MSC_VER)
 #error "Foreign C++ exception containment needs MSVC structured exception handling"
 #endif
 
@@ -53,28 +48,28 @@ static int32_t open_graphics(const rsf_srvk_setup* setup, void** out)
             setup->device_proc(setup->device, "vkDeviceWaitIdle"),
         };
         return rsf_fsr4vk_graphics_open(setup, &entries, out);
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_FEATURE_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 }
 
 static int32_t bridge_create(const rsf_fsr4_bridge_create* setup, rsf_fsr4_bridge** out)
 {
     RSF_FOREIGN_TRY {
         return RsfFsr4BridgeCreate(setup, out);
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_FEATURE_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 }
 
 static int32_t bridge_plan(rsf_fsr4_bridge* bridge, uint32_t quality, uint32_t* width, uint32_t* height)
 {
     RSF_FOREIGN_TRY {
         return RsfFsr4BridgePlan(bridge, quality, width, height);
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_FEATURE_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 }
 
 static int32_t create_fence(void* bridge, void** handle)
 {
     RSF_FOREIGN_TRY {
         return rsf_vk_fsr4_create_shared_fence((rsf_fsr4_bridge*)bridge, handle);
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_FEATURE_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 }
 
 /* The resource output is written on every path, including a contained exception. */
@@ -85,7 +80,7 @@ static int32_t create_image(rsf_fsr4_bridge* bridge, uint32_t width, uint32_t he
     int32_t result;
     RSF_FOREIGN_TRY {
         result = rsf_vk_fsr4_create_shared_image(bridge, width, height, format, writable, handle, &image);
-    } RSF_FOREIGN_CATCH(result = RSF_BACKEND_ERROR_FEATURE_FAILED)
+    } RSF_FOREIGN_CATCH { result = RSF_BACKEND_ERROR_FEATURE_FAILED; }
     *resource = image;
     return result;
 }
@@ -95,28 +90,28 @@ static int32_t split(const rsf_fsr4vk_handoff* handoff, void* commands, uint64_t
 {
     RSF_FOREIGN_TRY {
         return handoff->split_record(handoff->user, commands, timeline, previous, ready, done, continuation);
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_FEATURE_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 }
 
 static int32_t bridge_evaluate(rsf_fsr4_bridge* bridge, const rsf_fsr4_bridge_frame* frame)
 {
     RSF_FOREIGN_TRY {
         return RsfFsr4BridgeEvaluate(bridge, frame);
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_FEATURE_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 }
 
 static int32_t bridge_prepare_destroy(rsf_fsr4_bridge* bridge)
 {
     RSF_FOREIGN_TRY {
         return rsf_vk_fsr4_prepare_destroy(bridge);
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_FEATURE_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 }
 
 static int32_t bridge_destroy(rsf_fsr4_bridge* bridge)
 {
     RSF_FOREIGN_TRY {
         return rsf_vk_fsr4_destroy_checked(bridge);
-    } RSF_FOREIGN_CATCH(return RSF_BACKEND_ERROR_FEATURE_FAILED)
+    } RSF_FOREIGN_CATCH { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 }
 
 /* The interop table is a Rust address, so it is stored once before first use. */

@@ -17,9 +17,11 @@
 #include <stdbool.h>
 #include <rescaleframe/game_api.h>
 
+/* The structured exception code of an MSVC C++ throw (fixtures raise it directly). */
+#define RSF_CXX_EXCEPTION_CODE 0xE06D7363ul
+
 #if defined(_MSC_VER)
 #include <excpt.h>
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363ul
 #define RSF_FOREIGN_TRY __try
 #define RSF_FOREIGN_FINALLY __finally
 #define RSF_FOREIGN_CATCH \

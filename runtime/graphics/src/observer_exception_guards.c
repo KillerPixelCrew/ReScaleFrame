@@ -25,9 +25,7 @@
 #error "Foreign C++ exception containment needs MSVC structured exception handling"
 #endif
 
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
-#define RSF_FOREIGN_EXCEPTION \
-    (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+#include <rescaleframe/foreign_guard.h>
 
 typedef HRESULT (STDMETHODCALLTYPE* present_fn)(void*, UINT, UINT);
 typedef HRESULT (STDMETHODCALLTYPE* present1_fn)(void*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
@@ -35,45 +33,45 @@ typedef HRESULT (STDMETHODCALLTYPE* present1_fn)(void*, UINT, UINT, const DXGI_P
 /* Keep foreign exceptions on the native side. */
 static void guard_log(rsf_dump_log_fn callback, void* user, const char* text)
 {
-    __try { callback(user, text); } __except (RSF_FOREIGN_EXCEPTION) {}
+    RSF_FOREIGN_TRY { callback(user, text); } RSF_FOREIGN_CATCH {}
 }
 
 static void guard_layout(rsf_observer_layout_fn callback, void* user, void* object,
     const rsf_observer_layout_element* elements, uint32_t copied, uint32_t count)
 {
-    __try { callback(user, object, elements, copied, count); } __except (RSF_FOREIGN_EXCEPTION) {}
+    RSF_FOREIGN_TRY { callback(user, object, elements, copied, count); } RSF_FOREIGN_CATCH {}
 }
 
 static void guard_shader(rsf_observer_shader_fn callback, void* user, void* object, uint32_t stage,
     const void* bytes, uint32_t size)
 {
-    __try { callback(user, object, stage, bytes, size); } __except (RSF_FOREIGN_EXCEPTION) {}
+    RSF_FOREIGN_TRY { callback(user, object, stage, bytes, size); } RSF_FOREIGN_CATCH {}
 }
 
 static void guard_texture(rsf_observer_texture_fn callback, void* user, void* texture,
     const rsf_observer11_texture_facts* facts)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         callback(user, texture, facts->width, facts->height, facts->format, facts->mip_levels,
             facts->array_size, facts->sample_count, facts->bind_flags, facts->misc_flags);
-    } __except (RSF_FOREIGN_EXCEPTION) {}
+    } RSF_FOREIGN_CATCH {}
 }
 
 static void guard_buffer(rsf_observer_buffer_fn callback, void* user, void* object, const void* bytes,
     uint32_t size, uint32_t flags)
 {
-    __try { callback(user, object, bytes, size, flags); } __except (RSF_FOREIGN_EXCEPTION) {}
+    RSF_FOREIGN_TRY { callback(user, object, bytes, size, flags); } RSF_FOREIGN_CATCH {}
 }
 
 static void guard_present(rsf_observer_present_fn callback, void* user, void* chain)
 {
-    __try { callback(user, chain); } __except (RSF_FOREIGN_EXCEPTION) {}
+    RSF_FOREIGN_TRY { callback(user, chain); } RSF_FOREIGN_CATCH {}
 }
 
 static void guard_event(rsf_observer_present_event_fn callback, void* user,
     const rsf_observer_present_event* event)
 {
-    __try { callback(user, event); } __except (RSF_FOREIGN_EXCEPTION) {}
+    RSF_FOREIGN_TRY { callback(user, event); } RSF_FOREIGN_CATCH {}
 }
 
 const rsf_observer11_callbacks rsf_observer11_callback_guards = {
@@ -90,13 +88,13 @@ _Static_assert(RSF_OBSERVER_ERROR_ALREADY_INSTALLED == -3 && RSF_OBSERVER_ERROR_
 
 int32_t rsf_observer11_guard_texture_extent(void* texture, uint32_t* width, uint32_t* height)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         D3D11_TEXTURE2D_DESC desc = {0};
         ID3D11Texture2D_GetDesc((ID3D11Texture2D*)texture, &desc);
         *width = desc.Width;
         *height = desc.Height;
         return 1;
-    } __except (RSF_FOREIGN_EXCEPTION) {
+    } RSF_FOREIGN_CATCH {
         return 0;
     }
 }
@@ -106,35 +104,35 @@ _Static_assert(sizeof(rsf_observer11_present_ops) == 3 * sizeof(void*), "observe
 
 static int32_t present_describe(void* raw, uint32_t* width, uint32_t* height)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         DXGI_SWAP_CHAIN_DESC desc = {0};
         if (FAILED(IDXGISwapChain_GetDesc((IDXGISwapChain*)raw, &desc))) return 0;
         *width = desc.BufferDesc.Width;
         *height = desc.BufferDesc.Height;
         return 1;
-    } __except (RSF_FOREIGN_EXCEPTION) {
+    } RSF_FOREIGN_CATCH {
         return 0;
     }
 }
 
 static int32_t present_device(void* raw, void** device)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         return IDXGISwapChain_GetDevice((IDXGISwapChain*)raw, &IID_ID3D11Device, device);
-    } __except (RSF_FOREIGN_EXCEPTION) {
+    } RSF_FOREIGN_CATCH {
         return E_FAIL;
     }
 }
 
 static int32_t present_forward(const rsf_observer_present_event* event, const void* parameters, void* target)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         if (event->method == 1) {
             return ((present1_fn)target)(event->swapchain, event->sync_interval, event->flags,
                 (const DXGI_PRESENT_PARAMETERS*)parameters);
         }
         return ((present_fn)target)(event->swapchain, event->sync_interval, event->flags);
-    } __except (RSF_FOREIGN_EXCEPTION) {
+    } RSF_FOREIGN_CATCH {
         return E_FAIL;
     }
 }
@@ -154,20 +152,20 @@ void rsf_observer11_guard_probe_create(uint32_t driver, uint32_t feature_level,
     out->device = NULL;
     out->result = E_FAIL;
     out->returned = 0;
-    __try {
+    RSF_FOREIGN_TRY {
         out->result = D3D11CreateDeviceAndSwapChain(NULL, (D3D_DRIVER_TYPE)driver, NULL, 0, &wanted, 1,
             D3D11_SDK_VERSION, desc, (IDXGISwapChain**)&out->chain, (ID3D11Device**)&out->device, &obtained,
             (ID3D11DeviceContext**)&out->context);
         out->returned = 1;
-    } __except (RSF_FOREIGN_EXCEPTION) {}
+    } RSF_FOREIGN_CATCH {}
 }
 
 uint32_t rsf_observer11_probe_chain1(void* chain, void** extended, int32_t* result)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         *result = IDXGISwapChain_QueryInterface((IDXGISwapChain*)chain, &IID_IDXGISwapChain1, extended);
         return 1;
-    } __except (RSF_FOREIGN_EXCEPTION) {
+    } RSF_FOREIGN_CATCH {
         return 0;
     }
 }
@@ -175,9 +173,9 @@ uint32_t rsf_observer11_probe_chain1(void* chain, void** extended, int32_t* resu
 /* Contain exceptions in the native registration code before returning to Rust. */
 rsf_observer_result rsf_observer_install_guarded(const rsf_observer_options* options)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         return rsf_observer_install(options);
-    } __except (RSF_FOREIGN_EXCEPTION) {
+    } RSF_FOREIGN_CATCH {
         return RSF_OBSERVER_ERROR_NO_DEVICE;
     }
 }
@@ -185,10 +183,10 @@ rsf_observer_result rsf_observer_install_guarded(const rsf_observer_options* opt
 /* The Rust thunk and its SDK call both permit unwinding to this native frame. */
 int32_t rsf_observer12_try(void (*call)(void*), void* context)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         call(context);
         return 1;
-    } __except (RSF_FOREIGN_EXCEPTION) {
+    } RSF_FOREIGN_CATCH {
         return 0;
     }
 }

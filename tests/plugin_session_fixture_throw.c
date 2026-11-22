@@ -13,7 +13,7 @@
 #endif
 #include <windows.h>
 
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
+#include <rescaleframe/foreign_guard.h>
 #define RSF_CXX_EXCEPTION_MAGIC 0x19930520UL
 
 bool rsf_test_session_detect(const rsf_game_probe*, rsf_detection*);
