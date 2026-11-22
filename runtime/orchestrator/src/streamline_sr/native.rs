@@ -16,7 +16,7 @@ const NOT_READY: i32 = -8;
 const WRONG_API: i32 = -12;
 
 unsafe extern "C" {
-    fn rsf_dlss_verify_runtime_signature(path: *const u16) -> u32;
+    fn rsf_dlss_sdk_verify_signature(path: *const u16) -> bool;
     fn rsf_streamline_host_graphics(host: Handle, out: *mut Graphics) -> i32;
     fn rsf_streamline_host_module(host: Handle) -> Handle;
 }
@@ -24,7 +24,7 @@ unsafe extern "C" {
 /// Whether the interposer at `path` is a signed NVIDIA module. The check itself is the vendor
 /// header's, which links into the native leaf.
 pub(crate) unsafe fn verify_signature(path: *const u16) -> bool {
-    unsafe { rsf_dlss_verify_runtime_signature(path) != 0 }
+    unsafe { rsf_dlss_sdk_verify_signature(path) }
 }
 
 pub(crate) unsafe extern "C" fn rsf_dlss_sr_load_sdk(path: *const u16, setup: &Setup) -> Handle {

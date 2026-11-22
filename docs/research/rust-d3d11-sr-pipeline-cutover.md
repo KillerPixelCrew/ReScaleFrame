@@ -156,15 +156,19 @@ Rust copies against the pinned headers with `static_assert`, and `rsf_dlss_sdk_c
 constructs each SDK record once to confirm the struct versions and defaults Rust writes. The
 SDK path stays unavailable when the headers are absent or the check fails, as `RSF_HAVE_STREAMLINE=0`
 did before. The same file defines `rsf_dlss_verify_runtime_signature`, the vendor's
-`sl::security::verifyEmbeddedSignature`, because `sl_security.h` defines globals and pulls in
-WinTrust and cert parsing it owns. Both are C++ because `sl.h` and `sl_security.h` are C++ only;
+`sl::security::verifyEmbeddedSignature`, which D06's `mfg_unlock.h` lease adapter still calls, and
+its `extern "C"` alias `rsf_dlss_sdk_verify_signature` for the Rust loaders. It stays native because
+`sl_security.h` defines globals and pulls in WinTrust and cert parsing it owns. Both are C++ because `sl.h` and `sl_security.h` are C++ only;
 there is no first-party logic left in the file.
 
 Callers. `streamline_load.h` and `streamline_frame.h` are now C declarations. The Rust loader is
 exported as `rsf_streamline_load_interposer` and `dlss_generation.cpp` calls it instead of the
 removed inline C++ loader. `rsf_streamline_common_set` takes an opaque constants record and is
 `extern "C"`; the D06 file changed only in that definition and its loader call. The unused
-`rsf_streamline_camera_forward` export was removed with its inline C++ caller.
+`rsf_streamline_camera_forward` export was removed with its inline C++ caller. No D05 file
+includes `streamline_diagnostics.h` any more: the D3D11 route logs through the Rust sink. Its
+remaining callers are `dlss_generation.cpp` (D06/D04) only, since D06 ported `mfg_unlock.cpp`
+and `reflex_audit.cpp`.
 
 Source evidence. The 48 orchestrator resolution errors at this tip (D06, D01 and other chunks) stop
 `cargo check` before type checking, so the changed modules were compiled in a scratch crate that

@@ -212,16 +212,23 @@ extern "C" uint32_t rsf_dlss_sdk_compiled()
 #endif
 }
 
-extern "C" uint32_t rsf_dlss_verify_runtime_signature(const wchar_t* path)
+// Streamline's embedded-signature check, for the D3D12 host's MFG lease adapter (mfg_unlock.h).
+bool rsf_dlss_verify_runtime_signature(const wchar_t* path)
 {
 #if RSF_HAVE_STREAMLINE && RSF_HAVE_SIGNATURE_CHECK
     try {
         return sl::security::verifyEmbeddedSignature(path);
     } catch (...) {
-        return 0;
+        return false;
     }
 #else
     (void)path;
-    return 0;
+    return false;
 #endif
+}
+
+// The same check for the Rust loaders.
+extern "C" bool rsf_dlss_sdk_verify_signature(const wchar_t* path)
+{
+    return rsf_dlss_verify_runtime_signature(path);
 }
