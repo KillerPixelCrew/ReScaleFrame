@@ -57,11 +57,6 @@ typedef struct rsf_xess_bridge_present_status {
     uint32_t reserved;
 } rsf_xess_bridge_present_status;
 
-static inline int32_t rsf_xess_bridge_check(uint32_t size, uint32_t version, size_t required) {
-    if (size < required) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    return version == RSF_XESS_BRIDGE_ABI_VERSION ? 0 : RSF_XESS_BRIDGE_ABI_MISMATCH;
-}
-
 #ifdef __cplusplus
 extern "C" {
 #endif

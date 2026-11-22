@@ -4,49 +4,26 @@
 #include "session_abi.h"
 #include "../../common/include/rescaleframe/sha256_file.h"
 #include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
-#include <string>
 
 /* Native leaves of the opt-in XeSS-FG diagnostic capture. The Rust owner in
    capture.rs decides configuration, source identity, admission, budgets,
    duplicates, the callback counter and completion-gated publication, and owns
    the pending readbacks. These leaves keep the typed SDK callback table, the
-   DX12 readback, copy and map calls, and the on-disk formats. */
+   DX12 readback, copy and map calls. */
 
 // Records shared with runtime/vulkan/xess-fg/capture.rs.
 struct rsf_xess_capture_desc {
     uint64_t width;
     uint32_t height, dimension, format, depth_or_array_size, mip_levels, sample_count;
 };
-struct rsf_xess_capture_event {
-    uint64_t frame, token, resource, commands, width;
-    uint32_t kind, ordinal, generated, height, format, state;
-};
-// Owns one readback reference. The source and command list are identities only.
-struct rsf_xess_capture_image {
-    ID3D12Resource* readback;
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
-    uint64_t bytes, token, source_resource, command_list;
-    uint32_t ordinal, kind, generated_count, actual_count, generated, reserved;
-    rsf_frame_record source;
-};
 static_assert(sizeof(rsf_xess_capture_desc) == 32);
-static_assert(sizeof(rsf_xess_capture_event) == 64 && offsetof(rsf_xess_capture_event, kind) == 40 &&
-    offsetof(rsf_xess_capture_event, state) == 60);
 static_assert(sizeof(D3D12_PLACED_SUBRESOURCE_FOOTPRINT) == 32 &&
     offsetof(D3D12_PLACED_SUBRESOURCE_FOOTPRINT, Footprint) == 8 && offsetof(D3D12_SUBRESOURCE_FOOTPRINT, RowPitch) == 16);
 static_assert(sizeof(rsf_frame_record) == 480 && alignof(rsf_frame_record) == 8);
 static_assert(offsetof(rsf_frame_record, frame_id) == 8 && offsetof(rsf_frame_record, output_width) == 52 &&
     offsetof(rsf_frame_record, output_height) == 56 && offsetof(rsf_frame_record, input_qpc) == 64);
-static_assert(sizeof(rsf_xess_capture_image) == 576 && alignof(rsf_xess_capture_image) == 8);
-static_assert(offsetof(rsf_xess_capture_image, footprint) == 8 && offsetof(rsf_xess_capture_image, bytes) == 40 &&
-    offsetof(rsf_xess_capture_image, ordinal) == 72 && offsetof(rsf_xess_capture_image, generated) == 88 &&
-    offsetof(rsf_xess_capture_image, source) == 96);
-
 extern "C" {
-// Zero, or -7012 when the source cannot be bound.
+// Checks the GameSDK record and camera ABI before binding an accepted source.
 int32_t rsf_core_xess_capture_source(rsf_xess_capture_owner*, const rsf_frame_record*, uint32_t);
 void rsf_core_xess_capture_input(rsf_xess_capture_owner*, uint64_t, uint32_t, uint32_t, void*, void*, uint32_t);
 void rsf_core_xess_capture_output(rsf_xess_capture_owner*, uint64_t, uint32_t, void*, void*, uint32_t);
@@ -75,14 +52,6 @@ struct DiagnosticsV2 {
 static_assert(sizeof(DiagnosticsV2) == 0x60 && offsetof(DiagnosticsV2, input) == 0x38 && offsetof(DiagnosticsV2, output) == 0x50);
 static_assert(sizeof(xefg_swapchain_d3d12_resource_data_t) == 0x28);
 using SetDiagnostics = int (*)(xefg_swapchain_handle_t, const DiagnosticsV2*);
-
-// Results of Publish, matched in capture.rs.
-inline constexpr int32_t kPublished = 0, kMapFailed = -1, kWriteFailed = -2, kPublishException = -3;
-
-// The Rust owner lends a NUL-terminated UTF-16 directory for the call.
-inline std::filesystem::path Directory(const uint16_t* directory) {
-    return std::filesystem::path(reinterpret_cast<const wchar_t*>(directory));
-}
 
 // The SDK user pointer is the Rust capture owner.
 inline void Input(void* user, uint64_t token, uint32_t kind,
@@ -113,10 +82,6 @@ inline uint32_t Fingerprint(void* module) {
     return rsf::sha256_file(path, actual) && std::memcmp(actual, expected, sizeof(actual)) == 0;
 }
 
-inline void Failure(const uint16_t* directory, const char* reason) noexcept try {
-    std::ofstream(Directory(directory) / "xess-capture-errors.log", std::ios::app) << reason << '\n';
-} catch (...) {}
-
 inline void Describe(void* resource, rsf_xess_capture_desc* output) {
     const D3D12_RESOURCE_DESC desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
     output->width = desc.Width;
@@ -126,18 +91,6 @@ inline void Describe(void* resource, rsf_xess_capture_desc* output) {
     output->depth_or_array_size = desc.DepthOrArraySize;
     output->mip_levels = desc.MipLevels;
     output->sample_count = desc.SampleDesc.Count;
-}
-
-inline int32_t WriteEvent(const uint16_t* directory, const rsf_xess_capture_event* event) noexcept try {
-    std::ofstream events(Directory(directory) / "xess-diagnostic-callbacks.jsonl", std::ios::app);
-    events << "{\"frame\":" << event->frame << ",\"token\":" << event->token
-        << ",\"kind\":" << event->kind << ",\"ordinal\":" << event->ordinal << ",\"generated\":" << (event->generated ? "true" : "false")
-        << ",\"resource\":" << event->resource << ",\"commands\":" << event->commands
-        << ",\"width\":" << event->width << ",\"height\":" << event->height << ",\"format\":" << static_cast<DXGI_FORMAT>(event->format)
-        << ",\"state\":" << static_cast<D3D12_RESOURCE_STATES>(event->state) << ",\"fraction_established\":false}\n";
-    return 0;
-} catch (...) {
-    return -1;
 }
 
 // Returns a device reference for the readback allocation, or -1 without one.
@@ -194,45 +147,17 @@ inline void RecordCopy(void* commands, void* resource, void* readback, const voi
 }
 
 // Called only after the bridge drained its DX12 queue and completed its fence.
-inline int32_t Publish(const uint16_t* directory, const rsf_xess_capture_image* image) noexcept try {
-    const auto& record = image->source; const auto& camera = record.camera;
-    const char* role = image->generated ? "fg-xess-generated-before-present" : "fg-xess-sdk-backbuffer-input";
-    const std::string stem = std::to_string(record.session_id) + '-' + std::to_string(record.frame_id) + '-' + role + '-' + std::to_string(image->ordinal);
-    const std::filesystem::path base = Directory(directory);
-    void* pixels = nullptr; const D3D12_RANGE range{0, static_cast<SIZE_T>(image->bytes)};
-    if (FAILED(image->readback->Map(0, &range, &pixels))) return kMapFailed;
-    std::ofstream raw(base / (stem + ".raw"), std::ios::binary);
-    raw.write(static_cast<const char*>(pixels), static_cast<std::streamsize>(image->bytes));
-    const D3D12_RANGE written{0, 0}; image->readback->Unmap(0, &written);
-    std::ofstream json(base / (stem + ".json"));
-    json << std::setprecision(9) << "{\n\"role\":\"" << role << "\",\n\"frame\":" << record.frame_id
-        << ",\n\"session\":" << record.session_id << ",\n\"view\":" << record.view_id << ",\n\"generation\":" << record.resource_generation
-        << ",\n\"flags\":" << record.flags << ",\n\"frame_time_ms\":" << record.frame_time_ms
-        << ",\n\"width\":" << image->footprint.Footprint.Width << ",\n\"height\":" << image->footprint.Footprint.Height
-        << ",\n\"row_pitch\":" << image->footprint.Footprint.RowPitch << ",\n\"offset\":" << image->footprint.Offset
-        << ",\n\"dxgi_format\":" << image->footprint.Footprint.Format << ",\n\"bytes\":" << image->bytes
-        << ",\n\"fg_backend\":5,\n\"sdk_token\":" << image->token << ",\n\"sdk_output_kind\":" << image->kind
-        << ",\n\"sdk_array_ordinal\":" << image->ordinal << ",\n\"fraction_established\":false"
-        << ",\n\"requested_generated_count\":" << image->generated_count
-        << ",\n\"observed_output_count\":" << image->actual_count
-        << ",\n\"generated\":" << (image->generated ? "true" : "false")
-        << ",\n\"capture_boundary\":\"" << (image->generated ? "sdk-interpolation-output-callback" : "sdk-input-backbuffer-callback") << '"'
-        << ",\n\"provider_sha256\":\"ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27\""
-        << ",\n\"source_resource\":" << image->source_resource << ",\n\"command_list\":" << image->command_list
-        << ",\n\"completion\":\"bridge-owned-dx12-queue-drained\",\n\"render_size\":[" << camera.render_width << ',' << camera.render_height
-        << "],\n\"output_size\":[" << camera.output_width << ',' << camera.output_height << "],\n\"jitter_pixels\":[" << camera.jitter_pixels[0] << ',' << camera.jitter_pixels[1]
-        << "],\n\"matrix_convention\":\"row_vectors\"";
-    auto matrix = [&json](const char* name, const float* values) {
-        json << ",\n\"" << name << "\":[";
-        for (uint32_t i = 0; i < 16; ++i) { if (i) json << ','; json << values[i]; }
-        json << ']';
-    };
-    matrix("view_to_clip", camera.view_to_clip); matrix("clip_to_view", camera.clip_to_view);
-    matrix("view_to_world", camera.view_to_world); matrix("world_to_view", camera.world_to_view);
-    matrix("clip_to_previous_clip", camera.clip_to_previous_clip);
-    json << "\n}\n";
-    return raw && json ? kPublished : kWriteFailed;
-} catch (...) {
-    return kPublishException;
+inline int32_t MapReadback(void* readback, uint64_t bytes, const uint8_t** output) {
+    void* pixels = nullptr;
+    const D3D12_RANGE range{0, static_cast<SIZE_T>(bytes)};
+    const HRESULT result = static_cast<ID3D12Resource*>(readback)->Map(0, &range, &pixels);
+    if (FAILED(result)) return -1;
+    *output = static_cast<const uint8_t*>(pixels);
+    return 0;
+}
+
+inline void UnmapReadback(void* readback) {
+    const D3D12_RANGE written{0, 0};
+    static_cast<ID3D12Resource*>(readback)->Unmap(0, &written);
 }
 }

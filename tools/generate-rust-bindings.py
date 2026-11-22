@@ -47,29 +47,47 @@ generate("tests/loader/src/windows/vendor_census_asi_abi.rs",
          "rsf_census_options", "RSF_CENSUS_ABI_VERSION", [], ["--with-derive-default"])
 generate("runtime/backends/fsr/compat/src/abi.rs", "runtime/backends/fsr/src/fsr4_compat_platform.h",
          "rsf_fsr4_compat_.*", "RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION", [])
-frame_records = "rsf_(camera_frame|game_cpu_event)"
+frame_types = "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame)"
+frame_values = "RSF_(GAME_(FRAME|CAMERA)_ABI_VERSION|FRAME_(FLAG|SOURCE)_.*)"
+generate("sdk/game/src/frame_abi.rs", "sdk/game/include/rescaleframe/game_frame.h",
+         frame_types, frame_values, [], ["--raw-line", "#![allow(dead_code)]"])
+generate("runtime/vulkan/xess-fg/bridge_abi.rs", "runtime/vulkan/xess-fg/bridge_api.h",
+         "rsf_xess_bridge_(create|start|frame|present_status)", "RSF_XESS_BRIDGE_.*", [],
+         ["--raw-line", "#![allow(dead_code)]"])
+frame_records = "rsf_game_cpu_event"
 frame_constants = (
-    "RSF_(GAME_CAMERA_ABI_VERSION|GAME_CPU_(FRAME_BEGIN|INPUT_SAMPLE|SIMULATION_BEGIN|"
+    "RSF_(GAME_CPU_(FRAME_BEGIN|INPUT_SAMPLE|SIMULATION_BEGIN|"
     "SIMULATION_END|FRAME_END|INPUT_EVENT|EVENT_VERSION|INPUT_KEYED|INPUT_UNFRAMED)|"
     "GAME_RENDER_(SR|FINAL_SCENE|RESET|PRIMARY))"
 )
 generate("sdk/game/src/frame_event_abi.rs", "sdk/game/include/rescaleframe/game_api.h",
-         frame_records, frame_constants, ["-Isdk/game/include"])
+         frame_records, frame_constants, ["-Isdk/game/include"],
+         ["--blocklist-type", frame_types])
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
          ["-Isdk/game/include"], ["--blocklist-type", frame_records, "--blocklist-item", frame_constants,
-          "--raw-line", "mod frame_event_abi;", "--raw-line", "pub use frame_event_abi::*;",
-          "--raw-line", "pub mod camera_math;", "--raw-line", "pub mod d3d11_host_abi;",
+          "--blocklist-type", frame_types, "--blocklist-item", frame_values,
+          "--raw-line", "mod frame_abi;",
+          "--raw-line", "pub use frame_abi::*;",
+          "--raw-line", "mod frame_event_abi;",
+          "--raw-line", "pub use frame_event_abi::*;",
+          "--raw-line", "pub mod callback_host_abi;",
+          "--raw-line", "pub mod camera_math;",
+          "--raw-line", "pub mod d3d11_host_abi;",
           "--raw-line", "pub mod d3d11_reduced_abi;",
-          "--raw-line", "pub mod plugin_session_abi;", "--raw-line", "mod render_config;",
-          "--raw-line", "mod render_pass;", "--raw-line", "pub mod presentation_result;",
-          "--raw-line", "pub mod session;", "--raw-line", "pub mod sampling;",
+          "--raw-line", "pub mod plugin_session_abi;",
+          "--raw-line", "pub mod presentation_result;",
+          "--raw-line", "mod render_config;",
+          "--raw-line", "mod render_pass;",
+          "--raw-line", "pub mod session;",
+          "--raw-line", "pub mod sampling;",
           "--raw-line", "pub mod shader_patch_abi;",
           "--raw-line", "pub mod sharpening_abi;",
           "--raw-line", "pub mod sr_abi;",
-          "--raw-line", "#[cfg(windows)]", "--raw-line", "pub mod win32;",
-          "--raw-line", "pub mod windows_path;",
-          "--raw-line", "pub mod callback_host_abi;", "--raw-line", "pub mod vendor_paths;"])
+          "--raw-line", "pub mod vendor_paths;",
+          "--raw-line", "#[cfg(windows)]",
+          "--raw-line", "pub mod win32;",
+          "--raw-line", "pub mod windows_path;"])
 generate("sdk/game/src/callback_host_abi.rs", "runtime/orchestrator/include/rescaleframe/callback_render_host.h",
          "rsf_callback_host_setup(_v2)?", "RSF_CALLBACK_HOST_ABI_VERSION(_V2)?",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include"],

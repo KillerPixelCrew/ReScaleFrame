@@ -36,6 +36,11 @@ int wmain(int argc, wchar_t** argv) {
     invalid.runtime_directory = reinterpret_cast<const uint16_t*>(L"relative");
     if (RsfXessBridgeCreate(&invalid, &rejected) != RSF_XESS_BRIDGE_INVALID_ARGUMENT || rejected)
         return 12;
+    alignas(rsf_xess_bridge_create) const uint32_t size_only = sizeof(uint32_t);
+    rejected = reinterpret_cast<rsf_xess_bridge*>(1);
+    if (RsfXessBridgeCreate(reinterpret_cast<const rsf_xess_bridge_create*>(&size_only),
+            &rejected) != RSF_XESS_BRIDGE_INVALID_ARGUMENT || rejected)
+        return 14;
     if (argc == 1) { std::puts("{\"contract_checks\":\"passed\",\"device_test\":false}"); return 0; }
     if ((argc != 3 && argc != 4) || std::wcscmp(argv[1], L"--device") ||
         (argc == 4 && std::wcscmp(argv[3], L"--present"))) return 13;

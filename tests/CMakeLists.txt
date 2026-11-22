@@ -535,6 +535,7 @@ add_custom_command(OUTPUT "${godot_graph_object}"
         "${godot_module}/graph.rs" "${godot_module}/host.rs" "${godot_module}/pass.rs"
         "${godot_module}/present.rs" "${godot_module}/primary.rs"
         "${PROJECT_SOURCE_DIR}/sdk/game/src/frame_event_abi.rs" "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
+        "${PROJECT_SOURCE_DIR}/sdk/game/src/frame_abi.rs"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
 set_source_files_properties("${godot_graph_object}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)

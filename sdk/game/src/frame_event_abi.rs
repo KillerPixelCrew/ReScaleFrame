@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-pub const RSF_GAME_CAMERA_ABI_VERSION: u32 = 1;
 pub const RSF_GAME_RENDER_SR: u32 = 1;
 pub const RSF_GAME_RENDER_FINAL_SCENE: u32 = 10;
 pub const RSF_GAME_RENDER_RESET: u32 = 1;
@@ -16,72 +15,6 @@ pub const RSF_GAME_CPU_INPUT_EVENT: u32 = 5;
 pub const RSF_GAME_CPU_EVENT_VERSION: u32 = 1;
 pub const RSF_GAME_CPU_INPUT_KEYED: u32 = 1;
 pub const RSF_GAME_CPU_INPUT_UNFRAMED: u32 = 16;
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_camera_frame {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub view_to_clip: [f32; 16usize],
-    pub clip_to_view: [f32; 16usize],
-    pub view_to_world: [f32; 16usize],
-    pub world_to_view: [f32; 16usize],
-    pub clip_to_previous_clip: [f32; 16usize],
-    pub jitter_pixels: [f32; 2usize],
-    pub previous_jitter_pixels: [f32; 2usize],
-    pub render_width: u32,
-    pub render_height: u32,
-    pub output_width: u32,
-    pub output_height: u32,
-    pub near_plane: f32,
-    pub far_plane: f32,
-    pub vertical_fov_radians: f32,
-    pub depth_inverted: u32,
-    pub motion_jittered: u32,
-    pub frame_time_seconds: f32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_camera_frame"][::core::mem::size_of::<rsf_camera_frame>() - 384usize];
-    ["Alignment of rsf_camera_frame"][::core::mem::align_of::<rsf_camera_frame>() - 4usize];
-    ["Offset of field: rsf_camera_frame::struct_size"]
-        [::core::mem::offset_of!(rsf_camera_frame, struct_size) - 0usize];
-    ["Offset of field: rsf_camera_frame::abi_version"]
-        [::core::mem::offset_of!(rsf_camera_frame, abi_version) - 4usize];
-    ["Offset of field: rsf_camera_frame::view_to_clip"]
-        [::core::mem::offset_of!(rsf_camera_frame, view_to_clip) - 8usize];
-    ["Offset of field: rsf_camera_frame::clip_to_view"]
-        [::core::mem::offset_of!(rsf_camera_frame, clip_to_view) - 72usize];
-    ["Offset of field: rsf_camera_frame::view_to_world"]
-        [::core::mem::offset_of!(rsf_camera_frame, view_to_world) - 136usize];
-    ["Offset of field: rsf_camera_frame::world_to_view"]
-        [::core::mem::offset_of!(rsf_camera_frame, world_to_view) - 200usize];
-    ["Offset of field: rsf_camera_frame::clip_to_previous_clip"]
-        [::core::mem::offset_of!(rsf_camera_frame, clip_to_previous_clip) - 264usize];
-    ["Offset of field: rsf_camera_frame::jitter_pixels"]
-        [::core::mem::offset_of!(rsf_camera_frame, jitter_pixels) - 328usize];
-    ["Offset of field: rsf_camera_frame::previous_jitter_pixels"]
-        [::core::mem::offset_of!(rsf_camera_frame, previous_jitter_pixels) - 336usize];
-    ["Offset of field: rsf_camera_frame::render_width"]
-        [::core::mem::offset_of!(rsf_camera_frame, render_width) - 344usize];
-    ["Offset of field: rsf_camera_frame::render_height"]
-        [::core::mem::offset_of!(rsf_camera_frame, render_height) - 348usize];
-    ["Offset of field: rsf_camera_frame::output_width"]
-        [::core::mem::offset_of!(rsf_camera_frame, output_width) - 352usize];
-    ["Offset of field: rsf_camera_frame::output_height"]
-        [::core::mem::offset_of!(rsf_camera_frame, output_height) - 356usize];
-    ["Offset of field: rsf_camera_frame::near_plane"]
-        [::core::mem::offset_of!(rsf_camera_frame, near_plane) - 360usize];
-    ["Offset of field: rsf_camera_frame::far_plane"]
-        [::core::mem::offset_of!(rsf_camera_frame, far_plane) - 364usize];
-    ["Offset of field: rsf_camera_frame::vertical_fov_radians"]
-        [::core::mem::offset_of!(rsf_camera_frame, vertical_fov_radians) - 368usize];
-    ["Offset of field: rsf_camera_frame::depth_inverted"]
-        [::core::mem::offset_of!(rsf_camera_frame, depth_inverted) - 372usize];
-    ["Offset of field: rsf_camera_frame::motion_jittered"]
-        [::core::mem::offset_of!(rsf_camera_frame, motion_jittered) - 376usize];
-    ["Offset of field: rsf_camera_frame::frame_time_seconds"]
-        [::core::mem::offset_of!(rsf_camera_frame, frame_time_seconds) - 380usize];
-};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_game_cpu_event {

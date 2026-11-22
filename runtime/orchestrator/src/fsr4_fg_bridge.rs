@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering::SeqCst};
 #[path = "../../vulkan/fsr4/completion.rs"]
 mod completion;
 use completion::next_local_completion;
+#[path = "../../vulkan/timeline_pair.rs"]
+mod timeline_pair;
 
 type Handle = *mut c_void;
 
@@ -416,9 +418,7 @@ impl Bridge {
 
     fn handoff(&mut self, frame: &BridgeFrame, result: i32) -> i32 {
         if self.prepared_destroy
-            || frame.ready_value == 0
-            || frame.done_value <= frame.ready_value
-            || frame.done_value <= self.done
+            || !timeline_pair::can_signal_done(frame.ready_value, frame.done_value, self.done)
             || !self.has(LOCAL_FENCE | SHARED_FENCE)
         {
             return result;

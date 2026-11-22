@@ -63,6 +63,7 @@ void WriteTimingReport(const rsf_xess_timing_report* report) {
 // handle may remain live after failed retirement; only the session frees it.
 struct VulkanStoryXessFg {
     rsf_xess_bridge_session* session = nullptr;
+    const rsf_xess_timing* timing = nullptr;
     // Borrowed from the session; the SDK diagnostic callback user.
     rsf_xess_capture_owner* capture = nullptr;
     rsf_xess_capture::SetDiagnostics setDiagnostics = nullptr;
@@ -88,7 +89,6 @@ struct VulkanStoryXessFg {
     std::array<bool, RSF_XESS_BRIDGE_ALLOCATOR_COUNT> slotTimed{};
     xell_context_handle_t xell = nullptr;
     xefg_swapchain_handle_t fg = nullptr;
-    uint32_t activeInterpolations = 0;
 
     decltype(&xellD3D12CreateContext) createXell = nullptr;
     decltype(&xellDestroyContext) destroyXell = nullptr;
@@ -199,9 +199,12 @@ static int32_t LoadRuntime(VulkanStoryXessFg* value, const uint16_t* directory,
     return -3;
 }
 
-static VulkanStoryXessFg* Allocate(rsf_xess_bridge_session* session) noexcept try {
+static VulkanStoryXessFg* Allocate(rsf_xess_bridge_session* session, const rsf_xess_timing* timing) noexcept try {
     auto* value = new (std::nothrow) VulkanStoryXessFg();
-    if (value) value->session = session;
+    if (value) {
+        value->session = session;
+        value->timing = timing;
+    }
     return value;
 } catch (...) {
     return nullptr;
@@ -331,24 +334,6 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgCreate(uint64_t adapterLui
     return CreateContext(adapterLuid, nullptr, output);
 }
 
-extern "C" __declspec(dllexport) int32_t RsfXessBridgeCreate(
-    const rsf_xess_bridge_create* setup, rsf_xess_bridge** output) {
-    if (!output) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    *output = nullptr;
-    if (!setup) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    int32_t check = rsf_xess_bridge_check(setup->struct_size, setup->abi_version, sizeof(*setup));
-    if (check) return check;
-    static_assert(sizeof(wchar_t) == sizeof(uint16_t));
-    const auto* directory = reinterpret_cast<const wchar_t*>(setup->runtime_directory);
-    // Accept drive-rooted or UNC absolute paths, never a DLL search-path input.
-    if (!directory || !directory[0] ||
-        !((directory[0] && directory[1] == L':' &&
-           (directory[2] == L'\\' || directory[2] == L'/')) ||
-          (directory[0] == L'\\' && directory[1] == L'\\')))
-        return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    return CreateContext(setup->adapter_luid, directory, output);
-}
-
 extern "C" __declspec(dllexport) uint64_t RsfXessBridgeAdapterLuid(const rsf_xess_bridge* value) {
     DXGI_ADAPTER_DESC1 desc{};
     if (!value || !value->adapter || FAILED(value->adapter->GetDesc1(&desc))) return 0;
@@ -464,18 +449,14 @@ static int32_t UnregisterDiagnostics(VulkanStoryXessFg* value) {
 }
 
 static int32_t SetGenerated(VulkanStoryXessFg* value, uint32_t count) {
-    int code = static_cast<int>(value->setInterpolations(value->fg, count));
-    if (code >= 0) value->activeInterpolations = count;
-    return code;
+    return static_cast<int>(value->setInterpolations(value->fg, count));
 }
 
 extern "C" __declspec(dllexport) int32_t RsfXessBridgeCaptureSource(rsf_xess_bridge* value,
     const rsf_frame_record* record) {
-    if (!value || !record || record->struct_size < sizeof(*record) || record->camera.struct_size < sizeof(record->camera) ||
-        !record->frame_id || record->frame_id > UINT32_MAX || !record->session_id) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    if (record->abi_version != RSF_GAME_FRAME_ABI_VERSION || record->camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION)
-        return RSF_XESS_BRIDGE_ABI_MISMATCH;
-    return rsf_core_xess_capture_source(value->capture, record, value->activeInterpolations);
+    return value ? rsf_core_xess_capture_source(value->capture, record,
+                     rsf_core_xess_bridge_active_generated(value->session))
+                 : RSF_XESS_BRIDGE_INVALID_ARGUMENT;
 }
 
 extern "C" __declspec(dllexport) uint64_t RsfXessBridgeCapturedCallbacks(const rsf_xess_bridge* value) {
@@ -491,12 +472,8 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgStart(VulkanStoryXessFg* v
 
 extern "C" __declspec(dllexport) int32_t RsfXessBridgeStart(rsf_xess_bridge* value,
     const rsf_xess_bridge_start* setup) {
-    if (!value || !setup) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    int32_t check = rsf_xess_bridge_check(setup->struct_size, setup->abi_version, sizeof(*setup));
-    if (check) return check;
-    if (!setup->generated_count || setup->inverted_depth > 1) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    return rsf_core_xess_bridge_start(value->session, setup->window, setup->width, setup->height,
-        setup->inverted_depth, setup->generated_count, XEFG_SWAPCHAIN_RESULT_ERROR_UNSUPPORTED);
+    return rsf_core_xess_bridge_start_integrated(value ? value->session : nullptr, setup,
+        XEFG_SWAPCHAIN_RESULT_ERROR_UNSUPPORTED);
 }
 
 extern "C" __declspec(dllexport) uint32_t RsfXessBridgeMaxGenerated(const rsf_xess_bridge* value) {
@@ -504,10 +481,8 @@ extern "C" __declspec(dllexport) uint32_t RsfXessBridgeMaxGenerated(const rsf_xe
 }
 
 extern "C" __declspec(dllexport) int32_t RsfXessBridgeSetGenerated(rsf_xess_bridge* value, uint32_t count) {
-    if (!value || !IsStarted(value) || !count) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    if (count > RsfXessBridgeMaxGenerated(value)) return XEFG_SWAPCHAIN_RESULT_ERROR_UNSUPPORTED;
-    if (count == value->activeInterpolations) return 0;
-    return SetGenerated(value, count);
+    return value ? rsf_core_xess_bridge_set_generated(value->session, count, XEFG_SWAPCHAIN_RESULT_ERROR_UNSUPPORTED)
+                 : RSF_XESS_BRIDGE_INVALID_ARGUMENT;
 }
 
 /// @brief Forwards frame-generation enablement for an already started native presenter.
@@ -519,7 +494,7 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgSetEnabled(VulkanStoryXess
 }
 
 /// @brief Clamps interpolation count to the started runtime's supported range and avoids redundant SDK updates.
-/// @details Outputs describe the clamped request and maximum. activeInterpolations updates only for nonnegative SDK results.
+/// @details Outputs describe the clamped request and maximum.
 /// @param value Borrowed started native owner.
 /// @param requested Requested generated frames per rendered frame; clamped to one through the SDK limit.
 /// @param effective Required output for the clamped count.
@@ -527,13 +502,8 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgSetEnabled(VulkanStoryXess
 /// @return SDK result, zero for an unchanged count, or -1 for missing prerequisites.
 extern "C" __declspec(dllexport) int VulkanStoryXessFgSetGeneratedFrames(
     VulkanStoryXessFg* value, uint32_t requested, uint32_t* effective, uint32_t* maximum) {
-    if (!value || !value->fg || !IsStarted(value) || !effective || !maximum) return -1;
-    const auto max = RsfXessBridgeMaxGenerated(value);
-    if (!max) return -1;
-    *maximum = max;
-    *effective = requested < 1 ? 1 : requested > max ? max : requested;
-    if (*effective == value->activeInterpolations) return 0;
-    return SetGenerated(value, *effective);
+    return value && value->fg ?
+        rsf_core_xess_bridge_set_generated_legacy(value->session, requested, effective, maximum) : -1;
 }
 
 // VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT is a handle to a D3D12
@@ -706,7 +676,7 @@ void HarvestGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
     if (gpuEnd <= gpuStart || FAILED(value->queue->GetClockCalibration(&gpuCalibration, &cpuCalibration))) return;
     const rsf_xess_timing_gpu_sample sample{gpuStart, gpuCopiesEnd, gpuEnd, value->gpuFrequency,
         gpuCalibration, cpuCalibration, value->presentEnter[slot], value->presentExit[slot]};
-    rsf_core_xess_timing_gpu(&sample, timing_frequency);
+    rsf_core_xess_timing_gpu(value->timing, &sample, timing_frequency);
 }
 }
 
@@ -910,19 +880,23 @@ static constexpr rsf_xess_bridge_platform Platform{
     .attach_capture = [](VulkanStoryXessFg* value, rsf_xess_capture_owner* capture) { value->capture = capture; },
     .register_diagnostics = RegisterDiagnostics,
     .capture_fingerprint = rsf_xess_capture::Fingerprint,
-    .capture_failure = rsf_xess_capture::Failure,
     .capture_describe = rsf_xess_capture::Describe,
-    .capture_event = rsf_xess_capture::WriteEvent,
     .capture_footprint = rsf_xess_capture::QueryFootprint,
     .capture_readback = rsf_xess_capture::CreateReadback,
     .capture_release = rsf_xess_capture::ReleaseObject,
     .capture_copy = rsf_xess_capture::RecordCopy,
-    .capture_publish = rsf_xess_capture::Publish,
+    .capture_map = rsf_xess_capture::MapReadback,
+    .capture_unmap = rsf_xess_capture::UnmapReadback,
 };
 
 static int CreateContext(uint64_t adapterLuid, const wchar_t* directory, VulkanStoryXessFg** output) {
     return rsf_core_xess_bridge_create(&Platform, adapterLuid,
         reinterpret_cast<const uint16_t*>(directory), output);
+}
+
+extern "C" __declspec(dllexport) int32_t RsfXessBridgeCreate(
+    const rsf_xess_bridge_create* setup, rsf_xess_bridge** output) {
+    return rsf_core_xess_bridge_create_integrated(&Platform, setup, output);
 }
 
 /// @brief Presents a prepared frame and preserves the ordered shared-fence handoff on recoverable failure.
@@ -968,7 +942,7 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgSleep(VulkanStoryXessFg* v
     if (!value || !value->xell) return -1;
     const int64_t start = timing_enabled ? TimingNow() : 0;
     int result = static_cast<int>(value->sleep(value->xell, frameId));
-    if (timing_enabled) rsf_core_xess_timing_cpu(kSleep, start, TimingNow(), timing_frequency);
+    if (timing_enabled) rsf_core_xess_timing_cpu(value->timing, kSleep, start, TimingNow(), timing_frequency);
     return result;
 }
 

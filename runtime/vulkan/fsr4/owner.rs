@@ -23,6 +23,8 @@ use bridge_abi::{
 #[path = "completion.rs"]
 mod completion;
 use completion::next_local_completion;
+#[path = "../timeline_pair.rs"]
+mod timeline_pair;
 
 type Handle = *mut c_void;
 type Native = *mut c_void;
@@ -594,7 +596,8 @@ impl Session {
     ///
     /// Every failure still waits for producer readiness before signalling.
     fn finish(&mut self, ready: u64, done: u64, result: i32) -> i32 {
-        if ready == 0 || done <= ready || done <= self.last_done || !self.has(QUEUE | SHARED_FENCE)
+        if !timeline_pair::can_signal_done(ready, done, self.last_done)
+            || !self.has(QUEUE | SHARED_FENCE)
         {
             return result;
         }

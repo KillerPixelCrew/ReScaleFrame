@@ -3519,6 +3519,9 @@ both carriers and Minecraft Release exports matched. The linked XeSS
 device fixture built. The worker verified SDK-disabled linkage in its
 isolated build. Device and game execution remain pending.
 See [the XeSS Vulkan FG cutover audit](research/rust-vulkan-xess-fg-cutover.md).
+V06 moved integrated ABI admission, interpolation count policy and diagnostic
+publication into the bridge's Rust session. The source port and remaining
+shared overlay dependency are recorded in [the V06 audit](research/rust-vulkan-xess-fg-v06.md).
 
 Vulkan DLSS FG now owns proxy admission, exact source state, private GPU
 leases, capture groups and checked teardown in Rust. It shares the FG

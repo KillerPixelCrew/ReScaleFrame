@@ -3,7 +3,7 @@
 
 #include "bridge_api.h"
 
-inline constexpr uint32_t RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION = 5;
+inline constexpr uint32_t RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION = 6;
 inline constexpr uint32_t RSF_XESS_BRIDGE_ALLOCATOR_COUNT = 3;
 
 struct rsf_xess_bridge_session;
@@ -11,8 +11,6 @@ struct VulkanStoryXessFrame;
 // Rust capture owner and the records shared with it, defined in diagnostic-capture.h.
 struct rsf_xess_capture_owner;
 struct rsf_xess_capture_desc;
-struct rsf_xess_capture_event;
-struct rsf_xess_capture_image;
 
 struct rsf_xess_bridge_present_result {
     uint32_t frames_presented, fg_enabled;
@@ -43,15 +41,16 @@ struct rsf_xess_timing_report {
 
 static_assert(sizeof(rsf_xess_timing_gpu_sample) == 64);
 static_assert(sizeof(rsf_xess_timing_report) == 344 && offsetof(rsf_xess_timing_report, sequence) == 152);
-extern "C" void rsf_core_xess_timing_cpu(uint32_t phase, int64_t start, int64_t end, int64_t frequency);
-extern "C" void rsf_core_xess_timing_gpu(const rsf_xess_timing_gpu_sample*, int64_t cpu_frequency);
+struct rsf_xess_timing;
+extern "C" void rsf_core_xess_timing_cpu(const rsf_xess_timing*, uint32_t phase, int64_t start, int64_t end, int64_t frequency);
+extern "C" void rsf_core_xess_timing_gpu(const rsf_xess_timing*, const rsf_xess_timing_gpu_sample*, int64_t cpu_frequency);
 
 // Private Windows x64 C ABI. The native capsule stores typed COM and SDK objects.
 // Only the Rust session may retire the capsule and its Win32 leases. The host
 // serializes start, completion-event use, and retirement against presentation.
 struct rsf_xess_bridge_platform {
     uint32_t struct_size, abi_version;
-    rsf_xess_bridge* (*allocate)(rsf_xess_bridge_session*);
+    rsf_xess_bridge* (*allocate)(rsf_xess_bridge_session*, const rsf_xess_timing*);
     void (*release_native)(rsf_xess_bridge*);
     int32_t (*load_runtime)(rsf_xess_bridge*, const uint16_t*, rsf_xess_bridge_modules*);
     void (*unload_module)(void*);
@@ -108,19 +107,18 @@ struct rsf_xess_bridge_platform {
     void (*mark_present_enter)(rsf_xess_bridge*, uint32_t);
     void (*finish_gpu_timing)(rsf_xess_bridge*, uint32_t);
     uint32_t (*serialize_enabled)();
-    // Opt-in diagnostic capture leaves. Rust owns admission and the readbacks;
-    // the native side keeps typed SDK, DX12 and file-format calls.
+    // Opt-in diagnostic capture leaves. Rust owns admission, readbacks and
+    // publication. These callbacks keep the typed SDK and DX12 calls.
     void (*attach_capture)(rsf_xess_bridge*, rsf_xess_capture_owner*);
     int32_t (*register_diagnostics)(rsf_xess_bridge*);
     uint32_t (*capture_fingerprint)(void*);
-    void (*capture_failure)(const uint16_t*, const char*);
     void (*capture_describe)(void*, rsf_xess_capture_desc*);
-    int32_t (*capture_event)(const uint16_t*, const rsf_xess_capture_event*);
     int32_t (*capture_footprint)(void*, void*, uint64_t*, void**);
     void* (*capture_readback)(void*, uint64_t);
     void (*capture_release)(void*);
     void (*capture_copy)(void*, void*, void*, const void*, uint32_t);
-    int32_t (*capture_publish)(const uint16_t*, const rsf_xess_capture_image*);
+    int32_t (*capture_map)(void*, uint64_t, const uint8_t**);
+    void (*capture_unmap)(void*);
 };
 
 static_assert(sizeof(rsf_xess_bridge_modules) == 16);
@@ -128,7 +126,7 @@ static_assert(sizeof(rsf_xess_bridge_present_result) == 12);
 static_assert(sizeof(rsf_xess_bridge_resource_desc) == 16 && alignof(rsf_xess_bridge_resource_desc) == 8);
 static_assert(offsetof(rsf_xess_bridge_resource_desc, height) == 8);
 static_assert(offsetof(rsf_xess_bridge_resource_desc, format) == 12);
-static_assert(sizeof(rsf_xess_bridge_platform) == 544 && alignof(rsf_xess_bridge_platform) == 8);
+static_assert(sizeof(rsf_xess_bridge_platform) == 536 && alignof(rsf_xess_bridge_platform) == 8);
 static_assert(offsetof(rsf_xess_bridge_platform, allocate) == 8);
 static_assert(offsetof(rsf_xess_bridge_platform, init_swapchain) == 112);
 static_assert(offsetof(rsf_xess_bridge_platform, find_diagnostics) == 168);
@@ -145,16 +143,21 @@ static_assert(offsetof(rsf_xess_bridge_platform, wait_shared) == 328);
 static_assert(offsetof(rsf_xess_bridge_platform, read_present_status) == 376);
 static_assert(offsetof(rsf_xess_bridge_platform, serialize_enabled) == 448);
 static_assert(offsetof(rsf_xess_bridge_platform, attach_capture) == 456);
-static_assert(offsetof(rsf_xess_bridge_platform, capture_footprint) == 504);
-static_assert(offsetof(rsf_xess_bridge_platform, capture_publish) == 536);
+static_assert(offsetof(rsf_xess_bridge_platform, capture_footprint) == 488);
+static_assert(offsetof(rsf_xess_bridge_platform, capture_unmap) == 528);
 
 extern "C" {
 int32_t rsf_core_xess_bridge_create(const rsf_xess_bridge_platform*, uint64_t, const uint16_t*, rsf_xess_bridge**);
+int32_t rsf_core_xess_bridge_create_integrated(const rsf_xess_bridge_platform*, const rsf_xess_bridge_create*, rsf_xess_bridge**);
 const char* rsf_core_xess_bridge_create_stage();
 void rsf_core_xess_bridge_note_vulkan_lookup();
 int32_t rsf_core_xess_bridge_start(rsf_xess_bridge_session*, void*, uint32_t, uint32_t, uint32_t, uint32_t, int32_t);
+int32_t rsf_core_xess_bridge_start_integrated(rsf_xess_bridge_session*, const rsf_xess_bridge_start*, int32_t);
 uint32_t rsf_core_xess_bridge_started(const rsf_xess_bridge_session*);
 uint32_t rsf_core_xess_bridge_max_generated(const rsf_xess_bridge_session*);
+uint32_t rsf_core_xess_bridge_active_generated(const rsf_xess_bridge_session*);
+int32_t rsf_core_xess_bridge_set_generated(rsf_xess_bridge_session*, uint32_t, int32_t);
+int32_t rsf_core_xess_bridge_set_generated_legacy(rsf_xess_bridge_session*, uint32_t, uint32_t*, uint32_t*);
 int32_t rsf_core_xess_bridge_wait_idle(const rsf_xess_bridge_session*);
 int32_t rsf_core_xess_bridge_present(rsf_xess_bridge_session*, const VulkanStoryXessFrame*, uint32_t*, int32_t*, uint32_t*);
 int32_t rsf_core_xess_bridge_present_integrated(rsf_xess_bridge_session*, const rsf_xess_bridge_frame*, rsf_xess_bridge_present_status*);
