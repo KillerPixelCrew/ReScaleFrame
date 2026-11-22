@@ -9,7 +9,6 @@ The source constraints come from `docs/research/anomaly-world-space-ui.md`, refe
 - `../src/temporal_fixture/oracle.rs` owns per-view history, retirement and source-frame-bound geometry and UI plans.
 - `../src/temporal_fixture/oracle/math.rs` handles independent output, world and PDA sizes, finite matrix arithmetic, column-vector projection jitter and pixel motion.
 - `fixture_platform.h` declares the native geometry fixture's plain data records.
-- `../src/temporal_types.h` defines the native matrix and identity representations used by geometry and motion consumers.
 
 ## Hook feeding contract
 
