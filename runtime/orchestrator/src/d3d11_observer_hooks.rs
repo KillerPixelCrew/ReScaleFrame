@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 mod detours;
+mod hde_abi;
 mod probe;
+mod route;
 
 use crate::d3d11_observer_abi::rsf_observer_options as Options;
 use crate::d3d11_observer_callbacks::Callbacks;
@@ -35,7 +37,7 @@ const EMPTY_SLOT: Slot = Slot {
     address: null_mut(),
     hook: null_mut(),
 };
-type Probe = unsafe extern "C" fn(Handle, &mut [Slot; SLOT_COUNT], &mut u32) -> i32;
+const NO_DEVICE: i32 = -4;
 
 #[repr(C)]
 struct Platform {
@@ -221,14 +223,23 @@ unsafe extern "C" fn rsf_graphics_replace_vtable_slot(
     i32::from(changed)
 }
 
+unsafe extern "C" {
+    static rsf_observer11_callback_guards: Callbacks;
+}
+
+unsafe extern "C" fn read_slot(address: *mut Handle) -> Handle {
+    unsafe { AtomicPtr::from_ptr(address) }.load(Ordering::Acquire)
+}
+
+const NATIVE: Platform = Platform {
+    read: read_slot,
+    replace: rsf_graphics_replace_vtable_slot,
+    detour: route::detour,
+    remove: route::remove,
+};
+
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_install(
-    options: *const Options,
-    callbacks: &'static Callbacks,
-    user: Handle,
-    probe: Probe,
-    platform: &Platform,
-) -> i32 {
+unsafe extern "C" fn rsf_observer_install(options: *const Options) -> i32 {
     let validated = unsafe { d3d11_observer_callbacks::validate(options) };
     if validated != OK {
         return validated;
@@ -241,11 +252,11 @@ unsafe extern "C" fn rsf_core_observer11_install(
     }
 
     let mut slots = [EMPTY_SLOT; SLOT_COUNT];
-    let mut has_present1 = 0;
-    let result = unsafe { probe(user, &mut slots, &mut has_present1) };
-    if result != OK {
-        return result;
-    }
+    let Some(routes) = probe::native_slots(&mut slots) else {
+        return NO_DEVICE;
+    };
+    let has_present1 = u32::from(!routes[1].table.is_null());
+    let mut setup = route::Setup::new(routes);
     let options = unsafe { &*options };
     if options.constant_buffer_max_bytes == 0 {
         slots[BUFFER] = EMPTY_SLOT;
@@ -256,12 +267,21 @@ unsafe extern "C" fn rsf_core_observer11_install(
     if options.on_shader.is_none() {
         slots[STAGE_BASE..].fill(EMPTY_SLOT);
     }
-    d3d11_observer_callbacks::configure(options, callbacks);
-    state.install(&slots, has_present1, user, platform)
+    d3d11_observer_callbacks::configure(options, unsafe { &rsf_observer11_callback_guards });
+    state.install(
+        &slots,
+        has_present1,
+        std::ptr::from_mut(&mut setup).cast(),
+        &NATIVE,
+    )
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_uninstall_hooks(platform: &Platform) -> i32 {
+extern "C" fn rsf_observer_uninstall() -> i32 {
+    uninstall(&NATIVE)
+}
+
+fn uninstall(platform: &Platform) -> i32 {
     let Some(mut state) = lifecycle() else {
         return NOT_READY;
     };
@@ -300,16 +320,6 @@ pub(super) fn forward_target(method: u32, nested: u32) -> Handle {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_publish_route(
-    method: u32,
-    target: Handle,
-    chain: Handle,
-    genuine: Handle,
-) {
-    ROUTES[method as usize].publish(target, chain, genuine);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,7 +344,7 @@ mod tests {
     }
 
     unsafe extern "C" fn detour(_: Handle, _: u32) -> i32 {
-        assert_eq!(rsf_core_observer11_uninstall_hooks(&PLATFORM), NOT_READY);
+        assert_eq!(uninstall(&PLATFORM), NOT_READY);
         0
     }
     unsafe extern "C" fn remove(_: Handle) -> i32 {

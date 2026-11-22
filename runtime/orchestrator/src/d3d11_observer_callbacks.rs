@@ -140,20 +140,10 @@ pub(super) fn configure(options: &Options, calls: &'static Callbacks) {
     d3d11_observer_capture::configure(options, options.log.map(|_| relay_log as _));
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_logging() -> i32 {
-    i32::from(snapshot().is_some_and(|config| config.options.log.is_some()))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_log(text: *const c_char) {
+unsafe extern "C" fn relay_log(_: Handle, text: *const c_char) {
     if let Some(config) = snapshot() {
         config.log(text);
     }
-}
-
-unsafe extern "C" fn relay_log(_: Handle, text: *const c_char) {
-    rsf_core_observer11_log(text);
 }
 
 // Creation callbacks are serialized, as required by d3d11_observer.h.

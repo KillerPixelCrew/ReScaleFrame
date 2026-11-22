@@ -16,8 +16,3 @@ struct rsf_observer11_callbacks {
     void (*present)(rsf_observer_present_fn, void* user, void* chain);
     void (*event)(rsf_observer_present_event_fn, void* user, const rsf_observer_present_event*);
 };
-
-extern "C" {
-int32_t rsf_core_observer11_logging(void);
-void rsf_core_observer11_log(const char*);
-}

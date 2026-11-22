@@ -53,10 +53,10 @@ const CHAIN_SLOTS: usize = DXGI_PRESENT + 1;
 const CHAIN1_SLOTS: usize = DXGI_PRESENT1 + 1;
 
 #[repr(C)]
-struct Route {
-    table: Table,
-    index: usize,
-    hook: Handle,
+pub(super) struct Route {
+    pub(super) table: Table,
+    pub(super) index: usize,
+    pub(super) hook: Handle,
 }
 
 #[repr(C)]
@@ -295,21 +295,17 @@ fn probe(platform: &Platform, window: Handle) -> Option<Tables> {
     })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_probe(
-    slots: &mut [Slot; SLOT_COUNT],
-    routes: &mut [Route; 2],
-) -> u32 {
+pub(super) fn native_slots(slots: &mut [Slot; SLOT_COUNT]) -> Option<[Route; 2]> {
     let mut tables = Tables {
         device: null_mut(),
         chain: null_mut(),
         chain1: null_mut(),
     };
     if run(&NATIVE, &mut tables) == 0 {
-        return 0;
+        return None;
     }
     let present = detours::hook_present as Handle;
-    *routes = [
+    let routes = [
         Route {
             table: tables.chain,
             index: DXGI_PRESENT,
@@ -359,7 +355,7 @@ extern "C" fn rsf_core_observer11_probe(
             hook,
         };
     }
-    1
+    Some(routes)
 }
 
 fn run(platform: &Platform, tables: &mut Tables) -> u32 {

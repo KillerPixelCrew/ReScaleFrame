@@ -9,6 +9,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 mod attachment;
 mod detours;
 mod diagnostics;
+mod foreign;
 
 type Handle = *mut c_void;
 const KINDS: usize = 4;

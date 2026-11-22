@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::Handle;
 use super::attachment::{Query, query, query_interface};
+use super::{Handle, foreign};
 use crate::com_ref::ComRef;
 use crate::win32_diagnostics::module_location;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_AUTO_BREADCRUMB_NODE, D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_ID, D3D12_MESSAGE_SEVERITY,
-    D3D12MessageFunc, ID3D12Debug, ID3D12DeviceRemovedExtendedData,
-    ID3D12DeviceRemovedExtendedDataSettings, ID3D12InfoQueue1,
+    ID3D12Debug, ID3D12DeviceRemovedExtendedData, ID3D12DeviceRemovedExtendedDataSettings,
+    ID3D12InfoQueue1,
 };
-use windows::core::{GUID, Interface, PCSTR};
+use windows::core::{Interface, PCSTR};
 use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 
 const WARNING: u32 = 2;
@@ -52,38 +52,26 @@ pub(super) struct Removal {
     page_fault: unsafe extern "C" fn(Handle, &mut u64) -> i32,
 }
 
-unsafe extern "C" {
-    fn rsf_observer12_guard_register_debug(info_queue: Handle, callback: D3D12MessageFunc);
-    fn rsf_observer12_guard_debug(iid: &GUID, out: &mut Handle) -> i32;
-    fn rsf_observer12_guard_breadcrumbs(settings: Handle);
-    fn rsf_observer12_guard_page_faults(settings: Handle);
-    fn rsf_observer12_guard_debug_layer(debug: Handle) -> i32;
-    fn rsf_observer12_guard_queue_device(queue: Handle, out: &mut Handle) -> i32;
-    fn rsf_observer12_guard_removed_reason(device: Handle) -> i32;
-    fn rsf_observer12_guard_breadcrumb_head(dred: Handle) -> *const c_void;
-    fn rsf_observer12_guard_page_fault(dred: Handle, address: &mut u64) -> i32;
-}
-
 unsafe extern "C" fn debug_interface<T: Interface>(out: &mut Handle) -> i32 {
-    unsafe { rsf_observer12_guard_debug(&T::IID, out) }
+    unsafe { foreign::debug(&T::IID, out) }
 }
 
 const DIAGNOSTICS: DiagnosticSetup = DiagnosticSetup {
     query_settings: debug_interface::<ID3D12DeviceRemovedExtendedDataSettings>,
-    enable_breadcrumbs: rsf_observer12_guard_breadcrumbs,
-    enable_page_faults: rsf_observer12_guard_page_faults,
+    enable_breadcrumbs: foreign::breadcrumbs,
+    enable_page_faults: foreign::page_faults,
     query_debug: debug_interface::<ID3D12Debug>,
-    enable_debug: rsf_observer12_guard_debug_layer,
+    enable_debug: foreign::debug_layer,
 };
 
 pub(super) const NATIVE: Removal = Removal {
-    queue_device: rsf_observer12_guard_queue_device,
-    removed_reason: rsf_observer12_guard_removed_reason,
+    queue_device: foreign::queue_device,
+    removed_reason: foreign::removed_reason,
     query_dred: query::<ID3D12DeviceRemovedExtendedData>,
-    breadcrumb_head: rsf_observer12_guard_breadcrumb_head,
+    breadcrumb_head: foreign::breadcrumb_head,
     breadcrumb,
     operation: breadcrumb_operation,
-    page_fault: rsf_observer12_guard_page_fault,
+    page_fault: foreign::page_fault,
 };
 
 // DRED node storage is borrowed until the owning interface is released.
@@ -188,7 +176,7 @@ pub(super) fn enabled() -> bool {
 
 pub(super) unsafe extern "C" fn register_debug(device: Handle) {
     if let Some(info) = query_interface(query::<ID3D12InfoQueue1>, device) {
-        unsafe { rsf_observer12_guard_register_debug(info.as_ptr(), Some(debug_message)) }
+        unsafe { foreign::register_debug(info.as_ptr(), Some(debug_message)) }
     }
 }
 

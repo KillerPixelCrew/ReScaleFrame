@@ -113,3 +113,42 @@ Both observer bindings were regenerated with bindgen 0.72.1 from the individual 
 clauses. The unscoped generator stopped at the pre-existing D3D11 SR admission clause, whose
 clang include set could not resolve `rescaleframe/game_frame.h`. Its unrelated earlier outputs
 were restored.
+
+
+## Route reconstruction and guarded SDK dispatch
+
+This follow-up starts at integrated revision `e5d73636`. D3D11 now opens the checked disk image,
+resolves the genuine slot, follows the outer Present chain, relocates the file-backed prologue and
+owns MinHook registration and retirement in Rust. It retains the three observed jump forms
+(`E9 rel32`, `FF 25 [rip+disp32]` and `48 B8 imm64; FF E0`), eight-hop limit, 32-byte disk
+comparison and independent 14-byte bypass. Live reads use bounded `ReadProcessMemory`. MinHook
+still decodes each x64 instruction with its real HDE64 implementation. The packed Rust binding
+comes from the pinned v1.3.4 HDE header. Rust pads the decoder's private input and rejects
+truncation, unknown RIP displacement layouts and relative control flow. A failed installation
+releases the trampoline only when it no longer has a published owner. A successfully published
+route keeps the previous process-lifetime trampoline policy. The original Steam and RTSS
+evidence remains in [Windows Present hook coexistence](windows-present-hook-coexistence.md).
+
+D3D12 query, queue type, removal, debug, DRED and swap-chain calls now use their SDK signatures
+in Rust. Their synchronous private thunk permits foreign unwinding into a native catch frame
+and keeps the previous HRESULTs and exception fallbacks. The MSVC SDK's queue descriptor return
+uses the generated out-pointer signature. DRED node pointers remain borrowed while the query's
+COM reference lives. The registered diagnostics and observer callbacks keep their original ABI.
+
+Both original implementation paths (`runtime/graphics/src/d3d11_observer.cpp` and
+`runtime/graphics/src/d3d12_observer.cpp`) are retired. Remaining native code is confined to
+`runtime/graphics/src/observer_exception_guards.cpp`. It holds the D3D11 SDK/proxy and user
+callback exception guards, the shared overlay's existing `rsf_observer_install_guarded` entry,
+and the D3D12 catch frame. The old observer module bridge header was removed. G02 frame-tap
+callback leases and shared native ABI, including the overlay registration caller and G03
+output calls, were left as integrated. The graphics CMake target still links pinned MinHook;
+Cargo dependencies are unchanged.
+
+Targeted bindgen 0.72.1 used the v1.3.4 `src/hde/hde64.h` from the existing MinHook checkout,
+the MSVC Windows x64 target and the Windows 10.0.26100.0 SDK. The allowlists were
+`hde64s`, `hde64_disasm` and `F_(ERROR|MODRM|RELATIVE|IMM[0-9]+|DISP32|PREFIX_67)`.
+The generated packed record is 37 bytes and puts flags at byte 33. MSVC syntax-only checking
+covered the native guard file and the existing HDE64 translation unit. Pinned Rust formatting,
+observer source-only type analysis with SDK and unrelated crate stubs, locked offline Cargo
+metadata and Git whitespace checks passed. No project build, linked fixture, device run or
+foreign-exception runtime test was performed.

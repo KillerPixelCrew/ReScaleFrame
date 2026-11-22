@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Handle, OBSERVER, Observer, diagnostics, notify_present};
+use super::{Handle, OBSERVER, Observer, diagnostics, foreign, notify_present};
 use crate::com_ref::ComRef;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D12::{
@@ -7,7 +7,7 @@ use windows::Win32::Graphics::Direct3D12::{
     ID3D12Device_Vtbl,
 };
 use windows::Win32::Graphics::Dxgi::{IDXGIFactory2, IDXGIFactory2_Vtbl, IDXGISwapChain_Vtbl};
-use windows::core::{GUID, Interface};
+use windows::core::Interface;
 
 const FACTORY: u32 = 0;
 const DEVICE: u32 = 1;
@@ -34,24 +34,18 @@ pub(super) struct Platform {
     describe_window: unsafe extern "C" fn(Handle, &mut Handle) -> i32,
 }
 
-unsafe extern "C" {
-    fn rsf_observer12_guard_query(object: Handle, iid: &GUID, out: &mut Handle) -> i32;
-    fn rsf_observer12_guard_queue_type(queue: Handle) -> u32;
-    fn rsf_observer12_guard_describe_window(chain: Handle, window: &mut Handle) -> i32;
-}
-
 pub(super) unsafe extern "C" fn query<T: Interface>(object: Handle, out: &mut Handle) -> i32 {
-    unsafe { rsf_observer12_guard_query(object, &T::IID, out) }
+    unsafe { foreign::query(object, &T::IID, out) }
 }
 
 pub(super) const NATIVE: Platform = Platform {
     query_factory: query::<IDXGIFactory2>,
     query_device: query::<ID3D12Device>,
     query_queue: query::<ID3D12CommandQueue>,
-    queue_type: rsf_observer12_guard_queue_type,
+    queue_type: foreign::queue_type,
     bind_interface: super::detours::bind_interface,
     register_debug: diagnostics::register_debug,
-    describe_window: rsf_observer12_guard_describe_window,
+    describe_window: foreign::describe_window,
 };
 
 pub(super) fn query_interface(query: Query, pointer: Handle) -> Option<ComRef> {
