@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 use crate::d3d11_bridge_sr_abi::rsf_dlss_frame;
-use crate::d3d11_marker_abi::rsf_native_cpu_frame;
+use crate::d3d11_marker_abi::{rsf_d3d11_marker_fixture_calls, rsf_native_cpu_frame};
 #[cfg(feature = "gl-device-fixture")]
 pub(super) use crate::gl_pipeline_fixture_abi::rsf_streamline_host;
 use rsf_game_sys::d3d11_chain_abi::rsf_d3d11_chain_dispatch;
@@ -27,6 +27,9 @@ pub const RSF_REFLEX_BOOST: u32 = 2;
 pub const RSF_OBSERVER_ABI_VERSION: u32 = 8;
 pub const RSF_PRESENT_STATUS_VERSION: u32 = 1;
 pub const RSF_DLSS_ABI_VERSION: u32 = 5;
+pub const RSF_NATIVE_SCENE_PRESENT_NONE: u32 = 0;
+pub const RSF_NATIVE_SCENE_PRESENT_SAMPLED: u32 = 1;
+pub const RSF_NATIVE_SCENE_PRESENT_DIRECT: u32 = 2;
 pub type rsf_latency_marker = u32;
 pub type rsf_lifetime = u32;
 pub type rsf_ui_mode = u32;
@@ -1316,7 +1319,16 @@ unsafe extern "C" {
     pub fn rsf_native_fg_cpu(arg1: *const rsf_game_cpu_event);
 }
 unsafe extern "C" {
+    pub fn rsf_native_fg_final(
+        context11: *mut ::core::ffi::c_void,
+        arg1: *const rsf_game_render_pass,
+    );
+}
+unsafe extern "C" {
     pub fn rsf_native_fg_submission(arg1: *const rsf_game_render_pass, begin: u32);
+}
+unsafe extern "C" {
+    pub fn rsf_native_fg_frame(arg1: *const rsf_game_render_pass, begin: u32);
 }
 unsafe extern "C" {
     pub fn rsf_native_fg_prepare(
@@ -1550,12 +1562,117 @@ unsafe extern "C" {
     pub fn rsf_sr12_destroy(arg1: *mut rsf_sr12);
 }
 unsafe extern "C" {
+    pub fn rsf_native_scene_pass(
+        pass: *const rsf_game_render_pass,
+        begin: u32,
+    ) -> ::core::ffi::c_int;
+}
+unsafe extern "C" {
+    pub fn rsf_native_scene_texture_binding(
+        pass: *const rsf_game_render_pass,
+    ) -> ::core::ffi::c_int;
+}
+unsafe extern "C" {
+    pub fn rsf_native_scene_present_path(window: *const rsf_game_render_pass) -> u32;
+}
+unsafe extern "C" {
+    pub fn rsf_native_window_scope(
+        pass: *const rsf_game_render_pass,
+        begin: u32,
+    ) -> ::core::ffi::c_int;
+}
+unsafe extern "C" {
+    pub fn rsf_native_window_match(
+        swapchain: *mut ::core::ffi::c_void,
+        pass: *mut rsf_game_render_pass,
+    ) -> ::core::ffi::c_int;
+}
+unsafe extern "C" {
     pub fn rsf_native_window_present(
         event: *const rsf_observer_present_event,
     ) -> ::core::ffi::c_int;
 }
 unsafe extern "C" {
     pub fn rsf_overlay_d3d12_stop();
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_native_cpu_counters {
+    pub struct_size: u32,
+    pub frames: u64,
+    pub input_events: [u64; 3usize],
+    pub pings: u64,
+    pub substitutes: u64,
+    pub duplicates: u64,
+    pub order_violations: u64,
+    pub expired_messages: u64,
+    pub unframed_inputs: u64,
+    pub derived_frame_ends: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_cpu_counters"]
+        [::core::mem::size_of::<rsf_native_cpu_counters>() - 96usize];
+    ["Alignment of rsf_native_cpu_counters"]
+        [::core::mem::align_of::<rsf_native_cpu_counters>() - 8usize];
+    ["Offset of field: rsf_native_cpu_counters::struct_size"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, struct_size) - 0usize];
+    ["Offset of field: rsf_native_cpu_counters::frames"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, frames) - 8usize];
+    ["Offset of field: rsf_native_cpu_counters::input_events"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, input_events) - 16usize];
+    ["Offset of field: rsf_native_cpu_counters::pings"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, pings) - 40usize];
+    ["Offset of field: rsf_native_cpu_counters::substitutes"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, substitutes) - 48usize];
+    ["Offset of field: rsf_native_cpu_counters::duplicates"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, duplicates) - 56usize];
+    ["Offset of field: rsf_native_cpu_counters::order_violations"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, order_violations) - 64usize];
+    ["Offset of field: rsf_native_cpu_counters::expired_messages"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, expired_messages) - 72usize];
+    ["Offset of field: rsf_native_cpu_counters::unframed_inputs"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, unframed_inputs) - 80usize];
+    ["Offset of field: rsf_native_cpu_counters::derived_frame_ends"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, derived_frame_ends) - 88usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_native_latency_frame {
+    pub struct_size: u32,
+    pub version: u32,
+    pub source: u64,
+    pub generation: u64,
+    pub ready_qpc: u64,
+    pub paced: u32,
+    pub failed: u32,
+    pub completed: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_latency_frame"]
+        [::core::mem::size_of::<rsf_native_latency_frame>() - 48usize];
+    ["Alignment of rsf_native_latency_frame"]
+        [::core::mem::align_of::<rsf_native_latency_frame>() - 8usize];
+    ["Offset of field: rsf_native_latency_frame::struct_size"]
+        [::core::mem::offset_of!(rsf_native_latency_frame, struct_size) - 0usize];
+    ["Offset of field: rsf_native_latency_frame::version"]
+        [::core::mem::offset_of!(rsf_native_latency_frame, version) - 4usize];
+    ["Offset of field: rsf_native_latency_frame::source"]
+        [::core::mem::offset_of!(rsf_native_latency_frame, source) - 8usize];
+    ["Offset of field: rsf_native_latency_frame::generation"]
+        [::core::mem::offset_of!(rsf_native_latency_frame, generation) - 16usize];
+    ["Offset of field: rsf_native_latency_frame::ready_qpc"]
+        [::core::mem::offset_of!(rsf_native_latency_frame, ready_qpc) - 24usize];
+    ["Offset of field: rsf_native_latency_frame::paced"]
+        [::core::mem::offset_of!(rsf_native_latency_frame, paced) - 32usize];
+    ["Offset of field: rsf_native_latency_frame::failed"]
+        [::core::mem::offset_of!(rsf_native_latency_frame, failed) - 36usize];
+    ["Offset of field: rsf_native_latency_frame::completed"]
+        [::core::mem::offset_of!(rsf_native_latency_frame, completed) - 40usize];
+};
+unsafe extern "C" {
+    pub fn rsf_native_latency_render(source: u64, begin: u32);
 }
 unsafe extern "C" {
     pub fn rsf_native_cpu_event(event: *const rsf_game_cpu_event) -> ::core::ffi::c_int;
@@ -1750,13 +1867,10 @@ impl Default for rsf_ac7_loop {
     }
 }
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct rsf_ac7_fixture_calls {
     pub install_exception_filter: ::core::option::Option<unsafe extern "C" fn()>,
-    pub log: rsf_backend_log_fn,
-    pub run_markers: ::core::option::Option<
-        unsafe extern "C" fn(chain: *mut ::core::ffi::c_void) -> ::core::ffi::c_int,
-    >,
+    pub marker_calls: *const rsf_d3d11_marker_fixture_calls,
     pub run_guarded: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut rsf_ac7_loop,
@@ -1771,15 +1885,22 @@ pub struct rsf_ac7_fixture_calls {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_ac7_fixture_calls"][::core::mem::size_of::<rsf_ac7_fixture_calls>() - 32usize];
+    ["Size of rsf_ac7_fixture_calls"][::core::mem::size_of::<rsf_ac7_fixture_calls>() - 24usize];
     ["Alignment of rsf_ac7_fixture_calls"]
         [::core::mem::align_of::<rsf_ac7_fixture_calls>() - 8usize];
     ["Offset of field: rsf_ac7_fixture_calls::install_exception_filter"]
         [::core::mem::offset_of!(rsf_ac7_fixture_calls, install_exception_filter) - 0usize];
-    ["Offset of field: rsf_ac7_fixture_calls::log"]
-        [::core::mem::offset_of!(rsf_ac7_fixture_calls, log) - 8usize];
-    ["Offset of field: rsf_ac7_fixture_calls::run_markers"]
-        [::core::mem::offset_of!(rsf_ac7_fixture_calls, run_markers) - 16usize];
+    ["Offset of field: rsf_ac7_fixture_calls::marker_calls"]
+        [::core::mem::offset_of!(rsf_ac7_fixture_calls, marker_calls) - 8usize];
     ["Offset of field: rsf_ac7_fixture_calls::run_guarded"]
-        [::core::mem::offset_of!(rsf_ac7_fixture_calls, run_guarded) - 24usize];
+        [::core::mem::offset_of!(rsf_ac7_fixture_calls, run_guarded) - 16usize];
 };
+impl Default for rsf_ac7_fixture_calls {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}

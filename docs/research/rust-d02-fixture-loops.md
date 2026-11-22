@@ -72,3 +72,30 @@ the base, all mode names, and startup and final Release order. Pinned
 Rust formatting, repeatable targeted bindgen, locked offline Windows
 metadata and MSVC syntax checks passed. Build, link, fixture execution
 and device validation remain pending.
+
+## AC7 guarded command continuation
+
+Base `c34634bc`. The fixture's Rust scope module now records the AC7
+submission, evaluation, final scene, Slate window and optional sampled
+binding. It then records Present, closes the window, inserts deferred
+SimulationEnd when required and closes the frame. The native command
+objects still execute through the original per-command exception guard.
+The native draw callback owns the backbuffer and RTV through that drain
+and keeps the GetBuffer, RTV creation and clear calls under a C++ guard.
+The SR command and actual Present call remain native. Rust checks the
+matched window path and still rejects a stale source or another
+viewport before the window scope is published.
+
+The Rust entry now invokes the marker scenario directly. Its typed table
+still dispatches the real CPU, render, Present and ledger callbacks. The
+Rust logger consumes the reentry request before it calls the live render
+marker, preserving the synchronous reentry assertion. QPC, token and
+sleep-count reads still use their original providers. The C++ launcher
+retains the CRT entry, exception report, native command list and scope
+lifetime, guarded draw and execution, and table of linked marker calls.
+
+Pinned formatting, repeatable targeted bindgen, locked offline Windows
+metadata and MSVC syntax checks passed. Source checks compared the
+original exception report, command guard, SR command, Present call,
+marker callbacks, and sequence with the base. Executable and device
+verification remain pending.

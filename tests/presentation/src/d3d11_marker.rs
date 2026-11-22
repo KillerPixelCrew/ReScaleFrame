@@ -2,8 +2,92 @@
 //! Drive the linked CPU ledger and presentation owner with the original marker
 //! admission sequences. The native device fixture supplies the production calls.
 use crate::d3d11_marker_abi::*;
+use crate::present_fixture_loops_abi::{
+    RSF_FG_OFF, RSF_REFLEX_OFF, rsf_d3d11_present_host, rsf_native_fg_options,
+    rsf_native_fg_options_set, rsf_native_fg_set_log, rsf_native_latency_render,
+    rsf_streamline_host_latency_status, rsf_streamline_host_token, rsf_streamline_latency_status,
+};
+use crate::present_fixture_time::{frequency, stamp};
 use rsf_game_sys::*;
-use std::ffi::c_void;
+use std::ffi::{CStr, c_char, c_void};
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+static REENTRY_SOURCE: AtomicU64 = AtomicU64::new(0);
+static REENTRIES: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_ac7_fixture_log(_: *mut c_void, message: *const c_char) {
+    let message = unsafe { CStr::from_ptr(message) };
+    println!("SDK: {}", message.to_string_lossy());
+    const SUBMIT: &[u8] = b"actual graphics submit begin";
+    if REENTRY_SOURCE.load(Ordering::Acquire) != 0
+        && message
+            .to_bytes()
+            .windows(SUBMIT.len())
+            .any(|part| part == SUBMIT)
+    {
+        let source = REENTRY_SOURCE.swap(0, Ordering::AcqRel);
+        if source != 0 {
+            REENTRIES.fetch_add(1, Ordering::Relaxed);
+            // Consume the request before the linked logger can synchronously reenter.
+            unsafe { rsf_native_latency_render(source, 1) };
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_fixture_marker_configure() {
+    let options = rsf_native_fg_options {
+        struct_size: size_of::<rsf_native_fg_options>() as u32,
+        mode: RSF_FG_OFF,
+        generated_frames: 1,
+        reflex_mode: RSF_REFLEX_OFF,
+        frame_limit_us: 0,
+        debug: 1,
+    };
+    unsafe {
+        rsf_native_fg_options_set(&options);
+        rsf_native_fg_set_log(Some(rsf_ac7_fixture_log), null_mut());
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_fixture_marker_stamp() -> u64 {
+    stamp()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_fixture_marker_frequency() -> u64 {
+    frequency()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_fixture_marker_token(id: u64) -> *mut c_void {
+    unsafe { rsf_streamline_host_token(rsf_d3d11_present_host(), id) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_fixture_marker_sleep_count(count: &mut u64) -> i32 {
+    let mut status = rsf_streamline_latency_status {
+        struct_size: size_of::<rsf_streamline_latency_status>() as u32,
+        ..Default::default()
+    };
+    let result =
+        unsafe { rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &mut status) };
+    *count = status.sleep_calls;
+    result
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_fixture_marker_reenter(id: u64) {
+    REENTRY_SOURCE.store(id, Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_fixture_marker_reentries() -> u32 {
+    REENTRIES.load(Ordering::Relaxed)
+}
 
 const SESSION: u64 = 42;
 const FALLBACK: u64 = 10_000;
@@ -286,7 +370,7 @@ impl MarkerFixture<'_> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_marker_fixture(
+pub(super) unsafe extern "C" fn rsf_d3d11_marker_fixture(
     chain: *mut c_void,
     calls: &rsf_d3d11_marker_fixture_calls,
 ) -> i32 {
@@ -341,8 +425,9 @@ const _: () = {
     assert!(std::mem::offset_of!(NativeList, uid) == 0x18);
 };
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_fixture_append(list: *mut NativeList, command: *mut NativeCommand) {
+pub(super) unsafe fn append_native(list: *mut c_void, command: *mut c_void) {
+    let list = list.cast::<NativeList>();
+    let command = command.cast::<NativeCommand>();
     unsafe {
         (*list).tail.write(command);
         (*list).tail = &raw mut (*command).next;

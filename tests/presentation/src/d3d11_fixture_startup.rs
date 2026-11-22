@@ -5,6 +5,7 @@ use crate::d3d11_bridge_sr_abi::{
     rsf_dlss_frame, rsf_dlss_release_resources, rsf_dlss_share_host, rsf_dlss_shutdown,
 };
 use crate::d3d11_device_checks::*;
+use crate::d3d11_marker::{rsf_ac7_fixture_log, rsf_d3d11_marker_fixture};
 use crate::fixture_device::{rsf_d3d11_fixture_proxy_smoke, rsf_present_fixture_debug12};
 use crate::present_fixture_loops_abi::*;
 use crate::present_fixture_startup::*;
@@ -123,12 +124,7 @@ impl Mode {
         }
     }
 
-    unsafe fn install(
-        &self,
-        window: HWND,
-        argv: &[*const c_char],
-        log: rsf_backend_log_fn,
-    ) -> bool {
+    unsafe fn install(&self, window: HWND, argv: &[*const c_char]) -> bool {
         let dev = unsafe { CStr::from_ptr(argv[1]) }
             .to_bytes()
             .windows(b"development".len())
@@ -137,7 +133,7 @@ impl Mode {
             struct_size: size_of::<rsf_d3d11_present_setup>() as u32,
             runtime_directory_utf8: argv[1],
             development_runtime: u32::from(dev),
-            log,
+            log: Some(rsf_ac7_fixture_log),
             user: window.0,
             accept_window: Some(accept_window),
             before_present: Some(before_present),
@@ -311,7 +307,13 @@ fn run_enabled(
         hwnd.0,
         unsafe { GetForegroundWindow() }.0
     );
-    if unsafe { rsf_dlss_share_host(rsf_d3d11_present_host().cast(), native.log, null_mut()) } != 0
+    if unsafe {
+        rsf_dlss_share_host(
+            rsf_d3d11_present_host().cast(),
+            Some(rsf_ac7_fixture_log),
+            null_mut(),
+        )
+    } != 0
     {
         return Err(1);
     }
@@ -326,7 +328,7 @@ fn run_enabled(
     let stall = limit(s!("RSF_TEST_SUBMISSION_STALL_MS"));
     unsafe {
         rsf_native_fg_options_set(&options);
-        rsf_native_fg_set_log(native.log, null_mut());
+        rsf_native_fg_set_log(Some(rsf_ac7_fixture_log), null_mut());
     }
     let description = D3D11_TEXTURE2D_DESC {
         Width: 512,
@@ -430,7 +432,7 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
     if mode.visible {
         show(hwnd, true);
     }
-    if !unsafe { mode.install(hwnd, argv, native.log) } {
+    if !unsafe { mode.install(hwnd, argv) } {
         return Err(1);
     }
     println!("fixture: presentation interception installed");
@@ -493,7 +495,7 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
             device.as_raw(),
             context.as_raw(),
             &textures,
-            native.log,
+            Some(rsf_ac7_fixture_log),
             &mut frame,
         )
     } != 0
@@ -535,7 +537,7 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
             transfer.native_device,
             &mut frame,
         )?;
-    } else if unsafe { (native.run_markers.unwrap())(chain.as_raw()) } == 0 {
+    } else if unsafe { rsf_d3d11_marker_fixture(chain.as_raw(), &*native.marker_calls) } == 0 {
         return Err(1);
     }
     unsafe { context.ClearState() };

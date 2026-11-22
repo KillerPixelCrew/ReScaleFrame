@@ -4,18 +4,17 @@
 #include <rescaleframe/native_fg.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_scene.h>
-#include <rescaleframe/native_window.h>
 #include "presentation/d3d11_scope_fixture.h"
 #include "presentation/present_fixture_loops.h"
 #include <d3d11.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <cstdio>
-#include <cstring>
 #include <cstddef>
 using Microsoft::WRL::ComPtr;
 static_assert(sizeof(rsf_ac7_loop) == 104 && offsetof(rsf_ac7_loop, read_cpu) == 96);
-static_assert(sizeof(rsf_ac7_fixture_calls) == 32 && offsetof(rsf_ac7_fixture_calls, run_guarded) == 24);
+static_assert(sizeof(rsf_ac7_fixture_calls) == 24 && offsetof(rsf_ac7_fixture_calls, run_guarded) == 16);
+static_assert(sizeof(rsf_ac7_fixture_commands) == 112 && offsetof(rsf_ac7_fixture_commands, execute) == 104);
 struct NativeCommand {
     NativeCommand* next = nullptr;
     void (*execute)(void*, NativeCommand*) = nullptr;
@@ -37,14 +36,11 @@ struct NativeList {
 };
 static_assert(sizeof(NativeCommand) == 16 && sizeof(NativeList) == 32 &&
     offsetof(NativeList, count) == 0x14 && offsetof(NativeList, uid) == 0x18);
-extern "C" void rsf_d3d11_fixture_append(NativeList*, NativeCommand*);
 extern "C" void rsf_d3d11_fixture_run(NativeList*, void (*)(NativeList*, NativeCommand*));
 
 bool queued_passes_ok = true;
-void append(NativeList& list, NativeCommand& command) {
-    rsf_d3d11_fixture_append(&list, &command);
-}
-void run(NativeList& list) {
+void run(void* commands) {
+    auto& list = *static_cast<NativeList*>(commands);
     rsf_d3d11_fixture_run(&list, [](NativeList* owner, NativeCommand* command) noexcept {
         try { command->execute(owner, command); }
         catch (...) { queued_passes_ok = false; }
@@ -55,27 +51,7 @@ DWORD submission_stall_ms = 0;
 uint32_t expected_presentation_path = RSF_NATIVE_SCENE_PRESENT_NONE;
 ID3D11DeviceContext* final_context = nullptr;
 void queued_pass(void*, void*, const rsf_game_render_pass* pass, uint32_t begin) {
-    if (pass->role == RSF_GAME_RENDER_SUBMISSION) rsf_native_fg_submission(pass, begin);
-    if (pass->role == RSF_GAME_RENDER_FRAME) rsf_native_fg_frame(pass, begin);
-    if (pass->role == RSF_GAME_RENDER_FINAL_SCENE) {
-        queued_passes_ok &= rsf_native_scene_pass(pass, begin) != 0;
-        if (!begin && final_context) rsf_native_fg_final(final_context, pass);
-    }
-    if (pass->role == RSF_GAME_RENDER_TEXTURE_BINDING && !begin)
-        queued_passes_ok &= rsf_native_scene_texture_binding(pass) != 0;
-    if (pass->role == RSF_GAME_RENDER_WINDOW) {
-        if (begin) {
-            const auto expected = expected_presentation_path == RSF_NATIVE_SCENE_PRESENT_DIRECT ?
-                RSF_NATIVE_SCENE_PRESENT_DIRECT : RSF_NATIVE_SCENE_PRESENT_NONE;
-            queued_passes_ok &= rsf_native_scene_present_path(pass) == expected;
-            auto stale = *pass; ++stale.source_frame_id;
-            queued_passes_ok &= rsf_native_scene_present_path(&stale) == RSF_NATIVE_SCENE_PRESENT_NONE;
-            auto other_viewport = *pass; ++other_viewport.viewport_key;
-            queued_passes_ok &= rsf_native_scene_present_path(&other_viewport) == RSF_NATIVE_SCENE_PRESENT_NONE;
-        }
-        if (!begin) rsf_native_fg_window_end(pass);
-        queued_passes_ok &= rsf_native_window_scope(pass, begin) != 0;
-    }
+    queued_passes_ok &= rsf_d3d11_fixture_queued_pass(final_context, expected_presentation_path, pass, begin) != 0;
 }
 struct PresentCommand : NativeCommand {
     IDXGISwapChain* chain = nullptr;
@@ -83,13 +59,12 @@ struct PresentCommand : NativeCommand {
     HRESULT result = E_FAIL;
     PresentCommand() { execute = [](void*, NativeCommand* command) {
         auto& present = *static_cast<PresentCommand*>(command);
-        rsf_game_render_pass window{}; window.struct_size = sizeof(window);
-        if (!rsf_native_window_match(present.chain, &window) ||
-            rsf_native_scene_present_path(&window) != expected_presentation_path) return;
+        uint64_t source = 0;
+        if (!rsf_d3d11_fixture_window_source(present.chain, expected_presentation_path, &source)) return;
         present.result = present.chain->Present(0, 0);
         // RenderSubmitEnd precedes PresentStart, so PresentEnd retires the token unless the
         // game thread's SimulationEnd is still outstanding.
-        queued_passes_ok &= rsf_d3d11_fixture_token_matches(window.source_frame_id, uint32_t(present.simulation_pending)) != 0;
+        queued_passes_ok &= rsf_d3d11_fixture_token_matches(source, uint32_t(present.simulation_pending)) != 0;
     }; }
 };
 struct EvaluateCommand : NativeCommand {
@@ -111,15 +86,6 @@ struct SimulationEndCommand : NativeCommand {
         rsf_d3d11_fixture_cpu_event(static_cast<SimulationEndCommand*>(command)->source, RSF_GAME_CPU_SIMULATION_END);
     }; }
 };
-uint64_t marker_reentry_source{};
-uint32_t marker_reentries{};
-void log_message(void*, const char* message) {
-    std::printf("SDK: %s\n", message);
-    if (marker_reentry_source && std::strstr(message,"actual graphics submit begin")) {
-        const auto source = marker_reentry_source; marker_reentry_source = 0; ++marker_reentries;
-        rsf_native_latency_render(source,1); // synchronous logger reentry must not open a second interval
-    }
-}
 // AC7 render scopes queue commands into their native list. Keep that list and
 // the native command execution guard in the same translation unit.
 struct FrameCommands {
@@ -145,11 +111,31 @@ const rsf_d3d11_scope_fixture_calls scope_calls{rsf_ac7_render_scope_open, rsf_a
 
 int begin_commands(void* user, const rsf_game_render_pass* source, uint32_t direct) noexcept try {
     auto& frame = *static_cast<FrameCommands*>(user);
-    expected_presentation_path = direct ? RSF_NATIVE_SCENE_PRESENT_DIRECT : RSF_NATIVE_SCENE_PRESENT_SAMPLED;
     frame.commands.reset();
     frame.frame_ticket = nullptr;
-    if (!rsf_d3d11_fixture_scope_begin(&scope_calls, frame.scopes, &frame.commands, source, &frame.frame_ticket)) return 0;
-    run(frame.commands);
+    if (!rsf_d3d11_fixture_scope_begin(&scope_calls, frame.scopes, &frame.commands, source, &frame.frame_ticket,
+        direct, &expected_presentation_path)) return 0;
+    run(&frame.commands);
+    return 1;
+} catch (...) {
+    return 0;
+}
+
+struct DrawBuffers {
+    FrameCommands* frame;
+    ComPtr<ID3D11Texture2D> backbuffer;
+    ComPtr<ID3D11RenderTargetView> target;
+};
+
+int draw_buffers(void* user, void** backbuffer) noexcept try {
+    auto& draw = *static_cast<DrawBuffers*>(user);
+    const auto& frame = *draw.frame;
+    if (FAILED(frame.chain->GetBuffer(0, IID_PPV_ARGS(&draw.backbuffer))) ||
+        FAILED(frame.device->CreateRenderTargetView(draw.backbuffer.Get(), nullptr, &draw.target))) return 0;
+    const float color[]{0.25f, 0.2f, 0.6f, 1};
+    frame.context->ClearRenderTargetView(draw.target.Get(), color);
+    frame.context->ClearRenderTargetView(frame.hudless_target, color);
+    *backbuffer = draw.backbuffer.Get();
     return 1;
 } catch (...) {
     return 0;
@@ -158,27 +144,17 @@ int begin_commands(void* user, const rsf_game_render_pass* source, uint32_t dire
 int draw_present(void* user, const rsf_game_render_pass* source, uint32_t direct, uint32_t late_simulation,
     int32_t* evaluated, int32_t* presented) noexcept try {
     auto& frame = *static_cast<FrameCommands*>(user);
-    auto& commands = frame.commands;
-    rsf_ac7_render_ticket *submission_ticket = nullptr, *window_ticket = nullptr;
-    if (!rsf_d3d11_fixture_scope_scene(&scope_calls, frame.scopes, &commands, source, &submission_ticket)) return -1;
-    frame.frame->reset = source->source_frame_id == 2;
     EvaluateCommand evaluate; evaluate.context = frame.context; evaluate.source = source; evaluate.frame = frame.frame;
-    append(commands, evaluate);
-    ComPtr<ID3D11Texture2D> backbuffer; ComPtr<ID3D11RenderTargetView> target;
-    if (FAILED(frame.chain->GetBuffer(0, IID_PPV_ARGS(&backbuffer))) ||
-        FAILED(frame.device->CreateRenderTargetView(backbuffer.Get(), nullptr, &target))) return -1;
-    const float color[]{0.25f, 0.2f, 0.6f, 1};
-    frame.context->ClearRenderTargetView(target.Get(), color);
-    frame.context->ClearRenderTargetView(frame.hudless_target, color);
-    if (!rsf_d3d11_fixture_scope_window(&scope_calls, frame.scopes, &commands, source,
-        submission_ticket, backbuffer.Get(), frame.hudless, frame.window, frame.chain, direct, &window_ticket)) return -1;
     PresentCommand present; present.chain = frame.chain; present.simulation_pending = late_simulation != 0;
-    append(commands, present);
-    if (!rsf_ac7_render_scope_close(window_ticket, &commands)) return -1;
     SimulationEndCommand simulation_end; simulation_end.source = source->source_frame_id;
-    if (late_simulation) append(commands, simulation_end);
-    if (!rsf_ac7_render_scope_close(frame.frame_ticket, &commands)) return -1;
-    run(commands);
+    DrawBuffers buffers{&frame, {}, {}};
+    const rsf_ac7_fixture_commands packet{
+        &scope_calls, frame.scopes, frame.frame_ticket, &frame.commands,
+        frame.chain, frame.hudless, frame.window, frame.frame,
+        static_cast<NativeCommand*>(&evaluate), static_cast<NativeCommand*>(&present),
+        static_cast<NativeCommand*>(&simulation_end), &buffers, draw_buffers, run,
+    };
+    if (!rsf_d3d11_fixture_record(&packet, source, direct, late_simulation)) return -1;
     *evaluated = evaluate.result;
     *presented = present.result;
     return int(queued_passes_ok);
@@ -193,13 +169,9 @@ int finish_commands(void* user) noexcept {
 }
 namespace {
 const rsf_d3d11_marker_fixture_calls marker_calls{
-    []() {
-        rsf_native_fg_options options{sizeof(options),RSF_FG_OFF,1,RSF_REFLEX_OFF,0,1};
-        rsf_native_fg_options_set(&options);
-        rsf_native_fg_set_log(log_message, nullptr);
-    },
-    []() -> uint64_t { LARGE_INTEGER qpc{}; QueryPerformanceCounter(&qpc); return uint64_t(qpc.QuadPart); },
-    []() -> uint64_t { LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency); return uint64_t(frequency.QuadPart); },
+    rsf_ac7_fixture_marker_configure,
+    rsf_ac7_fixture_marker_stamp,
+    rsf_ac7_fixture_marker_frequency,
     [](const rsf_game_cpu_event* event) {
         return rsf_native_cpu_dispatch(event, [](void*, const rsf_game_cpu_event* fact) { rsf_native_fg_cpu(fact); }, nullptr);
     },
@@ -213,15 +185,10 @@ const rsf_d3d11_marker_fixture_calls marker_calls{
     rsf_d3d11_present_abort,
     rsf_native_latency_frame_get,
     rsf_d3d11_present_generation,
-    [](uint64_t frame) { return rsf_streamline_host_token(rsf_d3d11_present_host(), frame); },
-    [](uint64_t* count) {
-        rsf_streamline_latency_status status{}; status.struct_size = sizeof(status);
-        const auto result = rsf_streamline_host_latency_status(rsf_d3d11_present_host(), &status);
-        *count = status.sleep_calls;
-        return result;
-    },
-    [](uint64_t frame) { marker_reentry_source = frame; },
-    [] { return marker_reentries; },
+    rsf_ac7_fixture_marker_token,
+    rsf_ac7_fixture_marker_sleep_count,
+    rsf_ac7_fixture_marker_reenter,
+    rsf_ac7_fixture_marker_reentries,
 };
 } // namespace
 
@@ -238,14 +205,6 @@ extern "C" void rsf_ac7_fixture_install_exception_filter() {
         }
         return EXCEPTION_EXECUTE_HANDLER;
     });
-}
-
-extern "C" void rsf_ac7_fixture_log(void* user, const char* message) {
-    log_message(user, message);
-}
-
-extern "C" int rsf_ac7_fixture_run_markers(void* chain) {
-    return rsf_d3d11_marker_fixture(chain, &marker_calls);
 }
 
 extern "C" int rsf_ac7_fixture_run_guarded(rsf_ac7_loop* loop, void* device, void* context,
@@ -269,8 +228,7 @@ extern "C" int rsf_ac7_fixture_run_guarded(rsf_ac7_loop* loop, void* device, voi
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const rsf_ac7_fixture_calls calls{
-        rsf_ac7_fixture_install_exception_filter, rsf_ac7_fixture_log,
-        rsf_ac7_fixture_run_markers, rsf_ac7_fixture_run_guarded,
+        rsf_ac7_fixture_install_exception_filter, &marker_calls, rsf_ac7_fixture_run_guarded,
     };
     return rsf_d3d11_fixture_main(argc, argv, &calls);
 }

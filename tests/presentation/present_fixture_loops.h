@@ -2,10 +2,12 @@
 #pragma once
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_sr_d3d12.h>
+#include <rescaleframe/native_scene.h>
 #include <rescaleframe/native_window.h>
 #include <rescaleframe/overlay_d3d12.h>
 #include <rescaleframe/native_cpu.h>
 #include "device_fixture_bridge.h"
+#include "d3d11_marker_bridge.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -60,11 +62,19 @@ int rsf_d3d11_fixture_token_matches(uint64_t id, uint32_t expected);
 /* AC7 commands and exception handling stay in the native translation unit. */
 typedef struct rsf_ac7_fixture_calls {
     void (*install_exception_filter)(void);
-    rsf_backend_log_fn log;
-    int (*run_markers)(void* chain);
+    const rsf_d3d11_marker_fixture_calls* marker_calls;
     int (*run_guarded)(rsf_ac7_loop*, void* device, void* context,
         void* hudless, void* hudless_target, rsf_dlss_frame*, uint32_t stall_ms);
 } rsf_ac7_fixture_calls;
+
+void rsf_ac7_fixture_log(void*, const char*);
+void rsf_ac7_fixture_marker_configure(void);
+uint64_t rsf_ac7_fixture_marker_stamp(void);
+uint64_t rsf_ac7_fixture_marker_frequency(void);
+void* rsf_ac7_fixture_marker_token(uint64_t id);
+int rsf_ac7_fixture_marker_sleep_count(uint64_t* count);
+void rsf_ac7_fixture_marker_reenter(uint64_t id);
+uint32_t rsf_ac7_fixture_marker_reentries(void);
 
 int rsf_d3d11_fixture_main(int argc, char** argv, const rsf_ac7_fixture_calls*);
 int rsf_fg_fixture_main(int argc, char** argv);
