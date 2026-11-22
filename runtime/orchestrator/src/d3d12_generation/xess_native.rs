@@ -2,12 +2,7 @@
 use super::*;
 use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 
-// bindgen output: SDK typedef aliases and bitfield accessors.
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
-#[allow(unused_imports, clippy::ptr_offset_with_cast)]
-#[path = "xess_abi.rs"]
-mod abi;
-use abi::*;
+use rsf_vk_xess_fg::sdk::*;
 use std::ffi::CStr;
 use windows::Win32::{
     Foundation::HANDLE,

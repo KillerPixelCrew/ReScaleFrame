@@ -753,6 +753,7 @@ dependencies = [
  "rsf-runtime-submission",
  "rsf-shader-compiler",
  "rsf-streamline-vk",
+ "rsf-vk-xess-fg",
  "windows",
  "windows-sys",
 ]
@@ -904,6 +905,14 @@ name = "rsf-vk-fsr3"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+]
+
+[[package]]
+name = "rsf-vk-xess-fg"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
+ "windows-sys",
 ]
 
 [[package]]

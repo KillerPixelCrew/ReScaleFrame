@@ -36,6 +36,7 @@ rsf-bindgen = { path = "../../tools/bindgen" }
 workspace = true
 
 [target."cfg(windows)".dependencies]
+rsf-vk-xess-fg = { path = "../vulkan/xess-fg" }
 ash = { workspace = true }
 rsf-shader-compiler = { path = "../shader_patch/compiler", default-features = false }
 windows = { workspace = true, features = [

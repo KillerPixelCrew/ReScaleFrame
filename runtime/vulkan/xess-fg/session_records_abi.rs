@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 
-pub const RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION: u32 = 8;
 pub const RSF_XESS_BRIDGE_ALLOCATOR_COUNT: u32 = 3;
 #[repr(C)]
 #[derive(Default, Copy, Clone)]

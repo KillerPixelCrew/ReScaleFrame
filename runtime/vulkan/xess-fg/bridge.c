@@ -1186,8 +1186,6 @@ static void AttachCapture(rsf_vk_xess_fg* value, rsf_xess_capture_owner* capture
 }
 
 static const rsf_xess_bridge_platform Platform = {
-    .struct_size = sizeof(rsf_xess_bridge_platform),
-    .abi_version = RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION,
     .allocate = Allocate,
     .release_native = ReleaseNative,
     .load_runtime = LoadRuntime,

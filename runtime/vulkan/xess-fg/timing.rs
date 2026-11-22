@@ -16,15 +16,15 @@ pub(super) enum Phase {
 }
 
 #[repr(C)]
-pub(crate) struct GpuSample {
-    pub(crate) start: u64,
-    pub(crate) copies_end: u64,
-    pub(crate) end: u64,
-    pub(crate) frequency: u64,
-    pub(crate) calibration_gpu: u64,
-    pub(crate) calibration_cpu: u64,
-    pub(crate) present_enter: i64,
-    pub(crate) present_exit: i64,
+pub struct GpuSample {
+    pub start: u64,
+    pub copies_end: u64,
+    pub end: u64,
+    pub frequency: u64,
+    pub calibration_gpu: u64,
+    pub calibration_cpu: u64,
+    pub present_enter: i64,
+    pub present_exit: i64,
 }
 
 #[repr(C)]
@@ -145,7 +145,7 @@ impl Batch {
 // Kept at a stable address by the session. The GPU callback and XeLL
 // sleep can sample it without borrowing the mutable presentation owner.
 #[derive(Default)]
-pub(crate) struct Accumulator(Mutex<Batch>);
+pub struct Accumulator(Mutex<Batch>);
 
 impl Accumulator {
     pub(super) fn cpu_sample(&self, phase: u32, start: i64, end: i64, frequency: i64) {
@@ -175,7 +175,7 @@ extern "C" fn rsf_core_xess_timing_cpu(
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_xess_timing_gpu(
+pub extern "C" fn rsf_core_xess_timing_gpu(
     timing: &Accumulator,
     sample: &GpuSample,
     cpu_frequency: i64,

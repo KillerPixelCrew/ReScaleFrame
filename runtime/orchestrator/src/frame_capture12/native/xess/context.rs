@@ -128,7 +128,7 @@ extern "C" fn rsf_core_xess_dx12_swapchain_desc(
 }
 
 const SLOTS: usize =
-    crate::xess_fg_bridge::session_records_abi::RSF_XESS_BRIDGE_ALLOCATOR_COUNT as usize;
+    rsf_vk_xess_fg::session_records_abi::RSF_XESS_BRIDGE_ALLOCATOR_COUNT as usize;
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_xess_dx12_recorders(

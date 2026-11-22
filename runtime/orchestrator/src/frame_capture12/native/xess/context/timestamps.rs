@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, SLOTS, borrow, execute, readback_buffer};
 use crate::allocate_handle;
-use crate::xess_fg_bridge::timing::{Accumulator, GpuSample, rsf_core_xess_timing_gpu};
+use rsf_vk_xess_fg::timing::{Accumulator, GpuSample, rsf_core_xess_timing_gpu};
 use std::ptr;
 use windows::Win32::Graphics::Direct3D12::*;
 

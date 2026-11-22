@@ -2,7 +2,7 @@
 .SYNOPSIS
 Compiles the retained XeSS frame-generation Vulkan/DX12 bridge DLL.
 .DESCRIPTION
-Builds the shared Rust session for x86_64-pc-windows-gnu and links it with the C11 bridge leaves using gcc. Replaces Output only after a successful link.
+Builds the rsf-vk-xess-fg archive for x86_64-pc-windows-gnu with Cargo and links it with the C11 bridge leaves using gcc. Replaces Output only after a successful link.
 .PARAMETER SdkRoot
 XeSS SDK root containing inc/xess_fg/xefg_swapchain_d3d12.h.
 .PARAMETER Output
@@ -21,7 +21,6 @@ $include = Join-Path $sdk 'inc'
 if (-not $VulkanSdkRoot) { throw 'Specify -VulkanSdkRoot or set VULKAN_SDK.' }
 $vulkan = Join-Path (Resolve-Path -LiteralPath $VulkanSdkRoot).Path 'Include'
 $compiler = (Get-Command gcc.exe -ErrorAction Stop).Source
-$rustCompiler = (Get-Command rustc.exe -ErrorAction Stop).Source
 if (-not (Test-Path -LiteralPath (Join-Path $include 'xess_fg/xefg_swapchain_d3d12.h'))) {
     throw 'XeSS 3 SDK frame generation headers are required'
 }
@@ -33,27 +32,20 @@ $targetDirectory = Split-Path $target
 New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
 $temporaryBase = Join-Path $targetDirectory ('VulkanStoryXessFg-' + [Guid]::NewGuid().ToString('N'))
 $temporary = "$temporaryBase.tmp.dll"
-$rustArchive = "$temporaryBase.a"
+$cargoTarget = "$temporaryBase-cargo"
 try {
+    $rustTarget = 'x86_64-pc-windows-gnu'
     Push-Location -LiteralPath (Join-Path $PSScriptRoot '../../..')
     try {
-        # The session reads the frame record from rsf-game-sys, whose build script generates the
-        # public SDK bindings (it needs libclang, see docs/tooling.md).
-        $cargoTarget = Join-Path $targetDirectory 'VulkanStoryXessFg-cargo'
-        & (Get-Command cargo.exe -ErrorAction Stop).Source build --locked --release -p rsf-game-sys `
-            --target x86_64-pc-windows-gnu --target-dir $cargoTarget
-        if ($LASTEXITCODE -ne 0) { throw "rsf-game-sys build failed: $LASTEXITCODE" }
-        $rlibs = Join-Path $cargoTarget 'x86_64-pc-windows-gnu/release'
-        & $rustCompiler --edition=2024 --crate-name rsf_xess_fg_session --crate-type staticlib `
-            --target x86_64-pc-windows-gnu -C opt-level=2 -C panic=abort -D unsafe_op_in_unsafe_fn `
-            --extern "rsf_game_sys=$(Join-Path $rlibs 'librsf_game_sys.rlib')" `
-            -L "dependency=$(Join-Path $rlibs 'deps')" `
-            (Join-Path $PSScriptRoot 'session.rs') -o $rustArchive
+        # rsf-game-sys generates the public SDK bindings at build time (libclang, see docs/tooling.md).
+        & (Get-Command cargo.exe -ErrorAction Stop).Source build --locked --release -p rsf-vk-xess-fg `
+            --target $rustTarget --target-dir $cargoTarget
         if ($LASTEXITCODE -ne 0) { throw "XeSS-FG Rust session compilation failed: $LASTEXITCODE" }
     }
     finally {
         Pop-Location
     }
+    $rustArchive = Join-Path $cargoTarget "$rustTarget/release/librsf_vk_xess_fg.a"
     & $compiler -std=c11 -O2 -shared -static -Wall -Wextra -I $include -I $vulkan `
         (Join-Path $PSScriptRoot 'bridge.c') (Join-Path $PSScriptRoot '../../../integrations/vulkanstory/native/xess_fg.def') $rustArchive -o $temporary `
         -ld3d12 -ldxgi -ldxguid -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp
@@ -61,7 +53,6 @@ try {
     Move-Item -LiteralPath $temporary -Destination $target -Force
 }
 finally {
-    foreach ($artifact in @($temporary, $rustArchive)) {
-        if (Test-Path -LiteralPath $artifact) { Remove-Item -LiteralPath $artifact -Force }
-    }
+    if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    if (Test-Path -LiteralPath $cargoTarget) { Remove-Item -LiteralPath $cargoTarget -Recurse -Force }
 }

@@ -1,0 +1,21 @@
+[package]
+name = "rsf-vk-xess-fg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The Runtime links the rlib; build.ps1 links the archive with bridge.c into VulkanStoryXessFg.dll.
+[lib]
+path = "session.rs"
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+rsf-game-sys = { path = "../../../sdk/game" }
+
+[dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Memory", "Win32_System_SystemInformation"] }
+
+[lints]
+workspace = true

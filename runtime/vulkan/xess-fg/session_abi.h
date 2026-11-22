@@ -43,7 +43,6 @@ void rsf_core_xess_timing_gpu(const rsf_xess_timing*, const rsf_xess_timing_gpu_
    Only the Rust session may retire the capsule and its Win32 leases. The host
    serializes start, completion-event use, and retirement against presentation. */
 typedef struct rsf_xess_bridge_platform {
-    uint32_t struct_size, abi_version;
     rsf_xess_bridge* (*allocate)(rsf_xess_bridge_session*, const rsf_xess_timing*);
     void (*release_native)(rsf_xess_bridge*);
     int32_t (*load_runtime)(const uint16_t*, rsf_xess_bridge_modules*);
@@ -123,27 +122,27 @@ _Static_assert(sizeof(rsf_xess_bridge_resource_desc) == 16 && _Alignof(rsf_xess_
 _Static_assert(offsetof(rsf_xess_bridge_resource_desc, height) == 8, "bridge platform layout");
 _Static_assert(offsetof(rsf_xess_bridge_resource_desc, format) == 12, "bridge platform layout");
 _Static_assert(sizeof(rsf_xess_bridge_sdk_entries) == 18 * sizeof(void*), "bridge platform layout");
-_Static_assert(sizeof(rsf_xess_bridge_platform) == 552 && _Alignof(rsf_xess_bridge_platform) == 8, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, allocate) == 8, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, init_swapchain) == 112, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, bind_diagnostics) == 168, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, read_completion) == 184, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, unregister_diagnostics) == 216, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, destroy_xell) == 240, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, has_shared_queue) == 248, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, describe_present_resource) == 256, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, transition_present_resource) == 272, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, acquire_backbuffer) == 280, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, tag_present_resource) == 296, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, release_backbuffer) == 304, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, wait_shared) == 328, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, read_present_status) == 376, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, serialize_enabled) == 448, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, attach_capture) == 456, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, capture_footprint) == 488, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, capture_unmap) == 528, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, lookup_export) == 536, "bridge platform layout");
-_Static_assert(offsetof(rsf_xess_bridge_platform, bind_runtime) == 544, "bridge platform layout");
+_Static_assert(sizeof(rsf_xess_bridge_platform) == 544 && _Alignof(rsf_xess_bridge_platform) == 8, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, allocate) == 0, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, init_swapchain) == 104, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, bind_diagnostics) == 160, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, read_completion) == 176, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, unregister_diagnostics) == 208, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, destroy_xell) == 232, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, has_shared_queue) == 240, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, describe_present_resource) == 248, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, transition_present_resource) == 264, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, acquire_backbuffer) == 272, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, tag_present_resource) == 288, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, release_backbuffer) == 296, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, wait_shared) == 320, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, read_present_status) == 368, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, serialize_enabled) == 440, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, attach_capture) == 448, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, capture_footprint) == 480, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, capture_unmap) == 520, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, lookup_export) == 528, "bridge platform layout");
+_Static_assert(offsetof(rsf_xess_bridge_platform, bind_runtime) == 536, "bridge platform layout");
 
 int32_t rsf_core_xess_bridge_create(const rsf_xess_bridge_platform*, uint64_t, const uint16_t*, rsf_xess_bridge**);
 int32_t rsf_core_xess_bridge_create_integrated(const rsf_xess_bridge_platform*, const rsf_xess_bridge_create*, rsf_xess_bridge**);

@@ -16,6 +16,7 @@ members = [
   "runtime/vulkan/fsr3",
   "runtime/vulkan/ngx",
   "runtime/vulkan/streamline/lifecycle",
+  "runtime/vulkan/xess-fg",
   "runtime/common",
   "runtime/graphics/rust",
   "runtime/graphics/submission",

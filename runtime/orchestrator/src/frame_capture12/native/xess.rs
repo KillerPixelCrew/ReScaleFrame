@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, readback_buffer, resource_field, transition};
-use crate::xess_fg_bridge::session_records_abi::{
+use rsf_vk_xess_fg::session_records_abi::{
     rsf_xess_bridge_resource_desc, rsf_xess_bridge_shared_image_desc, rsf_xess_capture_desc,
 };
 use std::{ffi::c_void, ptr};

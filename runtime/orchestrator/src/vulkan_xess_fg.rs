@@ -13,9 +13,8 @@ use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
 use crate::vulkan_dx12_fg::{self as shared, *};
 use crate::vulkan_latency_frames::{Marker, legacy_present_source};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
-#[path = "../../vulkan/xess-fg/bridge_abi.rs"]
-mod bridge_abi;
+// Linking the XeSS session also provides the rsf_core_xess_bridge_* entries bridge.c calls.
+use rsf_vk_xess_fg::bridge_abi;
 use crate::sys::rsf_xessgvk_options as Options;
 use bridge_abi::{
     RSF_XESS_BRIDGE_ABI_MISMATCH as XESS_ABI_MISMATCH, RSF_XESS_BRIDGE_ABI_VERSION as BRIDGE_ABI,

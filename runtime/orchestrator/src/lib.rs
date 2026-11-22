@@ -349,9 +349,6 @@ mod vulkan_timing;
 mod vulkan_xess_fg;
 #[cfg(windows)]
 mod win32_diagnostics;
-#[cfg(windows)]
-#[path = "../../vulkan/xess-fg/session.rs"]
-mod xess_fg_bridge;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rsf_get_runtime_version() -> *const std::ffi::c_char {
