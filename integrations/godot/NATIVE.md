@@ -531,12 +531,14 @@ exported players, NVIDIA, Intel, AMD and software-device runs, and the visual ha
 2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
    contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
    Residual: the readback's extent check against a velocity override (see that slice).
-3. The SCons engine module's C++ still holds the camera matrices and the previous camera they
-   and the camera jump distance come from, the SR and final-scene pass and packet construction,
-   motion resolve (`motion.cpp`), the Vulkan graph scope (`graph.cpp`), the D3D12 and Vulkan
-   driver patches (`d3d12.cpp`, `vulkan.cpp`), and the direct Dictionary option parser, now a
-   `configure` leaf. Boot, configure and shutdown order, the ready, enabled, session and
-   requested SR state, and the status-driven extent updates are in `host.rs`; CPU frame
+3. The SCons engine module's C++ still holds the Godot camera matrix math and the previous
+   camera transform and projection it and the camera jump distance come from, the native texture
+   handles, packets and Vulkan image descriptions, motion resolve (`motion.cpp`), the Vulkan
+   graph scope (`graph.cpp`), the D3D12 and Vulkan driver patches (`d3d12.cpp`, `vulkan.cpp`),
+   and the direct Dictionary option parser, now a `configure` leaf. The SR and final-scene pass
+   records (identity, keys, flags, screen class, driver route, camera scalars and the last
+   recorded SR pass) are in `pass.rs`. Boot, configure and shutdown order, the ready, enabled,
+   session and requested SR state, and the status-driven extent updates are in `host.rs`; CPU frame
    lifecycle and render frame identity are in `frame.rs`; primary viewport and target identity,
    render admission and the history reset rules are in `primary.rs` (see below). Native
    callbacks supply CPU facts to the Rust record builder before passing them to `window.rs`
@@ -823,11 +825,80 @@ configure, resize and shutdown sequence.
 Remaining in the engine module after this slice: the SR pass construction in `upscale` (camera
 matrices, jitter, the previous camera and projection, the camera jump distance input, the
 Vulkan image descriptions) and the final-scene pass in `hudless`, `motion.cpp`'s resolve pass,
-`graph.cpp`'s graph scope, and the `d3d12.cpp` and `vulkan.cpp` driver patch leaves. These are
-Godot rendering device and driver calls with little policy; moving the pass record assembly
-would need a Rust mirror of `rsf_game_render_pass` and the camera record, which this module does
-not have yet. The direct singleton parser stays a C++ leaf until a compatibility review decides
-whether it should share `extension.rs`'s checked parser.
+`graph.cpp`'s graph scope, and the `d3d12.cpp` and `vulkan.cpp` driver patch leaves. The pass
+records moved in the next slice. The direct singleton parser stays a C++ leaf until a
+compatibility review decides whether it should share `extension.rs`'s checked parser.
+
+## Engine module SR and final-scene pass records
+
+Relative to RSF `798084c7`, `pass.rs` in the same private SCons object decides the SR and
+final-scene pass records that `upscale` and `hudless` assembled field by field, and keeps the last
+recorded SR pass that `last_pass` held. `pass.h` declares the private C linkage, the private
+`rsf_godot_pass_record` and `rsf_godot_sr_facts` records, and asserts their layouts, every
+`rsf_camera_frame` offset, and the role, flag, screen and camera ABI values. `pass.rs` mirrors
+`rsf_camera_frame` (camera ABI 1, 384 bytes) and asserts the same offsets. The public pass has no
+Rust mirror: the C++ copies the record's non-pointer fields into a zeroed `rsf_game_render_pass`
+(`pass_from`) and sets the native resource pointers per route. The SDK's bindgen crate was not
+reused because the SCons object is a standalone `no_std` rustc invocation with no crate
+dependencies. `primary.rs`'s decision, recording and final-scene admission are now crate
+functions called from `pass.rs`; their C linkage and `rsf_godot_sr_identity` are gone. Nothing
+new is exported from the Godot executable or the native DLL; `rsf_game_render_pass`,
+`rsf_godot_vk_packet`, every `rsfg_*` call, `motion.cpp`'s shader and the patch sites are
+unchanged.
+
+Rust decides: role (SR, then FINAL_SCENE for the repeat), session (`host.rs`), source and native
+frame, the view, history and viewport key (the render target), `PRIMARY` plus `RESET` from the
+`primary.rs` decision, the resource generation, the screen class (FLIGHT in gameplay, else
+MENU), `motion_to_uv` `-1, -1`, `motion_camera_included` and `camera_valid` `1`, the camera
+struct size and ABI, render extent (internal size), output extent (target size), near, far and
+vertical FOV as Godot reports them, `depth_inverted` `1`, the frame time narrowed to float, and
+the jitter in pixels as `jitter * render_extent * 0.5` in single precision in the old order. The
+route comes from admission's driver fact: Vulkan uses the motion pass's `depth_r32` copy as SR
+depth, samples the final-scene color and uses the Vulkan packet; D3D12 uses Godot's depth, a
+color attachment read-write usage and the D3D12 packet.
+
+The C++ keeps the Godot reads, the FOV conversion, the projection depth correction and the five
+camera matrices plus `previous_clip_to_clip` (identity reprojection on reset, as before),
+`resolve_motion`, the resolved texture checks, the previous projection and camera assignments,
+native texture handles, callback resources, packets, the Vulkan image descriptions and
+`driver_callback_add`.
+
+Preserved per route, compared line by line with `798084c7`:
+
+- SR: admission, `ensure_upscaled`, the four texture checks, the decision (generation increment
+  and consumed reset request even for passes later refused), the matrices, resolve, the depth
+  route and its check, then the previous camera and projection, the `primary.rs` recording
+  (extent, color, `frame.rs` evaluation, recorded source) and the last pass, in that order. A
+  refused pass records nothing. The packet's pass carries the same four native pointers.
+- Final scene: admission with the recorded source equal to the current frame, the primary
+  target's slice and its check, then the last SR pass with the final-scene role, no SR
+  resources, the slice as color input, and the camera output extent in the Vulkan color image.
+- `motion_jittered` stays zero and every other pass field stays zero, as before.
+
+Intentional differences: the native texture handles for the SR pass are read after the resolve
+instead of before it, and the unresolved depth and motion handles the old code stored and then
+overwrote are no longer read. The final-scene plan runs before the slice read. The packet's
+route and the final scene's usage use admission's driver fact, read from the same rendering
+driver name, instead of reading the name again. All are pure queries. A `real_t` size assertion
+makes the single-precision Godot build, which `eng/build-godot-engine.ps1` uses, a compile-time
+requirement. The last pass is a Rust static behind an `UnsafeCell` that only the rendering
+server thread touches, as the C++ global was.
+
+Source evidence: field types checked against Godot `ed1daf0bf001b61586d9930840f2f1394092c079`
+(`RenderSceneDataRD::z_near` and `z_far` are `float`, `taa_jitter` and `prev_taa_jitter` are
+`Vector2`, `real_t` is `float` without `precision=double`) and against the SDK headers. A scratch
+`rustc` probe confirmed that write-only fields of public `repr(C)` records reached through
+exported functions raise no `dead_code` warning. Checks: rustfmt 1.11.0 `--edition 2024 --check`
+of the object's crate root (the pinned 1.94.1 toolchain is not installed), locked offline Cargo
+metadata and `git diff --check`. Not run: SCons compilation and linkage, the `-Dwarnings` Rust
+object build, symbol checks, Clippy, Cargo tests, CTest, editor and exported player runs on D3D12
+and Vulkan, and a capture comparing pass contents before and after.
+
+Remaining in the engine module: the Godot camera matrix math and the previous camera transform
+and projection (a Rust port would have to reproduce Godot's `Projection` and `Transform3D`
+inverses bit for bit), `motion.cpp`'s resolve pass and shader, `graph.cpp`'s graph scope, the
+`d3d12.cpp` and `vulkan.cpp` driver patch leaves, the native handle and packet assembly, and the
+singleton's Dictionary parser.
 
 ## Build requirements
 

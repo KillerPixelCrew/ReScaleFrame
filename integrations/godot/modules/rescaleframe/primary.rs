@@ -14,7 +14,7 @@ use crate::frame;
 
 // primary.h defines these driver facts.
 const DRIVER_D3D12: u32 = 1;
-const DRIVER_VULKAN: u32 = 2;
+pub(crate) const DRIVER_VULKAN: u32 = 2;
 
 const MAX_FRAME_SECONDS: f64 = 0.25;
 const MAX_CAMERA_DISTANCE: f64 = 20.0;
@@ -27,26 +27,25 @@ pub struct Admission {
     host_active: u32,
     buffers_valid: u32,
     view_count: u32,
-    driver: u32,
+    pub(crate) driver: u32,
 }
 
 /// Engine facts read by the SR hook after its textures are known valid.
 #[repr(C)]
 pub struct History {
-    color: u64,
-    internal_width: i32,
-    internal_height: i32,
-    frame_seconds: f64,
+    pub(crate) color: u64,
+    pub(crate) internal_width: i32,
+    pub(crate) internal_height: i32,
+    pub(crate) frame_seconds: f64,
     camera_distance: f64,
     sequence_break: u32,
-    reserved: u32,
+    _reserved: u32,
 }
 
 /// The SR pass identity decided from `History`.
-#[repr(C)]
-pub struct Identity {
-    resource_generation: u32,
-    reset: u32,
+pub(crate) struct Identity {
+    pub(crate) resource_generation: u32,
+    pub(crate) reset: bool,
 }
 
 const _: () = {
@@ -64,9 +63,6 @@ const _: () = {
     assert!(offset_of!(History, frame_seconds) == 16);
     assert!(offset_of!(History, camera_distance) == 24);
     assert!(offset_of!(History, sequence_break) == 32);
-    assert!(size_of::<Identity>() == 8 && align_of::<Identity>() == 4);
-    assert!(offset_of!(Identity, resource_generation) == 0);
-    assert!(offset_of!(Identity, reset) == 4);
 };
 
 struct Primary {
@@ -151,27 +147,16 @@ pub unsafe extern "C" fn rsf_godot_sr_admit(facts: *const Admission) -> u32 {
     admit(unsafe { &*facts }) as u32
 }
 
-/// Rendering server thread: the final-scene hook may record a pass. It also requires the last
-/// recorded SR pass to carry this frame's identity.
-///
-/// # Safety
-/// `facts` must point to a valid `rsf_godot_render_admission`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_godot_final_scene_admit(facts: *const Admission) -> u32 {
-    let facts = unsafe { &*facts };
-    (admit(facts) && PRIMARY.recorded_source.load(R) == facts.source_frame_id) as u32
+/// Rendering server thread: the final-scene hook may record a pass (`pass.rs`). It also requires
+/// the last recorded SR pass to carry this frame's identity.
+pub(crate) fn final_scene_admitted(facts: &Admission) -> bool {
+    admit(facts) && PRIMARY.recorded_source.load(R) == facts.source_frame_id
 }
 
-/// Rendering server thread: decides the SR pass generation and history reset. A new internal
-/// color texture is a new generation even if the pass is later refused. The reset request is
-/// consumed first, so it is consumed by every pass that reaches this point.
-///
-/// # Safety
-/// `facts` must point to a valid `rsf_godot_sr_history` and `out` to writable, aligned storage
-/// for one `rsf_godot_sr_identity`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_godot_sr_decide(facts: *const History, out: *mut Identity) {
-    let facts = unsafe { &*facts };
+/// Rendering server thread: decides the SR pass generation and history reset (`pass.rs`). A new
+/// internal color texture is a new generation even if the pass is later refused. The reset
+/// request is consumed first, so it is consumed by every pass that reaches this point.
+pub(crate) fn decide(facts: &History) -> Identity {
     let color_changed = PRIMARY.previous_color.load(R) != facts.color;
     if color_changed {
         PRIMARY.generation.fetch_add(1, R);
@@ -183,17 +168,15 @@ pub unsafe extern "C" fn rsf_godot_sr_decide(facts: *const History, out: *mut Id
         || facts.sequence_break != 0
         || facts.frame_seconds > MAX_FRAME_SECONDS
         || facts.camera_distance > MAX_CAMERA_DISTANCE;
-    let value = Identity {
+    Identity {
         resource_generation: PRIMARY.generation.load(R),
-        reset: reset as u32,
-    };
-    unsafe { out.write(value) };
+        reset,
+    }
 }
 
 /// Rendering server thread: the SR pass for this frame was recorded with this color texture
-/// and internal extent.
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_godot_sr_recorded(
+/// and internal extent (`pass.rs`).
+pub(crate) fn recorded(
     source_frame_id: u64,
     color: u64,
     internal_width: i32,

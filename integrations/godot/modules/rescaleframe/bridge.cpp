@@ -5,6 +5,7 @@
 #include "frame.h"
 #include "graph.h"
 #include "host.h"
+#include "pass.h"
 #include "primary.h"
 #include "viewport.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
@@ -67,10 +68,11 @@ decltype(&rsfg_shutdown) native_shutdown = nullptr;
 HMODULE native_module = nullptr;
 String boot_runtime, boot_id;
 // primary.rs keeps the primary viewport and target identity, the resource generation and the
-// history reset state. The camera matrices of the last recorded SR pass stay here.
+// history reset state; pass.rs keeps the last recorded SR pass. The Godot camera transform and
+// projection of the last recorded SR pass stay here for the reprojection math.
 Projection previous_projection;
 Transform3D previous_camera;
-rsf_game_render_pass last_pass{};
+static_assert(sizeof(real_t) == sizeof(float), "pass.rs takes Godot's jitter and camera scalars as float");
 
 int configure_from_extension(const rsf_godot_settings *value, uint64_t viewport_id) {
     if (!value || value->struct_size < sizeof(*value) || value->abi_version != RSF_GODOT_SETTINGS_ABI_VERSION) return 0;
@@ -141,6 +143,19 @@ void matrix(float *out, const Projection &value) {
     for (int row = 0; row < 4; ++row)
         for (int column = 0; column < 4; ++column) out[row * 4 + column] = value.columns[row][column];
 }
+// The public pass from pass.rs's record. The native resource pointers stay null for the caller.
+rsf_game_render_pass pass_from(const rsf_godot_pass_record &record) {
+    rsf_game_render_pass pass{};
+    pass.struct_size = sizeof(pass); pass.role = record.role;
+    pass.session_id = record.session_id; pass.source_frame_id = pass.native_frame = record.source_frame_id;
+    pass.view_key = pass.history_key = pass.viewport_key = record.key;
+    pass.flags = record.flags; pass.resource_generation = record.resource_generation; pass.screen = record.screen;
+    pass.motion_to_uv[0] = record.motion_to_uv[0]; pass.motion_to_uv[1] = record.motion_to_uv[1];
+    pass.motion_camera_included = record.motion_camera_included; pass.camera_valid = record.camera_valid;
+    pass.camera = record.camera;
+    std::memcpy(pass.previous_clip_to_clip, record.previous_clip_to_clip, sizeof(pass.previous_clip_to_clip));
+    return pass;
+}
 String disk_path(const String &value) {
     auto *project_settings = ProjectSettings::get_singleton();
     String path = project_settings->globalize_path(value);
@@ -193,11 +208,12 @@ rsf_godot_render_admission admission(const RenderDataRD *data, uint64_t frame) {
     facts.driver = driver == "d3d12" ? RSF_GODOT_DRIVER_D3D12 : driver == "vulkan" ? RSF_GODOT_DRIVER_VULKAN : RSF_GODOT_DRIVER_OTHER;
     return facts;
 }
-Packet *packet_for(const rsf_game_render_pass &pass) {
+// The admitted route's driver, which admission read from the same rendering driver name.
+Packet *packet_for(const rsf_game_render_pass &pass, bool vulkan) {
     RD *rd = RD::get_singleton();
     Packet *packet = memnew(Packet);
     packet->pass = pass;
-    packet->vulkan = RenderingServer::get_singleton()->get_current_rendering_driver_name() == "vulkan";
+    packet->vulkan = vulkan;
     packet->device = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_LOGICAL_DEVICE));
     if (!packet->vulkan) packet->queue = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_COMMAND_QUEUE));
     return packet;
@@ -416,62 +432,43 @@ void upscale(const RenderDataRD *data, double) {
     const RID color = rb->get_internal_texture(0), depth = rb->get_depth_texture(0), motion = rb->get_velocity_buffer(false, 0), output = rb->get_upscaled_texture(0);
     if (!color.is_valid() || !depth.is_valid() || !motion.is_valid() || !output.is_valid()) return;
     const RenderSceneDataRD *scene = data->scene_data;
-    rsf_game_render_pass pass{};
-    pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR;
-    pass.session_id = rsf_godot_host_session(); pass.source_frame_id = pass.native_frame = frame.source_frame_id;
-    pass.view_key = pass.history_key = pass.viewport_key = rb->get_render_target().get_id();
-    pass.flags = RSF_GAME_RENDER_PRIMARY;
-    const Vector2i internal = rb->get_internal_size();
-    const rsf_godot_sr_history history{color.get_id(), internal.x, internal.y, frame.frame_seconds,
-        double(previous_camera.origin.distance_to(scene->cam_transform.origin)), frame.sequence_break, 0};
-    rsf_godot_sr_identity identity;
-    rsf_godot_sr_decide(&history, &identity);
-    pass.resource_generation = identity.resource_generation;
-    pass.screen = frame.gameplay ? RSF_SCREEN_FLIGHT : RSF_SCREEN_MENU;
-    if (identity.reset) pass.flags |= RSF_GAME_RENDER_RESET;
-    auto native = [rd](RID texture) { return reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture)); };
-    pass.color_input = native(color); pass.color_output = native(output); pass.depth = native(depth); pass.motion = native(motion);
-    pass.motion_to_uv[0] = pass.motion_to_uv[1] = -1;
-    pass.motion_camera_included = 1; pass.camera_valid = 1;
-    auto &camera = pass.camera;
-    camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-    camera.render_width = rb->get_internal_size().x; camera.render_height = rb->get_internal_size().y;
-    camera.output_width = rb->get_target_size().x; camera.output_height = rb->get_target_size().y;
-    camera.near_plane = scene->z_near; camera.far_plane = scene->z_far;
-    camera.vertical_fov_radians = Math::deg_to_rad(scene->cam_projection.get_fovy(scene->cam_projection.get_fov(), 1.0 / scene->cam_projection.get_aspect()));
-    camera.depth_inverted = 1; camera.frame_time_seconds = float(frame.frame_seconds);
-    camera.jitter_pixels[0] = scene->taa_jitter.x * camera.render_width * 0.5f;
-    camera.jitter_pixels[1] = scene->taa_jitter.y * camera.render_height * 0.5f;
-    camera.previous_jitter_pixels[0] = scene->prev_taa_jitter.x * camera.render_width * 0.5f;
-    camera.previous_jitter_pixels[1] = scene->prev_taa_jitter.y * camera.render_height * 0.5f;
+    const Vector2i internal = rb->get_internal_size(), target = rb->get_target_size();
+    const rsf_godot_sr_facts sr{
+        {color.get_id(), internal.x, internal.y, frame.frame_seconds,
+            double(previous_camera.origin.distance_to(scene->cam_transform.origin)), frame.sequence_break, 0},
+        frame.source_frame_id, rb->get_render_target().get_id(), target.x, target.y, scene->z_near, scene->z_far,
+        Math::deg_to_rad(scene->cam_projection.get_fovy(scene->cam_projection.get_fov(), 1.0 / scene->cam_projection.get_aspect())),
+        {scene->taa_jitter.x, scene->taa_jitter.y}, {scene->prev_taa_jitter.x, scene->prev_taa_jitter.y},
+        frame.gameplay, facts.driver, 0};
+    rsf_godot_pass_record record;
+    rsf_godot_sr_plan(&sr, &record);
+    auto &camera = record.camera;
     // SDK clip space has +Y up. Godot's render-target Y flip is already reflected
     // in its texture-space velocity and must not be applied to camera metadata.
     Projection correction; correction.set_depth_correction(false);
     const Projection projection = correction * scene->cam_projection;
     matrix(camera.view_to_clip, projection); matrix(camera.clip_to_view, projection.inverse());
     matrix(camera.view_to_world, Projection(scene->cam_transform)); matrix(camera.world_to_view, Projection(scene->cam_transform.affine_inverse()));
-    const Projection to_previous = (pass.flags & RSF_GAME_RENDER_RESET) ? Projection() :
+    const Projection to_previous = (record.flags & RSF_GAME_RENDER_RESET) ? Projection() :
         previous_projection * Projection(previous_camera.affine_inverse() * scene->cam_transform) * projection.inverse();
     matrix(camera.clip_to_previous_clip, to_previous);
-    matrix(pass.previous_clip_to_clip, to_previous.inverse());
+    matrix(record.previous_clip_to_clip, to_previous.inverse());
     const RID resolved_motion = resolve_motion(rb, depth, motion, to_previous, scene->taa_jitter);
     if (!resolved_motion.is_valid()) return;
-    const RID resolved_depth = RenderingServer::get_singleton()->get_current_rendering_driver_name() == "vulkan" ?
-        rb->get_texture(StringName("rescaleframe"), StringName("depth_r32")) : depth;
+    const RID resolved_depth = record.normalized_depth ? rb->get_texture(StringName("rescaleframe"), StringName("depth_r32")) : depth;
     if (!resolved_depth.is_valid()) return;
-    pass.depth = native(resolved_depth);
-    pass.motion = native(resolved_motion);
     previous_projection = projection; previous_camera = scene->cam_transform;
-    rsf_godot_sr_recorded(frame.source_frame_id, color.get_id(), rb->get_internal_size().x, rb->get_internal_size().y);
-    last_pass = pass;
-    last_pass.color_input = last_pass.color_output = last_pass.depth = last_pass.motion = last_pass.exposure = nullptr;
-    last_pass.color_output_readable = last_pass.ui_input = last_pass.swapchain = last_pass.scene_surface = last_pass.sampled_texture = nullptr;
+    rsf_godot_sr_record(&sr, &record);
+    rsf_game_render_pass pass = pass_from(record);
+    auto native = [rd](RID texture) { return reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture)); };
+    pass.color_input = native(color); pass.color_output = native(output);
+    pass.depth = native(resolved_depth); pass.motion = native(resolved_motion);
     RD::CallbackResource resources[] = {
         {color, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
         {resolved_depth, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
         {resolved_motion, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE},
         {output, RD::CALLBACK_RESOURCE_TYPE_TEXTURE, RD::CALLBACK_RESOURCE_USAGE_COPY_TO}};
-    Packet *packet = packet_for(pass);
+    Packet *packet = packet_for(pass, record.driver == RSF_GODOT_DRIVER_VULKAN);
     if (packet->vulkan) {
         auto &vk = packet->vk;
         vk.struct_size = sizeof(vk); vk.abi_version = RSF_GODOT_ABI_VERSION; vk.pass = pass;
@@ -495,17 +492,19 @@ void hudless(const RenderDataRD *data) {
     rsf_godot_render_frame frame;
     rsf_godot_render_frame_read(&frame);
     const rsf_godot_render_admission facts = admission(data, frame.source_frame_id);
-    if (!rsf_godot_final_scene_admit(&facts)) return;
+    rsf_godot_pass_record record;
+    if (!rsf_godot_final_scene_plan(&facts, &record)) return;
     RD *rd = RD::get_singleton();
     // Admission proved these buffers render to the primary target.
     RID color = RendererRD::TextureStorage::get_singleton()->render_target_get_rd_texture_slice(data->render_buffers->get_render_target(), 0);
     if (!color.is_valid()) return;
-    auto pass = last_pass; pass.role = RSF_GAME_RENDER_FINAL_SCENE;
+    // The last recorded SR pass with the final-scene role and no SR resources.
+    rsf_game_render_pass pass = pass_from(record);
     pass.color_input = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, color));
-    const bool vulkan = RenderingServer::get_singleton()->get_current_rendering_driver_name() == "vulkan";
+    const bool vulkan = record.driver == RSF_GODOT_DRIVER_VULKAN;
     RD::CallbackResource resource{color, RD::CALLBACK_RESOURCE_TYPE_TEXTURE,
         vulkan ? RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE : RD::CALLBACK_RESOURCE_USAGE_ATTACHMENT_COLOR_READ_WRITE};
-    Packet *packet = packet_for(pass);
+    Packet *packet = packet_for(pass, vulkan);
     if (vulkan) {
         packet->vk.struct_size = sizeof(packet->vk); packet->vk.abi_version = RSF_GODOT_ABI_VERSION;
         packet->vk.pass = pass; packet->vk.pass.color_input = nullptr;
