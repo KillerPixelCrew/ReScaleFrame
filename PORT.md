@@ -467,32 +467,32 @@ Port overlay input, cursor, pointer, visibility and host window ownership throug
 
 **Port files (11)**
 
-- [ ] [loader/proxy/src/overlay_host.cpp](loader/proxy/src/overlay_host.cpp)
-- [ ] [loader/proxy/src/overlay_host.h](loader/proxy/src/overlay_host.h)
-- [ ] [loader/proxy/src/overlay_host_platform.h](loader/proxy/src/overlay_host_platform.h)
-- [ ] [runtime/graphics/include/rescaleframe/overlay_input.h](runtime/graphics/include/rescaleframe/overlay_input.h)
-- [ ] [runtime/graphics/src/overlay_cursor_capture.h](runtime/graphics/src/overlay_cursor_capture.h)
-- [ ] [runtime/graphics/src/overlay_cursor_platform.h](runtime/graphics/src/overlay_cursor_platform.h)
-- [ ] [runtime/graphics/src/overlay_input.cpp](runtime/graphics/src/overlay_input.cpp)
-- [ ] [runtime/graphics/src/overlay_input_route.h](runtime/graphics/src/overlay_input_route.h)
-- [ ] [runtime/graphics/src/overlay_pointer_platform.h](runtime/graphics/src/overlay_pointer_platform.h)
-- [ ] [runtime/graphics/src/overlay_visibility_platform.h](runtime/graphics/src/overlay_visibility_platform.h)
-- [ ] [runtime/graphics/src/overlay_window_platform.h](runtime/graphics/src/overlay_window_platform.h)
+- [x] [loader/proxy/src/overlay_host.cpp](loader/proxy/src/overlay_host.cpp)
+- [x] [loader/proxy/src/overlay_host.h](loader/proxy/src/overlay_host.h)
+- [x] [loader/proxy/src/overlay_host_platform.h](loader/proxy/src/overlay_host_platform.h)
+- [x] [runtime/graphics/include/rescaleframe/overlay_input.h](runtime/graphics/include/rescaleframe/overlay_input.h)
+- [x] [runtime/graphics/src/overlay_cursor_capture.h](runtime/graphics/src/overlay_cursor_capture.h)
+- [x] [runtime/graphics/src/overlay_cursor_platform.h](runtime/graphics/src/overlay_cursor_platform.h)
+- [x] [runtime/graphics/src/overlay_input.cpp](runtime/graphics/src/overlay_input.cpp)
+- [x] [runtime/graphics/src/overlay_input_route.h](runtime/graphics/src/overlay_input_route.h)
+- [x] [runtime/graphics/src/overlay_pointer_platform.h](runtime/graphics/src/overlay_pointer_platform.h)
+- [x] [runtime/graphics/src/overlay_visibility_platform.h](runtime/graphics/src/overlay_visibility_platform.h)
+- [x] [runtime/graphics/src/overlay_window_platform.h](runtime/graphics/src/overlay_window_platform.h)
 
 **Fixtures (2)**
 
-- [ ] [tests/overlay_host.cpp](tests/overlay_host.cpp)
-- [ ] [tests/overlay_hotkey.cpp](tests/overlay_hotkey.cpp)
+- [x] [tests/overlay_host.cpp](tests/overlay_host.cpp)
+- [x] [tests/overlay_hotkey.cpp](tests/overlay_hotkey.cpp)
 
 **Rust review findings (4)**
 
-- [ ] **Altitude | Medium | Keep egui textures alive through the draw that retires them.** Host::carry_textures drains both atlas updates and texture frees before renderer_draw in draw_target and present. ui/overlay/src/overlay.rs:407 forwards egui's TexturesDelta.free directly, whose epaint contract schedules those frees after painting. A mesh can therefore lose a texture needed by its last frame. Upload texture changes before drawing and retire the released IDs after the draw attempt, at one shared host-owned frame boundary. [runtime/orchestrator/src/overlay_host.rs:378](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/overlay_host.rs#L378)
+- [x] **Altitude | Medium | Keep egui textures alive through the draw that retires them.** Host::carry_textures drains both atlas updates and texture frees before renderer_draw in draw_target and present. ui/overlay/src/overlay.rs:407 forwards egui's TexturesDelta.free directly, whose epaint contract schedules those frees after painting. A mesh can therefore lose a texture needed by its last frame. Upload texture changes before drawing and retire the released IDs after the draw attempt, at one shared host-owned frame boundary. [runtime/orchestrator/src/overlay_host.rs:378](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/overlay_host.rs#L378)
 
-- [ ] **Duplication | Medium | Handle a poisoned overlay panel once across both D3D11 draw routes.** The supplied-target and swapchain paths independently collect input, call the same panel.frame, process its intent, carry atlas textures and draw. A layout failure returns directly from draw_target, while present at runtime/orchestrator/src/overlay_host.rs:624 closes the panel and latches failure. The panel sets poisoned after a panic and every later frame then refuses (ui/overlay/src/ffi.rs:98 and :112), so wrapped-device drawing keeps invoking an unusable panel. Share layout/failure handling across both entries, preserving their distinct target acquisition and the intentional intent-on-draw-failure contracts documented at runtime/orchestrator/src/overlay_host_tests.rs:585 and :753. [runtime/orchestrator/src/overlay_host.rs:437](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/overlay_host.rs#L437)
+- [x] **Duplication | Medium | Handle a poisoned overlay panel once across both D3D11 draw routes.** The supplied-target and swapchain paths independently collect input, call the same panel.frame, process its intent, carry atlas textures and draw. A layout failure returns directly from draw_target, while present at runtime/orchestrator/src/overlay_host.rs:624 closes the panel and latches failure. The panel sets poisoned after a panic and every later frame then refuses (ui/overlay/src/ffi.rs:98 and :112), so wrapped-device drawing keeps invoking an unusable panel. Share layout/failure handling across both entries, preserving their distinct target acquisition and the intentional intent-on-draw-failure contracts documented at runtime/orchestrator/src/overlay_host_tests.rs:585 and :753. [runtime/orchestrator/src/overlay_host.rs:437](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/overlay_host.rs#L437)
 
-- [ ] **Altitude | Medium | Apply hotkey debounce to toggle edges, not explicit panel visibility requests.** Visibility::request applies the 250 ms debounce to EXTERNAL requests as well as window and polling edges. A close-button intent or overlay_host::close_after_failure immediately following an open can therefore be discarded, leaving input captured by a panel that just stopped drawing. The test explicitly rejects an external hide after two milliseconds. Make set_visible idempotently honor the requested state and use debounce only to reconcile duplicate physical toggle observations. [runtime/orchestrator/src/overlay_visibility.rs:40](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/overlay_visibility.rs#L40)
+- [x] **Altitude | Medium | Apply hotkey debounce to toggle edges, not explicit panel visibility requests.** Visibility::request applies the 250 ms debounce to EXTERNAL requests as well as window and polling edges. A close-button intent or overlay_host::close_after_failure immediately following an open can therefore be discarded, leaving input captured by a panel that just stopped drawing. The test explicitly rejects an external hide after two milliseconds. Make set_visible idempotently honor the requested state and use debounce only to reconcile duplicate physical toggle observations. [runtime/orchestrator/src/overlay_visibility.rs:40](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/overlay_visibility.rs#L40)
 
-- [ ] **Altitude | Low | Count observed raw mouse input separately from all WM_INPUT messages.** The route increments raw_mouse_reports for every visible WM_INPUT after calling a void leaf. record_raw_mouse in overlay_input.cpp:69 can return before reading the packet, or ignore a keyboard/HID record, a failed read or absolute motion. The diagnostic therefore cannot establish that a mouse report reached the panel. Return the decoded device kind or count the mouse report at the decoder and expose total WM_INPUT traffic separately if needed. [runtime/orchestrator/src/overlay_input_route.rs:265](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/overlay_input_route.rs#L265)
+- [x] **Altitude | Low | Count observed raw mouse input separately from all WM_INPUT messages.** The route increments raw_mouse_reports for every visible WM_INPUT after calling a void leaf. record_raw_mouse in overlay_input.cpp:69 can return before reading the packet, or ignore a keyboard/HID record, a failed read or absolute motion. The diagnostic therefore cannot establish that a mouse report reached the panel. Return the decoded device kind or count the mouse report at the decoder and expose total WM_INPUT traffic separately if needed. [runtime/orchestrator/src/overlay_input_route.rs:265](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/runtime/orchestrator/src/overlay_input_route.rs#L265)
 
 <a id="o02"></a>
 
