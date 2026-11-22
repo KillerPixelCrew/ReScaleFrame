@@ -412,3 +412,13 @@ The new native boundaries are `loader/census/src/census_platform.cpp`,
 `loader/census/src/d3d_guarded_platform.cpp`, `loader/diagnostics/src/module_dump_writer.c`,
 and `tests/loader/vendor_layout_facts.cpp`. The Windows builds, fixture execution, lint and
 device checks remain user-owned.
+
+## Rust RTTI recovery
+
+The continuation from `3066e6ad` moves the scanner and JSON emission in
+`loader/diagnostics/src/module_dump_rtti.c` into Rust. The scanner retains the
+MSVC locator signature and self-RVA check, section exclusions, hierarchy layout, name
+cache, class and base bounds, and output fields. It copies committed image regions in
+bounded chunks and checks the time budget even when no plausible locator appears.
+DbgHelp still resolves complex names through the same System32 entry point. The live
+compiler-emitted RTTI specimen and its independent checks are unchanged.

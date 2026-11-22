@@ -21,8 +21,4 @@ double rsf_dump_now_ms(void);
 rsf_dump_result rsf_dump_poll_code(double threshold, uint32_t poll_ms, uint32_t timeout_ms,
                                    uint32_t required_stable, double* last_entropy);
 
-/* Sidecar sections. Each writes one `"key": value,` entry including the trailing comma. */
-void rsf_dump_write_rtti(FILE* stream, const unsigned char* base, const IMAGE_NT_HEADERS64* headers,
-                         uint32_t budget_ms, uint32_t* class_count);
-
 #endif /* RSF_MODULE_DUMP_INTERNAL_H */

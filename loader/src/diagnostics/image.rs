@@ -395,10 +395,25 @@ pub(super) unsafe extern "C" fn rsf_dump_imports_impl(
     count
 }
 
-pub(super) fn sidecar_section(
-    info: &rsf_dump_image_info,
-    index: u32,
-) -> Option<([u8; 8], u32, u32, u32)> {
+pub(super) struct Section {
+    pub(super) name: [u8; 8],
+    pub(super) rva: u32,
+    pub(super) virtual_size: u32,
+    pub(super) raw_size: u32,
+    pub(super) flags: u32,
+}
+
+impl Section {
+    pub(super) fn mapped_size(&self) -> u32 {
+        if self.virtual_size == 0 {
+            self.raw_size
+        } else {
+            self.virtual_size
+        }
+    }
+}
+
+pub(super) fn sidecar_section(info: &rsf_dump_image_info, index: u32) -> Option<Section> {
     let image = LiveImage {
         base: info.base as usize,
         size: info.image_size as usize,
@@ -407,9 +422,11 @@ pub(super) fn sidecar_section(
         .checked_mul(SECTION_BYTES as u32)?
         .checked_add(info.sections_offset)?;
     let row = image.bytes::<SECTION_BYTES>(offset)?;
-    let name = row[..8].try_into().unwrap();
-    let rva = word32(&row, offset_of!(IMAGE_SECTION_HEADER, VirtualAddress));
-    let size = word32(&row, offset_of!(IMAGE_SECTION_HEADER, Misc));
-    let flags = word32(&row, offset_of!(IMAGE_SECTION_HEADER, Characteristics));
-    Some((name, rva, size, flags))
+    Some(Section {
+        name: row[..8].try_into().unwrap(),
+        rva: word32(&row, offset_of!(IMAGE_SECTION_HEADER, VirtualAddress)),
+        virtual_size: word32(&row, offset_of!(IMAGE_SECTION_HEADER, Misc)),
+        raw_size: word32(&row, offset_of!(IMAGE_SECTION_HEADER, SizeOfRawData)),
+        flags: word32(&row, offset_of!(IMAGE_SECTION_HEADER, Characteristics)),
+    })
 }

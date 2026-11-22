@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::image::{rsf_dump_imports_impl, sidecar_section};
+use super::image::{Section, rsf_dump_imports_impl, sidecar_section};
 use super::names::{escape_unit, rsf_dump_names_impl};
+use super::rtti::write_rtti;
 use super::sections::{
     Stream, Write, rsf_dump_functions_impl, rsf_dump_now_ms, rsf_dump_threads_impl,
 };
@@ -8,8 +9,6 @@ use super::sections_abi::{rsf_dump_sidecar_info, rsf_dump_sidecar_stats};
 use std::ffi::{CStr, c_void};
 use std::fmt::Write as _;
 use std::slice;
-
-type Rtti = unsafe extern "C" fn(*mut c_void, *const u8, *const c_void, u32, *mut u32);
 
 fn fixed(out: &mut Stream, number: f64) {
     if number < 0.0 {
@@ -36,7 +35,6 @@ unsafe fn path(out: &mut Stream, source: *const u16) {
 unsafe extern "C" fn rsf_dump_sidecar_impl(
     context: *mut c_void,
     write: Write,
-    rtti: Rtti,
     info: &rsf_dump_sidecar_info,
     stats: *mut rsf_dump_sidecar_stats,
 ) {
@@ -63,7 +61,14 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
     out.emit("  \"sections\": [");
     let mut comma = "";
     for index in 0..image.sections {
-        let Some((name, rva, size, flags)) = sidecar_section(image, index) else {
+        let Some(Section {
+            name,
+            rva,
+            virtual_size: size,
+            flags,
+            ..
+        }) = sidecar_section(image, index)
+        else {
             break;
         };
         let _ = write!(out, "{comma}\n    {{\"name\": \"");
@@ -126,16 +131,7 @@ unsafe extern "C" fn rsf_dump_sidecar_impl(
     let structured = rsf_dump_now_ms();
     let threads_listed =
         unsafe { rsf_dump_threads_impl(context, write, info.modules, info.module_count) };
-    let mut rtti_classes = 0;
-    unsafe {
-        rtti(
-            context,
-            image.base,
-            info.headers,
-            info.rtti_budget_ms,
-            &mut rtti_classes,
-        )
-    };
+    let rtti_classes = write_rtti(&mut out, image, info.rtti_budget_ms);
     let function_starts = rsf_dump_functions_impl(
         context,
         write,

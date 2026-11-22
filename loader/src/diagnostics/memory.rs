@@ -12,14 +12,14 @@ use windows_sys::Win32::System::{
     Threading::GetCurrentProcess,
 };
 
-struct Region {
+pub(super) struct Region {
     start: usize,
-    end: usize,
-    readable: bool,
+    pub(super) end: usize,
+    pub(super) readable: bool,
 }
 
 impl Region {
-    fn containing(address: usize) -> Option<Self> {
+    pub(super) fn containing(address: usize) -> Option<Self> {
         let mut info = MEMORY_BASIC_INFORMATION::default();
         let size = size_of::<MEMORY_BASIC_INFORMATION>();
         if unsafe { VirtualQuery(address as *const c_void, &mut info, size) } != size {
