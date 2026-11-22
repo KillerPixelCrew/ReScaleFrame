@@ -483,6 +483,8 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3Destroy(VulkanStoryFsr3Conte
 /// @param info Borrowed creation information; initial oldSwapchain must be null.
 /// @param result Required native owner output, cleared before creation.
 /// @return Zero on success; -1 for prerequisites, -2 for allocation, -3 for incomplete replacement functions, or an SDK result.
+// A failed creation can return a cleanup-only owner if SDK rollback failed.
+// Retry VulkanStoryFsr3SwapchainDestroy on that owner before releasing the device.
 extern "C" __declspec(dllexport) int VulkanStoryFsr3SwapchainCreate(
     VkPhysicalDevice physical, VkDevice device, VkQueue gameQueue, VkQueue asyncQueue,
     VkQueue presentQueue, VkQueue acquireQueue, uint32_t queueFamily,
