@@ -232,21 +232,6 @@ unsafe extern "C" fn mode(device: *mut c_void, parameters: *const c_void) -> i32
     }
 }
 
-fn forget_resources(pass: &mut rsf_game_render_pass) {
-    pass.color_input = ptr::null_mut();
-    pass.color_output = ptr::null_mut();
-    pass.depth = ptr::null_mut();
-    pass.motion = ptr::null_mut();
-    pass.exposure = ptr::null_mut();
-    pass.color_output_readable = ptr::null_mut();
-    pass.ui_input = ptr::null_mut();
-    pass.swapchain = ptr::null_mut();
-    pass.scene_surface = ptr::null_mut();
-    pass.sampled_texture = ptr::null_mut();
-    pass.native_frame_context = ptr::null_mut();
-    pass.temporal_mask = ptr::null_mut();
-}
-
 /// Entered from the native leaf with the call's return address.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_rdr2_output_detour(
@@ -679,9 +664,8 @@ fn record_upscale(state: &mut State, commands: usize, pass: &rsf_game_render_pas
         return;
     }
     *scene = Scene::EMPTY;
-    scene.pass = *pass;
+    scene.pass = pass.without_resources();
     scene.commands = commands;
-    forget_resources(&mut scene.pass);
 }
 
 /// The swapchain whose Present observer the renderer attached; retained by the renderer.

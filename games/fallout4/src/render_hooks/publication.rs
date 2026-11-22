@@ -423,19 +423,7 @@ pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
     }
     // The host normalizes and retains these contents synchronously before SR. No borrowed
     // resource pointer survives in the scalar identity.
-    let mut scalar = fg;
-    scalar.color_input = null_mut();
-    scalar.color_output = null_mut();
-    scalar.color_output_readable = null_mut();
-    scalar.depth = null_mut();
-    scalar.motion = null_mut();
-    scalar.exposure = null_mut();
-    scalar.swapchain = null_mut();
-    scalar.ui_input = null_mut();
-    scalar.scene_surface = null_mut();
-    scalar.sampled_texture = null_mut();
-    scalar.native_frame_context = null_mut();
-    scalar.temporal_mask = null_mut();
+    let scalar = fg.without_resources();
     unsafe { (leaves.publish_inputs)(&scalar) };
     if sr_off {
         // Keep actual FG/native output facts, with no SR/output-state mutation.
