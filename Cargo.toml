@@ -3,7 +3,6 @@ members = [
   "ui/overlay",
   "tests/overlay",
   "tests/game-sdk",
-  "runtime/backends/rsf-upscaler",
   "runtime/backends/fsr/compat",
   "runtime/vulkan/ngx",
   "runtime/vulkan/streamline/lifecycle",

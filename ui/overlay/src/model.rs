@@ -7,9 +7,7 @@ use crate::abi;
 
 /// How aggressively to reconstruct.
 ///
-/// The order matches `rsf_overlay_quality` in the header and `rsf_upscaler::Quality`. A value that
-/// means different things in three places is a bug waiting for someone to add a level, so
-/// [`Quality::to_abi`] and [`Quality::from_abi`] are the only places the numbers appear.
+/// [`Quality::to_abi`] and [`Quality::from_abi`] map to the values of `rsf_overlay_quality`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Quality {
     /// Render at output resolution. Antialiasing without upscaling.
