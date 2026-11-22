@@ -110,43 +110,14 @@ typedef struct rsf_frame_tap_draw_call {
     int32_t base_vertex;
 } rsf_frame_tap_draw_call;
 
-/* `original` is the hooked method's original. */
-typedef struct rsf_frame_tap_platform {
-    int32_t (*patch)(void** vtable, uint32_t slot, void* replacement);
-    int32_t (*context1)(void* context);
-    void* (*texture_behind)(void* view);
-    void (*texture_facts)(void* texture, rsf_texture_facts* facts);
-    uint32_t (*target_view_format)(void* view);
-    /* Zero when the resource is not a buffer. */
-    uint32_t (*buffer_width)(void* resource, uint32_t* bind_flags);
-    /* Every pixel shader resource slot, as owned references. */
-    void (*shader_views)(void* context, void** views);
-    void (*set_shader_views)(void* original, void* context, uint32_t start, uint32_t count,
-                             void* const* views);
-    void (*set_targets)(void* original, void* context, uint32_t count, void* const* views,
-                        void* depth, const rsf_frame_tap_uavs* uavs);
-    uint32_t (*viewport)(void* context, rsf_frame_tap_viewport* viewport);
-    /* Borrowed geometry, hull and domain constant buffers, 14 each. */
-    void (*stage_constants)(void* context, void** geometry, void** hull, void** domain);
-    void (*seed_geometry)(void* context, rsf_frame_tap_geometry* geometry,
-                          void** pixel_constants);
-    void (*draw)(void* original, void* context, const rsf_frame_tap_draw_call* call);
-    /* Every pixel shader sampler slot, as owned references. */
-    void (*samplers)(void* context, void** samplers);
-    void (*set_samplers)(void* original, void* context, uint32_t start, uint32_t count,
-                         void* const* samplers);
-    /* An owned biased clone, or null when the sampler is not biased or creation failed. */
-    void* (*clone_sampler)(void* context, void* sampler, float bias);
-    /* Callers' callbacks. Foreign exceptions stay on the native side. */
-    void (*report)(rsf_frame_tap_target_fn fn, void* user, const rsf_frame_tap_target_draw* draw);
-    void (*geometry)(rsf_frame_tap_geometry_fn fn, void* user,
-                     const rsf_frame_tap_geometry* geometry);
-    void (*compute)(rsf_frame_tap_compute_fn fn, void* user, void* context, uint32_t x,
-                    uint32_t y, uint32_t z, void* arguments, uint32_t offset);
-} rsf_frame_tap_platform;
-
-/* Only the foreign callback fields are populated by this shim. */
-const rsf_frame_tap_platform* rsf_frame_tap_foreign_callbacks(void);
+/* Callers' callbacks. Foreign exceptions stay on the native side. */
+void rsf_frame_tap_call_report(rsf_frame_tap_target_fn fn, void* user,
+                               const rsf_frame_tap_target_draw* draw);
+void rsf_frame_tap_call_geometry(rsf_frame_tap_geometry_fn fn, void* user,
+                                 const rsf_frame_tap_geometry* geometry);
+void rsf_frame_tap_call_compute(rsf_frame_tap_compute_fn fn, void* user, void* context,
+                                uint32_t x, uint32_t y, uint32_t z, void* arguments,
+                                uint32_t offset);
 
 void rsf_frame_tap_call_constant_observer(
     rsf_frame_tap_constant_observer_fn fn, void* user, void* buffer,

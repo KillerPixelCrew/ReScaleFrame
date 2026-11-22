@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
-use super::platform::{admitted_platform, platform};
-
 // Call an exact STDMETHODCALLTYPE original. The occupied slots were verified against
 // the Windows SDK ID3D11DeviceContext and ID3D11DeviceContext1 C vtables.
 macro_rules! forward {
     ($hook:expr; $($arg:expr => $ty:ty),+ $(,)?) => {{
-        let original = rsf_core_frame_tap_enter(platform(), $hook);
+        let original = rsf_core_frame_tap_enter($hook);
         if !original.is_null() {
             let call: unsafe extern "system" fn($($ty),+) = unsafe { std::mem::transmute(original) };
             unsafe { call($($arg),+) };
@@ -81,7 +79,7 @@ unsafe extern "system" fn constants<const HOOK: i32>(
 }
 
 unsafe extern "system" fn views(context: Handle, start: u32, count: u32, views: *const Handle) {
-    unsafe { rsf_core_frame_tap_views(platform(), context, start, count, views) };
+    unsafe { rsf_core_frame_tap_views(context, start, count, views) };
 }
 
 unsafe extern "system" fn targets(
@@ -90,7 +88,7 @@ unsafe extern "system" fn targets(
     views: *const Handle,
     depth: Handle,
 ) {
-    unsafe { rsf_core_frame_tap_targets(platform(), context, count, views, depth, null()) };
+    unsafe { rsf_core_frame_tap_targets(context, count, views, depth, null()) };
 }
 
 unsafe extern "system" fn targets_uavs(
@@ -109,7 +107,7 @@ unsafe extern "system" fn targets_uavs(
         views: uavs,
         initial_counts,
     };
-    unsafe { rsf_core_frame_tap_targets(platform(), context, count, views, depth, &unordered) };
+    unsafe { rsf_core_frame_tap_targets(context, count, views, depth, &unordered) };
 }
 
 unsafe extern "system" fn samplers(
@@ -118,8 +116,7 @@ unsafe extern "system" fn samplers(
     count: u32,
     samplers: *const Handle,
 ) {
-    let platform = platform();
-    let original = rsf_core_frame_tap_enter(platform, RSF_FRAME_TAP_HOOK_SAMPLERS);
+    let original = rsf_core_frame_tap_enter(RSF_FRAME_TAP_HOOK_SAMPLERS);
     if original.is_null() {
         return;
     }
@@ -129,7 +126,6 @@ unsafe extern "system" fn samplers(
     let mut admitted = 0;
     let views = unsafe {
         rsf_core_frame_tap_samplers(
-            platform,
             context,
             start,
             count,
@@ -139,12 +135,11 @@ unsafe extern "system" fn samplers(
         )
     };
     unsafe { call(context, start, count, views) };
-    rsf_core_frame_tap_leave(platform, admitted);
+    rsf_core_frame_tap_leave(admitted);
 }
 
 unsafe extern "system" fn draw(context: Handle, count: u32, start: u32) {
     rsf_core_frame_tap_draw(
-        platform(),
         context,
         RSF_FRAME_TAP_HOOK_DRAW,
         &rsf_frame_tap_draw_call {
@@ -160,7 +155,6 @@ unsafe extern "system" fn draw(context: Handle, count: u32, start: u32) {
 
 unsafe extern "system" fn indexed(context: Handle, count: u32, start: u32, base_vertex: i32) {
     rsf_core_frame_tap_draw(
-        platform(),
         context,
         RSF_FRAME_TAP_HOOK_DRAW_INDEXED,
         &rsf_frame_tap_draw_call {
@@ -182,7 +176,6 @@ unsafe extern "system" fn instanced(
     first_instance: u32,
 ) {
     rsf_core_frame_tap_draw(
-        platform(),
         context,
         RSF_FRAME_TAP_HOOK_DRAW_INSTANCED,
         &rsf_frame_tap_draw_call {
@@ -205,7 +198,6 @@ unsafe extern "system" fn indexed_instanced(
     first_instance: u32,
 ) {
     rsf_core_frame_tap_draw(
-        platform(),
         context,
         RSF_FRAME_TAP_HOOK_DRAW_INDEXED_INSTANCED,
         &rsf_frame_tap_draw_call {
@@ -221,7 +213,7 @@ unsafe extern "system" fn indexed_instanced(
 
 unsafe extern "system" fn draw_auto(context: Handle) {
     forward!(RSF_FRAME_TAP_HOOK_DRAW_AUTO; context => Handle);
-    rsf_core_frame_tap_indirect(platform(), context, 4, null_mut(), 0);
+    rsf_core_frame_tap_indirect(context, 4, null_mut(), 0);
 }
 
 unsafe extern "system" fn indirect<const HOOK: i32, const KIND: u32>(
@@ -230,7 +222,7 @@ unsafe extern "system" fn indirect<const HOOK: i32, const KIND: u32>(
     offset: u32,
 ) {
     forward!(HOOK; context => Handle, args => Handle, offset => u32);
-    rsf_core_frame_tap_indirect(platform(), context, KIND, args, offset);
+    rsf_core_frame_tap_indirect(context, KIND, args, offset);
 }
 
 unsafe extern "system" fn clear_state(context: Handle) {
@@ -251,33 +243,23 @@ unsafe extern "system" fn map(
     flags: u32,
     mapped: *mut MappedResource,
 ) -> i32 {
-    unsafe {
-        rsf_core_frame_tap_map(
-            platform(),
-            context,
-            resource,
-            subresource,
-            kind,
-            flags,
-            mapped,
-        )
-    }
+    unsafe { rsf_core_frame_tap_map(context, resource, subresource, kind, flags, mapped) }
 }
 
 unsafe extern "system" fn unmap(context: Handle, resource: Handle, subresource: u32) {
-    unsafe { rsf_core_frame_tap_unmap(platform(), context, resource, subresource) };
+    unsafe { rsf_core_frame_tap_unmap(context, resource, subresource) };
 }
 
 unsafe extern "system" fn dispatch(context: Handle, x: u32, y: u32, z: u32) {
     forward!(RSF_FRAME_TAP_HOOK_DISPATCH; context => Handle, x => u32, y => u32, z => u32);
-    rsf_core_frame_tap_leave(platform(), 0);
-    rsf_core_frame_tap_dispatch(platform(), context, x, y, z, null_mut(), 0);
+    rsf_core_frame_tap_leave(0);
+    rsf_core_frame_tap_dispatch(context, x, y, z, null_mut(), 0);
 }
 
 unsafe extern "system" fn dispatch_indirect(context: Handle, args: Handle, offset: u32) {
     forward!(RSF_FRAME_TAP_HOOK_DISPATCH_INDIRECT; context => Handle, args => Handle, offset => u32);
-    rsf_core_frame_tap_leave(platform(), 0);
-    rsf_core_frame_tap_dispatch(platform(), context, 0, 0, 0, args, offset);
+    rsf_core_frame_tap_leave(0);
+    rsf_core_frame_tap_dispatch(context, 0, 0, 0, args, offset);
 }
 
 // These calls only track the runtime's work-submission vtable rewrite. Viewports and scissors
@@ -286,7 +268,7 @@ macro_rules! pass_through {
     ($name:ident, $hook:ident $(, $arg:ident: $ty:ty)* $(,)?) => {
         unsafe extern "system" fn $name(context: Handle $(, $arg: $ty)*) {
             forward!($hook; context => Handle $(, $arg => $ty)*);
-            rsf_core_frame_tap_leave(platform(), 0);
+            rsf_core_frame_tap_leave(0);
         }
     };
 }
@@ -321,20 +303,10 @@ unsafe extern "system" fn update(
     depth: u32,
 ) {
     let whole = region.is_null();
-    unsafe {
-        rsf_core_frame_tap_update(
-            platform(),
-            context,
-            destination,
-            subresource,
-            whole,
-            data,
-            row,
-        )
-    };
+    unsafe { rsf_core_frame_tap_update(context, destination, subresource, whole, data, row) };
     forward!(RSF_FRAME_TAP_HOOK_UPDATE; context => Handle, destination => Handle, subresource => u32,
         region => *const c_void, data => *const c_void, row => u32, depth => u32);
-    rsf_core_frame_tap_leave(platform(), 0);
+    rsf_core_frame_tap_leave(0);
 }
 
 unsafe extern "system" fn update1(
@@ -348,20 +320,10 @@ unsafe extern "system" fn update1(
     flags: u32,
 ) {
     let whole = region.is_null();
-    unsafe {
-        rsf_core_frame_tap_update(
-            platform(),
-            context,
-            destination,
-            subresource,
-            whole,
-            data,
-            row,
-        )
-    };
+    unsafe { rsf_core_frame_tap_update(context, destination, subresource, whole, data, row) };
     forward!(RSF_FRAME_TAP_HOOK_UPDATE1; context => Handle, destination => Handle, subresource => u32,
         region => *const c_void, data => *const c_void, row => u32, depth => u32, flags => u32);
-    rsf_core_frame_tap_leave(platform(), 0);
+    rsf_core_frame_tap_leave(0);
 }
 const fn hook(slot: u32, context1: u32, function: *const ()) -> rsf_frame_tap_hook {
     rsf_frame_tap_hook {
@@ -439,32 +401,20 @@ unsafe extern "C" fn rsf_frame_tap_install(
     context: Handle,
     options: *const rsf_frame_tap_options,
 ) -> i32 {
-    let Some(platform) = admitted_platform() else {
-        return INVALID;
-    };
-    unsafe { rsf_core_frame_tap_install(platform, context, options, DETOURS.as_ptr()) }
+    unsafe { rsf_core_frame_tap_install(context, options, DETOURS.as_ptr()) }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_frame_tap_set_sampler_bias(bias: f32) -> i32 {
-    let Some(platform) = admitted_platform() else {
-        return INVALID;
-    };
-    rsf_core_frame_tap_set_sampler_bias(platform, bias)
+    rsf_core_frame_tap_set_sampler_bias(bias)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_frame_tap_refresh() -> i32 {
-    let Some(platform) = admitted_platform() else {
-        return INVALID;
-    };
-    rsf_core_frame_tap_refresh(platform)
+    rsf_core_frame_tap_refresh()
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_frame_tap_uninstall() -> i32 {
-    let Some(platform) = admitted_platform() else {
-        return INVALID;
-    };
-    rsf_core_frame_tap_uninstall(platform)
+    rsf_core_frame_tap_uninstall()
 }

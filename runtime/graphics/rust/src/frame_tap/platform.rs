@@ -2,49 +2,9 @@
 use super::*;
 use crate::d3d11_output::texture_desc;
 use crate::sys::{rsf_d3d11_output_child_device, rsf_d3d11_output_query_texture};
-use std::sync::OnceLock;
 use windows::core::IUnknown;
 use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
 use windows_sys::core::GUID;
-
-unsafe extern "C" {
-    fn rsf_frame_tap_foreign_callbacks() -> *const rsf_frame_tap_platform;
-}
-
-pub(super) fn platform() -> &'static Platform {
-    admitted_platform().expect("frame tap install admits the platform before patching")
-}
-
-pub(super) fn admitted_platform() -> Option<&'static Platform> {
-    static PLATFORM: OnceLock<Option<Platform>> = OnceLock::new();
-    PLATFORM.get_or_init(check_platform).as_ref()
-}
-
-fn check_platform() -> Option<Platform> {
-    // The C++ boundary contains exceptions from foreign C ABI callbacks.
-    let foreign = unsafe { rsf_frame_tap_foreign_callbacks().as_ref() }?;
-    Some(Platform {
-        patch: patch_slot,
-        context1,
-        texture_behind,
-        texture_facts,
-        target_view_format: target_format,
-        buffer_width,
-        shader_views,
-        set_shader_views,
-        set_targets,
-        viewport,
-        stage_constants,
-        seed_geometry,
-        draw,
-        samplers,
-        set_samplers: set_shader_views,
-        clone_sampler,
-        report: foreign.report?,
-        geometry: foreign.geometry?,
-        compute: foreign.compute?,
-    })
-}
 
 // SDK 10.0.26100.0 d3d11.h and d3d11_1.h C vtables. Each use names the exact
 // native argument types (with opaque pointers for COM interfaces and input records).
@@ -54,7 +14,7 @@ macro_rules! method {
     };
 }
 
-unsafe extern "C" fn patch_slot(vtable: *mut Handle, index: u32, replacement: Handle) -> i32 {
+pub(super) unsafe fn patch_slot(vtable: *mut Handle, index: u32, replacement: Handle) -> i32 {
     let entry = unsafe { vtable.add(index as usize) };
     let mut protection = 0;
     if unsafe {
@@ -76,7 +36,7 @@ unsafe extern "C" fn patch_slot(vtable: *mut Handle, index: u32, replacement: Ha
     1
 }
 
-unsafe extern "C" fn context1(context: Handle) -> i32 {
+pub(super) unsafe fn context1(context: Handle) -> i32 {
     i32::from(unsafe { context1_ref(context) }.is_some())
 }
 
@@ -105,14 +65,14 @@ unsafe fn view_resource(view: Handle) -> Handle {
     resource
 }
 
-unsafe extern "C" fn texture_behind(view: Handle) -> Handle {
+pub(super) unsafe fn texture_behind(view: Handle) -> Handle {
     let Some(resource) = (unsafe { com_ref::owned(view_resource(view)) }) else {
         return null_mut();
     };
     unsafe { rsf_d3d11_output_query_texture(resource.as_raw()) }
 }
 
-unsafe extern "C" fn texture_facts(texture: Handle, result: *mut rsf_texture_facts) {
+pub(super) unsafe fn texture_facts(texture: Handle, result: *mut rsf_texture_facts) {
     let desc = unsafe { texture_desc(texture) };
     unsafe {
         result.write(rsf_texture_facts {
@@ -128,7 +88,7 @@ unsafe extern "C" fn texture_facts(texture: Handle, result: *mut rsf_texture_fac
     }
 }
 
-unsafe extern "C" fn target_format(view: Handle) -> u32 {
+pub(super) unsafe fn target_format(view: Handle) -> u32 {
     // D3D11_RENDER_TARGET_VIEW_DESC, including the largest union member.
     type Desc = [u32; 5];
     type Get = unsafe extern "system" fn(Handle, *mut Desc);
@@ -138,7 +98,7 @@ unsafe extern "C" fn target_format(view: Handle) -> u32 {
     desc[0]
 }
 
-unsafe extern "C" fn buffer_width(resource: Handle, bind_flags: *mut u32) -> u32 {
+pub(super) unsafe fn buffer_width(resource: Handle, bind_flags: *mut u32) -> u32 {
     let Some((width, flags, _)) =
         (unsafe { crate::constant_buffer_read::resource_buffer_info(resource) })
     else {
@@ -152,17 +112,17 @@ type GetRange = unsafe extern "system" fn(Handle, u32, u32, *mut Handle);
 type SetRange = unsafe extern "system" fn(Handle, u32, u32, *const Handle);
 type GetViewport = unsafe extern "system" fn(Handle, *mut u32, *mut rsf_frame_tap_viewport);
 
-unsafe extern "C" fn shader_views(context: Handle, views: *mut Handle) {
+pub(super) unsafe fn shader_views(context: Handle, views: *mut Handle) {
     let get = unsafe { method!(context, 73, GetRange) };
     unsafe { get(context, 0, VIEWS as u32, views) };
 }
 
-unsafe extern "C" fn samplers(context: Handle, samplers: *mut Handle) {
+pub(super) unsafe fn samplers(context: Handle, samplers: *mut Handle) {
     let get = unsafe { method!(context, 75, GetRange) };
     unsafe { get(context, 0, SAMPLERS as u32, samplers) };
 }
 
-unsafe extern "C" fn set_shader_views(
+pub(super) unsafe fn set_shader_views(
     original: Handle,
     context: Handle,
     start: u32,
@@ -173,7 +133,7 @@ unsafe extern "C" fn set_shader_views(
     unsafe { set(context, start, count, views) };
 }
 
-unsafe extern "C" fn set_targets(
+pub(super) unsafe fn set_targets(
     original: Handle,
     context: Handle,
     count: u32,
@@ -212,7 +172,7 @@ unsafe extern "C" fn set_targets(
     }
 }
 
-unsafe extern "C" fn viewport(context: Handle, result: *mut rsf_frame_tap_viewport) -> u32 {
+pub(super) unsafe fn viewport(context: Handle, result: *mut rsf_frame_tap_viewport) -> u32 {
     let get = unsafe { method!(context, 95, GetViewport) };
     let mut count = 1;
     unsafe { get(context, &mut count, result) };
@@ -236,7 +196,7 @@ struct SamplerDesc {
 
 const _: () = assert!(size_of::<SamplerDesc>() == 52);
 
-unsafe extern "C" fn clone_sampler(context: Handle, sampler: Handle, bias: f32) -> Handle {
+pub(super) unsafe fn clone_sampler(context: Handle, sampler: Handle, bias: f32) -> Handle {
     type Get = unsafe extern "system" fn(Handle, *mut SamplerDesc);
     type Create = unsafe extern "system" fn(Handle, *const SamplerDesc, *mut Handle) -> i32;
     let mut desc = SamplerDesc::default();
@@ -272,7 +232,7 @@ unsafe fn get_constants(context: Handle, slot: usize, buffers: *mut Handle) {
     }
 }
 
-unsafe extern "C" fn stage_constants(
+pub(super) unsafe fn stage_constants(
     context: Handle,
     geometry: *mut Handle,
     hull: *mut Handle,
@@ -285,7 +245,7 @@ unsafe extern "C" fn stage_constants(
     }
 }
 
-unsafe extern "C" fn seed_geometry(
+pub(super) unsafe fn seed_geometry(
     context: Handle,
     geometry: *mut rsf_frame_tap_geometry,
     pixel: *mut Handle,
@@ -328,7 +288,7 @@ unsafe extern "C" fn seed_geometry(
     }
 }
 
-unsafe extern "C" fn draw(original: Handle, context: Handle, call: *const rsf_frame_tap_draw_call) {
+pub(super) unsafe fn draw(original: Handle, context: Handle, call: *const rsf_frame_tap_draw_call) {
     let call = unsafe { &*call };
     match call.kind {
         0 => {

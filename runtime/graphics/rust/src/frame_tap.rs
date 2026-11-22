@@ -18,80 +18,6 @@ use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
-struct Platform {
-    patch:
-        unsafe extern "C" fn(vtable: *mut *mut c_void, slot: u32, replacement: *mut c_void) -> i32,
-    context1: unsafe extern "C" fn(context: *mut c_void) -> i32,
-    texture_behind: unsafe extern "C" fn(view: *mut c_void) -> *mut c_void,
-    texture_facts: unsafe extern "C" fn(texture: *mut c_void, facts: *mut rsf_texture_facts),
-    target_view_format: unsafe extern "C" fn(view: *mut c_void) -> u32,
-    buffer_width: unsafe extern "C" fn(resource: *mut c_void, bind_flags: *mut u32) -> u32,
-    shader_views: unsafe extern "C" fn(context: *mut c_void, views: *mut *mut c_void),
-    set_shader_views: unsafe extern "C" fn(
-        original: *mut c_void,
-        context: *mut c_void,
-        start: u32,
-        count: u32,
-        views: *const *mut c_void,
-    ),
-    set_targets: unsafe extern "C" fn(
-        original: *mut c_void,
-        context: *mut c_void,
-        count: u32,
-        views: *const *mut c_void,
-        depth: *mut c_void,
-        uavs: *const rsf_frame_tap_uavs,
-    ),
-    viewport:
-        unsafe extern "C" fn(context: *mut c_void, viewport: *mut rsf_frame_tap_viewport) -> u32,
-    stage_constants: unsafe extern "C" fn(
-        context: *mut c_void,
-        geometry: *mut *mut c_void,
-        hull: *mut *mut c_void,
-        domain: *mut *mut c_void,
-    ),
-    seed_geometry: unsafe extern "C" fn(
-        context: *mut c_void,
-        geometry: *mut rsf_frame_tap_geometry,
-        pixel_constants: *mut *mut c_void,
-    ),
-    draw: unsafe extern "C" fn(
-        original: *mut c_void,
-        context: *mut c_void,
-        call: *const rsf_frame_tap_draw_call,
-    ),
-    samplers: unsafe extern "C" fn(context: *mut c_void, samplers: *mut *mut c_void),
-    set_samplers: unsafe extern "C" fn(
-        original: *mut c_void,
-        context: *mut c_void,
-        start: u32,
-        count: u32,
-        samplers: *const *mut c_void,
-    ),
-    clone_sampler:
-        unsafe extern "C" fn(context: *mut c_void, sampler: *mut c_void, bias: f32) -> *mut c_void,
-    report: unsafe extern "C" fn(
-        fn_: rsf_frame_tap_target_fn,
-        user: *mut c_void,
-        draw: *const rsf_frame_tap_target_draw,
-    ),
-    geometry: unsafe extern "C" fn(
-        fn_: rsf_frame_tap_geometry_fn,
-        user: *mut c_void,
-        geometry: *const rsf_frame_tap_geometry,
-    ),
-    compute: unsafe extern "C" fn(
-        fn_: rsf_frame_tap_compute_fn,
-        user: *mut c_void,
-        context: *mut c_void,
-        x: u32,
-        y: u32,
-        z: u32,
-        arguments: *mut c_void,
-        offset: u32,
-    ),
-}
-
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
@@ -319,22 +245,22 @@ fn original(hook: usize) -> Handle {
 
 // Record what the slot holds as the original before replacing it, so a call that reaches the
 // replacement finds its original.
-fn patch(platform: &Platform, vtable: *mut Handle, hook: usize, replacement: Handle) -> bool {
+fn patch(vtable: *mut Handle, hook: usize, replacement: Handle) -> bool {
     let slot = HOOK_TABLE.slots[hook].load(Relaxed);
     let current = unsafe { vtable.add(slot).read_volatile() };
     HOOK_TABLE.originals[hook].store(current, Release);
-    unsafe { (platform.patch)(vtable, slot as u32, replacement) != 0 }
+    unsafe { platform::patch_slot(vtable, slot as u32, replacement) != 0 }
 }
 
 // Put back the originals of patched hooks, in the given order.
-fn restore(platform: &Platform, vtable: *mut Handle, hooks: impl Iterator<Item = usize>) -> bool {
+fn restore(vtable: *mut Handle, hooks: impl Iterator<Item = usize>) -> bool {
     let mut restored = true;
     for hook in hooks {
         if HOOK_TABLE.replacements[hook].load(Acquire).is_null() {
             continue;
         }
         let slot = HOOK_TABLE.slots[hook].load(Relaxed) as u32;
-        if unsafe { (platform.patch)(vtable, slot, original(hook)) } != 0 {
+        if unsafe { platform::patch_slot(vtable, slot, original(hook)) } != 0 {
             HOOK_TABLE.replacements[hook].store(null_mut(), Release);
         } else {
             restored = false;
@@ -353,7 +279,7 @@ fn restore(platform: &Platform, vtable: *mut Handle, hooks: impl Iterator<Item =
 // and re-applies the whole table, recording what the runtime wrote as the new original.
 static HOOK_COVERAGE: AtomicBool = AtomicBool::new(false);
 
-fn refresh(platform: &Platform) {
+fn refresh() {
     if !TAP.installed.load(Acquire) {
         return;
     }
@@ -368,12 +294,12 @@ fn refresh(platform: &Platform) {
         && !vtable.is_null()
         && unsafe { vtable.add(SLOT_DRAW).read_volatile() } != HOOK_TABLE.sentinel.load(Relaxed)
     {
-        refresh_slow(platform, vtable);
+        refresh_slow(vtable);
     }
 }
 
 #[cold]
-fn refresh_slow(platform: &Platform, vtable: *mut Handle) {
+fn refresh_slow(vtable: *mut Handle) {
     let mut complete = true;
     for (hook, replacement) in HOOK_TABLE.replacements.iter().enumerate() {
         let replacement = replacement.load(Relaxed);
@@ -384,7 +310,7 @@ fn refresh_slow(platform: &Platform, vtable: *mut Handle) {
         if unsafe { vtable.add(slot).read_volatile() } == replacement {
             continue;
         }
-        complete &= patch(platform, vtable, hook, replacement);
+        complete &= patch(vtable, hook, replacement);
     }
     HOOK_COVERAGE.store(complete, Release);
 }
@@ -561,7 +487,7 @@ impl Samplers {
 
     // What to bind for one of the game's samplers at the current bias. The leaf decides which
     // filters are biased; a sampler it declines keeps passing through until the bias changes.
-    fn biased(&mut self, platform: &Platform, context: Handle, original: Handle) -> Handle {
+    fn biased(&mut self, context: Handle, original: Handle) -> Handle {
         if original.is_null() || self.bias == 0.0 {
             return original;
         }
@@ -581,7 +507,7 @@ impl Samplers {
             self.clones.remove(&(previous.as_raw() as usize));
         }
         entry.bias = bias;
-        let clone = unsafe { com_ref::owned((platform.clone_sampler)(context, original, bias)) };
+        let clone = unsafe { com_ref::owned(platform::clone_sampler(context, original, bias)) };
         let Some(clone) = clone else {
             return original;
         };
@@ -592,13 +518,13 @@ impl Samplers {
     }
 }
 
-fn texture_behind(platform: &Platform, view: Handle) -> Option<IUnknown> {
-    unsafe { com_ref::owned((platform.texture_behind)(view)) }
+fn texture_behind(view: Handle) -> Option<IUnknown> {
+    unsafe { com_ref::owned(platform::texture_behind(view)) }
 }
 
-fn facts_of(platform: &Platform, texture: Handle) -> rsf_texture_facts {
+fn facts_of(texture: Handle) -> rsf_texture_facts {
     let mut facts = ZERO_FACTS;
-    unsafe { (platform.texture_facts)(texture, &mut facts) };
+    unsafe { platform::texture_facts(texture, &mut facts) };
     facts
 }
 
@@ -663,12 +589,7 @@ fn forget_target(render: &mut Render) {
 
 // Record what render target slot 0 now holds. `resolved` is the texture behind `view` when the
 // caller already took it.
-fn shadow_target(
-    platform: &Platform,
-    render: &mut Render,
-    view: Handle,
-    resolved: Option<IUnknown>,
-) {
+fn shadow_target(render: &mut Render, view: Handle, resolved: Option<IUnknown>) {
     if render.target_view == view {
         // The same view rebound is not a new pass, so the draw ordinal continues.
         return;
@@ -678,13 +599,13 @@ fn shadow_target(
     if view.is_null() {
         return;
     }
-    let texture = resolved.or_else(|| texture_behind(platform, view));
+    let texture = resolved.or_else(|| texture_behind(view));
     if let Some(texture) = &texture {
-        render.target_facts = facts_of(platform, texture.as_raw());
+        render.target_facts = facts_of(texture.as_raw());
     }
     render.target_texture = texture;
     // For a typeless target the view, not the texture, says whether output is encoded.
-    render.target_view_format = unsafe { (platform.target_view_format)(view) };
+    render.target_view_format = unsafe { platform::target_format(view) };
 }
 
 // A pass that writes output slot zero cannot read it; clear that hazard from the shadow.
@@ -750,9 +671,9 @@ fn collect_inputs(
 }
 
 // Geometry, hull and domain constants, asked only on a draw that is offered.
-fn stage_constants(platform: &Platform, context: Handle, facts: &mut rsf_frame_tap_target_draw) {
+fn stage_constants(context: Handle, facts: &mut rsf_frame_tap_target_draw) {
     unsafe {
-        (platform.stage_constants)(
+        platform::stage_constants(
             context,
             facts.geometry_constants.as_mut_ptr(),
             facts.hull_constants.as_mut_ptr(),
@@ -763,7 +684,6 @@ fn stage_constants(platform: &Platform, context: Handle, facts: &mut rsf_frame_t
 
 // Offer this draw to the research callbacks. `before` offers it ahead of the game's call.
 fn consider_target_draw(
-    platform: &Platform,
     render: &mut Render,
     context: Handle,
     indexed: bool,
@@ -796,14 +716,14 @@ fn consider_target_draw(
     collect_inputs(render, &mut report, &mut inputs);
     // The one fact the shadow cannot supply, asked only on a reported draw.
     let mut viewport = ZERO_VIEWPORT;
-    if unsafe { (platform.viewport)(context, &mut viewport) } >= 1 {
+    if unsafe { platform::viewport(context, &mut viewport) } >= 1 {
         report.viewport_x = viewport.x;
         report.viewport_y = viewport.y;
         report.viewport_width = viewport.width as u32;
         report.viewport_height = viewport.height as u32;
     }
     if !render.geometry_valid {
-        seed_geometry(platform, render, context);
+        seed_geometry(render, context);
     }
     report.vertex_shader = render.geometry.vertex_shader;
     report.input_layout = render.geometry.input_layout;
@@ -811,8 +731,8 @@ fn consider_target_draw(
     report.topology = render.geometry.topology;
     report.vertex_constants = render.geometry.vertex_constants;
     report.pixel_constants = render.pixel_constants;
-    stage_constants(platform, context, &mut report);
-    unsafe { (platform.report)(research, TAP.research_user.load(Relaxed), &report) };
+    stage_constants(context, &mut report);
+    unsafe { rsf_frame_tap_call_report(research, TAP.research_user.load(Relaxed), &report) };
 }
 
 // Whether anything reads the shader resource shadow. Without a reader, keeping it is a resource
@@ -824,13 +744,7 @@ fn refresh_shadow_need() {
 }
 
 // Put one view into the shadow. `resolved` is the texture behind it when the caller took it.
-fn shadow_view(
-    platform: &Platform,
-    render: &mut Render,
-    index: usize,
-    view: Handle,
-    resolved: Option<IUnknown>,
-) {
+fn shadow_view(render: &mut Render, index: usize, view: Handle, resolved: Option<IUnknown>) {
     drop_slot(render, index);
     if view.is_null() {
         return;
@@ -838,7 +752,7 @@ fn shadow_view(
     render.slots[index].view = view;
     set_occupied(render, index, true);
     // A buffer or a 3D texture keeps the slot occupied with no texture.
-    let Some(texture) = resolved.or_else(|| texture_behind(platform, view)) else {
+    let Some(texture) = resolved.or_else(|| texture_behind(view)) else {
         return;
     };
     if texture.as_raw() == target_texture(render) {
@@ -846,13 +760,13 @@ fn shadow_view(
         drop_slot(render, index);
         return;
     }
-    render.slots[index].facts = facts_of(platform, texture.as_raw());
+    render.slots[index].facts = facts_of(texture.as_raw());
     render.slots[index].texture = Some(texture);
 }
 
 // Bring the shadow in line with whether anything reads it. A new shadow is seeded from the
 // context, which has already unbound what it refused; one no longer read drops its references.
-fn sync_shadow(platform: &Platform, render: &mut Render, context: Handle) {
+fn sync_shadow(render: &mut Render, context: Handle) {
     let wanted = TAP.shadow_needed.load(Relaxed);
     if wanted == render.shadow_live {
         return;
@@ -865,19 +779,19 @@ fn sync_shadow(platform: &Platform, render: &mut Render, context: Handle) {
         return;
     }
     let mut views = [null_mut(); VIEWS];
-    unsafe { (platform.shader_views)(context, views.as_mut_ptr()) };
+    unsafe { platform::shader_views(context, views.as_mut_ptr()) };
     for (index, view) in views.into_iter().enumerate() {
         if let Some(view) = unsafe { com_ref::owned(view) } {
-            shadow_view(platform, render, index, view.as_raw(), None);
+            shadow_view(render, index, view.as_raw(), None);
         }
     }
 }
 
 // Seed inherited IA/VS/PS constant state on the render thread, also after ClearState or a command
 // list. The context owns the live bindings.
-fn seed_geometry(platform: &Platform, render: &mut Render, context: Handle) {
+fn seed_geometry(render: &mut Render, context: Handle) {
     unsafe {
-        (platform.seed_geometry)(
+        platform::seed_geometry(
             context,
             &mut render.geometry,
             render.pixel_constants.as_mut_ptr(),
@@ -913,7 +827,6 @@ fn seed_geometry(platform: &Platform, render: &mut Render, context: Handle) {
 
 // Replay must happen here: retaining a buffer does not preserve its contents across uploads.
 fn report_geometry(
-    platform: &Platform,
     render: &mut Render,
     context: Handle,
     call: &rsf_frame_tap_draw_call,
@@ -930,7 +843,7 @@ fn report_geometry(
         return;
     }
     if !render.geometry_valid {
-        seed_geometry(platform, render, context);
+        seed_geometry(render, context);
     }
     let facts = render.target_facts;
     let geometry = &mut render.geometry;
@@ -949,7 +862,7 @@ fn report_geometry(
     geometry.start_instance = call.first_instance;
     geometry.indirect_buffer = indirect;
     geometry.indirect_offset = offset;
-    unsafe { (platform.geometry)(options.on_geometry, options.on_geometry_user, geometry) };
+    unsafe { rsf_frame_tap_call_geometry(options.on_geometry, options.on_geometry_user, geometry) };
 }
 
 // Command lists and ClearState invalidate all observation until the engine binds again.
@@ -1022,7 +935,7 @@ impl ConstantWatch {
 // Whether `resource` is a constant buffer the watch wants, and its width. Only a "no" is
 // remembered: a width becomes a memory size the caller copies, and a recycled address must not be
 // taken for it.
-fn watched_buffer(platform: &Platform, render: &mut Render, resource: Handle, watched: u32) -> u32 {
+fn watched_buffer(render: &mut Render, resource: Handle, watched: u32) -> u32 {
     let epoch = TAP.verdict_epoch.load(Relaxed);
     let expired = epoch != render.verdict_epoch_seen || {
         render.verdict_lookups += 1;
@@ -1038,7 +951,7 @@ fn watched_buffer(platform: &Platform, render: &mut Render, resource: Handle, wa
         return 0;
     }
     let mut bind_flags = 0;
-    let width = unsafe { (platform.buffer_width)(resource, &mut bind_flags) };
+    let width = unsafe { platform::buffer_width(resource, &mut bind_flags) };
     let wanted = if watched == 0 {
         width <= 4096
     } else {
@@ -1054,7 +967,6 @@ fn watched_buffer(platform: &Platform, render: &mut Render, resource: Handle, wa
 }
 
 unsafe fn rsf_core_frame_tap_install(
-    platform: &Platform,
     context: Handle,
     options: *const rsf_frame_tap_options,
     hooks: *const rsf_frame_tap_hook,
@@ -1095,7 +1007,7 @@ unsafe fn rsf_core_frame_tap_install(
     HOOK_TABLE
         .sentinel
         .store(hooks[HOOK_DRAW].replacement, Relaxed);
-    let context1 = unsafe { (platform.context1)(context) } != 0;
+    let context1 = unsafe { platform::context1(context) } != 0;
     // Every slot at once, undone as a unit: bindings and draws only mean anything together.
     for (hook, entry) in hooks.iter().enumerate() {
         HOOK_TABLE.replacements[hook].store(null_mut(), Relaxed);
@@ -1103,11 +1015,11 @@ unsafe fn rsf_core_frame_tap_install(
             continue;
         }
         HOOK_TABLE.slots[hook].store(entry.slot as usize, Relaxed);
-        if patch(platform, vtable, hook, entry.replacement) {
+        if patch(vtable, hook, entry.replacement) {
             HOOK_TABLE.replacements[hook].store(entry.replacement, Release);
             continue;
         }
-        restore(platform, vtable, (0..hook).rev());
+        restore(vtable, (0..hook).rev());
         return PATCH_FAILED;
     }
 
@@ -1122,7 +1034,7 @@ unsafe fn rsf_core_frame_tap_install(
     OK
 }
 
-fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
+fn rsf_core_frame_tap_uninstall() -> i32 {
     // Everything that can refuse comes before the first change. A caller inside a hook is refused
     // with INVALID_ARGUMENT when it would have to wait for another thread.
     let Some(lock) = control() else {
@@ -1134,7 +1046,7 @@ fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     }
     // A previous failed restore left forwarding-only hooks that still need to be removed.
     if !TAP.installed.load(SeqCst) {
-        return if restore(platform, vtable, 0..HOOKS) {
+        return if restore(vtable, 0..HOOKS) {
             OK
         } else {
             PATCH_FAILED
@@ -1156,7 +1068,7 @@ fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     // slot gets whatever the runtime last had there.
     HOOK_COVERAGE.store(false, Release);
     TAP.installed.store(false, SeqCst);
-    let restored = restore(platform, vtable, 0..HOOKS);
+    let restored = restore(vtable, 0..HOOKS);
     RETIRE_PENDING.store(true, SeqCst);
     {
         let mut samplers = sampler_state();
@@ -1175,17 +1087,17 @@ fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     if restored { OK } else { PATCH_FAILED }
 }
 
-fn rsf_core_frame_tap_refresh(platform: &Platform) -> i32 {
+fn rsf_core_frame_tap_refresh() -> i32 {
     if !TAP.installed.load(Acquire) {
         return NOT_INSTALLED;
     }
-    refresh(platform);
+    refresh();
     // Once a frame from the present hook, when resource address lookups stop being trusted.
     TAP.verdict_epoch.fetch_add(1, Relaxed);
     OK
 }
 
-fn rsf_core_frame_tap_set_sampler_bias(platform: &Platform, bias: f32) -> i32 {
+fn rsf_core_frame_tap_set_sampler_bias(bias: f32) -> i32 {
     if !bias.is_finite() || !(-16.0..=0.0).contains(&bias) {
         return INVALID;
     }
@@ -1203,13 +1115,13 @@ fn rsf_core_frame_tap_set_sampler_bias(platform: &Platform, bias: f32) -> i32 {
     // here. Every slot is resolved to its original before any is re-biased: re-biasing drops the
     // old clone's mapping, and a later slot holding it would be biased twice.
     let mut current = [null_mut(); SAMPLERS];
-    unsafe { (platform.samplers)(context, current.as_mut_ptr()) };
+    unsafe { platform::samplers(context, current.as_mut_ptr()) };
     let current = current.map(|sampler| unsafe { com_ref::owned(sampler) });
     let originals = current
         .each_ref()
         .map(|sampler| state.original_of(sampler.as_ref().map_or(null_mut(), Interface::as_raw)));
-    let bound = originals.map(|sampler| state.biased(platform, context, sampler));
-    unsafe { (platform.set_samplers)(forward, context, 0, SAMPLERS as u32, bound.as_ptr()) };
+    let bound = originals.map(|sampler| state.biased(context, sampler));
+    unsafe { platform::set_shader_views(forward, context, 0, SAMPLERS as u32, bound.as_ptr()) };
     drop(current);
     TAP.sampler_bias_active.store(bias != 0.0, Release);
     OK
@@ -1262,27 +1174,21 @@ extern "C" fn rsf_frame_tap_set_research_phase_callbacks(
     OK
 }
 
-fn rsf_core_frame_tap_enter(platform: &Platform, hook: i32) -> Handle {
-    refresh(platform);
+fn rsf_core_frame_tap_enter(hook: i32) -> Handle {
+    refresh();
     original(hook as usize)
 }
 
-fn rsf_core_frame_tap_leave(platform: &Platform, admitted: u32) {
-    refresh(platform);
+fn rsf_core_frame_tap_leave(admitted: u32) {
+    refresh();
     if admitted != 0 {
         // Ends the admission a deciding entry carried across the detour's forward.
         drop(Admission);
     }
 }
 
-unsafe fn rsf_core_frame_tap_views(
-    platform: &Platform,
-    context: Handle,
-    start: u32,
-    count: u32,
-    views: *const Handle,
-) {
-    refresh(platform);
+unsafe fn rsf_core_frame_tap_views(context: Handle, start: u32, count: u32, views: *const Handle) {
+    refresh();
     let forward = original(HOOK_VIEWS);
     if forward.is_null() {
         // Dropping a binding is wrong and will show; a null call ends the process silently.
@@ -1290,13 +1196,13 @@ unsafe fn rsf_core_frame_tap_views(
     }
     let admission = Admission::enter(context);
     // Forwarded before the shadow, so it is in place before a callback binds something else.
-    unsafe { (platform.set_shader_views)(forward, context, start, count, views) };
+    unsafe { platform::set_shader_views(forward, context, start, count, views) };
     if inside() || admission.is_none() {
         return;
     }
     let _guard = Reentry::enter();
     let render = unsafe { render() };
-    sync_shadow(platform, render, context);
+    sync_shadow(render, context);
     // Only a slot whose view changed pays for a resource query.
     for index in 0..count as usize {
         let slot = start as usize + index;
@@ -1309,20 +1215,19 @@ unsafe fn rsf_core_frame_tap_views(
             unsafe { *views.add(index) }
         };
         if render.slots[slot].view != view {
-            shadow_view(platform, render, slot, view, None);
+            shadow_view(render, slot, view, None);
         }
     }
 }
 
 unsafe fn rsf_core_frame_tap_targets(
-    platform: &Platform,
     context: Handle,
     count: u32,
     views: *const Handle,
     depth: Handle,
     uavs: *const rsf_frame_tap_uavs,
 ) {
-    refresh(platform);
+    refresh();
     let hook = if uavs.is_null() {
         HOOK_TARGETS
     } else {
@@ -1333,7 +1238,7 @@ unsafe fn rsf_core_frame_tap_targets(
         return;
     }
     let admission = Admission::enter(context);
-    unsafe { (platform.set_targets)(forward, context, count, views, depth, uavs) };
+    unsafe { platform::set_targets(forward, context, count, views, depth, uavs) };
     // KEEP leaves the render targets alone, so the shadow leaves them too.
     let keeps = !uavs.is_null() && count == KEEP_TARGETS;
     if inside() || admission.is_none() || keeps {
@@ -1349,29 +1254,24 @@ unsafe fn rsf_core_frame_tap_targets(
     } else {
         unsafe { *views }
     };
-    shadow_target(platform, render, first, None);
+    shadow_target(render, first, None);
     unbind_target_reads(render);
 }
 
 // One draw the tap looks at: offered to research before and after it is forwarded, and its
 // geometry reported. The game's call reads its original afresh, after anything that may have
 // moved the runtime's table.
-fn rsf_core_frame_tap_draw(
-    platform: &Platform,
-    context: Handle,
-    hook: i32,
-    call: &rsf_frame_tap_draw_call,
-) {
-    refresh(platform);
+fn rsf_core_frame_tap_draw(context: Handle, hook: i32, call: &rsf_frame_tap_draw_call) {
+    refresh();
     let hook = hook as usize;
     if original(hook).is_null() {
         return;
     }
-    let forward = || unsafe { (platform.draw)(original(hook), context, call) };
+    let forward = || unsafe { platform::draw(original(hook), context, call) };
     let admission = Admission::enter(context);
     if inside() || admission.is_none() {
         forward();
-        refresh(platform);
+        refresh();
         return;
     }
     let _guard = Reentry::enter();
@@ -1380,30 +1280,24 @@ fn rsf_core_frame_tap_draw(
     let indexed = call.kind == 1 || call.kind == 3;
     let before = call.kind < 2;
     let elements = call.count;
-    sync_shadow(platform, render, context);
+    sync_shadow(render, context);
     if !render.geometry_valid {
-        seed_geometry(platform, render, context);
+        seed_geometry(render, context);
     }
     if before {
-        consider_target_draw(platform, render, context, indexed, elements, true);
+        consider_target_draw(render, context, indexed, elements, true);
         // A before-capture Map can switch the runtime's submission vtable.
-        refresh(platform);
+        refresh();
     }
     forward();
-    refresh(platform);
-    report_geometry(platform, render, context, call, null_mut(), 0);
-    consider_target_draw(platform, render, context, indexed, elements, false);
+    refresh();
+    report_geometry(render, context, call, null_mut(), 0);
+    consider_target_draw(render, context, indexed, elements, false);
 }
 
 // Draws whose arguments live in a buffer or come from stream-out, after they are forwarded.
-fn rsf_core_frame_tap_indirect(
-    platform: &Platform,
-    context: Handle,
-    kind: u32,
-    arguments: Handle,
-    offset: u32,
-) {
-    refresh(platform);
+fn rsf_core_frame_tap_indirect(context: Handle, kind: u32, arguments: Handle, offset: u32) {
+    refresh();
     let Some(_admission) = Admission::enter(context) else {
         return;
     };
@@ -1419,14 +1313,7 @@ fn rsf_core_frame_tap_indirect(
         first_instance: 0,
         base_vertex: 0,
     };
-    report_geometry(
-        platform,
-        unsafe { render() },
-        context,
-        &call,
-        arguments,
-        offset,
-    );
+    report_geometry(unsafe { render() }, context, &call, arguments, offset);
 }
 
 unsafe fn read_or<T: Copy>(items: *const T, index: usize, empty: T) -> T {
@@ -1563,7 +1450,6 @@ fn rsf_core_frame_tap_invalidate(context: Handle, restore: u32) {
 }
 
 unsafe fn rsf_core_frame_tap_map(
-    platform: &Platform,
     context: Handle,
     resource: Handle,
     subresource: u32,
@@ -1571,11 +1457,11 @@ unsafe fn rsf_core_frame_tap_map(
     flags: u32,
     mapped: *mut MappedResource,
 ) -> i32 {
-    refresh(platform);
+    refresh();
     let admission = Admission::enter(context);
     let forward: Map = unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_MAP as usize)) };
     let result = unsafe { forward(context, resource, subresource, kind, flags, mapped) };
-    refresh(platform);
+    refresh();
     if result < 0
         || admission.is_none()
         || mapped.is_null()
@@ -1593,7 +1479,7 @@ unsafe fn rsf_core_frame_tap_map(
     let Some(watch) = *constant_watch() else {
         return result;
     };
-    let bytes = watched_buffer(platform, unsafe { render() }, resource, watch.bytes);
+    let bytes = watched_buffer(unsafe { render() }, resource, watch.bytes);
     if bytes != 0 {
         let mut mappings = pending();
         let index = mappings
@@ -1614,13 +1500,8 @@ unsafe fn rsf_core_frame_tap_map(
     result
 }
 
-unsafe fn rsf_core_frame_tap_unmap(
-    platform: &Platform,
-    context: Handle,
-    resource: Handle,
-    subresource: u32,
-) {
-    refresh(platform);
+unsafe fn rsf_core_frame_tap_unmap(context: Handle, resource: Handle, subresource: u32) {
+    refresh();
     let admission = Admission::enter(context);
     let forward: Unmap =
         unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_UNMAP as usize)) };
@@ -1642,11 +1523,10 @@ unsafe fn rsf_core_frame_tap_unmap(
         }
     }
     unsafe { forward(context, resource, subresource) };
-    refresh(platform);
+    refresh();
 }
 
 fn rsf_core_frame_tap_dispatch(
-    platform: &Platform,
     context: Handle,
     x: u32,
     y: u32,
@@ -1664,7 +1544,7 @@ fn rsf_core_frame_tap_dispatch(
     };
     let _guard = Reentry::enter();
     unsafe {
-        (platform.compute)(
+        rsf_frame_tap_call_compute(
             compute,
             TAP.research_user.load(Relaxed),
             context,
@@ -1680,7 +1560,6 @@ fn rsf_core_frame_tap_dispatch(
 // A whole-buffer UpdateSubresource of a shader's own constants on its way to the GPU, offered to
 // the observer before it is forwarded.
 unsafe fn rsf_core_frame_tap_update(
-    platform: &Platform,
     context: Handle,
     destination: Handle,
     subresource: u32,
@@ -1704,7 +1583,7 @@ unsafe fn rsf_core_frame_tap_update(
     let Some(watch) = *constant_watch() else {
         return;
     };
-    let bytes = watched_buffer(platform, unsafe { render() }, destination, watch.bytes);
+    let bytes = watched_buffer(unsafe { render() }, destination, watch.bytes);
     if bytes == 0 || row_pitch > bytes {
         return;
     }
@@ -1716,7 +1595,6 @@ unsafe fn rsf_core_frame_tap_update(
 // forward: the bias reads the bindings back from the context when it starts or ends. Biased clones
 // carry their admission to the detour's `leave`, so uninstall cannot release one being bound.
 unsafe fn rsf_core_frame_tap_samplers(
-    platform: &Platform,
     context: Handle,
     start: u32,
     count: u32,
@@ -1746,7 +1624,7 @@ unsafe fn rsf_core_frame_tap_samplers(
     }
     let bound_slots = unsafe { slice::from_raw_parts_mut(bound, count) };
     for (bound, &original) in bound_slots.iter_mut().zip(&originals) {
-        *bound = state.biased(platform, context, original);
+        *bound = state.biased(context, original);
     }
     bound.cast_const()
 }
