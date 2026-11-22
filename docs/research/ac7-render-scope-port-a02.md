@@ -177,3 +177,14 @@ ABI, exception or capture-probe checks.
 Validation uses source comparisons, regenerated bindgen 0.72.1 records,
 Rust 1.94.1 formatting, locked offline Cargo metadata, and Git whitespace
 checks. Compilation, linking, fixtures and device execution remain unverified.
+
+## AC7 C11 contracts
+
+The UI classifier ABI probe uses a C11 launcher. It still checks null classification and
+layout, accepts an optional exact 1,104-byte captured shader, and requires the classifier
+to reject a copy with its final byte flipped. The CTest name, Rust library and C++ link
+driver are unchanged. The cloud depth platform header is a C declaration and layout
+contract for the three Rust implementations in `cloud_depth/d3d11.rs`.
+
+Strict C11 syntax checks passed for the launcher and the cloud header, including a
+56-byte state layout assertion. Linking and fixture execution remain pending.

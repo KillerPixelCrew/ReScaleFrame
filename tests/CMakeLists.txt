@@ -326,7 +326,8 @@ add_test(NAME constant_override COMMAND rsf_constant_override)
 set_tests_properties(constant_override PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 # No device: the classifier is a pure function over shadowed facts, which is the point of it.
-add_executable(rsf_ac7_ui_rules_test ac7_ui_rules.cpp)
+add_executable(rsf_ac7_ui_rules_test ac7_ui_rules.c)
+set_target_properties(rsf_ac7_ui_rules_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_ac7_ui_rules_test PRIVATE ReScaleFrame::AC7UIRules rsf_build_options)
 add_test(NAME ac7_ui_rules COMMAND rsf_ac7_ui_rules_test)
 
