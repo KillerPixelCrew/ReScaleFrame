@@ -8,28 +8,14 @@
 #include <new>
 #include <utility>
 
+extern "C" uint32_t rsf_fsr4_compat_adapter_vendor(void*);
+extern "C" bool rsf_fsr4_compat_device_supports_int8(void*);
+extern "C" void rsf_fsr4_compat_retain_device(void*);
+extern "C" void rsf_fsr4_compat_release_device(void*);
+extern "C" const rsf_fsr4_compat_lease* rsf_fsr4_compat_acquire_device(
+    const rsf_fsr4_compat_platform*, void*, void*, Fsr4Log, void*);
+
 namespace {
-uint32_t adapter_vendor(void* adapter)
-{
-    DXGI_ADAPTER_DESC1 description{};
-    return SUCCEEDED(static_cast<IDXGIAdapter1*>(adapter)->GetDesc1(&description))
-        ? description.VendorId : 0;
-}
-
-bool device_supports_int8(void* opaque)
-{
-    auto* device = static_cast<ID3D12Device*>(opaque);
-    D3D12_FEATURE_DATA_SHADER_MODEL shader_model{D3D_SHADER_MODEL_6_6};
-    D3D12_FEATURE_DATA_D3D12_OPTIONS1 options{};
-    return SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model))) &&
-        shader_model.HighestShaderModel >= D3D_SHADER_MODEL_6_6 &&
-        SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &options, sizeof(options))) &&
-        options.WaveOps;
-}
-
-void retain_device(void* device) { static_cast<ID3D12Device*>(device)->AddRef(); }
-void release_device(void* device) { static_cast<ID3D12Device*>(device)->Release(); }
-
 bool module_digest(void* module, const uint32_t* sizes, size_t size_count,
     uint32_t* size, uint8_t digest[32])
 {
@@ -82,7 +68,8 @@ void* enable_hook(void* target, rsf_fsr4_compat_capability_fn detour)
 
 const rsf_fsr4_compat_platform platform{
     sizeof(rsf_fsr4_compat_platform), RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION,
-    adapter_vendor, device_supports_int8, retain_device, release_device,
+    rsf_fsr4_compat_adapter_vendor, rsf_fsr4_compat_device_supports_int8,
+    rsf_fsr4_compat_retain_device, rsf_fsr4_compat_release_device,
     module_digest, match_entry, create_hook, enable_hook,
 };
 
@@ -117,14 +104,5 @@ catch (...) {
 const rsf_fsr4_compat_lease* rsf_fsr4_acquire_int8(HMODULE module, ID3D12Device* device,
     Fsr4Log log, void* user)
 {
-    if (!module || !device) return nullptr;
-    IDXGIFactory4* factory = nullptr;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return nullptr;
-    IDXGIAdapter1* adapter = nullptr;
-    const auto result = factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter));
-    factory->Release();
-    if (FAILED(result)) return nullptr;
-    const auto* lease = rsf_fsr4_acquire_int8_adapter(module, adapter, device, log, user);
-    adapter->Release();
-    return lease;
+    return rsf_fsr4_compat_acquire_device(&platform, module, device, log, user);
 }

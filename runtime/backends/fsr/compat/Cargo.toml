@@ -14,3 +14,10 @@ rsf-game-sys = { path = "../../../../sdk/game" }
 
 [lints]
 workspace = true
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62.2", default-features = false, features = [
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+] }

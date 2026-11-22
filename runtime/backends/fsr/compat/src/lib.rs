@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 mod abi;
+#[cfg(windows)]
+mod dx12;
 // The orchestrator's stateless FidelityFX provider-version policy.
 #[path = "../../../../orchestrator/src/ffx_version.rs"]
 mod ffx_version;
