@@ -4,7 +4,6 @@
     "source_base_commit": "38ebf179245de730b37c355023e49375426a6cb8",
     "observer_source_sha256": "f7d754fe0d50ad8a5c2fe26fdd8ee2ad0d31a91db7c95f8102f6faf680876fd4",
     "scope": "Release MSVC build; 43 native checks, seven skips, Rust formatting/lint; deployed carrier and temporal observer; user-run desktop mission produced 197 readable samples. VR unavailable. No GPU processing or image-quality acceptance.",
-    "game_abi": 13,
     "plugin_rendering_ready": false,
     "current_status": "../../docs/current-status.md",
     "status": "Exact-build XInput carrier and guarded temporal graph observer; GPU leases, SR, FG, latency and VR processing unimplemented.",

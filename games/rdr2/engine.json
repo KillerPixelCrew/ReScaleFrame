@@ -3,7 +3,6 @@
     "audited": "2026-10-26",
     "scope": "Normal SDR native SR/FG has recorded acceptance. All five real input resolutions and runtime transitions are accepted in permanent PID140840 and user-confirmed. Native UI insertion cancelled. HDR, complete HUD modes and non-NVIDIA hardware remain unproven.",
     "continuation_record": "RESEARCH-HANDOFF.md",
-    "game_abi": 19,
     "frontend_validation": "Shared Rust/DX12 panel and runtime quality controls user-confirmed. FG-Off now displays Off while retaining the saved provider for re-enable; frontend regression passes. Busy settings observation and GPU-ring UI omissions corrected; native WARP backlog test passes.",
     "frontend_evidence": ".local/rdr2-tools/quality-overlay-20261026/{permanent-game.log,permanent-result.json,deployment.json}; .local/rdr2-tools/rdr2-fg-off-selection-verify.log",
     "plugin_rendering_ready": false,

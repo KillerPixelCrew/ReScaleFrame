@@ -27,7 +27,6 @@
     "audited": "2026-10-07",
     "source_commit": "fda5fd0f2730b40e5b96f419bc0a05cb0b73932b",
     "scope": "Source/documentation review of recorded evidence; no new game or device test. Earlier dated observations below retain their original scope.",
-    "game_abi": 13,
     "plugin_rendering_ready": false,
     "current_status": "../../docs/current-status.md",
     "sr": "Live DX12 SR execution and improved pre-DoF order recorded.",
