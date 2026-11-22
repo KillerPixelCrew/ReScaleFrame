@@ -33,7 +33,8 @@ lends its pointers only when all four leases exist.
 `overlay_native12_platform.h` is private to the orchestrator: only `overlay_native12.cpp` and the
 Rust owner use `rsf_overlay12_platform`. `overlay_wrapped12_platform.h` includes the header for
 `rsf_overlay12_log` only. The public `overlay_d3d12.h` entry points and the overlay panel ABI are
-unchanged.
+unchanged. Both private headers were later deleted: the records are Rust types in
+`overlay_native12.rs` and `overlay_wrapped12.rs`, and the leaf tables are Rust-only.
 
 - New `rsf_overlay12_frame { allocator, commands, srv, rtv }`, four pointers.
 - New `create_frame(panel, rsf_overlay12_frame*)` at index 2, after `initialize`.

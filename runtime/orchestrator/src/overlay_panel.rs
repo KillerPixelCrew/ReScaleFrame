@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// The production entry points live in `native`, which unit tests do not build.
+#![cfg_attr(test, allow(dead_code))]
 use crate::sys::{rsf_overlay, rsf_overlay_draw_data, rsf_overlay_host_panel, rsf_overlay_input};
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use std::ffi::{CStr, c_void};

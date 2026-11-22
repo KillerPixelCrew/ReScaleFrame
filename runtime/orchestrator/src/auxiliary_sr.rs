@@ -1073,18 +1073,6 @@ unsafe extern "C" fn rsf_auxiliary_sr_reserve(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_refine(
-    handle: *mut AuxiliarySr,
-    count: u32,
-    inputs: *const rsf_d3d11_auxiliary_surface,
-) -> i32 {
-    unsafe { handle.as_mut() }.is_some_and(|state| {
-        unsafe { borrowed_surfaces(count, inputs, MAX_SURFACES) }
-            .is_some_and(|inputs| state.refine(inputs))
-    }) as i32
-}
-
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_auxiliary_sr_seal(handle: *mut AuxiliarySr) -> i32 {
     unsafe { handle.as_mut() }.is_some_and(|state| state.render(true, None)) as i32
 }
@@ -1092,11 +1080,6 @@ unsafe extern "C" fn rsf_auxiliary_sr_seal(handle: *mut AuxiliarySr) -> i32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_auxiliary_sr_cancel(handle: *mut AuxiliarySr) -> i32 {
     unsafe { handle.as_mut() }.is_some_and(AuxiliarySr::cancel) as i32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_original_colour(handle: *const AuxiliarySr) -> Texture {
-    unsafe { handle.as_ref() }.map_or(ptr::null_mut(), AuxiliarySr::original_colour)
 }
 
 #[unsafe(no_mangle)]

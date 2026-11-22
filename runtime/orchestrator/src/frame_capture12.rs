@@ -669,18 +669,6 @@ unsafe extern "C" fn rsf_core_capture12_abandon(owner: *const Owner, slot: u32) 
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_flush_after_queue(
-    owner: *const Owner,
-    queue: Handle,
-    wait_submissions: unsafe extern "C" fn(Handle) -> i32,
-    user: Handle,
-) -> i32 {
-    unsafe { self::owner(owner) }.map_or(0, |owner| {
-        i32::from(owner.flush_after_queue(queue, || unsafe { wait_submissions(user) } != 0))
-    })
-}
-
 // Public capture readers use the same owner as the embedded backends without
 // the environment-driven capture window.
 #[unsafe(no_mangle)]

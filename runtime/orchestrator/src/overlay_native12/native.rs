@@ -172,7 +172,7 @@ unsafe extern "C" fn create_frame(gpu: *mut c_void, out: *mut FrameTable) -> u32
     }
     let mut desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-        NumDescriptors: RSF_OVERLAY12_TEXTURE_LIMIT as u32,
+        NumDescriptors: TEXTURES as u32,
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
         NodeMask: 0,
     };
@@ -576,7 +576,7 @@ unsafe extern "C" fn begin(
 
 unsafe extern "C" fn install(
     window: *mut c_void,
-    log: rsf_overlay12_log,
+    log: OverlayLog,
     user: *mut c_void,
 ) -> u32 {
     let options = rsf_overlay_input_options {
@@ -662,7 +662,7 @@ pub(crate) unsafe extern "C" fn rsf_overlay_native12_present(
     chain: *mut c_void,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
-    log: rsf_overlay12_log,
+    log: OverlayLog,
     user: *mut c_void,
 ) -> i32 {
     unsafe { panel_present(&PLATFORM, device, queue, chain, stats, intent, log, user) }

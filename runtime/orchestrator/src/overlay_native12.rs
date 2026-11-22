@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// The production entry points live in `native`, which unit tests do not build.
+#![cfg_attr(test, allow(dead_code))]
 use crate::com_ref::ComRef;
 use crate::d3d12_fence::FenceState;
 use crate::overlay_geometry::{
@@ -11,13 +13,8 @@ use crate::sys::{
     RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data as DrawData, rsf_overlay_input,
     rsf_overlay_vertex,
 };
-use crate::sys::{
-    RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_draw as Draw, rsf_overlay12_draw_call as DrawCall,
-    rsf_overlay12_frame as FrameTable, rsf_overlay12_log, rsf_overlay12_platform as RawPlatform,
-    rsf_overlay12_target as Target,
-};
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
-use std::ffi::{CStr, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::ptr::{NonNull, null_mut};
 use std::sync::Mutex;
@@ -33,8 +30,52 @@ use windows_sys::Win32::{
 #[cfg(not(test))]
 pub(crate) mod native;
 
-// Production constructs this table with required pointers. Only the legacy
-// C entry points admit a nullable table.
+pub(crate) type OverlayLog = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
+
+#[repr(C)]
+struct Target {
+    width: u32,
+    height: u32,
+    format: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DrawCall {
+    descriptor: u32,
+    first_index: u32,
+    index_count: u32,
+    vertex_offset: i32,
+    clip: [i32; 4],
+}
+
+#[repr(C)]
+struct Draw {
+    target: *mut c_void,
+    pipeline: *mut c_void,
+    vertices: *mut c_void,
+    indices: *mut c_void,
+    vertex_data: *const c_void,
+    index_data: *const c_void,
+    width: u32,
+    height: u32,
+    vertex_bytes: u32,
+    index_bytes: u32,
+}
+
+/// One Present slot: direct allocator, its closed graphics list, a shader-visible SRV heap of
+/// `TEXTURES` descriptors and a one-entry RTV heap. The owner holds each reference; leaves
+/// borrow the table for one call.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FrameTable {
+    allocator: *mut c_void,
+    commands: *mut c_void,
+    srv: *mut c_void,
+    rtv: *mut c_void,
+}
+
+// Production binds `native::PLATFORM`; the unit tests bind fakes.
 #[derive(Clone, Copy)]
 struct Platform {
     window: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
@@ -45,7 +86,7 @@ struct Platform {
     ) -> *mut c_void,
     create_frame: unsafe extern "C" fn(panel: *mut c_void, frame: *mut FrameTable) -> u32,
     install_input:
-        unsafe extern "C" fn(window: *mut c_void, log: rsf_overlay12_log, user: *mut c_void) -> u32,
+        unsafe extern "C" fn(window: *mut c_void, log: OverlayLog, user: *mut c_void) -> u32,
     stop_input: unsafe extern "C" fn() -> u32,
     destroy: unsafe extern "C" fn(panel: *mut c_void),
     visible: unsafe extern "C" fn() -> u32,
@@ -87,34 +128,8 @@ struct Platform {
     signal: unsafe extern "C" fn(panel: *mut c_void, fence: *mut c_void, value: u64) -> u32,
 }
 
-impl Platform {
-    fn admit(raw: &RawPlatform) -> Option<Self> {
-        Some(Self {
-            window: raw.window?,
-            initialize: raw.initialize?,
-            create_frame: raw.create_frame?,
-            install_input: raw.install_input?,
-            stop_input: raw.stop_input?,
-            destroy: raw.destroy?,
-            visible: raw.visible?,
-            set_visible: raw.set_visible?,
-            completed: raw.completed?,
-            arm: raw.arm?,
-            begin: raw.begin?,
-            create_pipeline: raw.create_pipeline?,
-            create_upload: raw.create_upload?,
-            collect_input: raw.collect_input?,
-            create_texture: raw.create_texture?,
-            upload_texture: raw.upload_texture?,
-            record: raw.record?,
-            execute: raw.execute?,
-            signal: raw.signal?,
-        })
-    }
-}
-
 const SLOTS: usize = 3;
-const TEXTURES: usize = RSF_OVERLAY12_TEXTURE_LIMIT as usize;
+const TEXTURES: usize = 64;
 const ATLAS_BATCH: usize = 32;
 const STARTUP_MS: u64 = 8000;
 const STARTUP_FADE_MS: u64 = 1000;
@@ -638,7 +653,7 @@ struct Started {
     previous: u64,
     was_visible: bool,
     trace_left: u32,
-    logger: rsf_overlay12_log,
+    logger: OverlayLog,
     log_user: usize,
 }
 
@@ -659,7 +674,7 @@ impl Started {
         device: *mut c_void,
         queue: *mut c_void,
         chain: *mut c_void,
-        logger: rsf_overlay12_log,
+        logger: OverlayLog,
         user: *mut c_void,
     ) -> Option<Self> {
         let window = unsafe { (platform.window)(chain) };
@@ -798,7 +813,7 @@ unsafe fn panel_present(
     chain: *mut c_void,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
-    logger: rsf_overlay12_log,
+    logger: OverlayLog,
     user: *mut c_void,
 ) -> i32 {
     if device.is_null()
@@ -861,35 +876,6 @@ unsafe fn panel_present(
         panel.retire_failed(platform, now);
     }
     0
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay12_visible(raw: &RawPlatform) -> u32 {
-    Platform::admit(raw).map_or(0, |platform| panel_visible(&platform))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay12_toggle(raw: &RawPlatform) {
-    if let Some(platform) = Platform::admit(raw) {
-        panel_toggle(&platform);
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay12_present(
-    raw: &RawPlatform,
-    device: *mut c_void,
-    queue: *mut c_void,
-    chain: *mut c_void,
-    stats: *const rsf_overlay_stats,
-    intent: *mut rsf_overlay_intent,
-    logger: rsf_overlay12_log,
-    user: *mut c_void,
-) -> i32 {
-    let Some(platform) = Platform::admit(raw) else {
-        return 0;
-    };
-    unsafe { panel_present(&platform, device, queue, chain, stats, intent, logger, user) }
 }
 
 impl Started {
@@ -1169,7 +1155,7 @@ mod tests {
         fn unused_window(_: *mut c_void) -> *mut c_void;
         fn unused_initialize(_: *mut c_void, _: *mut c_void, _: *mut *mut c_void) -> *mut c_void;
         fn unused_create_frame(_: *mut c_void, _: *mut FrameTable) -> u32;
-        fn unused_install_input(_: *mut c_void, _: rsf_overlay12_log, _: *mut c_void) -> u32;
+        fn unused_install_input(_: *mut c_void, _: OverlayLog, _: *mut c_void) -> u32;
         fn unused_stop_input() -> u32;
         fn unused_destroy(_: *mut c_void);
         fn unused_visible() -> u32;

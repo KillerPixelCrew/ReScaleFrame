@@ -1,30 +1,45 @@
 // SPDX-License-Identifier: MIT
+// The production entry points live in `native`, which unit tests do not build.
+#![cfg_attr(test, allow(dead_code))]
 use crate::com_ref::ComRef;
 use crate::sr_session::has_capacity;
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats};
-use crate::sys::{
-    rsf_overlay11on12_device, rsf_overlay11on12_platform as RawPlatform, rsf_overlay11on12_target,
-    rsf_overlay12_log,
-};
+use crate::overlay_native12::OverlayLog;
 use std::ffi::{CStr, c_void};
 use std::sync::Mutex;
 #[cfg(not(test))]
 pub(super) mod native;
 
-// Production constructs this table with required pointers. Only the legacy
-// C entry points admit a nullable table.
+/// Successful device and target calls transfer one reference per pointer.
+#[repr(C)]
+struct Interop {
+    device: *mut c_void,
+    context: *mut c_void,
+    interop: *mut c_void,
+}
+
+#[repr(C)]
+struct WrappedTarget {
+    backbuffer: *mut c_void,
+    wrapped: *mut c_void,
+    view: *mut c_void,
+    width: u32,
+    height: u32,
+}
+
+// Production binds `native::PLATFORM`; the unit tests bind fakes.
 #[derive(Clone, Copy)]
 struct Platform {
     create: unsafe extern "C" fn(
         device: *mut c_void,
         queue: *mut c_void,
-        out: *mut rsf_overlay11on12_device,
+        out: *mut Interop,
     ) -> i32,
     window: unsafe extern "C" fn(chain: *mut c_void, window: *mut *mut c_void) -> u32,
     start: unsafe extern "C" fn(
         device: *mut c_void,
         window: *mut c_void,
-        log: rsf_overlay12_log,
+        log: OverlayLog,
         user: *mut c_void,
     ) -> i32,
     admit: unsafe extern "C" fn(show_hud: u32, visible: *mut u32, hint: *mut f32) -> i32,
@@ -32,7 +47,7 @@ struct Platform {
         device: *mut c_void,
         interop: *mut c_void,
         chain: *mut c_void,
-        out: *mut rsf_overlay11on12_target,
+        out: *mut WrappedTarget,
     ) -> u32,
     acquire: unsafe extern "C" fn(interop: *mut c_void, wrapped: *mut c_void),
     draw: unsafe extern "C" fn(
@@ -48,23 +63,6 @@ struct Platform {
     release: unsafe extern "C" fn(interop: *mut c_void, wrapped: *mut c_void),
     flush: unsafe extern "C" fn(context: *mut c_void),
     stop: unsafe extern "C" fn(device: *mut c_void),
-}
-
-impl Platform {
-    fn admit(raw: &RawPlatform) -> Option<Self> {
-        Some(Self {
-            create: raw.create?,
-            window: raw.window?,
-            start: raw.start?,
-            admit: raw.admit?,
-            target: raw.target?,
-            acquire: raw.acquire?,
-            draw: raw.draw?,
-            release: raw.release?,
-            flush: raw.flush?,
-            stop: raw.stop?,
-        })
-    }
 }
 
 const NOT_SUPPORTED: i32 = -7;
@@ -121,7 +119,7 @@ struct Frame<'a> {
     input_window: Handle,
     stats: &'a rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
-    logger: rsf_overlay12_log,
+    logger: OverlayLog,
     user: Handle,
 }
 
@@ -156,7 +154,7 @@ impl State {
             return 0;
         }
         if self.binding.is_none() {
-            let mut native: rsf_overlay11on12_device = unsafe { std::mem::zeroed() };
+            let mut native: Interop = unsafe { std::mem::zeroed() };
             let result = unsafe { (platform.create)(frame.device, frame.queue, &mut native) };
             if result == NOT_SUPPORTED {
                 return self.refuse(
@@ -211,7 +209,7 @@ impl State {
         {
             return 0;
         }
-        let mut native: rsf_overlay11on12_target = unsafe { std::mem::zeroed() };
+        let mut native: WrappedTarget = unsafe { std::mem::zeroed() };
         if unsafe {
             (platform.target)(
                 binding.device.as_ptr(),
@@ -271,7 +269,7 @@ unsafe fn render_frame(
     input_window: Handle,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
-    logger: rsf_overlay12_log,
+    logger: OverlayLog,
     user: Handle,
 ) -> i32 {
     if device.is_null()
@@ -307,43 +305,6 @@ unsafe fn render_frame(
 
 fn stop(platform: &Platform) {
     OWNER.lock().unwrap().stop(platform);
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay11on12_frame(
-    raw: &RawPlatform,
-    device: Handle,
-    queue: Handle,
-    chain: Handle,
-    input_window: Handle,
-    stats: *const rsf_overlay_stats,
-    intent: *mut rsf_overlay_intent,
-    logger: rsf_overlay12_log,
-    user: Handle,
-) -> i32 {
-    let Some(platform) = Platform::admit(raw) else {
-        return 0;
-    };
-    unsafe {
-        render_frame(
-            &platform,
-            device,
-            queue,
-            chain,
-            input_window,
-            stats,
-            intent,
-            logger,
-            user,
-        )
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay11on12_stop(raw: &RawPlatform) {
-    if let Some(platform) = Platform::admit(raw) {
-        stop(&platform);
-    }
 }
 
 #[cfg(test)]
@@ -382,11 +343,11 @@ mod tests {
     unsafe extern "C" fn create(
         device: Handle,
         _: Handle,
-        out: *mut rsf_overlay11on12_device,
+        out: *mut Interop,
     ) -> i32 {
         call("create");
         unsafe {
-            out.write(rsf_overlay11on12_device {
+            out.write(Interop {
                 device,
                 context: device,
                 interop: device,
@@ -398,7 +359,7 @@ mod tests {
         unsafe { out.write(chain) };
         1
     }
-    unsafe extern "C" fn start(_: Handle, _: Handle, _: rsf_overlay12_log, _: Handle) -> i32 {
+    unsafe extern "C" fn start(_: Handle, _: Handle, _: OverlayLog, _: Handle) -> i32 {
         call("start");
         1
     }
@@ -418,11 +379,11 @@ mod tests {
         device: Handle,
         _: Handle,
         _: Handle,
-        out: *mut rsf_overlay11on12_target,
+        out: *mut WrappedTarget,
     ) -> u32 {
         call("target");
         unsafe {
-            out.write(rsf_overlay11on12_target {
+            out.write(WrappedTarget {
                 backbuffer: device,
                 wrapped: device,
                 view: device,

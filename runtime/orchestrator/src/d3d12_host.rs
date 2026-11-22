@@ -153,43 +153,6 @@ pub(super) unsafe extern "C" fn rsf_core_d3d12_copy_transitioned(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_d3d12_create_command_list(
-    device: Raw,
-    kind: u32,
-    allocator_out: *mut Raw,
-    list_out: *mut Raw,
-) -> i32 {
-    let device: &ID3D12Device = unsafe { borrow(&device) };
-    let kind = D3D12_COMMAND_LIST_TYPE(kind as i32);
-    let Some(allocator) = receive::<ID3D12CommandAllocator>(|iid, out| unsafe {
-        (device.vtable().CreateCommandAllocator)(device.as_raw(), kind, iid, out)
-    }) else {
-        return 0;
-    };
-    let Some(list) = receive::<ID3D12GraphicsCommandList>(|iid, out| unsafe {
-        (device.vtable().CreateCommandList)(
-            device.as_raw(),
-            0,
-            kind,
-            allocator.as_raw(),
-            null_mut(),
-            iid,
-            out,
-        )
-    }) else {
-        return 0;
-    };
-    if unsafe { list.Close() }.is_err() {
-        return 0;
-    }
-    unsafe {
-        allocator_out.write(allocator.into_raw());
-        list_out.write(list.into_raw());
-    }
-    1
-}
-
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_d3d12_create_uav_texture(
     device: Raw,
     width: u32,

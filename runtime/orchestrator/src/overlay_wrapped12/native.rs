@@ -94,7 +94,7 @@ impl SystemEntry {
 unsafe extern "C" fn create_wrapped_device(
     device: Handle,
     queue: Handle,
-    out: *mut rsf_overlay11on12_device,
+    out: *mut Interop,
 ) -> i32 {
     static ENTRY: OnceLock<Option<SystemEntry>> = OnceLock::new();
     let Some(entry) = ENTRY.get_or_init(SystemEntry::open) else {
@@ -124,7 +124,7 @@ unsafe extern "C" fn create_wrapped_device(
         return INIT_FAILED;
     };
     unsafe {
-        out.write(rsf_overlay11on12_device {
+        out.write(Interop {
             device: device11.into_raw(),
             context: context11.into_raw(),
             interop: interop.into_raw(),
@@ -146,7 +146,7 @@ unsafe fn wrap(
     interop: Handle,
     backbuffer: ID3D12Resource,
     state: D3D12_RESOURCE_STATES,
-    out: *mut rsf_overlay11on12_target,
+    out: *mut WrappedTarget,
 ) -> Option<()> {
     let device = unsafe { graphics::borrow::<ID3D11Device>(&device) };
     let interop = unsafe { graphics::borrow::<ID3D11On12Device>(&interop) };
@@ -167,7 +167,7 @@ unsafe fn wrap(
         return None;
     }
     unsafe {
-        out.write(rsf_overlay11on12_target {
+        out.write(WrappedTarget {
             backbuffer: backbuffer.into_raw(),
             wrapped: wrapped.into_raw(),
             view: view.into_raw(),
@@ -182,7 +182,7 @@ unsafe extern "C" fn target(
     device: Handle,
     interop: Handle,
     chain: Handle,
-    out: *mut rsf_overlay11on12_target,
+    out: *mut WrappedTarget,
 ) -> u32 {
     let Ok(chain) =
         (unsafe { graphics::borrow::<IDXGISwapChain>(&chain) }).cast::<IDXGISwapChain3>()
@@ -212,7 +212,7 @@ unsafe extern "C" fn target_present(
     device: Handle,
     interop: Handle,
     backbuffer: Handle,
-    out: *mut rsf_overlay11on12_target,
+    out: *mut WrappedTarget,
 ) -> u32 {
     // This is the supplied resource, even if the chain has advanced its index.
     let backbuffer = unsafe { graphics::borrow::<ID3D12Resource>(&backbuffer) }.clone();
@@ -248,7 +248,7 @@ unsafe extern "C" {
     fn rsf_overlay_host_start_device(
         device: Handle,
         window: Handle,
-        log: rsf_overlay12_log,
+        log: OverlayLog,
         user: Handle,
     ) -> i32;
     fn rsf_overlay_host_admit_target(hud: u32, visible: *mut u32, hint: *mut f32) -> i32;
@@ -289,7 +289,7 @@ pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame(
     chain: Handle,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
-    log: rsf_overlay12_log,
+    log: OverlayLog,
     user: Handle,
 ) -> i32 {
     unsafe {
@@ -315,7 +315,7 @@ pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame_for_window(
     window: Handle,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
-    log: rsf_overlay12_log,
+    log: OverlayLog,
     user: Handle,
 ) -> i32 {
     if unsafe { IsWindow(window) } == 0 {
@@ -340,7 +340,7 @@ pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_present(
     chain: Handle,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
-    log: rsf_overlay12_log,
+    log: OverlayLog,
     user: Handle,
 ) -> i32 {
     unsafe {

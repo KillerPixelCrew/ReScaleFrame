@@ -85,16 +85,6 @@ pub(super) unsafe fn load_absolute_library(path: *const u16) -> (*mut c_void, u3
     (module, error)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_load_absolute_library(
-    path: *const u16,
-    error: &mut u32,
-) -> *mut c_void {
-    let (module, last_error) = unsafe { load_absolute_library(path) };
-    *error = last_error;
-    module
-}
-
 pub(super) struct SdkModule {
     handle: NonNull<c_void>,
     unload: unsafe extern "C" fn(*mut c_void),
