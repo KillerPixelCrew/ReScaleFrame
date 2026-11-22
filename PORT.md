@@ -1942,15 +1942,15 @@ Port the input hooks and overlay integration, including the handoff between game
 
 **Port files (9)**
 
-- [ ] [games/anomaly/src/input_hooks.cpp](games/anomaly/src/input_hooks.cpp)
+- [x] [games/anomaly/src/input_hooks.cpp](games/anomaly/src/input_hooks.cpp)
 - [ ] [games/anomaly/src/input_hooks.h](games/anomaly/src/input_hooks.h)
-- [ ] [games/anomaly/src/input_profile.h](games/anomaly/src/input_profile.h)
-- [ ] [games/anomaly/src/overlay_hooks.cpp](games/anomaly/src/overlay_hooks.cpp)
-- [ ] [games/anomaly/src/overlay_hooks.h](games/anomaly/src/overlay_hooks.h)
-- [ ] [games/anomaly/src/overlay_input_gate.h](games/anomaly/src/overlay_input_gate.h)
-- [ ] [games/anomaly/src/overlay_platform.h](games/anomaly/src/overlay_platform.h)
-- [ ] [games/anomaly/src/overlay_service.cpp](games/anomaly/src/overlay_service.cpp)
-- [ ] [games/anomaly/src/overlay_service.h](games/anomaly/src/overlay_service.h)
+- [x] [games/anomaly/src/input_profile.h](games/anomaly/src/input_profile.h)
+- [x] [games/anomaly/src/overlay_hooks.cpp](games/anomaly/src/overlay_hooks.cpp)
+- [x] [games/anomaly/src/overlay_hooks.h](games/anomaly/src/overlay_hooks.h)
+- [x] [games/anomaly/src/overlay_input_gate.h](games/anomaly/src/overlay_input_gate.h)
+- [x] [games/anomaly/src/overlay_platform.h](games/anomaly/src/overlay_platform.h)
+- [x] [games/anomaly/src/overlay_service.cpp](games/anomaly/src/overlay_service.cpp)
+- [x] [games/anomaly/src/overlay_service.h](games/anomaly/src/overlay_service.h)
 
 **Fixtures (5)**
 
