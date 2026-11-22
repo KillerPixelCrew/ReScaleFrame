@@ -24,9 +24,9 @@ pub(super) use rsf_graphics::dump_options::{
 };
 pub(super) mod abi;
 mod legacy;
-pub(crate) use legacy::{
-    rsf_input_dump_active, rsf_input_dump_fg, rsf_input_dump_fg_prepare, rsf_input_dump_sr,
-};
+#[cfg(not(test))]
+pub(crate) use legacy::rsf_input_dump_active;
+pub(crate) use legacy::{rsf_input_dump_fg, rsf_input_dump_fg_prepare, rsf_input_dump_sr};
 mod metadata;
 mod native;
 
