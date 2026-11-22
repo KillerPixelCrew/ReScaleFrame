@@ -124,3 +124,50 @@ Checked source declarations, preserved CTest targets, scoped the two
 feature archives, ran Rust 1.94.1 formatting, locked offline Cargo
 metadata and `git diff --check`. Build, test execution, lint and
 device or game verification remain user-owned.
+
+## Verified profile and native actor follow-up from `8df04a40`
+
+The generated private observer profile now carries the exact image
+size, frame and dimension RVAs, and the guarded site banks borrowed
+from the two native build records. Prepare checks the PE and
+instruction guards and retains that immutable profile in the observer
+engine. First hook installation and frame reads now take their inputs
+from that same prepared profile. HookSet still verifies mapped
+ownership, protection and replayed guard bytes before registration.
+
+Rust assembles the hook sites with the selected bytes and RVAs.
+The C++ actor defines a typed trampoline slot for each replacement
+and keeps the actual calls, invocation retirement and geometry scope
+on the native side. Camera samples use the native fault-contained
+copy for each matrix, and Rust publishes the pair only after both
+copies succeed. The public observation ABI and its version stay the same.
+
+The profile-taking SR and geometry test hosts now delegate argument
+selection to Rust. The first matching argument and the standard
+default are unchanged. The native hook fixture now lends the native,
+motion and selected SR site banks separately, and Rust seeds the
+fixture image in the original order.
+
+| Path | Source disposition |
+| --- | --- |
+| `games/anomaly/src/native_observer_platform.cpp` | Hook site assembly, frame field selection and camera sampling moved to Rust. Keeps typed detour actors, native stage bridges and exception or SEH leaves. |
+| `games/anomaly/src/native_observer_platform.h` | The private profile and trampoline bindings now have generated layouts. The public observation record remains unchanged. |
+| `tests/anomaly_build_select.h` | Argument selection moved to Rust. The facade still projects a native `BuildProfile` reference, supplies the opposite profile by reference identity and prints the fixture banner. |
+| `tests/anomaly_native_hook_leaves.cpp` | Rust owns bank traversal and image seeding. C++ supplies the compiler-emitted target functions, guarded copy and exact profile bank pointers. |
+
+`games/anomaly/src/build_profile.h` and
+`games/anomaly/src/native_profile.h` remain the single compile-time
+source for the exact Standard and AVX identities and records. The
+native input, geometry, motion and SR owners still consume them, as do
+the profile evidence tools and native compile-time assertions. The
+observer platform, slot exchange, PE and memory fault boundaries,
+MinHook and stage wrappers remain native. The residual temporal headers
+remain with their temporal and SR consumers.
+
+Source checks compared all eight native actor bodies and the binding
+order against `8df04a40`, preserving callback order and original-call
+arguments. The exact profile files and public observation declaration
+matched the base. Targeted bindgen 0.72.1 regeneration, pinned Rust
+1.94.1 formatting, locked offline Cargo metadata and `git diff --check`
+passed. Added guarded-camera and selected-profile batch fixtures remain
+unrun. Builds, test execution, lint and game or device checks remain open.

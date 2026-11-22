@@ -1099,6 +1099,13 @@ detours retain their exception and trampoline boundaries. Export and
 fixture verification remain open.
 [Native entry and fixture follow-up](research/rust-anomaly-startup-n01.md#native-entry-and-fixture-follow-up-from-82b39a63)
 
+The Anomaly observer now carries the verified build profile through
+hook site assembly and frame sampling. Rust owns the camera sample
+while the native copy and native actor calls retain their exception
+boundaries. The exact profiles and public observation ABI passed
+source comparison. Build and runtime verification remain open.
+[Verified profile and native actor follow-up](research/rust-anomaly-startup-n01.md#verified-profile-and-native-actor-follow-up-from-8df04a40)
+
 ## Rust orchestrator and first Anomaly port
 
 Anomaly's Rust geometry owner now reads and interprets draw-time producer

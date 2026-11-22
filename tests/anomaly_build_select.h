@@ -4,18 +4,18 @@
 #pragma once
 #include "build_profile.h"
 #include <cstdio>
-#include <cstdlib>
-#include <string_view>
+
+extern "C" size_t rsf_test_anomaly_select_build(int, const char* const*, const char* const*, size_t) noexcept;
 
 namespace rsf::anomaly::testing {
 inline const BuildProfile& selected_build(int argc, char** argv) noexcept
 {
-    for (int i = 1; i < argc; ++i) {
-        const std::string_view value = argv[i];
-        for (const auto& build : build_profiles)
-            if (value == build.label) return build;
-    }
-    return standard_build;
+    constexpr auto labels = [] {
+        std::array<const char*, build_profiles.size()> result{};
+        for (size_t i = 0; i < result.size(); ++i) result[i] = build_profiles[i].label;
+        return result;
+    }();
+    return build_profiles[rsf_test_anomaly_select_build(argc, argv, labels.data(), labels.size())];
 }
 // The profile of the other executable: its tables must never be accepted on this build's image.
 inline const BuildProfile& other_build(const BuildProfile& build) noexcept

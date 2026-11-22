@@ -6,11 +6,13 @@ mod tests;
 
 use crate::engine_guards::{Image, NativeSite, Read, UniqueGuard};
 use crate::executable::observer_build;
-use crate::native_hooks::ImageHeaders;
+use crate::native_hooks::{ImageHeaders, Site};
 use crate::native_observer_abi::{
-    RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation as Observation,
+    RSF_ANOMALY_OBSERVATION_ABI, RSF_ANOMALY_OBSERVER_HOOK_COUNT,
+    rsf_anomaly_native_observation as Observation, rsf_anomaly_observer_binding as Binding,
     rsf_anomaly_observer_camera as Camera, rsf_anomaly_observer_engine as Engine,
     rsf_anomaly_observer_frame as Frame, rsf_anomaly_observer_platform as Platform,
+    rsf_anomaly_observer_profile as Profile,
 };
 use crate::{ABI_MISMATCH, BuildIdentity, INVALID_ARGUMENT};
 use rsf_game_sys::{
@@ -31,28 +33,11 @@ const NOT_READY: rsf_result = -3;
 const BUSY: rsf_result = -4;
 const NATIVE_REFUSED: rsf_result = -5;
 
-#[repr(C)]
-struct ObserverProfile {
-    label: *const c_char,
-    image_size: u32,
-    sites: *const NativeSite,
-    site_count: usize,
-    unique_guards: *const UniqueGuard,
-    unique_guard_count: usize,
-}
-
-const _: () = {
-    assert!(size_of::<ObserverProfile>() == 48);
-    assert!(std::mem::offset_of!(ObserverProfile, image_size) == 8);
-    assert!(std::mem::offset_of!(ObserverProfile, sites) == 16);
-    assert!(std::mem::offset_of!(ObserverProfile, unique_guards) == 32);
-};
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_observer_identify(
     out: &mut Engine,
     builds: *const BuildIdentity,
-    profiles: *const ObserverProfile,
+    profiles: *const Profile,
     count: usize,
     headers: &ImageHeaders,
     read: Read,
@@ -64,17 +49,29 @@ unsafe extern "C" fn rsf_anomaly_observer_identify(
         Err(reason) => return reason.as_ptr(),
     };
     let profile = unsafe { &*profiles.add(build) };
+    if profile.site_count != HOOK_COUNT
+        || profile.sites.is_null()
+        || (profile.unique_guard_count != 0 && profile.unique_guards.is_null())
+    {
+        return c"Native observer profile does not describe all hook boundaries.".as_ptr();
+    }
     let image = unsafe { GetModuleHandleW(ptr::null()) };
     // HookSet adds a mapped-region check and an NT header extent check on install.
     if !headers.matches(image, profile.image_size, usize::MAX) {
         return c"Running image size differs from the verified build.".as_ptr();
     }
     let checked = Image::new(image.cast(), profile.image_size, read);
-    let sites = unsafe { slice::from_raw_parts(profile.sites, profile.site_count) };
+    let sites =
+        unsafe { slice::from_raw_parts(profile.sites.cast::<NativeSite>(), profile.site_count) };
     let guards = if profile.unique_guard_count == 0 {
         &[]
     } else {
-        unsafe { slice::from_raw_parts(profile.unique_guards, profile.unique_guard_count) }
+        unsafe {
+            slice::from_raw_parts(
+                profile.unique_guards.cast::<UniqueGuard>(),
+                profile.unique_guard_count,
+            )
+        }
     };
     if !unsafe { checked.matches_sites(sites, guards) } {
         return c"A native hook's expected instructions do not match; no hook was written."
@@ -85,23 +82,65 @@ unsafe extern "C" fn rsf_anomaly_observer_identify(
         build,
         label: profile.label,
         executable: builds[build].executable,
+        profile,
     };
     ptr::null()
 }
 
+const HOOK_COUNT: usize = RSF_ANOMALY_OBSERVER_HOOK_COUNT as usize;
+type Install = unsafe extern "C" fn(*mut c_void, u32, *const Site, usize) -> bool;
+
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_read_frame(
-    image: &Image,
-    frame: u32,
-    width: u32,
-    height: u32,
+unsafe extern "C" fn rsf_anomaly_observer_install(
+    engine: &Engine,
+    bindings: &[Binding; HOOK_COUNT],
+    install: Install,
+) -> bool {
+    let Some(profile) = (unsafe { engine.profile.as_ref() }) else {
+        return false;
+    };
+    if profile.site_count != bindings.len() || profile.sites.is_null() {
+        return false;
+    }
+    // The prepared engine owns this exact bank. The C++ actor lends one
+    // typed detour and a process-lifetime trampoline slot per entry.
+    let native_sites: &[NativeSite; HOOK_COUNT] = unsafe { &*profile.sites.cast() };
+    let sites: [Site; HOOK_COUNT] = std::array::from_fn(|index| {
+        let site = &native_sites[index];
+        let binding = &bindings[index];
+        Site {
+            _name: site.name,
+            rva: site.rva,
+            expected: site.expected,
+            replacement: binding.replacement,
+            original: binding.original,
+        }
+    });
+    unsafe {
+        install(
+            engine.image,
+            profile.image_size,
+            sites.as_ptr(),
+            sites.len(),
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_observer_read_frame(
+    engine: &Engine,
+    read: Read,
     out: &mut Frame,
 ) -> bool {
+    let Some(profile) = (unsafe { engine.profile.as_ref() }) else {
+        return false;
+    };
+    let image = Image::new(engine.image.cast(), profile.image_size, read);
     let sample = || {
         Some(Frame {
-            id: u32::from_le_bytes(image.copy(frame)?),
-            width: u32::from_le_bytes(image.copy(width)?),
-            height: u32::from_le_bytes(image.copy(height)?),
+            id: u32::from_le_bytes(image.copy(profile.frame_rva)?),
+            width: u32::from_le_bytes(image.copy(profile.width_rva)?),
+            height: u32::from_le_bytes(image.copy(profile.height_rva)?),
         })
     };
     let Some(frame) = sample() else {
@@ -511,7 +550,18 @@ impl Observer {
             return;
         }
         let mut sample = Camera::default();
-        let read = unsafe { (platform.read_camera.unwrap())(view, projection, &mut sample) };
+        let copy = platform.guarded_copy.unwrap();
+        let read = unsafe {
+            copy(
+                sample.view.as_mut_ptr().cast(),
+                view.cast(),
+                size_of_val(&sample.view),
+            ) && copy(
+                sample.projection.as_mut_ptr().cast(),
+                projection.cast(),
+                size_of_val(&sample.projection),
+            )
+        };
         {
             let mut state = lock(&self.state);
             let o = &mut state.observation;

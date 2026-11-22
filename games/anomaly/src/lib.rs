@@ -28,6 +28,8 @@ mod fg_policy_abi;
 mod fg_stage;
 #[cfg(windows)]
 mod fg_stage_abi;
+#[cfg(all(windows, not(feature = "native-entry")))]
+mod fixture_profile;
 mod frame_dump;
 mod geometry_registry;
 mod geometry_registry_abi;

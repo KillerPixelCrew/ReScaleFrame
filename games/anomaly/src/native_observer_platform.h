@@ -14,11 +14,29 @@ typedef struct rsf_anomaly_native_observation {
     float view[16], projection[16];
 } rsf_anomaly_native_observation;
 
+// The immutable projection of one native profile. Site banks are NativeSite
+// and UniqueGuard arrays whose layouts are checked by the native and Rust owners.
+typedef struct rsf_anomaly_observer_profile {
+    const char* label;
+    uint32_t image_size, frame_rva, width_rva, height_rva;
+    const void* sites;
+    size_t site_count;
+    const void* unique_guards;
+    size_t unique_guard_count;
+} rsf_anomaly_observer_profile;
+
+#define RSF_ANOMALY_OBSERVER_HOOK_COUNT 8
+typedef struct rsf_anomaly_observer_binding {
+    void* replacement;
+    void** original;
+} rsf_anomaly_observer_binding;
+
 typedef struct rsf_anomaly_observer_engine {
     void* image;
     size_t build;
     const char* label;
     const char* executable;
+    const rsf_anomaly_observer_profile* profile;
 } rsf_anomaly_observer_engine;
 
 typedef struct rsf_anomaly_observer_frame {
@@ -44,7 +62,7 @@ typedef struct rsf_anomaly_observer_platform {
     bool (*disable_input)(void);
     bool (*input_idle)(void);
     bool (*read_frame)(const rsf_anomaly_observer_engine*, rsf_anomaly_observer_frame*);
-    bool (*read_camera)(const float*, const float*, rsf_anomaly_observer_camera*);
+    bool (*guarded_copy)(void*, const void*, size_t);
     void (*render_begin)(uint32_t, uint32_t, uint32_t);
     void (*sr_frame_end)(void);
     void (*end_before)(void);

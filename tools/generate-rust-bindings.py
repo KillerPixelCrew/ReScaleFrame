@@ -304,8 +304,8 @@ generate("games/anomaly/src/bootstrap_abi.rs", "games/anomaly/src/bootstrap_plat
          "wchar_t|rsf_anomaly_(build_identity|bootstrap_platform)", "NOTHING", ["-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"])
 generate("games/anomaly/src/native_observer_abi.rs", "games/anomaly/src/native_observer_platform.h",
-         "rsf_anomaly_(native_observation|observer_(engine|frame|camera|platform))",
-         "RSF_ANOMALY_OBSERVATION_ABI", ["-Isdk/game/include"],
+         "rsf_anomaly_(native_observation|observer_(profile|binding|engine|frame|camera|platform))",
+         "RSF_ANOMALY_(OBSERVATION_ABI|OBSERVER_HOOK_COUNT)", ["-Isdk/game/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"])
 generate("games/anomaly/src/overlay_abi.rs", "games/anomaly/src/overlay_platform.h",

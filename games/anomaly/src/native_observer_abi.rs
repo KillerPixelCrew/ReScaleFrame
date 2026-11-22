@@ -4,6 +4,7 @@
 use rsf_game_sys::rsf_game_log_fn;
 
 pub const RSF_ANOMALY_OBSERVATION_ABI: u32 = 1;
+pub const RSF_ANOMALY_OBSERVER_HOOK_COUNT: u32 = 8;
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_native_observation {
@@ -68,16 +69,90 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_anomaly_observer_profile {
+    pub label: *const ::core::ffi::c_char,
+    pub image_size: u32,
+    pub frame_rva: u32,
+    pub width_rva: u32,
+    pub height_rva: u32,
+    pub sites: *const ::core::ffi::c_void,
+    pub site_count: usize,
+    pub unique_guards: *const ::core::ffi::c_void,
+    pub unique_guard_count: usize,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_anomaly_observer_profile"]
+        [::core::mem::size_of::<rsf_anomaly_observer_profile>() - 56usize];
+    ["Alignment of rsf_anomaly_observer_profile"]
+        [::core::mem::align_of::<rsf_anomaly_observer_profile>() - 8usize];
+    ["Offset of field: rsf_anomaly_observer_profile::label"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_profile, label) - 0usize];
+    ["Offset of field: rsf_anomaly_observer_profile::image_size"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_profile, image_size) - 8usize];
+    ["Offset of field: rsf_anomaly_observer_profile::frame_rva"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_profile, frame_rva) - 12usize];
+    ["Offset of field: rsf_anomaly_observer_profile::width_rva"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_profile, width_rva) - 16usize];
+    ["Offset of field: rsf_anomaly_observer_profile::height_rva"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_profile, height_rva) - 20usize];
+    ["Offset of field: rsf_anomaly_observer_profile::sites"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_profile, sites) - 24usize];
+    ["Offset of field: rsf_anomaly_observer_profile::site_count"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_profile, site_count) - 32usize];
+    ["Offset of field: rsf_anomaly_observer_profile::unique_guards"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_profile, unique_guards) - 40usize];
+    ["Offset of field: rsf_anomaly_observer_profile::unique_guard_count"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_profile, unique_guard_count) - 48usize];
+};
+impl Default for rsf_anomaly_observer_profile {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_anomaly_observer_binding {
+    pub replacement: *mut ::core::ffi::c_void,
+    pub original: *mut *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_anomaly_observer_binding"]
+        [::core::mem::size_of::<rsf_anomaly_observer_binding>() - 16usize];
+    ["Alignment of rsf_anomaly_observer_binding"]
+        [::core::mem::align_of::<rsf_anomaly_observer_binding>() - 8usize];
+    ["Offset of field: rsf_anomaly_observer_binding::replacement"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_binding, replacement) - 0usize];
+    ["Offset of field: rsf_anomaly_observer_binding::original"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_binding, original) - 8usize];
+};
+impl Default for rsf_anomaly_observer_binding {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_anomaly_observer_engine {
     pub image: *mut ::core::ffi::c_void,
     pub build: usize,
     pub label: *const ::core::ffi::c_char,
     pub executable: *const ::core::ffi::c_char,
+    pub profile: *const rsf_anomaly_observer_profile,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_observer_engine"]
-        [::core::mem::size_of::<rsf_anomaly_observer_engine>() - 32usize];
+        [::core::mem::size_of::<rsf_anomaly_observer_engine>() - 40usize];
     ["Alignment of rsf_anomaly_observer_engine"]
         [::core::mem::align_of::<rsf_anomaly_observer_engine>() - 8usize];
     ["Offset of field: rsf_anomaly_observer_engine::image"]
@@ -88,6 +163,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_observer_engine, label) - 16usize];
     ["Offset of field: rsf_anomaly_observer_engine::executable"]
         [::core::mem::offset_of!(rsf_anomaly_observer_engine, executable) - 24usize];
+    ["Offset of field: rsf_anomaly_observer_engine::profile"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_engine, profile) - 32usize];
 };
 impl Default for rsf_anomaly_observer_engine {
     fn default() -> Self {
@@ -166,11 +243,11 @@ pub struct rsf_anomaly_observer_platform {
             arg2: *mut rsf_anomaly_observer_frame,
         ) -> bool,
     >,
-    pub read_camera: ::core::option::Option<
+    pub guarded_copy: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const f32,
-            arg2: *const f32,
-            arg3: *mut rsf_anomaly_observer_camera,
+            arg1: *mut ::core::ffi::c_void,
+            arg2: *const ::core::ffi::c_void,
+            arg3: usize,
         ) -> bool,
     >,
     pub render_begin: ::core::option::Option<unsafe extern "C" fn(arg1: u32, arg2: u32, arg3: u32)>,
@@ -224,8 +301,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_observer_platform, input_idle) - 88usize];
     ["Offset of field: rsf_anomaly_observer_platform::read_frame"]
         [::core::mem::offset_of!(rsf_anomaly_observer_platform, read_frame) - 96usize];
-    ["Offset of field: rsf_anomaly_observer_platform::read_camera"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, read_camera) - 104usize];
+    ["Offset of field: rsf_anomaly_observer_platform::guarded_copy"]
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, guarded_copy) - 104usize];
     ["Offset of field: rsf_anomaly_observer_platform::render_begin"]
         [::core::mem::offset_of!(rsf_anomaly_observer_platform, render_begin) - 112usize];
     ["Offset of field: rsf_anomaly_observer_platform::sr_frame_end"]

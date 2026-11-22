@@ -9,6 +9,83 @@ static FG_ENDS: AtomicU32 = AtomicU32::new(0);
 static FG_RETIRE_READY: AtomicBool = AtomicBool::new(false);
 static TEARDOWN: Mutex<Vec<&str>> = Mutex::new(Vec::new());
 
+unsafe extern "C" fn sample_copy(out: *mut c_void, source: *const c_void, size: usize) -> bool {
+    if source.addr() == 1 {
+        return false;
+    }
+    unsafe { ptr::copy_nonoverlapping(source.cast::<u8>(), out.cast::<u8>(), size) };
+    true
+}
+
+unsafe extern "C" fn accept_sample(_: *const f32, _: *const f32) {}
+
+#[test]
+fn camera_copy_refusal_keeps_the_last_complete_sample() {
+    let observer = Observer::new(|| false, || true);
+    let platform = Platform {
+        guarded_copy: Some(sample_copy),
+        camera: Some(accept_sample),
+        ..Platform::default()
+    };
+    let view = [1.0; 16];
+    let projection = [2.0; 16];
+    observer.camera(&platform, view.as_ptr(), projection.as_ptr());
+    assert_eq!(observer.observation().camera_updates, 1);
+    assert_eq!(observer.observation().camera_finite, 1);
+
+    observer.camera(&platform, projection.as_ptr(), ptr::without_provenance(1));
+    let observation = observer.observation();
+    assert_eq!(observation.camera_updates, 1);
+    assert_eq!(observation.camera_finite, 0);
+    assert_eq!(observation.view, view);
+    assert_eq!(observation.projection, projection);
+}
+
+unsafe extern "C" fn check_selected_hooks(
+    image: *mut c_void,
+    size: u32,
+    sites: *const Site,
+    count: usize,
+) -> bool {
+    let sites = unsafe { slice::from_raw_parts(sites, count) };
+    image.addr() == 0x1234
+        && size == 4096
+        && count == HOOK_COUNT
+        && sites.iter().enumerate().all(|(i, site)| {
+            site.rva == 32 + i as u32 * 16
+                && site.expected == [i as u8; 16]
+                && site.replacement.addr() == 0x2000 + i
+                && site.original.addr() == 0x4000 + i * size_of::<usize>()
+        })
+}
+
+#[test]
+fn verified_profile_stays_with_the_hook_batch() {
+    let bank: [NativeSite; HOOK_COUNT] = std::array::from_fn(|i| NativeSite {
+        name: c"fixture".as_ptr(),
+        rva: 32 + i as u32 * 16,
+        expected: [i as u8; 16],
+    });
+    let bindings = std::array::from_fn(|i| Binding {
+        replacement: ptr::without_provenance_mut(0x2000 + i),
+        original: ptr::without_provenance_mut(0x4000 + i * size_of::<usize>()),
+    });
+    let profile = Profile {
+        image_size: 4096,
+        sites: bank.as_ptr().cast(),
+        site_count: bank.len(),
+        ..Profile::default()
+    };
+    let mut engine = Engine {
+        image: ptr::without_provenance_mut(0x1234),
+        profile: &profile,
+        ..Engine::default()
+    };
+    assert!(unsafe { rsf_anomaly_observer_install(&engine, &bindings, check_selected_hooks) });
+    engine.profile = ptr::null();
+    assert!(!unsafe { rsf_anomaly_observer_install(&engine, &bindings, check_selected_hooks) });
+}
+
 unsafe extern "C" fn disable_input() -> bool {
     lock(&TEARDOWN).push("input");
     true

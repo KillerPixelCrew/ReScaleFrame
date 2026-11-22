@@ -335,15 +335,22 @@ fn mapping_contract(platform: &Platform, page: u32) {
 }
 
 #[repr(C)]
-struct FixtureProfile {
-    label: *const c_char,
-    image_size: u32,
+struct SiteBank {
     sites: *const NativeSite,
     count: usize,
 }
 
-const _: () =
-    assert!(size_of::<FixtureProfile>() == 32 && std::mem::offset_of!(FixtureProfile, sites) == 16);
+#[repr(C)]
+struct FixtureProfile {
+    label: *const c_char,
+    image_size: u32,
+    banks: [SiteBank; 3],
+}
+
+const _: () = {
+    assert!(size_of::<SiteBank>() == 16);
+    assert!(size_of::<FixtureProfile>() == 64 && std::mem::offset_of!(FixtureProfile, banks) == 16);
+};
 
 fn profile_contract(platform: &Platform, profile: &FixtureProfile) {
     println!(
@@ -353,10 +360,12 @@ fn profile_contract(platform: &Platform, profile: &FixtureProfile) {
     let size = profile.image_size;
     let image = Image::new(size, PAGE_EXECUTE_READWRITE);
     image.write_headers(size);
-    let mut originals = vec![ptr::null_mut(); profile.count];
-    let native_sites = unsafe { slice::from_raw_parts(profile.sites, profile.count) };
-    let mut sites: Vec<_> = native_sites
+    let count = profile.banks.iter().map(|bank| bank.count).sum();
+    let mut originals = vec![ptr::null_mut(); count];
+    let mut sites: Vec<_> = profile
+        .banks
         .iter()
+        .flat_map(|bank| unsafe { slice::from_raw_parts(bank.sites, bank.count) })
         .zip(&mut originals)
         .map(|(site, original)| {
             unsafe {
