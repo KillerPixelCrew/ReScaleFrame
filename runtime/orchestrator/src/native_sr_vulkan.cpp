@@ -20,7 +20,6 @@ int32_t rsf_core_srvk_spatial_fallback(Lookup, const rsf_srvk_fallback*);
 #if defined(RSF_HAVE_FFX_VK)
 #include "native_dlss_vulkan_platform.h"
 #include "native_xess_vulkan.h"
-#include "../../backends/common/sharpening.h"
 #include "vulkan_fg_copy_abi.h"
 #include "vulkan_fg_resources.h"
 #include "../../backends/fsr/src/ffx_version.h"
@@ -36,12 +35,7 @@ namespace {
 constexpr auto max_versions = RSF_FFX_MAX_VERSIONS;
 
 using Version = rsf_ffx_version;
-struct FfxDispatch {
-    const rsf_srvk_frame* frame;
-    rsf_srvk_image reactive, composition, output;
-    float far_plane, sharpness;
-    uint32_t reset;
-};
+struct FfxDispatch;
 struct FfxNative;
 using FfxExports = rsf_vk_function[4];
 using FfxDeviceEntries = rsf_vk_function[9];
@@ -87,7 +81,91 @@ static_assert(sizeof(FfxOps) == 28 * sizeof(void*) && sizeof(Platform) == 264);
 static_assert(sizeof(FfxExports) == 4 * sizeof(void*) && sizeof(FfxDeviceEntries) == 9 * sizeof(void*));
 static_assert(offsetof(FfxOps, barrier) == 16 * 8 && offsetof(FfxOps, clear_color_zero) == 17 * 8 &&
     offsetof(FfxOps, dispatch) == 18 * 8 && offsetof(FfxOps, copy) == 19 * 8 && offsetof(FfxOps, sharpen) == 20 * 8);
-static_assert(sizeof(FfxDispatch) == 144 && offsetof(FfxDispatch, reset) == 136);
+// Keep the configured SDK compatible with the pinned Rust Vulkan records.
+#define RSF_FFX_FIELD(type, field, offset) static_assert(offsetof(type, field) == offset)
+static_assert(sizeof(ffxApiHeader) == 16 && alignof(ffxApiHeader) == 8);
+RSF_FFX_FIELD(ffxApiHeader, type, 0);
+RSF_FFX_FIELD(ffxApiHeader, pNext, 8);
+static_assert(sizeof(FfxApiDimensions2D) == 8 && sizeof(FfxApiFloatCoords2D) == 8);
+RSF_FFX_FIELD(FfxApiDimensions2D, width, 0);
+RSF_FFX_FIELD(FfxApiDimensions2D, height, 4);
+RSF_FFX_FIELD(FfxApiFloatCoords2D, x, 0);
+RSF_FFX_FIELD(FfxApiFloatCoords2D, y, 4);
+static_assert(sizeof(ffxCreateBackendVKDesc) == 40 && alignof(ffxCreateBackendVKDesc) == 8);
+RSF_FFX_FIELD(ffxCreateBackendVKDesc, header, 0);
+RSF_FFX_FIELD(ffxCreateBackendVKDesc, vkDevice, 16);
+RSF_FFX_FIELD(ffxCreateBackendVKDesc, vkPhysicalDevice, 24);
+RSF_FFX_FIELD(ffxCreateBackendVKDesc, vkDeviceProcAddr, 32);
+static_assert(sizeof(ffxCreateContextDescUpscale) == 48 && alignof(ffxCreateContextDescUpscale) == 8);
+RSF_FFX_FIELD(ffxCreateContextDescUpscale, header, 0);
+RSF_FFX_FIELD(ffxCreateContextDescUpscale, flags, 16);
+RSF_FFX_FIELD(ffxCreateContextDescUpscale, maxRenderSize, 20);
+RSF_FFX_FIELD(ffxCreateContextDescUpscale, maxUpscaleSize, 28);
+RSF_FFX_FIELD(ffxCreateContextDescUpscale, fpMessage, 40);
+using PlanDesc = ffxQueryDescUpscaleGetRenderResolutionFromQualityMode;
+static_assert(sizeof(PlanDesc) == 48 && alignof(PlanDesc) == 8);
+RSF_FFX_FIELD(PlanDesc, header, 0);
+RSF_FFX_FIELD(PlanDesc, displayWidth, 16);
+RSF_FFX_FIELD(PlanDesc, displayHeight, 20);
+RSF_FFX_FIELD(PlanDesc, qualityMode, 24);
+RSF_FFX_FIELD(PlanDesc, pOutRenderWidth, 32);
+RSF_FFX_FIELD(PlanDesc, pOutRenderHeight, 40);
+static_assert(sizeof(FfxApiResourceDescription) == 32 && alignof(FfxApiResourceDescription) == 4);
+RSF_FFX_FIELD(FfxApiResourceDescription, type, 0);
+RSF_FFX_FIELD(FfxApiResourceDescription, format, 4);
+RSF_FFX_FIELD(FfxApiResourceDescription, width, 8);
+RSF_FFX_FIELD(FfxApiResourceDescription, height, 12);
+RSF_FFX_FIELD(FfxApiResourceDescription, depth, 16);
+RSF_FFX_FIELD(FfxApiResourceDescription, mipCount, 20);
+RSF_FFX_FIELD(FfxApiResourceDescription, flags, 24);
+RSF_FFX_FIELD(FfxApiResourceDescription, usage, 28);
+static_assert(sizeof(FfxApiResource) == 48 && alignof(FfxApiResource) == 8);
+RSF_FFX_FIELD(FfxApiResource, resource, 0);
+RSF_FFX_FIELD(FfxApiResource, description, 8);
+RSF_FFX_FIELD(FfxApiResource, state, 40);
+using DispatchDesc = ffxDispatchDescUpscale;
+static_assert(sizeof(DispatchDesc) == 432 && alignof(DispatchDesc) == 8);
+RSF_FFX_FIELD(DispatchDesc, header, 0);
+RSF_FFX_FIELD(DispatchDesc, commandList, 16);
+RSF_FFX_FIELD(DispatchDesc, color, 24);
+RSF_FFX_FIELD(DispatchDesc, depth, 72);
+RSF_FFX_FIELD(DispatchDesc, motionVectors, 120);
+RSF_FFX_FIELD(DispatchDesc, exposure, 168);
+RSF_FFX_FIELD(DispatchDesc, reactive, 216);
+RSF_FFX_FIELD(DispatchDesc, transparencyAndComposition, 264);
+RSF_FFX_FIELD(DispatchDesc, output, 312);
+RSF_FFX_FIELD(DispatchDesc, jitterOffset, 360);
+RSF_FFX_FIELD(DispatchDesc, motionVectorScale, 368);
+RSF_FFX_FIELD(DispatchDesc, renderSize, 376);
+RSF_FFX_FIELD(DispatchDesc, upscaleSize, 384);
+RSF_FFX_FIELD(DispatchDesc, enableSharpening, 392);
+RSF_FFX_FIELD(DispatchDesc, sharpness, 396);
+RSF_FFX_FIELD(DispatchDesc, frameTimeDelta, 400);
+RSF_FFX_FIELD(DispatchDesc, preExposure, 404);
+RSF_FFX_FIELD(DispatchDesc, reset, 408);
+RSF_FFX_FIELD(DispatchDesc, cameraNear, 412);
+RSF_FFX_FIELD(DispatchDesc, cameraFar, 416);
+RSF_FFX_FIELD(DispatchDesc, cameraFovAngleVertical, 420);
+RSF_FFX_FIELD(DispatchDesc, viewSpaceToMetersFactor, 424);
+RSF_FFX_FIELD(DispatchDesc, flags, 428);
+#undef RSF_FFX_FIELD
+static_assert(FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK == 3 &&
+    FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE == 65536 &&
+    FFX_API_DISPATCH_DESC_TYPE_UPSCALE == 65537 &&
+    FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE == 65539);
+static_assert(FFX_API_SURFACE_FORMAT_UNKNOWN == 0 && FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT == 4 &&
+    FFX_API_SURFACE_FORMAT_R16G16_FLOAT == 18 && FFX_API_SURFACE_FORMAT_R8_UNORM == 25 &&
+    FFX_API_SURFACE_FORMAT_R32_FLOAT == 28);
+static_assert(FFX_API_RESOURCE_TYPE_TEXTURE2D == 2 && FFX_API_RESOURCE_USAGE_READ_ONLY == 0 &&
+    FFX_API_RESOURCE_USAGE_UAV == 2 && FFX_API_RESOURCE_USAGE_DEPTHTARGET == 4 &&
+    FFX_API_RESOURCE_STATE_UNORDERED_ACCESS == 2 && FFX_API_RESOURCE_STATE_COMPUTE_READ == 4);
+
+extern "C" {
+void rsf_core_srvk_ffx_create_desc(const rsf_srvk_setup*, uint32_t, PFN_vkGetDeviceProcAddr,
+    ffxApiHeader*, ffxCreateBackendVKDesc*, ffxCreateContextDescUpscale*);
+void rsf_core_srvk_ffx_plan_desc(const rsf_srvk_setup*, uint32_t*, uint32_t*, PlanDesc*);
+void rsf_core_srvk_ffx_dispatch_desc(void*, const FfxDispatch*, DispatchDesc*);
+}
 static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
 static_assert(VK_IMAGE_LAYOUT_GENERAL == 1 && VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 &&
@@ -193,16 +271,8 @@ int32_t create_effect(FfxNative* native, const rsf_srvk_setup* setup, uint64_t i
     version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
     version.versionId = id;
     ffxCreateBackendVKDesc backend{};
-    backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
-    backend.header.pNext = &version.header;
-    backend.vkDevice = static_cast<VkDevice>(setup->device);
-    backend.vkPhysicalDevice = static_cast<VkPhysicalDevice>(setup->physical_device);
-    backend.vkDeviceProcAddr = sdk_device_proc;
     ffxCreateContextDescUpscale create{};
-    create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-    create.header.pNext = &backend.header;
-    create.maxRenderSize = create.maxUpscaleSize = {setup->output_width, setup->output_height};
-    create.flags = flags;
+    rsf_core_srvk_ffx_create_desc(setup, flags, sdk_device_proc, &version.header, &backend, &create);
     return native->sdk.create(&native->effect, &create.header, nullptr) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
@@ -229,65 +299,17 @@ catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 int32_t plan(FfxNative* native, const rsf_srvk_setup* setup, uint32_t* width, uint32_t* height) noexcept try
 {
-    ffxQueryDescUpscaleGetRenderResolutionFromQualityMode query{};
-    query.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE;
-    query.displayWidth = setup->output_width;
-    query.displayHeight = setup->output_height;
-    query.qualityMode = setup->quality;
-    query.pOutRenderWidth = width;
-    query.pOutRenderHeight = height;
+    PlanDesc query{};
+    rsf_core_srvk_ffx_plan_desc(setup, width, height, &query);
     return native->sdk.query(&native->effect, &query.header) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_SUPPORTED;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-FfxApiResource resource(const rsf_srvk_image& image, bool output = false) noexcept
-{
-    FfxApiResource value{};
-    value.resource = reinterpret_cast<void*>(static_cast<uintptr_t>(image.image));
-    value.description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
-    value.description.width = image.width;
-    value.description.height = image.height;
-    value.description.depth = value.description.mipCount = 1;
-    value.description.usage = output ? FFX_API_RESOURCE_USAGE_UAV : FFX_API_RESOURCE_USAGE_READ_ONLY;
-    if (image.format == VK_FORMAT_D32_SFLOAT) value.description.usage = FFX_API_RESOURCE_USAGE_DEPTHTARGET;
-    switch (image.format) {
-    case VK_FORMAT_R16G16B16A16_SFLOAT: value.description.format = FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT; break;
-    case VK_FORMAT_R16G16_SFLOAT: value.description.format = FFX_API_SURFACE_FORMAT_R16G16_FLOAT; break;
-    case VK_FORMAT_R32_SFLOAT:
-    case VK_FORMAT_D32_SFLOAT: value.description.format = FFX_API_SURFACE_FORMAT_R32_FLOAT; break;
-    case VK_FORMAT_R8_UNORM: value.description.format = FFX_API_SURFACE_FORMAT_R8_UNORM; break;
-    default: break;
-    }
-    value.state = output ? FFX_API_RESOURCE_STATE_UNORDERED_ACCESS : FFX_API_RESOURCE_STATE_COMPUTE_READ;
-    return value;
-}
-
 int32_t dispatch(FfxNative* native, void* commands, const FfxDispatch* call) noexcept try
 {
-    const auto& frame = *call->frame;
-    const auto& record = *frame.record;
-    ffxDispatchDescUpscale data{};
-    data.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
-    data.commandList = commands;
-    data.color = resource(frame.color);
-    data.depth = resource(frame.depth);
-    data.motionVectors = resource(frame.motion);
-    data.reactive = resource(call->reactive);
-    data.transparencyAndComposition = resource(call->composition);
-    data.output = resource(call->output, true);
-    data.jitterOffset = {record.camera.jitter_pixels[0], record.camera.jitter_pixels[1]};
-    data.motionVectorScale = {frame.motion_scale_x, frame.motion_scale_y};
-    data.preExposure = frame.pre_exposure;
-    data.renderSize = {record.render_width, record.render_height};
-    data.upscaleSize = {record.output_width, record.output_height};
-    data.frameTimeDelta = record.frame_time_ms;
-    data.cameraNear = record.camera.near_plane;
-    data.cameraFar = call->far_plane;
-    data.cameraFovAngleVertical = record.camera.vertical_fov_radians;
-    data.viewSpaceToMetersFactor = 1;
-    rsf_ffx_sharpening(call->sharpness, &data.enableSharpening, &data.sharpness);
-    data.reset = call->reset != 0;
+    DispatchDesc data{};
+    rsf_core_srvk_ffx_dispatch_desc(commands, call, &data);
     return native->sdk.dispatch(&native->effect, &data.header) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }

@@ -1105,5 +1105,7 @@ mod owner_tests;
 
 mod fallback;
 #[cfg(windows)]
+mod ffx_descriptors;
+#[cfg(windows)]
 mod graphics;
 mod xess;
