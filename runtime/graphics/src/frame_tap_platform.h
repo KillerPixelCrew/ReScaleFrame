@@ -66,6 +66,18 @@ enum {
     RSF_FRAME_TAP_OBJECT_DEPTH_STENCIL
 };
 
+/* What the shadow records of a bound texture. */
+typedef struct rsf_texture_facts {
+    uint32_t struct_size;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint32_t bind_flags;
+    uint32_t mip_levels;
+    uint32_t array_size;
+    uint32_t sample_count;
+} rsf_texture_facts;
+
 /* One vtable slot, counting the three IUnknown and four ID3D11DeviceChild entries. `context1`
    slots exist only on ID3D11DeviceContext1. */
 typedef struct rsf_frame_tap_hook {
@@ -74,27 +86,10 @@ typedef struct rsf_frame_tap_hook {
     void* replacement;
 } rsf_frame_tap_hook;
 
-/* D3D11_VIEWPORT and D3D11_RECT. */
+/* D3D11_VIEWPORT. */
 typedef struct rsf_frame_tap_viewport {
     float x, y, width, height, min_depth, max_depth;
 } rsf_frame_tap_viewport;
-
-typedef struct rsf_frame_tap_rect {
-    int32_t left, top, right, bottom;
-} rsf_frame_tap_rect;
-
-/* Output merger and rasterizer state a divert saves. Every object is an owned reference. */
-typedef struct rsf_frame_tap_output {
-    void* targets[8];
-    void* depth_view;
-    void* blend;
-    float blend_factor[4];
-    uint32_t blend_mask;
-    uint32_t viewport_count;
-    rsf_frame_tap_viewport viewports[16];
-    uint32_t scissor_count;
-    rsf_frame_tap_rect scissors[16];
-} rsf_frame_tap_output;
 
 /* The unordered access arguments of OMSetRenderTargetsAndUnorderedAccessViews. */
 typedef struct rsf_frame_tap_uavs {
@@ -115,26 +110,11 @@ typedef struct rsf_frame_tap_draw_call {
     int32_t base_vertex;
 } rsf_frame_tap_draw_call;
 
-/* Render target zero of the game's blend before the alpha patch, and the patched write mask. */
-typedef struct rsf_frame_tap_blend_log {
-    uint32_t enable;
-    uint32_t source;
-    uint32_t destination;
-    uint32_t operation;
-    uint32_t alpha_source;
-    uint32_t alpha_destination;
-    uint32_t alpha_operation;
-    uint32_t write_mask;
-    uint32_t patched_write_mask;
-} rsf_frame_tap_blend_log;
-
-/* `original` is the hooked method's original. A null `original` on set_viewports and set_scissors
-   calls through the context, which reaches the hooks as the tap's own work. */
+/* `original` is the hooked method's original. */
 typedef struct rsf_frame_tap_platform {
     int32_t (*patch)(void** vtable, uint32_t slot, void* replacement);
     int32_t (*context1)(void* context);
     void* (*texture_behind)(void* view);
-    void* (*view_resource)(void* view);
     void (*texture_facts)(void* texture, rsf_texture_facts* facts);
     uint32_t (*target_view_format)(void* view);
     /* Zero when the resource is not a buffer. */
@@ -145,20 +125,9 @@ typedef struct rsf_frame_tap_platform {
                              void* const* views);
     void (*set_targets)(void* original, void* context, uint32_t count, void* const* views,
                         void* depth, const rsf_frame_tap_uavs* uavs);
-    void (*set_viewports)(void* original, void* context, uint32_t count,
-                          const rsf_frame_tap_viewport* viewports);
-    void (*set_scissors)(void* original, void* context, uint32_t count,
-                         const rsf_frame_tap_rect* rectangles);
     uint32_t (*viewport)(void* context, rsf_frame_tap_viewport* viewport);
-    void (*set_blend)(void* context, void* blend, const float* factor, uint32_t mask);
-    void (*save_output)(void* context, rsf_frame_tap_output* output);
-    /* An owned blend state with the alpha operations patched, or null. */
-    void* (*patch_blend)(void* context, void* blend, rsf_frame_tap_blend_log* log);
     /* Borrowed geometry, hull and domain constant buffers, 14 each. */
     void (*stage_constants)(void* context, void** geometry, void** hull, void** domain);
-    /* Stage 0 and 1 call `original`, the vertex or pixel constant setter. */
-    void (*bind_constants)(void* original, void* context, uint32_t stage, uint32_t slot,
-                           void* buffer);
     void (*seed_geometry)(void* context, rsf_frame_tap_geometry* geometry,
                           void** pixel_constants);
     void (*draw)(void* original, void* context, const rsf_frame_tap_draw_call* call);
@@ -168,23 +137,12 @@ typedef struct rsf_frame_tap_platform {
                          void* const* samplers);
     /* An owned biased clone, or null when the sampler is not biased or creation failed. */
     void* (*clone_sampler)(void* context, void* sampler, float bias);
-    /* Callers' callbacks. Foreign exceptions stay on the native side; a throwing gate, verdict or
-       override reports decline, leave and nothing. */
-    void (*log)(rsf_frame_tap_log_fn fn, void* user, const char* message);
-    void (*pass)(rsf_frame_tap_fn fn, void* user, const rsf_frame_tap_pass* pass);
+    /* Callers' callbacks. Foreign exceptions stay on the native side. */
     void (*report)(rsf_frame_tap_target_fn fn, void* user, const rsf_frame_tap_target_draw* draw);
     void (*geometry)(rsf_frame_tap_geometry_fn fn, void* user,
                      const rsf_frame_tap_geometry* geometry);
     void (*compute)(rsf_frame_tap_compute_fn fn, void* user, void* context, uint32_t x,
                     uint32_t y, uint32_t z, void* arguments, uint32_t offset);
-    void (*constants)(rsf_frame_tap_constants_fn fn, void* user, void* buffer, void* contents,
-                      uint32_t bytes);
-    int32_t (*gate)(rsf_frame_tap_gate_fn fn, void* user, void* context, void* texture);
-    rsf_frame_tap_verdict (*verdict)(rsf_frame_tap_verdict_fn fn, void* user,
-                                     const rsf_frame_tap_target_draw* draw);
-    int32_t (*override_constants)(rsf_frame_tap_constant_override_fn fn, void* user,
-                                  const rsf_frame_tap_target_draw* draw, uint32_t* slots,
-                                  void** buffers);
 } rsf_frame_tap_platform;
 
 /* Only the foreign callback fields are populated by this shim. */

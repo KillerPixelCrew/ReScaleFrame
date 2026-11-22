@@ -5,7 +5,7 @@ D3D11 utilities shared by the carriers and runtime. Game-specific view interpret
 | Module | Purpose |
 | --- | --- |
 | `d3d11_observer` | Track selected allocations and invoke a Present callback |
-| `resource_roles`, `frame_tap` | Classify resources, find candidate colour/depth/motion bindings, and describe the draws into a named target |
+| `frame_tap` | Report geometry draws, research draw facts and constant uploads on the immediate context, and apply a pixel sampler LOD bias |
 | `resource_ref` | Retain and release COM resources across the C ABI |
 | `constant_buffer_read` | Stage and read a buffer with type/device checks |
 | `motion_decode`, `motion_resolve` | Decode biased sparse velocity and resolve dense camera/object motion with validity/depth conventions |
@@ -26,7 +26,7 @@ Steam's overlay and RivaTuner Statistics Server both patch the entry of dxgi's P
 
 ## The Windows runtime rewrites its vtable
 
-The stock D3D11 runtime keeps the immediate context's vtable on the heap and rewrites the whole work-submission family of entries, draws, dispatches, copies and clears, whenever a flush-class call runs and again on the next piece of work, flipping between two implementations. Each rewrite discards patched hooks. DXVK's table is static, which is why every Wine run of the tap's test passed and why no Windows run of this project could have observed a draw after the first read-back. Every hook now checks a sentinel slot on entry and re-applies the table when it is gone, the work-submission hooks check again on the way out, the flush-class calls are hooked as pass-throughs for that check, and `rsf_frame_tap_refresh` covers the flush inside Present. `vtable_refreshes` in the status counts it. [The measurement](../../docs/research/d3d11-runtime-vtable-rewrite.md) has the slot table.
+The stock D3D11 runtime keeps the immediate context's vtable on the heap and rewrites the whole work-submission family of entries, draws, dispatches, copies and clears, whenever a flush-class call runs and again on the next piece of work, flipping between two implementations. Each rewrite discards patched hooks. DXVK's table is static, which is why every Wine run of the tap's test passed and why no Windows run of this project could have observed a draw after the first read-back. Every hook now checks a sentinel slot on entry and re-applies the table when it is gone, the work-submission hooks check again on the way out, the flush-class calls are hooked as pass-throughs for that check, and `rsf_frame_tap_refresh` covers the flush inside Present. [The measurement](../../docs/research/d3d11-runtime-vtable-rewrite.md) has the slot table.
 
 Run context work on the owning render thread. Save and restore all affected graphics state around injected work. Hook installation, rollback, and teardown must account for callbacks already in flight.
 

@@ -351,12 +351,6 @@ set_target_properties(rsf_ac7_session PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7View ReScaleFrame::GraphicsLeaves rsf_build_options)
 add_test(NAME ac7_session COMMAND rsf_ac7_session)
 
-include(g02/fixture.cmake)
-rsf_add_g02_fixture(rsf_constant_override constant_override.rs)
-target_link_libraries(rsf_constant_override PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options d3dcompiler)
-add_test(NAME constant_override COMMAND rsf_constant_override)
-set_tests_properties(constant_override PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
-
 # A vendor that is not compiled in still has to answer, and has to answer differently from one
 # whose runtime is missing. Runs in both configurations.
 add_executable(rsf_fsr_backend fsr_backend.c)
@@ -433,10 +427,6 @@ target_link_libraries(rsf_d3d11_host_test PRIVATE rsf_game_sdk_fixtures_rust "$<
 add_dependencies(rsf_d3d11_host_test rsf_orchestrator)
 add_test(NAME d3d11_host_contract COMMAND rsf_d3d11_host_test)
 
-add_executable(rsf_resource_roles fixture_main.c)
-target_compile_definitions(rsf_resource_roles PRIVATE RSF_FIXTURE_ENTRY=rsf_resource_roles_fixture)
-target_link_libraries(rsf_resource_roles PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
-add_test(NAME resource_roles COMMAND rsf_resource_roles)
 
 add_executable(rsf_motion_decode fixture_main.c)
 target_compile_definitions(rsf_motion_decode PRIVATE RSF_FIXTURE_ENTRY=rsf_motion_decode_fixture)
@@ -1084,7 +1074,7 @@ endif()
 # (runtime/orchestrator/CMakeLists.txt).
 foreach(rsf_fixture_target
         rsf_fullscreen_pass rsf_native_reinsert rsf_depth_scale rsf_auxiliary_sr rsf_sampler_bias
-        rsf_resource_roles rsf_motion_decode rsf_d3d11_state rsf_motion_resolve_test rsf_colour_transport_test
+        rsf_motion_decode rsf_d3d11_state rsf_motion_resolve_test rsf_colour_transport_test
         rsf_sharpening_test rsf_sharpening_d3d12_test rsf_sharpening_vulkan_test rsf_sharpening_vulkan_cpu_test
         rsf_sharpening_settings_test rsf_exposure_normalization_test rsf_native_vulkan_test rsf_dlss_backend
         rsf_dlss_sr_layout rsf_sr_session_test rsf_sr_bridge_test rsf_sr_pipeline_test rsf_sr_backend_switch_device_test

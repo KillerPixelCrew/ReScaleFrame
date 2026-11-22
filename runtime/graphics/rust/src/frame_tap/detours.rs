@@ -76,7 +76,7 @@ unsafe extern "system" fn constants<const HOOK: i32>(
     if HOOK == RSF_FRAME_TAP_HOOK_VERTEX_CONSTANTS {
         unsafe { rsf_core_frame_tap_vertex_constants(context, start, count, buffers) };
     } else {
-        unsafe { rsf_core_frame_tap_pixel_constants(platform(), context, start, count, buffers) };
+        unsafe { rsf_core_frame_tap_pixel_constants(context, start, count, buffers) };
     }
 }
 
@@ -110,32 +110,6 @@ unsafe extern "system" fn targets_uavs(
         initial_counts,
     };
     unsafe { rsf_core_frame_tap_targets(platform(), context, count, views, depth, &unordered) };
-}
-
-unsafe extern "system" fn viewports(
-    context: Handle,
-    count: u32,
-    values: *const rsf_frame_tap_viewport,
-) {
-    unsafe { rsf_core_frame_tap_viewports(platform(), context, count, values) };
-}
-
-unsafe extern "system" fn scissors(context: Handle, count: u32, values: *const rsf_frame_tap_rect) {
-    unsafe { rsf_core_frame_tap_scissors(platform(), context, count, values) };
-}
-
-unsafe extern "system" fn clear_target(context: Handle, view: Handle, color: *const f32) {
-    let platform = platform();
-    let original = rsf_core_frame_tap_enter(platform, RSF_FRAME_TAP_HOOK_CLEAR_TARGET);
-    if original.is_null() {
-        return;
-    }
-    let call: unsafe extern "system" fn(Handle, Handle, *const f32) =
-        unsafe { std::mem::transmute(original) };
-    let mut admitted = 0;
-    let view = unsafe { rsf_core_frame_tap_clear_target(platform, context, view, &mut admitted) };
-    unsafe { call(context, view, color) };
-    rsf_core_frame_tap_leave(platform, admitted);
 }
 
 unsafe extern "system" fn samplers(
@@ -260,14 +234,11 @@ unsafe extern "system" fn indirect<const HOOK: i32, const KIND: u32>(
 }
 
 unsafe extern "system" fn clear_state(context: Handle) {
-    provenance::invalidate_context(context);
     forward!(RSF_FRAME_TAP_HOOK_CLEAR_STATE; context => Handle);
     rsf_core_frame_tap_invalidate(context, 0);
 }
 
 unsafe extern "system" fn execute(context: Handle, list: Handle, restore: i32) {
-    // RestoreContextState preserves bindings, not resource contents.
-    provenance::invalidate_context(context);
     forward!(RSF_FRAME_TAP_HOOK_EXECUTE; context => Handle, list => Handle, restore => i32);
     rsf_core_frame_tap_invalidate(context, u32::from(restore != 0));
 }
@@ -309,25 +280,37 @@ unsafe extern "system" fn dispatch_indirect(context: Handle, args: Handle, offse
     rsf_core_frame_tap_dispatch(platform(), context, 0, 0, 0, args, offset);
 }
 
-unsafe extern "system" fn copy(context: Handle, mut destination: Handle, mut source: Handle) {
-    let mut admitted = 0;
-    unsafe {
-        rsf_core_frame_tap_copy(
-            platform(),
-            context,
-            &mut destination,
-            &mut source,
-            &mut admitted,
-        )
+// These calls only track the runtime's work-submission vtable rewrite. Viewports and scissors
+// were hooked for the removed substitution plans; patching them is harmless and keeps the hook ids.
+macro_rules! pass_through {
+    ($name:ident, $hook:ident $(, $arg:ident: $ty:ty)* $(,)?) => {
+        unsafe extern "system" fn $name(context: Handle $(, $arg: $ty)*) {
+            forward!($hook; context => Handle $(, $arg => $ty)*);
+            rsf_core_frame_tap_leave(platform(), 0);
+        }
     };
-    provenance::destination(context, destination);
-    forward!(RSF_FRAME_TAP_HOOK_COPY; context => Handle, destination => Handle, source => Handle);
-    rsf_core_frame_tap_leave(platform(), admitted);
 }
 
-#[repr(align(16))]
-struct Upload([u8; 4096]);
+pass_through!(flush, RSF_FRAME_TAP_HOOK_FLUSH);
+pass_through!(viewports, RSF_FRAME_TAP_HOOK_VIEWPORTS, count: u32, values: *const c_void);
+pass_through!(scissors, RSF_FRAME_TAP_HOOK_SCISSORS, count: u32, values: *const c_void);
+pass_through!(clear_target, RSF_FRAME_TAP_HOOK_CLEAR_TARGET, view: Handle, color: *const f32);
+pass_through!(copy, RSF_FRAME_TAP_HOOK_COPY, destination: Handle, source: Handle);
+pass_through!(copy_region, RSF_FRAME_TAP_HOOK_COPY_REGION, destination: Handle, subresource: u32,
+    x: u32, y: u32, z: u32, source: Handle, source_subresource: u32, region: *const c_void);
+pass_through!(copy_structure_count, RSF_FRAME_TAP_HOOK_COPY_STRUCTURE_COUNT, destination: Handle,
+    offset: u32, source: Handle);
+pass_through!(clear_uav_uint, RSF_FRAME_TAP_HOOK_CLEAR_UAV_UINT, view: Handle, values: *const u32);
+pass_through!(clear_uav_float, RSF_FRAME_TAP_HOOK_CLEAR_UAV_FLOAT, view: Handle, values: *const f32);
+pass_through!(clear_depth, RSF_FRAME_TAP_HOOK_CLEAR_DEPTH, view: Handle, flags: u32, depth: f32, stencil: u8);
+pass_through!(generate_mips, RSF_FRAME_TAP_HOOK_GENERATE_MIPS, view: Handle);
+pass_through!(resolve, RSF_FRAME_TAP_HOOK_RESOLVE, destination: Handle, subresource: u32,
+    source: Handle, source_subresource: u32, format: u32);
+pass_through!(copy_region1, RSF_FRAME_TAP_HOOK_COPY_REGION1, destination: Handle, subresource: u32,
+    x: u32, y: u32, z: u32, source: Handle, source_subresource: u32, region: *const c_void, flags: u32);
+pass_through!(discard_resource, RSF_FRAME_TAP_HOOK_DISCARD_RESOURCE, destination: Handle);
 
+// A whole-buffer constant upload is offered to the observer before it is forwarded.
 unsafe extern "system" fn update(
     context: Handle,
     destination: Handle,
@@ -337,33 +320,11 @@ unsafe extern "system" fn update(
     row: u32,
     depth: u32,
 ) {
-    // Keep the tap installation admitted through forwarding and receipt publication.
-    let admission = provenance::admit(context);
-    let serial = provenance::destination(context, destination);
-    let mut scratch = MaybeUninit::<Upload>::uninit();
-    let data = unsafe {
-        rsf_core_frame_tap_update(
-            platform(),
-            context,
-            destination,
-            subresource,
-            u32::from(!region.is_null()),
-            data,
-            row,
-            (&raw mut (*scratch.as_mut_ptr()).0).cast(),
-        )
-    };
-    let announced = admission.is_some()
-        && !inside()
-        && subresource == 0
-        && region.is_null()
-        && unsafe { provenance::upload(serial, destination, data, Some(row)) };
-    let forwarded = forward!(RSF_FRAME_TAP_HOOK_UPDATE; context => Handle, destination => Handle, subresource => u32,
+    let whole = region.is_null();
+    unsafe { rsf_core_frame_tap_update(platform(), context, destination, subresource, whole, data, row) };
+    forward!(RSF_FRAME_TAP_HOOK_UPDATE; context => Handle, destination => Handle, subresource => u32,
         region => *const c_void, data => *const c_void, row => u32, depth => u32);
     rsf_core_frame_tap_leave(platform(), 0);
-    if announced && forwarded {
-        provenance::commit(serial);
-    }
 }
 
 unsafe extern "system" fn update1(
@@ -376,73 +337,12 @@ unsafe extern "system" fn update1(
     depth: u32,
     flags: u32,
 ) {
-    // Keep the tap installation admitted through forwarding and receipt publication.
-    let admission = provenance::admit(context);
-    let serial = provenance::destination(context, destination);
-    let mut scratch = MaybeUninit::<Upload>::uninit();
-    let data = unsafe {
-        rsf_core_frame_tap_update(
-            platform(),
-            context,
-            destination,
-            subresource,
-            u32::from(!region.is_null()),
-            data,
-            row,
-            (&raw mut (*scratch.as_mut_ptr()).0).cast(),
-        )
-    };
-    let announced = admission.is_some()
-        && !inside()
-        && subresource == 0
-        && region.is_null()
-        && flags == 0
-        && unsafe { provenance::upload(serial, destination, data, Some(row)) };
-    let forwarded = forward!(RSF_FRAME_TAP_HOOK_UPDATE1; context => Handle, destination => Handle, subresource => u32,
+    let whole = region.is_null();
+    unsafe { rsf_core_frame_tap_update(platform(), context, destination, subresource, whole, data, row) };
+    forward!(RSF_FRAME_TAP_HOOK_UPDATE1; context => Handle, destination => Handle, subresource => u32,
         region => *const c_void, data => *const c_void, row => u32, depth => u32, flags => u32);
     rsf_core_frame_tap_leave(platform(), 0);
-    if announced && forwarded {
-        provenance::commit(serial);
-    }
 }
-
-// These calls only track the runtime's work-submission vtable rewrite.
-macro_rules! pass_through {
-    ($name:ident, $hook:ident $(, $arg:ident: $ty:ty)* $(,)?) => {
-        unsafe extern "system" fn $name(context: Handle $(, $arg: $ty)*) {
-            forward!($hook; context => Handle $(, $arg => $ty)*);
-            rsf_core_frame_tap_leave(platform(), 0);
-        }
-    };
-}
-
-// These operations have no known CPU upload to join. Invalidate their actual
-// destination on every intercepted context, including nested tap work.
-macro_rules! invalidating_write {
-    ($name:ident, $hook:ident $(, $arg:ident: $ty:ty)* $(,)?) => {
-        unsafe extern "system" fn $name(context: Handle, destination: Handle $(, $arg: $ty)*) {
-            provenance::destination(context, destination);
-            forward!($hook; context => Handle, destination => Handle $(, $arg => $ty)*);
-            rsf_core_frame_tap_leave(platform(), 0);
-        }
-    };
-}
-
-pass_through!(flush, RSF_FRAME_TAP_HOOK_FLUSH);
-invalidating_write!(copy_region, RSF_FRAME_TAP_HOOK_COPY_REGION, subresource: u32,
-    x: u32, y: u32, z: u32, source: Handle, source_subresource: u32, region: *const c_void);
-invalidating_write!(copy_structure_count, RSF_FRAME_TAP_HOOK_COPY_STRUCTURE_COUNT, offset: u32, source: Handle);
-pass_through!(clear_uav_uint, RSF_FRAME_TAP_HOOK_CLEAR_UAV_UINT, view: Handle, values: *const u32);
-pass_through!(clear_uav_float, RSF_FRAME_TAP_HOOK_CLEAR_UAV_FLOAT, view: Handle, values: *const f32);
-pass_through!(clear_depth, RSF_FRAME_TAP_HOOK_CLEAR_DEPTH, view: Handle, flags: u32, depth: f32, stencil: u8);
-pass_through!(generate_mips, RSF_FRAME_TAP_HOOK_GENERATE_MIPS, view: Handle);
-invalidating_write!(resolve, RSF_FRAME_TAP_HOOK_RESOLVE, subresource: u32,
-    source: Handle, source_subresource: u32, format: u32);
-invalidating_write!(copy_region1, RSF_FRAME_TAP_HOOK_COPY_REGION1, subresource: u32,
-    x: u32, y: u32, z: u32, source: Handle, source_subresource: u32, region: *const c_void, flags: u32);
-
-invalidating_write!(discard_resource, RSF_FRAME_TAP_HOOK_DISCARD_RESOURCE);
-
 const fn hook(slot: u32, context1: u32, function: *const ()) -> rsf_frame_tap_hook {
     rsf_frame_tap_hook {
         slot,
@@ -549,10 +449,3 @@ extern "C" fn rsf_frame_tap_uninstall() -> i32 {
     rsf_core_frame_tap_uninstall(platform)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_frame_tap_set_divert(setup: *const rsf_frame_tap_divert_setup) -> i32 {
-    let Some(platform) = admitted_platform() else {
-        return INVALID;
-    };
-    unsafe { rsf_core_frame_tap_set_divert(platform, setup) }
-}

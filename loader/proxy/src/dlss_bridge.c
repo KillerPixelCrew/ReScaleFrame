@@ -706,7 +706,6 @@ static void on_present(void* user, void* swapchain)
         /* The runtime flushes at Present and rewrites its vtable when it does, which takes the
            tap's hooks with it; this puts them back before the next frame's first draw. */
         rsf_frame_tap_refresh();
-        rsf_frame_tap_end_frame();
         publish_native_settings();
     }
     {
@@ -844,8 +843,6 @@ int rsf_bridge_start(const char* streamline_directory, unsigned long output_widt
     tap.struct_size = sizeof(tap);
     tap.abi_version = RSF_FRAME_TAP_ABI_VERSION;
     tap.on_geometry = on_geometry;
-    tap.log = log;
-    tap.log_user = log_user;
     tapped = rsf_frame_tap_install(bridge.context, &tap);
     if (tapped != RSF_FRAME_TAP_OK) {
         say("dlss bridge: frame tap not installed, result %d", (int)tapped);
