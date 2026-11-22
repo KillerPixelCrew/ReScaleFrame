@@ -12,8 +12,10 @@ crate-type = ["staticlib"]
 [features]
 dispatch = []
 ffx = []
+fsr4-state = ["dep:ash"]
 
 [dependencies]
+ash = { version = "=0.38.0", default-features = false, features = ["std"], optional = true }
 rsf-game-sys = { path = "../../sdk/game" }
 
 [lints]

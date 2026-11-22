@@ -26,6 +26,9 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 
+#[path = "native_sr_fsr4_vulkan.rs"]
+mod fsr4;
+
 type Handle = *mut c_void;
 const NO_LOADER: &str = "Vulkan loader unavailable";
 const NO_DEVICE: &str = "enumerate GPUs";
@@ -118,9 +121,19 @@ struct Gpu {
 
 impl Gpu {
     fn open(streamline: rsf_vk_get_proc, session: Option<Session>) -> TestResult<Self> {
+        let mut gpu = Self::open_instance(streamline, session, c"ReScaleFrame Vulkan SR fixture")?;
+        gpu.open_device(streamline.is_some())?;
+        Ok(gpu)
+    }
+
+    fn open_instance(
+        streamline: rsf_vk_get_proc,
+        session: Option<Session>,
+        application: &CStr,
+    ) -> TestResult<Self> {
         let (library, entry) = entry(streamline)?;
         let app = vk::ApplicationInfo::default()
-            .application_name(c"ReScaleFrame Vulkan SR fixture")
+            .application_name(application)
             .api_version(vk::API_VERSION_1_2);
         let extensions = [ash::khr::surface::NAME.as_ptr()];
         let mut info = vk::InstanceCreateInfo::default().application_info(&app);
@@ -128,7 +141,7 @@ impl Gpu {
             info = info.enabled_extension_names(&extensions);
         }
         let instance = unsafe { entry.create_instance(&info, None) }?;
-        let mut gpu = Self {
+        Ok(Self {
             session,
             _library: library,
             entry,
@@ -143,9 +156,7 @@ impl Gpu {
             buffer: vk::Buffer::null(),
             buffer_memory: vk::DeviceMemory::null(),
             images: Vec::new(),
-        };
-        gpu.open_device(streamline.is_some())?;
-        Ok(gpu)
+        })
     }
 
     fn open_device(&mut self, streamline: bool) -> TestResult {

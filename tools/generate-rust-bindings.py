@@ -1029,3 +1029,19 @@ generate("runtime/orchestrator/src/fg_registry_abi.rs",
          "runtime/contract/include/rescaleframe/frame_generation.h",
          "^rsf_fg_backend_info$", "^RSF_FG_BACKEND_(DLSS|FSR3|FSR4|XESS)$",
          ["-Iruntime/contract/include", "-Isdk/game/include"])
+
+generate("tests/native_sr_fsr4_vulkan_abi.rs", "tests/native_sr_fsr4_vulkan_fixture.h",
+         "rsf_fsr4sr_fixture_calls", "NOTHING",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist",
+          "--raw-line", "use super::{\n"
+          "    Frame as rsf_srvk_frame, Setup as rsf_srvk_setup, rsf_fsr4_bridge_info, rsf_fsr4vk_handoff,\n};",
+          "--raw-line", "type rsf_fsr4vk = ::core::ffi::c_void;"])
+generate("tests/vulkan-fg/src/fsr4_state_abi.rs", "runtime/orchestrator/src/native_fg_fsr4_vulkan_platform.h",
+         "rsf_fsr4gvk_ops", "RSF_(FGVK_ABI_VERSION|SRVK_ABI_VERSION|FSR4FG_INVALID_ARGUMENT)",
+         ["-x", "c++", "-std=c++17", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/graphics/include", "-Isdk/game/include"],
+         ["--allowlist-function", "rsf_(core_fsr4gvk_create|fsr4gvk_(acquire|enable_options|prepare|hudless|submitted|present_source|status|drain|destroy))",
+          "--blocklist-type", "rsf_(frame_record|camera_frame|frame_id|frame_phase|screen_class)",
+          "--raw-line", "use rsf_game_sys::rsf_frame_record;",
+          "--with-derive-default"])

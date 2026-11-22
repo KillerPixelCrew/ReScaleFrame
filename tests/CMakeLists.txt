@@ -684,8 +684,12 @@ target_include_directories(rsf_godot_graph_handoff_test PRIVATE godot_graph_stub
 target_link_libraries(rsf_godot_graph_handoff_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 add_test(NAME godot_graph_handoff_contract COMMAND rsf_godot_graph_handoff_test)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../upscalers/include/ffx_upscale.h")
-    add_executable(rsf_native_sr_fsr4_vulkan_test native_sr_fsr4_vulkan.cpp)
-    target_include_directories(rsf_native_sr_fsr4_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
+    add_executable(rsf_native_sr_fsr4_vulkan_test native_sr_fsr4_vulkan_main.c)
+    set_target_properties(rsf_native_sr_fsr4_vulkan_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+        LINKER_LANGUAGE CXX)
+    if(MINGW)
+        target_link_options(rsf_native_sr_fsr4_vulkan_test PRIVATE -municode)
+    endif()
     target_link_libraries(rsf_native_sr_fsr4_vulkan_test PRIVATE ReScaleFrame::NativeVulkan rsf_build_options)
     add_test(NAME native_sr_fsr4_vulkan_contract COMMAND rsf_native_sr_fsr4_vulkan_test)
     add_executable(rsf_native_sr_fsr4_state_test native_sr_fsr4_state.c)
@@ -832,11 +836,13 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}
     target_link_libraries(rsf_native_fsr4_fg_bridge_test PRIVATE rsf_presentation_fixtures_rust
         ReScaleFrame::NativeVulkan rsf_build_options dxgi)
     add_test(NAME native_fsr4_fg_bridge_contract COMMAND rsf_native_fsr4_fg_bridge_test)
-    add_executable(rsf_native_fsr4_fg_state_test native_fsr4_fg_state.cpp)
-    target_include_directories(rsf_native_fsr4_fg_state_test PRIVATE ../runtime/orchestrator/include)
-    target_include_directories(rsf_native_fsr4_fg_state_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_compile_definitions(rsf_native_fsr4_fg_state_test PRIVATE RSF_RUNTIME_BUILD)
-    target_link_libraries(rsf_native_fsr4_fg_state_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_orchestrator_rust rsf_build_options)
+    rsf_add_rust_static(rsf_fsr4_fg_state_fixtures_rust rsf_rust_fsr4_fg_state_fixtures
+        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features fsr4-state)
+    add_executable(rsf_native_fsr4_fg_state_test game-sdk/cpu_fixture_main.c)
+    set_target_properties(rsf_native_fsr4_fg_state_test PROPERTIES LINKER_LANGUAGE CXX)
+    target_compile_definitions(rsf_native_fsr4_fg_state_test PRIVATE RSF_CPU_FIXTURE=rsf_fixture_fsr4fg_wsi_state)
+    target_link_libraries(rsf_native_fsr4_fg_state_test PRIVATE rsf_fsr4_fg_state_fixtures_rust
+        ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_orchestrator_rust rsf_build_options)
     add_test(NAME native_fsr4_fg_state_contract COMMAND rsf_native_fsr4_fg_state_test)
 endif()
 add_test(NAME native_xess_vulkan_device COMMAND rsf_native_xess_vulkan_test --device)
