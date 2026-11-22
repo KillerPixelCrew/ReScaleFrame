@@ -14,6 +14,8 @@ use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_plat
 use std::ffi::CString;
 use std::sync::{Arc, PoisonError};
 
+mod graphics;
+
 #[path = "xess_requirements_abi.rs"]
 mod requirements_abi;
 #[path = "xess_sdk_abi.rs"]

@@ -180,3 +180,10 @@ wait, coherently mapped readback, and RGB-only tolerance over the same
 pixel region. Its binary16 decoder treats nonfinite values as failures.
 The independent C++ typed SDK mock stays byte-for-byte identical, and the
 SDK-disabled launcher retains its skip route.
+
+The SR adapter now owns the Vulkan image dispatch, memory-type metadata,
+barrier and copy functions in its Rust graphics state. It binds the same
+commands in the same order and initializes the same shared capture owner
+with the device's reported memory types. The C++ capsule retains the
+typed SDK table and opaque Rust handle. Its mock still supplies the
+original inert SDK and Vulkan proc callbacks.

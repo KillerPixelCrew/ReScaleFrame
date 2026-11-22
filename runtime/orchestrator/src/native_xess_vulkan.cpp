@@ -25,6 +25,15 @@ int32_t rsf_core_xessvk_shutdown(const rsf::xess_vk::Ops*);
 #include "vulkan_fg_copy.h"
 #include "vulkan_fg_resources_native.h"
 
+struct rsf_xessvk_graphics;
+extern "C" {
+int32_t rsf_core_xessvk_graphics_bind(const rsf_srvk_setup*, rsf_core_capture_vk*, rsf_xessvk_graphics**);
+void rsf_core_xessvk_graphics_destroy(rsf_xessvk_graphics*);
+void* rsf_core_xessvk_graphics_images(rsf_xessvk_graphics*);
+void rsf_core_xessvk_graphics_barrier(const rsf_xessvk_graphics*, void*, const rsf_vkfg_barrier*);
+void rsf_core_xessvk_graphics_copy(const rsf_xessvk_graphics*, void*, const rsf_vkfg_image_copy*);
+}
+
 namespace rsf::xess_vk {
 struct Library {
     decltype(&xessVKGetRequiredInstanceExtensions) instance = nullptr;
@@ -42,10 +51,8 @@ using Entries = void*[10];
 struct Native {
     const Library* sdk = nullptr;
     xess_context_handle_t context = nullptr;
-    VkDevice device = VK_NULL_HANDLE;
-    rsf::vkfg::Device gpu;
-    PFN_vkCmdPipelineBarrier barrier = nullptr;
-    PFN_vkCmdCopyImage copy = nullptr;
+    std::unique_ptr<rsf_xessvk_graphics, decltype(&rsf_core_xessvk_graphics_destroy)> gpu{
+        nullptr, rsf_core_xessvk_graphics_destroy};
     // The SR owner retires its readbacks with the command buffer that recorded them.
     std::unique_ptr<rsf_core_capture_vk, decltype(&rsf_core_capture_vk_destroy)> capture{
         rsf_core_capture_vk_create(RSF_CAPTURE_VK_COMMAND_RETIREMENT), rsf_core_capture_vk_destroy};
@@ -151,9 +158,8 @@ int32_t open(Library* sdk, Native** out) noexcept try {
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 int32_t create_context(Native* native, const rsf_srvk_setup* setup) noexcept {
-    native->device = static_cast<VkDevice>(setup->device);
     return native->sdk->create(static_cast<VkInstance>(setup->instance),
-        static_cast<VkPhysicalDevice>(setup->physical_device), native->device, &native->context);
+        static_cast<VkPhysicalDevice>(setup->physical_device), static_cast<VkDevice>(setup->device), &native->context);
 }
 
 int32_t initialize(Native* native, const xess_vk_init_params_t* init) noexcept {
@@ -172,30 +178,19 @@ int32_t destroy_context(Native* native) noexcept {
     return result;
 }
 
-int32_t bind_device(Native* native, const rsf_srvk_setup* setup) noexcept try {
-    if (!native->gpu.load_images(*setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-#define RSF_XESS_VK_LOAD(member, function) \
-    native->member = reinterpret_cast<PFN_##function>(setup->device_proc(setup->device, #function)); \
-    if (!native->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
-    RSF_XESS_VK_LOAD(barrier, vkCmdPipelineBarrier);
-    RSF_XESS_VK_LOAD(copy, vkCmdCopyImage);
-#undef RSF_XESS_VK_LOAD
-    const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
-        setup->instance_proc(setup->instance, "vkGetPhysicalDeviceMemoryProperties"));
-    if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-    VkPhysicalDeviceMemoryProperties memory{};
-    properties(static_cast<VkPhysicalDevice>(setup->physical_device), &memory);
-    native->gpu.memory_types(memory);
-    return rsf_core_capture_vk_initialize(native->capture.get(), native->device, setup->device_proc, &memory)
-        ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
-} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+int32_t bind_device(Native* native, const rsf_srvk_setup* setup) noexcept {
+    rsf_xessvk_graphics* gpu = nullptr;
+    const int32_t result = rsf_core_xessvk_graphics_bind(setup, native->capture.get(), &gpu);
+    if (result == RSF_BACKEND_OK) native->gpu.reset(gpu);
+    return result;
+}
 
 void record_barrier(Native* native, void* commands, const rsf_vkfg_barrier* plan) noexcept {
-    rsf_core_vkfg_record_barrier(native->barrier, static_cast<VkCommandBuffer>(commands), plan);
+    rsf_core_xessvk_graphics_barrier(native->gpu.get(), commands, plan);
 }
 
 void record_copy(Native* native, void* commands, const rsf_vkfg_image_copy* plan) noexcept {
-    rsf_core_vkfg_record_copy(native->copy, static_cast<VkCommandBuffer>(commands), plan);
+    rsf_core_xessvk_graphics_copy(native->gpu.get(), commands, plan);
 }
 
 int32_t velocity(Native* native, float x, float y) noexcept {
@@ -229,7 +224,7 @@ extern const Ops native_ops{
     rsf_vk_sdk_system_loader, allocate_table, rsf_core_vk_sdk_pin, [](Library* sdk) noexcept { delete sdk; },
     instance_requirements, device_extensions, device_features, version,
     open, [](Native* native) noexcept { delete native; }, create_context, initialize, resolution, destroy_context,
-    bind_device, [](Native* native) -> void* { return native->gpu.get(); }, &rsf::vkfg::platform,
+    bind_device, [](Native* native) -> void* { return rsf_core_xessvk_graphics_images(native->gpu.get()); }, &rsf::vkfg::platform,
     velocity, record_barrier, record_copy, execute, sharpen,
     [](Native* native) noexcept { rsf_sharpenvk_host_clear(&native->sharpen); },
     [](Native* native, uint64_t provider, uint32_t backend) noexcept { rsf_core_capture_vk_provider(native->capture.get(), provider, backend, 0); },

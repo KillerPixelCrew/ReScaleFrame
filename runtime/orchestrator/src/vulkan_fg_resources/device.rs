@@ -74,7 +74,7 @@ impl Device {
         }
     }
 
-    fn load(
+    pub(crate) fn load(
         graphics: &rsf_srvk_setup,
         fg: Option<&rsf_fgvk_setup>,
         with_view: bool,
