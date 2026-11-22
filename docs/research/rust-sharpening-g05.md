@@ -190,3 +190,8 @@ Rust fixture fakes. The CTest names and entry points were checked against
 the source tree. The worktree retained the existing Cargo dependency
 graph and the native Vulkan capability gates. No builds, test runs,
 Clippy runs or device execution were performed for this follow-up.
+
+The thin settings launcher now compiles as C11. It keeps the independent
+panel, Runtime and SDK layout probes, the FidelityFX descriptor fields and
+the CRT decimal comparison. Strict MinGW C11 syntax passed with and without
+the pinned FidelityFX header. CTest execution and native linking are pending.

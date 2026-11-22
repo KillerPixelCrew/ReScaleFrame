@@ -973,7 +973,8 @@ target_link_libraries(rsf_sharpening_test PRIVATE ReScaleFrame::Graphics rsf_bui
 add_test(NAME sharpening COMMAND rsf_sharpening_test)
 set_tests_properties(sharpening PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
-add_executable(rsf_sharpening_settings_test sharpening_settings_native.cpp)
+add_executable(rsf_sharpening_settings_test sharpening_settings_native.c)
+set_target_properties(rsf_sharpening_settings_test PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_sharpening_settings_test PRIVATE rsf_orchestrator rsf_build_options)
 if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/fidelityfx/Kits/FidelityFX/upscalers/include/ffx_upscale.h")
     target_include_directories(rsf_sharpening_settings_test SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/vendor/fidelityfx/Kits/FidelityFX/upscalers/include")

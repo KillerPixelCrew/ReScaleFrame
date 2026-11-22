@@ -841,7 +841,7 @@ Port host wrappers, options and bindings for sharpening. Track shader provenance
 - [x] [tests/engine_sharpening.cpp](tests/engine_sharpening.cpp)
 - [x] [tests/sharpening.cpp](tests/sharpening.cpp)
 - [x] [tests/sharpening_d3d12.cpp](tests/sharpening_d3d12.cpp)
-- [ ] [tests/sharpening_settings_native.cpp](tests/sharpening_settings_native.cpp) (SDK descriptor and CRT fixture probes)
+- [x] [tests/sharpening_settings_native.cpp](tests/sharpening_settings_native.cpp) (C11 SDK descriptor and CRT fixture probes)
 - [x] [tests/sharpening_settings.cpp](tests/sharpening_settings.cpp)
 - [x] [tests/sharpening_vulkan.cpp](tests/sharpening_vulkan.cpp)
 - [x] [tests/sharpening_vulkan_cpu.cpp](tests/sharpening_vulkan_cpu.cpp)
