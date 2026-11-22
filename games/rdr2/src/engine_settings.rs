@@ -8,7 +8,7 @@ use crate::asi::{self, AsiPlatform, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
 use crate::layout::asi::{self as site, collection, manager};
 use crate::platform::trampoline;
 use rsf_game_sys::rsf_game_log_fn;
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
@@ -162,9 +162,7 @@ fn log(message: &str) {
     }
     // LOGGER only ever holds a `LogFn` stored by `rsf_rdr2_report_engine_settings`.
     let log = unsafe { std::mem::transmute::<*mut c_void, LogFn>(pointer) };
-    if let Ok(text) = CString::new(message) {
-        unsafe { log(LOGGER_USER.load(Ordering::Acquire), text.as_ptr()) };
-    }
+    rsf_game_sys::log_guarded(Some(log), LOGGER_USER.load(Ordering::Acquire), message);
 }
 
 fn logging() -> bool {

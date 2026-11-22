@@ -933,7 +933,7 @@ if(TARGET rsf_vendor_census)
         add_test(NAME rdr2_camera COMMAND rsf_rdr2_camera "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/rdr2-camera-v1.bin")
         add_executable(rsf_rdr2_capture rdr2_capture_main.c rdr2_capture_ngx.c ../games/rdr2/src/capture_ngx.c)
         target_compile_definitions(rsf_rdr2_capture PRIVATE RSF_RDR2_CAPTURE_FIXTURE)
-        target_link_libraries(rsf_rdr2_capture PRIVATE rsf_rdr2_fixtures_rust ReScaleFrame::VendorCensus minhook
+        target_link_libraries(rsf_rdr2_capture PRIVATE rsf_rdr2_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::VendorCensus minhook
             d3d12 dxgi d3dcompiler user32 rsf_build_options)
         add_dependencies(rsf_rdr2_capture rsf_census_fx_ngx)
         add_test(NAME rdr2_capture COMMAND rsf_rdr2_capture "${CMAKE_CURRENT_BINARY_DIR}/rdr2-capture")

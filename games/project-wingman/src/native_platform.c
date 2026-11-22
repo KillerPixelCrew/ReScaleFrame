@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: MIT */
-/* Win32 DLL export and native exception barriers for the Rust adapter.
-   MSVC raises a C++ exception as SEH code 0xE06D7363, so a filter on that code stops the same
-   exceptions the former catch-all stopped. The engine and COM reads in acquire_texture still
-   contain every fault, as before. */
+/* Win32 DLL export and native exception barriers for the Rust adapter (rescaleframe/foreign_guard.h).
+   Calls into the host contain foreign C++ exceptions only; the engine and COM reads in
+   acquire_texture contain every fault, as before. */
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/log.h>
 #include <stdbool.h>
@@ -20,13 +19,11 @@
 #include <initguid.h>
 #include <d3d11.h>
 
+#include <rescaleframe/foreign_guard.h>
+
 #if !defined(_MSC_VER)
 #error "Foreign C++ exception containment needs MSVC structured exception handling"
 #endif
-
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
-#define RSF_FOREIGN_EXCEPTION \
-    (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
 
 bool rsf_wingman_accepting(void);
 bool rsf_wingman_copy(void*, const void*, size_t);
@@ -36,7 +33,7 @@ typedef void* (*native_resource_fn)(void*);
 /* The engine object is foreign: a bad read or throw yields no texture. Every fault is contained. */
 void* rsf_wingman_acquire_texture(uintptr_t rdg)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         void* rhi = NULL;
         uintptr_t table = 0;
         native_resource_fn native_resource = NULL;
@@ -51,7 +48,7 @@ void* rsf_wingman_acquire_texture(uintptr_t rdg)
         if (!native || FAILED(IUnknown_QueryInterface(native, &IID_ID3D11Texture2D, (void**)&texture)))
             return NULL;
         return texture;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } RSF_FAULT_CATCH {
         return NULL;
     }
 }
@@ -66,8 +63,8 @@ void rsf_wingman_report_execution(const rsf_game_host_services* host, uintptr_t 
 {
     ID3D11Device* device = NULL;
     ID3D11DeviceContext* context = NULL;
-    __try {
-        __try {
+    RSF_FOREIGN_TRY {
+        RSF_FOREIGN_TRY {
             ID3D11Texture2D* color = (ID3D11Texture2D*)pass->color_input;
             ID3D11Texture2D_GetDevice(color, &device);
             if (device) {
@@ -93,18 +90,11 @@ void rsf_wingman_report_execution(const rsf_game_host_services* host, uintptr_t 
                     host->render_pass(host->user, context, pass, 0);
                 }
             }
-        } __finally {
+        } RSF_FOREIGN_FINALLY {
             if (context) ID3D11DeviceContext_Release(context);
             if (device) ID3D11Device_Release(device);
         }
-    } __except (RSF_FOREIGN_EXCEPTION) {}
-}
-
-void rsf_wingman_guarded_log(rsf_game_log_fn log, void* user, const char* message)
-{
-    __try {
-        if (log) log(user, message);
-    } __except (RSF_FOREIGN_EXCEPTION) {}
+    } RSF_FOREIGN_CATCH {}
 }
 
 rsf_result rsf_wingman_publish_api(uint32_t, rsf_game_plugin_api*);

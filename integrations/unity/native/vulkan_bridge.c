@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Unity's versioned Vulkan interface, the loader hooks handed to the Rust resolver, and the
-   exception guards around foreign calls at the Rust boundary. MSVC raises a C++ exception as SEH
-   code 0xE06D7363, so a filter on that code stops the same exceptions the former catch-all
-   stopped. Access violations and other faults still propagate. */
+   exception guards around foreign calls at the Rust boundary (rescaleframe/foreign_guard.h:
+   foreign C++ exceptions only; access violations and other faults still propagate). */
 #include "vulkan_bridge.h"
 #include "vulkan_foreign.h"
 #include "vulkan_state.h"
@@ -15,9 +14,7 @@
 #if !defined(_MSC_VER)
 #error "Foreign C++ exception containment needs MSVC structured exception handling"
 #endif
-#define RSF_CXX_EXCEPTION_CODE 0xE06D7363UL
-#define RSF_CXX_FILTER \
-    (GetExceptionCode() == RSF_CXX_EXCEPTION_CODE ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+#include <rescaleframe/foreign_guard.h>
 
 /* Only the Vulkan commands this leaf names cross into the resolver (vulkan_resolver.rs). */
 typedef struct rsf_unity_vk_hooks {
@@ -66,18 +63,18 @@ static VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue queue, const VkP
 
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL instance_lookup(VkInstance instance, const char* name)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         return vkGetInstanceProcAddr(instance, name);
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return NULL;
     }
 }
 
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL device_lookup(VkDevice device, const char* name)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         return vkGetDeviceProcAddr(device, name);
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return NULL;
     }
 }
@@ -95,7 +92,7 @@ bool rsf_uvk_foreign_available(void) { return unity != NULL; }
 bool rsf_uvk_foreign_instance(rsf_uvk_engine_instance* output)
 {
     if (!unity) return false;
-    __try {
+    RSF_FOREIGN_TRY {
         const UnityVulkanInstance instance = unity->Instance();
         output->instance = (uint64_t)(uintptr_t)instance.instance;
         output->device = (uint64_t)(uintptr_t)instance.device;
@@ -103,7 +100,7 @@ bool rsf_uvk_foreign_instance(rsf_uvk_engine_instance* output)
         output->queue = (uint64_t)(uintptr_t)instance.graphicsQueue;
         output->queue_family = instance.queueFamilyIndex;
         return true;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return false;
     }
 }
@@ -117,7 +114,7 @@ bool rsf_uvk_foreign_create_device(const rsf_game_host_services* services, rsf_u
 
 bool rsf_uvk_foreign_texture(void* texture, int32_t layout, uint32_t access, rsf_uvk_engine_image* output)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         UnityVulkanImage image = {0};
         if (!unity->AccessTexture(texture, UnityVulkanWholeImage, (VkImageLayout)layout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, access, kUnityVulkanResourceAccess_PipelineBarrier, &image))
@@ -126,64 +123,56 @@ bool rsf_uvk_foreign_texture(void* texture, int32_t layout, uint32_t access, rsf
         output->layout = (int32_t)image.layout;
         output->aspect = image.aspect;
         return true;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return false;
     }
 }
 
 bool rsf_uvk_foreign_queue(int event_id, void* event)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         unity->AccessQueue(execute_queue, event_id, event, true);
         return true;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return false;
-    }
-}
-
-void rsf_uvk_foreign_log(const rsf_game_host_services* services, const char* text)
-{
-    __try {
-        services->log(services->user, text);
-    } __except (RSF_CXX_FILTER) {
     }
 }
 
 bool rsf_uvk_foreign_pass(const rsf_game_host_services* services, void* target,
     const rsf_game_render_pass* pass, uint32_t phase)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         services->render_pass(services->user, target, pass, phase);
         return true;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return false;
     }
 }
 
 bool rsf_uvk_foreign_present(uint64_t queue, const void* info, int32_t* result)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         /* The loader export dispatches arbitrary queues, including those outside this bridge. */
         *result = vkQueuePresentKHR((VkQueue)(uintptr_t)queue, (const VkPresentInfoKHR*)info);
         return true;
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         return false;
     }
 }
 
 void rsf_uvk_preload(void* interfaces)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         unity = RSF_UNITY_GET((IUnityInterfaces*)interfaces, IUnityGraphicsVulkanV2);
         if (unity) (void)unity->AddInterceptInitialization(initialize_intercept, NULL, 0);
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         unity = NULL;
     }
 }
 
 void rsf_unity_package_sdk_bind_vulkan(void* interfaces, int base_event)
 {
-    __try {
+    RSF_FOREIGN_TRY {
         unity = RSF_UNITY_GET((IUnityInterfaces*)interfaces, IUnityGraphicsVulkanV2);
         if (!unity) return;
         UnityVulkanPluginEventConfig config = {0};
@@ -191,7 +180,7 @@ void rsf_unity_package_sdk_bind_vulkan(void* interfaces, int base_event)
         config.graphicsQueueAccess = kUnityVulkanGraphicsQueueAccess_DontCare;
         config.flags = kUnityVulkanEventConfigFlag_SyncWorkerThreads;
         for (int offset = 0; offset < 3; ++offset) unity->ConfigureEvent(base_event + offset, &config);
-    } __except (RSF_CXX_FILTER) {
+    } RSF_FOREIGN_CATCH {
         unity = NULL;
     }
 }

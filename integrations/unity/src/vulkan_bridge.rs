@@ -58,7 +58,8 @@ extern "C" fn ring_retired(epoch: u64) {
 
 fn log(services: *const rsf_game_host_services, message: &CStr) {
     if unsafe { services.as_ref() }.is_some_and(|services| services.log.is_some()) {
-        unsafe { rsf_uvk_foreign_log(services, message.as_ptr()) };
+        let services = unsafe { &*services };
+        unsafe { rsf_game_log_guarded(services.log, services.user, message.as_ptr()) };
     } else {
         unsafe {
             OutputDebugStringA(message.as_ptr().cast());

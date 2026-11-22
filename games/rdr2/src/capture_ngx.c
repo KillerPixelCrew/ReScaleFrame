@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Only NGX virtual dispatch and its foreign exception boundary stay native. Snapshot policy and
    registration live in Rust. */
+#include <rescaleframe/foreign_guard.h>
 #include <rescaleframe/census_d3d12_observer.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -23,19 +24,15 @@ static bool dispatch(const void* parameters, uint32_t slot, const char* key, voi
     return read && read(parameters, key, output) == 1;
 }
 
-/* The NGX implementation is foreign C++. SEH also contains its C++ exceptions. */
+/* The NGX implementation is foreign C++ on a borrowed parameter block: every fault and C++
+   exception reads as unavailable. */
 static bool read_ngx(const void* parameters, uint32_t slot, const char* key, void* output)
 {
     if (!parameters || !slot_supported(slot)) return false;
-#if defined(_MSC_VER)
-    __try {
-        return dispatch(parameters, slot, key, output);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-#else
-    return dispatch(parameters, slot, key, output);
-#endif
+    bool read = false;
+    RSF_FOREIGN_TRY { read = dispatch(parameters, slot, key, output); }
+    RSF_FAULT_CATCH { read = false; }
+    return read;
 }
 
 typedef void (*observe_d3d12_fn)(void (*)(void*), void (*)(void*, uint32_t, void* const*),

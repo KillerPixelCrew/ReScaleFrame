@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Process identity, guarded native reads, MinHook and the native exception leaves.
 use rsf_game_sys::win32::module_path;
-use rsf_game_sys::{rsf_game_host_services, rsf_game_log_fn, rsf_game_render_pass};
-use std::ffi::{OsString, c_char, c_void};
+use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
+use std::ffi::{OsString, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
@@ -22,11 +22,6 @@ unsafe extern "C" {
         list: usize,
         pass: *const rsf_game_render_pass,
         log: bool,
-    );
-    pub(crate) fn rsf_wingman_guarded_log(
-        log: rsf_game_log_fn,
-        user: *mut c_void,
-        message: *const c_char,
     );
 }
 

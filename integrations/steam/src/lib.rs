@@ -21,14 +21,14 @@ use rsf_game_sys::{
 };
 use rsf_game_sys::{RSF_GAME_ABI_VERSION, rsf_game_host_services};
 use rsf_windows::minhook;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use windows_sys::Win32::Foundation::HMODULE;
-use windows_sys::Win32::System::Diagnostics::Debug::{FlushInstructionCache, ReadProcessMemory};
+use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleFileNameW,
     GetModuleHandleExW, GetModuleHandleW, GetProcAddress,
@@ -125,7 +125,6 @@ unsafe extern "C" {
         user: *mut c_void,
         request: *mut rsf_d3d11_chain_dispatch,
     ) -> i32;
-    fn rsf_steam_log_guard(host: *const rsf_game_host_services, message: *const c_char);
 }
 
 struct Relay {
@@ -154,23 +153,8 @@ unsafe fn function<F: Copy>(address: usize) -> F {
     unsafe { std::mem::transmute_copy(&address) }
 }
 
-fn read(address: usize, out: *mut c_void, size: usize) -> bool {
-    let mut copied = 0;
-    let read = unsafe {
-        ReadProcessMemory(
-            GetCurrentProcess(),
-            address as *const c_void,
-            out,
-            size,
-            &mut copied,
-        )
-    };
-    read != 0 && copied == size
-}
-
 fn read_bytes<const N: usize>(address: usize) -> Option<[u8; N]> {
-    let mut bytes = [0; N];
-    read(address, bytes.as_mut_ptr().cast(), N).then_some(bytes)
+    rsf_game_sys::win32::read(address)
 }
 
 fn handlers() -> [usize; 7] {
@@ -220,7 +204,9 @@ fn continuation(method: u32) -> Option<usize> {
     let index = method as usize - 1;
     let slot = relay().base.wrapping_add(SLOTS[index]);
     let mut next = 0usize;
-    let copied = read(slot, (&raw mut next).cast(), size_of::<usize>());
+    let copied = unsafe {
+        rsf_game_sys::win32::read_process(slot, (&raw mut next).cast(), size_of::<usize>())
+    };
     (copied && next != 0 && next != handlers()[index]).then_some(next)
 }
 
@@ -465,7 +451,7 @@ fn guarded(base: usize) -> bool {
 }
 
 fn log(host: &rsf_game_host_services, message: &CStr) {
-    unsafe { rsf_steam_log_guard(host, message.as_ptr()) };
+    unsafe { rsf_game_sys::rsf_game_log_guarded(host.log, host.user, message.as_ptr()) };
 }
 
 fn fail(host: &rsf_game_host_services, message: &CStr) -> bool {

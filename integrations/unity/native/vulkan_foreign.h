@@ -25,7 +25,6 @@ bool rsf_uvk_foreign_available(void);
 bool rsf_uvk_foreign_instance(rsf_uvk_engine_instance*);
 bool rsf_uvk_foreign_texture(void*, int32_t layout, uint32_t access, rsf_uvk_engine_image*);
 bool rsf_uvk_foreign_queue(int event_id, void* event);
-void rsf_uvk_foreign_log(const rsf_game_host_services*, const char*);
 bool rsf_uvk_foreign_pass(const rsf_game_host_services*, void*, const rsf_game_render_pass*, uint32_t phase);
 bool rsf_uvk_foreign_present(uint64_t queue, const void* info, int32_t* result);
 

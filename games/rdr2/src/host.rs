@@ -5,7 +5,7 @@ use rsf_game_sys::{
     rsf_game_render_pass,
 };
 use std::cell::UnsafeCell;
-use std::ffi::{CString, c_void};
+use std::ffi::c_void;
 
 /// One owner's copy of the host services. It is written only by prepare and stop, while that
 /// owner's hooks are not installed or enabled, and read by its callbacks in between.
@@ -37,10 +37,7 @@ impl Host {
     }
 
     pub(crate) fn log(&self, message: &str) {
-        let Some(log) = self.0.log else { return };
-        if let Ok(text) = CString::new(message) {
-            unsafe { log(self.0.user, text.as_ptr()) };
-        }
+        rsf_game_sys::host_log(&self.0, message);
     }
 
     pub(crate) fn feedback(&self, reason: u32, native_frame: u64) {

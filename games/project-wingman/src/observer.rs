@@ -4,8 +4,7 @@ use crate::INVALID_ARGUMENT;
 use crate::camera::{CopyMemory, JITTER, read};
 use crate::execution;
 use crate::windows::{
-    copy, create_hook, disable_hook, enable_hook, image_base, rsf_wingman_guarded_log, tick_count,
-    verify_executable,
+    copy, create_hook, disable_hook, enable_hook, image_base, tick_count, verify_executable,
 };
 use rsf_game_sys::{
     rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args, rsf_game_renderer_status,
@@ -447,6 +446,6 @@ fn observe(
         downsample,
         downsample_format,
     )) {
-        unsafe { rsf_wingman_guarded_log(host.log, host.user, message.as_ptr()) };
+        unsafe { rsf_game_sys::rsf_game_log_guarded(host.log, host.user, message.as_ptr()) };
     }
 }
