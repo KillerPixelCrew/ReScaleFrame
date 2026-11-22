@@ -91,43 +91,40 @@ fn native_pass(
         ..unsafe { std::mem::zeroed() }
     }
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_host_fixture_run_phase(
-    phase: u32,
-    scoped: u32,
-    frame: rsf_d3d11_fixture_frame_fn,
-    user: *mut c_void,
-) {
-    let Some(frame) = frame else { return };
-    let count = match phase {
-        RSF_D3D11_FIXTURE_REDUCED_WARMUP | RSF_D3D11_FIXTURE_LATE_ENABLE => 10,
-        RSF_D3D11_FIXTURE_NATIVE_SR_OFF | RSF_D3D11_FIXTURE_NATIVE_SR_ON => 12,
-        RSF_D3D11_FIXTURE_FG_OFF => 3,
-        _ => return,
-    };
-    for index in 0..count {
-        let first = index == 0;
-        let (reconstruct, reset, expect_capture, cleanup) = match phase {
-            RSF_D3D11_FIXTURE_REDUCED_WARMUP => (true, first, 0, scoped != 0 && index == 9),
-            RSF_D3D11_FIXTURE_LATE_ENABLE => (true, false, if index < 2 { -1 } else { 1 }, false),
-            RSF_D3D11_FIXTURE_NATIVE_SR_OFF => (false, first, if first { -1 } else { 1 }, false),
-            RSF_D3D11_FIXTURE_NATIVE_SR_ON => (true, first, 1, false),
-            RSF_D3D11_FIXTURE_FG_OFF => (false, false, 0, false),
-            _ => unreachable!(),
-        };
-        if unsafe {
-            frame(
-                user,
-                reconstruct.into(),
-                reset.into(),
-                expect_capture,
-                cleanup.into(),
-            )
-        } != 0
-        {
-            break;
+// Read the same actual D3D11 debug queue as the native launchers. The queue
+// and native window remain launcher-owned until this synchronous check returns.
+unsafe fn finish_device(r: &rsf_d3d11_fixture_resources) -> bool {
+    let mut valid = true;
+    if let Some(queue) = unsafe { ID3D11InfoQueue::from_raw_borrowed(&r.diagnostics) } {
+        let count = unsafe { queue.GetNumStoredMessagesAllowedByRetrievalFilter() };
+        for index in 0..count {
+            let mut size = 0;
+            let _ = unsafe { queue.GetMessage(index, None, &mut size) };
+            if size < size_of::<D3D11_MESSAGE>() {
+                continue;
+            }
+            let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
+            let message = storage.as_mut_ptr().cast::<D3D11_MESSAGE>();
+            if unsafe { queue.GetMessage(index, Some(message), &mut size) }.is_ok() {
+                let message = unsafe { &*message };
+                if message.Severity.0 <= D3D11_MESSAGE_SEVERITY_ERROR.0 {
+                    let description = if message.pDescription.is_null() {
+                        std::borrow::Cow::Borrowed("")
+                    } else {
+                        unsafe { std::ffi::CStr::from_ptr(message.pDescription.cast()) }
+                            .to_string_lossy()
+                    };
+                    eprintln!("D3D11 error: {description}");
+                    valid = false;
+                }
+            }
         }
     }
+    let _ = unsafe { rsf_d3d11_host_set_active((*r.host).user, 0) };
+    if let Some(close) = r.close_window {
+        unsafe { close() };
+    }
+    valid
 }
 
 #[unsafe(no_mangle)]

@@ -9,13 +9,13 @@ type rsf_fg_mode = u32;
 type rsf_pacing_owner = u32;
 type rsf_reflex_mode = u32;
 
+pub const RSF_SR_DLSS: u32 = 1;
+pub const RSF_FG_BACKEND_FSR3: u32 = 3;
+pub const RSF_FG_OFF: u32 = 0;
 pub const RSF_PACING_NONE: u32 = 0;
 pub const RSF_REFLEX_OFF: u32 = 0;
-pub const RSF_D3D11_FIXTURE_REDUCED_WARMUP: u32 = 1;
-pub const RSF_D3D11_FIXTURE_LATE_ENABLE: u32 = 2;
-pub const RSF_D3D11_FIXTURE_NATIVE_SR_OFF: u32 = 3;
-pub const RSF_D3D11_FIXTURE_NATIVE_SR_ON: u32 = 4;
-pub const RSF_D3D11_FIXTURE_FG_OFF: u32 = 5;
+pub const RSF_NATIVE_FG_REASON_RESET: u32 = 5;
+pub const RSF_RENDER_FRONTEND_ABI_VERSION: u32 = 3;
 unsafe extern "C" {
     pub fn rsf_d3d11_host_set_active(services_user: *mut ::core::ffi::c_void, active: u32) -> i32;
 }
@@ -104,6 +104,96 @@ const _: () = {
     ["Offset of field: rsf_native_cpu_frame::pings"]
         [::core::mem::offset_of!(rsf_native_cpu_frame, pings) - 144usize];
 };
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_native_cpu_counters {
+    pub struct_size: u32,
+    pub frames: u64,
+    pub input_events: [u64; 3usize],
+    pub pings: u64,
+    pub substitutes: u64,
+    pub duplicates: u64,
+    pub order_violations: u64,
+    pub expired_messages: u64,
+    pub unframed_inputs: u64,
+    pub derived_frame_ends: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_cpu_counters"]
+        [::core::mem::size_of::<rsf_native_cpu_counters>() - 96usize];
+    ["Alignment of rsf_native_cpu_counters"]
+        [::core::mem::align_of::<rsf_native_cpu_counters>() - 8usize];
+    ["Offset of field: rsf_native_cpu_counters::struct_size"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, struct_size) - 0usize];
+    ["Offset of field: rsf_native_cpu_counters::frames"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, frames) - 8usize];
+    ["Offset of field: rsf_native_cpu_counters::input_events"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, input_events) - 16usize];
+    ["Offset of field: rsf_native_cpu_counters::pings"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, pings) - 40usize];
+    ["Offset of field: rsf_native_cpu_counters::substitutes"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, substitutes) - 48usize];
+    ["Offset of field: rsf_native_cpu_counters::duplicates"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, duplicates) - 56usize];
+    ["Offset of field: rsf_native_cpu_counters::order_violations"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, order_violations) - 64usize];
+    ["Offset of field: rsf_native_cpu_counters::expired_messages"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, expired_messages) - 72usize];
+    ["Offset of field: rsf_native_cpu_counters::unframed_inputs"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, unframed_inputs) - 80usize];
+    ["Offset of field: rsf_native_cpu_counters::derived_frame_ends"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, derived_frame_ends) - 88usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_native_latency_status {
+    pub struct_size: u32,
+    pub version: u32,
+    pub owner: u32,
+    pub available: u32,
+    pub effective_mode: u32,
+    pub pcl_available: u32,
+    pub report_available: u32,
+    pub paced_frames: u64,
+    pub marker_calls: u64,
+    pub derived_boundaries: u64,
+    pub events: rsf_native_cpu_counters,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_latency_status"]
+        [::core::mem::size_of::<rsf_native_latency_status>() - 152usize];
+    ["Alignment of rsf_native_latency_status"]
+        [::core::mem::align_of::<rsf_native_latency_status>() - 8usize];
+    ["Offset of field: rsf_native_latency_status::struct_size"]
+        [::core::mem::offset_of!(rsf_native_latency_status, struct_size) - 0usize];
+    ["Offset of field: rsf_native_latency_status::version"]
+        [::core::mem::offset_of!(rsf_native_latency_status, version) - 4usize];
+    ["Offset of field: rsf_native_latency_status::owner"]
+        [::core::mem::offset_of!(rsf_native_latency_status, owner) - 8usize];
+    ["Offset of field: rsf_native_latency_status::available"]
+        [::core::mem::offset_of!(rsf_native_latency_status, available) - 12usize];
+    ["Offset of field: rsf_native_latency_status::effective_mode"]
+        [::core::mem::offset_of!(rsf_native_latency_status, effective_mode) - 16usize];
+    ["Offset of field: rsf_native_latency_status::pcl_available"]
+        [::core::mem::offset_of!(rsf_native_latency_status, pcl_available) - 20usize];
+    ["Offset of field: rsf_native_latency_status::report_available"]
+        [::core::mem::offset_of!(rsf_native_latency_status, report_available) - 24usize];
+    ["Offset of field: rsf_native_latency_status::paced_frames"]
+        [::core::mem::offset_of!(rsf_native_latency_status, paced_frames) - 32usize];
+    ["Offset of field: rsf_native_latency_status::marker_calls"]
+        [::core::mem::offset_of!(rsf_native_latency_status, marker_calls) - 40usize];
+    ["Offset of field: rsf_native_latency_status::derived_boundaries"]
+        [::core::mem::offset_of!(rsf_native_latency_status, derived_boundaries) - 48usize];
+    ["Offset of field: rsf_native_latency_status::events"]
+        [::core::mem::offset_of!(rsf_native_latency_status, events) - 56usize];
+};
+unsafe extern "C" {
+    pub fn rsf_native_latency_status_get(
+        arg1: *mut rsf_native_latency_status,
+    ) -> ::core::ffi::c_int;
+}
 unsafe extern "C" {
     pub fn rsf_native_cpu_read(
         session: u64,
@@ -351,19 +441,91 @@ unsafe extern "C" {
         record: *mut rsf_native_present_record,
     ) -> ::core::ffi::c_int;
 }
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_render_settings {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub sr_enabled: u32,
+    pub sr_backend: u32,
+    pub dlss_preset: u32,
+    pub fg_enabled: u32,
+    pub fg_backend: u32,
+    pub generated_frames: u32,
+    pub latency: u32,
+    pub frame_limit_us: u32,
+    pub status_overlay: u32,
+    pub sr_quality: u32,
+    pub sharpening_mode: u32,
+    pub sharpening_sharpness: f32,
+    pub sharpening_mas: u32,
+    pub sharpening_motion_sharpness: f32,
+    pub sharpening_motion_threshold: f32,
+    pub sharpening_motion_scale_limit: f32,
+    pub sharpening_contrast_enabled: u32,
+    pub sharpening_contrast: f32,
+    pub sharpening_depth_scale: f32,
+    pub sharpening_depth_bias: f32,
+    pub sharpening_clamp_output: u32,
+    pub sharpening_debug: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_render_settings"][::core::mem::size_of::<rsf_render_settings>() - 96usize];
+    ["Alignment of rsf_render_settings"][::core::mem::align_of::<rsf_render_settings>() - 4usize];
+    ["Offset of field: rsf_render_settings::struct_size"]
+        [::core::mem::offset_of!(rsf_render_settings, struct_size) - 0usize];
+    ["Offset of field: rsf_render_settings::abi_version"]
+        [::core::mem::offset_of!(rsf_render_settings, abi_version) - 4usize];
+    ["Offset of field: rsf_render_settings::sr_enabled"]
+        [::core::mem::offset_of!(rsf_render_settings, sr_enabled) - 8usize];
+    ["Offset of field: rsf_render_settings::sr_backend"]
+        [::core::mem::offset_of!(rsf_render_settings, sr_backend) - 12usize];
+    ["Offset of field: rsf_render_settings::dlss_preset"]
+        [::core::mem::offset_of!(rsf_render_settings, dlss_preset) - 16usize];
+    ["Offset of field: rsf_render_settings::fg_enabled"]
+        [::core::mem::offset_of!(rsf_render_settings, fg_enabled) - 20usize];
+    ["Offset of field: rsf_render_settings::fg_backend"]
+        [::core::mem::offset_of!(rsf_render_settings, fg_backend) - 24usize];
+    ["Offset of field: rsf_render_settings::generated_frames"]
+        [::core::mem::offset_of!(rsf_render_settings, generated_frames) - 28usize];
+    ["Offset of field: rsf_render_settings::latency"]
+        [::core::mem::offset_of!(rsf_render_settings, latency) - 32usize];
+    ["Offset of field: rsf_render_settings::frame_limit_us"]
+        [::core::mem::offset_of!(rsf_render_settings, frame_limit_us) - 36usize];
+    ["Offset of field: rsf_render_settings::status_overlay"]
+        [::core::mem::offset_of!(rsf_render_settings, status_overlay) - 40usize];
+    ["Offset of field: rsf_render_settings::sr_quality"]
+        [::core::mem::offset_of!(rsf_render_settings, sr_quality) - 44usize];
+    ["Offset of field: rsf_render_settings::sharpening_mode"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_mode) - 48usize];
+    ["Offset of field: rsf_render_settings::sharpening_sharpness"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_sharpness) - 52usize];
+    ["Offset of field: rsf_render_settings::sharpening_mas"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_mas) - 56usize];
+    ["Offset of field: rsf_render_settings::sharpening_motion_sharpness"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_motion_sharpness) - 60usize];
+    ["Offset of field: rsf_render_settings::sharpening_motion_threshold"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_motion_threshold) - 64usize];
+    ["Offset of field: rsf_render_settings::sharpening_motion_scale_limit"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_motion_scale_limit) - 68usize];
+    ["Offset of field: rsf_render_settings::sharpening_contrast_enabled"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_contrast_enabled) - 72usize];
+    ["Offset of field: rsf_render_settings::sharpening_contrast"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_contrast) - 76usize];
+    ["Offset of field: rsf_render_settings::sharpening_depth_scale"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_depth_scale) - 80usize];
+    ["Offset of field: rsf_render_settings::sharpening_depth_bias"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_depth_bias) - 84usize];
+    ["Offset of field: rsf_render_settings::sharpening_clamp_output"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_clamp_output) - 88usize];
+    ["Offset of field: rsf_render_settings::sharpening_debug"]
+        [::core::mem::offset_of!(rsf_render_settings, sharpening_debug) - 92usize];
+};
 pub type rsf_d3d11_fixture_disable_sr_fn =
     ::core::option::Option<unsafe extern "C" fn(user: *mut ::core::ffi::c_void) -> i32>;
 pub type rsf_d3d11_fixture_present_fn =
     ::core::option::Option<unsafe extern "C" fn(chain: *mut ::core::ffi::c_void) -> i32>;
-pub type rsf_d3d11_fixture_frame_fn = ::core::option::Option<
-    unsafe extern "C" fn(
-        user: *mut ::core::ffi::c_void,
-        reconstruct: u32,
-        reset: u32,
-        expect_capture: i32,
-        cleanup: u32,
-    ) -> i32,
->;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_d3d11_fixture_resources {
@@ -381,11 +543,13 @@ pub struct rsf_d3d11_fixture_resources {
     pub output_view: *mut ::core::ffi::c_void,
     pub width: u32,
     pub height: u32,
+    pub diagnostics: *mut ::core::ffi::c_void,
+    pub close_window: ::core::option::Option<unsafe extern "C" fn()>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_d3d11_fixture_resources"]
-        [::core::mem::size_of::<rsf_d3d11_fixture_resources>() - 104usize];
+        [::core::mem::size_of::<rsf_d3d11_fixture_resources>() - 120usize];
     ["Alignment of rsf_d3d11_fixture_resources"]
         [::core::mem::align_of::<rsf_d3d11_fixture_resources>() - 8usize];
     ["Offset of field: rsf_d3d11_fixture_resources::host"]
@@ -416,6 +580,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_d3d11_fixture_resources, width) - 96usize];
     ["Offset of field: rsf_d3d11_fixture_resources::height"]
         [::core::mem::offset_of!(rsf_d3d11_fixture_resources, height) - 100usize];
+    ["Offset of field: rsf_d3d11_fixture_resources::diagnostics"]
+        [::core::mem::offset_of!(rsf_d3d11_fixture_resources, diagnostics) - 104usize];
+    ["Offset of field: rsf_d3d11_fixture_resources::close_window"]
+        [::core::mem::offset_of!(rsf_d3d11_fixture_resources, close_window) - 112usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -436,11 +604,13 @@ pub struct rsf_d3d11_fixture_sr_calls {
     >,
     pub cancel_dump: ::core::option::Option<unsafe extern "C" fn(session: u64) -> i32>,
     pub present: rsf_d3d11_fixture_present_fn,
+    pub disable_sr: rsf_d3d11_fixture_disable_sr_fn,
+    pub decode_half: ::core::option::Option<unsafe extern "C" fn(arg1: u16) -> f32>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_d3d11_fixture_sr_calls"]
-        [::core::mem::size_of::<rsf_d3d11_fixture_sr_calls>() - 48usize];
+        [::core::mem::size_of::<rsf_d3d11_fixture_sr_calls>() - 64usize];
     ["Alignment of rsf_d3d11_fixture_sr_calls"]
         [::core::mem::align_of::<rsf_d3d11_fixture_sr_calls>() - 8usize];
     ["Offset of field: rsf_d3d11_fixture_sr_calls::user"]
@@ -455,6 +625,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_d3d11_fixture_sr_calls, cancel_dump) - 32usize];
     ["Offset of field: rsf_d3d11_fixture_sr_calls::present"]
         [::core::mem::offset_of!(rsf_d3d11_fixture_sr_calls, present) - 40usize];
+    ["Offset of field: rsf_d3d11_fixture_sr_calls::disable_sr"]
+        [::core::mem::offset_of!(rsf_d3d11_fixture_sr_calls, disable_sr) - 48usize];
+    ["Offset of field: rsf_d3d11_fixture_sr_calls::decode_half"]
+        [::core::mem::offset_of!(rsf_d3d11_fixture_sr_calls, decode_half) - 56usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -480,11 +654,26 @@ pub struct rsf_d3d11_fixture_fg_calls {
         ),
     >,
     pub pump_messages: ::core::option::Option<unsafe extern "C" fn() -> i32>,
+    pub settings_get: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *mut rsf_render_settings) -> i32,
+    >,
+    pub settings_apply: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            arg2: *const rsf_render_settings,
+        ) -> i32,
+    >,
+    pub switch_result: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, result: *mut i32) -> i32,
+    >,
+    pub generation: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, generation: *mut u64) -> i32,
+    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_d3d11_fixture_fg_calls"]
-        [::core::mem::size_of::<rsf_d3d11_fixture_fg_calls>() - 56usize];
+        [::core::mem::size_of::<rsf_d3d11_fixture_fg_calls>() - 88usize];
     ["Alignment of rsf_d3d11_fixture_fg_calls"]
         [::core::mem::align_of::<rsf_d3d11_fixture_fg_calls>() - 8usize];
     ["Offset of field: rsf_d3d11_fixture_fg_calls::user"]
@@ -501,86 +690,12 @@ const _: () = {
         [::core::mem::offset_of!(rsf_d3d11_fixture_fg_calls, outer_counts) - 40usize];
     ["Offset of field: rsf_d3d11_fixture_fg_calls::pump_messages"]
         [::core::mem::offset_of!(rsf_d3d11_fixture_fg_calls, pump_messages) - 48usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_d3d11_fixture_fg_state {
-    pub source: u64,
-    pub captured: u64,
-    pub sr_evaluated: u64,
-    pub app_presents: u64,
-    pub failed: u32,
-    pub unavailable: u32,
-    pub occluded: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_d3d11_fixture_fg_state"]
-        [::core::mem::size_of::<rsf_d3d11_fixture_fg_state>() - 48usize];
-    ["Alignment of rsf_d3d11_fixture_fg_state"]
-        [::core::mem::align_of::<rsf_d3d11_fixture_fg_state>() - 8usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_state::source"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_state, source) - 0usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_state::captured"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_state, captured) - 8usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_state::sr_evaluated"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_state, sr_evaluated) - 16usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_state::app_presents"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_state, app_presents) - 24usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_state::failed"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_state, failed) - 32usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_state::unavailable"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_state, unavailable) - 36usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_state::occluded"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_state, occluded) - 40usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_d3d11_fixture_fg_frame {
-    pub reconstruct: u32,
-    pub primary: u32,
-    pub reset: u32,
-    pub expect_capture: i32,
-    pub scoped: u32,
-    pub native_reinsertion: u32,
-    pub active_width: u32,
-    pub active_height: u32,
-    pub native_pixel: u32,
-    pub outside_marker: u32,
-    pub cleanup: u32,
-    pub refuse_inputs_late: u32,
-    pub refuse_depth_late: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_d3d11_fixture_fg_frame"]
-        [::core::mem::size_of::<rsf_d3d11_fixture_fg_frame>() - 52usize];
-    ["Alignment of rsf_d3d11_fixture_fg_frame"]
-        [::core::mem::align_of::<rsf_d3d11_fixture_fg_frame>() - 4usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::reconstruct"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, reconstruct) - 0usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::primary"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, primary) - 4usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::reset"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, reset) - 8usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::expect_capture"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, expect_capture) - 12usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::scoped"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, scoped) - 16usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::native_reinsertion"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, native_reinsertion) - 20usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::active_width"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, active_width) - 24usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::active_height"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, active_height) - 28usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::native_pixel"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, native_pixel) - 32usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::outside_marker"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, outside_marker) - 36usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::cleanup"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, cleanup) - 40usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::refuse_inputs_late"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, refuse_inputs_late) - 44usize];
-    ["Offset of field: rsf_d3d11_fixture_fg_frame::refuse_depth_late"]
-        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_frame, refuse_depth_late) - 48usize];
+    ["Offset of field: rsf_d3d11_fixture_fg_calls::settings_get"]
+        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_calls, settings_get) - 56usize];
+    ["Offset of field: rsf_d3d11_fixture_fg_calls::settings_apply"]
+        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_calls, settings_apply) - 64usize];
+    ["Offset of field: rsf_d3d11_fixture_fg_calls::switch_result"]
+        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_calls, switch_result) - 72usize];
+    ["Offset of field: rsf_d3d11_fixture_fg_calls::generation"]
+        [::core::mem::offset_of!(rsf_d3d11_fixture_fg_calls, generation) - 80usize];
 };

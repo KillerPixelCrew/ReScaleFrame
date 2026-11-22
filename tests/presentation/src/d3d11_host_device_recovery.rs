@@ -218,37 +218,26 @@ unsafe fn run_source(
     Ok(())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_host_fixture_recover(
-    host: *const rsf_game_host_services,
-    context: Raw,
-    chain: Raw,
-    motion: Raw,
-    base: *const rsf_game_render_pass,
-    present: rsf_d3d11_fixture_present_fn,
-    disable_sr: rsf_d3d11_fixture_disable_sr_fn,
-    user: Raw,
-) -> i32 {
-    let (Some(host), Some(base), Some(present), Some(disable_sr)) = (
-        unsafe { host.as_ref() },
-        unsafe { base.as_ref() },
-        present,
-        disable_sr,
-    ) else {
-        return 1;
-    };
+pub(super) unsafe fn recover(
+    r: &rsf_d3d11_fixture_resources,
+    api: &rsf_d3d11_fixture_sr_calls,
+    base: &rsf_game_render_pass,
+) -> Result<(), &'static str> {
+    let host = unsafe { &*r.host };
     let callbacks = Callbacks {
-        present,
-        disable_sr,
-        settings_user: user,
+        present: api.present.ok_or("Present callback")?,
+        disable_sr: api.disable_sr.ok_or("disable SR callback")?,
+        settings_user: api.user,
     };
     for source in 11..=12 {
-        if let Err(check) =
-            unsafe { run_source(host, context, chain, motion, *base, source, &callbacks) }
-        {
+        if let Err(check) = unsafe {
+            run_source(
+                host, r.context, r.chain, r.motion, *base, source, &callbacks,
+            )
+        } {
             eprintln!("FAIL resource-only recovery source={source}: {check}");
-            return 1;
+            return Err("resource-only recovery");
         }
     }
-    0
+    Ok(())
 }

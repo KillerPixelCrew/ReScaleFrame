@@ -19,14 +19,102 @@ use windows::Win32::Foundation::DXGI_STATUS_OCCLUDED;
 const OK: i32 = 0;
 const NOT_READY: i32 = -3;
 const BUSY: i32 = -4;
+const INVALID: i32 = -1;
 
-impl rsf_d3d11_fixture_fg_state {
+#[path = "d3d11_host_device_fg_phases.rs"]
+mod phases;
+
+#[derive(Default)]
+struct State {
+    source: u64,
+    captured: u64,
+    sr_evaluated: u64,
+    app_presents: u64,
+    failed: bool,
+    unavailable: bool,
+    occluded: bool,
+}
+
+struct Frame {
+    reconstruct: bool,
+    primary: bool,
+    reset: bool,
+    expect_capture: i32,
+    scoped: bool,
+    native_reinsertion: bool,
+    active_width: u32,
+    active_height: u32,
+    native_pixel: u32,
+    outside_marker: u32,
+    cleanup: bool,
+    refuse_inputs_late: bool,
+    refuse_depth_late: bool,
+}
+
+impl State {
     fn verify(&mut self, ok: bool, label: &str) {
         if !ok {
             eprintln!("FAIL source={}: {label}", self.source);
-            self.failed = 1;
+            self.failed = true;
         }
     }
+}
+
+fn foreign_restore(user: Raw, cleanup: &rsf_d3d11_auxiliary_scope) -> bool {
+    // The joined thread only borrows the scope and process-owned host.
+    let scope = std::ptr::from_ref(cleanup).expose_provenance();
+    let user = user.expose_provenance();
+    let other = std::thread::spawn(move || unsafe {
+        rsf_d3d11_host_restore_auxiliaries(
+            with_exposed_provenance_mut(user),
+            with_exposed_provenance(scope),
+        )
+    });
+    matches!(other.join(), Ok(NOT_READY))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11_host_fixture_check_empty_aux(
+    host: *const rsf_game_host_services,
+    context: Raw,
+) -> i32 {
+    let host = unsafe { &*host };
+    let cleanup = rsf_d3d11_auxiliary_scope {
+        struct_size: size_of::<rsf_d3d11_auxiliary_scope>() as u32,
+        abi_version: RSF_D3D11_HOST_ABI_VERSION,
+        session_id: host.session_id,
+        native_frame: 1,
+        view_key: 1,
+    };
+    let restore = |scope: &rsf_d3d11_auxiliary_scope| unsafe {
+        rsf_d3d11_host_restore_auxiliaries(host.user, scope)
+    };
+    let wrong_session = rsf_d3d11_auxiliary_scope {
+        session_id: cleanup.session_id + 1,
+        ..cleanup
+    };
+    let invalid = rsf_d3d11_auxiliary_pass {
+        struct_size: size_of::<rsf_d3d11_auxiliary_pass>() as u32,
+        abi_version: RSF_D3D11_HOST_ABI_VERSION,
+        pass: std::ptr::null(),
+        surface_count: 0,
+        surfaces: std::ptr::null(),
+    };
+    let failure = if restore(&cleanup) != OK || restore(&cleanup) != OK {
+        "verified owner acknowledges empty cleanup before preparation and on repeat"
+    } else if restore(&wrong_session) != NOT_READY {
+        "empty cleanup refuses a foreign session"
+    } else if !foreign_restore(host.user, &cleanup) {
+        "empty cleanup refuses a foreign graphics thread"
+    } else if unsafe { rsf_d3d11_host_upscale_auxiliaries(host.user, context, &invalid) } != INVALID
+        || restore(&cleanup) != OK
+    {
+        "failure before auxiliary preparation acknowledges no retained lease"
+    } else {
+        return 0;
+    };
+    eprintln!("FAIL: {failure}");
+    1
 }
 
 unsafe fn check_cleanup(
@@ -34,7 +122,7 @@ unsafe fn check_cleanup(
     device: &ID3D11Device,
     request: &rsf_d3d11_auxiliary_pass,
     result: i32,
-    state: &mut rsf_d3d11_fixture_fg_state,
+    state: &mut State,
 ) {
     let host = unsafe { &*r.host };
     let cleanup = rsf_d3d11_auxiliary_scope {
@@ -79,17 +167,8 @@ unsafe fn check_cleanup(
     ] {
         state.verify(restore(&wrong) == NOT_READY, label);
     }
-    // Scope storage and the process-lived host stay live until the foreign thread joins.
-    let scope = (&raw const cleanup).expose_provenance();
-    let user = host.user.expose_provenance();
-    let other = std::thread::spawn(move || unsafe {
-        rsf_d3d11_host_restore_auxiliaries(
-            with_exposed_provenance_mut(user),
-            with_exposed_provenance(scope),
-        )
-    });
     state.verify(
-        matches!(other.join(), Ok(NOT_READY)),
+        foreign_restore(host.user, &cleanup),
         "pending cleanup refuses foreign thread",
     );
     state.verify(
@@ -134,8 +213,8 @@ unsafe fn check_cleanup(
 unsafe fn run(
     r: &rsf_d3d11_fixture_resources,
     api: &rsf_d3d11_fixture_fg_calls,
-    frame: &rsf_d3d11_fixture_fg_frame,
-    state: &mut rsf_d3d11_fixture_fg_state,
+    frame: &Frame,
+    state: &mut State,
 ) -> Result<(), &'static str> {
     let host = unsafe { &*r.host };
     let render = host.render_pass.ok_or("render callback")?;
@@ -170,7 +249,7 @@ unsafe fn run(
     let colour = unsafe { ID3D11RenderTargetView::from_raw_borrowed(&r.colour_view) }.unwrap();
     let motion = unsafe { ID3D11RenderTargetView::from_raw_borrowed(&r.motion_view) }.unwrap();
     let depth = unsafe { ID3D11DepthStencilView::from_raw_borrowed(&r.depth_view) }.unwrap();
-    let reinsertion = frame.native_reinsertion != 0;
+    let reinsertion = frame.native_reinsertion;
     if reinsertion {
         let mut pixels = vec![frame.outside_marker; r.width as usize * r.height as usize];
         for row in pixels
@@ -200,12 +279,12 @@ unsafe fn run(
     );
     pass.screen = RSF_SCREEN_GAMEPLAY;
     pass.flags = RSF_GAME_RENDER_AFTER_SIMULATION
-        | if frame.primary != 0 {
+        | if frame.primary {
             RSF_GAME_RENDER_PRIMARY
         } else {
             RSF_GAME_RENDER_NO_FG
         };
-    if frame.reset != 0 {
+    if frame.reset {
         pass.flags |= RSF_GAME_RENDER_RESET;
     }
     if reinsertion {
@@ -215,7 +294,7 @@ unsafe fn run(
     lease(&pass, 1);
     pass.role = RSF_GAME_RENDER_SUBMISSION;
     lease(&pass, 1);
-    if frame.scoped != 0 {
+    if frame.scoped {
         let domains = &mut pass.depth_domains;
         domains.struct_size = size_of_val(domains) as u32;
         domains.version = RSF_DEPTH_DOMAINS_VERSION;
@@ -234,7 +313,7 @@ unsafe fn run(
     state.captured += u64::from(held);
     if frame.expect_capture > 0 && !held {
         match unsafe { has_provider_session(api.user) } {
-            0 => state.unavailable = 1,
+            0 => state.unavailable = true,
             1 => state.verify(false, "requested native FG inputs were not retained"),
             _ => state.verify(false, "provider session callback raised an exception"),
         }
@@ -248,10 +327,10 @@ unsafe fn run(
     let mut sr_pass = pass;
     sr_pass.role = RSF_GAME_RENDER_SR;
     sr_pass.flags |= RSF_GAME_RENDER_NO_FG;
-    if frame.scoped != 0 {
+    if frame.scoped {
         sr_pass.depth_domains.domains[0].source_clip_to_target_clip[14] = 0.125;
     }
-    let sr_result = if frame.cleanup != 0 {
+    let sr_result = if frame.cleanup {
         let auxiliary = rsf_d3d11_auxiliary_surface {
             struct_size: size_of::<rsf_d3d11_auxiliary_surface>() as u32,
             kind: RSF_D3D11_AUXILIARY_COLOUR,
@@ -274,7 +353,7 @@ unsafe fn run(
     } else {
         unsafe { upscale(host.user, r.context, &sr_pass) }
     };
-    if frame.reconstruct != 0 {
+    if frame.reconstruct {
         state.sr_evaluated += u64::from(sr_result == OK);
         if reinsertion {
             state.verify(
@@ -283,12 +362,12 @@ unsafe fn run(
             );
         }
     }
-    if frame.refuse_depth_late != 0 {
+    if frame.refuse_depth_late {
         let mut malformed = pass;
         malformed.depth_domains.version += 1;
         pair(&malformed);
     }
-    if frame.refuse_inputs_late != 0 {
+    if frame.refuse_inputs_late {
         let mut refused = pass;
         refused.flags |= RSF_GAME_RENDER_NO_FG;
         pair(&refused);
@@ -336,9 +415,9 @@ unsafe fn run(
     }
     if result < 0 {
         eprintln!("FAIL Present HRESULT=0x{:08x}", result as u32);
-        state.failed = 1;
+        state.failed = true;
     }
-    state.occluded |= u32::from(result == DXGI_STATUS_OCCLUDED.0);
+    state.occluded |= result == DXGI_STATUS_OCCLUDED.0;
     lease(&pass, 0);
     pass.role = RSF_GAME_RENDER_FRAME;
     lease(&pass, 0);
@@ -441,17 +520,4 @@ unsafe fn run(
     // Keep the exact backbuffer/view lease alive through WINDOW end and the receipts.
     drop((target, backbuffer));
     Ok(())
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_host_fixture_rendered_frame(
-    resources: *const rsf_d3d11_fixture_resources,
-    calls: *const rsf_d3d11_fixture_fg_calls,
-    frame: *const rsf_d3d11_fixture_fg_frame,
-    state: *mut rsf_d3d11_fixture_fg_state,
-) {
-    let state = unsafe { &mut *state };
-    if let Err(label) = unsafe { run(&*resources, &*calls, &*frame, state) } {
-        state.verify(false, label);
-    }
 }

@@ -19,7 +19,6 @@
 #include <DirectXPackedVector.h>
 #include <wrl/client.h>
 #include <cstdio>
-#include <thread>
 #include <filesystem>
 #include <vector>
 #include <cstring>
@@ -298,21 +297,7 @@ int main(int argc, char** argv) {
     const rsf_d3d11_presentation_binding binding{sizeof(binding),RSF_D3D11_HOST_ABI_VERSION,chain.Get()};
     if (rsf_d3d11_host_bind_presentation(host.user,&binding) != RSF_OK)
         return fail("bind verified application presentation before source facts");
-    rsf_d3d11_auxiliary_scope empty_cleanup{sizeof(empty_cleanup),RSF_D3D11_HOST_ABI_VERSION,host.session_id,1,1};
-    if (rsf_d3d11_host_restore_auxiliaries(host.user,&empty_cleanup)!=RSF_OK ||
-        rsf_d3d11_host_restore_auxiliaries(host.user,&empty_cleanup)!=RSF_OK)
-        return fail("verified owner acknowledges empty cleanup before preparation and on repeat");
-    auto wrong_session=empty_cleanup; ++wrong_session.session_id;
-    if (rsf_d3d11_host_restore_auxiliaries(host.user,&wrong_session)!=RSF_ERROR_NOT_READY)
-        return fail("empty cleanup refuses a foreign session");
-    int32_t foreign_thread_result=RSF_OK;
-    std::thread wrong_thread([&] { foreign_thread_result=rsf_d3d11_host_restore_auxiliaries(host.user,&empty_cleanup); });
-    wrong_thread.join();
-    if (foreign_thread_result!=RSF_ERROR_NOT_READY) return fail("empty cleanup refuses a foreign graphics thread");
-    rsf_d3d11_auxiliary_pass failed_before_prepare{sizeof(failed_before_prepare),RSF_D3D11_HOST_ABI_VERSION,nullptr,0,nullptr};
-    if (rsf_d3d11_host_upscale_auxiliaries(host.user,context.Get(),&failed_before_prepare)!=RSF_ERROR_INVALID_ARGUMENT ||
-        rsf_d3d11_host_restore_auxiliaries(host.user,&empty_cleanup)!=RSF_OK)
-        return fail("failure before auxiliary preparation acknowledges no retained lease");
+    if (rsf_d3d11_host_fixture_check_empty_aux(&host, context.Get()) != 0) return 1;
 
     if (outer) {
         rsf_d3d11_chain_dispatch typed{}; typed.struct_size = sizeof(typed); typed.abi_version = RSF_D3D11_HOST_ABI_VERSION;
@@ -354,22 +339,18 @@ int main(int argc, char** argv) {
     if (diagnostics) diagnostics->ClearStoredMessages();
     rsf_overlay_api overlay{sizeof(overlay), RSF_OVERLAY_API_VERSION};
     if (rsf_get_overlay_api(&overlay) != RSF_OK) return fail("query production overlay API");
-    UINT active_width = width, active_height = height;
-    bool native_reinsertion = false;
     const DirectX::PackedVector::XMFLOAT3PK native_pixel(0.25f, 0.5f, 0.75f), outside_marker(3.0f, 0.0f, 3.0f);
-    rsf_d3d11_fixture_fg_state state{};
-    state.occluded = first_present == DXGI_STATUS_OCCLUDED;
-    auto& [source, captured, sr_evaluated, app_presents, failed, unavailable, occluded] = state;
-    const auto verify = [&](bool condition, const char* label) {
-        if (!condition) { std::printf("FAIL: %s\n", label); failed = true; }
-    };
-    bool refuse_inputs_late = false, refuse_depth_late = false, exercise_auxiliary_cleanup = false;
     const rsf_d3d11_fixture_resources resources{
         &host, device.Get(), context.Get(), chain.Get(), color.Get(), motion.Get(), depth.Get(), output.Get(),
         color_view.Get(), motion_view.Get(), depth_view.Get(), output_view.Get(), width, height,
+        diagnostics.Get(), []() noexcept { DestroyWindow(window); },
     };
-    struct NativeCalls { const rsf_d3d11_present_api* presentation; const OuterChain* outer; };
-    NativeCalls native_calls{&presentation, outer};
+    struct NativeCalls {
+        const rsf_d3d11_present_api* presentation;
+        const OuterChain* outer;
+        const rsf_overlay_api* overlay;
+    };
+    NativeCalls native_calls{&presentation, outer, &overlay};
     const rsf_d3d11_fixture_fg_calls calls{
         &native_calls,
         [](void* receiver, void** out) noexcept -> int32_t {
@@ -408,190 +389,27 @@ int main(int argc, char** argv) {
                 return RSF_OK;
             } catch (...) { return RSF_ERROR_NOT_READY; }
         },
+        [](void* user, rsf_render_settings* settings) noexcept -> int32_t {
+            try { return static_cast<const NativeCalls*>(user)->overlay->settings_get(settings); }
+            catch (...) { return RSF_ERROR_NOT_READY; }
+        },
+        [](void* user, const rsf_render_settings* settings) noexcept -> int32_t {
+            try { return static_cast<const NativeCalls*>(user)->overlay->settings_apply(settings); }
+            catch (...) { return RSF_ERROR_NOT_READY; }
+        },
+        [](void* user, int32_t* result) noexcept -> int32_t {
+            try {
+                *result = static_cast<const NativeCalls*>(user)->presentation->switch_result();
+                return RSF_OK;
+            } catch (...) { return RSF_ERROR_NOT_READY; }
+        },
+        [](void* user, uint64_t* generation) noexcept -> int32_t {
+            try {
+                *generation = static_cast<const NativeCalls*>(user)->presentation->generation();
+                return RSF_OK;
+            } catch (...) { return RSF_ERROR_NOT_READY; }
+        },
     };
-    auto frame = [&](bool reconstruct, bool primary, bool reset, int expect_capture) {
-        const rsf_d3d11_fixture_fg_frame request{
-            uint32_t(reconstruct), uint32_t(primary), uint32_t(reset), expect_capture,
-            uint32_t(scoped), uint32_t(native_reinsertion), active_width, active_height,
-            native_pixel.v, outside_marker.v, uint32_t(exercise_auxiliary_cleanup),
-            uint32_t(refuse_inputs_late), uint32_t(refuse_depth_late),
-        };
-        rsf_d3d11_host_fixture_rendered_frame(&resources, &calls, &request, &state);
-    };
-    const auto phase_frame = [&](uint32_t reconstruct, uint32_t reset,
-        int32_t expect_capture, uint32_t cleanup) noexcept -> int32_t {
-        exercise_auxiliary_cleanup = cleanup != 0;
-        try {
-            if (!failed) frame(reconstruct != 0, true, reset != 0, expect_capture);
-        } catch (...) {
-            verify(false, "foreign frame callback raised an exception");
-        }
-        exercise_auxiliary_cleanup = false;
-        return failed;
-    };
-    const auto run_phase = [&](uint32_t phase) {
-        auto callback = phase_frame;
-        rsf_d3d11_host_fixture_run_phase(phase, uint32_t(scoped),
-            [](void* user, uint32_t reconstruct, uint32_t reset, int32_t capture, uint32_t cleanup) -> int32_t {
-                return (*static_cast<decltype(callback)*>(user))(reconstruct, reset, capture, cleanup);
-            }, &callback);
-    };
-    // Presentation was bound above without claiming scene/SR admission. Bootstrap
-    // is one complete source with FG/SR Off, not a hidden warmup or successful SR source.
-    std::puts("Phase: one complete source-owned bootstrap scene, SR/FG Off");
-    frame(false, true, true, 0);
-    const uint64_t bootstrap_sources = source;
-    verify(bootstrap_sources == 1 && app_presents == 1 && !captured && !sr_evaluated,
-        "bootstrap must complete exactly one application Present without capture or SR evaluation");
-    if (failed) return fail("complete source-owned bootstrap admission");
-    rsf_render_settings settings{}; settings.struct_size = sizeof(settings); settings.abi_version = RSF_RENDER_FRONTEND_ABI_VERSION;
-    if (overlay.settings_get(&settings) != RSF_OK) return fail("read initial warmup settings");
-    settings.sr_enabled = 1; settings.sr_backend = RSF_SR_DLSS; settings.sr_quality = 1;
-    settings.fg_enabled = 0; settings.fg_backend = RSF_FG_BACKEND_FSR3; settings.generated_frames = 1;
-    settings.latency = RSF_REFLEX_OFF; settings.frame_limit_us = 0;
-    if (overlay.settings_apply(&settings) != RSF_OK) return fail("apply reduced DLSS warmup with FG Off");
-    active_width = 640; active_height = 360; native_reinsertion = true;
-    std::puts("Phase: bounded 10-source DLSS Quality warmup, render640x360 in960x540 native colour allocation, FG Off");
-    const auto warmup_evaluated_before = sr_evaluated;
-    run_phase(RSF_D3D11_FIXTURE_REDUCED_WARMUP);
-    verify(sr_evaluated == warmup_evaluated_before + 10, "all bounded reduced warmup sources must evaluate SR");
-    // Inspect an output pixel outside the active input rectangle: reinsertion must
-    // overwrite the marker in the same R11G11B10 native allocation, not a side target.
-    uint32_t outside_pixel{};
-    if (!rsf_d3d11_host_fixture_read_pixel(device.Get(), context.Get(), color.Get(),
-        width - 2, height - 2, uint32_t(sizeof(outside_pixel)), &outside_pixel))
-        return fail("read native reinsertion outside-active pixel");
-    std::printf("Native reinsertion outside-active pixel=0x%08x original_marker=0x%08x\n", outside_pixel, outside_marker.v);
-    verify(outside_pixel != outside_marker.v, "DLSS reinsertion must overwrite native allocation outside reduced input rectangle");
-    rsf_native_fg_status warmed{}; warmed.struct_size = sizeof(warmed);
-    verify(rsf_native_fg_status_get(&warmed) != 0, "read warmed FG-Off status");
-    verify(warmed.requested.mode == RSF_FG_OFF && !warmed.tagged_frames, "warmup must remain FG Off and untagged");
-    const auto presents_before_late_enable = app_presents;
-    const auto captured_before_late_enable = captured;
-    const auto generation_before_late_enable = presentation.generation();
-    settings.fg_enabled = 1;
-    if (overlay.settings_apply(&settings) != RSF_OK) return fail("enable FSR3 through public overlay after warmed reduced DLSS");
-    std::puts("Phase: bounded 10-source late FSR3 activation over warmed reduced in-place DLSS");
-    run_phase(RSF_D3D11_FIXTURE_LATE_ENABLE);
-    rsf_native_fg_status late_enabled{}; late_enabled.struct_size = sizeof(late_enabled);
-    verify(rsf_native_fg_status_get(&late_enabled) != 0, "read post-switch reduced FG status");
-    std::printf("Late-enable receipt: backend=%u switch_result=%d generation=%llu previous_generation=%llu captures=%llu application_calls=%llu tags=%llu generated_callbacks=%llu statistics_flags=0x%x vendor_generated_presented=%llu\n",
-        presentation.backend(), presentation.switch_result(), static_cast<unsigned long long>(presentation.generation()),
-        static_cast<unsigned long long>(generation_before_late_enable), static_cast<unsigned long long>(captured - captured_before_late_enable),
-        static_cast<unsigned long long>(app_presents - presents_before_late_enable), static_cast<unsigned long long>(late_enabled.tagged_frames),
-        static_cast<unsigned long long>(late_enabled.vendor.generated_callbacks), late_enabled.vendor.valid_statistics,
-        static_cast<unsigned long long>(late_enabled.vendor.generated_presented));
-    verify(app_presents == presents_before_late_enable + 10, "late-enable phase must complete ten application Presents");
-    if (presentation.backend() != RSF_FG_BACKEND_FSR3 || !late_enabled.vendor.generated_callbacks) unavailable = true;
-    else {
-        verify(presentation.switch_result() == RSF_BACKEND_OK, "late FSR switch must succeed");
-        verify(presentation.generation() > generation_before_late_enable, "late FSR switch must advance provider generation");
-        verify(captured > captured_before_late_enable && late_enabled.tagged_frames > warmed.tagged_frames,
-            "late activation must capture and tag reduced native inputs");
-    }
-    const bool late_generated = late_enabled.tagged_frames > warmed.tagged_frames && late_enabled.vendor.generated_callbacks != 0;
-    // Preserve the original native-resolution SR-Off/SR-On and refusal phases.
-    settings.sr_enabled = 0; settings.sr_quality = 0;
-    if (overlay.settings_apply(&settings) != RSF_OK) return fail("start original SR-Off generation phase");
-    active_width = width; active_height = height; native_reinsertion = false;
-    // More than the six-slot transfer ring; first source explicitly invalidates history.
-    run_phase(RSF_D3D11_FIXTURE_NATIVE_SR_OFF);
-    rsf_native_fg_status off_sr{}; off_sr.struct_size = sizeof(off_sr);
-    if (!rsf_native_fg_status_get(&off_sr)) return fail("query SR-Off FG status");
-    const bool off_sr_generated = off_sr.tagged_frames > late_enabled.tagged_frames &&
-        off_sr.vendor.generated_callbacks > late_enabled.vendor.generated_callbacks;
-    if (off_sr_generated) verify(presentation.backend() == RSF_FG_BACKEND_FSR3, "generated SR-Off phase must use FSR3");
-    std::printf("SR-Off receipt: tagged=%llu generated_callbacks=%llu provenance=%u input_qpc=%llu\n",
-        static_cast<unsigned long long>(off_sr.tagged_frames),
-        static_cast<unsigned long long>(off_sr.vendor.generated_callbacks), off_sr.source_provenance,
-        static_cast<unsigned long long>(off_sr.input_qpc));
-    if (overlay.settings_get(&settings) != RSF_OK) return fail("read shared rendering settings");
-    settings.sr_enabled = 1; settings.sr_quality = 0;
-    if (overlay.settings_apply(&settings) != RSF_OK) return fail("apply shared rendering settings");
-    run_phase(RSF_D3D11_FIXTURE_NATIVE_SR_ON);
-    // Explicit reset followed by continuity, then a non-primary source must not tag.
-    rsf_native_fg_status before_reset{}; before_reset.struct_size = sizeof(before_reset);
-    if (!rsf_native_fg_status_get(&before_reset)) return fail("query before-reset FG status");
-    if (!failed) frame(true, true, true, true);
-    rsf_native_fg_status after_reset{}; after_reset.struct_size = sizeof(after_reset);
-    verify(rsf_native_fg_status_get(&after_reset) != 0, "after-reset FG status query");
-    std::printf("Reset tags: before=%llu after=%llu\n", static_cast<unsigned long long>(before_reset.tagged_frames), static_cast<unsigned long long>(after_reset.tagged_frames));
-    verify(after_reset.tagged_frames == before_reset.tagged_frames, "explicit reset must not increment tag count");
-    if (!failed) frame(true, true, false, true);
-    rsf_native_fg_status before_refusal{}; before_refusal.struct_size = sizeof(before_refusal);
-    if (!rsf_native_fg_status_get(&before_refusal)) return fail("query before-late-refusal FG status");
-    refuse_inputs_late = true;
-    if (!failed) frame(true,true,false,true);
-    refuse_inputs_late = false;
-    rsf_native_fg_status after_refusal{}; after_refusal.struct_size = sizeof(after_refusal);
-    verify(rsf_native_fg_status_get(&after_refusal) != 0, "after-late-refusal FG status query");
-    verify(after_refusal.tagged_frames == before_refusal.tagged_frames && after_refusal.reason == RSF_NATIVE_FG_REASON_RESET,
-        "genuine late FG refusal remains sticky despite eligible duplicate and WINDOW");
-    if (!failed) frame(true,true,false,true);
-    if (scoped) {
-        rsf_native_fg_status before_depth{}; before_depth.struct_size=sizeof(before_depth);
-        verify(rsf_native_fg_status_get(&before_depth)!=0,"query before malformed repeated depth lease");
-        refuse_depth_late=true;
-        if (!failed) frame(true,true,false,true);
-        refuse_depth_late=false;
-        rsf_native_fg_status after_depth{}; after_depth.struct_size=sizeof(after_depth);
-        verify(rsf_native_fg_status_get(&after_depth)!=0 && after_depth.tagged_frames==before_depth.tagged_frames &&
-            after_depth.reason==RSF_NATIVE_FG_REASON_RESET,
-            "refused repeated depth descriptor cannot authorize retained same-source inputs");
-        if (!failed) frame(true,true,false,true);
-    }
-    rsf_native_fg_status before_invalid{}; before_invalid.struct_size = sizeof(before_invalid);
-    if (!rsf_native_fg_status_get(&before_invalid)) return fail("query before-nonprimary FG status");
-    if (!failed) frame(true, false, false, -1);
-    rsf_native_fg_status after_invalid{}; after_invalid.struct_size = sizeof(after_invalid);
-    verify(rsf_native_fg_status_get(&after_invalid) != 0, "after-nonprimary FG status query");
-    std::printf("Nonprimary tags: before=%llu after=%llu\n", static_cast<unsigned long long>(before_invalid.tagged_frames), static_cast<unsigned long long>(after_invalid.tagged_frames));
-    verify(after_invalid.tagged_frames == before_invalid.tagged_frames, "nonprimary source must not increment tag count");
-    settings.fg_enabled = 0; settings.sr_enabled = 0;
-    if (overlay.settings_apply(&settings) != RSF_OK) return fail("apply shared rendering settings");
-    run_phase(RSF_D3D11_FIXTURE_FG_OFF);
-    rsf_native_fg_status stopped{}; stopped.struct_size = sizeof(stopped);
-    rsf_native_latency_status latency{}; latency.struct_size = sizeof(latency); latency.version = 1;
-    const auto stopped_ok = rsf_native_fg_status_get(&stopped);
-    const auto latency_ok = rsf_native_latency_status_get(&latency);
-    std::printf("Final FG: query=%d requested=%u effective=%u tagged=%llu expected_tags=%llu statistics_flags=0x%x present_callbacks=%llu generated_callbacks=%llu\n",
-        stopped_ok, stopped.requested.mode, stopped.vendor.effective_mode,
-        static_cast<unsigned long long>(stopped.tagged_frames), static_cast<unsigned long long>(after_invalid.tagged_frames),
-        stopped.vendor.valid_statistics, static_cast<unsigned long long>(stopped.vendor.present_callbacks),
-        static_cast<unsigned long long>(stopped.vendor.generated_callbacks));
-    std::printf("Final latency: query=%d version=%u owner=%u available=%u paced=%llu markers=%llu effective=%u PCL_available=%u report_available=%u\n",
-        latency_ok, latency.version, latency.owner, latency.available, static_cast<unsigned long long>(latency.paced_frames),
-        static_cast<unsigned long long>(latency.marker_calls), latency.effective_mode, latency.pcl_available, latency.report_available);
-    verify(stopped_ok != 0, "final FG status query");
-    verify(stopped.requested.mode == RSF_FG_OFF, "final FG request must be Off");
-    verify(stopped.tagged_frames == after_invalid.tagged_frames, "FG Off must not increment tag count");
-    verify(latency_ok != 0, "final latency status query with version 1");
-    verify(!latency.paced_frames, "final latency paced count must be zero");
-    verify(!latency.marker_calls, "final latency marker count must be zero");
-    verify(latency.effective_mode == RSF_REFLEX_OFF, "final effective latency must be Off");
-    verify(!latency.pcl_available, "rendered-source latency PCL availability must remain zero");
-    verify(!latency.report_available, "rendered-source physical latency report availability must remain zero");
-    if (diagnostics) for (UINT64 i = 0; i < diagnostics->GetNumStoredMessagesAllowedByRetrievalFilter(); ++i) {
-        SIZE_T size{}; (void)diagnostics->GetMessage(i, nullptr, &size); std::vector<unsigned char> storage(size);
-        auto* message = reinterpret_cast<D3D11_MESSAGE*>(storage.data());
-        if (SUCCEEDED(diagnostics->GetMessage(i, message, &size)) && message->Severity <= D3D11_MESSAGE_SEVERITY_ERROR) {
-            std::printf("D3D11 error: %s\n", message->pDescription); failed = true;
-        }
-    }
-    (void)rsf_d3d11_host_set_active(host.user, 0);
-    DestroyWindow(window);
-    std::printf("Receipts: sources=%llu bootstrap_sources=%llu test_sources=%llu captured=%llu SR_evaluated=%llu application_Present_calls=%llu SR_Off_generated=%u occluded=%u\n",
-        static_cast<unsigned long long>(source), static_cast<unsigned long long>(bootstrap_sources),
-        static_cast<unsigned long long>(source - bootstrap_sources), static_cast<unsigned long long>(captured),
-        static_cast<unsigned long long>(sr_evaluated), static_cast<unsigned long long>(app_presents),
-        off_sr_generated ? 1u : 0u, occluded ? 1u : 0u);
-    if (failed) return fail("one or more labeled fixture checks failed");
-    if (!late_generated || !off_sr_generated || unavailable) {
-        std::puts("INCOMPLETE: missing late-enable or SR-Off callback receipt; no physical display/generation success claimed");
-        return 77;
-    }
-    if (after_reset.tagged_frames <= off_sr.tagged_frames || after_reset.vendor.generated_callbacks <= off_sr.vendor.generated_callbacks) { std::puts("FAIL: SR-On phase never tagged generation inputs"); return fail("SR-On phase must advance both tags and generated callbacks"); }
-    if (!sr_evaluated) { std::puts("FAIL: SR-On phase never evaluated"); return fail("SR-On phase must evaluate reconstruction"); }
-    std::puts("Rendered-source FSR generated callback regression passed; physical scanout and latency remain unmeasured");
-    return 0;
+    return rsf_d3d11_host_fixture_rendered_fg(&resources, &calls, uint32_t(scoped), first_present,
+        native_pixel.v, outside_marker.v);
 }

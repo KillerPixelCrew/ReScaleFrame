@@ -165,3 +165,29 @@ The two requested scenario bodies are source-ported. The shared-SR C++
 file still owns setup, final counters and debug checks. The rendered-FG C++
 file still owns setup, the external COM facade, phase-level overlay
 transactions and final disposition. No hardware execution was performed.
+
+## Device phase replay on `e5d73636`
+
+- The rendered-FG fixture now owns its settings, source counts, capture
+  expectations, provider receipts and verdict in Rust. It runs one bootstrap
+  source, ten reduced DLSS warmup sources with FG Off, ten late-enable FSR3
+  sources, twelve native SR-Off and twelve native SR-On sources, the original
+  reset and refusal sequence, and three final FG-Off sources. The exact
+  R11G11B10 outside-active pixel is still read from the application colour
+  allocation. The late switch compares actual provider generation, tagged
+  frames and application Presents. Exit 77 still requires a missing
+  generation receipt or unavailable provider, and accumulated failures take
+  precedence. The per-frame outer and inner Present assertions are unchanged.
+- Shared-SR now keeps the source 10 pass, sources 11 and 12 recovery, before
+  and after evaluation counters, FG-Off witness and center-pixel verdict in
+  one Rust scenario. C++ still supplies the DirectX half decoder. Rust reads
+  each fixture's actual D3D11 debug queue and suspends the host before the
+  native window teardown, in the original order.
+- The native launchers keep the device and window setup, the external COM
+  facade, SDK and overlay call guards, the exact application swapchain
+  receiver and native destruction. Empty auxiliary preflight now uses the
+  same Rust foreign-thread check as the pending lease case.
+
+This replay preserves the dedicated hardware executables and public Runtime
+and GameSDK exports. Source review and MSVC syntax-only checking are distinct
+from a native build or a device run.

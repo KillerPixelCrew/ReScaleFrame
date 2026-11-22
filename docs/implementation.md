@@ -92,6 +92,11 @@ readback, the original application-chain receiver, and the ordered SR and
 FG lease assertions. The C++ launchers still own device setup, guarded SDK
 and swapchain calls, and final fixture checks. Source checks only.
 
+D01's device phase replay moves the provider transitions, source receipts
+and verdicts to Rust. Shared-SR now owns recovery and the output check in the
+same scenario. The launchers still supply native startup, the external COM
+facade and guarded SDK calls. MSVC syntax-only and source checks passed.
+
 Rust owns the D3D11 graphics snapshots, resource and UI device operations,
 sampler changes, and native composition passes. The replay uses the integrated
 Rust output and capture paths. All eight G03 fixture bodies now use Rust. The source

@@ -14,10 +14,8 @@
 #include <dxgi1_6.h>
 #include <DirectXPackedVector.h>
 #include <wrl/client.h>
-#include <cmath>
 #include <cstdio>
 #include <filesystem>
-#include <vector>
 #include <string>
 
 using Microsoft::WRL::ComPtr;
@@ -36,11 +34,8 @@ ComPtr<ID3D11Texture2D> texture(ID3D11Device* device, DXGI_FORMAT format, UINT b
 
 }
 int main(int argc, char** argv) {
-    uint64_t diagnostic_source{};
-    const char* diagnostic_phase="startup";
-    const auto failed = [&](int line) {
-        std::fprintf(stderr,"FAIL shared-SR fixture source=%llu phase=%s line=%d\n",
-            static_cast<unsigned long long>(diagnostic_source),diagnostic_phase,line);
+    const auto failed = [](int line) {
+        std::fprintf(stderr,"FAIL shared-SR fixture startup line=%d\n",line);
         return 1;
     };
     if (argc != 2) { std::puts("Usage: rsf_d3d11_host_shared_sr_device <scratch runtime root>"); return 77; }
@@ -157,58 +152,22 @@ int main(int argc, char** argv) {
             try { return static_cast<IDXGISwapChain*>(receiver)->Present(0, 0); }
             catch (...) { return E_FAIL; }
         },
+        [](void* user) noexcept -> int32_t {
+            try {
+                const auto& api = *static_cast<const NativeCalls*>(user)->overlay;
+                rsf_render_settings changed{sizeof(changed), RSF_RENDER_FRONTEND_ABI_VERSION};
+                const auto read = api.settings_get(&changed);
+                if (read != RSF_OK) return read;
+                changed.sr_enabled = 0;
+                return api.settings_apply(&changed);
+            } catch (...) { return RSF_ERROR_NOT_READY; }
+        },
+        [](uint16_t channel) noexcept { return DirectX::PackedVector::XMConvertHalfToFloat(channel); },
     };
     const rsf_d3d11_fixture_resources resources{
         &host, device.Get(), context.Get(), chain.Get(), color.Get(), motion.Get(), depth.Get(), output.Get(),
         color_view.Get(), motion_view.Get(), depth_view.Get(), output_view.Get(), width, height,
+        diagnostics.Get(), []() noexcept { DestroyWindow(window); },
     };
-    rsf_game_render_pass last_pass{};
-    diagnostic_phase="shared-SR sources 1 through 10";
-    if (rsf_d3d11_host_fixture_shared_sr(&resources, &calls, capture_root.c_str(), &last_pass) != 0)
-        return failed(__LINE__);
-    diagnostic_source=10;
-    rsf_dlss_pipeline_status status{}; status.struct_size = sizeof(status);
-    if (rsf_dlss_pipeline_get_status(&status) != RSF_DLSS_PIPELINE_OK || status.frames_evaluated != 8 || status.frames_refused != 1) return failed(__LINE__);
-    // The real graphics owner runs both resource-only recovery scenarios in Rust.
-    const auto disable_sr = [](void* user) noexcept -> int32_t {
-        try {
-            const auto& api = *static_cast<const rsf_overlay_api*>(user);
-            rsf_render_settings changed{sizeof(changed), RSF_RENDER_FRONTEND_ABI_VERSION};
-            const auto read = api.settings_get(&changed);
-            if (read != RSF_OK) return read;
-            changed.sr_enabled = 0;
-            return api.settings_apply(&changed);
-        } catch (...) { return RSF_ERROR_NOT_READY; }
-    };
-    diagnostic_phase="resource-only-recovery";
-    if (rsf_d3d11_host_fixture_recover(&host, context.Get(), chain.Get(), motion.Get(),
-        &last_pass, calls.present, disable_sr, &overlay) != 0) return failed(__LINE__);
-    diagnostic_source=12;
-    diagnostic_phase="final-counters-and-readback";
-    rsf_dlss_pipeline_status after_recovery{sizeof(after_recovery)};
-    if (rsf_dlss_pipeline_get_status(&after_recovery)!=RSF_DLSS_PIPELINE_OK ||
-        after_recovery.frames_evaluated!=status.frames_evaluated || after_recovery.frames_refused!=status.frames_refused) return failed(__LINE__);
-    rsf_native_fg_status generation{}; generation.struct_size = sizeof(generation);
-    if (!rsf_native_fg_status_get(&generation) || generation.requested.mode != RSF_FG_OFF ||
-        generation.vendor.effective_mode != RSF_FG_OFF || generation.tagged_frames) return failed(__LINE__);
-    std::printf("FG requested=%u effective=%u tagged=%llu\n", generation.requested.mode,
-        generation.vendor.effective_mode, static_cast<unsigned long long>(generation.tagged_frames));
-    uint16_t pixel[4]{};
-    if (!rsf_d3d11_host_fixture_read_pixel(device.Get(), context.Get(), output.Get(),
-        width / 2, height / 2, uint32_t(sizeof(pixel)), pixel)) return failed(__LINE__);
-    bool valid = true; const float expected[]{0.25f, 0.5f, 0.75f};
-    for (unsigned i = 0; i < 3; ++i) {
-        const auto value = DirectX::PackedVector::XMConvertHalfToFloat(pixel[i]);
-        std::printf("Output channel%u=%g\n", i, value); valid &= std::isfinite(value) && std::fabs(value - expected[i]) < 0.15f;
-    }
-    if (diagnostics) for (UINT64 i = 0; i < diagnostics->GetNumStoredMessagesAllowedByRetrievalFilter(); ++i) {
-        SIZE_T size{}; (void)diagnostics->GetMessage(i, nullptr, &size); std::vector<unsigned char> storage(size);
-        auto* message = reinterpret_cast<D3D11_MESSAGE*>(storage.data());
-        if (SUCCEEDED(diagnostics->GetMessage(i, message, &size)) && message->Severity <= D3D11_MESSAGE_SEVERITY_ERROR) {
-            std::printf("D3D11 error: %s\n", message->pDescription); valid = false;
-        }
-    }
-    (void)rsf_d3d11_host_set_active(host.user, 0); DestroyWindow(window);
-    std::puts(valid ? "Shared SR device check passed; FG remained Off" : "Shared SR device check FAILED");
-    return valid ? 0 : 1;
+    return rsf_d3d11_host_fixture_shared_sr(&resources, &calls, capture_root.c_str());
 }

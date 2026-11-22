@@ -367,24 +367,99 @@ unsafe fn run(
     Ok(pass)
 }
 
+unsafe fn run_scenario(
+    r: &rsf_d3d11_fixture_resources,
+    api: &rsf_d3d11_fixture_sr_calls,
+    root: &Path,
+) -> Result<i32, &'static str> {
+    let mut last = None;
+    for source in 1..=10 {
+        last = Some(unsafe { run(r, api, root, source) }.inspect_err(|label| {
+            eprintln!("FAIL shared-SR fixture source={source}: {label}");
+        })?);
+    }
+    let mut before = rsf_dlss_pipeline_status {
+        struct_size: size_of::<rsf_dlss_pipeline_status>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    require(
+        unsafe { rsf_dlss_pipeline_get_status(&mut before) } == OK
+            && before.frames_evaluated == 8
+            && before.frames_refused == 1,
+        "expected eight evaluations and one provider refusal after source 10",
+    )?;
+    unsafe { recovery::recover(r, api, &last.ok_or("missing source 10 pass")?) }?;
+
+    let mut after = rsf_dlss_pipeline_status {
+        struct_size: before.struct_size,
+        ..unsafe { std::mem::zeroed() }
+    };
+    require(
+        unsafe { rsf_dlss_pipeline_get_status(&mut after) } == OK
+            && after.frames_evaluated == before.frames_evaluated
+            && after.frames_refused == before.frames_refused,
+        "spatial recovery must not change the SR evaluation or refusal counters",
+    )?;
+    let mut generation = rsf_native_fg_status {
+        struct_size: size_of::<rsf_native_fg_status>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    require(
+        unsafe { rsf_native_fg_status_get(&mut generation) } != 0
+            && generation.requested.mode == RSF_FG_OFF
+            && generation.vendor.effective_mode == RSF_FG_OFF
+            && generation.tagged_frames == 0,
+        "FG remains Off and no frames were tagged",
+    )?;
+    println!(
+        "FG requested={} effective={} tagged={}",
+        generation.requested.mode, generation.vendor.effective_mode, generation.tagged_frames
+    );
+    let mut pixel = [0u16; 4];
+    require(
+        unsafe {
+            rsf_d3d11_host_fixture_read_pixel(
+                r.device,
+                r.context,
+                r.output,
+                r.width / 2,
+                r.height / 2,
+                size_of_val(&pixel) as u32,
+                pixel.as_mut_ptr().cast(),
+            )
+        } != 0,
+        "read actual SR output center pixel",
+    )?;
+    let decode = api.decode_half.ok_or("half decoder callback")?;
+    let mut valid = true;
+    for (index, (channel, expected)) in pixel.into_iter().zip(SCENE_COLOUR).take(3).enumerate() {
+        let value = unsafe { decode(channel) };
+        println!("Output channel{index}={value}");
+        valid &= value.is_finite() && (value - expected).abs() < 0.15;
+    }
+    valid &= unsafe { finish_device(r) };
+    println!(
+        "{}",
+        if valid {
+            "Shared SR device check passed; FG remained Off"
+        } else {
+            "Shared SR device check FAILED"
+        }
+    );
+    Ok(i32::from(!valid))
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11_host_fixture_shared_sr(
     resources: *const rsf_d3d11_fixture_resources,
     calls: *const rsf_d3d11_fixture_sr_calls,
     capture_root: *const u16,
-    last: *mut rsf_game_render_pass,
 ) -> i32 {
     let root = PathBuf::from(OsString::from_wide(unsafe {
         PCWSTR(capture_root).as_wide()
     }));
-    for source in 1..=10 {
-        match unsafe { run(&*resources, &*calls, &root, source) } {
-            Ok(pass) => unsafe { last.write(pass) },
-            Err(label) => {
-                eprintln!("FAIL shared-SR fixture source={source}: {label}");
-                return 1;
-            }
-        }
-    }
-    0
+    unsafe { run_scenario(&*resources, &*calls, &root) }.unwrap_or_else(|label| {
+        eprintln!("FAIL shared-SR fixture: {label}");
+        1
+    })
 }
