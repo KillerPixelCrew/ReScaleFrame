@@ -17,6 +17,7 @@ use crate::{
     render_hooks,
 };
 use rsf_game_sys::call_header::validate;
+use rsf_game_sys::d3d11_host_abi::same_upstream_identity;
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
     rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args, rsf_game_renderer_status,
@@ -70,14 +71,6 @@ static SESSION: Mutex<Session> = Mutex::new(Session {
 
 fn session() -> MutexGuard<'static, Session> {
     SESSION.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn same_session(upstream: &rsf_game_host_services, host: &rsf_game_host_services) -> bool {
-    upstream.session_id == host.session_id
-        && upstream.user == host.user
-        && upstream.log.map(|log| log as *const ()) == host.log.map(|log| log as *const ())
-        && upstream.cpu_event.map(|event| event as *const ())
-            == host.cpu_event.map(|event| event as *const ())
 }
 
 fn wide(units: &[u16], suffix: &str) -> Vec<u16> {
@@ -238,7 +231,7 @@ impl Session {
             return Ok(RSF_ERROR_NOT_READY);
         }
         if !self.services.user.is_null() {
-            if !same_session(&self.upstream, host) {
+            if !same_upstream_identity(&self.upstream, host) {
                 return self.refuse(
                     ops,
                     host,

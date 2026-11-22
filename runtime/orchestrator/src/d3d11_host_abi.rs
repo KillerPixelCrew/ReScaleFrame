@@ -13,6 +13,7 @@ use crate::scene_abi::{rsf_native_present_record, rsf_observer_present_event};
 pub(crate) use rsf_game_sys::d3d11_chain_abi::*;
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 pub(crate) use rsf_game_sys::d3d11_host_abi::{
+    rsf_d3d11_host_setup, rsf_d3d11_native_chain, rsf_d3d11_creation_scope,
     rsf_d3d11_auxiliary_pass, rsf_d3d11_auxiliary_scope, rsf_d3d11_host_capture,
     rsf_d3d11_sampler_bias,
 };
@@ -41,34 +42,8 @@ pub(crate) use rsf_game_sys::d3d11_reduced_abi::{
 
 pub(crate) type Pass = rsf_game_render_pass;
 pub(crate) type Surface = rsf_d3d11_auxiliary_surface;
-pub(crate) type AcceptWindow = Option<unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int>;
 pub(crate) type PresentEvent =
     Option<unsafe extern "C" fn(*mut c_void, *const rsf_observer_present_event)>;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct rsf_d3d11_host_setup {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub configuration_path: *const u16,
-    pub configuration_section: *const u16,
-    pub runtime_directory: *const u16,
-    pub identity_utf8: *const c_char,
-    pub executable_sha256: *const c_char,
-    pub engine_type: u32,
-    pub engine_version_utf8: *const c_char,
-    pub project_id_utf8: *const c_char,
-    pub units_to_meters: f32,
-    pub depth_inverted: u32,
-    pub motion: rsf_motion_decode_params,
-    pub quality_choices: u32,
-    pub presentation_bridge: u32,
-    pub accept_window: AcceptWindow,
-    pub presentation_user: *mut c_void,
-    pub capabilities: u32,
-    pub colour_transport_default: u32,
-    pub depth_far_plane: u32,
-}
 
 #[repr(C)]
 pub(crate) struct rsf_d3d11_present_dispatch {
@@ -79,23 +54,6 @@ pub(crate) struct rsf_d3d11_present_dispatch {
     pub flags: u32,
     pub handled: u32,
     pub native_result: i32,
-}
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11_native_chain {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub device: *mut c_void,
-    pub immediate_context: *mut c_void,
-    pub swapchain: *mut *mut c_void,
-}
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11_creation_scope {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub window: *mut c_void,
-    pub token: u64,
 }
 
 #[repr(C)]

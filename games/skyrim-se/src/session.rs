@@ -15,6 +15,8 @@ use crate::creation;
 use crate::observers::{self, Control};
 use crate::platform::{self, Platform};
 use crate::plugin::{ABI_MISMATCH, INVALID_ARGUMENT, SHA256};
+use rsf_game_sys::d3d11_host_abi::{rsf_d3d11_host_setup as HostSetup, same_upstream_identity};
+use rsf_game_sys::sr_abi::rsf_motion_decode_params as MotionDecode;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
     rsf_game_renderer_status, rsf_game_start_args, rsf_result,
@@ -87,49 +89,6 @@ const STOPPED: &CStr = c"Native observer stopped; no host services retained.";
 type AcceptWindow = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
 type SetDpi = unsafe extern "system" fn(*mut c_void) -> i32;
 
-/// `rsf_motion_decode_params` from `motion_decode.h`.
-#[allow(dead_code)] // The Runtime reads every field.
-#[repr(C)]
-struct MotionDecode {
-    struct_size: u32,
-    scale_x: f32,
-    scale_y: f32,
-    bias_x: f32,
-    bias_y: f32,
-    output_scale_x: f32,
-    output_scale_y: f32,
-    invalid_value: f32,
-    zero_means_unwritten: u32,
-    validity_enabled: u32,
-    validity_channel: u32,
-    validity_threshold: f32,
-}
-
-/// `rsf_d3d11_host_setup` from `d3d11_host.h`.
-#[allow(dead_code)] // The Runtime reads every field.
-#[repr(C)]
-pub(crate) struct HostSetup {
-    struct_size: u32,
-    abi_version: u32,
-    configuration_path: *const u16,
-    configuration_section: *const u16,
-    runtime_directory: *const u16,
-    identity_utf8: *const c_char,
-    executable_sha256: *const c_char,
-    engine_type: u32,
-    engine_version_utf8: *const c_char,
-    project_id_utf8: *const c_char,
-    units_to_meters: f32,
-    depth_inverted: u32,
-    motion: MotionDecode,
-    quality_choices: u32,
-    presentation_bridge: u32,
-    accept_window: Option<AcceptWindow>,
-    presentation_user: *mut c_void,
-    capabilities: u32,
-    colour_transport_default: u32,
-}
-
 /// `rsf_skyrim_session_leaves`, lent by `plugin.cpp` for the process.
 #[repr(C)]
 pub(crate) struct Leaves {
@@ -153,12 +112,6 @@ pub(crate) struct Leaves {
 }
 
 const _: () = {
-    assert!(size_of::<MotionDecode>() == 48);
-    assert!(size_of::<HostSetup>() == 160);
-    assert!(std::mem::offset_of!(HostSetup, motion) == 80);
-    assert!(std::mem::offset_of!(HostSetup, quality_choices) == 128);
-    assert!(std::mem::offset_of!(HostSetup, accept_window) == 136);
-    assert!(std::mem::offset_of!(HostSetup, colour_transport_default) == 156);
     assert!(size_of::<Leaves>() == 8 + 11 * size_of::<usize>());
 };
 
@@ -296,14 +249,6 @@ fn session() -> MutexGuard<'static, Session> {
 const fn empty_services() -> rsf_game_host_services {
     // SAFETY: the services table is plain data; all-zero is its empty state.
     unsafe { std::mem::zeroed() }
-}
-
-fn same_session(upstream: &rsf_game_host_services, host: &rsf_game_host_services) -> bool {
-    upstream.session_id == host.session_id
-        && upstream.user == host.user
-        && upstream.log.map(|log| log as *const ()) == host.log.map(|log| log as *const ())
-        && upstream.cpu_event.map(|event| event as *const ())
-            == host.cpu_event.map(|event| event as *const ())
 }
 
 fn terminated(units: &[u16], suffix: &str) -> Vec<u16> {
@@ -557,9 +502,10 @@ impl Session {
             presentation_user: ptr::null_mut(),
             capabilities: CAP_FG_INPUTS | CAP_INPUT_TIMELINE,
             colour_transport_default: COLOUR_TRANSPORT_NATIVE,
+            depth_far_plane: 0,
         };
         if !self.bound_services.user.is_null() {
-            if !same_session(&self.bound_upstream, host) {
+            if !same_upstream_identity(&self.bound_upstream, host) {
                 self.reason = PROCESS_LIVED.as_ptr();
                 return Ok(NATIVE_REFUSED);
             }

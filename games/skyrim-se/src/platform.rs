@@ -4,6 +4,9 @@
 //! fault-guarded reads, Win32 module, memory and last-error calls, MinHook, exception guards around
 //! host and Runtime callbacks, the Community Shaders gate and the Steam facade; every Skyrim
 //! address, expected byte and decision stays in this crate. The archive imports no native symbol.
+pub(crate) use rsf_game_sys::d3d11_host_abi::{
+    rsf_d3d11_creation_scope as CreationScope, rsf_d3d11_native_chain as NativeChain,
+};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
@@ -19,52 +22,6 @@ pub(crate) struct MemoryRegion {
     pub(crate) size: usize,
     pub(crate) state: u32,
     pub(crate) protect: u32,
-}
-
-/// `rsf_d3d11_creation_scope` from `d3d11_host.h`.
-#[allow(dead_code)] // The Runtime reads the header, window and token.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct CreationScope {
-    pub(crate) struct_size: u32,
-    pub(crate) abi_version: u32,
-    pub(crate) window: *mut c_void,
-    pub(crate) token: u64,
-}
-
-impl CreationScope {
-    pub(crate) fn new(abi_version: u32) -> Self {
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version,
-            window: ptr::null_mut(),
-            token: 0,
-        }
-    }
-}
-
-/// `rsf_d3d11_native_chain` from `d3d11_host.h`.
-#[allow(dead_code)] // The Runtime reads every field.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct NativeChain {
-    pub(crate) struct_size: u32,
-    pub(crate) abi_version: u32,
-    pub(crate) device: *mut c_void,
-    pub(crate) immediate_context: *mut c_void,
-    pub(crate) swapchain: *mut *mut c_void,
-}
-
-impl NativeChain {
-    pub(crate) fn new(abi_version: u32) -> Self {
-        Self {
-            struct_size: size_of::<Self>() as u32,
-            abi_version,
-            device: ptr::null_mut(),
-            immediate_context: ptr::null_mut(),
-            swapchain: ptr::null_mut(),
-        }
-    }
 }
 
 /// `rsf_skyrim_creation_call`: one guarded creation call on the detour's stack.

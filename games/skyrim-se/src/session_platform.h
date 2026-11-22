@@ -2,8 +2,8 @@
 #pragma once
 // Internal boundary between plugin.cpp and the Rust session owner (src/session.rs, crate
 // rsf-skyrim-se). Not a DLL ABI: both sides link into ReScaleFrame.Game.SkyrimSE.dll.
-// src/session.rs mirrors these layouts and rsf_d3d11_host_setup by hand (bindgen-cli 0.72.1 was
-// not available); both sides assert sizes and offsets. Rust owns the lifecycle order, results,
+// src/session.rs mirrors the private leaves. The public setup comes from the generated SDK binding.
+// Rust owns the lifecycle order, results,
 // reasons, the Runtime host setup and its original-session reuse, DPI startup and the borrowed
 // services. The leaves keep the C++ subsystems, the detours and their engine facts.
 #include "observer_platform.h"

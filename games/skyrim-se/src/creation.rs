@@ -320,8 +320,19 @@ fn owned_call(
 /// Before the original call: report a refused route and open the Runtime scope for the owner.
 pub(crate) fn enter(platform: &Platform, call: &mut CreationCall) {
     let entry_error = platform.last_error();
-    call.scope = CreationScope::new(platform.d3d11_host_abi);
-    call.outputs = NativeChain::new(platform.d3d11_host_abi);
+    call.scope = CreationScope {
+        struct_size: size_of::<CreationScope>() as u32,
+        abi_version: platform.d3d11_host_abi,
+        window: ptr::null_mut(),
+        token: 0,
+    };
+    call.outputs = NativeChain {
+        struct_size: size_of::<NativeChain>() as u32,
+        abi_version: platform.d3d11_host_abi,
+        device: ptr::null_mut(),
+        immediate_context: ptr::null_mut(),
+        swapchain: ptr::null_mut(),
+    };
     let shared = shared();
     let route = creation_caller(platform);
     let live = LIVE.load(Ordering::Acquire);
