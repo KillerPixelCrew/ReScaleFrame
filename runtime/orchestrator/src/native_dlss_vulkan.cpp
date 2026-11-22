@@ -5,14 +5,13 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
-#include <limits>
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
 #define VK_NO_PROTOTYPES
 #include <windows.h>
 #include <vulkan/vulkan.h>
 #include "vulkan_fg_resources_native.h"
-#include <sl.h>
+#include "../../vulkan/streamline/sdk_records_checks.h"
 #include <sl_dlss.h>
 #include <DirectXMath.h>
 #include "../../backends/common/frame_capture_vk.h"
@@ -23,12 +22,6 @@ sl::DLSSMode mode(uint32_t quality) {
     constexpr sl::DLSSMode modes[] = {sl::DLSSMode::eDLAA, sl::DLSSMode::eMaxQuality, sl::DLSSMode::eBalanced,
         sl::DLSSMode::eMaxPerformance, sl::DLSSMode::eUltraPerformance};
     return modes[quality];
-}
-sl::float4x4 matrix(const float* values) {
-    sl::float4x4 result{};
-    for (uint32_t row = 0; row < 4; ++row) for (uint32_t column = 0; column < 4; ++column)
-        (&result[row].x)[column] = values[row * 4 + column];
-    return result;
 }
 template<class T> T entry(void* module, const char* name) { return reinterpret_cast<T>(GetProcAddress(static_cast<HMODULE>(module), name)); }
 }
@@ -44,9 +37,9 @@ struct Native {
     rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
 };
 namespace {
-sl::Resource resource(const Image& image, bool output = false) {
+sl::Resource resource(const Image& image, uint32_t layout) {
     sl::Resource result{sl::ResourceType::eTex2d, reinterpret_cast<void*>(image.image), nullptr,
-        reinterpret_cast<void*>(image.view), uint32_t(output ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)};
+        reinterpret_cast<void*>(image.view), layout};
     result.width = image.width; result.height = image.height; result.nativeFormat = image.format;
     result.mipLevels = result.arrayLayers = 1;
     result.flags = 0; result.usage = image.usage;
@@ -79,28 +72,17 @@ rsf_backend_result initialize(void* module, uintptr_t, void* user) {
     init.width = plan.optimalRenderWidth; init.height = plan.optimalRenderHeight;
     return RSF_BACKEND_OK;
 }
-int32_t set_constants(void* native, uintptr_t token, const rsf_srvk_frame* input, uint32_t reset) {
+int32_t set_constants(void* native, uintptr_t token, const rsf_slvk_sdk_constants* input) {
     auto& self = *static_cast<Native*>(native);
-    const auto& record = *input->record; const auto& camera = record.camera;
-    DirectX::XMFLOAT4X4 previous{}, inverse{}; std::memcpy(&previous, camera.clip_to_previous_clip, sizeof(previous));
+    DirectX::XMFLOAT4X4 previous{}, inverse{}; std::memcpy(&previous, input->clip_to_previous, sizeof(previous));
     DirectX::XMVECTOR determinant{};
     DirectX::XMStoreFloat4x4(&inverse, DirectX::XMMatrixInverse(&determinant, DirectX::XMLoadFloat4x4(&previous)));
     const float det = DirectX::XMVectorGetX(determinant);
     if (!std::isfinite(det) || std::abs(det) < 1e-12f) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    sl::Constants constants{}; constants.cameraViewToClip = matrix(camera.view_to_clip); constants.clipToCameraView = matrix(camera.clip_to_view);
-    constants.clipToPrevClip = matrix(camera.clip_to_previous_clip); constants.prevClipToClip = matrix(&inverse.m[0][0]);
-    constants.cameraPos = {camera.view_to_world[12], camera.view_to_world[13], camera.view_to_world[14]};
-    constants.cameraRight = {camera.view_to_world[0], camera.view_to_world[1], camera.view_to_world[2]};
-    constants.cameraUp = {camera.view_to_world[4], camera.view_to_world[5], camera.view_to_world[6]};
-    constants.cameraFwd = {-camera.view_to_world[8], -camera.view_to_world[9], -camera.view_to_world[10]};
-    constants.cameraNear = camera.near_plane; constants.cameraFar = camera.far_plane > 0 ? camera.far_plane : std::numeric_limits<float>::max();
-    constants.cameraFOV = camera.vertical_fov_radians; constants.cameraAspectRatio = float(record.output_width) / record.output_height;
-    constants.jitterOffset = {camera.jitter_pixels[0], camera.jitter_pixels[1]}; constants.cameraPinholeOffset = {0, 0};
-    constants.mvecScale = {input->motion_scale_x / record.render_width, input->motion_scale_y / record.render_height};
-    constants.depthInverted = camera.depth_inverted ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-    constants.cameraMotionIncluded = sl::Boolean::eTrue; constants.motionVectors3D = sl::Boolean::eFalse;
-    constants.motionVectorsJittered = camera.motion_jittered ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-    constants.motionVectorsInvalidValue = std::numeric_limits<float>::max(); constants.reset = reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    sl::Constants constants{};
+    std::memcpy(static_cast<void*>(&constants), input, sizeof(constants));
+    static_assert(sizeof(constants.prevClipToClip) == sizeof(inverse));
+    std::memcpy(static_cast<void*>(&constants.prevClipToClip), &inverse, sizeof(inverse));
     auto& frame = *reinterpret_cast<sl::FrameToken*>(token);
     return self.constants(constants, frame, viewport) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -115,23 +97,17 @@ int32_t set_options(void* native, const rsf_srvk_frame* input, uint32_t preset_h
     return self.options(viewport, options) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
-int32_t tag(void* native, uintptr_t token, void* commands, const rsf_srvk_frame* input, const rsf_vkdlss_images* images) {
+int32_t tag(void* native, uintptr_t token, void* commands, const rsf_vkdlss_tag* plan) {
     auto& self = *static_cast<Native*>(native);
-    const auto& record = *input->record;
-    sl::Resource color = resource(images->color);
-    sl::Resource depth = resource(images->depth);
-    sl::Resource motion = resource(images->motion);
-    sl::Resource output = resource(images->output, true);
-    sl::Resource bias{};
-    if (input->bias_current_color.image) bias = resource(images->bias);
-    const sl::Extent render{0, 0, images->color.width, images->color.height},
-        presented{0, 0, record.output_width, record.output_height};
-    sl::ResourceTag tags[] = {{&color, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &render},
-        {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate, &render},
-        {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate, &render},
-        {&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &presented},
-        // An explicit null tag clears a mask used on an earlier frame.
-        {input->bias_current_color.image ? &bias : nullptr, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilEvaluate, &render}};
+    sl::Resource resources[5]{};
+    sl::ResourceTag tags[5]{};
+    for (size_t i = 0; i < 5; ++i) {
+        const auto& item = plan[i];
+        const sl::Extent extent{0, 0, item.width, item.height};
+        if (item.image) resources[i] = resource(*item.image, item.layout);
+        tags[i] = sl::ResourceTag{item.image ? &resources[i] : nullptr, item.kind,
+            sl::ResourceLifecycle::eValidUntilEvaluate, &extent};
+    }
     return self.tags(*reinterpret_cast<sl::FrameToken*>(token), viewport, tags, 5,
         reinterpret_cast<sl::CommandBuffer*>(commands)) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -216,4 +192,8 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     rsf_dlss_preset_valid,
 };
 static_assert(sizeof(rsf_vkdlss_platform) == 16 * sizeof(void*));
+static_assert(sizeof(rsf_vkdlss_tag) == 24);
+static_assert(sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 &&
+    sl::kBufferTypeScalingInputColor == 3 && sl::kBufferTypeScalingOutputColor == 4 &&
+    sl::kBufferTypeBiasCurrentColorHint == 29);
 #endif

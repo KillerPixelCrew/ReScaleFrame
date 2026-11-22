@@ -400,6 +400,8 @@ mod vulkan_sr_session;
 #[cfg(windows)]
 mod vulkan_sr_split;
 #[cfg(windows)]
+mod vulkan_streamline_camera;
+#[cfg(windows)]
 mod vulkan_timing;
 #[cfg(windows)]
 mod vulkan_xess_fg;

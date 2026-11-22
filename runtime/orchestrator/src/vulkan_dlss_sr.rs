@@ -4,15 +4,16 @@ use crate::frame_capture_vk::sr_capture_inputs;
 mod commands;
 use self::commands::Dispatch;
 use crate::vulkan_dlss_sr_abi::{
-    rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_platform as Platform,
+    rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_platform as Platform, rsf_vkdlss_tag,
 };
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_ownership::Claim;
 use crate::vulkan_sr::{
-    GENERAL, History, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, STORAGE_USAGE,
-    TRANSFER_DST_USAGE, TRANSFER_SRC_USAGE,
+    GENERAL, History, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, SHADER_READ,
+    STORAGE_USAGE, TRANSFER_DST_USAGE, TRANSFER_SRC_USAGE,
 };
 use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
+use crate::vulkan_streamline_camera::camera_constants;
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
 use std::ptr;
@@ -160,7 +161,12 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
     let platform = owner.platform;
     let native = owner.native;
     let reset = u32::from(owner.history.needs_reset(record));
-    let result = unsafe { (platform.constants.unwrap())(native, token, *input, reset) };
+    let constants = camera_constants(
+        record,
+        [input.motion_scale_x, input.motion_scale_y],
+        reset != 0,
+    );
+    let result = unsafe { (platform.constants.unwrap())(native, token, &constants) };
     if result != 0 {
         return result;
     }
@@ -187,7 +193,35 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
         dispatch.initialize_output(*commands, &images.output);
         images.output.initialized = 1;
     }
-    let result = unsafe { (platform.tag.unwrap())(native, token, *commands, *input, images) };
+    let render_tag = |image, kind| rsf_vkdlss_tag {
+        image,
+        kind,
+        layout: SHADER_READ,
+        width: images.color.width,
+        height: images.color.height,
+    };
+    let tags = [
+        render_tag(&images.color, 3),
+        render_tag(&images.depth, 0),
+        render_tag(&images.motion, 1),
+        rsf_vkdlss_tag {
+            image: &images.output,
+            kind: 4,
+            layout: GENERAL,
+            width: record.output_width,
+            height: record.output_height,
+        },
+        // An explicit null tag clears a mask used on an earlier frame.
+        render_tag(
+            if input.bias_current_color.image != 0 {
+                &images.bias
+            } else {
+                ptr::null()
+            },
+            29,
+        ),
+    ];
+    let result = unsafe { (platform.tag.unwrap())(native, token, *commands, tags.as_ptr()) };
     if result != 0 {
         return result;
     }

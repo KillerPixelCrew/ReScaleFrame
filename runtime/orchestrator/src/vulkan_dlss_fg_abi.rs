@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::vulkan_dlss_fg::sdk_fg_options::Packed;
-use crate::vulkan_dlss_fg::sdk_records_abi::rsf_slvk_sdk_constants;
 use crate::vulkan_fg_abi::{rsf_dlssgvk_status as Status, rsf_fgvk_setup as Setup};
 use crate::vulkan_fg_copy::{BarrierFn, CopyFn};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu};
 use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_sr_abi::rsf_srvk_image as SourceImage;
+use crate::vulkan_streamline_camera::rsf_slvk_sdk_constants;
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::c_void;
 

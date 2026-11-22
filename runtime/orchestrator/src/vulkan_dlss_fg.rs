@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: MIT
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_camera_defaults.rs"]
-mod sdk_camera_defaults;
 #[path = "../../vulkan/streamline/lifecycle/src/sdk_fg_options.rs"]
 pub(super) mod sdk_fg_options;
-#[path = "../../vulkan/streamline/lifecycle/src/sdk_records_abi.rs"]
-#[allow(dead_code)] // The other records are consumed by the standalone bridge.
-pub(super) mod sdk_records_abi;
 mod wsi;
 
 use self::wsi::Wsi;
@@ -28,9 +23,9 @@ use crate::vulkan_fg_resources_abi::{
 use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_ownership::Claim;
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as SourceImage};
+use crate::vulkan_streamline_camera::camera_constants;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
-use sdk_records_abi::rsf_slvk_sdk_constants;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -184,39 +179,6 @@ struct RecordWork<'a> {
     staged: bool,
 }
 
-fn camera_constants(record: &Record, input: &Frame) -> rsf_slvk_sdk_constants {
-    let camera = &record.camera;
-    let world = &camera.view_to_world;
-    rsf_slvk_sdk_constants {
-        view_to_clip: camera.view_to_clip,
-        clip_to_view: camera.clip_to_view,
-        clip_to_previous: camera.clip_to_previous_clip,
-        // The native call adapter fills the inverse under the existing
-        // DirectXMath determinant rule.
-        jitter: camera.jitter_pixels,
-        motion_scale: [
-            input.motion_scale_x / record.render_width as f32,
-            input.motion_scale_y / record.render_height as f32,
-        ],
-        position: [world[12], world[13], world[14]],
-        right: [world[0], world[1], world[2]],
-        up: [world[4], world[5], world[6]],
-        forward: [-world[8], -world[9], -world[10]],
-        near_plane: camera.near_plane,
-        far_plane: if camera.far_plane > 0.0 {
-            camera.far_plane
-        } else {
-            f32::MAX
-        },
-        fov: camera.vertical_fov_radians,
-        aspect: record.output_width as f32 / record.output_height as f32,
-        depth_inverted: u8::from(camera.depth_inverted != 0),
-        motion_jittered: u8::from(camera.motion_jittered != 0),
-        reset: u8::from(record.flags & RSF_FRAME_FLAG_RESET != 0),
-        ..sdk_camera_defaults::constants()
-    }
-}
-
 fn tag_plan(images: &[Image], record: &Record, guides: bool) -> [Tag; 2] {
     const DEPTH: u32 = 0;
     const MOTION: u32 = 1;
@@ -269,7 +231,12 @@ unsafe extern "C" fn record_inputs(module: Handle, token: usize, user: Handle) -
     }
     let sdk = &mut work.sdk;
     if work.first_role == 0 {
-        let constants = camera_constants(unsafe { &*sdk.record }, work.input);
+        let record = unsafe { &*sdk.record };
+        let constants = camera_constants(
+            record,
+            [work.input.motion_scale_x, work.input.motion_scale_y],
+            record.flags & RSF_FRAME_FLAG_RESET != 0,
+        );
         sdk.camera = &constants;
         let result =
             unsafe { (work.platform.constants.unwrap())(module, token, ptr::from_mut(sdk).cast()) };

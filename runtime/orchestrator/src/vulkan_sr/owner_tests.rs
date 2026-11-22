@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_commands, rsf_vkdlss_images, rsf_vkdlss_platform};
+use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_commands, rsf_vkdlss_platform, rsf_vkdlss_tag};
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
+use crate::vulkan_streamline_camera::rsf_slvk_sdk_constants;
 use ash::vk::{self, Handle as _};
 
 const FAILED: i32 = -9;
@@ -230,11 +231,15 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
     })),
     constants: Some(leaf!(|native: Handle,
                            token: usize,
-                           input: *const Frame,
-                           reset: u32|
+                           constants: *const rsf_slvk_sdk_constants|
      -> i32 {
-        assert_eq!(token as u64, unsafe { (*(*input).record).frame_id });
-        unsafe { fake(native).calls.push(Call::DlssConstants(reset)) };
+        assert_ne!(token, 0);
+        let reset = unsafe { (*constants).reset };
+        unsafe {
+            fake(native)
+                .calls
+                .push(Call::DlssConstants(u32::from(reset)))
+        };
         0
     })),
     options: Some(leaf!(|native: Handle,
@@ -247,12 +252,16 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
     tag: Some(leaf!(|_: Handle,
                      _: usize,
                      _: Handle,
-                     _: *const Frame,
-                     images: *const rsf_vkdlss_images|
+                     tags: *const rsf_vkdlss_tag|
      -> i32 {
-        let images = unsafe { &*images };
-        assert_eq!(images.color.initialized, 1);
-        assert_eq!(images.output.initialized, 1);
+        let tags = unsafe { &*tags.cast::<[rsf_vkdlss_tag; 5]>() };
+        assert_eq!(tags.each_ref().map(|tag| tag.kind), [3, 0, 1, 4, 29]);
+        assert_eq!(unsafe { (*tags[0].image).initialized }, 1);
+        assert_eq!(unsafe { (*tags[3].image).initialized }, 1);
+        assert_eq!(
+            (tags[3].layout, tags[3].width, tags[3].height),
+            (GENERAL, 128, 72)
+        );
         0
     })),
     evaluate: Some(leaf!(|native: Handle, _: usize, _: Handle| -> i32 {

@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
 use crate::vulkan_latency_abi::rsf_slvk_call;
+use crate::vulkan_streamline_camera::rsf_slvk_sdk_constants;
 use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup, rsf_vk_function};
 use rsf_game_sys::rsf_frame_record;
 
@@ -65,6 +66,39 @@ impl Default for rsf_vkdlss_commands {
     }
 }
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_vkdlss_tag {
+    pub image: *const rsf_vkfg_image,
+    pub kind: u32,
+    pub layout: u32,
+    pub width: u32,
+    pub height: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_vkdlss_tag"][::core::mem::size_of::<rsf_vkdlss_tag>() - 24usize];
+    ["Alignment of rsf_vkdlss_tag"][::core::mem::align_of::<rsf_vkdlss_tag>() - 8usize];
+    ["Offset of field: rsf_vkdlss_tag::image"]
+        [::core::mem::offset_of!(rsf_vkdlss_tag, image) - 0usize];
+    ["Offset of field: rsf_vkdlss_tag::kind"]
+        [::core::mem::offset_of!(rsf_vkdlss_tag, kind) - 8usize];
+    ["Offset of field: rsf_vkdlss_tag::layout"]
+        [::core::mem::offset_of!(rsf_vkdlss_tag, layout) - 12usize];
+    ["Offset of field: rsf_vkdlss_tag::width"]
+        [::core::mem::offset_of!(rsf_vkdlss_tag, width) - 16usize];
+    ["Offset of field: rsf_vkdlss_tag::height"]
+        [::core::mem::offset_of!(rsf_vkdlss_tag, height) - 20usize];
+};
+impl Default for rsf_vkdlss_tag {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_vkdlss_platform {
     pub open: ::core::option::Option<
@@ -95,8 +129,7 @@ pub struct rsf_vkdlss_platform {
         unsafe extern "C" fn(
             arg1: *mut ::core::ffi::c_void,
             token: usize,
-            arg2: *const rsf_srvk_frame,
-            reset: u32,
+            arg2: *const rsf_slvk_sdk_constants,
         ) -> i32,
     >,
     pub options: ::core::option::Option<
@@ -111,8 +144,7 @@ pub struct rsf_vkdlss_platform {
             arg1: *mut ::core::ffi::c_void,
             token: usize,
             commands: *mut ::core::ffi::c_void,
-            arg2: *const rsf_srvk_frame,
-            arg3: *const rsf_vkdlss_images,
+            tags: *const rsf_vkdlss_tag,
         ) -> i32,
     >,
     pub evaluate: ::core::option::Option<
