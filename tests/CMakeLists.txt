@@ -292,8 +292,13 @@ add_test(NAME fsr_backend COMMAND rsf_fsr_backend)
 
 # Whether a D3D11 texture can be opened by a D3D12 device here at all. Skips with 77 and the
 # HRESULTs when the two runtimes disagree, which under Wine is a fact about the environment.
-add_executable(rsf_shared_surface shared_surface.cpp)
-target_link_libraries(rsf_shared_surface PRIVATE ReScaleFrame::Presentation rsf_build_options)
+rsf_add_rust_static(rsf_presentation_fixtures_rust rsf_rust_presentation_fixtures
+    rsf-presentation-fixtures rsf_presentation_fixtures)
+add_executable(rsf_shared_surface presentation/shared_surface_main.c)
+set_target_properties(rsf_shared_surface PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
+    LINKER_LANGUAGE CXX)
+target_link_libraries(rsf_shared_surface PRIVATE rsf_presentation_fixtures_rust
+    ReScaleFrame::Presentation rsf_build_options)
 add_test(NAME shared_surface COMMAND rsf_shared_surface)
 set_tests_properties(shared_surface PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 

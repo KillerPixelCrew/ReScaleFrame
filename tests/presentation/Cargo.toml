@@ -1,0 +1,22 @@
+[package]
+name = "rsf-presentation-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[lints]
+workspace = true
+
+[target."cfg(windows)".dependencies]
+windows = { version = "=0.62.2", default-features = false, features = [
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+] }

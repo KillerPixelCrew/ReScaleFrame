@@ -42,6 +42,10 @@ generate("loader/src/census/json_abi.rs", "loader/census/src/json_platform.h",
 generate("loader/src/census/decode_abi.rs", "loader/census/src/decode_platform.h",
          "rsf_census_(resource_desc|read_resource)", "NOTHING", [],
          ["--with-derive-default"])
+generate("tests/presentation/src/shared_surface_abi.rs",
+         "runtime/presentation/include/rescaleframe/shared_surface.h",
+         "rsf_shared_.*", "RSF_SHARED_SURFACE_ABI_VERSION", [],
+         ["--allowlist-function", "rsf_shared_.*"])
 generate("tests/loader/src/windows/vendor_census_asi_abi.rs",
          "loader/census/include/rescaleframe/vendor_census.h",
          "rsf_census_options", "RSF_CENSUS_ABI_VERSION", [], ["--with-derive-default"])
