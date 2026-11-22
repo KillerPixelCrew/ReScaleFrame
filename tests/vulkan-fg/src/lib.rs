@@ -42,3 +42,9 @@ mod xess_bridge_abi;
 mod vulkan_fg_abi;
 #[cfg(feature = "xess-device")]
 mod xess_present;
+
+#[cfg(feature = "xess-sr")]
+#[path = "../../../runtime/orchestrator/src/vulkan_sr/xess_requirements_abi.rs"]
+mod xess_requirements_abi;
+#[cfg(feature = "xess-sr")]
+mod xess_sr;

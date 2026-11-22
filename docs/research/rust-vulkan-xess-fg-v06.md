@@ -105,3 +105,9 @@ passes the existing frame and Present records to V02 and issues the same
 receipt. An unsuccessful drain retains the views and owner. After drain,
 views retire before the presenter releases the underlying images. The
 remaining fixture allocations retire only after checked presenter release.
+
+The SR fixture now runs requirements preflight, SDK session admission,
+quality selection and shutdown in Rust. It preserves the return-77 decisions
+and the device-before-SDK retirement order. Native leaves still own Vulkan
+setup, both quality runs' frame recording and pixel comparison, and the
+separately compiled typed SDK input-range mock.

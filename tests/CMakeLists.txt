@@ -797,8 +797,10 @@ add_test(NAME native_vulkan_device COMMAND rsf_native_vulkan_test --device)
 add_test(NAME native_vulkan_dlss_device COMMAND rsf_native_vulkan_test --dlss)
 set_tests_properties(native_vulkan_device native_vulkan_dlss_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
+rsf_add_rust_static(rsf_xess_sr_fixture_rust rsf_rust_xess_sr_fixture
+    rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features xess-sr)
 add_executable(rsf_native_xess_vulkan_test native_xess_vulkan.cpp)
-target_link_libraries(rsf_native_xess_vulkan_test PRIVATE ReScaleFrame::NativeVulkan rsf_build_options)
+target_link_libraries(rsf_native_xess_vulkan_test PRIVATE rsf_xess_sr_fixture_rust ReScaleFrame::NativeVulkan rsf_build_options)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess/xess_vk.h")
     target_compile_definitions(rsf_native_xess_vulkan_test PRIVATE RSF_TEST_VULKAN=1)
     target_include_directories(rsf_native_xess_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")

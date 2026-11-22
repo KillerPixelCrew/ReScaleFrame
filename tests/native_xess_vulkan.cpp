@@ -190,10 +190,6 @@ int main() {
 #include <cstring>
 #include <limits>
 
-namespace {
-void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
-}
-
 #if defined(RSF_TEST_VULKAN)
 #define VK_NO_PROTOTYPES
 #include <windows.h>
@@ -204,6 +200,7 @@ void require(bool value, const char* message) { if (!value) throw std::runtime_e
 #include <filesystem>
 
 namespace {
+void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 struct Image { VkImage image = VK_NULL_HANDLE; VkDeviceMemory memory = VK_NULL_HANDLE; uint32_t width, height; VkFormat format; uint32_t copy_source = 0; };
 struct Gpu {
     HMODULE module = nullptr;
@@ -471,39 +468,23 @@ void device_case(Gpu& gpu, const char* directory, uint32_t quality) {
     std::printf("PASS: Vulkan SR backend %u GPU pixels, reset and image-owner guards\n", RSF_SR_XESS);
 }
 }
+extern "C" int run_device(const char* directory, uint32_t quality, uint32_t second_quality) noexcept try {
+    Gpu gpu;
+    gpu.initialize();
+    device_case(gpu, directory, quality);
+    device_case(gpu, directory, second_quality);
+    return 0;
+} catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }
 #endif
 
-int main(int argc, char**) try {
-    rsf_xessvk_setup setup{sizeof(setup) - 1, RSF_XESSVK_REQUIREMENTS_ABI_VERSION, nullptr};
-    require(rsf_xessvk_initialize(nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
-        rsf_xessvk_initialize(&setup) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "XeSS requirements short/null setup");
-    setup.struct_size = sizeof(setup); setup.abi_version++;
-    require(rsf_xessvk_initialize(&setup) == RSF_BACKEND_ERROR_ABI_MISMATCH, "XeSS requirements ABI mismatch");
-    setup.abi_version = RSF_XESSVK_REQUIREMENTS_ABI_VERSION;
-    require(rsf_xessvk_initialize(&setup) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "XeSS requirements missing payload path");
-    require(rsf_xessvk_instance_requirements(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
-        rsf_xessvk_device_requirements(nullptr, nullptr, nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT,
-        "XeSS requirements reject missing output pointers");
-    require(rsf_xessvk_shutdown() == RSF_BACKEND_OK, "XeSS requirements empty shutdown");
-    if (argc == 1) { std::puts("PASS: XeSS Vulkan requirements ABI guards"); return 0; }
-    const char* directory = std::getenv("RSF_VULKAN_XESS_RUNTIME");
-    if (!directory) { std::puts("SKIP: set RSF_VULKAN_XESS_RUNTIME for XeSS Vulkan device fixture"); return 77; }
+extern "C" int rsf_fixture_xess_sr_main(int argc, int (*run)(const char*, uint32_t, uint32_t));
+
+int main(int argc, char**) {
 #if defined(RSF_TEST_VULKAN)
-    setup.runtime_directory_utf8 = directory;
-    require(rsf_xessvk_initialize(&setup) == RSF_BACKEND_OK, "load early XeSS Vulkan session");
-    struct SessionOwner { ~SessionOwner() { (void)rsf_xessvk_shutdown(); } } session;
-    require(rsf_xessvk_initialize(&setup) == RSF_BACKEND_ERROR_NOT_READY, "refuse replacing an active XeSS SDK");
-    {
-        Gpu gpu; gpu.initialize();
-        device_case(gpu, directory, 1);
-        device_case(gpu, directory, 5);
-    }
-    require(rsf_xessvk_shutdown() == RSF_BACKEND_OK, "retire XeSS session after device destruction");
-    return 0;
+    return rsf_fixture_xess_sr_main(argc, run_device);
 #else
-    (void)directory;
-    std::puts("SKIP: built without Vulkan SDK headers"); return 77;
+    return rsf_fixture_xess_sr_main(argc, nullptr);
 #endif
-} catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }
+}
 
 #endif // RSF_TEST_XESS_INPUT_RANGE

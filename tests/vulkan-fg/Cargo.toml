@@ -13,6 +13,7 @@ crate-type = ["staticlib"]
 dispatch = []
 ffx = []
 fsr4-state = ["dep:ash"]
+xess-sr = []
 xess-device = ["dep:ash", "dep:windows-sys"]
 
 [dependencies]
