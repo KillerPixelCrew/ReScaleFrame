@@ -11,7 +11,7 @@
    and its resize, the checked close and release, and the presentation: Unity's intercepted
    swapchains with their images and present-ready semaphores, the presentation window's identity
    and the presentation lease. The command slot rotation and the shared D3D12 fence values are the
-   package bridge's submission ring (bridge_interop.h); a process has one Unity renderer, so the
+   package bridge's submission ring (bridge_interop.rs); a process has one Unity renderer, so the
    D3D11 and Vulkan bridges never use it at once. Rust owns the shared graphics device record,
    Vulkan dispatch, command pool, per-slot handles and imported images. vulkan_platform.rs
    executes the graphics operations. Rust also owns the HWND path and the image descriptors

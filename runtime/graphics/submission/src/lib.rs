@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Runtime submission sequencing for an adapter-owned command ring and its fence timelines.
 
-use std::ffi::c_void;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const MAX_SLOTS: usize = 32;
@@ -118,8 +117,8 @@ impl SubmissionRing {
     }
 }
 
-/// An opaque Runtime handle. The adapter owns one handle per bridge and keeps it alive
-/// through callback retirement. The handle serializes observations with submission updates.
+/// The adapter owns one handle per bridge and keeps it alive through callback retirement. The
+/// handle serializes observations with submission updates.
 pub struct SubmissionHandle(Mutex<SubmissionRing>);
 
 impl SubmissionHandle {
@@ -135,111 +134,6 @@ impl SubmissionHandle {
         let mut ring = self.lock();
         *ring = SubmissionRing::new(ring.slots);
     }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_acquire(handle: *const c_void, complete: *mut u64) -> u32 {
-    let Some(handle) = (unsafe { handle.cast::<SubmissionHandle>().as_ref() }) else {
-        return u32::MAX;
-    };
-    let (slot, value) = handle.lock().slot();
-    if !complete.is_null() {
-        unsafe { complete.write(value) };
-    }
-    slot as u32
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_shared_pair(
-    handle: *const c_void,
-    first: *mut u64,
-    second: *mut u64,
-) -> u32 {
-    let Some(handle) = (unsafe { handle.cast::<SubmissionHandle>().as_ref() }) else {
-        return 0;
-    };
-    if first.is_null() || second.is_null() {
-        return 0;
-    }
-    let Some((upload, download)) = handle.lock().shared_pair() else {
-        return 0;
-    };
-    unsafe {
-        first.write(upload);
-        second.write(download);
-    }
-    1
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_advance(handle: *const c_void, slot: u32) {
-    if let Some(handle) = unsafe { handle.cast::<SubmissionHandle>().as_ref() } {
-        handle.lock().advance(slot as usize);
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_submit(handle: *const c_void, slot: u32) -> u64 {
-    unsafe { handle.cast::<SubmissionHandle>().as_ref() }
-        .and_then(|handle| handle.lock().submit(slot as usize))
-        .unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_completion(handle: *const c_void) -> u64 {
-    unsafe { handle.cast::<SubmissionHandle>().as_ref() }
-        .and_then(|handle| handle.lock().completion())
-        .unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_next_completion(handle: *const c_void) -> u64 {
-    unsafe { handle.cast::<SubmissionHandle>().as_ref() }
-        .and_then(|handle| handle.lock().next_completion())
-        .unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_pending_value(handle: *const c_void) -> u64 {
-    unsafe { handle.cast::<SubmissionHandle>().as_ref() }
-        .map_or(0, |handle| handle.lock().submitted())
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_status(handle: *const c_void, completed: u64) -> u32 {
-    match unsafe { handle.cast::<SubmissionHandle>().as_ref() }
-        .map(|handle| handle.lock().status(completed))
-    {
-        Some(FenceStatus::Complete) => 1,
-        Some(FenceStatus::Pending) => 2,
-        Some(FenceStatus::Removed) | None => 0,
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_shared_tail(handle: *const c_void) -> u64 {
-    unsafe { handle.cast::<SubmissionHandle>().as_ref() }
-        .and_then(|handle| handle.lock().shared_tail())
-        .unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_record_copy(handle: *const c_void) {
-    if let Some(handle) = unsafe { handle.cast::<SubmissionHandle>().as_ref() } {
-        handle.lock().record_copy();
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_submission_copy_submitted(handle: *const c_void, value: u64) {
-    if let Some(handle) = unsafe { handle.cast::<SubmissionHandle>().as_ref() } {
-        handle.lock().copy_submitted(value);
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_submission_fence_complete(completed: u64, required: u64) -> bool {
-    fence_status(completed, required) == FenceStatus::Complete
 }
 
 #[cfg(test)]
