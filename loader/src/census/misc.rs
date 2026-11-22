@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: MIT
 #![allow(non_upper_case_globals)]
 use super::hooks::{bind_named, rsf_census_hook_bind_thunk, rsf_census_hook_original};
-use super::json::{
-    emit_decimal, rsf_census_json_bytes, rsf_census_json_close, rsf_census_json_hex,
-    rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
-    rsf_census_json_wide,
-};
+use super::json::{Json, emit_decimal, rsf_census_json_bytes, rsf_census_json_wide};
 use super::platform;
 use super::rsf_census_call_state;
-use super::rsf_census_json;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
@@ -91,35 +86,14 @@ fn label(names: &[&'static CStr], index: u32) -> &'static CStr {
         .unwrap_or(c"other")
 }
 
-struct Json<'a>(&'a mut rsf_census_json);
-impl Json<'_> {
-    fn open(&mut self, key: Option<&CStr>, delimiter: u8) {
-        unsafe {
-            rsf_census_json_open(
-                self.0,
-                key.map_or(null(), CStr::as_ptr),
-                delimiter as c_char,
-            )
-        };
-    }
-    fn close(&mut self, delimiter: u8) {
-        rsf_census_json_close(self.0, delimiter as c_char);
-    }
-    fn word(&mut self, key: Option<&CStr>, value: u64) {
-        unsafe { rsf_census_json_u64(self.0, key.map_or(null(), CStr::as_ptr), value) };
-    }
-    fn number(&mut self, key: &CStr, value: u32) {
-        self.word(Some(key), value.into());
-    }
-    fn hex(&mut self, key: Option<&CStr>, value: u64) {
-        unsafe { rsf_census_json_hex(self.0, key.map_or(null(), CStr::as_ptr), value) };
-    }
-    fn text(&mut self, key: &CStr, value: &CStr) {
-        unsafe { rsf_census_json_string(self.0, key.as_ptr(), value.as_ptr()) };
-    }
-    fn raw(&mut self, key: &CStr, value: &CStr) {
-        unsafe { rsf_census_json_raw(self.0, key.as_ptr(), value.as_ptr()) };
-    }
+trait MiscJson {
+    fn flag(&mut self, key: &CStr, value: bool);
+    fn float(&mut self, key: Option<&CStr>, bytes: &[u8], offset: usize);
+    fn output(&mut self, key: &CStr, out: u64);
+    fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]);
+}
+
+impl MiscJson for Json<'_> {
     fn flag(&mut self, key: &CStr, value: bool) {
         self.raw(key, if value { c"true" } else { c"false" });
     }
@@ -243,7 +217,7 @@ fn nv_marker(json: &mut Json<'_>, args: &Args, vulkan: bool) {
     }
 }
 fn marker_fields(json: &mut Json<'_>, frame: u64, marker: u32, layout: &CStr) {
-    json.word(Some(c"frame_id"), frame);
+    json.number(Some(c"frame_id"), frame);
     json.number(c"marker_type", marker);
     json.text(c"marker", label(NV_MARKER_NAMES, marker));
     json.text(c"layout", layout);
@@ -350,7 +324,7 @@ fn tags(json: &mut Json<'_>, address: u64, count: u32) {
         );
         if let Some(resource) = read::<96>(u64_at(&tag, 32), 0) {
             let native = u64_at(&resource, 40);
-            json.number(c"resource_type", resource[32].into());
+            json.number(c"resource_type", resource[32]);
             json.hex(Some(c"state"), u32_at(&resource, 64).into());
             json.fields(
                 &resource,
@@ -414,7 +388,7 @@ fn sl_init(json: &mut Json<'_>, args: &Args) {
             let Some(feature) = read::<4>(u64_at(&preferences, 96), index * 4) else {
                 break;
             };
-            json.word(None, u64::from(u32::from_le_bytes(feature)));
+            json.number(None, u64::from(u32::from_le_bytes(feature)));
         }
         json.close(b']');
     } else {
@@ -530,7 +504,7 @@ fn reflex_options(json: &mut Json<'_>, args: &Args) {
         );
         json.number(c"frame_limit_us", u32_at(&options, 4));
         json.flag(c"use_markers_to_optimize", options[8] != 0);
-        json.number(c"virtual_key", u16_at(&options, 10).into());
+        json.number(c"virtual_key", u16_at(&options, 10));
         json.number(c"id_thread", u32_at(&options, 12));
     }
 }
@@ -572,7 +546,7 @@ fn pre(entry: Entry, json: &mut Json<'_>, args: &Args) {
         | RSF_MISC_SlUpgradeInterface => json.hex(Some(c"device"), args[0]),
         RSF_MISC_NvllInitLowLatencyDevice | RSF_MISC_NvllSleep => {
             json.hex(Some(c"device"), args[0]);
-            json.word(Some(c"signal_value"), args[1]);
+            json.number(Some(c"signal_value"), args[1]);
         }
         RSF_MISC_NvllSetSleepMode => {
             json.hex(Some(c"device"), args[0]);
@@ -653,7 +627,7 @@ fn post(entry: Entry, json: &mut Json<'_>, args: &Args) {
             if let Some(latency) = read::<16>(args[1], 0) {
                 let report = u64_at(&latency, 8);
                 json.flag(c"latency_report_present", report != 0);
-                json.word(Some(c"first_report_frame_id"), report);
+                json.number(Some(c"first_report_frame_id"), report);
             }
         }
         RSF_MISC_SlGetNewFrameToken => {

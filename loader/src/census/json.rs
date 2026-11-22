@@ -22,6 +22,50 @@ pub(super) unsafe fn emit_decimal(
     unsafe { rsf_census_json_raw(json, key, ptr::null()) };
 }
 
+/// A census JSON key: a name, or `None` for an array element.
+pub(super) trait Key {
+    fn ptr(self) -> *const c_char;
+}
+
+impl Key for &CStr {
+    fn ptr(self) -> *const c_char {
+        self.as_ptr()
+    }
+}
+
+impl Key for Option<&CStr> {
+    fn ptr(self) -> *const c_char {
+        self.map_or(ptr::null(), CStr::as_ptr)
+    }
+}
+
+/// The writer every census module builds its records with.
+pub(super) struct Json<'a>(pub(super) &'a mut rsf_census_json);
+
+impl Json<'_> {
+    pub(super) fn open(&mut self, key: impl Key, delimiter: u8) {
+        unsafe { rsf_census_json_open(self.0, key.ptr(), delimiter as c_char) };
+    }
+    pub(super) fn close(&mut self, delimiter: u8) {
+        rsf_census_json_close(self.0, delimiter as c_char);
+    }
+    pub(super) fn number(&mut self, key: impl Key, value: impl Into<u64>) {
+        unsafe { rsf_census_json_u64(self.0, key.ptr(), value.into()) };
+    }
+    pub(super) fn signed(&mut self, key: impl Key, value: impl Into<i64>) {
+        unsafe { rsf_census_json_i64(self.0, key.ptr(), value.into()) };
+    }
+    pub(super) fn hex(&mut self, key: impl Key, value: u64) {
+        unsafe { rsf_census_json_hex(self.0, key.ptr(), value) };
+    }
+    pub(super) fn text(&mut self, key: impl Key, value: &CStr) {
+        unsafe { rsf_census_json_string(self.0, key.ptr(), value.as_ptr()) };
+    }
+    pub(super) fn raw(&mut self, key: impl Key, value: &CStr) {
+        unsafe { rsf_census_json_raw(self.0, key.ptr(), value.as_ptr()) };
+    }
+}
+
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
 impl rsf_census_json {
@@ -97,8 +141,7 @@ impl Write for rsf_census_json {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_json_open(
+pub(super) unsafe fn rsf_census_json_open(
     json: &mut rsf_census_json,
     key: *const c_char,
     delimiter: c_char,
@@ -113,14 +156,12 @@ pub(super) unsafe extern "C" fn rsf_census_json_open(
     json.depth += 1;
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_census_json_close(json: &mut rsf_census_json, delimiter: c_char) {
+pub(super) fn rsf_census_json_close(json: &mut rsf_census_json, delimiter: c_char) {
     json.depth = json.depth.saturating_sub(1);
     json.put(&[delimiter as u8]);
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_json_string(
+pub(super) unsafe fn rsf_census_json_string(
     json: &mut rsf_census_json,
     key: *const c_char,
     value: *const c_char,
@@ -128,8 +169,7 @@ pub(super) unsafe extern "C" fn rsf_census_json_string(
     unsafe { json.string(key, value) };
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_json_wide(
+pub(super) unsafe fn rsf_census_json_wide(
     json: &mut rsf_census_json,
     key: *const c_char,
     value: *const u16,
@@ -155,8 +195,7 @@ pub(super) unsafe extern "C" fn rsf_census_json_wide(
     json.quoted(&utf8[..len.saturating_sub(1).max(0) as usize]);
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_json_u64(
+pub(super) unsafe fn rsf_census_json_u64(
     json: &mut rsf_census_json,
     key: *const c_char,
     value: u64,
@@ -165,8 +204,7 @@ pub(super) unsafe extern "C" fn rsf_census_json_u64(
     let _ = write!(json, "{value}");
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_json_i64(
+pub(super) unsafe fn rsf_census_json_i64(
     json: &mut rsf_census_json,
     key: *const c_char,
     value: i64,
@@ -175,8 +213,7 @@ pub(super) unsafe extern "C" fn rsf_census_json_i64(
     let _ = write!(json, "{value}");
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_json_hex(
+pub(super) unsafe fn rsf_census_json_hex(
     json: &mut rsf_census_json,
     key: *const c_char,
     value: u64,
@@ -185,8 +222,7 @@ pub(super) unsafe extern "C" fn rsf_census_json_hex(
     let _ = write!(json, "\"0x{value:x}\"");
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_json_bytes(
+pub(super) unsafe fn rsf_census_json_bytes(
     json: &mut rsf_census_json,
     key: *const c_char,
     data: *const c_void,
@@ -205,8 +241,7 @@ pub(super) unsafe extern "C" fn rsf_census_json_bytes(
     json.put(b"\"");
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_census_json_raw(
+pub(super) unsafe fn rsf_census_json_raw(
     json: &mut rsf_census_json,
     key: *const c_char,
     value: *const c_char,

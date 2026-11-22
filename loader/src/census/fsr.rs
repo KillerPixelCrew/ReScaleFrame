@@ -4,18 +4,15 @@
 use super::decode::rsf_census_dxgi_format_name;
 use super::hooks::rsf_census_hook_original;
 use super::json::{
-    emit_decimal, rsf_census_json_bytes, rsf_census_json_close, rsf_census_json_hex,
-    rsf_census_json_i64, rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string,
-    rsf_census_json_u64, rsf_census_json_wide,
+    Json, emit_decimal, rsf_census_json_bytes, rsf_census_json_string, rsf_census_json_wide,
 };
 use super::platform;
 use super::rsf_census_call_state;
-use super::rsf_census_json;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
 use crate::sys::*;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::mem::{MaybeUninit, transmute};
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::sync::OnceLock;
 use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_DESC1};
 use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
@@ -95,35 +92,18 @@ fn pointed_word(address: u64) -> Option<u64> {
     read::<8>(address).map(u64::from_le_bytes)
 }
 
-struct Json<'a>(&'a mut rsf_census_json);
-impl Json<'_> {
-    fn open(&mut self, key: Option<&CStr>, delimiter: u8) {
-        unsafe {
-            rsf_census_json_open(
-                self.0,
-                key.map_or(null(), CStr::as_ptr),
-                delimiter as c_char,
-            )
-        };
-    }
-    fn close(&mut self, delimiter: u8) {
-        rsf_census_json_close(self.0, delimiter as c_char);
-    }
-    fn number(&mut self, key: &CStr, value: impl Into<u64>) {
-        unsafe { rsf_census_json_u64(self.0, key.as_ptr(), value.into()) };
-    }
-    fn signed(&mut self, key: &CStr, value: i32) {
-        unsafe { rsf_census_json_i64(self.0, key.as_ptr(), value.into()) };
-    }
-    fn hex(&mut self, key: Option<&CStr>, value: u64) {
-        unsafe { rsf_census_json_hex(self.0, key.map_or(null(), CStr::as_ptr), value) };
-    }
-    fn text(&mut self, key: Option<&CStr>, value: &CStr) {
-        unsafe { rsf_census_json_string(self.0, key.map_or(null(), CStr::as_ptr), value.as_ptr()) };
-    }
-    fn raw(&mut self, key: &CStr, value: &CStr) {
-        unsafe { rsf_census_json_raw(self.0, key.as_ptr(), value.as_ptr()) };
-    }
+trait FsrJson {
+    fn flag(&mut self, key: &CStr, on: bool);
+    fn decimal(&mut self, key: &CStr, value: f32);
+    fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]);
+    fn decimals(&mut self, data: &[u8], fields: &[(&CStr, usize)]);
+    fn ptr(&mut self, key: &CStr, address: u64);
+    fn output(&mut self, key: &CStr, address: u64);
+    fn resource(&mut self, key: &CStr, address: u64, require_slot: bool);
+    fn args(&mut self, args: &[u64]);
+}
+
+impl FsrJson for Json<'_> {
     fn flag(&mut self, key: &CStr, on: bool) {
         self.raw(key, if on { c"true" } else { c"false" });
     }

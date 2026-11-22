@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::hooks::{bind_named, rsf_census_hook_original};
-use super::json::{
-    rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_raw,
-    rsf_census_json_string, rsf_census_json_u64,
-};
+use super::json::Json;
 use super::platform;
 use super::rsf_census_call_state;
-use super::rsf_census_json;
 use super::session::{rsf_census_active, rsf_census_call_begin, rsf_census_call_finish};
 use super::stats::{
     rsf_census_present_enter, rsf_census_present_leave, rsf_census_stats_queue_describe,
@@ -94,51 +90,11 @@ impl<'a> Call<'a> {
     }
 }
 
-struct Json<'a>(&'a mut rsf_census_json);
+trait VulkanJson {
+    fn output(&mut self, key: &CStr, out: Info);
+}
 
-impl Json<'_> {
-    fn open(&mut self, key: Option<&CStr>, delimiter: u8) {
-        unsafe {
-            rsf_census_json_open(
-                self.0,
-                key.map_or(std::ptr::null(), CStr::as_ptr),
-                delimiter as c_char,
-            )
-        };
-    }
-
-    fn close(&mut self, delimiter: u8) {
-        rsf_census_json_close(self.0, delimiter as c_char);
-    }
-
-    fn number(&mut self, key: Option<&CStr>, value: u32) {
-        unsafe {
-            rsf_census_json_u64(
-                self.0,
-                key.map_or(std::ptr::null(), CStr::as_ptr),
-                value.into(),
-            )
-        };
-    }
-
-    fn hex(&mut self, key: Option<&CStr>, value: u64) {
-        unsafe { rsf_census_json_hex(self.0, key.map_or(std::ptr::null(), CStr::as_ptr), value) };
-    }
-
-    fn text(&mut self, key: Option<&CStr>, value: &CStr) {
-        unsafe {
-            rsf_census_json_string(
-                self.0,
-                key.map_or(std::ptr::null(), CStr::as_ptr),
-                value.as_ptr(),
-            )
-        };
-    }
-
-    fn raw(&mut self, key: &CStr, value: &CStr) {
-        unsafe { rsf_census_json_raw(self.0, key.as_ptr(), value.as_ptr()) };
-    }
-
+impl VulkanJson for Json<'_> {
     fn output(&mut self, key: &CStr, out: Info) {
         if let Some(bytes) = read::<8>(out, 0) {
             self.hex(Some(key), u64::from_le_bytes(bytes));

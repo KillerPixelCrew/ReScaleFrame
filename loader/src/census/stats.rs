@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: MIT
-use super::json::{
-    rsf_census_json_close, rsf_census_json_hex, rsf_census_json_i64, rsf_census_json_open,
-    rsf_census_json_string, rsf_census_json_u64,
-};
+use super::json::{Json, rsf_census_json_string};
 use super::rsf_census_json;
 use super::rsf_census_sample;
 use crate::sys::rsf_census_hook_desc;
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::io::Write;
-use std::ptr::null;
 use std::sync::{
     OnceLock,
     atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering::*},
@@ -320,30 +316,11 @@ pub(super) fn rsf_census_stats_queue_submit(kind: u8, address: *const c_void, li
     first
 }
 
-struct Json<'a>(&'a mut rsf_census_json);
+trait StatsJson {
+    unsafe fn raw_text(&mut self, key: &CStr, text: *const c_char);
+}
 
-impl Json<'_> {
-    fn open(&mut self, key: Option<&CStr>, delimiter: u8) {
-        unsafe {
-            rsf_census_json_open(
-                self.0,
-                key.map_or(null(), CStr::as_ptr),
-                delimiter as c_char,
-            )
-        };
-    }
-    fn close(&mut self, delimiter: u8) {
-        rsf_census_json_close(self.0, delimiter as c_char);
-    }
-    fn number(&mut self, key: Option<&CStr>, value: u64) {
-        unsafe { rsf_census_json_u64(self.0, key.map_or(null(), CStr::as_ptr), value) };
-    }
-    fn signed(&mut self, key: &CStr, value: i64) {
-        unsafe { rsf_census_json_i64(self.0, key.as_ptr(), value) };
-    }
-    fn hex(&mut self, key: &CStr, value: u64) {
-        unsafe { rsf_census_json_hex(self.0, key.as_ptr(), value) };
-    }
+impl StatsJson for Json<'_> {
     unsafe fn raw_text(&mut self, key: &CStr, text: *const c_char) {
         unsafe { rsf_census_json_string(self.0, key.as_ptr(), text) };
     }
@@ -381,7 +358,7 @@ pub(super) unsafe fn rsf_census_stats_sites(output: &mut rsf_census_json) {
         json.open(Some(c"threads"), b'[');
         let count = site.thread_count.load(Relaxed) as usize;
         for tid in site.threads.iter().take(count) {
-            json.number(None, tid.load(Relaxed).into());
+            json.number(None, tid.load(Relaxed));
         }
         json.close(b']');
         if count > SITE_THREADS {
@@ -438,12 +415,12 @@ pub(super) fn rsf_census_stats_queues(output: &mut rsf_census_json) {
             .each_ref()
             .map(|value| value.load(Relaxed));
         if d3d12 {
-            json.number(Some(c"type"), a.into());
-            json.signed(c"priority", (b as i32).into());
+            json.number(Some(c"type"), a);
+            json.signed(c"priority", b as i32);
             json.hex(c"flags", c.into());
         } else {
-            json.number(Some(c"family"), a.into());
-            json.number(Some(c"index"), b.into());
+            json.number(Some(c"family"), a);
+            json.number(Some(c"index"), b);
         }
         json.number(Some(c"submit_calls"), queue.calls.load(Relaxed));
         json.number(Some(c"lists_or_batches"), queue.lists.load(Relaxed));

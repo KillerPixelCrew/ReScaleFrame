@@ -4,10 +4,7 @@ use super::hooks::{
     rsf_census_hooks_summary,
 };
 use super::identity::*;
-use super::json::{
-    rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_raw,
-    rsf_census_json_string, rsf_census_json_u64,
-};
+use super::json::Json;
 use super::output::*;
 use super::record::*;
 use super::rsf_census_sample;
@@ -236,40 +233,12 @@ fn json_buffer(output: &mut [u8], reserve: usize) -> rsf_census_json {
     }
 }
 
-struct Json<'a>(&'a mut rsf_census_json);
-impl Json<'_> {
-    fn open(&mut self, key: Option<&CStr>, delimiter: u8) {
-        unsafe {
-            rsf_census_json_open(
-                self.0,
-                key.map_or(null(), CStr::as_ptr),
-                delimiter as c_char,
-            )
-        };
-    }
-    fn close(&mut self, delimiter: u8) {
-        rsf_census_json_close(self.0, delimiter as c_char);
-    }
-    fn number(&mut self, key: &CStr, value: u64) {
-        unsafe { rsf_census_json_u64(self.0, key.as_ptr(), value) };
-    }
-    fn hex(&mut self, key: &CStr, value: u64) {
-        unsafe { rsf_census_json_hex(self.0, key.as_ptr(), value) };
-    }
-    fn text(&mut self, key: &CStr, value: &CStr) {
-        unsafe { rsf_census_json_string(self.0, key.as_ptr(), value.as_ptr()) };
-    }
-    fn raw(&mut self, key: &CStr, value: &CStr) {
-        unsafe { rsf_census_json_raw(self.0, key.as_ptr(), value.as_ptr()) };
-    }
-}
-
 impl Writer {
     fn write_summary(&mut self, core: &Core) {
         let mut state = json_buffer(&mut self.summary, 16);
         let mut json = Json(&mut state);
         json.open(None, b'{');
-        json.number(c"census_abi", RSF_CENSUS_ABI_VERSION.into());
+        json.number(c"census_abi", RSF_CENSUS_ABI_VERSION);
         let exe = CStr::from_bytes_until_nul(&core.exe).unwrap_or(c"");
         let units = exe.to_bytes_with_nul();
         let leaf = units
@@ -280,7 +249,7 @@ impl Writer {
             c"process",
             CStr::from_bytes_with_nul(&units[leaf..]).unwrap_or(c""),
         );
-        json.number(c"pid", unsafe { GetCurrentProcessId() }.into());
+        json.number(c"pid", unsafe { GetCurrentProcessId() });
         json.number(c"elapsed_ms", core.now() / 1000);
         let (mut calls, mut present, mut sites, mut overflow) = (0, 0, 0, 0);
         rsf_census_stats_counts(&mut calls, &mut present, &mut sites, &mut overflow);
@@ -291,8 +260,8 @@ impl Writer {
         json.number(c"byte_budget", core.budget);
         json.number(c"bytes_written", bytes);
         json.raw(c"exhausted", if exhausted { c"true" } else { c"false" });
-        json.number(c"full_record_cap", core.cap.into());
-        json.number(c"sample_interval", core.interval.into());
+        json.number(c"full_record_cap", core.cap);
+        json.number(c"sample_interval", core.interval);
         json.close(b'}');
         json.open(Some(c"counters"), b'{');
         json.number(c"calls_seen", calls);
@@ -301,8 +270,8 @@ impl Writer {
         json.number(c"dropped_queue", DROPPED_QUEUE.load(Relaxed));
         json.number(c"dropped_budget", dropped);
         json.number(c"dropped_size", DROPPED_SIZE.load(Relaxed));
-        json.number(c"sites", sites.into());
-        json.number(c"site_overflow", overflow.into());
+        json.number(c"sites", sites);
+        json.number(c"site_overflow", overflow);
         json.close(b'}');
         unsafe {
             rsf_census_stats_sites(json.0);
@@ -353,13 +322,13 @@ fn write_start(core: &Core) {
     let mut json = Json(&mut state);
     json.open(None, b'{');
     json.text(c"type", c"census_start");
-    json.number(c"census_abi", RSF_CENSUS_ABI_VERSION.into());
-    json.number(c"pid", unsafe { GetCurrentProcessId() }.into());
+    json.number(c"census_abi", RSF_CENSUS_ABI_VERSION);
+    json.number(c"pid", unsafe { GetCurrentProcessId() });
     json.text(c"exe", CStr::from_bytes_until_nul(&core.exe).unwrap_or(c""));
     json.number(c"qpc_frequency", core.frequency as u64);
     json.number(c"byte_budget", core.budget);
-    json.number(c"full_record_cap", core.cap.into());
-    json.number(c"sample_interval", core.interval.into());
+    json.number(c"full_record_cap", core.cap);
+    json.number(c"sample_interval", core.interval);
     json.close(b'}');
     if !state.overflow {
         line[state.length] = b'\n';
@@ -562,7 +531,7 @@ unsafe extern "system" fn static_scan(_: *mut c_void) -> u32 {
         0,
         |json| {
             json.number(c"elapsed_ms", core.now().saturating_sub(started) / 1000);
-            json.number(c"findings", FINDING_COUNT.load(Relaxed).into());
+            json.number(c"findings", FINDING_COUNT.load(Relaxed));
         },
     );
     0

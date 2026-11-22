@@ -1,18 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::hooks::rsf_census_hook_original;
-use super::json::{
-    emit_decimal, rsf_census_json_close, rsf_census_json_hex, rsf_census_json_i64,
-    rsf_census_json_open, rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
-    rsf_census_json_wide,
-};
+use super::json::{Json, emit_decimal, rsf_census_json_i64, rsf_census_json_wide};
 use super::platform;
 use super::rsf_census_call_state;
-use super::rsf_census_json;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
 use crate::sys::RSF_CENSUS_NGX_ENTRIES;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::mem::{MaybeUninit, transmute};
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::sync::{
     OnceLock,
     atomic::{
@@ -145,33 +140,15 @@ fn number(params: u64, name: &CStr, prefer_float: bool) -> Option<f64> {
         .or_else(|| parameter::<f64>(params, 13, name))
 }
 
-struct Json<'a>(&'a mut rsf_census_json);
+trait NgxJson {
+    fn scalar(&mut self, params: u64, key: &CStr, prefer_float: bool);
+    fn string(&mut self, key: &CStr, address: u64);
+    fn path(&mut self, address: u64);
+    fn output(&mut self, key: &CStr, address: u64);
+    fn args(&mut self, args: &[u64]);
+}
 
-impl Json<'_> {
-    fn open(&mut self, key: Option<&CStr>, delimiter: u8) {
-        unsafe {
-            rsf_census_json_open(
-                self.0,
-                key.map_or(null(), CStr::as_ptr),
-                delimiter as c_char,
-            )
-        };
-    }
-    fn close(&mut self, delimiter: u8) {
-        rsf_census_json_close(self.0, delimiter as c_char);
-    }
-    fn integer(&mut self, key: &CStr, value: u32) {
-        unsafe { rsf_census_json_u64(self.0, key.as_ptr(), value.into()) };
-    }
-    fn hex(&mut self, key: Option<&CStr>, value: u64) {
-        unsafe { rsf_census_json_hex(self.0, key.map_or(null(), CStr::as_ptr), value) };
-    }
-    fn text(&mut self, key: Option<&CStr>, value: &CStr) {
-        unsafe { rsf_census_json_string(self.0, key.map_or(null(), CStr::as_ptr), value.as_ptr()) };
-    }
-    fn raw(&mut self, key: &CStr, value: &CStr) {
-        unsafe { rsf_census_json_raw(self.0, key.as_ptr(), value.as_ptr()) };
-    }
+impl NgxJson for Json<'_> {
     fn scalar(&mut self, params: u64, key: &CStr, prefer_float: bool) {
         if let Some(value) = number(params, key, prefer_float) {
             unsafe { emit_decimal(self.0, key.as_ptr(), value, platform().decimal.unwrap()) };
@@ -264,7 +241,7 @@ fn create(json: &mut Json<'_>, args: &[u64]) {
     let feature = args[1] as u32;
     let params = args[2];
     json.hex(Some(c"command_list_or_context"), args[0]);
-    json.integer(c"feature_id", feature);
+    json.number(c"feature_id", feature);
     json.text(Some(c"feature"), feature_name(feature));
     json.hex(Some(c"parameters"), params);
     if !plausible(params) {
@@ -314,7 +291,7 @@ fn vulkan_resource(json: &mut Json<'_>, key: &CStr, resource: u64) {
             (c"height", 44),
             (c"resource_type", 48),
         ] {
-            json.integer(
+            json.number(
                 field,
                 u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()),
             );
@@ -419,7 +396,7 @@ fn pre_decode(json: &mut Json<'_>, api: usize, operation: usize, args: &Args) {
         }
         2 | 3 => {
             json.string(c"project_id", args[0]);
-            json.integer(c"engine_type", args[1] as u32);
+            json.number(c"engine_type", args[1] as u32);
             json.string(c"engine_version", args[2]);
             json.path(args[3]);
             json.args(&args[..7]);

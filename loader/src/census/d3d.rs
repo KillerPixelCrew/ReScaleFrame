@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::decode::rsf_census_dxgi_format_name;
 use super::hooks::{rsf_census_hook_bind_inline, rsf_census_hook_original, rsf_census_hooks_apply};
-use super::json::{
-    rsf_census_json_close, rsf_census_json_hex, rsf_census_json_i64, rsf_census_json_open,
-    rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
-};
+use super::json::{Json, rsf_census_json_raw, rsf_census_json_string};
 use super::platform;
 use super::rsf_census_call_state;
-use super::rsf_census_json;
 use super::session::{
     rsf_census_active, rsf_census_call_begin, rsf_census_call_finish, rsf_census_flags,
 };
@@ -17,7 +13,7 @@ use super::stats::{
 };
 use crate::sys::RSF_CENSUS_FLAG_D3D12_DEBUG_ONLY;
 use crate::sys::*;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::io::Write;
 use std::marker::PhantomData;
 use std::mem::{MaybeUninit, transmute};
@@ -163,26 +159,15 @@ impl<'a> Call<'a> {
     }
 }
 
-struct Json<'a>(&'a mut rsf_census_json);
-impl Json<'_> {
-    fn open(&mut self, key: &CStr, delimiter: u8) {
-        unsafe { rsf_census_json_open(self.0, key.as_ptr(), delimiter as c_char) };
-    }
-    fn close(&mut self, delimiter: u8) {
-        rsf_census_json_close(self.0, delimiter as c_char);
-    }
-    fn number(&mut self, key: &CStr, value: u32) {
-        unsafe { rsf_census_json_u64(self.0, key.as_ptr(), value.into()) };
-    }
-    fn signed(&mut self, key: &CStr, value: i32) {
-        unsafe { rsf_census_json_i64(self.0, key.as_ptr(), value.into()) };
-    }
-    fn hex(&mut self, key: Option<&CStr>, value: u64) {
-        unsafe { rsf_census_json_hex(self.0, key.map_or(null(), CStr::as_ptr), value) };
-    }
-    fn text(&mut self, key: Option<&CStr>, value: &CStr) {
-        unsafe { rsf_census_json_string(self.0, key.map_or(null(), CStr::as_ptr), value.as_ptr()) };
-    }
+trait D3dJson {
+    fn flag(&mut self, key: &CStr, yes: bool);
+    fn ptr(&mut self, key: &CStr, pointer: Info);
+    fn fmt_code(&mut self, format: u32);
+    fn output(&mut self, key: &CStr, out: *mut Ptr);
+    fn guid(&mut self, iid: *const GUID);
+}
+
+impl D3dJson for Json<'_> {
     fn flag(&mut self, key: &CStr, yes: bool) {
         unsafe {
             rsf_census_json_raw(
