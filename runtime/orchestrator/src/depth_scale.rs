@@ -75,7 +75,7 @@ struct DepthScale {
     platform: &'static Platform,
 }
 
-fn rect_valid(rect: &[i32; 4], [width, height]: [u32; 2]) -> bool {
+pub(super) fn rect_valid(rect: &[i32; 4], [width, height]: [u32; 2]) -> bool {
     rect[0] >= 0
         && rect[1] >= 0
         && rect[2] > rect[0]
@@ -84,7 +84,7 @@ fn rect_valid(rect: &[i32; 4], [width, height]: [u32; 2]) -> bool {
         && rect[3] as u32 <= height
 }
 
-fn jitter_valid(jitter: [f32; 2]) -> bool {
+pub(super) fn jitter_valid(jitter: [f32; 2]) -> bool {
     jitter
         .into_iter()
         .all(|value| value.is_finite() && value.abs() <= JITTER_LIMIT)
@@ -141,17 +141,14 @@ impl DepthScale {
         let mut raw = [null_mut(); 5];
         let made =
             unsafe { (self.platform.surfaces)(self.device.as_ptr(), texture, &mut raw) } != 0;
-        let surfaces = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
+        let surfaces = unsafe { ComRef::adopt_all(raw) };
         if !made {
             return false;
         }
-        let [Some(a), Some(b), Some(c), Some(d), Some(e)] = surfaces else {
+        let Some(surfaces) = surfaces else {
             return false;
         };
-        transaction.reserved = Some(Reserved {
-            surfaces: [a, b, c, d, e],
-            size,
-        });
+        transaction.reserved = Some(Reserved { surfaces, size });
         true
     }
 
@@ -316,18 +313,18 @@ unsafe extern "C" fn rsf_core_depth_scale_create(
             &mut raw,
         )
     };
-    let resources = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
+    let resources = unsafe { ComRef::adopt_all(raw) };
     if status != OK {
         return RESOURCE_FAILED;
     }
-    if resources.iter().any(Option::is_none) {
+    let Some(resources) = resources else {
         return RESOURCE_FAILED;
-    }
+    };
     let scale = crate::allocate_handle(DepthScale {
         thread: unsafe { GetCurrentThreadId() },
         context: unsafe { ComRef::retain(context) },
         device,
-        pipeline: resources.map(Option::unwrap),
+        pipeline: resources,
         transaction: RefCell::default(),
         platform,
     });

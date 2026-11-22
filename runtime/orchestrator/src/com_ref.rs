@@ -19,6 +19,15 @@ impl ComRef {
         NonNull::new(object).map(Self)
     }
 
+    // Every non-null slot transfers one reference, including partial results.
+    pub(super) unsafe fn adopt_all<const N: usize>(objects: [*mut c_void; N]) -> Option<[Self; N]> {
+        let resources = objects.map(|object| unsafe { Self::from_owned(object) });
+        if resources.iter().any(Option::is_none) {
+            return None;
+        }
+        Some(resources.map(Option::unwrap))
+    }
+
     pub(super) fn as_ptr(&self) -> *mut c_void {
         self.0.as_ptr()
     }
@@ -133,5 +142,21 @@ pub(crate) mod test {
 
     pub(crate) fn raw(object: &Fake) -> *mut c_void {
         ptr::from_ref(object).cast_mut().cast()
+    }
+
+    #[test]
+    fn partial_adoption_releases_every_returned_reference() {
+        use super::ComRef;
+        let (first, last) = (fake(), fake());
+        let result = unsafe {
+            ComRef::adopt_all([
+                ComRef::retain(raw(&first)).into_raw(),
+                ptr::null_mut(),
+                ComRef::retain(raw(&last)).into_raw(),
+            ])
+        };
+        assert!(result.is_none());
+        assert_eq!(first.refs.get(), 1);
+        assert_eq!(last.refs.get(), 1);
     }
 }

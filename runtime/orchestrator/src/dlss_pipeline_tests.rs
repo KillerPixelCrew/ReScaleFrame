@@ -1343,3 +1343,15 @@ fn production_motion_scale_reconstructs_the_previous_feature_location() {
     }
     assert_eq!(dlss_motion_scale(0.5, false, false), 0.5);
 }
+
+#[test]
+fn dlss_motion_scale_reaches_the_previous_feature_location() {
+    for (current, previous) in [(0.4_f32, 0.5_f32), (0.3, 0.7)] {
+        let native = previous - current;
+        let direct = current + native * dlss_motion_scale(-1.0, true, false);
+        let dense = current + native * 1000.0 * dlss_motion_scale(0.001, true, true);
+        assert!((direct - previous).abs() < 1e-6);
+        assert!((dense - previous).abs() < 1e-6);
+    }
+    assert_eq!(dlss_motion_scale(0.5, false, false), 0.5);
+}

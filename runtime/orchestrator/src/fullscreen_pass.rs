@@ -192,36 +192,15 @@ unsafe fn create(
     unsafe { out.write(null_mut()) };
     let mut raw = [null_mut(); 9];
     let status = unsafe { (platform.make)(device, setup, size_of::<Constants>() as u32, &mut raw) };
-    let resources = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
+    let resources = unsafe { ComRef::adopt_all(raw) };
     if status != OK {
         return status;
     }
-    let [
-        Some(vs),
-        Some(ps),
-        Some(point),
-        Some(linear),
-        Some(opaque),
-        Some(premultiplied),
-        Some(depth),
-        Some(raster),
-        Some(constants),
-    ] = resources
-    else {
+    let Some(resources) = resources else {
         return RESOURCE_FAILED;
     };
     let pass = crate::allocate_handle(Pass {
-        resources: [
-            vs,
-            ps,
-            point,
-            linear,
-            opaque,
-            premultiplied,
-            depth,
-            raster,
-            constants,
-        ],
+        resources,
         device: unsafe { ComRef::retain(device) },
         filter: AtomicU32::new(filter),
         drawing: Mutex::new(()),

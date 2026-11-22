@@ -2,6 +2,7 @@
 use crate::auxiliary_sr_abi::*;
 use crate::com_ref::ComRef;
 use crate::d3d11_output::SavedBindings;
+use crate::depth_scale::{jitter_valid, rect_valid};
 use rsf_game_sys::d3d11_host_abi::rsf_d3d11_auxiliary_surface;
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::c_void;
@@ -103,13 +104,7 @@ impl Mapping {
     }
 
     fn output_fits(&self, key: TextureKey) -> bool {
-        let [left, top, right, bottom] = self.output;
-        left >= 0
-            && top >= 0
-            && right > left
-            && bottom > top
-            && right as u32 <= key.width
-            && bottom as u32 <= key.height
+        rect_valid(&self.output, [key.width, key.height])
     }
 
     fn integral(&self) -> bool {
@@ -117,9 +112,7 @@ impl Mapping {
     }
 
     fn jitter_valid(&self) -> bool {
-        self.jitter
-            .into_iter()
-            .all(|value| (-16384.0..=16384.0).contains(&value))
+        jitter_valid(self.jitter)
     }
 
     fn colour_constants(&self) -> rsf_aux_draw_constants {

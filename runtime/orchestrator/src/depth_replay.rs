@@ -298,15 +298,15 @@ unsafe extern "C" fn rsf_core_depth_replay_create(
     }
     let mut raw = [null_mut(); 3];
     let made = unsafe { (platform.make)(device, width, height, &mut raw) } != 0;
-    let resources = raw.map(|handle| unsafe { ComRef::from_owned(handle) });
-    let [Some(texture), Some(view), Some(write)] = resources else {
-        return null_mut();
-    };
+    let resources = unsafe { ComRef::adopt_all(raw) };
     if !made {
         return null_mut();
     }
+    let Some(resources) = resources else {
+        return null_mut();
+    };
     crate::allocate_handle(DepthReplay {
-        resources: [texture, view, write],
+        resources,
         width,
         height,
         frame: Mutex::default(),
