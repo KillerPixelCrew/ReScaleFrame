@@ -31,8 +31,10 @@ generate("sdk/game/src/d3d11_reduced_abi.rs", "runtime/orchestrator/include/resc
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
-          "--raw-line", "use crate::rsf_game_render_pass;",
-          "--raw-line", "pub use crate::d3d11_host_abi::{rsf_d3d11_auxiliary_surface, RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS};"])
+          "--raw-line", "pub use crate::d3d11_host_abi::{\n"
+          "    RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL,\n"
+          "    RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, rsf_d3d11_auxiliary_surface,\n};",
+          "--raw-line", "use crate::rsf_game_render_pass;"])
 generate("loader/src/diagnostics/frame_capture_abi.rs", "loader/diagnostics/src/frame_capture_platform.h",
          "rsf_capture_(result|calls|connect)", "NOTHING", ["-Iloader/diagnostics/include"])
 generate("loader/src/diagnostics/memory_abi.rs", "loader/diagnostics/src/module_dump_memory.h",
@@ -49,9 +51,9 @@ generate("tests/presentation/api/src/abi.rs",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include", "-Iruntime/contract/include"],
          ["--no-recursive-allowlist",
-          "--raw-line", "use crate::{rsf_backend_log_fn, rsf_generation_provider, rsf_latency_marker, "
-                        "rsf_observer_present_event_fn, rsf_observer_present_fn, rsf_result, "
-                        "rsf_streamline_graphics, rsf_streamline_host};"])
+          "--raw-line", "use crate::{\n"
+          "    rsf_backend_log_fn, rsf_generation_provider, rsf_latency_marker, rsf_observer_present_event_fn,\n"
+          "    rsf_observer_present_fn, rsf_result, rsf_streamline_graphics, rsf_streamline_host,\n};"])
 generate("tests/presentation/src/shared_surface_abi.rs",
          "runtime/presentation/include/rescaleframe/shared_surface.h",
          "rsf_shared_.*", "RSF_SHARED_SURFACE_ABI_VERSION", [],
@@ -216,8 +218,8 @@ generate("games/ac7/src/sites_abi.rs", "games/ac7/src/ac7_sites.h",
          "RELAY_BYTES)",
          ["-Isdk/game/include", "-Igames/ac7/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "use crate::platform_abi::{rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, "
-          "rsf_ac7_renderer_log_fn};"])
+          "--raw-line", "use crate::platform_abi::{\n"
+          "    rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_renderer_log_fn,\n};"])
 generate("games/ac7/src/scope_abi.rs", "games/ac7/src/ac7_scope_owner.h",
          "rsf_ac7_scope_(lease|calls)", "NOTHING",
          ["-Isdk/game/include", "-Igames/ac7/include"],
@@ -365,11 +367,12 @@ generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/packa
           "-Isdk/game/include", "-Igames/unity-mono/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "type wchar_t = u16;",
-          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services, "
-          "rsf_game_render_config_fn, rsf_game_render_pass, rsf_game_render_pass_fn};",
           "--raw-line", "use crate::plugin_abi::rsf_unity_native_api;",
           "--raw-line", "use crate::runtime_abi::rsf_fg12_setup;",
           "--raw-line", "pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
+          "--raw-line", "use rsf_game_sys::{\n"
+          "    rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config_fn, rsf_game_render_pass,\n"
+          "    rsf_game_render_pass_fn,\n};",
           "--with-derive-custom-struct", "rsf_unity_package_platform=Copy,Clone"])
 generate("tests/engine_sharpening_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(godot_settings|unity_package_settings|srvk_(frame|image))",
@@ -441,9 +444,9 @@ generate("runtime/orchestrator/src/vulkan_fsr4_sr_abi.rs", "runtime/orchestrator
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",
           "--raw-line", "use super::bridge_abi::{rsf_fsr4_bridge_create, rsf_fsr4_bridge_frame, rsf_fsr4_bridge_info};",
-          "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_barrier;",
           "--raw-line", "use crate::dx12_vulkan_interop_abi::rsf_dx12vk_platform;",
           "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
+          "--raw-line", "use crate::vulkan_fg_resources_abi::rsf_vkfg_barrier;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_fsr4vk_handoff, rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;",
           "--raw-line", "type rsf_fsr4_bridge = ::core::ffi::c_void;"])
@@ -486,7 +489,9 @@ generate("tests/game-sdk/src/cpu_calls.rs", "runtime/orchestrator/include/rescal
          "NOTHING", "NOTHING", ["-Iruntime/orchestrator/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",
           "--allowlist-function", "rsf_native_(cpu_(event|dispatch|read|release|release_session|marker|ping_message|counters_get|rendered_source_set|reservation_read|reservation_counters_get|present_result)|input_receipts_get)",
-          "--raw-line", "use crate::cpu_abi::{rsf_native_cpu_counters, rsf_native_cpu_frame, rsf_native_input_receipts, rsf_native_cpu_reservation, rsf_native_cpu_reservation_counters};",
+          "--raw-line", "use crate::cpu_abi::{\n"
+          "    rsf_native_cpu_counters, rsf_native_cpu_frame, rsf_native_cpu_reservation,\n"
+          "    rsf_native_cpu_reservation_counters, rsf_native_input_receipts,\n};",
           "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_cpu_event_fn};"])
 generate("runtime/orchestrator/src/scene_abi.rs", "runtime/orchestrator/include/rescaleframe/native_window.h",
          "rsf_(native_present_record|observer_present_event|native_scene_identity)",
@@ -548,9 +553,10 @@ generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/s
           "--blocklist-type", "rsf_d3d11_auxiliary_surface",
           "--blocklist-type", "rsf_d3d11_state",
           "--raw-line", "use crate::d3d11_output_abi::rsf_d3d11_state;",
+          "--raw-line", "pub use rsf_game_sys::d3d11_reduced_abi::{\n"
+          "    RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL,\n"
+          "    RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, rsf_d3d11_auxiliary_surface,\n};",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;",
-          "--raw-line", "pub use rsf_game_sys::d3d11_reduced_abi::{rsf_d3d11_auxiliary_surface, "
-          "RSF_D3D11_AUXILIARY_DEPTH_STENCIL, RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS};",
           "--with-derive-default"])
 generate("runtime/orchestrator/src/graphics_pass_abi.rs", "runtime/graphics/include/rescaleframe/fullscreen_pass.h",
          "rsf_(fullscreen_(setup|draw)|present_blit_setup|motion_decode_setup|depth_replay_detail)",
@@ -608,11 +614,15 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "#[path = \"../../../ui/overlay/src/wire.rs\"]",
           "--raw-line", "mod overlay_wire;",
-          "--raw-line", "pub use overlay_wire::{RSF_OVERLAY_FRAME_LIMIT_VRR, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK, RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,\n"
-                        "    RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,\n"
-                        "    rsf_overlay_host_option, rsf_overlay_intent, rsf_overlay_stats};",
+          "--raw-line", "pub use overlay_wire::{\n"
+                        "    RSF_OVERLAY_FRAME_LIMIT_VRR, RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING,\n"
+                        "    RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,\n"
+                        "    RSF_OVERLAY_SR_QUALITY_STANDARD_MASK, rsf_overlay_host_option, rsf_overlay_intent,\n"
+                        "    rsf_overlay_stats,\n};",
           "--raw-line", "impl Default for rsf_overlay_intent {\n"
-                        "    fn default() -> Self { unsafe { std::mem::zeroed() } }\n"
+                        "    fn default() -> Self {\n"
+                        "        unsafe { std::mem::zeroed() }\n"
+                        "    }\n"
                         "}",
           "--raw-line", "use crate::cpu_abi::rsf_native_cpu_counters;",
           "--raw-line", "use crate::render_abi::{\n"

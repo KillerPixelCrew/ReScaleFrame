@@ -1159,4 +1159,3 @@ const _: () = {
     ["Offset of field: rsf_frame_tap_platform::override_constants"]
         [::core::mem::offset_of!(rsf_frame_tap_platform, override_constants) - 248usize];
 };
-pub type rsf_frame_tap_platform_ref = *const rsf_frame_tap_platform;

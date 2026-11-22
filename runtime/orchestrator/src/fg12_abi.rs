@@ -250,25 +250,6 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct rsf_fg12_texture_desc {
-    pub width: u64,
-    pub height: u32,
-    pub format: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_fg12_texture_desc"][::core::mem::size_of::<rsf_fg12_texture_desc>() - 16usize];
-    ["Alignment of rsf_fg12_texture_desc"]
-        [::core::mem::align_of::<rsf_fg12_texture_desc>() - 8usize];
-    ["Offset of field: rsf_fg12_texture_desc::width"]
-        [::core::mem::offset_of!(rsf_fg12_texture_desc, width) - 0usize];
-    ["Offset of field: rsf_fg12_texture_desc::height"]
-        [::core::mem::offset_of!(rsf_fg12_texture_desc, height) - 8usize];
-    ["Offset of field: rsf_fg12_texture_desc::format"]
-        [::core::mem::offset_of!(rsf_fg12_texture_desc, format) - 12usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
 pub struct rsf_fg12_readback_layout {
     pub bytes: u64,
     pub offset: u64,
@@ -295,6 +276,25 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fg12_readback_layout, format) - 24usize];
     ["Offset of field: rsf_fg12_readback_layout::row_pitch"]
         [::core::mem::offset_of!(rsf_fg12_readback_layout, row_pitch) - 28usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg12_texture_desc {
+    pub width: u64,
+    pub height: u32,
+    pub format: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg12_texture_desc"][::core::mem::size_of::<rsf_fg12_texture_desc>() - 16usize];
+    ["Alignment of rsf_fg12_texture_desc"]
+        [::core::mem::align_of::<rsf_fg12_texture_desc>() - 8usize];
+    ["Offset of field: rsf_fg12_texture_desc::width"]
+        [::core::mem::offset_of!(rsf_fg12_texture_desc, width) - 0usize];
+    ["Offset of field: rsf_fg12_texture_desc::height"]
+        [::core::mem::offset_of!(rsf_fg12_texture_desc, height) - 8usize];
+    ["Offset of field: rsf_fg12_texture_desc::format"]
+        [::core::mem::offset_of!(rsf_fg12_texture_desc, format) - 12usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
