@@ -314,6 +314,39 @@ pub(crate) struct RuntimeVariant {
     pub(crate) outcome: u8,
 }
 
+pub(super) fn admit_runtime_variant<'a>(
+    input: &Request,
+    stage: u8,
+    status: i32,
+    cache_hit: bool,
+    variant: impl FnOnce() -> &'a [u8],
+    mut reflect: impl FnMut(&[u8]) -> Option<Snapshot>,
+) -> Result<RuntimeVariant, Outcome> {
+    if let Some(outcome) = runtime_refusal(status) {
+        return Err(outcome);
+    }
+    let stock = reflect(unsafe { input.bytecode.as_slice() }).ok_or(Outcome::ReflectionMismatch)?;
+    let code = variant();
+    if code.is_empty() {
+        return Err(Outcome::ReflectionMismatch);
+    }
+    let reflection = reflect(code).ok_or(Outcome::ReflectionMismatch)?;
+    if rsf_anomaly_shader_compatible(stage, stock.view(), reflection.view()) != Compatibility::Ok {
+        return Err(Outcome::ReflectionMismatch);
+    }
+    Ok(RuntimeVariant {
+        stock,
+        reflection,
+        bytecode: code.to_vec(),
+        skin: unsafe { rsf_anomaly_shader_skin_mode(input.defines) },
+        outcome: if cache_hit {
+            Outcome::ReplacedFromCache as u8
+        } else {
+            Outcome::Replaced as u8
+        },
+    })
+}
+
 impl RuntimePack {
     pub(crate) fn constant_ops(&self) -> ConstantOps {
         self.constant_ops
@@ -356,37 +389,24 @@ impl RuntimePack {
             let detail = CStr::from_bytes_until_nul(&detail).map_or(&detail[..], CStr::to_bytes);
             (outcome as u8, String::from_utf8_lossy(detail).into_owned())
         };
-        if let Some(outcome) = runtime_refusal(status) {
-            return Err(refusal(outcome));
-        }
-        let incompatible = || refusal(Outcome::ReflectionMismatch);
         let reflector = self.modules.reflect();
-        let stock =
-            reflect(reflector, unsafe { input.bytecode.as_slice() }).ok_or_else(incompatible)?;
-        let code = if output.bytecode.data.is_null() || output.bytecode.size == 0 {
-            return Err(incompatible());
-        } else {
-            // The session owns the bytes until its next prepare or close. Copy the
-            // result here before any other session operation can reuse that storage.
-            unsafe { std::slice::from_raw_parts(output.bytecode.data.cast(), output.bytecode.size) }
-        };
-        let reflection = reflect(reflector, code).ok_or_else(incompatible)?;
-        if rsf_anomaly_shader_compatible(stage, stock.view(), reflection.view())
-            != Compatibility::Ok
-        {
-            return Err(incompatible());
-        }
-        Ok(RuntimeVariant {
-            stock,
-            reflection,
-            bytecode: code.to_vec(),
-            skin: unsafe { rsf_anomaly_shader_skin_mode(input.defines) },
-            outcome: if output.cache_hit != 0 {
-                Outcome::ReplacedFromCache as u8
-            } else {
-                Outcome::Replaced as u8
+        admit_runtime_variant(
+            input,
+            stage,
+            status,
+            output.cache_hit != 0,
+            || {
+                if output.bytecode.data.is_null() || output.bytecode.size == 0 {
+                    return &[];
+                }
+                // The session owns the bytes until its next prepare or close.
+                unsafe {
+                    std::slice::from_raw_parts(output.bytecode.data.cast(), output.bytecode.size)
+                }
             },
-        })
+            |code| reflect(reflector, code),
+        )
+        .map_err(refusal)
     }
 
     pub(crate) unsafe fn create(

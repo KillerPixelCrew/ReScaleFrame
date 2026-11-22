@@ -6,11 +6,15 @@
 
 #[cfg(all(windows, feature = "motion-device-fixture"))]
 mod device_fixture;
+#[cfg(all(windows, feature = "motion-binder-fixture"))]
+mod fixture;
 mod foliage;
 #[cfg(all(windows, feature = "motion-hooks-fixture"))]
 mod hook_fixture;
 #[cfg(windows)]
 mod stage;
+#[cfg(all(windows, feature = "motion-binder-fixture"))]
+pub(crate) use stage::abi::FoliageLayout;
 #[cfg(any(windows, test))]
 mod window;
 

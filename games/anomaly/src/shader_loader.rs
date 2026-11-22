@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 mod d3d;
 mod engine_include_abi;
+#[cfg(feature = "motion-binder-fixture")]
+mod fixture;
 mod frame;
 mod manifest;
 mod reflection;
@@ -11,6 +13,10 @@ pub(crate) use engine_include_abi::{
     rsf_anomaly_engine_include_ops as EngineIncludeOps,
     rsf_anomaly_engine_shader_profile as EngineShaderProfile,
 };
+#[cfg(feature = "motion-binder-fixture")]
+pub(crate) use fixture::SHADER_CONTRACT_CASES;
+#[cfg(feature = "motion-binder-fixture")]
+pub(crate) use frame::run_frame_fixture;
 pub(crate) use frame::{DecodedFrame, FrameLayout, Read, decode_frame};
 pub(crate) use manifest::{Entry, Manifest};
 use reflection::{Compatibility, rsf_anomaly_shader_compatible};
@@ -18,11 +24,10 @@ pub(crate) use reflection::{
     Reflection, Snapshot, rsf_anomaly_shader_linkable, rsf_anomaly_shader_tess_linkable,
 };
 pub(crate) use runtime_pack::RuntimePack;
-use std::ffi::{CStr, OsString, c_char, c_void};
+use std::ffi::{CStr, c_char};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::windows::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy)]
@@ -86,17 +91,7 @@ const _: () = {
     assert!(std::mem::offset_of!(Request, bytecode) == 72);
 };
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_sha256(bytes: Bytes, out: &mut [u8; 64]) -> bool {
-    let Some(hash) = sha256(unsafe { bytes.as_slice() }) else {
-        return false;
-    };
-    *out = hash;
-    true
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_match_request(
+unsafe fn rsf_anomaly_shader_match_request(
     manifest: Option<&Manifest>,
     source: Bytes,
     target: Bytes,
@@ -131,21 +126,7 @@ fn cache_key(request: &Request, id: &Identity) -> Option<[u8; 64]> {
     sha256(&key)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_cache_key(
-    request: &Request,
-    id: &Identity,
-    out: &mut [u8; 64],
-) -> bool {
-    let Some(hash) = cache_key(request, id) else {
-        return false;
-    };
-    *out = hash;
-    true
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_skin_mode(defines: Span<Define>) -> i32 {
+unsafe fn rsf_anomaly_shader_skin_mode(defines: Span<Define>) -> i32 {
     unsafe { defines.as_slice() }
         .iter()
         .fold(-2, |mode, define| match unsafe { define.name.as_slice() } {
@@ -197,74 +178,6 @@ extern "C" fn rsf_anomaly_shader_outcome_name(value: u8) -> *const c_char {
     outcome_label(value).as_ptr()
 }
 
-type Reflect = unsafe extern "C" fn(*mut c_void, bool, Bytes, *mut Reflection) -> bool;
-type Complete = unsafe extern "C" fn(*mut c_void, Outcome, Compatibility, i32, Bytes, Bytes);
-type Compile = unsafe extern "C" fn(*mut c_void, bool, Bytes, *mut Bytes) -> bool;
-
-#[repr(C)]
-struct Preparation {
-    user: *mut c_void,
-    reflect: Reflect,
-    complete: Complete,
-}
-
-impl Preparation {
-    fn reflect(&self, stock: bool, bytes: &[u8]) -> Option<Reflection> {
-        let mut view = std::mem::MaybeUninit::uninit();
-        unsafe {
-            (self.reflect)(self.user, stock, Bytes::from(bytes), view.as_mut_ptr())
-                .then(|| view.assume_init())
-        }
-    }
-
-    fn check(
-        &self,
-        stage: u8,
-        stock: &Reflection,
-        bytes: &[u8],
-    ) -> Result<(), (Compatibility, &'static [u8])> {
-        let variant = self
-            .reflect(false, bytes)
-            .ok_or((Compatibility::Ok, b"variant does not reflect".as_slice()))?;
-        let check = rsf_anomaly_shader_compatible(stage, stock, &variant);
-        if check == Compatibility::Ok {
-            Ok(())
-        } else {
-            Err((check, check.name()))
-        }
-    }
-}
-
-struct ResultSink<'a> {
-    host: &'a Preparation,
-    skin: i32,
-}
-
-impl ResultSink<'_> {
-    fn complete(
-        &self,
-        outcome: Outcome,
-        compatibility: Compatibility,
-        detail: &[u8],
-        variant: &[u8],
-    ) {
-        unsafe {
-            (self.host.complete)(
-                self.host.user,
-                outcome,
-                compatibility,
-                self.skin,
-                Bytes::from(detail),
-                Bytes::from(variant),
-            )
-        };
-    }
-
-    fn refuse(&self, outcome: Outcome, detail: &[u8]) {
-        self.complete(outcome, Compatibility::Ok, detail, &[]);
-    }
-}
-
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn write_cache(path: &Path, bytes: &[u8]) {
@@ -302,14 +215,6 @@ impl<R> TreeResult<R> {
             bytes: Vec::new(),
             detail: detail.as_ref().to_vec(),
         }
-    }
-
-    fn publish(self, host: &Preparation, request: &Request) {
-        ResultSink {
-            host,
-            skin: unsafe { rsf_anomaly_shader_skin_mode(request.defines) },
-        }
-        .complete(self.outcome, self.compatibility, &self.detail, &self.bytes);
     }
 }
 
@@ -406,70 +311,6 @@ fn prepare_tree<R>(
     };
     result.stock = Some(stock);
     result
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_prepare_tree(
-    request: &Request,
-    id: &Identity,
-    deployment: Span<u16>,
-    cache: Span<u16>,
-    host: &Preparation,
-    compile: Compile,
-) {
-    let deployment = PathBuf::from(OsString::from_wide(unsafe { deployment.as_slice() }));
-    let cache = unsafe { cache.as_slice() };
-    let cache = (!cache.is_empty()).then(|| PathBuf::from(OsString::from_wide(cache)));
-    prepare_tree(
-        request,
-        id,
-        &deployment,
-        cache.as_deref(),
-        |stock, code| host.reflect(stock, code),
-        |reflection| reflection,
-        |motion, code| {
-            let mut output = Bytes::from(&[][..]);
-            let ok = unsafe { compile(host.user, motion, Bytes::from(code), &mut output) };
-            let data = unsafe { output.as_slice() }.to_vec();
-            if ok { Ok(data) } else { Err(data) }
-        },
-    )
-    .publish(host, request);
-}
-
-// The generic Runtime v1 service owns the original DXBC proof and production cache.
-// Adapter authorization additionally requires its own stage reflection policy.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_finish_runtime(
-    request: &Request,
-    stage: u8,
-    status: i32,
-    cache_hit: bool,
-    variant: Bytes,
-    detail: Bytes,
-    host: &Preparation,
-) {
-    let sink = ResultSink {
-        host,
-        skin: unsafe { rsf_anomaly_shader_skin_mode(request.defines) },
-    };
-    let detail = unsafe { detail.as_slice() };
-    if let Some(outcome) = runtime_refusal(status) {
-        return sink.refuse(outcome, detail);
-    }
-    let Some(stock) = host.reflect(true, unsafe { request.bytecode.as_slice() }) else {
-        return sink.refuse(Outcome::ReflectionMismatch, detail);
-    };
-    let variant = unsafe { variant.as_slice() };
-    if let Err((compatibility, _)) = host.check(stage, &stock, variant) {
-        return sink.complete(Outcome::ReflectionMismatch, compatibility, detail, &[]);
-    }
-    let outcome = if cache_hit {
-        Outcome::ReplacedFromCache
-    } else {
-        Outcome::Replaced
-    };
-    sink.complete(outcome, Compatibility::Ok, detail, variant);
 }
 
 fn runtime_refusal(status: i32) -> Option<Outcome> {

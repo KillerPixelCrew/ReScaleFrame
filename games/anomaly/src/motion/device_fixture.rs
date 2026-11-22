@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Hardware admission for the deployed far-motion and tessellation fixtures.
+//! Device admission and scenario scheduling for the deployed motion fixtures.
+mod foliage;
+mod model;
+mod schedule;
 use std::ffi::c_void;
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_DRIVER_TYPE_WARP,

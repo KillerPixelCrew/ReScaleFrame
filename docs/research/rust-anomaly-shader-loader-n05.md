@@ -116,3 +116,28 @@ hook fixture remain in `motion_profile.h`, `motion_stage.cpp/.h`,
 Source checks covered this diff, bindgen 0.72.1, pinned Rust 1.94.1 formatting,
 locked offline Windows metadata and Git whitespace. Build, fixture execution,
 lint and device or game acceptance remain open.
+
+## CPU fixture and device scheduling port from b5a7434c
+
+| Path | Source evidence |
+| --- | --- |
+| `tests/anomaly_motion_contract.cpp` | Retired. The 23 existing case names now dispatch from `motion/fixture.rs` and `shader_loader/fixture.rs`. The native `tests/anomaly_motion_contract_main.cpp` only passes the selection and the Standard/AVX layouts from `shader_frame_layout.h`. CTest still invokes the full contract and the unknown-case refusal. |
+| `games/anomaly/src/motion_history.h`, `motion_policy.h`, and `motion_foliage.cpp/.h` | Retired. Rust fixtures call the production motion history, foliage identity/remapping, policy and b13 packers. They retain moving SKIN_0/SKIN_2 vectors, previous camera and instance retirement, detail reordering and conflicts, reflected foliage layouts, and packed-byte checks against the published shader layouts. |
+| `games/anomaly/src/shader_loader.cpp/.h`, `shader_loader_platform.h` | Removed the native mock compiler and reflector ladder and descriptor projection. The typed Rust CPU cases check manifest admission and rollback, fresh and cached tree compilation, stock-bytecode refusal, reflection compatibility and full tessellation linkage. The device fixture holds opaque Rust snapshots. The native loader boundary still supplies Windows file opening and projects the result bytes and manifest rows for the native scenes. |
+| `games/anomaly/src/shader_loader/runtime_pack.rs` | The fixture and live loader now call the same typed Runtime variant admission. The check order remains Runtime status, stock reflection, nonempty variant, variant reflection, compatibility and byte copy. The session owner, engine include SEH calls, source proof and pack reload transaction retain their existing boundaries. |
+| `tests/anomaly_motion_device.cpp` | Rust schedules root proof, foliage layout review, core draw, tree draw and detail draw in the existing order. Rust checks the foliage layout and remaps and packs both grass-history scenarios. D3D11 draw, readback, per-pixel comparisons and the replay unwind scope remain native. |
+| `tests/anomaly_motion_far_device.cpp`, `tests/anomaly_motion_tess_chain_device.cpp` | Rust schedules 41 far-character pairs, the seven default tessellation cases and the two opt-in HM cases, including the create-only probe and diagnostic continuation. It decides and packs the prior bone/world, viewport and domain constants and uploads them to the Rust device owner. Native scene code still creates shaders, binds geometry, draws and compares GPU outputs. The raw-DXBC probe and driver crash reporting also remain native. |
+
+`motion_bridge.cpp` and `motion_constants.h` retain the packing and matrix
+calls used by the native device scenes and the existing SR jitter fixture.
+The native game hook and its fixture still own the verified engine ABI and
+unwind scopes. The shipping game SDK, live SR and startup paths, profile
+data, shader files and embedded fixture shader strings were unchanged in
+the source diff.
+
+The source comparison matched all 23 CPU names, nine far pair templates
+and nine tessellation labels against `b5a7434c`. MSVC x64 syntax-only
+checking with the repository's warning flags passed for the changed native
+fixture units. Bindgen 0.72.1 reproduced the schedule ABI after pinned
+Rust 1.94.1 formatting. Locked offline Windows metadata resolved both
+fixture features. Build, linking, lint, fixture and device execution remain open.

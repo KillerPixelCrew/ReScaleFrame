@@ -320,7 +320,7 @@ impl FoliageLayout {
     // m_xform consts wave wind, detail consts wave dir2D array. The compiler may remove consts, wave
     // and wind (USE_TREEWAVE zeroes the sway, the still detail route has no wave set); a removed one
     // is absent and its history words stay zero.
-    fn from_stock(family: u8, stock: &Reflection) -> Self {
+    pub(crate) fn from_stock(family: u8, stock: &Reflection) -> Self {
         let find = |name: &[u8]| ConstantRef::find(stock, name);
         let mut layout = Self {
             family,

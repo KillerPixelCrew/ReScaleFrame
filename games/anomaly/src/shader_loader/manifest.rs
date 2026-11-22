@@ -54,8 +54,8 @@ impl Entry {
         }
     }
 
-    #[cfg(test)]
-    fn motion(&self) -> &[u8] {
+    #[cfg(any(test, feature = "motion-binder-fixture"))]
+    pub(super) fn motion(&self) -> &[u8] {
         unsafe { self.motion.as_slice() }
     }
 }
@@ -189,7 +189,7 @@ impl<'a> Candidate<'a> {
     }
 }
 
-unsafe fn parse(text: &[u8]) -> Result<Manifest, String> {
+pub(super) fn parse(text: &[u8]) -> Result<Manifest, String> {
     let mut namespace: &[u8] = &[];
     let mut candidate = Candidate::default();
     let mut header = false;
@@ -296,21 +296,7 @@ fn publish(result: Result<Manifest, String>, refusal: &Refusal) -> *mut Manifest
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_shader_manifest(text: Bytes, refusal: &Refusal) -> *mut Manifest {
-    publish(unsafe { parse(text.as_slice()) }, refusal)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_shader_pack_manifest(
-    namespace: Bytes,
-    count: u32,
-    session: *const c_void,
-    read: ReadRoot,
-    refusal: &Refusal,
-) -> *mut Manifest {
-    publish(
-        unsafe { admit_pack(namespace.as_slice(), count, session, read) },
-        refusal,
-    )
+    publish(parse(unsafe { text.as_slice() }), refusal)
 }
 
 #[unsafe(no_mangle)]
@@ -369,7 +355,7 @@ mod tests {
     }
 
     fn parsed(text: &str) -> Result<Manifest, String> {
-        unsafe { parse(text.as_bytes()) }
+        parse(text.as_bytes())
     }
 
     #[test]

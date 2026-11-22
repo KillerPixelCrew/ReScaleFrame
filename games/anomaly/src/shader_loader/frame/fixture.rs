@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{FrameLayout, FrameStatus, decode_frame};
 use crate::shader_loader::rsf_anomaly_shader_skin_mode;
-use std::ffi::{CStr, c_char};
+use std::ffi::CStr;
 
 const IMAGE: usize = 0x1000_0000;
 const STACK: usize = 0x1000;
@@ -140,13 +140,10 @@ fn caller_frame(layout: &FrameLayout, other: &FrameLayout) -> Result<(), &'stati
     Ok(())
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_shader_frame_fixture(
+pub(crate) fn run_frame_fixture(
     standard: &FrameLayout,
     avx: &FrameLayout,
-) -> *const c_char {
-    caller_frame(standard, avx)
-        .and_then(|()| caller_frame(avx, standard))
-        .err()
-        .map_or(std::ptr::null(), CStr::as_ptr)
+) -> Result<(), &'static CStr> {
+    caller_frame(standard, avx)?;
+    caller_frame(avx, standard)
 }

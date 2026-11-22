@@ -84,15 +84,12 @@ set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection 
 # manifest, original-bytecode proof, reflection rules, disk cache) with fakes. The device fixture draws the real
 # deployed core variants (tools/anomaly_motion_deploy.py output, local only; 77 when absent) through the Rust
 # deployed-tree loader, b13 packers and invalidation replay. Neither runs game code.
-# The mixed fixtures still use C++ projections for their assertions.
-set(RSF_ANOMALY_MOTION_SOURCES "${RSF_ANOMALY_SR_SRC}/motion_foliage.cpp"
-    "${RSF_ANOMALY_SR_SRC}/shader_loader.cpp")
+# The device fixtures retain native draw and readback bodies. Rust schedules their cases.
+set(RSF_ANOMALY_MOTION_SOURCES "${RSF_ANOMALY_SR_SRC}/shader_loader.cpp")
 rsf_add_rust_static(rsf_anomaly_motion_binder_fixture_rust rsf_rust_anomaly_motion_binder_fixture
     rsf-anomaly rsf_anomaly --features motion-binder-fixture)
-add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract.cpp"
-    "${RSF_ANOMALY_SR_SRC}/motion_bridge.cpp" ${RSF_ANOMALY_MOTION_SOURCES})
+add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract_main.cpp")
 target_include_directories(rsf_anomaly_motion_contract_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_compile_definitions(rsf_anomaly_motion_contract_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE rsf_anomaly_motion_binder_fixture_rust
     bcrypt ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME anomaly_motion_contract COMMAND rsf_anomaly_motion_contract_test)

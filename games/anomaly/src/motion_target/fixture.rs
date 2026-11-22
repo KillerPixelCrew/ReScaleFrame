@@ -123,7 +123,7 @@ fn check(condition: bool, reason: &'static str) -> Result<(), &'static str> {
     if condition { Ok(()) } else { Err(reason) }
 }
 
-fn exercise() -> Result<(), &'static str> {
+pub(crate) fn run_binder_fixture() -> Result<(), &'static str> {
     let mut state = State::default();
     let mut host = Host::default();
     let mut engine = Backend::default();
@@ -267,13 +267,4 @@ fn exercise() -> Result<(), &'static str> {
             && new_context.clears == 0,
         "empty original slot permits retirement after a context change",
     )
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_binder_fixture() -> bool {
-    if let Err(error) = exercise() {
-        eprintln!("anomaly motion binder: {error}");
-        return false;
-    }
-    true
 }

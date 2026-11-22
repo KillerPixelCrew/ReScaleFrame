@@ -113,7 +113,7 @@ pub(super) struct Platform {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-pub(super) struct ConstantRef {
+pub(crate) struct ConstantRef {
     pub present: bool,
     pub buffer: u32,
     pub buffer_size: u32,
@@ -123,7 +123,7 @@ pub(super) struct ConstantRef {
 
 #[repr(C)]
 #[derive(Default)]
-pub(super) struct FoliageLayout {
+pub(crate) struct FoliageLayout {
     pub family: u8,
     pub xform: ConstantRef,
     pub consts: ConstantRef,

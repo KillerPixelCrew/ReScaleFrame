@@ -448,6 +448,9 @@ generate("games/anomaly/src/motion_target_abi.rs", "games/anomaly/src/motion_tar
 generate("games/anomaly/src/motion_device_abi.rs", "games/anomaly/src/motion_device_platform.h",
          "rsf_anomaly_motion_(device_(platform|view)|log)", "RSF_MOTION_.*", [],
          ["--with-derive-default"])
+generate("games/anomaly/src/motion/device_fixture/schedule_abi.rs", "games/anomaly/src/motion_fixture_platform.h",
+         "rsf_anomaly_motion_(far_case|tess_case|(core|far|tess)_case_fn)",
+         "RSF_ANOMALY_MOTION_.*", [])
 generate("games/anomaly/src/bootstrap_abi.rs", "games/anomaly/src/bootstrap_platform.h",
          "wchar_t|rsf_anomaly_(build_identity|bootstrap_platform)", "NOTHING", ["-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"])

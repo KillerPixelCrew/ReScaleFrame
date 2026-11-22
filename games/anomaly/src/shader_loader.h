@@ -13,7 +13,7 @@
 //   4. the runtime-patched tree is compiled with the same inputs;
 //   5. the variant's reflection must keep every stock resource and constant-buffer layout and the VS input
 //      signature, and may add only the b13 RSF buffer (VS, DS) or SV_Target2 (PS) and the RSF interpolants
-//      (compatible() below; hull and domain shaders of the tessellation pass included).
+//      (including the hull and domain shaders of the tessellation pass).
 // Any failure leaves only the stock shader (counted by reason). Verified variants are cached on disk under a key
 // over namespace, root, defines, target, entry, flags and the original bytecode hash; a cache entry is still
 // reflection-checked. Production uses the Runtime source-patch service and the engine includer.
@@ -23,7 +23,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -32,6 +31,8 @@
 #include <vector>
 
 struct rsf_anomaly_shader_admitted;
+struct rsf_anomaly_shader_snapshot;
+extern "C" void rsf_anomaly_shader_snapshot_drop(rsf_anomaly_shader_snapshot*) noexcept;
 struct rsf_anomaly_shader_d3d;
 extern "C" rsf_anomaly_shader_d3d* rsf_anomaly_shader_d3d_load(const uint16_t*) noexcept;
 extern "C" void rsf_anomaly_shader_d3d_unload(rsf_anomaly_shader_d3d*) noexcept;
@@ -46,11 +47,6 @@ enum class Family : std::uint8_t {
     None = 0, CoreStatic = 1, CoreModel = 2, CorePixel = 3, FoliageTree = 4,
     FoliageDetail = 5, TessHull = 6, TessDomain = 7, Count = 8
 };
-const char* family_name(Family) noexcept;
-bool family_is_vertex(Family) noexcept;
-// 'v', 'p', 'h' or 'd' (the first letter of the engine's compile target); 0 for None.
-char family_stage(Family) noexcept;
-
 // Borrowed manifest text, not NUL-terminated.
 struct ManifestText {
     const char* data;
@@ -88,8 +84,6 @@ private:
     std::span<const ManifestEntry> entries_;
 };
 
-std::string sha256_hex(std::span<const std::byte>);
-
 struct Define {
     std::string name, value;
     bool operator==(const Define&) const = default;
@@ -104,57 +98,14 @@ struct ShaderRequest {
     std::span<const std::byte> bytecode;  // what the engine just created (borrowed)
     std::string file_name;              // engine cache/object path, diagnostics only
 };
-// One compile through the engine's d3dcompiler with an include handler rooted at `tree`/r3.
-class Compiler {
-public:
-    virtual ~Compiler() = default;
-    virtual bool compile(const std::filesystem::path& tree, std::span<const std::byte> root, const ShaderRequest&,
-        std::vector<std::byte>& bytecode, std::string& error) = 0;
+struct ReflectionDrop {
+    void operator()(rsf_anomaly_shader_snapshot* snapshot) const noexcept { rsf_anomaly_shader_snapshot_drop(snapshot); }
 };
+using Reflection = std::unique_ptr<rsf_anomaly_shader_snapshot, ReflectionDrop>;
+bool keeps_buffer_sizes(const Reflection& stock, const Reflection& variant) noexcept;
 
-// Reflection facts of one shader, enough to check compatibility and stage linkage.
-struct Parameter {
-    std::string name;
-    std::uint32_t index{}, reg{}, system_value{}, component{}, mask{};
-    bool operator==(const Parameter&) const = default;
-};
-struct Variable {
-    std::string name;
-    std::uint32_t offset{}, size{};
-    bool operator==(const Variable&) const = default;
-};
-struct Buffer {
-    std::string name;
-    std::uint32_t size{};
-    std::vector<Variable> variables;
-    bool operator==(const Buffer&) const = default;
-};
-struct Binding {
-    std::string name;
-    std::uint32_t type{}, point{}, count{}, return_type{}, dimension{};
-    bool operator==(const Binding&) const = default;
-};
-struct Reflection {
-    std::uint32_t version{};
-    std::vector<Parameter> inputs, outputs;
-    // Patch-constant signature: the hull shader's patch-constant outputs, the domain shader's patch-constant inputs.
-    std::vector<Parameter> patch;
-    std::vector<Binding> bindings;
-    std::vector<Buffer> buffers;
-};
-class Reflector {
-public:
-    virtual ~Reflector() = default;
-    virtual bool reflect(std::span<const std::byte> bytecode, Reflection&) = 0;
-};
 // D3D_SIT_CBUFFER = 0.
 enum class Compatibility : std::uint8_t { Ok, Version, MissingBinding, ExtraBinding, Buffer, Inputs, Outputs, PatchConstants };
-const char* compatibility_name(Compatibility) noexcept;
-// Stage 'v', 'p', 'h' or 'd'. Hull: the stock control-point inputs and outputs kept (any register) plus exactly the four
-// RSF control-point fields (TEXCOORD12 xyzw, 13 x, 14 xyzw, 15 xyz), the patch-constant signature identical, no new
-// binding. Domain: the same control-point inputs, the stock outputs plus exactly TEXCOORD12/13, the patch-constant
-// signature identical, only RSFTessPrevious added at b13.
-Compatibility compatible(char stage, const Reflection& stock, const Reflection& variant) noexcept;
 // Linkage of a producer stage with a consumer stage: every consumer input must be a producer output with the same name,
 // index and register and a covering mask.
 bool linkable(const Reflection& vertex, const Reflection& pixel) noexcept;
@@ -185,21 +136,4 @@ bool reflect_deployed(const rsf_anomaly_shader_d3d&, std::span<const std::byte>,
 Prepared prepare_deployed(const rsf_anomaly_shader_d3d&, const Manifest&, const std::filesystem::path& deployment,
     const ShaderRequest&);
 
-class ShaderLoader {
-public:
-    // Development fixture only: deployment holds original/motion trees; production uses Prepare below.
-    ShaderLoader(Manifest, std::filesystem::path deployment, std::filesystem::path cache, Compiler&, Reflector&);
-    using Prepare = std::function<Prepared(const ShaderRequest&, const ManifestEntry&)>;
-    ShaderLoader(Manifest, Compiler&, Reflector&, Prepare);
-    const Manifest& manifest() const noexcept { return manifest_; }
-    Prepared prepare(const ShaderRequest&);
-    std::string cache_key(const ShaderRequest&, const ManifestEntry&) const;
-private:
-    Manifest manifest_;
-    std::filesystem::path deployment_, cache_;
-    Compiler& compiler_;
-    Reflector& reflector_;
-    Prepare runtime_prepare_;
-};
-int skin_mode(const std::vector<Define>&) noexcept;
 }

@@ -18,16 +18,6 @@ typedef struct {
     rsf_anomaly_shader_defines defines;
     rsf_anomaly_shader_bytes source, bytecode;
 } rsf_anomaly_shader_request;
-typedef struct {
-    rsf_anomaly_shader_bytes name_space, original, motion, name;
-    uint8_t stage;
-} rsf_anomaly_shader_identity;
-
-typedef struct {
-    rsf_anomaly_shader_bytes name, original, motion, tag;
-    uint32_t stage;
-} rsf_anomaly_shader_root;
-typedef bool (*rsf_anomaly_shader_read_root)(const void*, uint32_t, rsf_anomaly_shader_root*);
 // The admitted manifest is Rust-owned and immutable; free it with rsf_anomaly_shader_admitted_free.
 // Its namespace and rows borrow its storage until then.
 typedef struct rsf_anomaly_shader_admitted rsf_anomaly_shader_admitted;  // opaque
@@ -45,79 +35,26 @@ typedef struct {
     void (*report)(void*, rsf_anomaly_shader_bytes message);
 } rsf_anomaly_shader_refusal;
 
-typedef struct {
-    rsf_anomaly_shader_bytes name;
-    uint32_t index, reg, system_value, component, mask;
-} rsf_anomaly_shader_parameter;
-typedef struct {
-    rsf_anomaly_shader_bytes name;
-    uint32_t offset, size;
-} rsf_anomaly_shader_variable;
-typedef struct {
-    rsf_anomaly_shader_bytes name;
-    uint32_t size;
-    struct { const rsf_anomaly_shader_variable* data; size_t len; } variables;
-} rsf_anomaly_shader_buffer;
-typedef struct {
-    rsf_anomaly_shader_bytes name;
-    uint32_t type, point, count, return_type, dimension;
-} rsf_anomaly_shader_binding;
-typedef struct {
-    uint32_t version;
-    struct { const rsf_anomaly_shader_parameter* data; size_t len; } inputs, outputs, patch;
-    struct { const rsf_anomaly_shader_binding* data; size_t len; } bindings;
-    struct { const rsf_anomaly_shader_buffer* data; size_t len; } buffers;
-} rsf_anomaly_shader_reflection;
-typedef struct {
-    void* user;
-    // Stock and variant have separate storage. An invocation only invalidates the same slot.
-    bool (*reflect)(void*, bool stock, rsf_anomaly_shader_bytes, rsf_anomaly_shader_reflection*);
-    void (*complete)(void*, uint8_t outcome, uint8_t compatibility, int32_t skin,
-        rsf_anomaly_shader_bytes detail, rsf_anomaly_shader_bytes variant);
-} rsf_anomaly_shader_preparation;
-// Returns compiled bytes on success, diagnostic bytes on refusal, until the next call.
-typedef bool (*rsf_anomaly_shader_compile)(void*, bool motion, rsf_anomaly_shader_bytes,
-    rsf_anomaly_shader_bytes*);
-
+typedef struct rsf_anomaly_shader_reflection rsf_anomaly_shader_reflection;
 #ifdef __cplusplus
 extern "C" {
 #endif
-const char* rsf_anomaly_shader_family_name(uint8_t);
-uint8_t rsf_anomaly_shader_family_stage(uint8_t);
-const char* rsf_anomaly_shader_compatibility_name(uint8_t);
 // Null on refusal, after reporting the reason once.
 rsf_anomaly_shader_admitted* rsf_anomaly_shader_manifest(rsf_anomaly_shader_bytes, const rsf_anomaly_shader_refusal*);
-rsf_anomaly_shader_admitted* rsf_anomaly_shader_pack_manifest(rsf_anomaly_shader_bytes, uint32_t count,
-    const void* session, rsf_anomaly_shader_read_root, const rsf_anomaly_shader_refusal*);
 void rsf_anomaly_shader_admitted_free(rsf_anomaly_shader_admitted*);
 void rsf_anomaly_shader_admitted_view(const rsf_anomaly_shader_admitted*, rsf_anomaly_shader_manifest_view*);
 const rsf_anomaly_shader_entry* rsf_anomaly_shader_admitted_find(const rsf_anomaly_shader_admitted*,
     rsf_anomaly_shader_bytes original);
-bool rsf_anomaly_shader_sha256(rsf_anomaly_shader_bytes, uint8_t (*out)[64]);
-const rsf_anomaly_shader_entry* rsf_anomaly_shader_match_request(const rsf_anomaly_shader_admitted*,
-    rsf_anomaly_shader_bytes source, rsf_anomaly_shader_bytes target);
 const char* rsf_anomaly_shader_outcome_name(uint8_t);
-uint8_t rsf_anomaly_shader_compatible(uint8_t, const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*);
 bool rsf_anomaly_shader_linkable(const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*);
 bool rsf_anomaly_shader_tess_linkable(const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*,
     const rsf_anomaly_shader_reflection*, const rsf_anomaly_shader_reflection*);
-int32_t rsf_anomaly_shader_skin_mode(rsf_anomaly_shader_defines);
-bool rsf_anomaly_shader_cache_key(const rsf_anomaly_shader_request*, const rsf_anomaly_shader_identity*, uint8_t (*out)[64]);
-void rsf_anomaly_shader_prepare_tree(const rsf_anomaly_shader_request*, const rsf_anomaly_shader_identity*,
-    rsf_anomaly_shader_wide deployment, rsf_anomaly_shader_wide cache, const rsf_anomaly_shader_preparation*,
-    rsf_anomaly_shader_compile);
-void rsf_anomaly_shader_finish_runtime(const rsf_anomaly_shader_request*, uint8_t stage, int32_t status, bool cache_hit,
-    rsf_anomaly_shader_bytes variant, rsf_anomaly_shader_bytes detail, const rsf_anomaly_shader_preparation*);
 #ifdef __cplusplus
 }
 
 #include "shader_loader.h"
 #include <cstddef>
 namespace rsf::anomaly::motion {
-static_assert(sizeof(rsf_anomaly_shader_reflection) == 88 &&
-    offsetof(rsf_anomaly_shader_reflection, inputs) == 8 && offsetof(rsf_anomaly_shader_reflection, buffers) == 72);
-static_assert(sizeof(rsf_anomaly_shader_parameter) == 40 && sizeof(rsf_anomaly_shader_variable) == 24 &&
-    sizeof(rsf_anomaly_shader_buffer) == 40 && sizeof(rsf_anomaly_shader_binding) == 40);
 static_assert(sizeof(rsf_anomaly_shader_request) == 88 && offsetof(rsf_anomaly_shader_request, defines) == 40 &&
     offsetof(rsf_anomaly_shader_request, bytecode) == 72);
 
@@ -134,12 +71,6 @@ inline const ManifestEntry& manifest_entry(const rsf_anomaly_shader_entry& row) 
 {
     return *reinterpret_cast<const ManifestEntry*>(&row);
 }
-bool admit_runtime_manifest(Manifest&, std::string_view name_space, uint32_t count, const void* session,
-    rsf_anomaly_shader_read_root, std::string& error);
-Prepared finish_runtime_shader(const ShaderRequest&, const ManifestEntry&, Reflector&, int32_t status, bool cache_hit,
-    std::span<const std::byte>, std::string_view detail);
-// Passes `reflection` to `use` as the private view, borrowed for that call only. `use` is not called when the view
-// cannot be built.
-void borrow_reflection(const Reflection&, void* user, void (*use)(void*, const rsf_anomaly_shader_reflection*)) noexcept;
+const rsf_anomaly_shader_reflection* reflection_view(const Reflection&) noexcept;
 }
 #endif

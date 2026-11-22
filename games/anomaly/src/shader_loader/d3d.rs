@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::reflection::{Reflection, Snapshot, reflect};
+use super::reflection::{Snapshot, reflect};
 use super::{
     Bytes, Compatibility, Entry, Manifest, Outcome, Request, Span, prepare_tree,
     rsf_anomaly_shader_match_request, rsf_anomaly_shader_skin_mode,
@@ -100,11 +100,8 @@ unsafe extern "C" fn rsf_anomaly_shader_d3d_unload(modules: *mut Modules) {
 unsafe extern "C" fn rsf_anomaly_shader_d3d_reflect(
     modules: &Modules,
     code: Bytes,
-    user: *mut c_void,
-    consume: unsafe extern "C" fn(*mut c_void, &Reflection) -> bool,
-) -> bool {
-    reflect(modules.reflect(), unsafe { code.as_slice() })
-        .is_some_and(|snapshot| unsafe { consume(user, snapshot.view()) })
+) -> *mut Snapshot {
+    reflect(modules.reflect(), unsafe { code.as_slice() }).map_or(null_mut(), allocate)
 }
 
 #[derive(Default)]
@@ -310,8 +307,8 @@ type PublishPrepared = unsafe extern "C" fn(
     i32,
     Bytes,
     Bytes,
-    Option<&Reflection>,
-    Option<&Reflection>,
+    *mut Snapshot,
+    *mut Snapshot,
 );
 
 #[unsafe(no_mangle)]
@@ -360,8 +357,8 @@ unsafe extern "C" fn rsf_anomaly_shader_d3d_prepare(
             rsf_anomaly_shader_skin_mode(request.defines),
             Bytes::from(result.detail.as_slice()),
             Bytes::from(result.bytes.as_slice()),
-            result.stock.as_ref().map(Snapshot::view),
-            result.reflection.as_ref().map(Snapshot::view),
+            result.stock.map_or(null_mut(), allocate),
+            result.reflection.map_or(null_mut(), allocate),
         )
     };
 }

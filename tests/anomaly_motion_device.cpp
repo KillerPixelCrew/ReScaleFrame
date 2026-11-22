@@ -18,8 +18,9 @@
 //    previous rows were batched into other groups: the production FoliageHistory remaps them to the current groups, the
 //    motion equals the CPU model including the plant that grew, and a plant without history stays zero.
 #include "motion_device_platform.h"
-#include "motion_foliage.h"
-#include "shader_loader.h"
+#include "motion_fixture_platform.h"
+#include "motion_constants.h"
+#include "shader_loader_platform.h"
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
 #include <d3dcompiler.h>
@@ -555,26 +556,14 @@ void foliage_layouts(const std::vector<Root>& list)
         const auto built = build(root, engine_defines(root));
         require(built.prepared.outcome == Outcome::Replaced, root.name + ": " + built.prepared.detail);
         const bool tree = root.family == "foliage_tree";
-        const auto layout = make_foliage_layout(tree ? Family::FoliageTree : Family::FoliageDetail, built.prepared.stock);
-        require(layout.usable, root.name + ": the engine's staged constants cannot be located from the stock reflection");
-        if (tree) {
-            require(layout.xform.size >= 48 && layout.xform.present, root.name + " m_xform is three registers");
-            // Which of wave, wind and consts survive depends on the permutation (the compiler drops unused uniforms); the
-            // reader treats a missing one as zero, and consts is always needed for the texture coordinates.
-            require(layout.consts.present, root.name + " consts");
-            ++trees;
-        } else {
-            require(layout.array.size == 3904 && layout.consts.present, root.name + " array[61 * 4]");
-            const bool still = root.name == "deffer_detail_s_flat.vs";
-            require(layout.wave.present == !still && layout.wind.present == !still, root.name + " wave set");
-            ++details;
-        }
-        // The variant keeps the stock buffer indices, so the engine's own table index addresses the same buffer.
-        for (const auto& buffer : built.prepared.stock.buffers) {
-            const auto found = std::find_if(built.prepared.reflection.buffers.begin(), built.prepared.reflection.buffers.end(),
-                [&](const Buffer& b) { return b.name == buffer.name; });
-            require(found != built.prepared.reflection.buffers.end() && found->size == buffer.size, root.name + " buffer kept");
-        }
+        const bool still = root.name == "deffer_detail_s_flat.vs";
+        const auto family = tree ? Family::FoliageTree : Family::FoliageDetail;
+        const char* error = rsf_anomaly_motion_foliage_fixture_layout(reflection_view(built.prepared.stock),
+            static_cast<uint8_t>(family), true, still);
+        require(error == nullptr, root.name + ": " + (error ? error : "usable foliage layout"));
+        if (tree) ++trees;
+        else ++details;
+        require(keeps_buffer_sizes(built.prepared.stock, built.prepared.reflection), root.name + " buffers kept");
     }
     require(trees >= 10 && details == 2, "all deployed foliage roots checked");
     std::printf("foliage roots: %u tree, %u detail layouts usable\n", trees, details);
@@ -774,8 +763,9 @@ void draw_tree()
 {
     const Root vs_root{'v', "foliage_tree", "deffer_tree_flat.vs"}, ps_root{'p', "core_pixel", "deffer_base_flat.ps"};
     auto rig = make_rig(vs_root, ps_root);
-    const auto layout = make_foliage_layout(Family::FoliageTree, rig.vs.prepared.stock);
-    require(layout.usable, "tree layout");
+    const char* layout_error = rsf_anomaly_motion_foliage_fixture_layout(reflection_view(rig.vs.prepared.stock),
+        static_cast<uint8_t>(Family::FoliageTree), false, false);
+    require(layout_error == nullptr, layout_error ? layout_error : "foliage layout");
     std::unique_ptr<rsf_anomaly_motion_device_owner, decltype(&rsf_anomaly_motion_device_drop)> owner{
         rsf_anomaly_motion_device_new(rsf_anomaly_motion_device_platform_get()), rsf_anomaly_motion_device_drop};
     auto* motion = owner.get();
@@ -865,8 +855,9 @@ void draw_detail()
 {
     const Root vs_root{'v', "foliage_detail", "deffer_detail_w_flat.vs"}, ps_root{'p', "core_pixel", "deffer_base_flat.ps"};
     auto rig = make_rig(vs_root, ps_root);
-    const auto layout = make_foliage_layout(Family::FoliageDetail, rig.vs.prepared.stock);
-    require(layout.usable, "detail layout");
+    const char* layout_error = rsf_anomaly_motion_foliage_fixture_layout(reflection_view(rig.vs.prepared.stock),
+        static_cast<uint8_t>(Family::FoliageDetail), false, false);
+    require(layout_error == nullptr, layout_error ? layout_error : "foliage layout");
     std::unique_ptr<rsf_anomaly_motion_device_owner, decltype(&rsf_anomaly_motion_device_drop)> owner{
         rsf_anomaly_motion_device_new(rsf_anomaly_motion_device_platform_get()), rsf_anomaly_motion_device_drop};
     auto* motion = owner.get();
@@ -878,16 +869,9 @@ void draw_detail()
 
     struct Plant { float tx, scale, sun, hemi; };
     const Plant a{-0.5f, 1.0f, 0.3f, 0.7f}, b{0.5f, 1.0f, 0.2f, 0.6f};
-    const auto empty_batch_rows = [] {
-        DetailRows rows;
-        poison_detail_rows(rows);
-        return rows;
-    };
+    using DetailRows = std::array<float, foliage_detail_floats>;
     const auto group = [](const Plant& p, float scale) {
         return std::array<float, 16>{scale, 0, 0, p.tx, 0, scale, 0, 0, 0, 0, scale, 0.5f, p.sun, p.sun, p.sun, p.hemi};
-    };
-    const auto put = [](DetailRows& rows, std::size_t slot, const std::array<float, 16>& g) {
-        std::memcpy(rows.data() + slot * 16, g.data(), sizeof(float) * 16);
     };
     const auto constants = [](float time, float amplitude) {
         FoliageConstants c;
@@ -902,31 +886,21 @@ void draw_detail()
             {"array", {rows.begin(), rows.end()}}};
     };
     const auto now = constants(0.30f, 0.08f), before = constants(0.80f, 0.05f);
-    const std::uint64_t route = 0xfeed;
-    // The previous frame drew plant A in group 0 (scale 0.8: it has grown since) and plant B in group 1. This frame the
-    // engine batches them the other way round: B in group 0, A in group 1. Quad B reads rows at offset 0, quad A at 4.
-    FoliageHistory history;
+    // The previous frame drew plant A before plant B. The current frame reverses the group order.
+    const std::array previous_groups{group(a, 0.8f), group(b, 1.0f)};
+    const std::array current_groups{group(b, 1.0f), group(a, 1.0f)};
+    FoliageVertexBytes bytes;
     const auto upload_for = [&](bool include_b) {
-        history.reset_all();
-        history.begin_frame(temporal::ViewId::Main, 1, 0, size, size);
-        DetailRows previous = empty_batch_rows();
-        put(previous, 0, group(a, 0.8f));
-        if (include_b) put(previous, 1, group(b, 1.0f));
-        history.record_detail(temporal::ViewId::Main, route, before, previous);
-        history.begin_frame(temporal::ViewId::Main, 2, 0, size, size);
-        DetailRows current = empty_batch_rows();
-        put(current, 0, group(b, 1.0f));
-        put(current, 1, group(a, 1.0f));
-        const auto remap = history.record_detail(temporal::ViewId::Main, route, now, current);
-        return std::make_pair(current, remap);
+        DetailRows current;
+        const char* error = rsf_anomaly_motion_detail_fixture_bytes(size, include_b, &before, &now,
+            previous_groups.front().data(), current_groups.front().data(), current.data(), bytes.data());
+        require(error == nullptr, error ? error : "packed detail history");
+        return current;
     };
     const std::vector<ComPtr<ID3D11Buffer>> quads{foliage_quad(rig, -0.5f, 0.5f, -1, 1, 0, 8192, 0),   // plant B (offset 0)
         foliage_quad(rig, -0.5f, 0.5f, -1, 1, 0, 8192, 4)};                                          // plant A (offset 4)
     // Quad B must land on the right half and quad A on the left: shift each by its own translation via the rows (tx = 0.5 / -0.5).
-    auto [current, remap] = upload_for(true);
-    require(remap.live == 2 && remap.matched == 2 && remap.route_found, "both plants remapped");
-    FoliageVertexBytes bytes;
-    require(pack_foliage_detail(temporal::Mat4::identity(), remap.previous, remap.items, remap.live, bytes), "pack detail history");
+    const auto current = upload_for(true);
     const auto stock = draw_foliage_pair(rig, motion, false, overrides(now, current), quads, nullptr);
     const auto drawn = draw_foliage_pair(rig, motion, true, overrides(now, current), quads, &bytes);
     const float frac = 8192.0f / 16384;
@@ -962,9 +936,7 @@ void draw_detail()
     require(left > 100 && right > 100 && largest > 4e-3f, "both plants moved with the wind");
 
     // A plant the previous frame did not draw has no history; its neighbour keeps its own.
-    auto [current2, remap2] = upload_for(false);
-    require(remap2.live == 2 && remap2.matched == 1 && remap2.unmatched == 1, "only plant A has history");
-    require(pack_foliage_detail(temporal::Mat4::identity(), remap2.previous, remap2.items, remap2.live, bytes), "pack partial history");
+    const auto current2 = upload_for(false);
     const auto partial = draw_foliage_pair(rig, motion, true, overrides(now, current2), quads, &bytes);
     unsigned a_valid = 0, b_zero = 0;
     for (UINT j = 0; j < size; ++j)
@@ -1023,11 +995,24 @@ int main()
         admitted = &*manifest;
         const auto list = roots(deployment / "manifest.txt");
         require(list.size() == manifest->entries().size(), "manifest roots");
-        every_root(list);
-        foliage_layouts(list);
-        draw_scene();
-        draw_tree();
-        draw_detail();
+        const auto status = rsf_anomaly_motion_core_schedule(&list, [](const void* roots, uint32_t phase) noexcept {
+            try {
+                const auto& entries = *static_cast<const std::vector<Root>*>(roots);
+                switch (phase) {
+                case RSF_ANOMALY_MOTION_ROOTS: every_root(entries); break;
+                case RSF_ANOMALY_MOTION_FOLIAGE_LAYOUTS: foliage_layouts(entries); break;
+                case RSF_ANOMALY_MOTION_CORE_DRAW: draw_scene(); break;
+                case RSF_ANOMALY_MOTION_TREE_DRAW: draw_tree(); break;
+                case RSF_ANOMALY_MOTION_DETAIL_DRAW: draw_detail(); break;
+                default: return false;
+                }
+                return true;
+            } catch (const std::exception& error) {
+                std::fprintf(stderr, "FAILED %s\n", error.what());
+                return false;
+            }
+        });
+        if (status != 0) return status;
         std::printf("anomaly motion device: %d checks passed\n", checks);
         return 0;
     } catch (const std::exception& error) {

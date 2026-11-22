@@ -1493,6 +1493,15 @@ the existing mixed CPU contract. Source checks passed. Build, fixture, device
 and game checks remain open.
 [Motion and shader loader follow-up](research/rust-anomaly-shader-loader-n05.md#motion-and-deployed-tree-ownership-follow-up-from-0251a81a)
 
+The Anomaly motion CPU contract now dispatches its 23 cases in Rust. Its
+native entry point supplies the verified compiler caller-frame layouts.
+Rust also schedules the deployed motion cases, retains their reflection
+snapshots, and prepares the far, tessellation and grass history constants.
+The original native scene draws and GPU comparisons remain in the device
+fixtures. Source and native syntax-only checks passed. Build, fixture and
+device execution remain open.
+[CPU fixture and device scheduling port](research/rust-anomaly-shader-loader-n05.md#cpu-fixture-and-device-scheduling-port-from-b5a7434c)
+
 Anomaly now admits successful stock shader creation and reads its
 guarded interface and filename in Rust. The native detour still
 supplies its own return address and stack to the compiler-frame

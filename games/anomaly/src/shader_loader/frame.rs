@@ -11,6 +11,8 @@ const _: () = assert!(size_of::<FrameLayout>() == 36);
 
 #[cfg(feature = "motion-binder-fixture")]
 mod fixture;
+#[cfg(feature = "motion-binder-fixture")]
+pub(crate) use fixture::run_frame_fixture;
 
 #[repr(u8)]
 pub(crate) enum FrameStatus {

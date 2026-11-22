@@ -30,7 +30,7 @@
 // debug layer.
 #include "motion_constants.h"
 #include "motion_device_platform.h"
-#include "motion_policy.h"
+#include "motion_fixture_platform.h"
 #include "shader_loader.h"
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
@@ -56,6 +56,8 @@ using namespace rsf::anomaly::motion;
 namespace temporal = rsf::anomaly::temporal;
 
 namespace {
+struct CameraSample { temporal::Mat4 view, projection; };
+
 constexpr UINT size = 64;
 ComPtr<ID3D11Device> device;
 ComPtr<ID3D11DeviceContext> context;
@@ -556,35 +558,11 @@ Frame draw(const Case& c, Chain& chain, Targets& t, rsf_anomaly_motion_device_ow
         // The production policy, packers and Rust motion owner uploads, as on_flush runs them for a swapped chain.
         // SKIN_0 (CSkeletonX RM_SINGLE): the engine composes the single bone into the world matrix, so the previous
         // bone-composed world carries the motion and there is no palette.
-        temporal::InstanceSnapshot previous;
-        previous.world = c.skin == 0 ? previous_bone() : identity();
-        if (c.skin != 0) previous.bones.assign(78, previous_bone());
         const auto camera = previous_camera();
-        CoreDrawInput in;
-        in.family = Family::CoreModel;
-        in.skin = c.skin;
-        in.in_visual = true;
-        in.verdict = rsf::anomaly::geometry::DrawVerdict::Identified;
-        in.kind = c.skin == 0 ? rsf::anomaly::geometry::DrawKind::SingleBone : rsf::anomaly::geometry::DrawKind::HardwareSkinned;
-        in.context = true;
-        in.previous_camera = &camera;
-        in.previous = draw_snapshot_view(previous);
-        const auto decision = decide_core(in);
-        require(decision.reason == HistoryReason::Valid, "policy accepts the skinned mover");
-        CoreVertexBytes vbytes;
-        TessDomainBytes dbytes;
-        if (history) {
-            require(pack_core_vertex(decision.previous_wvp, decision.bones.span(), decision.flags, vbytes), "pack VS b13");
-            require(pack_tess_domain(decision.previous_wv, decision.previous_projection, true, dbytes), "pack DS b13");
-        } else {
-            pack_core_invalid(vbytes);
-            pack_tess_invalid(dbytes);
-        }
-        PixelBytes pbytes;
-        require(pack_pixel({0, 0, float(size), float(size), 0, 0, 0, 0}, pbytes), "pack PS b13");
-        require(rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_CORE, vbytes.data(), vbytes.size()) &&
-            rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_TESS, dbytes.data(), dbytes.size()) &&
-            rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_PIXEL, pbytes.data(), pbytes.size()), "b13 uploads");
+        const auto bone = previous_bone();
+        const char* error = rsf_anomaly_motion_model_upload(motion, context.Get(), camera.view.values.data(),
+            camera.projection.values.data(), bone.values.data(), history, true, c.skin, size);
+        require(error == nullptr, error ? error : "model b13 uploads");
     }
     ID3D11RenderTargetView* views[3]{t.position_rtv.Get(), t.albedo_rtv.Get(), motion ? static_cast<ID3D11RenderTargetView*>(motion_view.rtv) : nullptr};
     context->OMSetRenderTargets(motion ? 3 : 2, views, t.dsv.Get());
@@ -768,32 +746,26 @@ int main()
         api = shader_api.get();
         admitted = &*manifest;
         std::printf("deployment: %s\n", deployment.string().c_str());
-        // Every tessellation permutation in the user's shader cache (appdata/shaders_cache/r4: deffer_model_bump(tess_pn,)
-        // _0.._4, deffer_model_bump(tess_pn,use_tdetail,use_tdetail_bump,)_2/_3 with the matching dx11\tess hs/ds and
-        // deffer_base_bump ps). TESS_HM (displacement) is in no cached permutation, and the engine's own TESS_HM hull
-        // shader (d3dcompiler_43 output, stock bytes) makes the NVIDIA driver crash in CreateHullShader in a few percent
-        // of fresh processes (docs/research/anomaly-tess-motion.md), so the HM cases run only with RSF_TESS_HM=1.
-        const std::vector<Define> pn{{"TESS_PN", "1"}};
-        const std::vector<Define> detail{{"TESS_PN", "1"}, {"USE_TDETAIL", "1"}, {"USE_TDETAIL_BUMP", "1"}};
-        const std::vector<Define> hm{{"TESS_PN", "1"}, {"TESS_HM", "1"}, {"USE_TDETAIL", "1"}};
-        std::vector<Case> cases{{"SKIN_0 TESS_PN", 0, pn}, {"SKIN_1 TESS_PN", 1, pn}, {"SKIN_2 TESS_PN", 2, pn},
-            {"SKIN_3 TESS_PN", 3, pn}, {"SKIN_4 TESS_PN", 4, pn}, {"SKIN_2 TESS_PN+USE_TDETAIL+USE_TDETAIL_BUMP", 2, detail},
-            {"SKIN_3 TESS_PN+USE_TDETAIL+USE_TDETAIL_BUMP", 3, detail}};
-        if (std::getenv("RSF_TESS_HM")) {
-            cases.push_back({"SKIN_1 TESS_PN+TESS_HM+USE_TDETAIL", 1, hm});
-            cases.push_back({"SKIN_2 TESS_PN+TESS_HM+USE_TDETAIL", 2, hm});
-        }
-        if (const char* which = std::getenv("RSF_TESS_CREATE")) {
-            create_probe(Case{"SKIN_1 TESS_PN+TESS_HM+USE_TDETAIL", 1, hm}, which);
-            return 0;
-        }
-        for (const auto& c : cases) {
-            if (std::getenv("RSF_TESS_DIAG")) {
-                try { run(c); } catch (const std::exception& e) { std::printf("  CASE FAILED %s\n", e.what()); }
-            } else {
-                run(c);
-            }
-        }
+        // The HM path stays opt-in because creating the stock HS can crash the driver.
+        const char* const create = std::getenv("RSF_TESS_CREATE");
+        const auto status = rsf_anomaly_motion_tess_schedule(
+            [](const rsf_anomaly_motion_tess_case* scene, const char* probe, bool diagnose) noexcept {
+                try {
+                    Case c{scene->name, scene->skin, {}};
+                    c.tess.reserve(scene->define_count);
+                    for (std::size_t i = 0; i < scene->define_count; ++i)
+                        c.tess.push_back({scene->defines[i], "1"});
+                    if (probe) create_probe(c, probe);
+                    else run(c);
+                    return true;
+                } catch (const std::exception& error) {
+                    if (diagnose) std::printf("  CASE FAILED %s\n", error.what());
+                    else std::fprintf(stderr, "FAILED %s\n", error.what());
+                    return false;
+                }
+            },
+            std::getenv("RSF_TESS_HM") != nullptr, std::getenv("RSF_TESS_DIAG") != nullptr, create);
+        if (status != 0 || create) return status;
         std::printf("anomaly motion tess chain device: %d checks passed (debug layer %s)\n", checks, debug_layer ? "on, clean" : "off");
         return 0;
     } catch (const std::exception& error) {

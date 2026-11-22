@@ -6,6 +6,9 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::{HRESULT, Interface, PCSTR};
 use windows_sys::Win32::Foundation::FARPROC;
 
+#[cfg(feature = "motion-binder-fixture")]
+pub(super) mod fixture;
+
 type Reflect = unsafe extern "system" fn(
     *const c_void,
     usize,
@@ -31,6 +34,37 @@ impl Snapshot {
     pub(crate) fn view(&self) -> &Reflection {
         &self.view
     }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_shader_snapshot_drop(snapshot: *mut Snapshot) {
+    if !snapshot.is_null() {
+        drop(unsafe { Box::from_raw(snapshot) });
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_shader_snapshot_view(snapshot: Option<&Snapshot>) -> Option<&Reflection> {
+    snapshot.map(Snapshot::view)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_shader_snapshot_keeps_buffer_sizes(
+    stock: Option<&Snapshot>,
+    variant: Option<&Snapshot>,
+) -> bool {
+    let (Some(stock), Some(variant)) = (stock, variant) else {
+        return false;
+    };
+    let stock = unsafe { stock.view.buffers.as_slice() };
+    let variant = unsafe { variant.view.buffers.as_slice() };
+    stock.iter().all(|buffer| {
+        let name = unsafe { buffer.name.as_slice() };
+        variant
+            .iter()
+            .find(|candidate| unsafe { candidate.name.as_slice() } == name)
+            .is_some_and(|candidate| candidate.size == buffer.size)
+    })
 }
 
 #[cfg(test)]
@@ -179,6 +213,7 @@ pub(super) fn reflect(entry: FARPROC, code: &[u8]) -> Option<Snapshot> {
     snapshot(&shader)
 }
 
+#[cfg_attr(feature = "motion-binder-fixture", derive(Clone))]
 #[repr(C)]
 struct Parameter {
     name: Bytes,
@@ -223,6 +258,7 @@ struct Buffer {
     variables: Span<Variable>,
 }
 
+#[cfg_attr(feature = "motion-binder-fixture", derive(Clone))]
 #[repr(C)]
 struct Binding {
     name: Bytes,

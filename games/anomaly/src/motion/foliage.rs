@@ -294,7 +294,7 @@ pub(super) extern "C" fn rsf_anomaly_foliage_detail(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_conflicts(history: Option<&History>) -> u64 {
+pub(super) extern "C" fn rsf_anomaly_foliage_conflicts(history: Option<&History>) -> u64 {
     history.map_or(0, |h| h.conflicts)
 }
 
@@ -304,7 +304,10 @@ pub(super) extern "C" fn rsf_anomaly_foliage_overflows(history: Option<&History>
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_recorded(history: Option<&History>, view: u8) -> usize {
+pub(super) extern "C" fn rsf_anomaly_foliage_recorded(
+    history: Option<&History>,
+    view: u8,
+) -> usize {
     history
         .and_then(|h| h.views[lane(view)].current.as_ref())
         .map_or(0, |frame| frame.items.len())
@@ -321,6 +324,6 @@ pub(super) extern "C" fn rsf_anomaly_foliage_poison(rows: &mut MaybeUninit<Rows>
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_scale(group: &[f32; 16]) -> f32 {
+pub(super) extern "C" fn rsf_anomaly_foliage_scale(group: &[f32; 16]) -> f32 {
     group_scale(group)
 }

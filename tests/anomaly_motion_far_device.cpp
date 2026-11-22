@@ -25,7 +25,7 @@
 // 4. Missing history writes all-zero motion (validity 0) and leaves the native output unchanged.
 #include "motion_constants.h"
 #include "motion_device_platform.h"
-#include "motion_policy.h"
+#include "motion_fixture_platform.h"
 #include "shader_loader.h"
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
@@ -51,6 +51,8 @@ using namespace rsf::anomaly::motion;
 namespace temporal = rsf::anomaly::temporal;
 
 namespace {
+struct CameraSample { temporal::Mat4 view, projection; };
+
 constexpr UINT size = 64;
 ComPtr<ID3D11Device> device;
 ComPtr<ID3D11DeviceContext> context;
@@ -494,27 +496,9 @@ Frame draw(const Pair& p, const Scene& scene, Shaders& s, const Mesh& mesh, Targ
     bind_stage(false, s.ps.stock, overrides, keep);
     if (motion) {
         // The production policy, packers and Rust motion owner uploads, as on_flush runs them for a swapped pair.
-        temporal::InstanceSnapshot previous;
-        previous.world = p.skin == 0 ? scene.previous_bone : identity();
-        if (p.skin != 0) previous.bones.assign(78, scene.previous_bone);
-        CoreDrawInput in;
-        in.family = Family::CoreModel;
-        in.skin = p.skin;
-        in.in_visual = true;
-        in.verdict = rsf::anomaly::geometry::DrawVerdict::Identified;
-        in.kind = p.skin == 0 ? rsf::anomaly::geometry::DrawKind::SingleBone : rsf::anomaly::geometry::DrawKind::HardwareSkinned;
-        in.context = true;
-        in.previous_camera = &scene.previous_camera;
-        in.previous = draw_snapshot_view(previous);
-        const auto decision = decide_core(in);
-        require(decision.reason == HistoryReason::Valid, "policy accepts the skinned mover");
-        CoreVertexBytes vbytes;
-        if (history) require(pack_core_vertex(decision.previous_wvp, decision.bones.span(), decision.flags, vbytes), "pack VS b13");
-        else pack_core_invalid(vbytes);
-        PixelBytes pbytes;
-        require(pack_pixel({0, 0, float(size), float(size), 0, 0, 0, 0}, pbytes), "pack PS b13");
-        require(rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_CORE, vbytes.data(), vbytes.size()) &&
-            rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_PIXEL, pbytes.data(), pbytes.size()), "b13 uploads");
+        const char* error = rsf_anomaly_motion_model_upload(motion, context.Get(), scene.previous_camera.view.values.data(),
+            scene.previous_camera.projection.values.data(), scene.previous_bone.values.data(), history, false, p.skin, size);
+        require(error == nullptr, error ? error : "model b13 uploads");
     }
     ID3D11RenderTargetView* views[3]{t.position_rtv.Get(), t.albedo_rtv.Get(), motion ? static_cast<ID3D11RenderTargetView*>(motion_view.rtv) : nullptr};
     context->OMSetRenderTargets(motion ? 3 : 2, views, t.dsv.Get());
@@ -627,36 +611,25 @@ int main()
         api = shader_api.get();
         admitted = &*manifest;
         std::printf("deployment: %s\n", deployment.string().c_str());
-        // The element pairs uber_deffer builds for a deferred model (bump or flat base texture, with or without alpha
-        // reference), restricted to the SKIN modes the user's shader cache holds for each VS root.
-        std::vector<Pair> pairs;
-        for (int skin = 0; skin <= 4; ++skin) {
-            pairs.push_back({"deffer_model_bump.vs", "deffer_base_bump.ps", skin, "LQ"});
-            pairs.push_back({"deffer_model_bump.vs", "deffer_base_aref_bump.ps", skin, "LQ"});
-            pairs.push_back({"deffer_model_flat.vs", "deffer_base_flat.ps", skin, "LQ"});
-            pairs.push_back({"deffer_model_flat.vs", "deffer_base_aref_flat.ps", skin, "LQ"});
-            pairs.push_back({"deffer_model_bump-hq.vs", "deffer_base_bump-hq.ps", skin, "HQ"});
-            pairs.push_back({"deffer_model_bump-hq.vs", "deffer_base_steep-hq.ps", skin, "HQ"});
-            pairs.push_back({"deffer_model_bump-hq.vs", "deffer_base_aref_bump-hq.ps", skin, "HQ"});
-        }
-        for (int skin = 0; skin <= 2; ++skin) {
-            pairs.push_back({"deffer_model_bump_d-hq.vs", "deffer_base_bump_d-hq.ps", skin, "HQ"});
-            pairs.push_back({"deffer_model_bump_d-hq.vs", "deffer_base_bump_db-hq.ps", skin, "HQ"});
-        }
-        const auto near_case = near_scene();
-        const auto far_case = far_scene();
-        unsigned lq = 0;
+        uint32_t pairs = 0, lq = 0;
         double far_worst = 0;
-        for (const auto& p : pairs) {
-            auto shaders = make_shaders(p);
-            require(linkable(shaders.vs.prepared.reflection, shaders.ps.prepared.reflection), p.vs + "+" + p.ps + ": the variant pair links");
-            require(!linkable(reflection_of(shaders.vs.stock), shaders.ps.prepared.reflection), p.vs + ": stock VS cannot feed the motion PS");
-            run(p, shaders, near_case);
-            far_worst = std::max(far_worst, run(p, shaders, far_case).worst_px);
-            if (std::string(p.element) == "LQ") ++lq;
-        }
-        std::printf("anomaly motion far device: %zu pairs (%u LQ), far worst error %.4f px, %d checks passed (debug layer %s)\n",
-            pairs.size(), lq, far_worst, checks, debug_layer ? "on, clean" : "off");
+        const auto status = rsf_anomaly_motion_far_schedule([](const rsf_anomaly_motion_far_case* scene, double* worst) noexcept {
+            try {
+                const Pair p{scene->vertex, scene->pixel, scene->skin, scene->element};
+                auto shaders = make_shaders(p);
+                require(linkable(shaders.vs.prepared.reflection, shaders.ps.prepared.reflection), p.vs + "+" + p.ps + ": the variant pair links");
+                require(!linkable(reflection_of(shaders.vs.stock), shaders.ps.prepared.reflection), p.vs + ": stock VS cannot feed the motion PS");
+                run(p, shaders, near_scene());
+                *worst = run(p, shaders, far_scene()).worst_px;
+                return true;
+            } catch (const std::exception& error) {
+                std::fprintf(stderr, "FAILED %s\n", error.what());
+                return false;
+            }
+        }, &pairs, &lq, &far_worst);
+        if (status != 0) return status;
+        std::printf("anomaly motion far device: %u pairs (%u LQ), far worst error %.4f px, %d checks passed (debug layer %s)\n",
+            pairs, lq, far_worst, checks, debug_layer ? "on, clean" : "off");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "FAILED %s\n", error.what());
