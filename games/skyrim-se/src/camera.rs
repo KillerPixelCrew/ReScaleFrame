@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn native_skyrim_camera_contract() {
+    fn skyrim_camera_contract() {
         let projection = [
             2.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 1.01, 1.0, 0.0, 0.0, -1.01, 0.0,
         ];

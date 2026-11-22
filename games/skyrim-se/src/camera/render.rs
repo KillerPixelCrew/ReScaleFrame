@@ -248,6 +248,14 @@ mod tests {
         // Frame 2 sampled the camera but never acquired valid render inputs.
         assert!(!history_consumed(false, Some(accepted), refused));
         assert!(history_consumed(true, Some(accepted), refused));
+
+        // Frame 3 must evaluate with a reset. Once it succeeds, frame 4 can
+        // use its receipt normally instead of carrying the reset forward.
+        let recovered = SrFrame {
+            session: 7,
+            frame: 3,
+        };
+        assert!(history_consumed(false, Some(recovered), recovered));
         let new_session = SrFrame {
             session: 8,
             ..accepted
