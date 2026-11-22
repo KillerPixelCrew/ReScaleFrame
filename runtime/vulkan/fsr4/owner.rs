@@ -11,14 +11,23 @@ use core::ffi::{CStr, c_void};
 use core::ptr;
 use std::alloc::{Layout, alloc};
 
+#[path = "bridge_abi.rs"]
+mod bridge_abi;
+use bridge_abi::{
+    RSF_FSR4_BRIDGE_ABI_MISMATCH as ABI_MISMATCH,
+    RSF_FSR4_BRIDGE_ABI_VERSION as BRIDGE_ABI_VERSION,
+    RSF_FSR4_BRIDGE_INVALID_ARGUMENT as INVALID_ARGUMENT, rsf_fsr4_bridge_create as BridgeCreate,
+    rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as BridgeInfo,
+};
+#[path = "completion.rs"]
+mod completion;
+use completion::next_local_completion;
+
 type Handle = *mut c_void;
 type Native = *mut c_void;
 type Step = unsafe extern "C" fn(Native) -> i32;
 
 const PLATFORM_ABI_VERSION: u32 = 1;
-const BRIDGE_ABI_VERSION: u32 = 1;
-const INVALID_ARGUMENT: i32 = -11001;
-const ABI_MISMATCH: i32 = -11002;
 const UNEXPECTED: i32 = 0x8000_ffff_u32 as i32; // E_UNEXPECTED
 const DEVICE_REMOVED: i32 = 0x887a_0005_u32 as i32; // DXGI_ERROR_DEVICE_REMOVED
 
@@ -63,58 +72,6 @@ const DEFAULT_FRAME_TIME_MS: f32 = 16.667;
 // The previous C++ bound, 3.141593f, one f32 step above pi.
 #[allow(clippy::approx_constant)]
 const MAX_VERTICAL_FOV: f32 = 3.141_593;
-
-#[repr(C)]
-struct BridgeCreate {
-    struct_size: u32,
-    abi_version: u32,
-    adapter_luid: u64,
-    runtime_directory: *const u16,
-    render_width: u32,
-    render_height: u32,
-    output_width: u32,
-    output_height: u32,
-    depth_inverted: u32,
-    depth_infinite: u32,
-    motion_jittered: u32,
-    reserved: u32,
-}
-
-#[repr(C)]
-struct BridgeFrame {
-    struct_size: u32,
-    abi_version: u32,
-    color: Handle,
-    depth: Handle,
-    motion: Handle,
-    output: Handle,
-    render_width: u32,
-    render_height: u32,
-    output_width: u32,
-    output_height: u32,
-    jitter_x: f32,
-    jitter_y: f32,
-    motion_scale_x: f32,
-    motion_scale_y: f32,
-    delta_ms: f32,
-    near_plane: f32,
-    far_plane: f32,
-    vertical_fov: f32,
-    pre_exposure: f32,
-    reset: u32,
-    ready_value: u64,
-    done_value: u64,
-}
-
-#[repr(C)]
-struct BridgeInfo {
-    struct_size: u32,
-    abi_version: u32,
-    adapter_luid: u64,
-    provider_version: u64,
-    vendor_id: u32,
-    int8_compatibility: u32,
-}
 
 /// VulkanStoryFsr4Frame, the managed fixed-layout frame.
 #[repr(C)]
@@ -223,10 +180,6 @@ struct Platform {
 
 const _: () = {
     use std::mem::offset_of;
-    assert!(size_of::<BridgeCreate>() == 56 && offset_of!(BridgeCreate, output_width) == 32);
-    assert!(size_of::<BridgeFrame>() == 112 && offset_of!(BridgeFrame, reset) == 92);
-    assert!(offset_of!(BridgeFrame, done_value) == 104);
-    assert!(size_of::<BridgeInfo>() == 32 && offset_of!(BridgeInfo, int8_compatibility) == 28);
     assert!(size_of::<LegacyFrame>() == 96 && offset_of!(LegacyFrame, ready_value) == 80);
     assert!(size_of::<Request>() == 40 && offset_of!(Request, flags) == 32);
     assert!(size_of::<Context>() == 32 && offset_of!(Context, flags) == 24);
@@ -604,66 +557,43 @@ impl Session {
     ///
     /// Shared images enter and leave COMMON. The local completion value is
     /// tracked immediately after submission; the shared `done` signal follows.
-    fn submit(&mut self, frame: &LegacyFrame, motion_scale: [f32; 2], pre_exposure: f32) -> i32 {
-        if frame.color.is_null()
-            || frame.depth.is_null()
-            || frame.motion.is_null()
-            || frame.output.is_null()
-            || frame.ready_value == 0
-            || frame.done_value == 0
+    fn submit(&mut self, mut dispatch: Dispatch, ready: u64, done: u64) -> i32 {
+        if dispatch.color.is_null()
+            || dispatch.depth.is_null()
+            || dispatch.motion.is_null()
+            || dispatch.output.is_null()
+            || ready == 0
+            || done == 0
             || !self.has(SHARED_FENCE)
         {
             return FAILED;
         }
+        let Some(completed) = next_local_completion(self.completion) else {
+            return UNEXPECTED;
+        };
         let slot = (self.next_allocator % SLOTS as u32) as usize;
         self.next_allocator = self.next_allocator.wrapping_add(1);
         let idle = self.wait(self.allocator_values[slot]);
         if idle != 0 {
             return idle;
         }
-        let [motion_scale_x, motion_scale_y] = motion_scale;
-        let dispatch = Dispatch {
-            color: frame.color,
-            depth: frame.depth,
-            motion: frame.motion,
-            output: frame.output,
-            render_width: frame.render_width,
-            render_height: frame.render_height,
-            output_width: frame.display_width,
-            output_height: frame.display_height,
-            jitter_x: frame.jitter_x,
-            jitter_y: frame.jitter_y,
-            motion_scale_x,
-            motion_scale_y,
-            frame_time_ms: if frame.delta_ms > 0.0 {
-                frame.delta_ms
-            } else {
-                DEFAULT_FRAME_TIME_MS
-            },
-            pre_exposure,
-            near_plane: frame.near_plane,
-            far_plane: frame.far_plane,
-            vertical_fov: frame.fov,
-            sharpness: self.sharpness,
-            reset: frame.reset,
-            slot: slot as u32,
-        };
+        dispatch.slot = slot as u32;
+        dispatch.sharpness = self.sharpness;
         let ops = self.ops;
         let code = unsafe { (ops.record)(self.native, &dispatch) };
         if code != 0 {
             return code;
         }
-        let code = unsafe { (ops.wait_shared)(self.native, frame.ready_value) };
+        let code = unsafe { (ops.wait_shared)(self.native, ready) };
         if code != 0 {
             return code;
         }
         unsafe { (ops.execute)(self.native) };
-        self.completion += 1;
-        let completed = self.completion;
+        self.completion = completed;
         self.allocator_values[slot] = completed;
-        let handoff = unsafe { (ops.signal)(self.native, frame.done_value, 1) };
+        let handoff = unsafe { (ops.signal)(self.native, done, 1) };
         if handoff == 0 {
-            self.last_done = frame.done_value;
+            self.last_done = done;
         }
         let retired = unsafe { (ops.signal)(self.native, completed, 0) };
         if retired != 0 {
@@ -692,8 +622,11 @@ impl Session {
         if handoff == 0 {
             self.last_done = done;
         }
-        self.completion += 1;
-        let retired = unsafe { (ops.signal)(self.native, self.completion, 0) };
+        let Some(completed) = next_local_completion(self.completion) else {
+            return self.retain(UNEXPECTED);
+        };
+        self.completion = completed;
+        let retired = unsafe { (ops.signal)(self.native, completed, 0) };
         if retired != 0 {
             return self.retain(retired);
         }
@@ -703,9 +636,9 @@ impl Session {
         result
     }
 
-    fn evaluate(&mut self, frame: &LegacyFrame, motion_scale: [f32; 2], pre_exposure: f32) -> i32 {
-        let result = self.submit(frame, motion_scale, pre_exposure);
-        self.finish(frame.ready_value, frame.done_value, result)
+    fn evaluate(&mut self, dispatch: Dispatch, ready: u64, done: u64) -> i32 {
+        let result = self.submit(dispatch, ready, done);
+        self.finish(ready, done, result)
     }
 }
 
@@ -942,6 +875,14 @@ unsafe extern "C" fn rsf_core_fsr4sr_create_fence(
     unsafe { (session.ops.create_fence)(session.native, handle) }
 }
 
+fn frame_time_ms(delta: f32) -> f32 {
+    if delta > 0.0 {
+        delta
+    } else {
+        DEFAULT_FRAME_TIME_MS
+    }
+}
+
 /// # Safety
 /// Non-null pointers must be a live bridge and a readable legacy frame.
 #[unsafe(no_mangle)]
@@ -957,7 +898,29 @@ unsafe extern "C" fn rsf_core_fsr4sr_evaluate_legacy(
     if session.prepared {
         return FAILED;
     }
-    session.evaluate(frame, [1.0, 1.0], 1.0)
+    let dispatch = Dispatch {
+        color: frame.color,
+        depth: frame.depth,
+        motion: frame.motion,
+        output: frame.output,
+        render_width: frame.render_width,
+        render_height: frame.render_height,
+        output_width: frame.display_width,
+        output_height: frame.display_height,
+        jitter_x: frame.jitter_x,
+        jitter_y: frame.jitter_y,
+        motion_scale_x: 1.0,
+        motion_scale_y: 1.0,
+        frame_time_ms: frame_time_ms(frame.delta_ms),
+        pre_exposure: 1.0,
+        near_plane: frame.near_plane,
+        far_plane: frame.far_plane,
+        vertical_fov: frame.fov,
+        sharpness: 0.0,
+        reset: frame.reset,
+        slot: 0,
+    };
+    session.evaluate(dispatch, frame.ready_value, frame.done_value)
 }
 
 /// # Safety
@@ -984,18 +947,21 @@ unsafe extern "C" fn rsf_core_fsr4sr_evaluate(
     if !session.admits(frame) {
         return session.finish(frame.ready_value, frame.done_value, INVALID_ARGUMENT);
     }
-    let legacy = LegacyFrame {
+    let dispatch = Dispatch {
         color: frame.color,
         depth: frame.depth,
         motion: frame.motion,
         output: frame.output,
         render_width: frame.render_width,
         render_height: frame.render_height,
-        display_width: frame.output_width,
-        display_height: frame.output_height,
+        output_width: frame.output_width,
+        output_height: frame.output_height,
         jitter_x: frame.jitter_x,
         jitter_y: frame.jitter_y,
-        delta_ms: frame.delta_ms,
+        motion_scale_x: frame.motion_scale_x,
+        motion_scale_y: frame.motion_scale_y,
+        frame_time_ms: frame_time_ms(frame.delta_ms),
+        pre_exposure: frame.pre_exposure,
         near_plane: frame.near_plane,
         // Zero far means infinite depth.
         far_plane: if frame.far_plane > 0.0 {
@@ -1003,16 +969,12 @@ unsafe extern "C" fn rsf_core_fsr4sr_evaluate(
         } else {
             f32::MAX
         },
-        fov: frame.vertical_fov,
+        vertical_fov: frame.vertical_fov,
+        sharpness: 0.0,
         reset: frame.reset,
-        ready_value: frame.ready_value,
-        done_value: frame.done_value,
+        slot: 0,
     };
-    session.evaluate(
-        &legacy,
-        [frame.motion_scale_x, frame.motion_scale_y],
-        frame.pre_exposure,
-    )
+    session.evaluate(dispatch, frame.ready_value, frame.done_value)
 }
 
 /// # Safety

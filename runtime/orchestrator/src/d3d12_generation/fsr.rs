@@ -681,11 +681,7 @@ impl Session for Fsr {
         let mut count = 0;
         let result = unsafe { (self.ops.present_count)(chain, &mut count) };
         if result >= 0 {
-            let delta = if count >= counters.dxgi || counters.dxgi > 0xf000_0000 {
-                count.wrapping_sub(counters.dxgi)
-            } else {
-                count
-            };
+            let delta = crate::fsr4_fg_bridge::present_count_delta(counters.dxgi, count);
             counters.dxgi = count;
             observation.presented = u64::from(delta);
             observation.statistics |= RSF_FG_STAT_TOTAL_PRESENTED;

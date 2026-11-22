@@ -37,12 +37,6 @@ typedef struct rsf_fsr4vk_platform {
 extern "C" {
 #endif
 int32_t rsf_core_fsr4vk_create(const rsf_fsr4vk_platform*, const rsf_srvk_setup*, const rsf_fsr4vk_handoff*, rsf_fsr4vk**);
-int32_t rsf_core_fsr4vk_plan(const rsf_fsr4vk*, uint32_t*, uint32_t*);
-int32_t rsf_core_fsr4vk_evaluate(rsf_fsr4vk*, void*, const rsf_srvk_frame*, void**);
-int32_t rsf_core_fsr4vk_info(const rsf_fsr4vk*, rsf_fsr4_bridge_info*);
-int32_t rsf_core_fsr4vk_destroy(rsf_fsr4vk*);
-void rsf_core_fsr4vk_retire_commands(rsf_fsr4vk*, void*);
-int32_t rsf_core_fsr4vk_submitted(rsf_fsr4vk*, void*);
 #ifdef __cplusplus
 }
 #endif

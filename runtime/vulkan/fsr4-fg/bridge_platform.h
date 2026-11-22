@@ -77,14 +77,6 @@ struct rsf_fsr4fg_platform {
 uint64_t rsf_core_fsr4fg_select_version(const rsf_ffx_version*, uint64_t count);
 int32_t rsf_core_fsr4fg_probe(const rsf_fsr4fg_platform*, uint64_t, const uint16_t*, rsf_fsr4fg_info*);
 int32_t rsf_core_fsr4fg_create(const rsf_fsr4fg_platform*, const rsf_fsr4fg_create*, rsf_fsr4fg_bridge**);
-int32_t rsf_core_fsr4fg_info(const rsf_fsr4fg_bridge*, rsf_fsr4fg_info*);
-int32_t rsf_core_fsr4fg_start(rsf_fsr4fg_bridge*, void*);
-int32_t rsf_core_fsr4fg_create_image(rsf_fsr4fg_bridge*, uint32_t, uint32_t, uint32_t, void**, void**);
-int32_t rsf_core_fsr4fg_create_fence(rsf_fsr4fg_bridge*, void**);
-int32_t rsf_core_fsr4fg_present(rsf_fsr4fg_bridge*, const rsf_fsr4fg_frame*, rsf_fsr4fg_present_status*);
-int32_t rsf_core_fsr4fg_drain(rsf_fsr4fg_bridge*);
-int32_t rsf_core_fsr4fg_prepare_destroy(rsf_fsr4fg_bridge*);
-int32_t rsf_core_fsr4fg_destroy(rsf_fsr4fg_bridge*);
 }
 
 static_assert(sizeof(rsf_fsr4fg_platform) == 36 * sizeof(void*));

@@ -23,6 +23,10 @@ int wmain(int argc, wchar_t** argv) {
     if (RsfFsr4FgProbe(1, reinterpret_cast<const uint16_t*>(L"relative"), &info) != RSF_FSR4FG_INVALID_ARGUMENT ||
         info.adapter_luid || info.provider_version || info.vendor_id || info.max_generated) return 14;
     if (RsfFsr4FgStart(nullptr, reinterpret_cast<void*>(1)) != RSF_FSR4FG_INVALID_ARGUMENT) return 15;
+    rsf_fsr4fg_present_status status{sizeof(status), 1, 23, 1, 0, 1, 17};
+    if (RsfFsr4FgPresent(nullptr, nullptr, &status) != RSF_FSR4FG_INVALID_ARGUMENT ||
+        status.result != RSF_FSR4FG_INVALID_ARGUMENT || status.frames_presented || status.fg_enabled ||
+        status.terminal || status.generated_callbacks) return 17;
     if (argc == 1) { std::puts("{\"contract_passed\":true,\"device_query\":false}"); return 0; }
     if (argc != 3 || std::wcscmp(argv[1], L"--device")) return 16;
     IDXGIFactory4* factory{};

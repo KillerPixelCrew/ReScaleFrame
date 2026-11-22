@@ -281,10 +281,17 @@ generate("runtime/orchestrator/src/dx12_vulkan_interop_abi.rs", "runtime/orchest
          "rsf_dx12vk_(platform|shared_image|interop_callbacks)", "RSF_DX12VK_INTEROP_.*",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "use crate::vulkan_sr_abi::rsf_srvk_setup;"])
+generate("runtime/vulkan/fsr4/bridge_abi.rs", "runtime/vulkan/fsr4/bridge_api.h",
+         "rsf_fsr4_bridge_(create|frame|info)", "RSF_FSR4_BRIDGE_.*", [],
+         ["--no-recursive-allowlist"])
+generate("runtime/vulkan/fsr4-fg/bridge_abi.rs", "runtime/vulkan/fsr4-fg/bridge_api.h",
+         "rsf_fsr4fg_(create|frame|info|present_status)", "RSF_FSR4FG_.*", ["-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
 generate("runtime/orchestrator/src/vulkan_fsr4_sr_abi.rs", "runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h",
-         "rsf_fsr4vk_platform|rsf_fsr4_bridge_(create|frame|info)", "RSF_FSR4_BRIDGE_ABI_VERSION",
+         "rsf_fsr4vk_platform", "NOTHING",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",
+          "--raw-line", "use super::bridge_abi::{rsf_fsr4_bridge_create, rsf_fsr4_bridge_frame, rsf_fsr4_bridge_info};",
           "--raw-line", "use crate::dx12_vulkan_interop_abi::rsf_dx12vk_platform;",
           "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--raw-line", "use crate::vulkan_sr_abi::{rsf_fsr4vk_handoff, rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};",

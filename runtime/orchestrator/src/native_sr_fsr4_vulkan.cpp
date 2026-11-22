@@ -173,17 +173,3 @@ const rsf_fsr4vk_platform& platform() {
 int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff* handoff, rsf_fsr4vk** out) {
     return rsf_core_fsr4vk_create(&platform(), setup, handoff, out);
 }
-int32_t rsf_fsr4vk_plan(const rsf_fsr4vk* owner, uint32_t* width, uint32_t* height) {
-    return rsf_core_fsr4vk_plan(owner, width, height);
-}
-int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* owner, void* commands, const rsf_srvk_frame* frame, void** continuation) {
-    return rsf_core_fsr4vk_evaluate(owner, commands, frame, continuation);
-}
-int32_t rsf_fsr4vk_info(const rsf_fsr4vk* owner, rsf_fsr4_bridge_info* info) {
-    return rsf_core_fsr4vk_info(owner, info);
-}
-int32_t rsf_fsr4vk_destroy(rsf_fsr4vk* owner) { return rsf_core_fsr4vk_destroy(owner); }
-void rsf_fsr4vk_retire_commands(rsf_fsr4vk* owner, void* commands) { rsf_core_fsr4vk_retire_commands(owner, commands); }
-int32_t rsf_fsr4vk_submitted(rsf_fsr4vk* owner, void* commands) {
-    return rsf_core_fsr4vk_submitted(owner, commands);
-}

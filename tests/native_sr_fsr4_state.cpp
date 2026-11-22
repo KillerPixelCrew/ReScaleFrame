@@ -22,7 +22,7 @@ const auto producer = fake(1), resumed = fake(2), device = fake(3);
 const auto bridge = fake<rsf_fsr4_bridge>(4);
 struct Barrier { void* commands; uint64_t image; uint32_t before, after, transfer; };
 struct Copy { void* commands; uint64_t src, dst; };
-struct Record { void* commands; uint64_t image; std::string_view role; };
+struct Record { void* commands; uint64_t image; std::string_view role; uint32_t reset; };
 enum class Step { wait, idle, prepare, flush, clear, image, memory, com, timeline, importer, bridge, graphics };
 struct {
     unsigned images{}, resources{}, queries{}, retires{}, sharpened{};
@@ -125,8 +125,8 @@ const rsf_fsr4vk_platform platform{
     [](void*) { calls.retirement.push_back(Step::com); },
     [](void*, const auto*, uint64_t provider) -> int32_t { CHECK(provider == version); return 0; },
     [](const rsf_frame_record* record) { CHECK(record->session_id == 10 && record->view_id == 11); },
-    [](void*, void* commands, const auto* image, const auto*, const char* role, uint32_t) {
-        calls.captures.push_back({commands, image->image, role});
+    [](void*, void* commands, const auto* image, const auto*, const char* role, uint32_t reset) {
+        calls.captures.push_back({commands, image->image, role, reset});
     },
     [](const rsf_srvk_frame*, uint32_t reset) { CHECK(calls.dispatches.back().reset == reset); },
     [](void*) -> int32_t { calls.retirement.push_back(Step::flush); return calls.flush_error ? 0 : 1; },
@@ -214,15 +214,15 @@ struct Fixture {
     }
 
     int create() { return rsf_core_fsr4vk_create(&platform, &setup, &handoff, &owner); }
-    int evaluate() { return rsf_core_fsr4vk_evaluate(owner, producer, &frame, &next); }
-    int destroy() { return rsf_core_fsr4vk_destroy(owner); }
+    int evaluate() { return rsf_fsr4vk_evaluate(owner, producer, &frame, &next); }
+    int destroy() { return rsf_fsr4vk_destroy(owner); }
     void submitted() {
-        CHECK(rsf_core_fsr4vk_submitted(owner, resumed) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
-        CHECK(rsf_core_fsr4vk_submitted(owner, fake(789)) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
-        CHECK(rsf_core_fsr4vk_submitted(owner, producer) == 0);
-        CHECK(rsf_core_fsr4vk_submitted(owner, producer) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
+        CHECK(rsf_fsr4vk_submitted(owner, resumed) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
+        CHECK(rsf_fsr4vk_submitted(owner, fake(789)) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
+        CHECK(rsf_fsr4vk_submitted(owner, producer) == 0);
+        CHECK(rsf_fsr4vk_submitted(owner, producer) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
         CHECK(destroy() == VK_NOT_READY && calls.retirement.empty());
-        CHECK(rsf_core_fsr4vk_submitted(owner, resumed) == 0);
+        CHECK(rsf_fsr4vk_submitted(owner, resumed) == 0);
     }
 };
 
@@ -230,9 +230,9 @@ void evaluate_and_retire() {
     Fixture fixture;
     CHECK(fixture.create() == 0 && fixture.owner && calls.images == 4 && calls.resources == 4);
     uint32_t width{}, height{};
-    CHECK(rsf_core_fsr4vk_plan(fixture.owner, &width, &height) == 0 && width == render_width && height == render_height);
+    CHECK(rsf_fsr4vk_plan(fixture.owner, &width, &height) == 0 && width == render_width && height == render_height);
     rsf_fsr4_bridge_info info{sizeof(info), RSF_FSR4_BRIDGE_ABI_VERSION};
-    CHECK(rsf_core_fsr4vk_info(fixture.owner, &info) == 0 && info.provider_version == version);
+    CHECK(rsf_fsr4vk_info(fixture.owner, &info) == 0 && info.provider_version == version);
     fixture.frame.depth.copy_source = 0;
     CHECK(fixture.evaluate() == RSF_FSR4_BRIDGE_INVALID_ARGUMENT && fixture.next == producer && calls.barriers.empty());
     fixture.frame.depth.copy_source = 1;
@@ -242,11 +242,12 @@ void evaluate_and_retire() {
     CHECK(calls.copies.back().commands == resumed && calls.copies.back().src == 103 && calls.copies.back().dst == 23);
     CHECK(calls.captures.size() == 5 && calls.captures.back().commands == resumed &&
         calls.captures.back().role == "sr-output-linear" && calls.captures.back().image == 103);
+    for (const auto& capture : calls.captures) CHECK(capture.reset == 1);
     CHECK(calls.barriers[1].transfer == 0 && calls.barriers[1].before == VK_IMAGE_LAYOUT_UNDEFINED);
     ++fixture.record.frame_id;
     CHECK(fixture.evaluate() == VK_NOT_READY && fixture.next == producer && calls.splits.size() == 1);
     fixture.submitted();
-    rsf_core_fsr4vk_retire_commands(fixture.owner, resumed);
+    rsf_fsr4vk_retire_commands(fixture.owner, resumed);
     CHECK(calls.retires == 1);
 
     --fixture.record.frame_id;
@@ -272,6 +273,12 @@ void evaluate_and_retire() {
     CHECK(fixture.evaluate() == 0 && calls.dispatches.back().reset == 1);
     fixture.submitted();
 
+    const auto captures_before_gap = calls.captures.size();
+    fixture.record.frame_id += 2;
+    CHECK(fixture.evaluate() == 0 && calls.dispatches.back().reset == 1);
+    for (auto i = captures_before_gap; i < calls.captures.size(); ++i) CHECK(calls.captures[i].reset == 1);
+    fixture.submitted();
+
     calls.wait_error = VK_TIMEOUT;
     CHECK(fixture.destroy() == VK_TIMEOUT && calls.retirement == std::vector{Step::wait});
     calls.wait_error = 0; calls.idle_error = -78; calls.retirement.clear();
@@ -282,7 +289,7 @@ void evaluate_and_retire() {
     CHECK(fixture.evaluate() == RSF_FSR4_BRIDGE_INVALID_ARGUMENT && !fixture.next);
     calls.prepare_error = 0; calls.flush_error = true; calls.retirement.clear();
     CHECK((fixture.destroy() == VK_ERROR_UNKNOWN && calls.retirement == std::vector{Step::wait, Step::idle, Step::prepare, Step::flush}));
-    CHECK(rsf_core_fsr4vk_plan(fixture.owner, &width, &height) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
+    CHECK(rsf_fsr4vk_plan(fixture.owner, &width, &height) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
     calls.flush_error = false; calls.destroy_error = -80; calls.retirement.clear();
     CHECK((fixture.destroy() == -80 && calls.retirement == std::vector{Step::wait, Step::idle, Step::prepare,
         Step::flush, Step::clear, Step::image, Step::memory, Step::com, Step::image, Step::memory, Step::com,
@@ -307,7 +314,7 @@ void create_failure_and_legacy() {
     Fixture legacy;
     legacy.handoff.abi_version = RSF_SRVK_SPLIT_ABI_VERSION;
     CHECK(legacy.create() == 0 && legacy.evaluate() == 0 && legacy.next == resumed);
-    CHECK(rsf_core_fsr4vk_submitted(legacy.owner, producer) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
+    CHECK(rsf_fsr4vk_submitted(legacy.owner, producer) == RSF_FSR4_BRIDGE_INVALID_ARGUMENT);
     CHECK(legacy.destroy() == 0);
 
     Fixture terminal;

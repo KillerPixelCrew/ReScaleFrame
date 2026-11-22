@@ -364,30 +364,6 @@ extern "C" int32_t RsfFsr4FgProbe(uint64_t luid, const uint16_t* directory, rsf_
 extern "C" int32_t RsfFsr4FgCreate(const rsf_fsr4fg_create* setup, rsf_fsr4fg_bridge** output) {
     return rsf_core_fsr4fg_create(&platform, setup, output);
 }
-extern "C" int32_t RsfFsr4FgInfo(const rsf_fsr4fg_bridge* self, rsf_fsr4fg_info* info) {
-    return rsf_core_fsr4fg_info(self, info);
-}
-extern "C" int32_t RsfFsr4FgStart(rsf_fsr4fg_bridge* self, void* window) {
-    return rsf_core_fsr4fg_start(self, window);
-}
-extern "C" int32_t RsfFsr4FgCreateImage(void* user, uint32_t width, uint32_t height, uint32_t format, void** handle, void** resource) {
-    return rsf_core_fsr4fg_create_image(static_cast<rsf_fsr4fg_bridge*>(user), width, height, format, handle, resource);
-}
 extern "C" void RsfFsr4FgReleaseImage(void* resource) {
     if (resource) static_cast<ID3D12Resource*>(resource)->Release();
-}
-extern "C" int32_t RsfFsr4FgCreateFence(void* user, void** handle) {
-    return rsf_core_fsr4fg_create_fence(static_cast<rsf_fsr4fg_bridge*>(user), handle);
-}
-extern "C" int32_t RsfFsr4FgPresent(rsf_fsr4fg_bridge* self, const rsf_fsr4fg_frame* frame, rsf_fsr4fg_present_status* status) {
-    return rsf_core_fsr4fg_present(self, frame, status);
-}
-extern "C" int32_t RsfFsr4FgDrain(rsf_fsr4fg_bridge* self) {
-    return rsf_core_fsr4fg_drain(self);
-}
-extern "C" int32_t RsfFsr4FgPrepareDestroy(rsf_fsr4fg_bridge* self) {
-    return rsf_core_fsr4fg_prepare_destroy(self);
-}
-extern "C" int32_t RsfFsr4FgDestroy(rsf_fsr4fg_bridge* self) {
-    return rsf_core_fsr4fg_destroy(self);
 }

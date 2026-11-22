@@ -33,8 +33,8 @@ inline void prepare_constants(const rsf_fsr4fg_frame& frame, uint64_t sequence, 
     out.frameTimeDelta = record.frame_time_ms; out.cameraNear = camera.near_plane; out.cameraFar = camera.far_plane;
     out.cameraFovAngleVertical = camera.vertical_fov_radians; out.viewSpaceToMetersFactor = 1;
     out.reset = reset;
-    // Godot's RH perspective looks down negative view Z. Follow the signed W/Z
-    // projection term, as the existing D3D12 FSR preparation does.
+    // The signed W/Z projection term determines perspective forward.
+    // A zero term retains positive view Z.
     const float sign = camera.view_to_clip[11] < 0 ? -1.0f : 1.0f;
     for (uint32_t i = 0; i < 3; ++i) {
         out.cameraPosition[i] = camera.view_to_world[12 + i];

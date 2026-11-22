@@ -7,6 +7,9 @@
    SR ABI 1. Graphics backend must be 4; runtime_directory_utf8 locates the signed
    FSR4 DX12 runtime. The handoff and callbacks remain live until destroy. */
 int32_t rsf_fsr4vk_create(const rsf_srvk_setup*, const rsf_fsr4vk_handoff*, rsf_fsr4vk**);
+#ifdef __cplusplus
+extern "C" {
+#endif
 int32_t rsf_fsr4vk_plan(const rsf_fsr4vk*, uint32_t*, uint32_t*);
 /* Always returns the continuation after a successful split, even when SDK
    evaluation fails. On SDK failure record spatial fallback there, submit both
@@ -20,3 +23,6 @@ int32_t rsf_fsr4vk_destroy(rsf_fsr4vk*);
 void rsf_fsr4vk_retire_commands(rsf_fsr4vk*,void* commands);
 
 int32_t rsf_fsr4vk_submitted(rsf_fsr4vk*, void* commands);
+#ifdef __cplusplus
+}
+#endif

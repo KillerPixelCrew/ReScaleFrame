@@ -4,11 +4,6 @@ use crate::dx12_vulkan_interop::{Owner as Interop, checked};
 use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image;
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
-use crate::vulkan_fsr4_sr_abi::{
-    RSF_FSR4_BRIDGE_ABI_VERSION, rsf_fsr4_bridge_create as BridgeCreate,
-    rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as Info,
-    rsf_fsr4vk_platform as Platform,
-};
 use crate::vulkan_sr::{
     GENERAL, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, SHADER_READ, SHARPENING_VENDOR,
     STORAGE_USAGE, TRANSFER_DST, valid_frame_record, valid_image,
@@ -19,6 +14,18 @@ use rsf_game_sys::{RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_SR, RSF_FRAME_
 use std::ffi::{CStr, c_void};
 use std::ptr;
 
+#[path = "../../vulkan/fsr4/bridge_abi.rs"]
+mod bridge_abi;
+use bridge_abi::{
+    RSF_FSR4_BRIDGE_ABI_MISMATCH as ABI_MISMATCH, RSF_FSR4_BRIDGE_ABI_VERSION,
+    RSF_FSR4_BRIDGE_INVALID_ARGUMENT as INVALID, rsf_fsr4_bridge_create as BridgeCreate,
+    rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as Info,
+};
+
+#[path = "vulkan_fsr4_sr_abi.rs"]
+mod platform_abi;
+use platform_abi::rsf_fsr4vk_platform as Platform;
+
 type Handle = *mut c_void;
 type Setup = rsf_srvk_setup;
 type Handoff = rsf_fsr4vk_handoff;
@@ -27,8 +34,6 @@ type Record = rsf_game_sys::rsf_frame_record;
 type Image = rsf_srvk_image;
 type SharedImage = rsf_dx12vk_shared_image;
 
-const INVALID: i32 = RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-const ABI_MISMATCH: i32 = RSF_FSR4_BRIDGE_ABI_MISMATCH;
 const OUT_OF_HOST_MEMORY: i32 = -1;
 const INITIALIZATION_FAILED: i32 = -3;
 const NOT_READY: i32 = 1;
@@ -37,6 +42,35 @@ const UNDEFINED: u32 = 0;
 const TRANSFER_SRC: u32 = 6;
 const WAIT_NS: u64 = 10_000_000_000;
 const INPUT_FORMATS: [u32; 3] = [RGBA16_FLOAT, R32_FLOAT, RG16_FLOAT];
+
+pub(super) mod directory {
+    use std::ffi::CStr;
+
+    pub(crate) enum Error {
+        Invalid,
+        Allocation,
+    }
+
+    /// Convert a nonempty runtime directory to a NUL-terminated Windows path,
+    /// with at most 32767 UTF-16 units including the terminator.
+    pub(crate) fn encode(path: &CStr) -> Result<Vec<u16>, Error> {
+        const MAX_UNITS: usize = 32767;
+        let path = path.to_str().map_err(|_| Error::Invalid)?;
+        if path.is_empty() || path.len() > (MAX_UNITS - 1) * 3 {
+            return Err(Error::Invalid);
+        }
+        let units = path.encode_utf16().count() + 1;
+        if units > MAX_UNITS {
+            return Err(Error::Invalid);
+        }
+        let mut wide = Vec::new();
+        wide.try_reserve_exact(units)
+            .map_err(|_| Error::Allocation)?;
+        wide.extend(path.encode_utf16());
+        wide.push(0);
+        Ok(wide)
+    }
+}
 
 #[repr(u32)]
 #[derive(Copy, Clone)]
@@ -244,9 +278,9 @@ impl Owner {
         frame: &Frame,
         record: &Record,
         images: &[SharedImage; 4],
+        reset: u32,
     ) {
         use QueueTransfer::{AcquireExternal, Local, ReleaseExternal};
-        let reset = record.flags & RSF_FRAME_FLAG_RESET;
         unsafe { (self.ops().capture_begin.unwrap())(record) };
         self.capture(commands, &frame.color, record, c"sr-source-jittered", reset);
         self.capture(commands, &frame.color, record, c"sr-linear-color", reset);
@@ -344,7 +378,13 @@ impl Owner {
             return Err(NOT_READY);
         }
         let ops = self.ops();
-        self.record_inputs(commands, frame, record, &images);
+        let reset = u32::from(
+            !self.history.valid
+                || self.history.last_frame.checked_add(1) != Some(record.frame_id)
+                || record.flags & RSF_FRAME_FLAG_RESET != 0
+                || self.history.generation != record.resource_generation,
+        );
+        self.record_inputs(commands, frame, record, &images, reset);
         let timeline = self.interop.as_ref().unwrap().timeline();
         let ready = done - 1;
         self.lease.begin(commands);
@@ -371,9 +411,6 @@ impl Owner {
         }
 
         self.lease.resume(*continuation);
-        let reset = !self.history.valid
-            || record.flags & RSF_FRAME_FLAG_RESET != 0
-            || self.history.generation != record.resource_generation;
         self.history = History {
             last_frame: record.frame_id,
             done,
@@ -405,7 +442,7 @@ impl Owner {
             far_plane: camera.far_plane,
             vertical_fov: camera.vertical_fov_radians,
             pre_exposure: frame.pre_exposure,
-            reset: u32::from(reset),
+            reset,
             ready_value: ready,
             done_value: done,
         };
@@ -476,15 +513,11 @@ unsafe extern "C" fn rsf_core_fsr4vk_create(
         Ok(args) => args,
         Err(error) => return private_setup_result(error),
     };
-    let Ok(directory) = (unsafe { CStr::from_ptr(setup.runtime_directory_utf8) }).to_str() else {
-        return INVALID;
+    let wide = match directory::encode(unsafe { CStr::from_ptr(setup.runtime_directory_utf8) }) {
+        Ok(wide) => wide,
+        Err(directory::Error::Invalid) => return INVALID,
+        Err(directory::Error::Allocation) => return OUT_OF_HOST_MEMORY,
     };
-    let mut wide = Vec::new();
-    if wide.try_reserve_exact(directory.len() + 1).is_err() {
-        return OUT_OF_HOST_MEMORY;
-    }
-    wide.extend(directory.encode_utf16());
-    wide.push(0);
     setup.runtime_directory_utf8 = ptr::null();
     let mut graphics = ptr::null_mut();
     let result = unsafe { (ops.open.unwrap())(&setup, &mut graphics) };
@@ -523,7 +556,7 @@ unsafe extern "C" fn rsf_core_fsr4vk_create(
     }
     unsafe { output.write(owner) };
     if let Err(error) = unsafe { &mut *owner }.initialize(luid, &wide) {
-        if unsafe { rsf_core_fsr4vk_destroy(owner) } == 0 {
+        if unsafe { rsf_fsr4vk_destroy(owner) } == 0 {
             unsafe { output.write(ptr::null_mut()) };
         }
         return error;
@@ -532,7 +565,7 @@ unsafe extern "C" fn rsf_core_fsr4vk_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4vk_plan(
+unsafe extern "C" fn rsf_fsr4vk_plan(
     owner: *const Owner,
     width: *mut u32,
     height: *mut u32,
@@ -551,12 +584,12 @@ unsafe extern "C" fn rsf_core_fsr4vk_plan(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4vk_info(owner: *const Owner, info: *mut Info) -> i32 {
+unsafe extern "C" fn rsf_fsr4vk_info(owner: *const Owner, info: *mut Info) -> i32 {
     unsafe { owner.as_ref() }.map_or(INVALID, |owner| owner.info(info))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4vk_evaluate(
+unsafe extern "C" fn rsf_fsr4vk_evaluate(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -602,7 +635,7 @@ unsafe extern "C" fn rsf_core_fsr4vk_evaluate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4vk_destroy(owner: *mut Owner) -> i32 {
+unsafe extern "C" fn rsf_fsr4vk_destroy(owner: *mut Owner) -> i32 {
     let Some(owned) = (unsafe { owner.as_mut() }) else {
         return 0;
     };
@@ -614,14 +647,14 @@ unsafe extern "C" fn rsf_core_fsr4vk_destroy(owner: *mut Owner) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4vk_retire_commands(owner: *mut Owner, commands: Handle) {
+unsafe extern "C" fn rsf_fsr4vk_retire_commands(owner: *mut Owner, commands: Handle) {
     if let Some(owner) = unsafe { owner.as_ref() } {
         unsafe { (owner.ops().retire.unwrap())(owner.graphics.handle, commands) };
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4vk_submitted(owner: *mut Owner, commands: Handle) -> i32 {
+unsafe extern "C" fn rsf_fsr4vk_submitted(owner: *mut Owner, commands: Handle) -> i32 {
     if let Some(owner) = unsafe { owner.as_mut() }
         && owner.lease.submitted(commands)
     {

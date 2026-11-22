@@ -13,12 +13,21 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering::SeqCst};
 
+#[path = "../../vulkan/fsr4/completion.rs"]
+mod completion;
+use completion::next_local_completion;
+
 type Handle = *mut c_void;
 
-pub(super) const BRIDGE_ABI: u32 = 1;
-const INVALID: i32 = -13001;
-const ABI_MISMATCH: i32 = -13002;
-pub(super) const UNSUPPORTED: i32 = -13003;
+#[path = "../../vulkan/fsr4-fg/bridge_abi.rs"]
+mod bridge_abi;
+use bridge_abi::{RSF_FSR4FG_ABI_MISMATCH as ABI_MISMATCH, RSF_FSR4FG_INVALID_ARGUMENT as INVALID};
+pub(super) use bridge_abi::{
+    RSF_FSR4FG_BRIDGE_ABI_VERSION as BRIDGE_ABI, RSF_FSR4FG_NOT_SUPPORTED as UNSUPPORTED,
+    rsf_fsr4fg_create as BridgeCreate, rsf_fsr4fg_frame as BridgeFrame,
+    rsf_fsr4fg_info as BridgeInfo, rsf_fsr4fg_present_status as BridgeStatus,
+};
+
 const OUT_OF_MEMORY: i32 = 0x8007_000e_u32 as i32;
 const UNEXPECTED: i32 = 0x8000_ffff_u32 as i32;
 
@@ -45,58 +54,6 @@ const SWAPCHAIN_ALPHA_UNSPECIFIED: u32 = 0;
 const MAX_DIRECTORY: usize = 32700;
 const PROVIDER_DLL: &str = "amd_fidelityfx_framegeneration_dx12.dll";
 const PROVIDER_PATH_CAPACITY: usize = MAX_DIRECTORY + 1 + PROVIDER_DLL.len() + 1;
-
-#[repr(C)]
-pub(super) struct BridgeCreate {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub adapter_luid: u64,
-    pub runtime_directory: *const u16,
-    pub width: u32,
-    pub height: u32,
-    pub depth_inverted: u32,
-    pub depth_infinite: u32,
-    pub motion_jittered: u32,
-    pub generated_count: u32,
-}
-
-#[repr(C)]
-pub(super) struct BridgeInfo {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub adapter_luid: u64,
-    pub provider_version: u64,
-    pub vendor_id: u32,
-    pub max_generated: u32,
-}
-
-#[repr(C)]
-pub(super) struct BridgeFrame {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub record: *const Record,
-    pub color: Handle,
-    pub depth: Handle,
-    pub motion: Handle,
-    pub hudless: Handle,
-    pub motion_scale_x: f32,
-    pub motion_scale_y: f32,
-    pub ready_value: u64,
-    pub done_value: u64,
-    pub enabled: u32,
-    pub vsync: u32,
-}
-
-#[repr(C)]
-pub(super) struct BridgeStatus {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub frames_presented: u32,
-    pub fg_enabled: u32,
-    pub result: i32,
-    pub terminal: u32,
-    pub generated_callbacks: u64,
-}
 
 #[repr(C)]
 #[derive(Default)]
@@ -443,13 +400,11 @@ impl Bridge {
     }
 
     fn signal_local(&mut self) -> Result<(), i32> {
-        // D3D12 reserves UINT64_MAX as the device-removed completion value.
-        let value = self.completion + 1;
-        let code = if value == u64::MAX {
-            UNEXPECTED
-        } else {
-            unsafe { (self.ops.signal)(self.native, value, 0) }
+        let Some(value) = next_local_completion(self.completion) else {
+            self.terminal = UNEXPECTED;
+            return Err(UNEXPECTED);
         };
+        let code = unsafe { (self.ops.signal)(self.native, value, 0) };
         if code != 0 {
             self.terminal = code;
             return Err(code);
@@ -650,12 +605,11 @@ impl Bridge {
         let result = self.handoff(frame, reported);
         let mut count = 0;
         if unsafe { (self.ops.get_present_count)(self.native, &mut count) } == 0 {
-            status.frames_presented = count.wrapping_sub(self.last_present_count);
+            status.frames_presented = present_count_delta(self.last_present_count, count);
             self.last_present_count = count;
         }
         status.fg_enabled = frame.enabled;
         status.generated_callbacks = self.generated().count.load(SeqCst);
-        status.result = result;
         result
     }
 
@@ -694,6 +648,22 @@ impl Bridge {
         self.prepared_destroy = true;
         Ok(())
     }
+}
+
+pub(crate) fn present_count_delta(previous: u32, current: u32) -> u32 {
+    if current >= previous || previous > 0xf000_0000 {
+        current.wrapping_sub(previous)
+    } else {
+        current
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn present_count_delta_handles_reset_and_rollover() {
+    assert_eq!(present_count_delta(100, 103), 3);
+    assert_eq!(present_count_delta(100, 1), 1);
+    assert_eq!(present_count_delta(u32::MAX - 1, 1), 3);
 }
 
 fn finite_nonzero(value: f32) -> bool {
@@ -840,7 +810,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_info(bridge: *const Bridge, out: *mut BridgeInfo) -> i32 {
+unsafe extern "C" fn RsfFsr4FgInfo(bridge: *const Bridge, out: *mut BridgeInfo) -> i32 {
     if bridge.is_null() {
         return INVALID;
     }
@@ -852,7 +822,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_info(bridge: *const Bridge, out: *mut Bridg
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_start(bridge: *mut Bridge, window: Handle) -> i32 {
+unsafe extern "C" fn RsfFsr4FgStart(bridge: *mut Bridge, window: Handle) -> i32 {
     let Some(bridge) = (unsafe { bridge.as_mut() }) else {
         return INVALID;
     };
@@ -860,8 +830,8 @@ unsafe extern "C" fn rsf_core_fsr4fg_start(bridge: *mut Bridge, window: Handle) 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create_image(
-    bridge: *mut Bridge,
+unsafe extern "C" fn RsfFsr4FgCreateImage(
+    bridge: Handle,
     width: u32,
     height: u32,
     format: u32,
@@ -875,7 +845,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_image(
         handle.write(ptr::null_mut());
         resource.write(ptr::null_mut());
     }
-    let Some(bridge) = (unsafe { bridge.as_ref() }) else {
+    let Some(bridge) = (unsafe { bridge.cast::<Bridge>().as_ref() }) else {
         return INVALID;
     };
     if !bridge.has(DEVICE) || width == 0 || height == 0 || bridge.prepared_destroy {
@@ -891,12 +861,12 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_image(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_create_fence(bridge: *mut Bridge, handle: *mut Handle) -> i32 {
+unsafe extern "C" fn RsfFsr4FgCreateFence(bridge: Handle, handle: *mut Handle) -> i32 {
     if handle.is_null() {
         return INVALID;
     }
     unsafe { handle.write(ptr::null_mut()) };
-    let Some(bridge) = (unsafe { bridge.as_ref() }) else {
+    let Some(bridge) = (unsafe { bridge.cast::<Bridge>().as_ref() }) else {
         return INVALID;
     };
     if !bridge.has(DEVICE) || bridge.has(SHARED_FENCE) || bridge.prepared_destroy {
@@ -906,29 +876,36 @@ unsafe extern "C" fn rsf_core_fsr4fg_create_fence(bridge: *mut Bridge, handle: *
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_present(
+unsafe extern "C" fn RsfFsr4FgPresent(
     bridge: *mut Bridge,
     frame: *const BridgeFrame,
     status: *mut BridgeStatus,
 ) -> i32 {
-    if bridge.is_null() || frame.is_null() || status.is_null() {
-        return INVALID;
-    }
-    if let Err(code) = unsafe { check(frame).and_then(|()| check(status)) } {
+    if let Err(code) = unsafe { check(status) } {
         return code;
     }
-    let (bridge, frame, status) = unsafe { (&mut *bridge, &*frame, &mut *status) };
+    let status = unsafe { &mut *status };
     status.frames_presented = 0;
     status.fg_enabled = 0;
-    status.result = 0;
-    status.generated_callbacks = bridge.generated().count.load(SeqCst);
-    let result = bridge.present(frame, status);
-    status.terminal = u32::from(bridge.terminal != 0);
+    status.generated_callbacks = 0;
+    status.terminal = 0;
+    let result = if let Some(bridge) = unsafe { bridge.as_mut() } {
+        status.generated_callbacks = bridge.generated().count.load(SeqCst);
+        let result = match unsafe { check(frame) } {
+            Ok(()) => bridge.present(unsafe { &*frame }, status),
+            Err(code) => code,
+        };
+        status.terminal = u32::from(bridge.terminal != 0);
+        result
+    } else {
+        INVALID
+    };
+    status.result = result;
     result
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_drain(bridge: *mut Bridge) -> i32 {
+unsafe extern "C" fn RsfFsr4FgDrain(bridge: *mut Bridge) -> i32 {
     let Some(bridge) = (unsafe { bridge.as_mut() }) else {
         return 0;
     };
@@ -936,7 +913,7 @@ unsafe extern "C" fn rsf_core_fsr4fg_drain(bridge: *mut Bridge) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_prepare_destroy(bridge: *mut Bridge) -> i32 {
+unsafe extern "C" fn RsfFsr4FgPrepareDestroy(bridge: *mut Bridge) -> i32 {
     let Some(bridge) = (unsafe { bridge.as_mut() }) else {
         return 0;
     };
@@ -944,8 +921,8 @@ unsafe extern "C" fn rsf_core_fsr4fg_prepare_destroy(bridge: *mut Bridge) -> i32
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4fg_destroy(bridge: *mut Bridge) -> i32 {
-    let code = unsafe { rsf_core_fsr4fg_prepare_destroy(bridge) };
+unsafe extern "C" fn RsfFsr4FgDestroy(bridge: *mut Bridge) -> i32 {
+    let code = unsafe { RsfFsr4FgPrepareDestroy(bridge) };
     if code == 0 && !bridge.is_null() {
         drop(unsafe { Box::from_raw(bridge) });
     }

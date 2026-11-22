@@ -8,9 +8,10 @@ use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, rsf_fgvk_frame as Frame, rsf_fgvk_setup as Setup,
     rsf_fgvk_status as Status,
 };
+use crate::vulkan_fsr4_sr::directory;
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
 use rsf_game_sys::rsf_frame_record as Record;
-use std::ffi::c_char;
+use std::ffi::CStr;
 use std::ptr;
 
 #[repr(C)]
@@ -24,7 +25,6 @@ struct Options {
 
 #[repr(C)]
 struct Ops {
-    directory: unsafe extern "C" fn(*const c_char, *mut u16, i32) -> i32,
     probe: unsafe extern "C" fn(u64, *const u16, *mut BridgeInfo) -> i32,
     bridge_create: unsafe extern "C" fn(*const BridgeCreate, *mut Handle) -> i32,
     bridge_info: unsafe extern "C" fn(Handle, *mut BridgeInfo) -> i32,
@@ -40,7 +40,7 @@ struct Ops {
 
 const _: () = {
     assert!(size_of::<Options>() == 24);
-    assert!(size_of::<Ops>() == 44 * size_of::<Handle>());
+    assert!(size_of::<Ops>() == 43 * size_of::<Handle>());
 };
 
 type Owner = shared::Owner<Fsr4>;
@@ -70,11 +70,11 @@ unsafe extern "C" fn rsf_core_fsr4gvk_probe(
     if setup.abi_version != RSF_SRVK_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let mut directory = [0u16; 32768];
-    if unsafe { (ops.directory)(setup.runtime_directory_utf8, directory.as_mut_ptr(), 32768) } <= 1
+    let directory = match directory::encode(unsafe { CStr::from_ptr(setup.runtime_directory_utf8) })
     {
-        return INVALID;
-    }
+        Ok(path) => path,
+        Err(error) => return directory_error(error),
+    };
     let mut luid = 0;
     let result = unsafe { (ops.graphics.adapter_luid)(setup, &mut luid) };
     if result != 0 {
@@ -123,17 +123,11 @@ unsafe extern "C" fn rsf_core_fsr4gvk_create(
     if !swapchain.supported() {
         return FORMAT_UNSUPPORTED;
     }
-    let mut directory = [0u16; 32768];
-    if unsafe {
-        (ops.directory)(
-            graphics.runtime_directory_utf8,
-            directory.as_mut_ptr(),
-            32768,
-        )
-    } <= 1
-    {
-        return INVALID;
-    }
+    let directory =
+        match directory::encode(unsafe { CStr::from_ptr(graphics.runtime_directory_utf8) }) {
+            Ok(path) => path,
+            Err(error) => return directory_error(error),
+        };
     let vendor = Fsr4 {
         ops,
         directory: directory.as_ptr(),
@@ -149,6 +143,13 @@ unsafe extern "C" fn rsf_core_fsr4gvk_create(
             output,
             chain,
         )
+    }
+}
+
+fn directory_error(error: directory::Error) -> i32 {
+    match error {
+        directory::Error::Invalid => INVALID,
+        directory::Error::Allocation => -1, // VK_ERROR_OUT_OF_HOST_MEMORY
     }
 }
 
@@ -301,7 +302,7 @@ impl Submission for Fsr4Submission<'_> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_images(
+unsafe extern "C" fn rsf_fsr4gvk_images(
     owner: *const Owner,
     count: *mut u32,
     out: *mut u64,
@@ -309,7 +310,7 @@ unsafe extern "C" fn rsf_core_fsr4gvk_images(
     unsafe { shared::images(owner, count, out) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_acquire(
+unsafe extern "C" fn rsf_fsr4gvk_acquire(
     owner: *mut Owner,
     timeout: u64,
     semaphore: u64,
@@ -319,7 +320,7 @@ unsafe extern "C" fn rsf_core_fsr4gvk_acquire(
     unsafe { shared::acquire(owner, timeout, semaphore, fence, index) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_prepare(
+unsafe extern "C" fn rsf_fsr4gvk_prepare(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -327,7 +328,7 @@ unsafe extern "C" fn rsf_core_fsr4gvk_prepare(
     unsafe { shared::prepare(owner, commands, frame) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_hudless(
+unsafe extern "C" fn rsf_fsr4gvk_hudless(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -335,15 +336,16 @@ unsafe extern "C" fn rsf_core_fsr4gvk_hudless(
     unsafe { shared::hudless(owner, commands, frame) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_submitted(
-    owner: *mut Owner,
-    commands: *const Handle,
-    count: u32,
-) {
+unsafe extern "C" fn rsf_fsr4gvk_submitted(owner: *mut Owner, commands: *const Handle, count: u32) {
     unsafe { shared::submitted(owner, commands, count) };
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_enable_options(
+unsafe extern "C" fn rsf_fsr4gvk_enable(owner: *mut Owner, enabled: u32) -> i32 {
+    unsafe { rsf_fsr4gvk_enable_options(owner, enabled, 1) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fsr4gvk_enable_options(
     owner: *mut Owner,
     enabled: u32,
     count: u32,
@@ -351,7 +353,7 @@ unsafe extern "C" fn rsf_core_fsr4gvk_enable_options(
     unsafe { shared::enable_options(owner, enabled, count) }
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fsr4gvk_max_generated(owner: *const Owner) -> u32 {
+extern "C" fn rsf_fsr4gvk_max_generated(owner: *const Owner) -> u32 {
     u32::from(!owner.is_null())
 }
 #[unsafe(no_mangle)]
@@ -364,14 +366,14 @@ unsafe extern "C" fn rsf_core_fsr4gvk_present(
     unsafe { shared::present(owner, info, source, explicit) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_status(owner: *const Owner, status: *mut Status) -> i32 {
+unsafe extern "C" fn rsf_fsr4gvk_status(owner: *const Owner, status: *mut Status) -> i32 {
     unsafe { shared::status(owner, status) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_drain(owner: *mut Owner) -> i32 {
+unsafe extern "C" fn rsf_fsr4gvk_drain(owner: *mut Owner) -> i32 {
     unsafe { shared::drain(owner) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fsr4gvk_destroy(owner: *mut Owner) -> i32 {
+unsafe extern "C" fn rsf_fsr4gvk_destroy(owner: *mut Owner) -> i32 {
     unsafe { shared::destroy(owner) }
 }

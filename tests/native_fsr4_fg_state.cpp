@@ -180,8 +180,8 @@ void terminal_bridge() {
     CHECK(create_bridge(&bridge) == 0 && bridge);
     if (!bridge) return;
     void* fence{};
-    CHECK(rsf_core_fsr4fg_create_fence(bridge, &fence) == 0 && fence);
-    CHECK(rsf_core_fsr4fg_start(bridge, fake(3)) == 0);
+    CHECK(RsfFsr4FgCreateFence(bridge, &fence) == 0 && fence);
+    CHECK(RsfFsr4FgStart(bridge, fake(3)) == 0);
     bridge_calls.steps.clear();
 
     rsf_frame_record source{sizeof(source), RSF_GAME_FRAME_ABI_VERSION};
@@ -200,7 +200,7 @@ void terminal_bridge() {
     auto present = [&] {
         frame.ready_value = bridge_calls.done + 1;
         frame.done_value = frame.ready_value + 1;
-        return rsf_core_fsr4fg_present(bridge, &frame, &status);
+        return RsfFsr4FgPresent(bridge, &frame, &status);
     };
 
     bridge_calls.notify(bridge_calls.telemetry, 0, 1);
@@ -222,7 +222,7 @@ void terminal_bridge() {
 
     frame.enabled = 0;
     bridge_calls.configure_result = -92;
-    CHECK(present() == -92 && bridge_calls.presents == 4 && !status.terminal);
+    CHECK(present() == -92 && status.result == -92 && bridge_calls.presents == 4 && !status.terminal);
     bridge_calls.configure_result = 0;
     frame.enabled = 1;
     CHECK(present() == bridge_error);
@@ -231,10 +231,10 @@ void terminal_bridge() {
 
     const auto done = bridge_calls.done;
     bridge_calls.wait_result = bridge_error;
-    CHECK(present() == bridge_error && status.terminal == 1 && bridge_calls.done == done);
-    CHECK(rsf_core_fsr4fg_drain(bridge) == bridge_error && bridge_calls.done == done);
-    CHECK(rsf_core_fsr4fg_prepare_destroy(bridge) == bridge_error);
-    CHECK(rsf_core_fsr4fg_destroy(bridge) == bridge_error);
+    CHECK(present() == bridge_error && status.result == bridge_error && status.terminal == 1 && bridge_calls.done == done);
+    CHECK(RsfFsr4FgDrain(bridge) == bridge_error && bridge_calls.done == done);
+    CHECK(RsfFsr4FgPrepareDestroy(bridge) == bridge_error);
+    CHECK(RsfFsr4FgDestroy(bridge) == bridge_error);
     CHECK(!bridge_calls.destroys_generation && !bridge_calls.releases_chain && !bridge_calls.releases);
 }
 
@@ -244,23 +244,23 @@ void bridge_retirement() {
     bridge_calls.fail_generation_destroy = true;
     rsf_fsr4fg_bridge* bridge{};
     CHECK(create_bridge(&bridge) == RSF_FSR4FG_NOT_SUPPORTED && bridge);
-    CHECK(rsf_core_fsr4fg_start(bridge, fake(3)) == RSF_FSR4FG_INVALID_ARGUMENT);
+    CHECK(RsfFsr4FgStart(bridge, fake(3)) == RSF_FSR4FG_INVALID_ARGUMENT);
     CHECK(bridge_calls.destroys_generation == 1 && !bridge_calls.releases);
     bridge_calls.fail_generation_destroy = false;
-    CHECK(rsf_core_fsr4fg_destroy(bridge) == 0 && bridge_calls.releases == 1);
+    CHECK(RsfFsr4FgDestroy(bridge) == 0 && bridge_calls.releases == 1);
 
     bridge_calls = {};
     CHECK(create_bridge(&bridge) == 0 && bridge);
     if (!bridge) return;
-    CHECK(rsf_core_fsr4fg_start(bridge, fake(3)) == 0);
+    CHECK(RsfFsr4FgStart(bridge, fake(3)) == 0);
     bridge_calls.fail_swapchain_destroy = true;
-    CHECK(rsf_core_fsr4fg_prepare_destroy(bridge) == bridge_error);
+    CHECK(RsfFsr4FgPrepareDestroy(bridge) == bridge_error);
     CHECK(bridge_calls.destroys_generation == 1 && bridge_calls.releases_chain == 1 && !bridge_calls.releases);
     bridge_calls.fail_swapchain_destroy = false;
-    CHECK(rsf_core_fsr4fg_prepare_destroy(bridge) == 0);
+    CHECK(RsfFsr4FgPrepareDestroy(bridge) == 0);
     const auto retired = bridge_calls.completion;
-    CHECK(rsf_core_fsr4fg_drain(bridge) == 0 && bridge_calls.completion == retired);
-    CHECK(rsf_core_fsr4fg_destroy(bridge) == 0 && bridge_calls.releases == 1);
+    CHECK(RsfFsr4FgDrain(bridge) == 0 && bridge_calls.completion == retired);
+    CHECK(RsfFsr4FgDestroy(bridge) == 0 && bridge_calls.releases == 1);
     CHECK(bridge_calls.destroys_generation == 1 && bridge_calls.releases_chain == 1 && bridge_calls.destroys_swapchain == 2);
 }
 }
@@ -303,7 +303,6 @@ constexpr uint32_t transfer_dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, r
 constexpr uint32_t blit_features = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
 VkSwapchainCreateInfoKHR swapchain_info{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
 const rsf_fsr4gvk_ops platform{
-    [](const char*, uint16_t* out, int32_t) -> int32_t { out[0] = 'X'; return 2; },
     [](uint64_t, const uint16_t*, auto*) -> int32_t { return 0; },
     [](const auto* create, rsf_fsr4fg_bridge** bridge) -> int32_t {
         CHECK(create->adapter_luid == adapter && create->generated_count == 1);
@@ -482,7 +481,7 @@ rsf_fgvk_frame inputs(const rsf_frame_record& record) {
 }
 void present(rsf_fsr4gvk* owner, uint64_t chain, const rsf_frame_record* record, uint64_t expected, uint32_t enabled) {
     uint32_t index = 0;
-    CHECK(rsf_core_fsr4gvk_acquire(owner, 100, 1, 0, &index) == 0);
+    CHECK(rsf_fsr4gvk_acquire(owner, 100, 1, 0, &index) == 0);
     // Mirror rsf_dx12gvk_present_marshaled: Rust admits the VkPresentInfoKHR shape, the
     // reader copies the admitted handles, and only a changed sentinel reaches pResults.
     const auto semaphore = reinterpret_cast<VkSemaphore>(uint64_t{88});
@@ -508,7 +507,7 @@ void present(rsf_fsr4gvk* owner, uint64_t chain, const rsf_frame_record* record,
     CHECK(code == 0 && result == 0 && written == VK_SUCCESS);
     CHECK(calls.presented == expected);
     rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
-    CHECK(rsf_core_fsr4gvk_status(owner, &status) == 0 && status.enabled == enabled);
+    CHECK(rsf_fsr4gvk_status(owner, &status) == 0 && status.enabled == enabled);
     CHECK(status.source_frame == (enabled ? expected : 0) && status.last_present_count == 1 && status.generated_callbacks == 0);
 }
 void prove_identity_and_completion() {
@@ -517,7 +516,7 @@ void prove_identity_and_completion() {
     uint64_t chain{};
     CHECK(create(&owner, &chain) == 0 && owner && chain);
     if (!owner) return;
-    CHECK(rsf_core_fsr4gvk_enable_options(owner, 1, 1) == 0);
+    CHECK(rsf_fsr4gvk_enable_options(owner, 1, 1) == 0);
     auto first = source(1);
     auto invalid = first;
     ++invalid.resource_generation;
@@ -526,16 +525,16 @@ void prove_identity_and_completion() {
     void* abandoned = fake(92);
     const auto initial = inputs(first);
     const auto mismatch = inputs(invalid);
-    CHECK(rsf_core_fsr4gvk_prepare(owner, guides, &initial) == 0);
-    CHECK(rsf_core_fsr4gvk_hudless(owner, hudless, &mismatch) == RSF_FSR4FG_INVALID_ARGUMENT);
-    CHECK(rsf_core_fsr4gvk_hudless(owner, hudless, &initial) == 0);
-    rsf_core_fsr4gvk_submitted(owner, &guides, 1);
-    CHECK(rsf_core_fsr4gvk_drain(owner) == VK_NOT_READY && calls.idles == 0);
+    CHECK(rsf_fsr4gvk_prepare(owner, guides, &initial) == 0);
+    CHECK(rsf_fsr4gvk_hudless(owner, hudless, &mismatch) == RSF_FSR4FG_INVALID_ARGUMENT);
+    CHECK(rsf_fsr4gvk_hudless(owner, hudless, &initial) == 0);
+    rsf_fsr4gvk_submitted(owner, &guides, 1);
+    CHECK(rsf_fsr4gvk_drain(owner) == VK_NOT_READY && calls.idles == 0);
     present(owner, chain, &invalid, 0, 0);
     void* off_depth = calls.depth;
     CHECK(calls.marked_complete.empty() && calls.markers.size() == 1);
-    rsf_core_fsr4gvk_submitted(owner, &hudless, 1);
-    rsf_core_fsr4gvk_submitted(owner, &hudless, 1);
+    rsf_fsr4gvk_submitted(owner, &hudless, 1);
+    rsf_fsr4gvk_submitted(owner, &hudless, 1);
     CHECK(calls.markers.size() == 2 && calls.markers[0] != calls.markers[1] && calls.waits.empty());
 
     // A newer recording does not supply any resources for an exact older Present.
@@ -543,9 +542,9 @@ void prove_identity_and_completion() {
     const auto newer = source(3);
     const auto old_inputs = inputs(older_discarded);
     const auto new_inputs = inputs(newer);
-    CHECK(rsf_core_fsr4gvk_prepare(owner, abandoned, &old_inputs) == 0);
-    CHECK(rsf_core_fsr4gvk_prepare(owner, abandoned, &new_inputs) == 0);
-    rsf_core_fsr4gvk_submitted(owner, &abandoned, 1);
+    CHECK(rsf_fsr4gvk_prepare(owner, abandoned, &old_inputs) == 0);
+    CHECK(rsf_fsr4gvk_prepare(owner, abandoned, &new_inputs) == 0);
+    rsf_fsr4gvk_submitted(owner, &abandoned, 1);
     CHECK(calls.discarded.size() == 1 && calls.markers.size() == 3);
     struct alignas(rsf_frame_record) IdentityPrefix {
         uint32_t size, version;
@@ -564,15 +563,15 @@ void prove_identity_and_completion() {
 
     const auto reused = source(7);
     const auto reused_inputs = inputs(reused);
-    CHECK(rsf_core_fsr4gvk_prepare(owner, guides, &reused_inputs) == 0);
+    CHECK(rsf_fsr4gvk_prepare(owner, guides, &reused_inputs) == 0);
     CHECK(calls.waits.size() == 2 && calls.marked_complete.size() == 2);
     CHECK(calls.initialized_copies[calls.initialized_copies.size() - 1] == 1);
 
     // A source with only the submitted guide stage may present the real frame.
-    rsf_core_fsr4gvk_submitted(owner, &guides, 1);
+    rsf_fsr4gvk_submitted(owner, &guides, 1);
     present(owner, chain, &reused, 7, 0);
-    CHECK(rsf_core_fsr4gvk_drain(owner) == 0 && calls.marked_complete.size() == 4);
-    CHECK(rsf_core_fsr4gvk_destroy(owner) == 0 && calls.releases == 1);
+    CHECK(rsf_fsr4gvk_drain(owner) == 0 && calls.marked_complete.size() == 4);
+    CHECK(rsf_fsr4gvk_destroy(owner) == 0 && calls.releases == 1);
 }
 void prove_admission_and_retirement() {
     calls = {};
@@ -586,7 +585,7 @@ void prove_admission_and_retirement() {
     CHECK(create(&owner, &chain) == injected_error && owner && !chain);
     CHECK(calls.pools_destroyed == 1 && calls.images_destroyed == 3 && calls.releases == 0);
     calls.fail_importer_destroy = false;
-    CHECK(rsf_core_fsr4gvk_destroy(owner) == 0);
+    CHECK(rsf_fsr4gvk_destroy(owner) == 0);
     CHECK(calls.pools_destroyed == 1 && calls.images_destroyed == 3 && calls.releases == 1);
 
     calls = {};
@@ -594,12 +593,12 @@ void prove_admission_and_retirement() {
     const auto record = source(21);
     const auto frame = inputs(record);
     void* list = fake(90);
-    CHECK(rsf_core_fsr4gvk_prepare(owner, list, &frame) == 0);
+    CHECK(rsf_fsr4gvk_prepare(owner, list, &frame) == 0);
     calls.fail_marker = true;
-    rsf_core_fsr4gvk_submitted(owner, &list, 1);
+    rsf_fsr4gvk_submitted(owner, &list, 1);
     rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
-    CHECK(rsf_core_fsr4gvk_status(owner, &status) == 0 && status.result == injected_error);
-    CHECK(rsf_core_fsr4gvk_drain(owner) == VK_NOT_READY && rsf_core_fsr4gvk_destroy(owner) == VK_NOT_READY);
+    CHECK(rsf_fsr4gvk_status(owner, &status) == 0 && status.result == injected_error);
+    CHECK(rsf_fsr4gvk_drain(owner) == VK_NOT_READY && rsf_fsr4gvk_destroy(owner) == VK_NOT_READY);
     // This synthetic terminal owner is intentionally retained through process exit.
     CHECK(calls.releases == 0 && calls.images_destroyed == 0 && calls.marked_complete.empty());
 }
