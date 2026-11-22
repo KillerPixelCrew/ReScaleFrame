@@ -2,6 +2,17 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+/// A C11 build without the default C runtime library, as every C leaf here needs. MSVC takes its
+/// flags directly; the others take `-std=c11`.
+fn c11() -> cc::Build {
+    let mut build = cc::Build::new();
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flags(["/Zl", "/std:c11"]);
+    } else {
+        build.std("c11");
+    }
+    build
+}
 fn shader_patch_parser() {
     let shader_patch = PathBuf::from("../shader_patch");
     let vendor = PathBuf::from("../../vendor/shader-patch/yyjson");
@@ -29,11 +40,7 @@ fn shader_patch_parser() {
         .status()
         .expect("run CMake to provision the pinned shader-pack parser");
     assert!(status.success(), "shader-pack parser provisioning failed");
-    let mut build = cc::Build::new();
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        build.flag("/Zl");
-        build.flag("/std:c11");
-    }
+    let mut build = c11();
     build
         .include(yyjson.join("src"))
         .include(shader_patch.join("include"))
@@ -60,12 +67,7 @@ fn sharpening_payload() {
         println!("cargo:rerun-if-changed={directory}/{file}");
     }
     println!("cargo:rerun-if-changed=include/rescaleframe/sharpening_settings.h");
-    let mut build = cc::Build::new();
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        build.flags(["/Zl", "/std:c11"]);
-    } else {
-        build.std("c11");
-    }
+    let mut build = c11();
     build
         .include("include")
         .warnings_into_errors(true)
@@ -74,10 +76,7 @@ fn sharpening_payload() {
 }
 
 fn plugin_callbacks() {
-    let mut build = cc::Build::new();
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        build.flags(["/Zl", "/std:c11"]);
-    }
+    let mut build = c11();
     build
         .include("../../sdk/game/include")
         .warnings_into_errors(true)
@@ -92,10 +91,7 @@ fn plugin_callbacks() {
 // SDK headers are not used, which compiles the same NOT_COMPILED paths as a checkout without them.
 fn native_leaf(name: &str, files: &[&str], defines: &[&str]) {
     let minhook = std::env::var("DEP_MINHOOK_INCLUDE").expect("rsf-minhook-sys include directory");
-    let mut build = cc::Build::new();
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        build.flags(["/Zl", "/std:c11"]);
-    }
+    let mut build = c11();
     for define in defines {
         build.define(define, None);
     }
@@ -174,12 +170,7 @@ fn native_leaves() {
 // so the standalone lifecycle archive can link beside it.
 fn streamline_guard() {
     println!("cargo:rerun-if-changed=../vulkan/streamline/sdk_guard.c");
-    let mut build = cc::Build::new();
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        build.flags(["/Zl", "/std:c11"]);
-    } else {
-        build.std("c11");
-    }
+    let mut build = c11();
     build
         .define("RSF_SLVK_GUARDED", "rsf_core_slvk_guarded")
         .define("RSF_SLVK_GUARD_ONLY", None)
@@ -272,9 +263,6 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(rsf_streamline_core)");
     println!("cargo:rustc-cfg=rsf_streamline_core");
     println!("cargo:rerun-if-changed=src/plugin_callbacks.c");
-    println!("cargo:rerun-if-changed=src/d3d11_output_platform.h");
-    println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/d3d11_state.h");
-    println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/srv_format.h");
     println!("cargo:rerun-if-changed=../../sdk/game/include");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         shader_patch_parser();
