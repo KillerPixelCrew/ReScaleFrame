@@ -1,5 +1,5 @@
-#include <rescaleframe/native_cpu.h>
 // SPDX-License-Identifier: MIT
+#include <rescaleframe/native_cpu.h>
 #include "api.h"
 #include "godot_platform.h"
 #include "vulkan_control.h"
@@ -18,6 +18,7 @@
 #include <string>
 #include <cstdio>
 #include <atomic>
+#include <utility>
 #include "../../../runtime/backends/common/frame_capture12.h"
 #include "../../../runtime/orchestrator/src/fg_auto_choice.h"
 
@@ -27,7 +28,7 @@
 // submissions and the Present pass identity by native/d3d12.rs, the Vulkan session by
 // native/vulkan.rs, and the input window admission, its window procedure, the input session, the
 // CPU event and ping routing and the present-marker admission by native/window.rs. This file
-// keeps the rsfg_* exports as forwarders and the leaves: the device, queue and fence references,
+// keeps native forwarders and the leaves: the device, queue and fence references,
 // the Runtime SR, FG, presentation, CPU event and latency calls, capture, DXGI, Win32 window
 // calls and the linked Runtime. The Vulkan leaves in the table below live in vulkan.cpp.
 static_assert(sizeof(rsf_sharpening_options) == 56);
@@ -40,8 +41,8 @@ static_assert(sizeof(rsf_godot_setup) == 48 && sizeof(rsf_godot_engine_services)
 static_assert(sizeof(rsf_godot_fg_options) == 20 && sizeof(rsf_godot_fg_install) == 96 &&
     offsetof(rsf_godot_fg_install, fidelityfx_directory) == 56);
 static_assert(sizeof(rsf_godot_paths) == 56 && sizeof(rsf_godot_input_facts) == 56 && sizeof(rsf_godot_window_facts) == 16);
-static_assert(sizeof(rsf_godot_fg_facts) == 96 && offsetof(rsf_godot_fg_facts, tagged_frames) == 48);
-static_assert(sizeof(rsf_godot_latency_facts) == 88);
+static_assert(sizeof(rsf_godot_fg_facts) == 88 && offsetof(rsf_godot_fg_facts, tagged_frames) == 40);
+static_assert(sizeof(rsf_godot_latency_facts) == 96);
 static_assert(sizeof(rsf_godot_sr_create) == 88 && offsetof(rsf_godot_sr_create, paths) == 32 &&
     sizeof(rsf_godot_sr_context) == 24 && offsetof(rsf_godot_sr_context, desired_width) == 12 &&
     sizeof(rsf_godot_sr_evaluate) == 64);
@@ -84,7 +85,9 @@ void log(void*, const char* message)
 }
 bool wait(uint64_t value)
 {
-    if (!value || !fence || fence->GetCompletedValue() >= value) return true;
+    if (!value) return true;
+    if (!fence) return false;
+    if (fence->GetCompletedValue() >= value) return true;
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!event) return false;
     const bool okay = SUCCEEDED(fence->SetEventOnCompletion(value, event)) && WaitForSingleObject(event, 15000) == WAIT_OBJECT_0;
@@ -193,7 +196,6 @@ void leaf_fg_facts(rsf_godot_fg_facts* facts)
     facts->backend = rsf_d3d11_present_backend(); facts->available = fg.available; facts->active = fg.vendor.active;
     facts->switch_result = rsf_d3d11_present_switch_result(); facts->last_result = fg.last_result; facts->reason = fg.reason;
     facts->max_generated_frames = fg.vendor.max_generated_frames; facts->generated_frames = fg.vendor.effective_generated_frames;
-    facts->latency_available = fg.vendor.low_latency_available; facts->latency_mode = fg.vendor.effective_reflex;
     facts->tagged_frames = fg.tagged_frames;
     facts->total_presented = fg.vendor.total_presented; facts->generated_presented = fg.vendor.generated_presented;
     facts->statistics_flags = fg.vendor.valid_statistics;
@@ -212,14 +214,19 @@ uint32_t leaf_latency_facts(rsf_godot_latency_facts* facts)
     facts->paced_frames = latency.paced_frames; facts->marker_calls = latency.marker_calls;
     facts->pcl_available = latency.pcl_available; facts->report_available = latency.report_available;
     facts->owner = latency.owner;
+    facts->available = latency.available; facts->effective_mode = latency.effective_mode;
     return 1;
 }
 // D3D12 SR context and submission leaves for native/d3d12.rs.
 uint32_t leaf_d3d12_bind(void* owning_device, void* owning_queue)
 {
-    device = static_cast<ID3D12Device*>(owning_device);
+    auto* candidate = static_cast<ID3D12Device*>(owning_device);
+    ComPtr<ID3D12Fence> completion;
+    if (FAILED(candidate->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&completion)))) return 0;
+    device = candidate;
     queue = static_cast<ID3D12CommandQueue*>(owning_queue);
-    return SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))) ? 1u : 0u;
+    fence = std::move(completion);
+    return 1;
 }
 uint32_t leaf_d3d12_wait(uint64_t value) { return wait(value) ? 1u : 0u; }
 uint32_t leaf_d3d12_signal(uint64_t value)
@@ -359,19 +366,6 @@ bool booted() { return rsf_godot_booted() != 0; }
 
 extern "C" const rsf_godot_platform* rsf_godot_platform_leaves(void) { return &platform; }
 
-extern "C" int rsfg_attach_engine(const rsf_godot_engine_services* services)
-{
-    return rsf_godot_attach_engine(services);
-}
-extern "C" int rsfg_configure_engine(const rsf_godot_settings* input, uint64_t viewport_id)
-{
-    return rsf_godot_configure_engine(&platform, input, viewport_id);
-}
-extern "C" void rsfg_reset_history()
-{
-    rsf_godot_reset_history(&platform);
-}
-
 extern "C" int rsfg_boot(const rsf_godot_setup* setup) try
 {
     return rsf_godot_boot(&platform, setup);
@@ -387,11 +381,6 @@ extern "C" int rsfg_configure(const rsf_godot_settings* input) try
     return rsf_godot_configure(&platform, input);
 } catch (...) { return 0; }
 
-extern "C" void rsfg_cpu(const rsf_game_cpu_event* event)
-{
-    rsf_godot_cpu(&platform, event);
-}
-
 extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* commands, const rsf_game_render_pass* pass) try
 {
     if (!booted() || !owning_device || !owning_queue || !commands || !pass || pass->struct_size < sizeof(*pass)) return 0;
@@ -406,33 +395,6 @@ extern "C" void rsfg_render_begin(uint64_t frame) try
     rsf_godot_d3d12_render_begin(&platform, frame);
 } catch (...) {}
 
-extern "C" void rsfg_submitted(void* owning_queue, void* const* command_lists, uint32_t count)
-{
-    rsf_godot_d3d12_submitted(&platform, owning_queue, command_lists, count);
-}
-
-extern "C" void rsfg_present(void* chain)
-{
-    if (!booted() || !chain) return;
-    rsf_godot_d3d12_present(&platform, chain);
-}
-
-extern "C" int rsfg_status(rsf_godot_status* output) try
-{
-    return rsf_godot_status_get(&platform, output);
-} catch (...) { return 0; }
-
-extern "C" int rsfg_settings(rsf_godot_settings* output) try
-{
-    return rsf_godot_settings_get(&platform, output);
-} catch (...) { return 0; }
-extern "C" int rsfg_request_latency_ping(void)
-{
-    return rsf_godot_latency_ping(&platform);
-}
-extern "C" void rsfg_vk_window(void* window) {
-    rsf_godot_vk_window(&platform, window);
-}
 extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
     if (!rsf_godot_vk_present_marker(&platform, window, begin)) return 0;
     capture_native_primary_present = begin != 0;

@@ -193,18 +193,33 @@ fn release_under_a_foreign_subclass_keeps_forwarding() {
     window.release(&fake::LEAVES);
     assert_eq!(fake::take_window_calls(), [("get", 0)]);
     assert!(window.input().is_null());
-    // The subclass above still forwards here; the replaced procedure keeps receiving messages,
-    // reported without a session as before.
+    // Retired windows keep forwarding without sending inputs to the active session.
     window.message(&fake::LEAVES, false, handle(ENGINE), 0x100, 0, 0);
-    assert_eq!(fake::take_cpu_events()[0].2, 0);
+    assert!(fake::take_cpu_events().is_empty());
     assert_eq!(
         fake::take_window_calls()[0],
         ("forward", fake::ENGINE_PROCEDURE as u64)
     );
-    // Nothing is attached again over the subclass at a later frame begin.
-    assert!(window.accept(&fake::LEAVES, handle(ENGINE)));
+    fake::PROCEDURE.set(0x7000);
+    assert!(window.accept(&fake::LEAVES, handle(OTHER)));
     window.cpu(&fake::LEAVES, false, &event(RSF_GAME_CPU_FRAME_BEGIN, 8));
-    assert!(!fake::take_window_calls().iter().any(|call| call.0 == "set"));
+    assert_eq!(
+        fake::take_window_calls(),
+        [
+            ("identity", OTHER as u64),
+            ("set", procedure_address() as u64)
+        ]
+    );
+    fake::take_cpu_events();
+    window.message(&fake::LEAVES, false, handle(ENGINE), 0x100, 0, 0);
+    assert_eq!(
+        fake::take_window_calls()[0],
+        ("forward", fake::ENGINE_PROCEDURE as u64)
+    );
+    assert!(fake::take_cpu_events().is_empty());
+    window.message(&fake::LEAVES, false, handle(OTHER), 0x100, 0, 0);
+    assert_eq!(fake::take_window_calls()[0], ("forward", 0x7000));
+    assert_eq!(fake::take_cpu_events()[0].2, 8);
 }
 
 #[test]

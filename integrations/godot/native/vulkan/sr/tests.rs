@@ -2,7 +2,7 @@
 use super::super::SR_FSR3;
 use super::*;
 use crate::control::default_settings;
-use crate::platform::{ABI_VERSION, Settings, Setup, Status, VkAdapter, VkFacts, VkFunction, fake};
+use crate::platform::{Settings, Status, VkAdapter, VkFacts, VkFunction, fake};
 use std::ffi::c_char;
 use std::ptr;
 
@@ -32,18 +32,8 @@ fn reset() {
 
 fn booted() -> Vulkan {
     reset();
-    let runtime = c"C:/game/runtime";
-    let setup = Setup {
-        struct_size: size_of::<Setup>() as u32,
-        abi_version: ABI_VERSION,
-        runtime_directory: runtime.as_ptr(),
-        engine_version: c"4.7.2".as_ptr(),
-        project_id: c"125d2115-7176-46e1-8806-95b790f01717".as_ptr(),
-        log: None,
-        log_user: ptr::null_mut(),
-    };
     let vulkan = Vulkan::new();
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup), 1);
+    fake::boot_vulkan(&vulkan, c"C:/game/runtime");
     vulkan.creation().report_ready(true, true);
     fake::take_calls();
     vulkan
@@ -234,16 +224,9 @@ fn four_refusals_are_logged_per_session() {
         .count();
     assert_eq!(logs, 4);
     vulkan.shutdown(&fake::LEAVES);
-    let runtime = c"C:/game/runtime";
-    let setup = Setup {
-        struct_size: size_of::<Setup>() as u32,
-        abi_version: ABI_VERSION,
-        runtime_directory: runtime.as_ptr(),
-        engine_version: ptr::null(),
-        project_id: ptr::null(),
-        log: None,
-        log_user: ptr::null_mut(),
-    };
+    let mut setup = fake::setup(c"C:/game/runtime");
+    setup.engine_version = ptr::null();
+    setup.project_id = ptr::null();
     assert_eq!(vulkan.boot(&fake::LEAVES, &setup), 1);
     fake::take_vk_sr_calls();
     render(&vulkan, &pass(DEVICE, OUTPUT));

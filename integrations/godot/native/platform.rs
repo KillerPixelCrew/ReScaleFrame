@@ -15,31 +15,13 @@ use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::OnceLock;
 
-pub(crate) const PLATFORM_VERSION: u32 = 6;
+pub(crate) const PLATFORM_VERSION: u32 = 7;
 /// `RSF_GODOT_ABI_VERSION`: setup, status, engine services and the Vulkan packet.
 pub(crate) const ABI_VERSION: u32 = 3;
 /// `RSF_GODOT_SETTINGS_ABI_VERSION`.
 pub(crate) const SETTINGS_ABI_VERSION: u32 = 2;
 
-/// `rsf_sharpening_options` (`sharpening_settings.h`). Defaults and validity stay in the Runtime.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct Sharpening {
-    pub(crate) struct_size: u32,
-    pub(crate) abi_version: u32,
-    pub(crate) mode: u32,
-    pub(crate) sharpness: f32,
-    pub(crate) mas: u32,
-    pub(crate) motion_sharpness: f32,
-    pub(crate) motion_threshold: f32,
-    pub(crate) motion_scale_limit: f32,
-    pub(crate) contrast_enabled: u32,
-    pub(crate) contrast: f32,
-    pub(crate) depth_scale: f32,
-    pub(crate) depth_bias: f32,
-    pub(crate) clamp_output: u32,
-    pub(crate) debug: u32,
-}
+pub(crate) use rsf_game_sys::sharpening_abi::rsf_sharpening_options as Sharpening;
 
 /// `rsf_godot_settings`.
 #[repr(C)]
@@ -235,8 +217,6 @@ pub(crate) struct FgFacts {
     pub(crate) reason: u32,
     pub(crate) max_generated_frames: u32,
     pub(crate) generated_frames: u32,
-    pub(crate) latency_available: u32,
-    pub(crate) latency_mode: u32,
     pub(crate) statistics_flags: u32,
     pub(crate) last_result: i32,
     pub(crate) switch_result: i32,
@@ -254,6 +234,8 @@ pub(crate) struct FgFacts {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct LatencyFacts {
+    pub(crate) available: u32,
+    pub(crate) effective_mode: u32,
     pub(crate) pcl_available: u32,
     pub(crate) report_available: u32,
     pub(crate) owner: u32,
@@ -600,7 +582,7 @@ pub(crate) struct VkCreationLeaves {
 }
 
 /// `RSF_GODOT_EFFECT_VERSION`: the effect leaves and the effect status record.
-pub(crate) const EFFECT_VERSION: u32 = 1;
+pub(crate) const EFFECT_VERSION: u32 = 2;
 /// `RSF_GODOT_EFFECT_MOTION_FORMAT`, `RenderingDevice::DATA_FORMAT_R16G16_SFLOAT`.
 pub(crate) const EFFECT_MOTION_FORMAT: i32 = 82;
 
@@ -705,6 +687,15 @@ pub(crate) struct EffectStatus {
     pub(crate) latency_active: u32,
 }
 
+/// Recording parameters for the motion capture leaf.
+#[repr(C)]
+pub(crate) struct EffectReadback {
+    pub(crate) shader: *const c_char,
+    pub(crate) bytes: u32,
+    pub(crate) groups_x: u32,
+    pub(crate) groups_y: u32,
+}
+
 /// `rsf_godot_effect_leaves`, the godot-cpp leaves of `effect.cpp`.
 #[repr(C)]
 pub(crate) struct EffectLeaves {
@@ -712,7 +703,8 @@ pub(crate) struct EffectLeaves {
     pub(crate) version: u32,
     pub(crate) frame: unsafe extern "C" fn(*mut c_void, *mut EffectFrame) -> u32,
     pub(crate) resources: unsafe extern "C" fn(*mut c_void, *mut EffectResources) -> u32,
-    pub(crate) read_motion: unsafe extern "C" fn(*mut c_void, *mut *const u8, *mut u64) -> u32,
+    pub(crate) read_motion:
+        unsafe extern "C" fn(*mut c_void, *const EffectReadback, *mut *const u8, *mut u64) -> u32,
 }
 
 /// `RSF_GODOT_VK_LOG_*`.
@@ -853,9 +845,9 @@ const _: () = {
     assert!(size_of::<Paths>() == 56);
     assert!(size_of::<InputFacts>() == 56);
     assert!(size_of::<WindowFacts>() == 16);
-    assert!(size_of::<FgFacts>() == 96);
-    assert!(offset_of!(FgFacts, tagged_frames) == 48);
-    assert!(size_of::<LatencyFacts>() == 88);
+    assert!(size_of::<FgFacts>() == 88);
+    assert!(offset_of!(FgFacts, tagged_frames) == 40);
+    assert!(size_of::<LatencyFacts>() == 96);
     assert!(size_of::<SrCreate>() == 88);
     assert!(offset_of!(SrCreate, paths) == 32);
     assert!(size_of::<SrContext>() == 24);
@@ -907,6 +899,7 @@ const _: () = {
     assert!(offset_of!(EffectStatus, rendering_ready) == 400);
     assert!(size_of::<EffectLeaves>() == 32);
     assert!(offset_of!(EffectLeaves, read_motion) == 24);
+    assert!(size_of::<EffectReadback>() == 24 && offset_of!(EffectReadback, groups_y) == 16);
     assert!(size_of::<WindowIdentity>() == 144);
     assert!(offset_of!(WindowIdentity, class_name) == 16);
     assert!(size_of::<Platform>() == 536);
@@ -1592,9 +1585,14 @@ impl EffectLeaves {
 
     /// Runs `read` over the readback bytes, which `call` keeps alive until the callback ends.
     /// An empty slice when the readback was refused or the leaf threw.
-    pub(crate) fn read_motion<R>(&self, call: *mut c_void, read: impl FnOnce(&[u8]) -> R) -> R {
+    pub(crate) fn read_motion<R>(
+        &self,
+        call: *mut c_void,
+        plan: &EffectReadback,
+        read: impl FnOnce(&[u8]) -> R,
+    ) -> R {
         let (mut data, mut size): (*const u8, u64) = (std::ptr::null(), 0);
-        let completed = unsafe { (self.read_motion)(call, &mut data, &mut size) } != 0;
+        let completed = unsafe { (self.read_motion)(call, plan, &mut data, &mut size) } != 0;
         if !completed || data.is_null() || size == 0 {
             return read(&[]);
         }

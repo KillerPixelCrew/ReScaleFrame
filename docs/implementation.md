@@ -15,6 +15,13 @@ Pinned binding regeneration and source checks passed. Native linking,
 Steam cold creation, Present forwarding and controller observation
 remain to be verified. [Steam continuation evidence](research/skyrim-steam-present-continuation-20261116.md)
 
+Godot's DLL exports native control and presentation notifications from Rust. D3D12
+publishes its device binding after fence creation and tracks the render and capture slots
+by source. Godot and Unity share packaged vendor paths, the legacy FG result convention
+and the public sharpening binding. Source export coverage, binding regeneration and
+pinned formatting were checked. Build, fixture and device checks remain open.
+[Godot native control evidence](../integrations/godot/NATIVE.md#native-control-and-d3d12-follow-up)
+
 The Unity package now routes render callbacks, admits preview and
 generation windows, and handles device events in Rust. The managed
 exports matched in source, and pinned binding regeneration matched the

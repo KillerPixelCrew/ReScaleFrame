@@ -598,15 +598,15 @@ impl Package {
 
     /// The stored status merged with the Runtime's generation and latency status. The merge is
     /// kept, as the C++ kept it. Leaves are called in the C++ order: generation status, present
-    /// backend, the switch result only without a generation result, latency status.
+    /// backend, provider-switch result, latency status.
     fn status(&self, leaves: &Leaves) -> rsf_unity_package_status {
         let fg = leaves.fg_status();
         let fg_backend = leaves.present_backend();
-        let fg_result = if fg.last_result != 0 {
-            fg.last_result
-        } else {
-            leaves.present_switch_result()
-        };
+        let fg_result = rsf_game_sys::presentation_result::PresentationResult {
+            session: fg.last_result,
+            provider_switch: leaves.present_switch_result(),
+        }
+        .aggregate();
         let latency = leaves.latency_status().unwrap_or_default();
         let mut state = self.lock();
         let status = &mut state.status;
@@ -1842,16 +1842,16 @@ mod tests {
             (4, 5, 6)
         );
         assert_eq!((status.derived_boundaries, status.active_sr), (8, 3));
-        // A generation result wins over the switch result, which is then not read.
+        // The aggregate gives a provider-switch failure precedence over a session failure.
         set(|f| f.last_result = -3);
         set(|f| f.latency = false);
         package.bridge_failed(-9);
         package.lock().status.sleep_calls = 1;
         let status = package.status(&leaves);
-        assert_eq!(calls(), ["fg status", "backend", "latency"]);
+        assert_eq!(calls(), ["fg status", "backend", "switch", "latency"]);
         assert_eq!(
             (status.fg_result, status.sr_result, status.active_sr),
-            (-3, -9, 0)
+            (-7, -9, 0)
         );
         assert_eq!(status.sleep_calls, 0);
         assert_eq!((status.latency_available, status.latency_mode), (0, 0));

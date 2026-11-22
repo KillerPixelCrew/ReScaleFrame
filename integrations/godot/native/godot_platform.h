@@ -21,7 +21,7 @@
 #include "api.h"
 #include <stdint.h>
 
-#define RSF_GODOT_PLATFORM_VERSION 6u
+#define RSF_GODOT_PLATFORM_VERSION 7u
 
 /* Mirror of rsf_native_fg_options without its header. */
 typedef struct rsf_godot_fg_options {
@@ -75,7 +75,7 @@ typedef struct rsf_godot_window_identity {
 /* rsf_fg12_status plus the shared presentation provider, typed as the status fields. */
 typedef struct rsf_godot_fg_facts {
     uint32_t available, active, reason, max_generated_frames, generated_frames;
-    uint32_t latency_available, latency_mode, statistics_flags;
+    uint32_t statistics_flags;
     int32_t last_result, switch_result;
     uint32_t backend, reserved;
     uint64_t tagged_frames, total_presented, generated_presented, source_frame_id, generated_callbacks;
@@ -84,6 +84,7 @@ typedef struct rsf_godot_fg_facts {
 
 /* rsf_native_latency_status, typed as the status fields. */
 typedef struct rsf_godot_latency_facts {
+    uint32_t available, effective_mode;
     uint32_t pcl_available, report_available, owner, reserved;
     uint64_t paced_frames, marker_calls;
     rsf_godot_input_facts inputs;
@@ -340,7 +341,7 @@ typedef struct rsf_godot_vk_creation_leaves {
    registration and callback contract, the RenderSceneBuffersRD, RenderSceneData and
    RenderingDevice reads, the readback compute pass and the status Dictionary keys. call is the
    render callback's private record. These leaves take no guard and call no other owner. */
-#define RSF_GODOT_EFFECT_VERSION 1u
+#define RSF_GODOT_EFFECT_VERSION 2u
 /* RenderingDevice::DATA_FORMAT_R16G16_SFLOAT, the engine's velocity format and the only one the
    readback is interpreted for. effect.cpp asserts the value. */
 #define RSF_GODOT_EFFECT_MOTION_FORMAT 82
@@ -386,6 +387,11 @@ typedef struct rsf_godot_effect_status {
 
 /* Process-lived table from effect.cpp, lent with each render callback. Every entry is present and
    catches its own exceptions; a completion of zero means an exception ended the leaf. */
+typedef struct rsf_godot_effect_readback {
+    const char* shader;
+    uint32_t bytes, groups_x, groups_y;
+} rsf_godot_effect_readback;
+
 typedef struct rsf_godot_effect_leaves {
     uint32_t struct_size, version;
     /* The scene buffers, scene data and the RenderingServer's RenderingDevice, then the frame facts
@@ -397,7 +403,7 @@ typedef struct rsf_godot_effect_leaves {
     /* Converts the velocity texture through the render graph into an owned storage buffer of
        internal_width * internal_height vec2 and reads it back (a GPU stall). The bytes stay in call
        until the callback ends; empty when the shader, pipeline or buffer was refused. */
-    uint32_t (*read_motion)(void* call, const uint8_t** data, uint64_t* size);
+    uint32_t (*read_motion)(void* call, const rsf_godot_effect_readback* plan, const uint8_t** data, uint64_t* size);
 } rsf_godot_effect_leaves;
 
 typedef struct rsf_godot_effect rsf_godot_effect;
@@ -569,30 +575,17 @@ extern "C" {
 const rsf_godot_platform* rsf_godot_platform_leaves(void);
 
 /* Rust owner. platform is the process-lived table above; the first accepted one is kept. */
-int rsf_godot_attach_engine(const rsf_godot_engine_services* services);
-int rsf_godot_configure_engine(const rsf_godot_platform* platform, const rsf_godot_settings* settings,
-    uint64_t viewport_id);
-void rsf_godot_reset_history(const rsf_godot_platform* platform);
 int rsf_godot_boot(const rsf_godot_platform* platform, const rsf_godot_setup* setup);
 int rsf_godot_configure(const rsf_godot_platform* platform, const rsf_godot_settings* settings);
-int rsf_godot_settings_get(const rsf_godot_platform* platform, rsf_godot_settings* settings);
-int rsf_godot_status_get(const rsf_godot_platform* platform, rsf_godot_status* status);
-/* rsf_godot_status_get succeeded with a nonzero session. */
-int rsf_godot_status_ready(const rsf_godot_platform* platform, rsf_godot_status* status);
 void rsf_godot_log(const char* message);
 
 /* D3D12 session state read by the rsfg_* forwarders in runtime.cpp. */
 int rsf_godot_booted(void);
 
-/* D3D12 SR context and submission owner (d3d12.rs). runtime.cpp forwards rsfg_render after its
-   booted, argument, size and depth-domain checks, and rsfg_render_begin, rsfg_submitted,
-   rsfg_present and the D3D12 branch of rsfg_shutdown after their own. */
+/* D3D12 render, render-begin and shutdown leaves reached from the public forwarders. */
 int rsf_godot_d3d12_render(const rsf_godot_platform* platform, void* device, void* queue, void* commands,
     const rsf_game_render_pass* pass);
 void rsf_godot_d3d12_render_begin(const rsf_godot_platform* platform, uint64_t source_frame_id);
-void rsf_godot_d3d12_submitted(const rsf_godot_platform* platform, void* queue, void* const* command_lists,
-    uint32_t count);
-void rsf_godot_d3d12_present(const rsf_godot_platform* platform, void* swapchain);
 int rsf_godot_d3d12_shutdown(const rsf_godot_platform* platform);
 
 /* Vulkan session (vulkan.rs). Boot and shutdown take the guard through vulkan_locked; the
@@ -656,15 +649,9 @@ int rsf_godot_effect_status_get(const rsf_godot_effect* effect, rsf_godot_effect
 /* The Runtime's accept_window question: nonzero for the admitted window, the first window of this
    process with the Engine class. */
 int rsf_godot_accept_window(const rsf_godot_platform* platform, void* window);
-/* rsfg_cpu with its boot and record checks: keeps the input session, attaches the window procedure
-   at a frame begin, and reports the event to the booted backend. */
-void rsf_godot_cpu(const rsf_godot_platform* platform, const rsf_game_cpu_event* event);
 /* The window part of rsfg_shutdown: the checked procedure restore and the end of the admission
    and input session. */
 void rsf_godot_window_release(const rsf_godot_platform* platform);
-int rsf_godot_latency_ping(const rsf_godot_platform* platform);
-/* rsfg_vk_window: while the Vulkan session is booted, the admission and the primary window. */
-void rsf_godot_vk_window(const rsf_godot_platform* platform, void* window);
 /* rsfg_vk_present_marker: nonzero when the admitted window's marker was reported. */
 int rsf_godot_vk_present_marker(const rsf_godot_platform* platform, uint64_t window, uint32_t begin);
 

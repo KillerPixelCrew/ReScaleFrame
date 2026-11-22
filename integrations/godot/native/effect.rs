@@ -11,7 +11,8 @@
 //! CPU facts only, and no resource lease or GPU completion is implied. The effect reads no
 //! Runtime settings or status: `ReScaleFrameRuntime` reports active SR, FG and latency.
 use crate::platform::{
-    EFFECT_MOTION_FORMAT, EFFECT_VERSION, EffectFrame, EffectLeaves, EffectResources, EffectStatus,
+    EFFECT_MOTION_FORMAT, EFFECT_VERSION, EffectFrame, EffectLeaves, EffectReadback,
+    EffectResources, EffectStatus,
 };
 use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +26,17 @@ pub(crate) const SNAPSHOT_SCOPE: &CStr = c"last_post_transparent_callback";
 const SAMPLE_BYTES: usize = 8;
 /// A finite texel moves when either component's magnitude exceeds this, in UV.
 const MOVING_UV: f64 = 0.00001;
+
+// Convert the sampleable velocity texture into an owned readback buffer.
+const MOTION_SHADER: &CStr = c"#version 450
+layout(local_size_x=8, local_size_y=8) in;
+layout(set=0,binding=0) uniform sampler2D motion_tex;
+layout(set=0,binding=1,std430) writeonly buffer Samples { vec2 velocity[]; };
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy), size=textureSize(motion_tex,0);
+    if(any(greaterThanEqual(p,size))) return;
+    velocity[p.y*size.x+p.x]=texelFetch(motion_tex,p,0).xy;
+}";
 
 /// What the last callback published.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -87,7 +99,18 @@ impl Effect {
                 if requested && next.resources.motion_format == EFFECT_MOTION_FORMAT {
                     // Explicit bounded diagnostics only: the readback stalls the GPU.
                     let pixels = pixels(&frame);
-                    sampled = leaves.read_motion(call, |bytes| classify(bytes, pixels));
+                    if let Some(bytes) = pixels
+                        .checked_mul(SAMPLE_BYTES as u64)
+                        .and_then(|bytes| u32::try_from(bytes).ok())
+                    {
+                        let plan = EffectReadback {
+                            shader: MOTION_SHADER.as_ptr(),
+                            bytes,
+                            groups_x: frame.internal_width.unsigned_abs().div_ceil(8),
+                            groups_y: frame.internal_height.unsigned_abs().div_ceil(8),
+                        };
+                        sampled = leaves.read_motion(call, &plan, |bytes| classify(bytes, pixels));
+                    }
                 }
             }
         }

@@ -24,7 +24,8 @@ use rsf_game_sys::{
 };
 use std::ffi::{c_int, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 const fn wide<const N: usize>(text: &[u8; N]) -> [u16; N] {
     let mut out = [0; N];
@@ -39,8 +40,9 @@ const fn wide<const N: usize>(text: &[u8; N]) -> [u16; N] {
 /// The window class of Godot's Windows display server.
 const ENGINE_CLASS: [u16; 6] = wide(b"Engine");
 
-/// The procedure attached to the input window. It holds no lock, so the procedures it forwards to
-/// may re-enter it.
+const WM_NCDESTROY: u32 = 0x0082;
+
+/// The procedure attached to the input window. It releases its lock before forwarding.
 ///
 /// # Safety
 /// Called by Windows with the window's message.
@@ -80,7 +82,7 @@ pub(crate) struct Window {
     /// The session of the engine module's last CPU event; zero after `release`.
     session: AtomicU64,
     /// The procedure `procedure` replaced; nonzero while it is attached.
-    previous: AtomicIsize,
+    previous: Mutex<Vec<(usize, isize)>>,
 }
 
 impl Window {
@@ -88,7 +90,7 @@ impl Window {
         Self {
             input: AtomicPtr::new(ptr::null_mut()),
             session: AtomicU64::new(0),
-            previous: AtomicIsize::new(0),
+            previous: Mutex::new(Vec::new()),
         }
     }
 
@@ -131,12 +133,15 @@ impl Window {
     /// Replaces the admitted window's procedure once. A failed replacement leaves nothing
     /// attached, and the next frame begin tries again.
     fn attach(&self, platform: &Platform) {
+        let mut procedures = self.previous.lock().unwrap_or_else(|err| err.into_inner());
         let window = self.input();
-        if window.is_null() || self.previous.load(Ordering::Acquire) != 0 {
+        if window.is_null() || procedures.iter().any(|(owner, _)| *owner == window.addr()) {
             return;
         }
         let previous = platform.window_procedure_set(window, procedure_address());
-        self.previous.store(previous, Ordering::Release);
+        if previous != 0 {
+            procedures.push((window.addr(), previous));
+        }
     }
 
     /// One message the window received: reported as an input event of the current session, then
@@ -150,7 +155,30 @@ impl Window {
         wparam: usize,
         lparam: isize,
     ) -> isize {
-        let previous = self.previous.load(Ordering::Acquire);
+        let previous = {
+            let mut procedures = self.previous.lock().unwrap_or_else(|err| err.into_inner());
+            procedures
+                .iter()
+                .position(|(owner, _)| *owner == window.addr())
+                .map_or(0, |index| {
+                    if message == WM_NCDESTROY {
+                        procedures.swap_remove(index).1
+                    } else {
+                        procedures[index].1
+                    }
+                })
+        };
+        if self.input() != window {
+            return platform.window_forward(previous, window, message, wparam, lparam);
+        }
+        if message == WM_NCDESTROY {
+            let _ = self.input.compare_exchange(
+                window,
+                ptr::null_mut(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
         let (counter, frequency) = platform.query_counter();
         let event = rsf_game_cpu_event {
             struct_size: size_of::<rsf_game_cpu_event>() as u32,
@@ -173,17 +201,14 @@ impl Window {
     /// window's own and the restore succeeds. A refused restore or an intervening subclass
     /// keeps forwarding to the replaced procedure. The admission and session end either way.
     pub(crate) fn release(&self, platform: &Platform) {
-        let window = self.input();
-        let previous = self.previous.load(Ordering::Acquire);
-        if !window.is_null()
-            && previous != 0
-            && platform.window_procedure_get(window) == procedure_address()
-            && platform.window_procedure_set(window, previous) != 0
-        {
-            self.previous.store(0, Ordering::Release);
-        }
+        let mut procedures = self.previous.lock().unwrap_or_else(|err| err.into_inner());
         self.input.store(ptr::null_mut(), Ordering::Release);
         self.session.store(0, Ordering::Release);
+        procedures.retain(|&(owner, previous)| {
+            let window = ptr::without_provenance_mut(owner);
+            platform.window_procedure_get(window) != procedure_address()
+                || platform.window_procedure_set(window, previous) == 0
+        });
     }
 
     /// `rsfg_request_latency_ping`: the PCL ping for the admitted window, null when none.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::control::default_settings;
-use crate::platform::{ABI_VERSION, Setup, Status, fake};
+use crate::platform::{Status, fake};
 use std::ptr;
 
 const DEVICE: usize = 0x10;
@@ -9,22 +9,6 @@ const QUEUE: usize = 0x20;
 const HUDLESS_LIST: usize = 0x900;
 const CHAIN: usize = 0x77;
 const SR_DLSS: u32 = 1;
-
-fn booted() -> Control {
-    let control = Control::new();
-    fake::INSTALL_RESULT.set(BACKEND_OK);
-    let setup = Setup {
-        struct_size: size_of::<Setup>() as u32,
-        abi_version: ABI_VERSION,
-        runtime_directory: c"C:/game/runtime".as_ptr(),
-        engine_version: c"4.7.2".as_ptr(),
-        project_id: c"125d2115-7176-46e1-8806-95b790f01717".as_ptr(),
-        log: None,
-        log_user: ptr::null_mut(),
-    };
-    assert_eq!(control.boot(&fake::LEAVES, &setup), 1);
-    control
-}
 
 fn configure(control: &Control, change: impl FnOnce(&mut Settings)) {
     let mut settings = default_settings();
@@ -79,11 +63,7 @@ fn submit(control: &Control, lists: &[usize]) {
 }
 
 fn status(control: &Control) -> Status {
-    let mut value = Status {
-        struct_size: size_of::<Status>() as u32,
-        abi_version: ABI_VERSION,
-        ..Status::default()
-    };
+    let mut value = fake::status_header();
     // SAFETY: a complete local record.
     assert_eq!(unsafe { control.status(&fake::LEAVES, &mut value) }, 1);
     value
@@ -91,7 +71,7 @@ fn status(control: &Control) -> Status {
 
 #[test]
 fn the_first_pass_binds_creates_the_auto_provider_and_evaluates_slot_zero() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     assert_eq!(render(&control, &sr(1)), 1);
     assert_eq!(
         fake::take_d3d12_calls(),
@@ -118,15 +98,18 @@ fn the_first_pass_binds_creates_the_auto_provider_and_evaluates_slot_zero() {
 }
 
 #[test]
-fn another_device_is_refused_and_a_failed_fence_keeps_the_binding() {
-    let control = booted();
+fn failed_fence_creation_retries_before_publishing_the_binding() {
+    let control = fake::boot_d3d12();
     fake::BIND.set(0);
     assert_eq!(render(&control, &sr(1)), 0);
     assert_eq!(fake::take_d3d12_calls(), [("bind", 0)]);
+    assert_eq!(render(&control, &sr(2)), 0);
+    assert_eq!(fake::take_d3d12_calls(), [("bind", 0)]);
+    fake::BIND.set(1);
     assert_eq!(render(&control, &sr(2)), 1);
     assert_eq!(
         fake::take_d3d12_calls(),
-        [("create", 1), ("wait", 0), ("evaluate", 0)]
+        [("bind", 0), ("create", 1), ("wait", 0), ("evaluate", 0)]
     );
     let other = control.d3d12.render(
         &control,
@@ -142,7 +125,7 @@ fn another_device_is_refused_and_a_failed_fence_keeps_the_binding() {
 
 #[test]
 fn a_generation_change_drains_submitted_work_and_recreates() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     assert_eq!(render(&control, &sr(1)), 1);
     submit(&control, &[list(1)]);
     fake::take_d3d12_calls();
@@ -170,7 +153,7 @@ fn a_generation_change_drains_submitted_work_and_recreates() {
 
 #[test]
 fn a_provider_context_follows_its_output_but_not_its_input_extent() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     let mut frame = sr(1);
     assert_eq!(render(&control, &frame), 1);
     fake::take_d3d12_calls();
@@ -198,7 +181,7 @@ fn a_provider_context_follows_its_output_but_not_its_input_extent() {
 
 #[test]
 fn spatial_uses_the_normalising_context_and_its_plan() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     configure(&control, |s| s.sr_backend = SR_SPATIAL);
     let mut frame = sr(1);
     assert_eq!(render(&control, &frame), 1);
@@ -228,7 +211,7 @@ fn spatial_uses_the_normalising_context_and_its_plan() {
 
 #[test]
 fn a_refused_provider_falls_back_and_reports_its_first_result() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     configure(&control, |s| s.sr_backend = SR_DLSS);
     fake::REFUSED.set(Some((SR_DLSS, -7)));
     assert_eq!(render(&control, &sr(1)), 1);
@@ -251,7 +234,7 @@ fn a_refused_provider_falls_back_and_reports_its_first_result() {
 
 #[test]
 fn no_context_refuses_the_pass_before_a_slot_is_taken() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     configure(&control, |s| s.sr_backend = SR_SPATIAL);
     fake::REFUSED.set(Some((SR_NONE, -3)));
     assert_eq!(render(&control, &sr(1)), 0);
@@ -266,7 +249,7 @@ fn no_context_refuses_the_pass_before_a_slot_is_taken() {
 
 #[test]
 fn each_slot_waits_for_its_own_last_submission() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     for frame in 1..=3 {
         assert_eq!(render(&control, &sr(frame)), 1);
         submit(&control, &[list(frame)]);
@@ -290,7 +273,7 @@ fn each_slot_waits_for_its_own_last_submission() {
 
 #[test]
 fn a_slot_stays_owned_until_its_recording_is_fenced() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     for frame in 1..=3 {
         assert_eq!(render(&control, &sr(frame)), 1);
     }
@@ -306,12 +289,29 @@ fn a_slot_stays_owned_until_its_recording_is_fenced() {
 }
 
 #[test]
-fn the_final_scene_rides_the_last_slot_and_reports_its_submission() {
+fn final_scene_refuses_an_sr_slot_whose_wait_failed() {
+    let control = fake::boot_d3d12();
+    for frame in 1..=3 {
+        assert_eq!(render(&control, &sr(frame)), 1);
+        submit(&control, &[list(frame)]);
+    }
+    fake::take_d3d12_calls();
+    fake::WAIT.set(0);
+    assert_eq!(render(&control, &sr(4)), 0);
     assert_eq!(
-        [last_slot(0), last_slot(1), last_slot(3), last_slot(4)],
-        [0, 0, 2, 0]
+        render_on(
+            &control,
+            &pass(RSF_GAME_RENDER_FINAL_SCENE, 4),
+            HUDLESS_LIST
+        ),
+        0
     );
-    let control = booted();
+    assert_eq!(fake::take_d3d12_calls(), [("wait", 1)]);
+}
+
+#[test]
+fn the_final_scene_rides_the_last_slot_and_reports_its_submission() {
+    let control = fake::boot_d3d12();
     assert_eq!(render(&control, &sr(1)), 1);
     assert_eq!(render(&control, &sr(2)), 1);
     fake::take_d3d12_calls();
@@ -336,7 +336,7 @@ fn the_final_scene_rides_the_last_slot_and_reports_its_submission() {
 
 #[test]
 fn the_fg_provider_is_requested_only_from_an_owner_on_another_backend() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     fake::PRESENT_OWNER.set(Some(1));
     assert_eq!(render(&control, &sr(1)), 1);
     assert_eq!(
@@ -365,7 +365,7 @@ fn only_gameplay_flight_passes_keep_the_flight_screen() {
 
 #[test]
 fn input_refusals_are_logged_four_times_and_each_is_counted() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     fake::EVALUATED.set(BACKEND_ERROR_INVALID_ARGUMENT);
     for frame in 1..=5 {
         assert_eq!(render(&control, &sr(frame)), 0);
@@ -385,7 +385,7 @@ fn input_refusals_are_logged_four_times_and_each_is_counted() {
 
 #[test]
 fn present_reuses_the_rendered_identity_or_reports_a_miss() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     let chain = ptr::without_provenance_mut(CHAIN);
     control.d3d12.present(&control, &fake::LEAVES, chain);
     assert_eq!(fake::WINDOW.get(), None);
@@ -398,6 +398,9 @@ fn present_reuses_the_rendered_identity_or_reports_a_miss() {
     );
     assert_eq!(status(&control).active_sr, 1);
     control.d3d12.render_begin(&control, &fake::LEAVES, 2);
+    fake::CAPTURE_SR_BEGIN.set(0);
+    assert_eq!(render(&control, &sr(2)), 0);
+    fake::CAPTURE_SR_BEGIN.set(1);
     control.d3d12.present(&control, &fake::LEAVES, chain);
     assert_eq!(
         fake::WINDOW.get(),
@@ -414,7 +417,7 @@ fn present_reuses_the_rendered_identity_or_reports_a_miss() {
 
 #[test]
 fn shutdown_drains_ends_the_fg_session_and_releases_the_context() {
-    let control = booted();
+    let control = fake::boot_d3d12();
     assert_eq!(render(&control, &sr(1)), 1);
     submit(&control, &[list(1)]);
     fake::take_d3d12_calls();

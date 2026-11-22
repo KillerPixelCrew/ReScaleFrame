@@ -1,27 +1,15 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::platform::fake::setup;
 use crate::platform::{VkAdapter, fake};
-use std::ffi::CStr;
 use std::ptr;
-
-fn setup(runtime: &CStr) -> Setup {
-    Setup {
-        struct_size: size_of::<Setup>() as u32,
-        abi_version: ABI_VERSION,
-        runtime_directory: runtime.as_ptr(),
-        engine_version: c"4.7.2".as_ptr(),
-        project_id: c"125d2115-7176-46e1-8806-95b790f01717".as_ptr(),
-        log: None,
-        log_user: ptr::null_mut(),
-    }
-}
 
 const WINDOW: usize = 0x1234;
 
 /// A booted session whose engine reported its primary window.
 fn booted() -> Vulkan {
     let vulkan = Vulkan::new();
-    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
+    fake::boot_vulkan(&vulkan, c"C:/game/runtime");
     vulkan.report_window(ptr::without_provenance_mut(WINDOW));
     vulkan.creation().report_ready(true, true);
     fake::take_calls();
@@ -590,20 +578,20 @@ fn auto_resolves_through_the_runtime_policy_for_the_device_adapter() {
     };
     fake::VK_FACTS.set(served);
     fake::take_auto();
-    // Every provider servable: SR DLSS, FSR3, FSR4 and XeSS; FG FSR3 and XeSS. DLSS-G is never
-    // offered to Auto, so NVIDIA's FG preference falls back to FSR3.
+    // DLSS-G is explicit only. The fake answers independently of vendor and capability masks.
     let sr_all = bits(&[SR_DLSS, SR_FSR3, SR_FSR4, SR_XESS]);
     let fg_all = bits(&[FG_FSR3, FG_XESS]);
     let cases = [
-        (adapter(0x10de, 0), (SR_DLSS, FG_FSR3)),
-        (adapter(0x8086, 0), (SR_XESS, FG_XESS)),
-        (adapter(0x1002, 0), (SR_FSR3, FG_FSR3)),
-        (adapter(0x10de, 1), (0, FG_FSR3)),
-        // No adapter facts: the Runtime's unknown adapter, which keeps the former FSR3.
-        (None, (SR_FSR3, FG_FSR3)),
+        (adapter(0x10de, 0), (SR_XESS, FG_FSR3)),
+        (adapter(0x8086, 0), (SR_DLSS, FG_FSR3)),
+        (adapter(0x1002, 0), (SR_XESS, FG_XESS)),
+        (adapter(0x10de, 1), (0, 0)),
+        (None, (SR_DLSS, FG_XESS)),
     ];
     for (facts, expected) in cases {
         vulkan.creation().report_adapter(facts);
+        fake::SR_SELECTED.set(expected.0);
+        fake::FG_SELECTED.set(expected.1);
         let view = vulkan.view(&fake::LEAVES).0;
         assert_eq!((view.sr_backend, view.fg_backend), expected, "{facts:?}");
         let identity = facts.map_or((0, 0), |value| (value.vendor, value.software));
@@ -636,7 +624,7 @@ fn auto_resolves_through_the_runtime_policy_for_the_device_adapter() {
 }
 
 #[test]
-fn auto_chooses_only_providers_the_session_can_serve() {
+fn auto_passes_only_providers_the_session_can_serve() {
     let vulkan = booted();
     // NVIDIA without the Streamline session: DLSS is not served, FSR3 remains.
     vulkan.creation().report_adapter(adapter(0x10de, 0));
@@ -662,10 +650,13 @@ fn auto_chooses_only_providers_the_session_can_serve() {
     assert_eq!(fresh.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
     fresh.creation().report_adapter(adapter(0x8086, 0));
     fresh.creation().report_ready(true, true);
-    let view = fresh.view(&fake::LEAVES).0;
-    assert_eq!((view.sr_backend, view.fg_backend), (SR_XESS, FG_FSR3));
+    fresh.view(&fake::LEAVES);
+    let (sr, fg) = fake::take_auto();
+    assert_ne!(sr.unwrap().2 & bits(&[SR_XESS]), 0);
+    assert_eq!(fg.unwrap().2 & bits(&[FG_XESS]), 0);
     fresh.report_window(ptr::without_provenance_mut(WINDOW));
-    assert_eq!(fresh.view(&fake::LEAVES).0.fg_backend, FG_XESS);
+    fresh.view(&fake::LEAVES);
+    assert_ne!(fake::take_auto().1.unwrap().2 & bits(&[FG_XESS]), 0);
     // FSR4 SR is served only with its build, the graph lease capability and interop; FSR4 FG is
     // never offered to Auto, so its probe is not asked.
     fake::VK_FACTS.set(VkFacts {
@@ -729,6 +720,7 @@ fn auto_admission_and_presenter_follow_the_resolved_provider() {
     assert!(intel.presenter_current(&fake::LEAVES, FG_FSR3));
     // Once reported, XeSS is served: the FSR3 owner is recreated as a fixed-guide XeSS owner.
     intel.report_window(ptr::without_provenance_mut(WINDOW));
+    fake::FG_SELECTED.set(FG_XESS);
     assert!(!intel.presenter_current(&fake::LEAVES, FG_FSR3));
     intel.presenter_created(true, FG_XESS, 1);
     assert!(intel.presenter_current(&fake::LEAVES, FG_XESS));

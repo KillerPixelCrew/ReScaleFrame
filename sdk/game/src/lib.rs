@@ -8,11 +8,14 @@ pub mod d3d11_host_abi;
 pub mod plugin_session_abi;
 mod render_config;
 mod render_pass;
+pub mod presentation_result;
 pub mod shader_patch_abi;
+pub mod sharpening_abi;
 pub mod sr_abi;
 #[cfg(windows)]
 pub mod win32;
 pub mod callback_host_abi;
+pub mod vendor_paths;
 
 pub const RSF_GAME_FRAME_ABI_VERSION: u32 = 2;
 pub const RSF_FRAME_FLAG_RESET: u32 = 1;

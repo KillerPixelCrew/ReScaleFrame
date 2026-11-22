@@ -1,14 +1,45 @@
 // SPDX-License-Identifier: MIT
 //! Test leaves. Recorded calls are thread-local, so parallel tests do not share them.
 use super::{
-    FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, LockedBody, PLATFORM_VERSION,
-    Platform, Setup, Sharpening, SrContext, SrCreate, SrEvaluate, VkFacts, VkLatencyFacts, VkProc,
-    VkSrContext, VkSrCreate, WindowFacts, WindowIdentity,
+    ABI_VERSION, FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, LockedBody,
+    PLATFORM_VERSION, Platform, Setup, Sharpening, SrContext, SrCreate, SrEvaluate, Status,
+    VkFacts, VkLatencyFacts, VkProc, VkSrContext, VkSrCreate, WindowFacts, WindowIdentity,
 };
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};
 use std::cell::{Cell, RefCell};
-use std::ffi::c_void;
+use std::ffi::{CStr, c_void};
 use std::ptr;
+
+pub(crate) fn setup(runtime: &CStr) -> Setup {
+    Setup {
+        struct_size: size_of::<Setup>() as u32,
+        abi_version: ABI_VERSION,
+        runtime_directory: runtime.as_ptr(),
+        engine_version: c"4.7.2".as_ptr(),
+        project_id: c"125d2115-7176-46e1-8806-95b790f01717".as_ptr(),
+        log: None,
+        log_user: ptr::null_mut(),
+    }
+}
+
+pub(crate) fn boot_d3d12() -> crate::Control {
+    let control = crate::Control::new();
+    INSTALL_RESULT.set(0);
+    assert_eq!(control.boot(&LEAVES, &setup(c"C:/game/runtime")), 1);
+    control
+}
+
+pub(crate) fn boot_vulkan(vulkan: &crate::vulkan::Vulkan, runtime: &CStr) {
+    assert_eq!(vulkan.boot(&LEAVES, &setup(runtime)), 1);
+}
+
+pub(crate) fn status_header() -> Status {
+    Status {
+        struct_size: size_of::<Status>() as u32,
+        abi_version: ABI_VERSION,
+        ..Status::default()
+    }
+}
 
 thread_local! {
     pub(crate) static INSTALL_RESULT: Cell<i32> = const { Cell::new(0) };
@@ -31,8 +62,12 @@ thread_local! {
     pub(crate) static VK_LATENCY_RESULT: Cell<i32> = const { Cell::new(0) };
     /// The D3D12 leaves in call order, each with its main argument.
     static D3D12_CALLS: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static CAPTURE_SR_BEGIN: Cell<u32> = const { Cell::new(1) };
+    pub(crate) static WAIT: Cell<u32> = const { Cell::new(1) };
     pub(crate) static BIND: Cell<u32> = const { Cell::new(1) };
     pub(crate) static SIGNAL: Cell<u32> = const { Cell::new(1) };
+    pub(crate) static SR_SELECTED: Cell<u32> = const { Cell::new(3) };
+    pub(crate) static FG_SELECTED: Cell<u32> = const { Cell::new(3) };
     pub(crate) static SR_DEFAULT: Cell<u32> = const { Cell::new(1) };
     pub(crate) static FG_DEFAULT: Cell<u32> = const { Cell::new(3) };
     pub(crate) static PRESENT_OWNER: Cell<Option<u32>> = const { Cell::new(None) };
@@ -292,7 +327,7 @@ unsafe extern "C" fn d3d12_bind(_: *mut c_void, _: *mut c_void) -> u32 {
 
 unsafe extern "C" fn d3d12_wait(value: u64) -> u32 {
     d3d12("wait", value);
-    1
+    WAIT.get()
 }
 
 unsafe extern "C" fn d3d12_signal(value: u64) -> u32 {
@@ -364,7 +399,7 @@ unsafe extern "C" fn sr_refusal_log(_: *const rsf_game_render_pass, width: u32, 
 }
 
 unsafe extern "C" fn capture_sr_begin(_: *const rsf_game_render_pass) -> u32 {
-    1
+    CAPTURE_SR_BEGIN.get()
 }
 
 unsafe extern "C" fn final_scene(_: *mut c_void, _: *const rsf_game_render_pass, slot: u32) -> u32 {
@@ -649,38 +684,14 @@ pub(crate) fn take_auto() -> (Option<(u32, u32, u32)>, Option<(u32, u32, u32)>) 
     (SR_ASKED.take(), FG_ASKED.take())
 }
 
-/// As `rsf_gpu_select_sr_backend`: NVIDIA DLSS, Intel XeSS, others FSR3 on hardware, none on a
-/// software adapter; then FSR3, then XeSS among `choices`.
 unsafe extern "C" fn sr_select_backend(vendor: u32, software: u32, choices: u32) -> u32 {
     SR_ASKED.set(Some((vendor, software, choices)));
-    if software != 0 {
-        return 0;
-    }
-    let preferred = match vendor {
-        0x10de => 1,
-        0x8086 => 5,
-        _ => 3,
-    };
-    [preferred, 3, 5]
-        .into_iter()
-        .find(|backend| choices & (1 << backend) != 0)
-        .unwrap_or(0)
+    SR_SELECTED.get()
 }
 
-/// As `rsf_fg_select_auto_backend` of `rsf_fg_default_backend`: the hardware vendor's DLSS, XeSS
-/// or FSR3, then FSR3, among `choices`.
 unsafe extern "C" fn fg_select_backend(vendor: u32, software: u32, choices: u32) -> u32 {
     FG_ASKED.set(Some((vendor, software, choices)));
-    let preferred = match (software, vendor) {
-        (0, 0x10de) => 1,
-        (0, 0x8086) => 5,
-        (0, 0x1002) => 3,
-        _ => 0,
-    };
-    [preferred, 3]
-        .into_iter()
-        .find(|&backend| backend != 0 && choices & (1 << backend) != 0)
-        .unwrap_or(0)
+    FG_SELECTED.get()
 }
 
 pub(crate) static LEAVES: Platform = Platform {

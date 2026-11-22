@@ -39,24 +39,30 @@ static CONTROL: LazyLock<Control> = LazyLock::new(Control::new);
 /// `VK_ERROR_INITIALIZATION_FAILED`, for a creation call without its table or record.
 const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
 
-/// A size- and ABI-checked record: `struct_size` and `abi_version` lead every one of them.
-///
 /// # Safety
-/// `record` is null or readable for its leading eight bytes, and for `T` when they pass.
-unsafe fn checked<'a, T>(record: *const T, abi: u32) -> Option<&'a T> {
-    // SAFETY: the caller's guarantee for the header.
-    let [size, version] = unsafe { record.cast::<[u32; 2]>().as_ref() }.copied()?;
-    // SAFETY: the header covers T.
-    (size as usize >= size_of::<T>() && version == abi).then(|| unsafe { &*record })
+/// A non-null record has a readable size word. When the size covers T, its version word is
+/// readable too. T is a C record with two leading u32 header fields.
+unsafe fn header_valid<T>(record: *const T, abi: u32) -> bool {
+    if record.is_null() {
+        return false;
+    }
+    let header = record.cast::<u32>();
+    // SAFETY: the caller guarantees the size word, and a sufficient size covers the version.
+    unsafe { header.read() as usize >= size_of::<T>() && header.add(1).read() == abi }
 }
 
-/// As `checked`, for a caller-owned output record.
-///
 /// # Safety
-/// As `checked`, and writable for `T` when the header passes.
+/// As for header_valid. A matching header covers a fully initialized T.
+unsafe fn checked<'a, T>(record: *const T, abi: u32) -> Option<&'a T> {
+    // SAFETY: the caller guarantees a readable initialized record when the header matches.
+    unsafe { header_valid(record, abi) }.then(|| unsafe { &*record })
+}
+
+/// # Safety
+/// As for header_valid. A matching header covers writable storage for T.
 unsafe fn checked_output<T>(record: *mut T, abi: u32) -> Option<*mut T> {
-    // SAFETY: the caller's guarantee.
-    unsafe { checked(record.cast_const(), abi) }.map(|_| record)
+    // SAFETY: the header is initialized independently of the rest of the record.
+    unsafe { header_valid(record.cast_const(), abi) }.then_some(record)
 }
 
 /// # Safety
@@ -69,7 +75,7 @@ unsafe fn leaves(table: *const Platform) -> Option<&'static Platform> {
 /// # Safety
 /// `services` is null or a readable `rsf_godot_engine_services` of its stated size.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_attach_engine(services: *const EngineServices) -> c_int {
+unsafe extern "C" fn rsfg_attach_engine(services: *const EngineServices) -> c_int {
     // SAFETY: the caller's guarantee.
     unsafe { checked(services, ABI_VERSION) }
         .is_some_and(|services| CONTROL.attach_engine(services))
@@ -77,25 +83,18 @@ unsafe extern "C" fn rsf_godot_attach_engine(services: *const EngineServices) ->
 }
 
 /// # Safety
-/// `table` is null or the leaf table; `settings` is forwarded to the engine module unchanged.
+/// `settings` follows the checked record contract.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_configure_engine(
-    table: *const Platform,
-    settings: *const Settings,
-    viewport_id: u64,
-) -> c_int {
+unsafe extern "C" fn rsfg_configure_engine(settings: *const Settings, viewport_id: u64) -> c_int {
     // SAFETY: the caller's guarantee.
-    unsafe { leaves(table) }.map_or(0, |_| CONTROL.configure_engine(settings, viewport_id))
+    unsafe { checked(settings, SETTINGS_ABI_VERSION) }.map_or(0, |settings| {
+        CONTROL.configure_engine(settings, viewport_id)
+    })
 }
 
-/// # Safety
-/// `table` is null or the leaf table.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_reset_history(table: *const Platform) {
-    // SAFETY: the caller's guarantee.
-    if unsafe { leaves(table) }.is_some() {
-        CONTROL.reset_history();
-    }
+extern "C" fn rsfg_reset_history() {
+    CONTROL.reset_history();
 }
 
 /// # Safety
@@ -126,49 +125,26 @@ unsafe extern "C" fn rsf_godot_configure(
 }
 
 /// # Safety
-/// `table` is null or the leaf table; `settings` is null or a writable `rsf_godot_settings` of
-/// its stated size.
+/// `settings` follows the checked output record contract.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_settings_get(
-    table: *const Platform,
-    settings: *mut Settings,
-) -> c_int {
-    // SAFETY: the caller's guarantee.
-    match unsafe {
-        (
-            leaves(table),
-            checked_output(settings, SETTINGS_ABI_VERSION),
-        )
-    } {
-        // SAFETY: checked_output established the record.
-        (Some(_), Some(settings)) => unsafe { CONTROL.settings(settings) },
-        _ => 0,
-    }
+unsafe extern "C" fn rsfg_settings(settings: *mut Settings) -> c_int {
+    // SAFETY: the caller's guarantee; a matching header covers writable storage.
+    unsafe { checked_output(settings, SETTINGS_ABI_VERSION) }
+        .map_or(0, |settings| unsafe { CONTROL.settings(settings) })
 }
 
 /// # Safety
-/// `table` is null or the leaf table; `status` is null or a writable `rsf_godot_status` of its
-/// stated size.
+/// `status` follows the checked output record contract.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_status_get(table: *const Platform, status: *mut Status) -> c_int {
+unsafe extern "C" fn rsfg_status(status: *mut Status) -> c_int {
     // SAFETY: the caller's guarantee.
-    match unsafe { (leaves(table), checked_output(status, ABI_VERSION)) } {
+    match (platform::registered(), unsafe {
+        checked_output(status, ABI_VERSION)
+    }) {
         // SAFETY: checked_output established the record.
         (Some(platform), Some(status)) => unsafe { CONTROL.status(platform, status) },
         _ => 0,
     }
-}
-
-/// `ReScaleFrameRuntime.get_status` reports the engine bridge ready only for a live session.
-///
-/// # Safety
-/// As `rsf_godot_status_get`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_status_ready(table: *const Platform, status: *mut Status) -> c_int {
-    // SAFETY: the caller's guarantee; a successful read filled the record.
-    let ready =
-        unsafe { rsf_godot_status_get(table, status) } != 0 && unsafe { (*status).session_id } != 0;
-    ready.into()
 }
 
 /// `message` is forwarded to the session log unchanged, as the C++ trampoline did.
@@ -226,16 +202,10 @@ unsafe extern "C" fn rsf_godot_d3d12_render_begin(table: *const Platform, frame:
 }
 
 /// # Safety
-/// `table` is null or the leaf table; `lists` is null or readable for `count` entries.
+/// `lists` is null or readable for `count` entries.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_d3d12_submitted(
-    table: *const Platform,
-    queue: *mut c_void,
-    lists: *const *mut c_void,
-    count: u32,
-) {
-    // SAFETY: the caller's guarantee.
-    let Some(platform) = (unsafe { leaves(table) }) else {
+unsafe extern "C" fn rsfg_submitted(queue: *mut c_void, lists: *const *mut c_void, count: u32) {
+    let Some(platform) = (platform::registered()) else {
         return;
     };
     if queue.is_null() || lists.is_null() || count == 0 {
@@ -247,12 +217,12 @@ unsafe extern "C" fn rsf_godot_d3d12_submitted(
 }
 
 /// # Safety
-/// `table` is null or the leaf table; `chain` is the engine's swapchain for the call.
+/// `chain` is the engine's swapchain for the call.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_d3d12_present(table: *const Platform, chain: *mut c_void) {
-    // SAFETY: the caller's guarantee.
-    if let Some(platform) = unsafe { leaves(table) }
+unsafe extern "C" fn rsfg_present(chain: *mut c_void) {
+    if let Some(platform) = platform::registered()
         && CONTROL.booted()
+        && !chain.is_null()
     {
         CONTROL.d3d12.present(&CONTROL, platform, chain);
     }
@@ -526,10 +496,10 @@ unsafe extern "C" fn rsf_godot_accept_window(table: *const Platform, window: *mu
 /// `rsfg_cpu`.
 ///
 /// # Safety
-/// `table` is null or the leaf table; `event` is null or a readable `rsf_game_cpu_event` of its
+/// `event` is null or a readable `rsf_game_cpu_event` of its
 /// stated size.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_cpu(table: *const Platform, event: *const rsf_game_cpu_event) {
+unsafe extern "C" fn rsfg_cpu(event: *const rsf_game_cpu_event) {
     let vulkan = CONTROL.vulkan.booted();
     if !CONTROL.booted() && !vulkan {
         return;
@@ -539,8 +509,7 @@ unsafe extern "C" fn rsf_godot_cpu(table: *const Platform, event: *const rsf_gam
         Some(&size) if size as usize >= size_of::<rsf_game_cpu_event>() => unsafe { &*event },
         _ => return,
     };
-    // SAFETY: the caller's guarantee.
-    if let Some(platform) = unsafe { leaves(table) } {
+    if let Some(platform) = platform::registered() {
         CONTROL.window.cpu(platform, vulkan, event);
     }
 }
@@ -557,14 +526,10 @@ unsafe extern "C" fn rsf_godot_window_release(table: *const Platform) {
     }
 }
 
-/// `rsfg_request_latency_ping`.
-///
-/// # Safety
-/// `table` is null or the leaf table.
+/// Request a PCL ping for the admitted window.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_latency_ping(table: *const Platform) -> c_int {
-    // SAFETY: the caller's guarantee.
-    unsafe { leaves(table) }.map_or(0, |platform| {
+extern "C" fn rsfg_request_latency_ping() -> c_int {
+    platform::registered().map_or(0, |platform| {
         CONTROL
             .window
             .latency_ping(platform, CONTROL.vulkan.booted())
@@ -572,14 +537,10 @@ unsafe extern "C" fn rsf_godot_latency_ping(table: *const Platform) -> c_int {
 }
 
 /// `rsfg_vk_window`: while the Vulkan session is booted, asks the input window admission and
-/// keeps the window as the session's primary window either way.
-///
-/// # Safety
-/// `table` is null or the leaf table; `window` is a window handle, compared and passed through.
+/// keeps its window as the session's primary window.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_window(table: *const Platform, window: *mut c_void) {
-    // SAFETY: the caller's guarantee.
-    if let Some(platform) = unsafe { leaves(table) }
+extern "C" fn rsfg_vk_window(window: *mut c_void) {
+    if let Some(platform) = platform::registered()
         && CONTROL.vulkan.booted()
     {
         CONTROL.window.accept(platform, window);

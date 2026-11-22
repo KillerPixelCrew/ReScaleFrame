@@ -129,7 +129,9 @@ struct Ledger {
     next_slot: u32,
     pending: Vec<Pending>,
     current_frame: u64,
-    rendered: Rendered,
+    rendered: Option<Rendered>,
+    attempted_sr: Option<(u64, u64)>,
+    sr_slot: Option<((u64, u64), u32)>,
     diagnostics: u32,
 }
 
@@ -146,11 +148,6 @@ fn screen(settings: &Settings, screen: u32) -> u32 {
     }
 }
 
-/// The last slot an SR pass took; the first when none has.
-fn last_slot(next: u32) -> u32 {
-    next.checked_sub(1).map_or(0, |last| last % SLOTS)
-}
-
 impl D3d12 {
     pub(crate) fn new() -> Self {
         Self {
@@ -164,7 +161,9 @@ impl D3d12 {
                 next_slot: 0,
                 pending: Vec::new(),
                 current_frame: 0,
-                rendered: Rendered(empty_pass()),
+                rendered: None,
+                attempted_sr: None,
+                sr_slot: None,
                 diagnostics: 0,
             }),
         }
@@ -186,22 +185,19 @@ impl D3d12 {
         pass: &rsf_game_render_pass,
     ) -> c_int {
         let identity = (device as usize, queue as usize);
-        let first = {
+        {
             let mut ledger = self.ledger();
-            match ledger.bound {
-                None => {
-                    ledger.bound = Some(identity);
-                    true
-                }
-                Some(bound) if bound == identity => false,
-                Some(_) => return 0,
+            if pass.role == RSF_GAME_RENDER_SR {
+                ledger.attempted_sr = Some((pass.session_id, pass.source_frame_id));
+                ledger.sr_slot = None;
             }
-        };
-        // The first device and queue stay bound when the fence failed, as before.
-        if first && !platform.d3d12_bind(device, queue) {
-            return 0;
+            match ledger.bound {
+                // Binding creates the fence and calls no owner.
+                None if platform.d3d12_bind(device, queue) => ledger.bound = Some(identity),
+                Some(bound) if bound == identity => {}
+                _ => return 0,
+            }
         }
-        self.ledger().rendered = Rendered::of(pass);
         if pass.role == RSF_GAME_RENDER_SR && !platform.capture_sr_begin(pass) {
             return 0;
         }
@@ -245,19 +241,9 @@ impl D3d12 {
         else {
             return 0;
         };
-        let (slot, fence) = {
-            let mut ledger = self.ledger();
-            let slot = ledger.next_slot % SLOTS;
-            if ledger.pending.iter().any(|item| item.slot == slot) {
-                return 0;
-            }
-            ledger.next_slot = ledger.next_slot.wrapping_add(1);
-            (slot, ledger.slots[slot as usize])
-        };
-        // The slot's descriptors are reused only after its last submission completed.
-        if !platform.d3d12_wait(fence) {
+        let Some(slot) = self.acquire_slot(platform) else {
             return 0;
-        }
+        };
         let request = SrEvaluate {
             slot,
             screen: screen(&settings, pass.screen),
@@ -291,6 +277,12 @@ impl D3d12 {
                 hudless: false,
                 submitted: false,
             });
+            if evaluated == BACKEND_OK {
+                ledger.rendered = Some(Rendered::of(pass));
+                if pass.role == RSF_GAME_RENDER_SR {
+                    ledger.sr_slot = Some(((pass.session_id, pass.source_frame_id), slot));
+                }
+            }
             ledger.context_result
         };
         control.sr_frame(&SrFrame {
@@ -306,28 +298,74 @@ impl D3d12 {
         c_int::from(evaluated == BACKEND_OK)
     }
 
-    /// The HUD-less colour record of the final scene, captured and pending on the last SR slot.
+    /// Reuse descriptors only after the slot's last submission completed.
+    fn acquire_slot(&self, platform: &Platform) -> Option<u32> {
+        let (slot, fence) = {
+            let ledger = self.ledger();
+            let slot = ledger.next_slot % SLOTS;
+            if ledger.pending.iter().any(|item| item.slot == slot)
+                || ledger.sr_slot.is_some_and(|(_, acquired)| acquired == slot)
+            {
+                return None;
+            }
+            (slot, ledger.slots[slot as usize])
+        };
+        if !platform.d3d12_wait(fence) {
+            return None;
+        }
+        self.ledger().next_slot = (slot + 1) % SLOTS;
+        Some(slot)
+    }
+
+    /// The HUD-less record can share this source's admitted SR slot while its lists are pending
+    /// on the same queue. After submission it must wait for that slot's completion fence.
     fn final_scene(
         &self,
         platform: &Platform,
         commands: *mut c_void,
         pass: &rsf_game_render_pass,
     ) -> c_int {
-        let slot = {
-            let ledger = self.ledger();
-            let slot = last_slot(ledger.next_slot);
-            if ledger.pending.iter().any(|item| {
-                item.slot == slot
-                    && (item.session != pass.session_id || item.frame != pass.source_frame_id)
-            }) {
+        let source = (pass.session_id, pass.source_frame_id);
+        let (attempted, admitted) = {
+            let mut ledger = self.ledger();
+            let attempted = ledger.attempted_sr == Some(source);
+            let admitted = ledger.sr_slot.take().filter(|(key, _)| *key == source);
+            (attempted, admitted)
+        };
+        let slot = if let Some((_, slot)) = admitted {
+            let fence = {
+                let ledger = self.ledger();
+                let mut pending = ledger.pending.iter().filter(|item| item.slot == slot);
+                if let Some(item) = pending.next() {
+                    if item.submitted
+                        || (item.session, item.frame) != source
+                        || pending.next().is_some()
+                    {
+                        return 0;
+                    }
+                    None
+                } else {
+                    Some(ledger.slots[slot as usize])
+                }
+            };
+            if fence.is_some_and(|fence| !platform.d3d12_wait(fence)) {
                 return 0;
             }
+            slot
+        } else {
+            if attempted {
+                return 0;
+            }
+            let Some(slot) = self.acquire_slot(platform) else {
+                return 0;
+            };
             slot
         };
         if !platform.final_scene(commands, pass, slot) {
             return 0;
         }
-        self.ledger().pending.push(Pending {
+        let mut ledger = self.ledger();
+        ledger.pending.push(Pending {
             commands: commands as usize,
             slot,
             session: pass.session_id,
@@ -335,6 +373,9 @@ impl D3d12 {
             hudless: true,
             submitted: false,
         });
+        if !attempted {
+            ledger.rendered = Some(Rendered::of(pass));
+        }
         1
     }
 
@@ -441,7 +482,13 @@ impl D3d12 {
 
     /// `rsfg_render_begin` on a booted session. A leaf exception clears the frame, as before.
     pub(crate) fn render_begin(&self, control: &Control, platform: &Platform, frame: u64) {
-        self.ledger().current_frame = frame;
+        {
+            let mut ledger = self.ledger();
+            ledger.current_frame = frame;
+            ledger.rendered = None;
+            ledger.attempted_sr = None;
+            ledger.sr_slot = None;
+        }
         if frame != 0 && !platform.render_begin(control.session_id(), frame) {
             self.ledger().current_frame = 0;
         }
@@ -457,13 +504,17 @@ impl D3d12 {
         if chain.is_null() || current == 0 {
             return;
         }
-        let mut pass = if rendered.0.source_frame_id == current {
-            rendered.0
+        let session = control.session_id();
+        let mut pass = if let Some(Rendered(pass)) = rendered
+            && pass.source_frame_id == current
+            && pass.session_id == session
+        {
+            pass
         } else {
             control.sr_missed();
             let mut pass = empty_pass();
             pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-            pass.session_id = control.session_id();
+            pass.session_id = session;
             pass.source_frame_id = current;
             pass.native_frame = current;
             pass.screen = SCREEN_UNKNOWN;

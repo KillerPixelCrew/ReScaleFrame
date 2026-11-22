@@ -74,28 +74,13 @@ Projection previous_projection;
 Transform3D previous_camera;
 static_assert(sizeof(real_t) == sizeof(float), "pass.rs takes Godot's jitter and camera scalars as float");
 
+bool configure_viewport(RID viewport, const Dictionary *options, const rsf_godot_settings *typed);
+
 int configure_from_extension(const rsf_godot_settings *value, uint64_t viewport_id) {
     if (!value || value->struct_size < sizeof(*value) || value->abi_version != RSF_GODOT_SETTINGS_ABI_VERSION) return 0;
     auto *bridge = Object::cast_to<ReScaleFrameBridge>(Engine::get_singleton()->get_singleton_object("ReScaleFrame"));
     if (!bridge) return 0;
-    Dictionary options;
-#define RSF_FIELD(name) options[#name] = value->name
-    options["sharpening_mode"] = value->sharpening.mode;
-    options["sharpening_sharpness"] = value->sharpening.sharpness;
-    options["sharpening_mas"] = value->sharpening.mas;
-    options["sharpening_motion_sharpness"] = value->sharpening.motion_sharpness;
-    options["sharpening_motion_threshold"] = value->sharpening.motion_threshold;
-    options["sharpening_motion_scale_limit"] = value->sharpening.motion_scale_limit;
-    options["sharpening_contrast_enabled"] = value->sharpening.contrast_enabled;
-    options["sharpening_contrast"] = value->sharpening.contrast;
-    options["sharpening_depth_scale"] = value->sharpening.depth_scale;
-    options["sharpening_depth_bias"] = value->sharpening.depth_bias;
-    options["sharpening_clamp_output"] = value->sharpening.clamp_output;
-    options["sharpening_debug"] = value->sharpening.debug;
-    RSF_FIELD(sr_backend); RSF_FIELD(quality); RSF_FIELD(dlss_preset); RSF_FIELD(fg_backend); RSF_FIELD(fg_mode);
-    RSF_FIELD(generated_frames); RSF_FIELD(latency_mode); RSF_FIELD(frame_limit_us); RSF_FIELD(gameplay);
-#undef RSF_FIELD
-    return bridge->configure(options, RID::from_uint64(viewport_id)) ? 1 : 0;
+    return configure_viewport(RID::from_uint64(viewport_id), nullptr, value) ? 1 : 0;
 }
 void reset_from_extension() { rsf_godot_reset_request(); }
 
@@ -229,7 +214,8 @@ void ReScaleFrameBridge::reset_history() { rsf_godot_reset_request(); }
 namespace {
 // Godot and driver leaves for host.rs's configure sequence.
 struct ConfigureContext {
-    const Dictionary &options;
+    const Dictionary *options;
+    const rsf_godot_settings *typed;
     RID viewport;
     rsf_godot_settings value{sizeof(value), RSF_GODOT_SETTINGS_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
 };
@@ -240,8 +226,10 @@ uint32_t configure_is_root(void *context) {
 }
 // Godot's Variant conversions, which differ from the GDExtension's checked integer parser.
 const rsf_godot_settings *configure_parse(void *context) {
-    const Dictionary &options = static_cast<ConfigureContext *>(context)->options;
-    rsf_godot_settings &value = static_cast<ConfigureContext *>(context)->value;
+    auto &request = *static_cast<ConfigureContext *>(context);
+    if (request.typed) return request.typed;
+    const Dictionary &options = *request.options;
+    rsf_godot_settings &value = request.value;
     value.sr_backend = options.get("sr_backend", value.sr_backend);
     value.quality = options.get("quality", value.quality);
     value.dlss_preset = options.get("dlss_preset", value.dlss_preset);
@@ -280,14 +268,17 @@ void configure_apply_scaling(void *context, uint32_t mode, float scale) {
         mode == RSF_GODOT_VIEWPORT_SPATIAL ? RSE::VIEWPORT_SCALING_3D_MODE_FSR : RSE::VIEWPORT_SCALING_3D_MODE_FSR2);
     rs->viewport_set_scaling_3d_scale(viewport, scale);
 }
-}
-bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
-    ConfigureContext context{options, viewport};
+bool configure_viewport(RID viewport, const Dictionary *options, const rsf_godot_settings *typed) {
+    ConfigureContext context{options, typed, viewport};
     const rsf_godot_configure_facts facts{uint32_t(viewport.is_valid()),
         uint32_t(OS::get_singleton()->get_current_rendering_driver_name() == "vulkan")};
     const rsf_godot_configure_callbacks callbacks{&context, configure_is_root, configure_parse,
         configure_report_window, configure_native, configure_queue_primary, configure_apply_scaling};
     return rsf_godot_host_configure(&facts, &callbacks) != 0;
+}
+}
+bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
+    return configure_viewport(viewport, &options, nullptr);
 }
 Dictionary ReScaleFrameBridge::get_status() const {
     Dictionary result;

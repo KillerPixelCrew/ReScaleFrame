@@ -1,5 +1,39 @@
 # Godot native integration ownership
 
+## Native control and D3D12 follow-up
+
+The existing engine ABI retains its function signatures and record layouts. The DLL exports
+control, status, CPU and several presentation notifications directly from Rust through
+`native/exports.def`. ABI checks read the size before the version and
+validate output headers without borrowing uninitialized bodies. The engine callback applies the
+typed extension settings through the same root-viewport admission and scaling path as the public
+Dictionary method.
+
+D3D12 status returns ABI 3 and reads latency availability, mode and counters from the Runtime
+latency owner. Godot and Unity use the same packaged vendor paths and give a nonzero provider
+switch result precedence in their legacy FG result. The sharpening record derives from the public
+C header for all three Rust consumers, with compile-time field offset checks.
+
+A D3D12 binding publishes the device and queue after fence creation. Present reuses a receipt from
+successful recording for its current session and source. HUD-less capture shares that source's
+slot while its lists await submission, waits for completion if the slot was signalled, and
+refuses it if the original SR slot wait failed. A native final-scene pass acquires its own retired
+slot. Window subclass forwarding remains keyed by HWND through a refused restoration so a
+replacement window can attach independently.
+
+Rust plans the motion diagnostic's buffer size and dispatch and supplies its shader. The
+GDExtension entry, class bindings, Variant/RID marshaling and RenderingDevice recording still
+use godot-cpp. COM, DXGI and C++ FrameCapture12 operations stay in typed native leaves. CPU and
+ping routing still need a shared Runtime service. The current Vulkan Present marker carries a
+window and a phase, and needs a source receipt from the engine's submitted presentation path
+before it can report that identity explicitly.
+
+Source evidence is in the Rust entry points, the CMake export list, the engine's
+`RSF_RESOLVE`/GetProcAddress calls, and recording fixtures for ABI reuse, failed fence creation,
+failed SR admission and wait, and window replacement. Bindings were regenerated using bindgen
+0.72.1 and formatted with the Rust 1.94.1 toolchain. Native linking, tests and device execution
+remain pending.
+
 ## Rust control owner, first slice
 
 `ReScaleFrame.Godot.Native.dll` now links the `rsf-godot` staticlib (`native/lib.rs`) next to the
@@ -36,7 +70,7 @@ the integration; FG backend Auto resolution and SR Auto resolution still call th
 
 Preserved behaviour, including quirks:
 
-- The D3D12 status record carries ABI 1 and `rsfg_status` copies it to the caller, as before.
+- This slice returned ABI 1 for D3D12. The follow-up above corrected it to the current ABI.
 - A booted D3D12 session stays booted after `rsfg_shutdown`; a later `rsfg_boot` returns 1.
 - D3D12 configuration is accepted and stored before boot, as before. Vulkan configuration,
   settings and status route to the Vulkan session only after the shared refusal rules pass.
