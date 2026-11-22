@@ -5,6 +5,11 @@
 mod dispatch;
 #[cfg(feature = "dispatch")]
 mod dispatch_abi;
+#[cfg(feature = "dlss")]
+mod dlss;
+#[cfg(feature = "dlss")]
+#[allow(dead_code)]
+mod dlss_abi;
 #[cfg(feature = "ffx")]
 mod ffx;
 #[cfg(feature = "ffx")]

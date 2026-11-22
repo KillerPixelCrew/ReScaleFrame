@@ -4,22 +4,47 @@
 #include "../runtime/orchestrator/src/native_fg_dlss_vulkan_capture.cpp"
 #include <cstdio>
 #include <cstdlib>
+#include "vulkan-fg/dlss_abi.h"
 
 namespace {
-uint64_t lease_session = 7, lease_frame = 42;
+rsf_dlss_fixture_state fixture{
+    7, 42,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 3, 3,
+    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, 0, 0,
+    false, false, false, false, false, false, false, false,
+    9, 9,
+};
+auto& lease_session = fixture.lease_session;
+auto& lease_frame = fixture.lease_frame;
+auto& on_calls = fixture.on_calls;
+auto& off_calls = fixture.off_calls;
+auto& present_calls = fixture.present_calls;
+auto& fence_submits = fixture.fence_submits;
+auto& destroyed_chains = fixture.destroyed_chains;
+auto& sdk_presented = fixture.sdk_presented;
+auto& copies = fixture.copies;
+auto& release_calls = fixture.release_calls;
+auto& max_generated = fixture.max_generated;
+auto& backbuffer_count = fixture.backbuffer_count;
+auto& surface_usage = fixture.surface_usage;
+auto& expected_chain_usage = fixture.expected_chain_usage;
+auto& chain_creates = fixture.chain_creates;
+auto& inputs_waits = fixture.inputs_waits;
+auto& refuse_create = fixture.refuse_create;
+auto& refuse_enumeration = fixture.refuse_enumeration;
+auto& refuse_options = fixture.refuse_options;
+auto& refuse_submit = fixture.refuse_submit;
+auto& refuse_tags = fixture.refuse_tags;
+auto& refuse_release = fixture.refuse_release;
+auto& worker_timeout = fixture.worker_timeout;
+auto& refuse_inputs_wait = fixture.refuse_inputs_wait;
+auto& expected_inputs_value = fixture.expected_inputs_value;
+auto& completion_value = fixture.completion_value;
 uint32_t sdk_token = 42;
-uint32_t on_calls = 0, off_calls = 0, present_calls = 0, fence_submits = 0, destroyed_chains = 0;
-uint32_t sdk_presented = 0, copies = 0, release_calls = 0, max_generated = 3;
-uint32_t backbuffer_count = 3;
-VkImageUsageFlags surface_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-VkImageUsageFlags expected_chain_usage = surface_usage;
-uint32_t chain_creates = 0;
-bool refuse_create = false, refuse_enumeration = false;
-bool refuse_options = false, refuse_submit = false, refuse_tags = false, refuse_release = false;
 uint64_t worker_timeout_epoch = 0;
-bool worker_timeout = false, locked = false, refuse_inputs_wait = false;
-uint32_t inputs_waits = 0;
-uint64_t expected_inputs_value = 9, completion_value = 9;
+bool locked = false;
 const auto device = reinterpret_cast<VkDevice>(1);
 const auto queue = reinterpret_cast<VkQueue>(2);
 const auto chain = reinterpret_cast<VkSwapchainKHR>(3);
@@ -262,37 +287,6 @@ rsf_vk_function device_proc(void*, const char* name) {
     return nullptr;
 }
 
-struct Source {
-    rsf_frame_record record{};
-    rsf_fgvk_frame input{};
-    explicit Source(uint64_t frame) {
-        record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-        record.session_id = lease_session; record.frame_id = lease_frame = frame;
-        record.render_width = 640; record.render_height = 360; record.output_width = 1280; record.output_height = 720;
-        record.frame_time_ms = 16.0f;
-        auto& c = record.camera;
-        c.struct_size = sizeof(c); c.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-        c.render_width = record.render_width; c.render_height = record.render_height;
-        c.output_width = record.output_width; c.output_height = record.output_height;
-        c.near_plane = 0.1f; c.far_plane = 500.0f; c.vertical_fov_radians = 1.0f;
-        for (uint32_t i = 0; i < 16; i += 5) c.clip_to_previous_clip[i] = 1.0f;
-        input.struct_size = sizeof(input); input.abi_version = RSF_FGVK_ABI_VERSION; input.record = &record;
-        input.depth = {device, 99, VK_FORMAT_R32_SFLOAT, 640, 360, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
-        input.motion = {device, 98, VK_FORMAT_R16G16_SFLOAT, 640, 360, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
-        input.hudless = {device, 97, VK_FORMAT_R8G8B8A8_UNORM, 1280, 720, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
-        input.motion_scale_x = 320.0f; input.motion_scale_y = -180.0f;
-    }
-    void stage(rsf_dlssgvk* owner) const {
-        require(rsf_dlssgvk_prepare(owner, prepare_list, &input) == RSF_BACKEND_OK &&
-            rsf_dlssgvk_hudless(owner, color_list, &input) == RSF_BACKEND_OK, "source stages and tags the guides and HUD-less image");
-    }
-};
-rsf_dlssgvk_status status(rsf_dlssgvk* owner) {
-    rsf_dlssgvk_status result{sizeof(result), RSF_DLSSGVK_ABI_VERSION};
-    require(rsf_dlssgvk_get_status(owner, &result) == RSF_BACKEND_OK, "status snapshot is available");
-    return result;
-}
-
 // Runs the Rust present capture owner with the real Vulkan, WSI and
 // registration leaves. Only open, frame selection, readback recording and
 // file output are synthetic.
@@ -301,7 +295,7 @@ uint64_t capture_readbacks = 0;
 uint32_t capture_flushes = 0, capture_metadata = 0;
 const char* capture_failure = nullptr;
 int32_t capture_failure_result = 0;
-void check_present_capture(const rsf_fgvk_setup& setup) {
+int32_t open_present_capture(const rsf_fgvk_setup& setup, rsf_dlss_capture** capture) {
     static const auto synthetic = [] {
         auto result = rsf::capture_platform;
         result.open = [](const rsf_fgvk_setup*, void** out) -> rsf_backend_result { *out = synthetic_capture; return RSF_BACKEND_OK; };
@@ -335,54 +329,8 @@ void check_present_capture(const rsf_fgvk_setup& setup) {
     vk.setup = setup; vk.registration = register_capture;
     vk.commands = rsf_vk_capture_commands_open(&vk.setup.graphics);
     require(vk.commands != nullptr, "synthetic capture resolves its command and fence operations");
-    rsf_dlss_capture* capture{};
-    require(rsf_core_dlss_capture_open(&synthetic, &setup, &capture) == RSF_BACKEND_OK && capture &&
-        capture_callback && capture_user == capture && registrations == 1, "capture registers last with its Rust owner");
-
-    Source source(42);
-    rsf_dlssgvk_status sdk{sizeof(sdk), RSF_DLSSGVK_ABI_VERSION};
-    rsf_core_dlss_capture_remember(capture, &source.record, 3, &sdk, 1);
-    VkSwapchainCreateInfoKHR chain_info{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
-    chain_info.imageUsage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    chain_info.imageFormat = VK_FORMAT_B8G8R8A8_UNORM; chain_info.imageArrayLayers = 1; chain_info.imageExtent = {1280, 720};
-    const VkSemaphore waits[]{reinterpret_cast<VkSemaphore>(0x601), reinterpret_cast<VkSemaphore>(0x602)};
-    const uint32_t indices[]{1};
-    int extension = 0;
-    VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, &extension, 2, waits, 1, &real_chain, indices};
-    rsf_sl_present_capture_packet packet{sizeof(packet), RSF_SL_PRESENT_CAPTURE_ABI_VERSION, device, queue, &info, &chain_info,
-        reinterpret_cast<uintptr_t>(real_present), 42, 43, 2, 1, 5, reinterpret_cast<uintptr_t>(real_images),
-        reinterpret_cast<uintptr_t>(real_submit), reinterpret_cast<uintptr_t>(wsi_lease)};
     waited_fence = VK_NULL_HANDLE;
-    require(capture_callback(capture_user, &packet) == VK_SUBOPTIMAL_KHR, "captured Present returns the native result");
-    require(pool_family == 5 && pool_flags == VK_COMMAND_POOL_CREATE_TRANSIENT_BIT && capture_begins == 1 && capture_ends == 1,
-        "copy uses a transient pool for the packet queue family");
-    require(real_submits == 1 && submitted.waitSemaphoreCount == 2 && submitted.pWaitSemaphores == waits &&
-        submitted_stages[0] == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT && submitted_stages[1] == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT &&
-        submitted.commandBufferCount == 1 && submitted_commands == capture_commands && submitted_fence,
-        "copy consumes the Present's original binary waits with its own fence");
-    require(waited_fence == submitted_fence && fence_timeout == 15000000000ull && capture_flushes == 1 && capture_metadata == 1,
-        "own fence completes before the readback flush");
-    require(real_enumerations == 2 && real_presents == 1 && wsi_calls == 3 && presented_info != &info &&
-        presented.waitSemaphoreCount == 0 && !presented.pWaitSemaphores && presented.pNext == &extension &&
-        presented.swapchainCount == 1 && presented.pSwapchains == &real_chain && presented.pImageIndices == indices,
-        "native Present follows the completed copy without its consumed waits");
-
-    packet.source_frame = 7;
-    require(capture_callback(capture_user, &packet) == VK_SUBOPTIMAL_KHR && presented_info == &info && real_submits == 1 &&
-        real_presents == 2, "an unmapped boundary presents the original info once");
-    packet.source_frame = 42; chain_info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    require(capture_callback(capture_user, &packet) == VK_SUBOPTIMAL_KHR && presented_info == &info && real_enumerations == 2 &&
-        real_submits == 1 && std::strcmp(capture_failure, "real-chain-copy-contract") == 0 &&
-        capture_failure_result == VK_ERROR_FORMAT_NOT_SUPPORTED, "a chain without copy usage presents untouched");
-    packet.native_wsi_call = 0;
-    require(capture_callback(capture_user, &packet) == VK_ERROR_INITIALIZATION_FAILED && real_presents == 3,
-        "an incomplete packet is refused without a Present");
-
-    const auto fence = submitted_fence;
-    require(rsf_core_dlss_capture_detach(capture) == RSF_BACKEND_OK && !capture_callback && registrations == 2,
-        "detach clears the same registration");
-    rsf_core_dlss_capture_close(capture);
-    require(destroyed_pools == 1 && destroyed_fence == fence, "close destroys the family pool and fence");
+    return rsf_core_dlss_capture_open(&synthetic, &setup, capture);
 }
 }
 extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) {
@@ -392,195 +340,60 @@ extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) {
     return call->callback(reinterpret_cast<void*>(1), call->frame_id ? reinterpret_cast<uintptr_t>(&sdk_token) : 0, call->user);
 }
 extern "C" uint64_t VulkanStorySlWorkerTimeoutEpoch() { return worker_timeout_epoch; }
+extern "C" rsf_dlss_fixture_state* rsf_fixture_dlss_state() { return &fixture; }
+extern "C" rsf_vk_function rsf_fixture_dlss_proc(void* object, const char* name) { return device_proc(object, name); }
+extern "C" int32_t rsf_fixture_dlss_submit(void* user, uint32_t count, const void* commands, uint64_t fence) {
+    return submit(user, count, commands, fence);
+}
+extern "C" void rsf_fixture_dlss_lock(void* user) { lock(user); }
+extern "C" void rsf_fixture_dlss_unlock(void* user) { unlock(user); }
+
+extern "C" rsf_backend_result rsf_fixture_dlss_create(rsf_dlss_fixture_variant variant, const rsf_fgvk_setup* setup,
+    rsf_dlssgvk** owner, uint64_t* chain_out) {
+    // The provider borrows the selected platform table until destruction.
+    static const auto synthetic = [] { auto result = platform; result.initialize = fake_initialize; return result; }();
+    static const auto capture_required = [] {
+        auto result = synthetic;
+        result.prepare_chain = [](void* native, uint32_t* capture_enabled, void** gpu) {
+            const auto result = platform.prepare_chain(native, capture_enabled, gpu);
+            if (result == RSF_BACKEND_OK) *capture_enabled = 1;
+            return result;
+        };
+        return result;
+    }();
+    static const auto capture_refused = [] {
+        auto result = synthetic;
+        result.start_capture = [](void*) { return RSF_BACKEND_ERROR_FEATURE_FAILED; };
+        return result;
+    }();
+    const auto& selected = variant == RSF_DLSS_FIXTURE_CAPTURE_REQUIRED ? capture_required :
+        variant == RSF_DLSS_FIXTURE_CAPTURE_REFUSED ? capture_refused : synthetic;
+    return rsf_core_dlgvk_create(&selected, setup, owner, chain_out);
+}
+extern "C" int32_t rsf_fixture_dlss_capture_open(const rsf_fgvk_setup* setup, rsf_dlss_capture** capture,
+    rsf_dlss_fixture_capture_calls* calls) {
+    *calls = {reinterpret_cast<uintptr_t>(real_present), reinterpret_cast<uintptr_t>(real_images),
+        reinterpret_cast<uintptr_t>(real_submit), reinterpret_cast<uintptr_t>(wsi_lease)};
+    return open_present_capture(*setup, capture);
+}
+extern "C" void rsf_fixture_dlss_capture_state(rsf_dlss_fixture_capture_state* out) {
+    *out = {capture_user, capture_callback ? 1u : 0u, registrations,
+        pool_family, pool_flags, capture_begins, capture_ends, destroyed_pools,
+        real_submits, real_enumerations, real_presents, wsi_calls,
+        reinterpret_cast<uintptr_t>(submitted.pWaitSemaphores), reinterpret_cast<uintptr_t>(submitted_commands),
+        reinterpret_cast<uintptr_t>(submitted_fence), reinterpret_cast<uintptr_t>(waited_fence),
+        reinterpret_cast<uintptr_t>(destroyed_fence), submitted.waitSemaphoreCount, submitted.commandBufferCount,
+        {submitted_stages[0], submitted_stages[1]}, fence_timeout, capture_flushes, capture_metadata,
+        reinterpret_cast<uintptr_t>(presented_info), reinterpret_cast<uintptr_t>(presented.pWaitSemaphores),
+        reinterpret_cast<uintptr_t>(presented.pNext), reinterpret_cast<uintptr_t>(presented.pSwapchains),
+        reinterpret_cast<uintptr_t>(presented.pImageIndices), presented.waitSemaphoreCount, presented.swapchainCount,
+        capture_failure, capture_failure_result};
+}
+extern "C" int32_t rsf_fixture_dlss_capture_call(const rsf_sl_present_capture_packet* packet) {
+    return capture_callback(capture_user, packet);
+}
+
 int main() {
     SetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", nullptr);
-    require(rsf_dlssgvk_create(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "null create refused");
-    require(rsf_dlssgvk_prepare(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "null recording refused");
-    require(rsf_dlssgvk_destroy(nullptr) == RSF_BACKEND_OK, "null destruction idempotent");
-
-    static const auto synthetic = [] { auto result = platform; result.initialize = fake_initialize; return result; }();
-    VkSwapchainCreateInfoKHR create{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
-    create.surface = reinterpret_cast<VkSurfaceKHR>(5); create.imageExtent = {1280, 720};
-    create.imageFormat = VK_FORMAT_B8G8R8A8_UNORM; create.imageArrayLayers = 1;
-    create.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    rsf_fgvk_setup setup{sizeof(setup), RSF_FGVK_ABI_VERSION};
-    setup.graphics = {sizeof(setup.graphics), RSF_SRVK_ABI_VERSION};
-    setup.graphics.instance = reinterpret_cast<void*>(6); setup.graphics.physical_device = reinterpret_cast<void*>(7);
-    setup.graphics.device = device; setup.graphics.instance_proc = setup.graphics.device_proc = device_proc;
-    setup.graphics.output_width = 1280; setup.graphics.output_height = 720;
-    setup.queues[0] = queue; setup.queue_user = queue; setup.create_info = &create; setup.allocator = allocator;
-    setup.graphics_submit = submit; setup.lock_queues = lock; setup.unlock_queues = unlock;
-    rsf_dlssgvk* owner{}; uint64_t chain_out{};
-    const VkStructureType bad_type = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    setup.create_info = &bad_type;
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
-        !owner && !chain_out && !chain_creates, "foreign Vulkan struct prefix refused before proxy creation");
-    setup.create_info = &create;
-    create.imageArrayLayers = 2;
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
-        !owner && !chain_out && !chain_creates, "invalid swapchain descriptor refused before proxy creation");
-    create.imageArrayLayers = 1;
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_OK && owner &&
-        chain_out == reinterpret_cast<uint64_t>(chain), "Rust publishes only the complete proxy owner");
-    rsf_dlssgvk* second{}; uint64_t second_chain{};
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &second, &second_chain) == RSF_BACKEND_ERROR_NOT_READY &&
-        !second && !second_chain, "another owner cannot claim the one SDK viewport");
-    uint64_t images[8]{}; uint32_t count = 8;
-    require(rsf_dlssgvk_images(owner, &count, images) == VK_SUCCESS && count == 3 && images[2] == 102,
-        "proxy image enumeration normalizes oversized capacities");
-    count = 2;
-    require(rsf_dlssgvk_images(owner, &count, images) == VK_INCOMPLETE && count == 2, "short proxy enumeration remains incomplete");
-    uint32_t index = 0, layout = 0;
-    require(rsf_dlssgvk_acquire(owner, 8, 9, 10, &index) == VK_SUBOPTIMAL_KHR && index == 2, "acquire preserves native result");
-    require(rsf_dlssgvk_image_layout(owner, &layout) == RSF_BACKEND_OK && layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
-        rsf_dlssgvk_image_layout(owner, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT,
-        "game-facing proxy images require transfer source layout even while Off");
-    require(rsf_dlssgvk_enable(owner, 1, 4) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
-        rsf_dlssgvk_enable(owner, 1, 0) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
-        rsf_dlssgvk_enable(owner, 1, 3) == RSF_BACKEND_OK, "MFG count is validated without clamping");
-
-    VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-    info.swapchainCount = 1; info.pSwapchains = &chain;
-    void* lists[]{prepare_list, color_list};
-    Source first(42); first.stage(owner);
-    require(rsf_dlssgvk_present(owner, &info) == VK_SUCCESS && !on_calls && off_calls == 1 && !status(owner).presentation.enabled,
-        "unsubmitted source explicitly publishes Off");
-    Source second_source(43); second_source.stage(owner);
-    rsf_dlssgvk_submitted(owner, lists, 1);
-    require(fence_submits == 1 && rsf_dlssgvk_present(owner, &info) == VK_SUCCESS && off_calls == 2,
-        "prepare-only submission is fenced but still explicitly Off");
-    Source complete(44); complete.stage(owner);
-    rsf_dlssgvk_submitted(owner, lists, 2);
-    const auto previous_submits = fence_submits;
-    rsf_dlssgvk_submitted(owner, lists, 2);
-    require(fence_submits == previous_submits, "duplicate submission does not reset a live fence");
-    sdk_presented = 4;
-    require(rsf_dlssgvk_present(owner, &info) == VK_SUCCESS && on_calls == 1, "fully submitted source enables MFG");
-    auto snapshot = status(owner);
-    require(snapshot.presentation.enabled && snapshot.presentation.source_frame == 44 &&
-        snapshot.presentation.last_present_count == 4 && !snapshot.presentation.generated_callbacks,
-        "actual SDK count stays distinct from source identity and generated callbacks");
-    require(rsf_dlssgvk_present(owner, &info) == VK_SUCCESS && !status(owner).presentation.enabled,
-        "duplicate source preserves ordinary Present");
-
-    Source recycle(50);
-    refuse_inputs_wait = true;
-    const auto previous_copies = copies;
-    require(rsf_dlssgvk_prepare(owner, prepare_list, &recycle.input) == RSF_BACKEND_ERROR_NOT_READY && copies == previous_copies,
-        "SDK timeline timeout retains the slot and its private images");
-    refuse_inputs_wait = false;
-    recycle.stage(owner);
-    require(inputs_waits == 2, "successful exact timeline wait permits reuse");
-    rsf_dlssgvk_submitted(owner, lists, 2);
-    completion_value = 0;
-    require(rsf_dlssgvk_present(owner, &info) == VK_SUCCESS && on_calls == 2, "unchanged On options are published again");
-    expected_inputs_value = 0;
-    Source zero(56); zero.stage(owner);
-    require(inputs_waits == 3, "zero is a valid captured SDK timeline value");
-    rsf_dlssgvk_submitted(owner, lists, 2);
-    completion_value = expected_inputs_value = 9;
-    lease_frame = 57;
-    require(rsf_dlssgvk_present(owner, &info) == VK_SUCCESS && on_calls == 2 && !status(owner).presentation.enabled,
-        "expired original token is never replaced by a newer CPU token");
-
-    Source unknown(57); unknown.stage(owner); refuse_submit = true;
-    rsf_dlssgvk_submitted(owner, lists, 2); refuse_submit = false;
-    require(rsf_dlssgvk_present(owner, &info) == VK_SUCCESS && on_calls == 2, "unknown fence completion refuses interpolation");
-    lease_session = 8;
-    Source old_output(1); old_output.stage(owner); rsf_dlssgvk_submitted(owner, lists, 2);
-    Source new_output(2); new_output.stage(owner); rsf_dlssgvk_submitted(owner, lists, 2);
-    lease_frame = 1;
-    require(rsf_dlssgvk_present_source(owner, &info, &old_output.record) == VK_SUCCESS &&
-        status(owner).presentation.enabled && status(owner).presentation.source_frame == 1,
-        "explicit old output selects its original token even after a new session restarts source numbering");
-    lease_frame = 2;
-    require(rsf_dlssgvk_present_source(owner, &info, nullptr) == VK_SUCCESS && !status(owner).presentation.source_frame,
-        "unidentified explicit output cannot consume the latest record");
-    require(rsf_dlssgvk_present_source(owner, &info, &new_output.record) == VK_SUCCESS &&
-        status(owner).presentation.enabled && status(owner).presentation.source_frame == 2, "later output consumes its exact source");
-    require(rsf_dlssgvk_present_source(owner, &info, &old_output.record) == VK_SUCCESS && !status(owner).presentation.enabled &&
-        rsf_dlssgvk_present_source(owner, &info, &new_output.record) == VK_SUCCESS && !status(owner).presentation.enabled,
-        "an older output cannot rewind the newest consumed source");
-    Source options_failure(4); options_failure.stage(owner); rsf_dlssgvk_submitted(owner, lists, 2);
-    refuse_options = true;
-    const auto before_refused_present = present_calls;
-    require(rsf_dlssgvk_present(owner, &info) == VK_ERROR_INITIALIZATION_FAILED && present_calls == before_refused_present &&
-        !status(owner).presentation.enabled, "failed enable and failed explicit Off refuse WSI");
-    refuse_options = false;
-    VkSwapchainKHR foreign = reinterpret_cast<VkSwapchainKHR>(99); info.pSwapchains = &foreign;
-    require(rsf_dlssgvk_present(owner, &info) == VK_ERROR_INITIALIZATION_FAILED && present_calls == before_refused_present,
-        "foreign chain never reaches owner WSI");
-    info.pSwapchains = &chain;
-    snapshot.abi_version = 99;
-    require(rsf_dlssgvk_get_status(owner, &snapshot) == RSF_BACKEND_ERROR_ABI_MISMATCH &&
-        status(owner).requested_generated_frames == 3, "status validates its ABI and preserves independent requested count");
-
-    worker_timeout = true;
-    require(rsf_dlssgvk_destroy(owner) == RSF_BACKEND_ERROR_NOT_READY && !destroyed_chains && !release_calls,
-        "worker timeout refuses teardown even when Vulkan idle succeeds");
-    worker_timeout = false; refuse_inputs_wait = true;
-    require(rsf_dlssgvk_destroy(owner) == RSF_BACKEND_ERROR_NOT_READY && !destroyed_chains && !release_calls,
-        "GPU idle alone cannot discard a pending SDK completion lease");
-    refuse_inputs_wait = false;
-    require(rsf_dlssgvk_drain(owner) == RSF_BACKEND_OK && status(owner).requested_generated_frames == 3,
-        "later successful drain preserves the interpolation request");
-    Source rejected(5); refuse_tags = true;
-    require(rsf_dlssgvk_prepare(owner, prepare_list, &rejected.input) == RSF_BACKEND_ERROR_FEATURE_FAILED,
-        "tag failure after actual staging is returned to the host");
-    refuse_tags = false;
-    const auto before_pending_off = off_calls;
-    require(rsf_dlssgvk_destroy(owner) == RSF_BACKEND_ERROR_NOT_READY && !destroyed_chains && off_calls == before_pending_off,
-        "unsubmitted copies from rejected tags preserve ownership before any disable or release");
-    const auto before_rejected = fence_submits;
-    rsf_dlssgvk_submitted(owner, lists, 1);
-    require(fence_submits == before_rejected + 1 && rsf_dlssgvk_drain(owner) == RSF_BACKEND_OK,
-        "actual submission fences rejected copies and permits retirement");
-    refuse_release = true;
-    require(rsf_dlssgvk_destroy(owner) == RSF_BACKEND_ERROR_FEATURE_FAILED && release_calls == 1 && !destroyed_chains,
-        "failed SDK release preserves the native chain for retry");
-    refuse_release = false;
-    require(rsf_dlssgvk_destroy(owner) == RSF_BACKEND_OK && release_calls == 2 && destroyed_chains == 1,
-        "successful retry releases the feature and destroys its chain once");
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_OK &&
-        rsf_dlssgvk_present(owner, &info) == VK_SUCCESS && !status(owner).presentation.enabled &&
-        rsf_dlssgvk_destroy(owner) == RSF_BACKEND_OK && destroyed_chains == 2, "a new owner explicitly configures Off and retires cleanly");
-    max_generated = 0;
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
-        !owner && !chain_out && destroyed_chains == 2, "zero supported generation count refuses before proxy creation");
-    max_generated = 3;
-    refuse_create = true;
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INIT_FAILED &&
-        !owner && !chain_out && destroyed_chains == 2, "a failed create result never grants ownership of its output handle");
-    refuse_create = false; refuse_enumeration = true;
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INIT_FAILED &&
-        !owner && !chain_out && destroyed_chains == 3, "enumeration refusal closes the unpublished proxy");
-    refuse_enumeration = false;
-    backbuffer_count = 0;
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INIT_FAILED &&
-        !owner && !chain_out && destroyed_chains == 4, "zero-image proxy is refused and destroyed before publication");
-    backbuffer_count = 3;
-    auto capture_required = synthetic;
-    capture_required.prepare_chain = [](void* native, uint32_t* capture_enabled, void** gpu) {
-        const auto result = platform.prepare_chain(native, capture_enabled, gpu);
-        if (result == RSF_BACKEND_OK) *capture_enabled = 1;
-        return result;
-    };
-    const auto before_usage = chain_creates;
-    require(rsf_core_dlgvk_create(&capture_required, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
-        !owner && !chain_out && chain_creates == before_usage, "capture requires transfer source support before proxy creation");
-    surface_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
-        !owner && !chain_out && chain_creates == before_usage, "missing transfer destination refuses before proxy creation");
-    surface_usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    expected_chain_usage = surface_usage;
-    auto capture_refused = synthetic;
-    capture_refused.start_capture = [](void*) { return RSF_BACKEND_ERROR_FEATURE_FAILED; };
-    require(rsf_core_dlgvk_create(&capture_refused, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_FEATURE_FAILED &&
-        !owner && !chain_out && destroyed_chains == 5, "capture refusal rolls back the unpublished proxy");
-    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_OK && chain_out &&
-        create.imageUsage == VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT &&
-        rsf_dlssgvk_destroy(owner) == RSF_BACKEND_OK && destroyed_chains == 6,
-        "retry preserves caller usage and adds supported transfer source even with capture off");
-    check_present_capture(setup);
-    std::puts("Synthetic DLSS Vulkan FG identity, MFG and WSI checks passed");
+    return rsf_fixture_dlss_run();
 }

@@ -1082,3 +1082,9 @@ generate("tests/vulkan-fg/src/fsr4_state_abi.rs", "runtime/orchestrator/src/nati
           "--blocklist-type", "rsf_(frame_record|camera_frame|frame_id|frame_phase|screen_class)",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;",
           "--with-derive-default"])
+generate("tests/vulkan-fg/src/dlss_abi.rs", "tests/vulkan-fg/dlss_abi.h",
+         "(rsf_dlss_fixture_.*|rsf_fixture_result)", "RSF_(FGVK_ABI_VERSION|SRVK_ABI_VERSION|DLSSGVK_ABI_VERSION|SL_PRESENT_CAPTURE_ABI_VERSION)",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
+         ["--allowlist-function", "rsf_(fixture_dlss_.*|dlssgvk_.*|core_dlss_capture_(remember|detach|close))", "--no-prepend-enum-name",
+          "--blocklist-type", "rsf_(frame_record|camera_frame|frame_id|frame_phase|screen_class)",
+          "--raw-line", "use rsf_game_sys::rsf_frame_record;", "--with-derive-default"])
