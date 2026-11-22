@@ -714,7 +714,6 @@ pub(super) unsafe extern "C" fn rsf_core_capture_vk_enabled(owner: *const Owner)
     i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.lock().legacy.enabled()))
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture_vk_ready(owner: *const Owner) -> i32 {
     i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.lock().device != 0))
 }

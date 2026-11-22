@@ -43,7 +43,6 @@ pub(super) unsafe fn rsf_d3d11p_facade_query_interface(
     S_OK
 }
 
-#[unsafe(no_mangle)]
 #[inline(never)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_facade_present1(
     chain: *mut Chain,
@@ -59,7 +58,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_facade_present1(
     unsafe { rsf_core_d3d11p_present(chain, sync, flags) }
 }
 
-#[unsafe(no_mangle)]
 #[inline(never)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_facade_resize1(
     chain: *mut Chain,

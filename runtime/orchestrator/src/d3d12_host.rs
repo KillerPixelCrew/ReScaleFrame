@@ -110,7 +110,6 @@ pub(super) unsafe extern "C" fn rsf_core_d3d12_transition(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_d3d12_copy_transitioned(
     list: Raw,
     destination: Raw,

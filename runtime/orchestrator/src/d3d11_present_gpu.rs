@@ -67,7 +67,6 @@ pub(super) unsafe extern "C" fn close_event(event: Raw) {
     unsafe { CloseHandle(event) };
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_create_slot(
     device: Raw,
     out_allocator: *mut Raw,
@@ -118,7 +117,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_create_slot(
     S_OK
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_render_buffer(
     device: Raw,
     width: u32,
@@ -283,7 +281,6 @@ unsafe fn transition(
     unsafe { list.ResourceBarrier(&[barrier]) };
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_record_copy(
     list: Raw,
     destination: Raw,
@@ -325,7 +322,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_record_copy(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_resize(
     physical: Raw,
     count: u32,
@@ -353,7 +349,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_resize(
     .0
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_upload_wait(
     context: Raw,
     queue: Raw,
@@ -371,7 +366,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_upload_wait(
     unsafe { queue_wait(queue, fence12, value) }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_upload_return(
     context: Raw,
     queue: Raw,
@@ -387,7 +381,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_upload_return(
     unsafe { (immediate.vtable().Wait)(context, fence11, value) }.0
 }
 
-#[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_retire_submit(
     facade: Raw,

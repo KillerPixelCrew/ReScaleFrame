@@ -105,7 +105,6 @@ pub(super) unsafe extern "C" fn allocate_capture(source: Handle, out: *mut Layou
     unsafe { allocate_raw(source, out, true) }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback(
     source: Handle,
     out: *mut Layout,
@@ -142,7 +141,6 @@ fn transition(
     unsafe { commands.ResourceBarrier(&[barrier]) };
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback_copy(
     list: Handle,
     source: Handle,
@@ -190,7 +188,6 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback_copy(
     transition(commands, source, copy, before);
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_map(buffer: Handle, bytes: u64) -> *const u8 {
     let Some(buffer) = (unsafe { ID3D12Resource::from_raw_borrowed(&buffer) }) else {
         return ptr::null();
@@ -207,7 +204,6 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_map(buffer: Handle, bytes: u64
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_unmap(buffer: Handle) {
     if let Some(buffer) = unsafe { ID3D12Resource::from_raw_borrowed(&buffer) } {
         let written = D3D12_RANGE { Begin: 0, End: 0 };

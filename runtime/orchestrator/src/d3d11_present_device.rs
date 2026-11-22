@@ -30,7 +30,6 @@ fn same_identity(left: &impl Interface, right: &impl Interface) -> bool {
         .is_ok_and(|right| left.as_raw() == right.as_raw())
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_device_queue_device(queue: Raw, out: *mut Raw) -> i32 {
     let mut device: Option<ID3D12Device> = None;
     let queue = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
@@ -49,7 +48,6 @@ unsafe fn adapter_at_device(device: &ID3D12Device) -> Result<IDXGIAdapter1> {
     unsafe { factory.EnumAdapterByLuid(device.GetAdapterLuid()) }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_device_native_adapter(
     device: Raw,
     out: *mut Raw,
@@ -69,7 +67,6 @@ pub(super) struct AdapterInfo {
     pub(super) software: u32,
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_device_read_adapter(
     source: Raw,
     native_device: Raw,
@@ -98,7 +95,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_device_read_adapter(
     S_OK
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_device_immediate(
     source: Raw,
     out_device: *mut Raw,
@@ -128,7 +124,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_device_immediate(
     S_OK
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_device_create12(adapter: Raw, out: *mut Raw) -> i32 {
     let adapter = unsafe { IUnknown::from_raw_borrowed(&adapter) };
     let mut device: Option<ID3D12Device> = None;
@@ -142,7 +137,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_device_create12(adapter: Raw, out: *m
     S_OK
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_device_tearing(factory: Raw) -> u32 {
     let Ok(facility) = (unsafe { borrow::<IDXGIFactory>(&factory) }).cast::<IDXGIFactory5>() else {
         return 0;
@@ -204,7 +198,6 @@ pub(super) unsafe extern "C" fn verify_outer(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_device_native_chain(
     device: Raw,
     chain: Raw,

@@ -109,7 +109,6 @@ fn switching() -> bool {
     settings().runtime_switching != 0
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_facade_create(
     chain: *mut Chain,
     state: Raw,
@@ -125,7 +124,6 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_facade_create(
     .cast()
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_facade_state(this: Raw) -> Raw {
     unsafe { Facade::borrow(this) }.state
 }
@@ -145,7 +143,6 @@ unsafe extern "system" fn add_ref(this: Raw) -> u32 {
         + 1
 }
 
-#[unsafe(no_mangle)]
 #[inline(never)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_facade_release(this: Raw) -> u32 {
     let facade = unsafe { Facade::borrow(this) };
@@ -482,7 +479,6 @@ unsafe extern "system" fn get_backbuffer_index(this: Raw) -> u32 {
     })
 }
 
-#[unsafe(no_mangle)]
 #[inline(never)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_facade_color_space(this: Raw, value: u32) -> i32 {
     let facade = unsafe { Facade::borrow(this) };

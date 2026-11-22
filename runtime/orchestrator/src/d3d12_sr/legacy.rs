@@ -214,7 +214,6 @@ extern "C" fn rsf_fsr_sr_provider() -> *const Sr {
     fsr_sr_provider(false)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_fsr_managed_sr_provider() -> *const Sr {
     fsr_sr_provider(true)
 }

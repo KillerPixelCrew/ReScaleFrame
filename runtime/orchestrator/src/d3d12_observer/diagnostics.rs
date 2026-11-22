@@ -24,7 +24,6 @@ const MESSAGE_IDS: usize = 4096;
 const BREADCRUMB_LIMIT: u32 = 64;
 
 type Log = unsafe extern "C" fn(Handle, *const c_char);
-type DebugQuery = unsafe extern "C" fn(&mut Handle) -> i32;
 
 #[derive(Default)]
 struct Breadcrumb {
@@ -36,14 +35,6 @@ struct Breadcrumb {
     name: *const c_char,
 }
 
-struct DiagnosticSetup {
-    query_settings: DebugQuery,
-    enable_breadcrumbs: unsafe extern "C" fn(Handle),
-    enable_page_faults: unsafe extern "C" fn(Handle),
-    query_debug: DebugQuery,
-    enable_debug: unsafe extern "C" fn(Handle) -> i32,
-}
-
 pub(super) struct Removal {
     queue_device: Query,
     removed_reason: unsafe extern "C" fn(Handle) -> i32,
@@ -53,18 +44,6 @@ pub(super) struct Removal {
     operation: unsafe extern "C" fn(*const c_void, u32) -> u32,
     page_fault: unsafe extern "C" fn(Handle, &mut u64) -> i32,
 }
-
-unsafe extern "C" fn debug_interface<T: Interface>(out: &mut Handle) -> i32 {
-    unsafe { foreign::debug(&T::IID, out) }
-}
-
-const DIAGNOSTICS: DiagnosticSetup = DiagnosticSetup {
-    query_settings: debug_interface::<ID3D12DeviceRemovedExtendedDataSettings>,
-    enable_breadcrumbs: foreign::breadcrumbs,
-    enable_page_faults: foreign::page_faults,
-    query_debug: debug_interface::<ID3D12Debug>,
-    enable_debug: foreign::debug_layer,
-};
 
 pub(super) const NATIVE: Removal = Removal {
     queue_device: foreign::queue_device,
@@ -105,9 +84,9 @@ unsafe extern "C" fn breadcrumb_operation(node: *const c_void, index: u32) -> u3
     unsafe { (*node.pCommandHistory.add(index as usize)).0 as u32 }
 }
 
-fn query_debug(query: DebugQuery) -> Option<IUnknown> {
+fn debug_interface<T: Interface>() -> Option<IUnknown> {
     let mut object = null_mut();
-    let result = unsafe { query(&mut object) };
+    let result = unsafe { foreign::debug(&T::IID, &mut object) };
     unsafe { com_ref::owned(object) }.filter(|_| result >= 0)
 }
 
@@ -143,22 +122,20 @@ fn sink() -> Option<Sink> {
 
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_d3d12_diagnostics_enable(log: Option<Log>, user: Handle) -> i32 {
-    let platform = &DIAGNOSTICS;
     let Some(log) = log else {
         return -1;
     };
     let selected = Sink { log, user };
     *lock(SINK.get_or_init(|| Mutex::new(selected))) = selected;
-    let settings = query_debug(platform.query_settings);
+    let settings = debug_interface::<ID3D12DeviceRemovedExtendedDataSettings>();
     if let Some(settings) = &settings {
         unsafe {
-            (platform.enable_breadcrumbs)(settings.as_raw());
-            (platform.enable_page_faults)(settings.as_raw());
+            foreign::breadcrumbs(settings.as_raw());
+            foreign::page_faults(settings.as_raw());
         }
     }
-    let debug = query_debug(platform.query_debug);
-    let enabled =
-        debug.is_some_and(|debug| unsafe { (platform.enable_debug)(debug.as_raw()) } != 0);
+    let debug = debug_interface::<ID3D12Debug>();
+    let enabled = debug.is_some_and(|debug| unsafe { foreign::debug_layer(debug.as_raw()) } != 0);
     drop(settings);
     if !enabled {
         selected.say(c"D3D12 diagnostics: debug layer unavailable; DRED requested.");

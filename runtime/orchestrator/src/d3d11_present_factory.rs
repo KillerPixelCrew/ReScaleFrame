@@ -230,7 +230,6 @@ pub(super) extern "C" fn rsf_d3d11p_factory_hooks_ready() -> u32 {
     u32::from(HOOK_STATE.load(Ordering::Acquire) == READY)
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_d3d11p_factory_hooks_block_explicit() -> u32 {
     u32::from(HOOK_STATE.load(Ordering::Acquire) != IDLE)
 }
@@ -359,7 +358,6 @@ unsafe fn install(setup: *const rsf_d3d11_present_setup, scoped: bool) -> i32 {
 pub(super) type GuardedCreate =
     unsafe extern "C" fn(Raw, Raw, *mut DXGI_SWAP_CHAIN_DESC, *mut Raw) -> i32;
 
-#[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe extern "C" fn rsf_d3d11p_factory_create_plain(
     facade: Raw,

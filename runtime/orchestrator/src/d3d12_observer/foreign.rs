@@ -127,7 +127,7 @@ pub(super) unsafe extern "C" fn page_fault(raw: Handle, address: &mut u64) -> i3
     result
 }
 
-pub(super) unsafe extern "C" fn breadcrumbs(raw: Handle) {
+pub(super) unsafe fn breadcrumbs(raw: Handle) {
     if let Some(settings) =
         unsafe { ID3D12DeviceRemovedExtendedDataSettings::from_raw_borrowed(&raw) }
     {
@@ -135,7 +135,7 @@ pub(super) unsafe extern "C" fn breadcrumbs(raw: Handle) {
     }
 }
 
-pub(super) unsafe extern "C" fn page_faults(raw: Handle) {
+pub(super) unsafe fn page_faults(raw: Handle) {
     if let Some(settings) =
         unsafe { ID3D12DeviceRemovedExtendedDataSettings::from_raw_borrowed(&raw) }
     {
@@ -143,7 +143,7 @@ pub(super) unsafe extern "C" fn page_faults(raw: Handle) {
     }
 }
 
-pub(super) unsafe extern "C" fn debug_layer(raw: Handle) -> i32 {
+pub(super) unsafe fn debug_layer(raw: Handle) -> i32 {
     let Some(debug) = (unsafe { ID3D12Debug::from_raw_borrowed(&raw) }) else {
         return 0;
     };

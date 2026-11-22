@@ -2810,8 +2810,7 @@ unsafe extern "C" fn rsf_d3d11_present_pace(id: u64, owner: u32, generation: *mu
     unsafe { rsf_core_d3d11p_pace(id, owner, ptr::null(), generation) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_present_pace_for_generation(
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_pace_for_generation(
     id: u64,
     owner: u32,
     generation: u64,

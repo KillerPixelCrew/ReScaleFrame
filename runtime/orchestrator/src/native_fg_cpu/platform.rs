@@ -2,7 +2,7 @@
 use super::*;
 use crate::d3d11_present::{
     rsf_d3d11_present_backend, rsf_d3d11_present_generation, rsf_d3d11_present_graphics,
-    rsf_d3d11_present_has_owner, rsf_d3d11_present_host,
+    rsf_d3d11_present_has_owner, rsf_d3d11_present_host, rsf_d3d11_present_pace_for_generation,
 };
 use crate::d3d11_present_abi::rsf_streamline_graphics;
 use crate::native_cpu::rsf_native_cpu_rendered_source_set;
@@ -29,7 +29,6 @@ unsafe extern "C" {
     fn rsf_streamline_host_retire_through(host: Handle, through: u64) -> i32;
     fn rsf_streamline_host_reset_sources(host: Handle) -> i32;
     fn rsf_d3d11_present_acquire(source: u64) -> i32;
-    fn rsf_d3d11_present_pace_for_generation(source: u64, pacer: u32, generation: u64) -> i32;
     fn rsf_d3d11_present_marker(generation: u64, source: u64, marker: u32, controller: u32) -> i32;
     fn rsf_d3d11_present_input(source: u64, kind: u32, message: u32) -> i32;
     fn rsf_d3d11_present_receipt(generation: u64, source: u64, kind: u32, message: u32) -> i32;

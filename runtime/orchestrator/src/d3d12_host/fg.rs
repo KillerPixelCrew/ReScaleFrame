@@ -4,7 +4,6 @@ use crate::sys::rsf_fg12_texture_desc;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::core::IUnknown;
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_buffer_index(chain: Raw) -> u32 {
     unsafe { IUnknown::from_raw_borrowed(&chain) }
         .and_then(|chain| receive::<IDXGISwapChain3>(|iid, out| unsafe { chain.query(iid, out) }))
@@ -13,7 +12,6 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_buffer_index(chain: Raw) -> u3
         })
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_texture_desc(
     resource: Raw,
     output: *mut rsf_fg12_texture_desc,
@@ -40,7 +38,6 @@ fn same_shape(a: &D3D12_RESOURCE_DESC, b: &D3D12_RESOURCE_DESC) -> bool {
         && a.SampleDesc == b.SampleDesc
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_texture(
     list: Raw,
     resource: Raw,
@@ -65,7 +62,6 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_texture(
     )
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_copy(
     list: Raw,
     source: Raw,
@@ -86,7 +82,6 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_copy(
     };
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_transition(
     list: Raw,
     resource: Raw,
@@ -96,7 +91,6 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_transition(
     unsafe { rsf_core_d3d12_transition(list, resource, before, after) };
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_fence(queue: Raw) -> Raw {
     let Some(device) = device_of(unsafe { borrow::<ID3D12CommandQueue>(&queue) }) else {
         return null_mut();
@@ -107,7 +101,6 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_fence(queue: Raw) -> Raw {
     .map_or(null_mut(), Interface::into_raw)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_signal(
     queue: Raw,
     fence: Raw,
