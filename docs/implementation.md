@@ -3264,6 +3264,13 @@ checks in Rust. Native AC7, vendor, window and overlay runner code
 remains. Build and device evidence is pending.
 [Native device harness evidence](research/rust-d3d11-present-cutover.md#native-device-harness-continuation)
 
+The D02 Rust factory now owns cold install sequencing and the two
+original continuation addresses. Factory2 bootstrap, MinHook and the
+typed native replays remain behind C++ leaves. Failure handling preserves
+any registered continuation while blocking another install. Source
+checks are recorded separately from binary and device verification.
+[Factory installation evidence](research/rust-d3d11-bridge-native-owner.md#rust-factory-install-transaction)
+
 Rust now owns the D02 facade's graphics state, native chain wrapping and
 owned dispatch continuations. The native hook and SDK shim preserves the
 existing entry points. The device fixtures moved shared SR evaluation,

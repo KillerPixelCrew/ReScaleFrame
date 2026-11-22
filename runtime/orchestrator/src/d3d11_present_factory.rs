@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MIT
-//! The native detour retains its trampoline, while Rust owns descriptor
-//! translation and the decision to intercept a factory call.
+//! Descriptor translation, interception and cold installation for DXGI factories.
 use super::device::rsf_d3d11p_device_native_chain;
 use super::{
     DXGI_ERROR_UNSUPPORTED, E_FAIL, E_INVALIDARG, E_UNEXPECTED, Platform, S_OK, failed, log,
     rsf_core_d3d11p_active_bridge, rsf_core_d3d11p_capture, rsf_core_d3d11p_captured,
-    rsf_core_d3d11p_create, rsf_core_d3d11p_is_owner, settings,
+    rsf_core_d3d11p_create, rsf_core_d3d11p_is_owner, rsf_core_d3d11p_prepare,
+    rsf_core_d3d11p_set_scoped, settings,
 };
 use crate::com_ref::ComRef;
 use crate::d3d11_present_abi::{Raw, rsf_d3d11p_plain_plan, rsf_d3d11p_request};
+use crate::fg12_abi::rsf_d3d11_present_setup;
+use std::ffi::c_void;
 use std::ptr::{self, null_mut};
+use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED, DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
@@ -223,18 +226,138 @@ unsafe extern "C" fn rsf_d3d11p_factory_wrap_native(
     S_OK
 }
 
+#[repr(C)]
+struct HookCalls {
+    bootstrap: unsafe extern "C" fn() -> Raw,
+    initialize: unsafe extern "C" fn() -> u32,
+    create: unsafe extern "C" fn(Raw, Raw, *mut Raw) -> u32,
+    enable: unsafe extern "C" fn(Raw) -> u32,
+    disable: unsafe extern "C" fn(Raw),
+    remove: unsafe extern "C" fn(Raw) -> u32,
+}
+
+const _: () = assert!(size_of::<HookCalls>() == 6 * size_of::<Raw>());
+const IDLE: u8 = 0;
+const INSTALLING: u8 = 1;
+const READY: u8 = 2;
+const BLOCKED: u8 = 3;
+static HOOK_STATE: AtomicU8 = AtomicU8::new(IDLE);
+static LEGACY_ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static HWND_ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11p_factory_hook_targets(
-    factory: Raw,
-    create: *mut Raw,
-    create_hwnd: *mut Raw,
-) {
+extern "C" fn rsf_d3d11p_factory_hooks_ready() -> u32 {
+    u32::from(HOOK_STATE.load(Ordering::Acquire) == READY)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_d3d11p_factory_hooks_block_explicit() -> u32 {
+    u32::from(HOOK_STATE.load(Ordering::Acquire) != IDLE)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_d3d11p_factory_legacy_original() -> Raw {
+    LEGACY_ORIGINAL.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_d3d11p_factory_hwnd_original() -> Raw {
+    HWND_ORIGINAL.load(Ordering::Acquire)
+}
+
+fn hook_targets(factory: Raw) -> (Raw, Raw) {
     let factory2 = unsafe { IDXGIFactory2::from_raw_borrowed(&factory) }.unwrap();
     let factory1 = unsafe { IDXGIFactory::from_raw_borrowed(&factory) }.unwrap();
-    unsafe {
-        create.write(factory1.vtable().CreateSwapChain as Raw);
-        create_hwnd.write(factory2.vtable().CreateSwapChainForHwnd as Raw);
+    (
+        factory1.vtable().CreateSwapChain as Raw,
+        factory2.vtable().CreateSwapChainForHwnd as Raw,
+    )
+}
+
+// A refused remove may leave a detour registered. Its original must remain
+// available for native replay, and a second installation must leave it alone.
+fn remove_hook(calls: &HookCalls, target: Raw, published: &AtomicPtr<c_void>) -> bool {
+    if unsafe { (calls.remove)(target) } == 0 {
+        return false;
     }
+    published.store(null_mut(), Ordering::Release);
+    true
+}
+
+fn install_hooks(calls: &HookCalls, factory: Raw, legacy_detour: Raw, hwnd_detour: Raw) -> u8 {
+    if unsafe { (calls.initialize)() } == 0 {
+        return IDLE;
+    }
+    let (legacy_target, hwnd_target) = hook_targets(factory);
+    let mut legacy = null_mut();
+    if unsafe { (calls.create)(legacy_target, legacy_detour, &mut legacy) } == 0 {
+        return IDLE;
+    }
+    let mut hwnd = null_mut();
+    if unsafe { (calls.create)(hwnd_target, hwnd_detour, &mut hwnd) } == 0 {
+        return if remove_hook(calls, legacy_target, &LEGACY_ORIGINAL) {
+            IDLE
+        } else {
+            BLOCKED
+        };
+    }
+
+    // The hook bodies can run as each target is enabled. Until both enables
+    // complete they only replay the typed native continuations.
+    LEGACY_ORIGINAL.store(legacy, Ordering::Release);
+    HWND_ORIGINAL.store(hwnd, Ordering::Release);
+    if unsafe { (calls.enable)(legacy_target) } != 0 && unsafe { (calls.enable)(hwnd_target) } != 0
+    {
+        return READY;
+    }
+
+    unsafe { (calls.disable)(legacy_target) };
+    let legacy_removed = remove_hook(calls, legacy_target, &LEGACY_ORIGINAL);
+    let hwnd_removed = remove_hook(calls, hwnd_target, &HWND_ORIGINAL);
+    if legacy_removed && hwnd_removed {
+        IDLE
+    } else {
+        BLOCKED
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11p_factory_install(
+    setup: *const rsf_d3d11_present_setup,
+    scoped: u32,
+    calls: &HookCalls,
+    legacy_detour: Raw,
+    hwnd_detour: Raw,
+) -> i32 {
+    if HOOK_STATE
+        .compare_exchange(IDLE, INSTALLING, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return 0;
+    }
+    if scoped != 0 {
+        rsf_core_d3d11p_set_scoped(1);
+    }
+    // Keep Factory2 live through the install result and its success log, as in
+    // the native bootstrap.
+    let factory = if unsafe { rsf_core_d3d11p_prepare(setup, 0) } != 0 {
+        unsafe { ComRef::from_owned((calls.bootstrap)()) }
+    } else {
+        None
+    };
+    let state = factory.as_ref().map_or(IDLE, |factory| {
+        install_hooks(calls, factory.as_ptr(), legacy_detour, hwnd_detour)
+    });
+    if state != READY && scoped != 0 {
+        rsf_core_d3d11p_set_scoped(0);
+    }
+    HOOK_STATE.store(state, Ordering::Release);
+    if state == READY {
+        log("presentation bridge: cold-start D3D11 swapchain interception installed");
+    } else if state == BLOCKED {
+        log("presentation bridge: MinHook cleanup refused; factory interception unavailable");
+    }
+    i32::from(state == READY)
 }
 
 pub(super) type GuardedCreate =

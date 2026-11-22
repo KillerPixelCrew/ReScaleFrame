@@ -49,3 +49,32 @@ owned dispatch methods and both fixture command sequences against the base.
 Rust 1.94.1 formatting, repeatable targeted bindgen 0.72.1 generation,
 locked offline Windows-target Cargo metadata and Git whitespace checks
 passed. Builds, executable fixtures, lint and device runs are pending.
+
+
+
+## Rust factory install transaction
+
+From `c34634bc`, the Rust factory owner calls setup admission, the real
+Factory2 bootstrap, MinHook initialization, legacy and HWND hook creation,
+and both enables in that order. The two original addresses are published
+before the first enable. Until both enables complete, an entered detour
+forwards to its own native original. Scoped setup and successful publication
+share the same install transaction. The Factory2 reference remains live
+through installation and the success log.
+
+A refused second creation removes the first hook. A refused enable retains
+the legacy disable and both remove attempts. A clean failure clears the
+originals and permits another cold attempt. A refused removal blocks
+reinstallation and retains any published continuation whose hook may
+still be registered for native replay. The pinned MinHook implementation only reports successful removal
+after freeing the trampoline and deleting the hook entry. Its absent entry
+and absent heap results also permit clearing the original. This remains a
+cold setup transaction, with no live uninstall path.
+
+The native file still executes Factory2 creation, individual MinHook calls,
+the typed legacy and HWND original replays, and the C++ exception guards.
+The SDK and C linkage anchors retain their existing contracts. The install
+leaf table is separate from the 72-slot presentation platform, so no fake
+fixture slots moved. D08 explicit HWND creation, O02 and shared SR dispatch
+retain their existing routes. Source, syntax and binding evidence does not
+establish live hook or device behavior.

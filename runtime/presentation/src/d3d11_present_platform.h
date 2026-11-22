@@ -198,7 +198,23 @@ bool rsf_d3d11p_factory_intercept_hwnd(const rsf_d3d11p_platform*, void*, void*,
     const struct DXGI_SWAP_CHAIN_DESC1*, const struct DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, void*, void**, int32_t*);
 int32_t rsf_d3d11p_factory_create_hwnd(const rsf_d3d11p_platform*, void*, void*, void*,
     const struct DXGI_SWAP_CHAIN_DESC1*, void**);
-void rsf_d3d11p_factory_hook_targets(void*, void**, void**);
+/* Cold factory installation. Bootstrap transfers a retained Factory2 reference.
+   create returns nonzero only when MinHook created the hook. remove returns
+   nonzero only once the target has no registered hook. */
+typedef struct rsf_d3d11p_hook_calls {
+    void* (*bootstrap)(void);
+    uint32_t (*initialize)(void);
+    uint32_t (*create)(void* target, void* detour, void** original);
+    uint32_t (*enable)(void* target);
+    void (*disable)(void* target);
+    uint32_t (*remove)(void* target);
+} rsf_d3d11p_hook_calls;
+int32_t rsf_d3d11p_factory_install(const rsf_d3d11_present_setup*, uint32_t scoped,
+    const rsf_d3d11p_hook_calls*, void* legacy_detour, void* hwnd_detour);
+uint32_t rsf_d3d11p_factory_hooks_ready(void);
+uint32_t rsf_d3d11p_factory_hooks_block_explicit(void);
+void* rsf_d3d11p_factory_legacy_original(void);
+void* rsf_d3d11p_factory_hwnd_original(void);
 int32_t rsf_d3d11p_factory_create_plain(void*, void*, const struct DXGI_SWAP_CHAIN_DESC*,
     const rsf_d3d11p_plain_plan*, uint32_t,
     int32_t (*)(void*, void*, struct DXGI_SWAP_CHAIN_DESC*, void**), void**, void**);
