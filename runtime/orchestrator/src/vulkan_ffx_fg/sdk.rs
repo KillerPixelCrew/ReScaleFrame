@@ -43,9 +43,7 @@ use std::cell::UnsafeCell;
 use std::ffi::{c_char, c_void};
 use std::ptr;
 
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
-#[path = "../../../vulkan/fsr3/sdk_abi.rs"]
-mod abi;
+use crate::ffx_vk_abi as abi;
 use abi::{
     FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION, FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK,
     FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK,

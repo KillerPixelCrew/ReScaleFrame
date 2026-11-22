@@ -15,30 +15,20 @@ use std::mem::offset_of;
 use std::ptr::{self, NonNull};
 use std::sync::OnceLock;
 
-// The standalone DLL is built directly by rustc. Import the same source
-// used by rsf_game_sys without adding an rlib or Cargo build dependency.
-#[path = "../../../sdk/game/src/ffi_util.rs"]
-#[cfg_attr(test, allow(dead_code))]
-mod ffi_util;
-use ffi_util::try_box;
+use rsf_game_sys::ffi_util::try_box;
 
 #[cfg(not(test))]
 mod exports;
 #[cfg(not(test))]
 #[path = "platform.rs"]
 mod platform_win32;
-#[cfg(all(not(test), vulkanstory_compat))]
-#[path = "../../../integrations/vulkanstory/native/fsr3.rs"]
-mod vulkanstory_compat;
 
 type Handle = *mut c_void;
 
-const PLATFORM_ABI_VERSION: u32 = 1;
 const VULKAN_LOADER: u32 = 1 << 0;
 const VULKAN_BUFFER_REQUIREMENTS: u32 = 1 << 1;
 const VULKAN_READY: u32 = VULKAN_LOADER | VULKAN_BUFFER_REQUIREMENTS;
 
-const FG_PLATFORM_ABI_VERSION: u32 = 1;
 
 /// `VK_ERROR_INITIALIZATION_FAILED`, the swapchain pass-through refusal.
 const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
@@ -249,8 +239,6 @@ struct Native {
 /// Matches `rsf_fsr3sr_platform`.
 #[repr(C)]
 struct Platform {
-    struct_size: u32,
-    abi_version: u32,
     resolve: unsafe extern "C" fn(Handle, *const c_char) -> Handle,
     allocate: unsafe extern "C" fn() -> *mut Native,
     release: unsafe extern "C" fn(*mut Native),
@@ -269,21 +257,12 @@ const _: () = {
     assert!(offset_of!(Frame, composition) == 128);
     assert!(size_of::<Sdk>() == 48 && offset_of!(Sdk, dispatch) == 32);
     assert!(size_of::<Request>() == 32 && offset_of!(Request, render_width) == 16);
-    assert!(size_of::<Platform>() == 8 + 9 * size_of::<usize>());
-    assert!(offset_of!(Platform, resolve) == 8);
-    assert!(offset_of!(Platform, create) == 40);
-    assert!(offset_of!(Platform, destroy) == 72);
     assert!(size_of::<FgFrame>() == 248);
     assert!(offset_of!(FgFrame, delta_ms) == 136 && offset_of!(FgFrame, frame_id) == 152);
     assert!(offset_of!(FgFrame, ui) == 216 && offset_of!(FgFrame, swapchain_context) == 240);
     assert!(size_of::<WsiRequest>() == 64 && offset_of!(WsiRequest, info) == 48);
     assert!(offset_of!(WsiRequest, queue_family) == 56);
     assert!(size_of::<FgRequest>() == 32 && offset_of!(FgRequest, back_buffer_format) == 24);
-    assert!(size_of::<FgPlatform>() == 8 + 25 * size_of::<usize>());
-    assert!(offset_of!(FgPlatform, wsi_allocate) == 8);
-    assert!(offset_of!(FgPlatform, wsi_recreate) == 80);
-    assert!(offset_of!(FgPlatform, fg_allocate) == 128);
-    assert!(offset_of!(FgPlatform, fg_generate) == 200);
 };
 
 /// Opaque `rsf_fsr3wsi_native` capsule.
@@ -301,8 +280,6 @@ struct FgNative {
 /// Matches `rsf_fsr3fg_platform`.
 #[repr(C)]
 struct FgPlatform {
-    struct_size: u32,
-    abi_version: u32,
     wsi_allocate: unsafe extern "C" fn() -> *mut WsiNative,
     wsi_release: unsafe extern "C" fn(*mut WsiNative),
     wsi_create: unsafe extern "C" fn(*mut WsiNative, Handle, *const WsiRequest, *mut Vk) -> i32,
@@ -330,23 +307,6 @@ struct FgPlatform {
     fg_generate: unsafe extern "C" fn(*mut FgNative, Handle, *const FgFrame) -> i32,
 }
 
-/// # Safety
-/// A non-null table must stay valid for the process lifetime.
-unsafe fn fg_platform(ops: *const FgPlatform) -> Option<&'static FgPlatform> {
-    let ops = unsafe { ops.as_ref() }?;
-    (ops.struct_size as usize >= size_of::<FgPlatform>()
-        && ops.abi_version == FG_PLATFORM_ABI_VERSION)
-        .then_some(ops)
-}
-
-/// # Safety
-/// A non-null table must stay valid for the process lifetime.
-unsafe fn platform(ops: *const Platform) -> Option<&'static Platform> {
-    let ops = unsafe { ops.as_ref() }?;
-    (ops.struct_size as usize >= size_of::<Platform>() && ops.abi_version == PLATFORM_ABI_VERSION)
-        .then_some(ops)
-}
-
 /// The exported `rsf_vk_fsr3_context`. The host serializes calls on one
 /// context and retires its Vulkan work before destruction.
 struct Context {
@@ -368,7 +328,7 @@ fn rsf_core_fsr3_sdk() -> *const Sdk {
 ///
 /// # Safety
 /// `ops` is the static platform table; `runtime` is null or a loaded module.
-unsafe extern "C" fn rsf_core_fsr3_open(ops: *const Platform, runtime: Handle) -> i32 {
+unsafe fn rsf_core_fsr3_open(ops: *const Platform, runtime: Handle) -> i32 {
     if runtime.is_null() {
         return -1;
     }
@@ -376,7 +336,7 @@ unsafe extern "C" fn rsf_core_fsr3_open(ops: *const Platform, runtime: Handle) -
     if let Some(bound) = SDK.get() {
         return same(bound);
     }
-    let Some(ops) = (unsafe { platform(ops) }) else {
+    let Some(ops) = (unsafe { ops.as_ref() }) else {
         return -1;
     };
     let mut entries = [ptr::null_mut(); EXPORTS.len()];
@@ -408,7 +368,7 @@ unsafe extern "C" fn rsf_core_fsr3_open(ops: *const Platform, runtime: Handle) -
 ///
 /// # Safety
 /// `ops` is the static platform table; non-null outputs must be writable.
-unsafe extern "C" fn rsf_core_fsr3_plan(
+unsafe fn rsf_core_fsr3_plan(
     ops: *const Platform,
     display_width: u32,
     display_height: u32,
@@ -422,7 +382,7 @@ unsafe extern "C" fn rsf_core_fsr3_plan(
     if render_width.is_null() || render_height.is_null() {
         return -1;
     }
-    let Some(ops) = (unsafe { platform(ops) }) else {
+    let Some(ops) = (unsafe { ops.as_ref() }) else {
         return -1;
     };
     unsafe {
@@ -445,7 +405,7 @@ unsafe extern "C" fn rsf_core_fsr3_plan(
 ///
 /// # Safety
 /// `ops` is the static platform table; `request` and `result` are null or valid.
-unsafe extern "C" fn rsf_core_fsr3_create(
+unsafe fn rsf_core_fsr3_create(
     ops: *const Platform,
     request: *const Request,
     result: *mut *mut Context,
@@ -466,7 +426,7 @@ unsafe extern "C" fn rsf_core_fsr3_create(
     {
         return -1;
     }
-    let Some(ops) = (unsafe { platform(ops) }) else {
+    let Some(ops) = (unsafe { ops.as_ref() }) else {
         return -1;
     };
     let Some(native) = NonNull::new(unsafe { (ops.allocate)() }) else {
@@ -499,7 +459,7 @@ unsafe extern "C" fn rsf_core_fsr3_create(
 ///
 /// # Safety
 /// Non-null pointers must be a live context and a readable 184-byte frame.
-unsafe extern "C" fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const Frame) -> i32 {
+unsafe fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const Frame) -> i32 {
     let (Some(context), Some(frame)) = (unsafe { context.as_ref() }, unsafe { frame.as_ref() })
     else {
         return -1;
@@ -526,7 +486,7 @@ unsafe extern "C" fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const
 ///
 /// # Safety
 /// `context` is null or a live context from `rsf_core_fsr3_create`.
-unsafe extern "C" fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
+unsafe fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
     let Some(owner) = (unsafe { context.as_ref() }) else {
         return 0;
     };
@@ -597,7 +557,7 @@ unsafe fn has_context(swapchain: *mut Swapchain) -> bool {
 /// # Safety
 /// `ops` is the static platform table; `request` is valid with a null or
 /// readable `info`; `result` is null or writable.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_create(
+unsafe fn rsf_core_fsr3_swapchain_create(
     ops: *const FgPlatform,
     request: *const WsiRequest,
     result: *mut *mut Swapchain,
@@ -611,7 +571,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_create(
     if result.is_null() || !unsafe { request.admitted() } {
         return -1;
     }
-    let Some(ops) = (unsafe { fg_platform(ops) }) else {
+    let Some(ops) = (unsafe { ops.as_ref() }) else {
         return -1;
     };
     unsafe { result.write(ptr::null_mut()) };
@@ -671,7 +631,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_create(
 ///
 /// # Safety
 /// `value` is null or a live swapchain owner.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_handle(value: *mut Swapchain) -> Vk {
+unsafe fn rsf_core_fsr3_swapchain_handle(value: *mut Swapchain) -> Vk {
     if value.is_null() {
         0
     } else {
@@ -684,7 +644,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_handle(value: *mut Swapchain) -> Vk
 ///
 /// # Safety
 /// `value` is null or a live owner; non-null `info` and `chain` are valid.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_recreate(
+unsafe fn rsf_core_fsr3_swapchain_recreate(
     value: *mut Swapchain,
     info: *const u8,
     chain: *mut Vk,
@@ -713,7 +673,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_recreate(
 ///
 /// # Safety
 /// `value` is null or a live owner; the pointers follow the Vulkan contract.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_get_images(
+unsafe fn rsf_core_fsr3_swapchain_get_images(
     value: *mut Swapchain,
     chain: Vk,
     count: *mut u32,
@@ -740,7 +700,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_get_images(
 ///
 /// # Safety
 /// `value` is null or a live owner; the handles follow the Vulkan contract.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_acquire(
+unsafe fn rsf_core_fsr3_swapchain_acquire(
     value: *mut Swapchain,
     chain: Vk,
     timeout: u64,
@@ -771,7 +731,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_acquire(
 ///
 /// # Safety
 /// `value` is null or a live owner; `info` is null or a valid present info.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_present(
+unsafe fn rsf_core_fsr3_swapchain_present(
     value: *mut Swapchain,
     queue: Handle,
     info: *const c_void,
@@ -794,7 +754,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_present(
 ///
 /// # Safety
 /// `value` is null or a live owner whose `active_fg` is null or live.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_prepare_destroy(
+unsafe fn rsf_core_fsr3_swapchain_prepare_destroy(
     value: *mut Swapchain,
     chain: Vk,
 ) -> i32 {
@@ -822,7 +782,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_prepare_destroy(
 ///
 /// # Safety
 /// As `rsf_core_fsr3_swapchain_prepare_destroy`.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy_chain(
+unsafe fn rsf_core_fsr3_swapchain_destroy_chain(
     value: *mut Swapchain,
     chain: Vk,
 ) -> i32 {
@@ -851,7 +811,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy_chain(
 ///
 /// # Safety
 /// `value` is null or a live owner.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_last_present_count(
+unsafe fn rsf_core_fsr3_swapchain_last_present_count(
     value: *mut Swapchain,
     chain: Vk,
 ) -> u64 {
@@ -869,7 +829,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_last_present_count(
 ///
 /// # Safety
 /// `value` is null or a live owner whose `active_fg` is null or live.
-unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i32 {
+unsafe fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i32 {
     if value.is_null() {
         return 0;
     }
@@ -903,7 +863,7 @@ unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i
 ///
 /// # Safety
 /// `ops` is the static platform table; `request` and `result` are null or valid.
-unsafe extern "C" fn rsf_core_fsr3_fg_create(
+unsafe fn rsf_core_fsr3_fg_create(
     ops: *const FgPlatform,
     request: *const FgRequest,
     result: *mut *mut FgContext,
@@ -923,7 +883,7 @@ unsafe extern "C" fn rsf_core_fsr3_fg_create(
     {
         return -1;
     }
-    let Some(ops) = (unsafe { fg_platform(ops) }) else {
+    let Some(ops) = (unsafe { ops.as_ref() }) else {
         return -1;
     };
     let Some(native) = NonNull::new(unsafe { (ops.fg_allocate)() }) else {
@@ -1009,7 +969,7 @@ unsafe fn fg_disable(context: *mut FgContext) -> i32 {
 ///
 /// # Safety
 /// As `fg_disable`.
-unsafe extern "C" fn rsf_core_fsr3_fg_disable(
+unsafe fn rsf_core_fsr3_fg_disable(
     context: *mut FgContext,
     _swapchain: *mut Swapchain,
 ) -> i32 {
@@ -1027,7 +987,7 @@ unsafe extern "C" fn rsf_core_fsr3_fg_disable(
 /// # Safety
 /// `context` is null or a live owner; `frame` is null or a readable 248-byte
 /// record whose `swapchain_context` is null or a live swapchain owner.
-unsafe extern "C" fn rsf_core_fsr3_fg_evaluate(
+unsafe fn rsf_core_fsr3_fg_evaluate(
     context: *mut FgContext,
     frame: *const FgFrame,
 ) -> i32 {
@@ -1094,7 +1054,7 @@ unsafe extern "C" fn rsf_core_fsr3_fg_evaluate(
 ///
 /// # Safety
 /// As `rsf_core_fsr3_fg_evaluate`.
-unsafe extern "C" fn rsf_core_fsr3_fg_evaluate_direct(
+unsafe fn rsf_core_fsr3_fg_evaluate_direct(
     context: *mut FgContext,
     frame: *const FgFrame,
 ) -> i32 {
@@ -1113,7 +1073,7 @@ unsafe extern "C" fn rsf_core_fsr3_fg_evaluate_direct(
 ///
 /// # Safety
 /// `context` is null or a live owner; the host has retired direct-mode work.
-unsafe extern "C" fn rsf_core_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
+unsafe fn rsf_core_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
     if context.is_null() {
         return 0;
     }
@@ -1246,8 +1206,6 @@ mod tests {
     }
 
     static PLATFORM: Platform = Platform {
-        struct_size: size_of::<Platform>() as u32,
-        abi_version: PLATFORM_ABI_VERSION,
         resolve,
         allocate,
         release,
@@ -1544,8 +1502,6 @@ mod tests {
     }
 
     static FG_PLATFORM: FgPlatform = FgPlatform {
-        struct_size: size_of::<FgPlatform>() as u32,
-        abi_version: FG_PLATFORM_ABI_VERSION,
         wsi_allocate,
         wsi_release,
         wsi_create,

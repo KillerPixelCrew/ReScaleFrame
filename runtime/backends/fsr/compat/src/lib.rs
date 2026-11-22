@@ -33,11 +33,6 @@ mod native;
 #[cfg(windows)]
 #[path = "../../../../vulkan/fsr4/owner.rs"]
 mod vulkan_bridge;
-// The standalone VulkanStoryFsr3.dll links its owner with rustc, not this
-// archive. Only its CPU fixture runs here.
-#[cfg(test)]
-#[path = "../../../../vulkan/fsr3/owner.rs"]
-mod vulkan_fsr3_bridge;
 
 use core::ffi::{CStr, c_char, c_void};
 use core::ptr::{self, NonNull};

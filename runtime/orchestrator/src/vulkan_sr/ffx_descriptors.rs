@@ -5,8 +5,7 @@ use crate::sharpening_policy::ffx_sharpening;
 use ash::vk;
 use std::ptr;
 
-#[path = "../../../vulkan/fsr3/sdk_abi.rs"]
-pub(super) mod abi;
+pub(super) use crate::ffx_vk_abi as abi;
 use abi::*;
 
 fn header(kind: u32, next: *mut ffxApiHeader) -> ffxApiHeader {

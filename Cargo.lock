@@ -900,6 +900,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-vk-fsr3"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
+]
+
+[[package]]
 name = "rsf-vulkan-fg-fixtures"
 version = "0.1.2"
 dependencies = [

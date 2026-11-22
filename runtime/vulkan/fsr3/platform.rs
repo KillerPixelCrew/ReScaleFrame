@@ -21,7 +21,7 @@ unsafe extern "system" {
 }
 
 static DEVICE_PROC: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
-const VULKAN_DLL: [u16; 13] = ffi_util::ascii_wide(b"vulkan-1.dll\0");
+const VULKAN_DLL: [u16; 13] = rsf_game_sys::ffi_util::ascii_wide(b"vulkan-1.dll\0");
 
 // The owner resolves and publishes all required addresses before making a call.
 macro_rules! sdk_proc {
@@ -393,7 +393,7 @@ unsafe extern "C" fn wsi_recreate(
     let owner = owner.cast::<WsiCapsule>();
     unsafe {
         let Some(recreate) = (*owner).functions.pOutCreateSwapchainFFXAPI else {
-            return VK_ERROR_INITIALIZATION_FAILED;
+            return super::VK_ERROR_INITIALIZATION_FAILED;
         };
         recreate(
             device.cast(),
@@ -417,7 +417,7 @@ unsafe extern "C" fn wsi_images(
             .functions
             .pOutGetSwapchainImagesKHR
         else {
-            return VK_ERROR_INITIALIZATION_FAILED;
+            return super::VK_ERROR_INITIALIZATION_FAILED;
         };
         images_fn(device.cast(), vk_handle(chain), count, images.cast())
     }
@@ -437,7 +437,7 @@ unsafe extern "C" fn wsi_acquire(
             .functions
             .pOutAcquireNextImageKHR
         else {
-            return VK_ERROR_INITIALIZATION_FAILED;
+            return super::VK_ERROR_INITIALIZATION_FAILED;
         };
         acquire(
             device.cast(),
@@ -453,7 +453,7 @@ unsafe extern "C" fn wsi_acquire(
 unsafe extern "C" fn wsi_present(owner: *mut WsiNative, queue: Handle, info: *const c_void) -> i32 {
     unsafe {
         let Some(present) = (*owner.cast::<WsiCapsule>()).functions.pOutQueuePresentKHR else {
-            return VK_ERROR_INITIALIZATION_FAILED;
+            return super::VK_ERROR_INITIALIZATION_FAILED;
         };
         present(queue.cast(), info.cast())
     }
@@ -677,8 +677,6 @@ unsafe extern "C" fn fg_generate(
 }
 
 pub(super) static SR: Platform = Platform {
-    struct_size: size_of::<Platform>() as u32,
-    abi_version: PLATFORM_ABI_VERSION,
     resolve,
     allocate: sr_allocate,
     release: release::<SrCapsule, Native>,
@@ -691,8 +689,6 @@ pub(super) static SR: Platform = Platform {
 };
 
 pub(super) static FG: FgPlatform = FgPlatform {
-    struct_size: size_of::<FgPlatform>() as u32,
-    abi_version: FG_PLATFORM_ABI_VERSION,
     wsi_allocate,
     wsi_release: release::<WsiCapsule, WsiNative>,
     wsi_create,

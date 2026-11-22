@@ -10,7 +10,7 @@ filenames and symbol names.
 | `VulkanStoryStreamline.dll` | `rsf_vk_sl_` | Same-DLL aliases from `sl.def` |
 | `VulkanStoryFsr4.dll` | `rsf_vk_fsr4_` | Same-DLL aliases from `fsr4.def` |
 | `VulkanStoryXessFg.dll` | `rsf_vk_xess_fg_` | Same-DLL aliases from `xess_fg.def` |
-| `VulkanStoryFsr3.dll` | `rsf_vk_fsr3_` | Rust forwarding exports selected by `vulkanstory_compat` |
+| `VulkanStoryFsr3.dll` | `rsf_vk_fsr3_` | Same-DLL aliases from `fsr3.def` |
 | `VulkanStoryNgx.dll`, `libVulkanStoryNgx.so` | `rsf_vk_ngx_` | Rust forwarding exports selected by `vulkanstory-compat` |
 
 The standalone build scripts include the matching alias table. Each alias

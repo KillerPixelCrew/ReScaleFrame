@@ -1,0 +1,18 @@
+[package]
+name = "rsf-vk-fsr3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# VulkanStoryFsr3.dll: build.ps1 links this archive with integrations/vulkanstory/native/fsr3.def.
+[lib]
+path = "owner.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+rsf-game-sys = { path = "../../../sdk/game" }
+
+[lints]
+workspace = true
