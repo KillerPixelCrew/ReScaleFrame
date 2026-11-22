@@ -7650,3 +7650,14 @@ SR12 ABI fixtures preserve their DLL and embedded registrations. The
 [D04 source record](research/d04-d3d12-host-port.md) lists the five remaining
 C++ paths and the Rust review resolutions. Verification covers source syntax,
 bindings and pinned formatting. Build, test and device execution remain pending.
+
+### Shared overlay rendering and panel (O02)
+
+Rust owns D3D11 overlay rendering and native D3D12 COM lifetime and recovery.
+The D3D11-on-12 wrapper consumes a single host draw decision and keeps D08's
+exact backbuffer and input HWND. Panel ABI 19 shares generated wire records
+with the Runtime and carries SR choices and edit receipts. The pacing owner
+resolves the saved VRR policy from display refresh and effective FG state.
+The [O02 source record](research/rust-shared-overlay-o02.md) lists each
+port, fixture and finding. Binding reproduction and pinned formatting
+completed. Builds, lint, fixture execution and device checks remain pending.
