@@ -32,6 +32,7 @@ windows = { version = "0.62.2", default-features = false, features = [
 ] }
 windows-sys = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
+  "Win32_Graphics_OpenGL",
   "Win32_Security",
   "Win32_Security_Cryptography",
   "Win32_System_Diagnostics_Debug",

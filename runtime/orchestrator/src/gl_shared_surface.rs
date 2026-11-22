@@ -2,7 +2,7 @@
 // OpenGL and D3D12 sharing owner behind rescaleframe/gl_shared_surface.h. This owner decides WGL
 // owner admission, format validation, semaphore, handle and resource lifetime, command slot and
 // fence synchronization, the GL/D3D12 queue handoff, failure recovery and teardown.
-// gl_shared_surface.cpp supplies one native leaf per WGL, OpenGL, DXGI or D3D12 operation.
+// The native table uses typed WGL, OpenGL, DXGI and D3D12 calls.
 //
 // Every transaction leaves GL through a semaphore signal and returns through a GL wait on a value
 // the D3D12 queue signals after the transaction's commands. A queue signal that fails after
@@ -20,6 +20,9 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+
+mod native_dx;
+mod native_gl;
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -39,7 +42,7 @@ const STICKY_ERRORS: usize = 32;
 // GL_LAYOUT_GENERAL_EXT. Resources enter and leave D3D12 in COMMON.
 const LAYOUT_GENERAL: u32 = 0x958d;
 
-// DXGI formats and GL internal formats, pinned by static_asserts in gl_shared_surface.cpp.
+// DXGI formats and GL internal formats.
 const DXGI_R16G16B16A16_FLOAT: u32 = 10;
 const DXGI_R16G16_FLOAT: u32 = 34;
 const DXGI_R32_FLOAT: u32 = 41;
@@ -50,7 +53,7 @@ const GL_RG16F: u32 = 0x822f;
 const GL_RGBA8: u32 = 0x8058;
 const FEATURE_LEVEL_11_0: u32 = 0xb000;
 
-// Order is the typed Gl table in gl_shared_surface.cpp.
+// native_gl converts these entries to their typed OpenGL signatures at the call site.
 const GL_ENTRY_POINTS: [&CStr; 13] = [
     c"glGetStringi",
     c"glGetUnsignedBytevEXT",
@@ -70,13 +73,12 @@ const GL_ENTRY_POINTS: [&CStr; 13] = [
 type Handle = *mut c_void;
 type Log = rsf_backend_log_fn;
 
-// Native leaves borrow the resolved entry points as Gl in gl_shared_surface.cpp.
+// Native GL leaves and the fixture borrow the resolved entry points.
 #[repr(C)]
 pub(crate) struct GlProcs([*const c_void; GL_ENTRY_POINTS.len()]);
 
-// Field order matches `Leaves` in gl_shared_surface.cpp. GL leaves return glGetError after their
-// call. D3D12 and DXGI leaves return an HRESULT; created COM interfaces carry one reference.
-#[repr(C)]
+// GL operations return glGetError after their call. D3D12 and DXGI calls
+// return an HRESULT. A returned COM interface transfers one reference.
 pub(crate) struct Leaves {
     gl_current: unsafe extern "C" fn() -> Handle,
     gl_lookup: unsafe extern "C" fn(*const c_char) -> *const c_void,
@@ -113,14 +115,6 @@ pub(crate) struct Leaves {
     queue_signal: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
     resource_create: unsafe extern "C" fn(Handle, u32, u32, u32, *mut Handle) -> i32,
 }
-
-const _: () = {
-    assert!(size_of::<GlProcs>() == 13 * size_of::<usize>());
-    assert!(size_of::<Leaves>() == 34 * size_of::<usize>());
-    assert!(std::mem::offset_of!(Leaves, gl_lookup) == size_of::<usize>());
-    assert!(std::mem::offset_of!(Leaves, factory_create) == 15 * size_of::<usize>());
-    assert!(std::mem::offset_of!(Leaves, resource_create) == 33 * size_of::<usize>());
-};
 
 impl GlProcs {
     fn load(leaves: &Leaves) -> Option<Self> {
@@ -702,10 +696,13 @@ fn with_state(context: *mut Context, run: impl FnOnce(&Context, &mut State) -> i
 }
 
 /// # Safety
-/// `setup` is null or readable for its `struct_size`; `out` is null or writable. `leaves` is the
-/// static table from gl_shared_surface.cpp.
+/// `setup` is null or readable for its `struct_size` and `out` is null or writable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_gl_open(
+unsafe extern "C" fn rsf_gl_open(setup: *const rsf_gl_setup, out: *mut *mut Context) -> i32 {
+    unsafe { rsf_core_gl_open(setup, out, &native_dx::NATIVE) }
+}
+
+unsafe fn rsf_core_gl_open(
     setup: *const rsf_gl_setup,
     out: *mut *mut Context,
     leaves: *const Leaves,
