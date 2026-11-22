@@ -12,11 +12,10 @@
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <cstddef>
-#include <memory>
 #include <new>
 #include "api/include/dx12/ffx_api_dx12.h"
 #include "upscalers/include/ffx_upscale.h"
-#include "fsr4_compat_core.h"
+#include "fsr4_compat_platform.h"
 #if !defined(RSF_FSR4_VULKAN_STATIC)
 #define RSF_FSR4_BRIDGE_BUILD
 #endif
@@ -76,7 +75,7 @@ static_assert(static_cast<uint32_t>(E_UNEXPECTED) == 0x8000ffffu &&
 /// @details Imported image/resource ownership stays with the caller. Only the Rust owner releases the capsule.
 /// The NVIDIA/Intel INT8 compatibility lease must outlive the SDK context; Rust drops it after context destruction.
 struct rsf_fsr4sr_native {
-    std::shared_ptr<Fsr4Compatibility> compatibility;
+    const rsf_fsr4_compat_lease* compatibility{};
     HMODULE module{};
     IDXGIFactory4* factory{};
     IDXGIAdapter1* adapter{};
@@ -97,12 +96,17 @@ struct rsf_fsr4sr_native {
 namespace {
 constexpr uint32_t kAllocators = 3;
 
+void ReleaseCompatibility(rsf_fsr4sr_native* native) {
+    rsf_fsr4_compat_release(native->compatibility);
+    native->compatibility = nullptr;
+}
+
 rsf_fsr4sr_native* Allocate() { return new (std::nothrow) rsf_fsr4sr_native(); }
 
 /// @brief Frees COM owners, the event, the module and the capsule in the previous checked-destruction order.
 void ReleaseNative(rsf_fsr4sr_native* native) {
     if (!native) return;
-    native->compatibility.reset();
+    ReleaseCompatibility(native);
     void* const objects[10] = {
         native->commands, native->allocators[0], native->allocators[1], native->allocators[2],
         native->completionFence, native->sharedFence, native->queue, native->device, native->adapter, native->factory,
@@ -155,15 +159,11 @@ int32_t Load(rsf_fsr4sr_native* native, const uint16_t* path) {
 /// @brief Takes the pinned-SDK INT8 capability lease for NVIDIA/Intel.
 /// @details It must be active before version enumeration, which filters providers by device support.
 uint32_t AcquireCompatibility(rsf_fsr4sr_native* native) {
-    try {
-        native->compatibility = rsf_fsr4_enable_int8_adapter(native->module, native->adapter, native->device, nullptr, nullptr);
-    } catch (...) {
-        native->compatibility.reset();
-    }
+    ReleaseCompatibility(native);
+    native->compatibility = rsf_fsr4_compat_acquire_native_adapter(native->module, native->adapter,
+        native->device, nullptr, nullptr);
     return native->compatibility ? 1u : 0u;
 }
-
-void ReleaseCompatibility(rsf_fsr4sr_native* native) { native->compatibility.reset(); }
 
 /// @brief Lists upscaler providers for this device, parsed by the shared FidelityFX version helper.
 /// @param count In: capacity of out (at most 32). Out: the SDK's provider count.

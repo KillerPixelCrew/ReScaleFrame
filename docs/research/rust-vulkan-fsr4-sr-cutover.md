@@ -117,3 +117,26 @@ info, private request, context, texture and dispatch structures and the
 Git whitespace checks passed. Nothing was compiled or run. Native linking,
 Clippy, Rust tests, the FSR4 CTest contracts, the standalone DLL build and
 device behavior await user verification.
+
+## D07 INT8 lease shim removal
+
+`fsr4_compat_core.cpp` and `fsr4_compat_core.h` only wrapped the Rust
+`rsf_fsr4_compat_acquire_native_adapter` lease in a C++ `shared_ptr` with a
+`try/catch (...)`. The sole consumer was the standalone Vulkan FSR4 bridge
+(`runtime/vulkan/fsr4/bridge.cpp`), which now keeps the
+`const rsf_fsr4_compat_lease*` in its native capsule and calls the C
+acquire and release functions from `fsr4_compat_platform.h` directly. Release
+is idempotent in the capsule (the pointer is cleared), and
+`rsf_fsr4_compat_release` accepts null.
+
+The `catch (...)` is dropped. The lease functions are `extern "C"` Rust
+that cannot unwind into C++ (a panic aborts at the boundary), so nothing
+throws through that call. The `rsf_fsr` static library no longer compiles any
+C++ and the g++ bridge build no longer lists the shim. Create-hook failure now
+sets a refusal in the Rust owner, so the leaf adds no logging of its own.
+
+Checked: `g++ -std=c++20 -fsyntax-only -Wall -Wextra` on `bridge.cpp` with the pinned
+FidelityFX and Vulkan SDK headers passes, and `cargo clippy --locked -p rsf-fsr4-compat --lib`
+passes. The full CMake link was not possible on the branch tip: `rsf-orchestrator`
+fails to compile there, and `tests/CMakeLists.txt` and `tests/anomaly_fg.cmake` have
+stale entries from other chunks.

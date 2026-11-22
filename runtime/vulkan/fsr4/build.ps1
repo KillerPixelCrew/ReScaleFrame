@@ -69,7 +69,7 @@ try {
     }
     & $compiler -std=c++20 -O2 -shared -static -Wall -Wextra -I (Join-Path $sdk 'Kits/FidelityFX') -I $vulkan `
         -I (Join-Path $minHook 'include') -I (Join-Path $PSScriptRoot '../../backends/fsr/src') -I (Join-Path $PSScriptRoot '../../common/include') `
-        (Join-Path $PSScriptRoot 'bridge.cpp') (Join-Path $PSScriptRoot '../../backends/fsr/src/fsr4_compat_core.cpp') $minHookObjects `
+        (Join-Path $PSScriptRoot 'bridge.cpp') $minHookObjects `
         (Join-Path $PSScriptRoot '../../../integrations/vulkanstory/native/fsr4.def') `
         $rustArchive $commonArchive -o $temporary -ld3d12 -ldxgi -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp
     if ($LASTEXITCODE -ne 0) { throw "FSR 4 bridge compilation failed: $LASTEXITCODE" }
