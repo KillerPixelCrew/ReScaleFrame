@@ -155,7 +155,7 @@ const STARTUP_PLATFORM: Startup = Startup {
     pcl_defaults: quiet,
 };
 
-const PLATFORM: Platform = Platform {
+pub(super) const PLATFORM: Platform = Platform {
     startup: &STARTUP_PLATFORM,
     dispose,
     token,
@@ -182,7 +182,7 @@ const PLATFORM: Platform = Platform {
     tags,
 };
 
-fn host(profile: u32) -> Box<Host> {
+pub(super) fn host(profile: u32) -> Box<Host> {
     let mut setup: Setup = unsafe { zeroed() };
     setup.profile = profile;
     let mut host = Box::new(Host::new(&setup));
@@ -251,7 +251,7 @@ fn tokens_keep_source_order_and_retire_after_required_markers() {
     assert_eq!(sleep(&host, 1, &PLATFORM), OK);
     assert_eq!(sleep(&host, 1, &PLATFORM), INVALID);
     assert_eq!(SLEEPS.get(), 1);
-    assert_eq!(host.frames().tokens[0].index, 1);
+    assert_eq!(host.frames().tokens[0].unwrap().index, 1);
 
     // Marker 6 without a controller is dropped; with one it maps to PCL marker 13.
     assert_eq!(marker_for(&host, 1, INPUT_SAMPLE, 0, &PLATFORM), OK);
@@ -267,49 +267,133 @@ fn tokens_keep_source_order_and_retire_after_required_markers() {
     assert_eq!(host.frames().marker_calls, 7);
 }
 
+unsafe extern "C" fn reject_sleep(_: Handle, _: Handle) -> i32 {
+    FEATURE_FAILED
+}
+
+unsafe extern "C" fn reject_marker(_: Handle, _: Handle, _: u32) -> i32 {
+    FEATURE_FAILED
+}
+
+#[test]
+fn combined_begin_retires_failed_sleep_without_reusing_the_source() {
+    let mut host = host(PROFILE_DLSS_FG);
+    let platform = Platform {
+        sleep: reject_sleep,
+        ..PLATFORM
+    };
+    assert_eq!(
+        unsafe { rsf_core_slhost_begin(host.as_mut(), 1, &platform) },
+        FEATURE_FAILED
+    );
+    assert!(unsafe { rsf_core_slhost_token(host.as_mut(), 1) }.is_null());
+    assert_eq!(
+        unsafe { rsf_core_slhost_begin(host.as_mut(), 1, &PLATFORM) },
+        NOT_READY
+    );
+    // Wrap around the failed slot without any explicit abort from the caller.
+    for id in 2..=1 + TOKEN_SLOTS as u64 {
+        assert_eq!(acquire(&host, id, &PLATFORM), OK);
+        assert_eq!(abort_for(&host, id), OK);
+    }
+    assert_eq!(unsafe { rsf_core_slhost_reset_sources(host.as_mut()) }, OK);
+}
+
+unsafe extern "C" fn partial_present_entries(_: Handle, addresses: &mut [Handle; 2]) -> u32 {
+    addresses[0] = std::ptr::without_provenance_mut(1);
+    1
+}
+
+unsafe extern "C" fn present_entries(_: Handle, addresses: &mut [Handle; 2]) -> u32 {
+    *addresses = [1, 2].map(std::ptr::without_provenance_mut);
+    1
+}
+
+unsafe extern "C" fn before_present(entry: Handle, _: Handle, interval: u32, flags: u32) -> u32 {
+    u32::from(entry.addr() == 1 && interval == 1 && flags == 4)
+}
+
+unsafe extern "C" fn after_present(entry: Handle, flags: u32) -> u32 {
+    u32::from(entry.addr() == 2 && flags == 4)
+}
+
+#[test]
+fn common_present_caches_only_a_complete_hook_pair() {
+    let host = host(PROFILE_DLSS_FG);
+    let chain = NonNull::<c_void>::dangling().as_ptr();
+    let partial = CommonPresent {
+        resolve: partial_present_entries,
+        before: before_present,
+        after: after_present,
+    };
+    assert_eq!(
+        unsafe { rsf_core_slhost_present_common(host.as_ref(), chain, 1, 4, 1, &partial) },
+        MISSING_ENTRY
+    );
+    let complete = CommonPresent {
+        resolve: present_entries,
+        ..partial
+    };
+    assert_eq!(
+        unsafe { rsf_core_slhost_present_common(host.as_ref(), chain, 1, 4, 1, &complete) },
+        OK
+    );
+    // The second half uses the cached pair even if a fresh lookup would fail.
+    assert_eq!(
+        unsafe { rsf_core_slhost_present_common(host.as_ref(), chain, 0, 4, 0, &partial) },
+        OK
+    );
+}
+
 #[test]
 fn ring_refuses_a_live_slot_until_present_completion_retires_it() {
-    let host = host(PROFILE_DLSS_FG);
+    let mut host = host(PROFILE_DLSS_FG);
     for id in 2..2 + TOKEN_SLOTS as u64 {
         assert_eq!(acquire(&host, id, &PLATFORM), OK);
     }
     let next = 2 + TOKEN_SLOTS as u64;
     assert_eq!(acquire(&host, next, &PLATFORM), NOT_READY);
-    let raw = Box::into_raw(host);
-    assert_eq!(unsafe { rsf_core_slhost_reset_sources(raw) }, NOT_READY);
-    assert_eq!(unsafe { rsf_core_slhost_retire_through(raw, 2) }, OK);
-    let host = unsafe { Box::from_raw(raw) };
+    assert_eq!(
+        unsafe { rsf_core_slhost_reset_sources(host.as_mut()) },
+        NOT_READY
+    );
+    assert_eq!(
+        unsafe { rsf_core_slhost_retire_through(host.as_mut(), 2) },
+        OK
+    );
     assert_eq!(acquire(&host, next, &PLATFORM), OK);
     // Token indices stay monotonic across the ring.
-    assert_eq!(host.frames().tokens[0].index, TOKEN_SLOTS as u32 + 1);
+    assert_eq!(
+        host.frames().tokens[0].unwrap().index,
+        TOKEN_SLOTS as u32 + 1
+    );
     for id in 3..=next {
         assert_eq!(abort_for(&host, id), OK);
     }
-    let raw = Box::into_raw(host);
-    assert_eq!(unsafe { rsf_core_slhost_reset_sources(raw) }, OK);
-    let host = unsafe { Box::from_raw(raw) };
+    assert_eq!(unsafe { rsf_core_slhost_reset_sources(host.as_mut()) }, OK);
     assert_eq!(acquire(&host, 1, &PLATFORM), OK);
 }
 
 #[test]
 fn pcl_profile_mints_tokens_without_a_sleeper() {
-    let host = host(PROFILE_PCL);
-    let raw = Box::into_raw(host);
-    assert_eq!(unsafe { rsf_core_slhost_begin(raw, 1, &PLATFORM) }, OK);
+    let mut host = host(PROFILE_PCL);
+    assert_eq!(
+        unsafe { rsf_core_slhost_begin(host.as_mut(), 1, &PLATFORM) },
+        OK
+    );
     assert_eq!(SLEEPS.get(), 0);
     assert_eq!(
-        unsafe { rsf_core_slhost_reflex(raw, REFLEX_ON, 0, &PLATFORM) },
+        unsafe { rsf_core_slhost_reflex(host.as_mut(), REFLEX_ON, 0, &PLATFORM) },
         NOT_SUPPORTED
     );
     let mut status: LatencyStatus = unsafe { zeroed() };
     status.struct_size = size_of::<LatencyStatus>() as u32;
     assert_eq!(
-        unsafe { rsf_core_slhost_latency_status(raw, &mut status, &PLATFORM) },
+        unsafe { rsf_core_slhost_latency_status(host.as_mut(), &mut status, &PLATFORM) },
         OK
     );
     assert!(status.pacing_owner == RSF_PACING_NONE && status.last_begin_id == 1);
     assert!(status.sleep_calls == 0 && status.pcl_message_id == PING);
-    drop(unsafe { Box::from_raw(raw) });
 }
 
 #[test]
@@ -318,11 +402,27 @@ fn input_reports_controller_and_registered_ping_once_per_frame() {
     assert_eq!(input_for(&host, 1, CONTROLLER, PING, &PLATFORM), NOT_READY);
     assert_eq!(acquire(&host, 1, &PLATFORM), OK);
     assert_eq!(input_for(&host, 1, 8, 0, &PLATFORM), INVALID);
+    let unavailable = Platform {
+        marker: reject_marker,
+        ..PLATFORM
+    };
+    assert_eq!(
+        marker_for(&host, 1, INPUT_SAMPLE, 1, &unavailable),
+        FEATURE_FAILED
+    );
+    assert_eq!(marker_for(&host, 1, INPUT_SAMPLE, 1, &PLATFORM), OK);
+    assert_eq!(marker_for(&host, 1, INPUT_SAMPLE, 1, &PLATFORM), OK);
     assert_eq!(input_for(&host, 1, CONTROLLER | 1, PING, &PLATFORM), OK);
     assert_eq!(input_for(&host, 1, CONTROLLER, PING, &PLATFORM), OK);
     assert_eq!(input_for(&host, 1, 2, PING + 1, &PLATFORM), OK);
     assert_eq!(markers(), [CONTROLLER_SAMPLE, PCL_PING]);
     assert_eq!(host.frames().input_counts, [1, 1, 2, 1]);
+
+    assert_eq!(acquire(&host, 2, &PLATFORM), OK);
+    assert_eq!(input_for(&host, 2, CONTROLLER, 0, &PLATFORM), OK);
+    assert_eq!(marker_for(&host, 2, INPUT_SAMPLE, 1, &PLATFORM), OK);
+    assert_eq!(markers(), [CONTROLLER_SAMPLE]);
+    assert_eq!(host.frames().input_counts, [1, 1, 3, 1]);
 }
 
 #[test]
@@ -343,21 +443,17 @@ fn reflex_options_are_recorded_and_common_constants_set_once() {
 
 #[test]
 fn generation_reload_waits_for_borrowers() {
-    let host = host(PROFILE_DLSS_FG);
+    let mut host = host(PROFILE_DLSS_FG);
     host.borrowers.store(1, Relaxed);
-    let raw = Box::into_raw(host);
     assert_eq!(
-        unsafe { rsf_core_slhost_generation_load(raw, 0, &PLATFORM) },
+        unsafe { rsf_core_slhost_generation_load(host.as_mut(), 0, &PLATFORM) },
         NOT_READY
     );
-    let host = unsafe { Box::from_raw(raw) };
     host.borrowers.store(0, Relaxed);
-    let raw = Box::into_raw(host);
     assert_eq!(
-        unsafe { rsf_core_slhost_generation_load(raw, 0, &PLATFORM) },
+        unsafe { rsf_core_slhost_generation_load(host.as_mut(), 0, &PLATFORM) },
         OK
     );
-    let host = unsafe { Box::from_raw(raw) };
     assert!(!host.generation_loaded.load(Relaxed) && !host.has(GET_STATE));
     assert!(host.has(SLEEP | PCL_MARKER));
 }

@@ -182,10 +182,10 @@ const _: () = {
     assert!(size_of::<Platform>() == 24 * size_of::<Handle>());
 };
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct Token {
     id: u64,
-    handle: Option<NonNull<c_void>>,
+    handle: NonNull<c_void>,
     // The index this token was minted with, which the SDK token reports back.
     index: u32,
     common: [bool; 2],
@@ -198,7 +198,7 @@ struct Token {
 // Everything the original marker lock guarded: the token ring, pacing counters and the
 // published Reflex/PCL capabilities.
 struct Frames {
-    tokens: [Token; TOKEN_SLOTS],
+    tokens: [Option<Token>; TOKEN_SLOTS],
     cursor: usize,
     native_index: u32,
     last_begin: u64,
@@ -221,7 +221,7 @@ struct Frames {
 impl Frames {
     fn new(pcl_message: u32) -> Self {
         Self {
-            tokens: [Token::default(); TOKEN_SLOTS],
+            tokens: [None; TOKEN_SLOTS],
             cursor: 0,
             native_index: 0,
             last_begin: 0,
@@ -241,18 +241,26 @@ impl Frames {
         }
     }
 
-    // The in-flight slot carrying `id`. Zero marks an empty slot and never matches.
     fn slot(&self, id: u64) -> Option<usize> {
-        if id == 0 {
-            return None;
-        }
-        self.tokens.iter().position(|token| token.id == id)
+        self.tokens
+            .iter()
+            .position(|slot| slot.is_some_and(|token| token.id == id))
     }
 
-    fn handle(&self, slot: usize) -> Handle {
-        self.tokens[slot].handle.map_or(null_mut(), NonNull::as_ptr)
+    fn token_mut(&mut self, id: u64) -> Option<&mut Token> {
+        let slot = self.slot(id)?;
+        self.tokens[slot].as_mut()
     }
 }
+
+#[repr(C)]
+struct CommonPresent {
+    resolve: unsafe extern "C" fn(Handle, &mut [Handle; 2]) -> u32,
+    before: unsafe extern "C" fn(Handle, Handle, u32, u32) -> u32,
+    after: unsafe extern "C" fn(Handle, u32) -> u32,
+}
+
+const _: () = assert!(size_of::<CommonPresent>() == 3 * size_of::<Handle>());
 
 pub(crate) struct Host {
     native: Handle,
@@ -272,6 +280,7 @@ pub(crate) struct Host {
     borrowers: AtomicU32,
     generation_loaded: AtomicBool,
     frames: Mutex<Frames>,
+    common_present: Mutex<Option<[NonNull<c_void>; 2]>>,
     // Held across the SDK sleep. Option changes share it; Present-side markers do not.
     reflex: Mutex<()>,
 }
@@ -295,6 +304,7 @@ impl Host {
             borrowers: AtomicU32::new(0),
             generation_loaded: AtomicBool::new(true),
             frames: Mutex::new(Frames::new(0)),
+            common_present: Mutex::new(None),
             reflex: Mutex::new(()),
         }
     }
@@ -419,13 +429,52 @@ unsafe extern "C" fn rsf_core_slhost_destroy(host: *mut Host, platform: &Platfor
     let Ok(_owner) = OWNER.try_lock() else {
         return NOT_READY;
     };
-    if owner.borrowers.load(Relaxed) != 0 || owner.frames().tokens.iter().any(|token| token.id != 0)
-    {
+    if owner.borrowers.load(Relaxed) != 0 || owner.frames().tokens.iter().any(Option::is_some) {
         return NOT_READY;
     }
     unsafe { (platform.dispose)(owner.native) };
     drop(unsafe { Box::from_raw(host) });
     OK
+}
+
+// Only the presentation owner calls this around physical Presents that bypass the proxy.
+// No lock spans the vendor lookup or either hook.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_slhost_present_common(
+    host: *const Host,
+    chain: Handle,
+    interval: u32,
+    flags: u32,
+    begin: u32,
+    platform: &CommonPresent,
+) -> i32 {
+    let Some(host) = (unsafe { host.as_ref() }) else {
+        return INVALID;
+    };
+    if chain.is_null() || begin > 1 {
+        return INVALID;
+    }
+    let cached = *host.common_present.lock().unwrap();
+    let [before, after] = if let Some(entries) = cached {
+        entries
+    } else {
+        let mut addresses = [null_mut(); 2];
+        if unsafe { (platform.resolve)(host.native, &mut addresses) } == 0 {
+            return MISSING_ENTRY;
+        }
+        let [Some(before), Some(after)] = addresses.map(NonNull::new) else {
+            return MISSING_ENTRY;
+        };
+        let entries = [before, after];
+        *host.common_present.lock().unwrap() = Some(entries);
+        entries
+    };
+    let ok = if begin != 0 {
+        unsafe { (platform.before)(before.as_ptr(), chain, interval, flags) }
+    } else {
+        unsafe { (platform.after)(after.as_ptr(), flags) }
+    };
+    if ok != 0 { OK } else { FEATURE_FAILED }
 }
 
 // The native state of a live host, for the native-only graphics and presentation entries.
@@ -448,8 +497,11 @@ unsafe extern "C" fn rsf_core_slhost_token(host: *mut Host, id: u64) -> Handle {
     };
     let frames = host.frames();
     frames
-        .slot(id)
-        .map_or(null_mut(), |slot| frames.handle(slot))
+        .tokens
+        .iter()
+        .flatten()
+        .find(|token| token.id == id)
+        .map_or(null_mut(), |token| token.handle.as_ptr())
 }
 
 #[unsafe(no_mangle)]
@@ -457,12 +509,19 @@ unsafe extern "C" fn rsf_core_slhost_begin(host: *mut Host, id: u64, platform: &
     let Some(host) = (unsafe { host.as_ref() }) else {
         return INVALID;
     };
-    let result = acquire(host, id, platform);
-    if result == OK {
-        sleep(host, id, platform)
-    } else {
-        result
+    begin(host, id, platform)
+}
+
+fn begin(host: &Host, id: u64, platform: &Platform) -> i32 {
+    let acquired = acquire(host, id, platform);
+    if acquired != OK {
+        return acquired;
     }
+    let result = sleep(host, id, platform);
+    if result != OK {
+        abort_for(host, id);
+    }
+    result
 }
 
 #[unsafe(no_mangle)]
@@ -481,7 +540,7 @@ fn acquire(host: &Host, id: u64, platform: &Platform) -> i32 {
     }
     let mut frames = host.frames();
     let cursor = frames.cursor;
-    if id <= frames.last_begin || frames.tokens[cursor].id != 0 {
+    if id <= frames.last_begin || frames.tokens[cursor].is_some() {
         return NOT_READY;
     }
     if frames.native_index == u32::MAX {
@@ -499,12 +558,16 @@ fn acquire(host: &Host, id: u64, platform: &Platform) -> i32 {
     };
     frames.cursor = (cursor + 1) % TOKEN_SLOTS;
     frames.last_begin = id;
-    frames.tokens[cursor] = Token {
+    frames.tokens[cursor] = Some(Token {
         id,
-        handle: Some(handle),
+        handle,
         index,
-        ..Token::default()
-    };
+        common: [false; 2],
+        markers: 0,
+        controller_sampled: false,
+        ping_sampled: false,
+        sleep_claimed: false,
+    });
     OK
 }
 
@@ -519,16 +582,13 @@ fn sleep(host: &Host, id: u64, platform: &Platform) -> i32 {
     let entered = Instant::now();
     let mut frames = host.frames();
     let locked = Instant::now();
-    let Some(slot) = frames.slot(id) else {
+    let Some(token) = frames.token_mut(id) else {
         return NOT_READY;
     };
-    let token = &mut frames.tokens[slot];
     if token.sleep_claimed {
         return INVALID;
     }
-    let (Some(handle), index) = (token.handle, token.index) else {
-        return NOT_READY;
-    };
+    let (handle, index) = (token.handle, token.index);
     token.sleep_claimed = true;
     let minted = Instant::now();
     drop(frames);
@@ -633,38 +693,47 @@ fn marker_for(host: &Host, id: u64, marker: u32, controller: u32, platform: &Pla
         return NOT_SUPPORTED;
     }
     let mut frames = host.frames();
-    let Some(slot) = frames
-        .slot(id)
-        .filter(|&slot| frames.tokens[slot].handle.is_some())
-    else {
+    let Some(slot) = frames.slot(id) else {
         return NOT_READY;
     };
+    let token = frames.tokens[slot].as_mut().unwrap();
     // PCL removed ordinary input sample marker 6. Marker 13 is for controllers only.
-    if marker == INPUT_SAMPLE && controller == 0 {
-        return OK;
+    if marker == INPUT_SAMPLE {
+        if controller == 0 {
+            return OK;
+        }
+        return controller_sample(host, &mut frames, slot, platform);
     }
-    let mapped = if marker == INPUT_SAMPLE {
-        CONTROLLER_SAMPLE
-    } else {
-        marker
-    };
-    let required = marker <= PRESENT_END;
-    if required && frames.tokens[slot].markers & (1 << marker) != 0 {
+    if token.markers & (1 << marker) != 0 {
         return INVALID;
     }
-    if unsafe { (platform.marker)(host.native, frames.handle(slot), mapped) } != OK {
+    if !emit_marker(host, token.handle, marker, platform) {
         return FEATURE_FAILED;
     }
-    frames.marker_calls += 1;
-    if required {
-        let token = &mut frames.tokens[slot];
-        token.markers |= 1 << marker;
-        // UE's native EndFrame follows Present. Keep the token until every required
-        // marker has arrived, including configurations where simulation overlaps render.
-        if token.markers == REQUIRED_MARKERS {
-            token.id = 0;
-        }
+    token.markers |= 1 << marker;
+    // UE's native EndFrame follows Present. Keep the token until every required
+    // marker has arrived, including configurations where simulation overlaps render.
+    if token.markers == REQUIRED_MARKERS {
+        frames.tokens[slot].take();
     }
+    frames.marker_calls += 1;
+    OK
+}
+
+fn emit_marker(host: &Host, token: NonNull<c_void>, marker: u32, platform: &Platform) -> bool {
+    host.has(PCL_MARKER) && unsafe { (platform.marker)(host.native, token.as_ptr(), marker) } == OK
+}
+
+fn controller_sample(host: &Host, frames: &mut Frames, slot: usize, platform: &Platform) -> i32 {
+    let token = frames.tokens[slot].as_mut().unwrap();
+    if token.controller_sampled {
+        return OK;
+    }
+    if !emit_marker(host, token.handle, CONTROLLER_SAMPLE, platform) {
+        return FEATURE_FAILED;
+    }
+    token.controller_sampled = true;
+    frames.marker_calls += 1;
     OK
 }
 
@@ -694,15 +763,16 @@ fn common_for(
         return false;
     }
     let mut frames = host.frames();
-    let Some(slot) = frames.slot(id) else {
+    let Some(token) = frames.token_mut(id) else {
         return false;
     };
-    if frames.tokens[slot].common[viewport as usize]
-        || unsafe { (platform.common)(host.native, frames.handle(slot), viewport, constants) } != OK
+    if token.common[viewport as usize]
+        || unsafe { (platform.common)(host.native, token.handle.as_ptr(), viewport, constants) }
+            != OK
     {
         return false;
     }
-    frames.tokens[slot].common[viewport as usize] = true;
+    token.common[viewport as usize] = true;
     true
 }
 
@@ -711,10 +781,11 @@ unsafe extern "C" fn rsf_core_slhost_presented(host: *mut Host, id: u64) -> i32 
     let Some(host) = (unsafe { host.as_ref() }) else {
         return 0;
     };
-    let frames = host.frames();
-    frames
-        .slot(id)
-        .is_some_and(|slot| frames.tokens[slot].markers & (1 << PRESENT_END) != 0)
+    host.frames()
+        .tokens
+        .iter()
+        .flatten()
+        .any(|token| token.id == id && token.markers & (1 << PRESENT_END) != 0)
         .into()
 }
 
@@ -750,29 +821,21 @@ fn input_for(host: &Host, id: u64, kinds: u32, message: u32, platform: &Platform
             *count += 1;
         }
     }
-    let token = frames.handle(slot);
-    let emit = |frames: &mut Frames, marker: u32| {
-        if !host.has(PCL_MARKER) || unsafe { (platform.marker)(host.native, token, marker) } != OK {
-            return false;
+    if input.controller.is_some() {
+        let result = controller_sample(host, frames, slot, platform);
+        if result != OK {
+            return result;
         }
-        frames.marker_calls += 1;
-        true
-    };
-    if let Some(marker) = input.controller
-        && !frames.tokens[slot].controller_sampled
-    {
-        if !emit(&mut *frames, marker) {
-            return FEATURE_FAILED;
-        }
-        frames.tokens[slot].controller_sampled = true;
     }
+    let token = frames.tokens[slot].as_mut().unwrap();
     if let Some(marker) = input.ping
-        && !frames.tokens[slot].ping_sampled
+        && !token.ping_sampled
     {
-        if !emit(&mut *frames, marker) {
+        if !emit_marker(host, token.handle, marker, platform) {
             return FEATURE_FAILED;
         }
-        frames.tokens[slot].ping_sampled = true;
+        token.ping_sampled = true;
+        frames.marker_calls += 1;
         frames.input_counts[3] += 1;
     }
     // Keyboard/mouse timing uses real dequeue records and registered pings, never deprecated marker 6.
@@ -785,7 +848,7 @@ fn abort_for(host: &Host, id: u64) -> i32 {
     }
     let mut frames = host.frames();
     if let Some(slot) = frames.slot(id) {
-        frames.tokens[slot].id = 0;
+        frames.tokens[slot].take();
     }
     OK
 }
@@ -801,7 +864,7 @@ unsafe extern "C" fn rsf_core_slhost_reset_sources(host: *mut Host) -> i32 {
         return INVALID;
     };
     let mut frames = host.frames();
-    if frames.tokens.iter().any(|token| token.id != 0) {
+    if frames.tokens.iter().any(Option::is_some) {
         return NOT_READY;
     }
     frames.last_begin = 0;
@@ -817,8 +880,8 @@ unsafe extern "C" fn rsf_core_slhost_retire_through(host: *mut Host, id: u64) ->
         return INVALID;
     }
     for token in &mut host.frames().tokens {
-        if token.id != 0 && token.id <= id {
-            token.id = 0;
+        if token.is_some_and(|entry| entry.id <= id) {
+            token.take();
         }
     }
     OK

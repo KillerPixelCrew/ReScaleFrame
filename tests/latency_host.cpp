@@ -70,10 +70,12 @@ int main(int argc, char** argv)
         if (rsf_streamline_host_acquire(host, id) != 0) return 1;
         rsf_streamline_latency_status input_state{}; input_state.struct_size = sizeof(input_state);
         if (rsf_streamline_host_latency_status(host, &input_state) != 0 || !input_state.pcl_message_id) return 1;
-        // Model a queued ping and controller receipt before pre-input pacing. Both markers
-        // must survive a combined fact, while repeating that fact emits neither twice.
+        // Exercise the shared controller marker from both API routes. The ping
+        // still accompanies the receipt and the total stays at eight markers per frame.
+        if (frame % 2 == 0 && rsf_streamline_host_marker(host, id, RSF_LATENCY_INPUT_SAMPLE, 1) != 0) return 1;
         if (rsf_streamline_host_input(host, id, 4, input_state.pcl_message_id) != 0 ||
             rsf_streamline_host_input(host, id, 4, input_state.pcl_message_id) != 0 ||
+            rsf_streamline_host_marker(host, id, RSF_LATENCY_INPUT_SAMPLE, 1) != 0 ||
             rsf_streamline_host_sleep(host, id) != 0) return 1;
         const bool pressed = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
         if (rsf_streamline_host_marker(host, id, RSF_LATENCY_INPUT_SAMPLE, 0) != 0 ||

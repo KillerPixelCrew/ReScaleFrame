@@ -1027,6 +1027,13 @@ order, and enabled and disabled public entry points. The typed COM
 and SDK operations remain native. Build and device checks remain open.
 [Streamline startup](research/rust-d3d12-streamline-host-startup.md)
 
+D3D12 Streamline now shares prepare ordering with FSR and XeSS, releases failed
+combined-begin tokens, deduplicates controller samples and reconciles Reflex
+after rejected DLSS-G options. Rust also owns the common Present hook cache and
+compatibility module handoff. Source review is complete. Build, synthetic and
+device checks remain open.
+[Streamline generation port](research/rust-d3d12-streamline-generation-port.md)
+
 Anomaly now owns Stage 3 burst staging and mapping in Rust. The
 leased texture and device facts admit the same single-sample copy,
 and map refusal retains size and format for the burst summary.

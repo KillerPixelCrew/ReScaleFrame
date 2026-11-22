@@ -371,7 +371,7 @@ impl Session for Xess {
         }
         let before = self.state.read();
         let id = record.frame_id;
-        if self.chain().is_null() || id <= before.last_prepare {
+        if self.chain().is_null() || id <= before.order.last_prepare {
             return NOT_READY;
         }
         let sdk = self
@@ -389,7 +389,7 @@ impl Session for Xess {
             return FEATURE_FAILED;
         }
         if frame.interpolate == 0 || before.mode() == RSF_FG_OFF {
-            let staged = self.state.stage(before.revision, id, RSF_FG_OFF, 0);
+            let staged = self.state.stage(before.order.revision, id, RSF_FG_OFF, 0);
             let result = configure_disabled(&self.state, before, id, staged);
             return if self.enabled(false) {
                 result
@@ -407,14 +407,14 @@ impl Session for Xess {
             return INVALID;
         }
         if !self.state.stage(
-            before.revision,
+            before.order.revision,
             id,
             before.status.effective_mode,
             before.status.effective_generated_frames,
         ) {
             return NOT_READY;
         }
-        let reset = before.reset_for(record);
+        let reset = before.order.reset_for(record);
         let resources = [&frame.depth, &frame.motion, &frame.hudless, &frame.ui];
         for (kind, resource) in resources.into_iter().enumerate() {
             if !resource.resource.is_null()
@@ -430,14 +430,14 @@ impl Session for Xess {
             return FEATURE_FAILED;
         }
         self.prepared_reset.set(reset);
-        self.prepared_gap.set(id - before.last_prepare);
+        self.prepared_gap.set(id - before.order.last_prepare);
         let count = before
             .request
             .map_or(0, |options| options.generated_frames)
             .min(self.reserved.get());
         if self
             .state
-            .complete(before.revision, id, true, before.mode(), count)
+            .complete(before.order.revision, id, true, before.mode(), count)
         {
             OK
         } else {
@@ -461,12 +461,12 @@ impl Session for Xess {
             observation.presented = u64::from(present.frames);
             observation.statistics = RSF_FG_STAT_TOTAL_PRESENTED | RSF_FG_STAT_ACTIVITY;
         }
-        let status = self.state.observe(before.revision, observation);
+        let status = self.state.observe(before.order.revision, observation);
         let previous_active = self.last_present_active.replace(status.active);
         if previous_active != status.active || before.status.vendor_status != status.vendor_status {
             self.log.write(format_args!(
                 "XeSS FG present source={} query={result} interpolation={} enabled={} presented={} active={} reset={} source_gap={}",
-                before.last_prepare, present.interpolation, present.enabled, present.frames, status.active,
+                before.order.last_prepare, present.interpolation, present.enabled, present.frames, status.active,
                 u32::from(self.prepared_reset.get()), self.prepared_gap.get()
             ));
         }

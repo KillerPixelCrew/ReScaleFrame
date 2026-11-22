@@ -42,7 +42,7 @@ uint8_t* wrapper_limit(HMODULE module, uint32_t& maximum)
 
 // NGX chooses and loads its implementation during capability initialization. Inspect the
 // actual loaded export owner, including driver-delivered paths, rather than guessing a DLL.
-HMODULE provider_module()
+void* provider_module()
 {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
     if (snapshot == INVALID_HANDLE_VALUE) return nullptr;
@@ -67,10 +67,8 @@ uint32_t supported(void* device)
     return midpoint_fix::ObserveD3D12Device(device);
 }
 
-void* load_wrapper(const wchar_t* directory, uint32_t require_signature)
+void* load_wrapper(const wchar_t* path, uint32_t require_signature)
 {
-    wchar_t path[1200]{};
-    swprintf_s(path, L"%s\\sl.dlss_g.dll", directory);
     if (require_signature && !rsf_dlss_verify_runtime_signature(path)) return nullptr;
     return LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 }
@@ -105,20 +103,14 @@ uint32_t prepare_wrapper(void* module)
     return 0;
 }
 
-int32_t prepare_provider(void* wrapper, void* get_state, uint32_t maximum, char* report)
+uint32_t prepare_provider(void* module, uint32_t maximum, char* report)
 {
-    HMODULE owner = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-        reinterpret_cast<LPCWSTR>(get_state), &owner)) return -1;
-    const bool same_wrapper = owner == static_cast<HMODULE>(wrapper);
-    FreeLibrary(owner);
-    HMODULE provider = provider_module();
+    const auto provider = static_cast<HMODULE>(module);
     wchar_t path[32768]{};
-    const bool identified = provider && GetModuleFileNameW(provider, path, DWORD(std::size(path))) &&
+    const bool identified = GetModuleFileNameW(provider, path, DWORD(std::size(path))) &&
         dlssg_provider_policy::IsSupportedProvider(provider, path);
-    const bool temporal = same_wrapper && identified && midpoint_fix::PatchProvider(provider, path);
+    const bool temporal = identified && midpoint_fix::PatchProvider(provider, path);
     const auto gate = temporal ? ngx_mfg_gate::Patch(provider, true) : ngx_mfg_gate::Result{};
-    if (provider) FreeLibrary(provider);
     std::snprintf(report, 512, "RTX 40 MFG unlock %s: wrapper_capacity=%u temporal=%u gate=%u failure=%u provider=%ls",
         gate.patched ? "ready" : "refused", maximum, unsigned(temporal),
         unsigned(gate.patched), midpoint_fix::FailureCode(), path);
@@ -131,10 +123,12 @@ struct rsf_mfg_platform {
     uint32_t (*supported)(void*);
     void* (*load_wrapper)(const wchar_t*, uint32_t);
     uint32_t (*prepare_wrapper)(void*);
-    int32_t (*prepare_provider)(void*, void*, uint32_t, char*);
+    // Transfers one module reference on success. The Rust compatibility owner releases it.
+    void* (*provider_module)();
+    uint32_t (*prepare_provider)(void*, uint32_t, char*);
 };
 
-static_assert(sizeof(rsf_mfg_platform) == 4 * sizeof(void*) && sizeof(wchar_t) == 2);
+static_assert(sizeof(rsf_mfg_platform) == 5 * sizeof(void*) && sizeof(wchar_t) == 2);
 static_assert(RSF_MFG_UNLOCK_NOT_APPLICABLE == 0 && RSF_MFG_UNLOCK_READY == 1 && RSF_MFG_UNLOCK_REFUSED == 2);
 
 extern "C" {
@@ -147,7 +141,7 @@ void rsf_core_mfg_destroy(rsf_mfg_state*);
 }
 
 namespace {
-constexpr rsf_mfg_platform platform{supported, load_wrapper, prepare_wrapper, prepare_provider};
+constexpr rsf_mfg_platform platform{supported, load_wrapper, prepare_wrapper, provider_module, prepare_provider};
 }
 #endif
 

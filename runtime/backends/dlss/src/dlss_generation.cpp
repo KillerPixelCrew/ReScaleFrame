@@ -132,11 +132,21 @@ static_assert(uint32_t(sl::DLSSGStatus::eOk) == 0 && uint32_t(sl::DLSSGMode::eOf
 static_assert(RSF_MFG_UNLOCK_READY == 1 && RSF_MFG_UNLOCK_REFUSED == 2 && RSF_FG_STAT_LATENCY_AVAILABLE == 4 &&
     RSF_UI_MODE_NONE == 1 && RSF_UI_MODE_BACKBUFFER_HUDLESS == 4 && RSF_UI_MODE_BACKBUFFER_HUDLESS_UI == 8);
 
+struct rsf_slhost_common_present {
+    uint32_t (*resolve)(void*, void**);
+    uint32_t (*before)(void*, void*, uint32_t, uint32_t);
+    uint32_t (*after)(void*, uint32_t);
+};
+
+static_assert(sizeof(rsf_slhost_common_present) == 3 * sizeof(void*));
+
 extern "C" {
 int32_t rsf_core_slhost_create(const rsf_streamline_host_setup*, void*, void*, rsf_streamline_host**,
     const rsf_slhost_platform*);
 int32_t rsf_core_slhost_destroy(rsf_streamline_host*, const rsf_slhost_platform*);
 void* rsf_core_slhost_native(rsf_streamline_host*);
+int32_t rsf_core_slhost_present_common(const rsf_streamline_host*, void*, uint32_t, uint32_t, uint32_t,
+    const rsf_slhost_common_present*);
 void* rsf_core_slhost_module(const rsf_streamline_host*);
 void rsf_core_vk_sdk_unload(void*);
 void* rsf_core_slhost_token(rsf_streamline_host*, uint64_t);
@@ -199,8 +209,6 @@ struct Native {
     PFun_slPCLSetMarker* pcl_marker{};
     PFun_slPCLSetOptions* pcl_options{};
     PFun_slPCLGetState* pcl_state{};
-    HRESULT (*common_present)(IDXGISwapChain*, UINT, UINT, bool&){};
-    HRESULT (*common_after_present)(UINT){};
     rsf::MfgUnlock mfg;
 };
 // One driver ring snapshot. The Rust owner serializes its capture and write.
@@ -882,24 +890,34 @@ extern "C" rsf_backend_result rsf_streamline_host_retire_through(rsf_streamline_
 {
     return rsf_core_slhost_retire_through(host, id);
 }
+namespace {
+uint32_t resolve_common(void* native, void** entries) noexcept
+{
+    auto& host = as_native(native);
+    return host.function(sl::kFeatureCommon, "slHookPresent", entries[0]) == sl::Result::eOk &&
+        host.function(sl::kFeatureCommon, "slHookAfterPresent", entries[1]) == sl::Result::eOk;
+}
+
+uint32_t common_before(void* entry, void* chain, uint32_t interval, uint32_t flags) noexcept
+{
+    using Hook = HRESULT (*)(IDXGISwapChain*, UINT, UINT, bool&);
+    bool skip = false;
+    const auto result = reinterpret_cast<Hook>(entry)(static_cast<IDXGISwapChain*>(chain), interval, flags, skip);
+    return SUCCEEDED(result) && !skip;
+}
+
+uint32_t common_after(void* entry, uint32_t flags) noexcept
+{
+    using Hook = HRESULT (*)(UINT);
+    return SUCCEEDED(reinterpret_cast<Hook>(entry)(flags));
+}
+
+constexpr rsf_slhost_common_present common_present_platform{resolve_common, common_before, common_after};
+}
 extern "C" rsf_backend_result rsf_streamline_host_present_common(rsf_streamline_host* host,
     void* chain, uint32_t interval, uint32_t flags, uint32_t begin)
 {
-    if (!host || !chain || begin > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& native = *native_of(host);
-    if (!native.initialized) return RSF_BACKEND_ERROR_NOT_READY;
-    if (!native.common_present || !native.common_after_present) {
-        void* before = nullptr; void* after = nullptr;
-        if (native.function(sl::kFeatureCommon, "slHookPresent", before) != sl::Result::eOk ||
-            native.function(sl::kFeatureCommon, "slHookAfterPresent", after) != sl::Result::eOk || !before || !after)
-            return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-        native.common_present = reinterpret_cast<decltype(native.common_present)>(before);
-        native.common_after_present = reinterpret_cast<decltype(native.common_after_present)>(after);
-    }
-    bool skip = false;
-    const auto result = begin ? native.common_present(static_cast<IDXGISwapChain*>(chain), interval, flags, skip) :
-        native.common_after_present(flags);
-    return SUCCEEDED(result) && !skip ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
+    return rsf_core_slhost_present_common(host, chain, interval, flags, begin, &common_present_platform);
 }
 extern "C" int rsf_streamline_host_presented(rsf_streamline_host* host, uint64_t id) { return rsf_core_slhost_presented(host, id); }
 extern "C" rsf_backend_result rsf_streamline_host_input(rsf_streamline_host* host, uint64_t id, uint32_t kinds, uint32_t message_id)

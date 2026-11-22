@@ -4,11 +4,27 @@ use crate::render_abi::rsf_backend_log_fn as Log;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use windows::core::w;
+use windows_sys::Win32::{
+    Foundation::FARPROC,
+    System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
+};
 
 type Emit = unsafe extern "C" fn(Log, *mut c_void, *const c_void);
 const SOURCES: usize = 64;
 const LINE_LIMIT: u32 = 192;
 const HOOKS: usize = 4;
+
+// Borrow the module already owned by Streamline. The audit pins installed hook
+// targets and never obtains a second driver loader reference.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_reflex_audit_query() -> FARPROC {
+    let module = unsafe { GetModuleHandleW(w!("nvapi64.dll").as_ptr()) };
+    if module.is_null() {
+        return None;
+    }
+    unsafe { GetProcAddress(module, c"nvapi_QueryInterface".as_ptr().cast()) }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

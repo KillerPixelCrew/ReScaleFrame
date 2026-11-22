@@ -429,10 +429,10 @@ impl Fsr {
         if !self.wait() {
             return NOT_READY;
         }
-        if !self.state.reset_history(before.revision) {
+        if !self.state.reset_history(before.order.revision) {
             return NOT_READY;
         }
-        before.interpolated = None;
+        before.order.interpolated = None;
         if !self.destroy_generation() {
             return FEATURE_FAILED;
         }
@@ -536,7 +536,7 @@ impl Session for Fsr {
             };
         let chain = self.chain();
         let mut before = self.state.read();
-        if chain.is_null() || record.frame_id <= before.last_prepare {
+        if chain.is_null() || record.frame_id <= before.order.last_prepare {
             return NOT_READY;
         }
         let enabled = frame.interpolate != 0 && before.mode() != RSF_FG_OFF;
@@ -609,14 +609,14 @@ impl Session for Fsr {
         };
         let staged = self
             .state
-            .stage(before.revision, record.frame_id, mode, count);
+            .stage(before.order.revision, record.frame_id, mode, count);
         if !enabled {
             return configure_disabled(&self.state, before, record.frame_id, staged);
         }
         if !staged {
             return NOT_READY;
         }
-        let reset = before.reset_for(record);
+        let reset = before.order.reset_for(record);
         // Perspective W follows view Z. A right-handed projection looks down
         // negative Z; a positive-Z view basis remains positive.
         let forward_sign = if record.camera.view_to_clip[11] < 0.0 {
@@ -639,12 +639,12 @@ impl Session for Fsr {
         self.capture
             .event(record, c"fsr-prepare", sequence, reset, dispatched as i32);
         if dispatched != 0 {
-            self.state.reset_history(before.revision);
+            self.state.reset_history(before.order.revision);
             return FEATURE_FAILED;
         }
         if self
             .state
-            .complete(before.revision, record.frame_id, true, mode, count)
+            .complete(before.order.revision, record.frame_id, true, mode, count)
         {
             OK
         } else {
@@ -689,14 +689,14 @@ impl Session for Fsr {
             observation.presented = u64::from(delta);
             observation.statistics |= RSF_FG_STAT_TOTAL_PRESENTED;
         }
-        self.state.observe(before.revision, observation);
+        self.state.observe(before.order.revision, observation);
         let report = counters.reports < 6;
         counters.reports = counters.reports.saturating_add(1);
         self.counters.set(counters);
         if report {
             self.log.write(format_args!(
                 "FSR FG counters source={} generated={dispatched} DXGI_present_count={count} query={:08x}",
-                before.last_prepare, result as u32
+                before.order.last_prepare, result as u32
             ));
         }
         OK
