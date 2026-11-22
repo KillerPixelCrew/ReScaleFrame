@@ -6,3 +6,5 @@ mod measure;
 mod memory;
 mod memory_abi;
 mod names;
+mod sections;
+mod sections_abi;

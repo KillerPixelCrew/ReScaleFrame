@@ -46,7 +46,7 @@ impl Region {
     }
 }
 
-fn readable_extent(cache: &mut rsf_mem_cache, start: usize, size: usize) -> usize {
+pub(super) fn readable_extent(cache: &mut rsf_mem_cache, start: usize, size: usize) -> usize {
     let mut offset = 0;
     while offset < size {
         let Some(address) = start.checked_add(offset) else {
@@ -89,7 +89,7 @@ extern "C" fn rsf_dump_readable_extent(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dump_read_exact(
+pub(super) unsafe extern "C" fn rsf_dump_read_exact(
     cache: &mut rsf_mem_cache,
     address: *const c_void,
     destination: *mut c_void,

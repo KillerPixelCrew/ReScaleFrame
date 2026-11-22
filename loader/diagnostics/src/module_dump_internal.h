@@ -12,14 +12,9 @@
 #include <stdint.h>
 
 #include "module_dump_memory.h"
+#include "module_dump_records.h"
 
 #define RSF_MAX_MODULES 384
-
-typedef struct rsf_module_entry {
-    wchar_t path[MAX_PATH];
-    const unsigned char* base;
-    size_t size;
-} rsf_module_entry;
 
 const void* rsf_dump_resolve_base(const void* module_base);
 const IMAGE_NT_HEADERS64* rsf_dump_nt_headers(const void* base);

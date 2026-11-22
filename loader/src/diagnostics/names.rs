@@ -38,15 +38,13 @@ fn parse_rva(bytes: &[u8]) -> Option<u32> {
     u32::try_from(value).ok()
 }
 
-fn escape_unit(out: &mut String, value: u16) {
-    match value {
-        0x22 => out.push_str("\\\""),
-        0x5c => out.push_str("\\\\"),
-        0x20..=0x7e => out.push(char::from(value as u8)),
-        _ => {
-            let _ = write!(out, "\\u{value:04x}");
-        }
-    }
+pub(super) fn escape_unit(out: &mut impl std::fmt::Write, value: u16) {
+    let _ = match value {
+        0x22 => out.write_str("\\\""),
+        0x5c => out.write_str("\\\\"),
+        0x20..=0x7e => out.write_char(char::from(value as u8)),
+        _ => write!(out, "\\u{value:04x}"),
+    };
 }
 
 fn json_string(out: &mut String, bytes: &[u8]) {

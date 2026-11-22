@@ -1,16 +1,12 @@
 /* SPDX-License-Identifier: MIT */
-/* Structured sidecar sections: threads, function starts from the exception
-   directory and the caller-supplied name list. RTTI lives in module_dump_rtti.c. */
+/* Native stream bridge for the structured module dump sections. */
 
 #include "module_dump_internal.h"
 
-#include <stdlib.h>
-#include <string.h>
-#include <tlhelp32.h>
 #include <wchar.h>
 
-#define RSF_MAX_THREADS 4096u
-#define RSF_MAX_PDATA_BYTES (96u * 1024u * 1024u)
+_Static_assert(RSF_DUMP_MODULE_PATH_UNITS == MAX_PATH, "module path must match the Windows SDK");
+_Static_assert(sizeof(RUNTIME_FUNCTION) == 12, "RUNTIME_FUNCTION must use the Windows x64 layout");
 
 /* ---- JSON helpers ---- */
 
@@ -41,262 +37,44 @@ void rsf_json_ascii(FILE* stream, const char* text, size_t limit)
     }
 }
 
-double rsf_dump_now_ms(void)
-{
-    LARGE_INTEGER frequency;
-    LARGE_INTEGER counter;
-    if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart == 0) {
-        return (double)GetTickCount64();
-    }
-    QueryPerformanceCounter(&counter);
-    return (double)counter.QuadPart * 1000.0 / (double)frequency.QuadPart;
-}
-
 const wchar_t* rsf_dump_basename(const wchar_t* path)
 {
     const wchar_t* leaf = wcsrchr(path, L'\\');
     return leaf ? leaf + 1 : path;
 }
 
-static void write_elapsed(FILE* stream, double started)
+uint32_t rsf_dump_threads_impl(void* stream, rsf_dump_stream_write write,
+                               const rsf_module_entry* modules, size_t count);
+uint32_t rsf_dump_functions_impl(void* stream, rsf_dump_stream_write write,
+                                 const unsigned char* base, uint32_t image_size,
+                                 uint32_t directory, uint32_t size);
+void rsf_dump_names_impl(void* stream, const char* path_utf8, rsf_dump_stream_write write);
+
+static void write_bytes(void* stream, const unsigned char* data, size_t size)
 {
-    fprintf(stream, "\"elapsed_ms\": %lu", (unsigned long)(rsf_dump_now_ms() - started + 0.5));
+    fwrite(data, 1, size, (FILE*)stream);
 }
-
-/* ---- threads ---- */
-
-typedef LONG(NTAPI* nt_query_information_thread_fn)(HANDLE, ULONG, PVOID, ULONG, PULONG);
-typedef HRESULT(WINAPI* get_thread_description_fn)(HANDLE, PWSTR*);
-
-#define RSF_THREAD_QUERY_WIN32_START_ADDRESS 9u
 
 uint32_t rsf_dump_write_threads(FILE* stream, const rsf_module_entry* modules,
                                 size_t module_count)
 {
-    const double started = rsf_dump_now_ms();
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-    nt_query_information_thread_fn query =
-        ntdll ? (nt_query_information_thread_fn)(void*)GetProcAddress(ntdll,
-                                                                       "NtQueryInformationThread")
-              : NULL;
-    get_thread_description_fn describe =
-        kernel ? (get_thread_description_fn)(void*)GetProcAddress(kernel, "GetThreadDescription")
-               : NULL;
-
-    fputs("  \"threads\": {\"list\": [", stream);
-    uint32_t listed = 0;
-    int truncated = 0;
-    const DWORD process = GetCurrentProcessId();
-    const DWORD current = GetCurrentThreadId();
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snapshot != INVALID_HANDLE_VALUE) {
-        THREADENTRY32 entry;
-        entry.dwSize = sizeof(entry);
-        if (Thread32First(snapshot, &entry)) {
-            do {
-                if (entry.th32OwnerProcessID != process) {
-                    continue;
-                }
-                if (listed >= RSF_MAX_THREADS) {
-                    truncated = 1;
-                    break;
-                }
-                HANDLE thread = OpenThread(THREAD_QUERY_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION,
-                                           FALSE, entry.th32ThreadID);
-                if (!thread) {
-                    thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ThreadID);
-                }
-
-                uint64_t start = 0;
-                if (thread && query) {
-                    PVOID address = NULL;
-                    if (query(thread, RSF_THREAD_QUERY_WIN32_START_ADDRESS, &address,
-                              (ULONG)sizeof(address), NULL) >= 0) {
-                        start = (uint64_t)(uintptr_t)address;
-                    }
-                }
-
-                fprintf(stream, "%s\n    {\"tid\": %lu, \"dumping\": %s, \"start_address\": \"0x%llx\"",
-                        listed ? "," : "", (unsigned long)entry.th32ThreadID,
-                        entry.th32ThreadID == current ? "true" : "false",
-                        (unsigned long long)start);
-
-                const rsf_module_entry* owner = NULL;
-                for (size_t index = 0; index < module_count && start; ++index) {
-                    if ((const unsigned char*)(uintptr_t)start >= modules[index].base &&
-                        (const unsigned char*)(uintptr_t)start <
-                            modules[index].base + modules[index].size) {
-                        owner = &modules[index];
-                        break;
-                    }
-                }
-                if (owner) {
-                    fputs(", \"start_module\": \"", stream);
-                    rsf_json_wide(stream, rsf_dump_basename(owner->path));
-                    fprintf(stream, "\", \"start_rva\": \"0x%llx\"",
-                            (unsigned long long)(start - (uint64_t)(uintptr_t)owner->base));
-                }
-
-                if (thread && describe) {
-                    PWSTR text = NULL;
-                    if (SUCCEEDED(describe(thread, &text)) && text) {
-                        if (text[0]) {
-                            fputs(", \"description\": \"", stream);
-                            rsf_json_wide(stream, text);
-                            fputc('"', stream);
-                        }
-                        LocalFree(text);
-                    }
-                }
-                if (thread) {
-                    const int priority = GetThreadPriority(thread);
-                    if (priority != (int)THREAD_PRIORITY_ERROR_RETURN) {
-                        fprintf(stream, ", \"priority\": %d", priority);
-                    }
-                    CloseHandle(thread);
-                }
-                fprintf(stream, ", \"base_priority\": %ld}", (long)entry.tpBasePri);
-                ++listed;
-            } while (Thread32Next(snapshot, &entry));
-        }
-        CloseHandle(snapshot);
-    }
-    fprintf(stream, "\n  ], \"count\": %lu, \"truncated\": %s, \"start_address_source\": \"%s\", ",
-            (unsigned long)listed, truncated ? "true" : "false",
-            query ? "NtQueryInformationThread(ThreadQuerySetWin32StartAddress)" : "unavailable");
-    write_elapsed(stream, started);
-    fputs("},\n", stream);
-    return listed;
-}
-
-/* ---- function starts ---- */
-
-typedef struct pdata_entry {
-    uint32_t begin;
-    uint32_t end;
-    uint32_t unwind;
-    uint32_t chained;
-} pdata_entry;
-
-static int compare_pdata(const void* left, const void* right)
-{
-    const pdata_entry* a = (const pdata_entry*)left;
-    const pdata_entry* b = (const pdata_entry*)right;
-    if (a->begin != b->begin) {
-        return a->begin < b->begin ? -1 : 1;
-    }
-    /* Unchained first, so the surviving duplicate is the real function start. */
-    if (a->chained != b->chained) {
-        return a->chained < b->chained ? -1 : 1;
-    }
-    return a->end < b->end ? -1 : (a->end > b->end ? 1 : 0);
+    return rsf_dump_threads_impl(stream, write_bytes, modules, module_count);
 }
 
 void rsf_dump_write_functions(FILE* stream, const unsigned char* base,
                               const IMAGE_NT_HEADERS64* headers, uint32_t* function_count)
 {
-    const double started = rsf_dump_now_ms();
     const IMAGE_DATA_DIRECTORY* directory =
         &headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
-    const uint32_t image_size = headers->OptionalHeader.SizeOfImage;
-    const char* reason = NULL;
-    uint32_t raw = 0;
-    uint32_t invalid = 0;
-    uint32_t chained_count = 0;
-    uint32_t unique = 0;
-    pdata_entry* entries = NULL;
-    rsf_mem_cache cache = {NULL, NULL};
-
-    if (directory->VirtualAddress == 0 || directory->Size < sizeof(RUNTIME_FUNCTION)) {
-        reason = "the module has no exception directory";
-    } else if (directory->Size > RSF_MAX_PDATA_BYTES ||
-               (uint64_t)directory->VirtualAddress + directory->Size > image_size) {
-        reason = "the exception directory lies outside the image or exceeds the size bound";
-    } else {
-        const size_t wanted = directory->Size / sizeof(RUNTIME_FUNCTION);
-        const size_t readable =
-            rsf_dump_readable_extent(&cache, base + directory->VirtualAddress,
-                                     wanted * sizeof(RUNTIME_FUNCTION)) /
-            sizeof(RUNTIME_FUNCTION);
-        entries = (pdata_entry*)malloc((readable ? readable : 1) * sizeof(pdata_entry));
-        if (!entries) {
-            reason = "allocation failed";
-        } else {
-            if (readable < wanted) {
-                reason = "part of the exception directory is not readable";
-            }
-            const RUNTIME_FUNCTION* table = (const RUNTIME_FUNCTION*)(base + directory->VirtualAddress);
-            for (size_t index = 0; index < readable; ++index) {
-                RUNTIME_FUNCTION item;
-                memcpy(&item, &table[index], sizeof(item));
-                ++raw;
-                if (item.BeginAddress == 0 || item.EndAddress <= item.BeginAddress ||
-                    item.EndAddress > image_size) {
-                    ++invalid;
-                    continue;
-                }
-                uint32_t chained = 0;
-                const uint32_t unwind = item.UnwindData & ~1u;
-                unsigned char flags = 0;
-                if (!(item.UnwindData & 1u) && unwind < image_size &&
-                    rsf_dump_read_exact(&cache, base + unwind, &flags, 1)) {
-                    /* UNW_FLAG_CHAININFO marks a split-off part of another function, not a
-                       function start of its own. */
-                    chained = (flags >> 3) & 4u ? 1u : 0u;
-                }
-                entries[unique].begin = item.BeginAddress;
-                entries[unique].end = item.EndAddress;
-                entries[unique].unwind = item.UnwindData;
-                entries[unique].chained = chained;
-                ++unique;
-            }
-        }
-    }
-
-    fputs("  \"functions\": {\"entries\": [", stream);
-    uint32_t written = 0;
-    if (entries) {
-        qsort(entries, unique, sizeof(pdata_entry), compare_pdata);
-        for (uint32_t index = 0; index < unique; ++index) {
-            if (index && entries[index].begin == entries[index - 1].begin) {
-                continue;
-            }
-            fprintf(stream, "%s\n    [%lu,%lu,%lu,%lu]", written ? "," : "",
-                    (unsigned long)entries[index].begin, (unsigned long)entries[index].end,
-                    (unsigned long)entries[index].unwind, (unsigned long)entries[index].chained);
-            chained_count += entries[index].chained;
-            ++written;
-        }
-    }
-    free(entries);
+    const uint32_t written = rsf_dump_functions_impl(
+        stream, write_bytes, base, headers->OptionalHeader.SizeOfImage,
+        directory->VirtualAddress, directory->Size);
     if (function_count) {
         *function_count = written;
     }
-    fprintf(stream,
-            "\n  ], \"format\": \"[begin_rva, end_rva, unwind_rva, chained] as decimal integers\", "
-            "\"source\": \"exception directory (.pdata RUNTIME_FUNCTION)\", "
-            "\"raw_entries\": %lu, \"invalid\": %lu, \"count\": %lu, \"chained\": %lu, ",
-            (unsigned long)raw, (unsigned long)invalid, (unsigned long)written,
-            (unsigned long)chained_count);
-    if (reason) {
-        fprintf(stream, "\"reason\": \"%s\", ", reason);
-    }
-    write_elapsed(stream, started);
-    fputs("},\n", stream);
-}
-
-/* ---- caller-supplied names ---- */
-
-typedef void (*rsf_dump_names_write)(void* stream, const unsigned char* data, size_t size);
-void rsf_dump_names_impl(void* stream, const char* path_utf8, rsf_dump_names_write write);
-
-static void write_names_bytes(void* stream, const unsigned char* data, size_t size)
-{
-    fwrite(data, 1, size, (FILE*)stream);
 }
 
 void rsf_dump_write_names(FILE* stream, const char* path_utf8)
 {
-    rsf_dump_names_impl(stream, path_utf8, write_names_bytes);
+    rsf_dump_names_impl(stream, path_utf8, write_bytes);
 }

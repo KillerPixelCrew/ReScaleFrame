@@ -308,6 +308,16 @@ D3D11 Texture2D description faults. The remaining native COM calls use the exist
 SEH boundary in `loader/census/src/d3d_guarded_platform.cpp`. Both languages assert
 the description sizes and alignments used by the transfer.
 
+## Module thread and function sidecar sections
+
+Rust now owns the thread snapshot, optional thread descriptions and Win32 start addresses,
+and the `.pdata` function inventory. The module writer passes its existing module table and
+exception-directory facts to Rust. The same JSON fields, limits, invalid-entry counts, sort
+order and chained-function rule are retained. Function rows are copied in bounded batches
+so a region changing after VirtualQuery produces a partial inventory instead of a fault.
+The shared Win32 clock also moved into Rust. The native RTTI writer still provides the
+compiler-specific RTTI evidence.
+
 ## Inventory at the end of the 82b39a63 continuation
 
 Eleven additional baseline paths have source cutovers. The two public header paths retain
