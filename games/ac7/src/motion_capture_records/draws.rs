@@ -4,7 +4,7 @@
 mod before;
 mod geometry;
 #[cfg(all(windows, not(test)))]
-mod gpu;
+pub(crate) mod gpu;
 mod ordinary;
 
 use super::{NativeRootScope, QueuedScope, Records, artifacts::Bytes, records};

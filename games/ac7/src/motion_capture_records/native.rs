@@ -3,6 +3,7 @@
 //! reads go through the guarded platform copy.
 
 use super::*;
+use crate::motion_capture_session::native::rsf_ac7_capture_checkpoint_native;
 use crate::motion_capture_session::{
     rsf_ac7_capture_fail, rsf_ac7_capture_sample, rsf_ac7_capture_sampled,
 };
@@ -12,7 +13,6 @@ use windows::Win32::System::Performance::QueryPerformanceCounter;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 unsafe extern "C" {
-    fn rsf_ac7_capture_checkpoint_native(capture: CaptureInterval);
     fn rsf_ac7_capture_get_graph_output(
         getter: u64,
         node: u64,
@@ -289,7 +289,7 @@ extern "C" fn rsf_ac7_capture_root_after(root: &mut RootRecord, capture: Capture
     }
     record(root);
     if begin == POSTPROCESS_BEGIN {
-        unsafe { rsf_ac7_capture_checkpoint_native(capture) };
+        rsf_ac7_capture_checkpoint_native(capture);
     }
 }
 

@@ -446,7 +446,7 @@ unsafe extern "C" fn scopes_create(renderer: *mut rsf_ac7_native_renderer, capac
     let Some(create) = native().and_then(|calls| calls.scopes_create) else {
         return false;
     };
-    let mut scopes = owner.scopes();
+    let mut scopes = owner.scopes.load(Ordering::Relaxed);
     let created = unsafe {
         create(
             options.session_id,

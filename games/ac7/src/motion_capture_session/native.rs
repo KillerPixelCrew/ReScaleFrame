@@ -6,6 +6,9 @@ use super::{
     rsf_ac7_capture_present, rsf_ac7_capture_shutdown,
 };
 use crate::motion_capture_records::artifacts::rsf_ac7_capture_publish_checkpoint;
+use crate::motion_capture_records::draws::gpu::rsf_ac7_capture_set_sample;
+use crate::motion_capture_records::root_hooks::rsf_ac7_capture_current_command_address;
+use crate::motion_capture_records::root_hooks::rsf_ac7_capture_engine_installed;
 use std::ffi::{c_char, c_void};
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
@@ -19,12 +22,6 @@ use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F9};
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 use windows::core::{Interface, PCSTR};
-
-unsafe extern "C" {
-    fn rsf_ac7_capture_engine_installed() -> bool;
-    fn rsf_ac7_capture_current_command_address() -> *const c_void;
-    fn rsf_ac7_capture_set_sample(enabled: bool);
-}
 
 unsafe extern "C" fn poll(chain: *mut c_void, pressed: *mut bool) -> bool {
     let Some(chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }) else {
@@ -94,8 +91,8 @@ extern "C" fn stats() -> Stats {
     let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
     Stats::from_native(
         frequency,
-        unsafe { rsf_ac7_capture_engine_installed() },
-        !unsafe { rsf_ac7_capture_current_command_address() }.is_null(),
+        rsf_ac7_capture_engine_installed(),
+        !rsf_ac7_capture_current_command_address().is_null(),
         rsf_ac7_capture_failures(),
     )
 }
@@ -120,11 +117,11 @@ unsafe extern "C" fn rsf_ac7_motion_capture_present(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_end_session() {
+pub(crate) extern "C" fn rsf_ac7_capture_end_session() {
     unsafe { rsf_ac7_capture_shutdown(&EFFECTS) };
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_checkpoint_native(capture: CaptureInterval) {
+pub(crate) extern "C" fn rsf_ac7_capture_checkpoint_native(capture: CaptureInterval) {
     rsf_ac7_capture_publish_checkpoint(write_file, capture);
 }

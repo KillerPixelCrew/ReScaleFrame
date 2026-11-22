@@ -72,7 +72,7 @@ impl Command {
 /// open until its end marker executes. Fields are reached through raw pointers only, because the
 /// RHI stream may run begin while the recording thread closes the ticket.
 #[repr(C)]
-struct Ticket {
+pub(crate) struct Ticket {
     owner: *const Scopes,
     recording_list: *mut c_void,
     scope: rsf_ac7_render_scope,
@@ -114,7 +114,7 @@ struct State {
 }
 
 /// `rsf_ac7_render_scopes`. Everything outside `state` is fixed at creation.
-struct Scopes {
+pub(crate) struct Scopes {
     session: u64,
     capacity: u32,
     callback: rsf_ac7_render_scope_fn,
@@ -293,7 +293,7 @@ unsafe extern "C" fn rsf_ac7_scope_owner_create(
 /// # Safety
 /// As `rsf_ac7_render_scope_open_leased` without a lease.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_render_scope_open(
+pub(crate) unsafe extern "C" fn rsf_ac7_render_scope_open(
     scopes: *mut Scopes,
     native_command_list: *mut c_void,
     scope: *const rsf_ac7_render_scope,
@@ -310,7 +310,7 @@ unsafe extern "C" fn rsf_ac7_render_scope_open(
 /// owned by the calling thread; `scope` is null or a caller scope of at least its struct_size;
 /// `lease` and `out` are null or valid.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_render_scope_open_leased(
+pub(crate) unsafe extern "C" fn rsf_ac7_render_scope_open_leased(
     scopes: *mut Scopes,
     native_command_list: *mut c_void,
     scope: *const rsf_ac7_render_scope,
@@ -328,7 +328,7 @@ unsafe extern "C" fn rsf_ac7_render_scope_open_leased(
 /// # Safety
 /// As open_leased, without a ticket output.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_render_scope_enqueue_leased(
+pub(crate) unsafe extern "C" fn rsf_ac7_render_scope_enqueue_leased(
     scopes: *mut Scopes,
     native_command_list: *mut c_void,
     scope: *const rsf_ac7_render_scope,
@@ -406,7 +406,7 @@ unsafe fn queue_scope(
 /// `ticket` is null or an open ticket whose end has not executed; `native_command_list` is null or
 /// a recording native list owned by the calling thread.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_render_scope_close(
+pub(crate) unsafe extern "C" fn rsf_ac7_render_scope_close(
     ticket: *mut Ticket,
     native_command_list: *mut c_void,
 ) -> c_int {
@@ -454,7 +454,7 @@ unsafe extern "C" fn rsf_ac7_render_scope_current(
 /// # Safety
 /// `scopes` is null or a live owner.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_render_scopes_quiesce(scopes: *mut Scopes) {
+pub(crate) unsafe extern "C" fn rsf_ac7_render_scopes_quiesce(scopes: *mut Scopes) {
     if let Some(owner) = unsafe { scopes.as_ref() } {
         owner.lock().accepting = false;
     }
@@ -469,7 +469,7 @@ fn idle(state: &State) -> bool {
 /// # Safety
 /// `scopes` is null or a live owner.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_render_scopes_idle(scopes: *mut Scopes) -> c_int {
+pub(crate) unsafe extern "C" fn rsf_ac7_render_scopes_idle(scopes: *mut Scopes) -> c_int {
     match unsafe { scopes.as_ref() } {
         Some(owner) => c_int::from(idle(&owner.lock())),
         None => 1,
@@ -481,7 +481,7 @@ unsafe extern "C" fn rsf_ac7_render_scopes_idle(scopes: *mut Scopes) -> c_int {
 /// # Safety
 /// `scopes` is null or a live owner that no other thread uses once this succeeds.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_render_scopes_destroy(scopes: *mut Scopes) -> c_int {
+pub(crate) unsafe extern "C" fn rsf_ac7_render_scopes_destroy(scopes: *mut Scopes) -> c_int {
     let Some(owner) = (unsafe { scopes.as_ref() }) else {
         return 1;
     };

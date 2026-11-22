@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The contact-shadow correction at the engine's pixel shader factory.
 use super::{Guard, Renderer, copy, hook, installed, original, read};
-use crate::sys::{RSF_AC7_CONTACT_PATCHED, RSF_AC7_CONTACT_REFUSED, rsf_ac7_contact_shader_fn};
+use crate::contact_shadow::rsf_ac7_contact_shadow_correct;
+use crate::sys::{RSF_AC7_CONTACT_PATCHED, RSF_AC7_CONTACT_REFUSED};
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
 use std::ptr::null_mut;
@@ -21,16 +22,6 @@ const _: () =
 
 type Create =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *const NativeShaderCode) -> *mut c_void;
-
-unsafe extern "C" {
-    fn rsf_ac7_contact_shadow_correct(
-        bytes: *const u8,
-        size: usize,
-        offset: usize,
-        use_shader: rsf_ac7_contact_shader_fn,
-        user: *mut c_void,
-    ) -> i32;
-}
 
 struct Factory<'a> {
     original: Create,

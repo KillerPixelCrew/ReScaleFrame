@@ -2,7 +2,7 @@
 //! F9 trigger admission, output paths and the Present-relative capture session.
 
 #[cfg(all(windows, not(test)))]
-mod native;
+pub(crate) mod native;
 
 use crate::motion_capture_observations::reset_session_observations;
 use crate::motion_capture_records::artifacts::{Bytes, Stats, WriteFile, publish_finish};

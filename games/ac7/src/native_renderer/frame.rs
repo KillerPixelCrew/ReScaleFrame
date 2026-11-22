@@ -244,7 +244,7 @@ unsafe extern "system" fn input_message(code: i32, removed: WPARAM, argument: LP
 }
 
 pub(super) fn source_primary_renderer(owner: &Renderer, renderer: *mut c_void) -> bool {
-    owner.config().is_some_and(|config| unsafe {
+    owner.config().is_some_and(|config| {
         super::rsf_ac7_scope_primary_renderer(
             SCOPE_READ,
             key(renderer),

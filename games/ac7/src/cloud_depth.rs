@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! TrueSky composite_tile's cloud-depth resource owner and dispatch parameters.
 #[cfg(windows)]
-mod d3d11;
+pub(crate) mod d3d11;
 
 #[cfg(any(windows, test))]
 struct Facts {

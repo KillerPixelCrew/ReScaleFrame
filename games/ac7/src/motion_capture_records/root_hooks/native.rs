@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::motion_capture_session::native::rsf_ac7_capture_end_session;
 use crate::motion_capture_session::{rsf_ac7_capture_enabled, say};
 use crate::sys::{
     rsf_ac7_capture_initialize_minhook, rsf_ac7_capture_install_engine_batch,
@@ -7,10 +8,6 @@ use crate::sys::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::core::PCWSTR;
-
-unsafe extern "C" {
-    fn rsf_ac7_capture_end_session();
-}
 
 const ROOT_EFFECTS: RootHookEffects = RootHookEffects {
     copy: rsf_ac7_copy_memory,
@@ -71,7 +68,7 @@ extern "C" fn rsf_ac7_motion_capture_install() -> i32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_motion_capture_shutdown() {
-    unsafe { rsf_ac7_capture_end_session() };
+    rsf_ac7_capture_end_session();
     if !rsf_ac7_capture_remove_engine(&ENGINE_EFFECTS) {
         say(c"motion capture engine hooks pending removal");
     }

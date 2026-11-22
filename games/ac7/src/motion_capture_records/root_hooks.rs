@@ -270,12 +270,12 @@ extern "C" fn rsf_ac7_capture_remove_engine(effects: &RootHookEffects) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_engine_installed() -> bool {
+pub(crate) extern "C" fn rsf_ac7_capture_engine_installed() -> bool {
     lock(&ENGINE).installed
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_current_command_address() -> *const c_void {
+pub(crate) extern "C" fn rsf_ac7_capture_current_command_address() -> *const c_void {
     CURRENT_COMMAND.load(Ordering::Acquire)
 }
 

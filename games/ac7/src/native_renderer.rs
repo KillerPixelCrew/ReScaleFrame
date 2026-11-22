@@ -10,6 +10,18 @@
 //! former code contained, from the engine's pixel shader factory, is contained by the C leaf
 //! native_renderer_platform.c. Every other engine call ran uncontained before and still does.
 //! Research and the per-hook comparison are in docs/research/rust-ac7-native-renderer.md.
+use crate::render_scope::rsf_ac7_render_scope_close;
+use crate::render_scope::rsf_ac7_render_scope_enqueue_leased;
+use crate::render_scope::rsf_ac7_render_scope_open;
+use crate::render_scope::rsf_ac7_render_scope_open_leased;
+use crate::render_scope::rsf_ac7_render_scopes_destroy;
+use crate::render_scope::rsf_ac7_render_scopes_idle;
+use crate::render_scope::rsf_ac7_render_scopes_quiesce;
+use crate::scope_facts::rsf_ac7_scope_primary_facts;
+use crate::scope_facts::rsf_ac7_scope_primary_renderer;
+use crate::scope_facts::rsf_ac7_scope_primary_view;
+use crate::sites::rsf_ac7_hook_role;
+use crate::sites::rsf_ac7_hook_rva;
 use crate::sys::rsf_ac7_cloud_depth;
 use crate::sys::{
     RSF_AC7_GUARD_ENTRY, RSF_AC7_GUARD_OUTER, RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches,
@@ -25,7 +37,7 @@ use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::rsf_game_render_config;
 use std::alloc::{Layout, alloc_zeroed};
 use std::cell::UnsafeCell;
-use std::ffi::{CStr, CString, c_int, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::mem::{size_of, zeroed};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
@@ -592,8 +604,8 @@ impl Renderer {
         self.quiescing.load(Ordering::SeqCst)
     }
 
-    fn scopes(&self) -> *mut c_void {
-        self.scopes.load(Ordering::Relaxed)
+    fn scopes(&self) -> *mut crate::render_scope::Scopes {
+        self.scopes.load(Ordering::Relaxed).cast()
     }
 
     fn tables(&self) -> MutexGuard<'_, Box<Tables>> {
@@ -638,9 +650,7 @@ impl Renderer {
 }
 
 fn primary_view(view: u64, config: &rsf_game_render_config) -> bool {
-    unsafe {
-        rsf_ac7_scope_primary_view(SCOPE_READ, view, config.output_width, config.output_height)
-    }
+    rsf_ac7_scope_primary_view(SCOPE_READ, view, config.output_width, config.output_height)
 }
 
 /// Engine pool and resource references held for one queued pass until its end marker runs.
@@ -758,58 +768,10 @@ fn drain_retired(owner: &Renderer) {
     }
 }
 
-// Native leaves in other translation units and the crate's C ABI owners, at their C signatures.
-unsafe extern "C" {
-    fn rsf_ac7_render_scope_open(
-        scopes: *mut c_void,
-        list: *mut c_void,
-        scope: *const rsf_ac7_render_scope,
-        out: *mut *mut c_void,
-    ) -> c_int;
-    fn rsf_ac7_render_scope_open_leased(
-        scopes: *mut c_void,
-        list: *mut c_void,
-        scope: *const rsf_ac7_render_scope,
-        lease: *const rsf_ac7_scope_lease,
-        out: *mut *mut c_void,
-    ) -> c_int;
-    fn rsf_ac7_render_scope_enqueue_leased(
-        scopes: *mut c_void,
-        list: *mut c_void,
-        scope: *const rsf_ac7_render_scope,
-        lease: *const rsf_ac7_scope_lease,
-    ) -> c_int;
-    fn rsf_ac7_render_scope_close(ticket: *mut c_void, list: *mut c_void) -> c_int;
-    fn rsf_ac7_render_scopes_quiesce(scopes: *mut c_void);
-    fn rsf_ac7_render_scopes_idle(scopes: *mut c_void) -> c_int;
-    fn rsf_ac7_render_scopes_destroy(scopes: *mut c_void) -> c_int;
-    fn rsf_ac7_scope_primary_view(
-        read: rsf_ac7_scope_read,
-        view: u64,
-        width: u32,
-        height: u32,
-    ) -> bool;
-    fn rsf_ac7_scope_primary_renderer(
-        read: rsf_ac7_scope_read,
-        renderer: u64,
-        width: u32,
-        height: u32,
-    ) -> bool;
-    fn rsf_ac7_scope_primary_facts(
-        read: rsf_ac7_scope_read,
-        renderer: u64,
-        width: u32,
-        height: u32,
-        scope: *mut rsf_ac7_render_scope,
-    ) -> bool;
-    fn rsf_ac7_hook_rva(hook: u32) -> u32;
-    fn rsf_ac7_hook_role(hook: u32) -> u32;
-}
-
 fn open(owner: &Renderer, list: *mut c_void, scope: &rsf_ac7_render_scope) -> Option<*mut c_void> {
     let mut ticket = null_mut();
     (unsafe { rsf_ac7_render_scope_open(owner.scopes(), list, scope, &mut ticket) } != 0)
-        .then_some(ticket)
+        .then_some(ticket.cast())
 }
 
 fn open_leased(
@@ -821,7 +783,7 @@ fn open_leased(
     let mut ticket = null_mut();
     (unsafe { rsf_ac7_render_scope_open_leased(owner.scopes(), list, scope, lease, &mut ticket) }
         != 0)
-        .then_some(ticket)
+        .then_some(ticket.cast())
 }
 
 fn enqueue_leased(
@@ -834,13 +796,13 @@ fn enqueue_leased(
 }
 
 fn close(ticket: *mut c_void, list: *mut c_void) -> bool {
-    unsafe { rsf_ac7_render_scope_close(ticket, list) != 0 }
+    unsafe { rsf_ac7_render_scope_close(ticket.cast(), list) != 0 }
 }
 
 fn hook_role(hook: u32) -> u32 {
-    unsafe { rsf_ac7_hook_role(hook) }
+    rsf_ac7_hook_role(hook)
 }
 
 fn hook_rva(hook: u32) -> u32 {
-    unsafe { rsf_ac7_hook_rva(hook) }
+    rsf_ac7_hook_rva(hook)
 }

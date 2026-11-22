@@ -3,10 +3,10 @@
 //! The C++ capture owns guarded engine reads, typed GPU effects and narrow file effects.
 
 pub(super) mod artifacts;
-mod draws;
+pub(crate) mod draws;
 #[cfg(all(windows, not(test)))]
 mod native;
-mod root_hooks;
+pub(crate) mod root_hooks;
 
 use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
 use rsf_game_sys::rsf_game_render_pass;

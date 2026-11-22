@@ -36,7 +36,7 @@ fn single_view(read: rsf_ac7_scope_read, renderer: u64) -> Option<u64> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_scope_primary_view(
+pub(crate) extern "C" fn rsf_ac7_scope_primary_view(
     read: rsf_ac7_scope_read,
     view: u64,
     width: u32,
@@ -48,7 +48,7 @@ extern "C" fn rsf_ac7_scope_primary_view(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_scope_primary_renderer(
+pub(crate) extern "C" fn rsf_ac7_scope_primary_renderer(
     read: rsf_ac7_scope_read,
     renderer: u64,
     width: u32,
@@ -92,7 +92,7 @@ fn fill(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_scope_primary_facts(
+pub(crate) extern "C" fn rsf_ac7_scope_primary_facts(
     read: rsf_ac7_scope_read,
     renderer: u64,
     width: u32,

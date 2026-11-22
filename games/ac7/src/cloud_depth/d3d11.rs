@@ -32,7 +32,9 @@ fn compile(device: &ID3D11Device, source: &[u8], name: &CStr) -> Option<ID3D11Co
 }
 /// The native effect owns dispatch and bindings. This returns one shader reference.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_create_truesky_depth_shader(device: *mut c_void) -> *mut c_void {
+pub(crate) unsafe extern "C" fn rsf_ac7_create_truesky_depth_shader(
+    device: *mut c_void,
+) -> *mut c_void {
     let Some(device) = (unsafe { ID3D11Device::from_raw_borrowed(&device) }) else {
         return null_mut();
     };
@@ -105,7 +107,7 @@ fn target(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_cloud_depth_release(state: &mut State) {
+pub(crate) extern "C" fn rsf_ac7_cloud_depth_release(state: &mut State) {
     for resource in [
         state.view,
         state.texture,
@@ -215,7 +217,7 @@ fn write(
 
 /// The adapter lends the immediate context and exclusively lends initialized state.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_cloud_depth_write(
+pub(crate) unsafe extern "C" fn rsf_ac7_cloud_depth_write(
     state: &mut State,
     context: *mut c_void,
     width: f32,

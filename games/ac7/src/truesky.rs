@@ -539,7 +539,7 @@ unsafe fn native<'a>(
 /// # Safety
 /// See `native`.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_truesky_apply(
+pub(crate) unsafe extern "C" fn rsf_ac7_truesky_apply(
     patches: *mut rsf_ac7_truesky_patches,
     leaves: *const rsf_ac7_truesky_leaves,
 ) {
@@ -551,7 +551,7 @@ unsafe extern "C" fn rsf_ac7_truesky_apply(
 /// # Safety
 /// See `native`.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_truesky_refuse_full_grid(
+pub(crate) unsafe extern "C" fn rsf_ac7_truesky_refuse_full_grid(
     patches: *mut rsf_ac7_truesky_patches,
     leaves: *const rsf_ac7_truesky_leaves,
 ) {
@@ -563,7 +563,7 @@ unsafe extern "C" fn rsf_ac7_truesky_refuse_full_grid(
 /// # Safety
 /// See `native`.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_truesky_restore(
+pub(crate) unsafe extern "C" fn rsf_ac7_truesky_restore(
     patches: *mut rsf_ac7_truesky_patches,
     leaves: *const rsf_ac7_truesky_leaves,
 ) -> bool {

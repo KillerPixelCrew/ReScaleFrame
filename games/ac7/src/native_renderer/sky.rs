@@ -4,9 +4,14 @@
 //! (truesky.rs) and the sky render and projection hooks.
 use super::leaves::code_leaves;
 use super::{Guard, Renderer, hook, installed, key, original, primary_view, read, scope};
-use crate::sys::rsf_ac7_cloud_depth;
+use crate::cloud_depth::d3d11::rsf_ac7_cloud_depth_release;
+use crate::cloud_depth::d3d11::rsf_ac7_cloud_depth_write;
+use crate::cloud_depth::d3d11::rsf_ac7_create_truesky_depth_shader;
 use crate::sys::rsf_ac7_native_renderer;
-use crate::sys::{rsf_ac7_truesky_leaves, rsf_ac7_truesky_patches};
+use crate::sys::rsf_ac7_truesky_leaves;
+use crate::truesky::rsf_ac7_truesky_apply;
+use crate::truesky::rsf_ac7_truesky_refuse_full_grid;
+use crate::truesky::rsf_ac7_truesky_restore;
 use rsf_game_sys::RSF_GAME_RENDER_CLOUD_DEPTH;
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -27,29 +32,6 @@ use windows::Win32::System::Memory::{
 };
 use windows::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 use windows::core::{Interface, PCWSTR};
-
-unsafe extern "C" {
-    fn rsf_ac7_create_truesky_depth_shader(device: *mut c_void) -> *mut c_void;
-    fn rsf_ac7_cloud_depth_write(
-        state: *mut rsf_ac7_cloud_depth,
-        context: *mut c_void,
-        width: f32,
-        height: f32,
-    ) -> *mut c_void;
-    fn rsf_ac7_cloud_depth_release(state: *mut rsf_ac7_cloud_depth);
-    fn rsf_ac7_truesky_apply(
-        patches: *mut rsf_ac7_truesky_patches,
-        leaves: *const rsf_ac7_truesky_leaves,
-    );
-    fn rsf_ac7_truesky_refuse_full_grid(
-        patches: *mut rsf_ac7_truesky_patches,
-        leaves: *const rsf_ac7_truesky_leaves,
-    );
-    fn rsf_ac7_truesky_restore(
-        patches: *mut rsf_ac7_truesky_patches,
-        leaves: *const rsf_ac7_truesky_leaves,
-    ) -> bool;
-}
 
 /// The depth producer's bound resources and their descriptions, as read before its dispatch.
 #[derive(Default)]
@@ -328,7 +310,7 @@ unsafe extern "C" fn native_cloud_composite_draw(
     let depth = if viewports == 1 {
         unsafe {
             rsf_ac7_cloud_depth_write(
-                owner.cloud_motion.get(),
+                &mut *owner.cloud_motion.get(),
                 context.as_raw(),
                 viewport.Width,
                 viewport.Height,
@@ -393,7 +375,9 @@ unsafe extern "C" fn depth_ready(renderer: *mut rsf_ac7_native_renderer) -> bool
 }
 
 unsafe extern "C" fn motion_release(renderer: *mut rsf_ac7_native_renderer) {
-    unsafe { rsf_ac7_cloud_depth_release(Renderer::from_handle(renderer).cloud_motion.get()) };
+    unsafe {
+        rsf_ac7_cloud_depth_release(&mut *Renderer::from_handle(renderer).cloud_motion.get())
+    };
 }
 
 /// Called by truesky.rs with `cloud_lock` held.

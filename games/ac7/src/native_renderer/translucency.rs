@@ -14,6 +14,7 @@ use super::{
 };
 use crate::sys::rsf_ac7_render_scope;
 use crate::sys::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
+use crate::view::rsf_ac7_view_read;
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
@@ -25,15 +26,6 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr::{null_mut, write_unaligned};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-
-unsafe extern "C" {
-    fn rsf_ac7_view_read(
-        buffer: *const c_void,
-        bytes: u32,
-        abi_version: u32,
-        out: *mut rsf_ac7_view,
-    ) -> i32;
-}
 
 type GetScene = unsafe extern "C" fn() -> *mut c_void;
 
@@ -328,13 +320,13 @@ fn primary_scope(
     *out = scope();
     out.role = role;
     out.session_id = owner.options.session_id;
-    unsafe {
+    {
         super::rsf_ac7_scope_primary_facts(
             SCOPE_READ,
             key(renderer),
             config.output_width,
             config.output_height,
-            out,
+            Some(out),
         )
     }
 }

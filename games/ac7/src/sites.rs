@@ -340,12 +340,12 @@ unsafe extern "C" fn rsf_ac7_build_admit(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_hook_rva(hook: u32) -> u32 {
+pub(crate) extern "C" fn rsf_ac7_hook_rva(hook: u32) -> u32 {
     HOOK_SITES.get(hook as usize).map_or(0, |site| site.rva)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_hook_role(hook: u32) -> u32 {
+pub(crate) extern "C" fn rsf_ac7_hook_role(hook: u32) -> u32 {
     PROCESS_ROLES.get(hook as usize).copied().unwrap_or(0)
 }
 

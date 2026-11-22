@@ -7,6 +7,7 @@ use crate::motion_capture_observations::colour::{
     ColourSnapshot, rsf_ac7_capture_colour_snapshot, rsf_ac7_capture_colour_snapshot_available,
 };
 use crate::motion_capture_observations::rsf_ac7_capture_shader_facts;
+use crate::motion_capture_records::root_hooks::rsf_ac7_capture_current_command_address;
 use crate::motion_capture_records::{
     rsf_ac7_capture_queued_scope, rsf_ac7_capture_root_scope, store_blob,
 };
@@ -24,10 +25,6 @@ use windows::Win32::System::Performance::QueryPerformanceCounter;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::core::Interface;
 
-unsafe extern "C" {
-    fn rsf_ac7_capture_current_command_address() -> *const c_void;
-}
-
 pub(super) fn tick() -> u64 {
     let mut ticks = 0;
     let _ = unsafe { QueryPerformanceCounter(&mut ticks) };
@@ -36,7 +33,7 @@ pub(super) fn tick() -> u64 {
 
 pub(super) fn queued_draw() -> QueuedDraw {
     let mut draw = QueuedDraw::default();
-    let address = unsafe { rsf_ac7_capture_current_command_address() };
+    let address = rsf_ac7_capture_current_command_address();
     let observed = read_u64(address, &mut draw.command)
         && draw.command != 0
         && read_u64(
@@ -238,7 +235,7 @@ pub(super) fn identity<T: Interface>(object: &Option<T>) -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_set_sample(enabled: bool) {
+pub(crate) extern "C" fn rsf_ac7_capture_set_sample(enabled: bool) {
     unsafe {
         if enabled {
             rsf_frame_tap_set_research_phase_callbacks(

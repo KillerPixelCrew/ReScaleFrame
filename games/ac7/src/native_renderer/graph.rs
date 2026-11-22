@@ -12,6 +12,7 @@ use crate::sys::rsf_ac7_render_scope;
 use crate::sys::rsf_ac7_scope_lease;
 use crate::sys::{RSF_AC7_ROLE_SR, RSF_AC7_ROLE_TONEMAP};
 use crate::sys::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
+use crate::view::rsf_ac7_view_read;
 use rsf_game_sys::ffi_util::{ascii_wide, try_box};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY,
@@ -23,15 +24,6 @@ use std::ffi::c_void;
 use std::mem::{offset_of, size_of, zeroed};
 use std::ptr::{copy_nonoverlapping, null_mut, write_bytes, write_unaligned};
 use std::sync::atomic::{AtomicU32, Ordering};
-
-unsafe extern "C" {
-    fn rsf_ac7_view_read(
-        buffer: *const c_void,
-        bytes: u32,
-        abi_version: u32,
-        out: *mut rsf_ac7_view,
-    ) -> i32;
-}
 
 const VIEW_OK: i32 = 0;
 
