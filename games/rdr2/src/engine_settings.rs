@@ -29,7 +29,7 @@ const QUALITY_LIMIT: u32 = 4;
 const DEFAULT_QUALITY: u32 = 2;
 /// RAGE saves the refresh rational clamped to this value.
 pub(crate) const REFRESH_LIMIT: u32 = 262_144;
-const MAX_EXTENT: u32 = 16384;
+use crate::layout::d3d::MAX_EXTENT;
 
 /// The index in an active DLSS capability list whose mode serves `quality`.
 pub(crate) fn dlss_choice(modes: &[u32], quality: u32) -> Option<u32> {

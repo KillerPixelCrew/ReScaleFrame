@@ -4,7 +4,7 @@
 //! view convention and Z-up world coordinates.
 #![allow(clippy::needless_range_loop)]
 
-use crate::layout::view;
+use crate::layout::{d3d, view};
 use rsf_game_sys::camera_math::{inverse_4x4 as inverse, multiply_4x4 as multiply};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};
 
@@ -80,7 +80,7 @@ fn store(source: &Matrix, destination: &mut [f32; 16]) -> bool {
 }
 
 fn valid_extent(value: u32) -> bool {
-    value != 0 && value <= 16384
+    value != 0 && value <= d3d::MAX_EXTENT
 }
 
 /// Decodes a copied RAGE worker view; `None` refuses it.

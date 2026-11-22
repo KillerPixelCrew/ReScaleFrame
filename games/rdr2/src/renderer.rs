@@ -326,8 +326,8 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
     };
     let mut output = ResourceFacts::default();
     if !unsafe { platform::resource_facts(d.output, &mut output) }
-        || output.width > d3d::MAX_EXTENT
-        || u64::from(output.height) > d3d::MAX_EXTENT
+        || output.width > u64::from(d3d::MAX_EXTENT)
+        || output.height > d3d::MAX_EXTENT
         || output.format != d3d::R16G16B16A16_FLOAT
     {
         return refusal(

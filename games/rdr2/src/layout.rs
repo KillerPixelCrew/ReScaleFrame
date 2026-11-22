@@ -275,7 +275,8 @@ pub(crate) mod d3d {
     pub(crate) const PIXEL_SHADER_RESOURCE: u32 = 0x80;
     pub(crate) const COPY_DEST: u32 = 0x400;
     pub(crate) const R16G16B16A16_FLOAT: u32 = 10;
-    pub(crate) const MAX_EXTENT: u64 = 16384;
+    /// The largest render or output extent any RDR2 path accepts.
+    pub(crate) const MAX_EXTENT: u32 = 16384;
 }
 
 /// Facts used by `ReScaleFrame.RDR2.asi` during startup, before the game reads its settings.
