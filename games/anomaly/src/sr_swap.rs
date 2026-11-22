@@ -1575,5 +1575,5 @@ extern "C" fn rsf_anomaly_swap_restore_name(restore: u32) -> *const c_char {
         .as_ptr()
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(windows, feature = "sr-fixtures")))]
 mod tests;

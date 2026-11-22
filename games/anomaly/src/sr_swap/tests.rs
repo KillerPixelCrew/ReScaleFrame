@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! The swap owner on fake CRenderTarget, CRT, CTexture, RCache and Device memory laid out with the sr_profile.h
-//! offsets. tests/anomaly_sr_swap.cpp drives the same owner through the native facade with the full case list.
+//! offsets. The CTest entry also compares the profile and independent native camera oracle.
 
 use super::*;
 use std::ptr;
+mod scenarios;
 
 const CRT_SIZE: usize = 0x50;
 const TEXTURE_SIZE: usize = 0xb0;
@@ -146,20 +147,31 @@ struct Host {
     ignore_write_address: *mut c_void,
     upload_calls: usize,
     fail_upload_at: Option<usize>,
+    bias_calls: usize,
+    fail_bias_at: Option<usize>,
     refuse_bias: bool,
     uploads: Vec<Matrix>,
     biases: Vec<f32>,
     viewports: Vec<(u32, u32)>,
     makes: usize,
+    make_result: u32,
+    wrong_format: bool,
+    request: Option<Request>,
     drops: usize,
     round_trips: usize,
+    fail_pass: bool,
+    engine: *const Engine,
+    original_before_draw: Option<Engine>,
+    seam_views: Option<[Fields; 6]>,
     upscales: usize,
     recovery_inputs: Option<rsf_anomaly_swap_upscale>,
     published: *const View,
     observed_twin_generation: u64,
     positions: Vec<(f32, f32)>,
+    constant: *mut c_void,
+    refuse_position: bool,
     sampler: usize,
-    twin_objects: [u64; 32],
+    twin_objects: [[u64; 32]; 2],
 }
 
 fn host(user: *mut c_void) -> &'static mut Host {
@@ -214,7 +226,11 @@ unsafe extern "C" fn make_twins(
     host.makes += 1;
     // Both records live for the call.
     let (request, out) = unsafe { (&*request, &mut *out) };
-    let objects = host.twin_objects.as_mut_ptr();
+    host.request = Some(*request);
+    if host.make_result != RSF_ANOMALY_SWAP_MAKE_CREATED {
+        return host.make_result;
+    }
+    let objects = host.twin_objects.as_mut_ptr().cast::<u64>();
     let object = |index: usize| objects.wrapping_add(index).cast::<c_void>();
     for slot in 0..SLOTS {
         let spec = request.spec[slot];
@@ -239,6 +255,9 @@ unsafe extern "C" fn make_twins(
         } else {
             request.engine[slot].fields.format
         };
+        if host.wrong_format && slot == 0 {
+            f.format = 0;
+        }
         f.desc = [0x77; 44];
     }
     if request.stage == 2 {
@@ -255,9 +274,19 @@ unsafe extern "C" fn drop_twins(user: *mut c_void) {
     host(user).drops += 1;
 }
 
-unsafe extern "C" fn round_trip(user: *mut c_void, _: *const Fields, _: *const Fields) -> bool {
-    host(user).round_trips += 1;
-    true
+unsafe extern "C" fn round_trip(
+    user: *mut c_void,
+    twin: *const Fields,
+    engine: *const Fields,
+) -> bool {
+    let host = host(user);
+    host.round_trips += 1;
+    host.original_before_draw = Some(unsafe { *host.engine });
+    let mut views = [Fields::default(); 6];
+    views[0] = unsafe { *twin };
+    views[3] = unsafe { *engine };
+    host.seam_views = Some(views);
+    !host.fail_pass
 }
 
 unsafe extern "C" fn upscale(user: *mut c_void, inputs: *const rsf_anomaly_swap_upscale) -> bool {
@@ -265,6 +294,18 @@ unsafe extern "C" fn upscale(user: *mut c_void, inputs: *const rsf_anomaly_swap_
     host.upscales += 1;
     host.observed_twin_generation = unsafe { (*host.published).counters.twin_generations };
     let inputs = unsafe { &*inputs };
+    host.original_before_draw = Some(unsafe { *host.engine });
+    host.seam_views = Some(
+        [
+            inputs.generic0_twin,
+            inputs.position_twin,
+            inputs.generic1_twin,
+            inputs.generic0,
+            inputs.position,
+            inputs.generic1,
+        ]
+        .map(|fields| unsafe { *fields }),
+    );
     if inputs.spatial_recovery {
         // The target records are valid during this call.
         for fields in [
@@ -279,7 +320,7 @@ unsafe extern "C" fn upscale(user: *mut c_void, inputs: *const rsf_anomaly_swap_
         }
         host.recovery_inputs = Some(*inputs);
     }
-    true
+    !host.fail_pass
 }
 
 unsafe extern "C" fn set_viewport(user: *mut c_void, width: u32, height: u32) {
@@ -301,7 +342,9 @@ unsafe extern "C" fn upload_projection(user: *mut c_void, matrix: *const c_void)
 
 unsafe extern "C" fn set_mip_bias(user: *mut c_void, value: f32) -> bool {
     let host = host(user);
-    if host.refuse_bias {
+    let call = host.bias_calls;
+    host.bias_calls += 1;
+    if host.refuse_bias || host.fail_bias_at == Some(call) {
         return false;
     }
     host.biases.push(value);
@@ -312,12 +355,14 @@ unsafe extern "C" fn set_mip_bias(user: *mut c_void, value: f32) -> bool {
 
 unsafe extern "C" fn correct_position_constant(
     user: *mut c_void,
-    _: *mut c_void,
+    constant: *mut c_void,
     x: f32,
     y: f32,
 ) -> u32 {
-    host(user).positions.push((x, y));
-    1
+    let host = host(user);
+    host.positions.push((x, y));
+    host.constant = constant;
+    u32::from(!host.refuse_position)
 }
 
 struct Case {
@@ -325,6 +370,7 @@ struct Case {
     host: *mut Host,
     swap: *mut Handle,
     original: Engine,
+    size: [u32; 2],
 }
 
 impl Drop for Case {
@@ -387,6 +433,7 @@ impl Case {
         e.sampler_bias = 0.25;
         let host = Box::into_raw(Box::new(Host {
             sampler: &raw mut e.sampler_bias as usize,
+            engine,
             ..Host::default()
         }));
         let platform = Platform {
@@ -410,6 +457,7 @@ impl Case {
             host,
             swap,
             original: *e,
+            size: [1920, 1080],
         };
         rsf_anomaly_swap_set_enabled(case.swap, true);
         case
@@ -450,18 +498,24 @@ impl Case {
             render_target: (&raw mut (unsafe { &mut *e }).target).cast(),
             backend: (&raw mut (unsafe { &mut *e }).backend).cast(),
             device: std::ptr::without_provenance_mut(0x1234),
-            device_width: 1920,
-            device_height: 1080,
+            device_width: self.size[0],
+            device_height: self.size[1],
             ..Facts::default()
         }
     }
 
     fn facts2(&self) -> Facts {
+        self.facts_at_scale(0.67)
+    }
+
+    fn facts_at_scale(&self, scale: f32) -> Facts {
         let e = self.engine();
+        let [ow, oh] = self.size;
+        let plan = crate::sr_stage::math::make_plan(ow, oh, scale).unwrap();
         Facts {
             stage: 2,
-            render_width: 1286,
-            render_height: 724,
+            render_width: plan.render_width,
+            render_height: plan.render_height,
             device_size: (&raw mut e.device_size).cast(),
             base_zb: (&raw mut e.base_zb).cast(),
             base_rt: (&raw mut e.base_rt).cast(),
@@ -495,6 +549,42 @@ impl Case {
         rsf_anomaly_swap_seam(self.swap)
     }
 
+    fn resize(&mut self, [width, height]: [u32; 2], half: bool) {
+        self.size = [width, height];
+        let e = self.engine();
+        e.device_size = [width, height];
+        put(&mut e.target, 0x8, width);
+        put(&mut e.target, 0xc, height);
+        for (slot, record) in e.crt.iter_mut().enumerate() {
+            let divisor = if half && slot == 7 { 2 } else { 1 };
+            put(record, 0x38, width / divisor);
+            put(record, 0x3c, height / divisor);
+        }
+        self.rebase();
+    }
+
+    fn ssao(&mut self, [width, height]: [f32; 2]) {
+        let e = self.engine();
+        e.guard = i32::MIN + 1;
+        [e.viewport[2], e.viewport[3]] = [width, height];
+        self.rebase();
+    }
+
+    fn restored(&self, reason: u32) -> u64 {
+        self.view().counters.restores[reason as usize]
+    }
+
+    fn skipped(&self, reason: u32) -> u64 {
+        self.view().counters.skips[reason as usize]
+    }
+
+    fn before_draw_stock(&self) -> bool {
+        self.host().original_before_draw.is_some_and(|mut bytes| {
+            bytes.backend = self.original.backend;
+            bytes == self.original
+        })
+    }
+
     fn twin_installed(&self, slot: usize) -> bool {
         let twin = self.view().twins.targets[slot];
         let e = self.engine();
@@ -517,7 +607,7 @@ impl Case {
     }
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn jitter_follows_the_row_vector_rule() {
     let p = perspective(1.2, 1.7778, 0.2);
     let (x, y, w, h) = (0.25f32, -1.0f32 / 6.0, 1286u32, 724u32);
@@ -552,7 +642,7 @@ fn jitter_follows_the_row_vector_rule() {
     assert_eq!(jitter_projection(&p, 0.0, 0.0, w, h), Some(p));
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn full_transform_composes_row_vectors() {
     let p = perspective(1.2, 1.7778, 0.2);
     let full = engine_mul(&p, &VIEW);
@@ -567,7 +657,7 @@ fn full_transform_composes_row_vectors() {
     }
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn first_person_projection_is_jittered_once() {
     let main = jitter_projection(&perspective(1.2, 1.7778, 0.2), 0.25, -0.1, 1286, 724).unwrap();
     let fresh = perspective(0.9, 1.7778, 0.05);
@@ -594,7 +684,7 @@ fn first_person_projection_is_jittered_once() {
     );
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn twin_extents_follow_the_engine_division() {
     assert_eq!(twin_extent(1920, 1920, 1286, false), Some((1286, false)));
     assert_eq!(twin_extent(960, 1920, 1286, true), Some((643, true)));
@@ -612,7 +702,7 @@ fn twin_extents_follow_the_engine_division() {
     assert_eq!(twin_extent(960, 1920, 1920, true), Some((960, true)));
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn stage1_window_swaps_and_restores_engine_bytes() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()));
@@ -620,17 +710,30 @@ fn stage1_window_swaps_and_restores_engine_bytes() {
     assert!(c.texture_cache_cleared());
     // Stage 1 leaves the other targets, the constant table and the globals alone.
     assert_eq!(get::<u8>(&c.engine().backend, 0x5c8), 0x5a);
-    assert_eq!(
-        get::<usize>(&c.engine().crt[2], 0x10),
-        get::<usize>(&c.original.crt[2], 0x10)
-    );
+    for slot in 2..SLOTS {
+        assert_eq!(
+            get::<usize>(&c.engine().crt[slot], 0x10),
+            get::<usize>(&c.original.crt[slot], 0x10)
+        );
+    }
     rsf_anomaly_swap_prepared(c.swap);
     assert!(c.host().viewports.is_empty());
+    rsf_anomaly_swap_rm_near(c.swap);
+    c.engine().backend.fill(0x5a);
     assert!(c.seam());
     assert!(c.stock() && !c.view().open && c.host().round_trips == 1);
+    assert!(c.before_draw_stock() && c.texture_cache_cleared());
+    let refs = c.host().seam_views.unwrap();
+    assert_eq!(refs[0].surface, c.view().twins.targets[0].surface);
+    assert_eq!(
+        refs[3].surface,
+        get::<*mut c_void>(&c.original.crt[0], 0x10)
+    );
+    assert_eq!(refs[3].rtv, get::<*mut c_void>(&c.original.crt[0], 0x18));
     assert!(!c.seam());
     rsf_anomaly_swap_combine_end(c.swap);
     rsf_anomaly_swap_frame_end(c.swap);
+    rsf_anomaly_swap_rm_near(c.swap);
     assert!(c.stock() && c.view().refusal.is_null());
     let n = c.view().counters;
     assert_eq!(
@@ -638,13 +741,21 @@ fn stage1_window_swaps_and_restores_engine_bytes() {
         (1, 1, 1, 1)
     );
     assert_eq!(n.restores[RSF_ANOMALY_SWAP_RESTORE_SEAM as usize], 1);
-    // The twins are reused while the key holds.
-    assert!(c.prepare(&c.facts()) && c.seam() && c.stock() && c.host().makes == 1);
+    assert_eq!(
+        (n.eligible, n.rm_near_in_window, n.twin_generations),
+        (1, 1, 1)
+    );
+    for _ in 0..3 {
+        assert!(c.prepare(&c.facts()) && c.seam() && c.stock());
+    }
+    assert_eq!((c.host().makes, c.view().counters.swapped), (1, 4));
+    let request = c.host().request.unwrap();
+    assert!(request.stage == 1 && request.spec[0].promote && !request.spec[2].present);
     rsf_anomaly_swap_shutdown(c.swap);
     assert!(c.stock() && c.host().drops == 1);
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn upscale_can_read_the_published_twin_generation_during_the_seam() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts2()));
@@ -656,7 +767,7 @@ fn upscale_can_read_the_published_twin_generation_during_the_seam() {
     assert!(c.stock());
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn stage3_window_jitters_main_and_first_person_once() {
     let mut c = Case::new(true);
     c.engine().guard = i32::MIN + 7;
@@ -706,7 +817,7 @@ fn stage3_window_jitters_main_and_first_person_once() {
     assert!(c.view().refusal.is_null());
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn sun_cascades_borrow_the_unjittered_camera() {
     let c = Case::new(true);
     let (main, full) = (c.engine().project, c.engine().full);
@@ -743,7 +854,7 @@ fn sun_cascades_borrow_the_unjittered_camera() {
     assert!(c.stock() && c.host().upload_calls == uploads);
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn failed_first_person_jitter_restores_the_camera_and_uploaded_projection() {
     for fail_upload in [false, true] {
         let c = Case::new(true);
@@ -767,7 +878,7 @@ fn failed_first_person_jitter_restores_the_camera_and_uploaded_projection() {
     }
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn pending_camera_and_sampler_restoration_retains_twins_until_quiesce_retries() {
     let c = Case::new(true);
     let saved = (c.engine().project, c.engine().full);
@@ -797,7 +908,7 @@ fn pending_camera_and_sampler_restoration_retains_twins_until_quiesce_retries() 
     );
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn sun_refusal_returns_the_frame_to_output_size() {
     for failure in 0..3 {
         let c = Case::new(true);
@@ -838,7 +949,7 @@ fn sun_refusal_returns_the_frame_to_output_size() {
     }
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn scope_frames_stay_stock() {
     let c = Case::new(true);
     let facts = Facts {
@@ -864,7 +975,7 @@ fn scope_frames_stay_stock() {
     assert!(c.prepare(&c.facts3(0.25, 0.1)) && c.seam() && c.stock());
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn a_failed_exchange_rolls_every_write_back() {
     let probe = Case::new(true);
     probe.engine().guard = 1;
@@ -891,7 +1002,7 @@ fn a_failed_exchange_rolls_every_write_back() {
     }
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn a_partially_written_cache_range_rolls_back_before_drawing() {
     let c = Case::new(true);
     // 99 target fields, four globals, then the texture-list pointer and PS range.
@@ -909,7 +1020,7 @@ fn a_partially_written_cache_range_rolls_back_before_drawing() {
     assert_eq!(c.engine().backend, expected);
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn cache_readback_refusal_keeps_twins_until_the_range_is_clear() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts2()));
@@ -931,7 +1042,7 @@ fn cache_readback_refusal_keeps_twins_until_the_range_is_clear() {
     assert_eq!(c.host().drops, 1);
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn a_failed_restore_keeps_twins_until_shutdown_can_verify_the_fields() {
     for global in [false, true] {
         let c = Case::new(true);
@@ -975,7 +1086,7 @@ fn a_failed_restore_keeps_twins_until_shutdown_can_verify_the_fields() {
     }
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn layout_and_platform_are_checked_at_creation() {
     let short = Layout {
         struct_size: 8,

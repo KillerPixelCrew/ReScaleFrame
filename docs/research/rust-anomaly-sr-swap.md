@@ -139,3 +139,25 @@ comparison with the pinned ABI, shader, profile and history files.
 The isolated verification Cargo cache lacked `ash`. The existing default
 Cargo cache resolved the same lockfile offline. Builds, fixture execution,
 Clippy, and Standard and AVX game validation remain open.
+
+## N07 swap scenarios from 6cb0c169
+
+The 29 original named CTest scenarios in `tests/anomaly_sr_swap.cpp` at
+`6cb0c169` now run in `games/anomaly/src/sr_swap/tests.rs` and
+`sr_swap/tests/scenarios.rs`. The runner preserves the case names and
+unknown-selection result. The native entry lends the production
+`verified_layout` and the independent jitter and Fmatrix oracle.
+The Rust runner compares the fixture layout field by field and checks
+actual main and first-person swap output against that oracle.
+
+The Rust cases retain stage admission refusals, allocation retry keys,
+the 22 Stage 1 write faults, all Stage 2 exchange and cache write faults,
+optional and odd-size targets, exact state and viewport restoration,
+the SSAO init and in-progress branches, all four non-seam exits, and
+set_P, mip and sun failures. They observe the restored stock bindings as
+the seam callback sees them, then exercise repeated restoration, lost
+CRT chains and live twin retention. The native production guard and sun
+unwind paths and both profile tables remain those of `6cb0c169`.
+
+Pinned formatting, locked offline Windows metadata and source comparison
+completed. Builds, fixture execution and device validation remain pending.

@@ -125,7 +125,7 @@ typedef struct rsf_anomaly_sr_frame_reads {
     bool view_read, options_read;
 } rsf_anomaly_sr_frame_reads;
 
-// What the stage reads back from the SwapController after each call.
+// What the stage reads back from the Rust swap owner after each call.
 typedef struct rsf_anomaly_sr_controller {
     bool window_open, refused, jitter_applied, mip_bias_applied;
     uint32_t stage, render_width, render_height;
@@ -221,7 +221,7 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*now)(int64_t* counter, int64_t* frequency);
     bool (*geometry_active)(void);
     const char* (*build_sha256)(void);
-    // SwapController (sr_swap.h).
+    // Scoped production swap owner (sr_swap.rs).
     void (*close_stale)(void);
     bool (*prepare)(const rsf_anomaly_sr_frame_facts*, rsf_anomaly_sr_log, void* log_user);
     void (*prepared)(void);
