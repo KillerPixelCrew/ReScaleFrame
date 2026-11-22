@@ -10,7 +10,7 @@
 #define VK_NO_PROTOTYPES
 #include <windows.h>
 #include <vulkan/vulkan.h>
-#include "vulkan_fg_resources_native.h"
+#include "vulkan_fg_resources.h"
 #include "../../vulkan/streamline/sdk_records_checks.h"
 #include <sl_dlss.h>
 #include <DirectXMath.h>
@@ -26,7 +26,8 @@ struct Native {
     rsf_sharpenvk_host sharpen{};
     ~Native() { rsf_sharpenvk_host_destroy(&sharpen); }
     rsf_srvk_setup setup{};
-    rsf::vkfg::Device gpu;
+    std::unique_ptr<rsf_vkfg_device, decltype(&rsf_core_vkfg_device_destroy)> gpu{
+        nullptr, rsf_core_vkfg_device_destroy};
     PFun_slSetConstants* constants = nullptr; PFun_slSetTagForFrame* tags = nullptr;
     PFun_slEvaluateFeature* evaluate = nullptr; PFun_slFreeResources* release = nullptr;
     PFun_slDLSSGetOptimalSettings* optimal = nullptr; PFun_slDLSSSetOptions* options = nullptr;
@@ -120,13 +121,15 @@ int32_t open(const rsf_srvk_setup* setup, void** out) noexcept try {
 int32_t prepare(void* native) noexcept try {
     auto* self = static_cast<Native*>(native);
     const auto* setup = &self->setup;
-    if (!self->gpu.load_images(*setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    auto* device_resources = rsf_core_vkfg_load_device(setup, nullptr, true);
+    if (!device_resources) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    self->gpu.reset(device_resources);
     const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
         setup->instance_proc(setup->instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     VkPhysicalDeviceMemoryProperties memory{};
     properties(static_cast<VkPhysicalDevice>(setup->physical_device), &memory);
-    self->gpu.memory_types(memory);
+    rsf_core_vkfg_device_memory(self->gpu.get(), &memory);
     rsf_core_capture_vk_provider(self->capture.get(), 0, RSF_SR_DLSS, 0);
     if (!rsf_core_capture_vk_initialize(self->capture.get(), setup->device, setup->device_proc, &memory))
         return RSF_BACKEND_ERROR_INIT_FAILED;
@@ -142,11 +145,11 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     initialize,
     prepare,
     [](void* native, Image* image, uint32_t width, uint32_t height, uint32_t format, uint32_t usage) {
-        return rsf_core_vkfg_ensure_image_usage(&rsf::vkfg::platform, static_cast<Native*>(native)->gpu.get(),
+        return rsf_core_vkfg_ensure_image_usage(&rsf_core_vkfg_platform, static_cast<Native*>(native)->gpu.get(),
             image, width, height, format, usage, 1);
     },
     [](void* native, Image* image) {
-        rsf_core_vkfg_release_image(&rsf::vkfg::platform, static_cast<Native*>(native)->gpu.get(), image);
+        rsf_core_vkfg_release_image(&rsf_core_vkfg_platform, static_cast<Native*>(native)->gpu.get(), image);
     },
     set_constants, set_options,
     tag,

@@ -13,7 +13,7 @@
 #include <cstring>
 #include <memory>
 #include "native_fg_dlss_vulkan_capture.h"
-#include "vulkan_fg_resources_native.h"
+#include "vulkan_fg_resources.h"
 #include "../../backends/common/frame_capture_vk.h"
 
 extern "C" uint64_t rsf_vk_sl_worker_timeout_epoch();
@@ -25,7 +25,8 @@ void on_error(const sl::APIError& error) { rsf_core_dlgvk_report_api_error(stati
 
 struct Native {
     rsf_fgvk_setup setup{};
-    rsf::vkfg::Device gpu;
+    std::unique_ptr<rsf_vkfg_device, decltype(&rsf_core_vkfg_device_destroy)> gpu{
+        nullptr, rsf_core_vkfg_device_destroy};
     PFun_slSetConstants* constants = nullptr;
     PFun_slSetTagForFrame* tags = nullptr;
     PFun_slFreeResources* release = nullptr;
@@ -157,8 +158,10 @@ rsf_backend_result prepare_chain(void* user, uint32_t* capture_enabled, void** g
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     VkPhysicalDeviceMemoryProperties memory{};
     properties(static_cast<VkPhysicalDevice>(graphics.physical_device), &memory);
-    if (!self->gpu.load(self->setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-    self->gpu.memory_types(memory);
+    auto* device_resources = rsf_core_vkfg_load_device(&self->setup.graphics, &self->setup, true);
+    if (!device_resources) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    self->gpu.reset(device_resources);
+    rsf_core_vkfg_device_memory(self->gpu.get(), &memory);
     rsf_core_capture_vk_provider(self->capture.get(), 0, RSF_SR_DLSS, 1);
     if (!rsf_core_capture_vk_initialize(self->capture.get(), graphics.device, graphics.device_proc, &memory))
         return RSF_BACKEND_ERROR_INIT_FAILED;
@@ -168,7 +171,7 @@ rsf_backend_result prepare_chain(void* user, uint32_t* capture_enabled, void** g
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 constexpr rsf_dlgvk_platform platform{
-    &rsf::vkfg::platform, open,
+    &rsf_core_vkfg_platform, open,
     [](void* user) { delete static_cast<Native*>(user); },
     prepare_chain,
     [](void* user) noexcept -> rsf_backend_result {
