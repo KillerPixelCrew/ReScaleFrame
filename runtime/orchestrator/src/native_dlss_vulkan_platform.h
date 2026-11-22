@@ -51,13 +51,14 @@ typedef struct rsf_vkdlss_platform {
     int32_t (*preset_valid)(uint32_t preset);
 } rsf_vkdlss_platform;
 
-#ifdef __cplusplus
-namespace rsf::dlss_vk {
+/* The Streamline leaf table, selected by CMake for the Vulkan SR platform. */
 #if defined(RSF_HAVE_STREAMLINE_VK)
-extern const rsf_vkdlss_platform leaves;
-inline constexpr const rsf_vkdlss_platform* platform = &leaves;
+#ifdef __cplusplus
+extern "C" const rsf_vkdlss_platform rsf_vkdlss_native_leaves;
 #else
-inline constexpr const rsf_vkdlss_platform* platform = nullptr;
+extern const rsf_vkdlss_platform rsf_vkdlss_native_leaves;
 #endif
-}
+#define RSF_VKDLSS_NATIVE_PLATFORM (&rsf_vkdlss_native_leaves)
+#else
+#define RSF_VKDLSS_NATIVE_PLATFORM ((const rsf_vkdlss_platform*)0)
 #endif

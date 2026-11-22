@@ -6,7 +6,7 @@ The baseline is `c83715f`. This source port moves the `rsf_srvk` owner for FSR2/
 
 | Boundary | Owner |
 | --- | --- |
-| Public entry points | `native_sr_vulkan.cpp` forwards to Rust and supplies a private native function table. The existing CMake feature gates select the table. Without Vulkan FidelityFX headers, valid create requests return `NOT_COMPILED`, and valid spatial recovery requests return `NOT_SUPPORTED`. |
+| Public entry points | `native_sr_vulkan.c` forwards to Rust and supplies a private native function table. The existing CMake feature gates select the table. Without Vulkan FidelityFX headers, valid create requests return `NOT_COMPILED`, and valid spatial recovery requests return `NOT_SUPPORTED`. |
 | Setup and lifetime | `vulkan_sr.rs` owns the handle, provider selection and sizing, staging allocations, the device dispatch lease, partial initialization cleanup and destroy retry. For FSR2/3 it selects the newest parsed minor/patch for the requested major, checks the effective opaque ID, and preserves FSR2 native AA's output-sized plan. |
 | Frame execution | Rust validates camera and image leases, initializes the zero mask and private output once, computes temporal reset and capture ordering, and publishes output after accepted dispatch. A failed dispatch invalidates history and leaves the engine output for the caller's existing spatial recovery. One logged sharpening failure keeps vendor output usable. |
 | Native work | The C++ leaves resolve Windows DLL and Vulkan entry points, marshal FFX descriptors, allocate Vulkan resources, issue barriers, clears and copies, invoke SDKs, run the existing Vulkan sharpening pass and make Vulkan readbacks. The GPL sharpening option/pass implementation remains behind the leaf. |

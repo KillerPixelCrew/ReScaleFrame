@@ -51,6 +51,8 @@ and retains its private result mapping. The split lease is Rust-only.
 - `tests/native_sr_xess_range_check.py` was removed. It extracted a C++ dispatch
   implementation that had already moved. The Rust and native XeSS fixtures
   now exercise range admission through the shared production dispatcher.
+- `runtime/orchestrator/src/native_sr_vulkan.cpp` was replaced by the C11 leaf
+  described below.
 - `tests/native_vulkan_exports.cpp` was replaced by `tests/native_vulkan_exports.rs`,
   retaining all 31 export names, the separate process and the real DLL loader check.
 
@@ -59,9 +61,6 @@ and retains its private result mapping. The split lease is Rust-only.
 - `runtime/orchestrator/src/native_sr_split_vulkan.cpp` supplies the CMake-selected
   provider and DLL export thunks. The stub fixture still exercises its exception
   boundary and continuation preservation.
-- `runtime/orchestrator/src/native_sr_vulkan.cpp` supplies the CMake-selected
-  platform and DLL export thunks. Its typed Vulkan and FidelityFX functions
-  marshal pinned SDK records, including the Vulkan blit and SDK dispatch.
 - `runtime/orchestrator/src/native_vulkan_timing.h` owns native DLL-scope
   retirement for the Rust timing file. Native FG/WSI, fence waits and latency
   calls still consume this scope.
@@ -74,6 +73,37 @@ The remaining files require a coordinated native export/feature-selection
 mechanism, migration of native timing call sites, or typed Vulkan/SDK bindings
 for the C++ leaves and device fixtures. Preserve those contracts during a full
 port.
+
+## Native SR Vulkan C11 leaf
+
+`native_sr_vulkan.cpp` became `native_sr_vulkan.c`. Rust already owned provider
+admission, descriptor assembly, images, capture and retirement, so the leaf keeps
+three things Rust cannot express:
+
+- the `static_assert` layout checks of the FidelityFX create, plan, dispatch and
+  resource records against the configured SDK headers, now `_Static_assert`;
+- the six FidelityFX SDK calls and the `vkGetDeviceProcAddr` call that contained
+  foreign C++ exceptions. Each `catch (...)` became `__try/__except` filtered on 0xE06D7363,
+  which is the only code MSVC `/EHsc` catch-all caught, and returns the same
+  result code. Access violations still propagate;
+- the CMake-selected platform table and the seven `rsf_srvk_*` export thunks.
+
+The platform record keeps 264 bytes and the FidelityFX ops record 28 pointers,
+with the same offsets that `vulkan_sr.rs` mirrors. `ffx_api_vk.h` names
+`VkQueueInfoFFXAPI`, `FfxApiResource` and `FfxApiResourceDescription` without
+`struct`, so the leaf typedefs them before the include.
+
+Callers changed for C linkage:
+
+- `vulkan_sdk_native.h` and `vulkan_fidelityfx_native.h` hold C declarations only.
+  The loader table is the `RSF_VK_SDK_SYSTEM_LOADER` initializer, used by this leaf
+  and by the V02 FidelityFX FG table in `native_fg_vulkan.cpp`. The FG leaf now
+  value-initializes its `rsf_vkffx_exports` member, because the header lost its
+  C++ default member initializers.
+- `native_dlss_vulkan_platform.h` (V04) replaces the C++ `rsf::dlss_vk::platform`
+  constant with the C symbol `rsf_vkdlss_native_leaves` and the
+  `RSF_VKDLSS_NATIVE_PLATFORM` selector; `native_dlss_vulkan.cpp` defines that symbol.
+- The XeSS table uses V06's `RSF_XESSVK_NATIVE_PLATFORM`.
 
 ## Evidence
 

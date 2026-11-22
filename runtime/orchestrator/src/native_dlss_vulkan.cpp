@@ -138,7 +138,7 @@ int32_t prepare(void* native) noexcept try {
 
 }
 
-const rsf_vkdlss_platform rsf::dlss_vk::leaves{
+const rsf_vkdlss_platform rsf_vkdlss_native_leaves{
     open,
     [](void* native) { delete static_cast<Native*>(native); },
     rsf_slvk_invoke,

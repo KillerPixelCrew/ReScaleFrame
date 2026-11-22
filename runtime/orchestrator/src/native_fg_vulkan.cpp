@@ -29,7 +29,7 @@ static_assert(sizeof(rsf_ffxgvk_open_ops) == 10 * sizeof(void*) &&
 
 struct rsf_ffxgvk_native {
     rsf_fgvk_setup setup{};
-    rsf_vkffx_exports sdk;
+    rsf_vkffx_exports sdk{};
     ffxContext swapchain = nullptr, effect = nullptr;
     VkSwapchainKHR chain = VK_NULL_HANDLE;
     PfnFfxConfigure configure = nullptr;
@@ -377,7 +377,7 @@ void capture_flush(rsf_ffxgvk_native* self) noexcept try {
     (void)rsf_core_capture_vk_flush(self->capture.get(), 0, nullptr);
 } catch (...) {}
 constexpr rsf_ffxgvk_ops operations{
-    rsf_vk_sdk_system_loader, open, close_native, set_wsi,
+    RSF_VK_SDK_SYSTEM_LOADER, open, close_native, set_wsi,
     create_swapchain, query_swapchain, create_effect, query_provider, destroy_effect, destroy_chain, destroy_swapchain,
     images, acquire, prepare, record_barrier, record_copy, configure, present, drain,
     [](rsf_ffxgvk_native* self, uint64_t frame) -> uint32_t { return rsf_core_capture_vk_wants(self->capture.get(), frame) ? 1u : 0u; },

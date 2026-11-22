@@ -44,7 +44,7 @@ add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
 set(RSF_VULKAN_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/engine/thirdparty/vulkan/include" CACHE PATH "Vulkan headers for native Vulkan services")
 set(RSF_FFX_VK_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/fidelityfx-vulkan/ffx-api/include" CACHE PATH "Pinned FidelityFX Vulkan API headers")
-add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.cpp src/native_dlss_vulkan.cpp src/native_xess_vulkan.c src/native_fg_vulkan.cpp src/native_fg_vulkan_dispatch.cpp src/native_fg_dlss_vulkan.cpp src/native_fg_dlss_vulkan_capture.cpp src/native_latency_vulkan.c)
+add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.c src/native_dlss_vulkan.cpp src/native_xess_vulkan.c src/native_fg_vulkan.cpp src/native_fg_vulkan_dispatch.cpp src/native_fg_dlss_vulkan.cpp src/native_fg_dlss_vulkan_capture.cpp src/native_latency_vulkan.c)
 target_sources(rsf_native_vulkan PRIVATE src/latency_amd_vulkan.c)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_ANTILAG_VK=1)

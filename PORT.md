@@ -1365,10 +1365,10 @@ Port the shared Vulkan SR services, split routes and provider-selection boundari
 - [x] [runtime/orchestrator/include/rescaleframe/native_sr_vulkan.h](runtime/orchestrator/include/rescaleframe/native_sr_vulkan.h)
 - [x] [runtime/orchestrator/src/native_sr_split_lease.h](runtime/orchestrator/src/native_sr_split_lease.h)
 - [x] [runtime/orchestrator/src/native_sr_split_vulkan.cpp](runtime/orchestrator/src/native_sr_split_vulkan.cpp)
-- [ ] [runtime/orchestrator/src/native_sr_vulkan.cpp](runtime/orchestrator/src/native_sr_vulkan.cpp)
+- [x] [runtime/orchestrator/src/native_sr_vulkan.c](runtime/orchestrator/src/native_sr_vulkan.c) (C++ removed; C11 leaf with the FidelityFX SDK layout asserts, the SEH-guarded SDK and device-proc calls filtered on 0xE06D7363, the CMake-selected platform table and the seven export thunks)
 - [x] [runtime/orchestrator/src/native_vulkan_timing.h](runtime/orchestrator/src/native_vulkan_timing.h)
-- [x] [runtime/orchestrator/src/vulkan_fidelityfx_native.h](runtime/orchestrator/src/vulkan_fidelityfx_native.h)
-- [x] [runtime/orchestrator/src/vulkan_sdk_native.h](runtime/orchestrator/src/vulkan_sdk_native.h)
+- [x] [runtime/orchestrator/src/vulkan_fidelityfx_native.h](runtime/orchestrator/src/vulkan_fidelityfx_native.h) (C declarations only)
+- [x] [runtime/orchestrator/src/vulkan_sdk_native.h](runtime/orchestrator/src/vulkan_sdk_native.h) (C declarations and a loader initializer macro only)
 
 **Fixtures (4)**
 

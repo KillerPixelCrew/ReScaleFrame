@@ -1,14 +1,23 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
 #include <stdint.h>
 
-struct rsf_vk_sdk_loader {
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct rsf_vk_sdk_loader {
     void* (*load)(const uint16_t*);
     void (*unload)(void*);
-};
-static_assert(sizeof(rsf_vk_sdk_loader) == 2 * sizeof(void*));
+} rsf_vk_sdk_loader;
 
-extern "C" void* rsf_core_vk_sdk_load(const uint16_t*);
-extern "C" void rsf_core_vk_sdk_unload(void*);
-extern "C" uint32_t rsf_core_vk_sdk_pin(void*);
-inline constexpr rsf_vk_sdk_loader rsf_vk_sdk_system_loader{rsf_core_vk_sdk_load, rsf_core_vk_sdk_unload};
+void* rsf_core_vk_sdk_load(const uint16_t*);
+void rsf_core_vk_sdk_unload(void*);
+uint32_t rsf_core_vk_sdk_pin(void*);
+
+#ifdef __cplusplus
+}
+#endif
+
+/* Brace initializer for the system loader table inside a constant platform table. */
+#define RSF_VK_SDK_SYSTEM_LOADER {rsf_core_vk_sdk_load, rsf_core_vk_sdk_unload}

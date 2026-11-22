@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
 #include "vulkan_sdk_native.h"
 
@@ -7,13 +7,21 @@
 #include <windows.h>
 #include <ffx_api/ffx_api.h>
 
-struct rsf_vkffx_exports {
-    PfnFfxCreateContext create{};
-    PfnFfxDestroyContext destroy{};
-    PfnFfxQuery query{};
-    PfnFfxDispatch dispatch{};
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-};
+/* FidelityFX context exports resolved from the loaded SDK module. */
+typedef struct rsf_vkffx_exports {
+    PfnFfxCreateContext create;
+    PfnFfxDestroyContext destroy;
+    PfnFfxQuery query;
+    PfnFfxDispatch dispatch;
+} rsf_vkffx_exports;
 
-extern "C" rsf_vk_function rsf_vkffx_symbol(void* module, const char* name);
+rsf_vk_function rsf_vkffx_symbol(void* module, const char* name);
+
+#ifdef __cplusplus
+}
+#endif
 #endif
