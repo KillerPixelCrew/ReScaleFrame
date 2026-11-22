@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::com_ref::ComRef;
 use crate::scene_abi::{
     RSF_NATIVE_SCENE_PRESENT_DIRECT, RSF_NATIVE_SCENE_PRESENT_NONE,
     RSF_NATIVE_SCENE_PRESENT_SAMPLED, rsf_native_scene_identity as Scene,
@@ -10,11 +11,12 @@ use rsf_game_sys::{
 };
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::ptr::null_mut;
 use windows::Win32::Graphics::{
     Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Texture2D},
     Dxgi::IDXGISwapChain,
 };
-use windows::core::{IUnknown, Interface};
+use windows::core::Interface;
 
 const CAPACITY: usize = 64;
 const EMPTY: Scene = unsafe { std::mem::zeroed() };
@@ -233,9 +235,7 @@ pub(super) extern "C" fn rsf_native_scene_reset() {
 }
 
 unsafe extern "C" fn resource_identity(resource: *mut c_void) -> u64 {
-    unsafe { IUnknown::from_raw_borrowed(&resource) }
-        .and_then(|resource| resource.cast::<IUnknown>().ok())
-        .map_or(0, |identity| identity.as_raw() as usize as u64)
+    unsafe { ComRef::identity(resource) }.map_or(0, |identity| identity.as_ptr() as usize as u64)
 }
 
 unsafe extern "C" fn backbuffer_identity(
@@ -246,15 +246,20 @@ unsafe extern "C" fn backbuffer_identity(
     let Some(chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }) else {
         return 0;
     };
-    let Ok(buffer) = (unsafe { chain.GetBuffer::<ID3D11Texture2D>(0) }) else {
+    let mut raw = null_mut();
+    let result =
+        unsafe { (chain.vtable().GetBuffer)(chain.as_raw(), 0, &ID3D11Texture2D::IID, &mut raw) };
+    let Some(buffer) = (unsafe { ComRef::from_result(result.0, raw) }) else {
         return 0;
     };
+    let raw = buffer.as_ptr();
+    let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.expect("retained backbuffer");
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe {
-        buffer.GetDesc(&mut desc);
+        texture.GetDesc(&mut desc);
         width.write(desc.Width);
         height.write(desc.Height);
-        resource_identity(buffer.as_raw())
+        resource_identity(raw)
     }
 }
 

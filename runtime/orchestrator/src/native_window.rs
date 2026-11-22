@@ -10,7 +10,6 @@ use crate::{
 use core::{
     cell::{Cell, RefCell},
     ffi::c_void,
-    ptr::null_mut,
 };
 use rsf_game_sys::{RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use windows_sys::Win32::{
@@ -18,28 +17,8 @@ use windows_sys::Win32::{
     System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
 };
 
-use windows_sys::core::GUID;
-
 const DXGI_PRESENT_TEST: u32 = 0x00000001;
 const WINDOW_SCOPE_CAPACITY: usize = 32;
-
-const IID_IUNKNOWN: GUID = GUID {
-    data1: 0,
-    data2: 0,
-    data3: 0,
-    data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
-};
-
-unsafe fn com_identity(object: *mut c_void) -> Option<ComRef> {
-    type Query = unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32;
-    // IUnknown::QueryInterface is the first slot on every COM interface.
-    let query = unsafe { **object.cast::<*const Query>() };
-    let mut identity = null_mut();
-    if unsafe { query(object, &IID_IUNKNOWN, &mut identity) } < 0 {
-        return None;
-    }
-    unsafe { ComRef::from_owned(identity) }
-}
 
 struct WindowScopes {
     passes: [Option<rsf_game_render_pass>; WINDOW_SCOPE_CAPACITY],
@@ -141,8 +120,8 @@ unsafe extern "C" fn rsf_native_window_scope(pass: *const rsf_game_render_pass, 
 unsafe fn match_window(swapchain: *mut c_void) -> Option<rsf_game_render_pass> {
     // The active scope leases its swapchain. Release the TLS borrow before calling COM.
     let current = SCOPES.with_borrow(|scopes| scopes.current().copied())?;
-    let observed = unsafe { com_identity(swapchain) }?;
-    let owned = unsafe { com_identity(current.swapchain) }?;
+    let observed = unsafe { ComRef::identity(swapchain) }?;
+    let owned = unsafe { ComRef::identity(current.swapchain) }?;
     (observed.as_ptr() == owned.as_ptr()).then_some(current)
 }
 

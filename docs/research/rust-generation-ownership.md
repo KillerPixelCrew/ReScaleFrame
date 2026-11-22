@@ -68,6 +68,9 @@ Rust platform keeps the native CPU callback table layout for the C05 fixture,
 preserves the direct presentation-bridge operations and uses the same typed
 DXGI hardware lookup. The Anti-Lag SDK factory remains a native leaf. The
 CPU dispatcher, graphics and latency exports retain their existing signatures.
+Scene and window matching share the same IUnknown identity query. The query
+and scene GetBuffer operations release any non-null failure output and retain
+only copied identity values in the registry.
 
 - tests/d3d11_fg_api.cpp retains independent C++ DLL import and typed callback
   identity checks alongside the separate C11 import fixture.

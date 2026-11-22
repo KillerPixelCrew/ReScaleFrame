@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 use std::borrow::Borrow;
 use std::ffi::c_void;
-use std::ptr::NonNull;
+use std::ptr::{NonNull, null_mut};
+use windows::core::{IUnknown, Interface};
 
 use windows::core::{HRESULT, IUnknown_Vtbl, Interface};
 
@@ -21,6 +22,19 @@ pub(super) struct ComRef(pub(super) NonNull<c_void>);
 impl ComRef {
     pub(super) unsafe fn from_owned(object: *mut c_void) -> Option<Self> {
         NonNull::new(object).map(Self)
+    }
+
+    // An output reference belongs to the caller even if the COM method reports failure.
+    pub(super) unsafe fn from_result(result: i32, object: *mut c_void) -> Option<Self> {
+        let owned = unsafe { Self::from_owned(object) };
+        if result >= 0 { owned } else { None }
+    }
+
+    pub(super) unsafe fn identity(object: *mut c_void) -> Option<Self> {
+        let object = unsafe { IUnknown::from_raw_borrowed(&object) }?;
+        let mut identity = null_mut();
+        let result = unsafe { object.query(&IUnknown::IID, &mut identity) };
+        unsafe { Self::from_result(result.0, identity) }
     }
 
     // Every non-null slot transfers one reference, including partial results.
