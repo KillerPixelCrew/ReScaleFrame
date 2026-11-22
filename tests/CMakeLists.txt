@@ -596,7 +596,7 @@ set(rsf_vulkan_latency_test_endpoints
     rsf_fgvk_latency_marker=rsf_test_fgvk_latency_marker
     rsf_fgvk_latency_get_status=rsf_test_fgvk_latency_get_status)
 add_executable(rsf_native_latency_vulkan_test native_latency_vulkan.cpp ../runtime/orchestrator/src/native_latency_vulkan.cpp)
-target_sources(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/src/latency_amd_vulkan.cpp)
+target_sources(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/src/latency_amd_vulkan.c)
 target_include_directories(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/include)
 target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1
     ${rsf_vulkan_latency_test_endpoints})
@@ -786,7 +786,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_build_options)
     add_test(NAME streamline_vulkan_dispatch_contract COMMAND rsf_streamline_vulkan_dispatch_test)
     add_executable(rsf_native_antilag_vulkan_test native_antilag_vulkan.cpp
-        ../runtime/orchestrator/src/native_latency_vulkan.cpp ../runtime/orchestrator/src/latency_amd_vulkan.cpp)
+        ../runtime/orchestrator/src/native_latency_vulkan.cpp ../runtime/orchestrator/src/latency_amd_vulkan.c)
     target_compile_definitions(rsf_native_antilag_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_ANTILAG_VK=1
         ${rsf_vulkan_latency_test_endpoints})
     target_include_directories(rsf_native_antilag_vulkan_test PRIVATE ../runtime/orchestrator/include)
