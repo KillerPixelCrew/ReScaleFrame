@@ -351,6 +351,34 @@ only reads or writes fully covered extension fields. Native engine patch and con
 controls retain their existing code. The dump entry forwards to Rust, and the CRT stream
 bridge retains native RTTI and its original file error reporting.
 
+## Inventory at the end of the 031aa9ac continuation
+
+Two baseline paths have source cutovers.
+
+- `tests/vendor_census.cpp` is replaced by Rust scenario and record verification code and
+  `tests/loader/vendor_census_native.cpp` for native SDK, WARP, payload and caller evidence.
+- `loader/census/src/decode_d3d_platform.cpp` is removed. Resource field selection is in Rust
+  and the guarded SDK calls are in the existing D3D platform file.
+
+The other eight baseline paths have these dispositions.
+
+- `loader/diagnostics/include/rescaleframe/module_dump.h` is unchanged. Rust owns dump setup,
+  image output, imports and structured sidecar output. Native engine patch and console controls
+  and module list text formatting remain.
+- `loader/diagnostics/src/module_dump_internal.h` retains the native RTTI and stream boundary.
+- `loader/census/src/census_platform.cpp` retains registration, the native descriptor catalog,
+  guarded Streamline operations and CRT decimal formatting.
+- `loader/census/src/hook_platform.cpp` retains MinHook and the guarded loader-list walk.
+- `loader/census/src/guarded_platform.cpp` retains native SEH for borrowed memory and calls.
+- `loader/census/src/d3d_guarded_platform.cpp` retains guarded COM queries. Debug-layer,
+  DRED and info-queue registration now use the typed SDK calls in Rust.
+- `tests/loader/module_dump_rtti_fixture.cpp` retains the real compiler-emitted RTTI specimen.
+- `tests/loader/vendor_layout_facts.cpp` retains the independent SDK-header comparison facts.
+
+`loader/diagnostics/src/sha256.c` and `loader/diagnostics/src/module_dump_v2.c` were also
+removed. `loader/diagnostics/src/module_dump_writer.c` now holds the native dump entry,
+CRT stream and RTTI bridge. Compiled and runtime verification are user-owned.
+
 ## Inventory at the end of the 82b39a63 continuation
 
 Eleven additional baseline paths have source cutovers. The two public header paths retain
