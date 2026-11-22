@@ -63,6 +63,11 @@ generate("sdk/game/src/plugin_session_abi.rs", "runtime/orchestrator/include/res
          ["-Isdk/game/include", "-Iruntime/orchestrator/include"],
          ["--no-recursive-allowlist", "--raw-line", "type wchar_t = u16;",
           "--raw-line", "use crate::{rsf_game_host_services, rsf_game_probe};"])
+generate("games/project-wingman/src/overlay_abi.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
+         "rsf_(start_d3d11_overlay_fn|adapter_setting_(read|write)_bool_fn)",
+         "RSF_(OVERLAY_(API_VERSION|SERVICE_OPTION_TOGGLE)|RENDER_FRONTEND_ABI_VERSION|FG_BACKEND_AUTO|REFLEX_OFF)",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-include", "rescaleframe/adapter_settings.h", "-include", "rescaleframe/frame_generation.h"])
 generate("games/rdr2/src/runtime_worker_abi.rs", "games/rdr2/src/runtime_setup.h",
          "rsf_(rdr2_runtime_leaves|rdr2_fingerprint_fn|render_host_setup)",
          "RSF_(RENDER_HOST_(ABI_VERSION|OWNS_PRESENTATION)|UI_MODE_BACKBUFFER_HUDLESS)",

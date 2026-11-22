@@ -39,6 +39,7 @@ def main() -> None:
         ("build/windows-x64/wingman/bin/Release/xinput1_3.dll", "xinput1_3.dll"),
         ("build/windows-x64/bin/Release/ReScaleFrame.Runtime.dll", "ReScaleFrame/ReScaleFrame.Runtime.dll"),
         ("build/windows-x64/bin/Release/ReScaleFrame.Game.ProjectWingman.dll", "ReScaleFrame/ReScaleFrame.Game.ProjectWingman.dll"),
+        ("target/release/rescaleframe_overlay.dll", "ReScaleFrame/rescaleframe_overlay.dll"),
         ("docs/releases/wingman-observer-install.md", "ReScaleFrame/README.md"),
         ("LICENSE", "ReScaleFrame/licenses/ReScaleFrame-MIT.txt"),
         ("runtime/graphics/src/sharpening/LICENSE-GPL-3.0.txt", "ReScaleFrame/licenses/Sharpening-GPL-3.0.txt"),

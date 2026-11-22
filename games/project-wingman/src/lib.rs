@@ -6,6 +6,10 @@ mod carrier;
 mod execution;
 mod observer;
 #[cfg(windows)]
+mod overlay;
+#[cfg(windows)]
+mod overlay_abi;
+#[cfg(windows)]
 mod windows;
 
 use rsf_game_sys::session::Probe;

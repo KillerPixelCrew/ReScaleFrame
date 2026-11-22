@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The Wingman XInput carrier's optional, process-lived plugin session.
 use crate::windows::{fingerprint, matches_executable, module_path};
-use crate::{AMD64, EXECUTABLE};
+use crate::{AMD64, EXECUTABLE, SHA256, overlay};
 use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
 use std::ffi::{CStr, OsString, c_char, c_void};
@@ -18,8 +18,7 @@ use windows_sys::Win32::System::LibraryLoader::{
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::CreateThread;
-use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileIntW;
-use windows_sys::core::{s, w};
+use windows_sys::core::s;
 
 type Prepare = unsafe extern "C" fn(*const rsf_plugin_session_options, *mut *mut c_void) -> i32;
 type Start = unsafe extern "C" fn(*mut c_void) -> i32;
@@ -59,7 +58,7 @@ fn path_with(prefix: &[u16], suffix: &str) -> Vec<u16> {
         .collect()
 }
 
-fn write_log(message: &[u8]) {
+pub(crate) fn write_log(message: &[u8]) {
     let Some(path) = LOG_PATH.get() else { return };
     let _writer = LOG_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
@@ -70,7 +69,7 @@ fn write_log(message: &[u8]) {
     }
 }
 
-unsafe extern "C" fn host_log(_: *mut c_void, message: *const c_char) {
+pub(crate) unsafe extern "C" fn host_log(_: *mut c_void, message: *const c_char) {
     if !message.is_null() {
         write_log(unsafe { CStr::from_ptr(message) }.to_bytes());
     }
@@ -101,22 +100,22 @@ unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
         .map_or(0, |index| index + 1);
     let parent = &module_path_utf16[..parent_end];
     let config = path_with(parent, "ReScaleFrame.ini");
-    if unsafe {
-        GetPrivateProfileIntW(
-            w!("ProjectWingman"),
-            w!("ObserveNative"),
-            0,
-            config.as_ptr(),
-        )
-    } == 0
-    {
-        return 0;
-    }
     let log_path = path_with(parent, "ReScaleFrame\\project-wingman.log");
     let _ = LOG_PATH.set(PathBuf::from(OsString::from_wide(
         &log_path[..log_path.len() - 1],
     )));
     write_log(b"XInput carrier started; Windows controller forwarding remains independent.");
+
+    let mut executable = vec![0; 32768];
+    let Some(digest) = module_path(null_mut(), &mut executable).and_then(fingerprint) else {
+        write_log(b"Executable fingerprint could not be read.");
+        return 1;
+    };
+    let digest = CStr::from_bytes_with_nul(&digest).expect("hex digest is NUL terminated");
+    if digest != SHA256 {
+        write_log(b"Executable fingerprint differs from the supported Wingman build.");
+        return 1;
+    }
 
     let mut owner = SESSION.lock().unwrap_or_else(PoisonError::into_inner);
     if owner.as_ref().is_some_and(|session| session.active) {
@@ -139,6 +138,26 @@ unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
         write_log(b"Runtime DLL load refused.");
         return 1;
     }
+    let result = match overlay::read(runtime, config) {
+        Ok(true) => start_session(runtime, parent, digest, &mut owner),
+        Ok(false) => 0,
+        Err(result) => {
+            write_log(
+                format!("Shared observer setting could not be read, result={result}.").as_bytes(),
+            );
+            return result as u32;
+        }
+    };
+    overlay::start(runtime);
+    result
+}
+
+fn start_session(
+    runtime: HMODULE,
+    parent: &[u16],
+    digest: &CStr,
+    owner: &mut Option<Session>,
+) -> u32 {
     let prepare = unsafe { GetProcAddress(runtime, s!("rsf_plugin_session_prepare")) };
     let start = unsafe { GetProcAddress(runtime, s!("rsf_plugin_session_start")) };
     let quiesce = unsafe { GetProcAddress(runtime, s!("rsf_plugin_session_quiesce")) };
@@ -154,15 +173,10 @@ unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
     let quiesce: Start = unsafe { std::mem::transmute(quiesce) };
     let stop: Start = unsafe { std::mem::transmute(stop) };
 
-    let mut executable = vec![0; 32768];
-    let Some(digest) = module_path(null_mut(), &mut executable).and_then(fingerprint) else {
-        write_log(b"Executable fingerprint could not be read.");
-        return 1;
-    };
     let probe = Probe {
         machine: AMD64,
         executable: EXECUTABLE,
-        sha256: CStr::from_bytes_with_nul(&digest).expect("hex digest is NUL terminated"),
+        sha256: digest,
     };
     let plugin_path = path_with(parent, "ReScaleFrame\\ReScaleFrame.Game.ProjectWingman.dll");
     let services = host_services(unsafe { GetTickCount64() }, Some(host_log));
@@ -180,7 +194,7 @@ unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
         });
     }
     if prepared != 0 {
-        let cleanup = retire(&mut owner);
+        let cleanup = retire(owner);
         if cleanup != 0 {
             write_log(
                 format!("Project Wingman observer cleanup pending result={cleanup}").as_bytes(),
@@ -195,7 +209,7 @@ unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
     admitted.active = started == 0;
     write_log(format!("Project Wingman observer start result={started}; graph facts only, SR/FG/latency not implemented.").as_bytes());
     if started != 0 {
-        let cleanup = retire(&mut owner);
+        let cleanup = retire(owner);
         if cleanup != 0 {
             write_log(
                 format!("Project Wingman observer cleanup pending result={cleanup}").as_bytes(),

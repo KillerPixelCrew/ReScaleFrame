@@ -19,9 +19,11 @@ https://aka.ms/vc14/vc_redist.x64.exe if MSVCP140/VCRUNTIME140 is missing.
    enables the guarded observer. Native TAA continues unchanged.
 4. Read `ReScaleFrame/project-wingman.log` for prepare/start results and graph facts.
 
-Set `ObserveNative=0` and restart to disable observation. There is no settings
-overlay or vendor-runtime payload in this observer package. The runtime only
-uses the game-plugin lifecycle here and does not activate a graphics provider.
+Press Insert in the D3D11 game window and open **Advanced** to change
+**Observe native temporal passes**. The panel saves the choice to
+`[ProjectWingman] ObserveNative` in `ReScaleFrame.ini`. Restart the game to
+apply the change. The shared panel remains available while temporal observation
+is off. This package runs native TAA and includes no vendor-runtime payload.
 
 The manifest identifies the source commit, exact file hashes and capability
 limits. Build/contract tests do not establish a fresh live-game or VR test.
