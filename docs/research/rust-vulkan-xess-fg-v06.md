@@ -170,3 +170,13 @@ the private platform table layout and SDK callback ABI stay fixed. The
 standalone bridge continues to link the Rust session directly with its
 native DX12 call leaves. Both bridge configurations passed MinGW syntax
 checking with the pre-existing FARPROC cast warning left nonfatal.
+
+The SR device fixture now uses ash for the resolved loader and Vulkan
+operations. It still chooses the first discrete adapter when present,
+requires a graphics-and-compute queue, queries the Vulkan 1.1/1.2 feature
+chain in the same order and lets XeSS amend it before device creation.
+The two quality cases retain their formats, image barriers, queue and fence
+wait, coherently mapped readback, and RGB-only tolerance over the same
+pixel region. Its binary16 decoder treats nonfinite values as failures.
+The independent C++ typed SDK mock stays byte-for-byte identical, and the
+SDK-disabled launcher retains its skip route.

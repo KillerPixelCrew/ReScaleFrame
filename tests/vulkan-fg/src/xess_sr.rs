@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::render_abi::rsf_sharpening_options;
-use crate::vulkan_sr_abi::{
-    RSF_SR_XESS, RSF_SRVK_ABI_VERSION, rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup,
-};
+use crate::vulkan_sr_abi::{RSF_SR_XESS, RSF_SRVK_ABI_VERSION, rsf_srvk_frame, rsf_srvk_setup};
 use crate::xess_requirements_abi::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
 use std::{
-    cell::Cell,
     ffi::{CStr, c_char, c_void},
     mem,
     ptr::{null, null_mut},
@@ -20,19 +17,9 @@ const ABI_MISMATCH: i32 = -2;
 const NOT_READY: i32 = -8;
 
 type Handle = *mut c_void;
-type Failure = &'static str;
+use crate::xess_sr_gpu::Gpu;
 
-#[repr(C)]
-struct DeviceOps {
-    open: unsafe extern "C" fn(*mut rsf_srvk_setup) -> Handle,
-    release: unsafe extern "C" fn(Handle),
-    allocate: unsafe extern "C" fn(Handle, u32, u32, *mut rsf_srvk_image) -> bool,
-    begin: unsafe extern "C" fn(Handle) -> Handle,
-    record: unsafe extern "C" fn(Handle, bool, *const f32),
-    finish: unsafe extern "C" fn(Handle, *const f32) -> bool,
-    drain: unsafe extern "C" fn(Handle) -> i32,
-}
-const _: () = assert!(size_of::<DeviceOps>() == 7 * size_of::<Handle>());
+pub(super) type Failure = &'static str;
 
 unsafe extern "C" {
     fn rsf_srvk_create(setup: *const rsf_srvk_setup, owner: *mut Handle) -> i32;
@@ -43,12 +30,12 @@ unsafe extern "C" {
     fn rsf_sharpening_core_defaults() -> rsf_sharpening_options;
     fn getenv(name: *const c_char) -> *const c_char;
     fn rsf_xessvk_initialize(setup: *const rsf_xessvk_setup) -> i32;
-    fn rsf_xessvk_instance_requirements(
+    pub(super) fn rsf_xessvk_instance_requirements(
         count: *mut u32,
         names: *mut *const *const c_char,
         minimum_api: *mut u32,
     ) -> i32;
-    fn rsf_xessvk_device_requirements(
+    pub(super) fn rsf_xessvk_device_requirements(
         instance: *mut c_void,
         physical: *mut c_void,
         count: *mut u32,
@@ -58,7 +45,7 @@ unsafe extern "C" {
     fn rsf_xessvk_shutdown() -> i32;
 }
 
-fn require(assertion: bool, message: &'static str) -> Result<(), &'static str> {
+pub(super) fn require(assertion: bool, message: &'static str) -> Result<(), &'static str> {
     if assertion { Ok(()) } else { Err(message) }
 }
 
@@ -99,7 +86,7 @@ fn preflight(setup: &mut rsf_xessvk_setup) -> Result<(), &'static str> {
     }
 }
 
-fn run(argc: i32, device_ops: Option<&DeviceOps>) -> Result<i32, &'static str> {
+fn run(argc: i32, device_available: bool) -> Result<i32, &'static str> {
     let mut setup = rsf_xessvk_setup {
         struct_size: size_of::<rsf_xessvk_setup>() as u32 - 1,
         abi_version: RSF_XESSVK_REQUIREMENTS_ABI_VERSION,
@@ -116,10 +103,10 @@ fn run(argc: i32, device_ops: Option<&DeviceOps>) -> Result<i32, &'static str> {
         println!("SKIP: set RSF_VULKAN_XESS_RUNTIME for XeSS Vulkan device fixture");
         return Ok(77);
     }
-    let Some(device_ops) = device_ops else {
+    if !device_available {
         println!("SKIP: built without Vulkan SDK headers");
         return Ok(77);
-    };
+    }
 
     require(
         unsafe { rsf_xessvk_initialize(&setup) } == OK,
@@ -136,7 +123,7 @@ fn run(argc: i32, device_ops: Option<&DeviceOps>) -> Result<i32, &'static str> {
         unsafe { rsf_xessvk_initialize(&setup) } == NOT_READY,
         "refuse replacing an active XeSS SDK",
     )?;
-    device_cases(device_ops, setup.runtime_directory_utf8)?;
+    device_cases(setup.runtime_directory_utf8)?;
     require(
         unsafe { rsf_xessvk_shutdown() } == OK,
         "retire XeSS session after device destruction",
@@ -145,8 +132,8 @@ fn run(argc: i32, device_ops: Option<&DeviceOps>) -> Result<i32, &'static str> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fixture_xess_sr_main(argc: i32, device_ops: Option<&DeviceOps>) -> i32 {
-    match run(argc, device_ops) {
+extern "C" fn rsf_fixture_xess_sr_main(argc: i32, device_available: bool) -> i32 {
+    match run(argc, device_available) {
         Ok(result) => result,
         Err(message) => {
             if !message.is_empty() {
@@ -157,22 +144,8 @@ extern "C" fn rsf_fixture_xess_sr_main(argc: i32, device_ops: Option<&DeviceOps>
     }
 }
 
-struct Device<'a> {
-    ops: &'a DeviceOps,
-    native: Handle,
-    retain: Cell<bool>,
-}
-
-impl Drop for Device<'_> {
-    fn drop(&mut self) {
-        if !self.retain.get() {
-            unsafe { (self.ops.release)(self.native) };
-        }
-    }
-}
-
 struct Context<'a> {
-    device: &'a Device<'a>,
+    device: &'a mut Option<Gpu>,
     owner: Handle,
 }
 
@@ -181,7 +154,7 @@ impl Context<'_> {
         if self.owner.is_null() {
             return true;
         }
-        if unsafe { (self.device.ops.drain)(self.device.native) } != OK
+        if self.device.as_ref().unwrap().drain().is_err()
             || unsafe { rsf_srvk_destroy(self.owner) } != OK
         {
             return false;
@@ -194,23 +167,17 @@ impl Context<'_> {
 impl Drop for Context<'_> {
     fn drop(&mut self) {
         if !self.retire() {
-            self.device.retain.set(true);
+            mem::forget(self.device.take());
         }
     }
 }
 
-fn device_cases(ops: &DeviceOps, directory: *const c_char) -> Result<(), Failure> {
-    // The native leaf fills the device handles and optional proc callbacks.
+fn device_cases(directory: *const c_char) -> Result<(), Failure> {
+    // The Vulkan fixture fills the device handles and proc callbacks.
     let mut setup: rsf_srvk_setup = unsafe { mem::zeroed() };
     setup.struct_size = size_of::<rsf_srvk_setup>() as u32;
     setup.abi_version = RSF_SRVK_ABI_VERSION;
-    let native = unsafe { (ops.open)(&mut setup) };
-    require(!native.is_null(), "")?;
-    let device = Device {
-        ops,
-        native,
-        retain: Cell::new(false),
-    };
+    let mut device = Some(Gpu::open(&mut setup)?);
     setup.backend = RSF_SR_XESS;
     setup.output_width = 320;
     setup.output_height = 180;
@@ -218,7 +185,7 @@ fn device_cases(ops: &DeviceOps, directory: *const c_char) -> Result<(), Failure
     setup.runtime_directory_utf8 = directory;
     for quality in [1, 5] {
         setup.quality = quality;
-        quality_case(&device, &setup)?;
+        quality_case(&mut device, &setup)?;
     }
     Ok(())
 }
@@ -301,7 +268,7 @@ fn refused_inputs(owner: Handle, command: Handle, frame: &rsf_srvk_frame) -> Res
     )
 }
 
-fn quality_case(device: &Device<'_>, setup: &rsf_srvk_setup) -> Result<(), Failure> {
+fn quality_case(device: &mut Option<Gpu>, setup: &rsf_srvk_setup) -> Result<(), Failure> {
     let mut context = Context {
         device,
         owner: null_mut(),
@@ -324,13 +291,8 @@ fn quality_case(device: &Device<'_>, setup: &rsf_srvk_setup) -> Result<(), Failu
         unsafe { rsf_xessvk_shutdown() } == NOT_READY,
         "live XeSS context pins SDK module",
     )?;
-    let ops = device.ops;
-    let native = device.native;
-    let mut images: [rsf_srvk_image; 4] = unsafe { mem::zeroed() };
-    require(
-        unsafe { (ops.allocate)(native, width, height, images.as_mut_ptr()) },
-        "",
-    )?;
+    let gpu = context.device.as_mut().unwrap();
+    let images = gpu.allocate_images(width, height)?;
     let mut record = record(setup.quality, width, height);
     let mut fallback_logs = 0u32;
     let mut frame: rsf_srvk_frame = unsafe { mem::zeroed() };
@@ -353,11 +315,10 @@ fn quality_case(device: &Device<'_>, setup: &rsf_srvk_setup) -> Result<(), Failu
         frame.sharpening.mode = (index - 1) % 4;
         frame.sharpening.sharpness = 0.7;
         frame.exposure.image = u64::from(index == 6 || index == 10);
-        let command = unsafe { (ops.begin)(native) };
-        require(!command.is_null(), "")?;
+        let command = gpu.begin()?;
         unsafe { rsf_srvk_retire_commands(context.owner, command) };
         println!("live sharpening mode={}", frame.sharpening.mode);
-        unsafe { (ops.record)(native, index == 1, color.as_ptr()) };
+        gpu.record(index == 1, color);
         record.frame_id = u64::from(index);
         record.flags = if index == 1 || index == 7 {
             RSF_FRAME_FLAG_RESET
@@ -372,7 +333,7 @@ fn quality_case(device: &Device<'_>, setup: &rsf_srvk_setup) -> Result<(), Failu
             record.flags
         );
         require(result == OK, "Vulkan SR dispatch")?;
-        require(unsafe { (ops.finish)(native, color.as_ptr()) }, "")?;
+        gpu.finish_and_verify(color)?;
     }
     require(
         fallback_logs == 1,

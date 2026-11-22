@@ -59,3 +59,6 @@ mod xess_present_gpu;
 #[cfg(feature = "xess-device")]
 #[path = "../../../runtime/orchestrator/src/vulkan_xess_fg_abi.rs"]
 mod xess_present_options;
+
+#[cfg(feature = "xess-sr")]
+mod xess_sr_gpu;

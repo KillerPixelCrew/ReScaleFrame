@@ -14,7 +14,7 @@ dispatch = []
 ffx = []
 fsr4-state = ["dep:ash"]
 dlss = ["dep:ash"]
-xess-sr = []
+xess-sr = ["dep:ash", "dep:windows-sys"]
 xess-device = ["dep:ash", "dep:windows-sys"]
 
 [dependencies]
