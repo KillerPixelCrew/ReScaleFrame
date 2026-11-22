@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // MSVC x64 CompleteObjectLocator and class hierarchy recovery from a live PE image.
 use super::image::{Section, sidecar_section};
-use super::measure::record;
 use super::memory::{MemoryCache, Region, read, read_exact, readable_extent};
 use super::names::escape_unit;
 use super::sections::{Stream, rsf_dump_now_ms};
 use crate::sys::rsf_dump_image_info;
+use rsf_game_sys::pe32_plus::Mapped;
 use std::ffi::c_char;
 use std::fmt::Write as _;
 use std::mem::transmute;
@@ -15,8 +15,8 @@ use windows_sys::{
     Win32::System::{
         Diagnostics::Debug::{
             IMAGE_DATA_DIRECTORY, IMAGE_DIRECTORY_ENTRY_BASERELOC, IMAGE_DIRECTORY_ENTRY_EXCEPTION,
-            IMAGE_DIRECTORY_ENTRY_RESOURCE, IMAGE_NT_HEADERS64, IMAGE_SCN_MEM_DISCARDABLE,
-            IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ,
+            IMAGE_DIRECTORY_ENTRY_RESOURCE, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_EXECUTE,
+            IMAGE_SCN_MEM_READ,
         },
         LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
     },
@@ -403,7 +403,8 @@ fn prepare(image: &rsf_dump_image_info, deadline: f64) -> Result<Scan, &'static 
         },
     );
     let base = image.base as usize;
-    let headers = unsafe { record::<IMAGE_NT_HEADERS64>(base, image.nt_offset as usize) }
+    let headers = Mapped::read(&mut super::measure::image(base))
+        .map(|mapped| mapped.headers)
         .ok_or("the module headers could not be read for RTTI recovery")?;
     let excluded = [
         IMAGE_DIRECTORY_ENTRY_EXCEPTION,

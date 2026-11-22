@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
-//! Read-only AMD64 PE32+ metadata and file-backed RVA lookup.
+//! Read-only AMD64 PE32+ metadata: file-backed RVA lookup, and the headers of an image the loader
+//! mapped (`Mapped`), read through the caller's own guarded copy.
+
+#[cfg(windows)]
+pub use mapped::Mapped;
 
 const COFF_SIZE: usize = 20;
 const SECTION_SIZE: usize = 40;
@@ -90,6 +94,85 @@ impl<'a> Pe32Plus<'a> {
             return Some((span, u32::from_le_bytes(le(section, 36)?)));
         }
         None
+    }
+}
+
+#[cfg(windows)]
+mod mapped {
+    use std::mem::{MaybeUninit, offset_of, size_of};
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SECTION_HEADER,
+    };
+    use windows_sys::Win32::System::SystemServices::{
+        IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_NT_SIGNATURE,
+    };
+
+    /// The NT headers of a mapped PE32+ image. Header bytes sit at the same offsets in the file
+    /// and in memory, so `read(offset, out, size)` copies `size` bytes at that image offset and
+    /// returns whether every byte was copied.
+    pub struct Mapped {
+        pub nt_offset: usize,
+        pub sections_offset: usize,
+        pub headers: IMAGE_NT_HEADERS64,
+    }
+
+    // Only for the windows-sys PE records, which accept any byte pattern.
+    fn record<T: Copy>(
+        read: &mut impl FnMut(usize, *mut u8, usize) -> bool,
+        offset: usize,
+    ) -> Option<T> {
+        let mut value = MaybeUninit::<T>::zeroed();
+        read(offset, value.as_mut_ptr().cast(), size_of::<T>())
+            .then(|| unsafe { value.assume_init() })
+    }
+
+    impl Mapped {
+        pub fn read(read: &mut impl FnMut(usize, *mut u8, usize) -> bool) -> Option<Self> {
+            let dos: IMAGE_DOS_HEADER = record(read, 0)?;
+            if dos.e_magic != IMAGE_DOS_SIGNATURE {
+                return None;
+            }
+            let nt_offset = usize::try_from(dos.e_lfanew).ok()?;
+            let headers: IMAGE_NT_HEADERS64 = record(read, nt_offset)?;
+            if headers.Signature != IMAGE_NT_SIGNATURE
+                || headers.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
+            {
+                return None;
+            }
+            let sections_offset = nt_offset
+                .checked_add(offset_of!(IMAGE_NT_HEADERS64, OptionalHeader))?
+                .checked_add(headers.FileHeader.SizeOfOptionalHeader.into())?;
+            Some(Self {
+                nt_offset,
+                sections_offset,
+                headers,
+            })
+        }
+
+        pub fn image_size(&self) -> usize {
+            self.headers.OptionalHeader.SizeOfImage as usize
+        }
+
+        pub fn section_count(&self) -> usize {
+            usize::from(self.headers.FileHeader.NumberOfSections)
+        }
+
+        /// Whether the whole section table lies inside SizeOfImage.
+        pub fn sections_fit(&self) -> bool {
+            self.section_count()
+                .checked_mul(size_of::<IMAGE_SECTION_HEADER>())
+                .and_then(|size| self.sections_offset.checked_add(size))
+                .is_some_and(|end| end <= self.image_size())
+        }
+
+        pub fn section(
+            &self,
+            read: &mut impl FnMut(usize, *mut u8, usize) -> bool,
+            index: usize,
+        ) -> Option<IMAGE_SECTION_HEADER> {
+            let offset = index.checked_mul(size_of::<IMAGE_SECTION_HEADER>())?;
+            record(read, self.sections_offset.checked_add(offset)?)
+        }
     }
 }
 

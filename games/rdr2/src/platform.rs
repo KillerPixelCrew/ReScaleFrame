@@ -147,30 +147,19 @@ pub(crate) fn image_header(
     read: unsafe extern "C" fn(usize, *mut c_void, usize) -> bool,
     module: usize,
 ) -> Option<(usize, ImageFacts)> {
-    let read_bytes = |address, bytes: &mut [u8]| unsafe {
-        read(address, bytes.as_mut_ptr().cast(), bytes.len())
-    };
-    let read_word = |address| {
-        let mut bytes = [0; 4];
-        read_bytes(address, &mut bytes).then_some(u32::from_le_bytes(bytes))
-    };
-    let mut dos = [0; 2];
-    if module == 0 || !read_bytes(module, &mut dos) || dos != *b"MZ" {
+    if module == 0 {
         return None;
     }
-    let offset = read_word(module.checked_add(0x3c)?)? as i32;
-    let nt = module.checked_add(usize::try_from(offset).ok()?)?;
-    if read_word(nt)? != PE_SIGNATURE {
-        return None;
-    }
-    // IMAGE_FILE_HEADER.TimeDateStamp and IMAGE_OPTIONAL_HEADER64.SizeOfImage.
-    let timestamp = read_word(nt.checked_add(8)?)?;
-    let image_size = read_word(nt.checked_add(0x50)?)?;
+    let headers = rsf_game_sys::pe32_plus::Mapped::read(&mut |offset, out: *mut u8, size| {
+        module
+            .checked_add(offset)
+            .is_some_and(|address| unsafe { read(address, out.cast(), size) })
+    })?;
     Some((
-        nt,
+        module.checked_add(headers.nt_offset)?,
         ImageFacts {
-            timestamp,
-            image_size,
+            timestamp: headers.headers.FileHeader.TimeDateStamp,
+            image_size: headers.headers.OptionalHeader.SizeOfImage,
         },
     ))
 }

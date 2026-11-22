@@ -1,18 +1,12 @@
 // SPDX-License-Identifier: MIT
 use super::entropy::{entropy, sampled};
 use super::memory::{read, read_guarded};
+use rsf_game_sys::pe32_plus::Mapped;
 use std::ffi::c_void;
-use std::mem::{offset_of, size_of_val};
 use std::ptr::null;
 use windows_sys::Win32::System::{
-    Diagnostics::Debug::{
-        IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SCN_MEM_EXECUTE,
-        IMAGE_SECTION_HEADER,
-    },
-    LibraryLoader::GetModuleHandleW,
-    SystemInformation::GetTickCount64,
-    SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_NT_SIGNATURE},
-    Threading::Sleep,
+    Diagnostics::Debug::IMAGE_SCN_MEM_EXECUTE, LibraryLoader::GetModuleHandleW,
+    SystemInformation::GetTickCount64, Threading::Sleep,
 };
 
 const OK: i32 = 0;
@@ -23,39 +17,26 @@ const STILL_ENCRYPTED: i32 = -5;
 const WINDOW: usize = 65_536;
 const SAMPLES: usize = 16;
 
-// T must have no invalid bit patterns. Use the PE records from the Windows bindings.
-pub(super) unsafe fn record<T: Default>(base: usize, offset: usize) -> Option<T> {
-    let address = base.checked_add(offset)?;
-    let mut raw = T::default();
-    let size = size_of_val(&raw);
-    let (ok, copied) = unsafe { read(address, (&raw mut raw).cast(), size) };
-    (ok && copied == size).then_some(raw)
+/// The guarded reader `Mapped` takes, over the module at `base`.
+pub(super) fn image(base: usize) -> impl FnMut(usize, *mut u8, usize) -> bool {
+    move |offset, out, size| {
+        base.checked_add(offset).is_some_and(|address| {
+            let (ok, copied) = unsafe { read(address, out, size) };
+            ok && copied == size
+        })
+    }
 }
 
 fn executable_span(base: usize) -> Option<(usize, usize)> {
-    let dos: IMAGE_DOS_HEADER = unsafe { record(base, 0) }?;
-    if dos.e_magic != IMAGE_DOS_SIGNATURE {
+    let mut read = image(base);
+    let pe = Mapped::read(&mut read)?;
+    if !pe.sections_fit() {
         return None;
     }
-    let nt = usize::try_from(dos.e_lfanew).ok()?;
-    let headers: IMAGE_NT_HEADERS64 = unsafe { record(base, nt) }?;
-    if headers.Signature != IMAGE_NT_SIGNATURE
-        || headers.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
-    {
-        return None;
-    }
-    let table = nt
-        .checked_add(offset_of!(IMAGE_NT_HEADERS64, OptionalHeader))?
-        .checked_add(headers.FileHeader.SizeOfOptionalHeader.into())?;
-    let count = usize::from(headers.FileHeader.NumberOfSections);
-    let stride = size_of::<IMAGE_SECTION_HEADER>();
-    let image_size = headers.OptionalHeader.SizeOfImage as usize;
-    if table.checked_add(count * stride)? > image_size {
-        return None;
-    }
+    let image_size = pe.image_size();
     let mut largest = (0, 0);
-    for index in 0..count {
-        let section: IMAGE_SECTION_HEADER = unsafe { record(base, table + index * stride) }?;
+    for index in 0..pe.section_count() {
+        let section = pe.section(&mut read, index)?;
         if section.Characteristics & IMAGE_SCN_MEM_EXECUTE != 0 {
             let size = unsafe { section.Misc.VirtualSize } as usize;
             if size > largest.1 {

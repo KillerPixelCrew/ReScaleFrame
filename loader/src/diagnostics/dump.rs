@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: MIT
 use super::image::dump_image;
-use super::measure::{record, rsf_dump_poll_code, rsf_measure_module_code};
+use super::measure::{image, rsf_dump_poll_code, rsf_measure_module_code};
 use super::sections::{Stream, collect_modules, rsf_dump_now_ms};
 use super::sidecar::write_sidecar;
 use crate::sys::*;
+use rsf_game_sys::pe32_plus::Mapped;
 use std::ffi::{OsString, c_char, c_void};
 use std::mem::offset_of;
 use std::os::windows::ffi::OsStringExt;
 use std::ptr::{self, null_mut};
+use std::slice;
 use windows_sys::Win32::{
     Globalization::{CP_UTF8, MultiByteToWideChar},
     System::{
         Diagnostics::Debug::{
-            IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_NT_HEADERS64,
-            IMAGE_NT_OPTIONAL_HDR64_MAGIC,
+            FlushInstructionCache, IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_DIRECTORY_ENTRY_IMPORT,
         },
         LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
-        SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_NT_SIGNATURE},
+        Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect},
+        Threading::GetCurrentProcess,
     },
 };
 
@@ -75,40 +77,67 @@ unsafe fn copy_report(out: *mut rsf_dump_report, mut report: rsf_dump_report, le
     unsafe { ptr::copy_nonoverlapping((&raw const report).cast::<u8>(), out.cast(), copy_length) };
 }
 
-struct ImageHeaders {
-    nt_offset: u32,
-    sections_offset: u32,
-    headers: IMAGE_NT_HEADERS64,
-}
-
-fn read_headers(base: usize) -> Option<ImageHeaders> {
-    let dos: IMAGE_DOS_HEADER = unsafe { record(base, 0) }?;
-    let nt_offset = u32::try_from(dos.e_lfanew).ok()?;
-    if dos.e_magic != IMAGE_DOS_SIGNATURE {
-        return None;
-    }
-    let headers: IMAGE_NT_HEADERS64 = unsafe { record(base, nt_offset as usize) }?;
-    if headers.Signature != IMAGE_NT_SIGNATURE
-        || headers.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
-    {
-        return None;
-    }
-    let sections_offset = nt_offset
-        .checked_add(offset_of!(IMAGE_NT_HEADERS64, OptionalHeader) as u32)?
-        .checked_add(u32::from(headers.FileHeader.SizeOfOptionalHeader))?;
-    Some(ImageHeaders {
-        nt_offset,
-        sections_offset,
-        headers,
-    })
-}
-
 fn dump_base(module: *const c_void) -> usize {
     if module.is_null() {
         (unsafe { GetModuleHandleW(ptr::null()) }) as usize
     } else {
         module as usize
     }
+}
+
+/// Writes `count` bytes at `rva` of the executable. `expected`, when given, must match the bytes
+/// there: a patch aimed at shifted code is far worse than no patch.
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_patch_code(
+    rva: u32,
+    bytes: *const u8,
+    count: u32,
+    expected: *const u8,
+    expected_count: u32,
+    previous: *mut u8,
+) -> rsf_dump_result {
+    if bytes.is_null() || count == 0 {
+        return INVALID_ARGUMENT;
+    }
+    let base = dump_base(ptr::null());
+    let Some(headers) = Mapped::read(&mut image(base)) else {
+        return NOT_A_PE;
+    };
+    if u64::from(rva) + u64::from(count) > headers.image_size() as u64 {
+        return INVALID_ARGUMENT;
+    }
+    let target = (base + rva as usize) as *mut u8;
+    let count = count as usize;
+    if !expected.is_null() && expected_count != 0 {
+        if expected_count as usize != count
+            || unsafe {
+                slice::from_raw_parts(target, count) != slice::from_raw_parts(expected, count)
+            }
+        {
+            return INVALID_ARGUMENT;
+        }
+    }
+    let mut protection = 0;
+    if unsafe {
+        VirtualProtect(
+            target.cast(),
+            count,
+            PAGE_EXECUTE_READWRITE,
+            &mut protection,
+        )
+    } == 0
+    {
+        return WRITE_FAILED;
+    }
+    unsafe {
+        if !previous.is_null() {
+            ptr::copy_nonoverlapping(target, previous, count);
+        }
+        ptr::copy_nonoverlapping(bytes, target, count);
+        VirtualProtect(target.cast(), count, protection, &mut protection);
+        FlushInstructionCache(GetCurrentProcess(), target.cast(), count);
+    }
+    OK
 }
 
 fn module_path(base: usize) -> [u16; PATH] {
@@ -212,7 +241,7 @@ unsafe extern "C" fn rsf_dump_module(
     };
     let started_ms = rsf_dump_now_ms();
     let base = dump_base(module);
-    let Some(image) = read_headers(base) else {
+    let Some(image) = Mapped::read(&mut image(base)) else {
         return NOT_A_PE;
     };
     let header = image.headers.OptionalHeader;
@@ -240,8 +269,8 @@ unsafe extern "C" fn rsf_dump_module(
         image_size: header.SizeOfImage,
         header_size: header.SizeOfHeaders,
         alignment: header.SectionAlignment,
-        nt_offset: image.nt_offset,
-        sections_offset: image.sections_offset,
+        nt_offset: image.nt_offset as u32,
+        sections_offset: image.sections_offset as u32,
         sections: u32::from(image.headers.FileHeader.NumberOfSections),
         import_directory: imports.VirtualAddress,
     };

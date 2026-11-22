@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Static findings identify possible vendor call sites in the loaded executable.
+use rsf_game_sys::pe32_plus::Mapped;
 use std::ffi::{CString, c_char};
-use std::mem::{size_of, size_of_val};
+use std::mem::size_of;
 use windows_sys::Win32::System::{
     Diagnostics::Debug::{
-        IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC,
-        IMAGE_RUNTIME_FUNCTION_ENTRY, IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_EXECUTE,
-        IMAGE_SCN_MEM_READ, IMAGE_SECTION_HEADER, ReadProcessMemory,
+        IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_RUNTIME_FUNCTION_ENTRY,
+        IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ,
+        ReadProcessMemory,
     },
     LibraryLoader::GetModuleHandleW,
-    SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_NT_SIGNATURE},
     Threading::{
         GetCurrentProcess, GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
     },
@@ -127,13 +127,6 @@ impl Image {
             .then_some(())
     }
 
-    // The PE record's fields must accept arbitrary byte patterns.
-    unsafe fn record<T: Default>(&self, offset: usize) -> Option<T> {
-        let mut value = T::default();
-        self.read(offset, (&raw mut value).cast(), size_of_val(&value))?;
-        Some(value)
-    }
-
     fn section(&self, rva: u32, size: u32, image_size: u32) -> Option<Vec<u8>> {
         if rva.checked_add(size)? > image_size {
             return None;
@@ -163,31 +156,16 @@ struct Scan {
 
 impl Scan {
     fn read(image: Image) -> Option<Self> {
-        let dos: IMAGE_DOS_HEADER = unsafe { image.record(0) }?;
-        if dos.e_magic != IMAGE_DOS_SIGNATURE {
+        let mut read = |offset, out: *mut u8, len| image.read(offset, out.cast(), len).is_some();
+        let pe = Mapped::read(&mut read)?;
+        if !pe.sections_fit() {
             return None;
         }
-        let nt_offset = usize::try_from(dos.e_lfanew).ok()?;
-        let nt: IMAGE_NT_HEADERS64 = unsafe { image.record(nt_offset) }?;
-        if nt.Signature != IMAGE_NT_SIGNATURE
-            || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
-        {
-            return None;
-        }
+        let nt = pe.headers;
         let image_size = nt.OptionalHeader.SizeOfImage;
-        let section_table = nt_offset
-            .checked_add(std::mem::offset_of!(IMAGE_NT_HEADERS64, OptionalHeader))?
-            .checked_add(nt.FileHeader.SizeOfOptionalHeader.into())?;
-        let section_count = nt.FileHeader.NumberOfSections as usize;
-        if section_table.checked_add(section_count * size_of::<IMAGE_SECTION_HEADER>())?
-            > image_size as usize
-        {
-            return None;
-        }
         let mut sections = Vec::new();
-        for index in 0..section_count {
-            let section: IMAGE_SECTION_HEADER =
-                unsafe { image.record(section_table + index * size_of::<IMAGE_SECTION_HEADER>()) }?;
+        for index in 0..pe.section_count() {
+            let section = pe.section(&mut read, index)?;
             let flags = section.Characteristics;
             let code = flags & IMAGE_SCN_MEM_EXECUTE != 0;
             if flags & IMAGE_SCN_MEM_READ != 0
