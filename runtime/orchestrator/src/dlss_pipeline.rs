@@ -364,26 +364,6 @@ struct Sink {
     user: usize,
 }
 
-/* Input conditioning this pipeline does for a backend before it evaluates. The alternate backends
-condition their own inputs in the legacy adapter, which resolves dense motion with the unwritten
-sentinel and converts units, so only DLSS declares anything here. Colour transport and colour
-correction are remedies for DLSS's own behaviour: its auto-exposing presets band in dark linear
-HDR, and its output is pulled toward the current jittered frame. */
-#[derive(Clone, Copy)]
-struct Needs {
-    dense_motion: bool,
-    colour_transport: bool,
-    colour_correction: bool,
-}
-
-fn needs_of(backend: u32) -> Needs {
-    let dlss = backend == RSF_SR_DLSS;
-    Needs {
-        dense_motion: dlss,
-        colour_transport: dlss,
-        colour_correction: dlss,
-    }
-}
 
 fn motion_to_uv(frame: &DlssFrame, already_uv: bool) -> [f32; 2] {
     let [x, y] = [frame.motion_scale_x, frame.motion_scale_y];
@@ -426,6 +406,16 @@ fn texture_desc(width: u32, height: u32, format: u32, bind_flags: u32) -> Textur
         usage: RSF_D3D11_USAGE_DEFAULT,
         bind_flags,
         ..Default::default()
+    }
+}
+
+// The optional render-size out-parameters of the quality, resize and backend entries.
+unsafe fn write_render_size(range: &Range, width: *mut u32, height: *mut u32) {
+    if let Some(width) = unsafe { width.as_mut() } {
+        *width = range.width;
+    }
+    if let Some(height) = unsafe { height.as_mut() } {
+        *height = range.height;
     }
 }
 
@@ -498,7 +488,8 @@ impl Pipeline {
     }
 
     // One line through the caller's sink, cut where rsf_logf cuts it.
-    fn emit(&self, text: &[u8]) {
+    fn say(&self, text: impl AsRef<[u8]>) {
+        let text = text.as_ref();
         let sink = *lock(&self.sink);
         let Some(log) = sink.log else {
             return;
@@ -513,9 +504,6 @@ impl Pipeline {
         unsafe { log(sink.user as Raw, line.as_ptr().cast()) };
     }
 
-    fn say(&self, text: impl AsRef<[u8]>) {
-        self.emit(text.as_ref());
-    }
 
     // Streamline, the decode pass and the dump each take their own sink. All are forwarded to ours
     // with a prefix, so one log carries the whole sequence in the order it happened.
@@ -525,7 +513,7 @@ impl Pipeline {
         if !message.is_null() {
             line.extend_from_slice(unsafe { CStr::from_ptr(message) }.to_bytes());
         }
-        self.emit(&line);
+        self.say(&line);
     }
 
     fn set_output(&self, owned: &mut Owned, output: Option<IUnknown>) -> Option<IUnknown> {
@@ -1133,12 +1121,17 @@ impl Pipeline {
         }
 
         let backend = self.shared().backend;
-        let needs = needs_of(backend);
+        /* Dense motion, colour transport and colour correction are conditioning this pipeline does
+        for DLSS only. The alternate backends condition their own inputs in the legacy adapter,
+        which resolves dense motion with the unwritten sentinel and converts units. Colour transport
+        and correction are remedies for DLSS's own behaviour: its auto-exposing presets band in dark
+        linear HDR, and its output is pulled toward the current jittered frame. */
+        let dlss_inputs = backend == RSF_SR_DLSS;
         let mut resolved = false;
         // Shared D3D12 evaluation also needs copy-compatible R16G16 motion and R32 depth, even when
         // the producer already includes camera motion in every sample.
         let reconstruct = camera.camera_motion_included == 0 && camera.has_motion_sentinel != 0;
-        if needs.dense_motion && (reconstruct || !unsafe { (p.present_host)() }.is_null()) {
+        if dlss_inputs && (reconstruct || !unsafe { (p.present_host)() }.is_null()) {
             let Some(rebuilt_resolve) = (unsafe { self.fit_resolve(p, o, render) }) else {
                 return self.finish(o, RESOURCE_FAILED);
             };
@@ -1173,7 +1166,7 @@ impl Pipeline {
             dlss.motion_scale_y = dlss_motion_scale(dlss.motion_scale_y, motion_in_uv, resolved);
         }
         let correct_colour =
-            needs.colour_correction && self.colour_correction.load(Ordering::Acquire);
+            dlss_inputs && self.colour_correction.load(Ordering::Acquire);
         if correct_colour && o.fidelity.is_null() {
             if !o.fidelity_failed {
                 o.fidelity = unsafe { (p.fidelity_create)(o.device()) };
@@ -1190,7 +1183,7 @@ impl Pipeline {
         // DLSS receives an invertible display-range encoding with HDR input off, on every preset,
         // and its output is decoded back to linear before the engine grades it: its auto-exposing
         // presets band in dark linear HDR, and a driver override can replace any preset choice.
-        let transported = needs.colour_transport && self.colour_transport.load(Ordering::Acquire);
+        let transported = dlss_inputs && self.colour_transport.load(Ordering::Acquire);
         if transported && o.transport.is_null() && !o.transport_failed {
             o.transport = unsafe { (p.transport_create)(o.device()) };
             if o.transport.is_null() {
@@ -1984,14 +1977,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         width_out: *mut u32,
         height_out: *mut u32,
     ) -> i32 {
-        let write = |width: u32, height: u32| unsafe {
-            if !width_out.is_null() {
-                width_out.write(width);
-            }
-            if !height_out.is_null() {
-                height_out.write(height);
-            }
-        };
         let Some(guard) = self.owned() else {
             return NOT_RUNNING;
         };
@@ -2029,7 +2014,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             shared.range = range;
             shared.restart_history();
         }
-        write(range.width, range.height);
+        unsafe { write_render_size(&range, width_out, height_out) };
         OK
     }
 
@@ -2053,20 +2038,13 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         if o.device.is_none() || o.output.is_none() {
             return NOT_RUNNING;
         }
-        let write = |range: &Range| unsafe {
-            if !width_out.is_null() {
-                width_out.write(range.width);
-            }
-            if !height_out.is_null() {
-                height_out.write(range.height);
-            }
-        };
+
         let (output, current, backend, quality) = {
             let shared = self.shared();
             (shared.output, shared.range, shared.backend, shared.quality)
         };
         if output == [width, height] {
-            write(&current);
+            unsafe { write_render_size(&current, width_out, height_out) };
             return OK;
         }
         let mut range = Range::alternate([width, height]);
@@ -2127,7 +2105,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         }
         drop(previous_output);
         unsafe { rsf_sr_legacy_destroy(previous_alternate) };
-        write(&range);
+        unsafe { write_render_size(&range, width_out, height_out) };
         self.say(format!(
             "output resized to {width}x{height}; backend {backend} plans {}x{}",
             range.width, range.height
@@ -2252,14 +2230,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             return NOT_SUPPORTED;
         }
         self.shared().restart_history();
-        unsafe {
-            if !width_out.is_null() {
-                width_out.write(range.width);
-            }
-            if !height_out.is_null() {
-                height_out.write(range.height);
-            }
-        }
+        unsafe { write_render_size(&range, width_out, height_out) };
         self.say(format!(
             "selected backend {backend}: {}x{}",
             range.width, range.height
