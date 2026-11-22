@@ -2197,9 +2197,9 @@ Port swap ownership, projection jitter, temporal history and tonemap routing. Ad
 - [ ] [games/anomaly/src/sr_swap.cpp](games/anomaly/src/sr_swap.cpp)
 - [ ] [games/anomaly/src/sr_swap.h](games/anomaly/src/sr_swap.h)
 - [x] [games/anomaly/src/sr_swap_platform.h](games/anomaly/src/sr_swap_platform.h)
-- [ ] [games/anomaly/src/sr_temporal.cpp](games/anomaly/src/sr_temporal.cpp)
-- [ ] [games/anomaly/src/sr_temporal.h](games/anomaly/src/sr_temporal.h)
-- [ ] [games/anomaly/src/sr_tonemap.h](games/anomaly/src/sr_tonemap.h)
+- [x] [games/anomaly/src/sr_temporal.cpp](games/anomaly/src/sr_temporal.cpp)
+- [x] [games/anomaly/src/sr_temporal.h](games/anomaly/src/sr_temporal.h)
+- [x] [games/anomaly/src/sr_tonemap.h](games/anomaly/src/sr_tonemap.h)
 
 **Fixtures (6)**
 
