@@ -94,54 +94,23 @@ extern "C" int rsf_fg12_platform_signal(void* queue, void* fence, uint64_t value
 
 extern "C" void* rsf_fg12_platform_readback(void* source, rsf_fg12_readback_layout* output)
 {
-    auto* resource = static_cast<ID3D12Resource*>(source);
-    const auto desc = resource->GetDesc();
-    if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1) return nullptr;
-    ComPtr<ID3D12Device> device;
-    if (FAILED(resource->GetDevice(IID_PPV_ARGS(&device)))) return nullptr;
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-    uint64_t bytes = 0;
-    device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &bytes);
-    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_READBACK;
-    D3D12_RESOURCE_DESC storage{}; storage.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    storage.Width = bytes; storage.Height = storage.DepthOrArraySize = storage.MipLevels = 1;
-    storage.SampleDesc.Count = 1; storage.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    ComPtr<ID3D12Resource> buffer;
-    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &storage, D3D12_RESOURCE_STATE_COPY_DEST,
-        nullptr, IID_PPV_ARGS(&buffer)))) return nullptr;
-    *output = {bytes, footprint.Offset, footprint.Footprint.Width, footprint.Footprint.Height,
-        uint32_t(footprint.Footprint.Format), footprint.Footprint.RowPitch};
-    return buffer.Detach();
+    return rsf::allocate_readback12(source, output, false);
 }
 
 extern "C" void rsf_fg12_platform_readback_copy(void* list, void* source, uint32_t source_state, void* buffer,
     const rsf_fg12_readback_layout* layout)
 {
-    auto* commands = static_cast<ID3D12GraphicsCommandList*>(list);
-    auto* resource = static_cast<ID3D12Resource*>(source);
-    const auto before = static_cast<D3D12_RESOURCE_STATES>(source_state);
-    D3D12_TEXTURE_COPY_LOCATION from{}, to{};
-    from.pResource = resource; from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    to.pResource = static_cast<ID3D12Resource*>(buffer); to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    to.PlacedFootprint = {layout->offset, {static_cast<DXGI_FORMAT>(layout->format), layout->width,
-        layout->height, 1, layout->row_pitch}};
-    rsf::transition(commands, resource, before, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    commands->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
-    rsf::transition(commands, resource, D3D12_RESOURCE_STATE_COPY_SOURCE, before);
+    rsf::copy_readback12(list, source, source_state, buffer, layout);
 }
 
 extern "C" const uint8_t* rsf_fg12_platform_map(void* buffer, uint64_t bytes)
 {
-    void* mapped = nullptr;
-    const D3D12_RANGE read{0, static_cast<size_t>(bytes)};
-    return SUCCEEDED(static_cast<ID3D12Resource*>(buffer)->Map(0, &read, &mapped))
-        ? static_cast<const uint8_t*>(mapped) : nullptr;
+    return rsf::map_readback12(buffer, bytes);
 }
 
 extern "C" void rsf_fg12_platform_unmap(void* buffer)
 {
-    const D3D12_RANGE written{0, 0};
-    static_cast<ID3D12Resource*>(buffer)->Unmap(0, &written);
+    rsf::unmap_readback12(buffer);
 }
 
 extern "C" void rsf_fg12_platform_dump_record(void* list, void* source, uint32_t state, const rsf_frame_record* record,

@@ -227,7 +227,7 @@ unsafe extern "C" fn rsf_core_dump_sr(
 extern "C" fn rsf_core_dump_sr_result(result: i32) {
     owner(|owner| {
         if let Some(capture) = owner.capture.as_mut().filter(|capture| capture.in_sr) {
-            capture.sr_result = result;
+            capture.sr_result = Some(result);
         }
     });
 }
@@ -300,6 +300,7 @@ unsafe extern "C" fn rsf_core_dump_fg_prepare(
             .as_mut()
             .filter(|capture| capture.matches_pass(pass))
         {
+            capture.fg_result = Some(result);
             capture.fg_constants =
                 metadata::fg_constants(&capture.bundle, frame, record, result).is_ok();
         }

@@ -89,6 +89,7 @@ pub(crate) struct Platform {
     destroy_fence: unsafe extern "C" fn(Handle, u64),
     reset_fence: unsafe extern "C" fn(Handle, u64) -> i32,
     wait_fence: unsafe extern "C" fn(Handle, u64, u64) -> i32,
+    complete_readback: unsafe extern "C" fn(Handle, Handle),
     wants: unsafe extern "C" fn(Handle, u64) -> u32,
     readbacks: unsafe extern "C" fn(Handle) -> u64,
     target: unsafe extern "C" fn(*const Packet, *mut Target),
@@ -107,7 +108,7 @@ const _: () = {
     assert!(size_of::<Target>() == 40 && align_of::<Target>() == 8);
     assert!(std::mem::offset_of!(Target, index) == 8);
     assert!(std::mem::offset_of!(Target, height) == 32);
-    assert!(size_of::<Platform>() == 23 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 24 * size_of::<Handle>());
 };
 
 impl Platform {
@@ -265,6 +266,7 @@ impl Owner {
                 return None;
             }
             state.ledger.completed(family);
+            unsafe { (ops.complete_readback)(native, work.commands) };
         }
         let created = (work.pool != 0
             || unsafe { (ops.create_pool)(native, family, &mut work.pool) } == VK_SUCCESS)
@@ -381,6 +383,7 @@ impl Owner {
             };
         }
         state.ledger.completed(packet.queue_family);
+        unsafe { (ops.complete_readback)(self.native, commands) };
         // Every earlier submitted copy must also have a successful own-fence
         // wait, including other queue families after a previous timeout. No
         // global idle or SDK lock is acquired here. Legacy readbacks have no

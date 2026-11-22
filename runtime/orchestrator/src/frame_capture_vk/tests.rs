@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::capture_test_sink::Sink;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -11,12 +12,7 @@ const DEVICE: usize = 0xd0;
 struct World {
     core: bool,
     core_frame: bool,
-    next_ticket: u64,
-    reserved: Vec<(u64, String, u32, f32)>,
-    failed: Vec<(u64, String, i32)>,
-    published: Vec<(u64, String, u32, Vec<u8>)>,
-    ready: bool,
-    ready_queries: u32,
+    sink: Sink,
     fail_stage: Option<u32>,
     next_handle: u64,
     encoded: Vec<usize>,
@@ -29,17 +25,11 @@ struct World {
 }
 
 thread_local! {
-    static WORLD: RefCell<World> = RefCell::new(World { next_ticket: 7, next_handle: 100, ..World::default() });
+    static WORLD: RefCell<World> = RefCell::new(World { sink: Sink { next_ticket: 7, ..Sink::default() }, next_handle: 100, ..World::default() });
 }
 
 fn world<T>(f: impl FnOnce(&mut World) -> T) -> T {
     WORLD.with(|world| f(&mut world.borrow_mut()))
-}
-
-unsafe fn text(value: *const c_char) -> String {
-    unsafe { CStr::from_ptr(value) }
-        .to_string_lossy()
-        .into_owned()
 }
 
 unsafe extern "C" fn allocate(
@@ -116,23 +106,17 @@ unsafe extern "C" fn wants_frame(_: u64) -> i32 {
 }
 
 unsafe extern "C" fn reserve(
-    _: *const Record,
+    record: *const Record,
     name: *const c_char,
-    _: *const c_char,
+    description: *const c_char,
     view: u32,
     scale: f32,
 ) -> u64 {
-    let name = unsafe { text(name) };
-    world(|w| {
-        w.next_ticket += 1;
-        w.reserved.push((w.next_ticket, name, view, scale));
-        w.next_ticket
-    })
+    world(|w| unsafe { w.sink.reserve(record, name, description, view, scale) })
 }
 
 unsafe extern "C" fn failed(ticket: u64, name: *const c_char, result: i32) {
-    let name = unsafe { text(name) };
-    world(|w| w.failed.push((ticket, name, result)));
+    world(|w| unsafe { w.sink.failed(ticket, name, result) });
 }
 
 unsafe extern "C" fn pixels(
@@ -140,24 +124,9 @@ unsafe extern "C" fn pixels(
     name: *const c_char,
     pixels: *const Pixels,
     api: u32,
-    _: u32,
+    native: u32,
 ) -> i32 {
-    let name = unsafe { text(name) };
-    let pixels = unsafe { &*pixels };
-    assert_eq!(api, VULKAN_API);
-    let bytes =
-        unsafe { std::slice::from_raw_parts(pixels.data.cast::<u8>(), pixels.data_size as usize) }
-            .to_vec();
-    world(|w| w.published.push((ticket, name, pixels.format, bytes)));
-    1
-}
-
-unsafe extern "C" fn gpu_ready(_: u64, _: *const c_char, api: u32, device: Handle) -> i32 {
-    assert_eq!((api, device as usize), (VULKAN_API, DEVICE));
-    world(|w| {
-        w.ready_queries += 1;
-        i32::from(w.ready)
-    })
+    world(|w| unsafe { w.sink.pixels(ticket, name, pixels, api, native) })
 }
 
 static OPS: Platform = Platform {
@@ -172,7 +141,6 @@ static OPS: Platform = Platform {
     reserve,
     failed,
     pixels,
-    gpu_ready,
 };
 
 fn owner(command_completion: bool, legacy: Legacy) -> Owner {
@@ -217,7 +185,14 @@ fn record(owner: &Owner, commands: usize, role: &CStr, group: u64) -> (bool, u64
 
 // The fake GPU writes copied bytes only when a test says the copy executed.
 fn execute(memory: u64) {
-    world(|w| w.memory.get_mut(&memory).unwrap().fill(COPIED));
+    world(|w| {
+        w.memory.get_mut(&memory).unwrap().fill(COPIED);
+        for (&event, &event_memory) in &w.event_memory {
+            if event_memory == memory {
+                w.events.insert(event, true);
+            }
+        }
+    });
 }
 
 fn pending_memory(owner: &Owner, index: usize) -> u64 {
@@ -249,7 +224,7 @@ fn unrequested_frame_does_no_gpu_work() {
     assert_eq!(ticket, 0);
     assert!(owner.lock().pending.is_empty());
     world(|w| {
-        assert!(w.encoded.is_empty() && w.reserved.is_empty() && w.next_handle == 100);
+        assert!(w.encoded.is_empty() && w.sink.reserved.is_empty() && w.next_handle == 100);
     });
 }
 
@@ -274,31 +249,43 @@ fn overflowing_capture_extent_fails_the_exact_ticket_once() {
     assert_ne!(ticket, 0);
     assert!(owner.lock().pending.is_empty());
     world(|w| {
-        assert_eq!(w.reserved, [(ticket, "sr_motion".into(), 7, 8.0)]);
-        assert_eq!(w.failed, [(ticket, "sr_motion".into(), UNSUPPORTED_FORMAT)]);
+        assert_eq!(
+            w.sink.reserved,
+            [(ticket, "sr_motion".into(), "sr-motion-uv".into(), 7, 8.0)]
+        );
+        assert_eq!(
+            w.sink.failed,
+            [(ticket, "sr_motion".into(), UNSUPPORTED_FORMAT)]
+        );
         assert!(w.encoded.is_empty() && w.next_handle == 100);
     });
 }
 
 #[test]
-fn shared_ticket_waits_for_shared_completion_proof() {
+fn ungrouped_ticket_waits_for_its_command_retirement() {
     core();
     let owner = owner(false, Legacy::default());
     let (done, ticket) = record(&owner, 1, c"sr-linear-color", 0);
     assert!(done && ticket != 0);
-    world(|w| assert_eq!(w.reserved, vec![(ticket, "sr_color".into(), 3, 1.0)]));
-    // Queries before the watermark certify the reservation must not map.
-    assert!(poll(&owner));
-    assert!(poll(&owner));
-    world(|w| assert!(w.mapped.is_empty() && w.published.is_empty() && w.ready_queries == 2));
-    execute(pending_memory(&owner, 0));
-    world(|w| w.ready = true);
-    assert!(poll(&owner));
     world(|w| {
-        assert_eq!(w.published.len(), 1);
-        assert_eq!(w.published[0].0, ticket);
-        assert_eq!(w.published[0].2, 28);
-        assert!(w.published[0].3.iter().all(|&b| b == COPIED));
+        assert_eq!(
+            w.sink.reserved,
+            vec![(ticket, "sr_color".into(), "sr-linear-color".into(), 3, 1.0)]
+        )
+    });
+    // Polling without a retirement proof does not map an ungrouped copy.
+    assert!(poll(&owner));
+    assert!(poll(&owner));
+    world(|w| assert!(w.mapped.is_empty() && w.sink.published.is_empty()));
+    execute(pending_memory(&owner, 0));
+    unsafe { rsf_core_capture_vk_retire(&owner, 1 as Handle) };
+    world(|w| {
+        assert_eq!(w.sink.published.len(), 1);
+        assert_eq!(w.sink.published[0].0, ticket);
+        assert_eq!(w.sink.published[0].2, 28);
+        assert_eq!(w.sink.storage, [(VULKAN_API, 37, 2, 2)]);
+        assert_eq!(w.sink.identities, [(2, 9, 0, 0)]);
+        assert!(w.sink.published[0].5.iter().all(|&b| b == COPIED));
         assert_eq!((w.released.len(), w.unmapped), (1, 1));
     });
     assert!(owner.lock().pending.is_empty());
@@ -311,20 +298,19 @@ fn shared_ticket_without_proof_fails_on_full_drain() {
     let (_, ticket) = record(&owner, 1, c"sr-depth", 0);
     assert!(!flush(&owner));
     world(|w| {
-        assert_eq!(w.failed, vec![(ticket, "sr_depth".into(), MAP_FAILED)]);
-        assert!(w.mapped.is_empty() && w.published.is_empty() && w.released.len() == 1);
+        assert_eq!(w.sink.failed, vec![(ticket, "sr_depth".into(), MAP_FAILED)]);
+        assert!(w.mapped.is_empty() && w.sink.published.is_empty() && w.released.len() == 1);
     });
 }
 
 #[test]
-fn exact_group_ignores_shared_watermark_until_completed() {
+fn exact_group_waits_for_its_own_fence() {
     core();
     let owner = owner(false, Legacy::default());
     let (_, ticket) = record(&owner, 1, c"snapshot", 4);
-    // A shared watermark covering the queue is not proof for this exact group.
-    world(|w| w.ready = true);
+
     assert!(poll(&owner));
-    world(|w| assert!(w.mapped.is_empty() && w.ready_queries == 0));
+    world(|w| assert!(w.mapped.is_empty()));
     owner.complete_group(3);
     assert!(poll(&owner));
     world(|w| assert!(w.mapped.is_empty()));
@@ -332,10 +318,9 @@ fn exact_group_ignores_shared_watermark_until_completed() {
     owner.complete_group(4);
     assert!(poll(&owner));
     world(|w| {
-        assert_eq!(w.published.len(), 1);
-        assert_eq!(w.published[0].0, ticket);
-        assert!(w.published[0].3.iter().all(|&b| b == COPIED));
-        assert_eq!(w.ready_queries, 0);
+        assert_eq!(w.sink.published.len(), 1);
+        assert_eq!(w.sink.published[0].0, ticket);
+        assert!(w.sink.published[0].5.iter().all(|&b| b == COPIED));
     });
 }
 
@@ -352,8 +337,11 @@ fn discarded_group_fails_once_and_never_maps() {
     assert_eq!(owner.lock().pending.len(), 1, "allocation kept until drain");
     assert!(flush(&owner));
     world(|w| {
-        assert_eq!(w.failed, vec![(ticket, "snapshot".into(), STAGING_FAILED)]);
-        assert!(w.mapped.is_empty() && w.published.is_empty() && w.released.len() == 1);
+        assert_eq!(
+            w.sink.failed,
+            vec![(ticket, "snapshot".into(), STAGING_FAILED)]
+        );
+        assert!(w.mapped.is_empty() && w.sink.published.is_empty() && w.released.len() == 1);
     });
 }
 
@@ -364,7 +352,7 @@ fn incomplete_group_fails_on_full_drain_without_mapping() {
     let (_, ticket) = record(&owner, 1, c"snapshot", 6);
     assert!(!flush(&owner));
     world(|w| {
-        assert_eq!(w.failed, vec![(ticket, "snapshot".into(), MAP_FAILED)]);
+        assert_eq!(w.sink.failed, vec![(ticket, "snapshot".into(), MAP_FAILED)]);
         assert!(w.mapped.is_empty() && w.released.len() == 1);
     });
 }
@@ -387,14 +375,14 @@ fn command_retirement_matches_exact_executed_commands() {
     unsafe { rsf_core_capture_vk_retire(&owner, 11 as Handle) };
     world(|w| {
         assert_eq!(w.mapped, vec![first_memory]);
-        assert_eq!(w.published.len(), 1);
-        assert_eq!(w.published[0].0, first);
+        assert_eq!(w.sink.published.len(), 1);
+        assert_eq!(w.sink.published[0].0, first);
     });
     // Retiring a recording whose event never signalled abandons it unmapped.
     unsafe { rsf_core_capture_vk_retire(&owner, 12 as Handle) };
     world(|w| {
         assert_eq!(w.mapped.len(), 1);
-        assert_eq!(w.failed, vec![(second, "second".into(), MAP_FAILED)]);
+        assert_eq!(w.sink.failed, vec![(second, "second".into(), MAP_FAILED)]);
         assert_eq!(w.released.len(), 2);
     });
     assert!(owner.lock().pending.is_empty());
@@ -411,7 +399,10 @@ fn partial_allocation_is_retained_then_refused() {
     world(|w| assert!(w.encoded.is_empty()));
     assert!(poll(&owner));
     world(|w| {
-        assert_eq!(w.failed, vec![(ticket, "snapshot".into(), STAGING_FAILED)]);
+        assert_eq!(
+            w.sink.failed,
+            vec![(ticket, "snapshot".into(), STAGING_FAILED)]
+        );
         assert_eq!(w.released, vec![(101, 102, 0)]);
         assert!(w.mapped.is_empty());
     });
@@ -431,7 +422,7 @@ fn refused_sources_reserve_nothing() {
     source.device = 0xbad as Handle;
     assert!(!owner.record(1, &source, &frame(9), c"x", 0, true, &mut ticket, 0));
     assert!(!owner.record(0, &image(37), &frame(9), c"x", 0, true, &mut ticket, 0));
-    world(|w| assert!(w.reserved.is_empty() && w.next_handle == 100));
+    world(|w| assert!(w.sink.reserved.is_empty() && w.next_handle == 100));
 }
 
 #[test]
@@ -444,7 +435,10 @@ fn oversized_reservation_fails_unsupported() {
     let mut ticket = 0;
     assert!(!owner.record(1, &source, &frame(9), c"big", 0, true, &mut ticket, 0));
     world(|w| {
-        assert_eq!(w.failed, vec![(ticket, "big".into(), UNSUPPORTED_FORMAT)]);
+        assert_eq!(
+            w.sink.failed,
+            vec![(ticket, "big".into(), UNSUPPORTED_FORMAT)]
+        );
         assert_eq!(w.next_handle, 100);
     });
 }
@@ -456,7 +450,7 @@ fn non_core_source_skips_reservation() {
     let mut ticket = 1;
     assert!(owner.record(1, &image(37), &frame(9), c"x", 0, false, &mut ticket, 0));
     assert_eq!(ticket, 0);
-    world(|w| assert!(w.reserved.is_empty() && w.next_handle == 100));
+    world(|w| assert!(w.sink.reserved.is_empty() && w.next_handle == 100));
 }
 
 #[test]
@@ -468,7 +462,10 @@ fn destroy_fails_pending_tickets_and_releases_without_mapping() {
     drop(owner);
     world(|w| {
         assert!(w.mapped.is_empty() && w.released.len() == 1);
-        assert_eq!(w.failed, vec![(ticket, "snapshot".into(), STAGING_FAILED)]);
+        assert_eq!(
+            w.sink.failed,
+            vec![(ticket, "snapshot".into(), STAGING_FAILED)]
+        );
     });
 }
 
@@ -497,12 +494,12 @@ fn legacy_publishes_only_after_drain() {
     // Shared polling never writes a legacy-only readback.
     assert!(poll(&owner));
     world(|w| assert!(w.mapped.is_empty()));
-    assert!(!directory.join("2-9-fg-hudless-color-0.raw").exists());
+    assert!(!directory.join("2-9-v0-g0-fg-hudless-color-0.raw").exists());
     execute(pending_memory(&owner, 0));
     assert!(flush(&owner));
-    let raw = fs::read(directory.join("2-9-fg-hudless-color-0.raw")).unwrap();
+    let raw = fs::read(directory.join("2-9-v0-g0-fg-hudless-color-0.raw")).unwrap();
     assert_eq!(raw, vec![COPIED; 16]);
-    let json = fs::read_to_string(directory.join("2-9-fg-hudless-color-0.json")).unwrap();
+    let json = fs::read_to_string(directory.join("2-9-v0-g0-fg-hudless-color-0.json")).unwrap();
     assert!(json.starts_with("{\n\"role\":\"fg-hudless-color\",\n\"frame\":9,\n\"session\":2,"));
     assert!(json.contains("\"row_pitch\":8,\n\"offset\":0,\n\"vk_format\":37,\n\"bytes\":16,"));
     assert!(json.contains("\"completion\":\"owner-drained-context-retirement\",\n\"fg_backend\":3,\n\"provider_version_id\":77,"));
@@ -511,7 +508,7 @@ fn legacy_publishes_only_after_drain() {
 }
 
 #[test]
-fn shared_core_and_legacy_publish_once_each() {
+fn core_and_legacy_use_the_same_execution_proof() {
     core();
     let directory = legacy_directory("both");
     let owner = owner(
@@ -523,18 +520,56 @@ fn shared_core_and_legacy_publish_once_each() {
         },
     );
     let (_, ticket) = record(&owner, 1, c"sr-depth", 0);
-    execute(pending_memory(&owner, 0));
-    world(|w| w.ready = true);
     assert!(poll(&owner));
-    world(|w| assert_eq!((w.published.len(), w.published[0].0), (1, ticket)));
-    assert_eq!(
-        owner.lock().pending.len(),
-        1,
-        "legacy copy waits for the drain"
+    assert!(!flush(&owner));
+    world(|w| {
+        assert_eq!(w.sink.failed, [(ticket, "sr_depth".into(), MAP_FAILED)]);
+        assert!(w.mapped.is_empty());
+    });
+    assert!(!directory.join("2-9-v0-g0-sr-depth-0.raw").exists());
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn legacy_artifacts_distinguish_views_generations_and_repeated_evaluations() {
+    let directory = legacy_directory("identity");
+    let owner = owner(
+        false,
+        Legacy {
+            directory: Some(directory.clone()),
+            first: 9,
+            count: 1,
+        },
     );
+    let mut identity = frame(9);
+    for (view, generation) in [(1, 2), (2, 2), (1, 3), (1, 2)] {
+        identity.view_id = view;
+        identity.resource_generation = generation;
+        assert!(owner.record(
+            3,
+            &image(37),
+            &identity,
+            c"role\"quote",
+            0,
+            false,
+            &mut 0,
+            0
+        ));
+    }
+    for index in 0..4 {
+        execute(pending_memory(&owner, index));
+    }
     assert!(flush(&owner));
-    world(|w| assert_eq!((w.published.len(), w.mapped.len()), (1, 2)));
-    assert!(directory.join("2-9-sr-depth-0.raw").exists());
+    for stem in [
+        "v1-g2-role%22quote-0",
+        "v2-g2-role%22quote-0",
+        "v1-g3-role%22quote-0",
+        "v1-g2-role%22quote-0-repeat1",
+    ] {
+        let json = fs::read_to_string(directory.join(format!("2-9-{stem}.json"))).unwrap();
+        assert!(json.contains(r#""role":"role\"quote""#));
+        assert!(directory.join(format!("2-9-{stem}.raw")).is_file());
+    }
     let _ = fs::remove_dir_all(&directory);
 }
 

@@ -6,7 +6,11 @@ mod auxiliary_sr;
 mod auxiliary_sr_abi;
 #[cfg(windows)]
 mod callback_host;
+mod capture_metadata;
 mod capture_names;
+mod capture_pixels;
+#[cfg(test)]
+mod capture_test_sink;
 #[cfg(windows)]
 mod colour_d3d11;
 #[cfg(windows)]
@@ -300,6 +304,8 @@ mod ui_layer;
 mod ui_layer_abi;
 #[cfg(windows)]
 mod vulkan_antilag;
+#[cfg(windows)]
+mod vulkan_capture_commands;
 #[cfg(windows)]
 mod vulkan_dispatch;
 #[cfg(windows)]

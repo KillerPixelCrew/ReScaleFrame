@@ -2,7 +2,9 @@
 use super::{Constant, DumpResult, Handle, Immediate, OK, Request};
 use crate::com_ref::ComRef;
 use crate::d3d11_observer_abi::rsf_observer_options;
-use crate::input_dump::{DECODED_MOTION, Log, TextureOptions};
+use crate::input_dump::{
+    DECODED_MOTION, ENCODED_MOTION, Log, MotionEncoding, MotionTextureOptions, TextureOptions,
+};
 use crate::render_abi::rsf_backend_log_fn;
 use rsf_game_sys::sr_abi::rsf_motion_decode_params as DecodeParams;
 use std::ffi::{CStr, CString};
@@ -46,7 +48,7 @@ impl DumpSettings {
 #[repr(C)]
 pub(super) struct DumpPlatform {
     pub(super) immediate: Immediate,
-    texture: unsafe extern "C" fn(Handle, Handle, Handle, &TextureOptions) -> i32,
+    texture: unsafe extern "C" fn(Handle, Handle, Handle, *const TextureOptions) -> i32,
     read_buffer: unsafe extern "C" fn(Handle, Handle, Handle, Handle, u32) -> i32,
     create_decode:
         unsafe extern "C" fn(Handle, Handle, rsf_backend_log_fn, Handle, *mut Handle) -> i32,
@@ -81,7 +83,26 @@ struct Writer<'a> {
 impl Writer<'_> {
     fn texture(&self, source: Handle, prefix: &CStr, view: u32) -> i32 {
         let options = TextureOptions::new(prefix, view, 0.0, self.log);
-        unsafe { (self.platform.texture)(self.device, self.context, source, &options) }
+        if view == ENCODED_MOTION && self.settings.decode_motion != 0 {
+            let extended = MotionTextureOptions::new(
+                options,
+                MotionEncoding {
+                    scale: [self.settings.scale; 2],
+                    bias: [self.settings.bias; 2],
+                    zero_x_unwritten: 1,
+                },
+            );
+            unsafe {
+                (self.platform.texture)(
+                    self.device,
+                    self.context,
+                    source,
+                    std::ptr::from_ref(&extended).cast(),
+                )
+            }
+        } else {
+            unsafe { (self.platform.texture)(self.device, self.context, source, &options) }
+        }
     }
 
     fn decoded(&self, source: Handle, prefix: &str) {

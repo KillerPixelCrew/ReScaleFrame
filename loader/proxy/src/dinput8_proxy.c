@@ -822,7 +822,7 @@ static void report_and_dump(void)
     snprintf(prefix, sizeof(prefix), "%s\\capture%02u", observe_directory, index);
     /* The work happens inside the next present. Reading a resource from this thread would race
        the game's own rendering, which is what took the process down the first time. */
-    const rsf_observer_result requested = rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_VELOCITY);
+    const rsf_observer_result requested = rsf_observer_request_dump(prefix, RSF_DUMP_VIEW_ENCODED_MOTION);
 
     char sizes[MAX_PATH * 2];
     snprintf(sizes, sizeof(sizes), "%s\\capture%02u-buffer-sizes.csv", observe_directory, index);

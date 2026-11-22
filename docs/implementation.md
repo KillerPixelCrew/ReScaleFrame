@@ -1310,10 +1310,17 @@ and maximum-wait paths. Builds, fixtures and live checks remain open.
 The common Vulkan-to-D3D12 importer and FG graphics leaves call typed
 Vulkan procedures from Rust. FSR4 and XeSS wait for the consumer timeline
 and Vulkan source fences before replacing depth and motion on a render
-extent change. The existing capture adapter and shared C++ device fixture
-remain. Source checks compared the Vulkan names and private table layouts,
+extent change. The shared capture owner now provides the readback adapter
+directly from Rust. The shared C++ device fixture remains. Source checks
+compared the Vulkan names and private table layouts,
 and locked Windows metadata resolved. Compile, link, fixture and device
 checks remain open. [Vulkan D3D12 interop](research/rust-vulkan-dx12-interop.md)
+
+Shared texture capture now performs Vulkan and D3D11 readback in Rust.
+Vulkan publication requires proof for the exact group or retired command
+buffer. D3D12 and Vulkan share the legacy metadata and artifact names carry
+view and generation. Source and ABI checks passed. Builds, fixtures and
+device checks remain open. [Shared capture port](research/rust-shared-capture-port.md)
 
 The standalone FSR3 bridge now binds the SDK and owns the SR, FG and
 swapchain transactions in Rust. It keeps the active FG and swapchain

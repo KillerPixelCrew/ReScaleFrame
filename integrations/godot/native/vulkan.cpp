@@ -71,10 +71,11 @@ rsf_frame_record dump_record{};
 int32_t release_capture(void* user) {
     if (!dump_owner || dump_setup.user != user) return RSF_BACKEND_OK;
     const auto joined = rsf_input_dump_vk_drain(dump_owner);
-    if (joined != RSF_BACKEND_OK) return joined;
-    (void)dump_stages.flush();
+    if (joined != RSF_BACKEND_OK && joined != RSF_INPUT_DUMP_VK_DEVICE_LOST) return joined;
     const auto stopped = rsf_input_dump_vk_destroy(dump_owner);
     if (stopped != RSF_BACKEND_OK) return stopped;
+    if (joined == RSF_BACKEND_OK) (void)dump_stages.flush();
+    else dump_stages.discard_all();
     dump_owner = nullptr; dump_chain = VK_NULL_HANDLE; dump_record = {}; dump_setup = {};
     return RSF_BACKEND_OK;
 }
@@ -129,11 +130,6 @@ void capture_present_impl(rsf_fgvk* owner, const void* native_info, int32_t resu
     const rsf_srvk_image image{dump_setup.graphics.device, images[info.pImageIndices[0]], uint32_t(dump_format),
         dump_extent.width, dump_extent.height, layout, (dump_usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ? 1u : 0u};
     const auto code = rsf_input_dump_vk_snapshot(dump_owner, &record, &image, "final_color");
-    if (code) {
-        const auto submitted = rsf_input_dump_gpu_submission(&record);
-        if (rsf_input_dump_vk_drain(dump_owner) == RSF_BACKEND_OK)
-            rsf_input_dump_gpu_completed(submitted, 3, dump_setup.graphics.device);
-    }
     if (code && logger) logger(logger_user, "Core frame dump: final Vulkan image could not be read; see the bundle's missing stage.");
 }
 #endif
@@ -496,6 +492,9 @@ extern "C" int32_t rsfg_vk_present(void* value, const void* info) try {
 } catch (...) { return -3; }
 extern "C" void rsfg_vk_recording_begin(void* commands) try {
     std::lock_guard lock(guard);
+#if defined(RSF_FRAME_DUMP_VULKAN)
+    dump_stages.retire_commands(static_cast<VkCommandBuffer>(commands));
+#endif
     rsf_srvk_session_retire(static_cast<rsf_srvk_session*>(rsf_godot_vk_sr_context()), commands);
 } catch (...) {}
 extern "C" void rsfg_vk_submitted(void* const* commands, uint32_t count) try {

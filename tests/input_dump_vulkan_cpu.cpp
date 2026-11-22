@@ -33,6 +33,7 @@ struct Queue {
     bool fence_reset = false, pending = false, ready = true, signaled = false;
     bool missing_wait = false, fail_fence = false, fail_bind = false, fail_end = false;
     VkResult submit_result = VK_SUCCESS;
+    bool lost_on_wait = false;
     Readback* recording = nullptr;
     Readback* queued = nullptr;
 
@@ -109,6 +110,11 @@ VKAPI_ATTR VkResult VKAPI_CALL wait_fences(VkDevice device, uint32_t count, cons
     check(count == 1 && fences[0] == q.fence() && all == VK_TRUE, "Wait on the exact submitted fence.");
     ++q.waits;
     q.timeout = timeout;
+    if (q.lost_on_wait) {
+        q.queued = nullptr;
+        q.pending = false;
+        return VK_ERROR_DEVICE_LOST;
+    }
     if (q.pending && q.ready) {
         if (q.queued) q.queued->copied = true;
         q.queued = nullptr;
@@ -316,9 +322,6 @@ int main(int argc, char** argv) {
     check(rsf_input_dump_vk_snapshot(owner, &frame, &image, "refused_end") == RSF_BACKEND_ERROR_FEATURE_FAILED &&
         !q.submits && q.copies_recorded == 1 && q.frees == 1 && !q.last().live, "Discard a copy whose command buffer could not end.");
     q.fail_end = false;
-    const auto poisoned = rsf_input_dump_gpu_submission(&frame);
-    check(poisoned != 0, "Construct a same-frame shared completion token.");
-    rsf_input_dump_gpu_completed(poisoned, 3, q.device());
     check(rsf_input_dump_vk_snapshot(owner, &frame, &image, "successful") == RSF_BACKEND_OK &&
         q.submits == 1 && q.maps == 1 && !q.invalid_maps && q.frees == 2 && q.timeout == 15000000000ull,
         "Only the successful recording publishes after its own bounded fence wait.");
@@ -355,12 +358,12 @@ int main(int argc, char** argv) {
     check(rsf_input_dump_vk_drain(owner) == RSF_BACKEND_ERROR_NOT_READY && q.markers == 1 && q.maps == 1 && q.frees == 4,
         "Drain does not issue another submit until the exact pending fence retires.");
     check(!rsf_input_dump_gpu_ready(later_ticket, "later_engine", 3, q.device()),
-        "A stale watermark cannot become evidence for the later stage.");
+        "A pending snapshot cannot certify an independent recording.");
     q.ready = true;
     check(rsf_input_dump_vk_drain(owner) == RSF_BACKEND_OK && q.markers == 2 && q.maps == 2 &&
         !q.invalid_maps && q.frees == 5 && !q.pending, "Retry retires the original submitted readback exactly once.");
-    check(rsf_input_dump_gpu_ready(later_ticket, "later_engine", 3, q.device()) != 0,
-        "A completed snapshot still certifies the earlier engine stages on its queue.");
+    check(!rsf_input_dump_gpu_ready(later_ticket, "later_engine", 3, q.device()),
+        "A completed snapshot certifies only its own readback group.");
     rsf_input_dump_failed(engine_ticket, "engine", RSF_TEXTURE_ERROR_STAGING_FAILED);
     rsf_input_dump_failed(later_ticket, "later_engine", RSF_TEXTURE_ERROR_STAGING_FAILED);
     rsf_input_dump_complete(&frame, 0);
@@ -368,11 +371,11 @@ int main(int argc, char** argv) {
     const std::string pixel("\x40\x80\xff\0", 4);
     for (const char* accepted : {"successful", "final_color"}) {
         check(read(bundle / (std::string(accepted) + ".bin")) == pixel, "Publish exact pixels through the shared capture owner.");
-        check(read(legacy / (std::string("31-32-") + accepted + "-0.raw")) == pixel, "Publish matching pixels through optional legacy output.");
+        check(read(legacy / (std::string("31-32-v33-g0-") + accepted + "-0.raw")) == pixel, "Publish matching pixels through optional legacy output.");
     }
     for (const char* refused : {"refused_bind", "refused_end", "refused_submit", "blocked"}) {
         check(!std::filesystem::exists(bundle / (std::string(refused) + ".bin")) &&
-            !std::filesystem::exists(legacy / (std::string("31-32-") + refused + "-0.raw")),
+            !std::filesystem::exists(legacy / (std::string("31-32-v33-g0-") + refused + "-0.raw")),
             "Publish neither core nor legacy files for abandoned work.");
     }
 
@@ -391,17 +394,29 @@ int main(int argc, char** argv) {
     rsf_input_dump_request();
     check(rsf_input_dump_begin_record(&frame, 2) != 0, "Arm a new request even for a reused frame identity.");
     q.ready = false;
-    q.submit_result = VK_ERROR_DEVICE_LOST;
-    check(rsf_input_dump_vk_snapshot(owner, &frame, &image, "uncertain_submit") == RSF_BACKEND_ERROR_FEATURE_FAILED &&
-        q.pending && q.last().live && q.frees == 5, "A device-loss submit may leave work in use without valid pixels.");
-    const auto blocked_destroy = rsf_input_dump_vk_destroy(owner);
-    check(blocked_destroy == RSF_BACKEND_ERROR_NOT_READY,
-        "An uncertain submission retains the owner when the fence has no completion.");
-    if (blocked_destroy != RSF_BACKEND_ERROR_NOT_READY) return 1;
-    q.ready = true;
+    q.lost_on_wait = true;
+    check(rsf_input_dump_vk_snapshot(owner, &frame, &image, "lost_device") == RSF_INPUT_DUMP_VK_DEVICE_LOST &&
+        !q.pending && q.last().live && q.frees == 5, "A lost fence reports a terminal device failure.");
+    check(rsf_input_dump_vk_drain(owner) == RSF_INPUT_DUMP_VK_DEVICE_LOST,
+        "A lost device cannot resume submitting capture work.");
     check(rsf_input_dump_vk_destroy(owner) == RSF_BACKEND_OK && q.maps == 2 && q.frees == 6 &&
-        !std::filesystem::exists(legacy / "31-32-uncertain_submit-0.raw"),
-        "Retire uncertain work without allowing its fence to publish discarded data.");
+        !std::filesystem::exists(legacy / "31-32-v33-g0-lost_device-0.raw"),
+        "Retire the lost device's allocation without publishing discarded data.");
+    rsf_input_dump_cancel(0);
+    if (rsf_input_dump_vk_create(&setup, &owner) != RSF_BACKEND_OK || !owner) return 1;
+    rsf_input_dump_request();
+    check(rsf_input_dump_begin_record(&frame, 2) != 0, "Arm the uncertain submit case.");
+    q.lost_on_wait = false;
+    q.submit_result = VK_ERROR_DEVICE_LOST;
+    check(rsf_input_dump_vk_snapshot(owner, &frame, &image, "uncertain_submit") == RSF_INPUT_DUMP_VK_DEVICE_LOST &&
+        q.pending && q.last().live && q.frees == 6, "A lost submit can leave its allocation in use.");
+    const auto retained = rsf_input_dump_vk_destroy(owner);
+    check(retained == RSF_BACKEND_ERROR_NOT_READY, "A fence timeout preserves the uncertain submit.");
+    if (retained != RSF_BACKEND_ERROR_NOT_READY) return 1;
+    q.lost_on_wait = true;
+    check(rsf_input_dump_vk_destroy(owner) == RSF_BACKEND_OK && q.maps == 2 && q.frees == 7 &&
+        !std::filesystem::exists(legacy / "31-32-v33-g0-uncertain_submit-0.raw"),
+        "A terminal fence result permits teardown without mapping the rejected copy.");
     rsf_input_dump_cancel(0);
     return passed ? 0 : 1;
 }

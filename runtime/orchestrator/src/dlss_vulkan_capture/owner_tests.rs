@@ -232,6 +232,8 @@ unsafe extern "C" fn metadata(
         .push((sequence, result, ready, flushed));
 }
 
+unsafe extern "C" fn ignore_readback(_: Handle, _: Handle) {}
+
 static PLATFORM: Platform = Platform {
     open,
     close,
@@ -246,6 +248,7 @@ static PLATFORM: Platform = Platform {
     destroy_fence,
     reset_fence,
     wait_fence,
+    complete_readback: ignore_readback,
     wants,
     readbacks,
     target,

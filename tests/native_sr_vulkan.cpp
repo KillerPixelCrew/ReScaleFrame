@@ -103,10 +103,10 @@ void capture_retirement_contract()
     capture.retire_commands(second);
     require(device.mapped == 1 && device.released == 2 && capture.pending_count() == 1, "abandoned recording is discarded without mapping");
     require(capture.flush() && device.mapped == 2 && device.released == 3 && capture.pending_count() == 0, "full drain retires remaining executed readbacks");
-    require(std::filesystem::file_size(directory / "1-1-submitted-0.raw") == 4 &&
-        !std::filesystem::exists(directory / "1-1-abandoned-0.raw"), "capture bytes only come from executed copies");
-    for (const auto* filename : {"1-1-submitted-0.raw", "1-1-submitted-0.json", "1-1-drained-0.raw",
-        "1-1-drained-0.json", "capture-errors.log"}) std::filesystem::remove(directory / filename);
+    require(std::filesystem::file_size(directory / "1-1-v0-g0-submitted-0.raw") == 4 &&
+        !std::filesystem::exists(directory / "1-1-v0-g0-abandoned-0.raw"), "capture bytes only come from executed copies");
+    for (const auto* filename : {"1-1-v0-g0-submitted-0.raw", "1-1-v0-g0-submitted-0.json", "1-1-v0-g0-drained-0.raw",
+        "1-1-v0-g0-drained-0.json", "capture-errors.log"}) std::filesystem::remove(directory / filename);
     std::filesystem::remove(directory);
 }
 

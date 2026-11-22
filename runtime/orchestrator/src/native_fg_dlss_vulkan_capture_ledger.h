@@ -36,6 +36,7 @@ typedef struct rsf_dlss_capture_platform {
     void (*destroy_fence)(void*, uint64_t);
     int32_t (*reset_fence)(void*, uint64_t);
     int32_t (*wait_fence)(void*, uint64_t, uint64_t timeout);
+    void (*complete_readback)(void*, void* commands);
     uint32_t (*wants)(void*, uint64_t frame);
     uint64_t (*readbacks)(void*);
     void (*target)(const rsf_sl_present_capture_packet*, rsf_dlss_capture_target*);

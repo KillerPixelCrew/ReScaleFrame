@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "d3d12_helpers.h"
+#include "d3d12_readback.h"
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/capture_names.h>
 #include <wrl/client.h>
@@ -21,10 +21,9 @@
 // These native leaves only issue typed D3D12 and Win32 calls.
 extern "C" {
 struct rsf_core_capture12;
-struct rsf_core_capture12_layout { uint64_t bytes, offset; uint32_t width, height, format, row_pitch; };
 struct rsf_core_capture12_platform {
-    void* (*allocate)(void* source, rsf_core_capture12_layout*);
-    void (*copy)(void* list, void* source, uint32_t state, void* buffer, const rsf_core_capture12_layout*);
+    void* (*allocate)(void* source, rsf_fg12_readback_layout*);
+    void (*copy)(void* list, void* source, uint32_t state, void* buffer, const rsf_fg12_readback_layout*);
     const uint8_t* (*map)(void* buffer, uint64_t bytes);
     void (*unmap)(void* buffer);
     void* (*signal)(void* queue);
@@ -36,7 +35,7 @@ struct rsf_core_capture12_platform {
     int (*pixels)(uint64_t, const char*, const rsf_dump_pixels*, uint32_t, uint32_t);
 };
 static_assert(sizeof(rsf_core_capture12_platform) == 11 * sizeof(void*));
-static_assert(sizeof(rsf_core_capture12_layout) == 32 && sizeof(rsf_dump_pixels) == 40);
+static_assert(sizeof(rsf_fg12_readback_layout) == 32 && sizeof(rsf_dump_pixels) == 40);
 rsf_core_capture12* rsf_core_capture12_create(uint32_t environment, const rsf_core_capture12_platform*);
 void rsf_core_capture12_destroy(rsf_core_capture12*);
 int32_t rsf_core_capture12_enabled(const rsf_core_capture12*);
@@ -61,45 +60,8 @@ namespace rsf {
 class FrameCapture12 {
     rsf_core_capture12* owner = nullptr;
 
-    static void* allocate_leaf(void* raw, rsf_core_capture12_layout* out) noexcept {
-        auto* source = static_cast<ID3D12Resource*>(raw);
-        const auto desc = source->GetDesc();
-        if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 || desc.DepthOrArraySize != 1) return nullptr;
-        Microsoft::WRL::ComPtr<ID3D12Device> device;
-        if (FAILED(source->GetDevice(IID_PPV_ARGS(&device)))) return nullptr;
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-        UINT rows = 0; UINT64 row_bytes = 0, bytes = 0;
-        device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &rows, &row_bytes, &bytes);
-        D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_READBACK;
-        D3D12_RESOURCE_DESC storage{}; storage.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        storage.Width = bytes; storage.Height = storage.DepthOrArraySize = storage.MipLevels = 1;
-        storage.SampleDesc.Count = 1; storage.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        ID3D12Resource* buffer = nullptr;
-        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &storage, D3D12_RESOURCE_STATE_COPY_DEST,
-            nullptr, IID_PPV_ARGS(&buffer)))) return nullptr;
-        *out = {bytes, footprint.Offset, footprint.Footprint.Width, footprint.Footprint.Height,
-            uint32_t(footprint.Footprint.Format), footprint.Footprint.RowPitch};
-        return buffer;
-    }
-    static void copy_leaf(void* list, void* raw, uint32_t state, void* buffer, const rsf_core_capture12_layout* layout) noexcept {
-        auto* commands = static_cast<ID3D12GraphicsCommandList*>(list);
-        auto* source = static_cast<ID3D12Resource*>(raw);
-        const auto before = static_cast<D3D12_RESOURCE_STATES>(state);
-        transition(commands, source, before, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        D3D12_TEXTURE_COPY_LOCATION from{}; from.pResource = source; from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        D3D12_TEXTURE_COPY_LOCATION to{}; to.pResource = static_cast<ID3D12Resource*>(buffer); to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        to.PlacedFootprint = {layout->offset, {static_cast<DXGI_FORMAT>(layout->format), layout->width, layout->height, 1, layout->row_pitch}};
-        commands->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
-        transition(commands, source, D3D12_RESOURCE_STATE_COPY_SOURCE, before);
-    }
-    static const uint8_t* map_leaf(void* buffer, uint64_t bytes) noexcept {
-        void* data = nullptr;
-        const D3D12_RANGE range{0, static_cast<size_t>(bytes)};
-        return SUCCEEDED(static_cast<ID3D12Resource*>(buffer)->Map(0, &range, &data)) ? static_cast<const uint8_t*>(data) : nullptr;
-    }
-    static void unmap_leaf(void* buffer) noexcept {
-        const D3D12_RANGE written{0, 0};
-        static_cast<ID3D12Resource*>(buffer)->Unmap(0, &written);
+    static void* allocate_leaf(void* raw, rsf_fg12_readback_layout* out) noexcept {
+        return allocate_readback12(raw, out, true);
     }
     static void* signal_leaf(void* raw) noexcept {
         auto* queue = static_cast<ID3D12CommandQueue*>(raw);
@@ -125,7 +87,7 @@ class FrameCapture12 {
     }
 public:
     static const rsf_core_capture12_platform* native_platform() noexcept {
-        static const rsf_core_capture12_platform value{allocate_leaf, copy_leaf, map_leaf, unmap_leaf, signal_leaf,
+        static const rsf_core_capture12_platform value{allocate_leaf, copy_readback12, map_readback12, unmap_readback12, signal_leaf,
             completed_leaf, drain_leaf, rsf_input_dump_wants, rsf_input_dump_reserve, rsf_input_dump_failed,
             rsf_input_dump_pixels};
         return &value;

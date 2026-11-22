@@ -75,7 +75,6 @@ unsafe extern "C" fn rsf_core_dump_begin_record(
         }
         capture.record = Some(*frame);
         capture.backend = backend;
-        capture.sr_result = 0;
         capture.constants = metadata::frame(&capture.bundle, frame, backend).is_ok();
         owner.publish("capturing");
         1
@@ -83,7 +82,7 @@ unsafe extern "C" fn rsf_core_dump_begin_record(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_wants(input: *const rsf_frame_record) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_core_dump_wants(input: *const rsf_frame_record) -> i32 {
     i32::from(unsafe { record(input) }.is_some_and(|frame| {
         owner(|owner| {
             owner
@@ -95,7 +94,7 @@ unsafe extern "C" fn rsf_core_dump_wants(input: *const rsf_frame_record) -> i32 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_wants_frame(frame: u64) -> i32 {
+pub(crate) extern "C" fn rsf_core_dump_wants_frame(frame: u64) -> i32 {
     i32::from(owner(|owner| {
         owner
             .capture
@@ -126,7 +125,7 @@ extern "C" fn rsf_core_dump_requested() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_reserve(
+pub(crate) unsafe extern "C" fn rsf_core_dump_reserve(
     input: *const rsf_frame_record,
     name: *const c_char,
     description: *const c_char,
@@ -161,7 +160,11 @@ unsafe extern "C" fn rsf_core_dump_reserve(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_failed(ticket: u64, name: *const c_char, result: i32) {
+pub(crate) unsafe extern "C" fn rsf_core_dump_failed(
+    ticket: u64,
+    name: *const c_char,
+    result: i32,
+) {
     let Some(name) = (unsafe { string(name) }) else {
         return;
     };
@@ -186,7 +189,7 @@ unsafe extern "C" fn rsf_core_dump_failed(ticket: u64, name: *const c_char, resu
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_pixels(
+pub(crate) unsafe extern "C" fn rsf_core_dump_pixels(
     ticket: u64,
     name: *const c_char,
     input: *const Pixels,
@@ -258,65 +261,18 @@ unsafe extern "C" fn rsf_core_dump_complete(input: *const rsf_frame_record, resu
     }
 }
 
+// Preserve the native entry points. A frame record cannot identify a submitted batch.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_gpu_submission(input: *const rsf_frame_record) -> u64 {
-    let Some(frame) = (unsafe { record(input) }) else {
-        return 0;
-    };
-    owner(|owner| {
-        owner
-            .capture
-            .as_ref()
-            .filter(|capture| capture.wants(frame))
-            .map_or(0, |capture| {
-                (capture.ticket << 8) | capture.images.len() as u64
-            })
-    })
+extern "C" fn rsf_core_dump_gpu_submission(_: *const rsf_frame_record) -> u64 {
+    0
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_dump_gpu_completed(submission: u64, api: u32, device: *mut c_void) {
-    let count = (submission & 255) as usize;
-    if count == 0 || device.is_null() {
-        return;
-    }
-    owner(|owner| {
-        if let Some(capture) = &mut owner.capture
-            && submission >> 8 == capture.ticket
-            && count <= capture.images.len()
-        {
-            let ready = capture
-                .gpu_completed
-                .entry((api, device as usize))
-                .or_default();
-            *ready = (*ready).max(count);
-        }
-    });
-}
+extern "C" fn rsf_core_dump_gpu_completed(_: u64, _: u32, _: *mut c_void) {}
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dump_gpu_ready(
-    ticket: u64,
-    name: *const c_char,
-    api: u32,
-    device: *mut c_void,
-) -> i32 {
-    let Some(name) = (unsafe { string(name) }) else {
-        return 0;
-    };
-    i32::from(owner(|owner| {
-        let Some(capture) = &owner.capture else {
-            return false;
-        };
-        let Some(index) = capture.index(ticket, name) else {
-            return false;
-        };
-        capture.images[index].state == ImageState::Reserved
-            && capture
-                .gpu_completed
-                .get(&(api, device as usize))
-                .is_some_and(|&count| index < count)
-    }))
+extern "C" fn rsf_core_dump_gpu_ready(_: u64, _: *const c_char, _: u32, _: *mut c_void) -> i32 {
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -457,10 +413,12 @@ unsafe extern "C" fn rsf_core_dump_result(
             .filter(|capture| capture.wants(frame))
         {
             if stage == "sr" {
-                capture.sr_result = result;
+                capture.sr_result = Some(result);
                 if result == 0 {
                     capture.fill_sr_metadata(frame, backend);
                 }
+            } else if stage == "fg" {
+                capture.fg_result = Some(result);
             }
             let _ = metadata::result(&capture.bundle, frame, stage, backend, result);
         }

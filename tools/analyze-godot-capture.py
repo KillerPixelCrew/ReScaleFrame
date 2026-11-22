@@ -254,7 +254,9 @@ def write_report(output, summary, capture_info):
             panels.append(f'<a href="{escape(sheet.name)}"><img class="comparison" src="{escape(sheet.name)}" alt="Source, actual generated image, independent midpoint reference, and error"></a>')
         guides = []
         for role, title in (("fg-motion-pixels", "Motion: previous minus current pixels"), ("fg-depth", "Depth: logarithmic preview")):
-            for path in output.glob(f"*-{identity}-{role}-*.png"):
+            paths = (*output.glob(f"*-{identity}-{role}-*.png"),
+                     *output.glob(f"*-{identity}-v*-g*-{role}-*.png"))
+            for path in sorted(paths):
                 guides.append(f'<figure><a href="{escape(path.name)}"><img src="{escape(path.name)}" alt="{escape(title)}"></a><figcaption>{escape(title)}</figcaption></figure>')
         images.append(f'<section><h2>Source frame {identity}</h2>{"".join(panels)}<div class="guides">{"".join(guides)}</div></section>')
     failed = "".join(f"<li>{escape(message)}</li>" for message in summary["failures"])
@@ -324,7 +326,11 @@ def main():
             # the same render-pixel convention as the DX12 guide readbacks.
             data *= np.asarray(meta["render_size"])
             meta = {**meta, "role": "fg-motion-pixels"}
-        frames.setdefault(meta["frame"], {})[meta["role"]] = (meta, data)
+        resources = frames.setdefault(meta["frame"], {})
+        if meta["role"] in resources:
+            failures.append(f"Frame {meta['frame']}: multiple captures for {meta['role']}")
+            continue
+        resources[meta["role"]] = (meta, data)
         if meta["role"] == "fg-xess-generated-before-present":
             xess_output_counts[meta["frame"]] = xess_output_counts.get(meta["frame"], 0) + 1
         if meta["role"].startswith("fg-generated-present-"):

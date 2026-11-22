@@ -1,10 +1,20 @@
 // SPDX-License-Identifier: MIT
-use crate::com_ref::ComRef;
-use crate::input_dump::{Log, MAX_IMAGE_BYTES, Pixels, TextureOptions};
+use crate::input_dump::{
+    ENCODED_MOTION, Log, MAX_IMAGE_BYTES, MotionEncoding, MotionTextureOptions, Pixels,
+    TextureOptions,
+};
 use crate::sr_session::checked;
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::fs::File;
+use std::io::{BufWriter, Write as _};
 use std::mem::{offset_of, size_of};
-use std::ptr::NonNull;
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_CPU_ACCESS_READ, D3D11_DEVICE_CONTEXT_IMMEDIATE, D3D11_MAP_READ,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_DIMENSION_TEXTURE2D, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Resource, ID3D11Texture2D,
+};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+use windows::core::Interface;
 
 mod sample;
 use sample::Format;
@@ -28,37 +38,8 @@ enum Output {
 }
 
 #[repr(C)]
-#[derive(Default)]
-struct Description {
-    width: u32,
-    height: u32,
-    format: u32,
-    mip_levels: u32,
-    array_size: u32,
-    samples: u32,
-    immediate: u32,
-    context_on_device: u32,
-    texture_on_device: u32,
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct MappedData {
-    data: *const u8,
-    row_pitch: u32,
-}
-
-#[repr(C)]
 struct Platform {
     struct_size: u32,
-    describe: unsafe extern "C" fn(Handle, Handle, Handle, &mut Description) -> u32,
-    stage: unsafe extern "C" fn(Handle, &Description) -> Handle,
-    copy: unsafe extern "C" fn(Handle, Handle, Handle, u32),
-    map: unsafe extern "C" fn(Handle, Handle, &mut MappedData) -> u32,
-    unmap: unsafe extern "C" fn(Handle, Handle),
-    open_file: unsafe extern "C" fn(*const c_char) -> Handle,
-    write_file: unsafe extern "C" fn(Handle, *const u8, usize) -> u32,
-    close_file: unsafe extern "C" fn(Handle) -> u32,
     write_png: unsafe extern "C" fn(*const c_char, u32, u32, u32, u32, *mut u8) -> u32,
 }
 
@@ -77,15 +58,13 @@ struct Report {
 }
 
 const _: () = {
-    assert!(size_of::<Description>() == 36);
-    assert!(size_of::<MappedData>() == 16);
-    assert!(offset_of!(MappedData, row_pitch) == 8);
-    assert!(size_of::<Platform>() == 80);
-    assert!(offset_of!(Platform, describe) == 8);
-    assert!(offset_of!(Platform, write_png) == 72);
+    assert!(size_of::<Platform>() == 16);
+    assert!(offset_of!(Platform, write_png) == 8);
     assert!(size_of::<Report>() == 40);
     assert!(size_of::<Pixels>() == 40);
     assert!(size_of::<TextureOptions>() == 40);
+    assert!(size_of::<MotionTextureOptions>() == 64);
+    assert!(offset_of!(MotionTextureOptions, motion) == 40);
 };
 
 fn source_bytes(row_pitch: u32, height: u32, row_bytes: u64) -> Option<u64> {
@@ -141,13 +120,37 @@ struct Request<'a> {
     prefix: &'a CStr,
     view: u32,
     scale: f32,
+    motion: Option<MotionEncoding>,
     log: Log,
 }
 
 impl<'a> Request<'a> {
-    unsafe fn new(options: &'a TextureOptions) -> DumpResult<Self> {
-        if options.abi_version != TextureOptions::ABI_VERSION {
-            return Err(ABI_MISMATCH);
+    unsafe fn new(input: *const TextureOptions, output: Output) -> DumpResult<Self> {
+        let options = unsafe { checked(input) }
+            .filter(|options| !options.prefix.is_null())
+            .ok_or(INVALID)?;
+        let motion = match options.abi_version {
+            TextureOptions::ABI_VERSION => None,
+            MotionTextureOptions::ABI_VERSION => Some(
+                unsafe { checked(input.cast::<MotionTextureOptions>()) }
+                    .ok_or(INVALID)?
+                    .motion,
+            ),
+            _ => return Err(ABI_MISMATCH),
+        };
+        if output != Output::Raw
+            && options.view == ENCODED_MOTION
+            && motion.is_none_or(|motion| {
+                !motion
+                    .scale
+                    .iter()
+                    .chain(&motion.bias)
+                    .all(|v| v.is_finite())
+                    || motion.scale.contains(&0.0)
+                    || motion.zero_x_unwritten > 1
+            })
+        {
+            return Err(INVALID);
         }
         Ok(Self {
             prefix: unsafe { CStr::from_ptr(options.prefix) },
@@ -157,6 +160,7 @@ impl<'a> Request<'a> {
             } else {
                 options.scale
             },
+            motion,
             log: Log::new(options.log, options.log_user),
         })
     }
@@ -169,44 +173,70 @@ impl<'a> Request<'a> {
 }
 
 struct Mapping<'a> {
-    platform: &'a Platform,
-    context: Handle,
-    texture: ComRef,
+    context: &'a ID3D11DeviceContext,
+    texture: ID3D11Texture2D,
     pixels: Pixels,
 }
 
 impl Drop for Mapping<'_> {
     fn drop(&mut self) {
-        unsafe { (self.platform.unmap)(self.context, self.texture.as_ptr()) };
+        unsafe { self.context.Unmap(&self.texture, 0) };
     }
 }
 
 struct Readback<'a> {
     platform: &'a Platform,
-    device: Handle,
-    context: Handle,
-    source: Handle,
+    device: &'a ID3D11Device,
+    context: &'a ID3D11DeviceContext,
+    source: &'a ID3D11Resource,
 }
 
 impl<'a> Readback<'a> {
-    fn describe(&self) -> DumpResult<Description> {
-        let mut desc = Description::default();
-        if unsafe { (self.platform.describe)(self.device, self.context, self.source, &mut desc) }
-            == 0
-            || desc.immediate == 0
+    fn describe(&self) -> DumpResult<D3D11_TEXTURE2D_DESC> {
+        if unsafe { self.source.GetType() } != D3D11_RESOURCE_DIMENSION_TEXTURE2D
+            || unsafe { self.context.GetType() } != D3D11_DEVICE_CONTEXT_IMMEDIATE
         {
             return Err(INVALID);
         }
+        let texture: ID3D11Texture2D = self.source.cast().map_err(|_| INVALID)?;
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { texture.GetDesc(&mut desc) };
         Ok(desc)
     }
 
-    fn map(&self, desc: &Description, raw: bool, log: Log) -> DumpResult<Mapping<'a>> {
+    fn context_on_device(&self) -> bool {
+        unsafe { self.context.GetDevice() }
+            .is_ok_and(|device| device.as_raw() == self.device.as_raw())
+    }
+
+    fn texture_on_device(&self) -> bool {
+        unsafe { self.source.GetDevice() }
+            .is_ok_and(|device| device.as_raw() == self.device.as_raw())
+    }
+
+    fn map(&self, desc: &D3D11_TEXTURE2D_DESC, raw: bool, log: Log) -> DumpResult<Mapping<'a>> {
         if !raw {
             log.say("dump: creating staging copy");
         }
-        let texture = unsafe { ComRef::from_owned((self.platform.stage)(self.device, desc)) }
-            .ok_or(STAGING_FAILED)?;
-        let top = raw || desc.mip_levels > 1 || desc.array_size > 1;
+        let info = D3D11_TEXTURE2D_DESC {
+            Width: desc.Width,
+            Height: desc.Height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: desc.Format,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            ..Default::default()
+        };
+        let mut texture = None;
+        unsafe { self.device.CreateTexture2D(&info, None, Some(&mut texture)) }
+            .map_err(|_| STAGING_FAILED)?;
+        let texture = texture.ok_or(STAGING_FAILED)?;
+        let top = raw || desc.MipLevels > 1 || desc.ArraySize > 1;
         if raw {
             log.say("raw dump: copying subresource zero and mapping");
         } else if top {
@@ -215,87 +245,59 @@ impl<'a> Readback<'a> {
             log.say("dump: copying (whole resource)");
         }
         unsafe {
-            (self.platform.copy)(self.context, texture.as_ptr(), self.source, u32::from(top))
-        };
+            if top {
+                self.context
+                    .CopySubresourceRegion(&texture, 0, 0, 0, 0, self.source, 0, None);
+            } else {
+                self.context.CopyResource(&texture, self.source);
+            }
+        }
         if !raw {
             log.say("dump: mapping");
         }
-        let mut mapped = MappedData::default();
-        if unsafe { (self.platform.map)(self.context, texture.as_ptr(), &mut mapped) } == 0 {
-            return Err(MAP_FAILED);
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            self.context
+                .Map(&texture, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
         }
+        .map_err(|_| MAP_FAILED)?;
         Ok(Mapping {
-            platform: self.platform,
             context: self.context,
             texture,
             pixels: Pixels {
                 struct_size: size_of::<Pixels>() as u32,
-                width: desc.width,
-                height: desc.height,
-                format: desc.format,
-                row_pitch: mapped.row_pitch,
-                // A successful map provides all rows of the staging subresource.
-                data_size: u64::from(mapped.row_pitch) * u64::from(desc.height),
-                data: mapped.data.cast(),
+                width: desc.Width,
+                height: desc.Height,
+                format: desc.Format.0 as u32,
+                row_pitch: mapped.RowPitch,
+                data_size: u64::from(mapped.RowPitch) * u64::from(desc.Height),
+                data: mapped.pData.cast_const(),
             },
         })
     }
 }
 
-struct File<'a> {
-    platform: &'a Platform,
-    handle: Option<NonNull<c_void>>,
+fn open_file(path: &CStr) -> DumpResult<BufWriter<File>> {
+    File::create(path.to_str().map_err(|_| WRITE_FAILED)?)
+        .map(BufWriter::new)
+        .map_err(|_| WRITE_FAILED)
 }
 
-impl<'a> File<'a> {
-    fn open(platform: &'a Platform, path: &CStr) -> DumpResult<Self> {
-        let handle =
-            NonNull::new(unsafe { (platform.open_file)(path.as_ptr()) }).ok_or(WRITE_FAILED)?;
-        Ok(Self {
-            platform,
-            handle: Some(handle),
-        })
-    }
-
-    fn write(&self, bytes: &[u8]) -> DumpResult<()> {
-        let handle = self.handle.expect("open file");
-        (unsafe { (self.platform.write_file)(handle.as_ptr(), bytes.as_ptr(), bytes.len()) } != 0)
-            .then_some(())
-            .ok_or(WRITE_FAILED)
-    }
-
-    fn close(&mut self) -> bool {
-        self.handle
-            .take()
-            .is_none_or(|handle| (unsafe { (self.platform.close_file)(handle.as_ptr()) }) != 0)
-    }
-
-    fn finish(mut self) -> DumpResult<()> {
-        self.close().then_some(()).ok_or(WRITE_FAILED)
-    }
-}
-
-impl Drop for File<'_> {
-    fn drop(&mut self) {
-        self.close();
-    }
-}
-
-fn write_file(platform: &Platform, path: &CStr, bytes: &[u8]) -> DumpResult<()> {
-    let file = File::open(platform, path)?;
-    file.write(bytes)?;
-    file.finish()
+fn write_file(path: &CStr, bytes: &[u8]) -> DumpResult<()> {
+    let mut file = open_file(path)?;
+    file.write_all(bytes)
+        .and_then(|()| file.flush())
+        .map_err(|_| WRITE_FAILED)
 }
 
 fn write_raw(mapping: Mapping<'_>, format: Format, request: &Request<'_>) -> DumpResult<()> {
-    let platform = mapping.platform;
     let pixels = &mapping.pixels;
     let rows = unsafe { PackedRows::new(pixels, format.bytes()) }.ok_or(MAP_FAILED)?;
-    let binary = File::open(platform, &request.path(b".bin"))?;
+    let mut binary = open_file(&request.path(b".bin"))?;
     for row in rows.iter() {
-        binary.write(row)?;
+        binary.write_all(row).map_err(|_| WRITE_FAILED)?;
     }
-    binary.finish()?;
+    binary.flush().map_err(|_| WRITE_FAILED)?;
     let metadata = format!(
         "{{\"width\":{},\"height\":{},\"format\":{},\"row_pitch\":{},\"source_row_pitch\":{},\"subresource\":0,\"bytes\":{}}}\n",
         pixels.width,
@@ -306,7 +308,7 @@ fn write_raw(mapping: Mapping<'_>, format: Format, request: &Request<'_>) -> Dum
         rows.packed_size()
     );
     drop(mapping);
-    write_file(platform, &request.path(b"_raw.json"), metadata.as_bytes())
+    write_file(&request.path(b"_raw.json"), metadata.as_bytes())
 }
 
 fn image_bytes(width: u32, height: u32) -> DumpResult<usize> {
@@ -335,7 +337,7 @@ impl Preview {
         for row in rows.iter() {
             for pixel in row.chunks_exact(format.bytes() as usize) {
                 let sample = format.decode(pixel);
-                match sample.channels(request.view) {
+                match sample.channels(request.view, request.motion) {
                     Some((red, green)) => {
                         x.include(red);
                         y.include(green);
@@ -410,10 +412,11 @@ impl Preview {
             header[14..16].copy_from_slice(&height.to_le_bytes());
             header[16] = 32;
             header[17] = 0x28; // top-left origin, 8 attribute bits
-            let file = File::open(platform, &path)?;
-            file.write(&header)?;
-            file.write(&self.bgra)?;
-            file.finish()?;
+            let mut file = open_file(&path)?;
+            file.write_all(&header)
+                .and_then(|()| file.write_all(&self.bgra))
+                .and_then(|()| file.flush())
+                .map_err(|_| WRITE_FAILED)?;
         }
         let fraction = stats.fraction_unwritten;
         let metadata = format!(
@@ -421,7 +424,7 @@ impl Preview {
             stats.format, request.view, stats.min_x, stats.max_x, stats.min_y, stats.max_y
         );
         // Preview metadata has always been best effort after the image succeeds.
-        let _ = write_file(platform, &request.path(b".json"), metadata.as_bytes());
+        let _ = write_file(&request.path(b".json"), metadata.as_bytes());
         if let Some(size) = unsafe { report.cast::<u32>().as_ref() }.copied()
             && size as usize >= size_of::<Report>()
         {
@@ -445,38 +448,38 @@ fn dump_texture(
     let desc = readback.describe()?;
     let raw = output == Output::Raw;
     if !raw {
-        if desc.samples != 1 {
+        if desc.SampleDesc.Count != 1 {
             return Err(INVALID);
         }
-        image_bytes(desc.width, desc.height)?;
+        image_bytes(desc.Width, desc.Height)?;
     }
-    if desc.context_on_device == 0 || raw && desc.texture_on_device == 0 {
+    if !readback.context_on_device() || raw && !readback.texture_on_device() {
         return Err(FOREIGN_DEVICE);
     }
     if !raw {
         request.log.say(&format!(
             "dump {}: {}x{} format {} mips {} slices {} samples {}",
             request.prefix.to_string_lossy(),
-            desc.width,
-            desc.height,
-            desc.format,
-            desc.mip_levels,
-            desc.array_size,
-            desc.samples
+            desc.Width,
+            desc.Height,
+            desc.Format.0 as u32,
+            desc.MipLevels,
+            desc.ArraySize,
+            desc.SampleDesc.Count
         ));
     }
-    let format = Format::from_dxgi(desc.format).ok_or(UNSUPPORTED)?;
+    let format = Format::from_dxgi(desc.Format.0 as u32).ok_or(UNSUPPORTED)?;
     if raw {
-        let row = u64::from(desc.width) * u64::from(format.bytes());
-        if desc.samples != 1
+        let row = u64::from(desc.Width) * u64::from(format.bytes());
+        if desc.SampleDesc.Count != 1
             || row == 0
-            || desc.height == 0
-            || row > MAX_IMAGE_BYTES / u64::from(desc.height)
+            || desc.Height == 0
+            || row > MAX_IMAGE_BYTES / u64::from(desc.Height)
         {
             return Err(UNSUPPORTED);
         }
     }
-    if desc.texture_on_device == 0 {
+    if !readback.texture_on_device() {
         request
             .log
             .say("dump: refused, texture belongs to another device");
@@ -489,16 +492,10 @@ fn dump_texture(
     let rows = unsafe { PackedRows::new(&mapping.pixels, format.bytes()) }.ok_or(MAP_FAILED)?;
     request
         .log
-        .say(&format!("dump: decoding {} rows", desc.height));
+        .say(&format!("dump: decoding {} rows", desc.Height));
     let preview = Preview::encode(rows, format, request)?;
     drop(mapping);
     preview.write(readback.platform, request, output, report)
-}
-
-unsafe fn sized_options<'a>(options: *const TextureOptions) -> DumpResult<&'a TextureOptions> {
-    unsafe { checked(options) }
-        .filter(|options| !options.prefix.is_null())
-        .ok_or(INVALID)
 }
 
 #[unsafe(no_mangle)]
@@ -520,17 +517,23 @@ unsafe extern "C" fn rsf_core_texture_dump_texture(
     let Some(platform) = (unsafe { checked(platform) }) else {
         return INVALID;
     };
-    if device.is_null() || context.is_null() || source.is_null() {
+    let handles = unsafe {
+        (
+            ID3D11Device::from_raw_borrowed(&device),
+            ID3D11DeviceContext::from_raw_borrowed(&context),
+            ID3D11Resource::from_raw_borrowed(&source),
+        )
+    };
+    let (Some(device), Some(context), Some(source)) = handles else {
         return INVALID;
-    }
+    };
     let readback = Readback {
         platform,
         device,
         context,
         source,
     };
-    unsafe { sized_options(options) }
-        .and_then(|options| unsafe { Request::new(options) })
+    unsafe { Request::new(options, output) }
         .and_then(|request| dump_texture(readback, &request, output, report))
         .err()
         .unwrap_or(0)
@@ -543,11 +546,8 @@ unsafe extern "C" fn rsf_core_texture_dump_pixels(
     options: *const TextureOptions,
     report: *mut Report,
 ) -> i32 {
-    let (Some(platform), Some(pixels), Ok(options)) = (
-        unsafe { checked(platform) },
-        unsafe { checked(pixels) },
-        unsafe { sized_options(options) },
-    ) else {
+    let (Some(platform), Some(pixels)) = (unsafe { checked(platform) }, unsafe { checked(pixels) })
+    else {
         return INVALID;
     };
     let format = Format::from_dxgi(pixels.format);
@@ -558,7 +558,7 @@ unsafe extern "C" fn rsf_core_texture_dump_pixels(
     {
         return INVALID;
     }
-    let result = unsafe { Request::new(options) }.and_then(|request| {
+    let result = unsafe { Request::new(options, Output::Png) }.and_then(|request| {
         let format = format.ok_or(UNSUPPORTED)?;
         let rows = unsafe { PackedRows::new(pixels, stride) }.ok_or(INVALID)?;
         Preview::encode(rows, format, &request)?.write(platform, &request, Output::Png, report)

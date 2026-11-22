@@ -74,12 +74,10 @@ const BIND_UNORDERED_ACCESS: u32 = 128;
 const LAYER_VIEWPORT: u32 = 1;
 // texture_dump.h views.
 const VIEW_RAW: u32 = 0;
-const VIEW_VELOCITY: u32 = 1;
 const VIEW_DECODED_MOTION: u32 = 2;
 const VIEW_HDR: u32 = 3;
 const VIEW_DEPTH: u32 = 4;
 const VIEW_SCALAR: u32 = 5;
-const VIEW_DENSE_MOTION: u32 = 7;
 const DUMP_OK: i32 = 0;
 // rsf::say formats into a 512-byte buffer.
 const LINE_LIMIT: usize = 511;
@@ -1404,11 +1402,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
 
     unsafe fn dump_inputs(&self, p: &P, o: &Owned, context: Raw, frame: &Frame) {
         let decoded = unsafe { (p.decode_texture)(o.decode) };
-        let motion_view = if o.motion.zero_means_unwritten != 0 {
-            VIEW_VELOCITY
-        } else {
-            VIEW_DENSE_MOTION
-        };
         let inputs: [(&CStr, &CStr, Raw, u32, f32); 11] = [
             (
                 c"sr_source_jittered",
@@ -1421,7 +1414,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 c"sr_game_motion",
                 c"Native motion in adapter-declared storage and units",
                 frame.game_motion,
-                motion_view,
+                VIEW_RAW,
                 8.0,
             ),
             (
@@ -1596,7 +1589,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 "engine velocity",
                 b"_motion",
                 frame.game_motion,
-                VIEW_VELOCITY,
+                VIEW_RAW,
                 true,
             ),
             (

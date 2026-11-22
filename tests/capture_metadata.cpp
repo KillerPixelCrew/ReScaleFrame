@@ -29,6 +29,8 @@ int main(int argc,char** argv) {
     rsf_frame_record frame{}; frame.struct_size=sizeof(frame); frame.abi_version=RSF_GAME_FRAME_ABI_VERSION;
     frame.session_id=7;frame.frame_id=11;frame.view_id=13;
     frame.resource_generation=2;
+    frame.camera.struct_size=sizeof(frame.camera);
+    frame.camera.abi_version=RSF_GAME_CAMERA_ABI_VERSION+1;
     frame.render_width=frame.render_height=32;frame.output_width=frame.output_height=64;
     if (!rsf_input_dump_begin_record(&frame,1)) return 2;
     rsf_input_dump_result(&frame,"sr",1,-3);
@@ -55,6 +57,7 @@ int main(int argc,char** argv) {
         const auto text=contents(bundle/(std::string(name)+"_status.json"));
         if (text.find("\"source_frame_id\":11")==std::string::npos) return 4;
     }
+    if (contents(bundle/"frame.json").find("\"camera_available\":false")==std::string::npos) return 26;
     const auto manifest=contents(bundle/"manifest.json");
     if (manifest.find("\"sr_result\":-3")==std::string::npos ||
         manifest.find("\"game\":\"contract\\u000a\\\"test\\\"\"")==std::string::npos ||
@@ -74,19 +77,11 @@ int main(int argc,char** argv) {
     if (rsf_input_dump_wants(&ambiguous) || rsf_input_dump_begin_record(&ambiguous,2)) return 24;
     const auto ticket=rsf_input_dump_reserve(&frame,"final_color","padded CPU rows",RSF_DUMP_VIEW_RAW,1);
     if (!ticket || rsf_input_dump_reserve(&frame,"final_color","duplicate",RSF_DUMP_VIEW_RAW,1)) return 10;
-    const auto first=rsf_input_dump_gpu_submission(&frame);
     if (ticket!=rsf_input_dump_reserve(&frame,"later","delayed input",RSF_DUMP_VIEW_RAW,1)) return 12;
     if (ticket!=rsf_input_dump_reserve(&frame,"blocked_raw","occupied raw path",RSF_DUMP_VIEW_RAW,1) ||
         ticket!=rsf_input_dump_reserve(&frame,"blocked_metadata","occupied metadata path",RSF_DUMP_VIEW_RAW,1)) return 25;
-    int first_device=0, other_device=0;
-    rsf_input_dump_gpu_completed(first,3,&first_device);
-    if (!rsf_input_dump_gpu_ready(ticket,"final_color",3,&first_device) ||
-        rsf_input_dump_gpu_ready(ticket,"later",3,&first_device) ||
-        rsf_input_dump_gpu_ready(ticket,"final_color",2,&first_device) ||
-        rsf_input_dump_gpu_ready(ticket,"final_color",3,&other_device)) return 11;
-
     rsf_input_dump_complete(&different,0);
-    if (rsf_input_dump_gpu_submission(&frame)==0 || !rsf_input_dump_requested()) return 13;
+    if (!rsf_input_dump_requested()) return 13;
     rsf_input_dump_complete(&frame,0);
     if (rsf_input_dump_reserve(&frame,"after_present","too late",RSF_DUMP_VIEW_RAW,1)) return 14;
     fs::path later_bundle;

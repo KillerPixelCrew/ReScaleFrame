@@ -51,7 +51,7 @@ int main(int argc, char** argv)
     const auto root = std::filesystem::path(argv[1]) / ("core-dump-vulkan-" + std::to_string(GetCurrentProcessId()) + '-' + std::to_string(GetTickCount64()));
     rsf_input_dump_configure(root.string().c_str(), "FixtureVulkan", "fixture", nullptr, nullptr);
     rsf_input_dump_request();
-    rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION; record.flags = RSF_FRAME_FLAG_NO_SR | RSF_FRAME_FLAG_NO_FG;
     record.session_id = 31; record.frame_id = 32; record.view_id = 33; record.render_width = record.output_width = 4; record.render_height = record.output_height = 2;
     check(rsf_input_dump_begin_record(&record, 2) != 0, "Begin an API-neutral core capture.");
     rsf_input_dump_vk_setup setup{sizeof(setup), 1, device.setup(), device.queue, device.family, submit, &device};

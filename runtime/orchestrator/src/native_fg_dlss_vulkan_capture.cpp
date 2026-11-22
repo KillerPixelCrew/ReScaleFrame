@@ -13,6 +13,22 @@
 #include <string>
 #include <vector>
 
+extern "C" {
+struct rsf_vk_capture_commands;
+rsf_vk_capture_commands* rsf_vk_capture_commands_open(const rsf_srvk_setup*);
+void rsf_vk_capture_commands_close(rsf_vk_capture_commands*);
+int32_t rsf_vk_capture_create_pool(const rsf_vk_capture_commands*, uint32_t family, uint64_t*);
+void rsf_vk_capture_destroy_pool(const rsf_vk_capture_commands*, uint64_t pool);
+int32_t rsf_vk_capture_allocate(const rsf_vk_capture_commands*, uint64_t pool, void**);
+int32_t rsf_vk_capture_reset_pool(const rsf_vk_capture_commands*, uint64_t pool);
+int32_t rsf_vk_capture_begin(const rsf_vk_capture_commands*, void* command);
+int32_t rsf_vk_capture_end(const rsf_vk_capture_commands*, void* command);
+int32_t rsf_vk_capture_create_fence(const rsf_vk_capture_commands*, uint64_t*);
+void rsf_vk_capture_destroy_fence(const rsf_vk_capture_commands*, uint64_t fence);
+int32_t rsf_vk_capture_reset_fence(const rsf_vk_capture_commands*, uint64_t fence);
+int32_t rsf_vk_capture_wait_fence(const rsf_vk_capture_commands*, uint64_t fence, uint64_t timeout);
+}
+
 namespace rsf {
 namespace {
 // Typed Vulkan, WSI, Streamline registration and file leaves. The Rust owner
@@ -21,7 +37,7 @@ namespace {
 using CapturePacket = rsf_sl_present_capture_packet;
 static_assert(sizeof(CapturePacket) == 96 && offsetof(CapturePacket, source_frame) == 48 &&
     offsetof(CapturePacket, queue_family) == 68 && offsetof(CapturePacket, native_wsi_call) == 88);
-static_assert(sizeof(rsf_dlss_capture_platform) == 23 * sizeof(void*));
+static_assert(sizeof(rsf_dlss_capture_platform) == 24 * sizeof(void*));
 static_assert(sizeof(rsf_dlss_capture_target) == 40 && alignof(rsf_dlss_capture_target) == 8 &&
     offsetof(rsf_dlss_capture_target, index) == 8 && offsetof(rsf_dlss_capture_target, height) == 32);
 static_assert(sizeof(VkImage) == sizeof(uint64_t) && alignof(VkImage) == alignof(uint64_t));
@@ -34,12 +50,8 @@ struct CaptureVk {
     rsf_sl_set_present_capture registration = nullptr;
     FrameCaptureVk capture;
     std::filesystem::path directory;
-    PFN_vkCreateCommandPool create_pool = nullptr; PFN_vkDestroyCommandPool destroy_pool = nullptr;
-    PFN_vkResetCommandPool reset_pool = nullptr; PFN_vkAllocateCommandBuffers allocate_commands = nullptr;
-    PFN_vkBeginCommandBuffer begin = nullptr; PFN_vkEndCommandBuffer end = nullptr;
-    PFN_vkCreateFence create_fence = nullptr; PFN_vkDestroyFence destroy_fence = nullptr;
-    PFN_vkResetFences reset_fences = nullptr; PFN_vkWaitForFences wait_fences = nullptr;
-    VkDevice device() const { return static_cast<VkDevice>(setup.graphics.device); }
+    rsf_vk_capture_commands* commands = nullptr;
+    ~CaptureVk() { rsf_vk_capture_commands_close(commands); }
 };
 CaptureVk& capture_vk(void* native) { return *static_cast<CaptureVk*>(native); }
 const VkPresentInfoKHR& present_info(const CapturePacket& packet) { return *static_cast<const VkPresentInfoKHR*>(packet.present_info); }
@@ -77,13 +89,8 @@ rsf_backend_result open_capture(const rsf_fgvk_setup* setup, void** out) noexcep
     next->registration = reinterpret_cast<rsf_sl_set_present_capture>(GetProcAddress(module, "rsfSlSetPresentCapture"));
     if (!next->registration) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     const auto& graphics = setup->graphics;
-#define RSF_CAPTURE_LOAD(member, name) next->member = reinterpret_cast<PFN_##name>(graphics.device_proc(graphics.device, #name)); if (!next->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
-    RSF_CAPTURE_LOAD(create_pool, vkCreateCommandPool); RSF_CAPTURE_LOAD(destroy_pool, vkDestroyCommandPool);
-    RSF_CAPTURE_LOAD(reset_pool, vkResetCommandPool); RSF_CAPTURE_LOAD(allocate_commands, vkAllocateCommandBuffers);
-    RSF_CAPTURE_LOAD(begin, vkBeginCommandBuffer); RSF_CAPTURE_LOAD(end, vkEndCommandBuffer);
-    RSF_CAPTURE_LOAD(create_fence, vkCreateFence); RSF_CAPTURE_LOAD(destroy_fence, vkDestroyFence);
-    RSF_CAPTURE_LOAD(reset_fences, vkResetFences); RSF_CAPTURE_LOAD(wait_fences, vkWaitForFences);
-#undef RSF_CAPTURE_LOAD
+    next->commands = rsf_vk_capture_commands_open(&graphics);
+    if (!next->commands) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     VkPhysicalDeviceMemoryProperties memory{}; properties(static_cast<VkPhysicalDevice>(graphics.physical_device), &memory);
@@ -100,38 +107,6 @@ int32_t set_callback(void* native, rsf_sl_present_capture_callback callback, voi
     return self.registration(&registration);
 }
 
-int32_t create_pool(void* native, uint32_t family, uint64_t* out) noexcept {
-    auto& self = capture_vk(native);
-    VkCommandPoolCreateInfo info{}; info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    info.queueFamilyIndex = family; info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-    VkCommandPool pool = VK_NULL_HANDLE;
-    const auto result = self.create_pool(self.device(), &info, nullptr, &pool);
-    if (result == VK_SUCCESS) *out = reinterpret_cast<uint64_t>(pool);
-    return result;
-}
-int32_t allocate_commands(void* native, uint64_t pool, void** out) noexcept {
-    auto& self = capture_vk(native);
-    VkCommandBufferAllocateInfo info{}; info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    info.commandPool = reinterpret_cast<VkCommandPool>(pool); info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; info.commandBufferCount = 1;
-    VkCommandBuffer commands = VK_NULL_HANDLE;
-    const auto result = self.allocate_commands(self.device(), &info, &commands);
-    if (result == VK_SUCCESS) *out = commands;
-    return result;
-}
-int32_t begin_commands(void* native, void* commands) noexcept {
-    VkCommandBufferBeginInfo info{}; info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    return capture_vk(native).begin(static_cast<VkCommandBuffer>(commands), &info);
-}
-int32_t create_fence(void* native, uint64_t* out) noexcept {
-    auto& self = capture_vk(native);
-    VkFenceCreateInfo info{}; info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    VkFence fence = VK_NULL_HANDLE;
-    const auto result = self.create_fence(self.device(), &info, nullptr, &fence);
-    if (result == VK_SUCCESS) *out = reinterpret_cast<uint64_t>(fence);
-    return result;
-}
-
 void target(const CapturePacket* packet, rsf_dlss_capture_target* out) noexcept {
     const auto& info = present_info(*packet);
     const auto& chain = *static_cast<const VkSwapchainCreateInfoKHR*>(packet->swapchain_info);
@@ -146,7 +121,7 @@ void target(const CapturePacket* packet, rsf_dlss_capture_target* out) noexcept 
 
 uint32_t record(void* native, void* commands, const rsf_srvk_image* image, const rsf_frame_record* identity, const char* role) noexcept try {
     return capture_vk(native).capture.record(static_cast<VkCommandBuffer>(commands), *image, *identity,
-        role, identity->flags & RSF_FRAME_FLAG_RESET, false);
+        role, identity->flags & RSF_FRAME_FLAG_RESET, false, nullptr, reinterpret_cast<uint64_t>(commands));
 } catch (...) { return 0; }
 
 int32_t submit(const CapturePacket* packet, void* commands, uint64_t fence) noexcept try {
@@ -180,28 +155,17 @@ const rsf_dlss_capture_platform capture_platform{
     open_capture,
     [](void* native) { delete static_cast<CaptureVk*>(native); },
     set_callback,
-    create_pool,
-    [](void* native, uint64_t pool) {
-        auto& self = capture_vk(native); self.destroy_pool(self.device(), reinterpret_cast<VkCommandPool>(pool), nullptr);
-    },
-    allocate_commands,
-    [](void* native, uint64_t pool) -> int32_t {
-        auto& self = capture_vk(native); return self.reset_pool(self.device(), reinterpret_cast<VkCommandPool>(pool), 0);
-    },
-    begin_commands,
-    [](void* native, void* commands) -> int32_t { return capture_vk(native).end(static_cast<VkCommandBuffer>(commands)); },
-    create_fence,
-    [](void* native, uint64_t fence) {
-        auto& self = capture_vk(native); self.destroy_fence(self.device(), reinterpret_cast<VkFence>(fence), nullptr);
-    },
-    [](void* native, uint64_t fence) -> int32_t {
-        auto& self = capture_vk(native); const auto handle = reinterpret_cast<VkFence>(fence);
-        return self.reset_fences(self.device(), 1, &handle);
-    },
-    [](void* native, uint64_t fence, uint64_t timeout) -> int32_t {
-        auto& self = capture_vk(native); const auto handle = reinterpret_cast<VkFence>(fence);
-        return self.wait_fences(self.device(), 1, &handle, VK_TRUE, timeout);
-    },
+    [](void* native, uint32_t family, uint64_t* out) { return rsf_vk_capture_create_pool(capture_vk(native).commands, family, out); },
+    [](void* native, uint64_t pool) { rsf_vk_capture_destroy_pool(capture_vk(native).commands, pool); },
+    [](void* native, uint64_t pool, void** out) { return rsf_vk_capture_allocate(capture_vk(native).commands, pool, out); },
+    [](void* native, uint64_t pool) { return rsf_vk_capture_reset_pool(capture_vk(native).commands, pool); },
+    [](void* native, void* command) { return rsf_vk_capture_begin(capture_vk(native).commands, command); },
+    [](void* native, void* command) { return rsf_vk_capture_end(capture_vk(native).commands, command); },
+    [](void* native, uint64_t* out) { return rsf_vk_capture_create_fence(capture_vk(native).commands, out); },
+    [](void* native, uint64_t fence) { rsf_vk_capture_destroy_fence(capture_vk(native).commands, fence); },
+    [](void* native, uint64_t fence) { return rsf_vk_capture_reset_fence(capture_vk(native).commands, fence); },
+    [](void* native, uint64_t fence, uint64_t timeout) { return rsf_vk_capture_wait_fence(capture_vk(native).commands, fence, timeout); },
+    [](void* native, void* commands) { capture_vk(native).capture.complete_group(reinterpret_cast<uint64_t>(commands)); },
     [](void* native, uint64_t frame) -> uint32_t { return capture_vk(native).capture.wants(frame); },
     [](void* native) noexcept -> uint64_t {
         try { return capture_vk(native).capture.pending_count(); } catch (...) { return UINT64_MAX; }

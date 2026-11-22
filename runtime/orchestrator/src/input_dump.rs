@@ -4,26 +4,28 @@ use crate::com_ref::ComRef;
 use crate::render_abi::{rsf_backend_log_fn, rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
 use crate::sr_session::checked;
 use rsf_game_sys::{
-    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION,
-    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY,
-    RSF_GAME_RENDER_SR, RSF_GAME_RENDER_UI_COMPOSITE, rsf_camera_frame, rsf_frame_record,
-    rsf_game_depth_domains, rsf_game_render_pass,
+    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR,
+    RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
+    RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_UI_COMPOSITE, rsf_camera_frame,
+    rsf_frame_record, rsf_game_depth_domains, rsf_game_render_pass,
 };
-use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
-mod abi;
+pub(super) use crate::capture_pixels::Pixels;
+pub(super) mod abi;
 mod legacy;
 mod metadata;
+mod native;
 
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const WRITE_FAILED: i32 = -6;
 const RAW: u32 = 0;
+pub(super) const ENCODED_MOTION: u32 = 1;
 pub(super) const DECODED_MOTION: u32 = 2;
 const D3D11: u32 = 1;
 const MAX_IMAGES: usize = 96;
@@ -71,17 +73,6 @@ impl Encoding {
 }
 
 #[repr(C)]
-pub(super) struct Pixels {
-    pub(super) struct_size: u32,
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) format: u32,
-    pub(super) row_pitch: u32,
-    pub(super) data_size: u64,
-    pub(super) data: *const c_void,
-}
-
-#[repr(C)]
 pub(super) struct TextureOptions {
     struct_size: u32,
     pub(super) abi_version: u32,
@@ -90,6 +81,30 @@ pub(super) struct TextureOptions {
     pub(super) scale: f32,
     pub(super) log: rsf_backend_log_fn,
     pub(super) log_user: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct MotionEncoding {
+    pub scale: [f32; 2],
+    pub bias: [f32; 2],
+    pub zero_x_unwritten: u32,
+}
+
+#[repr(C)]
+pub(super) struct MotionTextureOptions {
+    pub base: TextureOptions,
+    pub motion: MotionEncoding,
+}
+
+impl MotionTextureOptions {
+    pub(super) const ABI_VERSION: u32 = 3;
+
+    pub(super) fn new(mut base: TextureOptions, motion: MotionEncoding) -> Self {
+        base.struct_size = size_of::<Self>() as u32;
+        base.abi_version = Self::ABI_VERSION;
+        Self { base, motion }
+    }
 }
 
 impl TextureOptions {
@@ -296,13 +311,13 @@ struct Capture {
     legacy_camera: Option<rsf_camera_frame>,
     in_sr: bool,
     backend: u32,
-    sr_result: i32,
+    sr_result: Option<i32>,
+    fg_result: Option<i32>,
     constants: bool,
     fg_constants: bool,
     window: Option<WindowIdentity>,
     present_result: Option<i32>,
     images: Vec<Image>,
-    gpu_completed: HashMap<(u32, usize), usize>,
 }
 
 impl Capture {
@@ -316,13 +331,13 @@ impl Capture {
             legacy_camera: None,
             in_sr: false,
             backend: 0,
-            sr_result: -1,
+            sr_result: None,
+            fg_result: None,
             constants: false,
             fg_constants: false,
             window: None,
             present_result: None,
             images: Vec::new(),
-            gpu_completed: HashMap::new(),
         }
     }
 
@@ -398,12 +413,8 @@ impl Capture {
             return;
         }
         let camera = frame.camera;
-        let has_camera = |camera: &rsf_camera_frame| {
-            camera.struct_size as usize >= size_of::<rsf_camera_frame>()
-                && camera.abi_version == RSF_GAME_CAMERA_ABI_VERSION
-        };
-        let fill_camera = !has_camera(&selected.camera)
-            && has_camera(&camera)
+        let fill_camera = !metadata::camera_available(&selected.camera)
+            && metadata::camera_available(&camera)
             && [
                 camera.render_width,
                 camera.render_height,
@@ -476,22 +487,37 @@ impl Capture {
             .images
             .iter()
             .any(|image| image.state == ImageState::Finished && !image.encoding.success());
-        let required = if self.record.is_some() {
-            &["final_color"][..]
-        } else {
+        let observed_sr = self.sr_result.is_some();
+        let requires_sr = self
+            .record
+            .is_none_or(|frame| frame.flags & RSF_FRAME_FLAG_NO_SR == 0)
+            || observed_sr;
+        let required = if self.record.is_none() {
             metadata::LEGACY_REQUIRED
+        } else if requires_sr {
+            &["final_color", "sr_color", "sr_depth", "sr_motion"]
+        } else {
+            &["final_color"]
         };
-        let all_required = required.iter().all(|name| {
-            self.images
-                .iter()
-                .any(|image| image.name == *name && image.captured())
+        let has_required = |names: &[&str]| {
+            names.iter().all(|name| {
+                self.images
+                    .iter()
+                    .any(|image| image.name == *name && image.captured())
+            })
+        };
+        let fg_complete = self.record.is_none_or(|frame| match self.fg_result {
+            Some(0) => has_required(&["fg_depth", "fg_motion", "hudless_color"]),
+            Some(_) => false,
+            None => requires_sr || frame.flags & RSF_FRAME_FLAG_NO_FG != 0,
         });
         Some(
             if present < 0
-                || self.sr_result != 0
+                || (requires_sr && self.sr_result != Some(0))
                 || !self.constants
                 || images_failed
-                || !all_required
+                || !has_required(required)
+                || !fg_complete
             {
                 "partial"
             } else {
