@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 pub const RSF_CENSUS_ABI_VERSION: u32 = 1;
+pub const RSF_CENSUS_FLAG_NO_STATIC_SCAN: u32 = 1;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_census_options {

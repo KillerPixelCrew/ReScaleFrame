@@ -900,7 +900,8 @@ if(TARGET rsf_vendor_census)
         rsf_loader_fixtures_rust ReScaleFrame::VendorCensus rsf_build_options)
 
     add_executable(rsf_vendor_census_test vendor_census.cpp)
-    target_link_libraries(rsf_vendor_census_test PRIVATE ReScaleFrame::VendorCensus rsf_census_fx_fsr2 rsf_build_options)
+    target_link_libraries(rsf_vendor_census_test PRIVATE
+        rsf_loader_fixtures_rust ReScaleFrame::VendorCensus rsf_census_fx_fsr2 rsf_build_options)
     add_dependencies(rsf_vendor_census_test rsf_census_fx_ngx rsf_census_fx_nvapi rsf_census_fx_xess rsf_census_fx_vk rsf_census_fx_sl rsf_census_fx_ffx rsf_census_fx_creation rsf_census_asi)
     add_test(NAME vendor_census COMMAND rsf_vendor_census_test functional "${CMAKE_CURRENT_BINARY_DIR}/census-functional")
     add_test(NAME vendor_census_budget COMMAND rsf_vendor_census_test budget "${CMAKE_CURRENT_BINARY_DIR}/census-budget")

@@ -32,6 +32,7 @@
 #include "vendor_census_ngx_params.h"
 
 extern "C" {
+int rsf_test_census_creation(const char*, decltype(&rsf_census_install), decltype(&rsf_census_shutdown));
 __declspec(dllimport) int ffxFsr2ContextDispatch(void* context, const void* desc);
 __declspec(dllimport) int ffxFsr2GetJitterOffset(float* x, float* y, int index, int phase_count);
 __declspec(dllimport) float ffxFsr2GetUpscaleRatioFromQualityMode(int mode);
@@ -1816,29 +1817,6 @@ int dllmain_mode(const std::string& dir) {
     return g_failures ? 1 : 0;
 }
 
-// Creation pointers must remain stable even when resolved before post_load.
-// The functional WARP case separately verifies real export detours still record.
-int creation_mode(const std::string& dir) {
-    rsf_census_options opt{};
-    opt.struct_size = sizeof(opt); opt.abi_version = RSF_CENSUS_ABI_VERSION;
-    opt.output_dir_utf8 = dir.c_str(); opt.flags = RSF_CENSUS_FLAG_NO_STATIC_SCAN;
-    CHECK(rsf_census_install(&opt) == RSF_CENSUS_OK);
-    const HMODULE module = load_fixture(L"rsf_fixture_creation.dll");
-    CHECK(module);
-    if (!module) return 1;
-    const auto identity = proc<unsigned (*)()>(module, "fixture_creation_identity");
-    const auto raw = proc<void* (*)(unsigned)>(module, "fixture_creation_raw");
-    CHECK(identity && raw);
-    if (!identity || !raw) return 1;
-    CHECK(identity() == 15);
-    const char* names[] = {"CreateDXGIFactory", "CreateDXGIFactory1", "CreateDXGIFactory2", "D3D12CreateDevice"};
-    for (unsigned i = 0; i < 4; ++i)
-        CHECK(reinterpret_cast<void*>(GetProcAddress(module, names[i])) == raw(i));
-    CHECK(rsf_census_shutdown() == RSF_CENSUS_OK);
-    std::printf("vendor_census creation_identity: %d failure(s)\n", g_failures);
-    return g_failures ? 1 : 0;
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1852,6 +1830,6 @@ int main(int argc, char** argv) {
     if (mode == "vulkan") return vulkan_mode(argv[2]);
     if (mode == "ffx") return ffx_mode(argv[2]);
     if (mode == "dllmain") return dllmain_mode(argv[2]);
-    if (mode == "creation") return creation_mode(argv[2]);
+    if (mode == "creation") return rsf_test_census_creation(argv[2], rsf_census_install, rsf_census_shutdown);
     return 2;
 }

@@ -262,3 +262,10 @@ The PE relayout, import scan and final sidecar publication now belong to
 image and module inventory helpers, the protected reader, and the sidecar sections. The
 engine patch and console callbacks stay in their existing native translation unit. The
 writer's algorithms and public dump declarations are unchanged.
+
+## Census creation fixture
+
+The creation identity mode in `tests/vendor_census.cpp` now runs in Rust. It loads the fixture
+through the original LoadLibraryW path, checks the four early exports and verifies the four
+resolver pointers after post-load. The shared C++ functional, budget, Vulkan, FidelityFX and
+DllMain modes still need porting.
