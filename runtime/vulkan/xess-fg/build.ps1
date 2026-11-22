@@ -46,7 +46,7 @@ try {
         Pop-Location
     }
     & $compiler -std=c++20 -O2 -shared -static -Wall -Wextra -I $include -I $vulkan `
-        (Join-Path $PSScriptRoot 'bridge.cpp') $rustArchive -o $temporary `
+        (Join-Path $PSScriptRoot 'bridge.cpp') (Join-Path $PSScriptRoot '../../../integrations/vulkanstory/native/xess_fg.def') $rustArchive -o $temporary `
         -ld3d12 -ldxgi -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp
     if ($LASTEXITCODE -ne 0) { throw "XeSS-FG bridge compilation failed: $LASTEXITCODE" }
     Move-Item -LiteralPath $temporary -Destination $target -Force

@@ -265,26 +265,26 @@ extern "C" {
 /// @param loadDlssG Requests DLSS-G, Reflex and PCL.
 /// @param loadDlssSr Adds DLSS SR to the shared session.
 /// @return Zero on successful/already-initialized state, a negative local failure or native Streamline result.
-RSF_SL_VK_EXPORT int VulkanStorySlInitializeFeatures(const wchar_t* directory, const char* projectId,
+RSF_SL_VK_EXPORT int rsf_vk_sl_initialize_features(const wchar_t* directory, const char* projectId,
     uint32_t loadReflex, uint32_t loadDlssG, uint32_t loadDlssSr) {
     return rsf_slvk_life_initialize(&lifecycle, directory, projectId, loadReflex, loadDlssG, loadDlssSr);
 }
-RSF_SL_VK_EXPORT int VulkanStorySlInitialize(const wchar_t* directory, const char* projectId,
+RSF_SL_VK_EXPORT int rsf_vk_sl_initialize(const wchar_t* directory, const char* projectId,
     uint32_t loadReflex, uint32_t loadDlssG) {
-    return VulkanStorySlInitializeFeatures(directory, projectId, loadReflex, loadDlssG, 0);
+    return rsf_vk_sl_initialize_features(directory, projectId, loadReflex, loadDlssG, 0);
 }
-RSF_SL_VK_EXPORT void* VulkanStorySlModule() { return rsf_slvk_life_module(); }
-RSF_SL_VK_EXPORT uint64_t VulkanStorySlWorkerTimeoutEpoch() { return rsf_slvk_diagnostic_worker_timeout_epoch(); }
+RSF_SL_VK_EXPORT void* rsf_vk_sl_module() { return rsf_slvk_life_module(); }
+RSF_SL_VK_EXPORT uint64_t rsf_vk_sl_worker_timeout_epoch() { return rsf_slvk_diagnostic_worker_timeout_epoch(); }
 
 /// @brief Shuts down Streamline and clears SDK function pointers/state while retaining the interposer module.
-/// @details Call after provider work is retired. In-flight token calls return busy and allow retry. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. The SDK shutdown result is sticky; a nonzero result refuses later initialization and unload. After success, a later VulkanStorySlInitialize re-runs slInit.
-RSF_SL_VK_EXPORT int VulkanStorySlShutdownChecked() {
+/// @details Call after provider work is retired. In-flight token calls return busy and allow retry. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. The SDK shutdown result is sticky; a nonzero result refuses later initialization and unload. After success, a later rsf_vk_sl_initialize re-runs slInit.
+RSF_SL_VK_EXPORT int rsf_vk_sl_shutdown_checked() {
     return rsf_slvk_life_shutdown(&lifecycle);
 }
 
 /// @brief Retains the original void ABI for hosts predating checked shutdown.
-RSF_SL_VK_EXPORT void VulkanStorySlShutdown() {
-    VulkanStorySlShutdownChecked();
+RSF_SL_VK_EXPORT void rsf_vk_sl_shutdown() {
+    rsf_vk_sl_shutdown_checked();
 }
 
 // Vulkan dispatch pointers can still point into the interposer after slShutdown.
@@ -294,7 +294,7 @@ RSF_SL_VK_EXPORT void VulkanStorySlShutdown() {
 RSF_SL_VK_EXPORT int rsf_vk_sl_unload_checked() {
     return rsf_slvk_life_unload(&lifecycle);
 }
-RSF_SL_VK_EXPORT void VulkanStorySlUnload() {
+RSF_SL_VK_EXPORT void rsf_vk_sl_unload() {
     rsf_vk_sl_unload_checked();
 }
 
@@ -302,7 +302,7 @@ RSF_SL_VK_EXPORT void VulkanStorySlUnload() {
 /// @brief Queries DLSS-G support for the selected borrowed physical device.
 /// @details Feature functions are queried after the proxy has observed device creation.
 /// @return Native Streamline support result, or -1 when unavailable.
-RSF_SL_VK_EXPORT int VulkanStorySlIsFrameGenerationSupported(VkPhysicalDevice physical) {
+RSF_SL_VK_EXPORT int rsf_vk_sl_is_frame_generation_supported(VkPhysicalDevice physical) {
     if (!physical) return -1;
     return callSdk([&] {
         if (!isFeatureSupported) return -1;
@@ -313,7 +313,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlIsFrameGenerationSupported(VkPhysicalDevice ph
 }
 /// @brief Resolves Reflex options, sleep and state entry points for the initialized device.
 /// @return Zero when all required functions resolve, otherwise a negative local code.
-RSF_SL_VK_EXPORT int VulkanStorySlBindReflex() {
+RSF_SL_VK_EXPORT int rsf_vk_sl_bind_reflex() {
     return callSdk([] {
         void* function{};
         if (!loadFeature(sl::kFeatureReflex, "slReflexSetOptions", function)) return -1;
@@ -327,7 +327,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlBindReflex() {
 }
 /// @brief Resolves DLSS-G option and state entry points for the initialized device.
 /// @return Zero on success, otherwise a negative local code.
-RSF_SL_VK_EXPORT int VulkanStorySlBindFrameGeneration() {
+RSF_SL_VK_EXPORT int rsf_vk_sl_bind_frame_generation() {
     return callSdk([] {
         void* function{};
         if (!loadFeature(sl::kFeatureDLSS_G, "slDLSSGSetOptions", function)) return -4;
@@ -340,7 +340,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlBindFrameGeneration() {
 /// @brief Queries distinct low-latency and latency-report availability flags.
 /// @details Outputs are written only after a successful SDK query.
 /// @return Zero on success, -1 for unavailable functions/null outputs, or the SDK result.
-RSF_SL_VK_EXPORT int VulkanStorySlGetReflexState(uint32_t* available, uint32_t* reports) {
+RSF_SL_VK_EXPORT int rsf_vk_sl_get_reflex_state(uint32_t* available, uint32_t* reports) {
     if (!available || !reports) return -1;
     return callSdk([&] {
         if (!reflexState) return -1;
@@ -354,7 +354,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlGetReflexState(uint32_t* available, uint32_t* 
 }
 /// @brief Resolves PCL entry points and assigns the current host thread as the SDK marker thread.
 /// @return Zero on success, a negative local bind failure or the SDK option result.
-RSF_SL_VK_EXPORT int VulkanStorySlBindPcl() {
+RSF_SL_VK_EXPORT int rsf_vk_sl_bind_pcl() {
     return callSdk([] {
         void* function{};
         if (!loadFeature(sl::kFeaturePCL, "slPCLSetMarker", function)) return -1;
@@ -372,7 +372,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlBindPcl() {
 }
 /// @brief Queries the PCL statistics latency-ping window message.
 /// @return Message ID on success, otherwise zero.
-RSF_SL_VK_EXPORT uint32_t VulkanStorySlPclWindowMessage() {
+RSF_SL_VK_EXPORT uint32_t rsf_vk_sl_pcl_window_message() {
     uint32_t message = 0;
     const auto result = callSdk([&] {
         if (!pclState) return -1;
@@ -388,10 +388,10 @@ RSF_SL_VK_EXPORT uint32_t VulkanStorySlPclWindowMessage() {
 /// @param mode 0 selects Off, 1 On, 2 Boost; other values select Off.
 /// @param intervalUs Minimum interval in microseconds, or zero for no cap.
 /// @return SDK result, or -1 without the option function.
-RSF_SL_VK_EXPORT int VulkanStorySlSetReflexInterval(int mode, uint32_t intervalUs) {
+RSF_SL_VK_EXPORT int rsf_vk_sl_set_reflex_interval(int mode, uint32_t intervalUs) {
     return rsf_slvk_reflex_options(applyReflexOptions, mode, intervalUs, 0);
 }
-RSF_SL_VK_EXPORT int VulkanStorySlSetReflex(int mode, uint32_t maxFps) {
+RSF_SL_VK_EXPORT int rsf_vk_sl_set_reflex(int mode, uint32_t maxFps) {
     return rsf_slvk_reflex_options(applyReflexOptions, mode, maxFps, 1);
 }
 /// @brief Obtains the current Streamline frame token for the supplied 32-bit renderer frame identity.
@@ -401,17 +401,17 @@ RSF_SL_VK_EXPORT int rsf_vk_sl_begin_frame_checked(uint32_t frameIndex, uintptr_
     if (!token) return -1;
     return rsf_slvk_token_begin(acquireFrameToken, frameIndex, token);
 }
-RSF_SL_VK_EXPORT int VulkanStorySlBeginFrame(uint32_t frameIndex) {
+RSF_SL_VK_EXPORT int rsf_vk_sl_begin_frame(uint32_t frameIndex) {
     uintptr_t token = 0;
     return rsf_vk_sl_begin_frame_checked(frameIndex, &token);
 }
 /// @brief Returns the borrowed pointer to the most recently acquired SDK frame token.
 /// @details The caller must not free the token and must retain it only within the SDK frame lifetime.
 /// @return Token address, or zero before acquisition/after shutdown.
-RSF_SL_VK_EXPORT uintptr_t VulkanStorySlCurrentFrameToken() {
+RSF_SL_VK_EXPORT uintptr_t rsf_vk_sl_current_frame_token() {
     return rsf_slvk_token_current();
 }
-RSF_SL_VK_EXPORT int VulkanStorySlTokenMatches(uintptr_t token, uint32_t index) {
+RSF_SL_VK_EXPORT int rsf_vk_sl_token_matches(uintptr_t token, uint32_t index) {
     if (!token) return 0;
     return withFrameToken(token, [index](const sl::FrameToken& frame) {
         return static_cast<uint32_t>(frame) == index ? 1 : 0;
@@ -419,7 +419,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlTokenMatches(uintptr_t token, uint32_t index) 
 }
 /// @brief Runs Reflex sleep for the current borrowed frame token before host input polling.
 /// @return SDK result, or -1 without sleep/token availability.
-RSF_SL_VK_EXPORT int VulkanStorySlReflexSleep() {
+RSF_SL_VK_EXPORT int rsf_vk_sl_reflex_sleep() {
     return withFrameToken(0, [](const sl::FrameToken& frame) {
         const auto call = reflexSleep.load();
         return call ? static_cast<int32_t>(call(frame)) : -1;
@@ -427,13 +427,13 @@ RSF_SL_VK_EXPORT int VulkanStorySlReflexSleep() {
 }
 /// @brief Emits a PCL marker for the current borrowed frame token.
 /// @return SDK result, or -1 when the marker/token is unavailable.
-RSF_SL_VK_EXPORT int VulkanStorySlMarker(uint32_t marker) {
+RSF_SL_VK_EXPORT int rsf_vk_sl_marker(uint32_t marker) {
     return emitFrameMarker(0, marker);
 }
 /// @brief Emits a PCL marker for an explicitly retained token during asynchronous presentation.
 /// @details The token is borrowed and must remain within its SDK lifetime; this call does not replace current frame state.
 /// @return SDK result, or -1 for unavailable markers/a zero token.
-RSF_SL_VK_EXPORT int VulkanStorySlMarkerForToken(uintptr_t token, uint32_t marker) {
+RSF_SL_VK_EXPORT int rsf_vk_sl_marker_for_token(uintptr_t token, uint32_t marker) {
     return token ? emitFrameMarker(token, marker) : -1;
 }
 
@@ -475,7 +475,7 @@ static int tagFrame(const sl::FrameToken& frame, VkCommandBuffer commandBuffer,
 /// @param ui Borrowed premultiplied UI metadata.
 /// @param camera Borrowed matching constants/matrix pointers.
 /// @return SDK result, or -1 for missing required bindings/pointers.
-RSF_SL_VK_EXPORT int VulkanStorySlTagFrame(VkCommandBuffer commandBuffer,
+RSF_SL_VK_EXPORT int rsf_vk_sl_tag_frame(VkCommandBuffer commandBuffer,
     const rsf_slvk_legacy_image* depth, const rsf_slvk_legacy_image* motion, const rsf_slvk_legacy_image* hudless,
     const rsf_slvk_legacy_image* ui, const rsf_slvk_legacy_camera* camera) {
     return withFrameToken(0, [&](const sl::FrameToken& frame) {
@@ -485,7 +485,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlTagFrame(VkCommandBuffer commandBuffer,
 /// @brief Clears scene resource tags for the current frame token.
 /// @details Use at non-scene frames or before resources/provider state change. The SDK resolves the full backbuffer after deferred swapchain recreation; no client subregion is supplied.
 /// @return SDK result, or -1 without tagging/token availability.
-RSF_SL_VK_EXPORT int VulkanStorySlInvalidateFrameTags() {
+RSF_SL_VK_EXPORT int rsf_vk_sl_invalidate_frame_tags() {
     return withFrameToken(0, [](const sl::FrameToken& frame) {
         return setTagForFrame ? submitTags(frame, nullptr, nullptr) : -1;
     });
@@ -493,7 +493,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlInvalidateFrameTags() {
 /// @brief Applies DLSS-G enablement, interpolation count and presentation-resource metadata.
 /// @details Successful identical options are reused. An Off out-of-VRAM warning clears configuration without proving release; the host must drain and explicitly free resources.
 /// @return SDK result, -1 without options or -2 for an enabled zero interpolation count.
-RSF_SL_VK_EXPORT int VulkanStorySlSetFrameGeneration(int enabled, uint32_t count,
+RSF_SL_VK_EXPORT int rsf_vk_sl_set_frame_generation(int enabled, uint32_t count,
     uint32_t width, uint32_t height, uint32_t colorFormat, uint32_t backBuffers) {
     const RsfSlFgOptions request{count, width, height, colorFormat, backBuffers};
     return rsf_slvk_fg_set(&fgPlatform, enabled, &request);
@@ -503,18 +503,18 @@ RSF_SL_VK_EXPORT int VulkanStorySlSetFrameGeneration(int enabled, uint32_t count
 /// @brief Disables a previously enabled DLSS-G feature before the host's checked drain/release sequence.
 /// @details Unused or already disabled features return zero without configuring another provider's presentation.
 /// @return SDK option result, or zero when no disable is required.
-RSF_SL_VK_EXPORT int VulkanStorySlDisableFrameGenerationForRelease() {
+RSF_SL_VK_EXPORT int rsf_vk_sl_disable_frame_generation_for_release() {
     return rsf_slvk_fg_disable(&fgPlatform);
 }
 /// @brief Frees known DLSS-G resources after enablement is Off and the host has drained proxy GPU/present work.
 /// @details Resource-ownership state clears only when slFreeResources succeeds.
 /// @return SDK result, zero for no resources, or -1 when release prerequisites are missing.
-RSF_SL_VK_EXPORT int VulkanStorySlFreeFrameGenerationResources() {
+RSF_SL_VK_EXPORT int rsf_vk_sl_free_frame_generation_resources() {
     return rsf_slvk_fg_free(&fgPlatform);
 }
 /// @brief Atomically consumes the latest recorded asynchronous presentation error.
 /// @return Recorded Vulkan error code, or zero when none is pending.
-RSF_SL_VK_EXPORT int VulkanStorySlTakePresentError() {
+RSF_SL_VK_EXPORT int rsf_vk_sl_take_present_error() {
     return rsf_slvk_diagnostic_take_present_error();
 }
 static int32_t readFgSample(rsf_slvk_sdk_fg_sample* output) noexcept try {
@@ -534,7 +534,7 @@ static int32_t readFgSample(rsf_slvk_sdk_fg_sample* output) noexcept try {
 /// @brief Queries frame-generation status, actual presents and the generated-frame limit.
 /// @details Output values are written only after a successful SDK state query.
 /// @return SDK result, or -1 for unavailable state/null outputs.
-RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationState(uint32_t* status,
+RSF_SL_VK_EXPORT int rsf_vk_sl_get_frame_generation_state(uint32_t* status,
     uint32_t* presented, uint32_t* maxGenerated) {
     return rsf_slvk_fg_state(readFgSample, status, presented, maxGenerated);
 }
@@ -543,7 +543,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationState(uint32_t* status,
 /// @param values Caller-owned output array containing exactly six uint32_t values.
 /// @param count Must equal six.
 /// @return SDK result, or -1 for unavailable state/invalid output storage.
-RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationStateDetails(uint32_t* values, uint32_t count) {
+RSF_SL_VK_EXPORT int rsf_vk_sl_get_frame_generation_state_details(uint32_t* values, uint32_t count) {
     return rsf_slvk_fg_state_details(readFgSample, values, count);
 }
 }

@@ -143,42 +143,42 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
     {
         _library = library;
         nint Export(string name) => NativeLibrary.GetExport(library, name);
-        _shutdownChecked = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlShutdownChecked");
+        _shutdownChecked = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_shutdown_checked");
         _unloadChecked = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_unload_checked");
-        _instanceProc = (delegate* unmanaged[Cdecl]<Instance, byte*, nint>)Export("VulkanStorySlGetInstanceProcAddr");
-        _deviceProc = (delegate* unmanaged[Cdecl]<Device, byte*, nint>)Export("VulkanStorySlGetDeviceProcAddr");
-        _createInstance = (delegate* unmanaged[Cdecl]<InstanceCreateInfo*, Instance*, Result>)Export("VulkanStorySlCreateInstance");
-        _enumeratePhysicalDevices = (delegate* unmanaged[Cdecl]<Instance, uint*, PhysicalDevice*, Result>)Export("VulkanStorySlEnumeratePhysicalDevices");
-        _createDevice = (delegate* unmanaged[Cdecl]<Instance, PhysicalDevice, DeviceCreateInfo*, Device*, Result>)Export("VulkanStorySlCreateDevice");
-        _createSwapchain = (delegate* unmanaged[Cdecl]<Device, SwapchainCreateInfoKHR*, SwapchainKHR*, Result>)Export("VulkanStorySlCreateSwapchain");
-        _destroySwapchain = (delegate* unmanaged[Cdecl]<Device, SwapchainKHR, void>)Export("VulkanStorySlDestroySwapchain");
-        _getImages = (delegate* unmanaged[Cdecl]<Device, SwapchainKHR, uint*, Image*, Result>)Export("VulkanStorySlGetSwapchainImages");
-        _acquire = (delegate* unmanaged[Cdecl]<Device, SwapchainKHR, ulong, Semaphore, Fence, uint*, Result>)Export("VulkanStorySlAcquire");
-        _present = (delegate* unmanaged[Cdecl]<Device, Queue, PresentInfoKHR*, Result>)Export("VulkanStorySlPresent");
-        _createSurface = (delegate* unmanaged[Cdecl]<Instance, Win32SurfaceCreateInfoKHR*, SurfaceKHR*, Result>)Export("VulkanStorySlCreateWin32Surface");
-        _destroySurface = (delegate* unmanaged[Cdecl]<Instance, SurfaceKHR, void>)Export("VulkanStorySlDestroySurface");
-        _deviceWaitIdle = (delegate* unmanaged[Cdecl]<Device, Result>)Export("VulkanStorySlDeviceWaitIdle");
-        _bindReflex = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlBindReflex");
-        _bindFrameGeneration = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlBindFrameGeneration");
-        _bindPcl = NativeLibrary.TryGetExport(library, "VulkanStorySlBindPcl", out nint bindPcl)
+        _instanceProc = (delegate* unmanaged[Cdecl]<Instance, byte*, nint>)Export("rsf_vk_sl_get_instance_proc_addr");
+        _deviceProc = (delegate* unmanaged[Cdecl]<Device, byte*, nint>)Export("rsf_vk_sl_get_device_proc_addr");
+        _createInstance = (delegate* unmanaged[Cdecl]<InstanceCreateInfo*, Instance*, Result>)Export("rsf_vk_sl_create_instance");
+        _enumeratePhysicalDevices = (delegate* unmanaged[Cdecl]<Instance, uint*, PhysicalDevice*, Result>)Export("rsf_vk_sl_enumerate_physical_devices");
+        _createDevice = (delegate* unmanaged[Cdecl]<Instance, PhysicalDevice, DeviceCreateInfo*, Device*, Result>)Export("rsf_vk_sl_create_device");
+        _createSwapchain = (delegate* unmanaged[Cdecl]<Device, SwapchainCreateInfoKHR*, SwapchainKHR*, Result>)Export("rsf_vk_sl_create_swapchain");
+        _destroySwapchain = (delegate* unmanaged[Cdecl]<Device, SwapchainKHR, void>)Export("rsf_vk_sl_destroy_swapchain");
+        _getImages = (delegate* unmanaged[Cdecl]<Device, SwapchainKHR, uint*, Image*, Result>)Export("rsf_vk_sl_get_swapchain_images");
+        _acquire = (delegate* unmanaged[Cdecl]<Device, SwapchainKHR, ulong, Semaphore, Fence, uint*, Result>)Export("rsf_vk_sl_acquire");
+        _present = (delegate* unmanaged[Cdecl]<Device, Queue, PresentInfoKHR*, Result>)Export("rsf_vk_sl_present");
+        _createSurface = (delegate* unmanaged[Cdecl]<Instance, Win32SurfaceCreateInfoKHR*, SurfaceKHR*, Result>)Export("rsf_vk_sl_create_win32_surface");
+        _destroySurface = (delegate* unmanaged[Cdecl]<Instance, SurfaceKHR, void>)Export("rsf_vk_sl_destroy_surface");
+        _deviceWaitIdle = (delegate* unmanaged[Cdecl]<Device, Result>)Export("rsf_vk_sl_device_wait_idle");
+        _bindReflex = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_bind_reflex");
+        _bindFrameGeneration = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_bind_frame_generation");
+        _bindPcl = NativeLibrary.TryGetExport(library, "rsf_vk_sl_bind_pcl", out nint bindPcl)
             ? (delegate* unmanaged[Cdecl]<int>)bindPcl : null;
-        _getReflexState = (delegate* unmanaged[Cdecl]<uint*, uint*, int>)Export("VulkanStorySlGetReflexState");
-        _pclWindowMessage = NativeLibrary.TryGetExport(library, "VulkanStorySlPclWindowMessage", out nint pclMessage)
+        _getReflexState = (delegate* unmanaged[Cdecl]<uint*, uint*, int>)Export("rsf_vk_sl_get_reflex_state");
+        _pclWindowMessage = NativeLibrary.TryGetExport(library, "rsf_vk_sl_pcl_window_message", out nint pclMessage)
             ? (delegate* unmanaged[Cdecl]<uint>)pclMessage : null;
-        _isFrameGenerationSupported = (delegate* unmanaged[Cdecl]<PhysicalDevice, int>)Export("VulkanStorySlIsFrameGenerationSupported");
-        _setReflex = (delegate* unmanaged[Cdecl]<int, uint, int>)Export("VulkanStorySlSetReflex");
+        _isFrameGenerationSupported = (delegate* unmanaged[Cdecl]<PhysicalDevice, int>)Export("rsf_vk_sl_is_frame_generation_supported");
+        _setReflex = (delegate* unmanaged[Cdecl]<int, uint, int>)Export("rsf_vk_sl_set_reflex");
         _beginFrameChecked = (delegate* unmanaged[Cdecl]<uint, nint*, int>)Export("rsf_vk_sl_begin_frame_checked");
-        _reflexSleep = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlReflexSleep");
-        _marker = (delegate* unmanaged[Cdecl]<uint, int>)Export("VulkanStorySlMarker");
-        _markerForToken = (delegate* unmanaged[Cdecl]<nint, uint, int>)Export("VulkanStorySlMarkerForToken");
-        _setFg = (delegate* unmanaged[Cdecl]<int, uint, uint, uint, uint, uint, int>)Export("VulkanStorySlSetFrameGeneration");
-        _invalidateFrameTags = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlInvalidateFrameTags");
-        _freeFrameGenerationResources = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlFreeFrameGenerationResources");
-        _disableFrameGenerationForRelease = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlDisableFrameGenerationForRelease");
-        _getFgStateDetails = (delegate* unmanaged[Cdecl]<uint*, uint, int>)Export("VulkanStorySlGetFrameGenerationStateDetails");
-        _takePresentError = (delegate* unmanaged[Cdecl]<int>)Export("VulkanStorySlTakePresentError");
+        _reflexSleep = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_reflex_sleep");
+        _marker = (delegate* unmanaged[Cdecl]<uint, int>)Export("rsf_vk_sl_marker");
+        _markerForToken = (delegate* unmanaged[Cdecl]<nint, uint, int>)Export("rsf_vk_sl_marker_for_token");
+        _setFg = (delegate* unmanaged[Cdecl]<int, uint, uint, uint, uint, uint, int>)Export("rsf_vk_sl_set_frame_generation");
+        _invalidateFrameTags = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_invalidate_frame_tags");
+        _freeFrameGenerationResources = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_free_frame_generation_resources");
+        _disableFrameGenerationForRelease = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_disable_frame_generation_for_release");
+        _getFgStateDetails = (delegate* unmanaged[Cdecl]<uint*, uint, int>)Export("rsf_vk_sl_get_frame_generation_state_details");
+        _takePresentError = (delegate* unmanaged[Cdecl]<int>)Export("rsf_vk_sl_take_present_error");
         _tagFrame = (delegate* unmanaged[Cdecl]<CommandBuffer, StreamlineTaggedImage*, StreamlineTaggedImage*,
-            StreamlineTaggedImage*, StreamlineTaggedImage*, StreamlineFrameCamera*, int>)Export("VulkanStorySlTagFrame");
+            StreamlineTaggedImage*, StreamlineTaggedImage*, StreamlineFrameCamera*, int>)Export("rsf_vk_sl_tag_frame");
     }
 
     /// <summary>Loads the private Streamline bridge and initializes selected PCL, Reflex and DLSS-G plugins.</summary>
@@ -208,7 +208,7 @@ internal sealed unsafe class StreamlineRuntime : IDisposable
         {
             var instance = new StreamlineRuntime(library);
             var initialize = (delegate* unmanaged[Cdecl]<char*, byte*, uint, uint, int>)
-                NativeLibrary.GetExport(library, "VulkanStorySlInitialize");
+                NativeLibrary.GetExport(library, "rsf_vk_sl_initialize");
             // A different NVIDIA adapter in a hybrid system must not enable
             // NVIDIA plugin extension injection on an explicitly selected Intel/AMD device.
             bool nvidia = HasNvidiaDisplayAdapter() &&

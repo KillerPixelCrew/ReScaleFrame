@@ -5,12 +5,12 @@ use super::*;
 use std::io::Write;
 
 #[unsafe(no_mangle)]
-extern "C" fn VulkanStoryFsr3Open(runtime: Handle) -> i32 {
+pub(super) extern "C" fn rsf_vk_fsr3_open(runtime: Handle) -> i32 {
     unsafe { rsf_core_fsr3_open(&platform_win32::SR, runtime) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3Plan(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_plan(
     width: u32,
     height: u32,
     quality: u32,
@@ -30,7 +30,7 @@ unsafe extern "C" fn VulkanStoryFsr3Plan(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3Create(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_create(
     device: Handle,
     physical: Handle,
     render_width: u32,
@@ -51,7 +51,7 @@ unsafe extern "C" fn VulkanStoryFsr3Create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3EvaluateWithComposition(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_evaluate_with_composition(
     context: *mut Context,
     frame: *const Frame,
 ) -> i32 {
@@ -59,13 +59,13 @@ unsafe extern "C" fn VulkanStoryFsr3EvaluateWithComposition(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3Destroy(context: *mut Context) -> i32 {
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_destroy(context: *mut Context) -> i32 {
     unsafe { rsf_core_fsr3_destroy(context) }
 }
 
 /// A failed rollback can return a cleanup-only owner for SwapchainDestroy.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainCreate(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_create(
     physical: Handle,
     device: Handle,
     game: Handle,
@@ -90,12 +90,12 @@ unsafe extern "C" fn VulkanStoryFsr3SwapchainCreate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainHandle(owner: *mut Swapchain) -> Vk {
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_handle(owner: *mut Swapchain) -> Vk {
     unsafe { rsf_core_fsr3_swapchain_handle(owner) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainRecreate(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_recreate(
     owner: *mut Swapchain,
     info: *const u8,
     chain: *mut Vk,
@@ -104,7 +104,7 @@ unsafe extern "C" fn VulkanStoryFsr3SwapchainRecreate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainGetImages(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_get_images(
     owner: *mut Swapchain,
     chain: Vk,
     count: *mut u32,
@@ -114,7 +114,7 @@ unsafe extern "C" fn VulkanStoryFsr3SwapchainGetImages(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainAcquire(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_acquire(
     owner: *mut Swapchain,
     chain: Vk,
     timeout: u64,
@@ -126,7 +126,7 @@ unsafe extern "C" fn VulkanStoryFsr3SwapchainAcquire(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainPresent(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_present(
     owner: *mut Swapchain,
     queue: Handle,
     info: *const c_void,
@@ -135,7 +135,7 @@ unsafe extern "C" fn VulkanStoryFsr3SwapchainPresent(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainPrepareDestroy(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_prepare_destroy(
     owner: *mut Swapchain,
     chain: Vk,
 ) -> i32 {
@@ -143,7 +143,7 @@ unsafe extern "C" fn VulkanStoryFsr3SwapchainPrepareDestroy(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainDestroyChainChecked(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_destroy_chain_checked(
     owner: *mut Swapchain,
     chain: Vk,
 ) -> i32 {
@@ -151,7 +151,10 @@ unsafe extern "C" fn VulkanStoryFsr3SwapchainDestroyChainChecked(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainDestroyChain(owner: *mut Swapchain, chain: Vk) {
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_destroy_chain(
+    owner: *mut Swapchain,
+    chain: Vk,
+) {
     let code = unsafe { rsf_core_fsr3_swapchain_destroy_chain(owner, chain) };
     if code != 0 {
         let _ = writeln!(
@@ -162,7 +165,7 @@ unsafe extern "C" fn VulkanStoryFsr3SwapchainDestroyChain(owner: *mut Swapchain,
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainLastPresentCount(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_last_present_count(
     owner: *mut Swapchain,
     chain: Vk,
 ) -> u64 {
@@ -170,12 +173,12 @@ unsafe extern "C" fn VulkanStoryFsr3SwapchainLastPresentCount(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3SwapchainDestroy(owner: *mut Swapchain) -> i32 {
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_destroy(owner: *mut Swapchain) -> i32 {
     unsafe { rsf_core_fsr3_swapchain_destroy(owner) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3FgCreate(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_fg_create(
     device: Handle,
     physical: Handle,
     width: u32,
@@ -194,7 +197,7 @@ unsafe extern "C" fn VulkanStoryFsr3FgCreate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3FgDisable(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_fg_disable(
     context: *mut FgContext,
     swapchain: *mut Swapchain,
 ) -> i32 {
@@ -202,7 +205,7 @@ unsafe extern "C" fn VulkanStoryFsr3FgDisable(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3FgEvaluate(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_fg_evaluate(
     context: *mut FgContext,
     frame: *const FgFrame,
 ) -> i32 {
@@ -210,7 +213,7 @@ unsafe extern "C" fn VulkanStoryFsr3FgEvaluate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3FgEvaluateDirect(
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_fg_evaluate_direct(
     context: *mut FgContext,
     frame: *const FgFrame,
 ) -> i32 {
@@ -218,6 +221,6 @@ unsafe extern "C" fn VulkanStoryFsr3FgEvaluateDirect(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn VulkanStoryFsr3FgDestroy(context: *mut FgContext) -> i32 {
+pub(super) unsafe extern "C" fn rsf_vk_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
     unsafe { rsf_core_fsr3_fg_destroy(context) }
 }

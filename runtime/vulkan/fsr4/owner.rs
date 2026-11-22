@@ -79,7 +79,7 @@ const DEFAULT_FRAME_TIME_MS: f32 = 16.667;
 #[allow(clippy::approx_constant)]
 const MAX_VERTICAL_FOV: f32 = 3.141_593;
 
-/// VulkanStoryFsr4Frame, the managed fixed-layout frame.
+/// rsf_vk_fsr4_frame, the managed fixed-layout frame.
 #[repr(C)]
 struct LegacyFrame {
     color: Handle,
@@ -677,7 +677,7 @@ extern "C" fn rsf_core_fsr4sr_candidate_vendor(vendor: u32) -> u32 {
 }
 
 /// # Safety
-/// `request` and `output` follow VulkanStoryFsr4Create; `ops` is the static table.
+/// `request` and `output` follow rsf_vk_fsr4_create; `ops` is the static table.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr4sr_create(
     ops: *const Platform,

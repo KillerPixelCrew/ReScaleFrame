@@ -7,7 +7,7 @@ use std::{mem, ptr};
 
 const UNAVAILABLE: vk::Result = vk::Result::ERROR_INITIALIZATION_FAILED;
 
-#[unsafe(export_name = "VulkanStorySlGetInstanceProcAddr")]
+#[unsafe(export_name = "rsf_vk_sl_get_instance_proc_addr")]
 unsafe extern "C" fn instance_proc(
     instance: vk::Instance,
     name: *const c_char,
@@ -20,7 +20,7 @@ unsafe extern "C" fn instance_proc(
     unsafe { resolve(instance, name) }
 }
 
-#[unsafe(export_name = "VulkanStorySlGetDeviceProcAddr")]
+#[unsafe(export_name = "rsf_vk_sl_get_device_proc_addr")]
 unsafe extern "C" fn device_proc(
     device: vk::Device,
     name: *const c_char,
@@ -41,7 +41,7 @@ macro_rules! entry {
     };
 }
 
-#[unsafe(export_name = "VulkanStorySlCreateInstance")]
+#[unsafe(export_name = "rsf_vk_sl_create_instance")]
 unsafe extern "C" fn create_instance(
     info: *const vk::InstanceCreateInfo<'_>,
     output: *mut vk::Instance,
@@ -57,7 +57,7 @@ unsafe extern "C" fn create_instance(
     })
 }
 
-#[unsafe(export_name = "VulkanStorySlEnumeratePhysicalDevices")]
+#[unsafe(export_name = "rsf_vk_sl_enumerate_physical_devices")]
 unsafe extern "C" fn physical_devices(
     instance: vk::Instance,
     count: *mut u32,
@@ -72,7 +72,7 @@ unsafe extern "C" fn physical_devices(
     .map_or(UNAVAILABLE, |call| unsafe { call(instance, count, output) })
 }
 
-#[unsafe(export_name = "VulkanStorySlCreateDevice")]
+#[unsafe(export_name = "rsf_vk_sl_create_device")]
 unsafe extern "C" fn create_device(
     instance: vk::Instance,
     physical: vk::PhysicalDevice,
@@ -90,7 +90,7 @@ unsafe extern "C" fn create_device(
     })
 }
 
-#[unsafe(export_name = "VulkanStorySlCreateWin32Surface")]
+#[unsafe(export_name = "rsf_vk_sl_create_win32_surface")]
 unsafe extern "C" fn create_surface(
     instance: vk::Instance,
     info: *const vk::Win32SurfaceCreateInfoKHR<'_>,
@@ -107,7 +107,7 @@ unsafe extern "C" fn create_surface(
     })
 }
 
-#[unsafe(export_name = "VulkanStorySlDestroySurface")]
+#[unsafe(export_name = "rsf_vk_sl_destroy_surface")]
 unsafe extern "C" fn destroy_surface(instance: vk::Instance, surface: vk::SurfaceKHR) {
     if let Some(call) = entry!(
         instance_proc,
@@ -119,7 +119,7 @@ unsafe extern "C" fn destroy_surface(instance: vk::Instance, surface: vk::Surfac
     }
 }
 
-#[unsafe(export_name = "VulkanStorySlCreateSwapchain")]
+#[unsafe(export_name = "rsf_vk_sl_create_swapchain")]
 unsafe extern "C" fn create_swapchain(
     device: vk::Device,
     info: *const vk::SwapchainCreateInfoKHR<'_>,
@@ -142,7 +142,7 @@ unsafe extern "C" fn create_swapchain(
     result
 }
 
-#[unsafe(export_name = "VulkanStorySlDestroySwapchain")]
+#[unsafe(export_name = "rsf_vk_sl_destroy_swapchain")]
 unsafe extern "C" fn destroy_swapchain(device: vk::Device, swapchain: vk::SwapchainKHR) {
     if let Some(call) = entry!(
         device_proc,
@@ -155,7 +155,7 @@ unsafe extern "C" fn destroy_swapchain(device: vk::Device, swapchain: vk::Swapch
     }
 }
 
-#[unsafe(export_name = "VulkanStorySlGetSwapchainImages")]
+#[unsafe(export_name = "rsf_vk_sl_get_swapchain_images")]
 unsafe extern "C" fn images(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
@@ -173,7 +173,7 @@ unsafe extern "C" fn images(
     })
 }
 
-#[unsafe(export_name = "VulkanStorySlAcquire")]
+#[unsafe(export_name = "rsf_vk_sl_acquire")]
 unsafe extern "C" fn acquire(
     device: vk::Device,
     swapchain: vk::SwapchainKHR,
@@ -193,7 +193,7 @@ unsafe extern "C" fn acquire(
     })
 }
 
-#[unsafe(export_name = "VulkanStorySlPresent")]
+#[unsafe(export_name = "rsf_vk_sl_present")]
 unsafe extern "C" fn present(
     device: vk::Device,
     queue: vk::Queue,
@@ -208,7 +208,7 @@ unsafe extern "C" fn present(
     .map_or(UNAVAILABLE, |call| unsafe { call(queue, info) })
 }
 
-#[unsafe(export_name = "VulkanStorySlDeviceWaitIdle")]
+#[unsafe(export_name = "rsf_vk_sl_device_wait_idle")]
 unsafe extern "C" fn wait_idle(device: vk::Device) -> vk::Result {
     entry!(
         device_proc,
@@ -219,7 +219,7 @@ unsafe extern "C" fn wait_idle(device: vk::Device) -> vk::Result {
     .map_or(UNAVAILABLE, |call| unsafe { call(device) })
 }
 
-#[unsafe(export_name = "VulkanStorySlQueuePresentSynchronized")]
+#[unsafe(export_name = "rsf_vk_sl_queue_present_synchronized")]
 unsafe extern "C" fn synchronized_present(
     address: usize,
     queue: vk::Queue,
@@ -248,7 +248,7 @@ unsafe extern "C" fn synchronized_present(
 type Callback = unsafe extern "C" fn(*mut c_void) -> i32;
 type Lease = unsafe extern "C" fn(Callback, *mut c_void) -> i32;
 
-#[unsafe(export_name = "VulkanStorySlVulkanWsiCall")]
+#[unsafe(export_name = "rsf_vk_sl_vulkan_wsi_call")]
 unsafe extern "C" fn synchronized_wsi(callback: Option<Callback>, user: *mut c_void) -> i32 {
     let Some(callback) = callback.filter(|_| !user.is_null()) else {
         return UNAVAILABLE.as_raw();
@@ -264,7 +264,7 @@ unsafe extern "C" fn synchronized_wsi(callback: Option<Callback>, user: *mut c_v
     unsafe { lease(callback, user) }
 }
 
-#[unsafe(export_name = "VulkanStorySlWithoutDlssG")]
+#[unsafe(export_name = "rsf_vk_sl_without_dlss_g")]
 unsafe extern "C" fn without_dlss_g(callback: Option<Callback>, user: *mut c_void) -> i32 {
     let Some(callback) = callback else {
         return UNAVAILABLE.as_raw();

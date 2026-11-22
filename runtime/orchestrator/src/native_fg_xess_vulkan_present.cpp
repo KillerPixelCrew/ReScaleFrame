@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include "native_fg_xess_vulkan_platform.h"
 
-extern "C" int VulkanStoryXessFgSetEnabled(rsf_xess_bridge*, uint32_t);
-extern "C" int VulkanStoryXessFgSleep(rsf_xess_bridge*, uint32_t);
-extern "C" int VulkanStoryXessFgMarker(rsf_xess_bridge*, uint32_t, int);
-extern "C" int VulkanStoryXessFgSetLatencyMode(rsf_xess_bridge*, uint32_t, uint32_t);
-extern "C" int VulkanStoryXessFgWaitIdle(rsf_xess_bridge*);
-extern "C" int VulkanStoryXessFgPrepareDestroy(rsf_xess_bridge*);
-extern "C" int VulkanStoryXessFgDestroyChecked(rsf_xess_bridge*);
+extern "C" int rsf_vk_xess_fg_set_enabled(rsf_xess_bridge*, uint32_t);
+extern "C" int rsf_vk_xess_fg_sleep(rsf_xess_bridge*, uint32_t);
+extern "C" int rsf_vk_xess_fg_marker(rsf_xess_bridge*, uint32_t, int);
+extern "C" int rsf_vk_xess_fg_set_latency_mode(rsf_xess_bridge*, uint32_t, uint32_t);
+extern "C" int rsf_vk_xess_fg_wait_idle(rsf_xess_bridge*);
+extern "C" int rsf_vk_xess_fg_prepare_destroy(rsf_xess_bridge*);
+extern "C" int rsf_vk_xess_fg_destroy_checked(rsf_xess_bridge*);
 
 static_assert(sizeof(rsf_xessgvk_ops) == 17 * sizeof(void*) && sizeof(rsf_xessgvk_options) == 32 &&
     sizeof(rsf_xess_bridge_create) == 24 && sizeof(rsf_xess_bridge_start) == 32 &&
@@ -18,9 +18,9 @@ const rsf_xessgvk_ops& operations() {
     static const rsf_xessgvk_ops value{
         rsf_dx12gvk_graphics(), &rsf_dx12gvk_interop, rsf_xessvk_interop_create,
         RsfXessBridgeCreate, RsfXessBridgeStart, RsfXessBridgeMaxGenerated, RsfXessBridgeSetGenerated,
-        VulkanStoryXessFgSetEnabled, RsfXessBridgePresent, RsfXessBridgeCaptureSource, RsfXessBridgeCapturedCallbacks,
-        VulkanStoryXessFgWaitIdle, VulkanStoryXessFgPrepareDestroy, VulkanStoryXessFgDestroyChecked,
-        VulkanStoryXessFgSleep, VulkanStoryXessFgMarker, VulkanStoryXessFgSetLatencyMode,
+        rsf_vk_xess_fg_set_enabled, RsfXessBridgePresent, RsfXessBridgeCaptureSource, RsfXessBridgeCapturedCallbacks,
+        rsf_vk_xess_fg_wait_idle, rsf_vk_xess_fg_prepare_destroy, rsf_vk_xess_fg_destroy_checked,
+        rsf_vk_xess_fg_sleep, rsf_vk_xess_fg_marker, rsf_vk_xess_fg_set_latency_mode,
     };
     return value;
 }

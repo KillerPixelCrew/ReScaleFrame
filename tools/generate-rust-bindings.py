@@ -187,7 +187,7 @@ frame_values = "RSF_(GAME_(FRAME|CAMERA)_ABI_VERSION|FRAME_(FLAG|SOURCE)_.*)"
 generate("sdk/game/src/frame_abi.rs", "sdk/game/include/rescaleframe/game_frame.h",
          frame_types, frame_values, [], ["--raw-line", "#![allow(dead_code)]"])
 generate("runtime/vulkan/xess-fg/bridge_abi.rs", "runtime/vulkan/xess-fg/bridge_api.h",
-         "rsf_xess_bridge_(create|start|frame|present_status)|VulkanStoryXessFrame", "RSF_XESS_BRIDGE_.*", [],
+         "rsf_xess_bridge_(create|start|frame|present_status)|rsf_vk_xess_fg_frame", "RSF_XESS_BRIDGE_.*", [],
          ["--blocklist-type", "rsf_xess_bridge_legacy_reserved", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "type rsf_xess_bridge_legacy_reserved = ::core::mem::MaybeUninit<u32>;"])
 generate("runtime/vulkan/xess-fg/session_records_abi.rs", "runtime/vulkan/xess-fg/session_records.h",

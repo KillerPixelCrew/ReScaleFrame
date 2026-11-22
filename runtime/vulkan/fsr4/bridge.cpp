@@ -268,7 +268,7 @@ constexpr rsf_fsr4sr_platform kPlatform{
 /// @brief Checks the Vulkan adapter vendor required by this FSR4 bridge.
 /// @details The vendor check is preliminary; NVIDIA/Intel compatibility and signed-provider selection are verified during Create.
 /// @return Zero for an AMD, NVIDIA or Intel Vulkan adapter, otherwise a negative availability code.
-extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4Probe(VkPhysicalDevice physical) {
+extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_probe(VkPhysicalDevice physical) {
     if (!physical) return -1;
     HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
     auto properties = loader ? reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
@@ -281,27 +281,27 @@ extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4Probe(VkPhysicalDevice physica
 
 /// @brief Waits for the most recent tracked submission on this DX12 queue.
 /// @return Zero when complete or value is null; nonzero on completion failure.
-extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4WaitIdle(VulkanStoryFsr4* value) {
+extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_wait_idle(rsf_vk_fsr4* value) {
     return rsf_core_fsr4sr_wait_idle(value);
 }
 
 /// @brief Drains tracked DX12 work and destroys the SDK consumer before imported resources are retired.
 /// @details Failure is persisted as terminal releaseFailure; native ownership is retained.
 /// @return Zero when prepared, or the retained drain/SDK destruction error.
-extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4PrepareDestroy(VulkanStoryFsr4* value) {
+extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_prepare_destroy(rsf_vk_fsr4* value) {
     return rsf_core_fsr4sr_prepare_destroy(value);
 }
 
 /// @brief Performs checked release preparation then frees native/COM owners and the context allocation.
 /// @details The caller must first drain Vulkan users and dispose imported shared images/fence imports before destroying their owning DX12 context. Failure leaves the owner attached.
 /// @return Zero after successful destruction; a nonzero preparation error preserves the value pointer.
-extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4DestroyChecked(VulkanStoryFsr4* value) {
+extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_destroy_checked(rsf_vk_fsr4* value) {
     return rsf_core_fsr4sr_destroy(value);
 }
 
 /// @brief Legacy void destruction entry point that preserves ownership when checked preparation fails.
 /// @details New callers should use DestroyChecked to observe release failure.
-extern "C" RSF_FSR4_BRIDGE_API void VulkanStoryFsr4Destroy(VulkanStoryFsr4* value) {
+extern "C" RSF_FSR4_BRIDGE_API void rsf_vk_fsr4_destroy(rsf_vk_fsr4* value) {
     rsf_core_fsr4sr_destroy(value);
 }
 
@@ -310,9 +310,9 @@ extern "C" RSF_FSR4_BRIDGE_API void VulkanStoryFsr4Destroy(VulkanStoryFsr4* valu
 /// @param physical Borrowed Vulkan physical device with a valid Windows LUID.
 /// @param output Required owner slot; release an attached owner only with checked destruction.
 /// @return Zero on success; local, HRESULT or FidelityFX failure code otherwise.
-extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4Create(
+extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_create(
     VkPhysicalDevice physical, uint32_t renderWidth, uint32_t renderHeight,
-    uint32_t displayWidth, uint32_t displayHeight, VulkanStoryFsr4** output) {
+    uint32_t displayWidth, uint32_t displayHeight, rsf_vk_fsr4** output) {
     if (!output) return -1;
     *output = nullptr;
     if (!physical) return -1;
@@ -353,8 +353,8 @@ extern "C" RSF_FSR4_BRIDGE_API int32_t RsfFsr4BridgePlan(rsf_fsr4_bridge* value,
 /// @param handle Caller-owned NT handle output; close it after import/use.
 /// @param resource Caller-owned COM resource reference; release after both graphics APIs finish.
 /// @return Zero on success, or local/HRESULT failure; outputs are cleared before allocation.
-extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4CreateSharedImage(
-    VulkanStoryFsr4* value, uint32_t width, uint32_t height, uint32_t vkFormat,
+extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_create_shared_image(
+    rsf_vk_fsr4* value, uint32_t width, uint32_t height, uint32_t vkFormat,
     uint32_t writable, HANDLE* handle, ID3D12Resource** resource) {
     return rsf_core_fsr4sr_create_image(value, width, height, vkFormat, writable, handle,
         reinterpret_cast<void**>(resource));
@@ -362,22 +362,22 @@ extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4CreateSharedImage(
 
 /// @brief Releases the caller-owned DX12 image reference; a null reference is accepted.
 /// @details This does not wait. Vulkan import users and DX12 queue users must already be complete.
-extern "C" RSF_FSR4_BRIDGE_API void VulkanStoryFsr4ReleaseImage(ID3D12Resource* resource) {
+extern "C" RSF_FSR4_BRIDGE_API void rsf_vk_fsr4_release_image(ID3D12Resource* resource) {
     rsf_core_fsr4sr_release_image(resource);
 }
 
 /// @brief Creates or reuses the runtime-owned DX12 shared fence and exports a new NT handle.
 /// @details The caller owns and closes the returned handle after permanent Vulkan timeline import; the fence remains owned by value.
 /// @return Zero on success, or a local/HRESULT error.
-extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4CreateSharedFence(
-    VulkanStoryFsr4* value, HANDLE* handle) {
+extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_create_shared_fence(
+    rsf_vk_fsr4* value, HANDLE* handle) {
     return rsf_core_fsr4sr_create_fence(value, handle);
 }
 
 /// @brief Records and submits reconstruction after a GPU wait for the Vulkan ready value.
 /// @details Valid ready/done values always receive an ordered handoff, including SDK failures. A prepared owner refuses new work.
-extern "C" RSF_FSR4_BRIDGE_API int VulkanStoryFsr4Evaluate(
-    VulkanStoryFsr4* value, const VulkanStoryFsr4Frame* frame) {
+extern "C" RSF_FSR4_BRIDGE_API int rsf_vk_fsr4_evaluate(
+    rsf_vk_fsr4* value, const rsf_vk_fsr4_frame* frame) {
     return rsf_core_fsr4sr_evaluate_legacy(value, frame);
 }
 

@@ -339,7 +339,7 @@ extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) {
     if (call->session_id && (call->session_id != lease_session || call->frame_id != lease_frame)) return RSF_BACKEND_ERROR_NOT_READY;
     return call->callback(reinterpret_cast<void*>(1), call->frame_id ? reinterpret_cast<uintptr_t>(&sdk_token) : 0, call->user);
 }
-extern "C" uint64_t VulkanStorySlWorkerTimeoutEpoch() { return worker_timeout_epoch; }
+extern "C" uint64_t rsf_vk_sl_worker_timeout_epoch() { return worker_timeout_epoch; }
 extern "C" rsf_dlss_fixture_state* rsf_fixture_dlss_state() { return &fixture; }
 extern "C" rsf_vk_function rsf_fixture_dlss_proc(void* object, const char* name) { return device_proc(object, name); }
 extern "C" int32_t rsf_fixture_dlss_submit(void* user, uint32_t count, const void* commands, uint64_t fence) {

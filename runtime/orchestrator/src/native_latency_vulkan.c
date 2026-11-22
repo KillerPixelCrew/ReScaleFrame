@@ -4,32 +4,32 @@
 #include "native_latency_vulkan_platform.h"
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
-void* VulkanStorySlModule(void);
-int VulkanStorySlShutdownChecked(void);
-rsf_vk_function VulkanStorySlGetInstanceProcAddr(void*, const char*);
-int VulkanStorySlBindReflex(void);
-int VulkanStorySlBindPcl(void);
-uint32_t VulkanStorySlPclWindowMessage(void);
-int VulkanStorySlGetReflexState(uint32_t*, uint32_t*);
-int VulkanStorySlSetReflexInterval(int, uint32_t);
+void* rsf_vk_sl_module(void);
+int rsf_vk_sl_shutdown_checked(void);
+rsf_vk_function rsf_vk_sl_get_instance_proc_addr(void*, const char*);
+int rsf_vk_sl_bind_reflex(void);
+int rsf_vk_sl_bind_pcl(void);
+uint32_t rsf_vk_sl_pcl_window_message(void);
+int rsf_vk_sl_get_reflex_state(uint32_t*, uint32_t*);
+int rsf_vk_sl_set_reflex_interval(int, uint32_t);
 int rsf_vk_sl_begin_frame_checked(uint32_t, uintptr_t*);
-uintptr_t VulkanStorySlCurrentFrameToken(void);
-int VulkanStorySlTokenMatches(uintptr_t, uint32_t);
-int VulkanStorySlReflexSleep(void);
-int VulkanStorySlMarkerForToken(uintptr_t, uint32_t);
-int VulkanStorySlQueuePresentSynchronized(uintptr_t, void*, const void*);
-int VulkanStorySlVulkanWsiCall(rsf_vk_wsi_call, void*);
-int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call, void*);
+uintptr_t rsf_vk_sl_current_frame_token(void);
+int rsf_vk_sl_token_matches(uintptr_t, uint32_t);
+int rsf_vk_sl_reflex_sleep(void);
+int rsf_vk_sl_marker_for_token(uintptr_t, uint32_t);
+int rsf_vk_sl_queue_present_synchronized(uintptr_t, void*, const void*);
+int rsf_vk_sl_vulkan_wsi_call(rsf_vk_wsi_call, void*);
+int rsf_vk_sl_without_dlss_g(rsf_vk_wsi_call, void*);
 int32_t rsf_sllatency_initialize_checked(const uint16_t*, const char*, uint32_t, uint32_t, uint32_t, int32_t*);
 int32_t rsf_sllatency_invoke_checked(const rsf_slvk_call*, void*, uintptr_t);
 
 static const rsf_vk_streamline_calls streamline = {
-    rsf_sllatency_initialize_checked, VulkanStorySlShutdownChecked, VulkanStorySlModule, rsf_sllatency_invoke_checked,
-    VulkanStorySlSetReflexInterval, VulkanStorySlReflexSleep,
-    {rsf_vk_sl_begin_frame_checked, VulkanStorySlCurrentFrameToken, VulkanStorySlTokenMatches,
-        VulkanStorySlMarkerForToken},
-    {VulkanStorySlBindPcl, VulkanStorySlPclWindowMessage, VulkanStorySlBindReflex,
-        VulkanStorySlGetReflexState},
+    rsf_sllatency_initialize_checked, rsf_vk_sl_shutdown_checked, rsf_vk_sl_module, rsf_sllatency_invoke_checked,
+    rsf_vk_sl_set_reflex_interval, rsf_vk_sl_reflex_sleep,
+    {rsf_vk_sl_begin_frame_checked, rsf_vk_sl_current_frame_token, rsf_vk_sl_token_matches,
+        rsf_vk_sl_marker_for_token},
+    {rsf_vk_sl_bind_pcl, rsf_vk_sl_pcl_window_message, rsf_vk_sl_bind_reflex,
+        rsf_vk_sl_get_reflex_state},
 };
 #endif
 
@@ -88,7 +88,7 @@ rsf_backend_result rsf_latencyvk_shutdown(void) {
 
 int32_t rsf_slvk_without_dlssg(rsf_vk_wsi_call callback, void* user) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    return rsf_core_slvk_without_dlssg(VulkanStorySlWithoutDlssG, callback, user);
+    return rsf_core_slvk_without_dlssg(rsf_vk_sl_without_dlss_g, callback, user);
 #else
     return rsf_core_slvk_without_dlssg(NULL, callback, user);
 #endif
@@ -97,7 +97,7 @@ int32_t rsf_slvk_without_dlssg(rsf_vk_wsi_call callback, void* user) {
 rsf_vk_function rsf_latencyvk_instance_proc(void* instance, const char* name) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
     // Resolver remains usable after slShutdown for Vulkan object destruction.
-    return rsf_core_latencyvk_instance_proc(VulkanStorySlGetInstanceProcAddr, instance, name);
+    return rsf_core_latencyvk_instance_proc(rsf_vk_sl_get_instance_proc_addr, instance, name);
 #else
     return rsf_core_latencyvk_instance_proc(NULL, instance, name);
 #endif
@@ -105,7 +105,7 @@ rsf_vk_function rsf_latencyvk_instance_proc(void* instance, const char* name) {
 
 int32_t rsf_latencyvk_queue_present(rsf_vk_function callback, void* queue, const void* info) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    return rsf_core_latencyvk_queue_present(VulkanStorySlQueuePresentSynchronized, callback, queue, info);
+    return rsf_core_latencyvk_queue_present(rsf_vk_sl_queue_present_synchronized, callback, queue, info);
 #else
     return rsf_core_latencyvk_queue_present(NULL, callback, queue, info);
 #endif
@@ -113,7 +113,7 @@ int32_t rsf_latencyvk_queue_present(rsf_vk_function callback, void* queue, const
 
 int32_t rsf_latencyvk_wsi_call(rsf_vk_wsi_call callback, void* user) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    return rsf_core_latencyvk_wsi_call(VulkanStorySlVulkanWsiCall, callback, user);
+    return rsf_core_latencyvk_wsi_call(rsf_vk_sl_vulkan_wsi_call, callback, user);
 #else
     return rsf_core_latencyvk_wsi_call(NULL, callback, user);
 #endif

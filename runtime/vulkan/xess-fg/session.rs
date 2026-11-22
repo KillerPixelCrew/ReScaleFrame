@@ -25,7 +25,7 @@ mod timing;
 use bridge_abi::{
     RSF_XESS_BRIDGE_ABI_MISMATCH as ABI_MISMATCH,
     RSF_XESS_BRIDGE_ABI_VERSION as BRIDGE_ABI_VERSION,
-    RSF_XESS_BRIDGE_INVALID_ARGUMENT as INVALID_ARGUMENT, VulkanStoryXessFrame as Frame,
+    RSF_XESS_BRIDGE_INVALID_ARGUMENT as INVALID_ARGUMENT, rsf_vk_xess_fg_frame as Frame,
     rsf_xess_bridge_create as IntegratedCreate, rsf_xess_bridge_frame as IntegratedFrame,
     rsf_xess_bridge_present_status as IntegratedStatus, rsf_xess_bridge_start as IntegratedStart,
 };

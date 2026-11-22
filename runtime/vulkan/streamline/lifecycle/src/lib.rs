@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Lifecycle owner for the Streamline Vulkan interposer.
 //!
-//! `runtime/vulkan/streamline/bridge.cpp` keeps the `VulkanStorySl*` exports, the
+//! `runtime/vulkan/streamline/bridge.cpp` keeps the native `rsf_vk_sl_*` exports, the
 //! typed SDK entry points and the verified-file leaf. This
 //! crate decides when the interposer is admitted, loaded, initialized, shut down
 //! and unloaded, which features slInit loads, and which Vulkan dispatch entry

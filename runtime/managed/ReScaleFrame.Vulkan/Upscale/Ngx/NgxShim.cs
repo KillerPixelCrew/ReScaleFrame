@@ -102,74 +102,74 @@ internal static unsafe class NgxShim
 
     private const CallingConvention Cdecl = CallingConvention.Cdecl;
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_Version", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_version", CallingConvention = Cdecl)]
     private static extern uint VersionCore();
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_LoadRuntime", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_load_runtime", CallingConvention = Cdecl)]
     private static extern NgxResult LoadRuntimeCore();
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_RuntimeName", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_runtime_name", CallingConvention = Cdecl)]
     private static extern IntPtr RuntimeNameCore();
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_LastLoadError", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_last_load_error", CallingConvention = Cdecl)]
     private static extern IntPtr LastLoadErrorCore();
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_VulkanInitProjectId", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_vulkan_init_project_id", CallingConvention = Cdecl)]
     public static extern NgxResult InitProjectId(
         IntPtr projectId, NgxEngineType engineType, IntPtr engineVersion, IntPtr applicationDataPath,
         IntPtr instance, IntPtr physicalDevice, IntPtr device, int sdkVersion,
         NgxFeatureCommonInfo* featureInfo);
 
     /// <summary>Shuts down NGX for the supplied logical device after its features are released.</summary>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_VulkanShutdown", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_vulkan_shutdown", CallingConvention = Cdecl)]
     public static extern NgxResult Shutdown(IntPtr device);
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_GetCapabilityParameters", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_get_capability_parameters", CallingConvention = Cdecl)]
     public static extern NgxResult GetCapabilityParameters(out IntPtr parameters);
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_AllocateParameters", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_allocate_parameters", CallingConvention = Cdecl)]
     public static extern NgxResult AllocateParameters(out IntPtr parameters);
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_DestroyParameters", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_destroy_parameters", CallingConvention = Cdecl)]
     public static extern NgxResult DestroyParameters(IntPtr parameters);
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_GetFeatureRequirements", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_get_feature_requirements", CallingConvention = Cdecl)]
     public static extern NgxResult GetFeatureRequirements(
         IntPtr instance, IntPtr physicalDevice, NgxFeatureDiscoveryInfo* discovery,
         NgxFeatureRequirement* outSupported);
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_GetFeatureInstanceExtensionRequirements",
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_get_feature_instance_extension_requirements",
         CallingConvention = Cdecl)]
     public static extern NgxResult GetFeatureInstanceExtensionRequirements(
         NgxFeatureDiscoveryInfo* discovery, uint* outCount, NgxExtensionProperties** outProperties);
 
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_GetFeatureDeviceExtensionRequirements",
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_get_feature_device_extension_requirements",
         CallingConvention = Cdecl)]
     public static extern NgxResult GetFeatureDeviceExtensionRequirements(
         IntPtr instance, IntPtr physicalDevice, NgxFeatureDiscoveryInfo* discovery,
         uint* outCount, NgxExtensionProperties** outProperties);
 
     /// <summary>Creates an NGX feature through the shim using a live command buffer and parameter map.</summary>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_CreateFeature", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_create_feature", CallingConvention = Cdecl)]
     public static extern NgxResult CreateFeature(
         IntPtr commandBuffer, NgxFeature feature, IntPtr parameters, out IntPtr handle);
 
     /// <summary>Creates an NGX feature through the device-explicit shim entry point.</summary>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_CreateFeature1", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_create_feature1", CallingConvention = Cdecl)]
     public static extern NgxResult CreateFeature1(
         IntPtr device, IntPtr commandBuffer, NgxFeature feature, IntPtr parameters, out IntPtr handle);
 
     /// <summary>Records evaluation of a live NGX feature using the supplied command buffer and parameters.</summary>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_EvaluateFeature", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_evaluate_feature", CallingConvention = Cdecl)]
     public static extern NgxResult EvaluateFeature(
         IntPtr commandBuffer, IntPtr handle, IntPtr parameters, IntPtr progressCallback);
 
     /// <summary>Releases an NGX feature after its referencing GPU work has completed.</summary>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ReleaseFeature", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_release_feature", CallingConvention = Cdecl)]
     public static extern NgxResult ReleaseFeature(IntPtr handle);
 
     /// <summary>Queries NGX optimal/minimum/maximum input dimensions and recommended sharpness for DLSS quality.</summary>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_DlssGetOptimalSettings", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_dlss_get_optimal_settings", CallingConvention = Cdecl)]
     public static extern NgxResult DlssGetOptimalSettings(
         IntPtr parameters, uint displayWidth, uint displayHeight, NgxPerfQuality quality,
         uint* outOptimalWidth, uint* outOptimalHeight, uint* outMinWidth, uint* outMinHeight,
@@ -181,61 +181,61 @@ internal static unsafe class NgxShim
 
     /// <summary>Sets a unsigned 64-bit integer NGX parameter through the native shim.</summary>
     /// <remarks>The supplied parameter-map pointer must remain live for the call.</remarks>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterSetULongLong", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_set_u_long_long", CallingConvention = Cdecl)]
     public static extern NgxResult SetULong(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, ulong value);
 
     /// <summary>Sets a single-precision value NGX parameter through the native shim.</summary>
     /// <remarks>The supplied parameter-map pointer must remain live for the call.</remarks>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterSetFloat", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_set_float", CallingConvention = Cdecl)]
     public static extern NgxResult SetFloat(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, float value);
 
     /// <summary>Sets a double-precision value NGX parameter through the native shim.</summary>
     /// <remarks>The supplied parameter-map pointer must remain live for the call.</remarks>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterSetDouble", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_set_double", CallingConvention = Cdecl)]
     public static extern NgxResult SetDouble(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, double value);
 
     /// <summary>Sets a unsigned 32-bit integer NGX parameter through the native shim.</summary>
     /// <remarks>The supplied parameter-map pointer must remain live for the call.</remarks>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterSetUInt", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_set_u_int", CallingConvention = Cdecl)]
     public static extern NgxResult SetUInt(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, uint value);
 
     /// <summary>Sets a signed 32-bit integer NGX parameter through the native shim.</summary>
     /// <remarks>The supplied parameter-map pointer must remain live for the call.</remarks>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterSetInt", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_set_int", CallingConvention = Cdecl)]
     public static extern NgxResult SetInt(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int value);
 
     /// <summary>Sets a borrowed native resource pointer NGX parameter through the native shim.</summary>
     /// <remarks>The supplied parameter-map pointer must remain live for the call.</remarks>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterSetVoidPointer", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_set_void_pointer", CallingConvention = Cdecl)]
     public static extern NgxResult SetVoidPointer(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, IntPtr value);
 
     /// <summary>Reads a unsigned 64-bit integer NGX parameter through the native shim.</summary>
     /// <returns>The native NGX accessor result.</returns>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterGetULongLong", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_get_u_long_long", CallingConvention = Cdecl)]
     public static extern NgxResult GetULong(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, out ulong value);
 
     /// <summary>Reads a single-precision value NGX parameter through the native shim.</summary>
     /// <returns>The native NGX accessor result.</returns>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterGetFloat", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_get_float", CallingConvention = Cdecl)]
     public static extern NgxResult GetFloat(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, out float value);
 
     /// <summary>Reads a double-precision value NGX parameter through the native shim.</summary>
     /// <returns>The native NGX accessor result.</returns>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterGetDouble", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_get_double", CallingConvention = Cdecl)]
     public static extern NgxResult GetDouble(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, out double value);
 
     /// <summary>Reads a unsigned 32-bit integer NGX parameter through the native shim.</summary>
     /// <returns>The native NGX accessor result.</returns>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterGetUInt", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_get_u_int", CallingConvention = Cdecl)]
     public static extern NgxResult GetUInt(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, out uint value);
 
     /// <summary>Reads a signed 32-bit integer NGX parameter through the native shim.</summary>
     /// <returns>The native NGX accessor result.</returns>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterGetInt", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_get_int", CallingConvention = Cdecl)]
     public static extern NgxResult GetInt(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, out int value);
 
     /// <summary>Reads a borrowed native resource pointer NGX parameter through the native shim.</summary>
     /// <returns>The native NGX accessor result.</returns>
-    [DllImport(LibraryName, EntryPoint = "VulkanStoryNgx_ParameterGetVoidPointer", CallingConvention = Cdecl)]
+    [DllImport(LibraryName, EntryPoint = "rsf_vk_ngx_parameter_get_void_pointer", CallingConvention = Cdecl)]
     public static extern NgxResult GetVoidPointer(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr value);
 }

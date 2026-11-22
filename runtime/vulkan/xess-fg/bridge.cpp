@@ -70,7 +70,7 @@ void WriteTimingReport(const rsf_xess_timing_report* report) {
 
 // Typed storage for the Rust session and its presentation leaves. The public
 // handle may remain live after failed retirement; only the session frees it.
-struct VulkanStoryXessFg {
+struct rsf_vk_xess_fg {
     rsf_xess_bridge_session* session = nullptr;
     const rsf_xess_timing* timing = nullptr;
     // Borrowed from the session; the SDK diagnostic callback user.
@@ -119,10 +119,10 @@ struct VulkanStoryXessFg {
     decltype(&xefgSwapChainGetLastPresentStatus) presentStatus = nullptr;
 };
 
-static_assert(sizeof(VulkanStoryXessFrame) == 216 && alignof(VulkanStoryXessFrame) == 8);
-static_assert(offsetof(VulkanStoryXessFrame, color) == 16);
-static_assert(offsetof(VulkanStoryXessFrame, view) == 56);
-static_assert(offsetof(VulkanStoryXessFrame, ready) == 200);
+static_assert(sizeof(rsf_vk_xess_fg_frame) == 216 && alignof(rsf_vk_xess_fg_frame) == 8);
+static_assert(offsetof(rsf_vk_xess_fg_frame, color) == 16);
+static_assert(offsetof(rsf_vk_xess_fg_frame, view) == 56);
+static_assert(offsetof(rsf_vk_xess_fg_frame, ready) == 200);
 static_assert(sizeof(rsf_xess_bridge_frame) == 216 && alignof(rsf_xess_bridge_frame) == 8);
 static_assert(offsetof(rsf_xess_bridge_frame, color) == 24);
 static_assert(offsetof(rsf_xess_bridge_frame, view_matrix) == 56);
@@ -163,7 +163,7 @@ static int32_t LoadRuntime(const uint16_t* directory,
     return -3;
 }
 
-static void BindRuntime(VulkanStoryXessFg* value, const rsf_xess_bridge_sdk_entries* entries) {
+static void BindRuntime(rsf_vk_xess_fg* value, const rsf_xess_bridge_sdk_entries* entries) {
     value->createXell = reinterpret_cast<decltype(value->createXell)>((*entries)[0]);
     value->destroyXell = reinterpret_cast<decltype(value->destroyXell)>((*entries)[1]);
     value->setSleepMode = reinterpret_cast<decltype(value->setSleepMode)>((*entries)[2]);
@@ -184,8 +184,8 @@ static void BindRuntime(VulkanStoryXessFg* value, const rsf_xess_bridge_sdk_entr
     value->presentStatus = reinterpret_cast<decltype(value->presentStatus)>((*entries)[17]);
 }
 
-static VulkanStoryXessFg* Allocate(rsf_xess_bridge_session* session, const rsf_xess_timing* timing) noexcept try {
-    auto* value = new (std::nothrow) VulkanStoryXessFg();
+static rsf_vk_xess_fg* Allocate(rsf_xess_bridge_session* session, const rsf_xess_timing* timing) noexcept try {
+    auto* value = new (std::nothrow) rsf_vk_xess_fg();
     if (value) {
         value->session = session;
         value->timing = timing;
@@ -195,7 +195,7 @@ static VulkanStoryXessFg* Allocate(rsf_xess_bridge_session* session, const rsf_x
     return nullptr;
 }
 
-static void ReleaseNative(VulkanStoryXessFg* value) {
+static void ReleaseNative(rsf_vk_xess_fg* value) {
     Release(value->commandList);
     for (auto*& allocator : value->allocators) Release(allocator);
     Release(value->postList);
@@ -211,34 +211,34 @@ static void ReleaseNative(VulkanStoryXessFg* value) {
     delete value;
 }
 
-static int32_t CreateFactory(VulkanStoryXessFg* value) {
+static int32_t CreateFactory(rsf_vk_xess_fg* value) {
     return FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&value->factory))) ? -4 : 0;
 }
 
-static int32_t FindAdapter(VulkanStoryXessFg* value, uint64_t adapterLuid) {
+static int32_t FindAdapter(rsf_vk_xess_fg* value, uint64_t adapterLuid) {
     LUID luid{};
     luid.LowPart = static_cast<DWORD>(adapterLuid);
     luid.HighPart = static_cast<LONG>(adapterLuid >> 32);
     return FAILED(value->factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&value->adapter))) ? -5 : 0;
 }
 
-static int32_t CreateDevice(VulkanStoryXessFg* value) {
+static int32_t CreateDevice(rsf_vk_xess_fg* value) {
     return FAILED(D3D12CreateDevice(value->adapter, D3D_FEATURE_LEVEL_11_0,
         IID_PPV_ARGS(&value->device))) ? -6 : 0;
 }
 
-static int32_t CreateQueue(VulkanStoryXessFg* value) {
+static int32_t CreateQueue(rsf_vk_xess_fg* value) {
     D3D12_COMMAND_QUEUE_DESC queue{};
     queue.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     return FAILED(value->device->CreateCommandQueue(&queue, IID_PPV_ARGS(&value->queue))) ? -7 : 0;
 }
 
-static int32_t CreateXell(VulkanStoryXessFg* value) {
+static int32_t CreateXell(rsf_vk_xess_fg* value) {
     int code = static_cast<int>(value->createXell(value->device, &value->xell));
     return code == 0 && !value->xell ? -8 : code;
 }
 
-static int32_t CreateFg(VulkanStoryXessFg* value, void* module) {
+static int32_t CreateFg(rsf_vk_xess_fg* value, void* module) {
     int code = static_cast<int>(value->createFg(value->device, &value->fg));
     if (code != 0 || !value->fg) return code != 0 ? code : -9;
     if (std::getenv("VULKANSTORY_XESS_FG_LOG")) {
@@ -264,13 +264,13 @@ static void LogCreateError(const char* stage, int32_t error, int32_t cleanup) {
             error, cleanup);
 }
 
-static int32_t ReadCompletion(VulkanStoryXessFg* value, uint64_t* completed) {
+static int32_t ReadCompletion(rsf_vk_xess_fg* value, uint64_t* completed) {
     if (!value->completionFence) return static_cast<int32_t>(E_UNEXPECTED);
     *completed = value->completionFence->GetCompletedValue();
     return *completed == UINT64_MAX ? static_cast<int32_t>(DXGI_ERROR_DEVICE_REMOVED) : 0;
 }
 
-static int32_t DestroyFg(VulkanStoryXessFg* value) {
+static int32_t DestroyFg(rsf_vk_xess_fg* value) {
     if (!value->fg) return 0;
     if (!value->destroyFg) return -1;
     int code = static_cast<int>(value->destroyFg(value->fg));
@@ -278,7 +278,7 @@ static int32_t DestroyFg(VulkanStoryXessFg* value) {
     return code;
 }
 
-static int32_t DestroyXell(VulkanStoryXessFg* value) {
+static int32_t DestroyXell(rsf_vk_xess_fg* value) {
     if (!value->xell) return 0;
     if (!value->destroyXell) return -1;
     int code = static_cast<int>(value->destroyXell(value->xell));
@@ -286,36 +286,36 @@ static int32_t DestroyXell(VulkanStoryXessFg* value) {
     return code;
 }
 
-static bool IsStarted(const VulkanStoryXessFg* value) {
+static bool IsStarted(const rsf_vk_xess_fg* value) {
     return rsf_core_xess_bridge_started(value->session) != 0;
 }
 
-extern "C" __declspec(dllexport) int VulkanStoryXessFgWaitIdle(VulkanStoryXessFg* value) {
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_wait_idle(rsf_vk_xess_fg* value) {
     return value ? rsf_core_xess_bridge_wait_idle(value->session) : -1;
 }
 
-extern "C" __declspec(dllexport) const char* VulkanStoryXessFgLastCreateStage() {
+extern "C" __declspec(dllexport) const char* rsf_vk_xess_fg_last_create_stage() {
     return rsf_core_xess_bridge_create_stage();
 }
 
 // The host stops admission, then drains its Vulkan users before retiring the
 // SDK consumers. Shared input resources stay alive until preparation succeeds.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgPrepareDestroy(VulkanStoryXessFg* value) {
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_prepare_destroy(rsf_vk_xess_fg* value) {
     return value ? rsf_core_xess_bridge_prepare_destroy(value->session) : 0;
 }
 
-extern "C" __declspec(dllexport) int VulkanStoryXessFgDestroyChecked(VulkanStoryXessFg* value) {
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_destroy_checked(rsf_vk_xess_fg* value) {
     return value ? rsf_core_xess_bridge_destroy(value->session) : 0;
 }
 
-extern "C" __declspec(dllexport) void VulkanStoryXessFgDestroy(VulkanStoryXessFg* value) {
-    VulkanStoryXessFgDestroyChecked(value);
+extern "C" __declspec(dllexport) void rsf_vk_xess_fg_destroy(rsf_vk_xess_fg* value) {
+    rsf_vk_xess_fg_destroy_checked(value);
 }
 
-static int CreateContext(uint64_t adapterLuid, const wchar_t* directory, VulkanStoryXessFg** output);
+static int CreateContext(uint64_t adapterLuid, const wchar_t* directory, rsf_vk_xess_fg** output);
 
-extern "C" __declspec(dllexport) int VulkanStoryXessFgCreate(uint64_t adapterLuid,
-    VulkanStoryXessFg** output) {
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create(uint64_t adapterLuid,
+    rsf_vk_xess_fg** output) {
     return CreateContext(adapterLuid, nullptr, output);
 }
 
@@ -331,8 +331,8 @@ extern "C" __declspec(dllexport) uint64_t RsfXessBridgeAdapterLuid(const rsf_xes
 /// @brief Queries the selected Vulkan device LUID and creates its matching native presentation context.
 /// @details The Vulkan physical device is borrowed and must expose a valid Windows LUID.
 /// @return Native creation result, or a negative argument/Vulkan-query availability code.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgCreateFromVulkan(
-    VkPhysicalDevice physical, VulkanStoryXessFg** output) {
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create_from_vulkan(
+    VkPhysicalDevice physical, rsf_vk_xess_fg** output) {
     rsf_core_xess_bridge_note_vulkan_lookup();
     if (!output) return -1;
     *output = nullptr;
@@ -350,12 +350,12 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgCreateFromVulkan(
     if (!id.deviceLUIDValid) return -11;
     uint64_t luid = 0;
     std::memcpy(&luid, id.deviceLUID, VK_LUID_SIZE);
-    return VulkanStoryXessFgCreate(luid, output);
+    return rsf_vk_xess_fg_create(luid, output);
 }
 
 // The borrowed HWND must be free of other swapchain owners. Per-frame VSync
 // is applied by the native presentation path.
-static int32_t InitSwapchain(VulkanStoryXessFg* value, void* window, uint32_t width,
+static int32_t InitSwapchain(rsf_vk_xess_fg* value, void* window, uint32_t width,
     uint32_t height, const xefg_swapchain_d3d12_init_params_t* params) {
     IDXGIFactory5* factory5 = nullptr;
     if (SUCCEEDED(value->factory->QueryInterface(IID_PPV_ARGS(&factory5)))) {
@@ -377,13 +377,13 @@ static int32_t InitSwapchain(VulkanStoryXessFg* value, void* window, uint32_t wi
         &desc, nullptr, value->queue, value->factory, params));
 }
 
-static int32_t GetSwapchain(VulkanStoryXessFg* value) {
+static int32_t GetSwapchain(rsf_vk_xess_fg* value) {
     int code = static_cast<int>(value->getSwapchain(value->fg,
         __uuidof(IDXGISwapChain4), reinterpret_cast<void**>(&value->swapchain)));
     return code >= 0 && !value->swapchain ? -2 : code;
 }
 
-static int32_t CreateRecorders(VulkanStoryXessFg* value) {
+static int32_t CreateRecorders(rsf_vk_xess_fg* value) {
     HRESULT result;
     for (auto*& allocator : value->allocators) {
         result = value->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -397,11 +397,11 @@ static int32_t CreateRecorders(VulkanStoryXessFg* value) {
 }
 
 // The session admits the exact SDK binary before resolving its private setter.
-static void BindDiagnostics(VulkanStoryXessFg* value, void* address) {
+static void BindDiagnostics(rsf_vk_xess_fg* value, void* address) {
     value->setDiagnostics = reinterpret_cast<rsf_xess_capture::SetDiagnostics>(address);
 }
 
-static int32_t RegisterDiagnostics(VulkanStoryXessFg* value) {
+static int32_t RegisterDiagnostics(rsf_vk_xess_fg* value) {
     rsf_xess_capture::DiagnosticsV2 diagnostics;
     diagnostics.user = value->capture;
     diagnostics.input = rsf_xess_capture::Input;
@@ -412,14 +412,14 @@ static int32_t RegisterDiagnostics(VulkanStoryXessFg* value) {
     return result;
 }
 
-static int32_t UnregisterDiagnostics(VulkanStoryXessFg* value) {
+static int32_t UnregisterDiagnostics(rsf_vk_xess_fg* value) {
     if (!value->diagnosticContext || !value->setDiagnostics) return 0;
     const int result = value->setDiagnostics(value->diagnosticContext, nullptr);
     if (result >= 0) value->diagnosticContext = nullptr;
     return result;
 }
 
-static int32_t SetGenerated(VulkanStoryXessFg* value, uint32_t count) {
+static int32_t SetGenerated(rsf_vk_xess_fg* value, uint32_t count) {
     return static_cast<int>(value->setInterpolations(value->fg, count));
 }
 
@@ -434,7 +434,7 @@ extern "C" __declspec(dllexport) uint64_t RsfXessBridgeCapturedCallbacks(const r
     return value ? rsf_core_xess_capture_callbacks(value->capture) : 0;
 }
 
-extern "C" __declspec(dllexport) int VulkanStoryXessFgStart(VulkanStoryXessFg* value,
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_start(rsf_vk_xess_fg* value,
     HWND window, uint32_t width, uint32_t height, uint32_t vsync) {
     (void)vsync;
     return value ? rsf_core_xess_bridge_start(value->session, window, width, height, 0, 0,
@@ -458,7 +458,7 @@ extern "C" __declspec(dllexport) int32_t RsfXessBridgeSetGenerated(rsf_xess_brid
 
 /// @brief Forwards frame-generation enablement for an already started native presenter.
 /// @return SDK result, or -1 without a started FG context.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgSetEnabled(VulkanStoryXessFg* value,
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_set_enabled(rsf_vk_xess_fg* value,
     uint32_t enabled) {
     return value && value->fg && IsStarted(value) ?
         static_cast<int>(value->setEnabled(value->fg, enabled ? 1 : 0)) : -1;
@@ -471,8 +471,8 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgSetEnabled(VulkanStoryXess
 /// @param effective Required output for the clamped count.
 /// @param maximum Required output for the native interpolation limit.
 /// @return SDK result, zero for an unchanged count, or -1 for missing prerequisites.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgSetGeneratedFrames(
-    VulkanStoryXessFg* value, uint32_t requested, uint32_t* effective, uint32_t* maximum) {
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_set_generated_frames(
+    rsf_vk_xess_fg* value, uint32_t requested, uint32_t* effective, uint32_t* maximum) {
     return value && value->fg ?
         rsf_core_xess_bridge_set_generated_legacy(value->session, requested, effective, maximum) : -1;
 }
@@ -489,7 +489,7 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgSetGeneratedFrames(
 /// @param sharedHandle Caller-owned NT handle; close it after import/use.
 /// @param resource Caller-owned COM reference; release after both APIs finish.
 /// @return Zero on success; outputs are cleared before creation. Unsupported formats/local/HRESULT failures are nonzero.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgCreateSharedImage(VulkanStoryXessFg* value,
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create_shared_image(rsf_vk_xess_fg* value,
     uint32_t width, uint32_t height, uint32_t vkFormat, HANDLE* sharedHandle,
     ID3D12Resource** resource) {
     if (!value || !value->device || !width || !height || !sharedHandle || !resource)
@@ -536,7 +536,7 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgCreateSharedImage(VulkanSt
 
 /// @brief Releases a caller-owned shared-image COM reference; null is accepted.
 /// @details No waiting occurs; the host must first complete Vulkan import users and DX12 consumers.
-extern "C" __declspec(dllexport) void VulkanStoryXessFgReleaseImage(ID3D12Resource* resource) {
+extern "C" __declspec(dllexport) void rsf_vk_xess_fg_release_image(ID3D12Resource* resource) {
     Release(resource);
 }
 
@@ -545,8 +545,8 @@ extern "C" __declspec(dllexport) void VulkanStoryXessFgReleaseImage(ID3D12Resour
 /// @brief Creates or reuses the native-owned DX12 shared fence and exports a caller-owned NT handle.
 /// @details The importer closes the handle after permanent Vulkan timeline-semaphore import; the bridge keeps the DX12 fence for GPU queue waits/signals.
 /// @return Zero on success, or a local/HRESULT error.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgCreateSharedFence(
-    VulkanStoryXessFg* value, HANDLE* sharedHandle) {
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create_shared_fence(
+    rsf_vk_xess_fg* value, HANDLE* sharedHandle) {
     if (!value || !value->device || !sharedHandle) return -1;
     *sharedHandle = nullptr;
     if (!value->sharedFence) {
@@ -559,19 +559,19 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgCreateSharedFence(
     return FAILED(result) ? static_cast<int>(result) : 0;
 }
 
-static int32_t WaitShared(VulkanStoryXessFg* value, uint64_t target) {
+static int32_t WaitShared(rsf_vk_xess_fg* value, uint64_t target) {
     return static_cast<int32_t>(value->queue->Wait(value->sharedFence, target));
 }
 
-static int32_t SignalDone(VulkanStoryXessFg* value, uint64_t target) {
+static int32_t SignalDone(rsf_vk_xess_fg* value, uint64_t target) {
     return static_cast<int32_t>(value->queue->Signal(value->sharedFence, target));
 }
 
 /// @brief Queues a DX12 GPU wait for the borrowed shared-fence value.
 /// @details This returns after enqueuing the wait; it does not synchronously wait on the CPU.
 /// @return Zero when enqueued, otherwise local/HRESULT failure.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgWaitSharedFence(
-    VulkanStoryXessFg* value, uint64_t fenceValue) {
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_wait_shared_fence(
+    rsf_vk_xess_fg* value, uint64_t fenceValue) {
     if (!value || !value->queue || !value->sharedFence || !fenceValue) return -1;
     const int32_t code = WaitShared(value, fenceValue);
     return code < 0 ? code : 0;
@@ -580,8 +580,8 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgWaitSharedFence(
 /// @brief Queues a DX12 shared-fence signal behind prior queue work.
 /// @details The caller must reserve ordered values and must not equate a successful enqueue with immediate GPU completion.
 /// @return Zero when enqueued, otherwise local/HRESULT failure.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgSignalSharedFence(
-    VulkanStoryXessFg* value, uint64_t fenceValue) {
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_signal_shared_fence(
+    rsf_vk_xess_fg* value, uint64_t fenceValue) {
     if (!value || !value->queue || !value->sharedFence || !fenceValue) return -1;
     const int32_t code = SignalDone(value, fenceValue);
     return code < 0 ? code : 0;
@@ -605,7 +605,7 @@ static void Transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource
 namespace {
 /// @brief Lazily creates opt-in timestamp queries, readback storage and post-present command lists.
 /// @details Objects remain owned by the context and are released during checked destruction; a false result disables that timing sample.
-bool EnsureGpuTiming(VulkanStoryXessFg* value) {
+bool EnsureGpuTiming(rsf_vk_xess_fg* value) {
     if (value->postList) return true;
     constexpr uint32_t queryCount = RSF_XESS_BRIDGE_ALLOCATOR_COUNT * 3;
     D3D12_QUERY_HEAP_DESC heap{};
@@ -637,7 +637,7 @@ bool EnsureGpuTiming(VulkanStoryXessFg* value) {
 // timestamps are final and go on the CPU clock through a fresh calibration.
 /// @brief Reads the completed slot timestamps and the queue's clock calibration.
 /// @details The caller first waits for the slot's previous DX12 completion before reusing query/allocator storage.
-void HarvestGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
+void HarvestGpuTiming(rsf_vk_xess_fg* value, uint32_t slot) {
     if (!value->slotTimed[slot]) return;
     value->slotTimed[slot] = false;
     uint64_t* mapped = nullptr;
@@ -665,7 +665,7 @@ static void DescribePresentResource(void* resource, rsf_xess_bridge_resource_des
 
 #endif
 
-static int32_t ResetPresentCommands(VulkanStoryXessFg* value, uint32_t slot) {
+static int32_t ResetPresentCommands(rsf_vk_xess_fg* value, uint32_t slot) {
     const HRESULT result = value->allocators[slot]->Reset();
     if (FAILED(result)) return static_cast<int32_t>(result);
     return static_cast<int32_t>(value->commandList->Reset(value->allocators[slot], nullptr));
@@ -674,7 +674,7 @@ static int32_t ResetPresentCommands(VulkanStoryXessFg* value, uint32_t slot) {
 static_assert(D3D12_RESOURCE_STATE_COMMON == 0 && D3D12_RESOURCE_STATE_PRESENT == 0 &&
     D3D12_RESOURCE_STATE_COPY_DEST == 0x400 && D3D12_RESOURCE_STATE_COPY_SOURCE == 0x800);
 
-static void TransitionPresentResource(VulkanStoryXessFg* value, void* resource,
+static void TransitionPresentResource(rsf_vk_xess_fg* value, void* resource,
     uint32_t before, uint32_t after) {
 #if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
     rsf_xess_capture::rsf_core_xess_d3d12_present_transition(value->commandList, resource, before, after);
@@ -684,7 +684,7 @@ static void TransitionPresentResource(VulkanStoryXessFg* value, void* resource,
 #endif
 }
 
-static int32_t AcquireBackbuffer(VulkanStoryXessFg* value, void** output) {
+static int32_t AcquireBackbuffer(rsf_vk_xess_fg* value, void** output) {
     ID3D12Resource* backbuffer = nullptr;
     const uint32_t backbufferIndex = value->swapchain->GetCurrentBackBufferIndex();
     const HRESULT result = value->swapchain->GetBuffer(backbufferIndex, IID_PPV_ARGS(&backbuffer));
@@ -692,7 +692,7 @@ static int32_t AcquireBackbuffer(VulkanStoryXessFg* value, void** output) {
     return static_cast<int32_t>(result);
 }
 
-static void CopyPresentColor(VulkanStoryXessFg* value, void* backbuffer, void* color) {
+static void CopyPresentColor(rsf_vk_xess_fg* value, void* backbuffer, void* color) {
 #if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
     rsf_xess_capture::rsf_core_xess_d3d12_present_copy(value->commandList, backbuffer, color);
 #else
@@ -701,27 +701,27 @@ static void CopyPresentColor(VulkanStoryXessFg* value, void* backbuffer, void* c
 #endif
 }
 
-static void ExecutePresentCommands(VulkanStoryXessFg* value) {
+static void ExecutePresentCommands(rsf_vk_xess_fg* value) {
     ID3D12CommandList* lists[] = {value->commandList};
     value->queue->ExecuteCommandLists(1, lists);
 }
 
-static int32_t PresentSwapchain(VulkanStoryXessFg* value, uint32_t vsync) {
+static int32_t PresentSwapchain(rsf_vk_xess_fg* value, uint32_t vsync) {
     const uint32_t flags = !vsync && value->allowTearing ? DXGI_PRESENT_ALLOW_TEARING : 0;
     return static_cast<int32_t>(value->swapchain->Present(vsync ? 1 : 0, flags));
 }
 
-static uint32_t BeginGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
+static uint32_t BeginGpuTiming(rsf_vk_xess_fg* value, uint32_t slot) {
     if (!EnsureGpuTiming(value)) return 0;
     HarvestGpuTiming(value, slot);
     return 1;
 }
 
-static void TimestampCopies(VulkanStoryXessFg* value, uint32_t slot, uint32_t index) {
+static void TimestampCopies(rsf_vk_xess_fg* value, uint32_t slot, uint32_t index) {
     value->commandList->EndQuery(value->queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, slot * 3 + index);
 }
 
-static void FinishGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
+static void FinishGpuTiming(rsf_vk_xess_fg* value, uint32_t slot) {
     value->presentExit[slot] = TimingNow();
     if (SUCCEEDED(value->postAllocators[slot]->Reset()) &&
         SUCCEEDED(value->postList->Reset(value->postAllocators[slot], nullptr))) {
@@ -749,22 +749,22 @@ static constexpr rsf_xess_bridge_platform Platform{
     .create_queue = CreateQueue,
     .create_xell = CreateXell,
     .create_fg = CreateFg,
-    .set_latency = [](VulkanStoryXessFg* value) -> int32_t {
+    .set_latency = [](rsf_vk_xess_fg* value) -> int32_t {
         return value->setLatency(value->fg, value->xell);
     },
-    .set_sleep_mode = [](VulkanStoryXessFg* value, const xell_sleep_params_t* mode) -> int32_t {
+    .set_sleep_mode = [](rsf_vk_xess_fg* value, const xell_sleep_params_t* mode) -> int32_t {
         return value->setSleepMode(value->xell, mode);
     },
     .log_create_error = LogCreateError,
     .init_swapchain = InitSwapchain,
-    .get_properties = [](VulkanStoryXessFg* value, xefg_swapchain_properties_t* properties) -> int32_t {
+    .get_properties = [](rsf_vk_xess_fg* value, xefg_swapchain_properties_t* properties) -> int32_t {
         return value->getProperties(value->fg, properties);
     },
     .get_swapchain = GetSwapchain,
-    .enable_ui = [](VulkanStoryXessFg* value) -> int32_t {
+    .enable_ui = [](rsf_vk_xess_fg* value) -> int32_t {
         return value->setUi(value->fg, XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED);
     },
-    .create_completion_fence = [](VulkanStoryXessFg* value) -> int32_t {
+    .create_completion_fence = [](rsf_vk_xess_fg* value) -> int32_t {
         return value->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&value->completionFence));
     },
     .open_event = []() -> void* { return CreateEventW(nullptr, FALSE, FALSE, nullptr); },
@@ -772,20 +772,20 @@ static constexpr rsf_xess_bridge_platform Platform{
     .bind_diagnostics = BindDiagnostics,
     .set_generated = SetGenerated,
     .read_completion = ReadCompletion,
-    .arm_completion = [](VulkanStoryXessFg* value, uint64_t target, void* event) -> int32_t {
+    .arm_completion = [](rsf_vk_xess_fg* value, uint64_t target, void* event) -> int32_t {
         return value->completionFence->SetEventOnCompletion(target, event);
     },
     .wait_event = [](void* event, uint32_t timeout) -> int32_t {
         return WaitForSingleObject(event, timeout) == WAIT_OBJECT_0 ? 0 : -3;
     },
-    .disable_fg = [](VulkanStoryXessFg* value) -> int32_t {
+    .disable_fg = [](rsf_vk_xess_fg* value) -> int32_t {
         return value->fg && value->setEnabled ? static_cast<int>(value->setEnabled(value->fg, 0)) : -1;
     },
     .unregister_diagnostics = UnregisterDiagnostics,
-    .release_swapchain = [](VulkanStoryXessFg* value) { Release(value->swapchain); },
+    .release_swapchain = [](rsf_vk_xess_fg* value) { Release(value->swapchain); },
     .destroy_fg = DestroyFg,
     .destroy_xell = DestroyXell,
-    .has_shared_queue = [](const VulkanStoryXessFg* value) -> uint32_t {
+    .has_shared_queue = [](const rsf_vk_xess_fg* value) -> uint32_t {
         return value->queue && value->sharedFence;
     },
 #if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
@@ -797,27 +797,27 @@ static constexpr rsf_xess_bridge_platform Platform{
     .transition_present_resource = TransitionPresentResource,
     .acquire_backbuffer = AcquireBackbuffer,
     .copy_present_color = CopyPresentColor,
-    .tag_present_resource = [](VulkanStoryXessFg* value, uint32_t frameId,
+    .tag_present_resource = [](rsf_vk_xess_fg* value, uint32_t frameId,
         const xefg_swapchain_d3d12_resource_data_t* data) -> int32_t {
         return value->tagResource(value->fg, value->commandList, frameId, data);
     },
     .release_backbuffer = [](void* backbuffer) { static_cast<ID3D12Resource*>(backbuffer)->Release(); },
-    .close_commands = [](VulkanStoryXessFg* value) -> int32_t { return value->commandList->Close(); },
-    .tag_constants = [](VulkanStoryXessFg* value, uint32_t frameId,
+    .close_commands = [](rsf_vk_xess_fg* value) -> int32_t { return value->commandList->Close(); },
+    .tag_constants = [](rsf_vk_xess_fg* value, uint32_t frameId,
         const xefg_swapchain_frame_constant_data_t* data) -> int32_t {
         return value->tagConstants(value->fg, frameId, data);
     },
     .wait_shared = WaitShared,
     .execute = ExecutePresentCommands,
-    .set_present_id = [](VulkanStoryXessFg* value, uint32_t frameId) -> int32_t {
+    .set_present_id = [](rsf_vk_xess_fg* value, uint32_t frameId) -> int32_t {
         return value->setPresentId(value->fg, frameId);
     },
     .present = PresentSwapchain,
     .signal_done = SignalDone,
-    .signal_completion = [](VulkanStoryXessFg* value, uint64_t target) -> int32_t {
+    .signal_completion = [](rsf_vk_xess_fg* value, uint64_t target) -> int32_t {
         return value->queue->Signal(value->completionFence, target);
     },
-    .read_present_status = [](VulkanStoryXessFg* value, xefg_swapchain_present_status_t* status) -> int32_t {
+    .read_present_status = [](rsf_vk_xess_fg* value, xefg_swapchain_present_status_t* status) -> int32_t {
         return value->presentStatus(value->fg, status);
     },
     .timing_enabled = []() -> uint32_t { return timing_enabled; },
@@ -826,7 +826,7 @@ static constexpr rsf_xess_bridge_platform Platform{
     .timing_report = WriteTimingReport,
     .begin_gpu_timing = BeginGpuTiming,
     .timestamp_copies = TimestampCopies,
-    .mark_present_enter = [](VulkanStoryXessFg* value, uint32_t slot) {
+    .mark_present_enter = [](rsf_vk_xess_fg* value, uint32_t slot) {
         value->presentEnter[slot] = TimingNow();
     },
     .finish_gpu_timing = FinishGpuTiming,
@@ -834,7 +834,7 @@ static constexpr rsf_xess_bridge_platform Platform{
         static const bool enabled = std::getenv("VULKANSTORY_XESS_FG_SERIALIZE") != nullptr;
         return enabled;
     },
-    .attach_capture = [](VulkanStoryXessFg* value, rsf_xess_capture_owner* capture) { value->capture = capture; },
+    .attach_capture = [](rsf_vk_xess_fg* value, rsf_xess_capture_owner* capture) { value->capture = capture; },
     .register_diagnostics = RegisterDiagnostics,
     .capture_digest = rsf_xess_capture::Digest,
 #if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
@@ -860,7 +860,7 @@ static constexpr rsf_xess_bridge_platform Platform{
     .bind_runtime = BindRuntime,
 };
 
-static int CreateContext(uint64_t adapterLuid, const wchar_t* directory, VulkanStoryXessFg** output) {
+static int CreateContext(uint64_t adapterLuid, const wchar_t* directory, rsf_vk_xess_fg** output) {
     return rsf_core_xess_bridge_create(&Platform, adapterLuid,
         reinterpret_cast<const uint16_t*>(directory), output);
 }
@@ -878,8 +878,8 @@ extern "C" __declspec(dllexport) int32_t RsfXessBridgeCreate(
 /// @param frameGenResult Required interpolation-result output, separate from this function result.
 /// @param frameGenEnabled Required native FG enablement-status output.
 /// @return Zero on successful presentation/status query; local/HRESULT/SDK error otherwise.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgPresent(VulkanStoryXessFg* value,
-    const VulkanStoryXessFrame* frame, uint32_t* framesPresented,
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_present(rsf_vk_xess_fg* value,
+    const rsf_vk_xess_fg_frame* frame, uint32_t* framesPresented,
     int* frameGenResult, uint32_t* frameGenEnabled) {
     return rsf_core_xess_bridge_present(value ? value->session : nullptr,
         frame, framesPresented, frameGenResult, frameGenEnabled);
@@ -896,7 +896,7 @@ extern "C" __declspec(dllexport) int32_t RsfXessBridgePresent(rsf_xess_bridge* v
 /// @param minimumIntervalUs Minimum frame interval in microseconds, or zero for no cap.
 /// @param enabled Nonzero enables XeLL low-latency mode.
 /// @return SDK result, or -1 without a XeLL context.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgSetLatencyMode(VulkanStoryXessFg* value,
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_set_latency_mode(rsf_vk_xess_fg* value,
     uint32_t minimumIntervalUs, uint32_t enabled) {
     if (!value || !value->xell) return -1;
     return rsf_core_xess_bridge_set_sleep_mode(value->session, minimumIntervalUs, enabled);
@@ -905,7 +905,7 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgSetLatencyMode(VulkanStory
 /// @brief Invokes XeLL sleep for the supplied frame before host input polling.
 /// @details Optional timing measures CPU call duration only.
 /// @return SDK result, or -1 without a XeLL context.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgSleep(VulkanStoryXessFg* value,
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_sleep(rsf_vk_xess_fg* value,
     uint32_t frameId) {
     if (!value || !value->xell) return -1;
     const int64_t start = timing_enabled ? TimingNow() : 0;
@@ -916,7 +916,7 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgSleep(VulkanStoryXessFg* v
 
 /// @brief Emits the supplied XeLL marker for the matching frame identity.
 /// @return SDK result, or -1 without a XeLL context.
-extern "C" __declspec(dllexport) int VulkanStoryXessFgMarker(VulkanStoryXessFg* value,
+extern "C" __declspec(dllexport) int rsf_vk_xess_fg_marker(rsf_vk_xess_fg* value,
     uint32_t frameId, xell_latency_marker_type_t marker) {
     return value && value->xell ?
         static_cast<int>(value->marker(value->xell, frameId, marker)) : -1;

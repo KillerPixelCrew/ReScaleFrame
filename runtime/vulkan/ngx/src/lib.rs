@@ -2,6 +2,9 @@
 //! NGX Vulkan's native caller module with its original flat C ABI.
 mod loader;
 mod parameters;
+#[cfg(feature = "vulkanstory-compat")]
+#[path = "../../../../integrations/vulkanstory/native/ngx.rs"]
+mod vulkanstory_compat;
 
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{self, NonNull};
@@ -90,17 +93,17 @@ fn caller_result(result: ResultCode) -> ResultCode {
     unsafe { ptr::read_volatile(&result) }
 }
 
-#[unsafe(export_name = "VulkanStoryNgx_Version")]
+#[unsafe(export_name = "rsf_vk_ngx_version")]
 extern "C" fn version() -> u32 {
     1
 }
 
-#[unsafe(export_name = "VulkanStoryNgx_RuntimeName")]
+#[unsafe(export_name = "rsf_vk_ngx_runtime_name")]
 extern "C" fn runtime_name() -> *const c_char {
     loader::NAME.as_ptr()
 }
 
-#[unsafe(export_name = "VulkanStoryNgx_LastLoadError")]
+#[unsafe(export_name = "rsf_vk_ngx_last_load_error")]
 extern "C" fn last_load_error() -> *const c_char {
     LOAD_STATE
         .get()
@@ -108,7 +111,7 @@ extern "C" fn last_load_error() -> *const c_char {
         .map_or(c"".as_ptr(), |error| error.as_ptr().cast())
 }
 
-#[unsafe(export_name = "VulkanStoryNgx_LoadRuntime")]
+#[unsafe(export_name = "rsf_vk_ngx_load_runtime")]
 extern "C" fn load_runtime() -> ResultCode {
     if load().runtime.is_ok() {
         SUCCESS
@@ -117,7 +120,7 @@ extern "C" fn load_runtime() -> ResultCode {
     }
 }
 
-#[unsafe(export_name = "VulkanStoryNgx_VulkanInitProjectId")]
+#[unsafe(export_name = "rsf_vk_ngx_vulkan_init_project_id")]
 extern "C" fn init_project(
     project: *const c_char,
     engine: i32,
@@ -140,7 +143,7 @@ extern "C" fn init_project(
     })
 }
 
-#[unsafe(export_name = "VulkanStoryNgx_VulkanShutdown")]
+#[unsafe(export_name = "rsf_vk_ngx_vulkan_shutdown")]
 extern "C" fn shutdown(device: Handle) -> ResultCode {
     let call = require!(shutdown);
     // Linux 615.71.09 writes through the driver's second argument.
@@ -163,10 +166,10 @@ macro_rules! out_pointer_entry {
 }
 
 out_pointer_entry!(
-    "VulkanStoryNgx_GetCapabilityParameters",
+    "rsf_vk_ngx_get_capability_parameters",
     capability_parameters
 );
-out_pointer_entry!("VulkanStoryNgx_AllocateParameters", allocate_parameters);
+out_pointer_entry!("rsf_vk_ngx_allocate_parameters", allocate_parameters);
 
 macro_rules! handle_entry {
     ($export:literal, $name:ident) => {
@@ -181,10 +184,10 @@ macro_rules! handle_entry {
     };
 }
 
-handle_entry!("VulkanStoryNgx_DestroyParameters", destroy_parameters);
-handle_entry!("VulkanStoryNgx_ReleaseFeature", release_feature);
+handle_entry!("rsf_vk_ngx_destroy_parameters", destroy_parameters);
+handle_entry!("rsf_vk_ngx_release_feature", release_feature);
 
-#[unsafe(export_name = "VulkanStoryNgx_GetFeatureRequirements")]
+#[unsafe(export_name = "rsf_vk_ngx_get_feature_requirements")]
 extern "C" fn feature_requirements(
     instance: Handle,
     physical: Handle,
@@ -216,11 +219,11 @@ macro_rules! extension_entry {
 }
 
 extension_entry!(
-    "VulkanStoryNgx_GetFeatureInstanceExtensionRequirements",
+    "rsf_vk_ngx_get_feature_instance_extension_requirements",
     instance_extensions
 );
 extension_entry!(
-    "VulkanStoryNgx_GetFeatureDeviceExtensionRequirements",
+    "rsf_vk_ngx_get_feature_device_extension_requirements",
     device_extensions,
     instance,
     physical
@@ -240,10 +243,10 @@ macro_rules! create_entry {
     };
 }
 
-create_entry!("VulkanStoryNgx_CreateFeature", create_feature);
-create_entry!("VulkanStoryNgx_CreateFeature1", create_feature1, device);
+create_entry!("rsf_vk_ngx_create_feature", create_feature);
+create_entry!("rsf_vk_ngx_create_feature1", create_feature1, device);
 
-#[unsafe(export_name = "VulkanStoryNgx_EvaluateFeature")]
+#[unsafe(export_name = "rsf_vk_ngx_evaluate_feature")]
 extern "C" fn evaluate_feature(
     commands: Handle,
     feature: Handle,

@@ -19,7 +19,7 @@ unsafe fn vtable_slot(parameters: Handle, slot: usize) -> Handle {
 macro_rules! accessors {
     ($set_export:literal, $get_export:literal, $set:ident, $get:ident, $value:ty, $index:expr $(, $initial:expr)?) => {
         #[unsafe(export_name = $set_export)]
-        unsafe extern "C" fn $set(parameters: Handle, name: *const c_char, value: $value) -> ResultCode {
+        pub(super) unsafe extern "C" fn $set(parameters: Handle, name: *const c_char, value: $value) -> ResultCode {
             if parameters.is_null() || name.is_null() {
                 return INVALID;
             }
@@ -33,7 +33,7 @@ macro_rules! accessors {
         }
 
         #[unsafe(export_name = $get_export)]
-        unsafe extern "C" fn $get(parameters: Handle, name: *const c_char, output: *mut $value) -> ResultCode {
+        pub(super) unsafe extern "C" fn $get(parameters: Handle, name: *const c_char, output: *mut $value) -> ResultCode {
             if parameters.is_null() || name.is_null() || output.is_null() {
                 return INVALID;
             }
@@ -50,40 +50,40 @@ macro_rules! accessors {
 }
 
 accessors!(
-    "VulkanStoryNgx_ParameterSetULongLong",
-    "VulkanStoryNgx_ParameterGetULongLong",
+    "rsf_vk_ngx_parameter_set_u_long_long",
+    "rsf_vk_ngx_parameter_get_u_long_long",
     set_ull,
     get_ull,
     u64,
     0
 );
 accessors!(
-    "VulkanStoryNgx_ParameterSetFloat",
-    "VulkanStoryNgx_ParameterGetFloat",
+    "rsf_vk_ngx_parameter_set_float",
+    "rsf_vk_ngx_parameter_get_float",
     set_float,
     get_float,
     f32,
     1
 );
 accessors!(
-    "VulkanStoryNgx_ParameterSetDouble",
-    "VulkanStoryNgx_ParameterGetDouble",
+    "rsf_vk_ngx_parameter_set_double",
+    "rsf_vk_ngx_parameter_get_double",
     set_double,
     get_double,
     f64,
     2
 );
 accessors!(
-    "VulkanStoryNgx_ParameterSetUInt",
-    "VulkanStoryNgx_ParameterGetUInt",
+    "rsf_vk_ngx_parameter_set_u_int",
+    "rsf_vk_ngx_parameter_get_u_int",
     set_uint,
     get_uint,
     u32,
     3
 );
 accessors!(
-    "VulkanStoryNgx_ParameterSetInt",
-    "VulkanStoryNgx_ParameterGetInt",
+    "rsf_vk_ngx_parameter_set_int",
+    "rsf_vk_ngx_parameter_get_int",
     set_int,
     get_int,
     i32,
@@ -93,8 +93,8 @@ accessors!(
 // The public pointer getter clears the output before dispatching, unlike the
 // scalar getters.
 accessors!(
-    "VulkanStoryNgx_ParameterSetVoidPointer",
-    "VulkanStoryNgx_ParameterGetVoidPointer",
+    "rsf_vk_ngx_parameter_set_void_pointer",
+    "rsf_vk_ngx_parameter_get_void_pointer",
     set_pointer,
     get_pointer,
     Handle,
@@ -111,8 +111,8 @@ unsafe fn get_uint_or(parameters: Handle, name: &std::ffi::CStr, fallback: u32) 
     }
 }
 
-#[unsafe(export_name = "VulkanStoryNgx_DlssGetOptimalSettings")]
-unsafe extern "C" fn optimal_settings(
+#[unsafe(export_name = "rsf_vk_ngx_dlss_get_optimal_settings")]
+pub(super) unsafe extern "C" fn optimal_settings(
     parameters: Handle,
     width: u32,
     height: u32,

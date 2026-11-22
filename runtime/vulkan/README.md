@@ -2,8 +2,10 @@
 
 ReScaleFrame owns the native Vulkan provider bridges migrated from VulkanStory-Rewrite:
 NGX SR, FidelityFX Vulkan SR/FG, FidelityFX DX12 SR interop, XeSS-FG interop and
-Streamline Vulkan FG/Reflex/PCL. Their existing DLL and export names are retained
-as compatibility ABI, not a second source tree.
+Streamline Vulkan FG/Reflex/PCL. The provider entry points use neutral
+`rsf_vk_*` names. The standalone build recipes also include the
+[VulkanStory compatibility shims](../../integrations/vulkanstory/native/)
+so the existing package filenames and exports keep working.
 
 VulkanStory consumes this repository through its pinned `sdk/rescaleframe` submodule.
 Its build scripts pass the host's pinned SDK and MinHook paths explicitly. The

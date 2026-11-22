@@ -35,7 +35,7 @@ try {
     # The repository root selects the pinned rust-toolchain.toml.
     Push-Location -LiteralPath (Join-Path $PSScriptRoot '../../..')
     try {
-        & $rustCompiler --edition=2024 --crate-name rescaleframe_fsr3 --crate-type cdylib `
+        & $rustCompiler --edition=2024 --crate-name rescaleframe_fsr3 --crate-type cdylib --cfg vulkanstory_compat `
             --target x86_64-pc-windows-gnu -C opt-level=2 -C panic=abort -D unsafe_op_in_unsafe_fn `
             (Join-Path $PSScriptRoot 'owner.rs') -o $temporary
         if ($LASTEXITCODE -ne 0) { throw "FSR3 bridge build failed: $LASTEXITCODE" }

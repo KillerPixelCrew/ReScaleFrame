@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! DLSS-G state for the legacy VulkanStorySl bridge. The orchestrator's
+//! DLSS-G state for the standalone Streamline bridge. The orchestrator's
 //! rsf_dlssgvk owner has its own proxy, frame inputs and retirement protocol.
 
 use crate::sdk_fg_options::{self, Packed};

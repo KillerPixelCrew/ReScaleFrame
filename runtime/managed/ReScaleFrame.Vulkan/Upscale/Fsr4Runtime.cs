@@ -37,13 +37,13 @@ internal sealed unsafe class Fsr4Runtime : IDisposable, IDx12SharedRuntime
     {
         this.module = module;
         this.context = context;
-        destroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryFsr4DestroyChecked");
-        prepareDestroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryFsr4PrepareDestroy");
-        createImage = (delegate* unmanaged[Cdecl]<nint, uint, uint, uint, uint, nint*, nint*, int>)Export("VulkanStoryFsr4CreateSharedImage");
-        releaseImage = (delegate* unmanaged[Cdecl]<nint, void>)Export("VulkanStoryFsr4ReleaseImage");
-        createFence = (delegate* unmanaged[Cdecl]<nint, nint*, int>)Export("VulkanStoryFsr4CreateSharedFence");
-        evaluate = (delegate* unmanaged[Cdecl]<nint, Fsr4Frame*, int>)Export("VulkanStoryFsr4Evaluate");
-        waitIdle = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryFsr4WaitIdle");
+        destroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_fsr4_destroy_checked");
+        prepareDestroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_fsr4_prepare_destroy");
+        createImage = (delegate* unmanaged[Cdecl]<nint, uint, uint, uint, uint, nint*, nint*, int>)Export("rsf_vk_fsr4_create_shared_image");
+        releaseImage = (delegate* unmanaged[Cdecl]<nint, void>)Export("rsf_vk_fsr4_release_image");
+        createFence = (delegate* unmanaged[Cdecl]<nint, nint*, int>)Export("rsf_vk_fsr4_create_shared_fence");
+        evaluate = (delegate* unmanaged[Cdecl]<nint, Fsr4Frame*, int>)Export("rsf_vk_fsr4_evaluate");
+        waitIdle = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_fsr4_wait_idle");
     }
 
     private nint Export(string name) => NativeLibrary.GetExport(module, name);
@@ -71,8 +71,8 @@ internal sealed unsafe class Fsr4Runtime : IDisposable, IDx12SharedRuntime
         try
         {
             bridge = NativeRuntimePaths.LoadLibrary(Path.Combine(directory, "VulkanStoryFsr4.dll"));
-            _ = NativeLibrary.GetExport(bridge, "VulkanStoryFsr4DestroyChecked");
-            _ = NativeLibrary.GetExport(bridge, "VulkanStoryFsr4PrepareDestroy");
+            _ = NativeLibrary.GetExport(bridge, "rsf_vk_fsr4_destroy_checked");
+            _ = NativeLibrary.GetExport(bridge, "rsf_vk_fsr4_prepare_destroy");
             reason = "ready";
             return true;
         }
@@ -89,7 +89,7 @@ internal sealed unsafe class Fsr4Runtime : IDisposable, IDx12SharedRuntime
     public static int Probe(nint bridge, nint physical)
     {
         var probe = (delegate* unmanaged[Cdecl]<nint, int>)NativeLibrary.GetExport(
-            bridge, "VulkanStoryFsr4Probe");
+            bridge, "rsf_vk_fsr4_probe");
         return probe(physical);
     }
 
@@ -110,7 +110,7 @@ internal sealed unsafe class Fsr4Runtime : IDisposable, IDx12SharedRuntime
         {
             instance = new Fsr4Runtime(bridge, 0);
             var create = (delegate* unmanaged[Cdecl]<nint, uint, uint, uint, uint, nint*, int>)
-                NativeLibrary.GetExport(bridge, "VulkanStoryFsr4Create");
+                NativeLibrary.GetExport(bridge, "rsf_vk_fsr4_create");
             int code = create(physical, (uint)plan.RenderWidth, (uint)plan.RenderHeight,
                 (uint)plan.DisplayWidth, (uint)plan.DisplayHeight, &context);
             instance.context = context;
@@ -141,7 +141,7 @@ internal sealed unsafe class Fsr4Runtime : IDisposable, IDx12SharedRuntime
         }
     }
 
-    /// <summary>Maps a native VulkanStoryFsr4Create result to a readable unavailability reason.</summary>
+    /// <summary>Maps a native rsf_vk_fsr4_create result to a readable unavailability reason.</summary>
     /// <remarks>-11: unsupported vendor; -9: no FSR 4 provider selected/effective; -12: NVIDIA/Intel INT8 compatibility refused.</remarks>
     private static string CreateFailureReason(int code) => code switch
     {

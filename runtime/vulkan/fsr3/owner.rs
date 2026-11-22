@@ -27,6 +27,9 @@ mod exports;
 #[cfg(not(test))]
 #[path = "platform.rs"]
 mod platform_win32;
+#[cfg(all(not(test), vulkanstory_compat))]
+#[path = "../../../integrations/vulkanstory/native/fsr3.rs"]
+mod vulkanstory_compat;
 
 type Handle = *mut c_void;
 
@@ -96,7 +99,7 @@ fn sdk() -> &'static Sdk {
     SDK.get().unwrap_or(&UNBOUND)
 }
 
-/// Matches `VulkanStoryFsr3Image`.
+/// Matches `rsf_vk_fsr3_image`.
 #[repr(C)]
 struct Image {
     image: u64,
@@ -105,7 +108,7 @@ struct Image {
     format: i32,
 }
 
-/// Matches `VulkanStoryFsr3Frame` and the managed `Fsr3Frame`.
+/// Matches `rsf_vk_fsr3_frame` and the managed `Fsr3Frame`.
 // Layout mirror: the native dispatch leaf reads the commands and constants.
 #[allow(dead_code)]
 #[repr(C)]
@@ -150,7 +153,7 @@ fn frame_time_ms(delta_ms: f32) -> f32 {
     }
 }
 
-/// Matches `VulkanStoryFsr3FgFrame` and the managed `Fsr3FgFrame`.
+/// Matches `rsf_vk_fsr3_fg_frame` and the managed `Fsr3FgFrame`.
 // Layout mirror: the native configure, prepare, generate and UI leaves read
 // the resources, constants and camera vectors.
 #[allow(dead_code)]
@@ -344,7 +347,7 @@ unsafe fn platform(ops: *const Platform) -> Option<&'static Platform> {
         .then_some(ops)
 }
 
-/// The exported `VulkanStoryFsr3Context`. The host serializes calls on one
+/// The exported `rsf_vk_fsr3_context`. The host serializes calls on one
 /// context and retires its Vulkan work before destruction.
 struct Context {
     ops: &'static Platform,
@@ -545,7 +548,7 @@ unsafe extern "C" fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
     0
 }
 
-/// The exported `VulkanStoryFsr3Swapchain`: one SDK presentation context, its
+/// The exported `rsf_vk_fsr3_swapchain`: one SDK presentation context, its
 /// replacement function table (in the capsule), the device it was created on
 /// and the current chain.
 ///
@@ -562,7 +565,7 @@ struct Swapchain {
     cleanup_only: bool,
 }
 
-/// The exported `VulkanStoryFsr3FgContext`: one interpolation effect (in the
+/// The exported `rsf_vk_fsr3_fg_context`: one interpolation effect (in the
 /// capsule), its display extent and its borrowed swapchain association.
 ///
 /// `chain` and `swapchain` are set together after a successful proxy

@@ -23,8 +23,8 @@ static DEVICE_PROC: OnceLock<vk::PFN_vkGetDeviceProcAddr> = OnceLock::new();
 
 unsafe extern "C" {
     fn RsfXessBridgeCreate(create: *const rsf_xess_bridge_create, output: *mut Handle) -> i32;
-    fn VulkanStoryXessFgWaitIdle(bridge: Handle) -> i32;
-    fn VulkanStoryXessFgDestroyChecked(bridge: Handle) -> i32;
+    fn rsf_vk_xess_fg_wait_idle(bridge: Handle) -> i32;
+    fn rsf_vk_xess_fg_destroy_checked(bridge: Handle) -> i32;
     fn rsf_xessvk_interop_create(
         setup: *const rsf_srvk_setup,
         bridge: Handle,
@@ -230,7 +230,7 @@ fn exercise(
     let dx_drain = if bridge.is_null() {
         0
     } else {
-        unsafe { VulkanStoryXessFgWaitIdle(bridge) }
+        unsafe { rsf_vk_xess_fg_wait_idle(bridge) }
     };
     let release = if vk_drain == 0 && dx_drain == 0 {
         unsafe { rsf_xessvk_interop_destroy(interop, 1) }
@@ -238,7 +238,7 @@ fn exercise(
         -1
     };
     let bridge_release = if release == 0 {
-        unsafe { VulkanStoryXessFgDestroyChecked(bridge) }
+        unsafe { rsf_vk_xess_fg_destroy_checked(bridge) }
     } else {
         -1
     };

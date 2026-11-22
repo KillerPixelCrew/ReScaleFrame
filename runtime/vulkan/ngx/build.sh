@@ -40,7 +40,7 @@ target="$out/$name"
 if [ -f "$target" ]; then
     fresh=1
     for input in "$here/vulkanstory_ngx.h" "$here/src/lib.rs" "$here/src/loader.rs" "$here/src/parameters.rs" "$here/Cargo.toml" \
-            "$workspace/Cargo.toml" "$workspace/Cargo.lock" "$workspace/rust-toolchain.toml" "$here/build.sh"; do
+            "$workspace/integrations/vulkanstory/native/ngx.rs" "$workspace/Cargo.toml" "$workspace/Cargo.lock" "$workspace/rust-toolchain.toml" "$here/build.sh"; do
         if [ ! -f "$input" ] || [ ! "$target" -nt "$input" ]; then
             fresh=0
             break
@@ -64,7 +64,7 @@ mkdir -p -- "$out" || exit 0
 output="$(cd -- "$out" && pwd)" || exit 0
 scratch="$(mktemp -d "$output/.vulkanstory-ngx.XXXXXXXX")" || exit 0
 trap 'rm -rf -- "$scratch"' EXIT
-if ! (cd "$workspace" && cargo build --locked --release -p rsf-vulkanstory-ngx \
+if ! (cd "$workspace" && cargo build --locked --release -p rsf-vulkanstory-ngx --features vulkanstory-compat \
         "${rust_args[@]}" --target-dir "$scratch/cargo"); then
     skip_build "Rust caller module build failed"
 fi

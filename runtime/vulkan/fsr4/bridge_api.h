@@ -10,7 +10,7 @@
 #else
 #define RSF_FSR4_BRIDGE_API
 #endif
-typedef struct VulkanStoryFsr4 rsf_fsr4_bridge;
+typedef struct rsf_vk_fsr4 rsf_fsr4_bridge;
 typedef struct rsf_fsr4_bridge_create {
     uint32_t struct_size, abi_version;
     uint64_t adapter_luid;

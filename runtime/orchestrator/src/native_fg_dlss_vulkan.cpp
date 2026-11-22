@@ -17,7 +17,7 @@
 #include "vulkan_fg_resources_native.h"
 #include "../../backends/common/frame_capture_vk.h"
 
-extern "C" uint64_t VulkanStorySlWorkerTimeoutEpoch();
+extern "C" uint64_t rsf_vk_sl_worker_timeout_epoch();
 namespace {
 template<class T> T entry(void* module, const char* name) { return reinterpret_cast<T>(GetProcAddress(static_cast<HMODULE>(module), name)); }
 using Image = rsf_vkfg_image;
@@ -217,7 +217,7 @@ constexpr rsf_dlgvk_platform platform{
         try { return static_cast<Native*>(user)->present_capture.detach(); }
         catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
     },
-    VulkanStorySlWorkerTimeoutEpoch,
+    rsf_vk_sl_worker_timeout_epoch,
 };
 }
 #endif

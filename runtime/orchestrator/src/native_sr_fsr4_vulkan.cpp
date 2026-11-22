@@ -5,11 +5,11 @@
 #include "native_sr_fsr4_vulkan_platform.h"
 
 struct ID3D12Resource;
-extern "C" int VulkanStoryFsr4CreateSharedImage(rsf_fsr4_bridge*, uint32_t, uint32_t,
+extern "C" int rsf_vk_fsr4_create_shared_image(rsf_fsr4_bridge*, uint32_t, uint32_t,
     uint32_t, uint32_t, HANDLE*, ID3D12Resource**);
-extern "C" int VulkanStoryFsr4CreateSharedFence(rsf_fsr4_bridge*, HANDLE*);
-extern "C" int VulkanStoryFsr4PrepareDestroy(rsf_fsr4_bridge*);
-extern "C" int VulkanStoryFsr4DestroyChecked(rsf_fsr4_bridge*);
+extern "C" int rsf_vk_fsr4_create_shared_fence(rsf_fsr4_bridge*, HANDLE*);
+extern "C" int rsf_vk_fsr4_prepare_destroy(rsf_fsr4_bridge*);
+extern "C" int rsf_vk_fsr4_destroy_checked(rsf_fsr4_bridge*);
 extern "C" int32_t rsf_core_fsr4sr_info(const rsf_fsr4_bridge*, rsf_fsr4_bridge_info*);
 extern "C" int32_t rsf_core_fsr4sr_sharpness(rsf_fsr4_bridge*, float);
 extern "C" void rsf_core_fsr4sr_release_image(void*);
@@ -44,13 +44,13 @@ int32_t checked(Args... args) noexcept try {
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 int32_t create_fence(void* bridge, void** handle) noexcept {
-    return checked<VulkanStoryFsr4CreateSharedFence>(static_cast<rsf_fsr4_bridge*>(bridge), handle);
+    return checked<rsf_vk_fsr4_create_shared_fence>(static_cast<rsf_fsr4_bridge*>(bridge), handle);
 }
 
 int32_t create_image(rsf_fsr4_bridge* bridge, uint32_t width, uint32_t height, uint32_t format,
     uint32_t writable, void** handle, void** resource) noexcept {
     ID3D12Resource* image{};
-    const int32_t result = checked<VulkanStoryFsr4CreateSharedImage>(bridge, width, height, format, writable, handle, &image);
+    const int32_t result = checked<rsf_vk_fsr4_create_shared_image>(bridge, width, height, format, writable, handle, &image);
     *resource = image;
     return result;
 }
@@ -69,7 +69,7 @@ const rsf_fsr4vk_platform& platform() {
         rsf_fsr4vk_graphics_transition, rsf_fsr4vk_graphics_copy, split, nullptr,
         rsf_core_fsr4sr_sharpness, checked<RsfFsr4BridgeEvaluate>, rsf_fsr4vk_graphics_sharpen,
         rsf_fsr4vk_graphics_retire, rsf_fsr4vk_graphics_clear_sharpen, rsf_fsr4vk_graphics_wait, rsf_fsr4vk_graphics_idle,
-        checked<VulkanStoryFsr4PrepareDestroy>, checked<VulkanStoryFsr4DestroyChecked>,
+        checked<rsf_vk_fsr4_prepare_destroy>, checked<rsf_vk_fsr4_destroy_checked>,
     };
     return ops;
 }

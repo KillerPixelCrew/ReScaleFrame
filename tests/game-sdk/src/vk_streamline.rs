@@ -144,7 +144,7 @@ pub(super) fn xell_status() -> rsf_fgvk_latency_status {
 
 // Synthetic Streamline SDK exports for the native consumer. The token handles
 // address six mock slots and never leave this fixture executable.
-#[unsafe(export_name = "VulkanStorySlInitializeFeatures")]
+#[unsafe(export_name = "rsf_vk_sl_initialize_features")]
 extern "C" fn sdk_initialize_features(
     _: *const u16,
     _: *const c_char,
@@ -156,7 +156,7 @@ extern "C" fn sdk_initialize_features(
     FG.store(fg, Relaxed);
     OK
 }
-#[unsafe(export_name = "VulkanStorySlShutdownChecked")]
+#[unsafe(export_name = "rsf_vk_sl_shutdown_checked")]
 extern "C" fn sdk_shutdown_checked() -> i32 {
     if SHUTDOWN_ALLOWED.load(Relaxed) {
         OK
@@ -164,19 +164,19 @@ extern "C" fn sdk_shutdown_checked() -> i32 {
         INVALID
     }
 }
-#[unsafe(export_name = "VulkanStorySlModule")]
+#[unsafe(export_name = "rsf_vk_sl_module")]
 extern "C" fn sdk_module() -> *mut c_void {
     identity(1)
 }
-#[unsafe(export_name = "VulkanStorySlGetInstanceProcAddr")]
+#[unsafe(export_name = "rsf_vk_sl_get_instance_proc_addr")]
 extern "C" fn sdk_get_instance_proc_addr(_: *mut c_void, _: *const c_char) -> rsf_vk_function {
     None
 }
-#[unsafe(export_name = "VulkanStorySlBindReflex")]
+#[unsafe(export_name = "rsf_vk_sl_bind_reflex")]
 extern "C" fn sdk_bind_reflex() -> i32 {
     OK
 }
-#[unsafe(export_name = "VulkanStorySlBindPcl")]
+#[unsafe(export_name = "rsf_vk_sl_bind_pcl")]
 extern "C" fn sdk_bind_pcl() -> i32 {
     PCL_BINDS.fetch_add(1, Relaxed);
     if PCL_BIND_FAIL.load(Relaxed) {
@@ -185,11 +185,11 @@ extern "C" fn sdk_bind_pcl() -> i32 {
     PCL_THREAD.store(unsafe { GetCurrentThreadId() }, Relaxed);
     OK
 }
-#[unsafe(export_name = "VulkanStorySlPclWindowMessage")]
+#[unsafe(export_name = "rsf_vk_sl_pcl_window_message")]
 extern "C" fn sdk_pcl_window_message() -> u32 {
     PCL_MESSAGE
 }
-#[unsafe(export_name = "VulkanStorySlGetReflexState")]
+#[unsafe(export_name = "rsf_vk_sl_get_reflex_state")]
 unsafe extern "C" fn sdk_get_reflex_state(available: *mut u32, reports: *mut u32) -> i32 {
     unsafe {
         available.write(LOW_LATENCY.load(Relaxed));
@@ -197,7 +197,7 @@ unsafe extern "C" fn sdk_get_reflex_state(available: *mut u32, reports: *mut u32
     }
     OK
 }
-#[unsafe(export_name = "VulkanStorySlSetReflexInterval")]
+#[unsafe(export_name = "rsf_vk_sl_set_reflex_interval")]
 extern "C" fn sdk_set_reflex_interval(mode: i32, interval: u32) -> i32 {
     if !verify(
         (mode == 1 && interval == 12345)
@@ -222,15 +222,15 @@ unsafe extern "C" fn rsf_vk_sl_begin_frame_checked(frame: u32, token: *mut usize
     CURRENT.store(next, Relaxed);
     OK
 }
-#[unsafe(export_name = "VulkanStorySlCurrentFrameToken")]
+#[unsafe(export_name = "rsf_vk_sl_current_frame_token")]
 extern "C" fn sdk_current_frame_token() -> usize {
     CURRENT.load(Relaxed)
 }
-#[unsafe(export_name = "VulkanStorySlTokenMatches")]
+#[unsafe(export_name = "rsf_vk_sl_token_matches")]
 extern "C" fn sdk_token_matches(token: usize, index: u32) -> i32 {
     i32::from(token_index(token) == Some(index))
 }
-#[unsafe(export_name = "VulkanStorySlReflexSleep")]
+#[unsafe(export_name = "rsf_vk_sl_reflex_sleep")]
 extern "C" fn sdk_reflex_sleep() -> i32 {
     check_registration();
     if !verify(REFLEX_SLEEP.pause()) {
@@ -239,7 +239,7 @@ extern "C" fn sdk_reflex_sleep() -> i32 {
     SLEPT.fetch_add(1, Relaxed);
     OK
 }
-#[unsafe(export_name = "VulkanStorySlMarkerForToken")]
+#[unsafe(export_name = "rsf_vk_sl_marker_for_token")]
 extern "C" fn sdk_marker_for_token(token: usize, kind: u32) -> i32 {
     check_registration();
     let Some(frame) = token_index(token) else {
@@ -249,15 +249,15 @@ extern "C" fn sdk_marker_for_token(token: usize, kind: u32) -> i32 {
     MARKERS.lock().unwrap().push(Marker { frame, kind });
     OK
 }
-#[unsafe(export_name = "VulkanStorySlQueuePresentSynchronized")]
+#[unsafe(export_name = "rsf_vk_sl_queue_present_synchronized")]
 extern "C" fn sdk_queue_present_synchronized(_: usize, _: *mut c_void, _: *const c_void) -> i32 {
     OK
 }
-#[unsafe(export_name = "VulkanStorySlVulkanWsiCall")]
+#[unsafe(export_name = "rsf_vk_sl_vulkan_wsi_call")]
 unsafe extern "C" fn sdk_vulkan_wsi_call(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
     unsafe { callback.unwrap()(user) }
 }
-#[unsafe(export_name = "VulkanStorySlWithoutDlssG")]
+#[unsafe(export_name = "rsf_vk_sl_without_dlss_g")]
 unsafe extern "C" fn sdk_without_dlss_g(callback: rsf_vk_wsi_call, user: *mut c_void) -> i32 {
     unsafe { callback.unwrap()(user) }
 }

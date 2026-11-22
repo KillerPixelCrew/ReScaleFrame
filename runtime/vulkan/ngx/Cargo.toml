@@ -9,6 +9,9 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+vulkanstory-compat = []
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",

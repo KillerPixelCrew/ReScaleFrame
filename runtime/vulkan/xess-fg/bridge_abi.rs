@@ -8,7 +8,7 @@ pub const RSF_XESS_BRIDGE_ABI_VERSION: u32 = 1;
 pub const RSF_XESS_BRIDGE_INVALID_ARGUMENT: i32 = -10001;
 pub const RSF_XESS_BRIDGE_ABI_MISMATCH: i32 = -10002;
 #[repr(C)]
-pub struct VulkanStoryXessFrame {
+pub struct rsf_vk_xess_fg_frame {
     pub frame_id: u32,
     pub reset: u32,
     pub vsync: u32,
@@ -27,38 +27,38 @@ pub struct VulkanStoryXessFrame {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of VulkanStoryXessFrame"][::core::mem::size_of::<VulkanStoryXessFrame>() - 216usize];
-    ["Alignment of VulkanStoryXessFrame"][::core::mem::align_of::<VulkanStoryXessFrame>() - 8usize];
-    ["Offset of field: VulkanStoryXessFrame::frame_id"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, frame_id) - 0usize];
-    ["Offset of field: VulkanStoryXessFrame::reset"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, reset) - 4usize];
-    ["Offset of field: VulkanStoryXessFrame::vsync"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, vsync) - 8usize];
-    ["Offset of field: VulkanStoryXessFrame::reserved"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, reserved) - 12usize];
-    ["Offset of field: VulkanStoryXessFrame::color"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, color) - 16usize];
-    ["Offset of field: VulkanStoryXessFrame::depth"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, depth) - 24usize];
-    ["Offset of field: VulkanStoryXessFrame::motion"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, motion) - 32usize];
-    ["Offset of field: VulkanStoryXessFrame::hudless"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, hudless) - 40usize];
-    ["Offset of field: VulkanStoryXessFrame::ui"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, ui) - 48usize];
-    ["Offset of field: VulkanStoryXessFrame::view"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, view) - 56usize];
-    ["Offset of field: VulkanStoryXessFrame::projection"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, projection) - 120usize];
-    ["Offset of field: VulkanStoryXessFrame::jitter"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, jitter) - 184usize];
-    ["Offset of field: VulkanStoryXessFrame::motion_scale"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, motion_scale) - 192usize];
-    ["Offset of field: VulkanStoryXessFrame::ready"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, ready) - 200usize];
-    ["Offset of field: VulkanStoryXessFrame::done"]
-        [::core::mem::offset_of!(VulkanStoryXessFrame, done) - 208usize];
+    ["Size of rsf_vk_xess_fg_frame"][::core::mem::size_of::<rsf_vk_xess_fg_frame>() - 216usize];
+    ["Alignment of rsf_vk_xess_fg_frame"][::core::mem::align_of::<rsf_vk_xess_fg_frame>() - 8usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::frame_id"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, frame_id) - 0usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::reset"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, reset) - 4usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::vsync"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, vsync) - 8usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::reserved"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, reserved) - 12usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::color"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, color) - 16usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::depth"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, depth) - 24usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::motion"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, motion) - 32usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::hudless"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, hudless) - 40usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::ui"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, ui) - 48usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::view"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, view) - 56usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::projection"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, projection) - 120usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::jitter"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, jitter) - 184usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::motion_scale"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, motion_scale) - 192usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::ready"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, ready) - 200usize];
+    ["Offset of field: rsf_vk_xess_fg_frame::done"]
+        [::core::mem::offset_of!(rsf_vk_xess_fg_frame, done) - 208usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]

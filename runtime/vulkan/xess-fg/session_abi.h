@@ -153,7 +153,7 @@ int32_t rsf_core_xess_bridge_set_generated(rsf_xess_bridge_session*, uint32_t, i
 int32_t rsf_core_xess_bridge_set_generated_legacy(rsf_xess_bridge_session*, uint32_t, uint32_t*, uint32_t*);
 int32_t rsf_core_xess_bridge_set_sleep_mode(rsf_xess_bridge_session*, uint32_t, uint32_t);
 int32_t rsf_core_xess_bridge_wait_idle(const rsf_xess_bridge_session*);
-int32_t rsf_core_xess_bridge_present(rsf_xess_bridge_session*, const VulkanStoryXessFrame*, uint32_t*, int32_t*, uint32_t*);
+int32_t rsf_core_xess_bridge_present(rsf_xess_bridge_session*, const rsf_vk_xess_fg_frame*, uint32_t*, int32_t*, uint32_t*);
 int32_t rsf_core_xess_bridge_present_integrated(rsf_xess_bridge_session*, const rsf_xess_bridge_frame*, rsf_xess_bridge_present_status*);
 int32_t rsf_core_xess_bridge_prepare_destroy(rsf_xess_bridge_session*);
 int32_t rsf_core_xess_bridge_destroy(rsf_xess_bridge_session*);

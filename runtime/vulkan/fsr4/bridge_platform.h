@@ -32,7 +32,7 @@ enum : uint32_t {
 
 /// @brief Fixed-layout reconstruction frame shared with the managed FSR4 ABI.
 /// @details All four resource pointers borrow caller-owned shared images in COMMON state. Vulkan signals readyValue after input copies; DX12 signals doneValue after reconstruction/output handoff.
-struct VulkanStoryFsr4Frame {
+struct rsf_vk_fsr4_frame {
     ID3D12Resource* color;
     ID3D12Resource* depth;
     ID3D12Resource* motion;
@@ -121,14 +121,14 @@ int32_t rsf_core_fsr4sr_sharpness(rsf_fsr4_bridge*, float);
 int32_t rsf_core_fsr4sr_plan(rsf_fsr4_bridge*, uint32_t, uint32_t*, uint32_t*);
 int32_t rsf_core_fsr4sr_create_image(rsf_fsr4_bridge*, uint32_t, uint32_t, uint32_t, uint32_t, void**, void**);
 int32_t rsf_core_fsr4sr_create_fence(rsf_fsr4_bridge*, void**);
-int32_t rsf_core_fsr4sr_evaluate_legacy(rsf_fsr4_bridge*, const VulkanStoryFsr4Frame*);
+int32_t rsf_core_fsr4sr_evaluate_legacy(rsf_fsr4_bridge*, const rsf_vk_fsr4_frame*);
 int32_t rsf_core_fsr4sr_evaluate(rsf_fsr4_bridge*, const rsf_fsr4_bridge_frame*);
 int32_t rsf_core_fsr4sr_wait_idle(rsf_fsr4_bridge*);
 int32_t rsf_core_fsr4sr_prepare_destroy(rsf_fsr4_bridge*);
 int32_t rsf_core_fsr4sr_destroy(rsf_fsr4_bridge*);
 }
 
-static_assert(sizeof(VulkanStoryFsr4Frame) == 96 && offsetof(VulkanStoryFsr4Frame, readyValue) == 80);
+static_assert(sizeof(rsf_vk_fsr4_frame) == 96 && offsetof(rsf_vk_fsr4_frame, readyValue) == 80);
 static_assert(sizeof(rsf_fsr4sr_request) == 40 && offsetof(rsf_fsr4sr_request, flags) == 32);
 static_assert(sizeof(rsf_fsr4sr_context) == 32 && offsetof(rsf_fsr4sr_context, flags) == 24);
 static_assert(sizeof(rsf_fsr4sr_texture) == 16 && offsetof(rsf_fsr4sr_texture, format) == 12);

@@ -17,7 +17,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 #[cfg(test)]
 mod tests;
 
-// Local results of VulkanStorySlInitializeFeatures. Other values are slInit
+// Local results of rsf_vk_sl_initialize_features. Other values are slInit
 // results or the sticky slShutdown result.
 const INVALID_ARGUMENT: i32 = -1;
 const PATH_TOO_LONG: i32 = -2;
