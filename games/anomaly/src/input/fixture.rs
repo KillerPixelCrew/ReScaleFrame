@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::engine_slots::rsf_anomaly_slot_set;
+use crate::native_profile::PROFILES;
 use crate::runtime_module::Module;
 use std::ffi::{CStr, c_char};
 use std::ptr::{copy_nonoverlapping, null_mut};
@@ -18,20 +19,44 @@ impl Drop for Mapping {
     }
 }
 
-/// The launcher supplies the selected build index and SEH-safe primitives used by the carrier.
+/// The launcher supplies CRT argv and the native memory primitives.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_fixture(
-    build: usize,
-    image_size: u32,
-    counter_rva: u32,
+unsafe extern "C" fn rsf_anomaly_input_fixture(
+    argc: i32,
+    argv: *const *const c_char,
     read: Read,
     exchange: Exchange,
-    path: *const u16,
 ) -> i32 {
+    if argc < 1 || argv.is_null() {
+        return 1;
+    }
+    let args = unsafe { std::slice::from_raw_parts(argv, argc as usize) };
+    let build = usize::from(
+        args.get(1)
+            .is_some_and(|arg| !arg.is_null() && unsafe { CStr::from_ptr(*arg) } == c"avx"),
+    );
+    let native = &PROFILES[build];
     let Some(profile) = profile::for_build(build) else {
         return 1;
     };
-    match contract(&profile, image_size, counter_rva, read, exchange, path) {
+    let path = if argc > 2 {
+        let executable = native.executable.to_str().expect("ASCII executable name");
+        format!("D:/Anomaly 1.5.3/bin/{executable}")
+            .encode_utf16()
+            .chain([0])
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let path = path.first().map_or(std::ptr::null(), std::ptr::from_ref);
+    match contract(
+        &profile,
+        native.image_size,
+        native.device_frame_rva,
+        read,
+        exchange,
+        path,
+    ) {
         Ok(()) => 0,
         Err(reason) => {
             eprintln!("Anomaly input: {reason}");

@@ -119,3 +119,29 @@ for `rsf_anomaly_sr_hooks_test` and remove that fixture's reference to
 `input_hooks.cpp`. The observer now calls the Rust slot owner through
 the inline declarations. Both N02 and N06 implementation entries belong
 in the tracker.
+
+## Fixture launchers and headers from 19680cf1
+
+The input fixture now reads the same Rust Standard and AVX profile records as
+startup for the image size, frame counter RVA and executable name. Its C11
+launcher only forwards CRT arguments and provides the guarded memory read
+and interlocked slot exchange. The fixture keeps its existing synthetic
+guard mutations and optional mapped-executable path. The CInput body bytes,
+primary vtable slot and keyboard-before-mouse field evidence are unchanged.
+
+The overlay hook fixture uses a C11 launcher for MinHook and the SDK mouse
+format. Both sides check the layout of the callback table. The DirectInput
+layout, offset, flag and HRESULT assertions remain in the SDK-facing launcher.
+The visibility fixture keeps its C launcher and imports the same Runtime
+query. The Rust fixture scenarios still cover test Presents, unrelated
+windows, chain replacement, active-chain Resize and visible panel pixels.
+
+The overlay's chain and adapter option records now live in Rust. Bindgen
+still supplies the private startup record and shared Runtime ABI. The
+input header retains C declarations for the Rust entries and typed C++
+slot adapters for the observer. The production original OnFrame call,
+C++ unwind scope, SEH memory primitives and HWND admission did not move.
+
+Verification used Rust 1.94.1 formatting, targeted bindgen 0.72.1,
+locked offline Cargo metadata, MSVC syntax-only checks and source
+comparison. Build, link, fixture, lint and device verification remain open.

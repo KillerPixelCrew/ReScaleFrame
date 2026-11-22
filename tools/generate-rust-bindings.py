@@ -458,7 +458,7 @@ generate("games/anomaly/src/native_observer_abi.rs", "games/anomaly/src/native_o
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"])
 generate("games/anomaly/src/overlay_abi.rs", "games/anomaly/src/overlay_platform.h",
-         "wchar_t|rsf_anomaly_overlay_(option|chain|options)|"
+         "wchar_t|rsf_anomaly_overlay_options|"
          "rsf_overlay_(api|service_setup|service_option|capture|diagnostics)|rsf_named_frame_dump(_report|_log_fn)?|"
          "rsf_render_(settings|status)|rsf_get_overlay_(api|diagnostics)_fn|rsf_input_dump_named_texture_fn",
          "RSF_ANOMALY_OVERLAY_.*|RSF_OVERLAY_(API_VERSION|API_ENTRY_POINT|DIAGNOSTICS_ENTRY_POINT|CAPTURE_.*|"
@@ -470,6 +470,7 @@ generate("games/anomaly/src/overlay_abi.rs", "games/anomaly/src/overlay_platform
           "-Iruntime/presentation/include", "-Iruntime/graphics/include", "-Iruntime/backends/dlss/include",
           "-Iui/overlay/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "#[path = \"overlay/records.rs\"]\nmod records;\npub(crate) use records::*;",
           "--raw-line", "use rsf_game_sys::sr_abi::rsf_overlay_sr_report;",
           "--raw-line", "use rsf_game_sys::{rsf_game_log_fn, rsf_result};"])
 generate("games/anomaly/src/sr_swap_abi.rs", "games/anomaly/src/sr_swap_platform.h",

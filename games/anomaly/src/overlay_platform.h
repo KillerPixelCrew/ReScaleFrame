@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Private layouts between the Anomaly overlay service (overlay.rs) and its native bootstrap caller.
+// Private startup boundary between the Anomaly overlay service and its native bootstrap caller.
 // tools/generate-rust-bindings.py generates overlay_abi.rs from this header and the Runtime's overlay API.
 #include <rescaleframe/named_frame_dump.h>
 #include <rescaleframe/overlay_api.h>
@@ -12,23 +12,6 @@ enum {
     RSF_ANOMALY_OVERLAY_STARTED, RSF_ANOMALY_OVERLAY_ALREADY_STARTED, RSF_ANOMALY_OVERLAY_API_MISSING,
     RSF_ANOMALY_OVERLAY_API_REFUSED, RSF_ANOMALY_OVERLAY_CONFIGURE_REFUSED, RSF_ANOMALY_OVERLAY_HOOKS_REFUSED,
 };
-
-// One adapter option as the panel shows it. get and set run on the Present-owner thread.
-typedef struct rsf_anomaly_overlay_option {
-    const char* label;
-    uint32_t toggle, restart;
-    int32_t minimum, maximum, step;
-    uint32_t divisor;
-    int32_t (*get)(void);
-    bool (*set)(int32_t);
-} rsf_anomaly_overlay_option;
-
-// A presented chain: its DXGI output window and size, and its D3D11 device, compared only.
-typedef struct rsf_anomaly_overlay_chain {
-    void* window;
-    const void* device;
-    uint32_t width, height;
-} rsf_anomaly_overlay_chain;
 
 typedef struct rsf_anomaly_overlay_options {
     void* runtime;

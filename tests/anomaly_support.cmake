@@ -36,7 +36,8 @@ set_tests_properties(anomaly_geometry_contract anomaly_geometry_hooks_contract P
 
 # Rust unit fixtures cover the input gate and overlay API contracts. This fixture uses the
 # Windows SDK to exercise the installed hooks through WARP and system DirectInput.
-add_executable(rsf_anomaly_overlay_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_hooks.cpp")
+add_executable(rsf_anomaly_overlay_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_overlay_hooks.c")
+set_target_properties(rsf_anomaly_overlay_hooks_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
 target_include_directories(rsf_anomaly_overlay_hooks_test PRIVATE
     "${PROJECT_SOURCE_DIR}/games/anomaly/src" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
 target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE
@@ -262,7 +263,8 @@ target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_sr_fixture_r
 
 rsf_add_rust_static(rsf_anomaly_input_fixture_rust rsf_rust_anomaly_input_fixture
     rsf-anomaly rsf_anomaly --features input-hook-fixture)
-add_executable(rsf_anomaly_input_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_input_hooks.cpp")
+add_executable(rsf_anomaly_input_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_input_hooks.c")
+set_target_properties(rsf_anomaly_input_hooks_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
 target_include_directories(rsf_anomaly_input_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_link_libraries(rsf_anomaly_input_hooks_test PRIVATE rsf_anomaly_input_fixture_rust ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME anomaly_input_hooks_standard_contract COMMAND rsf_anomaly_input_hooks_test standard)

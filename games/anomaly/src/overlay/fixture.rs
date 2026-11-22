@@ -333,6 +333,7 @@ extern "C" fn rsf_anomaly_overlay_hooks_fixture(
     hooks: &HookOps,
     format: *const DIDATAFORMAT,
 ) -> i32 {
+    // The C host supplies the pinned MinHook calls and the SDK mouse format.
     let api = rsf_overlay_api {
         struct_size: size_of::<rsf_overlay_api>() as u32,
         abi_version: RSF_OVERLAY_API_VERSION,
@@ -378,6 +379,16 @@ extern "C" fn rsf_anomaly_overlay_hooks_fixture(
     }
     checks.exit()
 }
+
+const _: () = {
+    use std::mem::offset_of;
+
+    assert!(size_of::<HookOps>() == 40);
+    assert!(offset_of!(HookOps, create) == 8);
+    assert!(offset_of!(HookOps, remove_unqueued) == 16);
+    assert!(offset_of!(HookOps, queue) == 24);
+    assert!(offset_of!(HookOps, apply) == 32);
+};
 
 struct Com;
 impl Drop for Com {
