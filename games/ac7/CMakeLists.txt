@@ -40,7 +40,7 @@ target_include_directories(rsf_ac7_memory PUBLIC include)
 target_link_libraries(rsf_ac7_memory PRIVATE rsf_build_options)
 
 add_library(rsf_ac7_capture_trampolines STATIC
-    src/motion_capture_trampolines.c src/ac7_hooks.c src/ac7_capture_io.c)
+    src/motion_capture_trampolines.c src/ac7_hooks.c)
 target_include_directories(rsf_ac7_capture_trampolines PRIVATE include)
 target_link_libraries(rsf_ac7_capture_trampolines PRIVATE ReScaleFrame::GameSDK rsf_ac7_memory minhook rsf_build_options)
 # Rust owns the public entry points and calls these native effects in return. Load the

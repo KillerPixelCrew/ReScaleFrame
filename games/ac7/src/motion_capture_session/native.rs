@@ -6,10 +6,13 @@ use super::{
     rsf_ac7_capture_present, rsf_ac7_capture_shutdown,
 };
 use crate::motion_capture_records::artifacts::rsf_ac7_capture_publish_checkpoint;
-use crate::sys::rsf_ac7_capture_write_file;
 use std::ffi::{c_char, c_void};
+use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
-use windows::Win32::Storage::FileSystem::CreateDirectoryA;
+use windows::Win32::Storage::FileSystem::{
+    self as file_system, CREATE_ALWAYS, CreateDirectoryA, CreateFileA, FILE_ATTRIBUTE_NORMAL,
+    FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+};
 use windows::Win32::System::Performance::QueryPerformanceFrequency;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -57,6 +60,35 @@ unsafe extern "C" fn create_directory(path: *const c_char) -> bool {
     unsafe { CreateDirectoryA(PCSTR(path.cast()), None) }.is_ok()
 }
 
+/// Replaces the file at the narrow (ANSI) path with ytes, sharing as open(path, "wb"); false
+/// on an open failure, a short write or a failed close.
+unsafe extern "C" fn write_file(path: *const c_char, data: *const u8, bytes: usize) -> bool {
+    let Ok(file) = (unsafe {
+        CreateFileA(
+            PCSTR(path.cast()),
+            FILE_GENERIC_WRITE.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    }) else {
+        return false;
+    };
+    let data = if bytes == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, bytes) }
+    };
+    let written = data.chunks(u32::MAX as usize).all(|chunk| {
+        let mut count = 0;
+        unsafe { file_system::WriteFile(file, Some(chunk), Some(&mut count), None) }.is_ok()
+            && count as usize == chunk.len()
+    });
+    unsafe { CloseHandle(file) }.is_ok() && written
+}
+
 extern "C" fn stats() -> Stats {
     let mut frequency = 0;
     let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
@@ -73,7 +105,7 @@ const EFFECTS: CaptureEffects = CaptureEffects {
     stamp,
     create_directory,
     set_sample: rsf_ac7_capture_set_sample,
-    write: rsf_ac7_capture_write_file,
+    write: write_file,
     stats,
 };
 
@@ -94,5 +126,5 @@ extern "C" fn rsf_ac7_capture_end_session() {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_capture_checkpoint_native(capture: CaptureInterval) {
-    rsf_ac7_capture_publish_checkpoint(rsf_ac7_capture_write_file, capture);
+    rsf_ac7_capture_publish_checkpoint(write_file, capture);
 }

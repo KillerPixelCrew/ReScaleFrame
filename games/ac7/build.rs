@@ -38,7 +38,6 @@ fn main() {
         &[
             "src/motion_capture_trampolines.c",
             "src/ac7_hooks.c",
-            "src/ac7_capture_io.c",
         ],
         &["include", "src", "../../sdk/game/include", &minhook],
     );
@@ -62,7 +61,6 @@ fn bindings() {
     headers.sort();
     println!("cargo:rerun-if-changed=include/rescaleframe");
     for private in [
-        "ac7_capture_io.h",
         "ac7_platform.h",
         "ac7_scope_owner.h",
         "ac7_sites.h",
