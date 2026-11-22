@@ -450,7 +450,7 @@ add_test(NAME d3d11_host_contract COMMAND rsf_d3d11_host_test)
 
 add_executable(rsf_resource_roles graphics_fixture_main.c)
 target_compile_definitions(rsf_resource_roles PRIVATE RSF_GRAPHICS_FIXTURE=rsf_resource_roles_fixture)
-target_link_libraries(rsf_resource_roles PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_resource_roles PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options
 add_test(NAME resource_roles COMMAND rsf_resource_roles)
 
 add_executable(rsf_motion_decode graphics_fixture_main.c)
