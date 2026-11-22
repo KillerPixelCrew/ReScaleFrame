@@ -307,17 +307,20 @@ impl Configuration<'_> {
     /// The value without its terminator, read into a buffer of `capacity` units.
     fn string(&self, key: &str, capacity: u32) -> Vec<u16> {
         let key = wide(key);
-        let mut value = vec![0; capacity as usize];
+        let read_capacity = rsf_game_sys::profile_text::read_capacity(capacity as usize);
+        let mut value = vec![0; read_capacity];
         let length = unsafe {
             (self.platform.profile_string)(
                 self.path.as_ptr(),
                 self.section.as_ptr(),
                 key.as_ptr(),
                 value.as_mut_ptr(),
-                capacity,
+                read_capacity as u32,
             )
         };
-        value.truncate((length as usize).min(capacity.saturating_sub(1) as usize));
+        value.truncate((length as usize).min(read_capacity.saturating_sub(1)));
+        let mut value = rsf_game_sys::profile_text::decode(value);
+        value.truncate(capacity.saturating_sub(1) as usize);
         value
     }
 }

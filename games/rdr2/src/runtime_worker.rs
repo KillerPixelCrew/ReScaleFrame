@@ -35,6 +35,88 @@ type Create =
     unsafe extern "C" fn(*const rsf_render_host_setup, *mut rsf_game_host_services) -> i32;
 type Fingerprint = unsafe extern "C" fn(*const u16, u32, *mut u8) -> u32;
 
+#[path = "../../../runtime/orchestrator/src/overlay_saved_abi.rs"]
+mod saved_abi;
+
+fn register_startup_options(runtime: HMODULE, scope: *mut c_void, path: *const u16) {
+    use saved_abi::*;
+    type Register = unsafe extern "C" fn(*mut c_void, *const rsf_overlay_saved_setup) -> i32;
+    let Some(register) =
+        (unsafe { typed_export::<Register>(runtime, c"rsf_overlay_saved_options_register") })
+    else {
+        log("RDR2 overlay startup controls unavailable in this Runtime.");
+        return;
+    };
+    let toggle = |key: &CStr, label: &CStr, default_value| rsf_overlay_saved_option {
+        label_utf8: label.as_ptr(),
+        key_utf8: key.as_ptr(),
+        default_value,
+        kind: RSF_OVERLAY_SAVED_TOGGLE,
+        restart: 1,
+        ..Default::default()
+    };
+    let text = |key: &CStr, label: &CStr, max_text_length| rsf_overlay_saved_option {
+        label_utf8: label.as_ptr(),
+        key_utf8: key.as_ptr(),
+        max_text_length,
+        kind: RSF_OVERLAY_SAVED_TEXT,
+        restart: 1,
+        ..Default::default()
+    };
+    let rows = [
+        toggle(c"Enable", c"Enable renderer integration", 1),
+        toggle(c"ForceD3D12", c"Force Direct3D 12", 1),
+        toggle(c"NativeCapture", c"Native GPU capture", 0),
+        toggle(c"CameraProbe", c"Camera probe", 0),
+        text(
+            c"CameraProbeDirectory",
+            c"Camera and native capture directory",
+            195,
+        ),
+        toggle(c"CameraReference", c"Camera reference capture", 0),
+        text(c"CameraReferenceLibrary", c"Camera reference library", 259),
+        toggle(c"FrameProbe", c"Frame probe", 0),
+        text(c"FrameProbeLibrary", c"Frame probe library", 259),
+        text(c"FrameProbePrefix", c"Frame probe prefix", 259),
+        toggle(c"Census", c"Vendor census", 0),
+        text(c"CensusDirectory", c"Census directory", 259),
+        rsf_overlay_saved_option {
+            label_utf8: c"Census flags".as_ptr(),
+            key_utf8: c"CensusFlags".as_ptr(),
+            kind: RSF_OVERLAY_SAVED_NUMBER,
+            restart: 1,
+            maximum: 127,
+            step: 1,
+            divisor: 1,
+            ..Default::default()
+        },
+        toggle(c"TraceD3D12", c"Trace Direct3D 12", 0),
+        toggle(c"NativeSettingsProbe", c"Native settings probe", 0),
+        text(
+            c"NativeSettingsProbePath",
+            c"Native settings probe path",
+            RSF_OVERLAY_SAVED_TEXT_LIMIT,
+        ),
+        toggle(c"DumpModule", c"Dump the executable module", 0),
+        text(c"DumpDirectory", c"Module dump directory", 259),
+    ];
+    let setup = rsf_overlay_saved_setup {
+        struct_size: size_of::<rsf_overlay_saved_setup>() as u32,
+        abi_version: RSF_OVERLAY_SAVED_OPTIONS_ABI_VERSION,
+        configuration_path: path,
+        configuration_section: w!("RDR2"),
+        options: rows.as_ptr(),
+        option_count: rows.len() as u32,
+        ..Default::default()
+    };
+    let result = unsafe { register(scope, &setup) };
+    if result != OK {
+        log(format!(
+            "RDR2 overlay startup controls refused, result={result}."
+        ));
+    }
+}
+
 static LOG: CarrierLog = CarrierLog::new();
 
 pub(crate) fn log(message: impl AsRef<[u8]>) {
@@ -60,21 +142,27 @@ fn profile_string(
     config: &[u16],
     capacity: usize,
 ) -> Option<Vec<u16>> {
-    let mut value = vec![0; capacity];
+    let read_capacity = rsf_game_sys::profile_text::read_capacity(capacity);
+    let mut value = vec![0; read_capacity];
     let length = unsafe {
         GetPrivateProfileStringW(
             section,
             key,
             w!(""),
             value.as_mut_ptr(),
-            capacity as u32,
+            read_capacity as u32,
             config.as_ptr(),
         )
     } as usize;
-    if length == 0 || length >= capacity - 1 {
+    if length == 0 || length >= read_capacity - 1 {
         return None;
     }
-    value.truncate(length + 1);
+    value.truncate(length);
+    let mut value = rsf_game_sys::profile_text::decode(value);
+    if value.is_empty() || value.len() >= capacity - 1 {
+        return None;
+    }
+    value.push(0);
     Some(value)
 }
 
@@ -200,6 +288,7 @@ fn run_session(
             result: created,
         });
     }
+    register_startup_options(runtime, services.user, config.as_ptr());
     after_create();
 
     let mut session = null_mut();
