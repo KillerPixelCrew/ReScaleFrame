@@ -1569,7 +1569,14 @@ unsafe fn latency_window_bind(binding: *const Window, p: &Platform) -> i32 {
     if binding.version != 1 {
         return RSF_NFG_CPU_ABI_MISMATCH;
     }
-    let thread = owned_window_thread(p, binding.window_key);
+    bind_window(binding.session_id, binding.window_key, p)
+}
+
+fn bind_window(session_id: u64, window_key: u64, p: &Platform) -> i32 {
+    if session_id == 0 || window_key == 0 {
+        return INVALID;
+    }
+    let thread = owned_window_thread(p, window_key);
     if thread == 0 {
         return INVALID;
     }
@@ -1579,14 +1586,14 @@ unsafe fn latency_window_bind(binding: *const Window, p: &Platform) -> i32 {
         ledger.binding.session,
         ledger.binding.key,
         ledger.binding.thread,
-    ) != (binding.session_id, binding.window_key, thread)
+    ) != (session_id, window_key, thread)
     {
         ledger.routes = empty_routes();
         epoch = epoch.wrapping_add(1);
     }
     ledger.binding = Binding {
-        key: binding.window_key,
-        session: binding.session_id,
+        key: window_key,
+        session: session_id,
         thread,
         epoch,
     };

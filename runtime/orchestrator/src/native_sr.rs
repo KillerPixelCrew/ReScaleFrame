@@ -460,7 +460,7 @@ unsafe fn capture_validated(context: Texture, pass: &Pass, motion: &DecodeParams
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_sr_capture_fg(
+pub(crate) unsafe extern "C" fn rsf_native_sr_capture_fg(
     context: Texture,
     pass: *const Pass,
     motion: *const DecodeParams,

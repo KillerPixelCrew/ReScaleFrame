@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Public host records come from the generated SDK bindings.
-// The host platform table is Rust-only and can be replaced by fixture calls.
 #![allow(non_camel_case_types)]
 
-use crate::auxiliary_sr::AuxPlatform;
-use crate::sys::rsf_motion_decode_params;
-use crate::sys::rsf_overlay_service_setup;
-use crate::sys::{rsf_backend_log_fn, rsf_native_fg_options, rsf_render_settings};
-use crate::sys::{rsf_d3d11_present_setup, rsf_streamline_host};
-use crate::sys::{rsf_native_present_record, rsf_observer_present_event};
 use rsf_game_sys::rsf_d3d11_auxiliary_surface;
 pub(crate) use rsf_game_sys::*;
 pub(crate) use rsf_game_sys::{
@@ -19,8 +12,7 @@ pub(crate) use rsf_game_sys::{
     rsf_d3d11_host_setup, rsf_d3d11_native_chain, rsf_d3d11_present_dispatch,
     rsf_d3d11_presentation_binding, rsf_d3d11_sampler_bias,
 };
-use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
-use std::ffi::{c_char, c_int, c_void};
+use rsf_game_sys::rsf_game_render_pass;
 use std::mem::{offset_of, size_of};
 
 pub(crate) use rsf_game_sys::{
@@ -42,144 +34,6 @@ pub(super) const DUMP_DENSE_MOTION: u32 = 7;
 
 pub(crate) type Pass = rsf_game_render_pass;
 pub(crate) type Surface = rsf_d3d11_auxiliary_surface;
-pub(crate) type PresentEvent =
-    Option<unsafe extern "C" fn(*mut c_void, *const rsf_observer_present_event)>;
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11h_strings {
-    pub streamline: *const c_char,
-    pub fidelityfx: *const c_char,
-    pub xess: *const c_char,
-    pub captures: *const c_char,
-    pub identity: *const c_char,
-    pub fingerprint: *const c_char,
-    pub engine_version: *const c_char,
-    pub project: *const c_char,
-}
-
-#[repr(C)]
-pub(crate) struct rsf_d3d11h_pipeline_start {
-    pub output_width: u32,
-    pub output_height: u32,
-    pub quality: u32,
-    pub backend: u32,
-    pub setup: *const rsf_d3d11_host_setup,
-    pub strings: *const rsf_d3d11h_strings,
-    pub log: rsf_game_log_fn,
-    pub user: *mut c_void,
-}
-
-#[repr(C)]
-#[derive(Default)]
-pub(crate) struct rsf_d3d11h_pipeline_status {
-    pub running: u32,
-    pub output_width: u32,
-    pub output_height: u32,
-    pub render_width: u32,
-    pub render_height: u32,
-}
-
-type Raw = *mut c_void;
-
-#[derive(Clone, Copy)]
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) struct rsf_d3d11h_platform {
-    pub same_object: unsafe extern "C" fn(Raw, Raw) -> i32,
-    pub child_device: unsafe extern "C" fn(Raw) -> Raw,
-    pub is_immediate: unsafe extern "C" fn(Raw) -> u32,
-    pub device_ok: unsafe extern "C" fn(Raw) -> u32,
-    pub immediate_context: unsafe extern "C" fn(Raw) -> Raw,
-    pub device_vendor: unsafe extern "C" fn(Raw, *mut u32) -> i32,
-    pub chain_device: unsafe extern "C" fn(Raw) -> Raw,
-    pub chain_window: unsafe extern "C" fn(Raw) -> Raw,
-    pub chain_buffer: unsafe extern "C" fn(Raw) -> Raw,
-    #[cfg_attr(test, allow(dead_code))]
-    pub present_install: unsafe extern "C" fn(*const rsf_d3d11_present_setup) -> c_int,
-    #[cfg_attr(test, allow(dead_code))]
-    pub present_prepare: unsafe extern "C" fn(*const rsf_d3d11_present_setup) -> c_int,
-    #[cfg_attr(test, allow(dead_code))]
-    pub present_install_scoped: unsafe extern "C" fn(*const rsf_d3d11_present_setup) -> c_int,
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_prepare:
-        unsafe extern "C" fn(Raw, Raw, Raw, Raw, Raw, *mut rsf_streamline_host, Raw, u32),
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_retire: unsafe extern "C" fn(Raw, Raw),
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_latency_event: unsafe extern "C" fn(Raw, *const rsf_observer_present_event),
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_rendered_source_set: unsafe extern "C" fn(u32),
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_set_log: unsafe extern "C" fn(rsf_backend_log_fn, Raw),
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_options_set: unsafe extern "C" fn(*const rsf_native_fg_options),
-    pub observer_install: unsafe extern "C" fn(rsf_game_log_fn, Raw, PresentEvent) -> i32,
-    pub present_is_owner: unsafe extern "C" fn(Raw) -> i32,
-    pub chain_dispatch: unsafe extern "C" fn(*mut rsf_d3d11_chain_dispatch),
-    pub creation_begin: unsafe extern "C" fn(Raw, *mut u64) -> i32,
-    pub creation_end: unsafe extern "C" fn(Raw, u64, Raw, Raw, Raw) -> i32,
-    pub wrap_native: unsafe extern "C" fn(Raw, Raw, *mut Raw) -> i32,
-    pub com_identity: unsafe extern "C" fn(Raw) -> Raw,
-    pub chain_present: unsafe extern "C" fn(Raw) -> Raw,
-    pub com_release: unsafe extern "C" fn(Raw) -> u32,
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_frame: unsafe extern "C" fn(*const Pass, u32),
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_submission: unsafe extern "C" fn(*const Pass, u32),
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_final: unsafe extern "C" fn(Raw, *const Pass),
-    #[cfg_attr(test, allow(dead_code))]
-    pub fg_capture: unsafe extern "C" fn(Raw, *const Pass, *const rsf_motion_decode_params) -> i32,
-    #[cfg_attr(test, allow(dead_code))]
-    pub scene_pass: unsafe extern "C" fn(*const Pass, u32) -> i32,
-    pub scene_present_path: unsafe extern "C" fn(*const Pass) -> u32,
-    #[cfg_attr(test, allow(dead_code))]
-    pub window_scope: unsafe extern "C" fn(*const Pass, u32) -> i32,
-    pub window_present: unsafe extern "C" fn(*const rsf_observer_present_event) -> i32,
-    pub window_last_present: unsafe extern "C" fn(*mut rsf_native_present_record) -> i32,
-    pub window_match: unsafe extern "C" fn(Raw, *mut Pass) -> i32,
-    pub latency_window_bind: unsafe extern "C" fn(u64, Raw),
-    #[cfg_attr(test, allow(dead_code))]
-    pub cpu_dispatch_fg: unsafe extern "C" fn(*const rsf_game_cpu_event) -> i32,
-    #[cfg_attr(test, allow(dead_code))]
-    pub cpu_event: unsafe extern "C" fn(*const rsf_game_cpu_event),
-    pub dlss_native_present: unsafe extern "C" fn(Raw, u32, u32, u32) -> i32,
-    pub pipeline_start: unsafe extern "C" fn(Raw, *const rsf_d3d11h_pipeline_start) -> i32,
-    pub pipeline_resize: unsafe extern "C" fn(u32, u32) -> i32,
-    pub pipeline_select: unsafe extern "C" fn(u32) -> i32,
-    pub pipeline_quality: unsafe extern "C" fn(u32) -> i32,
-    pub pipeline_preset: unsafe extern "C" fn(u32) -> i32,
-    pub pipeline_sharpen: unsafe extern "C" fn(*const rsf_render_settings),
-    pub pipeline_status: unsafe extern "C" fn(*mut rsf_d3d11h_pipeline_status) -> i32,
-    pub pipeline_colour: unsafe extern "C" fn(u32, u32),
-    pub pipeline_output: unsafe extern "C" fn() -> Raw,
-    pub sr_evaluate: unsafe extern "C" fn(Raw, *const Pass, *mut u32) -> i32,
-    pub dump_configure: unsafe extern "C" fn(*const rsf_d3d11h_strings, rsf_game_log_fn, Raw),
-    pub dump_request: unsafe extern "C" fn(),
-    pub dump_requested: unsafe extern "C" fn() -> i32,
-    pub dump_poll: unsafe extern "C" fn(),
-    pub dump_begin: unsafe extern "C" fn(*const rsf_frame_record, u32) -> i32,
-    pub dump_wants: unsafe extern "C" fn(*const rsf_frame_record) -> i32,
-    pub dump_inputs: unsafe extern "C" fn(Raw, *const Pass, *const rsf_frame_record, Raw),
-    pub dump_pass: unsafe extern "C" fn(Raw, *const Pass, u32),
-    pub dump_texture: unsafe extern "C" fn(
-        Raw,
-        *const rsf_frame_record,
-        *const c_char,
-        *const c_char,
-        Raw,
-        u32,
-        f32,
-    ) -> i32,
-    pub dump_result: unsafe extern "C" fn(*const rsf_frame_record, *const c_char, u32, i32),
-    pub dump_complete: unsafe extern "C" fn(*const rsf_frame_record, i32),
-    pub overlay_configure:
-        unsafe extern "C" fn(*const rsf_overlay_service_setup, *mut rsf_render_settings) -> i32,
-    pub overlay_present: unsafe extern "C" fn(Raw),
-    pub overlay_poll_toggle: unsafe extern "C" fn(),
-    pub ini_read: unsafe extern "C" fn(*const u16, *const u16, *const u16, i32) -> i32,
-    pub ini_write: unsafe extern "C" fn(*const u16, *const u16, *const u16, *const u16) -> i32,
-    pub auxiliary: *const AuxPlatform,
-}
 
 const _: () = {
     assert!(size_of::<rsf_d3d11_host_setup>() == 168);

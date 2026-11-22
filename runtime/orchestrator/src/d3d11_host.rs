@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Generic D3D11 callback host: session admission, callback leases, presentation
 // installation and binding, SR lifecycle, reduced-frame recovery and status.
-// Every D3D11, DXGI, SDK, overlay and capture call stays behind the private
-// Rust platform table. Native calls cross individually guarded boundaries.
+// Every D3D11, DXGI, SDK, overlay and capture call goes through `native`
+// (d3d11_host_platform.rs; fakes under test). Native calls cross individually
+// guarded boundaries.
 use crate::com_ref::ComRef;
 use crate::d3d11_host_abi::*;
-use crate::d3d11_host_reduced::{
-    MAX_RESERVED, Products, ProductsFactory, Raw, Ticket, zeroed_pass,
-};
+#[cfg(not(test))]
+use crate::d3d11_host_platform as native;
+use crate::d3d11_host_reduced::{MAX_RESERVED, Products, Raw, Ticket, zeroed_pass};
 use crate::native_cpu::{SourcePacket, decode_source_event};
 use crate::sys::RSF_SR_DLSS;
 use crate::sys::rsf_d3d11_present_setup;
@@ -21,7 +22,6 @@ use crate::sys::{
 };
 use crate::sys::{rsf_native_present_record, rsf_observer_present_event};
 use crate::wide::copy_nul as wide_copy;
-use crate::wide::from_str as wide;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_ABI_VERSION,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE,
@@ -36,6 +36,8 @@ use std::mem::offset_of;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+#[cfg(test)]
+use tests::native;
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -54,7 +56,6 @@ const REFLEX_OFF: u32 = 0;
 const REFLEX_ON: u32 = 1;
 const REFLEX_BOOST: u32 = 2;
 const MAX_GENERATED_FRAMES: u32 = 15;
-#[cfg_attr(test, allow(dead_code))]
 const UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
 const SCREEN_GAMEPLAY: u32 = 8;
 const DXGI_PRESENT_TEST: u32 = 1;
@@ -126,21 +127,6 @@ struct Text {
     fingerprint: CString,
     version: CString,
     project: CString,
-}
-
-impl Text {
-    fn strings(&self) -> rsf_d3d11h_strings {
-        rsf_d3d11h_strings {
-            streamline: self.streamline.as_ptr(),
-            fidelityfx: self.fidelityfx.as_ptr(),
-            xess: self.xess.as_ptr(),
-            captures: self.captures.as_ptr(),
-            identity: self.identity.as_ptr(),
-            fingerprint: self.fingerprint.as_ptr(),
-            engine_version: self.version.as_ptr(),
-            project: self.project.as_ptr(),
-        }
-    }
 }
 
 struct Shared {
@@ -289,16 +275,12 @@ impl Graphics {
 // owner that holds the callback lease.
 unsafe impl Send for Graphics {}
 
-#[cfg_attr(test, allow(dead_code))]
 pub(crate) struct Host {
-    platform: rsf_d3d11h_platform,
-    make_products: ProductsFactory,
     upstream: rsf_game_host_services,
     setup: rsf_d3d11_host_setup,
     ini: Vec<u16>,
     section: Vec<u16>,
-    _text: Text,
-    strings: rsf_d3d11h_strings,
+    text: Text,
     bridge_installed: AtomicBool,
     bridge_bound: AtomicBool,
     active: AtomicBool,
@@ -308,13 +290,9 @@ pub(crate) struct Host {
     capture_failures: AtomicBool,
     capture_sequence: AtomicBool,
     requested_generation: AtomicU32,
-    #[cfg_attr(test, allow(dead_code))]
     cpu_reports: AtomicU32,
-    #[cfg_attr(test, allow(dead_code))]
     cpu_sample_reports: AtomicU32,
-    #[cfg_attr(test, allow(dead_code))]
     cpu_refusal_stages: AtomicU32,
-    #[cfg_attr(test, allow(dead_code))]
     cpu_stage_reports: [AtomicU32; RSF_GAME_CPU_SOURCE_ABORT as usize + 1],
     shared: Mutex<Shared>,
     graphics: Mutex<Graphics>,
@@ -325,7 +303,6 @@ pub(crate) struct Host {
 unsafe impl Send for Host {}
 unsafe impl Sync for Host {}
 
-#[cfg_attr(test, allow(dead_code))]
 static CREATION: Mutex<()> = Mutex::new(());
 static OWNER: AtomicPtr<Host> = AtomicPtr::new(null_mut());
 
@@ -347,7 +324,7 @@ enum Advanced {
 struct AdvancedOption {
     label: &'static CStr,
     flag: fn(&Host) -> &AtomicBool,
-    key: Option<&'static str>,
+    key: Option<&'static CStr>,
     bump_generation: bool,
 }
 
@@ -369,19 +346,19 @@ const ADVANCED: [AdvancedOption; 5] = {
     options[Advanced::Transport as usize] = AdvancedOption {
         label: c"DLSS colour transport",
         flag: |h| &h.transport,
-        key: Some("ColourTransport"),
+        key: Some(c"ColourTransport"),
         bump_generation: true,
     };
     options[Advanced::Correction as usize] = AdvancedOption {
         label: c"SR colour correction",
         flag: |h| &h.fidelity,
-        key: Some("ColourCorrection"),
+        key: Some(c"ColourCorrection"),
         bump_generation: true,
     };
     options[Advanced::CaptureFailures as usize] = AdvancedOption {
         label: c"Capture SR failures (max 3 per session)",
         flag: |h| &h.capture_failures,
-        key: Some("CaptureSRFailures"),
+        key: Some(c"CaptureSRFailures"),
         bump_generation: false,
     };
     options[Advanced::CaptureSequence as usize] = AdvancedOption {
@@ -462,14 +439,8 @@ fn validate_setup(setup: &rsf_d3d11_host_setup, services: &rsf_game_host_service
         || services.render_feedback.is_some())
 }
 
-#[cfg_attr(test, allow(dead_code))]
 impl Host {
-    fn new(
-        platform: rsf_d3d11h_platform,
-        make_products: ProductsFactory,
-        setup: &rsf_d3d11_host_setup,
-        upstream: rsf_game_host_services,
-    ) -> Option<Self> {
+    fn new(setup: &rsf_d3d11_host_setup, upstream: rsf_game_host_services) -> Option<Self> {
         let copy = |text: *const c_char| unsafe { CStr::from_ptr(text) }.to_owned();
         let runtime = unsafe { wide_copy(setup.runtime_directory) };
         let root = String::from_utf16_lossy(&runtime[..runtime.len() - 1]);
@@ -494,14 +465,11 @@ impl Host {
         retained.engine_version_utf8 = ptr::null();
         retained.project_id_utf8 = ptr::null();
         Some(Self {
-            platform,
-            make_products,
             upstream,
             setup: retained,
             ini: unsafe { wide_copy(setup.configuration_path) },
             section: unsafe { wide_copy(setup.configuration_section) },
-            strings: text.strings(),
-            _text: text,
+            text,
             bridge_installed: AtomicBool::new(false),
             bridge_bound: AtomicBool::new(false),
             active: AtomicBool::new(false),
@@ -572,11 +540,11 @@ impl Host {
     }
 
     fn same(&self, left: Raw, right: Raw) -> bool {
-        unsafe { (self.platform.same_object)(left, right) != 0 }
+        unsafe { native::same_object(left, right) != 0 }
     }
 
     fn child_device(&self, child: Raw) -> Option<ComRef> {
-        unsafe { ComRef::from_owned((self.platform.child_device)(child)) }
+        unsafe { ComRef::from_owned(native::child_device(child)) }
     }
 
     fn on_device(&self, child: Raw, device: Raw) -> bool {
@@ -584,11 +552,11 @@ impl Host {
     }
 
     fn is_immediate(&self, context: Raw) -> bool {
-        unsafe { (self.platform.is_immediate)(context) != 0 }
+        unsafe { native::is_immediate(context) != 0 }
     }
 
     fn dump_wants(&self, record: &rsf_frame_record) -> bool {
-        unsafe { (self.platform.dump_wants)(record) != 0 }
+        unsafe { native::dump_wants(record) != 0 }
     }
 
     fn dump_texture(
@@ -601,7 +569,7 @@ impl Host {
         view: u32,
     ) {
         unsafe {
-            (self.platform.dump_texture)(
+            native::dump_texture(
                 context,
                 record,
                 name,
@@ -614,53 +582,37 @@ impl Host {
     }
 
     fn dump_result(&self, record: &rsf_frame_record, stage: &CStr, backend: u32, result: i32) {
-        unsafe { (self.platform.dump_result)(record, stage.as_ptr(), backend, result) };
+        unsafe { native::dump_result(record, stage.as_ptr(), backend, result) };
     }
 
-    fn ini_read(&self, key: &str, fallback: i32) -> bool {
-        let key = wide(key);
-        unsafe {
-            (self.platform.ini_read)(
-                self.ini.as_ptr(),
-                self.section.as_ptr(),
-                key.as_ptr(),
-                fallback,
-            ) != 0
-        }
+    fn ini_read(&self, key: &CStr, fallback: bool) -> bool {
+        let (ini, section) = (self.ini.as_ptr(), self.section.as_ptr());
+        unsafe { native::ini_read(ini, section, key.as_ptr(), u32::from(fallback)) != 0 }
     }
 
-    fn ini_write(&self, key: &str, value: bool) -> bool {
-        let (key, value) = (wide(key), wide(if value { "1" } else { "0" }));
-        unsafe {
-            (self.platform.ini_write)(
-                self.ini.as_ptr(),
-                self.section.as_ptr(),
-                key.as_ptr(),
-                value.as_ptr(),
-            ) != 0
-        }
+    fn ini_write(&self, key: &CStr, value: bool) -> bool {
+        let (ini, section) = (self.ini.as_ptr(), self.section.as_ptr());
+        unsafe { native::ini_write(ini, section, key.as_ptr(), u32::from(value)) == OK }
     }
 
-    #[cfg_attr(test, allow(dead_code))]
     fn install_bridge(&self) {
         let mode = self.setup.presentation_bridge;
         if mode == 0 {
             return;
         }
-        let p = &self.platform;
         let rendered = self.setup.capabilities & RSF_D3D11_HOST_CAP_RENDERED_SOURCE != 0;
         let bridge = rsf_d3d11_present_setup {
             struct_size: size_of::<rsf_d3d11_present_setup>() as u32,
-            runtime_directory_utf8: self.strings.streamline,
+            runtime_directory_utf8: self.text.streamline.as_ptr(),
             development_runtime: 0,
             log: Some(host_log),
             user: self.user(),
             accept_window: Some(host_accept_window),
             before_present: None,
             present_event: Some(host_present),
-            latency_event: Some(p.fg_latency_event),
-            retire: Some(p.fg_retire),
-            prepare: Some(p.fg_prepare),
+            latency_event: Some(native::fg_latency_event),
+            retire: Some(native::fg_retire),
+            prepare: Some(native::fg_prepare),
             debug_timing: 0,
             backend: 0,
             max_generated_frames: MAX_GENERATED_FRAMES,
@@ -669,13 +621,13 @@ impl Host {
             units_to_meters: self.setup.units_to_meters,
             runtime_switching: 1,
             ui_mode: UI_MODE_BACKBUFFER_HUDLESS,
-            fsr3_directory_utf8: self.strings.fidelityfx,
-            fsr4_directory_utf8: self.strings.fidelityfx,
-            xess_directory_utf8: self.strings.xess,
-            streamline_directory_utf8: self.strings.streamline,
+            fsr3_directory_utf8: self.text.fidelityfx.as_ptr(),
+            fsr4_directory_utf8: self.text.fidelityfx.as_ptr(),
+            xess_directory_utf8: self.text.xess.as_ptr(),
+            streamline_directory_utf8: self.text.streamline.as_ptr(),
             engine_type: self.setup.engine_type,
-            engine_version_utf8: self.strings.engine_version,
-            project_id_utf8: self.strings.project,
+            engine_version_utf8: self.text.version.as_ptr(),
+            project_id_utf8: self.text.project.as_ptr(),
             allowed_backend_choices: if rendered {
                 (1 << FG_BACKEND_FSR3) | (1 << FG_BACKEND_FSR4)
             } else {
@@ -683,13 +635,13 @@ impl Host {
             },
         };
         let install = match mode {
-            2 => p.present_prepare,
-            3 => p.present_install_scoped,
-            _ => p.present_install,
+            2 => native::present_prepare,
+            3 => native::present_install_scoped,
+            _ => native::present_install,
         };
         let installed = unsafe {
             // The source mode is published even when the bridge refuses installation.
-            (p.fg_rendered_source_set)(u32::from(rendered));
+            native::fg_rendered_source_set(u32::from(rendered));
             install(&bridge) != 0
         };
         if installed {
@@ -703,8 +655,8 @@ impl Host {
                 debug: 0,
             };
             unsafe {
-                (p.fg_set_log)(bridge.log, bridge.user);
-                (p.fg_options_set)(&off);
+                native::fg_set_log(bridge.log, bridge.user);
+                native::fg_options_set(&off);
             }
         }
         self.bridge_installed.store(installed, Ordering::Release);
@@ -728,10 +680,9 @@ impl Host {
         if g.configured {
             return true;
         }
-        let p = &self.platform;
         let bridge = self.bridge();
         if self.setup.presentation_bridge != 0
-            && (!bridge || unsafe { (p.present_is_owner)(swapchain) } == 0)
+            && (!bridge || unsafe { native::present_is_owner(swapchain) } == 0)
         {
             self.log(
                 "D3D11 host refused presentation binding: engine chain is not the final application facade.",
@@ -740,7 +691,7 @@ impl Host {
         }
         g.device = self.child_device(context);
         let mut vendor = 0;
-        if g.device.is_none() || unsafe { (p.device_vendor)(g.device_ptr(), &mut vendor) } == 0 {
+        if g.device.is_none() || unsafe { native::device_vendor(g.device_ptr(), &mut vendor) } == 0 {
             return false;
         }
         let selected =
@@ -801,7 +752,7 @@ impl Host {
             if let Some(key) = option.key {
                 let fallback = index == Advanced::Transport as usize
                     && self.setup.colour_transport_default == 0;
-                (option.flag)(self).store(self.ini_read(key, fallback as i32), Ordering::SeqCst);
+                (option.flag)(self).store(self.ini_read(key, fallback), Ordering::SeqCst);
             }
         }
         let toggle = |label: &'static CStr, value: bool| rsf_overlay_service_option {
@@ -818,7 +769,7 @@ impl Host {
         let panel = rsf_overlay_service_setup {
             struct_size: size_of::<rsf_overlay_service_setup>() as u32,
             abi_version: RSF_OVERLAY_API_VERSION,
-            identity_utf8: self.strings.identity,
+            identity_utf8: self.text.identity.as_ptr(),
             configuration_path: self.ini.as_ptr(),
             configuration_section: self.section.as_ptr(),
             defaults,
@@ -843,33 +794,42 @@ impl Host {
             ..Default::default()
         };
         let mut applied = zeroed_settings();
-        if unsafe { (p.overlay_configure)(&panel, &mut applied) } != OK {
+        if unsafe { native::overlay_configure(&panel, &mut applied) } != OK {
             return false;
         }
         self.shared().desired = applied;
         g.execution_thread = current_thread();
         g.chain = Some(unsafe { ComRef::retain(swapchain) });
-        if unsafe { (p.present_is_owner)(swapchain) } != 0 {
+        if unsafe { native::present_is_owner(swapchain) } != 0 {
             g.observer = true;
             self.log(
                 "D3D11 callback host uses bridge application Present events; native DXGI interception is unnecessary.",
             );
         } else {
             g.observer =
-                unsafe { (p.observer_install)(Some(host_log), self.user(), Some(host_present)) }
+                unsafe { native::observer_install(Some(host_log), self.user(), Some(host_present)) }
                     != 0;
         }
         if !g.observer {
             self.log("D3D11 callback host: Present observation refused; SR activation suspended.");
         }
-        unsafe { (p.dump_configure)(&self.strings, Some(host_log), self.user()) };
+        let text = &self.text;
+        unsafe {
+            native::dump_configure(
+                text.captures.as_ptr(),
+                text.identity.as_ptr(),
+                text.fingerprint.as_ptr(),
+                Some(host_log),
+                self.user(),
+            )
+        };
         set_reason(
             &mut self.shared().report,
             "Waiting for verified scene inputs",
         );
-        let window = unsafe { (p.chain_window)(swapchain) };
+        let window = unsafe { native::chain_window(swapchain) };
         if !window.is_null() {
-            unsafe { (p.latency_window_bind)(self.upstream.session_id, window) };
+            native::latency_window_bind(self.upstream.session_id, window);
         }
         g.configured = true;
         if g.observer && self.setup.presentation_bridge != 0 {
@@ -882,13 +842,12 @@ impl Host {
     }
 
     fn arm_failure_capture(&self, budget: &mut CaptureBudget, result: i32) -> bool {
-        let p = &self.platform;
         let enabled = self.capture_failures.load(Ordering::Acquire);
-        let pending = unsafe { (p.dump_requested)() } != 0;
+        let pending = unsafe { native::dump_requested() } != 0;
         if !budget.claim_failure(enabled, pending, result) {
             return false;
         }
-        unsafe { (p.dump_request)() };
+        unsafe { native::dump_request() };
         self.log(
             "Automatic SR failure capture: failure-time resources, not a pre-evaluation snapshot.",
         );
@@ -924,15 +883,14 @@ impl Host {
         record.output_height = pass.camera.output_height;
         record.camera = pass.camera;
         record.frame_time_ms = pass.camera.frame_time_seconds * 1000.0;
-        let p = &self.platform;
         if self.capture.swap(false, Ordering::AcqRel) {
-            unsafe { (p.dump_request)() };
+            unsafe { native::dump_request() };
         }
-        unsafe { (p.dump_poll)() };
-        if unsafe { (p.dump_begin)(record, backend) } == 0 {
+        unsafe { native::dump_poll() };
+        if unsafe { native::dump_begin(record, backend) } == 0 {
             return;
         }
-        unsafe { (p.dump_inputs)(context, pass, record, original_colour) };
+        unsafe { native::dump_inputs(context, pass, record, original_colour) };
     }
 
     fn prepare_pipeline(
@@ -941,22 +899,36 @@ impl Host {
         pass: &Pass,
         settings: &rsf_render_settings,
     ) -> bool {
-        let p = &self.platform;
         let (width, height) = (pass.camera.output_width, pass.camera.output_height);
         if settings.sr_enabled != 0 {
             if !g.running && !g.attempted {
                 g.attempted = true;
-                let start = rsf_d3d11h_pipeline_start {
+                let (setup, text) = (&self.setup, &self.text);
+                let start = rsf_dlss_pipeline_setup {
+                    struct_size: size_of::<rsf_dlss_pipeline_setup>() as u32,
+                    abi_version: RSF_DLSS_PIPELINE_ABI_VERSION,
+                    streamline_directory_utf8: text.streamline.as_ptr(),
+                    streamline_log_directory_utf8: ptr::null(),
+                    require_signature: 1,
                     output_width: width,
                     output_height: height,
                     quality: settings.sr_quality,
-                    backend: settings.sr_backend,
-                    setup: &self.setup,
-                    strings: &self.strings,
+                    motion: setup.motion,
                     log: Some(host_log),
-                    user: self.user(),
+                    log_user: self.user(),
+                    engine: setup.engine_type,
+                    engine_version_utf8: text.version.as_ptr(),
+                    project_id_utf8: text.project.as_ptr(),
+                    fsr2_directory_utf8: text.fidelityfx.as_ptr(),
+                    fsr3_directory_utf8: text.fidelityfx.as_ptr(),
+                    fsr4_directory_utf8: text.fidelityfx.as_ptr(),
+                    xess_directory_utf8: text.xess.as_ptr(),
+                    view_space_to_meters: setup.units_to_meters,
+                    standard_depth: u32::from(setup.depth_inverted == 0),
                 };
-                g.last_result = unsafe { (p.pipeline_start)(g.device_ptr(), &start) };
+                g.last_result = unsafe {
+                    native::pipeline_start(g.device_ptr(), &start, settings.sr_backend)
+                };
                 g.running = g.last_result == OK;
                 g.backend = settings.sr_backend;
                 g.dlss_started = g.running && g.backend == RSF_SR_DLSS;
@@ -967,7 +939,7 @@ impl Host {
             }
             if g.running && g.present_result == DLSS_OK {
                 if g.output_width != width || g.output_height != height {
-                    g.last_result = unsafe { (p.pipeline_resize)(width, height) };
+                    g.last_result = unsafe { native::pipeline_resize(width, height, null_mut(), null_mut()) };
                     if g.last_result == OK {
                         g.output_width = width;
                         g.output_height = height;
@@ -975,7 +947,9 @@ impl Host {
                     }
                 }
                 if g.backend != settings.sr_backend {
-                    g.last_result = unsafe { (p.pipeline_select)(settings.sr_backend) };
+                    g.last_result = unsafe {
+                        native::pipeline_select(settings.sr_backend, null_mut(), null_mut())
+                    };
                     if g.last_result == OK {
                         g.backend = settings.sr_backend;
                         g.dlss_started |= g.backend == RSF_SR_DLSS;
@@ -983,25 +957,31 @@ impl Host {
                     }
                 }
                 if g.quality != settings.sr_quality {
-                    g.last_result = unsafe { (p.pipeline_quality)(settings.sr_quality) };
+                    g.last_result = unsafe {
+                        native::pipeline_quality(settings.sr_quality, null_mut(), null_mut())
+                    };
                     if g.last_result == OK {
                         g.quality = settings.sr_quality;
                         g.reset = true;
                     }
                 }
                 if g.preset != settings.dlss_preset {
-                    g.last_result = unsafe { (p.pipeline_preset)(settings.dlss_preset) };
+                    g.last_result = unsafe { native::pipeline_preset(settings.dlss_preset) };
                     if g.last_result == OK {
                         g.preset = settings.dlss_preset;
                         g.reset = true;
                     }
                 }
-                unsafe { (p.pipeline_sharpen)(settings) };
+                native::pipeline_sharpen(settings);
             }
         }
-        let mut status = rsf_d3d11h_pipeline_status::default();
+        // SAFETY: the status record contains only integers.
+        let mut status = rsf_dlss_pipeline_status {
+            struct_size: size_of::<rsf_dlss_pipeline_status>() as u32,
+            ..unsafe { std::mem::zeroed() }
+        };
         let ready = g.running
-            && unsafe { (p.pipeline_status)(&mut status) } == OK
+            && unsafe { native::pipeline_status(&mut status) } == OK
             && status.running != 0
             && status.output_width == width
             && status.output_height == height
@@ -1030,7 +1010,6 @@ impl Host {
         if !self.active() {
             return NOT_READY;
         }
-        let p = &self.platform;
         let reconfigure = pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0;
         let recovery = g.reduced_pending();
         if let Some(ticket) = g.reduced.as_ref().filter(|ticket| ticket.pending)
@@ -1098,12 +1077,8 @@ impl Host {
             g.applied_generation = generation;
         }
         if !recovery {
-            unsafe {
-                (p.pipeline_colour)(
-                    self.transport.load(Ordering::Acquire) as u32,
-                    self.fidelity.load(Ordering::Acquire) as u32,
-                )
-            };
+            native::pipeline_colour_transport(self.transport.load(Ordering::Acquire) as u32);
+            native::pipeline_colour_correction(self.fidelity.load(Ordering::Acquire) as u32);
         }
         let pipeline_ready = if recovery {
             g.running
@@ -1127,12 +1102,12 @@ impl Host {
                 && pass.camera_valid != 0
                 && pass.screen == SCREEN_GAMEPLAY;
             let pending =
-                self.capture.load(Ordering::Acquire) || unsafe { (p.dump_requested)() } != 0;
+                self.capture.load(Ordering::Acquire) || unsafe { native::dump_requested() } != 0;
             g.capture_budget
                 .claim_source(pass.session_id, pass.source_frame_id, ready, pending)
         };
         if sequence_frame {
-            unsafe { (p.dump_request)() };
+            unsafe { native::dump_request() };
         }
         if !configure_only {
             self.capture_inputs(g.backend, context, pass, &mut record, null_mut());
@@ -1166,7 +1141,7 @@ impl Host {
                     evaluated.flags |= RSF_GAME_RENDER_RESET;
                 }
                 if auxiliary.is_some() && g.auxiliaries.is_none() {
-                    g.auxiliaries = (self.make_products)(p.auxiliary);
+                    g.auxiliaries = native::auxiliary_products();
                 }
                 if recovery {
                     let ticket = g.reduced.as_mut().expect("pending recovery ticket");
@@ -1177,7 +1152,7 @@ impl Host {
                     let mut ordered = 0;
                     result = if prepared {
                         observed = Some(sr_inputs(&evaluated));
-                        unsafe { (p.sr_evaluate)(context, &evaluated, &mut ordered) }
+                        unsafe { native::sr_evaluate(context, &evaluated, &mut ordered) }
                     } else {
                         NOT_READY
                     };
@@ -1203,7 +1178,7 @@ impl Host {
                     });
                     result = if prepared {
                         observed = Some(sr_inputs(&evaluated));
-                        unsafe { (p.sr_evaluate)(context, &evaluated, null_mut()) }
+                        unsafe { native::sr_evaluate(context, &evaluated, null_mut()) }
                     } else {
                         NOT_READY
                     };
@@ -1287,7 +1262,7 @@ impl Host {
                 }
             }
             self.dump_result(&record, c"sr", g.backend, result);
-            unsafe { (p.dump_pass)(context, pass, 0) };
+            unsafe { native::dump_pass(context, pass, 0) };
             g.capture_record = record;
             g.capture_view = pass.view_key;
             g.capture_native_frame = pass.native_frame;
@@ -1372,7 +1347,6 @@ impl Host {
         pass: &Pass,
         request: &mut rsf_d3d11_reduced_frame,
     ) -> i32 {
-        let p = &self.platform;
         let count = request.surface_count as usize;
         if !self.active()
             || !g.scene_bound
@@ -1401,15 +1375,15 @@ impl Host {
             return NOT_READY;
         }
         let device = self.child_device(context);
-        let immediate = unsafe { ComRef::from_owned((p.immediate_context)(g.device_ptr())) };
+        let immediate = unsafe { ComRef::from_owned(native::immediate_context(g.device_ptr())) };
         if context != ptr_of(&immediate)
             || !self.same(ptr_of(&device), g.device_ptr())
             || !self.is_immediate(context)
-            || unsafe { (p.device_ok)(ptr_of(&device)) } == 0
+            || unsafe { native::device_ok(ptr_of(&device)) } == 0
         {
             return NOT_READY;
         }
-        let private_output = unsafe { (p.pipeline_output)() };
+        let private_output = native::pipeline_output();
         let private =
             |texture: Raw| !private_output.is_null() && self.same(texture, private_output);
         if private(pass.color_input)
@@ -1461,7 +1435,7 @@ impl Host {
             append_main(pass.color_output_readable);
         }
         if g.reduced.is_none() {
-            g.reduced = (self.make_products)(p.auxiliary).map(Ticket::new);
+            g.reduced = native::auxiliary_products().map(Ticket::new);
         }
         let Some(ticket) = g.reduced.as_mut() else {
             return NOT_READY;
@@ -1527,7 +1501,7 @@ impl Host {
                 NOT_READY
             };
         }
-        if unsafe { (self.platform.device_ok)(g.device_ptr()) } == 0 {
+        if unsafe { native::device_ok(g.device_ptr()) } == 0 {
             return self.incomplete(ticket, RSF_D3D11_REDUCED_UNSAFE, request);
         }
         if operation == RSF_D3D11_REDUCED_CANCEL {
@@ -1742,7 +1716,6 @@ impl Host {
         result
     }
 
-    #[cfg_attr(test, allow(dead_code))]
     fn passes(&self, context: Raw, pass: &Pass, begin: u32) {
         let Some(guard) = self.try_graphics() else {
             return;
@@ -1752,12 +1725,11 @@ impl Host {
         {
             return;
         }
-        let p = &self.platform;
         let bridge = self.bridge();
         // Native ownership facts remain useful before a generation provider is enabled.
         match pass.role {
-            RSF_GAME_RENDER_FRAME if bridge => unsafe { (p.fg_frame)(pass, begin) },
-            RSF_GAME_RENDER_SUBMISSION if bridge => unsafe { (p.fg_submission)(pass, begin) },
+            RSF_GAME_RENDER_FRAME if bridge => unsafe { native::fg_frame(pass, begin) },
+            RSF_GAME_RENDER_SUBMISSION if bridge => unsafe { native::fg_submission(pass, begin) },
             RSF_GAME_RENDER_FG_INPUTS => {
                 let requested = self.shared().desired.fg_enabled != 0;
                 if requested
@@ -1769,7 +1741,7 @@ impl Host {
                     && self.on_device(context, g.device_ptr())
                     && self.is_immediate(context)
                 {
-                    unsafe { (p.fg_capture)(context, pass, &self.setup.motion) };
+                    unsafe { native::fg_capture(context, pass, &self.setup.motion) };
                 }
             }
             RSF_GAME_RENDER_FINAL_SCENE => {
@@ -1781,13 +1753,13 @@ impl Host {
                 {
                     return;
                 }
-                let accepted = unsafe { (p.scene_pass)(pass, begin) } != 0;
+                let accepted = unsafe { native::scene_pass(pass, begin) } != 0;
                 if accepted && begin == 0 && bridge {
-                    unsafe { (p.fg_final)(context, pass) };
+                    unsafe { native::fg_final(context, pass) };
                 }
             }
             RSF_GAME_RENDER_WINDOW if pass.swapchain == g.chain_ptr() => unsafe {
-                (p.window_scope)(pass, begin);
+                native::window_scope(pass, begin);
             },
             _ => {}
         }
@@ -1798,23 +1770,22 @@ impl Host {
             return;
         };
         let g = &mut *guard;
-        let p = &self.platform;
         let event_thread = current_thread();
         if !self.active()
             || event.flags & DXGI_PRESENT_TEST != 0
             || event_thread != g.execution_thread
-            || (self.bridge() && unsafe { (p.present_is_owner)(event.swapchain) } == 0)
+            || (self.bridge() && unsafe { native::present_is_owner(event.swapchain) } == 0)
             || !self.same(event.swapchain, g.chain_ptr())
         {
             return;
         }
-        unsafe { (p.window_present)(event) };
+        unsafe { native::window_present(event) };
         if event.completed != 0 && g.ownership_reports < 4 {
             let mut observed = rsf_native_present_record {
                 struct_size: size_of::<rsf_native_present_record>() as u32,
                 ..Default::default()
             };
-            if unsafe { (p.window_last_present)(&mut observed) } != 0 && observed.matched != 0 {
+            if unsafe { native::window_last_present(&mut observed) } != 0 && observed.matched != 0 {
                 g.ownership_reports += 1;
                 self.log(&format!(
                     "D3D11 native ownership source={} submission={} native_frame={} scene={} direct={} accepted={}; generation still requires complete inputs and policy",
@@ -1829,7 +1800,7 @@ impl Host {
         }
         if g.running && g.dlss_started {
             let result = unsafe {
-                (p.dlss_native_present)(
+                native::dlss_native_present(
                     event.swapchain,
                     event.sync_interval,
                     event.flags,
@@ -1865,13 +1836,13 @@ impl Host {
             // Preserve the original short circuit: no WINDOW or scene query is added.
             let matched = term(
                 1,
-                unsafe { (p.window_match)(event.swapchain, &mut window) } != 0,
+                unsafe { native::window_match(event.swapchain, &mut window) } != 0,
             ) && term(2, window.session_id == record.session_id)
                 && term(4, window.source_frame_id == record.frame_id)
                 && term(8, window.native_frame == g.capture_native_frame)
                 && term(16, window.view_key == g.capture_view)
                 && term(32, {
-                    scene_path = unsafe { (p.scene_present_path)(&window) };
+                    scene_path = unsafe { native::scene_present_path(&window) };
                     scene_path != SCENE_PRESENT_NONE
                 });
             if !matched {
@@ -1892,14 +1863,14 @@ impl Host {
                         event.completed
                     ));
                 }
-                unsafe { (p.dump_complete)(&g.capture_record, NOT_READY) };
+                unsafe { native::dump_complete(&g.capture_record, NOT_READY) };
                 g.capture_pending = false;
             }
         }
         if g.capture_pending && self.dump_wants(&g.capture_record) {
             if event.completed == 0 {
-                let context = unsafe { ComRef::from_owned((p.immediate_context)(g.device_ptr())) };
-                let buffer = unsafe { ComRef::from_owned((p.chain_buffer)(g.chain_ptr())) };
+                let context = unsafe { ComRef::from_owned(native::immediate_context(g.device_ptr())) };
+                let buffer = unsafe { ComRef::from_owned(native::chain_buffer(g.chain_ptr())) };
                 if let Some(buffer) = &buffer {
                     self.dump_texture(
                         ptr_of(&context),
@@ -1911,34 +1882,30 @@ impl Host {
                     );
                 }
             } else {
-                unsafe { (p.dump_complete)(&g.capture_record, event.result) };
+                unsafe { native::dump_complete(&g.capture_record, event.result) };
                 g.capture_pending = false;
             }
         }
         if event.completed != 0 {
             return;
         }
-        unsafe {
-            (p.overlay_poll_toggle)();
-            (p.overlay_present)(event.swapchain);
-        }
+        native::overlay_poll_toggle();
+        unsafe { native::overlay_present(event.swapchain) };
     }
 
-    #[cfg_attr(test, allow(dead_code))]
     fn cpu(&self, event: *const rsf_game_cpu_event) {
         // Installation/preparation alone does not prove the engine retained the facade.
         if self.setup.presentation_bridge != 0 && !self.bridge_bound.load(Ordering::Acquire) {
             return;
         }
-        let p = &self.platform;
         if !self.bridge() {
             match self.upstream.cpu_event {
                 Some(cpu) => unsafe { cpu(self.upstream.user, event) },
-                None => unsafe { (p.cpu_event)(event) },
+                None => unsafe { native::cpu_event(event) },
             }
             return;
         }
-        let accepted = unsafe { (p.cpu_dispatch_fg)(event) };
+        let accepted = unsafe { native::cpu_dispatch_fg(event) };
         // Keep startup receipts, plus bounded late stage samples and the first refusal
         // of each stage. Read no extension fields until its declared size/version allows it.
         // This host owns normalization; the same fact is not dispatched upstream twice.
@@ -2036,7 +2003,6 @@ impl Host {
             return BUSY;
         };
         let g = &mut *guard;
-        let p = &self.platform;
         if g.configured {
             if !g.observer || g.chain_ptr() != swapchain {
                 return NOT_READY;
@@ -2056,13 +2022,13 @@ impl Host {
             }
             return OK;
         }
-        let Some(device) = (unsafe { ComRef::from_owned((p.chain_device)(swapchain)) }) else {
+        let Some(device) = (unsafe { ComRef::from_owned(native::chain_device(swapchain)) }) else {
             return INVALID;
         };
-        if unsafe { (p.chain_window)(swapchain) }.is_null() {
+        if unsafe { native::chain_window(swapchain) }.is_null() {
             return INVALID;
         }
-        let context = unsafe { ComRef::from_owned((p.immediate_context)(device.as_ptr())) };
+        let context = unsafe { ComRef::from_owned(native::immediate_context(device.as_ptr())) };
         if !self.initialize(g, ptr_of(&context), swapchain) {
             return NOT_READY;
         }
@@ -2076,7 +2042,6 @@ impl Host {
     // until an owned facade is proven; then the slot takes the facade's
     // reference and the caller's native reference is released.
     fn wrap_native_chain(&self, request: &rsf_d3d11_native_chain) -> i32 {
-        let p = &self.platform;
         let context = request.immediate_context;
         if !self.is_immediate(context) {
             return INVALID;
@@ -2089,7 +2054,7 @@ impl Host {
         // SAFETY: the export admitted the request and checked both slot levels.
         let native = unsafe { *request.swapchain };
         let mut facade = null_mut();
-        let result = unsafe { (p.wrap_native)(request.device, native, &mut facade) };
+        let result = unsafe { native::wrap_native(request.device, native, &mut facade) };
         // A set out pointer owns one facade reference even beside a failed
         // HRESULT; filtering drops (releases) it so a refusal never leaks it.
         let Some(facade) = (unsafe { ComRef::from_owned(facade) }).filter(|_| result >= 0) else {
@@ -2099,30 +2064,30 @@ impl Host {
             ));
             return NOT_READY;
         };
-        if unsafe { (p.present_is_owner)(facade.as_ptr()) } == 0 {
+        if unsafe { native::present_is_owner(facade.as_ptr()) } == 0 {
             drop(facade);
             self.log("D3D11 outer creation refused non-owner facade; native outputs preserved.");
             return NOT_READY;
         }
-        let native_identity = unsafe { ComRef::from_owned((p.com_identity)(native)) };
-        let facade_identity = unsafe { ComRef::from_owned((p.com_identity)(facade.as_ptr())) };
+        let native_identity = unsafe { ComRef::from_owned(native::com_identity(native)) };
+        let facade_identity = unsafe { ComRef::from_owned(native::com_identity(facade.as_ptr())) };
         let native_unknown = ptr_of(&native_identity);
         self.log(&format!(
             "D3D11 outer creation identity native={} unknown={} Present={} facade={} unknown={} Present={} owner={}",
             msvc_pointer(native),
             msvc_pointer(native_unknown),
-            msvc_pointer(unsafe { (p.chain_present)(native) }),
+            msvc_pointer(unsafe { native::chain_present(native) }),
             msvc_pointer(facade.as_ptr()),
             msvc_pointer(ptr_of(&facade_identity)),
-            msvc_pointer(unsafe { (p.chain_present)(facade.as_ptr()) }),
-            unsafe { (p.present_is_owner)(facade.as_ptr()) },
+            msvc_pointer(unsafe { native::chain_present(facade.as_ptr()) }),
+            unsafe { native::present_is_owner(facade.as_ptr()) },
         ));
         // SAFETY: the slot is writable caller storage; it now owns the facade reference.
         unsafe { *request.swapchain = facade.into_raw() };
         // Drop our diagnostic identity reference before observing the caller's
         // release. A remaining count belongs to another owner, not this temporary.
         drop(native_identity);
-        let remaining = unsafe { (p.com_release)(native) };
+        let remaining = unsafe { native::com_release(native) };
         self.log(&format!(
             "D3D11 outer native chain caller reference released identity={} reported_remaining={remaining}; no external references consumed",
             msvc_pointer(native_unknown)
@@ -2179,7 +2144,6 @@ unsafe extern "C" fn host_sr_report(user: Raw, output: *mut rsf_overlay_sr_repor
     1
 }
 
-#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_cpu(user: Raw, event: *const rsf_game_cpu_event) {
     unsafe { host(user) }.cpu(event);
 }
@@ -2192,7 +2156,6 @@ unsafe extern "C" fn host_accept_window(user: Raw, window: Raw) -> c_int {
         as c_int
 }
 
-#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_passes(user: Raw, context: Raw, pass: *const Pass, begin: u32) {
     let host = unsafe { host(user) };
     let Some(pass) = (unsafe { pass.as_ref() }) else {
@@ -2207,7 +2170,6 @@ unsafe extern "C" fn host_passes(user: Raw, context: Raw, pass: *const Pass, beg
     host.passes(context, pass, begin);
 }
 
-#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_config(user: Raw, output: *mut rsf_game_render_config) -> c_int {
     let host = unsafe { host(user) };
     let Some(output) = (unsafe { output.as_mut() }) else {
@@ -2223,7 +2185,6 @@ unsafe extern "C" fn host_config(user: Raw, output: *mut rsf_game_render_config)
     1
 }
 
-#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_feedback(user: Raw, event: *const rsf_game_render_feedback) {
     let host = unsafe { host(user) };
     let Some(event) = (unsafe { event.as_ref() }) else {
@@ -2268,7 +2229,6 @@ unsafe extern "C" fn host_present(user: Raw, event: *const rsf_observer_present_
     }
 }
 
-#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn host_process(user: Raw, context: Raw, pass: *const Pass) -> i32 {
     let Some(pass) = (unsafe { pass.as_ref() }) else {
         return INVALID;
@@ -2299,32 +2259,10 @@ unsafe fn admitted<T>(object: *const T, version: u32) -> Result<&'static T, i32>
 }
 
 #[unsafe(no_mangle)]
-#[cfg(not(test))]
 unsafe extern "C" fn rsf_d3d11_host_create(
     setup: *const rsf_d3d11_host_setup,
     services: *mut rsf_game_host_services,
 ) -> i32 {
-    let platform = crate::d3d11_host_platform::linked_platform();
-    unsafe {
-        create(
-            &platform,
-            setup,
-            services,
-            crate::d3d11_host_reduced::auxiliary_products,
-        )
-    }
-}
-
-#[cfg_attr(test, allow(dead_code))]
-unsafe fn create(
-    platform: *const rsf_d3d11h_platform,
-    setup: *const rsf_d3d11_host_setup,
-    services: *mut rsf_game_host_services,
-    make_products: ProductsFactory,
-) -> i32 {
-    let Some(platform) = (unsafe { platform.as_ref() }) else {
-        return NOT_READY;
-    };
     const LEGACY_SETUP_SIZE: usize = offset_of!(rsf_d3d11_host_setup, depth_far_plane);
     if setup.is_null()
         || unsafe { prefix_size(setup.cast()) } < LEGACY_SETUP_SIZE as u32
@@ -2366,7 +2304,7 @@ unsafe fn create(
     if !OWNER.load(Ordering::Acquire).is_null() {
         return BUSY;
     }
-    let Some(host) = Host::new(*platform, make_products, setup, upstream) else {
+    let Some(host) = Host::new(setup, upstream) else {
         return NOT_READY;
     };
     let host = crate::allocate_handle(host);
@@ -2472,7 +2410,7 @@ unsafe fn dispatch_chain(host: &Host, request: *mut rsf_d3d11_chain_dispatch) ->
     }
     request.handled = 0;
     if host.bridge() {
-        unsafe { (host.platform.chain_dispatch)(request) };
+        unsafe { native::chain_dispatch(request) };
     }
     OK
 }
@@ -2558,7 +2496,7 @@ unsafe extern "C" fn rsf_d3d11_host_creation_begin(
     {
         return NOT_READY;
     }
-    if unsafe { (host.platform.creation_begin)(scope.window, &mut scope.token) } >= 0 {
+    if unsafe { native::creation_begin(scope.window, &mut scope.token) } >= 0 {
         OK
     } else {
         NOT_READY
@@ -2588,12 +2526,11 @@ unsafe extern "C" fn rsf_d3d11_host_creation_end(
     if host.setup.presentation_bridge != 3 || !host.bridge() {
         return NOT_READY;
     }
-    let p = &host.platform;
     // End must always close the owning transaction, even if another callback is busy.
     let mut g = host.lock_graphics();
     if result_error != OK {
         unsafe {
-            (p.creation_end)(
+            native::creation_end(
                 scope.window,
                 scope.token,
                 null_mut(),
@@ -2608,7 +2545,7 @@ unsafe extern "C" fn rsf_d3d11_host_creation_end(
         .filter(|result| !result.swapchain.is_null())
         .map_or(null_mut(), |result| unsafe { *result.swapchain });
     let admitted = unsafe {
-        (p.creation_end)(
+        native::creation_end(
             scope.window,
             scope.token,
             result.map_or(null_mut(), |result| result.device),
@@ -2863,7 +2800,7 @@ unsafe extern "C" fn rsf_d3d11_host_capture_texture(
         return INVALID;
     }
     let recorded = unsafe {
-        (host.platform.dump_texture)(
+        native::dump_texture(
             context,
             &g.capture_record,
             request.name,

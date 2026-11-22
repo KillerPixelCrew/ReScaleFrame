@@ -1,133 +1,94 @@
 // SPDX-License-Identifier: MIT
-//! Typed Windows and Rust owner calls for the host's production platform table.
-use crate::auxiliary_sr::rsf_auxiliary_sr_platform;
-use crate::d3d11_device_identity::{device_vendor, identity};
-use crate::d3d11_host_abi::{
-    DUMP_DENSE_MOTION, DUMP_DEPTH, DUMP_HDR, DUMP_RAW, Pass, rsf_d3d11h_pipeline_start,
-    rsf_d3d11h_pipeline_status, rsf_d3d11h_platform, rsf_d3d11h_strings,
-};
-use crate::d3d11_output_platform::{
-    rsf_d3d11_output_child_device, rsf_d3d11_output_device_ok, rsf_d3d11_output_is_immediate,
-};
-use crate::dlss_pipeline::exports::{
-    rsf_dlss_pipeline_get_status, rsf_dlss_pipeline_output_texture,
-    rsf_dlss_pipeline_resize_output, rsf_dlss_pipeline_select_backend,
-    rsf_dlss_pipeline_set_colour_correction, rsf_dlss_pipeline_set_colour_transport,
-    rsf_dlss_pipeline_set_preset, rsf_dlss_pipeline_set_quality, rsf_dlss_pipeline_start_backend,
-};
-use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening;
-use crate::dlss_streamline::exports::rsf_dlss_native_present;
-use crate::native_cpu::{rsf_native_cpu_dispatch, rsf_native_cpu_event};
-use crate::native_fg::{
-    rsf_native_fg_final, rsf_native_fg_options_set, rsf_native_fg_prepare, rsf_native_fg_present,
-    rsf_native_fg_retire, rsf_native_fg_set_log,
-};
-use crate::native_fg_cpu::platform::{
-    rsf_native_fg_cpu, rsf_native_fg_frame, rsf_native_fg_rendered_source_set,
-    rsf_native_fg_submission, rsf_native_latency_window_bind,
-};
-use crate::native_scene::{rsf_native_scene_pass, rsf_native_scene_present_path};
-use crate::native_sr::rsf_native_sr_evaluate_ordered;
-use crate::native_window::{
-    rsf_native_window_last_present, rsf_native_window_match, rsf_native_window_present,
-    rsf_native_window_scope,
-};
-use crate::overlay_input::rsf_overlay_input_poll_toggle;
-use crate::sys::rsf_native_latency_window;
+//! The host's production leaves: Windows calls, the guarded C boundaries and the Rust owners.
+//! `d3d11_host` calls them as `native::*`; its unit tests swap in fakes of the same names.
+use crate::auxiliary_sr::{AuxiliarySr, rsf_auxiliary_sr_platform};
+use crate::d3d11_device_identity::identity;
+use crate::d3d11_host_abi::{DUMP_DENSE_MOTION, DUMP_DEPTH, DUMP_HDR, DUMP_RAW, Pass};
+use crate::d3d11_host_reduced::Products;
+use crate::native_cpu::rsf_native_cpu_dispatch;
+use crate::native_fg_cpu::platform::rsf_native_fg_cpu;
 use crate::sys::rsf_observer_present_event;
-use crate::sys::rsf_render_settings;
 use crate::sys::rsf_streamline_host;
-use rsf_game_sys::{
-    RSF_DLSS_PIPELINE_ABI_VERSION, rsf_dlss_pipeline_setup, rsf_dlss_pipeline_status,
+use crate::sys::{
+    rsf_d3d11h_guard_dump_inputs_start, rsf_d3d11h_guard_dump_texture,
 };
-use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_log_fn};
+use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event};
 use std::ffi::{c_char, c_void};
-use std::ptr::{null, null_mut};
+use std::ptr::{NonNull, null_mut};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::{IDXGIDeviceSubObject, IDXGISwapChain};
-use windows::Win32::System::WindowsProgramming::{
-    GetPrivateProfileIntW, WritePrivateProfileStringW,
+use windows::core::{IUnknown, Interface};
+
+pub(super) use crate::d3d11_output_platform::{
+    rsf_d3d11_output_child_device as child_device, rsf_d3d11_output_device_ok as device_ok,
+    rsf_d3d11_output_is_immediate as is_immediate,
 };
-use windows::core::{IUnknown, Interface, PCWSTR};
+pub(super) use crate::dlss_pipeline::exports::{
+    rsf_dlss_pipeline_get_status as pipeline_status,
+    rsf_dlss_pipeline_output_texture as pipeline_output,
+    rsf_dlss_pipeline_resize_output as pipeline_resize,
+    rsf_dlss_pipeline_select_backend as pipeline_select,
+    rsf_dlss_pipeline_set_colour_correction as pipeline_colour_correction,
+    rsf_dlss_pipeline_set_colour_transport as pipeline_colour_transport,
+    rsf_dlss_pipeline_set_preset as pipeline_preset,
+    rsf_dlss_pipeline_set_quality as pipeline_quality,
+    rsf_dlss_pipeline_start_backend as pipeline_start,
+};
+pub(super) use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening as pipeline_sharpen;
+pub(super) use crate::dlss_streamline::exports::rsf_dlss_native_present as dlss_native_present;
+pub(super) use crate::native_fg::{
+    rsf_native_fg_final as fg_final, rsf_native_fg_options_set as fg_options_set,
+    rsf_native_fg_retire as fg_retire, rsf_native_fg_set_log as fg_set_log,
+};
+pub(super) use crate::native_fg_cpu::platform::{
+    rsf_native_fg_frame as fg_frame, rsf_native_fg_rendered_source_set as fg_rendered_source_set,
+    rsf_native_fg_submission as fg_submission,
+};
+pub(super) use crate::native_scene::{
+    rsf_native_scene_pass as scene_pass, rsf_native_scene_present_path as scene_present_path,
+};
+pub(super) use crate::native_sr::{
+    rsf_native_sr_capture_fg as fg_capture, rsf_native_sr_evaluate_ordered as sr_evaluate,
+};
+pub(super) use crate::native_window::{
+    rsf_native_window_last_present as window_last_present,
+    rsf_native_window_match as window_match, rsf_native_window_present as window_present,
+    rsf_native_window_scope as window_scope,
+};
+pub(super) use crate::overlay_input::rsf_overlay_input_poll_toggle as overlay_poll_toggle;
+pub(super) use crate::settings_store::{
+    rsf_settings_store_read_integer as ini_read, rsf_settings_store_write_integer as ini_write,
+};
+pub(super) use crate::sys::{
+    rsf_d3d11h_guard_chain_dispatch as chain_dispatch,
+    rsf_d3d11h_guard_creation_begin as creation_begin,
+    rsf_d3d11h_guard_creation_end as creation_end,
+    rsf_d3d11h_guard_dump_begin as dump_begin,
+    rsf_d3d11h_guard_dump_complete as dump_complete,
+    rsf_d3d11h_guard_dump_configure as dump_configure,
+    rsf_d3d11h_guard_dump_pass as dump_pass, rsf_d3d11h_guard_dump_poll as dump_poll,
+    rsf_d3d11h_guard_dump_request as dump_request,
+    rsf_d3d11h_guard_dump_requested as dump_requested,
+    rsf_d3d11h_guard_dump_result as dump_result, rsf_d3d11h_guard_dump_wants as dump_wants,
+    rsf_d3d11h_guard_observer_install as observer_install,
+    rsf_d3d11h_guard_overlay_configure as overlay_configure,
+    rsf_d3d11h_guard_overlay_present as overlay_present,
+    rsf_d3d11h_guard_present_install as present_install,
+    rsf_d3d11h_guard_present_install_scoped as present_install_scoped,
+    rsf_d3d11h_guard_present_is_owner as present_is_owner,
+    rsf_d3d11h_guard_present_prepare as present_prepare,
+    rsf_d3d11h_guard_wrap_native as wrap_native,
+};
 
 type Raw = *mut c_void;
 
-use crate::sys::*;
-
-pub(super) fn linked_platform() -> rsf_d3d11h_platform {
-    rsf_d3d11h_platform {
-        same_object: rsf_d3d11h_same_object,
-        child_device: rsf_d3d11_output_child_device,
-        is_immediate: rsf_d3d11_output_is_immediate,
-        device_ok: rsf_d3d11_output_device_ok,
-        immediate_context: rsf_d3d11h_immediate_context,
-        device_vendor: rsf_d3d11h_device_vendor,
-        chain_device: rsf_d3d11h_chain_device,
-        chain_window: rsf_d3d11h_chain_window,
-        chain_buffer: rsf_d3d11h_chain_buffer,
-        present_install: rsf_d3d11h_guard_present_install,
-        present_prepare: rsf_d3d11h_guard_present_prepare,
-        present_install_scoped: rsf_d3d11h_guard_present_install_scoped,
-        fg_prepare,
-        fg_retire: rsf_native_fg_retire,
-        fg_latency_event: rsf_d3d11h_fg_latency_event,
-        fg_rendered_source_set: rsf_native_fg_rendered_source_set,
-        fg_set_log: rsf_native_fg_set_log,
-        fg_options_set: rsf_native_fg_options_set,
-        observer_install: rsf_d3d11h_guard_observer_install,
-        present_is_owner: rsf_d3d11h_guard_present_is_owner,
-        chain_dispatch: rsf_d3d11h_guard_chain_dispatch,
-        creation_begin: rsf_d3d11h_guard_creation_begin,
-        creation_end: rsf_d3d11h_guard_creation_end,
-        wrap_native: rsf_d3d11h_guard_wrap_native,
-        com_identity: rsf_d3d11h_com_identity,
-        chain_present: rsf_d3d11h_chain_present,
-        com_release: rsf_d3d11h_com_release,
-        fg_frame: rsf_native_fg_frame,
-        fg_submission: rsf_native_fg_submission,
-        fg_final: rsf_native_fg_final,
-        fg_capture: rsf_native_sr_capture_fg,
-        scene_pass: rsf_native_scene_pass,
-        scene_present_path: rsf_native_scene_present_path,
-        window_scope: rsf_native_window_scope,
-        window_present: rsf_native_window_present,
-        window_last_present: rsf_native_window_last_present,
-        window_match: rsf_native_window_match,
-        latency_window_bind: rsf_d3d11h_latency_window_bind,
-        cpu_dispatch_fg: rsf_d3d11h_cpu_dispatch_fg,
-        cpu_event: rsf_d3d11h_cpu_event,
-        dlss_native_present: rsf_dlss_native_present,
-        pipeline_start: rsf_d3d11h_start_pipeline,
-        pipeline_resize: rsf_d3d11h_pipeline_resize,
-        pipeline_select: rsf_d3d11h_pipeline_select,
-        pipeline_quality: rsf_d3d11h_pipeline_quality,
-        pipeline_preset: rsf_dlss_pipeline_set_preset,
-        pipeline_sharpen,
-        pipeline_status: rsf_d3d11h_read_pipeline_status,
-        pipeline_colour: rsf_d3d11h_pipeline_colour,
-        pipeline_output: rsf_dlss_pipeline_output_texture,
-        sr_evaluate: rsf_native_sr_evaluate_ordered,
-        dump_configure,
-        dump_request: rsf_d3d11h_guard_dump_request,
-        dump_requested: rsf_d3d11h_guard_dump_requested,
-        dump_poll: rsf_d3d11h_guard_dump_poll,
-        dump_begin: rsf_d3d11h_guard_dump_begin,
-        dump_wants: rsf_d3d11h_guard_dump_wants,
-        dump_inputs,
-        dump_pass: rsf_d3d11h_guard_dump_pass,
-        dump_texture,
-        dump_result: rsf_d3d11h_guard_dump_result,
-        dump_complete: rsf_d3d11h_guard_dump_complete,
-        overlay_configure: rsf_d3d11h_guard_overlay_configure,
-        overlay_present: rsf_d3d11h_guard_overlay_present,
-        overlay_poll_toggle: rsf_overlay_input_poll_toggle,
-        ini_read: rsf_d3d11h_ini_read,
-        ini_write: rsf_d3d11h_ini_write,
-        auxiliary: rsf_auxiliary_sr_platform(),
-    }
+pub(super) fn auxiliary_products() -> Option<Box<dyn Products>> {
+    let platform = unsafe { rsf_auxiliary_sr_platform().as_ref()? };
+    let owner = NonNull::new(crate::allocate_handle(AuxiliarySr::new(platform)?))?;
+    Some(unsafe { Box::from_raw(owner.as_ptr()) })
 }
 
-unsafe extern "C" fn fg_prepare(
+pub(super) unsafe extern "C" fn fg_prepare(
     user: Raw,
     chain: Raw,
     context: Raw,
@@ -138,7 +99,7 @@ unsafe extern "C" fn fg_prepare(
     sync: u32,
 ) {
     unsafe {
-        rsf_native_fg_prepare(
+        crate::native_fg::rsf_native_fg_prepare(
             user,
             chain,
             context,
@@ -151,22 +112,27 @@ unsafe extern "C" fn fg_prepare(
     };
 }
 
-unsafe extern "C" fn pipeline_sharpen(settings: *const rsf_render_settings) {
-    rsf_core_dlss_pipeline_apply_sharpening(unsafe { &*settings });
+pub(super) unsafe extern "C" fn fg_latency_event(_: Raw, event: *const rsf_observer_present_event) {
+    unsafe { crate::native_fg::rsf_native_fg_present(event) };
 }
 
-unsafe extern "C" fn dump_configure(
-    text: *const rsf_d3d11h_strings,
-    log: rsf_game_log_fn,
-    user: Raw,
-) {
-    let text = unsafe { &*text };
-    unsafe {
-        rsf_d3d11h_guard_dump_configure(text.captures, text.identity, text.fingerprint, log, user)
-    };
+pub(super) fn latency_window_bind(session_id: u64, window: Raw) {
+    let _ = crate::native_fg_cpu::platform::bind_latency_window(session_id, window.addr() as u64);
 }
 
-unsafe extern "C" fn dump_inputs(
+unsafe extern "C" fn forward_fg(_: Raw, event: *const rsf_game_cpu_event) {
+    unsafe { rsf_native_fg_cpu(event) };
+}
+
+pub(super) unsafe fn cpu_dispatch_fg(event: *const rsf_game_cpu_event) -> i32 {
+    unsafe { rsf_native_cpu_dispatch(event, Some(forward_fg), null_mut()) }
+}
+
+pub(super) unsafe fn cpu_event(event: *const rsf_game_cpu_event) {
+    let _ = unsafe { crate::native_cpu::rsf_native_cpu_event(event) };
+}
+
+pub(super) unsafe fn dump_inputs(
     context: Raw,
     pass: *const Pass,
     record: *const rsf_frame_record,
@@ -233,7 +199,7 @@ unsafe extern "C" fn dump_inputs(
     }
 }
 
-unsafe extern "C" fn dump_texture(
+pub(super) unsafe fn dump_texture(
     context: Raw,
     record: *const rsf_frame_record,
     name: *const c_char,
@@ -248,103 +214,7 @@ unsafe extern "C" fn dump_texture(
     .max(0)
 }
 
-unsafe extern "C" fn rsf_d3d11h_fg_latency_event(_: Raw, event: *const rsf_observer_present_event) {
-    unsafe { rsf_native_fg_present(event) };
-}
-
-unsafe extern "C" fn rsf_d3d11h_latency_window_bind(session_id: u64, window: Raw) {
-    let binding = rsf_native_latency_window {
-        struct_size: size_of::<rsf_native_latency_window>() as u32,
-        version: 1,
-        session_id,
-        window_key: window.addr() as u64,
-    };
-    let _ = unsafe { rsf_native_latency_window_bind(&binding) };
-}
-
-unsafe extern "C" fn forward_fg(_: Raw, event: *const rsf_game_cpu_event) {
-    unsafe { rsf_native_fg_cpu(event) };
-}
-
-unsafe extern "C" fn rsf_d3d11h_cpu_dispatch_fg(event: *const rsf_game_cpu_event) -> i32 {
-    unsafe { rsf_native_cpu_dispatch(event, Some(forward_fg), null_mut()) }
-}
-
-unsafe extern "C" fn rsf_d3d11h_cpu_event(event: *const rsf_game_cpu_event) {
-    let _ = unsafe { rsf_native_cpu_event(event) };
-}
-
-unsafe extern "C" fn rsf_d3d11h_start_pipeline(
-    device: Raw,
-    request: *const rsf_d3d11h_pipeline_start,
-) -> i32 {
-    let request = unsafe { &*request };
-    let setup = unsafe { &*request.setup };
-    let text = unsafe { &*request.strings };
-    let create = rsf_dlss_pipeline_setup {
-        struct_size: size_of::<rsf_dlss_pipeline_setup>() as u32,
-        abi_version: RSF_DLSS_PIPELINE_ABI_VERSION,
-        streamline_directory_utf8: text.streamline,
-        streamline_log_directory_utf8: null(),
-        require_signature: 1,
-        output_width: request.output_width,
-        output_height: request.output_height,
-        quality: request.quality,
-        motion: setup.motion,
-        log: request.log,
-        log_user: request.user,
-        engine: setup.engine_type,
-        engine_version_utf8: text.engine_version,
-        project_id_utf8: text.project,
-        fsr2_directory_utf8: text.fidelityfx,
-        fsr3_directory_utf8: text.fidelityfx,
-        fsr4_directory_utf8: text.fidelityfx,
-        xess_directory_utf8: text.xess,
-        view_space_to_meters: setup.units_to_meters,
-        standard_depth: u32::from(setup.depth_inverted == 0),
-    };
-    unsafe { rsf_dlss_pipeline_start_backend(device, &create, request.backend) }
-}
-
-unsafe extern "C" fn rsf_d3d11h_pipeline_resize(width: u32, height: u32) -> i32 {
-    unsafe { rsf_dlss_pipeline_resize_output(width, height, null_mut(), null_mut()) }
-}
-
-unsafe extern "C" fn rsf_d3d11h_pipeline_select(backend: u32) -> i32 {
-    unsafe { rsf_dlss_pipeline_select_backend(backend, null_mut(), null_mut()) }
-}
-
-unsafe extern "C" fn rsf_d3d11h_pipeline_quality(quality: u32) -> i32 {
-    unsafe { rsf_dlss_pipeline_set_quality(quality, null_mut(), null_mut()) }
-}
-
-unsafe extern "C" fn rsf_d3d11h_read_pipeline_status(
-    output: *mut rsf_d3d11h_pipeline_status,
-) -> i32 {
-    // The wire record contains only integer fields.
-    let mut status = rsf_dlss_pipeline_status {
-        struct_size: size_of::<rsf_dlss_pipeline_status>() as u32,
-        ..unsafe { std::mem::zeroed() }
-    };
-    let result = unsafe { rsf_dlss_pipeline_get_status(&mut status) };
-    unsafe {
-        output.write(rsf_d3d11h_pipeline_status {
-            running: status.running,
-            output_width: status.output_width,
-            output_height: status.output_height,
-            render_width: status.render_width,
-            render_height: status.render_height,
-        });
-    }
-    result
-}
-
-extern "C" fn rsf_d3d11h_pipeline_colour(transport: u32, correction: u32) {
-    rsf_dlss_pipeline_set_colour_transport(transport);
-    rsf_dlss_pipeline_set_colour_correction(correction);
-}
-
-unsafe extern "C" fn rsf_d3d11h_same_object(left: Raw, right: Raw) -> i32 {
+pub(super) unsafe fn same_object(left: Raw, right: Raw) -> i32 {
     if right.is_null() {
         return 0;
     }
@@ -354,72 +224,51 @@ unsafe extern "C" fn rsf_d3d11h_same_object(left: Raw, right: Raw) -> i32 {
     i32::from(unsafe { identity(right) }.is_some_and(|right| left.as_raw() == right.as_raw()))
 }
 
-unsafe extern "C" fn rsf_d3d11h_immediate_context(device: Raw) -> Raw {
+pub(super) unsafe fn immediate_context(device: Raw) -> Raw {
     unsafe { ID3D11Device::from_raw_borrowed(&device) }
         .and_then(|device| unsafe { device.GetImmediateContext() }.ok())
         .map_or(null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn rsf_d3d11h_device_vendor(device: Raw, vendor: *mut u32) -> i32 {
-    let Some(id) = (unsafe { device_vendor(device) }) else {
+pub(super) unsafe fn device_vendor(device: Raw, vendor: *mut u32) -> i32 {
+    let Some(id) = (unsafe { crate::d3d11_device_identity::device_vendor(device) }) else {
         return 0;
     };
     unsafe { vendor.write(id) };
     1
 }
 
-unsafe extern "C" fn rsf_d3d11h_chain_device(chain: Raw) -> Raw {
+pub(super) unsafe fn chain_device(chain: Raw) -> Raw {
     unsafe { IDXGIDeviceSubObject::from_raw_borrowed(&chain) }
         .and_then(|chain| unsafe { chain.GetDevice::<ID3D11Device>() }.ok())
         .map_or(null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn rsf_d3d11h_chain_window(chain: Raw) -> Raw {
+pub(super) unsafe fn chain_window(chain: Raw) -> Raw {
     unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }
         .and_then(|chain| unsafe { chain.GetDesc() }.ok())
         .map_or(null_mut(), |desc| desc.OutputWindow.0)
 }
 
-unsafe extern "C" fn rsf_d3d11h_chain_buffer(chain: Raw) -> Raw {
+pub(super) unsafe fn chain_buffer(chain: Raw) -> Raw {
     unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }
         .and_then(|chain| unsafe { chain.GetBuffer::<ID3D11Texture2D>(0) }.ok())
         .map_or(null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn rsf_d3d11h_com_identity(object: Raw) -> Raw {
+pub(super) unsafe fn com_identity(object: Raw) -> Raw {
     unsafe { identity(object) }.map_or(null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn rsf_d3d11h_chain_present(chain: Raw) -> Raw {
+pub(super) unsafe fn chain_present(chain: Raw) -> Raw {
     // Log the entry from this receiver's own vtable, without dispatching it.
     unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }
         .map_or(null_mut(), |chain| chain.vtable().Present as Raw)
 }
 
-unsafe extern "C" fn rsf_d3d11h_com_release(object: Raw) -> u32 {
+pub(super) unsafe fn com_release(object: Raw) -> u32 {
     let Some(object) = (unsafe { IUnknown::from_raw_borrowed(&object) }) else {
         return 0;
     };
     unsafe { (object.vtable().Release)(object.as_raw()) }
-}
-
-unsafe extern "C" fn rsf_d3d11h_ini_read(
-    path: *const u16,
-    section: *const u16,
-    key: *const u16,
-    fallback: i32,
-) -> i32 {
-    unsafe { GetPrivateProfileIntW(PCWSTR(section), PCWSTR(key), fallback, PCWSTR(path)) }
-}
-
-unsafe extern "C" fn rsf_d3d11h_ini_write(
-    path: *const u16,
-    section: *const u16,
-    key: *const u16,
-    value: *const u16,
-) -> i32 {
-    i32::from(unsafe {
-        WritePrivateProfileStringW(PCWSTR(section), PCWSTR(key), PCWSTR(value), PCWSTR(path))
-            .is_ok()
-    })
 }

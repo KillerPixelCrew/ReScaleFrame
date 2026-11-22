@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
-// Synthetic D3D11 host contracts: fake COM identities, a fake native leaf table
+// Synthetic D3D11 host contracts: fake COM identities, fake native leaves
 // and fake auxiliary products. No device, window or SDK is touched.
 use super::*;
-use crate::auxiliary_sr::AuxPlatform;
 use crate::com_ref::test::{Fake, add_ref, fake, raw};
 use crate::sys::rsf_backend_log_fn;
 use crate::sys::rsf_motion_decode_params;
+use crate::sys::rsf_observer_present_event_fn;
 use crate::sys::rsf_streamline_host;
+use crate::wide::from_str as wide;
 use rsf_game_sys::rsf_game_log_fn;
 use std::cell::Cell;
 
@@ -60,32 +61,60 @@ fn owned(cell: &'static std::thread::LocalKey<Cell<Raw>>) -> Raw {
     object
 }
 
-unsafe extern "C" fn same(left: Raw, right: Raw) -> i32 {
+// The fakes `d3d11_host` calls in place of d3d11_host_platform.
+pub(super) mod native {
+    pub(in crate::d3d11_host) use super::{
+        auxiliary_products, begin as creation_begin, bind_window as latency_window_bind,
+        capture_fg as fg_capture, colour as pipeline_colour_correction,
+        colour as pipeline_colour_transport, context_of as immediate_context,
+        cpu_dispatch as cpu_dispatch_fg, cpu_event, device_of as chain_device,
+        device_of as child_device, dispatch as chain_dispatch, dump_begin, dump_complete,
+        dump_configure, dump_inputs, dump_pass, dump_result, dump_texture, dump_wants,
+        end as creation_end, evaluate as sr_evaluate, facade as present_is_owner,
+        fg_latency_event, fg_options_set, fg_prepare, fg_rendered_source_set, fg_retire,
+        fg_set_log, final_fact as fg_final, ini_read, ini_write,
+        last_present as window_last_present, native_present as dlss_native_present,
+        none as chain_buffer, none as chain_present, none as com_identity, nothing as dump_poll,
+        nothing as dump_request, observe as observer_install, output as pipeline_output,
+        overlay_configure, overlay_present, pass_fact as fg_frame, pass_fact as fg_submission,
+        pass_result as scene_pass, pass_result as window_scope, poll_toggle as overlay_poll_toggle,
+        preset as pipeline_preset, present_path as scene_present_path,
+        refuse_bridge as present_install, refuse_bridge as present_install_scoped,
+        refuse_bridge as present_prepare, release_count as com_release,
+        resize as pipeline_resize, same as same_object, select as pipeline_quality,
+        select as pipeline_select, sharpen as pipeline_sharpen, start as pipeline_start,
+        status as pipeline_status, vendor as device_vendor, window as chain_window, window_match,
+        window_present, wrap as wrap_native, yes as device_ok, yes as is_immediate,
+        zero as dump_requested,
+    };
+}
+
+pub(super) unsafe extern "C" fn same(left: Raw, right: Raw) -> i32 {
     (!left.is_null() && left == right) as i32
 }
-unsafe extern "C" fn device_of(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn device_of(_: Raw) -> Raw {
     owned(&DEVICE)
 }
-unsafe extern "C" fn context_of(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn context_of(_: Raw) -> Raw {
     owned(&CONTEXT)
 }
-unsafe extern "C" fn yes(_: Raw) -> u32 {
+pub(super) unsafe extern "C" fn yes(_: Raw) -> u32 {
     1
 }
-unsafe extern "C" fn vendor(_: Raw, value: *mut u32) -> i32 {
+pub(super) unsafe extern "C" fn vendor(_: Raw, value: *mut u32) -> i32 {
     unsafe { *value = 0x10de };
     1
 }
-unsafe extern "C" fn window(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn window(_: Raw) -> Raw {
     ptr::without_provenance_mut(0x1000)
 }
-unsafe extern "C" fn none(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn none(_: Raw) -> Raw {
     null_mut()
 }
-unsafe extern "C" fn refuse_bridge(_: *const rsf_d3d11_present_setup) -> c_int {
+pub(super) unsafe extern "C" fn refuse_bridge(_: *const rsf_d3d11_present_setup) -> c_int {
     0
 }
-unsafe extern "C" fn fg_prepare(
+pub(super) unsafe extern "C" fn fg_prepare(
     _: Raw,
     _: Raw,
     _: Raw,
@@ -96,104 +125,124 @@ unsafe extern "C" fn fg_prepare(
     _: u32,
 ) {
 }
-unsafe extern "C" fn fg_retire(_: Raw, _: Raw) {}
-unsafe extern "C" fn fg_latency_event(_: Raw, _: *const rsf_observer_present_event) {}
-unsafe extern "C" fn fg_rendered_source_set(_: u32) {}
-unsafe extern "C" fn fg_set_log(_: rsf_backend_log_fn, _: Raw) {}
-unsafe extern "C" fn fg_options_set(_: *const rsf_native_fg_options) {}
-unsafe extern "C" fn observe(_: rsf_game_log_fn, _: Raw, _: PresentEvent) -> i32 {
+pub(super) unsafe extern "C" fn fg_retire(_: Raw, _: Raw) {}
+pub(super) unsafe extern "C" fn fg_latency_event(_: Raw, _: *const rsf_observer_present_event) {}
+pub(super) extern "C" fn fg_rendered_source_set(_: u32) {}
+pub(super) unsafe extern "C" fn fg_set_log(_: rsf_backend_log_fn, _: Raw) {}
+pub(super) unsafe extern "C" fn fg_options_set(_: *const rsf_native_fg_options) {}
+pub(super) unsafe extern "C" fn observe(
+    _: rsf_game_log_fn,
+    _: Raw,
+    _: rsf_observer_present_event_fn,
+) -> i32 {
     1
 }
-unsafe extern "C" fn facade(_: Raw) -> i32 {
+pub(super) unsafe extern "C" fn facade(_: Raw) -> i32 {
     OWNER_FACADE.get()
 }
-unsafe extern "C" fn dispatch(_: *mut rsf_d3d11_chain_dispatch) {}
-unsafe extern "C" fn begin(_: Raw, _: *mut u64) -> i32 {
+pub(super) unsafe extern "C" fn dispatch(_: *mut rsf_d3d11_chain_dispatch) {}
+pub(super) unsafe extern "C" fn begin(_: Raw, _: *mut u64) -> i32 {
     0
 }
-unsafe extern "C" fn end(_: Raw, _: u64, _: Raw, _: Raw, _: Raw) -> i32 {
+pub(super) unsafe extern "C" fn end(_: Raw, _: u64, _: Raw, _: Raw, _: Raw) -> i32 {
     0
 }
-unsafe extern "C" fn wrap(_: Raw, _: Raw, _: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn wrap(_: Raw, _: Raw, _: *mut Raw) -> i32 {
     0x8000_4005_u32 as i32 // E_FAIL
 }
-unsafe extern "C" fn release_count(_: Raw) -> u32 {
+pub(super) unsafe extern "C" fn release_count(_: Raw) -> u32 {
     0
 }
-unsafe extern "C" fn pass_fact(_: *const Pass, _: u32) {}
-unsafe extern "C" fn final_fact(_: Raw, _: *const Pass) {}
-unsafe extern "C" fn capture_fg(_: Raw, _: *const Pass, _: *const rsf_motion_decode_params) -> i32 {
+pub(super) unsafe extern "C" fn pass_fact(_: *const Pass, _: u32) {}
+pub(super) unsafe extern "C" fn final_fact(_: Raw, _: *const Pass) {}
+pub(super) unsafe extern "C" fn capture_fg(
+    _: Raw,
+    _: *const Pass,
+    _: *const rsf_motion_decode_params,
+) -> i32 {
     0
 }
-unsafe extern "C" fn pass_result(_: *const Pass, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn pass_result(_: *const Pass, _: u32) -> i32 {
     0
 }
-unsafe extern "C" fn present_path(_: *const Pass) -> u32 {
+pub(super) unsafe extern "C" fn present_path(_: *const Pass) -> u32 {
     0
 }
-unsafe extern "C" fn window_present(_: *const rsf_observer_present_event) -> i32 {
+pub(super) unsafe extern "C" fn window_present(_: *const rsf_observer_present_event) -> i32 {
     0
 }
-unsafe extern "C" fn last_present(_: *mut rsf_native_present_record) -> i32 {
+pub(super) unsafe extern "C" fn last_present(_: *mut rsf_native_present_record) -> i32 {
     0
 }
-unsafe extern "C" fn window_match(_: Raw, _: *mut Pass) -> i32 {
+pub(super) unsafe extern "C" fn window_match(_: Raw, _: *mut Pass) -> i32 {
     0
 }
-unsafe extern "C" fn bind_window(_: u64, _: Raw) {}
-unsafe extern "C" fn cpu_dispatch(_: *const rsf_game_cpu_event) -> i32 {
+pub(super) fn bind_window(_: u64, _: Raw) {}
+pub(super) unsafe extern "C" fn cpu_dispatch(_: *const rsf_game_cpu_event) -> i32 {
     0
 }
-unsafe extern "C" fn cpu_event(_: *const rsf_game_cpu_event) {}
-unsafe extern "C" fn native_present(_: Raw, _: u32, _: u32, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn cpu_event(_: *const rsf_game_cpu_event) {}
+pub(super) unsafe extern "C" fn native_present(_: Raw, _: u32, _: u32, _: u32) -> i32 {
     0
 }
-unsafe extern "C" fn start(_: Raw, _: *const rsf_d3d11h_pipeline_start) -> i32 {
+pub(super) unsafe extern "C" fn start(_: Raw, _: *const rsf_dlss_pipeline_setup, _: u32) -> i32 {
     0
 }
-unsafe extern "C" fn resize(_: u32, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn resize(_: u32, _: u32, _: *mut u32, _: *mut u32) -> i32 {
     0
 }
-unsafe extern "C" fn select(_: u32) -> i32 {
+pub(super) unsafe extern "C" fn select(_: u32, _: *mut u32, _: *mut u32) -> i32 {
     0
 }
-unsafe extern "C" fn sharpen(_: *const rsf_render_settings) {}
-unsafe extern "C" fn status(output: *mut rsf_d3d11h_pipeline_status) -> i32 {
-    unsafe {
-        *output = rsf_d3d11h_pipeline_status {
-            running: 1,
-            output_width: 64,
-            output_height: 64,
-            render_width: 32,
-            render_height: 32,
-        }
-    };
+pub(super) unsafe extern "C" fn preset(_: u32) -> i32 {
     0
 }
-unsafe extern "C" fn colour(_: u32, _: u32) {}
-unsafe extern "C" fn output() -> Raw {
+pub(super) extern "C" fn sharpen(_: &rsf_render_settings) {}
+pub(super) unsafe extern "C" fn status(output: *mut rsf_dlss_pipeline_status) -> i32 {
+    let output = unsafe { &mut *output };
+    output.running = 1;
+    [output.output_width, output.output_height] = [64, 64];
+    [output.render_width, output.render_height] = [32, 32];
+    0
+}
+pub(super) extern "C" fn colour(_: u32) {}
+pub(super) extern "C" fn output() -> Raw {
     null_mut()
 }
-unsafe extern "C" fn evaluate(_: Raw, _: *const Pass, ordered: *mut u32) -> i32 {
+pub(super) unsafe extern "C" fn evaluate(_: Raw, _: *const Pass, ordered: *mut u32) -> i32 {
     if !ordered.is_null() {
         unsafe { ordered.write(EVALUATE_ORDERED.get()) };
     }
     EVALUATE.get()
 }
-unsafe extern "C" fn dump_configure(_: *const rsf_d3d11h_strings, _: rsf_game_log_fn, _: Raw) {}
-unsafe extern "C" fn nothing() {}
-unsafe extern "C" fn zero() -> i32 {
+pub(super) unsafe extern "C" fn dump_configure(
+    _: *const c_char,
+    _: *const c_char,
+    _: *const c_char,
+    _: rsf_game_log_fn,
+    _: Raw,
+) {
+}
+pub(super) unsafe extern "C" fn nothing() {}
+pub(super) extern "C" fn poll_toggle() {}
+pub(super) unsafe extern "C" fn zero() -> i32 {
     0
 }
-unsafe extern "C" fn dump_begin(_: *const rsf_frame_record, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn dump_begin(_: *const rsf_frame_record, _: u32) -> i32 {
     0
 }
-unsafe extern "C" fn dump_wants(_: *const rsf_frame_record) -> i32 {
+pub(super) unsafe extern "C" fn dump_wants(_: *const rsf_frame_record) -> i32 {
     0
 }
-unsafe extern "C" fn dump_inputs(_: Raw, _: *const Pass, _: *const rsf_frame_record, _: Raw) {}
-unsafe extern "C" fn dump_pass(_: Raw, _: *const Pass, _: u32) {}
-unsafe extern "C" fn dump_texture(
+pub(super) unsafe extern "C" fn dump_inputs(
+    _: Raw,
+    _: *const Pass,
+    _: *const rsf_frame_record,
+    _: Raw,
+) {
+}
+pub(super) unsafe extern "C" fn dump_pass(_: Raw, _: *const Pass, _: u32) {}
+pub(super) unsafe extern "C" fn dump_texture(
     _: Raw,
     _: *const rsf_frame_record,
     _: *const c_char,
@@ -204,9 +253,15 @@ unsafe extern "C" fn dump_texture(
 ) -> i32 {
     0
 }
-unsafe extern "C" fn dump_result(_: *const rsf_frame_record, _: *const c_char, _: u32, _: i32) {}
-unsafe extern "C" fn dump_complete(_: *const rsf_frame_record, _: i32) {}
-unsafe extern "C" fn overlay_configure(
+pub(super) unsafe extern "C" fn dump_result(
+    _: *const rsf_frame_record,
+    _: *const c_char,
+    _: u32,
+    _: i32,
+) {
+}
+pub(super) unsafe extern "C" fn dump_complete(_: *const rsf_frame_record, _: i32) {}
+pub(super) unsafe extern "C" fn overlay_configure(
     _: *const rsf_overlay_service_setup,
     applied: *mut rsf_render_settings,
 ) -> i32 {
@@ -221,85 +276,18 @@ unsafe extern "C" fn overlay_configure(
     };
     OK
 }
-unsafe extern "C" fn overlay_present(_: Raw) {}
-unsafe extern "C" fn ini_read(_: *const u16, _: *const u16, _: *const u16, fallback: i32) -> i32 {
+pub(super) unsafe extern "C" fn overlay_present(_: Raw) {}
+pub(super) unsafe extern "C" fn ini_read(
+    _: *const u16,
+    _: *const u16,
+    _: *const c_char,
+    fallback: u32,
+) -> u32 {
     fallback
 }
-unsafe extern "C" fn ini_write(_: *const u16, _: *const u16, _: *const u16, _: *const u16) -> i32 {
-    1
+pub(super) unsafe extern "C" fn ini_write(_: *const u16, _: *const u16, _: *const c_char, _: u32) -> i32 {
+    OK
 }
-
-const PLATFORM: rsf_d3d11h_platform = rsf_d3d11h_platform {
-    same_object: same,
-    child_device: device_of,
-    is_immediate: yes,
-    device_ok: yes,
-    immediate_context: context_of,
-    device_vendor: vendor,
-    chain_device: device_of,
-    chain_window: window,
-    chain_buffer: none,
-    present_install: refuse_bridge,
-    present_prepare: refuse_bridge,
-    present_install_scoped: refuse_bridge,
-    fg_prepare,
-    fg_retire,
-    fg_latency_event,
-    fg_rendered_source_set,
-    fg_set_log,
-    fg_options_set,
-    observer_install: observe,
-    present_is_owner: facade,
-    chain_dispatch: dispatch,
-    creation_begin: begin,
-    creation_end: end,
-    wrap_native: wrap,
-    com_identity: none,
-    chain_present: none,
-    com_release: release_count,
-    fg_frame: pass_fact,
-    fg_submission: pass_fact,
-    fg_final: final_fact,
-    fg_capture: capture_fg,
-    scene_pass: pass_result,
-    scene_present_path: present_path,
-    window_scope: pass_result,
-    window_present,
-    window_last_present: last_present,
-    window_match,
-    latency_window_bind: bind_window,
-    cpu_dispatch_fg: cpu_dispatch,
-    cpu_event,
-    dlss_native_present: native_present,
-    pipeline_start: start,
-    pipeline_resize: resize,
-    pipeline_select: select,
-    pipeline_quality: select,
-    pipeline_preset: select,
-    pipeline_sharpen: sharpen,
-    pipeline_status: status,
-    pipeline_colour: colour,
-    pipeline_output: output,
-    sr_evaluate: evaluate,
-    dump_configure,
-    dump_request: nothing,
-    dump_requested: zero,
-    dump_poll: nothing,
-    dump_begin,
-    dump_wants,
-    dump_inputs,
-    dump_pass,
-    dump_texture,
-    dump_result,
-    dump_complete,
-    overlay_configure,
-    overlay_present,
-    overlay_poll_toggle: nothing,
-    ini_read,
-    ini_write,
-    auxiliary: ptr::null(),
-};
-
 #[derive(Default)]
 struct FakeProducts {
     frame: bool,
@@ -363,7 +351,7 @@ impl Products for FakeProducts {
     }
 }
 
-fn fake_products(_: *const AuxPlatform) -> Option<Box<dyn Products>> {
+pub(super) fn auxiliary_products() -> Option<Box<dyn Products>> {
     Some(Box::<FakeProducts>::default())
 }
 
@@ -416,7 +404,7 @@ impl Fixture {
             ..unsafe { std::mem::zeroed() }
         };
         assert!(validate_setup(&setup, &upstream));
-        let host = Host::new(PLATFORM, fake_products, &setup, upstream).expect("host");
+        let host = Host::new(&setup, upstream).expect("host");
         host.active.store(true, Ordering::SeqCst);
         Self {
             host,

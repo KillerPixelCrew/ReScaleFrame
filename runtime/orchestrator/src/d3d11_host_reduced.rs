@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: MIT
 // Graphics-owner products and the reduced-frame ticket of the D3D11 host.
-use crate::auxiliary_sr::AuxPlatform;
-#[cfg(not(test))]
-use crate::auxiliary_sr::AuxiliarySr;
 use crate::auxiliary_sr::SurfaceKey;
 use crate::com_ref::ComRef;
 use crate::d3d11_host_abi::{
@@ -11,8 +8,6 @@ use crate::d3d11_host_abi::{
 };
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::c_void;
-#[cfg(not(test))]
-use std::ptr::NonNull;
 
 pub(crate) type Raw = *mut c_void;
 pub(crate) const MAX_RESERVED: usize = 8;
@@ -51,15 +46,6 @@ pub(crate) trait Products {
     ) -> bool {
         self.reserve(context, pass, surfaces, log, user, false) && self.seal()
     }
-}
-
-pub(crate) type ProductsFactory = fn(*const AuxPlatform) -> Option<Box<dyn Products>>;
-
-#[cfg(not(test))]
-pub(crate) fn auxiliary_products(platform: *const AuxPlatform) -> Option<Box<dyn Products>> {
-    let platform = unsafe { platform.as_ref()? };
-    let owner = NonNull::new(crate::allocate_handle(AuxiliarySr::new(platform)?))?;
-    Some(unsafe { Box::from_raw(owner.as_ptr()) })
 }
 
 pub(crate) fn zeroed_pass() -> Pass {
