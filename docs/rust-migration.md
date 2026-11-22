@@ -55,6 +55,13 @@ Source comparison covered the 19-entry private table and the disabled
 provider. Pinned formatting, locked offline metadata and whitespace
 passed. The new Rust cases and native routes remain unverified by execution.
 
+Vulkan-to-D3D12 FG swapchain admission for FSR4 and XeSS is in Rust.
+The fixture uses the 31-slot graphics table and exercises the Rust
+Present marshaling entry with a native Vulkan record. Source review
+covered the callback signatures, wait plan and typed result write.
+Build and execution of the fixture and both device paths remain open.
+[Swapchain admission evidence](research/rust-vulkan-dx12-copy-plan.md#swapchain-admission-facts)
+
 ## Remaining integration ports
 
 Carry the same Rust ownership and public C ABI through every in-tree game

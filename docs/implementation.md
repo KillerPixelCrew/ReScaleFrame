@@ -1,5 +1,10 @@
 # Implementation tracker
 
+The shared Vulkan-to-D3D12 FG paths now admit swapchain extensions and
+select vsync in Rust. The FSR4 state fixture uses the current graphics
+callback table. Build, fixture and device checks remain open.
+[Swapchain admission evidence](research/rust-vulkan-dx12-copy-plan.md#swapchain-admission-facts)
+
 The Godot SCons module now owns host boot, configuration, shutdown and
 viewport extent policy in Rust. Source checks matched the private
 callbacks and public declarations. The SCons build, editor and player
