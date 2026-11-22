@@ -91,6 +91,11 @@ int main() {
     }
     const auto sr_colour = read(device.Get(), context.Get(), main.Get(), 16);
     check(transaction.restore() && !transaction.pending(), "restore lease after final consumer");
+    count = 1;
+    context->RSGetViewports(&count, &saved);
+    context->IAGetPrimitiveTopology(&topology);
+    check(count == 1 && !std::memcmp(&saved, &viewport, sizeof(saved)) &&
+        topology == D3D11_PRIMITIVE_TOPOLOGY_POINTLIST, "retirement restores native bindings");
     check(read(device.Get(), context.Get(), depth.Get(), 4) == depth_before && read(device.Get(), context.Get(), aux.Get(), 4) == aux_before,
         "every original auxiliary restored bit for bit");
     check(read(device.Get(), context.Get(), main.Get(), 16) == sr_colour, "successful SR colour survives auxiliary restoration");

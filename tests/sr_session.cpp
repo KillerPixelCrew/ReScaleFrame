@@ -94,6 +94,10 @@ int main()
     check(rsf_sr_session_evaluate(session, &setup, &frame) == RSF_BACKEND_ERROR_ABI_MISMATCH,
           "frame ABI must not validate an embedded camera");
     record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+    frame.sharpness = 1.01f;
+    check(rsf_sr_session_evaluate(session, &setup, &frame) == RSF_BACKEND_ERROR_INVALID_ARGUMENT,
+        "out-of-range sharpening is refused before evaluation");
+    frame.sharpness = 0;
     check(rsf_sr_session_evaluate(session, &setup, &frame) == 0 && reset_seen, "first frame reset");
     ++record.frame_id;
     check(rsf_sr_session_evaluate(session, &setup, &frame) == 0 && !reset_seen, "contiguous frame keeps history");

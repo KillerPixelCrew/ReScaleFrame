@@ -7,6 +7,9 @@
 //       The same selector now: the vendor first-use build happens inside the select (logged "preparing" / "prepared in N ms"),
 //       and no frame after it stalls. A mode suffix "+exposure" offers a constant exposure texture, as Anomaly does.
 //
+//   sr_backend_switch_device <vendor root> fsr3-start
+//       Start FSR3 with no Streamline directory and evaluate the first frames.
+//
 // <vendor root> is the package layout <root>/{streamline,fidelityfx,xess}. Exit 77 when the machine cannot run it.
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/d3d11_state.h>
@@ -74,13 +77,13 @@ struct Rig {
         frame.exposure = exposure.Get();
         return true;
     }
-    bool create() {
+    bool create(bool require_nvidia) {
         ComPtr<IDXGIFactory> factory; ComPtr<IDXGIAdapter> adapter;
         if (FAILED(CreateDXGIFactory(IID_PPV_ARGS(&factory)))) return false;
         for (uint32_t i = 0; ; ++i) {
             if (FAILED(factory->EnumAdapters(i, &adapter))) return false;
             DXGI_ADAPTER_DESC desc{}; adapter->GetDesc(&desc);
-            if (desc.VendorId == 0x10de) break;
+            if (!require_nvidia || desc.VendorId == 0x10de) break;
             adapter.Reset();
         }
         if (FAILED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)))
@@ -101,7 +104,8 @@ struct Rig {
     }
     rsf_dlss_pipeline_result run_frame(const char* name = "frame") {
         camera.jitter_pixels[0] = (serial++ % 2) ? -0.25f : 0.25f;
-        rsf_d3d11_state saved{}; rsf_d3d11_state_save(context.Get(), &saved);
+        rsf_d3d11_state saved{};
+        if (!rsf_d3d11_state_save(context.Get(), &saved)) return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
         const auto begin = Clock::now();
         const auto result = rsf_dlss_pipeline_on_frame(context.Get(), &frame);
         note(name, milliseconds(begin, Clock::now()));
@@ -112,11 +116,12 @@ struct Rig {
     void present() { context->Flush(); }
 };
 
-bool start(Rig& rig, const std::string& root) {
+bool start(Rig& rig, const std::string& root, uint32_t backend) {
     const std::string streamline = root + "\\streamline", fidelityfx = root + "\\fidelityfx", xess = root + "\\xess";
     rsf_dlss_pipeline_setup setup{};
     setup.struct_size = sizeof(setup); setup.abi_version = RSF_DLSS_PIPELINE_ABI_VERSION;
-    setup.streamline_directory_utf8 = streamline.c_str(); setup.output_width = kSize; setup.output_height = kHeight;
+    setup.streamline_directory_utf8 = backend == RSF_SR_DLSS ? streamline.c_str() : nullptr;
+    setup.output_width = kSize; setup.output_height = kHeight;
     setup.quality = RSF_DLSS_QUALITY_NATIVE;
     setup.motion.struct_size = sizeof(setup.motion);
     setup.motion.scale_x = setup.motion.scale_y = 1;
@@ -126,7 +131,7 @@ bool start(Rig& rig, const std::string& root) {
     setup.project_id_utf8 = "a3ed1f08-3542-4698-b85c-e1a9908e861a";
     setup.fsr2_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = fidelityfx.c_str();
     setup.xess_directory_utf8 = xess.c_str(); setup.view_space_to_meters = 1; setup.log = log_line;
-    const auto result = rsf_dlss_pipeline_start(rig.device.Get(), &setup);
+    const auto result = rsf_dlss_pipeline_start_backend(rig.device.Get(), &setup, backend);
     if (result != 0) { std::fprintf(stderr, "pipeline start refused: %d\n", result); return false; }
     return true;
 }
@@ -193,7 +198,7 @@ int select_stall(Rig& rig) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 3) { std::puts("usage: sr_backend_switch_device <vendor root> baseline|select"); return 77; }
+    if (argc < 3) { std::puts("usage: sr_backend_switch_device <vendor root> baseline|select|select+exposure|fsr3-start"); return 77; }
     const std::string root = argv[1];
     std::string mode = argv[2];
     Rig rig;
@@ -202,13 +207,27 @@ int main(int argc, char** argv) {
         rig.with_exposure = true;
         mode.resize(mode.size() - suffix.size());
     }
-    if (!rig.create()) { std::puts("SKIP: no NVIDIA D3D11 adapter"); return 77; }
-    if (!start(rig, root)) { std::puts("SKIP: the shared pipeline did not start (Streamline or DLSS unavailable)"); return 77; }
+    const bool alternate_start = mode == "fsr3-start";
+    if (!alternate_start && mode != "baseline" && mode != "select") {
+        std::printf("unknown mode %s\n", mode.c_str());
+        return 2;
+    }
+    if (!rig.create(!alternate_start)) { std::puts("SKIP: no matching D3D11 adapter"); return 77; }
+    const uint32_t backend = alternate_start ? RSF_SR_FSR3 : RSF_SR_DLSS;
+    if (!start(rig, root, backend)) return alternate_start ? 1 : 77;
     int status = 0;
-    if (mode == "baseline") status = baseline(rig);
-    else if (mode == "select") status = select_stall(rig);
-    else { std::printf("unknown mode %s\n", mode.c_str()); status = 2; }
-    rsf_dlss_pipeline_stop();
+    if (alternate_start) {
+        rsf_dlss_pipeline_status pipeline{};
+        pipeline.struct_size = sizeof(pipeline);
+        CHECK(rsf_dlss_pipeline_get_status(&pipeline) == RSF_DLSS_PIPELINE_OK);
+        CHECK(pipeline.backend == RSF_SR_FSR3 && pipeline.requested_backend == RSF_SR_FSR3);
+        CHECK(warm_up(rig));
+    } else if (mode == "baseline") {
+        status = baseline(rig);
+    } else {
+        status = select_stall(rig);
+    }
+    CHECK(rsf_dlss_pipeline_stop() == RSF_DLSS_PIPELINE_OK);
     if (failures) return 1;
     return status;
 }
