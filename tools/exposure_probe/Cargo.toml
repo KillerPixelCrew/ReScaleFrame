@@ -19,6 +19,7 @@ workspace = true
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]
+rsf-minhook-sys = { path = "../../third_party/minhook" }
 windows = { workspace = true, features = [
   "std",
   "Win32_Graphics_Direct3D",

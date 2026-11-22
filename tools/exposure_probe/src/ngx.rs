@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Standalone NGX tracing. The optional SDK leaf owns typed parameter access.
 use crate::{Handle, strtof, sys::*};
+use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_Uninitialize};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::{
     ffi::c_void,
@@ -19,13 +20,6 @@ type Evaluate = unsafe extern "C" fn(Handle, Handle, Handle, Handle) -> u32;
 static CREATE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static EVALUATE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
-unsafe extern "system" {
-    fn MH_Initialize() -> i32;
-    fn MH_CreateHook(target: Handle, detour: Handle, original: *mut Handle) -> i32;
-    fn MH_EnableHook(target: Handle) -> i32;
-    fn MH_DisableHook(target: Handle) -> i32;
-    fn MH_Uninitialize() -> i32;
-}
 
 unsafe extern "C" fn create(
     context: Handle,
