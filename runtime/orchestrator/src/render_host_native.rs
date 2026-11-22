@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::render_host_methods::{Adapter, ResourceDesc};
 use crate::com_ref;
-use crate::d3d12_host::{borrow, device_of, rsf_core_d3d12_wait_native_fence};
+use crate::d3d12_fence::wait_fence;
+use crate::d3d12_host::{borrow, device_of};
 use crate::dlss_native12::{Registration, exports::rsf_dlss_native12_registration_borrow};
 use crate::sys::rsf_dlss_setup;
 use crate::sys::{rsf_render_host_call_native_interface, rsf_render_host_native_interface_fn};
@@ -137,7 +138,7 @@ pub(super) unsafe fn fence_wait(fence: Handle, value: u64, timeout: u32) -> i32 
     if event.is_null() {
         return 0;
     }
-    let status = unsafe { rsf_core_d3d12_wait_native_fence(fence, value, event, timeout) };
+    let status = unsafe { wait_fence(fence, value, event, timeout) };
     unsafe { CloseHandle(event) };
     if status >= 0 { 1 } else { -1 }
 }

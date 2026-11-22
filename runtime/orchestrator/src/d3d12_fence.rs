@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 use std::ffi::c_void;
 use std::time::Instant;
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Graphics::Direct3D12::ID3D12Fence;
+use windows::core::Interface;
 use windows_sys::Win32::{
     Foundation::{E_FAIL, GetLastError, S_OK, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     System::Threading::{INFINITE, WaitForSingleObject},
@@ -84,29 +87,28 @@ pub(super) fn wait_for_value(
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_core_d3d12_wait_fence(
-    fence: Handle,
-    value: u64,
-    event: Handle,
-    timeout_ms: u32,
-    completed: unsafe extern "C" fn(Handle) -> u64,
-    arm: unsafe extern "C" fn(Handle, u64, Handle) -> i32,
-) -> i32 {
+/// Waits until `fence` (a live ID3D12Fence) reaches `value`, using `event` for the wait.
+pub(crate) unsafe fn wait_fence(fence: Handle, value: u64, event: Handle, timeout_ms: u32) -> i32 {
     if value == 0 {
         return S_OK;
     }
-    if fence.is_null() || event.is_null() {
+    let Some(fence) = (unsafe { ID3D12Fence::from_raw_borrowed(&fence) }) else {
+        return E_FAIL;
+    };
+    if event.is_null() {
         return E_FAIL;
     }
     wait_for_value(
         value,
         timeout_ms,
-        || unsafe { completed(fence) },
-        || unsafe { arm(fence, value, event) },
+        || unsafe { fence.GetCompletedValue() },
+        || {
+            unsafe { fence.SetEventOnCompletion(value, HANDLE(event)) }
+                .map_or_else(|error| error.code().0, |()| S_OK)
+        },
         |remaining| unsafe { wait_event(event, remaining) },
     )
 }
-
 /// One wait on a fence event, as the HRESULT `wait_for_value` expects from its wait step.
 ///
 /// # Safety

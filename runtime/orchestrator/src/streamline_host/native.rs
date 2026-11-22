@@ -1064,7 +1064,7 @@ pub(crate) unsafe fn drain(host: *mut Host) -> i32 {
     }
     let ready = unsafe { queue.Signal(&fence, 1) }.is_ok()
         && unsafe {
-            crate::d3d12_host::rsf_core_d3d12_wait_native_fence(
+            crate::d3d12_fence::wait_fence(
                 fence.as_raw(),
                 1,
                 event,

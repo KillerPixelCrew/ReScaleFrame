@@ -11,7 +11,7 @@ pub(super) use super::native_gl::{
 use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 use windows::Win32::{
-    Foundation::{E_FAIL, GENERIC_ALL, HANDLE, LUID},
+    Foundation::{E_FAIL, GENERIC_ALL, LUID},
     Graphics::{
         Direct3D::D3D_FEATURE_LEVEL,
         Direct3D12::*,
@@ -171,26 +171,13 @@ pub(super) unsafe extern "C" fn fence_completed(fence: Handle) -> u64 {
     unsafe { borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
 }
 
-pub(super) unsafe extern "C" fn fence_arm(fence: Handle, value: u64, event: Handle) -> i32 {
-    status(unsafe { borrow::<ID3D12Fence>(&fence).SetEventOnCompletion(value, HANDLE(event)) })
-}
-
 pub(super) unsafe extern "C" fn fence_wait(
     fence: Handle,
     value: u64,
     event: Handle,
     timeout: u32,
 ) -> i32 {
-    i32::from(unsafe {
-        crate::d3d12_fence::rsf_core_d3d12_wait_fence(
-            fence,
-            value,
-            event,
-            timeout,
-            fence_completed,
-            fence_arm,
-        ) >= 0
-    })
+    i32::from(unsafe { crate::d3d12_fence::wait_fence(fence, value, event, timeout) } >= 0)
 }
 
 pub(super) unsafe extern "C" fn queue_wait(queue: Handle, fence: Handle, value: u64) -> i32 {

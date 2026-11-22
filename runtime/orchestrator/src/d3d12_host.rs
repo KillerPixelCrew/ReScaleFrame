@@ -168,28 +168,6 @@ pub(super) unsafe extern "C" fn rsf_core_d3d12_create_uav_texture(
     )
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_core_d3d12_wait_native_fence(
-    fence: Raw,
-    value: u64,
-    event: Raw,
-    timeout_ms: u32,
-) -> i32 {
-    unsafe extern "C" fn completed(fence: Raw) -> u64 {
-        unsafe { borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
-    }
-    unsafe extern "C" fn arm(fence: Raw, value: u64, event: Raw) -> i32 {
-        use windows::Win32::Foundation::HANDLE;
-        let bound: &ID3D12Fence = unsafe { borrow(&fence) };
-        unsafe { (bound.vtable().SetEventOnCompletion)(fence, value, HANDLE(event)) }.0
-    }
-    unsafe {
-        crate::d3d12_fence::rsf_core_d3d12_wait_fence(
-            fence, value, event, timeout_ms, completed, arm,
-        )
-    }
-}
-
 pub(super) mod fg;
 // Called only by sr12's native platform, which unit tests do not build.
 #[cfg(not(test))]

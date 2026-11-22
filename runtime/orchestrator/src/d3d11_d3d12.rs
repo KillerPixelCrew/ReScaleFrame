@@ -9,7 +9,6 @@ use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 use windows::Win32::{
-    Foundation::HANDLE,
     Graphics::{Direct3D11::*, Direct3D12::*, Dxgi::Common::*},
 };
 use windows::core::IUnknown;
@@ -60,11 +59,6 @@ pub(crate) unsafe extern "C" fn fence_d3d11(fence: Handle) -> Handle {
 
 pub(crate) unsafe extern "C" fn fence_d3d12(fence: Handle) -> Handle {
     unsafe { rsf_shared_fence_d3d12(fence.cast()) }
-}
-
-pub(crate) unsafe extern "C" fn arm_fence(fence: Handle, value: u64, event: Handle) -> i32 {
-    unsafe { borrow::<ID3D12Fence>(&fence).SetEventOnCompletion(value, HANDLE(event)) }
-        .map_or_else(|error| error.code().0, |()| 0)
 }
 
 pub(crate) unsafe extern "C" fn flush(context: Handle) {

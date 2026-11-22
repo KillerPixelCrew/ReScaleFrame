@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::native::graphics;
 use super::{Handle, QueueDesc, SwapchainDesc, Texture, dx12};
-use crate::d3d12_host::{rsf_core_d3d12_copy_transitioned, rsf_core_d3d12_wait_native_fence};
+use crate::d3d12_fence::wait_fence;
+use crate::d3d12_host::rsf_core_d3d12_copy_transitioned;
 
 use windows::Win32::{
     Foundation::LUID,
@@ -318,5 +319,5 @@ pub(super) unsafe extern "C" fn wait_shared(native: Handle, value: u64) -> i32 {
 
 pub(super) unsafe extern "C" fn wait_local(native: Handle, value: u64) -> i32 {
     let graphics = unsafe { graphics(native) };
-    unsafe { rsf_core_d3d12_wait_native_fence(graphics.completion, value, graphics.event, 10_000) }
+    unsafe { wait_fence(graphics.completion, value, graphics.event, 10_000) }
 }

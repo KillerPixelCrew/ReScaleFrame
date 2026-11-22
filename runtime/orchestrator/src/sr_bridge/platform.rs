@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::d3d11_d3d12::{arm_fence, borrow, close_commands, create_texture12, execute, query};
+use crate::d3d11_d3d12::{borrow, close_commands, create_texture12, execute, query};
 // The leaves sr_bridge.rs calls as `native::*`; sr_bridge/tests.rs fakes the same names.
 pub(super) use crate::d3d11_d3d12::{
     close_event, context_signal, context_wait, copy_resource, copy_transitioned, create_commands,
     create_event, create_output, fence_d3d11, fence_d3d12, flush, queue_signal, queue_wait,
     reset_commands, surface_d3d11, surface_d3d12, surface_destroy, transition,
 };
-use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
-use crate::fg_leases::rsf_d3d12_fence_completed;
 use crate::shared_surface::{
     ABI_VERSION, SurfaceSetup, rsf_shared_fence_create, rsf_shared_fence_destroy,
     rsf_shared_surface_create,
@@ -181,18 +179,7 @@ pub(super) unsafe extern "C" fn wait_fence(
     event: Handle,
     timeout_ms: u32,
 ) -> i32 {
-    i32::from(
-        unsafe {
-            rsf_core_d3d12_wait_fence(
-                fence,
-                value,
-                event,
-                timeout_ms,
-                rsf_d3d12_fence_completed,
-                arm_fence,
-            )
-        } >= 0,
-    )
+    i32::from(unsafe { crate::d3d12_fence::wait_fence(fence, value, event, timeout_ms) } >= 0)
 }
 pub(super) unsafe extern "C" fn copy_region(
     context: Handle,

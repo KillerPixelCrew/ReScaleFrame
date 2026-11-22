@@ -177,9 +177,6 @@ unsafe fn queue_wait(queue: Raw, fence: Raw, value: u64) -> i32 {
     unsafe { (bound.vtable().Wait)(queue, fence, value) }.0
 }
 
-unsafe extern "C" fn completed(fence: Raw) -> u64 {
-    unsafe { borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
-}
 
 unsafe extern "C" fn arm(fence: Raw, value: u64, event: Raw) -> i32 {
     let bound = unsafe { borrow::<ID3D12Fence>(&fence) };
@@ -187,9 +184,7 @@ unsafe extern "C" fn arm(fence: Raw, value: u64, event: Raw) -> i32 {
 }
 
 pub(super) unsafe extern "C" fn wait_fence(fence: Raw, event: Raw, value: u64) -> i32 {
-    unsafe {
-        crate::d3d12_fence::rsf_core_d3d12_wait_fence(fence, value, event, 10_000, completed, arm)
-    }
+    unsafe { crate::d3d12_fence::wait_fence(fence, value, event, 10_000) }
 }
 
 pub(super) unsafe extern "C" fn signal_wait(queue: Raw, fence: Raw, event: Raw, value: u64) -> i32 {

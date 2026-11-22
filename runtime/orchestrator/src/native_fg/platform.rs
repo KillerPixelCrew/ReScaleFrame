@@ -3,7 +3,6 @@ use super::{Handle, Log, TextureInfo};
 use crate::d3d11_d3d12::*;
 use crate::d3d11_present::rsf_d3d11_present_graphics;
 use crate::d3d11_present_abi::rsf_streamline_graphics;
-use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
 use crate::shared_surface::{
     ABI_VERSION as SURFACE_ABI, SurfaceSetup, rsf_shared_fence_create, rsf_shared_surface_create,
 };
@@ -137,7 +136,7 @@ pub(super) unsafe fn surface_create(
 pub(super) unsafe fn wait_fence(fence: Handle, value: u64, event: Handle) -> i32 {
     i32::from(
         unsafe {
-            rsf_core_d3d12_wait_fence(fence, value, event, 10_000, fence_completed, arm_fence)
+            crate::d3d12_fence::wait_fence(fence, value, event, 10_000)
         } >= 0,
     )
 }

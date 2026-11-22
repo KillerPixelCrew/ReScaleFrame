@@ -9,8 +9,7 @@ use windows::core::Interface;
 #[cfg(not(test))]
 use {
     super::SUBMITTED,
-    crate::d3d12_fence::rsf_core_d3d12_wait_fence,
-    windows::Win32::Foundation::HANDLE,
+    crate::d3d12_fence::wait_fence,
     windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED,
     windows_sys::Win32::{Foundation::CloseHandle, System::Threading::CreateEventW},
 };
@@ -235,13 +234,6 @@ pub(super) unsafe extern "C" fn completed(fence: Handle) -> u64 {
 }
 
 #[cfg(not(test))]
-unsafe extern "C" fn arm(fence: Handle, value: u64, event: Handle) -> i32 {
-    let fence = unsafe { ID3D12Fence::from_raw_borrowed(&fence) }.unwrap();
-    unsafe { fence.SetEventOnCompletion(value, HANDLE(event)) }
-        .map_or_else(|error| error.code().0, |()| 0)
-}
-
-#[cfg(not(test))]
 pub(super) unsafe extern "C" fn drain(queue: Handle) -> u64 {
     let Some(queue) = (unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) }) else {
         return 0;
@@ -256,7 +248,7 @@ pub(super) unsafe extern "C" fn drain(queue: Handle) -> u64 {
     let result = unsafe { queue.Signal(&fence, SUBMITTED) }.map_or_else(
         |error| error.code().0,
         |()| unsafe {
-            rsf_core_d3d12_wait_fence(fence.as_raw(), SUBMITTED, event, 15_000, completed, arm)
+            wait_fence(fence.as_raw(), SUBMITTED, event, 15_000)
         },
     );
     unsafe { CloseHandle(event) };
