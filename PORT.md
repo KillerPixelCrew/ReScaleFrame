@@ -194,7 +194,7 @@ Port control and rendering callbacks, session selection and frontend wiring acro
 - [x] [runtime/orchestrator/include/rescaleframe/render_frontend.h](runtime/orchestrator/include/rescaleframe/render_frontend.h)
 - [x] [runtime/orchestrator/include/rescaleframe/render_host.h](runtime/orchestrator/include/rescaleframe/render_host.h)
 - [x] [runtime/orchestrator/include/rescaleframe/render_links.h](runtime/orchestrator/include/rescaleframe/render_links.h)
-- [ ] [runtime/orchestrator/src/callback_render_host_platform.cpp](runtime/orchestrator/src/callback_render_host_platform.cpp)
+- [x] [runtime/orchestrator/src/callback_render_host_platform.cpp](runtime/orchestrator/src/callback_render_host_platform.cpp)
 - [x] [runtime/orchestrator/src/native_window_platform.cpp](runtime/orchestrator/src/native_window_platform.cpp)
 - [ ] [runtime/orchestrator/src/render_host_platform.cpp](runtime/orchestrator/src/render_host_platform.cpp)
 
