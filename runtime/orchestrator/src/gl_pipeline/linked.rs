@@ -18,7 +18,10 @@ unsafe extern "C" {
     fn rsf_native_latency_frame_get(out: *mut rsf_native_latency_frame) -> c_int;
     fn rsf_native_latency_end_session(session: u64);
     fn rsf_input_dump_cancel(session: u64);
-    fn rsf_gl_contract_dlss_preset_valid(preset: u32) -> c_int;
+}
+
+unsafe extern "C" fn dlss_preset_valid(preset: u32) -> c_int {
+    c_int::from(crate::streamline_sr::preset_valid(preset))
 }
 
 unsafe extern "C" fn gl_open(log: Log, user: Handle, out: *mut Handle) -> i32 {
@@ -185,7 +188,7 @@ pub(super) static PLATFORM: Platform = Platform {
     latency_completed,
     latency_end_session: rsf_native_latency_end_session,
     dump_cancel: rsf_input_dump_cancel,
-    dlss_preset_valid: rsf_gl_contract_dlss_preset_valid,
+    dlss_preset_valid,
     fg_default_backend: crate::fg_choice::rsf_fg_default_backend,
     depth_domains_requested,
     overlay_configure: rsf_overlay_configure_bound,

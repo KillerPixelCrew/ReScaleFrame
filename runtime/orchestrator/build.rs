@@ -130,7 +130,6 @@ fn native_leaves() {
         &[
             "src/fg12_platform.c",
             "src/native_composition_unload.c",
-            "src/gl_pipeline_contract.c",
             "src/render_host_platform.c",
             "src/d3d11_host_foreign.c",
             "../graphics/src/observer_exception_guards.c",
