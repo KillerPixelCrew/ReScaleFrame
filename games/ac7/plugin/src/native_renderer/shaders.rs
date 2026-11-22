@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The contact-shadow correction at the engine's pixel shader factory.
 use super::{Guard, Renderer, copy, hook, installed, original, read};
-use crate::sys::{RSF_AC7_CONTACT_PATCHED, RSF_AC7_CONTACT_REFUSED};
-use rsf_ac7::contact_shadow::rsf_ac7_contact_shadow_correct;
+use rsf_ac7::contact_shadow::{Correction, correct};
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
 use std::ptr::null_mut;
@@ -23,26 +22,21 @@ const _: () =
 type Create =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *const NativeShaderCode) -> *mut c_void;
 
-struct Factory<'a> {
-    original: Create,
-    owner: &'a Renderer,
+/// Creates the corrected shader through the engine factory `create`, into `created`. False when
+/// the factory threw.
+fn create_corrected(
+    owner: &Renderer,
+    create: Create,
     rhi: *mut c_void,
     result: *mut c_void,
-    created: *mut c_void,
-    failed: bool,
-}
-
-unsafe extern "C" fn use_shader(
-    user: *mut c_void,
-    transformed: *const u8,
-    size: usize,
+    transformed: &[u8],
     crc: u32,
+    created: &mut *mut c_void,
 ) -> bool {
-    let factory = unsafe { &mut *user.cast::<Factory<'_>>() };
     let replacement = NativeShaderCode {
-        data: transformed,
-        count: size as i32,
-        capacity: size as i32,
+        data: transformed.as_ptr(),
+        count: transformed.len() as i32,
+        capacity: transformed.len() as i32,
     };
     // native_renderer_platform.c calls the factory, containing a C++ exception as the former
     // catch(...) did. False means one was thrown and `created` is unchanged.
@@ -50,29 +44,23 @@ unsafe extern "C" fn use_shader(
         .and_then(|calls| calls.shader_factory)
         .is_some_and(|call| unsafe {
             call(
-                factory.original as *mut c_void,
-                factory.rhi,
-                factory.result,
+                create as *mut c_void,
+                rhi,
+                result,
                 (&raw const replacement).cast(),
-                &mut factory.created,
+                created,
             )
         });
     if !called {
-        factory.failed = true;
-        factory
-            .owner
-            .log(c"AC7 contact-shadow correction refused: native shader factory failed");
+        owner.log(c"AC7 contact-shadow correction refused: native shader factory failed");
         return false;
     }
     let (mut shader, mut native) = (0u64, 0u64);
-    let accepted = copy(
-        (&mut shader as *mut u64).cast(),
-        factory.result,
-        size_of::<u64>(),
-    ) && read(shader, 0xa0, &mut native)
+    let accepted = copy((&mut shader as *mut u64).cast(), result, size_of::<u64>())
+        && read(shader, 0xa0, &mut native)
         && native != 0;
-    if factory.owner.contact_reports.fetch_add(1, Ordering::SeqCst) < 8 {
-        factory.owner.log_bounded(
+    if owner.contact_reports.fetch_add(1, Ordering::SeqCst) < 8 {
+        owner.log_bounded(
             &format!(
                 "AC7 contact-shadow correction: native factory resource={} RHI={:x} D3D11={:x} CRC={}; View noise phase and depth quantisation bias, native light/ray parameters preserved",
                 u32::from(accepted),
@@ -159,28 +147,21 @@ pub(super) unsafe extern "C" fn hooked_create_pixel_shader(
     {
         return forward();
     }
-    let mut factory = Factory {
-        original: create,
-        owner,
-        rhi,
-        result,
-        created: null_mut(),
-        failed: false,
-    };
-    let patched = unsafe {
-        rsf_ac7_contact_shadow_correct(
-            data,
-            total,
-            offset,
-            Some(use_shader),
-            (&mut factory as *mut Factory<'_>).cast(),
-        )
-    };
-    if patched == RSF_AC7_CONTACT_PATCHED as i32 {
-        return factory.created;
+    // The guarded reads above bound the engine's borrowed shader bytes, which the factory
+    // consumes synchronously.
+    let source = unsafe { std::slice::from_raw_parts(data, total) };
+    let mut created = null_mut();
+    let mut failed = false;
+    let correction = correct(source, offset, |transformed, crc| {
+        let made = create_corrected(owner, create, rhi, result, transformed, crc, &mut created);
+        failed = !made;
+        made
+    });
+    if correction == Correction::Patched {
+        return created;
     }
-    if patched == RSF_AC7_CONTACT_REFUSED as i32
-        && !factory.failed
+    if correction == Correction::Refused
+        && !failed
         && owner.contact_reports.fetch_add(1, Ordering::SeqCst) < 8
     {
         owner.log(c"AC7 contact-shadow correction refused: shader fingerprint matched but transform validation failed");

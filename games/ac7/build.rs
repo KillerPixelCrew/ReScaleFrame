@@ -61,11 +61,7 @@ fn bindings() {
         .collect();
     headers.sort();
     println!("cargo:rerun-if-changed=include/rescaleframe");
-    for private in [
-        "ac7_scope_owner.h",
-        "ac7_sites.h",
-        "contact_shadow.h",
-    ] {
+    for private in ["ac7_scope_owner.h", "ac7_sites.h"] {
         headers.push(format!("games/ac7/src/{private}"));
     }
     let headers: Vec<&str> = headers.iter().map(String::as_str).collect();

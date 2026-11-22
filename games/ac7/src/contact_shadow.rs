@@ -3,13 +3,7 @@
 //! The shader facts and operands come from the existing capture evidence.
 use crate::dxbc_chunks::word;
 use crate::shader_hash::{crc32c, dxbc_checksum, dxbc_digest_bytes};
-use crate::sys::{
-    RSF_AC7_CONTACT_PATCHED, RSF_AC7_CONTACT_REFUSED, RSF_AC7_CONTACT_UNMATCHED,
-    rsf_ac7_contact_shader_fn,
-};
 use crate::velocity_container::store;
-use std::ffi::c_void;
-use std::slice;
 
 const ORIGINAL_SIZE: usize = 10_456;
 const MAX_INPUT: usize = 8 * 1024 * 1024;
@@ -19,10 +13,6 @@ const TOKENS: usize = SHADER_OFFSET + 8;
 const PHASE_SPLIT: usize = TOKENS + 469 * 4;
 const START_SPLIT: usize = TOKENS + 996 * 4;
 const TEMPS: usize = TOKENS + 66 * 4;
-
-const UNMATCHED: i32 = RSF_AC7_CONTACT_UNMATCHED as i32;
-const PATCHED: i32 = RSF_AC7_CONTACT_PATCHED as i32;
-const REFUSED: i32 = RSF_AC7_CONTACT_REFUSED as i32;
 
 const EXPECTED: &[u8; 64] = b"60a2ca61e5d83b853f692ee8c0bc3580ea46b8e33d72c644949e5f37c1060a12";
 
@@ -136,46 +126,56 @@ fn rewrite(input: &[u8], output: &mut [u8]) -> bool {
     true
 }
 
-/// The native caller lends the input. On success the factory borrows Rust-owned output.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
-    bytes: *const u8,
-    size: usize,
+/// What the correction did with a pixel shader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Correction {
+    /// Not the pinned contact-shadow shader.
+    Unmatched,
+    /// The factory took the replacement.
+    Patched,
+    /// The pinned shader whose layout, rewrite or factory call failed.
+    Refused,
+}
+
+/// `source` is the engine's RHI prefix, the DXBC at `offset` and any engine trailer. For the
+/// pinned shader, `use_shader` borrows the complete replacement and its DXBC CRC for the call
+/// and says whether the factory took it.
+pub fn correct(
+    source: &[u8],
     offset: usize,
-    use_shader: rsf_ac7_contact_shader_fn,
-    user: *mut c_void,
-) -> i32 {
-    let Some(shader_size) = size.checked_sub(offset) else {
-        return UNMATCHED;
+    use_shader: impl FnOnce(&[u8], u32) -> bool,
+) -> Correction {
+    let Some(shader_size) = source.len().checked_sub(offset) else {
+        return Correction::Unmatched;
     };
-    if bytes.is_null() || size > MAX_INPUT || shader_size < ORIGINAL_SIZE {
-        return UNMATCHED;
+    if source.len() > MAX_INPUT || shader_size < ORIGINAL_SIZE {
+        return Correction::Unmatched;
     }
-    let source = unsafe { slice::from_raw_parts(bytes, size) };
     let (prefix, input) = source.split_at(offset);
     if &input[..4] != b"DXBC" || word(input, 24) != Some(ORIGINAL_SIZE as u32) {
-        return UNMATCHED;
+        return Correction::Unmatched;
     }
     if rsf_windows::sha256_hex(&input[..ORIGINAL_SIZE]).as_ref() != Some(EXPECTED) {
-        return UNMATCHED;
+        return Correction::Unmatched;
     }
     if !layout_matches(input) {
-        return REFUSED;
+        return Correction::Refused;
     }
     let mut buffer = Vec::new();
-    let Some(output) = crate::velocity_container::resize_bytes(&mut buffer, size + GROWTH) else {
-        return REFUSED;
+    let Some(output) = crate::velocity_container::resize_bytes(&mut buffer, source.len() + GROWTH)
+    else {
+        return Correction::Refused;
     };
     let (output_prefix, shader) = output.split_at_mut(offset);
     output_prefix.copy_from_slice(prefix);
     if !rewrite(input, shader) {
-        return REFUSED;
+        return Correction::Refused;
     }
     let crc = container_crc(shader);
-    if use_shader.is_some_and(|apply| unsafe { apply(user, output.as_ptr(), output.len(), crc) }) {
-        PATCHED
+    if use_shader(output, crc) {
+        Correction::Patched
     } else {
-        REFUSED
+        Correction::Refused
     }
 }
 

@@ -409,7 +409,7 @@ plane, so the bias is resolution dependent by construction and vanishes on depth
 in screen space. Taking the smaller side keeps a silhouette's depth jump out of the estimate.
 Five extra point samples per lit pixel inside the contact branch only.
 
-Encoding. `games/ac7/src/contact_shadow.cpp`, now `rsf_ac7_contact_shadow_correct`, applies
+Encoding. `games/ac7/src/contact_shadow.cpp`, now `contact_shadow::correct`, applies
 both the 08:45 noise phase and this bias to the shader with SHA-256
 `60a2ca61e5d83b853f692ee8c0bc3580ea46b8e33d72c644949e5f37c1060a12`. It additionally requires the
 original tokens `05000036 00100042 0000000a 0010002a 00000008` (`mov r10.z, r8.z`, the ray start)
