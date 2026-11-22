@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The guarded engine-memory copy and the void form of the shared guarded host log (foreign_guard.h).
+// The guarded engine-memory copy.
 #pragma once
 #include <windows.h>
 #include <stdbool.h>
@@ -22,9 +22,4 @@ static inline bool guarded_copy(void* output, const void* input, size_t size)
     SetLastError(error);
     return complete;
 #endif
-}
-
-static inline void guarded_log_line(rsf_game_log_fn log, void* user, const char* message)
-{
-    (void)rsf_game_log_guarded(log, user, message);
 }

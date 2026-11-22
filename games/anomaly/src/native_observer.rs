@@ -138,8 +138,8 @@ struct Session {
 unsafe impl Send for Session {}
 
 impl Session {
-    fn emit(&self, platform: &Platform, message: &CStr) {
-        unsafe { (platform.log.unwrap())(self.log, self.user, message.as_ptr()) };
+    fn emit(&self, message: &CStr) {
+        unsafe { rsf_game_sys::rsf_game_log_guarded(self.log, self.user, message.as_ptr()) };
     }
 }
 
@@ -329,13 +329,11 @@ impl Observer {
         drop(control);
         if sr_refused {
             session.emit(
-                platform,
                 c"Anomaly SR stage not installed; rendering is stock.",
             );
         }
         if motion_refused {
             session.emit(
-                platform,
                 c"Anomaly motion stage not installed; shaders stay stock.",
             );
         }
@@ -352,7 +350,7 @@ impl Observer {
         if let Ok(message) = CString::new(format!(
             "Anomaly guarded native hooks installed on the {label} build ({executable}){geometry}. No executable file was modified."
         )) {
-            session.emit(platform, &message);
+            session.emit(&message);
         }
         OK
     }
@@ -511,9 +509,9 @@ impl Observer {
             o.height,
             o.resets,
         )) {
-            session.emit(platform, &message);
+            session.emit(&message);
         }
-        report::stages(session, platform);
+        report::stages(session);
     }
 
     fn camera(&self, platform: &Platform, view: *const f32, projection: *const f32) {

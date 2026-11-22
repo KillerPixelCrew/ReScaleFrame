@@ -21,9 +21,7 @@ static SINK: Mutex<Log> = Mutex::new(Log {
 
 unsafe extern "C" fn forward(_: Raw, message: *const c_char) {
     let sink = *SINK.lock().unwrap_or_else(|poison| poison.into_inner());
-    if let Some(call) = PLATFORM.get().and_then(|p| p.guarded_log) {
-        unsafe { call(sink.callback, sink.user as Raw, message) };
-    }
+    unsafe { rsf_game_sys::rsf_game_log_guarded(sink.callback, sink.user as Raw, message) };
 }
 
 unsafe extern "C" fn configure(

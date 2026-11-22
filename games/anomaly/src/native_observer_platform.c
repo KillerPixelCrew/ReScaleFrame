@@ -79,7 +79,6 @@ static const rsf_anomaly_observer_platform platform = {
     .ui_boundary = rsf_anomaly_fg_stage_ui_boundary,
     .scope_frame = rsf_anomaly_fg_stage_scope,
     .device_reset = rsf_anomaly_fg_stage_device_reset,
-    .log = guarded_log_line,
 };
 
 static void call_original(const invocation* call)

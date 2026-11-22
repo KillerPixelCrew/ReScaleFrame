@@ -2,7 +2,7 @@
 /* Native leaves of the SR stage driver. sr_stage.rs owns the lifecycle, admission, ordering, configuration and
    status; sr_stage/native.rs builds the production leaf table over the Rust profile records. This file keeps what Rust
    cannot express: the five stage trampolines and the position-binder slot replacement, the SEH calls into the engine,
-   the guarded memory copy, the C++ exception boundary around foreign log sinks, the hook set and the C entries. */
+   the guarded memory copy, the hook set and the C entries. */
 #include "sr_stage.h"
 #include "sr_stage_platform.h"
 #include "engine_slots.h"
@@ -150,14 +150,13 @@ static uintptr_t constant_buffer(void* function, void* constants, uintptr_t cons
 #endif
 }
 
-/* ---- memory, logs and helpers ---------------------------------------------------------------------------------- */
+/* ---- memory and helpers ------------------------------------------------------------------------------------------ */
 static bool copy(void* output, const void* input, size_t size) { return guarded_copy(output, input, size); }
 
 static const void* d3d11(void) { return rsf_anomaly_sr_d3d11_platform(); }
 
 static const rsf_anomaly_sr_native native = {
     copy,
-    guarded_log_line,
     set_projection,
     set_mip_bias,
     constant_buffer,

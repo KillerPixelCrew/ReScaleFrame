@@ -68,12 +68,10 @@ typedef struct rsf_sr_d3d11 {
 } rsf_sr_d3d11;
 
 /* The native leaves of the table. `default_view` creates a default shader view (an owned reference or null).
-   `guarded_log` calls a log sink and returns false if it raised a C++ exception, which it contains.
    `save_state` returns an owned snapshot of the immediate-context pipeline or null; `restore_state` restores and
    frees it. */
 typedef struct rsf_sr_d3d11_foreign {
     void* (*default_view)(void* device, void* texture);
-    bool (*guarded_log)(rsf_sr_log log, void* user, const char* message);
     void* (*save_state)(void* context);
     void (*restore_state)(void* context, void* snapshot);
 } rsf_sr_d3d11_foreign;
@@ -113,7 +111,7 @@ RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_draw) == 56 && sizeof(rsf_sr_d3d11) == 184 && 
     "SR D3D11 table layout");
 RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_twin_input) == 56 && sizeof(rsf_sr_target_view) == 96 &&
     sizeof(rsf_sr_temporal_view) == 88, "SR D3D11 target layout");
-RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_twin_batch_info) == 24 && sizeof(rsf_sr_d3d11_foreign) == 32,
+RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_twin_batch_info) == 24 && sizeof(rsf_sr_d3d11_foreign) == 24,
     "SR D3D11 batch and foreign layout");
 
 /* View kinds and pass kinds (sr_d3d11.rs). */

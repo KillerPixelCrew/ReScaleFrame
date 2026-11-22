@@ -14,9 +14,9 @@ use crate::sys::*;
 pub(crate) mod records;
 use crate::sr_stage::{OverlayChoices, STAGE};
 use crate::sys::rsf_anomaly_sr_settings;
+use crate::host_log::Log;
 use crate::{overlay_hooks, overlay_native};
 pub(crate) use records::*;
-use rsf_game_sys::rsf_game_log_fn;
 use rsf_game_sys::rsf_overlay_sr_report;
 use std::ffi::{CStr, CString, OsString, c_char, c_int, c_void};
 use std::fmt;
@@ -72,18 +72,6 @@ fn text(reason: *const c_char) -> String {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Log {
-    log: rsf_game_log_fn,
-    user: *mut c_void,
-}
-
-impl Log {
-    fn say(&self, message: fmt::Arguments) {
-        // The adapter log callback is borrowed for the process lifetime.
-        rsf_game_sys::log_guarded(self.log, self.user, &message.to_string());
-    }
-}
 
 // ---- adapter options ---------------------------------------------------------------------------------------------
 
@@ -939,9 +927,10 @@ impl Overlay {
                 c"no adapter configuration path",
             ));
         };
+        // The adapter log callback is borrowed for the process lifetime.
         let log = Log {
-            log: options.log,
-            user: options.log_user,
+            callback: options.log,
+            user: options.log_user as usize,
         };
         let api = match unsafe { options.api_override.as_ref() } {
             Some(table) => validate(OK, table),

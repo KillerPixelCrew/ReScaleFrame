@@ -23,11 +23,10 @@ fn owned<T: Interface>(value: Option<T>) -> Ptr {
 #[derive(Clone, Copy)]
 struct Foreign {
     default_view: unsafe extern "C" fn(Ptr, Ptr) -> Ptr,
-    guarded_log: unsafe extern "C" fn(Log, Ptr, *const c_char) -> bool,
     save_state: unsafe extern "C" fn(Ptr) -> Ptr,
     restore_state: unsafe extern "C" fn(Ptr, Ptr),
 }
-const _: () = assert!(size_of::<Foreign>() == 32);
+const _: () = assert!(size_of::<Foreign>() == 24);
 
 static FOREIGN: OnceLock<Foreign> = OnceLock::new();
 static PLATFORM: OnceLock<Platform> = OnceLock::new();
@@ -78,12 +77,11 @@ unsafe extern "C" fn view_with_default_srv(
 struct LogSink {
     callback: Log,
     user: Ptr,
-    guarded: unsafe extern "C" fn(Log, Ptr, *const c_char) -> bool,
 }
 
 unsafe extern "C" fn shader_log(sink: Ptr, text: *const c_char) -> bool {
     let sink = unsafe { &*sink.cast::<LogSink>() };
-    unsafe { (sink.guarded)(sink.callback, sink.user, text) }
+    unsafe { rsf_game_sys::rsf_game_log_guarded(sink.callback, sink.user, text) }
 }
 
 unsafe extern "C" fn compile_with_guarded_log(
@@ -95,12 +93,7 @@ unsafe extern "C" fn compile_with_guarded_log(
     user: Ptr,
     out: &mut Ptr,
 ) -> i32 {
-    let foreign = FOREIGN.get().expect("registered D3D11 platform");
-    let mut sink = LogSink {
-        callback,
-        user,
-        guarded: foreign.guarded_log,
-    };
+    let mut sink = LogSink { callback, user };
     unsafe {
         rsf_anomaly_sr_compile_shader(
             device,

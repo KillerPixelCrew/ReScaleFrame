@@ -50,6 +50,7 @@ use crate::sr_profile::{
     SITE_SET_P, SITE_SUN_CASCADES, WORLD_TARGETS, rsf_anomaly_sr_engine_layout,
 };
 use crate::sr_reconstruction::rsf_anomaly_sr_correct_position_constant;
+use crate::host_log::Log;
 use crate::sr_swap::{self as swap_owner, Handle};
 
 use crate::sys::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation};
@@ -64,7 +65,7 @@ use crate::sys::{
     rsf_anomaly_sr_swap_counters,
 };
 use rsf_game_sys::rsf_result;
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::mem::{MaybeUninit, size_of};
 use std::ptr::{from_ref, null_mut};
 use std::sync::OnceLock;
@@ -77,7 +78,6 @@ type Ptr = *mut c_void;
 #[repr(C)]
 pub(crate) struct Native {
     copy: unsafe extern "C" fn(Ptr, *const c_void, usize) -> bool,
-    log: unsafe extern "C" fn(rsf_anomaly_sr_log, Ptr, *const c_char),
     set_projection: unsafe extern "C" fn(Ptr, Ptr, *const c_void) -> bool,
     set_mip_bias: unsafe extern "C" fn(Ptr, Ptr, f32) -> bool,
     constant_buffer: unsafe extern "C" fn(Ptr, Ptr, usize, u32) -> usize,
@@ -94,7 +94,7 @@ pub(crate) struct Native {
 }
 
 const _: () = {
-    assert!(size_of::<Native>() == 120);
+    assert!(size_of::<Native>() == 112);
     // The seam reads the generic0 CRT the world window swaps.
     assert!(WORLD_TARGETS[0].offset == 0x3a8);
 };
@@ -131,7 +131,7 @@ static SET_MIP_BIAS: AtomicUsize = AtomicUsize::new(0);
 static CONSTANT_BUFFER: AtomicUsize = AtomicUsize::new(0);
 // The D3D11 host's resource owner and the swap owner's prepare-time log.
 static RESOURCES: AtomicPtr<StageResources> = AtomicPtr::new(null_mut());
-static TWIN_LOG: AtomicPtr<TwinLog> = AtomicPtr::new(null_mut());
+static TWIN_LOG: AtomicPtr<Log> = AtomicPtr::new(null_mut());
 static SWAP: OnceLock<usize> = OnceLock::new();
 
 // RCache.constants (R_constants) inside CBackend.
@@ -213,18 +213,6 @@ fn context() -> Ptr {
         .map_or(null_mut(), |value| value as Ptr)
 }
 
-struct TwinLog {
-    callback: rsf_anomaly_sr_log,
-    user: Ptr,
-}
-
-impl TwinLog {
-    fn say(&self, text: &str) {
-        if let Ok(text) = CString::new(text) {
-            unsafe { (native().log)(self.callback, self.user, text.as_ptr()) };
-        }
-    }
-}
 
 // ---- the swap owner's host -----------------------------------------------------------------------------------------
 
@@ -243,10 +231,7 @@ unsafe extern "C" fn make_twins(
 ) -> u32 {
     let borrowed = TWIN_LOG.load(Ordering::Acquire);
     // The prepare leaf lends its log for the duration of the swap owner's call.
-    let log = unsafe { borrowed.as_ref() }.unwrap_or(&TwinLog {
-        callback: None,
-        user: null_mut(),
-    });
+    let log = unsafe { borrowed.as_ref() }.copied().unwrap_or_default();
     let request = unsafe { &*request };
     let d3d = device();
     if d3d.is_null() {
@@ -263,7 +248,7 @@ unsafe extern "C" fn make_twins(
         unsafe { &mut *out },
         &mut info,
         log.callback,
-        log.user,
+        log.user as Ptr,
     );
     RESOURCES.store(handle, Ordering::Release);
     if info.pass_refused {
@@ -571,9 +556,9 @@ unsafe extern "C" fn prepare(
     log: rsf_anomaly_sr_log,
     user: Ptr,
 ) -> bool {
-    let mut call_log = TwinLog {
+    let mut call_log = Log {
         callback: log,
-        user,
+        user: user as usize,
     };
     let previous = TWIN_LOG.swap(&raw mut call_log, Ordering::AcqRel);
     let prepared = swap_owner::prepare(swap(), unsafe { facts.as_ref() });
@@ -839,10 +824,6 @@ unsafe extern "C" fn apply_colour_transport(enabled: bool) {
     rsf_anomaly_runtime_set_colour_transport(enabled);
 }
 
-unsafe extern "C" fn guarded_log(log: rsf_anomaly_sr_log, user: Ptr, message: *const c_char) {
-    unsafe { (native().log)(log, user, message) };
-}
-
 fn leaves() -> Platform {
     Platform {
         render_target: Some(render_target),
@@ -921,7 +902,6 @@ fn leaves() -> Platform {
         persist_text: Some(rsf_anomaly_sr_persist_text),
         apply_colour_transport: Some(apply_colour_transport),
         configured: None,
-        guarded_log: Some(guarded_log),
     }
 }
 

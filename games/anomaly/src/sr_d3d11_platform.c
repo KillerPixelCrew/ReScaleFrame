@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Native leaves of the SR D3D11 table. Rust owns the table and every typed COM call; this file keeps the shared
-   default-view and pipeline-state helpers, the C++ exception boundary around foreign log sinks and the descriptor
-   layout checks against the Windows SDK. */
+   default-view and pipeline-state helpers and the descriptor layout checks against the Windows SDK. */
 #include "native_memory.h"
 #include "sr_d3d11_platform.h"
 #include "sr_swap_platform.h"
@@ -54,7 +53,7 @@ static void restore_state(void* context, void* snapshot)
     free(snapshot);
 }
 
-static const rsf_sr_d3d11_foreign foreign = {default_view, rsf_game_log_guarded, save_state, restore_state};
+static const rsf_sr_d3d11_foreign foreign = {default_view, save_state, restore_state};
 
 const rsf_sr_d3d11* rsf_anomaly_sr_d3d11_platform(void)
 {

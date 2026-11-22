@@ -13,8 +13,8 @@ unsafe extern "C" fn collect(user: *mut c_void, message: *const c_char) {
 
 fn log_into(log: &Mutex<Vec<String>>) -> Log {
     Log {
-        log: Some(collect),
-        user: ptr::from_ref(log).cast_mut().cast(),
+        callback: Some(collect),
+        user: ptr::from_ref(log) as usize,
     }
 }
 
@@ -461,10 +461,7 @@ fn runtime_start_and_capture_report_refusals() {
         assert_eq!(
             service(
                 &api,
-                Log {
-                    log: None,
-                    user: ptr::null_mut()
-                },
+                Log::default(),
                 None
             )
             .capture_bits(),

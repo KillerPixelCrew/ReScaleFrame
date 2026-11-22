@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Platform, Session};
+use super::Session;
 use crate::motion::stage::rsf_anomaly_motion_stage_report;
 use crate::native_geometry::coverage::rsf_anomaly_geometry_report;
 use crate::native_geometry::coverage::rsf_anomaly_geometry_stats_read;
@@ -8,24 +8,18 @@ use crate::native_geometry_abi::Stats;
 use crate::sr_stage::rsf_anomaly_sr_stage_report;
 use std::ffi::{CString, c_char, c_void};
 
-struct Sink<'a> {
-    session: Session,
-    platform: &'a Platform,
-}
-
 unsafe extern "C" fn forward(user: *mut c_void, text: *const c_char) {
     // Each stage reports synchronously. The observer still holds the
-    // invocation lease, and the C++ log leaf contains foreign exceptions.
-    let sink = unsafe { &*user.cast::<Sink<'_>>() };
-    unsafe { (sink.platform.log.unwrap())(sink.session.log, sink.session.user, text) };
+    // invocation lease, and the guarded log leaf contains foreign exceptions.
+    let session = unsafe { &*user.cast::<Session>() };
+    unsafe { rsf_game_sys::rsf_game_log_guarded(session.log, session.user, text) };
 }
 
-pub(super) fn stages(session: Session, platform: &Platform) {
+pub(super) fn stages(mut session: Session) {
     if session.log.is_none() {
         return;
     }
-    let mut sink = Sink { session, platform };
-    let user = std::ptr::from_mut(&mut sink).cast();
+    let user = std::ptr::from_mut(&mut session).cast();
     if rsf_anomaly_geometry_active() {
         let mut stats = Stats::default();
         unsafe { rsf_anomaly_geometry_stats_read(&mut stats) };
@@ -37,7 +31,7 @@ pub(super) fn stages(session: Session, platform: &Platform) {
             stats.draws_unidentified,
             stats.capture_faults,
         )) {
-            session.emit(platform, &text);
+            session.emit(&text);
         }
         rsf_anomaly_geometry_report(Some(forward), user);
     }
