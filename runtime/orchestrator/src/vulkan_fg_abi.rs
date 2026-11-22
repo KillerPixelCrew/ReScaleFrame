@@ -15,6 +15,7 @@ pub struct rsf_fgvk {
     _unused: [u8; 0],
 }
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_fgvk_setup {
     pub struct_size: u32,
     pub abi_version: u32,

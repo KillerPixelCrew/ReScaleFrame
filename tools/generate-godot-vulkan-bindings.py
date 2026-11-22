@@ -86,22 +86,31 @@ with TemporaryDirectory() as directory:
         "acquire|prepare|hudless|submitted|present|get_status|drain|destroy)|"
         "input_dump_(cancel|poll|requested|wants|begin_record|complete|pass_metadata|result))"
     )
-    output = subprocess.check_output(
-        [bindgen, str(header), "--allowlist-type", f"^({types})$", "--allowlist-function", f"^{functions}$",
-         "--blocklist-type", "^VkStructureType$", "--no-prepend-enum-name",
-         "--allowlist-var", "^RSF_(LATENCYVK_(DEVICE_)?ABI_VERSION|SLVK_(ABI_VERSION|DLSS_SR|DLSS_FG)|"
-         "XESSVK_REQUIREMENTS_ABI_VERSION|SRVK_(SPLIT_)?ABI_VERSION|FGVK_(HOST_)?ABI_VERSION|"
-         "FSR4FG_BRIDGE_ABI_VERSION|INPUT_DUMP_VK_DEVICE_LOST|GODOT_(ABI_VERSION|VK_GRAPH_HANDOFF|VK_HANDOFF_ABI_VERSION))$",
-         "--blocklist-type", "^rsf_(frame_record|game_render_pass|sharpening_options)$",
-         "--raw-line", "#![allow(non_camel_case_types, non_snake_case, dead_code)]",
-         "--raw-line", "use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
-         "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};",
-         "--raw-line", "pub type VkStructureType = ::core::ffi::c_int;", "--use-core",
-         "--no-doc-comments", "--no-derive-debug", "--with-derive-default",
-         "--rust-edition", "2024", "--rust-target", "1.85",
-         "--", "--target=x86_64-pc-windows-msvc", f"-I{include}",
-         "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
-         "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include", f"-I{root}"],
-        cwd=root,
-    )
+    def generate(*extra):
+        return subprocess.check_output(
+            [bindgen, str(header), "--allowlist-type", f"^({types})$", "--allowlist-function", f"^{functions}$",
+             "--blocklist-type", "^VkStructureType$", "--no-prepend-enum-name",
+             "--allowlist-var", "^RSF_(LATENCYVK_(DEVICE_)?ABI_VERSION|SLVK_(ABI_VERSION|DLSS_SR|DLSS_FG)|"
+             "XESSVK_REQUIREMENTS_ABI_VERSION|SRVK_(SPLIT_)?ABI_VERSION|FGVK_(HOST_)?ABI_VERSION|"
+             "FSR4FG_BRIDGE_ABI_VERSION|INPUT_DUMP_VK_DEVICE_LOST|GODOT_(ABI_VERSION|VK_GRAPH_HANDOFF|VK_HANDOFF_ABI_VERSION))$",
+             "--blocklist-type", "^rsf_(frame_record|game_render_pass|sharpening_options)$",
+             "--raw-line", "#![allow(non_camel_case_types, non_snake_case, dead_code)]",
+             "--raw-line", "#![allow(non_upper_case_globals)]",
+             "--raw-line", "use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
+             "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};",
+             "--raw-line", "pub type VkStructureType = ::core::ffi::c_int;", "--use-core",
+             "--no-doc-comments", "--no-derive-debug", "--with-derive-default", *extra,
+             "--rust-edition", "2024", "--rust-target", "1.85",
+             "--", "--target=x86_64-pc-windows-msvc", f"-I{include}",
+             "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+             "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include", f"-I{root}"],
+            cwd=root,
+        )
+
+    # Every record holds the blocklisted VkStructureType or an SDK record, so bindgen cannot prove
+    # it Copy. They are all plain C data: name each record bindgen left without Copy and derive it.
+    plain = generate().replace(b"\r\n", b"\n").decode()
+    uncopied = re.findall(r"^#\[repr\(C\)\]\n(?!#\[derive\([^)]*Copy)(?:#\[.*\]\n)*pub struct (\w+) \{",
+                          plain, re.M)
+    output = generate("--with-derive-custom-struct", f"^({'|'.join(uncopied)})$=Copy,Clone")
 (root / "integrations/godot/native/vulkan/creation/abi.rs").write_bytes(output.replace(b"\r\n", b"\n"))

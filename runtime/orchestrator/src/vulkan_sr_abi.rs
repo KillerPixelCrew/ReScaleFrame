@@ -107,6 +107,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_srvk_image, copy_source) - 32usize];
 };
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_srvk_frame {
     pub struct_size: u32,
     pub abi_version: u32,

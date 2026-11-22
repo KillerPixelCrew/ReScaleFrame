@@ -339,6 +339,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_ac7_truesky_leaves, depth_release) - 96usize];
 };
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_ac7_native_calls {
     pub hook_initialize: ::core::option::Option<unsafe extern "C" fn() -> i32>,
     pub hook_create: ::core::option::Option<

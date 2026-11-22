@@ -626,7 +626,7 @@ generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/packa
           "--raw-line", "use crate::runtime_abi::{rsf_backend_log_fn, rsf_fg12_setup};",
           "--raw-line", "pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
           "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_pass};",
-          "--with-derive-custom-struct", "rsf_unity_package_platform=Copy,Clone"])
+          "--with-derive-custom-struct", "rsf_unity_package_settings=Copy,Clone"])
 generate("tests/engine_sharpening_abi.rs", "integrations/unity/native/package_state.h",
          "rsf_(godot_settings|unity_package_settings|srvk_(frame|image))",
          "RSF_(GODOT_ABI_VERSION|GODOT_SETTINGS_ABI_VERSION|UNITY_SETTINGS_ABI_VERSION|SRVK_ABI_VERSION)",
@@ -673,7 +673,7 @@ generate("runtime/orchestrator/src/vulkan_fg_abi.rs", "runtime/orchestrator/src/
           "-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "use crate::vulkan_sr_abi::{rsf_srvk_image, rsf_srvk_setup};",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;", "--raw-line", "type rsf_backend_result = i32;",
-          "--with-derive-custom-struct", "rsf_dlss_capture_source=Copy,Clone"])
+          "--with-derive-custom-struct", "rsf_dlss_capture_source|rsf_fgvk_setup=Copy,Clone"])
 generate("runtime/orchestrator/src/vulkan_latency_abi.rs", "runtime/orchestrator/include/rescaleframe/native_latency_vulkan.h",
          "rsf_(latencyvk_(setup|status|device_query|device_requirements|created_device)|slvk_(setup|call|callback))",
          "RSF_(LATENCYVK_(ABI_VERSION|DEVICE_ABI_VERSION)|SLVK_(ABI_VERSION|DLSS_SR|DLSS_FG))",
@@ -872,7 +872,7 @@ generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/incl
           "--raw-line", "pub use rsf_game_sys::sr_abi::{RSF_DLSS_PIPELINE_ABI_VERSION, rsf_motion_decode_params};"])
 overlay_wire = "rsf_overlay_(host_option|intent|quality|saved_row|stats)"
 generate("ui/overlay/src/wire.rs", "ui/overlay/include/rescaleframe/overlay.h",
-         overlay_wire, "RSF_OVERLAY_(ABI_VERSION|QUALITY_ULTRA_QUALITY|SR_QUALITY_.*|SR_CHANGE_.*|FRAME_LIMIT_VRR|SAVED_.*)",
+         overlay_wire, "RSF_OVERLAY_(ABI_VERSION|QUALITY_ULTRA_QUALITY|SR_QUALITY_.*|SR_CHANGE_.*|FRAME_LIMIT_VRR|SAVED_.*|HOST_OPTION_(TOGGLE|NUMBER))",
          [], ["--with-derive-default", "--with-derive-partialeq", "--no-default", "rsf_overlay_intent",
               "--raw-line", "#![allow(missing_docs, dead_code)]"], derive_debug=True)
 generate("runtime/orchestrator/src/overlay_saved_abi.rs", "runtime/orchestrator/include/rescaleframe/overlay_saved_options.h",
@@ -965,7 +965,8 @@ generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/incl
           "-Iruntime/orchestrator/include",
           "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
-          "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
+          "--raw-line", "use rsf_game_sys::rsf_frame_record;",
+          "--with-derive-custom-struct", "rsf_srvk_frame=Copy,Clone"])
 generate("tests/presentation/src/gl_fixture_abi.rs", "runtime/presentation/include/rescaleframe/gl_shared_surface.h",
          "rsf_gl_(context|texture|setup|texture_info)", "RSF_GL_.*",
          ["-Iruntime/presentation/include", "-Iruntime/contract/include", "-Isdk/game/include"],

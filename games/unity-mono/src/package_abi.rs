@@ -463,6 +463,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_native_latency_status, events) - 56usize];
 };
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_unity_package_settings {
     pub struct_size: u32,
     pub abi_version: u32,
@@ -725,7 +726,7 @@ impl Default for rsf_unity_package_view_setup {
     }
 }
 #[repr(C)]
-#[derive(Default, Copy, Clone, Copy, Clone)]
+#[derive(Default, Copy, Clone)]
 pub struct rsf_unity_package_platform {
     pub sharpening_valid:
         ::core::option::Option<unsafe extern "C" fn(options: *const rsf_sharpening_options) -> u32>,
