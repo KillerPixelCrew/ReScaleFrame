@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: MIT
 //! Win32 ASI admission and the engine settings call adapters.
+#[path = "diagnostic_services.rs"]
+mod diagnostic_services;
+#[path = "diagnostics_abi.rs"]
+mod diagnostics_abi;
+
 use super::{ASI_PLATFORM_VERSION, AsiPlatform, rsf_rdr2_asi_attach};
 use crate::platform::{minhook::*, read_process_memory};
 use crate::runtime_worker::rsf_rdr2_asi_start_runtime;
 use crate::runtime_worker_abi::rsf_rdr2_runtime_leaves;
+use diagnostic_services::{install_census, install_frame_probe, start_diagnostics};
+use diagnostics_abi::rsf_rdr2_asi_services;
 use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows_sys::Win32::Foundation::{CloseHandle, HMODULE};
 use windows_sys::Win32::Graphics::Gdi::{DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW};
 use windows_sys::Win32::System::LibraryLoader::{
@@ -17,22 +25,9 @@ use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, GetPrivateProfileStringW,
 };
 
-/// Private C ABI shared with asi_platform.h. Capture callbacks are process-lived.
-#[repr(C)]
-struct DiagnosticLeaves {
-    adapter_vendor: unsafe extern "C" fn(u32) -> u32,
-    d3d12_trace: unsafe extern "C" fn(usize, u32, *const u16) -> i32,
-    native_capture: unsafe extern "C" fn(*const u16) -> bool,
-    frame_probe: Option<unsafe extern "C" fn(*const u16, *const u16) -> i32>,
-    census: unsafe extern "C" fn(*const u16, u32) -> i32,
-    camera_probe: unsafe extern "C" fn(*const u16) -> bool,
-    camera_reference: unsafe extern "C" fn(*const u16) -> bool,
-    social_club: unsafe extern "C" fn(bool) -> bool,
-}
-const _: () = assert!(size_of::<DiagnosticLeaves>() == 8 * size_of::<usize>());
-
 struct Startup {
     module: usize,
+    services: rsf_rdr2_asi_services,
     runtime: rsf_rdr2_runtime_leaves,
     platform: AsiPlatform,
 }
@@ -42,12 +37,15 @@ static STARTUP: OnceLock<Startup> = OnceLock::new();
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_asi_process_attach(
     module: HMODULE,
-    diagnostics: &DiagnosticLeaves,
-    runtime: &rsf_rdr2_runtime_leaves,
+    services: &rsf_rdr2_asi_services,
 ) {
     let startup = Startup {
         module: module as usize,
-        runtime: *runtime,
+        services: *services,
+        runtime: rsf_rdr2_runtime_leaves {
+            fingerprint: services.fingerprint,
+            diagnostics: Some(start_diagnostics),
+        },
         platform: AsiPlatform {
             _struct_size: size_of::<AsiPlatform>() as u32,
             _version: ASI_PLATFORM_VERSION,
@@ -65,18 +63,21 @@ unsafe extern "C" fn rsf_rdr2_asi_process_attach(
             hook_disable,
             hook_remove,
             hook_status,
-            adapter_vendor: diagnostics.adapter_vendor,
+            adapter_vendor,
             desktop_refresh,
             engine_manager,
             engine_owner,
             engine_find,
-            d3d12_trace: diagnostics.d3d12_trace,
-            native_capture: diagnostics.native_capture,
-            frame_probe: diagnostics.frame_probe,
-            census: diagnostics.census,
-            camera_probe: diagnostics.camera_probe,
-            camera_reference: diagnostics.camera_reference,
-            social_club: diagnostics.social_club,
+            d3d12_trace: crate::d3d12_trace::install,
+            native_capture: services.native_capture.unwrap_or(capture_unavailable),
+            frame_probe: services
+                .frame_initialise
+                .zip(services.frame_trigger)
+                .map(|_| install_frame_probe as _),
+            census: install_census,
+            camera_probe: crate::camera_probe::rsf_rdr2_install_camera_probe,
+            camera_reference,
+            social_club,
             start_worker,
         },
     };
@@ -88,6 +89,34 @@ unsafe extern "C" fn rsf_rdr2_asi_process_attach(
             rsf_rdr2_asi_attach(&startup.platform);
         }
     }
+}
+
+fn services() -> &'static rsf_rdr2_asi_services {
+    &STARTUP
+        .get()
+        .expect("ASI services are registered before startup")
+        .services
+}
+
+unsafe extern "C" fn capture_unavailable(_: *const u16) -> bool {
+    false
+}
+
+unsafe extern "C" fn camera_reference(path: *const u16) -> bool {
+    let Some(startup) = STARTUP.get() else {
+        return false;
+    };
+    unsafe {
+        crate::camera_probe::rsf_rdr2_install_camera_reference(startup.module as HMODULE, path)
+    }
+}
+
+unsafe extern "C" fn social_club(trace: bool) -> bool {
+    services()
+        .social_current_index
+        .is_some_and(|current_index| {
+            crate::social_club::rsf_rdr2_social_club_install(current_index, trace)
+        })
 }
 
 unsafe extern "C" fn start_worker() {
@@ -106,6 +135,15 @@ unsafe extern "system" fn worker(_: *mut c_void) -> u32 {
 
 unsafe extern "C" fn main_module() -> usize {
     unsafe { GetModuleHandleW(null()) as usize }
+}
+
+unsafe extern "C" fn adapter_vendor(index: u32) -> u32 {
+    unsafe {
+        CreateDXGIFactory1::<IDXGIFactory1>()
+            .and_then(|factory| factory.EnumAdapters1(index))
+            .and_then(|adapter| adapter.GetDesc1())
+            .map_or(0, |description| description.VendorId)
+    }
 }
 
 unsafe extern "C" fn executable_path(out: *mut u16, capacity: u32) -> u32 {

@@ -180,7 +180,7 @@ unsafe extern "C" fn enable(target: usize) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const u16) -> bool {
+pub(crate) unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const u16) -> bool {
     let Some(platform) = asi::platform() else {
         return false;
     };
@@ -359,7 +359,7 @@ extern "C" fn script_reference() {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_install_camera_reference(
+pub(crate) unsafe extern "C" fn rsf_rdr2_install_camera_reference(
     instance: HMODULE,
     library: *const u16,
 ) -> bool {

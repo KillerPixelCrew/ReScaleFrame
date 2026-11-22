@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept;
+extern "C" bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept;
 
 #ifdef RSF_RDR2_CAPTURE_TEST
 void rsf_rdr2_capture_test_arm(void* swapchain) noexcept;

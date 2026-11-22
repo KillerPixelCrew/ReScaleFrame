@@ -40,7 +40,8 @@ patch generation, binding regeneration and pinned formatting were checked. Build
 RDR2's ASI startup leaves, research-attach worker and native settings probe
 now run in Rust. Settings fixtures share the measured vectors with the
 Rust policy, and refused startup sessions retain their cleanup owner.
-The diagnostic C++ bridge and restart overlay controls remain open.
+DXGI and the ASI diagnostics adapters now also run in Rust. The CRT entry
+binds their existing C services. Restart overlay controls remain open.
 Build, fixture and device checks are pending.
 [RDR2 startup source evidence](research/rust-rdr2-asi.md#r01-follow-up)
 

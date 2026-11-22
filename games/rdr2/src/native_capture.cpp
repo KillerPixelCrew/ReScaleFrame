@@ -735,7 +735,7 @@ constexpr rsf_rdr2_capture_install_ops install_ops{
 };
 }
 
-bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept
+extern "C" bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept
 {
     return rsf_rdr2_capture_install(directory, &install_ops, fixture);
 }

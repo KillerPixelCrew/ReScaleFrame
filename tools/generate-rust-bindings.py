@@ -116,6 +116,12 @@ generate("games/project-wingman/src/overlay_abi.rs", "runtime/orchestrator/inclu
          "RSF_(OVERLAY_(API_VERSION|SERVICE_OPTION_TOGGLE)|RENDER_FRONTEND_ABI_VERSION|FG_BACKEND_AUTO|REFLEX_OFF)",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-include", "rescaleframe/adapter_settings.h", "-include", "rescaleframe/frame_generation.h"])
+generate("games/rdr2/src/asi/diagnostics_abi.rs", "games/rdr2/src/asi_platform.h",
+         "rsf_(rdr2_asi_services|dump_(options|report)|census_(options|counters))",
+         "RSF_(MODULE_DUMP|CENSUS)_ABI_VERSION",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iloader/diagnostics/include", "-Iloader/census/include"],
+         ["--with-derive-default"])
 generate("games/rdr2/src/runtime_worker_abi.rs", "games/rdr2/src/runtime_setup.h",
          "rsf_(rdr2_runtime_leaves|rdr2_fingerprint_fn|render_host_setup)",
          "RSF_(RENDER_HOST_(ABI_VERSION|OWNS_PRESENTATION)|UI_MODE_BACKBUFFER_HUDLESS)",

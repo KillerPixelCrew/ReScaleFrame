@@ -10,7 +10,7 @@ mod camera;
 #[cfg(windows)]
 mod camera_probe;
 mod capture_state;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 mod d3d12_trace;
 #[cfg(windows)]
 mod diagnostics;

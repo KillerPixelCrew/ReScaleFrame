@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: MIT
-//! Opt-in observation of native RDR2 D3D12 results. The original HRESULT and native
-//! call frames remain in the ASI's typed detour.
+//! Opt-in observation of native RDR2 D3D12 results.
 use crate::asi::{self, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
 use crate::diagnostics::path_units;
+use crate::platform::minhook::MH_EnableHook;
+use std::arch::naked_asm;
 use std::ffi::{OsString, c_void};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
-use std::slice;
+use std::ptr::{null, null_mut};
 use std::sync::{Mutex, PoisonError};
+use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 const STACK_LIMIT: usize = 24;
 const MH_ERROR_NOT_INITIALIZED: i32 = 2;
 
-#[repr(C)]
-struct Hook {
-    detour: *const c_void,
-    original: *mut *mut c_void,
-    enable: unsafe extern "C" fn(usize) -> i32,
-}
-
-const _: () = assert!(size_of::<Hook>() == 24);
+type CheckResult = unsafe extern "C" fn(i32) -> i32;
+static mut ORIGINAL: *mut c_void = null_mut();
 
 struct Trace {
     path: PathBuf,
@@ -30,14 +29,8 @@ struct Trace {
 
 static TRACE: Mutex<Option<Trace>> = Mutex::new(None);
 
-/// The native caller lends a terminated path and its typed trampoline slot.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_d3d12_trace_install(
-    target: usize,
-    image_size: u32,
-    path: *const u16,
-    hook: &Hook,
-) -> i32 {
+/// The caller lends the expected target and a terminated path.
+pub(crate) unsafe extern "C" fn install(target: usize, image_size: u32, path: *const u16) -> i32 {
     let Some(platform) = asi::platform() else {
         return MH_ERROR_NOT_INITIALIZED;
     };
@@ -45,7 +38,8 @@ unsafe extern "C" fn rsf_rdr2_d3d12_trace_install(
     if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
         return initialized;
     }
-    let created = unsafe { (platform.hook_create)(target, hook.detour, hook.original) };
+    let created =
+        unsafe { (platform.hook_create)(target, detour as *const c_void, &raw mut ORIGINAL) };
     if created != MH_OK {
         return created;
     }
@@ -56,28 +50,37 @@ unsafe extern "C" fn rsf_rdr2_d3d12_trace_install(
         path,
         image_size: image_size as usize,
     });
-    unsafe { (hook.enable)(target) }
+    unsafe { MH_EnableHook(target as _) }
 }
 
-/// The detour lends the exact caller address and at most 24 captured native stack addresses.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_d3d12_trace_record(
-    result: i32,
-    base: usize,
-    caller: usize,
-    tick: u64,
-    thread: u32,
-    stack: *const *mut c_void,
-    count: usize,
-) {
-    if result >= 0 || count > STACK_LIMIT || (count != 0 && stack.is_null()) {
-        return;
+// Read the incoming return address before a prologue changes RSP. The tail jump keeps
+// the original native frame visible to the Windows stack walker.
+#[unsafe(naked)]
+unsafe extern "C" fn detour(_: i32) -> i32 {
+    naked_asm!("mov rdx, [rsp]", "jmp {}", sym observe);
+}
+
+unsafe extern "C" fn observe(result: i32, caller: usize) -> i32 {
+    if result < 0 {
+        let mut stack = [null_mut(); STACK_LIMIT];
+        let count = unsafe {
+            RtlCaptureStackBackTrace(1, STACK_LIMIT as u32, stack.as_mut_ptr(), null_mut())
+        };
+        record(
+            result,
+            unsafe { GetModuleHandleW(null()) } as usize,
+            caller,
+            unsafe { GetTickCount64() },
+            unsafe { GetCurrentThreadId() },
+            &stack[..usize::from(count).min(STACK_LIMIT)],
+        );
     }
-    let stack = if count == 0 {
-        &[]
-    } else {
-        unsafe { slice::from_raw_parts(stack, count) }
-    };
+    // MinHook publishes the original before enabling this entry.
+    let original: CheckResult = unsafe { std::mem::transmute(ORIGINAL) };
+    unsafe { original(result) }
+}
+
+fn record(result: i32, base: usize, caller: usize, tick: u64, thread: u32, stack: &[*mut c_void]) {
     let trace = TRACE.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(trace) = trace.as_ref() else {
         return;
