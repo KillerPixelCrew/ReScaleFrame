@@ -6,13 +6,11 @@ use std::ffi::{OsString, c_char, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
-use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
     GetModuleHandleW,
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 // The native leaves contain every engine fault or foreign C++ exception (native_platform.c).
 unsafe extern "C" {
@@ -51,11 +49,7 @@ pub(crate) unsafe extern "C" fn copy(
     input: *const c_void,
     bytes: usize,
 ) -> bool {
-    let mut copied = 0;
-    !output.is_null()
-        && !input.is_null()
-        && unsafe { ReadProcessMemory(GetCurrentProcess(), input, output, bytes, &mut copied) } != 0
-        && copied == bytes
+    unsafe { rsf_game_sys::win32::read_process(input as usize, output, bytes) }
 }
 
 pub(crate) fn verify_executable() -> bool {

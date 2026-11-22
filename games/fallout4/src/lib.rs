@@ -62,14 +62,11 @@ use rsf_game_sys::{
     rsf_game_log_fn, rsf_game_plugin_api, rsf_game_probe, rsf_result,
 };
 use std::ffi::{CStr, CString, c_void};
-use std::mem::MaybeUninit;
 use std::ptr::null_mut;
-use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
     GetModuleHandleW,
 };
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 use rsf_game_sys::{
     RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED,
@@ -218,36 +215,7 @@ pub(crate) fn bind_presentation(
     Ok(result)
 }
 
-/// Plain data that every bit pattern of its size represents.
-///
-/// # Safety
-/// Implementors must accept any byte contents.
-pub(crate) unsafe trait Plain: Copy {}
-unsafe impl Plain for u8 {}
-unsafe impl Plain for i32 {}
-unsafe impl Plain for u32 {}
-unsafe impl Plain for u64 {}
-unsafe impl Plain for usize {}
-unsafe impl Plain for f32 {}
-unsafe impl<const N: usize> Plain for [u8; N] {}
-unsafe impl<const N: usize> Plain for [f32; N] {}
-
-/// A guarded engine read: the whole value or nothing, never a fault.
-pub(crate) fn read<T: Plain>(address: usize) -> Option<T> {
-    let mut value = MaybeUninit::<T>::uninit();
-    let mut copied = 0;
-    let read = unsafe {
-        ReadProcessMemory(
-            GetCurrentProcess(),
-            address as *const c_void,
-            value.as_mut_ptr().cast(),
-            size_of::<T>(),
-            &mut copied,
-        )
-    };
-    // SAFETY: the read filled every byte, and T accepts any contents.
-    (read != 0 && copied == size_of::<T>()).then(|| unsafe { value.assume_init() })
-}
+pub(crate) use rsf_game_sys::win32::{Plain, read};
 
 /// Compares an entire guarded instruction span within the caller's byte limit.
 fn matches_bytes<const N: usize>(address: usize, expected: &[u8]) -> bool {
@@ -255,17 +223,9 @@ fn matches_bytes<const N: usize>(address: usize, expected: &[u8]) -> bool {
     let Some(actual) = actual.get_mut(..expected.len()) else {
         return false;
     };
-    let mut copied = 0;
-    let read = unsafe {
-        ReadProcessMemory(
-            GetCurrentProcess(),
-            address as *const c_void,
-            actual.as_mut_ptr().cast(),
-            actual.len(),
-            &mut copied,
-        )
-    };
-    read != 0 && copied == actual.len() && &*actual == expected
+    (unsafe {
+        rsf_game_sys::win32::read_process(address, actual.as_mut_ptr().cast(), actual.len())
+    }) && *actual == *expected
 }
 
 pub(crate) fn image() -> usize {

@@ -23,12 +23,10 @@ use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleHandleExW, GetModuleHandleW,
 };
 
-use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::Memory::{
     CreateFileMappingW, FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, PAGE_READONLY,
     UnmapViewOfFile,
 };
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const PATH_LIMIT: usize = 32768;
 const MODULE_NAME: *const u16 = windows_sys::w!("CommunityShaders.dll");
@@ -54,19 +52,7 @@ unsafe extern "C" {
     );
 }
 
-unsafe extern "C" fn read(address: usize, output: *mut c_void, size: usize) -> bool {
-    let mut count = 0;
-    let result = unsafe {
-        ReadProcessMemory(
-            GetCurrentProcess(),
-            address as *const c_void,
-            output,
-            size,
-            &mut count,
-        )
-    };
-    result != 0 && count == size
-}
+use rsf_game_sys::win32::read_process as read;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {

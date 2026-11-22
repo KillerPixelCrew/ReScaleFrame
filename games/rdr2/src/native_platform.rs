@@ -10,11 +10,9 @@ use std::{
     ptr::{self, null_mut},
 };
 use windows_sys::Win32::System::{
-    Diagnostics::Debug::ReadProcessMemory,
     LibraryLoader::*,
     Memory::{PAGE_READWRITE, VirtualProtect},
     Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
-    Threading::GetCurrentProcess,
 };
 use windows_sys::core::GUID;
 
@@ -65,14 +63,7 @@ unsafe extern "C" fn blit_bridge(
     }
 }
 
-pub(crate) unsafe extern "C" fn read(address: usize, out: *mut c_void, bytes: usize) -> bool {
-    let mut count = 0;
-    address != 0
-        && !out.is_null()
-        && unsafe { ReadProcessMemory(GetCurrentProcess(), address as _, out, bytes, &mut count) }
-            != 0
-        && count == bytes
-}
+pub(crate) use rsf_game_sys::win32::read_process as read;
 
 pub(crate) unsafe extern "C" fn module_path(
     address: usize,

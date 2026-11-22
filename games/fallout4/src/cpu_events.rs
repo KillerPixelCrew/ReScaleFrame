@@ -26,7 +26,7 @@ use crate::sys::{
     RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, RSF_FALLOUT4_CPU_SCOPE_WORDS,
     rsf_fallout4_cpu_identity, rsf_fallout4_cpu_scope,
 };
-use crate::{MH_CreateHook, MH_OK, MH_RemoveHook, Plain, creation, image, message, pin, read};
+use crate::{MH_CreateHook, MH_OK, MH_RemoveHook, creation, image, message, pin, read};
 use handoff::{
     CpuIdentity, Phase, WorkerCycle, WorkerTicket, active_join_matches, invalidates_render_source,
 };
@@ -61,7 +61,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{MSG, PM_REMOVE};
 use Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
 
 // SAFETY: MSG holds integers and a window handle; every bit pattern is a value.
-unsafe impl Plain for MSG {}
 
 const WAIT_OBJECT_0: u32 = 0;
 
