@@ -718,6 +718,37 @@ rsf_frame_tap_result rsf_frame_tap_refresh(void);
    no idea where a frame ends: it watches bindings and draws, and nothing in either says so. */
 rsf_frame_tap_result rsf_frame_tap_end_frame(void);
 
+/* Optional provenance for one explicitly identified pixel constant buffer and slot. Arm or
+   replace it from the immediate render thread before the upload, and disarm there with a null
+   buffer and callback. The buffer is a live ID3D11Buffer. The tap retains it. The dedicated read-only observer receives the
+   full upload after any legacy watch edits, under the same borrowed-data lifetime as the watch.
+   Existing watch and draw callbacks and their ABI are unchanged.
+
+   This is an observation of the installed D3D11 context, not a native view or frame receipt.
+   The caller must establish that all writes and command-list execution for this buffer go
+   through the observed paths and that WRITE_DISCARD fills the buffer, and must correlate the
+   actual draw and slot with its own producer. A deferred recording, raw vtable bypass, different
+   context or unobserved mutation cannot prove upload provenance. */
+rsf_frame_tap_result rsf_frame_tap_track_pixel_constant(
+    void* context, uint32_t pixel_slot, void* buffer, rsf_frame_tap_constant_observer_fn callback,
+    void* user);
+
+#define RSF_FRAME_TAP_CONSTANT_UPLOAD 1u
+#define RSF_FRAME_TAP_CONSTANT_DRAW 2u
+#define RSF_FRAME_TAP_CONSTANT_CURRENT 3u
+
+/* Nonzero IDs identify one upload and are never reused while the module is loaded. UPLOAD works only inside its dedicated
+   callback and is tentative until the intercepted native call returns. DRAW works only inside
+   post-draw target/input/candidate/research callbacks for a forwarded direct draw that used the
+   tracked buffer's full range in the configured slot. CURRENT is for revalidation on the
+   registering render thread before later use. Equality of all three IDs is necessary.
+
+   Zero means unavailable. Whole observed updates and matching WRITE_DISCARD Map/Unmap can
+   publish. Copies, discard, unpaired mappings, command-list execution (even when bindings are
+   restored), ClearState, detected vtable rewrites, plan changes and end-frame invalidate. A
+   retained buffer address is never enough to validate its contents or identify a camera. */
+uint64_t rsf_frame_tap_constant_generation(void* context, void* buffer, uint32_t phase);
+
 rsf_frame_tap_result rsf_frame_tap_get_status(rsf_frame_tap_status* status);
 
 #ifdef __cplusplus

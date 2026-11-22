@@ -2,6 +2,7 @@
 // Shared D3D11 frame tap. The Rust detours and platform leaves use the native COM ABI.
 mod detours;
 mod platform;
+mod provenance;
 
 use crate::com_ref::ComRef;
 use crate::constant_buffer_read::{MAP_WRITE_DISCARD, Map, MappedResource, Unmap, slot};
@@ -483,6 +484,8 @@ fn restore(platform: &Platform, vtable: *mut Handle, hooks: impl Iterator<Item =
 // flush-class calls and again on the next draw, dispatch, copy or clear, discarding the hooks
 // (docs/research/d3d11-runtime-vtable-rewrite.md). Every hook checks the sentinel on the way in
 // and re-applies the whole table, recording what the runtime wrote as the new original.
+static HOOK_COVERAGE: AtomicBool = AtomicBool::new(false);
+
 fn refresh(platform: &Platform) {
     if !TAP.installed.load(Acquire) {
         return;
@@ -491,7 +494,10 @@ fn refresh(platform: &Platform) {
     let _lock = match CONTROL.try_lock() {
         Ok(lock) => lock,
         Err(TryLockError::Poisoned(error)) => error.into_inner(),
-        Err(TryLockError::WouldBlock) => return,
+        Err(TryLockError::WouldBlock) => {
+            provenance::invalidate();
+            return;
+        }
     };
     let vtable = HOOK_TABLE.vtable.load(Relaxed);
     if TAP.installed.load(Acquire)
@@ -504,7 +510,9 @@ fn refresh(platform: &Platform) {
 
 #[cold]
 fn refresh_slow(platform: &Platform, vtable: *mut Handle) {
+    provenance::invalidate();
     let mut rewritten = 0;
+    let mut complete = true;
     for (hook, replacement) in HOOK_TABLE.replacements.iter().enumerate() {
         let replacement = replacement.load(Relaxed);
         if replacement.is_null() {
@@ -514,8 +522,11 @@ fn refresh_slow(platform: &Platform, vtable: *mut Handle) {
         if unsafe { vtable.add(slot).read_volatile() } == replacement {
             continue;
         }
-        rewritten += u32::from(patch(platform, vtable, hook, replacement));
+        let restored = patch(platform, vtable, hook, replacement);
+        complete &= restored;
+        rewritten += u32::from(restored);
     }
+    HOOK_COVERAGE.store(complete, Release);
     if rewritten != 0 {
         HOOK_TABLE.refreshes.fetch_add(1, Relaxed);
     }
@@ -2092,6 +2103,7 @@ fn retire_render() {
     }
     let render = unsafe { render() };
     pending().fill(None);
+    provenance::retire();
     render.patched_blends.clear();
     invalidate_geometry(render);
     render.shadow_dirty = false;
@@ -2304,6 +2316,7 @@ unsafe fn rsf_core_frame_tap_install(
     HOOK_TABLE.refreshes.store(0, Relaxed);
     unsafe { render() }.shadow_live = false;
     TAP.verdict_epoch.fetch_add(1, Relaxed);
+    HOOK_COVERAGE.store(true, Release);
     TAP.installed.store(true, SeqCst);
     refresh_shadow_need();
     drop(retiring);
@@ -2352,6 +2365,7 @@ fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     TAP.shadow_needed.store(false, Relaxed);
     // Off before the table goes back, so a hook in flight cannot re-apply it or be admitted. Each
     // slot gets whatever the runtime last had there.
+    HOOK_COVERAGE.store(false, Release);
     TAP.installed.store(false, SeqCst);
     let restored = restore(platform, vtable, 0..HOOKS);
     TAP.divert.layer_target.store(null_mut(), Relaxed);
@@ -2484,6 +2498,7 @@ unsafe extern "C" fn rsf_frame_tap_set_plan(plan: *const rsf_frame_tap_plan) -> 
             }
         }
     }
+    provenance::invalidate();
     TAP.plan_active.store(false, SeqCst);
     unsafe {
         *TAP.plan.get() = replacement.unwrap_or(ZERO_PLAN);
@@ -2500,6 +2515,7 @@ unsafe extern "C" fn rsf_frame_tap_set_plan(plan: *const rsf_frame_tap_plan) -> 
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_frame_tap_end_frame() -> i32 {
+    provenance::invalidate();
     TAP.verdict_epoch.fetch_add(1, Relaxed);
     // No lock: the present hook runs on the render thread, which is where the gates open.
     if TAP.plan_active.load(Acquire) {
@@ -3156,6 +3172,11 @@ fn rsf_core_frame_tap_draw(
         // A before-capture Map can switch the runtime's submission vtable.
         refresh(platform);
     }
+    let serial = if !moved && !render.constant_override.active {
+        provenance::draw(context)
+    } else {
+        0
+    };
     forward();
     refresh(platform);
     if moved {
@@ -3164,7 +3185,9 @@ fn rsf_core_frame_tap_draw(
     end_constant_override(platform, render, context);
     report_geometry(platform, render, context, call, null_mut(), 0);
     consider_bound_set(platform, render, context);
-    consider_target_draw(platform, render, context, indexed, elements, false);
+    provenance::report(serial, || {
+        consider_target_draw(platform, render, context, indexed, elements, false);
+    });
 }
 
 // Draws whose arguments live in a buffer or come from stream-out, after they are forwarded.
@@ -3375,6 +3398,7 @@ unsafe fn rsf_core_frame_tap_map(
     refresh(platform);
     let admission = Admission::enter(context);
     let forward: Map = unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_MAP as usize)) };
+    let serial = provenance::destination(context, resource);
     let result = unsafe { forward(context, resource, subresource, kind, flags, mapped) };
     refresh(platform);
     if result < 0
@@ -3391,6 +3415,7 @@ unsafe fn rsf_core_frame_tap_map(
     if data.is_null() {
         return result;
     }
+    provenance::mapped(serial, data);
     let Some(watch) = *constant_watch() else {
         return result;
     };
@@ -3425,6 +3450,7 @@ unsafe fn rsf_core_frame_tap_unmap(
     let admission = Admission::enter(context);
     let forward: Unmap =
         unsafe { std::mem::transmute(original(RSF_FRAME_TAP_HOOK_UNMAP as usize)) };
+    let (serial, data) = provenance::unmapping(context, resource, subresource);
     if admission.is_some() && subresource == 0 {
         let entry = pending()
             .iter_mut()
@@ -3442,8 +3468,14 @@ unsafe fn rsf_core_frame_tap_unmap(
             }
         }
     }
+    let published = admission.is_some()
+        && !inside()
+        && unsafe { provenance::upload(serial, resource, data, None) };
     unsafe { forward(context, resource, subresource) };
     refresh(platform);
+    if published {
+        provenance::commit(serial);
+    }
 }
 
 fn rsf_core_frame_tap_dispatch(

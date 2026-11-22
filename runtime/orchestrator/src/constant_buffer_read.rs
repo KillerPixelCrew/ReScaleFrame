@@ -46,7 +46,7 @@ const _: () = {
 
 pub(super) const MAP_WRITE_DISCARD: u32 = 4;
 const MAP_READ: u32 = 1;
-const USAGE_DYNAMIC: u32 = 2;
+pub(super) const USAGE_DYNAMIC: u32 = 2;
 const USAGE_STAGING: u32 = 3;
 const BIND_CONSTANT_BUFFER: u32 = 4;
 const CPU_ACCESS_WRITE: u32 = 0x10000;
@@ -87,7 +87,7 @@ pub(super) unsafe fn make_dynamic(device: Handle, bytes: u32) -> Option<ComRef> 
     }
 }
 
-pub(super) unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32)> {
+pub(super) unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32, u32)> {
     type GetType = unsafe extern "system" fn(Handle, *mut u32);
     let get_type: GetType = unsafe { std::mem::transmute(slot(buffer, 7)) };
     let mut dimension = 0;
@@ -96,7 +96,7 @@ pub(super) unsafe fn resource_buffer_info(buffer: Handle) -> Option<(u32, u32)> 
         return None;
     }
     let desc = unsafe { buffer_desc(buffer) };
-    Some((desc.byte_width, desc.bind_flags))
+    Some((desc.byte_width, desc.bind_flags, desc.usage))
 }
 
 pub(super) unsafe fn constant_size(buffer: Handle, bytes: u32) -> bool {
@@ -157,7 +157,7 @@ unsafe extern "C" fn rsf_read_constant_buffer(
     {
         return INVALID;
     }
-    let Some((width, _)) = (unsafe { resource_buffer_info(buffer) }) else {
+    let Some((width, _, _)) = (unsafe { resource_buffer_info(buffer) }) else {
         return INVALID;
     };
     if !unsafe { same_device(device, buffer) && same_device(device, context) } {

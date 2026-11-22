@@ -89,6 +89,10 @@ unsafe extern "C" fn patch_slot(vtable: *mut Handle, index: u32, replacement: Ha
 }
 
 unsafe extern "C" fn context1(context: Handle) -> i32 {
+    i32::from(unsafe { context1_ref(context) }.is_some())
+}
+
+pub(super) unsafe fn context1_ref(context: Handle) -> Option<ComRef> {
     // IID_ID3D11DeviceContext1, d3d11_1.h.
     const IID: GUID = GUID {
         data1: 0xbb2c6faa,
@@ -100,9 +104,9 @@ unsafe extern "C" fn context1(context: Handle) -> i32 {
     let query = unsafe { method!(context, 0, Query) };
     let mut result = null_mut();
     if unsafe { query(context, &IID, &mut result) } < 0 {
-        return 0;
+        return None;
     }
-    i32::from(unsafe { ComRef::from_owned(result) }.is_some())
+    unsafe { ComRef::from_owned(result) }
 }
 
 unsafe extern "C" fn view_resource(view: Handle) -> Handle {
@@ -147,7 +151,7 @@ unsafe extern "C" fn target_format(view: Handle) -> u32 {
 }
 
 unsafe extern "C" fn buffer_width(resource: Handle, bind_flags: *mut u32) -> u32 {
-    let Some((width, flags)) =
+    let Some((width, flags, _)) =
         (unsafe { crate::constant_buffer_read::resource_buffer_info(resource) })
     else {
         return 0;
