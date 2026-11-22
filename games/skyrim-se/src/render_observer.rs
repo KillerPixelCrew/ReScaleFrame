@@ -4,7 +4,7 @@
 use crate::compatibility::render_allowed;
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::{self, Platform};
-use crate::session::{rsf_skyrim_session_accepting, rsf_skyrim_session_lease};
+use crate::session;
 use crate::{auxiliary, presentation, resolution, sampling};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
@@ -31,8 +31,7 @@ type Bind = unsafe extern "C" fn(*mut c_void, &PresentationBinding) -> i32;
 
 static OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_reset_render_observations() {
+pub(crate) fn reset_observations() {
     OBSERVATIONS.store(0, Ordering::Relaxed);
     crate::postprocess::reset_observations();
 }
@@ -54,8 +53,8 @@ fn swapchain(platform: &Platform) -> Option<usize> {
 /// The native detour holds this services record through its original renderer-end call.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_render_end_enter(retained: &mut rsf_game_host_services) {
-    let binding = unsafe { rsf_skyrim_session_lease(false, retained) };
-    if rsf_skyrim_session_accepting()
+    let binding = unsafe { session::lease(false, retained) };
+    if session::accepting()
         && render_allowed()
         && binding != 0
         && let Some(platform) = platform::get()
@@ -63,7 +62,7 @@ unsafe extern "C" fn rsf_skyrim_render_end_enter(retained: &mut rsf_game_host_se
     {
         let request = PresentationBinding {
             struct_size: size_of::<PresentationBinding>() as u32,
-            abi_version: platform.d3d11_host_abi,
+            abi_version: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
             swapchain: ptr::with_exposed_provenance_mut(chain),
         };
         let bind: Bind = unsafe { std::mem::transmute(binding) };
@@ -94,12 +93,12 @@ extern "C" fn rsf_skyrim_render_upload_enter(
         || base.checked_add(RENDERER) != Some(renderer)
         || !platform.read(base + UPLOAD_DIRTY, &mut dirty)
         || dirty[0] == 0
-        || !rsf_skyrim_session_accepting()
+        || !session::accepting()
     {
         return false;
     }
     let mut host: rsf_game_host_services = unsafe { std::mem::zeroed() };
-    unsafe { rsf_skyrim_session_lease(true, &mut host) };
+    unsafe { session::lease(true, &mut host) };
     let Some(frame) = platform.read_u32(base + NATIVE_FRAME) else {
         return false;
     };
@@ -139,7 +138,7 @@ fn pair(platform: &Platform, state: usize, offset: usize) -> Option<[u32; 2]> {
 extern "C" fn rsf_skyrim_render_jitter_observed(state: usize) {
     // A withdrawn or incompatible host still gives the resolution owner a chance to restore.
     let mut host: rsf_game_host_services = unsafe { std::mem::zeroed() };
-    unsafe { rsf_skyrim_session_lease(true, &mut host) };
+    unsafe { session::lease(true, &mut host) };
     if !render_allowed() {
         host = unsafe { std::mem::zeroed() };
     }
@@ -147,14 +146,14 @@ extern "C" fn rsf_skyrim_render_jitter_observed(state: usize) {
         return;
     };
     let _ = resolution::configure(platform, state, &host);
-    if !rsf_skyrim_session_accepting() {
+    if !session::accepting() {
         return;
     }
     let number = OBSERVATIONS.fetch_add(1, Ordering::Relaxed);
     if number >= JITTER_OBSERVATIONS {
         return;
     }
-    unsafe { rsf_skyrim_session_lease(true, &mut host) };
+    unsafe { session::lease(true, &mut host) };
     if host.log.is_none() {
         return;
     }
@@ -172,11 +171,7 @@ extern "C" fn rsf_skyrim_render_jitter_observed(state: usize) {
     ));
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_render_accept_window(
-    _user: *mut c_void,
-    window: *mut c_void,
-) -> i32 {
+pub(crate) extern "C" fn accept_window(_user: *mut c_void, window: *mut c_void) -> i32 {
     if window.is_null() {
         return 0;
     }

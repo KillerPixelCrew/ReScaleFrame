@@ -33,14 +33,12 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 const PATH_LIMIT: usize = 32768;
 const MODULE_NAME: *const u16 = windows_sys::w!("CommunityShaders.dll");
 const EXCEPTION: &CStr = c"CS initializer exception; RSF coexistence refused for this process.";
-#[cfg_attr(test, allow(dead_code))]
 const ARMED: &CStr = c"CS initializer interception armed before module load; awaiting exact-profile initialization if present.";
 const EXCLUDED: &CStr = c"CS 1.9.1 Upscaling lifecycle excluded; original configuration and other feature initialization forwarded; runtime coexistence unvalidated.";
 
-type Withdraw = unsafe extern "C" fn();
+type Withdraw = fn();
 
 unsafe extern "system" {
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cs_resolve(module: HMODULE, name: *const u8) -> FARPROC;
 }
 
@@ -71,10 +69,8 @@ unsafe extern "C" fn read(address: usize, output: *mut c_void, size: usize) -> b
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(test, allow(dead_code))]
 enum Phase {
     Unarmed,
-    #[cfg_attr(test, allow(dead_code))]
     Arming,
     Armed,
     Captured,
@@ -134,7 +130,7 @@ fn refuse(reason: &'static CStr, withdraw: bool) {
         state.withdraw
     };
     if withdraw && let Some(callback) = callback {
-        unsafe { callback() };
+        callback();
     }
 }
 
@@ -172,7 +168,6 @@ fn module_path(module: usize, buffer: &mut [u16; PATH_LIMIT]) -> Option<usize> {
     (len != 0 && len < PATH_LIMIT).then_some(len)
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn file_kind(path: &[u16]) -> u32 {
     let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
     if attributes != INVALID_FILE_ATTRIBUTES {
@@ -248,7 +243,6 @@ fn inspect_profile(path: &[u16], module: usize, read: Read) -> Option<bool> {
     Some(profile_matches(bytes, module, read))
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn installed_profile() -> Result<(), &'static CStr> {
     let mut path = [0; PATH_LIMIT];
     if let Some(module) = Module::borrow(0) {
@@ -293,7 +287,6 @@ fn create_hook(platform: &Platform, slot: usize, target: usize, detour: *const c
     true
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn arm(platform: &Platform) -> Result<(), &'static CStr> {
     installed_profile()?;
     if !rsf_windows::minhook::initialize() {
@@ -337,13 +330,11 @@ fn arm(platform: &Platform) -> Result<(), &'static CStr> {
 }
 
 #[cfg(not(test))]
-pub(crate) unsafe extern "C" fn checkpoint(refusal: *mut *const c_char, arm: bool) -> bool {
-    let withdraw: Option<Withdraw> =
-        arm.then_some(crate::session::rsf_skyrim_session_withdraw as Withdraw);
-    checkpoint_with(unsafe { &mut *refusal }, withdraw)
+pub(crate) fn checkpoint(refusal: &mut *const c_char, arm: bool) -> bool {
+    let withdraw: Option<Withdraw> = arm.then_some(crate::session::withdraw as Withdraw);
+    checkpoint_with(refusal, withdraw)
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn checkpoint_with(refusal: &mut *const c_char, withdraw: Option<Withdraw>) -> bool {
     let Some(platform) = platform::get() else {
         return false;
@@ -536,7 +527,7 @@ extern "C" fn rsf_skyrim_cs_excluded_byte(feature: usize) -> usize {
     }
 }
 
-fn render_allowed(module: usize) -> bool {
+fn module_allowed(module: usize) -> bool {
     let (phase, admitted) = {
         let state = state();
         (state.phase, state.module)
@@ -549,19 +540,17 @@ fn render_allowed(module: usize) -> bool {
         && features_inactive(module, true, read) == Some(true)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_cs_render_allowed() -> bool {
-    render_allowed(current_module())
+pub(crate) fn render_allowed() -> bool {
+    module_allowed(current_module())
 }
 
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) extern "C" fn status() -> *const c_char {
+pub(crate) fn status() -> *const c_char {
     let module = current_module();
     let (phase, reason) = {
         let state = state();
         (state.phase, state.reason)
     };
-    if phase == Phase::Excluded && !render_allowed(module) {
+    if phase == Phase::Excluded && !module_allowed(module) {
         return c"CS HDR chain preserved; float16 scene readers, PQ/HDR setup metadata and post-composite HUD-less lease still required; RSF HDR processing refused.".as_ptr();
     }
     if phase == Phase::Refused || module != 0 {

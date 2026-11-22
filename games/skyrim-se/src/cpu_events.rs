@@ -918,8 +918,7 @@ unsafe extern "C" fn rsf_skyrim_cpu_after(
     unsafe { ptr::drop_in_place(receipt) };
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_cpu_start() -> bool {
+pub(crate) fn start() -> bool {
     match cpu_hooks::start() {
         Ok(()) => true,
         Err(refusal) => {

@@ -177,7 +177,7 @@ fn apply(
     ];
     let scope = Scope {
         struct_size: size_of::<Scope>() as u32,
-        abi_version: platform.d3d11_host_abi,
+        abi_version: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
         session_id: pass.session_id,
         native_frame: pass.native_frame,
         view_key: pass.view_key,
@@ -449,7 +449,7 @@ fn describe_allocation(
     if facts.capture != 0 {
         let request = Capture {
             struct_size: size_of::<Capture>() as u32,
-            abi_version: platform.d3d11_host_abi,
+            abi_version: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
             session_id: pass.session_id,
             native_frame: pass.native_frame,
             view_key: pass.view_key,

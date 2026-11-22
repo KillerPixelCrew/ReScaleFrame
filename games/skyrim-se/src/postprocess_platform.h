@@ -30,7 +30,6 @@ RSF_SKYRIM_ASSERT(sizeof(rsf_skyrim_taa_receipt) == 24 && offsetof(rsf_skyrim_ta
 
 void rsf_skyrim_postprocess_prepare(const rsf_skyrim_cs_hdr_call*, rsf_skyrim_taa_receipt*) RSF_SKYRIM_NOEXCEPT;
 void rsf_skyrim_postprocess_restore(const rsf_skyrim_taa_receipt*) RSF_SKYRIM_NOEXCEPT;
-bool rsf_skyrim_render_cleanup_pending(void) RSF_SKYRIM_NOEXCEPT;
 #ifdef __cplusplus
 }
 #endif

@@ -12,7 +12,7 @@
 //! One lock serializes the lifecycle, the borrowed services lent to the native detours and the
 //! compatibility withdraw callback. The detours never hold it across native execution.
 use crate::creation;
-use crate::observers::{self, Control};
+use crate::observers::Control;
 use crate::platform::{self, Platform};
 use crate::plugin::{ABI_MISMATCH, INVALID_ARGUMENT, SHA256};
 use rsf_game_sys::rsf_motion_decode_params as MotionDecode;
@@ -21,38 +21,14 @@ use rsf_game_sys::{
     rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
 use rsf_game_sys::{rsf_d3d11_host_setup as HostSetup, same_upstream_identity};
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-
 const OK: rsf_result = 0;
 const NOT_READY: rsf_result = -3;
 const BUSY: rsf_result = -4;
 const NATIVE_REFUSED: rsf_result = -5;
-
-const LEAVES_VERSION: u32 = 4;
-// Subsystem operation tags also drive the injectable lifecycle fixture.
-const ADMIT_OBSERVERS: u32 = 0;
-const OBSERVERS_BUSY: u32 = 1;
-const RESET_OBSERVATIONS: u32 = 2;
-const CPU_PREPARE: u32 = 3;
-const CPU_BIND: u32 = 19;
-const CPU_START: u32 = 4;
-const CPU_QUIESCE: u32 = 5;
-const CPU_DISABLE: u32 = 6;
-const CPU_STOP: u32 = 7;
-const CPU_BUSY: u32 = 8;
-const SAMPLING_START: u32 = 9;
-const SAMPLING_QUIESCE: u32 = 10;
-const SAMPLING_STOP: u32 = 11;
-const SAMPLING_BUSY: u32 = 12;
-const PRESENTATION_START: u32 = 13;
-const PRESENTATION_QUIESCE: u32 = 14;
-const PRESENTATION_STOP: u32 = 15;
-const PRESENTATION_BUSY: u32 = 16;
-const RESOLUTION_OWNED: u32 = 17;
-const AUXILIARIES_PENDING: u32 = 18;
 
 const RUNTIME_MODULE: &str = "ReScaleFrame.Runtime.dll";
 const PATH_CAPACITY: usize = 32_768;
@@ -86,245 +62,128 @@ const START_IDENTITY: &CStr =
 const ACTIVE: &CStr = c"Experimental native-resolution SR active with native temporal fallback; FG and latency ownership remain incomplete.";
 const STOPPED: &CStr = c"Native observer stopped; no host services retained.";
 
-type AcceptWindow = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
 type SetDpi = unsafe extern "system" fn(*mut c_void) -> i32;
 
-/// The process-lived native services and injectable fixture callbacks.
-#[repr(C)]
-pub(crate) struct Leaves {
-    _struct_size: u32,
-    _version: u32,
-    platform: *const Platform,
-    observers: *const observers::Leaves,
-    admit_observers: unsafe extern "C" fn() -> i32,
-    observers_busy: unsafe extern "C" fn() -> bool,
-    cpu_prepare: unsafe extern "C" fn() -> bool,
-    cpu_start: unsafe extern "C" fn() -> bool,
-    #[cfg(test)]
-    subsystem: unsafe extern "C" fn(u32, *const rsf_game_host_services, *mut i32) -> bool,
-    checkpoint: unsafe extern "C" fn(*mut *const c_char, bool) -> bool,
-    compatibility_status: unsafe extern "C" fn() -> *const c_char,
-    log: unsafe extern "C" fn(*const rsf_game_host_services, *const c_char) -> bool,
-    host_create: unsafe extern "C" fn(
-        usize,
-        *const HostSetup,
-        *mut rsf_game_host_services,
-        *mut i32,
-    ) -> bool,
-    host_set_active: unsafe extern "C" fn(usize, *mut c_void, u32, *mut i32) -> bool,
-    accept_window: AcceptWindow,
-}
-
-const _: () = {
-    assert!(size_of::<Leaves>() == 8 + (12 + cfg!(test) as usize) * size_of::<usize>());
-};
-
-// The production record borrows only immutable process-lived tables.
+/// The subsystems the lifecycle drives, called directly. Unit tests swap in recording fakes
+/// (`tests::subsystems`).
 #[cfg(not(test))]
-unsafe impl Sync for Leaves {}
+mod subsystems {
+    use super::HostSetup;
+    use rsf_game_sys::rsf_game_host_services;
+    use std::ffi::{c_char, c_void};
 
-#[cfg(not(test))]
-unsafe extern "C" {
-    fn rsf_skyrim_host_create_guarded(
+    pub(super) use crate::compatibility::checkpoint;
+    pub(super) use crate::cpu_events::start as cpu_start;
+    pub(super) use crate::cpu_hooks::{
+        bind as cpu_bind, busy as cpu_busy, disable as cpu_disable, prepare as cpu_prepare,
+        quiesce as cpu_quiesce, stop as cpu_stop,
+    };
+    pub(super) use crate::observers::{NATIVE_LEAVES as OBSERVERS, busy as observers_busy};
+    pub(super) use crate::plugin::admit_observers;
+    pub(super) use crate::postprocess::cleanup_pending as auxiliaries_pending;
+    pub(super) use crate::presentation::{
+        busy as presentation_busy, quiesce as presentation_quiesce, start as presentation_start,
+        stop as presentation_stop,
+    };
+    pub(super) use crate::render_observer::{accept_window, reset_observations};
+    pub(super) use crate::resolution::owned as resolution_owned;
+    pub(super) use crate::sampling::{
+        busy as sampling_busy, quiesce as sampling_quiesce, start as sampling_start,
+        stop as sampling_stop,
+    };
+
+    unsafe extern "C" {
+        fn rsf_skyrim_host_create_guarded(
+            create: usize,
+            setup: *const HostSetup,
+            services: *mut rsf_game_host_services,
+            result: *mut i32,
+        ) -> bool;
+        fn rsf_skyrim_host_active_guarded(
+            activate: usize,
+            user: *mut c_void,
+            active: u32,
+            result: *mut i32,
+        ) -> bool;
+    }
+
+    /// False when the host log threw.
+    pub(super) fn log(host: &rsf_game_host_services, message: *const c_char) -> bool {
+        unsafe { crate::render_native::log_host(host, message) }
+    }
+
+    /// False when the Runtime export at `create` threw.
+    pub(super) fn host_create(
         create: usize,
-        setup: *const HostSetup,
-        services: *mut rsf_game_host_services,
-        result: *mut i32,
-    ) -> bool;
-    fn rsf_skyrim_host_active_guarded(
+        setup: &HostSetup,
+        services: &mut rsf_game_host_services,
+        result: &mut i32,
+    ) -> bool {
+        unsafe { rsf_skyrim_host_create_guarded(create, setup, services, result) }
+    }
+
+    /// False when the Runtime export at `activate` threw.
+    pub(super) fn host_set_active(
         activate: usize,
         user: *mut c_void,
         active: u32,
-        result: *mut i32,
-    ) -> bool;
+        result: &mut i32,
+    ) -> bool {
+        unsafe { rsf_skyrim_host_active_guarded(activate, user, active, result) }
+    }
 }
 
-#[cfg(not(test))]
-pub(crate) static NATIVE_LEAVES: Leaves = Leaves {
-    _struct_size: size_of::<Leaves>() as u32,
-    _version: LEAVES_VERSION,
-    platform: &platform::NATIVE_PLATFORM,
-    observers: &observers::NATIVE_LEAVES,
-    admit_observers: crate::plugin::rsf_skyrim_observer_admit,
-    observers_busy: observers::busy,
-    cpu_prepare: crate::cpu_hooks::prepare,
-    cpu_start: crate::cpu_events::rsf_skyrim_cpu_start,
-    checkpoint: crate::compatibility::checkpoint,
-    compatibility_status: crate::compatibility::status,
-    log: crate::render_native::log_host,
-    host_create: rsf_skyrim_host_create_guarded,
-    host_set_active: rsf_skyrim_host_active_guarded,
-    accept_window: crate::render_observer::rsf_skyrim_render_accept_window,
-};
+#[cfg(test)]
+use tests::subsystems;
 
 /// A native leaf threw. A lifecycle entry reports RSF_ERROR_NOT_READY as the former C++ catch did.
 struct Threw;
 
-impl Leaves {
-    fn platform(&self) -> &'static Platform {
-        // SAFETY: `publish` accepted the process-lived table.
-        unsafe { &*self.platform }
-    }
-
-    fn observers(&self) -> &observers::Leaves {
-        // SAFETY: `publish` refused a null table; it lives for the process.
-        unsafe { &*self.observers }
-    }
-
-    #[cfg(test)]
-    fn run(&self, operation: u32, services: Option<&rsf_game_host_services>) -> Result<i32, Threw> {
-        let services = services.map_or(ptr::null(), ptr::from_ref);
-        let mut value = 0;
-        if unsafe { (self.subsystem)(operation, services, &mut value) } {
-            Ok(value)
-        } else {
-            Err(Threw)
-        }
-    }
-
-    #[cfg(not(test))]
-    fn run(&self, operation: u32, services: Option<&rsf_game_host_services>) -> Result<i32, Threw> {
-        use crate::{cpu_hooks, postprocess, presentation, render_observer, resolution, sampling};
-
-        let result = match operation {
-            ADMIT_OBSERVERS => return Ok(unsafe { (self.admit_observers)() }),
-            OBSERVERS_BUSY => unsafe { (self.observers_busy)() },
-            RESET_OBSERVATIONS => {
-                render_observer::rsf_skyrim_reset_render_observations();
-                true
-            }
-            CPU_PREPARE => unsafe { (self.cpu_prepare)() },
-            CPU_BIND => services.is_some_and(|host| cpu_hooks::rsf_skyrim_cpu_rust_bind(host)),
-            CPU_START => unsafe { (self.cpu_start)() },
-            CPU_QUIESCE => {
-                cpu_hooks::rsf_skyrim_cpu_rust_quiesce();
-                true
-            }
-            CPU_DISABLE => cpu_hooks::rsf_skyrim_cpu_rust_disable(),
-            CPU_STOP => cpu_hooks::rsf_skyrim_cpu_rust_stop(),
-            CPU_BUSY => cpu_hooks::rsf_skyrim_cpu_rust_busy(),
-            SAMPLING_START => {
-                services.is_some_and(|host| sampling::rsf_skyrim_sampling_start(host))
-            }
-            SAMPLING_QUIESCE => {
-                sampling::rsf_skyrim_sampling_quiesce();
-                true
-            }
-            SAMPLING_STOP => sampling::rsf_skyrim_sampling_stop(),
-            SAMPLING_BUSY => sampling::rsf_skyrim_sampling_busy(),
-            PRESENTATION_START => {
-                services.is_some_and(|host| presentation::rsf_skyrim_presentation_start(host))
-            }
-            PRESENTATION_QUIESCE => {
-                presentation::rsf_skyrim_presentation_quiesce();
-                true
-            }
-            PRESENTATION_STOP => presentation::rsf_skyrim_presentation_stop(),
-            PRESENTATION_BUSY => presentation::rsf_skyrim_presentation_busy(),
-            RESOLUTION_OWNED => resolution::rsf_skyrim_resolution_owned(),
-            AUXILIARIES_PENDING => postprocess::rsf_skyrim_render_cleanup_pending(),
-            _ => false,
-        };
-        Ok(i32::from(result))
-    }
-
-    fn check(&self, operation: u32) -> Result<bool, Threw> {
-        Ok(self.run(operation, None)? != 0)
-    }
-
-    fn check_with(&self, operation: u32, services: &rsf_game_host_services) -> Result<bool, Threw> {
-        Ok(self.run(operation, Some(services))? != 0)
-    }
-
-    fn checkpoint(&self, reason: &mut *const c_char, arm: bool) -> bool {
-        unsafe { (self.checkpoint)(reason, arm) }
-    }
-
-    fn compatibility_status(&self) -> *const c_char {
-        unsafe { (self.compatibility_status)() }
-    }
-
-    fn log(&self, host: &rsf_game_host_services, message: *const c_char) -> Result<(), Threw> {
-        if unsafe { (self.log)(host, message) } {
-            Ok(())
-        } else {
-            Err(Threw)
-        }
-    }
-
-    /// Logs formatted text; it never contains an interior NUL.
-    fn log_text(&self, host: &rsf_game_host_services, message: &str) -> Result<(), Threw> {
-        let mut text = Vec::with_capacity(message.len() + 1);
-        text.extend_from_slice(message.as_bytes());
-        text.push(0);
-        match CStr::from_bytes_with_nul(&text) {
-            Ok(text) => self.log(host, text.as_ptr()),
-            Err(_) => Ok(()),
-        }
-    }
-
-    fn host_create(
-        &self,
-        create: usize,
-        setup: &HostSetup,
-        services: &mut rsf_game_host_services,
-    ) -> Result<rsf_result, Threw> {
-        let mut result = NOT_READY;
-        if unsafe { (self.host_create)(create, setup, services, &mut result) } {
-            Ok(result)
-        } else {
-            Err(Threw)
-        }
-    }
-
-    fn set_active(
-        &self,
-        activate: usize,
-        user: *mut c_void,
-        active: u32,
-    ) -> Result<rsf_result, Threw> {
-        let mut result = NOT_READY;
-        if unsafe { (self.host_set_active)(activate, user, active, &mut result) } {
-            Ok(result)
-        } else {
-            Err(Threw)
-        }
+fn log(host: &rsf_game_host_services, message: *const c_char) -> Result<(), Threw> {
+    if subsystems::log(host, message) {
+        Ok(())
+    } else {
+        Err(Threw)
     }
 }
 
-static LEAVES: AtomicPtr<Leaves> = AtomicPtr::new(ptr::null_mut());
+/// Logs formatted text; it never contains an interior NUL.
+fn log_text(host: &rsf_game_host_services, message: &str) -> Result<(), Threw> {
+    let mut text = Vec::with_capacity(message.len() + 1);
+    text.extend_from_slice(message.as_bytes());
+    text.push(0);
+    match CStr::from_bytes_with_nul(&text) {
+        Ok(text) => log(host, text.as_ptr()),
+        Err(_) => Ok(()),
+    }
+}
+
+fn host_create(
+    create: usize,
+    setup: &HostSetup,
+    services: &mut rsf_game_host_services,
+) -> Result<rsf_result, Threw> {
+    let mut result = NOT_READY;
+    if subsystems::host_create(create, setup, services, &mut result) {
+        Ok(result)
+    } else {
+        Err(Threw)
+    }
+}
+
+fn set_active(activate: usize, user: *mut c_void, active: u32) -> Result<rsf_result, Threw> {
+    let mut result = NOT_READY;
+    if subsystems::host_set_active(activate, user, active, &mut result) {
+        Ok(result)
+    } else {
+        Err(Threw)
+    }
+}
+
 // Read without the lock by the detours. Only start sets it, under the lock. Quiesce and the
 // withdraw callback clear it before taking the lock; every other clear happens under it.
 static ACCEPTING: AtomicBool = AtomicBool::new(false);
 static SESSION: Mutex<Session> = Mutex::new(Session::new());
-
-/// Accepts the adapter's table when its size, version and nested tables match this crate.
-///
-/// # Safety
-/// `leaves` is null or points at a table readable for at least its leading header that, when
-/// accepted, lives for the process with every entry present.
-pub(crate) unsafe fn publish(leaves: *const Leaves) -> bool {
-    if leaves.is_null() {
-        return false;
-    }
-    let header = leaves.cast::<u32>();
-    if (unsafe { header.read() } as usize) < size_of::<Leaves>()
-        || unsafe { header.add(1).read() } != LEAVES_VERSION
-    {
-        return false;
-    }
-    let table = unsafe { &*leaves };
-    if table.observers.is_null() || unsafe { platform::register(table.platform) }.is_none() {
-        return false;
-    }
-    LEAVES.store(leaves.cast_mut(), Ordering::Release);
-    true
-}
-
-fn leaves() -> Option<&'static Leaves> {
-    // Only `publish` stores, and only a process-lived table.
-    unsafe { LEAVES.load(Ordering::Acquire).as_ref() }
-}
 
 fn session() -> MutexGuard<'static, Session> {
     SESSION.lock().unwrap_or_else(PoisonError::into_inner)
@@ -342,25 +201,22 @@ fn terminated(units: &[u16], suffix: &str) -> Vec<u16> {
     path
 }
 
-/// Quiesces the CPU, sampling and presentation-input subsystems and native creation. Every step
-/// runs even when an earlier one threw; returns false when any step threw.
-fn quiesce_subsystems(leaves: &Leaves, creation_first: bool) -> bool {
+/// Quiesces the CPU, sampling and presentation-input subsystems and native creation.
+fn quiesce_subsystems(creation_first: bool) {
     if creation_first {
         creation::quiesce();
     }
-    let mut completed = true;
-    for operation in [CPU_QUIESCE, SAMPLING_QUIESCE, PRESENTATION_QUIESCE] {
-        completed &= leaves.run(operation, None).is_ok();
-    }
+    subsystems::cpu_quiesce();
+    subsystems::sampling_quiesce();
+    subsystems::presentation_quiesce();
     if !creation_first {
         creation::quiesce();
     }
-    completed
 }
 
 /// The per-monitor-v2 startup request, once per process before any observer hook exists.
-fn request_dpi(leaves: &Leaves, host: &rsf_game_host_services) -> Result<(), Threw> {
-    let platform = leaves.platform();
+fn request_dpi(host: &rsf_game_host_services) -> Result<(), Threw> {
+    let platform = &Platform;
     let user32 = platform.module_handle("user32.dll");
     let set = platform.export_address(user32, c"SetProcessDpiAwarenessContext");
     platform.set_last_error(0);
@@ -369,7 +225,7 @@ fn request_dpi(leaves: &Leaves, host: &rsf_game_host_services) -> Result<(), Thr
         set != 0 && unsafe { std::mem::transmute::<usize, SetDpi>(set)(PER_MONITOR_V2) } != 0;
     let error = if accepted { 0 } else { platform.last_error() };
     if host.log.is_some() {
-        leaves.log_text(
+        log_text(
             host,
             &format!(
                 "Skyrim DPI startup per-monitor-v2 accepted={} error={error}; window creation must use physical pixels.",
@@ -397,21 +253,21 @@ const STAGES: [Stage; 4] = [
 ];
 
 impl Stage {
-    fn start(self, leaves: &Leaves, services: &rsf_game_host_services) -> Result<bool, Threw> {
+    fn start(self, services: &rsf_game_host_services) -> bool {
         match self {
-            Self::Sampling => leaves.check_with(SAMPLING_START, services),
-            Self::Presentation => leaves.check_with(PRESENTATION_START, services),
-            Self::Cpu => leaves.check(CPU_START),
-            Self::Creation => Ok(creation::start()),
+            Self::Sampling => subsystems::sampling_start(services),
+            Self::Presentation => subsystems::presentation_start(services),
+            Self::Cpu => subsystems::cpu_start(),
+            Self::Creation => creation::start(),
         }
     }
 
     /// A stage retires only when it acknowledges cleanup.
-    fn retire(self, leaves: &Leaves) -> bool {
+    fn retire(self) -> bool {
         match self {
-            Self::Sampling => matches!(leaves.check(SAMPLING_STOP), Ok(true)),
-            Self::Presentation => matches!(leaves.check(PRESENTATION_STOP), Ok(true)),
-            Self::Cpu => matches!(leaves.check(CPU_DISABLE), Ok(true)),
+            Self::Sampling => subsystems::sampling_stop(),
+            Self::Presentation => subsystems::presentation_stop(),
+            Self::Cpu => subsystems::cpu_disable(),
             Self::Creation => creation::stop(),
         }
     }
@@ -476,27 +332,23 @@ impl Session {
         }
     }
 
-    fn suspend_host(&self, leaves: &Leaves) -> Result<rsf_result, Threw> {
+    fn suspend_host(&self) -> Result<rsf_result, Threw> {
         if self.activate != 0 && !self.bound_services.user.is_null() {
-            leaves.set_active(self.activate, self.bound_services.user, 0)
+            set_active(self.activate, self.bound_services.user, 0)
         } else {
             Ok(OK)
         }
     }
 
-    fn prepare(
-        &mut self,
-        leaves: &Leaves,
-        host: &rsf_game_host_services,
-    ) -> Result<rsf_result, Threw> {
+    fn prepare(&mut self, host: &rsf_game_host_services) -> Result<rsf_result, Threw> {
         if self.prepared
             || self.retirement_pending
-            || leaves.check(OBSERVERS_BUSY)?
-            || leaves.check(CPU_BUSY)?
+            || subsystems::observers_busy()
+            || subsystems::cpu_busy()
         {
             return Ok(BUSY);
         }
-        let admitted = leaves.run(ADMIT_OBSERVERS, None)?;
+        let admitted = subsystems::admit_observers();
         if admitted < 0 {
             return Ok(NOT_READY);
         }
@@ -504,23 +356,23 @@ impl Session {
             self.reason = OBSERVER_REFUSED.as_ptr();
             return Ok(NATIVE_REFUSED);
         }
-        if !leaves.checkpoint(&mut self.reason, true) {
-            leaves.log(host, self.reason)?;
+        if !subsystems::checkpoint(&mut self.reason, true) {
+            log(host, self.reason)?;
             return Ok(NATIVE_REFUSED);
         }
         if !self.dpi_requested {
             self.dpi_requested = true;
-            request_dpi(leaves, host)?;
+            request_dpi(host)?;
         }
-        if !self.observers.prepare(leaves.observers()) {
+        if !self.observers.prepare(&subsystems::OBSERVERS) {
             return Ok(NATIVE_REFUSED);
         }
-        if !leaves.check(CPU_PREPARE)? {
+        if !subsystems::cpu_prepare() {
             self.reason = CPU_REFUSED.as_ptr();
             return Ok(NATIVE_REFUSED);
         }
         self.services = *host;
-        let platform = leaves.platform();
+        let platform = &Platform;
         let runtime = platform.module_handle(RUNTIME_MODULE);
         let export = |name| {
             if runtime == 0 {
@@ -557,7 +409,7 @@ impl Session {
         let section = platform::wide("Rendering");
         let setup = HostSetup {
             struct_size: size_of::<HostSetup>() as u32,
-            abi_version: platform.d3d11_host_abi,
+            abi_version: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
             configuration_path: ini.as_ptr(),
             configuration_section: section.as_ptr(),
             runtime_directory: directory.as_ptr(),
@@ -586,7 +438,7 @@ impl Session {
             // The corrected shared SR transfer has device regression evidence. Runtime
             // capability and per-frame checks still gate generation and latency admission.
             presentation_bridge: PRESENTATION_BRIDGE_SCOPED,
-            accept_window: Some(leaves.accept_window),
+            accept_window: Some(subsystems::accept_window),
             presentation_user: ptr::null_mut(),
             capabilities: CAP_FG_INPUTS | CAP_INPUT_TIMELINE,
             colour_transport_default: COLOUR_TRANSPORT_NATIVE,
@@ -599,7 +451,7 @@ impl Session {
             }
             self.services = self.bound_services;
         } else {
-            let result = leaves.host_create(create, &setup, &mut self.services)?;
+            let result = host_create(create, &setup, &mut self.services)?;
             if result != OK {
                 return Ok(result);
             }
@@ -610,113 +462,101 @@ impl Session {
         let created = creation::prepare(platform, &services);
         if !created {
             self.reason = CREATION_REFUSED.as_ptr();
-            leaves.log(&services, self.reason)?;
+            log(&services, self.reason)?;
             return Ok(NATIVE_REFUSED);
         }
-        if !leaves.check_with(CPU_BIND, &services)? {
+        if !subsystems::cpu_bind(&services) {
             return Ok(NATIVE_REFUSED);
         }
-        leaves.run(RESET_OBSERVATIONS, None)?;
+        subsystems::reset_observations();
         self.prepared = true;
         self.reason = PREPARED.as_ptr();
         Ok(OK)
     }
 
-    fn refuse(&mut self, leaves: &Leaves, message: &'static CStr) -> Result<rsf_result, Threw> {
+    fn refuse(&mut self, message: &'static CStr) -> Result<rsf_result, Threw> {
         self.reason = message.as_ptr();
-        leaves.log(&self.services, self.reason)?;
+        log(&self.services, self.reason)?;
         Ok(NATIVE_REFUSED)
     }
 
-    fn rollback(&mut self, leaves: &Leaves) -> bool {
+    fn rollback(&mut self) -> bool {
         for (index, stage) in STAGES.into_iter().enumerate().rev() {
             let bit = 1 << index;
-            if self.rollback_stages & bit != 0 && stage.retire(leaves) {
+            if self.rollback_stages & bit != 0 && stage.retire() {
                 self.rollback_stages &= !bit;
             }
         }
         if self.rollback_observers {
-            self.rollback_observers = !self.observers.disable(leaves.observers(), true);
+            self.rollback_observers = !self.observers.disable(&subsystems::OBSERVERS, true);
         }
         self.rollback_stages == 0 && !self.rollback_observers
     }
 
-    fn start(&mut self, leaves: &Leaves) -> Result<rsf_result, Threw> {
+    fn start(&mut self) -> Result<rsf_result, Threw> {
         if !self.prepared {
             return Ok(NOT_READY);
         }
         if self.retirement_pending {
             return Ok(BUSY);
         }
-        if !leaves.checkpoint(&mut self.reason, false) {
-            leaves.log(&self.services, self.reason)?;
+        if !subsystems::checkpoint(&mut self.reason, false) {
+            log(&self.services, self.reason)?;
             return Ok(NATIVE_REFUSED);
         }
         if self.enabled {
-            return Ok(if rsf_skyrim_session_accepting() {
-                OK
-            } else {
-                BUSY
-            });
+            return Ok(if accepting() { OK } else { BUSY });
         }
         self.reason = START_IDENTITY.as_ptr();
-        let admitted = leaves.run(ADMIT_OBSERVERS, None)?;
+        let admitted = subsystems::admit_observers();
         if admitted < 0 {
             return Ok(NOT_READY);
         }
         if admitted == 0 {
-            leaves.log(&self.services, self.reason)?;
+            log(&self.services, self.reason)?;
             return Ok(NATIVE_REFUSED);
         }
         let services = self.services;
-        if !self.observers.start(leaves.observers(), &services) {
+        if !self.observers.start(&subsystems::OBSERVERS, &services) {
             self.rollback_observers = true;
-            let retired = self.rollback(leaves);
+            let retired = self.rollback();
             self.retirement_pending = !retired;
             return Ok(if retired { NATIVE_REFUSED } else { BUSY });
         }
         for (index, stage) in STAGES.into_iter().enumerate() {
-            let (started, threw) = match stage.start(leaves, &services) {
-                Ok(started) => (started, false),
-                Err(Threw) => (false, true),
-            };
-            if started {
+            if stage.start(&services) {
                 continue;
             }
             // Start can refuse after acquiring a subset of its hooks. Retire it too.
             self.rollback_stages = (1 << (index + 1)) - 1;
             self.rollback_observers = true;
-            let retired = self.rollback(leaves);
+            let retired = self.rollback();
             self.retirement_pending = !retired;
             if !retired {
                 return Ok(BUSY);
             }
-            if threw {
-                return Ok(NOT_READY);
-            }
-            return self.refuse(leaves, stage.refusal());
+            return self.refuse(stage.refusal());
         }
         self.enabled = true;
         if self.activate != 0 {
-            let activated = leaves.set_active(self.activate, self.services.user, 1);
+            let activated = set_active(self.activate, self.services.user, 1);
             if !matches!(activated, Ok(OK)) {
                 self.retirement_pending = true;
-                let _ = self.suspend_host(leaves);
-                let _ = quiesce_subsystems(leaves, false);
+                let _ = self.suspend_host();
+                quiesce_subsystems(false);
                 return activated;
             }
         }
         ACCEPTING.store(true, Ordering::Release);
         // Close a refusal racing start: do not republish a live engine source after the
         // compatibility callback already withdrew it on another thread.
-        if !leaves.checkpoint(&mut self.reason, false) {
+        if !subsystems::checkpoint(&mut self.reason, false) {
             ACCEPTING.store(false, Ordering::Release);
-            let suspended = self.suspend_host(leaves);
-            let quiesced = quiesce_subsystems(leaves, false);
+            let suspended = self.suspend_host();
+            quiesce_subsystems(false);
             self.retirement_pending = true;
             return match suspended {
-                Ok(OK) if quiesced => Ok(NATIVE_REFUSED),
-                Ok(OK) => Ok(NOT_READY),
+                Ok(OK) => Ok(NATIVE_REFUSED),
                 failure => failure,
             };
         }
@@ -724,55 +564,48 @@ impl Session {
         Ok(OK)
     }
 
-    /// Every step runs; a step that threw reports RSF_ERROR_NOT_READY after the rest.
-    fn quiesce(&mut self, leaves: &Leaves) -> Result<rsf_result, Threw> {
+    /// Every step runs; a host suspension that threw reports RSF_ERROR_NOT_READY after the rest.
+    fn quiesce(&mut self) -> Result<rsf_result, Threw> {
         // A start holding the lock could have published after the public entry cleared it.
         ACCEPTING.store(false, Ordering::Release);
         self.retirement_pending |= self.prepared;
-        let suspended = self.suspend_host(leaves);
-        let quiesced = quiesce_subsystems(leaves, true);
+        let suspended = self.suspend_host();
+        quiesce_subsystems(true);
         let suspended = suspended?;
         if suspended != OK {
             return Ok(suspended);
         }
-        if !quiesced {
-            return Err(Threw);
-        }
-        let busy = leaves.check(OBSERVERS_BUSY)?
-            || leaves.check(CPU_BUSY)?
-            || leaves.check(RESOLUTION_OWNED)?
-            || leaves.check(AUXILIARIES_PENDING)?
-            || leaves.check(SAMPLING_BUSY)?
-            || leaves.check(PRESENTATION_BUSY)?
+        let busy = subsystems::observers_busy()
+            || subsystems::cpu_busy()
+            || subsystems::resolution_owned()
+            || subsystems::auxiliaries_pending()
+            || subsystems::sampling_busy()
+            || subsystems::presentation_busy()
             || creation::busy();
         // The Runtime cannot call stop until quiesce succeeds. Retry failed start cleanup here.
-        Ok(if busy || !self.rollback(leaves) {
-            BUSY
-        } else {
-            OK
-        })
+        Ok(if busy || !self.rollback() { BUSY } else { OK })
     }
 
     /// Each refusal is retryable: a later stop resumes from the first stage that remains.
-    fn stop(&mut self, leaves: &Leaves) -> Result<rsf_result, Threw> {
+    fn stop(&mut self) -> Result<rsf_result, Threw> {
         ACCEPTING.store(false, Ordering::Release);
         self.retirement_pending |= self.prepared;
-        let suspended = self.suspend_host(leaves)?;
+        let suspended = self.suspend_host()?;
         if suspended != OK {
             return Ok(suspended);
         }
-        if leaves.check(RESOLUTION_OWNED)? || leaves.check(AUXILIARIES_PENDING)? {
+        if subsystems::resolution_owned() || subsystems::auxiliaries_pending() {
             return Ok(BUSY);
         }
-        if !creation::stop() || !leaves.check(PRESENTATION_STOP)? || !leaves.check(SAMPLING_STOP)? {
+        if !creation::stop() || !subsystems::presentation_stop() || !subsystems::sampling_stop() {
             return Ok(BUSY);
         }
-        let cpu_stopped = leaves.check(CPU_DISABLE)?;
-        if !self.observers.disable(leaves.observers(), false) {
+        let cpu_stopped = subsystems::cpu_disable();
+        if !self.observers.disable(&subsystems::OBSERVERS, false) {
             return Ok(BUSY);
         }
         self.enabled = false;
-        if !cpu_stopped || leaves.check(OBSERVERS_BUSY)? || !leaves.check(CPU_STOP)? {
+        if !cpu_stopped || subsystems::observers_busy() || !subsystems::cpu_stop() {
             return Ok(BUSY);
         }
         self.services = empty_services();
@@ -804,12 +637,8 @@ unsafe fn validate<T>(value: *const T) -> rsf_result {
     }
 }
 
-fn run(entry: impl FnOnce(&mut Session, &Leaves) -> Result<rsf_result, Threw>) -> rsf_result {
-    let Some(leaves) = leaves() else {
-        return NOT_READY;
-    };
-    let mut session = session();
-    entry(&mut session, leaves).unwrap_or(NOT_READY)
+fn run(entry: impl FnOnce(&mut Session) -> Result<rsf_result, Threw>) -> rsf_result {
+    entry(&mut session()).unwrap_or(NOT_READY)
 }
 
 pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {
@@ -826,7 +655,7 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
     if host.session_id == 0 {
         return INVALID_ARGUMENT;
     }
-    run(|session, leaves| session.prepare(leaves, &host))
+    run(|session| session.prepare(&host))
 }
 
 pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_result {
@@ -860,17 +689,14 @@ pub(crate) unsafe extern "C" fn status(output: *mut rsf_game_renderer_status) ->
     if valid != OK {
         return valid;
     }
-    let Some(leaves) = leaves() else {
-        return NOT_READY;
-    };
     let session = session();
     let output = unsafe { &mut *output };
     output.prepared = u32::from(session.prepared);
     output.active = u32::from(ACCEPTING.load(Ordering::Acquire));
     output.rendering_ready = 0;
     output.reason = session.reason;
-    if !leaves.platform().render_allowed() {
-        let compatibility = leaves.compatibility_status();
+    if !crate::compatibility::render_allowed() {
+        let compatibility = crate::compatibility::status();
         if !compatibility.is_null() {
             output.reason = compatibility;
         }
@@ -878,8 +704,7 @@ pub(crate) unsafe extern "C" fn status(output: *mut rsf_game_renderer_status) ->
     OK
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_session_accepting() -> bool {
+pub(crate) fn accepting() -> bool {
     ACCEPTING.load(Ordering::Acquire)
 }
 
@@ -888,11 +713,7 @@ pub(crate) extern "C" fn rsf_skyrim_session_accepting() -> bool {
 ///
 /// # Safety
 /// `out` is null or writable for one services table.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_skyrim_session_lease(
-    live: bool,
-    out: *mut rsf_game_host_services,
-) -> usize {
+pub(crate) unsafe fn lease(live: bool, out: *mut rsf_game_host_services) -> usize {
     let session = session();
     if let Some(out) = unsafe { out.as_mut() } {
         *out = if !live || ACCEPTING.load(Ordering::Relaxed) {
@@ -905,20 +726,16 @@ pub(crate) unsafe extern "C" fn rsf_skyrim_session_lease(
 }
 
 /// The compatibility withdraw callback, from any thread.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_session_withdraw() {
+pub(crate) fn withdraw() {
     let was_active = ACCEPTING.swap(false, Ordering::AcqRel);
-    let Some(leaves) = leaves() else {
-        return;
-    };
-    let _ = quiesce_subsystems(leaves, false);
+    quiesce_subsystems(false);
     // A successful start publishes the host services before accepting. A refusal while the
     // session is not accepting has no live host to suspend and must not take the lock, which a
     // lifecycle call on this thread may hold.
     if was_active {
         let session = session();
         if session.activate != 0 && !session.services.user.is_null() {
-            let _ = leaves.set_active(session.activate, session.services.user, 0);
+            let _ = set_active(session.activate, session.services.user, 0);
         }
     }
 }

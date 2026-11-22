@@ -280,11 +280,9 @@ export lookup, the `rsf_d3d11_host_setup` identity (skyrim-se, engine 1.7.104, p
 0.0142875, qualities 0x1f, native colour transport, bridge 3, `FG_INPUTS | INPUT_TIMELINE`,
 unit motion with invalid -1000), the process-lived host and its original-session check, the
 observer hook record and the start order: observers, sampling, presentation inputs, CPU events,
-native creation. `session_platform.h` lends a size- and version-checked leaf table: one guarded
-subsystem call per C++ operation, the compatibility checkpoint and status, a guarded host log,
-`GetModuleFileNameW`, guarded Runtime create and activate calls, the observer leaves and the
-window-class callback. `rsf_d3d11_host_setup` and `rsf_motion_decode_params` are mirrored by hand
-with size and offset asserts on both sides. The `rsf_skyrim_creation_*` and
+native creation. The session calls the subsystem owners directly; only the host log and the
+Runtime create and activate calls go through C exception guards. Unit tests swap the subsystems for
+recording fakes with a `cfg(test)` module (`session/tests.rs`). The `rsf_skyrim_creation_*` and
 `rsf_skyrim_observers_*` exports, `native_creation.h` and its C++ wrappers are gone; the session
 calls those Rust owners directly.
 
@@ -303,19 +301,16 @@ the racing-checkpoint close, stop's retryable order and status's compatibility o
 
 Deliberate differences, all on exception paths the former code left partial:
 
-- A start stage that throws is retired together with every earlier stage (in reverse order) and
-  the observers, then start reports `NOT_READY`. Before, the catch left them enabled.
+- The subsystem stages are Rust and cannot throw; only the guarded host and Runtime calls can.
 - Each rollback, quiesce and withdraw step runs even when an earlier one throws. A throwing
   rollback still reports `NOT_READY` without the refusal reason, as before. Quiesce now reports
   `NOT_READY` after a throw instead of terminating through `noexcept`.
 - A throwing Runtime activation in start now suspends the host and quiesces the started
   subsystems; stop retires the hooks. Before, they stayed live without accepting.
-- `rsf_skyrim_publish_api` reports `NOT_READY` for a malformed leaf table, which the compiled
-  constant never is.
 
 Checks: source comparison against the removed C++, `rustfmt --edition 2024 --check` with rustfmt
 1.11.0, `cargo metadata --locked --offline` and `git diff --check`. Two Rust regressions in
-`session/tests.rs` cover the refused and the throwing start stage; they remain unrun.
+`session/tests.rs` cover the refused start stage and a refused rollback; they remain unrun.
 
 ## Startup and CPU follow-up
 

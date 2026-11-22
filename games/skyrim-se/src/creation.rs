@@ -219,7 +219,7 @@ pub(crate) fn prepare(platform: &Platform, host: &rsf_game_host_services) -> boo
         return false;
     }
     if ORIGINAL.load(Ordering::Acquire).is_null() {
-        let Some(original) = platform.hook_create(thunk(platform), platform.create_detour) else {
+        let Some(original) = platform.hook_create(thunk(platform), platform.create_detour()) else {
             return false;
         };
         ORIGINAL.store(original, Ordering::Release);
@@ -322,13 +322,13 @@ pub(crate) fn enter(platform: &Platform, call: &mut CreationCall) {
     let entry_error = platform.last_error();
     call.scope = CreationScope {
         struct_size: size_of::<CreationScope>() as u32,
-        abi_version: platform.d3d11_host_abi,
+        abi_version: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
         window: ptr::null_mut(),
         token: 0,
     };
     call.outputs = NativeChain {
         struct_size: size_of::<NativeChain>() as u32,
-        abi_version: platform.d3d11_host_abi,
+        abi_version: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
         device: ptr::null_mut(),
         immediate_context: ptr::null_mut(),
         swapchain: ptr::null_mut(),

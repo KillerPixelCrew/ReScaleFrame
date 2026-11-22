@@ -705,8 +705,7 @@ pub(crate) fn rsf_skyrim_worker_counts(out: &mut WorkerCounts) {
     };
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_cpu_clear_proof(drained: bool) {
+pub(crate) fn clear_proof(drained: bool) {
     if drained {
         JOBS.reset();
     } else {

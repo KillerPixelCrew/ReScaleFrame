@@ -9,7 +9,6 @@
 #include "observer_platform.h"
 #include "postprocess_platform.h"
 #include "render_observer_platform.h"
-#include "session_platform.h"
 #include <rescaleframe/d3d11_host.h>
 
 #if !defined(_MSC_VER)

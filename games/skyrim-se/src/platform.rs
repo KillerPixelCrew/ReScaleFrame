@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
-//! Checked process platform and native exception boundary for the Skyrim adapter.
+//! Process platform and native exception boundary for the Skyrim adapter.
 use rsf_game_sys::rsf_game_host_services;
 pub(crate) use rsf_game_sys::{
     rsf_d3d11_creation_scope as CreationScope, rsf_d3d11_native_chain as NativeChain,
 };
-use std::ffi::{CStr, OsString, c_char, c_void};
+use std::ffi::{CStr, OsString, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleFileNameW,
@@ -16,7 +15,8 @@ use windows_sys::Win32::System::LibraryLoader::{
 };
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
 
-pub(crate) const PLATFORM_VERSION: u32 = 4;
+/// `RSF_SKYRIM_CREATION_PLATFORM_VERSION`, the native detour's call record version.
+pub(crate) const CREATION_CALL_VERSION: u32 = 4;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -52,91 +52,41 @@ pub(crate) struct CreationCall {
 
 impl CreationCall {
     pub(crate) fn valid(&self) -> bool {
-        self.struct_size as usize >= size_of::<Self>() && self.version == PLATFORM_VERSION
+        self.struct_size as usize >= size_of::<Self>() && self.version == CREATION_CALL_VERSION
     }
 }
 
-#[repr(C)]
-pub(crate) struct Platform {
-    _struct_size: u32,
-    _version: u32,
-    pub(crate) d3d11_host_abi: u32,
-    _reserved: u32,
-    read: unsafe extern "C" fn(address: usize, out: *mut c_void, size: usize) -> bool,
-    pub(crate) create_detour: *const c_void,
-    log: unsafe extern "C" fn(host: *const rsf_game_host_services, message: *const c_char),
-    creation_begin:
-        unsafe extern "C" fn(service: usize, user: *mut c_void, scope: *mut CreationScope) -> i32,
-    creation_end: unsafe extern "C" fn(
-        service: usize,
-        user: *mut c_void,
-        scope: *const CreationScope,
-        outputs: *const NativeChain,
-    ) -> i32,
-    render_allowed: unsafe extern "C" fn() -> bool,
-}
+/// The process platform: Win32 queries plus the native fault and exception boundary.
+pub(crate) struct Platform;
 
-#[cfg(not(test))]
 mod native {
-    use super::*;
-    use winapi::shared::dxgi::{DXGI_SWAP_CHAIN_DESC, IDXGIAdapter, IDXGISwapChain};
-    use winapi::shared::minwindef::{HMODULE, UINT};
-    use winapi::shared::ntdef::HRESULT;
-    use winapi::um::d3d11::{ID3D11Device, ID3D11DeviceContext};
-    use winapi::um::d3dcommon::{D3D_DRIVER_TYPE, D3D_FEATURE_LEVEL};
+    use super::{CreationScope, NativeChain};
+    use std::ffi::c_void;
 
     unsafe extern "system" {
-        fn rsf_skyrim_create_detour(
-            adapter: *mut IDXGIAdapter,
-            driver: D3D_DRIVER_TYPE,
-            software: HMODULE,
-            flags: UINT,
-            levels: *const D3D_FEATURE_LEVEL,
-            level_count: UINT,
-            sdk: UINT,
-            description: *const DXGI_SWAP_CHAIN_DESC,
-            chain: *mut *mut IDXGISwapChain,
-            device: *mut *mut ID3D11Device,
-            selected: *mut D3D_FEATURE_LEVEL,
-            context: *mut *mut ID3D11DeviceContext,
-        ) -> HRESULT;
+        // The D3D11CreateDeviceAndSwapChain detour; only its address is taken.
+        pub(super) fn rsf_skyrim_create_detour();
     }
 
     unsafe extern "C" {
-        fn rsf_skyrim_guarded_read(address: usize, out: *mut c_void, size: usize) -> bool;
-        fn rsf_skyrim_creation_begin_guarded(
+        pub(super) fn rsf_skyrim_guarded_read(
+            address: usize,
+            out: *mut c_void,
+            size: usize,
+        ) -> bool;
+        pub(super) fn rsf_skyrim_creation_begin_guarded(
             service: usize,
             user: *mut c_void,
             scope: *mut CreationScope,
         ) -> i32;
-        fn rsf_skyrim_creation_end_guarded(
+        pub(super) fn rsf_skyrim_creation_end_guarded(
             service: usize,
             user: *mut c_void,
             scope: *const CreationScope,
             outputs: *const NativeChain,
         ) -> i32;
     }
-
-    unsafe extern "C" fn log(host: *const rsf_game_host_services, message: *const c_char) {
-        unsafe { crate::render_native::log_host(host, message) };
-    }
-
-    pub(crate) static NATIVE_PLATFORM: Platform = Platform {
-        _struct_size: size_of::<Platform>() as u32,
-        _version: PLATFORM_VERSION,
-        d3d11_host_abi: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
-        _reserved: 0,
-        read: rsf_skyrim_guarded_read,
-        create_detour: rsf_skyrim_create_detour as *const c_void,
-        log,
-        creation_begin: rsf_skyrim_creation_begin_guarded,
-        creation_end: rsf_skyrim_creation_end_guarded,
-        render_allowed: crate::compatibility::render_allowed,
-    };
 }
-
-#[cfg(not(test))]
-pub(crate) use native::NATIVE_PLATFORM;
 
 const _: () = {
     assert!(size_of::<MemoryRegion>() == 32);
@@ -147,58 +97,11 @@ const _: () = {
     assert!(std::mem::offset_of!(CreationCall, owner) == 56);
     assert!(std::mem::offset_of!(CreationCall, scope) == 80);
     assert!(std::mem::offset_of!(CreationCall, outputs) == 104);
-    assert!(size_of::<Platform>() == 16 + 6 * size_of::<usize>());
-    assert!(std::mem::offset_of!(Platform, create_detour) == 16 + size_of::<usize>());
 };
 
-// The platform record is immutable and lives for the process.
-unsafe impl Sync for Platform {}
-
-static PLATFORM: AtomicPtr<Platform> = AtomicPtr::new(ptr::null_mut());
-
-/// Accepts the adapter's table when its size and version match this crate.
-///
-/// # Safety
-/// `platform` is null or points at a table readable for at least its leading header that, when
-/// accepted, lives for the process.
-pub(crate) unsafe fn inspect(platform: *const Platform) -> Option<&'static Platform> {
-    if platform.is_null() {
-        return None;
-    }
-    // Only the leading header is readable from a short or foreign table.
-    let header = platform.cast::<u32>();
-    if (unsafe { header.read() } as usize) < size_of::<Platform>()
-        || unsafe { header.add(1).read() } != PLATFORM_VERSION
-    {
-        return None;
-    }
-    Some(unsafe { &*platform })
-}
-
-/// Publishes the checked table for the cold creation detour.
-///
-/// # Safety
-/// Same contract as `inspect`.
-pub(crate) unsafe fn register(platform: *const Platform) -> Option<&'static Platform> {
-    let published = PLATFORM.load(Ordering::Acquire);
-    if !published.is_null() {
-        return (published == platform.cast_mut()).then(|| unsafe { &*published });
-    }
-    let table = unsafe { inspect(platform) }?;
-    match PLATFORM.compare_exchange(
-        ptr::null_mut(),
-        platform.cast_mut(),
-        Ordering::AcqRel,
-        Ordering::Acquire,
-    ) {
-        Ok(_) => Some(table),
-        Err(published) => (published == platform.cast_mut()).then_some(table),
-    }
-}
-
+/// The platform. Unit tests see none, so they never reach the game image.
 pub(crate) fn get() -> Option<&'static Platform> {
-    // Only `register` stores, and only a process-lived table.
-    unsafe { PLATFORM.load(Ordering::Acquire).as_ref() }
+    if cfg!(test) { None } else { Some(&Platform) }
 }
 
 /// `name` as a NUL-terminated UTF-16 string.
@@ -241,7 +144,7 @@ impl Platform {
     }
 
     pub(crate) fn read(&self, address: usize, out: &mut [u8]) -> bool {
-        unsafe { (self.read)(address, out.as_mut_ptr().cast(), out.len()) }
+        unsafe { native::rsf_skyrim_guarded_read(address, out.as_mut_ptr().cast(), out.len()) }
     }
 
     pub(crate) fn read_u32(&self, address: usize) -> Option<u32> {
@@ -330,7 +233,7 @@ impl Platform {
     }
 
     pub(crate) fn log(&self, host: &rsf_game_host_services, message: &CStr) {
-        unsafe { (self.log)(host, message.as_ptr()) }
+        unsafe { crate::render_native::log_host(host, message.as_ptr()) };
     }
 
     /// Logs formatted text; it never contains an interior NUL.
@@ -349,7 +252,7 @@ impl Platform {
         user: *mut c_void,
         scope: &mut CreationScope,
     ) -> i32 {
-        unsafe { (self.creation_begin)(service, user, scope) }
+        unsafe { native::rsf_skyrim_creation_begin_guarded(service, user, scope) }
     }
 
     pub(crate) fn creation_end(
@@ -360,11 +263,15 @@ impl Platform {
         outputs: Option<&NativeChain>,
     ) -> i32 {
         let outputs = outputs.map_or(ptr::null(), ptr::from_ref);
-        unsafe { (self.creation_end)(service, user, scope, outputs) }
+        unsafe { native::rsf_skyrim_creation_end_guarded(service, user, scope, outputs) }
+    }
+
+    pub(crate) fn create_detour(&self) -> *const c_void {
+        native::rsf_skyrim_create_detour as *const c_void
     }
 
     pub(crate) fn render_allowed(&self) -> bool {
-        unsafe { (self.render_allowed)() }
+        crate::compatibility::render_allowed()
     }
 }
 

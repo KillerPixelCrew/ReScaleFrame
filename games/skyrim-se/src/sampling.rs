@@ -79,7 +79,7 @@ impl Binding {
         }
         let mut request = Bias {
             struct_size: size_of::<Bias>() as u32,
-            abi_version: self.platform.d3d11_host_abi,
+            abi_version: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
             session_id: self.host.session_id,
             samplers: [ptr::null_mut(); SLOTS],
             slot_mask: 0,
@@ -180,8 +180,7 @@ pub(crate) fn sampling_guard() -> bool {
 }
 
 /// Lifecycle calls are serialized by the adapter session.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_sampling_start(host: &rsf_game_host_services) -> bool {
+pub(crate) fn start(host: &rsf_game_host_services) -> bool {
     let Some(platform) = platform::get() else {
         return false;
     };
@@ -211,20 +210,17 @@ pub(crate) extern "C" fn rsf_skyrim_sampling_start(host: &rsf_game_host_services
     )
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_sampling_quiesce() {
+pub(crate) fn quiesce() {
     HOOK.live.store(false, Ordering::Release);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_sampling_busy() -> bool {
+pub(crate) fn busy() -> bool {
     PENDING.load(Ordering::Acquire) || CALLS.load(Ordering::Acquire) != 0
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_sampling_stop() -> bool {
-    rsf_skyrim_sampling_quiesce();
-    if rsf_skyrim_sampling_busy() {
+pub(crate) fn stop() -> bool {
+    quiesce();
+    if busy() {
         return false;
     }
     if HOOK.original.load(Ordering::Acquire).is_null() {
@@ -234,7 +230,7 @@ pub(crate) extern "C" fn rsf_skyrim_sampling_stop() -> bool {
         return false;
     };
     let base = platform.main_module();
-    base != 0 && platform.hook_disable(base + FLUSH) && !rsf_skyrim_sampling_busy()
+    base != 0 && platform.hook_disable(base + FLUSH) && !busy()
 }
 
 unsafe extern "C" fn observe(preserve_input_layout: u8) -> usize {

@@ -21,8 +21,7 @@ pub(crate) struct Control {
     pinned: bool,
 }
 
-/// Hook operations used by the process owner and the injectable fixtures.
-#[repr(C)]
+/// Hook operations: the native MinHook leaves, or a test fake.
 pub(crate) struct Leaves {
     pub(crate) initialize: unsafe extern "C" fn() -> bool,
     pub(crate) create: unsafe extern "C" fn(u32) -> bool,
@@ -33,8 +32,6 @@ pub(crate) struct Leaves {
     pub(crate) log: unsafe extern "C" fn(*const rsf_game_host_services, *const c_char),
 }
 
-const _: () = assert!(size_of::<Leaves>() == 56);
-
 #[cfg(not(test))]
 unsafe extern "C" fn log(host: *const rsf_game_host_services, message: *const c_char) {
     unsafe { crate::render_native::log_host(host, message) };
@@ -42,12 +39,12 @@ unsafe extern "C" fn log(host: *const rsf_game_host_services, message: *const c_
 
 #[cfg(not(test))]
 pub(crate) static NATIVE_LEAVES: Leaves = Leaves {
-    initialize: rsf_skyrim_observer_initialize,
-    create: rsf_skyrim_observer_create,
-    remove: rsf_skyrim_observer_remove,
-    enable: rsf_skyrim_observer_enable,
-    disable: rsf_skyrim_observer_disable,
-    pin: rsf_skyrim_observer_pin,
+    initialize,
+    create,
+    remove,
+    enable,
+    disable,
+    pin,
     log,
 };
 
@@ -136,7 +133,7 @@ extern "C" fn rsf_skyrim_observer_leave() {
 }
 
 #[cfg(not(test))]
-pub(crate) extern "C" fn busy() -> bool {
+pub(crate) fn busy() -> bool {
     CALLS.load(Ordering::Acquire) != 0
 }
 
@@ -192,13 +189,11 @@ extern "C" fn rsf_skyrim_observer_original(index: u32) -> *mut c_void {
     ORIGINALS[index as usize].load(Ordering::Acquire)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observer_initialize() -> bool {
+extern "C" fn initialize() -> bool {
     rsf_windows::minhook::initialize()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observer_create(index: u32) -> bool {
+extern "C" fn create(index: u32) -> bool {
     let detour = DETOURS[index as usize];
     let mut original = ptr::null_mut();
     if !unsafe {
@@ -210,8 +205,7 @@ extern "C" fn rsf_skyrim_observer_create(index: u32) -> bool {
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observer_remove(index: u32) -> bool {
+extern "C" fn remove(index: u32) -> bool {
     if !unsafe { rsf_windows::minhook::remove_idempotent(target(index as usize)) } {
         return false;
     }
@@ -219,18 +213,15 @@ extern "C" fn rsf_skyrim_observer_remove(index: u32) -> bool {
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observer_enable(index: u32) -> i32 {
+extern "C" fn enable(index: u32) -> i32 {
     unsafe { rsf_windows::minhook::enable_status(target(index as usize)) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observer_disable(index: u32) -> bool {
+extern "C" fn disable(index: u32) -> bool {
     unsafe { rsf_windows::minhook::disable(target(index as usize)) }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observer_pin() -> bool {
+extern "C" fn pin() -> bool {
     let address = DETOURS[0] as usize;
     crate::platform::get().is_some_and(|platform| platform.pin_module(address) != 0)
 }

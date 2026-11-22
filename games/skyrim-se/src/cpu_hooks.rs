@@ -3,7 +3,7 @@
 //! Native detours keep the engine ABI, caller addresses and original calls on their own frames.
 
 use crate::cpu_policy::bad_screen_query;
-use crate::cpu_sources::rsf_skyrim_cpu_clear_proof;
+use crate::cpu_sources::clear_proof;
 use crate::hook_set::HookSet;
 use crate::platform::{self, Platform};
 use rsf_game_sys::rsf_game_host_services;
@@ -119,41 +119,27 @@ const INDICES: std::ops::Range<usize> = 0..HOOKS.len();
 // C++ owns the native calls and unwind receipts. Rust binds their typed addresses to the
 // checked hook order and publishes the original trampoline before enabling a detour.
 unsafe extern "C" {
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_tick(main: *mut c_void) -> i16;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_poll(manager: *mut c_void, timestep: f32) -> usize;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_render(main: *mut c_void) -> usize;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_dispatch(manager: *mut c_void, list: *mut c_void) -> i32;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_world(main: *mut c_void, output: u32, flags: u8) -> usize;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_controls(owner: *mut c_void, list: *mut c_void, source: *mut c_void)
     -> usize;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_camera_update(state: *mut c_void) -> usize;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_jobs_submit() -> u32;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_jobs_join() -> u32;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_named_poll(data: *mut c_void) -> usize;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_movement(
         actor: *mut c_void,
         timestep: f32,
         argument: *mut c_void,
         output: *mut f32,
     );
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_player_update(actor: *mut c_void, timestep: f32) -> usize;
-    #[cfg_attr(test, allow(dead_code))]
     fn rsf_skyrim_cpu_player_camera_update(camera: *mut c_void);
 }
 
-#[cfg_attr(test, allow(dead_code))]
 const DETOURS: [*const c_void; HOOKS.len()] = [
     rsf_skyrim_cpu_tick as *const c_void,
     rsf_skyrim_cpu_poll as *const c_void,
@@ -180,7 +166,6 @@ extern "C" fn rsf_skyrim_cpu_original(index: u32) -> *mut c_void {
         .map_or(ptr::null_mut(), |slot| slot.load(Ordering::Acquire))
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn qpc_frequency() -> u64 {
     let mut value: LARGE_INTEGER = unsafe { std::mem::zeroed() };
     if unsafe { QueryPerformanceFrequency(&mut value) } == 0 {
@@ -271,9 +256,7 @@ impl StartRefusal {
     }
 }
 
-#[cfg_attr(test, allow(dead_code))]
 impl Control {
-    #[cfg_attr(test, allow(dead_code))]
     fn remove_unpinned(&mut self) {
         let base = self.base;
         self.hooks.remove(INDICES, |index| {
@@ -287,9 +270,8 @@ impl Control {
         });
     }
 
-    #[cfg_attr(test, allow(dead_code))]
     fn prepare(&mut self, platform: &Platform) -> bool {
-        if active() || rsf_skyrim_cpu_rust_busy() || !self.hooks.is_disabled() {
+        if active() || busy() || !self.hooks.is_disabled() {
             return false;
         }
         let base = platform.main_module();
@@ -332,7 +314,7 @@ impl Control {
     }
 
     fn start(&mut self, platform: &Platform) -> Result<(), StartRefusal> {
-        if active() || rsf_skyrim_cpu_rust_busy() {
+        if active() || busy() {
             return Err(StartRefusal::new(c"active or entered", 0, 0));
         }
         // Disabled targets are the only ones whose live prologues can be checked.
@@ -351,7 +333,7 @@ impl Control {
         }
         admission(platform, base)?;
 
-        rsf_skyrim_cpu_clear_proof(true);
+        clear_proof(true);
         if let Err((index, status)) = self.hooks.enable(|index| unsafe {
             rsf_windows::minhook::enable_status(target(base, index) as *mut c_void)
         }) {
@@ -371,13 +353,12 @@ impl Control {
     }
 
     fn disable(&mut self) -> bool {
-        rsf_skyrim_cpu_rust_quiesce();
-        self.disable_hooks() && !rsf_skyrim_cpu_rust_busy()
+        quiesce();
+        self.disable_hooks() && !busy()
     }
 }
 
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) extern "C" fn prepare() -> bool {
+pub(crate) fn prepare() -> bool {
     let Some(platform) = platform::get() else {
         return false;
     };
@@ -387,10 +368,9 @@ pub(crate) extern "C" fn prepare() -> bool {
         .prepare(platform)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_cpu_rust_bind(host: &rsf_game_host_services) -> bool {
+pub(crate) fn bind(host: &rsf_game_host_services) -> bool {
     let control = CONTROL.lock().unwrap_or_else(PoisonError::into_inner);
-    if control.frequency == 0 || !control.hooks.is_disabled() || rsf_skyrim_cpu_rust_busy() {
+    if control.frequency == 0 || !control.hooks.is_disabled() || busy() {
         return false;
     }
     *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) = Some(Services {
@@ -408,23 +388,20 @@ pub(crate) fn start() -> Result<(), StartRefusal> {
         .start(platform)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_cpu_rust_quiesce() {
+pub(crate) fn quiesce() {
     PRODUCERS.fetch_and(ENTERED, Ordering::AcqRel);
     // Runtime closes reservations at session release. There is no engine event at quiesce.
-    rsf_skyrim_cpu_clear_proof(false);
+    clear_proof(false);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_cpu_rust_disable() -> bool {
+pub(crate) fn disable() -> bool {
     CONTROL
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .disable()
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_cpu_rust_stop() -> bool {
+pub(crate) fn stop() -> bool {
     let mut control = CONTROL.lock().unwrap_or_else(PoisonError::into_inner);
     if !control.disable() {
         return false;
@@ -443,8 +420,7 @@ pub(crate) fn active() -> bool {
     PRODUCERS.load(Ordering::Acquire) & ACTIVE != 0
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_cpu_rust_busy() -> bool {
+pub(crate) fn busy() -> bool {
     PRODUCERS.load(Ordering::Acquire) & ENTERED != 0
 }
 

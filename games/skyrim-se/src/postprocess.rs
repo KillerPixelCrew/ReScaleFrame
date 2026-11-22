@@ -7,7 +7,7 @@ use crate::layout::target_slot;
 use crate::platform::{self, Platform};
 use crate::render_inputs;
 use crate::render_native::thread;
-use crate::session::{rsf_skyrim_session_accepting, rsf_skyrim_session_lease};
+use crate::session;
 use crate::taa;
 use rsf_game_sys::rsf_game_host_services;
 use std::ptr;
@@ -32,7 +32,7 @@ static OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
 fn services() -> rsf_game_host_services {
     // The C record consists of numeric fields, raw pointers and nullable callbacks.
     let mut host = unsafe { std::mem::zeroed() };
-    unsafe { rsf_skyrim_session_lease(true, &mut host) };
+    unsafe { session::lease(true, &mut host) };
     host
 }
 
@@ -90,8 +90,7 @@ pub(crate) fn reset_observations() {
     crate::camera::render::reset_history();
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_render_cleanup_pending() -> bool {
+pub(crate) fn cleanup_pending() -> bool {
     let Some(platform) = platform::get() else {
         return crate::auxiliary::pending();
     };
@@ -115,7 +114,7 @@ extern "C" fn rsf_skyrim_postprocess_prepare(call: &HdrCall, receipt: &mut TaaRe
         return;
     }
     let mut reconstructed = false;
-    if rsf_skyrim_session_accepting()
+    if session::accepting()
         && render_allowed()
         && call.input == 1
         && call.output == 0
@@ -127,7 +126,7 @@ extern "C" fn rsf_skyrim_postprocess_prepare(call: &HdrCall, receipt: &mut TaaRe
         reconstructed =
             render_inputs::produce(platform, call.manager, &host, false).unwrap_or(false);
     }
-    if rsf_skyrim_session_accepting() {
+    if session::accepting() {
         let number = OBSERVATIONS.fetch_add(1, Ordering::Relaxed);
         if number < 16 {
             let host = services();
@@ -156,7 +155,7 @@ extern "C" fn rsf_skyrim_postprocess_restore(receipt: &TaaReceipt) {
     };
     if !restored {
         let mut retained: rsf_game_host_services = unsafe { std::mem::zeroed() };
-        unsafe { rsf_skyrim_session_lease(false, &mut retained) };
+        unsafe { session::lease(false, &mut retained) };
         platform.log(
             &retained,
             c"Skyrim native TAA restore pending after guarded restore refusal.",

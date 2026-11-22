@@ -347,7 +347,7 @@ fn use_buffer(
         };
         let request = Capture {
             struct_size: size_of::<Capture>() as u32,
-            abi_version: binding.platform.d3d11_host_abi,
+            abi_version: rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION,
             session_id: scene.pass.session_id,
             native_frame: scene.pass.native_frame,
             view_key: scene.pass.view_key,
@@ -400,9 +400,8 @@ pub(crate) fn presentation_guard() -> bool {
 }
 
 /// Lifecycle calls are serialized by the adapter session.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_presentation_start(host: &rsf_game_host_services) -> bool {
-    if rsf_skyrim_presentation_busy() {
+pub(crate) fn start(host: &rsf_game_host_services) -> bool {
+    if busy() {
         return false;
     }
     let Some(platform) = platform::get() else {
@@ -432,27 +431,24 @@ pub(crate) extern "C" fn rsf_skyrim_presentation_start(host: &rsf_game_host_serv
     )
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_presentation_quiesce() {
+pub(crate) fn quiesce() {
     HOOK.live.store(false, Ordering::Release);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_presentation_busy() -> bool {
+pub(crate) fn busy() -> bool {
     CALLS.load(Ordering::Acquire) != 0 || WINDOWS.load(Ordering::Acquire) != 0
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_skyrim_presentation_stop() -> bool {
-    rsf_skyrim_presentation_quiesce();
+pub(crate) fn stop() -> bool {
+    quiesce();
     if HOOK.original.load(Ordering::Acquire).is_null() {
-        return !rsf_skyrim_presentation_busy();
+        return !busy();
     }
     let Some(platform) = platform::get() else {
         return false;
     };
     let base = platform.main_module();
-    base != 0 && platform.hook_disable(base + DRAW_INTERFACE) && !rsf_skyrim_presentation_busy()
+    base != 0 && platform.hook_disable(base + DRAW_INTERFACE) && !busy()
 }
 
 fn enter(ui: usize, primary: &mut bool) -> *mut c_void {
