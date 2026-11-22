@@ -2,6 +2,11 @@
 // Shared D3D11 translucency hints and cloud-depth handover.
 use crate::com_ref::{self, vtable};
 use crate::d3d11_output::{SavedBindings, texture_desc};
+use crate::d3d11_output_platform::{
+    rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv,
+    rsf_d3d11_output_create_texture, rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
+    rsf_d3d11_output_unbind_targets,
+};
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::native_regions::{
     MaskTarget, Region, SourceView, compile_compute, create_constants, crop, device_identity,
@@ -11,9 +16,7 @@ use crate::sync::lock;
 use crate::sys::rsf_native_translucency_masks as Masks;
 use crate::sys::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_USAGE_DEFAULT,
-    rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv,
-    rsf_d3d11_output_create_texture, rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
-    rsf_d3d11_output_unbind_targets, rsf_d3d11_texture_desc,
+    rsf_d3d11_texture_desc,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_CLOUD_DEPTH, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
@@ -509,7 +512,7 @@ impl Owner {
         if adopt_clouds {
             self.published ^= 1;
         }
-        let format = unsafe { rsf_d3d11_output_srv_format(scene_desc.format) };
+        let format = rsf_d3d11_output_srv_format(scene_desc.format);
         if !unsafe { self.prepare_targets(region.extent, format) } {
             return;
         }
@@ -532,7 +535,7 @@ impl Owner {
             return false;
         };
         let (scene, scene_desc) = scene;
-        let scene_format = unsafe { rsf_d3d11_output_srv_format(scene_desc.format) };
+        let scene_format = rsf_d3d11_output_srv_format(scene_desc.format);
         let Some(scene_view) =
             (unsafe { SourceView::get(&mut self.scene_view, device, scene, scene_format) })
         else {
@@ -542,7 +545,7 @@ impl Owner {
             None => NONE,
             Some((_, desc)) if desc.samples != 1 || desc.layers != 1 => return false,
             Some((layer, desc)) => {
-                let format = unsafe { rsf_d3d11_output_srv_format(desc.format) };
+                let format = rsf_d3d11_output_srv_format(desc.format);
                 match unsafe { SourceView::get(&mut self.layer_view, device, layer, format) } {
                     Some(view) => view,
                     None => return false,
@@ -612,7 +615,7 @@ impl Owner {
         {
             return;
         }
-        let format = unsafe { rsf_d3d11_output_srv_format(layer_desc.format) };
+        let format = rsf_d3d11_output_srv_format(layer_desc.format);
         let Some(extent) = self.targets.as_ref().map(|targets| targets.extent) else {
             return;
         };

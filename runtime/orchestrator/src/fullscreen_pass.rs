@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref;
 use crate::d3d11_output::same_device;
+use crate::d3d11_output_platform::rsf_d3d11_output_is_immediate;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::sr_session::has_capacity;
-use crate::sys::rsf_d3d11_output_is_immediate;
 use crate::sys::{
     RSF_FULLSCREEN_PASS_ABI_VERSION as ABI, rsf_fullscreen_draw as Draw,
     rsf_fullscreen_setup as Setup,

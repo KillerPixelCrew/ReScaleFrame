@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Typed Windows leaves shared by the Rust render paths and native callers.
+//! Typed D3D11 leaves shared by the Rust render paths. The functions the orchestrator's platform tables point at keep the C calling convention.
 use crate::sys::rsf_d3d11_texture_desc as Desc;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -10,8 +10,7 @@ use windows::core::Interface;
 
 type Raw = *mut c_void;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_output_query_texture(resource: Raw) -> Raw {
+pub unsafe fn rsf_d3d11_output_query_texture(resource: Raw) -> Raw {
     unsafe { ID3D11Resource::from_raw_borrowed(&resource) }
         .and_then(|resource| resource.cast::<ID3D11Texture2D>().ok())
         .map_or(null_mut(), Interface::into_raw)
@@ -20,15 +19,13 @@ unsafe extern "C" fn rsf_d3d11_output_query_texture(resource: Raw) -> Raw {
 /// # Safety
 ///
 /// `child` is null or a live `ID3D11DeviceChild`; the caller owns the returned device.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_output_child_device(child: Raw) -> Raw {
     unsafe { ID3D11DeviceChild::from_raw_borrowed(&child) }
         .and_then(|child| unsafe { child.GetDevice().ok() })
         .map_or(null_mut(), Interface::into_raw)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_output_texture_desc(texture: Raw, desc: *mut Desc) {
+pub unsafe extern "C" fn rsf_d3d11_output_texture_desc(texture: Raw, desc: *mut Desc) {
     let mut native = D3D11_TEXTURE2D_DESC::default();
     unsafe {
         ID3D11Texture2D::from_raw_borrowed(&texture)
@@ -52,8 +49,7 @@ unsafe extern "C" fn rsf_d3d11_output_texture_desc(texture: Raw, desc: *mut Desc
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_output_create_texture(device: Raw, desc: *const Desc) -> Raw {
+pub unsafe extern "C" fn rsf_d3d11_output_create_texture(device: Raw, desc: *const Desc) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     let desc = unsafe { &*desc };
     let native = D3D11_TEXTURE2D_DESC {
@@ -78,8 +74,7 @@ unsafe extern "C" fn rsf_d3d11_output_create_texture(device: Raw, desc: *const D
     result.map_or(null_mut(), Interface::into_raw)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_output_create_srv(device: Raw, texture: Raw, format: u32) -> Raw {
+pub unsafe fn rsf_d3d11_output_create_srv(device: Raw, texture: Raw, format: u32) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     let texture = unsafe { ID3D11Resource::from_raw_borrowed(&texture).unwrap() };
     let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
@@ -104,7 +99,6 @@ unsafe extern "C" fn rsf_d3d11_output_create_srv(device: Raw, texture: Raw, form
 ///
 /// `device` must be a live `ID3D11Device` and `texture` a live resource of it; the caller owns
 /// the returned view.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_output_create_rtv(device: Raw, texture: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     let texture = unsafe { ID3D11Resource::from_raw_borrowed(&texture).unwrap() };
@@ -115,8 +109,7 @@ pub unsafe extern "C" fn rsf_d3d11_output_create_rtv(device: Raw, texture: Raw) 
     result.map_or(null_mut(), Interface::into_raw)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_d3d11_output_srv_format(format: u32) -> u32 {
+pub fn rsf_d3d11_output_srv_format(format: u32) -> u32 {
     srv_format(DXGI_FORMAT(format as i32)).0 as u32
 }
 
@@ -144,7 +137,6 @@ pub fn srv_format(format: DXGI_FORMAT) -> DXGI_FORMAT {
 /// # Safety
 ///
 /// `device` must be a live `ID3D11Device`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_output_device_ok(device: Raw) -> u32 {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device).unwrap() };
     unsafe { device.GetDeviceRemovedReason().is_ok() as u32 }
@@ -153,34 +145,29 @@ pub unsafe extern "C" fn rsf_d3d11_output_device_ok(device: Raw) -> u32 {
 /// # Safety
 ///
 /// `context` must be a live `ID3D11DeviceContext`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_output_is_immediate(context: Raw) -> u32 {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context).unwrap() };
     unsafe { (context.GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE) as u32 }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_output_clear_state(context: Raw) {
+pub unsafe fn rsf_d3d11_output_clear_state(context: Raw) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context).unwrap() };
     unsafe { context.ClearState() };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_output_unbind_targets(context: Raw) {
+pub unsafe fn rsf_d3d11_output_unbind_targets(context: Raw) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context).unwrap() };
     unsafe { context.OMSetRenderTargets(None, None::<&ID3D11DepthStencilView>) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_output_copy_resource(context: Raw, destination: Raw, source: Raw) {
+pub unsafe fn rsf_d3d11_output_copy_resource(context: Raw, destination: Raw, source: Raw) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context).unwrap() };
     let destination = unsafe { ID3D11Resource::from_raw_borrowed(&destination).unwrap() };
     let source = unsafe { ID3D11Resource::from_raw_borrowed(&source).unwrap() };
     unsafe { context.CopyResource(destination, source) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_output_copy_region(
+pub unsafe fn rsf_d3d11_output_copy_region(
     context: Raw,
     destination: Raw,
     source: Raw,

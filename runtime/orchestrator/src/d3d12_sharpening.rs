@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
+use crate::d3d11_output_platform::rsf_d3d11_output_srv_format;
 use crate::d3d11_sharpening::{Frame, rsf_sharpen11_active, rsf_sharpen11_pack};
 use crate::sharpening_policy::{FILTERS, effective_mode};
-use crate::sys::rsf_d3d11_output_srv_format;
 use crate::sys::rsf_sharpening_options as Options;
 use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};
 use std::ffi::{CStr, c_char, c_void};
@@ -230,9 +230,7 @@ fn write_descriptors(
     ];
     for (index, resource) in resources.into_iter().enumerate() {
         let format = if resource.is_some() {
-            DXGI_FORMAT(
-                unsafe { rsf_d3d11_output_srv_format(descriptions[index].Format.0 as u32) } as i32,
-            )
+            DXGI_FORMAT(rsf_d3d11_output_srv_format(descriptions[index].Format.0 as u32) as i32)
         } else {
             null_formats[index]
         };

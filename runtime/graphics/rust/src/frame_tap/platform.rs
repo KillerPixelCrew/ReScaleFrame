@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d11_output::texture_desc;
-use crate::sys::{rsf_d3d11_output_child_device, rsf_d3d11_output_query_texture};
+use crate::d3d11_output_platform::{rsf_d3d11_output_child_device, rsf_d3d11_output_query_texture};
 use windows::core::IUnknown;
 use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
 use windows_sys::core::GUID;

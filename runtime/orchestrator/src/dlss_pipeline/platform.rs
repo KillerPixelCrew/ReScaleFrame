@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d11_d3d12::borrow;
+use crate::d3d11_output_platform::{
+    rsf_d3d11_output_create_texture, rsf_d3d11_output_texture_desc,
+};
 use crate::d3d11_present::rsf_d3d11_present_host;
 use crate::d3d11_sharpening::{
     Frame as SharpenFrame, rsf_core_sharpen11_destroy, rsf_core_sharpen11_run,
@@ -13,7 +16,6 @@ use crate::motion_resolve::{
 use crate::sr_legacy::rsf_sr_legacy_create;
 use crate::sys::rsf_motion_resolve_params;
 use crate::sys::{RSF_MOTION_DECODE_ABI_VERSION, rsf_motion_decode_setup as DecodeSetup};
-use crate::sys::{rsf_d3d11_output_create_texture, rsf_d3d11_output_texture_desc};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;

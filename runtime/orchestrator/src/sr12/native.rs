@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::d3d11_output_platform::rsf_d3d11_output_srv_format;
 use crate::d3d12_host::borrow;
 use crate::frame_capture12::{self as capture, Owner as Capture};
-use crate::sys::rsf_d3d11_output_srv_format;
 use std::mem::ManuallyDrop;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
 use windows::core::Interface;

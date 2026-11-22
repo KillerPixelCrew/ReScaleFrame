@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref;
 use crate::d3d11_output::{FullscreenBlit, GraphicsCache, SavedBindings, texture_desc};
+use crate::d3d11_output_platform::{
+    rsf_d3d11_output_child_device, rsf_d3d11_output_clear_state, rsf_d3d11_output_copy_region,
+    rsf_d3d11_output_create_rtv, rsf_d3d11_output_create_texture, rsf_d3d11_output_device_ok,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_output_unbind_targets,
+};
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::native_regions::SourceView;
 use crate::sys::*;
@@ -73,7 +78,7 @@ impl Output {
         }
         let mut convert_to = None;
         if dest.format != source.format {
-            let format = unsafe { rsf_d3d11_output_srv_format(dest.format) };
+            let format = rsf_d3d11_output_srv_format(dest.format);
             if !float_colour(source.format)
                 || !float_colour(format)
                 || source.bind_flags & RSF_D3D11_BIND_SHADER_RESOURCE == 0

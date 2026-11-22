@@ -2,6 +2,7 @@
 #[cfg(not(test))]
 mod platform;
 #[cfg(not(test))]
+use crate::d3d11_output_platform::{rsf_d3d11_output_child_device, rsf_d3d11_output_is_immediate};
 use crate::{
     graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save},
     motion_decode::{rsf_motion_decode_run, rsf_motion_decode_texture},
@@ -35,11 +36,9 @@ use crate::native_translucency::rsf_native_translucency_release;
 use crate::native_window::rsf_native_window_reset;
 use crate::owned_handle::OwnedHandle;
 #[cfg(not(test))]
-use crate::sys::rsf_native_translucency_masks as Masks;
+use crate::sys::RSF_D3D11_FORMAT_RGBA16_FLOAT;
 #[cfg(not(test))]
-use crate::sys::{
-    RSF_D3D11_FORMAT_RGBA16_FLOAT, rsf_d3d11_output_child_device, rsf_d3d11_output_is_immediate,
-};
+use crate::sys::rsf_native_translucency_masks as Masks;
 #[cfg(not(test))]
 use crate::sys::{
     RSF_DLSS_PIPELINE_ABI_VERSION, rsf_dlss_pipeline_frame as Frame,

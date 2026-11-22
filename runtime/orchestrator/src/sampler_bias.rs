@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::{self, vtable};
-use crate::sys::{
+use crate::d3d11_output_platform::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_device_ok, rsf_d3d11_output_is_immediate,
 };
 use std::ffi::c_void;

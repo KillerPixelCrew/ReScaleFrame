@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::{self, vtable};
 use crate::d3d11_output::{GraphicsCache, texture_desc};
+use crate::d3d11_output_platform::{
+    rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv,
+    rsf_d3d11_output_create_texture, rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
+    rsf_d3d11_output_unbind_targets,
+};
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS, R32_TYPELESS,
 };
@@ -290,7 +295,7 @@ fn depth_constants(
         return None;
     }
     // Only these decoded UNORM formats have the required finite sample bounds.
-    let quantum = match unsafe { rsf_d3d11_output_srv_format(format) } {
+    let quantum = match rsf_d3d11_output_srv_format(format) {
         R16_UNORM => 1.0 / 65535.0,
         R24_UNORM_X8_TYPELESS => 1.0 / 16777215.0,
         _ => return None,
@@ -334,7 +339,7 @@ fn depth_constants(
 }
 
 fn mask_view_format(format: u32) -> Option<u32> {
-    let view = unsafe { rsf_d3d11_output_srv_format(format) };
+    let view = rsf_d3d11_output_srv_format(format);
     // Numeric views preserve the channel semantics of the weighted sum.
     matches!(
         view,

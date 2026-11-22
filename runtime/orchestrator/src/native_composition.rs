@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref;
 use crate::d3d11_output::{GraphicsCache, texture_desc};
+use crate::d3d11_output_platform::{
+    rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_texture,
+    rsf_d3d11_output_query_texture,
+};
 use crate::sys::{
-    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_USAGE_DEFAULT, rsf_d3d11_output_child_device,
-    rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_texture,
-    rsf_d3d11_output_query_texture, rsf_native_composition_frame as Frame,
+    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_USAGE_DEFAULT, rsf_native_composition_frame as Frame,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_UI_COMPOSITE, rsf_game_render_pass as Pass,

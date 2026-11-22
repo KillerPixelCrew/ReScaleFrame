@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! D3D11 binding snapshots, texture descriptions, device identity and the per-owner cache.
 use crate::com_ref;
-use crate::sys::{
-    rsf_d3d11_output_child_device, rsf_d3d11_output_texture_desc, rsf_d3d11_state,
-    rsf_d3d11_texture_desc,
-};
+use crate::d3d11_output_platform::{rsf_d3d11_output_child_device, rsf_d3d11_output_texture_desc};
+use crate::sys::{rsf_d3d11_state, rsf_d3d11_texture_desc};
 use std::ffi::c_void;
 use std::sync::Mutex;
 use windows::core::Interface;

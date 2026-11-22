@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref;
 use crate::d3d11_output::{FullscreenBlit, GraphicsCache, texture_desc};
+use crate::d3d11_output_platform::{
+    rsf_d3d11_output_child_device, rsf_d3d11_output_create_rtv, rsf_d3d11_output_create_texture,
+    rsf_d3d11_output_srv_format,
+};
 use crate::native_regions::SourceView;
 use crate::sys::*;
 use std::ffi::c_void;
@@ -20,7 +24,7 @@ fn exposure_input(desc: &rsf_d3d11_texture_desc) -> Option<ExposureInput> {
     if desc.format == RSF_D3D11_FORMAT_R32_FLOAT {
         return Some(ExposureInput::Scalar);
     }
-    let format = unsafe { rsf_d3d11_output_srv_format(desc.format) };
+    let format = rsf_d3d11_output_srv_format(desc.format);
     matches!(
         format,
         RSF_D3D11_FORMAT_RGBA32_FLOAT
