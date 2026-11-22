@@ -50,6 +50,42 @@ failed SR admission and wait, and window replacement. Bindings were regenerated 
 0.72.1 and formatted with the Rust 1.94.1 toolchain. Native linking, tests and device execution
 remain pending.
 
+### E02 checklist evidence
+
+| Finding | Source evidence |
+| --- | --- |
+| Reusable D3D12 status header | `control.rs` writes the current ABI and `control/tests.rs` passes the same buffer twice through `rsfg_status`. |
+| Shared packaged D3D12 paths | `sdk/game/src/vendor_paths.rs` supplies Godot's session storage and Unity's package identity. |
+| Simultaneous FG failures | `sdk/game/src/presentation_result.rs` keeps both facts and defines provider-switch precedence. The Unity and Godot fixtures both specify simultaneous failures. |
+| D3D12 latency mode and availability | The native leaf copies both from `rsf_native_latency_status_get` and `control.rs` uses that one latency snapshot for status. |
+| Completion fence before binding | `runtime.cpp` creates a candidate fence before committing COM ownership. `d3d12/tests.rs` requires repeated binding attempts while creation fails. |
+| Present recording receipt | `d3d12.rs` publishes after successful recording. The same-frame capture refusal fixture expects Present to report its unknown screen and missed SR. |
+| HUD-less slot admission | `d3d12.rs` matches the SR slot's session and source, waits on already-submitted work, and refuses the fixture's failed wait. |
+| Typed settings handoff | The extension's typed settings enter `bridge.cpp` through the same host admission and viewport scaling callbacks as the Dictionary method. |
+| Size-first ABI validation | Raw header reads in `lib.rs` reject the four-byte attach, boot and configure fixture before reading a version. |
+| Generated sharpening layout | `sdk/game/src/sharpening_abi.rs` is the type used by Godot, Unity and Runtime. |
+| Runtime CPU service and explicit Present | `native_cpu_service.h`, the Runtime graphics hosts and the paired Godot driver receipt carry CPU facts, ping requests and the admitted window's actual submission and Present scope. |
+| Auto policy delegation | The fake selectors return configured answers and record the arguments. The Runtime's own choice fixtures cover provider policy. |
+| Refused window restore | `window.rs` retains ownership per HWND and its fixture admits a replacement while the old window continues forwarding independently. |
+| Shared fixtures | `platform/fake.rs` provides versioned setup and status records and backend boot helpers. |
+
+`api.h` and `godot_platform.h` contain ABI declarations. The following first-party C++ files
+still contain implementation and remain open in the file inventory.
+
+- `extension.cpp` calls godot-cpp's `GDExtensionBinding::InitObject` and class-registration macros.
+- `effect.h` and `effect.cpp` define and implement the godot-cpp `CompositorEffect` subclass.
+  It supplies virtual dispatch, Godot references, RID-backed RenderingDevice commands and
+  the scripting Dictionary.
+- `runtime_control.h` and `runtime_control.cpp` define and implement the godot-cpp
+  `RefCounted` scripting class. It lends Godot Variants and RID values to the Rust settings
+  owner, marshals status and requests frame capture through RenderingServer.
+- `runtime.cpp` still holds the typed COM device, queue and fence leaves, DXGI and Win32
+  calls, C++ FrameCapture12 and native Runtime call records. Ten entry points now link
+  directly to their Rust definitions through the Windows export list.
+
+The C++ Godot class and capture boundaries need compatible Rust bindings or equivalent
+replacement ownership to remove the remaining native files.
+
 ## Rust control owner, first slice
 
 `ReScaleFrame.Godot.Native.dll` now links the `rsf-godot` staticlib (`native/lib.rs`) next to the
