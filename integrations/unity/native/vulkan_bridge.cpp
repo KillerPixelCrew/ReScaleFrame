@@ -556,7 +556,7 @@ VkResult present_admitted(PFN_vkQueuePresentKHR original_present, VkQueue vk_que
     // The lease is held from the lookup through the forwarded Present, also when the swapchain is
     // unknown or the index out of range and the Present is forwarded unchanged.
     rsf_unity_vulkan_present_source source{};
-    const bool found = rsf_unity_vulkan_present_begin(handle_id(info->pSwapchains[0]), info->pImageIndices[0], &source) != 0;
+    const bool found = rsf_unity_vulkan_present_begin(graphics.vk_device(), handle_id(info->pSwapchains[0]), info->pImageIndices[0], &source) != 0;
     PresentationLease lease;
     if (!found) return unchanged();
     auto* chain = static_cast<IDXGISwapChain3*>(rsf_unity_vulkan_configure_surface(source.width, source.height, &surface_ops));
@@ -602,8 +602,10 @@ VkResult present_admitted(PFN_vkQueuePresentKHR original_present, VkQueue vk_que
 } catch (...) { stop("Unity Vulkan present interception failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
 VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPresentInfoKHR* info) noexcept try
 {
-    const auto original_present = saved_proc<PFN_vkQueuePresentKHR>(RSF_UNITY_VK_PRESENT);
-    if (!original_present || !info) return VK_ERROR_INITIALIZATION_FAILED;
+    // Unlike vkGetDeviceProcAddr, the loader export accepts any queue and dispatches to
+    // its owning device. A present on a different queue must retain that native path.
+    constexpr PFN_vkQueuePresentKHR original_present = vkQueuePresentKHR;
+    if (!info) return VK_ERROR_INITIALIZATION_FAILED;
     BridgeEntry entry;
     return entry.admitted ? present_admitted(original_present, vk_queue, info) : original_present(vk_queue, info);
 } catch (...) { return VK_ERROR_DEVICE_LOST; }
@@ -653,17 +655,20 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_device(VkPhysicalDevice physical
     return static_cast<VkResult>(rsf_unity_vk_resolver_create_device(info->ppEnabledExtensionNames,
         info->enabledExtensionCount, &request, device_extensions, create_device));
 }
-// The typed lookup through the saved vkGetDeviceProcAddr; Rust chooses when and under which key.
-PFN_vkVoidFunction resolve_device_function(PFN_vkVoidFunction device_proc, void* vk_device, const char* name) noexcept
+// A device lookup is dispatched by Vulkan on the supplied device, including its layers.
+PFN_vkVoidFunction resolve_device_function(void* vk_device, const char* name) noexcept
 {
-    return reinterpret_cast<PFN_vkGetDeviceProcAddr>(device_proc)(static_cast<VkDevice>(vk_device), name);
+    return vkGetDeviceProcAddr(static_cast<VkDevice>(vk_device), name);
+}
+template <class Function> Function device_proc(uint32_t slot, VkDevice device)
+{
+    return reinterpret_cast<Function>(rsf_unity_vk_resolver_device_function(slot, device, resolve_device_function));
 }
 VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* allocator, VkSwapchainKHR* output) noexcept try
 {
-    const auto original_create_swapchain = saved_proc<PFN_vkCreateSwapchainKHR>(RSF_UNITY_VK_CREATE_SWAPCHAIN);
+    const auto original_create_swapchain = device_proc<PFN_vkCreateSwapchainKHR>(RSF_UNITY_VK_CREATE_SWAPCHAIN, vk_device);
     if (!original_create_swapchain || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
-    const auto destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(
-        rsf_unity_vk_resolver_device_function(RSF_UNITY_VK_DESTROY_SWAPCHAIN, vk_device, resolve_device_function));
+    const auto destroy = device_proc<PFN_vkDestroySwapchainKHR>(RSF_UNITY_VK_DESTROY_SWAPCHAIN, vk_device);
     if (!destroy) return original_create_swapchain(vk_device, info, allocator, output);
 
     auto request = *info; request.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -707,7 +712,7 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, co
     std::vector<uint64_t> image_ids(count), ready_ids(count);
     for (uint32_t i = 0; i < count; ++i) { image_ids[i] = handle_id(images[i]); ready_ids[i] = handle_id(present_ready[i]); }
     // A refused publication (a handle already published) rolls back like any other step.
-    if (!rsf_unity_vulkan_swapchain_register(handle_id(pending.chain), request.imageExtent.width, request.imageExtent.height,
+    if (!rsf_unity_vulkan_swapchain_register(vk_device, handle_id(pending.chain), request.imageExtent.width, request.imageExtent.height,
         image_ids.data(), ready_ids.data(), count)) return VK_ERROR_INITIALIZATION_FAILED;
     *output = pending.chain;
     pending.chain = VK_NULL_HANDLE;
@@ -719,21 +724,24 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, co
 void retire_present_ready(void* context, const uint64_t* present_ready, uint32_t count) noexcept
 {
     const auto vk_device = static_cast<VkDevice>(context);
-    vkDeviceWaitIdle(vk_device);
     for (uint32_t i = 0; i < count; ++i) vkDestroySemaphore(vk_device, from_id<VkSemaphore>(present_ready[i]), nullptr);
 }
 VKAPI_ATTR void VKAPI_CALL intercept_destroy_swapchain(VkDevice vk_device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* allocator)
 {
-    (void)rsf_unity_vulkan_swapchain_retire(handle_id(swapchain), retire_present_ready, vk_device);
-    const auto destroy = saved_proc<PFN_vkDestroySwapchainKHR>(RSF_UNITY_VK_DESTROY_SWAPCHAIN);
+    const auto wait_idle = [](void* device) noexcept -> int32_t {
+        return vkDeviceWaitIdle(static_cast<VkDevice>(device));
+    };
+    const int32_t retired = rsf_unity_vulkan_swapchain_retire(vk_device, handle_id(swapchain), wait_idle, retire_present_ready);
+    if (retired != VK_SUCCESS && retired != VK_ERROR_DEVICE_LOST)
+        stop("Unity Vulkan could not retire its present semaphores; ownership was retained.");
+    const auto destroy = device_proc<PFN_vkDestroySwapchainKHR>(RSF_UNITY_VK_DESTROY_SWAPCHAIN, vk_device);
     if (destroy) destroy(vk_device, swapchain, allocator);
 }
 
 // Rust routes each resolved name to the interceptor registered for its slot (vulkan_resolver.rs).
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_device_proc(VkDevice vk_device, const char* name)
 {
-    const auto get = saved_proc<PFN_vkGetDeviceProcAddr>(RSF_UNITY_VK_DEVICE_PROC);
-    return get && name ? rsf_unity_vk_resolver_resolve(name, get(vk_device, name), false) : nullptr;
+    return name ? rsf_unity_vk_resolver_resolve(name, vkGetDeviceProcAddr(vk_device, name), false) : nullptr;
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_instance_proc(VkInstance vk_instance, const char* name)

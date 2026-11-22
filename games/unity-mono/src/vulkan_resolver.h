@@ -26,10 +26,9 @@ PFN_vkVoidFunction rsf_unity_vk_bind_resolver(PFN_vkVoidFunction original, const
    original. A null original is returned and never saved. Unity lends name for the call. */
 PFN_vkVoidFunction rsf_unity_vk_resolver_resolve(const char* name, PFN_vkVoidFunction original, bool from_instance);
 PFN_vkVoidFunction rsf_unity_vk_resolver_original(uint32_t slot);
-/* The saved function for slot or, without one, what resolve finds through the saved
-   vkGetDeviceProcAddr under the slot's resolver key. That fallback is not saved. */
+/* Resolves the command on the supplied device without publishing a cached continuation. */
 PFN_vkVoidFunction rsf_unity_vk_resolver_device_function(uint32_t slot, void* device,
-    PFN_vkVoidFunction (*resolve)(PFN_vkVoidFunction device_proc, void* device, const char* name));
+    PFN_vkVoidFunction (*resolve)(void* device, const char* name));
 
 /* Rust owns the requested extension names, their selection and the merge. Native code borrows the
    typed request for the call; enumerate is vkEnumerateDeviceExtensionProperties on its physical

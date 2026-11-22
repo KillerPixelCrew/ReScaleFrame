@@ -71,7 +71,7 @@ type Enumerate = unsafe extern "C" fn(*mut c_void, *mut u32, *mut ExtensionPrope
 type Create =
     unsafe extern "C" fn(*mut c_void, Function, *const *const c_char, u32, *mut *mut c_void) -> i32;
 type Resolves = unsafe extern "C" fn(*mut c_void, *const c_char) -> bool;
-type ResolveDevice = unsafe extern "C" fn(Function, *mut c_void, *const c_char) -> Option<Function>;
+type ResolveDevice = unsafe extern "C" fn(*mut c_void, *const c_char) -> Option<Function>;
 
 struct Resolver {
     /// Native interceptors by slot, published with the loader's instance resolver. FORWARD has none.
@@ -138,7 +138,11 @@ impl Resolver {
         let Some(interceptor) = self.interceptors[slot] else {
             return Some(original);
         };
-        self.originals[slot] = Some(original);
+        // Device-command continuations are looked up for the dispatch owner at call time.
+        // Caching these even on an instance route would make a later device's lookup global.
+        if slot == CREATE_DEVICE as usize && from_instance {
+            self.originals[slot] = Some(original);
+        }
         Some(interceptor)
     }
 
@@ -178,22 +182,18 @@ extern "C" fn rsf_unity_vk_resolver_original(slot: u32) -> Option<Function> {
     resolver().original(slot)
 }
 
-/// The fallback lookup runs outside the lock and is returned without being saved.
+/// Look up a device command on the device supplied by its caller, outside the state mutex.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vk_resolver_device_function(
     slot: u32,
     device: *mut c_void,
     resolve: ResolveDevice,
 ) -> Option<Function> {
-    let (saved, device_proc) = {
-        let state = resolver();
-        (state.original(slot), state.original(DEVICE_PROC))
-    };
-    if saved.is_some() {
-        return saved;
+    let name = key(slot)?;
+    if device.is_null() || !matches!(slot, CREATE_SWAPCHAIN | DESTROY_SWAPCHAIN | PRESENT) {
+        return None;
     }
-    let (device_proc, name) = (device_proc?, key(slot)?);
-    unsafe { resolve(device_proc, device, name.as_ptr()) }
+    unsafe { resolve(device, name.as_ptr()) }
 }
 
 /// The recorded request short-circuits the lookups, which run in order outside the lock.
@@ -406,27 +406,30 @@ mod tests {
     }
 
     #[test]
-    fn routed_keys_save_their_original_before_interception() {
+    fn device_resolutions_keep_the_continuation_on_its_dispatch_owner() {
+        unsafe extern "C" fn lookup(device: *mut c_void, _: *const c_char) -> Option<Function> {
+            match device as usize {
+                1 => Some(loader),
+                2 => Some(other_loader),
+                _ => None,
+            }
+        }
+
         let mut state = Resolver::NEW;
         state.bind(Some(loader), &table());
-        let device_proc = state.resolve(Some(c"vkGetDeviceProcAddr"), Some(other_loader), true);
-        assert_eq!(address(device_proc), Some(interceptor as usize));
-        assert_eq!(
-            address(state.original(DEVICE_PROC)),
-            Some(other_loader as usize)
-        );
         state.resolve(Some(c"vkDestroySwapchainKHR"), Some(loader), false);
         state.resolve(Some(c"vkDestroySwapchainKHR"), Some(other_loader), false);
-        assert_eq!(
-            address(state.original(DESTROY_SWAPCHAIN)),
-            Some(other_loader as usize)
-        );
-        // A later null resolution keeps the earlier original.
-        state.resolve(Some(c"vkDestroySwapchainKHR"), None, false);
-        assert_eq!(
-            address(state.original(DESTROY_SWAPCHAIN)),
-            Some(other_loader as usize)
-        );
+        assert_eq!(address(state.original(DESTROY_SWAPCHAIN)), None);
+        for (owner, expected) in [(1, loader as Function), (2, other_loader as Function)] {
+            let continuation = unsafe {
+                rsf_unity_vk_resolver_device_function(
+                    DESTROY_SWAPCHAIN,
+                    ptr::without_provenance_mut(owner),
+                    lookup,
+                )
+            };
+            assert_eq!(address(continuation), Some(expected as usize));
+        }
     }
 
     /// A physical device whose count may grow after the first query.
@@ -540,7 +543,7 @@ mod tests {
     #[test]
     fn interop_lookups_run_in_order_and_short_circuit() {
         for (found, made) in [(0, 1), (1, 2), (2, 2)] {
-            let mut lookups = (Vec::new(), found);
+            let mut lookups: (Vec<Vec<u8>>, usize) = (Vec::new(), found);
             let device = ptr::from_mut(&mut lookups).cast();
             assert_eq!(unsafe { functions_resolve(device, resolves) }, found == 2);
             assert_eq!(lookups.0.len(), made);

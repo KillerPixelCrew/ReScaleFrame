@@ -157,12 +157,14 @@ void* rsf_unity_vulkan_surface_window(void);
 /* Publishes a complete swapchain with one present-ready semaphore per image, waiting for the lease
    to end. Zero for a null handle or array, no images or a handle already published; the caller then
    destroys what it created. */
-uint32_t rsf_unity_vulkan_swapchain_register(uint64_t chain, uint32_t width, uint32_t height,
+uint32_t rsf_unity_vulkan_swapchain_register(void* device, uint64_t chain, uint32_t width, uint32_t height,
     const uint64_t* images, const uint64_t* present_ready, uint32_t count);
-/* Waits for the lease, forgets chain and, holding the lease, hands retire its present-ready
-   semaphores to destroy. Zero, without calling retire, for an unknown chain or a null retire. */
-typedef void (*rsf_unity_vulkan_retire_fn)(void* context, const uint64_t* present_ready, uint32_t count);
-uint32_t rsf_unity_vulkan_swapchain_retire(uint64_t chain, rsf_unity_vulkan_retire_fn retire, void* context);
+/* Detaches the swapchain and retires pending semaphores for device when wait_idle proves
+   completion or reports device loss. Returns the Vulkan wait result. */
+typedef int32_t (*rsf_unity_vulkan_wait_idle_fn)(void* device);
+typedef void (*rsf_unity_vulkan_destroy_ready_fn)(void* device, const uint64_t* present_ready, uint32_t count);
+int32_t rsf_unity_vulkan_swapchain_retire(void* device, uint64_t chain,
+    rsf_unity_vulkan_wait_idle_fn wait_idle, rsf_unity_vulkan_destroy_ready_fn destroy);
 
 typedef struct rsf_unity_vulkan_present_source {
     uint64_t image;         /* VkImage at the presented index */
@@ -173,7 +175,7 @@ typedef struct rsf_unity_vulkan_present_source {
 /* Waits for and takes the lease, which the caller always ends with
    rsf_unity_vulkan_presentation_end. Non-zero, with source filled, when chain is published and
    index names one of its images. */
-uint32_t rsf_unity_vulkan_present_begin(uint64_t chain, uint32_t index, rsf_unity_vulkan_present_source* source);
+uint32_t rsf_unity_vulkan_present_begin(void* device, uint64_t chain, uint32_t index, rsf_unity_vulkan_present_source* source);
 /* Takes the lease without waiting for a surface update or queue callback. */
 uint32_t rsf_unity_vulkan_presentation_try_begin(void);
 void rsf_unity_vulkan_presentation_end(void);

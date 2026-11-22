@@ -925,7 +925,9 @@ unsafe extern "C" fn rsf_unity_vulkan_configure_surface(
 /// One intercepted Unity swapchain: its extent, its images and the present-ready semaphore the
 /// bridge created for each image. Handles are Vulkan's, kept as identity only.
 struct Swapchain {
+    device: usize,
     chain: u64,
+    detached: bool,
     width: u32,
     height: u32,
     images: Vec<u64>,
@@ -1005,10 +1007,11 @@ impl Presentation {
         if swapchain.chain == 0
             || swapchain.images.is_empty()
             || swapchain.images.len() != swapchain.present_ready.len()
-            || self
-                .swapchains
-                .iter()
-                .any(|known| known.chain == swapchain.chain)
+            || self.swapchains.iter().any(|known| {
+                !known.detached
+                    && known.device == swapchain.device
+                    && known.chain == swapchain.chain
+            })
             || self.swapchains.try_reserve(1).is_err()
         {
             return false;
@@ -1017,8 +1020,11 @@ impl Presentation {
         true
     }
 
-    fn source(&self, chain: u64, index: u32) -> Option<PresentSource> {
-        let swapchain = self.swapchains.iter().find(|known| known.chain == chain)?;
+    fn source(&self, device: usize, chain: u64, index: u32) -> Option<PresentSource> {
+        let swapchain = self
+            .swapchains
+            .iter()
+            .find(|known| !known.detached && known.device == device && known.chain == chain)?;
         let index = index as usize;
         Some(PresentSource {
             image: *swapchain.images.get(index)?,
@@ -1028,18 +1034,22 @@ impl Presentation {
         })
     }
 
-    /// Forgets the swapchain and returns its present-ready semaphores for destruction.
-    fn retire(&mut self, chain: u64) -> Option<Vec<u64>> {
-        let position = self
-            .swapchains
-            .iter()
-            .position(|known| known.chain == chain)?;
-        Some(self.swapchains.swap_remove(position).present_ready)
+    /// The native swapchain can disappear even if an idle wait fails. Its semaphores remain
+    /// owned, but it can no longer supply a present source or block reuse of its handle.
+    fn detach(&mut self, device: usize, chain: u64) {
+        for known in &mut self.swapchains {
+            if known.device == device && known.chain == chain {
+                known.detached = true;
+            }
+        }
     }
 }
 
-/// Destroys a retired swapchain's present-ready semaphores, with the presentation lease held.
-type Retire = unsafe extern "C" fn(context: *mut c_void, present_ready: *const u64, count: u32);
+/// Vulkan idle wait, followed by destruction of each detached batch on success or device loss.
+type WaitIdle = unsafe extern "C" fn(device: *mut c_void) -> i32;
+type DestroyReady = unsafe extern "C" fn(device: *mut c_void, ready: *const u64, count: u32);
+const VK_SUCCESS: i32 = 0;
+const VK_ERROR_DEVICE_LOST: i32 = -4;
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_vulkan_set_surface_window(window: *mut c_void) -> u32 {
@@ -1053,6 +1063,7 @@ extern "C" fn rsf_unity_vulkan_surface_window() -> *mut c_void {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vulkan_swapchain_register(
+    device: *mut c_void,
     chain: u64,
     width: u32,
     height: u32,
@@ -1060,7 +1071,7 @@ unsafe extern "C" fn rsf_unity_vulkan_swapchain_register(
     present_ready: *const u64,
     count: u32,
 ) -> u32 {
-    if images.is_null() || present_ready.is_null() || count == 0 {
+    if device.is_null() || images.is_null() || present_ready.is_null() || count == 0 {
         return 0;
     }
     let count = count as usize;
@@ -1075,7 +1086,9 @@ unsafe extern "C" fn rsf_unity_vulkan_swapchain_register(
     image_copy.extend_from_slice(unsafe { slice::from_raw_parts(images, count) });
     semaphore_copy.extend_from_slice(unsafe { slice::from_raw_parts(present_ready, count) });
     let swapchain = Swapchain {
+        device: device as usize,
         chain,
+        detached: false,
         width,
         height,
         images: image_copy,
@@ -1086,34 +1099,60 @@ unsafe extern "C" fn rsf_unity_vulkan_swapchain_register(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vulkan_swapchain_retire(
+    device: *mut c_void,
     chain: u64,
-    retire: Option<Retire>,
-    context: *mut c_void,
-) -> u32 {
-    let Some(retire) = retire else {
-        return 0;
-    };
-    let mut presentation = unleased();
-    let Some(present_ready) = presentation.retire(chain) else {
-        return 0;
-    };
-    presentation.leased = true;
-    drop(presentation);
-    // SAFETY: vulkan_bridge.cpp's noexcept leaf, borrowing the handles for the call.
-    unsafe { retire(context, present_ready.as_ptr(), present_ready.len() as u32) };
+    wait_idle: WaitIdle,
+    destroy: DestroyReady,
+) -> i32 {
+    let mut registry = unleased();
+    registry.detach(device as usize, chain);
+    if !registry
+        .swapchains
+        .iter()
+        .any(|known| known.device == device as usize && known.detached)
+    {
+        return VK_SUCCESS;
+    }
+    registry.leased = true;
+    drop(registry);
+
+    let result = unsafe { wait_idle(device) };
+    // Device loss permits explicit teardown. An allocation failure or any other result leaves
+    // the detached records available for a later retirement attempt on this device.
+    if matches!(result, VK_SUCCESS | VK_ERROR_DEVICE_LOST) {
+        loop {
+            let retired = {
+                let mut registry = presentation();
+                registry
+                    .swapchains
+                    .iter()
+                    .position(|known| known.device == device as usize && known.detached)
+                    .map(|index| registry.swapchains.swap_remove(index))
+            };
+            let Some(retired) = retired else { break };
+            unsafe {
+                destroy(
+                    device,
+                    retired.present_ready.as_ptr(),
+                    retired.present_ready.len() as u32,
+                )
+            };
+        }
+    }
     end_lease();
-    1
+    result
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vulkan_present_begin(
+    device: *mut c_void,
     chain: u64,
     index: u32,
     source: *mut PresentSource,
 ) -> u32 {
     let mut presentation = unleased();
     presentation.leased = true;
-    let Some(found) = presentation.source(chain, index) else {
+    let Some(found) = presentation.source(device as usize, chain, index) else {
         return 0;
     };
     if source.is_null() {
@@ -1429,7 +1468,9 @@ mod tests {
 
     fn swapchain(chain: u64, count: u64) -> Swapchain {
         Swapchain {
+            device: 1,
             chain,
+            detached: false,
             width: 640,
             height: 360,
             images: (1..=count).map(|image| chain * 100 + image).collect(),
@@ -1448,7 +1489,7 @@ mod tests {
         assert!(presentation.register(swapchain(3, 2)));
         assert!(!presentation.register(swapchain(3, 3)));
         assert_eq!(
-            presentation.source(3, 1),
+            presentation.source(1, 3, 1),
             Some(PresentSource {
                 image: 302,
                 present_ready: 3002,
@@ -1456,11 +1497,10 @@ mod tests {
                 height: 360,
             })
         );
-        assert!(presentation.source(3, 2).is_none());
-        assert!(presentation.source(4, 0).is_none());
-        assert_eq!(presentation.retire(3), Some(vec![3001, 3002]));
-        assert!(presentation.retire(3).is_none());
-        assert!(presentation.source(3, 0).is_none());
+        assert!(presentation.source(1, 3, 2).is_none());
+        assert!(presentation.source(1, 4, 0).is_none());
+        presentation.detach(1, 3);
+        assert!(presentation.source(1, 3, 0).is_none());
     }
 
     #[test]
@@ -1489,20 +1529,31 @@ mod tests {
     // The only test that touches the process-wide presentation.
     #[test]
     fn the_presentation_lease_is_exclusive() {
+        let device = ptr::without_provenance_mut(1);
         let (images, ready) = ([71, 72], [81, 82]);
         assert_eq!(
             unsafe {
-                rsf_unity_vulkan_swapchain_register(7, 4, 2, images.as_ptr(), ready.as_ptr(), 2)
+                rsf_unity_vulkan_swapchain_register(
+                    device,
+                    7,
+                    4,
+                    2,
+                    images.as_ptr(),
+                    ready.as_ptr(),
+                    2,
+                )
             },
             1
         );
         assert_eq!(
-            unsafe { rsf_unity_vulkan_swapchain_register(8, 4, 2, ptr::null(), ready.as_ptr(), 2) },
+            unsafe {
+                rsf_unity_vulkan_swapchain_register(device, 8, 4, 2, ptr::null(), ready.as_ptr(), 2)
+            },
             0
         );
         let mut source = PresentSource::default();
         assert_eq!(
-            unsafe { rsf_unity_vulkan_present_begin(7, 1, &mut source) },
+            unsafe { rsf_unity_vulkan_present_begin(device, 7, 1, &mut source) },
             1
         );
         assert_eq!((source.image, source.present_ready), (72, 82));
@@ -1510,26 +1561,30 @@ mod tests {
         rsf_unity_vulkan_presentation_end();
         // A miss still holds the lease: the C++ forwards the present under it.
         assert_eq!(
-            unsafe { rsf_unity_vulkan_present_begin(7, 2, &mut source) },
+            unsafe { rsf_unity_vulkan_present_begin(device, 7, 2, &mut source) },
             0
         );
         assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 0);
         rsf_unity_vulkan_presentation_end();
         assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 1);
         rsf_unity_vulkan_presentation_end();
+        unsafe extern "C" fn failed(_: *mut c_void) -> i32 {
+            -1
+        }
+        unsafe extern "C" fn lost(_: *mut c_void) -> i32 {
+            VK_ERROR_DEVICE_LOST
+        }
         assert_eq!(
-            unsafe { rsf_unity_vulkan_swapchain_retire(7, None, ptr::null_mut()) },
-            0
+            unsafe { rsf_unity_vulkan_swapchain_retire(device, 7, failed, retire) },
+            -1
         );
+        assert!(RETIRED.lock().unwrap().0.is_empty());
+        assert!(presentation().source(1, 7, 1).is_none());
         assert_eq!(
-            unsafe { rsf_unity_vulkan_swapchain_retire(7, Some(retire), ptr::null_mut()) },
-            1
+            unsafe { rsf_unity_vulkan_swapchain_retire(device, 7, lost, retire) },
+            VK_ERROR_DEVICE_LOST
         );
         assert_eq!(*RETIRED.lock().unwrap(), (vec![81, 82], true));
-        assert_eq!(
-            unsafe { rsf_unity_vulkan_swapchain_retire(7, Some(retire), ptr::null_mut()) },
-            0
-        );
         assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 1);
         rsf_unity_vulkan_presentation_end();
     }
