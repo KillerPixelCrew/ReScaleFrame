@@ -234,3 +234,40 @@ same-allocation reuse. PORT line 1754 remains open.
 Validation is source-only. Strict MinGW C11 syntax passed for the bridge.
 Targeted bindgen reproduction, pinned formatting, locked offline Cargo metadata
 and Git whitespace checks cover this change. Runtime behavior remains unverified.
+
+## Portable scope and view fixture boundaries at 6c935471
+
+`ac7_scene_color.h` and `ac7_scope_owner.h` explicitly include their C
+standard types. The contact-shadow header now declares its callback and
+32-bit return contract in C11. Bindgen supplies the callback and result values
+to Rust. The native shader factory still borrows the rewritten bytes only
+during its call, and the existing DXBC, digest and operand guards remain in
+force. An absent factory callback refuses a matched rewrite.
+
+The scope create functions now have C bodies in `render_scope_entry.c`.
+`render_scope.cpp` provides only the three C++ exception-catching leaves for
+notification, lease resolution and lease release. Rust still owns the private
+RHI command markers, admission, execution and retirement. The platform's SEH
+reader and native renderer hook bodies stay at their existing entry points.
+
+The scope fixture has a C launcher and constructs public scope records using
+the C header. Rust drives the native list ABI, saves Next before each execute,
+resets the list and checks the original results. The fixture still uses real
+C++ throwing pass, resolve and release callbacks through the production C++
+leaves. Its 105/0 notification sequence, per-marker resolution, release
+counts, callback unload refusal and quiescent destruction checks remain.
+
+The view fixture's C launcher keeps the no-argument null ABI check. With one
+directory argument it lends the narrow CRT path to the optional Rust probe.
+The file leaf still reads the first 4096 bytes of each numbered capture
+(`capture00_cb4096.bin` through `capture99_cb4096.bin`) and skips missing
+and short reads. Rust handles decoding, reporting, half-pixel jitter and
+matrix-inverse checks. The optional probe still exits 2 when no full buffer
+was read, 1 when validation fails, and 0 otherwise.
+
+The fixture CTest names stay the same. The prior compatibility camera candidate
+and native-colour seed paths remain in use. The native scene/view/family
+producer gap recorded in the [G02 provenance audit](ac7-frame-tap-constant-provenance.md)
+keeps the camera finding open. Checks covered focused C11/C++ syntax, generated
+ABI layouts, pinned Rust formatting, locked offline metadata and source review.
+Linking, fixture execution and game validation remain pending.

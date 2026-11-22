@@ -20,8 +20,8 @@ add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 # src/ac7_sites.h with its native leaves, so the Rust archive follows the render scope
 # on the link line. Only this DLL and the native graph fixture pull native_renderer.cpp.
 # The crate also owns the queued render scopes (src/render_scope.rs) and exports
-# ac7_render_scope.h except its two create calls, which render_scope.cpp keeps to lend its
-# exception leaves (src/ac7_scope_owner.h). Every target that calls that header links
+# ac7_render_scope.h except its two C create calls, which pass the C++ exception leaves
+# from render_scope.cpp (src/ac7_scope_owner.h). Every target that calls that header links
 # rsf_ac7_rust after rsf_ac7_render_scope: this DLL and the render scope, D3D11 present bridge and
 # native graph fixtures. The carriers use the crate through AC7View without pulling render_scope.cpp.
 add_library(rsf_game_ac7 SHARED src/plugin.c)
@@ -58,7 +58,7 @@ target_link_libraries(rsf_ac7_motion_capture INTERFACE
     rsf_ac7_rust ReScaleFrame::Graphics)
 add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
-add_library(rsf_ac7_render_scope STATIC src/render_scope.cpp src/native_renderer.cpp)
+add_library(rsf_ac7_render_scope STATIC src/render_scope_entry.c src/render_scope.cpp src/native_renderer.cpp)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
 target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_view rsf_ac7_memory rsf_windows_input_facts minhook rsf_build_options ReScaleFrame::RuntimeCommon)
 # The shader compiler is available without linking the Graphics library.

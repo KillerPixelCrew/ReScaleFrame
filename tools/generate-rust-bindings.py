@@ -396,6 +396,10 @@ generate("games/ac7/src/scope_abi.rs", "games/ac7/src/ac7_scope_owner.h",
          ["-Isdk/game/include", "-Igames/ac7/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};"])
+generate("games/ac7/src/contact_shadow_abi.rs", "games/ac7/src/contact_shadow.h",
+         "rsf_ac7_contact_shader_fn", "RSF_AC7_CONTACT_.*", [])
+generate("tests/ac7_render_scope_fixture_abi.rs", "tests/ac7_render_scope_fixture.h",
+         "rsf_ac7_fixture_lease", "NOTHING", ["-Isdk/game/include", "-Igames/ac7/include"])
 generate("tests/ac7_graph_patch_abi.rs", "games/ac7/src/ac7_sites.h",
          "rsf_ac7_(code_(leaves|patch|patches)|renderer_log_fn|call_relay|truesky_patches)",
          "RSF_AC7_(SITE_BYTES|VELOCITY_PATCHES|RELAY_BYTES)",

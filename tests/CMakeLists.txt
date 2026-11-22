@@ -278,10 +278,6 @@ target_compile_definitions(rsf_frame_assembly PRIVATE RSF_GENERATION_FIXTURE=rsf
 target_link_libraries(rsf_frame_assembly PRIVATE rsf_generation_fixtures_rust rsf_orchestrator rsf_build_options)
 add_test(NAME frame_assembly COMMAND rsf_frame_assembly)
 
-add_executable(rsf_ac7_view_test ac7_view.cpp)
-target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View rsf_build_options)
-add_test(NAME ac7_view COMMAND rsf_ac7_view_test)
-
 add_executable(rsf_ac7_velocity_shader_test ac7_velocity_shader.c)
 set_target_properties(rsf_ac7_velocity_shader_test PROPERTIES LINKER_LANGUAGE CXX)
 if(MINGW)
@@ -309,6 +305,28 @@ if(MSVC)
 else()
     set(ac7_fixture_target x86_64-pc-windows-gnu)
 endif()
+function(rsf_ac7_fixture_object output stem)
+    set(object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_${stem}.obj")
+    add_custom_command(OUTPUT "${object}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+        COMMAND "${ac7_fixture_rustc}" --edition 2024 --target "${ac7_fixture_target}"
+            --crate-name "rsf_${stem}" --crate-type lib --emit obj -C codegen-units=1
+            -C panic=abort -C opt-level=$<IF:$<CONFIG:Debug>,0,3>
+            -o "${object}" "${CMAKE_CURRENT_SOURCE_DIR}/${stem}.rs"
+        DEPENDS "${stem}.rs" ${ARGN}
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        VERBATIM)
+    set_source_files_properties("${object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
+    set(${output} "${object}" PARENT_SCOPE)
+endfunction()
+
+rsf_ac7_fixture_object(ac7_view_probe_object ac7_view_probe
+    "${PROJECT_SOURCE_DIR}/games/ac7/src/view_abi.rs")
+add_executable(rsf_ac7_view_test ac7_view.c "${ac7_view_probe_object}")
+set_target_properties(rsf_ac7_view_test PROPERTIES LINKER_LANGUAGE CXX)
+target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View rsf_build_options)
+add_test(NAME ac7_view COMMAND rsf_ac7_view_test)
+
 set(ac7_session_object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_ac7_session.obj")
 add_custom_command(OUTPUT "${ac7_session_object}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
@@ -748,8 +766,9 @@ target_link_libraries(rsf_render_links_test PRIVATE rsf_render_host_fixtures_rus
 add_test(NAME render_links COMMAND rsf_render_links_test)
 set_tests_properties(render_links PROPERTIES TIMEOUT 120)
 
-add_executable(rsf_ac7_render_scope_test ac7_render_scope.cpp)
-# render_scope.cpp keeps create; the rsf-ac7 crate owns and exports the rest (render_scope.rs).
+rsf_ac7_fixture_object(ac7_scope_fixture_object ac7_render_scope ac7_render_scope_fixture_abi.rs)
+add_executable(rsf_ac7_render_scope_test ac7_render_scope.c ac7_render_scope_exceptions.cpp
+    "${ac7_scope_fixture_object}")
 target_link_libraries(rsf_ac7_render_scope_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_build_options)
 add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)

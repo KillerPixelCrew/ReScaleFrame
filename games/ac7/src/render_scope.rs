@@ -10,7 +10,7 @@
 //! render_scope.cpp. Research: docs/research/ac7-native-renderer-refactor-20261001.md,
 //! docs/research/ac7-dlss-fg-20261003.md and docs/research/rust-ac7-render-scopes.md.
 //!
-//! render_scope.cpp keeps the two create calls and lends `rsf_ac7_scope_calls`, which call consumer
+//! The two C create calls pass `rsf_ac7_scope_calls` from render_scope.cpp, which call consumer
 //! callbacks and lease functions with any C++ exception contained. Everything else is here,
 //! including `execute`, the function the engine's command iterator calls.
 use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};

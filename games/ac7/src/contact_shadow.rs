@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
-//! The hash-pinned AC7 contact-shadow rewrite. The caller owns the output allocation.
+//! The hash-pinned AC7 contact-shadow rewrite. The factory borrows the output for the call.
 //! The shader facts and operands come from the existing capture evidence.
+use crate::contact_shadow_abi::{
+    RSF_AC7_CONTACT_PATCHED, RSF_AC7_CONTACT_REFUSED, RSF_AC7_CONTACT_UNMATCHED,
+    rsf_ac7_contact_shader_fn,
+};
 use crate::shader_hash::{crc32c, dxbc_checksum, dxbc_digest_bytes};
 use std::ffi::c_void;
 use std::slice;
@@ -14,9 +18,9 @@ const PHASE_SPLIT: usize = TOKENS + 469 * 4;
 const START_SPLIT: usize = TOKENS + 996 * 4;
 const TEMPS: usize = TOKENS + 66 * 4;
 
-const UNMATCHED: i32 = 0;
-const PATCHED: i32 = 1;
-const REFUSED: i32 = 2;
+const UNMATCHED: i32 = RSF_AC7_CONTACT_UNMATCHED as i32;
+const PATCHED: i32 = RSF_AC7_CONTACT_PATCHED as i32;
+const REFUSED: i32 = RSF_AC7_CONTACT_REFUSED as i32;
 
 const EXPECTED: [u8; 32] = [
     0x60, 0xa2, 0xca, 0x61, 0xe5, 0xd8, 0x3b, 0x85, 0x3f, 0x69, 0x2e, 0xe8, 0xc0, 0xbc, 0x35, 0x80,
@@ -64,7 +68,6 @@ const BIASED_START: [u32; 7] = [
 ];
 
 const GROWTH: usize = (PHASE.len() + BIAS.len() + BIASED_START.len() - RAY_START.len()) * 4;
-type UseShader = unsafe extern "C" fn(*mut c_void, *const u8, usize, u32) -> bool;
 
 #[cfg(windows)]
 fn sha256(input: &[u8]) -> Option<[u8; 32]> {
@@ -200,7 +203,7 @@ unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
     bytes: *const u8,
     size: usize,
     offset: usize,
-    use_shader: UseShader,
+    use_shader: rsf_ac7_contact_shader_fn,
     user: *mut c_void,
 ) -> i32 {
     let Some(shader_size) = size.checked_sub(offset) else {
@@ -230,7 +233,7 @@ unsafe extern "C" fn rsf_ac7_contact_shadow_correct(
         return REFUSED;
     }
     let crc = container_crc(shader);
-    if unsafe { use_shader(user, output.as_ptr(), output.len(), crc) } {
+    if use_shader.is_some_and(|apply| unsafe { apply(user, output.as_ptr(), output.len(), crc) }) {
         PATCHED
     } else {
         REFUSED

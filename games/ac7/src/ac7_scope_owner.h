@@ -1,13 +1,11 @@
-// SPDX-License-Identifier: MIT
-#pragma once
-// Internal boundary between render_scope.cpp and the Rust owner of the queued render scopes
-// (render_scope.rs in the rsf-ac7 crate). Not a DLL ABI: both sides link into
-// ReScaleFrame.Game.AC7.dll and the fixtures that call ac7_render_scope.h.
-// tools/generate-rust-bindings.py generates src/scope_abi.rs from this header.
-//
-// The Rust owner exports every call of ac7_render_scope.h except the two create calls, which
-// render_scope.cpp keeps so it can lend its exception leaves.
+/* SPDX-License-Identifier: MIT */
+#ifndef RSF_AC7_SCOPE_OWNER_H
+#define RSF_AC7_SCOPE_OWNER_H
+
+/* Internal C interface for the Rust scope owner, its C entry points and its C++ exception leaves.
+   tools/generate-rust-bindings.py generates src/scope_abi.rs from this header. */
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <rescaleframe/ac7_render_scope.h>
 
@@ -28,6 +26,9 @@ typedef struct rsf_ac7_scope_calls {
     bool (*release)(const rsf_ac7_scope_lease* lease);
 } rsf_ac7_scope_calls;
 
+/* The native callbacks catch C++ exceptions before returning false to Rust. */
+extern const rsf_ac7_scope_calls rsf_ac7_scope_exception_calls;
+
 // rsf_ac7_render_scopes_create_passes with the exception leaves. A null pass callback is the
 // single-callback form of rsf_ac7_render_scopes_create.
 int rsf_ac7_scope_owner_create(uint64_t session_id, uint32_t capacity,
@@ -47,4 +48,5 @@ bool rsf_ac7_scope_primary_facts(rsf_ac7_scope_read read, uint64_t renderer, uin
 
 #ifdef __cplusplus
 }
+#endif
 #endif

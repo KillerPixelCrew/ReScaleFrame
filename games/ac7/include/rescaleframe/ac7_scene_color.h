@@ -2,6 +2,7 @@
 #ifndef RSF_AC7_SCENE_COLOR_H
 #define RSF_AC7_SCENE_COLOR_H
 
+#include <stdint.h>
 #include <rescaleframe/frame_tap.h>
 
 #ifdef __cplusplus

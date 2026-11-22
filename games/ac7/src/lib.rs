@@ -7,7 +7,7 @@
 //! admission (`renderer.rs`) and the TrueSky plugin patches and call relays with their admission,
 //! rollback and retirement (`truesky.rs`), all reached through ac7_sites.h. The queued RHI render
 //! scopes of ac7_render_scope.h (`render_scope.rs`) export that header's calls except the two
-//! create calls, which render_scope.cpp keeps to lend its exception leaves (ac7_scope_owner.h).
+//! C create calls, which pass render_scope.cpp's exception leaves (ac7_scope_owner.h).
 //! The translucent velocity pass keeps shader compilation, DXBC transforms, D3D11 shader
 //! objects and variant publication in Rust. The Rust renderer owns the replay and scope lease,
 //! the history and stream modules own their decisions, and the commit module owns admission
@@ -30,6 +30,7 @@ mod cloud_depth_abi;
 #[cfg(windows)]
 mod com_resource;
 mod contact_shadow;
+mod contact_shadow_abi;
 #[path = "../../../runtime/graphics/src/d3d11_observer_layout_abi.rs"]
 mod d3d11_observer_layout_abi;
 #[path = "../../../runtime/graphics/src/dxbc_chunks.rs"]
