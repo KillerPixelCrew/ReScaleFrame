@@ -2,7 +2,7 @@
 # adapter does. Keep them free of OrchestratorCore and its public RSF_RUNTIME_BUILD define.
 add_executable(rsf_overlay_dll_api_test "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api.c")
 add_executable(rsf_overlay_dll_api_c11 "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_c11.c")
-add_executable(rsf_overlay_dll_api_device "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_device.cpp")
+add_executable(rsf_overlay_dll_api_device "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_device.c")
 add_executable(rsf_overlay_dll_api_no_sr "${CMAKE_CURRENT_LIST_DIR}/overlay_dll_api_no_sr.c")
 rsf_add_rust_static(rsf_overlay_service_fixtures_rust rsf_rust_overlay_service_fixtures
     rsf-overlay-service-fixtures rsf_overlay_service_fixtures)

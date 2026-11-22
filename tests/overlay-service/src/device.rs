@@ -4,19 +4,14 @@ use crate::abi::*;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::{thread, time::Duration};
 
+use std::os::windows::ffi::OsStrExt;
+use windows::Win32::UI::WindowsAndMessaging::ShowCursor;
+use windows::core::Interface;
+
+mod native;
+use native::{Graphics, StartError};
+
 type Handle = *mut c_void;
-type Foreign = unsafe extern "C" fn(Handle, Handle);
-
-#[repr(C)]
-struct Leaves {
-    clear: unsafe extern "C" fn(Handle) -> u32,
-    submit: unsafe extern "C" fn(Handle) -> u32,
-    resize: unsafe extern "C" fn(Handle, u32, u32) -> u32,
-    foreign: unsafe extern "C" fn(Handle, Foreign, Handle) -> u32,
-    hide_cursor: unsafe extern "C" fn() -> i32,
-}
-
-const _: () = assert!(size_of::<Leaves>() == size_of::<Handle>() * 5);
 const SR_NOTE: &CStr = c"FSR4 building shaders (3s); DLSS keeps running";
 const NOT_READY: i32 = -3;
 
@@ -93,41 +88,31 @@ fn capture_header() -> rsf_overlay_capture {
     }
 }
 
-struct ForeignCheck<'a> {
-    api: &'a rsf_overlay_api,
-    checks: &'a mut Checks,
-}
-
-unsafe extern "C" fn test_foreign(user: Handle, chain: Handle) {
-    let test = unsafe { &mut *user.cast::<ForeignCheck<'_>>() };
+fn test_foreign(api: &rsf_overlay_api, checks: &mut Checks, chain: Handle) {
     let mut drawn = 7;
-    test.checks.check(
-        unsafe { test.api.present.unwrap()(chain, &mut drawn) } == NOT_READY && drawn == 0,
+    checks.check(
+        unsafe { api.present.unwrap()(chain, &mut drawn) } == NOT_READY && drawn == 0,
         "window filter refuses another chain",
     );
     let mut occurrence = capture_header();
-    test.checks.check(
-        unsafe { test.api.capture.unwrap()(&mut occurrence) } == OK && occurrence.started == 0,
+    checks.check(
+        unsafe { api.capture.unwrap()(&mut occurrence) } == OK && occurrence.started == 0,
         "refused chain did not start the panel",
     );
 }
 
 struct Device<'a> {
-    leaf: &'a Leaves,
-    gpu: Handle,
-    chain: Handle,
+    gpu: Graphics,
     api: &'a rsf_overlay_api,
 }
 
 impl Device<'_> {
     fn frame(&self) -> Option<u32> {
         let mut drawn = 2;
-        unsafe {
-            ((self.leaf.clear)(self.gpu) != 0
-                && self.api.present.unwrap()(self.chain, &mut drawn) == OK
-                && (self.leaf.submit)(self.gpu) != 0)
-                .then_some(drawn)
-        }
+        self.gpu.clear().ok()?;
+        (unsafe { self.api.present.unwrap()(self.gpu.chain.as_raw(), &mut drawn) } == OK
+            && self.gpu.submit())
+        .then_some(drawn)
     }
 
     fn frames(&self, count: u32, expected: Option<u32>, checks: &mut Checks, message: &str) {
@@ -152,13 +137,26 @@ impl Device<'_> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_test_overlay_device(
-    query: Query,
-    leaf: &Leaves,
-    gpu: Handle,
-    chain: Handle,
-    window: Handle,
-) -> i32 {
+extern "C" fn rsf_test_overlay_device(query: Query) -> i32 {
+    if !std::env::var_os("RSF_OVERLAY_DLL").is_some_and(|path| {
+        path.encode_wide().count() < 520 && std::path::Path::new(&path).is_file()
+    }) {
+        eprintln!("FAIL: RSF_OVERLAY_DLL must name the built rescaleframe_overlay.dll");
+        return 1;
+    }
+    let gpu = match Graphics::new() {
+        Ok(gpu) => gpu,
+        Err(StartError::Window(error)) => {
+            eprintln!("FAIL: hidden window: {error}");
+            return 1;
+        }
+        Err(StartError::Device(error)) => {
+            println!("SKIP: no D3D11 hardware or WARP device ({error})");
+            return 77;
+        }
+    };
+    let chain = gpu.chain.as_raw();
+    let window = gpu.hwnd().0;
     let mut checks = Checks::default();
     let mut api = rsf_overlay_api {
         struct_size: size_of::<rsf_overlay_api>() as u32,
@@ -169,12 +167,7 @@ extern "C" fn rsf_test_overlay_device(
         checks.check(false, "query");
         return 1;
     }
-    let device = Device {
-        leaf,
-        gpu,
-        chain,
-        api: &api,
-    };
+    let device = Device { gpu, api: &api };
     let ini = Ini::new("rsf_overlay_dll_device", "Overlay");
     let mut adapter = Adapter {
         window,
@@ -227,13 +220,10 @@ extern "C" fn rsf_test_overlay_device(
         ..Default::default()
     };
     checks.check(unsafe { api.configure.unwrap()(&setup) } == OK, "configure");
-    let mut foreign = ForeignCheck {
-        api: &api,
-        checks: &mut checks,
-    };
-    let foreign_ready =
-        unsafe { (leaf.foreign)(gpu, test_foreign, (&raw mut foreign).cast()) } != 0;
-    checks.check(foreign_ready, "second chain for the window filter");
+    let foreign = device
+        .gpu
+        .with_foreign_chain(|foreign| test_foreign(&api, &mut checks, foreign.as_raw()));
+    checks.check(foreign.is_ok(), "second chain for the window filter");
 
     device.frames(3, None, &mut checks, "closed frame presents");
     let get_capture = api.capture.unwrap();
@@ -257,7 +247,7 @@ extern "C" fn rsf_test_overlay_device(
     let mut count = 0;
     let mut attempts = 0;
     while count >= 0 && attempts < 512 {
-        count = unsafe { (leaf.hide_cursor)() };
+        count = unsafe { ShowCursor(false) };
         attempts += 1;
     }
     checks.check(
@@ -325,10 +315,7 @@ extern "C" fn rsf_test_overlay_device(
         unsafe { notify(chain, RSF_OVERLAY_NOTIFY_RESIZE) } == OK,
         "resize notification",
     );
-    checks.check(
-        unsafe { (leaf.resize)(gpu, 800, 450) } != 0,
-        "ResizeBuffers",
-    );
+    checks.check(device.gpu.resize(800, 450), "ResizeBuffers");
     checks.check(device.visible(1), "reopen after resize");
     device.frames(3, Some(1), &mut checks, "open panel draws after resize");
     checks.check(
