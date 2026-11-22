@@ -106,7 +106,7 @@ Ignored local logs:
 - `tools/rsf_shader_pack.py`, `tools/package-anomaly.py`,
   `tools/anomaly_motion_deploy.py`: build/inspect CLI, explicit rules-only
   release membership and development-only offline tool description.
-- `tests/shader_patch*.cpp`, `tests/anomaly_shader_provider_evidence.py`,
+- `tests/shader_patch*.cpp`, `tools/anomaly_shader_provider_evidence.py`,
   `tests/package_anomaly_test.py`, `tests/anomaly_motion_contract.cpp`,
   `tests/overlay_dll_api_device.cpp`,
   `tests/anomaly_overlay_visibility.cpp`, `tests/CMakeLists.txt` and

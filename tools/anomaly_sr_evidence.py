@@ -1,8 +1,8 @@
 """SR Stage 0: read-only check of every games/anomaly/src/sr_profile.h guard and layout against the installed exe.
 
 Checks --exe standard (default) or --exe avx. Needs the selected installed executable (D:/Anomaly 1.5.3), so it is not registered in CTest (same as
-tests/anomaly_geometry_evidence.py). Nothing is patched or executed; the file is only read.
-Run: py -3 -I tests/anomaly_sr_evidence.py --verify
+tools/anomaly_geometry_evidence.py). Nothing is patched or executed; the file is only read.
+Run: py -3 -I tools/anomaly_sr_evidence.py --verify
 Every check raises AssertionError naming the site or layout that does not match.
 """
 import argparse
@@ -18,7 +18,7 @@ PROFILE = ROOT / 'games/anomaly/src/sr_profile.h'
 NATIVE = ROOT / 'games/anomaly/src/native_profile.h'
 GEOMETRY = ROOT / 'games/anomaly/src/geometry_profile.h'
 
-_spec = importlib.util.spec_from_file_location('anomaly_geometry_evidence', ROOT / 'tests/anomaly_geometry_evidence.py')
+_spec = importlib.util.spec_from_file_location('anomaly_geometry_evidence', ROOT / 'tools/anomaly_geometry_evidence.py')
 geometry = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(geometry)
 

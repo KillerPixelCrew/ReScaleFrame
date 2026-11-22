@@ -791,7 +791,7 @@ the expected-failure unknown-selection check, and all eight Python shader-tool c
 the local FXC byte-identity regression. CPU history and declaration-only shader staging do not
 produce GPU motion or establish a usable SR seam. The reviewed r3 tree contains 449 files;
 55 geometry-stage roots are identified, 44 stage roots remain unclassified, and one tree wrapper
-has a blocked recursive include. See `tools/anomaly_shader_README.md` for source evidence.
+has a blocked recursive include. See `docs/research/anomaly-shader-inventory.md` for source evidence.
 
 ## FidelityFX Vulkan static line width, 8 November 2026
 

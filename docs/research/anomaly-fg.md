@@ -35,7 +35,7 @@ observer already hooks. No new detour was needed.
 `frame.ui` (a separate UI layer) is still not transported by native_fg. Anomaly does not need it: the bridge runs in
 `RSF_UI_MODE_BACKBUFFER_HUDLESS` and every provider derives the interface from the final frame and the HUD-less copy.
 
-## Engine sites (verified by `tests/anomaly_fg_evidence.py --verify` against the installed exe)
+## Engine sites (verified by `tools/anomaly_fg_evidence.py --verify` against the installed exe)
 
 | Site | RVA | FG use |
 | --- | --- | --- |

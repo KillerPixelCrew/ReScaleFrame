@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Motion MRT sites of the exact Anomaly 1.5.3 DX11 executables (design notes in motion_stage.h), in
-//! native_profile.rs build order. Data only: nothing here installs a hook. tests/anomaly_motion_evidence.py
+//! native_profile.rs build order. Data only: nothing here installs a hook. tools/anomaly_motion_evidence.py
 //! --verify [--exe avx] re-derives every value from the installed executable with a disassembler. All
 //! functions are x64 __fastcall. Line numbers refer to xray-monolith 028ccf5.
 //!

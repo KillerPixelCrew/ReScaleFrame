@@ -3,7 +3,7 @@
 #include "native_profile.h"
 namespace rsf::anomaly::geometry {
 // One table per exact executable (native_profile.h); native_profile.rs selects it. Local handoff records decompilation and
-// RTTI slot evidence; tests/anomaly_geometry_evidence.py --verify [--exe avx] re-derives every value per build.
+// RTTI slot evidence; tools/anomaly_geometry_evidence.py --verify [--exe avx] re-derives every value per build.
 // Indices 0..9 are the lifecycle and visual-entry detours. 10..15 are the draw-time call site and the
 // view/projection context boundaries (see the "Context and draw-time sites" notes below). 16 is the detail (grass)
 // render window.

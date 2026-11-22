@@ -3,7 +3,7 @@
 Checks games/anomaly/src/geometry_profile.h against the installed executable of one exact build: --exe standard (default,
 AnomalyDX11.exe) or --exe avx (AnomalyDX11AVX.exe). Each header holds one table per build; only the selected build's table
 (plus the shared layout) is read. Needs D:/Anomaly 1.5.3, so it is not registered in CTest.
-Run: py -3 tests/anomaly_geometry_evidence.py --verify [--exe avx] [--profile copy-of-geometry_profile.h]
+Run: py -3 tools/anomaly_geometry_evidence.py --verify [--exe avx] [--profile copy-of-geometry_profile.h]
 The other Anomaly evidence scripts import BUILDS/select/profile_text from here.
 """
 import argparse
@@ -242,6 +242,11 @@ def verify_unique_guards(pe, text, domain, sites):
     declared = int(re.search(r'array<UniqueGuard, (\d+)> ' + domain + r'_(?:standard|avx)_unique', text).group(1))
     assert len(guards) == declared, ('unique guard parse', domain, len(guards), declared)
     _, code = pe.text()
+    check_guards(pe, code, guards, sites, domain)
+    return len(guards)
+
+
+def check_guards(pe, code, guards, sites, domain=''):
     by_rva = {}
     for name, rva, raw in guards:
         assert pe.read(rva, len(raw)) == raw, ('unique guard bytes', name)
@@ -255,7 +260,6 @@ def verify_unique_guards(pe, text, domain, sites):
             assert by_rva[rva][0] == name and by_rva[rva][1].startswith(expected), ('unique guard does not extend the site', name)
         else:
             assert code.count(expected) == 1, ('16-byte guard not unique and no extended guard', domain, name)
-    return len(guards)
 
 
 def rea(name, args):

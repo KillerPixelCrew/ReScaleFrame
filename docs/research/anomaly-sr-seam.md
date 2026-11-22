@@ -19,7 +19,7 @@ to source/binary evidence or marked **UNVERIFIED**.
   `.local/anomaly/sr-seam/dump_code.py`. Stage 0 (section 8) added an IDA analysis of a private copy of the
   executable (`.local/anomaly/sr-stage0/ida/`; the install was not touched). Its results are in
   `games/anomaly/src/sr_profile.h` and are re-checked against the installed file by
-  `py -3 -I tests/anomaly_sr_evidence.py --verify` (output: `.local/anomaly/sr-stage0/verify.txt`).
+  `py -3 -I tools/anomaly_sr_evidence.py --verify` (output: `.local/anomaly/sr-stage0/verify.txt`).
 - Packed vanilla shaders: `.local/anomaly/vanilla/shaders/r3` (paths below are relative to it).
 - AVX executable: nothing here applies to `AnomalyDX11AVX.exe` until mapped separately.
 - MSAA (`o.dx10_msaa`) is out of scope: the design refuses SR when MSAA is enabled.
@@ -297,7 +297,7 @@ From `CRender::Render` (`r4_R_render.cpp:209-542`) and `CRenderTarget::phase_com
 | --- | --- | --- | --- | --- |
 | S-A | Prologue of `phase_bloom` (`phase_combine.cpp:324`) | Same `generic0` as S-B | Bloom and luminance run at output size, so W `generic1` must be rebuilt (`x/9` and skyblend alpha) at output size. The distortion pass then needs an output-size depth with world content for its geometry depth test, and runs with a jittered projection at output size | Workable, more surgery |
 | **S-B** | **First of `phase_sunshafts`/`phase_blur`** (374/378) | **Complete composite in low space; FP16 twin makes it invertible** | Bloom and luminance stay in W (fixed-size targets). The distortion mask is rendered at render size against the real world depth and consumed by UV. Only `generic0`/`generic_temp` twins change format. Post runs stock at output size | **Recommended** |
-| S-C | Linear FP16 MRT written inside `combine_1` | True radiance | Misses sky/clouds (drawn before), forward and volumetrics (after). Every forward material would have to be moved after SR at output size, or rewritten for a linear target. Needs new shader permutations and cache/reflection hooks (`tools/anomaly_shader_README.md`, cache section) | Rejected for the first implementation; revisit only if f^-1 shows measurable artefacts |
+| S-C | Linear FP16 MRT written inside `combine_1` | True radiance | Misses sky/clouds (drawn before), forward and volumetrics (after). Every forward material would have to be moved after SR at output size, or rewritten for a linear target. Needs new shader permutations and cache/reflection hooks (`docs/research/anomaly-shader-inventory.md`, cache section) | Rejected for the first implementation; revisit only if f^-1 shows measurable artefacts |
 | S-D | After `combine_2`, before `phase_pp` | Final LDR including grain, motion blur, SMAA, LUT and lens dirt | Temporal SR on post-processed noise | Rejected (spatial fallback only) |
 
 Why S-B: `generic0` is identical at S-A and S-B. Bloom extraction (step 7) and the distortion mask
@@ -579,7 +579,7 @@ policy to disable SMAA and engine AA while SR is active, as a settings decision.
 ## 8. Stage 0 site map (standard DX11 executable)
 
 Static evidence only. No game run, no hook installed, rendering unchanged. RVAs are relative to image
-base `0x140000000`. The data lives in `games/anomaly/src/sr_profile.h`. `tests/anomaly_sr_evidence.py --verify`
+base `0x140000000`. The data lives in `games/anomaly/src/sr_profile.h`. `tools/anomaly_sr_evidence.py --verify`
 re-derives every value from the installed exe and fails on any mismatch. Four negative runs, each
 mutating one profile copy (a guard byte, the `generic0` slot, `crt_texture_offset`,
 `backend_textures_ps_offset`), each failed with that name (`.local/anomaly/sr-stage0/negative.txt`).
@@ -747,7 +747,7 @@ and a raw `.bin`.
   debug-layer errors. Informational, register item 3: a 64x64 RTV with a 128x128 DSV (stock `phase_blur`)
   raises a debug-layer error, but the runtime still binds both.
 - `ctest -R "anomaly|thin"`: 63 of 64 passed. The failure is `anomaly_overlay_visibility`, which is built
-  only from the overlay sources another worker is changing. `py -3 -I tests/anomaly_sr_evidence.py --verify`
+  only from the overlay sources another worker is changing. `py -3 -I tools/anomaly_sr_evidence.py --verify`
   passes. Logs: `.local/anomaly/sr-stage1/`.
 
 **Live acceptance (to run).** Use the same save in l01_escape, the same standing view and the same time of day,
@@ -868,7 +868,7 @@ frame record carries render and output size.
 
 **Hooks and guards.** The same four detours. Stage 2 also requires the first 0x46 bytes of `set_viewport`
 (`ssao_set_viewport_code`, which encodes the guard and viewport displacements) before installing.
-`tests/anomaly_sr_evidence.py --verify` re-derives the world-target table against the constructor slots, the absent
+`tools/anomaly_sr_evidence.py --verify` re-derives the world-target table against the constructor slots, the absent
 slots, the `rt_half_depth` halving, the SSAO dispatch bits in `phase_combine` (`0x8bca75`), the `set_viewport` code,
 both data addresses (viewport in `.data` with `{0,0,0,0,0,1}`, guard in `.bss`), its four callers and that nothing
 else references either address (`.local/anomaly/sr-stage2/verify.txt`). Six negative profile mutations each fail by
@@ -967,7 +967,7 @@ foliage worker's tree path also reads `previous_u/v` from it. `motion::set_jitte
 **Guards.** Stage 3 adds no detour; it calls two engine functions and relies on six call sites. Before installing it
 requires the 28-byte `set_P` unique guard, the 16-byte `SetMipLODBias` guard (it encodes the `+0x19C` field), and at each
 of the six `sr_first_person_sites` an `E8` to `set_P` followed within 0x120 bytes by `call [rax+0x1b8]` (slot 55) or an `E8`
-to `rmNear` (`0x83a450`). `tests/anomaly_sr_evidence.py --verify` adds: `Device.mView/mProject/mFullTransform` adjacency,
+to `rmNear` (`0x83a450`). `tools/anomaly_sr_evidence.py --verify` adds: `Device.mView/mProject/mFullTransform` adjacency,
 slot 55 = `+0x1b8`, the call forms (4 virtual, 2 direct) and that `SetMipLODBias` compares `xmm1` with the cached bias.
 
 **Diagnostics.** Every 120 frames, with `SRStage=3`, a third line:
@@ -984,7 +984,7 @@ present); `fp_foreign = jitter_invalid = 0`; `resets` grows only on load, menu, 
 twin at the seam and the back buffer before Present into staging textures, maps them three frames after the last one and
 writes `<dump dir>/sr-jitter-<session>/world_NN.bin` (RGBA16F, rows packed), `final_NN.bin` (back buffer format) and
 `burst.json` (per frame: engine frame, jitter frame, sequence index and phase count, applied jitter and previous jitter
-in pixels, render size, window mip bias, `fp_jittered`, sizes and DXGI formats). `py -3 -I tests/anomaly_sr_evidence.py
+in pixels, render size, window mip bias, `fp_jittered`, sizes and DXGI formats). `py -3 -I tools/anomaly_sr_evidence.py
 --measure-jitter <dir> [--region x0 y0 x1 y1] [--final-region x0 y0 x1 y1]` measures each world frame's displacement
 against frame 0 (Hann-windowed cross-correlation, 1/100 px refinement) and compares it with the recorded jitter
 difference; `--region` restricts it to, for example, the weapon, `--final-region` checks that a HUD rectangle does not
@@ -1011,7 +1011,7 @@ move. `--measure-self-test` recovers synthetic Halton offsets within 0.015 px.
   worst motion 3.5e-5 UV (0.003 render px) over 93,312 pixels; with the b13 jitter zeroed the motion equals the jitter
   difference (worst error 4.3e-5 UV); a (+3, -2) px pan between frames survives the jitter removal (worst 5.0e-5 UV).
 - `anomaly_sr_measure_self_test`: the burst measurement on a synthetic burst.
-- `py -3 -I tests/anomaly_sr_evidence.py --verify` passes (`.local/anomaly/sr-stage3/verify.txt`).
+- `py -3 -I tools/anomaly_sr_evidence.py --verify` passes (`.local/anomaly/sr-stage3/verify.txt`).
 
 **Live acceptance (to run).** Same save and standing view as Stage 2, no movement, weather and time fixed if possible.
 Runs: A `SRStage=2` (0.67, `SRStageCapture=1`); B `SRStage=3 SRJitter=0` (mip bias only); C `SRStage=3` with
@@ -1065,7 +1065,7 @@ prefix is 30 bytes: `48895c240848896c2410488974241848897c242041564883ec20488bd94
 integer instruction (`mov [rsp+8],rbx`), with no RIP operand or VEX instruction. The cascade fit itself differs considerably:
 standard uses four 16-byte projection loads; AVX uses two 32-byte loads, with a different frame. No fit-frame offset is read
 by the adapter. Discovery and decoded operands are retained in `.local/anomaly/sun-cascade/{locate,decode,guards}.py`,
-`sites.json` and `disassembly.txt`; the permanent checks are in `tests/anomaly_sr_evidence.py`. REA had no open database
+`sites.json` and `disassembly.txt`; the permanent checks are in `tools/anomaly_sr_evidence.py`. REA had no open database
 and its Ghidra Java runtime was unavailable, so this bounded read used the existing PE/Capstone tools rather than opening
 an additional database or changing tool installation.
 
@@ -1094,7 +1094,7 @@ checks. No game was launched and the game installation was not modified by this 
 
 Validation for this correction: MSVC Release configure and the full build in `build/wk-avx` passed; the requested
 `ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion" --output-on-failure` passed 93/93 without skips
-(104.53 seconds). `py -3 -I tests/anomaly_profile_evidence.py` passed 36/36, including all four evidence scripts for
+(104.53 seconds). `py -3 -I tools/anomaly_profile_evidence.py` passed 36/36, including all four evidence scripts for
 both executables and 28 negative mutations. `git diff --check` passed for the affected files. Logs and bounded binary
 analysis are under `.local/anomaly/sun-cascade/` (`configure.log`, `build-all.log`, `ctest.log`, `evidence-suite.log`,
 `sites.json`, `disassembly.txt`). The assigned-directory restriction prevents using the hardcoded shared build directory
@@ -1199,7 +1199,7 @@ its visual acceptance is pending. Rendering readiness stays zero.
 
 Validation (13 November 2026): MSVC Release configure and full build in `build/wk-avx` passed; the requested
 `ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion|shader_patch" --output-on-failure` passed 96/96,
-without skips, in 92.78 seconds. `py -3 -I tests/anomaly_profile_evidence.py` passed 48/48: all four evidence scripts
+without skips, in 92.78 seconds. `py -3 -I tools/anomaly_profile_evidence.py` passed 48/48: all four evidence scripts
 against both hashes, with 40 negative mutations rejected. Package unittests passed 10/10 and `git diff --check` passed.
 The first CTest run passed 94/96 but failed FSR3 activation in two FG fixtures: its cached vendor root held AMD DLL
 SHA-256 `02297bee...`, while the current SDK/header pin uses `e6843252...`. Pointing only the assigned build's
@@ -1383,7 +1383,7 @@ with `_frame.json`, which holds the submitted jitter, motion scale, reset and cl
     PASS.
   - The RDR2 D3D12 shared-host fixture, `rsf_unity_sr_d3d12_test` for backends 1, 3, 4 and 5 with `RSF_RDR2_HOST_INI`,
     `RSF_RDR2_HOST_ROOT` and `RSF_OVERLAY_DLL`: PASS.
-- `py -3 -I tests/anomaly_sr_evidence.py --verify` and `--measure-self-test`, and `tests/anomaly_motion_evidence.py --verify`:
+- `py -3 -I tools/anomaly_sr_evidence.py --verify` and `--measure-self-test`, and `tools/anomaly_motion_evidence.py --verify`:
   PASS.
 
 Logs: `.local/anomaly/sr-stage5/`.
@@ -1512,12 +1512,12 @@ native_sr_d3d12.h, d3d11_present_api.h, overlay_api.h}`, `runtime/orchestrator/s
 sr_bridge.cpp, sr_legacy_adapter.cpp, native_sr_d3d12.cpp}`, `runtime/graphics/include/rescaleframe/
 {motion_decode.h, motion_resolve.h}`, `sdk/game/include/rescaleframe/{game_renderer.h, game_frame.h}`,
 `loader/proxy/src/dlss_bridge.c`, `games/anomaly/shaders/core/README.md`,
-`docs/research/anomaly-{native-hooks,world-space-ui}.md`, `tools/anomaly_shader_README.md`.
+`docs/research/anomaly-{native-hooks,world-space-ui}.md`, `docs/research/anomaly-shader-inventory.md`.
 
 Binary: `.local/anomaly/rea-evidence/0003-procedure_pseudo_code.json` (CRender::Render, first 100
 of 484 lines), `0012-procedure_pseudo_code.json` (CRender::RenderToTarget),
 `.local/anomaly/native-sites-dx11.json`. Stage 0: IDA database `.local/anomaly/sr-stage0/ida/AnomalyDX11.exe.i64`
-(private copy, same SHA-256), `games/anomaly/src/sr_profile.h`, `tests/anomaly_sr_evidence.py`,
+(private copy, same SHA-256), `games/anomaly/src/sr_profile.h`, `tools/anomaly_sr_evidence.py`,
 `tests/anomaly_sr_profile.cpp`, `.local/anomaly/sr-stage0/{verify,negative,build,ctest}.txt|log`. Extra
 source read for Stage 0: `xrRender/{R_Backend.h, r_backend_xform.h, SH_Texture.h, xrRender_console.cpp,
 ParticleEffect.cpp}`, `xrRenderPC_R4/{r4.h, r4_rendertarget_accum_point.cpp}`,

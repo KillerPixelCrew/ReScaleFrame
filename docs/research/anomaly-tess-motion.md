@@ -73,7 +73,7 @@ The whole chain is swapped per draw, and only when all four stages have verified
   - Both templates through their `mov [rcx+10h], rax` object store (`SHS::sh`/`SDS::sh` at `shader_object_offset`).
   - Both `CreateHWShader` wrappers through their `ID3D11Device` call (+0x80 `CreateHullShader`, +0x88
     `CreateDomainShader`).
-  - `tests/anomaly_motion_evidence.py --verify` re-derives all of these from the installed executable, including the
+  - `tools/anomaly_motion_evidence.py --verify` re-derives all of these from the installed executable, including the
     `RC_dest_hull`/`RC_dest_domain` constant-table destinations.
 - **Draw time** (`motion_stage.cpp on_flush`):
   - With HS/DS bound and no GS, the stage looks up variants for the bound VS, HS, DS and PS. The VS must be a core

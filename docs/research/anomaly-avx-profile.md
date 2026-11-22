@@ -215,7 +215,7 @@ The AVX tessellation dispatch at 0x8303c3 compares al with 'h', calls create_sha
 
 ## Validation and limits
 
-`py -3 -I tests/anomaly_profile_evidence.py` checks both installed hashes with all four evidence scripts, then mutates a guard, RVA and layout field for every script/build combination in temporary header copies: 8 positive and 24 negative checks. Native, geometry, motion and SR guards include minimal-prefix uniqueness checks. The suite never writes either executable.
+`py -3 -I tools/anomaly_profile_evidence.py` checks both installed hashes with all four evidence scripts, then mutates a guard, RVA and layout field for every script/build combination in temporary header copies: 8 positive and 24 negative checks. Native, geometry, motion and SR guards include minimal-prefix uniqueness checks. The suite never writes either executable.
 
 Profile-selection tests cover mixed hashes/names, unknown renderer names, case folding and wide filenames. Geometry/SR hook fixtures run once per build; motion caller-frame fixtures cover both builds. The plugin/bootstrap contracts exercise exact fingerprints while readiness remains zero. No engine.json exists for this adapter.
 
@@ -278,7 +278,7 @@ MinHook source check: `src/trampoline.c` copies until `oldPos >= sizeof(JMP_REL)
 * `cmake --build build/wk-avx --config Release`: the Anomaly and requested test targets built; the full build reported an unrelated LNK2019/LNK1120 in rsf_native_split_stub_test for rsf_fsr4vk_retire_commands, during concurrent Vulkan work. The coordinator explicitly excluded that target from this task's gate.
 * `cmake --build build/wk-avx --config Release --target rsf_game_anomaly`: passed.
 * `ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion" --output-on-failure`: 92/92 passed, no skips, 96.36 seconds. These include synthetic profile/hook contracts and device fixtures, not a game run.
-* `py -3 -I tests/anomaly_profile_evidence.py`: 32/32 passed, including all four scripts against each executable and 24 negative profile mutations.
+* `py -3 -I tools/anomaly_profile_evidence.py`: 32/32 passed, including all four scripts against each executable and 24 negative profile mutations.
 
 Local logs: `.local/anomaly/avx-handoff/{configure,build,build-adapter,ctest,evidence-suite}.log`. `eng/verify.ps1` hardcodes the shared default build directory, so it was not run under the worker's explicit assigned-directory restriction; the assigned MSVC configure/build/tests above are the native evidence. No Rust files or versions changed.
 
@@ -309,7 +309,7 @@ as history, rather than presented as acceptance of this later correction.
 
 Validation for this correction: MSVC Release configure and the full build in `build/wk-avx` passed; the requested
 `ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion" --output-on-failure` passed 93/93 without skips
-(104.53 seconds). `py -3 -I tests/anomaly_profile_evidence.py` passed 36/36, including all four evidence scripts for
+(104.53 seconds). `py -3 -I tools/anomaly_profile_evidence.py` passed 36/36, including all four evidence scripts for
 both executables and 28 negative mutations. `git diff --check` passed for the affected files. Logs and bounded binary
 analysis are under `.local/anomaly/sun-cascade/` (`configure.log`, `build-all.log`, `ctest.log`, `evidence-suite.log`,
 `sites.json`, `disassembly.txt`). The assigned-directory restriction prevents using the hardcoded shared build directory
@@ -372,7 +372,7 @@ scales restored to normal by the tester.
 
 Validation (13 November 2026): MSVC Release configure and full build in `build/wk-avx` passed; the requested
 `ctest --test-dir build/wk-avx -C Release -R "anomaly|thin|motion|shader_patch" --output-on-failure` passed 96/96,
-without skips, in 92.78 seconds. `py -3 -I tests/anomaly_profile_evidence.py` passed 48/48: all four evidence scripts
+without skips, in 92.78 seconds. `py -3 -I tools/anomaly_profile_evidence.py` passed 48/48: all four evidence scripts
 against both hashes, with 40 negative mutations rejected. Package unittests passed 10/10 and `git diff --check` passed.
 The first CTest run passed 94/96 but failed FSR3 activation in two FG fixtures: its cached vendor root held AMD DLL
 SHA-256 `02297bee...`, while the current SDK/header pin uses `e6843252...`. Pointing only the assigned build's

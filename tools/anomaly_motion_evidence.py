@@ -1,8 +1,8 @@
 """Motion MRT sites: read-only check of every games/anomaly/src/motion_profile.rs value against the installed exe.
 
 Checks --exe standard (default) or --exe avx. Needs the selected installed executable (D:/Anomaly 1.5.3) and capstone, so it is not registered in CTest
-(same as tests/anomaly_sr_evidence.py). Nothing is patched or executed; the file is only read and disassembled.
-Run: py -3 -I tests/anomaly_motion_evidence.py --verify
+(same as tools/anomaly_sr_evidence.py). Nothing is patched or executed; the file is only read and disassembled.
+Run: py -3 -I tools/anomaly_motion_evidence.py --verify
 Every check raises AssertionError naming the site that does not match.
 
 What is proven, per site:
@@ -32,7 +32,7 @@ from capstone import x86
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROFILE = ROOT / 'games/anomaly/src/motion_profile.rs'
-_spec = importlib.util.spec_from_file_location('anomaly_geometry_evidence', ROOT / 'tests/anomaly_geometry_evidence.py')
+_spec = importlib.util.spec_from_file_location('anomaly_geometry_evidence', ROOT / 'tools/anomaly_geometry_evidence.py')
 geometry = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(geometry)
 
@@ -82,18 +82,8 @@ def verify_unique_guards(pe, guards, sites):
     """Each extended guard matches the image, is unique in .text and minimal, and extends the 16-byte guard of the
     same site; every site whose 16 bytes are not unique has one (same rules as the geometry and SR profiles)."""
     assert guards, 'missing extended unique guards'
-    by_rva = {}
-    for name, rva, raw in guards:
-        assert pe.read(rva, len(raw)) == raw, ('unique guard bytes', name)
-        assert pe.code.count(raw) == 1, ('unique guard not unique', name)
-        assert len(raw) > 16 and pe.code.count(raw[:-1]) > 1, ('unique guard is not minimal', name, len(raw))
-        by_rva[rva] = (name, raw)
-    for name, rva, expected in sites:
-        expected = bytes.fromhex(expected)
-        if rva in by_rva:
-            assert by_rva[rva][0] == name and by_rva[rva][1].startswith(expected), ('unique guard does not extend the site', name)
-        else:
-            assert pe.code.count(expected) == 1, ('16-byte guard not unique and no extended guard', name)
+    geometry.check_guards(pe, pe.code, guards, sites)
+
 
 class Image(geometry.PE):
     def __init__(self):

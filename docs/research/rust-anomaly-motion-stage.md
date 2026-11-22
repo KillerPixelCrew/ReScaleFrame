@@ -433,8 +433,8 @@ engine compiler profile, and lends the three detour sites to the native leaf, wh
 trampolines. The stage selects the record from the SHA-256 the native installer passes, and refuses when
 none matches. `rsf_anomaly_motion_platform` is ABI 13 (272 bytes): `guards`, `shader_profile` and
 `frame_layout` are gone, `copy` (the guarded copy behind the guard image) and the site list in
-`install_hooks` are new. `tests/anomaly_motion_evidence.py` and the motion case of
-`tests/anomaly_profile_evidence.py` parse the Rust profile; the parser was checked offline against both
+`install_hooks` are new. `tools/anomaly_motion_evidence.py` and the motion case of
+`tools/anomaly_profile_evidence.py` parse the Rust profile; the parser was checked offline against both
 build sections (5 sites, 12 integer fields, 3 hex guards, 2 hull/domain sites, 1 unique guard per build,
 hex lengths equal to the removed C++ table). The evidence scripts themselves need the installed
 executables and were not run.

@@ -270,7 +270,7 @@ RIP-relative LEA selects the includer vtable. Open begins 40534881ec40020000;
 Close begins 4883ec284885d274. The adapter checks these before creating a stack
 object containing that table. Source review establishes that the includer has no
 data members and ignores object state; the exact-build PE checks establish the
-selected functions. tests/anomaly_shader_provider_evidence.py verifies both files
+selected functions. tools/anomaly_shader_provider_evidence.py verifies both files
 and hashes without execution. No game call or runtime FS acquisition is claimed
 tested here. A source mismatch/provider failure leaves the shader stock.
 

@@ -1,52 +1,22 @@
-# Local Anomaly shader inventory and bounded include previews
+# Anomaly shader inventory and include-preview evidence
 
-This is source-inspection and patch-planning tooling, **not a temporal shader
-implementation**. It does not launch or deploy to a game, modify engine source,
-produce motion vectors, or replace an executable. Python 3.12 or later is required.
+Source-inspection evidence for the Anomaly r3 shader corpus: the colour, depth and geometry findings
+below and the census the temporal shader tools build on. It is **not a temporal shader
+implementation**. The Python inventory, patch-plan and include-preview tool that produced the
+census (`tools/anomaly_shader_tool.py`, its profile and header) was removed with no production
+consumer; `git log --diff-filter=D -- tools/anomaly_shader_tool.py` recovers it. The production
+path is `tools/rsf_shader_pack.py`, `tools/anomaly_temporal_shader.py` and
+`tools/anomaly_foliage_shader.py`.
 
-All proprietary input and generated shader trees stay under `.local/anomaly/`.
-The tracked header and synthetic fixtures are independently authored first-party
-material. No GSC or TAA addon shader implementations are redistributed here.
+All proprietary input stays under `.local/anomaly/`; no GSC or TAA addon shader implementation is
+redistributed here.
 
-## Commands
-
-Run from the repository root, using a fresh output name each time:
-
-```text
-python tools/anomaly_shader_tool.py inventory --source .local/anomaly/vanilla/shaders/r3 --output .local/anomaly/inventory.json
-python tools/anomaly_shader_tool.py plan --source .local/anomaly/vanilla/shaders/r3 --output .local/anomaly/patch-plan.json
-python tools/anomaly_shader_tool.py stage-include --source .local/anomaly/vanilla/shaders/r3 --output .local/anomaly/staging/constants-preview
-python -m unittest discover -s tests -p "anomaly_shader_test.py" -v
-```
-
-Inventory records original byte hashes, family/stage, include dependencies,
-entrypoint input-structure/semantic candidates, lexical conditional axes, texture
-names, tonemap references and Lua material texture bindings. It strips HLSL and
-Lua comments and resolves includes case-insensitively from the supplied r3 root,
-matching the first lookup in the engine includer. External shader-root fallback
-is reported missing, not guessed. This is **not preprocessing, bytecode reflection,
-or a census of live engine permutations**. Conditional structure fields and
-macro aliases are intentionally retained as candidates.
-
-`plan` additionally checks the reviewed corpus fingerprint and emits every
-identified scene-geometry wrapper with its prior-state requirements, skin modes,
-conditional axes and interface/engine prerequisites. Other stage roots remain
-explicitly unclassified. Shadow-only roots are excluded from scene motion.
-
-`stage-include` validates the entire original corpus digest and file count, the
-patched file digest, the exact anchor-line digest, and the first-party include
-digest. It inserts one declaration-only include after the pinned common-header
-guard. Every other source byte is preserved. The tool refuses changed/added/
-missing assets, mismatched anchors, bad include names, pre-existing destinations,
-linked output paths and destinations outside `.local/anomaly/staging/`. Errors
-during writing remove the newly created preview. Readback verifies every staged
-asset before writing `.rsf-stage.json`.
-
-The header does not assign a hardware constant-buffer slot. No previous-state
-uploads or output semantics exist yet. Unused declarations can be optimized away.
-The manifest says `runtime_ready: false` and `motion_output_implemented: false`.
-Do not deploy the preview as a temporal implementation.
-
+The inventory recorded original byte hashes, family/stage, include dependencies, entrypoint
+input-structure/semantic candidates, lexical conditional axes, texture names, tonemap references
+and Lua material texture bindings. It resolved includes case-insensitively from the r3 root,
+matching the first lookup in the engine includer, and reported the external shader-root fallback
+missing rather than guessing. It was **not preprocessing, bytecode reflection, or a census of live
+engine permutations**: conditional structure fields and macro aliases stay candidates.
 ## Reviewed input
 
 Inspected on 11 November 2026. Local reference engine revision:
@@ -61,10 +31,6 @@ separators and ASCII escaping:
 ```text
 fdc260e0608f259d876c4ae0f11a6f2d8c03c001cf1fe82548794af1c6826a67
 ```
-
-The raw `common.h` SHA-256 and the exact second-line anchor hash are pinned in
-`anomaly_shader_vanilla_profile.json`; neither original text nor snippets are
-embedded in the profile.
 
 There are no unresolved quoted includes within this r3 tree. One unguarded source
 recursion is real: `deffer_tree_s_bump_d.vs:1-2` defines `USE_TREEWAVE` and includes
@@ -212,7 +178,7 @@ Surface motion and scrolling/glitching UV content require different treatment.
    composition remain independent work. No motion sign, units, validity encoding
    or resolve policy is established by this prototype.
 
-## Executed verification
+## Executed verification (of the removed tool)
 
 The eight focused unittest cases run synthetic failure tests, real-fixture hashes/
 semantics/PDA inventory checks, CLI staging/readback and an optional Windows SDK

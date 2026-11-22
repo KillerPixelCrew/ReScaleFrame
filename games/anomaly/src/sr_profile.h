@@ -6,7 +6,7 @@ namespace rsf::anomaly::sr {
 // native_profile.rs order); the AVX table is documented in docs/research/anomaly-avx-profile.md.
 // Data only: nothing here installs a hook or changes rendering. sr_profile.rs owns every value below and
 // tools/generate-anomaly-sr-profile.py projects it here (--check refuses drift). Every value is re-checked against the installed
-// executable by tests/anomaly_sr_evidence.py --verify [--exe avx] (decompile/disassembly evidence in that script and the docs).
+// executable by tools/anomaly_sr_evidence.py --verify [--exe avx] (decompile/disassembly evidence in that script and the docs).
 // All functions are x64 __fastcall with `this` in rcx. Line numbers refer to xray-monolith 028ccf5.
 
 // Detour and call-target candidates (sr_function_sites, in this order). expected = the first 16 bytes at the RVA (same

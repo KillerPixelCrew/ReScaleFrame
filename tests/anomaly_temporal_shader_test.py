@@ -20,6 +20,7 @@ def load_tool():
     return module
 
 
+@unittest.skipUnless(SOURCE.exists(), 'licensed local fixture unavailable')
 class CoreTests(unittest.TestCase):
     def test_refuses_changed_corpus_escaped_output_and_unknown_root(self):
         tool = load_tool()

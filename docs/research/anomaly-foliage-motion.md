@@ -25,7 +25,7 @@ Both end in `dx10ConstantBuffer::m_pBufferData`. Reading it after the original f
 `DrawIndexed` uses, with no new engine-state derivation. The alternatives (derive wind from `Device.fTimeGlobal` and the
 environment, walk `m_visibles` and `SlotItem` lists) need much more struct layout and would only approximate the values.
 
-## Evidence (installed exe, `py -3 tests/anomaly_geometry_evidence.py --verify`)
+## Evidence (installed exe, `py -3 tools/anomaly_geometry_evidence.py --verify`)
 
 | Fact | Where |
 | --- | --- |

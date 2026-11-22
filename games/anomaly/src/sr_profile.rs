@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! SR render-resolution split profiles for both exact Anomaly 1.5.3 DX11 executables.
-//! Evidence: docs/research/anomaly-sr-seam.md and anomaly-avx-profile.md; tests/anomaly_sr_evidence.py re-checks
+//! Evidence: docs/research/anomaly-sr-seam.md and anomaly-avx-profile.md; tools/anomaly_sr_evidence.py re-checks
 //! every value against the installed executables. tools/generate-anomaly-sr-profile.py projects these records
 //! into sr_profile.h for the native consumers and the evidence tools.
 // Every profiled value is projected into sr_profile.h and checked by the evidence tools; Rust reads a subset.

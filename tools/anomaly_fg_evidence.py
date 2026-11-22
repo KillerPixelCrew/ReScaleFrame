@@ -15,7 +15,7 @@ This script proves, on --exe standard (default) or --exe avx, that those sites a
   HW.pBaseZB                       the depth view the SR-off pass reads, used by CRender::Render's u_setrt
 
 Needs D:/Anomaly 1.5.3 (not in CTest, like the other Anomaly evidence scripts). Nothing is patched or executed.
-Run: py -3 -I tests/anomaly_fg_evidence.py --verify
+Run: py -3 -I tools/anomaly_fg_evidence.py --verify
 """
 import argparse
 import importlib.util
@@ -29,7 +29,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 NATIVE = ROOT / 'games/anomaly/src/native_profile.h'
 SR_PROFILE = ROOT / 'games/anomaly/src/sr_profile.h'
 INPUT_PROFILE = ROOT / 'games/anomaly/src/input/profile.rs'
-_spec = importlib.util.spec_from_file_location('anomaly_sr_evidence', ROOT / 'tests/anomaly_sr_evidence.py')
+_spec = importlib.util.spec_from_file_location('anomaly_sr_evidence', ROOT / 'tools/anomaly_sr_evidence.py')
 sr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sr)
 

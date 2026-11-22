@@ -9,11 +9,12 @@ set_tests_properties(anomaly_temporal_unknown_selection PROPERTIES WILL_FAIL TRU
 set_tests_properties(anomaly_temporal_contract anomaly_temporal_unknown_selection PROPERTIES TIMEOUT 30)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
+# Every *_test.py here covers a script in tools/. The Anomaly shader tests need the licensed local
+# corpus and skip without it.
 if(Python3_Interpreter_FOUND)
-    add_test(NAME anomaly_shader_tool_contract COMMAND "${Python3_EXECUTABLE}" -m unittest discover
-        -s "${CMAKE_CURRENT_LIST_DIR}" -p anomaly_shader_test.py -v)
-    set_tests_properties(anomaly_shader_tool_contract PROPERTIES
-        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" TIMEOUT 120)
+    add_test(NAME python_tool_tests COMMAND "${Python3_EXECUTABLE}" -I -m unittest discover
+        -s "${CMAKE_CURRENT_LIST_DIR}" -p "*_test.py")
+    set_tests_properties(python_tool_tests PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" TIMEOUT 300)
 endif()
 
 # Geometry identity/lifetime producer. Pure CPU registry, draw scopes and history feed, then real x64
@@ -44,7 +45,7 @@ add_test(NAME anomaly_overlay_hooks_contract COMMAND rsf_anomaly_overlay_hooks_t
 set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
 # SR Stage 0 site profile: compile-time consistency and runtime build selection. The guards are checked against the installed executable by
-# tests/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.
+# tools/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.
 add_executable(rsf_anomaly_sr_profile_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_profile.c")
 target_include_directories(rsf_anomaly_sr_profile_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
@@ -171,9 +172,9 @@ target_link_libraries(rsf_anomaly_sr_jitter_device_test PRIVATE rsf_anomaly_fixt
 add_test(NAME anomaly_sr_jitter_device COMMAND rsf_anomaly_sr_jitter_device_test)
 set_tests_properties(anomaly_sr_jitter_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_jitter_contract anomaly_sr_jitter_unknown_selection anomaly_sr_jitter_device PROPERTIES TIMEOUT 120)
-# The Stage 3 burst measurement (tests/anomaly_sr_evidence.py --measure-jitter) on a synthetic shifted burst; 77 without numpy.
+# The Stage 3 burst measurement (tools/anomaly_sr_evidence.py --measure-jitter) on a synthetic shifted burst; 77 without numpy.
 if(Python3_Interpreter_FOUND)
-    add_test(NAME anomaly_sr_measure_self_test COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_evidence.py"
+    add_test(NAME anomaly_sr_measure_self_test COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/tools/anomaly_sr_evidence.py"
         --measure-self-test)
     set_tests_properties(anomaly_sr_measure_self_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 endif()

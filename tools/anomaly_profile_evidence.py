@@ -20,7 +20,7 @@ CASES = {
 
 
 def run(script, build, profile=None, input_profile=None):
-    args = [sys.executable, '-I', str(ROOT / 'tests' / ('anomaly_' + script + '_evidence.py')),
+    args = [sys.executable, '-I', str(ROOT / 'tools' / ('anomaly_' + script + '_evidence.py')),
             '--verify', '--exe', build]
     if profile:
         args.extend(['--profile', str(profile)])

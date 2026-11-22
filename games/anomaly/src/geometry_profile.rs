@@ -2,7 +2,7 @@
 //! Exact Anomaly 1.5.3 DX11 geometry profiles shared by admission, the
 //! native hook leaf and the generated native projection.
 //! Evidence: docs/research/anomaly-geometry-coverage.md, anomaly-avx-profile.md
-//! and tests/anomaly_geometry_evidence.py.
+//! and tools/anomaly_geometry_evidence.py.
 use crate::engine_guards::{NativeSite, UniqueGuard, site};
 
 pub(crate) const SITE_COUNT: usize = 17;
