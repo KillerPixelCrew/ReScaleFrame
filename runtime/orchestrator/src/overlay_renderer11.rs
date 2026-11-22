@@ -21,10 +21,8 @@ mod pipeline;
 mod platform;
 
 type Handle = *mut c_void;
-const ABI: u32 = 1;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
 const SHADER_FAILED: i32 = -3;
 const RESOURCE_FAILED: i32 = -4;
 const MAX_VERTICES: u32 = 1 << 22;
@@ -34,11 +32,8 @@ const VERTEX_BUFFER: u32 = 1;
 const INDEX_BUFFER: u32 = 2;
 const CONSTANTS: usize = 3;
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 struct Setup {
-    struct_size: u32,
-    abi_version: u32,
     log: LogFn,
     log_user: Handle,
 }
@@ -62,8 +57,6 @@ impl Setup {
         }
     }
 }
-
-const _: () = assert!(size_of::<Setup>() == 24);
 
 struct Texture {
     id: u64,
@@ -391,21 +384,18 @@ struct DrawNotes {
     target: Option<&'static str>,
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_renderer_create(
+pub(crate) unsafe extern "C" fn create(
     device: Handle,
-    setup: *const Setup,
+    log: LogFn,
+    log_user: Handle,
     out: *mut Handle,
 ) -> i32 {
-    if device.is_null() || out.is_null() || !unsafe { has_capacity(setup) } {
+    if device.is_null() || out.is_null() {
         return INVALID;
     }
-    let setup = unsafe { &*setup };
-    if setup.abi_version != ABI {
-        return ABI_MISMATCH;
-    }
+    let setup = Setup { log, log_user };
     unsafe { out.write(null_mut()) };
-    let pipeline = match unsafe { pipeline::create(device, setup) } {
+    let pipeline = match unsafe { pipeline::create(device, &setup) } {
         Ok(pipeline) => pipeline,
         Err(status) => return status,
     };
@@ -414,7 +404,7 @@ unsafe extern "C" fn rsf_overlay_renderer_create(
         pending_free: Mutex::new(Vec::new()),
         pipeline,
         device: unsafe { com_ref::retain(device) },
-        setup: *setup,
+        setup,
     });
     let Some(owner) = (unsafe { renderer.as_ref() }) else {
         return RESOURCE_FAILED;
@@ -424,8 +414,7 @@ unsafe extern "C" fn rsf_overlay_renderer_create(
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_renderer_upload_texture(
+pub(crate) unsafe extern "C" fn upload_texture(
     renderer: Handle,
     context: Handle,
     update: *const Update,
@@ -456,8 +445,7 @@ unsafe extern "C" fn rsf_overlay_renderer_upload_texture(
     status
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_renderer_free_texture(renderer: Handle, id: u64) {
+pub(crate) unsafe extern "C" fn free_texture(renderer: Handle, id: u64) {
     if let Some(renderer) = unsafe { renderer.cast::<Renderer>().as_ref() } {
         if let Some(mut state) = renderer.state() {
             state.free(id);
@@ -467,8 +455,7 @@ unsafe extern "C" fn rsf_overlay_renderer_free_texture(renderer: Handle, id: u64
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_renderer_draw(
+pub(crate) unsafe extern "C" fn draw(
     renderer: Handle,
     context: Handle,
     data: *const DrawData,
@@ -504,8 +491,7 @@ unsafe extern "C" fn rsf_overlay_renderer_draw(
     renderer.draw(context, data, indices, calls, width, height)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_overlay_renderer_destroy(renderer: Handle) {
+pub(crate) unsafe extern "C" fn destroy(renderer: Handle) {
     if !renderer.is_null() {
         // C clients retain ownership of the handle through each operation.
         drop(unsafe { Box::from_raw(renderer.cast::<Renderer>()) });

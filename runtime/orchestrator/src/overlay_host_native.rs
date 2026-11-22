@@ -4,281 +4,137 @@ use crate::overlay_input::{
     rsf_overlay_input_collect, rsf_overlay_input_install, rsf_overlay_input_set_visible,
     rsf_overlay_input_uninstall, rsf_overlay_input_visible,
 };
+use crate::overlay_renderer11 as renderer;
 use crate::sys::{RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay_input_options as Options};
-use std::mem::{offset_of, transmute};
-use std::ptr::null;
-use windows::core::Interface;
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_TEXTURE2D_DESC, ID3D11DepthStencilView, ID3D11Device, ID3D11DeviceChild,
+    ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Resource, ID3D11Texture2D,
+};
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
+use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::{
     Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
     SystemInformation::GetTickCount64,
     Threading::GetCurrentThreadId,
 };
-use windows_sys::core::GUID;
 
-const UNKNOWN: GUID = GUID::from_u128(0x00000000_0000_0000_c000_000000000046);
-const DEVICE: GUID = GUID::from_u128(0xdb6f6ddb_ac77_4e88_8253_819df9bbf140);
-const TEXTURE_2D: GUID = GUID::from_u128(0x6f15aaf2_d208_4e89_9ab4_489535d34f9c);
+const E_POINTER: i32 = 0x8000_4003_u32 as i32;
 
-// Slots and structures follow the Windows SDK's C interface definitions in
-// dxgi.h and d3d11.h, including the inherited interfaces.
-const QUERY_INTERFACE: usize = 0;
-const CHAIN_GET_DEVICE: usize = 7;
-const CHAIN_GET_BUFFER: usize = 9;
-const CHAIN_GET_DESC: usize = 12;
-const DEVICE_GET_IMMEDIATE_CONTEXT: usize = 40;
-const CHILD_GET_DEVICE: usize = 3;
-const TEXTURE_GET_DESC: usize = 10;
-const DEVICE_CREATE_RENDER_TARGET_VIEW: usize = 9;
-const CONTEXT_OM_GET_RENDER_TARGETS: usize = 89;
-const CONTEXT_OM_SET_RENDER_TARGETS: usize = 33;
-
-#[repr(C)]
-#[derive(Default)]
-struct ModeDesc {
-    width: u32,
-    height: u32,
-    refresh_rate: [u32; 2],
-    format: u32,
-    scanline_ordering: u32,
-    scaling: u32,
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct SwapChainDesc {
-    buffer_desc: ModeDesc,
-    sample_desc: [u32; 2],
-    buffer_usage: u32,
-    buffer_count: u32,
-    output_window: Handle,
-    windowed: i32,
-    swap_effect: u32,
-    flags: u32,
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct Texture2dDesc {
-    width: u32,
-    height: u32,
-    mip_levels: u32,
-    array_size: u32,
-    format: u32,
-    sample_desc: [u32; 2],
-    usage: u32,
-    bind_flags: u32,
-    cpu_access_flags: u32,
-    misc_flags: u32,
-}
-
-const _: () = {
-    assert!(size_of::<SwapChainDesc>() == 72);
-    assert!(offset_of!(SwapChainDesc, output_window) == 48);
-    assert!(size_of::<Texture2dDesc>() == 44);
-    assert!(offset_of!(Texture2dDesc, bind_flags) == 32);
-};
-
-unsafe fn slot(object: Handle, index: usize) -> *const c_void {
-    let vtable = unsafe { *object.cast::<*const *const c_void>() };
-    unsafe { *vtable.add(index) }
-}
-
-macro_rules! com_call {
-    ($object:ident, $slot:ident, $signature:ty, $($arg:expr),+) => {{
-        unsafe {
-            let method = transmute::<*const c_void, $signature>(slot($object, $slot));
-            method($object, $($arg),+)
+fn hresult<T: Interface>(result: windows::core::Result<T>, out: *mut Handle) -> i32 {
+    match result {
+        Ok(value) => {
+            unsafe { out.write(value.into_raw()) };
+            0
         }
-    }};
+        Err(error) => error.code().0,
+    }
 }
 
 unsafe extern "C" fn chain_device(chain: Handle, out: *mut Handle) -> i32 {
-    com_call!(
-        chain,
-        CHAIN_GET_DEVICE,
-        unsafe extern "system" fn(Handle, *const GUID, *mut Handle) -> i32,
-        &DEVICE,
-        out
-    )
+    let Some(chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }) else {
+        return E_POINTER;
+    };
+    hresult(unsafe { chain.GetDevice::<ID3D11Device>() }, out)
 }
 
 unsafe extern "C" fn chain_buffer(chain: Handle, out: *mut Handle) -> i32 {
-    com_call!(
-        chain,
-        CHAIN_GET_BUFFER,
-        unsafe extern "system" fn(Handle, u32, *const GUID, *mut Handle) -> i32,
-        0,
-        &TEXTURE_2D,
-        out
-    )
+    let Some(chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }) else {
+        return E_POINTER;
+    };
+    hresult(unsafe { chain.GetBuffer::<ID3D11Texture2D>(0) }, out)
 }
 
 unsafe extern "C" fn chain_window(chain: Handle) -> Handle {
-    let mut desc = SwapChainDesc::default();
-    let status = com_call!(
-        chain,
-        CHAIN_GET_DESC,
-        unsafe extern "system" fn(Handle, *mut SwapChainDesc) -> i32,
-        &mut desc
-    );
-    if status < 0 {
-        null_mut()
-    } else {
-        desc.output_window
-    }
+    unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }
+        .and_then(|chain| unsafe { chain.GetDesc() }.ok())
+        .map_or(null_mut(), |desc| desc.OutputWindow.0)
 }
 
 unsafe extern "C" fn same_object(first: Handle, second: Handle) -> u32 {
     let identity = |object: Handle| {
-        if object.is_null() {
-            return None;
-        }
-        let mut raw = null_mut();
-        let status = com_call!(
-            object,
-            QUERY_INTERFACE,
-            unsafe extern "system" fn(Handle, *const GUID, *mut Handle) -> i32,
-            &UNKNOWN,
-            &mut raw
-        );
-        unsafe { com_ref::owned(raw) }.filter(|_| status >= 0)
+        unsafe { IUnknown::from_raw_borrowed(&object) }
+            .and_then(|object| object.cast::<IUnknown>().ok())
     };
-    u32::from(
-        identity(first).is_some_and(|a| identity(second).is_some_and(|b| a.as_raw() == b.as_raw())),
-    )
+    u32::from(identity(first).is_some_and(|a| identity(second).is_some_and(|b| a.as_raw() == b.as_raw())))
 }
 
 unsafe extern "C" fn immediate_context(device: Handle) -> Handle {
-    let mut context = null_mut();
-    com_call!(
-        device,
-        DEVICE_GET_IMMEDIATE_CONTEXT,
-        unsafe extern "system" fn(Handle, *mut Handle),
-        &mut context
-    );
-    context
+    unsafe { ID3D11Device::from_raw_borrowed(&device) }
+        .and_then(|device| unsafe { device.GetImmediateContext() }.ok())
+        .map_or(null_mut(), Interface::into_raw)
 }
 
 unsafe extern "C" fn texture_device(texture: Handle) -> Handle {
-    let mut device = null_mut();
-    com_call!(
-        texture,
-        CHILD_GET_DEVICE,
-        unsafe extern "system" fn(Handle, *mut Handle),
-        &mut device
-    );
-    device
+    unsafe { ID3D11DeviceChild::from_raw_borrowed(&texture) }
+        .and_then(|texture| unsafe { texture.GetDevice() }.ok())
+        .map_or(null_mut(), Interface::into_raw)
 }
 
 unsafe extern "C" fn texture_desc(texture: Handle, out: *mut TextureDesc) {
-    let mut desc = Texture2dDesc::default();
-    com_call!(
-        texture,
-        TEXTURE_GET_DESC,
-        unsafe extern "system" fn(Handle, *mut Texture2dDesc),
-        &mut desc
-    );
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    if let Some(texture) = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) } {
+        unsafe { texture.GetDesc(&mut desc) };
+    }
     unsafe {
         out.write(TextureDesc {
-            width: desc.width,
-            height: desc.height,
-            format: desc.format,
-            bind_flags: desc.bind_flags,
+            width: desc.Width,
+            height: desc.Height,
+            format: desc.Format.0 as u32,
+            bind_flags: desc.BindFlags,
         })
     };
 }
 
 unsafe extern "C" fn create_view(device: Handle, texture: Handle, out: *mut Handle) -> i32 {
-    com_call!(
-        device,
-        DEVICE_CREATE_RENDER_TARGET_VIEW,
-        unsafe extern "system" fn(Handle, Handle, *const c_void, *mut Handle) -> i32,
-        texture,
-        null(),
-        out
-    )
+    let (Some(device), Some(texture)) = (unsafe { ID3D11Device::from_raw_borrowed(&device) }, unsafe {
+        ID3D11Resource::from_raw_borrowed(&texture)
+    }) else {
+        return E_POINTER;
+    };
+    let mut view = None;
+    let result = unsafe { device.CreateRenderTargetView(texture, None, Some(&mut view)) };
+    match (result, view) {
+        (Ok(()), Some(view)) => {
+            unsafe { out.write(view.into_raw()) };
+            0
+        }
+        (Err(error), _) => error.code().0,
+        (Ok(()), None) => E_POINTER,
+    }
 }
 
 unsafe extern "C" fn save_targets(context: Handle, out: *mut Targets) {
+    let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }) else {
+        return;
+    };
+    let mut views: [Option<ID3D11RenderTargetView>; 8] = Default::default();
+    let mut depth = None;
+    unsafe { context.OMGetRenderTargets(Some(&mut views), Some(&mut depth)) };
     let out = unsafe { &mut *out };
-    com_call!(
-        context,
-        CONTEXT_OM_GET_RENDER_TARGETS,
-        unsafe extern "system" fn(Handle, u32, *mut Handle, *mut Handle),
-        out.views.len() as u32,
-        out.views.as_mut_ptr(),
-        &mut out.depth
-    );
+    for (slot, view) in out.views.iter_mut().zip(views) {
+        *slot = view.map_or(null_mut(), Interface::into_raw);
+    }
+    out.depth = depth.map_or(null_mut(), Interface::into_raw);
 }
 
 unsafe extern "C" fn bind_target(context: Handle, view: Handle) {
-    com_call!(
-        context,
-        CONTEXT_OM_SET_RENDER_TARGETS,
-        unsafe extern "system" fn(Handle, u32, *const Handle, Handle),
-        1,
-        &view,
-        null_mut()
-    );
+    if let Some(context) = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) } {
+        let view = unsafe { ID3D11RenderTargetView::from_raw_borrowed(&view) }.cloned();
+        unsafe { context.OMSetRenderTargets(Some(&[view]), None) };
+    }
 }
 
 unsafe extern "C" fn restore_targets(context: Handle, saved: *const Targets) {
-    let saved = unsafe { &*saved };
-    com_call!(
-        context,
-        CONTEXT_OM_SET_RENDER_TARGETS,
-        unsafe extern "system" fn(Handle, u32, *const Handle, Handle),
-        saved.views.len() as u32,
-        saved.views.as_ptr(),
-        saved.depth
-    );
-}
-
-#[repr(C)]
-struct RendererSetup {
-    struct_size: u32,
-    abi_version: u32,
-    log: Log,
-    log_user: Handle,
-}
-
-unsafe extern "C" {
-    fn rsf_overlay_renderer_create(
-        device: Handle,
-        setup: *const RendererSetup,
-        out: *mut Handle,
-    ) -> i32;
-    fn rsf_overlay_renderer_upload_texture(
-        renderer: Handle,
-        context: Handle,
-        update: *const rsf_overlay_texture_update,
-    ) -> i32;
-    fn rsf_overlay_renderer_free_texture(renderer: Handle, id: u64);
-    fn rsf_overlay_renderer_draw(
-        renderer: Handle,
-        context: Handle,
-        data: *const rsf_overlay_draw_data,
-        width: u32,
-        height: u32,
-    ) -> i32;
-    fn rsf_overlay_renderer_destroy(renderer: Handle);
-}
-
-unsafe extern "C" fn renderer_create(
-    device: Handle,
-    log: Log,
-    user: Handle,
-    out: *mut Handle,
-) -> i32 {
-    let setup = RendererSetup {
-        struct_size: size_of::<RendererSetup>() as u32,
-        abi_version: 1,
-        log,
-        log_user: user,
+    let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }) else {
+        return;
     };
-    unsafe { rsf_overlay_renderer_create(device, &setup, out) }
+    let saved = unsafe { &*saved };
+    let views = saved
+        .views
+        .map(|view| unsafe { ID3D11RenderTargetView::from_raw_borrowed(&view) }.cloned());
+    let depth = unsafe { ID3D11DepthStencilView::from_raw_borrowed(&saved.depth) };
+    unsafe { context.OMSetRenderTargets(Some(&views), depth) };
 }
-
 unsafe extern "C" fn input_install(window: Handle, toggle: u32, log: Log, user: Handle) -> i32 {
     let options = Options {
         struct_size: size_of::<Options>() as u32,
@@ -331,11 +187,11 @@ static PLATFORM: Platform = Platform {
     save_targets,
     bind_target,
     restore_targets,
-    renderer_create,
-    renderer_upload: rsf_overlay_renderer_upload_texture,
-    renderer_free: rsf_overlay_renderer_free_texture,
-    renderer_draw: rsf_overlay_renderer_draw,
-    renderer_destroy: rsf_overlay_renderer_destroy,
+    renderer_create: renderer::create,
+    renderer_upload: renderer::upload_texture,
+    renderer_free: renderer::free_texture,
+    renderer_draw: renderer::draw,
+    renderer_destroy: renderer::destroy,
     input_install,
     input_uninstall,
     input_visible: rsf_overlay_input_visible,
