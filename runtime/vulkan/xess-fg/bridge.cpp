@@ -496,32 +496,33 @@ extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create_shared_image(rsf_vk_x
         return -1;
     *sharedHandle = nullptr;
     *resource = nullptr;
-    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-    D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE;
-    switch (static_cast<VkFormat>(vkFormat)) {
-        case VK_FORMAT_R8G8B8A8_UNORM: format = DXGI_FORMAT_R8G8B8A8_UNORM; break;
-        case VK_FORMAT_B8G8R8A8_UNORM: format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
-        case VK_FORMAT_R16G16_SFLOAT: format = DXGI_FORMAT_R16G16_FLOAT; break;
-        case VK_FORMAT_R16G16B16A16_SFLOAT: format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
-        case VK_FORMAT_R32_SFLOAT: format = DXGI_FORMAT_R32_FLOAT; break;
-        case VK_FORMAT_D32_SFLOAT:
-            format = DXGI_FORMAT_D32_FLOAT;
-            flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-            break;
-        default: return -2;
-    }
+    static_assert(VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44 &&
+        VK_FORMAT_R16G16_SFLOAT == 83 && VK_FORMAT_R16G16B16A16_SFLOAT == 97 &&
+        VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
+    static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10 &&
+        D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL == 2);
+    rsf_xess_bridge_shared_image_desc plan{};
+    const int32_t planned = rsf_core_xess_bridge_shared_image_plan(width, height, vkFormat, &plan);
+    if (planned != 0) return planned;
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    void* plannedResource = nullptr;
+    const int32_t result = rsf_xess_capture::rsf_core_xess_d3d12_shared_image(
+        value->device, &plan, sharedHandle, &plannedResource);
+    *resource = static_cast<ID3D12Resource*>(plannedResource);
+    return result;
+#else
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_DEFAULT;
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = width;
-    desc.Height = height;
+    desc.Width = plan.width;
+    desc.Height = plan.height;
     desc.DepthOrArraySize = 1;
     desc.MipLevels = 1;
-    desc.Format = format;
+    desc.Format = static_cast<DXGI_FORMAT>(plan.format);
     desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    desc.Flags = flags;
+    desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(plan.flags);
     HRESULT result = value->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED,
         &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(resource));
     if (FAILED(result)) return static_cast<int>(result);
@@ -532,6 +533,7 @@ extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create_shared_image(rsf_vk_x
         return static_cast<int>(result);
     }
     return 0;
+#endif
 }
 
 /// @brief Releases a caller-owned shared-image COM reference; null is accepted.

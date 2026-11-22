@@ -187,3 +187,26 @@ commands in the same order and initializes the same shared capture owner
 with the device's reported memory types. The C++ capsule retains the
 typed SDK table and opaque Rust handle. Its mock still supplies the
 original inert SDK and Vulkan proc callbacks.
+
+Both bridge builds use the same Rust shared-image format plan for the six
+original Vulkan formats. The integrated bridge creates and exports the
+D3D12 resource through the Rust DX12 bindings. The standalone bridge uses
+the plan with its direct COM leaf. Transfer of the NT handle and COM
+reference happens after successful export. V03 still imports them and
+owns the original timeline and retirement contract.
+
+The FG and SR fixture drivers, integrated capture and Present recording,
+and SR Vulkan binding are ported at source level. Native boundaries remain
+for the Win32 window callbacks, the independent typed SDK mock, the
+conditional V02 entry-point table, SDK function binding, and the standalone
+bridge's COM calls. The integrated bridge also retains its native DXGI and
+D3D12 creation, queue and GPU timestamp context. V04's cross-provider
+public naming is independent. This change preserves the existing private
+XeSS adapter entries and does not take any public rename.
+
+Checks used Rust 1.94.1 formatting, bindgen 0.72.1 for the XeSS records and
+pinned vendor bindings, locked offline Windows x64 metadata, and MinGW
+C++ syntax for both bridge modes, the SR adapter and CPU mock, the SR
+launcher modes, and the Present window leaf. Source comparison checked
+the export lists, typed mock, V02/V03 owners and fixture queue order.
+Build, test and device results remain pending.

@@ -8007,6 +8007,13 @@ ports the interop, Present and SR device drivers and records the native
 Vulkan calls and typed SR input-range mock. Rust checks the exact diagnostic SDK fingerprint before resolving the
 private setter, and both bridge builds read the saved Unicode profile.
 Build, fixture execution and device checks remain pending.
+The [graphics follow-up](research/rust-vulkan-xess-fg-v06.md#graphics-leaves-from-3066e6ad)
+ports the remaining Vulkan device work in both fixtures and the SR adapter's
+dispatch state. The integrated bridge uses typed Rust DX12 capture and
+Present recording and shared texture creation. The standalone bridge
+shares the texture format plan and keeps its native COM leaves.
+The source checks and remaining native boundaries are recorded there.
+
 ### D3D12 Streamline generation follow-up (D06)
 
 Rust packs the D3D12 SDK inputs, formats Reflex reports, parses NVAPI records

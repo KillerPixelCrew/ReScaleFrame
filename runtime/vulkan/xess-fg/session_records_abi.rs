@@ -81,3 +81,26 @@ impl Default for rsf_xess_bridge_modules {
         }
     }
 }
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_xess_bridge_shared_image_desc {
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+    pub flags: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_xess_bridge_shared_image_desc"]
+        [::core::mem::size_of::<rsf_xess_bridge_shared_image_desc>() - 16usize];
+    ["Alignment of rsf_xess_bridge_shared_image_desc"]
+        [::core::mem::align_of::<rsf_xess_bridge_shared_image_desc>() - 4usize];
+    ["Offset of field: rsf_xess_bridge_shared_image_desc::width"]
+        [::core::mem::offset_of!(rsf_xess_bridge_shared_image_desc, width) - 0usize];
+    ["Offset of field: rsf_xess_bridge_shared_image_desc::height"]
+        [::core::mem::offset_of!(rsf_xess_bridge_shared_image_desc, height) - 4usize];
+    ["Offset of field: rsf_xess_bridge_shared_image_desc::format"]
+        [::core::mem::offset_of!(rsf_xess_bridge_shared_image_desc, format) - 8usize];
+    ["Offset of field: rsf_xess_bridge_shared_image_desc::flags"]
+        [::core::mem::offset_of!(rsf_xess_bridge_shared_image_desc, flags) - 12usize];
+};

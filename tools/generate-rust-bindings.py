@@ -191,7 +191,7 @@ generate("runtime/vulkan/xess-fg/bridge_abi.rs", "runtime/vulkan/xess-fg/bridge_
          ["--blocklist-type", "rsf_xess_bridge_legacy_reserved", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "type rsf_xess_bridge_legacy_reserved = ::core::mem::MaybeUninit<u32>;"])
 generate("runtime/vulkan/xess-fg/session_records_abi.rs", "runtime/vulkan/xess-fg/session_records.h",
-         "rsf_xess_(capture_desc|bridge_resource_desc|bridge_modules)",
+         "rsf_xess_(capture_desc|bridge_resource_desc|bridge_modules|bridge_shared_image_desc)",
          "RSF_XESS_BRIDGE_(PLATFORM_ABI_VERSION|ALLOCATOR_COUNT)", [],
          ["--with-derive-default", "--with-derive-custom-struct", "rsf_xess_bridge_resource_desc=PartialEq,Eq"])
 generate("runtime/orchestrator/src/vulkan_xess_fg_abi.rs", "runtime/orchestrator/src/native_fg_xess_vulkan.h",

@@ -82,6 +82,7 @@ void rsf_core_xess_d3d12_capture_unmap(void*);
 void rsf_core_xess_d3d12_present_describe(void*, rsf_xess_bridge_resource_desc*);
 void rsf_core_xess_d3d12_present_transition(void*, void*, uint32_t, uint32_t);
 void rsf_core_xess_d3d12_present_copy(void*, void*, void*);
+int32_t rsf_core_xess_d3d12_shared_image(void*, const rsf_xess_bridge_shared_image_desc*, void**, void**);
 }
 #else
 // Standalone bridge links the Rust session directly without the Runtime crate.

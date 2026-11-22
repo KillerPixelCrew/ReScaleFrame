@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, readback_buffer, resource_field, transition};
 use crate::xess_fg_bridge::session_records_abi::{
-    rsf_xess_bridge_resource_desc, rsf_xess_capture_desc,
+    rsf_xess_bridge_resource_desc, rsf_xess_bridge_shared_image_desc, rsf_xess_capture_desc,
 };
 use std::{ffi::c_void, ptr};
+use windows::Win32::Foundation::GENERIC_ALL;
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::core::{IUnknown, Interface};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+use windows::core::{IUnknown, Interface, PCWSTR};
 
 const _: () = {
     assert!(size_of::<D3D12_PLACED_SUBRESOURCE_FOOTPRINT>() == 32);
@@ -186,4 +188,56 @@ unsafe extern "C" fn rsf_core_xess_d3d12_present_copy(
     let target = unsafe { ID3D12Resource::from_raw_borrowed(&target).unwrap() };
     let source = unsafe { ID3D12Resource::from_raw_borrowed(&source).unwrap() };
     unsafe { commands.CopyResource(target, source) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_xess_d3d12_shared_image(
+    device: Handle,
+    desc: &rsf_xess_bridge_shared_image_desc,
+    shared: &mut Handle,
+    output: &mut Handle,
+) -> i32 {
+    let device = unsafe { ID3D12Device::from_raw_borrowed(&device).unwrap() };
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        ..Default::default()
+    };
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Width: u64::from(desc.width),
+        Height: desc.height,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT(desc.format as i32),
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAGS(desc.flags as i32),
+        ..Default::default()
+    };
+    let mut resource: Option<ID3D12Resource> = None;
+    if let Err(error) = unsafe {
+        device.CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_SHARED,
+            &desc,
+            D3D12_RESOURCE_STATE_COMMON,
+            None,
+            &mut resource,
+        )
+    } {
+        return error.code().0;
+    }
+    let Some(resource) = resource else { return -1 };
+    let handle = match unsafe {
+        device.CreateSharedHandle(&resource, None, GENERIC_ALL.0, PCWSTR::null())
+    } {
+        Ok(handle) => handle,
+        Err(error) => return error.code().0,
+    };
+    *shared = handle.0;
+    *output = resource.into_raw();
+    0
 }

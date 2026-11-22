@@ -20,3 +20,7 @@ typedef struct rsf_xess_bridge_modules {
     void* fg;
     void* xell;
 } rsf_xess_bridge_modules;
+
+typedef struct rsf_xess_bridge_shared_image_desc {
+    uint32_t width, height, format, flags;
+} rsf_xess_bridge_shared_image_desc;

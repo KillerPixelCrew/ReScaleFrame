@@ -247,6 +247,32 @@ const STATE_PRESENT: u32 = 0;
 const STATE_COPY_DEST: u32 = 0x400;
 const STATE_COPY_SOURCE: u32 = 0x800;
 
+// Keep this mapping shared by the Runtime and standalone D3D12 image creators.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_xess_bridge_shared_image_plan(
+    width: u32,
+    height: u32,
+    vk_format: u32,
+    output: &mut session_records_abi::rsf_xess_bridge_shared_image_desc,
+) -> i32 {
+    let (format, flags) = match vk_format {
+        37 => (28, 0), // R8G8B8A8_UNORM
+        44 => (DXGI_FORMAT_B8G8R8A8_UNORM, 0),
+        83 => (DXGI_FORMAT_R16G16_FLOAT, 0),
+        97 => (10, 0), // R16G16B16A16_FLOAT
+        100 => (DXGI_FORMAT_R32_FLOAT, 0),
+        126 => (DXGI_FORMAT_D32_FLOAT, 2), // ALLOW_DEPTH_STENCIL
+        _ => return -2,
+    };
+    *output = session_records_abi::rsf_xess_bridge_shared_image_desc {
+        width,
+        height,
+        format,
+        flags,
+    };
+    0
+}
+
 thread_local! {
     static CREATE_STAGE: Cell<&'static CStr> = const { Cell::new(c"not attempted") };
 }

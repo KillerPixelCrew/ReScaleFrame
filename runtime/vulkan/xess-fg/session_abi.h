@@ -158,3 +158,6 @@ int32_t rsf_core_xess_bridge_present_integrated(rsf_xess_bridge_session*, const 
 int32_t rsf_core_xess_bridge_prepare_destroy(rsf_xess_bridge_session*);
 int32_t rsf_core_xess_bridge_destroy(rsf_xess_bridge_session*);
 }
+
+extern "C" int32_t rsf_core_xess_bridge_shared_image_plan(uint32_t width, uint32_t height,
+    uint32_t vk_format, rsf_xess_bridge_shared_image_desc*);
