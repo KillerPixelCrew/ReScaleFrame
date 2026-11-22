@@ -24,9 +24,6 @@ extern "C" {
 // Bytes compared at each entry and helper site.
 #define RSF_AC7_SITE_BYTES 16u
 #define RSF_AC7_VELOCITY_PATCHES 3u
-// Hook body guards. Stop waits for entry guards before disabling hooks and for both kinds after.
-#define RSF_AC7_GUARD_ENTRY 0u
-#define RSF_AC7_GUARD_OUTER 1u
 
 // Native code leaves lent to the Rust owner for one call.
 typedef struct rsf_ac7_code_leaves {
@@ -54,12 +51,6 @@ typedef struct rsf_ac7_code_patches {
     uint32_t velocity_applied;      // velocity patches applied, in table order
     unsigned char* scene_precision_site; // patched scene-precision site, or null
 } rsf_ac7_code_patches;
-
-// Per-thread hook body counting. `kind` is RSF_AC7_GUARD_*.
-void rsf_ac7_guard_enter(uint32_t kind);
-void rsf_ac7_guard_leave(uint32_t kind);
-// Hook bodies running: entry guards, plus outer guards when `outer_too`.
-uint32_t rsf_ac7_guards_held(bool outer_too);
 
 // The temporal velocity patch at `index`; false out of range.
 bool rsf_ac7_velocity_patch(uint32_t index, rsf_ac7_code_patch* out);

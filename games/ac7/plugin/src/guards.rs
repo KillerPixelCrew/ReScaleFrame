@@ -5,7 +5,6 @@
 //! is inside the module: entry guards before hooks are disabled, entry and outer guards after.
 //! Each thread keeps to one cache-line slot, so counting does not bounce a shared line between
 //! the game, render and RHI threads; the slots are summed only on the stop and failure paths.
-use crate::sys::{RSF_AC7_GUARD_ENTRY, RSF_AC7_GUARD_OUTER};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering, fence};
 
@@ -31,7 +30,8 @@ thread_local! {
     static INDEX: Cell<u32> = const { Cell::new(SLOTS) };
 }
 
-fn counter(kind: u32) -> Option<&'static AtomicU32> {
+/// This thread's entry or outer count.
+fn counter(outer: bool) -> &'static AtomicU32 {
     let index = INDEX.with(|index| {
         if index.get() == SLOTS {
             index.set(NEXT.fetch_add(1, Ordering::Relaxed) % SLOTS);
@@ -39,30 +39,19 @@ fn counter(kind: u32) -> Option<&'static AtomicU32> {
         index.get()
     });
     let slot = &GUARDS[index as usize];
-    match kind {
-        RSF_AC7_GUARD_ENTRY => Some(&slot.entry),
-        RSF_AC7_GUARD_OUTER => Some(&slot.outer),
-        _ => None,
-    }
+    if outer { &slot.outer } else { &slot.entry }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_guard_enter(kind: u32) {
-    if let Some(count) = counter(kind) {
-        count.fetch_add(1, Ordering::Relaxed);
-    }
+pub(crate) fn enter(outer: bool) {
+    counter(outer).fetch_add(1, Ordering::Relaxed);
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_guard_leave(kind: u32) {
-    if let Some(count) = counter(kind) {
-        count.fetch_sub(1, Ordering::Release);
-    }
+pub(crate) fn leave(outer: bool) {
+    counter(outer).fetch_sub(1, Ordering::Release);
 }
 
 /// Hook bodies running: entry guards, plus outer guards when `outer_too`.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_guards_held(outer_too: bool) -> u32 {
+pub(crate) fn held(outer_too: bool) -> u32 {
     fence(Ordering::SeqCst);
     GUARDS.iter().fold(0u32, |total, slot| {
         let total = total.wrapping_add(slot.entry.load(Ordering::Acquire));
@@ -81,34 +70,30 @@ mod tests {
     // One test: the slots are process-wide, so parallel tests would see each other's guards.
     #[test]
     fn guards_count_per_thread_and_sum_by_kind() {
-        assert_eq!(rsf_ac7_guards_held(true), 0);
-        rsf_ac7_guard_enter(RSF_AC7_GUARD_ENTRY);
-        rsf_ac7_guard_enter(RSF_AC7_GUARD_OUTER);
-        assert_eq!(rsf_ac7_guards_held(false), 1);
-        assert_eq!(rsf_ac7_guards_held(true), 2);
+        assert_eq!(held(true), 0);
+        enter(false);
+        enter(true);
+        assert_eq!(held(false), 1);
+        assert_eq!(held(true), 2);
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                rsf_ac7_guard_enter(RSF_AC7_GUARD_ENTRY);
-                assert_eq!(rsf_ac7_guards_held(false), 2);
-                rsf_ac7_guard_leave(RSF_AC7_GUARD_ENTRY);
+                enter(false);
+                assert_eq!(held(false), 2);
+                leave(false);
             });
         });
         // More threads than slots share slots without losing a count.
         std::thread::scope(|scope| {
             for _ in 0..SLOTS + 8 {
                 scope.spawn(|| {
-                    rsf_ac7_guard_enter(RSF_AC7_GUARD_OUTER);
-                    rsf_ac7_guard_leave(RSF_AC7_GUARD_OUTER);
+                    enter(true);
+                    leave(true);
                 });
             }
         });
-        assert_eq!(rsf_ac7_guards_held(true), 2);
-        rsf_ac7_guard_leave(RSF_AC7_GUARD_OUTER);
-        rsf_ac7_guard_leave(RSF_AC7_GUARD_ENTRY);
-        assert_eq!(rsf_ac7_guards_held(true), 0);
-        rsf_ac7_guard_enter(7);
-        assert_eq!(rsf_ac7_guards_held(true), 0);
-        rsf_ac7_guard_leave(7);
-        assert_eq!(rsf_ac7_guards_held(true), 0);
+        assert_eq!(held(true), 2);
+        leave(true);
+        leave(false);
+        assert_eq!(held(true), 0);
     }
 }

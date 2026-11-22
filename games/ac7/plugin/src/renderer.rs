@@ -19,7 +19,6 @@
 //! - Retirement disables and removes the hooks that are created, which a removal clears, instead
 //!   of every bound target, so a retried stop or a stop after a partial activation removes
 //!   exactly what is still owned.
-use crate::guards::rsf_ac7_guards_held;
 use crate::lifecycle::Renderer;
 use crate::native_renderer::leaves;
 use crate::patches;
@@ -426,7 +425,7 @@ impl Native for NativeLeaves {
         unsafe { leaves::truesky_restore(renderer) }
     }
     fn guards_held(&self, outer_too: bool) -> u32 {
-        rsf_ac7_guards_held(outer_too)
+        crate::guards::held(outer_too)
     }
     fn pixel_diagnostics(&self) -> bool {
         let fallback = environment_flag(std::env::var_os(DIAGNOSTICS_VARIABLE).as_deref());

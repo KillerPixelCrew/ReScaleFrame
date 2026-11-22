@@ -1248,7 +1248,7 @@ fn replay_graph(calls: &Calls, device: &ID3D11Device, immediate: &ID3D11DeviceCo
         c"hook table and diagnostic admission match the native enum",
     );
     // Hook guards count per thread and sum for the stop path.
-    let held = crate::guards::rsf_ac7_guards_held;
+    let held = crate::guards::held;
     verify(held(true) == 0, c"no hook body is running");
     {
         let _entry = Guard::entry();

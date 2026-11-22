@@ -48,20 +48,6 @@ fn table_matches_the_former_patches() {
             .all(|patch| patch.native.len() == 2 && patch.replacement.len() == 2)
     );
     assert_eq!(NATIVE_SCENE_FORMAT, SCENE_PRECISION_EXPECTED[..13]);
-    let mut descriptor = rsf_ac7_code_patch {
-        rva: 0,
-        size: 0,
-        native: [0; 16],
-        replacement: [0; 16],
-    };
-    for (index, patch) in VELOCITY.iter().enumerate() {
-        assert!(unsafe { rsf_ac7_velocity_patch(index as u32, &mut descriptor) });
-        assert_eq!((descriptor.rva, descriptor.size), (patch.rva, 2));
-        assert_eq!(&descriptor.native[..2], patch.native);
-        assert_eq!(&descriptor.replacement[..2], patch.replacement);
-    }
-    assert!(!unsafe { rsf_ac7_velocity_patch(RSF_AC7_VELOCITY_PATCHES, &mut descriptor) });
-    assert!(!unsafe { rsf_ac7_velocity_patch(0, null_mut()) });
 }
 
 #[test]

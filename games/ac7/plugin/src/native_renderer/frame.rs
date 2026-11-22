@@ -3,8 +3,8 @@
 //! renderer identity bound into render packets, and the RHI frame and family scopes.
 use super::graph::retire_renderer_uniforms;
 use super::{
-    Guard, Renderer, RendererIdentity, SCOPE_READ, close, copy, drain_retired, game_engine_object,
-    game_module, hook, installed, key, native, open, original, read, scope,
+    Guard, Renderer, RendererIdentity, close, copy, drain_retired, game_engine_object, game_module,
+    hook, installed, key, native, open, original, read, scope,
 };
 use crate::sys::rsf_ac7_render_scope;
 use rsf_game_sys::{
@@ -245,8 +245,7 @@ unsafe extern "system" fn input_message(code: i32, removed: WPARAM, argument: LP
 
 pub(super) fn source_primary_renderer(owner: &Renderer, renderer: *mut c_void) -> bool {
     owner.config().is_some_and(|config| {
-        super::rsf_ac7_scope_primary_renderer(
-            SCOPE_READ,
+        crate::scope_facts::primary_renderer(
             key(renderer),
             config.output_width,
             config.output_height,

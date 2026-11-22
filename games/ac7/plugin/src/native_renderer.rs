@@ -17,22 +17,18 @@ use crate::render_scope::rsf_ac7_render_scope_open_leased;
 use crate::render_scope::rsf_ac7_render_scopes_destroy;
 use crate::render_scope::rsf_ac7_render_scopes_idle;
 use crate::render_scope::rsf_ac7_render_scopes_quiesce;
-use crate::scope_facts::rsf_ac7_scope_primary_facts;
-use crate::scope_facts::rsf_ac7_scope_primary_renderer;
-use crate::scope_facts::rsf_ac7_scope_primary_view;
 use crate::sites::rsf_ac7_hook_role;
 use crate::sites::rsf_ac7_hook_rva;
 use crate::sys::rsf_ac7_cloud_depth;
+use crate::sys::rsf_ac7_scope_lease;
 use crate::sys::{
-    RSF_AC7_GUARD_ENTRY, RSF_AC7_GUARD_OUTER, RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches,
-    rsf_ac7_native_calls, rsf_ac7_truesky_patches,
+    RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches, rsf_ac7_native_calls, rsf_ac7_truesky_patches,
 };
 use crate::sys::{rsf_ac7_copy_memory, rsf_ac7_read_memory};
 use crate::sys::{
     rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_render_scope,
     rsf_ac7_render_scope_fn,
 };
-use crate::sys::{rsf_ac7_scope_lease, rsf_ac7_scope_read};
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::rsf_game_render_config;
 use std::alloc::{Layout, alloc_zeroed};
@@ -203,24 +199,24 @@ fn installed() -> Option<&'static Renderer> {
 }
 
 /// Hook bodies count themselves in and out (guards.rs), so stop can tell when no thread is inside
-/// this module.
-struct Guard(u32);
+/// this module. True for an outer guard.
+struct Guard(bool);
 
 impl Guard {
     fn outer() -> Self {
-        crate::guards::rsf_ac7_guard_enter(RSF_AC7_GUARD_OUTER);
-        Self(RSF_AC7_GUARD_OUTER)
+        crate::guards::enter(true);
+        Self(true)
     }
 
     fn entry() -> Self {
-        crate::guards::rsf_ac7_guard_enter(RSF_AC7_GUARD_ENTRY);
-        Self(RSF_AC7_GUARD_ENTRY)
+        crate::guards::enter(false);
+        Self(false)
     }
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        crate::guards::rsf_ac7_guard_leave(self.0);
+        crate::guards::leave(self.0);
     }
 }
 
@@ -296,9 +292,6 @@ fn at(base: u64) -> *mut c_void {
 fn key(pointer: *const c_void) -> u64 {
     pointer as usize as u64
 }
-
-/// The guarded read as the scope facts' reader type.
-const SCOPE_READ: rsf_ac7_scope_read = Some(rsf_ac7_copy_memory);
 
 /// True when `count` bytes of live code at `address` equal `expected`. Unreadable memory differs.
 fn bytes_match(address: *const c_void, expected: *const c_void, count: usize) -> bool {
@@ -649,7 +642,7 @@ impl Renderer {
 }
 
 fn primary_view(view: u64, config: &rsf_game_render_config) -> bool {
-    rsf_ac7_scope_primary_view(SCOPE_READ, view, config.output_width, config.output_height)
+    crate::scope_facts::primary_view(view, config.output_width, config.output_height)
 }
 
 /// Engine pool and resource references held for one queued pass until its end marker runs.

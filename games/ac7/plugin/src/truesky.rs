@@ -13,7 +13,6 @@
 //! changes it, always under the renderer's cloud resolution lock. native_renderer/sky.rs keeps the
 //! relay handlers with their D3D11 binding checks and one-to-one depth shader, the module lookup,
 //! the relay memory and the protected code writes, which `NativePlugin` calls.
-use crate::guards::rsf_ac7_guards_held;
 use crate::native_renderer::sky;
 use crate::sites::{Code, CodeView, NativeCode};
 use crate::sys::rsf_ac7_native_renderer;
@@ -499,7 +498,7 @@ impl Plugin for NativePlugin {
         unsafe { sky::depth_release(self.renderer) }
     }
     fn guards_held(&self) -> u32 {
-        rsf_ac7_guards_held(true)
+        crate::guards::held(true)
     }
 }
 

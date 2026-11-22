@@ -8,9 +8,9 @@ use super::graph::{
 };
 use super::views::for_each_view;
 use super::{
-    Guard, PassLease, Renderer, SCOPE_READ, at, close, copy, engine, engine_add_ref, hook,
-    installed, key, method, move_uniform, open, open_leased, original, pass_lease, pool_ref,
-    primary_view, read, release_pass, scope,
+    Guard, PassLease, Renderer, at, close, copy, engine, engine_add_ref, hook, installed, key,
+    method, move_uniform, open, open_leased, original, pass_lease, pool_ref, primary_view, read,
+    release_pass, scope,
 };
 use crate::sys::rsf_ac7_render_scope;
 use crate::sys::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
@@ -320,15 +320,13 @@ fn primary_scope(
     *out = scope();
     out.role = role;
     out.session_id = owner.options.session_id;
-    {
-        super::rsf_ac7_scope_primary_facts(
-            SCOPE_READ,
-            key(renderer),
-            config.output_width,
-            config.output_height,
-            Some(out),
-        )
-    }
+    crate::scope_facts::primary_facts(
+        key(renderer),
+        config.output_width,
+        config.output_height,
+        out,
+    )
+    .is_some()
 }
 
 /// Passes 0 (standard), 1 (after DOF, the separate layer at scene+0x1b0, allocator RVA 0x109f4d0)

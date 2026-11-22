@@ -7,10 +7,8 @@
 //!
 //! The TrueSky plugin patches and call relays (TrueSkyPluginRender_MT.dll) are truesky.rs; their
 //! device-dependent readiness stays in native_renderer/sky.rs.
-use crate::sites::{Code, NativeCode};
-use crate::sys::{
-    RSF_AC7_VELOCITY_PATCHES, rsf_ac7_code_leaves, rsf_ac7_code_patch, rsf_ac7_code_patches,
-};
+use crate::sites::Code;
+use crate::sys::{RSF_AC7_VELOCITY_PATCHES, rsf_ac7_code_patches};
 use std::ptr::null_mut;
 
 /// Replaces `native` with `replacement` at `rva`.
@@ -31,18 +29,6 @@ impl Patch {
             native,
             replacement,
         }
-    }
-
-    fn descriptor(&self) -> rsf_ac7_code_patch {
-        let mut out = rsf_ac7_code_patch {
-            rva: self.rva,
-            size: self.native.len() as u32,
-            native: [0; 16],
-            replacement: [0; 16],
-        };
-        out.native[..self.native.len()].copy_from_slice(self.native);
-        out.replacement[..self.replacement.len()].copy_from_slice(self.replacement);
-        out
     }
 }
 
@@ -183,54 +169,68 @@ pub(crate) fn restore(state: &mut rsf_ac7_code_patches, code: &impl Code) -> boo
     scene_precision_restore(state, code)
 }
 
-/// The ownership record and leaves of one native call.
-///
-/// # Safety
-/// `patches` and `leaves` are null or valid for the call, and nothing else uses `patches` during
-/// it.
-unsafe fn native<'a>(
-    patches: *mut rsf_ac7_code_patches,
-    leaves: *const rsf_ac7_code_leaves,
-) -> Option<(&'a mut rsf_ac7_code_patches, NativeCode)> {
-    let patches = unsafe { patches.as_mut() }?;
-    let code = unsafe { NativeCode::new(leaves) }?;
-    Some((patches, code))
-}
+/// The C entries of the native graph fixture (tests/ac7_view_fixture.rs, through ac7_sites.h).
+#[cfg(feature = "warp-fixture")]
+mod fixture {
+    use super::{VELOCITY, velocity_apply, velocity_restore};
+    use crate::sites::NativeCode;
+    use crate::sys::{rsf_ac7_code_leaves, rsf_ac7_code_patch, rsf_ac7_code_patches};
 
-/// # Safety
-/// `out` is null or writable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_patch(index: u32, out: *mut rsf_ac7_code_patch) -> bool {
-    match (VELOCITY.get(index as usize), unsafe { out.as_mut() }) {
-        (Some(patch), Some(out)) => {
-            *out = patch.descriptor();
-            true
-        }
-        _ => false,
+    /// The ownership record and leaves of one native call.
+    ///
+    /// # Safety
+    /// `patches` and `leaves` are null or valid for the call, and nothing else uses `patches`
+    /// during it.
+    unsafe fn native<'a>(
+        patches: *mut rsf_ac7_code_patches,
+        leaves: *const rsf_ac7_code_leaves,
+    ) -> Option<(&'a mut rsf_ac7_code_patches, NativeCode)> {
+        let patches = unsafe { patches.as_mut() }?;
+        let code = unsafe { NativeCode::new(leaves) }?;
+        Some((patches, code))
     }
-}
 
-/// # Safety
-/// See `native`. The leaves receive `base` plus each patch RVA.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_apply(
-    patches: *mut rsf_ac7_code_patches,
-    base: *mut u8,
-    leaves: *const rsf_ac7_code_leaves,
-) -> bool {
-    unsafe { native(patches, leaves) }
-        .is_some_and(|(patches, code)| velocity_apply(patches, base, &code))
-}
+    /// # Safety
+    /// `out` is null or writable.
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn rsf_ac7_velocity_patch(index: u32, out: *mut rsf_ac7_code_patch) -> bool {
+        let (Some(patch), Some(out)) = (VELOCITY.get(index as usize), unsafe { out.as_mut() })
+        else {
+            return false;
+        };
+        *out = rsf_ac7_code_patch {
+            rva: patch.rva,
+            size: patch.native.len() as u32,
+            native: [0; 16],
+            replacement: [0; 16],
+        };
+        out.native[..patch.native.len()].copy_from_slice(patch.native);
+        out.replacement[..patch.replacement.len()].copy_from_slice(patch.replacement);
+        true
+    }
 
-/// # Safety
-/// See `native`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_restore(
-    patches: *mut rsf_ac7_code_patches,
-    leaves: *const rsf_ac7_code_leaves,
-) -> bool {
-    unsafe { native(patches, leaves) }
-        .is_some_and(|(patches, code)| velocity_restore(patches, &code))
+    /// # Safety
+    /// See `native`. The leaves receive `base` plus each patch RVA.
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn rsf_ac7_velocity_apply(
+        patches: *mut rsf_ac7_code_patches,
+        base: *mut u8,
+        leaves: *const rsf_ac7_code_leaves,
+    ) -> bool {
+        unsafe { native(patches, leaves) }
+            .is_some_and(|(patches, code)| velocity_apply(patches, base, &code))
+    }
+
+    /// # Safety
+    /// See `native`.
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn rsf_ac7_velocity_restore(
+        patches: *mut rsf_ac7_code_patches,
+        leaves: *const rsf_ac7_code_leaves,
+    ) -> bool {
+        unsafe { native(patches, leaves) }
+            .is_some_and(|(patches, code)| velocity_restore(patches, &code))
+    }
 }
 
 #[cfg(test)]

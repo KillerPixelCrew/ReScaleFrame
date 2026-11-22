@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Exact-build view facts read from the matched AC7 renderer and view layouts.
-use crate::sys::rsf_ac7_render_scope;
-use crate::sys::rsf_ac7_scope_read;
+use crate::sys::{rsf_ac7_copy_memory, rsf_ac7_render_scope};
 use std::ffi::c_void;
 
 const RENDERER_VIEWS: u64 = 0xb8;
@@ -13,15 +12,15 @@ const VIEW_OUTPUT_RECT: u64 = 0x80;
 const VIEW_UNCONSTRAINED_RECT: u64 = 0x90;
 const VIEW_CAPTURE_FLAGS: u64 = 0xc42;
 
-fn field<T: Default>(read: rsf_ac7_scope_read, base: u64, offset: u64) -> Option<T> {
-    let read = read?;
+/// The `T` at `base + offset` under the guarded read.
+fn field<T: Default>(base: u64, offset: u64) -> Option<T> {
     let address = base.checked_add(offset)?;
     if base == 0 {
         return None;
     }
     let mut value = T::default();
     unsafe {
-        read(
+        rsf_ac7_copy_memory(
             (&raw mut value).cast(),
             address as *const c_void,
             size_of::<T>(),
@@ -30,49 +29,38 @@ fn field<T: Default>(read: rsf_ac7_scope_read, base: u64, offset: u64) -> Option
     .then_some(value)
 }
 
-fn single_view(read: rsf_ac7_scope_read, renderer: u64) -> Option<u64> {
-    let view = field(read, renderer, RENDERER_VIEWS)?;
-    (field::<i32>(read, renderer, RENDERER_VIEW_COUNT)? == 1).then_some(view)
+fn single_view(renderer: u64) -> Option<u64> {
+    let view = field(renderer, RENDERER_VIEWS)?;
+    (field::<i32>(renderer, RENDERER_VIEW_COUNT)? == 1).then_some(view)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_scope_primary_view(
-    read: rsf_ac7_scope_read,
-    view: u64,
-    width: u32,
-    height: u32,
-) -> bool {
-    field::<[i32; 4]>(read, view, VIEW_UNCONSTRAINED_RECT)
-        == Some([0, 0, width as i32, height as i32])
-        && field::<[u8; 3]>(read, view, VIEW_CAPTURE_FLAGS) == Some([0; 3])
+/// A view of the whole `width` x `height` output that no scene capture renders.
+pub(crate) fn primary_view(view: u64, width: u32, height: u32) -> bool {
+    field::<[i32; 4]>(view, VIEW_UNCONSTRAINED_RECT) == Some([0, 0, width as i32, height as i32])
+        && field::<[u8; 3]>(view, VIEW_CAPTURE_FLAGS) == Some([0; 3])
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_scope_primary_renderer(
-    read: rsf_ac7_scope_read,
-    renderer: u64,
-    width: u32,
-    height: u32,
-) -> bool {
+/// A renderer of a single primary view.
+pub(crate) fn primary_renderer(renderer: u64, width: u32, height: u32) -> bool {
     width != 0
         && height != 0
-        && single_view(read, renderer)
-            .is_some_and(|view| rsf_ac7_scope_primary_view(read, view, width, height))
+        && single_view(renderer).is_some_and(|view| primary_view(view, width, height))
 }
 
-fn fill(
-    read: rsf_ac7_scope_read,
+/// Fills the native view, family, frame, rectangles and mip bias of an initialized scope from a
+/// primary renderer.
+pub(crate) fn primary_facts(
     renderer: u64,
     width: u32,
     height: u32,
     scope: &mut rsf_ac7_render_scope,
 ) -> Option<()> {
-    let view = single_view(read, renderer)?;
-    let family = field(read, view, VIEW_FAMILY)?;
-    let frame: u32 = field(read, family, FAMILY_FRAME)?;
-    let render: [i32; 4] = field(read, view, VIEW_RENDER_RECT)?;
-    let output: [i32; 4] = field(read, view, VIEW_OUTPUT_RECT)?;
-    if !rsf_ac7_scope_primary_view(read, view, width, height) {
+    let view = single_view(renderer)?;
+    let family = field(view, VIEW_FAMILY)?;
+    let frame: u32 = field(family, FAMILY_FRAME)?;
+    let render: [i32; 4] = field(view, VIEW_RENDER_RECT)?;
+    let output: [i32; 4] = field(view, VIEW_OUTPUT_RECT)?;
+    if !primary_view(view, width, height) {
         return None;
     }
 
@@ -89,15 +77,4 @@ fn fill(
             ((render_width as f32 / output_width as f32).log2() - 0.3).max(-2.0);
     }
     Some(())
-}
-
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_scope_primary_facts(
-    read: rsf_ac7_scope_read,
-    renderer: u64,
-    width: u32,
-    height: u32,
-    scope: Option<&mut rsf_ac7_render_scope>,
-) -> bool {
-    scope.is_some_and(|scope| fill(read, renderer, width, height, scope).is_some())
 }

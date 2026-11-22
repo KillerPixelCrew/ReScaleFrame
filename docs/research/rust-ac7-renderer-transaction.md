@@ -37,7 +37,7 @@ activation and retry path safe?
 `games/ac7/src/renderer.rs` owns that order and every refusal. It reuses the existing owners and
 their state rather than holding its own: `sites::admit`, `sites::wanted` and `HOOK_SITES` for
 admission and targets, `patches::apply`/`restore` on the renderer's `rsf_ac7_code_patches`
-record, `rsf_ac7_guards_held` for the hook body counts, and the lifecycle's `PENDING_CAPACITY`
+record, `guards::held` for the hook body counts, and the renderer's `PENDING_CAPACITY`
 (256) for the scope default. The installed pointer, the active and quiescing flags, the MinHook
 records (`sites[]`) and the scopes stay native; Rust reads and changes them through leaves.
 
@@ -55,7 +55,7 @@ read in Rust with the former eight-byte rule.
 
 `rsf::ac7::install_hooks`/`remove_hooks` in `ac7_hooks.h` are unchanged and still serve
 `motion_capture.cpp`; the renderer no longer includes them. The C++ `guards_held` wrapper is gone;
-the native graph fixture calls `rsf_ac7_guards_held` directly.
+the native graph fixture calls `guards::held` directly.
 
 ## Preserved
 
