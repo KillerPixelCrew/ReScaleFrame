@@ -535,7 +535,8 @@ add_custom_command(OUTPUT "${godot_graph_object}"
     COMMAND "${RSF_RUSTC}" --edition=2024 --crate-type=lib --emit=obj --target ${godot_graph_rust_target}
         -Cpanic=abort -Copt-level=2 -Ccodegen-units=1 -Dwarnings "${godot_module}/viewport.rs" -o "${godot_graph_object}"
     DEPENDS "${godot_module}/viewport.rs" "${godot_module}/cpu_facts.rs" "${godot_module}/frame.rs"
-        "${godot_module}/graph.rs" "${godot_module}/host.rs" "${godot_module}/pass.rs" "${godot_module}/primary.rs"
+        "${godot_module}/graph.rs" "${godot_module}/host.rs" "${godot_module}/pass.rs"
+        "${godot_module}/present.rs" "${godot_module}/primary.rs"
         "${PROJECT_SOURCE_DIR}/sdk/game/src/frame_event_abi.rs" "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)
