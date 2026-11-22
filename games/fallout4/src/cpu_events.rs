@@ -67,6 +67,8 @@ unsafe impl Plain for MSG {}
 
 const WAIT_OBJECT_0: u32 = 0;
 
+type CpuEvent = unsafe extern "C" fn(*mut c_void, *const rsf_game_cpu_event);
+
 // ---------------------------------------------------------------------------------------------
 // Native leaves.
 
@@ -83,7 +85,7 @@ unsafe extern "C" {
     fn rsf_fallout4_cpu_peek_thunk() -> *mut c_void;
     fn rsf_fallout4_cpu_finish_render_scope();
     fn rsf_fallout4_cpu_deliver(
-        callback: rsf_game_sys::rsf_game_cpu_event_fn,
+        callback: CpuEvent,
         user: *mut c_void,
         event: *const rsf_game_cpu_event,
     ) -> bool;
@@ -129,14 +131,24 @@ fn finish_render_scope() {
 // Process state.
 
 #[derive(Clone, Copy)]
-struct Host(rsf_game_host_services);
+struct Host {
+    services: rsf_game_host_services,
+    event: CpuEvent,
+}
 // SAFETY: process-lived Runtime services, written by prepare before any hook is enabled.
 unsafe impl Send for Host {}
 
-static HOST: Mutex<Host> = Mutex::new(Host(unsafe { std::mem::zeroed() }));
+static HOST: Mutex<Option<Host>> = Mutex::new(None);
 
-fn host() -> rsf_game_host_services {
-    HOST.lock().unwrap_or_else(PoisonError::into_inner).0
+// The empty GameSDK record is used only by diagnostics and identity reads before admission.
+const EMPTY_SERVICES: rsf_game_host_services = unsafe { std::mem::zeroed() };
+
+fn host() -> Option<Host> {
+    *HOST.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn host_services() -> rsf_game_host_services {
+    host().map_or(EMPTY_SERVICES, |host| host.services)
 }
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -551,7 +563,7 @@ fn native_cycle(
     };
     let bit = 1u64 << stage;
     let index = phase as usize;
-    let host = host();
+    let host = host_services();
     if host.log.is_some()
         && index < CYCLE_STAGES.len()
         && CYCLE_STAGES[index].fetch_or(bit, Relaxed) & bit == 0
@@ -660,10 +672,8 @@ fn ticket_pending(value: &Future) -> Pending {
 // ---------------------------------------------------------------------------------------------
 // GameSDK CPU facts.
 
-fn deliver(host: &rsf_game_host_services, event: *const rsf_game_cpu_event) -> bool {
-    host.cpu_event.is_some_and(|callback| unsafe {
-        rsf_fallout4_cpu_deliver(Some(callback), host.user, event)
-    })
+fn deliver(host: &Host, event: *const rsf_game_cpu_event) -> bool {
+    unsafe { rsf_fallout4_cpu_deliver(host.event, host.services.user, event) }
 }
 
 fn empty_event(size: usize, version: u32) -> rsf_game_cpu_event {
@@ -686,13 +696,15 @@ fn empty_event(size: usize, version: u32) -> rsf_game_cpu_event {
 fn received(kind: u32, message_id: u32, window_message: bool, window_key: u64) {
     let now = qpc();
     let frequency = qpc_frequency();
-    let host = host();
+    let Some(host) = host() else {
+        return;
+    };
     let mut header = empty_event(
         size_of::<rsf_game_cpu_receipt_event>(),
         RSF_GAME_CPU_EVENT_VERSION_RECEIPT,
     );
     header.stage = RSF_GAME_CPU_INPUT_EVENT;
-    header.session_id = host.session_id;
+    header.session_id = host.services.session_id;
     header.timestamp_qpc = now;
     header.qpc_frequency = frequency;
     header.input_kind = kind;
@@ -706,15 +718,13 @@ fn received(kind: u32, message_id: u32, window_message: bool, window_key: u64) {
         receipt_id: NEXT_RECEIPT.fetch_add(1, Relaxed),
         window_key,
     };
-    if host.cpu_event.is_some() {
-        let _ = deliver(&host, &receipt.header);
-    }
+    let _ = deliver(&host, &receipt.header);
     if (window_message || kind == RSF_GAME_INPUT_CONTROLLER)
-        && host.log.is_some()
+        && host.services.log.is_some()
         && NOTIFICATION_RECEIPTS[usize::from(!window_message)].fetch_add(1, SeqCst) < 4
     {
         log(
-            &host,
+            &host.services,
             format!(
                 "Fallout4 input receipt emitted: source=0 kind={kind} window_message={} message={message_id}.",
                 u32::from(window_message)
@@ -737,8 +747,7 @@ fn emit_identity(source: &CpuIdentity, stage: u32, expected_render: u32) -> bool
             event.flags = RSF_GAME_CPU_RENDER_SKIPPED;
         }
     }
-    let host = host();
-    host.cpu_event.is_some() && deliver(&host, &event)
+    host().is_some_and(|host| deliver(&host, &event))
 }
 
 fn emit(stage: u32) {
@@ -747,13 +756,15 @@ fn emit(stage: u32) {
 
 /// Emission only: cpu_event has no return status. The core logs its own acknowledgement.
 fn source_fact(fact: &Pending, stage: u32, reason: u32) -> bool {
-    let host = host();
+    let Some(host) = host() else {
+        return false;
+    };
     let mut header = empty_event(
         size_of::<rsf_game_cpu_source_event>(),
         RSF_GAME_CPU_EVENT_VERSION_SOURCE,
     );
     header.stage = stage;
-    header.session_id = host.session_id;
+    header.session_id = host.services.session_id;
     header.source_frame_id = fact.source;
     header.timestamp_qpc = qpc();
     header.qpc_frequency = fact.frequency;
@@ -774,15 +785,15 @@ fn source_fact(fact: &Pending, stage: u32, reason: u32) -> bool {
         event.header.flags = RSF_GAME_CPU_SOURCE_PRODUCED;
         event.poll_begin_qpc = fact.sample_begin;
     }
-    let delivered = host.cpu_event.is_some() && deliver(&host, &event.header);
+    let delivered = deliver(&host, &event.header);
     let index = stage.wrapping_sub(RSF_GAME_CPU_SOURCE_RESERVE) as usize;
-    if host.log.is_some()
+    if host.services.log.is_some()
         && index < SOURCE_RECEIPTS.len()
         && (SOURCE_RECEIPTS[index].fetch_add(1, SeqCst) < 8 || fact.source % 128 == 0)
         && SOURCE_RECEIPT_BUDGET.fetch_add(1, SeqCst) < 64
     {
         log(
-            &host,
+            &host.services,
             format!(
                 "Fallout4 source fact emitted: stage={stage} source={} generation={} reason={reason} poll_generation={} raw_revision={}.",
                 fact.source,
@@ -1047,7 +1058,7 @@ fn gate_receipt(
     proof: &WorkerCycle,
     requested: &CpuIdentity,
 ) {
-    let host = host();
+    let host = host_services();
     if bits == expected || host.log.is_none() {
         return;
     }
@@ -1138,7 +1149,7 @@ fn downstream_receipt(
     checks: &PhaseChecks,
     cursor: u32,
 ) {
-    let host = host();
+    let host = host_services();
     if !f.facts.active()
         || f.facts.refusal != 0
         || host.log.is_none()
@@ -1229,7 +1240,7 @@ fn reserve_worker_poll(
     } else {
         0
     };
-    let host = host();
+    let host = host_services();
     let mut copy = Future::ZERO;
     let mut bits = 0;
     let mut registered = false;
@@ -1800,7 +1811,7 @@ struct PollScope {
 /// A fixed process-wide fact set, not a source or event ledger. Startup repeats use one slot
 /// instead of exhausting the budget before world transitions.
 fn poll_receipt(r: &PollReceipt) {
-    let host = host();
+    let host = host_services();
     if host.log.is_none() {
         return;
     }
@@ -2099,7 +2110,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_player_controls_enter(
             });
         } else {
             IDENTITY.set(CpuIdentity {
-                session: host().session_id,
+                session: host_services().session_id,
                 source: p.source,
                 submission: 0,
                 began_qpc: qpc(),
@@ -2306,7 +2317,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_swap_enter(
         let frequency = qpc_frequency();
         let source = NEXT_SOURCE.fetch_add(1, SeqCst);
         IDENTITY.set(CpuIdentity {
-            session: host().session_id,
+            session: host_services().session_id,
             source,
             submission: 0,
             began_qpc: qpc(),
@@ -3181,7 +3192,7 @@ fn exchange_peek(
     finish_peek_protection(cell)
 }
 
-fn prepare_peek(host: &rsf_game_host_services) -> bool {
+fn prepare_peek(event: CpuEvent) -> bool {
     let mut cell = peek_cell();
     let thunk = peek_thunk();
     let mut current = 0usize;
@@ -3217,9 +3228,7 @@ fn prepare_peek(host: &rsf_game_host_services) -> bool {
     {
         return false;
     }
-    let callback = host
-        .cpu_event
-        .map_or(std::ptr::null(), |callback| callback as *const c_void);
+    let callback = event as *const c_void;
     if !pin(current as *const c_void) || !pin(thunk as *const c_void) || !pin(callback) {
         return false;
     }
@@ -3288,17 +3297,23 @@ pub(crate) fn prepare(
     if services.struct_size < size_of::<rsf_game_host_services>() as u32
         || services.abi_version != RSF_GAME_ABI_VERSION
         || services.session_id == 0
-        || services.cpu_event.is_none()
-        || busy()
-        || !native::guards()
     {
+        return false;
+    }
+    let Some(event) = services.cpu_event else {
+        return false;
+    };
+    if busy() || !native::guards() {
         return false;
     }
     if HOOKS.clone().any(hook_created) {
         return false;
     }
-    HOST.lock().unwrap_or_else(PoisonError::into_inner).0 = *services;
-    if !prepare_peek(services) {
+    *HOST.lock().unwrap_or_else(PoisonError::into_inner) = Some(Host {
+        services: *services,
+        event,
+    });
+    if !prepare_peek(event) {
         return false;
     }
     for hook in HOOKS {
