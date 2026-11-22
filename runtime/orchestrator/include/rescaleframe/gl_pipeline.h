@@ -39,6 +39,8 @@ extern "C" {
    Destroy routes to that same thread; all DXGI/GL work remains on the graphics thread. */
 RSF_RUNTIME_API void* rsf_gl_window_create(void* parent);
 RSF_RUNTIME_API int rsf_gl_window_destroy(void* window);
+/* A failed open can return a cleanup-only handle. Close it on the graphics owner
+   before releasing the presentation window or GL context. */
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_open(const rsf_gl_pipeline_setup*, rsf_gl_pipeline**);
 /* Graphics owner, drained boundary before beginning the CPU frame. No restart required. */
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline*, const rsf_gl_pipeline_options*, uint32_t width, uint32_t height);

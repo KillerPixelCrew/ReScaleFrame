@@ -388,6 +388,12 @@ fn allocate_handle<T>(value: T) -> *mut T {
     raw
 }
 
+#[cfg(windows)]
+fn reserve_handle<T>() -> Option<Box<std::mem::MaybeUninit<T>>> {
+    let storage = allocate_handle(std::mem::MaybeUninit::<T>::uninit());
+    (!storage.is_null()).then(|| unsafe { Box::from_raw(storage) })
+}
+
 // Adopt a returned Win32 handle. APIs use both null and -1 to report failure.
 #[cfg(windows)]
 unsafe fn owned_win32_handle(

@@ -21,10 +21,13 @@ use rsf_game_sys::{
     rsf_game_cpu_event, rsf_game_render_pass as Pass,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
+#[cfg(test)]
 use std::mem::MaybeUninit;
-use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::ptr::{self, NonNull};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
+
+mod window;
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -152,8 +155,7 @@ fn failed(result: i32) -> bool {
 // Strings, the caller's log and the presentation window that SDK and presentation hooks reach
 // through their `user` pointer. Once FG is installed its hooks keep this for the process lifetime.
 struct Shared {
-    log: Log,
-    user: Handle,
+    logger: Mutex<(Log, usize)>,
     window: AtomicPtr<c_void>,
     root: CString,
     fidelityfx: CString,
@@ -166,22 +168,28 @@ struct Shared {
 
 impl Shared {
     fn log(&self, message: &str) {
-        if let (Some(log), Ok(text)) = (self.log, CString::new(message)) {
-            unsafe { log(self.user, text.as_ptr()) };
+        if let Ok(text) = CString::new(message) {
+            unsafe { hook_log(ptr::from_ref(self).cast_mut().cast(), text.as_ptr()) };
         }
+    }
+
+    fn detach_log(&self) {
+        *self.logger.lock().unwrap_or_else(|error| error.into_inner()) = (None, 0);
     }
 }
 
 unsafe extern "C" fn hook_log(user: Handle, message: *const c_char) {
     let shared = unsafe { &*user.cast::<Shared>() };
-    if let Some(log) = shared.log {
-        unsafe { log(shared.user, message) };
+    if let Ok(logger) = shared.logger.try_lock()
+        && let (Some(log), user) = *logger
+    {
+        unsafe { log(user as Handle, message) };
     }
 }
 
 unsafe extern "C" fn hook_accept(user: Handle, window: Handle) -> c_int {
     let shared = unsafe { &*user.cast::<Shared>() };
-    c_int::from(shared.window.load(Ordering::Acquire) == window)
+    c_int::from(!window.is_null() && shared.window.load(Ordering::Acquire) == window)
 }
 
 // What the published SR session and surfaces were built for. A request that differs rebuilds.
@@ -247,6 +255,7 @@ pub(crate) struct Pipeline {
     shared: &'static Shared,
     session: u64,
     own_window: bool,
+    ready: AtomicBool,
     // Graphics-owner state. CPU, input, abort and PCL calls never take it.
     state: Mutex<State>,
 }
@@ -522,7 +531,7 @@ impl Pipeline {
         let (width, height) = if state.active.is_some() {
             (state.width, state.height)
         } else {
-            (32, 32) // initial child and swapchain extent
+            (window::INITIAL_EXTENT, window::INITIAL_EXTENT)
         };
         state.window_dirty =
             unsafe { (self.platform.window_resize)(state.window, width, height) } == 0;
@@ -755,6 +764,7 @@ impl Pipeline {
 
     fn close(&self, state: &mut State) -> i32 {
         let p = self.platform;
+        self.ready.store(false, Ordering::Release);
         if state.closed {
             return OK;
         }
@@ -781,6 +791,7 @@ impl Pipeline {
             }
         }
         self.shared.window.store(ptr::null_mut(), Ordering::Release);
+        self.shared.detach_log();
         if self.own_window && unsafe { (p.window_destroy)(state.window) } == 0 {
             return FEATURE_FAILED;
         }
@@ -840,7 +851,11 @@ impl Pipeline {
     }
 }
 
-fn open(setup: &rsf_gl_pipeline_setup, platform: &'static Platform) -> Result<Pipeline, i32> {
+fn open(
+    setup: &rsf_gl_pipeline_setup,
+    platform: &'static Platform,
+    cleanup: &mut Option<Pipeline>,
+) -> Result<Pipeline, i32> {
     let p = platform;
     if unsafe { (p.window_valid)(setup.hwnd) } == 0
         || setup.runtime_directory_utf8.is_null()
@@ -852,8 +867,7 @@ fn open(setup: &rsf_gl_pipeline_setup, platform: &'static Platform) -> Result<Pi
     let root = unsafe { CStr::from_ptr(setup.runtime_directory_utf8) };
     let streamline = concat(root, "/streamline");
     let guard = SharedGuard(Box::into_raw(Box::new(Shared {
-        log: setup.log,
-        user: setup.user,
+        logger: Mutex::new((setup.log, setup.user as usize)),
         window: AtomicPtr::new(ptr::null_mut()),
         root: root.to_owned(),
         fidelityfx: concat(root, "/fidelityfx"),
@@ -921,18 +935,37 @@ fn open(setup: &rsf_gl_pipeline_setup, platform: &'static Platform) -> Result<Pi
         engine_version_utf8: shared.version.as_ptr(),
         project_id_utf8: shared.project.as_ptr(),
     };
+    // FG can retain its logger before publishing whether the installation succeeded.
+    let shared = guard.keep();
+    let mut pipeline = Pipeline {
+        platform,
+        shared,
+        session: session_seed(),
+        own_window,
+        ready: AtomicBool::new(false),
+        state: Mutex::new(State {
+            sharing,
+            device,
+            queue,
+            window,
+            chain: None,
+            shown: false,
+            closed: false,
+            window_dirty: false,
+            width: 0,
+            height: 0,
+            generation: 0,
+            status: new_status(),
+            evaluation_result: OK,
+            frame_view: None,
+            active: None,
+        }),
+    };
     let result = unsafe { (p.fg_install)(&fg) };
     if result != OK {
-        unsafe {
-            if own_window {
-                (p.window_destroy)(window);
-            }
-            (p.gl_close)(sharing);
-        }
+        reject_open(pipeline, cleanup);
         return Err(result);
     }
-    // Installed presentation hooks retain `user` and its strings for the process lifetime.
-    let shared = guard.keep();
     let mut chain = ptr::null_mut();
     let created =
         unsafe { (p.chain_create)(queue, window, CHAIN_BUFFERS, CHAIN_FORMAT, &mut chain) };
@@ -946,36 +979,27 @@ fn open(setup: &rsf_gl_pipeline_setup, platform: &'static Platform) -> Result<Pi
             created as u32, owner
         ));
         shared.log("OpenGL: native presentation refused; GL presentation must be retained.");
-        // The hooks may already observe this chain and window; keep the GL owner, chain and child
-        // alive as the native implementation did.
-        std::mem::forget(chain);
+        pipeline.state.get_mut().unwrap().chain = chain;
+        reject_open(pipeline, cleanup);
         return Err(INIT_FAILED);
     }
     let chain = chain.expect("created chain");
     unsafe { (p.chain_associate)(chain.as_ptr(), window) };
-    Ok(Pipeline {
-        platform,
-        shared,
-        session: session_seed(),
-        own_window,
-        state: Mutex::new(State {
-            sharing,
-            device,
-            queue,
-            window,
-            chain: Some(chain),
-            shown: false,
-            closed: false,
-            window_dirty: false,
-            width: 0,
-            height: 0,
-            generation: 0,
-            status: new_status(),
-            evaluation_result: OK,
-            frame_view: None,
-            active: None,
-        }),
-    })
+    pipeline.state.get_mut().unwrap().chain = Some(chain);
+    pipeline.ready.store(true, Ordering::Release);
+    Ok(pipeline)
+}
+
+fn reject_open(pipeline: Pipeline, cleanup: &mut Option<Pipeline>) {
+    pipeline.shared.window.store(ptr::null_mut(), Ordering::Release);
+    pipeline.shared.detach_log();
+    let result = {
+        let mut state = pipeline.state.lock().unwrap();
+        pipeline.close(&mut state)
+    };
+    if result != OK {
+        *cleanup = Some(pipeline);
+    }
 }
 
 /// # Safety
@@ -996,20 +1020,19 @@ unsafe extern "C" fn rsf_core_gl_pipeline_open(
     else {
         return INVALID;
     };
-    let storage = crate::allocate_handle(MaybeUninit::<Pipeline>::uninit());
-    if storage.is_null() {
+    let Some(storage) = crate::reserve_handle() else {
         return INIT_FAILED;
-    }
-    match open(&setup, platform) {
+    };
+    let mut cleanup = None;
+    match open(&setup, platform, &mut cleanup) {
         Ok(pipeline) => {
-            unsafe {
-                storage.cast::<Pipeline>().write(pipeline);
-                out.write(storage.cast());
-            }
+            unsafe { out.write(Box::into_raw(Box::write(storage, pipeline))) };
             OK
         }
         Err(result) => {
-            unsafe { drop(Box::from_raw(storage)) };
+            if let Some(pipeline) = cleanup {
+                unsafe { out.write(Box::into_raw(Box::write(storage, pipeline))) };
+            }
             result
         }
     }
@@ -1025,7 +1048,7 @@ fn with_state(pipeline: *mut Pipeline, run: impl FnOnce(&Pipeline, &mut State) -
     if state.closed {
         return INVALID;
     }
-    if state.chain.is_none() {
+    if !pipeline.ready.load(Ordering::Acquire) || state.chain.is_none() {
         return NOT_READY;
     }
     run(pipeline, &mut state)
@@ -1090,7 +1113,9 @@ unsafe extern "C" fn rsf_gl_pipeline_get_surfaces(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_gl_pipeline_cpu(pipeline: *mut Pipeline, frame: u64, stage: u32) {
-    let Some(pipeline) = (unsafe { pipeline.as_ref() }) else {
+    let Some(pipeline) =
+        (unsafe { pipeline.as_ref() }).filter(|pipeline| pipeline.ready.load(Ordering::Acquire))
+    else {
         return;
     };
     let event = pipeline.cpu_event(stage, frame, 0, 0, RSF_GAME_CPU_INPUT_KEYED);
@@ -1106,7 +1131,8 @@ unsafe extern "C" fn rsf_gl_pipeline_input(
     message: u32,
 ) -> i32 {
     match unsafe { pipeline.as_ref() } {
-        Some(pipeline) => pipeline.input(frame, kinds, message),
+        Some(pipeline) if pipeline.ready.load(Ordering::Acquire) => pipeline.input(frame, kinds, message),
+        Some(_) => NOT_READY,
         None => INVALID,
     }
 }
@@ -1114,15 +1140,20 @@ unsafe extern "C" fn rsf_gl_pipeline_input(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_gl_pipeline_pcl_message(pipeline: *mut Pipeline) -> u32 {
     match unsafe { pipeline.as_ref() } {
-        Some(pipeline) => unsafe { (pipeline.platform.pcl_message)() },
-        None => 0,
+        Some(pipeline) if pipeline.ready.load(Ordering::Acquire) => unsafe {
+            (pipeline.platform.pcl_message)()
+        },
+        _ => 0,
     }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_gl_pipeline_abort(pipeline: *mut Pipeline, frame: u64) -> i32 {
     match unsafe { pipeline.as_ref() } {
-        Some(pipeline) if frame != 0 => unsafe { (pipeline.platform.present_abort)(frame) },
+        Some(pipeline) if frame != 0 && pipeline.ready.load(Ordering::Acquire) => unsafe {
+            (pipeline.platform.present_abort)(frame)
+        },
+        Some(_) if frame != 0 => NOT_READY,
         _ => INVALID,
     }
 }
@@ -1172,6 +1203,9 @@ unsafe extern "C" fn rsf_gl_pipeline_status_get(
     let Some(state) = lock(pipeline) else {
         return NOT_READY;
     };
+    if !pipeline.ready.load(Ordering::Acquire) {
+        return NOT_READY;
+    }
     let p = pipeline.platform;
     let mut status = state.status;
     if status.sr_result == OK {

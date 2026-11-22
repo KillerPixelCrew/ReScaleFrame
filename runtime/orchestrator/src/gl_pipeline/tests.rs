@@ -76,6 +76,7 @@ struct World {
     resize_refused: bool,
     chain_resize_refused: bool,
     destroy_refused: bool,
+    chain_unowned: bool,
     close_refused: bool,
     present_backend: u32,
     cpu_frames: HashMap<u64, bool>,
@@ -371,7 +372,7 @@ unsafe extern "C" fn present_host() -> Handle {
     HOST
 }
 unsafe extern "C" fn present_is_owner(chain: Handle) -> c_int {
-    c_int::from(!chain.is_null())
+    c_int::from(!chain.is_null() && !world(|world| world.chain_unowned))
 }
 unsafe extern "C" fn present_backend() -> u32 {
     world(|world| world.present_backend)
@@ -486,8 +487,8 @@ unsafe extern "C" fn record_log(_: Handle, message: *const c_char) {
     world(|world| world.logs.push(text));
 }
 
-fn open_pipeline() -> *mut Pipeline {
-    let setup = rsf_gl_pipeline_setup {
+fn setup() -> rsf_gl_pipeline_setup {
+    rsf_gl_pipeline_setup {
         struct_size: size_of::<rsf_gl_pipeline_setup>() as u32,
         hwnd: PARENT,
         runtime_directory_utf8: c"C:/RSF".as_ptr(),
@@ -496,7 +497,11 @@ fn open_pipeline() -> *mut Pipeline {
         engine_version_utf8: c"1.0".as_ptr(),
         project_id_utf8: c"project".as_ptr(),
         presentation_hwnd: ptr::null_mut(),
-    };
+    }
+}
+
+fn open_pipeline() -> *mut Pipeline {
+    let setup = setup();
     let mut pipeline = ptr::null_mut();
     assert_eq!(
         unsafe { rsf_core_gl_pipeline_open(&setup, &mut pipeline, &PLATFORM) },
@@ -844,6 +849,29 @@ fn surfaces_template() -> rsf_gl_pipeline_surfaces {
         struct_size: size_of::<rsf_gl_pipeline_surfaces>() as u32,
         ..Default::default()
     }
+}
+
+#[test]
+fn failed_chain_open_returns_a_cleanup_handle_if_retirement_refuses() {
+    world(|world| {
+        world.chain_unowned = true;
+        world.close_refused = true;
+    });
+    let mut pipeline = ptr::null_mut();
+    assert_eq!(
+        unsafe { rsf_core_gl_pipeline_open(&setup(), &mut pipeline, &PLATFORM) },
+        INIT_FAILED
+    );
+    assert!(!pipeline.is_null());
+    assert_eq!(unsafe { rsf_gl_pipeline_present(pipeline, 1, 0) }, NOT_READY);
+    assert_eq!(unsafe { rsf_gl_pipeline_input(pipeline, 1, 1, 0) }, NOT_READY);
+    events();
+    world(|world| world.close_refused = false);
+    assert_eq!(unsafe { rsf_gl_pipeline_close(pipeline) }, OK);
+    assert_eq!(
+        events(),
+        ["gl_close", "latency end", "dump cancel", "destroy window1"]
+    );
 }
 
 #[test]

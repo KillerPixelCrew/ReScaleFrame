@@ -17,7 +17,6 @@ use crate::gl_pipeline_abi::{
 use crate::render_abi::rsf_backend_log_fn;
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
-use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -729,22 +728,15 @@ unsafe extern "C" fn rsf_core_gl_open(
     if setup.abi_version != SETUP_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let storage = crate::allocate_handle(MaybeUninit::<Context>::uninit());
-    if storage.is_null() {
+    let Some(storage) = crate::reserve_handle() else {
         return FEATURE_FAILED;
-    }
+    };
     match open(&setup, leaves, gl_context) {
         Ok(context) => {
-            unsafe {
-                storage.cast::<Context>().write(context);
-                out.write(storage.cast());
-            }
+            unsafe { out.write(Box::into_raw(Box::write(storage, context))) };
             OK
         }
-        Err(result) => {
-            unsafe { drop(Box::from_raw(storage)) };
-            result
-        }
+        Err(result) => result,
     }
 }
 
@@ -786,22 +778,15 @@ unsafe extern "C" fn rsf_gl_texture_create(
     if width == 0 || height == 0 {
         return INVALID;
     }
-    let storage = crate::allocate_handle(MaybeUninit::<Texture>::uninit());
-    if storage.is_null() {
+    let Some(storage) = crate::reserve_handle() else {
         return FEATURE_FAILED;
-    }
+    };
     match create_texture(context, width, height, format) {
         Ok(texture) => {
-            unsafe {
-                storage.cast::<Texture>().write(texture);
-                out.write(storage.cast());
-            }
+            unsafe { out.write(Box::into_raw(Box::write(storage, texture))) };
             OK
         }
-        Err(result) => {
-            unsafe { drop(Box::from_raw(storage)) };
-            result
-        }
+        Err(result) => result,
     }
 }
 

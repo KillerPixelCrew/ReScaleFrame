@@ -25,61 +25,14 @@ static_assert(D3D12_RESOURCE_STATE_COMMON == 0 && D3D12_RESOURCE_STATE_PRESENT =
               D3D12_RESOURCE_STATE_COPY_DEST == 0x400 && D3D12_RESOURCE_STATE_COPY_SOURCE == 0x800);
 static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28);
 
+extern "C" int rsf_core_gl_window_valid(void*);
+extern "C" void* rsf_core_gl_window_create(void*);
+extern "C" int rsf_core_gl_window_destroy(void*);
+extern "C" int rsf_core_gl_window_child_of(void*, void*);
+extern "C" int rsf_core_gl_window_resize(void*, uint32_t, uint32_t);
+extern "C" void rsf_core_gl_window_show(void*);
+
 namespace {
-constexpr UINT surface_resize = WM_APP + 0x525, surface_destroy = WM_APP + 0x526;
-
-LRESULT CALLBACK surface_window(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
-{
-    // GLFW remains the input/focus owner. This child owns only DXGI presentation.
-    if (message == WM_NCHITTEST) return HTTRANSPARENT;
-    if (message == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
-    if (message == WM_ERASEBKGND) return 1;
-    if (message == surface_resize)
-        return SetWindowPos(window, nullptr, 0, 0, static_cast<int>(wparam), static_cast<int>(lparam),
-                            SWP_NOACTIVATE | SWP_NOZORDER);
-    if (message == surface_destroy) return DestroyWindow(window);
-    return DefWindowProcW(window, message, wparam, lparam);
-}
-
-HWND create_surface(HWND parent)
-{
-    if (GetWindowThreadProcessId(parent, nullptr) != GetCurrentThreadId()) return nullptr;
-    WNDCLASSW type{};
-    type.lpfnWndProc = surface_window;
-    type.hInstance = GetModuleHandleW(nullptr);
-    type.lpszClassName = L"ReScaleFrame.OpenGL.Presentation";
-    if (!RegisterClassW(&type) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return nullptr;
-    return CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, type.lpszClassName, L"", WS_CHILD | WS_CLIPSIBLINGS,
-                           0, 0, 32, 32, parent, nullptr, type.hInstance, nullptr);
-}
-
-// Routed to the window's event thread; that thread owns creation, size and destruction.
-bool surface_message(HWND window, UINT operation, WPARAM wparam = 0, LPARAM lparam = 0)
-{
-    DWORD_PTR result = 0;
-    return SendMessageTimeoutW(window, operation, wparam, lparam, SMTO_BLOCK | SMTO_ABORTIFHUNG, 5000, &result) &&
-           result != 0;
-}
-
-int window_valid(void* window) { return IsWindow(static_cast<HWND>(window)) ? 1 : 0; }
-void* window_create(void* parent) { return create_surface(static_cast<HWND>(parent)); }
-int window_destroy(void* window)
-{
-    const auto hwnd = static_cast<HWND>(window);
-    return !IsWindow(hwnd) || surface_message(hwnd, surface_destroy);
-}
-int window_child_of(void* window, void* parent)
-{
-    const auto child = static_cast<HWND>(window), owner = static_cast<HWND>(parent);
-    return GetParent(child) == owner &&
-           GetWindowThreadProcessId(child, nullptr) == GetWindowThreadProcessId(owner, nullptr);
-}
-int window_resize(void* window, uint32_t width, uint32_t height)
-{
-    return surface_message(static_cast<HWND>(window), surface_resize, width, height) ? 1 : 0;
-}
-void window_show(void* window) { ShowWindowAsync(static_cast<HWND>(window), SW_SHOWNOACTIVATE); }
-
 int32_t chain_create(void* queue, void* window, uint32_t buffers, uint32_t format, void** out)
 {
     *out = nullptr;
@@ -184,12 +137,12 @@ struct Platform {
     decltype(&rsf_gl_submit) gl_submit;
     decltype(&rsf_gl_drain) gl_drain;
     decltype(&rsf_gl_close) gl_close;
-    decltype(&window_valid) window_valid;
-    decltype(&window_create) window_create;
-    decltype(&window_destroy) window_destroy;
-    decltype(&window_child_of) window_child_of;
-    decltype(&window_resize) window_resize;
-    decltype(&window_show) window_show;
+    decltype(&rsf_core_gl_window_valid) window_valid;
+    decltype(&rsf_core_gl_window_create) window_create;
+    decltype(&rsf_core_gl_window_destroy) window_destroy;
+    decltype(&rsf_core_gl_window_child_of) window_child_of;
+    decltype(&rsf_core_gl_window_resize) window_resize;
+    decltype(&rsf_core_gl_window_show) window_show;
     decltype(&chain_create) chain_create;
     decltype(&chain_associate) chain_associate;
     decltype(&chain_resize) chain_resize;
@@ -229,8 +182,8 @@ struct Platform {
 
 constexpr Platform platform{
     gl_open, rsf_gl_graphics, rsf_gl_texture_create, rsf_gl_texture_get, rsf_gl_texture_destroy, rsf_gl_begin,
-    rsf_gl_submit, rsf_gl_drain, rsf_gl_close, window_valid, window_create, window_destroy, window_child_of,
-    window_resize, window_show, chain_create, chain_associate, chain_resize, chain_back_buffer, chain_present,
+    rsf_gl_submit, rsf_gl_drain, rsf_gl_close, rsf_core_gl_window_valid, rsf_core_gl_window_create, rsf_core_gl_window_destroy, rsf_core_gl_window_child_of,
+    rsf_core_gl_window_resize, rsf_core_gl_window_show, chain_create, chain_associate, chain_resize, chain_back_buffer, chain_present,
     adapter_identity, transition, copy_resource, rsf_sr12_create, rsf_sr12_plan, rsf_sr12_evaluate,
     rsf_sr12_set_sharpening, rsf_sr12_destroy, rsf_fg12_install, rsf_fg12_options, rsf_fg12_cpu, rsf_fg12_hudless,
     rsf_fg12_submitted, rsf_fg12_window, rsf_fg12_status, present_host, rsf_d3d11_present_is_owner,
@@ -245,8 +198,8 @@ extern "C" rsf_backend_result rsf_core_gl_pipeline_open(const rsf_gl_pipeline_se
 
 // Create on the parent window's owning thread. The window procedure and its event-thread routing
 // are platform mechanisms, so these two entries stay native.
-extern "C" void* rsf_gl_window_create(void* parent) { return window_create(parent); }
-extern "C" int rsf_gl_window_destroy(void* window) { return window_destroy(window); }
+extern "C" void* rsf_gl_window_create(void* parent) { return rsf_core_gl_window_create(parent); }
+extern "C" int rsf_gl_window_destroy(void* window) { return rsf_core_gl_window_destroy(window); }
 
 extern "C" rsf_backend_result rsf_gl_pipeline_open(const rsf_gl_pipeline_setup* setup, rsf_gl_pipeline** out)
 {
