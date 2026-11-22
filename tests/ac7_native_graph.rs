@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The AC7 native graph fixture, formerly tests/ac7_native_graph.cpp. It drives the native
+//! The AC7 native graph fixture. It drives the native
 //! renderer's private detours through an independent engine ABI caller and queued executor:
 //! screen classification, particle tags and bindings, the temporal velocity patches, the SR graph
 //! node with its spatial fallback on WARP, view preparation, the hook table, guards and the

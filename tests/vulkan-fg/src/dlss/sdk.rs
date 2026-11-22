@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Synthetic Streamline session and SDK entries for the production DLSS-G
-//! leaves, formerly tests/native_fg_dlss_vulkan.cpp. The fixture copies the
+//! leaves. The fixture copies the
 //! production tables, replaces the SDK initialize leaf with one that installs
 //! these entries, and runs the present capture owner with its real Vulkan,
 //! WSI and registration leaves. Only open, frame selection, readback recording

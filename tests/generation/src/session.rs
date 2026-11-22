@@ -53,18 +53,6 @@ unsafe extern "C" {
     fn rsf_frame_sequencer_destroy(ledger: Raw);
 }
 
-macro_rules! check {
-    ($condition:expr) => {
-        if !$condition {
-            eprintln!(
-                "FG contract failed at {}: {}",
-                line!(),
-                stringify!($condition)
-            );
-            std::process::exit(1);
-        }
-    };
-}
 
 #[derive(Clone, Copy, Default)]
 struct Mocks {

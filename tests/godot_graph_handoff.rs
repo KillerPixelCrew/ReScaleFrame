@@ -180,6 +180,16 @@ unsafe extern "C" fn rsf_fixture_vk_labels(state: *mut c_void, command: u64, reo
     }
 }
 
+/// Counts a failed condition and reports its line to the C++ runner.
+macro_rules! check {
+    ($failures:ident, $condition:expr) => {
+        if !$condition {
+            rsf_fixture_graph_failure(line!());
+            $failures += 1;
+        }
+    };
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fixture_graph_main() -> i32 {
     let mut failures = 0;
@@ -211,43 +221,35 @@ fn native_unloaded_cases() -> i32 {
         unsafe { *info.cast::<i32>() }
     }
     let mut failures = 0;
-    macro_rules! check {
-        ($condition:expr) => {
-            if !$condition {
-                rsf_fixture_graph_failure(line!());
-                failures += 1;
-            }
-        };
-    }
     let mut leases = 0_i32;
     let user = (&raw mut leases).cast::<c_void>();
     let present_result = 5_i32;
     // SAFETY: null owners and records are never dereferenced without a loaded host, the
     // leases borrow live locals and the C++ runner prints failures synchronously.
     unsafe {
-        check!(rsf_godot_native_vulkan_enabled() == 0);
-        check!(rsf_godot_native_vk_execution_supported() == 0);
-        check!(rsf_godot_native_vk_resolver() == 0);
-        check!(rsf_godot_native_vk_present_marker(1, 1) == 0);
-        check!(rsf_godot_native_vk_execution(1, 1, 1, 1, 1) == 0);
+        check!(failures, rsf_godot_native_vulkan_enabled() == 0);
+        check!(failures, rsf_godot_native_vk_execution_supported() == 0);
+        check!(failures, rsf_godot_native_vk_resolver() == 0);
+        check!(failures, rsf_godot_native_vk_present_marker(1, 1) == 0);
+        check!(failures, rsf_godot_native_vk_execution(1, 1, 1, 1, 1) == 0);
         // An engine-owned WSI chain keeps Godot's present layout.
-        check!(rsf_godot_native_vk_image_layout(ptr::null_mut()) == 1_000_001_002);
-        check!(rsf_godot_native_vk_wsi_call(lease, user) == 7);
-        check!(rsf_godot_native_vk_foreign_call(lease, user) == 7);
-        check!(
+        check!(failures, rsf_godot_native_vk_image_layout(ptr::null_mut()) == 1_000_001_002);
+        check!(failures, rsf_godot_native_vk_wsi_call(lease, user) == 7);
+        check!(failures, rsf_godot_native_vk_foreign_call(lease, user) == 7);
+        check!(failures, 
             rsf_godot_native_vk_native_present(
                 present as *const () as usize as u64,
                 ptr::null_mut(),
                 (&raw const present_result).cast(),
             ) == 5
         );
-        check!(rsf_godot_native_vk_capture_release(ptr::null_mut()) == 1);
-        check!(rsf_godot_native_vk_create(ptr::null(), ptr::null_mut(), ptr::null_mut()) == 0);
-        check!(rsf_godot_native_vk_destroy(ptr::null_mut()) == 0);
-        check!(rsf_godot_native_vk_images(ptr::null_mut(), ptr::null_mut(), ptr::null_mut()) == -3);
-        check!(rsf_godot_native_status(ptr::null_mut()) == 0);
-        check!(rsf_godot_native_attach(ptr::null()) == 0);
-        check!(
+        check!(failures, rsf_godot_native_vk_capture_release(ptr::null_mut()) == 1);
+        check!(failures, rsf_godot_native_vk_create(ptr::null(), ptr::null_mut(), ptr::null_mut()) == 0);
+        check!(failures, rsf_godot_native_vk_destroy(ptr::null_mut()) == 0);
+        check!(failures, rsf_godot_native_vk_images(ptr::null_mut(), ptr::null_mut(), ptr::null_mut()) == -3);
+        check!(failures, rsf_godot_native_status(ptr::null_mut()) == 0);
+        check!(failures, rsf_godot_native_attach(ptr::null()) == 0);
+        check!(failures, 
             rsf_godot_native_render(
                 ptr::null_mut(),
                 ptr::null_mut(),
@@ -255,8 +257,8 @@ fn native_unloaded_cases() -> i32 {
                 ptr::null()
             ) == 0
         );
-        check!(rsf_godot_native_shutdown() == 0);
-        check!(leases == 2);
+        check!(failures, rsf_godot_native_shutdown() == 0);
+        check!(failures, leases == 2);
     }
     failures
 }
@@ -269,14 +271,6 @@ extern "C" fn rsf_fixture_graph_cases(
     refusals: u32,
 ) -> i32 {
     let mut failures = 0;
-    macro_rules! check {
-        ($condition:expr) => {
-            if !$condition {
-                rsf_fixture_graph_failure(line!());
-                failures += 1;
-            }
-        };
-    }
     // SAFETY: the C++ runner gives us a single live Fixture per scenario. The
     // output and snapshot storage live through the corresponding calls.
     unsafe {
@@ -325,45 +319,45 @@ extern "C" fn rsf_fixture_graph_cases(
             ]
         };
         let mut next = 0;
-        check!(!handoff(0, 0));
-        check!(snapshot()[2] == u64::from(reuse));
+        check!(failures, !handoff(0, 0));
+        check!(failures, snapshot()[2] == u64::from(reuse));
         rsf_fixture_graph_scope(context, 1);
         if refusals == 0 {
-            check!(handoff(0, 0));
-            check!(valid_header());
-            check!(split(0, 0, 77, 4, 5, 6, &mut next) == 0);
-            check!(next == 2 * 16);
-            check!(snapshot() == [2, 1, 1, 1, 2, 1, 1, 0, 77, 4, 5, 77, 6, 0, 1, 1, 1]);
+            check!(failures, handoff(0, 0));
+            check!(failures, valid_header());
+            check!(failures, split(0, 0, 77, 4, 5, 6, &mut next) == 0);
+            check!(failures, next == 2 * 16);
+            check!(failures, snapshot() == [2, 1, 1, 1, 2, 1, 1, 0, 77, 4, 5, 77, 6, 0, 1, 1, 1]);
             // Provider fallback still records on the graph-owned continuation.
-            check!(!handoff(0, 0));
+            check!(failures, !handoff(0, 0));
             rsf_fixture_graph_scope(context, 0);
             next = 1;
-            check!(split(0, 0, 77, 6, 7, 8, &mut next) != 0);
-            check!(next == 0 && snapshot()[..2] == [2, 1]);
+            check!(failures, split(0, 0, 77, 6, 7, 8, &mut next) != 0);
+            check!(failures, next == 0 && snapshot()[..2] == [2, 1]);
         } else {
-            check!(!handoff(1, 0));
-            check!(!handoff(0, 2));
+            check!(failures, !handoff(1, 0));
+            check!(failures, !handoff(0, 2));
             (*state).fault = Fault::TimelineDisabled;
-            check!(!handoff(0, 0));
+            check!(failures, !handoff(0, 0));
             (*state).fault = Fault::None;
-            check!(handoff(0, 0));
-            check!(valid_header());
-            check!(split(1, 0, 77, 4, 5, 6, &mut next) != 0);
-            check!(split(0, 17, 77, 4, 5, 6, &mut next) != 0);
-            check!(split(0, 0, 0, 4, 5, 6, &mut next) != 0);
-            check!(split(0, 0, 77, 5, 5, 6, &mut next) != 0);
-            check!(split(0, 0, 77, 4, 5, 5, &mut next) != 0);
-            check!(split(0, 0, 77, 4, 5, 6, ptr::null_mut()) != 0);
+            check!(failures, handoff(0, 0));
+            check!(failures, valid_header());
+            check!(failures, split(1, 0, 77, 4, 5, 6, &mut next) != 0);
+            check!(failures, split(0, 17, 77, 4, 5, 6, &mut next) != 0);
+            check!(failures, split(0, 0, 0, 4, 5, 6, &mut next) != 0);
+            check!(failures, split(0, 0, 77, 5, 5, 6, &mut next) != 0);
+            check!(failures, split(0, 0, 77, 4, 5, 5, &mut next) != 0);
+            check!(failures, split(0, 0, 77, 4, 5, 6, ptr::null_mut()) != 0);
             (*state).fault = Fault::Allocate;
-            check!(split(0, 0, 77, 4, 5, 6, &mut next) == -1);
-            check!(snapshot() == [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+            check!(failures, split(0, 0, 77, 4, 5, 6, &mut next) == -1);
+            check!(failures, snapshot() == [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
             (*state).fault = Fault::Semaphore;
-            check!(split(0, 0, 77, 4, 5, 6, &mut next) == -1);
-            check!(snapshot() == [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+            check!(failures, split(0, 0, 77, 4, 5, 6, &mut next) == -1);
+            check!(failures, snapshot() == [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
             (*state).fault = Fault::Begin;
-            check!(split(0, 0, 77, 4, 5, 6, &mut next) == -3);
-            check!(next == 0);
-            check!(snapshot() == [1, 0, 1, 1, 2, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+            check!(failures, split(0, 0, 77, 4, 5, 6, &mut next) == -3);
+            check!(failures, next == 0);
+            check!(failures, snapshot() == [1, 0, 1, 1, 2, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
             rsf_fixture_graph_scope(context, 0);
         }
     }

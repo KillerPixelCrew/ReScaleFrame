@@ -39,18 +39,6 @@ unsafe extern "C" {
     fn rsf_fg_leases_abandon_device_lost(lease: Raw) -> i32;
 }
 
-macro_rules! check {
-    ($condition:expr) => {
-        if !$condition {
-            eprintln!(
-                "Lease check failed at {}: {}",
-                line!(),
-                stringify!($condition)
-            );
-            std::process::exit(1);
-        }
-    };
-}
 
 fn retirement(fence: Raw, value: u64) -> rsf_fg_retirement {
     rsf_fg_retirement {

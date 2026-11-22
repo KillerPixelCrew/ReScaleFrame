@@ -23,7 +23,7 @@ fn initialized(requested: &Barrier) -> Vec<Barrier> {
 
 /// SDK-created images enter their first layout once per mip, layer and
 /// aspect, keep combined depth and stencil aspects together, and keep the
-/// contents of initialized subresources. Formerly sdk-fixes/dispatch-tests.cpp.
+/// contents of initialized subresources.
 fn first_use_barriers() {
     let both = vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL;
     let tracked = || unsafe { rsf_fixture_sl_dispatch_tracked(1) } != 0;
