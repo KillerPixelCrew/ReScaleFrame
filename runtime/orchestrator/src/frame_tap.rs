@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
-// The shared D3D11 frame tap. This owns hook admission, refresh and retirement, the plan and
-// callback state, gates and substitution, classification, capture routing, and every reference the
-// tap holds. runtime/graphics/src/frame_tap.cpp supplies the remaining typed detours and D3D11
-// leaves through `rsf_frame_tap_platform`.
+// Shared D3D11 frame tap. The Rust detours and platform leaves use the native COM ABI.
 mod detours;
+mod platform;
 
 use crate::com_ref::ComRef;
 use crate::constant_buffer_read::{MAP_WRITE_DISCARD, Map, MappedResource, Unmap, slot};
@@ -1993,11 +1991,21 @@ fn constant_watch() -> MutexGuard<'static, Option<ConstantWatch>> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
+unsafe extern "C" {
+    fn rsf_frame_tap_call_constant_observer(
+        callback: rsf_frame_tap_constant_observer_fn,
+        user: Handle,
+        resource: Handle,
+        data: *const c_void,
+        bytes: u32,
+    );
+}
+
 impl ConstantWatch {
     unsafe fn notify(self, platform: &Platform, resource: Handle, data: *const c_void, bytes: u32) {
         match self.callback {
             ConstantCallback::Observer(callback) => unsafe {
-                callback.unwrap()(self.user, resource, data, bytes)
+                rsf_frame_tap_call_constant_observer(callback, self.user, resource, data, bytes)
             },
             ConstantCallback::Legacy(callback, _) => unsafe {
                 (platform.constants.unwrap())(callback, self.user, resource, data.cast_mut(), bytes)
@@ -2077,8 +2085,7 @@ impl Drop for Resolved {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_install(
+unsafe fn rsf_core_frame_tap_install(
     platform: &Platform,
     context: Handle,
     options: *const rsf_frame_tap_options,
@@ -2174,8 +2181,7 @@ unsafe extern "C" fn rsf_core_frame_tap_install(
     OK
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
+fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     // Everything that can refuse comes before the first change. A caller inside a hook is refused
     // with INVALID_ARGUMENT when it would have to wait for another thread.
     let Some(lock) = control() else {
@@ -2248,8 +2254,7 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     if restored { OK } else { PATCH_FAILED }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_refresh(platform: &Platform) -> i32 {
+fn rsf_core_frame_tap_refresh(platform: &Platform) -> i32 {
     if !TAP.installed.load(Acquire) {
         return NOT_INSTALLED;
     }
@@ -2259,8 +2264,7 @@ extern "C" fn rsf_core_frame_tap_refresh(platform: &Platform) -> i32 {
     OK
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_set_sampler_bias(platform: &Platform, bias: f32) -> i32 {
+fn rsf_core_frame_tap_set_sampler_bias(platform: &Platform, bias: f32) -> i32 {
     if !bias.is_finite() || !(-16.0..=0.0).contains(&bias) {
         return INVALID;
     }
@@ -2472,8 +2476,7 @@ extern "C" fn rsf_frame_tap_set_constant_override_format(format: u32) {
     TAP.constant_override_format.store(format, Release);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_set_divert(
+unsafe fn rsf_core_frame_tap_set_divert(
     platform: &Platform,
     setup: *const rsf_frame_tap_divert_setup,
 ) -> i32 {
@@ -2623,14 +2626,12 @@ unsafe extern "C" fn rsf_frame_tap_get_status(status: *mut rsf_frame_tap_status)
     OK
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_enter(platform: &Platform, hook: u32) -> Handle {
+fn rsf_core_frame_tap_enter(platform: &Platform, hook: u32) -> Handle {
     refresh(platform);
     original(hook as usize)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_leave(platform: &Platform, admitted: u32) {
+fn rsf_core_frame_tap_leave(platform: &Platform, admitted: u32) {
     refresh(platform);
     if admitted != 0 {
         // Ends the admission a deciding entry carried across the detour's forward.
@@ -2638,8 +2639,7 @@ extern "C" fn rsf_core_frame_tap_leave(platform: &Platform, admitted: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_views(
+unsafe fn rsf_core_frame_tap_views(
     platform: &Platform,
     context: Handle,
     start: u32,
@@ -2817,8 +2817,7 @@ fn settle_target_substitution(
     apply_viewport_policy(platform, render, context);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_targets(
+unsafe fn rsf_core_frame_tap_targets(
     platform: &Platform,
     context: Handle,
     count: u32,
@@ -2881,8 +2880,7 @@ unsafe extern "C" fn rsf_core_frame_tap_targets(
     settle_target_substitution(platform, render, context, !replacement.is_null());
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_viewports(
+unsafe fn rsf_core_frame_tap_viewports(
     platform: &Platform,
     context: Handle,
     count: u32,
@@ -2915,8 +2913,7 @@ unsafe extern "C" fn rsf_core_frame_tap_viewports(
     apply_viewport_policy(platform, render, context);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_scissors(
+unsafe fn rsf_core_frame_tap_scissors(
     platform: &Platform,
     context: Handle,
     count: u32,
@@ -2950,8 +2947,7 @@ unsafe extern "C" fn rsf_core_frame_tap_scissors(
 
 // The clear follows the target: a replaced target that is never cleared keeps old frames. A
 // substitute carries its admission to the detour's `leave`, after the clear is forwarded.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_clear_target(
+unsafe fn rsf_core_frame_tap_clear_target(
     platform: &Platform,
     context: Handle,
     view: Handle,
@@ -2991,8 +2987,7 @@ unsafe extern "C" fn rsf_core_frame_tap_clear_target(
 // One draw the tap looks at, from the divert decision to the reports. The guard is taken before
 // the divert, because retargeting issues context calls that are not the game's. The game's call
 // reads its original afresh, after anything that may have moved the runtime's table.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_draw(
+fn rsf_core_frame_tap_draw(
     platform: &Platform,
     context: Handle,
     hook: u32,
@@ -3041,8 +3036,7 @@ extern "C" fn rsf_core_frame_tap_draw(
 }
 
 // Draws whose arguments live in a buffer or come from stream-out, after they are forwarded.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_indirect(
+fn rsf_core_frame_tap_indirect(
     platform: &Platform,
     context: Handle,
     kind: u32,
@@ -3083,8 +3077,7 @@ unsafe fn read_or<T: Copy>(items: *const T, index: usize, empty: T) -> T {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_vertex_buffers(
+unsafe fn rsf_core_frame_tap_vertex_buffers(
     context: Handle,
     start: u32,
     count: u32,
@@ -3112,13 +3105,7 @@ unsafe extern "C" fn rsf_core_frame_tap_vertex_buffers(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_index_buffer(
-    context: Handle,
-    buffer: Handle,
-    format: u32,
-    offset: u32,
-) {
+fn rsf_core_frame_tap_index_buffer(context: Handle, buffer: Handle, format: u32, offset: u32) {
     let Some(_admission) = Admission::enter(context) else {
         return;
     };
@@ -3133,8 +3120,7 @@ extern "C" fn rsf_core_frame_tap_index_buffer(
 
 // The pipeline objects a draw is identified by. Recorded and nothing more: what they mean is
 // settled at creation and looked up by address.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_object(context: Handle, object: u32, value: Handle) {
+fn rsf_core_frame_tap_object(context: Handle, object: u32, value: Handle) {
     let Some(_admission) = Admission::enter(context) else {
         return;
     };
@@ -3153,16 +3139,14 @@ extern "C" fn rsf_core_frame_tap_object(context: Handle, object: u32, value: Han
     *field = value;
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_topology(context: Handle, topology: u32) {
+fn rsf_core_frame_tap_topology(context: Handle, topology: u32) {
     let admission = Admission::enter(context);
     if !inside() && admission.is_some() {
         unsafe { render() }.geometry.topology = topology;
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_vertex_constants(
+unsafe fn rsf_core_frame_tap_vertex_constants(
     context: Handle,
     start: u32,
     count: u32,
@@ -3184,8 +3168,7 @@ unsafe extern "C" fn rsf_core_frame_tap_vertex_constants(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_pixel_constants(
+unsafe fn rsf_core_frame_tap_pixel_constants(
     platform: &Platform,
     context: Handle,
     start: u32,
@@ -3236,8 +3219,7 @@ unsafe extern "C" fn rsf_core_frame_tap_pixel_constants(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_invalidate(context: Handle, restore: u32) {
+fn rsf_core_frame_tap_invalidate(context: Handle, restore: u32) {
     if restore != 0 {
         return;
     }
@@ -3249,8 +3231,7 @@ extern "C" fn rsf_core_frame_tap_invalidate(context: Handle, restore: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_map(
+unsafe fn rsf_core_frame_tap_map(
     platform: &Platform,
     context: Handle,
     resource: Handle,
@@ -3302,8 +3283,7 @@ unsafe extern "C" fn rsf_core_frame_tap_map(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_unmap(
+unsafe fn rsf_core_frame_tap_unmap(
     platform: &Platform,
     context: Handle,
     resource: Handle,
@@ -3334,8 +3314,7 @@ unsafe extern "C" fn rsf_core_frame_tap_unmap(
     refresh(platform);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_dispatch(
+fn rsf_core_frame_tap_dispatch(
     platform: &Platform,
     context: Handle,
     x: u32,
@@ -3379,8 +3358,7 @@ fn promoted(platform: &Platform, resource: Handle) -> Option<ComRef> {
 // A copy between promoted textures goes between their stand-ins, so a result copied from one
 // promoted target into another arrives at output resolution. A redirected copy carries its
 // admission to the detour's `leave`.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_copy(
+unsafe fn rsf_core_frame_tap_copy(
     platform: &Platform,
     context: Handle,
     destination: *mut Handle,
@@ -3413,9 +3391,8 @@ unsafe extern "C" fn rsf_core_frame_tap_copy(
 
 // A shader's own constants on their way to the GPU. The watch sees them on a copy unless it only
 // reads: the game's shadow is the game's, and the next upload must start from what it asked for.
-#[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn rsf_core_frame_tap_update(
+unsafe fn rsf_core_frame_tap_update(
     platform: &Platform,
     context: Handle,
     destination: Handle,
@@ -3462,8 +3439,7 @@ unsafe extern "C" fn rsf_core_frame_tap_update(
 // The samplers to forward. With no bias this is the game's own array, so the hook stays a plain
 // forward: the bias reads the bindings back from the context when it starts or ends. Biased clones
 // carry their admission to the detour's `leave`, so uninstall cannot release one being bound.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_frame_tap_samplers(
+unsafe fn rsf_core_frame_tap_samplers(
     platform: &Platform,
     context: Handle,
     start: u32,

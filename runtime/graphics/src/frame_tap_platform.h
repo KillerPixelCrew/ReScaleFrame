@@ -1,9 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
-/* Internal to rsf_graphics: the native leaves the Rust frame tap owner calls, and its entries.
-   Rust owns hook admission and retirement, plan and callback state, gates, substitution,
-   classification, capture routing and the references the tap holds. This contract supplies the
-   remaining native detours and D3D11 leaves. */
+/* Internal to the Rust frame tap. Defines the hook records and callback boundary. */
 #include <rescaleframe/frame_tap.h>
 
 #include <stdint.h>
@@ -189,69 +186,13 @@ typedef struct rsf_frame_tap_platform {
                                   void** buffers);
 } rsf_frame_tap_platform;
 
-typedef const rsf_frame_tap_platform* rsf_frame_tap_platform_ref;
+/* Only the foreign callback fields are populated by this shim. */
+const rsf_frame_tap_platform* rsf_frame_tap_foreign_callbacks(void);
 
-/* Control entries. */
-rsf_frame_tap_result rsf_core_frame_tap_install(rsf_frame_tap_platform_ref, void* context,
-                                                const rsf_frame_tap_options* options,
-                                                const rsf_frame_tap_hook* hooks);
-rsf_frame_tap_result rsf_core_frame_tap_uninstall(rsf_frame_tap_platform_ref);
-rsf_frame_tap_result rsf_core_frame_tap_refresh(rsf_frame_tap_platform_ref);
-rsf_frame_tap_result rsf_core_frame_tap_set_sampler_bias(rsf_frame_tap_platform_ref, float bias);
-rsf_frame_tap_result rsf_core_frame_tap_set_divert(rsf_frame_tap_platform_ref,
-                                                   const rsf_frame_tap_divert_setup* setup);
-
-/* Hook entries. `enter` re-applies a rewritten vtable and returns the hook's current original;
-   `leave` re-applies it after a call that may have rewritten it.
-
-   A hook that reads the plan or the render thread's shadow holds an admission. set_plan and
-   uninstall close a gate to new ones and drain the rest, or refuse from inside a callback when
-   that would mean waiting for another thread. Entries whose decision the detour
-   forwards (clear, copy, samplers) set `*admitted` when they hold one, and the detour
-   passes it to `leave` after forwarding, so a substitute or clone cannot outlive a clear. */
-void* rsf_core_frame_tap_enter(rsf_frame_tap_platform_ref, uint32_t hook);
-void rsf_core_frame_tap_leave(rsf_frame_tap_platform_ref, uint32_t admitted);
-void rsf_core_frame_tap_views(rsf_frame_tap_platform_ref, void* context, uint32_t start,
-                              uint32_t count, void* const* views);
-void rsf_core_frame_tap_targets(rsf_frame_tap_platform_ref, void* context, uint32_t count,
-                                void* const* views, void* depth, const rsf_frame_tap_uavs* uavs);
-void rsf_core_frame_tap_viewports(rsf_frame_tap_platform_ref, void* context, uint32_t count,
-                                  const rsf_frame_tap_viewport* viewports);
-void rsf_core_frame_tap_scissors(rsf_frame_tap_platform_ref, void* context, uint32_t count,
-                                 const rsf_frame_tap_rect* rectangles);
-void* rsf_core_frame_tap_clear_target(rsf_frame_tap_platform_ref, void* context, void* view,
-                                      uint32_t* admitted);
-void rsf_core_frame_tap_draw(rsf_frame_tap_platform_ref, void* context, uint32_t hook,
-                             const rsf_frame_tap_draw_call* call);
-void rsf_core_frame_tap_indirect(rsf_frame_tap_platform_ref, void* context, uint32_t kind,
-                                 void* arguments, uint32_t offset);
-void rsf_core_frame_tap_vertex_buffers(void* context, uint32_t start, uint32_t count,
-                                       void* const* buffers, const uint32_t* strides,
-                                       const uint32_t* offsets);
-void rsf_core_frame_tap_index_buffer(void* context, void* buffer, uint32_t format,
-                                     uint32_t offset);
-void rsf_core_frame_tap_object(void* context, uint32_t object, void* value);
-void rsf_core_frame_tap_topology(void* context, uint32_t topology);
-void rsf_core_frame_tap_vertex_constants(void* context, uint32_t start, uint32_t count,
-                                         void* const* buffers);
-void rsf_core_frame_tap_pixel_constants(rsf_frame_tap_platform_ref, void* context,
-                                        uint32_t start, uint32_t count, void* const* buffers);
-void rsf_core_frame_tap_invalidate(void* context, uint32_t restore);
-int32_t rsf_core_frame_tap_map(rsf_frame_tap_platform_ref, void* context, void* resource,
-                               uint32_t subresource, uint32_t kind, uint32_t flags, void* mapped);
-void rsf_core_frame_tap_unmap(rsf_frame_tap_platform_ref, void* context, void* resource,
-                              uint32_t subresource);
-void rsf_core_frame_tap_dispatch(rsf_frame_tap_platform_ref, void* context, uint32_t x,
-                                 uint32_t y, uint32_t z, void* arguments, uint32_t offset);
-void rsf_core_frame_tap_copy(rsf_frame_tap_platform_ref, void* context, void** destination,
-                             void** source, uint32_t* admitted);
-const void* rsf_core_frame_tap_update(rsf_frame_tap_platform_ref, void* context,
-                                      void* destination, uint32_t subresource, uint32_t has_box,
-                                      const void* data, uint32_t row_pitch, void* scratch);
-void* const* rsf_core_frame_tap_samplers(rsf_frame_tap_platform_ref, void* context,
-                                         uint32_t start, uint32_t count, void* const* samplers,
-                                         void** bound, uint32_t* admitted);
+void rsf_frame_tap_call_constant_observer(
+    rsf_frame_tap_constant_observer_fn fn, void* user, void* buffer,
+    const void* contents, uint32_t bytes);
 
 #ifdef __cplusplus
-} /* extern "C" */
+}
 #endif

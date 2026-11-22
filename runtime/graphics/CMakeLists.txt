@@ -8,7 +8,6 @@ add_library(rsf_graphics STATIC
     src/colour_fidelity.cpp
     src/colour_transport.cpp
     src/resource_ref.cpp
-    src/frame_tap.cpp
     src/depth_replay.cpp
     src/depth_scale.cpp
     src/d3d11_state.cpp

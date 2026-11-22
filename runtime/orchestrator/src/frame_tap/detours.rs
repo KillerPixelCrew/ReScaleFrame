@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 
-unsafe extern "C" {
-    fn rsf_frame_tap_native() -> *const Platform;
-}
-
-fn platform() -> &'static Platform {
-    // The native platform is immutable and lives for the lifetime of the image.
-    unsafe { &*rsf_frame_tap_native() }
-}
+use super::platform::platform;
 
 // Call an exact STDMETHODCALLTYPE original. The occupied slots were verified against
 // the Windows SDK ID3D11DeviceContext and ID3D11DeviceContext1 C vtables.
