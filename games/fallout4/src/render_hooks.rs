@@ -631,7 +631,7 @@ extern "C" fn rsf_fallout4_render_admit_world(
         && !candidate.auxiliary_open
         && !candidate.recovery_owned
         && {
-            crate::resolution::retry_retired();
+            crate::resolution::retry_retired(image());
             !resolution_busy()
         }
         && rsf_fallout4_cpu_begin_render()

@@ -40,8 +40,10 @@ superseded a write cause no restore. A newly observed live Context retires the s
 association without following the old pointer. Shadow cleanup preserves unrelated dirty bits.
 Failed reads and ambiguous equal bits under a different renderer retain their obligation.
 When the pending work clears, the owner count retires, and an advanced scope remains refused for
-its original source. The synthetic fixture injects a failed write and a later superseding value.
-The complete World callback, device and frame-advance sequence still need user-run validation.
+its original source. The synthetic fixtures inject a failed restore, exercise native counter
+advancement with a pending ratio write, and check that retirement preserves the superseding
+value and releases its owner count. The World callback and device sequence still need user-run
+validation.
 
 ## Remaining native boundaries
 

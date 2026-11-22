@@ -838,8 +838,7 @@ fn finish_source(base: usize) -> bool {
 }
 
 /// The verified ordinary World boundary may retire an older scope on its owning thread.
-pub(crate) fn retry_retired() {
-    let base = image();
+pub(crate) fn retry_retired(base: usize) {
     let scope = SCOPE.get();
     if (scope.input || scope.output)
         && read::<u32>(base + STATE + 0x98)
@@ -1116,6 +1115,45 @@ unsafe extern "C" fn rsf_fallout4_resolution_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn world_retry_waits_for_frame_advance_and_retires_the_input_scope() {
+        let mut native = vec![0_u8; STATE + 0x9c];
+        let base = native.as_mut_ptr() as usize;
+        let native_frame = base + STATE + 0x98;
+        assert!(write(native_frame, &7_u32));
+        assert!(write(base + RATIOS, &0.5_f32));
+        let count = OWNERS.fetch_add(1, Ordering::AcqRel);
+        SCOPE.set(Scope {
+            frame: FrameOwner {
+                native_frame: 7,
+                ..FrameOwner::default()
+            },
+            original_targets: TargetValues {
+                ratios: [1.0; 2],
+                active: 0,
+            },
+            input_targets: TargetValues {
+                ratios: [0.5; 2],
+                active: 1,
+            },
+            input_writes: TargetWrites {
+                ratios: [true, false],
+                active: false,
+            },
+            input: true,
+            ..Scope::default()
+        });
+        retry_retired(base);
+        assert!(SCOPE.get().input && SCOPE.get().input_writes.ratios[0]);
+
+        assert!(write(native_frame, &8_u32));
+        assert!(write(base + RATIOS, &0.75_f32));
+        retry_retired(base);
+        assert!(!SCOPE.get().input);
+        assert_eq!(OWNERS.load(Ordering::Acquire), count);
+        assert_eq!(read::<f32>(base + RATIOS), Some(0.75));
+    }
 
     #[test]
     fn failed_restore_can_retire_a_superseded_value() {
