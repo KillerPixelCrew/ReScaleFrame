@@ -1406,14 +1406,14 @@ Port common frame-generation resources, transfers, submission and swapchain life
 - [x] [runtime/orchestrator/src/vulkan_fg_copy.h](runtime/orchestrator/src/vulkan_fg_copy.h)
 - [x] [runtime/orchestrator/src/vulkan_fg_frames.h](runtime/orchestrator/src/vulkan_fg_frames.h)
 - [x] [runtime/orchestrator/src/vulkan_fg_resources.h](runtime/orchestrator/src/vulkan_fg_resources.h)
-- [ ] [runtime/orchestrator/src/vulkan_fg_resources_native.h](runtime/orchestrator/src/vulkan_fg_resources_native.h)
+- [x] [runtime/orchestrator/src/vulkan_fg_resources_native.h](runtime/orchestrator/src/vulkan_fg_resources_native.h)
 
 **Fixtures (8)**
 
 - [x] [tests/vulkan-fg/dispatch_fixture.cpp](tests/vulkan-fg/dispatch_fixture.cpp) (fake provider callbacks)
 - [ ] [tests/vulkan-fg/ffx_fixture.cpp](tests/vulkan-fg/ffx_fixture.cpp) (SDK records and Vulkan callbacks)
 - [ ] [tests/ffx_vulkan_wsi_dispatch.cpp](tests/ffx_vulkan_wsi_dispatch.cpp)
-- [ ] [tests/native_ffx_vulkan_harness.h](tests/native_ffx_vulkan_harness.h)
+- [x] [tests/native_ffx_vulkan_harness.h](tests/native_ffx_vulkan_harness.h)
 - [x] [tests/native_ffx_vulkan_reset.cpp](tests/native_ffx_vulkan_reset.cpp)
 - [x] [tests/native_ffx_vulkan_submission.cpp](tests/native_ffx_vulkan_submission.cpp)
 - [x] [tests/native_ffx_vulkan_wsi_route.cpp](tests/native_ffx_vulkan_wsi_route.cpp)

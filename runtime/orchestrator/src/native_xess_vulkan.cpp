@@ -23,7 +23,7 @@ int32_t rsf_core_xessvk_shutdown(const rsf::xess_vk::Ops*);
 #include <rescaleframe/capture_names.h>
 #include "sharpening_vulkan.h"
 #include "vulkan_fg_copy.h"
-#include "vulkan_fg_resources_native.h"
+#include "vulkan_fg_resources.h"
 
 struct rsf_xessvk_graphics;
 extern "C" {
@@ -224,7 +224,7 @@ extern const Ops native_ops{
     rsf_vk_sdk_system_loader, allocate_table, rsf_core_vk_sdk_pin, [](Library* sdk) noexcept { delete sdk; },
     instance_requirements, device_extensions, device_features, version,
     open, [](Native* native) noexcept { delete native; }, create_context, initialize, resolution, destroy_context,
-    bind_device, [](Native* native) -> void* { return rsf_core_xessvk_graphics_images(native->gpu.get()); }, &rsf::vkfg::platform,
+    bind_device, [](Native* native) -> void* { return rsf_core_xessvk_graphics_images(native->gpu.get()); }, &rsf_core_vkfg_platform,
     velocity, record_barrier, record_copy, execute, sharpen,
     [](Native* native) noexcept { rsf_sharpenvk_host_clear(&native->sharpen); },
     [](Native* native, uint64_t provider, uint32_t backend) noexcept { rsf_core_capture_vk_provider(native->capture.get(), provider, backend, 0); },
