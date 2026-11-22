@@ -27,6 +27,9 @@ use std::sync::atomic::{
 };
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
 
+#[path = "d3d11_present_dxgi.rs"]
+mod dxgi;
+
 type Platform = rsf_d3d11p_platform;
 type Graphics = rsf_streamline_graphics;
 

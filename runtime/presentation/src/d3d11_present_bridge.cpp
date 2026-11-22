@@ -56,6 +56,20 @@ static_assert(RSF_FG_BACKEND_DLSS == 1 && RSF_FG_BACKEND_FSR3 == 3 && RSF_FG_BAC
     RSF_FG_BACKEND_XESS == 5 && RSF_FG_BACKEND_AUTO == 7 && RSF_PACING_ANTILAG2 == 3 &&
     RSF_LATENCY_INPUT_SAMPLE == 6 && RSF_UI_MODE_NONE == 1);
 
+extern "C" {
+int32_t rsf_d3d11p_facade_query_interface(void*, const IID*, void**);
+int32_t rsf_d3d11p_facade_present1(rsf_d3d11p_chain*, uint32_t, uint32_t, const DXGI_PRESENT_PARAMETERS*);
+int32_t rsf_d3d11p_facade_resize1(rsf_d3d11p_chain*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+    const uint32_t*, IUnknown* const*);
+int32_t rsf_d3d11p_native_query_interface(void*, const void*, void**);
+int32_t rsf_d3d11p_native_query_chain4(void*, void**);
+int32_t rsf_d3d11p_native_get_fullscreen(void*, int32_t*);
+int32_t rsf_d3d11p_native_set_fullscreen(void*, int32_t, void*);
+int32_t rsf_d3d11p_native_present(void*, uint32_t, uint32_t);
+int32_t rsf_d3d11p_native_get_buffer(void*, uint32_t, const void*, void**);
+int32_t rsf_d3d11p_native_acquire_backbuffer(void*, void**);
+}
+
 namespace {
 using Microsoft::WRL::ComPtr;
 using Create = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
@@ -127,14 +141,7 @@ struct Bridge final : public IDXGISwapChain4 {
     }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
-        if (!out) return E_POINTER;
-        *out = nullptr;
-        if (iid == __uuidof(IUnknown) || iid == __uuidof(IDXGIObject) || iid == __uuidof(IDXGIDeviceSubObject) ||
-            iid == __uuidof(IDXGISwapChain) || iid == __uuidof(IDXGISwapChain1) || iid == __uuidof(IDXGISwapChain2) ||
-            iid == __uuidof(IDXGISwapChain3) || iid == __uuidof(IDXGISwapChain4)) {
-            *out = static_cast<IDXGISwapChain4*>(this); AddRef(); return S_OK;
-        }
-        return E_NOINTERFACE;
+        return rsf_d3d11p_facade_query_interface(static_cast<IDXGISwapChain4*>(this), &iid, out);
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
     ULONG STDMETHODCALLTYPE Release() override {
@@ -223,8 +230,7 @@ struct Bridge final : public IDXGISwapChain4 {
         const volatile HRESULT result = present1_owned(sync,flags,params); return result;
     }
     __declspec(noinline) HRESULT present1_owned(UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
-        if (params && (params->DirtyRectsCount || params->pScrollRect)) return DXGI_ERROR_INVALID_CALL;
-        return present_owned(sync, flags);
+        return rsf_d3d11p_facade_present1(chain, sync, flags, params);
     }
     BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override {
         const PhysicalLease lease(chain);
@@ -278,8 +284,7 @@ struct Bridge final : public IDXGISwapChain4 {
         const volatile HRESULT result = resize_buffers1_owned(count,width,height,format,flags,masks,queues); return result;
     }
     __declspec(noinline) HRESULT resize_buffers1_owned(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags, const UINT* masks, IUnknown* const* queues) {
-        if (masks || queues) return DXGI_ERROR_INVALID_CALL;
-        return resize_buffers_owned(count,width,height,format,flags);
+        return rsf_d3d11p_facade_resize1(chain, count, width, height, uint32_t(format), flags, masks, queues);
     }
     HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type, UINT bytes, void* data) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetHDRMetaData(type, bytes, data); }); }
 };
@@ -495,22 +500,6 @@ int32_t create_plain(void* b, const rsf_d3d11p_plain_plan* plan, void** physical
     *queue = owner_queue;
     return S_OK;
 }
-int32_t query_chain4(void* chain, void** physical) {
-    IDXGISwapChain4* replacement = nullptr;
-    const auto result = static_cast<IUnknown*>(chain)->QueryInterface(IID_PPV_ARGS(&replacement));
-    *physical = replacement;
-    return result;
-}
-int32_t get_fullscreen(void* physical, int32_t* fullscreen) {
-    auto* chain = static_cast<IDXGISwapChain4*>(physical);
-    BOOL value = FALSE; const auto result = chain->GetFullscreenState(&value, nullptr); *fullscreen = value; return result;
-}
-int32_t set_fullscreen(void* physical, int32_t fullscreen, void* target) {
-    return static_cast<IDXGISwapChain4*>(physical)->SetFullscreenState(BOOL(fullscreen), static_cast<IDXGIOutput*>(target));
-}
-int32_t physical_present(void* physical, uint32_t sync, uint32_t flags) {
-    return static_cast<IDXGISwapChain4*>(physical)->Present(sync, flags);
-}
 int32_t resize_physical(void* b, void* physical, uint32_t count, uint32_t width, uint32_t height, uint32_t format) {
     auto& self = *as_bridge(b);
     return static_cast<IDXGISwapChain4*>(physical)->ResizeBuffers(count, width, height, DXGI_FORMAT(format),
@@ -542,13 +531,6 @@ int32_t upload_wait(void* b, void* queue, uint64_t value) {
     if (FAILED(signaled)) return signaled;
     self.context->Flush();
     return static_cast<ID3D12CommandQueue*>(queue)->Wait(fence12, value);
-}
-int32_t acquire_backbuffer(void* chain, void** out) {
-    auto* physical = static_cast<IDXGISwapChain4*>(chain);
-    ID3D12Resource* value = nullptr;
-    const auto hr = physical->GetBuffer(physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&value));
-    *out = value;
-    return hr;
 }
 void record_copy(void* b, void* raw_list, void* backbuffer, void* source) {
     auto& self = *as_bridge(b); auto* list = static_cast<ID3D12GraphicsCommandList*>(raw_list);
@@ -607,12 +589,6 @@ void log_present_failure(void* b, const char* step, int32_t result, uint32_t ren
     log(text);
 }
 
-int32_t query_buffer_interface(void* resource, const void* iid, void** out) {
-    return static_cast<IUnknown*>(resource)->QueryInterface(*static_cast<const IID*>(iid), out);
-}
-int32_t get_physical_buffer(void* physical, uint32_t index, const void* iid, void** out) {
-    return static_cast<IDXGISwapChain4*>(physical)->GetBuffer(index, *static_cast<const IID*>(iid), out);
-}
 void log_buffer_refusal(void* b, uint32_t index, const void* requested, int32_t result, uint32_t pending) {
     const auto& iid = *static_cast<const IID*>(requested);
     char text[320]{};
@@ -718,16 +694,16 @@ const rsf_d3d11p_platform platform{
     .duplicate_event = leaf::duplicate_event, .close_event = leaf::close_event,
     .create_upload_fence = leaf::create_upload_fence, .create_slot = leaf::create_slot,
     .shared_surface_platform = rsf_shared_surface_native_platform, .create_render_buffer = leaf::create_render_buffer,
-    .create_plain = leaf::create_plain, .query_chain4 = leaf::query_chain4, .get_fullscreen = leaf::get_fullscreen,
-    .set_fullscreen = leaf::set_fullscreen,
-    .physical_present = leaf::physical_present, .resize_physical = leaf::resize_physical,
+    .create_plain = leaf::create_plain, .query_chain4 = rsf_d3d11p_native_query_chain4, .get_fullscreen = rsf_d3d11p_native_get_fullscreen,
+    .set_fullscreen = rsf_d3d11p_native_set_fullscreen,
+    .physical_present = rsf_d3d11p_native_present, .resize_physical = leaf::resize_physical,
     .join = leaf::join,
-    .slot_reset = leaf::slot_reset, .upload_wait = leaf::upload_wait, .acquire_backbuffer = leaf::acquire_backbuffer,
+    .slot_reset = leaf::slot_reset, .upload_wait = leaf::upload_wait, .acquire_backbuffer = rsf_d3d11p_native_acquire_backbuffer,
     .record_copy = leaf::record_copy, .context11 = leaf::context11,
     .close_execute = leaf::close_execute, .upload_return = leaf::upload_return, .signal_slot = leaf::signal_slot,
     .application_ready = leaf::application_ready, .report_device_failure = leaf::report_device_failure,
     .log_present_failure = leaf::log_present_failure,
-    .query_buffer_interface = leaf::query_buffer_interface, .get_physical_buffer = leaf::get_physical_buffer,
+    .query_buffer_interface = rsf_d3d11p_native_query_interface, .get_physical_buffer = rsf_d3d11p_native_get_buffer,
     .log_buffer_refusal = leaf::log_buffer_refusal,
     .signal_wait = leaf::signal_wait, .wait_fence = leaf::wait_fence,
     .buffer_referenced = leaf::buffer_referenced, .set_description = leaf::set_description,
