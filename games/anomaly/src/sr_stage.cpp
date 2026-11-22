@@ -5,6 +5,7 @@
 // trampolines, and the guarded engine and graphics callbacks for the Rust swap owner.
 #include "sr_stage.h"
 #include "sr_stage_platform.h"
+#include "engine_guards.h"
 #include "engine_slots.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
@@ -284,7 +285,7 @@ bool install_position_slot(std::byte* module) noexcept {
     const auto& site = srp().sr_function_sites[site_position_setup];
     const auto checked = guard_image(module, build->image_size());
     return matches(checked, site) && rsf_anomaly_slot_install(RSF_ANOMALY_POSITION_SLOT, &checked,
-        srp().position_setup_vtable_rva, site.rva, 0, reinterpret_cast<void*>(&position_setup_hook), compare_slot);
+        srp().position_setup_vtable_rva, site.rva, 0, reinterpret_cast<void*>(&position_setup_hook), rsf_anomaly_compare_slot);
 }
 void __fastcall sun_cascades_hook(void* self) {
     SunCameraScope camera;

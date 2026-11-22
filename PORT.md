@@ -1889,7 +1889,7 @@ Port bootstrap, profile admission and observer lifetime. Attribute each guarded 
 - [x] [games/anomaly/src/bootstrap.cpp](games/anomaly/src/bootstrap.cpp)
 - [ ] [games/anomaly/src/build_profile.h](games/anomaly/src/build_profile.h)
 - [ ] [games/anomaly/src/engine_guards.h](games/anomaly/src/engine_guards.h)
-- [ ] [games/anomaly/src/engine_slots.h](games/anomaly/src/engine_slots.h)
+- [x] [games/anomaly/src/engine_slots.h](games/anomaly/src/engine_slots.h)
 - [ ] [games/anomaly/src/native_hook_ops.h](games/anomaly/src/native_hook_ops.h)
 - [ ] [games/anomaly/src/native_hooks.cpp](games/anomaly/src/native_hooks.cpp)
 - [ ] [games/anomaly/src/native_hooks.h](games/anomaly/src/native_hooks.h)

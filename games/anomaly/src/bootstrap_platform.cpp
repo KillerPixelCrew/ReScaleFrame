@@ -8,6 +8,7 @@
 #include "input_hooks.h"
 #include "motion_stage.h"
 #include "native_hook_ops.h"
+#include "native_memory.h"
 #include "overlay_platform.h"
 #include "sr_stage.h"
 #include <windows.h>
@@ -52,7 +53,7 @@ constexpr rsf_anomaly_bootstrap_platform leaves{
     rsf_anomaly_bootstrap_publish_input_observer,
     [](void* image, size_t build, const char** reason) noexcept {
         return rsf_anomaly_bootstrap_install_input(image, build, reinterpret_cast<void*>(&input_frame),
-            compare_slot, guarded_copy, reason);
+            rsf_anomaly_compare_slot, guarded_copy, reason);
     },
     [](void* runtime, const wchar_t* ini, rsf_game_log_fn log) noexcept {
         return rsf_anomaly_bootstrap_start_overlay(runtime, ini, log, &hook_ops);
