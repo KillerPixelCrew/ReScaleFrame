@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Device admission and scenario scheduling for the deployed motion fixtures.
+mod draw;
 mod foliage;
 mod model;
 mod schedule;

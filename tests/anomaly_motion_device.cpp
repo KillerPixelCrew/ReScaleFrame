@@ -19,6 +19,7 @@
 //    motion equals the CPU model including the plant that grew, and a plant without history stays zero.
 #include "motion_device_platform.h"
 #include "motion_fixture_platform.h"
+#include "anomaly_motion_native.h"
 #include "motion_constants.h"
 #include "shader_loader_platform.h"
 #include <d3d11.h>
@@ -132,9 +133,8 @@ Built build(const Root& root, std::vector<Define> defines)
     auto request = request_for(root, std::move(defines));
     Built built;
     std::string error;
-    require(compile_deployed(*api, deployment / "original", request, built.stock, error), root.name + " stock: " + error);
-    request.bytecode = built.stock;
-    built.prepared = prepare_deployed(*api, *admitted, deployment, request);
+    const bool compiled = build_deployed(*api, *admitted, deployment, request, built.stock, built.prepared, error);
+    require(compiled, root.name + " stock: " + error);
     return built;
 }
 
@@ -179,35 +179,9 @@ void every_root(const std::vector<Root>& list)
     std::printf("roots compiled: %u variants through the deployed-tree loader (%zu roots)\n", replaced, list.size());
 }
 
-struct Target {
-    ComPtr<ID3D11Texture2D> texture;
-    ComPtr<ID3D11RenderTargetView> rtv;
-};
-Target target(DXGI_FORMAT format)
-{
-    D3D11_TEXTURE2D_DESC desc{};
-    desc.Width = desc.Height = size; desc.MipLevels = desc.ArraySize = 1; desc.Format = format; desc.SampleDesc.Count = 1;
-    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    Target t;
-    hr(device->CreateTexture2D(&desc, nullptr, &t.texture), "target");
-    hr(device->CreateRenderTargetView(t.texture.Get(), nullptr, &t.rtv), "rtv");
-    return t;
-}
 template<class T> std::vector<T> read_back(ID3D11Texture2D* texture)
 {
-    D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
-    desc.BindFlags = 0; desc.Usage = D3D11_USAGE_STAGING; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ; desc.MiscFlags = 0;
-    ComPtr<ID3D11Texture2D> staging;
-    hr(device->CreateTexture2D(&desc, nullptr, &staging), "staging");
-    context->CopyResource(staging.Get(), texture);
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    hr(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "map");
-    std::vector<T> out(size * size);
-    for (UINT y = 0; y < size; ++y)
-        std::memcpy(out.data() + y * size, static_cast<const std::byte*>(mapped.pData) + y * mapped.RowPitch, size * sizeof(T));
-    context->Unmap(staging.Get(), 0);
-    return out;
+    return fixture_readback<T>(device.Get(), context.Get(), texture, size);
 }
 struct Half4 { uint16_t c[4]; };
 float half(uint16_t h)
@@ -221,20 +195,16 @@ float half(uint16_t h)
     return std::bit_cast<float>(bits);
 }
 
+using Bindings = std::unique_ptr<rsf_anomaly_motion_fixture_bindings, decltype(&rsf_anomaly_motion_fixture_bindings_drop)>;
+
 struct Scene {
     ComPtr<ID3D11VertexShader> stock_vs, motion_vs;
     ComPtr<ID3D11PixelShader> stock_ps, motion_ps;
     ComPtr<ID3D11InputLayout> layout;
     ComPtr<ID3D11Buffer> near_vb, behind_vb, full_vb;
     UINT stride{};
-    std::vector<ComPtr<ID3D11Buffer>> constants;
-    std::vector<ComPtr<ID3D11ShaderResourceView>> views;
-    std::vector<ComPtr<ID3D11SamplerState>> samplers;
-    Target position, albedo;
-    ComPtr<ID3D11Texture2D> depth_texture;
-    ComPtr<ID3D11DepthStencilView> depth;
-    ComPtr<ID3D11DepthStencilState> less;
-    ComPtr<ID3D11RasterizerState> raster;
+    Bindings constants{rsf_anomaly_motion_fixture_bindings_new(), rsf_anomaly_motion_fixture_bindings_drop};
+    FixtureTargets targets;
 };
 
 ComPtr<ID3D11ShaderReflection> reflect(const std::vector<std::byte>& code)
@@ -246,63 +216,8 @@ ComPtr<ID3D11ShaderReflection> reflect(const std::vector<std::byte>& code)
 // Engine constant buffers: every matrix identity, everything else 0.1 (alpha ref 0.5), RSF b13 skipped.
 void bind_engine_constants(Scene& s, ID3D11ShaderReflection* reflection, bool vertex)
 {
-    D3D11_SHADER_DESC desc{};
-    reflection->GetDesc(&desc);
-    for (UINT i = 0; i < desc.BoundResources; ++i) {
-        D3D11_SHADER_INPUT_BIND_DESC binding{};
-        reflection->GetResourceBindingDesc(i, &binding);
-        if (binding.Type == D3D_SIT_CBUFFER) {
-            if (std::string(binding.Name).starts_with("RSF")) continue;
-            auto* cb = reflection->GetConstantBufferByName(binding.Name);
-            D3D11_SHADER_BUFFER_DESC bd{};
-            cb->GetDesc(&bd);
-            std::vector<float> values((bd.Size + 15) / 16 * 4, 0.1f);
-            for (UINT v = 0; v < bd.Variables; ++v) {
-                auto* variable = cb->GetVariableByIndex(v);
-                D3D11_SHADER_VARIABLE_DESC vd{};
-                variable->GetDesc(&vd);
-                D3D11_SHADER_TYPE_DESC td{};
-                variable->GetType()->GetDesc(&td);
-                float* out = values.data() + vd.StartOffset / 4;
-                if (td.Class == D3D_SVC_MATRIX_COLUMNS || td.Class == D3D_SVC_MATRIX_ROWS)
-                    for (UINT k = 0; k < vd.Size / 4; ++k) out[k] = (k % 5 == 0) ? 1.0f : 0.0f;
-                if (std::string(vd.Name) == "def_aref" || std::string(vd.Name) == "alpha_ref") out[0] = 0.5f;
-            }
-            D3D11_BUFFER_DESC desc_b{};
-            desc_b.ByteWidth = static_cast<UINT>(values.size() * 4);
-            desc_b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-            D3D11_SUBRESOURCE_DATA init{values.data()};
-            ComPtr<ID3D11Buffer> buffer;
-            hr(device->CreateBuffer(&desc_b, &init, &buffer), "engine cb");
-            ID3D11Buffer* p = buffer.Get();
-            if (vertex) context->VSSetConstantBuffers(binding.BindPoint, 1, &p);
-            else context->PSSetConstantBuffers(binding.BindPoint, 1, &p);
-            s.constants.push_back(buffer);
-        } else if (!vertex && binding.Type == D3D_SIT_TEXTURE) {
-            D3D11_TEXTURE2D_DESC td{};
-            td.Width = td.Height = 2; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-            td.SampleDesc.Count = 1; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            const float texels[16]{0.5f, 0.4f, 0.6f, 1, 0.5f, 0.4f, 0.6f, 1, 0.5f, 0.4f, 0.6f, 1, 0.5f, 0.4f, 0.6f, 1};
-            D3D11_SUBRESOURCE_DATA init{texels, 32};
-            ComPtr<ID3D11Texture2D> texture;
-            hr(device->CreateTexture2D(&td, &init, &texture), "texture");
-            ComPtr<ID3D11ShaderResourceView> srv;
-            hr(device->CreateShaderResourceView(texture.Get(), nullptr, &srv), "srv");
-            ID3D11ShaderResourceView* p = srv.Get();
-            context->PSSetShaderResources(binding.BindPoint, 1, &p);
-            s.views.push_back(srv);
-        } else if (!vertex && binding.Type == D3D_SIT_SAMPLER) {
-            D3D11_SAMPLER_DESC sd{};
-            sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-            sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-            sd.MaxLOD = D3D11_FLOAT32_MAX;
-            ComPtr<ID3D11SamplerState> sampler;
-            hr(device->CreateSamplerState(&sd, &sampler), "sampler");
-            ID3D11SamplerState* p = sampler.Get();
-            context->PSSetSamplers(binding.BindPoint, 1, &p);
-            s.samplers.push_back(sampler);
-        }
-    }
+    const auto* error = rsf_anomaly_motion_fixture_bind_core(s.constants.get(), device.Get(), context.Get(), reflection, vertex);
+    if (error) throw std::runtime_error(error);
 }
 ComPtr<ID3D11Buffer> triangle(ID3D11ShaderReflection* reflection, float x0, float x1, float z)
 {
@@ -345,45 +260,20 @@ void draw_scene()
     hr(device->CreatePixelShader(ps.stock.data(), ps.stock.size(), nullptr, &s.stock_ps), "stock PS");
     hr(device->CreatePixelShader(ps.prepared.variant.data(), ps.prepared.variant.size(), nullptr, &s.motion_ps), "motion PS");
     auto vs_reflection = reflect(vs.stock);
-    D3D11_SHADER_DESC desc{};
-    vs_reflection->GetDesc(&desc);
-    std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
-    std::vector<std::string> names;
-    names.reserve(desc.InputParameters);
-    for (UINT i = 0; i < desc.InputParameters; ++i) {
-        D3D11_SIGNATURE_PARAMETER_DESC in{};
-        vs_reflection->GetInputParameterDesc(i, &in);
-        names.emplace_back(in.SemanticName);
-        const DXGI_FORMAT format = in.ComponentType == D3D_REGISTER_COMPONENT_FLOAT32 ? DXGI_FORMAT_R32G32B32A32_FLOAT :
-            in.ComponentType == D3D_REGISTER_COMPONENT_UINT32 ? DXGI_FORMAT_R32G32B32A32_UINT : DXGI_FORMAT_R32G32B32A32_SINT;
-        elements.push_back({names.back().c_str(), in.SemanticIndex, format, 0, i * 16, D3D11_INPUT_PER_VERTEX_DATA, 0});
-    }
-    // The engine builds its input layout against the STOCK signature; the variant must accept it unchanged.
-    hr(device->CreateInputLayout(elements.data(), static_cast<UINT>(elements.size()), vs.stock.data(), vs.stock.size(), &s.layout), "layout");
-    s.stride = desc.InputParameters * 16;
+    const auto signature = fixture_signature(vs_reflection.Get());
+    s.layout = fixture_layout(device.Get(), signature, vs.stock);
+    s.stride = static_cast<UINT>(signature.size()) * 16;
     s.full_vb = triangle(vs_reflection.Get(), -1, 1, 0.5f);
     s.near_vb = triangle(vs_reflection.Get(), -1, 0, 0.25f);
     s.behind_vb = triangle(vs_reflection.Get(), 0, 1, 0.75f);
-    s.position = target(DXGI_FORMAT_R16G16B16A16_FLOAT);
-    s.albedo = target(DXGI_FORMAT_R8G8B8A8_UNORM);
-    D3D11_TEXTURE2D_DESC dd{};
-    dd.Width = dd.Height = size; dd.MipLevels = dd.ArraySize = 1; dd.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-    dd.SampleDesc.Count = 1; dd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-    hr(device->CreateTexture2D(&dd, nullptr, &s.depth_texture), "depth");
-    hr(device->CreateDepthStencilView(s.depth_texture.Get(), nullptr, &s.depth), "dsv");
-    D3D11_DEPTH_STENCIL_DESC ds{};
-    ds.DepthEnable = TRUE; ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; ds.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
-    hr(device->CreateDepthStencilState(&ds, &s.less), "depth state");
-    D3D11_RASTERIZER_DESC rd{};
-    rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE;
-    hr(device->CreateRasterizerState(&rd, &s.raster), "raster");
+    s.targets = FixtureTargets(device.Get(), size, true);
 
     std::unique_ptr<rsf_anomaly_motion_device_owner, decltype(&rsf_anomaly_motion_device_drop)> owner{
         rsf_anomaly_motion_device_new(rsf_anomaly_motion_device_platform_get()), rsf_anomaly_motion_device_drop};
     auto* motion = owner.get();
     require(rsf_anomaly_motion_device_create(motion, device.Get(), nullptr, nullptr), "Rust motion owner create");
     D3D11_TEXTURE2D_DESC position_desc{};
-    s.position.texture->GetDesc(&position_desc);
+    s.targets.position->GetDesc(&position_desc);
     require(rsf_anomaly_motion_device_target(motion, position_desc.Width, position_desc.Height,
         position_desc.SampleDesc.Count, position_desc.ArraySize) == RSF_MOTION_CREATED, "motion target created");
     rsf_anomaly_motion_device_view motion_view{};
@@ -399,28 +289,19 @@ void draw_scene()
 
     const auto setup = [&](bool variant, ID3D11Buffer* vb, bool three) {
         context->ClearState();
-        context->IASetInputLayout(s.layout.Get());
-        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        UINT offset = 0;
-        context->IASetVertexBuffers(0, 1, &vb, &s.stride, &offset);
-        context->VSSetShader(variant ? s.motion_vs.Get() : s.stock_vs.Get(), nullptr, 0);
-        context->PSSetShader(variant ? s.motion_ps.Get() : s.stock_ps.Get(), nullptr, 0);
+        const rsf_anomaly_motion_fixture_input input{s.layout.Get(), vb, variant ? s.motion_vs.Get() : s.stock_vs.Get(),
+            nullptr, nullptr, variant ? s.motion_ps.Get() : s.stock_ps.Get(), s.stride, false};
+        rsf_anomaly_motion_fixture_input_bind(context.Get(), &input);
         bind_engine_constants(s, vs_reflection.Get(), true);
         bind_engine_constants(s, reflect(ps.stock).Get(), false);
-        ID3D11RenderTargetView* views[3]{s.position.rtv.Get(), s.albedo.rtv.Get(),
-            three ? static_cast<ID3D11RenderTargetView*>(motion_view.rtv) : nullptr};
-        context->OMSetRenderTargets(three ? 3 : 2, views, s.depth.Get());
-        context->OMSetDepthStencilState(s.less.Get(), 0);
-        context->RSSetState(s.raster.Get());
-        const D3D11_VIEWPORT viewport{0, 0, float(size), float(size), 0, 1};
-        context->RSSetViewports(1, &viewport);
+        const rsf_anomaly_motion_fixture_output targets{s.targets.position_rtv.Get(), s.targets.albedo_rtv.Get(),
+            three ? motion_view.rtv : nullptr, s.targets.dsv.Get(), s.targets.less.Get(), s.targets.raster.Get(), size};
+        rsf_anomaly_motion_fixture_output_bind(context.Get(), &targets);
     };
     const auto clear = [&] {
-        const float sentinel[4]{-999, -999, -999, -999}, zero[4]{};
-        context->ClearRenderTargetView(s.position.rtv.Get(), sentinel);
-        context->ClearRenderTargetView(s.albedo.rtv.Get(), zero);
-        context->ClearDepthStencilView(s.depth.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1, 0);
-        rsf_anomaly_motion_clear_target(context.Get(), motion_view.rtv);
+        const rsf_anomaly_motion_fixture_output targets{s.targets.position_rtv.Get(), s.targets.albedo_rtv.Get(),
+            motion_view.rtv, s.targets.dsv.Get(), s.targets.less.Get(), s.targets.raster.Get(), size};
+        rsf_anomaly_motion_fixture_clear(context.Get(), &targets, true);
     };
     const auto upload = [&](bool valid) {
         temporal::Mat4 previous = temporal::Mat4::identity();
@@ -437,17 +318,17 @@ void draw_scene()
     // Stock reference.
     clear();
     setup(false, s.full_vb.Get(), false);
-    context->Draw(6, 0);
-    const auto stock_position = read_back<Half4>(s.position.texture.Get());
-    const auto stock_albedo = read_back<uint32_t>(s.albedo.texture.Get());
+    rsf_anomaly_motion_fixture_draw(context.Get(), 6);
+    const auto stock_position = read_back<Half4>(s.targets.position.Get());
+    const auto stock_albedo = read_back<uint32_t>(s.targets.albedo.Get());
     debug_errors();
     // Variant with history.
     clear();
     setup(true, s.full_vb.Get(), true);
     upload(true);
-    context->Draw(6, 0);
-    const auto position = read_back<Half4>(s.position.texture.Get());
-    const auto albedo = read_back<uint32_t>(s.albedo.texture.Get());
+    rsf_anomaly_motion_fixture_draw(context.Get(), 6);
+    const auto position = read_back<Half4>(s.targets.position.Get());
+    const auto albedo = read_back<uint32_t>(s.targets.albedo.Get());
     auto vectors = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
     debug_errors();
     unsigned covered = 0;
@@ -465,10 +346,10 @@ void draw_scene()
 
     // Stock occluder in front of the left half: the stock PS leaves stale vectors; the replay invalidates them.
     setup(false, s.near_vb.Get(), true);
-    context->Draw(6, 0);
+    rsf_anomaly_motion_fixture_draw(context.Get(), 6);
     auto stale = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
     require(half(stale[size / 2 * size + 4].c[2]) == 1, "fixture: a stock draw leaves the old vector (the reason for the replay)");
-    const auto occluded_position = read_back<Half4>(s.position.texture.Get());
+    const auto occluded_position = read_back<Half4>(s.targets.position.Get());
     const auto check_restored = [&] {
         ID3D11RenderTargetView* bound[3]{};
         ComPtr<ID3D11DepthStencilView> bound_depth;
@@ -478,8 +359,8 @@ void draw_scene()
         ComPtr<ID3D11DepthStencilState> bound_state;
         UINT reference = 0;
         context->OMGetDepthStencilState(&bound_state, &reference);
-        const bool restored = bound[0] == s.position.rtv.Get() && bound[1] == s.albedo.rtv.Get() && bound[2] == static_cast<ID3D11RenderTargetView*>(motion_view.rtv) &&
-            bound_depth.Get() == s.depth.Get() && bound_ps.Get() == s.stock_ps.Get() && bound_state.Get() == s.less.Get() && reference == 0;
+        const bool restored = bound[0] == s.targets.position_rtv.Get() && bound[1] == s.targets.albedo_rtv.Get() && bound[2] == static_cast<ID3D11RenderTargetView*>(motion_view.rtv) &&
+            bound_depth.Get() == s.targets.dsv.Get() && bound_ps.Get() == s.stock_ps.Get() && bound_state.Get() == s.targets.less.Get() && reference == 0;
         for (auto* p : bound) if (p) p->Release();
         require(restored, "OM state and PS restored");
     };
@@ -510,10 +391,10 @@ void draw_scene()
     check_restored();
     // Behind the surface: the occluder fails the depth test, so the replay's EQUAL test fails too.
     setup(false, s.behind_vb.Get(), true);
-    context->Draw(6, 0);
+    rsf_anomaly_motion_fixture_draw(context.Get(), 6);
     require(replay([&](ID3D11DeviceContext* c) { c->Draw(6, 0); }) == RSF_MOTION_REPLAY_READY, "replay behind");
     vectors = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
-    const auto after_position = read_back<Half4>(s.position.texture.Get());
+    const auto after_position = read_back<Half4>(s.targets.position.Get());
     debug_errors();
     unsigned invalidated = 0, kept = 0;
     for (UINT y = 0; y < size; ++y)
@@ -533,9 +414,9 @@ void draw_scene()
     clear();
     setup(true, s.full_vb.Get(), true);
     upload(false);
-    context->Draw(6, 0);
+    rsf_anomaly_motion_fixture_draw(context.Get(), 6);
     vectors = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
-    const auto invalid_position = read_back<Half4>(s.position.texture.Get());
+    const auto invalid_position = read_back<Half4>(s.targets.position.Get());
     for (UINT i = 0; i < size * size; ++i) {
         require(vectors[i].c[0] == 0 && vectors[i].c[1] == 0 && vectors[i].c[2] == 0 && vectors[i].c[3] == 0, "missing history is zero");
         require(std::memcmp(&invalid_position[i], &stock_position[i], sizeof(Half4)) == 0, "native unchanged without history");
@@ -582,11 +463,7 @@ struct FoliageRig {
     ComPtr<ID3D11ShaderReflection> vs_reflection, ps_reflection;
     Built vs, ps;
     UINT stride{};
-    Target position, albedo;
-    ComPtr<ID3D11Texture2D> depth_texture;
-    ComPtr<ID3D11DepthStencilView> depth;
-    ComPtr<ID3D11DepthStencilState> less;
-    ComPtr<ID3D11RasterizerState> raster;
+    FixtureTargets targets;
     Scene engine;   // keeps the engine constant buffers alive
 };
 FoliageRig make_rig(const Root& vs_root, const Root& ps_root)
@@ -602,34 +479,10 @@ FoliageRig make_rig(const Root& vs_root, const Root& ps_root)
     hr(device->CreatePixelShader(r.ps.prepared.variant.data(), r.ps.prepared.variant.size(), nullptr, &r.motion_ps), "motion PS");
     r.vs_reflection = reflect(r.vs.stock);
     r.ps_reflection = reflect(r.ps.stock);
-    D3D11_SHADER_DESC desc{};
-    r.vs_reflection->GetDesc(&desc);
-    std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
-    std::vector<std::string> names;
-    names.reserve(desc.InputParameters);
-    for (UINT i = 0; i < desc.InputParameters; ++i) {
-        D3D11_SIGNATURE_PARAMETER_DESC in{};
-        r.vs_reflection->GetInputParameterDesc(i, &in);
-        names.emplace_back(in.SemanticName);
-        const DXGI_FORMAT format = in.ComponentType == D3D_REGISTER_COMPONENT_FLOAT32 ? DXGI_FORMAT_R32G32B32A32_FLOAT :
-            in.ComponentType == D3D_REGISTER_COMPONENT_UINT32 ? DXGI_FORMAT_R32G32B32A32_UINT : DXGI_FORMAT_R32G32B32A32_SINT;
-        elements.push_back({names.back().c_str(), in.SemanticIndex, format, 0, i * 16, D3D11_INPUT_PER_VERTEX_DATA, 0});
-    }
-    hr(device->CreateInputLayout(elements.data(), static_cast<UINT>(elements.size()), r.vs.stock.data(), r.vs.stock.size(), &r.layout), "layout");
-    r.stride = desc.InputParameters * 16;
-    r.position = target(DXGI_FORMAT_R16G16B16A16_FLOAT);
-    r.albedo = target(DXGI_FORMAT_R8G8B8A8_UNORM);
-    D3D11_TEXTURE2D_DESC dd{};
-    dd.Width = dd.Height = size; dd.MipLevels = dd.ArraySize = 1; dd.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-    dd.SampleDesc.Count = 1; dd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-    hr(device->CreateTexture2D(&dd, nullptr, &r.depth_texture), "depth");
-    hr(device->CreateDepthStencilView(r.depth_texture.Get(), nullptr, &r.depth), "dsv");
-    D3D11_DEPTH_STENCIL_DESC ds{};
-    ds.DepthEnable = TRUE; ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; ds.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
-    hr(device->CreateDepthStencilState(&ds, &r.less), "depth state");
-    D3D11_RASTERIZER_DESC rd{};
-    rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE;
-    hr(device->CreateRasterizerState(&rd, &r.raster), "raster");
+    const auto signature = fixture_signature(r.vs_reflection.Get());
+    r.layout = fixture_layout(device.Get(), signature, r.vs.stock);
+    r.stride = static_cast<UINT>(signature.size()) * 16;
+    r.targets = FixtureTargets(device.Get(), size, true);
     return r;
 }
 // A quad of two triangles in the vertex layout of the foliage VS: POSITION float4, TEXCOORD0 int4 (0, 0, frac, row offset).
@@ -660,51 +513,14 @@ ComPtr<ID3D11Buffer> foliage_quad(const FoliageRig& rig, float x0, float x1, flo
     return buffer;
 }
 using Overrides = std::map<std::string, std::vector<float>>;
-void apply_overrides(ID3D11ShaderReflection* reflection, const Overrides& overrides, std::vector<ComPtr<ID3D11Buffer>>& keep)
+void apply_overrides(ID3D11ShaderReflection* reflection, const Overrides& overrides, const Bindings& keep)
 {
-    D3D11_SHADER_DESC desc{};
-    reflection->GetDesc(&desc);
-    for (UINT i = 0; i < desc.BoundResources; ++i) {
-        D3D11_SHADER_INPUT_BIND_DESC binding{};
-        reflection->GetResourceBindingDesc(i, &binding);
-        if (binding.Type != D3D_SIT_CBUFFER || std::string(binding.Name).starts_with("RSF")) continue;
-        auto* cb = reflection->GetConstantBufferByName(binding.Name);
-        D3D11_SHADER_BUFFER_DESC bd{};
-        cb->GetDesc(&bd);
-        // Read back what bind_engine_constants uploaded, patch the named variables, upload again.
-        ID3D11Buffer* current{};
-        context->VSGetConstantBuffers(binding.BindPoint, 1, &current);
-        require(current != nullptr, "engine constant buffer bound");
-        D3D11_BUFFER_DESC cd{};
-        current->GetDesc(&cd);
-        std::vector<float> values(cd.ByteWidth / 4);
-        cd.Usage = D3D11_USAGE_STAGING; cd.BindFlags = 0; cd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        ComPtr<ID3D11Buffer> staging;
-        hr(device->CreateBuffer(&cd, nullptr, &staging), "staging");
-        context->CopyResource(staging.Get(), current);
-        D3D11_MAPPED_SUBRESOURCE mapped{};
-        hr(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "map cb");
-        std::memcpy(values.data(), mapped.pData, cd.ByteWidth);
-        context->Unmap(staging.Get(), 0);
-        current->Release();
-        for (UINT v = 0; v < bd.Variables; ++v) {
-            D3D11_SHADER_VARIABLE_DESC vd{};
-            cb->GetVariableByIndex(v)->GetDesc(&vd);
-            const auto found = overrides.find(vd.Name);
-            if (found == overrides.end()) continue;
-            require(found->second.size() * 4 <= vd.Size, std::string("override fits ") + vd.Name);
-            std::memcpy(values.data() + vd.StartOffset / 4, found->second.data(), found->second.size() * 4);
-        }
-        D3D11_BUFFER_DESC nb{};
-        nb.ByteWidth = static_cast<UINT>(values.size() * 4);
-        nb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        D3D11_SUBRESOURCE_DATA init{values.data()};
-        ComPtr<ID3D11Buffer> buffer;
-        hr(device->CreateBuffer(&nb, &init, &buffer), "patched cb");
-        ID3D11Buffer* p = buffer.Get();
-        context->VSSetConstantBuffers(binding.BindPoint, 1, &p);
-        keep.push_back(buffer);
-    }
+    std::vector<rsf_anomaly_motion_fixture_override> rows;
+    rows.reserve(overrides.size());
+    for (const auto& [name, values] : overrides) rows.push_back({name.c_str(), values.data(), values.size()});
+    const auto* error = rsf_anomaly_motion_fixture_patch_core(
+        keep.get(), device.Get(), context.Get(), reflection, rows.data(), rows.size());
+    if (error) throw std::runtime_error(error);
 }
 struct FoliageDraw {
     std::vector<Half4> position, vectors;
@@ -716,42 +532,32 @@ FoliageDraw draw_foliage_pair(FoliageRig& rig, rsf_anomaly_motion_device_owner* 
     const std::vector<ComPtr<ID3D11Buffer>>& quads, const FoliageVertexBytes* vbytes)
 {
     context->ClearState();
-    const float sentinel[4]{-999, -999, -999, -999}, zero[4]{};
-    context->ClearRenderTargetView(rig.position.rtv.Get(), sentinel);
-    context->ClearRenderTargetView(rig.albedo.rtv.Get(), zero);
-    context->ClearDepthStencilView(rig.depth.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1, 0);
     rsf_anomaly_motion_device_view motion_view{};
     rsf_anomaly_motion_device_get(motion, &motion_view);
-    rsf_anomaly_motion_clear_target(context.Get(), motion_view.rtv);
-    context->IASetInputLayout(rig.layout.Get());
-    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    context->VSSetShader(variant ? rig.motion_vs.Get() : rig.stock_vs.Get(), nullptr, 0);
-    context->PSSetShader(variant ? rig.motion_ps.Get() : rig.stock_ps.Get(), nullptr, 0);
+    const rsf_anomaly_motion_fixture_output targets{rig.targets.position_rtv.Get(), rig.targets.albedo_rtv.Get(),
+        motion_view.rtv, rig.targets.dsv.Get(), rig.targets.less.Get(), rig.targets.raster.Get(), size};
+    rsf_anomaly_motion_fixture_clear(context.Get(), &targets, true);
+    const rsf_anomaly_motion_fixture_input input{rig.layout.Get(), nullptr, variant ? rig.motion_vs.Get() : rig.stock_vs.Get(),
+        nullptr, nullptr, variant ? rig.motion_ps.Get() : rig.stock_ps.Get(), rig.stride, false};
+    rsf_anomaly_motion_fixture_input_bind(context.Get(), &input);
     bind_engine_constants(rig.engine, rig.vs_reflection.Get(), true);
-    std::vector<ComPtr<ID3D11Buffer>> keep;
+    const Bindings keep{rsf_anomaly_motion_fixture_bindings_new(), rsf_anomaly_motion_fixture_bindings_drop};
     apply_overrides(rig.vs_reflection.Get(), overrides, keep);
     bind_engine_constants(rig.engine, rig.ps_reflection.Get(), false);
-    ID3D11RenderTargetView* views[3]{rig.position.rtv.Get(), rig.albedo.rtv.Get(), variant ? static_cast<ID3D11RenderTargetView*>(motion_view.rtv) : nullptr};
-    context->OMSetRenderTargets(variant ? 3 : 2, views, rig.depth.Get());
-    context->OMSetDepthStencilState(rig.less.Get(), 0);
-    context->RSSetState(rig.raster.Get());
-    const D3D11_VIEWPORT viewport{0, 0, float(size), float(size), 0, 1};
-    context->RSSetViewports(1, &viewport);
+    auto bound = targets;
+    if (!variant) bound.motion = nullptr;
+    rsf_anomaly_motion_fixture_output_bind(context.Get(), &bound);
     if (variant) {
         PixelBytes pbytes;
         require(pack_pixel({0, 0, float(size), float(size), 0, 0, 0, 0}, pbytes), "pack PS b13");
         require(vbytes && rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_FOLIAGE, vbytes->data(), vbytes->size()) &&
             rsf_anomaly_motion_device_upload(motion, context.Get(), RSF_MOTION_PIXEL, pbytes.data(), pbytes.size()), "foliage b13 upload");
     }
-    for (const auto& quad : quads) {
-        ID3D11Buffer* vb = quad.Get();
-        UINT stride = rig.stride, offset = 0;
-        context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-        context->Draw(6, 0);
-    }
+    for (const auto& quad : quads)
+        rsf_anomaly_motion_fixture_draw_quad(context.Get(), quad.Get(), rig.stride);
     FoliageDraw out;
-    out.position = read_back<Half4>(rig.position.texture.Get());
-    out.albedo = read_back<uint32_t>(rig.albedo.texture.Get());
+    out.position = read_back<Half4>(rig.targets.position.Get());
+    out.albedo = read_back<uint32_t>(rig.targets.albedo.Get());
     if (variant) out.vectors = read_back<Half4>(static_cast<ID3D11Texture2D*>(motion_view.texture));
     debug_errors();
     return out;
@@ -771,7 +577,7 @@ void draw_tree()
     auto* motion = owner.get();
     require(rsf_anomaly_motion_device_create(motion, device.Get(), nullptr, nullptr), "Rust motion owner create");
     D3D11_TEXTURE2D_DESC position_desc{};
-    rig.position.texture->GetDesc(&position_desc);
+    rig.targets.position->GetDesc(&position_desc);
     require(rsf_anomaly_motion_device_target(motion, position_desc.Width, position_desc.Height,
         position_desc.SampleDesc.Count, position_desc.ArraySize) == RSF_MOTION_CREATED, "motion target");
     const std::vector<ComPtr<ID3D11Buffer>> quads{foliage_quad(rig, -1, 1, -1, 1, 0.5f, 1024, 0)};
@@ -863,7 +669,7 @@ void draw_detail()
     auto* motion = owner.get();
     require(rsf_anomaly_motion_device_create(motion, device.Get(), nullptr, nullptr), "Rust motion owner create");
     D3D11_TEXTURE2D_DESC position_desc{};
-    rig.position.texture->GetDesc(&position_desc);
+    rig.targets.position->GetDesc(&position_desc);
     require(rsf_anomaly_motion_device_target(motion, position_desc.Width, position_desc.Height,
         position_desc.SampleDesc.Count, position_desc.ArraySize) == RSF_MOTION_CREATED, "motion target");
 

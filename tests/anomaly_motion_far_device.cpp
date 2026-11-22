@@ -26,6 +26,7 @@
 #include "motion_constants.h"
 #include "motion_device_platform.h"
 #include "motion_fixture_platform.h"
+#include "anomaly_motion_native.h"
 #include "shader_loader.h"
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
@@ -113,9 +114,8 @@ Built build(char stage, const std::string& root, const std::vector<Define>& defi
     request.source = file_bytes(deployment / "original" / "r3" / root);
     Built built;
     std::string error;
-    require(compile_deployed(*api, deployment / "original", request, built.stock, error), root + " stock: " + error);
-    request.bytecode = built.stock;
-    built.prepared = prepare_deployed(*api, *admitted, deployment, request);
+    const bool compiled = build_deployed(*api, *admitted, deployment, request, built.stock, built.prepared, error);
+    require(compiled, root + " stock: " + error);
     require(built.prepared.outcome == Outcome::Replaced || built.prepared.outcome == Outcome::ReplacedFromCache,
         root + " " + request.target + ": " + outcome_name(built.prepared.outcome) + " " + built.prepared.detail);
     return built;
@@ -129,76 +129,16 @@ Reflection reflection_of(const std::vector<std::byte>& code)
 
 // ---- engine bindings: every matrix identity, everything else 0.1 unless overridden; RSF b13 skipped ----------------
 using Overrides = std::map<std::string, std::vector<float>>;
-struct Bindings {
-    std::vector<ComPtr<ID3D11Buffer>> buffers;
-    std::vector<ComPtr<ID3D11ShaderResourceView>> views;
-    std::vector<ComPtr<ID3D11SamplerState>> samplers;
-};
-void bind_stage(bool vertex, const std::vector<std::byte>& code, const Overrides& overrides, Bindings& keep)
+using Bindings = std::unique_ptr<rsf_anomaly_motion_fixture_bindings, decltype(&rsf_anomaly_motion_fixture_bindings_drop)>;
+
+void bind_stage(char stage, const std::vector<std::byte>& code, const Overrides& overrides, const Bindings& keep)
 {
-    ComPtr<ID3D11ShaderReflection> reflection;
-    hr(D3DReflect(code.data(), code.size(), IID_PPV_ARGS(&reflection)), "reflect");
-    D3D11_SHADER_DESC desc{};
-    reflection->GetDesc(&desc);
-    for (UINT i = 0; i < desc.BoundResources; ++i) {
-        D3D11_SHADER_INPUT_BIND_DESC binding{};
-        reflection->GetResourceBindingDesc(i, &binding);
-        if (binding.Type == D3D_SIT_CBUFFER) {
-            if (std::string(binding.Name).starts_with("RSF")) continue;
-            auto* cb = reflection->GetConstantBufferByName(binding.Name);
-            D3D11_SHADER_BUFFER_DESC bd{};
-            cb->GetDesc(&bd);
-            std::vector<float> values((bd.Size + 15) / 16 * 4, 0.1f);
-            for (UINT v = 0; v < bd.Variables; ++v) {
-                auto* variable = cb->GetVariableByIndex(v);
-                D3D11_SHADER_VARIABLE_DESC vd{};
-                variable->GetDesc(&vd);
-                D3D11_SHADER_TYPE_DESC td{};
-                variable->GetType()->GetDesc(&td);
-                float* out = values.data() + vd.StartOffset / 4;
-                if (td.Class == D3D_SVC_MATRIX_COLUMNS || td.Class == D3D_SVC_MATRIX_ROWS)
-                    for (UINT k = 0; k < vd.Size / 4; ++k) out[k] = (k % 5 == 0) ? 1.0f : 0.0f;
-                if (std::string(vd.Name) == "def_aref" || std::string(vd.Name) == "alpha_ref") out[0] = 0.5f;
-                if (const auto found = overrides.find(vd.Name); found != overrides.end())
-                    std::copy_n(found->second.begin(), std::min<std::size_t>(found->second.size(), vd.Size / 4), out);
-            }
-            D3D11_BUFFER_DESC b{};
-            b.ByteWidth = static_cast<UINT>(values.size() * 4);
-            b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-            D3D11_SUBRESOURCE_DATA init{values.data()};
-            ComPtr<ID3D11Buffer> buffer;
-            hr(device->CreateBuffer(&b, &init, &buffer), "engine cb");
-            ID3D11Buffer* p = buffer.Get();
-            if (vertex) context->VSSetConstantBuffers(binding.BindPoint, 1, &p);
-            else context->PSSetConstantBuffers(binding.BindPoint, 1, &p);
-            keep.buffers.push_back(buffer);
-        } else if (binding.Type == D3D_SIT_TEXTURE) {
-            D3D11_TEXTURE2D_DESC td{};
-            td.Width = td.Height = 2; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-            td.SampleDesc.Count = 1; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            const float texels[16]{0.5f, 0.4f, 0.6f, 1, 0.5f, 0.4f, 0.6f, 1, 0.5f, 0.4f, 0.6f, 1, 0.5f, 0.4f, 0.6f, 1};
-            D3D11_SUBRESOURCE_DATA init{texels, 32};
-            ComPtr<ID3D11Texture2D> t;
-            hr(device->CreateTexture2D(&td, &init, &t), "texture");
-            ComPtr<ID3D11ShaderResourceView> srv;
-            hr(device->CreateShaderResourceView(t.Get(), nullptr, &srv), "srv");
-            ID3D11ShaderResourceView* p = srv.Get();
-            if (vertex) context->VSSetShaderResources(binding.BindPoint, 1, &p);
-            else context->PSSetShaderResources(binding.BindPoint, 1, &p);
-            keep.views.push_back(srv);
-        } else if (binding.Type == D3D_SIT_SAMPLER) {
-            D3D11_SAMPLER_DESC sd{};
-            sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-            sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-            sd.MaxLOD = D3D11_FLOAT32_MAX;
-            ComPtr<ID3D11SamplerState> sampler;
-            hr(device->CreateSamplerState(&sd, &sampler), "sampler");
-            ID3D11SamplerState* p = sampler.Get();
-            if (vertex) context->VSSetSamplers(binding.BindPoint, 1, &p);
-            else context->PSSetSamplers(binding.BindPoint, 1, &p);
-            keep.samplers.push_back(sampler);
-        }
-    }
+    std::vector<rsf_anomaly_motion_fixture_override> rows;
+    rows.reserve(overrides.size());
+    for (const auto& [name, values] : overrides) rows.push_back({name.c_str(), values.data(), values.size()});
+    const auto* error = rsf_anomaly_motion_fixture_bind_stage(keep.get(), device.Get(), context.Get(), static_cast<uint8_t>(stage),
+        false, code.data(), code.size(), rows.data(), rows.size());
+    if (error) throw std::runtime_error(error);
 }
 
 // ---- math (column-vector, row-major storage like temporal::Mat4) ---------------------------------------------------
@@ -276,19 +216,7 @@ std::vector<float> floats(const temporal::Mat4& m)
 // ---- readback ----------------------------------------------------------------------------------------------------
 template<class T> std::vector<T> read_back(ID3D11Texture2D* texture)
 {
-    D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
-    desc.BindFlags = 0; desc.Usage = D3D11_USAGE_STAGING; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ; desc.MiscFlags = 0;
-    ComPtr<ID3D11Texture2D> staging;
-    hr(device->CreateTexture2D(&desc, nullptr, &staging), "staging");
-    context->CopyResource(staging.Get(), texture);
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    hr(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "map");
-    std::vector<T> out(size * size);
-    for (UINT y = 0; y < size; ++y)
-        std::memcpy(out.data() + y * size, static_cast<const std::byte*>(mapped.pData) + y * mapped.RowPitch, size * sizeof(T));
-    context->Unmap(staging.Get(), 0);
-    return out;
+    return fixture_readback<T>(device.Get(), context.Get(), texture, size);
 }
 struct Half4 { uint16_t c[4]; };
 float half(uint16_t h)
@@ -378,31 +306,19 @@ Mesh make_mesh(Shaders& shaders, const Scene& scene, int skin)
 {
     ComPtr<ID3D11ShaderReflection> reflection;
     hr(D3DReflect(shaders.vs.stock.data(), shaders.vs.stock.size(), IID_PPV_ARGS(&reflection)), "reflect VS");
-    D3D11_SHADER_DESC desc{};
-    reflection->GetDesc(&desc);
-    std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
-    std::vector<std::string> names;
-    names.reserve(desc.InputParameters);
-    std::vector<D3D11_SIGNATURE_PARAMETER_DESC> inputs(desc.InputParameters);
-    for (UINT i = 0; i < desc.InputParameters; ++i) {
-        reflection->GetInputParameterDesc(i, &inputs[i]);
-        names.emplace_back(inputs[i].SemanticName);
-        const DXGI_FORMAT format = inputs[i].ComponentType == D3D_REGISTER_COMPONENT_FLOAT32 ? DXGI_FORMAT_R32G32B32A32_FLOAT :
-            inputs[i].ComponentType == D3D_REGISTER_COMPONENT_UINT32 ? DXGI_FORMAT_R32G32B32A32_UINT : DXGI_FORMAT_R32G32B32A32_SINT;
-        elements.push_back({names.back().c_str(), inputs[i].SemanticIndex, format, 0, i * 16, D3D11_INPUT_PER_VERTEX_DATA, 0});
-    }
+    const auto inputs = fixture_signature(reflection.Get());
+    const auto input_count = static_cast<UINT>(inputs.size());
     shaders.layout.Reset();
-    hr(device->CreateInputLayout(elements.data(), static_cast<UINT>(elements.size()), shaders.vs.stock.data(),
-        shaders.vs.stock.size(), &shaders.layout), "layout");
+    shaders.layout = fixture_layout(device.Get(), inputs, shaders.vs.stock);
     Mesh mesh;
-    mesh.stride = desc.InputParameters * 16;
+    mesh.stride = input_count * 16;
     const Vec3 axes[6]{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
     std::vector<int> corners;
     for (int sx = 0; sx < 2; ++sx) for (int sy = 0; sy < 2; ++sy) for (int sz = 0; sz < 2; ++sz) {
         corners.push_back(sx); corners.push_back(2 + sy); corners.push_back(4 + sz);
     }
     mesh.count = static_cast<UINT>(corners.size());
-    std::vector<float> data(mesh.count * desc.InputParameters * 4, 0.0f);
+    std::vector<float> data(mesh.count * input_count * 4, 0.0f);
     // skin.h unpacks D3DCOLOR normals: the shader swizzles .zyx and maps [0, 1] to [-1, 1].
     const auto packed = [](const Vec3& n) { return std::array<float, 3>{float((n[2] + 1) / 2), float((n[1] + 1) / 2), float((n[0] + 1) / 2)}; };
     for (UINT v = 0; v < mesh.count; ++v) {
@@ -411,8 +327,8 @@ Mesh make_mesh(Shaders& shaders, const Scene& scene, int skin)
             scene.centre[2] + scene.radius[2] * n[2]};
         const Vec3 up = std::abs(n[1]) > 0.9 ? Vec3{1, 0, 0} : Vec3{0, 1, 0};
         const Vec3 t = normalize(cross(up, n)), b = cross(n, t);
-        for (UINT i = 0; i < desc.InputParameters; ++i) {
-            float* out = data.data() + (v * desc.InputParameters + i) * 4;
+        for (UINT i = 0; i < input_count; ++i) {
+            float* out = data.data() + (v * input_count + i) * 4;
             const std::string semantic = inputs[i].SemanticName;
             if (semantic == "POSITION") { out[0] = float(position[0]); out[1] = float(position[1]); out[2] = float(position[2]); out[3] = 1; }
             else if (semantic == "NORMAL") { const auto p = packed(n); out[0] = p[0]; out[1] = p[1]; out[2] = p[2]; out[3] = skin == 2 ? 0.25f : 0.0f; }
@@ -432,35 +348,10 @@ Mesh make_mesh(Shaders& shaders, const Scene& scene, int skin)
     return mesh;
 }
 
-struct Targets {
-    ComPtr<ID3D11Texture2D> position, albedo, depth;
-    ComPtr<ID3D11RenderTargetView> position_rtv, albedo_rtv;
-    ComPtr<ID3D11DepthStencilView> dsv;
-    ComPtr<ID3D11DepthStencilState> less;
-    ComPtr<ID3D11RasterizerState> raster;
-};
+using Targets = FixtureTargets;
 Targets make_targets()
 {
-    Targets t;
-    D3D11_TEXTURE2D_DESC desc{};
-    desc.Width = desc.Height = size; desc.MipLevels = desc.ArraySize = 1; desc.SampleDesc.Count = 1;
-    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    hr(device->CreateTexture2D(&desc, nullptr, &t.position), "position");
-    hr(device->CreateRenderTargetView(t.position.Get(), nullptr, &t.position_rtv), "position rtv");
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    hr(device->CreateTexture2D(&desc, nullptr, &t.albedo), "albedo");
-    hr(device->CreateRenderTargetView(t.albedo.Get(), nullptr, &t.albedo_rtv), "albedo rtv");
-    desc.Format = DXGI_FORMAT_D32_FLOAT; desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-    hr(device->CreateTexture2D(&desc, nullptr, &t.depth), "depth");
-    hr(device->CreateDepthStencilView(t.depth.Get(), nullptr, &t.dsv), "dsv");
-    D3D11_DEPTH_STENCIL_DESC ds{};
-    ds.DepthEnable = TRUE; ds.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; ds.DepthFunc = D3D11_COMPARISON_LESS;
-    hr(device->CreateDepthStencilState(&ds, &t.less), "depth state");
-    D3D11_RASTERIZER_DESC rd{};
-    rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE;
-    hr(device->CreateRasterizerState(&rd, &t.raster), "raster");
-    return t;
+    return Targets(device.Get(), size, false);
 }
 
 struct Frame {
@@ -470,43 +361,31 @@ struct Frame {
 };
 Frame draw(const Pair& p, const Scene& scene, Shaders& s, const Mesh& mesh, Targets& t, rsf_anomaly_motion_device_owner* motion, bool history)
 {
-    Bindings keep;
+    Bindings keep{rsf_anomaly_motion_fixture_bindings_new(), rsf_anomaly_motion_fixture_bindings_drop};
     context->ClearState();
-    const float sentinel[4]{-999, -999, -999, -999}, zero[4]{};
-    context->ClearRenderTargetView(t.position_rtv.Get(), sentinel);
-    context->ClearRenderTargetView(t.albedo_rtv.Get(), zero);
-    context->ClearDepthStencilView(t.dsv.Get(), D3D11_CLEAR_DEPTH, 1, 0);
     rsf_anomaly_motion_device_view motion_view{};
-    if (motion) {
-        rsf_anomaly_motion_device_get(motion, &motion_view);
-        rsf_anomaly_motion_clear_target(context.Get(), motion_view.rtv);
-    }
-    context->IASetInputLayout(s.layout.Get());
-    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    UINT offset = 0;
-    ID3D11Buffer* vb = mesh.vertices.Get();
-    context->IASetVertexBuffers(0, 1, &vb, &mesh.stride, &offset);
-    context->VSSetShader(motion ? s.motion_vs.Get() : s.stock_vs.Get(), nullptr, 0);
-    context->PSSetShader(motion ? s.motion_ps.Get() : s.stock_ps.Get(), nullptr, 0);
+    if (motion) rsf_anomaly_motion_device_get(motion, &motion_view);
+    const rsf_anomaly_motion_fixture_output targets{t.position_rtv.Get(), t.albedo_rtv.Get(),
+        motion_view.rtv, t.dsv.Get(), t.less.Get(), t.raster.Get(), size};
+    rsf_anomaly_motion_fixture_clear(context.Get(), &targets, false);
+    const rsf_anomaly_motion_fixture_input input{s.layout.Get(), mesh.vertices.Get(),
+        motion ? s.motion_vs.Get() : s.stock_vs.Get(), nullptr, nullptr, motion ? s.motion_ps.Get() : s.stock_ps.Get(),
+        mesh.stride, false};
+    rsf_anomaly_motion_fixture_input_bind(context.Get(), &input);
     // Current palette: every bone identity (rows). Current camera: view identity, the scene projection (m_WVP).
     std::vector<float> bones(234 * 4, 0.0f);
     for (int b = 0; b < 78; ++b) for (int r = 0; r < 3; ++r) bones[(b * 3 + r) * 4 + r] = 1.0f;
     const Overrides overrides{{"sbones_array", bones}, {"m_WVP", floats(scene.projection)}, {"dt_params", {1.0f, 1.0f, 0.0f, 0.0f}}};
-    bind_stage(true, s.vs.stock, overrides, keep);
-    bind_stage(false, s.ps.stock, overrides, keep);
+    bind_stage('v', s.vs.stock, overrides, keep);
+    bind_stage('p', s.ps.stock, overrides, keep);
     if (motion) {
         // The production policy, packers and Rust motion owner uploads, as on_flush runs them for a swapped pair.
         const char* error = rsf_anomaly_motion_model_upload(motion, context.Get(), scene.previous_camera.view.values.data(),
             scene.previous_camera.projection.values.data(), scene.previous_bone.values.data(), history, false, p.skin, size);
         require(error == nullptr, error ? error : "model b13 uploads");
     }
-    ID3D11RenderTargetView* views[3]{t.position_rtv.Get(), t.albedo_rtv.Get(), motion ? static_cast<ID3D11RenderTargetView*>(motion_view.rtv) : nullptr};
-    context->OMSetRenderTargets(motion ? 3 : 2, views, t.dsv.Get());
-    context->OMSetDepthStencilState(t.less.Get(), 0);
-    context->RSSetState(t.raster.Get());
-    const D3D11_VIEWPORT viewport{0, 0, float(size), float(size), 0, 1};
-    context->RSSetViewports(1, &viewport);
-    context->Draw(mesh.count, 0);
+    rsf_anomaly_motion_fixture_output_bind(context.Get(), &targets);
+    rsf_anomaly_motion_fixture_draw(context.Get(), mesh.count);
     Frame frame;
     frame.position = read_back<Half4>(t.position.Get());
     frame.albedo = read_back<uint32_t>(t.albedo.Get());

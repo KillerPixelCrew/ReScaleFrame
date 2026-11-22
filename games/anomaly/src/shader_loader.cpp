@@ -15,6 +15,7 @@ bool rsf_anomaly_shader_d3d_compile(const rsf_anomaly_shader_d3d*, const void*, 
     const rsf_anomaly_shader_request*, void*, bool (*)(void*, bool, rsf_anomaly_shader_bytes)) noexcept;
 void rsf_anomaly_shader_d3d_prepare(const rsf_anomaly_shader_d3d*, const rsf_anomaly_shader_admitted*,
     const rsf_anomaly_shader_request*, rsf_anomaly_shader_wide, const void*, const void*, OpenFile, void*,
+    bool (*)(void*, bool, rsf_anomaly_shader_bytes),
     void (*)(void*, const rsf_anomaly_shader_entry*, uint8_t, uint8_t, int32_t, rsf_anomaly_shader_bytes,
         rsf_anomaly_shader_bytes, rsf_anomaly_shader_snapshot*, rsf_anomaly_shader_snapshot*)) noexcept;
 }
@@ -176,15 +177,37 @@ bool reflect_deployed(const rsf_anomaly_shader_d3d& modules, std::span<const std
     return out != nullptr;
 }
 
-Prepared prepare_deployed(const rsf_anomaly_shader_d3d& modules, const Manifest& manifest,
-    const std::filesystem::path& deployment, const ShaderRequest& request)
+namespace {
+struct Preparation {
+    Prepared& result;
+    std::vector<std::byte>* stock{};
+    std::string* error{};
+    bool compiled{};
+};
+
+void prepare(const rsf_anomaly_shader_d3d& modules, const Manifest& manifest, const std::filesystem::path& deployment,
+    const ShaderRequest& request, Preparation& output)
 {
-    if (!manifest.admitted()) return {};
+    if (!manifest.admitted()) return;
     const auto original = deployment / "original", motion = deployment / "motion";
     const RequestView input(request);
-    Prepared result;
+    const auto stock_sink = [](void* user, bool ok, Bytes value) noexcept {
+        auto& out = *static_cast<Preparation*>(user);
+        try {
+            if (!ok) {
+                *out.error = text(value);
+                return false;
+            }
+            const auto data = bytecode(value);
+            if (!data.empty()) out.stock->assign(data.begin(), data.end());
+            out.compiled = true;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    };
     rsf_anomaly_shader_d3d_prepare(&modules, manifest.admitted(), &input.value, wide(deployment), &original, &motion,
-        open_file, &result,
+        open_file, &output, output.stock ? +stock_sink : nullptr,
         [](void* user, const rsf_anomaly_shader_entry* entry, uint8_t outcome, uint8_t compatibility, int32_t skin,
             Bytes detail, Bytes variant, rsf_anomaly_shader_snapshot* stock,
             rsf_anomaly_shader_snapshot* reflection) noexcept {
@@ -202,10 +225,28 @@ Prepared prepare_deployed(const rsf_anomaly_shader_d3d& modules, const Manifest&
                     const auto code = bytecode(variant);
                     next.variant.assign(code.begin(), code.end());
                 }
-                *static_cast<Prepared*>(user) = std::move(next);
+                static_cast<Preparation*>(user)->result = std::move(next);
             } catch (...) {}
         });
+}
+}
+
+Prepared prepare_deployed(const rsf_anomaly_shader_d3d& modules, const Manifest& manifest,
+    const std::filesystem::path& deployment, const ShaderRequest& request)
+{
+    Prepared result;
+    Preparation output{result};
+    prepare(modules, manifest, deployment, request, output);
     return result;
 }
 
+bool build_deployed(const rsf_anomaly_shader_d3d& modules, const Manifest& manifest, const std::filesystem::path& deployment,
+    const ShaderRequest& request, std::vector<std::byte>& stock, Prepared& result, std::string& error)
+{
+    stock.clear();
+    result = {};
+    Preparation output{result, &stock, &error};
+    prepare(modules, manifest, deployment, request, output);
+    return output.compiled;
+}
 }

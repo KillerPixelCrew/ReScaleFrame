@@ -321,8 +321,40 @@ unsafe extern "C" fn rsf_anomaly_shader_d3d_prepare(
     motion: *const c_void,
     open_file: OpenFile,
     user: *mut c_void,
+    stock_sink: Option<PublishCompile>,
     publish: PublishPrepared,
 ) {
+    // Ordinary fixture builds use two independent original-tree compiles. The
+    // first supplies the simulated engine bytecode, the second proves it.
+    // Refusal cases supply their own mutated or foreign engine bytecode.
+    let stock;
+    let replay;
+    let request = if let Some(sink) = stock_sink {
+        let source = unsafe { request.source.as_slice() };
+        match compile_tree(modules.compile(), original, open_file, request, source) {
+            Ok(bytes) => {
+                stock = bytes;
+                if !unsafe { sink(user, true, Bytes::from(stock.as_slice())) } {
+                    return;
+                }
+            }
+            Err(error) => {
+                unsafe { sink(user, false, Bytes::from(error.as_slice())) };
+                return;
+            }
+        }
+        replay = Request {
+            target: request.target,
+            entry: request.entry,
+            flags: request.flags,
+            defines: request.defines,
+            source: request.source,
+            bytecode: Bytes::from(stock.as_slice()),
+        };
+        &replay
+    } else {
+        request
+    };
     let Some(entry) = (unsafe {
         rsf_anomaly_shader_match_request(Some(manifest), request.source, request.target)
     }) else {

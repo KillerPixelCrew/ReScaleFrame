@@ -1537,6 +1537,14 @@ fixtures. Source and native syntax-only checks passed. Build, fixture and
 device execution remain open.
 [CPU fixture and device scheduling port](research/rust-anomaly-shader-loader-n05.md#cpu-fixture-and-device-scheduling-port-from-b5a7434c)
 
+The deployed Anomaly motion fixtures now create targets and input layouts,
+bind stock resources and issue ordinary draws through Rust helpers. They
+share the Rust staging readback and retain the native comparison loops and
+the replay unwind scope. Rust also emits and independently proves the
+deployed fixture's stock shader bytes before preparing the variant.
+Source and syntax-only checks passed. Device checks remain open.
+[Draw and readback port](research/rust-anomaly-shader-loader-n05.md#draw-and-readback-port-from-6c935471)
+
 Anomaly now admits successful stock shader creation and reads its
 guarded interface and filename in Rust. The native detour still
 supplies its own return address and stack to the compiler-frame

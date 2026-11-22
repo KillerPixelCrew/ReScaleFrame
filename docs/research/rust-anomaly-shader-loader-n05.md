@@ -141,3 +141,28 @@ checking with the repository's warning flags passed for the changed native
 fixture units. Bindgen 0.72.1 reproduced the schedule ABI after pinned
 Rust 1.94.1 formatting. Locked offline Windows metadata resolved both
 fixture features. Build, linking, lint, fixture and device execution remain open.
+
+## Draw and readback port from 6c935471
+
+`6c935471` already contains the fixture ownership replay at `2f8d4721`.
+This follow-up uses that integrated tree directly.
+
+| Path | Source evidence |
+| --- | --- |
+| `motion/device_fixture/draw.rs`, `draw/resources.rs` | Rust creates the fixture position, albedo, depth and raster state, applies the stock signature's 16-byte input elements, binds the triangle or three-control-point patch topology, and issues the ordinary draws. Core and foliage keep D24S8, less-or-equal and depth-plus-stencil clears. Far and tessellation keep D32F, less and depth-only clears. The native fixtures still choose the exact shader objects and the two- or three-target output for each pass. |
+| `motion/device_fixture/draw/bindings.rs` | The same D3DCompiler 47 reflection drives stock b13 exclusions, slot enumeration, identity matrices and default values. Far and core retain the 0.5 alpha reference. Core binds textures and clamp samplers on PS only. Far and tessellation retain wrapping samplers and per-stage SRVs. Tessellation retains the 4-by-4 displacement ramp. Foliage still copies and maps the bound VS buffer before patching named values and rebinding it. Fixture owners hold the emitted COM resources through the same scene or draw scope. |
+| `sr_fixture_readback.rs`, `tests/anomaly_motion_native.h` | The three motion fixtures share the Rust staging copy, map, row-pitch copy and unmap. D32F adds a four-byte texel to the existing fixture helper. C++ allocates the same destination element type and extent for each comparison. |
+| `shader_loader/d3d.rs`, `shader_loader.cpp/.h` | Rust emits the simulated engine's stock DXBC and then independently recompiles the original tree to prove that DXBC before allowing the motion variant. The stock-only call and supplied-bytecode path remain for the tampered and foreign permutation refusals. The compiler entry, flags, ordered defines and include lookup order are the same. Native Windows path opening preserves the STL narrow filename conversion and root/drive/UNC append behavior. |
+
+The three native scene files retain their geometry data, shader creation,
+diagnostic probes, assertion loops and COM attachments at the call boundary.
+The core fixture's intentional C++ throw and both replay draws still run
+inside the native restoration scope. The live compiler trampoline, engine
+originals and SEH operations remain in the existing native stage.
+
+The source comparison matched shader assets and raw shader strings, the
+far and tessellation comparison bodies, core and grass comparison blocks,
+and the core replay unwind callback against `6c935471`. Pinned 1.94.1
+formatting, bindgen 0.72.1 reproduction, locked offline Windows metadata
+and MSVC x64 syntax-only checks passed. Build, linking, fixture execution,
+lint and device acceptance remain open.

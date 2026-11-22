@@ -135,5 +135,7 @@ bool compile_deployed(const rsf_anomaly_shader_d3d&, const std::filesystem::path
 bool reflect_deployed(const rsf_anomaly_shader_d3d&, std::span<const std::byte>, Reflection&);
 Prepared prepare_deployed(const rsf_anomaly_shader_d3d&, const Manifest&, const std::filesystem::path& deployment,
     const ShaderRequest&);
+bool build_deployed(const rsf_anomaly_shader_d3d&, const Manifest&, const std::filesystem::path& deployment,
+    const ShaderRequest&, std::vector<std::byte>& stock, Prepared&, std::string& error);
 
 }
