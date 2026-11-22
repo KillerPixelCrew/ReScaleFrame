@@ -371,6 +371,7 @@ add_custom_command(OUTPUT "${overlay_fixture_dll}"
     COMMAND "${RSF_RUSTC}" --edition=2024 --crate-type=cdylib --target ${overlay_fixture_rust_target}
         -Cpanic=abort -Dwarnings "${overlay_fixture_source}" -o "${overlay_fixture_dll}"
     DEPENDS "${overlay_fixture_source}" "${PROJECT_SOURCE_DIR}/ui/overlay/src/abi.rs"
+        "${PROJECT_SOURCE_DIR}/sdk/game/src/sharpening_defaults.rs"
         "${PROJECT_SOURCE_DIR}/rust-toolchain.toml"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     VERBATIM)

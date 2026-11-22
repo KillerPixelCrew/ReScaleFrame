@@ -14,8 +14,7 @@
 //!
 //! What this crate never does is touch a GPU. The D3D11 renderer on the other side of the header
 //! owns the device, the pipeline state, and the job of leaving the game's frame exactly as it
-//! found it. Drawing inside somebody else's frame is C++ work against a device the game owns;
-//! deciding what a quality dropdown does is not.
+//! found it. The panel describes the draw and sends settings requests through the C API.
 //!
 //! Honesty, since this is a status panel: it shows what it was told, plus ratios derived from it.
 //! The compact HUD derives rendered and presented rates from host counters and the QPC clock.

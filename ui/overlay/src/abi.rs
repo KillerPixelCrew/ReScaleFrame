@@ -7,6 +7,9 @@
 
 use core::ffi::c_char;
 
+#[path = "../../../sdk/game/src/sharpening_defaults.rs"]
+pub(crate) mod sharpening_defaults;
+
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
 pub const RSF_OVERLAY_ABI_VERSION: u32 = 18;
 
@@ -397,18 +400,22 @@ impl Default for RsfOverlayIntent {
             host_option_index: 0,
             host_option_value: 0,
             sharpening_changed: 0,
-            sharpening_mode: 0,
-            sharpening_sharpness: 0.4,
-            sharpening_mas: 0,
-            sharpening_motion_sharpness: 0.2,
-            sharpening_motion_threshold: 0.0,
-            sharpening_motion_scale_limit: 10.0,
-            sharpening_contrast_enabled: 0,
-            sharpening_contrast: 0.0,
-            sharpening_depth_scale: 35.0,
-            sharpening_depth_bias: 0.001,
-            sharpening_clamp_output: 0,
-            sharpening_debug: 0,
+            sharpening_mode: sharpening_defaults::RSF_SHARPENING_DEFAULT_MODE,
+            sharpening_sharpness: sharpening_defaults::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
+            sharpening_mas: sharpening_defaults::RSF_SHARPENING_DEFAULT_MAS,
+            sharpening_motion_sharpness:
+                sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS as f32,
+            sharpening_motion_threshold:
+                sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD as f32,
+            sharpening_motion_scale_limit:
+                sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT as f32,
+            sharpening_contrast_enabled:
+                sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
+            sharpening_contrast: sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
+            sharpening_depth_scale: sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
+            sharpening_depth_bias: sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
+            sharpening_clamp_output: sharpening_defaults::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
+            sharpening_debug: sharpening_defaults::RSF_SHARPENING_DEFAULT_DEBUG,
             close_requested: 0,
             ui_preferences_changed: 0,
             ui_preferences: 0,

@@ -363,18 +363,21 @@ pub struct Sharpening {
 impl Default for Sharpening {
     fn default() -> Self {
         Self {
-            mode: 0,
-            sharpness: 0.4,
-            mas: 0,
-            motion_sharpness: 0.2,
-            motion_threshold: 0.0,
-            motion_scale_limit: 10.0,
-            contrast_enabled: 0,
-            contrast: 0.0,
-            depth_scale: 35.0,
-            depth_bias: 0.001,
-            clamp_output: 0,
-            debug: 0,
+            mode: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MODE,
+            sharpness: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
+            mas: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MAS,
+            motion_sharpness: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS
+                as f32,
+            motion_threshold: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD
+                as f32,
+            motion_scale_limit: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT
+                as f32,
+            contrast_enabled: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
+            contrast: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
+            depth_scale: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
+            depth_bias: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
+            clamp_output: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
+            debug: abi::sharpening_defaults::RSF_SHARPENING_DEFAULT_DEBUG,
         }
     }
 }

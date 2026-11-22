@@ -10,6 +10,9 @@ use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr;
 
+#[path = "../../../../sdk/game/src/sharpening_defaults.rs"]
+mod sharpening_defaults;
+
 thread_local! {
     pub(crate) static INSTALL_RESULT: Cell<i32> = const { Cell::new(0) };
     pub(crate) static INSTALLS: Cell<u32> = const { Cell::new(0) };
@@ -90,18 +93,18 @@ pub(crate) fn sharpening_defaults() -> Sharpening {
     Sharpening {
         struct_size: size_of::<Sharpening>() as u32,
         abi_version: 1,
-        mode: 0,
-        sharpness: 0.4,
-        mas: 0,
-        motion_sharpness: 0.2,
-        motion_threshold: 0.0,
-        motion_scale_limit: 10.0,
-        contrast_enabled: 0,
-        contrast: 0.0,
-        depth_scale: 35.0,
-        depth_bias: 0.001,
-        clamp_output: 0,
-        debug: 0,
+        mode: sharpening_defaults::RSF_SHARPENING_DEFAULT_MODE,
+        sharpness: sharpening_defaults::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
+        mas: sharpening_defaults::RSF_SHARPENING_DEFAULT_MAS,
+        motion_sharpness: sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS as f32,
+        motion_threshold: sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD as f32,
+        motion_scale_limit: sharpening_defaults::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT as f32,
+        contrast_enabled: sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
+        contrast: sharpening_defaults::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
+        depth_scale: sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
+        depth_bias: sharpening_defaults::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
+        clamp_output: sharpening_defaults::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
+        debug: sharpening_defaults::RSF_SHARPENING_DEFAULT_DEBUG,
     }
 }
 
