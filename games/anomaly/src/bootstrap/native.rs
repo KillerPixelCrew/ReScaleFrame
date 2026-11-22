@@ -67,8 +67,6 @@ extern "C" fn rsf_anomaly_bootstrap_start_overlay(
         log,
         log_user: null_mut(),
         api_override: null(),
-        diagnostics_override: None,
-        capture_override: None,
         install_hooks: 1,
     };
     let status = unsafe { rsf_anomaly_overlay_start(&options, Some(hooks), null_mut()) };

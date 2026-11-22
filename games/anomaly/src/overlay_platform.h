@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Private startup boundary between the Anomaly overlay service and its native bootstrap caller.
-// tools/generate-rust-bindings.py generates overlay_abi.rs from this header and the Runtime's overlay API.
+// build.rs binds this header with the Runtime's overlay API.
 #include <rescaleframe/named_frame_dump.h>
 #include <rescaleframe/overlay_api.h>
 #include <stdbool.h>
@@ -19,8 +19,6 @@ typedef struct rsf_anomaly_overlay_options {
     rsf_game_log_fn log;
     void* log_user;
     const rsf_overlay_api* api_override;
-    rsf_get_overlay_diagnostics_fn diagnostics_override;
-    rsf_input_dump_named_texture_fn capture_override;
     uint32_t install_hooks;
 } rsf_anomaly_overlay_options;
 

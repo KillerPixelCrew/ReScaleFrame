@@ -280,8 +280,6 @@ fn options(api: &rsf_overlay_api, install_hooks: bool) -> rsf_anomaly_overlay_op
         log: None,
         log_user: ptr::null_mut(),
         api_override: api,
-        diagnostics_override: None,
-        capture_override: None,
         install_hooks: install_hooks.into(),
     }
 }
@@ -711,12 +709,4 @@ fn panel_edges_log_and_capture_the_configured_frames() {
             .iter()
             .any(|line| line.starts_with("Anomaly overlay panel #2 opened"))
     );
-}
-
-#[test]
-fn log_lines_are_bounded_like_the_native_buffer() {
-    let log = Mutex::new(Vec::new());
-    log_into(&log).say(format_args!("{}", "ÃƒÂ©".repeat(500)));
-    let line = &lines(&log)[0];
-    assert!(line.len() <= LOG_CAPACITY && line.len() >= LOG_CAPACITY - 1);
 }

@@ -29,8 +29,6 @@ use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
 use windows_sys::core::w;
 
 use rsf_game_sys::{RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_OK as OK};
-// The C++ service formatted log lines into char[768].
-const LOG_CAPACITY: usize = 767;
 
 type Status = u32;
 const STARTED: Status = RSF_ANOMALY_OVERLAY_STARTED as Status;
@@ -82,19 +80,8 @@ struct Log {
 
 impl Log {
     fn say(&self, message: fmt::Arguments) {
-        let Some(log) = self.log else { return };
-        let mut line = message.to_string().replace('\0', " ");
-        if line.len() > LOG_CAPACITY {
-            let mut end = LOG_CAPACITY;
-            while !line.is_char_boundary(end) {
-                end -= 1;
-            }
-            line.truncate(end);
-        }
-        if let Ok(line) = CString::new(line) {
-            // The adapter log callback is borrowed for the process lifetime.
-            unsafe { log(self.user, line.as_ptr()) };
-        }
+        // The adapter log callback is borrowed for the process lifetime.
+        rsf_game_sys::log_guarded(self.log, self.user, &message.to_string());
     }
 }
 
@@ -518,26 +505,22 @@ fn configure_capture(
     ini: &[u16],
     log: &Log,
 ) -> (Option<DiagnosticsFn>, Option<Capture>) {
-    let mut diagnostics = options.diagnostics_override;
-    let mut dump = options.capture_override;
-    if !options.runtime.is_null() {
-        if diagnostics.is_none() {
-            diagnostics = unsafe {
+    let (diagnostics, dump) = if options.runtime.is_null() {
+        (None, None)
+    } else {
+        unsafe {
+            (
                 crate::runtime_module::export::<DiagnosticsFn>(
                     options.runtime,
                     RSF_OVERLAY_DIAGNOSTICS_ENTRY_POINT,
-                )
-            };
-        }
-        if dump.is_none() {
-            dump = unsafe {
+                ),
                 crate::runtime_module::export::<DumpFn>(
                     options.runtime,
                     RSF_INPUT_DUMP_NAMED_TEXTURE_ENTRY_POINT,
-                )
-            };
+                ),
+            )
         }
-    }
+    };
     if diagnostics.is_none() {
         log.say(format_args!("Anomaly overlay: the Runtime has no rsf_get_overlay_diagnostics; panel logs omit input and settings counters."));
     }
