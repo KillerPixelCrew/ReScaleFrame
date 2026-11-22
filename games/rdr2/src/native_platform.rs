@@ -65,7 +65,7 @@ unsafe extern "C" fn blit_bridge(
     }
 }
 
-unsafe extern "C" fn read(address: usize, out: *mut c_void, bytes: usize) -> bool {
+pub(crate) unsafe extern "C" fn read(address: usize, out: *mut c_void, bytes: usize) -> bool {
     let mut count = 0;
     address != 0
         && !out.is_null()

@@ -47,12 +47,11 @@ The ASI (`rsf_asi_rdr2`) links the same crate for its startup slice: `asi.rs` ow
 admission, the `[RDR2]` configuration gates read under the loader lock, the ForceD3D12 parameter
 write, the D3D12 trace guard and the order in which the startup owners are armed, and
 `engine_settings.rs` owns the settings-collection carrier, refresh-rate storage and the
-ScriptHook quality request. `src/asi_entry.cpp` lends it a separate leaf table (`asi_platform.h`)
-and keeps the runtime session worker. The Social Club fix, camera probe, native capture, script
-input and native settings probe remain C++. The attach helper (`rsf_rdr2_attach`) remains C++
-and links no Rust. Shared inputs: `runtime_setup.h` (ASI, attach and `tests/unity_sr_d3d12.cpp`),
-`native_capture.cpp` (also built into `tests/rdr2_capture.cpp`) and `engine_settings_policy.h`,
-which declares the crate's policy C ABI for `tests/rdr2_engine_settings.cpp`.
+ScriptHook quality request. Rust owns the Win32 startup leaves, ASI and research-attach
+workers, and settings probe. `src/asi_entry.cpp` supplies DXGI adapter discovery and native
+capture and diagnostic callbacks through `asi_platform.h`. `runtime_setup.h` declares the
+C bridge also used by the Unity D3D12 fixture. The engine-settings vector suite lives in
+`src/engine_settings/tests.rs`.
 [The ASI note](../../docs/research/rust-rdr2-asi.md) records that slice.
 
 ## Deployment

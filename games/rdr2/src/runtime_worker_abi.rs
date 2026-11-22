@@ -70,7 +70,11 @@ const _: () = {
         [::core::mem::offset_of!(rsf_render_host_setup, user) - 88usize];
 };
 pub type rsf_rdr2_fingerprint_fn = ::core::option::Option<
-    unsafe extern "C" fn(executable: *const wchar_t, digest: *mut ::core::ffi::c_char) -> bool,
+    unsafe extern "C" fn(
+        executable: *const wchar_t,
+        sharing: u32,
+        digest: *mut ::core::ffi::c_uchar,
+    ) -> u32,
 >;
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -79,18 +83,15 @@ pub struct rsf_rdr2_runtime_leaves {
     pub diagnostics: ::core::option::Option<
         unsafe extern "C" fn(modules_path: *const wchar_t, dump_directory: *const wchar_t),
     >,
-    pub native_settings: ::core::option::Option<unsafe extern "C" fn(path: *const wchar_t) -> bool>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_rdr2_runtime_leaves"]
-        [::core::mem::size_of::<rsf_rdr2_runtime_leaves>() - 24usize];
+        [::core::mem::size_of::<rsf_rdr2_runtime_leaves>() - 16usize];
     ["Alignment of rsf_rdr2_runtime_leaves"]
         [::core::mem::align_of::<rsf_rdr2_runtime_leaves>() - 8usize];
     ["Offset of field: rsf_rdr2_runtime_leaves::fingerprint"]
         [::core::mem::offset_of!(rsf_rdr2_runtime_leaves, fingerprint) - 0usize];
     ["Offset of field: rsf_rdr2_runtime_leaves::diagnostics"]
         [::core::mem::offset_of!(rsf_rdr2_runtime_leaves, diagnostics) - 8usize];
-    ["Offset of field: rsf_rdr2_runtime_leaves::native_settings"]
-        [::core::mem::offset_of!(rsf_rdr2_runtime_leaves, native_settings) - 16usize];
 };

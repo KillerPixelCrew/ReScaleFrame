@@ -4,7 +4,7 @@
 //! Windows and COM services are implemented in the platform module.
 //!
 //! `ReScaleFrame.RDR2.asi` links the same archive for its startup admission and engine-settings
-//! ownership (`asi`, `engine_settings`); `asi_entry.cpp` lends that module its own leaf table.
+//! ownership (`asi`, `engine_settings`). The ASI supplies its native diagnostic callbacks.
 mod asi;
 mod camera;
 #[cfg(windows)]
@@ -34,6 +34,7 @@ mod script_input_abi;
 mod social_club;
 
 use platform::Platform;
+use rsf_game_sys::session::Probe;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_hooks_api, rsf_game_info,
     rsf_game_plugin_api, rsf_game_prepare_args, rsf_game_probe, rsf_game_renderer_status,
@@ -122,28 +123,10 @@ unsafe extern "C" fn status(output: *mut rsf_game_renderer_status) -> i32 {
     valid
 }
 
-fn recognized(executable: &[u8], sha256: &[u8]) -> bool {
-    executable.eq_ignore_ascii_case(layout::EXECUTABLE)
-        && sha256.eq_ignore_ascii_case(layout::SHA256)
-}
-
-unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> u32 {
-    // Only the size field is readable from a short SDK structure.
-    if probe.is_null() || unsafe { probe.cast::<u32>().read() } < size_of::<rsf_game_probe>() as u32
-    {
-        return UNKNOWN;
-    }
-    let probe = unsafe { &*probe };
-    if probe.pe_machine != layout::AMD64
-        || probe.executable_name_utf8.is_null()
-        || probe.sha256_hex.is_null()
-    {
-        return UNKNOWN;
-    }
-    // Probe strings are borrowed, NUL-terminated UTF-8 for the call.
-    let executable = unsafe { CStr::from_ptr(probe.executable_name_utf8) };
-    let sha256 = unsafe { CStr::from_ptr(probe.sha256_hex) };
-    if recognized(executable.to_bytes(), sha256.to_bytes()) {
+unsafe extern "C" fn detect(raw: *const rsf_game_probe) -> u32 {
+    if unsafe { Probe::from_raw(raw) }.is_some_and(|probe| {
+        probe.machine == layout::AMD64 && probe.matches(layout::EXECUTABLE_NAME, layout::SHA256)
+    }) {
         RECOGNIZED
     } else {
         UNKNOWN

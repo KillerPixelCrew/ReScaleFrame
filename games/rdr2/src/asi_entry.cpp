@@ -6,7 +6,7 @@
 //
 // Startup admission, the [RDR2] configuration gates, the ForceD3D12 write and engine-settings
 // ownership are owned by the Rust crate rsf-rdr2 (games/rdr2/src/asi.rs, engine_settings.rs).
-// This file lends the startup and Runtime session workers their typed leaves.
+// This file lends the Rust startup its DXGI and native capture/diagnostic leaves.
 #include <rescaleframe/module_dump.h>
 #ifdef RSF_HAVE_FRAME_CAPTURE
 #include <rescaleframe/frame_capture.h>
@@ -14,7 +14,8 @@
 #include <rescaleframe/vendor_census.h>
 #include "d3d12_trace.h"
 #include "diagnostics.h"
-#include "runtime_worker_native.h"
+#include "runtime_setup.h"
+#include <rescaleframe/sha256_file.h>
 #include <windows.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
@@ -27,9 +28,9 @@
 #include "social_club.h"
 #include "camera_probe.h"
 #include "native_capture.h"
-#include "native_settings.h"
 
 namespace {
+// These leaves use the loader's optional capture libraries and Windows SDK COM wrappers.
 HMODULE self = nullptr;
 char census_directory[MAX_PATH * 3]{};
 #ifdef RSF_HAVE_FRAME_CAPTURE
@@ -127,48 +128,11 @@ void start_diagnostics(const wchar_t* modules, const wchar_t* dumps) noexcept
 }
 
 constexpr rsf_rdr2_runtime_leaves runtime_leaves{
-    rsf_rdr2_fingerprint,
+    rsf_common_sha256_file,
     start_diagnostics,
-    rsf_rdr2_native_settings_probe,
 };
 
-DWORD WINAPI startup(void*) noexcept
-{
-    return rsf_rdr2_asi_start_runtime(self, &runtime_leaves);
-}
-
-bool read_memory(uintptr_t address, void* out, size_t size) noexcept
-{
-    SIZE_T count{};
-    return address && out &&
-        ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address), out, size, &count) &&
-        count == size;
-}
-
-struct SettingsPath { const uint32_t* ids; uint64_t count; };
-
-constexpr rsf::rdr2::AsiPlatform native{
-    sizeof(rsf::rdr2::AsiPlatform),
-    rsf::rdr2::asi_platform_version,
-    []() noexcept { return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)); },
-    read_memory,
-    [](wchar_t* out, uint32_t capacity) noexcept -> uint32_t { return GetModuleFileNameW(nullptr, out, capacity); },
-    [](wchar_t* out, uint32_t capacity) noexcept -> uint32_t { return GetModuleFileNameW(self, out, capacity); },
-    []() noexcept -> uint32_t { return GetCurrentThreadId(); },
-    [](const wchar_t* path, const wchar_t* section, const wchar_t* key, int32_t fallback) noexcept -> uint32_t {
-        return GetPrivateProfileIntW(section, key, fallback, path);
-    },
-    [](const wchar_t* path, const wchar_t* section, const wchar_t* key, wchar_t* out, uint32_t capacity) noexcept
-        -> uint32_t { return GetPrivateProfileStringW(section, key, L"", out, capacity, path); },
-    []() noexcept -> int32_t { return MH_Initialize(); },
-    [](uintptr_t target, const void* detour, void** original) noexcept -> int32_t {
-        return MH_CreateHook(reinterpret_cast<void*>(target), const_cast<void*>(detour), original);
-    },
-    [](uintptr_t target) noexcept -> int32_t { return MH_QueueEnableHook(reinterpret_cast<void*>(target)); },
-    []() noexcept -> int32_t { return MH_ApplyQueued(); },
-    [](uintptr_t target) noexcept -> int32_t { return MH_DisableHook(reinterpret_cast<void*>(target)); },
-    [](uintptr_t target) noexcept -> int32_t { return MH_RemoveHook(reinterpret_cast<void*>(target)); },
-    [](int32_t status) noexcept { return MH_StatusToString(static_cast<MH_STATUS>(status)); },
+constexpr rsf_rdr2_asi_leaves native{
     [](uint32_t index) noexcept -> uint32_t {
         Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
         Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
@@ -176,17 +140,6 @@ constexpr rsf::rdr2::AsiPlatform native{
         return SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) &&
             SUCCEEDED(factory->EnumAdapters1(index, &adapter)) && SUCCEEDED(adapter->GetDesc1(&description)) ?
             description.VendorId : 0;
-    },
-    []() noexcept -> uint32_t {
-        DEVMODEW desktop{};
-        desktop.dmSize = sizeof(desktop);
-        return EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &desktop) ? desktop.dmDisplayFrequency : 0;
-    },
-    [](uintptr_t function) noexcept { return reinterpret_cast<void* (*)()>(function)(); },
-    [](uintptr_t function, void* manager) noexcept { return reinterpret_cast<void* (*)(void*)>(function)(manager); },
-    [](uintptr_t function, void* manager, const uint32_t* ids, uint64_t count, void* scratch) noexcept {
-        const SettingsPath path{ids, count};
-        return reinterpret_cast<void* (*)(void*, const SettingsPath*, void*)>(function)(manager, &path, scratch);
     },
     install_d3d12_result_trace,
     [](const wchar_t* directory) noexcept { return rsf_rdr2_install_native_capture(directory); },
@@ -199,19 +152,16 @@ constexpr rsf::rdr2::AsiPlatform native{
     [](const wchar_t* directory) noexcept { return rsf_rdr2_install_camera_probe(directory); },
     [](const wchar_t* library) noexcept { return rsf_rdr2_install_camera_reference(self, library); },
     rsf_rdr2_install_social_club_fix,
-    []() noexcept {
-        if (HANDLE worker = CreateThread(nullptr, 0, startup, nullptr, 0, nullptr)) CloseHandle(worker);
-    },
 };
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*)
 {
     if (reason == DLL_PROCESS_ATTACH) {
-        self = instance; DisableThreadLibraryCalls(instance);
+        self = instance;
         // Runs under the loader lock: the ASI loader loads modules during CRT startup, after
         // decryption and before the engine reads its settings.
-        rsf_rdr2_asi_attach(&native);
+        rsf_rdr2_asi_process_attach(instance, &native, &runtime_leaves);
     }
     return TRUE;
 }

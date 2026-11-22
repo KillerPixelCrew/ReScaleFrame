@@ -300,3 +300,28 @@ observations remain open. A recording with no observed covering submission or us
 fence can still hold the capture pending. Runtime behavior under interleaved submissions,
 allocation or Signal refusal, device removal and a tail written in an earlier poll
 remains unverified.
+
+## R01 follow-up
+
+The ASI keeps its loader-lock ordering. `asi/windows.rs` constructs the Win32 platform table
+and starts the worker. `asi_entry.cpp` supplies DXGI adapter discovery and the remaining native
+capture and diagnostic callbacks, including the optional RenderDoc path and the R03-owned
+`native_capture.cpp` entry. The research-attach C entry forwards to Rust and borrows the
+existing Runtime. Both workers use the GameSDK probe and request helpers. The R02 renderer
+session and `DiagnosticHook::new` stay with their existing owners.
+
+| R01 review | Source evidence |
+| --- | --- |
+| Loaded PE header | `platform::image_header` reads through the caller's guarded callback, checks both signatures and rejects negative or overflowing offsets. It returns the NT address and image facts. |
+| Adapter lookup | `engine_settings::adapter_vendor` caches nonzero identities. The fixture retries the same index after a refused query and checks the successful identity is cached. |
+| Pending selection | `engine_settings::pin_pending` snapshots and plans both collections, refuses invalid versions, applies both plans and then publishes the selection. The fiber advances its initialized state only on success. |
+| Session cleanup | `runtime_worker::run_session` resolves quiesce and stop before preparing. A prepare or start refusal retains any returned owner until both cleanup calls succeed. |
+| Settings vectors | `engine_settings/tests.rs` carries the capability, vendor, quality and refresh cases, the independent literal-byte offsets and calls to all three C entry points. The CMake fixture and its C++ default-argument bridge are removed. |
+| Settings probe addresses | `native_settings::Probe::address_fields` emits offsets inside the loaded image, raw addresses for observed external pointers and null for a failed read or null pointer. |
+| Carrier log | `rsf_game_sys::session::carrier_log` owns wide-path append, serialized writes and C-message admission. RDR2 and Project Wingman each supply their path and clock. |
+| Worker refusal paths | `run_session` accepts a post-create callback and returns a stage and raw refusal code. Callers own diagnostic startup, ScriptHook startup and exit-code mapping. |
+| Restart overlay controls | Open. `rsf_render_host_setup` has no adapter option registration path, and the native D3D12 host draws its own overlay stats in `render_host.rs`. The shared overlay option ABI offers toggles and numbers. The path and prefix keys also need generic text options and shared persistence. |
+
+Pinned Rust 1.94.1 formatting, bindgen 0.72.1 for the touched records and Git whitespace
+checks cover this checkpoint. Compilation, fixtures, lint and game or device checks are
+user-run.

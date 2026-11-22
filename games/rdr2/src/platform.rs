@@ -11,6 +11,8 @@ mod input;
 #[cfg(all(windows, not(test)))]
 #[path = "native_platform.rs"]
 mod native;
+#[cfg(all(windows, not(test)))]
+pub(crate) use native::read as read_process_memory;
 
 #[cfg(all(windows, not(test)))]
 pub(crate) fn native() -> &'static Platform {
@@ -42,6 +44,9 @@ pub(crate) mod minhook {
             original: *mut *mut c_void,
         ) -> i32;
         pub(crate) fn MH_EnableHook(target: *mut c_void) -> i32;
+        pub(crate) fn MH_QueueEnableHook(target: *mut c_void) -> i32;
+        pub(crate) fn MH_ApplyQueued() -> i32;
+        pub(crate) fn MH_StatusToString(status: i32) -> *const std::ffi::c_char;
     }
 
     #[cfg(test)]
@@ -244,21 +249,41 @@ pub(crate) struct ImageFacts {
 }
 
 pub(crate) fn image_facts(platform: &Platform, module: usize) -> Option<ImageFacts> {
-    const DOS_SIGNATURE: u16 = 0x5a4d;
-    const PE_SIGNATURE: u32 = 0x4550;
-    if module == 0 || platform.read_value::<u16>(module)? != DOS_SIGNATURE {
+    image_header(platform.read, module).map(|(_, facts)| facts)
+}
+
+pub(crate) const PE_SIGNATURE: u32 = 0x4550;
+
+pub(crate) fn image_header(
+    read: unsafe extern "C" fn(usize, *mut c_void, usize) -> bool,
+    module: usize,
+) -> Option<(usize, ImageFacts)> {
+    let read_bytes = |address, bytes: &mut [u8]| unsafe {
+        read(address, bytes.as_mut_ptr().cast(), bytes.len())
+    };
+    let read_word = |address| {
+        let mut bytes = [0; 4];
+        read_bytes(address, &mut bytes).then_some(u32::from_le_bytes(bytes))
+    };
+    let mut dos = [0; 2];
+    if module == 0 || !read_bytes(module, &mut dos) || dos != *b"MZ" {
         return None;
     }
-    let nt =
-        module.checked_add(usize::try_from(platform.read_value::<i32>(module + 0x3c)?).ok()?)?;
-    if platform.read_value::<u32>(nt)? != PE_SIGNATURE {
+    let offset = read_word(module.checked_add(0x3c)?)? as i32;
+    let nt = module.checked_add(usize::try_from(offset).ok()?)?;
+    if read_word(nt)? != PE_SIGNATURE {
         return None;
     }
     // IMAGE_FILE_HEADER.TimeDateStamp and IMAGE_OPTIONAL_HEADER64.SizeOfImage.
-    Some(ImageFacts {
-        timestamp: platform.read_value(nt + 8)?,
-        image_size: platform.read_value(nt + 0x50)?,
-    })
+    let timestamp = read_word(nt.checked_add(8)?)?;
+    let image_size = read_word(nt.checked_add(0x50)?)?;
+    Some((
+        nt,
+        ImageFacts {
+            timestamp,
+            image_size,
+        },
+    ))
 }
 
 /// Counts code executing in this module so quiesce and stop can refuse while it runs.

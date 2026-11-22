@@ -4,6 +4,9 @@ use crate::plugin_session_abi::{RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_sessi
 use crate::{RSF_GAME_ABI_VERSION, rsf_game_host_services, rsf_game_log_fn, rsf_game_probe};
 use core::ffi::CStr;
 
+#[cfg(windows)]
+pub mod carrier_log;
+
 #[derive(Clone, Copy)]
 pub struct Probe<'a> {
     pub machine: u16,

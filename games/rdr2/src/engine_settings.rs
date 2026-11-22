@@ -177,6 +177,43 @@ unsafe fn word(address: *const u8) -> u32 {
     unsafe { address.cast::<u32>().read_unaligned() }
 }
 
+fn adapter_vendor(cache: &AtomicU64, index: u32, detect: impl FnOnce(u32) -> u32) -> u32 {
+    let cached = cache.load(Ordering::SeqCst);
+    if index == (cached >> 32) as u32 && cached as u32 != 0 {
+        return cached as u32;
+    }
+    let vendor = detect(index);
+    if vendor != 0 {
+        cache.store(
+            (u64::from(index) << 32) | u64::from(vendor),
+            Ordering::SeqCst,
+        );
+    }
+    vendor
+}
+
+type Collection = [u8; collection::BYTES];
+
+fn snapshot(platform: &AsiPlatform, object: *mut u8) -> Option<Collection> {
+    let mut current = [0; collection::BYTES];
+    if !unsafe { (platform.read)(object as usize, current.as_mut_ptr().cast(), current.len()) } {
+        return None;
+    }
+    let version = u16::from_le_bytes([
+        current[collection::VERSION],
+        current[collection::VERSION + 1],
+    ]);
+    collection::VERSIONS.contains(&version).then_some(current)
+}
+
+fn collection_vendor(platform: &AsiPlatform, current: &Collection) -> u32 {
+    adapter_vendor(
+        &ADAPTER,
+        get(current, collection::VIDEO_ADAPTER),
+        |index| unsafe { (platform.adapter_vendor)(index) },
+    )
+}
+
 /// Enforces the carrier on a collection the engine handed to a verified settings method.
 ///
 /// # Safety
@@ -186,46 +223,49 @@ unsafe fn own(object: *mut u8) {
         FAILURES.fetch_add(1, Ordering::SeqCst);
         return;
     };
-    let mut expected = [0u8; collection::BYTES];
-    unsafe { ptr::copy_nonoverlapping(object, expected.as_mut_ptr(), expected.len()) };
-    let version = u16::from_le_bytes([
-        expected[collection::VERSION],
-        expected[collection::VERSION + 1],
-    ]);
-    if !collection::VERSIONS.contains(&version) {
+    let Some(current) = snapshot(platform, object) else {
         FAILURES.fetch_add(1, Ordering::SeqCst);
         return;
-    }
-    let selected = get(&expected, collection::VIDEO_ADAPTER);
-    let mut cached = ADAPTER.load(Ordering::SeqCst);
-    if selected != (cached >> 32) as u32 {
-        let detected = unsafe { (platform.adapter_vendor)(selected) };
-        cached = (u64::from(selected) << 32) | u64::from(detected);
-        ADAPTER.store(cached, Ordering::SeqCst);
-    }
-    // FSR2 is the universal carrier when native NGX cannot exist. Both carriers enter the same
-    // canonical DLSS-shaped RSF adapter; neither selects RSF's vendor.
-    let vendor = cached as u32;
+    };
+    let vendor = collection_vendor(platform, &current);
     let selection = SELECTION.load(Ordering::SeqCst);
-    let current = expected;
-    if !pin(&mut expected, vendor, selection as u32) {
+    let Some(expected) = plan_collection(current, vendor, selection) else {
         FAILURES.fetch_add(1, Ordering::SeqCst);
         return;
+    };
+    unsafe { apply_collection(platform, object, &current, &expected, vendor) };
+}
+
+fn plan_collection(mut expected: Collection, vendor: u32, selection: u64) -> Option<Collection> {
+    // Native DLSS and FSR2 are input carriers for the same RSF renderer adapter.
+    if !pin(&mut expected, vendor, selection as u32) {
+        return None;
     }
     let native_index = (selection >> 32) as u32;
     if vendor == NVIDIA && native_index != u32::MAX {
         put(&mut expected, collection::DLSS, native_index);
     }
+    Some(expected)
+}
+
+/// The snapshot and requested quality were validated before any engine writes.
+unsafe fn apply_collection(
+    platform: &AsiPlatform,
+    object: *mut u8,
+    current: &Collection,
+    expected: &Collection,
+    vendor: u32,
+) {
     let (dlss, mode, fsr) = (
-        get(&expected, collection::DLSS),
-        get(&expected, collection::DLSS_QUALITY),
-        get(&expected, collection::FSR),
+        get(expected, collection::DLSS),
+        get(expected, collection::DLSS_QUALITY),
+        get(expected, collection::FSR),
     );
     let (old_dlss, old_mode, old_fsr, old_reflex) = (
-        get(&current, collection::DLSS),
-        get(&current, collection::DLSS_QUALITY),
-        get(&current, collection::FSR),
-        get(&current, collection::REFLEX),
+        get(current, collection::DLSS),
+        get(current, collection::DLSS_QUALITY),
+        get(current, collection::FSR),
+        get(current, collection::REFLEX),
     );
     let changed =
         old_dlss != dlss || old_mode != mode || old_fsr != fsr || old_reflex != NATIVE_MARKERS;
@@ -237,12 +277,8 @@ unsafe fn own(object: *mut u8) {
     ] {
         unsafe { ptr::copy_nonoverlapping(expected.as_ptr().add(offset), object.add(offset), 4) };
     }
-    let (mut numerator, mut denominator) = unsafe {
-        (
-            word(object.add(collection::REFRESH_NUMERATOR)),
-            word(object.add(collection::REFRESH_DENOMINATOR)),
-        )
-    };
+    let mut numerator = get(current, collection::REFRESH_NUMERATOR);
+    let mut denominator = get(current, collection::REFRESH_DENOMINATOR);
     let (old_numerator, old_denominator) = (numerator, denominator);
     let desktop_hz = unsafe { (platform.desktop_refresh)() };
     if storable_refresh(&mut numerator, &mut denominator, desktop_hz) {
@@ -400,8 +436,23 @@ unsafe fn pin_pending(platform: &AsiPlatform, manager_object: *mut c_void, quali
     if active.is_null() || pending.is_null() || active == pending {
         return false;
     }
+    let first = unsafe { pending.add(manager::OWNER_COLLECTION) };
+    let second = unsafe { pending.add(manager::PENDING_SECOND_COLLECTION) };
+    let (Some(first_values), Some(second_values)) =
+        (snapshot(platform, first), snapshot(platform, second))
+    else {
+        return false;
+    };
+    let first_vendor = collection_vendor(platform, &first_values);
+    let second_vendor = if get(&first_values, collection::VIDEO_ADAPTER)
+        == get(&second_values, collection::VIDEO_ADAPTER)
+    {
+        first_vendor
+    } else {
+        collection_vendor(platform, &second_values)
+    };
     let mut native_index = u32::MAX;
-    if ADAPTER.load(Ordering::SeqCst) as u32 == NVIDIA {
+    if first_vendor == NVIDIA || second_vendor == NVIDIA {
         let count = unsafe { word(active.add(manager::DLSS_CHOICE_COUNT)) } as usize;
         if count == 0 || count > manager::DLSS_CHOICE_LIMIT {
             return false;
@@ -414,16 +465,24 @@ unsafe fn pin_pending(platform: &AsiPlatform, manager_object: *mut c_void, quali
         };
         native_index = index;
     }
-    SELECTION.store(
-        (u64::from(native_index) << 32) | u64::from(quality),
-        Ordering::SeqCst,
-    );
-    // Only the four RSF-owned scalar fields change. No string allocation or borrowed collection
-    // copy is involved; all other pending settings survive.
+    let selection = (u64::from(native_index) << 32) | u64::from(quality);
+    let (Some(first_plan), Some(second_plan)) = (
+        plan_collection(first_values, first_vendor, selection),
+        plan_collection(second_values, second_vendor, selection),
+    ) else {
+        return false;
+    };
     unsafe {
-        own(pending.add(manager::OWNER_COLLECTION));
-        own(pending.add(manager::PENDING_SECOND_COLLECTION));
+        apply_collection(platform, first, &first_values, &first_plan, first_vendor);
+        apply_collection(
+            platform,
+            second,
+            &second_values,
+            &second_plan,
+            second_vendor,
+        );
     }
+    SELECTION.store(selection, Ordering::SeqCst);
     true
 }
 

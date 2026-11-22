@@ -9,8 +9,7 @@ passed. Binary ABI, fixture, device and game results are pending.
 
 Steam D3D11 uses a static C entry for both Rust adapters and the existing
 C++ callers. Rust owns fingerprinting, MinHook installation and the typed
-relay, while C++ guards exceptions at the foreign calls. AC7 and RDR2
-retain their XInput observation interface with a shared Rust owner.
+relay, while C++ guards exceptions at the foreign calls. AC7 uses the shared Rust XInput owner.
 Pinned binding regeneration and source checks passed. Native linking,
 Steam cold creation, Present forwarding and controller observation
 remain to be verified. [Steam continuation evidence](research/skyrim-steam-present-continuation-20261116.md)
@@ -22,6 +21,13 @@ and the public sharpening binding. Godot binds a Runtime CPU service and reports
 actual Vulkan submission and Present receipt. The export source coverage, pinned engine
 patch generation, binding regeneration and pinned formatting were checked. Build, fixture and device checks remain open.
 [Godot native control evidence](../integrations/godot/NATIVE.md#native-control-and-d3d12-follow-up)
+
+RDR2's ASI startup leaves, research-attach worker and native settings probe
+now run in Rust. Settings fixtures share the measured vectors with the
+Rust policy, and refused startup sessions retain their cleanup owner.
+The diagnostic C++ bridge and restart overlay controls remain open.
+Build, fixture and device checks are pending.
+[RDR2 startup source evidence](research/rust-rdr2-asi.md#r01-follow-up)
 
 The Unity package now routes render callbacks, admits preview and
 generation windows, and handles device events in Rust. The managed

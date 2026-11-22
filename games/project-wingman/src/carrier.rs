@@ -3,14 +3,11 @@
 use crate::windows::{fingerprint, matches_executable, module_path};
 use crate::{AMD64, EXECUTABLE, SHA256, overlay};
 use rsf_game_sys::plugin_session_abi::rsf_plugin_session_options;
+use rsf_game_sys::session::carrier_log::CarrierLog;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
 use std::ffi::{CStr, OsString, c_char, c_void};
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::windows::ffi::OsStringExt;
-use std::path::PathBuf;
 use std::ptr::null_mut;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::Foundation::{CloseHandle, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{
     DisableThreadLibraryCalls, GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
@@ -23,8 +20,7 @@ use windows_sys::core::s;
 type Prepare = unsafe extern "C" fn(*const rsf_plugin_session_options, *mut *mut c_void) -> i32;
 type Start = unsafe extern "C" fn(*mut c_void) -> i32;
 
-static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
-static LOG_WRITE: Mutex<()> = Mutex::new(());
+static LOG: CarrierLog = CarrierLog::new();
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
 struct Session {
@@ -59,20 +55,11 @@ fn path_with(prefix: &[u16], suffix: &str) -> Vec<u16> {
 }
 
 pub(crate) fn write_log(message: &[u8]) {
-    let Some(path) = LOG_PATH.get() else { return };
-    let _writer = LOG_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let tick = unsafe { GetTickCount64() };
-        let _ = write!(file, "[{tick}] ");
-        let _ = file.write_all(message);
-        let _ = file.write_all(b"\n");
-    }
+    LOG.write(unsafe { GetTickCount64() }, message);
 }
 
 pub(crate) unsafe extern "C" fn host_log(_: *mut c_void, message: *const c_char) {
-    if !message.is_null() {
-        write_log(unsafe { CStr::from_ptr(message) }.to_bytes());
-    }
+    unsafe { LOG.write_c_message(GetTickCount64(), message) };
 }
 
 #[unsafe(no_mangle)]
@@ -101,9 +88,7 @@ unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
     let parent = &module_path_utf16[..parent_end];
     let config = path_with(parent, "ReScaleFrame.ini");
     let log_path = path_with(parent, "ReScaleFrame\\project-wingman.log");
-    let _ = LOG_PATH.set(PathBuf::from(OsString::from_wide(
-        &log_path[..log_path.len() - 1],
-    )));
+    LOG.set_path(&log_path);
     write_log(b"XInput carrier started; Windows controller forwarding remains independent.");
 
     let mut executable = vec![0; 32768];
