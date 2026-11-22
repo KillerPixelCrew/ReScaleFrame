@@ -252,40 +252,7 @@ constexpr Platform platform{
 };
 }
 
-extern "C" {
-int32_t rsf_core_render_host_create(const rsf_render_host_setup*, rsf_game_host_services*, const Platform*);
-int32_t rsf_core_render_host_graphics(void*, void*);
-int32_t rsf_core_render_host_device(void*, void*);
-int32_t rsf_core_render_host_factory(void*, void*);
-uint32_t rsf_core_render_host_graphics_ready(void*);
-void* rsf_core_render_host_native_object(void*, void*);
-int32_t rsf_core_render_status_get(rsf_render_status*);
-int32_t rsf_core_render_settings_get(rsf_render_settings*);
-int32_t rsf_core_render_settings_apply(const rsf_render_settings*);
-}
-
-// The public entries stay native so the Runtime DLL and every embedded consumer keep the same
-// exported names and decorations.
-extern "C" uint32_t rsf_render_overlay_visible() { return rsf_overlay_native12_visible(); }
-extern "C" void rsf_render_overlay_toggle() { rsf_overlay_native12_toggle(); }
-extern "C" int32_t rsf_render_host_create(const rsf_render_host_setup* setup, rsf_game_host_services* services)
+extern "C" const Platform* rsf_render_host_platform()
 {
-    return rsf_core_render_host_create(setup, services, &platform);
-}
-extern "C" int32_t rsf_render_host_graphics(void* user, void* native_queue)
-{
-    return rsf_core_render_host_graphics(user, native_queue);
-}
-extern "C" int32_t rsf_render_host_device(void* user, void* device) { return rsf_core_render_host_device(user, device); }
-extern "C" int32_t rsf_render_host_factory(void* user, void* factory) { return rsf_core_render_host_factory(user, factory); }
-extern "C" uint32_t rsf_render_host_graphics_ready(void* user) { return rsf_core_render_host_graphics_ready(user); }
-extern "C" void* rsf_render_host_native_object(void* user, void* object)
-{
-    return rsf_core_render_host_native_object(user, object);
-}
-extern "C" int32_t rsf_render_status_get(rsf_render_status* output) { return rsf_core_render_status_get(output); }
-extern "C" int32_t rsf_render_settings_get(rsf_render_settings* output) { return rsf_core_render_settings_get(output); }
-extern "C" int32_t rsf_render_settings_apply(const rsf_render_settings* request)
-{
-    return rsf_core_render_settings_apply(request);
+    return &platform;
 }

@@ -779,7 +779,6 @@ fn refused_plugins_are_stopped_or_kept_for_retry() {
         events(),
         ["quiesce", "stop", "overlay stop", "dump cancel 0"]
     );
-    assert_eq!(unsafe { rsf_core_callback_host_start(&setup, null()) }, 1);
 }
 
 #[test]

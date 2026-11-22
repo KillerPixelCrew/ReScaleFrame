@@ -5,7 +5,7 @@
 //! commit, SR context lifetime, recording slots, fence retirement, scene and Present matching,
 //! the frontend status and overlay routing. render_host_platform.cpp supplies one call per
 //! D3D12, DXGI, SR12, DLSS registration, FG12, presentation bridge, overlay or observer operation
-//! and keeps the exported entry points. Settings keys and text belong to settings_store.rs,
+//! through its static leaf table. Settings keys and text belong to settings_store.rs,
 //! SR vendor selection to rsf_gpu_select_sr_backend and FG provider admission to fg_choice.rs.
 use crate::com_ref::ComRef;
 use crate::d3d12_observer::ObserverSetup;
@@ -1851,26 +1851,33 @@ unsafe fn create(setup: *const Setup, services: *mut Services, p: &'static Platf
     OK
 }
 
-// Entries behind the exported forwarders in render_host_platform.cpp.
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn rsf_render_host_platform() -> &'static Platform;
+}
 
-/// # Safety
-/// `setup` and `services` follow render_host.h; `platform` is the caller's static table.
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_render_host_create(
-    setup: *const Setup,
-    services: *mut Services,
-    platform: *const Platform,
-) -> i32 {
-    // The platform table is a static in the native library that called this entry.
-    let Some(platform): Option<&'static Platform> = (unsafe { platform.as_ref() }) else {
-        return INVALID;
-    };
+unsafe extern "C" fn rsf_render_host_create(setup: *const Setup, services: *mut Services) -> i32 {
+    let platform = unsafe { rsf_render_host_platform() };
     assert_eq!(platform.struct_size as usize, size_of::<Platform>());
     unsafe { create(setup, services, platform) }
 }
 
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_render_host_graphics(user: *mut c_void, queue: Handle) -> i32 {
+extern "C" fn rsf_render_overlay_visible() -> u32 {
+    unsafe { (rsf_render_host_platform().overlay_visible)() }
+}
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+extern "C" fn rsf_render_overlay_toggle() {
+    unsafe { (rsf_render_host_platform().overlay_toggle)() };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_render_host_graphics(user: *mut c_void, queue: Handle) -> i32 {
     let Some(host) = published(user) else {
         return INVALID;
     };
@@ -1882,7 +1889,7 @@ unsafe extern "C" fn rsf_core_render_host_graphics(user: *mut c_void, queue: Han
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_render_host_device(user: *mut c_void, device: Handle) -> i32 {
+unsafe extern "C" fn rsf_render_host_device(user: *mut c_void, device: Handle) -> i32 {
     match published(user) {
         Some(host) => match host.observer.load(Ordering::Acquire) {
             observer if !observer.is_null() => unsafe {
@@ -1895,7 +1902,7 @@ unsafe extern "C" fn rsf_core_render_host_device(user: *mut c_void, device: Hand
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_render_host_factory(user: *mut c_void, factory: Handle) -> i32 {
+unsafe extern "C" fn rsf_render_host_factory(user: *mut c_void, factory: Handle) -> i32 {
     match published(user) {
         Some(host) => match host.observer.load(Ordering::Acquire) {
             observer if !observer.is_null() => unsafe {
@@ -1908,17 +1915,14 @@ unsafe extern "C" fn rsf_core_render_host_factory(user: *mut c_void, factory: Ha
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_render_host_graphics_ready(user: *mut c_void) -> u32 {
+extern "C" fn rsf_render_host_graphics_ready(user: *mut c_void) -> u32 {
     published(user).map_or(0, |host| {
         u32::from(host.graphics_ready.load(Ordering::Acquire))
     })
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_render_host_native_object(
-    user: *mut c_void,
-    object: Handle,
-) -> Handle {
+unsafe extern "C" fn rsf_render_host_native_object(user: *mut c_void, object: Handle) -> Handle {
     match published(user) {
         Some(host) if !object.is_null() => unsafe { (host.p.native_object)(object) },
         _ => null_mut(),
@@ -1928,7 +1932,7 @@ unsafe extern "C" fn rsf_core_render_host_native_object(
 /// # Safety
 /// `output` is null or readable for its leading `struct_size`.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_render_status_get(output: *mut Status) -> i32 {
+unsafe extern "C" fn rsf_render_status_get(output: *mut Status) -> i32 {
     if output.is_null() || unsafe { output.cast::<u32>().read() } < size_of::<Status>() as u32 {
         return INVALID;
     }
@@ -1950,7 +1954,7 @@ unsafe extern "C" fn rsf_core_render_status_get(output: *mut Status) -> i32 {
 /// # Safety
 /// `output` is null or readable for its leading `struct_size`.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_render_settings_get(output: *mut Settings) -> i32 {
+unsafe extern "C" fn rsf_render_settings_get(output: *mut Settings) -> i32 {
     if output.is_null() || unsafe { output.cast::<u32>().read() } < size_of::<Settings>() as u32 {
         return INVALID;
     }
@@ -1972,7 +1976,7 @@ unsafe extern "C" fn rsf_core_render_settings_get(output: *mut Settings) -> i32 
 /// # Safety
 /// `request` is null or readable for its leading `struct_size`.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_render_settings_apply(request: *const Settings) -> i32 {
+unsafe extern "C" fn rsf_render_settings_apply(request: *const Settings) -> i32 {
     if request.is_null() || unsafe { request.cast::<u32>().read() } < size_of::<Settings>() as u32 {
         return INVALID;
     }

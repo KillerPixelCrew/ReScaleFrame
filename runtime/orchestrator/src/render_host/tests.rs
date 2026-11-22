@@ -1125,33 +1125,33 @@ fn latency_and_observer_submissions_reach_their_owners() {
 #[test]
 fn published_entries_refuse_foreign_users_and_short_structures() {
     let mut status: Status = Status::default();
-    assert_eq!(unsafe { rsf_core_render_status_get(null_mut()) }, INVALID);
+    assert_eq!(unsafe { rsf_render_status_get(null_mut()) }, INVALID);
     status.struct_size = 8;
-    assert_eq!(unsafe { rsf_core_render_status_get(&mut status) }, INVALID);
+    assert_eq!(unsafe { rsf_render_status_get(&mut status) }, INVALID);
     let mut settings: Settings = unsafe { std::mem::zeroed() };
     settings.struct_size = size_of::<Settings>() as u32;
     settings.abi_version = RSF_RENDER_FRONTEND_ABI_VERSION + 1;
     assert_eq!(
-        unsafe { rsf_core_render_settings_get(&mut settings) },
+        unsafe { rsf_render_settings_get(&mut settings) },
         ABI_MISMATCH
     );
     assert_eq!(
-        unsafe { rsf_core_render_settings_apply(&settings) },
+        unsafe { rsf_render_settings_apply(&settings) },
         ABI_MISMATCH
     );
     let stranger = 0x1234 as Handle;
     assert_eq!(
-        unsafe { rsf_core_render_host_graphics(stranger, stranger) },
+        unsafe { rsf_render_host_graphics(stranger, stranger) },
         INVALID
     );
     assert_eq!(
-        unsafe { rsf_core_render_host_device(stranger, stranger) },
+        unsafe { rsf_render_host_device(stranger, stranger) },
         NOT_READY
     );
     assert_eq!(
-        unsafe { rsf_core_render_host_factory(stranger, stranger) },
+        unsafe { rsf_render_host_factory(stranger, stranger) },
         NOT_READY
     );
-    assert_eq!(rsf_core_render_host_graphics_ready(stranger), 0);
-    assert!(unsafe { rsf_core_render_host_native_object(stranger, stranger) }.is_null());
+    assert_eq!(rsf_render_host_graphics_ready(stranger), 0);
+    assert!(unsafe { rsf_render_host_native_object(stranger, stranger) }.is_null());
 }

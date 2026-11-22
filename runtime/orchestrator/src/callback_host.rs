@@ -1058,20 +1058,18 @@ fn stop() -> u32 {
     0
 }
 
-/// # Safety
-/// `setup` is null or readable for its leading struct_size; `platform` is the static leaf table.
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn rsf_callback_host_platform() -> &'static Platform;
+}
+
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_callback_host_start(
-    setup: *const Setup,
-    platform: *const Platform,
-) -> u32 {
-    if platform.is_null() {
-        return 1;
-    }
-    unsafe { start(setup, &*platform) }
+unsafe extern "C" fn rsf_callback_host_start(setup: *const Setup) -> u32 {
+    unsafe { start(setup, rsf_callback_host_platform()) }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_callback_host_stop() -> u32 {
+extern "C" fn rsf_callback_host_stop() -> u32 {
     stop()
 }

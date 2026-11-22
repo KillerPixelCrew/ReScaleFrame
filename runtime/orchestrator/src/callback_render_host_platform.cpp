@@ -171,15 +171,7 @@ constexpr Platform platform{
 };
 }
 
-extern "C" {
-uint32_t rsf_core_callback_host_start(const rsf_callback_host_setup*, const Platform*);
-uint32_t rsf_core_callback_host_stop(void);
-}
-
-// The public entries stay native so the Runtime DLL and every embedded consumer keep the same
-// exported names and decorations.
-extern "C" uint32_t rsf_callback_host_start(const rsf_callback_host_setup* setup)
+extern "C" const Platform* rsf_callback_host_platform()
 {
-    return rsf_core_callback_host_start(setup, &platform);
+    return &platform;
 }
-extern "C" uint32_t rsf_callback_host_stop(void) { return rsf_core_callback_host_stop(); }
