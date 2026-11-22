@@ -297,13 +297,13 @@ Port frame assembly, generation selection and leased inputs while preserving fra
 
 **Fixtures (9)**
 
-- [ ] [tests/d3d11_fg_api.cpp](tests/d3d11_fg_api.cpp)
+- [x] [tests/d3d11_fg_api.cpp](tests/d3d11_fg_api.cpp)
 - [x] [tests/fg_choice.cpp](tests/fg_choice.cpp)
 - [x] [tests/fg_leases.cpp](tests/fg_leases.cpp)
 - [x] [tests/fg_leases_faults.cpp](tests/fg_leases_faults.cpp)
-- [ ] [tests/fg_provider.cpp](tests/fg_provider.cpp)
-- [ ] [tests/fg_session.cpp](tests/fg_session.cpp)
-- [ ] [tests/fg_switching.cpp](tests/fg_switching.cpp)
+- [x] [tests/fg_provider.cpp](tests/fg_provider.cpp)
+- [x] [tests/fg_session.cpp](tests/fg_session.cpp)
+- [x] [tests/fg_switching.cpp](tests/fg_switching.cpp)
 - [x] [tests/frame_assembly.cpp](tests/frame_assembly.cpp)
 - [x] [tests/gpu_policy.cpp](tests/gpu_policy.cpp)
 
