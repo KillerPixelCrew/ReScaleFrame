@@ -2,7 +2,7 @@
 //! Unity's Vulkan resolver: the resolver keys and their separate instance and device routes, the
 //! interceptors native code registers at initialization, the loader functions they replace, the
 //! Win32 interop device-extension selection and the interop readiness of the created device.
-//! Native leaves keep the Vulkan types and perform the typed loader, enumeration and create calls.
+//! Native code supplies stateless Vulkan loader entry points and the swapchain and surface hooks.
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::slice;
@@ -48,7 +48,7 @@ const INTEROP_FUNCTIONS: [&CStr; 2] = [
 
 const EXTENSION_NAME_SIZE: usize = 256;
 
-/// VkExtensionProperties, which vulkan_bridge.cpp checks against the same size.
+/// VkExtensionProperties from the Vulkan SDK.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct ExtensionProperties {
@@ -71,11 +71,52 @@ impl ExtensionProperties {
 }
 
 type Function = unsafe extern "system" fn();
-type Enumerate = unsafe extern "C" fn(*mut c_void, *mut u32, *mut ExtensionProperties) -> i32;
-type Create =
-    unsafe extern "C" fn(*mut c_void, Function, *const *const c_char, u32, *mut *mut c_void) -> i32;
-type Resolves = unsafe extern "C" fn(*mut c_void, *const c_char) -> bool;
-type ResolveDevice = unsafe extern "C" fn(*mut c_void, *const c_char) -> Option<Function>;
+type Lookup = unsafe extern "system" fn(*mut c_void, *const c_char) -> Option<Function>;
+type Enumerate = unsafe extern "system" fn(
+    *mut c_void,
+    *const c_char,
+    *mut u32,
+    *mut ExtensionProperties,
+) -> i32;
+type CreateDevice = unsafe extern "system" fn(
+    *mut c_void,
+    *const DeviceCreateInfo,
+    *const c_void,
+    *mut *mut c_void,
+) -> i32;
+
+/// VkDeviceCreateInfo, verified against bindgen 0.72.1 and the Windows x64 Vulkan SDK.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DeviceCreateInfo {
+    kind: i32,
+    next: *const c_void,
+    flags: u32,
+    queue_count: u32,
+    queues: *const c_void,
+    layer_count: u32,
+    layers: *const *const c_char,
+    extension_count: u32,
+    extensions: *const *const c_char,
+    features: *const c_void,
+}
+const _: () = assert!(
+    size_of::<DeviceCreateInfo>() == 72
+        && std::mem::offset_of!(DeviceCreateInfo, extension_count) == 48
+        && std::mem::offset_of!(DeviceCreateInfo, extensions) == 56
+);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NativeHooks {
+    create_swapchain: Function,
+    destroy_swapchain: Function,
+    present: Function,
+    create_surface: Function,
+    destroy_surface: Function,
+    device_proc: Lookup,
+    enumerate: Enumerate,
+}
 
 struct Resolver {
     /// Native interceptors by slot, published with the loader's instance resolver. FORWARD has none.
@@ -84,6 +125,7 @@ struct Resolver {
     originals: [Option<Function>; SLOTS],
     /// The device created with both interop extensions in its request.
     interop_device: usize,
+    native: Option<NativeHooks>,
 }
 
 static RESOLVER: Mutex<Resolver> = Mutex::new(Resolver::NEW);
@@ -100,6 +142,7 @@ fn route(name: &CStr, from_instance: bool) -> u32 {
     }
 }
 
+#[cfg(test)]
 fn key(slot: u32) -> Option<&'static CStr> {
     KEYS.iter()
         .find(|(candidate, _)| *candidate == slot)
@@ -111,6 +154,7 @@ impl Resolver {
         interceptors: [None; SLOTS],
         originals: [None; SLOTS],
         interop_device: 0,
+        native: None,
     };
 
     /// The initialization route. A null loader resolver or an incomplete table leaves Unity on its
@@ -156,68 +200,89 @@ impl Resolver {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vk_bind_resolver(
-    original: Option<Function>,
-    interceptors: *const Option<Function>,
-    count: u32,
-) -> Option<Function> {
-    let table = if interceptors.is_null() {
-        &[]
-    } else {
-        // The native table is a constant array of count entries.
-        unsafe { slice::from_raw_parts(interceptors, count as usize) }
+unsafe extern "C" fn rsf_unity_vk_install(
+    original: Option<Lookup>,
+    hooks: *const NativeHooks,
+) -> Option<Lookup> {
+    let original = original?;
+    let Some(&native) = (unsafe { hooks.as_ref() }) else {
+        return Some(original);
     };
-    resolver().bind(original, table)
+    // Vulkan defines PFN_vkVoidFunction for transport of any Vulkan function pointer.
+    let cast = |lookup: Lookup| unsafe { std::mem::transmute::<Lookup, Function>(lookup) };
+    let table = [
+        None,
+        Some(cast(get_instance_proc)),
+        Some(cast(get_device_proc)),
+        Some(unsafe { std::mem::transmute::<CreateDevice, Function>(intercept_create_device) }),
+        Some(native.create_swapchain),
+        Some(native.destroy_swapchain),
+        Some(native.present),
+        Some(native.create_surface),
+        Some(native.destroy_surface),
+    ];
+    let mut state = resolver();
+    state.native = Some(native);
+    let _ = state.bind(Some(cast(original)), &table);
+    Some(get_instance_proc)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_vk_instance_command(
+    instance: *mut c_void,
+    name: *const c_char,
+) -> Option<Function> {
+    let original = resolver().original(INSTANCE_PROC)?;
+    let lookup = unsafe { std::mem::transmute::<Function, Lookup>(original) };
+    unsafe { lookup(instance, name) }
 }
 
 /// Unity lends a NUL-terminated loader name, or null, for the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vk_resolver_resolve(
+unsafe extern "system" fn get_instance_proc(
+    instance: *mut c_void,
     name: *const c_char,
-    original: Option<Function>,
-    from_instance: bool,
 ) -> Option<Function> {
-    let name = (!name.is_null()).then(|| unsafe { CStr::from_ptr(name) });
-    resolver().resolve(name, original, from_instance)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vk_resolver_original(slot: u32) -> Option<Function> {
-    resolver().original(slot)
-}
-
-/// Look up a device command on the device supplied by its caller, outside the state mutex.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vk_resolver_device_function(
-    slot: u32,
-    device: *mut c_void,
-    resolve: ResolveDevice,
-) -> Option<Function> {
-    let name = key(slot)?;
-    if device.is_null() || !matches!(slot, CREATE_SWAPCHAIN | DESTROY_SWAPCHAIN | PRESENT) {
+    if name.is_null() {
         return None;
     }
-    unsafe { resolve(device, name.as_ptr()) }
+    let original = unsafe { rsf_unity_vk_instance_command(instance, name) };
+    resolver().resolve(Some(unsafe { CStr::from_ptr(name) }), original, true)
+}
+
+unsafe extern "system" fn get_device_proc(
+    device: *mut c_void,
+    name: *const c_char,
+) -> Option<Function> {
+    if name.is_null() {
+        return None;
+    }
+    let native = resolver().native?;
+    let original = unsafe { (native.device_proc)(device, name) };
+    resolver().resolve(Some(unsafe { CStr::from_ptr(name) }), original, false)
 }
 
 /// The recorded request short-circuits the lookups, which run in order outside the lock.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vk_interop_ready(device: *mut c_void, resolves: Resolves) -> bool {
-    let requested = !device.is_null() && resolver().interop_device == device as usize;
-    requested || unsafe { functions_resolve(device, resolves) }
+unsafe extern "C" fn rsf_unity_vk_interop_ready(device: *mut c_void, lookup: Lookup) -> bool {
+    if device.is_null() {
+        return false;
+    }
+    let requested = resolver().interop_device == device as usize;
+    requested || functions_resolve(|name| unsafe { lookup(device, name.as_ptr()) }.is_some())
 }
 
-unsafe fn functions_resolve(device: *mut c_void, resolves: Resolves) -> bool {
-    INTEROP_FUNCTIONS
-        .iter()
-        .all(|name| unsafe { resolves(device, name.as_ptr()) })
+fn functions_resolve(resolves: impl FnMut(&CStr) -> bool) -> bool {
+    INTEROP_FUNCTIONS.into_iter().all(resolves)
 }
 
 /// Whether the physical device offers every required name. The two-call enumeration fails on an
 /// unsuccessful query, a failed allocation or a second count above the first.
-unsafe fn available(context: *mut c_void, enumerate: Enumerate, required: &[&CStr]) -> bool {
+fn available(
+    mut enumerate: impl FnMut(*mut u32, *mut ExtensionProperties) -> i32,
+    required: &[&CStr],
+) -> bool {
     let mut count = 0;
-    if unsafe { enumerate(context, &mut count, ptr::null_mut()) } != SUCCESS {
+    if enumerate(&mut count, ptr::null_mut()) != SUCCESS {
         return false;
     }
     let mut properties = Vec::new();
@@ -231,9 +296,7 @@ unsafe fn available(context: *mut c_void, enumerate: Enumerate, required: &[&CSt
     } else {
         properties.as_mut_ptr()
     };
-    if unsafe { enumerate(context, &mut count, target) } != SUCCESS
-        || count as usize > properties.len()
-    {
+    if enumerate(&mut count, target) != SUCCESS || count as usize > properties.len() {
         return false;
     }
     properties.truncate(count as usize);
@@ -265,48 +328,55 @@ unsafe fn merge(supplied: &[*const c_char]) -> Option<Vec<*const c_char>> {
     Some(extensions)
 }
 
-/// The native caller lends the engine request and its extension names until creation returns.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vk_resolver_create_device(
-    names: *const *const c_char,
-    count: u32,
-    context: *mut c_void,
-    enumerate: Enumerate,
-    create: Create,
+/// Unity lends the native create request and its borrowed pointers until the driver returns.
+unsafe extern "system" fn intercept_create_device(
+    physical: *mut c_void,
+    info: *const DeviceCreateInfo,
+    allocator: *const c_void,
+    output: *mut *mut c_void,
 ) -> i32 {
-    let Some(original) = rsf_unity_vk_resolver_original(CREATE_DEVICE) else {
+    let (original, native) = {
+        let state = resolver();
+        (state.original(CREATE_DEVICE), state.native)
+    };
+    let (Some(original), Some(native), Some(info)) = (original, native, unsafe { info.as_ref() })
+    else {
         return INITIALIZATION_FAILED;
     };
-    let supplied = if count == 0 {
+    if output.is_null() {
+        return INITIALIZATION_FAILED;
+    }
+    let supplied = if info.extension_count == 0 {
         &[]
-    } else if names.is_null() {
+    } else if info.extensions.is_null() {
         return INITIALIZATION_FAILED;
     } else {
-        unsafe { slice::from_raw_parts(names, count as usize) }
+        unsafe { slice::from_raw_parts(info.extensions, info.extension_count as usize) }
     };
-    let interop = unsafe { available(context, enumerate, &INTEROP) };
-    let mut device = ptr::null_mut();
+    let create = unsafe { std::mem::transmute::<Function, CreateDevice>(original) };
+    let interop = available(
+        |count, properties| unsafe { (native.enumerate)(physical, ptr::null(), count, properties) },
+        &INTEROP,
+    );
     let result = if interop {
         let Some(extensions) = (unsafe { merge(supplied) }) else {
             return OUT_OF_HOST_MEMORY;
         };
-        unsafe {
-            create(
-                context,
-                original,
-                extensions.as_ptr(),
-                extensions.len() as u32,
-                &mut device,
-            )
-        }
+        let configured = DeviceCreateInfo {
+            extension_count: extensions.len() as u32,
+            extensions: extensions.as_ptr(),
+            ..*info
+        };
+        unsafe { create(physical, &configured, allocator, output) }
     } else {
-        unsafe { create(context, original, ptr::null(), 0, &mut device) }
+        unsafe { create(physical, info, allocator, output) }
     };
-    if result == SUCCESS && !device.is_null() {
+    if result == SUCCESS && !unsafe { *output }.is_null() {
+        let device = unsafe { *output } as usize;
         let mut state = resolver();
         if interop {
-            state.interop_device = device as usize;
-        } else if state.interop_device == device as usize {
+            state.interop_device = device;
+        } else if state.interop_device == device {
             state.interop_device = 0;
         }
     }
@@ -411,7 +481,10 @@ mod tests {
 
     #[test]
     fn device_resolutions_keep_the_continuation_on_its_dispatch_owner() {
-        unsafe extern "C" fn lookup(device: *mut c_void, _: *const c_char) -> Option<Function> {
+        unsafe extern "system" fn lookup(
+            device: *mut c_void,
+            _: *const c_char,
+        ) -> Option<Function> {
             match device as usize {
                 1 => Some(loader),
                 2 => Some(other_loader),
@@ -426,10 +499,9 @@ mod tests {
         assert_eq!(address(state.original(DESTROY_SWAPCHAIN)), None);
         for (owner, expected) in [(1, loader as Function), (2, other_loader as Function)] {
             let continuation = unsafe {
-                rsf_unity_vk_resolver_device_function(
-                    DESTROY_SWAPCHAIN,
+                lookup(
                     ptr::without_provenance_mut(owner),
-                    lookup,
+                    key(DESTROY_SWAPCHAIN).unwrap().as_ptr(),
                 )
             };
             assert_eq!(address(continuation), Some(expected as usize));
@@ -481,7 +553,10 @@ mod tests {
 
     fn offered(mut enumeration: Enumeration) -> (bool, Vec<(u32, bool)>) {
         let context = ptr::from_mut(&mut enumeration).cast();
-        let result = unsafe { available(context, enumerate, &INTEROP) };
+        let result = available(
+            |count, properties| unsafe { enumerate(context, count, properties) },
+            &INTEROP,
+        );
         (result, enumeration.calls)
     }
 
@@ -549,7 +624,10 @@ mod tests {
         for (found, made) in [(0, 1), (1, 2), (2, 2)] {
             let mut lookups: (Vec<Vec<u8>>, usize) = (Vec::new(), found);
             let device = ptr::from_mut(&mut lookups).cast();
-            assert_eq!(unsafe { functions_resolve(device, resolves) }, found == 2);
+            assert_eq!(
+                functions_resolve(|name| unsafe { resolves(device, name.as_ptr()) }),
+                found == 2
+            );
             assert_eq!(lookups.0.len(), made);
             assert_eq!(lookups.0[0], b"vkImportSemaphoreWin32HandleKHR");
             if made == 2 {
