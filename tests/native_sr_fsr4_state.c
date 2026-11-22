@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-extern "C" int rsf_fixture_fsr4sr_state();
+int rsf_fixture_fsr4sr_state(void);
 
-int main() {
+int main(void) {
     return rsf_fixture_fsr4sr_state();
 }

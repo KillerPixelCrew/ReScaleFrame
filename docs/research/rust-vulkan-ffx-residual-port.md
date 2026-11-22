@@ -39,3 +39,8 @@ The generated SDK layouts use bindgen 0.72.1 and pinned FidelityFX revisions
 Rust 1.94.1 formatting, locked offline Cargo metadata and Git whitespace
 checks were completed. Compilation, linking, fixture execution, lint and device
 verification remain pending.
+
+The synthetic SR state fixture uses a C11 entry with the same CTest target
+and Rust scenario owner. Strict MinGW C11 syntax passed for that entry and
+five retained declaration headers. Native Vulkan/SDK glue and real-device
+verification remain pending.

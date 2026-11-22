@@ -1550,11 +1550,11 @@ Port the FSR3 and FSR4 bridge owners, private ABI and SDK patch payloads alongsi
 **Port files (22)**
 
 - [ ] [runtime/orchestrator/src/native_fg_fsr4_vulkan.cpp](runtime/orchestrator/src/native_fg_fsr4_vulkan.cpp)
-- [ ] [runtime/orchestrator/src/native_fg_fsr4_vulkan.h](runtime/orchestrator/src/native_fg_fsr4_vulkan.h)
+- [x] [runtime/orchestrator/src/native_fg_fsr4_vulkan.h](runtime/orchestrator/src/native_fg_fsr4_vulkan.h)
 - [ ] [runtime/orchestrator/src/native_fg_fsr4_vulkan_platform.h](runtime/orchestrator/src/native_fg_fsr4_vulkan_platform.h)
 - [ ] [runtime/orchestrator/src/native_sr_fsr4_vulkan.cpp](runtime/orchestrator/src/native_sr_fsr4_vulkan.cpp)
-- [ ] [runtime/orchestrator/src/native_sr_fsr4_vulkan.h](runtime/orchestrator/src/native_sr_fsr4_vulkan.h)
-- [ ] [runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h](runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h)
+- [x] [runtime/orchestrator/src/native_sr_fsr4_vulkan.h](runtime/orchestrator/src/native_sr_fsr4_vulkan.h)
+- [x] [runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h](runtime/orchestrator/src/native_sr_fsr4_vulkan_platform.h)
 - [x] [runtime/vulkan/fsr3/bridge.cpp](runtime/vulkan/fsr3/bridge.cpp)
 - [x] [runtime/vulkan/fsr3/bridge_platform.h](runtime/vulkan/fsr3/bridge_platform.h)
 - [ ] [runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json](runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json) (C++ edits applied to the FidelityFX SDK)
@@ -1565,11 +1565,11 @@ Port the FSR3 and FSR4 bridge owners, private ABI and SDK patch payloads alongsi
 - [ ] [runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.json](runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.json) (C++ edits applied to the FidelityFX SDK)
 - [ ] [runtime/vulkan/fsr3/wsi-dispatch.h](runtime/vulkan/fsr3/wsi-dispatch.h)
 - [ ] [runtime/vulkan/fsr4-fg/bridge.cpp](runtime/vulkan/fsr4-fg/bridge.cpp)
-- [ ] [runtime/vulkan/fsr4-fg/bridge_api.h](runtime/vulkan/fsr4-fg/bridge_api.h)
+- [x] [runtime/vulkan/fsr4-fg/bridge_api.h](runtime/vulkan/fsr4-fg/bridge_api.h)
 - [x] [runtime/vulkan/fsr4-fg/bridge_contract.h](runtime/vulkan/fsr4-fg/bridge_contract.h)
 - [ ] [runtime/vulkan/fsr4-fg/bridge_platform.h](runtime/vulkan/fsr4-fg/bridge_platform.h)
 - [ ] [runtime/vulkan/fsr4/bridge.cpp](runtime/vulkan/fsr4/bridge.cpp)
-- [ ] [runtime/vulkan/fsr4/bridge_api.h](runtime/vulkan/fsr4/bridge_api.h)
+- [x] [runtime/vulkan/fsr4/bridge_api.h](runtime/vulkan/fsr4/bridge_api.h)
 - [ ] [runtime/vulkan/fsr4/bridge_platform.h](runtime/vulkan/fsr4/bridge_platform.h)
 
 **Fixtures (5)**
@@ -1577,7 +1577,7 @@ Port the FSR3 and FSR4 bridge owners, private ABI and SDK patch payloads alongsi
 - [x] [tests/native_fsr4_fg_bridge.cpp](tests/native_fsr4_fg_bridge.cpp)
 - [x] [tests/native_fsr4_fg_contract.cpp](tests/native_fsr4_fg_contract.cpp)
 - [ ] [tests/native_fsr4_fg_state.cpp](tests/native_fsr4_fg_state.cpp)
-- [ ] [tests/native_sr_fsr4_state.cpp](tests/native_sr_fsr4_state.cpp)
+- [x] [tests/native_sr_fsr4_state.cpp](tests/native_sr_fsr4_state.cpp)
 - [ ] [tests/native_sr_fsr4_vulkan.cpp](tests/native_sr_fsr4_vulkan.cpp)
 
 **Rust review findings (13)**
