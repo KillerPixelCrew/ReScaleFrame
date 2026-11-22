@@ -1638,7 +1638,7 @@ Port XeSS Vulkan requirements, frame generation and present/capture handling for
 
 **Fixtures (3)**
 
-- [ ] [tests/native_fg_xess_vulkan_interop.cpp](tests/native_fg_xess_vulkan_interop.cpp)
+- [x] [tests/native_fg_xess_vulkan_interop.cpp](tests/native_fg_xess_vulkan_interop.cpp)
 - [ ] [tests/native_fg_xess_vulkan_present.cpp](tests/native_fg_xess_vulkan_present.cpp)
 - [ ] [tests/native_xess_vulkan.cpp](tests/native_xess_vulkan.cpp)
 

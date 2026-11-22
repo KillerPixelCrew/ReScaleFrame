@@ -143,3 +143,7 @@ Cargo metadata, and whitespace and source ordering comparisons. Full
 workspace binding generation with IDA's libclang hit a bindgen panic in the
 V05 fixture header. Scoped V06 regeneration succeeded. Device, game, build,
 test and Clippy verification were outside the requested scope.
+
+The interop executable now uses a C11 UTF-16 CRT launcher. The existing C++
+Present fixture source keeps the target linker and SDK calls. Strict C11
+syntax and all-feature locked Windows metadata passed. Execution remains open.
