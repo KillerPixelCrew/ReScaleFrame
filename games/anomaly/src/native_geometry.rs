@@ -6,6 +6,9 @@
 mod coverage;
 #[cfg(windows)]
 mod fixture;
+#[cfg(windows)]
+mod fixture_abi;
+mod hook_sites;
 mod scopes;
 #[cfg(test)]
 mod tests;

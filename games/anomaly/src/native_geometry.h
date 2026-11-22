@@ -199,6 +199,6 @@ bool geometry_hooks_active() noexcept;
 void geometry_retire_all() noexcept; // Device/session teardown. Generation never resets.
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING
 void geometry_test_bind_module(std::byte*, const BuildProfile&) noexcept;
-bool geometry_test_seed(std::byte*, const BuildProfile&) noexcept;
+bool geometry_test_guard_lifecycle(std::byte*, const BuildProfile&, const BuildProfile& other) noexcept;
 #endif
 }

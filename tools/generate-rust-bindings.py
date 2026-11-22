@@ -423,6 +423,10 @@ generate("games/anomaly/src/fg_stage_abi.rs", "games/anomaly/src/fg_stage_platfo
           "--raw-line", "type rsf_fg_mode = u32;",
           "--raw-line", "type rsf_reflex_mode = u32;",
           "--raw-line", "type rsf_pacing_owner = u32;"])
+generate("games/anomaly/src/native_geometry/fixture_abi.rs",
+         "games/anomaly/src/native_geometry/fixture_platform.h",
+         "rsf_test_anomaly_geometry_(scenario|hooks|contract)", "NOTHING", [],
+         ["--no-recursive-allowlist"])
 generate("games/anomaly/src/geometry_registry_abi.rs", "games/anomaly/src/geometry_registry_platform.h",
          "rsf_anomaly_geometry_(draw|key|probe|retired)",
          "RSF_ANOMALY_(VISUAL_.*|PASS_SHADOW|TYPE_(SKELETON_.*|TREE_.*)|DRAW_(IDENTIFIED.*|IGNORED_.*|UNIDENTIFIED_.*))", [],

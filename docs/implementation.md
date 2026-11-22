@@ -1184,6 +1184,12 @@ exact profile banks, the Standard and AVX native fixture entry points,
 and the SR and FG stage selection were preserved. Source checks passed.
 [Remaining geometry source and fixtures](research/rust-anomaly-native-geometry.md#remaining-geometry-source-and-fixtures)
 
+Rust now drives the native geometry fixture scenarios, including the
+Standard and AVX guarded install and release sequences. It also builds
+the exact-profile detour records and transfers staged vertex constants
+through the guarded native leaf. Source and MSVC syntax-only checks
+passed. [Rust fixture orchestration and hook plans](research/rust-anomaly-native-geometry.md#rust-fixture-orchestration-and-hook-plans)
+
 Anomaly's Rust geometry owner now distinguishes owned and borrowed
 child ranges before model reuse and retirement. The selected profile
 and guarded memory reads remain native. The expanded geometry fixture

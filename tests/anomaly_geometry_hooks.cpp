@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "native_geometry.h"
+#include "anomaly_geometry_fixture.h"
 #include "anomaly_build_select.h"
 #include "native_hooks.h"
 #ifndef NOMINMAX
@@ -230,6 +231,22 @@ std::uint64_t cell(const GeometryCoverage& c, DrawPass pass, VisualType type, Dr
     return c.draws[static_cast<std::size_t>(pass)][static_cast<std::size_t>(type)][static_cast<std::size_t>(verdict)];
 }
 }
+static std::byte* allocate_fixture_image(std::uint32_t size)
+{
+    // Production installation path, using guarded code copied into an executable-memory fixture.
+    // No game code is executed, no game process or installation is modified.
+    auto image = static_cast<std::byte*>(VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    CHECK(image);
+    auto fixture_dos = reinterpret_cast<IMAGE_DOS_HEADER*>(image);
+    fixture_dos->e_magic = IMAGE_DOS_SIGNATURE;
+    fixture_dos->e_lfanew = 0x80;
+    auto fixture_pe = reinterpret_cast<IMAGE_NT_HEADERS64*>(image + fixture_dos->e_lfanew);
+    fixture_pe->Signature = IMAGE_NT_SIGNATURE;
+    fixture_pe->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
+    fixture_pe->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    fixture_pe->OptionalHeader.SizeOfImage = size;
+    return image;
+}
 int main(int argc, char** argv)
 {
     const auto& build = testing::selected_build(argc, argv);
@@ -295,471 +312,466 @@ int main(int argc, char** argv)
     const auto tree_st = reinterpret_cast<Render>(fixtures[12]);
     const auto tree_pm = reinterpret_cast<Render>(fixtures[13]);
     const auto detail_render = reinterpret_cast<Unary>(fixtures[14]);
-    CHECK(create(&owner, expected_name, expected_reader) == visual.data());
-    CHECK(duplicate(&owner, visual.data()) == duplicate_visual.data());
-    {
-        DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
-        render(child.data(), 0.375f);
-    }
-    const auto first_generation = observed_generation;
+    std::vector<DrawCapture> sunk;
     std::array<std::byte, 256> parent{};
     std::array<std::byte, 65 * 168> bone{};
-    const auto parent_pointer = parent.data();
-    const auto bone_pointer = bone.data();
-    std::memcpy(parent.data() + 208, &bone_pointer, sizeof(bone_pointer));
-    const auto check_skin = [&](std::size_t index, std::size_t offset, float lod, float translation) {
-        const std::uint16_t mode = 2;
-        const std::uint32_t count = index == 4 ? 1 : 65;
-        std::memcpy(child.data() + offset + 8, &parent_pointer, sizeof(parent_pointer));
-        std::memcpy(child.data() + offset + 56, &mode, sizeof(mode));
-        std::memcpy(child.data() + offset + 60, &count, sizeof(count));
-        float transform[16];
-        std::memcpy(transform, world, sizeof(transform));
-        for (std::uint32_t i = 0; i < count; ++i) {
-            transform[12] = translation + static_cast<float>(i);
-            std::memcpy(bone.data() + i * 168 + 64, transform, sizeof(transform));
+    const auto run_lifecycle = [&] {
+        // Prime the typed fixture trampolines.
+        CHECK(create(&owner, expected_name, expected_reader) == visual.data());
+        CHECK(duplicate(&owner, visual.data()) == duplicate_visual.data());
+        {
+            DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
+            render(child.data(), 0.375f);
         }
-        reinterpret_cast<Render>(fixtures[index])(child.data(), lod);
+        const auto first_generation = observed_generation;
+        const auto parent_pointer = parent.data();
+        const auto bone_pointer = bone.data();
+        std::memcpy(parent.data() + 208, &bone_pointer, sizeof(bone_pointer));
+        const auto check_skin = [&](std::size_t index, std::size_t offset, float lod, float translation) {
+            const std::uint16_t mode = 2;
+            const std::uint32_t count = index == 4 ? 1 : 65;
+            std::memcpy(child.data() + offset + 8, &parent_pointer, sizeof(parent_pointer));
+            std::memcpy(child.data() + offset + 56, &mode, sizeof(mode));
+            std::memcpy(child.data() + offset + 60, &count, sizeof(count));
+            float transform[16];
+            std::memcpy(transform, world, sizeof(transform));
+            for (std::uint32_t i = 0; i < count; ++i) {
+                transform[12] = translation + static_cast<float>(i);
+                std::memcpy(bone.data() + i * 168 + 64, transform, sizeof(transform));
+            }
+            reinterpret_cast<Render>(fixtures[index])(child.data(), lod);
+        };
+        check_skin(4, 160, 0.625f, 456);
+        check_skin(5, 208, 0.875f, 789);
+        // A bad affine lane in the second batch discards all 64 earlier matrices.
+        const float bad_lane = std::numeric_limits<float>::quiet_NaN();
+        std::memcpy(bone.data() + 64 * 168 + 64, &bad_lane, sizeof(bad_lane));
+        valid_pm_palette = false;
+        reinterpret_cast<Render>(fixtures[5])(child.data(), 0.875f);
+        void* pointer = visual.data();
+        destroy(&owner, &pointer, 0x12345678);
+        CHECK(!pointer && !borrow_draw());
+        CHECK(create(&owner, expected_name, expected_reader) == visual.data());
+        {
+            DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
+            render(child.data(), 0.375f);
+        }
+        CHECK(observed_generation > first_generation);
     };
-    check_skin(4, 160, 0.625f, 456);
-    check_skin(5, 208, 0.875f, 789);
-    // A bad affine lane in the second batch discards all 64 earlier matrices.
-    const float bad_lane = std::numeric_limits<float>::quiet_NaN();
-    std::memcpy(bone.data() + 64 * 168 + 64, &bad_lane, sizeof(bad_lane));
-    valid_pm_palette = false;
-    reinterpret_cast<Render>(fixtures[5])(child.data(), 0.875f);
-    void* pointer = visual.data();
-    destroy(&owner, &pointer, 0x12345678);
-    CHECK(!pointer && !borrow_draw());
-    CHECK(create(&owner, expected_name, expected_reader) == visual.data());
-    {
-        DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
-        render(child.data(), 0.375f);
-    }
-    CHECK(observed_generation > first_generation);
 
-    // Draw-time call site: the hooked CBackend::constants.flush reaches capture_current_draw for an identified
-    // main-pass draw and hands the copy to the sink. The registered visual stays child.data().
-    std::vector<DrawCapture> sunk;
-    geometry_set_draw_sink({&sunk, &collect_draw});
-    call_flush = true;
-    {
-        const auto before = geometry_coverage();
-        const auto calls_before = flush_calls;
-        DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
-        render(child.data(), 0.375f);
-        const auto after = geometry_coverage();
-        CHECK(flush_calls == calls_before + 1); // The original flush still runs.
-        CHECK(sunk.size() == 1 && sunk[0].key.visual == reinterpret_cast<std::uintptr_t>(child.data()));
-        CHECK(sunk[0].view == temporal::ViewId::Scope && sunk[0].domain == temporal::ProjectionDomain::FirstPerson);
-        CHECK(sunk[0].world && sunk[0].world->at(0, 3) == 123);
-        CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::Identified) ==
-            cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::Identified) + 1);
-        CHECK(after.flush_total[0] == before.flush_total[0] + 1 && after.flush_in_visual[0] == before.flush_in_visual[0] + 1);
-        CHECK(after.captured == before.captured + 1 && after.sunk == before.sunk + 1 && after.capture_no_world == before.capture_no_world);
-    }
-    // A flush outside every visual is counted as such and captures nothing.
-    {
-        const auto before = geometry_coverage();
-        flush_target();
-        const auto after = geometry_coverage();
-        CHECK(after.flush_total[0] == before.flush_total[0] + 1 && after.flush_in_visual[0] == before.flush_in_visual[0]);
-        CHECK(after.captured == before.captured && sunk.size() == 1);
-    }
-    // The shared callback observes the same copy after the original flush, even
-    // if the engine changes its CPU world matrix during that call.
-    {
-        const auto calls_before = flush_calls;
-        geometry_set_flush_callback(&collect_facts);
-        world_at_flush = module.data() + gp.world_matrix_rva;
-        const DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
-        render(child.data(), 0.375f);
-        CHECK(callback_flush_calls == calls_before + 1 && callback_translation == 123);
-        float sampled[16]{};
-        CHECK(read_world_matrix(sampled) && sampled[12] == 321);
-        CHECK(sunk.size() == 2 && sunk.back().world && sunk.back().world->at(0, 3) == 123);
-        std::memcpy(world_at_flush, world, sizeof(world));
-        world_at_flush = nullptr;
-        geometry_set_flush_callback(nullptr);
-    }
-    // An identified draw with no view/projection context is still captured; the missing context is counted.
-    {
-        expected_view.reset();
-        expected_domain.reset();
-        const auto before = geometry_coverage();
-        sunk.clear();
-        render(child.data(), 0.375f);
-        const auto after = geometry_coverage();
-        CHECK(sunk.size() == 1 && !sunk[0].view && !sunk[0].domain);
-        CHECK(after.capture_no_context == before.capture_no_context + 1);
-        expected_view = temporal::ViewId::Scope;
-        expected_domain = temporal::ProjectionDomain::FirstPerson;
-    }
-    // Shadow-map and Z-fill phase: nothing is captured, and the counters say why.
-    {
-        const std::uint32_t smap = phase_smap;
-        std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
-        const auto before = geometry_coverage();
-        sunk.clear();
+    const auto run_flush_capture = [&] {
+        // Draw-time call site: the hooked CBackend::constants.flush reaches capture_current_draw for an identified
+        // main-pass draw and hands the copy to the sink. The registered visual stays child.data().
+        geometry_set_draw_sink({&sunk, &collect_draw});
+        call_flush = true;
         {
+            const auto before = geometry_coverage();
+            const auto calls_before = flush_calls;
             DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
             render(child.data(), 0.375f);
+            const auto after = geometry_coverage();
+            CHECK(flush_calls == calls_before + 1); // The original flush still runs.
+            CHECK(sunk.size() == 1 && sunk[0].key.visual == reinterpret_cast<std::uintptr_t>(child.data()));
+            CHECK(sunk[0].view == temporal::ViewId::Scope && sunk[0].domain == temporal::ProjectionDomain::FirstPerson);
+            CHECK(sunk[0].world && sunk[0].world->at(0, 3) == 123);
+            CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::Identified) ==
+                cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::Identified) + 1);
+            CHECK(after.flush_total[0] == before.flush_total[0] + 1 && after.flush_in_visual[0] == before.flush_in_visual[0] + 1);
+            CHECK(after.captured == before.captured + 1 && after.sunk == before.sunk + 1 && after.capture_no_world == before.capture_no_world);
         }
-        const auto after = geometry_coverage();
-        CHECK(sunk.empty() && after.captured == before.captured);
-        CHECK(cell(after, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) ==
-            cell(before, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) + 1);
-        CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::Identified) ==
-            cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::Identified));
-        CHECK(after.flush_total[1] == before.flush_total[1] + 1 && after.flush_in_visual[1] == before.flush_in_visual[1] + 1);
-        const std::uint32_t other_phase = 7;
-        std::memcpy(module.data() + gp.render_phase_rva, &other_phase, sizeof(other_phase));
+        // A flush outside every visual is counted as such and captures nothing.
         {
-            DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
-            render(child.data(), 0.375f);
+            const auto before = geometry_coverage();
+            flush_target();
+            const auto after = geometry_coverage();
+            CHECK(after.flush_total[0] == before.flush_total[0] + 1 && after.flush_in_visual[0] == before.flush_in_visual[0]);
+            CHECK(after.captured == before.captured && sunk.size() == 1);
         }
-        const auto unknown = geometry_coverage();
-        CHECK(cell(unknown, DrawPass::Unknown, VisualType::Static, DrawVerdict::Identified) ==
-            cell(after, DrawPass::Unknown, VisualType::Static, DrawVerdict::Identified) + 1);
-        CHECK(sunk.empty() && unknown.captured == before.captured);
-        const std::uint32_t normal_phase = phase_normal;
-        std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
-    }
-    // Entry classification and actual flush phase are separate facts. An
-    // identified main entry cannot put a shadow or unknown flush into history.
-    {
-        const auto before = geometry_coverage();
-        const auto calls_before = flush_calls;
-        const DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
-        geometry_set_flush_callback(&collect_facts);
-        seen_facts.clear();
-        for (const auto phase : {phase_smap, std::uint32_t{7}}) {
-            flush_phase = phase;
+        // The shared callback observes the same copy after the original flush, even
+        // if the engine changes its CPU world matrix during that call.
+        {
+            const auto calls_before = flush_calls;
+            geometry_set_flush_callback(&collect_facts);
+            world_at_flush = module.data() + gp.world_matrix_rva;
+            const DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
             render(child.data(), 0.375f);
+            CHECK(callback_flush_calls == calls_before + 1 && callback_translation == 123);
+            float sampled[16]{};
+            CHECK(read_world_matrix(sampled) && sampled[12] == 321);
+            CHECK(sunk.size() == 2 && sunk.back().world && sunk.back().world->at(0, 3) == 123);
+            std::memcpy(world_at_flush, world, sizeof(world));
+            world_at_flush = nullptr;
+            geometry_set_flush_callback(nullptr);
         }
-        flush_phase.reset();
-        geometry_set_flush_callback(nullptr);
-        const auto after = geometry_coverage();
-        CHECK(flush_calls == calls_before + 2 && sunk.empty() && after.captured == before.captured);
-        CHECK(seen_facts.size() == 2 && !callback_translation);
-        CHECK(seen_facts[0].pass == DrawPass::Shadow && seen_facts[1].pass == DrawPass::Unknown);
-        for (const auto& facts : seen_facts)
-            CHECK(facts.in_visual && facts.classification.pass == DrawPass::Main &&
-                facts.classification.verdict == DrawVerdict::Identified);
-    }
-    // Unregistered rigid visuals: level geometry (exactly Fidentity) needs no object motion; anything else is a gap.
-    expect_identity = false;
-    expected_instance = unregistered.data();
-    {
-        std::memcpy(module.data() + gp.world_matrix_rva, identity_world, sizeof(identity_world));
-        const auto before = geometry_coverage();
-        sunk.clear();
-        render(unregistered.data(), 0.375f);
-        const auto after = geometry_coverage();
-        CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::IgnoredStaticWorld) ==
-            cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::IgnoredStaticWorld) + 1);
-        CHECK(sunk.empty() && after.captured == before.captured);
-        CHECK(after.flush_in_visual[0] == before.flush_in_visual[0] + 1);
+        // An identified draw with no view/projection context is still captured; the missing context is counted.
+        {
+            expected_view.reset();
+            expected_domain.reset();
+            const auto before = geometry_coverage();
+            sunk.clear();
+            render(child.data(), 0.375f);
+            const auto after = geometry_coverage();
+            CHECK(sunk.size() == 1 && !sunk[0].view && !sunk[0].domain);
+            CHECK(after.capture_no_context == before.capture_no_context + 1);
+            expected_view = temporal::ViewId::Scope;
+            expected_domain = temporal::ProjectionDomain::FirstPerson;
+        }
+    };
 
-        std::memcpy(module.data() + gp.world_matrix_rva, world, sizeof(world));
-        render(unregistered.data(), 0.375f);
-        const auto moving = geometry_coverage();
-        CHECK(cell(moving, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedDynamic) ==
-            cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedDynamic) + 1);
-        CHECK(sunk.empty() && moving.captured == before.captured);
+    const auto run_phase = [&] {
+        // Shadow-map and Z-fill phase: nothing is captured, and the counters say why.
+        {
+            const std::uint32_t smap = phase_smap;
+            std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
+            const auto before = geometry_coverage();
+            sunk.clear();
+            {
+                DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
+                render(child.data(), 0.375f);
+            }
+            const auto after = geometry_coverage();
+            CHECK(sunk.empty() && after.captured == before.captured);
+            CHECK(cell(after, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) ==
+                cell(before, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) + 1);
+            CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::Identified) ==
+                cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::Identified));
+            CHECK(after.flush_total[1] == before.flush_total[1] + 1 && after.flush_in_visual[1] == before.flush_in_visual[1] + 1);
+            const std::uint32_t other_phase = 7;
+            std::memcpy(module.data() + gp.render_phase_rva, &other_phase, sizeof(other_phase));
+            {
+                DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
+                render(child.data(), 0.375f);
+            }
+            const auto unknown = geometry_coverage();
+            CHECK(cell(unknown, DrawPass::Unknown, VisualType::Static, DrawVerdict::Identified) ==
+                cell(after, DrawPass::Unknown, VisualType::Static, DrawVerdict::Identified) + 1);
+            CHECK(sunk.empty() && unknown.captured == before.captured);
+            const std::uint32_t normal_phase = phase_normal;
+            std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
+        }
+        // Entry classification and actual flush phase are separate facts. An
+        // identified main entry cannot put a shadow or unknown flush into history.
+        {
+            const auto before = geometry_coverage();
+            const auto calls_before = flush_calls;
+            const DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
+            geometry_set_flush_callback(&collect_facts);
+            seen_facts.clear();
+            for (const auto phase : {phase_smap, std::uint32_t{7}}) {
+                flush_phase = phase;
+                render(child.data(), 0.375f);
+            }
+            flush_phase.reset();
+            geometry_set_flush_callback(nullptr);
+            const auto after = geometry_coverage();
+            CHECK(flush_calls == calls_before + 2 && sunk.empty() && after.captured == before.captured);
+            CHECK(seen_facts.size() == 2 && !callback_translation);
+            CHECK(seen_facts[0].pass == DrawPass::Shadow && seen_facts[1].pass == DrawPass::Unknown);
+            for (const auto& facts : seen_facts)
+                CHECK(facts.in_visual && facts.classification.pass == DrawPass::Main &&
+                    facts.classification.verdict == DrawVerdict::Identified);
+        }
+    };
 
-        const std::uint32_t smap = phase_smap;
-        std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
-        render(unregistered.data(), 0.375f);
-        const std::uint32_t normal_phase = phase_normal;
-        std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
-        const auto shadow = geometry_coverage();
-        CHECK(cell(shadow, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) ==
-            cell(moving, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) + 1);
-    }
-    // The same visual live under two owners cannot be named, and says so instead of guessing.
-    {
-        int other_owner{};
-        expected_owner = &other_owner;
-        expected_instance = child.data(); // The factory fixture draws the child once while constructing.
-        CHECK(create(&other_owner, expected_name, expected_reader) == visual.data());
-        expected_owner = &owner;
-        const auto before = geometry_coverage();
-        sunk.clear();
-        render(child.data(), 0.375f);
-        const auto after = geometry_coverage();
-        CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedAmbiguous) ==
-            cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedAmbiguous) + 1);
-        CHECK(sunk.empty());
-        void* second = visual.data();
-        expected_owner = &other_owner;
-        destroy(&other_owner, &second, 0x12345678);
-        expected_owner = &owner;
-        CHECK(!second);
-        expect_identity = true;
-        DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
-        render(child.data(), 0.375f);
-        CHECK(sunk.size() == 1);
-    }
-    call_flush = false;
-    geometry_set_draw_sink({});
-
-    // Foliage. A level tree never enters the model registry. Without foliage identity it is the measured gap
-    // (unidentified_deformed); with it the tree is named by its address, nothing is captured, and the flush facts carry
-    // the visual, its type and the progressive tree's slide window.
-    {
+    const auto run_identities = [&] {
+        // Unregistered rigid visuals: level geometry (exactly Fidentity) needs no object motion; anything else is a gap.
         expect_identity = false;
-        geometry_set_flush_callback(&collect_facts);
-        const std::uint32_t lod5 = 5;
-        std::memcpy(tree_visual.data() + tree_pm_last_lod_offset, &lod5, sizeof(lod5));
-        CHECK(!geometry_foliage_identity_enabled());
-        auto before = geometry_coverage();
-        seen_facts.clear();
-        tree_st(tree_visual.data(), 0.5f);
-        auto after = geometry_coverage();
-        CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed) ==
-            cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed) + 1);
-        CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage) ==
-            cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage));
-
-        geometry_enable_foliage_identity(true);
-        CHECK(geometry_foliage_identity_enabled());
-        before = geometry_coverage();
-        const auto stats_before = geometry_stats();
-        seen_facts.clear();
-        tree_st(tree_visual.data(), 0.5f);
-        tree_pm(tree_visual.data(), 0.25f);
-        after = geometry_coverage();
-        CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage) ==
-            cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage) + 1);
-        CHECK(cell(after, DrawPass::Main, VisualType::TreePM, DrawVerdict::IdentifiedFoliage) ==
-            cell(before, DrawPass::Main, VisualType::TreePM, DrawVerdict::IdentifiedFoliage) + 1);
-        CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed) ==
-            cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed));
-        CHECK(geometry_stats().draws_identified == stats_before.draws_identified + 2);
-        CHECK(after.captured == before.captured);   // a foliage identity is not a registry capture
-        CHECK(seen_facts.size() == 2);
-        const auto address = reinterpret_cast<std::uintptr_t>(tree_visual.data());
-        CHECK(seen_facts[0].in_visual && seen_facts[0].kind == DrawKind::Tree && seen_facts[0].visual == address &&
-            seen_facts[0].type == VisualType::TreeST && seen_facts[0].tree_lod == -1 && !seen_facts[0].detail &&
-            seen_facts[0].classification.verdict == DrawVerdict::IdentifiedFoliage && !seen_facts[0].capture);
-        CHECK(seen_facts[1].visual == address && seen_facts[1].type == VisualType::TreePM && seen_facts[1].tree_lod == 5);
-        // A shadow-map tree needs nothing.
-        const std::uint32_t smap = phase_smap;
-        std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
-        before = geometry_coverage();
-        tree_st(tree_visual.data(), 0.5f);
-        after = geometry_coverage();
-        CHECK(cell(after, DrawPass::Shadow, VisualType::TreeST, DrawVerdict::IgnoredShadow) ==
-            cell(before, DrawPass::Shadow, VisualType::TreeST, DrawVerdict::IgnoredShadow) + 1);
-        const std::uint32_t normal_phase = phase_normal;
-        std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
-
-        // CDetailManager::Render: every flush inside it is a detail draw in its pass; outside it none is.
-        before = geometry_coverage();
-        seen_facts.clear();
-        detail_render(&detail_calls);
-        flush_target();
-        after = geometry_coverage();
-        CHECK(seen_facts.size() == 3 && seen_facts[0].detail && seen_facts[1].detail && !seen_facts[2].detail);
-        CHECK(!seen_facts[0].in_visual && seen_facts[0].pass == DrawPass::Main);
-        CHECK(after.detail_renders[0] == before.detail_renders[0] + 1 && after.flush_in_detail[0] == before.flush_in_detail[0] + 2);
-        std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
-        detail_render(&detail_calls);
-        std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
-        const auto shadow = geometry_coverage();
-        CHECK(shadow.detail_renders[1] == after.detail_renders[1] + 1 && shadow.flush_in_detail[1] == after.flush_in_detail[1] + 2);
-        geometry_set_flush_callback(nullptr);
-        geometry_enable_foliage_identity(false);
-        expect_identity = true;
-    }
-    // The engine's staged vertex constants: CBackend::m_aVertexConstants[slot] -> dx10ConstantBuffer { size +0x58,
-    // data +0x60 }. Reads and writes are refused unless the object reports the reflected size.
-    {
-        std::array<std::byte, 0x80> object{};
-        std::array<float, 64> staged{};
-        for (std::size_t i = 0; i < staged.size(); ++i) staged[i] = static_cast<float>(i + 1);
-        const std::uint32_t size = sizeof(staged);
-        const auto data = reinterpret_cast<std::uintptr_t>(staged.data());
-        std::memcpy(object.data() + constant_buffer_size_offset, &size, sizeof(size));
-        std::memcpy(object.data() + constant_buffer_data_offset, &data, sizeof(data));
-        const auto object_pointer = reinterpret_cast<std::uintptr_t>(object.data());
-        std::memcpy(module.data() + gp.vertex_constant_buffers_rva + 3 * sizeof(object_pointer), &object_pointer, sizeof(object_pointer));
-        float out[4]{};
-        CHECK(read_vertex_constants(3, size, 16, out, sizeof(out)) && out[0] == 5.0f && out[3] == 8.0f);
-        CHECK(!read_vertex_constants(3, size + 16, 16, out, sizeof(out)));          // reflected size differs
-        CHECK(!read_vertex_constants(3, size, size - 8, out, sizeof(out)));         // runs past the buffer
-        CHECK(!read_vertex_constants(constant_buffer_slots, size, 0, out, sizeof(out)));
-        CHECK(!read_vertex_constants(4, size, 0, out, sizeof(out)));                // no buffer in that slot
-        const float poison[4]{-1, -2, -3, -4};
-        CHECK(write_vertex_constants(3, size, 32, poison, sizeof(poison)) && staged[8] == -1.0f && staged[11] == -4.0f &&
-            staged[7] == 8.0f && staged[12] == 13.0f);
-        CHECK(!write_vertex_constants(3, size + 4, 32, poison, sizeof(poison)) && staged[8] == -1.0f);
-        float matrix[16]{};
-        CHECK(read_world_matrix(matrix));
-    }
-
-    // Context producers: the engine's IsSVPFrame predicate selects the view, render_hud and the rmNear window the
-    // first-person domain.
-    const auto set_viewport = [&](bool active, std::uint8_t delay, std::uint32_t frame) {
-        std::memcpy(module.data() + gp.second_viewport_rva, &active, sizeof(active));
-        std::memcpy(module.data() + gp.second_viewport_rva + second_viewport_delay_offset, &delay, sizeof(delay));
-        std::memcpy(module.data() + build.native->device_frame_rva, &frame, sizeof(frame));
-    };
-    CHECK(!current_render_view(nullptr, build));
-    set_viewport(false, 2, 4);
-    CHECK(current_render_view(module.data(), build) == temporal::ViewId::Main);
-    set_viewport(true, 2, 3);
-    CHECK(current_render_view(module.data(), build) == temporal::ViewId::Main);
-    set_viewport(true, 2, 4);
-    CHECK(current_render_view(module.data(), build) == temporal::ViewId::Scope);
-    set_viewport(true, 0, 4);
-    CHECK(current_render_view(module.data(), build) == temporal::ViewId::Main);
-    const Context outside{};
-    CHECK(context_now() == outside);
-    {
-        set_viewport(true, 2, 4);
-        const RenderViewScope view;
-        const Context world_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::World};
-        const Context hud_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson};
-        CHECK(context_now() == world_scope);
-        hud(&hud_calls);
-        CHECK(hud_calls == 1 && hud_context == hud_scope);
-        CHECK(context_now() == world_scope);
-        sorted(&hud_calls);
-        CHECK(sorted_before == world_scope && sorted_hud == hud_scope && sorted_after == world_scope);
-        emissive(&hud_calls);
-        CHECK(emissive_before == world_scope && emissive_hud == hud_scope);
-        CHECK(context_now() == world_scope); // The window closed on return although rmNormal never ran.
-        CHECK(near_calls == 2 && normal_calls == 1);
-        near_target(&hud_calls); // Outside sorted/emissive (particles, light volumes) rmNear opens nothing.
-        CHECK(context_now() == world_scope);
-        normal_target(&hud_calls);
-    }
-    CHECK(context_now() == outside);
-    {
-        set_viewport(true, 2, 4);
-        const RenderViewScope view;
-        const Context world_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::World};
-        const Context hud_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson};
-        const Context world_main{temporal::ViewId::Main, temporal::ProjectionDomain::World};
-        const Context hud_main{temporal::ViewId::Main, temporal::ProjectionDomain::FirstPerson};
-        const auto before = geometry_coverage();
-        nested_window = true;
-        sorted(&hud_calls);
-        nested_window = false;
-        CHECK(sorted_before == world_scope && sorted_hud == hud_scope && sorted_after == world_scope);
-        CHECK(emissive_before == world_main && emissive_hud == hud_main && emissive_after == world_main);
-        CHECK(context_now() == world_scope && geometry_coverage().near_windows == before.near_windows + 2);
-
-        geometry_test_bind_module(nullptr, build);
+        expected_instance = unregistered.data();
         {
-            const RenderViewScope unavailable;
-            CHECK((context_now() == Context{std::nullopt, temporal::ProjectionDomain::World}));
+            std::memcpy(module.data() + gp.world_matrix_rva, identity_world, sizeof(identity_world));
+            const auto before = geometry_coverage();
+            sunk.clear();
+            render(unregistered.data(), 0.375f);
+            const auto after = geometry_coverage();
+            CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::IgnoredStaticWorld) ==
+                cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::IgnoredStaticWorld) + 1);
+            CHECK(sunk.empty() && after.captured == before.captured);
+            CHECK(after.flush_in_visual[0] == before.flush_in_visual[0] + 1);
+
+            std::memcpy(module.data() + gp.world_matrix_rva, world, sizeof(world));
+            render(unregistered.data(), 0.375f);
+            const auto moving = geometry_coverage();
+            CHECK(cell(moving, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedDynamic) ==
+                cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedDynamic) + 1);
+            CHECK(sunk.empty() && moving.captured == before.captured);
+
+            const std::uint32_t smap = phase_smap;
+            std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
+            render(unregistered.data(), 0.375f);
+            const std::uint32_t normal_phase = phase_normal;
+            std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
+            const auto shadow = geometry_coverage();
+            CHECK(cell(shadow, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) ==
+                cell(moving, DrawPass::Shadow, VisualType::Static, DrawVerdict::IgnoredShadow) + 1);
+        }
+        // The same visual live under two owners cannot be named, and says so instead of guessing.
+        {
+            int other_owner{};
+            expected_owner = &other_owner;
+            expected_instance = child.data(); // The factory fixture draws the child once while constructing.
+            CHECK(create(&other_owner, expected_name, expected_reader) == visual.data());
+            expected_owner = &owner;
+            const auto before = geometry_coverage();
+            sunk.clear();
+            render(child.data(), 0.375f);
+            const auto after = geometry_coverage();
+            CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedAmbiguous) ==
+                cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedAmbiguous) + 1);
+            CHECK(sunk.empty());
+            void* second = visual.data();
+            expected_owner = &other_owner;
+            destroy(&other_owner, &second, 0x12345678);
+            expected_owner = &owner;
+            CHECK(!second);
+            expect_identity = true;
+            DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
+            render(child.data(), 0.375f);
+            CHECK(sunk.size() == 1);
+        }
+        call_flush = false;
+        geometry_set_draw_sink({});
+    };
+
+    const auto run_foliage = [&] {
+        // Foliage. A level tree never enters the model registry. Without foliage identity it is the measured gap
+        // (unidentified_deformed); with it the tree is named by its address, nothing is captured, and the flush facts carry
+        // the visual, its type and the progressive tree's slide window.
+        {
+            expect_identity = false;
+            geometry_set_flush_callback(&collect_facts);
+            const std::uint32_t lod5 = 5;
+            std::memcpy(tree_visual.data() + tree_pm_last_lod_offset, &lod5, sizeof(lod5));
+            CHECK(!geometry_foliage_identity_enabled());
+            auto before = geometry_coverage();
+            seen_facts.clear();
+            tree_st(tree_visual.data(), 0.5f);
+            auto after = geometry_coverage();
+            CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed) ==
+                cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed) + 1);
+            CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage) ==
+                cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage));
+
+            geometry_enable_foliage_identity(true);
+            CHECK(geometry_foliage_identity_enabled());
+            before = geometry_coverage();
+            const auto stats_before = geometry_stats();
+            seen_facts.clear();
+            tree_st(tree_visual.data(), 0.5f);
+            tree_pm(tree_visual.data(), 0.25f);
+            after = geometry_coverage();
+            CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage) ==
+                cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::IdentifiedFoliage) + 1);
+            CHECK(cell(after, DrawPass::Main, VisualType::TreePM, DrawVerdict::IdentifiedFoliage) ==
+                cell(before, DrawPass::Main, VisualType::TreePM, DrawVerdict::IdentifiedFoliage) + 1);
+            CHECK(cell(after, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed) ==
+                cell(before, DrawPass::Main, VisualType::TreeST, DrawVerdict::UnidentifiedDeformed));
+            CHECK(geometry_stats().draws_identified == stats_before.draws_identified + 2);
+            CHECK(after.captured == before.captured);   // a foliage identity is not a registry capture
+            CHECK(seen_facts.size() == 2);
+            const auto address = reinterpret_cast<std::uintptr_t>(tree_visual.data());
+            CHECK(seen_facts[0].in_visual && seen_facts[0].kind == DrawKind::Tree && seen_facts[0].visual == address &&
+                seen_facts[0].type == VisualType::TreeST && seen_facts[0].tree_lod == -1 && !seen_facts[0].detail &&
+                seen_facts[0].classification.verdict == DrawVerdict::IdentifiedFoliage && !seen_facts[0].capture);
+            CHECK(seen_facts[1].visual == address && seen_facts[1].type == VisualType::TreePM && seen_facts[1].tree_lod == 5);
+            // A shadow-map tree needs nothing.
+            const std::uint32_t smap = phase_smap;
+            std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
+            before = geometry_coverage();
+            tree_st(tree_visual.data(), 0.5f);
+            after = geometry_coverage();
+            CHECK(cell(after, DrawPass::Shadow, VisualType::TreeST, DrawVerdict::IgnoredShadow) ==
+                cell(before, DrawPass::Shadow, VisualType::TreeST, DrawVerdict::IgnoredShadow) + 1);
+            const std::uint32_t normal_phase = phase_normal;
+            std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
+
+            // CDetailManager::Render: every flush inside it is a detail draw in its pass; outside it none is.
+            before = geometry_coverage();
+            seen_facts.clear();
+            detail_render(&detail_calls);
+            flush_target();
+            after = geometry_coverage();
+            CHECK(seen_facts.size() == 3 && seen_facts[0].detail && seen_facts[1].detail && !seen_facts[2].detail);
+            CHECK(!seen_facts[0].in_visual && seen_facts[0].pass == DrawPass::Main);
+            CHECK(after.detail_renders[0] == before.detail_renders[0] + 1 && after.flush_in_detail[0] == before.flush_in_detail[0] + 2);
+            std::memcpy(module.data() + gp.render_phase_rva, &smap, sizeof(smap));
+            detail_render(&detail_calls);
+            std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
+            const auto shadow = geometry_coverage();
+            CHECK(shadow.detail_renders[1] == after.detail_renders[1] + 1 && shadow.flush_in_detail[1] == after.flush_in_detail[1] + 2);
+            geometry_set_flush_callback(nullptr);
+            geometry_enable_foliage_identity(false);
+            expect_identity = true;
+        }
+    };
+
+    const auto run_vertex_constants = [&] {
+        // The engine's staged vertex constants: CBackend::m_aVertexConstants[slot] -> dx10ConstantBuffer { size +0x58,
+        // data +0x60 }. Reads and writes are refused unless the object reports the reflected size.
+        {
+            std::array<std::byte, 0x80> object{};
+            std::array<float, 64> staged{};
+            for (std::size_t i = 0; i < staged.size(); ++i) staged[i] = static_cast<float>(i + 1);
+            const std::uint32_t size = sizeof(staged);
+            const auto data = reinterpret_cast<std::uintptr_t>(staged.data());
+            std::memcpy(object.data() + constant_buffer_size_offset, &size, sizeof(size));
+            std::memcpy(object.data() + constant_buffer_data_offset, &data, sizeof(data));
+            const auto object_pointer = reinterpret_cast<std::uintptr_t>(object.data());
+            std::memcpy(module.data() + gp.vertex_constant_buffers_rva + 3 * sizeof(object_pointer), &object_pointer, sizeof(object_pointer));
+            float out[4]{};
+            CHECK(read_vertex_constants(3, size, 16, out, sizeof(out)) && out[0] == 5.0f && out[3] == 8.0f);
+            CHECK(!read_vertex_constants(3, size + 16, 16, out, sizeof(out)));          // reflected size differs
+            CHECK(!read_vertex_constants(3, size, size - 8, out, sizeof(out)));         // runs past the buffer
+            CHECK(!read_vertex_constants(constant_buffer_slots, size, 0, out, sizeof(out)));
+            CHECK(!read_vertex_constants(4, size, 0, out, sizeof(out)));                // no buffer in that slot
+            const float poison[4]{-1, -2, -3, -4};
+            CHECK(write_vertex_constants(3, size, 32, poison, sizeof(poison)) && staged[8] == -1.0f && staged[11] == -4.0f &&
+                staged[7] == 8.0f && staged[12] == 13.0f);
+            CHECK(!write_vertex_constants(3, size + 4, 32, poison, sizeof(poison)) && staged[8] == -1.0f);
+            float matrix[16]{};
+            CHECK(read_world_matrix(matrix));
+        }
+    };
+
+    const auto run_contexts = [&] {
+        // Context producers: the engine's IsSVPFrame predicate selects the view, render_hud and the rmNear window the
+        // first-person domain.
+        const auto set_viewport = [&](bool active, std::uint8_t delay, std::uint32_t frame) {
+            std::memcpy(module.data() + gp.second_viewport_rva, &active, sizeof(active));
+            std::memcpy(module.data() + gp.second_viewport_rva + second_viewport_delay_offset, &delay, sizeof(delay));
+            std::memcpy(module.data() + build.native->device_frame_rva, &frame, sizeof(frame));
+        };
+        CHECK(!current_render_view(nullptr, build));
+        set_viewport(false, 2, 4);
+        CHECK(current_render_view(module.data(), build) == temporal::ViewId::Main);
+        set_viewport(true, 2, 3);
+        CHECK(current_render_view(module.data(), build) == temporal::ViewId::Main);
+        set_viewport(true, 2, 4);
+        CHECK(current_render_view(module.data(), build) == temporal::ViewId::Scope);
+        set_viewport(true, 0, 4);
+        CHECK(current_render_view(module.data(), build) == temporal::ViewId::Main);
+        const Context outside{};
+        CHECK(context_now() == outside);
+        {
+            set_viewport(true, 2, 4);
+            const RenderViewScope view;
+            const Context world_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::World};
+            const Context hud_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson};
+            CHECK(context_now() == world_scope);
             hud(&hud_calls);
-            CHECK((hud_context == Context{std::nullopt, temporal::ProjectionDomain::FirstPerson}));
+            CHECK(hud_calls == 1 && hud_context == hud_scope);
+            CHECK(context_now() == world_scope);
+            sorted(&hud_calls);
+            CHECK(sorted_before == world_scope && sorted_hud == hud_scope && sorted_after == world_scope);
+            emissive(&hud_calls);
+            CHECK(emissive_before == world_scope && emissive_hud == hud_scope);
+            CHECK(context_now() == world_scope); // The window closed on return although rmNormal never ran.
+            CHECK(near_calls == 2 && normal_calls == 1);
+            near_target(&hud_calls); // Outside sorted/emissive (particles, light volumes) rmNear opens nothing.
+            CHECK(context_now() == world_scope);
+            normal_target(&hud_calls);
         }
-        geometry_test_bind_module(module.data(), build);
-        CHECK(context_now() == world_scope);
-    }
-    CHECK(context_now() == outside);
-    set_viewport(false, 2, 4);
-    {
-        const RenderViewScope view;
-        CHECK((context_now() == Context{temporal::ViewId::Main, temporal::ProjectionDomain::World}));
-    }
-    {
-        const auto coverage = geometry_coverage();
-        CHECK(coverage.views_main >= 1 && coverage.views_scope >= 2 && coverage.hud_scopes >= 2 && coverage.near_windows == 4);
-    }
-    std::vector<std::string> lines;
-    geometry_report_coverage(&collect_line, &lines);
-    const auto has = [&](std::string_view text) {
-        for (const auto& line : lines) if (line.find(text) != std::string::npos) return true;
-        return false;
+        CHECK(context_now() == outside);
+        {
+            set_viewport(true, 2, 4);
+            const RenderViewScope view;
+            const Context world_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::World};
+            const Context hud_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson};
+            const Context world_main{temporal::ViewId::Main, temporal::ProjectionDomain::World};
+            const Context hud_main{temporal::ViewId::Main, temporal::ProjectionDomain::FirstPerson};
+            const auto before = geometry_coverage();
+            nested_window = true;
+            sorted(&hud_calls);
+            nested_window = false;
+            CHECK(sorted_before == world_scope && sorted_hud == hud_scope && sorted_after == world_scope);
+            CHECK(emissive_before == world_main && emissive_hud == hud_main && emissive_after == world_main);
+            CHECK(context_now() == world_scope && geometry_coverage().near_windows == before.near_windows + 2);
+
+            geometry_test_bind_module(nullptr, build);
+            {
+                const RenderViewScope unavailable;
+                CHECK((context_now() == Context{std::nullopt, temporal::ProjectionDomain::World}));
+                hud(&hud_calls);
+                CHECK((hud_context == Context{std::nullopt, temporal::ProjectionDomain::FirstPerson}));
+            }
+            geometry_test_bind_module(module.data(), build);
+            CHECK(context_now() == world_scope);
+        }
+        CHECK(context_now() == outside);
+        set_viewport(false, 2, 4);
+        {
+            const RenderViewScope view;
+            CHECK((context_now() == Context{temporal::ViewId::Main, temporal::ProjectionDomain::World}));
+        }
+        {
+            const auto coverage = geometry_coverage();
+            CHECK(coverage.views_main >= 1 && coverage.views_scope >= 2 && coverage.hud_scopes >= 2 && coverage.near_windows == 4);
+        }
     };
-    CHECK(has("coverage render-entries main=") && has("pass=main type=static identified=") &&
-        has("pass=shadow type=static identified=") && has("pass=other type=static") &&
-        has("draw-time flush main=") && has("captured=") && has("hud_scopes="));
-    for (const auto& line : lines) CHECK(line.size() < 600);
 
-    // A borrowed child range does not belong to this owner, even when it cannot be traversed.
-    child_list[0] = nullptr;
-    const auto borrowed_offset = hierarchy_children_offset + 3 * sizeof(void*);
-    const std::int32_t borrowed = 1;
-    std::memcpy(visual.data() + borrowed_offset, &borrowed, sizeof(borrowed));
-    const auto before_borrowed = geometry_stats();
-    CHECK(create(&owner, expected_name, expected_reader) == visual.data());
-    CHECK(geometry_stats().capture_faults == before_borrowed.capture_faults && geometry_hooks_active());
+    const auto run_coverage = [&] {
+        std::vector<std::string> lines;
+        geometry_report_coverage(&collect_line, &lines);
+        const auto has = [&](std::string_view text) {
+            for (const auto& line : lines) if (line.find(text) != std::string::npos) return true;
+            return false;
+        };
+        CHECK(has("coverage render-entries main=") && has("pass=main type=static identified=") &&
+            has("pass=shadow type=static identified=") && has("pass=other type=static") &&
+            has("draw-time flush main=") && has("captured=") && has("hud_scopes="));
+        for (const auto& line : lines) CHECK(line.size() < 600);
+    };
 
-    // An owned hierarchy that cannot be walked latches capture off rather than publishing a partial lifetime.
-    const std::int32_t owned = 0;
-    std::memcpy(visual.data() + borrowed_offset, &owned, sizeof(owned));
-    const auto before_fault = geometry_stats();
-    CHECK(create(&owner, expected_name, expected_reader) == visual.data());
-    CHECK(geometry_stats().capture_faults == before_fault.capture_faults + 1 && !geometry_hooks_active());
-    CHECK(create(&owner, expected_name, expected_reader) == visual.data());
-    CHECK(geometry_stats().models_registered == before_fault.models_registered);
-    child_list[0] = child.data();
-    // With capture latched off a draw is not identified and says so; the flush hook stops observing.
-    {
-        const auto before = geometry_coverage();
-        expect_identity = false;
-        render(child.data(), 0.375f);
-        const auto after = geometry_coverage();
-        CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedNoCapture) ==
-            cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedNoCapture) + 1);
-    }
-    CHECK(hooks.disable());
-    geometry_retire_all();
-    geometry_set_sink({});
-    const auto stats = geometry_stats();
-    CHECK(stats.models_registered >= 5 && stats.models_retired >= 5 && stats.draws_identified >= 3 &&
-        stats.draws_unidentified >= 1 && stats.capture_faults == 1);
-    // Production installation path, using guarded code copied into an executable-memory fixture.
-    // No game code is executed, no game process or installation is modified.
-    auto image = static_cast<std::byte*>(VirtualAlloc(nullptr, build.image_size(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-    CHECK(image);
-    auto fixture_dos = reinterpret_cast<IMAGE_DOS_HEADER*>(image);
-    fixture_dos->e_magic = IMAGE_DOS_SIGNATURE;
-    fixture_dos->e_lfanew = 0x80;
-    auto fixture_pe = reinterpret_cast<IMAGE_NT_HEADERS64*>(image + fixture_dos->e_lfanew);
-    fixture_pe->Signature = IMAGE_NT_SIGNATURE;
-    fixture_pe->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
-    fixture_pe->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
-    fixture_pe->OptionalHeader.SizeOfImage = build.image_size();
-    CHECK(geometry_test_seed(image, build));
-    for (const auto& guard : gp.geometry_unique_guards) {
-        const auto last = guard.rva + std::strlen(guard.expected_hex) / 2 - 1;
-        image[last] ^= std::byte{1};
-        CHECK(!install_native_geometry(image, build.image_size(), build));
-        image[last] ^= std::byte{1};
-    }
-    // Every detour and every layout guard refuses on a single changed byte, and nothing is written before the refusal.
-    for (const auto& layout : gp.geometry_layout_sites) {
-        image[layout.rva] ^= std::byte{1};
-        CHECK(!install_native_geometry(image, build.image_size(), build));
-        image[layout.rva] ^= std::byte{1};
-    }
-    for (const auto& site : gp.geometry_sites) {
-        image[site.rva + 5] ^= std::byte{0x80};
-        CHECK(!install_native_geometry(image, build.image_size(), build));
-        image[site.rva + 5] ^= std::byte{0x80};
-    }
-    const auto corrupted = gp.geometry_sites.back();
-    image[corrupted.rva] ^= std::byte{1};
-    CHECK(!install_native_geometry(image, build.image_size(), build));
-    for (std::size_t i = 0; i + 1 < gp.geometry_sites.size(); ++i)
-        CHECK(!std::memcmp(image + gp.geometry_sites[i].rva, gp.geometry_sites[i].expected.data(), 16));
-    image[corrupted.rva] ^= std::byte{1};
-    CHECK(install_native_geometry(image, build.image_size(), build));
-    CHECK(geometry_hooks_active());
-    CHECK(disable_native_geometry() && !geometry_hooks_active());
-    for (const auto& site : gp.geometry_sites) CHECK(!std::memcmp(image + site.rva, site.expected.data(), 16));
-    CHECK(!install_native_geometry(image, build.image_size(), other));
-    CHECK(!install_native_geometry(image, other.image_size(), other));   // the other build's sites are not on this image
-    CHECK(install_native_geometry(image, build.image_size(), build));
-    CHECK(disable_native_geometry());
+    const auto run_retirement = [&] {
+        // A borrowed child range does not belong to this owner, even when it cannot be traversed.
+        child_list[0] = nullptr;
+        const auto borrowed_offset = hierarchy_children_offset + 3 * sizeof(void*);
+        const std::int32_t borrowed = 1;
+        std::memcpy(visual.data() + borrowed_offset, &borrowed, sizeof(borrowed));
+        const auto before_borrowed = geometry_stats();
+        CHECK(create(&owner, expected_name, expected_reader) == visual.data());
+        CHECK(geometry_stats().capture_faults == before_borrowed.capture_faults && geometry_hooks_active());
+
+        // An owned hierarchy that cannot be walked latches capture off rather than publishing a partial lifetime.
+        const std::int32_t owned = 0;
+        std::memcpy(visual.data() + borrowed_offset, &owned, sizeof(owned));
+        const auto before_fault = geometry_stats();
+        CHECK(create(&owner, expected_name, expected_reader) == visual.data());
+        CHECK(geometry_stats().capture_faults == before_fault.capture_faults + 1 && !geometry_hooks_active());
+        CHECK(create(&owner, expected_name, expected_reader) == visual.data());
+        CHECK(geometry_stats().models_registered == before_fault.models_registered);
+        child_list[0] = child.data();
+        // With capture latched off a draw is not identified and says so; the flush hook stops observing.
+        {
+            const auto before = geometry_coverage();
+            expect_identity = false;
+            render(child.data(), 0.375f);
+            const auto after = geometry_coverage();
+            CHECK(cell(after, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedNoCapture) ==
+                cell(before, DrawPass::Main, VisualType::Static, DrawVerdict::UnidentifiedNoCapture) + 1);
+        }
+    };
+
+    const auto run_release = [&] {
+        CHECK(hooks.disable());
+        geometry_retire_all();
+        geometry_set_sink({});
+        const auto stats = geometry_stats();
+        CHECK(stats.models_registered >= 5 && stats.models_retired >= 5 && stats.draws_identified >= 3 &&
+            stats.draws_unidentified >= 1 && stats.capture_faults == 1);
+    };
+
+    const auto run_guards = [&] {
+        const auto image = allocate_fixture_image(build.image_size());
+        CHECK(geometry_test_guard_lifecycle(image, build, other));
+    };
+    const rsf_test_anomaly_geometry_hooks scenarios{
+        geometry_scenario(run_lifecycle), geometry_scenario(run_flush_capture), geometry_scenario(run_phase),
+        geometry_scenario(run_identities), geometry_scenario(run_foliage), geometry_scenario(run_vertex_constants),
+        geometry_scenario(run_contexts), geometry_scenario(run_coverage), geometry_scenario(run_retirement),
+        geometry_scenario(run_release), geometry_scenario(run_guards),
+    };
+    rsf_test_anomaly_geometry_run_hooks(&scenarios);
+
     // Executable fixture allocations and trampolines intentionally live until process exit.
     std::puts("PASS: actual x64 lifecycle/visual detours, RCX/RDX/R8/XMM1, hierarchy retirement before pooling/reuse, current world, "
         "draw-time flush capture and sink, pass/identity/static-world classification, view and first-person context producers, "

@@ -229,3 +229,37 @@ sources match the base, as do the SR and FG stage sources. Pinned Rust
 bindgen 0.72.1 regeneration of the unchanged registry binding and Git
 whitespace checks passed. Builds, Clippy, native fixtures and game or
 device execution were outside this pass.
+
+## Rust fixture orchestration and hook plans
+
+The follow-up at base `b5a7434c` moves geometry hook-record assembly into
+the Rust geometry owner. It pairs each exact-profile site with the typed
+replacement and the address of its native original slot, using the shared
+hook record. Both C++ profile banks remain the immutable source for the
+guard spans and the compile-time profile fixture. Staged vertex constant
+reads and writes now resolve and copy in Rust through the same guarded
+native leaf. Slot admission, the reflected-size check and read ordering
+are unchanged. The public C++ interfaces still serve N01 observation,
+N04 motion and N06 SR.
+
+Rust drives eleven native hook scenarios and five mixed geometry scenarios
+in their previous order. This includes disabling the fixture detours,
+retiring geometry, and clearing the retirement sink before the synthetic
+production-install scenario. The Rust guard driver seeds each selected
+bank, corrupts every extended prefix, layout site and detour entry in
+order, checks no early writes, and checks install, restore, both wrong-bank
+refusals and re-enable. It holds no allocation slice across installation.
+C++ still supplies the executable PE allocation, the exact Microsoft x64
+trampolines and their RAII scopes, real MinHook and guarded copy leaves,
+and the native history and worker-thread callbacks. Executable fixture
+memory and trampolines retain their process lifetime.
+
+Source comparison matched the profile banks, the N01, N04, SR and FG
+callers, both hook fixture registrations, 139 native hook assertions
+outside the guard scenario and 71 mixed-contract assertions. The native
+syntax pass caught an existing missing include for the geometry key
+adapter. Restoring the include allowed MSVC syntax-only checks to pass
+with warnings as errors for the geometry source and both fixtures.
+Pinned Rust 1.94.1 formatting, targeted bindgen 0.72.1 regeneration,
+locked offline Windows metadata and whitespace checks passed. Build,
+link, lint, fixtures and device or game execution remain pending.

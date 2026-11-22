@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "native_geometry.h"
 #include "build_profile.h"
+#include "geometry_retirement.h"
 #include <array>
 #include <cstddef>
 #ifndef NOMINMAX
@@ -14,9 +15,14 @@ struct VertexConstantTable {
     std::uint32_t table_rva, slots, size_offset, data_offset;
 };
 static_assert(sizeof(VertexConstantTable) == 24 && offsetof(VertexConstantTable, table_rva) == 8);
-extern "C" std::uintptr_t rsf_anomaly_geometry_vertex_constant_data(const VertexConstantTable*,
-    std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, std::uint32_t bytes,
-    decltype(&rsf::anomaly::guarded_copy) read) noexcept;
+extern "C" bool rsf_anomaly_geometry_read_vertex(const VertexConstantTable*, std::uint32_t slot,
+    std::uint32_t expected_size, std::uint32_t offset, void* out, std::uint32_t bytes,
+    decltype(&rsf::anomaly::guarded_copy)) noexcept;
+extern "C" bool rsf_anomaly_geometry_write_vertex(const VertexConstantTable*, std::uint32_t slot,
+    std::uint32_t expected_size, std::uint32_t offset, const void* in, std::uint32_t bytes,
+    decltype(&rsf::anomaly::guarded_copy)) noexcept;
+extern "C" void rsf_anomaly_geometry_build_hook_sites(const rsf::anomaly::NativeSite*, void* const* replacements,
+    void** originals, rsf::anomaly::HookSite*, std::size_t count) noexcept;
 
 namespace rsf::anomaly::geometry {
 namespace {
@@ -57,6 +63,8 @@ static_assert(sizeof(rsf_anomaly_geometry_child_range) == 24);
 static_assert(sizeof(rsf_anomaly_geometry_hierarchy) == 32 && offsetof(rsf_anomaly_geometry_hierarchy, read) == 24);
 static_assert(sizeof(rsf_anomaly_geometry_writer) == 16 && sizeof(Matrix) == 128 &&
     alignof(Matrix) == alignof(double) && offsetof(Matrix, values) == 0);
+static_assert(sizeof(HookSite) == 48 && offsetof(HookSite, expected) == 12 &&
+    offsetof(HookSite, replacement) == 32 && offsetof(HookSite, original) == 40);
 static_assert(sizeof(NativeSite) == 32 && offsetof(NativeSite, rva) == 8 && offsetof(NativeSite, expected) == 12);
 static_assert(sizeof(UniqueGuard) == 24 && offsetof(UniqueGuard, rva) == 8 && offsetof(UniqueGuard, expected_hex) == 16);
 static_assert(sizeof(rsf_anomaly_geometry_guard_profile) == 64 &&
@@ -302,15 +310,12 @@ void __fastcall detail_render_hook(void* self)
     reinterpret_cast<Unary>(originals[geometry_site_detail_render])(self);
 }
 
-// The dx10ConstantBuffer behind CBackend::m_aVertexConstants[slot], only when it reports the reflected size.
-std::uintptr_t vertex_constant_data(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset,
-    std::uint32_t bytes) noexcept
+VertexConstantTable vertex_constants() noexcept
 {
     const auto engine = rsf_anomaly_geometry_binding();
-    if (!engine.module) return 0;
-    const VertexConstantTable table{engine.module, build_of(engine).geometry->vertex_constant_buffers_rva,
+    if (!engine.module) return {};
+    return {engine.module, build_of(engine).geometry->vertex_constant_buffers_rva,
         constant_buffer_slots, constant_buffer_size_offset, constant_buffer_data_offset};
-    return rsf_anomaly_geometry_vertex_constant_data(&table, slot, expected_size, offset, bytes, guarded_copy);
 }
 }
 
@@ -417,15 +422,15 @@ bool geometry_foliage_identity_enabled() noexcept { return rsf_anomaly_geometry_
 bool read_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, void* out,
     std::uint32_t bytes) noexcept
 {
-    const auto source = vertex_constant_data(slot, expected_size, offset, bytes);
-    return source && guarded_copy(out, reinterpret_cast<const void*>(source), bytes);
+    const auto table = vertex_constants();
+    return rsf_anomaly_geometry_read_vertex(&table, slot, expected_size, offset, out, bytes, guarded_copy);
 }
 
 bool write_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, const void* in,
     std::uint32_t bytes) noexcept
 {
-    const auto target = vertex_constant_data(slot, expected_size, offset, bytes);
-    return target && guarded_copy(reinterpret_cast<void*>(target), in, bytes);
+    const auto table = vertex_constants();
+    return rsf_anomaly_geometry_write_vertex(&table, slot, expected_size, offset, in, bytes, guarded_copy);
 }
 
 bool read_world_matrix(float (&out)[16]) noexcept
@@ -456,10 +461,8 @@ std::span<const HookSite> native_geometry_hook_sites(const BuildProfile& build) 
         reinterpret_cast<void*>(&flush_hook), reinterpret_cast<void*>(&render_hud_hook), reinterpret_cast<void*>(&render_sorted_hook),
         reinterpret_cast<void*>(&render_emissive_hook), reinterpret_cast<void*>(&rm_near_hook),
         reinterpret_cast<void*>(&rm_normal_hook), reinterpret_cast<void*>(&detail_render_hook)};
-    for (std::size_t i = 0; i < sites.size(); ++i) {
-        const auto& site = build.geometry->geometry_sites[i];
-        sites[i] = {site.name, site.rva, site.expected, replacements[i], &originals[i]};
-    }
+    rsf_anomaly_geometry_build_hook_sites(build.geometry->geometry_sites.data(), replacements.data(),
+        originals.data(), sites.data(), sites.size());
     return sites;
 }
 
@@ -500,13 +503,12 @@ void geometry_report_coverage(void (*emit)(void*, const char*), void* user) noex
 }
 
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING
-extern "C" bool rsf_test_anomaly_geometry_seed(std::byte*, uint32_t,
-    const rsf_anomaly_geometry_guard_profile*) noexcept;
+extern "C" bool rsf_test_anomaly_geometry_guard_lifecycle(std::byte*, const rsf_anomaly_geometry_platform*,
+    rsf_anomaly_geometry_engine, rsf_anomaly_geometry_engine) noexcept;
 
-bool geometry_test_seed(std::byte* module, const BuildProfile& build) noexcept
+bool geometry_test_guard_lifecycle(std::byte* module, const BuildProfile& build, const BuildProfile& other) noexcept
 {
-    const auto profile = guard_profile(bind(module, build));
-    return rsf_test_anomaly_geometry_seed(module, build.image_size(), &profile);
+    return rsf_test_anomaly_geometry_guard_lifecycle(module, &platform, bind(module, build), bind(module, other));
 }
 
 void geometry_test_bind_module(std::byte* module, const BuildProfile& build) noexcept

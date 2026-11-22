@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Read, read_bytes};
+use std::{ffi::c_void, ptr};
 
 #[repr(C)]
 struct VertexConstantTable {
@@ -61,18 +62,42 @@ impl VertexConstantTable {
     }
 }
 
-/// Resolves the staged data address. The caller supplies the immutable build facts and performs
-/// the guarded copy while the observed buffer still belongs to the current draw.
+// The native caller lends the draw's input or output span. All engine memory
+// access, including the final transfer, still goes through the guarded leaf.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_vertex_constant_data(
+extern "C" fn rsf_anomaly_geometry_read_vertex(
     table: &VertexConstantTable,
     slot: u32,
     expected_size: u32,
     offset: u32,
+    out: *mut c_void,
     bytes: u32,
-    read: Read,
-) -> usize {
+    copy: Read,
+) -> bool {
     table
-        .data(slot, expected_size, offset, bytes, read)
-        .unwrap_or(0)
+        .data(slot, expected_size, offset, bytes, copy)
+        .is_some_and(|source| unsafe {
+            copy(out, ptr::with_exposed_provenance(source), bytes as usize)
+        })
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_geometry_write_vertex(
+    table: &VertexConstantTable,
+    slot: u32,
+    expected_size: u32,
+    offset: u32,
+    input: *const c_void,
+    bytes: u32,
+    copy: Read,
+) -> bool {
+    table
+        .data(slot, expected_size, offset, bytes, copy)
+        .is_some_and(|target| unsafe {
+            copy(
+                ptr::with_exposed_provenance_mut(target),
+                input,
+                bytes as usize,
+            )
+        })
 }
