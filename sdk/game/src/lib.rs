@@ -11,10 +11,11 @@ pub mod d3d11_host_abi;
 pub mod d3d11_reduced_abi;
 pub mod plugin_session_abi;
 pub mod presentation_result;
+pub mod recording_slots;
 mod render_config;
 mod render_pass;
-pub mod session;
 pub mod sampling;
+pub mod session;
 pub mod shader_patch_abi;
 pub mod sharpening_abi;
 pub mod sr_abi;
@@ -22,7 +23,6 @@ pub mod vendor_paths;
 #[cfg(windows)]
 pub mod win32;
 pub mod windows_path;
-pub mod recording_slots;
 
 pub const RSF_SCREEN_UNKNOWN: u32 = 0;
 pub const RSF_SCREEN_MENU: u32 = 1;
