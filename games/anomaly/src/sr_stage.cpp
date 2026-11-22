@@ -30,8 +30,6 @@
 #include <string_view>
 #include <tuple>
 
-namespace rsf { uint32_t texture_pixel_bytes(DXGI_FORMAT format); }
-
 extern "C" {
 int32_t rsf_anomaly_sr_ini_int(const void*, const char*, int32_t) noexcept;
 uint32_t rsf_anomaly_sr_ini_text(const void*, const char*, const char*, uint16_t*, uint32_t) noexcept;
@@ -460,7 +458,7 @@ const rsf_anomaly_sr_stage_platform platform{
     .unmap = [](void* context, void* texture, uint32_t subresource) {
         static_cast<ID3D11DeviceContext*>(context)->Unmap(static_cast<ID3D11Resource*>(texture), subresource);
     },
-    .pixel_bytes = [](uint32_t format) { return rsf::texture_pixel_bytes(static_cast<DXGI_FORMAT>(format)); },
+    .pixel_bytes = rsf_texture_pixel_bytes,
     .draw_pass = [](uint32_t kind, const rsf_sr_draw_views* views) {
         return rsf_anomaly_sr_run_pass(host.pass(), host.context(), kind, views) != 0;
     },

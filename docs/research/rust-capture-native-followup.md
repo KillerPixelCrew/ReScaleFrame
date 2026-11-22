@@ -53,3 +53,9 @@ the fixture entry points, the public Vulkan ABI and the typed native method
 declarations. They matched 33 Windows method names and 21 mock Vulkan PFN
 names to the installed bindings and Vulkan headers. No build, test, lint
 or device run was performed.
+
+The public texture and input dump forwarding objects now compile as C11.
+Windows once initialization publishes the same static capture service table.
+The Anomaly stage binds the Rust pixel-format lookup through its C signature.
+Strict MinGW C11 syntax and a source comparison of the forwarding names passed.
+Native linking and capture verification remain pending.

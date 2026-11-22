@@ -767,7 +767,9 @@ generate("tests/generation/src/dll_abi.rs", "tests/generation/dll_abi.h",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
           "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist",
-          "--raw-line", "use crate::session_abi::{rsf_backend_log_fn, rsf_fg_status, rsf_generation_provider, rsf_latency_marker, rsf_streamline_graphics};",
+          "--raw-line", "use crate::session_abi::{\n"
+          "    rsf_backend_log_fn, rsf_fg_status, rsf_generation_provider, rsf_latency_marker,\n"
+          "    rsf_streamline_graphics,\n};",
           "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};",
           "--raw-line", "type rsf_result = i32;",
           "--raw-line", "type rsf_streamline_host = ::core::ffi::c_void;",

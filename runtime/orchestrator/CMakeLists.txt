@@ -2,7 +2,7 @@
 # and directly into the research proxy, which is what actually gets loaded into the game today.
 # Compiling it twice, or requiring the runtime DLL beside the game executable before anything works,
 # would both be worse.
-add_library(rsf_frame_dump STATIC src/input_dump.cpp)
+add_library(rsf_frame_dump STATIC src/input_dump.c)
 target_include_directories(rsf_frame_dump PUBLIC include "${CMAKE_SOURCE_DIR}/runtime/backends/dlss/include")
 target_compile_definitions(rsf_frame_dump PRIVATE RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_frame_dump PUBLIC ReScaleFrame::Graphics ReScaleFrame::Contract ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon PRIVATE rsf_build_options)

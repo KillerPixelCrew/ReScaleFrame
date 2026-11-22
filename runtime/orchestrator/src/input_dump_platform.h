@@ -4,13 +4,19 @@
 #include <rescaleframe/sha256_file.h>
 
 /* Services contributed by native archives to the Rust dump owner. */
-struct rsf_dump_services {
+typedef struct rsf_dump_services {
     uint32_t struct_size;
-    decltype(&rsf_common_sha256_file) hash;
-    decltype(&rsf_dump_texture_bytes) raw;
-    decltype(&rsf_dump_texture_png) png;
-    decltype(&rsf_dump_pixels_png) pixels_png;
-    decltype(&rsf_game_depth_domains_requested) depth_domains_requested;
-};
-static_assert(sizeof(rsf_dump_services) == 48);
-extern "C" void rsf_core_dump_bind_services(const rsf_dump_services*);
+    uint32_t (*hash)(const wchar_t*, uint32_t, unsigned char*);
+    rsf_dump_texture_result (*raw)(void*, void*, void*, const rsf_texture_dump_options*);
+    rsf_dump_texture_result (*png)(void*, void*, void*, const rsf_texture_dump_options*, rsf_texture_dump_report*);
+    rsf_dump_texture_result (*pixels_png)(const rsf_dump_pixels*, const rsf_texture_dump_options*, rsf_texture_dump_report*);
+    uint32_t (*depth_domains_requested)(const rsf_game_depth_domains*);
+} rsf_dump_services;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void rsf_core_dump_bind_services(const rsf_dump_services*);
+#ifdef __cplusplus
+}
+#endif

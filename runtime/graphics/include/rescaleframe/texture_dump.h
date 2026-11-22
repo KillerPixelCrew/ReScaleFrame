@@ -61,7 +61,8 @@ typedef uint32_t rsf_dump_view;
 #define RSF_DUMP_VIEW_DENSE_MOTION ((rsf_dump_view)7)
 /* Anything at or below this is the sentinel a decode pass wrote, not motion. Real screen space
    motion is a fraction of the [-1,1] range, so the gap is several orders of magnitude wide. */
-#define RSF_DUMP_DECODED_SENTINEL_THRESHOLD (-100.0f)
+#define RSF_DUMP_DECODED_SENTINEL_VALUE (-100)
+#define RSF_DUMP_DECODED_SENTINEL_THRESHOLD ((float)RSF_DUMP_DECODED_SENTINEL_VALUE)
 
 typedef struct rsf_texture_dump_options {
     uint32_t struct_size;
@@ -128,6 +129,9 @@ typedef struct rsf_dump_pixels {
 } rsf_dump_pixels;
 rsf_dump_texture_result rsf_dump_pixels_png(const rsf_dump_pixels*,
     const rsf_texture_dump_options*, rsf_texture_dump_report*);
+
+/* Bytes per pixel for an admitted DXGI storage format, or zero if unsupported. */
+uint32_t rsf_texture_pixel_bytes(uint32_t format);
 
 #ifdef __cplusplus
 } /* extern "C" */

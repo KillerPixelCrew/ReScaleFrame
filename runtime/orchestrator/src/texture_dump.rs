@@ -105,7 +105,7 @@ pub(super) fn pixel_bytes(format: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_texture_pixel_bytes(format: u32) -> u32 {
+extern "C" fn rsf_texture_pixel_bytes(format: u32) -> u32 {
     pixel_bytes(format)
 }
 
