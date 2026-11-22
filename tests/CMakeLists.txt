@@ -49,7 +49,8 @@ add_custom_target(rsf_native_vulkan_exports_test ALL DEPENDS "${rsf_vulkan_expor
 add_dependencies(rsf_native_vulkan_exports_test rsf_orchestrator)
 add_test(NAME native_vulkan_dll_exports COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
     "${rsf_vulkan_exports_exe}" "$<TARGET_FILE:rsf_orchestrator>")
-add_executable(rsf_shader_patch_test shader_patch_main.c)
+# Corpus parity run by hand, documented in runtime/shader_patch/README.md; the device test below is the CTest one.
+add_executable(rsf_shader_patch_test EXCLUDE_FROM_ALL shader_patch_main.c)
 target_link_libraries(rsf_shader_patch_test PRIVATE rsf_shader_patch rsf_build_options)
 add_executable(rsf_shader_patch_device_test shader_patch_main.c)
 target_compile_definitions(rsf_shader_patch_device_test PRIVATE RSF_SHADER_PATCH_DEVICE_FIXTURE)
@@ -788,7 +789,7 @@ set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 # Explicit hardware experiment, never run by routine CTest verification.
 rsf_add_rust_static(rsf_exposure_probe_rust rsf_exposure_probe_rust_build rsf-exposure-probe rsf_exposure_probe)
 # The probe archive supplies the C main symbol. Keep the platform console CRT startup.
-add_executable(rsf_exposure_probe ../tools/exposure_probe/renderdoc.c)
+add_executable(rsf_exposure_probe EXCLUDE_FROM_ALL ../tools/exposure_probe/renderdoc.c)
 if(MSVC)
     target_link_options(rsf_exposure_probe PRIVATE /SUBSYSTEM:CONSOLE)
 endif()
@@ -1000,7 +1001,7 @@ if(TARGET rsf_vendor_census)
         set_tests_properties(rdr2_capture rdr2_capture_rgb10 PROPERTIES TIMEOUT 60)
     endif()
     # Hardware and desktop reproduction of the census next to an injected overlay; run by hand.
-    add_executable(rsf_census_present_coexistence loader/census_present_main.c)
+    add_executable(rsf_census_present_coexistence EXCLUDE_FROM_ALL loader/census_present_main.c)
     target_link_libraries(rsf_census_present_coexistence PRIVATE
         rsf_loader_fixtures_rust ReScaleFrame::VendorCensus d3d12 dxgi user32 rsf_build_options)
 
