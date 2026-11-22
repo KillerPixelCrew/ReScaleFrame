@@ -22,12 +22,12 @@ const NAMES: [&CStr; 7] = [
 const COUNT: usize = NAMES.len();
 
 #[repr(C)]
-struct Platform {
-    initialize: unsafe extern "C" fn() -> i32,
-    create: unsafe extern "C" fn(Handle, Handle, *mut Handle) -> i32,
-    enable: unsafe extern "C" fn(Handle) -> i32,
-    disable: unsafe extern "C" fn(Handle) -> i32,
-    remove: unsafe extern "C" fn(Handle) -> i32,
+pub(super) struct Platform {
+    pub(super) initialize: unsafe extern "C" fn() -> i32,
+    pub(super) create: unsafe extern "C" fn(Handle, Handle, *mut Handle) -> i32,
+    pub(super) enable: unsafe extern "C" fn(Handle) -> i32,
+    pub(super) disable: unsafe extern "C" fn(Handle) -> i32,
+    pub(super) remove: unsafe extern "C" fn(Handle) -> i32,
 }
 
 const _: () = assert!(size_of::<Platform>() == 5 * size_of::<Handle>());
@@ -126,8 +126,10 @@ fn install(
     Ok(())
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_install(detours: &[Handle; COUNT], platform: &Platform) {
+pub(super) extern "C" fn rsf_core_overlay_cursor_install(
+    detours: &[Handle; COUNT],
+    platform: &Platform,
+) {
     let (result, rollback_pending) = {
         let mut bindings = lock();
         let result = install(&mut bindings, detours, platform);
@@ -167,28 +169,23 @@ extern "C" fn rsf_core_overlay_cursor_install(detours: &[Handle; COUNT], platfor
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_retire(platform: &Platform) -> i32 {
+pub(super) extern "C" fn rsf_core_overlay_cursor_retire(platform: &Platform) -> i32 {
     i32::from(retire(&mut lock(), platform))
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_overlay_cursor_ready() -> u32 {
     READY.load(Ordering::Acquire).into()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_enter() {
+pub(super) extern "C" fn rsf_core_overlay_cursor_enter() {
     CALLS.fetch_add(1, Ordering::SeqCst);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_leave() {
+pub(super) extern "C" fn rsf_core_overlay_cursor_leave() {
     CALLS.fetch_sub(1, Ordering::SeqCst);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_forward(index: u32) -> Handle {
+pub(super) extern "C" fn rsf_core_overlay_cursor_forward(index: u32) -> Handle {
     FORWARD[index as usize].load(Ordering::SeqCst)
 }
 

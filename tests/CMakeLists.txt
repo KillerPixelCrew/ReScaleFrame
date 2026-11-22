@@ -362,7 +362,7 @@ target_link_libraries(rsf_overlay_panel_fixture PRIVATE ReScaleFrame::Graphics r
 # Exported by property rather than by dllexport on each definition: the header declares the
 # functions plainly, and MSVC refuses a definition whose linkage differs from its declaration.
 set_target_properties(rsf_overlay_panel_fixture PROPERTIES PREFIX "" WINDOWS_EXPORT_ALL_SYMBOLS ON)
-add_executable(rsf_overlay_host overlay_host.cpp ../loader/proxy/src/overlay_host.cpp)
+add_executable(rsf_overlay_host overlay_host.cpp)
 
 add_executable(rsf_overlay_hotkey overlay_hotkey.cpp)
 target_link_libraries(rsf_overlay_hotkey PRIVATE ReScaleFrame::Graphics minhook rsf_build_options)

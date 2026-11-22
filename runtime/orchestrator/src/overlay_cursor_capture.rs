@@ -13,11 +13,11 @@ const SHOW_LIMIT: u32 = 64;
 type Show = unsafe extern "C" fn(i32) -> i32;
 
 #[repr(C)]
-struct Effects {
-    get: unsafe extern "C" fn(*mut POINT) -> i32,
-    clip: unsafe extern "C" fn(*const RECT),
-    show: Show,
-    arrow: unsafe extern "C" fn(),
+pub(super) struct Effects {
+    pub(super) get: unsafe extern "C" fn(*mut POINT) -> i32,
+    pub(super) clip: unsafe extern "C" fn(*const RECT),
+    pub(super) show: Show,
+    pub(super) arrow: unsafe extern "C" fn(),
 }
 
 const _: () = {
@@ -57,13 +57,11 @@ fn captured() -> bool {
     rsf_core_overlay_cursor_ready() != 0 && rsf_core_overlay_visible() != 0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_captured() -> u32 {
+pub(super) extern "C" fn rsf_core_overlay_cursor_captured() -> u32 {
     captured().into()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_swallow_warp() -> u32 {
+pub(super) extern "C" fn rsf_core_overlay_cursor_swallow_warp() -> u32 {
     if captured() {
         SWALLOWED_WARPS.fetch_add(1, Ordering::Relaxed);
         1
@@ -72,14 +70,12 @@ extern "C" fn rsf_core_overlay_cursor_swallow_warp() -> u32 {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_cursor_clip_request(rect: *const RECT) -> u32 {
+pub(super) unsafe extern "C" fn rsf_core_overlay_cursor_clip_request(rect: *const RECT) -> u32 {
     lock().last_clip = unsafe { rect.as_ref() }.copied();
     captured().into()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_cursor_frozen(out: *mut POINT) -> u32 {
+pub(super) unsafe extern "C" fn rsf_core_overlay_cursor_frozen(out: *mut POINT) -> u32 {
     if out.is_null() || !captured() {
         return 0;
     }
@@ -90,8 +86,7 @@ unsafe extern "C" fn rsf_core_overlay_cursor_frozen(out: *mut POINT) -> u32 {
     1
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_show(visible: i32, original: Show) -> i32 {
+pub(super) extern "C" fn rsf_core_overlay_cursor_show(visible: i32, original: Show) -> i32 {
     if !captured() {
         let count = unsafe { original(visible) };
         GAME_COUNT.with(|value| value.set(count));
@@ -152,8 +147,11 @@ fn close(effects: &Effects, restore_clip: bool) {
     ));
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_capture(visible: u32, restore_clip: u32, effects: &Effects) {
+pub(super) extern "C" fn rsf_core_overlay_cursor_capture(
+    visible: u32,
+    restore_clip: u32,
+    effects: &Effects,
+) {
     if rsf_core_overlay_cursor_ready() == 0 {
         return;
     }
@@ -164,7 +162,6 @@ extern "C" fn rsf_core_overlay_cursor_capture(visible: u32, restore_clip: u32, e
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_reset_capture() {
+pub(super) extern "C" fn rsf_core_overlay_cursor_reset_capture() {
     *lock() = Capture::new();
 }

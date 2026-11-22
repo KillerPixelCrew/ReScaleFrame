@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: MIT
+use crate::overlay_host_abi::{
+    RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay_input_log_fn as LogFn,
+    rsf_overlay_input_options as Options,
+};
 use crate::overlay_visibility::{self, rsf_core_overlay_toggle_key};
 use crate::sr_session::has_capacity;
 use crate::{overlay_cursor_hooks, overlay_pointer};
@@ -17,10 +21,8 @@ use windows_sys::Win32::{
 };
 
 type Handle = *mut c_void;
-type LogFn = Option<unsafe extern "C" fn(Handle, *const c_char)>;
 type InvokeLog = unsafe extern "C" fn(LogFn, Handle, *const c_char);
 
-const ABI_VERSION: u32 = 1;
 const INSERT: u32 = 0x2d;
 pub(super) const OK: i32 = 0;
 pub(super) const INVALID: i32 = -1;
@@ -31,19 +33,10 @@ const SUBCLASS_FAILED: i32 = -5;
 const FOREIGN_SUBCLASS: i32 = -6;
 
 #[repr(C)]
-struct Options {
-    struct_size: u32,
-    abi_version: u32,
-    toggle_virtual_key: u32,
-    log: LogFn,
-    log_user: Handle,
-}
-
-#[repr(C)]
-struct Platform {
-    install_cursor: unsafe extern "C" fn(),
-    retire_cursor: unsafe extern "C" fn(u32, u32) -> i32,
-    log: InvokeLog,
+pub(super) struct Platform {
+    pub(super) install_cursor: unsafe extern "C" fn(),
+    pub(super) retire_cursor: unsafe extern "C" fn(u32, u32) -> i32,
+    pub(super) log: InvokeLog,
 }
 
 const _: () = {
@@ -117,8 +110,7 @@ fn swap_procedure(window: Handle, procedure: isize) -> Result<isize, u32> {
     Ok(previous)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_input_install(
+pub(super) unsafe extern "C" fn rsf_core_overlay_input_install(
     window: Handle,
     options: *const Options,
     procedure: isize,
@@ -128,7 +120,7 @@ unsafe extern "C" fn rsf_core_overlay_input_install(
         return INVALID;
     }
     let options = unsafe { &*options };
-    if options.abi_version != ABI_VERSION {
+    if options.abi_version != RSF_OVERLAY_INPUT_ABI_VERSION {
         return ABI_MISMATCH;
     }
     if unsafe { IsWindow(window) } == 0 {
@@ -191,8 +183,7 @@ unsafe extern "C" fn rsf_core_overlay_input_install(
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_input_uninstall(
+pub(super) unsafe extern "C" fn rsf_core_overlay_input_uninstall(
     procedure: isize,
     platform: &Platform,
 ) -> i32 {
@@ -246,23 +237,12 @@ unsafe extern "C" fn rsf_core_overlay_input_uninstall(
     OK
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_overlay_input_window() -> Handle {
     WINDOW.load(Ordering::Acquire)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_input_original() -> isize {
+pub(super) extern "C" fn rsf_core_overlay_input_original() -> isize {
     ORIGINAL.load(Ordering::Acquire)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_input_log(message: *const c_char) {
-    if !message.is_null()
-        && let Some(log) = logger()
-    {
-        log.say(unsafe { CStr::from_ptr(message) });
-    }
 }
 
 pub(super) fn hold(key: u32) {

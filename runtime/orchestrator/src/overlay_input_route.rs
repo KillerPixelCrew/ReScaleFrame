@@ -39,24 +39,24 @@ static LAST_POSITION: AtomicU64 = AtomicU64::new(0);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct Contact {
-    x: i32,
-    y: i32,
-    id: u32,
-    flags: u32,
-    kind: i32,
+pub(super) struct Contact {
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) id: u32,
+    pub(super) flags: u32,
+    pub(super) kind: i32,
 }
 
 #[repr(C)]
-struct MessageOps {
-    pointer: unsafe extern "C" fn(u32, &mut Contact) -> u32,
-    touch: unsafe extern "C" fn(isize, u32, *mut Contact, &mut u64) -> u32,
-    close_touch: unsafe extern "C" fn(isize),
-    contact: unsafe extern "C" fn(*mut c_void, &Contact, u32),
-    mouse_position: unsafe extern "C" fn(*mut c_void, isize),
-    mouse_button: unsafe extern "C" fn(u32, u32),
-    raw_mouse: unsafe extern "C" fn(*mut c_void, isize),
-    apply: Apply,
+pub(super) struct MessageOps {
+    pub(super) pointer: unsafe extern "C" fn(u32, &mut Contact) -> u32,
+    pub(super) touch: unsafe extern "C" fn(isize, u32, *mut Contact, &mut u64) -> u32,
+    pub(super) close_touch: unsafe extern "C" fn(isize),
+    pub(super) contact: unsafe extern "C" fn(*mut c_void, &Contact, u32),
+    pub(super) mouse_position: unsafe extern "C" fn(*mut c_void, isize),
+    pub(super) mouse_button: unsafe extern "C" fn(u32, u32),
+    pub(super) raw_mouse: unsafe extern "C" fn(*mut c_void, isize) -> bool,
+    pub(super) apply: Apply,
 }
 
 const _: () = {
@@ -67,7 +67,7 @@ const _: () = {
 
 #[repr(u32)]
 #[derive(Clone, Copy)]
-enum Disposition {
+pub(super) enum Disposition {
     Forward = 0,
     Consume = 1,
     ConsumeXButton = 2,
@@ -191,8 +191,7 @@ fn mouse_button(message: u32, wparam: usize) -> Option<(u32, bool)> {
     Some((key.into(), down))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_route_message(
+pub(super) extern "C" fn rsf_core_overlay_route_message(
     window: *mut c_void,
     message: u32,
     wparam: usize,
@@ -258,8 +257,9 @@ extern "C" fn rsf_core_overlay_route_message(
             return Disposition::Consume;
         }
         WM_INPUT if visible => {
-            unsafe { (ops.raw_mouse)(window, lparam) };
-            RAW.fetch_add(1, Ordering::Relaxed);
+            if unsafe { (ops.raw_mouse)(window, lparam) } {
+                RAW.fetch_add(1, Ordering::Relaxed);
+            }
             // DefWindowProc releases the consumed raw-input record.
             return Disposition::Default;
         }
@@ -360,7 +360,7 @@ pub(super) fn sampled(x: f32, y: f32, buttons: u32) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_input_counters(out: *mut Counters) -> i32 {
+pub(super) unsafe extern "C" fn rsf_overlay_input_counters_get(out: *mut Counters) -> i32 {
     if !unsafe { has_capacity(out) } {
         return -1;
     }

@@ -4,6 +4,7 @@
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 
 pub const RSF_OVERLAY_ABI_VERSION: u32 = 18;
+pub const RSF_OVERLAY_INPUT_ABI_VERSION: u32 = 1;
 pub type rsf_overlay_result = i32;
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
@@ -147,6 +148,44 @@ impl Default for rsf_overlay_draw_data {
 pub struct rsf_overlay {
     _unused: [u8; 0],
 }
+pub type rsf_overlay_input_log_fn = ::core::option::Option<
+    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
+>;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_overlay_input_options {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub toggle_virtual_key: u32,
+    pub log: rsf_overlay_input_log_fn,
+    pub log_user: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_overlay_input_options"]
+        [::core::mem::size_of::<rsf_overlay_input_options>() - 32usize];
+    ["Alignment of rsf_overlay_input_options"]
+        [::core::mem::align_of::<rsf_overlay_input_options>() - 8usize];
+    ["Offset of field: rsf_overlay_input_options::struct_size"]
+        [::core::mem::offset_of!(rsf_overlay_input_options, struct_size) - 0usize];
+    ["Offset of field: rsf_overlay_input_options::abi_version"]
+        [::core::mem::offset_of!(rsf_overlay_input_options, abi_version) - 4usize];
+    ["Offset of field: rsf_overlay_input_options::toggle_virtual_key"]
+        [::core::mem::offset_of!(rsf_overlay_input_options, toggle_virtual_key) - 8usize];
+    ["Offset of field: rsf_overlay_input_options::log"]
+        [::core::mem::offset_of!(rsf_overlay_input_options, log) - 16usize];
+    ["Offset of field: rsf_overlay_input_options::log_user"]
+        [::core::mem::offset_of!(rsf_overlay_input_options, log_user) - 24usize];
+};
+impl Default for rsf_overlay_input_options {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_overlay_host_panel {
@@ -193,224 +232,3 @@ pub const RSF_OVERLAY_HOST_PANEL_NO_PATH: _bindgen_ty_1 = 1;
 pub const RSF_OVERLAY_HOST_PANEL_NOT_LOADED: _bindgen_ty_1 = 2;
 pub const RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS: _bindgen_ty_1 = 3;
 pub type _bindgen_ty_1 = ::core::ffi::c_int;
-pub type rsf_overlay_host_log = ::core::option::Option<
-    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
->;
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_overlay_host_texture_desc {
-    pub width: u32,
-    pub height: u32,
-    pub format: u32,
-    pub bind_flags: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_overlay_host_texture_desc"]
-        [::core::mem::size_of::<rsf_overlay_host_texture_desc>() - 16usize];
-    ["Alignment of rsf_overlay_host_texture_desc"]
-        [::core::mem::align_of::<rsf_overlay_host_texture_desc>() - 4usize];
-    ["Offset of field: rsf_overlay_host_texture_desc::width"]
-        [::core::mem::offset_of!(rsf_overlay_host_texture_desc, width) - 0usize];
-    ["Offset of field: rsf_overlay_host_texture_desc::height"]
-        [::core::mem::offset_of!(rsf_overlay_host_texture_desc, height) - 4usize];
-    ["Offset of field: rsf_overlay_host_texture_desc::format"]
-        [::core::mem::offset_of!(rsf_overlay_host_texture_desc, format) - 8usize];
-    ["Offset of field: rsf_overlay_host_texture_desc::bind_flags"]
-        [::core::mem::offset_of!(rsf_overlay_host_texture_desc, bind_flags) - 12usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_overlay_host_targets {
-    pub views: [*mut ::core::ffi::c_void; 8usize],
-    pub depth: *mut ::core::ffi::c_void,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_overlay_host_targets"]
-        [::core::mem::size_of::<rsf_overlay_host_targets>() - 72usize];
-    ["Alignment of rsf_overlay_host_targets"]
-        [::core::mem::align_of::<rsf_overlay_host_targets>() - 8usize];
-    ["Offset of field: rsf_overlay_host_targets::views"]
-        [::core::mem::offset_of!(rsf_overlay_host_targets, views) - 0usize];
-    ["Offset of field: rsf_overlay_host_targets::depth"]
-        [::core::mem::offset_of!(rsf_overlay_host_targets, depth) - 64usize];
-};
-impl Default for rsf_overlay_host_targets {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_overlay_host_platform {
-    pub load_panel: ::core::option::Option<
-        unsafe extern "C" fn(out: *mut rsf_overlay_host_panel, error: *mut u32) -> u32,
-    >,
-    pub chain_device: ::core::option::Option<
-        unsafe extern "C" fn(
-            chain: *mut ::core::ffi::c_void,
-            device: *mut *mut ::core::ffi::c_void,
-        ) -> i32,
-    >,
-    pub chain_buffer: ::core::option::Option<
-        unsafe extern "C" fn(
-            chain: *mut ::core::ffi::c_void,
-            texture: *mut *mut ::core::ffi::c_void,
-        ) -> i32,
-    >,
-    pub chain_window: ::core::option::Option<
-        unsafe extern "C" fn(chain: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub same_object: ::core::option::Option<
-        unsafe extern "C" fn(
-            first: *mut ::core::ffi::c_void,
-            second: *mut ::core::ffi::c_void,
-        ) -> u32,
-    >,
-    pub immediate_context: ::core::option::Option<
-        unsafe extern "C" fn(device: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub texture_device: ::core::option::Option<
-        unsafe extern "C" fn(texture: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
-    >,
-    pub texture_desc: ::core::option::Option<
-        unsafe extern "C" fn(
-            texture: *mut ::core::ffi::c_void,
-            out: *mut rsf_overlay_host_texture_desc,
-        ),
-    >,
-    pub create_view: ::core::option::Option<
-        unsafe extern "C" fn(
-            device: *mut ::core::ffi::c_void,
-            texture: *mut ::core::ffi::c_void,
-            view: *mut *mut ::core::ffi::c_void,
-        ) -> i32,
-    >,
-    pub save_targets: ::core::option::Option<
-        unsafe extern "C" fn(context: *mut ::core::ffi::c_void, out: *mut rsf_overlay_host_targets),
-    >,
-    pub bind_target: ::core::option::Option<
-        unsafe extern "C" fn(context: *mut ::core::ffi::c_void, view: *mut ::core::ffi::c_void),
-    >,
-    pub restore_targets: ::core::option::Option<
-        unsafe extern "C" fn(
-            context: *mut ::core::ffi::c_void,
-            saved: *const rsf_overlay_host_targets,
-        ),
-    >,
-    pub renderer_create: ::core::option::Option<
-        unsafe extern "C" fn(
-            device: *mut ::core::ffi::c_void,
-            log: rsf_overlay_host_log,
-            user: *mut ::core::ffi::c_void,
-            out: *mut *mut ::core::ffi::c_void,
-        ) -> i32,
-    >,
-    pub renderer_upload: ::core::option::Option<
-        unsafe extern "C" fn(
-            renderer: *mut ::core::ffi::c_void,
-            context: *mut ::core::ffi::c_void,
-            update: *const rsf_overlay_texture_update,
-        ) -> i32,
-    >,
-    pub renderer_free:
-        ::core::option::Option<unsafe extern "C" fn(renderer: *mut ::core::ffi::c_void, id: u64)>,
-    pub renderer_draw: ::core::option::Option<
-        unsafe extern "C" fn(
-            renderer: *mut ::core::ffi::c_void,
-            context: *mut ::core::ffi::c_void,
-            data: *const rsf_overlay_draw_data,
-            width: u32,
-            height: u32,
-        ) -> i32,
-    >,
-    pub renderer_destroy:
-        ::core::option::Option<unsafe extern "C" fn(renderer: *mut ::core::ffi::c_void)>,
-    pub input_install: ::core::option::Option<
-        unsafe extern "C" fn(
-            window: *mut ::core::ffi::c_void,
-            toggle_key: u32,
-            log: rsf_overlay_host_log,
-            user: *mut ::core::ffi::c_void,
-        ) -> i32,
-    >,
-    pub input_uninstall: ::core::option::Option<unsafe extern "C" fn()>,
-    pub input_visible: ::core::option::Option<unsafe extern "C" fn() -> u32>,
-    pub input_set_visible: ::core::option::Option<unsafe extern "C" fn(visible: u32)>,
-    pub input_collect: ::core::option::Option<
-        unsafe extern "C" fn(
-            out: *mut rsf_overlay_input,
-            width: u32,
-            height: u32,
-            delta_seconds: f32,
-        ),
-    >,
-    pub tick: ::core::option::Option<unsafe extern "C" fn() -> u64>,
-    pub counter: ::core::option::Option<unsafe extern "C" fn(value: *mut i64) -> u32>,
-    pub frequency: ::core::option::Option<unsafe extern "C" fn(value: *mut i64) -> u32>,
-    pub thread_id: ::core::option::Option<unsafe extern "C" fn() -> u32>,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_overlay_host_platform"]
-        [::core::mem::size_of::<rsf_overlay_host_platform>() - 208usize];
-    ["Alignment of rsf_overlay_host_platform"]
-        [::core::mem::align_of::<rsf_overlay_host_platform>() - 8usize];
-    ["Offset of field: rsf_overlay_host_platform::load_panel"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, load_panel) - 0usize];
-    ["Offset of field: rsf_overlay_host_platform::chain_device"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, chain_device) - 8usize];
-    ["Offset of field: rsf_overlay_host_platform::chain_buffer"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, chain_buffer) - 16usize];
-    ["Offset of field: rsf_overlay_host_platform::chain_window"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, chain_window) - 24usize];
-    ["Offset of field: rsf_overlay_host_platform::same_object"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, same_object) - 32usize];
-    ["Offset of field: rsf_overlay_host_platform::immediate_context"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, immediate_context) - 40usize];
-    ["Offset of field: rsf_overlay_host_platform::texture_device"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, texture_device) - 48usize];
-    ["Offset of field: rsf_overlay_host_platform::texture_desc"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, texture_desc) - 56usize];
-    ["Offset of field: rsf_overlay_host_platform::create_view"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, create_view) - 64usize];
-    ["Offset of field: rsf_overlay_host_platform::save_targets"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, save_targets) - 72usize];
-    ["Offset of field: rsf_overlay_host_platform::bind_target"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, bind_target) - 80usize];
-    ["Offset of field: rsf_overlay_host_platform::restore_targets"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, restore_targets) - 88usize];
-    ["Offset of field: rsf_overlay_host_platform::renderer_create"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, renderer_create) - 96usize];
-    ["Offset of field: rsf_overlay_host_platform::renderer_upload"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, renderer_upload) - 104usize];
-    ["Offset of field: rsf_overlay_host_platform::renderer_free"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, renderer_free) - 112usize];
-    ["Offset of field: rsf_overlay_host_platform::renderer_draw"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, renderer_draw) - 120usize];
-    ["Offset of field: rsf_overlay_host_platform::renderer_destroy"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, renderer_destroy) - 128usize];
-    ["Offset of field: rsf_overlay_host_platform::input_install"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, input_install) - 136usize];
-    ["Offset of field: rsf_overlay_host_platform::input_uninstall"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, input_uninstall) - 144usize];
-    ["Offset of field: rsf_overlay_host_platform::input_visible"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, input_visible) - 152usize];
-    ["Offset of field: rsf_overlay_host_platform::input_set_visible"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, input_set_visible) - 160usize];
-    ["Offset of field: rsf_overlay_host_platform::input_collect"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, input_collect) - 168usize];
-    ["Offset of field: rsf_overlay_host_platform::tick"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, tick) - 176usize];
-    ["Offset of field: rsf_overlay_host_platform::counter"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, counter) - 184usize];
-    ["Offset of field: rsf_overlay_host_platform::frequency"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, frequency) - 192usize];
-    ["Offset of field: rsf_overlay_host_platform::thread_id"]
-        [::core::mem::offset_of!(rsf_overlay_host_platform, thread_id) - 200usize];
-};

@@ -35,7 +35,6 @@ add_library(rsf_orchestrator_core OBJECT
     src/render_host_platform.cpp
     src/overlay_d3d12.cpp
     src/overlay_native12.cpp
-    ../../loader/proxy/src/overlay_host.cpp
     src/native_regions.cpp
     src/fg_session_platform.cpp
     src/fg_providers.cpp

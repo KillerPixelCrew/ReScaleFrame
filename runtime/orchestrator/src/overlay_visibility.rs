@@ -18,7 +18,7 @@ struct Change {
 
 struct Visibility {
     requested: bool,
-    last_change: Option<u64>,
+    last_toggle: Option<u64>,
     key_down: bool,
     poll_focused: bool,
     applying: bool,
@@ -29,7 +29,7 @@ impl Visibility {
     const fn new(down: bool) -> Self {
         Self {
             requested: false,
-            last_change: None,
+            last_toggle: None,
             key_down: down,
             poll_focused: false,
             applying: false,
@@ -39,14 +39,17 @@ impl Visibility {
 
     fn request(&mut self, visible: bool, source: u32, now: u64) -> Option<Change> {
         if self.requested == visible
-            || self
-                .last_change
-                .is_some_and(|previous| now.saturating_sub(previous) < DEBOUNCE_MS)
+            || (source != EXTERNAL
+                && self
+                    .last_toggle
+                    .is_some_and(|previous| now.saturating_sub(previous) < DEBOUNCE_MS))
         {
             return None;
         }
         self.requested = visible;
-        self.last_change = Some(now);
+        if source != EXTERNAL {
+            self.last_toggle = Some(now);
+        }
         let change = Change { visible, source };
         if self.applying {
             self.pending = Some(change);
@@ -106,12 +109,10 @@ fn apply_changes(mut change: Option<Change>, apply: Apply) {
     }
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_overlay_visible() -> u32 {
     VISIBLE.load(Ordering::Acquire).into()
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_overlay_toggle_key() -> u32 {
     TOGGLE_KEY.load(Ordering::Relaxed)
 }
@@ -126,7 +127,6 @@ pub(super) fn reset(toggle_key: u32, down: bool) -> bool {
     VISIBLE.swap(false, Ordering::AcqRel)
 }
 
-#[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_core_overlay_visibility_set(visible: u32, now: u64, apply: Apply) {
     let change = lock().request(visible != 0, EXTERNAL, now);
     apply_changes(change, apply);
@@ -146,8 +146,12 @@ pub(super) fn focus_lost() {
     lock().focus_lost();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_toggle_poll(focused: u32, down: u32, now: u64, apply: Apply) {
+pub(super) extern "C" fn rsf_core_overlay_toggle_poll(
+    focused: u32,
+    down: u32,
+    now: u64,
+    apply: Apply,
+) {
     let change = lock().poll(focused != 0, down != 0, now);
     apply_changes(change, apply);
 }
@@ -164,7 +168,7 @@ mod tests {
         assert!(open.unwrap().visible);
         assert!(state.poll(true, true, 1).is_none());
         assert!(state.request(false, EXTERNAL, 2).is_none());
-        assert!(state.request(false, EXTERNAL, 250).is_none());
+        assert!(!state.requested);
         assert!(!state.next().unwrap().visible);
         assert!(state.next().is_none());
     }

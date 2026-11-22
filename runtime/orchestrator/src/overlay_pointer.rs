@@ -21,11 +21,11 @@ const OUTSIDE_PANEL: f32 = -100000.0;
 
 #[repr(C)]
 #[derive(Default)]
-struct ClientPoint {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+pub(super) struct ClientPoint {
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) width: i32,
+    pub(super) height: i32,
 }
 
 const _: () = assert!(size_of::<ClientPoint>() == 16);
@@ -303,8 +303,7 @@ pub(super) fn reset() {
     *lock() = PointerState::new();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_clear() {
+pub(super) extern "C" fn rsf_core_overlay_pointer_clear() {
     lock().clear_transient();
 }
 
@@ -312,25 +311,21 @@ pub(super) fn focus_lost() {
     lock().focus_lost();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_raw(point: &ClientPoint) {
+pub(super) extern "C" fn rsf_core_overlay_pointer_raw(point: &ClientPoint) {
     lock().raw(point);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_move(point: &ClientPoint, cursor_freed: u32) {
+pub(super) extern "C" fn rsf_core_overlay_pointer_move(point: &ClientPoint, cursor_freed: u32) {
     lock().movement(point, cursor_freed != 0);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_seed(point: &ClientPoint) {
+pub(super) extern "C" fn rsf_core_overlay_pointer_seed(point: &ClientPoint) {
     let mut state = lock();
     state.position_at(point);
     state.previous_report = None;
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_button(bit: u32, down: u32) {
+pub(super) extern "C" fn rsf_core_overlay_pointer_button(bit: u32, down: u32) {
     let mut state = lock();
     if down != 0 {
         state.buttons |= bit;
@@ -339,8 +334,7 @@ extern "C" fn rsf_core_overlay_pointer_button(bit: u32, down: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_polled_buttons(buttons: u32) {
+pub(super) extern "C" fn rsf_core_overlay_pointer_polled_buttons(buttons: u32) {
     lock().polled_buttons = buttons;
 }
 
@@ -348,8 +342,11 @@ pub(super) fn scroll(notches: f32) {
     lock().scroll += notches;
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_contact(point: &ClientPoint, id: u32, flags: u32) {
+pub(super) extern "C" fn rsf_core_overlay_pointer_contact(
+    point: &ClientPoint,
+    id: u32,
+    flags: u32,
+) {
     lock().contact(point, id, flags);
 }
 
@@ -365,8 +362,7 @@ pub(super) fn gesture(id: u32, x: i32, y: i32, flags: u32, now: u64, visible: u3
 
 type SampleCursor = unsafe extern "C" fn(*mut c_void, *mut ClientPoint) -> u32;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_input_collect(
+pub(super) unsafe extern "C" fn rsf_core_overlay_input_collect(
     out: *mut Input,
     display_width: u32,
     display_height: u32,

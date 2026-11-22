@@ -421,10 +421,10 @@ generate("runtime/orchestrator/src/overlay_native12_abi.rs", "runtime/orchestrat
          ["--no-recursive-allowlist", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};",
           "--raw-line", "use crate::overlay_host_abi::rsf_overlay_input;"])
-generate("runtime/orchestrator/src/overlay_host_abi.rs", "loader/proxy/src/overlay_host_platform.h",
-         "rsf_overlay(_result|_input|_draw_data|_vertex|_draw_call|_host_(log|panel|texture_desc|targets|platform))?",
-         "RSF_OVERLAY_(ABI_VERSION|HOST_PANEL_.*)",
-         ["-Iui/overlay/include"],
+generate("runtime/orchestrator/src/overlay_host_abi.rs", "runtime/orchestrator/src/overlay_panel.h",
+         "rsf_overlay(_result|_input(_options|_log_fn)?|_draw_data|_vertex|_draw_call|_host_panel)?",
+         "RSF_OVERLAY_(ABI_VERSION|INPUT_ABI_VERSION|HOST_PANEL_.*)",
+         ["-include", "rescaleframe/overlay_input.h", "-Iui/overlay/include", "-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])
 generate("runtime/orchestrator/src/shader_patch_abi.rs", "runtime/shader_patch/src/json.h",

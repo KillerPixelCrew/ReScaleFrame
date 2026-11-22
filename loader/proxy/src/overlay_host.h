@@ -1,18 +1,6 @@
 /* SPDX-License-Identifier: MIT */
-/* Put the egui overlay on the screen inside the game, and give what it decides back to the bridge.
-
-   The three pieces this joins already existed and had never been connected to anything: the panel
-   itself is a Rust DLL behind `rescaleframe/overlay.h`, the D3D11 pass that draws its triangles is
-   `overlay_renderer`, and the window subclass that feeds it a mouse and a keyboard is
-   `overlay_input`. What was missing was a caller inside a game process, which is this.
-
-   It lives in the research proxy for the same reason the rest of the bridge does: this is what can
-   be loaded into Ace Combat 7 today. Presentation belongs to the orchestrator by the ownership
-   split in AGENTS.md, and moving it there is its own change.
-
-   The point of it is not the settings. Counters can say a reconstruction ran, and a dumped frame
-   can say its geometry is right, but whether the picture is actually correct is a question that
-   has to be looked at while the game moves. That is what this is for. */
+/* Shared D3D11 overlay host C ABI. The Rust orchestrator owns the panel, renderer and input
+   capture for both the swap-chain and supplied-target paths. */
 
 #ifndef RSF_PROXY_OVERLAY_HOST_H
 #define RSF_PROXY_OVERLAY_HOST_H
@@ -38,7 +26,8 @@ typedef void (*rsf_overlay_host_log_fn)(void* user, const char* message);
    without the Rust half is a normal thing to be running. */
 int rsf_overlay_host_start(void* swapchain, rsf_overlay_host_log_fn log,
                            void* log_user);
-/* Shared UI host endpoints for renderers which already own a device, window and target. */
+/* Shared UI host endpoints for renderers which already own a device, window and target.
+   Once layout succeeds, draw_target returns the intent even if rendering fails. */
 int rsf_overlay_host_start_device(void* d3d11_device, void* hwnd, rsf_overlay_host_log_fn log, void* user);
 void rsf_overlay_host_stop_device(void* d3d11_device);
 int rsf_overlay_host_draw_target(void* d3d11_context, void* render_target_view, uint32_t width,

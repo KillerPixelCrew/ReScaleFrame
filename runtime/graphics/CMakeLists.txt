@@ -16,7 +16,6 @@ add_library(rsf_graphics STATIC
     src/fullscreen_pass.cpp
     src/ui_layer.cpp
     src/overlay_renderer.cpp
-    src/overlay_input.cpp
     src/d3d11_observer.cpp)
 target_sources(rsf_graphics PRIVATE src/d3d12_observer.cpp)
 # The overlay's C ABI lives with the Rust crate that implements it, because that crate is the side

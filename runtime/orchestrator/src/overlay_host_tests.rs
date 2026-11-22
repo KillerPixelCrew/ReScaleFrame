@@ -173,10 +173,10 @@ unsafe extern "C" fn immediate_context(_: Handle) -> Handle {
 unsafe extern "C" fn texture_device(_: Handle) -> Handle {
     give(world(|world| world.owner))
 }
-unsafe extern "C" fn texture_desc(_: Handle, out: *mut rsf_overlay_host_texture_desc) {
+unsafe extern "C" fn texture_desc(_: Handle, out: *mut TextureDesc) {
     let (width, height) = world(|world| world.size);
     unsafe {
-        out.write(rsf_overlay_host_texture_desc {
+        out.write(TextureDesc {
             width,
             height,
             format: 28,
@@ -190,22 +190,17 @@ unsafe extern "C" fn create_view(_: Handle, _: Handle, view: *mut Handle) -> i32
     unsafe { view.write(if hr < 0 { null_mut() } else { give(object) }) };
     hr
 }
-unsafe extern "C" fn save_targets(_: Handle, out: *mut rsf_overlay_host_targets) {
+unsafe extern "C" fn save_targets(_: Handle, out: *mut Targets) {
     call("save_targets");
     unsafe { (*out).views[0] = give(world(|world| world.saved_view)) };
 }
 unsafe extern "C" fn bind_target(_: Handle, view: Handle) {
     call(format!("bind {}", view as usize));
 }
-unsafe extern "C" fn restore_targets(_: Handle, saved: *const rsf_overlay_host_targets) {
+unsafe extern "C" fn restore_targets(_: Handle, saved: *const Targets) {
     call(format!("restore {}", unsafe { (*saved).views[0] } as usize));
 }
-unsafe extern "C" fn renderer_create(
-    _: Handle,
-    log: rsf_overlay_host_log,
-    _: Handle,
-    out: *mut Handle,
-) -> i32 {
+unsafe extern "C" fn renderer_create(_: Handle, log: Log, _: Handle, out: *mut Handle) -> i32 {
     call("renderer_create");
     assert!(log.is_some());
     let result = world(|world| world.renderer_result);
@@ -241,12 +236,7 @@ unsafe extern "C" fn renderer_draw(
 unsafe extern "C" fn renderer_destroy(_: Handle) {
     call("renderer_destroy");
 }
-unsafe extern "C" fn input_install(
-    _: Handle,
-    key: u32,
-    log: rsf_overlay_host_log,
-    _: Handle,
-) -> i32 {
+unsafe extern "C" fn input_install(_: Handle, key: u32, log: Log, _: Handle) -> i32 {
     call(format!("install {key:#x}"));
     assert!(log.is_some());
     world(|world| world.install_result)
@@ -563,11 +553,11 @@ fn present_draws_between_saved_targets_and_releases_every_reference() {
             "frame".into(),
             "set_visible 0".into(),
             "updates".into(),
-            "frees".into(),
             "save_targets".into(),
             format!("bind {view}"),
             "draw 64x32 3".into(),
             format!("restore {saved}"),
+            "frees".into(),
         ]
     );
     assert_eq!(intent.close_requested, 1);
@@ -652,13 +642,24 @@ fn a_layout_failure_is_reported_once_even_with_the_performance_hud() {
     let mut host = started(&p);
     host.trace_frames = 0;
     world(|world| world.frame_result = -3);
-    for _ in 0..4 {
-        assert_eq!(host.present(&p, CHAIN, &stats(true), null_mut()), 0);
-    }
+    let context = raw(&scene.context);
+    let target = raw(&scene.view);
+    let hud = stats(true);
+    world(|world| world.visible = 1);
     assert_eq!(
-        logs(),
-        ["overlay: the panel failed to lay out a frame, result -3. Closing it"]
+        host.draw_target(&p, context, target, 64, 32, &hud, null_mut()),
+        0
     );
+    assert_eq!(world(|world| world.visible), 0);
+    logs(); // Drop the supplied-target trace before checking for further layout attempts.
+    for _ in 0..4 {
+        assert_eq!(host.present(&p, CHAIN, &hud, null_mut()), 0);
+        assert_eq!(
+            host.draw_target(&p, context, target, 64, 32, &hud, null_mut()),
+            0
+        );
+    }
+    assert!(logs().is_empty());
     assert_eq!(calls().iter().filter(|call| *call == "frame").count(), 1);
     host.stop(&p);
     assert!(scene.balanced());
@@ -839,6 +840,8 @@ fn the_exported_entry_points_share_one_host() {
             0
         );
         drop(held);
+        rsf_core_overlay_host_stop_device(&p, raw(&scene.other));
+        assert_eq!(rsf_core_overlay_host_visible(&p), 1);
         rsf_core_overlay_host_stop(&p);
         assert_eq!(rsf_core_overlay_host_visible(&p), 0);
         assert_eq!(

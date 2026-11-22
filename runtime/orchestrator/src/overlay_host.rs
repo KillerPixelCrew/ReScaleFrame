@@ -4,16 +4,14 @@
 // AC7's embedded bridge, the Runtime overlay service and the D3D11-on-12 path all draw the same
 // panel through this one host. It decides lifecycle, owns the panel, renderer and device, runs the
 // startup hint, visibility, input and texture sequencing, admits draws and targets, handles
-// failures and keeps frame time. The native leaves in overlay_host_platform.h only make the
+// failures and keeps frame time. The native functions only make the
 // loader, COM, input, renderer and Win32 calls.
 use crate::com_ref::ComRef;
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use crate::overlay_host_abi::{
     RSF_OVERLAY_ABI_VERSION, RSF_OVERLAY_HOST_PANEL_LOADED, RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS,
     RSF_OVERLAY_HOST_PANEL_NO_PATH, RSF_OVERLAY_HOST_PANEL_NOT_LOADED, rsf_overlay,
-    rsf_overlay_draw_data, rsf_overlay_host_log, rsf_overlay_host_panel,
-    rsf_overlay_host_platform as Platform, rsf_overlay_host_targets, rsf_overlay_host_texture_desc,
-    rsf_overlay_input,
+    rsf_overlay_draw_data, rsf_overlay_host_panel, rsf_overlay_input,
 };
 use std::ffi::{CString, c_char, c_void};
 use std::fmt::Display;
@@ -22,6 +20,100 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 type Handle = *mut c_void;
+
+type Log = Option<unsafe extern "C" fn(user: *mut c_void, message: *const c_char)>;
+#[derive(Default, Copy, Clone)]
+struct TextureDesc {
+    width: u32,
+    height: u32,
+    format: u32,
+    bind_flags: u32,
+}
+#[derive(Copy, Clone)]
+struct Targets {
+    views: [*mut c_void; 8usize],
+    depth: *mut c_void,
+}
+impl Default for Targets {
+    fn default() -> Self {
+        Self {
+            views: [null_mut(); 8],
+            depth: null_mut(),
+        }
+    }
+}
+#[derive(Default, Copy, Clone)]
+struct Platform {
+    load_panel:
+        Option<unsafe extern "C" fn(out: *mut rsf_overlay_host_panel, error: *mut u32) -> u32>,
+    chain_device: Option<unsafe extern "C" fn(chain: *mut c_void, device: *mut *mut c_void) -> i32>,
+    chain_buffer:
+        Option<unsafe extern "C" fn(chain: *mut c_void, texture: *mut *mut c_void) -> i32>,
+    chain_window: Option<unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void>,
+    same_object: Option<unsafe extern "C" fn(first: *mut c_void, second: *mut c_void) -> u32>,
+    immediate_context: Option<unsafe extern "C" fn(device: *mut c_void) -> *mut c_void>,
+    texture_device: Option<unsafe extern "C" fn(texture: *mut c_void) -> *mut c_void>,
+    texture_desc: Option<unsafe extern "C" fn(texture: *mut c_void, out: *mut TextureDesc)>,
+    create_view: Option<
+        unsafe extern "C" fn(
+            device: *mut c_void,
+            texture: *mut c_void,
+            view: *mut *mut c_void,
+        ) -> i32,
+    >,
+    save_targets: Option<unsafe extern "C" fn(context: *mut c_void, out: *mut Targets)>,
+    bind_target: Option<unsafe extern "C" fn(context: *mut c_void, view: *mut c_void)>,
+    restore_targets: Option<unsafe extern "C" fn(context: *mut c_void, saved: *const Targets)>,
+    renderer_create: Option<
+        unsafe extern "C" fn(
+            device: *mut c_void,
+            log: Log,
+            user: *mut c_void,
+            out: *mut *mut c_void,
+        ) -> i32,
+    >,
+    renderer_upload: Option<
+        unsafe extern "C" fn(
+            renderer: *mut c_void,
+            context: *mut c_void,
+            update: *const rsf_overlay_texture_update,
+        ) -> i32,
+    >,
+    renderer_free: Option<unsafe extern "C" fn(renderer: *mut c_void, id: u64)>,
+    renderer_draw: Option<
+        unsafe extern "C" fn(
+            renderer: *mut c_void,
+            context: *mut c_void,
+            data: *const rsf_overlay_draw_data,
+            width: u32,
+            height: u32,
+        ) -> i32,
+    >,
+    renderer_destroy: Option<unsafe extern "C" fn(renderer: *mut c_void)>,
+    input_install: Option<
+        unsafe extern "C" fn(
+            window: *mut c_void,
+            toggle_key: u32,
+            log: Log,
+            user: *mut c_void,
+        ) -> i32,
+    >,
+    input_uninstall: Option<unsafe extern "C" fn()>,
+    input_visible: Option<unsafe extern "C" fn() -> u32>,
+    input_set_visible: Option<unsafe extern "C" fn(visible: u32)>,
+    input_collect: Option<
+        unsafe extern "C" fn(
+            out: *mut rsf_overlay_input,
+            width: u32,
+            height: u32,
+            delta_seconds: f32,
+        ),
+    >,
+    tick: Option<unsafe extern "C" fn() -> u64>,
+    counter: Option<unsafe extern "C" fn(value: *mut i64) -> u32>,
+    frequency: Option<unsafe extern "C" fn(value: *mut i64) -> u32>,
+    thread_id: Option<unsafe extern "C" fn() -> u32>,
+}
 
 /* The key that opens the panel. F6 through F11 are already claimed by the bridge, and the input
 module's own default is F7, which is the debug display. Holding it does not toggle again; the
@@ -50,7 +142,7 @@ fn leaf<T>(entry: Option<T>) -> T {
 }
 
 struct Logger {
-    log: rsf_overlay_host_log,
+    log: Log,
     user: usize,
 }
 
@@ -58,7 +150,7 @@ struct Logger {
 thread, including while the host is held. */
 static LOGGER: Mutex<Logger> = Mutex::new(Logger { log: None, user: 0 });
 
-fn set_logger(log: rsf_overlay_host_log, user: Handle) {
+fn set_logger(log: Log, user: Handle) {
     *LOGGER.lock().unwrap_or_else(PoisonError::into_inner) = Logger {
         log,
         user: user as usize,
@@ -119,12 +211,12 @@ saved references are released after they are rebound. */
 struct SavedTargets<'a> {
     platform: &'a Platform,
     context: Handle,
-    targets: rsf_overlay_host_targets,
+    targets: Targets,
 }
 
 impl<'a> SavedTargets<'a> {
     fn bind(platform: &'a Platform, context: Handle, view: Handle) -> Self {
-        let mut targets = rsf_overlay_host_targets::default();
+        let mut targets = Targets::default();
         unsafe { leaf(platform.save_targets)(context, &mut targets) };
         unsafe { leaf(platform.bind_target)(context, view) };
         Self {
@@ -312,7 +404,7 @@ impl Host {
         p: &Platform,
         device: Handle,
         window: Handle,
-        log: rsf_overlay_host_log,
+        log: Log,
         user: Handle,
     ) -> i32 {
         if self.started {
@@ -351,9 +443,8 @@ impl Host {
         }
     }
 
-    /* Hand the renderer everything the last layout changed, then everything it has finished
-    with. Both drain until a batch comes back short. */
-    fn carry_textures(&self, p: &Platform, api: &rsf_overlay_host_panel, context: Handle) {
+    /* Drain each queue until a batch comes back short. */
+    fn upload_textures(&self, p: &Platform, api: &rsf_overlay_host_panel, context: Handle) {
         let mut updates = [rsf_overlay_texture_update::default(); UPDATE_BATCH];
         loop {
             let count = unsafe {
@@ -368,7 +459,9 @@ impl Host {
                 break;
             }
         }
+    }
 
+    fn free_textures(&self, p: &Platform, api: &rsf_overlay_host_panel) {
         let mut finished = [0; UPDATE_BATCH];
         loop {
             let count = unsafe {
@@ -383,6 +476,64 @@ impl Host {
         }
     }
 
+    fn layout(
+        &mut self,
+        p: &Platform,
+        api: &rsf_overlay_host_panel,
+        dimensions: (u32, u32),
+        stats: &rsf_overlay_stats,
+        hint: f32,
+    ) -> Option<(rsf_overlay_draw_data, rsf_overlay_intent)> {
+        let (width, height) = dimensions;
+        let mut input = rsf_overlay_input {
+            struct_size: size_of::<rsf_overlay_input>() as u32,
+            ..Default::default()
+        };
+        let delta = self.seconds_since_last_frame(p);
+        unsafe { leaf(p.input_collect)(&mut input, width, height, delta) };
+        input.startup_hint_alpha = hint;
+        let mut data = rsf_overlay_draw_data {
+            struct_size: size_of::<rsf_overlay_draw_data>() as u32,
+            ..Default::default()
+        };
+        let mut decided = rsf_overlay_intent {
+            struct_size: size_of::<rsf_overlay_intent>() as u32,
+            ..Default::default()
+        };
+        let result = unsafe { leaf(api.frame)(self.panel, &input, stats, &mut data, &mut decided) };
+        if result != 0 {
+            say(format_args!(
+                "overlay: the panel failed to lay out a frame, result {result}. Closing it"
+            ));
+            self.close_after_failure(p);
+            return None;
+        }
+        if decided.close_requested != 0 {
+            unsafe { leaf(p.input_set_visible)(0) };
+        }
+        Some((data, decided))
+    }
+
+    fn paint(
+        &self,
+        p: &Platform,
+        api: &rsf_overlay_host_panel,
+        context: Handle,
+        target: Handle,
+        dimensions: (u32, u32),
+        data: &rsf_overlay_draw_data,
+    ) -> i32 {
+        self.upload_textures(p, api, context);
+        let (width, height) = dimensions;
+        let result = {
+            let _targets = SavedTargets::bind(p, context, target);
+            unsafe { leaf(p.renderer_draw)(self.renderer, context, data, width, height) }
+        };
+        // egui may use a retiring texture in this frame's draw data.
+        self.free_textures(p, api);
+        result
+    }
+
     /* For renderers that already own a device, window and target. */
     #[allow(clippy::too_many_arguments)]
     fn draw_target(
@@ -395,7 +546,7 @@ impl Host {
         stats: &rsf_overlay_stats,
         intent: *mut rsf_overlay_intent,
     ) -> i32 {
-        let Some(api) = self.api.filter(|_| self.started) else {
+        let Some(api) = self.api.filter(|_| self.started && !self.failed) else {
             return 0;
         };
         if context.is_null() || target.is_null() || width == 0 || height == 0 {
@@ -411,53 +562,24 @@ impl Host {
         if !visible && elapsed >= STARTUP_HINT_MS && stats.show_performance_hud == 0 {
             return 0;
         }
-        let mut input = rsf_overlay_input {
-            struct_size: size_of::<rsf_overlay_input>() as u32,
-            ..Default::default()
-        };
-        let delta = self.seconds_since_last_frame(p);
-        unsafe { leaf(p.input_collect)(&mut input, width, height, delta) };
-        input.startup_hint_alpha = if !visible && elapsed < STARTUP_HINT_MS {
-            hint_alpha(elapsed)
-        } else {
-            0.0
-        };
-        let mut data = rsf_overlay_draw_data {
-            struct_size: size_of::<rsf_overlay_draw_data>() as u32,
-            ..Default::default()
-        };
-        let mut decided = rsf_overlay_intent {
-            struct_size: size_of::<rsf_overlay_intent>() as u32,
-            ..Default::default()
-        };
+        let hint = if visible { 0.0 } else { hint_alpha(elapsed) };
         if trace {
             say(format_args!(
                 "D3D11-on-12 overlay: laying out panel on thread {}",
                 unsafe { leaf(p.thread_id)() }
             ));
         }
-        if unsafe { leaf(api.frame)(self.panel, &input, stats, &mut data, &mut decided) } != 0 {
+        let dimensions = (width, height);
+        let Some((data, decided)) = self.layout(p, &api, dimensions, stats, hint) else {
             return 0;
-        }
-        // The close button and a tap outside the sheet. Visibility is input state, so it is
-        // handled here for every host rather than by each one.
-        if decided.close_requested != 0 {
-            unsafe { leaf(p.input_set_visible)(0) };
-        }
-        if trace {
-            say("D3D11-on-12 overlay: uploading textures");
-        }
-        self.carry_textures(p, &api, context);
-        let result = {
-            let _targets = SavedTargets::bind(p, context, target);
-            if trace {
-                say(format_args!(
-                    "D3D11-on-12 overlay: drawing {} vertices, {} indices",
-                    data.vertex_count, data.index_count
-                ));
-            }
-            unsafe { leaf(p.renderer_draw)(self.renderer, context, &data, width, height) }
         };
+        if trace {
+            say(format_args!(
+                "D3D11-on-12 overlay: drawing {} vertices, {} indices",
+                data.vertex_count, data.index_count
+            ));
+        }
+        let result = self.paint(p, &api, context, target, dimensions, &data);
         if !intent.is_null() {
             unsafe { intent.write(decided) };
         }
@@ -557,7 +679,7 @@ impl Host {
             ));
             return self.close_after_failure(p);
         }
-        let mut desc = rsf_overlay_host_texture_desc::default();
+        let mut desc = TextureDesc::default();
         unsafe { leaf(p.texture_desc)(buffer.as_ptr(), &mut desc) };
         if desc.width == 0 || desc.height == 0 {
             return 0;
@@ -594,76 +716,34 @@ impl Host {
             return self.close_after_failure(p);
         };
 
-        let mut input = rsf_overlay_input {
-            struct_size: size_of::<rsf_overlay_input>() as u32,
-            ..Default::default()
-        };
-        let delta = self.seconds_since_last_frame(p);
-        unsafe { leaf(p.input_collect)(&mut input, desc.width, desc.height, delta) };
         if self.hint_begin == 0 {
             self.hint_begin = now;
         }
-        if !visible && !self.hint_dismissed {
-            input.startup_hint_alpha = hint_alpha(now.wrapping_sub(self.hint_begin));
-        }
-
-        let mut data = rsf_overlay_draw_data {
-            struct_size: size_of::<rsf_overlay_draw_data>() as u32,
-            ..Default::default()
+        let hint = if !visible && !self.hint_dismissed {
+            hint_alpha(now.wrapping_sub(self.hint_begin))
+        } else {
+            0.0
         };
-        let mut decided = rsf_overlay_intent {
-            struct_size: size_of::<rsf_overlay_intent>() as u32,
-            ..Default::default()
-        };
+        let dimensions = (desc.width, desc.height);
         if trace {
             say("overlay frame: laying out the panel");
         }
-        let laid_out =
-            unsafe { leaf(api.frame)(self.panel, &input, stats, &mut data, &mut decided) };
-        if laid_out != 0 {
-            /* A panicked panel is poisoned for good and every later frame returns the same
-            thing. Closing it alone left the performance HUD and startup hint laying it out,
-            and reporting this line, every frame. */
-            say(format_args!(
-                "overlay: the panel failed to lay out a frame, result {laid_out}. Closing it"
-            ));
-            return self.close_after_failure(p);
-        }
-        if decided.close_requested != 0 {
-            unsafe { leaf(p.input_set_visible)(0) };
-        }
+        let Some((data, decided)) = self.layout(p, &api, dimensions, stats, hint) else {
+            return 0;
+        };
         if trace {
             say(format_args!(
-                "overlay frame: laid out, {} vertices, {} indices, {} calls. Carrying textures",
+                "overlay frame: laid out, {} vertices, {} indices, {} calls. Calling the renderer",
                 data.vertex_count, data.index_count, data.call_count
             ));
         }
-        self.carry_textures(p, &api, context.as_ptr());
-
-        let drawn = {
-            // Restored before the view is released, on every path out of the draw.
-            let _targets = SavedTargets::bind(p, context.as_ptr(), view.as_ptr());
-            if trace {
-                say("overlay frame: calling the renderer");
-            }
-            let drawn = unsafe {
-                leaf(p.renderer_draw)(
-                    self.renderer,
-                    context.as_ptr(),
-                    &data,
-                    desc.width,
-                    desc.height,
-                )
-            };
-            if trace {
-                say(format_args!("overlay frame: the renderer returned {drawn}"));
-                say(format_args!(
-                    "overlay frame: drawn into the back buffer, result {drawn}"
-                ));
-                self.trace_frames -= 1;
-            }
-            drawn
-        };
+        let drawn = self.paint(p, &api, context.as_ptr(), view.as_ptr(), dimensions, &data);
+        if trace {
+            say(format_args!(
+                "overlay frame: drawn into the back buffer, result {drawn}"
+            ));
+            self.trace_frames -= 1;
+        }
         drop(view);
         if drawn != 0 {
             say(format_args!(
@@ -787,11 +867,10 @@ fn publish(host: &Host) {
     PRESENTABLE.store(host.started && !host.failed, Ordering::Release);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_host_start(
+unsafe fn rsf_core_overlay_host_start(
     platform: &Platform,
     chain: Handle,
-    log: rsf_overlay_host_log,
+    log: Log,
     user: Handle,
 ) -> i32 {
     set_logger(log, user);
@@ -804,12 +883,11 @@ unsafe extern "C" fn rsf_core_overlay_host_start(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_host_start_device(
+unsafe fn rsf_core_overlay_host_start_device(
     platform: &Platform,
     device: Handle,
     window: Handle,
-    log: rsf_overlay_host_log,
+    log: Log,
     user: Handle,
 ) -> i32 {
     let mut host = hold();
@@ -818,8 +896,7 @@ unsafe extern "C" fn rsf_core_overlay_host_start_device(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_host_draw_target(
+unsafe fn rsf_core_overlay_host_draw_target(
     platform: &Platform,
     context: Handle,
     target: Handle,
@@ -834,7 +911,7 @@ unsafe extern "C" fn rsf_core_overlay_host_draw_target(
     let Some(mut host) = try_hold() else {
         return 0;
     };
-    host.draw_target(
+    let result = host.draw_target(
         platform,
         context,
         target,
@@ -842,19 +919,19 @@ unsafe extern "C" fn rsf_core_overlay_host_draw_target(
         height,
         unsafe { &*stats },
         intent,
-    )
+    );
+    publish(&host);
+    result
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_host_visible(platform: &Platform) -> u32 {
+fn rsf_core_overlay_host_visible(platform: &Platform) -> u32 {
     if !STARTED.load(Ordering::Acquire) {
         return 0;
     }
     unsafe { leaf(platform.input_visible)() }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_host_toggle(platform: &Platform) {
+fn rsf_core_overlay_host_toggle(platform: &Platform) {
     if !STARTED.load(Ordering::Acquire) {
         say("overlay: not running, so there is nothing to open");
         return;
@@ -863,8 +940,7 @@ extern "C" fn rsf_core_overlay_host_toggle(platform: &Platform) {
     unsafe { leaf(platform.input_set_visible)((visible == 0) as u32) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_host_present(
+unsafe fn rsf_core_overlay_host_present(
     platform: &Platform,
     chain: Handle,
     stats: *const rsf_overlay_stats,
@@ -885,15 +961,13 @@ unsafe extern "C" fn rsf_core_overlay_host_present(
     result
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_host_stop(platform: &Platform) {
+fn rsf_core_overlay_host_stop(platform: &Platform) {
     let mut host = hold();
     host.stop(platform);
     publish(&host);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_host_stop_device(platform: &Platform, device: Handle) {
+fn rsf_core_overlay_host_stop_device(platform: &Platform, device: Handle) {
     let mut host = hold();
     host.stop_device(platform, device);
     publish(&host);
@@ -902,3 +976,7 @@ extern "C" fn rsf_core_overlay_host_stop_device(platform: &Platform, device: Han
 #[cfg(test)]
 #[path = "overlay_host_tests.rs"]
 mod tests;
+
+#[cfg(not(test))]
+#[path = "overlay_host_native.rs"]
+mod native;
