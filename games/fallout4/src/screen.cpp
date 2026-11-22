@@ -58,9 +58,8 @@ bool observe(const rsf_fallout4_screen_plan& plan, rsf_fallout4_screen_result& o
 NativeScreen classify_native_screen(const CpuIdentity& source, const rsf_game_render_pass& pass,
     bool ordinary_world) noexcept
 {
-    const auto identity = cpu_identity_abi(source);
     NativeScreen result{};
-    rsf_fallout4_screen_classify(&identity, &pass, ordinary_world, &result, observe);
+    rsf_fallout4_screen_classify(&source, &pass, ordinary_world, &result, observe);
     return result;
 }
 }

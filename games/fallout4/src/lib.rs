@@ -8,7 +8,7 @@
 //! render-input admission with its camera history and leased passes.
 //!
 //! Native leaves stay in C++ and reach this crate through rsf_fallout4_platform
-//! (fallout4_platform.h), rsf_fallout4_cpu_platform (cpu_events_platform.h), the render hook
+//! (fallout4_platform.h), the linked CPU leaves (cpu_events_platform.h), the render hook
 //! leaves (render_hooks_platform.h) and the per-call depth-domain and render-input leaves
 //! (depth_domains_platform.h, render_inputs_platform.h): MinHook, the typed detour shells with
 //! their return addresses and trampoline calls, exception guards, the shared file hash, the Steam
@@ -135,7 +135,6 @@ unsafe extern "system" {
 
 unsafe extern "C" {
     fn rsf_fallout4_host_boundary() -> *const rsf_fallout4_platform;
-    fn rsf_fallout4_cpu_boundary() -> *const cpu_abi::rsf_fallout4_cpu_platform;
     fn rsf_fallout4_publish_render_boundary();
 }
 
@@ -377,7 +376,6 @@ unsafe extern "C" fn rsf_get_game_plugin_api(
 ) -> rsf_result {
     // SAFETY: these linked leaves publish immutable process-lived callbacks.
     unsafe {
-        let _ = cpu_events::publish(rsf_fallout4_cpu_boundary());
         rsf_fallout4_publish_render_boundary();
     }
     if out.is_null()

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "cpu_events.h"
+#include "cpu_events_platform.h"
 #include <rescaleframe/game_renderer.h>
 namespace rsf::fallout4 {
 enum NativeScreenFact : uint32_t {

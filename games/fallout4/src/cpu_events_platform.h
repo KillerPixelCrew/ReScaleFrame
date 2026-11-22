@@ -41,16 +41,13 @@ typedef struct rsf_fallout4_cpu_scope {
     uint64_t state[RSF_FALLOUT4_CPU_SCOPE_WORDS];
 } rsf_fallout4_cpu_scope;
 
-// Leaves the Rust owner cannot express without C++. The table lives for the process.
-// Original engine functions are never called from Rust: each shell calls its trampoline itself.
-typedef struct rsf_fallout4_cpu_platform {
-    // Guarded GameSDK CPU callback. False only when it threw.
-    bool (*cpu_event)(rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event);
-    // render_hooks' scope close, called before a CPU frame end clears its identity.
-    void (*finish_render_scope)(void);
-    // The resident PeekMessageA import thunk. It stays pinned after stop.
-    void* (*peek_thunk)(void);
-} rsf_fallout4_cpu_platform;
+// Linked native leaves. Delivery takes the Rust owner's validated nonnull callback.
+#ifdef __cplusplus
+void* rsf_fallout4_cpu_detour(uint32_t hook) noexcept;
+void* rsf_fallout4_cpu_peek_thunk(void) noexcept;
+void rsf_fallout4_cpu_finish_render_scope(void) noexcept;
+bool rsf_fallout4_cpu_deliver(rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event) noexcept;
+#endif
 
 // Rust owner entry points.
 void* rsf_fallout4_cpu_original(uint32_t hook);
@@ -91,15 +88,31 @@ void rsf_fallout4_cpu_peek_exit(uintptr_t caller, int32_t result, void* message,
 void rsf_fallout4_cpu_cancel(uint32_t hook, rsf_fallout4_cpu_scope* scope);
 void rsf_fallout4_cpu_peek_cancel(void);
 
-// Render producer queries, all on the Swap thread (see cpu_events.h).
+// Render producer queries, all on the Swap thread.
 void rsf_fallout4_cpu_current_identity(rsf_fallout4_cpu_identity* identity);
-bool rsf_fallout4_cpu_begin_render(void);
-bool rsf_fallout4_cpu_source_is_current(const rsf_fallout4_cpu_identity* identity);
 bool rsf_fallout4_cpu_render_source_is_current(const rsf_fallout4_cpu_identity* identity);
 bool rsf_fallout4_cpu_begin_present_phase(const rsf_fallout4_cpu_identity* identity,
     uint64_t native_frame, uint64_t window);
 void rsf_fallout4_cpu_end_present_phase(const rsf_fallout4_cpu_identity* identity);
 
 #ifdef __cplusplus
+}
+
+namespace rsf::fallout4 {
+// The CPU event owner is Rust (cpu_events.rs). Identity is borrowed during the guarded Swap.
+// A proved PlayerControls consumer may adopt a reserved engine-buffer poll source before Swap;
+// a selected mode1 worker can hand one consumed successor through its native post-Swap join to
+// the next ordinary world. Otherwise Swap opens a rendered source. No simulation/GPU stage is
+// implied. Native RAWINPUT, selected removed window messages and delivered gamepad batches are
+// separate unframed receipts. They never assert a physical sample. The executable-local message
+// thunk and its saved continuation stay pinned after stop, including when a later IAT owner
+// retains our address.
+using CpuIdentity = rsf_fallout4_cpu_identity;
+
+inline CpuIdentity current_cpu_identity() noexcept {
+    rsf_fallout4_cpu_identity value{};
+    rsf_fallout4_cpu_current_identity(&value);
+    return value;
+}
 }
 #endif

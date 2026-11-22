@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "render_hooks.h"
 #include "render_hooks_platform.h"
-#include "cpu_events.h"
+#include "cpu_events_platform.h"
 #include "render_inputs.h"
 #include "resolution.h"
 #include "screen.h"
@@ -90,7 +90,7 @@ struct Entry {
     ~Entry() { entered.fetch_sub(1, std::memory_order_acq_rel); }
 };
 bool same_source() {
-    return world.cpu.session == host.session_id && render_source_is_current(world.cpu);
+    return world.cpu.session == host.session_id && rsf_fallout4_cpu_render_source_is_current(&world.cpu);
 }
 void notify(const rsf_game_render_pass& pass, void* context, uint32_t begin) noexcept {
     if (host.render_pass) try { host.render_pass(host.user, context, &pass, begin); } catch (...) {}
@@ -115,7 +115,7 @@ static_assert(sizeof(rsf_d3d11_reduced_frame)==56 && offsetof(rsf_d3d11_reduced_
 static_assert(sizeof(rsf_d3d11_auxiliary_surface)==80 && offsetof(rsf_d3d11_auxiliary_surface,flags)==72);
 static_assert(sizeof(NativeOutputOwner)==40);
 void read_world(NativeWorld* out) noexcept {
-    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,&world.submission_pass,
+    *out={world.cpu,&world.pass,&world.frame_pass,&world.submission_pass,
         &world.screen_basis,world.context.Get(),world.chain.Get(),host.process_upscale!=nullptr,
         reduced_frame!=nullptr,world.in_imagespace,world.inputs,world.published,world.window_open,
         world.frame_open,world.submission_open,world.refused,world.raster_refused,world.auxiliary_open,
@@ -388,7 +388,7 @@ void observe_world_begin() {
 #else
     const auto caller = uintptr_t(__builtin_return_address(0));
 #endif
-    const auto cpu = cpu_identity_abi(current_cpu_identity());
+    const auto cpu = current_cpu_identity();
     struct Restore {
         bool previous;
         ~Restore() { ordinary_world = previous; }
@@ -540,13 +540,13 @@ void observe_native_present(void* renderer) {
         &leased,read_present_owner);
     if (matched!=NativePresentMatch::unrelated) {
         if (matched==NativePresentMatch::matched) capture_recovery_output();
-        const auto cpu=cpu_identity_abi(world.cpu);
+        const auto cpu=world.cpu;
         switch (rsf_fallout4_render_admit_present(matched,host.session_id,&cpu,revalidate_present_screen)) {
         case NativePresentAdmission::complete: {
             rsf_fallout4_render_close_submission(&scope_leaves);
             // Close the same CPU phase after the original, even if it reenters.
             phase_owner=world.cpu;
-            cpu_phase=begin_cpu_present_phase(phase_owner,world.frame_pass.native_frame,world.frame_pass.window_key);
+            cpu_phase=rsf_fallout4_cpu_begin_present_phase(&phase_owner,world.frame_pass.native_frame,world.frame_pass.window_key);
             static std::atomic_flag announced = ATOMIC_FLAG_INIT;
             if (!announced.test_and_set(std::memory_order_relaxed))
                 report("Fallout4 native SUBMISSION end before original outer Present; FRAME/WINDOW remain open.");
@@ -565,7 +565,7 @@ void observe_native_present(void* renderer) {
     SetLastError(error);
     native_present(renderer);
     const auto native_error=GetLastError();
-    if (cpu_phase) end_cpu_present_phase(phase_owner);
+    if (cpu_phase) rsf_fallout4_cpu_end_present_phase(&phase_owner);
     SetLastError(native_error);
 }
 // NativeRenderHook order. MinHook writes each typed trampoline at creation; the detours call

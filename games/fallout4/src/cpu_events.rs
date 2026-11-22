@@ -24,7 +24,7 @@ use crate::cpu_abi::{
     RSF_FALLOUT4_CPU_HOOK_JOB_END, RSF_FALLOUT4_CPU_HOOK_KEYBOARD, RSF_FALLOUT4_CPU_HOOK_MOUSE,
     RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS, RSF_FALLOUT4_CPU_HOOK_POLL, RSF_FALLOUT4_CPU_HOOK_SWAP,
     RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, RSF_FALLOUT4_CPU_SCOPE_WORDS,
-    rsf_fallout4_cpu_identity, rsf_fallout4_cpu_platform, rsf_fallout4_cpu_scope,
+    rsf_fallout4_cpu_identity, rsf_fallout4_cpu_scope,
 };
 use crate::{
     MH_CreateHook, MH_OK, MH_RemoveHook, Ops, Plain, creation, image, message, ops, pin, read,
@@ -49,7 +49,7 @@ use rsf_game_sys::{
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
@@ -70,44 +70,6 @@ const WAIT_OBJECT_0: u32 = 0;
 // ---------------------------------------------------------------------------------------------
 // Native leaves.
 
-struct Leaves {
-    cpu_event: unsafe extern "C" fn(
-        callback: rsf_game_sys::rsf_game_cpu_event_fn,
-        user: *mut ::core::ffi::c_void,
-        event: *const rsf_game_cpu_event,
-    ) -> bool,
-    finish_render_scope: unsafe extern "C" fn(),
-    peek_thunk: unsafe extern "C" fn() -> *mut ::core::ffi::c_void,
-}
-
-impl Leaves {
-    fn from_native(table: &rsf_fallout4_cpu_platform) -> Option<Self> {
-        Some(Self {
-            cpu_event: table.cpu_event?,
-            finish_render_scope: table.finish_render_scope?,
-            peek_thunk: table.peek_thunk?,
-        })
-    }
-}
-
-static PLATFORM: OnceLock<Leaves> = OnceLock::new();
-
-fn platform() -> Option<&'static Leaves> {
-    PLATFORM.get()
-}
-
-/// Binds the CPU leaves for the process.
-///
-/// # Safety
-/// A nonnull `table` is a complete leaf table that lives for the process.
-pub(crate) unsafe fn publish(table: *const rsf_fallout4_cpu_platform) -> bool {
-    let Some(table) = (unsafe { table.as_ref() }).and_then(Leaves::from_native) else {
-        return false;
-    };
-    let _ = PLATFORM.get_or_init(|| table);
-    true
-}
-
 fn hook_target(hook: u32) -> *mut c_void {
     (image() + native::HOOK_ENTRIES[hook as usize].0) as *mut c_void
 }
@@ -118,6 +80,13 @@ static ORIGINALS: [AtomicPtr<c_void>; RSF_FALLOUT4_CPU_HOOK_COUNT as usize] =
 
 unsafe extern "C" {
     fn rsf_fallout4_cpu_detour(hook: u32) -> *mut c_void;
+    fn rsf_fallout4_cpu_peek_thunk() -> *mut c_void;
+    fn rsf_fallout4_cpu_finish_render_scope();
+    fn rsf_fallout4_cpu_deliver(
+        callback: rsf_game_sys::rsf_game_cpu_event_fn,
+        user: *mut c_void,
+        event: *const rsf_game_cpu_event,
+    ) -> bool;
 }
 
 #[unsafe(no_mangle)]
@@ -149,13 +118,11 @@ fn remove_hook(hook: u32, target: *mut c_void) -> bool {
 }
 
 fn peek_thunk() -> usize {
-    platform().map_or(0, |table| unsafe { (table.peek_thunk)() } as usize)
+    unsafe { rsf_fallout4_cpu_peek_thunk() as usize }
 }
 
 fn finish_render_scope() {
-    if let Some(table) = platform() {
-        unsafe { (table.finish_render_scope)() };
-    }
+    unsafe { rsf_fallout4_cpu_finish_render_scope() };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -694,12 +661,9 @@ fn ticket_pending(value: &Future) -> Pending {
 // GameSDK CPU facts.
 
 fn deliver(host: &rsf_game_host_services, event: *const rsf_game_cpu_event) -> bool {
-    match (host.cpu_event, platform()) {
-        (Some(callback), Some(table)) => unsafe {
-            (table.cpu_event)(Some(callback), host.user, event)
-        },
-        _ => false,
-    }
+    host.cpu_event.is_some_and(|callback| unsafe {
+        rsf_fallout4_cpu_deliver(Some(callback), host.user, event)
+    })
 }
 
 fn empty_event(size: usize, version: u32) -> rsf_game_cpu_event {
@@ -3103,15 +3067,6 @@ pub(crate) extern "C" fn rsf_fallout4_cpu_begin_render() -> bool {
 /// # Safety
 /// `identity` is null or readable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_cpu_source_is_current(
-    identity: *const rsf_fallout4_cpu_identity,
-) -> bool {
-    identity_from(identity).is_some_and(|identity| cpu_source_is_current(&identity))
-}
-
-/// # Safety
-/// `identity` is null or readable.
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_fallout4_cpu_render_source_is_current(
     identity: *const rsf_fallout4_cpu_identity,
 ) -> bool {
@@ -3330,8 +3285,7 @@ pub(crate) fn prepare(
     services: &rsf_game_host_services,
     _build: &creation::ExactBuild,
 ) -> bool {
-    if platform().is_none()
-        || services.struct_size < size_of::<rsf_game_host_services>() as u32
+    if services.struct_size < size_of::<rsf_game_host_services>() as u32
         || services.abi_version != RSF_GAME_ABI_VERSION
         || services.session_id == 0
         || services.cpu_event.is_none()
@@ -3400,9 +3354,6 @@ pub(crate) fn stop(ops: &Ops) -> bool {
     }
     invalidate_worker(RSF_GAME_CPU_ABORT_QUIESCE, true, None);
     if !drain_future() || !drain_current_abort() {
-        return false;
-    }
-    if platform().is_none() {
         return false;
     }
     for hook in HOOKS {

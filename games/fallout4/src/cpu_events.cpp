@@ -10,7 +10,7 @@
 // native unwind crosses only these shells, as it did before the port; like the previous native
 // detours they are not noexcept and swallow nothing. A scope guard retires each entry if the original unwinds.
 // The per-call receipt lives on the shell's stack.
-#include "cpu_events.h"
+#include "cpu_events_platform.h"
 #include "render_hooks.h"
 #include <windows.h>
 #include <array>
@@ -191,18 +191,14 @@ const std::array<void*, RSF_FALLOUT4_CPU_HOOK_COUNT> detours{
     reinterpret_cast<void*>(&observe_player_controls), reinterpret_cast<void*>(&observe_job_end),
     reinterpret_cast<void*>(&observe_wrapper), reinterpret_cast<void*>(&observe_worker_join)};
 
-// The same guard the previous native emission used around the host callback.
-bool cpu_event(rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event) noexcept {
-    if (!callback) return false;
+}
+
+extern "C" void* rsf_fallout4_cpu_detour(uint32_t hook) noexcept { return detours[hook]; }
+extern "C" void* rsf_fallout4_cpu_peek_thunk() noexcept { return reinterpret_cast<void*>(&observe_peek); }
+extern "C" void rsf_fallout4_cpu_finish_render_scope() noexcept { finish_render_scope(); }
+
+extern "C" bool rsf_fallout4_cpu_deliver(
+    rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event) noexcept {
     try { callback(user, event); return true; } catch (...) { return false; }
 }
-void finish_scope() noexcept { finish_render_scope(); }
-void* peek_thunk() noexcept { return reinterpret_cast<void*>(&observe_peek); }
-
-static_assert(sizeof(rsf_fallout4_cpu_platform) == 3 * sizeof(void*));
-constexpr rsf_fallout4_cpu_platform platform{
-    cpu_event, finish_scope, peek_thunk};
-}
-extern "C" const rsf_fallout4_cpu_platform* rsf_fallout4_cpu_boundary() noexcept { return &platform; }
-extern "C" void* rsf_fallout4_cpu_detour(uint32_t hook) noexcept { return detours[hook]; }
 }

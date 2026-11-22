@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "cpu_events.h"
+#include "cpu_events_platform.h"
 #include <rescaleframe/game_renderer.h>
 #include <cstddef>
 
@@ -80,7 +80,6 @@ inline bool native_depth_snapshot_current(const NativeDepthSnapshot& snapshot,
 inline bool make_native_depth_domains(const NativeDepthSnapshot& snapshot, const CpuIdentity& cpu,
     const rsf_game_render_pass& pass, rsf_game_depth_domains& output,
     void (*report)(const char*) = nullptr) noexcept {
-    const auto value = cpu_identity_abi(cpu);
-    return rsf_fallout4_depth_make(native_depth_leaves(), &snapshot, &value, &pass, &output, report);
+    return rsf_fallout4_depth_make(native_depth_leaves(), &snapshot, &cpu, &pass, &output, report);
 }
 }

@@ -2,7 +2,6 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-use rsf_game_sys::{rsf_game_cpu_event, rsf_game_cpu_event_fn};
 
 pub const RSF_FALLOUT4_CPU_HOOK_SWAP: u32 = 0;
 pub const RSF_FALLOUT4_CPU_HOOK_KEYBOARD: u32 = 1;
@@ -57,30 +56,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fallout4_cpu_scope, tag) - 0usize];
     ["Offset of field: rsf_fallout4_cpu_scope::state"]
         [::core::mem::offset_of!(rsf_fallout4_cpu_scope, state) - 8usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_fallout4_cpu_platform {
-    pub cpu_event: ::core::option::Option<
-        unsafe extern "C" fn(
-            callback: rsf_game_cpu_event_fn,
-            user: *mut ::core::ffi::c_void,
-            event: *const rsf_game_cpu_event,
-        ) -> bool,
-    >,
-    pub finish_render_scope: ::core::option::Option<unsafe extern "C" fn()>,
-    pub peek_thunk: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_fallout4_cpu_platform"]
-        [::core::mem::size_of::<rsf_fallout4_cpu_platform>() - 24usize];
-    ["Alignment of rsf_fallout4_cpu_platform"]
-        [::core::mem::align_of::<rsf_fallout4_cpu_platform>() - 8usize];
-    ["Offset of field: rsf_fallout4_cpu_platform::cpu_event"]
-        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, cpu_event) - 0usize];
-    ["Offset of field: rsf_fallout4_cpu_platform::finish_render_scope"]
-        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, finish_render_scope) - 8usize];
-    ["Offset of field: rsf_fallout4_cpu_platform::peek_thunk"]
-        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, peek_thunk) - 16usize];
 };
