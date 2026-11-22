@@ -1,4 +1,4 @@
-"""SR Stage 0: read-only check of every games/anomaly/src/sr_profile.h guard and layout against the installed exe.
+"""SR Stage 0: read-only check of every games/anomaly/src/sr_profile.rs guard and layout against the installed exe.
 
 Checks --exe standard (default) or --exe avx. Needs the selected installed executable (D:/Anomaly 1.5.3), so it is not registered in CTest (same as
 tools/anomaly_geometry_evidence.py). Nothing is patched or executed; the file is only read.
@@ -14,15 +14,14 @@ import capstone
 from capstone import x86
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-PROFILE = ROOT / 'games/anomaly/src/sr_profile.h'
-NATIVE = ROOT / 'games/anomaly/src/native_profile.h'
-GEOMETRY = ROOT / 'games/anomaly/src/geometry_profile.h'
 
 _spec = importlib.util.spec_from_file_location('anomaly_geometry_evidence', ROOT / 'tools/anomaly_geometry_evidence.py')
 geometry = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(geometry)
 
 geometry.build_from_args()
+profiles = geometry.profiles
+PROFILE = profiles.SR
 ANCHORS = {8531120: 8497456,
  8532560: 8498912,
  8532640: 8498992,
@@ -83,10 +82,9 @@ RENDER_MAIN = address(0x898a00)          # CRender::render_main(Fmatrix&, bool)
 RM_NORMAL = address(0x83a4d0)
 
 
-def ints(text, name):
-    match = re.search(r'\b' + name + r' = (?:1u << (\d+)|(0x[0-9a-f]+|\d+))', text)
-    assert match, ('profile constant', name)
-    return 1 << int(match.group(1)) if match.group(1) else int(match.group(2), 0)
+def ints(profile, name):
+    assert name in profile, ('profile constant', name)
+    return profile[name]
 
 
 class Image(geometry.PE):
@@ -120,30 +118,13 @@ class Image(geometry.PE):
                 if self.data[at - 1:at] == b'\0']
 
 
-def parse(text):
-    def native(block):
-        body = re.search(block + r'\{\{(.*?)\}\};', text, re.S).group(1)
-        return [(n, int(r, 16), h) for n, r, h in re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]{32})"\)\}', body)]
-    unique = re.search(r'sr_unique_guards\{\{(.*?)\}\};', text, re.S).group(1)
-    first = re.search(r'sr_first_person_sites\{\{(.*?)\}\};', text, re.S).group(1)
-    slots = re.search(r'target_slots\{\{(.*?)\}\};', text, re.S).group(1)
-    return {
-        'functions': native('sr_function_sites'),
-        'calls': native('sr_call_sites'),
-        'unique': [(n, int(r, 16), h) for n, r, h in re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), "([0-9a-f]+)"\}', unique)],
-        'first_person': [(n, int(a, 16), int(b, 16), int(c, 16)) for n, a, b, c in
-                         re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), (0x[0-9a-f]+), (0x[0-9a-f]+)\}', first)],
-        'slots': [(n, int(o, 16), int(f)) for n, o, f in re.findall(r'\{"(\$user\$[^"]+)", (0x[0-9a-f]+), (\d+)\}', slots)],
-    }
-
-
 def verify_guards(pe, p, log):
     declared = {
         'sr_function_sites': 17,
         'sr_call_sites': 6,
-        'sr_unique_guards': int(re.search(r'array<UniqueGuard, (\d+)> sr_unique_guards', TEXT).group(1)),
+        'sr_unique_guards': TEXT['unique_declared'],
         'sr_first_person_sites': 6,
-        'target_slots': int(re.search(r'array<TargetSlot, (\d+)> target_slots', TEXT).group(1)),
+        'target_slots': TEXT['slots_declared'],
     }
     parsed = {'sr_function_sites': p['functions'], 'sr_call_sites': p['calls'], 'sr_unique_guards': p['unique'],
               'sr_first_person_sites': p['first_person'], 'target_slots': p['slots']}
@@ -264,9 +245,7 @@ def verify_sun_cascades(pe, f, p, log):
 
 
 def verify_position_reconstruction(pe, f, log):
-    text = geometry.profile_text(PROFILE)
-    match = re.search(r'\.reconstruction_guards = \{\{(.*?)\}\},', text, re.S)
-    guards = [(n, int(a, 16), bytes.fromhex(h)) for n, a, h in re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), "([0-9a-f]+)"\}', match[1])]
+    guards = [(n, a, bytes.fromhex(h)) for n, a, h in TEXT['reconstruction']]
     assert len(guards) == 4, 'reconstruction guards'
     by_name = {n: (a, h) for n, a, h in guards}
     for name, rva, raw in guards:
@@ -329,10 +308,9 @@ def verify_render_modes(pe, f, log):
              ints(TEXT, 'rm_normal_slot'): RM_NORMAL}
     for slot, rva in slots.items():
         assert int(table['slots'][slot], 16) == rva, ('CRender slot', slot, table['slots'][slot])
-    geometry_text = geometry.legacy_profile(GEOMETRY)
-    geo_near = re.search(r'\{"CRender::rmNear", (0x[0-9a-f]+), signature\("([0-9a-f]+)"\)\}', geometry_text)
-    assert int(geo_near[1], 16) == f['CRender::rmNear'] and pe.read(f['CRender::rmNear'], 16).hex() == geo_near[2], \
-        'rmNear is shared with geometry_profile.h'
+    geo_near = next(site for site in profiles.geometry(geometry.BUILD)['sites'] if site[0] == 'CRender::rmNear')
+    assert geo_near[1] == f['CRender::rmNear'] and pe.read(f['CRender::rmNear'], 16).hex() == geo_near[2], \
+        'rmNear is shared with geometry_profile.rs'
 
 
     def depth_range(start):
@@ -347,7 +325,7 @@ def verify_render_modes(pe, f, log):
 def verify_xforms(pe, f, log):
     set_p, set_v = f['R_xforms::set_P'], f['R_xforms::set_V']
     xforms = ints(TEXT, 'backend_rva') + ints(TEXT, 'backend_xforms_offset')
-    assert xforms == ints(geometry.legacy_profile(GEOMETRY), 'world_matrix_rva'), 'RCache.xforms == geometry world matrix owner'
+    assert xforms == ints(profiles.geometry(geometry.BUILD), 'world_matrix_rva'), 'RCache.xforms == geometry world matrix owner'
     # set_P copies [rdx] to this+0xC0 (m_p); set_V to this+0x80 (m_v). `mov eax,[rdx]; lea rdi,[rcx+disp32]; mov [rdi],eax`.
     p_off, v_off = ints(TEXT, 'xforms_project_offset'), ints(TEXT, 'xforms_view_offset')
     assert ('8b02488db9' + struct.pack('<I', p_off).hex() + '8907') in pe.read(set_p, 40).hex(), 'set_P -> m_p'
@@ -447,7 +425,7 @@ def verify_first_person(pe, f, p, set_p, log):
 
 
 def verify_device_and_hw(pe, f, log):
-    native = geometry.legacy_profile(NATIVE)
+    native = profiles.native(geometry.BUILD)
     width, height = ints(native, 'device_width_rva'), ints(native, 'device_height_rva')
     base_rt, base_zb = ints(TEXT, 'hw_base_rt_rva'), ints(TEXT, 'hw_base_zb_rva')
     device, context, chain = ints(TEXT, 'hw_device_rva'), ints(TEXT, 'hw_context_rva'), ints(TEXT, 'hw_swap_chain_rva')
@@ -481,7 +459,7 @@ def verify_device_and_hw(pe, f, log):
     impl = ints(TEXT, 'render_implementation_rva')
     call = next(a for a, t in pe.calls_in(BACKEND_ON_FRAME_BEGIN, BACKEND_ON_FRAME_BEGIN + 0x40) if t == RM_NORMAL)
     assert pe.read(call - 7, 3) == b'\x48\x8d\x0d' and pe.rel_target(call - 7, 7, 3) == impl, 'RImplementation'
-    assert impl + 0x150 == ints(geometry.legacy_profile(GEOMETRY), 'render_phase_rva'), 'RImplementation.phase'
+    assert impl + 0x150 == ints(profiles.geometry(geometry.BUILD), 'render_phase_rva'), 'RImplementation.phase'
     log.append(f'Device {width:#x}/{height:#x}; HW pDevice {device:#x} pContext {context:#x} swapchain {chain:#x} '
                f'pBaseRT {base_rt:#x} pBaseZB {base_zb:#x}; RImplementation {impl:#x}')
 
@@ -641,10 +619,7 @@ def verify_stage2(pe, p, log):
     """SR Stage 2 data: the world-target table, the absent targets, the SSAO helper's static viewport and its callers,
     the half-size rule of rt_half_depth, and the SSAO dispatch in phase_combine."""
     slots = {name: (offset, fmt) for name, offset, fmt in p['slots']}
-    body = re.search(r'sr_world_targets\{\{(.*?)\}\};', TEXT, re.S).group(1)
-    world = [(n, int(o, 16), int(f), a == 'true', h == 'true') for n, o, f, a, h in
-             re.findall(r'\{"(\$user\$[^"]+)", (0x[0-9a-f]+), (\d+), (true|false), (true|false)\}', body)]
-    declared = int(re.search(r'array<WorldTarget, (\d+)> sr_world_targets', TEXT).group(1))
+    world, declared = TEXT['world'], TEXT['world_declared']
     assert len(world) == declared == 9, ('sr_world_targets parse', len(world), declared)
     order = ['$user$generic0', '$user$generic_temp', '$user$position', '$user$albedo', '$user$accum', '$user$generic1',
              '$user$generic2', '$user$half_depth', '$user$ssao_temp']
@@ -653,14 +628,14 @@ def verify_stage2(pe, p, log):
         assert slots.get(name) == (offset, fmt), ('world target differs from target_slots', name)
         assert optional == (name in ('$user$generic2', '$user$half_depth', '$user$ssao_temp')), ('optional', name)
         assert half == (name == '$user$half_depth'), ('half_allowed', name)
-    absent = [int(x, 16) for x in re.findall(r'0x[0-9a-f]+', re.search(r'sr_world_absent_offsets\{(.*?)\};', TEXT).group(1))]
+    absent = TEXT['absent']
     by_offset = {offset: name for name, (offset, _) in slots.items()}
     assert [by_offset.get(o) for o in absent] == ['$user$msaadepth', '$user$generic0_r', '$user$generic1_r', '$user$accum_temp'], absent
     assert set(absent).isdisjoint({w[1] for w in world})
     # rt_half_depth (r4_rendertarget.cpp:705-720): `test al,4` (ssao_opt_data), Device.dwWidth/dwHeight into r8d/r9d,
     # `test al,8` (ssao_half_data) then `shr r8d,1; shr r9d,1`, R16F (0x6f) or R32F on NVIDIA, slot +0x590.
     word0 = ints(TEXT, 'render_options_word0_rva')
-    width, height = ints(geometry.legacy_profile(NATIVE), 'device_width_rva'), ints(geometry.legacy_profile(NATIVE), 'device_height_rva')
+    width, height = ints(profiles.native(geometry.BUILD), 'device_width_rva'), ints(profiles.native(geometry.BUILD), 'device_height_rva')
     at = address(0x855433)
     code = pe.read(at, 0x55)
     assert code[:2] == b'\x8b\x05' and pe.rel_target(at, 6, 2) == word0, 'half_depth: o word0 load'
@@ -685,7 +660,7 @@ def verify_stage2(pe, p, log):
     assert callers[hdao] == [address(0x8bca8e)] and callers[downsamp] == [address(0x8bca9c)] and callers[ssao] == [address(0x8bcaaa)], callers
     # set_viewport: the code bytes the adapter checks at install, both data addresses from their displacements.
     helper = ints(TEXT, 'ssao_set_viewport_rva')
-    expected = bytes.fromhex(re.search(r'ssao_set_viewport_code(?:\[\])? =\s*"([0-9a-f]+)"', TEXT).group(1))
+    expected = bytes.fromhex(TEXT['ssao_set_viewport_code'])
     assert len(expected) == (0x4a if geometry.BUILD == 'avx' else 0x46) and pe.read(helper, len(expected)) == expected, 'set_viewport code'
     assert pe.unique_in_text(expected), 'set_viewport code not unique'
     viewport, guard = ints(TEXT, 'ssao_viewport_rva'), ints(TEXT, 'ssao_viewport_guard_rva')
@@ -729,7 +704,7 @@ def verify_loading_screen(pe, log):
     uses them: CGamePersistent::game_loaded (the `intro_start game_loaded` message) tests dwPrecacheFrame <= 2 and
     b_need_user_input (= b_registered + 1), and CRenderDevice::PreCache tests b_registered == 0 before it sets it to 1."""
     precache, registered = ints(TEXT, 'device_precache_frame_rva'), ints(TEXT, 'load_screen_registered_rva')
-    width = ints(geometry.legacy_profile(NATIVE), 'device_width_rva')
+    width = ints(profiles.native(geometry.BUILD), 'device_width_rva')
     assert precache == width + 8, 'Device.dwPrecacheFrame follows dwWidth and dwHeight'
     message = [pe.rva(at) for at in pe.occurrences(b'intro_start game_loaded\0') if pe.data[at - 1:at] == b'\0']
     assert len(message) == 1, 'one intro_start game_loaded string'
@@ -1034,8 +1009,7 @@ def measure_self_test():
 
 
 def verify(pe):
-    assert PROFILE.exists(), 'missing games/anomaly/src/sr_profile.h'
-    p = parse(TEXT)
+    p = TEXT
     log = [f'image sha256 {geometry.HASH}']
     f = verify_guards(pe, p, log)
     geometry.verify_detour_prefix(pe, p['functions'])
@@ -1061,14 +1035,14 @@ def verify(pe):
           'projection/first-person/mip-bias sites')
 
 
-TEXT = geometry.legacy_profile(PROFILE) if PROFILE.exists() else ''
+TEXT = profiles.sr(geometry.BUILD, PROFILE)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--exe', choices=sorted(geometry.BUILDS), default=geometry.BUILD)
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--read', nargs=2)
-    parser.add_argument('--profile', help='verify another copy of sr_profile.h (negative tests)')
+    parser.add_argument('--profile', help='verify another copy of sr_profile.rs (negative tests)')
     parser.add_argument('--measure-jitter', metavar='DIR', help='measure a Stage 3 burst (sr-jitter-* folder); no exe needed')
     parser.add_argument('--region', nargs=4, type=int, metavar=('X0', 'Y0', 'X1', 'Y1'),
                         help='world sub-rectangle in render pixels (for example the first-person weapon)')
@@ -1080,7 +1054,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.profile:
         PROFILE = pathlib.Path(args.profile)
-        TEXT = geometry.legacy_profile(PROFILE)
+        TEXT = profiles.sr(geometry.BUILD, PROFILE)
     if args.measure_self_test:
         raise SystemExit(measure_self_test())
     if args.measure_jitter:

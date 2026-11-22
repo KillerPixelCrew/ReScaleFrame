@@ -56,7 +56,7 @@ struct Profile {
     relations: [Relation; 13],
 }
 
-// Geometry detour indices the relations name (geometry_profile.h geometry_site_*), checked by name below.
+// Geometry detour indices the relations name (geometry_profile.rs sites order), checked by name below.
 const GEOMETRY_RENDER_HUD: usize = 11;
 const GEOMETRY_RENDER_SORTED: usize = 12;
 const GEOMETRY_RENDER_EMISSIVE: usize = 13;

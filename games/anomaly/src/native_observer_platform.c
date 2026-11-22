@@ -24,7 +24,7 @@ bool rsf_anomaly_observer_read_frame(const rsf_anomaly_observer_engine*, rsf_ano
 _Static_assert(sizeof(rsf_anomaly_observer_binding) == 16 && offsetof(rsf_anomaly_observer_binding, original) == 8,
     "observer binding layout");
 
-// Same order as native_sites in both exact-build records (native_profile.h).
+// Same order as native_sites in both exact-build records (native_profile.rs).
 enum { observer_site_count = RSF_ANOMALY_OBSERVER_RESET_END + 1 };
 _Static_assert(observer_site_count == 8, "observer site count");
 

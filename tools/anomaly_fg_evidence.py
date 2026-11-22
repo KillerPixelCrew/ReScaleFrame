@@ -1,7 +1,7 @@
 """Frame generation: read-only check of the engine sites games/anomaly/src/fg_stage.rs relies on, against the installed exe.
 
 FG input facts additionally use the guarded CInput primary vtable slot 0. It is driven from guarded boundaries the native observer already hooks
-(games/anomaly/src/native_profile.h) and reads HW.pBaseZB (games/anomaly/src/sr_profile.h) for the SR-off depth.
+(games/anomaly/src/native_profile.rs) and reads HW.pBaseZB (games/anomaly/src/sr_profile.rs) for the SR-off depth.
 This script proves, on --exe standard (default) or --exe avx, that those sites are what the FG timeline assumes:
 
   dxRenderDeviceRender::Begin      render begin (simulation end, FRAME/SUBMISSION begin)
@@ -26,28 +26,20 @@ import capstone
 from capstone import x86
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-NATIVE = ROOT / 'games/anomaly/src/native_profile.h'
-SR_PROFILE = ROOT / 'games/anomaly/src/sr_profile.h'
 INPUT_PROFILE = ROOT / 'games/anomaly/src/input/profile.rs'
 _spec = importlib.util.spec_from_file_location('anomaly_sr_evidence', ROOT / 'tools/anomaly_sr_evidence.py')
 sr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sr)
+profiles = sr.profiles
+NATIVE = profiles.NATIVE
 
 FG_SITES = ('IRenderDeviceRender::Begin', 'IRenderDeviceRender::End', 'IRenderDeviceRender::SetCacheXform',
             'CHUDManager::RenderUI', 'CRender::RenderToTarget', 'CRender::reset_begin')
 
 
-def native_sites():
-    text = sr.geometry.legacy_profile(NATIVE)
-    sites = {}
-    for name, rva, hexbytes in re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]{32})"\)\}', text):
-        sites[name] = (int(rva, 16), bytes.fromhex(hexbytes))
-    size = int(re.search(r'image_size = (0x[0-9a-f]+)', text).group(1), 16)
-    return sites, size
-
-
-def ints(text, name):
-    return int(re.search(name + r'\s*=\s*(0x[0-9a-f]+)', text).group(1), 16)
+def native_sites(native):
+    sites = {name: (rva, bytes.fromhex(expected)) for name, rva, expected in native['sites']}
+    return sites, native['image_size']
 
 
 def indirect_calls(code, base, displacement):
@@ -104,20 +96,21 @@ def verify_input(pe, log):
 def verify(pe):
     log = [f'image sha256 {sr.geometry.HASH}']
     verify_input(pe, log)
-    sites, size = native_sites()
+    native = profiles.native(sr.geometry.BUILD, NATIVE)
+    sites, size = native_sites(native)
     nt = struct.unpack_from('<I', pe.data, 60)[0]
     assert struct.unpack_from('<I', pe.data, nt + 24 + 56)[0] == size, 'SizeOfImage'
     all_sites = [(n, r, h.hex()) for n, (r, h) in sites.items()]
-    sr.geometry.verify_unique_guards(pe, sr.geometry.profile_text(NATIVE), 'native', all_sites)
+    sr.geometry.verify_unique_guards(pe, native['unique'], 'native', all_sites)
     sr.geometry.verify_detour_prefix(pe, all_sites)
     for name in sites:
         rva, expected = sites[name]
         actual = pe.read(rva, 16)
         assert actual == expected, f'{name} at {rva:#x}: {actual.hex()} != {expected.hex()}'
         log.append(f'{name:36} {rva:#08x} guard {expected.hex()} OK')
-    profile = sr.geometry.legacy_profile(SR_PROFILE)
-    chain = ints(profile, 'hw_swap_chain_rva')
-    base_zb = ints(profile, 'hw_base_zb_rva')
+    profile = profiles.sr(sr.geometry.BUILD)
+    chain = profile['hw_swap_chain_rva']
+    base_zb = profile['hw_base_zb_rva']
     # End: the only Present, HW.m_pSwapChain->Present(...), is an indirect call at vtable +0x40.
     end = sites['IRenderDeviceRender::End'][0]
     end_stop = pe.function_end(end)

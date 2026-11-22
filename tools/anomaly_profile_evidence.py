@@ -1,7 +1,7 @@
 """Read-only evidence regression suite for both installed Anomaly builds.
 
 Runs the four evidence scripts, then proves rejection of altered guards, RVAs and
-layout/frame values in temporary profile copies. Never writes the game install.
+layout/frame values in temporary copies of the Rust profile owners. Never writes the game install.
 Not registered in CTest because the copyrighted executables are external inputs.
 """
 import pathlib
@@ -12,10 +12,10 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CASES = {
-    'geometry': ('geometry_profile.h', 'world_matrix_rva'),
-    'sr': ('sr_profile.h', 'device_project_rva'),
+    'geometry': ('geometry_profile.rs', 'world_matrix_rva'),
+    'sr': ('sr_profile.rs', 'device_project_rva'),
     'motion': ('motion_profile.rs', 'source_offset'),
-    'fg': ('native_profile.h', 'image_size'),
+    'fg': ('native_profile.rs', 'image_size'),
 }
 
 
@@ -37,39 +37,37 @@ def main():
             assert result.returncode == 0, (domain, build, result.stdout, result.stderr)
             checks += 1
             text = (ROOT / 'games/anomaly/src' / header).read_text(encoding='utf-8')
-            rust = header.endswith('.rs')
             start = text.index('// ---- ' + section + ' 1.5.3 DX11')
             end = text.find('// ---- ', start + 10)
             end = len(text) if end < 0 else end
             selected = text[start:end]
             guard = re.search(r'b"([0-9a-f]{32})"', selected)
-            if rust:
-                rva = re.search(r'\bsite\(\s*c"[^"]+",\s*(0x[0-9a-f]+)', selected)
-                layout = re.search(r'\b' + field + r': (0x[0-9a-f]+)', selected)
-            else:
-                rva = re.search(r'\{"[^"]+", (0x[0-9a-f]+), signature', selected)
-                layout = re.search(r'\.' + field + r' = (0x[0-9a-f]+)', selected)
+            rva = re.search(r'\bsite\(\s*c"[^"]+",\s*(0x[0-9a-f]+)', selected)
+            layout = re.search(r'\b' + field + r': (0x[0-9a-f]+)', selected)
             assert guard and rva and layout, (domain, field)
-            mutations = [('guard', guard), ('rva', rva), ('layout', layout)]
+            mutations = [('guard', start, guard), ('rva', start, rva), ('layout', start, layout)]
             if domain == 'sr':
-                sun = re.search(r'\{"CRender::render_sun_cascades", (0x[0-9a-f]+), "([0-9a-f]+)"', selected)
+                # The build's extended guards are its STANDARD_UNIQUE / AVX_UNIQUE table, ahead of PROFILES.
+                unique = text.index('const ' + build.upper() + '_UNIQUE')
+                sun = re.search(r'UniqueGuard::new\(c"CRender::render_sun_cascades", (0x[0-9a-f]+), c"([0-9a-f]+)"',
+                                text[unique:])
                 assert sun
                 # Alter the extended guard beyond expected16, and the separately guarded call's displacement.
-                mutations.append(('sun_extended', sun))
-                sun_call = re.search(r'\{"CRender::Render -> render_sun_cascades[^\n]+signature\("([0-9a-f]+)"', selected)
+                mutations.append(('sun_extended', unique, sun))
+                sun_call = re.search(r'site\(c"CRender::Render -> render_sun_cascades[^\n]+b"([0-9a-f]+)"', selected)
                 assert sun_call
-                mutations.append(('sun_call', sun_call))
+                mutations.append(('sun_call', start, sun_call))
                 for field in ('get_constant_buffer_rva', 'position_setup_vtable_rva'):
-                    match = re.search(r'\.' + field + r' = (0x[0-9a-f]+)', selected)
+                    match = re.search(r'\b' + field + r': (0x[0-9a-f]+)', selected)
                     assert match
-                    mutations.append((field, match))
+                    mutations.append((field, start, match))
                 for name in ('position binder body', 'R_constants::GetCBuffer',
                              'position binder registration', 'constant buffer reflected size'):
-                    match = re.search(r'\{"' + name + r'", (0x[0-9a-f]+), "([0-9a-f]+)"', selected)
+                    match = re.search(r'UniqueGuard::new\(c"' + name + r'", (0x[0-9a-f]+), c"([0-9a-f]+)"', selected)
                     assert match
-                    mutations.append(('reconstruction_guard', match))
+                    mutations.append(('reconstruction_guard', start, match))
             with tempfile.TemporaryDirectory(prefix='rsf-anomaly-evidence-') as temp:
-                for kind, match in mutations:
+                for kind, base, match in mutations:
                     group = 2 if kind in ('sun_extended', 'reconstruction_guard') else 1
                     old = match[group]
                     if kind in ('guard', 'reconstruction_guard'):
@@ -80,9 +78,9 @@ def main():
                         new = old[:2] + ('00' if old[2:4] != '00' else 'ff') + old[4:]
                     else:
                         new = hex(int(old, 16) + 1)
-                    altered = selected[:match.start(group)] + new + selected[match.end(group):]
+                    at, stop = base + match.start(group), base + match.end(group)
                     path = pathlib.Path(temp) / header
-                    path.write_text(text[:start] + altered + text[end:], encoding='utf-8')
+                    path.write_text(text[:at] + new + text[stop:], encoding='utf-8')
                     result = run(domain, build, path)
                     assert result.returncode != 0 and 'AssertionError' in result.stderr, (domain, build, kind, result.stdout, result.stderr)
                     checks += 1

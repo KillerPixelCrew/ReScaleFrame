@@ -136,7 +136,7 @@ typedef struct rsf_anomaly_swap_counters {
     uint64_t restores[RSF_ANOMALY_SWAP_RESTORE_COUNT];
 } rsf_anomaly_swap_counters;
 
-// The verified engine layout shared by both executable profiles (sr_profile.h), supplied once at creation.
+// The verified engine layout shared by both executable profiles (sr_profile.rs), supplied once at creation.
 typedef struct rsf_anomaly_swap_world_target {
     uint32_t offset;                  // ref_rt (CRT*) inside CRenderTarget
     uint32_t d3d_format;              // 0 accepts R16F or R32F

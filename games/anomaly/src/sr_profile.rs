@@ -1,15 +1,107 @@
 // SPDX-License-Identifier: MIT
 //! SR render-resolution split profiles for both exact Anomaly 1.5.3 DX11 executables.
 //! Evidence: docs/research/anomaly-sr-seam.md and anomaly-avx-profile.md; tools/anomaly_sr_evidence.py re-checks
-//! every value against the installed executables. tools/generate-anomaly-sr-profile.py projects these records
-//! into sr_profile.h for the native consumers and the evidence tools.
-// Every profiled value is projected into sr_profile.h and checked by the evidence tools; Rust reads a subset.
+//! every value against the installed executables, reading this file through tools/anomaly_profiles.py.
+// Every profiled value is checked by the evidence tools; Rust reads a subset.
+// Render-resolution split (SR Stage 0, docs/research/anomaly-sr-seam.md). One table per exact executable (native_profile.rs,
+// native_profile.rs order); the AVX table is documented in docs/research/anomaly-avx-profile.md.
+// Every value is re-checked against the installed executable by tools/anomaly_sr_evidence.py --verify [--exe avx] (decompile/disassembly evidence in that script and the docs).
+// All functions are x64 __fastcall with `this` in rcx. Line numbers refer to xray-monolith 028ccf5.
+// Detour and call-target candidates (sr_function_sites, in this order). expected = the first 16 bytes at the RVA (same
+// convention as native_sites).
+//   render_sun_cascades: CRender wrapper looping over every sun cascade (r2_R_sun.cpp:1113). Temporarily uses the
+//     saved unjittered main matrices for fitting; the caller restores Device and RCache before world rendering resumes.
+//   phase_scene_prepare: void CRenderTarget::phase_scene_prepare() (r4_rendertarget_phase_scene.cpp:4). H1.
+//   phase_combine: void CRenderTarget::phase_combine() (r4_rendertarget_phase_combine.cpp:39). Hosts the S-B seam calls.
+//   phase_sunshafts: void CRenderTarget::phase_sunshafts() (rendertarget_phase_sunshafts.cpp:3). H2a.
+//   phase_blur: void CRenderTarget::phase_blur() (rendertarget_phase_blur.cpp:3). H2b. 16 bytes are not unique: see unique guards.
+//   rmNear / rmFar: void CRender::rmNear() / rmFar() (r4.cpp:834,843), CRender vtable slots 55 and 56. rmNear is H4 and is the
+//     same function geometry_profile.rs already detours (geometry_site_rm_near): H4 must share that detour.
+//   set_P: void R_xforms::set_P(const Fmatrix&) (R_Backend_xform.cpp:32), rdx = matrix; copies it to this+0xC0 (m_p).
+//   set_V: void R_xforms::set_V(const Fmatrix&) (R_Backend_xform.cpp:19); copies to this+0x80 (m_v).
+//   surface_set: void CTexture::surface_set(ID3DBaseTexture*) (dx10SH_Texture.cpp:55): AddRef new, Release pSurface and
+//     m_pSRView, store, refresh desc, CreateShaderResourceView (R24G8_TYPELESS -> R24_UNORM_X8_TYPELESS).
+//   SetMipLODBias: void dx10SamplerStateCache::SetMipLODBias(float) (dx10SamplerStateCache.cpp:201), bias in xmm1. Rebuilds
+//     every sampler state when the value changes.
+//   SetMaxAnisotropy: void dx10SamplerStateCache::SetMaxAnisotropy(u32) (dx10SamplerStateCache.cpp:172), edx = value.
+//   Invalidate: void CBackend::Invalidate() (R_Backend_Runtime.cpp:63). Clears every RCache cache, including the texture slots.
+//   u_setrt(W,H): void CRenderTarget::u_setrt(u32 W, u32 H, RTV0, RTV1, RTV2, DSV) (r4_rendertarget.cpp:111).
+//   CParticleEffect::Render, accum_point: first-person projection rebuild sites outside geometry_profile.rs (see
+//     sr_first_person_sites).
+// Where 16 bytes are not unique in .text: the shortest prefix at the same RVA that is (sr_unique_guards). rmNear/rmFar/
+// rmNormal differ only in their rip-relative MaxDepth displacement near the end of the guard.
+// Real `call rel32` instructions (sr_call_sites, no LTCG inlining). expected = 16 bytes from the E8 opcode.
+// Every site that rebuilds a first-person projection, uploads it with R_xforms::set_P and then calls rmNear().
+// rm_near_call is the virtual `call [rax+0x1b8]` (slot 55) or a direct call to CRender::rmNear.
+// Per-build addresses. Globals are RVAs from image base 0x140000000; Device.dwWidth/dwHeight are native_profile.rs
+// device_width/height_rva.
+//   device_view/project/full_transform_rva: Device.mView, mProject, mFullTransform (adjacent Fmatrix).
+//   Loading screen. CRenderDevice::PreCache registers load_screen_renderer (b_registered = 1, b_need_user_input = the next
+//   byte) and CGamePersistent::OnFrame stops it only when dwPrecacheFrame is 0 and the "Press any key to continue" sequence
+//   is done, so the flag stays set through the key wait, when the world still renders under the loading screen and
+//   dwPrecacheFrame is 0. device_precache_frame_rva = Device.dwPrecacheFrame (device_width_rva + 8);
+//   load_screen_registered_rva = load_screen_renderer.b_registered (bool).
+//   hw_*: HW.pDevice, HW.pContext, HW.m_pSwapChain, HW.pBaseRT, HW.pBaseZB.
+//   render_implementation_rva: RImplementation (CRender). render_options_word0/3_rva: CRender::o, first and fourth u32 of
+//   the bitfield. sunshafts_mode_rva: ps_sunshafts_mode; 2/3 run phase_sunshafts. sampler_cache_rva: SSManager
+//   (dx10SamplerStateCache). user_mip_bias_rva: ps_r__tf_Mipbias (float). user_anisotropy_rva: ps_r__tf_Anisotropic (u32).
+//   backend_rva: RCache (CBackend).
+//   SSAO viewport helper (r4_rendertarget_phase_ssao.cpp:3-10): `static D3D_VIEWPORT viewport[1] = {0, 0, w, h, 0, 1}`
+//   is a function-local static, so its width and height are fixed by the first call for the rest of the process and
+//   later calls only re-apply it. Stock calls it from phase_downsamp (with o.ssao_half_data) and phase_ssao (with
+//   o.ssao_blur_on and no ssao_opt_data), always first with Device.dwWidth/2 x Device.dwHeight/2. In a Stage 2 world
+//   window the static must hold render/2, and output/2 again afterwards. Binary (x64 magic static):
+//   `cmp [guard], tls_epoch; jg init` then `lea r8,[viewport]; jmp [ctx->vtbl+0x160]` (RSSetViewports); the init path
+//   stores only Width (+8) and Height (+0xC); X, Y, MinDepth 0 and MaxDepth 1.0 are in .data. The guard is in .bss:
+//   0 = never initialised, -1 = being initialised, anything else = initialised. Four callers in phase_downsamp and
+//   phase_ssao, no other reference. ssao_set_viewport_code is the function from its entry up to and including
+//   `lea r8,[rip+viewport]` (it ends with that displacement); the guard and viewport displacements in it prove both data
+//   addresses.
+// ---- Layout shared by both builds (same source; the evidence script re-derives each value from each build's code) ----
+// CRender::Target (CRenderTarget*)
+// m_uiMipLODBias (float)
+// CRenderTarget (from the constructor's ref_rt::create(name, w, h, fmt, samples) calls).
+// set by every u_setrt
+// CResourceManager name passed to ref_rt::create
+// ref_rt (CRT*) inside CRenderTarget
+// D3DFORMAT passed at creation: 21 A8R8G8B8, 113 A16B16G16R16F, 75 D24S8, 0 = not checked
+// CTexture* t_LUM_src / t_LUM_dest, re-pointed with surface_set at the start of every phase_combine.
+// SR Stage 2 world targets: every CRenderTarget target the world window (phase_scene_prepare .. S-B seam) renders
+// into, in the RSF_ANOMALY_SWAP_SLOT_* order (sr_swap.h). Each entry repeats its target_slots offset and format (a
+// compile-time check in sr_profile.rs, and the verifier). d3d_format 0 accepts R16F (111) or R32F (114): rt_half_depth is R32F on NVIDIA and
+// R16F elsewhere (r4_rendertarget.cpp:717), rt_ssao_temp is R16F with a UAV (749). Optional targets exist only with
+// their option (generic2: o.advancedpp; half_depth: o.ssao_opt_data; ssao_temp: o.ssao_hdao && o.ssao_ultra).
+// half_allowed: the engine may create it at Device.dwWidth/2 x Device.dwHeight/2 (o.ssao_half_data, line 709).
+// S-B colour; FP16 twin
+// CopyResource partner of generic0; FP16 twin
+// G-buffer position/normal; P reads it (blur, dof, combine_2)
+// G-buffer albedo, then hud_ui scratch
+// light accumulation
+// bloom source, then distortion mask; combine_2 reads it
+// volumetric light accumulation (advancedpp)
+// SSAO downsampled depth (ssao_opt_data)
+// HDAO output, UAV (ssao_hdao && ssao_ultra)
+// Targets the world window would also write on paths Stage 2 does not twin. Each must be absent (null ref_rt):
+// msaadepth, generic0_r and generic1_r exist only with MSAA (refused); accum_temp only without mrtmixdepth and
+// fp16_blend (r4_rendertarget.cpp:426), which D3D10+ never selects (HWCaps.cpp:242).
+// The CRender::o word0 bits phase_combine tests before calling the SSAO passes (test al,0x20 / 0x40 -> phase_hdao;
+// test al,4 -> phase_downsamp; test al,2 -> phase_ssao). Documentation and verifier only.
+// CRT (SH_RT.h:6-38; 0x50 bytes, allocated by CResourceManager::_CreateRT).
+// CTexture (SH_Texture.h; polymorphic, reference count after the vtable).
+// RCache (CBackend, R_Backend.h:117-190). Offsets from CBackend::Invalidate and OnFrameBegin.
+// R_xforms (geometry_profile world_matrix_rva)
+// pRT[4], pZB
+// R_constant_table* ctable
+// STextureList* T
+// m_bChangedRTorZB
+// R_xforms (r_backend_xform.h): m_w, m_invw, m_v, m_p, then derived matrices.
+// re-encoded with VEX moves (0x4a bytes up to the viewport lea instead of 0x46).
 #![allow(dead_code)]
 
 use crate::engine_guards::{NativeSite, UniqueGuard, site};
 use std::ffi::CStr;
 
-// ---- layout shared by both builds (sr_profile.h documents each value) ----
+// ---- layout shared by both builds (documented above) ----
 pub(crate) const SR_FUNCTION_SITE_COUNT: usize = 17;
 pub(crate) const SITE_PHASE_SCENE_PREPARE: usize = 0;
 pub(crate) const SITE_PHASE_COMBINE: usize = 1;
@@ -248,6 +340,7 @@ const AVX_UNIQUE: [UniqueGuard; 6] = [
 
 /// In native_profile.rs order (the build index Rust admits).
 pub(crate) static PROFILES: [Profile; 2] = [
+    // ---- Standard 1.5.3 DX11 ----
     Profile {
         label: c"standard",
         function_sites: [
@@ -318,6 +411,7 @@ pub(crate) static PROFILES: [Profile; 2] = [
             UniqueGuard::new(c"constant buffer reflected size", 0x83db90, c"488d5424404c896b10498bcc4c896b204c896b284c896b304c896b384c896b404c896b48c6436801498b0424ff10488b542440488b0dfe1b5000e8011186ff4885c07402ff00488b4b104885c9740fff09488b4b1044392975044c896b108b54244c488d4b20488943108b4424488943188b442450894358"),
         ],
     },
+    // ---- AVX 1.5.3 DX11 ----
     Profile {
         label: c"avx",
         function_sites: [

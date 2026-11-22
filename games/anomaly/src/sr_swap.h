@@ -23,7 +23,7 @@
    buckets and twin results are in sr_swap_platform.h. */
 #include "sr_swap_platform.h"
 
-/* Order of sr_world_targets (sr_profile.h). Stage 1 uses the first RSF_ANOMALY_SWAP_STAGE1_SLOT_COUNT slots. */
+/* Order of sr_world_targets (sr_profile.rs WORLD_TARGETS). Stage 1 uses the first RSF_ANOMALY_SWAP_STAGE1_SLOT_COUNT slots. */
 #define RSF_ANOMALY_SWAP_SLOT_GENERIC0 0u
 #define RSF_ANOMALY_SWAP_SLOT_GENERIC_TEMP 1u
 #define RSF_ANOMALY_SWAP_SLOT_POSITION 2u

@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import anomaly_motion_deploy as motion  # noqa: E402
+import anomaly_profiles  # noqa: E402
 import rsf_shader_pack as shader_pack  # noqa: E402
 from package_common import RUNTIME, copy, dependency_notices, digest, git, release_identity  # noqa: E402
 
@@ -235,14 +236,11 @@ def main(argv=None, *, release_revision=None, game_only=False):
                                     'See the per-family notices, Sharpening-THIRD_PARTY.md and RUST-DEPENDENCIES.md.\n'}.items():
         (stage / 'ReScaleFrame/licenses' / name).write_text(text, encoding='utf-8', newline='\n')
     dependency_notices(stage)
-    build_profile = (ROOT / 'games/anomaly/src/native_profile.h').read_text(encoding='utf-8')
-    hashes = re.findall(r'inline constexpr char (?:dx11|avx)_hash\[\] = "([0-9a-f]{64})"', build_profile)
-    if len(hashes) != 2:
-        raise RuntimeError('Expected the two exact Anomaly executable profiles.')
+    builds = [anomaly_profiles.native(build) for build in anomaly_profiles.BUILDS]
     manifest = {'product': 'ReScaleFrame for S.T.A.L.K.E.R. Anomaly', 'version': version, 'source_commit': revision,
                 'platform': 'Windows x64', 'streamline': '2.14.1', 'fidelityfx_sdk': '2.3.0', 'xess_sdk': '3.0.2',
                 'carrier_target': 'rsf_proxy_thin_dinput8',
-                'executables': dict(zip(('AnomalyDX11.exe', 'AnomalyDX11AVX.exe'), hashes)),
+                'executables': {build['executable']: build['sha256'] for build in builds},
                 'motion_namespace': report['namespace'], 'motion_source_corpus_sha256': motion.CORPUS,
                 'motion_root_count': len(report['roots']), 'compiled_shader_cache_included': False,
                 'game_test_scope': 'RTX 4070 Laptop SDR; see README; this rebuilt package is not independently game-tested',

@@ -1,9 +1,9 @@
 """Read-only installed-binary evidence and local REA client. No tokens in output.
 
-Checks games/anomaly/src/geometry_profile.h against the installed executable of one exact build: --exe standard (default,
-AnomalyDX11.exe) or --exe avx (AnomalyDX11AVX.exe). Each header holds one table per build; only the selected build's table
-(plus the shared layout) is read. Needs D:/Anomaly 1.5.3, so it is not registered in CTest.
-Run: py -3 tools/anomaly_geometry_evidence.py --verify [--exe avx] [--profile copy-of-geometry_profile.h]
+Checks games/anomaly/src/geometry_profile.rs (read through tools/anomaly_profiles.py) against the installed executable of
+one exact build: --exe standard (default, AnomalyDX11.exe) or --exe avx (AnomalyDX11AVX.exe). Only the selected build's
+record (plus the shared layout) is checked. Needs D:/Anomaly 1.5.3, so it is not registered in CTest.
+Run: py -3 tools/anomaly_geometry_evidence.py --verify [--exe avx] [--profile copy-of-geometry_profile.rs]
 The other Anomaly evidence scripts import BUILDS/select/profile_text from here.
 """
 import argparse
@@ -12,9 +12,12 @@ import json
 import pathlib
 import re
 import struct
+import sys
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
+import anomaly_profiles as profiles
 INSTALL = pathlib.Path('D:/Anomaly 1.5.3/bin')
 # Script anchors per exact build: functions found independently of the profile (RTTI slot, call-graph position, strings;
 # docs/research/anomaly-avx-profile.md). The checks then require the profile to name the same code.
@@ -56,7 +59,7 @@ def select(name):
 
 
 def profile_text(path, text=None):
-    """The shared part of a profile header plus the selected build's section ("// ---- Standard ..." / "// ---- AVX ...")."""
+    """The shared part of a profile source plus the selected build's section ("// ---- Standard ..." / "// ---- AVX ...")."""
     text = pathlib.Path(path).read_text() if text is None else text
     marks = {name: text.find('// ---- ' + BUILDS[name]['section'] + ' 1.5.3 DX11') for name in BUILDS}
     assert all(at >= 0 for at in marks.values()), ('profile has no per-build sections', str(path))
@@ -64,20 +67,6 @@ def profile_text(path, text=None):
     begin = marks[BUILD]
     end = next((at for at in starts if at > begin), len(text))
     return text[:starts[0]] + text[begin:end]
-
-
-def legacy_profile(path):
-    """Selected C++ aggregate as named fields for the evidence parsers."""
-    text = profile_text(path)
-    tag = 'standard' if BUILD == 'standard' else 'avx'
-    for domain in ('sr', 'motion'):
-        text = text.replace(domain + '_' + tag + '_unique', domain + '_unique_guards')
-    text = re.sub(r'\.(\w+) = \{\{(.*?)\}\},', lambda m: m[1] + '{{' + m[2] + '}};', text, flags=re.S)
-    text = re.sub(r'\.(\w+) =\s*((?:"[0-9a-f]*"\s*)+),', lambda m: 'inline constexpr char ' + m[1] + '[] = ' + m[2] + ';', text)
-    text = re.sub(r'\.(\w+) = (0x[0-9a-f]+|\d+)(?:,|(?=\}))', r'inline constexpr uint32_t \1 = \2;', text)
-    # Motion's CallerFrame is an embedded aggregate, named frame_* in the evidence parser.
-    text = re.sub(r'inline constexpr uint32_t (source|length|entry|flags|defines)_offset', r'inline constexpr uint32_t frame_\1_offset', text)
-    return text
 
 
 def verify_detour_prefix(pe, sites):
@@ -230,17 +219,11 @@ class PE:
         return sites[0][1]
 
 
-UNIQUE = re.compile(r'\{"([^"]+)", (0x[0-9a-f]+), "([0-9a-f]+)"\}')
-
-
-def verify_unique_guards(pe, text, domain, sites):
-    """The `<domain>_<build>_unique` extended guards of the selected section: each matches the image, is unique in .text and
-    minimal, starts with the 16-byte guard of the same site, and every listed site whose 16 bytes are not unique has one."""
-    block = re.search(domain + r'_(?:standard|avx)_unique\{\{(.*?)\}\};', text, re.S)
-    assert block, ('missing extended unique guards', domain)
-    guards = [(n, int(r, 16), bytes.fromhex(h)) for n, r, h in UNIQUE.findall(block.group(1))]
-    declared = int(re.search(r'array<UniqueGuard, (\d+)> ' + domain + r'_(?:standard|avx)_unique', text).group(1))
-    assert len(guards) == declared, ('unique guard parse', domain, len(guards), declared)
+def verify_unique_guards(pe, unique, domain, sites):
+    """The extended guards of the selected build: each matches the image, is unique in .text and minimal, starts with the
+    16-byte guard of the same site, and every listed site whose 16 bytes are not unique has one."""
+    assert unique, ('missing extended unique guards', domain)
+    guards = [(n, rva, bytes.fromhex(h)) for n, rva, h in unique]
     _, code = pe.text()
     check_guards(pe, code, guards, sites, domain)
     return len(guards)
@@ -276,9 +259,9 @@ def rea(name, args):
             content = [{k: item[k] for k in ('address', 'status', 'pseudocode') if k in item} for item in content['items']]
     print(json.dumps({'record': record['id'], 'result': content}, indent=2), flush=True)
 
-def verify_context(pe, text):
+def verify_context(pe, p):
     """Draw-time call site, phase, view and first-person boundaries. Raises AssertionError with the failing name."""
-    profile = {n: int(r, 16) for n, r, _ in re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]{32})"\)\}', text)}
+    profile = {n: rva for n, rva, _ in p['sites'] + p['layout']}
     assert profile['CBackend::constants.flush'] == FLUSH
     assert profile['R_dsgraph_structure::r_dsgraph_render_hud'] == RENDER_HUD
     assert profile['R_dsgraph_structure::r_dsgraph_render_sorted'] == RENDER_SORTED
@@ -307,7 +290,7 @@ def verify_context(pe, text):
         assert SKELETON_RENDER in [target for _, target in pe.calls_in(start, pe.function_end(start))], name
 
     # CRender::phase: Fvisual::Render's `cmp dword [phase], 1` (PHASE_SMAP) and the stores in CRender::Render.
-    phase = int(re.search(r'render_phase_rva = (0x[0-9a-f]+)', text).group(1), 16)
+    phase = p['render_phase_rva']
     cmp_at = PHASE_COMPARE
     raw = pe.read(cmp_at, 7)
     assert raw[:2] == b'\x83\x3d' and raw[6] == 1 and cmp_at + 7 + struct.unpack_from('<i', raw, 2)[0] == phase, 'phase compare'
@@ -332,14 +315,14 @@ def verify_context(pe, text):
     sv = pe.read(IS_SVP_FRAME, 32)
     assert sv[:3] == b'\x80\x39\x00' and sv[5:9] == b'\x0f\xb6\x49\x01' and sv[11:13] == b'\x8b\x05' and sv[17:19] == b'\xf7\xf1', 'IsSVPFrame shape'
     frame = IS_SVP_FRAME + 17 + struct.unpack_from('<i', sv, 13)[0]
-    assert frame == int(re.search(r'device_frame_rva = (0x[0-9a-f]+)', profile_text(ROOT / 'games/anomaly/src/native_profile.h')).group(1), 16), hex(frame)
+    assert frame == profiles.native(BUILD)['device_frame_rva'], hex(frame)
     call_at = callers[IS_SVP_FRAME]
     assert len(call_at) >= 1 and any(DEVICE_END <= c < DEVICE_END + 0x100 for c in call_at), 'End calls IsSVPFrame'
     call_in_end = next(c for c in call_at if DEVICE_END <= c < DEVICE_END + 0x100)
     lea = pe.read(call_in_end - 7, 7)
     assert lea[:3] == b'\x48\x8d\x0d', 'lea rcx,[Device.m_SecondViewport]'
     viewport = call_in_end - 7 + 7 + struct.unpack_from('<i', lea, 3)[0]
-    assert viewport == int(re.search(r'second_viewport_rva = (0x[0-9a-f]+)', text).group(1), 16), hex(viewport)
+    assert viewport == p['second_viewport_rva'], hex(viewport)
     after = pe.read(call_in_end + 5, 24)
     cam = after.find(b'\x38\x05')
     assert cam >= 0 and call_in_end + 5 + cam + 6 + struct.unpack_from('<i', after, cam + 2)[0] == viewport + 2, 'isCamReady'
@@ -378,14 +361,14 @@ def verify_context(pe, text):
     assert lea_rdx[:3] == b'\x48\x8d\x15' and lea_rcx[:3] == b'\x48\x8d\x0d'
     identity = RENDER_GRAPH + set_w - 14 + 7 + struct.unpack_from('<i', lea_rdx, 3)[0]
     world = RENDER_GRAPH + set_w - 7 + 7 + struct.unpack_from('<i', lea_rcx, 3)[0]
-    assert world == int(re.search(r'world_matrix_rva = (0x[0-9a-f]+)', text).group(1), 16)
+    assert world == p['world_matrix_rva']
     return {'flush_callers': len(callers[FLUSH]), 'draw_flush_sites': flush_before_draw, 'phase': hex(phase), 'RImplementation': hex(crender),
             'viewport': hex(viewport), 'psHUD_FOV': hex(next(iter(fov))), 'Fidentity': hex(identity)}
 
 
-def verify_foliage(pe, text):
+def verify_foliage(pe, p):
     """Tree and grass sites: the staged vertex constants, the detail render window and the progressive tree's slide window."""
-    number = lambda name: int(re.search(name + r' = (0x[0-9a-f]+|\d+)', text).group(1), 0)
+    number = p.__getitem__
     callers = pe.callers(FLUSH, CONSTANT_BUFFER_FLUSH, HW_RENDER, HW_RENDER_DUMP, TREE_BASE_RENDER)
 
     # CBackend::constants.flush walks six per-stage tables of 14 ref_cbuffer pointers (R_constants::flush_cache order:
@@ -443,17 +426,16 @@ def verify_foliage(pe, text):
     return {'vs_constant_table': hex(vertex_table), 'flush_table_entries': 6, 'hw_Render_dump': hex(HW_RENDER_DUMP),
             'dump_flush_sites': [hex(s) for s in sites], 'tree_pm_last_lod': '+0x108'}
 
-PROFILE = ROOT / 'games/anomaly/src/geometry_profile.h'
+PROFILE = profiles.GEOMETRY
 
 
 def verify(pe):
-    assert PROFILE.exists(), 'missing installed geometry profile'
-    text = profile_text(PROFILE)
-    sites = re.findall(r'\{"([^"]+)", (0x[0-9a-f]+), signature\("([0-9a-f]{32})"\)\}', text)
-    assert len(sites) >= 21, 'missing verified lifecycle, visual, context or layout sites'
+    p = profiles.geometry(BUILD, PROFILE)
+    sites = p['sites'] + p['layout']
+    assert len(p['sites']) == p['site_count'] and len(p['layout']) == p['layout_count'], 'geometry site counts'
     for name, rva, expected in sites:
-        assert pe.read(int(rva, 16), 16).hex() == expected, name
-    profile = {n: int(r, 16) for n, r, _ in sites}
+        assert pe.read(rva, 16).hex() == expected, name
+    profile = {n: rva for n, rva, _ in sites}
     wanted = {'CRender': {36: MODEL_CREATE, 37: MODEL_CREATE_CHILD, 38: MODEL_DUPLICATE, 39: MODEL_DELETE},
               'Fvisual': {7: FVISUAL}, 'FProgressive': {7: FPROGRESSIVE},
               'CSkeletonX_ST': {7: SKELETON_ST}, 'CSkeletonX_PM': {7: SKELETON_PM},
@@ -467,19 +449,18 @@ def verify(pe):
     for name, slots in named.items():
         for slot, site in slots.items():
             assert profile[site] == wanted[name][slot], ('profile site is not the RTTI slot', site)
-    guards = verify_unique_guards(pe, text, 'geometry', sites)
+    assert len(p['unique']) == p['unique_count'], 'geometry unique guard count'
+    guards = verify_unique_guards(pe, p['unique'], 'geometry', sites)
     verify_detour_prefix(pe, sites[:17])
     for name, slots in wanted.items():
         table = next(t for t in pe.tables(name) if t['this_offset'] == 0)
         for slot, rva in slots.items():
             assert int(table['slots'][slot], 16) == rva, (name, slot)
-    listed = re.search(r'hierarchy_vtables = \{([^}]*)\}', text)
-    assert listed, 'missing hierarchy vtable list'
-    expected_tables = {int(v, 16) for v in re.findall(r'0x[0-9a-f]+', listed.group(1))}
+    expected_tables = set(p['hierarchy_vtables'])
     found_tables = {int(next(t for t in pe.tables(name) if t['this_offset'] == 0)['vtable'], 16)
                     for name in ('FHierrarhyVisual', 'CKinematics', 'CKinematicsAnimated', 'FLOD')}
     assert expected_tables == found_tables, (sorted(map(hex, expected_tables)), sorted(map(hex, found_tables)))
-    world = int(re.search(r'world_matrix_rva = (0x[0-9a-f]+)', text).group(1), 16)
+    world = p['world_matrix_rva']
     callers = pe.set_w_world_address()
     assert callers and max(callers, key=callers.get) == world, (hex(world), callers)
     # set_W copies the first 16 floats of its argument to this+0 (m_w): mov eax,[rdx]; lea rsi,[rcx+0x100]; mov [rcx],eax.
@@ -491,8 +472,8 @@ def verify(pe):
     assert profile['R_xforms::set_W'] == SET_W and profile['Fvisual::Render phase compare'] == PHASE_COMPARE
     assert profile['CSecondVPParams::IsSVPFrame'] == IS_SVP_FRAME and profile['dx10ConstantBuffer::Flush'] == CONSTANT_BUFFER_FLUSH
     assert profile['CDetailManager::Render'] == DETAIL_RENDER
-    context = verify_context(pe, text)
-    foliage = verify_foliage(pe, text)
+    context = verify_context(pe, p)
+    foliage = verify_foliage(pe, p)
     print(f'PASS: installed {BUILD} build ({EXE.name}, sha256 {HASH}), {len(sites)} expected16 guards, {guards} extended unique '
           f'guards, lifecycle/visual/rmNear/rmNormal RTTI slots, '
           f'{len(found_tables)} hierarchy vtables, world matrix {hex(world)} ({callers[world]} set_W callers), '
@@ -505,7 +486,7 @@ if __name__ == '__main__':
     parser.add_argument('--rea', nargs=2)
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--exe', choices=sorted(BUILDS), default='standard', help='which exact executable (default standard)')
-    parser.add_argument('--profile', help='verify another copy of geometry_profile.h (negative tests)')
+    parser.add_argument('--profile', help='verify another copy of geometry_profile.rs (negative tests)')
     args = parser.parse_args()
     select(args.exe)
     if args.profile:

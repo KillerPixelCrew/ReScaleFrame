@@ -1,8 +1,47 @@
 // SPDX-License-Identifier: MIT
-//! Exact Anomaly 1.5.3 DX11 geometry profiles shared by admission, the
-//! native hook leaf and the generated native projection.
-//! Evidence: docs/research/anomaly-geometry-coverage.md, anomaly-avx-profile.md
-//! and tools/anomaly_geometry_evidence.py.
+//! Exact Anomaly 1.5.3 DX11 geometry profiles shared by admission and the
+//! native hook leaf. Evidence: docs/research/anomaly-geometry-coverage.md,
+//! anomaly-avx-profile.md and tools/anomaly_geometry_evidence.py, which reads
+//! this file through tools/anomaly_profiles.py.
+// RTTI slot evidence; tools/anomaly_geometry_evidence.py --verify [--exe avx] re-derives every value per build.
+// Indices 0..9 are the lifecycle and visual-entry detours. 10..15 are the draw-time call site and the
+// view/projection context boundaries (see the "Context and draw-time sites" notes below). 16 is the detail (grass)
+// render window.
+//   CDetailManager::Render (DetailManager.cpp:401): `if (0 == dtFS) return; if (!rsDetails) return;` then hw_Render()
+//   (the DX10 batch path). Every grass draw, in the G-buffer and in the shadow passes, happens inside this call.
+// Layout sites are evidence guards, not detours. Refuse the native layout reader on mismatch:
+//   R_xforms::set_W, CKinematics::LL_GetBoneInstance / LL_GetTransform_R (bone stride and render transform),
+//   Fvisual::Render phase compare (includes the rip-relative displacement to RImplementation.phase,
+//   `cmp dword [phase], PHASE_SMAP`), CSecondVPParams::IsSVPFrame (isActive && dwFrame % frameDelay == 0),
+//   dx10ConstantBuffer::Flush (`if (m_bChanged) { UpdateSubresource(m_pBuffer, 0, 0, m_pBufferData, 0, 0); m_bChanged = 0; }`:
+//   m_pBuffer +0x50, m_pBufferData +0x60, m_bChanged +0x68), FTreeVisual_PM last_lod load (`last_lod` +0x108 reloaded right
+//   after FTreeVisual::Render).
+// Context and draw-time sites:
+// * CBackend::constants.flush runs once per indexed/non-indexed draw (and compute dispatch), after the SRV, RT/ZB,
+//   vertex-layout and state-manager applies and immediately before DrawIndexed, from every inlined
+//   CBackend::Render site. The inlined D3D call is not hookable, so this is the last engine-owned call before it.
+// * r_dsgraph_render_hud draws mapHUD under the HUD projection (psHUD_FOV). r_dsgraph_render_sorted and
+//   r_dsgraph_render_emissive draw their world half and then, after rmNear(), their HUD half. rmNear/rmNormal
+//   are CRender vtable slots 55 and 57 (viewport depth 0..0.02 and 0..1).
+// Globals:
+// * render_phase_rva: CRender::phase (u32); PHASE_NORMAL=0, PHASE_SMAP=1.
+// * second_viewport_rva: CSecondVPParams: bool isActive, u8 frameDelay, bool isCamReady.
+// * world_matrix_rva: R_xforms instance behind RCache.xforms; set_W copies the 16 floats to its first member (m_w). The
+//   address most set_W callers pass (the evidence script counts them).
+// * vertex_constant_buffers_rva: foliage constants. The engine stages every shader constant in a CPU copy
+//   (dx10ConstantBuffer::m_pBufferData) and uploads it inside CBackend::constants.flush, so after the flush hook's original
+//   returns the copy is exactly what the next draw reads. CBackend::m_aVertexConstants[14] (ref_cbuffer = one pointer to the
+//   dx10ConstantBuffer) is the first of the six per-stage tables the flush loop walks (VS, PS, GS, HS, DS, CS, 0x70 bytes
+//   apart; flush body `lea rbx` base minus 0x70). The table index is the shader reflection's constant-buffer index.
+// * hierarchy_vtables: primary vtables of FHierrarhyVisual (engine spelling), CKinematics, CKinematicsAnimated and FLOD.
+//   All four share the FHierrarhyVisual child vector (+96/+104/+112) and BOOL bDontDelete (+120). RTTI re-checked.
+// Layout shared by both builds (same source; each value is re-derived from each build's code by the evidence script).
+// u32 m_uiBufferSize (the reflection size)
+// void* m_pBufferData
+// FTreeVisual_PM: FSlideWindowItem* pSWI at +0x100, u32 last_lod at +0x108 (the slide window the draw uses).
+// Detail rows live in `float4 array[61*4]`: four rows per instance, row 3 is (sun, sun, sun, hemi).
+// CSkeletonX subobject offsets are consumed by the Rust draw source setup.
+// Bone instance stride and transform offset are consumed by the Rust palette reader.
 use crate::engine_guards::{NativeSite, UniqueGuard, site};
 
 pub(crate) const SITE_COUNT: usize = 17;

@@ -3,7 +3,7 @@ use super::{Platform, Read, profile, read_bytes, rsf_anomaly_geometry_binding};
 use std::{ffi::c_void, ptr};
 
 /// CBackend::m_aVertexConstants slots, the reflected size and the staged data
-/// pointer of the engine's dx10ConstantBuffer (geometry_profile.h constants).
+/// pointer of the engine's dx10ConstantBuffer (documented in geometry_profile.rs).
 pub(crate) const SLOTS: u32 = 14;
 pub(crate) const SIZE_OFFSET: u32 = 0x58;
 pub(crate) const DATA_OFFSET: u32 = 0x60;

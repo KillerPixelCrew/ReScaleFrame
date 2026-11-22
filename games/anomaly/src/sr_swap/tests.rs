@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The swap owner on fake CRenderTarget, CRT, CTexture, RCache and Device memory laid out with the sr_profile.h
+//! The swap owner on fake CRenderTarget, CRT, CTexture, RCache and Device memory laid out with the sr_profile.rs
 //! offsets. The CTest entry also compares the profile and independent native camera oracle.
 
 use super::*;
