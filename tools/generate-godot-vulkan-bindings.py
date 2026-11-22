@@ -52,7 +52,15 @@ with TemporaryDirectory() as directory:
     header = Path(directory) / "godot_vk_creation.h"
     header.write_text(
         "#define VK_NO_PROTOTYPES\n#include <vulkan/vulkan_core.h>\n"
+        "#include <rescaleframe/native_latency_vulkan.h>\n"
         "#include <rescaleframe/native_latency_vulkan_requirements.h>\n"
+        "#include <rescaleframe/native_streamline_vulkan.h>\n"
+        "#include <rescaleframe/native_xess_vulkan_requirements.h>\n"
+        "#include <rescaleframe/native_sr_split_vulkan.h>\n"
+        "#include <rescaleframe/input_dump_vulkan.h>\n"
+        "#include <rescaleframe/input_dump.h>\n"
+        '#include "integrations/godot/native/api.h"\n'
+        '#include "runtime/orchestrator/src/native_fg_fsr4_vulkan.h"\n'
         "enum rsf_vk_tag {\n"
         + "".join(f"    TAG_{tag} = VK_STRUCTURE_TYPE_{tag},\n" for tag in tags)
         + "};\n",
@@ -60,22 +68,40 @@ with TemporaryDirectory() as directory:
     )
     types = (
         "Vk(InstanceCreateInfo|DeviceCreateInfo|BaseInStructure|BaseOutStructure|"
-        "ExtensionProperties|PhysicalDeviceProperties|PhysicalDevice(" + "|".join(features) + "))"
+        "ExtensionProperties|PhysicalDeviceProperties|SwapchainCreateInfoKHR|PresentInfoKHR|PhysicalDevice(" + "|".join(features) + "))"
         "|PFN_vk(CreateInstance|CreateDevice|DestroyDevice|EnumerateDeviceExtensionProperties|"
-        "GetPhysicalDeviceProperties)|rsf_vk_tag|"
-        "rsf_latencyvk_(device_query|device_requirements|created_device)"
+        "GetPhysicalDeviceProperties|GetPhysicalDeviceMemoryProperties|GetPhysicalDeviceSurfaceCapabilitiesKHR|"
+        "GetSwapchainImagesKHR|DeviceWaitIdle)|rsf_vk_tag|"
+        "rsf_(latencyvk_(device_query|device_requirements|created_device|status)|slvk_setup|xessvk_setup|"
+        "fgvk_(setup|frame|status|host_options)|srvk_(setup|frame|image|fallback)|fsr4vk_handoff|"
+        "fsr4fg_info|input_dump_vk_setup|godot_vk_(image|packet|handoff))"
+    )
+    functions = (
+        "rsf_(srvk_(create|plan|evaluate|destroy|retire_commands|dlss_preset|spatial_fallback|"
+        "fsr4_(create|plan|evaluate|destroy|retire_commands))|slvk_initialize|"
+        "xessvk_(initialize|shutdown|instance_requirements|device_requirements)|"
+        "latencyvk_(instance_proc|options|presentation|submit_end|render|get_status|shutdown|"
+        "require_device|device_created|device_destroyed)|"
+        "fgvk_(create_with_host|images|enable|enable_options|backend|image_layout|max_generated|"
+        "acquire|prepare|hudless|submitted|present|get_status|drain|destroy)|"
+        "input_dump_(cancel|poll|requested|wants|begin_record|complete|pass_metadata|result))"
     )
     output = subprocess.check_output(
-        [bindgen, str(header), "--allowlist-type", f"^({types})$",
+        [bindgen, str(header), "--allowlist-type", f"^({types})$", "--allowlist-function", f"^{functions}$",
          "--blocklist-type", "^VkStructureType$", "--no-prepend-enum-name",
-         "--allowlist-var", "^RSF_LATENCYVK_DEVICE_ABI_VERSION$",
+         "--allowlist-var", "^RSF_(LATENCYVK_(DEVICE_)?ABI_VERSION|SLVK_(ABI_VERSION|DLSS_SR|DLSS_FG)|"
+         "XESSVK_REQUIREMENTS_ABI_VERSION|SRVK_(SPLIT_)?ABI_VERSION|FGVK_(HOST_)?ABI_VERSION|"
+         "FSR4FG_BRIDGE_ABI_VERSION|INPUT_DUMP_VK_DEVICE_LOST|GODOT_(ABI_VERSION|VK_GRAPH_HANDOFF|VK_HANDOFF_ABI_VERSION))$",
+         "--blocklist-type", "^rsf_(frame_record|game_render_pass|sharpening_options)$",
          "--raw-line", "#![allow(non_camel_case_types, non_snake_case, dead_code)]",
+         "--raw-line", "use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
+         "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};",
          "--raw-line", "pub type VkStructureType = ::core::ffi::c_int;", "--use-core",
          "--no-doc-comments", "--no-derive-debug", "--with-derive-default",
          "--rust-edition", "2024", "--rust-target", "1.85",
          "--", "--target=x86_64-pc-windows-msvc", f"-I{include}",
          "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
-         "-Iruntime/graphics/include", "-Isdk/game/include"],
+         "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include", f"-I{root}"],
         cwd=root,
     )
 (root / "integrations/godot/native/vulkan/creation/abi.rs").write_bytes(output.replace(b"\r\n", b"\n"))

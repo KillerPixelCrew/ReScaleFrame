@@ -15,7 +15,7 @@
    vulkan/creation.rs), and the input window owner (window.rs: admission, window procedure, input
    session, CPU event and ping routing, and the present-marker admission). The leaves hold
    godot-cpp, D3D12, DXGI, Win32, Vulkan and Runtime calls and decide nothing. The creation leaves
-   are a separate table (rsf_godot_vk_creation_leaves) that vulkan_creation.cpp lends with each
+   use a separate Rust callback table at each
    creation call, so the creation contract test links them without runtime.cpp. The compositor
    effect's leaves are another (rsf_godot_effect_leaves, effect.cpp), lent with each callback. */
 #include "api.h"
@@ -137,36 +137,6 @@ typedef struct rsf_godot_vk_latency_facts {
     uint64_t sleep_calls, marker_calls;
 } rsf_godot_vk_latency_facts;
 
-/* The Vulkan session as the render, presentation and capture leaves read it under the guard. */
-typedef struct rsf_godot_vk_view {
-    rsf_godot_settings settings;
-    uint32_t sr_backend; /* the requested SR provider, Auto resolved */
-    uint64_t generation, session_id;
-    uint32_t fg_backend; /* the requested FG provider, Auto resolved */
-    uint32_t output_width, output_height; /* the last SR pass's output */
-} rsf_godot_vk_view;
-
-/* rsf_fgvk_get_status after a presenter Present. */
-typedef struct rsf_godot_vk_present_facts {
-    uint32_t enabled;
-    int32_t result;
-    uint64_t generated_callbacks, presented, tagged;
-} rsf_godot_vk_present_facts;
-
-/* One SR pass of rsfg_render_vulkan after its FG section, as the SR context owner reads it under
-   the guard. call is vulkan.cpp's private record of the packet, handoff, continuation, frame record
-   and current command buffer; the owner only lends it back to the SR leaves. device and
-   device_proc are compared and kept for retirement, never called by the owner. */
-typedef struct rsf_godot_vk_sr_pass {
-    void* call;
-    void* commands;
-    void* device;
-    rsf_godot_vk_proc device_proc;
-    uint32_t output_width, output_height;
-    uint64_t source_frame_id;
-    uint32_t render_width, render_height;
-} rsf_godot_vk_sr_pass;
-
 /* The provider and quality of one Vulkan SR context. The leaf adds the packet's device, procs and
    camera depth and motion facts and the provider's runtime directory. */
 typedef struct rsf_godot_vk_sr_create {
@@ -179,20 +149,6 @@ typedef struct rsf_godot_vk_sr_context {
     int32_t result;
     uint32_t reserved;
 } rsf_godot_vk_sr_context;
-
-struct rsf_latencyvk_device_query;
-struct rsf_latencyvk_device_requirements;
-struct rsf_latencyvk_created_device;
-
-/* The linked Runtime's creation services. The Rust resolver copies the table at setup. */
-typedef struct rsf_godot_vk_requirements {
-    uint32_t struct_size, version;
-    int32_t (*xess_instance)(uint32_t*, const char* const**, uint32_t*);
-    int32_t (*xess_device)(void*, void*, uint32_t*, const char* const**, void**);
-    int32_t (*latency_require)(const struct rsf_latencyvk_device_query*, struct rsf_latencyvk_device_requirements*);
-    int32_t (*latency_created)(const struct rsf_latencyvk_created_device*);
-    void (*latency_destroyed)(void*);
-} rsf_godot_vk_requirements;
 
 /* The compositor effect boundary. The effect owner (effect.rs) keeps each ReScaleFrameEffect's
    published snapshot, its callback count, the pending capture request and the last motion capture,
@@ -286,7 +242,7 @@ typedef struct rsf_godot_platform {
     uint32_t (*sharpening_valid)(const rsf_sharpening_options* options);
     void (*sharpening_defaults)(rsf_sharpening_options* options);
     uint32_t (*fg_backend_known)(uint32_t backend);
-    /* The Vulkan owner in vulkan.cpp. vulkan_supported and vulkan_latency_facts need no guard.
+    /* The Rust Vulkan bridge. vulkan_supported and vulkan_latency_facts need no guard.
        vulkan_locked runs body with the owner's guard held and returns its result, or zero when it
        could not; the guard is not reentrant. Every entry after it is called only inside such a
        body and does not take the guard itself. */
@@ -346,8 +302,8 @@ typedef struct rsf_godot_platform {
     uint32_t (*fg_end_session)(uint64_t session_id);
     /* Capture flush, context destroy (null accepted) and the session's frame dump cancel. */
     uint32_t (*d3d12_release)(void* context, uint64_t session_id);
-    /* The Vulkan SR context leaves (vulkan/sr.rs), called only while vulkan.cpp's guard is held:
-       inside a vulkan_locked body or from rsf_godot_vk_sr_render. None takes the guard. */
+    /* The Vulkan SR context leaves (vulkan/sr.rs), called only while the Rust graphics guard is held:
+       inside a vulkan_locked body or from the Vulkan SR pass. None takes the guard. */
     /* rsf_fgvk_drain of the live presenter, after rsf_fgvk_enable(0) when disable is nonzero;
        RSF_BACKEND_OK without a presenter. */
     int32_t (*vulkan_presenter_drain)(uint32_t disable);
@@ -430,38 +386,11 @@ int rsf_godot_d3d12_render(const rsf_godot_platform* platform, void* device, voi
 void rsf_godot_d3d12_render_begin(const rsf_godot_platform* platform, uint64_t source_frame_id);
 int rsf_godot_d3d12_shutdown(const rsf_godot_platform* platform);
 
-/* Vulkan session (vulkan.rs). Boot and shutdown take the guard through vulkan_locked; the
-   remaining calls are made by vulkan.cpp while it holds the guard. */
+/* Vulkan session. Boot and shutdown take the guard through vulkan_locked. */
 int rsf_godot_vk_booted(void);
 int rsf_godot_boot_vulkan(const rsf_godot_platform* platform, const rsf_godot_setup* setup);
 /* The caller found the session booted. */
 int rsf_godot_shutdown_vulkan(const rsf_godot_platform* platform);
-/* Fills view and returns whether the session is booted. Auto is resolved through the Runtime's
-   policy leaves of the table the boot registered; before any boot nothing is written. */
-int rsf_godot_vk_view_get(rsf_godot_vk_view* view);
-void rsf_godot_vk_presenter_created(uint32_t ready, uint32_t backend, uint32_t max_generated);
-/* Zero: the engine must drain and recreate its WSI owner, also when Auto now resolves to
-   another provider. */
-int rsf_godot_vk_presenter_current(uint32_t presenter_backend);
-void rsf_godot_vk_presented(const rsf_godot_vk_present_facts* facts);
-void rsf_godot_vk_presenter_retired(void);
-int32_t rsf_godot_vk_fg_pass(uint32_t screen, void* call,
-    int32_t (*options)(void*, uint32_t, uint32_t), int32_t (*record)(void*));
-void rsf_godot_vk_render_device(void* device);
-/* The SR section of rsfg_render_vulkan: context retirement, creation, plan, evaluate, the spatial
-   fallback and the SR accounting. Returns the export's result. */
-int rsf_godot_vk_sr_render(const rsf_godot_platform* platform, const rsf_godot_vk_sr_pass* pass);
-/* The live SR context handles, null when none, for rsfg_vk_recording_begin. */
-void* rsf_godot_vk_sr_context(void);
-/* The primary window rsfg_vk_window last reported since the session's start, or null. */
-void* rsf_godot_vk_primary_window(void);
-
-/* Install the engine resolver. The typed device calls run outside the graphics guard. */
-rsf_godot_vk_proc rsf_godot_vk_creation_resolver(rsf_godot_vk_proc underlying, uint32_t xess,
-    rsf_game_log_fn log, void* log_user, const rsf_godot_vk_requirements* requirements);
-void rsf_godot_vk_creation_stop(void);
-int rsf_godot_vk_interop_ready(void);
-
 /* Compositor effect owner (effect.rs), one per ReScaleFrameEffect instance. create and destroy run
    in the class constructor and destructor; request_capture and status on the caller's thread;
    render in _render_callback on the render thread, after the class's callback type check. */

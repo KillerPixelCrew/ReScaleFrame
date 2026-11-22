@@ -9,3 +9,20 @@ EXPORTS
     rsfg_cpu
     rsfg_request_latency_ping
     rsfg_vk_window
+    rsfg_vulkan_supported
+    rsfg_vk_resolver
+    rsfg_vk_host_capabilities
+    rsfg_boot_vulkan
+    rsfg_vk_create
+    rsfg_vk_capture_setup
+    rsfg_vk_capture_release
+    rsfg_vk_images
+    rsfg_vk_acquire
+    rsfg_vk_image_layout
+    rsfg_vk_present
+    rsfg_vk_recording_begin
+    rsfg_vk_submitted
+    rsfg_vk_destroy
+    rsfg_vk_drain
+    rsfg_render_vulkan
+    rsfg_render_vulkan_handoff

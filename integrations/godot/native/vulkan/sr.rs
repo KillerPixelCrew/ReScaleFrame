@@ -101,7 +101,7 @@ impl Vulkan {
         retired
     }
 
-    /// The SR section of `rsfg_render_vulkan`, called by `vulkan.cpp` with the guard held after
+    /// The SR section of `rsfg_render_vulkan`, called by `vulkan/native.rs` with the guard held after
     /// its argument, depth-domain and FG checks. Returns the export's result; a leaf exception
     /// returns 0 without a report, as the export's catch did.
     pub(crate) fn sr_render(&self, platform: &Platform, pass: &VkSrPass) -> c_int {

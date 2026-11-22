@@ -14,22 +14,8 @@ const ABI_MISMATCH: i32 = -2;
 const NOT_READY: i32 = -8;
 const INIT_FAILED: i32 = -6;
 
-#[repr(C)]
-struct Route {
-    open: unsafe extern "C" fn(&Setup, *const Handoff, &mut Handle) -> i32,
-    plan: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> i32,
-    record: unsafe extern "C" fn(Handle, Handle, *const Frame, &mut Handle) -> i32,
-    retire: unsafe extern "C" fn(Handle, Handle),
-    close: unsafe extern "C" fn(Handle) -> i32,
-}
-
-#[repr(C)]
-struct Routes {
-    native: Route,
-    split: Route,
-    preset: unsafe extern "C" fn(Handle, u32),
-    fallback: unsafe extern "C" fn(&Fallback) -> i32,
-}
+mod routes;
+use routes::{Route, Routes};
 
 struct Session {
     route: &'static Route,

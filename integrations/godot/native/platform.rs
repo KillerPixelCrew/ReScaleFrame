@@ -3,7 +3,7 @@
 //! `godot_platform.h` (bindgen-cli 0.72.1 was not available). Both sides assert sizes and offsets.
 //! The leaves carry the D3D12 capture owner, the FG presenter install, header-inline Runtime
 //! validators, the Vulkan owner's guard and its device, provider, presenter, SDK and SR context
-//! calls in `vulkan.cpp` (the latter driven by `vulkan/sr.rs`), the status facts, and the D3D12
+//! calls in `vulkan/native.rs` (the latter driven by `vulkan/sr.rs`), the status facts, and the D3D12
 //! device, fence, SR context, FG, presentation and capture calls the `d3d12.rs` owner drives,
 //! and the Win32 window, counter, CPU event, ping and present marker calls `window.rs` drives;
 //! every decision stays in this crate. The Vulkan creation and compositor effect leaves are
@@ -371,7 +371,7 @@ pub(crate) struct VkSrFrame {
     pub(crate) source_frame_id: u64,
 }
 
-/// `rsf_godot_vk_sr_pass`. `call` is `vulkan.cpp`'s private pass record, lent back to the leaves.
+/// `rsf_godot_vk_sr_pass`. `call` is `vulkan/native.rs`'s private pass record, lent back to the leaves.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VkSrPass {
@@ -1007,7 +1007,7 @@ impl Platform {
         unsafe { (self.d3d12_release)(context, session_id) != 0 }
     }
 
-    // The Vulkan SR context leaves, called only while `vulkan.cpp` holds its guard. Context
+    // The Vulkan SR context leaves, called only while `vulkan/native.rs` holds its guard. Context
     // handles are the Runtime's, held here as addresses; `call` is the leaf's live pass record for
     // the call. A `None` completion means the leaf caught an exception.
 

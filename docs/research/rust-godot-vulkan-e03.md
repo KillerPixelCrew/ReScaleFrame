@@ -28,11 +28,14 @@ The existing inputs and resource domains come from the
 - `integrations/godot/native/vulkan_creation.h` was removed. Rust owns resolver dispatch.
 - `integrations/godot/native/vulkan_control.h` contains declarations for the typed native
   callback table and Runtime entry points used by `runtime.cpp`.
-- `integrations/godot/native/vulkan.cpp` retains the guarded native loader/SDK startup,
-  Vulkan presentation and capture calls, and packet-to-Runtime ABI translation.
+- `integrations/godot/native/vulkan.cpp` was removed. `vulkan/native.rs` owns
+  guarded loader startup, engine record translation and calls to Runtime presentation
+  and SR. `vulkan/native/capture.rs` uses the Runtime Vulkan capture services and
+  typed Vulkan dispatch. `runtime.cpp` supplies the build-dependent provider and capture
+  function pointers from the existing NativeVulkan target.
 - `integrations/godot/native/vulkan_creation.cpp` was removed in the follow-up.
-  `vulkan/creation/typed.rs` owns the typed resolver entries and borrows a size-checked
-  table of linked Runtime services from `vulkan.cpp`. `typed/chain.rs` owns the
+  `vulkan/creation/typed.rs` owns the typed resolver entries and uses the size-checked
+  table of linked Runtime services. `typed/chain.rs` owns the
   aligned, bounded feature-chain copies through each synchronous loader call.
 - `tests/godot_vulkan_creation.cpp` was ported into Cargo fixtures in
   `vulkan/creation/typed/tests.rs`. They drive the production resolver with typed
@@ -40,8 +43,11 @@ The existing inputs and resource domains come from the
   links and values, allocator forwarding, aggregate and legacy feature roots,
   augmentation and retries, returned adapter facts and teardown order.
   The standalone native AMD Vulkan latency fixture still exercises its owner.
-- `runtime/orchestrator/src/native_sr_vulkan_session.cpp` retains the Runtime's
-  typed provider call table. The follow-up was scoped to Godot creation and fixtures.
+- `runtime/orchestrator/src/native_sr_vulkan_session.cpp` and its private helper header
+  were removed. `vulkan_sr_session/linked.rs` supplies the same typed provider routes
+  from the Godot archive, which already links NativeVulkan. The Runtime's session
+  owner and injected test routes use the same declaration in `routes.rs`.
+  Non-Vulkan Runtime targets retain their existing link dependencies.
 
 ## Source validation
 
@@ -62,4 +68,16 @@ with bindgen 0.72.1 from Vulkan header revision 335 in the pinned Godot checkout
 The generated offsets include the fields read and written in the feature-chain port.
 The Windows window-class comparison now uses the GameSDK `ascii_wide` helper and
 retains the six code units of `Engine`.
+
+The final native cutover started at `82b39a63`. Source comparison matched all 17
+Godot Vulkan exports and 20 private leaves. The engine module and patch carrying
+successful-submit and exact Present receipts are unchanged. The native Present
+entry still uses the same receipt-controlled capture gate, SDK bypass and call order.
+Provider-owned Present still wraps the Runtime call with capture and returns the
+actual result. Recycled command buffers reach capture retirement, then the same
+Runtime SR retirement entry, under the graphics guard. The SR session implementation
+and fixture bodies are unchanged. Bindgen 0.72.1 reproduced the extended private
+bindings byte for byte from the pinned headers, and Cargo 1.94.1 resolved the locked
+workspace offline.
+
 Builds, fixtures, lint, device runs and visual acceptance remain user-owned.

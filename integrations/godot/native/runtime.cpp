@@ -3,6 +3,9 @@
 #include "api.h"
 #include "godot_platform.h"
 #include "vulkan_control.h"
+#include <rescaleframe/input_dump_vulkan.h>
+#include "../../../runtime/orchestrator/src/native_fg_fsr4_vulkan.h"
+
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_latency_vulkan.h>
@@ -30,7 +33,7 @@
 // CPU event and ping routing and the present-marker admission by native/window.rs. This file
 // keeps native forwarders and the leaves: the device, queue and fence references,
 // the Runtime SR, FG, presentation, CPU event and latency calls, capture, DXGI, Win32 window
-// calls and the linked Runtime. The Vulkan leaves in the table below live in vulkan.cpp.
+// calls and the linked Runtime. The Vulkan leaves in the table below are implemented in Rust.
 static_assert(sizeof(rsf_cpu_session_service) == 32 && offsetof(rsf_cpu_session_service, execution) == 24);
 static_assert(sizeof(rsf_sharpening_options) == 56);
 static_assert(sizeof(rsf_godot_settings) == 100 && offsetof(rsf_godot_settings, sharpening) == 44);
@@ -48,6 +51,10 @@ static_assert(sizeof(rsf_godot_sr_create) == 88 && offsetof(rsf_godot_sr_create,
     sizeof(rsf_godot_sr_context) == 24 && offsetof(rsf_godot_sr_context, desired_width) == 12 &&
     sizeof(rsf_godot_sr_evaluate) == 64);
 static_assert(sizeof(rsf_godot_option_field) == 16 && sizeof(rsf_godot_option_value) == 24);
+static_assert(sizeof(rsf_godot_vk_facts) == 40 && sizeof(rsf_godot_vk_latency_facts) == 40 &&
+    offsetof(rsf_godot_vk_latency_facts, sleep_calls) == 24);
+static_assert(sizeof(rsf_godot_vk_sr_create) == 12 && sizeof(rsf_godot_vk_sr_context) == 16 &&
+    offsetof(rsf_godot_vk_sr_context, result) == 8);
 static_assert(offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
     offsetof(rsf_godot_platform, latency_facts) == 176 && offsetof(rsf_godot_platform, d3d12_bind) == 184 &&
     offsetof(rsf_godot_platform, sr_evaluate) == 256 && offsetof(rsf_godot_platform, d3d12_release) == 320 &&
@@ -343,18 +350,18 @@ uint32_t leaf_d3d12_release(void* context, uint64_t session) try {
     return 1;
 } catch (...) { return 0; }
 
-namespace vk = rsf::godot_vk;
 const rsf_godot_platform platform{sizeof(platform), RSF_GODOT_PLATFORM_VERSION, leaf_tick_count, leaf_prepare_capture,
     leaf_fg_install, leaf_fg_options, leaf_dlss_preset_valid, leaf_sharpening_valid, leaf_sharpening_defaults,
-    leaf_fg_backend_known, vk::leaf_supported, vk::leaf_latency_facts, vk::leaf_locked, vk::leaf_start, vk::leaf_stop,
-    vk::leaf_release, vk::leaf_facts, vk::leaf_presenter_max, vk::leaf_fsr4_fg_probe, vk::leaf_latency_options,
+    leaf_fg_backend_known, rsf_godot_vk_leaf_supported, rsf_godot_vk_leaf_latency_facts, rsf_godot_vk_leaf_locked,
+    rsf_godot_vk_leaf_start, rsf_godot_vk_leaf_stop, rsf_godot_vk_leaf_release, rsf_godot_vk_leaf_facts,
+    rsf_godot_vk_leaf_presenter_max, rsf_godot_vk_leaf_fsr4_fg_probe, rsf_godot_vk_leaf_latency_options,
     leaf_cpu_counters, leaf_window_facts, leaf_fg_facts, leaf_latency_facts,
     leaf_d3d12_bind, leaf_d3d12_wait, leaf_d3d12_signal, leaf_sr_default_backend, leaf_fg_default_backend,
     leaf_present_owner, leaf_present_request, leaf_sr_create, leaf_sr_destroy, leaf_sr_evaluate, leaf_sr_refusal_log,
     leaf_capture_sr_begin, leaf_final_scene, leaf_fg_submitted, leaf_render_begin, leaf_present_window,
-    leaf_fg_end_session, leaf_d3d12_release, vk::leaf_presenter_drain, vk::leaf_device_idle, vk::leaf_sr_destroy,
-    vk::leaf_sr_create, vk::leaf_sr_plan, vk::leaf_sr_record, vk::leaf_sr_log,
-    vk::leaf_sr_dump_result, leaf_window_identity, leaf_window_procedure_get, leaf_window_procedure_set,
+    leaf_fg_end_session, leaf_d3d12_release, rsf_godot_vk_leaf_presenter_drain, rsf_godot_vk_leaf_device_idle, rsf_godot_vk_leaf_sr_destroy,
+    rsf_godot_vk_leaf_sr_create, rsf_godot_vk_leaf_sr_plan, rsf_godot_vk_leaf_sr_record, rsf_godot_vk_leaf_sr_log,
+    rsf_godot_vk_leaf_sr_dump_result, leaf_window_identity, leaf_window_procedure_get, leaf_window_procedure_set,
     leaf_window_forward, leaf_query_counter, rsf_fg12_cpu_service, rsf_latencyvk_cpu_service,
     leaf_vulkan_present_marker, leaf_sr_select_backend, leaf_fg_select_backend};
 bool booted() { return rsf_godot_booted() != 0; }
@@ -386,7 +393,7 @@ extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* comman
 
 extern "C" void rsfg_render_begin(uint64_t frame) try
 {
-    if (rsf_godot_vk_booted()) { rsf::godot_vk::render_begin(frame); return; }
+    if (rsf_godot_vk_booted()) { rsf_godot_vk_render_begin(frame, 0); return; }
     if (!booted()) return;
     rsf_godot_d3d12_render_begin(&platform, frame);
 } catch (...) {}
@@ -399,7 +406,7 @@ extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
 extern "C" int rsfg_vk_execution(const rsf_game_render_pass* pass, uint32_t begin) try {
     if (!rsf_godot_vk_booted() || !pass || pass->struct_size < sizeof(*pass)) return 0;
     if (pass->role == RSF_GAME_RENDER_FRAME) {
-        rsf::godot_vk::render_begin(pass->source_frame_id, true);
+        rsf_godot_vk_render_begin(pass->source_frame_id, 1);
         return 1;
     }
     const int admitted = rsf_godot_execution(pass, begin);
@@ -409,12 +416,12 @@ extern "C" int rsfg_vk_execution(const rsf_game_render_pass* pass, uint32_t begi
 
 extern "C" int32_t rsfg_vk_native_present(uint64_t callback, void* owning_queue, const void* info) {
     struct Lease { uint64_t callback; void* queue; const void* info; } lease{callback, owning_queue, info};
-    if (capture_native_primary_present) rsf::godot_vk::capture_present(info, 0, 1);
+    if (capture_native_primary_present) rsf_godot_vk_capture_present(info, 0, 1);
     const auto result = rsf_slvk_without_dlssg([](void* user) -> int32_t {
         const auto& value = *static_cast<Lease*>(user);
         return rsf_latencyvk_queue_present(reinterpret_cast<rsf_vk_function>(value.callback), value.queue, value.info);
     }, &lease);
-    if (capture_native_primary_present) rsf::godot_vk::capture_present(info, result, 0);
+    if (capture_native_primary_present) rsf_godot_vk_capture_present(info, result, 0);
     return result;
 }
 extern "C" int32_t rsfg_vk_wsi_call(rsf_vk_wsi_call callback, void* user) {
@@ -431,3 +438,45 @@ extern "C" int rsfg_shutdown(void) try
     if (rsf_godot_vk_booted()) return rsf_godot_shutdown_vulkan(&platform);
     return rsf_godot_d3d12_shutdown(&platform);
 } catch (...) { return 0; }
+
+
+// CMake exposes the optional native provider symbols only in matching configurations.
+struct rsf_godot_vk_features {
+    uint32_t flags, reserved;
+    decltype(&rsf_fsr4gvk_probe) fsr4_probe;
+    decltype(&rsf_input_dump_vk_create) capture_create;
+    decltype(&rsf_input_dump_vk_snapshot) capture_snapshot;
+    decltype(&rsf_input_dump_vk_drain) capture_drain;
+    decltype(&rsf_input_dump_vk_destroy) capture_destroy;
+};
+static_assert(sizeof(rsf_godot_vk_features) == 48 && offsetof(rsf_godot_vk_features, capture_create) == 16);
+
+extern "C" const rsf_godot_vk_features* rsf_godot_vk_native_features() {
+    static constexpr rsf_godot_vk_features features{
+        0u
+#if defined(RSF_VULKAN_SR_ENABLED)
+        | 1u
+#endif
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+        | 2u
+#endif
+#if defined(RSF_VULKAN_FSR4_FG_ENABLED)
+        | 4u
+#endif
+#if defined(RSF_VULKAN_XESS_FG_ENABLED)
+        | 8u
+#endif
+        , 0,
+#if defined(RSF_VULKAN_FSR4_FG_ENABLED)
+        rsf_fsr4gvk_probe,
+#else
+        nullptr,
+#endif
+#if defined(RSF_FRAME_DUMP_VULKAN)
+        rsf_input_dump_vk_create, rsf_input_dump_vk_snapshot, rsf_input_dump_vk_drain, rsf_input_dump_vk_destroy,
+#else
+        nullptr, nullptr, nullptr, nullptr,
+#endif
+    };
+    return &features;
+}

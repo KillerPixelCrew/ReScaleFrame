@@ -22,7 +22,7 @@ set_property(TARGET godot-cpp PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CO
 unset(CMAKE_MSVC_RUNTIME_LIBRARY CACHE)
 
 # Rust control exports are listed in exports.def. runtime.cpp lends the linked Runtime through godot_platform.h.
-add_library(rsf_godot SHARED native/exports.def native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp native/vulkan.cpp)
+add_library(rsf_godot SHARED native/exports.def native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_include_directories(rsf_godot SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()

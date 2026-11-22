@@ -44,6 +44,21 @@ pub(crate) struct Requirements {
     latency_destroyed: unsafe extern "C" fn(*mut c_void),
 }
 
+#[cfg(all(windows, not(test)))]
+impl Requirements {
+    pub(crate) fn linked() -> Self {
+        Self {
+            size: size_of::<Self>() as u32,
+            version: 1,
+            xess_instance: rsf_xessvk_instance_requirements,
+            xess_device: rsf_xessvk_device_requirements,
+            latency_require: rsf_latencyvk_require_device,
+            latency_created: rsf_latencyvk_device_created,
+            latency_destroyed: rsf_latencyvk_device_destroyed,
+        }
+    }
+}
+
 const _: () = {
     assert!(size_of::<Requirements>() == 48);
     assert!(std::mem::offset_of!(Requirements, latency_require) == 24);

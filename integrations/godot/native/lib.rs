@@ -7,7 +7,7 @@
 //! `ReScaleFrameEffect`'s probe snapshot and motion capture classification (`effect.rs`).
 //!
 //! The GDExtension entry and godot-cpp classes stay C++. Native control uses the same C ABI.
-//! `runtime.cpp` and `vulkan.cpp` forward to these entry points and lend their leaves through
+//! `runtime.cpp` wires these entry points and the Rust Vulkan leaves through
 //! `rsf_godot_platform` (`godot_platform.h`, mirrored in `platform.rs`): the D3D12 device, fence,
 //! SR context, FG, presentation and capture calls, DXGI, Win32 window calls, the linked Runtime
 //! and the Vulkan owner's guard, device, provider, presenter and SDK calls. Rust uses generated
@@ -26,8 +26,7 @@ use control::Control;
 use effect::Effect;
 use platform::{
     ABI_VERSION, EFFECT_VERSION, EffectLeaves, EffectStatus, EngineServices, OptionField,
-    OptionValue, Platform, SETTINGS_ABI_VERSION, Settings, Setup, Status, VkFunction,
-    VkPresentFacts, VkProc, VkSrPass, VkView,
+    OptionValue, Platform, SETTINGS_ABI_VERSION, Settings, Setup, Status, VkFunction, VkProc,
 };
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -243,8 +242,7 @@ unsafe extern "C" fn rsf_godot_d3d12_shutdown(table: *const Platform) -> c_int {
     result
 }
 
-// The Vulkan session (vulkan.rs). The exports below other than boot and shutdown are called by
-// the leaves in vulkan.cpp while they hold its guard.
+// The Vulkan session binds the CPU services at boot and releases them after checked shutdown.
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_godot_vk_booted() -> c_int {
@@ -279,98 +277,6 @@ unsafe extern "C" fn rsf_godot_shutdown_vulkan(table: *const Platform) -> c_int 
         CONTROL.window.bind_cpu_service(None);
     }
     result
-}
-
-/// The view with Auto resolved through the table the boot registered. Without one (no boot was
-/// ever attempted) nothing is written and zero is returned.
-///
-/// # Safety
-/// `view` is null or writable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_view_get(view: *mut VkView) -> c_int {
-    let Some(platform) = platform::registered() else {
-        return 0;
-    };
-    let (value, active) = CONTROL.vulkan.view(platform);
-    if !view.is_null() {
-        // SAFETY: the caller's guarantee.
-        unsafe { view.write(value) };
-    }
-    active
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_presenter_created(ready: u32, backend: u32, max_generated: u32) {
-    CONTROL
-        .vulkan
-        .presenter_created(ready != 0, backend, max_generated);
-}
-
-/// Zero, so the engine recreates its WSI owner, also without a registered table (not reachable:
-/// a presenter exists only after a boot registered one).
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_presenter_current(backend: u32) -> c_int {
-    platform::registered()
-        .is_some_and(|platform| CONTROL.vulkan.presenter_current(platform, backend))
-        .into()
-}
-
-/// # Safety
-/// `facts` is null or readable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_presented(facts: *const VkPresentFacts) {
-    // SAFETY: the caller's guarantee.
-    if let Some(facts) = unsafe { facts.as_ref() } {
-        CONTROL.vulkan.presented(facts);
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_presenter_retired() {
-    CONTROL.vulkan.presenter_retired();
-}
-
-/// Callback state is borrowed through this synchronous recording.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_fg_pass(
-    screen: u32,
-    call: *mut c_void,
-    options: extern "C" fn(*mut c_void, u32, u32) -> i32,
-    record: extern "C" fn(*mut c_void) -> i32,
-) -> i32 {
-    CONTROL.vulkan.fg_pass(
-        screen,
-        !call.is_null(),
-        |enabled, count| options(call, enabled, count),
-        || record(call),
-    )
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_render_device(device: *mut c_void) {
-    CONTROL.vulkan.creation().report_render_device(device);
-}
-
-/// The SR section of `rsfg_render_vulkan`, called with the guard held.
-///
-/// # Safety
-/// `table` is null or the leaf table; `pass` is null or a readable `rsf_godot_vk_sr_pass` whose
-/// `call` record stays live for the call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_sr_render(
-    table: *const Platform,
-    pass: *const VkSrPass,
-) -> c_int {
-    // SAFETY: the caller's guarantee.
-    match unsafe { (leaves(table), pass.as_ref()) } {
-        (Some(platform), Some(pass)) => CONTROL.vulkan.sr_render(platform, pass),
-        _ => 0,
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_sr_context() -> *mut c_void {
-    CONTROL.vulkan.sr_context()
 }
 
 use vulkan::creation::typed::{self, Requirements};
@@ -419,17 +325,6 @@ unsafe fn vk_resolve(scope: u32, object: *mut c_void, name: *const c_char) -> Op
         }
         _ => typed::entry(route),
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_creation_stop() {
-    CONTROL.vulkan.creation().stop();
-}
-
-/// Read by `rsfg_vk_create` for the presenter host options.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_interop_ready() -> c_int {
-    CONTROL.vulkan.creation().interop_ready().into()
 }
 
 // The input window owner (window.rs), called by the rsfg_* forwarders and the accept_window

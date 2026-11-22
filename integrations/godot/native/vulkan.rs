@@ -488,3 +488,6 @@ mod sr;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(windows, not(test)))]
+mod native;
