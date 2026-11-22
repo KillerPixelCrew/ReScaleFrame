@@ -2944,19 +2944,19 @@ Port the SCons engine module and engine patch hooks, including frame, viewport, 
 
 - [ ] [eng/patch-godot.py](eng/patch-godot.py) (inserts integration hooks into the Godot source checkout)
 - [ ] [integrations/godot/modules/rescaleframe/bridge.cpp](integrations/godot/modules/rescaleframe/bridge.cpp)
-- [ ] [integrations/godot/modules/rescaleframe/cpu_facts.h](integrations/godot/modules/rescaleframe/cpu_facts.h)
+- [x] [integrations/godot/modules/rescaleframe/cpu_facts.h](integrations/godot/modules/rescaleframe/cpu_facts.h)
 - [ ] [integrations/godot/modules/rescaleframe/d3d12.cpp](integrations/godot/modules/rescaleframe/d3d12.cpp)
-- [ ] [integrations/godot/modules/rescaleframe/frame.h](integrations/godot/modules/rescaleframe/frame.h)
+- [x] [integrations/godot/modules/rescaleframe/frame.h](integrations/godot/modules/rescaleframe/frame.h)
 - [ ] [integrations/godot/modules/rescaleframe/graph.cpp](integrations/godot/modules/rescaleframe/graph.cpp)
 - [ ] [integrations/godot/modules/rescaleframe/graph.h](integrations/godot/modules/rescaleframe/graph.h)
-- [ ] [integrations/godot/modules/rescaleframe/host.h](integrations/godot/modules/rescaleframe/host.h)
+- [x] [integrations/godot/modules/rescaleframe/host.h](integrations/godot/modules/rescaleframe/host.h)
 - [ ] [integrations/godot/modules/rescaleframe/motion.cpp](integrations/godot/modules/rescaleframe/motion.cpp)
-- [ ] [integrations/godot/modules/rescaleframe/pass.h](integrations/godot/modules/rescaleframe/pass.h)
-- [ ] [integrations/godot/modules/rescaleframe/primary.h](integrations/godot/modules/rescaleframe/primary.h)
+- [x] [integrations/godot/modules/rescaleframe/pass.h](integrations/godot/modules/rescaleframe/pass.h)
+- [x] [integrations/godot/modules/rescaleframe/primary.h](integrations/godot/modules/rescaleframe/primary.h)
 - [ ] [integrations/godot/modules/rescaleframe/register_types.cpp](integrations/godot/modules/rescaleframe/register_types.cpp)
 - [ ] [integrations/godot/modules/rescaleframe/register_types.h](integrations/godot/modules/rescaleframe/register_types.h)
 - [ ] [integrations/godot/modules/rescaleframe/rsf_godot_engine.h](integrations/godot/modules/rescaleframe/rsf_godot_engine.h)
-- [ ] [integrations/godot/modules/rescaleframe/viewport.h](integrations/godot/modules/rescaleframe/viewport.h)
+- [x] [integrations/godot/modules/rescaleframe/viewport.h](integrations/godot/modules/rescaleframe/viewport.h)
 - [ ] [integrations/godot/modules/rescaleframe/vulkan.cpp](integrations/godot/modules/rescaleframe/vulkan.cpp)
 
 **Fixtures (3)**
@@ -3040,12 +3040,12 @@ Port Vulkan creation, render, SR and presentation, with adapter facts feeding Ru
 
 **Port files (4)**
 
-- [ ] [integrations/godot/native/vulkan.cpp](integrations/godot/native/vulkan.cpp)
+- [x] [integrations/godot/native/vulkan.cpp](integrations/godot/native/vulkan.cpp)
 - [x] [integrations/godot/native/vulkan_control.h](integrations/godot/native/vulkan_control.h)
 - [x] [integrations/godot/native/vulkan_creation.cpp](integrations/godot/native/vulkan_creation.cpp)
 - [x] [integrations/godot/native/vulkan_creation.h](integrations/godot/native/vulkan_creation.h)
 
-- [ ] [runtime/orchestrator/src/native_sr_vulkan_session.cpp](runtime/orchestrator/src/native_sr_vulkan_session.cpp) (introduced Runtime Vulkan SR session adapter)
+- [x] [runtime/orchestrator/src/native_sr_vulkan_session.cpp](runtime/orchestrator/src/native_sr_vulkan_session.cpp) (introduced Runtime Vulkan SR session adapter)
 
 **Fixtures (1)**
 
