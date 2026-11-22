@@ -61,7 +61,12 @@ impl State {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fg_fixture_state_create(service: u32, hot: u32, flip: u32, mfg: u32) -> Raw {
+pub(super) extern "C" fn rsf_fg_fixture_state_create(
+    service: u32,
+    hot: u32,
+    flip: u32,
+    mfg: u32,
+) -> Raw {
     Box::into_raw(Box::new(State {
         frame: Cell::new(0),
         accepted: Cell::new(true),
@@ -78,14 +83,17 @@ extern "C" fn rsf_fg_fixture_state_create(service: u32, hot: u32, flip: u32, mfg
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_fixture_state_destroy(state: Raw) {
+pub(super) unsafe extern "C" fn rsf_fg_fixture_state_destroy(state: Raw) {
     if !state.is_null() {
         drop(unsafe { Box::from_raw(state.cast::<State>()) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_fixture_state_inputs(state: Raw, inputs: &rsf_fg_fixture_inputs) {
+pub(super) unsafe extern "C" fn rsf_fg_fixture_state_inputs(
+    state: Raw,
+    inputs: &rsf_fg_fixture_inputs,
+) {
     let state = unsafe { &*state.cast::<State>() };
     *state.inputs.borrow_mut() = Some(unsafe {
         Inputs {
@@ -290,7 +298,7 @@ pub(super) unsafe extern "C" fn prepare_input(user: Raw, commands: Raw, back: Ra
 
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn rsf_fg_fixture_prepare(
+pub(super) unsafe extern "C" fn rsf_fg_fixture_prepare(
     user: Raw,
     _: Raw,
     _: Raw,
@@ -304,7 +312,10 @@ unsafe extern "C" fn rsf_fg_fixture_prepare(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_fixture_latency(user: Raw, event: &rsf_observer_present_event) {
+pub(super) unsafe extern "C" fn rsf_fg_fixture_latency(
+    user: Raw,
+    event: &rsf_observer_present_event,
+) {
     let state = unsafe { &*user.cast::<State>() };
     let session = unsafe { rsf_d3d11_present_session() };
     let Some(mark) = provider().and_then(|api| api.marker) else {
@@ -322,7 +333,7 @@ unsafe extern "C" fn rsf_fg_fixture_latency(user: Raw, event: &rsf_observer_pres
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_fixture_retire(user: Raw, session: Raw) {
+pub(super) unsafe extern "C" fn rsf_fg_fixture_retire(user: Raw, session: Raw) {
     let state = unsafe { &*user.cast::<State>() };
     let Some(api) = provider() else {
         return;
@@ -348,7 +359,7 @@ unsafe extern "C" fn rsf_fg_fixture_retire(user: Raw, session: Raw) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fg_fixture_expect_auto(preferred: u32) -> i32 {
+pub(super) extern "C" fn rsf_fg_fixture_expect_auto(preferred: u32) -> i32 {
     if unsafe { rsf_d3d11_present_backend() } != preferred
         || (preferred != 0 && unsafe { rsf_d3d11_present_session() }.is_null())
     {

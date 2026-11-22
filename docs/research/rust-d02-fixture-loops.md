@@ -40,3 +40,35 @@ compiler error on aggregate initialization of a list with a self
 pointer. Direct list construction and an explicit reset preserve the
 native layout and passed the subsequent syntax check. Linking, test
 execution, lint, device measurements and game validation are pending.
+
+## Startup and teardown continuation
+
+Base `cb8a0e0c` includes `16033561`, the replay of the live loops.
+`d3d11_fixture_startup.rs` owns argument modes, the cold status refusals,
+Win32 window and device setup, observer admission, the original fallback,
+and the canonical IUnknown and source device checks. It keeps the 12
+startup Presents, held-buffer resize refusals, the 1024×576 buffer and
+DXGI TEST Present check, and exact owned Release after dropping the
+alternate interfaces. The proxy smoke still tries hardware before WARP.
+
+`fg_fixture_startup.rs` owns selected hardware creation, native hook or
+explicit HWND creation, deferred provider startup, cached DX11 RTV and
+application latency handle acquisition, the Auto and FSR4 capability
+inputs, and optional native DLSS SR attachment. Teardown still closes the
+wait handles and destroys SR and overlay only after a completed loop.
+The provider callback state survives to CRT process teardown, including
+when completion is unknown. Both execute the same live loops and link
+the production providers.
+
+`tests/d3d11_present_bridge.cpp` keeps the native command list layout,
+execution exception guard, AC7 scope and command callbacks, native
+exception report, and reentrant marker callback table. Its typed
+startup callback table keeps AC7-specific symbols within that executable.
+`tests/fg_present_bridge.cpp` retains the CRT entry and stdout setup.
+The CTest registrations and both executable paths stay in place.
+
+Source checks compared the guarded AC7 command and exception bodies with
+the base, all mode names, and startup and final Release order. Pinned
+Rust formatting, repeatable targeted bindgen, locked offline Windows
+metadata and MSVC syntax checks passed. Build, link, fixture execution
+and device validation remain pending.

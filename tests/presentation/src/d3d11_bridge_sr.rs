@@ -10,7 +10,7 @@ use std::ptr::{null, null_mut};
 type Raw = *mut c_void;
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_fixture_shared_sr(
+pub(super) unsafe extern "C" fn rsf_d3d11_fixture_shared_sr(
     host: Raw,
     device: Raw,
     context: Raw,

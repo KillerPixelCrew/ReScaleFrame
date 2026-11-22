@@ -85,7 +85,7 @@ pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_focus_valid(lease: *const 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_focus_end(lease: *mut c_void) {
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_focus_end(lease: *mut c_void) {
     if !lease.is_null() {
         drop(unsafe { Box::from_raw(lease.cast::<Focus>()) });
     }

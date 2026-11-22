@@ -87,17 +87,25 @@ generate("tests/presentation/src/d3d11_scope_fixture_abi.rs",
          ["--no-recursive-allowlist", "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
 generate("tests/presentation/src/present_fixture_loops_abi.rs",
          "tests/presentation/present_fixture_loops.h",
-         "rsf_(fg_loop(_state)?|ac7_loop|fg_(status|options|frame)|generation_provider|backend_resource|native_fg_(status|options)|streamline_latency_status|observer_(status|present_event))",
-         "RSF_(FG_(ABI_VERSION|OFF|FIXED|BACKEND_(DLSS|FSR3|FSR4|XESS))|REFLEX_(OFF|ON|BOOST)|PACING_REFLEX|MFG_UNLOCK_READY)",
+         "rsf_(fg_loop(_state)?|ac7_(loop|fixture_calls)|fg_(status|options|frame)|generation_provider|backend_resource|"
+         "native_fg_(status|options)|streamline_(latency_status|graphics)|observer_(status|present_event|options)|"
+         "d3d11_present_(setup|status)|fg12_setup|sr12_setup)",
+         "RSF_(FG_(ABI_VERSION|OFF|FIXED|BACKEND_(AUTO|DLSS|FSR3|FSR4|XESS))|REFLEX_(OFF|ON|BOOST)|PACING_REFLEX|"
+         "MFG_UNLOCK_READY|PRESENT_STATUS_VERSION|OBSERVER_ABI_VERSION|DLSS_ABI_VERSION|UI_MODE_BACKBUFFER_HUDLESS)",
          ["-Iruntime/orchestrator/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include",
-          "-Iruntime/graphics/include", "-Iruntime/contract/include", "-Isdk/game/include"],
-         ["--blocklist-type", "rsf_(game_.*|frame_(record|id|phase)|screen_class|dlss_frame|streamline_host|native_cpu_frame)",
+          "-Iruntime/graphics/include", "-Iruntime/contract/include", "-Isdk/game/include", "-Iui/overlay/include"],
+         ["--blocklist-type", "rsf_(game_.*|frame_(record|id|phase)|camera_frame|screen_class|dlss_frame|streamline_host|native_cpu_frame|d3d11_chain_dispatch.*)",
           "--with-derive-default",
+          "--raw-line", "use crate::d3d11_bridge_sr_abi::rsf_dlss_frame;",
           "--raw-line", "use crate::d3d11_marker_abi::rsf_native_cpu_frame;",
           "--raw-line", "#[cfg(feature = \"gl-device-fixture\")]\npub(super) use crate::gl_pipeline_fixture_abi::rsf_streamline_host;",
+          "--raw-line", "use rsf_game_sys::d3d11_chain_abi::rsf_d3d11_chain_dispatch;",
           "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_render_pass};",
           "--raw-line", "#[cfg(not(feature = \"gl-device-fixture\"))]\npub(super) type rsf_streamline_host = ::core::ffi::c_void;",
-          "--allowlist-function", "rsf_(d3d11_present_(acquire|begin|abort|backend|generation|marker|request|switch_result|session|provider|queue|host|retire)|fg12_(cpu|status|options|capture|hudless)|native_fg_(cpu|options_set|submission|window_end)|native_cpu_event|streamline_host_(sleep|latency_status|input|token|begin|abort)|observer_get_status)"])
+          "--allowlist-function", "rsf_(d3d11_present_(acquire|begin|abort|backend|backend_choices|generation|marker|request|switch_result|session|provider|queue|host|retire|install|prepare|graphics|status_get|create_for_hwnd|has_owner)|"
+          "d3d11_chain_dispatch_owned|fg12_(cpu|status|options|capture|hudless|install|install_explicit)|native_fg_(cpu|options_set|set_log|submission|window_end|prepare|retire|present)|"
+          "native_window_present|native_cpu_event|streamline_host_(sleep|latency_status|input|token|begin|abort|graphics)|observer_(get_status|install|acquire_device)|"
+          "fg_default_backend|generation_fsr4_supported|sr12_(create|destroy)|overlay_d3d12_stop)"])
 generate("runtime/orchestrator/src/d3d11_present_streamline_abi.rs",
          "runtime/backends/dlss/include/rescaleframe/streamline_host.h",
          "rsf_streamline_(host|host_setup)", "RSF_(STREAMLINE_HOST_ABI_VERSION|SL_PROFILE_DLSS_FG)",

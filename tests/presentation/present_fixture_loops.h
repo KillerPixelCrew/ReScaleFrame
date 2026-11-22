@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 #include <rescaleframe/native_fg_d3d12.h>
+#include <rescaleframe/native_sr_d3d12.h>
+#include <rescaleframe/native_window.h>
+#include <rescaleframe/overlay_d3d12.h>
 #include <rescaleframe/native_cpu.h>
 #include "device_fixture_bridge.h"
 
@@ -53,6 +56,18 @@ typedef struct rsf_ac7_loop {
 int rsf_d3d11_fixture_run_loop(const rsf_ac7_loop*);
 void rsf_d3d11_fixture_cpu_event(uint64_t id, uint32_t stage);
 int rsf_d3d11_fixture_token_matches(uint64_t id, uint32_t expected);
+
+/* AC7 commands and exception handling stay in the native translation unit. */
+typedef struct rsf_ac7_fixture_calls {
+    void (*install_exception_filter)(void);
+    rsf_backend_log_fn log;
+    int (*run_markers)(void* chain);
+    int (*run_guarded)(rsf_ac7_loop*, void* device, void* context,
+        void* hudless, void* hudless_target, rsf_dlss_frame*, uint32_t stall_ms);
+} rsf_ac7_fixture_calls;
+
+int rsf_d3d11_fixture_main(int argc, char** argv, const rsf_ac7_fixture_calls*);
+int rsf_fg_fixture_main(int argc, char** argv);
 
 #ifdef __cplusplus
 }

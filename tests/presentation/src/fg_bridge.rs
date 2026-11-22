@@ -586,7 +586,7 @@ unsafe fn allocate_inputs(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_allocate(
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_allocate(
     gpu: Raw,
     mixed: u32,
     hot: u32,
@@ -602,7 +602,7 @@ unsafe extern "C" fn rsf_fg_bridge_fixture_allocate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_bridge_fixture_commands(
+pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_commands(
     gpu: Raw,
     allocator: *mut Raw,
     list: *mut Raw,

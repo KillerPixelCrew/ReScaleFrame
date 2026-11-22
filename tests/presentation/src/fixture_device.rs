@@ -80,7 +80,7 @@ fn adapter_for_vendor(factory: &IDXGIFactory1, vendor: u32) -> Result<IDXGIAdapt
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_present_fixture_adapter(
+pub(super) unsafe extern "C" fn rsf_present_fixture_adapter(
     vendor: u32,
     factory4: u32,
     out_factory: *mut Raw,
@@ -140,7 +140,7 @@ fn create11(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_present_fixture_device11(
+pub(super) unsafe extern "C" fn rsf_present_fixture_device11(
     adapter: Raw,
     device: *mut Raw,
     context: *mut Raw,
@@ -157,7 +157,7 @@ unsafe extern "C" fn rsf_present_fixture_device11(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_present_fixture_device12(
+pub(super) unsafe extern "C" fn rsf_present_fixture_device12(
     adapter: Raw,
     device: *mut Raw,
     queue: *mut Raw,
@@ -185,7 +185,7 @@ unsafe extern "C" fn rsf_present_fixture_device12(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_present_fixture_debug12() -> i32 {
+pub(super) extern "C" fn rsf_present_fixture_debug12() -> i32 {
     let mut layer: Option<ID3D12Debug> = None;
     if unsafe { D3D12GetDebugInterface(&mut layer) }.is_err() {
         return 1;
@@ -198,7 +198,7 @@ extern "C" fn rsf_present_fixture_debug12() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_fixture_proxy_smoke(proxy_path: *const c_char) -> i32 {
+pub(super) unsafe extern "C" fn rsf_d3d11_fixture_proxy_smoke(proxy_path: *const c_char) -> i32 {
     let mut logs = [0_u16; 260];
     let path_length = unsafe { GetModuleFileNameW(None, &mut logs) } as usize;
     if path_length == 0 || path_length >= logs.len() {

@@ -88,7 +88,11 @@ fn create_inputs(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_fixture_inputs(device: Raw, context: Raw, output: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn rsf_d3d11_fixture_inputs(
+    device: Raw,
+    context: Raw,
+    output: *mut Raw,
+) -> i32 {
     let inputs = unsafe {
         create_inputs(
             borrowed::<ID3D11Device>(&device),
@@ -190,7 +194,7 @@ fn draw_backbuffer(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_fixture_clear_and_present(
+pub(super) unsafe extern "C" fn rsf_d3d11_fixture_clear_and_present(
     device: Raw,
     context: Raw,
     chain: Raw,
@@ -255,7 +259,7 @@ fn window_rect(hwnd: HWND, when: &str) -> RECT {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_fixture_borderless(chain: Raw, window: Raw) -> i32 {
+pub(super) unsafe extern "C" fn rsf_d3d11_fixture_borderless(chain: Raw, window: Raw) -> i32 {
     let chain = unsafe { borrowed::<IDXGISwapChain>(&chain) };
     let window = HWND(window);
     let Ok(buffer) = (unsafe { chain.GetBuffer::<ID3D11Texture2D>(0) }) else {

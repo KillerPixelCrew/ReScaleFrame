@@ -260,7 +260,7 @@ fn hot_switch(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fg_fixture_run_loop(
+pub(super) unsafe extern "C" fn rsf_fg_fixture_run_loop(
     run: &rsf_fg_loop,
     focus_out: &mut *mut std::ffi::c_void,
 ) -> i32 {
