@@ -5,6 +5,7 @@
 // queue or GL has been asked to signal, so a lease release proves an observed completion.
 use super::*;
 use std::cell::{Cell, RefCell};
+use std::ffi::{c_char, c_int};
 use std::collections::HashSet;
 
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
@@ -139,10 +140,10 @@ fn names(count: u32, names: *const u32) -> String {
     text.join(",")
 }
 
-unsafe extern "C" fn gl_current() -> Handle {
+pub(super) extern "C" fn gl_current() -> Handle {
     world(|world| world.context) as Handle
 }
-unsafe extern "C" fn gl_lookup(name: *const c_char) -> *const c_void {
+pub(super) unsafe extern "C" fn gl_lookup(name: *const c_char) -> *const c_void {
     let name = unsafe { CStr::from_ptr(name) };
     let address = world(|world| {
         let index = world.looked_up.len() % GL_ENTRY_POINTS.len();
@@ -155,10 +156,10 @@ unsafe extern "C" fn gl_lookup(name: *const c_char) -> *const c_void {
     });
     ptr::without_provenance(address)
 }
-unsafe extern "C" fn gl_extension_count() -> i32 {
+pub(super) extern "C" fn gl_extension_count() -> i32 {
     2
 }
-unsafe extern "C" fn gl_extension_at(gl: *const GlProcs, index: u32) -> *const c_char {
+pub(super) unsafe extern "C" fn gl_extension_at(gl: *const GlProcs, index: u32) -> *const c_char {
     assert_eq!(unsafe { (*gl).0[0].addr() }, 4);
     match index {
         0 => c"GL_EXT_memory_object_win32".as_ptr(),
@@ -167,13 +168,13 @@ unsafe extern "C" fn gl_extension_at(gl: *const GlProcs, index: u32) -> *const c
         _ => unreachable!(),
     }
 }
-unsafe extern "C" fn gl_error() -> u32 {
+pub(super) extern "C" fn gl_error() -> u32 {
     world(|world| world.gl_errors.pop()).unwrap_or(GL_NO_ERROR)
 }
-unsafe extern "C" fn gl_luid(_: *const GlProcs, out: *mut u8) {
+pub(super) unsafe extern "C" fn gl_luid(_: *const GlProcs, out: *mut u8) {
     unsafe { out.copy_from_nonoverlapping(LUID.as_ptr(), 8) };
 }
-unsafe extern "C" fn semaphore_import(_: *const GlProcs, handle: Handle, out: *mut u32) -> u32 {
+pub(super) unsafe extern "C" fn semaphore_import(_: *const GlProcs, handle: Handle, out: *mut u32) -> u32 {
     assert!(world(|world| world.handles.contains(&(handle as usize))));
     let name = gl_name();
     unsafe { out.write(name) };
@@ -184,10 +185,10 @@ unsafe extern "C" fn semaphore_import(_: *const GlProcs, handle: Handle, out: *m
         GL_NO_ERROR
     }
 }
-unsafe extern "C" fn semaphore_delete(_: *const GlProcs, name: u32) {
+pub(super) unsafe extern "C" fn semaphore_delete(_: *const GlProcs, name: u32) {
     event(format!("delete semaphore {name}"));
 }
-unsafe extern "C" fn memory_import(_: *const GlProcs, handle: Handle, out: *mut u32) -> u32 {
+pub(super) unsafe extern "C" fn memory_import(_: *const GlProcs, handle: Handle, out: *mut u32) -> u32 {
     assert!(world(|world| world.handles.contains(&(handle as usize))));
     let name = gl_name();
     unsafe { out.write(name) };
@@ -197,10 +198,10 @@ unsafe extern "C" fn memory_import(_: *const GlProcs, handle: Handle, out: *mut 
         GL_NO_ERROR
     }
 }
-unsafe extern "C" fn memory_delete(_: *const GlProcs, name: u32) {
+pub(super) unsafe extern "C" fn memory_delete(_: *const GlProcs, name: u32) {
     event(format!("delete memory {name}"));
 }
-unsafe extern "C" fn texture_store(
+pub(super) unsafe extern "C" fn texture_store(
     _: *const GlProcs,
     memory: u32,
     internal: u32,
@@ -219,10 +220,10 @@ unsafe extern "C" fn texture_store(
         GL_NO_ERROR
     }
 }
-unsafe extern "C" fn texture_delete(name: u32) {
+pub(super) extern "C" fn texture_delete(name: u32) {
     event(format!("delete texture {name}"));
 }
-unsafe extern "C" fn gl_release(
+pub(super) unsafe extern "C" fn gl_release(
     _: *const GlProcs,
     _: u32,
     value: u64,
@@ -239,7 +240,7 @@ unsafe extern "C" fn gl_release(
     world(|world| world.signalled = world.signalled.max(value));
     GL_NO_ERROR
 }
-unsafe extern "C" fn gl_acquire(
+pub(super) unsafe extern "C" fn gl_acquire(
     _: *const GlProcs,
     _: u32,
     value: u64,
@@ -253,14 +254,14 @@ unsafe extern "C" fn gl_acquire(
     }
     GL_NO_ERROR
 }
-unsafe extern "C" fn finish() {
+pub(super) extern "C" fn finish() {
     event("finish".into());
 }
-unsafe extern "C" fn factory_create(out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn factory_create(out: *mut Handle) -> i32 {
     unsafe { out.write(named_com("factory setup".into())) };
     OK
 }
-unsafe extern "C" fn adapter_find(factory: Handle, luid: *const u8, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn adapter_find(factory: Handle, luid: *const u8, out: *mut Handle) -> i32 {
     assert_eq!(com_name(factory), "factory setup");
     assert_eq!(unsafe { std::slice::from_raw_parts(luid, 8) }, LUID);
     unsafe { out.write(named_com("adapter setup".into())) };
@@ -269,21 +270,21 @@ unsafe extern "C" fn adapter_find(factory: Handle, luid: *const u8, out: *mut Ha
     }
     OK
 }
-unsafe extern "C" fn device_create(adapter: Handle, level: u32, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn device_create(adapter: Handle, level: u32, out: *mut Handle) -> i32 {
     assert_eq!(com_name(adapter), "adapter setup");
     assert_eq!(level, FEATURE_LEVEL_11_0);
     unsafe { out.write(com("device")) };
     OK
 }
-unsafe extern "C" fn queue_create(_: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn queue_create(_: Handle, out: *mut Handle) -> i32 {
     unsafe { out.write(com("queue")) };
     OK
 }
-unsafe extern "C" fn device_luid(_: Handle, out: *mut u8) {
+pub(super) unsafe extern "C" fn device_luid(_: Handle, out: *mut u8) {
     let luid = world(|world| world.device_luid);
     unsafe { out.copy_from_nonoverlapping(luid.as_ptr(), 8) };
 }
-unsafe extern "C" fn queue_device(_: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn queue_device(_: Handle, out: *mut Handle) -> i32 {
     let owner = world(|world| world.queue_owner) as Handle;
     unsafe {
         add_ref(owner.cast());
@@ -291,7 +292,7 @@ unsafe extern "C" fn queue_device(_: Handle, out: *mut Handle) -> i32 {
     }
     OK
 }
-unsafe extern "C" fn fence_create(_: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn fence_create(_: Handle, out: *mut Handle) -> i32 {
     unsafe { out.write(com("fence")) };
     OK
 }
@@ -303,28 +304,28 @@ fn nt_handle() -> Handle {
         handle as Handle
     })
 }
-unsafe extern "C" fn shared_handle(_: Handle, _: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn shared_handle(_: Handle, _: Handle, out: *mut Handle) -> i32 {
     unsafe { out.write(nt_handle()) };
     OK
 }
-unsafe extern "C" fn event_create() -> Handle {
+pub(super) unsafe extern "C" fn event_create() -> Handle {
     nt_handle()
 }
-unsafe extern "C" fn handle_close(handle: Handle) {
+pub(super) unsafe extern "C" fn handle_close(handle: Handle) {
     assert!(world(|world| world.handles.remove(&(handle as usize))));
 }
-unsafe extern "C" fn slot_create(_: Handle, allocator: *mut Handle, list: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn slot_create(_: Handle, allocator: *mut Handle, list: *mut Handle) -> i32 {
     unsafe {
         allocator.write(com("allocator"));
         list.write(com("list"));
     }
     OK
 }
-unsafe extern "C" fn slot_reset(_: Handle, list: Handle) -> i32 {
+pub(super) unsafe extern "C" fn slot_reset(_: Handle, list: Handle) -> i32 {
     event(format!("reset {}", com_name(list)));
     OK
 }
-unsafe extern "C" fn list_close(list: Handle) -> i32 {
+pub(super) unsafe extern "C" fn list_close(list: Handle) -> i32 {
     event(format!("close {}", com_name(list)));
     if world(|world| std::mem::take(&mut world.fail_close)) {
         E_FAIL
@@ -332,10 +333,10 @@ unsafe extern "C" fn list_close(list: Handle) -> i32 {
         OK
     }
 }
-unsafe extern "C" fn fence_completed(_: Handle) -> u64 {
+pub(super) unsafe extern "C" fn fence_completed(_: Handle) -> u64 {
     world(|world| world.completed)
 }
-unsafe extern "C" fn fence_wait(_: Handle, value: u64, _: Handle, timeout: u32) -> c_int {
+pub(super) unsafe extern "C" fn fence_wait(_: Handle, value: u64, _: Handle, timeout: u32) -> c_int {
     assert_eq!(timeout, CPU_WAIT_MS);
     event(format!("wait {value}"));
     world(|world| {
@@ -346,7 +347,7 @@ unsafe extern "C" fn fence_wait(_: Handle, value: u64, _: Handle, timeout: u32) 
         1
     })
 }
-unsafe extern "C" fn queue_wait(_: Handle, _: Handle, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn queue_wait(_: Handle, _: Handle, value: u64) -> i32 {
     event(format!("queue wait {value}"));
     if world(|world| std::mem::take(&mut world.fail_queue_wait)) {
         E_FAIL
@@ -354,10 +355,10 @@ unsafe extern "C" fn queue_wait(_: Handle, _: Handle, value: u64) -> i32 {
         OK
     }
 }
-unsafe extern "C" fn queue_execute(_: Handle, list: Handle) {
+pub(super) unsafe extern "C" fn queue_execute(_: Handle, list: Handle) {
     event(format!("execute {}", com_name(list)));
 }
-unsafe extern "C" fn queue_signal(_: Handle, _: Handle, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn queue_signal(_: Handle, _: Handle, value: u64) -> i32 {
     world(|world| {
         if world.fail_signal > 0 {
             world.fail_signal -= 1;
@@ -369,7 +370,7 @@ unsafe extern "C" fn queue_signal(_: Handle, _: Handle, value: u64) -> i32 {
         OK
     })
 }
-unsafe extern "C" fn resource_create(
+pub(super) unsafe extern "C" fn resource_create(
     _: Handle,
     _: u32,
     _: u32,
@@ -380,42 +381,10 @@ unsafe extern "C" fn resource_create(
     OK
 }
 
-static LEAVES: Leaves = Leaves {
-    gl_current,
-    gl_lookup,
-    gl_extension_count,
-    gl_extension_at,
-    gl_error,
-    gl_luid,
-    semaphore_import,
-    semaphore_delete,
-    memory_import,
-    memory_delete,
-    texture_store,
-    texture_delete,
-    release: gl_release,
-    acquire: gl_acquire,
-    finish,
-    factory_create,
-    adapter_find,
-    device_create,
-    queue_create,
-    device_luid,
-    queue_device,
-    fence_create,
-    shared_handle,
-    event_create,
-    handle_close,
-    slot_create,
-    slot_reset,
-    list_close,
-    fence_completed,
-    fence_wait,
-    queue_wait,
-    queue_execute,
-    queue_signal,
-    resource_create,
-};
+// The fakes gl_shared_surface.rs calls in place of native_dx.rs and native_gl.rs.
+pub(super) mod native {
+    pub(in crate::gl_shared_surface) use super::{adapter_find, device_create, device_luid, event_create, factory_create, fence_completed, fence_create, fence_wait, finish, gl_acquire as acquire, gl_current, gl_error, gl_extension_at, gl_extension_count, gl_lookup, gl_luid, gl_release as release, handle_close, list_close, memory_delete, memory_import, queue_create, queue_device, queue_execute, queue_signal, queue_wait, resource_create, semaphore_delete, semaphore_import, shared_handle, slot_create, slot_reset, texture_delete, texture_store};
+}
 
 unsafe extern "C" fn log(_: Handle, text: *const c_char) {
     let text = unsafe { std::ffi::CStr::from_ptr(text) }
@@ -443,7 +412,7 @@ fn reset() {
 
 fn open_with(setup: &rsf_gl_setup) -> (i32, *mut Context) {
     let mut context = ptr::null_mut();
-    let result = unsafe { rsf_core_gl_open(setup, &mut context, &LEAVES) };
+    let result = unsafe { rsf_gl_open(setup, &mut context) };
     (result, context)
 }
 
@@ -907,7 +876,7 @@ fn open_validates_setup_and_releases_partial_state() {
     world(|world| world.context = 0);
     assert_eq!(open_with(&setup()).0, INVALID_ARGUMENT);
     assert_eq!(
-        unsafe { rsf_core_gl_open(&setup(), ptr::null_mut(), &LEAVES) },
+        unsafe { rsf_gl_open(&setup(), ptr::null_mut()) },
         INVALID_ARGUMENT
     );
 

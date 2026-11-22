@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Typed DXGI and D3D12 calls for the GL interop owner's native table.
-use super::{Handle, Leaves, native_gl};
+use super::Handle;
+// The leaves gl_shared_surface.rs calls as `native::*`; its tests fake the same names.
+pub(super) use super::native_gl::{
+    acquire, current as gl_current, error as gl_error, extension_at as gl_extension_at,
+    extension_count as gl_extension_count, finish, lookup as gl_lookup, luid as gl_luid,
+    memory_delete, memory_import, release, semaphore_delete, semaphore_import, texture_delete,
+    texture_store,
+};
 use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 use windows::Win32::{
@@ -33,17 +40,17 @@ unsafe fn publish<T: Interface>(result: Result<T>, out: *mut Handle) -> i32 {
     }
 }
 
-unsafe extern "C" fn factory_create(out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn factory_create(out: *mut Handle) -> i32 {
     unsafe { publish(CreateDXGIFactory1::<IDXGIFactory4>(), out) }
 }
 
-unsafe extern "C" fn adapter_find(factory: Handle, luid: *const u8, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn adapter_find(factory: Handle, luid: *const u8, out: *mut Handle) -> i32 {
     let factory = unsafe { borrow::<IDXGIFactory4>(&factory) };
     let luid = unsafe { luid.cast::<LUID>().read_unaligned() };
     unsafe { publish(factory.EnumAdapterByLuid::<IDXGIAdapter1>(luid), out) }
 }
 
-unsafe extern "C" fn device_create(adapter: Handle, level: u32, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn device_create(adapter: Handle, level: u32, out: *mut Handle) -> i32 {
     let adapter = unsafe { borrow::<IDXGIAdapter1>(&adapter) };
     let mut device = None::<ID3D12Device>;
     let result =
@@ -56,7 +63,7 @@ unsafe extern "C" fn device_create(adapter: Handle, level: u32, out: *mut Handle
     }
 }
 
-unsafe extern "C" fn queue_create(device: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn queue_create(device: Handle, out: *mut Handle) -> i32 {
     let device = unsafe { borrow::<ID3D12Device>(&device) };
     let desc = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -65,12 +72,12 @@ unsafe extern "C" fn queue_create(device: Handle, out: *mut Handle) -> i32 {
     unsafe { publish(device.CreateCommandQueue::<ID3D12CommandQueue>(&desc), out) }
 }
 
-unsafe extern "C" fn device_luid(device: Handle, out: *mut u8) {
+pub(super) unsafe extern "C" fn device_luid(device: Handle, out: *mut u8) {
     let device = unsafe { borrow::<ID3D12Device>(&device) };
     unsafe { out.cast::<LUID>().write_unaligned(device.GetAdapterLuid()) };
 }
 
-unsafe extern "C" fn queue_device(queue: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn queue_device(queue: Handle, out: *mut Handle) -> i32 {
     let queue = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
     let mut device = None::<ID3D12Device>;
     let result = unsafe { queue.GetDevice(&mut device) };
@@ -82,7 +89,7 @@ unsafe extern "C" fn queue_device(queue: Handle, out: *mut Handle) -> i32 {
     }
 }
 
-unsafe extern "C" fn fence_create(device: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn fence_create(device: Handle, out: *mut Handle) -> i32 {
     let device = unsafe { borrow::<ID3D12Device>(&device) };
     unsafe {
         publish(
@@ -92,7 +99,7 @@ unsafe extern "C" fn fence_create(device: Handle, out: *mut Handle) -> i32 {
     }
 }
 
-unsafe extern "C" fn shared_handle(device: Handle, object: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn shared_handle(device: Handle, object: Handle, out: *mut Handle) -> i32 {
     let device = unsafe { borrow::<ID3D12Device>(&device) };
     let object = unsafe { borrow::<ID3D12DeviceChild>(&object) };
     unsafe { out.write(null_mut()) };
@@ -100,15 +107,15 @@ unsafe extern "C" fn shared_handle(device: Handle, object: Handle, out: *mut Han
     status(created.map(|handle| unsafe { out.write(handle.0) }))
 }
 
-unsafe extern "C" fn event_create() -> Handle {
+pub(super) unsafe extern "C" fn event_create() -> Handle {
     unsafe { CreateEventW(null(), 0, 0, null()) }
 }
 
-unsafe extern "C" fn handle_close(handle: Handle) {
+pub(super) unsafe extern "C" fn handle_close(handle: Handle) {
     unsafe { CloseHandle(handle) };
 }
 
-unsafe extern "C" fn slot_create(device: Handle, allocator: *mut Handle, list: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn slot_create(device: Handle, allocator: *mut Handle, list: *mut Handle) -> i32 {
     let device = unsafe { borrow::<ID3D12Device>(&device) };
     unsafe {
         allocator.write(null_mut());
@@ -130,7 +137,7 @@ unsafe extern "C" fn slot_create(device: Handle, allocator: *mut Handle, list: *
     })())
 }
 
-unsafe extern "C" fn slot_reset(allocator: Handle, list: Handle) -> i32 {
+pub(super) unsafe extern "C" fn slot_reset(allocator: Handle, list: Handle) -> i32 {
     let allocator = unsafe { borrow::<ID3D12CommandAllocator>(&allocator) };
     let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&list) };
     status(unsafe {
@@ -140,19 +147,19 @@ unsafe extern "C" fn slot_reset(allocator: Handle, list: Handle) -> i32 {
     })
 }
 
-unsafe extern "C" fn list_close(list: Handle) -> i32 {
+pub(super) unsafe extern "C" fn list_close(list: Handle) -> i32 {
     status(unsafe { borrow::<ID3D12GraphicsCommandList>(&list).Close() })
 }
 
-unsafe extern "C" fn fence_completed(fence: Handle) -> u64 {
+pub(super) unsafe extern "C" fn fence_completed(fence: Handle) -> u64 {
     unsafe { borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
 }
 
-unsafe extern "C" fn fence_arm(fence: Handle, value: u64, event: Handle) -> i32 {
+pub(super) unsafe extern "C" fn fence_arm(fence: Handle, value: u64, event: Handle) -> i32 {
     status(unsafe { borrow::<ID3D12Fence>(&fence).SetEventOnCompletion(value, HANDLE(event)) })
 }
 
-unsafe extern "C" fn fence_wait(fence: Handle, value: u64, event: Handle, timeout: u32) -> i32 {
+pub(super) unsafe extern "C" fn fence_wait(fence: Handle, value: u64, event: Handle, timeout: u32) -> i32 {
     i32::from(unsafe {
         crate::d3d12_fence::rsf_core_d3d12_wait_fence(
             fence,
@@ -165,26 +172,26 @@ unsafe extern "C" fn fence_wait(fence: Handle, value: u64, event: Handle, timeou
     })
 }
 
-unsafe extern "C" fn queue_wait(queue: Handle, fence: Handle, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn queue_wait(queue: Handle, fence: Handle, value: u64) -> i32 {
     status(unsafe {
         borrow::<ID3D12CommandQueue>(&queue).Wait(borrow::<ID3D12Fence>(&fence), value)
     })
 }
 
-unsafe extern "C" fn queue_execute(queue: Handle, list: Handle) {
+pub(super) unsafe extern "C" fn queue_execute(queue: Handle, list: Handle) {
     let queue = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
     // The recording slot already owns this reference.
     let list = ManuallyDrop::new(Some(unsafe { ID3D12CommandList::from_raw(list) }));
     unsafe { queue.ExecuteCommandLists(std::slice::from_ref(&*list)) };
 }
 
-unsafe extern "C" fn queue_signal(queue: Handle, fence: Handle, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn queue_signal(queue: Handle, fence: Handle, value: u64) -> i32 {
     status(unsafe {
         borrow::<ID3D12CommandQueue>(&queue).Signal(borrow::<ID3D12Fence>(&fence), value)
     })
 }
 
-unsafe extern "C" fn resource_create(
+pub(super) unsafe extern "C" fn resource_create(
     device: Handle,
     width: u32,
     height: u32,
@@ -232,40 +239,3 @@ unsafe extern "C" fn resource_create(
         )
     }
 }
-
-pub(super) static NATIVE: Leaves = Leaves {
-    gl_current: native_gl::current,
-    gl_lookup: native_gl::lookup,
-    gl_extension_count: native_gl::extension_count,
-    gl_extension_at: native_gl::extension_at,
-    gl_error: native_gl::error,
-    gl_luid: native_gl::luid,
-    semaphore_import: native_gl::semaphore_import,
-    semaphore_delete: native_gl::semaphore_delete,
-    memory_import: native_gl::memory_import,
-    memory_delete: native_gl::memory_delete,
-    texture_store: native_gl::texture_store,
-    texture_delete: native_gl::texture_delete,
-    release: native_gl::release,
-    acquire: native_gl::acquire,
-    finish: native_gl::finish,
-    factory_create,
-    adapter_find,
-    device_create,
-    queue_create,
-    device_luid,
-    queue_device,
-    fence_create,
-    shared_handle,
-    event_create,
-    handle_close,
-    slot_create,
-    slot_reset,
-    list_close,
-    fence_completed,
-    fence_wait,
-    queue_wait,
-    queue_execute,
-    queue_signal,
-    resource_create,
-};

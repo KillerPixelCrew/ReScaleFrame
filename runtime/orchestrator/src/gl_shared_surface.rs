@@ -2,7 +2,7 @@
 // OpenGL and D3D12 sharing owner behind rescaleframe/gl_shared_surface.h. This owner decides WGL
 // owner admission, format validation, semaphore, handle and resource lifetime, command slot and
 // fence synchronization, the GL/D3D12 queue handoff, failure recovery and teardown.
-// The native table uses typed WGL, OpenGL, DXGI and D3D12 calls.
+// Its native leaves (native_dx.rs, native_gl.rs) use typed WGL, OpenGL, DXGI and D3D12 calls.
 //
 // Every transaction leaves GL through a semaphore signal and returns through a GL wait on a value
 // the D3D12 queue signals after the transaction's commands. A queue signal that fails after
@@ -19,13 +19,21 @@ use crate::sys::{
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
 };
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
+// GL operations return glGetError after their call. D3D12 and DXGI calls return an HRESULT.
+// A returned COM interface transfers one reference. Tests swap in fakes of the same names.
+#[cfg(not(test))]
 mod native_dx;
+#[cfg(not(test))]
 mod native_gl;
+#[cfg(not(test))]
+use native_dx as native;
+#[cfg(test)]
+use tests::native;
 
 const SETUP_ABI_VERSION: u32 = 1;
 const SLOTS: usize = 3;
@@ -73,50 +81,11 @@ type Log = rsf_backend_log_fn;
 #[repr(C)]
 pub(crate) struct GlProcs([*const c_void; GL_ENTRY_POINTS.len()]);
 
-// GL operations return glGetError after their call. D3D12 and DXGI calls
-// return an HRESULT. A returned COM interface transfers one reference.
-pub(crate) struct Leaves {
-    gl_current: unsafe extern "C" fn() -> Handle,
-    gl_lookup: unsafe extern "C" fn(*const c_char) -> *const c_void,
-    gl_extension_count: unsafe extern "C" fn() -> i32,
-    gl_extension_at: unsafe extern "C" fn(*const GlProcs, u32) -> *const c_char,
-    gl_error: unsafe extern "C" fn() -> u32,
-    gl_luid: unsafe extern "C" fn(*const GlProcs, *mut u8),
-    semaphore_import: unsafe extern "C" fn(*const GlProcs, Handle, *mut u32) -> u32,
-    semaphore_delete: unsafe extern "C" fn(*const GlProcs, u32),
-    memory_import: unsafe extern "C" fn(*const GlProcs, Handle, *mut u32) -> u32,
-    memory_delete: unsafe extern "C" fn(*const GlProcs, u32),
-    texture_store: unsafe extern "C" fn(*const GlProcs, u32, u32, u32, u32, *mut u32) -> u32,
-    texture_delete: unsafe extern "C" fn(u32),
-    release: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32) -> u32,
-    acquire: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32) -> u32,
-    finish: unsafe extern "C" fn(),
-    factory_create: unsafe extern "C" fn(*mut Handle) -> i32,
-    adapter_find: unsafe extern "C" fn(Handle, *const u8, *mut Handle) -> i32,
-    device_create: unsafe extern "C" fn(Handle, u32, *mut Handle) -> i32,
-    queue_create: unsafe extern "C" fn(Handle, *mut Handle) -> i32,
-    device_luid: unsafe extern "C" fn(Handle, *mut u8),
-    queue_device: unsafe extern "C" fn(Handle, *mut Handle) -> i32,
-    fence_create: unsafe extern "C" fn(Handle, *mut Handle) -> i32,
-    shared_handle: unsafe extern "C" fn(Handle, Handle, *mut Handle) -> i32,
-    event_create: unsafe extern "C" fn() -> Handle,
-    handle_close: unsafe extern "C" fn(Handle),
-    slot_create: unsafe extern "C" fn(Handle, *mut Handle, *mut Handle) -> i32,
-    slot_reset: unsafe extern "C" fn(Handle, Handle) -> i32,
-    list_close: unsafe extern "C" fn(Handle) -> i32,
-    fence_completed: unsafe extern "C" fn(Handle) -> u64,
-    fence_wait: unsafe extern "C" fn(Handle, u64, Handle, u32) -> c_int,
-    queue_wait: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
-    queue_execute: unsafe extern "C" fn(Handle, Handle),
-    queue_signal: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
-    resource_create: unsafe extern "C" fn(Handle, u32, u32, u32, *mut Handle) -> i32,
-}
-
 impl GlProcs {
-    fn load(leaves: &Leaves) -> Option<Self> {
+    fn load() -> Option<Self> {
         let mut gl = Self([ptr::null(); GL_ENTRY_POINTS.len()]);
         for (slot, name) in gl.0.iter_mut().zip(GL_ENTRY_POINTS) {
-            let entry = unsafe { (leaves.gl_lookup)(name.as_ptr()) };
+            let entry = unsafe { native::gl_lookup(name.as_ptr()) };
             // Drivers can report a WGL miss as null, 1, 2, 3 or -1.
             if entry.addr() <= 3 || entry.addr() == usize::MAX {
                 return None;
@@ -124,9 +93,9 @@ impl GlProcs {
             *slot = entry;
         }
         for name in [c"GL_EXT_memory_object_win32", c"GL_EXT_semaphore_win32"] {
-            let count = unsafe { (leaves.gl_extension_count)() };
+            let count = native::gl_extension_count();
             let found = (0..count).any(|index| {
-                let entry = unsafe { (leaves.gl_extension_at)(&gl, index as u32) };
+                let entry = unsafe { native::gl_extension_at(&gl, index as u32) };
                 !entry.is_null() && unsafe { CStr::from_ptr(entry) } == name
             });
             if !found {
@@ -160,13 +129,12 @@ fn message(log: Log, user: Handle, text: &str) {
 
 // An NT or event handle closed through its leaf.
 struct NtHandle {
-    leaves: &'static Leaves,
     handle: NonNull<c_void>,
 }
 
 impl NtHandle {
-    fn new(leaves: &'static Leaves, handle: Handle) -> Option<Self> {
-        NonNull::new(handle).map(|handle| Self { leaves, handle })
+    fn new(handle: Handle) -> Option<Self> {
+        NonNull::new(handle).map(|handle| Self { handle })
     }
 
     fn get(&self) -> Handle {
@@ -176,7 +144,7 @@ impl NtHandle {
 
 impl Drop for NtHandle {
     fn drop(&mut self) {
-        unsafe { (self.leaves.handle_close)(self.handle.as_ptr()) };
+        unsafe { native::handle_close(self.handle.as_ptr()) };
     }
 }
 
@@ -242,7 +210,6 @@ struct State {
 }
 
 pub(crate) struct Context {
-    leaves: &'static Leaves,
     gl: GlProcs,
     gl_context: Handle,
     thread: u32,
@@ -260,7 +227,7 @@ pub(crate) struct Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
-        unsafe { (self.leaves.semaphore_delete)(&self.gl, self.semaphore) };
+        unsafe { native::semaphore_delete(&self.gl, self.semaphore) };
     }
 }
 
@@ -282,7 +249,7 @@ impl Context {
     // All calls run on the original WGL context and its thread.
     fn owner(&self) -> bool {
         self.thread == unsafe { GetCurrentThreadId() }
-            && self.gl_context == unsafe { (self.leaves.gl_current)() }
+            && self.gl_context == native::gl_current()
     }
 
     fn lock(&self) -> Option<MutexGuard<'_, State>> {
@@ -308,7 +275,7 @@ impl Context {
     // separately rather than attributed to the next interop import.
     fn prior_errors(&self) {
         for _ in 0..STICKY_ERRORS {
-            let error = unsafe { (self.leaves.gl_error)() };
+            let error = native::gl_error();
             if error == GL_NO_ERROR {
                 break;
             }
@@ -341,19 +308,18 @@ impl Context {
         if value == 0 {
             return true;
         }
-        let l = self.leaves;
-        let completed = unsafe { (l.fence_completed)(self.fence.as_ptr()) };
+        let completed = unsafe { native::fence_completed(self.fence.as_ptr()) };
         match FenceState::check(completed, value) {
             FenceState::Complete => true,
             FenceState::DeviceRemoved => false,
             FenceState::Pending => unsafe {
-                (l.fence_wait)(self.fence.as_ptr(), value, self.event.get(), CPU_WAIT_MS) != 0
+                native::fence_wait(self.fence.as_ptr(), value, self.event.get(), CPU_WAIT_MS) != 0
             },
         }
     }
 
     fn signal(&self, value: u64) -> i32 {
-        unsafe { (self.leaves.queue_signal)(self.queue.as_ptr(), self.fence.as_ptr(), value) }
+        unsafe { native::queue_signal(self.queue.as_ptr(), self.fence.as_ptr(), value) }
     }
 
     // GL releases the batch to D3D12 at `value` and flushes so the queue can observe it.
@@ -361,7 +327,7 @@ impl Context {
         self.prior_errors();
         let layouts = [LAYOUT_GENERAL; BATCH];
         unsafe {
-            (self.leaves.release)(
+            native::release(
                 &self.gl,
                 self.semaphore,
                 value,
@@ -377,7 +343,7 @@ impl Context {
         self.prior_errors();
         let layouts = [LAYOUT_GENERAL; BATCH];
         unsafe {
-            (self.leaves.acquire)(
+            native::acquire(
                 &self.gl,
                 self.semaphore,
                 value,
@@ -427,7 +393,6 @@ impl Context {
     }
 
     fn begin(&self, state: &mut State, batch: &Batch, list: *mut Handle, slot: *mut u32) -> i32 {
-        let l = self.leaves;
         if !self.settle(state) {
             return FEATURE_FAILED;
         }
@@ -437,7 +402,7 @@ impl Context {
         }
         let current = &mut state.slots[index];
         current.leases.clear();
-        if failed(unsafe { (l.slot_reset)(current.allocator.as_ptr(), current.list.as_ptr()) }) {
+        if failed(unsafe { native::slot_reset(current.allocator.as_ptr(), current.list.as_ptr()) }) {
             return FEATURE_FAILED;
         }
         state.serial += 1;
@@ -445,7 +410,7 @@ impl Context {
         let released = self.release(ready, batch);
         let current = &mut state.slots[index];
         if released != GL_NO_ERROR {
-            unsafe { (l.list_close)(current.list.as_ptr()) };
+            unsafe { native::list_close(current.list.as_ptr()) };
             state.phase = Phase::ReleaseFailed;
             self.failure("GL semaphore release", released);
             return FEATURE_FAILED;
@@ -454,10 +419,10 @@ impl Context {
             slot: index,
             batch: *batch,
         };
-        let waited = unsafe { (l.queue_wait)(self.queue.as_ptr(), self.fence.as_ptr(), ready) };
+        let waited = unsafe { native::queue_wait(self.queue.as_ptr(), self.fence.as_ptr(), ready) };
         if failed(waited) {
             self.failure("D3D12 queue wait", waited as u32);
-            unsafe { (l.list_close)(current.list.as_ptr()) };
+            unsafe { native::list_close(current.list.as_ptr()) };
             // GL's own signal satisfies `ready`, so the textures return to GL unchanged.
             state.phase = Phase::AwaitingAcquire {
                 handoff,
@@ -479,7 +444,6 @@ impl Context {
     }
 
     fn submit(&self, state: &mut State, batch: &Batch) -> i32 {
-        let l = self.leaves;
         let Phase::Recording(handoff) = state.phase else {
             return INVALID_ARGUMENT;
         };
@@ -488,7 +452,7 @@ impl Context {
         }
         let list = state.slots[handoff.slot].list.as_ptr();
         state.phase = Phase::Unsignalled(handoff);
-        let closed = unsafe { (l.list_close)(list) };
+        let closed = unsafe { native::list_close(list) };
         if failed(closed) {
             // Nothing executes. The queue still holds its wait for GL, so the handoff is
             // completed by a signal ordered after that wait.
@@ -496,7 +460,7 @@ impl Context {
             self.settle(state);
             return FEATURE_FAILED;
         }
-        unsafe { (l.queue_execute)(self.queue.as_ptr(), list) };
+        unsafe { native::queue_execute(self.queue.as_ptr(), list) };
         if self.settle(state) {
             OK
         } else {
@@ -513,7 +477,7 @@ impl Context {
         if !matches!(state.phase, Phase::ReleaseFailed) && !self.settle(state) {
             return FEATURE_FAILED;
         }
-        unsafe { (self.leaves.finish)() };
+        native::finish();
         state.serial += 1;
         let complete = state.serial;
         if failed(self.signal(complete)) || !self.wait_cpu(complete) {
@@ -526,75 +490,74 @@ impl Context {
     }
 }
 
-fn create_context_device(leaves: &Leaves, luid: &[u8; 8]) -> Result<ComRef, i32> {
+fn create_context_device(luid: &[u8; 8]) -> Result<ComRef, i32> {
     let mut factory = ptr::null_mut();
-    let result = unsafe { (leaves.factory_create)(&mut factory) };
+    let result = unsafe { native::factory_create(&mut factory) };
     let factory = unsafe { ComRef::from_owned(factory) }
         .filter(|_| !failed(result))
         .ok_or(NOT_SUPPORTED)?;
 
     let mut adapter = ptr::null_mut();
-    let result = unsafe { (leaves.adapter_find)(factory.as_ptr(), luid.as_ptr(), &mut adapter) };
+    let result = unsafe { native::adapter_find(factory.as_ptr(), luid.as_ptr(), &mut adapter) };
     let adapter = unsafe { ComRef::from_owned(adapter) }
         .filter(|_| !failed(result))
         .ok_or(NOT_SUPPORTED)?;
 
     let mut device = ptr::null_mut();
     let result =
-        unsafe { (leaves.device_create)(adapter.as_ptr(), FEATURE_LEVEL_11_0, &mut device) };
+        unsafe { native::device_create(adapter.as_ptr(), FEATURE_LEVEL_11_0, &mut device) };
     unsafe { ComRef::from_owned(device) }
         .filter(|_| !failed(result))
         .ok_or(NOT_SUPPORTED)
 }
 
-fn open(setup: &rsf_gl_setup, leaves: &'static Leaves, gl_context: Handle) -> Result<Context, i32> {
-    let l = leaves;
+fn open(setup: &rsf_gl_setup, gl_context: Handle) -> Result<Context, i32> {
     let say = |text: &str| message(setup.log, setup.user, text);
-    let Some(gl) = GlProcs::load(l) else {
+    let Some(gl) = GlProcs::load() else {
         say("OpenGL sharing requires EXT_memory_object_win32 and EXT_semaphore_win32.");
         return Err(NOT_SUPPORTED);
     };
     let mut luid = [0u8; 8];
-    unsafe { (l.gl_luid)(&gl, luid.as_mut_ptr()) };
-    if unsafe { (l.gl_error)() } != GL_NO_ERROR {
+    unsafe { native::gl_luid(&gl, luid.as_mut_ptr()) };
+    if native::gl_error() != GL_NO_ERROR {
         return Err(FEATURE_FAILED);
     }
     let (device, queue) = if !setup.device.is_null() {
         let device = unsafe { ComRef::retain(setup.device) };
         let queue = unsafe { ComRef::retain(setup.queue) };
         let mut native = [0u8; 8];
-        unsafe { (l.device_luid)(device.as_ptr(), native.as_mut_ptr()) };
+        unsafe { native::device_luid(device.as_ptr(), native.as_mut_ptr()) };
         let mut owner = ptr::null_mut();
-        let found = unsafe { (l.queue_device)(queue.as_ptr(), &mut owner) };
+        let found = unsafe { native::queue_device(queue.as_ptr(), &mut owner) };
         let owner = unsafe { ComRef::from_owned(owner) };
         if luid != native || failed(found) || owner.is_none_or(|owner| owner.0 != device.0) {
             return Err(INVALID_ARGUMENT);
         }
         (device, queue)
     } else {
-        let device = create_context_device(l, &luid)?;
+        let device = create_context_device(&luid)?;
         let mut queue = ptr::null_mut();
-        let created = unsafe { (l.queue_create)(device.as_ptr(), &mut queue) };
+        let created = unsafe { native::queue_create(device.as_ptr(), &mut queue) };
         let queue = unsafe { ComRef::from_owned(queue) }
             .filter(|_| !failed(created))
             .ok_or(FEATURE_FAILED)?;
         (device, queue)
     };
     let mut fence = ptr::null_mut();
-    let created = unsafe { (l.fence_create)(device.as_ptr(), &mut fence) };
+    let created = unsafe { native::fence_create(device.as_ptr(), &mut fence) };
     let fence = unsafe { ComRef::from_owned(fence) }
         .filter(|_| !failed(created))
         .ok_or(FEATURE_FAILED)?;
     let mut shared = ptr::null_mut();
-    let created = unsafe { (l.shared_handle)(device.as_ptr(), fence.as_ptr(), &mut shared) };
-    let fence_handle = NtHandle::new(l, shared)
+    let created = unsafe { native::shared_handle(device.as_ptr(), fence.as_ptr(), &mut shared) };
+    let fence_handle = NtHandle::new(shared)
         .filter(|_| !failed(created))
         .ok_or(FEATURE_FAILED)?;
-    let event = NtHandle::new(l, unsafe { (l.event_create)() }).ok_or(FEATURE_FAILED)?;
+    let event = NtHandle::new(unsafe { native::event_create() }).ok_or(FEATURE_FAILED)?;
     let mut slots = Vec::with_capacity(SLOTS);
     for _ in 0..SLOTS {
         let (mut allocator, mut list) = (ptr::null_mut(), ptr::null_mut());
-        let created = unsafe { (l.slot_create)(device.as_ptr(), &mut allocator, &mut list) };
+        let created = unsafe { native::slot_create(device.as_ptr(), &mut allocator, &mut list) };
         let allocator = unsafe { ComRef::from_owned(allocator) };
         let list = unsafe { ComRef::from_owned(list) };
         let (Some(allocator), Some(list)) = (allocator, list) else {
@@ -612,14 +575,13 @@ fn open(setup: &rsf_gl_setup, leaves: &'static Leaves, gl_context: Handle) -> Re
     }
     // The semaphore imports last, so every earlier failure leaves no GL object behind.
     let mut semaphore = 0;
-    let imported = unsafe { (l.semaphore_import)(&gl, fence_handle.get(), &mut semaphore) };
+    let imported = unsafe { native::semaphore_import(&gl, fence_handle.get(), &mut semaphore) };
     if imported != GL_NO_ERROR {
-        unsafe { (l.semaphore_delete)(&gl, semaphore) };
+        unsafe { native::semaphore_delete(&gl, semaphore) };
         return Err(FEATURE_FAILED);
     }
     say("OpenGL sharing: exact context adapter, D3D12 resource memory, shared GPU timeline fence.");
     Ok(Context {
-        leaves,
         gl,
         gl_context,
         thread: unsafe { GetCurrentThreadId() },
@@ -641,12 +603,11 @@ fn open(setup: &rsf_gl_setup, leaves: &'static Leaves, gl_context: Handle) -> Re
 }
 
 fn create_texture(owner: &Context, width: u32, height: u32, format: u32) -> Result<Texture, i32> {
-    let l = owner.leaves;
     owner.prior_errors();
     let (native, internal) = native_format(format).ok_or(INVALID_ARGUMENT)?;
     let mut resource = ptr::null_mut();
     let created =
-        unsafe { (l.resource_create)(owner.device.as_ptr(), width, height, native, &mut resource) };
+        unsafe { native::resource_create(owner.device.as_ptr(), width, height, native, &mut resource) };
     let resource = unsafe { ComRef::from_owned(resource) };
     let Some(resource) = resource.filter(|_| !failed(created)) else {
         owner.failure("shared D3D12 resource", created as u32);
@@ -654,25 +615,25 @@ fn create_texture(owner: &Context, width: u32, height: u32, format: u32) -> Resu
     };
     let mut shared = ptr::null_mut();
     let created =
-        unsafe { (l.shared_handle)(owner.device.as_ptr(), resource.as_ptr(), &mut shared) };
-    let handle = NtHandle::new(l, shared)
+        unsafe { native::shared_handle(owner.device.as_ptr(), resource.as_ptr(), &mut shared) };
+    let handle = NtHandle::new(shared)
         .filter(|_| !failed(created))
         .ok_or(FEATURE_FAILED)?;
     let mut memory = 0;
-    let imported = unsafe { (l.memory_import)(&owner.gl, handle.get(), &mut memory) };
+    let imported = unsafe { native::memory_import(&owner.gl, handle.get(), &mut memory) };
     if imported != GL_NO_ERROR {
         owner.failure("D3D12 memory import", imported);
-        unsafe { (l.memory_delete)(&owner.gl, memory) };
+        unsafe { native::memory_delete(&owner.gl, memory) };
         return Err(FEATURE_FAILED);
     }
     let mut texture = 0;
     let stored =
-        unsafe { (l.texture_store)(&owner.gl, memory, internal, width, height, &mut texture) };
+        unsafe { native::texture_store(&owner.gl, memory, internal, width, height, &mut texture) };
     if stored != GL_NO_ERROR {
         owner.failure("shared texture storage", stored);
         unsafe {
-            (l.texture_delete)(texture);
-            (l.memory_delete)(&owner.gl, memory);
+            native::texture_delete(texture);
+            native::memory_delete(&owner.gl, memory);
         }
         return Err(FEATURE_FAILED);
     }
@@ -706,26 +667,15 @@ pub(crate) unsafe extern "C" fn rsf_gl_open(
     setup: *const rsf_gl_setup,
     out: *mut *mut Context,
 ) -> i32 {
-    unsafe { rsf_core_gl_open(setup, out, &native_dx::NATIVE) }
-}
-
-unsafe fn rsf_core_gl_open(
-    setup: *const rsf_gl_setup,
-    out: *mut *mut Context,
-    leaves: *const Leaves,
-) -> i32 {
     if out.is_null() {
         return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
-    let Some(leaves) = (unsafe { leaves.as_ref() }) else {
-        return INVALID_ARGUMENT;
-    };
     if !unsafe { has_capacity(setup) } {
         return INVALID_ARGUMENT;
     }
     let setup = unsafe { setup.read() };
-    let gl_context = unsafe { (leaves.gl_current)() };
+    let gl_context = native::gl_current();
     if gl_context.is_null() || setup.device.is_null() != setup.queue.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -733,7 +683,7 @@ unsafe fn rsf_core_gl_open(
         return ABI_MISMATCH;
     }
     crate::initialize_handle(unsafe { &mut *out }, FEATURE_FAILED, || {
-        match open(&setup, leaves, gl_context) {
+        match open(&setup, gl_context) {
             Ok(context) => (OK, Some(context)),
             Err(result) => (result, None),
         }
@@ -883,10 +833,9 @@ pub(crate) unsafe extern "C" fn rsf_gl_texture_destroy(texture: *mut Texture) {
         _ => {}
     }
     drop(state);
-    let l = owner.leaves;
     unsafe {
-        (l.texture_delete)(value.texture);
-        (l.memory_delete)(&owner.gl, value.memory);
+        native::texture_delete(value.texture);
+        native::memory_delete(&owner.gl, value.memory);
         drop(Box::from_raw(texture));
     }
 }
