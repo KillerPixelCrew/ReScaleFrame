@@ -21,6 +21,7 @@
 #include "sr_pass.h"
 #include "sr_temporal.h"
 #include "sr_tonemap.h"
+#include "anomaly_sr_readback.h"
 #include <rescaleframe/motion_decode.h>
 #include <rescaleframe/motion_resolve.h>
 
@@ -148,19 +149,12 @@ Depth depth_texture(Device& d, uint32_t w, uint32_t h, const std::vector<uint32_
     return out;
 }
 template<class T> std::vector<T> read_back(Device& d, ID3D11Texture2D* source, uint32_t texel_values) {
+    if (!source) return {};
     D3D11_TEXTURE2D_DESC desc{};
     source->GetDesc(&desc);
-    desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ; desc.MiscFlags = 0;
-    ComPtr<ID3D11Texture2D> staging;
     std::vector<T> out(std::size_t(desc.Width) * desc.Height * texel_values);
-    if (FAILED(d.device->CreateTexture2D(&desc, nullptr, &staging))) return {};
-    d.context->CopyResource(staging.Get(), source);
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(d.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return {};
-    for (uint32_t y = 0; y < desc.Height; ++y)
-        std::memcpy(&out[std::size_t(y) * desc.Width * texel_values], static_cast<const uint8_t*>(mapped.pData) + std::size_t(y) * mapped.RowPitch,
-            std::size_t(desc.Width) * texel_values * sizeof(T));
-    d.context->Unmap(staging.Get(), 0);
+    if (!rsf_anomaly_sr_fixture_readback(d.device.Get(), d.context.Get(), source, nullptr,
+            reinterpret_cast<uint8_t*>(out.data()), out.size() * sizeof(T))) return {};
     return out;
 }
 

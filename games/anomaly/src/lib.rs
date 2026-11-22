@@ -70,6 +70,10 @@ mod shader_family;
 #[cfg(windows)]
 mod shader_loader;
 mod sr_d3d11;
+#[cfg(windows)]
+mod sr_fixture_readback;
+#[path = "../../../tests/anomaly_sr_jitter_fixture.rs"]
+mod sr_jitter_fixture;
 mod sr_pass;
 mod sr_reconstruction;
 mod sr_stage;

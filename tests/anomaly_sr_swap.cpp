@@ -3,7 +3,7 @@
 // the offsets of games/anomaly/src/sr_profile.h, plus fake Device.dwWidth/dwHeight, HW.pBaseZB and the SSAO helper's
 // static viewport for Stage 2. Every exit path must leave the engine bytes exactly as they were.
 // No game code, D3D device or executable is involved.
-#include "sr_jitter.h"
+#include "anomaly_sr_jitter_reference.h"
 #include "sr_profile.h"
 #include "sr_swap.h"
 
@@ -172,6 +172,7 @@ struct Engine {
 struct FakeHost final : SwapHost {
     std::array<int, 64> twin_objects{};
     int write_count = 0, fail_write_at = -1;
+    void* blocked_write{};
     bool fail_make = false, fail_round_trip = false, wrong_format = false, depth_refused = false, refused = false;
     int makes = 0, drops = 0, round_trips = 0, upscales = 0;
     TargetFields last_twin{}, last_engine{};
@@ -192,7 +193,7 @@ struct FakeHost final : SwapHost {
         return true;
     }
     bool write(void* address, const void* input, std::size_t size) noexcept override {
-        if (!address || write_count++ == fail_write_at) return false;
+        if (!address || write_count++ == fail_write_at || address == blocked_write) return false;
         std::memcpy(address, input, size);
         return true;
     }
@@ -808,6 +809,21 @@ void stage2_write_faults() {
     }
 }
 
+void stage2_retains_twins_after_failed_restore() {
+    Case c;
+    CHECK(c.controller.prepare(c.engine.facts2()));
+    const auto depth = c.controller.twin_set().depth_dsv;
+    CHECK(depth && get<void*>(c.engine.base_zb.data(), 0) == depth);
+    c.host.blocked_write = c.engine.base_zb.data();
+    CHECK(!c.controller.seam());
+    CHECK(!c.controller.shutdown());
+    CHECK(get<void*>(c.engine.base_zb.data(), 0) == depth && c.host.drops == 0 && c.host.upscales == 0);
+    CHECK(restores(c.controller, Restore::Seam) == 0);
+    c.host.blocked_write = nullptr;
+    CHECK(c.controller.shutdown() && c.stock());
+    CHECK(c.host.drops == 1 && restores(c.controller, Restore::Seam) == 1);
+}
+
 void stage2_lifecycle() {
     Case c;
     c.engine.init_viewport(960.0f, 540.0f);
@@ -1217,7 +1233,8 @@ int main(int argc, char** argv) {
         {"round_trip_failure", round_trip_failure}, {"reset_resize", reset_and_resize}, {"names", names},
         {"stage2_normal", stage2_normal}, {"stage2_optional_odd", stage2_optional_and_odd}, {"stage2_layout", stage2_layout},
         {"stage2_exits", stage2_exits}, {"stage2_foreign", stage2_foreign}, {"stage2_ssao_viewport", stage2_ssao_viewport},
-        {"stage2_write_faults", stage2_write_faults}, {"stage2_lifecycle", stage2_lifecycle}, {"stage3_normal", stage3_normal},
+        {"stage2_write_faults", stage2_write_faults}, {"stage2_retains_twins", stage2_retains_twins_after_failed_restore},
+        {"stage2_lifecycle", stage2_lifecycle}, {"stage3_normal", stage3_normal},
         {"stage3_exits", stage3_exits}, {"stage3_foreign_ineligible", stage3_foreign_and_ineligible}, {"stage3_sun_cascades", stage3_sun_cascades}, {"stage3_sun_rollback", stage3_sun_rollback},
         {"stage3_position_reconstruction", stage3_position_reconstruction}};
     int ran = 0;

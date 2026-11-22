@@ -133,7 +133,7 @@ pub(crate) fn jitter_projection(
 
 /// Fmatrix::mul(A, B) in the engine's summation order: m[i][j] = sum_k A[k][j] * B[i][k]. Device.mFullTransform is
 /// mul(mProject, mView).
-fn engine_mul(a: &Matrix, b: &Matrix) -> Matrix {
+pub(crate) fn engine_mul(a: &Matrix, b: &Matrix) -> Matrix {
     std::array::from_fn(|n| {
         let (i, j) = (n / 4, n % 4);
         a[j] * b[i * 4]
@@ -591,30 +591,34 @@ impl Swap {
     /// change. Clearing T and every per-stage CTexture* slot forces the next set_Textures to bind the new SRVs.
     /// Stage 2 changes Device.dwWidth/dwHeight, which the screen_res and pos_decompression_params binders read when
     /// set_Constants processes a table; clearing ctable makes the next set_Element re-run every binder.
-    fn invalidate_caches(&mut self) -> bool {
+    fn invalidate_caches(&mut self, verify: bool) -> bool {
         if self.backend.is_null() {
             return true;
         }
-        let null = Addr::default();
         let zeros = [0u8; (MAX_CACHE_SLOTS * POINTER) as usize];
-        let mut ok = self.write(self.backend.at(self.layout.backend_texture_list), &null);
+        let clear = |offset, len| {
+            let address = self.backend.at(offset).0;
+            let write = self.platform.write.expect("validated platform");
+            // Only the verified pointer span is cleared.
+            if !unsafe { write(self.platform.user, address, zeros.as_ptr().cast(), len) } {
+                return false;
+            }
+            if !verify {
+                return true;
+            }
+            let mut actual = [0xffu8; (MAX_CACHE_SLOTS * POINTER) as usize];
+            let read = self.platform.read.expect("validated platform");
+            (unsafe { read(self.platform.user, address, actual.as_mut_ptr().cast(), len) })
+                && actual[..len] == zeros[..len]
+        };
+        let mut ok = clear(self.layout.backend_texture_list, POINTER as usize);
         for range in self.layout.backend_textures {
             if range.count != 0 {
-                let len = (range.count * POINTER) as usize;
-                let write = self.platform.write.expect("validated platform");
-                // Only the verified pointer array is cleared, leaving adjacent RCache fields alone.
-                ok = unsafe {
-                    write(
-                        self.platform.user,
-                        self.backend.at(range.offset).0,
-                        zeros.as_ptr().cast(),
-                        len,
-                    )
-                } && ok;
+                ok = clear(range.offset, (range.count * POINTER) as usize) && ok;
             }
         }
         if self.view.stage == 2 {
-            ok = self.write(self.backend.at(self.layout.backend_ctable), &null) && ok;
+            ok = clear(self.layout.backend_ctable, POINTER as usize) && ok;
         }
         if !ok {
             self.fault(c"RCache caches could not be invalidated.");
@@ -623,7 +627,7 @@ impl Swap {
     }
 
     fn release_twins(&mut self) {
-        if !self.have_twins || self.view.open || self.restore_state.pending() {
+        if !self.have_twins || self.view.open || self.cleanup_pending() {
             return;
         }
         if let Some(drop_twins) = self.platform.drop_twins {
@@ -727,6 +731,16 @@ impl Swap {
         self.write(address, value) && self.read(address, &mut current) && current == *value
     }
 
+    fn write_matrix(&self, address: Addr, value: &Matrix) -> bool {
+        let mut current = [0u32; 16];
+        let bits = value.map(f32::to_bits);
+        self.write(address, &bits) && self.read(address, &mut current) && current == bits
+    }
+
+    fn cleanup_pending(&self) -> bool {
+        self.restore_state.pending() || self.projection.written || self.bias.applied
+    }
+
     fn open_temporal(&mut self, facts: &Facts) -> bool {
         if facts.jitter
             && !facts.device_view.is_null()
@@ -766,7 +780,9 @@ impl Swap {
                     let jittered_full = engine_mul(&jittered, &view);
                     // Before the writes: a partial write is restored too.
                     self.projection.written = true;
-                    if !self.write(project, &jittered) || !self.write(full, &jittered_full) {
+                    if !self.write_matrix(project, &jittered)
+                        || !self.write_matrix(full, &jittered_full)
+                    {
                         return false;
                     }
                     // Before the call: a faulting upload is still followed by the restoring upload.
@@ -823,8 +839,8 @@ impl Swap {
             {
                 self.foreign(c"Device.mProject changed inside the world window.");
             }
-            let mut ok =
-                self.write(p.project, &p.saved_project) & self.write(p.full, &p.saved_full);
+            let mut ok = self.write_matrix(p.project, &p.saved_project)
+                & self.write_matrix(p.full, &p.saved_full);
             // Shutdown writes engine memory only; the next frame's SetCacheXform uploads Device.mProject again.
             if ok && p.uploaded && reason != RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN {
                 ok = self.upload_projection(p.project);
@@ -845,12 +861,13 @@ impl Swap {
                 self.foreign(c"The sampler mip bias changed inside the world window.");
             }
             // Also on shutdown: nothing else would ever put the user's bias back.
-            if self.set_mip_bias(b.saved) {
+            if self.set_mip_bias(b.saved) && self.read(b.field, &mut current) && current == b.saved
+            {
                 self.view.counters.mip_restored += 1;
+                self.bias.applied = false;
             } else {
                 self.fault(c"The sampler mip bias could not be restored.");
             }
-            self.bias.applied = false;
         }
     }
 
@@ -859,10 +876,15 @@ impl Swap {
         if closing {
             self.restore_state.reason = reason;
             self.restore_state.caches = true;
-            self.restore_temporal(reason);
-        } else if !self.restore_state.pending() {
+        } else if !self.cleanup_pending() {
             return true;
         }
+        // Retry pending camera or sampler writes without reclassifying the previous window.
+        self.restore_temporal(if closing || reason == RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN {
+            reason
+        } else {
+            RSF_ANOMALY_SWAP_RESTORE_ROLLBACK
+        });
         let checked = closing && reason != RSF_ANOMALY_SWAP_RESTORE_ROLLBACK;
         for slot in 0..self.slots() {
             let target = self.view.engine[slot];
@@ -910,8 +932,10 @@ impl Swap {
         }
         // If an engine reference is still live, invalidate again after the retry:
         // the engine may have cached the same twin in the meantime.
-        self.restore_state.caches = !self.invalidate_caches();
-        if self.restore_state.pending() {
+        if closing || self.restore_state.pending() {
+            self.restore_state.caches = !self.invalidate_caches(true);
+        }
+        if self.cleanup_pending() {
             return false;
         }
         self.view.counters.restores[self.restore_state.reason as usize] += 1;
@@ -937,6 +961,9 @@ impl Swap {
     fn prepare(&mut self, facts: &Facts) -> bool {
         self.view.counters.prepares += 1;
         self.close_stale();
+        if self.cleanup_pending() {
+            return self.skip(RSF_ANOMALY_SWAP_SKIP_OFF);
+        }
         // After close_stale, which needs the previous window's values.
         self.projection = Projection::default();
         self.bias = Bias::default();
@@ -1102,7 +1129,7 @@ impl Swap {
             self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK);
             return false;
         }
-        if !self.invalidate_caches() {
+        if !self.invalidate_caches(false) {
             self.restore(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK);
             return false;
         }
@@ -1234,8 +1261,8 @@ impl Swap {
             self.projection.sun_full = sun_full;
             // Before the writes: the rollback restores partial writes too.
             self.projection.sun_suspended = true;
-            let project = self.write(p.project, &p.saved_project);
-            let full = self.write(p.full, &p.saved_full);
+            let project = self.write_matrix(p.project, &p.saved_project);
+            let full = self.write_matrix(p.full, &p.saved_full);
             ok = project && full;
         }
         if ok {
@@ -1256,8 +1283,8 @@ impl Swap {
         }
         self.projection.sun_suspended = false;
         let p = self.projection;
-        let project = self.write(p.project, &p.jittered);
-        let full = self.write(p.full, &p.sun_full);
+        let project = self.write_matrix(p.project, &p.jittered);
+        let full = self.write_matrix(p.full, &p.sun_full);
         if project && full && self.upload_projection(p.project) {
             self.view.counters.sun_restored += 1;
             return;
@@ -1318,15 +1345,19 @@ impl Swap {
             return;
         };
         let full = engine_mul(&jittered, &view);
-        if !self.write(p.project, &jittered)
-            || !self.write(p.full, &full)
+        if !self.write_matrix(p.project, &jittered)
+            || !self.write_matrix(p.full, &full)
             || !self.upload_projection(p.project)
         {
-            let project = self.write(p.project, &current);
-            let full = self.write(p.full, &saved_full);
-            let uploaded = project && self.upload_projection(p.project);
             self.fault(c"A first-person projection could not be jittered.");
-            if !full || !uploaded {
+            // Retry the first-person pair only while rmNear owns it. At a later
+            // callback the camera may already be the main view.
+            if !(0..2).any(|_| {
+                let project = self.write_matrix(p.project, &current);
+                let full = self.write_matrix(p.full, &saved_full);
+                project && full && self.upload_projection(p.project)
+            }) {
+                self.spatial_recovery = true;
                 self.fault(c"The first-person projection could not be restored.");
             }
             return;

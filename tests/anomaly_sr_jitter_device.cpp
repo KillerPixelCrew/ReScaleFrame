@@ -11,7 +11,8 @@
 //   2. Same frames with the b13 jitter zeroed: motion equals the jitter difference (the fixture can see an error).
 //   3. Camera pan of (+3, -2) render pixels between frames plus jitter: motion is exactly the pan.
 #include "motion_constants.h"
-#include "sr_jitter.h"
+#include "anomaly_sr_jitter_reference.h"
+#include "anomaly_sr_readback.h"
 
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -186,15 +187,14 @@ std::vector<Motion> draw(Fixture& f, const EngineMatrix& current, const EngineMa
     ID3D11RenderTargetView* rtv = f.rtv.Get();
     context->OMSetRenderTargets(1, &rtv, nullptr);
     context->Draw(6, 0);
-    context->CopyResource(f.staging.Get(), f.target.Get());
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    hr(context->Map(f.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "map");
+    std::vector<uint16_t> pixels(width * height * 4);
+    require(rsf_anomaly_sr_fixture_readback(device.Get(), context.Get(), f.target.Get(), f.staging.Get(),
+        reinterpret_cast<uint8_t*>(pixels.data()), pixels.size() * sizeof(uint16_t)), "readback");
     std::vector<Motion> out(width * height);
     for (uint32_t y = 0; y < height; ++y) {
-        const auto* row = reinterpret_cast<const uint16_t*>(static_cast<const std::byte*>(mapped.pData) + std::size_t(y) * mapped.RowPitch);
+        const auto* row = pixels.data() + std::size_t(y) * width * 4;
         for (uint32_t x = 0; x < width; ++x) out[y * width + x] = {half(row[4 * x]), half(row[4 * x + 1]), half(row[4 * x + 2])};
     }
-    context->Unmap(f.staging.Get(), 0);
     debug_errors();
     return out;
 }

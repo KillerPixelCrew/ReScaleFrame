@@ -143,8 +143,10 @@ struct Host {
     fail_write_at: Option<usize>,
     partial_write_at: Option<usize>,
     fail_address: *mut c_void,
+    ignore_write_address: *mut c_void,
     upload_calls: usize,
     fail_upload_at: Option<usize>,
+    refuse_bias: bool,
     uploads: Vec<Matrix>,
     biases: Vec<f32>,
     viewports: Vec<(u32, u32)>,
@@ -190,6 +192,9 @@ unsafe extern "C" fn write(
     host.writes += 1;
     if address.is_null() || host.fail_address == address || host.fail_write_at == Some(index) {
         return false;
+    }
+    if host.ignore_write_address == address {
+        return true;
     }
     if host.partial_write_at == Some(index) {
         unsafe { ptr::copy_nonoverlapping(input.cast::<u8>(), address.cast::<u8>(), size / 2) };
@@ -296,6 +301,9 @@ unsafe extern "C" fn upload_projection(user: *mut c_void, matrix: *const c_void)
 
 unsafe extern "C" fn set_mip_bias(user: *mut c_void, value: f32) -> bool {
     let host = host(user);
+    if host.refuse_bias {
+        return false;
+    }
     host.biases.push(value);
     // SetMipLODBias stores the value in SSManager like the engine.
     unsafe { (host.sampler as *mut f32).write(value) };
@@ -760,6 +768,36 @@ fn failed_first_person_jitter_restores_the_camera_and_uploaded_projection() {
 }
 
 #[test]
+fn pending_camera_and_sampler_restoration_retains_twins_until_quiesce_retries() {
+    let c = Case::new(true);
+    let saved = (c.engine().project, c.engine().full);
+    let facts = c.facts3(0.25, 0.1);
+    assert!(c.prepare(&facts));
+    c.host().fail_address = (&raw mut c.engine().full).cast();
+    c.host().refuse_bias = true;
+    assert!(!c.seam());
+    assert_eq!(c.host().upscales, 0);
+    assert!(!rsf_anomaly_swap_shutdown(c.swap));
+    assert_eq!(c.host().drops, 0);
+
+    // Another H1 cannot erase the pending camera or sampler snapshot.
+    assert!(!c.prepare(&facts));
+    c.host().fail_address = null_mut();
+    assert!(!rsf_anomaly_swap_shutdown(c.swap));
+    assert_eq!((c.engine().project, c.engine().full), saved);
+    assert_eq!(c.host().drops, 0);
+
+    c.host().refuse_bias = false;
+    assert!(rsf_anomaly_swap_shutdown(c.swap));
+    assert_eq!(c.engine().sampler_bias, 0.25);
+    assert_eq!(c.host().drops, 1);
+    assert_eq!(
+        c.view().counters.restores[RSF_ANOMALY_SWAP_RESTORE_SEAM as usize],
+        1
+    );
+}
+
+#[test]
 fn sun_refusal_returns_the_frame_to_output_size() {
     for failure in 0..3 {
         let c = Case::new(true);
@@ -869,6 +907,28 @@ fn a_partially_written_cache_range_rolls_back_before_drawing() {
         expected[offset..offset + count as usize * POINTER as usize].fill(0);
     }
     assert_eq!(c.engine().backend, expected);
+}
+
+#[test]
+fn cache_readback_refusal_keeps_twins_until_the_range_is_clear() {
+    let c = Case::new(true);
+    assert!(c.prepare(&c.facts2()));
+    let (offset, _) = TEXTURE_RANGES[0];
+    put(&mut c.engine().backend, offset, 1usize);
+    c.host().ignore_write_address = c
+        .engine()
+        .backend
+        .as_mut_ptr()
+        .wrapping_add(offset as usize)
+        .cast();
+    assert!(!c.seam());
+    assert!(!rsf_anomaly_swap_shutdown(c.swap));
+    assert_eq!((c.host().drops, c.host().upscales), (0, 0));
+
+    c.host().ignore_write_address = null_mut();
+    assert!(rsf_anomaly_swap_shutdown(c.swap));
+    assert!(c.stock() && c.texture_cache_cleared());
+    assert_eq!(c.host().drops, 1);
 }
 
 #[test]

@@ -197,6 +197,7 @@ extern "C" {
 #endif
 // Null for a short layout or a platform with a missing callback. The platform and its user outlive the handle.
 rsf_anomaly_swap* rsf_anomaly_swap_create(const rsf_anomaly_swap_layout*, const rsf_anomaly_swap_platform*);
+// Shutdown must succeed before normal unload. Destroy alone does not retire retained twins.
 void rsf_anomaly_swap_destroy(rsf_anomaly_swap*);
 const rsf_anomaly_swap_view* rsf_anomaly_swap_view_of(const rsf_anomaly_swap*);
 void rsf_anomaly_swap_set_enabled(rsf_anomaly_swap*, bool enabled);

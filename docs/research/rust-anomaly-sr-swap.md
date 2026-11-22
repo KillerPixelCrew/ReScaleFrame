@@ -99,3 +99,43 @@ module name through `GetModuleHandleW`.
 No device fixture, visible window or game ran on this revision. The fixed
 sun-cascade path still needs a game frame that refuses inside
 `render_sun_cascades`, which the normal path does not produce.
+
+## N07 residual source checkpoint
+
+Base commit `8df04a40`. This pass follows the pinned Standard and AVX
+profile, S-B seam and render history in the [Anomaly SR seam research](anomaly-sr-seam.md)
+and the [N06 stage checkpoint](rust-anomaly-sr-stage.md). The profile file,
+shader tree and temporal reference tree have Git object IDs
+`82c08110670d05f95f58d404dc6ad1e445033453`,
+`c0df39d77fcd9c5b12f12b23089b2fff36cda40f` and
+`7ad34176e364d3d9650299bc75924488b87f4cd7` respectively.
+
+| Path | Source disposition |
+| --- | --- |
+| `games/anomaly/src/sr_swap.cpp`, `sr_swap.h`, `sr_swap_platform.h` | The native controller still checks the profile layout and passes guarded memory, engine calls and twin leases through the existing private ABI. The Rust owner checks completion before reporting successful restoration or authorizing release. The production scoped seam still enters from N06. |
+| `games/anomaly/src/sr_swap.rs`, `sr_swap/tests.rs`, `tests/anomaly_sr_swap.cpp` | Read back restored matrix bytes, sampler bias and cache spans. An incomplete return leaves the affected state and twin lease pending across H1 and quiesce. The first-person pair is retried while rmNear still owns it, and an unresolved rollback forces spatial recovery. Fixtures cover persistent target, global, cache, camera and sampler failures, then cleanup retries. |
+| `games/anomaly/src/sr_jitter.h`, `tests/anomaly_sr_jitter.cpp`, `tests/anomaly_sr_jitter_fixture.rs`, `tests/anomaly_sr_jitter_reference.h` | Seven numerical cases now run in Rust through the production helpers and existing math ABI. The runner keeps the same case names and unknown-selection status. The independent transpose, jitter and Fmatrix oracle lives with the native fixtures. |
+| `games/anomaly/src/sr_temporal.cpp`, `sr_temporal.h`, `sr_temporal.rs` | The guarded adapter call reads the Runtime's borrowed D3D11 texture descriptor in typed Rust. The output-format result still uses zero for an unavailable texture. The Runtime table, temporal driver API, negotiation and settings are preserved. The native facade still adapts C++ callers and catches C++ log exceptions. |
+| `games/anomaly/src/sr_tonemap.h`, `sr_tonemap.rs` | The existing adapter for the Rust low-tonemap and UNORM8 reference remains the colour oracle for round-trip and temporal fixture checks. The device reads still inspect the same format and shader outputs. |
+| `tests/anomaly_sr_jitter_device.cpp`, `tests/anomaly_sr_temporal_device.cpp`, `tests/anomaly_sr_readback.h`, `games/anomaly/src/sr_fixture_readback.rs` | The two D3D11 fixtures share typed Rust staging creation, resource copy, map, row copy and unmap. The jitter case reuses its existing staging texture. Native fixture setup, shader bindings, debug checks, vendor selection, numerical comparisons and skip codes remain in their original drivers. |
+| `tests/anomaly_temporal_tests.cpp` | The native temporal model remains independent. Its projection comparison also checks production refusal of a degenerate history extent. |
+
+The projection offset remains in render pixels with positive X right and
+positive Y down. The reference tracks a separate scope history, previous
+render dimensions and the existing motion cancellation convention. The
+retained temporal fixture compares the FP16 scene colour, R24G8 depth and
+motion validity at the existing decode, resolve and reinsertion points.
+The existing shader source and provider code set those contracts.
+
+For a closed window, the saved target, global, camera and sampler state
+remain live until verified restoration. A retry checks each outstanding
+CRT and CTexture chain before touching its saved addresses. The native
+resource destructor still retains a live twin batch if quiesce does not
+finish. No D3D11 device or game was used for this pass.
+
+Source checks used Rust 1.94.1 formatting, bindgen 0.72.1 regeneration,
+locked offline metadata for Windows x64, Git whitespace checks and a
+comparison with the pinned ABI, shader, profile and history files.
+The isolated verification Cargo cache lacked `ash`. The existing default
+Cargo cache resolved the same lockfile offline. Builds, fixture execution,
+Clippy, and Standard and AVX game validation remain open.

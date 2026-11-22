@@ -957,16 +957,24 @@ extern "C" fn rsf_anomaly_sr_running(driver: &Driver) -> bool {
     driver.published().status.running
 }
 
+#[cfg(windows)]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_output_texture(driver: &Driver) -> Raw {
-    // This borrowed texture is used under the Stage render guard before another table call.
+unsafe extern "C" fn rsf_anomaly_sr_output_format(driver: &Driver) -> u32 {
+    use windows::Win32::Graphics::Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Texture2D};
+    use windows::core::Interface;
+
+    // The render guard keeps the Runtime's borrowed texture live until GetDesc returns.
     let render = unsafe { &*driver.render.get() };
-    match render.api {
-        Some(api) if !render.device.is_null() => unsafe {
-            api.output_texture.expect("validated SR output texture")()
-        },
-        _ => null_mut(),
-    }
+    let Some(api) = render.api.filter(|_| !render.device.is_null()) else {
+        return 0;
+    };
+    let raw = unsafe { api.output_texture.expect("validated SR output texture")() };
+    let Some(texture) = (unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }) else {
+        return 0;
+    };
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { texture.GetDesc(&mut desc) };
+    desc.Format.0 as u32
 }
 
 #[unsafe(no_mangle)]

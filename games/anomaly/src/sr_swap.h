@@ -148,8 +148,8 @@ public:
     // it jitters a freshly built first-person projection once.
     void rm_near() noexcept;
     // Around CRender::render_sun_cascades: fit shadows to the saved main camera, then restore the exact jittered pair
-    // and upload it through set_P. The token is true only when begin suspended jitter; pass it once to end. A refusal
-    // closes the window and returns the engine to output size.
+    // and upload it through set_P. The token is true only when begin suspended jitter; pass it once to end.
+    // On refusal keep the rendered twins and reduced viewport for spatial recovery at the seam.
     bool sun_cascades_begin() noexcept;
     void sun_cascades_end(bool suspended) noexcept;
     // After the engine binder uploads stock values, correct its constant for the jittered G-buffer camera.
@@ -159,7 +159,7 @@ public:
     bool mip_bias_applied() const noexcept { return view_->mip_bias_applied; }
     float window_mip_bias() const noexcept { return view_->window_mip_bias; }
     float saved_mip_bias() const noexcept { return view_->saved_mip_bias; }
-    // Restore if open, then drop the twins. Safe at any time on the render thread.
+    // Restore open or pending engine state. False retains the twins and allows a later quiesce retry.
     bool shutdown() noexcept;
     bool window_open() const noexcept { return view_->open; }
     bool refused() const noexcept { return view_->refusal != nullptr; }

@@ -2,7 +2,7 @@
 #include "games/anomaly/temporal/math.h"
 #include "games/anomaly/temporal/history.h"
 #include "games/anomaly/temporal/frame_plan.h"
-#include "games/anomaly/src/sr_jitter.h"
+#include "anomaly_sr_jitter_reference.h"
 #include <cmath>
 #include <limits>
 
@@ -70,6 +70,9 @@ TEST(matrix_motion)
     require(reference && projection, "valid jitter rejected");
     const auto column = rsf::anomaly::sr::to_column(*projection);
     require(column == *reference, "production projection disagreed with the temporal model");
+    require(!rsf::anomaly::sr::production_jitter_projection(
+        rsf::anomaly::sr::from_column(Mat4::identity()), 0.25f, -0.5f, 1, render.height),
+        "production projection accepted a degenerate history extent");
     const auto clip = transform(column, {0, 0, 0.5, 1});
     require(clip.has_value(), "jitter projection failed");
     const auto stable = pixel_motion_from_jittered(*clip, {0, 0, 0.5, 1}, render, jitter, {});

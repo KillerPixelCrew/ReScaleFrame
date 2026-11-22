@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "sr_temporal.h"
-#include <d3d11.h>
 
 namespace rsf::anomaly::sr {
 static_assert(backend_dlss == RSF_SR_DLSS && backend_fsr3 == RSF_SR_FSR3 &&
@@ -28,7 +27,7 @@ bool rsf_anomaly_sr_bind_table(TemporalState*, const rsf_d3d11_sr_api*, uint64_t
 void rsf_anomaly_sr_request(TemporalState*, const SrSettings*) noexcept;
 bool rsf_anomaly_sr_enabled(const TemporalState*) noexcept;
 bool rsf_anomaly_sr_running(const TemporalState*) noexcept;
-void* rsf_anomaly_sr_output_texture(const TemporalState*) noexcept;
+uint32_t rsf_anomaly_sr_output_format(const TemporalState*) noexcept;
 bool rsf_anomaly_sr_plan(const TemporalState*, uint32_t, uint32_t, uint32_t*, uint32_t*) noexcept;
 void rsf_anomaly_sr_boundary(TemporalState*, void*, uint32_t, uint32_t) noexcept;
 bool rsf_anomaly_sr_evaluate(TemporalState*, void*, rsf_anomaly_sr_pass_inputs*, const rsf_anomaly_sr_reset_facts*,
@@ -78,11 +77,7 @@ void TemporalDriver::request(const SrSettings& settings) noexcept { rsf_anomaly_
 bool TemporalDriver::enabled() const noexcept { return rsf_anomaly_sr_enabled(state_); }
 bool TemporalDriver::running() const noexcept { return rsf_anomaly_sr_running(state_); }
 uint32_t TemporalDriver::output_format() const noexcept {
-    auto* texture = static_cast<ID3D11Texture2D*>(rsf_anomaly_sr_output_texture(state_));
-    if (!texture) return 0;
-    D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
-    return desc.Format;
+    return rsf_anomaly_sr_output_format(state_);
 }
 bool TemporalDriver::planned_render(uint32_t ow, uint32_t oh, uint32_t& rw, uint32_t& rh) const noexcept {
     return rsf_anomaly_sr_plan(state_, ow, oh, &rw, &rh);
