@@ -22,7 +22,26 @@
 #define RSF_FSR4_BRIDGE_BUILD
 #endif
 #include "bridge_platform.h"
-#include "../../backends/common/sharpening.h"
+
+extern "C" int32_t rsf_core_fsr4sr_sdk_versions(PfnFfxQuery, void*, rsf_ffx_version*, uint64_t*);
+extern "C" int32_t rsf_core_fsr4sr_sdk_provider(PfnFfxQuery, ffxContext*, uint64_t*, const char**);
+extern "C" int32_t rsf_core_fsr4sr_sdk_create(PfnFfxCreateContext, ffxContext*, ffxApiHeader*, uint32_t,
+    const rsf_fsr4sr_context*);
+extern "C" int32_t rsf_core_fsr4sr_sdk_plan(PfnFfxQuery, ffxContext*, uint32_t, uint32_t, uint32_t,
+    uint32_t*, uint32_t*);
+extern "C" void rsf_core_fsr4sr_sdk_dispatch(const rsf_fsr4sr_dispatch*, void*, ffxDispatchDescUpscale*);
+
+static_assert(FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE == 0x10000 &&
+    FFX_API_DISPATCH_DESC_TYPE_UPSCALE == 0x10001 &&
+    FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE == 0x10003 &&
+    FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION == 0x1000b);
+static_assert(sizeof(ffxApiHeader) == 16 && sizeof(ffxQueryDescGetVersions) == 56 &&
+    sizeof(ffxQueryGetProviderVersion) == 32 && sizeof(ffxOverrideVersion) == 24 &&
+    sizeof(ffxCreateContextDescUpscale) == 48 && sizeof(ffxCreateContextDescUpscaleVersion) == 24 &&
+    sizeof(ffxQueryDescUpscaleGetRenderResolutionFromQualityMode) == 48 &&
+    sizeof(ffxDispatchDescUpscale) == 432 && offsetof(ffxDispatchDescUpscale, color) == 24 &&
+    offsetof(ffxDispatchDescUpscale, motionVectors) == 120 &&
+    offsetof(ffxDispatchDescUpscale, output) == 312);
 
 // owner.rs repeats these values.
 static_assert(DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R16G16_FLOAT == 34 &&
@@ -171,58 +190,27 @@ void ReleaseCompatibility(rsf_fsr4sr_native* native) { native->compatibility.res
 /// @brief Lists upscaler providers for this device, parsed by the shared FidelityFX version helper.
 /// @param count In: capacity of out (at most 32). Out: the SDK's provider count.
 int32_t Versions(rsf_fsr4sr_native* native, rsf_ffx_version* out, uint64_t* count) {
-    const uint64_t capacity = *count;
-    if (capacity > rsf::max_ffx_versions) return -1;
-    uint64_t ids[rsf::max_ffx_versions]{};
-    const char* names[rsf::max_ffx_versions]{};
-    ffxQueryDescGetVersions versions{};
-    versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-    versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-    versions.device = native->device;
-    versions.outputCount = count;
-    versions.versionIds = ids;
-    versions.versionNames = names;
-    const auto result = static_cast<int32_t>(native->query(nullptr, &versions.header));
-    if (result) return result;
-    for (uint64_t i = 0; i < *count && i < capacity; ++i) out[i] = rsf::ffx_version(ids[i], names[i]);
-    return 0;
+    return rsf_core_fsr4sr_sdk_versions(native->query, native->device, out, count);
 }
 
 /// @brief Creates the upscaler context with the provider forced through ffxOverrideVersion.
 int32_t CreateContext(rsf_fsr4sr_native* native, const rsf_fsr4sr_context* setup) {
-    ffxCreateContextDescUpscale upscale{};
-    upscale.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-    upscale.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
-    if (setup->flags & RSF_FSR4SR_DEPTH_INVERTED) upscale.flags |= FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
-    if (setup->flags & RSF_FSR4SR_DEPTH_INFINITE) upscale.flags |= FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
-    if (setup->flags & RSF_FSR4SR_MOTION_JITTERED) upscale.flags |= FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION;
-    upscale.maxRenderSize = {setup->render_width, setup->render_height};
-    upscale.maxUpscaleSize = {setup->output_width, setup->output_height};
     ffxCreateBackendDX12Desc backend{};
     backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
     backend.device = native->device;
-    ffxCreateContextDescUpscaleVersion version{};
-    version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
-    version.version = FFX_UPSCALER_VERSION;
-    ffxOverrideVersion overrideVersion{};
-    overrideVersion.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
-    overrideVersion.versionId = setup->provider;
-    upscale.header.pNext = &backend.header;
-    backend.header.pNext = &version.header;
-    version.header.pNext = &overrideVersion.header;
-    return static_cast<int32_t>(native->create(&native->effect, &upscale.header, nullptr));
+    return rsf_core_fsr4sr_sdk_create(native->create, &native->effect, &backend.header, FFX_UPSCALER_VERSION, setup);
 }
 
 /// @brief Reports the effective provider ID, its parsed display name and whether the name parsed.
 /// @details The shared parse reports family 0 both for "0.x.y" and for labels without that shape, so
 /// `parsed` carries the previous IsFsr4Name sscanf result separately.
 int32_t Provider(rsf_fsr4sr_native* native, rsf_ffx_version* out, uint32_t* parsed) {
-    ffxQueryGetProviderVersion provider{};
-    provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-    const auto result = static_cast<int32_t>(native->query(&native->effect, &provider.header));
+    uint64_t id{};
+    const char* name{};
+    const auto result = rsf_core_fsr4sr_sdk_provider(native->query, &native->effect, &id, &name);
     if (result) return result;
     bool numeric = false;
-    *out = rsf::ffx_version(provider.versionId, provider.versionName, &numeric);
+    *out = rsf::ffx_version(id, name, &numeric);
     *parsed = numeric ? 1u : 0u;
     return 0;
 }
@@ -247,12 +235,7 @@ int32_t CreateCommands(rsf_fsr4sr_native* native) {
 
 int32_t Plan(rsf_fsr4sr_native* native, uint32_t quality, uint32_t displayWidth,
     uint32_t displayHeight, uint32_t* width, uint32_t* height) {
-    if (!native->query) return -1;
-    ffxQueryDescUpscaleGetRenderResolutionFromQualityMode plan{};
-    plan.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE;
-    plan.displayWidth = displayWidth; plan.displayHeight = displayHeight;
-    plan.qualityMode = quality; plan.pOutRenderWidth = width; plan.pOutRenderHeight = height;
-    return static_cast<int32_t>(native->query(&native->effect, &plan.header));
+    return rsf_core_fsr4sr_sdk_plan(native->query, &native->effect, quality, displayWidth, displayHeight, width, height);
 }
 
 /// @brief Creates a committed shared DX12 texture and NT handle for dedicated Vulkan import.
@@ -356,24 +339,11 @@ int32_t Record(rsf_fsr4sr_native* native, const rsf_fsr4sr_dispatch* frame) {
     Transition(native->commands, output, D3D12_RESOURCE_STATE_COMMON,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ffxDispatchDescUpscale upscale{};
-    upscale.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
-    upscale.commandList = native->commands;
-    rsf_ffx_sharpening(frame->sharpness, &upscale.enableSharpening, &upscale.sharpness);
+    rsf_core_fsr4sr_sdk_dispatch(frame, native->commands, &upscale);
     upscale.color = ffxApiGetResourceDX12(color, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     upscale.depth = ffxApiGetResourceDX12(depth, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     upscale.motionVectors = ffxApiGetResourceDX12(motion, FFX_API_RESOURCE_STATE_COMPUTE_READ);
     upscale.output = ffxApiGetResourceDX12(output, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-    upscale.jitterOffset = {frame->jitter_x, frame->jitter_y};
-    upscale.motionVectorScale = {frame->motion_scale_x, frame->motion_scale_y};
-    upscale.renderSize = {frame->render_width, frame->render_height};
-    upscale.upscaleSize = {frame->output_width, frame->output_height};
-    upscale.frameTimeDelta = frame->frame_time_ms;
-    upscale.preExposure = frame->pre_exposure;
-    upscale.reset = frame->reset != 0;
-    upscale.cameraNear = frame->near_plane;
-    upscale.cameraFar = frame->far_plane;
-    upscale.cameraFovAngleVertical = frame->vertical_fov;
-    upscale.viewSpaceToMetersFactor = 1.0f;
     const auto code = static_cast<int32_t>(native->dispatch(&native->effect, &upscale.header));
     if (code != 0) {
         native->commands->Close();

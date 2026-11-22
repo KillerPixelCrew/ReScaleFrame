@@ -23,6 +23,9 @@ use bridge_abi::{
 #[path = "completion.rs"]
 mod completion;
 use completion::next_local_completion;
+#[cfg(windows)]
+#[path = "sdk.rs"]
+mod sdk;
 #[path = "../timeline_pair.rs"]
 mod timeline_pair;
 
