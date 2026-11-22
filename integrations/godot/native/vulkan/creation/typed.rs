@@ -2,7 +2,9 @@
 //! The loader's typed entry points and borrowed device negotiation operations.
 
 use super::VK_ERROR_INITIALIZATION_FAILED;
-use super::abi::*;
+use crate::sys::*;
+use crate::vulkan::handle;
+use ash::vk::{self, Handle};
 use crate::platform::vulkan_negotiation::{
     VK_XESS_ENABLED_FEATURES, VK_XESS_FEATURES2, VK_XESS_FLOAT16_INT8, VK_XESS_INTEGER_DOT_PRODUCT,
     VK_XESS_SCALAR_BLOCK_LAYOUT,
@@ -82,49 +84,49 @@ pub(crate) unsafe fn bind_requirements(table: *const Requirements) -> bool {
 
 #[derive(Default)]
 struct InstanceRecord {
-    app: VkApplicationInfo,
-    request: VkInstanceCreateInfo,
+    app: vk::ApplicationInfo<'static>,
+    request: vk::InstanceCreateInfo<'static>,
 }
 
 #[derive(Default)]
 struct DeviceRecord {
     xess: Chain,
     latency: Chain,
-    base: VkPhysicalDeviceFeatures2,
-    scalar: VkPhysicalDeviceScalarBlockLayoutFeatures,
-    dot: VkPhysicalDeviceShaderIntegerDotProductFeatures,
-    int8: VkPhysicalDeviceShaderFloat16Int8Features,
-    stages: [VkDeviceCreateInfo; 3],
+    base: vk::PhysicalDeviceFeatures2<'static>,
+    scalar: vk::PhysicalDeviceScalarBlockLayoutFeatures<'static>,
+    dot: vk::PhysicalDeviceShaderIntegerDotProductFeatures<'static>,
+    int8: vk::PhysicalDeviceShaderFloat16Int8Features<'static>,
+    stages: [vk::DeviceCreateInfo<'static>; 3],
 }
 
 pub(crate) fn entry(route: u32) -> Option<VkFunction> {
     // The loader uses PFN_vkVoidFunction as the transport for named entry points on Win64.
     unsafe {
         match route {
-            VK_ROUTE_CREATE_INSTANCE => std::mem::transmute::<
-                PFN_vkCreateInstance,
-                std::option::Option<unsafe extern "C" fn()>,
-            >(Some(create_instance)),
-            VK_ROUTE_CREATE_DEVICE => std::mem::transmute::<
-                PFN_vkCreateDevice,
-                std::option::Option<unsafe extern "C" fn()>,
-            >(Some(create_device)),
-            VK_ROUTE_DESTROY_DEVICE => std::mem::transmute::<
-                PFN_vkDestroyDevice,
-                std::option::Option<unsafe extern "C" fn()>,
-            >(Some(destroy_device)),
+            VK_ROUTE_CREATE_INSTANCE => Some(std::mem::transmute::<
+                vk::PFN_vkCreateInstance,
+                VkFunction,
+            >(create_instance)),
+            VK_ROUTE_CREATE_DEVICE => Some(std::mem::transmute::<
+                vk::PFN_vkCreateDevice,
+                VkFunction,
+            >(create_device)),
+            VK_ROUTE_DESTROY_DEVICE => Some(std::mem::transmute::<
+                vk::PFN_vkDestroyDevice,
+                VkFunction,
+            >(destroy_device)),
             _ => None,
         }
     }
 }
 
-unsafe extern "C" fn create_instance(
-    info: *const VkInstanceCreateInfo,
-    allocator: *const VkAllocationCallbacks,
-    output: *mut VkInstance,
-) -> VkResult {
+unsafe extern "system" fn create_instance(
+    info: *const vk::InstanceCreateInfo<'_>,
+    allocator: *const vk::AllocationCallbacks<'_>,
+    output: *mut vk::Instance,
+) -> vk::Result {
     let Some(info) = (unsafe { info.as_ref() }) else {
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return vk::Result::from_raw(VK_ERROR_INITIALIZATION_FAILED);
     };
     let mut record = InstanceRecord::default();
     let call = VkInstanceCall {
@@ -132,47 +134,55 @@ unsafe extern "C" fn create_instance(
         request: ptr::from_ref(info).cast(),
         allocator: allocator.cast(),
         output: output.cast(),
-        extensions: info.ppEnabledExtensionNames,
-        extension_count: info.enabledExtensionCount,
+        extensions: info.pp_enabled_extension_names,
+        extension_count: info.enabled_extension_count,
         reserved: 0,
     };
-    crate::CONTROL
-        .vulkan
-        .creation()
-        .create_instance(&LEAVES, &call)
+    vk::Result::from_raw(
+        crate::CONTROL
+            .vulkan
+            .creation()
+            .create_instance(&LEAVES, &call),
+    )
 }
 
-unsafe extern "C" fn create_device(
-    physical: VkPhysicalDevice,
-    info: *const VkDeviceCreateInfo,
-    allocator: *const VkAllocationCallbacks,
-    output: *mut VkDevice,
-) -> VkResult {
+unsafe extern "system" fn create_device(
+    physical: vk::PhysicalDevice,
+    info: *const vk::DeviceCreateInfo<'_>,
+    allocator: *const vk::AllocationCallbacks<'_>,
+    output: *mut vk::Device,
+) -> vk::Result {
     let Some(info) = (unsafe { info.as_ref() }) else {
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return vk::Result::from_raw(VK_ERROR_INITIALIZATION_FAILED);
     };
     let mut record = DeviceRecord::default();
     let call = VkDeviceCall {
         call: (&raw mut record).cast(),
-        physical_device: physical.cast(),
+        physical_device: ptr::without_provenance_mut(physical.as_raw() as usize),
         request: ptr::from_ref(info).cast(),
         allocator: allocator.cast(),
         output: output.cast(),
-        extensions: info.ppEnabledExtensionNames,
-        extension_count: info.enabledExtensionCount,
+        extensions: info.pp_enabled_extension_names,
+        extension_count: info.enabled_extension_count,
         reserved: 0,
     };
-    crate::CONTROL
-        .vulkan
-        .creation()
-        .create_device(&LEAVES, &call)
+    vk::Result::from_raw(
+        crate::CONTROL
+            .vulkan
+            .creation()
+            .create_device(&LEAVES, &call),
+    )
 }
 
-unsafe extern "C" fn destroy_device(device: VkDevice, allocator: *const VkAllocationCallbacks) {
-    crate::CONTROL
-        .vulkan
-        .creation()
-        .destroy_device(&LEAVES, device.cast(), allocator.cast());
+unsafe extern "system" fn destroy_device(
+    device: vk::Device,
+    allocator: *const vk::AllocationCallbacks<'_>,
+) {
+    crate::CONTROL.vulkan.creation().destroy_device(
+        &LEAVES,
+        ptr::without_provenance_mut(device.as_raw() as usize),
+        allocator.cast(),
+    );
 }
 
 unsafe extern "C" fn xess_instance(
@@ -193,20 +203,15 @@ unsafe extern "C" fn derive_instance(
     count: u32,
 ) -> *const c_void {
     let record = unsafe { &mut *call.cast::<InstanceRecord>() };
-    let info = unsafe { *base.cast::<VkInstanceCreateInfo>() };
-    record.app = unsafe { info.pApplicationInfo.as_ref() }
+    let mut request = unsafe { *base.cast::<vk::InstanceCreateInfo<'static>>() };
+    record.app = unsafe { request.p_application_info.as_ref() }
         .copied()
-        .unwrap_or(VkApplicationInfo {
-            sType: TAG_APPLICATION_INFO,
-            ..VkApplicationInfo::default()
-        });
-    record.app.apiVersion = record.app.apiVersion.max(minimum);
-    record.request = VkInstanceCreateInfo {
-        pApplicationInfo: &raw const record.app,
-        enabledExtensionCount: count,
-        ppEnabledExtensionNames: extensions,
-        ..info
-    };
+        .unwrap_or_default();
+    record.app.api_version = record.app.api_version.max(minimum);
+    request.p_application_info = &raw const record.app;
+    request.enabled_extension_count = count;
+    request.pp_enabled_extension_names = extensions;
+    record.request = request;
     (&raw const record.request).cast()
 }
 
@@ -216,14 +221,8 @@ unsafe extern "C" fn call_create_instance(
     allocator: *const c_void,
     output: *mut c_void,
 ) -> i32 {
-    let create = unsafe {
-        std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, PFN_vkCreateInstance>(
-            Some(create),
-        )
-    };
-    unsafe {
-        create.expect("resolved vkCreateInstance")(info.cast(), allocator.cast(), output.cast())
-    }
+    let create = unsafe { std::mem::transmute::<VkFunction, vk::PFN_vkCreateInstance>(create) };
+    unsafe { create(info.cast(), allocator.cast(), output.cast()) }.as_raw()
 }
 
 unsafe extern "C" fn xess_features(
@@ -233,44 +232,29 @@ unsafe extern "C" fn xess_features(
     out: *mut *mut c_void,
 ) -> u32 {
     let record = unsafe { &mut *call.cast::<DeviceRecord>() };
-    let info = unsafe { &*request.cast::<VkDeviceCreateInfo>() };
+    let info = unsafe { &*request.cast::<vk::DeviceCreateInfo<'static>>() };
     unsafe { out.write(ptr::null_mut()) };
     record.xess = Chain::default();
-    let mut chain = match unsafe { Chain::copy(info.pNext.cast()) } {
+    let mut chain = match unsafe { Chain::copy(info.p_next.cast()) } {
         Ok(Some(chain)) => chain,
         Ok(None) => return 1,
         Err(()) => return 0,
     };
 
-    record.base = VkPhysicalDeviceFeatures2 {
-        sType: TAG_PHYSICAL_DEVICE_FEATURES_2,
-        ..Default::default()
-    };
-    if flags & VK_XESS_ENABLED_FEATURES != 0 && !info.pEnabledFeatures.is_null() {
-        record.base.features = unsafe { *info.pEnabledFeatures };
+    // The record's nodes are default-initialized with their structure types.
+    if flags & VK_XESS_ENABLED_FEATURES != 0 && !info.p_enabled_features.is_null() {
+        record.base.features = unsafe { *info.p_enabled_features };
         unsafe { chain.prepend((&raw mut record.base).cast()) };
     } else if flags & VK_XESS_FEATURES2 != 0 {
         unsafe { chain.prepend((&raw mut record.base).cast()) };
     }
     if flags & VK_XESS_FLOAT16_INT8 != 0 {
-        record.int8 = VkPhysicalDeviceShaderFloat16Int8Features {
-            sType: TAG_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
-            ..Default::default()
-        };
         unsafe { chain.prepend((&raw mut record.int8).cast()) };
     }
     if flags & VK_XESS_SCALAR_BLOCK_LAYOUT != 0 {
-        record.scalar = VkPhysicalDeviceScalarBlockLayoutFeatures {
-            sType: TAG_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES,
-            ..Default::default()
-        };
         unsafe { chain.prepend((&raw mut record.scalar).cast()) };
     }
     if flags & VK_XESS_INTEGER_DOT_PRODUCT != 0 {
-        record.dot = VkPhysicalDeviceShaderIntegerDotProductFeatures {
-            sType: TAG_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES,
-            ..Default::default()
-        };
         unsafe { chain.prepend((&raw mut record.dot).cast()) };
     }
     unsafe { chain.feature_root_first() };
@@ -298,14 +282,11 @@ unsafe extern "C" fn device_extensions(
     count: u32,
 ) -> u32 {
     let enumerate = unsafe {
-        std::mem::transmute::<
-            std::option::Option<unsafe extern "C" fn()>,
-            PFN_vkEnumerateDeviceExtensionProperties,
-        >(Some(enumerate))
-    }
-    .expect("resolved vkEnumerateDeviceExtensionProperties");
+        std::mem::transmute::<VkFunction, vk::PFN_vkEnumerateDeviceExtensionProperties>(enumerate)
+    };
+    let physical = handle::<vk::PhysicalDevice>(physical);
     let mut n = 0;
-    if unsafe { enumerate(physical.cast(), ptr::null(), &mut n, ptr::null_mut()) } != VK_SUCCESS
+    if unsafe { enumerate(physical, ptr::null(), &mut n, ptr::null_mut()) } != vk::Result::SUCCESS
         || n > MAX_EXTENSIONS
     {
         return 0;
@@ -315,13 +296,13 @@ unsafe extern "C" fn device_extensions(
     if available.try_reserve_exact(n as usize).is_err() {
         return 0;
     }
-    available.resize(n as usize, VkExtensionProperties::default());
+    available.resize(n as usize, vk::ExtensionProperties::default());
     let entries = if n == 0 {
         ptr::null_mut()
     } else {
         available.as_mut_ptr()
     };
-    if unsafe { enumerate(physical.cast(), ptr::null(), &mut n, entries) } != VK_SUCCESS
+    if unsafe { enumerate(physical, ptr::null(), &mut n, entries) } != vk::Result::SUCCESS
         || n as usize > available.len()
     {
         return 0;
@@ -331,8 +312,7 @@ unsafe extern "C" fn device_extensions(
     u32::from(names.iter().all(|&name| {
         !name.is_null()
             && available.iter().any(|entry| {
-                let bytes = entry.extensionName.map(|byte| byte as u8);
-                std::ffi::CStr::from_bytes_until_nul(&bytes).ok()
+                entry.extension_name_as_c_str().ok()
                     == Some(unsafe { std::ffi::CStr::from_ptr(name) })
             })
     }))
@@ -346,7 +326,7 @@ unsafe extern "C" fn latency_requirements(
     request: *const c_void,
     out: *mut VkLatencyRequirements,
 ) -> u32 {
-    let info = unsafe { &*request.cast::<VkDeviceCreateInfo>() };
+    let info = unsafe { &*request.cast::<vk::DeviceCreateInfo<'static>>() };
     let latency = unsafe { &mut (*call.cast::<DeviceRecord>()).latency };
     unsafe {
         out.write(VkLatencyRequirements {
@@ -360,7 +340,7 @@ unsafe extern "C" fn latency_requirements(
     let Some(ops) = REQUIREMENTS.get() else {
         return 1;
     };
-    *latency = match unsafe { Chain::copy(info.pNext.cast()) } {
+    *latency = match unsafe { Chain::copy(info.p_next.cast()) } {
         Ok(Some(chain)) => chain,
         Ok(None) => return 1,
         Err(()) => return 0,
@@ -396,20 +376,20 @@ unsafe extern "C" fn derive_device(
     derive: *const VkDeviceDerive,
 ) -> *const c_void {
     let derive = unsafe { &*derive };
-    let mut request = unsafe { *derive.base.cast::<VkDeviceCreateInfo>() };
+    let mut request = unsafe { *derive.base.cast::<vk::DeviceCreateInfo<'static>>() };
     if derive.replace_next != 0 {
-        request.pNext = derive.next;
+        request.p_next = derive.next;
     }
     if derive.clear_enabled_features != 0 {
-        request.pEnabledFeatures = ptr::null();
+        request.p_enabled_features = ptr::null();
     }
-    request.enabledExtensionCount = derive.extension_count;
-    request.ppEnabledExtensionNames = derive.extensions;
+    request.enabled_extension_count = derive.extension_count;
+    request.pp_enabled_extension_names = derive.extensions;
     let stages = unsafe { &raw mut (*call.cast::<DeviceRecord>()).stages };
     if stage >= 3 {
         return ptr::null();
     }
-    let slot = unsafe { stages.cast::<VkDeviceCreateInfo>().add(stage as usize) };
+    let slot = unsafe { stages.cast::<vk::DeviceCreateInfo<'static>>().add(stage as usize) };
     unsafe { slot.write(request) };
     slot.cast()
 }
@@ -421,19 +401,16 @@ unsafe extern "C" fn call_create_device(
     allocator: *const c_void,
     output: *mut c_void,
 ) -> i32 {
-    let create = unsafe {
-        std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, PFN_vkCreateDevice>(
-            Some(create),
-        )
-    };
+    let create = unsafe { std::mem::transmute::<VkFunction, vk::PFN_vkCreateDevice>(create) };
     unsafe {
-        create.expect("resolved vkCreateDevice")(
-            physical.cast(),
+        create(
+            handle(physical),
             request.cast(),
             allocator.cast(),
             output.cast(),
         )
     }
+    .as_raw()
 }
 
 unsafe extern "C" fn latency_created(
@@ -468,12 +445,8 @@ unsafe extern "C" fn call_destroy_device(
     device: *mut c_void,
     allocator: *const c_void,
 ) {
-    let destroy = unsafe {
-        std::mem::transmute::<std::option::Option<unsafe extern "C" fn()>, PFN_vkDestroyDevice>(
-            Some(destroy),
-        )
-    };
-    unsafe { destroy.expect("resolved vkDestroyDevice")(device.cast(), allocator.cast()) };
+    let destroy = unsafe { std::mem::transmute::<VkFunction, vk::PFN_vkDestroyDevice>(destroy) };
+    unsafe { destroy(handle(device), allocator.cast()) };
 }
 
 unsafe extern "C" fn adapter(
@@ -482,20 +455,15 @@ unsafe extern "C" fn adapter(
     out: *mut VkAdapter,
 ) -> u32 {
     let properties = unsafe {
-        std::mem::transmute::<
-            std::option::Option<unsafe extern "C" fn()>,
-            PFN_vkGetPhysicalDeviceProperties,
-        >(Some(function))
+        std::mem::transmute::<VkFunction, vk::PFN_vkGetPhysicalDeviceProperties>(function)
     };
-    let mut value = VkPhysicalDeviceProperties::default();
-    unsafe {
-        properties.expect("resolved vkGetPhysicalDeviceProperties")(physical.cast(), &mut value)
-    };
+    let mut value = vk::PhysicalDeviceProperties::default();
+    unsafe { properties(handle(physical), &mut value) };
     unsafe {
         out.write(VkAdapter {
-            vendor: value.vendorID,
-            device: value.deviceID,
-            software: u32::from(value.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU),
+            vendor: value.vendor_id,
+            device: value.device_id,
+            software: u32::from(value.device_type == vk::PhysicalDeviceType::CPU),
             reserved: 0,
         })
     };

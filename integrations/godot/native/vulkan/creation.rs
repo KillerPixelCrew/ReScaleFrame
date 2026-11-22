@@ -10,6 +10,7 @@ use crate::platform::{
     VK_ROUTE_DEVICE_PROC, VK_ROUTE_FORWARD, VK_ROUTE_NONE, VK_SCOPE_DEVICE, VkAdapter,
     VkCreationLeaves, VkDeviceCall, VkFunction, VkInstanceCall, VkProc,
 };
+use ash::vk;
 use rsf_game_sys::rsf_game_log_fn;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -17,11 +18,11 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-const VK_SUCCESS: i32 = 0;
-const VK_ERROR_OUT_OF_HOST_MEMORY: i32 = -1;
-const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
-const VK_ERROR_EXTENSION_NOT_PRESENT: i32 = -7;
-const VK_ERROR_INCOMPATIBLE_DRIVER: i32 = -9;
+const VK_SUCCESS: i32 = vk::Result::SUCCESS.as_raw();
+const VK_ERROR_OUT_OF_HOST_MEMORY: i32 = vk::Result::ERROR_OUT_OF_HOST_MEMORY.as_raw();
+const VK_ERROR_INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
+const VK_ERROR_EXTENSION_NOT_PRESENT: i32 = vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
+const VK_ERROR_INCOMPATIBLE_DRIVER: i32 = vk::Result::ERROR_INCOMPATIBLE_DRIVER.as_raw();
 
 #[derive(Clone, Copy)]
 struct Binding {
@@ -355,5 +356,4 @@ impl Creation {
 #[cfg(test)]
 mod tests;
 
-pub(crate) mod abi;
 pub(crate) mod typed;

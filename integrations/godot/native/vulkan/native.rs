@@ -3,11 +3,12 @@
 //! engine objects. Runtime capture callbacks from nested SDK WSI bypass the
 //! bridge while that guard is held.
 
-use super::creation::abi::{self, *};
+use crate::vulkan::handle;
+use ash::vk;
 use super::{BACKEND_ERROR_NOT_READY, BACKEND_ERROR_NOT_SUPPORTED, BACKEND_OK};
 use crate::host::native_platform as platform;
 use crate::platform::*;
-use crate::sys::{rsf_godot_vk_features, rsf_godot_vk_native_features};
+use crate::sys::*;
 use crate::{CONTROL, rsf_godot_vk_creation_resolver};
 use rsf_game_sys::ffi_util::ascii_wide;
 use rsf_game_sys::win32::typed_export;
@@ -27,7 +28,7 @@ mod linked;
 type Handle = *mut c_void;
 const INVALID: i32 = -1;
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x800;
-const VK_INIT_FAILED: i32 = -3;
+const VK_INIT_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
 const SHADER_READ: u32 = 5;
 const TRANSFER_DST: u32 = 7;
 const PRESENT_LAYOUT: u32 = 1_000_001_002;
@@ -332,13 +333,13 @@ pub(crate) unsafe extern "C" fn rsf_godot_vk_leaf_device_idle(
     let wait = proc.and_then(|get| {
         // Win64 Vulkan dispatch uses PFN_vkVoidFunction as its transport.
         unsafe {
-            std::mem::transmute::<_, PFN_vkDeviceWaitIdle>(get(
+            std::mem::transmute::<_, Option<vk::PFN_vkDeviceWaitIdle>>(get(
                 device,
                 c"vkDeviceWaitIdle".as_ptr(),
             ))
         }
     });
-    u32::from(wait.is_some_and(|wait| unsafe { wait(device.cast()) } == VK_SUCCESS))
+    u32::from(wait.is_some_and(|wait| unsafe { wait(handle(device)) } == vk::Result::SUCCESS))
 }
 
 #[unsafe(no_mangle)]
@@ -496,7 +497,7 @@ unsafe extern "C" fn rsfg_vk_acquire(
         return VK_INIT_FAILED;
     }
     if !CONTROL.vulkan.presenter_current(platform(), backend) {
-        return VK_ERROR_OUT_OF_DATE_KHR;
+        return vk::Result::ERROR_OUT_OF_DATE_KHR.as_raw();
     }
     unsafe { rsf_fgvk_acquire(owner.cast(), timeout, semaphore, fence, index) }
 }

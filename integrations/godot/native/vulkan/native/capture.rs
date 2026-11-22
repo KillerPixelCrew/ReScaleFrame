@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::vulkan::handle;
+use ash::vk::Handle as _;
 use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR};
 
-const TRANSFER_SRC: u32 = 1;
+const TRANSFER_SRC: vk::ImageUsageFlags = vk::ImageUsageFlags::TRANSFER_SRC;
 const SWAPCHAIN_IMAGES: usize = 16;
 
 unsafe extern "C" {
@@ -11,7 +13,7 @@ unsafe extern "C" {
         owner: Handle,
         device: Handle,
         proc: Option<VkProc>,
-        memory: *const VkPhysicalDeviceMemoryProperties,
+        memory: *const vk::PhysicalDeviceMemoryProperties,
     ) -> i32;
     fn rsf_core_capture_vk_wants(owner: Handle, frame: u64) -> i32;
     fn rsf_core_capture_vk_record(
@@ -34,20 +36,20 @@ unsafe extern "C" {
 
 #[derive(Default)]
 pub(super) struct Capture {
-    owner: Handle,
+    owner: *mut rsf_input_dump_vk,
     stages: Handle,
     setup: rsf_input_dump_vk_setup,
     format: u32,
     width: u32,
     height: u32,
-    usage: u32,
-    chain: VkSwapchainKHR,
+    usage: vk::ImageUsageFlags,
+    chain: vk::SwapchainKHR,
     record: Option<rsf_frame_record>,
 }
 
-pub(super) fn readable_create(setup: &rsf_fgvk_setup) -> Option<VkSwapchainCreateInfoKHR> {
+pub(super) fn readable_create(setup: &rsf_fgvk_setup) -> Option<vk::SwapchainCreateInfoKHR<'static>> {
     features().capture.create?;
-    let info = setup.create_info.cast::<VkSwapchainCreateInfoKHR>();
+    let info = setup.create_info.cast::<vk::SwapchainCreateInfoKHR<'static>>();
     if info.is_null() {
         return None;
     }
@@ -56,18 +58,20 @@ pub(super) fn readable_create(setup: &rsf_fgvk_setup) -> Option<VkSwapchainCreat
     if let Some(instance_proc) = graphics.instance_proc {
         let get = unsafe {
             std::mem::transmute::<
-                std::option::Option<unsafe extern "C" fn()>,
-                PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
+                Option<VkFunction>,
+                Option<vk::PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>,
             >(instance_proc(
                 graphics.instance,
                 c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR".as_ptr(),
             ))
         };
-        let mut caps = VkSurfaceCapabilitiesKHR::default();
-        if get.is_some_and(|get| unsafe { get(graphics.physical_device.cast(), info.surface, &mut caps) } == VK_SUCCESS)
-            && caps.supportedUsageFlags & TRANSFER_SRC != 0
+        let mut caps = vk::SurfaceCapabilitiesKHR::default();
+        if get.is_some_and(|get| unsafe {
+            get(handle(graphics.physical_device), info.surface, &mut caps)
+        } == vk::Result::SUCCESS)
+            && caps.supported_usage_flags.contains(TRANSFER_SRC)
         {
-            info.imageUsage |= TRANSFER_SRC;
+            info.image_usage |= TRANSFER_SRC;
         }
     }
     Some(info)
@@ -88,7 +92,7 @@ impl Capture {
         let Some(info) = (unsafe {
             setup
                 .create_info
-                .cast::<VkSwapchainCreateInfoKHR>()
+                .cast::<vk::SwapchainCreateInfoKHR<'static>>()
                 .as_ref()
         }) else {
             return;
@@ -108,23 +112,23 @@ impl Capture {
         if self.owner.is_null() {
             let _ = unsafe { create(&self.setup, &mut self.owner) };
         }
-        self.format = info.imageFormat as u32;
-        self.width = info.imageExtent.width;
-        self.height = info.imageExtent.height;
-        self.usage = info.imageUsage;
+        self.format = info.image_format.as_raw() as u32;
+        self.width = info.image_extent.width;
+        self.height = info.image_extent.height;
+        self.usage = info.image_usage;
         if let Some(proc) = setup.graphics.instance_proc {
             let properties = unsafe {
                 std::mem::transmute::<
-                    std::option::Option<unsafe extern "C" fn()>,
-                    PFN_vkGetPhysicalDeviceMemoryProperties,
+                    Option<VkFunction>,
+                    Option<vk::PFN_vkGetPhysicalDeviceMemoryProperties>,
                 >(proc(
                     setup.graphics.instance,
                     c"vkGetPhysicalDeviceMemoryProperties".as_ptr(),
                 ))
             };
             if let Some(properties) = properties {
-                let mut memory = VkPhysicalDeviceMemoryProperties::default();
-                unsafe { properties(setup.graphics.physical_device.cast(), &mut memory) };
+                let mut memory = vk::PhysicalDeviceMemoryProperties::default();
+                unsafe { properties(handle(setup.graphics.physical_device), &mut memory) };
                 if self.stages.is_null() {
                     self.stages = unsafe { rsf_core_capture_vk_create(0) };
                 }
@@ -162,7 +166,7 @@ impl Capture {
             unsafe { rsf_core_capture_vk_discard_all(self.stages) };
         }
         self.owner = ptr::null_mut();
-        self.chain = ptr::null_mut();
+        self.chain = vk::SwapchainKHR::null();
         self.record = None;
         self.setup = rsf_input_dump_vk_setup::default();
         BACKEND_OK
@@ -259,16 +263,16 @@ impl Capture {
             return false;
         }
 
-        let info = unsafe { &*info.cast::<VkPresentInfoKHR>() };
-        if info.swapchainCount != 1 || info.pSwapchains.is_null() || info.pImageIndices.is_null() {
+        let info = unsafe { &*info.cast::<vk::PresentInfoKHR<'_>>() };
+        if info.swapchain_count != 1 || info.p_swapchains.is_null() || info.p_image_indices.is_null() {
             return false;
         }
-        let chain = unsafe { *info.pSwapchains };
-        if owner.is_null() && !self.chain.is_null() && self.chain != chain {
+        let chain = unsafe { *info.p_swapchains };
+        if owner.is_null() && self.chain != vk::SwapchainKHR::null() && self.chain != chain {
             return false;
         }
         self.chain = chain;
-        let index = unsafe { *info.pImageIndices } as usize;
+        let index = unsafe { *info.p_image_indices } as usize;
         let Some((value, layout)) = self.present_image(owner, index) else {
             return false;
         };
@@ -279,7 +283,7 @@ impl Capture {
             width: self.width,
             height: self.height,
             layout,
-            copy_source: u32::from(self.usage & TRANSFER_SRC != 0),
+            copy_source: u32::from(self.usage.contains(TRANSFER_SRC)),
         };
         unsafe { snapshot(self.owner, &record, &image, c"final_color".as_ptr()) != BACKEND_OK }
     }
@@ -306,25 +310,25 @@ impl Capture {
             let proc = self.setup.graphics.device_proc?;
             let device = self.setup.graphics.device;
             let get = unsafe {
-                std::mem::transmute::<
-                    std::option::Option<unsafe extern "C" fn()>,
-                    PFN_vkGetSwapchainImagesKHR,
-                >(proc(device, c"vkGetSwapchainImagesKHR".as_ptr()))
+                std::mem::transmute::<Option<VkFunction>, Option<vk::PFN_vkGetSwapchainImagesKHR>>(proc(
+                    device,
+                    c"vkGetSwapchainImagesKHR".as_ptr(),
+                ))
             }?;
-            if unsafe { get(device.cast(), self.chain, &mut count, ptr::null_mut()) } != VK_SUCCESS
+            if unsafe { get(handle(device), self.chain, &mut count, ptr::null_mut()) } != vk::Result::SUCCESS
                 || count == 0
                 || count as usize > SWAPCHAIN_IMAGES
             {
                 return None;
             }
-            let mut images: [VkImage; SWAPCHAIN_IMAGES] = [ptr::null_mut(); SWAPCHAIN_IMAGES];
-            if unsafe { get(device.cast(), self.chain, &mut count, images.as_mut_ptr()) }
-                != VK_SUCCESS
+            let mut images = [vk::Image::null(); SWAPCHAIN_IMAGES];
+            if unsafe { get(handle(device), self.chain, &mut count, images.as_mut_ptr()) }
+                != vk::Result::SUCCESS
                 || index >= count as usize
             {
                 return None;
             }
-            images.get(index)?.addr() as u64
+            images.get(index)?.as_raw()
         };
         Some((value, layout))
     }

@@ -3,7 +3,7 @@
 //! provider policy live in the Runtime archive, which also links into non-Vulkan
 //! targets and therefore cannot unconditionally reference these native symbols.
 
-use super::abi::*;
+use crate::sys::*;
 use std::ffi::{c_char, c_void};
 
 type Handle = *mut c_void;

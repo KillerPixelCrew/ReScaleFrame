@@ -31,6 +31,11 @@ const SCREEN_FLIGHT: u32 = 4;
 /// The first registered window message; the PCL ping message is one when Streamline bound it.
 const REGISTERED_MESSAGE: u32 = 0xc000;
 /// `RSF_GODOT_VK_SR_*`: how an SR pass was counted.
+/// A Vulkan handle from the pointer-sized word the leaf records carry.
+pub(crate) fn handle<H: ash::vk::Handle>(pointer: *mut c_void) -> H {
+    H::from_raw(pointer.addr() as u64)
+}
+
 pub(crate) const SR_EVALUATED: u32 = 1;
 pub(crate) const SR_REFUSED: u32 = 2;
 

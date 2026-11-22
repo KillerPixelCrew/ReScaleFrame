@@ -14,6 +14,7 @@ path = "native/lib.rs"
 crate-type = ["staticlib"]
 
 [dependencies]
+ash = { workspace = true }
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]

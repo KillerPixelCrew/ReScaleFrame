@@ -104,7 +104,7 @@ unsafe extern "C" fn rsfg_vk_execution(pass: *const rsf_game_render_pass, begin:
 }
 
 struct PresentCall {
-    callback: crate::vulkan::creation::abi::rsf_vk_function,
+    callback: Option<crate::platform::VkFunction>,
     queue: Handle,
     info: *const c_void,
 }
@@ -122,7 +122,7 @@ unsafe extern "C" fn rsfg_vk_native_present(
 ) -> i32 {
     // The engine supplies the native function address in a uint64_t wire field (Windows x64).
     let callback = unsafe {
-        std::mem::transmute::<u64, crate::vulkan::creation::abi::rsf_vk_function>(callback)
+        std::mem::transmute::<u64, Option<crate::platform::VkFunction>>(callback)
     };
     let mut call = PresentCall {
         callback,
