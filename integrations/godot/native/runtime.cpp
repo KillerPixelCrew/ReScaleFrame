@@ -397,6 +397,17 @@ extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
     capture_native_primary_present = begin != 0;
     return 1;
 }
+extern "C" int rsfg_vk_execution(const rsf_game_render_pass* pass, uint32_t begin) try {
+    if (!rsf::godot_vk::booted() || !pass || pass->struct_size < sizeof(*pass)) return 0;
+    if (pass->role == RSF_GAME_RENDER_FRAME) {
+        rsf::godot_vk::render_begin(pass->source_frame_id, true);
+        return 1;
+    }
+    const int admitted = rsf_godot_execution(pass, begin);
+    if (admitted && pass->role == RSF_GAME_RENDER_PRESENT) capture_native_primary_present = begin != 0;
+    return admitted;
+} catch (...) { return 0; }
+
 extern "C" int32_t rsfg_vk_native_present(uint64_t callback, void* owning_queue, const void* info) {
     struct Lease { uint64_t callback; void* queue; const void* info; } lease{callback, owning_queue, info};
     if (capture_native_primary_present) rsf::godot_vk::capture_present(info, 0, 1);

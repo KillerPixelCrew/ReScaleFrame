@@ -651,6 +651,7 @@ int rsf_godot_accept_window(const rsf_godot_platform* platform, void* window);
    and input session. */
 void rsf_godot_window_release(const rsf_godot_platform* platform);
 /* rsfg_vk_present_marker: nonzero when the admitted window's marker was reported. */
+int rsf_godot_execution(const rsf_game_render_pass* pass, uint32_t begin);
 int rsf_godot_vk_present_marker(const rsf_godot_platform* platform, uint64_t window, uint32_t begin);
 
 /* Extension control (runtime_control.cpp). */

@@ -2,6 +2,8 @@
 #include "drivers/vulkan/rendering_device_driver_vulkan.h"
 #include "rsf_godot_engine.h"
 #include "api.h"
+#include "frame.h"
+#include "host.h"
 #include "core/os/os.h"
 #include "core/string/print_string.h"
 
@@ -13,6 +15,34 @@ struct MixedPresentCalls {
 static_assert(VK_ERROR_FEATURE_NOT_PRESENT == -8);
 extern "C" int32_t rsf_godot_present_mixed(const MixedPresentCalls *calls, void *context,
         uint32_t count, uint32_t has_extensions, uint32_t submitted);
+}
+
+namespace {
+thread_local RSFGodot::VulkanExecutionScope *execution_scope = nullptr;
+}
+
+RSFGodot::VulkanExecutionScope::VulkanExecutionScope(uint64_t queue_id, uint64_t fence_id, bool eligible) :
+        previous(execution_scope), queue(queue_id), fence(fence_id) {
+    execution_scope = this;
+    if (eligible && fence && vk_execution_supported()) {
+        rsf_godot_render_frame frame{};
+        rsf_godot_render_frame_read(&frame);
+        session = rsf_godot_host_session();
+        source = frame.source_frame_id;
+    }
+}
+RSFGodot::VulkanExecutionScope::~VulkanExecutionScope() { execution_scope = previous; }
+
+void RSFGodot::VulkanExecutionScope::submit(uint64_t queue, uint64_t fence, bool begin) {
+    auto *scope = execution_scope;
+    if (!scope || !scope->session || !scope->source || scope->queue != queue || scope->fence != fence) return;
+    scope->submitted = !begin;
+    vk_execution(RSF_GAME_RENDER_SUBMISSION, scope->session, scope->source, 0, begin);
+}
+bool RSFGodot::VulkanExecutionScope::present(uint64_t window, bool begin) {
+    if (!vk_execution_supported()) return vk_present_marker(window, begin);
+    const auto *scope = execution_scope;
+    return scope && scope->submitted && vk_execution(RSF_GAME_RENDER_PRESENT, scope->session, scope->source, window, begin);
 }
 
 int32_t RenderingDeviceDriverVulkan::rescaleframe_submit(void *user, uint32_t count, const void *submits, uint64_t fence) {
@@ -95,20 +125,24 @@ VkResult RenderingDeviceDriverVulkan::rescaleframe_acquire(void *opaque_chain, u
     }, &lease));
 }
 VkResult RenderingDeviceDriverVulkan::rescaleframe_present(CommandQueueID queue_id, const VkPresentInfoKHR *info, VectorView<SwapChainID> chains, bool submitted) {
-    // PCL belongs to the root window, independently of the active WSI/FG owner.
     struct PresentScope {
         uint64_t window = 0;
-        ~PresentScope() { if (window) RSFGodot::vk_present_marker(window, 0); }
-    } scope;
-    for (uint32_t i = 0; i < chains.size(); ++i) {
-        const auto *chain = reinterpret_cast<SwapChain *>(chains[i].id);
-        const auto *surface = reinterpret_cast<const RenderingContextDriverVulkan::Surface *>(chain->surface);
-        if (surface && RSFGodot::vk_present_marker(surface->rescaleframe_window, 1)) { scope.window = surface->rescaleframe_window; break; }
-    }
+        void admit(RenderingContextDriver::SurfaceID id) {
+            if (window) return;
+            const auto *surface = reinterpret_cast<const RenderingContextDriverVulkan::Surface *>(id);
+            if (surface && RSFGodot::VulkanExecutionScope::present(surface->rescaleframe_window, true))
+                window = surface->rescaleframe_window;
+        }
+        ~PresentScope() { if (window) RSFGodot::VulkanExecutionScope::present(window, false); }
+    };
     auto *queue = reinterpret_cast<CommandQueue *>(queue_id.id);
     if (chains.size() == 1) {
         auto *chain = reinterpret_cast<SwapChain *>(chains[0].id);
-        if (chain->rescaleframe_owner) return VkResult(RSFGodot::vk_present(chain->rescaleframe_owner, info));
+        if (chain->rescaleframe_owner) {
+            PresentScope scope;
+            scope.admit(chain->surface);
+            return VkResult(RSFGodot::vk_present(chain->rescaleframe_owner, info));
+        }
     }
     bool has_proxy = false;
     for (uint32_t i = 0; i < chains.size(); ++i) has_proxy |= reinterpret_cast<SwapChain *>(chains[i].id)->rescaleframe_owner != nullptr;
@@ -161,6 +195,8 @@ VkResult RenderingDeviceDriverVulkan::rescaleframe_present(CommandQueueID queue_
                 one.pImageIndices = &chain->image_index;
                 one.pWaitSemaphores = &chain->present_semaphores[chain->image_index];
                 one.pResults = batch.info.pResults ? &batch.info.pResults[index] : nullptr;
+                PresentScope scope;
+                scope.admit(chain->surface);
                 const auto item = chain->rescaleframe_owner ? VkResult(RSFGodot::vk_present(chain->rescaleframe_owner, &one)) :
                     VkResult(RSFGodot::vk_native_present(batch.native_present, batch.graphics, &one));
                 if (one.pResults) *one.pResults = item;
@@ -168,6 +204,11 @@ VkResult RenderingDeviceDriverVulkan::rescaleframe_present(CommandQueueID queue_
             },
         };
         return VkResult(RSFGodot::rsf_godot_present_mixed(&calls, &context, chains.size(), info->pNext != nullptr, submitted));
+    }
+    PresentScope scope;
+    for (uint32_t i = 0; i < chains.size(); ++i) {
+        const auto *chain = reinterpret_cast<const SwapChain *>(chains[i].id);
+        scope.admit(chain->surface);
     }
     return VkResult(RSFGodot::vk_native_present(reinterpret_cast<uint64_t>(device_functions.QueuePresentKHR), graphics, info));
 }

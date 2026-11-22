@@ -63,6 +63,7 @@ std::string streamline_directory;
 std::string fsr4_directory;
 std::wstring intel_directory;
 uint64_t render_source_frame = 0;
+bool explicit_execution = false;
 rsf_game_log_fn logger = nullptr;
 void* logger_user = nullptr;
 rsf_fgvk* presentation = nullptr;
@@ -197,9 +198,11 @@ rsf_srvk_frame sr_frame(const sr_call& call, const rsf_sharpening_options& sharp
 }
 namespace rsf::godot_vk {
 bool booted() { return rsf_godot_vk_booted() != 0; }
-void render_begin(uint64_t frame) {
-    rsf_latencyvk_render(frame);
-    std::lock_guard lock(guard); render_source_frame=frame;
+void render_begin(uint64_t frame, bool explicit_receipts) {
+    if (!explicit_receipts) rsf_latencyvk_render(frame);
+    std::lock_guard lock(guard);
+    render_source_frame = frame;
+    explicit_execution = explicit_receipts;
 }
 void capture_present(const void* info, int32_t result, uint32_t begin) {
 #if defined(RSF_FRAME_DUMP_VULKAN)
@@ -228,6 +231,7 @@ int32_t leaf_locked(int32_t (*body)(void*), void* user) try {
 int32_t leaf_start(const rsf_godot_setup* setup) try {
     // The session cleared its primary window just before this leaf.
     render_source_frame = 0;
+    explicit_execution = false;
     streamline_ready = false;
     directory = std::string(setup->runtime_directory) + "/fidelityfx-vulkan";
     fsr4_directory = std::string(setup->runtime_directory) + "/fidelityfx";
@@ -540,7 +544,7 @@ extern "C" uint32_t rsfg_vk_image_layout(void* value) {
 extern "C" int32_t rsfg_vk_present(void* value, const void* info) try {
     std::lock_guard lock(guard);
     auto* target = static_cast<rsf_fgvk*>(value);
-    rsf_latencyvk_submit_end(render_source_frame);
+    if (!explicit_execution) rsf_latencyvk_submit_end(render_source_frame);
 #if defined(RSF_FRAME_DUMP_VULKAN)
     capture_present_impl(target, info, 0, 1);
 #endif

@@ -27,6 +27,7 @@ FILES = (
     "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp",
     "servers/rendering/renderer_viewport.cpp",
     "servers/rendering/rendering_device_graph.cpp",
+    "servers/rendering/rendering_device.cpp",
     "thirdparty/amd-fsr2/shaders/ffx_fsr2_callbacks_glsl.h",
     "servers/rendering/renderer_rd/effects/fsr.h",
     "servers/rendering/renderer_rd/effects/fsr.cpp",
@@ -442,13 +443,32 @@ replace("platform/windows/display_server_windows.cpp",
         '#endif\n\t\t\t\t_process_key_events();')
 
 
+previous_execution_receipt_plan = planned.copy()
+path = "servers/rendering/rendering_device.cpp"
+at = planned[path].index("#include ")
+planned[path] = planned[path][:at] + INCLUDE + "\n" + planned[path][at:]
+replace(path, '\texecute_chained_cmds(present_swap_chain, frames[frame].fence, semaphore);',
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\tRSFGodot::VulkanExecutionScope rsf_execution(main_queue.id, frames[frame].fence.id,\n'
+        '\t\t\tframe_can_present && RenderingDevice::get_singleton() == this);\n#endif\n'
+        '\texecute_chained_cmds(present_swap_chain, frames[frame].fence, semaphore);')
+path = "drivers/vulkan/rendering_device_driver_vulkan.cpp"
+replace(path, '\t\tdevice_queue.submit_mutex.lock();\n\t\terr = vkQueueSubmit(device_queue.queue, 1, &submit_info, vk_fence);',
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\t\tRSFGodot::VulkanExecutionScope::submit(p_cmd_queue.id, p_cmd_fence.id, true);\n#endif\n'
+        '\t\tdevice_queue.submit_mutex.lock();\n\t\terr = vkQueueSubmit(device_queue.queue, 1, &submit_info, vk_fence);')
+replace(path, '\t\tRSFGodot::vk_submitted(reinterpret_cast<void *const *>(command_buffers.ptr()), command_buffers.size());',
+        '\t\tRSFGodot::VulkanExecutionScope::submit(p_cmd_queue.id, p_cmd_fence.id, false);\n'
+        '\t\tRSFGodot::vk_submitted(reinterpret_cast<void *const *>(command_buffers.ptr()), command_buffers.size());')
+
+
 changed = set(subprocess.check_output(["git", "-C", str(ENGINE), "diff", "--name-only"], text=True).splitlines())
 if changed - set(FILES):
     raise SystemExit("Unexpected reference changes: " + ", ".join(sorted(changed - set(FILES))))
 for path in FILES:
     current = (ENGINE / path).read_text(encoding="utf-8")
     validated[path] = current
-    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], previous_fsr1_formats_plan[path], previous_sharpening_plan[path], previous_unsharpened_plan[path], previous_pool_retirement_plan[path], previous_startup_plan[path], previous_input_sample_plan[path], planned[path]):
+    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], previous_fsr1_formats_plan[path], previous_sharpening_plan[path], previous_unsharpened_plan[path], previous_pool_retirement_plan[path], previous_startup_plan[path], previous_input_sample_plan[path], previous_execution_receipt_plan[path], planned[path]):
         raise SystemExit("Reference has unrelated changes: " + path)
     if "--check" in sys.argv and current != planned[path]:
         raise SystemExit("Bridge patch is missing: " + path)

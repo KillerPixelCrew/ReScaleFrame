@@ -18,12 +18,25 @@
 use crate::platform::{self, CpuService, Platform};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_INPUT_EVENT,
-    RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_WINDOW_MESSAGE, rsf_game_cpu_event,
+    RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_RENDER_PRESENT,
+    RSF_GAME_RENDER_SUBMISSION, rsf_game_cpu_event, rsf_game_render_pass,
 };
+use std::cell::Cell;
 use std::ffi::{c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PresentReceipt {
+    session: u64,
+    source: u64,
+    window: u64,
+}
+
+thread_local! {
+    static PRESENT: Cell<Option<PresentReceipt>> = const { Cell::new(None) };
+}
 
 const fn wide<const N: usize>(text: &[u8; N]) -> [u16; N] {
     let mut out = [0; N];
@@ -234,6 +247,43 @@ impl Window {
         })
     }
 
+    pub(crate) fn admits_present(&self, window: u64) -> bool {
+        window != 0 && self.input().addr() as u64 == window
+    }
+
+    pub(crate) fn execution(&self, pass: &rsf_game_render_pass, begin: u32) -> bool {
+        if pass.session_id == 0 || pass.source_frame_id == 0 || begin > 1 {
+            return false;
+        }
+        let Some(report) = self.cpu_service().and_then(|service| service.execution) else {
+            return false;
+        };
+        match pass.role {
+            RSF_GAME_RENDER_SUBMISSION => {}
+            RSF_GAME_RENDER_PRESENT => {
+                let receipt = PresentReceipt {
+                    session: pass.session_id,
+                    source: pass.source_frame_id,
+                    window: pass.window_key,
+                };
+                if begin != 0 {
+                    if PRESENT.get().is_some() || !self.admits_present(receipt.window) {
+                        return false;
+                    }
+                    PRESENT.set(Some(receipt));
+                } else if PRESENT.get() == Some(receipt) {
+                    PRESENT.set(None);
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        // SAFETY: the execution fact is borrowed only for the report.
+        unsafe { report(pass, begin) };
+        true
+    }
+
     /// `rsfg_vk_present_marker`: only the booted Vulkan session's admitted window marks its
     /// Present. True when the marker was reported.
     pub(crate) fn present_marker(
@@ -243,7 +293,7 @@ impl Window {
         window: u64,
         begin: u32,
     ) -> bool {
-        if !vulkan || window == 0 || self.input().addr() as u64 != window {
+        if !vulkan || !self.admits_present(window) {
             return false;
         }
         platform.vulkan_present_marker(begin);

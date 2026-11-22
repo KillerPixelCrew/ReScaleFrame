@@ -23,10 +23,26 @@ replacement window can attach independently.
 
 Rust plans the motion diagnostic's buffer size and dispatch and supplies its shader. The
 GDExtension entry, class bindings, Variant/RID marshaling and RenderingDevice recording still
-use godot-cpp. COM, DXGI and C++ FrameCapture12 operations stay in typed native leaves. CPU and
-ping routing still need a shared Runtime service. The current Vulkan Present marker carries a
-window and a phase, and needs a source receipt from the engine's submitted presentation path
-before it can report that identity explicitly.
+use godot-cpp. COM, DXGI and C++ FrameCapture12 operations stay in typed native leaves.
+
+The native integration binds one versioned Runtime CPU service at backend setup. CPU facts and
+window messages use its report callback, and diagnostic pings use its ping callback. Godot admits
+the window. Runtime still owns marker mapping, ordering and pacing.
+
+Godot's pinned 4.7.2 source at `ed1daf0bf001b61586d9930840f2f1394092c079` shows the main
+RenderingDevice submitting the last graph command with the frame fence in `execute_chained_cmds`.
+`_execute_frame` then either presents inside that driver call or calls the separate presentation
+queue with the signalled semaphore. An execution scope copies the session and source for this
+specific main-device call. The Vulkan driver reports submit begin immediately before queue
+submission and submit end only after success. It brackets the actual native, proxy or mixed-batch
+Present call for the admitted HWND, skipping fan-out failures and Present calls without a matching
+submitted frame. The Runtime carries the explicit source during Present for the XeSS provider's
+existing identity lookup. No pacing or marker semantics are chosen in the engine.
+
+The new receipt export is optional at lookup. Older modules and DLLs retain their original
+entry points. The paired engine and native DLL use explicit execution facts. The pinned source
+patch was generated and checked in memory. The engine checkout, game installations and
+device fixtures were left untouched.
 
 Source evidence is in the Rust entry points, the CMake export list, the engine's
 `RSF_RESOLVE`/GetProcAddress calls, and recording fixtures for ABI reuse, failed fence creation,

@@ -36,6 +36,7 @@ decltype(&rsfg_boot_vulkan) native_boot_vulkan = nullptr;
 decltype(&rsfg_vk_resolver) native_vk_resolver = nullptr;
 decltype(&rsfg_vk_window) native_vk_window = nullptr;
 decltype(&rsfg_vk_present_marker) native_vk_present_marker = nullptr;
+decltype(&rsfg_vk_execution) native_vk_execution = nullptr;
 decltype(&rsfg_vk_native_present) native_vk_native_present = nullptr;
 decltype(&rsfg_vk_wsi_call) native_vk_wsi_call = nullptr;
 decltype(&rsfg_vk_foreign_call) native_vk_foreign_call = nullptr;
@@ -113,7 +114,13 @@ uint32_t status_extent(rsf_godot_extent *out) {
     *out = {status.requested_sr, status.render_width, status.render_height, status.output_width, status.output_height};
     return 1;
 }
-void render_begin(uint64_t frame) { native_render_begin(frame); }
+void render_begin(uint64_t frame) {
+    if (RSFGodot::vk_execution_supported()) {
+        RSFGodot::vk_execution(RSF_GAME_RENDER_FRAME, rsf_godot_host_session(), frame, 0, 1);
+    } else {
+        native_render_begin(frame);
+    }
+}
 void set_scale(uint64_t viewport, double scale) {
     RSG::viewport->viewport_set_scaling_3d_scale(RID::from_uint64(viewport), scale);
 }
@@ -320,6 +327,7 @@ uint32_t boot_load() {
     RSF_RESOLVE(create_swapchain); RSF_RESOLVE(configure); RSF_RESOLVE(status); RSF_RESOLVE(render);
     RSF_RESOLVE(cpu); RSF_RESOLVE(render_begin); RSF_RESOLVE(submitted); RSF_RESOLVE(present); RSF_RESOLVE(shutdown);
 #undef RSF_RESOLVE
+    native_vk_execution = reinterpret_cast<decltype(native_vk_execution)>(GetProcAddress(module, "rsfg_vk_execution"));
     native_vk_capture_setup = reinterpret_cast<decltype(native_vk_capture_setup)>(GetProcAddress(module, "rsfg_vk_capture_setup"));
     native_vk_capture_release = reinterpret_cast<decltype(native_vk_capture_release)>(GetProcAddress(module, "rsfg_vk_capture_release"));
     return 1;
@@ -372,6 +380,18 @@ bool create_swapchain(void *factory, void *queue, void *window, const void *desc
 bool vulkan_enabled() { return rsf_godot_host_ready() && OS::get_singleton()->get_current_rendering_driver_name() == "vulkan"; }
 uint64_t vk_resolver() { return vulkan_enabled() ? reinterpret_cast<uint64_t>(native_vk_resolver()) : 0; }
 bool vk_present_marker(uint64_t window, uint32_t begin) { return vulkan_enabled() && native_vk_present_marker(window, begin); }
+bool vk_execution_supported() { return vulkan_enabled() && native_vk_execution; }
+bool vk_execution(uint32_t role, uint64_t session, uint64_t source, uint64_t window, uint32_t begin) {
+    if (!vk_execution_supported()) return false;
+    rsf_game_render_pass pass{};
+    pass.struct_size = sizeof(pass);
+    pass.role = role;
+    pass.session_id = session;
+    pass.source_frame_id = source;
+    pass.window_key = window;
+    return native_vk_execution(&pass, begin) != 0;
+}
+
 int32_t vk_native_present(uint64_t callback, void* queue, const void* info) {
     if (vulkan_enabled()) return native_vk_native_present(callback, queue, info);
     using Present = int32_t (*)(void*, const void*);

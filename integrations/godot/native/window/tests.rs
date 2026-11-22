@@ -253,3 +253,37 @@ fn pings_and_present_markers_use_the_admitted_window() {
         ]
     );
 }
+
+#[test]
+fn explicit_present_forwards_one_matching_source_even_after_window_release() {
+    let window = admitted();
+    window.bind_cpu_service(Some(&fake::VK_CPU));
+    let mut pass = crate::d3d12::empty_pass();
+    pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
+    pass.role = RSF_GAME_RENDER_PRESENT;
+    pass.session_id = 7;
+    pass.source_frame_id = 9;
+    pass.window_key = OTHER as u64;
+    assert!(!window.execution(&pass, 1));
+    pass.window_key = ENGINE as u64;
+    assert!(window.execution(&pass, 1));
+    assert!(!window.execution(&pass, 1));
+    window.release(&fake::LEAVES);
+    pass.source_frame_id = 8;
+    assert!(!window.execution(&pass, 0));
+    pass.source_frame_id = 9;
+    assert!(window.execution(&pass, 0));
+    assert_eq!(
+        fake::take_window_calls(),
+        [
+            ("execution_role", RSF_GAME_RENDER_PRESENT.into()),
+            ("execution_source", 9),
+            ("execution_window", ENGINE as u64),
+            ("execution_begin", 1),
+            ("execution_role", RSF_GAME_RENDER_PRESENT.into()),
+            ("execution_source", 9),
+            ("execution_window", ENGINE as u64),
+            ("execution_begin", 0),
+        ]
+    );
+}

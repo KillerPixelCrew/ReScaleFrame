@@ -6,7 +6,7 @@
 //! the `ReScaleFrameRuntime` option schema and renderer admission (`extension.rs`) and each
 //! `ReScaleFrameEffect`'s probe snapshot and motion capture classification (`effect.rs`).
 //!
-//! The `rsfg_*` exports in `api.h`, the GDExtension entry and the godot-cpp classes stay C++.
+//! The GDExtension entry and godot-cpp classes stay C++. Native control uses the same C ABI.
 //! `runtime.cpp` and `vulkan.cpp` forward to these entry points and lend their leaves through
 //! `rsf_godot_platform` (`godot_platform.h`, mirrored in `platform.rs`): the D3D12 device, fence,
 //! SR context, FG, presentation and capture calls, DXGI, Win32 window calls, the linked Runtime
@@ -559,6 +559,15 @@ extern "C" fn rsfg_vk_window(window: *mut c_void) {
         CONTROL.window.accept(platform, window);
         CONTROL.vulkan.report_window(window);
     }
+}
+
+/// # Safety
+/// The native export checked the pass size and borrows it for the call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_execution(pass: *const rsf_game_render_pass, begin: u32) -> c_int {
+    // SAFETY: the native export lends a complete pass.
+    let pass = unsafe { &*pass };
+    CONTROL.window.execution(pass, begin).into()
 }
 
 /// The Vulkan session's primary window, null when none was reported since its start. Read by

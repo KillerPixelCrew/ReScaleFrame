@@ -683,9 +683,20 @@ pub(crate) static D3D12_CPU: super::CpuService = super::CpuService {
     execution: None,
 };
 
+unsafe extern "C" fn execution(pass: *const rsf_game_render_pass, begin: u32) -> i32 {
+    // SAFETY: the adapter lends the pass until the call returns.
+    let pass = unsafe { &*pass };
+    window_call("execution_role", pass.role.into());
+    window_call("execution_source", pass.source_frame_id);
+    window_call("execution_window", pass.window_key);
+    window_call("execution_begin", begin.into());
+    0
+}
+
 pub(crate) static VK_CPU: super::CpuService = super::CpuService {
     report: vulkan_cpu_event,
     ping: vulkan_latency_ping,
+    execution: Some(execution),
     ..D3D12_CPU
 };
 
