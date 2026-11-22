@@ -15,8 +15,54 @@ const CAPTURE_SLOTS: usize = 64;
 const NON_PIXEL_READ: u32 = 0x40; // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
 const VENDOR_PARAMETER_ERROR: u32 = 6;
 const MODULE: &str = "amd_fidelityfx_framegeneration_dx12.dll";
+// FFX_FRAMEGENERATION_ENABLE_* values; fsr_generation.cpp asserts them.
+const CREATE_DISPLAY_RESOLUTION_MOTION: u32 = 1 << 1;
+const CREATE_JITTER_CANCELLATION: u32 = 1 << 2;
+const CREATE_DEPTH_INVERTED: u32 = 1 << 3;
+const CREATE_DEPTH_INFINITE: u32 = 1 << 4;
+const CREATE_HDR: u32 = 1 << 5;
 type QueryVersions =
     unsafe extern "C" fn(Raw, &Setup, &mut [Version; MAX_VERSIONS], &mut u64) -> i32;
+
+/// SDK API versions the native leaf compiled against.
+#[repr(C)]
+struct SdkApi {
+    generation: [u32; 3],
+    swapchain: [u32; 3],
+}
+
+#[repr(C)]
+struct GenerationPlan {
+    version_id: u64,
+    width: u32,
+    height: u32,
+    max_render_width: u32,
+    max_render_height: u32,
+    format: u32,
+    flags: u32,
+}
+
+#[repr(C)]
+struct PreparePlan {
+    command: Raw,
+    depth: Raw,
+    motion: Raw,
+    sequence: u64,
+    render_width: u32,
+    render_height: u32,
+    jitter: [f32; 2],
+    motion_scale: [f32; 2],
+    frame_time_ms: f32,
+    near_plane: f32,
+    far_plane: f32,
+    vertical_fov: f32,
+    view_space_to_meters: f32,
+    reset: u32,
+    position: [f32; 3],
+    right: [f32; 3],
+    up: [f32; 3],
+    forward: [f32; 3],
+}
 
 #[repr(C)]
 struct Configuration {
@@ -52,30 +98,95 @@ struct Generated {
 struct Ops {
     check: &'static Checks,
     capture: &'static CapturePlatform,
+    sdk: &'static SdkApi,
     resolve: Resolve,
     close: unsafe extern "C" fn(Raw),
     versions: QueryVersions,
     surface_format: unsafe extern "C" fn(u32) -> u32,
-    create_generation:
-        unsafe extern "C" fn(Raw, *const Extent, *const Status, *const c_char, *mut Raw) -> i32,
-    provider_matches: unsafe extern "C" fn(Raw, Raw, u64) -> i32,
-    create_chain: unsafe extern "C" fn(Raw, *const Setup, *mut Raw, *mut Raw) -> i32,
+    create_generation: unsafe extern "C" fn(Raw, *const GenerationPlan, *mut Raw) -> u32,
+    provider_version: unsafe extern "C" fn(Raw, Raw, *mut u64) -> u32,
+    create_chain: unsafe extern "C" fn(Raw, *const Setup, *mut Raw, *mut Raw, *mut u32) -> i32,
     destroy_context: unsafe extern "C" fn(Raw, *mut Raw) -> u32,
     wait: unsafe extern "C" fn(Raw, Raw) -> u32,
     chain_extent: unsafe extern "C" fn(Raw, *mut Extent) -> i32,
     whole_texture: unsafe extern "C" fn(*const Resource) -> u32,
     configure: unsafe extern "C" fn(Raw, Raw, *const Configuration) -> u32,
-    prepare: unsafe extern "C" fn(Raw, Raw, Raw, *const Frame, u64, u32, f32, f32) -> u32,
+    prepare: unsafe extern "C" fn(Raw, Raw, *const PreparePlan) -> u32,
     generate: unsafe extern "C" fn(Raw, Raw, Raw, *mut Generated) -> u32,
     copy_present: unsafe extern "C" fn(Raw) -> u32,
     present_count: unsafe extern "C" fn(Raw, *mut u32) -> i32,
 }
 
 const _: () = {
+    assert!(size_of::<SdkApi>() == 24 && size_of::<GenerationPlan>() == 32);
+    assert!(size_of::<PreparePlan>() == 128);
     assert!(size_of::<Configuration>() == 48);
     assert!(size_of::<Generated>() == 104);
-    assert!(size_of::<Ops>() == 18 * size_of::<Raw>());
+    assert!(size_of::<Ops>() == 19 * size_of::<Raw>());
 };
+
+/// FFX frame-generation create flags for the setup's declared inputs.
+fn create_flags(setup: &Setup) -> u32 {
+    [
+        (setup.depth_inverted, CREATE_DEPTH_INVERTED),
+        (setup.depth_infinite, CREATE_DEPTH_INFINITE),
+        (setup.motion_jittered, CREATE_JITTER_CANCELLATION),
+        (
+            setup.motion_at_display_resolution,
+            CREATE_DISPLAY_RESOLUTION_MOTION,
+        ),
+        (setup.hdr, CREATE_HDR),
+    ]
+    .into_iter()
+    .filter(|&(enabled, _)| enabled != 0)
+    .fold(0, |flags, (_, flag)| flags | flag)
+}
+
+/// Prepare constants for one source frame. Position, right and up are the
+/// view-to-world rows; forward carries the caller's handedness sign.
+fn prepare_plan(
+    command: Raw,
+    frame: &Frame,
+    record: &Record,
+    sequence: u64,
+    reset: bool,
+    meters: f32,
+    forward_sign: f32,
+) -> PreparePlan {
+    let camera = &record.camera;
+    let world = &camera.view_to_world;
+    let row = |start: usize| [world[start], world[start + 1], world[start + 2]];
+    PreparePlan {
+        command,
+        depth: frame.depth.resource,
+        motion: frame.motion.resource,
+        sequence,
+        render_width: record.render_width,
+        render_height: record.render_height,
+        jitter: camera.jitter_pixels,
+        motion_scale: [frame.motion_scale_x, frame.motion_scale_y],
+        frame_time_ms: record.frame_time_ms,
+        near_plane: camera.near_plane,
+        far_plane: camera.far_plane,
+        vertical_fov: camera.vertical_fov_radians,
+        view_space_to_meters: meters,
+        reset: u32::from(reset),
+        position: row(12),
+        right: row(0),
+        up: row(4),
+        forward: row(8).map(|value| forward_sign * value),
+    }
+}
+
+/// Borrowed NUL-terminated text for a log record.
+unsafe fn c_text(text: *const c_char) -> String {
+    if text.is_null() {
+        return String::new();
+    }
+    unsafe { CStr::from_ptr(text) }
+        .to_string_lossy()
+        .into_owned()
+}
 
 #[derive(Clone, Copy, Default)]
 struct Counters {
@@ -94,6 +205,7 @@ struct Fsr {
     depth_inverted: bool,
     motion_jittered: bool,
     view_space_to_meters: f32,
+    create_flags: u32,
     state: State,
     // The presenting owner changes contexts only after the swapchain has
     // drained. A generation callback reads the currently published handle.
@@ -134,14 +246,37 @@ impl Fsr {
         swapchain.is_null() || unsafe { (self.ops.wait)(self.sdk.raw, swapchain) } == 0
     }
 
-    fn create_generation(&self, extent: Extent, directory: *const c_char) -> i32 {
+    /// Creates the generation context for `extent`. `startup` is present only
+    /// for the first context and selects its startup record.
+    fn create_generation(&self, extent: Extent, startup: Option<&Setup>) -> i32 {
         let status = self.state.read().status;
-        let mut generation = null_mut();
-        let result = unsafe {
-            (self.ops.create_generation)(self.sdk.raw, &extent, &status, directory, &mut generation)
+        let plan = GenerationPlan {
+            version_id: status.version_id,
+            width: extent.width,
+            height: extent.height,
+            // Render size never exceeds the swapchain; prepare refuses larger.
+            max_render_width: extent.width,
+            max_render_height: extent.height,
+            format: extent.format,
+            flags: self.create_flags,
         };
+        let mut generation = null_mut();
+        let result = unsafe { (self.ops.create_generation)(self.sdk.raw, &plan, &mut generation) };
+        if let Some(setup) = startup.filter(|setup| !setup.runtime_directory_utf8.is_null()) {
+            let [major, minor, patch] = self.ops.sdk.generation;
+            let (selected, root) = unsafe {
+                (
+                    c_text(status.version_name.as_ptr()),
+                    c_text(setup.runtime_directory_utf8),
+                )
+            };
+            self.log.write(format_args!(
+                "FSR FG create generation: FFX result={result} requested_major={} selected={selected} id={} API={major}.{minor}.{patch} root={root}",
+                setup.feature_major, status.version_id
+            ));
+        }
         self.generation.store(generation, Relaxed);
-        if result != OK || generation.is_null() {
+        if result != 0 || generation.is_null() {
             return INIT_FAILED;
         }
         self.extent.set(extent);
@@ -179,7 +314,7 @@ impl Fsr {
         if !self.destroy_generation() {
             return FEATURE_FAILED;
         }
-        self.create_generation(extent, std::ptr::null())
+        self.create_generation(extent, None)
     }
 
     fn capture_generated(&self, generated: &Generated) {
@@ -376,18 +511,17 @@ impl Session for Fsr {
             1.0
         };
         let sequence = self.sequence.get();
-        let dispatched = unsafe {
-            (self.ops.prepare)(
-                self.sdk.raw,
-                self.generation.load(Relaxed),
-                command,
-                frame,
-                sequence,
-                u32::from(reset),
-                self.view_space_to_meters,
-                forward_sign,
-            )
-        };
+        let plan = prepare_plan(
+            command,
+            frame,
+            record,
+            sequence,
+            reset,
+            self.view_space_to_meters,
+            forward_sign,
+        );
+        let dispatched =
+            unsafe { (self.ops.prepare)(self.sdk.raw, self.generation.load(Relaxed), &plan) };
         self.capture
             .event(record, c"fsr-prepare", sequence, reset, dispatched as i32);
         if dispatched != 0 {
@@ -567,6 +701,7 @@ unsafe extern "C" fn rsf_core_fsr12_create(
         depth_inverted: setup.depth_inverted != 0,
         motion_jittered: setup.motion_jittered != 0,
         view_space_to_meters: setup.view_space_to_meters,
+        create_flags: create_flags(setup),
         state: State::new(initial),
         generation: AtomicPtr::new(null_mut()),
         generation_ready: Cell::new(false),
@@ -591,21 +726,41 @@ unsafe extern "C" fn rsf_core_fsr12_create(
         height: setup.chain.height,
         format: unsafe { (ops.surface_format)(setup.chain.format) },
     };
-    let mut result = owner.create_generation(extent, setup.runtime_directory_utf8);
+    let mut result = owner.create_generation(extent, Some(setup));
     if result == OK {
-        result = unsafe {
-            (ops.provider_matches)(
-                owner.sdk.raw,
-                owner.generation.load(Relaxed),
-                initial.version_id,
-            )
+        // The SDK may fall back to another provider; only the selected one is admitted.
+        let mut actual = 0;
+        let queried = unsafe {
+            (ops.provider_version)(owner.sdk.raw, owner.generation.load(Relaxed), &mut actual)
         };
+        if queried != 0 || actual != initial.version_id {
+            result = UNSUPPORTED;
+        }
     }
     if result == OK && !setup.chain.hwnd.is_null() {
-        let (mut swapchain, mut created) = (null_mut(), null_mut());
-        result = unsafe { (ops.create_chain)(owner.sdk.raw, setup, &mut swapchain, &mut created) };
+        let (mut swapchain, mut created, mut ffx) = (null_mut(), null_mut(), u32::MAX);
+        result = unsafe {
+            (ops.create_chain)(owner.sdk.raw, setup, &mut swapchain, &mut created, &mut ffx)
+        };
         owner.swapchain.set(swapchain);
-        *owner.chain.borrow_mut() = unsafe { ComRef::from_owned(created) };
+        if result == OK {
+            let [major, minor, patch] = ops.sdk.swapchain;
+            let desc = &setup.chain;
+            owner.log.write(format_args!(
+                "FSR FG create swapchain: FFX result={ffx} chain={} API={major}.{minor}.{patch} size={}x{} buffers={} format={}",
+                u32::from(!created.is_null()),
+                desc.width,
+                desc.height,
+                desc.buffer_count,
+                desc.format
+            ));
+            // Adopt the SDK's swapchain reference only from a successful create.
+            if ffx == 0 && !created.is_null() {
+                *owner.chain.borrow_mut() = unsafe { ComRef::from_owned(created) };
+            } else {
+                result = INIT_FAILED;
+            }
+        }
     }
     if result != OK {
         unsafe { destroy::<Fsr>(session.cast()) };
@@ -657,4 +812,42 @@ unsafe extern "C" fn rsf_core_fsr12_present(user: Raw, desc: Raw, generated: u32
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_flags_follow_declared_inputs() {
+        let mut setup: Setup = unsafe { std::mem::zeroed() };
+        assert_eq!(create_flags(&setup), 0);
+        setup.depth_inverted = 1;
+        setup.motion_jittered = 1;
+        setup.hdr = 1;
+        assert_eq!(
+            create_flags(&setup),
+            CREATE_DEPTH_INVERTED | CREATE_JITTER_CANCELLATION | CREATE_HDR
+        );
+        setup.depth_infinite = 1;
+        setup.motion_at_display_resolution = 1;
+        assert_eq!(create_flags(&setup), 0b11_1110);
+    }
+
+    #[test]
+    fn prepare_plan_reads_view_basis_and_signs_forward() {
+        let frame: Frame = unsafe { std::mem::zeroed() };
+        let mut record: Record = unsafe { std::mem::zeroed() };
+        record.camera.view_to_world = std::array::from_fn(|index| index as f32);
+        record.render_width = 1280;
+        record.camera.jitter_pixels = [0.25, -0.5];
+        let plan = prepare_plan(null_mut(), &frame, &record, 9, true, 0.01, -1.0);
+        assert_eq!(plan.right, [0.0, 1.0, 2.0]);
+        assert_eq!(plan.up, [4.0, 5.0, 6.0]);
+        assert_eq!(plan.forward, [-8.0, -9.0, -10.0]);
+        assert_eq!(plan.position, [12.0, 13.0, 14.0]);
+        assert_eq!((plan.sequence, plan.reset, plan.render_width), (9, 1, 1280));
+        assert_eq!(plan.jitter, [0.25, -0.5]);
+        assert_eq!(plan.view_space_to_meters, 0.01);
+    }
 }
