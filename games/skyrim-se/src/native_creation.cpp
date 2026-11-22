@@ -2,13 +2,12 @@
 // Native leaves of the Skyrim SE native-creation owner. The Rust crate rsf-skyrim-se
 // (src/creation.rs, src/layout.rs) owns the guarded thunk and route profiles, the cold-owner
 // rule, admission order, Runtime scope transaction, refusals and messages. This file keeps the
-// fault-guarded read, MinHook, exception guards around host
+// fault-guarded read, exception guards around host
 // and Runtime callbacks, the Community Shaders gate, and the detour that
 // captures the native return address and calls the original on its own frame.
 #include "native_creation_platform.h"
 #include "observer_platform.h"
 #include "compatibility.h"
-#include <MinHook.h>
 #include <windows.h>
 #include <d3d11.h>
 #include <cstddef>
@@ -28,8 +27,8 @@ static_assert(sizeof(rsf_d3d11_creation_scope) == 24 && sizeof(rsf_d3d11_native_
 static_assert(sizeof(rsf_skyrim_creation_call) == 136 && offsetof(rsf_skyrim_creation_call, native_result) == 48 &&
     offsetof(rsf_skyrim_creation_call, owner) == 56 && offsetof(rsf_skyrim_creation_call, scope) == 80 &&
     offsetof(rsf_skyrim_creation_call, outputs) == 104);
-static_assert(sizeof(rsf_skyrim_creation_platform) == 16 + 9 * sizeof(void*) &&
-    offsetof(rsf_skyrim_creation_platform, create_detour) == 16 + 4 * sizeof(void*));
+static_assert(sizeof(rsf_skyrim_creation_platform) == 16 + 6 * sizeof(void*) &&
+    offsetof(rsf_skyrim_creation_platform, create_detour) == 16 + sizeof(void*));
 
 bool read(uintptr_t address, void* destination, size_t size) noexcept {
 #if defined(_MSC_VER)
@@ -78,17 +77,6 @@ HRESULT WINAPI create(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driver, HMODULE sof
 const rsf_skyrim_creation_platform platform{
     sizeof(rsf_skyrim_creation_platform), RSF_SKYRIM_CREATION_PLATFORM_VERSION, RSF_D3D11_HOST_ABI_VERSION, 0,
     [](uintptr_t address, void* out, size_t size) noexcept { return out && read(address, out, size); },
-    [](uintptr_t target, const void* detour, void** original) noexcept {
-        return MH_CreateHook(reinterpret_cast<void*>(target), const_cast<void*>(detour), original) == MH_OK;
-    },
-    [](uintptr_t target) noexcept {
-        const auto status = MH_EnableHook(reinterpret_cast<void*>(target));
-        return status == MH_OK || status == MH_ERROR_ENABLED;
-    },
-    [](uintptr_t target) noexcept {
-        const auto status = MH_DisableHook(reinterpret_cast<void*>(target));
-        return status == MH_OK || status == MH_ERROR_DISABLED;
-    },
     reinterpret_cast<const void*>(&create),
     [](const rsf_game_host_services* host, const char* message) noexcept {
         if (host && host->log) try { host->log(host->user, message); } catch (...) {}

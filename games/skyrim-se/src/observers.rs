@@ -2,7 +2,7 @@
 //! Observer hook installation, activation, and retryable disable. The session (`session.rs`)
 //! owns the control record under its lock; native code keeps the typed MinHook trampolines.
 use rsf_game_sys::rsf_game_host_services;
-use std::ffi::{CString, c_char};
+use std::ffi::{CString, c_char, c_void};
 
 use crate::hook_set::HookSet;
 
@@ -103,6 +103,49 @@ impl Control {
         }
         true
     }
+}
+
+// These leaves bind the existing observer transaction to the same Rust MinHook owner as
+// cold creation and CPU hooks. The adapter supplies typed native detours and trampoline slots.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_observer_initialize() -> bool {
+    rsf_windows::minhook::initialize()
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_skyrim_observer_create(
+    target: *mut c_void,
+    detour: *mut c_void,
+    original: *mut *mut c_void,
+) -> bool {
+    unsafe { rsf_windows::minhook::create(target, detour, original) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_skyrim_observer_remove(
+    target: *mut c_void,
+    original: &mut *mut c_void,
+) -> bool {
+    if !unsafe { rsf_windows::minhook::remove_idempotent(target) } {
+        return false;
+    }
+    *original = std::ptr::null_mut();
+    true
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_skyrim_observer_enable(target: *mut c_void) -> i32 {
+    unsafe { rsf_windows::minhook::enable_status(target) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_skyrim_observer_disable(target: *mut c_void) -> bool {
+    unsafe { rsf_windows::minhook::disable(target) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_observer_pin(address: usize) -> bool {
+    crate::platform::get().is_some_and(|platform| platform.pin_module(address) != 0)
 }
 
 #[cfg(test)]

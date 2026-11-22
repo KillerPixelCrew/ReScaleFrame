@@ -7,9 +7,12 @@ use crate::cpu_sources::rsf_skyrim_cpu_clear_proof;
 use crate::hook_set::HookSet;
 use crate::platform::{self, Platform};
 use rsf_game_sys::rsf_game_host_services;
-use std::ffi::{CStr, c_char};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::ffi::{CStr, c_char, c_void};
+use std::ptr;
+use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
+use winapi::um::profileapi::QueryPerformanceFrequency;
+use winapi::um::winnt::LARGE_INTEGER;
 
 const NAMED_CALLBACK_SLOT: u32 = 0x20b5130;
 const NAMED_POLL: u32 = 0x6e6030;
@@ -111,16 +114,30 @@ const HOOKS: [(u32, [u8; 19]); 13] = [
 
 const INDICES: std::ops::Range<usize> = 0..HOOKS.len();
 
-/// Private `CpuHookLeaves` from cpu_events.cpp.
+/// Static list of typed native detours, in the same order as HOOKS.
 #[repr(C)]
-struct Leaves {
+struct Detours {
     struct_size: u32,
     version: u32,
-    create: unsafe extern "C" fn(u32, usize) -> bool,
-    remove: unsafe extern "C" fn(u32, usize) -> bool,
-    enable: unsafe extern "C" fn(usize) -> i32,
-    disable: unsafe extern "C" fn(usize) -> bool,
-    qpc_frequency: unsafe extern "C" fn() -> u64,
+    functions: [*const c_void; HOOKS.len()],
+}
+
+static ORIGINALS: [AtomicPtr<c_void>; HOOKS.len()] =
+    [const { AtomicPtr::new(ptr::null_mut()) }; HOOKS.len()];
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_original(index: u32) -> *mut c_void {
+    ORIGINALS
+        .get(index as usize)
+        .map_or(ptr::null_mut(), |slot| slot.load(Ordering::Acquire))
+}
+
+fn qpc_frequency() -> u64 {
+    let mut value: LARGE_INTEGER = unsafe { std::mem::zeroed() };
+    if unsafe { QueryPerformanceFrequency(&mut value) } == 0 {
+        return 0;
+    }
+    u64::try_from(unsafe { *value.QuadPart() }).unwrap_or(0)
 }
 
 #[derive(Clone, Copy)]
@@ -142,7 +159,7 @@ struct StartRefusal {
 }
 
 const _: () = {
-    assert!(size_of::<Leaves>() == 48);
+    assert!(size_of::<Detours>() == 8 + HOOKS.len() * size_of::<usize>());
     assert!(size_of::<Services>() == size_of::<rsf_game_host_services>() + 8);
     assert!(std::mem::offset_of!(Services, frequency) == size_of::<rsf_game_host_services>());
     assert!(size_of::<StartRefusal>() == 16);
@@ -207,14 +224,20 @@ impl StartRefusal {
 }
 
 impl Control {
-    fn remove_unpinned(&mut self, leaves: &Leaves) {
+    fn remove_unpinned(&mut self) {
         let base = self.base;
-        self.hooks.remove(INDICES, |index| unsafe {
-            (leaves.remove)(index as u32, target(base, index))
+        self.hooks.remove(INDICES, |index| {
+            let removed = unsafe {
+                rsf_windows::minhook::remove_idempotent(target(base, index) as *mut c_void)
+            };
+            if removed {
+                ORIGINALS[index].store(ptr::null_mut(), Ordering::Release);
+            }
+            removed
         });
     }
 
-    fn prepare(&mut self, platform: &Platform, leaves: &Leaves) -> bool {
+    fn prepare(&mut self, platform: &Platform, detours: &Detours) -> bool {
         if rsf_skyrim_cpu_active() || rsf_skyrim_cpu_rust_busy() || !self.hooks.is_disabled() {
             return false;
         }
@@ -224,28 +247,33 @@ impl Control {
         }
 
         if !self.pinned {
-            self.remove_unpinned(leaves);
+            self.remove_unpinned();
             if !self.hooks.is_empty() {
                 return false;
             }
             self.base = base;
-            if !self
-                .hooks
-                .create(|index| unsafe { (leaves.create)(index as u32, target(base, index)) })
-            {
-                self.remove_unpinned(leaves);
+            if !self.hooks.create(|index| {
+                let Some(original) =
+                    platform.hook_create(target(base, index), detours.functions[index])
+                else {
+                    return false;
+                };
+                ORIGINALS[index].store(original, Ordering::Release);
+                true
+            }) {
+                self.remove_unpinned();
                 return false;
             }
         } else if self.base != base || !self.hooks.is_complete() {
             return false;
         }
 
-        let frequency = unsafe { (leaves.qpc_frequency)() };
+        let frequency = qpc_frequency();
         if frequency == 0
-            || (!self.pinned && platform.pin_module(std::ptr::from_ref(leaves) as usize) == 0)
+            || (!self.pinned && platform.pin_module(std::ptr::from_ref(detours) as usize) == 0)
         {
             if !self.pinned {
-                self.remove_unpinned(leaves);
+                self.remove_unpinned();
             }
             return false;
         }
@@ -255,7 +283,7 @@ impl Control {
         true
     }
 
-    fn start(&mut self, platform: &Platform, leaves: &Leaves) -> Result<(), StartRefusal> {
+    fn start(&mut self, platform: &Platform) -> Result<(), StartRefusal> {
         if rsf_skyrim_cpu_active() || rsf_skyrim_cpu_rust_busy() {
             return Err(StartRefusal::new(c"active or entered", 0, 0));
         }
@@ -276,45 +304,46 @@ impl Control {
         admission(platform, base)?;
 
         rsf_skyrim_cpu_clear_proof(true);
-        if let Err((index, status)) = self
-            .hooks
-            .enable(|index| unsafe { (leaves.enable)(target(base, index)) })
-        {
+        if let Err((index, status)) = self.hooks.enable(|index| unsafe {
+            rsf_windows::minhook::enable_status(target(base, index) as *mut c_void)
+        }) {
             // Keep preparation and any hook whose disable refused so stop can retry.
-            self.disable_hooks(leaves);
+            self.disable_hooks();
             return Err(StartRefusal::new(c"hook enable", HOOKS[index].0, status));
         }
         PRODUCERS.fetch_or(ACTIVE, Ordering::Release);
         Ok(())
     }
 
-    fn disable_hooks(&mut self, leaves: &Leaves) -> bool {
+    fn disable_hooks(&mut self) -> bool {
         let base = self.base;
         self.hooks.disable(INDICES, |index| unsafe {
-            (leaves.disable)(target(base, index))
+            rsf_windows::minhook::disable(target(base, index) as *mut c_void)
         })
     }
 
-    fn disable(&mut self, leaves: &Leaves) -> bool {
+    fn disable(&mut self) -> bool {
         rsf_skyrim_cpu_rust_quiesce();
-        self.disable_hooks(leaves) && !rsf_skyrim_cpu_rust_busy()
+        self.disable_hooks() && !rsf_skyrim_cpu_rust_busy()
     }
 }
 
 // The native wrappers lend their static, versioned tables and stack out parameters.
-fn valid(leaves: &Leaves) -> bool {
-    leaves.struct_size as usize == size_of::<Leaves>() && leaves.version == 1
-}
-
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_cpu_rust_prepare(leaves: &Leaves) -> bool {
-    let Some(platform) = platform::get().filter(|_| valid(leaves)) else {
+extern "C" fn rsf_skyrim_cpu_rust_prepare(detours: &Detours) -> bool {
+    let Some(platform) = platform::get() else {
         return false;
     };
+    if detours.struct_size as usize != size_of::<Detours>()
+        || detours.version != 1
+        || detours.functions.iter().any(|detour| detour.is_null())
+    {
+        return false;
+    }
     CONTROL
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .prepare(platform, leaves)
+        .prepare(platform, detours)
 }
 
 #[unsafe(no_mangle)]
@@ -331,18 +360,15 @@ extern "C" fn rsf_skyrim_cpu_rust_bind(host: &rsf_game_host_services) -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_cpu_rust_start(
-    leaves: &Leaves,
-    refusal: &mut StartRefusal,
-) -> bool {
-    let Some(platform) = platform::get().filter(|_| valid(leaves)) else {
+extern "C" fn rsf_skyrim_cpu_rust_start(refusal: &mut StartRefusal) -> bool {
+    let Some(platform) = platform::get() else {
         *refusal = StartRefusal::new(c"hook state", 0, 0);
         return false;
     };
     match CONTROL
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .start(platform, leaves)
+        .start(platform)
     {
         Ok(()) => true,
         Err(reason) => {
@@ -360,18 +386,17 @@ extern "C" fn rsf_skyrim_cpu_rust_quiesce() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_rust_disable(leaves: &Leaves) -> bool {
-    valid(leaves)
-        && CONTROL
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .disable(leaves)
+extern "C" fn rsf_skyrim_cpu_rust_disable() -> bool {
+    CONTROL
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .disable()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cpu_rust_stop(leaves: &Leaves) -> bool {
+extern "C" fn rsf_skyrim_cpu_rust_stop() -> bool {
     let mut control = CONTROL.lock().unwrap_or_else(PoisonError::into_inner);
-    if !valid(leaves) || !control.disable(leaves) {
+    if !control.disable() {
         return false;
     }
     // The caller handles the other subsystem refusals before calling stop. No further

@@ -2,9 +2,7 @@
 #include "cpu_events.h"
 #include "cpu_policy.h"
 #include "input_ownership.h"
-#include <MinHook.h>
 #include <windows.h>
-#include <array>
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -16,13 +14,9 @@ namespace rsf::skyrim {
 namespace {
 // Private Rust lifecycle boundary, mirrored in cpu_hooks.rs. The native wrappers below
 // preserve the fixture and session subsystem interfaces.
-struct CpuHookLeaves {
+struct CpuDetours {
     uint32_t struct_size, version;
-    bool (*create)(uint32_t index, uintptr_t target);
-    bool (*remove)(uint32_t index, uintptr_t target);
-    int32_t (*enable)(uintptr_t target);
-    bool (*disable)(uintptr_t target);
-    uint64_t (*qpc_frequency)();
+    const void* functions[13];
 };
 struct CpuServices {
     rsf_game_host_services host{};
@@ -39,7 +33,7 @@ struct ManagerState {
     bool read() noexcept;
 };
 static_assert(sizeof(ManagerState) == 24);
-static_assert(sizeof(CpuHookLeaves) == 48);
+static_assert(sizeof(CpuDetours) == 8 + 13 * sizeof(void*));
 static_assert(sizeof(CpuServices) == sizeof(rsf_game_host_services) + 8 &&
     offsetof(CpuServices, frequency) == sizeof(rsf_game_host_services));
 static_assert(sizeof(CpuStartRefusal) == 16);
@@ -54,11 +48,12 @@ bool rsf_skyrim_cpu_camera_consumes(uintptr_t) noexcept;
 bool rsf_skyrim_cpu_queued_move(bool*) noexcept;
 bool rsf_skyrim_cpu_free_camera(bool*) noexcept;
 bool rsf_skyrim_cpu_rust_bind(const rsf_game_host_services*) noexcept;
-bool rsf_skyrim_cpu_rust_prepare(const CpuHookLeaves*) noexcept;
-bool rsf_skyrim_cpu_rust_start(const CpuHookLeaves*, CpuStartRefusal*) noexcept;
+void* rsf_skyrim_cpu_original(uint32_t) noexcept;
+bool rsf_skyrim_cpu_rust_prepare(const CpuDetours*) noexcept;
+bool rsf_skyrim_cpu_rust_start(CpuStartRefusal*) noexcept;
 void rsf_skyrim_cpu_rust_quiesce() noexcept;
-bool rsf_skyrim_cpu_rust_disable(const CpuHookLeaves*) noexcept;
-bool rsf_skyrim_cpu_rust_stop(const CpuHookLeaves*) noexcept;
+bool rsf_skyrim_cpu_rust_disable() noexcept;
+bool rsf_skyrim_cpu_rust_stop() noexcept;
 bool rsf_skyrim_cpu_rust_busy() noexcept;
 void rsf_skyrim_cpu_services(CpuServices*) noexcept;
 bool rsf_skyrim_cpu_active() noexcept;
@@ -283,7 +278,7 @@ enum HookIndex : uint32_t {
     hook_count
 };
 static_assert(hook_count == 13);
-const std::array<void*, hook_count> detours{
+const CpuDetours cpu_detours{sizeof(CpuDetours), 1, {
     reinterpret_cast<void*>(&tick),
     reinterpret_cast<void*>(&poll),
     reinterpret_cast<void*>(&render),
@@ -297,37 +292,10 @@ const std::array<void*, hook_count> detours{
     reinterpret_cast<void*>(&movement),
     reinterpret_cast<void*>(&player_update),
     reinterpret_cast<void*>(&player_camera_update),
-};
-std::array<std::atomic<void*>, hook_count> originals{};
-
-const CpuHookLeaves cpu_hook_leaves{
-    sizeof(CpuHookLeaves), 1,
-    [](uint32_t index, uintptr_t target) noexcept {
-        void* original{};
-        if (MH_CreateHook(reinterpret_cast<void*>(target), detours[index], &original) != MH_OK) return false;
-        originals[index].store(original, std::memory_order_release);
-        return true;
-    },
-    [](uint32_t index, uintptr_t target) noexcept {
-        const auto status = MH_RemoveHook(reinterpret_cast<void*>(target));
-        if (status != MH_OK && status != MH_ERROR_NOT_CREATED) return false;
-        originals[index].store(nullptr, std::memory_order_release);
-        return true;
-    },
-    [](uintptr_t target) noexcept { return int32_t(MH_EnableHook(reinterpret_cast<void*>(target))); },
-    [](uintptr_t target) noexcept {
-        const auto status = MH_DisableHook(reinterpret_cast<void*>(target));
-        return status == MH_OK || status == MH_ERROR_DISABLED;
-    },
-    []() noexcept {
-        LARGE_INTEGER value{};
-        return QueryPerformanceFrequency(&value) && value.QuadPart > 0 ? uint64_t(value.QuadPart) : uint64_t(0);
-    },
-};
-static_assert(MH_OK == 0);
+}};
 
 template<class Function> Function continuation(HookIndex index) noexcept {
-    return reinterpret_cast<Function>(originals[index].load(std::memory_order_acquire));
+    return reinterpret_cast<Function>(rsf_skyrim_cpu_original(index));
 }
 bool copy_input(void* out, const void* pointer, size_t size) noexcept {
 #if defined(_MSC_VER)
@@ -734,7 +702,7 @@ uintptr_t render(void* main)
 
 bool cpu_prepare()
 {
-    return rsf_skyrim_cpu_rust_prepare(&cpu_hook_leaves);
+    return rsf_skyrim_cpu_rust_prepare(&cpu_detours);
 }
 bool cpu_bind(const rsf_game_host_services& host)
 {
@@ -744,7 +712,7 @@ bool cpu_bind(const rsf_game_host_services& host)
 bool cpu_start()
 {
     CpuStartRefusal refusal{};
-    if (rsf_skyrim_cpu_rust_start(&cpu_hook_leaves, &refusal)) return true;
+    if (rsf_skyrim_cpu_rust_start(&refusal)) return true;
     const auto services = cpu_services();
     if (services.host.log) {
         char message[180]{};
@@ -755,8 +723,8 @@ bool cpu_start()
     return false;
 }
 void cpu_quiesce() { rsf_skyrim_cpu_rust_quiesce(); }
-bool cpu_disable() { return rsf_skyrim_cpu_rust_disable(&cpu_hook_leaves); }
-bool cpu_stop() { return rsf_skyrim_cpu_rust_stop(&cpu_hook_leaves); }
+bool cpu_disable() { return rsf_skyrim_cpu_rust_disable(); }
+bool cpu_stop() { return rsf_skyrim_cpu_rust_stop(); }
 bool cpu_busy() { return rsf_skyrim_cpu_rust_busy(); }
 uint64_t cpu_source() { return current ? current->source : 0; }
 bool cpu_render_identity(rsf_game_render_pass& pass) {

@@ -38,7 +38,6 @@ type Withdraw = unsafe extern "C" fn();
 #[repr(C)]
 struct Leaves {
     read: Read,
-    hook_initialize: unsafe extern "C" fn() -> bool,
     initialize: unsafe extern "C" fn(usize, *const c_void) -> u32,
     resolver_detour: *const c_void,
     initialize_detour: usize,
@@ -46,7 +45,7 @@ struct Leaves {
     hdr_detour: *const c_void,
 }
 
-const _: () = assert!(size_of::<Leaves>() == 56);
+const _: () = assert!(size_of::<Leaves>() == 48);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -271,7 +270,7 @@ fn create_hook(platform: &Platform, slot: usize, target: usize, detour: *const c
 
 fn arm(platform: &Platform, leaves: &Leaves) -> Result<(), &'static CStr> {
     installed_profile(leaves)?;
-    if !unsafe { (leaves.hook_initialize)() } {
+    if !rsf_windows::minhook::initialize() {
         return Err(c"CS initializer interception could not initialize native hooks.");
     }
     let target = platform.export_address(platform.module_handle("kernel32.dll"), c"GetProcAddress");

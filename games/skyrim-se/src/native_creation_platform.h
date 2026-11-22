@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#define RSF_SKYRIM_CREATION_PLATFORM_VERSION 3u
+#define RSF_SKYRIM_CREATION_PLATFORM_VERSION 4u
 
 // One guarded creation call, on the detour's stack from enter to leave. The detour fills the
 // argument fields and native_result/returned; the Rust owner writes the rest.
@@ -43,11 +43,6 @@ typedef struct rsf_skyrim_creation_platform {
     uint32_t reserved;
     // Fault-guarded copy from the process.
     bool (*read)(uintptr_t address, void* out, size_t size);
-    // MinHook on the adapter's process instance. Enable also accepts an already enabled hook and
-    // disable an already disabled one.
-    bool (*hook_create)(uintptr_t target, const void* detour, void** original);
-    bool (*hook_enable)(uintptr_t target);
-    bool (*hook_disable)(uintptr_t target);
     // D3D11CreateDeviceAndSwapChain-shaped detour that captures the native return address.
     const void* create_detour;
     // Logs through borrowed host services. A thrown exception is swallowed.

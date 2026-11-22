@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "compatibility.h"
 #include "postprocess_platform.h"
-#include <MinHook.h>
 #include <windows.h>
 #include <cstddef>
 #if defined(_MSC_VER)
@@ -17,7 +16,6 @@ struct rsf_skyrim_cs_hdr_scope {
 };
 struct rsf_skyrim_cs_leaves {
     ProfileRead read;
-    bool (*hook_initialize)();
     uint32_t (*initialize)(uintptr_t, const void*);
     const void* resolver_detour;
     uintptr_t initialize_detour;
@@ -37,7 +35,7 @@ void rsf_skyrim_cs_hdr_leave(const rsf_skyrim_cs_hdr_scope*) noexcept;
 bool rsf_skyrim_cs_postprocess_allowed(uintptr_t game, const rsf_skyrim_cs_hdr_call*, ProfileRead) noexcept;
 }
 
-static_assert(sizeof(wchar_t) == 2 && sizeof(rsf_skyrim_cs_leaves) == 56);
+static_assert(sizeof(wchar_t) == 2 && sizeof(rsf_skyrim_cs_leaves) == 48);
 static_assert(sizeof(rsf_skyrim_cs_hdr_scope) == 48);
 static_assert(sizeof(IMAGE_DOS_HEADER) == 64 && offsetof(IMAGE_DOS_HEADER, e_lfanew) == 0x3c);
 static_assert(sizeof(IMAGE_NT_HEADERS64) == 264 && sizeof(IMAGE_OPTIONAL_HEADER64) == 240);
@@ -107,10 +105,6 @@ void hdr_process(void* manager, uint32_t input, uint32_t output, uintptr_t argum
 
 const rsf_skyrim_cs_leaves leaves{
     read,
-    []() noexcept {
-        const auto status = MH_Initialize();
-        return status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED;
-    },
     [](uintptr_t original, const void* skse) noexcept -> uint32_t {
         try { return original && reinterpret_cast<Initialize>(original)(skse) ? 1u : 0u; } catch (...) { return 2u; }
     },

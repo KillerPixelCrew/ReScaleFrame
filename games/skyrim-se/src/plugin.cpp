@@ -6,7 +6,6 @@
 // MinHook and the exception boundary for callbacks supplied to Rust.
 #include <rescaleframe/game_api.h>
 #include <windows.h>
-#include <MinHook.h>
 #include <atomic>
 #include "cpu_events.h"
 #include "compatibility.h"
@@ -188,39 +187,30 @@ const ObserverHook& observer_hook(uint32_t index) noexcept
     return hooks[index];
 }
 
+extern "C" bool rsf_skyrim_observer_initialize() noexcept;
+extern "C" bool rsf_skyrim_observer_create(void*, void*, void**) noexcept;
+extern "C" bool rsf_skyrim_observer_remove(void*, void**) noexcept;
+extern "C" int32_t rsf_skyrim_observer_enable(void*) noexcept;
+extern "C" bool rsf_skyrim_observer_disable(void*) noexcept;
+extern "C" bool rsf_skyrim_observer_pin(uintptr_t) noexcept;
+
 constexpr rsf_skyrim_observer_leaves observer_leaves{
-    []() noexcept {
-        const auto result = MH_Initialize();
-        return result == MH_OK || result == MH_ERROR_ALREADY_INITIALIZED;
+    rsf_skyrim_observer_initialize,
+    [](uint32_t index) noexcept {
+        const auto& hook = observer_hook(index);
+        return rsf_skyrim_observer_create(*hook.address, hook.detour, hook.trampoline);
     },
     [](uint32_t index) noexcept {
         const auto& hook = observer_hook(index);
-        return MH_CreateHook(*hook.address, hook.detour, hook.trampoline) == MH_OK;
+        return rsf_skyrim_observer_remove(*hook.address, hook.trampoline);
     },
-    [](uint32_t index) noexcept {
-        const auto& hook = observer_hook(index);
-        const auto result = MH_RemoveHook(*hook.address);
-        if (result != MH_OK && result != MH_ERROR_NOT_CREATED) return false;
-        *hook.trampoline = nullptr;
-        return true;
-    },
-    [](uint32_t index) noexcept -> int32_t {
-        return static_cast<int32_t>(MH_EnableHook(*observer_hook(index).address));
-    },
-    [](uint32_t index) noexcept {
-        const auto result = MH_DisableHook(*observer_hook(index).address);
-        return result == MH_OK || result == MH_ERROR_DISABLED;
-    },
-    []() noexcept {
-        HMODULE pinned = nullptr;
-        return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-            reinterpret_cast<LPCWSTR>(&observe_jitter), &pinned) != FALSE;
-    },
+    [](uint32_t index) noexcept { return rsf_skyrim_observer_enable(*observer_hook(index).address); },
+    [](uint32_t index) noexcept { return rsf_skyrim_observer_disable(*observer_hook(index).address); },
+    []() noexcept { return rsf_skyrim_observer_pin(reinterpret_cast<uintptr_t>(&observe_jitter)); },
     [](const rsf_game_host_services* host, const char* message) noexcept {
         if (host->log) try { host->log(host->user, message); } catch (...) {}
     },
 };
-static_assert(MH_OK == 0);
 
 // A subsystem call that throws reports false; the Rust session then retires what it started and
 // answers RSF_ERROR_NOT_READY as the former catch did.

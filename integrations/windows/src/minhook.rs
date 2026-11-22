@@ -3,9 +3,13 @@
 use std::ffi::c_void;
 
 const OK: i32 = 0;
+const ALREADY_INITIALIZED: i32 = 1;
+const NOT_CREATED: i32 = 4;
+const ALREADY_ENABLED: i32 = 5;
 const ALREADY_DISABLED: i32 = 6;
 
 unsafe extern "system" {
+    fn MH_Initialize() -> i32;
     fn MH_CreateHook(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32;
     fn MH_QueueEnableHook(target: *mut c_void) -> i32;
     fn MH_QueueDisableHook(target: *mut c_void) -> i32;
@@ -45,10 +49,35 @@ pub(crate) unsafe fn enable(target: *mut c_void) -> bool {
     unsafe { MH_EnableHook(target) == OK }
 }
 
-pub(crate) unsafe fn disable(target: *mut c_void) -> bool {
+/// # Safety
+/// The target must identify a hook owned by the caller.
+pub unsafe fn disable(target: *mut c_void) -> bool {
     matches!(unsafe { MH_DisableHook(target) }, OK | ALREADY_DISABLED)
 }
 
 pub(crate) unsafe fn remove(target: *mut c_void) -> bool {
     unsafe { MH_RemoveHook(target) == OK }
+}
+
+/// Initialize or join the linked MinHook instance.
+pub fn initialize() -> bool {
+    matches!(unsafe { MH_Initialize() }, OK | ALREADY_INITIALIZED)
+}
+
+/// # Safety
+/// The caller owns the target and has published its original trampoline.
+pub unsafe fn enable_status(target: *mut c_void) -> i32 {
+    unsafe { MH_EnableHook(target) }
+}
+
+/// # Safety
+/// The caller owns the target and has published its original trampoline.
+pub unsafe fn enable_idempotent(target: *mut c_void) -> bool {
+    matches!(unsafe { enable_status(target) }, OK | ALREADY_ENABLED)
+}
+
+/// # Safety
+/// The caller owns the disabled target and will no longer use its trampoline.
+pub unsafe fn remove_idempotent(target: *mut c_void) -> bool {
+    matches!(unsafe { MH_RemoveHook(target) }, OK | NOT_CREATED)
 }

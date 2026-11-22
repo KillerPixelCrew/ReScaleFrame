@@ -16,7 +16,7 @@ use windows_sys::Win32::System::LibraryLoader::{
 };
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
 
-pub(crate) const PLATFORM_VERSION: u32 = 3;
+pub(crate) const PLATFORM_VERSION: u32 = 4;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -63,13 +63,6 @@ pub(crate) struct Platform {
     pub(crate) d3d11_host_abi: u32,
     _reserved: u32,
     read: unsafe extern "C" fn(address: usize, out: *mut c_void, size: usize) -> bool,
-    hook_create: unsafe extern "C" fn(
-        target: usize,
-        detour: *const c_void,
-        original: *mut *mut c_void,
-    ) -> bool,
-    hook_enable: unsafe extern "C" fn(target: usize) -> bool,
-    hook_disable: unsafe extern "C" fn(target: usize) -> bool,
     pub(crate) create_detour: *const c_void,
     log: unsafe extern "C" fn(host: *const rsf_game_host_services, message: *const c_char),
     creation_begin:
@@ -92,8 +85,8 @@ const _: () = {
     assert!(std::mem::offset_of!(CreationCall, owner) == 56);
     assert!(std::mem::offset_of!(CreationCall, scope) == 80);
     assert!(std::mem::offset_of!(CreationCall, outputs) == 104);
-    assert!(size_of::<Platform>() == 16 + 9 * size_of::<usize>());
-    assert!(std::mem::offset_of!(Platform, create_detour) == 16 + 4 * size_of::<usize>());
+    assert!(size_of::<Platform>() == 16 + 6 * size_of::<usize>());
+    assert!(std::mem::offset_of!(Platform, create_detour) == 16 + size_of::<usize>());
 };
 
 // The native table is a constant with static storage in the adapter DLL.
@@ -260,16 +253,18 @@ impl Platform {
 
     pub(crate) fn hook_create(&self, target: usize, detour: *const c_void) -> Option<*mut c_void> {
         let mut original = ptr::null_mut();
-        let created = unsafe { (self.hook_create)(target, detour, &mut original) };
+        let created = unsafe {
+            rsf_windows::minhook::create(target as *mut c_void, detour.cast_mut(), &mut original)
+        };
         (created && !original.is_null()).then_some(original)
     }
 
     pub(crate) fn hook_enable(&self, target: usize) -> bool {
-        unsafe { (self.hook_enable)(target) }
+        unsafe { rsf_windows::minhook::enable_idempotent(target as *mut c_void) }
     }
 
     pub(crate) fn hook_disable(&self, target: usize) -> bool {
-        unsafe { (self.hook_disable)(target) }
+        unsafe { rsf_windows::minhook::disable(target as *mut c_void) }
     }
 
     pub(crate) fn log(&self, host: &rsf_game_host_services, message: &CStr) {
