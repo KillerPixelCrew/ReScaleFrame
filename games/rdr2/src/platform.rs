@@ -1,11 +1,55 @@
 // SPDX-License-Identifier: MIT
-//! Typed native leaves supplied by `native_platform.cpp`. The table carries MinHook, D3D12/DXGI,
-//! Win32 input/memory and caller-capture operations only; every RDR2 decision stays in this crate.
-//! The archive imports no native symbol, so fixtures can link it without the plugin's leaves.
+//! Platform services used by the game renderer and synthetic fixtures.
 use std::ffi::{c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+
+#[cfg(all(windows, not(test)))]
+#[path = "native_input.rs"]
+mod input;
+#[cfg(all(windows, not(test)))]
+#[path = "native_platform.rs"]
+mod native;
+
+#[cfg(all(windows, not(test)))]
+pub(crate) fn native() -> &'static Platform {
+    &native::NATIVE
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub(crate) unsafe extern "C" fn worker_tls_slots() -> usize {
+    let slots: usize;
+    // Windows x64 TEB.ThreadLocalStoragePointer, equal to __readgsqword(0x58).
+    unsafe {
+        std::arch::asm!("mov {}, gs:[0x58]", out(reg) slots, options(nostack, readonly, preserves_flags))
+    };
+    slots
+}
+
+#[cfg(windows)]
+pub(crate) mod minhook {
+    use std::ffi::c_void;
+
+    #[cfg(not(test))]
+    unsafe extern "system" {
+        pub(crate) fn MH_Initialize() -> i32;
+        pub(crate) fn MH_DisableHook(target: *mut c_void) -> i32;
+        pub(crate) fn MH_RemoveHook(target: *mut c_void) -> i32;
+        pub(crate) fn MH_CreateHook(
+            target: *mut c_void,
+            detour: *mut c_void,
+            original: *mut *mut c_void,
+        ) -> i32;
+        pub(crate) fn MH_EnableHook(target: *mut c_void) -> i32;
+    }
+
+    #[cfg(test)]
+    #[allow(non_snake_case)]
+    pub(crate) unsafe extern "system" fn MH_EnableHook(_: *mut c_void) -> i32 {
+        2 // MH_ERROR_NOT_INITIALIZED. Cargo unit tests never install native hooks.
+    }
+}
 
 /// Hook callbacks must not unwind; a poisoned lock keeps its last consistent state.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

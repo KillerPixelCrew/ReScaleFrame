@@ -249,7 +249,7 @@ fn forget_resources(pass: &mut rsf_game_render_pass) {
 
 /// Entered from the native leaf with the call's return address.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_output_detour(
+pub(crate) unsafe extern "C" fn rsf_rdr2_output_detour(
     depth: *mut c_void,
     color: *mut c_void,
     technique: u32,
@@ -300,7 +300,7 @@ fn blit_target(platform: &Platform, image: usize) -> Option<BlitTarget> {
 
 /// Entered from the native leaf with the call's return address.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_blit_detour(
+pub(crate) unsafe extern "C" fn rsf_rdr2_blit_detour(
     shader: *mut c_void,
     technique: u32,
     pass_index: u32,
@@ -412,15 +412,17 @@ pub(crate) struct PresentReceipt {
     chain: usize,
     index: u32,
     surface: usize,
+    generation: u32,
 }
 
 pub(crate) fn before_present(
     platform: &Platform,
     chain: *mut c_void,
     flags: u32,
+    generation: u32,
 ) -> Option<PresentReceipt> {
     PRESENT_RECEIPT.set(None);
-    if flags & 1 != 0 || !ACTIVE.load(Ordering::SeqCst) {
+    if flags & 1 != 0 {
         return None; // DXGI_PRESENT_TEST does not present a buffer.
     }
     let index = unsafe { (platform.back_buffer_index)(chain) };
@@ -432,6 +434,7 @@ pub(crate) fn before_present(
         chain: chain as usize,
         index,
         surface: buffer.object as usize,
+        generation,
     })
 }
 
@@ -447,6 +450,7 @@ fn window_pass(
 ) -> Option<rsf_game_render_pass> {
     if receipt.chain != active
         || scene.pass.native_frame != frame
+        || receipt.generation != scene.pass.resource_generation
         || scene.surface == 0
         || scene.surface != receipt.surface
     {

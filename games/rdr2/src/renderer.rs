@@ -565,7 +565,7 @@ fn report_fsr_caller(ctx: &Context, caller: usize) {
 
 /// Entered from the native leaf with the call's return address.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_fsr_dispatch_detour(
+pub(crate) unsafe extern "C" fn rsf_rdr2_fsr_dispatch_detour(
     context_pointer: *mut c_void,
     pointer: *const c_void,
     caller: usize,
@@ -713,7 +713,7 @@ unsafe extern "system" fn present(owner: *mut c_void, interval: u32, flags: u32)
     }
     let receipt = platform::get()
         .filter(|_| active)
-        .and_then(|platform| scene::before_present(platform, owner, flags));
+        .and_then(|platform| scene::before_present(platform, owner, flags, generation));
     let result = unsafe { native(owner, interval, flags) };
     let observed = {
         let mut observers = lock(&OBSERVERS);
@@ -750,7 +750,7 @@ fn select_observers(platform: &Platform, host: &Host, queue: usize, swapchain: u
 
 /// Entered from the native leaf with the call's return address.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_pop_detour(
+pub(crate) unsafe extern "C" fn rsf_rdr2_pop_detour(
     ring: *mut c_void,
     record: *mut c_void,
     caller: usize,

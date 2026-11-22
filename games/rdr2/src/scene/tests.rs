@@ -77,6 +77,7 @@ fn window_pass_uses_the_buffer_that_present_actually_received() {
         chain: 0x3333,
         index: 1,
         surface: 0x2000,
+        generation: scene.pass.resource_generation,
     };
     assert!(window_pass(&mut scene, 70, receipt.chain, receipt).is_none());
     receipt.index = 0;

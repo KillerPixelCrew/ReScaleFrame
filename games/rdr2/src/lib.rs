@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Red Dead Redemption 2 (Steam 1.0.1491.50) game plugin policy for `ReScaleFrame.Game.RDR2.dll`.
 //! Recognition, lifecycle validation, native SR routing and the completed-scene producer live here.
-//! `native_platform.cpp` keeps the MinHook, D3D12/DXGI, Win32 and caller-capture leaves.
+//! Windows and COM services are implemented in the platform module.
 //!
 //! `ReScaleFrame.RDR2.asi` links the same archive for its startup admission and engine-settings
 //! ownership (`asi`, `engine_settings`); `asi_entry.cpp` lends that module its own leaf table.
@@ -148,6 +148,16 @@ unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> u32 {
     } else {
         UNKNOWN
     }
+}
+
+/// Public entry exported by the game plugin's module definition.
+#[cfg(all(windows, not(test)))]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_get_game_plugin_api(
+    requested_abi: u32,
+    api: *mut rsf_game_plugin_api,
+) -> i32 {
+    unsafe { rsf_rdr2_publish_api(requested_abi, api, platform::native()) }
 }
 
 /// Fills the plugin API for `rsf_get_game_plugin_api` and accepts the native leaf table.
