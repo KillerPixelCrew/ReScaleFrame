@@ -116,6 +116,7 @@ fn admitted_target(platform: &Platform, this: *mut c_void) -> *mut c_void {
 struct Seam {
     twin_surface: *mut c_void,
     engine_surface: *mut c_void,
+    spatial_recovery: bool,
     views: DrawViews,
 }
 
@@ -130,6 +131,7 @@ impl Seam {
         Some(Self {
             twin_surface: colour.surface,
             engine_surface: colour_target.surface,
+            spatial_recovery: input.spatial_recovery,
             views: DrawViews {
                 output: Extent {
                     width: input.output_width,
@@ -157,6 +159,7 @@ impl Seam {
         Self {
             twin_surface: twin.surface,
             engine_surface: engine.surface,
+            spatial_recovery: false,
             views: DrawViews {
                 output: Extent {
                     width: engine.width,
@@ -1857,9 +1860,12 @@ impl Stage {
                 frame.world = copy;
             }
         }
-        let ok = if sr_inputs(stage) {
+        let ok = if sr_inputs(stage) && !seam.spatial_recovery {
             self.temporal_seam(state, seam)
         } else {
+            if seam.spatial_recovery && sr_inputs(stage) {
+                leaf!(p, driver_count_bilinear());
+            }
             leaf!(p, draw_pass(UPSCALE, &seam.views))
         };
         if state.capture.active {
