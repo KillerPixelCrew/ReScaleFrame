@@ -7982,3 +7982,13 @@ registration, COM handoff and exception guards remain. Unity, AC7 and RDR2
 use the shared Win32 message classifier while retaining their own attribution
 and callback admission. AC7 velocity declarations were syntax-checked after
 the Rust bytecode and replay port. Build and runtime validation remain pending.
+
+### Typed overlay SDK calls
+
+The native D3D12 and D3D11-on-12 overlay now use typed Windows calls in Rust.
+The D3D11 device fixture keeps its real Runtime import through a C launcher.
+The shared native log exception guard remains. The
+[overlay SDK source record](research/overlay-native-sdk-port.md) documents
+the slot, backbuffer and input ownership and the remaining execution checks.
+Binding, formatting, locked offline metadata and source checks completed.
+Build, fixture and device execution remain pending.
