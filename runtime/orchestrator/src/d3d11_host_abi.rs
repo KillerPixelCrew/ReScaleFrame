@@ -3,7 +3,7 @@
 // The host platform table is Rust-only and can be replaced by fixture calls.
 #![allow(non_camel_case_types)]
 
-use crate::sys::rsf_aux_platform;
+use crate::auxiliary_sr::AuxPlatform;
 use crate::sys::rsf_motion_decode_params;
 use crate::sys::rsf_overlay_service_setup;
 use crate::sys::{rsf_backend_log_fn, rsf_native_fg_options, rsf_render_settings};
@@ -178,7 +178,7 @@ pub(crate) struct rsf_d3d11h_platform {
     pub overlay_poll_toggle: unsafe extern "C" fn(),
     pub ini_read: unsafe extern "C" fn(*const u16, *const u16, *const u16, i32) -> i32,
     pub ini_write: unsafe extern "C" fn(*const u16, *const u16, *const u16, *const u16) -> i32,
-    pub auxiliary: *const rsf_aux_platform,
+    pub auxiliary: *const AuxPlatform,
 }
 
 const _: () = {

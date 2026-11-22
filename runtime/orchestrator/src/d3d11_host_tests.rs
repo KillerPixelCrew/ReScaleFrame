@@ -2,8 +2,8 @@
 // Synthetic D3D11 host contracts: fake COM identities, a fake native leaf table
 // and fake auxiliary products. No device, window or SDK is touched.
 use super::*;
+use crate::auxiliary_sr::AuxPlatform;
 use crate::com_ref::test::{Fake, add_ref, fake, raw};
-use crate::sys::rsf_aux_platform;
 use crate::sys::rsf_backend_log_fn;
 use crate::sys::rsf_motion_decode_params;
 use crate::sys::rsf_streamline_host;
@@ -363,7 +363,7 @@ impl Products for FakeProducts {
     }
 }
 
-fn fake_products(_: *const rsf_aux_platform) -> Option<Box<dyn Products>> {
+fn fake_products(_: *const AuxPlatform) -> Option<Box<dyn Products>> {
     Some(Box::<FakeProducts>::default())
 }
 

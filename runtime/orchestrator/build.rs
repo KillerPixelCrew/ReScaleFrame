@@ -178,7 +178,6 @@ fn streamline_guard() {
 /// from rsf-streamline-vk and the D3D11 output and frame-tap platform headers from rsf-graphics.
 fn bindings() {
     const HEADERS: &[&str] = &[
-        "runtime/orchestrator/src/auxiliary_sr_platform.h",
         "runtime/orchestrator/src/d3d11_host_foreign.h",
         "runtime/orchestrator/src/fg12_platform.h",
         "runtime/orchestrator/src/latency_antilag.h",

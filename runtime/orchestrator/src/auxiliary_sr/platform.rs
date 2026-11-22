@@ -17,25 +17,7 @@ use windows::core::Interface;
 type Raw = *mut c_void;
 const SHADER: &[u8] = include_bytes!("scale.hlsl");
 
-const _: () = {
-    assert!(size_of::<rsf_aux_draw_constants>() == 64);
-    assert!(RSF_AUX_FORMAT_RGBA32_FLOAT == DXGI_FORMAT_R32G32B32A32_FLOAT.0 as u32);
-    assert!(RSF_AUX_FORMAT_RGBA16_FLOAT == DXGI_FORMAT_R16G16B16A16_FLOAT.0 as u32);
-    assert!(RSF_AUX_FORMAT_R11G11B10_FLOAT == DXGI_FORMAT_R11G11B10_FLOAT.0 as u32);
-    assert!(RSF_AUX_FORMAT_RGBA8_UNORM == DXGI_FORMAT_R8G8B8A8_UNORM.0 as u32);
-    assert!(RSF_AUX_FORMAT_RG16_FLOAT == DXGI_FORMAT_R16G16_FLOAT.0 as u32);
-    assert!(RSF_AUX_FORMAT_R32_FLOAT == DXGI_FORMAT_R32_FLOAT.0 as u32);
-    assert!(RSF_AUX_FORMAT_R24G8_TYPELESS == DXGI_FORMAT_R24G8_TYPELESS.0 as u32);
-    assert!(RSF_AUX_FORMAT_R16_FLOAT == DXGI_FORMAT_R16_FLOAT.0 as u32);
-    assert!(RSF_AUX_FORMAT_R8_UNORM == DXGI_FORMAT_R8_UNORM.0 as u32);
-    assert!(RSF_AUX_USAGE_DEFAULT == D3D11_USAGE_DEFAULT.0 as u32);
-    assert!(
-        RSF_AUX_PACKED_SUPPORT_MASK
-            == (D3D11_FORMAT_SUPPORT_TEXTURE2D.0
-                | D3D11_FORMAT_SUPPORT_SHADER_LOAD.0
-                | D3D11_FORMAT_SUPPORT_RENDER_TARGET.0) as u32
-    );
-};
+const _: () = assert!(size_of::<AuxDrawConstants>() == 64);
 
 unsafe extern "C" {
     fn rsf_d3d11_create_shader_view(device: Raw, texture: Raw) -> Raw;
@@ -52,18 +34,14 @@ unsafe extern "C" fn immediate_device(context: Raw) -> Raw {
 unsafe extern "C" fn device_ready(device: Raw) -> i32 {
     i32::from(unsafe { borrow::<ID3D11Device>(&device).GetDeviceRemovedReason() }.is_ok())
 }
-unsafe extern "C" fn describe_texture(
-    texture: Raw,
-    device: Raw,
-    out: *mut rsf_aux_texture_facts,
-) -> i32 {
+unsafe extern "C" fn describe_texture(texture: Raw, device: Raw, out: *mut AuxTextureFacts) -> i32 {
     let texture = unsafe { borrow::<ID3D11Texture2D>(&texture) };
     let owner = unsafe { texture.GetDevice() }.ok();
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe {
         texture.GetDesc(&mut desc);
-        out.write(rsf_aux_texture_facts {
-            info: rsf_aux_texture_info {
+        out.write(AuxTextureFacts {
+            info: AuxTextureInfo {
                 width: desc.Width,
                 height: desc.Height,
                 format: desc.Format.0 as u32,
@@ -90,7 +68,7 @@ unsafe extern "C" fn create_pipeline(
     device: Raw,
     log: rsf_game_log_fn,
     user: Raw,
-    out: *mut rsf_aux_colour_pipeline,
+    out: *mut AuxColourPipeline,
 ) -> i32 {
     let device = unsafe { borrow::<ID3D11Device>(&device) };
     let compile = |entry, target| {
@@ -110,8 +88,8 @@ unsafe extern "C" fn create_pipeline(
         let vertex = vertex_shader(device, &compile(c"vertex_main", c"vs_5_0")?)?;
         let pixel = pixel_shader(device, &compile(c"pixel_main", c"ps_5_0")?)?;
         let raster = rasterizer(device)?;
-        let constants = constant_buffer(device, size_of::<rsf_aux_draw_constants>() as u32, false)?;
-        Some(rsf_aux_colour_pipeline {
+        let constants = constant_buffer(device, size_of::<AuxDrawConstants>() as u32, false)?;
+        Some(AuxColourPipeline {
             vertex: vertex.into_raw(),
             pixel: pixel.into_raw(),
             raster: raster.into_raw(),
@@ -124,15 +102,11 @@ unsafe extern "C" fn create_pipeline(
     unsafe { out.write(pipeline) };
     1
 }
-unsafe extern "C" fn create_texture(
-    device: Raw,
-    info: *const rsf_aux_texture_info,
-    usage: u32,
-) -> Raw {
+unsafe extern "C" fn create_texture(device: Raw, info: *const AuxTextureInfo, usage: u32) -> Raw {
     let info = unsafe { &*info };
     let bind = match usage {
-        RSF_AUX_TEXTURE_SOURCE => D3D11_BIND_SHADER_RESOURCE.0,
-        RSF_AUX_TEXTURE_OUTPUT => D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0,
+        AUX_TEXTURE_SOURCE => D3D11_BIND_SHADER_RESOURCE.0,
+        AUX_TEXTURE_OUTPUT => D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0,
         _ => 0,
     };
     let desc = D3D11_TEXTURE2D_DESC {
@@ -161,10 +135,10 @@ unsafe extern "C" fn clear(context: Raw) {
 }
 unsafe extern "C" fn draw(
     raw: Raw,
-    pipeline: *const rsf_aux_colour_pipeline,
+    pipeline: *const AuxColourPipeline,
     view: Raw,
     target: Raw,
-    params: *const rsf_aux_draw_constants,
+    params: *const AuxDrawConstants,
 ) {
     let context = unsafe { borrow::<ID3D11DeviceContext>(&raw) };
     let table = context.vtable();
@@ -192,23 +166,22 @@ unsafe extern "C" fn draw(
         context.Draw(3, 0);
     }
 }
-static PLATFORM: rsf_aux_platform = rsf_aux_platform {
-    immediate_device: Some(immediate_device),
-    device_ready: Some(device_ready),
-    describe_texture: Some(describe_texture),
-    packed_colour_support: Some(packed_colour_support),
-    create_pipeline: Some(create_pipeline),
-    create_texture: Some(create_texture),
-    create_source_view: Some(rsf_d3d11_create_shader_view),
-    create_output_view: Some(rsf_d3d11_output_create_rtv),
-    save: Some(rsf_d3d11_state_save),
-    restore: Some(rsf_d3d11_state_restore),
-    clear: Some(clear),
-    copy: Some(rsf_d3d11_copy_resource),
-    draw: Some(draw),
+static PLATFORM: AuxPlatform = AuxPlatform {
+    immediate_device: immediate_device,
+    device_ready: device_ready,
+    describe_texture: describe_texture,
+    packed_colour_support: packed_colour_support,
+    create_pipeline: create_pipeline,
+    create_texture: create_texture,
+    create_source_view: rsf_d3d11_create_shader_view,
+    create_output_view: rsf_d3d11_output_create_rtv,
+    save: rsf_d3d11_state_save,
+    restore: rsf_d3d11_state_restore,
+    clear: clear,
+    copy: rsf_d3d11_copy_resource,
+    draw: draw,
 };
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_auxiliary_sr_platform() -> *const rsf_aux_platform {
+pub(crate) fn rsf_auxiliary_sr_platform() -> *const AuxPlatform {
     &PLATFORM
 }

@@ -2,6 +2,7 @@
 #[cfg(all(feature = "test-fixtures", not(test)))]
 #[path = "../../../tests/auxiliary_sr.rs"]
 mod fixture;
+#[cfg(not(test))]
 mod platform;
 #[cfg(not(test))]
 pub(super) use platform::rsf_auxiliary_sr_platform;
@@ -16,11 +17,83 @@ use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::c_void;
 use std::ptr;
 use std::slice;
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R11G11B10_FLOAT,
+    DXGI_FORMAT_R16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
+};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 const MAX_AUXILIARIES: usize = 8;
 const MAX_SURFACES: usize = MAX_AUXILIARIES + 2;
 type Texture = *mut c_void;
+
+const AUX_FORMAT_RGBA32_FLOAT: u32 = DXGI_FORMAT_R32G32B32A32_FLOAT.0 as u32;
+const AUX_FORMAT_RGBA16_FLOAT: u32 = DXGI_FORMAT_R16G16B16A16_FLOAT.0 as u32;
+const AUX_FORMAT_R11G11B10_FLOAT: u32 = DXGI_FORMAT_R11G11B10_FLOAT.0 as u32;
+const AUX_FORMAT_RGBA8_UNORM: u32 = DXGI_FORMAT_R8G8B8A8_UNORM.0 as u32;
+const AUX_FORMAT_RG16_FLOAT: u32 = DXGI_FORMAT_R16G16_FLOAT.0 as u32;
+const AUX_FORMAT_R32_FLOAT: u32 = DXGI_FORMAT_R32_FLOAT.0 as u32;
+const AUX_FORMAT_R24G8_TYPELESS: u32 = DXGI_FORMAT_R24G8_TYPELESS.0 as u32;
+const AUX_FORMAT_R16_FLOAT: u32 = DXGI_FORMAT_R16_FLOAT.0 as u32;
+const AUX_FORMAT_R8_UNORM: u32 = DXGI_FORMAT_R8_UNORM.0 as u32;
+// Formats whose packed-colour support bit the device must report.
+const AUX_PACKED_SUPPORT_MASK: u32 = 0x4120;
+const AUX_TEXTURE_BACKUP: u32 = 0;
+const AUX_TEXTURE_SOURCE: u32 = 1;
+const AUX_TEXTURE_OUTPUT: u32 = 2;
+const AUX_USAGE_DEFAULT: u32 = 0;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AuxTextureInfo {
+    width: u32,
+    height: u32,
+    format: u32,
+    sample_quality: u32,
+    depth_stencil: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AuxTextureFacts {
+    info: AuxTextureInfo,
+    same_device: u32,
+    array_size: u32,
+    mip_levels: u32,
+    sample_count: u32,
+    usage: u32,
+}
+
+/// The colour pass's 64-byte constant buffer.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct AuxDrawConstants {
+    source: [f32; 4],
+    output: [f32; 4],
+    valid: [f32; 4],
+    jitter: [f32; 2],
+    padding: [f32; 2],
+}
+
+#[repr(C)]
+pub(crate) struct AuxColourPipeline {
+    vertex: *mut c_void,
+    pixel: *mut c_void,
+    raster: *mut c_void,
+    constants: *mut c_void,
+}
+
+impl Default for AuxColourPipeline {
+    fn default() -> Self {
+        Self {
+            vertex: ptr::null_mut(),
+            pixel: ptr::null_mut(),
+            raster: ptr::null_mut(),
+            constants: ptr::null_mut(),
+        }
+    }
+}
 
 struct Owner {
     context: ComRef,
@@ -40,8 +113,8 @@ struct TextureKey {
     sample_quality: u32,
 }
 
-impl From<rsf_aux_texture_info> for TextureKey {
-    fn from(desc: rsf_aux_texture_info) -> Self {
+impl From<AuxTextureInfo> for TextureKey {
+    fn from(desc: AuxTextureInfo) -> Self {
         Self {
             width: desc.width,
             height: desc.height,
@@ -72,8 +145,8 @@ struct Pipeline {
 }
 
 impl Pipeline {
-    fn borrow(&self) -> rsf_aux_colour_pipeline {
-        rsf_aux_colour_pipeline {
+    fn borrow(&self) -> AuxColourPipeline {
+        AuxColourPipeline {
             vertex: self.vertex.0.as_ptr(),
             pixel: self.pixel.0.as_ptr(),
             raster: self.raster.0.as_ptr(),
@@ -123,9 +196,9 @@ impl Mapping {
         jitter_valid(self.jitter)
     }
 
-    fn colour_constants(&self) -> rsf_aux_draw_constants {
+    fn colour_constants(&self) -> AuxDrawConstants {
         let [left, top, right, bottom] = self.source.map(|edge| (edge - 0.5).ceil());
-        rsf_aux_draw_constants {
+        AuxDrawConstants {
             source: self.source,
             output: self.output.map(|edge| edge as f32),
             valid: [left, top, left.max(right - 1.0), top.max(bottom - 1.0)],
@@ -164,8 +237,8 @@ impl SurfaceKey {
 struct SurfacePlan {
     original: Texture,
     source: Texture,
-    original_desc: rsf_aux_texture_info,
-    source_desc: rsf_aux_texture_info,
+    original_desc: AuxTextureInfo,
+    source_desc: AuxTextureInfo,
     kind: u32,
     flags: u32,
     mapping: Mapping,
@@ -240,26 +313,26 @@ struct Frame {
     phase: Phase,
 }
 
-struct Platform {
+/// The D3D11 leaves the owner calls; production binds `platform::PLATFORM`. Successful COM
+/// outputs transfer one reference.
+#[derive(Clone, Copy)]
+pub(crate) struct AuxPlatform {
     immediate_device: unsafe extern "C" fn(context: *mut c_void) -> *mut c_void,
     device_ready: unsafe extern "C" fn(device: *mut c_void) -> i32,
     describe_texture: unsafe extern "C" fn(
         texture: *mut c_void,
         device: *mut c_void,
-        *mut rsf_aux_texture_facts,
+        *mut AuxTextureFacts,
     ) -> i32,
     packed_colour_support: unsafe extern "C" fn(device: *mut c_void, flags: *mut u32) -> i32,
     create_pipeline: unsafe extern "C" fn(
         device: *mut c_void,
         rsf_game_log_fn,
         log_user: *mut c_void,
-        *mut rsf_aux_colour_pipeline,
+        *mut AuxColourPipeline,
     ) -> i32,
-    create_texture: unsafe extern "C" fn(
-        device: *mut c_void,
-        *const rsf_aux_texture_info,
-        usage: u32,
-    ) -> *mut c_void,
+    create_texture:
+        unsafe extern "C" fn(device: *mut c_void, *const AuxTextureInfo, usage: u32) -> *mut c_void,
     create_source_view:
         unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
     create_output_view:
@@ -270,41 +343,21 @@ struct Platform {
     copy: unsafe extern "C" fn(context: *mut c_void, destination: *mut c_void, source: *mut c_void),
     draw: unsafe extern "C" fn(
         context: *mut c_void,
-        *const rsf_aux_colour_pipeline,
+        *const AuxColourPipeline,
         view: *mut c_void,
         target: *mut c_void,
-        *const rsf_aux_draw_constants,
+        *const AuxDrawConstants,
     ),
 }
 
-impl Platform {
-    fn checked(raw: &rsf_aux_platform) -> Option<Self> {
-        Some(Self {
-            immediate_device: raw.immediate_device?,
-            device_ready: raw.device_ready?,
-            describe_texture: raw.describe_texture?,
-            packed_colour_support: raw.packed_colour_support?,
-            create_pipeline: raw.create_pipeline?,
-            create_texture: raw.create_texture?,
-            create_source_view: raw.create_source_view?,
-            create_output_view: raw.create_output_view?,
-            save: raw.save?,
-            restore: raw.restore?,
-            clear: raw.clear?,
-            copy: raw.copy?,
-            draw: raw.draw?,
-        })
-    }
-}
-
 struct Bindings<'a> {
-    platform: &'a Platform,
+    platform: &'a AuxPlatform,
     context: *mut c_void,
     _saved: SavedBindings,
 }
 
 impl<'a> Bindings<'a> {
-    fn new(platform: &'a Platform, context: *mut c_void) -> Option<Self> {
+    fn new(platform: &'a AuxPlatform, context: *mut c_void) -> Option<Self> {
         let saved = unsafe { SavedBindings::new(context, platform.save, platform.restore) }?;
         let bindings = Self {
             platform,
@@ -324,7 +377,7 @@ impl<'a> Bindings<'a> {
     }
 }
 
-fn device_ready(platform: &Platform, device: *mut c_void) -> bool {
+fn device_ready(platform: &AuxPlatform, device: *mut c_void) -> bool {
     unsafe { (platform.device_ready)(device) != 0 }
 }
 
@@ -336,13 +389,13 @@ pub(crate) struct AuxiliarySr {
     pipeline: Option<Pipeline>,
     owner: Option<Owner>,
     depth: Option<Box<DepthScale>>,
-    platform: Platform,
+    platform: AuxPlatform,
 }
 
 impl AuxiliarySr {
-    pub(crate) fn new(platform: &rsf_aux_platform) -> Option<Self> {
+    pub(crate) fn new(platform: &AuxPlatform) -> Option<Self> {
         Some(Self {
-            platform: Platform::checked(platform)?,
+            platform: *platform,
             owner: None,
             pipeline: None,
             depth: None,
@@ -377,15 +430,15 @@ impl AuxiliarySr {
         Some(device_ptr)
     }
 
-    fn texture_info(&self, device: *mut c_void, texture: Texture) -> Option<rsf_aux_texture_info> {
-        let mut facts = rsf_aux_texture_facts::default();
+    fn texture_info(&self, device: *mut c_void, texture: Texture) -> Option<AuxTextureInfo> {
+        let mut facts = AuxTextureFacts::default();
         if texture.is_null()
             || unsafe { (self.platform.describe_texture)(texture, device, &mut facts) } == 0
             || facts.same_device == 0
             || facts.array_size != 1
             || facts.mip_levels != 1
             || facts.sample_count != 1
-            || facts.usage != RSF_AUX_USAGE_DEFAULT
+            || facts.usage != AUX_USAGE_DEFAULT
         {
             return None;
         }
@@ -394,19 +447,19 @@ impl AuxiliarySr {
 
     fn colour_supported(&self, device: *mut c_void, format: u32) -> bool {
         match format {
-            RSF_AUX_FORMAT_R11G11B10_FLOAT => {
+            AUX_FORMAT_R11G11B10_FLOAT => {
                 // Numeric nearest loads through an SRV and draws into an RTV.
                 let mut flags = 0;
                 (unsafe { (self.platform.packed_colour_support)(device, &mut flags) } != 0)
-                    && flags & RSF_AUX_PACKED_SUPPORT_MASK == RSF_AUX_PACKED_SUPPORT_MASK
+                    && flags & AUX_PACKED_SUPPORT_MASK == AUX_PACKED_SUPPORT_MASK
             }
-            RSF_AUX_FORMAT_RGBA32_FLOAT
-            | RSF_AUX_FORMAT_RGBA16_FLOAT
-            | RSF_AUX_FORMAT_RGBA8_UNORM
-            | RSF_AUX_FORMAT_RG16_FLOAT
-            | RSF_AUX_FORMAT_R32_FLOAT
-            | RSF_AUX_FORMAT_R16_FLOAT
-            | RSF_AUX_FORMAT_R8_UNORM => true,
+            AUX_FORMAT_RGBA32_FLOAT
+            | AUX_FORMAT_RGBA16_FLOAT
+            | AUX_FORMAT_RGBA8_UNORM
+            | AUX_FORMAT_RG16_FLOAT
+            | AUX_FORMAT_R32_FLOAT
+            | AUX_FORMAT_R16_FLOAT
+            | AUX_FORMAT_R8_UNORM => true,
             _ => false,
         }
     }
@@ -447,7 +500,7 @@ impl AuxiliarySr {
             let (source, source_desc) = match input.kind {
                 RSF_D3D11_AUXILIARY_DEPTH_STENCIL => {
                     if depth_seen
-                        || original_desc.format != RSF_AUX_FORMAT_R24G8_TYPELESS
+                        || original_desc.format != AUX_FORMAT_R24G8_TYPELESS
                         || original_desc.depth_stencil == 0
                         || !mapping.integral()
                     {
@@ -493,7 +546,7 @@ impl AuxiliarySr {
     fn create_texture(
         &self,
         device: *mut c_void,
-        desc: &rsf_aux_texture_info,
+        desc: &AuxTextureInfo,
         usage: u32,
     ) -> Option<ComRef> {
         unsafe { ComRef::from_owned((self.platform.create_texture)(device, desc, usage)) }
@@ -513,7 +566,7 @@ impl AuxiliarySr {
         {
             self.backups[index] = Some(Snapshot {
                 key,
-                texture: self.create_texture(device, &desc, RSF_AUX_TEXTURE_BACKUP)?,
+                texture: self.create_texture(device, &desc, AUX_TEXTURE_BACKUP)?,
             });
         }
         Some(())
@@ -532,8 +585,8 @@ impl AuxiliarySr {
         }) {
             return Some(());
         }
-        let snapshot = self.create_texture(device, &plan.source_desc, RSF_AUX_TEXTURE_SOURCE)?;
-        let output = self.create_texture(device, &plan.original_desc, RSF_AUX_TEXTURE_OUTPUT)?;
+        let snapshot = self.create_texture(device, &plan.source_desc, AUX_TEXTURE_SOURCE)?;
+        let output = self.create_texture(device, &plan.original_desc, AUX_TEXTURE_OUTPUT)?;
         let view = unsafe {
             ComRef::from_owned((self.platform.create_source_view)(
                 device,
@@ -574,7 +627,7 @@ impl AuxiliarySr {
             return None;
         }
         if self.pipeline.is_none() {
-            let mut pipeline = rsf_aux_colour_pipeline::default();
+            let mut pipeline = AuxColourPipeline::default();
             if unsafe { (self.platform.create_pipeline)(device, log, user, &mut pipeline) } == 0 {
                 return None;
             }
@@ -1005,9 +1058,7 @@ unsafe fn borrowed_surfaces<'a>(
 // Private C++ facade calls serialize access, pass live borrowed interfaces and
 // supply the platform callbacks. The owner checks thread and frame state.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_auxiliary_sr_create(
-    platform: *const rsf_aux_platform,
-) -> *mut AuxiliarySr {
+unsafe extern "C" fn rsf_auxiliary_sr_create(platform: *const AuxPlatform) -> *mut AuxiliarySr {
     let Some(platform) = (unsafe { platform.as_ref() }) else {
         return ptr::null_mut();
     };
@@ -1142,28 +1193,24 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn describe(
-        raw: Texture,
-        _: *mut c_void,
-        out: *mut rsf_aux_texture_facts,
-    ) -> i32 {
+    unsafe extern "C" fn describe(raw: Texture, _: *mut c_void, out: *mut AuxTextureFacts) -> i32 {
         let texture = unsafe { &*raw.cast::<FakeCom>() };
         if texture.width == 0 {
             return 0;
         }
         unsafe {
-            out.write(rsf_aux_texture_facts {
-                info: rsf_aux_texture_info {
+            out.write(AuxTextureFacts {
+                info: AuxTextureInfo {
                     width: texture.width,
                     height: texture.width,
-                    format: RSF_AUX_FORMAT_RGBA8_UNORM,
+                    format: AUX_FORMAT_RGBA8_UNORM,
                     ..Default::default()
                 },
                 same_device: 1,
                 array_size: 1,
                 mip_levels: 1,
                 sample_count: 1,
-                usage: RSF_AUX_USAGE_DEFAULT,
+                usage: AUX_USAGE_DEFAULT,
             })
         };
         1
@@ -1171,7 +1218,7 @@ mod tests {
 
     unsafe extern "C" fn create_texture(
         device: *mut c_void,
-        _: *const rsf_aux_texture_info,
+        _: *const AuxTextureInfo,
         _: u32,
     ) -> Texture {
         unsafe { retain(device) }
@@ -1189,7 +1236,7 @@ mod tests {
         _: *mut c_void,
         _: rsf_game_log_fn,
         _: *mut c_void,
-        _: *mut rsf_aux_colour_pipeline,
+        _: *mut AuxColourPipeline,
     ) -> i32 {
         unreachable!("fixture does not call create_pipeline")
     }
@@ -1212,10 +1259,10 @@ mod tests {
 
     unsafe extern "C" fn unused_draw(
         _: *mut c_void,
-        _: *const rsf_aux_colour_pipeline,
+        _: *const AuxColourPipeline,
         _: *mut c_void,
         _: *mut c_void,
-        _: *const rsf_aux_draw_constants,
+        _: *const AuxDrawConstants,
     ) {
         unreachable!("fixture does not call draw")
     }
@@ -1228,20 +1275,20 @@ mod tests {
         let main = FakeCom::new(8);
         let unreadable = FakeCom::new(0);
         let auxiliary = FakeCom::new(8);
-        let platform = rsf_aux_platform {
-            immediate_device: Some(retain),
-            device_ready: Some(ready),
-            describe_texture: Some(describe),
-            create_texture: Some(create_texture),
-            create_source_view: Some(create_view),
-            create_output_view: Some(create_view),
-            packed_colour_support: Some(unused_packed_colour_support),
-            create_pipeline: Some(unused_create_pipeline),
-            save: Some(unused_save),
-            restore: Some(unused_restore),
-            clear: Some(unused_clear),
-            copy: Some(unused_copy),
-            draw: Some(unused_draw),
+        let platform = AuxPlatform {
+            immediate_device: retain,
+            device_ready: ready,
+            describe_texture: describe,
+            create_texture: create_texture,
+            create_source_view: create_view,
+            create_output_view: create_view,
+            packed_colour_support: unused_packed_colour_support,
+            create_pipeline: unused_create_pipeline,
+            save: unused_save,
+            restore: unused_restore,
+            clear: unused_clear,
+            copy: unused_copy,
+            draw: unused_draw,
         };
         let mut owner = AuxiliarySr::new(&platform).expect("complete fixture platform");
         owner.pipeline = Some(Pipeline {
