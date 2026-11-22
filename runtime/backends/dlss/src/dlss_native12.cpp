@@ -4,12 +4,11 @@
 #if RSF_HAVE_STREAMLINE
 #include "streamline_frame.h"
 #include "streamline_sr.h"
-#include "streamline_load.h"
 #include <sl_consts.h>
 #include <DirectXMath.h>
+#include <d3d12.h>
 #include <dxgi.h>
 #include <cstddef>
-#include <cstdio>
 #include <cstring>
 
 using CoreEntries = void*[10];
@@ -55,26 +54,12 @@ struct Native {
     HRESULT (*after_present)(UINT){};
 };
 
-void* native_load(const wchar_t* path, const rsf_dlss_setup* setup) noexcept try
-{
-    return rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
-} catch (...) { return nullptr; }
-
-bool native_verify(const wchar_t* path) noexcept try
-{
-    return rsf_dlss_verify_runtime_signature(path);
-} catch (...) { return false; }
-
-rsf_backend_result native_shared_module(void* device, void* shared_host, void** out) noexcept try
-{
-    auto* host = static_cast<rsf_streamline_host*>(shared_host);
-    rsf_streamline_graphics graphics{};
-    graphics.struct_size = sizeof(graphics);
-    if (rsf_streamline_host_graphics(host, &graphics) != RSF_BACKEND_OK || graphics.native_device != device)
-        return RSF_BACKEND_ERROR_WRONG_API;
-    *out = rsf_streamline_host_module(host);
-    return RSF_BACKEND_OK;
-} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+extern "C" {
+void* rsf_dlss_sr_load_sdk(const wchar_t*, const rsf_dlss_setup*);
+bool rsf_dlss_sdk_verify_signature(const wchar_t*) noexcept;
+int32_t rsf_dlss_sr_shared_module(void*, void*, void**);
+int32_t rsf_dlss_sr_validate_d3d12(void*, const rsf_sr_frame*);
+}
 
 void* native_allocate(const wchar_t* directory) noexcept try
 {
@@ -132,10 +117,9 @@ int32_t lookup_feature(void* handle, uint32_t group, const char* name, void** ou
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-rsf_backend_result native_support(void* handle, void* device, uint32_t* result) noexcept try
+rsf_backend_result native_support(void* handle, uint64_t luid, uint32_t* result) noexcept try
 {
     auto& native = *static_cast<Native*>(handle);
-    LUID luid = static_cast<ID3D12Device*>(device)->GetAdapterLuid();
     sl::AdapterInfo adapter{};
     adapter.deviceLUID = reinterpret_cast<uint8_t*>(&luid);
     adapter.deviceLUIDSizeInBytes = sizeof(luid);
@@ -154,20 +138,6 @@ void native_bind_features(void* handle, const FeatureEntries* entries, uint32_t 
         native.after_present = reinterpret_cast<decltype(native.after_present)>(after);
     }
 }
-
-rsf_backend_result native_report_support(const rsf_dlss_setup* setup, uint32_t result) noexcept try
-{
-    if (setup->log) {
-        if (result == 0) {
-            setup->log(setup->log_user, "DLSS SR registered on the caller's native D3D12 device.");
-        } else {
-            char message[128];
-            std::snprintf(message, sizeof(message), "DLSS native D3D12 support query returned Streamline result %u", result);
-            setup->log(setup->log_user, message);
-        }
-    }
-    return RSF_BACKEND_OK;
-} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 rsf_backend_result native_shutdown(void* handle) noexcept try
 {
@@ -202,12 +172,6 @@ rsf_backend_result native_plan(void* handle, uint32_t width, uint32_t height, ui
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-rsf_backend_result native_validate(void* device, const rsf_sr_frame* frame) noexcept try
-{
-    const auto result = rsf::validate_frame(frame);
-    return result == RSF_BACKEND_OK ? rsf::validate_d3d12_resources(*frame, device) : result;
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-
 rsf_backend_result native_token(void* handle, uint32_t index, void** out) noexcept try
 {
     sl::FrameToken* token = nullptr;
@@ -222,6 +186,7 @@ void* native_shared_token(void* host, uint64_t frame_id) noexcept try
     return rsf_streamline_host_token(static_cast<rsf_streamline_host*>(host), frame_id);
 } catch (...) { return nullptr; }
 
+// Preserve the DirectXMath inverse and determinant used by the SR singularity gate.
 float native_inverse(const float (*matrix)[16], float (*inverse)[16]) noexcept
 {
     DirectX::XMFLOAT4X4 copied{}, inverted{};
@@ -294,9 +259,9 @@ void native_free_viewport(void* handle, uint32_t viewport) noexcept try
 } catch (...) {}
 
 struct Platform {
-    decltype(&native_load) load;
-    decltype(&native_verify) verify;
-    decltype(&native_shared_module) shared_module;
+    decltype(&rsf_dlss_sr_load_sdk) load;
+    decltype(&rsf_dlss_sdk_verify_signature) verify;
+    decltype(&rsf_dlss_sr_shared_module) shared_module;
     decltype(&native_allocate) allocate;
     decltype(&native_bind_core) bind_core;
     decltype(&native_init) init;
@@ -304,12 +269,11 @@ struct Platform {
     decltype(&native_support) support;
     decltype(&lookup_feature) lookup_feature;
     decltype(&native_bind_features) bind_features;
-    decltype(&native_report_support) report_support;
     decltype(&native_shutdown) shutdown;
     decltype(&native_close) close;
     decltype(&native_present) present;
     decltype(&native_plan) plan;
-    decltype(&native_validate) validate;
+    decltype(&rsf_dlss_sr_validate_d3d12) validate;
     decltype(&native_token) token;
     decltype(&native_shared_token) shared_token;
     decltype(&native_inverse) inverse;
@@ -318,7 +282,7 @@ struct Platform {
     decltype(&native_dispatch) dispatch;
     decltype(&native_free_viewport) free_viewport;
 };
-static_assert(sizeof(Platform) == 23 * sizeof(void*));
+static_assert(sizeof(Platform) == 22 * sizeof(void*));
 static_assert(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE == 0x40 && D3D12_RESOURCE_STATE_UNORDERED_ACCESS == 8);
 static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 &&
     RSF_BACKEND_ERROR_ABI_MISMATCH == -2 && RSF_BACKEND_ERROR_LOAD_FAILED == -4 && RSF_BACKEND_ERROR_INIT_FAILED == -6 &&
@@ -326,189 +290,20 @@ static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 &&
     RSF_QUALITY_QUALITY == 1);
 
 const Platform platform{
-    native_load, native_verify, native_shared_module, native_allocate, native_bind_core,
-    native_init, native_set_device, native_support, lookup_feature, native_bind_features, native_report_support,
+    rsf_dlss_sr_load_sdk, rsf_dlss_sdk_verify_signature, rsf_dlss_sr_shared_module, native_allocate, native_bind_core,
+    native_init, native_set_device, native_support, lookup_feature, native_bind_features,
     native_shutdown, native_close, native_present,
-    native_plan, native_validate, native_token, native_shared_token, native_inverse, native_constants, native_options,
+    native_plan, rsf_dlss_sr_validate_d3d12, native_token, native_shared_token, native_inverse, native_constants, native_options,
     native_dispatch, native_free_viewport,
 };
 }
-
-extern "C" {
-rsf_backend_result rsf_core_dlss_native12_create(void*, const rsf_dlss_setup*, void*,
-    rsf_dlss_native12**, const Platform*);
-rsf_backend_result rsf_core_dlss_native12_register(void*, const rsf_dlss_setup*, void*,
-    rsf_dlss_native12_registration**, const Platform*);
-rsf_backend_result rsf_core_dlss_native12_create_registered(void*, const rsf_dlss_setup*,
-    const rsf_dlss_native12_registration*, rsf_dlss_native12**);
-rsf_backend_result rsf_core_dlss_native12_registration_present(const rsf_dlss_native12_registration*,
-    void*, uint32_t, uint32_t, uint32_t);
-void rsf_core_dlss_native12_registration_destroy(rsf_dlss_native12_registration*);
-rsf_backend_result rsf_core_dlss_native12_present(const rsf_dlss_native12*, void*, uint32_t, uint32_t, uint32_t);
-rsf_backend_result rsf_core_dlss_native12_plan(const rsf_dlss_native12*, uint32_t, uint32_t, rsf_quality,
-    uint32_t*, uint32_t*);
-rsf_backend_result rsf_core_dlss_native12_evaluate(const rsf_dlss_native12*, void*, const rsf_sr_frame*, void*);
-void rsf_core_dlss_native12_destroy(rsf_dlss_native12*);
-void rsf_core_dlss_native12_set_sdr(const rsf_dlss_native12*, uint32_t);
-}
 #endif
 
-namespace {
-rsf_backend_result validate_setup(void* device, const rsf_dlss_setup* setup)
-{
-    if (!device || !setup || setup->struct_size < sizeof(*setup) || !setup->interposer_path_utf8 ||
-        !setup->plugin_directory_utf8 || !setup->engine_version_utf8 ||
-        (!setup->application_id && !setup->project_id_utf8) || !rsf_dlss_preset_valid(setup->preset))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    return setup->abi_version == RSF_DLSS_ABI_VERSION ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_ABI_MISMATCH;
-}
-
-rsf_backend_result create_registration(void* device, const rsf_dlss_setup* setup, void* engine_module,
-    rsf_dlss_native12_registration** out)
-{
-    if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out = nullptr;
-    const auto result = validate_setup(device, setup);
-    if (result != RSF_BACKEND_OK) return result;
-#if RSF_HAVE_STREAMLINE
-    return rsf_core_dlss_native12_register(device, setup, engine_module, out, &platform);
-#else
-    (void)engine_module;
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-}
-
-rsf_backend_result rsf_dlss_native12_registration_create(void* device, const rsf_dlss_setup* setup,
-    rsf_dlss_native12_registration** out)
-{
-    return create_registration(device, setup, nullptr, out);
-}
-
-rsf_backend_result rsf_dlss_native12_registration_borrow(void* device, void* module,
-    const rsf_dlss_setup* setup, rsf_dlss_native12_registration** out)
-{
-    if (!module) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    return create_registration(device, setup, module, out);
-}
-
-rsf_backend_result rsf_dlss_native12_create_registered(void* device, const rsf_dlss_setup* setup,
-    rsf_dlss_native12_registration* registration, rsf_dlss_native12** out)
-{
-    if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out = nullptr;
-    if (!setup || setup->struct_size < sizeof(*setup) || !registration || !rsf_dlss_preset_valid(setup->preset))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if RSF_HAVE_STREAMLINE
-    return rsf_core_dlss_native12_create_registered(device, setup, registration, out);
-#else
-    (void)device;
-    return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#endif
-}
-
-rsf_backend_result rsf_dlss_native12_registration_present(rsf_dlss_native12_registration* registration,
-    void* swapchain, uint32_t interval, uint32_t flags, uint32_t begin)
-{
-    if (!registration || !swapchain) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if RSF_HAVE_STREAMLINE
-    return rsf_core_dlss_native12_registration_present(registration, swapchain, interval, flags, begin);
-#else
-    (void)interval; (void)flags; (void)begin;
-    return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#endif
-}
-
-void rsf_dlss_native12_registration_destroy(rsf_dlss_native12_registration* registration)
+extern "C" const void* rsf_dlss_native12_sdk_platform() noexcept
 {
 #if RSF_HAVE_STREAMLINE
-    rsf_core_dlss_native12_registration_destroy(registration);
+    return &platform;
 #else
-    (void)registration;
-#endif
-}
-
-rsf_backend_result rsf_dlss_native12_create(void* device, const rsf_dlss_setup* setup, rsf_dlss_native12** out)
-{
-    return rsf_dlss_native12_create_shared(device, setup, nullptr, out);
-}
-
-rsf_backend_result rsf_dlss_native12_create_shared(void* device, const rsf_dlss_setup* setup,
-    rsf_streamline_host* host, rsf_dlss_native12** out)
-{
-    if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out = nullptr;
-    const auto result = validate_setup(device, setup);
-    if (result != RSF_BACKEND_OK) return result;
-#if RSF_HAVE_STREAMLINE
-    return rsf_core_dlss_native12_create(device, setup, host, out, &platform);
-#else
-    (void)host;
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-
-rsf_backend_result rsf_dlss_native12_plan(rsf_dlss_native12* context, uint32_t width, uint32_t height,
-    rsf_quality quality, uint32_t* render_width, uint32_t* render_height)
-{
-    if (!context || !width || !height || !render_width || !render_height || quality > RSF_QUALITY_ULTRA_PERFORMANCE)
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if RSF_HAVE_STREAMLINE
-    return rsf_core_dlss_native12_plan(context, width, height, quality, render_width, render_height);
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-
-rsf_backend_result rsf_dlss_native12_evaluate(rsf_dlss_native12* context, void* list, const rsf_sr_frame* frame)
-{
-    if (!context || !list) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if RSF_HAVE_STREAMLINE
-    return rsf_core_dlss_native12_evaluate(context, list, frame, nullptr);
-#else
-    (void)frame;
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-
-rsf_backend_result rsf_dlss_native12_evaluate_borrowed(rsf_dlss_native12* context, void* list,
-    const rsf_sr_frame* frame, void* native_token)
-{
-    if (!context || !list || !native_token) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if RSF_HAVE_STREAMLINE
-    return rsf_core_dlss_native12_evaluate(context, list, frame, native_token);
-#else
-    (void)frame;
-    return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#endif
-}
-
-void rsf_dlss_native12_destroy(rsf_dlss_native12* context)
-{
-#if RSF_HAVE_STREAMLINE
-    rsf_core_dlss_native12_destroy(context);
-#else
-    (void)context;
-#endif
-}
-
-void rsf_dlss_native12_set_sdr(rsf_dlss_native12* context, uint32_t sdr)
-{
-#if RSF_HAVE_STREAMLINE
-    if (context) rsf_core_dlss_native12_set_sdr(context, sdr);
-#else
-    (void)context; (void)sdr;
-#endif
-}
-
-rsf_backend_result rsf_dlss_native12_present(rsf_dlss_native12* context, void* swapchain,
-    uint32_t sync_interval, uint32_t flags, uint32_t begin)
-{
-    if (!context || !swapchain) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if RSF_HAVE_STREAMLINE
-    return rsf_core_dlss_native12_present(context, swapchain, sync_interval, flags, begin);
-#else
-    (void)sync_interval; (void)flags; (void)begin;
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
+    return nullptr;
 #endif
 }

@@ -495,7 +495,8 @@ add_dependencies(rsf_overlay_native12_test rsf_overlay_panel_fixture)
 add_test(NAME overlay_native12_backpressure COMMAND rsf_overlay_native12_test "${overlay_fixture_dll}")
 set_tests_properties(overlay_native12_backpressure PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_dlss_backend dlss_backend.cpp)
+add_executable(rsf_dlss_backend graphics_fixture_main.c)
+target_compile_definitions(rsf_dlss_backend PRIVATE RSF_GRAPHICS_FIXTURE=rsf_fixture_dlss_backend)
 target_link_libraries(rsf_dlss_backend PRIVATE ReScaleFrame::DLSS rsf_build_options)
 add_test(NAME dlss_backend COMMAND rsf_dlss_backend)
 # Loading a vendor runtime that talks to a driver is another place a hang is plausible.
@@ -547,8 +548,9 @@ target_compile_definitions(rsf_native_translucency_abi_embedded_test PRIVATE
 target_link_libraries(rsf_native_translucency_abi_embedded_test PRIVATE rsf_translucency_fixtures_rust
     ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME native_translucency_abi_embedded COMMAND rsf_native_translucency_abi_embedded_test)
-add_executable(rsf_sr_pipeline_test sr_pipeline.cpp)
-target_link_libraries(rsf_sr_pipeline_test PRIVATE rsf_orchestrator rsf_build_options)
+add_executable(rsf_sr_pipeline_test sr_pipeline_main.c)
+target_link_libraries(rsf_sr_pipeline_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
+add_dependencies(rsf_sr_pipeline_test rsf_orchestrator)
 add_test(NAME sr_pipeline COMMAND rsf_sr_pipeline_test)
 set_tests_properties(sr_pipeline PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 

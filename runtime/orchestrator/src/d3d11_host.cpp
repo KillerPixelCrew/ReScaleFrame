@@ -2,7 +2,6 @@
 // Stable D3D11 host exports and the native leaf calls behind them. Admission,
 // callback leases, lifecycle, recovery and status live in d3d11_host.rs.
 #include "d3d11_host_platform.h"
-#include "dlss_pipeline_platform.h"
 #include "d3d11_output_platform.h"
 #include <rescaleframe/native_sr.h>
 #include <rescaleframe/native_cpu.h>

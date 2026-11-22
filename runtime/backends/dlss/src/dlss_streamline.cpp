@@ -4,16 +4,12 @@
 #include <rescaleframe/streamline_host.h>
 #include "streamline_diagnostics.h"
 #include "streamline_frame.h"
-#include "streamline_load.h"
 
 #if RSF_HAVE_STREAMLINE
 
 #include <windows.h>
 
-#include <d3d11.h>
-#include <d3d12.h>
 #include <dxgi.h>
-#include <wrl/client.h>
 
 #include <sl.h>
 #include <sl_consts.h>
@@ -32,7 +28,6 @@
 
 #include <cstddef>
 #include <cstdio>
-#include <cstring>
 
 using rsf_streamline_sr_entry_addresses = void*[12];
 
@@ -67,9 +62,7 @@ struct rsf_streamline_sr_sizes {
     uint32_t optimal[2], minimum[2], maximum[2];
 };
 struct rsf_streamline_sr_planning {
-    int32_t (*query_dxgi_device)(void*, void**);
-    int32_t (*get_adapter)(void*, void**);
-    int32_t (*adapter_luid)(void*, uint64_t*);
+    int32_t (*d3d11_luid)(void*, uint64_t*);
     int32_t (*device_luid)(void*, uint64_t*);
     int32_t (*query_support)(void*, uint64_t, uint32_t*);
     int32_t (*requirements)(void*, rsf_streamline_sr_versions*);
@@ -112,6 +105,13 @@ bool rsf_dlss_verify_runtime_signature(const wchar_t* path)
     (void)path;
     return false;
 #endif
+}
+
+extern "C" {
+void* rsf_dlss_sr_load_sdk(const wchar_t*, const rsf_dlss_setup*);
+void* rsf_dlss_sr_host_device(void*);
+int32_t rsf_dlss_sr_d3d11_luid(void*, uint64_t*);
+int32_t rsf_dlss_sr_d3d12_luid(void*, uint64_t*);
 }
 
 namespace {
@@ -231,11 +231,6 @@ void bind_dlss_functions(void* native, void* optimal, void* options) noexcept
     self.set_options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
 }
 
-void* load_owned(const wchar_t* path, const rsf_dlss_setup* setup) noexcept try
-{
-    return rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
-} catch (...) { return nullptr; }
-
 void* allocate_native() noexcept try
 {
     return new Native();
@@ -276,19 +271,6 @@ int32_t init_owned(void* native, const rsf_streamline_sr_preferences* input) noe
     return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_INIT_FAILED; }
 
-void* host_module(void* raw_host) noexcept
-{
-    return rsf_streamline_host_module(static_cast<rsf_streamline_host*>(raw_host));
-}
-
-void* host_device(void* raw_host) noexcept
-{
-    rsf_streamline_graphics graphics{};
-    graphics.struct_size = sizeof(graphics);
-    return rsf_streamline_host_graphics(static_cast<rsf_streamline_host*>(raw_host), &graphics) == RSF_BACKEND_OK
-        ? graphics.native_device : nullptr;
-}
-
 int32_t register_device(void* native, void* device) noexcept try
 {
     const auto result = static_cast<Native*>(native)->sl.set_device(device);
@@ -313,36 +295,6 @@ int32_t present(void* native, void* swapchain, uint32_t interval, uint32_t flags
     bool skip = false;
     const auto result = begin ? self.present(static_cast<IDXGISwapChain*>(swapchain), interval, flags, skip) : self.after_present(flags);
     return SUCCEEDED(result) && !skip ? RSF_DLSS_OK : RSF_DLSS_ERROR_FEATURE_FAILED;
-} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
-
-int32_t query_dxgi_device(void* device, void** out) noexcept try
-{
-    const auto result = static_cast<ID3D11Device*>(device)->QueryInterface(__uuidof(IDXGIDevice), out);
-    return SUCCEEDED(result) ? RSF_DLSS_OK : RSF_DLSS_ERROR_NOT_READY;
-} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
-
-int32_t get_adapter(void* device, void** out) noexcept try
-{
-    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
-    const auto result = static_cast<IDXGIDevice*>(device)->GetAdapter(&adapter);
-    *out = adapter.Detach();
-    return SUCCEEDED(result) ? RSF_DLSS_OK : RSF_DLSS_ERROR_NOT_READY;
-} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
-
-int32_t adapter_luid(void* adapter, uint64_t* out) noexcept try
-{
-    DXGI_ADAPTER_DESC description{};
-    if (FAILED(static_cast<IDXGIAdapter*>(adapter)->GetDesc(&description)))
-        return RSF_DLSS_ERROR_NOT_READY;
-    std::memcpy(out, &description.AdapterLuid, sizeof(*out));
-    return RSF_DLSS_OK;
-} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
-
-int32_t device_luid(void* device, uint64_t* out) noexcept try
-{
-    const auto luid = static_cast<ID3D12Device*>(device)->GetAdapterLuid();
-    std::memcpy(out, &luid, sizeof(*out));
-    return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
 int32_t query_support(void* native, uint64_t luid, uint32_t* out) noexcept try
@@ -452,7 +404,6 @@ int32_t host_constants(void* host, uint64_t source, uint32_t viewport, const rsf
 int32_t set_options(void* native, uint32_t slot, const rsf_streamline_sr_options* input) noexcept try
 {
     auto& self = *static_cast<Native*>(native);
-    if (!rsf_dlss_preset_valid(input->preset)) return RSF_DLSS_ERROR_INVALID_ARGUMENT;
     const auto options = rsf::sr_options(*input);
     if (self.set_options(viewport_handle(slot), options) != sl::Result::eOk) {
         say("slDLSSSetOptions failed");
@@ -510,7 +461,9 @@ void destroy(void* native) noexcept
 }
 
 constexpr rsf_streamline_sr_startup startup{
-    allocate_native, dispose_native, set_log, missing_entry, bind_entries, init_owned, host_module, host_device,
+    allocate_native, dispose_native, set_log, missing_entry, bind_entries, init_owned,
+    [](void* host) { return rsf_streamline_host_module(static_cast<rsf_streamline_host*>(host)); },
+    rsf_dlss_sr_host_device,
     register_device, lookup_dlss_function, bind_dlss_functions, [](const char* text) { say(text); },
 };
 static_assert(sizeof(rsf_streamline_sr_startup) == 12 * sizeof(void*));
@@ -521,10 +474,10 @@ static_assert(uint64_t(sl::PreferenceFlags::eUseManualHooking) == (1ull << 2) &&
 static_assert(uint32_t(sl::EngineType::eCustom) == 0 && uint32_t(sl::EngineType::eUnreal) == RSF_DLSS_ENGINE_UNREAL &&
     uint32_t(sl::EngineType::eUnity) == RSF_DLSS_ENGINE_UNITY);
 constexpr rsf_streamline_sr_planning planning{
-    query_dxgi_device, get_adapter, adapter_luid, device_luid, query_support, requirements, optimal,
+    rsf_dlss_sr_d3d11_luid, rsf_dlss_sr_d3d12_luid, query_support, requirements, optimal,
 };
-static_assert(sizeof(LUID) == 8 && sizeof(rsf_streamline_sr_versions) == 16 && sizeof(rsf_streamline_sr_sizes) == 24);
-static_assert(sizeof(rsf_streamline_sr_planning) == 7 * sizeof(void*));
+static_assert(sizeof(wchar_t) == sizeof(uint16_t) && sizeof(LUID) == 8 && sizeof(rsf_streamline_sr_versions) == 16 && sizeof(rsf_streamline_sr_sizes) == 24);
+static_assert(sizeof(rsf_streamline_sr_planning) == 5 * sizeof(void*));
 static_assert(uint32_t(sl::Result::eOk) == 0 && uint32_t(sl::Result::eErrorDriverOutOfDate) == 2 &&
     uint32_t(sl::Result::eErrorOSOutOfDate) == 3 && uint32_t(sl::Result::eErrorNoSupportedAdapterFound) == 6);
 static_assert(uint32_t(sl::DLSSMode::eOff) == 0 && uint32_t(sl::DLSSMode::eMaxPerformance) == 1 &&
@@ -533,7 +486,7 @@ static_assert(uint32_t(sl::DLSSMode::eOff) == 0 && uint32_t(sl::DLSSMode::eMaxPe
 constexpr rsf_streamline_sr_frame_ops frame_ops{owned_token, host_token, owned_constants, host_constants};
 static_assert(sizeof(rsf_streamline_sr_frame_ops) == 4 * sizeof(void*));
 static_assert(sizeof(rsf_streamline_sr_constants) == 24 && offsetof(rsf_streamline_sr_constants, motion_vectors_3d) == 16);
-constexpr rsf_streamline_sr_platform platform{load_owned, &startup, &planning,
+constexpr rsf_streamline_sr_platform platform{rsf_dlss_sr_load_sdk, &startup, &planning,
     present, &frame_ops, set_options, set_tags, evaluate, drain,
     release_viewport, shutdown, destroy};
 static_assert(sizeof(rsf_streamline_sr_platform) == 12 * sizeof(void*));
@@ -544,138 +497,27 @@ static_assert(RSF_DLSS_OK == 0 && RSF_DLSS_ERROR_INVALID_ARGUMENT == -1 &&
     RSF_DLSS_ERROR_ABI_MISMATCH == -2 && RSF_DLSS_ERROR_MISSING_ENTRY_POINT == -5 &&
     RSF_DLSS_ERROR_INIT_FAILED == -6 && RSF_DLSS_ERROR_NOT_READY == -8 && RSF_DLSS_ERROR_FEATURE_FAILED == -9);
 } // namespace
+#endif
 
-extern "C" {
-int32_t rsf_core_dlss_streamline_load(const rsf_dlss_setup*, const rsf_streamline_sr_platform*);
-int32_t rsf_core_dlss_streamline_share_host(void*, rsf_dlss_log_fn, void*, const rsf_streamline_sr_platform*);
-int32_t rsf_core_dlss_streamline_set_device(void*, const rsf_streamline_sr_platform*);
-int32_t rsf_core_dlss_streamline_support(rsf_dlss_support*, const rsf_streamline_sr_platform*);
-int32_t rsf_core_dlss_streamline_plan(rsf_dlss_plan*, const rsf_streamline_sr_platform*);
-int32_t rsf_core_dlss_streamline_present(void*, uint32_t, uint32_t, uint32_t, const rsf_streamline_sr_platform*);
-int32_t rsf_core_dlss_streamline_evaluate(void*, const rsf_dlss_frame*, uint64_t, const rsf_streamline_sr_platform*);
-int32_t rsf_core_dlss_streamline_release(uint32_t, const rsf_streamline_sr_platform*);
-int32_t rsf_core_dlss_streamline_shutdown(const rsf_streamline_sr_platform*);
-
-uint32_t rsf_dlss_available(void) { return 1u; }
-rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
+extern "C" const void* rsf_dlss_streamline_sdk_platform() noexcept
 {
-    return rsf_core_dlss_streamline_load(setup, &platform);
-}
-rsf_dlss_result rsf_dlss_set_device(void* device)
-{
-    return rsf_core_dlss_streamline_set_device(device, &platform);
-}
-rsf_dlss_result rsf_dlss_native_present(void* chain, uint32_t interval, uint32_t flags, uint32_t begin)
-{
-    return rsf_core_dlss_streamline_present(chain, interval, flags, begin, &platform);
-}
-rsf_dlss_result rsf_dlss_query_support(rsf_dlss_support* support)
-{
-    return rsf_core_dlss_streamline_support(support, &platform);
-}
-rsf_dlss_result rsf_dlss_plan_render_size(rsf_dlss_plan* plan)
-{
-    return rsf_core_dlss_streamline_plan(plan, &platform);
-}
-rsf_dlss_result rsf_dlss_evaluate(void* context, const rsf_dlss_frame* frame)
-{
-    return rsf_core_dlss_streamline_evaluate(context, frame, 0, &platform);
-}
-rsf_dlss_result rsf_dlss_evaluate_shared(void* list, const rsf_dlss_frame* frame, uint64_t id)
-{
-    return id ? rsf_core_dlss_streamline_evaluate(list, frame, id, &platform) : RSF_DLSS_ERROR_NOT_READY;
-}
-rsf_dlss_result rsf_dlss_share_host(void* host, rsf_dlss_log_fn log, void* user)
-{
-    return rsf_core_dlss_streamline_share_host(host, log, user, &platform);
-}
-rsf_dlss_result rsf_dlss_release_viewport(uint32_t index)
-{
-    return rsf_core_dlss_streamline_release(index, &platform);
-}
-rsf_dlss_result rsf_dlss_release_resources(void)
-{
-    return rsf_dlss_release_viewport(0u);
-}
-rsf_dlss_result rsf_dlss_shutdown(void)
-{
-    return rsf_core_dlss_streamline_shutdown(&platform);
-}
+#if RSF_HAVE_STREAMLINE
+    return &platform;
+#else
+    return nullptr;
+#endif
 }
 
-#else // RSF_HAVE_STREAMLINE
-extern "C" rsf_dlss_result rsf_dlss_native_present(void* chain, uint32_t, uint32_t, uint32_t begin)
-{ return chain && begin <= 1 ? RSF_DLSS_ERROR_NOT_COMPILED : RSF_DLSS_ERROR_INVALID_ARGUMENT; }
-extern "C" rsf_dlss_result rsf_dlss_share_host(void*, rsf_dlss_log_fn, void*)
-{ return RSF_DLSS_ERROR_NOT_COMPILED; }
-extern "C" rsf_dlss_result rsf_dlss_evaluate_shared(void*, const rsf_dlss_frame*, uint64_t)
-{ return RSF_DLSS_ERROR_NOT_COMPILED; }
-
-// Built without the SDK. The contract still exists so callers compile and can say honestly that
-// this build has no DLSS in it, rather than reporting a runtime failure that never happened.
-
-extern "C" rsf_dlss_result rsf_dlss_release_viewport(uint32_t viewport)
+extern "C" bool rsf_dlss_sdk_verify_signature(const wchar_t* path) noexcept
 {
-    (void)viewport;
-    return RSF_DLSS_ERROR_NOT_COMPILED;
-}
-
-extern "C" uint32_t rsf_dlss_available(void)
-{
-    return 0u;
-}
-
-extern "C" rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup)
-{
-    if (!setup || setup->struct_size < sizeof(rsf_dlss_setup)) {
-        return RSF_DLSS_ERROR_INVALID_ARGUMENT;
+#if RSF_HAVE_STREAMLINE
+    try {
+        return rsf_dlss_verify_runtime_signature(path);
+    } catch (...) {
+        return false;
     }
-    if (setup->abi_version != RSF_DLSS_ABI_VERSION) {
-        return RSF_DLSS_ERROR_ABI_MISMATCH;
-    }
-    return RSF_DLSS_ERROR_NOT_COMPILED;
+#else
+    (void)path;
+    return false;
+#endif
 }
-
-extern "C" rsf_dlss_result rsf_dlss_set_device(void* d3d11_device)
-{
-    return d3d11_device ? RSF_DLSS_ERROR_NOT_COMPILED : RSF_DLSS_ERROR_INVALID_ARGUMENT;
-}
-
-extern "C" rsf_dlss_result rsf_dlss_query_support(rsf_dlss_support* support)
-{
-    if (!support || support->struct_size < sizeof(rsf_dlss_support)) {
-        return RSF_DLSS_ERROR_INVALID_ARGUMENT;
-    }
-    return RSF_DLSS_ERROR_NOT_COMPILED;
-}
-
-extern "C" rsf_dlss_result rsf_dlss_plan_render_size(rsf_dlss_plan* plan)
-{
-    if (!plan || plan->struct_size < sizeof(rsf_dlss_plan)) {
-        return RSF_DLSS_ERROR_INVALID_ARGUMENT;
-    }
-    return RSF_DLSS_ERROR_NOT_COMPILED;
-}
-
-extern "C" rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss_frame* frame)
-{
-    if (!d3d11_context || !frame || frame->struct_size < sizeof(rsf_dlss_frame)) {
-        return RSF_DLSS_ERROR_INVALID_ARGUMENT;
-    }
-    if (frame->abi_version != RSF_DLSS_ABI_VERSION) {
-        return RSF_DLSS_ERROR_ABI_MISMATCH;
-    }
-    return RSF_DLSS_ERROR_NOT_COMPILED;
-}
-
-extern "C" rsf_dlss_result rsf_dlss_release_resources(void)
-{
-    return RSF_DLSS_ERROR_NOT_COMPILED;
-}
-
-extern "C" rsf_dlss_result rsf_dlss_shutdown(void)
-{
-    return RSF_DLSS_ERROR_NOT_COMPILED;
-}
-
-#endif // RSF_HAVE_STREAMLINE

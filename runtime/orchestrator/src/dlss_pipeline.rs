@@ -5,7 +5,7 @@
 // backend and quality switching, the per-frame sequence (decode, dense resolve, assembly, colour
 // transport, evaluation, FG capture, decode back, colour correction, sharpening and the request
 // dump), reset and give-up policy, the output and layer leases, status and teardown. Every SDK,
-// D3D11, shader-pass and capture call is one leaf in dlss_pipeline_platform.h; the legacy FSR/XeSS
+// D3D11, shader-pass and capture call is one leaf in the Rust platform module; the legacy FSR/XeSS
 // adapter is the existing Rust owner in sr_legacy.rs.
 //
 // Locking: the frame-thread state is taken with try_lock, so a reentrant or concurrent call to a
@@ -2286,126 +2286,16 @@ fn frame_record(frame: &Frame, dlss: &DlssFrame, backend: u32, output: [u32; 2])
     )
 }
 
-// C entry points. dlss_pipeline.cpp keeps every public export as a one-line forward that passes
-// its static leaf table.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_start(
-    p: &P,
-    device: Raw,
-    setup: *const Setup,
-    backend: u32,
-) -> i32 {
-    unsafe { PROCESS.start_backend(p, device, setup, backend) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_on_frame(
-    p: &P,
-    context: Raw,
-    frame: *const Frame,
-) -> i32 {
-    unsafe { PROCESS.on_frame(p, context, frame) }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_pipeline_output_texture() -> Raw {
-    PROCESS.output_texture()
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_request_dump(prefix: *const c_char) -> i32 {
-    unsafe { PROCESS.request_dump(prefix) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_get_status(status: *mut Status) -> i32 {
-    unsafe { PROCESS.status(status) }
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn rsf_native_sr_set_surface(width: u32, height: u32) -> i32 {
     PROCESS.set_surface([width, height])
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_prepare_layer(
-    p: &P,
-    width: u32,
-    height: u32,
-    output: *mut Raw,
-) -> i32 {
-    unsafe { PROCESS.prepare_layer(p, width, height, output) }
-}
+#[cfg(not(test))]
+mod platform;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_on_layer(
-    p: &P,
-    context: Raw,
-    layer: *const Layer,
-) -> i32 {
-    unsafe { PROCESS.on_layer(p, context, layer) }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_pipeline_layer_output() -> Raw {
-    PROCESS.layer_texture()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_pipeline_set_colour_correction(enabled: u32) {
-    PROCESS.set_colour_correction(enabled);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_pipeline_set_colour_transport(enabled: u32) {
-    PROCESS.set_colour_transport(enabled);
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_set_sharpening(options: *const Sharpening) -> i32 {
-    unsafe { PROCESS.set_sharpening(options) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_set_preset(p: &P, preset: u32) -> i32 {
-    unsafe { PROCESS.set_preset(p, preset) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_set_quality(
-    p: &P,
-    quality: u32,
-    width: *mut u32,
-    height: *mut u32,
-) -> i32 {
-    unsafe { PROCESS.set_quality(p, quality, width, height) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_resize_output(
-    p: &P,
-    output_width: u32,
-    output_height: u32,
-    width: *mut u32,
-    height: *mut u32,
-) -> i32 {
-    unsafe { PROCESS.resize_output(p, output_width, output_height, width, height) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_select_backend(
-    p: &P,
-    backend: u32,
-    width: *mut u32,
-    height: *mut u32,
-) -> i32 {
-    unsafe { PROCESS.select_backend(p, backend, width, height) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_pipeline_stop(p: &P) -> i32 {
-    unsafe { PROCESS.stop(p) }
-}
+#[cfg(not(test))]
+mod exports;
 
 #[cfg(test)]
 #[path = "dlss_pipeline_tests.rs"]

@@ -911,3 +911,12 @@ generate("tests/generation/src/latency_abi.rs",
 generate("runtime/orchestrator/src/streamline_generation_records_abi.rs",
          "runtime/backends/dlss/src/streamline_generation_records.h",
          "rsf_slhost_(tag|reflex_sample)", "NOTHING", [])
+
+generate("runtime/orchestrator/src/dlss_pipeline_layer_abi.rs",
+         "runtime/orchestrator/include/rescaleframe/dlss_pipeline.h",
+         "^rsf_dlss_pipeline_layer$", "^RSF_DLSS_PRESET_MASK$",
+         ["-Iruntime/orchestrator/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/contract/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--raw-line",
+          "use crate::render_abi::rsf_pipeline_camera_frame;"])

@@ -4,6 +4,18 @@ use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
+#[cfg(not(test))]
+mod native;
+
+fn luid_bits(luid: windows::Win32::Foundation::LUID) -> u64 {
+    u64::from(luid.LowPart) | (u64::from(luid.HighPart as u32) << 32)
+}
+
+pub(super) unsafe fn d3d12_luid(device: Handle) -> u64 {
+    use windows::Win32::Graphics::Direct3D12::ID3D12Device;
+    luid_bits(unsafe { crate::d3d11_d3d12::borrow::<ID3D12Device>(&device).GetAdapterLuid() })
+}
+
 type Handle = *mut c_void;
 
 #[repr(C)]
@@ -16,6 +28,10 @@ pub(super) struct Options {
     pub(super) auto_exposure: u32,
     pub(super) alpha: u32,
     pub(super) preset: u32,
+}
+
+pub(super) fn preset_valid(preset: u32) -> bool {
+    preset <= 13 && (crate::dlss_pipeline_abi::RSF_DLSS_PRESET_MASK & (1 << preset)) != 0
 }
 
 pub(super) fn dlss_mode(quality: u32) -> u32 {

@@ -30,8 +30,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/overlay_d3d12.cpp
     src/overlay_platform.cpp
     src/overlay_native12.cpp
-    src/fg_frame_policy.c
-    src/dlss_pipeline.cpp)
+    src/fg_frame_policy.c)
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu)

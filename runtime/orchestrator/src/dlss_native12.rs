@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+mod exports;
+
 use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
@@ -130,10 +132,9 @@ struct Platform {
     bind_core: unsafe extern "C" fn(Handle, &CoreEntries),
     init: unsafe extern "C" fn(Handle, &Preferences) -> i32,
     set_device: unsafe extern "C" fn(Handle, Handle) -> i32,
-    support: unsafe extern "C" fn(Handle, Handle, &mut u32) -> i32,
+    support: unsafe extern "C" fn(Handle, u64, &mut u32) -> i32,
     lookup_feature: FeatureLookup,
     bind_features: unsafe extern "C" fn(Handle, &FeatureEntries, u32),
-    report_support: unsafe extern "C" fn(&Setup, u32) -> i32,
     shutdown: unsafe extern "C" fn(Handle) -> i32,
     close: unsafe extern "C" fn(Handle),
     present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
@@ -148,7 +149,7 @@ struct Platform {
     free_viewport: unsafe extern "C" fn(Handle, u32),
 }
 
-const _: () = assert!(size_of::<Platform>() == 23 * size_of::<Handle>());
+const _: () = assert!(size_of::<Platform>() == 22 * size_of::<Handle>());
 
 enum Route {
     Owned,
@@ -313,7 +314,8 @@ impl DeviceRegistration {
             }
         }
         let mut support = 0;
-        let result = unsafe { (platform.support)(native.as_ptr(), device, &mut support) };
+        let device_luid = unsafe { crate::streamline_sr::d3d12_luid(device) };
+        let result = unsafe { (platform.support)(native.as_ptr(), device_luid, &mut support) };
         if result != OK {
             return Err(result);
         }
@@ -332,13 +334,14 @@ impl DeviceRegistration {
             }
             unsafe { (platform.bind_features)(native.as_ptr(), &features, owned.into()) };
         }
-        let result = unsafe { (platform.report_support)(setup, support) };
-        if result != OK {
-            return Err(result);
-        }
+        let log = crate::input_dump::Log::new(setup.log, setup.log_user);
         if support != 0 {
+            log.say(&format!(
+                "DLSS native D3D12 support query returned Streamline result {support}"
+            ));
             return Err(NOT_SUPPORTED);
         }
+        log.say("DLSS SR registered on the caller's native D3D12 device.");
         Ok(Arc::new(registration))
     }
 
@@ -451,8 +454,7 @@ fn publish_context(
 }
 
 // Creation wrappers clear the output and validate the public setup before passing it here.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_create(
+unsafe fn rsf_core_dlss_native12_create(
     device: Handle,
     setup: &Setup,
     host: Handle,
@@ -465,8 +467,7 @@ unsafe extern "C" fn rsf_core_dlss_native12_create(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_register(
+unsafe fn rsf_core_dlss_native12_register(
     device: Handle,
     setup: &Setup,
     module: Handle,
@@ -482,8 +483,7 @@ unsafe extern "C" fn rsf_core_dlss_native12_register(
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_native12_create_registered(
+fn rsf_core_dlss_native12_create_registered(
     device: Handle,
     setup: &Setup,
     registration: &Registration,
@@ -498,8 +498,7 @@ extern "C" fn rsf_core_dlss_native12_create_registered(
     publish_context(Arc::clone(&registration.0), setup.preset, out)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_registration_present(
+unsafe fn rsf_core_dlss_native12_registration_present(
     registration: &Registration,
     swapchain: Handle,
     interval: u32,
@@ -509,15 +508,13 @@ unsafe extern "C" fn rsf_core_dlss_native12_registration_present(
     unsafe { registration.0.present(swapchain, interval, flags, begin) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_registration_destroy(registration: *mut Registration) {
+unsafe fn rsf_core_dlss_native12_registration_destroy(registration: *mut Registration) {
     if !registration.is_null() {
         drop(unsafe { Box::from_raw(registration) });
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_present(
+unsafe fn rsf_core_dlss_native12_present(
     context: &Context,
     swapchain: Handle,
     interval: u32,
@@ -531,8 +528,7 @@ unsafe extern "C" fn rsf_core_dlss_native12_present(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_plan(
+unsafe fn rsf_core_dlss_native12_plan(
     context: &Context,
     width: u32,
     height: u32,
@@ -566,8 +562,7 @@ unsafe extern "C" fn rsf_core_dlss_native12_plan(
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_evaluate(
+unsafe fn rsf_core_dlss_native12_evaluate(
     context: &Context,
     list: Handle,
     frame: *const Frame,
@@ -637,14 +632,12 @@ unsafe extern "C" fn rsf_core_dlss_native12_evaluate(
     unsafe { (platform.dispatch)(native, token, viewport, list, &tags) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_native12_destroy(context: *mut Context) {
+unsafe fn rsf_core_dlss_native12_destroy(context: *mut Context) {
     if !context.is_null() {
         drop(unsafe { Box::from_raw(context) });
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_native12_set_sdr(context: &Context, sdr: u32) {
+fn rsf_core_dlss_native12_set_sdr(context: &Context, sdr: u32) {
     context.sdr.store(sdr != 0, Ordering::Relaxed);
 }

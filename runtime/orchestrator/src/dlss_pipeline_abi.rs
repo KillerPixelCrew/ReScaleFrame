@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: MIT
-// Hand-written mirrors of rescaleframe/dlss_pipeline.h and dlss_pipeline_platform.h.
-// bindgen-cli is not installed here; dlss_pipeline.cpp asserts the same sizes and
-// offsets with static_assert.
+// Public layer binding and private Rust dispatch table.
 #![allow(non_camel_case_types)]
 use crate::d3d11_output_abi::rsf_d3d11_texture_desc;
 pub use crate::dlss_streamline_abi::{rsf_dlss_plan, rsf_dlss_support};
 use crate::gl_pipeline_abi::rsf_dlss_setup;
 use crate::native_sr_abi::rsf_motion_decode_params;
-use crate::render_abi::{
-    rsf_dlss_frame, rsf_motion_resolve_params, rsf_pipeline_camera_frame, rsf_sharpening_options,
-};
+use crate::render_abi::{rsf_dlss_frame, rsf_motion_resolve_params, rsf_sharpening_options};
 pub use rsf_game_sys::rsf_game_log_fn as rsf_dlss_pipeline_log_fn;
 pub use rsf_game_sys::sr_abi::{rsf_dlss_pipeline_setup, rsf_dlss_pipeline_status};
 use std::ffi::{c_char, c_void};
@@ -17,17 +13,9 @@ use std::ffi::{c_char, c_void};
 pub type Raw = *mut c_void;
 pub type rsf_dlssp_log_fn = Option<unsafe extern "C" fn(Raw, *const c_char)>;
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_dlss_pipeline_layer {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub color: Raw,
-    pub depth: Raw,
-    pub width: u32,
-    pub height: u32,
-    pub camera: *const rsf_pipeline_camera_frame,
-}
+#[path = "dlss_pipeline_layer_abi.rs"]
+mod layer;
+pub use layer::{RSF_DLSS_PRESET_MASK, rsf_dlss_pipeline_layer};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -39,7 +27,6 @@ pub struct rsf_dlssp_sharpen_frame {
     pub far_plane: f32,
 }
 
-#[repr(C)]
 pub struct rsf_dlssp_platform {
     pub present_host: unsafe extern "C" fn() -> Raw,
     pub share_host: unsafe extern "C" fn(Raw, rsf_dlssp_log_fn, Raw) -> i32,
@@ -106,12 +93,3 @@ pub struct rsf_dlssp_platform {
     pub dump_image:
         unsafe extern "C" fn(Raw, Raw, Raw, *const c_char, u32, f32, rsf_dlssp_log_fn) -> i32,
 }
-
-const _: () = {
-    use std::mem::{offset_of, size_of};
-    assert!(size_of::<rsf_dlss_pipeline_layer>() == 40);
-    assert!(offset_of!(rsf_dlss_pipeline_layer, width) == 24);
-    assert!(offset_of!(rsf_dlss_pipeline_layer, camera) == 32);
-    assert!(size_of::<rsf_dlssp_sharpen_frame>() == 20);
-    assert!(size_of::<rsf_dlssp_platform>() == 40 * size_of::<usize>());
-};

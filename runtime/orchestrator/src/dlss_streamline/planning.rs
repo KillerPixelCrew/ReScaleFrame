@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::{ComRef, Handle, NOT_READY, OK, Plan, Startup, Support};
+use super::{Handle, OK, Plan, Startup, Support};
 use crate::streamline_sr::dlss_mode;
-use std::ptr::{addr_of, addr_of_mut, null_mut};
+use std::ptr::{addr_of, addr_of_mut};
 
 const NOT_SUPPORTED: i32 = -7;
 const DRIVER_OUT_OF_DATE: u32 = 2;
@@ -25,14 +25,11 @@ struct RenderSizes {
     maximum: [u32; 2],
 }
 
-type Query = unsafe extern "C" fn(Handle, &mut Handle) -> i32;
 type GetLuid = unsafe extern "C" fn(Handle, &mut u64) -> i32;
 
 #[repr(C)]
 pub(super) struct Platform {
-    query_dxgi_device: Query,
-    get_adapter: Query,
-    adapter_luid: GetLuid,
+    d3d11_luid: GetLuid,
     device_luid: GetLuid,
     query_support: unsafe extern "C" fn(Handle, u64, &mut u32) -> i32,
     requirements: unsafe extern "C" fn(Handle, &mut DriverVersions) -> i32,
@@ -40,33 +37,20 @@ pub(super) struct Platform {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 7 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 5 * size_of::<Handle>());
     assert!(size_of::<DriverVersions>() == 16);
     assert!(size_of::<RenderSizes>() == 24);
 };
 
-fn query_owned(query: Query, source: Handle) -> Result<ComRef, i32> {
-    let mut object = null_mut();
-    let result = unsafe { query(source, &mut object) };
-    let owned = unsafe { ComRef::from_owned(object) };
-    if result != OK {
-        return Err(result);
-    }
-    owned.ok_or(NOT_READY)
-}
-
 impl Platform {
     fn luid(&self, device: Handle, shared: bool) -> Result<u64, i32> {
-        let mut luid = 0;
-        let result = if shared {
-            unsafe { (self.device_luid)(device, &mut luid) }
+        let query = if shared {
+            self.device_luid
         } else {
-            // Query the adapter of the caller's D3D11 device and release both
-            // interfaces before calling Streamline.
-            let dxgi = query_owned(self.query_dxgi_device, device)?;
-            let adapter = query_owned(self.get_adapter, dxgi.as_ptr())?;
-            unsafe { (self.adapter_luid)(adapter.as_ptr(), &mut luid) }
+            self.d3d11_luid
         };
+        let mut luid = 0;
+        let result = unsafe { query(device, &mut luid) };
         if result == OK { Ok(luid) } else { Err(result) }
     }
 

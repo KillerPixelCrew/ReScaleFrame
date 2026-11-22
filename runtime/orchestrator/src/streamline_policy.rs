@@ -44,7 +44,7 @@ fn perspective_and_orthographic_forward() {
 
 // Windows-style absolute paths accepted by the fixed-search Streamline loader.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_absolute_path(path: *const u16) -> u32 {
+pub(super) unsafe extern "C" fn rsf_streamline_absolute_path(path: *const u16) -> u32 {
     if path.is_null() || unsafe { path.read() } == 0 {
         return 0;
     }

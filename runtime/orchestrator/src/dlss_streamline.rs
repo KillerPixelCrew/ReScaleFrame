@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+mod exports;
 mod frame;
 mod planning;
 
@@ -358,11 +359,7 @@ impl Session {
 unsafe impl Send for Session {}
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_load(
-    setup: *const Setup,
-    platform: &Platform,
-) -> i32 {
+unsafe fn rsf_core_dlss_streamline_load(setup: *const Setup, platform: &Platform) -> i32 {
     if !unsafe { has_capacity(setup) } {
         return INVALID;
     }
@@ -424,8 +421,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_load(
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_share_host(
+unsafe fn rsf_core_dlss_streamline_share_host(
     host: Handle,
     log: Log,
     user: Handle,
@@ -456,11 +452,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_share_host(
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_set_device(
-    device: Handle,
-    platform: &Platform,
-) -> i32 {
+unsafe fn rsf_core_dlss_streamline_set_device(device: Handle, platform: &Platform) -> i32 {
     let Ok(mut state) = SESSION.try_lock() else {
         return NOT_READY;
     };
@@ -488,11 +480,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_set_device(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_support(
-    support: *mut Support,
-    platform: &Platform,
-) -> i32 {
+unsafe fn rsf_core_dlss_streamline_support(support: *mut Support, platform: &Platform) -> i32 {
     if !unsafe { has_capacity(support) } {
         return INVALID;
     }
@@ -517,8 +505,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_support(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_plan(plan: *mut Plan, platform: &Platform) -> i32 {
+unsafe fn rsf_core_dlss_streamline_plan(plan: *mut Plan, platform: &Platform) -> i32 {
     if !unsafe { has_capacity(plan) } {
         return INVALID;
     }
@@ -548,8 +535,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_plan(plan: *mut Plan, platform: &P
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_present(
+unsafe fn rsf_core_dlss_streamline_present(
     chain: Handle,
     interval: u32,
     flags: u32,
@@ -574,8 +560,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_present(
     unsafe { (platform.present)(session.native.as_ptr(), chain, interval, flags, begin) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
+unsafe fn rsf_core_dlss_streamline_evaluate(
     context: Handle,
     frame: *const Frame,
     source: u64,
@@ -628,6 +613,9 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
         return constants;
     }
 
+    if !crate::streamline_sr::preset_valid(frame.preset) {
+        return INVALID;
+    }
     let options = Options {
         mode: dlss_mode(frame.quality),
         width: frame.output_width,
@@ -656,8 +644,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
     unsafe { (platform.evaluate)(native, context, token, slot) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_release(viewport: u32, platform: &Platform) -> i32 {
+unsafe fn rsf_core_dlss_streamline_release(viewport: u32, platform: &Platform) -> i32 {
     if viewport >= 2 {
         return INVALID;
     }
@@ -675,8 +662,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_release(viewport: u32, platform: &
     unsafe { (platform.release_viewport)(session.native.as_ptr(), viewport) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_shutdown(platform: &Platform) -> i32 {
+unsafe fn rsf_core_dlss_streamline_shutdown(platform: &Platform) -> i32 {
     if Output::active_here() {
         return NOT_READY;
     }

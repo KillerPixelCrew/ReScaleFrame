@@ -41,6 +41,4 @@ if(RSF_NVAPI_INCLUDE)
     target_compile_definitions(rsf_dlss PRIVATE RSF_HAVE_NVAPI_DIAGNOSTICS=1)
 endif()
 
-if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h" OR RSF_NVAPI_INCLUDE)
-    target_link_libraries(rsf_dlss PRIVATE rsf_orchestrator_rust)
-endif()
+target_link_libraries(rsf_dlss PRIVATE rsf_orchestrator_rust)

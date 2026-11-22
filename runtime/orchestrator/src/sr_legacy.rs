@@ -70,7 +70,7 @@ static SERVICES: Services = Services {
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_legacy_create(
+pub(super) unsafe extern "C" fn rsf_sr_legacy_create(
     device: *mut c_void,
     width: u32,
     height: u32,
