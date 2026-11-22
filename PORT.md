@@ -805,19 +805,20 @@ Port host wrappers, options and bindings for sharpening. Track shader provenance
 
 - Shader inputs, formats and compilation interfaces ([G04](#g04), [G06](#g06)).
 
-**Port files (18)**
+**Port files (19)**
 
-- [ ] [runtime/backends/common/sharpening.h](runtime/backends/common/sharpening.h)
-- [ ] [runtime/graphics/src/sharpening/d3d11.cpp](runtime/graphics/src/sharpening/d3d11.cpp)
-- [ ] [runtime/graphics/src/sharpening/d3d11.h](runtime/graphics/src/sharpening/d3d11.h)
-- [ ] [runtime/graphics/src/sharpening/d3d12.cpp](runtime/graphics/src/sharpening/d3d12.cpp)
+- [x] [runtime/backends/common/sharpening.h](runtime/backends/common/sharpening.h)
+- [x] [runtime/graphics/src/sharpening/d3d11.cpp](runtime/graphics/src/sharpening/d3d11.cpp)
+- [x] [runtime/graphics/src/sharpening/d3d11.h](runtime/graphics/src/sharpening/d3d11.h)
+- [x] [runtime/graphics/src/sharpening/d3d12.cpp](runtime/graphics/src/sharpening/d3d12.cpp)
 - [ ] [runtime/graphics/src/sharpening/d3d12.h](runtime/graphics/src/sharpening/d3d12.h)
-- [ ] [runtime/graphics/src/sharpening/d3d12_platform.h](runtime/graphics/src/sharpening/d3d12_platform.h)
+- [x] [runtime/graphics/src/sharpening/d3d12_platform.h](runtime/graphics/src/sharpening/d3d12_platform.h)
 - [ ] [runtime/graphics/src/sharpening/da_das.h](runtime/graphics/src/sharpening/da_das.h)
 - [ ] [runtime/graphics/src/sharpening/da_das_spirv.h](runtime/graphics/src/sharpening/da_das_spirv.h)
 - [ ] [runtime/graphics/src/sharpening/da_rcas.h](runtime/graphics/src/sharpening/da_rcas.h)
 - [ ] [runtime/graphics/src/sharpening/da_rcas_spirv.h](runtime/graphics/src/sharpening/da_rcas_spirv.h)
 - [ ] [runtime/graphics/src/sharpening/depth_color.inc](runtime/graphics/src/sharpening/depth_color.inc) (C++ raw string containing shared HLSL)
+- [ ] [runtime/graphics/src/sharpening/pass_payload.cpp](runtime/graphics/src/sharpening/pass_payload.cpp) (retained GPL shader access and constant packing)
 - [ ] [runtime/graphics/src/sharpening/options.h](runtime/graphics/src/sharpening/options.h)
 - [ ] [runtime/graphics/src/sharpening/rcas.h](runtime/graphics/src/sharpening/rcas.h)
 - [ ] [runtime/graphics/src/sharpening/rcas_spirv.h](runtime/graphics/src/sharpening/rcas_spirv.h)
@@ -828,8 +829,8 @@ Port host wrappers, options and bindings for sharpening. Track shader provenance
 
 **Fixtures (6)**
 
-- [ ] [tests/engine_sharpening.cpp](tests/engine_sharpening.cpp)
-- [ ] [tests/sharpening.cpp](tests/sharpening.cpp)
+- [x] [tests/engine_sharpening.cpp](tests/engine_sharpening.cpp)
+- [x] [tests/sharpening.cpp](tests/sharpening.cpp)
 - [ ] [tests/sharpening_d3d12.cpp](tests/sharpening_d3d12.cpp)
 - [ ] [tests/sharpening_settings.cpp](tests/sharpening_settings.cpp)
 - [ ] [tests/sharpening_vulkan.cpp](tests/sharpening_vulkan.cpp)
