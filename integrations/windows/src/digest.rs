@@ -57,3 +57,14 @@ pub fn sha256_file(path: &Path) -> Option<[u8; 32]> {
     let status = unsafe { BCryptFinishHash(hash.0, digest.as_mut_ptr(), digest.len() as u32, 0) };
     (status >= 0).then_some(digest)
 }
+
+/// Lowercase hex of sha256_file, NUL terminated for the C sha256_hex fields.
+pub fn sha256_file_hex(path: &Path) -> Option<[u8; 65]> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = sha256_file(path)?;
+    let mut hex = [0; 65];
+    for (digits, byte) in hex.as_chunks_mut::<2>().0.iter_mut().zip(digest) {
+        *digits = [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 15)]];
+    }
+    Some(hex)
+}

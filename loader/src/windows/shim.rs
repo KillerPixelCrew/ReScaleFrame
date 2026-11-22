@@ -2,6 +2,7 @@
 use super::{PATH_CAPACITY, entry, load_library, module_path, null, null_mut, spawn_startup, wide};
 use std::cell::UnsafeCell;
 use std::ffi::{CString, OsString, c_void};
+use rsf_game_sys::ffi_util::ascii_wide;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
@@ -17,7 +18,7 @@ use windows_sys::Win32::System::WindowsProgramming::{
 };
 use windows_sys::core::BOOL;
 
-const LOADER: [u16; 7] = wide_literal(b"Loader");
+const LOADER: [u16; 7] = ascii_wide(b"Loader\0");
 const FLAGS: u32 = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
 
 fn profile(key: &str, capacity: usize, configuration: &[u16]) -> Option<Vec<u16>> {
@@ -136,8 +137,8 @@ unsafe extern "C" fn rsf_shim_attach(instance: HMODULE, event: u32) -> BOOL {
         let matches =
             |name| unsafe { CompareStringOrdinal(leaf.as_ptr(), -1, name, -1, 1) == CSTR_EQUAL };
         // Unity's crash reporter imports this shim for version forwarding.
-        const CRASH64: [u16; 24] = wide_literal(b"UnityCrashHandler64.exe");
-        const CRASH32: [u16; 24] = wide_literal(b"UnityCrashHandler32.exe");
+        const CRASH64: [u16; 24] = ascii_wide(b"UnityCrashHandler64.exe\0");
+        const CRASH32: [u16; 24] = ascii_wide(b"UnityCrashHandler32.exe\0");
         if matches(CRASH64.as_ptr()) || matches(CRASH32.as_ptr()) {
             unsafe { DisableThreadLibraryCalls(instance) };
             return 1;
@@ -145,15 +146,4 @@ unsafe extern "C" fn rsf_shim_attach(instance: HMODULE, event: u32) -> BOOL {
     }
     spawn_startup(instance, Some(startup));
     1
-}
-
-const fn wide_literal<const N: usize>(name: &[u8]) -> [u16; N] {
-    assert!(name.len() + 1 == N);
-    let mut wide = [0; N];
-    let mut index = 0;
-    while index < name.len() {
-        wide[index] = name[index] as u16;
-        index += 1;
-    }
-    wide
 }
