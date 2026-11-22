@@ -182,7 +182,6 @@ pub(crate) fn requested() -> Options {
 
 fn stage(name: &CStr, source: u64, native: u64, result: i32) {
     cpu_owner::stage(
-        cpu_platform(),
         call!(present_generation),
         &name.to_string_lossy(),
         source,
@@ -1479,7 +1478,6 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
         && owner.id == source
     {
         cpu_owner::report_timing(
-            cpu_platform(),
             &cpu,
             &owner,
             held.pass.screen,
@@ -1517,7 +1515,6 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
     );
     let result = if valid { OK } else { NOT_READY };
     cpu_owner::stage(
-        cpu_platform(),
         generation,
         &row,
         source,
@@ -1866,7 +1863,7 @@ pub(crate) unsafe extern "C" fn rsf_native_fg_window_end(pass: *const Pass) {
     if live && !presented {
         call!(present_abort, source);
         cpu_owner::fail(source);
-        cpu_owner::complete(cpu_platform(), source);
+        cpu_owner::complete(source);
     }
 }
 

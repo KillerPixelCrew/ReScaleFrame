@@ -55,7 +55,7 @@ struct OwnershipTotals {
     previous_native: u32,
 }
 
-pub(super) fn audit(_p: &Platform, source: Source) {
+pub(super) fn audit(source: Source) {
     let now = now_qpc();
     let frequency = win32::qpc_frequency();
     let (frame, total) = {
@@ -124,7 +124,6 @@ struct Timing {
 }
 
 pub(crate) fn report_timing(
-    _p: &Platform,
     cpu: &Facts,
     owner: &Frame,
     screen: u32,
@@ -339,7 +338,6 @@ struct StageBudget {
 }
 
 pub(crate) fn stage(
-    _p: &Platform,
     generation: u64,
     stage: &str,
     source: u64,
@@ -431,6 +429,6 @@ pub(super) unsafe fn report_stage(
 ) {
     if !name.is_null() {
         let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
-        stage(p, call!(p, generation), &name, source, native, result, None);
+        stage(call!(p, generation), &name, source, native, result, None);
     }
 }

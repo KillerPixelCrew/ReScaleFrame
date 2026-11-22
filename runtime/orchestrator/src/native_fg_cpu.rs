@@ -372,7 +372,7 @@ pub(crate) fn present_observed(presenting: u64, session: u64) {
     }
 }
 
-pub(crate) fn complete(_p: &Platform, source: u64) {
+pub(crate) fn complete(source: u64) {
     COMPLETED.fetch_max(source, Ordering::AcqRel);
     win32::signal_completion();
 }
@@ -990,9 +990,9 @@ fn end(p: &Platform, event: &Event, source: Source) {
     };
     if aborted {
         call!(p, abort, source.id);
-        complete(p, source.id);
+        complete(source.id);
     }
-    audit(p, source);
+    audit(source);
     report_latency_window(p);
 }
 
@@ -1388,7 +1388,7 @@ pub(crate) fn latency_present(p: &Platform, id: u64, chain: Handle, begin: bool)
             let (result, _) = deliver_marker(p, frame, RSF_NFG_CPU_PRESENT_END);
             trace("present end", id, result);
         }
-        complete(p, id);
+        complete(id);
     }
 }
 
@@ -1435,11 +1435,11 @@ unsafe fn fg_frame(pass: *const Pass, begin: u32, p: &Platform) {
     if progress(p, source.id).0 {
         call!(p, abort, source.id);
     }
-    complete(p, source.id);
+    complete(source.id);
     if RHI_SOURCE.get() == source {
         RHI_SOURCE.set(Source::default());
     }
-    audit(p, source);
+    audit(source);
 }
 
 fn watch(p: &Platform, pass: &Pass, begin: bool) {
@@ -1685,7 +1685,7 @@ fn latency_retire(session: u64, through: u64, p: &Platform) {
             frame.failed = true;
         }
     }
-    complete(p, through);
+    complete(through);
 }
 
 fn latency_end_session(session: u64, p: &Platform) {
