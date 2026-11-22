@@ -56,10 +56,40 @@ typedef struct rsf_slvk_legacy_camera {
     uint32_t reset;
 } rsf_slvk_legacy_camera;
 
+typedef struct rsf_slvk_legacy_image {
+    uint64_t image, view;
+    uint32_t layout, format, width, height, usage;
+} rsf_slvk_legacy_image;
+
+typedef struct rsf_slvk_sdk_resource {
+    rsf_slvk_sdk_header base;
+    uint8_t type;
+    void* image;
+    void* memory;
+    void* view;
+    uint32_t layout, width, height, format, mips, layers;
+    uint64_t address;
+    uint32_t flags, usage;
+    uint16_t internal_flags, reserved;
+} rsf_slvk_sdk_resource;
+
+typedef struct rsf_slvk_sdk_tag {
+    rsf_slvk_sdk_header base;
+    void* resource;
+    uint32_t type, lifecycle;
+    uint32_t top, left, width, height;
+} rsf_slvk_sdk_tag;
+
+typedef struct rsf_slvk_sdk_tag_batch {
+    rsf_slvk_sdk_resource resources[4];
+    rsf_slvk_sdk_tag tags[4];
+} rsf_slvk_sdk_tag_batch;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 uint32_t rsf_slvk_pack_legacy_camera(const rsf_slvk_legacy_camera*, rsf_slvk_sdk_constants*);
+void rsf_slvk_pack_legacy_tags(const rsf_slvk_legacy_image* const*, rsf_slvk_sdk_tag_batch*);
 #ifdef __cplusplus
 }
 #endif

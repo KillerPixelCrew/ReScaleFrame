@@ -19,6 +19,16 @@ static_assert(sizeof(sl::Preferences) == sizeof(rsf_slvk_sdk_preferences) &&
 static_assert(sizeof(sl::Constants) == sizeof(rsf_slvk_sdk_constants) &&
     alignof(sl::Constants) == alignof(rsf_slvk_sdk_constants) &&
     __is_trivially_copyable(sl::Constants));
+static_assert(sizeof(sl::Resource) == sizeof(rsf_slvk_sdk_resource) &&
+    alignof(sl::Resource) == alignof(rsf_slvk_sdk_resource) &&
+    __is_trivially_copyable(sl::Resource));
+static_assert(sizeof(sl::ResourceTag) == sizeof(rsf_slvk_sdk_tag) &&
+    alignof(sl::ResourceTag) == alignof(rsf_slvk_sdk_tag) &&
+    __is_trivially_copyable(sl::ResourceTag));
+static_assert(uint32_t(sl::ResourceType::eTex2d) == 0 &&
+    sl::ResourceLifecycle::eOnlyValidNow == 0 && sl::ResourceLifecycle::eValidUntilPresent == 1);
+static_assert(sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 &&
+    sl::kBufferTypeHUDLessColor == 2 && sl::kBufferTypeUIColorAndAlpha == 23);
 
 // The Streamline records inherit a nonempty base. Use the compiler's x64
 // offsetof extension here to catch changes in that layout.
@@ -74,6 +84,27 @@ RSF_SL_OFFSET(Constants, constants, orthographicProjection, orthographic);
 RSF_SL_OFFSET(Constants, constants, motionVectorsDilated, motion_dilated);
 RSF_SL_OFFSET(Constants, constants, motionVectorsJittered, motion_jittered);
 RSF_SL_OFFSET(Constants, constants, minRelativeLinearDepthObjectSeparation, min_relative_depth_separation);
+RSF_SL_OFFSET(Resource, resource, type, type);
+RSF_SL_OFFSET(Resource, resource, native, image);
+RSF_SL_OFFSET(Resource, resource, memory, memory);
+RSF_SL_OFFSET(Resource, resource, view, view);
+RSF_SL_OFFSET(Resource, resource, state, layout);
+RSF_SL_OFFSET(Resource, resource, width, width);
+RSF_SL_OFFSET(Resource, resource, height, height);
+RSF_SL_OFFSET(Resource, resource, nativeFormat, format);
+RSF_SL_OFFSET(Resource, resource, mipLevels, mips);
+RSF_SL_OFFSET(Resource, resource, arrayLayers, layers);
+RSF_SL_OFFSET(Resource, resource, gpuVirtualAddress, address);
+RSF_SL_OFFSET(Resource, resource, flags, flags);
+RSF_SL_OFFSET(Resource, resource, usage, usage);
+RSF_SL_OFFSET(Resource, resource, internalFlags, internal_flags);
+RSF_SL_OFFSET(Resource, resource, reserved, reserved);
+RSF_SL_OFFSET(ResourceTag, tag, resource, resource);
+RSF_SL_OFFSET(ResourceTag, tag, type, type);
+RSF_SL_OFFSET(ResourceTag, tag, lifecycle, lifecycle);
+RSF_SL_OFFSET(ResourceTag, tag, extent, top);
+static_assert(offsetof(sl::Extent, top) == 0 && offsetof(sl::Extent, left) == 4 &&
+    offsetof(sl::Extent, width) == 8 && offsetof(sl::Extent, height) == 12);
 #undef RSF_SL_OFFSET
 #undef RSF_SL_FIELD_OFFSET
 #if defined(__GNUC__)

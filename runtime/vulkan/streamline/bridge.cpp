@@ -178,30 +178,6 @@ HANDLE openVerifiedRelease(const wchar_t* path) noexcept {
     return INVALID_HANDLE_VALUE;
 }
 
-/// @brief Borrowed Vulkan image/view metadata passed through the Streamline C ABI.
-/// @details No ownership is acquired by this record. The associated tagged resource lifecycle determines when the original image can be reused.
-struct TaggedImage {
-    uint64_t image;
-    uint64_t view;
-    uint32_t layout;
-    uint32_t format;
-    uint32_t width;
-    uint32_t height;
-    uint32_t usage;
-};
-
-/// @brief Builds a borrowed Streamline 2D resource description from one C-ABI image record.
-sl::Resource resource(const TaggedImage& image) {
-    sl::Resource value{sl::ResourceType::eTex2d,
-        reinterpret_cast<void*>(static_cast<uintptr_t>(image.image)), nullptr,
-        reinterpret_cast<void*>(static_cast<uintptr_t>(image.view)), image.layout};
-    value.width = image.width; value.height = image.height;
-    value.nativeFormat = image.format; value.mipLevels = 1; value.arrayLayers = 1;
-    value.flags = 0;
-    value.usage = image.usage;
-    return value;
-}
-
 // Called by Streamline's present thread. Keep it lock-free and let the render
 // thread report or recover from the error on its next state query.
 /// @brief Publishes the latest asynchronous Vulkan presentation error with an atomic store.
@@ -517,9 +493,24 @@ RSF_SL_VK_EXPORT int VulkanStorySlMarkerForToken(uintptr_t token, uint32_t marke
     return token ? emitFrameMarker(token, marker) : -1;
 }
 
+static int submitTags(const sl::FrameToken& frame, VkCommandBuffer commands,
+    const rsf_slvk_legacy_image* const* images) {
+    rsf_slvk_sdk_tag_batch packed{};
+    rsf_slvk_pack_legacy_tags(images, &packed);
+    sl::Resource resources[4]{};
+    sl::ResourceTag tags[4]{};
+    std::memcpy(static_cast<void*>(tags), packed.tags, sizeof(tags));
+    if (images) {
+        std::memcpy(static_cast<void*>(resources), packed.resources, sizeof(resources));
+        for (size_t i = 0; i < 4; ++i) tags[i].resource = &resources[i];
+    }
+    return static_cast<int>(setTagForFrame(frame, viewport, tags, 4,
+        reinterpret_cast<sl::CommandBuffer*>(commands)));
+}
+
 static int tagFrame(const sl::FrameToken& frame, VkCommandBuffer commandBuffer,
-    const TaggedImage* depth, const TaggedImage* motion, const TaggedImage* hudless,
-    const TaggedImage* ui, const rsf_slvk_legacy_camera* camera) {
+    const rsf_slvk_legacy_image* depth, const rsf_slvk_legacy_image* motion, const rsf_slvk_legacy_image* hudless,
+    const rsf_slvk_legacy_image* ui, const rsf_slvk_legacy_camera* camera) {
     if (!setTagForFrame || !setConstants || !depth || !motion || !hudless || !ui) return -1;
     rsf_slvk_sdk_constants packed{};
     if (!rsf_slvk_pack_legacy_camera(camera, &packed)) return -1;
@@ -528,23 +519,8 @@ static int tagFrame(const sl::FrameToken& frame, VkCommandBuffer commandBuffer,
     auto result = setConstants(constants, frame, viewport);
     if (result != sl::Result::eOk) return static_cast<int>(result);
 
-    sl::Resource d = resource(*depth), m = resource(*motion), h = resource(*hudless), u = resource(*ui);
-    const sl::Extent depthExtent{0, 0, depth->width, depth->height};
-    const sl::Extent motionExtent{0, 0, motion->width, motion->height};
-    const sl::Extent colorExtent{0, 0, hudless->width, hudless->height};
-    const sl::Extent uiExtent{0, 0, ui->width, ui->height};
-      // The renderer reuses its four upright staging images on the next frame,
-      // which can begin before this frame reaches the asynchronous Present.
-      // Copy them on the tagging command buffer so each Present sees its own
-      // depth, motion, scene and UI contents.
-      sl::ResourceTag tags[] = {
-          {&d, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &depthExtent},
-          {&m, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &motionExtent},
-          {&h, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, &colorExtent},
-          {&u, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eOnlyValidNow, &uiExtent},
-      };
-    return static_cast<int>(setTagForFrame(frame, viewport, tags, 4,
-        reinterpret_cast<sl::CommandBuffer*>(commandBuffer)));
+    const rsf_slvk_legacy_image* images[] = {depth, motion, hudless, ui};
+    return submitTags(frame, commandBuffer, images);
 }
 /// @brief Sets matching camera constants and tags depth, motion, HUD-free color and UI on the current token.
 /// @details Input resources use eOnlyValidNow so the SDK records copies on commandBuffer before renderer staging images are reused. Full-window rendering leaves backbuffer size to the SDK, which resolves it after any deferred swapchain recreation; client backbuffer tags are needed only for subregions.
@@ -556,8 +532,8 @@ static int tagFrame(const sl::FrameToken& frame, VkCommandBuffer commandBuffer,
 /// @param camera Borrowed matching constants/matrix pointers.
 /// @return SDK result, or -1 for missing required bindings/pointers.
 RSF_SL_VK_EXPORT int VulkanStorySlTagFrame(VkCommandBuffer commandBuffer,
-    const TaggedImage* depth, const TaggedImage* motion, const TaggedImage* hudless,
-    const TaggedImage* ui, const rsf_slvk_legacy_camera* camera) {
+    const rsf_slvk_legacy_image* depth, const rsf_slvk_legacy_image* motion, const rsf_slvk_legacy_image* hudless,
+    const rsf_slvk_legacy_image* ui, const rsf_slvk_legacy_camera* camera) {
     return withFrameToken(0, [&](const sl::FrameToken& frame) {
         return tagFrame(frame, commandBuffer, depth, motion, hudless, ui, camera);
     });
@@ -567,14 +543,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlTagFrame(VkCommandBuffer commandBuffer,
 /// @return SDK result, or -1 without tagging/token availability.
 RSF_SL_VK_EXPORT int VulkanStorySlInvalidateFrameTags() {
     return withFrameToken(0, [](const sl::FrameToken& frame) {
-        if (!setTagForFrame) return -1;
-        sl::ResourceTag tags[] = {
-            {nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
-            {nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
-            {nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
-            {nullptr, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
-        };
-        return static_cast<int>(setTagForFrame(frame, viewport, tags, 4, nullptr));
+        return setTagForFrame ? submitTags(frame, nullptr, nullptr) : -1;
     });
 }
 /// @brief Applies DLSS-G enablement, interpolation count and presentation-resource metadata.

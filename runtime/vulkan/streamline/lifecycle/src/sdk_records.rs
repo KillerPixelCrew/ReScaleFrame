@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Data construction for the pinned Streamline 2.14.1 C++ call leaves.
 use crate::sdk_records_abi::{
-    rsf_slvk_legacy_camera, rsf_slvk_sdk_constants, rsf_slvk_sdk_header, rsf_slvk_sdk_log,
-    rsf_slvk_sdk_preferences,
+    rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_header,
+    rsf_slvk_sdk_log, rsf_slvk_sdk_preferences, rsf_slvk_sdk_resource, rsf_slvk_sdk_tag,
+    rsf_slvk_sdk_tag_batch,
 };
 use std::ffi::c_char;
 use std::ptr;
@@ -25,6 +26,24 @@ const CONSTANTS: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
     type_hi: 0x4bad,
     type_tail: [0xa9, 0x0c, 0xe0, 0xc4, 0x9e, 0xb2, 0x3a, 0xfe],
     version: 2,
+};
+
+const RESOURCE: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
+    next: ptr::null_mut(),
+    type_lo: 0x3a9d_70cf,
+    type_mid: 0x2418,
+    type_hi: 0x4b72,
+    type_tail: [0x83, 0x91, 0x13, 0xf8, 0x72, 0x1c, 0x72, 0x61],
+    version: 1,
+};
+
+const TAG: rsf_slvk_sdk_header = rsf_slvk_sdk_header {
+    next: ptr::null_mut(),
+    type_lo: 0x4c6a_5aad,
+    type_mid: 0xb445,
+    type_hi: 0x496c,
+    type_tail: [0x87, 0xff, 0x1a, 0xf3, 0x84, 0x5b, 0xe6, 0x53],
+    version: 1,
 };
 
 pub(crate) fn features(mask: u32) -> impl Iterator<Item = u32> {
@@ -127,6 +146,45 @@ unsafe extern "C" fn rsf_slvk_pack_legacy_camera(
     1
 }
 
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_pack_legacy_tags(
+    images: *const *const rsf_slvk_legacy_image,
+    output: &mut rsf_slvk_sdk_tag_batch,
+) {
+    let images = unsafe { images.cast::<[*const rsf_slvk_legacy_image; 4]>().as_ref() };
+    // Depth, motion vectors, HUD-less color, UI and alpha.
+    for (index, kind) in [0, 1, 2, 23].into_iter().enumerate() {
+        let mut tag = rsf_slvk_sdk_tag {
+            base: TAG,
+            type_: kind,
+            lifecycle: 1, // eValidUntilPresent for an invalidation
+            ..Default::default()
+        };
+        if let Some(image) = images.and_then(|images| unsafe { images[index].as_ref() }) {
+            output.resources[index] = rsf_slvk_sdk_resource {
+                base: RESOURCE,
+                image: image.image as usize as *mut _,
+                view: image.view as usize as *mut _,
+                layout: image.layout,
+                width: image.width,
+                height: image.height,
+                format: image.format,
+                mips: 1,
+                layers: 1,
+                usage: image.usage,
+                ..Default::default()
+            };
+            // The managed renderer reuses its staging images on the next frame.
+            // Streamline copies them on this recording command buffer.
+            tag.lifecycle = 0; // eOnlyValidNow
+            tag.width = image.width;
+            tag.height = image.height;
+        }
+        // The native adapter installs the pointer to its constructed resource.
+        output.tags[index] = tag;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +217,35 @@ mod tests {
         assert_eq!(
             unsafe { rsf_slvk_pack_legacy_camera(&camera, &mut packed) },
             0
+        );
+    }
+
+    #[test]
+    fn tag_batch_preserves_frame_lifetimes_and_resource_roles() {
+        let image = rsf_slvk_legacy_image {
+            image: 40,
+            view: 41,
+            layout: 5,
+            format: 44,
+            width: 1280,
+            height: 720,
+            usage: 7,
+        };
+        let images = [ptr::from_ref(&image); 4];
+        let mut batch = rsf_slvk_sdk_tag_batch::default();
+        unsafe { rsf_slvk_pack_legacy_tags(images.as_ptr(), &mut batch) };
+        assert_eq!(batch.tags.map(|tag| tag.type_), [0, 1, 2, 23]);
+        assert_eq!(batch.tags[0].lifecycle, 0);
+        assert_eq!([batch.tags[0].width, batch.tags[0].height], [1280, 720]);
+        assert_eq!(batch.resources[0].image.addr(), 40);
+        assert_eq!(batch.resources[0].view.addr(), 41);
+        unsafe { rsf_slvk_pack_legacy_tags(ptr::null(), &mut batch) };
+        assert_eq!(batch.tags.map(|tag| tag.lifecycle), [1; 4]);
+        assert!(
+            batch
+                .tags
+                .iter()
+                .all(|tag| tag.resource.is_null() && tag.width == 0)
         );
     }
 }

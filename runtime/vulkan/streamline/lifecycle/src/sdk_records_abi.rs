@@ -272,3 +272,168 @@ impl Default for rsf_slvk_legacy_camera {
         }
     }
 }
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_slvk_legacy_image {
+    pub image: u64,
+    pub view: u64,
+    pub layout: u32,
+    pub format: u32,
+    pub width: u32,
+    pub height: u32,
+    pub usage: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_legacy_image"][::core::mem::size_of::<rsf_slvk_legacy_image>() - 40usize];
+    ["Alignment of rsf_slvk_legacy_image"]
+        [::core::mem::align_of::<rsf_slvk_legacy_image>() - 8usize];
+    ["Offset of field: rsf_slvk_legacy_image::image"]
+        [::core::mem::offset_of!(rsf_slvk_legacy_image, image) - 0usize];
+    ["Offset of field: rsf_slvk_legacy_image::view"]
+        [::core::mem::offset_of!(rsf_slvk_legacy_image, view) - 8usize];
+    ["Offset of field: rsf_slvk_legacy_image::layout"]
+        [::core::mem::offset_of!(rsf_slvk_legacy_image, layout) - 16usize];
+    ["Offset of field: rsf_slvk_legacy_image::format"]
+        [::core::mem::offset_of!(rsf_slvk_legacy_image, format) - 20usize];
+    ["Offset of field: rsf_slvk_legacy_image::width"]
+        [::core::mem::offset_of!(rsf_slvk_legacy_image, width) - 24usize];
+    ["Offset of field: rsf_slvk_legacy_image::height"]
+        [::core::mem::offset_of!(rsf_slvk_legacy_image, height) - 28usize];
+    ["Offset of field: rsf_slvk_legacy_image::usage"]
+        [::core::mem::offset_of!(rsf_slvk_legacy_image, usage) - 32usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_resource {
+    pub base: rsf_slvk_sdk_header,
+    pub type_: u8,
+    pub image: *mut ::core::ffi::c_void,
+    pub memory: *mut ::core::ffi::c_void,
+    pub view: *mut ::core::ffi::c_void,
+    pub layout: u32,
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+    pub mips: u32,
+    pub layers: u32,
+    pub address: u64,
+    pub flags: u32,
+    pub usage: u32,
+    pub internal_flags: u16,
+    pub reserved: u16,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_resource"][::core::mem::size_of::<rsf_slvk_sdk_resource>() - 112usize];
+    ["Alignment of rsf_slvk_sdk_resource"]
+        [::core::mem::align_of::<rsf_slvk_sdk_resource>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_resource::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_resource::type_"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, type_) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_resource::image"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, image) - 40usize];
+    ["Offset of field: rsf_slvk_sdk_resource::memory"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, memory) - 48usize];
+    ["Offset of field: rsf_slvk_sdk_resource::view"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, view) - 56usize];
+    ["Offset of field: rsf_slvk_sdk_resource::layout"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, layout) - 64usize];
+    ["Offset of field: rsf_slvk_sdk_resource::width"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, width) - 68usize];
+    ["Offset of field: rsf_slvk_sdk_resource::height"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, height) - 72usize];
+    ["Offset of field: rsf_slvk_sdk_resource::format"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, format) - 76usize];
+    ["Offset of field: rsf_slvk_sdk_resource::mips"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, mips) - 80usize];
+    ["Offset of field: rsf_slvk_sdk_resource::layers"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, layers) - 84usize];
+    ["Offset of field: rsf_slvk_sdk_resource::address"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, address) - 88usize];
+    ["Offset of field: rsf_slvk_sdk_resource::flags"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, flags) - 96usize];
+    ["Offset of field: rsf_slvk_sdk_resource::usage"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, usage) - 100usize];
+    ["Offset of field: rsf_slvk_sdk_resource::internal_flags"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, internal_flags) - 104usize];
+    ["Offset of field: rsf_slvk_sdk_resource::reserved"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_resource, reserved) - 106usize];
+};
+impl Default for rsf_slvk_sdk_resource {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_tag {
+    pub base: rsf_slvk_sdk_header,
+    pub resource: *mut ::core::ffi::c_void,
+    pub type_: u32,
+    pub lifecycle: u32,
+    pub top: u32,
+    pub left: u32,
+    pub width: u32,
+    pub height: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_tag"][::core::mem::size_of::<rsf_slvk_sdk_tag>() - 64usize];
+    ["Alignment of rsf_slvk_sdk_tag"][::core::mem::align_of::<rsf_slvk_sdk_tag>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_tag::base"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, base) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_tag::resource"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, resource) - 32usize];
+    ["Offset of field: rsf_slvk_sdk_tag::type_"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, type_) - 40usize];
+    ["Offset of field: rsf_slvk_sdk_tag::lifecycle"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, lifecycle) - 44usize];
+    ["Offset of field: rsf_slvk_sdk_tag::top"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, top) - 48usize];
+    ["Offset of field: rsf_slvk_sdk_tag::left"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, left) - 52usize];
+    ["Offset of field: rsf_slvk_sdk_tag::width"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, width) - 56usize];
+    ["Offset of field: rsf_slvk_sdk_tag::height"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag, height) - 60usize];
+};
+impl Default for rsf_slvk_sdk_tag {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_slvk_sdk_tag_batch {
+    pub resources: [rsf_slvk_sdk_resource; 4usize],
+    pub tags: [rsf_slvk_sdk_tag; 4usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_slvk_sdk_tag_batch"][::core::mem::size_of::<rsf_slvk_sdk_tag_batch>() - 704usize];
+    ["Alignment of rsf_slvk_sdk_tag_batch"]
+        [::core::mem::align_of::<rsf_slvk_sdk_tag_batch>() - 8usize];
+    ["Offset of field: rsf_slvk_sdk_tag_batch::resources"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag_batch, resources) - 0usize];
+    ["Offset of field: rsf_slvk_sdk_tag_batch::tags"]
+        [::core::mem::offset_of!(rsf_slvk_sdk_tag_batch, tags) - 448usize];
+};
+impl Default for rsf_slvk_sdk_tag_batch {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
