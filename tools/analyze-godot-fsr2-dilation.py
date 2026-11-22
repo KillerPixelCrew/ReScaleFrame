@@ -97,7 +97,7 @@ def main():
     if len(findings) != 4:
         raise ValueError("Expected four complete captured SR frames")
     report = {"scope": "CPU replay of pinned FSR2 2.3.3 reverse-depth motion selection; no GPU intermediate readback or quality acceptance",
-              "model_sdk_commit": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+              "model_sdk_commit": json.loads((Path(__file__).resolve().parents[1] / "integrations/godot/dependencies.json").read_text(encoding="utf-8"))["vendor"]["fidelityfx_vulkan"]["revision"],
               "model_source": "sdk/include/FidelityFX/gpu/fsr2/ffx_fsr2_reconstruct_dilated_velocity_and_previous_depth.h:FindNearestDepth",
               "capture": str(args.capture.resolve()), "inputs": inputs, "frames": findings}
     args.output.parent.mkdir(parents=True, exist_ok=True)
