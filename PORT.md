@@ -1736,7 +1736,7 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 
 - [ ] **Altitude | Medium | Report a full-target view separately from player-camera identity.** read_view labels a zero-origin view filling its own buffer as is_main_view, and ac7_view.h describes that as the camera the player sees. The compatibility bridge treats it as camera admission at dlss_bridge.c:914, yet lines 2359-2367 document a separate translucency upload passing the same test and previously causing every evaluation to fail. Expose the actual rectangle fact, and have the adapter establish primary-camera identity from the corresponding scene pass, view and family before selecting backend inputs. [games/ac7/src/view.rs:177](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/view.rs#L177)
 
-- [ ] **Duplication | Low | Reuse the compile-time ASCII widening used by the Windows adapters.** TrueSky converts its NUL-terminated module name at games/ac7/src/truesky.rs:40 using the same byte-to-u16 loop that games/ac7/src/carrier.rs:27 uses for DLL, executable and window-class pointers. Godot repeats it at integrations/godot/native/window.rs:29 for a length-delimited class comparison at :108. Share one const helper for ASCII bytes which preserves exactly the input length, including a terminator only when supplied, and keep the names in their owning integrations. This gives all three callers the same ASCII and length contract. [games/ac7/src/truesky.rs:29](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L29)
+- [x] **Duplication | Low | Reuse the compile-time ASCII widening used by the Windows adapters.** TrueSky converts its NUL-terminated module name at games/ac7/src/truesky.rs:40 using the same byte-to-u16 loop that games/ac7/src/carrier.rs:27 uses for DLL, executable and window-class pointers. Godot repeats it at integrations/godot/native/window.rs:29 for a length-delimited class comparison at :108. Share one const helper for ASCII bytes which preserves exactly the input length, including a terminator only when supplied, and keep the names in their owning integrations. This gives all three callers the same ASCII and length contract. [games/ac7/src/truesky.rs:29](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L29)
 
 - [x] **Duplication | Low | Reuse one IEEE CRC-32 implementation for binary fingerprints.** AC7 checks its effect bytes at games/ac7/src/truesky.rs:168 using a slice fold. RDR2 computes the same reflected polynomial, initial value and final complement in games/rdr2/src/capture_state/recordings.rs:180; games/rdr2/src/native_capture.cpp:104 calls that loop for both pixel and vertex shader bytecode. Fixes or faster implementations currently need to preserve identical persisted hash values in two places. Share a pure crc32_ieee(&[u8]) function with the existing checksum utilities, retaining the RDR2 pointer/length contract and AC7 file-size check in their adapters. The existing CRC-32C function uses a different polynomial. [games/ac7/src/truesky.rs:159](https://github.com/KillerPixelCrew/ReScaleFrame/blob/894a55f9157a71835986ef3e9b64dc8023eedb0c/games/ac7/src/truesky.rs#L159)
 
@@ -3030,14 +3030,14 @@ Port Vulkan creation, render, SR and presentation, with adapter facts feeding Ru
 
 - [ ] [integrations/godot/native/vulkan.cpp](integrations/godot/native/vulkan.cpp)
 - [x] [integrations/godot/native/vulkan_control.h](integrations/godot/native/vulkan_control.h)
-- [ ] [integrations/godot/native/vulkan_creation.cpp](integrations/godot/native/vulkan_creation.cpp)
+- [x] [integrations/godot/native/vulkan_creation.cpp](integrations/godot/native/vulkan_creation.cpp)
 - [x] [integrations/godot/native/vulkan_creation.h](integrations/godot/native/vulkan_creation.h)
 
 - [ ] [runtime/orchestrator/src/native_sr_vulkan_session.cpp](runtime/orchestrator/src/native_sr_vulkan_session.cpp) (introduced Runtime Vulkan SR session adapter)
 
 **Fixtures (1)**
 
-- [ ] [tests/godot_vulkan_creation.cpp](tests/godot_vulkan_creation.cpp)
+- [x] [tests/godot_vulkan_creation.cpp](tests/godot_vulkan_creation.cpp)
 
 **Rust review findings (10)**
 
