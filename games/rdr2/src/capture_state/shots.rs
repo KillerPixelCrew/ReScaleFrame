@@ -392,9 +392,9 @@ pub(super) unsafe fn collect_ready(
     owner: &Capture,
     sample: Completed,
     removed: DeviceRemoved,
-) -> *mut Gpu {
+) -> Option<Gpu> {
     if rsf_rdr2_capture_active(owner) {
-        return ptr::null_mut();
+        return None;
     }
     let pending = &mut unsafe { &mut *owner.shots.get() }.pending;
     let ready = unsafe { &mut *owner.ready.get() };
@@ -432,7 +432,7 @@ pub(super) unsafe fn collect_ready(
     if pending.is_empty() {
         unsafe { take_idle(owner) }
     } else {
-        ptr::null_mut()
+        None
     }
 }
 
@@ -516,7 +516,7 @@ mod tests {
             assert!(claim_readback(&*submission, &mut pending[0].receipt));
             untracked_submit(&owner, 1, [other].as_ptr());
             rsf_rdr2_capture_reset_list(&owner, list, ptr::null_mut());
-            assert!(collect_ready(&owner, completed, device_live).is_null());
+            assert!(collect_ready(&owner, completed, device_live).is_none());
             assert_eq!(rsf_rdr2_capture_pending_count(&owner), 2);
             assert_eq!(ready_count(&owner), 0);
             assert_eq!((*owner.ledger.get()).readbacks_unavailable, 1);
@@ -545,9 +545,9 @@ mod tests {
         shot.receipt.fence_value = 1;
         unsafe {
             (*owner.shots.get()).pending.push(shot);
-            assert!(collect_ready(&owner, completed, device_live).is_null());
+            assert!(collect_ready(&owner, completed, device_live).is_none());
             assert_eq!(rsf_rdr2_capture_pending_count(&owner), 1);
-            assert!(collect_ready(&owner, completed, device_removed).is_null());
+            assert!(collect_ready(&owner, completed, device_removed).is_none());
             assert_eq!(rsf_rdr2_capture_pending_count(&owner), 0);
             assert_eq!(ready_count(&owner), 0);
             assert_eq!((*owner.ledger.get()).readbacks_unavailable, 1);

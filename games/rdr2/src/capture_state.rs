@@ -12,11 +12,17 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 mod artifacts;
 #[cfg(windows)]
 mod bundle;
+#[cfg(windows)]
+mod d3d12;
+#[cfg(windows)]
+mod fixture;
 mod gpu_leases;
 mod hooks;
 #[cfg(windows)]
 mod install;
 mod metadata;
+#[cfg(windows)]
+mod pipeline;
 #[cfg(windows)]
 mod poll;
 mod recordings;

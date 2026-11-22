@@ -2,8 +2,6 @@
 //! COM ownership of capture backbuffers, readbacks and per-queue completion fences.
 
 use super::Capture;
-#[cfg(any(windows, test))]
-use rsf_game_sys::ffi_util::try_box;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
@@ -22,7 +20,7 @@ pub(super) struct Ops {
 #[repr(C)]
 #[derive(Default)]
 pub(super) struct ReadbackLeases {
-    buffer: Option<NonNull<c_void>>,
+    pub(super) buffer: Option<NonNull<c_void>>,
     pub(super) fence: Option<NonNull<c_void>>,
     queue: Option<NonNull<c_void>>,
     ops: Option<&'static Ops>,
@@ -201,7 +199,7 @@ pub(super) unsafe fn signal(
 /// The native caller lends the admitted swapchain and exact buffer count under the capture mutex.
 /// Keep any successful acquisitions local until the entire batch exists.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_gpu_arm_backbuffers(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_gpu_arm_backbuffers(
     owner: &Capture,
     swapchain: *mut c_void,
     count: u32,
@@ -261,7 +259,7 @@ pub(super) unsafe fn select_target(owner: &Capture, target: *mut c_void) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_gpu_selected(
+pub(super) unsafe extern "C" fn rsf_rdr2_capture_gpu_selected(
     owner: &Capture,
     swapchain: *mut c_void,
 ) -> *mut c_void {
@@ -276,21 +274,10 @@ unsafe extern "C" fn rsf_rdr2_capture_gpu_selected(
 /// Ready admission has removed all pending readback receipts under the native capture mutex.
 /// Take the idle queue and swapchain owners so their final Release calls run outside that mutex.
 #[cfg(any(windows, test))]
-pub(super) unsafe fn take_idle(owner: &Capture) -> *mut Gpu {
+pub(super) unsafe fn take_idle(owner: &Capture) -> Option<Gpu> {
     let gpu = unsafe { &mut *owner.gpu.get() };
     if gpu.queues.is_empty() && gpu.backbuffers.is_none() {
-        return ptr::null_mut();
+        return None;
     }
-    let Some(mut retired) = try_box(Gpu::default()) else {
-        return ptr::null_mut();
-    };
-    std::mem::swap(gpu, &mut *retired);
-    Box::into_raw(retired)
-}
-
-#[cfg(windows)]
-pub(super) fn drop_idle(retired: *mut Gpu) {
-    if !retired.is_null() {
-        drop(unsafe { Box::from_raw(retired) });
-    }
+    Some(std::mem::take(gpu))
 }

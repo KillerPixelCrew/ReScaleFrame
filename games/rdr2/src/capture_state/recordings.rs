@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Command-list observations and copied draw facts ordered by the native capture mutex.
 use super::{Capture, MAX_DRAW_METADATA, try_entry};
-use rsf_game_sys::{checksum::crc32_ieee, ffi_util::try_box};
+#[cfg(windows)]
+use rsf_game_sys::checksum::crc32_ieee;
+use rsf_game_sys::ffi_util::try_box;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -184,12 +186,8 @@ impl Recordings {
 
 // The native descriptor parser lends the exact shader bytes for this call. Hashing does
 // not access the owner and runs before the native graphics mutex is taken.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_hash_shader(
-    bytes: *const u8,
-    length: usize,
-    out: &mut u32,
-) -> bool {
+#[cfg(windows)]
+pub(super) unsafe fn hash_shader(bytes: *const u8, length: usize, out: &mut u32) -> bool {
     if length == 0 {
         *out = 0;
         return true;

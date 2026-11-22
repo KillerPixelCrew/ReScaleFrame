@@ -15,7 +15,12 @@ rsf-game-sys = { path = "../../sdk/game" }
 [target."cfg(windows)".dependencies.windows]
 version = "0.62.2"
 default-features = false
-features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"]
+features = [
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+]
 
 [target."cfg(windows)".dependencies.windows-sys]
 version = "0.61"

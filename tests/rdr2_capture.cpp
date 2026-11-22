@@ -12,8 +12,6 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -29,9 +27,6 @@ template<class T> union Subobject {
     void* alignment;
     Subobject(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE tag,T value) : item{tag,value} {}
 };
-std::string read(const std::filesystem::path& path) {
-    std::ifstream file(path,std::ios::binary); return {std::istreambuf_iterator<char>(file),{}};
-}
 void transition(ID3D12GraphicsCommandList* list,ID3D12Resource* resource,D3D12_RESOURCE_STATES from,D3D12_RESOURCE_STATES to) {
     D3D12_RESOURCE_BARRIER barrier{}; barrier.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition={resource,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,from,to}; list->ResourceBarrier(1,&barrier);
@@ -151,31 +146,10 @@ int main(int argc,char** argv) try {
     const auto done=CreateEventW(nullptr,FALSE,FALSE,nullptr);check(done!=nullptr,"teardown event");
     hr(queue->Signal(drained.Get(),1),"teardown Signal");hr(drained->SetEventOnCompletion(1,done),"teardown completion");
     const auto wait=WaitForSingleObject(done,5000);CloseHandle(done);check(wait==WAIT_OBJECT_0,"presentation work drained");
-    const auto manifest=root/(L"bundle-"+std::to_wstring(GetCurrentProcessId())+L"-001.json");
-    for (unsigned i=0;i<100 && !std::filesystem::exists(manifest);++i)Sleep(100);
-    const auto document=read(manifest);check(!document.empty(),"capture manifest written");
     std::printf("Checking capture manifest and raw pixels.\n");
-    check(document.find("\"draw_count\":75")!=std::string::npos,"full draw sequence");
-    check(document.find("\"index\":3")!=std::string::npos,"four temporal input groups");
-    check(document.find("\"write_failed\":false")!=std::string::npos,"complete writes");
-    check(document.find("\"readbacks_unavailable\":0")!=std::string::npos,"complete readback receipts");
-    check(document.find("\"capture_timeout\":false")!=std::string::npos,"capture completed without timeout");
-    check(document.find("\"color_space_set\":true")!=std::string::npos,"observed color space");
-    check(document.find("\"pipeline_known\":true,\"ps_crc32\":\"")!=std::string::npos &&
-        document.find("\"ps_crc32\":\"00000000\"")==std::string::npos,"stream shader identity captured");
-    const auto prefix=L"native-"+std::to_wstring(GetCurrentProcessId())+L"-001-";
-    const auto final_metadata=read(root/(prefix+L"074.json"));
-    check(final_metadata.find("\"pipeline_known\":true")!=std::string::npos,"draw image reports observed pipeline");
-    const auto final=read(root/(prefix+L"074.bin"));check(final.size()==256u*48u,"final draw retained past 64");
-    if(rgb10){uint32_t packed{};std::memcpy(&packed,final.data(),sizeof(packed));
-        check((packed&1023)==256 && ((packed>>10)&1023)==512 && ((packed>>20)&1023)==767 && (packed>>30)==3,"actual final RGB10 pixels");}
-    else check(static_cast<unsigned char>(final[0])==191 && static_cast<unsigned char>(final[1])==128 && static_cast<unsigned char>(final[2])==64,"actual final BGRA pixels");
-    const auto inputprefix=L"input-"+std::to_wstring(GetCurrentProcessId())+L"-001-000-";
-    const auto motionbytes=read(root/(inputprefix+L"motion.bin"));check(motionbytes.size()==256u*24u,"motion readback dimensions");
-    check(static_cast<unsigned char>(motionbytes[0])==0 && static_cast<unsigned char>(motionbytes[1])==0x30 &&
-        static_cast<unsigned char>(motionbytes[2])==0 && static_cast<unsigned char>(motionbytes[3])==0xb4,"raw RG16F motion preserved");
-    const auto depthbytes=read(root/(inputprefix+L"depth.bin"));check(depthbytes.size()>=256u*24u,"depth plane readback");
-    float depthvalue{};std::memcpy(&depthvalue,depthbytes.data(),sizeof(depthvalue));check(depthvalue==0.25f,"raw depth preserved");
+    if (const auto* error = rsf_rdr2_capture_test_verify(root.c_str(), rgb10)) {
+        throw std::runtime_error(error);
+    }
     std::printf("Checking D3D12 debug messages.\n");
     if(info)for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size{};info->GetMessage(i,nullptr,&size);std::vector<unsigned char> bytes(size);
         auto* message=reinterpret_cast<D3D12_MESSAGE*>(bytes.data());hr(info->GetMessage(i,message,&size),"debug message");

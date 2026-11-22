@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The capture worker polls requests, retires GPU leases and publishes detached artifacts.
 use super::bundle::{self, Bundle, FormatScalar, Report};
-use super::gpu_leases::drop_idle;
 use super::shots::{self, Completed, DeviceRemoved, WriteImage};
 use super::{Capture, install, poll_request, readback_written, timeout};
 use std::ffi::c_void;
@@ -71,7 +70,7 @@ unsafe extern "C" fn rsf_rdr2_capture_poll(
         if let Some(sequence) = expired {
             unsafe { (ops.timeout)(sequence) };
         }
-        drop_idle(retired);
+        drop(retired);
         for index in 0..unsafe { shots::ready_count(owner) } {
             let saved = unsafe { shots::write_ready(owner, index, ops.write) };
             let _lock = unsafe { ops.lock(context) };
