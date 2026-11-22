@@ -105,6 +105,30 @@ Rust 1.94.1 formatting, byte-for-byte bindgen 0.72.1 reproduction of the
 FG12 and XeLL bindings, and locked offline Windows Cargo metadata with all
 features passed. Link and runtime checks remain pending.
 
+## Native boundary closure
+
+The three remaining D04 paths now hold no first-party C++.
+
+| D04 checklist path | Source evidence |
+| --- | --- |
+| runtime/backends/common/d3d12_helpers.h | C declarations only: `rsf_core_d3d12_wait_native_fence` with its raw HRESULT result. The `rsf::wait_fence` wrapper is gone. Its only caller, `rsf_streamline_host_drain` in dlss_generation.cpp, passes the former 10,000 ms default explicitly. The header no longer includes `<windows.h>` and `<d3d12.h>`, so dlss_generation.cpp includes `<d3d12.h>` itself. |
+| runtime/backends/common/fg_helpers.h | C declarations only: the five `rsf_core_fg12_*` entry points, with `DXGI_SWAP_CHAIN_DESC1` as an incomplete struct. dlss_generation.cpp was the only includer and calls them directly. The descriptor is zero-initialized before `rsf_core_fg12_chain_description` fills it, as the wrapper did. |
+| runtime/orchestrator/src/fg12_platform.cpp | Deleted. The install dispatch is `present_install` in fg12/native.rs, which calls `rsf_d3d11_present_prepare` for explicit creation and `rsf_d3d11_present_install` otherwise. The former `catch (...)` could not fire: both entries forward straight to non-unwinding Rust (`rsf_core_d3d11p_prepare`, `rsf_d3d11p_factory_install`), where a foreign C++ exception aborts before reaching an outer handler. The C++ hook callbacks they reach are `noexcept` or MinHook C calls. The capture lifetime moved to the C11 leaf fg12_platform.c: a `.CRT$XCU` entry (kept by `/include`) calls `rsf_fg12_capture_attach` where the static constructor ran, and registers `rsf_fg12_capture_detach` with `atexit`, which a DLL runs at unload as it ran the static destructor. The mingw preset uses a GCC constructor. Rust cannot place a guaranteed-linked CRT initializer in this object library, so this stays native. |
+
+D06's dlss_generation.cpp keeps its SDK C++ (`sl::` records and feature
+templates, `ComPtr` D3D12 and DXGI ownership, `sl_matrix_helpers`). This
+change only replaces its use of the removed inline wrappers.
+
+Checked on Rust 1.94.1 with the 9c8fe985 tip, which does not build the
+rsf-orchestrator crate. `cargo fmt --all -- --check` passed. `cargo check`
+and `cargo clippy --all-targets -D warnings` for rsf-orchestrator report no
+errors in fg12 sources; the remaining tip errors are elsewhere. Bindgen 0.72.1
+regeneration leaves every binding unchanged. MSBuild compiled fg12_platform.c
+and dlss_generation.cpp with the Streamline SDK at /W4 /WX, and `cl /Zs`
+passed the SDK-off branch and both helper headers as C11. Linking and the
+fg12_abi, fg12_abi_embedded and latency_host CTest entries wait on the tip
+build.
+
 ## Initial port verification
 
 - Pinned Rust 1.94.1 rustfmt checked the changed Rust sources. Bindgen CLI

@@ -19,7 +19,7 @@ target_include_directories(rsf_native_cpu INTERFACE include)
 target_link_libraries(rsf_native_cpu INTERFACE ReScaleFrame::GameSDK)
 
 add_library(rsf_orchestrator_core OBJECT
-    src/fg12_platform.cpp
+    src/fg12_platform.c
     src/native_sr.cpp
     src/native_composition_unload.cpp
     src/gl_pipeline_contract.c

@@ -8,7 +8,7 @@ use crate::frame_capture12::native::{
 };
 use crate::frame_capture12::{self as capture, Owner as Capture};
 use crate::native_cpu::rsf_native_cpu_dispatch;
-use rsf_game_sys::frame_policy::rsf_frame_allows_fg;
+use rsf_game_sys::rsf_frame_allows_fg;
 use std::sync::atomic::AtomicPtr;
 
 unsafe extern "C" {
@@ -19,10 +19,8 @@ unsafe extern "C" {
     );
     fn rsf_native_latency_ping(window: *mut c_void) -> i32;
     fn rsf_streamline_host_abort(host: *mut c_void, source: u64) -> i32;
-    fn rsf_fg12_platform_install(
-        setup: *const rsf_d3d11_present_setup,
-        explicit_creation: i32,
-    ) -> i32;
+    fn rsf_d3d11_present_install(setup: *const rsf_d3d11_present_setup) -> i32;
+    fn rsf_d3d11_present_prepare(setup: *const rsf_d3d11_present_setup) -> i32;
     fn rsf_d3d11_present_queue() -> *mut c_void;
     fn rsf_d3d11_present_source_queue() -> *mut c_void;
     fn rsf_d3d11_present_retire(
@@ -66,6 +64,19 @@ unsafe extern "C" fn dump_prepare(frame: *const rsf_fg_frame, result: i32) {
     unsafe { rsf_input_dump_fg_prepare(std::ptr::null(), frame, result) };
 }
 
+// Explicit creation only prepares the bridge. Both entries are non-unwinding
+// Rust behind thin C shims, and their native hook callbacks contain their own
+// exceptions, so no foreign unwind can reach this frame.
+unsafe extern "C" fn present_install(setup: *const rsf_d3d11_present_setup, explicit: i32) -> i32 {
+    unsafe {
+        if explicit != 0 {
+            rsf_d3d11_present_prepare(setup)
+        } else {
+            rsf_d3d11_present_install(setup)
+        }
+    }
+}
+
 unsafe extern "C" fn host_abort(host: *mut rsf_streamline_host, source: u64) -> i32 {
     unsafe { rsf_streamline_host_abort(host.cast(), source) }
 }
@@ -82,8 +93,8 @@ unsafe extern "C" fn readback_copy(
 
 pub(super) static CALLS: Platform = Platform {
     buffer_index: rsf_fg12_platform_buffer_index,
-    install: rsf_fg12_platform_install,
-    allows_fg: allows_fg,
+    install: present_install,
+    allows_fg,
     depth_domains: pass_depth_domains,
     texture_desc: rsf_fg12_platform_texture_desc,
     texture: rsf_fg12_platform_texture,
@@ -92,13 +103,13 @@ pub(super) static CALLS: Platform = Platform {
     fence: rsf_fg12_platform_fence,
     signal: rsf_fg12_platform_signal,
     readback: rsf_fg12_platform_readback,
-    readback_copy: readback_copy,
+    readback_copy,
     map: rsf_fg12_platform_map,
     unmap: rsf_fg12_platform_unmap,
-    dump_record: dump_record,
-    dump_flush: dump_flush,
-    dump_submitted: dump_submitted,
-    dump_prepare: dump_prepare,
+    dump_record,
+    dump_flush,
+    dump_submitted,
+    dump_prepare,
     present_queue: rsf_d3d11_present_queue,
     source_queue: rsf_d3d11_present_source_queue,
     present_retire: rsf_d3d11_present_retire,
@@ -107,7 +118,7 @@ pub(super) static CALLS: Platform = Platform {
     present_provider: rsf_d3d11_present_provider,
     present_backend: rsf_d3d11_present_backend,
     present_generation: rsf_d3d11_present_generation,
-    host_abort: host_abort,
+    host_abort,
     fg_set_log: rsf_native_fg_set_log,
     fg_options_set: rsf_native_fg_options_set,
     fg_cpu: rsf_native_fg_cpu,

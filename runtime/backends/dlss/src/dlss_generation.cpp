@@ -9,6 +9,7 @@
 #include "../../common/fg_helpers.h"
 #include "../../common/d3d12_helpers.h"
 #include <wrl/client.h>
+#include <d3d12.h>
 #include <dxgi1_6.h>
 #include <cmath>
 #include <cstddef>
@@ -641,7 +642,8 @@ void version(void* native, rsf_fg_status* status) noexcept
 int32_t chain(void* native, const rsf_fg_swapchain_desc* desc, void** out) noexcept
 {
     auto& host = as_native(native);
-    auto description = rsf::chain_description(*desc);
+    DXGI_SWAP_CHAIN_DESC1 description{};
+    rsf_core_fg12_chain_description(desc, &description);
     ComPtr<IDXGISwapChain1> swap;
     if (FAILED(host.factory->CreateSwapChainForHwnd(host.queue.Get(), static_cast<HWND>(desc->hwnd),
         &description, nullptr, nullptr, &swap))) return RSF_BACKEND_ERROR_INIT_FAILED;
@@ -695,7 +697,7 @@ int32_t observe(void* native, rsf_slhost_observed* out) noexcept
 
 int32_t frame(void* native, const rsf_fg_frame* frame) noexcept
 {
-    return rsf::fg_frame(frame, as_native(native).native_device.Get());
+    return rsf_core_fg12_frame(frame, as_native(native).native_device.Get());
 }
 
 int32_t command(void* native, void* command) noexcept
@@ -703,7 +705,7 @@ int32_t command(void* native, void* command) noexcept
     auto& host = as_native(native);
     void* native_command = native_alias(host, command);
     if (!native_command) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    return rsf::fg_command(native_command, host.native_device.Get());
+    return rsf_core_fg12_command(native_command, host.native_device.Get());
 }
 
 // Builds the frame's common constants. Sets them only when SR has not already done so.
@@ -773,7 +775,7 @@ constexpr rsf_slhost_platform platform{&startup,
 
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
-    const auto header = rsf::fg_setup_header(setup, out, chain);
+    const auto header = rsf_core_fg12_setup_header(setup, out, chain);
     return header != RSF_BACKEND_OK ? header : rsf_core_slhost_session_create(setup, out, chain, &platform);
 }
 rsf_backend_result configure(void* session, const rsf_fg_options* options)
@@ -827,7 +829,8 @@ extern "C" rsf_backend_result rsf_streamline_host_drain(rsf_streamline_host* hos
     if (FAILED(native.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!event) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    const bool ready = SUCCEEDED(native.queue->Signal(fence.Get(), 1)) && SUCCEEDED(rsf::wait_fence(fence.Get(), 1, event));
+    const bool ready = SUCCEEDED(native.queue->Signal(fence.Get(), 1)) &&
+        SUCCEEDED(static_cast<HRESULT>(rsf_core_d3d12_wait_native_fence(fence.Get(), 1, event, 10000)));
     CloseHandle(event);
     return ready ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
@@ -916,7 +919,7 @@ extern "C" void* rsf_streamline_host_native(rsf_streamline_host* host, void* pro
     return native_alias(*native_of(host), proxy);
 }
 #else
-extern "C" const rsf_generation_provider* rsf_generation_dlss() { return rsf::not_compiled_provider(); }
+extern "C" const rsf_generation_provider* rsf_generation_dlss() { return rsf_core_fg12_disabled_provider(); }
 extern "C" rsf_backend_result rsf_streamline_host_create(const rsf_streamline_host_setup*, rsf_streamline_host**) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_adopt(const rsf_streamline_host_setup*, void*, void*, rsf_streamline_host**) { return RSF_BACKEND_ERROR_NOT_COMPILED; }
 extern "C" rsf_backend_result rsf_streamline_host_graphics(rsf_streamline_host*, rsf_streamline_graphics*) { return RSF_BACKEND_ERROR_NOT_COMPILED; }

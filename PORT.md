@@ -1120,14 +1120,14 @@ Port shared D3D12 SR, FG, provider dispatch and retirements. Coordinate provider
 
 **Port files (10)**
 
-- [ ] [runtime/backends/common/d3d12_helpers.h](runtime/backends/common/d3d12_helpers.h)
-- [ ] [runtime/backends/common/fg_helpers.h](runtime/backends/common/fg_helpers.h)
+- [x] [runtime/backends/common/d3d12_helpers.h](runtime/backends/common/d3d12_helpers.h) (C declarations only)
+- [x] [runtime/backends/common/fg_helpers.h](runtime/backends/common/fg_helpers.h) (C declarations only)
 - [x] [runtime/backends/common/generation12_checks.h](runtime/backends/common/generation12_checks.h)
 - [x] [runtime/backends/common/generation12_platform.h](runtime/backends/common/generation12_platform.h)
 - [x] [runtime/backends/common/sr12_platform.h](runtime/backends/common/sr12_platform.h)
 - [x] [runtime/orchestrator/include/rescaleframe/native_fg_d3d12.h](runtime/orchestrator/include/rescaleframe/native_fg_d3d12.h)
 - [x] [runtime/orchestrator/include/rescaleframe/native_sr_d3d12.h](runtime/orchestrator/include/rescaleframe/native_sr_d3d12.h)
-- [ ] [runtime/orchestrator/src/fg12_platform.cpp](runtime/orchestrator/src/fg12_platform.cpp)
+- [x] [runtime/orchestrator/src/fg12_platform.cpp](runtime/orchestrator/src/fg12_platform.cpp) (install dispatch in fg12/native.rs; capture lifetime in the C11 leaf fg12_platform.c)
 - [x] [runtime/orchestrator/src/fg12_platform.h](runtime/orchestrator/src/fg12_platform.h)
 - [x] [runtime/orchestrator/src/sr12_platform.cpp](runtime/orchestrator/src/sr12_platform.cpp)
 
@@ -1238,7 +1238,7 @@ Port generation, latency instrumentation and bundled compatibility handling with
 **Port files (14)**
 
 - [x] [runtime/backends/dlss/include/rescaleframe/streamline_host.h](runtime/backends/dlss/include/rescaleframe/streamline_host.h)
-- [ ] [runtime/backends/dlss/src/dlss_generation.cpp](runtime/backends/dlss/src/dlss_generation.cpp)
+- [ ] [runtime/backends/dlss/src/dlss_generation.cpp](runtime/backends/dlss/src/dlss_generation.cpp) Still first-party C++. D04 removed its use of the fg_helpers.h and d3d12_helpers.h wrappers only. The Streamline host leaf still uses `sl::` SDK records, feature templates, `sl_matrix_helpers` and `ComPtr` D3D12/DXGI ownership.
 - [ ] [runtime/backends/dlss/src/mfg_unlock.cpp](runtime/backends/dlss/src/mfg_unlock.cpp)
 - [ ] [runtime/backends/dlss/src/mfg_unlock.h](runtime/backends/dlss/src/mfg_unlock.h)
 - [ ] [runtime/backends/dlss/src/reflex_audit.cpp](runtime/backends/dlss/src/reflex_audit.cpp)

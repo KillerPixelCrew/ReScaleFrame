@@ -1,15 +1,14 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
-#include <windows.h>
-#include <d3d12.h>
-#include <cstdint>
+#include <stdint.h>
 
-extern "C" int32_t rsf_core_d3d12_wait_native_fence(void*, uint64_t, void*, uint32_t);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-namespace rsf {
-// The caller owns the auto-reset event. The Rust wait retains the exact completion value and HRESULT.
-inline HRESULT wait_fence(ID3D12Fence* fence, uint64_t value, HANDLE event, DWORD timeout_ms = 10000)
-{
-    return static_cast<HRESULT>(rsf_core_d3d12_wait_native_fence(fence, value, event, timeout_ms));
+/* The caller owns the event. The result is the raw HRESULT. */
+int32_t rsf_core_d3d12_wait_native_fence(void* fence, uint64_t value, void* event, uint32_t timeout_ms);
+
+#ifdef __cplusplus
 }
-}
+#endif
