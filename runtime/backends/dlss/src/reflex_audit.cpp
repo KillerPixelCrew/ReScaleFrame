@@ -135,8 +135,9 @@ void emit_sync(rsf_backend_log_fn log, void* user, const void* payload) noexcept
     const auto origin = provenance(reinterpret_cast<void*>(report.caller));
     char text[480];
     std::snprintf(text, sizeof(text),
-        "Reflex API sync caller=%ls+0x%llx device=%p enabled=%u queue_us=%d target_us=%u vblank_us=%u fg=%u dfg_max=%u dfg_fps=%u result=%d",
-        origin.name, static_cast<unsigned long long>(origin.offset), reinterpret_cast<void*>(report.device), report.enabled,
+        "Reflex API sync caller=%ls+0x%llx device=%p enabled=%s queue_us=%d target_us=%u vblank_us=%u fg=%u dfg_max=%u dfg_fps=%u result=%d",
+        origin.name, static_cast<unsigned long long>(origin.offset), reinterpret_cast<void*>(report.device),
+        report.enabled == 1 ? "1" : report.enabled == 0 ? "0" : "unknown",
         report.queue_us, report.target_us, report.vblank_us, report.fg, report.dfg_max, report.dfg_fps, report.result);
     log(user, text);
 } catch (...) {}

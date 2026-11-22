@@ -249,7 +249,10 @@ unsafe extern "C" fn rsf_core_reflex_audit_event(
 unsafe extern "C" fn rsf_core_reflex_audit_sync(report: &SyncReport, enable: u32, disable: u32) {
     let mut audit = audit();
     let mut report = *report;
-    report.enabled = audit.sync.map_or(0, |prior| prior.enabled);
+    report.enabled = audit
+        .sync
+        .filter(|prior| prior.device == report.device)
+        .map_or(u32::MAX, |prior| prior.enabled);
     if report.result == 0 {
         if enable != 0 {
             report.enabled = 1;
