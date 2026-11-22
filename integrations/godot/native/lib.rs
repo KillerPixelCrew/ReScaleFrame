@@ -7,18 +7,21 @@
 //! `ReScaleFrameEffect`'s probe snapshot and motion capture classification (`effect.rs`).
 //!
 //! The GDExtension entry and godot-cpp classes stay C++. Native control uses the same C ABI.
-//! `runtime.cpp` wires these entry points and the Rust Vulkan leaves through
-//! `rsf_godot_platform` (`godot_platform.h`, mirrored in `platform.rs`): the D3D12 device, fence,
-//! SR context, FG, presentation and capture calls, DXGI, Win32 window calls, the linked Runtime
-//! and the Vulkan owner's guard, device, provider, presenter and SDK calls. Rust uses generated
-//! Vulkan layouts for device negotiation. `effect.cpp` lends godot-cpp leaves with each
-//! compositor callback. No second Runtime is
-//! loaded and no vendor, pacing or presentation policy is added here.
+//! `runtime.rs` handles the engine entry points, and `host.rs` implements the D3D12,
+//! DXGI and Win32 leaves and calls the shared Runtime capture owner. `runtime.cpp`
+//! wires the platform table, C header helpers and CMake-selected Vulkan capabilities.
+//! `effect.cpp` lends godot-cpp leaves for each compositor callback.
 mod control;
 mod d3d12;
 mod effect;
 mod extension;
+#[cfg(all(windows, not(test)))]
+mod host;
+#[cfg(all(windows, not(test)))]
+mod host_abi;
 mod platform;
+#[cfg(all(windows, not(test)))]
+mod runtime;
 mod vulkan;
 mod window;
 
@@ -33,6 +36,25 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::LazyLock;
 
 static CONTROL: LazyLock<Control> = LazyLock::new(Control::new);
+
+#[cfg(all(windows, not(test)))]
+fn depth_domains_requested(domains: &rsf_game_sys::rsf_game_depth_domains) -> bool {
+    use rsf_game_sys::{rsf_game_depth_domain, rsf_game_depth_domains};
+    const {
+        assert!(size_of::<rsf_game_depth_domain>() == 26 * 4);
+        assert!(size_of::<rsf_game_depth_domains>() == 60 * 4);
+    }
+    // The C wire types contain only u32/f32 fields, with no padding. Any
+    // nonzero byte requests mapping, including malformed records.
+    unsafe {
+        std::slice::from_raw_parts(
+            std::ptr::from_ref(domains).cast::<u8>(),
+            std::mem::size_of_val(domains),
+        )
+    }
+    .iter()
+    .any(|byte| *byte != 0)
+}
 
 /// # Safety
 /// A non-null record has a readable size word. When the size covers T, its version word is
@@ -496,46 +518,60 @@ unsafe extern "C" fn rsf_godot_effect_status_get(
     }
 }
 
-/// # Safety
-/// `count` is null or writable.
+/// Compose the options from a borrowed Godot Dictionary, then call the registered
+/// engine service with the typed settings. Only the leaf can interpret Variants.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_option_fields(count: *mut u32) -> *const OptionField {
-    if !count.is_null() {
-        // SAFETY: the caller's guarantee.
-        unsafe { count.write(extension::FIELD_COUNT as u32) };
-    }
-    extension::FIELDS.0.as_ptr()
-}
-
-/// # Safety
-/// `table` is null or the leaf table; `values` is null or readable for `count` values;
-/// `settings` is null or writable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_compose_settings(
+unsafe extern "C" fn rsf_godot_extension_configure(
     table: *const Platform,
-    values: *const OptionValue,
-    count: u32,
-    settings: *mut Settings,
+    admitted: u32,
+    viewport: u64,
+    dictionary: *const c_void,
+    read: unsafe extern "C" fn(*const c_void, *const OptionField, *mut OptionValue) -> u32,
 ) -> c_int {
-    if count as usize != extension::FIELD_COUNT || settings.is_null() {
+    let required = extension::ADMIT_DRIVER | extension::ADMIT_RENDERER;
+    if admitted & required != required {
         return 0;
     }
-    // SAFETY: the caller's guarantee for the table and FIELD_COUNT values.
-    let (Some(platform), Some(values)) = (unsafe { leaves(table) }, unsafe {
-        values
-            .cast::<[OptionValue; extension::FIELD_COUNT]>()
-            .as_ref()
-    }) else {
+    let mut values = [OptionValue::default(); extension::FIELD_COUNT];
+    for (field, value) in extension::FIELDS.0.iter().zip(&mut values) {
+        if unsafe { read(dictionary, field, value) } == 0 {
+            return 0;
+        }
+    }
+    let Some(platform) = (unsafe { leaves(table) }) else {
         return 0;
     };
-    match extension::compose(platform, values) {
-        Some(value) => {
-            // SAFETY: the caller's guarantee.
-            unsafe { settings.write(value) };
-            1
-        }
-        None => 0,
+    extension::compose(platform, &values)
+        .map_or(0, |value| CONTROL.configure_engine(&value, viewport))
+}
+
+/// The first bit admits a status snapshot; the second admits requested settings.
+/// The C++ class only materializes the corresponding Dictionary entries.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_extension_status(
+    status: *mut Status,
+    settings: *mut Settings,
+) -> u32 {
+    let mut current = Status {
+        struct_size: size_of::<Status>() as u32,
+        abi_version: ABI_VERSION,
+        ..Default::default()
+    };
+    if unsafe { rsfg_status(&mut current) } == 0 || current.session_id == 0 {
+        return 0;
     }
+    unsafe { status.write(current) };
+
+    let mut requested = Settings {
+        struct_size: size_of::<Settings>() as u32,
+        abi_version: SETTINGS_ABI_VERSION,
+        ..Default::default()
+    };
+    if unsafe { rsfg_settings(&mut requested) } == 0 {
+        return 1;
+    }
+    unsafe { settings.write(requested) };
+    3
 }
 
 /// # Safety

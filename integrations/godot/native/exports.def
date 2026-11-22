@@ -26,3 +26,14 @@ EXPORTS
     rsfg_vk_drain
     rsfg_render_vulkan
     rsfg_render_vulkan_handoff
+    rsfg_boot
+    rsfg_create_swapchain
+    rsfg_configure
+    rsfg_render
+    rsfg_render_begin
+    rsfg_vk_present_marker
+    rsfg_vk_execution
+    rsfg_vk_native_present
+    rsfg_vk_wsi_call
+    rsfg_vk_foreign_call
+    rsfg_shutdown

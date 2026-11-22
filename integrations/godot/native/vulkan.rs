@@ -490,4 +490,4 @@ mod sr;
 mod tests;
 
 #[cfg(all(windows, not(test)))]
-mod native;
+pub(crate) mod native;

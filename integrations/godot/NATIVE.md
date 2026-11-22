@@ -23,7 +23,7 @@ replacement window can attach independently.
 
 Rust plans the motion diagnostic's buffer size and dispatch and supplies its shader. The
 GDExtension entry, class bindings, Variant/RID marshaling and RenderingDevice recording still
-use godot-cpp. COM, DXGI and C++ FrameCapture12 operations stay in typed native leaves.
+use godot-cpp. Rust handles the D3D12 COM, DXGI and Runtime frame capture calls.
 
 The native integration binds one versioned Runtime CPU service at backend setup. CPU facts and
 window messages use its report callback, and diagnostic pings use its ping callback. Godot admits
@@ -58,7 +58,7 @@ remain pending.
 | Shared packaged D3D12 paths | `sdk/game/src/vendor_paths.rs` supplies Godot's session storage and Unity's package identity. |
 | Simultaneous FG failures | `sdk/game/src/presentation_result.rs` keeps both facts and defines provider-switch precedence. The Unity and Godot fixtures both specify simultaneous failures. |
 | D3D12 latency mode and availability | The native leaf copies both from `rsf_native_latency_status_get` and `control.rs` uses that one latency snapshot for status. |
-| Completion fence before binding | `runtime.cpp` creates a candidate fence before committing COM ownership. `d3d12/tests.rs` requires repeated binding attempts while creation fails. |
+| Completion fence before binding | `host.rs` creates a candidate fence before committing COM ownership. `d3d12/tests.rs` requires repeated binding attempts while creation fails. |
 | Present recording receipt | `d3d12.rs` publishes after successful recording. The same-frame capture refusal fixture expects Present to report its unknown screen and missed SR. |
 | HUD-less slot admission | `d3d12.rs` matches the SR slot's session and source, waits on already-submitted work, and refuses the fixture's failed wait. |
 | Typed settings handoff | The extension's typed settings enter `bridge.cpp` through the same host admission and viewport scaling callbacks as the Dictionary method. |
@@ -69,22 +69,61 @@ remain pending.
 | Refused window restore | `window.rs` retains ownership per HWND and its fixture admits a replacement while the old window continues forwarding independently. |
 | Shared fixtures | `platform/fake.rs` provides versioned setup and status records and backend boot helpers. |
 
-`api.h` and `godot_platform.h` contain ABI declarations. The following first-party C++ files
-still contain implementation and remain open in the file inventory.
+### E02 first-party native leaves
 
-- `extension.cpp` calls godot-cpp's `GDExtensionBinding::InitObject` and class-registration macros.
-- `effect.h` and `effect.cpp` define and implement the godot-cpp `CompositorEffect` subclass.
-  It supplies virtual dispatch, Godot references, RID-backed RenderingDevice commands and
-  the scripting Dictionary.
-- `runtime_control.h` and `runtime_control.cpp` define and implement the godot-cpp
-  `RefCounted` scripting class. It lends Godot Variants and RID values to the Rust settings
-  owner, marshals status and requests frame capture through RenderingServer.
-- `runtime.cpp` still holds the typed COM device, queue and fence leaves, DXGI and Win32
-  calls, C++ FrameCapture12 and native Runtime call records. Ten entry points now link
-  directly to their Rust definitions through the Windows export list.
+This slice starts at `84a8b9eb`. Eleven engine-facing functions previously defined
+in `runtime.cpp` are implemented in `runtime.rs` and listed by the same names in
+`exports.def`. The signatures in `api.h` are unchanged. D3D12 rendering checks the
+pass size before borrowing the record and shares the existing Vulkan rejection of any
+nonzero depth-domain descriptor. The engine module's D3D12 and Vulkan call sites,
+packet layouts and receipt production stay as integrated.
 
-The C++ Godot class and capture boundaries need compatible Rust bindings or equivalent
-replacement ownership to remove the remaining native files.
+- `host.rs` holds the D3D12 device, queue and fence behind one published binding.
+  It uses the same factory/adapter LUID query, render-thread fence wait with a 15-second
+  timeout, queue signal, SR setup and plan, FG setup, and Runtime status queries.
+  The existing `d3d12.rs` ledger still authorizes the slot, records successful SR,
+  matches real command-list submission, and carries the successful receipt to Present.
+  Win32 reads and window-procedure calls report the same facts to `window.rs`.
+- D3D12 capture uses the existing `rsf_core_capture12_*` Runtime owner from
+  `runtime/orchestrator/src/frame_capture12.rs`. The former `FrameCapture12` C++ class
+  also called that owner. The Rust leaf keeps the same event names and source identity,
+  reset flag, camera, dimensions, time in milliseconds, render-target state, slot and
+  default capture arguments. It flushes the slot before the HUD-less copy and calls
+  Runtime FG afterwards. Shutdown flushes all capture slots before destroying SR and
+  cancelling the session dump. The device binding and capture owner retain their DLL
+  lifetime. The CRT destructor calls Rust for unload cleanup and skips a lock held
+  during process teardown. Rust allocations follow Rust's out-of-memory behavior.
+- The Vulkan wrappers still use E03's guard and capture callbacks and the shared Runtime's
+  DLSS-G suppression and synchronized WSI entry points. The Present capture flag stays
+  thread-local. It tracks an admitted legacy window marker or E01's exact Present
+  execution receipt. A frame-role execution boundary still passes the explicit-execution
+  flag to E03. Native WSI capture surrounds the actual call and sees its return value.
+- `lib.rs` now iterates the existing options schema, composes typed settings and applies
+  them through the registered engine service. It also reads status/requested settings
+  for the script status snapshot. `runtime_control.cpp` lends the Dictionary only for
+  synchronous Variant reads. Rust handles the frame-dump request once the SDK Callable
+  runs on the render thread.
+
+Residual E02 file inventory and source constraints:
+
+| Open PORT file | Residual source |
+| --- | --- |
+| `runtime.cpp` | Platform wiring, C/C++ layout assertions, the CRT unload callback and the CMake-conditional FSR4 probe/Vulkan capture symbol table. The remaining validation/default leaves call shared inline helpers in `dlss_preset.h`, `sharpening_settings.h` and `frame_generation.h`. These are native build or Runtime boundaries. |
+| `extension.cpp` | `GDExtensionBinding::InitObject`, scene-level registration and `GDREGISTER_CLASS`. The pinned `include/godot_cpp/godot.hpp` declares the binding object and `core/class_db.hpp` expands the macro into typed C++ registration. |
+| `effect.h`, `effect.cpp` | `GDCLASS`, construction and destruction, the generated `CompositorEffect::_render_callback(int32_t, RenderData*)` virtual, `Ref`-owned scene and shader objects, Godot matrix and Variant conversions, and the RenderingDevice command and RID lifetime. The 4.7 API describes RID-based compute/list and storage-buffer calls and an owned `PackedByteArray` return for `buffer_get_data`. Rust already owns readback admission, dispatch dimensions, shader text and pixel classification. |
+| `runtime_control.h`, `runtime_control.cpp` | `GDCLASS` for the `RefCounted` subclass, ClassDB script method binding, typed Dictionary and Variant conversion, RID checks, RenderingServer queries, and `callable_mp_static` plus `call_on_render_thread`. The macro delegates to the pinned C++ Callable factory. The shader probe and Runtime retain their existing script-visible classes and methods. |
+
+The class evidence is from the pinned godot-cpp checkout
+`8070599885b6df675fcad033dd032ce44be2b850`, including
+`include/godot_cpp/classes/wrapped.hpp`, `include/godot_cpp/core/class_db.hpp`,
+`include/godot_cpp/variant/callable_method_pointer.hpp` and
+`gdextension/extension_api-4-7.json`. Removing these C++ class paths would require
+another implementation of Godot's typed wrappers, class/virtual binding and resource
+lifetimes. This slice uses the pinned classes for those exact operations.
+
+Validation covers source comparison, bindgen-cli 0.72.1, Rust 1.94.1 formatting,
+locked offline Windows x64 Cargo metadata, and Git whitespace checks.
+Compilation, linking, fixtures and live rendering remain unverified.
 
 ## Rust control owner, first slice
 

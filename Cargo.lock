@@ -503,6 +503,8 @@ name = "rsf-godot"
 version = "0.1.2"
 dependencies = [
  "rsf-game-sys",
+ "windows",
+ "windows-sys",
 ]
 
 [[package]]

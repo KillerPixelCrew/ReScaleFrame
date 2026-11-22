@@ -69,6 +69,13 @@ actual Vulkan submission and Present receipt. The export source coverage, pinned
 patch generation, binding regeneration and pinned formatting were checked. Build, fixture and device checks remain open.
 [Godot native control evidence](../integrations/godot/NATIVE.md#native-control-and-d3d12-follow-up)
 
+The E02 continuation ports D3D12 COM, DXGI, Win32 and capture leaves to Rust.
+The engine exports reuse the existing submission and Present receipts. The
+pinned godot-cpp classes retain registration, lifetime and typed Godot calls.
+Binding regeneration, pinned formatting and locked offline metadata passed.
+Build and runtime checks remain pending.
+[E02 source evidence](../integrations/godot/NATIVE.md#e02-first-party-native-leaves)
+
 RDR2's ASI startup leaves, research-attach worker and native settings probe
 now run in Rust. Settings fixtures share the measured vectors with the
 Rust policy, and refused startup sessions retain their cleanup owner.

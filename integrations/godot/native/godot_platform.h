@@ -346,7 +346,6 @@ typedef struct rsf_godot_platform {
 
 /* Extension option schema. The leaf reads each named Dictionary entry once, with the conversion
    the field names; the owner validates and composes the settings. */
-#define RSF_GODOT_OPTION_COUNT 21u
 #define RSF_GODOT_OPTION_INTEGER 0u
 #define RSF_GODOT_OPTION_REAL 1u
 #define RSF_GODOT_VARIANT_OTHER 0u
@@ -377,10 +376,10 @@ int rsf_godot_boot(const rsf_godot_platform* platform, const rsf_godot_setup* se
 int rsf_godot_configure(const rsf_godot_platform* platform, const rsf_godot_settings* settings);
 void rsf_godot_log(const char* message);
 
-/* D3D12 session state read by the rsfg_* forwarders in runtime.cpp. */
+/* D3D12 session state read by the engine entry points. */
 int rsf_godot_booted(void);
 
-/* D3D12 render, render-begin and shutdown leaves reached from the public forwarders. */
+/* D3D12 render, render-begin and shutdown operations reached from the public entry points. */
 int rsf_godot_d3d12_render(const rsf_godot_platform* platform, void* device, void* queue, void* commands,
     const rsf_game_render_pass* pass);
 void rsf_godot_d3d12_render_begin(const rsf_godot_platform* platform, uint64_t source_frame_id);
@@ -413,9 +412,12 @@ int rsf_godot_execution(const rsf_game_render_pass* pass, uint32_t begin);
 int rsf_godot_vk_present_marker(const rsf_godot_platform* platform, uint64_t window, uint32_t begin);
 
 /* Extension control (runtime_control.cpp). */
-const rsf_godot_option_field* rsf_godot_option_fields(uint32_t* count);
-int rsf_godot_compose_settings(const rsf_godot_platform* platform, const rsf_godot_option_value* values,
-    uint32_t count, rsf_godot_settings* settings);
+int rsf_godot_extension_configure(const rsf_godot_platform* platform, uint32_t admitted,
+    uint64_t viewport, const void* dictionary,
+    uint32_t (*read)(const void*, const rsf_godot_option_field*, rsf_godot_option_value*));
+/* Bit 0: active session status. Bit 1: requested settings. */
+uint32_t rsf_godot_extension_status(rsf_godot_status* status, rsf_godot_settings* settings);
+void rsf_godot_extension_capture(void);
 /* Null names are unsupported. Returns RSF_GODOT_ADMIT_* bits. */
 uint32_t rsf_godot_renderer_admission(const char* driver, const char* method, uint32_t vulkan_supported);
 #ifdef __cplusplus

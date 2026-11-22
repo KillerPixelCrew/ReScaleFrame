@@ -393,7 +393,7 @@ unsafe extern "C" fn rsfg_boot_vulkan(setup: *const Setup) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_render_begin(frame: u64, explicit: u32) {
+pub(crate) extern "C" fn rsf_godot_vk_render_begin(frame: u64, explicit: u32) {
     if explicit == 0 {
         unsafe { rsf_latencyvk_render(frame) };
     }
@@ -570,7 +570,11 @@ fn capture_present(owner: *mut rsf_fgvk, info: *const c_void, result: i32, begin
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_godot_vk_capture_present(info: *const c_void, result: i32, begin: u32) {
+pub(crate) extern "C" fn rsf_godot_vk_capture_present(
+    info: *const c_void,
+    result: i32,
+    begin: u32,
+) {
     // A nested SDK WSI call is already inside the provider-owned Present.
     if let Ok(_guard) = GUARD.try_lock() {
         capture_present(ptr::null_mut(), info, result, begin != 0);
@@ -719,20 +723,7 @@ unsafe fn render(
     }
 
     let _guard = guard();
-    // The wire record comprises u32/f32 fields without padding. This mirrors
-    // rsf_game_depth_domains_requested, including malformed nonzero payloads.
-    use rsf_game_sys::{rsf_game_depth_domain, rsf_game_depth_domains};
-    const {
-        assert!(size_of::<rsf_game_depth_domain>() == 26 * 4);
-        assert!(size_of::<rsf_game_depth_domains>() == 60 * 4);
-    }
-    let domains = unsafe {
-        std::slice::from_raw_parts(
-            ptr::from_ref(&pass.depth_domains).cast::<u8>(),
-            size_of::<rsf_game_depth_domains>(),
-        )
-    };
-    if domains.iter().any(|&byte| byte != 0) {
+    if crate::depth_domains_requested(&pass.depth_domains) {
         return 0;
     }
 
